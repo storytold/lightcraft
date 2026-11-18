@@ -234,6 +234,18 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.light.whites = 30.0;
             s.light.blacks = -25.0;
         }),
+        ("rgb contrast/blacks", |s| {
+            s.light.exposure = -0.3;
+            s.light.contrast = 50.0;
+            s.light.whites = 20.0;
+            s.light.blacks = -35.0;
+            s.light.contrast_mode = lcc_develop::ContrastMode::Rgb;
+        }),
+        ("rgb contrast/blacks lifted", |s| {
+            s.light.contrast = -40.0;
+            s.light.blacks = 45.0;
+            s.light.contrast_mode = lcc_develop::ContrastMode::Rgb;
+        }),
         ("vibrance/saturation", |s| {
             s.color.vibrance = 40.0;
             s.color.saturation = -20.0;
@@ -304,6 +316,59 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.curve.shadows = 25.0;
             s.curve.master = vec![Point::new(0.0, 0.05), Point::new(0.5, 0.55), Point::new(1.0, 0.95)];
             s.curve.blue = vec![Point::new(0.0, 0.0), Point::new(0.5, 0.45), Point::new(1.0, 1.0)];
+        }),
+        ("levels (master points)", |s| {
+            s.levels.master.black = 24.0;
+            s.levels.master.white = 232.0;
+        }),
+        ("levels (midtone + output)", |s| {
+            s.levels.master.midtone = 0.5;
+            s.levels.master.out_black = 12.0;
+            s.levels.master.out_white = 244.0;
+        }),
+        ("levels (channels + master + curve)", |s| {
+            s.levels.master.black = 10.0;
+            s.levels.master.midtone = -0.3;
+            s.levels.red.white = 220.0;
+            s.levels.red.midtone = 0.6;
+            s.levels.green.black = 18.0;
+            s.levels.blue.out_black = 30.0;
+            s.levels.blue.out_white = 200.0;
+            s.curve.master = vec![Point::new(0.0, 0.03), Point::new(0.5, 0.55), Point::new(1.0, 0.97)];
+        }),
+        ("levels (inverted output, strong midtone)", |s| {
+            s.levels.master.midtone = 0.8;
+            s.levels.master.out_black = 255.0;
+            s.levels.master.out_white = 0.0;
+        }),
+        ("levels (hdr edit)", |s| {
+            s.hdr.enabled = true;
+            s.light.exposure = 1.5;
+            s.levels.master.black = 20.0;
+            s.levels.master.midtone = 0.4;
+            s.levels.master.white = 230.0;
+        }),
+        ("levels (inverted input range)", |s| {
+            s.levels.master.black = 215.0;
+            s.levels.master.white = 40.0;
+        }),
+        ("levels (inverted input, midtone, channels)", |s| {
+            s.levels.master.black = 230.0;
+            s.levels.master.white = 25.0;
+            s.levels.master.midtone = -0.5;
+            s.levels.red.black = 10.0;
+            s.levels.red.white = 200.0;
+            s.levels.green.out_black = 240.0;
+            s.levels.green.out_white = 15.0;
+            s.curve.master = vec![Point::new(0.0, 0.03), Point::new(0.5, 0.55), Point::new(1.0, 0.97)];
+        }),
+        ("levels (inverted red, hdr edit)", |s| {
+            // red runs backwards and holds its end value above SDR white; green and blue rise and continue
+            s.hdr.enabled = true;
+            s.light.exposure = 1.5;
+            s.levels.master.midtone = 0.3;
+            s.levels.red.black = 235.0;
+            s.levels.red.white = 15.0;
         }),
         ("tone curves + refine saturation", |s| {
             s.curve.master = vec![Point::new(0.0, 0.0), Point::new(0.25, 0.15), Point::new(0.75, 0.88), Point::new(1.0, 1.0)];
@@ -845,6 +910,22 @@ fn cases() -> Vec<(&'static str, Edit)> {
     ]
 }
 
+/// `ContrastMode::Rgb` evaluates the per-channel Contrast/Blacks LUT on the GPU and matches the CPU.
+#[test]
+fn rgb_contrast_mode_renders_on_the_gpu() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(0, 480, 320);
+    let (raw, req) = (SourceInfo { raw: true, ..Default::default() }, RenderRequest::fit(480, 480));
+    for name in ["rgb contrast/blacks", "rgb contrast/blacks lifted"] {
+        let mut s = DevelopSettings::default();
+        let edit = cases().into_iter().find(|(n, _)| *n == name).map(|c| c.1).unwrap();
+        edit(&mut s);
+        check(name, &src, &raw, &s, &req);
+    }
+}
+
 /// A mask's local Point Color is drawn by the kernel, as the CPU draws it.
 #[test]
 fn local_point_colors_render_on_the_gpu() {
@@ -1127,9 +1208,9 @@ fn highlights_shadows_base_matches_on_every_process() {
         return;
     }
     let raw = SourceInfo { raw: true, ..Default::default() };
-    let src = scene(0, 2400, 1600);
+    let src = scene(0, 1200, 800);
     let cache = StageCache::default();
-    for &(w, h) in &[(720, 480), (2400, 1600)] {
+    for &(w, h) in &[(360, 240), (1200, 800)] {
         let req = RenderRequest::fit(w, h);
         for p in Process::ALL {
             let mut s = DevelopSettings { process: p.version(), ..DevelopSettings::default() };
@@ -1345,8 +1426,8 @@ fn windows_match() {
     use lcc_pipeline::PixelWindow;
     let src = scene(1, 960, 640);
     let info = SourceInfo { raw: true, ..Default::default() };
-    let win = PixelWindow { x: 1200, y: 800, w: 640, h: 480 };
-    let req = RenderRequest { window: Some(win), ..RenderRequest::fit(3000, 2000) };
+    let win = PixelWindow { x: 720, y: 480, w: 480, h: 360 };
+    let req = RenderRequest { window: Some(win), ..RenderRequest::fit(1800, 1200) };
     let mut cases = cases();
     cases.push(("vignette at the corner", |s| {
         s.vignette.amount = -80.0;
@@ -1380,7 +1461,7 @@ fn windows_match() {
     let mut s = DevelopSettings::default();
     s.vignette.amount = -80.0;
     s.vignette.midpoint = 10.0;
-    let corner = RenderRequest { window: Some(PixelWindow { x: 2360, y: 1520, w: 640, h: 480 }), ..RenderRequest::fit(3000, 2000) };
+    let corner = RenderRequest { window: Some(PixelWindow { x: 1320, y: 840, w: 480, h: 360 }), ..RenderRequest::fit(1800, 1200) };
     check("window: vignette corner", &src, &info, &s, &corner);
 }
 
@@ -2117,5 +2198,180 @@ fn dithered_gradients_match_in_phase() {
         let share = differ as f64 / cpu.data.len() as f64;
         eprintln!("dithered gradient ({:?}): {:.2} % of pixels differ", req.window, share * 100.0);
         assert!(share < 0.05, "{:.1} % of the pixels differ: the dither is out of phase", share * 100.0);
+    }
+}
+
+/// A flat-field map (Capture One LCC "Uniform Light", `lcc_pipeline::vignetting_calibration`): the GPU's `warp_gain` samples
+/// the same field as `Warp::gain`. On a raw source whose 5:4 image area sits inside a 3:2 map's window, turned by
+/// the user; with manual vignetting on top; with a lens profile's vignetting (stepping aside) and distortion; at the
+/// largest amount; and in a preview window with the joint colour NR on, whose noise model samples the whole frame
+/// in tiles (`Frame::sample_windows`).
+#[test]
+fn vignetting_calibration_matches() {
+    if !gpu() {
+        return;
+    }
+    use lcc_develop::{EmbeddedLens, EmbeddedVignette, EmbeddedVignettingMap, EmbeddedWarp};
+    use lcc_raw::SensorWindow;
+    use lcc_raw::gaintable::SourcePlacement;
+    // a 960 × 640 sensor; the photo's 800 × 640 image area at (80, 0) on it
+    let sensor = [960usize, 640];
+    let grid = [48usize, 32];
+    let ev: Vec<f64> = (0..grid[0] * grid[1])
+        .map(|i| {
+            let (dx, dy) = (((i % grid[0]) as f64 + 0.5) / grid[0] as f64 - 0.53, (((i / grid[0]) as f64 + 0.5) / grid[1] as f64 - 0.48) / 1.5);
+            let d2 = (dx * dx + dy * dy) / (0.25 + 0.25 / 2.25);
+            1.3 * d2 * d2 + 0.25 * d2
+        })
+        .collect();
+    let map = EmbeddedVignettingMap::from_ev(sensor, grid, Some([960, 640, 0, 0, 960, 640]), Default::default(), &ev).unwrap();
+    let win = SensorWindow { sensor, origin: [80, 0], size: [800, 640] };
+    let rect = [4.0 / 800.0, 2.0 / 640.0, 792.0 / 800.0, 636.0 / 640.0];
+    let placement = SourcePlacement { active_size: Some(win.size), window: Some(win), ..SourcePlacement::new(rect, Orientation::Normal) };
+    let vignetting_maps = Some(lcc_pipeline::vignetting_calibration::VignettingMapStore::of([map.clone()]));
+    let info = SourceInfo { raw: true, placement: Some(placement), vignetting_maps, ..Default::default() };
+    let id = lcc_develop::VignettingMapId::of(&map);
+    let src = scene(3, 792, 636);
+    let mut s = DevelopSettings::default();
+    s.optics.vignetting_calibration = Some(id.clone());
+    s.orientation = Orientation::Rotate90;
+    assert!(lcc_pipeline::frame_for(&src, &info, &s, true).warp.is_some_and(|w| w.field.is_some()), "the map applies");
+    check("flat field 5:4 rotated", &src, &info, &s, &RenderRequest::fit(700, 700));
+    // the GPU really applies it: its corner is brighter than without the map
+    let req = RenderRequest::fit(700, 700);
+    let with = lcc_gpu::render(&src, &info, &s, &req, None).expect("gpu render").image;
+    let without = lcc_gpu::render(&src, &info, &DevelopSettings { orientation: Orientation::Rotate90, ..Default::default() }, &req, None)
+        .expect("gpu render")
+        .image;
+    let corner = |i: &Rgba8| (0..3).map(|c| u32::from(i.data[i.width * 5 + 5][c])).sum::<u32>();
+    assert!(corner(&with) > corner(&without) + 20, "{} vs {}", corner(&with), corner(&without));
+    s.optics.vignetting = -40.0;
+    check("flat field + manual vignetting", &src, &info, &s, &RenderRequest::fit(700, 700));
+    let lens = EmbeddedLens {
+        warp: Some(EmbeddedWarp { planes: [[1.0, -0.03, 0.01, 0.0, 0.0, 0.0]; 3], center: Point::new(0.5, 0.5), radius: 0.6 }),
+        vignette: Some(EmbeddedVignette { k: [0.5, -0.1, 0.0, 0.0, 0.0], center: Point::new(0.5, 0.5), radius: 0.6 }),
+        stages: Default::default(),
+    };
+    let lensed = SourceInfo { lens: Some(lens), ..info.clone() };
+    s.optics.lens_profile = true;
+    check("flat field + lens profile", &src, &lensed, &s, &RenderRequest::fit(700, 700));
+    s.optics.vignetting_calibration_amount = 120.0;
+    check("flat field at 120", &src, &lensed, &s, &RenderRequest::fit(700, 700));
+    // a preview level of a large original with the joint colour NR, and a zoomed window of it
+    let mut s = DevelopSettings { process: Process::V8.version(), orientation: Orientation::Rotate90, ..Default::default() };
+    s.optics.vignetting_calibration = Some(id);
+    s.detail.nr_color = 60.0;
+    let preview = SourceInfo { native_long: Some(8000), ..info.clone() };
+    check("flat field + colour NR preview", &src, &preview, &s, &RenderRequest::fit(636, 792));
+    let w = lcc_pipeline::PixelWindow { x: 0, y: 500, w: 300, h: 260 };
+    check("flat field + colour NR window", &src, &info, &s, &RenderRequest { window: Some(w), ..RenderRequest::fit(636, 792) });
+}
+
+/// Levels at their defaults, spelled out, change nothing: the same settings, no stage, and the GPU
+/// render equals the render of settings that never had Levels.
+#[test]
+fn neutral_levels_render_like_no_levels() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(1, 320, 240);
+    let info = SourceInfo::default();
+    let req = RenderRequest::fit(320, 240);
+    let plain = DevelopSettings::default();
+    let mut spelled = DevelopSettings::default();
+    spelled.levels.master = Default::default();
+    spelled.levels.red.black = 0.0;
+    assert_eq!(plain, spelled);
+    assert!(lcc_pipeline::levels::LevelsK::new(&spelled.levels).is_none());
+    let a = lcc_gpu::render(&src, &info, &plain, &req, None).unwrap().image;
+    let b = lcc_gpu::render(&src, &info, &spelled, &req, None).unwrap().image;
+    assert_eq!(a.data, b.data, "GPU");
+    let (ca, cb) = (render(&src, &info, &plain, &req).image, render(&src, &info, &spelled, &req).image);
+    assert_eq!(ca.data, cb.data, "CPU");
+}
+
+/// The ends of the midtone range (and some values between), ordinary and inverted (output levels reversed, and on
+/// every other scene the input range too), on every demo scene: the GPU matches the CPU within [`MAX_LSB`] everywhere
+/// and no pixel is off by more than that (the scales are 8-bit levels).
+#[test]
+fn midtone_extremes_match_cpu_on_every_scene() {
+    if !gpu() {
+        return;
+    }
+    let (info, req) = (SourceInfo::default(), RenderRequest::fit(720, 480));
+    let (mut worst_max, mut worst_share) = (0u8, 0.0f64);
+    for i in 0..lcc_scenes::demo_library().len().min(6) {
+        let src = scene(i, 720, 480);
+        for midtone in [1.0, -1.0, 0.5, -0.5, 0.1, -0.1] {
+            for inverted in [false, true] {
+                let mut s = DevelopSettings::default();
+                s.levels.master.midtone = midtone;
+                if inverted && i % 2 == 1 {
+                    s.levels.master.black = 215.0;
+                    s.levels.master.white = 40.0;
+                }
+                if inverted {
+                    s.levels.master.out_black = 255.0;
+                    s.levels.master.out_white = 0.0;
+                }
+                let cpu = render(&src, &info, &s, &req).image;
+                let gpu = lcc_gpu::render(&src, &info, &s, &req, None)
+                    .unwrap_or_else(|| panic!("scene {i} midtone {midtone}: gpu render ({:?})", lcc_gpu::last_fallback()));
+                let (mean, max, _) = diff(&cpu, &gpu.image);
+                let far = cpu.data.iter().zip(&gpu.image.data).filter(|(p, q)| (0..3).any(|c| p[c].abs_diff(q[c]) > MAX_LSB)).count();
+                let share = far as f64 / cpu.data.len() as f64;
+                worst_max = worst_max.max(max);
+                worst_share = worst_share.max(share);
+                assert!(
+                    mean < MEAN_LSB && share == 0.0,
+                    "scene {i} midtone {midtone} inverted {inverted}: mean {mean:.4}, max {max}, share {share:.5}"
+                );
+            }
+        }
+    }
+    eprintln!("levels midtone extremes: worst max {worst_max} LSB (8-bit), worst share {worst_share:.5}");
+}
+
+/// 16-bit output samples of a render.
+fn u16_samples(r: &lcc_pipeline::Rendered) -> &[u16] {
+    let Some(lcc_pipeline::DeepImage { samples: lcc_pipeline::DeepSamples::U16(v), .. }) = &r.deep else { panic!("no 16-bit samples") };
+    v
+}
+
+/// Levels in the deep outputs, for every Levels case. The GPU renders two depths only (8-bit and the float
+/// HDR path; 16-bit and linear-float requests are the CPU's by design, `lcc_gpu::handles`), so:
+/// - the GPU's float samples match the CPU's, in 8-bit steps of the encoding they decode to
+///   (`check_hdr_req`, which also holds the 8-bit reductions together);
+/// - the CPU's 16-bit samples agree with its own 8-bit render to within the 8-bit rounding and dither
+///   (one level), so Levels act the same at every depth.
+#[test]
+fn levels_match_in_16_bit_and_float_output() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(2, 480, 320);
+    let info = SourceInfo::default();
+    for (name, edit) in cases().into_iter().filter(|(n, _)| n.starts_with("levels")) {
+        let mut s = DevelopSettings::default();
+        edit(&mut s);
+        let req = RenderRequest::fit(480, 320);
+        let eight = render(&src, &info, &s, &req);
+        let req16 = RenderRequest { depth: lcc_pipeline::OutputDepth::U16, ..req };
+        let sixteen = render(&src, &info, &s, &req16);
+        let deep = u16_samples(&sixteen);
+        let (mut sum, mut max) = (0.0f64, 0.0f64);
+        for (px, d) in eight.image.data.iter().zip(deep.as_chunks::<3>().0) {
+            for c in 0..3 {
+                let diff = (f64::from(px[c]) - f64::from(d[c]) / 257.0).abs();
+                sum += diff;
+                max = max.max(diff);
+            }
+        }
+        let mean = sum / (deep.len() as f64);
+        eprintln!("{name:<42} CPU 16-bit vs 8-bit: mean {mean:.4}  max {max:.3} (8-bit levels)");
+        assert!(mean < 0.6 && max <= 1.01, "{name}: 16-bit against 8-bit: mean {mean:.4}, max {max:.3}");
+        // float, linear (the HDR path): GPU against CPU
+        let reqf = RenderRequest { depth: lcc_pipeline::OutputDepth::F32Hdr, ..req };
+        check_hdr_req(&format!("{name} (float)"), &src, &info, &s, &reqf);
     }
 }

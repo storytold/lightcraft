@@ -16,6 +16,14 @@ import Shot from '../../../components/Shot.astro';
 - **Exports**: photos at once, *Use the GPU for exports*, and **Test my machine**, which tries several settings and keeps the fastest.
 - **Thumbnail cache**: size limit and **Clear Cache**.
 - **Prepare photos in the background**: next photos are rendered ahead; it shows in the activity stack.
+- **Large libraries** open much faster from network shares and hard disks.
+- **Culling stays responsive** while photos are prepared in the background; the first picture of a raw is its camera JPEG, replaced by the full render.
+- **Heavily masked exports** stay on the GPU instead of falling back to the CPU.
+- **GPU memory** is freed after batch work (exports, Build Previews).
+- **Zoom at 100 %** no longer stalls on Vulkan; returning to 100 % keeps rendered tiles.
+- **Windows**: batch work no longer freezes the window (Segment Heap).
+- **Hot pixels**: confirming one rebuilds only that camera's previews.
+- **Search and face models**: **Settings ▸ Performance** and **AI Models** choose the device for semantic search (Automatic, a named GPU or CPU); face detection and recognition use the GPU when it is verified faster.
 - Budgets (measured on one desktop): slider update under 16 ms, loupe under 60 ms, a 24 MP JPEG export about half a second.
 - A GPU backend can be forced or turned off with an environment variable named in the developer docs, if a driver crashes.
 
@@ -23,6 +31,8 @@ import Shot from '../../../components/Shot.astro';
 - Anything slow (import, export, previews, sync, downloads) runs off the main thread and shows as a row with a progress bar and a stop button when it can stop.
 - **Classic and Compact**: in the module bar. One task shows its bar; several show "N operations in progress…"; click for the full list.
 - **Modern**: a floating card under the Library / Develop switch, three rows and "+N more".
+- **Full-screen preview** (F): a quiet card top right with the running task's name and a thin bar, several as "N operations in progress…" over a bar each.
+- Preview builds asked for while one runs wait for their turn and start by themselves when it ends; **Stop Building Previews** stops the running one and drops the waiting ones.
 - Quitting asks first while a stoppable task is running.
 
 <Aside type="note" title="Modern layout">

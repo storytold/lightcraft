@@ -3,7 +3,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
-use std::path::PathBuf;
+
 use std::sync::PoisonError;
 
 use serde_json::{Value, json};
@@ -12,11 +12,9 @@ use crate::Session;
 use crate::lens_download::tests::{DB, archive, gzip};
 use crate::lens_profiles::TEST_LOCK;
 
-fn scratch(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("lens-db-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+/// The test's folder in Temp, removed when the test ends.
+fn scratch(name: &str) -> lcc_testkit::TempDir {
+    lcc_testkit::TempDir::new(&format!("lens-db-{name}"))
 }
 
 /// A local server answering every request with `status` and `body`.
@@ -76,7 +74,7 @@ fn a_lens_look_up_is_not_an_undo_step() {
     assert!(s.catalog.photo(id).unwrap().embedded_lens.is_none());
     let db = scratch("undo-db");
     std::fs::write(db.join("lenses.xml"), DB).unwrap();
-    s.lens_db.set_dir(Some(db)).unwrap();
+    s.lens_db.set_dir(Some(db.to_path_buf())).unwrap();
     let undo = s.undo.len();
     let changed = s.execute("lens.db.refresh", &json!({"ids": [id.0]})).unwrap();
     crate::lens_profiles::set_dir(before);
@@ -116,7 +114,7 @@ fn folder_setting_is_saved_used_at_once_and_reloaded() {
     // remembered: a new session (a restart) uses it
     crate::lens_profiles::set_dir(None);
     let s2 = session(&settings, "");
-    assert_eq!(crate::lens_profiles::configured_dir(), Some(db.clone()));
+    assert_eq!(crate::lens_profiles::configured_dir(), Some(db.to_path_buf()));
     assert_eq!(s2.lens_db.status()["lenses"], 1);
     // cleared with null, and remembered so
     s.execute("lens.db.setDir", &json!({"dir": null})).unwrap();
@@ -210,7 +208,7 @@ fn optics_is_told_why_there_is_no_correction() {
     jpeg.kind = lcc_catalog::MediaKind::Image;
     let db = scratch("optics");
     std::fs::write(db.join("lenses.xml"), DB).unwrap();
-    s.lens_db.set_dir(Some(db)).unwrap();
+    s.lens_db.set_dir(Some(db.to_path_buf())).unwrap();
     assert_eq!(s.lens_match(&jpeg), Some(Match::NotRaw));
     assert_eq!(s.lens_match(&raw("")), Some(Match::NoLensName));
     assert_eq!(s.lens_match(&raw("70-200mm F4")), Some(Match::NotFound("70-200mm F4".into())));
@@ -249,7 +247,7 @@ fn a_chosen_lens_and_the_lens_list() {
     assert_eq!(none["database"], json!(false));
     let db = scratch("chosen");
     std::fs::write(db.join("lenses.xml"), DB).unwrap();
-    s.lens_db.set_dir(Some(db)).unwrap();
+    s.lens_db.set_dir(Some(db.to_path_buf())).unwrap();
     let add = |s: &mut Session, lens: &str, own: bool| {
         let id = s.catalog.alloc_photo_id();
         let mut p = lcc_catalog::Photo::new(id, lcc_catalog::Source::Demo { scene: 0 }, "a.nef", "NEF", 10, 10, "now");
@@ -334,7 +332,7 @@ fn a_picked_lens_corrects_a_manual_lens() {
     s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
     let db = scratch("choose-db");
     std::fs::write(db.join("lenses.xml"), DB).unwrap();
-    s.lens_db.set_dir(Some(db)).unwrap();
+    s.lens_db.set_dir(Some(db.to_path_buf())).unwrap();
     let lens = json!({"maker": "Testcam", "model": "Testcam 18-55mm f/3.5-5.6"});
 
     let st = s.execute("lens.db.photo", &json!({})).unwrap();

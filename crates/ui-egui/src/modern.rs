@@ -55,6 +55,10 @@ pub struct ModernUi {
     /// The menu bar is open on this menu ([`crate::modern_menu`]).
     #[serde(skip)]
     pub menu: Option<String>,
+    /// The menu the bar last scrolled its open title into view for: it scrolls again only when the
+    /// open menu changes, so a finger can scroll the bar away from the open menu's title.
+    #[serde(skip)]
+    pub(crate) menu_scrolled: Option<String>,
     /// The open group's card shows one of its sections in full (`modern_dock::Group::sections`).
     #[serde(skip)]
     pub more: Option<String>,
@@ -169,6 +173,7 @@ impl Default for ModernUi {
             histogram: HistogramPlace::Small,
             histogram_at: [1.0, 0.0],
             menu: None,
+            menu_scrolled: None,
             more: None,
             histogram_menu: None,
             histogram_held: false,
@@ -291,6 +296,11 @@ pub(crate) fn after_input(app: &mut LccApp, raw: &mut egui::RawInput) {
         app.ui.modern.scroller = Default::default();
         return;
     }
+    // the bar scrolls its open menu's title into view only when the open menu changes: forget
+    // the last one when the bar closes, so opening the same menu again still scrolls to it
+    if app.ui.modern.menu.is_none() {
+        app.ui.modern.menu_scrolled = None;
+    }
     // Esc closes the Modern layout's own floating things first (before any shortcut sees it)
     let esc = |e: &egui::Event| matches!(e, egui::Event::Key { key: egui::Key::Escape, pressed: true, modifiers, .. } if modifiers.is_none());
     if raw.events.iter().any(esc) && escape(app) {
@@ -303,8 +313,20 @@ pub(crate) fn after_input(app: &mut LccApp, raw: &mut egui::RawInput) {
     let canvas = if develop { rect_of("modern:canvas").or(app.canvas_rect) } else { None };
     let photos = [rect_of("grid:scroll"), rect_of("filmstrip")];
     let strips = [rect_of("modern:strip"), rect_of("modern:menubar")];
+    // the strips scroll whichever way a finger swipes, even while the menu bar is open — the
+    // modal rule below would otherwise hand a sideways swipe to the title button under it, and
+    // the bar (and the dock) could not be scrolled at all until the menu was closed
+    let strip_over_modal = app.ui.modern.menu.is_some() && app.ui.dialog.is_none();
+    // the grid's fast-scroll handle takes a drag of its own (the swipe scroller lets it be)
+    let handle = rect_of("modern:scrollHandle");
     let region = |p: Pos2| {
         use crate::modern_input::Region;
+        if handle.is_some_and(|r| r.contains(p)) {
+            return None;
+        }
+        if strip_over_modal && strips.iter().flatten().any(|r| r.contains(p)) {
+            return Some(Region::Strip);
+        }
         if modal {
             return Some(Region::Free);
         }
@@ -826,9 +848,7 @@ fn import_menu(app: &mut LccApp, ui: &egui::Ui, right_top: Pos2) {
 /// A long press on a grid photo starts picking several, with that photo; later ones add or remove.
 fn long_press(app: &mut LccApp) {
     let Some(at) = app.ui.modern.long_press.take() else { return };
-    let Some(id) =
-        app.widgets.iter().rev().find(|(w, r)| w.starts_with("thumb:") && r.contains(at)).and_then(|(w, _)| w["thumb:".len()..].parse::<u64>().ok())
-    else {
+    let Some(id) = photo_at(app, at) else {
         return;
     };
     let mode = if app.ui.modern.selecting { "toggle" } else { "replace" };
@@ -844,7 +864,9 @@ fn open_tapped(app: &mut LccApp, ui: &egui::Ui, area: Rect, before: Option<lcc_c
     }
     // (a tap on a card floating over the grid, the search pill or the Info card, is the card's)
     let at = ui.input(|i| i.pointer.interact_pos());
-    let on_grid = at.is_some_and(|p| area.contains(p) && ui.ctx().layer_id_at(p).is_none_or(|l| l == ui.layer_id()));
+    let on_grid = at.is_some_and(|p| {
+        area.contains(p) && ui.ctx().layer_id_at(p).is_none_or(|l| l == ui.layer_id()) && !crate::modern_sources::owns_tap(ui.ctx(), p)
+    });
     let tapped = ui.input(|i| {
         i.pointer.primary_released()
             && on_grid
@@ -852,12 +874,25 @@ fn open_tapped(app: &mut LccApp, ui: &egui::Ui, area: Rect, before: Option<lcc_c
             && i.pointer.button_clicked(egui::PointerButton::Primary)
             && !i.modifiers.any()
     });
-    // a single photo picked by this tap (a tap on empty grid clears the selection instead);
-    // `before` is kept for a future "tap the picked photo again" rule
+    if !tapped {
+        return;
+    }
+    // the photo under the finger, not whichever one was active: the grid's own click does not pick it when the tap
+    // lands on a badge or a cell's edge, and the photo opened last (often the last in the grid) opened instead.
+    // `before` is kept for a future "tap the picked photo again" rule.
     let _ = before;
-    if tapped && app.session.active().is_some() && app.session.selection.ids.len() <= 1 {
+    let Some(id) = at.and_then(|p| photo_at(app, p)) else { return };
+    if app.session.active() != Some(lcc_catalog::PhotoId(id)) || app.session.selection.ids.len() > 1 {
+        let _ = app.run("library.select", json!({"ids": [id]}));
+    }
+    if app.session.active() == Some(lcc_catalog::PhotoId(id)) {
         open_develop(app);
     }
+}
+
+/// The grid photo whose thumbnail is under `at`, by the widgets drawn this frame.
+fn photo_at(app: &LccApp, at: egui::Pos2) -> Option<u64> {
+    app.widgets.iter().rev().find(|(w, r)| w.starts_with("thumb:") && r.contains(at)).and_then(|(w, _)| w["thumb:".len()..].parse::<u64>().ok())
 }
 
 fn open_develop(app: &mut LccApp) {
@@ -906,7 +941,9 @@ fn gestures(app: &mut LccApp, ui: &mut egui::Ui, canvas: Rect) {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
     }
     let was_holding = app.ui.modern.holding;
-    if !down && was_holding {
+    // only a lifted finger ends the hold (#1035): the Before button's hold is down off the photo,
+    // and ending it here whenever the photo itself wasn't pressed flipped the original back at once
+    if !down && was_holding && !ui.input(|i| i.pointer.any_down()) {
         stop_holding(app);
     }
     if resp.clicked() && !was_holding {

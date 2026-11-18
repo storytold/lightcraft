@@ -35,6 +35,7 @@ Photos you already edited in <app> keep their edits; `updateExisting=true` repla
 | Titles, captions, copyright, creator and other XMP metadata | yes |
 | Keywords, including hierarchies | yes |
 | Collections and collection sets | collections and collection folders |
+| Saved prints | Saved Prints (page, grid / package cells, image settings, print job); reimporting upgrades earlier plain albums once |
 | Smart collections | regular collections with their current photos; the rules are kept in the recovery archive |
 | Virtual copies | virtual copies |
 | Develop settings | mapped onto <app>'s controls (see below); unmapped fields are reported |
@@ -52,10 +53,14 @@ Photos you already edited in <app> keep their edits; `updateExisting=true` repla
   [lightroom-catalog-import.md](../lightroom-catalog-import.md).
 - Deferred Auto Tone is not evaluated; run Auto (`Shift+A`) again if you want it.
 - Not read from the catalog: stacks, face regions/people (read from XMP sidecars instead), publish services and their
-  history, Book / Slideshow / Print / Web creations, the Map module's saved locations, and Lightroom's preview cache.
+  history, Book / Slideshow / Web creations, the Map module's saved locations, and Lightroom's preview cache.
 - Presets, templates and keyword lists live outside the catalog: bring develop presets in with File → Import
   Profiles & Presets… (Lightroom `.xmp` presets), keyword lists with File → Import Keywords…. Adobe's own
   profiles (`.dcp`) and lens profiles (`.lcp`) are never used.
+
+A failed import takes back the photos it added. Records with broken references (an image whose file, folder or root
+does not resolve, or a settings, keyword or collection-member record naming no photo) are skipped with a warning
+instead of landing on another photo.
 
 ## Safety
 

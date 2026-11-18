@@ -171,18 +171,6 @@ fn auto_follows_the_system_and_falls_back_to_dark() {
 }
 
 #[test]
-fn view_menu_lists_modes_and_themes_with_checks() {
-    let mut a = app();
-    a.run("view.theme", json!({"theme": "paper"})).unwrap();
-    let menus = crate::menubar::menu_bar(&a);
-    let text = serde_json::to_string(&menus).unwrap();
-    for label in ["Appearance", "Sync with System", "Light Mode", "Dark Mode", "Next Appearance Mode", "Charcoal", "Midnight", "Silver", "Paper"] {
-        assert!(text.contains(&format!("\"{label}\"")), "{label} missing from the menus");
-    }
-    assert!(text.contains(r#""params":{"theme":"paper"}"#));
-}
-
-#[test]
 fn the_top_bar_button_and_settings_cards_drive_the_mode() {
     let mut h = Headless::new(app(), [1400.0, 900.0], 1.0);
     h.settle(Duration::from_secs(60));

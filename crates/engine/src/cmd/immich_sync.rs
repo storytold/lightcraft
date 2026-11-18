@@ -42,14 +42,15 @@ const PEOPLE_CAP: usize = 5000;
 #[derive(Default)]
 pub(crate) struct AccountSync {
     state: Option<SyncState>,
+    /// The file `state` was loaded from. The state belongs to one library: when another one is
+    /// opened (or the library is closed) this no longer matches and the state is loaded again.
+    state_file: Option<PathBuf>,
     pub(crate) running: bool,
     last: Option<Value>,
+    /// The last dry run's result (Preview Changes), with its list of changes.
+    preview: Option<Value>,
     next_due: Option<Instant>,
     failures: u32,
-    /// An album run (`immich.syncAlbums`) is on a worker.
-    pub(crate) albums_running: bool,
-    /// The last album run's summary.
-    pub(crate) albums_last: Option<Value>,
 }
 
 /// One linked pair as the worker gets it.
@@ -74,6 +75,14 @@ pub(crate) struct PairDone {
     error: Option<String>,
 }
 
+/// What [`finish`] needs to take a pair's pull back when the catalog write fails.
+struct PullUndo {
+    /// The fields the catalog batch was to write.
+    fields: BTreeSet<Field>,
+    old_base: Option<Snapshot>,
+    forced: BTreeMap<Field, Side>,
+}
+
 /// What a sync worker brings back.
 pub(crate) struct SyncDone {
     account: String,
@@ -88,6 +97,12 @@ pub(crate) struct SyncDone {
     fatal: Option<ImmichError>,
     /// RT.C3: the stack merge (None: skipped, e.g. the key lacks stack permissions).
     stacks: Option<StackSync>,
+    /// The state file of the library the run was started in ([`finish`] drops a run whose library
+    /// is no longer the open one).
+    home: Option<PathBuf>,
+    /// Queued deletions that are no longer true: the asset is out of Immich's trash again and the
+    /// photo is not in Recently Deleted.
+    restored: Vec<String>,
 }
 
 /// The stack part of a run.
@@ -107,9 +122,19 @@ fn state_path(s: &Session, account: &str) -> Option<PathBuf> {
 
 /// The account's sync state (loaded from its file on first use; a corrupt file starts over and
 /// says so in the log rather than failing every run).
+///
+/// The state is cached in the session per account, but it is one library's: the bases of catalog
+/// A say nothing about catalog B's photos. So the cache remembers which file it came from and is
+/// dropped as soon as the session's library (hence the file) is another one.
 fn state_of<'a>(s: &'a mut Session, account: &str) -> &'a mut SyncState {
     let path = state_path(s, account);
     let entry = s.remote.sync.entry(account.to_string()).or_default();
+    if entry.state_file != path {
+        entry.state = None;
+        entry.last = None;
+        entry.preview = None;
+        entry.state_file = path.clone();
+    }
     entry.state.get_or_insert_with(|| match path.as_ref().map(std::fs::read) {
         Some(Ok(b)) => serde_json::from_slice(&b).unwrap_or_else(|e| {
             log::warn!("Immich sync state {}: {e}; starting over", path.as_ref().map(|p| p.display().to_string()).unwrap_or_default());
@@ -121,7 +146,10 @@ fn state_of<'a>(s: &'a mut Session, account: &str) -> &'a mut SyncState {
 
 fn save_state(s: &mut Session, account: &str) -> std::result::Result<(), String> {
     let Some(path) = state_path(s, account) else { return Ok(()) };
-    let Some(st) = s.remote.sync.get(account).and_then(|a| a.state.as_ref()) else { return Ok(()) };
+    // (never write one library's state into another's file)
+    let Some(st) = s.remote.sync.get(account).filter(|a| a.state_file.as_ref() == Some(&path)).and_then(|a| a.state.as_ref()) else {
+        return Ok(());
+    };
     let json = serde_json::to_vec(st).map_err(|e| e.to_string())?;
     if let Some(d) = path.parent() {
         std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
@@ -142,6 +170,26 @@ fn linked(s: &Session, account: &str) -> Vec<(PhotoId, String)> {
         .filter(|r| r.service == SERVICE && r.account_id == account && r.sync_state != LinkState::Probable)
         .map(|r| (r.photo_id, r.remote_id.clone()))
         .collect()
+}
+
+/// When photo `id`'s metadata was last edited, as far as the catalog knows, for the "newest
+/// wins" policy. The catalog keeps no per-field edit time; what it has is the XMP stamp: when the
+/// photo's rating, flag and metadata are exactly what was last written to (or read from) its
+/// sidecar, that file's modification time is when they were last changed, or shortly after
+/// (auto-write XMP). `None` (no sidecar, the catalog changed since, or the stamp is older than
+/// the last sync and so can't be the edit): the caller falls back to the time the run noticed.
+///
+/// Without this the "newest" of an edit made on Monday and synced on Friday was Friday, and it
+/// beat anything done in Immich in between.
+fn edit_time(s: &Session, id: PhotoId, last_run: Option<&str>) -> Option<String> {
+    let p = s.catalog.photo(id)?;
+    let stamp = p.xmp.filter(|x| x.fingerprint == p.xmp_fingerprint())?;
+    let t = lcc_catalog::dates::local(stamp.file?.mtime)?;
+    let at = merge::instant(&t)?;
+    if last_run.and_then(merge::instant).is_some_and(|run| at <= run) {
+        return None;
+    }
+    Some(t)
 }
 
 /// Start a run: gather the catalog side, then work on a worker (`background`) or right here.
@@ -168,6 +216,20 @@ fn start(s: &mut Session, account: &str, dry_run: bool, full: bool, background: 
             })
             .collect()
     };
+    // photos whose catalog side differs from the base and has no change time yet
+    let unstamped: Vec<PhotoId> = {
+        let st = state_of(s, account);
+        snaps
+            .iter()
+            .filter(|(_, asset, local, ..)| {
+                st.items.get(asset).is_some_and(|i| i.local_changed_at.is_none() && i.base.as_ref().is_some_and(|b| b != local))
+            })
+            .map(|(photo, ..)| *photo)
+            .collect()
+    };
+    // the last real run: an edit this run is the first to see was made after it
+    let last_run = state_of(s, account).log.iter().rev().find(|l| !l.dry_run).map(|l| l.started.clone());
+    let edited: HashMap<PhotoId, String> = unstamped.into_iter().filter_map(|id| Some((id, edit_time(s, id, last_run.as_deref())?))).collect();
     let st = state_of(s, account);
     for (photo, asset, local, deleted, file_name) in snaps {
         let item = st.items.entry(asset.clone()).or_default();
@@ -176,19 +238,22 @@ fn start(s: &mut Session, account: &str, dry_run: bool, full: bool, background: 
         if !changed {
             item.local_changed_at = None;
         } else if item.local_changed_at.is_none() {
-            item.local_changed_at = Some(now.clone());
+            // when the edit was made, where the catalog knows; else when this run noticed it
+            item.local_changed_at = Some(edited.get(&photo).cloned().unwrap_or_else(|| now.clone()));
         }
         pairs.push(Pair { asset, photo, local, deleted, file_name, item: item.clone() });
     }
     let since = if full { None } else { st.synced_until.clone() };
     let kept = st.kept.clone();
+    let queued: BTreeSet<String> = st.deletions.iter().map(|d| d.asset.clone()).collect();
     let base_stacks = st.stacks.clone();
     let asset_of: HashMap<PhotoId, String> = links.iter().map(|(p, a)| (*p, a.clone())).collect();
     let catalog_stacks: Vec<Vec<PhotoId>> = s.catalog.stacks().map(|st| st.photos.clone()).collect();
     let local_stacks = lcc_immich::stacks::local_groups(&catalog_stacks, |p| asset_of.get(&p).cloned());
     let entry = s.remote.sync.entry(account.to_string()).or_default();
     entry.running = true;
-    let job = Job { account: account.to_string(), dry_run, since, cfg, pairs, kept, started: now, local_stacks, base_stacks };
+    let home = state_path(s, account);
+    let job = Job { account: account.to_string(), dry_run, since, cfg, pairs, kept, queued, started: now, local_stacks, base_stacks, home };
     let task =
         s.activity.start("immich", if dry_run { "Previewing the Immich sync" } else { "Syncing metadata with Immich" }, crate::activity::Cancel::No);
     let run = move || {
@@ -214,6 +279,10 @@ struct Job {
     cfg: SyncConfig,
     pairs: Vec<Pair>,
     kept: BTreeSet<String>,
+    /// Assets with a deletion waiting in the queue: looked at every run, so a deletion that was
+    /// undone (restored from the trash) leaves the queue.
+    queued: BTreeSet<String>,
+    home: Option<PathBuf>,
     started: String,
     /// The catalog's stacks over this account's linked assets, and the last sync's.
     local_stacks: Vec<lcc_immich::stacks::Group>,
@@ -222,7 +291,7 @@ struct Job {
 
 /// The server side of a run (a worker thread, or inline).
 fn work(c: &lcc_immich::Client, job: Job) -> SyncDone {
-    let Job { account, dry_run, since, cfg, pairs, kept, started, local_stacks, base_stacks } = job;
+    let Job { account, dry_run, since, cfg, pairs, kept, queued, started, local_stacks, base_stacks, home } = job;
     let linked_assets: BTreeSet<String> = pairs.iter().map(|p| p.asset.clone()).collect();
     let mut done = SyncDone {
         account,
@@ -236,6 +305,8 @@ fn work(c: &lcc_immich::Client, job: Job) -> SyncDone {
         errors: Vec::new(),
         fatal: None,
         stacks: None,
+        home,
+        restored: Vec::new(),
     };
     // 1. what changed on the server since the last complete run
     let wanted: BTreeSet<&str> = pairs.iter().map(|p| p.asset.as_str()).collect();
@@ -261,7 +332,8 @@ fn work(c: &lcc_immich::Client, job: Job) -> SyncDone {
     for p in pairs {
         let local_changed = p.item.base.as_ref().is_none_or(|b| *b != p.local);
         let pending = !p.item.conflicts.is_empty() || !p.item.forced.is_empty();
-        if !(since.is_none() || changed.contains(&p.asset) || local_changed || pending || p.deleted) {
+        let waiting = queued.contains(&p.asset);
+        if !(since.is_none() || changed.contains(&p.asset) || local_changed || pending || p.deleted || waiting) {
             continue;
         }
         done.checked += 1;
@@ -284,6 +356,10 @@ fn work(c: &lcc_immich::Client, job: Job) -> SyncDone {
         };
         if merge::untouchable(&a) {
             continue;
+        }
+        if waiting && (a.is_trashed == p.deleted) {
+            // restored on the side that had deleted it (or gone on both): nothing left to confirm
+            done.restored.push(p.asset.clone());
         }
         if a.is_trashed || p.deleted {
             let both = a.is_trashed && p.deleted;
@@ -416,9 +492,20 @@ fn sync_stacks(
 }
 
 /// Write the outcomes' Immich side: asset updates, then tags (created once, assigned in bulk).
+///
+/// A pair stays `pushed` only when everything it had to send arrived: its asset update and each
+/// of its tag changes. A pair the run never reached (the server went away part-way) or whose tags
+/// were not sent is marked not pushed, so [`finish`] keeps its old base and the next run sends
+/// the change again instead of reading the catalog's edit as "already synced".
 fn push(c: &lcc_immich::Client, cfg: &SyncConfig, results: &mut [(PairDone, Asset)], done: &mut SyncDone) {
+    let mut stopped = false;
     for (p, a) in results.iter_mut() {
         if p.outcome.to_remote.is_empty() {
+            continue;
+        }
+        if stopped {
+            // not reached
+            p.pushed = false;
             continue;
         }
         let zone = a.exif_info.as_ref().and_then(|e| e.date_time_original.as_deref()).and_then(merge::zone_of);
@@ -430,9 +517,17 @@ fn push(c: &lcc_immich::Client, cfg: &SyncConfig, results: &mut [(PairDone, Asse
             p.error = Some(e.to_string());
             if e.retryable() || matches!(e, ImmichError::BadKey | ImmichError::NoKey) {
                 done.fatal.get_or_insert(e);
-                return;
+                stopped = true;
             }
         }
+    }
+    let has_tags = |p: &PairDone| !p.outcome.add_tags.is_empty() || !p.outcome.remove_tags.is_empty();
+    if stopped {
+        // the tag step is not run either: a pair whose tags are still to send is not done
+        for (p, _) in results.iter_mut().filter(|(p, _)| p.pushed && has_tags(p)) {
+            p.pushed = false;
+        }
+        return;
     }
     // tags: create the missing ones, then assign / remove per tag
     let wanted: BTreeSet<String> =
@@ -447,15 +542,25 @@ fn push(c: &lcc_immich::Client, cfg: &SyncConfig, results: &mut [(PairDone, Asse
                     p.pushed = false;
                     p.error = Some(format!("tags: {e}"));
                 }
+                if e.retryable() || matches!(e, ImmichError::BadKey | ImmichError::NoKey) {
+                    done.fatal.get_or_insert(e);
+                    for (p, _) in results.iter_mut().filter(|(p, _)| p.pushed && has_tags(p)) {
+                        p.pushed = false;
+                    }
+                    return;
+                }
             }
         }
     }
     let mut add: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     let mut remove: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    let mut unknown: Vec<(usize, String)> = Vec::new();
     for (i, (p, a)) in results.iter().enumerate().filter(|(_, (p, _))| p.pushed) {
         for k in &p.outcome.add_tags {
-            if let Some(id) = ids.get(&merge::keyword_to_tag(k)) {
-                add.entry(id.clone()).or_default().push(i);
+            match ids.get(&merge::keyword_to_tag(k)) {
+                Some(id) => add.entry(id.clone()).or_default().push(i),
+                // the server did not hand the tag back: it was not added
+                None => unknown.push((i, k.clone())),
             }
         }
         for k in &p.outcome.remove_tags {
@@ -464,17 +569,38 @@ fn push(c: &lcc_immich::Client, cfg: &SyncConfig, results: &mut [(PairDone, Asse
             }
         }
     }
+    for (i, k) in unknown {
+        if let Some((p, _)) = results.get_mut(i) {
+            p.pushed = false;
+            p.error = Some(format!("tags: the server did not create the tag for {k}"));
+        }
+    }
+    let mut gone = false;
     for (tag, idx, adding) in add.into_iter().map(|(t, i)| (t, i, true)).chain(remove.into_iter().map(|(t, i)| (t, i, false))) {
-        let assets: Vec<String> = idx.iter().filter_map(|i| results.get(*i).map(|(p, _)| p.asset.clone())).collect();
-        let r = if adding { c.tag_assets(&tag, &assets) } else { c.untag_assets(&tag, &assets) };
-        if let Err(e) = r {
+        let r = if gone {
+            // the server went away: the tag changes not sent keep their pairs open
+            Err(None)
+        } else {
+            let assets: Vec<String> = idx.iter().filter_map(|i| results.get(*i).map(|(p, _)| p.asset.clone())).collect();
+            if adding { c.tag_assets(&tag, &assets) } else { c.untag_assets(&tag, &assets) }.map_err(Some)
+        };
+        let Err(e) = r else { continue };
+        if let Some(e) = &e {
             done.errors.push(format!("tags: {e}"));
-            for i in idx {
-                if let Some((p, _)) = results.get_mut(i) {
-                    p.pushed = false;
+        }
+        for i in idx {
+            if let Some((p, _)) = results.get_mut(i) {
+                p.pushed = false;
+                if let Some(e) = &e {
                     p.error = Some(format!("tags: {e}"));
                 }
             }
+        }
+        if let Some(e) = e
+            && (e.retryable() || matches!(e, ImmichError::BadKey | ImmichError::NoKey))
+        {
+            done.fatal.get_or_insert(e);
+            gone = true;
         }
     }
 }
@@ -483,13 +609,32 @@ fn push(c: &lcc_immich::Client, cfg: &SyncConfig, results: &mut [(PairDone, Asse
 pub(crate) fn finish(s: &mut Session, d: SyncDone) -> Value {
     let now = (s.clock)();
     let account = d.account.clone();
+    if state_path(s, &account) != d.home {
+        // another library was opened while the worker was out: its photo ids and bases are not
+        // this library's. Nothing is applied or recorded; that library's next run starts from
+        // its own saved state.
+        let entry = s.remote.sync.entry(account.clone()).or_default();
+        entry.running = false;
+        let v = json!({
+            "ok": false,
+            "account": account,
+            "dryRun": d.dry_run,
+            "errors": ["the library changed while the sync was running; nothing was applied"],
+        });
+        entry.last = Some(v.clone());
+        return v;
+    }
     let cfg = config_of(s, &account);
     let (mut pulled, mut pushed, mut conflicts) = (0u64, 0u64, 0u64);
     let mut errors = d.errors.clone();
     let mut changes = Vec::new();
     let mut ops: Vec<Op> = Vec::new();
     let mut link_ops: Vec<Op> = Vec::new();
-    let mut new_items: Vec<(String, ItemState)> = Vec::new();
+    // each pair's new state, with what to take back should the catalog write fail
+    let mut new_items: Vec<(String, ItemState, PullUndo)> = Vec::new();
+    // something was left behind that only the server's listing would bring up again: the
+    // cursor (`synced_until`) must not pass it
+    let mut unsent = false;
     {
         let st = state_of(s, &account).clone();
         let ex = excluded(&s.catalog);
@@ -517,26 +662,40 @@ pub(crate) fn finish(s: &mut Session, d: SyncDone) -> Value {
                 errors.push(format!("photo {}: {e}", p.photo.0));
             }
             if !p.pushed {
+                // not (fully) sent: the old base stays, so the next run sends the change again.
+                // A pair the next run would not look at by itself (the catalog still equals the
+                // base, nothing decided or in conflict) is found again through the listing
+                unsent |=
+                    st.items.get(&p.asset).is_some_and(|i| i.base.as_ref() == Some(&p.local_used) && i.forced.is_empty() && i.conflicts.is_empty());
                 continue;
             }
             let Some(photo) = s.catalog.photo(p.photo) else { continue };
             let mut item = st.items.get(&p.asset).cloned().unwrap_or_default();
             let current = merge::local(photo, &cfg, &ex);
+            let mut unapplied = BTreeSet::new();
             if !o.to_local.is_empty() {
                 if current == p.local_used {
                     ops.extend(merge::local_ops(photo, &o.target, &o.to_local, &cfg, &ex));
                     pulled += 1;
                 } else {
-                    // edited again while the run was out: the next run sends the newer edit
+                    // edited again while the run was out: nothing is written over the newer edit,
+                    // and the base does not move for the fields that were not taken
+                    unapplied = o.to_local.clone();
                     errors.push(format!("photo {}: changed during the sync; synced next time", p.photo.0));
                 }
             }
             pushed += u64::from(!o.to_remote.is_empty());
             conflicts += o.conflicts.len() as u64;
+            let undo = PullUndo {
+                fields: if unapplied.is_empty() { o.to_local.clone() } else { BTreeSet::new() },
+                old_base: item.base.clone(),
+                forced: item.forced.clone(),
+            };
             item.photo = p.photo.0;
-            item.base = Some(o.target.clone());
+            item.base = Some(merge::next_base(o, undo.old_base.as_ref(), &p.local_used, &p.remote, &unapplied));
             item.local_changed_at = None;
-            item.forced.clear();
+            // a decision for a field that was not taken waits for the next run
+            item.forced.retain(|f, _| unapplied.contains(f));
             let old = std::mem::take(&mut item.conflicts);
             for f in &o.conflicts {
                 let detected = old.get(f).map(|c| c.detected.clone()).unwrap_or_else(|| now.clone());
@@ -553,16 +712,32 @@ pub(crate) fn finish(s: &mut Session, d: SyncDone) -> Value {
                     link_ops.push(Catalog::link_remote_op(r));
                 }
             }
-            new_items.push((p.asset.clone(), item));
+            new_items.push((p.asset.clone(), item, undo));
         }
     }
     if !d.dry_run {
-        for chunk in [ops, link_ops] {
-            if !chunk.is_empty()
-                && let Err(e) = s.apply_system(Op::Batch { ops: chunk })
-            {
-                errors.push(format!("catalog: {e}"));
+        if !ops.is_empty()
+            && let Err(e) = s.apply_system(Op::Batch { ops })
+        {
+            // nothing was written into the catalog: no pulled field may count as synced
+            errors.push(format!("catalog: {e}"));
+            pulled = 0;
+            let by_asset: HashMap<&str, &PairDone> = d.pairs.iter().map(|p| (p.asset.as_str(), p)).collect();
+            for (asset, item, undo) in new_items.iter_mut().filter(|(_, _, u)| !u.fields.is_empty()) {
+                let Some(p) = by_asset.get(asset.as_str()) else { continue };
+                item.base = Some(merge::next_base(&p.outcome, undo.old_base.as_ref(), &p.local_used, &p.remote, &undo.fields));
+                for f in &undo.fields {
+                    if let Some(side) = undo.forced.get(f) {
+                        item.forced.insert(*f, *side);
+                    }
+                }
             }
+            unsent = true;
+        }
+        if !link_ops.is_empty()
+            && let Err(e) = s.apply_system(Op::Batch { ops: link_ops })
+        {
+            errors.push(format!("catalog: {e}"));
         }
     }
     let mut stacks_changed = 0u64;
@@ -602,15 +777,22 @@ pub(crate) fn finish(s: &mut Session, d: SyncDone) -> Value {
         st.stacks = ss.base.clone();
     }
     if !d.dry_run {
-        for (k, v) in new_items {
+        for (k, v, _) in new_items {
             st.items.insert(k, v);
         }
+        // the queue only holds deletions that are still true
+        st.deletions.retain(|x| !d.restored.contains(&x.asset));
         for del in &d.deletions {
-            if !st.deletions.iter().any(|x| x.asset == del.asset) {
-                st.deletions.push(del.clone());
+            match st.deletions.iter_mut().find(|x| x.asset == del.asset) {
+                // (restored on one side, deleted on the other since)
+                Some(x) if x.side != del.side => *x = del.clone(),
+                Some(_) => {}
+                None => st.deletions.push(del.clone()),
             }
         }
+        // the cursor only moves past a run that left nothing behind for the listing
         if d.fatal.is_none()
+            && !unsent
             && let Some(n) = &d.newest
             && st.synced_until.as_ref().is_none_or(|u| n > u)
         {
@@ -665,6 +847,9 @@ pub(crate) fn finish(s: &mut Session, d: SyncDone) -> Value {
     let entry = s.remote.sync.entry(account).or_default();
     entry.running = false;
     entry.last = Some(v.clone());
+    if d.dry_run {
+        entry.preview = Some(v.clone());
+    }
     // the schedule: back off after a failure (30 s, 1 min, 2 min … at most 1 h), else the interval
     if d.fatal.as_ref().is_some_and(|e| e.retryable()) {
         entry.failures = entry.failures.saturating_add(1);
@@ -695,13 +880,12 @@ pub(crate) fn tick(s: &mut Session) {
             }
             Some(t) if Instant::now() >= t => {
                 e.next_due = None;
+                // new assets on the server are linked first-come: the link pass rides along
+                if let Err(err) = super::start_link_pass(s, &id, false) {
+                    log::warn!("Immich background link pass: {err}");
+                }
                 if let Err(err) = start(s, &id, false, false, true) {
                     log::warn!("Immich background sync: {err}");
-                }
-                if config_of(s, &id).album_rule().direction != merge::Direction::Off
-                    && let Err(err) = super::publish::start_albums(s, &id, false, true)
-                {
-                    log::warn!("Immich background album sync: {err}");
                 }
                 // a start that could not reach the key / server waits a while
                 let e = s.remote.sync.entry(id).or_default();
@@ -720,12 +904,7 @@ fn sync_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "immich.sync";
     let id = account_param(s, p, C)?;
     let (dry, background) = (bool_or(p, "dryRun", false), bool_or(p, "background", false));
-    let mut v = start(s, &id, dry, bool_or(p, "full", false), background)?;
-    // the album rule rides along with every real run (Sync Now, the schedule)
-    if !dry && config_of(s, &id).album_rule().direction != merge::Direction::Off {
-        v["albums"] = super::publish::start_albums(s, &id, false, background)?;
-    }
-    Ok(v)
+    start(s, &id, dry, bool_or(p, "full", false), background)
 }
 
 fn status(s: &mut Session, p: &Value) -> Result<Value> {
@@ -740,6 +919,7 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
         "account": id,
         "running": e.is_some_and(|e| e.running),
         "last": e.and_then(|e| e.last.clone()),
+        "preview": e.and_then(|e| e.preview.clone()),
         "nextRunInSeconds": next,
         "syncedUntil": st.synced_until,
         "items": st.items.len(),
@@ -748,10 +928,6 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
         "log": st.log.iter().rev().take(n).collect::<Vec<_>>(),
         "config": cfg,
         "rules": Field::ALL.iter().map(|f| json!({"field": f.name(), "rule": cfg.rule(*f)})).collect::<Vec<_>>(),
-        "albumRule": cfg.album_rule(),
-        "albumsRunning": e.is_some_and(|e| e.albums_running),
-        "albumsLast": e.and_then(|e| e.albums_last.clone()),
-        "albumDeletions": super::publish::load_pending(s, &id),
     }))
 }
 
@@ -850,30 +1026,60 @@ fn resolve_deletion(s: &mut Session, p: &Value) -> Result<Value> {
     let picked: Vec<Deletion> = st.deletions.iter().filter(|d| assets.as_ref().is_none_or(|a| a.contains(&d.asset))).cloned().collect();
     let mut done = Vec::new();
     let mut failed = Vec::new();
+    // deletions that are no longer true (the asset is back out of Immich's trash, the photo back
+    // out of Recently Deleted): dropped from the queue, never applied
+    let mut restored: Vec<String> = Vec::new();
     if apply {
+        // the queue may be old: look again before deleting anything
+        let client = if picked.is_empty() { None } else { Some(s.immich_client(&id).map(|(_, c)| c)) };
+        let mut go: Vec<&Deletion> = Vec::new();
+        for d in &picked {
+            let photo_deleted = s.catalog.photo(PhotoId(d.photo)).is_some_and(|p| p.deleted);
+            if d.side == "catalog" {
+                if photo_deleted || s.catalog.photo(PhotoId(d.photo)).is_none() {
+                    go.push(d);
+                } else {
+                    restored.push(d.asset.clone());
+                }
+                continue;
+            }
+            match client.as_ref().map(|c| c.as_ref().map_err(Clone::clone).and_then(|c| c.asset(&d.asset))) {
+                Some(Ok(a)) if a.is_trashed => go.push(d),
+                Some(Ok(_)) => restored.push(d.asset.clone()),
+                // deleted for good in Immich: the deletion stands
+                Some(Err(ImmichError::NotFound(_))) => go.push(d),
+                // can't tell (offline, key): nothing is deleted on a guess
+                Some(Err(e)) => failed.push(failure(&e)),
+                None => {}
+            }
+        }
         let local: Vec<u64> =
-            picked.iter().filter(|d| d.side == "immich").map(|d| d.photo).filter(|ph| s.catalog.photo(PhotoId(*ph)).is_some()).collect();
+            go.iter().filter(|d| d.side == "immich").map(|d| d.photo).filter(|ph| s.catalog.photo(PhotoId(*ph)).is_some()).collect();
         if !local.is_empty() {
             s.execute("photo.delete", &json!({"ids": local}))?;
         }
-        done.extend(picked.iter().filter(|d| d.side == "immich").map(|d| d.asset.clone()));
-        let remote: Vec<String> = picked.iter().filter(|d| d.side == "catalog").map(|d| d.asset.clone()).collect();
+        done.extend(go.iter().filter(|d| d.side == "immich").map(|d| d.asset.clone()));
+        let remote: Vec<String> = go.iter().filter(|d| d.side == "catalog").map(|d| d.asset.clone()).collect();
         if !remote.is_empty() {
-            match s.immich_client(&id).and_then(|(_, c)| c.trash_assets(&remote)) {
-                Ok(()) => done.extend(remote),
-                Err(e) => failed.push(failure(&e)),
+            match client {
+                Some(Ok(c)) => match c.trash_assets(&remote) {
+                    Ok(()) => done.extend(remote),
+                    Err(e) => failed.push(failure(&e)),
+                },
+                Some(Err(e)) => failed.push(failure(&e)),
+                None => {}
             }
         }
     } else {
         done.extend(picked.iter().map(|d| d.asset.clone()));
     }
     let st = state_of(s, &id);
-    st.deletions.retain(|d| !done.contains(&d.asset));
+    st.deletions.retain(|d| !done.contains(&d.asset) && !restored.contains(&d.asset));
     if !apply {
         st.kept.extend(done.iter().cloned());
     }
     save_state(s, &id).map_err(|e| bad(C, e))?;
-    Ok(json!({"resolved": done.len(), "failed": failed}))
+    Ok(json!({"resolved": done.len(), "restored": restored.len(), "failed": failed}))
 }
 
 // ---- people
@@ -883,7 +1089,97 @@ fn linked_targets(s: &Session, p: &Value, account: &str) -> Vec<(PhotoId, String
     linked(s, account).into_iter().filter(|(ph, _)| only.as_ref().is_none_or(|o| o.contains(&ph.0))).collect()
 }
 
-/// Read Immich's faces for linked photos into their face regions (marked "from Immich").
+/// What the server side of `immich.importPeople` brings back.
+pub(crate) struct PeopleDone {
+    pub(crate) account: String,
+    hidden: bool,
+    more: bool,
+    people: Vec<lcc_immich::types::Person>,
+    faces: Vec<(PhotoId, Vec<lcc_immich::types::Face>)>,
+    errors: Vec<String>,
+    /// A failure that ends the run (offline, key, permissions): nothing is written.
+    fatal: Option<ImmichError>,
+}
+
+/// The server side: the people, then each linked asset's faces (`task`: progress and cancel).
+fn people_work(
+    client: &lcc_immich::Client,
+    account: String,
+    targets: Vec<(PhotoId, String)>,
+    hidden: bool,
+    more: bool,
+    task: Option<&crate::activity::TaskGuard>,
+) -> PeopleDone {
+    let mut d = PeopleDone { account, hidden, more, people: Vec::new(), faces: Vec::new(), errors: Vec::new(), fatal: None };
+    match client.people_all() {
+        Ok(x) => d.people = x,
+        Err(e) => {
+            d.fatal = Some(e);
+            return d;
+        }
+    }
+    let total = targets.len() as u64;
+    for (n, (ph, asset)) in targets.into_iter().enumerate() {
+        if let Some(t) = task {
+            if t.is_cancelled() {
+                break;
+            }
+            t.progress(n as u64, total);
+        }
+        match client.faces(&asset) {
+            Ok(f) => d.faces.push((ph, f)),
+            Err(e) if e.retryable() || matches!(e, ImmichError::BadKey | ImmichError::NoKey | ImmichError::Forbidden(_)) => {
+                d.fatal = Some(e);
+                return d;
+            }
+            Err(e) => d.errors.push(format!("{asset}: {e}")),
+        }
+    }
+    d
+}
+
+/// Take the faces in: the photos' regions, as one undo step.
+pub(crate) fn finish_people(s: &mut Session, d: PeopleDone) -> Value {
+    if let Some(e) = &d.fatal {
+        return failure(e);
+    }
+    let (mut added, mut removed, mut skipped, mut photos) = (0, 0, 0, 0);
+    let mut ops = Vec::new();
+    for (ph, faces) in &d.faces {
+        let Some(photo) = s.catalog.photo(*ph) else { continue };
+        let (regions, m) = people::regions_with_faces(photo, faces, d.hidden);
+        skipped += m.skipped;
+        if m.added + m.removed > 0 && regions != photo.meta.regions {
+            let mut meta = photo.meta.clone();
+            meta.regions = regions;
+            ops.push(Op::SetMeta { id: *ph, meta: Box::new(meta) });
+            added += m.added;
+            removed += m.removed;
+            photos += 1;
+        }
+    }
+    let mut errors = d.errors;
+    if !ops.is_empty()
+        && let Err(e) = s.commit("Import People from Immich", Op::Batch { ops })
+    {
+        errors.push(format!("catalog: {e}"));
+        (added, removed, photos) = (0, 0, 0);
+    }
+    json!({
+        "ok": true,
+        "photos": photos,
+        "added": added,
+        "removed": removed,
+        "skipped": skipped,
+        "more": d.more,
+        "errors": errors,
+        "people": d.people.iter().map(|x| json!({"id": x.id, "name": x.name, "birthDate": x.birth_date, "hidden": x.is_hidden})).collect::<Vec<_>>(),
+    })
+}
+
+/// Read Immich's faces for linked photos into their face regions (marked "from Immich"). With
+/// `background` the server is read on a worker (one request per photo: minutes on a large
+/// library) and the result arrives through `immich.answer`.
 fn import_people(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "immich.importPeople";
     let id = account_param(s, p, C)?;
@@ -894,48 +1190,24 @@ fn import_people(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(x) => x,
         Err(e) => return Ok(failure(&e)),
     };
-    let people = match client.people_all() {
-        Ok(x) => x,
-        Err(e) => return Ok(failure(&e)),
-    };
     let hidden = bool_or(p, "includeHidden", false);
-    let (mut added, mut removed, mut skipped, mut photos) = (0, 0, 0, 0);
-    let mut errors = Vec::new();
-    let mut ops = Vec::new();
-    for (ph, asset) in targets {
-        let faces = match client.faces(&asset) {
-            Ok(f) => f,
-            Err(e) if e.retryable() || matches!(e, ImmichError::BadKey | ImmichError::NoKey | ImmichError::Forbidden(_)) => return Ok(failure(&e)),
-            Err(e) => {
-                errors.push(format!("{asset}: {e}"));
-                continue;
-            }
-        };
-        let Some(photo) = s.catalog.photo(ph) else { continue };
-        let (regions, m) = people::regions_with_faces(photo, &faces, hidden);
-        skipped += m.skipped;
-        if m.added + m.removed > 0 && regions != photo.meta.regions {
-            let mut meta = photo.meta.clone();
-            meta.regions = regions;
-            ops.push(Op::SetMeta { id: ph, meta: Box::new(meta) });
-            added += m.added;
-            removed += m.removed;
-            photos += 1;
+    if bool_or(p, "background", false) {
+        let key = super::ask_key(C, &id);
+        if !s.remote.asking.insert(key.clone()) {
+            return Ok(json!({"started": false, "key": key, "reason": "already running"}));
         }
+        s.remote.answers.remove(&key);
+        let task = s.activity.start("immich", "Importing people from Immich", crate::activity::Cancel::Yes);
+        let tx = s.remote.sender();
+        std::thread::spawn(move || {
+            let d = people_work(&client, id, targets, hidden, more, Some(&task));
+            drop(task);
+            let _ = tx.send(Msg::People(Box::new(d)));
+        });
+        return Ok(json!({"started": true, "key": key}));
     }
-    if !ops.is_empty() {
-        s.commit("Import People from Immich", Op::Batch { ops })?;
-    }
-    Ok(json!({
-        "ok": true,
-        "photos": photos,
-        "added": added,
-        "removed": removed,
-        "skipped": skipped,
-        "more": more,
-        "errors": errors,
-        "people": people.iter().map(|x| json!({"id": x.id, "name": x.name, "birthDate": x.birth_date, "hidden": x.is_hidden})).collect::<Vec<_>>(),
-    }))
+    let d = people_work(&client, id, targets, hidden, more, None);
+    Ok(finish_people(s, d))
 }
 
 /// Confirm the Immich face regions of the photos (default: selection).
@@ -967,32 +1239,40 @@ fn push_people(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(x) => x,
         Err(e) => return Ok(failure(&e)),
     };
-    let people = match client.people_all() {
-        Ok(x) => x,
-        Err(e) => return Ok(failure(&e)),
-    };
-    let ids: BTreeSet<PhotoId> = linked(s, &id).into_iter().map(|(p, _)| p).collect();
-    let plan = people::names_to_push(ids.iter().filter_map(|i| s.catalog.photo(*i).map(|x| &**x)), &people, bool_or(p, "merge", false));
-    let v = json!({
-        "renames": plan.renames.iter().map(|(i, n)| json!({"person": i, "name": n})).collect::<Vec<_>>(),
-        "merges": plan.merges.iter().map(|(i, o)| json!({"into": i, "people": o})).collect::<Vec<_>>(),
-    });
-    if bool_or(p, "dryRun", false) {
-        return Ok(v);
-    }
-    if !plan.renames.is_empty()
-        && let Err(e) = client.rename_people(&plan.renames)
-    {
-        return Ok(failure(&e));
-    }
-    for (into, others) in &plan.merges {
-        if let Err(e) = client.merge_people(into, others) {
-            return Ok(failure(&e));
+    // the catalog's part here (the photos are shared, not copied); the server's in `work`
+    let photos: Vec<std::sync::Arc<lcc_catalog::Photo>> =
+        linked(s, &id).into_iter().map(|(p, _)| p).collect::<BTreeSet<PhotoId>>().into_iter().filter_map(|i| s.catalog.photo(i).cloned()).collect();
+    let (merge_people, dry_run) = (bool_or(p, "merge", false), bool_or(p, "dryRun", false));
+    let work = move || {
+        let people = match client.people_all() {
+            Ok(x) => x,
+            Err(e) => return failure(&e),
+        };
+        let plan = people::names_to_push(photos.iter().map(|x| &**x), &people, merge_people);
+        let mut v = json!({
+            "renames": plan.renames.iter().map(|(i, n)| json!({"person": i, "name": n})).collect::<Vec<_>>(),
+            "merges": plan.merges.iter().map(|(i, o)| json!({"into": i, "people": o})).collect::<Vec<_>>(),
+        });
+        if dry_run {
+            return v;
         }
+        if !plan.renames.is_empty()
+            && let Err(e) = client.rename_people(&plan.renames)
+        {
+            return failure(&e);
+        }
+        for (into, others) in &plan.merges {
+            if let Err(e) = client.merge_people(into, others) {
+                return failure(&e);
+            }
+        }
+        v["ok"] = json!(true);
+        v
+    };
+    if bool_or(p, "background", false) {
+        return Ok(super::ask(s, super::ask_key(C, &id), "Sending names to Immich", move |_| work()));
     }
-    let mut v = v;
-    v["ok"] = json!(true);
-    Ok(v)
+    Ok(work())
 }
 
 // ---- search
@@ -1067,12 +1347,12 @@ fn smart_search(s: &mut Session, p: &Value) -> Result<Value> {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "immich.sync", "Sync Metadata with Immich", ["Library", "Immich"], None, "{account?, dryRun?: bool (only report what would change), full?: bool (look at every linked asset), background?: bool}: two-way metadata sync of linked photos (rating, favourite, archived, description, keywords ↔ tags, location, date; per-field rules in immich.setSync); conflicts wait in immich.syncConflicts, deletions in the queue → {ok, checked, pulled, pushed, conflicts, openConflicts, deletionsQueued, errors, changes? (dry run)} or {started}", always, sync_cmd),
-        cmd!(query "immich.syncStatus", "Immich Sync Status", [], None, "{account?, log?: n} → {running, last, nextRunInSeconds, syncedUntil, items, conflicts, deletions, log (activity, newest first), config, rules}", always, status),
+        cmd!(query "immich.syncStatus", "Immich Sync Status", [], None, "{account?, log?: n} → {running, last, preview (the last dry run, with its changes), nextRunInSeconds, syncedUntil, items, conflicts, deletions, log (activity, newest first), config, rules}", always, status),
         cmd!(query "immich.syncConflicts", "Immich Sync Conflicts", [], None, "{account?} → {conflicts: [{photo, assetId, fileName, field, catalog, immich, detected, decided?}]}", always, conflicts),
         cmd!(query "immich.resolveConflict", "Resolve Immich Sync Conflict", [], None, "{account?, keep: catalog|immich, ids?: photos, assetId?, field?, sync?: bool, background?: bool}: decide conflicts (default: all); the next sync applies them (sync: run it now) → {decided, sync?}", always, resolve),
-        cmd!(query "immich.setSync", "Immich Sync Settings", [], None, "{account?, config: {rules?: {rating|favorite|archived|description|keywords|location|captured: {direction: twoWay|toImmich|fromImmich|off, policy: catalog|immich|newest|ask}}, favorite?: pick|fiveStars, description?: caption|title, intervalMinutes?, onPublish?, pushPeople?, albums?: {direction, policy} (collections ↔ albums, immich.syncAlbums; default off = only albums linked by hand, policy ask)}} → {config}", always, set_config),
-        cmd!(query "immich.resolveDeletion", "Resolve Immich Deletion", [], None, "{account?, assets?: [asset ids] (omitted = all queued; [] = none), action: apply|keep}: apply: a photo whose asset is in Immich's trash goes to Recently Deleted, an asset whose photo was deleted goes to Immich's trash (never a hard delete); keep: dismiss → {resolved, failed}", always, resolve_deletion),
-        cmd!(query "immich.importPeople", "Import People from Immich", [], None, "{account?, ids?: photos (default all linked), includeHidden?: bool}: read Immich's faces and people into the photos' face regions, marked from Immich (unconfirmed ones are replaced on the next import; regions the photo had are kept) → {photos, added, removed, skipped, more, people: [{id, name, birthDate, hidden}]}", always, import_people),
+        cmd!(query "immich.setSync", "Immich Sync Settings", [], None, "{account?, config: {rules?: {rating|favorite|archived|description|keywords|location|captured: {direction: twoWay|toImmich|fromImmich|off, policy: catalog|immich|newest|ask}}, favorite?: pick|fiveStars, description?: caption|title, intervalMinutes?, onPublish?, pushPeople?}} → {config}", always, set_config),
+        cmd!(query "immich.resolveDeletion", "Resolve Immich Deletion", [], None, "{account?, assets?: [asset ids] (omitted = all queued; [] = none), action: apply|keep}: apply: a photo whose asset is in Immich's trash goes to Recently Deleted, an asset whose photo was deleted goes to Immich's trash (never a hard delete); each is checked first, and a deletion that was undone meanwhile (the asset restored from the trash, the photo restored) is dropped, not applied; keep: dismiss → {resolved, restored, failed}", always, resolve_deletion),
+        cmd!(query "immich.importPeople", "Import People from Immich", [], None, "{account?, ids?: photos (default all linked), includeHidden?: bool, background?: bool (on a worker, with an activity row that can be cancelled: {started, key}, the result through immich.answer)}: read Immich's faces and people into the photos' face regions, marked from Immich (unconfirmed ones are replaced on the next import; regions the photo had are kept) → {photos, added, removed, skipped, more, people: [{id, name, birthDate, hidden}]}", always, import_people),
         cmd!(
             "immich.confirmFaces",
             "Confirm Faces from Immich",
@@ -1082,7 +1362,7 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             confirm_faces
         ),
-        cmd!(query "immich.pushPeople", "Send Names to Immich", [], None, "{account?, merge?: bool, dryRun?: bool}: rename Immich people to the names given to their faces in the app; with merge, people that now share a name are merged in Immich → {renames, merges, ok?}", always, push_people),
+        cmd!(query "immich.pushPeople", "Send Names to Immich", [], None, "{account?, merge?: bool, dryRun?: bool, background?: bool (on a worker: {started, key}, the result through immich.answer)}: rename Immich people to the names given to their faces in the app; with merge, people that now share a name are merged in Immich → {renames, merges, ok?}", always, push_people),
         cmd!(query "immich.smartSearch", "Immich Smart Search", [], None, "{account?, query, mode?: smart|ocr|description|place, size?, page?, show?: bool (show the results as a temporary collection), saveAs?: album name}: natural-language (CLIP) or metadata search on the server, mapped to linked photos → {photos, unmatched, total, nextPage, shown?, album?}", always, smart_search),
     ]
 }

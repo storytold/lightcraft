@@ -2,10 +2,13 @@
 # Build, sign and (optionally) notarize the macOS release artifacts:
 #
 #   $DIST/<binary>-<version>-macos-<arch>.dmg          <display_name>.app on a drag-to-Applications DMG
-#   $DIST/<cli_binary>-<version>-macos-<arch>.zip      the headless CLI
-# (names from brand.toml)
+# (names from brand.toml). The headless CLI is inside the app, Contents/MacOS/<cli_binary>, and the
+# craft-fonts faces are files in Contents/Resources/fonts/, one copy read by both programs.
 #
-# Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build]
+# Usage: packaging/macos/package.sh [--arch universal|arm64|x64] [--skip-build]
+#   arm64 (Apple silicon) and x64 (Intel) hold one build each; universal holds both. The names are
+#   arm64 and x64, never aarch64 and x86_64: earlier builds take any `-macos-universal`,
+#   `-macos-aarch64` or `-macos-x86_64` image as theirs and pick the smallest (issue #1228).
 # Fonts: use CRAFT_FONTS_DIR or ../craft-fonts; download the pinned checkout if absent.
 #
 # Signing (env):
@@ -25,15 +28,16 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --arch) ARCH="$2"; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
-    -h | --help) sed -n '2,16p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,19p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+# LIPO_ARCHS: what `lipo -archs` must print for each binary, sorted
 case "$ARCH" in
-  universal) TARGETS=(aarch64-apple-darwin x86_64-apple-darwin) ;;
-  aarch64) TARGETS=(aarch64-apple-darwin) ;;
-  x86_64) TARGETS=(x86_64-apple-darwin) ;;
-  *) echo "unknown --arch $ARCH" >&2; exit 2 ;;
+  universal) TARGETS=(aarch64-apple-darwin x86_64-apple-darwin) LIPO_ARCHS="arm64 x86_64" ;;
+  arm64) TARGETS=(aarch64-apple-darwin) LIPO_ARCHS="arm64" ;;
+  x64) TARGETS=(x86_64-apple-darwin) LIPO_ARCHS="x86_64" ;;
+  *) echo "unknown --arch $ARCH (universal, arm64 or x64)" >&2; exit 2 ;;
 esac
 
 # Keep in sync with LSMinimumSystemVersion in Info.plist.in.
@@ -44,7 +48,6 @@ NAME="$BRAND_DISPLAY_NAME"
 CLI="$BRAND_CLI_BINARY"
 APP="$WORK/$NAME.app"
 DMG="$DIST/$BRAND_BINARY-$VERSION-macos-$ARCH.dmg"
-CLI_ZIP="$DIST/$CLI-$VERSION-macos-$ARCH.zip"
 
 NOTARIZE=0
 if [[ "$IDENTITY" = "-" ]]; then
@@ -58,10 +61,13 @@ fi
 echo "==> $NAME $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: $NOTARIZE"
 
 # ---- build -------------------------------------------------------------------------------------
+# shellcheck source=../fonts.sh
+. "$ROOT/packaging/fonts.sh"
+# also with --skip-build: the bundle takes its fonts from the checkout
+prepare_fonts
 if [[ "$SKIP_BUILD" = 0 ]]; then
-  # shellcheck source=../fonts.sh
-  . "$ROOT/packaging/fonts.sh"
-  prepare_fonts
+  # The fonts go into the bundle as files (below), not into each binary: the app and the CLI share them.
+  export CRAFT_FONTS_EMBED=0
   args=()
   for t in "${TARGETS[@]}"; do args+=(--target "$t"); done
   (cd "$ROOT" && cargo build --release --locked -p lcc-app -p lcc-cli --features lcc-app/heif,lcc-cli/heif "${args[@]}")
@@ -76,6 +82,16 @@ for pair in "app:$BRAND_BINARY" "app-cli:$CLI"; do
   for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/release/$bin"); done
   lipo -create -output "$WORK/bin/$out" "${inputs[@]}"
   lipo -info "$WORK/bin/$out"
+  archs="$(lipo -archs "$WORK/bin/$out" | tr ' ' '\n' | sort | xargs)"
+  if [[ "$archs" != "$LIPO_ARCHS" ]]; then
+    echo "error: $out holds '$archs', expected '$LIPO_ARCHS' for --arch $ARCH" >&2
+    exit 1
+  fi
+  # Symbols out, as Linux and FreeBSD do, before signing (docs/packaging.md → Symbols).
+  # Apple's strip by path: a Homebrew binutils strip earlier on PATH can't read every Mach-O.
+  before="$(wc -c <"$WORK/bin/$out" | tr -d ' ')"
+  /usr/bin/strip "$WORK/bin/$out"
+  echo "==> stripped $out: $before -> $(wc -c <"$WORK/bin/$out" | tr -d ' ') bytes"
 done
 
 # ---- signing helpers ---------------------------------------------------------------------------
@@ -115,6 +131,67 @@ cp "$ICNS" "$APP/Contents/Resources/$NAME.icns"
 brand_render "$HERE/Info.plist.in" "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist"
 printf 'APPL????' >"$APP/Contents/PkgInfo"
+# The CLI beside the app: signed and updated with it (the updater replaces the whole bundle).
+cp "$WORK/bin/$CLI" "$APP/Contents/MacOS/$CLI"
+# The craft-fonts faces, once, as the checkout lays them out (fonts/manifest.txt, each file and its
+# licence at the path the manifest gives), checked against the manifest's checksums. The binaries
+# read them from here (lcc_engine::fonts::craft_fonts) and must not embed them.
+trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  printf '%s' "${s%"${s##*[![:space:]]}"}"
+}
+copy_fonts() {
+  local src="$1" dest="$2" line file lfile sum n=0
+  mkdir -p "$dest/fonts"
+  cp "$src/fonts/manifest.txt" "$dest/fonts/manifest.txt"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+    # family | style | file | scripts | licence | licence file | sha256 | source
+    IFS='|' read -r _ _ file _ _ lfile sum _ <<<"$line"
+    file="$(trim "$file")" lfile="$(trim "$lfile")" sum="$(trim "$sum")"
+    for f in "$file" "$lfile"; do
+      case "$f" in "" | /* | *..*) echo "error: fonts/manifest.txt: unexpected path '$f'" >&2; return 1 ;; esac
+      mkdir -p "$dest/$(dirname "$f")"
+      cp "$src/$f" "$dest/$f"
+    done
+    if [[ "$(shasum -a 256 "$dest/$file" | cut -d' ' -f1)" != "$sum" ]]; then
+      echo "error: $file does not match its checksum in fonts/manifest.txt" >&2
+      return 1
+    fi
+    n=$((n + 1))
+  done <"$src/fonts/manifest.txt"
+  [[ "$n" -gt 0 ]] || { echo "error: no fonts listed in $src/fonts/manifest.txt" >&2; return 1; }
+  echo "==> $n craft-fonts faces in $dest/fonts"
+}
+# A binary that embeds a face (a build without CRAFT_FONTS_EMBED=0, e.g. --skip-build over an older
+# build) would carry a second copy: refuse it. Looks for 4 KiB from the middle of each face.
+check_no_embedded_fonts() {
+  local fonts="$1"; shift
+  perl -e '
+    my ($fonts, @bins) = @ARGV;
+    open(my $m, "<", "$fonts/fonts/manifest.txt") or die "manifest: $!";
+    my @chunks;
+    while (<$m>) {
+      next if /^\s*(#|$)/;
+      my @f = map { s/^\s+|\s+$//gr } split /\|/;
+      open(my $fh, "<:raw", "$fonts/$f[2]") or die "$f[2]: $!";
+      local $/; my $b = <$fh>;
+      push @chunks, [$f[2], substr($b, int(length($b) / 2), 4096)];
+    }
+    my $bad = 0;
+    for my $bin (@bins) {
+      open(my $fh, "<:raw", $bin) or die "$bin: $!";
+      local $/; my $b = <$fh>;
+      for my $c (@chunks) {
+        if (index($b, $c->[1]) >= 0) { print STDERR "error: $bin embeds $c->[0]\n"; $bad = 1; }
+      }
+    }
+    exit $bad;
+  ' "$fonts" "$@"
+}
+copy_fonts "$CRAFT_FONTS_DIR" "$APP/Contents/Resources"
+check_no_embedded_fonts "$APP/Contents/Resources" "$APP/Contents/MacOS/$NAME" "$APP/Contents/MacOS/$CLI"
 # Licences (and the craft-fonts font licences when built with CRAFT_FONTS_DIR) inside the bundle.
 mkdir -p "$APP/Contents/Resources/Licenses"
 copy_docs "$APP/Contents/Resources/Licenses"
@@ -124,7 +201,11 @@ copy_docs "$APP/Contents/Resources/Licenses"
 xattr -cr "$APP"
 
 # Sign inside-out: nested code first, then the bundle itself (no --deep on the final signature).
-# Today the only nested code is the main executable; frameworks/helpers would be signed here too.
+# The nested code is the main executable and the CLI; frameworks/helpers would be signed here too.
+# The CLI has the app's entitlements: `--opt addToPhotos=true` / `app.export {addToPhotos}` send
+# Apple Events to Photos through osascript too (macOS asks about the app that started the CLI,
+# usually the terminal).
+sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/$CLI"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/$NAME"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP"
 codesign --verify --strict --deep --verbose=2 "$APP"
@@ -142,21 +223,9 @@ echo "==> building $DMG"
 STAGE="$WORK/dmg"
 mkdir -p "$STAGE"
 ditto "$APP" "$STAGE/$NAME.app"
-# A hidden copy under each earlier display name ([legacy] display_names in the brand file): the updater
-# of a build released under that name looks for its own name in the image (fork #411).
-LEGACY_NAMES="$(awk '
-  /^[[:space:]]*\[/ { sec = $0; gsub(/[][[:space:]]/, "", sec); next }
-  sec == "legacy" && $1 == "display_names" {
-    line = $0; sub(/^[^[]*\[/, "", line); sub(/\].*$/, "", line)
-    n = split(line, parts, "\"")
-    for (i = 2; i <= n; i += 2) print parts[i]
-  }' "$BRAND_FILE_PATH")"
-while IFS= read -r legacy; do
-  if [[ -z "$legacy" ]] || [[ "$legacy" = "$NAME" ]]; then continue; fi
-  echo "==> adding a hidden copy as $legacy.app for installs released under that name"
-  ditto "$APP" "$STAGE/$legacy.app"
-  chflags hidden "$STAGE/$legacy.app"
-done <<< "$LEGACY_NAMES"
+# While [legacy] display_names is non-empty in the brand file, add a hidden `<name>.app` copy under each
+# earlier name: the updater of a build released under that name looks for its own name in the image
+# (fork #411). Restore the block from 0a528340e when the next rename needs it.
 ln -s /Applications "$STAGE/Applications"
 # Finder window layout: background, icon size and positions (packaging/macos/dmg/README.md).
 mkdir -p "$STAGE/.background"
@@ -226,22 +295,12 @@ if [[ "$NOTARIZE" = 1 ]]; then
   spctl --assess --type open --context context:primary-signature -vvv "$DMG"
 fi
 
-# ---- CLI ---------------------------------------------------------------------------------------
-echo "==> building $CLI_ZIP"
-CLI_DIR="$WORK/$CLI-$VERSION-macos-$ARCH"
-mkdir -p "$CLI_DIR"
-cp "$WORK/bin/$CLI" "$CLI_DIR/"
-copy_docs "$CLI_DIR"
-# Same entitlements as the app: `--opt addToPhotos=true` / `app.export {addToPhotos}` send Apple
-# Events to Photos through osascript too (macOS asks about the app that started the CLI, usually
-# the terminal).
-sign --options runtime --entitlements "$HERE/entitlements.plist" "$CLI_DIR/$CLI"
-codesign --verify --strict --verbose=2 "$CLI_DIR/$CLI"
-rm -f "$CLI_ZIP"
-ditto -c -k --keepParent "$CLI_DIR" "$CLI_ZIP"
-# A bare Mach-O can't carry a stapled ticket; Gatekeeper looks the notarization up online.
-if [[ "$NOTARIZE" = 1 ]]; then notarize "$CLI_ZIP"; fi
-
-"$WORK/bin/$CLI" --version
+# only where this Mac runs it natively: an Intel build on Apple silicon needs Rosetta, which a
+# build machine needn't have
+if [[ " $LIPO_ARCHS " == *" $(uname -m) "* ]]; then
+  "$APP/Contents/MacOS/$CLI" --version
+else
+  echo "==> not running the $ARCH CLI on this $(uname -m) Mac"
+fi
 echo "==> done"
-ls -lh "$DMG" "$CLI_ZIP"
+ls -lh "$DMG"

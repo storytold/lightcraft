@@ -144,46 +144,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn projection_round_trips() {
-        for p in [LatLon::new(0.0, 0.0), LatLon::new(51.5, -0.12), LatLon::new(-33.9, 151.2), LatLon::new(80.0, 179.0)] {
-            let (x, y) = project(p);
-            let q = unproject(x, y);
-            assert!((p.lat - q.lat).abs() < 1e-9 && (p.lon - q.lon).abs() < 1e-9, "{p:?} {q:?}");
+    fn map_math() {
+        // projection round trips
+        {
+            for p in [LatLon::new(0.0, 0.0), LatLon::new(51.5, -0.12), LatLon::new(-33.9, 151.2), LatLon::new(80.0, 179.0)] {
+                let (x, y) = project(p);
+                let q = unproject(x, y);
+                assert!((p.lat - q.lat).abs() < 1e-9 && (p.lon - q.lon).abs() < 1e-9, "{p:?} {q:?}");
+            }
+            assert_eq!(project(LatLon::new(0.0, 0.0)), (0.5, 0.5));
         }
-        assert_eq!(project(LatLon::new(0.0, 0.0)), (0.5, 0.5));
-    }
-
-    #[test]
-    fn tile_of_london_at_zoom_10() {
-        // the OSM wiki's worked example: z10 tile containing London is (511, 340)
-        let (x, y) = project(LatLon::new(51.5074, -0.1278));
-        assert_eq!(((x * 1024.0) as u32, (y * 1024.0) as u32), (511, 340));
-    }
-
-    #[test]
-    fn visible_tiles_wrap_and_stop_at_poles() {
-        let t = visible_tiles(LatLon::new(0.0, 179.9), 1, 1024.0, 1024.0);
-        assert!(t.iter().all(|(k, _, _)| k.x < 2 && k.y < 2));
-        assert!(!t.is_empty());
-        assert!(visible_tiles(LatLon::new(0.0, 0.0), 2, f64::NAN, 1e12).len() <= 1024);
-        assert!(TileKey::new(3, 8, 0).is_none());
-        assert!(TileKey::new(30, 0, 0).is_none());
-    }
-
-    #[test]
-    fn distances() {
-        let paris = LatLon::new(48.8566, 2.3522);
-        let london = LatLon::new(51.5074, -0.1278);
-        let d = distance_m(paris, london);
-        assert!((d - 343_500.0).abs() < 2_000.0, "{d}");
-        assert_eq!(distance_m(paris, paris), 0.0);
-    }
-
-    #[test]
-    fn fit_covers_points() {
-        let (c, z) = fit(&[LatLon::new(48.0, 2.0), LatLon::new(52.0, 0.0)], 800.0, 600.0).unwrap_or_default();
-        assert!(c.lat > 48.0 && c.lat < 52.0 && z > 3.0 && z < 9.0, "{c:?} {z}");
-        assert!(fit(&[], 10.0, 10.0).is_none());
-        assert!(fit(&[LatLon::new(f64::NAN, 0.0)], 10.0, 10.0).is_none());
+        // tile of london at zoom 10
+        {
+            // the OSM wiki's worked example: z10 tile containing London is (511, 340)
+            let (x, y) = project(LatLon::new(51.5074, -0.1278));
+            assert_eq!(((x * 1024.0) as u32, (y * 1024.0) as u32), (511, 340));
+        }
+        // visible tiles wrap and stop at poles
+        {
+            let t = visible_tiles(LatLon::new(0.0, 179.9), 1, 1024.0, 1024.0);
+            assert!(t.iter().all(|(k, _, _)| k.x < 2 && k.y < 2));
+            assert!(!t.is_empty());
+            assert!(visible_tiles(LatLon::new(0.0, 0.0), 2, f64::NAN, 1e12).len() <= 1024);
+            assert!(TileKey::new(3, 8, 0).is_none());
+            assert!(TileKey::new(30, 0, 0).is_none());
+        }
+        // distances
+        {
+            let paris = LatLon::new(48.8566, 2.3522);
+            let london = LatLon::new(51.5074, -0.1278);
+            let d = distance_m(paris, london);
+            assert!((d - 343_500.0).abs() < 2_000.0, "{d}");
+            assert_eq!(distance_m(paris, paris), 0.0);
+        }
+        // fit covers points
+        {
+            let (c, z) = fit(&[LatLon::new(48.0, 2.0), LatLon::new(52.0, 0.0)], 800.0, 600.0).unwrap_or_default();
+            assert!(c.lat > 48.0 && c.lat < 52.0 && z > 3.0 && z < 9.0, "{c:?} {z}");
+            assert!(fit(&[], 10.0, 10.0).is_none());
+            assert!(fit(&[LatLon::new(f64::NAN, 0.0)], 10.0, 10.0).is_none());
+        }
     }
 }

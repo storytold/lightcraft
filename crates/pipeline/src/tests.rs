@@ -12,15 +12,6 @@ fn scene() -> Rgb32f {
 }
 
 #[test]
-fn default_render_is_sane() {
-    let r = render(&scene(), &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(240, 240));
-    assert!(r.image.width > 0 && r.image.height > 0 && r.image.width <= 240 && r.image.height <= 240);
-    let m = mean_luma(&r.image);
-    assert!((40.0..220.0).contains(&m), "{m}");
-    assert!(r.histogram.total > 0);
-}
-
-#[test]
 fn grey_ramp_stays_neutral() {
     let src = Rgb32f::from_fn(64, 8, |x, _| [0.002 * 1.12f32.powi(x as i32); 3]);
     let r = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(64, 8));

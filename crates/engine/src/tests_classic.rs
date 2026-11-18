@@ -87,7 +87,7 @@ fn add_file_photo(s: &mut Session, path: &str) -> lcc_catalog::PhotoId {
 /// Folders: a folder created on disk is one undo step (undo removes it, redo makes it again); an
 /// empty folder can be deleted (and undone); a folder holding anything is refused.
 #[test]
-fn folders_are_created_and_deleted_on_disk_undoably() {
+fn folders_are_created_and_deleted_on_disk_undoably_and_volumes_are_listed() {
     let d = Scratch::new("create");
     let mut s = Session::with_demo();
     let r = s.execute("folder.create", &json!({"parent": d.path(""), "name": "Trips"})).unwrap();
@@ -113,6 +113,15 @@ fn folders_are_created_and_deleted_on_disk_undoably() {
     s.redo_step().ok();
     while s.undo_step().is_ok() {}
     assert!(std::path::Path::new(&d.path("Trips/keep.txt")).is_file());
+
+    // the volumes the library's photos are on, with free space where the system tells
+    add_file_photo(&mut s, &d.path("x.jpg"));
+    let v = s.execute("library.volumes", &json!({})).unwrap();
+    let list = v.as_array().unwrap();
+    assert!(!list.is_empty(), "{v}");
+    #[cfg(unix)]
+    assert!(list.iter().any(|x| x["total"].as_u64().unwrap_or(0) > 0), "{v}");
+    assert_eq!(crate::cmd::folders::disk_space("/definitely/not/here"), None);
 }
 
 /// Synchronize Folder adds the files the library lacks, lists photos whose file is gone, and
@@ -199,20 +208,6 @@ fn collection_definitions_round_trip() {
     assert!(t.execute("album.exportDefinition", &json!({"id": 999_999})).is_err());
 }
 
-/// The volumes the library's photos are on, with free space where the system tells.
-#[test]
-fn volumes_list_the_disks_with_their_space() {
-    let d = Scratch::new("vol");
-    let mut s = Session::with_demo();
-    add_file_photo(&mut s, &d.path("x.jpg"));
-    let v = s.execute("library.volumes", &json!({})).unwrap();
-    let list = v.as_array().unwrap();
-    assert!(!list.is_empty(), "{v}");
-    #[cfg(unix)]
-    assert!(list.iter().any(|x| x["total"].as_u64().unwrap_or(0) > 0), "{v}");
-    assert_eq!(crate::cmd::folders::disk_space("/definitely/not/here"), None);
-}
-
 /// Keywording: built-in keyword sets can be used (⌥1–⌥9) but not deleted, a user set of the same
 /// name replaces one; the keyword shortcut (⇧K) toggles its keyword on the selection.
 #[test]
@@ -238,14 +233,9 @@ fn builtin_keyword_sets_and_the_keyword_shortcut() {
     assert!(!has(&s, "Travel|Rome"));
     s.execute("keyword.setShortcut", &json!({"keyword": ""})).unwrap();
     assert!(s.keyword_shortcut.is_empty());
-}
 
-/// The keyword shortcut (Set Keyword Shortcut…, ⌘⌥⇧K) holds the keywords typed with commas
-/// between them, each once whatever its case; ⇧K adds them to the target photos unless every one
-/// has them all, and then takes them off.
-#[test]
-fn the_keyword_shortcut_adds_and_removes_several_keywords() {
-    let (mut s, ids) = demo_with(2);
+    // The shortcut (Set Keyword Shortcut…, ⌘⌥⇧K) holds the keywords typed with commas between them, each once whatever
+    // its case; ⇧K adds them to the target photos unless every one has them all, and then takes them off.
     let kw = |s: &Session, id: u64| s.catalog.photo(lcc_catalog::PhotoId(id)).unwrap().meta.keywords.clone();
     s.execute("photo.setMeta", &json!({"ids": [ids[0]], "keywords": ["beach"]})).unwrap();
     s.execute("photo.setMeta", &json!({"ids": [ids[1]], "keywords": []})).unwrap();

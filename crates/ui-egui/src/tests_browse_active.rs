@@ -30,8 +30,8 @@ fn exec(h: &mut Headless, command: &str, params: Value) -> Value {
 }
 
 /// A folder of `n` small PNGs (different bytes each) in the temporary folder.
-fn folder(name: &str, n: u8) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("lc-ui-{name}-{}", std::process::id()));
+fn folder(name: &str, n: u8) -> lcc_testkit::TempDir {
+    let dir = lcc_testkit::TempDir::new(&format!("lc-ui-{name}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let o = lcc_engine::export::ExportOptions { format: lcc_engine::export::ExportFormat::Png, ..Default::default() };

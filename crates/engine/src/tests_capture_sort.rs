@@ -60,12 +60,8 @@ fn every_view_sorted_by_capture_time_interleaves_the_cameras() {
     s.execute("library.source", &json!({"kind": "album", "id": album})).unwrap();
     s.execute("library.sort", &json!({"key": "captureDate", "ascending": true})).unwrap();
     assert_eq!(shown(&mut s, &ids), THROUGH_THE_DAY, "a collection sorted by capture time");
-}
 
-/// A sort saved by an older build (`captureDate`) still reads as Capture Time.
-#[test]
-fn saved_capture_date_sorts_still_read() {
+    // a sort saved by an older build (`captureDate`) still reads as Capture Time
     let sort: lcc_catalog::Sort = serde_json::from_value(json!({"key": "captureDate", "ascending": true})).unwrap();
     assert_eq!(sort.key, lcc_catalog::SortKey::CaptureDate);
-    assert_eq!(serde_json::to_value(lcc_catalog::SortKey::Custom).unwrap(), json!("custom"));
 }

@@ -5,11 +5,9 @@ use lcc_catalog::{AlbumId, PhotoId};
 use lcc_publish::hard_drive::safe_name;
 use lcc_publish::{CollectionConfig, PublishConfig, ServiceConfig, Upload, open_service};
 
-fn scratch(tag: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("lcc-publish-robust-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+/// An empty Temp folder of the test's own, removed when the test ends.
+fn scratch(tag: &str) -> lcc_testkit::TempDir {
+    lcc_testkit::TempDir::new(&format!("lcc-publish-robust-{tag}"))
 }
 
 fn sample(out: &std::path::Path) -> PublishConfig {
@@ -48,7 +46,6 @@ fn damaged_publish_json_never_panics() {
             }
         }
     });
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -86,5 +83,4 @@ fn publishing_to_a_full_disk_is_an_error_and_keeps_the_old_file() {
         assert!(PublishConfig::default().save(&dir).is_err());
     }
     assert_eq!(std::fs::read(dir.join(lcc_publish::FILE)).unwrap(), before);
-    let _ = std::fs::remove_dir_all(&dir);
 }

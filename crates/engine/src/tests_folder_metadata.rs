@@ -25,8 +25,8 @@ fn write_png(path: &Path, seed: u8) {
 /// A library holding `a/one.png`, `a/two.png`, `a/sub/three.png` and `b/four.png`, auto-write off.
 struct Fixture {
     s: Session,
-    src: PathBuf,
-    lib: PathBuf,
+    src: lcc_testkit::TempDir,
+    lib: lcc_testkit::TempDir,
 }
 
 impl Fixture {
@@ -78,12 +78,21 @@ fn count(v: &Value, key: &str) -> usize {
 }
 
 #[test]
-fn saving_a_folder_writes_its_photos_and_the_folders_inside_only() {
+fn saving_a_folder_writes_its_library_photos_only_merges_and_reports_a_missing_file() {
     let mut f = Fixture::new("save-scope");
     f.rate_all(3);
+    // another app's sidecar is already there for one photo: the save merges into it, as the photo command does
+    std::fs::write(
+        f.sidecar("a/one.xmp"),
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about=\"\" xmlns:foo=\"http://example.com/foo/\" foo:keep=\"yes\"/></rdf:RDF></x:xmpmeta>",
+    )
+    .unwrap();
     let r = f.s.execute("folder.saveMetadata", &json!({"path": f.folder("a")})).unwrap();
     assert_eq!((r["total"].as_u64(), r["done"].as_u64(), r["cancelled"].as_bool()), (Some(3), Some(3), Some(false)), "{r}");
     assert_eq!((count(&r, "written"), count(&r, "failed")), (3, 0), "{r}");
+    assert_eq!(count(&r, "merged"), 1, "{r}");
+    let text = std::fs::read_to_string(f.sidecar("a/one.xmp")).unwrap();
+    assert!(text.contains("foo:keep"), "another app's data is kept: {text}");
     for rel in ["a/one.xmp", "a/two.xmp", "a/sub/three.xmp"] {
         assert!(f.sidecar(rel).is_file(), "{rel}");
     }
@@ -99,11 +108,21 @@ fn saving_a_folder_writes_its_photos_and_the_folders_inside_only() {
     assert!(!f.sidecar("a/one.xmp").exists(), "a/one.png is not in a/sub");
     // the row ends with the command
     assert!(f.s.activity.list().is_empty());
-}
 
-#[test]
-fn saving_leaves_local_browse_records_deleted_photos_and_virtual_copies_alone() {
-    let mut f = Fixture::new("save-kinds");
+    // a missing file is reported and the rest are saved
+    let two = f.id("two.png");
+    std::fs::remove_file(f.src.join("a/two.png")).unwrap();
+    let r = f.s.execute("folder.saveMetadata", &json!({"path": f.folder("a")})).unwrap();
+    assert_eq!((count(&r, "written"), count(&r, "failed")), (2, 1), "{r}");
+    assert_eq!(r["failed"][0]["id"], two.0, "{r}");
+    assert!(r["failed"][0]["error"].as_str().unwrap().contains("two.png"), "{r}");
+    assert_eq!(r["done"], 3, "{r}");
+    assert!(f.sidecar("a/one.xmp").is_file() && f.sidecar("a/sub/three.xmp").is_file());
+
+    // Local-only browse records, deleted photos and virtual copies are left alone
+    for rel in ["a/one.xmp", "a/two.xmp", "a/sub/three.xmp"] {
+        let _ = std::fs::remove_file(f.sidecar(rel));
+    }
     // a Local-only record inside the folder: a file seen while browsing, never imported
     write_png(&f.src.join("a/browsed.png"), 9);
     let mut local =
@@ -111,7 +130,7 @@ fn saving_leaves_local_browse_records_deleted_photos_and_virtual_copies_alone() 
     local.local = true;
     f.s.execute_fn("test.add", |s| s.apply_system(Op::AddPhoto { photo: Box::new(local) }).map(|()| Value::Null)).unwrap();
     // a deleted photo and a virtual copy
-    let (two, one) = (f.id("two.png"), f.id("one.png"));
+    let one = f.id("one.png");
     f.s.execute("photo.delete", &json!({"ids": [two.0]})).unwrap();
     f.s.execute("photo.virtualCopy", &json!({"ids": [one.0]})).unwrap();
     let r = f.s.execute("folder.saveMetadata", &json!({"path": f.folder("a")})).unwrap();
@@ -123,34 +142,7 @@ fn saving_leaves_local_browse_records_deleted_photos_and_virtual_copies_alone() 
 }
 
 #[test]
-fn a_missing_file_is_reported_and_the_rest_are_saved() {
-    let mut f = Fixture::new("save-missing");
-    let two = f.id("two.png");
-    std::fs::remove_file(f.src.join("a/two.png")).unwrap();
-    let r = f.s.execute("folder.saveMetadata", &json!({"path": f.folder("a")})).unwrap();
-    assert_eq!((count(&r, "written"), count(&r, "failed")), (2, 1), "{r}");
-    assert_eq!(r["failed"][0]["id"], two.0, "{r}");
-    assert!(r["failed"][0]["error"].as_str().unwrap().contains("two.png"), "{r}");
-    assert_eq!(r["done"], 3, "{r}");
-    assert!(f.sidecar("a/one.xmp").is_file() && f.sidecar("a/sub/three.xmp").is_file());
-}
-
-#[test]
-fn a_save_merges_into_an_existing_sidecar_as_the_photo_command_does() {
-    let mut f = Fixture::new("save-merge");
-    std::fs::write(
-        f.sidecar("a/one.xmp"),
-        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about=\"\" xmlns:foo=\"http://example.com/foo/\" foo:keep=\"yes\"/></rdf:RDF></x:xmpmeta>",
-    )
-    .unwrap();
-    let r = f.s.execute("folder.saveMetadata", &json!({"path": f.folder("a")})).unwrap();
-    assert_eq!(count(&r, "merged"), 1, "{r}");
-    let text = std::fs::read_to_string(f.sidecar("a/one.xmp")).unwrap();
-    assert!(text.contains("foo:keep"), "another app's data is kept: {text}");
-}
-
-#[test]
-fn cancelling_a_save_stops_between_photos_and_reports_what_was_done() {
+fn cancelling_a_save_stops_between_photos_and_a_photo_relinked_while_the_job_runs_is_not_written() {
     let mut f = Fixture::new("save-cancel");
     let mut job = FolderMetadataJob::plan(&f.s, Direction::Save, &f.folder("a")).unwrap();
     assert_eq!((job.total(), job.done()), (3, 0));
@@ -166,6 +158,27 @@ fn cancelling_a_save_stops_between_photos_and_reports_what_was_done() {
     let written = ["a/one.xmp", "a/two.xmp", "a/sub/three.xmp"].iter().filter(|rel| f.sidecar(rel).exists()).count();
     assert_eq!(written, 1, "the sidecars written before the cancel stay, no others are written");
     assert!(f.s.activity.list().is_empty(), "the row ends with the job");
+
+    // a photo relinked while the job runs is not written
+    for rel in ["a/one.xmp", "a/two.xmp", "a/sub/three.xmp"] {
+        let _ = std::fs::remove_file(f.sidecar(rel));
+    }
+    let mut job = FolderMetadataJob::plan(&f.s, Direction::Save, &f.folder("a")).unwrap();
+    let ids: Vec<PhotoId> = ["one.png", "two.png", "three.png"].iter().map(|n| f.id(n)).collect();
+    f.s.execute("photo.delete", &json!({"ids": ids.iter().map(|i| i.0).collect::<Vec<_>>()})).unwrap();
+    f.s.execute("edit.undo", &json!({})).unwrap();
+    f.s.execute_fn("test.relink", |s| {
+        for id in &ids {
+            let path = s.catalog.photo(*id).map(|p| p.file_name.clone()).unwrap_or_default();
+            s.apply_system(Op::Relink { id: *id, file_name: path.clone(), source: Source::File { path: format!("/nowhere/{path}") }, format: None })?;
+        }
+        Ok(Value::Null)
+    })
+    .unwrap();
+    while job.step(&mut f.s) {}
+    let r = job.finish(&mut f.s).unwrap();
+    assert_eq!((count(&r, "written"), count(&r, "failed")), (0, 3), "{r}");
+    assert!(!f.sidecar("a/one.xmp").exists());
 }
 
 /// Save every sidecar with rating 3, then give every photo rating 1 in the catalog only (auto-write off).
@@ -178,9 +191,21 @@ fn saved_at_three(f: &mut Fixture) {
 }
 
 #[test]
-fn reading_a_folder_is_one_undo_step_and_only_that_folder() {
+fn reading_a_folder_is_one_undo_step_writes_nothing_and_reports_missing_and_unreadable_sidecars() {
     let mut f = Fixture::new("read-scope");
     saved_at_three(&mut f);
+    // reading does not write the sidecars it reads, even with auto-write on
+    let bytes = |f: &Fixture| std::fs::read(f.sidecar("a/one.xmp")).unwrap();
+    let sidecar_before = bytes(&f);
+    f.s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    f.s.execute("folder.readMetadata", &json!({"path": f.folder("a")})).unwrap();
+    assert_eq!(f.rating("one.png"), 3);
+    assert_eq!(bytes(&f), sidecar_before, "the sidecar is as it was");
+    assert!(f.s.unsaved_sidecars() == 0);
+    f.s.execute("library.xmpPreferences", &json!({"autoWrite": false})).unwrap();
+    f.rate_all(1);
+
+    // one undo step, and only that folder
     let before = f.s.commits();
     let r = f.s.execute("folder.readMetadata", &json!({"path": f.folder("a")})).unwrap();
     assert_eq!((r["total"].as_u64(), r["cancelled"].as_bool()), (Some(3), Some(false)), "{r}");
@@ -195,45 +220,25 @@ fn reading_a_folder_is_one_undo_step_and_only_that_folder() {
         assert_eq!(f.rating(n), 1, "one undo restores {n}");
     }
     assert!(f.s.activity.list().is_empty());
-}
 
-#[test]
-fn reading_does_not_write_the_sidecars_it_reads_even_with_auto_write_on() {
-    let mut f = Fixture::new("read-noautowrite");
-    saved_at_three(&mut f);
-    let bytes = |f: &Fixture| std::fs::read(f.sidecar("a/one.xmp")).unwrap();
-    let before = bytes(&f);
-    f.s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
-    f.s.execute("folder.readMetadata", &json!({"path": f.folder("a")})).unwrap();
-    assert_eq!(f.rating("one.png"), 3);
-    assert_eq!(bytes(&f), before, "the sidecar is as it was");
-    assert!(f.s.unsaved_sidecars() == 0);
-}
-
-#[test]
-fn a_photo_without_a_sidecar_is_reported_and_the_rest_are_read() {
-    let mut f = Fixture::new("read-missing");
-    saved_at_three(&mut f);
+    // a photo without a sidecar is reported and the rest are read
     std::fs::remove_file(f.sidecar("a/two.xmp")).unwrap();
     let two = f.id("two.png");
     let r = f.s.execute("folder.readMetadata", &json!({"path": f.folder("a")})).unwrap();
     assert_eq!((count(&r, "read"), count(&r, "failed")), (2, 1), "{r}");
     assert_eq!(r["failed"][0]["id"], two.0, "{r}");
     assert_eq!((f.rating("one.png"), f.rating("two.png"), f.rating("three.png")), (3, 1, 3));
-}
 
-#[test]
-fn an_unreadable_sidecar_is_reported_and_the_rest_are_read() {
-    let mut f = Fixture::new("read-bad");
-    saved_at_three(&mut f);
+    // an unreadable sidecar is reported too, and the rest are read
+    f.rate_all(1);
     std::fs::write(f.sidecar("a/one.xmp"), [0xff, 0xfe, 0x00, 0x9f]).unwrap();
     let r = f.s.execute("folder.readMetadata", &json!({"path": f.folder("a")})).unwrap();
-    assert_eq!((count(&r, "read"), count(&r, "failed")), (2, 1), "{r}");
-    assert_eq!((f.rating("one.png"), f.rating("two.png")), (1, 3));
+    assert_eq!((count(&r, "read"), count(&r, "failed")), (1, 2), "the unreadable and the missing one fail: {r}");
+    assert_eq!((f.rating("one.png"), f.rating("three.png")), (1, 3));
 }
 
 #[test]
-fn cancelling_a_read_commits_what_was_read_as_one_undo_step() {
+fn a_cancelled_or_stopped_read_commits_what_was_read_once_and_a_later_edit_wins() {
     let mut f = Fixture::new("read-cancel");
     saved_at_three(&mut f);
     let before = f.s.commits();
@@ -251,27 +256,56 @@ fn cancelling_a_read_commits_what_was_read_as_one_undo_step() {
     assert_eq!(read, 2, "what was read is kept, the rest is not read");
     f.s.execute("edit.undo", &json!({})).unwrap();
     assert!(["one.png", "two.png", "three.png"].iter().all(|n| f.rating(n) == 1), "one undo step takes it back");
-}
 
-#[test]
-fn a_photo_relinked_while_the_job_runs_is_not_written() {
-    let mut f = Fixture::new("relinked");
-    let mut job = FolderMetadataJob::plan(&f.s, Direction::Save, &f.folder("a")).unwrap();
-    let ids: Vec<PhotoId> = ["one.png", "two.png", "three.png"].iter().map(|n| f.id(n)).collect();
-    f.s.execute("photo.delete", &json!({"ids": ids.iter().map(|i| i.0).collect::<Vec<_>>()})).unwrap();
+    // the same in the background: stopping between pumps commits what was read, once
+    let before = f.s.commits();
+    f.s.execute("folder.readMetadata", &json!({"path": f.folder("a"), "background": true})).unwrap();
+    // a pump with a zero budget still does one photo
+    let r = f.s.execute("folder.metadataPump", &json!({"budgetMs": 0})).unwrap();
+    assert_eq!((r["running"].as_bool(), r["done"].as_u64(), r["total"].as_u64()), (Some(true), Some(1), Some(3)), "{r}");
+    let row = f.s.activity.list();
+    assert_eq!((row[0].kind, row[0].done), ("readMetadata", 1));
+    f.s.execute("activity.cancel", &json!({"id": row[0].id})).unwrap();
+    let r = f.s.execute("folder.metadataPump", &json!({})).unwrap();
+    assert_eq!((r["running"].as_bool(), r["result"]["cancelled"].as_bool(), r["result"]["done"].as_u64()), (Some(false), Some(true), Some(1)), "{r}");
+    assert_eq!(count(&r["result"], "read"), 1, "{r}");
+    assert_eq!(f.s.commits(), before + 1, "one undo step");
+    assert_eq!(["one.png", "two.png", "three.png"].iter().filter(|n| f.rating(n) == 3).count(), 1);
+    assert!(f.s.activity.list().is_empty());
     f.s.execute("edit.undo", &json!({})).unwrap();
-    f.s.execute_fn("test.relink", |s| {
-        for id in &ids {
-            let path = s.catalog.photo(*id).map(|p| p.file_name.clone()).unwrap_or_default();
-            s.apply_system(Op::Relink { id: *id, file_name: path.clone(), source: Source::File { path: format!("/nowhere/{path}") }, format: None })?;
-        }
-        Ok(Value::Null)
-    })
-    .unwrap();
-    while job.step(&mut f.s) {}
-    let r = job.finish(&mut f.s).unwrap();
-    assert_eq!((count(&r, "written"), count(&r, "failed")), (0, 3), "{r}");
-    assert!(!f.sidecar("a/one.xmp").exists());
+    assert!(["one.png", "two.png", "three.png"].iter().all(|n| f.rating(n) == 1));
+
+    // a photo edited while a background read waits keeps its edit
+    f.s.execute("folder.readMetadata", &json!({"path": f.folder("a"), "background": true})).unwrap();
+    f.s.execute("folder.metadataPump", &json!({"budgetMs": 0})).unwrap();
+    let r = f.s.execute("folder.metadataPump", &json!({"budgetMs": 0})).unwrap();
+    assert_eq!((r["running"].as_bool(), r["done"].as_u64()), (Some(true), Some(2)), "two photos are read, nothing is committed yet: {r}");
+    // every photo is edited before the job ends: the two already read must keep the edit
+    let ids: Vec<u64> = ["one.png", "two.png", "three.png"].iter().map(|n| f.id(n).0).collect();
+    f.s.execute("photo.rate", &json!({"ids": ids, "rating": 5})).unwrap();
+    let r = pump_until_done(&mut f, 10);
+    let done = &r["result"];
+    assert_eq!((done["total"].as_u64(), count(done, "read"), count(done, "failed")), (Some(3), 1, 2), "{r}");
+    assert!(done["failed"][0]["error"].as_str().unwrap().contains("changed"), "{r}");
+    let ratings: Vec<u8> = ["one.png", "two.png", "three.png"].iter().map(|n| f.rating(n)).collect();
+    assert_eq!(ratings.iter().filter(|r| **r == 5).count(), 2, "the edit stays on the two photos read before it: {ratings:?}");
+    assert_eq!(ratings.iter().filter(|r| **r == 3).count(), 1, "the photo read after the edit takes its file: {ratings:?}");
+
+    // a stopped background job nobody pumps does not block the next one
+    f.rate_all(1);
+    f.s.execute("folder.readMetadata", &json!({"path": f.folder("a"), "background": true})).unwrap();
+    f.s.execute("folder.metadataPump", &json!({"budgetMs": 0})).unwrap();
+    let before = f.s.commits();
+    f.s.execute("activity.cancel", &json!({"all": true})).unwrap();
+    // no pump follows: the next folder job ends the stopped one, which commits the one photo it read
+    let r = f.s.execute("folder.saveMetadata", &json!({"path": f.folder("b")})).unwrap();
+    assert_eq!((r["total"].as_u64(), count(&r, "written")), (Some(1), 1), "{r}");
+    assert_eq!(f.s.commits(), before + 1, "the stopped read kept what it had read");
+    assert_eq!(["one.png", "two.png", "three.png"].iter().filter(|n| f.rating(n) == 3).count(), 1);
+    assert!(f.s.activity.list().is_empty());
+    // a job that was not stopped still blocks
+    f.s.execute("folder.saveMetadata", &json!({"path": f.folder("b"), "background": true})).unwrap();
+    assert!(f.s.execute("folder.saveMetadata", &json!({"path": f.folder("a")})).is_err());
 }
 
 #[test]
@@ -340,7 +374,7 @@ fn pump_until_done(f: &mut Fixture, max: usize) -> Value {
 }
 
 #[test]
-fn a_background_save_is_done_by_the_pump_and_shows_its_row() {
+fn a_background_save_is_done_by_the_pump_skips_deleted_photos_and_is_dropped_with_its_library() {
     let mut f = Fixture::new("bg-save");
     assert_eq!(f.s.execute("folder.metadataPump", &json!({})).unwrap(), json!({"running": false}), "no job: nothing to do");
     let r = f.s.execute("folder.saveMetadata", &json!({"path": f.folder("a"), "background": true})).unwrap();
@@ -358,53 +392,12 @@ fn a_background_save_is_done_by_the_pump_and_shows_its_row() {
     assert_eq!(f.s.execute("folder.metadataPump", &json!({})).unwrap(), json!({"running": false}));
     // and the next one starts
     f.s.execute("folder.saveMetadata", &json!({"path": f.folder("b"), "background": true})).unwrap();
-}
+    pump_until_done(&mut f, 100);
 
-#[test]
-fn stopping_a_background_read_between_pumps_commits_what_was_read_once() {
-    let mut f = Fixture::new("bg-read-cancel");
-    saved_at_three(&mut f);
-    let before = f.s.commits();
-    f.s.execute("folder.readMetadata", &json!({"path": f.folder("a"), "background": true})).unwrap();
-    // a pump with a zero budget still does one photo
-    let r = f.s.execute("folder.metadataPump", &json!({"budgetMs": 0})).unwrap();
-    assert_eq!((r["running"].as_bool(), r["done"].as_u64(), r["total"].as_u64()), (Some(true), Some(1), Some(3)), "{r}");
-    let row = f.s.activity.list();
-    assert_eq!((row[0].kind, row[0].done), ("readMetadata", 1));
-    f.s.execute("activity.cancel", &json!({"id": row[0].id})).unwrap();
-    let r = f.s.execute("folder.metadataPump", &json!({})).unwrap();
-    assert_eq!((r["running"].as_bool(), r["result"]["cancelled"].as_bool(), r["result"]["done"].as_u64()), (Some(false), Some(true), Some(1)), "{r}");
-    assert_eq!(count(&r["result"], "read"), 1, "{r}");
-    assert_eq!(f.s.commits(), before + 1, "one undo step");
-    assert_eq!(["one.png", "two.png", "three.png"].iter().filter(|n| f.rating(n) == 3).count(), 1);
-    assert!(f.s.activity.list().is_empty());
-    f.s.execute("edit.undo", &json!({})).unwrap();
-    assert!(["one.png", "two.png", "three.png"].iter().all(|n| f.rating(n) == 1));
-}
-
-#[test]
-fn a_photo_edited_while_a_background_read_waits_keeps_its_edit() {
-    let mut f = Fixture::new("bg-read-edit");
-    saved_at_three(&mut f);
-    f.s.execute("folder.readMetadata", &json!({"path": f.folder("a"), "background": true})).unwrap();
-    f.s.execute("folder.metadataPump", &json!({"budgetMs": 0})).unwrap();
-    let r = f.s.execute("folder.metadataPump", &json!({"budgetMs": 0})).unwrap();
-    assert_eq!((r["running"].as_bool(), r["done"].as_u64()), (Some(true), Some(2)), "two photos are read, nothing is committed yet: {r}");
-    // every photo is edited before the job ends: the two already read must keep the edit
-    let ids: Vec<u64> = ["one.png", "two.png", "three.png"].iter().map(|n| f.id(n).0).collect();
-    f.s.execute("photo.rate", &json!({"ids": ids, "rating": 5})).unwrap();
-    let r = pump_until_done(&mut f, 10);
-    let done = &r["result"];
-    assert_eq!((done["total"].as_u64(), count(done, "read"), count(done, "failed")), (Some(3), 1, 2), "{r}");
-    assert!(done["failed"][0]["error"].as_str().unwrap().contains("changed"), "{r}");
-    let ratings: Vec<u8> = ["one.png", "two.png", "three.png"].iter().map(|n| f.rating(n)).collect();
-    assert_eq!(ratings.iter().filter(|r| **r == 5).count(), 2, "the edit stays on the two photos read before it: {ratings:?}");
-    assert_eq!(ratings.iter().filter(|r| **r == 3).count(), 1, "the photo read after the edit takes its file: {ratings:?}");
-}
-
-#[test]
-fn a_photo_deleted_while_a_background_save_waits_is_not_written() {
-    let mut f = Fixture::new("bg-save-deleted");
+    // a photo deleted while a background save waits is not written
+    for rel in ["a/one.xmp", "a/two.xmp", "a/sub/three.xmp", "b/four.xmp"] {
+        let _ = std::fs::remove_file(f.sidecar(rel));
+    }
     f.s.execute("folder.saveMetadata", &json!({"path": f.folder("a"), "background": true})).unwrap();
     let ids: Vec<(String, PhotoId)> = ["one.png", "two.png", "three.png"].iter().map(|n| (n.to_string(), f.id(n))).collect();
     for (_, id) in &ids {
@@ -413,17 +406,14 @@ fn a_photo_deleted_while_a_background_save_waits_is_not_written() {
     let r = pump_until_done(&mut f, 10);
     assert_eq!((count(&r["result"], "written"), count(&r["result"], "failed")), (0, 3), "{r}");
     assert!(!f.sidecar("a/one.xmp").exists());
-}
 
-#[test]
-fn opening_another_library_drops_a_waiting_job() {
-    let mut f = Fixture::new("bg-switch");
-    f.s.execute("folder.saveMetadata", &json!({"path": f.folder("a"), "background": true})).unwrap();
+    // opening another library drops a waiting job
+    f.s.execute("folder.saveMetadata", &json!({"path": f.folder("b"), "background": true})).unwrap();
     let other = temp_dir("fm-switch-other");
     f.s.open_library(&other, false).unwrap();
     assert!(f.s.activity.list().is_empty(), "its row ended");
     assert_eq!(f.s.execute("folder.metadataPump", &json!({})).unwrap(), json!({"running": false}));
-    assert!(!f.sidecar("a/one.xmp").exists());
+    assert!(!f.sidecar("b/four.xmp").exists(), "the dropped job wrote nothing");
     let _ = std::fs::remove_dir_all(&other);
 }
 
@@ -451,25 +441,6 @@ fn a_read_names_each_photos_sidecar_as_the_photo_command_does() {
     assert_eq!(a, b, "the same sidecar for each photo");
     let _ = std::fs::remove_dir_all(&src);
     let _ = std::fs::remove_dir_all(&lib);
-}
-
-#[test]
-fn a_stopped_background_job_nobody_pumps_does_not_block_the_next_one() {
-    let mut f = Fixture::new("bg-stopped");
-    saved_at_three(&mut f);
-    f.s.execute("folder.readMetadata", &json!({"path": f.folder("a"), "background": true})).unwrap();
-    f.s.execute("folder.metadataPump", &json!({"budgetMs": 0})).unwrap();
-    let before = f.s.commits();
-    f.s.execute("activity.cancel", &json!({"all": true})).unwrap();
-    // no pump follows: the next folder job ends the stopped one, which commits the one photo it read
-    let r = f.s.execute("folder.saveMetadata", &json!({"path": f.folder("b")})).unwrap();
-    assert_eq!((r["total"].as_u64(), count(&r, "written")), (Some(1), 1), "{r}");
-    assert_eq!(f.s.commits(), before + 1, "the stopped read kept what it had read");
-    assert_eq!(["one.png", "two.png", "three.png"].iter().filter(|n| f.rating(n) == 3).count(), 1);
-    assert!(f.s.activity.list().is_empty());
-    // a job that was not stopped still blocks
-    f.s.execute("folder.saveMetadata", &json!({"path": f.folder("b"), "background": true})).unwrap();
-    assert!(f.s.execute("folder.saveMetadata", &json!({"path": f.folder("a")})).is_err());
 }
 
 #[test]

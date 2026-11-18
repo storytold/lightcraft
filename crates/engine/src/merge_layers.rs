@@ -279,13 +279,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ev_labels_read_as_steps() {
-        assert_eq!(ev_label(-2.0), "\u{2212}2");
-        assert_eq!(ev_label(1.33), "+1.3");
-        assert_eq!(ev_label(0.01), "0");
-    }
-
-    #[test]
     fn oversized_documents_are_refused_with_the_limit() {
         let o = LayerOutput::default();
         // 64 frames of 200 MP

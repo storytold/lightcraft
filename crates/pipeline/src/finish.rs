@@ -228,7 +228,8 @@ pub fn mask_terms(j: &LocalAdjustments) -> [f32; MASK_TERMS] {
         (j.clarity / 100.0) as f32,
         (j.dehaze / 100.0) as f32,
         (j.saturation / 100.0) as f32,
-        (j.hue / 100.0) as f32 * 0.6,
+        // degrees → radians (in f64: an old −100..100 value lands on the same f32 angle as before)
+        if j.hue.is_finite() { j.hue.clamp(-lcc_develop::LOCAL_HUE_MAX, lcc_develop::LOCAL_HUE_MAX).to_radians() as f32 } else { 0.0 },
         (j.sharpness / 100.0) as f32,
         (j.noise / 100.0) as f32,
         (j.moire / 100.0) as f32,
@@ -275,6 +276,7 @@ pub struct FinishParams {
     /// A LUT profile and its amount (0..2), applied to the display-encoded colour.
     pub lut: Option<(std::sync::Arc<crate::lut::Lut3d>, f32)>,
     pub tone: ToneMap,
+    pub rgb_contrast: Option<crate::tone::RgbContrast>,
     pub ops: ColorOps,
     /// The masks' local Point Color samples, one list per evaluated mask (empty when none has any,
     /// [`crate::colorops::mask_point_ks`]).
@@ -287,6 +289,9 @@ pub struct FinishParams {
     pub shadow_tint: f32,
     /// Tone curves (parametric ∘ point, per channel) on encoded values, 1024 entries each.
     pub curves: Option<[Lut1; 3]>,
+    /// Levels (beyond Lightroom) on encoded values, after Exposure and right before the Tone Curve; `None` while
+    /// neutral. See [`crate::levels`].
+    pub levels: Option<crate::levels::LevelsK>,
     /// Refine Saturation as 0..1 (1 = the curves' own saturation).
     pub refine_sat: f32,
     pub vig: Option<Vig>,
@@ -376,7 +381,7 @@ impl FinishParams {
             && out_to_norm.0.iter().all(|v| v.is_finite());
         let v7 = match s.process.process() {
             Process::V1 | Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 => false,
-            Process::V7 | Process::V8 => true,
+            Process::V7 | Process::V8 | Process::V9 => true,
         };
         let particles = if effects && finite_frame && v7 { crate::grain::GrainParams::new(&s.grain, px_per_long) } else { None };
         let grain = (s.grain.amount > 0.0 && effects && finite_frame && !v7).then(|| {
@@ -389,16 +394,30 @@ impl FinishParams {
         });
         let calibration = s.section_enabled("calibration");
         let peak = s.hdr.peak();
+        let (tone, rgb_contrast) = if s.light.contrast_mode == lcc_develop::ContrastMode::Rgb && (s.light.contrast != 0.0 || s.light.blacks != 0.0) {
+            let base = base_tone_with_contrast_blacks(s, info, peak, 0.0, 0.0);
+            let full = base_tone(s, info, peak);
+            let rc = crate::tone::RgbContrast::new(&base, &full, s.light.blacks, peak);
+            (base, Some(rc))
+        } else {
+            (base_tone(s, info, peak), None)
+        };
         FinishParams {
             peak,
-            calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
+            calib: if calibration {
+                crate::colorops::calibration_matrix(&s.calibration, s.process.process() >= lcc_develop::Process::V9)
+            } else {
+                None
+            },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
-            tone: base_tone(s, info, peak),
+            tone,
+            rgb_contrast,
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
             ops: ColorOps::new(s),
             local_points: crate::colorops::mask_point_ks(s),
             local_mixers: crate::colorops::mask_mixer_ks(s),
             curves: curve_luts(&s.curve),
+            levels: crate::levels::LevelsK::new(&s.levels),
             refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
             vig: if effects { vignette(s) } else { None },
             to_out: space.from_working(),
@@ -452,16 +471,20 @@ impl FinishParams {
 /// every arm is the SDR tone map. An HDR render keeps the camera's look through the midtones and
 /// lifts its highlights past white ([`ToneMap::camera_hdr`]), so it matches the SDR render below them.
 pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
+    base_tone_with_contrast_blacks(s, info, peak, s.light.contrast, s.light.blacks)
+}
+
+pub fn base_tone_with_contrast_blacks(s: &DevelopSettings, info: &SourceInfo, peak: f32, contrast: f64, blacks: f64) -> ToneMap {
     // the SDR rendition of an HDR edit: the HDR curve, its highlights rolled off into SDR white
     // (issue #69); SDR edits never get here (their rolloff peak is 1)
     let rolloff = s.hdr.rolloff_peak();
     if peak <= 1.0 && rolloff > 1.0 {
-        return base_tone_at(s, info, rolloff).sdr_rolloff(rolloff);
+        return base_tone_at_with(s, info, rolloff, contrast, blacks).sdr_rolloff(rolloff);
     }
-    base_tone_at(s, info, peak)
+    base_tone_at_with(s, info, peak, contrast, blacks)
 }
 
-fn base_tone_at(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
+fn base_tone_at_with(s: &DevelopSettings, info: &SourceInfo, peak: f32, contrast: f64, blacks: f64) -> ToneMap {
     let l = &s.light;
     // a Source filter that renders a finished picture (a negative conversion) is shown as it is,
     // like a JPEG, not toned again as a raw
@@ -473,17 +496,17 @@ fn base_tone_at(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
         // ([`hue_clip`]), V6 Denoise, V7 grain: not the tone map
         Process::V1 | Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 => {
             match info.camera_tone.as_ref().filter(|_| raw) {
-                Some(curve) => ToneMap::camera_hdr(curve, l.contrast, l.whites, l.blacks, peak),
-                None if raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
-                None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
+                Some(curve) => ToneMap::camera_hdr(curve, contrast, l.whites, blacks, peak),
+                None if raw => ToneMap::hdr(contrast, l.whites, blacks, peak),
+                None => ToneMap::display_hdr(contrast, l.whites, blacks, peak),
             }
         }
         // a raw's tone curve rolls off into white in stops: a camera curve past its last knot, the
         // generic curve from half a stop below its white point instead of clipping (upstream #3783)
-        Process::V8 => match info.camera_tone.as_ref().filter(|_| raw) {
-            Some(curve) => ToneMap::camera_rolloff_hdr(curve, l.contrast, l.whites, l.blacks, peak),
-            None if raw => ToneMap::rolloff_hdr(l.contrast, l.whites, l.blacks, peak),
-            None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
+        Process::V8 | Process::V9 => match info.camera_tone.as_ref().filter(|_| raw) {
+            Some(curve) => ToneMap::camera_rolloff_hdr(curve, contrast, l.whites, blacks, peak),
+            None if raw => ToneMap::rolloff_hdr(contrast, l.whites, blacks, peak),
+            None => ToneMap::display_hdr(contrast, l.whites, blacks, peak),
         },
     }
 }
@@ -624,6 +647,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let p_lut = fp.lut.clone();
     let FinishParams {
         tone,
+        rgb_contrast,
         ops,
         curves,
         vig,
@@ -653,6 +677,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let (hl, sh, clar, tex, dehaze, sharpen, sharpen_mask, air, air_pre, gain, ev) =
         (*hl, *sh, *clar, *tex, *dehaze, *sharpen, *sharpen_mask, *air, *air_pre, *gain, *ev);
     let (sharpen_limit, sharpen_fade) = (*sharpen_limit, *sharpen_fade);
+    let rgb_contrast = rgb_contrast.as_ref();
     let mut terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
     with_tone(&mut terms, &p.mask_tone);
     // (only when it lines up with the evaluated masks, which it does unless a caller mixed settings)
@@ -857,11 +882,15 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 
             // --- tone map on luminance, highlight desaturation
             let yl = luminance_2020(c);
-            let o = tone.apply(yl);
+            let mut o = tone.apply(yl);
             let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
             let k = tone.chroma_scale(o);
             if k != 1.0 {
                 d = d.map(|v| o + (v - o) * k);
+            }
+            if let Some(rc) = rgb_contrast {
+                d = d.map(|v| rc.apply(v));
+                o = rc.apply(o);
             }
             let mx = d[0].max(d[1]).max(d[2]);
             if mx > peak {
@@ -961,6 +990,11 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             } else {
                 r.map(|v| encode_srgb(srgb, v))
             };
+            // --- Levels: the one call site of the stage (see `crate::levels`): after the gamut map and the encode above, so
+            // on the final in-gamut display values, and before the Tone Curve.
+            if let Some(lv) = &fp.levels {
+                e = lv.apply(e, hdr);
+            }
             if let Some(l) = curves {
                 let e0 = e;
                 e = eval_curves(l, e, hdr);
@@ -1260,6 +1294,33 @@ fn enc(v: f32, dither: f32) -> u8 {
 mod tests {
     use super::*;
 
+    fn hue_term(a: &LocalAdjustments) -> f32 {
+        let zero = mask_terms(&LocalAdjustments::default());
+        // the one term the Hue moves
+        let probe = mask_terms(&LocalAdjustments { hue: 90.0, ..Default::default() });
+        let k = (0..MASK_TERMS).find(|&k| probe[k] != zero[k]).unwrap();
+        mask_terms(a)[k]
+    }
+
+    #[test]
+    fn a_legacy_mask_hue_renders_at_the_same_angle_as_before() {
+        for old in [-100.0, -37.0, -1.0, 0.0, 12.5, 50.0, 100.0] {
+            let a: LocalAdjustments = serde_json::from_value(serde_json::json!({ "hue": old })).unwrap();
+            let before = (old / 100.0) as f32 * 0.6;
+            assert!((hue_term(&a) - before).abs() < 1e-6, "{old}: {} vs {before}", hue_term(&a));
+        }
+    }
+
+    #[test]
+    fn the_mask_hue_reaches_half_a_turn_and_hostile_values_stay_finite() {
+        let full = hue_term(&LocalAdjustments { hue: 180.0, ..Default::default() });
+        assert!((full - std::f32::consts::PI).abs() < 1e-5);
+        for bad in [f64::NAN, f64::INFINITY, -1e300] {
+            let t = hue_term(&LocalAdjustments { hue: bad, ..Default::default() });
+            assert!(t.is_finite() && t.abs() <= std::f32::consts::PI + 1e-5, "{bad}: {t}");
+        }
+    }
+
     #[test]
     fn grain_noise_is_finite_for_degenerate_coordinates() {
         for (x, y) in [(f32::NAN, 1.0), (1.0, f32::INFINITY), (f32::NEG_INFINITY, f32::NAN)] {
@@ -1362,6 +1423,38 @@ mod tests {
         let r = lift_negatives([0.6, 0.2, -0.05], luma, 1.0);
         assert!(r[2].abs() < 1e-6 && r[0] < 0.6 && r[0] > r[1]);
         assert_eq!(lift_negatives([1.6, 0.2, 0.05], luma, 1.0), [1.6, 0.2, 0.05]);
+    }
+
+    #[test]
+    fn rgb_contrast_mode_preserves_neutral_and_deepens_chromatic_contrast() {
+        use lcc_develop::{ContrastMode, DevelopSettings};
+        use lcc_raster::Rgb32f;
+        let mut s_lum = DevelopSettings::default();
+        s_lum.light.contrast = 40.0;
+        s_lum.light.blacks = -25.0;
+        s_lum.light.contrast_mode = ContrastMode::Luminance;
+
+        let mut s_rgb = s_lum.clone();
+        s_rgb.light.contrast_mode = ContrastMode::Rgb;
+
+        // Neutral image: luminance-based and RGB-based contrast produce nearly identical results
+        let neutral = Rgb32f::filled(8, 8, [0.18, 0.18, 0.18]);
+        let req = crate::RenderRequest::fit(8, 8);
+        let out_lum = crate::render(&neutral, &SourceInfo::default(), &s_lum, &req).image;
+        let out_rgb = crate::render(&neutral, &SourceInfo::default(), &s_rgb, &req).image;
+        for (a, b) in out_lum.data.iter().zip(&out_rgb.data) {
+            for c in 0..3 {
+                assert!((a[c] as i32 - b[c] as i32).abs() <= 1, "neutral channel {c}: lum {} vs rgb {}", a[c], b[c]);
+            }
+        }
+
+        // Chromatic image: RGB contrast shifts channels differently from pure luminance contrast
+        let chromatic = Rgb32f::filled(8, 8, [0.4, 0.1, 0.05]);
+        let chrom_lum = crate::render(&chromatic, &SourceInfo::default(), &s_lum, &req).image;
+        let chrom_rgb = crate::render(&chromatic, &SourceInfo::default(), &s_rgb, &req).image;
+        let diff =
+            (chrom_lum.data[0][0] as i32 - chrom_rgb.data[0][0] as i32).abs() + (chrom_lum.data[0][2] as i32 - chrom_rgb.data[0][2] as i32).abs();
+        assert!(diff > 1, "chromatic difference should be noticeable");
     }
 
     /// Upstream #3509: the dither keeps black, white and every exact 8-bit level exact, and splits a

@@ -157,13 +157,26 @@ mod tests {
     }
 
     #[test]
-    fn a_hash_read_in_pieces_is_the_hash_of_the_whole() {
-        // longer than one piece, so the read loop runs more than once
-        let bytes: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
-        let whole = lcc_preview::hash_bytes(&bytes).to_string();
-        assert_eq!(hash_reader(bytes.as_slice()).as_deref(), Some(whole.as_str()));
-        assert_eq!(hash_reader(Trickle(&bytes[..1000], false)).as_deref(), Some(lcc_preview::hash_bytes(&bytes[..1000]).to_string().as_str()));
-        assert_eq!(hash_reader(std::io::empty()).as_deref(), Some(lcc_preview::hash_bytes(&[]).to_string().as_str()));
+    fn a_hash_read_in_pieces_is_the_hash_of_the_whole_and_a_file_hash_is_the_import_hash() {
+        // a hash read in pieces is the hash of the whole
+        {
+            // longer than one piece, so the read loop runs more than once
+            let bytes: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+            let whole = lcc_preview::hash_bytes(&bytes).to_string();
+            assert_eq!(hash_reader(bytes.as_slice()).as_deref(), Some(whole.as_str()));
+            assert_eq!(hash_reader(Trickle(&bytes[..1000], false)).as_deref(), Some(lcc_preview::hash_bytes(&bytes[..1000]).to_string().as_str()));
+            assert_eq!(hash_reader(std::io::empty()).as_deref(), Some(lcc_preview::hash_bytes(&[]).to_string().as_str()));
+        }
+        // a file hash is the import hash and a missing file has none
+        {
+            let dir = Scratch(std::env::temp_dir().join(format!("lc-file-hash-{}", std::process::id())));
+            let _ = std::fs::remove_dir_all(&dir.0);
+            std::fs::create_dir_all(&dir.0).unwrap();
+            let f = dir.0.join("a.bin");
+            std::fs::write(&f, b"pixels").unwrap();
+            assert_eq!(file_hash(f.to_str().unwrap()), Some(lcc_preview::hash_bytes(b"pixels").to_string()));
+            assert_eq!(file_hash(dir.0.join("nope").to_str().unwrap()), None);
+        }
     }
 
     /// A scratch folder that goes away with the test, however it ends.
@@ -173,17 +186,6 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
-    }
-
-    #[test]
-    fn a_file_hash_is_the_import_hash_and_a_missing_file_has_none() {
-        let dir = Scratch(std::env::temp_dir().join(format!("lc-file-hash-{}", std::process::id())));
-        let _ = std::fs::remove_dir_all(&dir.0);
-        std::fs::create_dir_all(&dir.0).unwrap();
-        let f = dir.0.join("a.bin");
-        std::fs::write(&f, b"pixels").unwrap();
-        assert_eq!(file_hash(f.to_str().unwrap()), Some(lcc_preview::hash_bytes(b"pixels").to_string()));
-        assert_eq!(file_hash(dir.0.join("nope").to_str().unwrap()), None);
     }
 }
 

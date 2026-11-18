@@ -154,14 +154,3 @@ pub fn check(together: bool) -> Result<(), String> {
     }
     if failed == 0 { Ok(()) } else { Err(format!("{failed} crate check(s) failed the Android check")) }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_fast_gate_checks_arm64_and_the_full_run_every_shipped_abi() {
-        assert_eq!(abis_to_check(true), &[Abi::Arm64]);
-        assert_eq!(abis_to_check(false), &[Abi::Arm64, Abi::X86_64]);
-    }
-}

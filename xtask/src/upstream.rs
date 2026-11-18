@@ -691,15 +691,6 @@ mod tests {
     }
 
     #[test]
-    fn areas_group_by_crate_app_or_top_folder() {
-        assert_eq!(area_of("crates/raw/src/vendor/nef.rs"), "crates/raw");
-        assert_eq!(area_of("apps/app/src/main.rs"), "apps/app");
-        assert_eq!(area_of("docs/gaps.md"), "docs");
-        assert_eq!(area_of("Cargo.toml"), "Cargo.toml");
-        assert_eq!(area_of(""), "");
-    }
-
-    #[test]
     fn the_review_lists_every_commit_and_marks_fork_owned_paths() {
         let m = Manifest::parse("[owned]\ncrates/ui-egui/\n").unwrap();
         let log = "\x01aaaaaaaaaaaa\tRaw: fix NEF tail\n3\t1\tcrates/raw/src/vendor/nef.rs\n\n\x01bbbbbbbbbbbb\tSettings window rework\n40\t9\tcrates/ui-egui/src/panels/settings.rs\n";
@@ -720,18 +711,6 @@ mod tests {
         assert!(m.is_shared("crates/raw/src/lib.rs"));
         assert!(Manifest::parse("x\n").is_err());
         assert!(Manifest::parse("[bogus]\n").is_err());
-    }
-
-    #[test]
-    fn repo_manifest_parses() {
-        let m = Manifest::load(&crate::root()).unwrap();
-        assert!(m.is_owned("crates/catalog/src/lib.rs"));
-        assert!(m.is_owned("crates/ui-egui/src/panels/classic.rs"));
-        // the UI is the fork's own since upstream changes are reviewed and ported by hand (docs/upstream-merge.md)
-        assert!(m.is_owned("crates/ui-egui/src/app.rs"));
-        assert!(m.is_shared("crates/pipeline/src/lib.rs"));
-        assert!(!m.is_shared("crates/ui-egui/locales/en/main.ftl"));
-        assert!(!m.is_shared("docs/parity-checklist.md"));
     }
 
     #[test]

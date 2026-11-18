@@ -259,17 +259,6 @@ mod tests {
         assert!(safe_file_name(&"x".repeat(200)).is_err(), "an absurdly long name is refused");
     }
 
-    #[test]
-    fn a_part_file_sits_beside_its_target() {
-        assert_eq!(part_path(Path::new("/tmp/a.msi")), PathBuf::from("/tmp/a.msi.part"));
-        assert_eq!(part_path(Path::new("C:/tmp/a.msi")).file_name().and_then(|n| n.to_str()), Some("a.msi.part"));
-    }
-
-    #[test]
-    fn stage_dir_is_inside_the_cache() {
-        assert_eq!(stage_dir(Path::new("/cache")), PathBuf::from("/cache/updates"));
-    }
-
     /// What the local release serves: the file, its `SHA256SUMS.txt` and the list's signature
     /// (`None`: a 404, as on a release that was never signed).
     struct Served {

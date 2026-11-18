@@ -838,34 +838,32 @@ pub(crate) mod tests {
             assert_eq!(image.crop, Rect::new(0, 0, 64, 48), "{aspect:?}");
             assert_eq!((image.metadata.width, image.metadata.height), (Some(64), Some(48)));
         }
-    }
-
-    /// Rectangles that don't fit the image area leave the crop alone and cannot overflow; without a usable
-    /// `SensorInfo` the origin `AspectInfo` is measured from is unknown, so it isn't applied either.
-    #[test]
-    fn aspect_info_that_does_not_fit_is_ignored() {
-        for bad in [[0, 65, 42, 0, 3], [0, 64, 42, 0, 7], [0, 64, 42, 1, 3], [0, 1, 42, 0, 0], [0, 64, 0, 0, 0], [0, u32::MAX, 42, 0, 0]] {
-            assert_eq!(decode_with_aspect(Some(bad)).crop, Rect::new(0, 0, 64, 48), "{bad:?}");
+        // aspect info that does not fit is ignored
+        // Rectangles that don't fit the image area leave the crop alone and cannot overflow; without a usable
+        // `SensorInfo` the origin `AspectInfo` is measured from is unknown, so it isn't applied either.
+        {
+            for bad in [[0, 65, 42, 0, 3], [0, 64, 42, 0, 7], [0, 64, 42, 1, 3], [0, 1, 42, 0, 0], [0, 64, 0, 0, 0], [0, u32::MAX, 42, 0, 0]] {
+                assert_eq!(decode_with_aspect(Some(bad)).crop, Rect::new(0, 0, 64, 48), "{bad:?}");
+            }
+            let aspect = [0u32, 32, 8, 0, 1].iter().flat_map(|v| v.to_le_bytes()).collect();
+            let image = decode_with_note(&[(CANON_ASPECT_INFO, 4, aspect)]);
+            assert_eq!((image.active_area, image.crop), (Rect::new(0, 0, 64, 10), Rect::new(0, 0, 64, 10)));
         }
-        let aspect = [0u32, 32, 8, 0, 1].iter().flat_map(|v| v.to_le_bytes()).collect();
-        let image = decode_with_note(&[(CANON_ASPECT_INFO, 4, aspect)]);
-        assert_eq!((image.active_area, image.crop), (Rect::new(0, 0, 64, 10), Rect::new(0, 0, 64, 10)));
-    }
-
-    /// Issue #964: an EOS 7D CR2 carries a 4:3 `AspectInfo` although the camera recorded (and its full-size JPEG
-    /// shows) the whole 3:2 frame. A rectangle the camera's own JPEG disagrees with is not applied; one it agrees
-    /// with still is.
-    #[test]
-    fn aspect_info_the_camera_jpeg_disagrees_with_is_ignored() {
-        // 3:2 image area 60 x 40 at (4, 2) on a 66 x 44 sensor; a 4:3 AspectInfo of 52 x 39 inside it
-        let si: Vec<u8> = [66u16, 44, 0, 0, 0, 4, 2, 63, 41].iter().flat_map(|v| v.to_le_bytes()).collect();
-        let aspect: Vec<u8> = [2u32, 52, 39, 4, 0].iter().flat_map(|v| v.to_le_bytes()).collect();
-        let entries = [(SENSOR_INFO, 3, si), (CANON_ASPECT_INFO, 4, aspect)];
-        let image = decode_sized_with_note_preview(66, 44, &entries, Some((5184, 3456)));
-        assert_eq!(image.crop, Rect::new(0, 0, 60, 40));
-        assert_eq!(image.info().developed_size(), (60, 40));
-        // a JPEG cropped to the rectangle (PowerShot-style in-camera aspect) keeps the aspect crop
-        let image = decode_sized_with_note_preview(66, 44, &entries, Some((4608, 3456)));
-        assert_eq!(image.crop, Rect::new(4, 0, 52, 39));
+        // aspect info the camera jpeg disagrees with is ignored
+        // Issue #964: an EOS 7D CR2 carries a 4:3 `AspectInfo` although the camera recorded (and its full-size JPEG
+        // shows) the whole 3:2 frame. A rectangle the camera's own JPEG disagrees with is not applied; one it agrees
+        // with still is.
+        {
+            // 3:2 image area 60 x 40 at (4, 2) on a 66 x 44 sensor; a 4:3 AspectInfo of 52 x 39 inside it
+            let si: Vec<u8> = [66u16, 44, 0, 0, 0, 4, 2, 63, 41].iter().flat_map(|v| v.to_le_bytes()).collect();
+            let aspect: Vec<u8> = [2u32, 52, 39, 4, 0].iter().flat_map(|v| v.to_le_bytes()).collect();
+            let entries = [(SENSOR_INFO, 3, si), (CANON_ASPECT_INFO, 4, aspect)];
+            let image = decode_sized_with_note_preview(66, 44, &entries, Some((5184, 3456)));
+            assert_eq!(image.crop, Rect::new(0, 0, 60, 40));
+            assert_eq!(image.info().developed_size(), (60, 40));
+            // a JPEG cropped to the rectangle (PowerShot-style in-camera aspect) keeps the aspect crop
+            let image = decode_sized_with_note_preview(66, 44, &entries, Some((4608, 3456)));
+            assert_eq!(image.crop, Rect::new(4, 0, 52, 39));
+        }
     }
 }

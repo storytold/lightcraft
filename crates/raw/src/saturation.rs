@@ -288,6 +288,20 @@ mod tests {
         let mut r = raw_with(Some(3567), 4095.0);
         r.active_area = Rect::new(usize::MAX, 0, 2, 64);
         assert_eq!(r.saturation_points(), [None; 3]);
+        // hostile levels keep the stated white level
+        {
+            for (black, white) in [(f32::NAN, 14558.0), (-5.0, 14558.0), (512.0, f32::NAN), (512.0, 16383.0), (512.0, 70000.0), (15000.0, 14558.0)] {
+                let mut r = eos_rp();
+                r.black = BlackLevel::uniform(black);
+                r.white = vec![white];
+                assert_eq!(r.extend_white_to_saturation(), None, "{black} {white}");
+            }
+            let mut r = eos_rp();
+            r.active_area = Rect::new(usize::MAX, 0, 2, 128);
+            assert_eq!(r.extend_white_to_saturation(), None);
+            r.active_area = Rect::new(0, 0, 0, 0);
+            assert_eq!(r.extend_white_to_saturation(), None);
+        }
     }
 
     #[test]
@@ -302,25 +316,6 @@ mod tests {
             assert_eq!(*y, if *x >= 3567 { 4095 } else { *x });
         }
         assert_eq!(r.lift_clipped_samples(), 0, "idempotent");
-    }
-
-    #[test]
-    fn data_that_reaches_its_white_level_is_left_alone() {
-        let mut r = raw_with(Some(4095), 4095.0);
-        let before = r.data.clone();
-        assert_eq!(r.saturation_points(), [None; 3]);
-        assert_eq!(r.lift_clipped_samples(), 0);
-        assert_eq!(r.data, before);
-    }
-
-    #[test]
-    fn data_without_a_pile_up_is_left_alone() {
-        let mut r = raw_with(None, 4095.0);
-        without_top(&mut r);
-        let before = r.data.clone();
-        assert_eq!(r.saturation_points(), [None; 3]);
-        assert_eq!(r.lift_clipped_samples(), 0);
-        assert_eq!(r.data, before);
     }
 
     /// Sparse or curve-coded data has popular values with plenty of samples above them: not a clip point.
@@ -506,20 +501,22 @@ mod tests {
         // a few hot pixels above it are not light worth a new white level
         let mut r = canon(512.0, 14558.0, 14000, |i, v| if i % 1000 == 0 { 16383 } else { v });
         assert_eq!(r.extend_white_to_saturation(), None);
-    }
-
-    #[test]
-    fn hostile_levels_keep_the_stated_white_level() {
-        for (black, white) in [(f32::NAN, 14558.0), (-5.0, 14558.0), (512.0, f32::NAN), (512.0, 16383.0), (512.0, 70000.0), (15000.0, 14558.0)] {
-            let mut r = eos_rp();
-            r.black = BlackLevel::uniform(black);
-            r.white = vec![white];
-            assert_eq!(r.extend_white_to_saturation(), None, "{black} {white}");
+        // data without a pile up is left alone
+        {
+            let mut r = raw_with(None, 4095.0);
+            without_top(&mut r);
+            let before = r.data.clone();
+            assert_eq!(r.saturation_points(), [None; 3]);
+            assert_eq!(r.lift_clipped_samples(), 0);
+            assert_eq!(r.data, before);
         }
-        let mut r = eos_rp();
-        r.active_area = Rect::new(usize::MAX, 0, 2, 128);
-        assert_eq!(r.extend_white_to_saturation(), None);
-        r.active_area = Rect::new(0, 0, 0, 0);
-        assert_eq!(r.extend_white_to_saturation(), None);
+        // data that reaches its white level is left alone
+        {
+            let mut r = raw_with(Some(4095), 4095.0);
+            let before = r.data.clone();
+            assert_eq!(r.saturation_points(), [None; 3]);
+            assert_eq!(r.lift_clipped_samples(), 0);
+            assert_eq!(r.data, before);
+        }
     }
 }

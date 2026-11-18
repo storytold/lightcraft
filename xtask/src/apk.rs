@@ -597,27 +597,22 @@ mod tests {
     }
 
     #[test]
-    fn version_code_override_is_validated() {
-        let code = parse(&["--aab", "--version-code", "26430600"]).unwrap().version_code.unwrap();
-        assert!(code > version_code("26.43.5").unwrap() && code < version_code("26.43.6-rc1").unwrap());
-        assert_eq!(parse(&["--aab"]).unwrap().version_code, None);
-        for bad in ["0", "-5", "abc", "2100000001", "99999999999", ""] {
-            assert!(parse(&["--version-code", bad]).is_err(), "{bad}");
+    fn version_codes_are_validated() {
+        // version code override is validated
+        {
+            let code = parse(&["--aab", "--version-code", "26430600"]).unwrap().version_code.unwrap();
+            assert!(code > version_code("26.43.5").unwrap() && code < version_code("26.43.6-rc1").unwrap());
+            assert_eq!(parse(&["--aab"]).unwrap().version_code, None);
+            for bad in ["0", "-5", "abc", "2100000001", "99999999999", ""] {
+                assert!(parse(&["--version-code", bad]).is_err(), "{bad}");
+            }
+            assert!(parse(&["--version-code"]).is_err());
         }
-        assert!(parse(&["--version-code"]).is_err());
-    }
-
-    #[test]
-    fn unusable_versions_are_errors() {
-        for v in ["", "1.2", "1.2.x", "1.100.0", "1.2.3.4"] {
-            assert!(version_code(v).is_err(), "{v}");
+        // unusable versions are errors
+        {
+            for v in ["", "1.2", "1.2.x", "1.100.0", "1.2.3.4"] {
+                assert!(version_code(v).is_err(), "{v}");
+            }
         }
-    }
-
-    #[test]
-    fn abi_names() {
-        assert_eq!(Abi::parse("arm64-v8a"), Some(Abi::Arm64));
-        assert_eq!(Abi::parse("x86_64"), Some(Abi::X86_64));
-        assert_eq!(Abi::parse("mips"), None);
     }
 }

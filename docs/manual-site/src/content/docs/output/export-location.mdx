@@ -9,7 +9,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 ## Export Location
 - **Export to**: **Choose folder later** (default; asks when the export starts), **Specific folder**, or **Same folder as original photo**.
-- **Subfolder**: one folder name inside the destination. `..` and path separators are refused.
+- **Subfolder**: one folder name inside the destination. `..`, path separators and Windows-reserved names and characters are refused. A destination whose `..` leads back to an original is refused too.
 - **If file exists**: **Add number** (-2, -3…), **Overwrite** or **Skip**. A file and its sidecars follow the same rule.
 - A catalogued original is never overwritten, whatever the policy.
 

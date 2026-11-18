@@ -332,6 +332,14 @@ mod tests {
         let w = white_from_data(&d, 14);
         assert!((14900.0..=15000.0).contains(&w), "{w}");
         assert_eq!(white_from_data(&[], 12), 4095.0);
+        // white plateau with strays above
+        {
+            let mut d: Vec<u16> = (0..100_000).map(|i| (2048 + i % 10000) as u16).collect();
+            d.extend(std::iter::repeat_n(13583u16, 5000));
+            d.extend([13700, 13900, 14100, 14426]);
+            let w = white_from_data(&d, 14);
+            assert!((13500.0..=13583.0).contains(&w), "{w}");
+        }
     }
 
     /// A Canon EOS 70D CR2 saturates at 13583 but has a handful of samples up to 14426 (out of ~20M): the plateau
@@ -343,15 +351,6 @@ mod tests {
         let d: Vec<u16> = (0..n * n).map(|i| if (i / n) % 2 == 1 && i % 2 == 1 { 15000 } else { (i % 10000) as u16 }).collect();
         let w = white_from_data(&active_rows(&d, n, Rect::new(0, 0, n, n)), 14);
         assert!((14900.0..=15000.0).contains(&w), "{w}");
-    }
-
-    #[test]
-    fn white_plateau_with_strays_above() {
-        let mut d: Vec<u16> = (0..100_000).map(|i| (2048 + i % 10000) as u16).collect();
-        d.extend(std::iter::repeat_n(13583u16, 5000));
-        d.extend([13700, 13900, 14100, 14426]);
-        let w = white_from_data(&d, 14);
-        assert!((13500.0..=13583.0).contains(&w), "{w}");
     }
 
     #[test]

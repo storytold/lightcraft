@@ -227,11 +227,9 @@ impl Sam2Encoded {
 mod tests {
     use super::*;
 
-    fn tmp(name: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("lc-sam2-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
+    /// An empty Temp folder of the test's own, removed when the test ends.
+    fn tmp(name: &str) -> lcc_testkit::TempDir {
+        lcc_testkit::TempDir::new(&format!("lc-sam2-{name}"))
     }
 
     #[test]
@@ -251,6 +249,5 @@ mod tests {
         assert!(e.starts_with("SAM 2 model:"), "{e}");
         std::fs::write(d.join(CONFIG_FILE), b"{ broken").unwrap();
         assert!(Sam2::load_on(&d, Device::Cpu).is_err());
-        let _ = std::fs::remove_dir_all(&d);
     }
 }

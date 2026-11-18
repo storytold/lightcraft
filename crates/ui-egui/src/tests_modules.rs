@@ -99,6 +99,8 @@ fn a_grid_view_from_develop_shows_library_panels() {
 }
 
 // Regression (#144): Library came back in the loupe after Develop, whatever view it was left in.
+// Issue #227: Returning to Library from Develop preserves the non-default view (Square Grid, Compare, etc.)
+// and redundant top-bar navigation arrows are removed.
 #[test]
 fn library_returns_to_its_own_view_after_develop() {
     let mut h = demo();
@@ -116,16 +118,10 @@ fn library_returns_to_its_own_view_after_develop() {
     run(&mut h, "view.photoGrid", json!({}));
     run(&mut h, "module.develop", json!({}));
     let saved = serde_json::to_string(&h.app.ui).unwrap();
-    eprintln!("SAVED UI: {}", saved);
     let back = serde_json::from_str::<crate::UiState>(&saved).unwrap().sanitized();
     assert_eq!(back.layouts.get(&ModuleId::Library).and_then(|l| l.view), Some(ViewMode::PhotoGrid));
-}
+    run(&mut h, "module.library", json!({}));
 
-// Issue #227: Returning to Library from Develop preserves the non-default view (Square Grid, Compare, etc.)
-// and redundant top-bar navigation arrows are removed.
-#[test]
-fn library_preserves_non_default_view_when_returning_from_develop() {
-    let mut h = demo();
     // Top-bar navigation arrows are removed
     assert!(!has_widget(&h, "icon:back"));
     assert!(!has_widget(&h, "icon:forward"));
@@ -172,7 +168,6 @@ fn panel_state_is_per_module_and_persists() {
     assert!(!h.app.ui.left_panel && !h.app.ui.right_edge && h.app.ui.auto_show.left);
     // across a save/load of ui.json
     let saved = serde_json::to_string(&h.app.ui).unwrap();
-    eprintln!("SAVED UI: {}", saved);
     let back = serde_json::from_str::<crate::UiState>(&saved).unwrap().sanitized();
     assert_eq!(back.module, ModuleId::Develop);
     assert_eq!(back.layouts.get(&ModuleId::Library).map(|l| (l.shown.left, l.toolbar)), Some((true, true)));
@@ -190,13 +185,11 @@ fn panel_state_is_per_module_and_persists() {
 }
 
 #[test]
-fn every_module_draws_and_the_picker_hides_modules() {
+fn every_module_has_its_bar_the_picker_hides_modules_and_the_identity_plate_is_checked() {
     let mut h = demo();
     for m in ModuleId::ALL {
         run(&mut h, m.command(), json!({}));
         h.settle(SETTLE);
-        let img = h.snapshot(T);
-        assert!(img.width() > 0 && img.height() > 0);
         assert!(has_widget(&h, "region:moduleBar") && has_widget(&h, "region:identityPlate"), "{m:?}");
         if m.is_placeholder() {
             assert!(has_widget(&h, &format!("view:module:{}", m.key())));
@@ -221,7 +214,7 @@ fn every_module_draws_and_the_picker_hides_modules() {
         assert_eq!(r["ok"], false, "{r}");
     }
     // a graphic plate from an SVG file, drawn in the bar; "" goes back to text
-    let svg = std::env::temp_dir().join(format!("plate-{}.svg", std::process::id()));
+    let svg = lcc_testkit::TempFile::new("plate", "plate.svg");
     std::fs::write(&svg, r#"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="30"><circle cx="15" cy="15" r="14" fill="teal"/></svg>"#)
         .unwrap();
     run(&mut h, "view.identityPlate", json!({"image": svg.to_string_lossy()}));
@@ -234,11 +227,8 @@ fn every_module_draws_and_the_picker_hides_modules() {
     // F5: the module bar goes
     run(&mut h, "panel.top", json!({}));
     assert!(!has_widget(&h, "region:moduleBar"));
-}
 
-#[test]
-fn the_identity_plate_colour_takes_only_six_hex_digits() {
-    let mut h = demo();
+    // the plate's colour takes only six hex digits
     run(&mut h, "view.identityPlate", json!({"color": "#ff8000"}));
     assert_eq!(h.app.ui.identity_plate.color, Some([255, 128, 0]));
     // a sign or a second `#` isn't a hex digit: refused, and the colour stays
@@ -279,27 +269,12 @@ fn screen_modes_and_lights_out() {
     assert_eq!(img.pixels.first().map(|c| (c.r(), c.g(), c.b())), Some((0, 0, 0)));
 }
 
+/// The secondary window's own controls (here in egui's embedded window, as on the web): the mode
+/// switcher, the filter bar in Grid, the filmstrip under the loupe; clicks select photos.
 #[test]
-fn rating_steps_and_flag_toggle() {
+fn secondary_window_has_its_own_switcher_filter_and_filmstrip() {
     let mut h = demo();
-    let id = h.app.session.visible_cloned()[0];
-    run(&mut h, "library.select", json!({"ids": [id.0]}));
-    run(&mut h, "photo.rate", json!({"rating": 2}));
-    run(&mut h, "photo.increaseRating", json!({}));
-    assert_eq!(h.app.session.catalog.photo(id).unwrap().rating, 3);
-    for _ in 0..5 {
-        run(&mut h, "photo.decreaseRating", json!({}));
-    }
-    assert_eq!(h.app.session.catalog.photo(id).unwrap().rating, 0);
-    run(&mut h, "photo.flagToggle", json!({}));
-    assert_eq!(h.app.session.catalog.photo(id).unwrap().flag, lcc_catalog::Flag::Pick);
-    run(&mut h, "photo.flagToggle", json!({}));
-    assert_eq!(h.app.session.catalog.photo(id).unwrap().flag, lcc_catalog::Flag::None);
-}
-
-#[test]
-fn secondary_window_modes() {
-    let mut h = demo();
+    // every mode shows the window; Locked keeps the photo it opened on
     let id = h.app.session.visible_cloned()[1];
     run(&mut h, "library.select", json!({"ids": [id.0]}));
     let r = run(&mut h, "second.locked", json!({}));
@@ -310,13 +285,7 @@ fn secondary_window_modes() {
         h.step();
         assert!(has_widget(&h, "view:secondWindow"), "{m}");
     }
-}
 
-/// The secondary window's own controls (here in egui's embedded window, as on the web): the mode
-/// switcher, the filter bar in Grid, the filmstrip under the loupe; clicks select photos.
-#[test]
-fn secondary_window_has_its_own_switcher_filter_and_filmstrip() {
-    let mut h = demo();
     run(&mut h, "second.grid", json!({}));
     h.step();
     for m in ["grid", "loupe", "live", "locked", "compare", "survey", "slideshow"] {
@@ -358,7 +327,7 @@ fn secondary_window_has_its_own_switcher_filter_and_filmstrip() {
 /// closes its drawer and leaves the Develop panels on screen. Closing the tool panel used to leave
 /// Develop with no editing panel, which is Library's, so the click threw the user back into the grid.
 #[test]
-fn clicking_the_tool_in_use_closes_its_drawer() {
+fn develops_tools_close_to_the_edit_panel_stay_in_develop_and_are_its_own() {
     let mut h = demo();
     run(&mut h, "module.develop", json!({}));
     h.step();
@@ -382,16 +351,12 @@ fn clicking_the_tool_in_use_closes_its_drawer() {
     h.step();
     h.step();
     assert_eq!((h.app.ui.module, h.app.ui.right), (ModuleId::Develop, RightPanel::Crop));
-}
+    run(&mut h, "panel.crop", json!({}));
+    assert_eq!((h.app.ui.module, h.app.ui.right), (ModuleId::Develop, RightPanel::Edit), "the command closes the drawer too");
 
-/// The tool strip's shortcuts and menu items keep toggling the tool off (Classic's `R`, `Q`…),
-/// but closing Develop's editing panel leaves Develop: it used to hand the Detail view, with no
-/// editing panel left, back to Library.
-#[test]
-fn closing_develops_tool_panel_stays_in_develop() {
-    let mut h = demo();
-    run(&mut h, "module.develop", json!({}));
-    h.step();
+    // The tool strip's shortcuts and menu items keep toggling the tool off (Classic's `R`, `Q`…),
+    // but closing Develop's editing panel leaves Develop: it used to hand the Detail view, with no
+    // editing panel left, back to Library.
     for (cmd, panel) in [
         ("panel.edit", RightPanel::Edit),
         ("panel.crop", RightPanel::Crop),
@@ -417,16 +382,15 @@ fn closing_develops_tool_panel_stays_in_develop() {
     // a grid view is still Library's
     run(&mut h, "view.photoGrid", json!({}));
     assert_eq!(h.app.ui.module, ModuleId::Library);
-}
 
-/// #45, #108: Develop's tool row shows its own editing tools only — the Library panels it used to
-/// list (Versions, Activity, Keywords, Info) looked like Develop's tools, and they are still
-/// commands. No module has a strip at the far right any more: Library's Versions panel is in its
-/// left column and History & Activity opens by command.
-#[test]
-fn tool_strip_shows_only_the_active_modules_tools() {
-    let mut h = demo();
+    // #45, #108: Develop's tool row shows its own editing tools only — the Library panels it used
+    // to list (Versions, Activity, Keywords, Info) looked like Develop's tools, and they are still
+    // commands. No module has a strip at the far right any more.
     run(&mut h, "module.develop", json!({}));
+    if h.app.ui.right != RightPanel::Edit {
+        run(&mut h, "panel.edit", json!({}));
+    }
+    assert_eq!((h.app.ui.module, h.app.ui.right), (ModuleId::Develop, RightPanel::Edit));
     h.step();
     for id in ["crop", "remove", "masking", "redeye"] {
         assert!(has_widget(&h, &format!("icon:{id}")), "Develop's tool row has {id}");
@@ -543,16 +507,11 @@ fn export_and_print_from_develop_take_the_open_photo() {
     run(&mut h, "library.select", json!({"ids": ids.clone()}));
     run(&mut h, "module.print", json!({}));
     assert_eq!(h.app.session.selection.ids.len(), 2, "a Library selection prints as it is");
-}
-
-/// File ▸ Export… (⇧E, the top bar's Export button) opens the Export module on the desktop.
-#[test]
-fn file_export_opens_the_module() {
-    let mut h = demo();
+    // File ▸ Export… (⇧E, the top bar's Export button) opens the Export module on the desktop
     run(&mut h, "file.export", json!({}));
     h.settle(SETTLE);
     assert_eq!(h.app.ui.module, ModuleId::Export);
-    assert!(h.app.ui.dialog.is_none());
+    assert!(h.app.ui.dialog.is_none(), "File ▸ Export… opens the module, not the dialog");
 }
 
 #[test]

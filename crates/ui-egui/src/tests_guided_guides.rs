@@ -42,30 +42,33 @@ fn guide_rect(h: &Headless, i: usize) -> egui::Rect {
 }
 
 /// A click near a guide selects it (Delete has a visible target); the guides stay put.
-#[test]
-fn a_click_near_a_guide_selects_it() {
-    let mut h = guided();
-    assert_eq!(guides_len(&h), 2);
+fn a_click_near_a_guide_selects_it(h: &mut Headless) {
+    // (not a double-click with the step before)
+    h.time += 1.0;
+    assert_eq!(guides_len(h), 2);
     let id = h.app.session.active().expect("a photo");
-    let r = h.request("ui.click", json!({"x": guide_at(&h, 0).x, "y": guide_at(&h, 0).y}), T);
+    let r = h.request("ui.click", json!({"x": guide_at(h, 0).x, "y": guide_at(h, 0).y}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert_eq!(h.app.ui.selected_guide, Some((id.0, 0)), "the clicked guide is selected");
-    assert_eq!(guides_len(&h), 2, "selecting removes nothing");
+    assert_eq!(guides_len(h), 2, "selecting removes nothing");
 }
 
 /// Delete removes the selected guide alone; the other one stays, and nothing stays selected.
-#[test]
-fn delete_removes_the_selected_guide() {
-    let mut h = guided();
-    let r = h.request("ui.click", json!({"x": guide_at(&h, 1).x, "y": guide_at(&h, 1).y}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+fn delete_removes_the_selected_guide(h: &mut Headless) {
+    // (not a double-click with the step before)
+    h.time += 1.0;
+    // (the endpoint click before left the second guide selected; a click on a selected guide lets go of it)
+    if h.app.ui.selected_guide.map(|(_, i)| i) != Some(1) {
+        let r = h.request("ui.click", json!({"x": guide_at(h, 1).x, "y": guide_at(h, 1).y}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+    }
     assert_eq!(h.app.ui.selected_guide.map(|(_, i)| i), Some(1));
     let r = h.request("ui.key", json!({"key": "Delete"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
-    assert_eq!(guides_len(&h), 1, "one guide is gone");
+    assert_eq!(guides_len(h), 1, "one guide is gone");
     assert_eq!(h.app.ui.selected_guide, None, "and nothing is selected afterwards");
     // the survivor is the first guide: the second one's endpoints are gone
     let id = h.app.session.active().expect("a photo");
@@ -77,11 +80,21 @@ fn delete_removes_the_selected_guide() {
     );
 }
 
-/// A click away from every guide clears the selection (and removes nothing).
 #[test]
-fn a_click_away_clears_the_selection() {
+fn clicks_select_a_guide_and_delete_removes_only_the_selected_one() {
     let mut h = guided();
-    let r = h.request("ui.click", json!({"x": guide_at(&h, 0).x, "y": guide_at(&h, 0).y}), T);
+    delete_with_no_selection_removes_nothing(&mut h);
+    a_click_away_clears_the_selection(&mut h);
+    a_click_near_a_guide_selects_it(&mut h);
+    clicking_an_endpoint_selects_it_without_changing_it(&mut h);
+    delete_removes_the_selected_guide(&mut h);
+}
+
+/// A click away from every guide clears the selection (and removes nothing).
+fn a_click_away_clears_the_selection(h: &mut Headless) {
+    // (not a double-click with the step before)
+    h.time += 1.0;
+    let r = h.request("ui.click", json!({"x": guide_at(h, 0).x, "y": guide_at(h, 0).y}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert!(h.app.ui.selected_guide.is_some());
@@ -91,41 +104,18 @@ fn a_click_away_clears_the_selection() {
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert_eq!(h.app.ui.selected_guide, None);
-    assert_eq!(guides_len(&h), 2, "and removes nothing");
+    assert_eq!(guides_len(h), 2, "and removes nothing");
 }
 
 /// With nothing selected Delete removes no guide and never deletes the photo: the tool is open.
-#[test]
-fn delete_with_no_selection_removes_nothing() {
-    let mut h = guided();
+fn delete_with_no_selection_removes_nothing(h: &mut Headless) {
     let undo = h.app.session.undo.len();
     let r = h.request("ui.key", json!({"key": "Delete"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
-    assert_eq!(guides_len(&h), 2, "no guide is removed");
+    assert_eq!(guides_len(h), 2, "no guide is removed");
     assert_eq!(h.app.session.undo.len(), undo, "no edit either");
     assert!(h.app.session.active().is_some(), "the photo is still active");
-}
-
-/// Drawing a new guide clears the selection first, so Delete after a draw removes the new guide.
-#[test]
-fn drawing_a_new_guide_clears_the_selection() {
-    let mut h = guided();
-    let r = h.request("ui.click", json!({"x": guide_at(&h, 0).x, "y": guide_at(&h, 0).y}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    assert!(h.app.ui.selected_guide.is_some());
-    let img = h.app.image_rect.expect("the photo on screen");
-    // a drag across the middle of the photo (clear of both guides) draws a third guide
-    let r = h.request(
-        "ui.drag",
-        json!({"x": img.left() + 0.3 * img.width(), "y": img.top() + 0.5 * img.height(), "toX": img.left() + 0.7 * img.width(), "toY": img.top() + 0.5 * img.height()}),
-        T,
-    );
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    assert_eq!(guides_len(&h), 3, "the drawn guide is added");
-    assert_eq!(h.app.ui.selected_guide, None, "and the click's selection is gone");
 }
 
 /// A press on an endpoint drags it: the guide follows the pointer — the other end and the other
@@ -160,20 +150,20 @@ fn dragging_a_guide_endpoint_moves_it() {
 
 /// A press-release on an endpoint without moving it selects the guide and changes nothing: no
 /// coordinate moves and no undo entry appears for a click.
-#[test]
-fn clicking_an_endpoint_selects_it_without_changing_it() {
-    let mut h = guided();
+fn clicking_an_endpoint_selects_it_without_changing_it(h: &mut Headless) {
+    // (not a double-click with the step before)
+    h.time += 1.0;
     let id = h.app.session.active().expect("a photo");
     let undo = h.app.session.undo.len();
     let img = h.app.image_rect.expect("the photo on screen");
-    let at = guide_rect(&h, 1).left_top();
+    let at = guide_rect(h, 1).left_top();
     let x = ((at.x - img.left()) / img.width()) as f64;
     let y = ((at.y - img.top()) / img.height()) as f64;
     let r = h.request("ui.pointer", json!({"events": [{"kind": "down", "x": x, "y": y}, {"kind": "up", "x": x, "y": y}]}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert_eq!(h.app.ui.selected_guide, Some((id.0, 1)), "the endpoint's guide is selected");
-    assert_eq!(guides_len(&h), 2);
+    assert_eq!(guides_len(h), 2);
     let d = h.app.session.catalog.photo(id).expect("the photo");
     let (a, b) = d.develop.geometry.guides[1];
     assert!(
@@ -190,6 +180,11 @@ fn clicking_an_endpoint_selects_it_without_changing_it() {
 fn a_new_guide_starts_at_the_press_point() {
     let mut h = guided();
     assert_eq!(guides_len(&h), 2);
+    // a guide selected before: drawing a new one clears the selection first
+    let r = h.request("ui.click", json!({"x": guide_at(&h, 0).x, "y": guide_at(&h, 0).y}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.ui.selected_guide.is_some());
     let img = h.app.image_rect.expect("the photo on screen");
     let p1 = egui::pos2(img.left() + 0.35 * img.width(), img.top() + 0.55 * img.height());
     let p2 = egui::pos2(img.left() + 0.6 * img.width(), img.top() + 0.55 * img.height());

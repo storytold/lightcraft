@@ -151,9 +151,20 @@ pub(crate) fn scene_pixels(scene: &lcc_scenes::Scene, max_edge: usize) -> Result
             }
         }
     };
-    let pixels = slot.get_or_generate(|how| match how {
-        Render::Parallel => scene.render_fit(max_edge),
-        Render::Serial => scene.render_fit_serial(max_edge),
+    let pixels = slot.get_or_generate(|how| {
+        // a test run keeps generated scenes on disk ([`crate::scene_disk`])
+        let disk = crate::scene_disk::Entry::of(scene, max_edge);
+        if let Some(stored) = disk.as_ref().and_then(crate::scene_disk::Entry::load) {
+            return stored;
+        }
+        let made = match how {
+            Render::Parallel => scene.render_fit(max_edge),
+            Render::Serial => scene.render_fit_serial(max_edge),
+        };
+        if let Some(disk) = &disk {
+            disk.store(&made);
+        }
+        made
     });
     trim_scene_cache(&mut scene_cache(), scene_cache_limit());
     pixels

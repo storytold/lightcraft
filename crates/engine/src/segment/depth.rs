@@ -37,7 +37,8 @@ impl DepthMasks {
 }
 
 /// The model's relative inverse depth (larger = nearer, 0..1) as the pipeline's distance grid
-/// (0 = nearest, 1 = farthest).
+/// (0 = nearest, 1 = farthest). Only the AI-masks build's model callback and the tests call it.
+#[cfg(any(feature = "sam", test))]
 pub(crate) fn distance(inverse: &[f32], width: usize, height: usize) -> Option<lcc_raster::Plane> {
     if width == 0 || height == 0 || inverse.len() != width.checked_mul(height)? {
         return None;

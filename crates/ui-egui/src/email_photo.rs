@@ -105,7 +105,7 @@ pub fn start(app: &mut LccApp, p: &Value) -> Result<Value, String> {
         };
         Some(json!({"email": shown}))
     });
-    crate::export_task::start_then(app, items, opts, to, after, Some(then))
+    crate::export_task::start_then(app, items, opts, to, Some(after), Some(then))
 }
 
 /// The toast's account of the hand-off (`email` of the batch's last result).

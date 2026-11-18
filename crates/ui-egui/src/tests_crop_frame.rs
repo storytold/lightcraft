@@ -153,3 +153,31 @@ fn crop_respects_zoom_level() {
         "photo should move left when panning right: zoomed={zoomed_rect:?} panned={panned_rect:?}"
     );
 }
+
+/// Zoomed in, the crop box reaches past the canvas but is drawn only on it, never over the
+/// filmstrip or the panels (#1156).
+#[test]
+fn zoomed_crop_frame_stays_on_the_canvas() {
+    let mut h = cropped();
+    let r = h.request("engine.execute", json!({"command": "crop.set", "params": {"rect": [0.0, 0.0, 1.0, 1.0]}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = h.request("engine.execute", json!({"command": "view.zoomLevel", "params": {"level": "4:1"}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(T);
+    let canvas = h.app.canvas_rect.expect("the canvas");
+    let corners = box_corners(&h);
+    assert!(corners.iter().any(|c| !canvas.contains(*c)), "zoomed in, the box reaches past the canvas: {corners:?} {canvas:?}");
+    // the box's outline: a closed path through its corners
+    let outline: Vec<_> = h
+        .view
+        .shapes
+        .iter()
+        .filter(
+            |s| matches!(&s.shape, egui::Shape::Path(p) if p.closed && p.points.len() == 4 && p.points.iter().zip(corners).all(|(a, b)| near(*a, b))),
+        )
+        .collect();
+    assert!(!outline.is_empty(), "the crop box is drawn");
+    for s in outline {
+        assert!(canvas.expand(0.5).contains_rect(s.clip_rect), "drawn only on the canvas: clip {:?}, canvas {canvas:?}", s.clip_rect);
+    }
+}

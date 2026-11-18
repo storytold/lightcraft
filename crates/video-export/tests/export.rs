@@ -15,10 +15,9 @@ const FPS: u32 = 25;
 const FRAMES: u32 = 50;
 const SR: u32 = 48_000;
 
-fn scratch(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("lcc-video-export-{}-{name}", std::process::id()));
-    std::fs::create_dir_all(&d).unwrap();
-    d
+/// An empty Temp folder of the test's own, removed when the test ends.
+fn scratch(name: &str) -> lcc_testkit::TempDir {
+    lcc_testkit::TempDir::new(&format!("lcc-video-export-{name}"))
 }
 
 /// A 2 s, 25 fps, 64×48 H.264 clip of mid grey (Y=126, neutral chroma), optionally with a
@@ -171,7 +170,6 @@ fn check_export(format: ClipFormat, audio: bool) {
     assert!((after[0] - before[0] * 0.5).abs() < 0.03, "red {before:?} -> {after:?}");
     assert!((after[1] - before[1]).abs() < 0.03, "green {before:?} -> {after:?}");
     assert!((after[2] - before[2] * 2.0).abs() < 0.05, "blue {before:?} -> {after:?}");
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -200,7 +198,6 @@ fn max_side_downscales() {
     assert_eq!((rep.width, rep.height, rep.frames), (32, 24, 50));
     let v = lcc_video::probe(&dir.join("out.mp4")).unwrap();
     assert_eq!((v.width, v.height), (32, 24));
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -224,7 +221,6 @@ fn cancel_stops_early_and_leaves_no_file() {
     assert!((5..=5 + 4 + 8).contains(&n), "{n}");
     assert!(!out.exists());
     assert!(!dir.join("out.mp4.partial").exists());
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -277,7 +273,6 @@ fn hostile_inputs_error() {
     let boom = |_: &mut RgbFrame| panic!("boom");
     assert!(matches!(export_clip(&src, (0.0, Some(0.2)), &boom, &o, &none, &|_| {}), Err(ExportClipError::Internal)));
     assert!(!out.exists() && !dir.join("out.mp4.partial").exists());
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// Frames graded out of order on the worker threads are still encoded in order.
@@ -303,7 +298,6 @@ fn parallel_grading_keeps_frame_order() {
         let (x, y) = (mean(a.frame_at(t, None).unwrap()), mean(b.frame_at(t, None).unwrap()));
         assert!((x - y).abs() < 0.01 + 0.05 * x, "frame at {t}: {x} vs {y}");
     }
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// A cancel while every stage is busy (slow grade) stops and leaves no file. Promptness is
@@ -332,7 +326,6 @@ fn cancel_mid_pipeline_is_prompt() {
     let r = rx.recv_timeout(std::time::Duration::from_secs(120)).expect("the cancelled export returns");
     assert!(matches!(r, Err(ExportClipError::Cancelled)), "{r:?}");
     assert!(!out.exists() && !dir.join("out.mp4.partial").exists());
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// Every grader mid-frame when the cancel lands: they find the encoder gone, and the decoder,
@@ -367,5 +360,4 @@ fn cancel_while_every_grader_is_busy_does_not_hang() {
     let r = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("the cancelled export returns");
     assert!(matches!(r, Err(ExportClipError::Cancelled)), "{r:?}");
     assert!(!out.exists() && !dir.join("out.mp4.partial").exists());
-    std::fs::remove_dir_all(&dir).ok();
 }

@@ -10,6 +10,7 @@ import NeedsImage from '../../../components/NeedsImage.astro';
 import { Aside } from '@astrojs/starlight/components';
 
 - Open: **File ▸ Export…** (⇧⌘E), the **Export** button in the module bar. It exports the selected photos (or the open one).
+- The preview of a single photo shows the loupe's own render (the thumbnail stands in until it arrives). Entering Export from Develop selects the photo on screen.
 - One encoder serves the app, CLI, MCP and the web build; the file matches the preview at any size.
 - Sections, in order, each folds and shows a one-line summary:
   - **Export Location**: [folder, subfolder, conflicts](../export-location/)
@@ -24,6 +25,7 @@ import { Aside } from '@astrojs/starlight/components';
 - The bottom line summarises the result, for example "JPEG (90%) / sRGB / 8-bit · Long Edge 2048 px".
 - **Ask / Folder / Next to Originals** (top right) switches the destination quickly.
 - Export runs in the background and shows in the activity stack; ✕ cancels it.
+- Start another export while one runs and it waits its turn: a "Waiting to export" row appears in the activity stack, ✕ on it drops it, and it starts when the one before ends.
 
 <Shot name="export-dialog" alt="The Export sheet with every section" />
 

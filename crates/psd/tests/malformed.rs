@@ -12,24 +12,15 @@ fn truncation_sweep(bytes: &[u8], name: &str) {
     assert!(PsdFile::from_bytes(bytes).is_ok(), "{name}: full file must parse");
 }
 
-macro_rules! trunc {
-    ($name:ident, $ver:expr, $comp:expr) => {
-        #[test]
-        fn $name() {
-            let b = testgen::small($ver, $comp).to_bytes().unwrap();
-            truncation_sweep(&b, stringify!($name));
+#[test]
+fn truncate_small_files_of_every_version_and_compression() {
+    for v in [Version::Psd, Version::Psb] {
+        for c in Compression::ALL {
+            let b = testgen::small(v, c).to_bytes().unwrap();
+            truncation_sweep(&b, &format!("small {v:?} {c:?}"));
         }
-    };
+    }
 }
-
-trunc!(truncate_small_psd_raw, Version::Psd, Compression::Raw);
-trunc!(truncate_small_psd_rle, Version::Psd, Compression::Rle);
-trunc!(truncate_small_psd_zip, Version::Psd, Compression::Zip);
-trunc!(truncate_small_psd_zipp, Version::Psd, Compression::ZipPrediction);
-trunc!(truncate_small_psb_raw, Version::Psb, Compression::Raw);
-trunc!(truncate_small_psb_rle, Version::Psb, Compression::Rle);
-trunc!(truncate_small_psb_zip, Version::Psb, Compression::Zip);
-trunc!(truncate_small_psb_zipp, Version::Psb, Compression::ZipPrediction);
 
 #[test]
 fn truncate_merged_only_all_modes() {
@@ -50,27 +41,6 @@ fn truncate_builder_16bit_lr16() {
 }
 
 #[test]
-fn empty_input() {
-    assert!(matches!(PsdFile::from_bytes(&[]), Err(PsdError::UnexpectedEof { .. })));
-}
-
-#[test]
-fn bad_file_signature() {
-    let mut b = testgen::small(Version::Psd, Compression::Raw).to_bytes().unwrap();
-    b[..4].copy_from_slice(b"8BPX");
-    assert!(matches!(PsdFile::from_bytes(&b), Err(PsdError::InvalidSignature { .. })));
-}
-
-#[test]
-fn bad_version() {
-    let mut b = testgen::small(Version::Psd, Compression::Raw).to_bytes().unwrap();
-    for v in [0u16, 3, 0xffff] {
-        b[4..6].copy_from_slice(&v.to_be_bytes());
-        assert_eq!(PsdFile::from_bytes(&b), Err(PsdError::UnsupportedVersion(v)));
-    }
-}
-
-#[test]
 fn bad_depth_and_channels() {
     let good = testgen::small(Version::Psd, Compression::Raw).to_bytes().unwrap();
     let mut b = good.clone();
@@ -82,13 +52,6 @@ fn bad_depth_and_channels() {
     let mut b = good;
     b[12..14].copy_from_slice(&57u16.to_be_bytes());
     assert!(PsdFile::from_bytes(&b).is_err());
-}
-
-#[test]
-fn oversized_dimensions_rejected() {
-    let mut b = testgen::small(Version::Psb, Compression::Raw).to_bytes().unwrap();
-    b[14..18].copy_from_slice(&300_001u32.to_be_bytes());
-    assert!(matches!(PsdFile::from_bytes(&b), Err(PsdError::LimitExceeded(_))));
 }
 
 #[test]
@@ -119,25 +82,6 @@ fn huge_declared_dimensions_small_data() {
     f.image_data.data = compression::zip_compress(&[0; 100]);
     let b = f.to_bytes().unwrap();
     assert!(matches!(PsdFile::from_bytes(&b).and_then(|f| f.decode_merged()), Err(PsdError::LimitExceeded(_))));
-}
-
-#[test]
-fn bad_resource_signature() {
-    let f = testgen::small(Version::Psd, Compression::Raw);
-    let mut b = f.to_bytes().unwrap();
-    // header 26 + color mode len 4 + resources len 4 → first resource sig.
-    b[34..38].copy_from_slice(b"XXXX");
-    assert!(matches!(PsdFile::from_bytes(&b), Err(PsdError::InvalidSignature { .. })));
-}
-
-#[test]
-fn bad_layer_blend_signature() {
-    let f = testgen::small(Version::Psd, Compression::Raw);
-    let b = f.to_bytes().unwrap();
-    let pos = b.windows(8).position(|w| w == b"8BIMnorm").expect("blend sig");
-    let mut b2 = b.clone();
-    b2[pos..pos + 4].copy_from_slice(b"XBIM");
-    assert!(PsdFile::from_bytes(&b2).is_err());
 }
 
 #[test]

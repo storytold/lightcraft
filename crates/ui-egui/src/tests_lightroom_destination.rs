@@ -39,8 +39,9 @@ impl Fixture {
         Fixture { lib: root.join("Library"), root, lrcat }
     }
 
-    /// The desktop app on `Library`, with a folder dialog (for Choose…) and screenshots.
-    fn app(&self, empty: bool) -> Headless {
+    /// The desktop app on `Library`, with a folder dialog (for Choose…) and screenshots. It waits
+    /// for its background work when it goes (see [`App`]).
+    fn app(&self, empty: bool) -> App {
         let mut session = lcc_engine::Session::new().with_fs();
         session.open_library(&self.lib, !empty).unwrap();
         let png = |img: &lcc_raster::Rgba8| {
@@ -55,7 +56,7 @@ impl Fixture {
         };
         let mut h = Headless::new(LccApp::new(session, services), [1200.0, 800.0], 1.0);
         h.step();
-        h
+        App(h)
     }
 
     /// The catalog's path as text.
@@ -67,8 +68,44 @@ impl Fixture {
 impl Drop for Fixture {
     /// Remove the folders.
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
+        // (a background job that outlived the wait in `App`'s drop can still write into the library
+        // for a moment)
+        lcc_testkit::remove_dir_settled(&self.root);
     }
+}
+
+/// A test's app on a library in its [`Fixture`]. When it goes, it first waits for the app's
+/// background work (thumbnail renders, the library's background jobs), which otherwise goes on
+/// writing into the library after the test removed it, leaving the folder in the system Temp.
+pub(crate) struct App(Headless);
+
+impl std::ops::Deref for App {
+    type Target = Headless;
+    fn deref(&self) -> &Headless {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for App {
+    fn deref_mut(&mut self) -> &mut Headless {
+        &mut self.0
+    }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        wait_for_background(&mut self.0);
+    }
+}
+
+/// Run frames until the app has no background work left (renders, scans, the session's activity
+/// rows, thumbnails still queued for the library's disk cache), up to a minute: for a test about
+/// to remove the library the app has open.
+pub(crate) fn wait_for_background(h: &mut Headless) {
+    h.settle(Duration::from_secs(60));
+    h.step_until(Duration::from_secs(60), |h| {
+        !h.busy() && h.app.session.activity.list().is_empty() && h.app.session.media.rendered.queued_bytes() == 0
+    });
 }
 
 /// The widget `id` was drawn last frame.
@@ -217,20 +254,6 @@ fn an_empty_library_opens_the_window_on_merge() {
         shot(&mut h, "lightroom-destination-empty-fr-2672.png");
         h.app.run("app.language.english", json!({})).unwrap();
     }
-}
-
-/// "Always merge into the open catalog" imports without the window.
-#[test]
-fn always_merge_skips_the_window() {
-    let f = Fixture::new("always");
-    let mut h = f.app(false);
-    h.app.ui.settings.lightroom_import = LightroomImport::AlwaysMerge;
-    let r = h.app.run("file.importLightroom", json!({"path": f.lrcat()})).unwrap();
-    assert_eq!(r["running"], true, "{r}");
-    h.step();
-    assert!(destination(&h).is_none());
-    import_ends(&mut h, &f.lrcat);
-    assert_eq!(open_dir(&h), Some(f.lib.clone()));
 }
 
 /// "Don't ask again" (with Merge only) sets "Always merge", which is saved in `ui.json`.

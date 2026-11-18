@@ -276,23 +276,43 @@ fn input(m: &GainTableMap, p: [f32; 3]) -> f32 {
     if m.gamma == 1.0 { x } else { x.powf(m.gamma) }
 }
 
-/// Where the pixels of a developed source sit in the raw's active area, for [`GainTableMap::gain`].
-/// The source is the default crop of the active area (`rect`, relative to the active area),
-/// then EXIF-`orientation`ed. Resolution independent.
+/// Where the pixels of a developed source sit in the raw's active area, for [`GainTableMap::gain`] and flat-field
+/// maps ([`crate::vignetting_calibration::VignettingMeasurement::sensor_at`]). The source is the default crop of the active area (`rect`,
+/// relative to the active area), then EXIF-`orientation`ed. Resolution independent.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SourcePlacement {
     /// x, y, width, height of the developed crop, relative to the active area.
     pub rect: [f64; 4],
     /// The EXIF orientation applied to the developed crop.
     pub orientation: lcc_geom::Orientation,
+    /// The active area's width and height in sensor pixels, when known: a flat-field map needs it to tell its own
+    /// sensor from another's (a gain table doesn't).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_size: Option<[usize; 2]>,
+    /// Where the active area sits on the camera's full sensor, when the file says ([`crate::sensor_window`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<crate::SensorWindow>,
 }
 
 impl SourcePlacement {
+    /// A placement by its crop and orientation only (what a gain table needs).
+    pub fn new(rect: [f64; 4], orientation: lcc_geom::Orientation) -> SourcePlacement {
+        SourcePlacement { rect, orientation, active_size: None, window: None }
+    }
+
     /// Relative active-area position of normalized (0..1) coordinates of the oriented source.
     pub fn active(&self, u: f64, v: f64) -> (f64, f64) {
         let (u, v) = self.orientation.inverse().map(u, v, 1.0, 1.0);
         let [x, y, w, h] = self.rect;
         (x + u * w, y + v * h)
+    }
+
+    /// [`Self::active`] the other way: a relative active-area position → normalized coordinates of the oriented
+    /// source.
+    pub fn oriented(&self, ax: f64, ay: f64) -> (f64, f64) {
+        let [x, y, w, h] = self.rect;
+        let (u, v) = (if w != 0.0 { (ax - x) / w } else { 0.0 }, if h != 0.0 { (ay - y) / h } else { 0.0 });
+        self.orientation.map(u, v, 1.0, 1.0)
     }
 }
 
@@ -535,14 +555,14 @@ mod tests {
     #[test]
     fn placement_undoes_crop_and_orientation() {
         // the source is the right half of the active area, rotated 90° clockwise
-        let p = SourcePlacement { rect: [0.5, 0.0, 0.5, 1.0], orientation: lcc_geom::Orientation::Rotate90 };
+        let p = SourcePlacement::new([0.5, 0.0, 0.5, 1.0], lcc_geom::Orientation::Rotate90);
         // the oriented source's top-left came from the crop's bottom-left
         let (x, y) = p.active(0.0, 0.0);
         assert!((x - 0.5).abs() < 1e-12 && (y - 1.0).abs() < 1e-12, "{x} {y}");
         // its top-right came from the crop's top-left
         let (x, y) = p.active(1.0, 0.0);
         assert!((x - 0.5).abs() < 1e-12 && y.abs() < 1e-12, "{x} {y}");
-        let plain = SourcePlacement { rect: [0.0, 0.0, 1.0, 1.0], orientation: lcc_geom::Orientation::Normal };
+        let plain = SourcePlacement::new([0.0, 0.0, 1.0, 1.0], lcc_geom::Orientation::Normal);
         assert_eq!(plain.active(0.25, 0.75), (0.25, 0.75));
     }
 }

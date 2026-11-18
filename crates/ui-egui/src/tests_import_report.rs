@@ -21,7 +21,7 @@ fn xmp(fields: &str) -> String {
 
 #[test]
 fn import_warnings_are_one_toast_line_and_a_window_that_selects_and_saves() {
-    let dir = std::env::temp_dir().join(format!("lc-ui-import-warnings-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lc-ui-import-warnings");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     for i in 0..3u8 {

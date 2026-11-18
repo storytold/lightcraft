@@ -52,6 +52,21 @@ pub fn migrate_library(dir: &Path) -> Result<bool> {
     Ok(lcc_catalog::library::migrate(dir)?)
 }
 
+/// Prepare the library in `dir` for opening without a session, so a frontend can run it on a
+/// worker thread and show [`migration_progress`] while its window is up: the v3 → v4 migration
+/// ([`migrate_library`]), or a v4 store's format bump — the byte-verified backup copy after an
+/// update, which over a store of gigabytes is most of the wait. [`Session::open_library`]
+/// afterwards finds the current format and is quick. The library is locked meanwhile (another
+/// process using it: `LibraryInUse`). `Ok(true)` when something was upgraded.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn prepare_library(dir: &Path) -> Result<bool> {
+    if needs_migration(dir) {
+        return migrate_library(dir);
+    }
+    let _lock = LibraryLock::acquire(dir, &program_name()).map_err(|e| EngineError::LibraryInUse(e.to_string()))?;
+    Ok(lcc_catalog::library::prepare_upgrade(dir)?)
+}
+
 /// The library folder `path` names. A library is a folder; naming one of its own files
 /// (`catalog.snap`, `catalog.log`, `catalog.lock`) means the folder that holds it. Any other
 /// existing file is an error that says so, instead of the OS's "File exists" from creating the
@@ -536,6 +551,40 @@ impl SettingsLoad {
     }
 }
 
+/// How long each stage of opening a library took: logged when the whole took a while (issue
+/// #979: a large catalog spent a minute between being read and the library opening, with no
+/// timings for that part), and always with `<PREFIX>_PROFILE` set.
+struct OpenStages {
+    at: web_time::Instant,
+    start: web_time::Instant,
+    took: Vec<(&'static str, f64)>,
+}
+
+impl OpenStages {
+    /// Opening that took longer than this logs its stages.
+    const SLOW_MS: f64 = 2000.0;
+
+    fn start() -> Self {
+        let now = web_time::Instant::now();
+        OpenStages { at: now, start: now, took: Vec::new() }
+    }
+
+    fn mark(&mut self, stage: &'static str) {
+        let now = web_time::Instant::now();
+        self.took.push((stage, now.duration_since(self.at).as_secs_f64() * 1000.0));
+        self.at = now;
+    }
+
+    fn report(&self) {
+        let total = self.start.elapsed().as_secs_f64() * 1000.0;
+        if total < Self::SLOW_MS && !lcc_pipeline::profiling() {
+            return;
+        }
+        let parts: Vec<String> = self.took.iter().map(|(s, ms)| format!("{s} {ms:.1}")).collect();
+        log::info!("library: opened in {total:.1} ms ({})", parts.join(", "));
+    }
+}
+
 impl Session {
     /// Take over what the thumbnail cache wrote under its name of before (`.jpg` files, which
     /// photo galleries took for the person's photos: issues #610, #1066), once for a cache
@@ -667,7 +716,9 @@ impl Session {
         #[cfg(not(target_arch = "wasm32"))]
         self.faces.library_changed();
         self.ml.library_changed();
+        let mut stages = OpenStages::start();
         let (mut journal, mut catalog, report) = Journal::open(catalog)?;
+        stages.mark("catalog");
         // A loaded catalog counts revisions from 0, like every other one. Caches (sidebar counts,
         // keyword tree, the grid's list…) are keyed on the revision, so give each library loaded
         // in this process its own range: otherwise an empty library opened after one that was
@@ -713,6 +764,7 @@ impl Session {
             self.plugin_library = id;
             crate::cmd::plugins::sync_fields_with(self, false);
         }
+        stages.mark("plug-in fields");
         let mut settings = SettingsLoad::default();
         // preferences
         let prefs = settings.read::<PrefsFile>(files.as_mut(), "prefs.json").unwrap_or_default();
@@ -805,6 +857,7 @@ impl Session {
             self.profile_edits = f.profile_edits.bounded();
             self.body_profiles = f.body_profiles.into_iter().take(10_000).collect();
         }
+        stages.mark("settings + presets");
         // view state
         if let Some(v) = settings.read::<ViewFile>(files.as_mut(), "view.json") {
             self.source = v.source;
@@ -840,6 +893,7 @@ impl Session {
         {
             self.selection = Selection::single(*first);
         }
+        stages.mark("view");
         // presets.json is as read: saved again only after the list changes (hash 0 = unknown bytes)
         let presets_saved = PresetsSaved::state_of(self);
         // photo ids are per library: drop decoded sources of the previous one
@@ -849,6 +903,7 @@ impl Session {
             self.keep_edited_previews_last();
             self.tidy_thumbnail_cache();
         }
+        stages.mark("thumbnail cache");
         let view_written = self.view_json();
         let store_with_library = prefs.store_with_library;
         let own_store = store_with_library || self.app_store.is_none();
@@ -880,6 +935,7 @@ impl Session {
             // the store's presets, profiles and habits (this library's joined it the first time)
             self.adopt_app_store(&self.library.as_ref().map(|l| l.dir.clone()).unwrap_or_default(), on_disk);
         }
+        stages.mark("app store");
         // forget untouched Local records of folders not browsed for a while (journaled at once)
         if self.forget_local_days > 0 {
             let plan = self.forget_local(false, None);
@@ -892,20 +948,25 @@ impl Session {
                 lib.forgot_local = Some(plan);
             }
         }
+        stages.mark("forget local");
         // keywords read whole from a list a line long (before they were split) become one each
         if self.split_multiline_keywords() > 0
             && let Err(e) = self.persist()
         {
             log::error!("library: {e}");
         }
+        stages.mark("keywords");
         // smart previews written by an older camera-look fit are brought up to date in the background
         #[cfg(not(target_arch = "wasm32"))]
         if on_disk {
             crate::cmd::previews::refresh_stale_smart_previews(self);
         }
+        stages.mark("smart previews");
         // an import still being finished when the app closed picks up where it stopped
         self.load_finishing();
+        stages.mark("unfinished import");
         self.library_identity = std::sync::Arc::new(());
+        stages.report();
         Ok(())
     }
 
@@ -1101,6 +1162,9 @@ impl Session {
         // the automatic sidecar writes and ML embeddings still queued are saved before the library goes
         self.flush_sidecar_writes();
         self.ml.save_store_now();
+        // the device-sync replica of this catalogue is written now, not on the next tick
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::device_sync::flush(self);
         let persisted = self.persist();
         // a presets.json save on its way finishes first (it is this library's), and a failed one
         // is made here, in the close

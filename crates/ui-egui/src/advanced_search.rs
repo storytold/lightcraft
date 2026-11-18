@@ -99,13 +99,35 @@ pub fn draft_query(search: &Search) -> Result<lcc_catalog::advanced_search::Adva
     q.to_filter().map(|_| q)
 }
 
+/// Where a category's open/closed state lives: a global id, not one derived from the parent
+/// `Ui`. The dialog body switches between a plain scope and a scroll area as its height crosses
+/// the room left (`ModalLayout::body`), which changes every parent-derived id; egui's own
+/// `CollapsingHeader` state was lost on each switch and fell back to "open because the category
+/// exists", so an expanded section could not be collapsed again (#1134).
+fn section_state_id(id: &str) -> egui::Id {
+    egui::Id::new(("advanced-search-section", id))
+}
+
+/// Whether category `id` is expanded; `default` until the user toggles it.
+fn section_open(ctx: &egui::Context, id: &str, default: bool) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(section_state_id(id))).unwrap_or(default)
+}
+
+fn set_section_open(ctx: &egui::Context, id: &str, open: bool) {
+    ctx.data_mut(|d| d.insert_temp(section_state_id(id), open));
+}
+
 /// A collapsible rule category: a `CollapsingHeader` whose content creates the category on first
-/// open (an empty category constrains nothing, so leaving one expanded is harmless).
+/// open (an empty category constrains nothing, so leaving one expanded is harmless). Its open
+/// state is kept under [`section_state_id`] so it survives the body's layout switches.
 fn section<T: Default>(ui: &mut egui::Ui, id: &'static str, title: &str, value: &mut Option<T>, add: impl FnOnce(&mut egui::Ui, &mut T)) {
-    egui::CollapsingHeader::new(RichText::new(tr(title)).strong()).id_salt(id).default_open(value.is_some()).show(ui, |ui| {
+    let open = section_open(ui.ctx(), id, value.is_some());
+    let shown = egui::CollapsingHeader::new(RichText::new(tr(title)).strong()).id_salt(id).open(Some(open)).show(ui, |ui| {
         ui.add_space(2.0);
         add(ui, value.get_or_insert_with(T::default));
     });
+    let open = if shown.header_response.clicked() { !open } else { open };
+    set_section_open(ui.ctx(), id, open);
 }
 
 /// The dialog's body: the global words field and one collapsible category per rule group.
@@ -293,4 +315,42 @@ fn unsupported_row(ui: &mut egui::Ui, label: &str) {
     dialog_frame::form_row(ui, tr(label), |ui| {
         ui.label(RichText::new(tr("not supported yet")).weak());
     });
+}
+
+#[cfg(test)]
+mod section_tests {
+    use super::*;
+
+    /// Draws one category, either directly or inside a scroll area (the two layouts the dialog
+    /// body switches between), and reports whether its content was shown.
+    fn frame(ctx: &egui::Context, scrolled: bool, value: &mut Option<u8>) -> bool {
+        let mut shown = false;
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut draw = |ui: &mut egui::Ui| section(ui, "asTest", "Test", value, |_, _| shown = true);
+            if scrolled {
+                egui::ScrollArea::vertical().id_salt("body").show(ui, |ui| draw(ui));
+            } else {
+                ui.scope(|ui| draw(ui));
+            }
+        });
+        out.textures_delta.clear();
+        shown
+    }
+
+    #[test]
+    fn collapsed_section_stays_collapsed_across_layout_switches() {
+        let ctx = egui::Context::default();
+        let mut value = None;
+        assert!(!frame(&ctx, false, &mut value), "a missing category starts collapsed");
+        set_section_open(&ctx, "asTest", true);
+        assert!(frame(&ctx, false, &mut value), "expanding shows the category");
+        assert!(value.is_some(), "the category exists once expanded");
+        // the user collapses it; the body then flips between a scope and a scroll area
+        set_section_open(&ctx, "asTest", false);
+        for scrolled in [true, false, true, false] {
+            assert!(!frame(&ctx, scrolled, &mut value), "a collapsed category reopened after a layout switch");
+        }
+        set_section_open(&ctx, "asTest", true);
+        assert!(frame(&ctx, true, &mut value), "re-expanding still works");
+    }
 }

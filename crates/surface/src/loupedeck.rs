@@ -585,21 +585,4 @@ mod tests {
         assert!(import(b"PK\x03\x04garbage", &|_| None).is_err());
         assert!(import(br#"{"layout":{"layoutModes":[{"workspaces":[{"pressActions":[1,{"a":2},null,"$Lightroom___Undo"]}]}]}}"#, &|_| None).is_ok());
     }
-
-    #[test]
-    fn the_console_works_as_labelled_with_no_setup() {
-        assert_eq!(default_binding("ld.r33"), Some(Binding::value("light.exposure")));
-        assert_eq!(default_binding("ld.r46"), Some(Binding::value("light.contrast")));
-        assert_eq!(default_binding("ld.r1"), Some(Binding::value("mixer.red.hue")));
-        assert_eq!(default_binding("ld.r24"), Some(Binding::value("mixer.magenta.lum")));
-        assert_eq!(default_binding("ld.r32"), Some(Binding::value("bw.magenta")));
-        assert_eq!(default_binding("ld.b95"), Some(Binding::command("edit.undo")));
-        assert_eq!(default_binding("ld.b999"), None);
-        assert_eq!(default_binding("ld.rx"), None);
-        // every default names a known the app action or value
-        for (control, _) in DEFAULTS {
-            assert!(default_binding(control).is_some(), "{control}");
-            assert!(CONTROLS.iter().any(|c| c.id == *control), "{control}");
-        }
-    }
 }

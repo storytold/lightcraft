@@ -368,74 +368,75 @@ mod tests {
     }
 
     #[test]
-    fn fills_empty_fields_keeps_typed_ones_and_undoes() {
-        let mut s = Session::with_demo();
-        let ids = s.visible_cloned();
-        let dir = dataset("fill");
-        set_gps(&mut s, ids[0], Some((48.86, 2.34)), "");
-        set_gps(&mut s, ids[1], Some((51.5, -0.1)), "Westminster");
-        set_gps(&mut s, ids[2], Some((f64::NAN, 0.0)), "");
-        set_gps(&mut s, ids[3], Some((0.0, 0.0)), "");
-        let r = s.execute("metadata.reverseGeocode", &json!({"ids": [ids[0].0, ids[1].0, ids[2].0, ids[3].0], "dataset": dir})).unwrap();
-        assert_eq!((r["looked"].as_u64(), r["found"].as_u64(), r["changed"].as_u64()), (Some(3), Some(2), Some(2)), "{r}");
-        let m0 = s.catalog.photo(ids[0]).unwrap().meta.clone();
-        assert_eq!((m0.city.as_str(), m0.state.as_str(), m0.country.as_str()), ("Paris", "Île-de-France", "France"));
-        let m1 = s.catalog.photo(ids[1]).unwrap().meta.clone();
-        assert_eq!((m1.city.as_str(), m1.state.as_str(), m1.country.as_str()), ("Westminster", "England", "United Kingdom"));
-        assert!(s.activity.list().is_empty(), "the activity row ends with the command");
-        // one undo step
-        s.undo_step().unwrap();
-        assert!(s.catalog.photo(ids[0]).unwrap().meta.city.is_empty());
-        assert_eq!(s.catalog.photo(ids[1]).unwrap().meta.city, "Westminster");
-        // overwrite replaces typed text
-        s.execute("metadata.reverseGeocode", &json!({"ids": [ids[1].0], "dataset": dir, "overwrite": true})).unwrap();
-        assert_eq!(s.catalog.photo(ids[1]).unwrap().meta.city, "London");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Issue #2242: the place names hold only towns of 15 000 people or more, so a photo in a
-    /// village finds the nearest larger town. `maxDistance` leaves City empty past that distance
-    /// (State and Country still fill) and says which town it was.
-    #[test]
-    fn max_distance_leaves_a_far_town_out_of_city() {
-        let mut s = Session::with_demo();
-        let ids = s.visible_cloned();
-        let dir = dataset("maxdist");
-        // about 5 km north of Paris (like Portofino and Rapallo in the issue), and right in Paris
-        set_gps(&mut s, ids[0], Some((48.90, 2.35)), "");
-        set_gps(&mut s, ids[1], Some((48.855, 2.35)), "");
-        let r = s.execute("metadata.reverseGeocode", &json!({"ids": [ids[0].0, ids[1].0], "dataset": dir, "maxDistance": 2000})).unwrap();
-        let m0 = s.catalog.photo(ids[0]).unwrap().meta.clone();
-        assert_eq!((m0.city.as_str(), m0.state.as_str(), m0.country.as_str()), ("", "Île-de-France", "France"));
-        assert_eq!(s.catalog.photo(ids[1]).unwrap().meta.city, "Paris", "close enough");
-        let far = r["photos"].as_array().unwrap().iter().find(|p| p["id"] == json!(ids[0].0)).unwrap();
-        assert_eq!((far["place"]["city"].as_str(), far["nearestCity"].as_str()), (Some(""), Some("Paris")), "{far}");
-        assert!(far["place"]["distance"].as_f64().unwrap() > 2000.0);
-        // without it, the nearest town fills City as before
-        s.undo_step().unwrap();
-        s.execute("metadata.reverseGeocode", &json!({"ids": [ids[0].0], "dataset": dir})).unwrap();
-        assert_eq!(s.catalog.photo(ids[0]).unwrap().meta.city, "Paris");
-        // hostile values are refused, not taken as "no limit"
-        for bad in [json!(-1), json!(0), json!("far"), json!(true)] {
-            let e = s.execute("metadata.reverseGeocode", &json!({"ids": [ids[0].0], "dataset": dir, "maxDistance": bad})).unwrap_err();
-            assert!(e.to_string().contains("maxDistance"), "{e}");
+    fn reverse_geocode_fills_empty_fields_within_max_distance_and_explains_what_is_missing() {
+        // fills empty fields keeps typed ones and undoes
+        {
+            let mut s = Session::with_demo();
+            let ids = s.visible_cloned();
+            let dir = dataset("fill");
+            set_gps(&mut s, ids[0], Some((48.86, 2.34)), "");
+            set_gps(&mut s, ids[1], Some((51.5, -0.1)), "Westminster");
+            set_gps(&mut s, ids[2], Some((f64::NAN, 0.0)), "");
+            set_gps(&mut s, ids[3], Some((0.0, 0.0)), "");
+            let r = s.execute("metadata.reverseGeocode", &json!({"ids": [ids[0].0, ids[1].0, ids[2].0, ids[3].0], "dataset": dir})).unwrap();
+            assert_eq!((r["looked"].as_u64(), r["found"].as_u64(), r["changed"].as_u64()), (Some(3), Some(2), Some(2)), "{r}");
+            let m0 = s.catalog.photo(ids[0]).unwrap().meta.clone();
+            assert_eq!((m0.city.as_str(), m0.state.as_str(), m0.country.as_str()), ("Paris", "Île-de-France", "France"));
+            let m1 = s.catalog.photo(ids[1]).unwrap().meta.clone();
+            assert_eq!((m1.city.as_str(), m1.state.as_str(), m1.country.as_str()), ("Westminster", "England", "United Kingdom"));
+            assert!(s.activity.list().is_empty(), "the activity row ends with the command");
+            // one undo step
+            s.undo_step().unwrap();
+            assert!(s.catalog.photo(ids[0]).unwrap().meta.city.is_empty());
+            assert_eq!(s.catalog.photo(ids[1]).unwrap().meta.city, "Westminster");
+            // overwrite replaces typed text
+            s.execute("metadata.reverseGeocode", &json!({"ids": [ids[1].0], "dataset": dir, "overwrite": true})).unwrap();
+            assert_eq!(s.catalog.photo(ids[1]).unwrap().meta.city, "London");
+            let _ = std::fs::remove_dir_all(&dir);
         }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn explains_missing_data_and_gps() {
-        let mut s = Session::with_demo();
-        let ids = s.visible_cloned();
-        set_gps(&mut s, ids[0], None, "");
-        let e = s.execute("metadata.reverseGeocode", &json!({"ids": [ids[0].0]})).unwrap_err();
-        assert!(e.to_string().contains("GPS"), "{e}");
-        set_gps(&mut s, ids[0], Some((48.86, 2.34)), "");
-        let missing = std::env::temp_dir().join(format!("app-geocode-none-{}", std::process::id()));
-        let e = s.execute("metadata.reverseGeocode", &json!({"ids": [ids[0].0], "dataset": missing})).unwrap_err();
-        assert!(e.to_string().contains("download"), "{e}");
-        let st = s.execute("metadata.placeNamesStatus", &json!({"dataset": missing})).unwrap();
-        assert_eq!(st["downloaded"], false);
+        // max distance leaves a far town out of city
+        // Issue #2242: the place names hold only towns of 15 000 people or more, so a photo in a
+        // village finds the nearest larger town. `maxDistance` leaves City empty past that distance
+        // (State and Country still fill) and says which town it was.
+        {
+            let mut s = Session::with_demo();
+            let ids = s.visible_cloned();
+            let dir = dataset("maxdist");
+            // about 5 km north of Paris (like Portofino and Rapallo in the issue), and right in Paris
+            set_gps(&mut s, ids[0], Some((48.90, 2.35)), "");
+            set_gps(&mut s, ids[1], Some((48.855, 2.35)), "");
+            let r = s.execute("metadata.reverseGeocode", &json!({"ids": [ids[0].0, ids[1].0], "dataset": dir, "maxDistance": 2000})).unwrap();
+            let m0 = s.catalog.photo(ids[0]).unwrap().meta.clone();
+            assert_eq!((m0.city.as_str(), m0.state.as_str(), m0.country.as_str()), ("", "Île-de-France", "France"));
+            assert_eq!(s.catalog.photo(ids[1]).unwrap().meta.city, "Paris", "close enough");
+            let far = r["photos"].as_array().unwrap().iter().find(|p| p["id"] == json!(ids[0].0)).unwrap();
+            assert_eq!((far["place"]["city"].as_str(), far["nearestCity"].as_str()), (Some(""), Some("Paris")), "{far}");
+            assert!(far["place"]["distance"].as_f64().unwrap() > 2000.0);
+            // without it, the nearest town fills City as before
+            s.undo_step().unwrap();
+            s.execute("metadata.reverseGeocode", &json!({"ids": [ids[0].0], "dataset": dir})).unwrap();
+            assert_eq!(s.catalog.photo(ids[0]).unwrap().meta.city, "Paris");
+            // hostile values are refused, not taken as "no limit"
+            for bad in [json!(-1), json!(0), json!("far"), json!(true)] {
+                let e = s.execute("metadata.reverseGeocode", &json!({"ids": [ids[0].0], "dataset": dir, "maxDistance": bad})).unwrap_err();
+                assert!(e.to_string().contains("maxDistance"), "{e}");
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        // explains missing data and gps
+        {
+            let mut s = Session::with_demo();
+            let ids = s.visible_cloned();
+            set_gps(&mut s, ids[0], None, "");
+            let e = s.execute("metadata.reverseGeocode", &json!({"ids": [ids[0].0]})).unwrap_err();
+            assert!(e.to_string().contains("GPS"), "{e}");
+            set_gps(&mut s, ids[0], Some((48.86, 2.34)), "");
+            let missing = std::env::temp_dir().join(format!("app-geocode-none-{}", std::process::id()));
+            let e = s.execute("metadata.reverseGeocode", &json!({"ids": [ids[0].0], "dataset": missing})).unwrap_err();
+            assert!(e.to_string().contains("download"), "{e}");
+            let st = s.execute("metadata.placeNamesStatus", &json!({"dataset": missing})).unwrap();
+            assert_eq!(st["downloaded"], false);
+        }
     }
 
     #[test]

@@ -13,8 +13,8 @@ use crate::headless::Headless;
 use crate::{LccApp, Services};
 
 /// Folders `trip` and `home` in a fresh temporary folder, with a photo file in each.
-fn folders(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
-    let root = std::env::temp_dir().join(format!("lc-folder-drop-{tag}-{}", std::process::id()));
+fn folders(tag: &str) -> (lcc_testkit::TempDir, PathBuf, PathBuf) {
+    let root = lcc_testkit::TempDir::new(&format!("lc-folder-drop-{tag}"));
     let _ = std::fs::remove_dir_all(&root);
     let (trip, home) = (root.join("trip"), root.join("home"));
     for (dir, file) in [(&trip, "beach.png"), (&home, "garden.png")] {

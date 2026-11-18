@@ -847,24 +847,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn command_line_places_the_file() {
-        let p = Path::new("/x/a b.psd");
-        let l = command_line("/opt/pc/photocraft", &["--new-window".into()], p);
-        assert_eq!(l, vec!["/opt/pc/photocraft", "--new-window", "/x/a b.psd"]);
-        let l = command_line("/usr/bin/ed", &["--open={file}".into(), "-v".into()], p);
-        assert_eq!(l, vec!["/usr/bin/ed", "--open=/x/a b.psd", "-v"]);
-    }
-
-    /// The system default opener gets the file as one argument, never through a shell, so a name
-    /// holding `&` opens that file and starts nothing else.
-    #[test]
-    fn the_default_opener_takes_the_file_without_a_shell() {
-        let p = Path::new("C:/x/a&calc.jpg");
-        assert_eq!(command_line_on(Os::Windows, "", &[], p), vec!["explorer.exe", "C:\\x\\a&calc.jpg"]);
-        assert_eq!(command_line_on(Os::Mac, "", &[], p), vec!["open", "C:/x/a&calc.jpg"]);
-        assert_eq!(command_line_on(Os::Other, "", &[], p), vec!["xdg-open", "C:/x/a&calc.jpg"]);
-        // a program the user chose gets the path as written
-        assert_eq!(command_line_on(Os::Windows, "C:/ed.exe", &[], p), vec!["C:/ed.exe", "C:/x/a&calc.jpg"]);
+    fn command_line_places_the_file_and_the_default_opener_takes_it_without_a_shell() {
+        // the command line places the file
+        {
+            let p = Path::new("/x/a b.psd");
+            let l = command_line("/opt/pc/photocraft", &["--new-window".into()], p);
+            assert_eq!(l, vec!["/opt/pc/photocraft", "--new-window", "/x/a b.psd"]);
+            let l = command_line("/usr/bin/ed", &["--open={file}".into(), "-v".into()], p);
+            assert_eq!(l, vec!["/usr/bin/ed", "--open=/x/a b.psd", "-v"]);
+        }
+        // The system default opener gets the file as one argument, never through a shell, so a name
+        // holding `&` opens that file and starts nothing else.
+        {
+            let p = Path::new("C:/x/a&calc.jpg");
+            assert_eq!(command_line_on(Os::Windows, "", &[], p), vec!["explorer.exe", "C:\\x\\a&calc.jpg"]);
+            assert_eq!(command_line_on(Os::Mac, "", &[], p), vec!["open", "C:/x/a&calc.jpg"]);
+            assert_eq!(command_line_on(Os::Other, "", &[], p), vec!["xdg-open", "C:/x/a&calc.jpg"]);
+            // a program the user chose gets the path as written
+            assert_eq!(command_line_on(Os::Windows, "C:/ed.exe", &[], p), vec!["C:/ed.exe", "C:/x/a&calc.jpg"]);
+        }
     }
 
     #[test]
@@ -885,39 +886,40 @@ mod tests {
     }
 
     #[test]
-    fn hostile_presets_are_refused() {
-        let mut p = EditorPreset { name: "x".into(), ..Default::default() };
-        p.bit_depth = 12;
-        assert!(p.validate().is_err());
-        let p = EditorPreset { name: "x".into(), naming: "../evil".into(), ..Default::default() };
-        assert!(p.validate().is_err());
-        let p = EditorPreset { name: "x".into(), color_space: "lab".into(), ..Default::default() };
-        assert!(p.validate().is_err());
-        assert!(decode_tiff16(b"II*\0garbage").is_err());
-    }
-
-    /// P6.2: a hand-edited or damaged `editors.json` never panics: every entry either fails to
-    /// parse or is checked like a preset saved through `editIn.savePreset`.
-    #[test]
-    fn hostile_editors_json_never_panics() {
-        let values = [r#""""#, r#""../x""#, r#""{file}{file}""#, r#""\u0000""#, "1e308", "-1", "null", "[]", "{}", r#""a\nb""#, "255", "65536"];
-        let keys = ["name", "app", "args", "format", "colorSpace", "bitDepth", "mode", "naming", "stack", "control"];
-        let extras = ["", r#","args":["{file}","-x"]"#, r#","control":{"port":99999,"tokenFile":"","root":"/"}"#];
-        let mut n = 0;
-        for (i, k) in keys.iter().enumerate() {
-            for v in values {
-                for extra in extras {
-                    let doc = format!(r#"[{{"name":"p{i}","{k}":{v}{extra}}}]"#);
-                    let Ok(list) = serde_json::from_str::<Vec<EditorPreset>>(&doc) else { continue };
-                    for p in list {
-                        n += 1;
-                        if p.validate().is_ok() {
-                            let _ = command_line(&p.app, &p.args, std::path::Path::new("/tmp/x y.tif"));
+    fn hostile_presets_are_refused_and_hostile_editors_json_never_panics() {
+        // hostile presets are refused
+        {
+            let mut p = EditorPreset { name: "x".into(), ..Default::default() };
+            p.bit_depth = 12;
+            assert!(p.validate().is_err());
+            let p = EditorPreset { name: "x".into(), naming: "../evil".into(), ..Default::default() };
+            assert!(p.validate().is_err());
+            let p = EditorPreset { name: "x".into(), color_space: "lab".into(), ..Default::default() };
+            assert!(p.validate().is_err());
+            assert!(decode_tiff16(b"II*\0garbage").is_err());
+        }
+        // P6.2: a hand-edited or damaged `editors.json` never panics: every entry either fails to
+        // parse or is checked like a preset saved through `editIn.savePreset`.
+        {
+            let values = [r#""""#, r#""../x""#, r#""{file}{file}""#, r#""\u0000""#, "1e308", "-1", "null", "[]", "{}", r#""a\nb""#, "255", "65536"];
+            let keys = ["name", "app", "args", "format", "colorSpace", "bitDepth", "mode", "naming", "stack", "control"];
+            let extras = ["", r#","args":["{file}","-x"]"#, r#","control":{"port":99999,"tokenFile":"","root":"/"}"#];
+            let mut n = 0;
+            for (i, k) in keys.iter().enumerate() {
+                for v in values {
+                    for extra in extras {
+                        let doc = format!(r#"[{{"name":"p{i}","{k}":{v}{extra}}}]"#);
+                        let Ok(list) = serde_json::from_str::<Vec<EditorPreset>>(&doc) else { continue };
+                        for p in list {
+                            n += 1;
+                            if p.validate().is_ok() {
+                                let _ = command_line(&p.app, &p.args, std::path::Path::new("/tmp/x y.tif"));
+                            }
                         }
                     }
                 }
             }
+            assert!(n > 20, "{n}");
         }
-        assert!(n > 20, "{n}");
     }
 }

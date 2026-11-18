@@ -22,30 +22,32 @@ fn flags(s: &Session) -> Vec<Flag> {
 }
 
 #[test]
-fn cycle_steps_unflagged_pick_reject_and_wraps() {
-    let mut s = session().unwrap();
-    s.execute("library.select", &json!({"ids": [1]})).unwrap();
-    let seen: Vec<Flag> = (0..4)
-        .map(|_| {
-            s.execute("photo.cycleFlag", &json!({})).unwrap();
-            flags(&s)[0]
-        })
-        .collect();
-    assert_eq!(seen, [Flag::Pick, Flag::Reject, Flag::None, Flag::Pick]);
-}
-
-#[test]
-fn cycle_uses_each_photos_own_flag_in_one_undo_step() {
-    let mut s = session().unwrap();
-    let undo = s.undo.len();
-    assert_eq!(s.execute("photo.cycleFlag", &json!({})).unwrap()["changed"], 3);
-    assert_eq!(flags(&s), [Flag::Pick, Flag::Reject, Flag::None, Flag::None]);
-    assert_eq!(s.undo.len(), undo + 1);
-    assert_eq!(s.active(), Some(PhotoId(2)));
-    s.execute("edit.undo", &json!({})).unwrap();
-    assert_eq!(flags(&s), [Flag::None, Flag::Pick, Flag::Reject, Flag::None]);
-    s.execute("edit.redo", &json!({})).unwrap();
-    assert_eq!(flags(&s), [Flag::Pick, Flag::Reject, Flag::None, Flag::None]);
+fn cycle_steps_each_photos_own_flag_and_wraps() {
+    // cycle steps unflagged pick reject and wraps
+    {
+        let mut s = session().unwrap();
+        s.execute("library.select", &json!({"ids": [1]})).unwrap();
+        let seen: Vec<Flag> = (0..4)
+            .map(|_| {
+                s.execute("photo.cycleFlag", &json!({})).unwrap();
+                flags(&s)[0]
+            })
+            .collect();
+        assert_eq!(seen, [Flag::Pick, Flag::Reject, Flag::None, Flag::Pick]);
+    }
+    // cycle uses each photos own flag in one undo step
+    {
+        let mut s = session().unwrap();
+        let undo = s.undo.len();
+        assert_eq!(s.execute("photo.cycleFlag", &json!({})).unwrap()["changed"], 3);
+        assert_eq!(flags(&s), [Flag::Pick, Flag::Reject, Flag::None, Flag::None]);
+        assert_eq!(s.undo.len(), undo + 1);
+        assert_eq!(s.active(), Some(PhotoId(2)));
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(flags(&s), [Flag::None, Flag::Pick, Flag::Reject, Flag::None]);
+        s.execute("edit.redo", &json!({})).unwrap();
+        assert_eq!(flags(&s), [Flag::Pick, Flag::Reject, Flag::None, Flag::None]);
+    }
 }
 
 #[test]

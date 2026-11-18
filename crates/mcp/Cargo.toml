@@ -16,14 +16,9 @@ lcc-raster = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 
-# P4.7 end-to-end session (tests/session_e2e.rs): an in-process SFTP server, SHA-1s for a fake Immich.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-lcc-hash = { workspace = true }
 # reusable presets end to end (tests/e2e.rs): read the exported files' metadata back
 lcc-meta = { workspace = true }
-russh = { version = "0.65", default-features = false, features = ["ring"] }
-russh-sftp = "3"
-tokio = { version = "1", default-features = false, features = ["rt", "net", "time"] }
 
 # M14: end-to-end video tests encode a synthetic clip in-test and re-decode the export
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies.lcc-video]

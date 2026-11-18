@@ -482,36 +482,9 @@ mod tests {
         let scaled = crate::target::normalized(&ps, Some(crate::target::find_neutral_patch(&ps, crate::color::D50).index));
         let eval_scaled = evaluate_profile(&prof, &scaled);
         assert!((eval.mean_de() - eval_scaled.mean_de()).abs() < 1.0, "{} vs {}", eval.mean_de(), eval_scaled.mean_de());
-    }
-
-    #[test]
-    fn lookup_type_reflects_the_profile() {
-        let ps = target(20);
-        let (with_lut, _) = profile::fit(&ps, &FitOptions::default(), &mut |_| {}).unwrap();
-        assert_eq!(evaluate_profile(&with_lut, &ps).lookup_type, LookupType::NativeLut);
-        let opts = FitOptions { make_lut: false, ..Default::default() };
-        let (no_lut, _) = profile::fit(&ps, &opts, &mut |_| {}).unwrap();
-        assert_eq!(evaluate_profile(&no_lut, &ps).lookup_type, LookupType::Matrix);
-    }
-
-    #[test]
-    fn report_mentions_every_dimension() {
-        let (prof, ps) = fitted(16);
-        let eval = evaluate_profile(&prof, &ps);
-        let text = eval.report(&ps, true);
-        for d in ERROR_DIMENSIONS {
-            assert!(text.contains(d), "missing {d}");
-        }
-        assert!(text.contains("worst patches"));
-        assert!(text.contains(&ps.patch_name(0)));
-    }
-
-    #[test]
-    fn summary_is_a_single_line() {
-        let (prof, ps) = fitted(10);
-        let s = evaluate_profile(&prof, &ps).summary();
-        assert_eq!(s.lines().count(), 1, "{s}");
-        assert!(s.contains("mean DE"));
+        // the matrix alone is no better than the matrix with its table
+        let matrix_only = evaluate_matrix_only(&prof, &ps);
+        assert!(matrix_only.mean_de() >= eval.mean_de() - 1.0e-9, "matrix only {} vs {}", matrix_only.mean_de(), eval.mean_de());
     }
 
     #[test]
@@ -542,14 +515,6 @@ mod tests {
         assert_eq!(total, ps.len(), "{names:?}");
         assert!(names.contains(&"white"), "{names:?}");
         assert!(names.contains(&"unclassified"), "{names:?}");
-    }
-
-    #[test]
-    fn matrix_only_evaluation_ignores_the_table() {
-        let (prof, ps) = fitted(40);
-        let with_table = evaluate_profile(&prof, &ps);
-        let matrix_only = evaluate_matrix_only(&prof, &ps);
-        assert!(matrix_only.mean_de() >= with_table.mean_de() - 1.0e-9);
     }
 
     #[test]

@@ -22,12 +22,16 @@ pub(super) fn commands() -> impl Iterator<Item = &'static UiCommand> {
         .chain(crate::email_photo::COMMANDS)
         .chain(crate::panels::filterbar::COMMANDS)
         .chain(crate::import_report::COMMANDS)
+        .chain(crate::duplicates_ui::COMMANDS)
         .chain(crate::comments_ui::COMMANDS)
         .chain(crate::face_menu::COMMANDS)
         .chain(crate::modern::COMMANDS)
         .chain(crate::modern_library::COMMANDS)
         .chain(crate::modern_sheets::COMMANDS)
         .chain(GRADING_COMMANDS)
+        .chain(crate::tool_profiles::COMMANDS)
+        .chain(crate::quick_bar::COMMANDS)
+        .chain(crate::help_link::COMMANDS)
         .chain(crate::lrc_menus::SOON_COMMANDS.iter())
 }
 
@@ -40,6 +44,7 @@ const GRADING_COMMANDS: &[UiCommand] = &[("view.gradingMode", "Grading Mode", So
 /// Crop tool), as Lightroom Classic's Transform panel, and Plug-in Filters (the photo's pixel-filter stack). Opened and
 /// closed like the others (`section.*`).
 const EDIT_SECTIONS: &[UiCommand] = &[
+    ("section.levels", "Levels", None, "Window>Edit Sections"),
     ("section.curve", "Tone Curve", Some("Cmd+2"), "Window>Edit Sections"),
     ("section.mixer", "Color Mixer", Some("Cmd+3"), "Window>Edit Sections"),
     ("section.grading", "Color Grading", Some("Cmd+4"), "Window>Edit Sections"),
@@ -75,6 +80,9 @@ pub(super) fn run(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Value,
     if let Some(r) = crate::catalog_ui::run(app, id, p) {
         return Some(r);
     }
+    if let Some(r) = crate::tool_profiles::run(app, id, p) {
+        return Some(r);
+    }
     if let Some(r) = crate::modern::run(app, id, p) {
         return Some(r);
     }
@@ -107,10 +115,19 @@ pub(super) fn run(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Value,
     if let Some(r) = crate::import_report::run(app, id, p) {
         return Some(r);
     }
+    if let Some(r) = crate::duplicates_ui::run(app, id, p) {
+        return Some(r);
+    }
     if let Some(r) = crate::comments_ui::run(app, id, p) {
         return Some(r);
     }
     if let Some(r) = crate::libtools::run(app, id, p) {
+        return Some(r);
+    }
+    if let Some(r) = crate::quick_bar::run(app, id, p) {
+        return Some(r);
+    }
+    if let Some(r) = crate::help_link::run(app, id, p) {
         return Some(r);
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -119,7 +136,8 @@ pub(super) fn run(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Value,
     }
     Some(match id {
         // the fork's Edit sections, opened and closed as upstream's are (⌥-click: just this one)
-        "section.curve"
+        "section.levels"
+        | "section.curve"
         | "section.mixer"
         | "section.grading"
         | "section.primaries"
@@ -278,6 +296,7 @@ pub(super) fn enabled(app: &LccApp, id: &str) -> Option<bool> {
         .or_else(|| crate::timelapse_ui::enabled(app, id))
         .or_else(|| crate::email_photo::enabled(app, id))
         .or_else(|| crate::import_report::enabled(app, id))
+        .or_else(|| crate::duplicates_ui::enabled(app, id))
         .or_else(|| crate::comments_ui::enabled(app, id))
         .or_else(|| crate::face_menu::enabled(app, id))
 }

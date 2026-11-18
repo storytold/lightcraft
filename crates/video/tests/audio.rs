@@ -18,10 +18,9 @@ const FRAMES: u32 = 50;
 const SR: u32 = 48_000;
 const HZ: f32 = 440.0;
 
-fn scratch(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("lcc-video-audio-{}", std::process::id()));
-    std::fs::create_dir_all(&d).unwrap();
-    d.join(name)
+/// The path of a file `name` in a Temp folder of its own, removed when the test ends.
+fn scratch(name: &str) -> lcc_testkit::TempFile {
+    lcc_testkit::TempFile::new(&format!("lcc-video-audio-{name}"), name)
 }
 
 fn tone(t: f64) -> f32 {

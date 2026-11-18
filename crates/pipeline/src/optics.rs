@@ -51,6 +51,9 @@ pub struct Warp {
     pub lens: Option<EmbeddedLens>,
     pub lens_dist: f64,
     pub lens_vig: f64,
+    /// A flat-field map's gain over this frame ([`crate::vignetting_calibration`]): applied whatever the lens profile says, and
+    /// in place of the profile's vignetting while there is one ([`crate::geometry::Frame::add_vignetting_calibration`]).
+    pub field: Option<std::sync::Arc<crate::vignetting_calibration::FieldGain>>,
 }
 
 impl Warp {
@@ -67,6 +70,7 @@ impl Warp {
             lens: None,
             lens_dist: 0.0,
             lens_vig: 0.0,
+            field: None,
         }
     }
 
@@ -123,7 +127,12 @@ impl Warp {
     }
 
     pub fn has_gain(&self) -> bool {
-        self.vig_stops != 0.0 || (self.lens_vig != 0.0 && self.lens.is_some_and(|l| l.vignette.is_some()))
+        self.vig_stops != 0.0 || (self.lens_vig != 0.0 && self.lens.is_some_and(|l| l.vignette.is_some())) || self.field_amount() != 0.0
+    }
+
+    /// The flat-field map's amount (0 without one).
+    pub fn field_amount(&self) -> f32 {
+        self.field.as_ref().map_or(0.0, |f| f.amount)
     }
 
     pub fn is_identity(&self) -> bool {
@@ -246,6 +255,11 @@ impl Warp {
             && let Some(v) = self.lens.and_then(|l| l.vignette)
         {
             g *= 1.0 + (embedded_vignette_gain(&v, src, self.w, self.h) - 1.0) * self.lens_vig;
+        }
+        if let Some(f) = self.field.as_deref()
+            && f.amount != 0.0
+        {
+            g *= f.gain(src, self.w, self.h);
         }
         g as f32
     }

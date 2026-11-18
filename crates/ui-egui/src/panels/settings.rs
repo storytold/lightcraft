@@ -23,7 +23,7 @@ use crate::theme::Tokens;
 use crate::widgets::register;
 
 /// Sections `app.settings {section}` can open, with their tab.
-pub const SECTIONS: &[(&str, &str)] = &[("lensProfiles", "import"), ("autoImport", "import")];
+pub const SECTIONS: &[(&str, &str)] = &[("lensProfiles", "import"), ("autoImport", "import"), ("semanticSearch", "ai")];
 
 /// (id, label) of the tabs, in the order of the Settings window's one row of tabs (OneSlips,
 /// LR-PREF-WINDOW): the settings used most first, the editing helpers and the AI next, the
@@ -39,6 +39,7 @@ pub const TABS: &[(&str, &str)] = &[
     ("slideshow", "Slideshow"),
     ("faces", "Faces"),
     ("profiles", "Profiles"),
+    ("develop", "Develop"),
     ("denoise", "AI Denoise"),
     ("ai", "AI Models"),
     ("genfill", "Generative Fill"),
@@ -55,7 +56,7 @@ pub(crate) const SLIDESHOW_W: f32 = SLIDESHOW_COLUMN_W + 12.0 + super::slide_lay
 const CACHE_SIZES: [u32; 5] = [512, 1024, 2048, 4096, 8192];
 
 /// The label column of the Settings window's rows (it gives up room in a narrow window).
-pub(super) const LABEL_W: f32 = 170.0;
+pub(crate) const LABEL_W: f32 = 170.0;
 /// The label column of the same rows outside the dialog (the slideshow panels).
 const PANEL_LABEL_W: f32 = 150.0;
 
@@ -363,6 +364,7 @@ pub(crate) fn tab_body(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, tab: &st
         "ai" => super::ai_models::settings_tab(app, ui, t),
         "genfill" => super::genfill::settings_tab(app, ui, t),
         "profiles" => super::settings_profiles::settings_tab(app, ui, t),
+        "develop" => super::settings_develop::settings_tab(app, ui, t),
         "shortcuts" => shortcuts_tab(app, ui, t),
         "controls" => super::controls::settings_tab(app, ui, t),
         #[cfg(not(target_arch = "wasm32"))]
@@ -430,6 +432,18 @@ pub(super) fn heading(ui: &mut egui::Ui, t: &Tokens, text: &str) {
     }
     ui.add_space(4.0);
     ui.label(RichText::new(crate::i18n::tr(text)).font(t.semibold(12.5)).color(t.text));
+}
+
+/// [`heading`] with a help link (`?`, `help:{topic}`, [`crate::help_link`]) just after it, opening
+/// the manual at the part about this group of settings.
+pub(crate) fn heading_help(ui: &mut egui::Ui, t: &Tokens, text: &str, topic: &str) {
+    if crate::dialog_frame::in_form(ui) {
+        crate::dialog_frame::group_begin_help(ui, Some(text), Some(topic));
+        return;
+    }
+    ui.add_space(4.0);
+    let r = ui.label(RichText::new(crate::i18n::tr(text)).font(t.semibold(12.5)).color(t.text));
+    crate::help_link::beside(ui, r.rect, topic);
 }
 
 /// A labelled row: in a dialog form the label is right-aligned in the label column.
@@ -536,6 +550,7 @@ fn shortcuts_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
             let key = if set == KeymapSet::Classic { "classic" } else { "alternative" };
             let _ = app.run("app.keymapSet", serde_json::json!({"set": key}));
         }
+        crate::help_link::icon(ui, "shortcuts");
     });
     row(ui, t, "Keymap file", |ui| {
         if crate::widgets::text_button(ui, "keymapImport", "Import…", false).clicked() {
@@ -551,20 +566,23 @@ fn shortcuts_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
 // ------------------------------------------------------------------------------------- General
 
 fn general_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
-    // Modern (Android's default), Classic or Compact (Classic drawn denser); on each, this row switches back
+    // Classic, Compact (Classic drawn denser) or Modern (Android's default), Classic and its denser
+    // twin first; on each, this row switches back (`button:settingsLayout-{0,1,2}`)
     row(ui, t, crate::i18n::tr("Layout"), |ui| {
         let now = if app.ui.modern.enabled {
-            1
-        } else if app.compact() {
             2
+        } else if app.compact() {
+            1
         } else {
             0
         };
         let mut layout = now;
-        if choices(ui, "settingsLayout", &[(0, "Classic – Advanced"), (1, "Modern – Simple"), (2, "Compact – Dense")], &mut layout) {
+        let changed = choices(ui, "settingsLayout", &[(0, "Classic – Advanced"), (1, "Compact – Dense"), (2, "Modern – Simple")], &mut layout);
+        crate::help_link::icon(ui, "layout");
+        if changed {
             let _ = match layout {
-                1 => app.run("view.modernLayout", json!({"on": true})),
-                2 => app.run("view.compactLayout", json!({"on": true})),
+                2 => app.run("view.modernLayout", json!({"on": true})),
+                1 => app.run("view.compactLayout", json!({"on": true})),
                 _ => {
                     let _ = app.run("view.modernLayout", json!({"on": false}));
                     app.run("view.compactLayout", json!({"on": false}))
@@ -572,6 +590,16 @@ fn general_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
             };
         }
     });
+    // where the Settings window lists its categories: Classic and Compact each keep their own
+    // (Modern always lists them down the left of its full-window sheet: no choice there)
+    if let Some(mut now) = crate::settings_screen::categories(app) {
+        use crate::state::SettingsCategories as C;
+        row(ui, t, crate::i18n::tr("Settings Categories"), |ui| {
+            if choices(ui, "settingsCategories", &[(C::Left, "Left"), (C::Top, "Top")], &mut now) {
+                crate::settings_screen::set_categories(app, now);
+            }
+        });
+    }
     // the Edit panel's colour tools: Lightroom Classic's panels, or the colourist's Witchcraft
     // layout (Window ▸ Grading Mode and Ctrl+Shift+G switch it too)
     row(ui, t, crate::i18n::tr("Grading Mode"), |ui| {
@@ -584,6 +612,7 @@ fn general_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
         ) {
             let _ = app.run("view.gradingMode", json!({"mode": mode.id()}));
         }
+        crate::help_link::icon(ui, "gradingMode");
     });
     row(ui, t, crate::i18n::tr("Language"), |ui| {
         // a list, not a row of buttons: there are too many languages for one line
@@ -598,7 +627,7 @@ fn general_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
         register(ui.ctx(), "combo:settingsLanguage", combo.response.rect);
         crate::i18n::set_language(app.ui.language);
     });
-    heading(ui, t, crate::i18n::tr("Catalog"));
+    heading_help(ui, t, crate::i18n::tr("Catalog"), "catalog");
     let location = match &app.session.library {
         Some(l) => l.dir.display().to_string(),
         None => crate::i18n::tr("In memory (nothing is saved)").to_string(),
@@ -646,7 +675,7 @@ fn general_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
             &mut app.ui.settings.lightroom_import,
         );
     });
-    heading(ui, t, crate::i18n::tr("Startup"));
+    heading_help(ui, t, crate::i18n::tr("Startup"), "startup");
     row(ui, t, crate::i18n::tr("Open in"), |ui| {
         choices(
             ui,
@@ -672,13 +701,13 @@ fn general_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
             app.toast_error(ui.ctx(), format!("{}: {e}", crate::i18n::tr("Update settings not saved")));
         }
     }
-    heading(ui, t, crate::i18n::tr("Culling"));
+    heading_help(ui, t, crate::i18n::tr("Culling"), "culling");
     check(ui, "settings.autoAdvance", &mut app.ui.auto_advance, "Auto Advance: move to the next photo after rating or flagging");
     check(ui, "settings.confirmDelete", &mut app.ui.settings.confirm_delete, "Confirm before moving photos to Recently Deleted");
     check(ui, "settings.askBeforeMove", &mut app.ui.settings.ask_before_move, "Confirm before moving photos to another folder on disk");
     heading(ui, t, crate::i18n::tr("Dialogs"));
     check(ui, "settings.closeDialogsOutside", &mut app.ui.settings.close_dialogs_outside, "Close a dialog by clicking outside it");
-    heading(ui, t, crate::i18n::tr("External Editing"));
+    heading_help(ui, t, crate::i18n::tr("External Editing"), "externalEditing");
     // Photo ▸ Edit In (#616): the window that asks which file to edit, or the remembered choice
     row(ui, t, crate::i18n::tr("Edit In"), |ui| {
         use crate::state::EditInMode;
@@ -820,7 +849,7 @@ fn import_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let d = app.session.import_defaults.clone();
     // (browsing folders needs a file system: the web keeps the import review)
     if !cfg!(target_arch = "wasm32") {
-        heading(ui, t, crate::i18n::tr("Import Window"));
+        heading_help(ui, t, crate::i18n::tr("Import Window"), "importWindow");
         check(ui, "settings.importAsTab", &mut app.ui.settings.import_as_tab, "Import as a tab");
         hint(
             ui,
@@ -830,7 +859,7 @@ fn import_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
             ),
         );
     }
-    heading(ui, t, crate::i18n::tr("Raw defaults"));
+    heading_help(ui, t, crate::i18n::tr("Raw defaults"), "rawDefaults");
     hint(ui, t, crate::i18n::tr("Settings new raw photos start from. Changing them doesn't touch photos already in the catalog."));
     row(ui, t, crate::i18n::tr("Raw photos"), |ui| {
         if let Some(v) = preset_combo(app, ui, "settingsRawPreset", d.raw_preset.as_deref(), "{app} Default") {
@@ -940,7 +969,7 @@ fn import_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     // the default camera profile (issue #723): what photos start from when no camera profile is
     // set on them, per camera or for every camera
-    heading(ui, t, crate::i18n::tr("Camera profile"));
+    heading_help(ui, t, crate::i18n::tr("Camera profile"), "cameraProfile");
     hint(
         ui,
         t,
@@ -1008,7 +1037,7 @@ fn import_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
             let _ = app.run("library.preferences", json!({"import": {"otherPreset": v}}));
         }
     });
-    heading(ui, t, crate::i18n::tr("Metadata"));
+    heading_help(ui, t, crate::i18n::tr("Metadata"), "importMetadata");
     hint(ui, t, crate::i18n::tr("Added to photos you import that don't already have it."));
     for (key, label, hint_text, value) in
         [("copyright", "Copyright", "© 2026 Your Name", d.copyright.clone()), ("creator", "Creator", "Your Name", d.creator.clone())]
@@ -1053,7 +1082,7 @@ fn import_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
             let _ = app.run("library.preferences", json!({"import": {"metadataPreset": n}}));
         }
     });
-    heading(ui, t, crate::i18n::tr("XMP sidecars"));
+    heading_help(ui, t, crate::i18n::tr("XMP sidecars"), "xmpSidecars");
     let mut xmp = app.session.xmp;
     if check(ui, "settings.autoWriteXmp", &mut xmp.auto_write, "Automatically write changes into XMP sidecars") {
         let _ = app.run("library.xmpPreferences", json!({"autoWrite": xmp.auto_write}));
@@ -1071,7 +1100,7 @@ fn import_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     if !cfg!(target_arch = "wasm32") {
         // issue #123: off by default, as listing folders costs something on a VPN or a slow link
-        heading(ui, t, crate::i18n::tr("Folder Polling"));
+        heading_help(ui, t, crate::i18n::tr("Folder Polling"), "folderPolling");
         hint(
             ui,
             t,
@@ -1109,7 +1138,7 @@ fn import_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
         if check(ui, "settings.importOnCard", &mut on_card, "Show the import review when a camera or card is connected") {
             let _ = app.run("library.preferences", json!({"import": {"showOnCard": on_card}}));
         }
-        let r = ui.scope(|ui| heading(ui, t, crate::i18n::tr("Auto Import"))).response;
+        let r = ui.scope(|ui| heading_help(ui, t, crate::i18n::tr("Auto Import"), "autoImport")).response;
         register(ui.ctx(), "section:autoImport", r.rect);
         if app.ui.settings_section.as_deref() == Some("autoImport") {
             r.scroll_to_me(Some(egui::Align::TOP));
@@ -1241,7 +1270,7 @@ fn import_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
 /// library one), a folder chooser, and downloading lensfun's database on request (`lens.db.*`).
 fn lens_profiles(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     use crate::i18n::tr;
-    let r = ui.scope(|ui| heading(ui, t, tr("Lens profiles"))).response;
+    let r = ui.scope(|ui| heading_help(ui, t, tr("Lens profiles"), "lensProfiles")).response;
     register(ui.ctx(), "section:lensProfiles", r.rect);
     if app.ui.settings_section.as_deref() == Some("lensProfiles") {
         r.scroll_to_me(Some(egui::Align::TOP));
@@ -1520,7 +1549,7 @@ pub(crate) fn save_pending_cache_size(app: &mut LccApp, ctx: &egui::Context) {
 /// Exports: photos side by side, the GPU for exports, and "Test my machine", which measures both and
 /// sets them (its last report below the button).
 fn exports_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
-    heading(ui, t, crate::i18n::tr("Exports"));
+    heading_help(ui, t, crate::i18n::tr("Exports"), "exports");
     row(ui, t, crate::i18n::tr("Photos at once"), |ui| {
         // (what Automatic is here: what Test my machine found, else half the processor's threads, up to 12)
         let tested = app.ui.settings.machine_test.as_ref().map(|m| m.lanes).filter(|n| *n > 0);
@@ -1575,7 +1604,7 @@ fn exports_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
 
 fn performance_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     use lcc_engine::gpu;
-    heading(ui, t, crate::i18n::tr("Rendering"));
+    heading_help(ui, t, crate::i18n::tr("Rendering"), "rendering");
     #[cfg(target_os = "windows")]
     check(ui, "settings.composeWindow", &mut app.ui.settings.compose_window, "Prevent G-SYNC/FreeSync flicker (applies at next launch)");
     check(ui, "settings.gpu", &mut app.ui.settings.gpu, "Use the GPU for rendering");
@@ -1640,7 +1669,7 @@ fn performance_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
         ),
     );
     exports_section(app, ui, t);
-    heading(ui, t, crate::i18n::tr("Thumbnail cache"));
+    heading_help(ui, t, crate::i18n::tr("Thumbnail cache"), "thumbnailCache");
     let cur = (app.session.cache_bytes() >> 20) as u32;
     // (0: Automatic, a share of the cache drive's free space)
     let chosen = app.session.cache_mb;
@@ -1728,7 +1757,7 @@ fn performance_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
 /// the user gets to it (`prefs.backgroundPrep`), app-wide or for this library.
 fn background_prep(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     use lcc_engine::prep::{Mode, Scope};
-    heading(ui, t, crate::i18n::tr("Prepare photos in the background"));
+    heading_help(ui, t, crate::i18n::tr("Prepare photos in the background"), "backgroundPrep");
     hint(
         ui,
         t,
@@ -1832,7 +1861,7 @@ fn smart_previews(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     if loc.is_null() {
         return;
     }
-    heading(ui, t, crate::i18n::tr("Smart previews"));
+    heading_help(ui, t, crate::i18n::tr("Smart previews"), "smartPreviews");
     let path = loc["path"].as_str().unwrap_or_default().to_string();
     let available = loc["available"].as_bool().unwrap_or(true);
     let custom = loc["custom"].as_bool().unwrap_or(false);
@@ -1924,7 +1953,7 @@ fn smart_previews(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
 /// The monitor profile (`app.displayProfile`): previews are shown through the display's ICC
 /// profile, so wide-gamut and calibrated displays show colours as they are.
 fn display_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
-    heading(ui, t, crate::i18n::tr("Monitor profile"));
+    heading_help(ui, t, crate::i18n::tr("Monitor profile"), "display");
     let current = app.renderer.display().cloned();
     let screen = current.as_ref().is_some_and(|d| d.path == crate::SCREEN_PROFILE);
     row(ui, t, crate::i18n::tr("Profile"), |ui| {
@@ -2023,8 +2052,9 @@ fn shared_store(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
 
 fn interface_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let system = app.system_theme(ui.ctx());
-    appearance(ui, t, &mut app.ui.settings, system);
-    heading(ui, t, crate::i18n::tr("Filmstrip"));
+    let forced = forced_slider_layout(app);
+    appearance(ui, t, &mut app.ui.settings, system, forced);
+    heading_help(ui, t, crate::i18n::tr("Filmstrip"), "gridAndFilmstrip");
     check(ui, "settings.filmNames", &mut app.ui.settings.film_names, "Show file names");
     check(ui, "settings.filmBadges", &mut app.ui.settings.film_badges, "Show ratings, flags and edit badges");
     heading(ui, t, crate::i18n::tr("Grid"));
@@ -2044,6 +2074,11 @@ fn interface_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     check(ui, "settings.reduceMotion", &mut app.ui.settings.reduce_motion, "Reduce motion");
     hint(ui, t, crate::i18n::tr("Turns off zoom and spinner animations. Fades stay."));
     check(ui, "settings.wheelResizesBrush", &mut app.ui.settings.wheel_resizes_brush, "Wheel resizes brush instead of zooming");
+    if app.ui.settings.wheel_resizes_brush {
+        check(ui, "settings.invertBrushResize", &mut app.ui.settings.invert_brush_resize, "Invert brush resize direction");
+    }
+    check(ui, "settings.expandedSliders", &mut app.ui.settings.expanded_sliders, "Expanded sliders");
+    hint(ui, t, crate::i18n::tr("Warning, expanding sliders is not XMP compliant."));
     heading(ui, t, crate::i18n::tr("Keywords"));
     row(ui, t, crate::i18n::tr("Keywords of the selection"), |ui| {
         use crate::state::KeywordChips as K;
@@ -2057,7 +2092,7 @@ fn interface_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     heading(ui, t, crate::i18n::tr("Presets"));
     check(ui, "settings.userPresetsFirst", &mut app.ui.settings.user_presets_first, "List User Presets first in the Presets panel");
     shared_store(app, ui, t);
-    heading(ui, t, crate::i18n::tr("Detail View"));
+    heading_help(ui, t, crate::i18n::tr("Detail View"), "detailView");
     check(ui, "settings.navigator", &mut app.ui.navigator, "Show the Navigator while zoomed in");
     check(ui, "settings.hideFilterInDevelop", &mut app.ui.settings.hide_filter_in_develop, "Hide filter text in Develop mode");
     row(ui, t, crate::i18n::tr("Info overlay"), |ui| {
@@ -2065,6 +2100,15 @@ fn interface_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
         choices(ui, "settingsInfo", &[(I::Off, "Off"), (I::Basic, "Info 1"), (I::Exposure, "Info 2")], &mut app.ui.info_overlay);
     });
     hint(ui, t, crate::i18n::tr("View → View Options chooses the lines Info 1 and Info 2 show."));
+    check(ui, "settings.eyeFocus", &mut app.ui.eye_focus, "Show the eye focus strip");
+    check(ui, "settings.eyeFocusImport", &mut app.ui.eye_focus_import, "Show the eye focus strip while browsing a folder");
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(
+            "Each person's sharper eye at 100 % across the top of the loupe. The quick settings bar (point at the space beside the module names) switches it too.",
+        ),
+    );
     // the overlay that reports every change (and the control surfaces' readout)
     super::surface_osd::settings_section(app, ui, t);
 }
@@ -2223,7 +2267,7 @@ fn export_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
 
 fn playback_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     use lcc_engine::slideshow::{FADE_MAX, SLIDE_MAX, SLIDE_MIN};
-    heading(ui, t, crate::i18n::tr("Playback"));
+    heading_help(ui, t, crate::i18n::tr("Playback"), "slideshow");
     let s = app.session.slideshow.clone();
     let mut v = s.manual;
     if check(ui, "settings.slideshowManual", &mut v, "Manual slideshow") {
@@ -2299,10 +2343,17 @@ fn playback_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
 
 /// Appearance Mode (`button:settingsAppearance-{0,1,2}`: Auto, Dark, Light) above the light and
 /// dark theme cards (`radio:theme-{id}`), each with a preview of the chosen theme. The card in
-/// use is outlined. Applied on the next frame ([`LccApp::sync_theme`]).
-fn appearance(ui: &mut egui::Ui, t: &Tokens, s: &mut crate::state::AppSettings, system: Option<egui::Theme>) {
+/// use is outlined. Applied on the next frame ([`LccApp::sync_theme`]). Then the font size and the
+/// slider rows that apply to the layout drawn (`forced`: [`forced_slider_layout`]).
+fn appearance(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    s: &mut crate::state::AppSettings,
+    system: Option<egui::Theme>,
+    forced: Option<crate::theme::SliderLayout>,
+) {
     use crate::state::{AppearanceMode as M, DarkTheme, LightTheme};
-    heading(ui, t, crate::i18n::tr("Appearance"));
+    heading_help(ui, t, crate::i18n::tr("Appearance"), "appearance");
     row(ui, t, crate::i18n::tr("Appearance Mode"), |ui| {
         choices(ui, "settingsAppearance", &[(M::Auto, "Sync with System"), (M::Dark, "Dark Mode"), (M::Light, "Light Mode")], &mut s.appearance_mode);
     });
@@ -2326,19 +2377,53 @@ fn appearance(ui: &mut egui::Ui, t: &Tokens, s: &mut crate::state::AppSettings, 
         let options = crate::theme::UiFontSize::ALL.map(|size| (size, size.label()));
         choices(ui, "settingsFontSize", &options, &mut s.ui_font_size);
     });
-    row(ui, t, crate::i18n::tr("Sliders"), |ui| {
-        let options = crate::theme::SliderLayout::ALL.map(|layout| (layout, layout.label()));
-        choices(ui, "settingsSliderLayout", &options, &mut s.slider_layout);
-    });
+    let rows = SliderRows::for_layout(forced, s.slider_layout);
+    if rows.layout {
+        row(ui, t, crate::i18n::tr("Sliders"), |ui| {
+            let options = crate::theme::SliderLayout::ALL.map(|layout| (layout, layout.label()));
+            choices(ui, "settingsSliderLayout", &options, &mut s.slider_layout);
+        });
+    }
+    // (the choice may have just changed what the rows below apply to)
+    let rows = SliderRows::for_layout(forced, s.slider_layout);
     row(ui, t, crate::i18n::tr("Slider text"), |ui| {
         let options = crate::theme::SliderText::ALL.map(|size| (size, size.label()));
         choices(ui, "settingsSliderText", &options, &mut s.slider_text);
     });
-    row(ui, t, crate::i18n::tr("Slider control"), |ui| {
-        let options = crate::theme::SliderControl::ALL.map(|c| (c, c.label()));
-        choices(ui, "settingsSliderControl", &options, &mut s.slider_control);
-    });
+    if rows.control {
+        row(ui, t, crate::i18n::tr("Slider control"), |ui| {
+            let options = crate::theme::SliderControl::ALL.map(|c| (c, c.label()));
+            choices(ui, "settingsSliderControl", &options, &mut s.slider_control);
+        });
+    }
+    // (every slider, pills too)
+    hint(ui, t, crate::i18n::tr("Hold Shift for fine control"));
     ui.add_space(2.0);
+}
+
+/// Which of Settings ▸ Interface's slider rows apply, and so show.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SliderRows {
+    /// Sliders (One Row, Two Rows, Pill): only where the layout doesn't choose for itself (the
+    /// Classic layout; Modern always draws pills, Compact always one dense row).
+    pub layout: bool,
+    /// Slider control (acceleration): only for sliders with a thumb, which a pill has not.
+    pub control: bool,
+}
+
+impl SliderRows {
+    /// `forced`: the slider layout the interface layout always uses (Modern: pills, Compact: one
+    /// row; `None` in Classic, which uses `chosen`, the Sliders setting).
+    pub(crate) fn for_layout(forced: Option<crate::theme::SliderLayout>, chosen: crate::theme::SliderLayout) -> SliderRows {
+        let drawn = forced.unwrap_or(chosen);
+        SliderRows { layout: forced.is_none(), control: drawn != crate::theme::SliderLayout::Pill }
+    }
+}
+
+/// The slider layout the interface layout drawn now always uses, whatever Settings ▸ Interface ▸
+/// Sliders says: pills in Modern, one dense row in Compact, `None` (the setting) in Classic.
+pub(crate) fn forced_slider_layout(app: &LccApp) -> Option<crate::theme::SliderLayout> {
+    if app.ui.modern.enabled || app.compact() { Some(app.slider_layout()) } else { None }
 }
 
 /// One family's card: its title (and "Active" when it is the one shown), a preview of the
@@ -2995,7 +3080,7 @@ mod tests {
     /// The folder scan before an import's review counts too: it ends in an import into the open library.
     #[test]
     fn open_library_is_refused_while_an_import_scan_runs() {
-        let dir = std::env::temp_dir().join(format!("lc-ui-switchscan-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lc-ui-switchscan");
         let _ = std::fs::create_dir_all(&dir);
         let mut app = LccApp::new(lcc_engine::Session::with_demo(), crate::Services::default());
         app.run("photo.setReference", json!({})).unwrap();
@@ -3022,38 +3107,29 @@ mod path_tests {
         elide_path(path, max as f32, |s| s.chars().count() as f32)
     }
 
+    /// A path that fits is left alone; one that doesn't loses its leading folders and keeps its end
+    /// (with either separator: `Path::display` gives backslashes on Windows); a last folder too long
+    /// by itself loses its end, on a character boundary; a separator at the end is not where the
+    /// name starts.
     #[test]
-    fn a_path_that_fits_is_left_alone() {
-        assert_eq!(fit("/Users/me/Pictures", 18), "/Users/me/Pictures");
-        assert_eq!(fit("", 5), "");
-    }
-
-    #[test]
-    fn leading_folders_go_first_and_the_end_stays() {
-        assert_eq!(fit("/Users/me/Pictures/Library", 20), "…/Pictures/Library");
-        assert_eq!(fit("/Users/me/Pictures/Library", 10), "…/Library");
-    }
-
-    /// Windows paths: `Path::display` gives backslashes there.
-    #[test]
-    fn a_path_with_backslashes_keeps_its_end_too() {
-        assert_eq!(fit(r"C:\Users\me\Pictures\Library", 20), r"…\Pictures\Library");
-        assert_eq!(fit(r"C:\Users\me/Pictures\Library", 10), r"…\Library");
-    }
-
-    #[test]
-    fn a_last_folder_too_long_by_itself_loses_its_end() {
-        assert_eq!(fit("/Users/me/a-very-long-folder-name", 8), "a-very-…");
-        assert_eq!(fit("no-separator-at-all", 8), "no-sepa…");
-        assert_eq!(fit("/Users/Фотографии-из-отпуска", 8), "Фотогра…");
-    }
-
-    #[test]
-    fn a_separator_at_the_end_is_not_where_the_name_starts() {
-        assert_eq!(fit("/Users/me/Pictures/Library/", 11), "…/Library/");
-        assert_eq!(fit("/Users/me/a-very-long-folder-name/", 8), "a-very-…");
-        assert_eq!(fit(r"C:\Users\me\Library\", 11), r"…\Library\");
-        assert_eq!(fit("///", 2), "…");
-        assert_eq!(fit(r"\\server\share\folder", 15), r"…\share\folder");
+    fn a_long_path_loses_its_leading_folders_and_keeps_its_end() {
+        for (path, max, want) in [
+            ("/Users/me/Pictures", 18, "/Users/me/Pictures"),
+            ("", 5, ""),
+            ("/Users/me/Pictures/Library", 20, "…/Pictures/Library"),
+            ("/Users/me/Pictures/Library", 10, "…/Library"),
+            (r"C:\Users\me\Pictures\Library", 20, r"…\Pictures\Library"),
+            (r"C:\Users\me/Pictures\Library", 10, r"…\Library"),
+            ("/Users/me/a-very-long-folder-name", 8, "a-very-…"),
+            ("no-separator-at-all", 8, "no-sepa…"),
+            ("/Users/Фотографии-из-отпуска", 8, "Фотогра…"),
+            ("/Users/me/Pictures/Library/", 11, "…/Library/"),
+            ("/Users/me/a-very-long-folder-name/", 8, "a-very-…"),
+            (r"C:\Users\me\Library\", 11, r"…\Library\"),
+            ("///", 2, "…"),
+            (r"\\server\share\folder", 15, r"…\share\folder"),
+        ] {
+            assert_eq!(fit(path, max), want, "{path:?} in {max}");
+        }
     }
 }

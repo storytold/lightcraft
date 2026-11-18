@@ -37,41 +37,57 @@ fn play(h: &mut Headless) {
     }
 }
 
-// Scenario: double-clicking the empty top bar zooms the window, and again restores it
-#[test]
-fn double_click_on_the_empty_bar_zooms_then_restores() {
-    let mut h = integrated();
-    let p = empty_spot(&h);
-    h.request("ui.click", json!({"x": p.x, "y": p.y, "count": 2}), T);
-    play(&mut h);
-    assert_eq!(h.window_commands, vec![ViewportCommand::Maximized(true)]);
-    // a pause longer than egui's multi-click window, or the second pair would count as a triple click
+/// A pause longer than egui's multi-click window, so the next click starts a new count.
+fn pause(h: &mut Headless) {
     for _ in 0..30 {
         h.step();
     }
-    h.request("ui.click", json!({"x": p.x, "y": p.y, "count": 2}), T);
-    play(&mut h);
-    assert_eq!(h.window_commands, vec![ViewportCommand::Maximized(true), ViewportCommand::Maximized(false)]);
 }
 
-// Scenario: dragging the empty top bar starts a window move
+// Scenario: buttons and the search field keep their clicks and drags; only the empty bar is a window handle,
+// dragged to move the window and double-clicked to zoom and restore it
 #[test]
-fn dragging_the_empty_bar_moves_the_window() {
-    let mut h = integrated();
-    let p = empty_spot(&h);
-    h.request("ui.drag", json!({"x": p.x, "y": p.y, "toX": p.x + 120.0, "toY": p.y + 40.0}), T);
-    play(&mut h);
-    assert_eq!(h.window_commands, vec![ViewportCommand::StartDrag]);
-}
-
-// Scenario: a single click on the empty bar does nothing
-#[test]
-fn single_click_on_the_empty_bar_does_nothing() {
+fn only_the_empty_bar_moves_and_zooms_the_window() {
     let mut h = integrated();
     let p = empty_spot(&h);
     h.request("ui.click", json!({"x": p.x, "y": p.y}), T);
     play(&mut h);
-    assert!(h.window_commands.is_empty(), "{:?}", h.window_commands);
+    assert!(h.window_commands.is_empty(), "a single click on the empty bar: {:?}", h.window_commands);
+    pause(&mut h);
+    let r = widget(&h, "icon:help");
+    h.request("ui.drag", json!({"x": r.center().x, "y": r.center().y, "toX": r.center().x - 150.0, "toY": r.center().y + 30.0}), T);
+    play(&mut h);
+    assert!(h.window_commands.is_empty(), "a drag off a button (as in a native title bar): {:?}", h.window_commands);
+    pause(&mut h);
+    // (Esc closes whatever a click on the button opened)
+    h.request("ui.key", json!({"key": "escape"}), T);
+    pause(&mut h);
+    // the search field: a double click selects a word, a drag selects text (#1646)
+    let r = widget(&h, "field:search");
+    let x = r.left() + r.width() * 0.35;
+    h.request("ui.click", json!({"x": x, "y": r.center().y}), T);
+    h.request("ui.text", json!({"text": "landscape"}), T);
+    play(&mut h);
+    h.request("ui.drag", json!({"x": x, "y": r.center().y, "toX": x + 60.0, "toY": r.center().y}), T);
+    play(&mut h);
+    assert!(h.window_commands.is_empty(), "a drag within the search field: {:?}", h.window_commands);
+    pause(&mut h);
+    h.request("ui.click", json!({"x": r.center().x, "y": r.center().y, "count": 2}), T);
+    play(&mut h);
+    assert!(h.window_commands.is_empty(), "a double click in the search field: {:?}", h.window_commands);
+    pause(&mut h);
+    // the empty bar
+    h.request("ui.drag", json!({"x": p.x, "y": p.y, "toX": p.x + 120.0, "toY": p.y + 40.0}), T);
+    play(&mut h);
+    assert_eq!(h.window_commands, vec![ViewportCommand::StartDrag], "dragging the empty bar moves the window");
+    pause(&mut h);
+    h.request("ui.click", json!({"x": p.x, "y": p.y, "count": 2}), T);
+    play(&mut h);
+    assert_eq!(h.window_commands, vec![ViewportCommand::StartDrag, ViewportCommand::Maximized(true)], "a double click zooms");
+    pause(&mut h);
+    h.request("ui.click", json!({"x": p.x, "y": p.y, "count": 2}), T);
+    play(&mut h);
+    assert_eq!(h.window_commands.last(), Some(&ViewportCommand::Maximized(false)), "and again restores: {:?}", h.window_commands);
 }
 
 // Scenario: double-clicking a button does not zoom the window
@@ -80,40 +96,6 @@ fn double_click_on_a_button_does_not_zoom() {
     let mut h = integrated();
     let r = widget(&h, "icon:help");
     h.request("ui.click", json!({"x": r.center().x, "y": r.center().y, "count": 2}), T);
-    play(&mut h);
-    assert!(h.window_commands.is_empty(), "{:?}", h.window_commands);
-}
-
-// Scenario: pressing a button and dragging off it does not move the window (as in a native title bar)
-#[test]
-fn dragging_from_a_button_does_not_move_the_window() {
-    let mut h = integrated();
-    let r = widget(&h, "icon:help");
-    h.request("ui.drag", json!({"x": r.center().x, "y": r.center().y, "toX": r.center().x - 150.0, "toY": r.center().y + 30.0}), T);
-    play(&mut h);
-    assert!(h.window_commands.is_empty(), "{:?}", h.window_commands);
-}
-
-// Scenario: double-clicking the search field selects a word, it does not zoom the window
-#[test]
-fn double_click_in_the_search_field_does_not_zoom() {
-    let mut h = integrated();
-    let r = widget(&h, "field:search");
-    h.request("ui.click", json!({"x": r.center().x, "y": r.center().y, "count": 2}), T);
-    play(&mut h);
-    assert!(h.window_commands.is_empty(), "{:?}", h.window_commands);
-}
-
-// Scenario: dragging within the search field selects text rather than moving the window (#1646)
-#[test]
-fn dragging_within_search_does_not_move_the_window() {
-    let mut h = integrated();
-    let r = widget(&h, "field:search");
-    let x = r.left() + r.width() * 0.35;
-    h.request("ui.click", json!({"x": x, "y": r.center().y}), T);
-    h.request("ui.text", json!({"text": "landscape"}), T);
-    play(&mut h);
-    h.request("ui.drag", json!({"x": x, "y": r.center().y, "toX": x + 60.0, "toY": r.center().y}), T);
     play(&mut h);
     assert!(h.window_commands.is_empty(), "{:?}", h.window_commands);
 }

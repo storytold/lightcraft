@@ -34,25 +34,30 @@ fn click(h: &mut Headless, id: &str) {
     h.step();
 }
 
-#[test]
-fn the_three_wheels_are_the_same_size() {
-    let h = demo();
-    let sizes: Vec<f32> = ["shadows", "midtones", "highlights"].iter().map(|k| widget(&h, &format!("wheel:{k}")).unwrap().width()).collect();
+fn the_three_wheels_are_the_same_size(h: &mut Headless) {
+    let sizes: Vec<f32> = ["shadows", "midtones", "highlights"].iter().map(|k| widget(h, &format!("wheel:{k}")).unwrap().width()).collect();
     assert!(sizes.iter().all(|w| (w - sizes[0]).abs() < 0.5), "{sizes:?}");
 }
 
-#[test]
-fn a_range_tab_shows_one_bigger_wheel_and_its_hue_and_saturation() {
-    let mut h = demo();
-    let small = widget(&h, "wheel:shadows").unwrap().width();
-    click(&mut h, "icon:grading-shadows");
+fn a_range_tab_shows_one_bigger_wheel_and_its_hue_and_saturation(h: &mut Headless) {
+    let small = widget(h, "wheel:shadows").unwrap().width();
+    click(h, "icon:grading-shadows");
     assert_eq!(h.app.ui.grading_mode, "shadows");
-    assert!(widget(&h, "wheel:shadows").unwrap().width() > small);
-    assert!(widget(&h, "wheel:midtones").is_none() && widget(&h, "wheel:highlights").is_none());
+    assert!(widget(h, "wheel:shadows").unwrap().width() > small);
+    assert!(widget(h, "wheel:midtones").is_none() && widget(h, "wheel:highlights").is_none());
     for c in ["grading.shadows.hue", "grading.shadows.sat", "grading.shadows.lum", "grading.blending", "grading.balance"] {
         assert!(h.app.widgets.iter().any(|(w, _)| w.contains(c)), "slider {c}");
     }
     assert!(!h.app.widgets.iter().any(|(w, _)| w.contains("grading.midtones.lum")));
+}
+
+#[test]
+fn the_wheels_are_alike_show_their_values_reset_and_give_way_to_a_range_tab() {
+    let mut h = demo();
+    the_three_wheels_are_the_same_size(&mut h);
+    hovering_a_three_way_wheel_shows_its_hue_and_saturation(&mut h);
+    double_click_still_resets_the_wheel_with_a_modifier_held(&mut h);
+    a_range_tab_shows_one_bigger_wheel_and_its_hue_and_saturation(&mut h);
 }
 
 #[test]
@@ -81,9 +86,7 @@ fn the_eye_hides_a_wheel_for_viewing_only_and_resets_on_another_photo() {
     assert_eq!(h.app.ui.grading_hidden_for(other), [false; 3]);
 }
 
-#[test]
-fn hovering_a_three_way_wheel_shows_its_hue_and_saturation() {
-    let mut h = demo();
+fn hovering_a_three_way_wheel_shows_its_hue_and_saturation(h: &mut Headless) {
     h.app.session.execute("develop.set", &json!({"values": {"grading.shadows.hue": 220, "grading.shadows.sat": 45}})).unwrap();
     h.step();
     let readout = "H 220°  S 45";
@@ -223,37 +226,33 @@ fn travelled(rad: f32, a: (f64, f64), b: (f64, f64)) -> f32 {
     (puck(b.0, b.1, rad) - puck(a.0, a.1, rad)).length()
 }
 
-#[test]
-fn shift_dragging_across_the_tangent_keeps_the_hue_and_moves_saturation() {
-    let mut h = demo();
-    let rad = wheel_radius(&h, "midtones");
-    set_wheel(&mut h, "midtones", 30.0, 50.0);
+fn shift_dragging_across_the_tangent_keeps_the_hue_and_moves_saturation(h: &mut Headless) {
+    let rad = wheel_radius(h, "midtones");
+    set_wheel(h, "midtones", 30.0, 50.0);
     let a = 30f32.to_radians();
     let radial = egui::vec2(a.cos(), -a.sin());
     let tangent = egui::vec2(-a.sin(), -a.cos());
     // grab the puck and go 10 points outward and 15 round the wheel (rad 40: +25 % saturation)
     let by = (radial * 10.0 + tangent * 15.0) * (rad / 40.0);
-    let ((hue, sat), undo) = drag_wheel(&mut h, puck(30.0, 50.0, rad), by, &["shift"]);
+    let ((hue, sat), undo) = drag_wheel(h, puck(30.0, 50.0, rad), by, &["shift"]);
     assert!((hue - 30.0).abs() <= 1.0, "hue stays: {hue}");
     assert!((sat - 75.0).abs() <= 1.5, "saturation follows the radial part: {sat}");
     assert_eq!(undo, 1, "one undo step per drag");
     // the same drag unconstrained does swing the hue round, so the lock is what held it
-    set_wheel(&mut h, "midtones", 30.0, 50.0);
-    let ((hue, _), undo) = drag_wheel(&mut h, puck(30.0, 50.0, rad), by, &[]);
+    set_wheel(h, "midtones", 30.0, 50.0);
+    let ((hue, _), undo) = drag_wheel(h, puck(30.0, 50.0, rad), by, &[]);
     assert!(hue > 50.0, "unlocked, the hue follows the pointer: {hue}");
     assert_eq!(undo, 1);
 }
 
-#[test]
-fn shift_drag_keeps_the_pucks_hue_wherever_the_pointer_grabs() {
-    let mut h = demo();
-    let rad = wheel_radius(&h, "midtones");
+fn shift_drag_keeps_the_pucks_hue_wherever_the_pointer_grabs(h: &mut Headless) {
+    let rad = wheel_radius(h, "midtones");
     // the puck is at 30°, the pointer grabs the wheel far off that angle (at 120°, and at 250°):
     // the hue stays the puck's own, it doesn't take the angle under the pointer
     for grab_angle in [120.0f64, 250.0] {
-        set_wheel(&mut h, "midtones", 30.0, 50.0);
+        set_wheel(h, "midtones", 30.0, 50.0);
         let from = puck(grab_angle, 60.0, rad);
-        let ((hue, sat), undo) = drag_wheel(&mut h, from, egui::vec2(8.0, -6.0) * (rad / 40.0), &["shift"]);
+        let ((hue, sat), undo) = drag_wheel(h, from, egui::vec2(8.0, -6.0) * (rad / 40.0), &["shift"]);
         assert!((hue - 30.0).abs() <= 1.0, "grabbed at {grab_angle}°, the hue is {hue}");
         let a = 30f32.to_radians();
         let end = from + egui::vec2(8.0, -6.0) * (rad / 40.0);
@@ -263,35 +262,31 @@ fn shift_drag_keeps_the_pucks_hue_wherever_the_pointer_grabs() {
     }
 }
 
-#[test]
-fn cmd_drag_keeps_the_saturation_and_changes_only_the_hue() {
-    let mut h = demo();
-    let rad = wheel_radius(&h, "midtones");
-    set_wheel(&mut h, "midtones", 30.0, 50.0);
+fn cmd_drag_keeps_the_saturation_and_changes_only_the_hue(h: &mut Headless) {
+    let rad = wheel_radius(h, "midtones");
+    set_wheel(h, "midtones", 30.0, 50.0);
     // drag the puck out to 200° at 90 % of the radius: the hue follows, the saturation stays
     let from = puck(30.0, 50.0, rad);
     let to = puck(200.0, 90.0, rad);
-    let ((hue, sat), undo) = drag_wheel(&mut h, from, to - from, &["cmd"]);
+    let ((hue, sat), undo) = drag_wheel(h, from, to - from, &["cmd"]);
     assert!((hue - 200.0).abs() <= 1.0, "{hue}");
     assert_eq!(sat, 50.0, "the saturation is held");
     assert_eq!(undo, 1, "one undo step per drag");
     // and the same drag without Cmd takes the pointer's saturation too
-    set_wheel(&mut h, "midtones", 30.0, 50.0);
-    let ((_, sat), _) = drag_wheel(&mut h, from, to - from, &[]);
+    set_wheel(h, "midtones", 30.0, 50.0);
+    let ((_, sat), _) = drag_wheel(h, from, to - from, &[]);
     assert!((sat - 90.0).abs() <= 1.5, "{sat}");
 }
 
-#[test]
-fn alt_drag_fine_adjusts_to_a_tenth_of_the_pointers_travel() {
-    let mut h = demo();
-    let rad = wheel_radius(&h, "midtones");
+fn alt_drag_fine_adjusts_to_a_tenth_of_the_pointers_travel(h: &mut Headless) {
+    let rad = wheel_radius(h, "midtones");
     let start = (30.0, 50.0);
     let from = puck(start.0, start.1, rad);
     let by = egui::vec2(20.0, 0.0) * (rad / 40.0);
-    set_wheel(&mut h, "midtones", start.0, start.1);
-    let (free, undo_free) = drag_wheel(&mut h, from, by, &[]);
-    set_wheel(&mut h, "midtones", start.0, start.1);
-    let (fine, undo_fine) = drag_wheel(&mut h, from, by, &["alt"]);
+    set_wheel(h, "midtones", start.0, start.1);
+    let (free, undo_free) = drag_wheel(h, from, by, &[]);
+    set_wheel(h, "midtones", start.0, start.1);
+    let (fine, undo_fine) = drag_wheel(h, from, by, &["alt"]);
     let (free_move, fine_move) = (travelled(rad, start, free), travelled(rad, start, fine));
     let expect = by.length() * 0.1;
     assert!(free_move > by.length() * 0.7, "unmodified: the puck follows the pointer ({free_move})");
@@ -300,22 +295,20 @@ fn alt_drag_fine_adjusts_to_a_tenth_of_the_pointers_travel() {
     assert_eq!((undo_free, undo_fine), (1, 1));
 }
 
-#[test]
-fn alt_works_with_shift_and_cmd_constraints() {
-    let mut h = demo();
-    let rad = wheel_radius(&h, "midtones");
+fn alt_works_with_shift_and_cmd_constraints(h: &mut Headless) {
+    let rad = wheel_radius(h, "midtones");
     let from = puck(30.0, 50.0, rad);
     let a = 30f32.to_radians();
     // 20 points outward along the spoke, then 20 round the wheel
     let radial = egui::vec2(a.cos(), -a.sin()) * 20.0 * (rad / 40.0);
     let tangent = egui::vec2(-a.sin(), -a.cos()) * 20.0 * (rad / 40.0);
-    set_wheel(&mut h, "midtones", 30.0, 50.0);
-    let ((hue, sat), undo) = drag_wheel(&mut h, from, radial, &["shift", "alt"]);
+    set_wheel(h, "midtones", 30.0, 50.0);
+    let ((hue, sat), undo) = drag_wheel(h, from, radial, &["shift", "alt"]);
     assert!((hue - 30.0).abs() <= 1.0, "{hue}");
     assert!((sat - 55.0).abs() <= 1.5, "20 points is 50 %, a tenth of it is 5: {sat}");
     assert_eq!(undo, 1);
-    set_wheel(&mut h, "midtones", 30.0, 50.0);
-    let ((hue, sat), undo) = drag_wheel(&mut h, from, tangent, &["cmd", "alt"]);
+    set_wheel(h, "midtones", 30.0, 50.0);
+    let ((hue, sat), undo) = drag_wheel(h, from, tangent, &["cmd", "alt"]);
     assert_eq!(sat, 50.0);
     // 2 points round a circle 20 points from the centre: 0.1 rad ≈ 5.7°
     assert!((hue - 35.7).abs() <= 1.5, "{hue}");
@@ -323,14 +316,22 @@ fn alt_works_with_shift_and_cmd_constraints() {
 }
 
 #[test]
-fn double_click_still_resets_the_wheel_with_a_modifier_held() {
+fn modifier_drags_constrain_and_fine_adjust_the_puck_in_one_undo_step() {
     let mut h = demo();
-    set_wheel(&mut h, "midtones", 30.0, 50.0);
+    shift_dragging_across_the_tangent_keeps_the_hue_and_moves_saturation(&mut h);
+    shift_drag_keeps_the_pucks_hue_wherever_the_pointer_grabs(&mut h);
+    cmd_drag_keeps_the_saturation_and_changes_only_the_hue(&mut h);
+    alt_drag_fine_adjusts_to_a_tenth_of_the_pointers_travel(&mut h);
+    alt_works_with_shift_and_cmd_constraints(&mut h);
+}
+
+fn double_click_still_resets_the_wheel_with_a_modifier_held(h: &mut Headless) {
+    set_wheel(h, "midtones", 30.0, 50.0);
     let r = h.request("ui.clickWidget", json!({"id": "wheel:midtones", "count": 2, "shift": true}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     h.step();
-    assert_eq!(wheel_value(&h, "midtones"), (0.0, 0.0));
+    assert_eq!(wheel_value(h, "midtones"), (0.0, 0.0));
 }
 
 /// Issue #77: the wheels looked muddy. Painted on screen, the rim of each hue reaches full

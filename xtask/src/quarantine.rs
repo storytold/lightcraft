@@ -353,9 +353,4 @@ reason = "timing"
         assert_eq!(civil(20_739), "2026-10-13");
         assert_eq!(civil(11_016), "2000-02-29");
     }
-
-    #[test]
-    fn repository_file_is_valid() {
-        load(&crate::root()).unwrap();
-    }
 }

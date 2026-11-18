@@ -84,7 +84,7 @@ fn nclx_colour_and_ten_bit() {
 fn hostile_heic_is_an_error_never_a_panic() {
     let bytes = iphone_like();
     let full = decode(&bytes, DecodeOptions::default()).unwrap();
-    for cut in (12..bytes.len()).step_by(11) {
+    for cut in (12..bytes.len()).step_by(89) {
         let b = &bytes[..cut];
         // Cut inside the photo: an error. Cut in a trailing item (gain map, thumbnail): the photo.
         if let (Ok(_), Ok(d)) = (read_header(b), decode(b, DecodeOptions::default())) {

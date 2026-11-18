@@ -28,63 +28,27 @@ fn snapshot_version(m: &MemStore) -> u64 {
     v["version"].as_u64().unwrap()
 }
 
+/// Libraries of older formats (1: the first; 2: before albums could be ordered by hand; 3: before keywords could be
+/// listed on their own; 5: before saved locations and creations) open as they were and are rewritten in the current
+/// format before anything is appended.
 #[test]
-fn v1_library_loads_and_is_upgraded() {
-    let (base, log, full) = legacy_parts();
-    let m = MemStore::new();
-    m.set(SNAPSHOT, format!("{{\"format\":\"lcc-catalog\",\"version\":1,\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
-    m.set(LOG, log.into_bytes());
-    let (mut j, c, r) = Journal::open(Box::new(m.clone())).unwrap();
-    assert_eq!(c.to_snapshot(), full.to_snapshot());
-    assert_eq!((r.replayed, r.upgraded_from), (1, Some(1)));
-    // rewritten in this format before anything is appended
-    assert_eq!(snapshot_version(&m), u64::from(VERSION));
-    assert!(m.get(LOG).unwrap().is_empty());
-    assert_eq!(j.seq(), 3);
-    j.append(&[Op::SetLabelName { label: ColorLabel::ALL[0], name: Some("x".into()) }]).unwrap();
-    drop(j);
-    let (_, _, r) = Journal::open(Box::new(m)).unwrap();
-    assert_eq!((r.replayed, r.upgraded_from), (1, None));
-}
-
-/// A library saved before albums could be ordered by hand opens as it was and is rewritten in the current format.
-#[test]
-fn v2_library_loads_and_is_upgraded() {
-    let (base, log, full) = legacy_parts();
-    let m = MemStore::new();
-    m.set(SNAPSHOT, format!("{{\"format\":\"lcc-catalog\",\"version\":2,\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
-    m.set(LOG, log.into_bytes());
-    let (_, c, r) = Journal::open(Box::new(m.clone())).unwrap();
-    assert_eq!(c.to_snapshot(), full.to_snapshot());
-    assert_eq!((r.replayed, r.upgraded_from), (1, Some(2)));
-    assert_eq!(snapshot_version(&m), u64::from(VERSION));
-}
-
-/// A library saved before keywords could be listed on their own opens as it was and is rewritten
-/// in the current format.
-#[test]
-fn v3_library_loads_and_is_upgraded() {
-    let (base, log, full) = legacy_parts();
-    let m = MemStore::new();
-    m.set(SNAPSHOT, format!("{{\"format\":\"lcc-catalog\",\"version\":3,\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
-    m.set(LOG, log.into_bytes());
-    let (_, c, r) = Journal::open(Box::new(m.clone())).unwrap();
-    assert_eq!(c.to_snapshot(), full.to_snapshot());
-    assert_eq!((r.replayed, r.upgraded_from), (1, Some(3)));
-    assert_eq!(snapshot_version(&m), u64::from(VERSION));
-}
-
-/// A format-5 library (before saved locations and creations) opens as it was and is rewritten in the current format.
-#[test]
-fn v5_library_loads_and_is_upgraded() {
-    let (base, log, full) = legacy_parts();
-    let m = MemStore::new();
-    m.set(SNAPSHOT, format!("{{\"format\":\"lcc-catalog\",\"version\":5,\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
-    m.set(LOG, log.into_bytes());
-    let (_, c, r) = Journal::open(Box::new(m.clone())).unwrap();
-    assert_eq!(c.to_snapshot(), full.to_snapshot());
-    assert_eq!((r.replayed, r.upgraded_from), (1, Some(5)));
-    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+fn older_libraries_load_and_are_upgraded() {
+    for version in [1u32, 2, 3, 5] {
+        let (base, log, full) = legacy_parts();
+        let m = MemStore::new();
+        m.set(SNAPSHOT, format!("{{\"format\":\"lcc-catalog\",\"version\":{version},\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
+        m.set(LOG, log.into_bytes());
+        let (mut j, c, r) = Journal::open(Box::new(m.clone())).unwrap();
+        assert_eq!(c.to_snapshot(), full.to_snapshot(), "v{version}");
+        assert_eq!((r.replayed, r.upgraded_from), (1, Some(version)));
+        assert_eq!(snapshot_version(&m), u64::from(VERSION), "v{version}");
+        assert!(m.get(LOG).unwrap().is_empty(), "v{version}");
+        assert_eq!(j.seq(), 3);
+        j.append(&[Op::SetLabelName { label: ColorLabel::ALL[0], name: Some("x".into()) }]).unwrap();
+        drop(j);
+        let (_, _, r) = Journal::open(Box::new(m)).unwrap();
+        assert_eq!((r.replayed, r.upgraded_from), (1, None), "v{version}");
+    }
 }
 
 /// A v11 library (before preview-only photos recorded which version decided it, upstream #662) opens
@@ -272,11 +236,17 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 11,
             Op::SetBefore { .. } => 16,
             Op::SetExported { .. } => 17,
+            Op::AddVignettingMap { .. } | Op::SetVignettingMapState { .. } => 18,
         }
     }
     /// v15: `Analysis.eyes_open` / `aesthetic` / `cull_score`.
     const NEWEST_FIELDS: u32 = 15;
-    let newest = since(&Op::SetExported { id: crate::PhotoId(1), exported: None });
+    let map = lcc_develop::EmbeddedVignettingMap::from_ev([4, 4], [2, 2], None, Default::default(), &[0.0; 4]).unwrap();
+    let id = lcc_develop::VignettingMapId::of(&map);
+    let newest = since(&Op::AddVignettingMap {
+        id,
+        record: Box::new(crate::VignettingMapRecord { map, photo: None, added: String::new(), withdrawn: false }),
+    });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }
 

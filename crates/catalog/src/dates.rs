@@ -194,6 +194,16 @@ pub fn normalize_iso(s: &str) -> Option<String> {
     Some(out)
 }
 
+/// [`normalize_iso`], keeping what follows the seconds as typed: a fraction of a second and a UTC
+/// offset (`2026-07-10T08:47:46+01:00`), as an import from Exif keeps them. Edit Capture Time
+/// uses it so a corrected time can carry its zone. `None` if it isn't a valid date.
+pub fn normalize_iso_keeping_zone(s: &str) -> Option<String> {
+    let out = normalize_iso(s)?;
+    let s = s.trim();
+    let tail = s.get(tail_start(s)?..)?;
+    Some(format!("{out}{tail}"))
+}
+
 /// Granularity of the grid's date headers.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -419,17 +429,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
-    fn now_local_is_this_moment_with_its_offset() {
-        let before = chrono::Utc::now().timestamp();
-        let now = super::now_local();
-        let at = chrono::DateTime::parse_from_rfc3339(&now).unwrap();
-        assert!((at.timestamp() - before).abs() <= 5, "{now}");
-        assert_eq!(*at.offset(), *at.with_timezone(&chrono::Local).offset(), "{now}");
-        assert_eq!(super::instant(&now), Some(at.timestamp()));
-    }
-
-    #[test]
     fn date_from_filename_reads_common_names() {
         use super::date_from_filename as f;
         assert_eq!(f("IMG_20260921_143000.jpg").as_deref(), Some("2026-09-21T14:30:00"));
@@ -538,6 +537,11 @@ mod tests {
         assert_eq!(display_time("2022-03-30T22:11-05:00"), "March 30, 2022 at 10:11:00 PM");
         assert_eq!(display_time("2022-03-30T22:11Z"), "March 30, 2022 at 10:11:00 PM");
         assert_eq!(display_time("2022-03-30T22:11:11"), "March 30, 2022 at 10:11:11 PM");
+        // as the Info panel shows them: midnight is 12 AM, a date alone has no time, anything else is shown as it is
+        assert_eq!(display_time("2022-03-30T22:05:01.5-04:00"), "March 30, 2022 at 10:05:01 PM");
+        assert_eq!(display_time("2022-01-02T00:00:00"), "January 2, 2022 at 12:00:00 AM");
+        assert_eq!(display_time("2022-07-04"), "July 4, 2022");
+        assert_eq!(display_time("someday"), "someday");
     }
 
     #[test]

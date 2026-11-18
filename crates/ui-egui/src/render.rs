@@ -86,6 +86,8 @@ pub enum Slot {
     Hover,
     /// An import candidate's thumbnail in the import review dialog (by index).
     Import(u32),
+    /// A duplicate group member's thumbnail in the Find Duplicates window (by index).
+    Duplicates(u32),
     /// The second window's view of the active photo.
     Second,
     /// A tile of a zoomed view (see [`crate::region::TileCache`]): the pane it is shown in
@@ -2424,6 +2426,16 @@ impl Renderer {
         self.quick_tried.retain(|s, _| !matches!(s, Slot::Import(_)));
     }
 
+    /// Drop the Find Duplicates window's thumbnails (the window closed).
+    pub fn forget_duplicates(&mut self) {
+        self.pool.reprioritize(|s, p| if matches!(s, Slot::Duplicates(_)) { None } else { Some(p) });
+        self.queue.retain(|q| !matches!(q.slot, Slot::Duplicates(_)));
+        self.pending.retain(|s, _| !matches!(s, Slot::Duplicates(_)));
+        self.requests.retain(|s, _| !matches!(s, Slot::Duplicates(_)));
+        self.textures.retain(|s, _| !matches!(s, Slot::Duplicates(_)));
+        self.quick_tried.retain(|s, _| !matches!(s, Slot::Duplicates(_)));
+    }
+
     /// Drop thumbnails that aren't in `keep` (bounded memory for huge libraries), and queued
     /// thumbnail jobs for photos that scrolled out of `keep`.
     pub fn evict_thumbs(&mut self, keep: &std::collections::HashSet<PhotoId>, max: usize) {
@@ -3095,8 +3107,8 @@ mod thumbnail_tests {
         assert!(!app.renderer.job_for(Slot::Thumb(PhotoId(1)), thumb).on_screen);
     }
 
-    fn relink_destination() -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!("lc-render-relinked-{}-{}.nef", std::process::id(), lcc_preview::next_tick()));
+    fn relink_destination() -> lcc_testkit::TempFile {
+        let path = lcc_testkit::TempFile::new(&format!("lc-render-relinked-{}", lcc_preview::next_tick()), "replacement.nef");
         std::fs::write(&path, b"replacement source").unwrap();
         path
     }
@@ -3113,7 +3125,7 @@ mod thumbnail_tests {
             assert_eq!(submitted, slot);
             let result = job.run();
             assert!(result.rendered.is_err(), "the old request has already failed");
-            app.session.execute("photo.relink", &serde_json::json!({"id": 1, "path": replacement})).unwrap();
+            app.session.execute("photo.relink", &serde_json::json!({"id": 1, "path": replacement.path()})).unwrap();
             assert!(
                 matches!(&app.session.catalog.photo(PhotoId(1)).unwrap().source, Source::File { path } if path.ends_with(replacement.file_name().unwrap().to_str().unwrap()))
             );
@@ -3138,7 +3150,7 @@ mod thumbnail_tests {
         app.renderer.request(slot, old_job, 100);
         let (_, old_job) = take_job(&work);
         let old_result = old_job.run();
-        app.session.execute("photo.relink", &serde_json::json!({"id": 1, "path": replacement})).unwrap();
+        app.session.execute("photo.relink", &serde_json::json!({"id": 1, "path": replacement.path()})).unwrap();
         let new_job = app.session.render_job(PhotoId(1), 64, 64, false, true).unwrap();
         app.renderer.request(slot, new_job, 100);
         let (_, new_job) = take_job(&work);
@@ -3309,7 +3321,7 @@ mod thumbnail_tests {
 
     #[test]
     fn resizing_the_disk_cache_keeps_textures_and_skips_rebuilds() {
-        let lib = std::env::temp_dir().join(format!("lc-ui-thumb-resize-{}", std::process::id()));
+        let lib = lcc_testkit::TempDir::new("lc-ui-thumb-resize");
         let _ = std::fs::remove_dir_all(&lib);
         let mut s = Session::new().with_fs();
         s.open_library(&lib, false).unwrap();
@@ -4424,6 +4436,7 @@ mod extended_linear_tests {
             display_fit: None,
             hdr_texels: None,
             superseded: None,
+            discard_source: false,
             latest: None,
             kept: None,
             placement: None,

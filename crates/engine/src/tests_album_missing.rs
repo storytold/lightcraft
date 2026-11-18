@@ -81,16 +81,8 @@ fn toggling_gone_photos_leaves_the_target_album_and_redo_alone() {
     assert!(r["added"].is_null() && r["toggled"] == 0, "{r}");
     assert_eq!(s.catalog.album(a).unwrap().photos, vec![photo]);
     assert_eq!((s.undo.len(), s.redo.len()), (undo, 1));
-}
 
-#[test]
-fn adding_photos_that_are_all_there_already_records_nothing() {
-    let mut s = Session::with_demo();
-    let photo = s.catalog.photos().next().unwrap().id;
-    let a = album(&mut s, "Trip");
-    s.execute("album.addPhotos", &json!({"id": a.0, "ids": [photo.0]})).unwrap();
-    leave_redo(&mut s, photo);
-    let undo = s.undo.len();
+    // adding photos that are all there already records nothing
     let r = s.execute("album.addPhotos", &json!({"id": a.0, "ids": [photo.0]})).unwrap();
     assert_eq!(r["added"], 0, "{r}");
     assert_eq!((s.undo.len(), s.redo.len()), (undo, 1), "no step, redo kept");
@@ -119,14 +111,10 @@ fn a_normal_add_or_toggle_is_one_step_and_one_undo_restores_it() {
     assert!(s.catalog.album(a).unwrap().photos.is_empty());
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(s.catalog.album(a).unwrap().photos, vec![photo]);
-}
 
-#[test]
-fn a_toggle_counts_only_the_photos_it_added() {
-    let mut s = Session::with_demo();
+    // a toggle counts only the photos it added
     let ids: Vec<PhotoId> = s.catalog.photos().take(3).map(|p| p.id).collect();
-    let a = album(&mut s, "Trip");
-    s.execute("album.setTarget", &json!({"id": a.0})).unwrap();
+    assert!(ids.contains(&photo));
     s.execute("album.addPhotos", &json!({"id": a.0, "ids": [ids[0].0, ids[1].0]})).unwrap();
     let all: Vec<u64> = ids.iter().map(|p| p.0).collect();
     let r = s.execute("album.toggleTarget", &json!({"ids": all})).unwrap();

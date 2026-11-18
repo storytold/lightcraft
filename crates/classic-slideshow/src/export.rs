@@ -473,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn exports_a_demo_library_as_jpegs() {
+    fn exports_a_demo_library_as_jpegs_and_refuses_bad_requests() {
         let mut session = Session::with_demo();
         let ids: Vec<PhotoId> = session.catalog.photos().take(2).map(|p| p.id).collect();
         assert_eq!(ids.len(), 2);
@@ -492,27 +492,17 @@ mod tests {
         }
         assert!(files[0].ends_with("Show-001.jpg"));
         let _ = std::fs::remove_dir_all(dir);
-    }
 
-    #[test]
-    fn exports_a_pdf_with_a_page_per_frame() {
-        let mut session = Session::with_demo();
-        let ids: Vec<PhotoId> = session.catalog.photos().take(2).map(|p| p.id).collect();
-        let mut s = Settings::default();
-        s.titles.ending.enabled = true;
-        s.titles.ending.text = "The end".into();
-        let dir = std::env::temp_dir().join(format!("lcc-slideshow-pdf-{}", std::process::id()));
-        let p = prepare_pdf(&mut session, &ids, &s, 320, 180, 85, &dir, "Show", "Plate").unwrap();
-        assert_eq!(p.len(), 3);
-        let files = std::thread::spawn(move || p.run(&mut |_, _| true)).join().unwrap().unwrap();
-        assert_eq!(files.len(), 1);
-        assert!(files[0].ends_with("Show.pdf"));
-        let b = std::fs::read(&files[0]).unwrap();
-        assert!(b.starts_with(b"%PDF-"));
-        let text = String::from_utf8_lossy(&b);
-        assert!(text.contains("/Count 3"), "three pages");
-        assert!(text.contains("/MediaBox [0 0 240 135]"), "320×180 px at 96 ppi");
-        let _ = std::fs::remove_dir_all(dir);
+        // bad requests are errors
+        let s = Settings::default();
+        let dir = std::env::temp_dir();
+        assert!(prepare(&mut session, &[], &s, 320, 180, 85, &dir, "x", "").is_err(), "no photos");
+        let id = ids[0];
+        assert!(prepare(&mut session, &[id], &s, 1, 180, 85, &dir, "x", "").is_err(), "a 1 px slide");
+        assert!(prepare(&mut session, &[PhotoId(u64::MAX)], &s, 320, 180, 85, &dir, "x", "").is_err(), "an unknown photo");
+        let mut bad = s.clone();
+        bad.backdrop.image = "/nonexistent/backdrop.png".into();
+        assert!(prepare(&mut session, &[id], &bad, 320, 180, 85, &dir, "x", "").is_err(), "a missing backdrop");
     }
 
     #[test]
@@ -558,19 +548,5 @@ mod tests {
         assert!(VideoFormat::parse("avi").is_err());
         assert_eq!(VideoFormat::parse("ProRes").unwrap(), VideoFormat::ProRes);
         let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn bad_requests_are_errors() {
-        let mut session = Session::with_demo();
-        let s = Settings::default();
-        let dir = std::env::temp_dir();
-        assert!(prepare(&mut session, &[], &s, 320, 180, 85, &dir, "x", "").is_err());
-        let id = session.catalog.photos().next().map(|p| p.id).unwrap();
-        assert!(prepare(&mut session, &[id], &s, 1, 180, 85, &dir, "x", "").is_err());
-        assert!(prepare(&mut session, &[PhotoId(u64::MAX)], &s, 320, 180, 85, &dir, "x", "").is_err());
-        let mut bad = s.clone();
-        bad.backdrop.image = "/nonexistent/backdrop.png".into();
-        assert!(prepare(&mut session, &[id], &bad, 320, 180, 85, &dir, "x", "").is_err());
     }
 }

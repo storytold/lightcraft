@@ -42,16 +42,16 @@ On ARM PCs the files say `arm64` instead of `x64`.
 
 ### macOS
 
-The app's disk image holds only the app: download **`{{cli_binary}}-26.43.7-macos-universal.zip`** from the same
-release too (signed and notarized, for Apple silicon and Intel). Double-click it in Finder to unzip, then open
-**Terminal** (Applications ▸ Utilities) and run it from that folder:
+The tool is inside the app (`{{binary}}-<version>-macos-arm64.dmg`, or `-macos-x64.dmg` on Intel; earlier releases had it as a separate
+`{{cli_binary}}-<version>-macos-universal.zip`). Open the app once first, so macOS knows you allowed it (the
+manual's Install page has the steps), then open **Terminal** (Applications ▸ Utilities) and run it from there:
 
 ```sh
-cd ~/Downloads
-./{{cli_binary}} --help
+/Applications/{{app}}.app/Contents/MacOS/{{cli_binary}} --help
 ```
 
-To run it from anywhere, move it onto your PATH once: `sudo mv ~/Downloads/{{cli_binary}} /usr/local/bin/`.
+To type just `{{cli_binary}}`, link it onto your PATH once (the Install page has the details):
+`ln -sf /Applications/{{app}}.app/Contents/MacOS/{{cli_binary}} ~/.local/bin/{{cli_binary}}`.
 
 ### Linux
 

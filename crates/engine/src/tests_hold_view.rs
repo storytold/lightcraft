@@ -66,17 +66,6 @@ fn a_keyword_given_in_a_held_view_leaves_the_photo_and_the_order_where_they_are(
 }
 
 #[test]
-fn a_view_that_is_not_held_follows_every_edit_as_before() {
-    let mut s = unkeyworded();
-    assert!(!s.hold_view, "off unless asked for");
-    let before = s.visible_cloned();
-    keyword(&mut s, before[3]);
-    let after = s.visible_cloned();
-    assert!(!after.contains(&before[3]), "the photo leaves at once");
-    assert_eq!(after, before.iter().copied().filter(|id| *id != before[3]).collect::<Vec<_>>(), "the others keep their order");
-}
-
-#[test]
 fn a_held_view_still_takes_in_what_starts_matching_and_lets_go_of_what_is_deleted() {
     let mut s = unkeyworded();
     let all = s.visible_cloned();
@@ -164,17 +153,6 @@ fn picks_and_the_filter_bar_hold_too_and_an_album_lets_go_of_what_is_taken_out_o
 }
 
 #[test]
-fn turning_the_hold_off_lets_go_at_once() {
-    let mut s = unkeyworded();
-    hold(&mut s);
-    let before = s.visible_cloned();
-    keyword(&mut s, before[4]);
-    assert!(s.visible_cloned().contains(&before[4]));
-    assert_eq!(s.execute("library.holdView", &json!({})).unwrap()["hold"], false, "toggles without `on`");
-    assert!(!s.visible_cloned().contains(&before[4]));
-}
-
-#[test]
 fn changing_the_rules_of_the_smart_album_shown_is_another_view() {
     let mut s = unkeyworded();
     hold(&mut s);
@@ -205,8 +183,9 @@ fn a_source_with_no_filter_over_it_holds_nothing() {
 }
 
 #[test]
-fn asking_for_the_state_it_has_changes_nothing_and_a_word_is_not_a_bool() {
+fn holding_again_changes_nothing_a_word_is_not_a_bool_and_turning_it_off_lets_go_at_once() {
     let mut s = unkeyworded();
+    assert!(!s.hold_view, "off unless asked for");
     hold(&mut s);
     let before = s.visible_cloned();
     keyword(&mut s, before[2]);
@@ -214,6 +193,15 @@ fn asking_for_the_state_it_has_changes_nothing_and_a_word_is_not_a_bool() {
     assert!(s.visible_cloned().contains(&before[2]), "on, asked for again: the held photos stay");
     assert!(s.execute("library.holdView", &json!({"on": "false"})).is_err());
     assert!(s.hold_view, "a refused call changes nothing");
+    // turning the hold off lets go at once
+    assert_eq!(s.execute("library.holdView", &json!({})).unwrap()["hold"], false, "toggles without `on`");
+    assert!(!s.visible_cloned().contains(&before[2]));
+    // and a view that is not held follows every edit as before
+    let shown = s.visible_cloned();
+    keyword(&mut s, shown[3]);
+    let after = s.visible_cloned();
+    assert!(!after.contains(&shown[3]), "the photo leaves at once");
+    assert_eq!(after, shown.iter().copied().filter(|id| *id != shown[3]).collect::<Vec<_>>(), "the others keep their order");
 }
 
 #[test]

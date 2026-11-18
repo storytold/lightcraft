@@ -133,6 +133,7 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("cropped", "Cropped", Kind::Bool),
     ("treatment", "Treatment", Kind::Choice(&[("color", "In Color"), ("monochrome", "Black & White")])),
     ("processVersion", "Process Version", Kind::Number),
+    ("vignettingReference", "Vignetting Reference", Kind::Choice(&[("reference", "Reference"), ("none", "Not a Reference")])),
     // Assisted Culling
     ("sharpness", "Focus (assisted culling)", Kind::Number),
     ("bestOfGroup", "Best of Similar Shots", Kind::Bool),
@@ -157,7 +158,7 @@ pub const FIELD_GROUPS: &[(&str, &[&str])] = &[
     ("Camera Info", &["camera", "lens", "focalLength", "aperture", "shutterSpeed", "iso", "flash", "exposureBias", "cameraSerial"]),
     ("Location", &["location", "sublocation", "city", "state", "country", "countryCode", "hasGps"]),
     ("Size", &["longEdge", "shortEdge", "width", "height", "aspect", "megapixels"]),
-    ("Develop", &["edited", "cropped", "treatment", "processVersion"]),
+    ("Develop", &["edited", "cropped", "treatment", "processVersion", "vignettingReference"]),
     ("Assisted Culling", &["sharpness", "bestOfGroup", "clipped", "eyesOpen", "aesthetic", "cullScore", "suggestedStars"]),
 ];
 
@@ -1106,6 +1107,8 @@ impl Rule {
             "captureDate" => date_op(op, p.captured.as_deref().map(crate::dates::capture_start).as_deref(), value),
             "importDate" => date_op(op, Some(&p.imported), value),
             "editDate" => date_op(op, p.edited.as_deref(), value),
+            // (the shown shutter text, not the exact time kept for export: a rule matches the value the photo
+            // shows, `1/3` or `0.3571`, at every op, including `is` and the edges of a range)
             "shutterSpeed" => num_op(op, crate::parse_shutter_seconds(&m.shutter), &shutter_value(value)),
             "iso" => num_op(op, m.iso.map(|v| v as f64), value),
             "flash" => yes(m.flash.unwrap_or(false)),
@@ -1123,6 +1126,7 @@ impl Rule {
                 num_op(op, Some(w * h / 1e6), value)
             }
             "processVersion" => num_op(op, Some(f64::from(p.develop.process.0)), value),
+            "vignettingReference" => crate::query::vignetting_reference_is(cat, p.id, &want) == (op == "is"),
             "sharpness" => num_op(op, p.analysis.map(|a| a.sharpness as f64), value),
             "bestOfGroup" => yes(p.analysis.is_some_and(|a| a.best || a.group.is_none())),
             "clipped" => num_op(op, p.analysis.map(|a| a.clipped as f64), value),
@@ -1578,6 +1582,24 @@ mod tests {
         assert!(m(&p, "faceCount", "gte", json!(3)));
         assert_eq!(field_group("person"), Some("Keywords & People"));
         assert_eq!(field_group("faceCount"), Some("Keywords & People"));
+    }
+
+    /// A shutter-speed rule matches the value the photo shows, not the exact time kept for export (upstream #1692).
+    #[test]
+    fn shutter_speed_rules_match_the_shown_value() {
+        let cat = Catalog::new();
+        let mut p = photo(1);
+        let m = |p: &Photo, op: &str, value: serde_json::Value| {
+            rs(json!({"rules": [{"field": "shutterSpeed", "op": op, "value": value}]})).matches(p, &cat)
+        };
+        p.meta.exposure_time = Some(1.0 / 2.8);
+        p.meta.shutter = "0.3571".into();
+        assert!(m(&p, "is", json!("0.3571")) && !m(&p, "isNot", json!("0.3571")), "1/2.8 s is the 0.3571 it shows");
+        assert!(m(&p, "lte", json!("0.3571")) && m(&p, "gte", json!("0.3571")));
+        p.meta.exposure_time = Some(3333.0 / 10000.0);
+        p.meta.shutter = "1/3".into();
+        assert!(m(&p, "is", json!("1/3")) && !m(&p, "isNot", json!("1/3")), "3333/10000 s is the 1/3 it shows");
+        assert!(m(&p, "gte", json!("1/3")) && m(&p, "lte", json!("1/3")) && !m(&p, "lt", json!("1/3")));
     }
 
     /// Shutter Speed compares exposure times in seconds, written as the camera shows them: a

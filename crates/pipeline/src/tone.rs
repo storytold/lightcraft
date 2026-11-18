@@ -403,6 +403,97 @@ impl ToneMap {
     }
 }
 
+/// Entries per RGB Contrast lookup table (matches CURVE_LUT_N for cache-friendly evaluation).
+pub const RGB_CONTRAST_N: usize = 1024;
+
+/// Per-channel display-linear transfer curve for [`lcc_develop::ContrastMode::Rgb`] (issue #839):
+/// maps a channel value after the contrast/blacks-neutral base tone map (`base`) through the
+/// Contrast and Blacks response of `full`, so neutral pixels (`R = G = B`) match `full` while
+/// chromatic pixels get RGB-curve contrast and shadow depth across channels.
+///
+/// Uses a square-root parameterization ($u = \sqrt{v / \text{peak}} \in [0, 1]$) over display-linear
+/// values to concentrate table resolution where shadow detail and black-point shifts live without
+/// computing expensive transcendentals (`log2`) in the per-pixel loop.
+#[derive(Clone, Debug)]
+pub struct RgbContrast {
+    lut: Vec<f32>,
+    zero: f32,
+    peak: f32,
+    inv_peak: f32,
+}
+
+impl RgbContrast {
+    pub fn new(base: &ToneMap, full: &ToneMap, blacks: f64, peak: f32) -> Self {
+        let peak = if peak.is_finite() && peak > 0.0 { peak.max(1.0) } else { 1.0 };
+        let inv_peak = 1.0 / peak;
+        let zero = if blacks > 0.0 { full.lut.first().copied().unwrap_or(0.0) } else { 0.0 };
+        let u0 = base.lut.first().copied().unwrap_or(0.0);
+        let w0 = full.lut.first().copied().unwrap_or(0.0);
+        let u_max = base.lut.last().copied().unwrap_or(peak);
+        // Stop at the first knot where `base` reaches its ceiling so a flat highlight plateau
+        // in `base` never creates a step discontinuity.
+        let k_top = base.lut.iter().position(|&u| u >= u_max - 1e-6).unwrap_or(LUT_N - 1).clamp(1, LUT_N - 1);
+        let u_top = base.lut.get(k_top).copied().unwrap_or(u_max);
+        let w_top = full.lut.get(k_top).copied().unwrap_or(u_max);
+        let active_u = base.lut.get(..=k_top).unwrap_or(&base.lut);
+        let lut = (0..RGB_CONTRAST_N)
+            .map(|j| {
+                let u = j as f32 / (RGB_CONTRAST_N - 1) as f32;
+                let v = u * u * peak;
+                if v <= u0 {
+                    if u0 > 1e-12 { zero + (v / u0).clamp(0.0, 1.0) * (w0 - zero) } else { w0 }
+                } else if v >= u_top {
+                    w_top + (v - u_top)
+                } else {
+                    let idx = active_u.partition_point(|&kn| kn <= v);
+                    let k = idx.saturating_sub(1).min(k_top - 1);
+                    let ua = base.lut.get(k).copied().unwrap_or(0.0);
+                    let ub = base.lut.get(k + 1).copied().unwrap_or(ua);
+                    let wa = full.lut.get(k).copied().unwrap_or(0.0);
+                    let wb = full.lut.get(k + 1).copied().unwrap_or(wa);
+                    let t = if ub > ua { ((v - ua) / (ub - ua)).clamp(0.0, 1.0) } else { 0.0 };
+                    wa + t * (wb - wa)
+                }
+            })
+            .collect();
+        Self { lut: monotone(lut), zero, peak, inv_peak }
+    }
+
+    /// The table (`RGB_CONTRAST_N` entries, see [`RgbContrast::apply`]).
+    pub fn lut(&self) -> &[f32] {
+        &self.lut
+    }
+
+    /// Output at channel value `0.0` (0 unless positive Blacks lift the black point).
+    pub fn zero(&self) -> f32 {
+        self.zero
+    }
+
+    /// Display peak this table covers.
+    pub fn peak(&self) -> f32 {
+        self.peak
+    }
+
+    /// Display-linear channel value before Contrast/Blacks → display-linear channel value after.
+    #[inline]
+    pub fn apply(&self, v: f32) -> f32 {
+        if v <= 0.0 || v.is_nan() {
+            return self.zero;
+        }
+        if v >= self.peak {
+            let last = self.lut.last().copied().unwrap_or(self.peak);
+            return last + (v - self.peak);
+        }
+        let u = (v * self.inv_peak).sqrt();
+        let f = u * (RGB_CONTRAST_N - 1) as f32;
+        let i = (f as usize).min(RGB_CONTRAST_N - 2);
+        let t = f - i as f32;
+        let a = self.lut.get(i).copied().unwrap_or(self.zero);
+        let b = self.lut.get(i + 1).copied().unwrap_or(a);
+        a + (b - a) * t
+    }
+}
+
 /// Gamma-space positions of the knots in [`WHITES_UP`] and the other whites/blacks tables.
 const WB_X: [f32; 12] = [0.0, 0.075, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.925, 1.0];
 /// Shift of the display value (gamma 2.2) at each knot for a slider at +100 / −100, fitted to the
@@ -452,6 +543,14 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Independently computed LUTs can differ by rounding in `powf` on the same platform (upstream #4221).
+    fn assert_same_lut(actual: &[f32], expected: &[f32]) {
+        assert_eq!(actual.len(), expected.len());
+        for (i, (&a, &b)) in actual.iter().zip(expected).enumerate() {
+            assert!(a.is_finite() && b.is_finite() && (a - b).abs() <= 1e-6, "LUT[{i}]: {a} vs {b}");
+        }
+    }
 
     /// A camera curve: 32 knots of `1 − e^(−2x)` from 0.004, each 1.18 times the last.
     fn knots() -> [[f32; 2]; 32] {
@@ -626,7 +725,7 @@ mod tests {
     #[test]
     fn hdr_is_sdr_at_peak_one_and_reaches_peak() {
         for (c, w, b) in [(0.0, 0.0, 0.0), (100.0, 100.0, -100.0), (-100.0, -100.0, 100.0), (50.0, -30.0, -40.0)] {
-            assert_eq!(ToneMap::hdr(c, w, b, 1.0).lut(), ToneMap::new(c, w, b).lut());
+            assert_same_lut(ToneMap::hdr(c, w, b, 1.0).lut(), ToneMap::new(c, w, b).lut());
             for peak in [2.0f32, 8.0, 32.0] {
                 let sdr = ToneMap::new(c, w, b);
                 let t = ToneMap::hdr(c, w, b, peak);
@@ -648,12 +747,12 @@ mod tests {
             }
         }
         // a broken peak falls back to SDR
-        assert_eq!(ToneMap::hdr(0.0, 0.0, 0.0, f32::NAN).lut(), ToneMap::new(0.0, 0.0, 0.0).lut());
+        assert_same_lut(ToneMap::hdr(0.0, 0.0, 0.0, f32::NAN).lut(), ToneMap::new(0.0, 0.0, 0.0).lut());
     }
 
     #[test]
     fn display_hdr_passes_hdr_sources_and_keeps_sdr() {
-        assert_eq!(ToneMap::display_hdr(20.0, 10.0, -5.0, 1.0).lut(), ToneMap::display(20.0, 10.0, -5.0).lut());
+        assert_same_lut(ToneMap::display_hdr(20.0, 10.0, -5.0, 1.0).lut(), ToneMap::display(20.0, 10.0, -5.0).lut());
         let t = ToneMap::display_hdr(0.0, 0.0, 0.0, 8.0);
         for i in 1..=90 {
             let y = i as f32 / 100.0;
@@ -720,6 +819,55 @@ mod tests {
             let y = GREY * 2f32.powf(ev);
             let (a, b) = (camera.apply(y), default.apply(y));
             assert!((a - b).abs() <= 0.01 * b.max(0.01), "{ev} EV: {a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn rgb_contrast_matches_full_tone_map_on_neutral_values_and_deepens_channel_separation() {
+        for (c, w, b, peak) in [(50.0, 20.0, -40.0, 1.0), (-45.0, -15.0, 35.0, 1.0), (60.0, 10.0, -30.0, 4.0)] {
+            let base = ToneMap::hdr(0.0, w, 0.0, peak);
+            let full = ToneMap::hdr(c, w, b, peak);
+            let rc = RgbContrast::new(&base, &full, b, peak);
+            let mut prev = -1.0f32;
+            for ev in [-8.0f32, -5.0, -3.0, -1.5, -0.5, 0.0, 0.5, 1.2, 2.0] {
+                let y = GREY * 2f32.powf(ev);
+                let u = base.apply(y);
+                let got = rc.apply(u);
+                let want = full.apply(y);
+                assert!(got >= prev - 1e-5, "{c} {w} {b} at {ev} EV: {got} < {prev}");
+                assert!((got - want).abs() < 2e-3, "{c} {w} {b} at {ev} EV: got {got}, want {want}");
+                prev = got;
+            }
+            if b > 0.0 {
+                assert!(rc.apply(0.0) > 0.0, "positive blacks lift a zero channel");
+            } else {
+                assert_eq!(rc.apply(0.0), 0.0);
+            }
+        }
+        // Chromatic shadow/midtone pixel: positive Contrast + negative Blacks widens the R:B ratio
+        // compared to uniform luminance scaling.
+        let base = ToneMap::new(0.0, 0.0, 0.0);
+        let full = ToneMap::new(60.0, 0.0, -50.0);
+        let rc = RgbContrast::new(&base, &full, -50.0, 1.0);
+        let rgb = [0.28f32, 0.14, 0.03];
+        let yl = 0.2627 * rgb[0] + 0.6780 * rgb[1] + 0.0593 * rgb[2];
+        let o_lum = full.apply(yl);
+        let d_lum = rgb.map(|v| v * o_lum / yl);
+        let o_base = base.apply(yl);
+        let d_rgb = rgb.map(|v| rc.apply(v * o_base / yl));
+        assert!(d_rgb[0] > d_lum[0] && d_rgb[2] < d_lum[2], "RGB contrast separates bright and dark channels: rgb={d_rgb:?} vs lum={d_lum:?}");
+    }
+
+    #[test]
+    fn rgb_contrast_handles_hostile_inputs_without_panicking_or_nans() {
+        let base = ToneMap::new(0.0, 0.0, 0.0);
+        let full = ToneMap::new(30.0, 0.0, 20.0);
+        for peak in [0.0f32, -1.0, f32::NAN, f32::INFINITY, 1.0] {
+            let rc = RgbContrast::new(&base, &full, f64::NAN, peak);
+            assert!(rc.apply(f32::NAN).is_finite());
+            assert!(rc.apply(f32::NEG_INFINITY).is_finite());
+            assert!(rc.apply(-0.5).is_finite());
+            assert!(rc.apply(0.5).is_finite());
         }
     }
 }

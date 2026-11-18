@@ -546,6 +546,15 @@ mod tests {
         assert_eq!(matches(&c, &q()), vec![PhotoId(1), PhotoId(2)]);
         assert!(q().is_empty());
         assert_eq!(q().to_filter().unwrap(), Filter::default());
+        // categories with nothing set add nothing
+        let mut query = q();
+        query.file = Some(FileCategory::default());
+        query.photograph = Some(PhotographCategory::default());
+        query.media = Some(MediaCategory::default());
+        assert!(query.is_empty());
+        assert_eq!(query.to_filter().unwrap(), Filter::default());
+        // an unknown field is a refused query, not a silently ignored one
+        assert!(serde_json::from_value::<AdvancedSearch>(serde_json::json!({"words": "x", "magic": true})).is_err());
     }
 
     #[test]
@@ -670,29 +679,5 @@ mod tests {
         let mut query = q();
         query.media = Some(MediaCategory { frame_rate: Some(24.0), ..Default::default() });
         assert!(query.to_filter().unwrap_err().contains("frame rate"));
-    }
-
-    #[test]
-    fn a_query_round_trips_through_json() {
-        let mut query = q();
-        query.words = "harbour".into();
-        query.file =
-            Some(FileCategory { kind: Some("image".into()), album: Some(AlbumId(3)), keywords: vec!["travel".into()], ..Default::default() });
-        let json = serde_json::to_value(&query).unwrap();
-        assert_eq!(json["file"]["album"], 3, "AlbumId serializes as a plain number");
-        let back: AdvancedSearch = serde_json::from_value(json).unwrap();
-        assert_eq!(back, query);
-        // an unknown field is a refused query, not a silently ignored one
-        assert!(serde_json::from_value::<AdvancedSearch>(serde_json::json!({"words": "x", "magic": true})).is_err());
-    }
-
-    #[test]
-    fn empty_categories_add_nothing() {
-        let mut query = q();
-        query.file = Some(FileCategory::default());
-        query.photograph = Some(PhotographCategory::default());
-        query.media = Some(MediaCategory::default());
-        assert!(query.is_empty());
-        assert_eq!(query.to_filter().unwrap(), Filter::default());
     }
 }

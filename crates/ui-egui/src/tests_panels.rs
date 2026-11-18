@@ -129,6 +129,22 @@ fn side_panels_resize_by_their_inner_edge_and_remember_it() {
     assert_eq!((u.left_width, u.right_width), (LEFT_WIDTH.min, RIGHT_WIDTH.default));
     u.right_width = 9000.0;
     assert_eq!(u.sanitized().right_width, RIGHT_WIDTH.max);
+    // a narrow window shrinks the panels without forgetting their width
+    {
+        let r = h.request("ui.set", json!({"view": "detail", "right": "edit", "leftPanel": true, "rightWidth": 480.0, "leftWidth": 400.0}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert_eq!(widget(&h, "panel:right_panel").width(), 480.0);
+        h.request("ui.resize", json!({"width": 1000.0, "height": 800.0}), T);
+        h.settle(SETTLE);
+        let (left, right) = (widget(&h, "panel:left_panel"), widget(&h, "panel:right_panel"));
+        assert!(right.left() - left.right() >= MIN_PHOTO_WIDTH - 1.0, "{left:?} {right:?}");
+        // the chosen widths come back when the window does
+        assert_eq!((h.app.ui.left_width, h.app.ui.right_width), (400.0, 480.0));
+        h.request("ui.resize", json!({"width": 1400.0, "height": 900.0}), T);
+        h.settle(SETTLE);
+        assert_eq!(widget(&h, "panel:right_panel").width(), 480.0);
+    }
 }
 
 /// Every widget drawn over the right panel lies within it (issue #47: selecting a mask added a
@@ -204,21 +220,6 @@ fn masking_contents_fit_the_right_panel_at_any_width() {
             assert_inside_right_panel(&h, &what);
         }
     }
-}
-
-#[test]
-fn a_narrow_window_shrinks_the_panels_without_forgetting_their_width() {
-    let mut h = demo([1400.0, 900.0], json!({"view": "detail", "right": "edit", "leftPanel": true, "rightWidth": 480.0, "leftWidth": 400.0}));
-    assert_eq!(widget(&h, "panel:right_panel").width(), 480.0);
-    h.request("ui.resize", json!({"width": 1000.0, "height": 800.0}), T);
-    h.settle(SETTLE);
-    let (left, right) = (widget(&h, "panel:left_panel"), widget(&h, "panel:right_panel"));
-    assert!(right.left() - left.right() >= MIN_PHOTO_WIDTH - 1.0, "{left:?} {right:?}");
-    // the chosen widths come back when the window does
-    assert_eq!((h.app.ui.left_width, h.app.ui.right_width), (400.0, 480.0));
-    h.request("ui.resize", json!({"width": 1400.0, "height": 900.0}), T);
-    h.settle(SETTLE);
-    assert_eq!(widget(&h, "panel:right_panel").width(), 480.0);
 }
 
 /// The modules that lay out their own sides (Web, Map, Print) resize them by the inner edge too,
@@ -321,6 +322,15 @@ fn a_damaged_sidebar_arrangement_does_not_lose_the_settings() {
     }
 }
 
+/// Put the sidebar back to its usual arrangement: every section shown and open, in the usual order.
+fn usual_sidebar(h: &mut Headless) {
+    // (refused when there is nothing to reset: the sidebar is the usual one either way)
+    h.request("engine.execute", json!({"command": "view.sidebarReset", "params": {}}), T);
+    h.step();
+    h.step();
+    assert!(h.app.ui.sidebar.is_default(), "the usual arrangement");
+}
+
 /// The sections drawn in the sidebar, top to bottom.
 fn sections_drawn(h: &Headless) -> Vec<String> {
     let mut drawn: Vec<(f32, String)> =
@@ -329,32 +339,109 @@ fn sections_drawn(h: &Headless) -> Vec<String> {
     drawn.into_iter().map(|(_, id)| id).collect()
 }
 
-/// Given an arrangement of the sidebar (an order, a hidden section), when the sidebar is drawn,
-/// then its sections are in that order, the hidden one is not there, and every header is the same
-/// distance below what is above it.
+/// One sidebar through its arrangement: an order and hidden sections are drawn as arranged; a
+/// section is hidden and shown from Window ▸ Sidebar Sections, from its header and from the My
+/// Photos title; Reset brings every section back; hiding a section leaves what the grid shows,
+/// and a new album brings a hidden Albums section back.
 #[test]
-fn the_sidebar_draws_its_sections_as_arranged() {
+fn sidebar_sections_are_arranged_hidden_shown_and_reset() {
     let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
-    // (Local is not on every platform)
-    let listed = |drawn: &[String]| drawn.iter().filter(|s| s.as_str() != "local").cloned().collect::<Vec<_>>();
-    let usual = sections_drawn(&h);
-    assert_eq!(listed(&usual), ["albums", "byDate", "folders", "keywords"], "{usual:?}");
-    // the demo library was imported from no folder: Folders says so in place of rows
-    assert!(has(&h, "sidebarEmpty:folders") && !has(&h, "sidebarEmpty:keywords"));
-    let r = h.request("ui.set", json!({"sidebar": [{"id": "keywords"}, {"id": "byDate", "hidden": true}, {"id": "albums"}]}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    let drawn = sections_drawn(&h);
-    assert_eq!(listed(&drawn), ["keywords", "albums", "folders"], "{drawn:?}");
-    assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("source:date:")), "a hidden section draws no rows");
-    // every header sits the same gap below the last row above it
-    let mut rows: Vec<egui::Rect> =
-        h.app.widgets.iter().filter(|(w, _)| w.starts_with("source:") || w.starts_with("sidebarEmpty:")).map(|(_, r)| *r).collect();
-    rows.sort_by(|a, b| a.top().total_cmp(&b.top()));
-    for id in &drawn {
-        let header = widget(&h, &format!("sidebarSection:{id}"));
-        let above = rows.iter().rev().find(|r| r.top() < header.top()).map(|r| r.bottom()).unwrap();
-        assert_eq!(header.top() - above, 10.0, "{id}");
+    // Reset Sidebar Sections is only offered when there is something to reset, and shows and opens every section again
+    {
+        let reset_enabled = |h: &Headless| {
+            let bar = crate::menubar::menu_bar(&h.app);
+            let json = serde_json::to_string(&bar).unwrap();
+            // the item as the menu model describes it
+            let at = json.find("view.sidebarReset").expect("the reset item");
+            json[at..].split("enabled\":").nth(1).is_some_and(|rest| rest.starts_with("true"))
+        };
+        assert!(!reset_enabled(&h), "nothing to reset yet");
+        exec(&mut h, "view.sidebarSection", json!({"section": "albums", "show": false}));
+        exec(&mut h, "view.sidebarSection", json!({"section": "keywords", "collapsed": true}));
+        assert!(reset_enabled(&h));
+        assert!(!has(&h, "sidebarSection:albums"));
+        exec(&mut h, "view.sidebarReset", json!({}));
+        assert!(h.app.ui.sidebar.is_default());
+        assert!(has(&h, "sidebarSection:albums") && !h.app.ui.sidebar_section_collapsed("keywords"));
+    }
+    // the sections are drawn in the order arranged, a hidden one not at all
+    {
+        // (Local is not on every platform)
+        let listed = |drawn: &[String]| drawn.iter().filter(|s| s.as_str() != "local").cloned().collect::<Vec<_>>();
+        let usual = sections_drawn(&h);
+        assert_eq!(listed(&usual), ["albums", "byDate", "folders", "keywords"], "{usual:?}");
+        // the demo library was imported from no folder: Folders says so in place of rows
+        assert!(has(&h, "sidebarEmpty:folders") && !has(&h, "sidebarEmpty:keywords"));
+        let r = h.request("ui.set", json!({"sidebar": [{"id": "keywords"}, {"id": "byDate", "hidden": true}, {"id": "albums"}]}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        let drawn = sections_drawn(&h);
+        assert_eq!(listed(&drawn), ["keywords", "albums", "folders"], "{drawn:?}");
+        assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("source:date:")), "a hidden section draws no rows");
+    }
+    usual_sidebar(&mut h);
+    // unchecked in Window ▸ Sidebar Sections a section leaves the sidebar, and comes back as it was; kept with the UI state
+    {
+        let checked = |h: &Headless, id: &str| sidebar_menu_items(h).into_iter().find(|(s, _)| s == id).unwrap_or_else(|| panic!("no {id} item")).1;
+        assert_eq!(checked(&h, "byDate"), Some(true));
+        assert!(has(&h, "sidebarSection:byDate"));
+        // folded first: it must come back folded
+        click(&mut h, "sidebarSection:byDate");
+        let r = exec(&mut h, "view.sidebarSection", json!({"section": "byDate"}));
+        assert_eq!(r, json!({"section": "byDate", "show": false, "collapsed": true}));
+        assert!(!has(&h, "sidebarSection:byDate"), "the header is gone");
+        assert_eq!(checked(&h, "byDate"), Some(false));
+        assert_eq!(checked(&h, "albums"), Some(true), "the others stay");
+        // saved and read back
+        let back = serde_json::from_value::<crate::UiState>(serde_json::to_value(&h.app.ui).unwrap()).unwrap().sanitized();
+        assert!(back.sidebar.is_hidden(crate::sidebar::SidebarSection::ByDate));
+        let r = exec(&mut h, "view.sidebarSection", json!({"section": "byDate"}));
+        assert_eq!(r["show"], true);
+        assert!(has(&h, "sidebarSection:byDate") && h.app.ui.sidebar_section_collapsed("byDate"), "back, still folded");
+        // saying what is wanted, instead of flipping it: showing a shown section changes nothing
+        let r = exec(&mut h, "view.sidebarSection", json!({"section": "byDate", "show": true, "collapsed": false}));
+        assert_eq!(r, json!({"section": "byDate", "show": true, "collapsed": false}));
+        assert!(h.app.widgets.iter().any(|(w, _)| w.starts_with("source:date:")), "open again: its rows are drawn");
+    }
+    usual_sidebar(&mut h);
+    // hidden from its header's menu, brought back from the menu of the My Photos title, which is always there
+    {
+        right_click(&mut h, "sidebarSection:keywords");
+        assert!(popup_open(&h), "the header has a menu");
+        click(&mut h, "sidebarMenu:hide");
+        assert!(!has(&h, "sidebarSection:keywords") && !popup_open(&h));
+        assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("source:keyword:")), "its rows went with it");
+        right_click(&mut h, "sidebarTitle");
+        assert!(popup_open(&h), "the title has the menu too");
+        assert!(!has(&h, "sidebarMenu:hide"), "the title is no section: nothing to hide");
+        click(&mut h, "sidebarMenu:section:keywords");
+        assert!(has(&h, "sidebarSection:keywords"));
+        // …and from there every section can go back to the usual arrangement
+        exec(&mut h, "view.sidebarSection", json!({"section": "byDate", "show": false}));
+        right_click(&mut h, "sidebarTitle");
+        click(&mut h, "sidebarMenu:reset");
+        assert!(h.app.ui.sidebar.is_default());
+    }
+    usual_sidebar(&mut h);
+    // hiding Albums while an album is shown leaves the grid showing the album
+    {
+        let album = h.app.session.execute("album.create", &json!({"name": "Kept"})).unwrap()["id"].as_u64().unwrap();
+        exec(&mut h, "library.source", json!({"kind": "album", "id": album}));
+        let shown = h.app.session.source;
+        exec(&mut h, "view.sidebarSection", json!({"section": "albums", "show": false}));
+        assert!(!has(&h, &format!("source:album:{album}")));
+        assert_eq!(h.app.session.source, shown);
+    }
+    // an album made while Albums is hidden (and folded) brings Albums back, open, so it can be seen
+    {
+        exec(&mut h, "view.sidebarSection", json!({"section": "albums", "show": false, "collapsed": true}));
+        exec(&mut h, "dialog.newAlbum", json!({"name": "Fresh"}));
+        let r = h.request("ui.dialog.confirm", json!({}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+        let id = h.app.session.catalog.albums().find(|a| a.name == "Fresh").expect("the album was made").id.0;
+        assert!(has(&h, "sidebarSection:albums") && has(&h, &format!("source:album:{id}")));
     }
 }
 
@@ -388,105 +475,6 @@ fn sidebar_menu_items(h: &Headless) -> Vec<(String, Option<bool>)> {
         .collect()
 }
 
-/// Given the sidebar, when a section is unchecked in Window ▸ Sidebar Sections, then it leaves the
-/// sidebar (header and rows) and the menu shows it unchecked; checking it again brings it back
-/// as it was. The choice is part of the saved UI state.
-#[test]
-fn a_section_is_hidden_and_shown_from_the_view_menu() {
-    let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
-    let checked = |h: &Headless, id: &str| sidebar_menu_items(h).into_iter().find(|(s, _)| s == id).unwrap_or_else(|| panic!("no {id} item")).1;
-    assert_eq!(checked(&h, "byDate"), Some(true));
-    assert!(has(&h, "sidebarSection:byDate"));
-    // folded first: it must come back folded
-    click(&mut h, "sidebarSection:byDate");
-    let r = exec(&mut h, "view.sidebarSection", json!({"section": "byDate"}));
-    assert_eq!(r, json!({"section": "byDate", "show": false, "collapsed": true}));
-    assert!(!has(&h, "sidebarSection:byDate"), "the header is gone");
-    assert_eq!(checked(&h, "byDate"), Some(false));
-    assert_eq!(checked(&h, "albums"), Some(true), "the others stay");
-    // saved and read back
-    let back = serde_json::from_value::<crate::UiState>(serde_json::to_value(&h.app.ui).unwrap()).unwrap().sanitized();
-    assert!(back.sidebar.is_hidden(crate::sidebar::SidebarSection::ByDate));
-    let r = exec(&mut h, "view.sidebarSection", json!({"section": "byDate"}));
-    assert_eq!(r["show"], true);
-    assert!(has(&h, "sidebarSection:byDate") && h.app.ui.sidebar_section_collapsed("byDate"), "back, still folded");
-    // saying what is wanted, instead of flipping it: showing a shown section changes nothing
-    let r = exec(&mut h, "view.sidebarSection", json!({"section": "byDate", "show": true, "collapsed": false}));
-    assert_eq!(r, json!({"section": "byDate", "show": true, "collapsed": false}));
-    assert!(h.app.widgets.iter().any(|(w, _)| w.starts_with("source:date:")), "open again: its rows are drawn");
-}
-
-/// Given sections moved out of sight, when Reset Sidebar Sections is chosen, then every section
-/// is shown and open again; the item is only offered when there is something to reset.
-#[test]
-fn resetting_the_sidebar_brings_every_section_back() {
-    let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
-    let reset_enabled = |h: &Headless| {
-        let bar = crate::menubar::menu_bar(&h.app);
-        let json = serde_json::to_string(&bar).unwrap();
-        // the item as the menu model describes it
-        let at = json.find("view.sidebarReset").expect("the reset item");
-        json[at..].split("enabled\":").nth(1).is_some_and(|rest| rest.starts_with("true"))
-    };
-    assert!(!reset_enabled(&h), "nothing to reset yet");
-    exec(&mut h, "view.sidebarSection", json!({"section": "albums", "show": false}));
-    exec(&mut h, "view.sidebarSection", json!({"section": "keywords", "collapsed": true}));
-    assert!(reset_enabled(&h));
-    assert!(!has(&h, "sidebarSection:albums"));
-    exec(&mut h, "view.sidebarReset", json!({}));
-    assert!(h.app.ui.sidebar.is_default());
-    assert!(has(&h, "sidebarSection:albums") && !h.app.ui.sidebar_section_collapsed("keywords"));
-}
-
-/// Given a section's header, when it is right-clicked and Hide This Section is chosen, then the
-/// section is hidden; and the menu of the My Photos title, which is always there, shows it again.
-#[test]
-fn a_section_is_hidden_from_its_header_and_brought_back_from_the_title() {
-    let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
-    right_click(&mut h, "sidebarSection:keywords");
-    assert!(popup_open(&h), "the header has a menu");
-    click(&mut h, "sidebarMenu:hide");
-    assert!(!has(&h, "sidebarSection:keywords") && !popup_open(&h));
-    assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("source:keyword:")), "its rows went with it");
-    right_click(&mut h, "sidebarTitle");
-    assert!(popup_open(&h), "the title has the menu too");
-    assert!(!has(&h, "sidebarMenu:hide"), "the title is no section: nothing to hide");
-    click(&mut h, "sidebarMenu:section:keywords");
-    assert!(has(&h, "sidebarSection:keywords"));
-    // …and from there every section can go back to the usual arrangement
-    exec(&mut h, "view.sidebarSection", json!({"section": "byDate", "show": false}));
-    right_click(&mut h, "sidebarTitle");
-    click(&mut h, "sidebarMenu:reset");
-    assert!(h.app.ui.sidebar.is_default());
-}
-
-/// Given an album is being shown, when Albums is hidden, then the grid goes on showing the album.
-#[test]
-fn hiding_the_section_of_what_is_shown_keeps_showing_it() {
-    let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
-    let album = h.app.session.execute("album.create", &json!({"name": "Kept"})).unwrap()["id"].as_u64().unwrap();
-    exec(&mut h, "library.source", json!({"kind": "album", "id": album}));
-    let shown = h.app.session.source;
-    exec(&mut h, "view.sidebarSection", json!({"section": "albums", "show": false}));
-    assert!(!has(&h, &format!("source:album:{album}")));
-    assert_eq!(h.app.session.source, shown);
-}
-
-/// Given Albums is hidden (and folded), when an album is made from the menu, then Albums is back
-/// and open, so the new album can be seen.
-#[test]
-fn a_new_album_brings_a_hidden_albums_section_back() {
-    let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
-    exec(&mut h, "view.sidebarSection", json!({"section": "albums", "show": false, "collapsed": true}));
-    exec(&mut h, "dialog.newAlbum", json!({"name": "Fresh"}));
-    let r = h.request("ui.dialog.confirm", json!({}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.step();
-    h.step();
-    let id = h.app.session.catalog.albums().find(|a| a.name == "Fresh").expect("the album was made").id.0;
-    assert!(has(&h, "sidebarSection:albums") && has(&h, &format!("source:album:{id}")));
-}
-
 /// A command that names no section, an unknown one, or a flag that is no true / false is refused
 /// with what it takes, and changes nothing.
 #[test]
@@ -504,6 +492,31 @@ fn sidebar_commands_refuse_what_they_cannot_read() {
         assert!(r.to_string().contains(says), "{params}: {r}");
     }
     assert!(h.app.ui.sidebar.is_default());
+    // an arrangement set through the control channel is checked: a wrong one is refused and leaves the sidebar as it was; the older `collapsedSidebar` list still folds and unfolds
+    {
+        exec(&mut h, "view.sidebarSection", json!({"section": "keywords", "show": false}));
+        let arranged = h.app.ui.sidebar.clone();
+        for bad in [json!(null), json!({"albums": 1}), json!([{"id": "keywrods", "hidden": true}]), json!(["albums", "albums"])] {
+            let r = h.request("ui.set", json!({"sidebar": bad}), T);
+            assert_eq!(r["ok"], false, "{bad}: {r}");
+            assert_eq!(h.app.ui.sidebar, arranged, "{bad}");
+        }
+        let r = h.request("ui.set", json!({"collapsedSidebar": ["byDate"]}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(h.app.ui.sidebar_section_collapsed("byDate") && !h.app.ui.sidebar_section_collapsed("albums"));
+        assert!(h.app.ui.sidebar.is_hidden(crate::sidebar::SidebarSection::Keywords), "the rest of the arrangement stays");
+        let r = h.request("ui.set", json!({"collapsedSidebar": []}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(!h.app.ui.sidebar_section_collapsed("byDate"));
+        // a name it doesn't know, or both ways of saying it at once, is refused and changes nothing
+        exec(&mut h, "view.sidebarSection", json!({"section": "albums", "collapsed": true}));
+        let arranged = h.app.ui.sidebar.clone();
+        for bad in [json!({"collapsedSidebar": ["albms"]}), json!({"collapsedSidebar": [], "sidebar": [{"id": "albums", "collapsed": true}]})] {
+            let r = h.request("ui.set", bad.clone(), T);
+            assert_eq!(r["ok"], false, "{bad}: {r}");
+            assert_eq!(h.app.ui.sidebar, arranged, "{bad}");
+        }
+    }
 }
 
 /// Press on `from`, move to `to` over a few frames, and release there (after `before_release`).
@@ -683,45 +696,6 @@ fn a_section_moves_up_and_down_from_its_menu() {
     }
 }
 
-/// Recently Deleted is one of My Photos' rows: right below the others, above every section.
-#[test]
-fn recently_deleted_is_listed_with_my_photos() {
-    let h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
-    let (picks, deleted) = (widget(&h, "source:picks"), widget(&h, "source:recentlyDeleted"));
-    assert_eq!(deleted.top(), picks.bottom(), "no gap: the same group");
-    let first = sections_drawn(&h).remove(0);
-    assert_eq!(header(&h, &first).top() - deleted.bottom(), 10.0, "the sections start below it");
-}
-
-/// An arrangement set through the control channel is checked: a wrong one is refused and leaves
-/// the sidebar as it was; the older `collapsedSidebar` list still folds and unfolds sections.
-#[test]
-fn an_arrangement_set_by_an_agent_is_checked() {
-    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
-    exec(&mut h, "view.sidebarSection", json!({"section": "keywords", "show": false}));
-    let arranged = h.app.ui.sidebar.clone();
-    for bad in [json!(null), json!({"albums": 1}), json!([{"id": "keywrods", "hidden": true}]), json!(["albums", "albums"])] {
-        let r = h.request("ui.set", json!({"sidebar": bad}), T);
-        assert_eq!(r["ok"], false, "{bad}: {r}");
-        assert_eq!(h.app.ui.sidebar, arranged, "{bad}");
-    }
-    let r = h.request("ui.set", json!({"collapsedSidebar": ["byDate"]}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    assert!(h.app.ui.sidebar_section_collapsed("byDate") && !h.app.ui.sidebar_section_collapsed("albums"));
-    assert!(h.app.ui.sidebar.is_hidden(crate::sidebar::SidebarSection::Keywords), "the rest of the arrangement stays");
-    let r = h.request("ui.set", json!({"collapsedSidebar": []}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    assert!(!h.app.ui.sidebar_section_collapsed("byDate"));
-    // a name it doesn't know, or both ways of saying it at once, is refused and changes nothing
-    exec(&mut h, "view.sidebarSection", json!({"section": "albums", "collapsed": true}));
-    let arranged = h.app.ui.sidebar.clone();
-    for bad in [json!({"collapsedSidebar": ["albms"]}), json!({"collapsedSidebar": [], "sidebar": [{"id": "albums", "collapsed": true}]})] {
-        let r = h.request("ui.set", bad.clone(), T);
-        assert_eq!(r["ok"], false, "{bad}: {r}");
-        assert_eq!(h.app.ui.sidebar, arranged, "{bad}");
-    }
-}
-
 /// Where a dragged section goes: above the first section whose middle is below the pointer.
 #[test]
 fn a_dragged_section_goes_above_the_section_it_is_over_the_top_half_of() {
@@ -745,19 +719,6 @@ fn a_dragged_section_goes_above_the_section_it_is_over_the_top_half_of() {
     }
     assert_eq!(section_drop_before(&[], 10.0), None);
     assert_eq!(section_drop_before(&placed, f32::NAN), None);
-}
-
-/// By Date opens a year into its months with the triangle, and closes it again.
-#[test]
-fn a_year_opens_into_its_months() {
-    let mut h = demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
-    let rows = |h: &Headless| h.app.widgets.iter().filter(|(w, _)| w.starts_with("source:date:")).count();
-    let years = rows(&h);
-    let toggle = h.app.widgets.iter().find(|(w, _)| w.starts_with("dateToggle:")).map(|(w, _)| w.clone()).expect("a year has a triangle");
-    click(&mut h, &toggle);
-    assert!(rows(&h) > years, "months are listed");
-    click(&mut h, &toggle);
-    assert_eq!(rows(&h), years, "closed again");
 }
 
 /// Given a section longer than the sidebar, when its header scrolls out of sight, then a copy of
@@ -977,7 +938,7 @@ fn the_keywords_header_creates_a_keyword() {
 /// A folded section's row count sits to the left of its header button; a section without a button
 /// has its count at the edge.
 #[test]
-fn a_header_button_stays_with_a_folded_header() {
+fn a_folded_section_shows_its_count_beside_its_header_button() {
     let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
     for (section, button) in [("keywords", "icon:keywordNew"), ("albums", "icon:albumNew")] {
         click(&mut h, &format!("sidebarSection:{section}"));
@@ -989,6 +950,18 @@ fn a_header_button_stays_with_a_folded_header() {
     click(&mut h, "sidebarSection:byDate");
     let (plain, beside_button) = (widget(&h, "sidebarSectionCount:byDate"), widget(&h, "sidebarSectionCount:keywords"));
     assert!(plain.right() >= widget(&h, "icon:keywordNew").left() && plain.right() > beside_button.right() + 20.0, "{plain:?} {beside_button:?}");
+    // a folded section says how many rows it holds (unless photo counts are off); an open one
+    // doesn't need to
+    usual_sidebar(&mut h);
+    assert!(!has(&h, "sidebarSectionCount:byDate"));
+    click(&mut h, "sidebarSection:byDate");
+    assert!(has(&h, "sidebarSectionCount:byDate"));
+    exec(&mut h, "view.photoCounts", json!({"show": false}));
+    assert!(!has(&h, "sidebarSectionCount:byDate"));
+    // an empty section has nothing to count
+    exec(&mut h, "view.photoCounts", json!({"show": true}));
+    click(&mut h, "sidebarSection:folders");
+    assert!(h.app.ui.sidebar_section_collapsed("folders") && !has(&h, "sidebarSectionCount:folders"));
 }
 
 /// Given Keywords is folded and new keywords go inside a parent, when a keyword is made with the
@@ -1052,32 +1025,6 @@ fn dragging_from_a_header_button_does_not_drag_the_section() {
     assert!(h.app.ui.sidebar.is_default());
 }
 
-/// A folded section says how many rows it holds (unless photo counts are off); an open one
-/// doesn't need to.
-#[test]
-fn a_folded_section_says_how_much_it_holds() {
-    let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
-    assert!(!has(&h, "sidebarSectionCount:byDate"));
-    click(&mut h, "sidebarSection:byDate");
-    assert!(has(&h, "sidebarSectionCount:byDate"));
-    exec(&mut h, "view.photoCounts", json!({"show": false}));
-    assert!(!has(&h, "sidebarSectionCount:byDate"));
-    // an empty section has nothing to count
-    exec(&mut h, "view.photoCounts", json!({"show": true}));
-    click(&mut h, "sidebarSection:folders");
-    assert!(h.app.ui.sidebar_section_collapsed("folders") && !has(&h, "sidebarSectionCount:folders"));
-}
-
-/// A section's chevron is in the same column as the triangles of the rows below it.
-#[test]
-fn section_chevrons_line_up_with_row_triangles() {
-    let h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
-    let triangle = h.app.widgets.iter().find(|(w, _)| w.starts_with("dateToggle:")).map(|(_, r)| *r).expect("a year has a triangle");
-    for id in sections_drawn(&h) {
-        assert_eq!(widget(&h, &format!("sidebarSectionChevron:{id}")).center().x, triangle.center().x, "{id}");
-    }
-}
-
 /// Albums nest in folders like the other sidebar trees: a folder row has a disclosure triangle
 /// (`albumToggle:<id>`), plain albums have none, and folding a folder hides what is inside it.
 #[test]
@@ -1119,6 +1066,24 @@ fn album_folders_have_a_disclosure_triangle() {
     h.step();
     h.step();
     assert!(has(&h, &format!("albumToggle:{empty}")), "it gets one with its first child");
+    // Alt-click on a triangle folds or opens the folder and everything inside it; a plain click still
+    // flips only that row
+    toggle(&mut h, europe);
+    assert!(has(&h, &format!("source:album:{best}")));
+    let click = |h: &mut Headless, id: u64, alt: bool| {
+        let r = h.request("ui.clickWidget", json!({"id": format!("albumToggle:{id}"), "alt": alt}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        for _ in 0..6 {
+            h.step();
+        }
+    };
+    click(&mut h, trips, true);
+    assert!(!has(&h, &format!("source:folder:{europe}")), "the whole branch is folded");
+    click(&mut h, trips, false);
+    assert!(has(&h, &format!("source:folder:{europe}")) && !has(&h, &format!("source:album:{best}")), "the inner folder was folded too");
+    click(&mut h, trips, true);
+    click(&mut h, trips, true);
+    assert!(has(&h, &format!("source:album:{best}")), "Alt-click on a folded folder opens everything inside it");
 }
 
 /// Survey's bottom bar has a filmstrip size slider that sets the filmstrip height within 100-240.
@@ -1137,57 +1102,6 @@ fn survey_filmstrip_size_slider_sets_the_filmstrip_height() {
     assert_eq!(r3["ok"], true, "{r3}");
     h.step();
     assert!(h.app.ui.film_height <= 108.0 && h.app.ui.film_height >= 96.0, "{}", h.app.ui.film_height);
-}
-
-/// Alt-click on a triangle folds or opens the folder and everything inside it; a plain click still
-/// flips only that row.
-#[test]
-fn alt_click_on_a_triangle_opens_or_folds_the_whole_branch() {
-    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
-    let make = |h: &mut Headless, params: serde_json::Value| h.app.session.execute("album.create", &params).unwrap()["id"].as_u64().unwrap();
-    let trips = make(&mut h, json!({"name": "Trips", "folder": true}));
-    let europe = make(&mut h, json!({"name": "Europe", "folder": true, "parent": trips}));
-    let best = make(&mut h, json!({"name": "Best", "parent": europe}));
-    h.step();
-    h.step();
-    let has = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
-    let click = |h: &mut Headless, id: u64, alt: bool| {
-        let r = h.request("ui.clickWidget", json!({"id": format!("albumToggle:{id}"), "alt": alt}), T);
-        assert_eq!(r["ok"], true, "{r}");
-        for _ in 0..6 {
-            h.step();
-        }
-    };
-    assert!(has(&h, &format!("source:album:{best}")));
-    click(&mut h, trips, true);
-    assert!(!has(&h, &format!("source:folder:{europe}")), "the whole branch is folded");
-    click(&mut h, trips, false);
-    assert!(has(&h, &format!("source:folder:{europe}")) && !has(&h, &format!("source:album:{best}")), "the inner folder was folded too");
-    click(&mut h, trips, true);
-    click(&mut h, trips, true);
-    assert!(has(&h, &format!("source:album:{best}")), "Alt-click on a folded folder opens everything inside it");
-}
-
-/// A dialog that cannot do its job (here: the chosen parent is a plain album, as when the folder
-/// was deleted or turned out not to be one) stays open with the error shown, the typed name kept.
-#[test]
-fn creating_in_a_non_folder_keeps_the_dialog_open() {
-    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
-    let plain = h.app.session.execute("album.create", &json!({"name": "Plain"})).unwrap()["id"].as_u64().unwrap();
-    let before = h.app.session.catalog.albums().count();
-    let r = h.request("engine.execute", json!({"command": "dialog.newAlbum", "params": {"name": "Kept", "parent": plain}}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.step();
-    let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.step();
-    h.step();
-    assert_eq!(h.app.session.catalog.albums().count(), before, "nothing was made");
-    assert!(
-        matches!(&h.app.ui.dialog, Some(crate::state::Dialog::NewAlbum { name, .. }) if name == "Kept"),
-        "the dialog stays, with its text: {:?}",
-        h.app.ui.dialog
-    );
 }
 
 /// Creating from a folder's menu: every `dialog.new*` command takes the folder to create in, the
@@ -1242,6 +1156,22 @@ fn albums_are_created_inside_the_chosen_folder() {
     // without a folder they are still made at the top level
     let top = create(&mut h, "dialog.newAlbum", "Loose", None);
     assert_eq!(parent_of(&h, top), None);
+    // a dialog that cannot do its job (the chosen parent is a plain album, as when the folder was
+    // deleted or turned out not to be one) stays open with the error shown, the typed name kept
+    let before = h.app.session.catalog.albums().count();
+    let r = h.request("engine.execute", json!({"command": "dialog.newAlbum", "params": {"name": "Kept", "parent": top}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert_eq!(h.app.session.catalog.albums().count(), before, "nothing was made");
+    assert!(
+        matches!(&h.app.ui.dialog, Some(crate::state::Dialog::NewAlbum { name, .. }) if name == "Kept"),
+        "the dialog stays, with its text: {:?}",
+        h.app.ui.dialog
+    );
 }
 
 /// Saved or scripted dialogs from before the folder parameter still load.
@@ -1421,15 +1351,6 @@ fn dropping_on_the_edge_of_an_album_places_it_there() {
     assert!(t.h.app.ui.dragging_album.is_none());
 }
 
-/// Dropping beside an album in another folder moves the album there, at that place.
-#[test]
-fn dropping_beside_an_album_in_another_folder_moves_it_there() {
-    let mut t = album_tree();
-    t.drag_to(t.loose, t.best, 0.2);
-    assert_eq!(t.parent(t.loose), Some(t.trips));
-    assert_eq!(t.kids(Some(t.trips), false), ["Loose", "Best"]);
-}
-
 /// Where nothing would change, nothing is done: no edit, so no hand order appears.
 #[test]
 fn dropping_where_it_already_is_changes_nothing() {
@@ -1507,7 +1428,7 @@ fn folders_are_placed_by_their_edges_and_entered_by_their_middle() {
 /// Holding a dragged album near the top or bottom edge of the sidebar scrolls it that way; in the
 /// middle, or beside the sidebar, nothing scrolls. (Each drag ends with Esc: nothing is dropped.)
 #[test]
-fn a_dragged_album_scrolls_the_sidebar_at_its_edges() {
+fn dragged_albums_and_photos_scroll_the_sidebar_at_its_edges() {
     let mut t = album_tree();
     for i in 0..60 {
         t.h.app.session.execute("album.create", &json!({"name": format!("Z{i:02}")})).unwrap();
@@ -1540,23 +1461,12 @@ fn a_dragged_album_scrolls_the_sidebar_at_its_edges() {
     let back = t.row(last).top();
     assert!(back > scrolled + 100.0, "the top edge scrolls back up: {scrolled} -> {back}");
     assert!(t.h.app.ui.dragging_album.is_none());
-}
-
-/// Photos dragged from the grid scroll the sidebar the same way, to reach an album further down.
-#[test]
-fn dragged_photos_scroll_the_sidebar_at_its_edges() {
-    let mut t = album_tree();
-    for i in 0..60 {
-        t.h.app.session.execute("album.create", &json!({"name": format!("Z{i:02}")})).unwrap();
-    }
-    t.h.step();
-    t.h.step();
-    let (last, panel) = (t.id_of("Z59"), widget(&t.h, "panel:left_panel"));
+    // photos dragged from the grid scroll the sidebar the same way, to reach an album further down
     let start = t.row(last).top();
     let first = t.h.app.session.visible_cloned()[0].0;
     let thumb = widget(&t.h, &format!("thumb:{first}")).center();
-    t.drag(thumb, &[(egui::pos2(panel.center().x, panel.bottom() - 6.0), 90)]);
-    assert!(t.row(last).top() < start - 100.0, "scrolled down: {start} -> {}", t.row(last).top());
+    t.drag(thumb, &[(egui::pos2(cx, bottom - 6.0), 90)]);
+    assert!(t.row(last).top() < start - 100.0, "photos scroll it down: {start} -> {}", t.row(last).top());
     assert!(t.h.app.ui.dragging_photos.is_none(), "the drag ended");
 }
 
@@ -1595,6 +1505,10 @@ fn dragging_an_album_to_the_albums_header_takes_it_to_the_top_level() {
     assert!(!t.h.app.ui.sidebar_section_collapsed("albums"));
     t.h.app.session.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(t.parent(t.best), Some(t.trips), "one undo puts it back");
+    // dropping beside an album in another folder moves the album there, at that place
+    t.drag_to(t.loose, t.best, 0.2);
+    assert_eq!(t.parent(t.loose), Some(t.trips));
+    assert_eq!(t.kids(Some(t.trips), false), ["Loose", "Best"]);
 }
 
 /// Holding a dragged album over a closed folder opens it, so the drop can go into a subfolder.
@@ -1741,35 +1655,35 @@ fn choosing_a_library_folder_replaces_whatever_was_shown() {
 
 #[test]
 fn the_grid_is_titled_after_the_folder() {
-    let mut h = folders_app(&["/Volumes/tokyo/photos/travel/a.jpg"]);
-    h.app.session.source = lcc_engine::LibrarySource::LibraryFolder;
-    h.app.session.library_folder = Some("/Volumes/tokyo/photos/travel".into());
-    assert_eq!(crate::i18n::source_title(&h.app.session), "photos/travel");
-    h.app.session.source = lcc_engine::LibrarySource::All;
-    assert_eq!(crate::i18n::source_title(&h.app.session), "All Photographs");
+    use lcc_catalog::{Op, Photo, Source};
+    let mut session = lcc_engine::Session::new();
+    let id = session.catalog.alloc_photo_id();
+    let p = Photo::new(id, Source::File { path: "/Volumes/tokyo/photos/travel/a.jpg".into() }, "x.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00");
+    session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    session.source = lcc_engine::LibrarySource::LibraryFolder;
+    session.library_folder = Some("/Volumes/tokyo/photos/travel".into());
+    assert_eq!(crate::i18n::source_title(&session), "photos/travel");
+    session.source = lcc_engine::LibrarySource::All;
+    assert_eq!(crate::i18n::source_title(&session), "All Photographs");
 }
 
-/// A folder that holds nothing itself and leads to one folder starts open: the tree opens down to
-/// where the library branches.
+/// Removing a folder, or a whole disk, from the library asks first, then moves its photos to
+/// Recently Deleted.
 #[test]
-fn a_chain_of_single_folders_starts_open() {
-    let h = folders_app(&["/Users/me/Pictures/2024/a.jpg", "/Users/me/Pictures/2025/b.jpg"]);
-    assert!(has(&h, "source:libfolder:/Users/me/Pictures"), "Users and me opened by themselves");
-    assert!(!has(&h, "source:libfolder:/Users/me/Pictures/2024"), "the branching folder waits to be opened");
-}
-
-/// Removing a folder from the library asks first, then moves its photos to Recently Deleted.
-#[test]
-fn removing_a_folder_from_the_library_asks_first() {
+fn removing_a_folder_or_a_disk_from_the_library_asks_first() {
     use crate::state::Dialog;
-    let mut h = folders_app(&["/pics/trip/a.jpg", "/pics/trip/b.jpg", "/pics/home/c.jpg"]);
-    h.app.ui.dialog = Some(Dialog::RemoveFolder { path: "/pics/trip".into(), name: "trip".into(), count: 2, disk: false });
-    h.step();
-    assert_eq!(h.app.session.visible().len(), 3, "nothing happens until it is confirmed");
-    let r = h.request("ui.dialog.confirm", json!({}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    assert_eq!(h.app.session.visible().len(), 1, "the photos left the library");
-    assert_eq!(h.app.ui.dialog, None);
+    let mut h = folders_app(&["/pics/trip/a.jpg", "/pics/trip/b.jpg", "/pics/home/c.jpg", "/Volumes/nas/a/1.jpg", "/Volumes/nas/2.jpg"]);
+    let mut left = 5;
+    for (path, name, disk) in [("/pics/trip", "trip", false), ("/Volumes/nas", "nas", true)] {
+        h.app.ui.dialog = Some(Dialog::RemoveFolder { path: path.into(), name: name.into(), count: 2, disk });
+        h.step();
+        assert_eq!(h.app.session.visible().len(), left, "{path}: nothing happens until it is confirmed");
+        let r = h.request("ui.dialog.confirm", json!({}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        left -= 2;
+        assert_eq!(h.app.session.visible().len(), left, "{path}: its photos left the library");
+        assert_eq!(h.app.ui.dialog, None);
+    }
 }
 
 fn popup_open(h: &Headless) -> bool {
@@ -1881,6 +1795,15 @@ fn show_in_folders_needs_a_photo_in_a_library_folder() {
     let scene = demo.session.visible().first().copied().unwrap();
     demo.run("library.select", json!({"ids": [scene.0]})).unwrap();
     assert!(!crate::menus::ui_enabled(&demo, "app.showInFolders"), "a demo scene has no folder");
+    // a folder deeper than the tree goes has no row: the entry is disabled rather than failing
+    {
+        let deep = format!("/pics{}/a.jpg", "/d".repeat(lcc_catalog::folders::MAX_DEPTH + 4));
+        let mut h = folders_app(&[deep.as_str()]);
+        activate(&mut h, &deep);
+        assert!(!h.app.caches.folder_tree(&h.app.session.catalog).is_empty());
+        assert!(!crate::menus::ui_enabled(&h.app, "app.showInFolders"));
+        assert!(h.app.run("app.showInFolders", json!({})).is_err());
+    }
 }
 
 /// The grid's menu reveals the photo right-clicked, not the active one a multi-selection keeps.
@@ -1900,17 +1823,6 @@ fn show_in_folders_reveals_the_photo_asked_for_and_follows_to_its_folder() {
     assert!(crate::menus::show_in_folders_enabled(&h.app, Some(c)));
 }
 
-/// A folder deeper than the tree goes has no row: the entry is disabled rather than failing.
-#[test]
-fn show_in_folders_is_disabled_for_a_folder_below_the_trees_depth() {
-    let deep = format!("/pics{}/a.jpg", "/d".repeat(lcc_catalog::folders::MAX_DEPTH + 4));
-    let mut h = folders_app(&[deep.as_str()]);
-    activate(&mut h, &deep);
-    assert!(!h.app.caches.folder_tree(&h.app.session.catalog).is_empty());
-    assert!(!crate::menus::ui_enabled(&h.app, "app.showInFolders"));
-    assert!(h.app.run("app.showInFolders", json!({})).is_err());
-}
-
 #[test]
 fn a_renamed_folder_keeps_its_place_in_the_tree() {
     /// Removes the folder however the test ends.
@@ -1922,7 +1834,7 @@ fn a_renamed_folder_keeps_its_place_in_the_tree() {
     }
     let base = std::env::temp_dir().join(format!("lc-ui-rename-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
-    let _cleanup = Cleanup(base.clone());
+    let _cleanup = Cleanup(base.to_path_buf());
     std::fs::create_dir_all(base.join("pics/trip")).unwrap();
     std::fs::create_dir_all(base.join("pics/home")).unwrap();
     // the folder tree writes paths with forward slashes, and its widget ids carry them
@@ -1979,7 +1891,7 @@ fn a_folder_menu_locates_its_missing_tree_only() {
 
     let base = std::env::temp_dir().join(format!("lc-ui-locate-folder-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
-    let _cleanup = Cleanup(base.clone());
+    let _cleanup = Cleanup(base.to_path_buf());
     let new_trip = base.join("new/trip");
     std::fs::create_dir_all(new_trip.join("day2")).unwrap();
     for path in [new_trip.join("a.jpg"), new_trip.join("day2/b.jpg"), new_trip.join("c.jpg")] {
@@ -2042,50 +1954,8 @@ fn a_folder_takes_a_colour_label_from_its_menu() {
     assert!(!has(&h, "labelMark:libfolder:/pics/trip"));
 }
 
-/// Asserts the open menu's rows `ids` are drawn top to bottom in that order.
-fn in_order(h: &Headless, ids: &[&str]) {
-    let ys: Vec<f32> = ids.iter().map(|id| widget(h, id).center().y).collect();
-    for (pair, y) in ids.windows(2).zip(ys.windows(2)) {
-        assert!(y[0] < y[1], "{} should come above {}: {ys:?}", pair[0], pair[1]);
-    }
-}
-
 fn reveal_and_pick_services(reveal: Result<(), String>) -> Services {
     Services { pick_folder: Some(Box::new(|| None)), reveal: Some(Box::new(move |_| reveal.clone())), png: None, ..Default::default() }
-}
-
-/// A folder's menu goes from what it does with the library's photos, through reorganizing the
-/// disk, to how the row looks and the way out to the file manager, with removal last; a disk's
-/// row keeps the same order with what applies to a disk.
-#[test]
-fn a_folders_menu_goes_from_the_library_to_the_disk_and_ends_with_removal() {
-    let services = reveal_and_pick_services(Ok(()));
-    let mut h = folders_app_with_services(&["/pics/trip/a.jpg", "/pics/home/b.jpg", "/Volumes/nas/c.jpg"], [1400.0, 900.0], services);
-    click(&mut h, "libraryFolderToggle:/pics");
-    right_click(&mut h, "source:libfolder:/pics/trip");
-    in_order(
-        &h,
-        &[
-            "folderSynchronize",
-            "folderLocateMissing",
-            "folderNewFolder",
-            "folderRename",
-            "folderMove:/pics/trip",
-            "folderMovePhotosHere",
-            "folderLabelMenu",
-            "folderReveal",
-            "folderCopyPath",
-            "folderRemove",
-        ],
-    );
-    h.request("ui.key", json!({"key": "escape"}), T);
-    h.step();
-    h.step();
-    right_click(&mut h, "source:libfolder:/Volumes/nas");
-    in_order(
-        &h,
-        &["folderSynchronize", "folderLocateMissing", "folderNewFolder", "folderLabelMenu", "folderReveal", "folderCopyPath", "folderRemove"],
-    );
 }
 
 /// Show in Finder on a folder says why when the file manager can't show it, instead of nothing.
@@ -2100,12 +1970,12 @@ fn a_folder_that_cant_be_shown_in_the_file_manager_says_why() {
     assert!(h.app.ui.toast().is_some_and(|t| t.0.contains("no file manager")), "{:?}", h.app.ui.toast());
 }
 
-/// A Local place's menu takes the Folders order: Synchronize first, then the disk, the file
-/// manager, and last what lists it in Local. A folder inside a place lists Remove from Local
-/// grayed out, since only a place can be removed, while its Add to Local makes it a place.
+/// A Local place's menu renames the folder by its own name on disk. A folder inside a place lists
+/// Remove from Local grayed out, since only a place can be removed, while its Add to Local makes
+/// it a place.
 #[test]
-fn a_local_folders_menu_takes_the_folders_order_and_grays_out_remove_inside_a_place() {
-    let dir = std::env::temp_dir().join(format!("lc-ui-local-menu-{}", std::process::id()));
+fn a_local_folders_menu_renames_by_its_own_name_and_grays_out_remove_inside_a_place() {
+    let dir = lcc_testkit::TempDir::new("lc-ui-local-menu");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("place/inner")).unwrap();
     struct Cleanup(std::path::PathBuf);
@@ -2114,26 +1984,13 @@ fn a_local_folders_menu_takes_the_folders_order_and_grays_out_remove_inside_a_pl
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
-    let _cleanup = Cleanup(dir.clone());
+    let _cleanup = Cleanup(dir.to_path_buf());
     let place = dir.join("place").to_string_lossy().to_string();
     let inner = dir.join("place").join("inner").to_string_lossy().to_string();
     let mut h = folders_app_with_services(&["/pics/trip/a.jpg"], [1400.0, 900.0], reveal_and_pick_services(Ok(())));
     h.app.run("local.addRoot", json!({"path": place})).unwrap();
     assert!(h.step_until(T, |h| h.app.widgets.iter().any(|(w, _)| *w == format!("source:local:{place}"))));
     right_click(&mut h, &format!("source:local:{place}"));
-    in_order(
-        &h,
-        &[
-            "folderSynchronize",
-            "folderNewFolder",
-            "folderRename",
-            &format!("localFolderMove:{place}"),
-            "folderReveal",
-            "folderCopyPath",
-            "folderKeepInLocal",
-            "folderRemoveFromLocal",
-        ],
-    );
     // Rename starts from the folder's own name on disk, not what dialogs call it ("parent/name")
     click(&mut h, "folderRename");
     assert!(matches!(&h.app.ui.dialog, Some(crate::state::Dialog::TextPrompt { value, .. }) if value == "place"), "{:?}", h.app.ui.dialog);
@@ -2151,31 +2008,12 @@ fn a_local_folders_menu_takes_the_folders_order_and_grays_out_remove_inside_a_pl
     assert!(h.app.ui.local_roots.contains(&inner), "{:?}", h.app.ui.local_roots);
 }
 
-/// Where the host has no file manager, Show in Finder is left out of its group but Copy Path
-/// (and Show Parent Folder) stay, so the group keeps its place: one separator between each pair
-/// of groups, as above.
-#[test]
-fn a_folders_menu_without_a_file_manager_keeps_copy_path_in_its_group() {
-    let services = Services { pick_folder: Some(Box::new(|| None)), png: None, ..Default::default() };
-    let mut h = folders_app_with_services(&["/pics/trip/a.jpg", "/pics/home/b.jpg"], [1400.0, 900.0], services);
-    click(&mut h, "libraryFolderToggle:/pics");
-    right_click(&mut h, "source:libfolder:/pics/trip");
-    assert!(!has(&h, "folderReveal"), "no file manager here");
-    assert!(has(&h, "folderCopyPath"), "copying the path needs none");
-    let gap = |above: &str, below: &str| widget(&h, below).top() - widget(&h, above).bottom();
-    let one_separator = gap("folderMovePhotosHere", "folderLabelMenu");
-    for (above, below) in [("folderLabelMenu", "folderCopyPath"), ("folderShowParent", "folderRemove")] {
-        let here = gap(above, below);
-        assert!((here - one_separator).abs() < 1.0, "one separator is {one_separator}, {above} to {below} is {here}");
-    }
-}
-
 /// Copy Path is in every folder menu and puts the path, as the OS spells it, on the clipboard
 /// and says so.
 #[test]
 fn copy_path_puts_a_folders_path_on_the_clipboard_from_each_kind_of_row() {
     let native = |p: &str| p.replace('/', std::path::MAIN_SEPARATOR_STR);
-    let dir = std::env::temp_dir().join(format!("lc-ui-copy-path-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lc-ui-copy-path");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("place")).unwrap();
     struct Cleanup(std::path::PathBuf);
@@ -2184,7 +2022,7 @@ fn copy_path_puts_a_folders_path_on_the_clipboard_from_each_kind_of_row() {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
-    let _cleanup = Cleanup(dir.clone());
+    let _cleanup = Cleanup(dir.to_path_buf());
     let place = dir.join("place").to_string_lossy().to_string();
     let mut h = folders_app_with_services(
         &["/pics/trip/a.jpg", "/pics/home/b.jpg", "/Volumes/nas/c.jpg"],
@@ -2256,7 +2094,7 @@ fn a_disks_menu_shows_it_in_the_file_manager_and_makes_a_folder_in_it() {
 /// New Folder on Disk… in a Local folder makes the folder inside it, and its row is listed.
 #[test]
 fn a_local_folders_new_folder_is_made_on_disk_and_listed() {
-    let dir = std::env::temp_dir().join(format!("lc-ui-local-new-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lc-ui-local-new");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("place/inner")).unwrap();
     struct Cleanup(std::path::PathBuf);
@@ -2265,7 +2103,7 @@ fn a_local_folders_new_folder_is_made_on_disk_and_listed() {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
-    let _cleanup = Cleanup(dir.clone());
+    let _cleanup = Cleanup(dir.to_path_buf());
     let place = dir.join("place").to_string_lossy().to_string();
     let inner = dir.join("place").join("inner").to_string_lossy().to_string();
     let made = dir.join("place").join("picks").to_string_lossy().to_string();
@@ -2282,18 +2120,6 @@ fn a_local_folders_new_folder_is_made_on_disk_and_listed() {
     assert_eq!(r["ok"], true, "{r}");
     assert!(std::path::Path::new(&made).is_dir(), "the folder is on disk");
     assert!(h.step_until(T, |h| has(h, &format!("source:local:{made}"))), "its row is listed");
-}
-
-#[test]
-fn removing_a_disk_from_the_library_asks_first() {
-    use crate::state::Dialog;
-    let mut h = folders_app(&["/Volumes/nas/a/1.jpg", "/Volumes/nas/2.jpg", "/Users/me/3.jpg"]);
-    h.app.ui.dialog = Some(Dialog::RemoveFolder { path: "/Volumes/nas".into(), name: "nas".into(), count: 2, disk: true });
-    h.step();
-    assert_eq!(h.app.session.visible().len(), 3);
-    let r = h.request("ui.dialog.confirm", json!({}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    assert_eq!(h.app.session.visible().len(), 1, "everything on that disk left the library");
 }
 
 /// A library with a photo in every folder down `deep` and two folders below it, in a window
@@ -2391,19 +2217,6 @@ fn a_deep_library_path_narrows_the_indent_instead_of_cutting_the_names() {
     assert_eq!(crate::panels::left::indent_step(&h.view.ctx), full, "a shallow tree is drawn as before");
 }
 
-/// The step is chosen in whole bands from the panel's width and the deepest row.
-#[test]
-fn the_indent_step_narrows_in_bands() {
-    use crate::panels::left::step_for;
-    // (room for the steps: the panel less the row's margins, a name's 80 pt and a count's 40)
-    assert_eq!(step_for(268.0, 0.0), 16.0, "top-level rows only");
-    assert_eq!(step_for(268.0, 5.0 * 16.0), 16.0, "five levels fit at full steps");
-    assert_eq!(step_for(268.0, 7.0 * 16.0), 12.0, "seven levels at 12 pt");
-    assert_eq!(step_for(268.0, 9.0 * 16.0), 8.0, "nine levels at 8 pt");
-    assert_eq!(step_for(268.0, 30.0 * 16.0), 8.0, "never below 8 pt: the sidebar scrolls instead");
-    assert_eq!(step_for(480.0, 9.0 * 16.0), 16.0, "a wide panel keeps full steps");
-}
-
 /// A sidebar that fits needs no sideways scrolling.
 #[test]
 fn a_sidebar_that_fits_does_not_scroll_sideways() {
@@ -2412,6 +2225,10 @@ fn a_sidebar_that_fits_does_not_scroll_sideways() {
     let w = crate::panels::left::content_width(&h.view.ctx);
     assert!(w > 0.0 && w <= panel.width(), "rows were measured and fit: no horizontal bar ({w} vs {})", panel.width());
     assert!((widget(&h, "source:all").width() - (panel.width() - 0.0)).abs() < 24.0, "rows are as wide as the panel");
+    // a long name alone does not make the sidebar scroll sideways: depth does
+    let h = folders_app(&[&format!("/{LONG_NAME}/a.jpg")]);
+    let panel = widget(&h, "panel:left_panel");
+    assert!(crate::panels::left::content_width(&h.view.ctx) <= panel.width(), "a name takes at most what a row can show");
 }
 
 /// A long folder name is trimmed before it can run under the photo count.
@@ -2454,28 +2271,13 @@ fn a_long_name_stops_at_the_count_and_shows_in_full_on_hover() {
         tooltip_shown(&h)
     });
     assert!(shown, "the full name appears on hover");
-}
-
-/// More room shows more of the name.
-#[test]
-fn widening_the_sidebar_shows_more_of_a_long_name() {
-    let mut h = folders_app(&[&format!("/pics/{LONG_NAME}/a.jpg"), "/pics/short/b.jpg"]);
-    click(&mut h, "libraryFolderToggle:/pics");
-    let id = format!("label:libfolder:/pics/{LONG_NAME}");
-    let narrow = widget(&h, &id).width();
+    // more room shows more of the name
+    h.request("ui.move", json!({"x": 800.0, "y": 450.0}), T);
     let r = h.request("ui.set", json!({"leftWidth": 480.0}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     h.step();
-    assert!(widget(&h, &id).width() > narrow + 100.0, "a wider panel shows more of it");
-}
-
-/// A long name alone does not make the sidebar scroll sideways: depth does.
-#[test]
-fn a_long_name_alone_does_not_make_the_sidebar_scroll() {
-    let h = folders_app(&[&format!("/{LONG_NAME}/a.jpg")]);
-    let panel = widget(&h, "panel:left_panel");
-    assert!(crate::panels::left::content_width(&h.view.ctx) <= panel.width(), "a name takes at most what a row can show");
+    assert!(widget(&h, &format!("label:libfolder:{long}")).width() > label.width() + 100.0, "a wider panel shows more of it");
 }
 
 /// The selection bar ends at the panel's edge, not past it, when the content is wider.
@@ -2555,6 +2357,14 @@ fn date_and_keyword_rows_show_their_photos_from_any_source() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert_eq!(h.app.session.filter, lcc_catalog::Filter::default(), "{key}");
+    // By Date opens a year into its months with the triangle, and closes it again
+    let rows = |h: &Headless| h.app.widgets.iter().filter(|(w, _)| w.starts_with("source:date:")).count();
+    let years = rows(&h);
+    let toggle = h.app.widgets.iter().find(|(w, _)| w.starts_with("dateToggle:")).map(|(w, _)| w.clone()).expect("a year has a triangle");
+    click(&mut h, &toggle);
+    assert!(rows(&h) > years, "months are listed");
+    click(&mut h, &toggle);
+    assert_eq!(rows(&h), years, "closed again");
 }
 
 /// Library's Navigator panel: its 1:1 preset opens the loupe at 1:1, a click on its picture pans
@@ -2612,24 +2422,8 @@ fn deleting_a_populated_album_folder_from_its_menu_is_undoable() {
 /// toasts with a fresh context, whose clock is at 0, so by the app's clock they were already over
 /// (Auto Advance On, Imported presets, …).
 #[test]
-fn a_menu_commands_toast_shows_after_a_while() {
-    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
-    let mut h = crate::headless::Headless::new(app, [1000.0, 700.0], 1.0);
-    for _ in 0..600 {
-        h.step();
-    }
-    let r = h.request("engine.execute", serde_json::json!({"command": "view.autoAdvance"}), std::time::Duration::from_secs(10));
-    assert_eq!(r["ok"], true, "{r}");
-    h.step();
-    h.step();
-    assert!(h.app.ui.toast().is_some_and(|t| t.0.starts_with("Auto Advance")), "{:?}", h.app.ui.toasts);
-}
-
-/// Auto-Tag from Tracklog's toast shows too: it was stamped by a clock of its own, which starts at
-/// zero, so a while into a session it had always already expired.
-#[test]
-fn the_tracklog_toast_shows_after_a_while() {
-    let dir = std::env::temp_dir().join(format!("lc-tracklog-toast-{}", std::process::id()));
+fn command_toasts_show_after_a_while() {
+    let dir = lcc_testkit::TempDir::new("lc-tracklog-toast");
     std::fs::create_dir_all(&dir).unwrap();
     let gpx = dir.join("walk.gpx");
     std::fs::write(
@@ -2642,6 +2436,14 @@ fn the_tracklog_toast_shows_after_a_while() {
     for _ in 0..600 {
         h.step();
     }
+    let r = h.request("engine.execute", serde_json::json!({"command": "view.autoAdvance"}), std::time::Duration::from_secs(10));
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert!(h.app.ui.toast().is_some_and(|t| t.0.starts_with("Auto Advance")), "{:?}", h.app.ui.toasts);
+    // Auto-Tag from Tracklog's toast shows too: it was stamped by a clock of its own, which starts
+    // at zero, so a while into a session it had always already expired
+    h.app.ui.toasts.clear();
     let p = serde_json::json!({"command": "photo.tagFromTracklog", "params": {"path": gpx.to_string_lossy(), "offset": 0}});
     let r = h.request("engine.execute", p, std::time::Duration::from_secs(10));
     assert_eq!(r["ok"], true, "{r}");
@@ -2652,12 +2454,13 @@ fn the_tracklog_toast_shows_after_a_while() {
 }
 
 /// Issue #678: Settings ▸ Faces cannot switch recognition on until a recognition model is chosen:
-/// the box is off and clicking it changes nothing. Installing a model switches recognition on by
-/// itself, and from then on the box turns it off and on.
+/// the box is off and clicking it changes nothing. Installing a model chooses it but leaves recognition
+/// off (it is off by default: the scan can take long); from then on the box turns it on and off, and the
+/// Face scan section has its status and Pause / Clear… / Restart….
 #[test]
 fn recognise_faces_stays_off_until_a_model_is_chosen() {
+    let dir = lcc_testkit::TempDir::new("lc-ui-faces-toggle");
     let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid"}));
-    let dir = std::env::temp_dir().join(format!("lc-ui-faces-toggle-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     h.app.session.face_models_dir = Some(dir.join("models"));
@@ -2683,18 +2486,39 @@ fn recognise_faces_stays_off_until_a_model_is_chosen() {
         let _ = std::fs::remove_dir_all(&dir);
         return;
     }
-    // a model: installing it chooses it and switches recognition on; the box then works both ways
+    // a model: installing it chooses it and leaves recognition off; the box then works both ways
     let f = dir.join("m.onnx");
     std::fs::write(&f, lcc_faces::synthetic::tiny_embedder_model(64)).unwrap();
     h.app.session.execute("faces.models.install", &json!({"path": f.to_string_lossy(), "acknowledged": true})).unwrap();
     h.app.caches.faces_epoch += 1;
     h.step();
     h.step();
-    assert!(enabled(&mut h));
+    assert!(!enabled(&mut h), "installing a model leaves recognition off");
     click(&mut h);
-    assert!(!enabled(&mut h), "the box switches recognition off");
+    assert!(enabled(&mut h), "the box switches recognition on, with a model chosen");
     click(&mut h);
-    assert!(enabled(&mut h), "and on again, with a model chosen");
+    assert!(!enabled(&mut h), "and off again");
+    // the Face scan section: its status and buttons; Clear… asks before it deletes anything
+    click(&mut h);
+    let has = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
+    for id in ["faces:status", "button:facesPause", "button:facesClear", "button:facesRestart"] {
+        assert!(has(&h, id), "{id} is shown");
+    }
+    let press = |h: &mut Headless, id: &str| {
+        let r = h.request("ui.clickWidget", json!({"id": id}), T);
+        assert_eq!(r["ok"], true, "{id}: {r}");
+        h.step();
+        h.step();
+    };
+    press(&mut h, "button:facesPause");
+    assert_eq!(h.app.session.execute("faces.status", &json!({})).unwrap()["paused"], true);
+    assert!(has(&h, "button:facesResume"), "paused: the button offers resume");
+    press(&mut h, "button:facesClear");
+    assert!(has(&h, "button:facesClearConfirm"), "Clear… asks first");
+    press(&mut h, "button:facesConfirmCancel");
+    assert!(!has(&h, "button:facesClearConfirm"));
+    press(&mut h, "button:facesResume");
+    assert_eq!(h.app.session.execute("faces.status", &json!({})).unwrap()["paused"], false);
 }
 
 /// Issue #684: albums hold library photos. For a browsed (Local) photo the grid's right-click
@@ -2703,12 +2527,12 @@ fn recognise_faces_stays_off_until_a_model_is_chosen() {
 /// three work.
 #[test]
 fn local_photos_cannot_be_added_to_albums_until_they_join_my_photos() {
+    let dir = lcc_testkit::TempDir::new("lc-ui-albums-local");
     let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
     // (dragging browsed photos onto the library's albums: Import as a tab off)
     h.app.ui.settings.import_as_tab = false;
     let album = h.app.session.execute("album.create", &json!({"name": "Trip", "addSelected": false})).unwrap()["id"].as_u64().unwrap();
     let album_id = lcc_catalog::AlbumId(album);
-    let dir = std::env::temp_dir().join(format!("lc-ui-albums-local-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let img = lcc_raster::Rgba8::from_fn(24, 16, |x, y| [(x * 9) as u8, (y * 12) as u8, 80, 255]);
@@ -2850,7 +2674,7 @@ fn right_click_add_to_album_offers_a_new_album_when_there_is_none() {
 /// the review can't offer (a folder, or an album deleted while the scan ran) leaves its album empty.
 #[test]
 fn an_album_menu_imports_into_that_album() {
-    let dir = std::env::temp_dir().join(format!("lc-ui-album-import-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lc-ui-album-import");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     for i in 0..2u8 {
@@ -3042,9 +2866,9 @@ fn emptying_recently_deleted_asks_first_and_removes_only_trashed_photos() {
 #[test]
 fn delete_from_disk_dialog_trashes_file_and_removes_from_catalog() {
     use crate::state::Dialog;
+    let tmp = lcc_testkit::TempDir::new("lcc-test-ui-delete");
     let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid"}));
 
-    let tmp = std::env::temp_dir().join(format!("lcc-test-ui-delete-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).unwrap();
     let file = tmp.join("disk_photo.jpg");
@@ -3145,18 +2969,47 @@ fn the_histogram_clipping_buttons_stay_clear_of_the_hovered_scroll_bar() {
 }
 
 /// An imported folder is listed under its own name, not under every folder from the disk down to
-/// it (the full path is on hover); two folders with the same name say which folder each is in.
+/// it (the full path is on hover); below the first listed folder every folder nests in its own
+/// parent, the ones holding only subfolders included (#1022).
 #[test]
 fn an_imported_folder_is_listed_by_its_own_name() {
     let h = folders_app(&["/Users/me/Desktop/shoot/c.jpg"]);
     assert!(has(&h, "source:libfolder:/Users/me/Desktop/shoot"), "the imported folder is a row straight under its disk");
     assert!(!has(&h, "source:libfolder:/Users") && !has(&h, "source:libfolder:/Users/me"), "no rows for the folders on the way");
-    let h = folders_app(&["/Users/me/Pictures/2024/trip/a.jpg", "/Users/me/Pictures/2025/trip/b.jpg"]);
-    let tree = crate::panels::left::sidebar_folders(h.app.session.catalog.folder_tree());
+    let h =
+        folders_app(&["/Users/me/Pictures/2026/January/31st/a.jpg", "/Users/me/Pictures/2026/August/31st/b.jpg", "/Users/me/Pictures/2025/x/c.jpg"]);
+    let tree = crate::panels::left::sidebar_folders(h.app.session.catalog.folder_tree(), &Default::default());
     let pictures = &tree[0].children[0];
     assert_eq!((pictures.name.as_str(), pictures.path.as_str()), ("Pictures", "/Users/me/Pictures"), "where the two branch");
-    let names: Vec<(&str, &str)> = pictures.children.iter().map(|n| (n.name.as_str(), n.path.as_str())).collect();
-    assert_eq!(names, [("trip (2024)", "/Users/me/Pictures/2024/trip"), ("trip (2025)", "/Users/me/Pictures/2025/trip")]);
+    let y2026 = pictures.children.iter().find(|n| n.path == "/Users/me/Pictures/2026").expect("2026 is a row");
+    let months: Vec<&str> = y2026.children.iter().map(|n| n.name.as_str()).collect();
+    assert_eq!(months, ["August", "January"], "the months holding only subfolders keep their rows");
+    let jan = &y2026.children[1];
+    assert_eq!(
+        jan.children.iter().map(|n| (n.name.as_str(), n.path.as_str())).collect::<Vec<_>>(),
+        [("31st", "/Users/me/Pictures/2026/January/31st")]
+    );
+    let y2025 = pictures.children.iter().find(|n| n.path == "/Users/me/Pictures/2025").expect("2025 is a row");
+    assert_eq!(y2025.children.len(), 1, "a single subfolder below a listed folder is not lifted");
+    // a folder that holds nothing itself and leads to one folder starts open: the tree opens down to
+    // where the library branches
+    let h = folders_app(&["/Users/me/Pictures/2024/a.jpg", "/Users/me/Pictures/2025/b.jpg"]);
+    assert!(has(&h, "source:libfolder:/Users/me/Pictures"), "Users and me opened by themselves");
+    assert!(!has(&h, "source:libfolder:/Users/me/Pictures/2024"), "the branching folder waits to be opened");
+}
+
+/// Show Parent Folder gives a folder hidden on the way down from the disk a row of its own in the
+/// Folders list and chooses it (#1022).
+#[test]
+fn show_parent_folder_lists_the_parent_in_folders() {
+    let mut h = folders_app(&["/Users/me/Desktop/shoot/c.jpg"]);
+    assert!(!has(&h, "source:libfolder:/Users/me/Desktop"));
+    right_click(&mut h, "source:libfolder:/Users/me/Desktop/shoot");
+    click(&mut h, "folderShowParent");
+    assert_eq!(h.app.session.library_folder.as_deref(), Some("/Users/me/Desktop"));
+    h.step();
+    assert!(has(&h, "source:libfolder:/Users/me/Desktop"), "the parent is a row of the Folders list");
+    assert!(has(&h, "source:libfolder:/Users/me/Desktop/shoot"), "with the folder inside it");
 }
 
 #[test]

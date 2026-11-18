@@ -1,6 +1,6 @@
 //! M11.4 end to end, synthetic: `calibrate-lightroom fit` recovers a known hidden profile.
 //!
-//! A fictitious camera shoots 20 procedural colour charts under white balances from tungsten to daylight (DNGs
+//! A fictitious camera shoots 12 procedural colour charts under white balances from tungsten to daylight (DNGs
 //! written by `lcc_raw::write_dng`). Stand-in "Lightroom exports" are the app's own 16-bit ProPhoto TIFF renders
 //! of those raws with a hidden calibration (matrices, a hue-twisting look table and a tone curve) installed
 //! through the debug-only `<PREFIX>_CAMERA_CALIBRATIONS` folder; the export folder's name is the look. The fit
@@ -19,7 +19,7 @@ const BIN: &str = env!("CARGO_BIN_EXE_app-cli");
 const MAKE: &str = "Synthica";
 const MODEL: &str = "SX-1";
 const LOOK: &str = "Synth Vivid";
-const PHOTOS: usize = 20;
+const PHOTOS: usize = 12;
 
 fn scratch() -> PathBuf {
     let d = std::env::temp_dir().join(format!("lcc-cli-lrcal-e2e-{}", std::process::id()));

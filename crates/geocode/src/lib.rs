@@ -276,34 +276,35 @@ mod tests {
     }
 
     #[test]
-    fn across_the_antimeridian() {
-        let fiji = GeoNames::parse("1\tX\tX\t\t-17.0\t179.9\tP\tP\tFJ\t\t\n", None, None);
-        assert_eq!(fiji.reverse(LatLon::new(-17.0, -179.95)).unwrap().city, "X");
-    }
-
-    #[test]
-    fn city_on_the_antimeridian_is_found() {
-        let g = GeoNames::parse("1\tTaveuni\tTaveuni\t\t0.0\t180.0\tP\tPPL\tFJ\t\t01\n", None, None);
-        for lon in [179.9, -179.9, 180.0, -180.0] {
-            assert_eq!(g.reverse(LatLon::new(0.0, lon)).map(|p| p.city).as_deref(), Some("Taveuni"), "from {lon}");
+    fn cities_across_the_antimeridian_and_at_high_latitudes_are_found() {
+        // across the antimeridian
+        {
+            let fiji = GeoNames::parse("1\tX\tX\t\t-17.0\t179.9\tP\tP\tFJ\t\t\n", None, None);
+            assert_eq!(fiji.reverse(LatLon::new(-17.0, -179.95)).unwrap().city, "X");
         }
-    }
-
-    #[test]
-    fn high_latitude_cities_two_cells_away() {
-        let city = |lat: f64, lon: f64| GeoNames::parse(&format!("1\tX\tX\t\t{lat}\t{lon}\tP\tP\tNO\t\t\n"), None, None);
-        // 70°N: 1° of longitude is ~38 km, so 45.6 km is two cells east
-        assert_eq!(city(70.0, 0.9).reverse(LatLon::new(70.0, 2.1)).unwrap().city, "X");
-        assert_eq!(city(70.0, 2.1).reverse(LatLon::new(70.0, 0.9)).unwrap().city, "X");
-        // 64°N: 1° is ~48.7 km, so 1.02° is just inside range yet two cells apart
-        assert_eq!(city(64.0, 0.99).reverse(LatLon::new(64.0, 2.01)).unwrap().city, "X");
-        // across the antimeridian, two cells apart
-        assert_eq!(city(70.0, 178.9).reverse(LatLon::new(70.0, -179.9)).unwrap().city, "X");
-        assert_eq!(city(70.0, -179.9).reverse(LatLon::new(70.0, 178.9)).unwrap().city, "X");
-        // still out of range (~80 km)
-        assert!(city(70.0, 0.0).reverse(LatLon::new(70.0, 2.1)).is_none());
-        // very near the pole every longitude is close
-        assert_eq!(city(89.9, 0.5).reverse(LatLon::new(89.9, 100.0)).unwrap().city, "X");
+        // city on the antimeridian is found
+        {
+            let g = GeoNames::parse("1\tTaveuni\tTaveuni\t\t0.0\t180.0\tP\tPPL\tFJ\t\t01\n", None, None);
+            for lon in [179.9, -179.9, 180.0, -180.0] {
+                assert_eq!(g.reverse(LatLon::new(0.0, lon)).map(|p| p.city).as_deref(), Some("Taveuni"), "from {lon}");
+            }
+        }
+        // high latitude cities two cells away
+        {
+            let city = |lat: f64, lon: f64| GeoNames::parse(&format!("1\tX\tX\t\t{lat}\t{lon}\tP\tP\tNO\t\t\n"), None, None);
+            // 70°N: 1° of longitude is ~38 km, so 45.6 km is two cells east
+            assert_eq!(city(70.0, 0.9).reverse(LatLon::new(70.0, 2.1)).unwrap().city, "X");
+            assert_eq!(city(70.0, 2.1).reverse(LatLon::new(70.0, 0.9)).unwrap().city, "X");
+            // 64°N: 1° is ~48.7 km, so 1.02° is just inside range yet two cells apart
+            assert_eq!(city(64.0, 0.99).reverse(LatLon::new(64.0, 2.01)).unwrap().city, "X");
+            // across the antimeridian, two cells apart
+            assert_eq!(city(70.0, 178.9).reverse(LatLon::new(70.0, -179.9)).unwrap().city, "X");
+            assert_eq!(city(70.0, -179.9).reverse(LatLon::new(70.0, 178.9)).unwrap().city, "X");
+            // still out of range (~80 km)
+            assert!(city(70.0, 0.0).reverse(LatLon::new(70.0, 2.1)).is_none());
+            // very near the pole every longitude is close
+            assert_eq!(city(89.9, 0.5).reverse(LatLon::new(89.9, 100.0)).unwrap().city, "X");
+        }
     }
 
     #[test]

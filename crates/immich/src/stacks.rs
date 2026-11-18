@@ -177,42 +177,51 @@ mod tests {
     }
 
     #[test]
-    fn one_sided_changes_flow_to_the_other_side() {
-        let base = vec![g("a", &["b"])];
-        // nothing changed
-        assert!(reconcile(&base, &base, &base).is_noop());
-        // catalog added a stack
-        let p = reconcile(&[g("a", &["b"]), g("x", &["y"])], &base, &base);
-        assert_eq!(p.to_remote, vec![g("x", &["y"])]);
-        assert!(p.to_local.is_empty() && p.remove_remote.is_empty() && p.remove_local.is_empty());
-        // Immich changed the primary: the catalog follows (old group removed, new one created)
-        let p = reconcile(&base, &[g("b", &["a"])], &base);
-        assert_eq!((p.to_local.clone(), p.remove_local.clone()), (vec![g("b", &["a"])], vec![g("a", &["b"])]));
-        assert!(p.to_remote.is_empty() && p.remove_remote.is_empty());
-        // the catalog dissolved it: Immich follows
-        let p = reconcile(&[], &base, &base);
-        assert_eq!(p.remove_remote, vec![g("a", &["b"])]);
-        // Immich dissolved it: the catalog follows
-        let p = reconcile(&base, &[], &base);
-        assert_eq!(p.remove_local, vec![g("a", &["b"])]);
-        // first sync (no base): both sides' stacks are kept and mirrored
-        let p = reconcile(&[g("a", &["b"])], &[g("x", &["y"])], &[]);
-        assert_eq!((p.to_remote.clone(), p.to_local.clone()), (vec![g("a", &["b"])], vec![g("x", &["y"])]));
-        assert_eq!(next_base(&[g("a", &["b"])], &[g("x", &["y"])], &p).len(), 2);
-    }
-
-    #[test]
-    fn conflicting_changes_keep_the_catalog_version() {
-        let base = vec![g("a", &["b"])];
-        // catalog added c to the stack, Immich made b primary
-        let p = reconcile(&[g("a", &["b", "c"])], &[g("b", &["a"])], &base);
-        assert_eq!(p.to_remote, vec![g("a", &["b", "c"])]);
-        assert!(p.to_local.is_empty());
-        assert!(p.remove_local.is_empty(), "the catalog's group stays");
-        assert_eq!(p.conflicts.len(), 1);
-        assert_eq!(p.remove_remote, vec![g("b", &["a"])]);
-        let nb = next_base(&[g("a", &["b", "c"])], &[g("b", &["a"])], &p);
-        assert_eq!(nb, vec![g("a", &["b", "c"])]);
+    fn stacks_reconcile_between_the_sides() {
+        // one sided changes flow to the other side
+        {
+            let base = vec![g("a", &["b"])];
+            // nothing changed
+            assert!(reconcile(&base, &base, &base).is_noop());
+            // catalog added a stack
+            let p = reconcile(&[g("a", &["b"]), g("x", &["y"])], &base, &base);
+            assert_eq!(p.to_remote, vec![g("x", &["y"])]);
+            assert!(p.to_local.is_empty() && p.remove_remote.is_empty() && p.remove_local.is_empty());
+            // Immich changed the primary: the catalog follows (old group removed, new one created)
+            let p = reconcile(&base, &[g("b", &["a"])], &base);
+            assert_eq!((p.to_local.clone(), p.remove_local.clone()), (vec![g("b", &["a"])], vec![g("a", &["b"])]));
+            assert!(p.to_remote.is_empty() && p.remove_remote.is_empty());
+            // the catalog dissolved it: Immich follows
+            let p = reconcile(&[], &base, &base);
+            assert_eq!(p.remove_remote, vec![g("a", &["b"])]);
+            // Immich dissolved it: the catalog follows
+            let p = reconcile(&base, &[], &base);
+            assert_eq!(p.remove_local, vec![g("a", &["b"])]);
+            // first sync (no base): both sides' stacks are kept and mirrored
+            let p = reconcile(&[g("a", &["b"])], &[g("x", &["y"])], &[]);
+            assert_eq!((p.to_remote.clone(), p.to_local.clone()), (vec![g("a", &["b"])], vec![g("x", &["y"])]));
+            assert_eq!(next_base(&[g("a", &["b"])], &[g("x", &["y"])], &p).len(), 2);
+        }
+        // conflicting changes keep the catalog version
+        {
+            let base = vec![g("a", &["b"])];
+            // catalog added c to the stack, Immich made b primary
+            let p = reconcile(&[g("a", &["b", "c"])], &[g("b", &["a"])], &base);
+            assert_eq!(p.to_remote, vec![g("a", &["b", "c"])]);
+            assert!(p.to_local.is_empty());
+            assert!(p.remove_local.is_empty(), "the catalog's group stays");
+            assert_eq!(p.conflicts.len(), 1);
+            assert_eq!(p.remove_remote, vec![g("b", &["a"])]);
+            let nb = next_base(&[g("a", &["b", "c"])], &[g("b", &["a"])], &p);
+            assert_eq!(nb, vec![g("a", &["b", "c"])]);
+        }
+        // hostile groups never panic
+        {
+            let weird = vec![g("a", &[]), Group { primary: "z".into(), members: ["a".into(), "b".into()].into() }, g("a", &["b"]), g("b", &["c"])];
+            let p = reconcile(&weird, &weird, &[]);
+            let _ = next_base(&weird, &weird, &p);
+            assert!(p.to_remote.iter().all(Group::is_stack));
+        }
     }
 
     #[test]
@@ -231,13 +240,5 @@ mod tests {
         let some: BTreeSet<String> = ["q", "r"].iter().map(|s| s.to_string()).collect();
         assert_eq!(remote_groups(std::slice::from_ref(&st), &some), vec![g("q", &["r"])]);
         assert_eq!(stack_index(&[st]).get("q").map(String::as_str), Some("s"));
-    }
-
-    #[test]
-    fn hostile_groups_never_panic() {
-        let weird = vec![g("a", &[]), Group { primary: "z".into(), members: ["a".into(), "b".into()].into() }, g("a", &["b"]), g("b", &["c"])];
-        let p = reconcile(&weird, &weird, &[]);
-        let _ = next_base(&weird, &weird, &p);
-        assert!(p.to_remote.iter().all(Group::is_stack));
     }
 }

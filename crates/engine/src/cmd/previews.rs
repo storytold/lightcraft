@@ -236,6 +236,57 @@ impl PreviewBuild {
     }
 }
 
+/// A preview build asked for while one was already running, waiting for its turn in
+/// [`Session::preview_queue`]: the command to run again and its parameters.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QueuedPreview {
+    /// `library.buildPreviews` or `library.smartPreviews`.
+    pub command: &'static str,
+    pub params: Value,
+}
+
+/// How many preview builds may wait for the running one (a runaway script asks forever; a person
+/// cannot get past a handful).
+const QUEUE_MAX: usize = 16;
+
+/// Queue request `p` of `command` behind the running build ([`Session::preview_queue`]): an
+/// identical request already waiting is not queued twice. → its place in the queue.
+fn enqueue(s: &mut Session, c: &str, command: &'static str, p: &Value) -> Result<Value> {
+    // a queued build runs when its turn comes, on the frontend that drains the queue — never as
+    // a blocking `wait` run, which would hold that whole frame (the queue's answer is immediate;
+    // progress comes from `library.previewProgress`, as any background build's)
+    let mut params = p.clone();
+    if let Some(o) = params.as_object_mut() {
+        o.remove("wait");
+    }
+    if let Some(place) = s.preview_queue.iter().position(|q| q.command == command && q.params == params) {
+        return Ok(json!({"queued": true, "position": place + 1}));
+    }
+    if s.preview_queue.len() >= QUEUE_MAX {
+        return Err(bad(c, format!("{} preview builds are already waiting; stop the running one first", QUEUE_MAX)));
+    }
+    s.preview_queue.push_back(QueuedPreview { command, params });
+    Ok(json!({"queued": true, "position": s.preview_queue.len()}))
+}
+
+/// Start the next queued preview build when no build that was asked for is running
+/// ([`Session::preview_queue`]); the frontends call this every frame. The background
+/// preparation's build gives way to the queued one, as it would to a build asked for from the
+/// menu. An entry that no longer can start (its smart previews folder went away, say) is dropped
+/// with its reason in the log, and the one after it starts on the next call. `None`: nothing was
+/// due.
+pub fn drain_queue(s: &mut Session) -> Option<Result<Value>> {
+    if s.preview_build.as_ref().is_some_and(|b| b.running() && !b.background) || s.preview_queue.is_empty() {
+        return None;
+    }
+    let next = s.preview_queue.pop_front()?;
+    let r = s.execute(next.command, &next.params);
+    if let Err(e) = &r {
+        log::warn!("queued {}: {e}", next.command);
+    }
+    Some(r)
+}
+
 /// The jobs that build `id`'s previews: the largest grid thumbnail and the view render at `edge`
 /// (`None` = 1:1, the photo's full size), the larger first.
 pub(crate) fn jobs_for(s: &mut Session, id: lcc_catalog::PhotoId, edge: Option<usize>) -> Vec<RenderJob> {
@@ -244,6 +295,17 @@ pub(crate) fn jobs_for(s: &mut Session, id: lcc_catalog::PhotoId, edge: Option<u
     let e = edge.unwrap_or(full).min(full.max(1)).max(1);
     let thumb = THUMB_SIZES[THUMB_SIZES.len() - 1];
     let (mut view, grid) = (s.loupe_job(id, e, e, true), s.thumb_job(id, thumb));
+    // a standard preview reads the original only as large as it needs (a JPEG then decodes straight at a half, a
+    // quarter or an eighth of its size): not whole, which for a 50 MP photo is over a gigabyte a lane. The decode is
+    // the build's own (it is not kept as the photo's full-size source), and shared only with decodes of the same size.
+    if edge.is_some()
+        && let Some(j) = view.as_mut()
+        && j.level == crate::media::SourceLevel::Full
+        && let Some(needed) = s.source_edge_for(id, e)
+        && let crate::media::SourceRef::File { max_edge, .. } = &mut j.source
+    {
+        *max_edge = needed.min(*max_edge);
+    }
     // a 1:1 preview is kept under its own key, to be discarded on its own
     if edge.is_none()
         && let Some(j) = view.as_mut()
@@ -545,12 +607,16 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
         other => return Err(bad(C, format!("unknown size `{other}` (standard|full)"))),
     };
     if let Some(b) = s.preview_build.as_ref().filter(|b| b.running()) {
-        // the background preparation gives way to a build that was asked for; nothing replaces a
-        // build that was asked for (it carries on, and the photos it built are skipped by the next)
+        // the background preparation gives way to a build that was asked for; a build asked for
+        // while another runs waits for its turn (the menu's builds queue up), and nothing
+        // replaces one that was asked for (it carries on, and the photos it built are skipped by
+        // the next)
         if b.background && !background {
             b.cancel.store(true, Ordering::Relaxed);
-        } else {
+        } else if background {
             return Err(bad(C, "a preview build is already running"));
+        } else {
+            return enqueue(s, C, "library.buildPreviews", p);
         }
     }
     // 1:1 previews past their time go first (the build may need the room). The background
@@ -925,11 +991,12 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     let discard = p.get("discard").and_then(Value::as_bool).unwrap_or(false);
     let background = p.get("background").and_then(Value::as_bool).unwrap_or(false);
     if background && let Some(b) = s.preview_build.as_ref().filter(|b| b.running()) {
-        // (the background preparation gives way, as to Build Previews)
+        // (the background preparation gives way, as to Build Previews; a build asked for while
+        // another runs waits for its turn, as Build Previews does)
         if b.background {
             b.cancel.store(true, Ordering::Relaxed);
         } else {
-            return Err(bad(C, "a preview build is already running"));
+            return enqueue(s, C, "library.smartPreviews", p);
         }
     }
     let ids = if p.get("ids").is_some() || !s.selection.ids.is_empty() { s.targets(p)? } else { s.visible_cloned() };
@@ -1098,7 +1165,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Build Smart Previews",
             [],
             None,
-            "{ids?, discard?: bool, background?: bool}: build (or discard) the smart previews of the selected photos (else all in view): compact proxies in the library that keep photos editable and exportable (at proxy size) while their originals are offline; a damaged proxy (cut short) is rebuilt → {built, repaired, removed, failed}; with background (the app's menu) the files are read and written on a worker thread → {total, done, failed, repaired, running, what} like library.buildPreviews (progress: library.previewProgress, stop: library.cancelPreviews)",
+            "{ids?, discard?: bool, background?: bool}: build (or discard) the smart previews of the selected photos (else all in view): compact proxies in the library that keep photos editable and exportable (at proxy size) while their originals are offline; a damaged proxy (cut short) is rebuilt → {built, repaired, removed, failed}; with background (the app's menu) the files are read and written on a worker thread → {total, done, failed, repaired, running, what} like library.buildPreviews (progress: library.previewProgress, stop: library.cancelPreviews), and like it a background request while another build runs waits for its turn → {queued: true, position}",
             always,
             smart
         ),
@@ -1125,7 +1192,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Build Previews",
             [],
             None,
-            "{size?: standard (the library's standard size, or `edge`) | full (1:1), ids?, wait?: bool, force?: bool, from?: id, backward?: bool, background?: bool}: render the grid thumbnail and loupe view of the selected photos (else all in view) into the preview cache (memory and disk), in the background unless `wait`. Photos whose previews are there already (big enough) are skipped unless `force`; the photos nearest `from` go first, in the direction of travel. `background`: the background preparation's build (at least the loupe's size, two lanes, waits while the photo on screen renders and while an export or import runs; a build asked for replaces it) → {total, done, failed, skipped, shared, background, running}",
+            "{size?: standard (the library's standard size, or `edge`) | full (1:1), ids?, wait?: bool, force?: bool, from?: id, backward?: bool, background?: bool}: render the grid thumbnail and loupe view of the selected photos (else all in view) into the preview cache (memory and disk), in the background unless `wait`. Photos whose previews are there already (big enough) are skipped unless `force`; the photos nearest `from` go first, in the direction of travel. A build asked for while another runs waits for its turn (an identical waiting request is not queued twice; library.cancelPreviews drops the waiting ones) → {queued: true, position}. `background`: the background preparation's build (at least the loupe's size, two lanes, waits while the photo on screen renders and while an export or import runs; a build asked for replaces it) → {total, done, failed, skipped, shared, background, running}",
             always,
             build
         ),
@@ -1148,6 +1215,10 @@ pub fn specs() -> Vec<CommandSpec> {
             settings
         ),
         cmd!(query "library.previewProgress", "Preview Build Progress", [], None, "{} → {total, done, failed, repaired, skipped, shared, background, running, cancelled, what, error} | null", always, |s, _| {
+            // a poll is the headless frontends' (CLI, MCP) frame: the waiting build starts here,
+            // as it does on the app's own poll ([`drain_queue`]'s guards make it a no-op while a
+            // build that was asked for still runs)
+            drain_queue(s);
             Ok(s.preview_build.as_ref().map_or(Value::Null, |b| b.json()))
         }),
         cmd!(query "prefs.backgroundPrep", "Background Preparation Settings", [], None, "{} → {app, library|null, settings (in use), own: bool (this library keeps its own), building}: what is prepared in the background per mode (culling | library: previews = build the previews of every photo in view in the spare time, ahead = photos each way rendered for the loupe before they are reached, eyeAhead = photos ahead whose eye focus strip is worked out, scope all|marked|onScreen; develop: ahead = photos each way made ready to edit, scope)", always, |s, _| {
@@ -1195,12 +1266,28 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(s.prep_json())
             }
         ),
-        cmd!("library.cancelPreviews", "Cancel Preview Build", [], None, "{}", always, |s, _| {
-            if let Some(b) = &s.preview_build {
-                b.cancel.store(true, Ordering::Relaxed);
+        cmd!(
+            "library.cancelPreviews",
+            "Cancel Preview Build",
+            [],
+            None,
+            "{}: stop the running preview build and drop the builds waiting behind it → the build's state (null without one), with how many waiting builds were dropped",
+            always,
+            |s, _| {
+                let dropped = s.preview_queue.drain(..).count() as u64;
+                if let Some(b) = &s.preview_build {
+                    b.cancel.store(true, Ordering::Relaxed);
+                }
+                let mut r = s.preview_build.as_ref().map_or(Value::Null, |b| b.json());
+                if dropped > 0 {
+                    if !r.is_object() {
+                        r = json!({});
+                    }
+                    r["queuedDropped"] = json!(dropped);
+                }
+                Ok(r)
             }
-            Ok(s.preview_build.as_ref().map_or(Value::Null, |b| b.json()))
-        }),
+        ),
     ]
 }
 
@@ -1384,17 +1471,6 @@ mod tests {
         assert_eq!(r["done"], json!(ids.len()), "{r}");
         assert_eq!(r["total"], json!(ids.len()));
         assert_eq!(r["failed"], json!(0));
-    }
-
-    // 1:1 previews run two photos per graphics card (two more feed a second card), never more than
-    // the memory-bound count; standard previews keep the export's count
-    #[test]
-    fn full_size_previews_run_two_photos_per_graphics_card() {
-        let hint = crate::gpu::batch_lanes_hint(2);
-        assert_eq!(hint, 2 * crate::gpu::batch_cards().max(1));
-        assert_eq!(super::lanes(64, true), crate::export::export_parallelism(64).min(hint));
-        assert_eq!(super::lanes(64, false), crate::export::export_parallelism(64));
-        assert!(super::lanes(1, true) >= 1);
     }
 
     // Given a photo, its preview build renders as batch work (a turn on whichever card has room,

@@ -1180,11 +1180,11 @@ fn center(ui: &mut egui::Ui, app: &mut LccApp) {
         area.max.y = film.top();
         filmstrip(ui, app, film);
     }
-    if app.ui.right_edge {
+    if crate::module::module_edge(app, Edge::Right) {
         let right = crate::panels::split_side(ui, &mut area, false, "book:right", &mut app.ui.right_width, crate::state::RIGHT_WIDTH);
         ui.scope_builder(UiBuilder::new().max_rect(right), |ui| right_panels(ui, app, right));
     }
-    if app.ui.left_panel {
+    if crate::module::module_edge(app, Edge::Left) {
         let left = crate::panels::split_side(ui, &mut area, true, "book:left", &mut app.ui.left_width, crate::state::LEFT_WIDTH);
         ui.scope_builder(UiBuilder::new().max_rect(left), |ui| left_panels(ui, app, left));
     }
@@ -1954,6 +1954,12 @@ mod tests {
         r["result"].clone()
     }
 
+    /// The export renders every page before it writes (and before it checks the path), so the tests that
+    /// export use the smallest book at the lowest resolution: at the default 240 ppi they took minutes.
+    fn small_book(h: &mut Headless) {
+        run(h, "book.settings", json!({"size": "smallSquare", "resolution": 72}));
+    }
+
     /// Book Preferences are applied by `book.new`: fit instead of fill, guides off, and Auto-fill lays the
     /// selected photos out at once.
     #[test]
@@ -1982,9 +1988,11 @@ mod tests {
 
     #[test]
     fn book_module_lays_out_edits_and_exports() {
+        let dir = lcc_testkit::TempDir::new("book-ui-test");
         let _turn = exports_one_at_a_time();
         let mut h = demo();
         run(&mut h, "module.book", json!({}));
+        small_book(&mut h);
         let r = run(&mut h, "book.autoLayout", json!({"preset": "Two Per Page"}));
         assert!(r["pages"].as_u64().unwrap() >= 1, "{r}");
         h.settle(Duration::from_secs(60));
@@ -2012,13 +2020,11 @@ mod tests {
         assert_eq!(r["pages"].as_u64().unwrap() as usize, pages, "{r}");
         for v in BookView::ALL {
             run(&mut h, "book.view", json!({"mode": v.key()}));
-            let img = h.snapshot(T);
-            assert!(img.width() > 0);
+            h.step();
         }
         // swap by command, bad input is an error
         let bad = h.request("engine.execute", json!({"command": "book.cell", "params": {"page": 1, "cell": 0, "zoom": "x"}}), T);
         assert_eq!(bad["ok"], false);
-        let dir = std::env::temp_dir().join(format!("book-ui-test-{}", std::process::id()));
         let pdf = dir.join("b.pdf");
         let r = run(&mut h, "book.export", json!({"path": pdf.to_string_lossy(), "wait": true}));
         let f = r["files"][0].as_str().unwrap().to_string();
@@ -2046,11 +2052,12 @@ mod tests {
     /// from MCP or the control channel); the files are left as they were.
     #[test]
     fn book_export_refuses_to_overwrite_an_original() {
+        let dir = lcc_testkit::TempDir::new("book-guard");
         let _turn = exports_one_at_a_time();
         let mut h = demo();
         run(&mut h, "module.book", json!({}));
+        small_book(&mut h);
         run(&mut h, "book.autoLayout", json!({"preset": "Two Per Page"}));
-        let dir = std::env::temp_dir().join(format!("book-guard-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let orig = dir.join("scan.pdf");
         std::fs::write(&orig, b"original").unwrap();

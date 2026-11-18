@@ -275,34 +275,35 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn colours_normalise_or_fall_back() {
-        assert_eq!(normalize_color("#ABC").as_deref(), Some("#aabbcc"));
-        assert_eq!(normalize_color("102030").as_deref(), Some("#102030"));
-        assert_eq!(normalize_color("red"), None);
-        assert_eq!(normalize_color("#12345"), None);
-        assert_eq!(color_rgb("#ff8000"), [255, 128, 0]);
-        let p = Palette { background: "nope\"><script>".into(), ..Palette::default() }.sanitized();
-        assert_eq!(p.background, Palette::default().background);
-    }
-
-    #[test]
-    fn hostile_numbers_are_clamped() {
-        let s =
-            GallerySettings::from_json(&json!({"appearance": {"columns": 0, "thumbSize": 99999}, "output": {"quality": 0, "largeSize": 1}})).unwrap();
-        assert_eq!(s.appearance.columns, 2);
-        assert_eq!(s.appearance.thumb_size, 400);
-        assert_eq!(s.output.quality, 1);
-        assert_eq!(s.output.large_size, 300);
-        assert!(GallerySettings::from_json(&json!({"appearance": {"columns": -3}})).is_err());
-    }
-
-    #[test]
-    fn merge_patches_nested_fields() {
-        let s = GallerySettings::default().merged(&json!({"site": {"title": "Trip"}, "template": "track"})).unwrap();
-        assert_eq!(s.site.title, "Trip");
-        assert_eq!(s.template, Template::Track);
-        assert_eq!(s.palette, Palette::default());
-        let back: GallerySettings = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
-        assert_eq!(back, s);
+    fn settings_normalise_clamp_and_merge() {
+        // colours normalise or fall back
+        {
+            assert_eq!(normalize_color("#ABC").as_deref(), Some("#aabbcc"));
+            assert_eq!(normalize_color("102030").as_deref(), Some("#102030"));
+            assert_eq!(normalize_color("red"), None);
+            assert_eq!(normalize_color("#12345"), None);
+            assert_eq!(color_rgb("#ff8000"), [255, 128, 0]);
+            let p = Palette { background: "nope\"><script>".into(), ..Palette::default() }.sanitized();
+            assert_eq!(p.background, Palette::default().background);
+        }
+        // hostile numbers are clamped
+        {
+            let s = GallerySettings::from_json(&json!({"appearance": {"columns": 0, "thumbSize": 99999}, "output": {"quality": 0, "largeSize": 1}}))
+                .unwrap();
+            assert_eq!(s.appearance.columns, 2);
+            assert_eq!(s.appearance.thumb_size, 400);
+            assert_eq!(s.output.quality, 1);
+            assert_eq!(s.output.large_size, 300);
+            assert!(GallerySettings::from_json(&json!({"appearance": {"columns": -3}})).is_err());
+        }
+        // merge patches nested fields
+        {
+            let s = GallerySettings::default().merged(&json!({"site": {"title": "Trip"}, "template": "track"})).unwrap();
+            assert_eq!(s.site.title, "Trip");
+            assert_eq!(s.template, Template::Track);
+            assert_eq!(s.palette, Palette::default());
+            let back: GallerySettings = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
+            assert_eq!(back, s);
+        }
     }
 }

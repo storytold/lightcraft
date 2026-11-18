@@ -63,15 +63,37 @@ fn check_one_to_one(s: &mut Session, id: lcc_catalog::PhotoId) {
     }
 }
 
-// Given a procedural photo with edits, every 1:1 window equals the full-resolution export
+/// A session with `n` photos of `w`×`h` whose sources at `level` are already decoded: textured
+/// pictures made in milliseconds (a full-size demo scene takes ten seconds to generate).
+fn decoded_photos(n: u64, w: usize, h: usize, level: crate::media::SourceLevel) -> (Session, Vec<lcc_catalog::PhotoId>) {
+    use lcc_catalog::{Op, Photo, PhotoId, Source};
+    let mut s = Session::new();
+    let ids: Vec<PhotoId> = (1..=n).map(PhotoId).collect();
+    for &id in &ids {
+        let name = format!("{}.jpg", id.0);
+        let p = Photo::new(id, Source::File { path: format!("/nowhere/{name}") }, &name, "JPEG", w as u32, h as u32, "");
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        let k = id.0 as usize;
+        let px = |x: usize, y: usize| {
+            let t = ((x * 7 + y * 13 + k * 5) % 97) as f32 / 97.0;
+            [0.1 + 0.5 * x as f32 / w as f32 + 0.1 * t, 0.2 + 0.4 * y as f32 / h as f32, 0.15 + 0.3 * t]
+        };
+        s.media.insert(id, level, std::sync::Arc::new(lcc_raster::Rgb32f::from_fn(w, h, px)));
+    }
+    (s, ids)
+}
+
+// Given a camera-sized photo with tone, local-contrast and sharpening edits, every 1:1 window
+// equals the full-resolution export
 #[test]
 fn one_to_one_pixels_equal_full_resolution_export_pixels() {
-    let mut s = Session::with_demo();
-    let id = s.active().unwrap();
-    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.4})).unwrap();
-    s.execute("develop.set", &json!({"control": "effects.clarity", "value": 20})).unwrap();
-    s.execute("develop.set", &json!({"control": "detail.sharpenAmount", "value": 60})).ok();
-    check_one_to_one(&mut s, id);
+    let (mut s, ids) = decoded_photos(1, 3000, 2000, crate::media::SourceLevel::Full);
+    let mut d = (*s.develop_of(ids[0]).unwrap()).clone();
+    d.light.exposure = 0.4;
+    d.effects.clarity = 20.0;
+    d.detail.sharpen_amount = 60.0;
+    s.set_develop(ids[0], d, "Edits").unwrap();
+    check_one_to_one(&mut s, ids[0]);
 }
 
 // Given corpus raws (`cargo xtask corpus --download`), the same holds for real files; skipped
@@ -111,8 +133,8 @@ fn one_to_one_pixels_equal_export_pixels_on_corpus_raws() {
 #[test]
 fn one_to_one_previews_are_discarded_on_their_own() {
     let _keys = crate::sensor_maps::keep_generation();
-    let mut s = Session::with_demo();
-    let id = s.active().unwrap();
+    let (mut s, ids) = decoded_photos(1, 3000, 2000, crate::media::SourceLevel::Full);
+    let id = ids[0];
     let p = s.catalog.photo(id).unwrap().clone();
     s.execute("library.buildPreviews", &json!({"size": "full", "ids": [id.0], "wait": true})).unwrap();
     let full = Session::full_view_key(&p);
@@ -182,11 +204,204 @@ fn preview_build_makes_the_thumbnail_from_the_views_source() {
 // Given many photos, a standard preview build renders them side by side and counts every one
 #[test]
 fn preview_build_of_many_photos_counts_each_once() {
-    let mut s = Session::with_demo();
-    let ids: Vec<u64> = s.catalog.photos().map(|p| p.id.0).collect();
-    assert!(ids.len() > 4);
+    let (mut s, ids) = decoded_photos(6, 600, 400, crate::media::SourceLevel::Thumb);
+    // (more photos than the cache keeps decoded: the rest come from this loader, no file needed)
+    s.media.reduced_loader = None;
+    s.media.preview_loader = None;
+    s.media.file_loader = Some(std::sync::Arc::new(|_, _, _| {
+        let mut image = lcc_raster::Rgb32f::new(600, 400);
+        image.data.fill([0.3, 0.2, 0.1]);
+        Ok((image, Default::default()))
+    }));
+    let ids: Vec<u64> = ids.iter().map(|id| id.0).collect();
     let r = s.execute("library.buildPreviews", &json!({"size": "standard", "edge": 512, "ids": ids, "wait": true})).unwrap();
     assert_eq!(r["done"], json!(ids.len()), "{r}");
     assert_eq!(r["total"], json!(ids.len()));
     assert_eq!(r["failed"], json!(0));
+}
+
+// ---- a build asked for while another runs waits for its turn (the preview queue)
+
+/// Wait (at most 30 s) until build `b` is over.
+fn wait_done(b: &crate::cmd::previews::PreviewBuild) -> bool {
+    for _ in 0..1500 {
+        if !b.running() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    false
+}
+
+/// A session of `n` synthetic photos whose every decode waits on `gate` (a failed test never
+/// leaves its lanes waiting: the gate gives up after a minute): a build's lanes hold in the
+/// loader, so a test can ask for a second build while the first truly runs.
+fn gated_photos(n: u64, gate: std::sync::Arc<std::sync::atomic::AtomicBool>) -> (Session, Vec<lcc_catalog::PhotoId>) {
+    use lcc_catalog::{Op, Photo, PhotoId, Source};
+    let mut s = Session::new();
+    let ids: Vec<PhotoId> = (1..=n).map(PhotoId).collect();
+    for &id in &ids {
+        let name = format!("{}.jpg", id.0);
+        let p = Photo::new(id, Source::File { path: format!("/nowhere/{name}") }, &name, "JPEG", 600, 400, "");
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    s.media.file_loader = Some(std::sync::Arc::new(move |_, _, _| {
+        let t0 = std::time::Instant::now();
+        while !gate.load(std::sync::atomic::Ordering::Acquire) && t0.elapsed() < std::time::Duration::from_secs(60) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let mut image = lcc_raster::Rgb32f::new(600, 400);
+        image.data.fill([0.3, 0.2, 0.1]);
+        Ok((image, Default::default()))
+    }));
+    (s, ids)
+}
+
+// Given a build running, a second one asked for waits for its turn, then runs: every photo is
+// built exactly once by each (the user queues a 1:1 build behind the standard one, as several
+// processes at once)
+#[test]
+fn a_build_asked_for_while_one_runs_waits_for_its_turn() {
+    let _keys = crate::sensor_maps::keep_generation();
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (mut s, ids) = gated_photos(6, gate.clone());
+    let ids: Vec<u64> = ids.iter().map(|id| id.0).collect();
+    let r = s.execute("library.buildPreviews", &json!({"size": "standard", "edge": 512, "ids": ids})).unwrap();
+    assert_eq!(r["running"], true, "{r}");
+    // the same request again while one runs: not an error, not a second build — it waits
+    let q = s.execute("library.buildPreviews", &json!({"size": "full", "ids": ids})).unwrap();
+    assert_eq!((q["queued"].as_bool(), q["position"].as_u64()), (Some(true), Some(1)), "{q}");
+    assert_eq!(s.preview_queue.len(), 1);
+    // the first build ends, and the waiting one runs and completes, every photo once
+    gate.store(true, std::sync::atomic::Ordering::Release);
+    let first = s.preview_build.clone().unwrap();
+    assert!(wait_done(&first), "the first build ended");
+    let started = crate::cmd::previews::drain_queue(&mut s).expect("the waiting build starts");
+    assert!(started.is_ok(), "{started:?}");
+    let second = s.preview_build.clone().unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&first, &second), "a fresh build");
+    assert!(wait_done(&second), "the second build ended");
+    let r = second.json();
+    assert_eq!(r["done"], json!(ids.len()), "{r}");
+    assert_eq!(r["failed"], json!(0));
+    assert_eq!(r["skipped"], json!(0), "1:1 previews are their own build's work");
+    assert!(crate::cmd::previews::drain_queue(&mut s).is_none(), "nothing more waits");
+}
+
+// Given a request already waiting, the same one is not queued twice; a different one queues
+// behind it; and past a full queue the ask is refused
+#[test]
+fn identical_waiting_requests_are_not_queued_twice_and_the_queue_has_a_cap() {
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (mut s, ids) = gated_photos(4, gate.clone());
+    let ids: Vec<u64> = ids.iter().map(|id| id.0).collect();
+    s.execute("library.buildPreviews", &json!({"size": "standard", "edge": 512, "ids": ids})).unwrap();
+    let same = json!({"size": "full", "ids": ids});
+    let q = s.execute("library.buildPreviews", &same).unwrap();
+    assert_eq!(q["position"], 1, "{q}");
+    let q = s.execute("library.buildPreviews", &same).unwrap();
+    assert_eq!(q["position"], 1, "still one waiting: {q}");
+    let q = s.execute("library.buildPreviews", &json!({"size": "standard", "edge": 256, "ids": ids})).unwrap();
+    assert_eq!(q["position"], 2, "a different one queues behind it: {q}");
+    assert_eq!(s.preview_queue.len(), 2);
+    for i in 0..14 {
+        let q = s.execute("library.buildPreviews", &json!({"size": "standard", "edge": 300 + i, "ids": ids})).unwrap();
+        assert_eq!(q["position"], 3 + i, "{q}");
+    }
+    let e = s.execute("library.buildPreviews", &json!({"size": "standard", "edge": 4000, "ids": ids})).unwrap_err();
+    assert!(e.to_string().contains("waiting"), "{e}");
+    // Stop drops them all and cancels the running one
+    let r = s.execute("library.cancelPreviews", &json!({})).unwrap();
+    assert_eq!(r["queuedDropped"], json!(16), "{r}");
+    assert_eq!(r["cancelled"], true, "{r}");
+    assert!(s.preview_queue.is_empty());
+    gate.store(true, std::sync::atomic::Ordering::Release);
+    let b = s.preview_build.clone().unwrap();
+    assert!(wait_done(&b));
+    assert!(crate::cmd::previews::drain_queue(&mut s).is_none(), "nothing more starts");
+}
+
+// Given Stop with builds waiting, the waiting ones are dropped and nothing starts after the
+// running one ends
+#[test]
+fn stop_drops_the_waiting_builds_and_cancels_the_running_one() {
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (mut s, ids) = gated_photos(4, gate.clone());
+    let ids: Vec<u64> = ids.iter().map(|id| id.0).collect();
+    s.execute("library.buildPreviews", &json!({"size": "standard", "edge": 512, "ids": ids})).unwrap();
+    s.execute("library.buildPreviews", &json!({"size": "full", "ids": ids})).unwrap();
+    s.execute("library.buildPreviews", &json!({"size": "standard", "edge": 256, "ids": ids})).unwrap();
+    let running = s.preview_build.clone().unwrap();
+    let r = s.execute("library.cancelPreviews", &json!({})).unwrap();
+    assert_eq!(r["queuedDropped"], json!(2), "{r}");
+    assert!(running.cancel.load(std::sync::atomic::Ordering::Relaxed), "the running one is stopped");
+    gate.store(true, std::sync::atomic::Ordering::Release);
+    assert!(wait_done(&running));
+    assert!(crate::cmd::previews::drain_queue(&mut s).is_none(), "nothing was left to start");
+    assert!(std::sync::Arc::ptr_eq(&running, &s.preview_build.clone().unwrap()), "no build took its place");
+}
+
+// Given a plain build running, a smart previews request waits for its turn and then runs
+#[test]
+fn a_smart_previews_request_waits_for_the_running_build() {
+    let _keys = crate::sensor_maps::keep_generation();
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (root, mut s, ids) = crate::tests_preview_prep::library("queue-smart", 4);
+    let gate2 = gate.clone();
+    s.media.file_loader = Some(std::sync::Arc::new(move |_, _, _| {
+        let t0 = std::time::Instant::now();
+        while !gate2.load(std::sync::atomic::Ordering::Acquire) && t0.elapsed() < std::time::Duration::from_secs(60) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let mut image = lcc_raster::Rgb32f::new(600, 400);
+        image.data.fill([0.3, 0.2, 0.1]);
+        Ok((image, Default::default()))
+    }));
+    let ids: Vec<u64> = ids.iter().map(|id| id.0).collect();
+    s.execute("library.buildPreviews", &json!({"size": "standard", "edge": 512, "ids": ids})).unwrap();
+    let q = s.execute("library.smartPreviews", &json!({"background": true, "ids": ids})).unwrap();
+    assert_eq!((q["queued"].as_bool(), q["position"].as_u64()), (Some(true), Some(1)), "{q}");
+    gate.store(true, std::sync::atomic::Ordering::Release);
+    let first = s.preview_build.clone().unwrap();
+    assert!(wait_done(&first), "the plain build ended");
+    let started = crate::cmd::previews::drain_queue(&mut s).expect("the smart build starts");
+    assert!(started.is_ok(), "{started:?}");
+    let smart = s.preview_build.clone().unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&first, &smart), "a fresh build");
+    assert!(wait_done(&smart), "the smart build ended");
+    let r = s.execute("library.previewProgress", &json!({})).unwrap();
+    assert_eq!(r["what"], "smart previews", "{r}");
+    assert_eq!(r["done"], json!(ids.len()), "{r}");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+// Given an original far too big to decode whole within any memory budget, the window and a standard preview build read
+// it smaller, while an export still reads it whole (a 200 MP phone JPEG closed the app on a phone)
+#[test]
+fn a_huge_original_is_read_smaller_for_the_window_and_previews_but_whole_for_an_export() {
+    use crate::media::SourceRef;
+    let mut s = Session::with_demo();
+    let id = s.catalog.alloc_photo_id();
+    // 30 gigapixels: whole, it is ~800 GB decoded
+    let p = lcc_catalog::Photo::new(
+        id,
+        lcc_catalog::Source::File { path: "/nonexistent/huge.jpg".into() },
+        "huge.jpg",
+        "JPEG",
+        200_000,
+        150_000,
+        "2026-01-01T10:00:00",
+    );
+    s.catalog.apply(lcc_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let edge = |src: &SourceRef| match src {
+        SourceRef::File { max_edge, .. } => *max_edge,
+        _ => panic!("a file source"),
+    };
+    assert!(s.full_source_capped(id));
+    let window = s.render_job(id, 4000, 3000, false, true).unwrap();
+    assert!(edge(&window.source) < 200_000, "the window reads a smaller decode");
+    let export = s.export_job(id, 4000, 3000, OutputSpace::Srgb, OutputDepth::U8).unwrap();
+    assert!(edge(&export.source) >= 200_000, "an export reads the original whole");
+    let jobs = crate::cmd::previews::jobs_for(&mut s, id, Some(3000));
+    assert!(edge(&jobs[0].source) <= 3000, "a standard preview reads only what it shows");
 }

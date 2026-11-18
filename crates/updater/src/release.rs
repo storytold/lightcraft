@@ -64,12 +64,13 @@ impl Release {
         })
     }
 
-    /// The file to install on `target`: an installer first, then a plain archive; `None` when the
-    /// release has nothing this platform can use. A `portable` copy takes the portable zip, never an
-    /// installer ([`Target::matches_portable`]).
+    /// The file to install on `target`: an installer first, then a plain archive, each for this
+    /// architecture before a fallback ([`Target::is_fallback`]: the universal macOS image); `None`
+    /// when the release has nothing this platform can use. A `portable` copy takes the portable
+    /// zip, never an installer ([`Target::matches_portable`]).
     pub fn best_asset(&self, target: &Target, portable: bool) -> Option<&Asset> {
         let ours = |name: &str| if portable { target.matches_portable(name) } else { target.matches_name(name) };
-        self.assets.iter().filter(|a| a.kind != Kind::Checksums && ours(&a.name)).min_by_key(|a| (a.kind.rank(), a.size))
+        self.assets.iter().filter(|a| a.kind != Kind::Checksums && ours(&a.name)).min_by_key(|a| (a.kind.rank(), target.is_fallback(&a.name), a.size))
     }
 
     /// The release's checksum list, when it publishes one.
@@ -185,14 +186,6 @@ mod tests {
     }
 
     #[test]
-    fn a_tag_that_is_not_a_version_is_not_ours() {
-        let v = serde_json::json!([api_release("docs-2026", false, &[("app.msi", "https://x/a", 1)])]).to_string();
-        assert!(newest(&v, false).is_err(), "an unversioned tag is not a release");
-        let draft = serde_json::json!([{"tag_name": "v9.9.9", "draft": true, "assets": []}]).to_string();
-        assert!(newest(&draft, false).is_err(), "a draft is not published yet");
-    }
-
-    #[test]
     fn choices_the_installer_over_the_archive() {
         let r = newest(&feed(), false).expect("a release");
         let win = Target { os: crate::target::Os::Windows, arch: "x64" };
@@ -228,26 +221,34 @@ mod tests {
     }
 
     #[test]
-    fn a_single_release_object_works_too() {
-        let one = serde_json::json!({"tag_name": "v2.0.0", "assets": [{"name": "app-2.0.0-macos-universal.dmg", "browser_download_url": "https://x/d", "size": 3}]}).to_string();
-        assert_eq!(newest(&one, false).expect("a release").version.to_text(), "2.0.0");
-    }
-
-    #[test]
-    fn broken_feeds_are_errors_not_panics() {
-        assert!(matches!(newest("not json", false), Err(UpdateError::Parse(_))));
-        assert!(matches!(newest("42", false), Err(UpdateError::Parse(_))));
-        assert!(matches!(newest("[]", false), Err(UpdateError::Parse(_))));
-        assert!(Version::parse("v1.2.3").is_ok());
-        assert!(version_of("v1.2.3-rc.1").is_some());
-        assert!(version_of("v1.2").is_none());
-    }
-
-    #[test]
-    fn assets_without_a_url_are_skipped() {
-        let v = serde_json::json!([{"tag_name": "v1.0.1", "assets": [{"name": "app-1.0.1-windows-x64.msi", "size": 1}]}]).to_string();
-        let r = newest(&v, false).expect("a release");
-        assert!(r.assets.is_empty());
-        assert!(r.best_asset(&Target { os: crate::target::Os::Windows, arch: "x64" }, false).is_none());
+    fn odd_feeds_are_read_or_refused_never_panicked_on() {
+        // broken feeds are errors not panics
+        {
+            assert!(matches!(newest("not json", false), Err(UpdateError::Parse(_))));
+            assert!(matches!(newest("42", false), Err(UpdateError::Parse(_))));
+            assert!(matches!(newest("[]", false), Err(UpdateError::Parse(_))));
+            assert!(Version::parse("v1.2.3").is_ok());
+            assert!(version_of("v1.2.3-rc.1").is_some());
+            assert!(version_of("v1.2").is_none());
+        }
+        // a tag that is not a version is not ours
+        {
+            let v = serde_json::json!([api_release("docs-2026", false, &[("app.msi", "https://x/a", 1)])]).to_string();
+            assert!(newest(&v, false).is_err(), "an unversioned tag is not a release");
+            let draft = serde_json::json!([{"tag_name": "v9.9.9", "draft": true, "assets": []}]).to_string();
+            assert!(newest(&draft, false).is_err(), "a draft is not published yet");
+        }
+        // a single release object works too
+        {
+            let one = serde_json::json!({"tag_name": "v2.0.0", "assets": [{"name": "app-2.0.0-macos-universal.dmg", "browser_download_url": "https://x/d", "size": 3}]}).to_string();
+            assert_eq!(newest(&one, false).expect("a release").version.to_text(), "2.0.0");
+        }
+        // assets without a url are skipped
+        {
+            let v = serde_json::json!([{"tag_name": "v1.0.1", "assets": [{"name": "app-1.0.1-windows-x64.msi", "size": 1}]}]).to_string();
+            let r = newest(&v, false).expect("a release");
+            assert!(r.assets.is_empty());
+            assert!(r.best_asset(&Target { os: crate::target::Os::Windows, arch: "x64" }, false).is_none());
+        }
     }
 }

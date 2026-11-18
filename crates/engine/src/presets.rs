@@ -242,17 +242,17 @@ impl Session {
         use std::collections::{HashMap, HashSet};
         // indexed: a collection of 10 000+ presets was quadratic (minutes) to import
         let mut ids: HashSet<String> = self.presets.iter().map(|q| q.id.clone()).collect();
-        let mut by_name: HashMap<(String, String), Vec<usize>> = HashMap::new();
-        for (i, q) in self.presets.iter().enumerate() {
-            by_name.entry((q.name.clone(), q.group.clone())).or_default().push(i);
-        }
+        // (name, group, settings): a preset is looked up rather than compared with every namesake.
+        // Every number is keyed as an f64 with -0.0 folded into 0.0: `0` and `0.0` are unequal
+        // `Value`s with equal hashes, so a crafted file of them would pile into one bucket (upstream #3680).
+        // shortcut: integers past 2^53 lose precision in the key, so two such presets are one
+        let key_of = |p: &Preset| (p.name.clone(), p.group.clone(), canonical_numbers(&p.settings));
+        let mut present: HashSet<(String, String, serde_json::Value)> = self.presets.iter().map(key_of).collect();
         // the next suffix to try per generated id, so a batch of clashes doesn't probe from 2 each time
         let mut next_suffix: HashMap<String, u32> = HashMap::new();
         let mut added = Vec::with_capacity(presets.len());
         for mut p in presets {
-            let key = (p.name.clone(), p.group.clone());
-            let same = by_name.get(&key).is_some_and(|ix| ix.iter().any(|&i| self.presets.get(i).is_some_and(|q| q.settings == p.settings)));
-            if same {
+            if !present.insert(key_of(&p)) {
                 added.push(None);
                 continue;
             }
@@ -268,11 +268,21 @@ impl Session {
             }
             p.builtin = false;
             ids.insert(p.id.clone());
-            by_name.entry(key).or_default().push(self.presets.len());
             added.push(Some(p.id.clone()));
             self.presets.push(p);
         }
         added
+    }
+}
+
+/// `v` with every number replaced by its f64 (`-0.0` as `0.0`), so equal numbers hash and compare alike.
+fn canonical_numbers(v: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match v {
+        Value::Number(n) => n.as_f64().and_then(|f| serde_json::Number::from_f64(f + 0.0)).map_or_else(|| v.clone(), Value::Number),
+        Value::Array(a) => Value::Array(a.iter().map(canonical_numbers).collect()),
+        Value::Object(o) => Value::Object(o.iter().map(|(k, x)| (k.clone(), canonical_numbers(x))).collect()),
+        _ => v.clone(),
     }
 }
 

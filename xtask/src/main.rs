@@ -240,6 +240,14 @@ pub fn cargo() -> Command {
             }
         }
     }
+    // Test runs keep generated demo scenes on disk (crates/engine/src/scene_disk.rs), so
+    // integration tests and the CLI processes they start reuse them too, not only unit tests.
+    if matches!(std::env::args().nth(1).as_deref(), Some("ci" | "quarantine" | "sil")) {
+        let key = env_name("DEMO_SCENE_CACHE");
+        if std::env::var_os(&key).is_none() {
+            c.env(key, dist::target_dir(&root()).join("tmp").join("demo-scenes"));
+        }
+    }
     c
 }
 

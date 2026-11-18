@@ -24,10 +24,8 @@ const THUMB_EDGE: usize = 128;
 /// the panel takes in the left column.
 pub const HEADER_H: f32 = 28.0;
 
-/// The state the Presets panel of Develop's left column folds under. The presets column (Window ▸ Presets)
-/// is the same panel somewhere else and folds under the panel's usual `panel:presets`: a state of
-/// its own here means folding the panel in the column cannot leave that column open and empty (a
-/// dead end), and closing the column brings the panel back as it was.
+/// The state the Presets panel of Develop's left column folds under (its own key, kept from when
+/// the panel was also drawn elsewhere, so saved fold states still apply).
 pub const IN_COLUMN_KEY: &str = "panel:presets-inline";
 
 /// The preset amount slider may replace only the undo step it created.
@@ -94,18 +92,58 @@ impl AppliedByPhoto {
     }
 }
 
+/// Whether the presets are on screen: Develop's left column is shown with its Presets panel
+/// unfolded (the Modern layout: its Presets card is open). What Window ▸ Presets ticks.
+pub fn shown(app: &LccApp) -> bool {
+    if crate::modern::on(app) {
+        return app.ui.modern.group == Some(crate::modern_dock::Group::Presets);
+    }
+    app.ui.module == crate::module::ModuleId::Develop
+        && crate::module::edge_visible(app, crate::module::Edge::Left)
+        && !app.ui.hidden_panels.contains(&PanelId::Presets)
+        && super::classic::is_open_with_key(app, IN_COLUMN_KEY)
+}
+
+/// Bring the presets on screen where they live: Develop, its left column shown, the Presets panel
+/// in it and unfolded. They are never a column of their own on the right — upstream's layout put
+/// them in the Edit panels' place, which left Develop without its sliders. Fails when Develop has
+/// no photo to open.
+pub fn reveal(app: &mut LccApp) -> Result<(), String> {
+    if crate::modern::on(app) {
+        if !shown(app) {
+            crate::modern_dock::open(app, crate::modern_dock::Group::Presets)?;
+        }
+        return Ok(());
+    }
+    crate::module::switch(app, crate::module::ModuleId::Develop)?;
+    app.ui.left_panel = true;
+    app.ui.hidden_panels.retain(|p| *p != PanelId::Presets);
+    set_shown(app, true);
+    Ok(())
+}
+
+/// Fold or unfold the Presets panel of Develop's left column (the Modern layout: close its card).
+pub fn set_shown(app: &mut LccApp, open: bool) {
+    if crate::modern::on(app) {
+        if !open && shown(app) {
+            crate::modern_dock::close(app);
+        }
+        return;
+    }
+    super::classic::set_open_with_key(app, PanelId::Presets, IN_COLUMN_KEY, open);
+}
+
 /// `in_column`: drawn as the Presets panel of Develop's left column (which gives it a share of the
-/// column and lets it fold). The presets column (Window ▸ Presets) draws the same panel whole.
+/// column and lets it fold); otherwise whole, with a plain header (docking).
 pub fn show(app: &mut LccApp, ui: &mut egui::Ui, side: &[PanelId], in_column: bool) {
     let t = Tokens::get(ui.ctx());
     egui::Frame::NONE.fill(t.chrome).stroke(egui::Stroke::new(1.0, t.divider)).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
         // The panel's own Classic header in the left column (issue #75): the chevron folds the
-        // list to give the panels below the room, folding under `IN_COLUMN_KEY` so folding there
-        // leaves the presets column (Window ▸ Presets) whole. The header keeps room for the Create and More
-        // buttons at the right (`header_inset`). Outside the left column (the presets column,
-        // Window ▸ Presets, or docking), the panel is drawn whole and does not fold, so it carries no
-        // collapse triangle (issue #238).
+        // list to give the panels below the room, folding under `IN_COLUMN_KEY`. The header keeps
+        // room for the Create and More buttons at the right (`header_inset`). Outside the left
+        // column (docking), the panel is drawn whole and does not fold, so it carries no collapse
+        // triangle (issue #238).
         let (hr, unfolded) = if in_column {
             super::classic::header_inset(app, ui, PanelId::Presets, side, IN_COLUMN_KEY, 62.0)
         } else {

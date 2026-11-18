@@ -20,6 +20,8 @@ pub enum Section {
     Grading,
     /// The colourist primaries of the Witchcraft grading mode (beyond Lightroom).
     Primaries,
+    /// Levels: black, midtone, white and output levels per channel (beyond Lightroom).
+    Levels,
     Effects,
     Vignette,
     Grain,
@@ -48,6 +50,7 @@ impl Section {
             Section::BwMix => "B&W Mixer",
             Section::Grading => "Color Grading",
             Section::Primaries => "Primaries",
+            Section::Levels => "Levels",
             Section::Effects => "Effects",
             Section::Vignette => "Vignette",
             Section::Grain => "Grain",
@@ -200,10 +203,14 @@ macro_rules! controls {
         pub fn set(s: &mut DevelopSettings, id: &str, v: f64) -> bool {
             let Some(spec) = find(id) else { return false };
             let v = spec.clamp(v);
-            match id {
+            let done = match id {
                 $( $id => { s.$($field).+ = v as _; true } )*
                 _ => indexed_set(s, id, v),
+            };
+            if done {
+                keep_levels_gap(s, id);
             }
+            done
         }
     };
 }
@@ -310,6 +317,26 @@ controls! {
     "primaries.logWheels.offset.lum" => primaries.log_wheels.offset.lum, "Log Offset Luminance", Primaries, -100, 100, 0, 1, 0, Centered;
     "primaries.low" => primaries.low, "Low Range", Primaries, 0, 1, 0.35, 0.01, 2, Plain;
     "primaries.high" => primaries.high, "High Range", Primaries, 0, 1, 0.7, 0.01, 2, Plain;
+    "levels.master.black" => levels.master.black, "RGB Input Black", Levels, 0, 255, 0, 1, 0, Plain;
+    "levels.master.midtone" => levels.master.midtone, "RGB Midtone", Levels, -1, 1, 0, 0.01, 2, Centered;
+    "levels.master.white" => levels.master.white, "RGB Input White", Levels, 0, 255, 255, 1, 0, Plain;
+    "levels.master.outBlack" => levels.master.out_black, "RGB Output Black", Levels, 0, 255, 0, 1, 0, Plain;
+    "levels.master.outWhite" => levels.master.out_white, "RGB Output White", Levels, 0, 255, 255, 1, 0, Plain;
+    "levels.red.black" => levels.red.black, "Red Input Black", Levels, 0, 255, 0, 1, 0, Plain;
+    "levels.red.midtone" => levels.red.midtone, "Red Midtone", Levels, -1, 1, 0, 0.01, 2, Centered;
+    "levels.red.white" => levels.red.white, "Red Input White", Levels, 0, 255, 255, 1, 0, Plain;
+    "levels.red.outBlack" => levels.red.out_black, "Red Output Black", Levels, 0, 255, 0, 1, 0, Plain;
+    "levels.red.outWhite" => levels.red.out_white, "Red Output White", Levels, 0, 255, 255, 1, 0, Plain;
+    "levels.green.black" => levels.green.black, "Green Input Black", Levels, 0, 255, 0, 1, 0, Plain;
+    "levels.green.midtone" => levels.green.midtone, "Green Midtone", Levels, -1, 1, 0, 0.01, 2, Centered;
+    "levels.green.white" => levels.green.white, "Green Input White", Levels, 0, 255, 255, 1, 0, Plain;
+    "levels.green.outBlack" => levels.green.out_black, "Green Output Black", Levels, 0, 255, 0, 1, 0, Plain;
+    "levels.green.outWhite" => levels.green.out_white, "Green Output White", Levels, 0, 255, 255, 1, 0, Plain;
+    "levels.blue.black" => levels.blue.black, "Blue Input Black", Levels, 0, 255, 0, 1, 0, Plain;
+    "levels.blue.midtone" => levels.blue.midtone, "Blue Midtone", Levels, -1, 1, 0, 0.01, 2, Centered;
+    "levels.blue.white" => levels.blue.white, "Blue Input White", Levels, 0, 255, 255, 1, 0, Plain;
+    "levels.blue.outBlack" => levels.blue.out_black, "Blue Output Black", Levels, 0, 255, 0, 1, 0, Plain;
+    "levels.blue.outWhite" => levels.blue.out_white, "Blue Output White", Levels, 0, 255, 255, 1, 0, Plain;
     "skin.amount" => skin.amount, "Amount", Skin, 0, 100, 0, 1, 0, Plain;
     "skin.texture" => skin.texture, "Texture", Skin, -100, 100, 0, 1, 0, Centered;
     "skin.evenTone" => skin.even_tone, "Even Tone", Skin, 0, 100, 0, 1, 0, Plain;
@@ -350,6 +377,7 @@ controls! {
     "optics.vignettingMidpoint" => optics.vignetting_midpoint, "Midpoint", Optics, 0, 100, 50, 1, 0, Plain;
     "optics.profileDistortion" => optics.profile_distortion, "Profile Distortion", Optics, 0, 200, 100, 1, 0, Plain;
     "optics.profileVignetting" => optics.profile_vignetting, "Profile Vignetting", Optics, 0, 200, 100, 1, 0, Plain;
+    "optics.vignettingCalibrationAmount" => optics.vignetting_calibration_amount, "Vignetting Calibration", Optics, 0, 120, 100, 1, 0, Plain;
     "optics.defringePurple" => optics.defringe_purple_amount, "Purple Amount", Optics, 0, 20, 0, 1, 0, Gradient { from: "#7a7a7a", to: "#a040d0" };
     "optics.defringePurpleHueLo" => optics.defringe_purple_hue_lo, "Purple Hue Low", Optics, 0, 90, 30, 1, 0, Gradient { from: "#6040e0", to: "#d040b0" };
     "optics.defringePurpleHueHi" => optics.defringe_purple_hue_hi, "Purple Hue High", Optics, 10, 100, 70, 1, 0, Gradient { from: "#6040e0", to: "#d040b0" };
@@ -374,6 +402,9 @@ controls! {
     "calibration.blueSat" => calibration.blue_sat, "Blue Saturation", Calibration, -100, 100, 0, 1, 0, Gradient { from: "#7a7a7a", to: "#3a60e0" };
     "crop.angle" => crop.geometry.angle, "Straighten", Geometry, -45, 45, 0, 0.01, 2, Centered;
     "sensor.pixelFix" => sensor.pixel_fix, "Fix Hot and Dead Pixels", Sensor, 0, 1, 1, 1, 0, Plain;
+    "filmDust.remove" => film_dust.remove, "Remove Film Dust", Sensor, 0, 1, 0, 1, 0, Plain;
+    "filmDust.sensitivity" => film_dust.sensitivity, "Film Dust Sensitivity", Sensor, 0, 100, 50, 1, 0, Plain;
+    "filmDust.expand" => film_dust.expand, "Film Dust Expand", Sensor, -8, 40, 1, 1, 0, Centered;
 }
 
 /// Template specs of the indexed controls (`<family>.<field>`; addressed as `<family>.<i>.<field>`).
@@ -587,6 +618,22 @@ pub fn indexed_instances(s: &DevelopSettings) -> Vec<(String, &'static ControlSp
         }
     }
     out
+}
+
+/// After a Levels input point was set by id, keeps the minimum distance between black and white (either may be the
+/// larger: black above white inverts): the point that was just set wins and the other gives way.
+fn keep_levels_gap(s: &mut DevelopSettings, id: &str) {
+    let mut parts = id.split('.');
+    if parts.next() != Some("levels") {
+        return;
+    }
+    let (Some(ch), Some(field)) = (parts.next(), parts.next()) else { return };
+    let Some(c) = s.levels.channel_mut(ch) else { return };
+    match field {
+        "black" => c.after_black_set(),
+        "white" => c.after_white_set(),
+        _ => {}
+    }
 }
 
 pub fn in_section(section: Section) -> impl Iterator<Item = &'static ControlSpec> {

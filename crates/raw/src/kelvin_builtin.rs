@@ -69,6 +69,11 @@ mod tests {
         for b in BUILTINS {
             assert!(find(Some(b.make), b.model).is_some(), "{} {}", b.make, b.model);
         }
+        // matching
+        {
+            assert!(covers(Some("NIKON CORPORATION"), "NIKON Z5_2") && covers(None, "Z5_2") && covers(Some("Nikon"), "nikon z5_2"));
+            assert!(!covers(Some("NIKON CORPORATION"), "NIKON Z5") && !covers(Some("SONY"), "Z5_2") && !covers(None, "") && !covers(None, "NIK"));
+        }
     }
 
     #[test]
@@ -83,11 +88,5 @@ mod tests {
         // the 5990 K Kelvin shot with a green-magenta fine-tune shift: daylight, clearly tinted
         let (t, tint) = p.temp_tint([1.531_25, 1.0, 1.074_218_8]).unwrap();
         assert!((4000.0..7500.0).contains(&t) && tint.abs() > 20.0, "{t} {tint}");
-    }
-
-    #[test]
-    fn matching() {
-        assert!(covers(Some("NIKON CORPORATION"), "NIKON Z5_2") && covers(None, "Z5_2") && covers(Some("Nikon"), "nikon z5_2"));
-        assert!(!covers(Some("NIKON CORPORATION"), "NIKON Z5") && !covers(Some("SONY"), "Z5_2") && !covers(None, "") && !covers(None, "NIK"));
     }
 }

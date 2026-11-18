@@ -10,7 +10,7 @@ const T: Duration = Duration::from_secs(60);
 
 #[test]
 fn each_body_on_the_card_gets_a_row_and_its_choice_goes_with_the_import() {
-    let dir = std::env::temp_dir().join(format!("lcc-ui-importbodies-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lcc-ui-importbodies");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let corners = lcc_engine::chart_profiling::camprof::ChartCorners::from_rect(10.0, 10.0, 40.0, 30.0);

@@ -94,19 +94,13 @@ fn a_plain_path_gives_the_same_folder_key_as_any_other_spelling() {
     }
     assert_eq!(photo_folder_index_key("/Volumes/X/[Stills]/0002/o.jpg").as_deref(), Some("/volumes/x/[stills]/0002"));
     assert_eq!(photo_folder_index_key("/a//b.jpg"), photo_folder_index_key("/a/b.jpg"));
-}
-
-#[test]
-fn a_folder_key_matches_its_files_key_at_a_drive_or_share_root_too() {
+    // a folder's key is its files' key, at a drive or share root too
     for (file, folder) in
         [("C:\\x.jpg", "C:\\"), ("C:\\x.jpg", "C:"), ("\\\\nas\\share\\x.jpg", "\\\\nas\\share"), ("/x.jpg", "/"), ("/a/b/x.jpg", "/a/b/")]
     {
         assert_eq!(photo_folder_index_key(file), Some(folder_index_key(folder)), "{file} in {folder}");
     }
-}
-
-#[test]
-fn a_file_name_is_cut_at_either_separator() {
+    // a file name is cut at either separator
     assert_eq!(file_name_index_key("/a/B.JPG").as_deref(), Some("b.jpg"));
     assert_eq!(file_name_index_key("D:\\Photos\\IMG_1.JPG").as_deref(), Some("img_1.jpg"));
     assert_eq!(file_name_index_key("/a/b/").as_deref(), Some("b"));

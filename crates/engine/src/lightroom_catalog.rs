@@ -42,6 +42,10 @@ fn is_smart_collection(r: &Row) -> bool {
 fn is_collection_set(r: &Row) -> bool {
     text(r, "creationId").contains("group")
 }
+/// Whether a collection row is a saved print (`com.adobe.ag.print`; an unsaved one is `….print.unsaved`).
+fn is_saved_print(r: &Row) -> bool {
+    text(r, "creationId") == "com.adobe.ag.print"
+}
 /// Seconds from the Unix epoch to 2001-01-01T00:00:00Z, where Lightroom's times start.
 const LIGHTROOM_EPOCH: i64 = 978_307_200;
 /// When Lightroom last changed the image (`Adobe_images.touchTime`: seconds since 2001-01-01T00:00:00Z, also for
@@ -63,10 +67,16 @@ pub(crate) fn number_for_job(r: &Row, k: &str) -> i64 {
 /// its `image` as a whole number, or `None` when that is missing, NULL, text or a fraction. [`number`] would read
 /// those as 0, giving the row to a photo whose `id_local` is 0, and 2.5 as 2, giving it to photo 2.
 fn image_of(r: &Row) -> Option<i64> {
-    let n = r.get("image")?.as_number()?;
+    id_of(r, "image")
+}
+/// The record a row's `k` column names: its value as a whole number, or `None` when that is missing, NULL, text, a
+/// fraction or out of `i64` range. [`number`] reads a missing, NULL or text value as 0, naming the record whose
+/// `id_local` is 0, and truncates a fraction (1.5 names record 1).
+fn id_of(r: &Row, k: &str) -> Option<i64> {
+    let n = r.get(k)?.as_number()?;
     let f = n.as_f64()?;
-    // An integer goes through f64 as [`number`] takes a photo's `id_local`, so a row and its photo get the same key
-    // past 2^53 too (read exactly, the row would miss its rounded photo and be lost without a warning).
+    // An integer goes through f64 as [`number`] takes the `id_local` of the record it names, so both get the same key
+    // past 2^53 too (read exactly, the row would miss its rounded record and be lost without a warning).
     if n.is_i64() {
         return Some(f as i64);
     }
@@ -103,10 +113,11 @@ fn source_path(p: &Photo) -> Option<&str> {
 pub(crate) struct Reader {
     db: Database,
 }
-/// Expanded XMP packets kept from one catalog, all rows together (each is bounded on its own).
-const MAX_XMP_TOTAL: usize = 1 << 30;
-/// Keyword paths kept for the photos of one catalog, all together.
-const MAX_KEYWORD_BYTES: usize = 256 << 20;
+/// The longest XMP packet kept for one image (what a compressed one may expand to). The bound is per
+/// image, never a running total, so the size of a catalog alone cannot drop a packet (upstream #3674).
+const MAX_XMP_PACKET: usize = 16 << 20;
+/// Keyword paths kept for the photos of one catalog, all together (a million photos at ~1 KB of paths each still fit).
+const MAX_KEYWORD_BYTES: usize = 1 << 30;
 /// Most bytes of history-step or snapshot settings decoded from one table. They are archived, and an archive holds at
 /// most [`crate::lightroom_archive::MAX_ARCHIVE_BYTES`] of JSON, so this keeps all a catalog can archive while a
 /// hostile one can't make the reader allocate without bound (each row alone may decode to 16 MiB).
@@ -132,7 +143,7 @@ impl Reader {
     /// missing table yields no rows unless `required`. `Blob` columns never become JSON; they reach `f` separately,
     /// as (column, bytes), and are dropped after it. `kept` says that `f` keeps every row, which bounds the walk to a
     /// million rows and the reader's table payload budget.
-    fn each_row(
+    pub(crate) fn each_row(
         &self,
         name: &str,
         required: bool,
@@ -308,16 +319,15 @@ impl Reader {
 
     /// `Adobe_AdditionalMetadata`, streamed into image id -> row with its (decompressed) `xmp` packet.
     fn xmp_table(&self, cancel: &AtomicBool) -> Result<(HashMap<i64, Row>, Vec<String>), String> {
-        self.xmp_table_within(cancel, MAX_XMP_TOTAL)
+        self.xmp_table_within(cancel, MAX_XMP_PACKET)
     }
 
-    /// [`Self::xmp_table`] with the packets of all rows together held to `max_total` decoded bytes: a packet past it
-    /// is left off its row (named in the warnings), so one oversized catalog keeps the packets that fit and every
-    /// row's other columns (upstream #3674).
-    fn xmp_table_within(&self, cancel: &AtomicBool, max_total: usize) -> Result<(HashMap<i64, Row>, Vec<String>), String> {
+    /// [`Self::xmp_table`] with each packet held to `max_packet` decoded bytes: a packet past it is left off
+    /// its row and named in the warnings; the bound is per image, so the size of the catalog alone never
+    /// drops a packet (upstream #3674).
+    fn xmp_table_within(&self, cancel: &AtomicBool, max_packet: usize) -> Result<(HashMap<i64, Row>, Vec<String>), String> {
         let mut warnings = Vec::new();
         let mut out = HashMap::new();
-        let mut xmp_total = 0usize;
         let mut unkeyed = 0usize;
         let read = self.each_row("Adobe_AdditionalMetadata", false, false, cancel, |mut r, blobs| {
             let Some(image) = image_of(&r) else {
@@ -331,27 +341,23 @@ impl Reader {
                 }
                 // the declared size (the decode checks it) against what is left, before inflating
                 let declared = bytes.get(..4).and_then(|s| <[u8; 4]>::try_from(s).ok()).map_or(0, |s| u32::from_be_bytes(s) as usize);
-                let over = |n: usize| n <= 16 << 20 && xmp_total.saturating_add(n) > max_total;
+                let over = |n: usize| n > max_packet;
                 let decoded = if over(declared) { Ok(None) } else { decode_compressed(&bytes, "XMP").map(Some) };
                 match decoded {
                     Ok(Some(packet)) if !over(packet.len()) => {
-                        xmp_total += packet.len();
                         r.insert(column.to_string(), Value::String(packet));
                     }
-                    Ok(_) => warnings.push(format!("image {image}: the XMP packets together exceed {} MiB; this one is left out", max_total >> 20)),
+                    Ok(_) => warnings.push(format!("image {image}: the XMP packet exceeds {} MiB; it is left out", max_packet >> 20)),
                     Err(error) => warnings.push(format!("image {image}: {error}")),
                 }
             }
-            // a text packet counts toward the total like a decoded one
+            // a text packet is held to the same bound as a decoded one
             if let Some(len) = r.get("xmp").and_then(Value::as_str).map(str::len)
                 && !blobs_had_xmp
+                && len > max_packet
             {
-                if xmp_total.saturating_add(len) > max_total {
-                    r.remove("xmp");
-                    warnings.push(format!("image {image}: the XMP packets together exceed {} MiB; this one is left out", max_total >> 20));
-                } else {
-                    xmp_total += len;
-                }
+                r.remove("xmp");
+                warnings.push(format!("image {image}: the XMP packet exceeds {} MiB; it is left out", max_packet >> 20));
             }
             out.insert(image, r);
             Ok(())
@@ -380,6 +386,9 @@ pub struct CatalogPhoto {
     /// `settings` is measured from (upstream #3906; [`custom_as_shot`]). Not archived.
     #[serde(skip)]
     pub as_shot_white: Option<(f64, f64)>,
+    /// A Capture One variant's develop settings ([`crate::capture_one_develop`]), in place of `settings`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_one: Option<Box<crate::capture_one_develop::CaptureOneDevelop>>,
 }
 
 /// Whether the original a catalog lists may be looked at. Its path is resolved with the catalog
@@ -433,11 +442,11 @@ pub struct SkippedImage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SkipReason {
-    /// Its `AgLibraryFile` record is gone.
+    /// Its `AgLibraryFile` record is gone, or its `rootFile` is not a whole number.
     MissingFile,
-    /// Its file's `AgLibraryFolder` record is gone.
+    /// Its file's `AgLibraryFolder` record is gone, or the file's `folder` is not a whole number.
     MissingFolder,
-    /// Its folder's `AgLibraryRootFolder` record is gone.
+    /// Its folder's `AgLibraryRootFolder` record is gone, or the folder's `rootFolder` is not a whole number.
     MissingRoot,
     /// Its file name or root folder path is empty.
     IncompletePath,
@@ -877,7 +886,7 @@ fn read_lightroom(path: &Path, reader: Reader, source_guard: SourceGuard, cancel
         if let Some(p) = path {
             keyword_bytes = keyword_bytes.saturating_add(p.len());
             if keyword_bytes > MAX_KEYWORD_BYTES {
-                return Err("the catalog's keyword assignments together exceed 256 MB".into());
+                return Err("the catalog's keyword assignments together exceed 1 GiB".into());
             }
             keywords.entry(image).or_default().push(p);
         }
@@ -944,9 +953,11 @@ fn read_lightroom(path: &Path, reader: Reader, source_guard: SourceGuard, cancel
     for image in table("Adobe_images", true)? {
         ensure_read_active(cancel)?;
         let id = number(&image, "id_local");
-        let record = files.get(&number(&image, "rootFile")).ok_or(SkipReason::MissingFile).and_then(|file| {
-            let folder = folders.get(&number(file, "folder")).ok_or(SkipReason::MissingFolder)?;
-            let root = roots.get(&number(folder, "rootFolder")).ok_or(SkipReason::MissingRoot)?;
+        // read strictly: a NULL, text or fractional reference names no record, not record 0 (or 1 for 1.5), whose
+        // path would merge this image into another photo
+        let record = id_of(&image, "rootFile").and_then(|f| files.get(&f)).ok_or(SkipReason::MissingFile).and_then(|file| {
+            let folder = id_of(file, "folder").and_then(|f| folders.get(&f)).ok_or(SkipReason::MissingFolder)?;
+            let root = id_of(folder, "rootFolder").and_then(|r| roots.get(&r)).ok_or(SkipReason::MissingRoot)?;
             Ok((file, folder, root))
         });
         let (file, folder, root) = match record {
@@ -998,6 +1009,7 @@ fn read_lightroom(path: &Path, reader: Reader, source_guard: SourceGuard, cancel
             snapshots: snapshots.remove(&id).unwrap_or_default(),
             original,
             as_shot_white: as_shot_whites.get(&id).copied(),
+            capture_one: None,
         });
     }
     if left_out > LEFT_OUT_NAMED {
@@ -1338,7 +1350,10 @@ fn apply(s: &mut crate::Session, data: CatalogImport, update_existing: bool) -> 
     let archive_dir = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join("Interop"));
     let index_path = archive_dir.as_ref().map(|p| p.join("lightroom-index.json"));
     let mut index = load_index(index_path.as_deref())?;
-    let archive_path = archive_dir.as_ref().map(|dir| crate::lightroom_archive::store(dir, &data).map_err(|e| error(e.to_string()))).transpose()?;
+    let archive_path = archive_dir
+        .as_ref()
+        .map(|dir| crate::lightroom_archive::store(dir, &data).map(|stored| stored.path).map_err(|e| error(e.to_string())))
+        .transpose()?;
     let undo0 = s.undo.len();
     let existing: HashMap<_, _> =
         s.catalog.photos().filter(|p| p.copy_of.is_none()).filter_map(|p| source_path(p).map(|path| (key(path), p.id))).collect();
@@ -1386,7 +1401,7 @@ fn first_of_each_collection<'a>(data: &'a CatalogImport, warnings: &mut Vec<Stri
             continue;
         };
         if *kept != collection {
-            let photos = if data.members.iter().any(|m| number(m, "collection") == id) {
+            let photos = if data.members.iter().any(|m| id_of(m, "collection") == Some(id)) {
                 format!("; the photos listed under that id go to “{}”", text(kept, "name"))
             } else {
                 String::new()
@@ -1426,6 +1441,8 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
     let mut imported = files.imported.len();
     let mut promoted = HashSet::new();
     let mut unmapped = BTreeMap::new();
+    // Capture One white balances applied on the relative scale (`crate::capture_one_develop`): approximate
+    let mut capture_one_wb_approximate = 0usize;
     let mut preserved = 0;
     let mut history_imported = 0usize;
     let mut snapshots_imported = 0usize;
@@ -1533,6 +1550,10 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         {
             p.develop = Arc::new(p.camera_defaults());
         }
+        // a Capture One variant's settings (partial: what it uses) start from the camera's defaults too
+        if fresh && src.settings.is_empty() && src.capture_one.as_deref().is_some_and(|c| !c.is_empty()) {
+            p.develop = Arc::new(p.camera_defaults());
+        }
         if !src.xmp.is_empty() {
             match crate::sidecar::parse_sidecar(&src.xmp, crate::crs::Target::for_photo(&p)) {
                 Ok(mut sc) => {
@@ -1612,6 +1633,26 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
                 snapshots_imported += versions.len();
                 p.versions = versions;
             }
+        } else if let Some(c1) = src.capture_one.as_deref()
+            && !keep_develop
+        {
+            // what the variant uses that isn't imported is reported for it, settings applied or not
+            let target = crate::crs::Target::for_photo(&p);
+            let (partial, unknown) = crate::capture_one_develop::partial(c1, target, p.as_shot_wb);
+            if target == crate::crs::Target::RawRelative && partial.get("wb").is_some() {
+                capture_one_wb_approximate = capture_one_wb_approximate.saturating_add(1);
+            }
+            if partial.as_object().is_some_and(|o| !o.is_empty()) {
+                p.develop = Arc::new(lcc_develop::apply_partial(&p.develop, &partial, 1.0));
+                if touched.is_none() {
+                    untimed.push(src.source_id);
+                }
+                p.edited = Some(touched.clone().unwrap_or_else(|| now.clone()));
+                dated = true;
+            }
+            if !unknown.is_empty() {
+                unmapped.insert(src.source_id, unknown);
+            }
         }
         // Lightroom dates every photo at its last edit, settings or not (or settings that can't be read); one edited
         // in the library keeps its own date.
@@ -1680,6 +1721,12 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         }
         by_path.entry(key(&src.path)).or_insert(photo_id);
     }
+    if capture_one_wb_approximate > 0 {
+        warnings.push(format!(
+            "Capture One White Balance: approximate on {capture_one_wb_approximate} photo(s); their raws are edited on the \
+             relative white balance scale, where Capture One's change can only be approximated"
+        ));
+    }
     if let Some(first) = untimed.first() {
         let named: Vec<String> = untimed.iter().take(LEFT_OUT_NAMED).map(i64::to_string).collect();
         let more = untimed.len() - named.len();
@@ -1735,8 +1782,16 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         .collect();
     let mut added_folders = HashSet::new();
     let mut grouped_members: HashMap<i64, Vec<&Row>> = HashMap::new();
+    // read strictly: a NULL, text or fractional `collection` names no collection, not collection 0 (or 1 for 1.5)
     for member in &data.members {
-        grouped_members.entry(number(member, "collection")).or_default().push(member);
+        if let Some(collection) = id_of(member, "collection") {
+            grouped_members.entry(collection).or_default().push(member);
+        }
+    }
+    match data.members.iter().filter(|m| id_of(m, "collection").is_none()).count() {
+        0 => {}
+        1 => warnings.push("AgLibraryCollectionImage: 1 record added to no album; its collection is not a collection id".into()),
+        n => warnings.push(format!("AgLibraryCollectionImage: {n} records added to no album; their collection is not a collection id")),
     }
     for members in grouped_members.values_mut() {
         members.sort_by(|a, b| text(a, "positionInCollection").cmp(text(b, "positionInCollection")));
@@ -1747,6 +1802,28 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         .filter(|r| text(r, "owningModule") == "ag.library.smart_collection")
         .map(|r| (number(r, "collection"), text(r, "content")))
         .collect();
+    let print_content: HashMap<i64, &str> = data
+        .collection_content
+        .iter()
+        .filter(|r| text(r, "owningModule") == "com.adobe.ag.print")
+        .map(|r| (number(r, "collection"), text(r, "content")))
+        .collect();
+    let mut saved_prints = 0usize;
+    // a saved print's layout as a Saved Print, or why it stays a plain collection (the original is in the archive)
+    let mut print_layout = |collection: &Row, name: &str, members: &[PhotoId], warnings: &mut Vec<String>| {
+        let found = print_content.get(&number(collection, "id_local")).ok_or_else(|| "the catalog has no layout for it".to_string());
+        match found.and_then(|c| crate::lightroom_print::saved_print(c, &|image| ids.get(&image).copied(), members)) {
+            Ok(print) => {
+                saved_prints += 1;
+                warnings.extend(print.notes.into_iter().map(|n| format!("{name}: saved print: {n}")));
+                Some(lcc_catalog::Creation { kind: "print".into(), document: print.document })
+            }
+            Err(why) => {
+                warnings.push(format!("{name}: its print layout isn't imported: {why}; imported as a plain collection (layout kept in archive)"));
+                None
+            }
+        }
+    };
     // Lightroom's Collection rule matches ordinary collections only: never a set, nor a smart collection (so a smart
     // collection never matches itself, nor one whose rules match it back).
     let named_collections: Vec<(&str, lcc_catalog::AlbumId)> = data
@@ -1786,6 +1863,8 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         // Reimport branches on the existing album's kind: its name/hierarchy and (for a smart album)
         // its possibly user-edited rules are kept; a regular album only gains new members.
         let existing = s.catalog.album(id).map(|a| (a.folder, a.is_smart(), a.photos.clone()));
+        // an earlier import's plain album of a saved print gains its layout; one that has a layout keeps it
+        let gains_layout = is_saved_print(collection) && s.catalog.album(id).is_some_and(|a| !a.folder && !a.is_smart() && a.creation.is_none());
         match existing {
             Some((true, _, _)) => {}
             Some((false, true, _)) => {
@@ -1811,6 +1890,9 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
                     if seen.insert(photo) {
                         photos.push(photo);
                     }
+                }
+                if gains_layout && let Some(creation) = print_layout(collection, &album.name, &photos, &mut warnings) {
+                    ops.push(Op::SetAlbumCreation { id, creation: Some(creation) });
                 }
                 ops.push(Op::SetAlbumPhotos { id, photos });
             }
@@ -1842,6 +1924,9 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
                 }
                 if !album.folder && !album.is_smart() {
                     album.photos = members;
+                    if is_saved_print(collection) {
+                        album.creation = print_layout(collection, &album.name, &album.photos, &mut warnings);
+                    }
                 }
                 let (set, moved) = collection_parent(collection, &collections, &sets);
                 album.parent = set.and_then(|set| albums.get(&set).copied());
@@ -1895,7 +1980,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
     }
     s.merge_undo(s.undo.len().saturating_sub(undo0), step);
     Ok(AppliedImport {
-        report: json!({"source":data.source,"photos":ids.len(),"imported":imported,"library":s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy()),"collections":albums.len(),"smartAlbums":smart_albums,"smartAsStatic":static_smart,"smartKept":smart_kept,"stacks":stacks,"historySteps":history_imported,"snapshots":snapshots_imported,"preservedExistingEdits":preserved,"missing":missing,"failed":files.failed,"warnings":warnings,"skipped":data.skipped,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
+        report: json!({"source":data.source,"photos":ids.len(),"imported":imported,"library":s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy()),"collections":albums.len(),"smartAlbums":smart_albums,"smartAsStatic":static_smart,"smartKept":smart_kept,"savedPrints":saved_prints,"stacks":stacks,"historySteps":history_imported,"snapshots":snapshots_imported,"preservedExistingEdits":preserved,"missing":missing,"failed":files.failed,"warnings":warnings,"skipped":data.skipped,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
         index: index.clone(),
     })
 }
@@ -2037,6 +2122,32 @@ pub(crate) mod tests {
     fn row(v: Value) -> Row {
         serde_json::from_value(v).unwrap()
     }
+
+    /// A reference names a record only by a whole number: never record 0 for a missing, NULL or text value, nor
+    /// record 1 for 1.5, nor a saturated id for a value past the `i64` range.
+    #[test]
+    fn a_reference_names_a_record_only_by_a_whole_number() {
+        let r = row(json!({
+            "int": 7, "zero": 0, "negative": -3, "real": 7.0, "fraction": 7.5, "text": "7", "null": null,
+            "past_f64": 9_007_199_254_740_993_i64, "edge": 9_223_372_036_854_775_808.0, "too_big": 1e19, "too_small": -1e19
+        }));
+        for (key, want) in [
+            ("int", Some(7)),
+            ("zero", Some(0)),
+            ("negative", Some(-3)),
+            ("real", Some(7)),
+            ("fraction", None),
+            ("text", None),
+            ("null", None),
+            ("missing", None),
+            ("past_f64", Some(number(&r, "past_f64"))),
+            ("edge", None),
+            ("too_big", None),
+            ("too_small", None),
+        ] {
+            assert_eq!(id_of(&r, key), want, "{key}");
+        }
+    }
     fn sample() -> CatalogImport {
         let mut photo = CatalogPhoto {
             source_id: 1,
@@ -2050,6 +2161,7 @@ pub(crate) mod tests {
             snapshots: Vec::new(),
             original: Original::Local,
             as_shot_white: None,
+            capture_one: None,
         };
         let mut copy = photo.clone();
         copy.source_id = 2;
@@ -2421,12 +2533,8 @@ pub(crate) mod tests {
         let (s, r) = import_with_refused(false, 0);
         assert_only_the_sample_imported(&s, &r, false);
         assert!(r["missing"].as_array().is_some_and(|m| m.contains(&json!("//server/share/far.ARW"))), "the refused photo is listed as missing: {r}");
-    }
-
-    /// The same with a virtual copy: its master was skipped, so the copy failed the import with
-    /// "virtual copy 2: missing master".
-    #[test]
-    fn a_refused_photo_with_id_zero_leaves_other_virtual_copies_their_master() {
+        // the same with a virtual copy: its master was skipped, so the copy failed the import with
+        // "virtual copy 2: missing master"
         let (s, r) = import_with_refused(true, 0);
         assert_only_the_sample_imported(&s, &r, true);
     }
@@ -2569,6 +2677,24 @@ pub(crate) mod tests {
         assert_eq!(s.catalog.stacks().count(), 1);
         assert!(!r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().is_some_and(|w| w.starts_with("stack"))), "{}", r["warnings"]);
     }
+    /// A member whose `collection` is missing, NULL, text or a fraction names no collection: it joins no album, with one
+    /// warning, and does not join collection 0 or the truncated id.
+    #[test]
+    fn a_collection_member_whose_collection_is_not_an_id_joins_no_album() {
+        let mut s = crate::Session::new();
+        let mut data = sample();
+        data.collections.push(row(json!({"id_local":0,"name":"Zero","creationId":"com.adobe.ag.library.collection"})));
+        data.members.push(row(json!({"image":1,"positionInCollection":"a"})));
+        data.members.push(row(json!({"collection":null,"image":1,"positionInCollection":"b"})));
+        data.members.push(row(json!({"collection":"10","image":1,"positionInCollection":"c"})));
+        data.members.push(row(json!({"collection":10.5,"image":1,"positionInCollection":"d"})));
+        let r = apply(&mut s, data, false).unwrap();
+        assert!(album_named(&s, "Zero").photos.is_empty());
+        assert_eq!(album_named(&s, "Keepers").photos.len(), 2);
+        let w: Vec<_> =
+            r["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).filter(|w| w.starts_with("AgLibraryCollectionImage")).collect();
+        assert_eq!(w.len(), 1, "{w:?}");
+    }
     #[test]
     fn creation_saved_inside_a_collection_joins_the_nearest_set() {
         // Lightroom Classic can save a print or book inside a plain collection; the app's albums only nest in folders.
@@ -2584,9 +2710,115 @@ pub(crate) mod tests {
         assert_eq!(print.photos.len(), 1);
         assert!(r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().is_some_and(|w| w.contains("Print"))));
     }
+    /// A saved print's layout as the catalog stores it: a Custom Package with two cells holding images 1 and 2,
+    /// and a third naming an image the catalog doesn't import.
+    const SAVED_PRINT: &str = r#"s = {
+	_engineIdentifier = "com.adobe.lightroom.print.engine.package.custom",
+	_engineSettings = {
+		["com.adobe.lightroom.print.engine.package.custom"] = {
+			autorotate = true,
+			innerStrokeBorder = true,
+			innerStrokeColor = AgColor( 0, 0, 0, 1 ),
+			innerStrokeWidth = 0.2,
+			numLayoutPages = 1,
+			pages = {
+				{
+					cells = {
+						{ bounds = AgMutableRect( 0, 0, 300, 200 ), imageID = 2, page = 1, },
+						{ bounds = AgMutableRect( 250, 150, 612, 792 ), imageID = 1, page = 1, },
+						{ bounds = AgMutableRect( 0, 500, 200, 792 ), imageID = 77, page = 1, },
+					},
+				},
+			},
+			zoomToFillFrame = true,
+		},
+	},
+	_globalSettings = { printDestination = "jpeg", printingFileResolution = 300, mediaType = "matte" },
+	_pageDimensions_x = 612,
+	_pageDimensions_y = 792,
+}"#;
+    fn saved_print_sample(content: Option<&str>) -> CatalogImport {
+        let mut data = sample();
+        data.collections.push(row(json!({"id_local":11,"name":"Collage","creationId":"com.adobe.ag.print"})));
+        data.members.push(row(json!({"collection":11,"image":1,"positionInCollection":"---0"})));
+        data.members.push(row(json!({"collection":11,"image":2,"positionInCollection":"---1"})));
+        if let Some(content) = content {
+            data.collection_content.push(row(json!({"collection":11,"owningModule":"com.adobe.ag.print","content":content})));
+            data.collection_content
+                .push(row(json!({"collection":11,"owningModule":"com.adobe.ag.library.sortType","content":"positionInCollection"})));
+        }
+        data
+    }
+    #[test]
+    fn a_saved_print_imports_as_a_saved_print_with_its_layout() {
+        let mut s = crate::Session::new();
+        let r = apply(&mut s, saved_print_sample(Some(SAVED_PRINT)), false).unwrap();
+        assert_eq!(r["savedPrints"], 1);
+        let collage = album_named(&s, "Collage");
+        assert_eq!(collage.photos.len(), 2);
+        let creation = collage.creation.as_ref().expect("a Saved Print");
+        assert_eq!(creation.kind, "print");
+        // what Print ▸ Saved Prints opens: the cells where Lightroom put them, each with its photo
+        let doc = lcc_layout::Document::from_json(&creation.document).unwrap();
+        let cells: Vec<_> = doc.pages[0].cells.iter().filter_map(|c| Some((c.rect, c.as_photo()?.photo.clone()))).collect();
+        let photo_of = |source: i64| r["mapping"][source.to_string()].as_u64().map(|id| id.to_string());
+        assert_eq!(cells.len(), 3);
+        assert_eq!(cells[0].1, photo_of(2));
+        assert_eq!(cells[1].1, photo_of(1));
+        assert!((cells[1].0.x - 250.0).abs() < 1e-3 && (cells[1].0.h - 642.0).abs() < 1e-3);
+        assert_eq!(cells[2].1, None, "a cell whose image isn't imported stays empty");
+        let settings = lcc_print::PrintSettings::from_json(&doc.settings.unwrap().to_string()).unwrap();
+        assert!(matches!(settings.layout, lcc_print::LayoutStyle::CustomPackage { .. }));
+        assert_eq!(settings.destination, lcc_print::Destination::Jpeg);
+        let w = warnings_naming(&r, "Collage");
+        assert!(w.len() == 1 && w[0].contains("wasn't imported"), "{w:?}");
+        // listed with the other Saved Prints
+        assert!(crate::creations::creations_of(&s, None).iter().any(|c| c.name == "Collage"));
+    }
+    #[test]
+    fn a_saved_print_whose_layout_cant_be_read_imports_as_a_plain_collection() {
+        for content in [None, Some("s = { _engineIdentifier = \"com.adobe.lightroom.print.engine.unknown\" }"), Some("s = {")] {
+            let mut s = crate::Session::new();
+            let r = apply(&mut s, saved_print_sample(content), false).unwrap();
+            assert_eq!(r["savedPrints"], 0);
+            let collage = album_named(&s, "Collage");
+            assert!(collage.creation.is_none() && collage.photos.len() == 2);
+            let w = warnings_naming(&r, "Collage");
+            assert!(w.len() == 1 && w[0].contains("imported as a plain collection"), "{content:?}: {w:?}");
+        }
+    }
+    /// A catalog imported before saved prints carried their layout: importing it again turns the plain album into the
+    /// Saved Print, and a later import keeps the layout the user may have changed since.
+    #[test]
+    fn reimport_gives_an_earlier_plain_album_its_print_layout_once() {
+        let dir = std::env::temp_dir().join(format!("app-lrcat-saved-print-reimport-{}", std::process::id()));
+        let mut s = crate::Session::new();
+        s.open_library(&dir, false).unwrap();
+        apply(&mut s, saved_print_sample(None), false).unwrap();
+        assert!(album_named(&s, "Collage").creation.is_none());
+        let albums = s.catalog.albums().count();
+        let r = apply(&mut s, saved_print_sample(Some(SAVED_PRINT)), false).unwrap();
+        assert_eq!(r["savedPrints"], 1);
+        assert_eq!(s.catalog.albums().count(), albums, "no second album");
+        let collage = album_named(&s, "Collage");
+        let id = collage.id;
+        assert!(collage.creation.as_ref().is_some_and(|c| c.kind == "print"));
+        let edited = lcc_catalog::Creation { kind: "print".into(), document: collage.creation.as_ref().unwrap().document.replace("612", "613") };
+        s.commit("edit", Op::SetAlbumCreation { id, creation: Some(edited.clone()) }).unwrap();
+        let r = apply(&mut s, saved_print_sample(Some(SAVED_PRINT)), false).unwrap();
+        assert_eq!(r["savedPrints"], 0);
+        assert_eq!(album_named(&s, "Collage").creation.as_ref(), Some(&edited));
+        s.close_library().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     /// The import report's warnings about `album`.
     fn warnings_naming(r: &Value, album: &str) -> Vec<String> {
         r["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).filter(|w| w.starts_with(&format!("{album}:"))).map(String::from).collect()
+    }
+    /// [`warnings_naming`] without the one a saved print gets when (as in these fixtures) the catalog has no layout
+    /// for it.
+    fn placement_warnings(r: &Value, album: &str) -> Vec<String> {
+        warnings_naming(r, album).into_iter().filter(|w| !w.contains("print layout isn't imported")).collect()
     }
     fn album_named<'a>(s: &'a crate::Session, name: &str) -> &'a lcc_catalog::Album {
         s.catalog.albums().find(|a| a.name == name).unwrap_or_else(|| panic!("no album {name}"))
@@ -2627,7 +2859,7 @@ pub(crate) mod tests {
         let poster = album_named(&s, "Poster");
         assert_eq!((poster.parent, poster.folder, poster.photos.len()), (None, false, 1));
         assert_eq!(album_named(&s, "Album Book").parent, Some(album_named(&s, "Travel").id));
-        let w = warnings_naming(&r, "Poster");
+        let w = placement_warnings(&r, "Poster");
         assert!(w.len() == 1 && w[0].contains("Loose") && w[0].contains("at the top level"), "{w:?}");
         assert_eq!(warnings_naming(&r, "Album Book").len(), 1);
         assert_eq!(album_named(&s, "Keepers").photos.len(), 2);
@@ -2648,7 +2880,7 @@ pub(crate) mod tests {
         assert!(s.catalog.albums().all(|a| a.name != "quick collection"));
         let w = warnings_naming(&r, "Orphan");
         assert!(w.len() == 1 && w[0].contains("isn't in the catalog"), "{w:?}");
-        let w = warnings_naming(&r, "Stray");
+        let w = placement_warnings(&r, "Stray");
         assert!(w.len() == 1 && w[0].contains("quick collection") && w[0].contains("at the top level"), "{w:?}");
         assert_eq!(album_named(&s, "Keepers").parent, Some(album_named(&s, "Travel").id));
     }
@@ -2753,7 +2985,7 @@ pub(crate) mod tests {
         assert_eq!(album_named(&s, "Poster").photos.len(), 1);
         let w = warnings_naming(&r, "Outer");
         assert!(w.len() == 1 && w[0].contains("inside “Loose”") && w[0].ends_with("at the top level (Lightroom collection 13)"), "{w:?}");
-        assert!(warnings_naming(&r, "Inner").is_empty() && warnings_naming(&r, "Poster").is_empty(), "{r}");
+        assert!(warnings_naming(&r, "Inner").is_empty() && placement_warnings(&r, "Poster").is_empty(), "{r}");
     }
     /// The album counter saturates: one at its end hands every collection the same id. The second collection used to be
     /// dropped without a word while the report counted it; the import now stops and names it.
@@ -4136,15 +4368,11 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn observed_changed_optional_settings_wal_frame_fails_public_read() {
-        let result = read_after_indexed_optional_frame_changes("Adobe_imageDevelopSettings");
-        assert!(result.is_err(), "an indexed source-frame change in an optional table must fail the whole read, not become a warning");
-    }
-
-    #[test]
-    fn observed_changed_optional_xmp_wal_frame_fails_public_read() {
-        let result = read_after_indexed_optional_frame_changes("Adobe_AdditionalMetadata");
-        assert!(result.is_err(), "an indexed source-frame change in optional XMP must fail the whole read, not become a warning");
+    fn observed_changed_optional_wal_frames_fail_public_read() {
+        for table in ["Adobe_imageDevelopSettings", "Adobe_AdditionalMetadata"] {
+            let result = read_after_indexed_optional_frame_changes(table);
+            assert!(result.is_err(), "{table}: an indexed source-frame change in an optional table must fail the whole read, not become a warning");
+        }
     }
 
     #[test]
@@ -4500,56 +4728,22 @@ pub(crate) mod tests {
         assert!(catalog.warnings.is_empty(), "{:?}", catalog.warnings);
         std::fs::remove_dir_all(dir).unwrap();
     }
+    /// Upstream #3674: the XMP bound is per packet: many small ones all stay however many there are, and one
+    /// past the bound is left off its row, named, while the others keep theirs.
     #[test]
-    fn oversized_optional_table_warns_and_is_skipped_upstream_fixture() {
-        let mut main = vec![0u8; 2 * 512];
-        main[..16].copy_from_slice(b"SQLite format 3\0");
-        main[16..18].copy_from_slice(&512u16.to_be_bytes());
-        main[18] = 1;
-        main[19] = 1;
-        main[21] = 64;
-        main[22] = 32;
-        main[23] = 32;
-        main[28..32].copy_from_slice(&2u32.to_be_bytes());
-        main[44..48].copy_from_slice(&4u32.to_be_bytes());
-        main[56..60].copy_from_slice(&1u32.to_be_bytes());
-        main[100] = 0x0d;
-        let schema = vec![
-            SqlValue::Text("table".into()),
-            SqlValue::Text("optional_history".into()),
-            SqlValue::Text("optional_history".into()),
-            SqlValue::Integer(2),
-            SqlValue::Text("CREATE TABLE optional_history (payload BLOB)".into()),
-        ];
-        leaf_one(&mut main[..512], 100, 1, &schema);
-        let page = &mut main[512..];
-        page[0] = 0x0d;
-        page[3..5].copy_from_slice(&1u16.to_be_bytes());
-        let mut cell = varint((64 * 1024 * 1024 + 1) as u64);
-        cell.extend(varint(1));
-        let start = 500 - cell.len();
-        page[start..start + cell.len()].copy_from_slice(&cell);
-        page[8..10].copy_from_slice(&u16::try_from(start).unwrap_or(0).to_be_bytes());
-        page[5..7].copy_from_slice(&u16::try_from(start).unwrap_or(0).to_be_bytes());
-        let db = Database::open_with_wal(main, &[]).unwrap();
-        let reader = Reader { db };
-        let mut warnings = Vec::new();
-        let cancel = AtomicBool::new(false);
-        let rows = reader.optional_table("optional_history", &mut warnings, &cancel).unwrap();
-        assert!(rows.is_empty());
-        assert!(warnings.iter().any(|warning| warning.contains("optional_history")));
-    }
-    /// Upstream #3674: text XMP packets count toward the catalog-wide total too; one past it is left off its row.
-    #[test]
-    fn text_xmp_counts_toward_the_total_cap() {
+    fn xmp_is_bounded_per_packet_not_as_a_running_total() {
         use SqlValue::{Integer as I, Null as N, Text as T};
-        let rows = vec![vec![N, I(1), T("<x:xmpmeta/>".into())], vec![N, I(2), T("<x:xmpmeta/>".into())]];
+        let rows = vec![
+            vec![N, I(1), T("<x:xmpmeta/>".into())],
+            vec![N, I(2), T("<x:xmpmeta/>".into())],
+            vec![N, I(3), T("<x:xmpmeta>padding</x:xmpmeta>".into())],
+        ];
         let bytes = native_catalog_rows(&[("Adobe_AdditionalMetadata", "id_local INTEGER PRIMARY KEY, image, xmp", rows)], None);
         let reader = Reader { db: Database::open_with_wal(bytes, &[]).unwrap() };
         let cancel = AtomicBool::new(false);
-        let (rows, warnings) = reader.xmp_table_within(&cancel, 12 + 5).unwrap();
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows.values().filter(|r| r.contains_key("xmp")).count(), 1);
+        let (rows, warnings) = reader.xmp_table_within(&cancel, 12).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.values().filter(|r| r.contains_key("xmp")).count(), 2);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("exceed"), "{warnings:?}");
     }
@@ -4796,7 +4990,7 @@ pub(crate) mod tests {
         let catalog = read(&path).unwrap();
         assert_eq!(catalog.photos.len(), shapes.len(), "{:?}", catalog.skipped);
         // the catalog's own value stays in the import archive, whatever the library keeps
-        let archived = fixture::read_archive(&crate::lightroom_archive::store(&dir.join("Interop"), &catalog).unwrap());
+        let archived = fixture::read_archive(&crate::lightroom_archive::store(&dir.join("Interop"), &catalog).unwrap().path);
         for photo in archived["photos"].as_array().unwrap() {
             let i = usize::try_from(photo["source_id"].as_i64().unwrap() - 1).unwrap();
             let (c, _) = shapes[i];
@@ -4967,6 +5161,7 @@ pub(crate) mod tests {
             snapshots: Vec::new(),
             original: Original::Local,
             as_shot_white: None,
+            capture_one: None,
         };
         let data = CatalogImport {
             source: "test.lrcat".into(),
@@ -5026,6 +5221,7 @@ pub(crate) mod tests {
                 snapshots: Vec::new(),
                 original: Original::Local,
                 as_shot_white: None,
+                capture_one: None,
             }],
             collections: Vec::new(),
             members: Vec::new(),
@@ -5147,6 +5343,7 @@ pub(crate) mod tests {
             snapshots: Vec::new(),
             original: Original::Local,
             as_shot_white: None,
+            capture_one: None,
         }
     }
     /// `sample()` (a virtual copy, then its master) with a Copy Name on the master, Lightroom's edit times, a photo

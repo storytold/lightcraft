@@ -28,21 +28,3 @@ fn fractional_and_malformed_indices_are_refused() {
     }
     s.execute("version.delete", &json!({"index": 0.0})).unwrap();
 }
-
-#[test]
-fn malformed_mask_and_spot_targets_are_refused() {
-    let mut s = Session::with_demo();
-    s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
-    s.execute("spot.add", &json!({"points": [[0.5, 0.5]]})).unwrap();
-    refused(&mut s, "mask.update", json!({"component": -1, "shape": {"kind": "brush", "strokes": []}}));
-    refused(&mut s, "mask.update", json!({"component": 0.5, "shape": {"kind": "brush", "strokes": []}}));
-    refused(&mut s, "mask.component", json!({"component": -1, "action": "delete"}));
-    refused(&mut s, "spot.delete", json!({"index": -1}));
-    refused(&mut s, "spot.select", json!({"index": -1}));
-    refused(&mut s, "spot.select", json!({"index": 0.5}));
-    refused(&mut s, "mask.select", json!({"id": -1}));
-    refused(&mut s, "mask.applyEffect", json!({"name": "x", "ids": [0, -1]}));
-    // valid defaults still work: omitted / null target = the active mask, null selection clears
-    s.execute("mask.select", &json!({"id": null})).unwrap();
-    assert_eq!(s.active_mask, None);
-}

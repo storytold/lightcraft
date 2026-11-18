@@ -471,7 +471,7 @@ fn show_inner(app: &mut LccApp, ui: &mut egui::Ui) {
                 bw_taken = bw + 10.0;
             }
             // the title gives way to the count: a long album or folder name is trimmed, in full on hover
-            let room = (hr.width() - 20.0 - count_w - 36.0).max(0.0);
+            let room = (hr.width() - 20.0 - count_w - 36.0 - if crate::modern::on(app) { 20.0 } else { 0.0 }).max(0.0);
             let font = t.semibold(17.0);
             let title = crate::widgets::elide_head(&full, room, |s| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text).size().x);
             let title_rect = ui.painter().text(pos2(hr.left() + 20.0, hr.center().y), Align2::LEFT_CENTER, &title, font, t.text);
@@ -487,6 +487,10 @@ fn show_inner(app: &mut LccApp, ui: &mut egui::Ui) {
             let count_rect = count.rect;
             count.on_hover_text(cnt.as_str());
             crate::widgets::register(ui.ctx(), "grid:title", title_rect);
+            // Modern has no source panel: its title opens the list of sources and collections
+            if crate::modern::on(app) {
+                crate::modern_sources::title(app, ui, title_rect, hr);
+            }
             crate::widgets::register(ui.ctx(), "grid:count", count_rect);
             if title != full {
                 ui.interact(title_rect, ui.id().with("grid-title"), Sense::hover()).on_hover_text(full);
@@ -588,15 +592,23 @@ fn show_inner(app: &mut LccApp, ui: &mut egui::Ui) {
     let anchor_id = egui::Id::new("grid-anchor");
     let lay_id = (Arc::as_ptr(&lay) as usize, ids.len(), lay.height.to_bits());
     let last: Option<GridAnchor> = ui.ctx().data(|d| d.get_temp(anchor_id));
-    // a bar that can be seen and grabbed, its handle always drawn: it says where the view is in the shoot
-    visible_scroll_bar(ui);
-    let mut area_ui = egui::ScrollArea::vertical()
-        .id_salt("grid-scroll")
-        .auto_shrink([false, false])
-        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible);
+    // a bar that can be seen and grabbed, its handle always drawn: it says where the view is in the shoot.
+    // The Modern layout instead has a finger-sized fast-scroll handle over the edge
+    // (`modern_library::scroll_handle`): its thin bar would only be in the way there.
+    let modern = crate::modern::on(app);
+    if !modern {
+        visible_scroll_bar(ui);
+    }
+    // the fast-scroll handle's drag, taken as the view's absolute offset
+    let handle_to: Option<f32> = ui.ctx().data_mut(|d| d.remove_temp(egui::Id::new("modern-grid-scroll-to")));
+    let mut area_ui = egui::ScrollArea::vertical().id_salt("grid-scroll").auto_shrink([false, false]).scroll_bar_visibility(if modern {
+        egui::scroll_area::ScrollBarVisibility::AlwaysHidden
+    } else {
+        egui::scroll_area::ScrollBarVisibility::AlwaysVisible
+    });
     let mut viewport_seen = Rect::NOTHING;
     if scroll_to.is_none()
-        && let Some(y) = last.as_ref().and_then(|a| a.reflow_offset(lay_id, &ids, &lay))
+        && let Some(y) = handle_to.or_else(|| last.as_ref().and_then(|a| a.reflow_offset(lay_id, &ids, &lay)))
     {
         area_ui = area_ui.vertical_scroll_offset(y);
     }
@@ -672,6 +684,12 @@ fn show_inner(app: &mut LccApp, ui: &mut egui::Ui) {
     });
     // where the view is in the shoot: "1,234 / 2,233" by the scroll bar while it is dragged or the view scrolls
     scroll_position_label(app, ui, scroll_rect, viewport_seen, total_h, &ids, &lay);
+    // the Modern layout's fast-scroll handle: where the view is, how far it may go, how tall the shoot is
+    if viewport_seen.is_positive() {
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(egui::Id::new("modern-grid-scroll"), (viewport_seen.top(), (total_h - viewport_seen.height()).max(0.0), total_h))
+        });
+    }
     app.caches.grid_stats.cells_visited += visited;
     app.renderer.evict_thumbs(&visible_ids, 600);
     let _ = (Color32::BLACK, StrokeKind::Inside, Stroke::NONE);
@@ -1312,7 +1330,7 @@ fn cell(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool,
         let marks = bar.shrink2(vec2(if square { 8.0 } else { 3.0 }, 1.0));
         register(ui.ctx(), format!("cellmarks:{}", id.0), marks);
         if show_badges || photo.label.is_some() {
-            paint_badges(p, &t, marks, &photo, false);
+            paint_badges(p, &t, marks, &photo, false, app.session.catalog.is_vignetting_reference(photo.id));
         }
     }
     let badge_bar = Rect::from_min_max(pos2(img_rect.left(), img_rect.bottom() - 24.0), img_rect.right_bottom());
@@ -1376,8 +1394,15 @@ fn cell(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool,
         ui.interact(br, egui::Id::new(("preview-only-badge", id.0)), Sense::hover())
             .on_hover_text(crate::i18n::tr_format!("Preview only: {}", crate::widgets::preview_only_explanation(why)));
     }
+    // the device-sync pill: bottom right, above the badge bar, with the other badges
     #[cfg(not(target_arch = "wasm32"))]
-    super::connections::grid_badge(app, ui, id, img_rect);
+    if show_badges && let Some(pill) = app.session.sync_pill(id) {
+        let size = super::sync_pill::size(ui, &pill);
+        let at = pos2(img_rect.right() - 6.0 - size.x, img_rect.bottom() - 30.0 - size.y);
+        if img_rect.contains_rect(egui::Rect::from_min_size(at, size)) {
+            super::sync_pill::paint(ui, at, &pill, &format!("badge:sync:{}", id.0));
+        }
+    }
     if photo.flag == Flag::Reject && !under {
         p.rect_filled(img_rect, 0.0, Color32::from_black_alpha(110));
     }
@@ -1506,7 +1531,7 @@ fn paint_outlined(p: &egui::Painter, rect: Rect, icon: Icon, colour: Color32) {
 /// A photo's culling marks along `bar` (the strip under a Compact thumbnail): its flag and stars
 /// from the left, its colour label and edited mark from the right, sized to the bar's height so
 /// they read at a glance. `on_photo`: drawn over the picture (white marks) rather than on the panel.
-pub fn paint_badges(p: &egui::Painter, t: &Tokens, bar: Rect, photo: &lcc_catalog::Photo, on_photo: bool) {
+pub fn paint_badges(p: &egui::Painter, t: &Tokens, bar: Rect, photo: &lcc_catalog::Photo, on_photo: bool, reference: bool) {
     let h = bar.height().clamp(10.0, 40.0);
     let y = bar.center().y;
     let star = (h * 0.62).round().max(8.0);
@@ -1553,6 +1578,13 @@ pub fn paint_badges(p: &egui::Painter, t: &Tokens, bar: Rect, photo: &lcc_catalo
         let s = (h * 0.5).round();
         let colour = if on_photo { Color32::from_gray(220) } else { t.text_label };
         paint(p, Rect::from_min_size(pos2(right - s, y - s / 2.0), vec2(s, s)), Icon::Share, colour);
+        right -= s + 4.0;
+    }
+    // a Vignetting Calibration reference in use
+    if reference {
+        let s = (h * 0.5).round();
+        let colour = if on_photo { Color32::from_gray(220) } else { t.text_label };
+        paint(p, Rect::from_min_size(pos2(right - s, y - s / 2.0), vec2(s, s)), Icon::Radial, colour);
     }
 }
 

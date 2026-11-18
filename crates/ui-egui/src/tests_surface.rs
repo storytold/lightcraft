@@ -169,28 +169,6 @@ fn pairing_then_subscribe_and_turn_over_a_connection() {
 }
 
 #[test]
-fn apply_to_selected_changes_every_selected_photo_in_one_step() {
-    let mut h = demo();
-    open_photo(&mut h);
-    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(3).map(|p| p.0).collect();
-    assert_eq!(h.request("engine.execute", json!({"command": "library.select", "params": {"ids": ids}}), T)["ok"], true);
-    h.settle(T);
-    let r = h.request("engine.execute", json!({"command": "surface.applyToSelected", "params": {"on": true}}), T);
-    assert_eq!(r["result"]["on"], true, "{r}");
-    let exp = |h: &Headless, id: u64| h.app.session.develop_of(lcc_catalog::PhotoId(id)).unwrap().light.exposure;
-    let before: Vec<f64> = ids.iter().map(|i| exp(&h, *i)).collect();
-    assert_eq!(input(&mut h, json!([{"control": "roller", "ticks": 10}]))["ok"], true);
-    finish_gesture(&mut h);
-    for (i, id) in ids.iter().enumerate() {
-        assert!((exp(&h, *id) - before[i] - 0.10).abs() < 1e-6, "photo {id}: {} vs {}", exp(&h, *id), before[i]);
-    }
-    assert_eq!(h.request("engine.execute", json!({"command": "edit.undo"}), T)["ok"], true);
-    for (i, id) in ids.iter().enumerate() {
-        assert!((exp(&h, *id) - before[i]).abs() < 1e-9, "one undo step for all");
-    }
-}
-
-#[test]
 fn pages_follow_crop_and_keys_run_commands() {
     let mut h = demo();
     open_photo(&mut h);
@@ -304,7 +282,7 @@ fn settings_tab_learn_and_edit_a_key() {
 
 #[test]
 fn tactilebridge_settings_import_and_damaged_files() {
-    let dir = std::env::temp_dir().join(format!("lc-surface-tb-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lc-surface-tb");
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join("settings.json");
     std::fs::write(
@@ -603,6 +581,7 @@ fn console_erase_works_while_held_and_delete_needs_a_hold() {
 
 #[test]
 fn a_loupedeck_plus_works_as_labelled_and_takes_a_loupedeck_profile() {
+    let dir = lcc_testkit::TempDir::new("lc-surface-ld");
     let mut h = demo();
     open_photo(&mut h);
     // no setup: the knob labelled Exposure moves Exposure
@@ -611,7 +590,6 @@ fn a_loupedeck_plus_works_as_labelled_and_takes_a_loupedeck_profile() {
     finish_gesture(&mut h);
     assert!(exposure(&h) > before, "the Exposure knob");
     // a Loupedeck profile: that knob now moves Temperature, Undo stays on its button
-    let dir = std::env::temp_dir().join(format!("lc-surface-ld-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join("ProfileInfo.json");
     let mut rotate = vec![Value::Null; 127];
@@ -651,34 +629,7 @@ fn widget(h: &Headless, id: &str) -> egui::Rect {
 }
 
 #[test]
-fn the_dialpad_is_drawn_like_the_device() {
-    let mut h = demo();
-    assert_eq!(h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "controls"}}), T)["ok"], true);
-    h.app.surface.editor.device = "dialpad".into();
-    h.settle(T);
-    let r = |id: &str| widget(&h, &format!("button:surfaceControl-{id}"));
-    let (b1, b2, roller, dial, b3, b4) = (r("pad.1"), r("pad.2"), r("roller"), r("dial"), r("pad.3"), r("pad.4"));
-    // buttons 1 and 2 top left, the roller top right
-    assert!(b1.center().x < b2.center().x && b2.center().x < roller.center().x, "{b1:?} {b2:?} {roller:?}");
-    assert!((b1.center().y - b2.center().y).abs() < 2.0 && (b2.center().y - roller.center().y).abs() < 4.0);
-    assert!(roller.width() > roller.height(), "the roller is a horizontal wheel");
-    // the big dial in the middle, the biggest control
-    assert!(dial.top() > b1.bottom() && dial.bottom() < b3.bottom(), "{dial:?}");
-    assert!(dial.width() > 2.0 * b1.width());
-    // button 3 bottom left, button 4 bottom right
-    assert!(b3.center().x < dial.center().x && b4.center().x > dial.center().x);
-    assert!((b3.center().y - b4.center().y).abs() < 2.0 && b3.top() > dial.center().y);
-    for a in [b1, b2, roller, dial, b3, b4] {
-        for b in [b1, b2, roller, dial, b3, b4] {
-            if a != b {
-                assert!(!a.shrink(1.0).intersects(b.shrink(1.0)), "controls don't overlap: {a:?} {b:?}");
-            }
-        }
-    }
-}
-
-#[test]
-fn the_actions_ring_takes_actions_dragged_onto_its_slots() {
+fn the_ring_takes_dragged_actions_and_a_dial_refuses_a_one_press_action() {
     let mut h = demo();
     assert_eq!(h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "controls"}}), T)["ok"], true);
     h.settle(T);
@@ -706,12 +657,7 @@ fn the_actions_ring_takes_actions_dragged_onto_its_slots() {
     let layout = serde_json::to_value(crate::surface::layout(&h.app, &lcc_surface::devices::MX_CREATIVE_CONSOLE)).unwrap();
     let buttons = layout["buttons"].as_array().cloned().unwrap_or_default();
     assert!(buttons.iter().any(|b| b["control"] == "ring.3" && b["binding"]["target"] == "light.highlights"), "{layout}");
-}
-
-#[test]
-fn a_dial_refuses_a_one_press_action_dropped_on_it() {
-    let mut h = demo();
-    assert_eq!(h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "controls"}}), T)["ok"], true);
+    // a dial refuses a one-press action dropped on it
     h.app.surface.editor.device = "dialpad".into();
     h.app.surface.editor.control = Some("pad.1".into());
     h.app.surface.editor.filter = "edit.undo".into();

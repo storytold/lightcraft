@@ -267,16 +267,18 @@ mod tests {
     }
 
     #[test]
-    fn missing_host_is_an_error_not_a_hang() {
-        let r = upload(&Server::default(), Auth::Password(String::new()), &[], &mut |_, _| true);
-        assert!(r.unwrap_err().contains("host"));
-    }
-
-    #[test]
-    fn unreachable_server_is_an_error() {
-        // port 1 on localhost: nothing listens
-        let s = Server { host: "127.0.0.1".into(), port: 1, user: "u".into(), ..Server::default() };
-        assert!(upload(&s, Auth::Password("x".into()), &[], &mut |_, _| true).is_err());
+    fn a_missing_or_unreachable_host_is_an_error_not_a_hang() {
+        // missing host is an error not a hang
+        {
+            let r = upload(&Server::default(), Auth::Password(String::new()), &[], &mut |_, _| true);
+            assert!(r.unwrap_err().contains("host"));
+        }
+        // unreachable server is an error
+        {
+            // port 1 on localhost: nothing listens
+            let s = Server { host: "127.0.0.1".into(), port: 1, user: "u".into(), ..Server::default() };
+            assert!(upload(&s, Auth::Password("x".into()), &[], &mut |_, _| true).is_err());
+        }
     }
 
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -325,23 +327,25 @@ mod tests {
     }
 
     #[test]
-    fn unpinned_host_key_is_refused_before_any_login() {
-        let logins = Arc::new(AtomicUsize::new(0));
-        let (port, fp) = serve(logins.clone());
-        let e = upload(&server(port, ""), Auth::Password("secret".into()), &[], &mut |_, _| true).unwrap_err();
-        assert!(e.contains(&fp) && e.contains("not trusted"), "{e}");
-        assert!(remove(&server(port, ""), Auth::Password("secret".into()), &["a".into()]).is_err());
-        assert_eq!(logins.load(Ordering::SeqCst), 0, "credentials sent to an unconfirmed host key");
-    }
-
-    #[test]
-    fn changed_host_key_is_refused_before_any_login() {
-        let logins = Arc::new(AtomicUsize::new(0));
-        let (port, fp) = serve(logins.clone());
-        let pin = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-        let e = upload(&server(port, pin), Auth::Password("secret".into()), &[], &mut |_, _| true).unwrap_err();
-        assert!(e.contains("changed") && e.contains(&fp) && e.contains(pin), "{e}");
-        assert_eq!(logins.load(Ordering::SeqCst), 0);
+    fn an_unpinned_or_changed_host_key_is_refused_before_any_login() {
+        // unpinned host key is refused before any login
+        {
+            let logins = Arc::new(AtomicUsize::new(0));
+            let (port, fp) = serve(logins.clone());
+            let e = upload(&server(port, ""), Auth::Password("secret".into()), &[], &mut |_, _| true).unwrap_err();
+            assert!(e.contains(&fp) && e.contains("not trusted"), "{e}");
+            assert!(remove(&server(port, ""), Auth::Password("secret".into()), &["a".into()]).is_err());
+            assert_eq!(logins.load(Ordering::SeqCst), 0, "credentials sent to an unconfirmed host key");
+        }
+        // changed host key is refused before any login
+        {
+            let logins = Arc::new(AtomicUsize::new(0));
+            let (port, fp) = serve(logins.clone());
+            let pin = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+            let e = upload(&server(port, pin), Auth::Password("secret".into()), &[], &mut |_, _| true).unwrap_err();
+            assert!(e.contains("changed") && e.contains(&fp) && e.contains(pin), "{e}");
+            assert_eq!(logins.load(Ordering::SeqCst), 0);
+        }
     }
 
     #[test]

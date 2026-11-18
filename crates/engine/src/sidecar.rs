@@ -228,6 +228,9 @@ pub struct SidecarData {
     /// `xmp:CreateDate` (first found). Used only when the file itself has no capture time.
     pub captured: Option<String>,
     pub develop: Option<DevelopPatch>,
+    /// The flat-field map our own settings (`lc:settings`, portable) carried; whoever applies the settings stores it
+    /// first ([`SidecarData::vignetting_calibration_ops`]).
+    pub vignetting_maps: Vec<(lcc_develop::VignettingMapId, lcc_develop::EmbeddedVignettingMap)>,
     /// A video clip's trim (`lcvid:trimIn`, `lcvid:trimOut`; seconds, `None` out = the end), when stated.
     pub video_trim: Option<(f64, Option<f64>)>,
     /// A video clip's poster frame time (`lcvid:posterTime`), when stated.
@@ -324,8 +327,11 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
         out.label = Some(ColorLabel::parse(l.trim()));
         out.label_text = Some(l.trim().to_string());
     }
-    let full =
-        d.lc_settings.as_deref().and_then(|j| serde_json::from_str::<Value>(j).ok()).and_then(|v| DevelopSettings::from_untrusted_json(&v).ok());
+    let full = d.lc_settings.as_deref().and_then(|j| serde_json::from_str::<Value>(j).ok()).and_then(|mut v| {
+        // (a flat-field map comes with them: taken out, the settings reference it)
+        out.vignetting_maps.extend(lcc_develop::absorb_portable(&mut v));
+        DevelopSettings::from_untrusted_json(&v).ok()
+    });
     out.develop = match full {
         Some(s) => Some(DevelopPatch::Full(Box::new(s))),
         None if crate::crs::has_adjustments(&d.properties) => {
@@ -524,6 +530,12 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
 }
 
 impl SidecarData {
+    /// The ops that store the flat-field map these settings carried in `cat` (none when it has it already): ahead of
+    /// the ops that apply them. The map links to no photo; the catalog finds its reference by the raw's SHA-1.
+    pub fn vignetting_calibration_ops(&self, cat: &lcc_catalog::Catalog, now: &str) -> Vec<Op> {
+        crate::vignetting_calibration_io::add_ops(cat, &self.vignetting_maps, now)
+    }
+
     /// The patch with the rotation [`SidecarData::turned_to`] adds to `file` (the orientation the photo file states,
     /// which the decode applies): Lightroom writes a photo turned in it as the whole orientation. Only another
     /// editor's settings take it; the app's own (`lc:settings`) carry their rotation already.
@@ -817,6 +829,16 @@ fn packet(p: &Photo, cat: &lcc_catalog::Catalog, remove_location: bool, gps: boo
         d.optics.lens = None;
         serde_json::to_string(&d).unwrap_or_default()
     };
+    // portable: the flat-field map goes with the settings (another catalog reads it back); settings without one are
+    // written exactly as before
+    let settings = match p.develop.optics.vignetting_calibration.as_ref().and_then(|id| cat.vignetting_map(id)) {
+        Some(r) => {
+            let mut v: Value = serde_json::from_str(&settings).unwrap_or(Value::Null);
+            lcc_develop::embed_portable(&mut v, |_| Some(r.map.clone()));
+            serde_json::to_string(&v).unwrap_or(settings)
+        }
+        None => settings,
+    };
     let flag = match p.flag {
         Flag::None => "none",
         Flag::Pick => "pick",
@@ -968,7 +990,7 @@ impl Packets {
 /// in `photoshop:DateCreated` only, so an `exif:DateTimeOriginal` already there (an earlier full time) is removed
 /// rather than left to outrank it on the next read.
 fn merged_contents(path: &Path, p: &Photo, packets: &Packets, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>)> {
-    let bytes = match std::fs::read(path) {
+    let bytes = match read_capped(path, SIDECAR_READ_MAX) {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((packets.with_gps.clone(), false, None)),
         // can't see what is there: never overwrite it blindly
@@ -977,21 +999,35 @@ fn merged_contents(path: &Path, p: &Photo, packets: &Packets, stamp: &str) -> st
     if bytes.iter().all(u8::is_ascii_whitespace) {
         return Ok((packets.with_gps.clone(), false, None));
     }
-    match std::str::from_utf8(&bytes).map_err(|e| e.to_string()).and_then(|old| {
-        let gps = GpsOnSave::of(p, old);
-        let partial_capture = p.captured.as_deref().and_then(lcc_catalog::dates::partial_capture).is_some();
-        let owned: Vec<&str> = OWNED.iter().chain(gps.owned_tags()).copied().chain(partial_capture.then_some("exif:DateTimeOriginal")).collect();
-        let rules = lcc_meta::MergeRules { owned: &owned, owned_if_present: OWNED_IF_STATED };
-        let fresh = if gps.write() { &packets.with_gps } else { &packets.without_gps };
-        lcc_meta::merge_xmp(old, fresh, rules).map_err(|e| e.to_string())
-    }) {
-        Ok(merged) => Ok((merged, true, None)),
-        Err(why) => {
-            let b = backup(path, stamp)?;
-            log::warn!("{}: not readable as XMP ({why}); kept a copy as {} before replacing it", path.display(), b.display());
-            Ok((packets.with_gps.clone(), false, Some(b)))
+    let why = match std::str::from_utf8(&bytes) {
+        Ok(old) => {
+            let gps = GpsOnSave::of(p, old);
+            let partial_capture = p.captured.as_deref().and_then(lcc_catalog::dates::partial_capture).is_some();
+            let owned: Vec<&str> = OWNED.iter().chain(gps.owned_tags()).copied().chain(partial_capture.then_some("exif:DateTimeOriginal")).collect();
+            let rules = lcc_meta::MergeRules { owned: &owned, owned_if_present: OWNED_IF_STATED };
+            let fresh = if gps.write() { &packets.with_gps } else { &packets.without_gps };
+            match lcc_meta::merge_xmp(old, fresh, rules) {
+                Ok(merged) => return Ok((merged, true, None)),
+                // a readable sidecar whose merge fails (e.g. the merged packet exceeds the XMP limits), or one
+                // that is valid but over the parser's complexity limits: fail the save and keep the file as it
+                // is, rather than replace metadata that could be read (upstream #3696). Text with no `rdf:RDF`
+                // element parses as empty metadata but holds nothing to keep: it is replaced after a backup,
+                // as any sidecar that is not XMP.
+                Err(why)
+                    if why == lcc_meta::XmpError::TooComplex
+                        || (lcc_meta::parse_xmp(old.strip_prefix('\u{feff}').unwrap_or(old)).is_ok()
+                            && !matches!(&why, lcc_meta::XmpError::Xml(m) if m.contains("no rdf:RDF element"))) =>
+                {
+                    return Err(std::io::Error::other(format!("the sidecar is readable but could not be merged ({why}); it was left unchanged")));
+                }
+                Err(why) => why.to_string(),
+            }
         }
-    }
+        Err(why) => why.to_string(),
+    };
+    let b = backup(path, stamp)?;
+    log::warn!("{}: not readable as XMP ({why}); kept a copy as {} before replacing it", path.display(), b.display());
+    Ok((packets.with_gps.clone(), false, Some(b)))
 }
 
 /// Make a background sidecar write ([`crate::sidecar_writer`]): the packet merged into an existing one and written
@@ -1092,14 +1128,26 @@ pub(crate) fn jpeg_header_xmp(bytes: &[u8]) -> Option<String> {
     read_jpeg_xmp(&mut std::io::Cursor::new(bytes), JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS)
 }
 
+/// Most bytes of a sidecar read whole (it must be a regular file).
+const SIDECAR_READ_MAX: u64 = 256 << 20;
+
+/// [`crate::bounded_read::read_bounded`] as an `io::Result`, keeping `NotFound` distinguishable.
+fn read_capped(path: &Path, max: u64) -> std::io::Result<Vec<u8>> {
+    use crate::bounded_read::ReadError;
+    crate::bounded_read::read_bounded(path, max).map_err(|e| match e {
+        ReadError::Io(e) => e,
+        other => std::io::Error::other(other.to_string()),
+    })
+}
+
 /// The XMP packet that describes a photo on disk: its sidecar, else embedded raw/DNG or JPEG XMP.
 pub fn read_packet(original: &str, kind: MediaKind, naming: SidecarNaming) -> Option<(String, PathBuf)> {
     if let Some(sc) = find_sidecar(original, naming) {
         // A discovered sidecar keeps precedence even when reading it fails.
-        return std::fs::read_to_string(&sc).ok().map(|s| (s, sc));
+        return read_capped(&sc, SIDECAR_READ_MAX).ok().and_then(|b| String::from_utf8(b).ok()).map(|s| (s, sc));
     }
     if kind == MediaKind::Raw {
-        let bytes = std::fs::read(original).ok()?;
+        let bytes = read_capped(original.as_ref(), crate::bounded_read::MAX_MEDIA_BYTES).ok()?;
         let x = lcc_meta::embedded(&bytes).xmp?;
         return Some((x, PathBuf::from(original)));
     }
@@ -1492,12 +1540,13 @@ impl Session {
         let sc = sc.resolve_label(&self.catalog);
         let mut q = (**p).clone();
         let develop_changed = merge_into(&mut q, &sc, &(self.clock)());
-        let mut ops = vec![
+        let mut ops = sc.vignetting_calibration_ops(&self.catalog, &(self.clock)());
+        ops.extend([
             Op::SetRating { id, rating: q.rating },
             Op::SetFlag { id, flag: q.flag },
             Op::SetLabel { id, label: q.label },
             Op::SetMeta { id, meta: Box::new(q.meta.clone()) },
-        ];
+        ]);
         if q.captured != p.captured {
             ops.push(Op::SetCaptured { id, captured: q.captured.clone() });
         }

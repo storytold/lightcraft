@@ -186,6 +186,7 @@ const LIBRARY: &[&str] = &[
     "photo.flatField=Flat-Field Correction…",
     "---",
     "file.findMissing=Find All Missing Photos",
+    "library.findDuplicates=Find Duplicates…",
     "library.validateDng",
     "dialog.synchronizeFolder=Synchronize Folder…",
     "---",

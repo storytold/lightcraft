@@ -25,7 +25,7 @@ NikonNEFInfo starts with `"Nikon\0"` and a 4-byte version, followed by a small T
 | Entry | Bytes | What it holds |
 |---|---|---|
 | `0x0005` DistortionInfo | 0–3 | `"0100"` |
-| | 4 | correction mode: 1 "On (Optional)", 3 "On (Required)", 0 none |
+| | 4 | correction mode: 1 "On (Optional)", 3 "On (Required)"; 0 no lens and 2 "Off" are not corrected, nor is any other value |
 | | 8–15 | normalisation radius in mm, a signed rational. It's 21.6 (the FX half diagonal) in every file I looked at |
 | | 16–19 | number of terms, 4 |
 | | 20, 28, 36 | the three coefficients, called `k1`, `k2`, `k3` here after ExifTool's names |

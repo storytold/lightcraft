@@ -73,6 +73,8 @@ fn export_dialog_fits_a_short_window_and_its_button_exports() {
     for size in [[1366.0, 690.0], [1366.0, 520.0]] {
         let mut h = export_dialog(size);
         assert_fits(&h, &format!("Export at {size:?}"));
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, h.size);
+        assert!(screen.contains_rect(rect(&h, "button:dialogCancel")), "Cancel is on screen at {size:?}");
         let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
         assert_eq!(r["ok"], true, "{r}");
         h.step();
@@ -83,54 +85,43 @@ fn export_dialog_fits_a_short_window_and_its_button_exports() {
     }
 }
 
-// Scenario: Cancel is on screen too, and closes the dialog
+/// One session, several steps; each step was a test of its own and says what it checks.
 #[test]
-fn export_dialog_cancel_is_on_screen_in_a_short_window() {
-    let mut h = export_dialog([1366.0, 690.0]);
-    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, h.size);
-    assert!(screen.contains_rect(rect(&h, "button:dialogCancel")));
-    h.request("ui.clickWidget", json!({"id": "button:dialogCancel"}), T);
-    h.step();
-    h.step();
-    assert!(h.app.ui.dialog.is_none());
-    assert!(h.app.export.is_none() && h.app.last_export_result.is_none(), "nothing exported");
-}
-
-// Scenario: other long dialogs fit a short window too, with their buttons on screen
-#[test]
-fn long_dialogs_fit_a_short_window() {
+fn long_dialogs_fit_a_short_window_and_a_list_shrinks() {
     let mut h = demo([1000.0, 320.0]);
-    for command in [
-        "dialog.copySettings",
-        "dialog.pasteSettings",
-        "dialog.createPreset",
-        "dialog.contactSheet",
-        "dialog.timelapse",
-        "app.settings",
-        "app.shortcuts",
-        "app.whatsNew",
-        "app.about",
-        "app.systemInfo",
-        "dialog.smartAlbum",
-    ] {
-        open(&mut h, command);
-        assert_fits(&h, command);
-        h.app.ui.dialog = None;
-        h.settle(T);
+    // long dialogs fit a short window
+    // Scenario: other long dialogs fit a short window too, with their buttons on screen
+    {
+        for command in [
+            "dialog.copySettings",
+            "dialog.pasteSettings",
+            "dialog.createPreset",
+            "dialog.contactSheet",
+            "dialog.timelapse",
+            "app.settings",
+            "app.shortcuts",
+            "app.whatsNew",
+            "app.about",
+            "app.systemInfo",
+            "dialog.smartAlbum",
+        ] {
+            open(&mut h, command);
+            assert_fits(&h, command);
+            h.app.ui.dialog = None;
+            h.settle(T);
+        }
     }
-}
-
-// Scenario: a list that scrolls on its own (the shortcuts) gets shorter instead of scrolling inside a scrolling dialog
-#[test]
-fn a_dialog_list_shrinks_to_fit_a_short_window() {
-    let mut h = demo([1000.0, 320.0]);
-    open(&mut h, "app.shortcuts");
-    // the fork sizes a dialog's list from the window's room up front (`dialogs::list_height` over
-    // `dialog_frame::max_window_height`) instead of upstream's measured `dialog-list-shrink`
-    let room = crate::dialog_frame::max_window_height(&h.view.ctx);
-    assert!(room < 460.0, "the list has less room than it would like: {room}");
-    let dialog = rect(&h, "dialog:window");
-    assert!(dialog.height() <= 320.0, "{dialog:?}");
+    // a dialog list shrinks to fit a short window
+    // Scenario: a list that scrolls on its own (the shortcuts) gets shorter instead of scrolling inside a scrolling dialog
+    {
+        open(&mut h, "app.shortcuts");
+        // the fork sizes a dialog's list from the window's room up front (`dialogs::list_height` over
+        // `dialog_frame::max_window_height`) instead of upstream's measured `dialog-list-shrink`
+        let room = crate::dialog_frame::max_window_height(&h.view.ctx);
+        assert!(room < 460.0, "the list has less room than it would like: {room}");
+        let dialog = rect(&h, "dialog:window");
+        assert!(dialog.height() <= 320.0, "{dialog:?}");
+    }
 }
 
 /// Settings ▸ Performance: the GPU status line above the controls stays one line whatever it says

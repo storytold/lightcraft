@@ -132,7 +132,7 @@ the only copy of those edits outside that application's catalog. Saving never dr
 Limits: the app writes keywords to `dc:subject` only, so another application's `lr:hierarchicalSubject` is kept as
 it was and may still list keywords removed in the app. The app doesn't write `crs:`: the other application's
 develop settings stay as that application left them, next to the app's own (`lc:settings`, which the app reads
-first).
+first). Levels (the Levels section) are only in `lc:settings`: they have no `crs:` equivalent, so Lightroom shows the photo without them.
 
 ## Shared names
 
@@ -269,7 +269,8 @@ mask: `CorrectionName` → name, `CorrectionAmount` → Amount, inactive correct
 | Field | Ours | Notes |
 |---|---|---|
 | `LocalExposure2012` | `adjust.exposure` | stored as a fraction, ×4 EV |
-| `LocalContrast2012`, `LocalHighlights2012`, `LocalShadows2012`, `LocalWhites2012`, `LocalBlacks2012`, `LocalClarity2012`, `LocalTexture`, `LocalDehaze`, `LocalTemperature`, `LocalTint`, `LocalSaturation`, `LocalHue`, `LocalSharpness`, `LocalLuminanceNoise`, `LocalMoire`, `LocalDefringe`, `LocalToningSaturation` | the matching `adjust.*` | stored −1..1, ×100 |
+| `LocalContrast2012`, `LocalHighlights2012`, `LocalShadows2012`, `LocalWhites2012`, `LocalBlacks2012`, `LocalClarity2012`, `LocalTexture`, `LocalDehaze`, `LocalTemperature`, `LocalTint`, `LocalSaturation`, `LocalSharpness`, `LocalLuminanceNoise`, `LocalMoire`, `LocalDefringe`, `LocalToningSaturation` | the matching `adjust.*` | stored −1..1, ×100 |
+| `LocalHue` | `adjust.hue` | stored −1..1; ×100 is the old slider value, rendered as ×0.6 rad (about ±34°). Ours is degrees −180..180: written back as degrees ÷ 34.38, clamped to −1..1; a value past that range is also written whole as `lc:LocalHueDegrees` (degrees), which is read in place of `LocalHue` when present |
 | `LocalToningHue` | `adjust.color_hue` | degrees |
 | other `Local*` sliders (`LocalGrain`…) | — | no counterpart in our masks: reported as `Mask: LocalGrain` when set (`LocalCurveRefineSaturation` 100 is neutral) |
 | `Mask/Gradient` (`FullX/Y`, `ZeroX/Y`) | linear gradient | full effect at the Full point |

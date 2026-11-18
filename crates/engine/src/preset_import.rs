@@ -303,15 +303,7 @@ impl LuaParser<'_> {
                     self.skip_ws();
                     match self.s.get(self.i) {
                         Some(b'"' | b'\'' | b'{') => self.value(),
-                        Some(b'(') => {
-                            self.i += 1;
-                            let v = self.value()?;
-                            self.skip_ws();
-                            if self.s.get(self.i) == Some(&b')') {
-                                self.i += 1;
-                            }
-                            Ok(v)
-                        }
+                        Some(b'(') => self.call_args(),
                         _ => Ok(Lua::Nil),
                     }
                 }
@@ -367,6 +359,30 @@ impl LuaParser<'_> {
                 }
             }
         }
+    }
+    /// The arguments of a call such as `ZSTR( "…" )`, `AgColor( 0, 0, 0, 1 )` or
+    /// `AgMutableRect( x1, y1, x2, y2 )`, the cursor on its `(`: one argument is that value (as
+    /// before), none is `nil`, several are a table of them in order.
+    fn call_args(&mut self) -> Result<Lua, String> {
+        self.i += 1; // (
+        let mut args = Vec::new();
+        loop {
+            self.skip_ws();
+            match self.s.get(self.i) {
+                None => return self.err("unterminated call"),
+                Some(b')') => {
+                    self.i += 1;
+                    break;
+                }
+                Some(b',') if !args.is_empty() => self.i += 1,
+                _ => args.push(self.value()?),
+            }
+        }
+        Ok(match args.len() {
+            0 => Lua::Nil,
+            1 => args.pop().unwrap_or(Lua::Nil),
+            _ => Lua::Table(args, Vec::new()),
+        })
     }
     fn expect_eq(&mut self) -> Result<(), String> {
         self.skip_ws();
@@ -757,6 +773,24 @@ text]], z = ZSTR "loc" }"#,
         assert_eq!(arr[..2], [Lua::Num(-25.0), Lua::Num(16.0)]);
         assert_eq!(arr[2], Lua::Str("long\ntext".into()));
         assert!(parse_lua("s = { a = ").is_err());
+    }
+
+    /// Calls with several arguments (a saved print's `AgColor( r, g, b, a )`, `AgMutableRect( … )`) read as a table of
+    /// them; one argument stays that value, none is nil; an unterminated call is an error.
+    #[test]
+    fn lua_calls() {
+        let v =
+            parse_lua("s = { c = AgColor( 0, 0.5, 1, 1 ), r = AgMutableRect( 2.2737367544323e-13, -1, 3, 4 ), z = ZSTR( \"x\" ), n = F(), k = 1 }")
+                .unwrap();
+        assert_eq!(v.get("c"), Some(&Lua::Table(vec![Lua::Num(0.0), Lua::Num(0.5), Lua::Num(1.0), Lua::Num(1.0)], vec![])));
+        let Some(Lua::Table(r, _)) = v.get("r") else { panic!("{v:?}") };
+        assert_eq!(r[1..], [Lua::Num(-1.0), Lua::Num(3.0), Lua::Num(4.0)]);
+        assert_eq!(v.get("z"), Some(&Lua::Str("x".into())));
+        assert_eq!(v.get("n"), Some(&Lua::Nil));
+        assert_eq!(v.get("k"), Some(&Lua::Num(1.0)));
+        for bad in ["s = { c = AgColor( 0, 1 }", "s = { c = AgColor( 0, ", "s = F( ( ( ("] {
+            assert!(parse_lua(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

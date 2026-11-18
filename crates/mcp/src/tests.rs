@@ -583,9 +583,24 @@ fn the_clipboard_tool_cuts_copies_and_pastes_in_the_app() {
     assert!(names.iter().any(|n| n == "clipboard"), "{names:?}");
     assert!(!crate::tools::helper_tools(false).iter().any(|t| t["name"] == "clipboard"), "not without the app");
     let mut b = Recorder(vec![]);
-    let r = call_tool(&mut b, "clipboard", &json!({"action": "paste", "text": "travel"}));
-    assert!(!r.is_error, "{r:?}");
-    assert_eq!(b.0, vec![("ui.clipboard".to_string(), json!({"action": "paste", "text": "travel"}))]);
+    for text in [Value::Null, json!(42), json!(true), json!([]), json!({})] {
+        let r = call_tool(&mut b, "clipboard", &json!({"action": "paste", "text": text}));
+        assert!(r.is_error, "{text}: {r:?}");
+        assert_eq!(r.content[0]["text"], "ui.clipboard: `text` must be a string");
+        assert!(b.0.is_empty(), "invalid text must never reach the backend: {text}");
+    }
+    for args in [
+        json!({"action": "paste", "text": "travel"}),
+        json!({"action": "paste", "text": ""}),
+        json!({"action": "paste"}),
+        json!({"action": "cut"}),
+        json!({"action": "copy"}),
+    ] {
+        b.0.clear();
+        let r = call_tool(&mut b, "clipboard", &args);
+        assert!(!r.is_error, "{args}: {r:?}");
+        assert_eq!(b.0, vec![("ui.clipboard".to_string(), args)]);
+    }
 }
 
 /// A running app that writes the PNG `ui.render` / `ui.screenshot` ask for. It notes each path and
@@ -783,4 +798,32 @@ fn an_allow_list_leaves_only_those_tools_listed_and_callable() {
     assert_eq!(names, ["doc_inspect"]);
     let r = rpc(&mut s, 2, "tools/call", json!({"name": "run_command", "arguments": {"command": "catalog.stats"}}));
     assert_eq!(r["result"]["isError"], true, "{r}");
+}
+
+/// A relative save `path` is made absolute in this process before the desktop checks it, so the check
+/// and the write name the same file whatever the two processes' working directories are.
+#[test]
+fn a_relative_save_path_is_checked_as_the_absolute_path_that_is_written() {
+    struct Rec(Vec<(String, Value)>);
+    impl Backend for Rec {
+        fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+            self.0.push((method.into(), params.clone()));
+            match method {
+                "engine.execute" => Ok(json!({})),
+                _ => Err("stop".into()),
+            }
+        }
+        fn has_ui(&self) -> bool {
+            true
+        }
+        fn describe(&self) -> String {
+            "rec".into()
+        }
+    }
+    let mut b = Rec(Vec::new());
+    let _ = call_tool(&mut b, "render_photo", &json!({"id": 1, "path": "out/x.png"}));
+    let checked = b.0.iter().find(|(m, p)| m == "engine.execute" && p["command"] == "export.checkTarget").expect("the target was checked");
+    let path = checked.1["params"]["path"].as_str().unwrap();
+    assert!(std::path::Path::new(path).is_absolute(), "{path}");
+    assert!(path.ends_with("x.png"));
 }

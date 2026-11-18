@@ -95,3 +95,21 @@ fn calibrated_camera_colour_stays_while_the_photo_is_decoded_again() {
     assert!(shown(&h), "still offered while the decodes carry no facts");
     assert_eq!(rect_of(&h, "slider:light.exposure"), Some(below), "the controls under it stay put");
 }
+
+#[test]
+fn contrast_mode_segmented_switch_toggles_between_luminance_and_rgb() {
+    use lcc_develop::ContrastMode;
+    let (mut h, _) = edit_panel(false);
+    let mode = |h: &Headless| h.app.session.catalog.photo(PhotoId(1)).unwrap().develop.light.contrast_mode;
+    assert_eq!(mode(&h), ContrastMode::Luminance);
+    assert!(rect_of(&h, "button:contrastMode-luminance").is_some());
+    assert!(rect_of(&h, "button:contrastMode-rgb").is_some());
+    let r = h.request("ui.clickWidget", json!({"id": "button:contrastMode-rgb"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(mode(&h), ContrastMode::Rgb);
+    let r = h.request("engine.execute", json!({"command": "edit.undo"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(mode(&h), ContrastMode::Luminance);
+}

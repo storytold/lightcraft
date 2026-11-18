@@ -373,7 +373,9 @@ impl Op {
             | Op::SetKeyword { .. }
             | Op::SetBrowsed { .. }
             | Op::SetFolderRecord { .. }
-            | Op::SetSavedLocation { .. } => {}
+            | Op::SetSavedLocation { .. }
+            | Op::AddVignettingMap { .. }
+            | Op::SetVignettingMapState { .. } => {}
         }
     }
 }

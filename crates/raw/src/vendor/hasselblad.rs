@@ -289,15 +289,6 @@ mod tests {
         assert_eq!(wrapped(&crate::embedded_preview(&bytes).unwrap()), (6, 6, vec![7; 108], false));
     }
 
-    /// A preview strip cut short by a truncated file gives no preview, not a partial picture.
-    #[test]
-    fn short_preview_strip_gives_none() {
-        let mut ifd0 = rgb_ifd();
-        ifd0.set_image(ImageData::Strips { rows_per_strip: 3, strips: vec![vec![1; 30]] });
-        let tiff = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
-        assert_eq!(rgb_preview(&Tiff::parse(&tiff).unwrap(), &tiff), None);
-    }
-
     /// #2561: a preview declaring more pixel bytes than the whole file gives none, refused before its buffer is
     /// reserved. Its one-row strips all point at the same 24 bytes, so the copy alone would fill it: a few strips
     /// (fewer pixel bytes than the file) still make a preview, a tall grid of them (more than the file) does not.
@@ -320,6 +311,14 @@ mod tests {
         let tall = aliased(2000);
         assert!(tall.len() < 8 * 2000 * 3);
         assert_eq!(rgb_preview(&Tiff::parse(&tall).unwrap(), &tall), None);
+        // short preview strip gives none
+        // A preview strip cut short by a truncated file gives no preview, not a partial picture.
+        {
+            let mut ifd0 = rgb_ifd();
+            ifd0.set_image(ImageData::Strips { rows_per_strip: 3, strips: vec![vec![1; 30]] });
+            let tiff = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+            assert_eq!(rgb_preview(&Tiff::parse(&tiff).unwrap(), &tiff), None);
+        }
     }
 
     /// An oversized RGB IFD is passed over, not the end of the search: beside a 2000-row aliased one (more pixel bytes

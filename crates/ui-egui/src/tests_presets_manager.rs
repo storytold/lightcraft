@@ -15,7 +15,7 @@ fn widget(h: &mut Headless, id: &str) -> bool {
 }
 
 #[test]
-fn the_manager_marks_at_import_and_hides_presets() {
+fn the_manager_marks_at_import_hides_renames_groups_and_restores() {
     let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     h.settle(Duration::from_secs(60));
@@ -45,6 +45,45 @@ fn the_manager_marks_at_import_and_hides_presets() {
     h.step();
     h.step();
     assert!(!widget(&mut h, "presetAtImport"), "a hidden preset leaves the panel");
+
+    // renaming a built-in preset in place, hiding a whole group, a new group, a preset moved onto
+    // it, and Restore Built-ins
+    h.app.session.execute("preset.hide", &json!({"id": p.id, "hidden": false})).unwrap();
+    let p = h.app.session.presets.iter().find(|p| p.builtin).unwrap().clone();
+    assert_eq!(h.request("engine.execute", json!({"command": "dialog.presetsManager", "params": {"query": p.name}}), T)["ok"], true);
+    h.step();
+    h.step();
+    click(&mut h, &format!("icon:presetsManagerRename:{}", p.id));
+    let field = format!("field:presetsManagerName:{}", p.id);
+    assert!(widget(&mut h, &field), "renamed in place");
+    h.request("ui.text", json!({"text": " Renamed"}), T);
+    h.request("ui.key", json!({"key": "Enter"}), T);
+    h.step();
+    h.step();
+    let now = h.app.session.presets.iter().find(|q| q.id == p.id).unwrap().clone();
+    assert!(now.name.ends_with("Renamed") && now.builtin, "a built-in renamed: {}", now.name);
+    // hide the group whole (the search for the old name finds nothing now)
+    if let Some(crate::state::Dialog::PresetsManager { query, .. }) = h.app.ui.dialog.as_mut() {
+        query.clear();
+    }
+    h.step();
+    h.step();
+    click(&mut h, &format!("icon:presetsManagerGroupHide:{}", now.group));
+    assert!(h.app.session.preset_hidden.contains(&p.id));
+    // a new group, and the preset dragged onto it
+    h.app.session.execute("preset.createGroup", &json!({"name": "Dropped Here"})).unwrap();
+    if let Some(crate::state::Dialog::PresetsManager { query, .. }) = h.app.ui.dialog.as_mut() {
+        query.clear();
+    }
+    h.step();
+    h.step();
+    assert!(widget(&mut h, "presetsManagerGroup:Dropped Here"), "an empty group of the user's is a place to drop");
+    h.app.session.execute("preset.move", &json!({"id": p.id, "group": "Dropped Here"})).unwrap();
+    click(&mut h, "button:presetsManagerRestore");
+    click(&mut h, "button:presetsManagerRestoreConfirm");
+    let back = h.app.session.presets.iter().find(|q| q.id == p.id).unwrap().clone();
+    assert_eq!((back.name, back.group), (p.name.clone(), p.group.clone()), "Restore Built-ins");
+    assert!(!h.app.session.preset_hidden.contains(&p.id));
 }
 
 fn has_prefix(h: &Headless, prefix: &str) -> usize {
@@ -88,50 +127,6 @@ fn the_picker_folds_stars_and_previews() {
     assert_eq!(h.request("ui.hoverWidget", json!({"id": "presetPick:qd-preset:user.mine"}), T)["ok"], true);
     h.step();
     assert!(widget(&mut h, "presetPickerPreview"), "resting on a preset shows it");
-}
-
-/// LR-PRE-MANAGE: renaming a built-in preset in place, hiding a whole group, a new group, dragging
-/// a preset onto it, and Restore Built-ins.
-#[test]
-fn the_manager_renames_groups_drags_and_restores() {
-    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
-    let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
-    h.settle(Duration::from_secs(60));
-    let p = h.app.session.presets.iter().find(|p| p.builtin).unwrap().clone();
-    assert_eq!(h.request("engine.execute", json!({"command": "dialog.presetsManager", "params": {"query": p.name}}), T)["ok"], true);
-    h.step();
-    h.step();
-    click(&mut h, &format!("icon:presetsManagerRename:{}", p.id));
-    let field = format!("field:presetsManagerName:{}", p.id);
-    assert!(widget(&mut h, &field), "renamed in place");
-    h.request("ui.text", json!({"text": " Renamed"}), T);
-    h.request("ui.key", json!({"key": "Enter"}), T);
-    h.step();
-    h.step();
-    let now = h.app.session.presets.iter().find(|q| q.id == p.id).unwrap().clone();
-    assert!(now.name.ends_with("Renamed") && now.builtin, "a built-in renamed: {}", now.name);
-    // hide the group whole (the search for the old name finds nothing now)
-    if let Some(crate::state::Dialog::PresetsManager { query, .. }) = h.app.ui.dialog.as_mut() {
-        query.clear();
-    }
-    h.step();
-    h.step();
-    click(&mut h, &format!("icon:presetsManagerGroupHide:{}", now.group));
-    assert!(h.app.session.preset_hidden.contains(&p.id));
-    // a new group, and the preset dragged onto it
-    h.app.session.execute("preset.createGroup", &json!({"name": "Dropped Here"})).unwrap();
-    if let Some(crate::state::Dialog::PresetsManager { query, .. }) = h.app.ui.dialog.as_mut() {
-        query.clear();
-    }
-    h.step();
-    h.step();
-    assert!(widget(&mut h, "presetsManagerGroup:Dropped Here"), "an empty group of the user's is a place to drop");
-    h.app.session.execute("preset.move", &json!({"id": p.id, "group": "Dropped Here"})).unwrap();
-    click(&mut h, "button:presetsManagerRestore");
-    click(&mut h, "button:presetsManagerRestoreConfirm");
-    let back = h.app.session.presets.iter().find(|q| q.id == p.id).unwrap().clone();
-    assert_eq!((back.name, back.group), (p.name.clone(), p.group.clone()), "Restore Built-ins");
-    assert!(!h.app.session.preset_hidden.contains(&p.id));
 }
 
 /// LR-PRE-CREATE: Update Preset's toast carries an Undo button that puts the old settings back.
@@ -250,11 +245,23 @@ fn the_manager_opens_at_the_size_it_was_left_at() {
     assert_eq!(h.app.ui.presets_manager_size, Some([700.0, 500.0]));
 }
 
-/// LR-PRE-MANAGE: dragging a preset onto a group's header moves it into that group; several
-/// selected presets go together.
+/// LR-PRE-MANAGE: a group's eye hides every preset in it and shows them again; dragging a preset
+/// onto a group's header moves it into that group, several selected presets together; a group's
+/// Delete asks at the group, and Cancel keeps it.
 #[test]
-fn dragging_presets_onto_a_group_moves_them() {
-    let mut h = manager([1600.0, 1000.0], vec![preset(1, "One", "Alpha"), preset(2, "Two", "Alpha"), preset(3, "Three", "Beta")]);
+fn a_group_hides_takes_dragged_presets_and_asks_before_deleting() {
+    let mut h =
+        manager([1600.0, 1000.0], vec![preset(1, "One", "Alpha"), preset(2, "Two", "Alpha"), preset(3, "Three", "Beta"), preset(4, "Four", "Gamma")]);
+    // a group's eye hides every preset in it, and shows them again
+    {
+        click(&mut h, "icon:presetsManagerGroupHide:Alpha");
+        let hidden = |h: &Headless| ["user.1", "user.2", "user.3"].map(|id| h.app.session.preset_hidden.iter().any(|x| x == id));
+        assert_eq!(hidden(&h), [true, true, false], "the group hidden, the other not");
+        click(&mut h, "icon:presetsManagerGroupHide:Alpha");
+        assert_eq!(hidden(&h), [false, false, false], "and shown again");
+    }
+    // dragging a preset onto a group's header moves it into that group; several selected presets go
+    // together
     h.app.ui.group_open.insert("presetsManager:Alpha".into(), true);
     h.step();
     h.step();
@@ -276,34 +283,18 @@ fn dragging_presets_onto_a_group_moves_them() {
     let to = rect(&h, "presetsManagerGroup:Alpha").center();
     drag(&mut h, from, to);
     assert_eq!((group(&h, "user.1").as_deref(), group(&h, "user.3").as_deref()), (Some("Alpha"), Some("Alpha")), "both selected presets moved");
-}
-
-/// LR-PRE-MANAGE: a group's eye hides every preset in it, and shows them again.
-#[test]
-fn a_group_hides_and_shows() {
-    let mut h = manager([1600.0, 1000.0], vec![preset(1, "One", "Alpha"), preset(2, "Two", "Alpha"), preset(3, "Three", "Beta")]);
-    click(&mut h, "icon:presetsManagerGroupHide:Alpha");
-    let hidden = |h: &Headless| ["user.1", "user.2", "user.3"].map(|id| h.app.session.preset_hidden.iter().any(|x| x == id));
-    assert_eq!(hidden(&h), [true, true, false], "the group hidden, the other not");
-    click(&mut h, "icon:presetsManagerGroupHide:Alpha");
-    assert_eq!(hidden(&h), [false, false, false], "and shown again");
-}
-
-/// LR-PRE-MANAGE: a group's Delete asks at the group, and Cancel keeps it.
-#[test]
-fn deleting_a_group_asks_at_the_group() {
-    let mut h = manager([1600.0, 1000.0], vec![preset(1, "One", "Alpha"), preset(2, "Two", "Alpha"), preset(3, "Three", "Beta")]);
+    // a group's Delete asks at the group, and Cancel keeps it (all three are in Alpha by now)
     click(&mut h, "icon:presetsManagerGroupDelete:Alpha");
     let ask = rect(&h, "label:presetsManagerGroupDeleteAsk:Alpha");
     let head = rect(&h, "presetsManagerGroup:Alpha");
     assert!(ask.top() >= head.bottom() - 1.0 && ask.top() < head.bottom() + 60.0, "asked under the group's header: {head:?} {ask:?}");
     click(&mut h, "button:presetsManagerGroupDeleteCancel:Alpha");
     assert!(!widget(&mut h, "label:presetsManagerGroupDeleteAsk:Alpha"), "Cancel closes it");
-    assert_eq!(h.app.session.presets.iter().filter(|p| p.group == "Alpha").count(), 2);
+    assert_eq!(h.app.session.presets.iter().filter(|p| p.group == "Alpha").count(), 3);
     click(&mut h, "icon:presetsManagerGroupDelete:Alpha");
     click(&mut h, "button:presetsManagerGroupDeleteConfirm:Alpha");
     assert!(!h.app.session.presets.iter().any(|p| p.group == "Alpha"), "the group and its presets are gone");
-    assert!(h.app.session.presets.iter().any(|p| p.id == "user.3"));
+    assert!(h.app.session.presets.iter().any(|p| p.id == "user.4"), "another group's preset stays");
 }
 
 /// LR-PRE-MANAGE: with 10 000 presets in 40 groups, all open, a frame lays out only the rows in

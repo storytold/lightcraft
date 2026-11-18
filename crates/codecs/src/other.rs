@@ -397,15 +397,14 @@ mod tests {
             Err(Error::TooLarge(w, h)) => assert_eq!((w, h), (65535, 65535)),
             other => panic!("unexpected: {other:?}"),
         }
-    }
-
-    /// A frame within the bound still reaches the decoder (which reports the truncated data);
-    /// the gate may only refuse on size.
-    #[test]
-    fn a_first_frame_within_the_bound_is_not_refused() {
-        let bytes = gif(&[0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0x00]);
-        let r = crate::decode(&bytes, DecodeOptions::default());
-        assert!(matches!(r, Err(Error::Malformed(..)) | Err(Error::TooLarge(..))), "{r:?}");
+        // a first frame within the bound is not refused
+        // A frame within the bound still reaches the decoder (which reports the truncated data);
+        // the gate may only refuse on size.
+        {
+            let bytes = gif(&[0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0x00]);
+            let r = crate::decode(&bytes, DecodeOptions::default());
+            assert!(matches!(r, Err(Error::Malformed(..)) | Err(Error::TooLarge(..))), "{r:?}");
+        }
     }
 
     /// A GIF whose blocks can't be walked to a first frame (here a comment that runs to the end of the

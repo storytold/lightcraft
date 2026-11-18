@@ -3,7 +3,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::io::Cursor;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use filmcraft_h264enc::{ColorConfig, Encoder, EncoderConfig, PacketFormat, RateControl, YuvFrame};
 use filmcraft_isobmff::{AvcConfig, Brand, Mp4Writer, SampleEntry, TrackConfig, WriteSample, WriterOptions};
@@ -27,10 +27,9 @@ impl Clip {
     }
 }
 
-fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("lcc-video-tests-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("scratch dir");
-    dir.join(name)
+/// The path of a file `name` in a Temp folder of its own, removed when the test ends.
+fn scratch(name: &str) -> lcc_testkit::TempFile {
+    lcc_testkit::TempFile::new(&format!("lcc-video-tests-{name}"), name)
 }
 
 /// Encode `clip`, frame k's planes given by `pic(k) -> (y, u, v)` (full planes), into an MP4.
@@ -95,7 +94,7 @@ fn mean(img: &lcc_raster::Rgb32f) -> [f32; 3] {
     s.map(|v| v / n)
 }
 
-fn save(name: &str, bytes: &[u8]) -> PathBuf {
+fn save(name: &str, bytes: &[u8]) -> lcc_testkit::TempFile {
     let p = scratch(name);
     std::fs::write(&p, bytes).expect("write clip");
     p
@@ -172,7 +171,7 @@ fn which(img: &lcc_raster::Rgb32f) -> usize {
     ((y - 30.0) / 6.0).round().max(0.0) as usize
 }
 
-fn seek_clip(bframes: u8, name: &str) -> PathBuf {
+fn seek_clip(bframes: u8, name: &str) -> lcc_testkit::TempFile {
     let clip = Clip { bframes, keyint: 10, ..Clip::new(64, 48, 30) };
     save(name, &write_clip(&clip, |k| flat(&clip, 30 + 6 * k as u8, 128, 128)))
 }

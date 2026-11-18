@@ -111,6 +111,12 @@ struct StoredMatte {
     len: usize,
 }
 
+/// Most mattes a proxy's tail may hold; a tail with more is not trusted (the render keeps its header facts).
+const MAX_STORED_MATTES: usize = 64;
+
+/// Most pixels of a proxy's picture (8192 x 8192; a preview is about 2560 px on its long edge).
+const MAX_PROXY_PIXELS: u64 = 1 << 26;
+
 /// The facts and mattes a proxy's tail holds: the length-prefixed JSON, then one byte plane per
 /// stored matte. `None` for an old proxy or a malformed tail; like a missing curve, the offline
 /// render then keeps its header facts.
@@ -122,6 +128,10 @@ fn stored_facts(head: &serde_json::Value, bytes: &[u8]) -> Option<(SmartFacts, M
     let t = bytes.get(bytes.len() - tail..)?;
     let n = u32::from_le_bytes(t.get(..4)?.try_into().ok()?) as usize;
     let facts: SmartFacts = serde_json::from_slice(t.get(4..4 + n)?).ok()?;
+    // a real preview holds a handful (sky, people, skin...); thousands would multiply the render's per-pixel work
+    if facts.mattes.len() > MAX_STORED_MATTES {
+        return None;
+    }
     let mut mattes = Mattes::default();
     let mut at = 4 + n;
     for m in &facts.mattes {
@@ -226,7 +236,8 @@ pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>, Option<Source
     if end <= start {
         return Err("bad smart preview".into());
     }
-    let d = lcc_codecs::decode(bytes.get(start..end).ok_or("bad smart preview")?, Default::default()).map_err(|e| e.to_string())?;
+    let opts = lcc_codecs::DecodeOptions { max_pixels: MAX_PROXY_PIXELS, ..Default::default() };
+    let d = lcc_codecs::decode(bytes.get(start..end).ok_or("bad smart preview")?, opts).map_err(|e| e.to_string())?;
     // the decoder undoes the sRGB encoding; the values are the source's own primaries
     let mut img = d.image;
     img.data.iter_mut().for_each(|c| *c = c.map(|v| v * scale));
@@ -514,6 +525,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    /// A tail holding more mattes than any real preview is not trusted; a normal count is.
+    #[test]
+    fn a_tail_with_too_many_mattes_is_not_trusted() {
+        let img = lcc_scenes::demo_library()[0].render(32, 20);
+        let with = |n: usize| {
+            let mut mattes = Mattes::default();
+            for _ in 0..n {
+                mattes.push(MatteKind::Sky, Image { width: 1, height: 1, data: vec![255] });
+            }
+            let info = SourceInfo { mattes: Some(std::sync::Arc::new(mattes)), ..Default::default() };
+            decode(&encode(&img, Some(&info)).unwrap()).unwrap().2
+        };
+        assert!(with(MAX_STORED_MATTES).is_some_and(|i| i.mattes.is_some()));
+        assert!(with(MAX_STORED_MATTES + 1).is_none());
     }
 
     #[test]

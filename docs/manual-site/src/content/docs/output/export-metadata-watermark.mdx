@@ -11,7 +11,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 ## Metadata
 - **All**, **No camera**, **Copyright**, **Copyright & Contact**, **None**.
-- **Remove location info** strips GPS. An original copied byte for byte is refused when it embeds GPS, with JPEG or TIFF offered instead.
+- **Remove location info** strips GPS. An original copied byte for byte is refused when it embeds GPS or place names, or when its metadata cannot be fully checked (a cut-short PNG or WebP, an over-limit XMP packet), with JPEG or TIFF offered instead.
 
 ## Watermarking
 - **Watermark** checkbox with a live preview on the photo.

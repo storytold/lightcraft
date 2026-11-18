@@ -136,6 +136,9 @@ pub struct ImportDialog {
     /// decisions and album ids belong to that catalog, so the review is not shown or confirmed in another.
     #[serde(skip)]
     pub library: Option<u64>,
+    /// The review of the device's camera roll: added in place, with the roll's watch offered.
+    #[serde(skip)]
+    pub camera_roll: bool,
 }
 
 /// A candidate's file type, as the review groups them: its format, or its extension when the
@@ -622,6 +625,9 @@ pub struct ScanTask {
     guard: lcc_engine::activity::TaskGuard,
     /// Whether subfolders are being scanned.
     pub subfolders: bool,
+    /// The device's camera roll is being scanned (`file.addCameraRoll`): the review offers to
+    /// keep watching it.
+    pub(crate) camera_roll: bool,
 }
 
 /// The activity row of a scan: the review's ("Scanning folder") or the Local view's ("Reading folder").
@@ -685,7 +691,8 @@ pub fn open_with_subfolders(app: &mut LccApp, paths: Vec<String>, subfolders: bo
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = scan_guard(app, &progress, false);
-    app.scan = Some(ScanTask { progress, rx, copy: false, destination: None, album: None, browse: false, sources, guard, subfolders });
+    app.scan =
+        Some(ScanTask { progress, rx, copy: false, destination: None, album: None, browse: false, sources, guard, subfolders, camera_roll: false });
     Ok(json!({"scanning": true}))
 }
 
@@ -713,7 +720,7 @@ pub fn rescan_with_subfolders(app: &mut LccApp, d: &ImportDialog, subfolders: bo
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = scan_guard(app, &progress, false);
-    app.scan = Some(ScanTask { progress, rx, copy, destination: None, album, browse: false, sources, guard, subfolders });
+    app.scan = Some(ScanTask { progress, rx, copy, destination: None, album, browse: false, sources, guard, subfolders, camera_roll: false });
     Ok(json!({"scanning": true}))
 }
 
@@ -731,7 +738,13 @@ pub fn browse(app: &mut LccApp, path: &str, subfolders: Option<bool>, show: Opti
         return Err("an import is running".into());
     }
     let dir_s = dir.to_string_lossy().trim_end_matches(['/', '\\']).to_string();
-    let subfolders = subfolders.unwrap_or_else(|| app.session.browse.as_ref().is_some_and(|b| b.subfolders));
+    // subfolders: given, it wins; left out, a re-browse of the same folder keeps the choice and a
+    // new folder starts with subfolders in — a folder picked to import means the tree under it
+    // (the engine's library.browse applies the same rule)
+    let subfolders = match subfolders {
+        Some(given) => given,
+        None => app.session.browse.as_ref().is_none_or(|b| if b.path == dir_s { b.subfolders } else { true }),
+    };
     // the quick filter: given, it wins; left out, a re-browse of the same folder keeps the choice
     // and a new folder starts on Show Not Imported (the engine's library.browse applies the same
     // rule with the choice as it stands)
@@ -805,8 +818,18 @@ pub fn browse(app: &mut LccApp, path: &str, subfolders: Option<bool>, show: Opti
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = scan_guard(app, &progress, true);
-    app.scan =
-        Some(ScanTask { progress, rx, copy: false, destination: None, album: None, browse: true, sources: Vec::new(), guard, subfolders: false });
+    app.scan = Some(ScanTask {
+        progress,
+        rx,
+        copy: false,
+        destination: None,
+        album: None,
+        browse: true,
+        sources: Vec::new(),
+        guard,
+        subfolders,
+        camera_roll: false,
+    });
     app.renderer.forget_imports();
     app.lap(&mut lap, "browse.rest");
     Ok(json!({"path": dir_s, "subfolders": subfolders, "scanning": true}))
@@ -914,6 +937,12 @@ pub fn poll_scan(app: &mut LccApp, ctx: &egui::Context) {
     }
     d.sources = task.sources;
     d.subfolders = task.subfolders;
+    if task.camera_roll {
+        // the roll's files stay where the camera puts them: a copy would only double them
+        d.camera_roll = true;
+        d.copy = false;
+        d.move_files = false;
+    }
     if d.metadata_preset.is_empty()
         && let Some(mp) = &app.session.import_defaults.metadata_preset
         && app.session.metadata_presets.iter().any(|m| m.name.eq_ignore_ascii_case(mp))
@@ -964,7 +993,18 @@ pub(crate) fn stall_scan_of(app: &mut LccApp, browse: bool) -> Box<dyn std::any:
     let progress = std::sync::Arc::new(ScanProgress::default());
     let (tx, rx) = std::sync::mpsc::channel::<ScanOutput>();
     let guard = scan_guard(app, &progress, false);
-    app.scan = Some(ScanTask { progress, rx, copy: false, destination: None, album: None, browse, sources: Vec::new(), guard, subfolders: true });
+    app.scan = Some(ScanTask {
+        progress,
+        rx,
+        copy: false,
+        destination: None,
+        album: None,
+        browse,
+        sources: Vec::new(),
+        guard,
+        subfolders: true,
+        camera_roll: false,
+    });
     Box::new(tx)
 }
 

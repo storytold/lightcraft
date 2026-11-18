@@ -76,7 +76,7 @@ fn optics_names_the_lens_the_database_lacks() {
         return;
     }
     let before = lcc_engine::lens_profiles::configured_dir();
-    let dir = std::env::temp_dir().join(format!("lens-ui-db-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lens-ui-db");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(

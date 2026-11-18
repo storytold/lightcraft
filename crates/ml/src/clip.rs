@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use candle_core::{D, Device as CandleDevice, Tensor};
 use thiserror::Error;
 
-use crate::accel::{AccelFactory, Accelerator, BlockWeights, TowerWeights, agree};
+use crate::accel::{AccelFactory, Accelerator, BlockWeights, TextTowerWeights, TowerWeights, VisionTowerWeights, agree};
 use crate::encoder::{Encoder, RgbImage, preprocess_image};
 use crate::manifest::{Commercial, InputSpec, Licence, MANIFEST_FILE, MANIFEST_VERSION, ModelFile, ModelManifest, Role, VerifyError, sha256_file};
 use crate::queue::{Ctx, JobError};
@@ -181,7 +181,6 @@ struct TextTower {
     final_ln: LayerNorm,
     projection: Linear,
     causal_mask: Tensor,
-    context_len: usize,
 }
 
 struct DeviceTowers {
@@ -377,7 +376,6 @@ fn load_text_tower(st: &mut SafetensorsFile, arch: ArchSpec, device: CandleDevic
         final_ln,
         projection: text_projection,
         causal_mask,
-        context_len: arch.context_len,
     })
 }
 
@@ -404,7 +402,7 @@ fn linear_weights(l: &Linear) -> Result<(Vec<f32>, Vec<f32>), String> {
 }
 
 /// A tower's blocks as plain weights for an [`Accelerator`].
-fn tower_weights(blocks: &[TransformerBlock], hidden: usize, intermediate: usize, heads: usize, causal: bool) -> Result<TowerWeights, String> {
+fn blocks_weights(blocks: &[TransformerBlock]) -> Result<Vec<BlockWeights>, String> {
     let mut out = Vec::with_capacity(blocks.len());
     for b in blocks {
         let (q_w, q_b) = linear_weights(&b.q_proj)?;
@@ -432,43 +430,134 @@ fn tower_weights(blocks: &[TransformerBlock], hidden: usize, intermediate: usize
             fc2_b,
         });
     }
-    Ok(TowerWeights { hidden, intermediate, heads, causal, eps: LAYER_NORM_EPS as f32, blocks: out })
+    Ok(out)
 }
 
-/// `x` (`[1, seq, hidden]`) through the CPU blocks: the reference a GPU runner is checked against.
-fn run_cpu_blocks(blocks: &[TransformerBlock], x: &[f32], seq: usize, hidden: usize, mask: Option<&Tensor>) -> Result<Vec<f32>, String> {
-    let mut t = Tensor::from_slice(x, (1, seq, hidden), &CandleDevice::Cpu).map_err(|e| e.to_string())?;
-    for b in blocks {
-        t = b.forward(&t, mask).map_err(|e| e.to_string())?;
+fn vision_tower_weights(v: &VisionTower, arch: ArchSpec, manifest: &ModelManifest) -> Result<VisionTowerWeights, String> {
+    Ok(VisionTowerWeights {
+        hidden: arch.vision_hidden,
+        intermediate: arch.vision_intermediate,
+        heads: arch.vision_heads,
+        eps: LAYER_NORM_EPS as f32,
+        embed_dim: arch.embed_dim,
+        patch_size: arch.patch_size,
+        num_positions: arch.num_positions,
+        img_w: manifest.input.width as usize,
+        img_h: manifest.input.height as usize,
+        patch_weight: flat(&v.patch_weight)?,
+        class_embedding: flat(&v.class_embedding)?,
+        position_embedding: flat(&v.position_embedding)?,
+        pre_ln_w: flat(&v.pre_ln.weight)?,
+        pre_ln_b: flat(&v.pre_ln.bias)?,
+        blocks: blocks_weights(&v.blocks)?,
+        post_ln_w: flat(&v.post_ln.weight)?,
+        post_ln_b: flat(&v.post_ln.bias)?,
+        projection: linear_weights(&v.projection)?.0,
+    })
+}
+
+fn text_tower_weights(t: &TextTower, arch: ArchSpec) -> Result<TextTowerWeights, String> {
+    Ok(TextTowerWeights {
+        hidden: arch.text_hidden,
+        intermediate: arch.text_intermediate,
+        heads: arch.text_heads,
+        eps: LAYER_NORM_EPS as f32,
+        embed_dim: arch.embed_dim,
+        vocab_size: arch.vocab_size,
+        context_len: arch.context_len,
+        token_embedding: flat(&t.token_embedding)?,
+        position_embedding: flat(&t.position_embedding)?,
+        blocks: blocks_weights(&t.blocks)?,
+        final_ln_w: flat(&t.final_ln.weight)?,
+        final_ln_b: flat(&t.final_ln.bias)?,
+        projection: linear_weights(&t.projection)?.0,
+    })
+}
+
+fn run_cpu_vision(vision: &VisionTower, flat_chw: &[f32], b: usize, h: usize, w: usize, ctx: Option<&Ctx>) -> Result<Vec<f32>, JobError> {
+    let map_err = |e: candle_core::Error| JobError::Failed(e.to_string());
+    let x = Tensor::from_slice(flat_chw, (b, 3, h, w), &vision.device).map_err(map_err)?;
+    let patches = x
+        .conv2d(&vision.patch_weight, 0, vision.patch_size, 1, 1)
+        .and_then(|t| t.flatten_from(2))
+        .and_then(|t| t.transpose(1, 2))
+        .and_then(|t| t.contiguous())
+        .map_err(map_err)?;
+
+    let cls = vision
+        .class_embedding
+        .reshape((1, 1, vision.hidden))
+        .and_then(|t| t.broadcast_as((b, 1, vision.hidden)))
+        .and_then(|t| t.contiguous())
+        .map_err(map_err)?;
+
+    let pos = vision.position_embedding.unsqueeze(0).map_err(map_err)?;
+    let mut hidden =
+        Tensor::cat(&[&cls, &patches], 1).and_then(|t| t.broadcast_add(&pos)).and_then(|t| vision.pre_ln.forward(&t)).map_err(map_err)?;
+
+    for block in &vision.blocks {
+        if let Some(c) = ctx {
+            c.check()?;
+        }
+        hidden = block.forward(&hidden, None).map_err(map_err)?;
     }
-    flat(&t)
+
+    let projected = hidden
+        .narrow(1, 0, 1)
+        .and_then(|t| t.squeeze(1))
+        .and_then(|t| vision.post_ln.forward(&t))
+        .and_then(|t| vision.projection.forward(&t))
+        .map_err(map_err)?;
+    flat(&projected).map_err(JobError::Failed)
 }
 
-/// A runner from `factory` for `weights`, once it agrees with the CPU (`cpu`) on a test input of `seq` positions.
-fn check(
+fn run_cpu_text(
+    text_tower: &TextTower,
+    flat_ids: &[u32],
+    eot: &[u32],
+    b: usize,
+    seq: usize,
+    hidden_dim: usize,
+    ctx: Option<&Ctx>,
+) -> Result<Vec<f32>, JobError> {
+    let map_err = |e: candle_core::Error| JobError::Failed(e.to_string());
+    let ids_tensor = Tensor::from_slice(flat_ids, (b * seq,), &text_tower.device).map_err(map_err)?;
+    let tok_emb = text_tower.token_embedding.index_select(&ids_tensor, 0).and_then(|t| t.reshape((b, seq, hidden_dim))).map_err(map_err)?;
+    let pos = text_tower.position_embedding.unsqueeze(0).map_err(map_err)?;
+    let mut hidden = tok_emb.broadcast_add(&pos).map_err(map_err)?;
+
+    for block in &text_tower.blocks {
+        if let Some(c) = ctx {
+            c.check()?;
+        }
+        hidden = block.forward(&hidden, Some(&text_tower.causal_mask)).map_err(map_err)?;
+    }
+
+    let normed = text_tower.final_ln.forward(&hidden).map_err(map_err)?;
+    let mut rows = Vec::with_capacity(b);
+    for (row, &eos_idx) in eot.iter().enumerate() {
+        let r = normed.narrow(0, row, 1).and_then(|t| t.narrow(1, eos_idx as usize, 1)).and_then(|t| t.squeeze(1)).map_err(map_err)?;
+        rows.push(r);
+    }
+    let pooled = Tensor::cat(&rows, 0).map_err(map_err)?;
+    let projected = text_tower.projection.forward(&pooled).map_err(map_err)?;
+    flat(&projected).map_err(JobError::Failed)
+}
+
+/// A runner from `factory` for `weights`, once it agrees with the CPU (`cpu`) on a test input.
+fn check_accel(
     factory: &AccelFactory,
     weights: &TowerWeights,
-    seq: usize,
-    cpu: impl FnOnce(&[f32]) -> Result<Vec<f32>, String>,
+    run_gpu: impl FnOnce(&dyn Accelerator) -> Result<Vec<f32>, String>,
+    cpu: impl FnOnce() -> Result<Vec<f32>, String>,
 ) -> Result<Arc<dyn Accelerator>, String> {
     let acc =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| factory(weights))).unwrap_or_else(|_| Err("making the GPU runner failed".into()))?;
-    let n = seq.checked_mul(weights.hidden).ok_or("a tower too large")?;
-    let x: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.618).sin()).collect();
-    let want = cpu(&x)?;
-    let got = acc.run_blocks(&x, 1, seq)?;
+    let want = cpu()?;
+    let got = run_gpu(&*acc)?;
     agree(&got, &want)?;
-    log::info!("clip: transformer blocks on {} (checked against the CPU)", acc.device());
+    log::info!("clip: full tower on {} (checked against the CPU)", acc.device());
     Ok(acc)
-}
-
-/// `hidden` (`[batch, seq, width]`) through `acc`; errors are device errors (the job moves to the CPU).
-fn run_on(acc: &dyn Accelerator, hidden: &Tensor) -> Result<Tensor, JobError> {
-    let dev = |e: String| JobError::Device(e);
-    let (b, seq, w) = hidden.dims3().map_err(|e| dev(e.to_string()))?;
-    let x = flat(hidden).map_err(dev)?;
-    let y = acc.run_blocks(&x, b, seq).map_err(dev)?;
-    Tensor::from_vec(y, (b, seq, w), hidden.device()).map_err(|e| dev(e.to_string()))
 }
 
 /// Loaded CLIP ViT + Text encoder ready for [`crate::Queue`] execution.
@@ -573,17 +662,27 @@ impl Clip {
             JobError::Device(s) | JobError::Failed(s) => s,
             JobError::Cancelled => "cancelled".into(),
         };
-        // a test input through the CPU blocks and the GPU's: one item, a whole sequence
+        // A full-tower test input through the CPU and GPU: two items (so batched indexing is covered too), checked before the runner is trusted.
         if text {
             let t = self.ensure_cpu_text().map_err(to_s)?;
-            let w = tower_weights(&t.blocks, self.arch.text_hidden, self.arch.text_intermediate, self.arch.text_heads, true)?;
-            let seq = t.context_len;
-            check(factory, &w, seq, |x| run_cpu_blocks(&t.blocks, x, seq, w.hidden, Some(&t.causal_mask)))
+            let w = TowerWeights::Text(text_tower_weights(&t, self.arch)?);
+            let seq = self.arch.context_len;
+            let vocab = self.arch.vocab_size.max(1);
+            let ids: Vec<u32> = (0..2 * seq).map(|i| ((i * 7 + 1) % vocab) as u32).collect();
+            let eot = [((seq / 2).min(seq.saturating_sub(1))) as u32, seq.saturating_sub(1) as u32];
+            check_accel(
+                factory,
+                &w,
+                |acc| acc.run_text(&ids, &eot, 2, seq),
+                || run_cpu_text(&t, &ids, &eot, 2, seq, self.arch.text_hidden, None).map_err(to_s),
+            )
         } else {
             let v = self.ensure_cpu_vision().map_err(to_s)?;
-            let w = tower_weights(&v.blocks, self.arch.vision_hidden, self.arch.vision_intermediate, self.arch.vision_heads, false)?;
-            let seq = self.arch.num_positions;
-            check(factory, &w, seq, |x| run_cpu_blocks(&v.blocks, x, seq, w.hidden, None))
+            let w = TowerWeights::Vision(vision_tower_weights(&v, self.arch, &self.manifest)?);
+            let (h, img_w) = (self.manifest.input.height as usize, self.manifest.input.width as usize);
+            let n = 3usize.checked_mul(h).and_then(|x| x.checked_mul(img_w)).ok_or("vision input too large")?;
+            let img: Vec<f32> = (0..2 * n).map(|i| ((i as f32) * 0.618).sin()).collect();
+            check_accel(factory, &w, |acc| acc.run_vision(&img, 2, h, img_w), || run_cpu_vision(&v, &img, 2, h, img_w, None).map_err(to_s))
         }
     }
 
@@ -609,13 +708,7 @@ impl Clip {
         Ok(tower)
     }
 
-    fn forward_images_on(
-        &self,
-        vision: &VisionTower,
-        batch: &[RgbImage],
-        ctx: &Ctx,
-        gpu: Option<&dyn Accelerator>,
-    ) -> Result<Vec<Vec<f32>>, JobError> {
+    fn forward_images_on(&self, batch: &[RgbImage], ctx: &Ctx, gpu: Option<&dyn Accelerator>) -> Result<Vec<Vec<f32>>, JobError> {
         if batch.is_empty() {
             return Ok(Vec::new());
         }
@@ -630,103 +723,63 @@ impl Clip {
             flat.extend_from_slice(&chw);
         }
 
-        let map_err = |e: candle_core::Error| {
-            if ctx.device().is_gpu() { JobError::Device(e.to_string()) } else { JobError::Failed(e.to_string()) }
-        };
-
-        let x = Tensor::from_vec(flat, (b, 3, h, w), &vision.device).map_err(map_err)?;
-        let patches = x
-            .conv2d(&vision.patch_weight, 0, vision.patch_size, 1, 1)
-            .and_then(|t| t.flatten_from(2))
-            .and_then(|t| t.transpose(1, 2))
-            .and_then(|t| t.contiguous())
-            .map_err(map_err)?;
-
-        let cls = vision
-            .class_embedding
-            .reshape((1, 1, vision.hidden))
-            .and_then(|t| t.broadcast_as((b, 1, vision.hidden)))
-            .and_then(|t| t.contiguous())
-            .map_err(map_err)?;
-
-        let pos = vision.position_embedding.unsqueeze(0).map_err(map_err)?;
-        let mut hidden =
-            Tensor::cat(&[&cls, &patches], 1).and_then(|t| t.broadcast_add(&pos)).and_then(|t| vision.pre_ln.forward(&t)).map_err(map_err)?;
-
-        if let Some(acc) = gpu {
+        let raw = if let Some(acc) = gpu {
             ctx.check()?;
-            hidden = run_on(acc, &hidden)?;
+            acc.run_vision(&flat, b, h, w).map_err(JobError::Device)?
         } else {
-            for block in &vision.blocks {
-                ctx.check()?;
-                hidden = block.forward(&hidden, None).map_err(map_err)?;
-            }
+            let vision = self.ensure_cpu_vision()?;
+            run_cpu_vision(&vision, &flat, b, h, w, Some(ctx))?
+        };
+        if raw.len() != b * self.arch.embed_dim {
+            let err = format!("vision encoder returned {} values, expected {}", raw.len(), b * self.arch.embed_dim);
+            return Err(if gpu.is_some() { JobError::Device(err) } else { JobError::Failed(err) });
         }
 
-        let pooled: Vec<Vec<f32>> = hidden
-            .narrow(1, 0, 1)
-            .and_then(|t| t.squeeze(1))
-            .and_then(|t| vision.post_ln.forward(&t))
-            .and_then(|t| vision.projection.forward(&t))
-            .and_then(|t| t.to_vec2::<f32>())
-            .map_err(map_err)?;
-
-        let mut out = Vec::with_capacity(pooled.len());
-        for mut vec in pooled {
+        let mut out = Vec::with_capacity(b);
+        for chunk in raw.chunks_exact(self.arch.embed_dim) {
+            let mut vec = chunk.to_vec();
             if !l2_normalize(&mut vec) {
-                return Err(JobError::Failed("vision encoder produced non-finite or zero-norm embedding".into()));
+                let err = "vision encoder produced non-finite or zero-norm embedding".to_string();
+                // from the GPU it is the device's fault (a driver passing the check on its test input, then not on a
+                // photo): the CPU takes over instead of the photo failing
+                return Err(if gpu.is_some() { JobError::Device(err) } else { JobError::Failed(err) });
             }
             out.push(vec);
         }
         Ok(out)
     }
 
-    fn forward_text_on(&self, text_tower: &TextTower, text: &str, ctx: &Ctx, gpu: Option<&dyn Accelerator>) -> Result<Vec<f32>, JobError> {
+    fn forward_text_on(&self, text: &str, ctx: &Ctx, gpu: Option<&dyn Accelerator>) -> Result<Vec<f32>, JobError> {
         ctx.check()?;
-        let prompts = if text_tower.context_len >= 16 { prompt_variants(text) } else { vec![text.to_string()] };
+        let seq = self.arch.context_len;
+        let prompts = if seq >= 16 { prompt_variants(text) } else { vec![text.to_string()] };
         let b = prompts.len().max(1);
-        let seq = text_tower.context_len;
         let mut flat_ids = Vec::with_capacity(b * seq);
         let mut eos_indices = Vec::with_capacity(b);
         for p in &prompts {
             let encoded = self.tokenizer.encode(p);
-            eos_indices.push(encoded.eos_index.min(seq.saturating_sub(1)));
+            eos_indices.push(encoded.eos_index.min(seq.saturating_sub(1)) as u32);
             flat_ids.extend_from_slice(&encoded.ids);
         }
-        let map_err = |e: candle_core::Error| {
-            if ctx.device().is_gpu() { JobError::Device(e.to_string()) } else { JobError::Failed(e.to_string()) }
-        };
 
-        let ids_tensor = Tensor::from_slice(&flat_ids, (b * seq,), &text_tower.device).map_err(map_err)?;
-        let tok_emb =
-            text_tower.token_embedding.index_select(&ids_tensor, 0).and_then(|t| t.reshape((b, seq, self.arch.text_hidden))).map_err(map_err)?;
-        let pos = text_tower.position_embedding.unsqueeze(0).map_err(map_err)?;
-        let mut hidden = tok_emb.broadcast_add(&pos).map_err(map_err)?;
-
-        if let Some(acc) = gpu {
+        let raw = if let Some(acc) = gpu {
             ctx.check()?;
-            hidden = run_on(acc, &hidden)?;
+            acc.run_text(&flat_ids, &eos_indices, b, seq).map_err(JobError::Device)?
         } else {
-            for block in &text_tower.blocks {
-                ctx.check()?;
-                hidden = block.forward(&hidden, Some(&text_tower.causal_mask)).map_err(map_err)?;
-            }
+            let text_tower = self.ensure_cpu_text()?;
+            run_cpu_text(&text_tower, &flat_ids, &eos_indices, b, seq, self.arch.text_hidden, Some(ctx))?
+        };
+        if raw.len() != b * self.arch.embed_dim {
+            let err = format!("text encoder returned {} values, expected {}", raw.len(), b * self.arch.embed_dim);
+            return Err(if gpu.is_some() { JobError::Device(err) } else { JobError::Failed(err) });
         }
 
-        let normed = text_tower.final_ln.forward(&hidden).map_err(map_err)?;
         let mut sum = vec![0.0f32; self.arch.embed_dim];
-        for (row, &eos_idx) in eos_indices.iter().enumerate() {
-            let pooled = normed
-                .narrow(0, row, 1)
-                .and_then(|t| t.narrow(1, eos_idx, 1))
-                .and_then(|t| t.squeeze(1))
-                .and_then(|t| text_tower.projection.forward(&t))
-                .and_then(|t| t.squeeze(0))
-                .and_then(|t| t.to_vec1::<f32>())
-                .map_err(map_err)?;
-            let mut vec = pooled;
+        for chunk in raw.chunks_exact(self.arch.embed_dim) {
+            let mut vec = chunk.to_vec();
             if !l2_normalize(&mut vec) {
-                return Err(JobError::Failed("text encoder produced non-finite or zero-norm embedding".into()));
+                let err = "text encoder produced non-finite or zero-norm embedding".to_string();
+                return Err(if gpu.is_some() { JobError::Device(err) } else { JobError::Failed(err) });
             }
             for (s, &v) in sum.iter_mut().zip(vec.iter()) {
                 *s += v;
@@ -952,14 +1005,12 @@ impl Encoder for Clip {
 
     fn encode_images(&self, batch: &[RgbImage], ctx: &Ctx) -> Result<Vec<Vec<f32>>, JobError> {
         let gpu = if ctx.device().is_gpu() { Some(self.ensure_gpu(false)?) } else { None };
-        let vision = self.ensure_cpu_vision()?;
-        self.forward_images_on(&vision, batch, ctx, gpu.as_deref())
+        self.forward_images_on(batch, ctx, gpu.as_deref())
     }
 
     fn encode_text(&self, text: &str, ctx: &Ctx) -> Result<Vec<f32>, JobError> {
         let gpu = if ctx.device().is_gpu() { Some(self.ensure_gpu(true)?) } else { None };
-        let text_tower = self.ensure_cpu_text()?;
-        self.forward_text_on(&text_tower, text, ctx, gpu.as_deref())
+        self.forward_text_on(text, ctx, gpu.as_deref())
     }
 }
 
@@ -1069,6 +1120,12 @@ mod tests {
             fn device(&self) -> String {
                 "identity".into()
             }
+            fn run_vision(&self, _: &[f32], batch: usize, _: usize, _: usize) -> Result<Vec<f32>, String> {
+                Ok(vec![0.0; batch * 4])
+            }
+            fn run_text(&self, _: &[u32], _: &[u32], batch: usize, _: usize) -> Result<Vec<f32>, String> {
+                Ok(vec![0.0; batch * 4])
+            }
             fn run_blocks(&self, x: &[f32], _: usize, _: usize) -> Result<Vec<f32>, String> {
                 Ok(x.to_vec())
             }
@@ -1086,6 +1143,44 @@ mod tests {
         let device = q.status().device.unwrap();
         assert!(!device.is_gpu());
         assert!(device.why_cpu.unwrap_or_default().contains("differs"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A GPU that gives NaN for a photo (after passing its check on the test input) hands the photo to the CPU: the
+    /// error is the device's, not the photo's, so the queue retries it there instead of failing it.
+    #[test]
+    fn a_non_finite_gpu_embedding_is_a_device_error() {
+        struct Nan(usize);
+        impl Accelerator for Nan {
+            fn device(&self) -> String {
+                "nan".into()
+            }
+            fn run_vision(&self, _: &[f32], batch: usize, _: usize, _: usize) -> Result<Vec<f32>, String> {
+                Ok(vec![f32::NAN; batch * self.0])
+            }
+            fn run_text(&self, _: &[u32], _: &[u32], batch: usize, _: usize) -> Result<Vec<f32>, String> {
+                Ok(vec![f32::NAN; batch * self.0])
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("lcc-ml-clip-nan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        Clip::write_synthetic_dir(&dir, "clip-nan").unwrap();
+        let clip = Clip::load(&dir).unwrap();
+        let gpu = Nan(clip.arch.embed_dim);
+        let img = RgbImage::new(16, 16, vec![128; 16 * 16 * 3]).unwrap();
+        let q = Queue::new(Config { preference: Preference::Cpu, ..Config::default() }, Box::new(|| Err("cpu test".into())), None);
+        let clip = Arc::new(clip);
+        let c = Arc::clone(&clip);
+        q.submit(
+            Job::new("nan", move |ctx| {
+                let image = c.forward_images_on(std::slice::from_ref(&img), ctx, Some(&gpu));
+                let text = c.forward_text_on("sunset", ctx, Some(&gpu));
+                Ok((matches!(image, Err(JobError::Device(_))), matches!(text, Err(JobError::Device(_)))))
+            })
+            .priority(Priority::Interactive),
+        )
+        .unwrap();
+        assert_eq!(wait_result(&q, "nan"), (true, true));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

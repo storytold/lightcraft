@@ -430,7 +430,7 @@ pub fn checked(app: &LccApp, id: &str) -> Option<bool> {
         "panel.info" if crate::modern::on(app) => Some(app.ui.modern.info),
         "panel.info" => panel(RightPanel::Info),
         "panel.keywords" => panel(RightPanel::Keywords),
-        "panel.presets" => Some(u.presets),
+        "panel.presets" => Some(crate::panels::presets::shown(app)),
         "library.toggleAutoWriteXmp" => Some(app.session.xmp.auto_write),
         "map.showInfo" => Some(app.map.prefs.show_info),
         "map.showKey" => Some(app.map.prefs.show_key),
@@ -481,9 +481,12 @@ pub(crate) fn expanded(app: &LccApp, name: &str) -> Option<Vec<MenuNode>> {
     let has = active.is_some();
     Some(match name {
         "Previews" => {
-            // (the background preparation's build gives way to one asked for here)
+            // (the background preparation's build gives way to one asked for here; a build asked
+            // for while another runs waits for its turn, so the builds stay offered — only the
+            // destructive discards wait, and Stop covers the waiting ones too)
             let running = app.session.preview_build.as_ref().is_some_and(|b| b.running() && !b.background);
-            let stoppable = app.session.preview_build.as_ref().is_some_and(|b| b.running());
+            let queued = !app.session.preview_queue.is_empty();
+            let stoppable = app.session.preview_build.as_ref().is_some_and(|b| b.running()) || queued;
             let scope = if app.session.selection.ids.len() > 1 { "Selected" } else { "Visible" };
             vec![
                 item(
@@ -491,7 +494,7 @@ pub(crate) fn expanded(app: &LccApp, name: &str) -> Option<Vec<MenuNode>> {
                     json!({"size": "standard", "edge": app.ui.settings.standard_preview_edge()}),
                     crate::i18n::tr_format!("Build Standard-Sized Previews ({scope})", scope = crate::i18n::tr(scope)),
                     None,
-                    !running,
+                    true,
                     None,
                 ),
                 item(
@@ -499,7 +502,7 @@ pub(crate) fn expanded(app: &LccApp, name: &str) -> Option<Vec<MenuNode>> {
                     json!({"size": "full"}),
                     crate::i18n::tr_format!("Build 1:1 Previews ({scope})", scope = crate::i18n::tr(scope)),
                     None,
-                    !running,
+                    true,
                     None,
                 ),
                 item("library.cancelPreviews", Value::Null, "Stop Building Previews", None, stoppable, None),
@@ -518,7 +521,7 @@ pub(crate) fn expanded(app: &LccApp, name: &str) -> Option<Vec<MenuNode>> {
                     json!({"background": true}),
                     crate::i18n::tr_format!("Build Smart Previews ({scope})", scope = crate::i18n::tr(scope)),
                     None,
-                    app.session.media.smart_dir.is_some() && !running,
+                    app.session.media.smart_dir.is_some(),
                     None,
                 ),
                 item(
@@ -526,7 +529,7 @@ pub(crate) fn expanded(app: &LccApp, name: &str) -> Option<Vec<MenuNode>> {
                     json!({"discard": true, "background": true}),
                     crate::i18n::tr_format!("Discard Smart Previews ({scope})", scope = crate::i18n::tr(scope)),
                     None,
-                    app.session.media.smart_dir.is_some() && !running,
+                    app.session.media.smart_dir.is_some(),
                     None,
                 ),
                 MenuNode::Separator,
@@ -2136,7 +2139,7 @@ mod tests {
 
     #[test]
     fn find_missing_and_locate() {
-        let dir = std::env::temp_dir().join(format!("lc-ui-missing-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lc-ui-missing");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("a")).unwrap();
         std::fs::create_dir_all(dir.join("b")).unwrap();
@@ -2204,7 +2207,7 @@ mod tests {
     /// failures as errors instead of returning `Ok(null)`.
     #[test]
     fn find_missing_waited_invalid_folder_returns_error_with_zero_mutations() {
-        let dir = std::env::temp_dir().join(format!("lc-ui-missing-err-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lc-ui-missing-err");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let dummy = dir.join("dummy.png");
@@ -2253,7 +2256,7 @@ mod tests {
     /// and background mode (`wait: false` or omitted) continues returning `{"background": true}`.
     #[test]
     fn find_missing_waited_structured_results_and_background_mode() {
-        let dir = std::env::temp_dir().join(format!("lc-ui-missing-bg-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lc-ui-missing-bg");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("orig")).unwrap();
         std::fs::create_dir_all(dir.join("found")).unwrap();
@@ -2291,7 +2294,7 @@ mod tests {
     /// indicating timeout and that the search continues in the background, rather than returning `Ok(null)`.
     #[test]
     fn find_missing_waited_timeout_behavior() {
-        let dir = std::env::temp_dir().join(format!("lc-ui-missing-to-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lc-ui-missing-to");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -2318,7 +2321,7 @@ mod tests {
     /// even if unrelated background tasks remain active in `app.tasks`.
     #[test]
     fn find_missing_waited_completes_while_unrelated_task_remains_active() {
-        let dir = std::env::temp_dir().join(format!("lc-ui-missing-multi-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lc-ui-missing-multi");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("orig")).unwrap();
         std::fs::create_dir_all(dir.join("found")).unwrap();
@@ -2363,7 +2366,7 @@ mod tests {
     #[test]
 
     fn auto_tag_from_tracklog() {
-        let dir = std::env::temp_dir().join(format!("lc-ui-tracklog-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lc-ui-tracklog");
         std::fs::create_dir_all(&dir).unwrap();
         let gpx = dir.join("walk.gpx");
         std::fs::write(

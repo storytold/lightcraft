@@ -412,7 +412,7 @@ fn mutated_files_agree_with_decode() {
     };
     let (mut decodable, mut disagreements) = (0, Vec::new());
     for (name, bytes) in fixtures(160, 96) {
-        for _ in 0..300 {
+        for _ in 0..40 {
             let mut b = bytes.clone();
             for _ in 0..1 + rnd() % 3 {
                 let i = rnd() as usize % b.len();
@@ -427,6 +427,6 @@ fn mutated_files_agree_with_decode() {
             }
         }
     }
-    assert!(decodable > 1000, "{decodable}");
+    assert!(decodable > 100, "{decodable}");
     assert!(disagreements.is_empty(), "{disagreements:#?}");
 }

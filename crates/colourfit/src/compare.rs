@@ -322,11 +322,9 @@ pub fn text(report: &CompareReport) -> String {
 mod tests {
     use super::*;
 
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("lcc-colourfit-compare-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
+    /// The test's folder in Temp, removed when the test ends.
+    fn scratch(name: &str) -> lcc_testkit::TempDir {
+        lcc_testkit::TempDir::new(&format!("lcc-colourfit-compare-{name}"))
     }
 
     /// A textured, colourful sRGB test card (8-bit), `gain` applied in linear light and shifted by `shift` pixels.

@@ -28,35 +28,56 @@ fn exposure(h: &Headless) -> f64 {
     h.app.session.develop_of(id).expect("its edit").light.exposure
 }
 
+/// One session, several steps; each step was a test of its own and says what it checks.
 #[test]
-fn compact_is_denser_and_switching_keeps_the_edit_and_the_panel() {
+fn compact_is_denser_and_switching_keeps_the_edit_the_panel_and_a_dragged_width() {
     let mut h = develop();
-    run(&mut h, "develop.set", json!({"control": "light.exposure", "value": 0.7}));
-    let panel = h.app.ui.right;
-    let classic_style = h.view.ctx.global_style();
-    let classic = rect(&h, "section:light").expect("the Light section header");
+    // compact is denser and switching keeps the edit and the panel
+    {
+        run(&mut h, "develop.set", json!({"control": "light.exposure", "value": 0.7}));
+        let panel = h.app.ui.right;
+        let classic_style = h.view.ctx.global_style();
+        let classic = rect(&h, "section:light").expect("the Light section header");
 
-    assert_eq!(run(&mut h, "view.compactLayout", json!({"on": true}))["on"], true);
-    h.step();
-    let compact = rect(&h, "section:light").expect("the Light section header, compact");
-    assert!(compact.height() < classic.height(), "compact header {compact:?} vs classic {classic:?}");
-    assert!(crate::theme::compact(&h.view.ctx));
-    assert_eq!(exposure(&h), 0.7, "the edit stays");
-    assert_eq!(h.app.ui.right, panel, "the panel stays");
+        assert_eq!(run(&mut h, "view.compactLayout", json!({"on": true}))["on"], true);
+        h.step();
+        let compact = rect(&h, "section:light").expect("the Light section header, compact");
+        assert!(compact.height() < classic.height(), "compact header {compact:?} vs classic {classic:?}");
+        assert!(crate::theme::compact(&h.view.ctx));
+        assert_eq!(exposure(&h), 0.7, "the edit stays");
+        assert_eq!(h.app.ui.right, panel, "the panel stays");
 
-    // Modern overrides Compact; Compact again turns Modern off
-    run(&mut h, "view.modernLayout", json!({"on": true}));
-    assert!(!h.app.compact() && !crate::theme::compact(&h.view.ctx));
-    run(&mut h, "view.compactLayout", json!({"on": true}));
-    assert!(!h.app.ui.modern.enabled && h.app.compact());
+        // Modern overrides Compact; Compact again turns Modern off
+        run(&mut h, "view.modernLayout", json!({"on": true}));
+        assert!(!h.app.compact() && !crate::theme::compact(&h.view.ctx));
+        run(&mut h, "view.compactLayout", json!({"on": true}));
+        assert!(!h.app.ui.modern.enabled && h.app.compact());
 
-    // back to Classic: the very same style and header as before
-    run(&mut h, "view.compactLayout", json!({"on": false}));
-    h.step();
-    assert_eq!(*h.view.ctx.global_style(), *classic_style, "Classic's style is untouched");
-    assert_eq!(rect(&h, "section:light").map(|r| r.height()), Some(classic.height()));
-    assert_eq!(exposure(&h), 0.7);
-    assert_eq!(h.app.ui.right, panel);
+        // back to Classic: the very same style and header as before
+        run(&mut h, "view.compactLayout", json!({"on": false}));
+        h.step();
+        assert_eq!(*h.view.ctx.global_style(), *classic_style, "Classic's style is untouched");
+        assert_eq!(rect(&h, "section:light").map(|r| r.height()), Some(classic.height()));
+        assert_eq!(exposure(&h), 0.7);
+        assert_eq!(h.app.ui.right, panel);
+    }
+    // compact right panel default width
+    // The right panel opens at 318 points in Compact while it was at Classic's default, and goes back;
+    // a width the user dragged to stays.
+    {
+        use crate::state::{COMPACT_RIGHT_WIDTH, RIGHT_WIDTH};
+        assert_eq!(h.app.ui.right_width, RIGHT_WIDTH.default);
+        run(&mut h, "view.compactLayout", json!({"on": true}));
+        assert_eq!(h.app.ui.right_width, COMPACT_RIGHT_WIDTH);
+        run(&mut h, "view.compactLayout", json!({"on": false}));
+        assert_eq!(h.app.ui.right_width, RIGHT_WIDTH.default);
+        h.app.ui.right_width = 300.0;
+        run(&mut h, "view.compactLayout", json!({"on": true}));
+        assert_eq!(h.app.ui.right_width, 300.0, "a dragged width stays");
+        for w in [f32::NAN, -1.0, 1e9] {
+            let _ = crate::state::follow_compact_width(w, true);
+        }
+    }
 }
 
 /// Draws a few passes so every name column has seen all of its rows.
@@ -137,77 +158,116 @@ fn button(h: &Headless, id: &str) -> Option<egui::Rect> {
     rect(h, &format!("icon:{id}")).or_else(|| rect(h, &format!("button:{id}")))
 }
 
-/// LAYOUT-DENSE (OneSlips' 23e2bec5c, 703ccb4f9): Compact has no "Edit" header above the sections:
-/// Basic's banded header comes first, and Auto · B&W | HDR, the profile row and white balance are
-/// its first rows. Classic keeps them above Basic.
+/// One session, several steps; each step was a test of its own and says what it checks.
 #[test]
-fn compact_starts_with_basic_and_its_treatment_row() {
-    for compact in [false, true] {
-        let h = develop_at(compact);
+fn compact_edit_panel_rows_columns_and_tools_line_up() {
+    let mut h = develop_at(true);
+    // compact starts with basic and its treatment row
+    // LAYOUT-DENSE (OneSlips' 23e2bec5c, 703ccb4f9): Compact has no "Edit" header above the sections:
+    // Basic's banded header comes first (under the tool profile's row), and Auto · B&W | HDR and white balance
+    // are its first rows; Browse Profiles is in the tool row above the panels, as in Classic.
+    {
         let basic = rect(&h, "section:light").expect("Basic");
         let auto = button(&h, "auto").expect("Auto");
-        let profile = button(&h, "profileBrowser").expect("the profile row");
-        if compact {
-            assert!(auto.top() >= basic.bottom() - 0.5, "Auto {auto:?} is inside Basic {basic:?}");
-            assert!(profile.top() >= auto.bottom() - 0.5, "the profile row {profile:?} under Auto {auto:?}");
-            let wb = button(&h, "wbPicker").expect("the white balance selector");
-            assert!(wb.top() >= profile.bottom() - 0.5, "white balance {wb:?} under the profile {profile:?}");
-        } else {
-            assert!(auto.bottom() <= basic.top() + 0.5, "Classic: Auto {auto:?} above Basic {basic:?}");
+        let profile = button(&h, "profileBrowser").expect("Browse Profiles");
+        assert!(auto.top() >= basic.bottom() - 0.5, "Auto {auto:?} is inside Basic {basic:?}");
+        assert!(profile.bottom() <= basic.top() + 0.5, "Browse Profiles {profile:?} is above Basic {basic:?}");
+        let wb = button(&h, "wbPicker").expect("the white balance selector");
+        assert!(wb.top() >= auto.bottom() - 0.5, "white balance {wb:?} under Auto {auto:?}");
+    }
+    // compact treatment buttons share one right aligned row
+    // Auto, B&W and HDR stand on one row, right-aligned on the rows' right margin.
+    {
+        let ids = ["auto", "treatment-bw", "hdr"];
+        let rects: Vec<egui::Rect> = ids.iter().map(|id| button(&h, id).unwrap_or_else(|| panic!("{id}"))).collect();
+        for (id, r) in ids.iter().zip(&rects) {
+            assert!((r.center().y - rects[0].center().y).abs() < 1.0, "{id} {r:?} is on Auto's row {:?}", rects[0]);
+        }
+        assert!(rects[0].right() < rects[1].left() && rects[1].right() < rects[2].left(), "in order: {rects:?}");
+        let basic = rect(&h, "section:light").expect("Basic");
+        let right = basic.right() - crate::widgets::PAD_R;
+        assert!((rects[2].right() - right).abs() <= 1.5, "HDR {:?} ends at the right margin {right}", rects[2]);
+    }
+    // compact section headers outrank sub tool rows
+    // Compact section headers are the loud rows (a band, taller than a sub-tool row) and sub-tool rows
+    // the quiet ones; in Classic the boxed sub-tool row is as tall as a section header.
+    {
+        let (sec, fly) = (rect(&h, "section:optics").expect("Lens Corrections"), rect(&h, "flyout:defringe").expect("Defringe"));
+        assert!(sec.height() > fly.height(), "the section header {sec:?} is taller than the sub-tool row {fly:?}");
+        // the band stands off the chrome in every theme, so the header reads louder than the rows
+        for kind in crate::theme::ThemeKind::ALL {
+            let t = crate::theme::Tokens::for_kind(kind);
+            assert_ne!(t.section_band, t.chrome, "{kind:?}");
         }
     }
-}
-
-/// Auto, B&W and HDR stand on one row, right-aligned on the rows' right margin.
-#[test]
-fn compact_treatment_buttons_share_one_right_aligned_row() {
-    let h = develop_at(true);
-    let ids = ["auto", "treatment-bw", "hdr"];
-    let rects: Vec<egui::Rect> = ids.iter().map(|id| button(&h, id).unwrap_or_else(|| panic!("{id}"))).collect();
-    for (id, r) in ids.iter().zip(&rects) {
-        assert!((r.center().y - rects[0].center().y).abs() < 1.0, "{id} {r:?} is on Auto's row {:?}", rects[0]);
+    // compact slider names and tracks share one column
+    // A Compact section's slider names end on one column and its tracks start on one, from Basic's
+    // first slider to its last; Lens Corrections' rows start on the same left margin.
+    {
+        let ids = ["light.exposure", "light.contrast", "light.blacks", "color.vibrance"];
+        let labels: Vec<egui::Rect> = ids.iter().map(|c| rect(&h, &format!("sliderLabel:{c}")).unwrap_or_else(|| panic!("{c}"))).collect();
+        let tracks: Vec<egui::Rect> = ids.iter().map(|c| rect(&h, &format!("slider:{c}")).unwrap_or_else(|| panic!("{c}"))).collect();
+        for (l, t) in labels.iter().zip(&tracks) {
+            assert!((l.right() - labels[0].right()).abs() < 0.5, "{l:?} vs {:?}", labels[0]);
+            assert!((t.left() - tracks[0].left()).abs() < 0.5, "{t:?} vs {:?}", tracks[0]);
+            assert!(t.left() > l.right(), "the name {l:?} clears its track {t:?}");
+        }
+        let basic = rect(&h, "section:light").expect("Basic");
+        let left = basic.left() + crate::widgets::PAD_L;
+        assert!((labels[0].left() - left).abs() < 0.5, "names start on the left margin: {:?} vs {left}", labels[0]);
+        let distortion = rect(&h, "sliderLabel:optics.distortion").expect("Distortion");
+        assert!((distortion.left() - left).abs() < 0.5, "{distortion:?}");
     }
-    assert!(rects[0].right() < rects[1].left() && rects[1].right() < rects[2].left(), "in order: {rects:?}");
-    let basic = rect(&h, "section:light").expect("Basic");
-    let right = basic.right() - crate::widgets::PAD_R;
-    assert!((rects[2].right() - right).abs() <= 1.5, "HDR {:?} ends at the right margin {right}", rects[2]);
+    // compact original photo box toggles the unedited view
+    // The Compact histogram's Original Photo box shows the unedited photo while ticked
+    // (`view.showOriginal`); Classic has no such box.
+    {
+        use crate::state::BeforeAfter;
+        assert!(rect(&h, "check:originalPhoto").is_some(), "the box is under the histogram");
+        assert_eq!(h.app.ui.before_after, BeforeAfter::Off);
+        let r = h.request("ui.clickWidget", json!({"id": "check:originalPhoto"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        redraw(&mut h);
+        assert_eq!(h.app.ui.before_after, BeforeAfter::Original, "ticked: the original");
+        run(&mut h, "view.showOriginal", json!({"on": true}));
+        assert_eq!(h.app.ui.before_after, BeforeAfter::Original, "on stays on");
+        let r = h.request("ui.clickWidget", json!({"id": "check:originalPhoto"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        redraw(&mut h);
+        assert_eq!(h.app.ui.before_after, BeforeAfter::Off, "unticked: the edit again");
+    }
+    // compact tool row spaces the tools evenly and ends with reset
+    // The tool row (OneSlips' fe1eb033d): in Compact every tool and Reset share one evenly spaced row
+    // under the histogram, and Reset resets the photo; Classic's row has no Reset of its own.
+    {
+        let ids = ["toolsEdit", "crop", "remove", "redeye", "masking", "profileBrowser", "toolsReset"];
+        let rects: Vec<egui::Rect> = ids.iter().map(|id| button(&h, id).unwrap_or_else(|| panic!("{id}"))).collect();
+        let step = rects[1].center().x - rects[0].center().x;
+        for pair in rects.windows(2) {
+            assert!((pair[0].center().y - pair[1].center().y).abs() < 0.5, "one row: {pair:?}");
+            assert!(((pair[1].center().x - pair[0].center().x) - step).abs() < 0.6, "evenly spaced: {rects:?}");
+        }
+        run(&mut h, "develop.set", json!({"control": "light.exposure", "value": 0.7}));
+        let id = if rect(&h, "icon:toolsReset").is_some() { "icon:toolsReset" } else { "button:toolsReset" };
+        let r = h.request("ui.clickWidget", json!({"id": id}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        redraw(&mut h);
+        assert_eq!(exposure(&h), 0.0, "Reset reset the edit");
+    }
 }
 
-/// Compact section headers are the loud rows (a band, taller than a sub-tool row) and sub-tool rows
-/// the quiet ones; in Classic the boxed sub-tool row is as tall as a section header.
+/// Classic's Edit panel is as it was without Compact (Auto · B&W | HDR at the top of Basic, as there), the boxed sub-tool row as tall
+/// as a section header, no Original Photo box under the histogram and no Reset in the tool row.
 #[test]
-fn compact_section_headers_outrank_sub_tool_rows() {
+fn classic_keeps_its_edit_panel_layout() {
     let classic = develop_at(false);
+    let basic = rect(&classic, "section:light").expect("Basic");
+    let auto = button(&classic, "auto").expect("Auto");
+    assert!(auto.top() >= basic.bottom() - 0.5, "Classic too: Auto {auto:?} inside Basic {basic:?} (no Edit line above it)");
     let (sec, fly) = (rect(&classic, "section:optics").expect("Lens Corrections"), rect(&classic, "flyout:defringe").expect("Defringe"));
     assert!(fly.height() >= sec.height() - 10.0, "Classic keeps its boxed sub-tool row: {fly:?} vs {sec:?}");
-    let h = develop_at(true);
-    let (sec, fly) = (rect(&h, "section:optics").expect("Lens Corrections"), rect(&h, "flyout:defringe").expect("Defringe"));
-    assert!(sec.height() > fly.height(), "the section header {sec:?} is taller than the sub-tool row {fly:?}");
-    // the band stands off the chrome in every theme, so the header reads louder than the rows
-    for kind in crate::theme::ThemeKind::ALL {
-        let t = crate::theme::Tokens::for_kind(kind);
-        assert_ne!(t.section_band, t.chrome, "{kind:?}");
-    }
-}
-
-/// A Compact section's slider names end on one column and its tracks start on one, from Basic's
-/// first slider to its last; Lens Corrections' rows start on the same left margin.
-#[test]
-fn compact_slider_names_and_tracks_share_one_column() {
-    let h = develop_at(true);
-    let ids = ["light.exposure", "light.contrast", "light.blacks", "color.vibrance"];
-    let labels: Vec<egui::Rect> = ids.iter().map(|c| rect(&h, &format!("sliderLabel:{c}")).unwrap_or_else(|| panic!("{c}"))).collect();
-    let tracks: Vec<egui::Rect> = ids.iter().map(|c| rect(&h, &format!("slider:{c}")).unwrap_or_else(|| panic!("{c}"))).collect();
-    for (l, t) in labels.iter().zip(&tracks) {
-        assert!((l.right() - labels[0].right()).abs() < 0.5, "{l:?} vs {:?}", labels[0]);
-        assert!((t.left() - tracks[0].left()).abs() < 0.5, "{t:?} vs {:?}", tracks[0]);
-        assert!(t.left() > l.right(), "the name {l:?} clears its track {t:?}");
-    }
-    let basic = rect(&h, "section:light").expect("Basic");
-    let left = basic.left() + crate::widgets::PAD_L;
-    assert!((labels[0].left() - left).abs() < 0.5, "names start on the left margin: {:?} vs {left}", labels[0]);
-    let distortion = rect(&h, "sliderLabel:optics.distortion").expect("Distortion");
-    assert!((distortion.left() - left).abs() < 0.5, "{distortion:?}");
+    assert!(rect(&classic, "check:originalPhoto").is_none(), "Classic's histogram is as it was");
+    assert!(button(&classic, "toolsReset").is_none(), "Classic's tool row has no Reset");
 }
 
 /// The Compact histogram draws RGB Overlap as three filled areas that add up toward grey where
@@ -238,69 +298,6 @@ fn compact_histogram_draws_filled_areas() {
     assert!(r > 160 && g > 160 && b > 160 && r.abs_diff(g) < 30 && g.abs_diff(b) < 30, "{r} {g} {b}");
 }
 
-/// The Compact histogram's Original Photo box shows the unedited photo while ticked
-/// (`view.showOriginal`); Classic has no such box.
-#[test]
-fn compact_original_photo_box_toggles_the_unedited_view() {
-    use crate::state::BeforeAfter;
-    let classic = develop_at(false);
-    assert!(rect(&classic, "check:originalPhoto").is_none(), "Classic's histogram is as it was");
-    let mut h = develop_at(true);
-    assert!(rect(&h, "check:originalPhoto").is_some(), "the box is under the histogram");
-    assert_eq!(h.app.ui.before_after, BeforeAfter::Off);
-    let r = h.request("ui.clickWidget", json!({"id": "check:originalPhoto"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    redraw(&mut h);
-    assert_eq!(h.app.ui.before_after, BeforeAfter::Original, "ticked: the original");
-    run(&mut h, "view.showOriginal", json!({"on": true}));
-    assert_eq!(h.app.ui.before_after, BeforeAfter::Original, "on stays on");
-    let r = h.request("ui.clickWidget", json!({"id": "check:originalPhoto"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    redraw(&mut h);
-    assert_eq!(h.app.ui.before_after, BeforeAfter::Off, "unticked: the edit again");
-}
-
-/// The tool row (OneSlips' fe1eb033d): in Compact every tool and Reset share one evenly spaced row
-/// under the histogram, and Reset resets the photo; Classic's row has no Reset of its own.
-#[test]
-fn compact_tool_row_spaces_the_tools_evenly_and_ends_with_reset() {
-    let classic = develop_at(false);
-    assert!(button(&classic, "toolsReset").is_none());
-    let mut h = develop_at(true);
-    let ids = ["toolsEdit", "crop", "remove", "redeye", "masking", "toolsReset"];
-    let rects: Vec<egui::Rect> = ids.iter().map(|id| button(&h, id).unwrap_or_else(|| panic!("{id}"))).collect();
-    let step = rects[1].center().x - rects[0].center().x;
-    for pair in rects.windows(2) {
-        assert!((pair[0].center().y - pair[1].center().y).abs() < 0.5, "one row: {pair:?}");
-        assert!(((pair[1].center().x - pair[0].center().x) - step).abs() < 0.6, "evenly spaced: {rects:?}");
-    }
-    run(&mut h, "develop.set", json!({"control": "light.exposure", "value": 0.7}));
-    let id = if rect(&h, "icon:toolsReset").is_some() { "icon:toolsReset" } else { "button:toolsReset" };
-    let r = h.request("ui.clickWidget", json!({"id": id}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    redraw(&mut h);
-    assert_eq!(exposure(&h), 0.0, "Reset reset the edit");
-}
-
-/// The right panel opens at 318 points in Compact while it was at Classic's default, and goes back;
-/// a width the user dragged to stays.
-#[test]
-fn compact_right_panel_default_width() {
-    use crate::state::{COMPACT_RIGHT_WIDTH, RIGHT_WIDTH};
-    let mut h = develop();
-    assert_eq!(h.app.ui.right_width, RIGHT_WIDTH.default);
-    run(&mut h, "view.compactLayout", json!({"on": true}));
-    assert_eq!(h.app.ui.right_width, COMPACT_RIGHT_WIDTH);
-    run(&mut h, "view.compactLayout", json!({"on": false}));
-    assert_eq!(h.app.ui.right_width, RIGHT_WIDTH.default);
-    h.app.ui.right_width = 300.0;
-    run(&mut h, "view.compactLayout", json!({"on": true}));
-    assert_eq!(h.app.ui.right_width, 300.0, "a dragged width stays");
-    for w in [f32::NAN, -1.0, 1e9] {
-        let _ = crate::state::follow_compact_width(w, true);
-    }
-}
-
 /// Develop at the Compact layout with `sections` open, every name column settled.
 fn compact_with(sections: &[&str]) -> Headless {
     let mut h = develop();
@@ -315,34 +312,39 @@ fn value_column(h: &Headless) -> f32 {
     h.app.widgets.iter().filter(|(w, _)| w.starts_with("sliderValue:")).map(|(_, r)| r.right()).fold(f32::NEG_INFINITY, f32::max)
 }
 
-/// The Color Mixer's Adjust row: its caption and HSL | Color fit the panel's column, the track ending on the value
-/// column like the sliders under it (the caption pushed it past the column's right edge).
+/// One session, several steps; each step was a test of its own and says what it checks.
 #[test]
-fn compact_mixer_adjust_row_stays_in_the_column() {
-    let h = compact_with(&["mixer"]);
-    let hsl = button(&h, "mixerAdjust-hsl").expect("HSL");
-    let color = button(&h, "mixerAdjust-color").expect("Color");
-    let right = value_column(&h);
-    assert!(right.is_finite(), "the mixer's sliders are drawn");
-    assert!(color.right() <= right + 0.5, "Color {color:?} ends on the value column {right}");
-    assert!(hsl.left() < color.left() && hsl.width() > 20.0, "HSL {hsl:?} then Color {color:?}");
-}
-
-/// With every section open (the panel scrolls, so it has a scroll bar) Auto · B&W | HDR still end on the value
-/// column, not past it.
-#[test]
-fn compact_treatment_row_ends_on_the_value_column_with_a_scroll_bar() {
-    let h = compact_with(&["light", "curve", "mixer", "grading", "detail", "optics", "geometry", "effects", "calibration"]);
-    let hdr = button(&h, "hdr").expect("HDR");
-    let exposure = rect(&h, "sliderValue:light.exposure").expect("Exposure's value");
-    assert!(hdr.right() <= exposure.right() + 0.5, "HDR {hdr:?} ends on the value column {exposure:?}");
-}
-
-/// The Transform section's Upright caption reads as a caption: no larger than the slider names, in Compact.
-#[test]
-fn compact_upright_caption_is_no_larger_than_the_slider_names() {
-    let h = compact_with(&["geometry"]);
-    let caption = rect(&h, "label:upright").expect("the Upright caption");
-    let name = h.app.widgets.iter().find(|(w, _)| w.starts_with("sliderLabel:geometry.")).map(|(_, r)| *r).expect("a transform slider's name");
-    assert!(caption.height() <= name.height() + 0.5, "Upright {caption:?} vs a slider name {name:?}");
+fn compact_rows_stay_in_the_value_column_whatever_is_open() {
+    let mut h = compact_with(&["mixer"]);
+    // compact mixer adjust row stays in the column
+    // The Color Mixer's Adjust row: its caption and HSL | Color fit the panel's column, the track ending on the value
+    // column like the sliders under it (the caption pushed it past the column's right edge).
+    {
+        let hsl = button(&h, "mixerAdjust-hsl").expect("HSL");
+        let color = button(&h, "mixerAdjust-color").expect("Color");
+        let right = value_column(&h);
+        assert!(right.is_finite(), "the mixer's sliders are drawn");
+        assert!(color.right() <= right + 0.5, "Color {color:?} ends on the value column {right}");
+        assert!(hsl.left() < color.left() && hsl.width() > 20.0, "HSL {hsl:?} then Color {color:?}");
+    }
+    // compact treatment row ends on the value column with a scroll bar
+    // With every section open (the panel scrolls, so it has a scroll bar) Auto · B&W | HDR still end on the value
+    // column, not past it.
+    {
+        h.app.ui.open_sections =
+            ["light", "curve", "mixer", "grading", "detail", "optics", "geometry", "effects", "calibration"].map(str::to_string).to_vec();
+        redraw(&mut h);
+        let hdr = button(&h, "hdr").expect("HDR");
+        let exposure = rect(&h, "sliderValue:light.exposure").expect("Exposure's value");
+        assert!(hdr.right() <= exposure.right() + 0.5, "HDR {hdr:?} ends on the value column {exposure:?}");
+    }
+    // compact upright caption is no larger than the slider names
+    // The Transform section's Upright caption reads as a caption: no larger than the slider names, in Compact.
+    {
+        h.app.ui.open_sections = vec!["geometry".to_string()];
+        redraw(&mut h);
+        let caption = rect(&h, "label:upright").expect("the Upright caption");
+        let name = h.app.widgets.iter().find(|(w, _)| w.starts_with("sliderLabel:geometry.")).map(|(_, r)| *r).expect("a transform slider's name");
+        assert!(caption.height() <= name.height() + 0.5, "Upright {caption:?} vs a slider name {name:?}");
+    }
 }

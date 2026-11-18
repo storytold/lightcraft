@@ -33,7 +33,7 @@ pub mod tokenizer;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod weights;
 
-pub use accel::{AccelFactory, Accelerator, BlockWeights, TowerWeights};
+pub use accel::{AccelFactory, Accelerator, BlockWeights, TextTowerWeights, TowerWeights, VisionTowerWeights};
 #[cfg(not(target_arch = "wasm32"))]
 pub use clip::{Clip, ClipError};
 pub use device::{Device, Kind, Preference, Probe, select};

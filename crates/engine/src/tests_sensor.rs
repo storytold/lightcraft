@@ -317,7 +317,7 @@ fn remove_dust_tags_its_spots_and_replaces_them_when_run_again() {
 fn a_body_dust_map_finds_faint_dust_on_later_photos() {
     let _maps = crate::sensor_maps::change_generation();
     let dir = temp_dir("sensor-dustmap");
-    let (w, h) = (1200usize, 800usize);
+    let (w, h) = (600usize, 400usize);
     // a smooth bright mosaic with a soft dark spot at (cx, cy) on the sensor, `depth` deep
     let photo = |seed: u64, depth: f32| {
         let mut n = seed.wrapping_add(7);
@@ -325,9 +325,9 @@ fn a_body_dust_map_finds_faint_dust_on_later_photos() {
             .map(|i| {
                 n = n.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
                 let (x, y) = ((i % w) as f32, (i / w) as f32);
-                let d2 = (x - 840.0).powi(2) + (y - 260.0).powi(2);
-                let t = 1.0 - depth * (-d2 / (2.0 * 7.0 * 7.0)).exp();
-                (256.0 + (2600.0 + 1.0 * y) * t + ((n >> 40) % 9) as f32) as u16
+                let d2 = (x - 420.0).powi(2) + (y - 130.0).powi(2);
+                let t = 1.0 - depth * (-d2 / (2.0 * 5.0 * 5.0)).exp();
+                (256.0 + (2600.0 + 2.0 * y) * t + ((n >> 40) % 9) as f32) as u16
             })
             .collect::<Vec<u16>>()
     };
@@ -356,13 +356,13 @@ fn a_body_dust_map_finds_faint_dust_on_later_photos() {
     assert!(alone["found"].as_u64() < Some(1) || r["confirmed"].as_u64() >= Some(1), "{alone} {r}");
     assert_eq!(r["added"], 1, "{r}");
     let sp = &r["spots"][0];
-    assert!((sp["x"].as_f64().unwrap() - 840.0 / w as f64).abs() < 0.01 && (sp["y"].as_f64().unwrap() - 260.0 / h as f64).abs() < 0.015, "{r}");
+    assert!((sp["x"].as_f64().unwrap() - 420.0 / w as f64).abs() < 0.01 && (sp["y"].as_f64().unwrap() - 130.0 / h as f64).abs() < 0.015, "{r}");
     assert_eq!(sp["confirmed"], true);
     // turned to portrait (Rotate Right): the spot follows the sensor position
     s.execute("photo.rotateRight", &json!({"ids": [fid.0]})).unwrap();
     let o = s.develop_of(fid).unwrap().orientation;
     let r = s.execute("spot.findDust", &json!({})).unwrap();
-    let (ex, ey) = o.map(840.0 / w as f64, 260.0 / h as f64, 1.0, 1.0);
+    let (ex, ey) = o.map(420.0 / w as f64, 130.0 / h as f64, 1.0, 1.0);
     let sp = &r["spots"][0];
     assert!((sp["x"].as_f64().unwrap() - ex).abs() < 0.015 && (sp["y"].as_f64().unwrap() - ey).abs() < 0.015, "{o:?} {r}");
     // a selection: in the background, applied by dust.pump
@@ -509,4 +509,152 @@ fn a_body_map_change_drops_only_that_bodys_decoded_sources() {
     assert!(s.media.get(b, SourceLevel::Preview).is_some(), "another body's decode is still right");
     assert!(s.media.get(none, SourceLevel::Preview).is_some(), "no map went into this one");
     let _ = crate::sensor_maps::clear("SN-SRC-A", true, true);
+}
+
+/// A film scanner's RGBI TIFF: a flat mid-grey picture (nothing to find in it) whose infrared
+/// pass has one dark speck and one dark hair; Find Film Dust heals both from the pass, and says
+/// it did; without the pass it finds nothing, and asked for the pass on a plain photo it refuses.
+#[test]
+fn film_dust_is_healed_from_a_scanners_infrared_pass() {
+    let dir = temp_dir("film-ir");
+    let (w, h) = (320u32, 240u32);
+    let px = |x: u32, y: u32| {
+        let speck = (x as i64 - 80).pow(2) + (y as i64 - 60).pow(2) <= 4;
+        let hair = (120..260).contains(&x) && y as i64 == 150 + (x as i64 - 120) / 7;
+        // dust blocks light: dark in the colour too, and in the pass
+        if speck || hair { vec![4000u16, 3000, 2000, 3000] } else { vec![30000, 25000, 20000, 42000] }
+    };
+    let path = dir.join("scan.tif");
+    std::fs::write(&path, lcc_testkit::tiff16(w, h, 4, "VueScan 9 x64 (9.8.52)", None, px)).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    // decoded as an opaque picture, the pass beside it
+    let info = s.source_info(id);
+    let _ = s.source_now(id, crate::media::SourceLevel::Preview).unwrap();
+    let info = if info.infrared.is_none() { s.source_info(id) } else { info };
+    assert!(info.infrared.is_some(), "the infrared pass is kept with the source");
+    assert!(info.alpha.is_none(), "and is not transparency");
+
+    let r = s.execute("spot.findFilmDust", &json!({})).unwrap();
+    assert_eq!(r["infrared"], true);
+    let spots = r["spots"].as_array().unwrap();
+    let near = |p: &Value, x: f64, y: f64| (p[0].as_f64().unwrap() - x).abs() < 0.02 && (p[1].as_f64().unwrap() - y).abs() < 0.02;
+    assert!(
+        spots.iter().any(|sp| sp["points"].as_array().unwrap().len() == 1 && near(&sp["points"][0], 80.0 / 320.0, 60.0 / 240.0)),
+        "speck: {spots:?}"
+    );
+    assert!(spots.iter().any(|sp| sp["points"].as_array().unwrap().len() >= 3), "hair as a stroke: {spots:?}");
+    let d = s.develop_of(id).unwrap();
+    assert_eq!(d.spots.len(), spots.len());
+    assert!(
+        d.spots.iter().all(|sp| sp.mode == lcc_develop::SpotMode::Fill && sp.source_offset.is_none()),
+        "rebuilt from the surroundings by default"
+    );
+    assert!(
+        d.spots.iter().all(|sp| sp.auto.is_some_and(|a| a.kind == lcc_develop::AutoSpotKind::FilmDust && a.confirmed)),
+        "tagged as film dust from the pass"
+    );
+    // heal mode copies from a source instead; expand grows each mark's spot
+    let r = s.execute("spot.findFilmDust", &json!({"mode": "heal", "expand": 0})).unwrap();
+    let speck_size = |r: &Value| {
+        r["spots"].as_array().unwrap().iter().find(|sp| sp["points"].as_array().unwrap().len() == 1).map(|sp| sp["size"].as_f64().unwrap())
+    };
+    let small = speck_size(&r).unwrap();
+    let d = s.develop_of(id).unwrap();
+    assert!(d.spots.iter().all(|sp| sp.mode == lcc_develop::SpotMode::Heal && sp.source_offset.is_some()));
+    let grown = s.develop_of(id).unwrap().spots.iter().map(|sp| sp.size).fold(0.0, f64::max);
+    s.execute("spot.findFilmDust", &json!({"expand": 40})).unwrap();
+    let grown_more = s.develop_of(id).unwrap().spots.iter().map(|sp| sp.size).fold(0.0, f64::max);
+    assert!(grown_more > grown + 30.0 / 2400.0, "expanded: {grown_more} vs {grown} (speck {small})");
+    assert!(s.execute("spot.findFilmDust", &json!({"mode": "magic"})).is_err());
+    // a run at another sensitivity replaces its own spots (the user's stay), so the strength can be adjusted
+    s.execute("spot.add", &json!({"mode": "heal", "points": [[0.9, 0.9]], "size": 0.01})).unwrap();
+    let r = s.execute("spot.findFilmDust", &json!({"sensitivity": 80})).unwrap();
+    assert_eq!(r["replaced"].as_u64(), Some(spots.len() as u64));
+    let d = s.develop_of(id).unwrap();
+    assert_eq!(d.spots.iter().filter(|sp| sp.auto.is_none()).count(), 1, "the user's spot stays");
+    assert_eq!(d.spots.iter().filter(|sp| sp.auto.is_some()).count(), r["added"].as_u64().unwrap() as usize);
+    assert!(
+        s.execute("spot.findFilmDust", &json!({"sensitivity": f64::NAN, "expand": f64::INFINITY})).is_ok(),
+        "a bad sensitivity is clamped, not a crash"
+    );
+
+    // the marks as a mask: a stored segmentation named for it, selected, replaced on a re-run
+    let r = s.execute("spot.filmDustMask", &json!({"expand": 2})).unwrap();
+    let mid = r["mask"].as_u64().unwrap() as u32;
+    assert!(r["coverage"].as_f64().unwrap() > 0.0 && r["coverage"].as_f64().unwrap() < 0.1, "{r}");
+    assert_eq!(s.active_mask, Some(mid));
+    let d = s.develop_of(id).unwrap();
+    let m = d.masks.iter().find(|m| m.id == mid).unwrap();
+    assert_eq!(m.name, crate::cmd::film_dust::MASK_NAME);
+    assert!(matches!(m.components.first().map(|c| &c.shape), Some(lcc_develop::MaskShape::Object { seg: Some(_), .. })));
+    let r2 = s.execute("spot.filmDustMask", &json!({"expand": 40})).unwrap();
+    assert!(r2["coverage"].as_f64().unwrap() > r["coverage"].as_f64().unwrap(), "expanded: {r2} vs {r}");
+    let d = s.develop_of(id).unwrap();
+    assert_eq!(d.masks.iter().filter(|m| m.name == crate::cmd::film_dust::MASK_NAME).count(), 1, "the earlier mask is replaced");
+    // and it can be filled like any mask
+    let n = d.spots.len();
+    let r = s.execute("spot.fromMask", &json!({"mode": "fill"})).unwrap();
+    assert!(r["dabs"].as_u64().unwrap() > 0);
+    assert_eq!(s.develop_of(id).unwrap().spots.len(), n + 1);
+
+    // the picture alone shows nothing (it is flat), and asking for the pass on a plain photo is refused
+    let r = s.execute("spot.findFilmDust", &json!({"infrared": "never", "add": false})).unwrap();
+    assert_eq!((r["infrared"].as_bool(), r["added"].as_u64()), (Some(false), Some(0)));
+    let plain = dir.join("plain.png");
+    let img = lcc_raster::Rgba8 { width: 80, height: 60, data: vec![[90, 100, 110, 255]; 4800] };
+    std::fs::write(&plain, lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap()).unwrap();
+    s.execute("library.import", &json!({"paths": [plain.to_string_lossy()]})).unwrap();
+    let err = s.execute("spot.findFilmDust", &json!({"infrared": "only"})).unwrap_err().to_string();
+    assert!(err.contains("infrared"), "{err}");
+    assert!(s.execute("spot.filmDustMask", &json!({})).unwrap_err().to_string().contains("infrared"));
+    assert!(s.execute("spot.findFilmDust", &json!({"infrared": "sometimes"})).is_err());
+}
+
+/// Remove Film Dust (`filmDust.remove`, a develop control) fills the pass's marks in before the
+/// picture is converted: the speck renders like its surroundings, off it stays dark; a photo
+/// without the pass renders the same with it on; the setting is not written while default.
+#[test]
+fn remove_film_dust_fills_the_marks_in_the_render() {
+    let dir = temp_dir("film-ir-remove");
+    let (w, h) = (320u32, 240u32);
+    let px = |x: u32, y: u32| {
+        let speck = (x as i64 - 80).pow(2) + (y as i64 - 60).pow(2) <= 9;
+        if speck { vec![4000u16, 3000, 2000, 3000] } else { vec![30000, 25000, 20000, 42000] }
+    };
+    let path = dir.join("scan.tif");
+    std::fs::write(&path, lcc_testkit::tiff16(w, h, 4, "VueScan 9 x64 (9.8.52)", None, px)).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    let at = |s: &mut Session, x: usize, y: usize| -> [u8; 4] {
+        let img = s.render_now(id, 320, 240).unwrap().image;
+        img.data[y * img.width + x]
+    };
+    let dark = at(&mut s, 80, 60);
+    let clean = at(&mut s, 100, 60);
+    assert!(dark[1] + 40 < clean[1], "the speck is dark before: {dark:?} vs {clean:?}");
+    s.execute("develop.set", &json!({"control": "filmDust.remove", "value": 1})).unwrap();
+    let filled = at(&mut s, 80, 60);
+    assert!((i32::from(filled[1]) - i32::from(clean[1])).abs() <= 6, "filled: {filled:?} vs {clean:?}");
+    assert_eq!(at(&mut s, 100, 60), clean, "the rest is untouched");
+    // the setting rides along in the settings JSON only when it is not the default
+    let d = s.develop_of(id).unwrap();
+    assert!(serde_json::to_string(&*d).unwrap().contains("film_dust"));
+    assert!(!serde_json::to_string(&lcc_develop::DevelopSettings::default()).unwrap().contains("film_dust"));
+    // sensitivity and expand are develop controls
+    s.execute("develop.set", &json!({"control": "filmDust.expand", "value": 40})).unwrap();
+    assert_eq!(s.develop_of(id).unwrap().film_dust.expand, 40.0);
+    s.execute("develop.set", &json!({"control": "filmDust.remove", "value": 0})).unwrap();
+    assert_eq!(at(&mut s, 80, 60), dark, "off again: the speck is back");
+    // no pass: nothing changes with it on
+    let plain = dir.join("plain.png");
+    let img = lcc_raster::Rgba8 { width: 80, height: 60, data: vec![[90, 100, 110, 255]; 4800] };
+    std::fs::write(&plain, lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap()).unwrap();
+    s.execute("library.import", &json!({"paths": [plain.to_string_lossy()]})).unwrap();
+    let pid = s.active().unwrap();
+    let before = s.render_now(pid, 80, 60).unwrap().image;
+    s.execute("develop.set", &json!({"control": "filmDust.remove", "value": 1})).unwrap();
+    assert_eq!(s.render_now(pid, 80, 60).unwrap().image.data, before.data);
 }

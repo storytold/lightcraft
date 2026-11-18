@@ -33,18 +33,13 @@ fn open(integrated_titlebar: bool, fullscreen: bool) -> Headless {
     h
 }
 
-// Scenario: with an integrated title bar the ‹ button starts right of the traffic lights
+// Scenario: with an integrated title bar the ‹ button starts right of the traffic lights; without one (and in
+// macOS full screen, where the lights hide) nothing moves
 #[test]
-fn back_clears_the_traffic_lights() {
-    let b = rect(&open(true, false), "settings:back");
-    assert!((b.left() - 78.0).abs() < 0.5, "{b:?}");
-}
-
-// Scenario: without one (and in macOS full screen, where the lights hide) nothing moves
-#[test]
-fn no_traffic_lights_no_offset() {
-    for h in [open(false, false), open(true, true)] {
-        let b = rect(&h, "settings:back");
-        assert!((b.left() - 10.0).abs() < 0.5, "{b:?}");
-    }
+fn back_clears_the_traffic_lights_only_where_they_are() {
+    let plain = rect(&open(false, false), "settings:back");
+    let lights = rect(&open(true, false), "settings:back");
+    assert!(lights.left() > plain.left() + 40.0, "clear of the traffic lights: {lights:?} against {plain:?}");
+    let fullscreen = rect(&open(true, true), "settings:back");
+    assert_eq!(fullscreen.left(), plain.left(), "no lights in full screen: no offset");
 }

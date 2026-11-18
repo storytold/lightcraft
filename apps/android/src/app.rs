@@ -28,6 +28,11 @@ pub fn main(activity: AndroidApp) {
         pictures: external.unwrap_or_else(|| config_root.clone()),
     });
     lcc_engine::guard::install_hook(Some(config_root.join(format!("{}-panics.log", lcc_brand::BINARY))));
+    // freed decode buffers go back to the system at once, not at the allocator's next purge (a phone has no memory to
+    // spare): after each decode, preview build and import, and on entering Develop
+    lcc_engine::memory::set_release_hook(|| {
+        let _ = lcc_sysmem::release_free_memory();
+    });
 
     let host = match Host::new(&activity) {
         Ok(h) => Some(Arc::new(h)),

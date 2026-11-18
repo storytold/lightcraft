@@ -635,7 +635,10 @@ fn warp_params(wp: &lcc_pipeline::optics::Warp, base: (usize, usize), out: (usiz
     p.extend([f(v.center.x), f(v.center.y), f(v.radius)]);
     p.push(wp.per_channel() as u32);
     p.push(wp.has_gain() as u32);
-    debug_assert_eq!(p.len(), 65);
+    // the flat-field gain (`Warp::field`): on?, amount, nodes per side; its EV grid is the `field` binding
+    let amount = wp.field_amount();
+    p.extend([(amount != 0.0) as u32, amount.to_bits(), lcc_pipeline::vignetting_calibration::FIELD_NODES as u32]);
+    debug_assert_eq!(p.len(), 68);
     p
 }
 
@@ -711,7 +714,7 @@ fn sample(cx: &mut Cx<'_>, src: &Arc<Rgb32f>, src_buf: Arc<Buf>, plan: &Plan<'_>
         let out = cx.gpu.buffer(sp.ow * sp.oh * 3);
         let mut p = vec![src.width as u32, src.height as u32, sp.ow as u32, sp.oh as u32];
         p.extend(orient_map(fr.orient, src.width, src.height).map(|v| v as u32));
-        cx.run("orient", &p, &[Some(&src_buf), Some(&out), None], groups2(sp.ow, sp.oh, [16, 16]));
+        cx.run("orient", &p, &[Some(&src_buf), Some(&out), None, None], groups2(sp.ow, sp.oh, [16, 16]));
         Arc::new(out)
     };
     let (base, (bw, bh)) = match sp.prefilter {
@@ -722,7 +725,7 @@ fn sample(cx: &mut Cx<'_>, src: &Arc<Rgb32f>, src_buf: Arc<Buf>, plan: &Plan<'_>
         let out = cx.gpu.buffer(w * h * 3);
         let mut p = vec![bw as u32, bh as u32, w as u32, h as u32];
         p.extend(affine_bits(xf));
-        cx.run("sample_affine", &p, &[Some(&base), Some(&out), None], groups2(w, h, [16, 16]));
+        cx.run("sample_affine", &p, &[Some(&base), Some(&out), None, None], groups2(w, h, [16, 16]));
         Arc::new(out)
     };
     match (&sp.mode, fr.warp.as_ref()) {
@@ -736,7 +739,9 @@ fn sample(cx: &mut Cx<'_>, src: &Arc<Rgb32f>, src_buf: Arc<Buf>, plan: &Plan<'_>
             // f32 rounding can cross a source edge. Keep the reference f64
             // framing decision in a bit mask; color sampling stays on the GPU.
             let coverage = cx.gpu.upload(wp.coverage(o2t, w, h).words());
-            cx.run("sample_warp", &p, &[Some(&base), Some(&out), Some(&coverage)], groups2(w, h, [16, 16]));
+            // (64 × 64 values, uploaded with the render: a placeholder binding without a field)
+            let field = wp.field.as_ref().filter(|f| f.amount != 0.0).map(|f| cx.gpu.upload(f.ev.as_slice()));
+            cx.run("sample_warp", &p, &[Some(&base), Some(&out), Some(&coverage), field.as_ref()], groups2(w, h, [16, 16]));
             Arc::new(out)
         }
     }

@@ -4041,23 +4041,15 @@ mod tests {
     }
 
     #[test]
-    fn corpus_a7cr_uses_the_bundled_profile() {
-        corpus_uses_the_bundled_profile("arw-sony-a7cr-lossless-l.arw", "ILCE-7CR");
-    }
-
-    #[test]
-    fn corpus_d780_uses_the_bundled_profile() {
-        corpus_uses_the_bundled_profile("nef-nikon-d780.nef", "NIKON D780");
-    }
-
-    #[test]
-    fn corpus_d750_uses_the_bundled_profile() {
-        corpus_uses_the_bundled_profile("nef-nikon-d750.nef", "NIKON D750");
-    }
-
-    #[test]
-    fn corpus_d90_uses_the_bundled_profile() {
-        corpus_uses_the_bundled_profile("nef-nikon-d90.nef", "NIKON D90");
+    fn corpus_raws_use_their_bundled_profiles() {
+        for (file, model) in [
+            ("arw-sony-a7cr-lossless-l.arw", "ILCE-7CR"),
+            ("nef-nikon-d780.nef", "NIKON D780"),
+            ("nef-nikon-d750.nef", "NIKON D750"),
+            ("nef-nikon-d90.nef", "NIKON D90"),
+        ] {
+            corpus_uses_the_bundled_profile(file, model);
+        }
     }
     /// A public DC-FZ1000 II RW2 shot at 4:3 on its 3:2 sensor (skipped without the corpus): the default crop is 4:3
     /// while the embedded JPEG shows the whole sensor; the look is still fitted, against the matching part of it.

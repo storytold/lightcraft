@@ -1,6 +1,6 @@
 # CI and landing changes
 
-> **Last updated:** 2026-10-30 · **Change:** minor (the fast gate checks that the fork catalogs are sorted); minor (the full run also checks the x86_64 Android target); major (no repeated runs: a push to main skips a tree its PR run tested, no CI on pushes to `release`, Brand only on PRs and built in the runner cache, Windows ARM64 only when packaging inputs change, sccache, one cargo run per target for the fast gate's wasm/Android checks); minor (release jobs upload straight to the draft release, not via Actions artifacts); major (every workflow on self-hosted runners, containers on gpu0, fork PRs approved after review); minor (test retries, flaky reports and the test quarantine for the full run); major (fast PR gate; full test runs only before a release); major (created: PR-only main, self-hosted runner, local status)
+> **Last updated:** 2026-11-13 · **Change:** minor (generated demo photos are kept on disk across test processes); minor (the fast gate checks that the fork catalogs are sorted); minor (the full run also checks the x86_64 Android target); major (no repeated runs: a push to main skips a tree its PR run tested, no CI on pushes to `release`, Brand only on PRs and built in the runner cache, Windows ARM64 only when packaging inputs change, sccache, one cargo run per target for the fast gate's wasm/Android checks); minor (release jobs upload straight to the draft release, not via Actions artifacts); major (every workflow on self-hosted runners, containers on gpu0, fork PRs approved after review); minor (test retries, flaky reports and the test quarantine for the full run); major (fast PR gate; full test runs only before a release); major (created: PR-only main, self-hosted runner, local status)
 
 ## How changes reach `main`
 
@@ -88,6 +88,14 @@ with its cache in `~/.cache/sccache` (`C:\lcc-ci\sccache` on Windows) and `RUSTC
 gpu0-b run as one user, so they share it: each registry crate compiles once per machine, not once per target dir,
 and the throw-away brand build reuses what CI compiled. The step is best effort; without sccache jobs build as
 before. `sccache --show-stats` on the runner shows the hit rate; `rm -rf ~/.cache/sccache` starts it clean.
+
+Test runs keep generated demo photos on disk. A procedural demo photo costs up to a minute of CPU time to
+generate, and nextest starts one process per test, so every UI test used to generate its own (over 90 % of the
+suite's time). Unit tests of the UI and engine now store them in `tmp/demo-scenes` of the target directory, and
+`cargo xtask ci`, `quarantine` and `sil` set `<PREFIX>_DEMO_SCENE_CACHE` to the same folder for integration tests
+and the CLI processes they start (`crates/engine/src/scene_disk.rs`). A file is named after a fingerprint of the
+scene's pixels, so a change to a scene makes new files; the folder stops growing at 16 GB and can be deleted at
+any time. The app itself never uses it unless the variable is set.
 
 Each runner instance has its own build cache (`CARGO_TARGET_DIR` from the runner's `.env`, else
 `~/.cache/lcc-ci-target-<runner name>`), so several instances on one machine (`gpu0` and `gpu0-b`) can run

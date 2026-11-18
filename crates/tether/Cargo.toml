@@ -18,3 +18,4 @@ workspace = true
 
 [dev-dependencies]
 lcc-fuzzkit = { workspace = true }
+lcc-testkit = { workspace = true }

@@ -19,10 +19,9 @@ const SR: u32 = 48_000;
 const HZ: f32 = 440.0;
 const TRIM: (f64, f64) = (0.4, 1.6);
 
-fn scratch(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("lcc-video-export-audio-{}-{name}", std::process::id()));
-    std::fs::create_dir_all(&d).unwrap();
-    d
+/// An empty Temp folder of the test's own, removed when the test ends.
+fn scratch(name: &str) -> lcc_testkit::TempDir {
+    lcc_testkit::TempDir::new(&format!("lcc-video-export-audio-{name}"))
 }
 
 fn tone(t: f64) -> f32 {
@@ -125,7 +124,6 @@ fn matroska_audio_exports_to_mp4_as_aac_in_sync() {
     let pcm = r.read_range(0.0, None).unwrap();
     let left: Vec<f32> = pcm.iter().step_by(2).copied().collect();
     check(&left);
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -147,5 +145,4 @@ fn matroska_audio_exports_to_prores_mov_as_pcm_in_sync() {
     }
     let left: Vec<f32> = bytes.as_chunks::<4>().0.iter().map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 32768.0).collect();
     check(&left);
-    std::fs::remove_dir_all(&dir).ok();
 }

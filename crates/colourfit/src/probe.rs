@@ -698,10 +698,9 @@ pub fn text(r: &ProbeReport) -> String {
 mod tests {
     use super::*;
 
-    fn scratch(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("lcc-colourfit-probe-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        d
+    /// The test's folder in Temp, removed when the test ends.
+    fn scratch(name: &str) -> lcc_testkit::TempDir {
+        lcc_testkit::TempDir::new(&format!("lcc-colourfit-probe-{name}"))
     }
 
     #[test]

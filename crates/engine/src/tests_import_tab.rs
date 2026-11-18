@@ -137,7 +137,7 @@ fn import_presets_are_kept_and_removed_by_name() {
 }
 
 #[test]
-fn finishing_starts_at_the_photo_on_screen() {
+fn finishing_starts_at_the_photo_on_screen_and_notes_a_missing_model() {
     let (mut s, dir) = browsed("finish", 5);
     let ids: Vec<u64> = s.visible_cloned().iter().map(|i| i.0).collect();
     assert_eq!(ids.len(), 5);
@@ -150,12 +150,9 @@ fn finishing_starts_at_the_photo_on_screen() {
     let r = s.execute("library.finishImport", &json!({"ids": [ids[0]], "previews": "none"})).unwrap();
     assert_eq!(r["running"], false);
     let _ = std::fs::remove_dir_all(&dir);
-}
 
-/// Finishing also gets the photos' Smooth Skin (and AI masks) going; a model that is not there is
-/// a note in the answer, not a failed finish.
-#[test]
-fn finishing_runs_the_ai_stages_and_notes_a_missing_model() {
+    // Finishing also gets the photos' Smooth Skin (and AI masks) going; a model that is not there is
+    // a note in the answer, not a failed finish.
     let (mut s, dir) = browsed("finish-ai", 2);
     s.segmenter.models_root = Some(dir.join("no-models-here"));
     let ids: Vec<u64> = s.visible_cloned().iter().map(|i| i.0).collect();

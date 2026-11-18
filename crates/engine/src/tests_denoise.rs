@@ -127,29 +127,16 @@ fn model_installation_keeps_the_frame_pump_responsive_and_reuses_the_loaded_mode
     let _ = std::fs::remove_dir_all(x.dir);
 }
 
-#[test]
-fn failed_model_replacement_preserves_the_installed_model() {
-    let mut x = setup("replacement", true);
-    let installed = x.dir.join("denoise-models/stand-in/model.onnx");
-    let original = std::fs::read(&installed).unwrap();
-    let source = model_files(&x.dir, "stand-in");
-    std::fs::write(&source, "a different broken model").unwrap();
-    assert!(x.s.execute("denoise.models.install", &json!({"path": source, "acknowledged": true})).is_err());
-    assert_eq!(std::fs::read(installed).unwrap(), original);
-    assert_eq!(x.s.execute("denoise.models.list", &json!({})).unwrap()["model"], "stand-in");
-    drop(x.s);
-    let _ = std::fs::remove_dir_all(x.dir);
-}
-
 /// A Bayer DNG that is a smooth ramp, big enough for a 64-cell tile and a second one.
 fn ramp_dng(w: usize, h: usize, cfa: &str) -> Vec<u8> {
     let data: Vec<u16> = (0..w * h).map(|i| 600 + ((i % w) * 30 + (i / w) * 35) as u16).collect();
     synthetic_dng_of(w, h, cfa, data, None, Default::default())
 }
 
+/// (Fields drop in order: the session, with its library open in `dir`, before the folder goes.)
 struct Setup {
-    dir: PathBuf,
     s: Session,
+    dir: lcc_testkit::TempDir,
     runs: Arc<AtomicUsize>,
 }
 
@@ -204,7 +191,7 @@ fn set_amount(s: &mut Session, amount: f64) {
 }
 
 #[test]
-fn a_model_is_installed_chosen_and_removed_with_the_terms_accepted() {
+fn a_model_is_installed_chosen_and_removed_with_the_terms_accepted_and_bad_manifests_are_refused() {
     let mut x = setup("model", false);
     let onnx = model_files(&x.dir, "stand-in");
     // the terms come first
@@ -224,6 +211,14 @@ fn a_model_is_installed_chosen_and_removed_with_the_terms_accepted() {
     assert!(r["installed"]["accepted"]["sha256"].as_str().is_some_and(|h| h.len() == 64), "the file's hash is recorded: {r}");
     assert!(x.s.denoise.active.is_some());
     assert_eq!(x.s.execute("denoise.status", &json!({})).unwrap()["model"]["id"], "stand-in");
+    // a replacement that fails leaves the installed model as it was
+    let installed = x.dir.join("denoise-models/stand-in/model.onnx");
+    let original = std::fs::read(&installed).unwrap();
+    std::fs::write(&onnx, "a different broken model").unwrap();
+    assert!(x.s.execute("denoise.models.install", &json!({"path": onnx.to_string_lossy(), "acknowledged": true})).is_err());
+    assert_eq!(std::fs::read(&installed).unwrap(), original, "the failed replacement left the installed file alone");
+    assert_eq!(x.s.execute("denoise.models.list", &json!({})).unwrap()["model"], "stand-in");
+    let onnx = model_files(&x.dir, "stand-in");
     // it can be checked again, switched off and on, and removed
     assert_eq!(x.s.execute("denoise.models.test", &json!({"id": "stand-in"})).unwrap()["ok"], true);
     assert_eq!(x.s.execute("denoise.models.select", &json!({"id": null})).unwrap()["model"], Value::Null);
@@ -245,13 +240,9 @@ fn a_model_is_installed_chosen_and_removed_with_the_terms_accepted() {
     let e = x.s.execute("denoise.models.install", &json!({"path": onnx.to_string_lossy(), "acknowledged": true})).unwrap_err().to_string();
     assert!(e.contains("it does not load"), "{e}");
     assert!(!x.dir.join("denoise-models").join("stand-in").exists());
-    let _ = std::fs::remove_dir_all(&x.dir);
-}
 
-#[test]
-fn a_manifest_that_does_not_validate_or_name_the_file_is_refused() {
-    let mut x = setup("manifest", false);
-    let onnx = model_files(&x.dir, "stand-in");
+    // a manifest that does not validate, or does not name the file, is refused
+    x.s.denoise.loader = dim_loader(&x.runs);
     let json_path = onnx.with_file_name("denoise-model.json");
     // a tile the model cannot run on
     let mut m = manifest("stand-in");
@@ -377,6 +368,26 @@ fn what_was_made_is_found_again_by_a_new_session_and_a_new_model_starts_over() {
     s2.execute("denoise.models.select", &json!({"id": "stand-in"})).unwrap();
     s2.denoise_pump(crate::denoise::Pace::Pause);
     assert_eq!(s2.denoise_photo_state(id), PhotoState::Ready);
+
+    // the photo's content is something else now (a replaced file): its old picture is not its picture
+    let p = s2.catalog.photo(id).unwrap().clone();
+    s2.commit(
+        "test",
+        lcc_catalog::Op::SetContent {
+            id,
+            width: p.width,
+            height: p.height,
+            file_size: p.file_size + 1,
+            content_hash: Some("ffffffffffffffffffffffffffffffff".into()),
+            preview_only: None,
+            preview_checked: String::new(),
+        },
+    )
+    .unwrap();
+    s2.denoise_pump(crate::denoise::Pace::Pause);
+    assert_ne!(s2.denoise_photo_state(id), PhotoState::Ready, "a changed file has no picture until it is made again");
+    // the old picture is not used by a render either
+    assert_eq!(s2.media.denoise_salt(id, &s2.catalog.photo(id).unwrap().develop), 0);
     let _ = std::fs::remove_dir_all(&x.dir);
 }
 
@@ -565,6 +576,18 @@ fn files_that_cannot_be_denoised_fail_with_a_reason_and_never_a_panic() {
         assert_eq!(make_product(&s, None), Ok(true), "{cfa}");
         assert_eq!(make_product(&s, None), Ok(false), "{cfa} is already there");
     }
+    // a model for finished pictures: a damaged picture, and a raw file (not a finished picture), are refused
+    let rgb_spec = |path: &Path| crate::denoise::JobSpec {
+        product: dir.join("rgb.lcdn"),
+        manifest: DenoiserManifest { domain: Domain::RgbToRgb, ..manifest("rgb") },
+        loader: Arc::new(|_, _| Ok(Arc::new(Same) as Arc<dyn Model>)),
+        ..spec(path)
+    };
+    let junk_png = dir.join("junk.png");
+    std::fs::write(&junk_png, b"\x89PNG\r\n\x1a\nnot really").unwrap();
+    assert!(matches!(make_product(&rgb_spec(&junk_png), None), Err(MakeError::Unsupported(_))), "a damaged finished picture");
+    assert!(matches!(make_product(&rgb_spec(&good), None), Err(MakeError::Unsupported(_))), "a raw file is not a finished picture");
+    assert!(!dir.join("rgb.lcdn").exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -675,6 +698,7 @@ fn settings_are_checked_saved_and_a_paused_pump_starts_nothing() {
         x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
     }
     assert_eq!(x.s.denoise_photo_state(id), PhotoState::Idle);
+    assert!(!x.s.denoise_auto() && !x.s.denoise_busy());
     x.s.execute("denoise.settings", &json!({"auto": true})).unwrap();
     // paused: it is queued but nothing starts
     for _ in 0..3 {
@@ -687,56 +711,11 @@ fn settings_are_checked_saved_and_a_paused_pump_starts_nothing() {
     assert_eq!(x.s.denoise_photo_state(id), PhotoState::Idle);
     // when the pace allows, it is made
     x.s.execute("denoise.queue", &json!({"scope": "withAmount"})).unwrap();
-    pump_until_ready(&mut x.s, 1);
-    let _ = std::fs::remove_dir_all(&x.dir);
-}
-
-#[test]
-fn a_photo_whose_file_changed_has_no_picture_until_it_is_made_again() {
-    let mut x = setup("changed", true);
-    let id = photo(&x.s);
-    set_amount(&mut x.s, 100.0);
-    pump_until_ready(&mut x.s, 1);
-    // the photo's content is something else now (a replaced file): its old picture is not its picture
-    let p = x.s.catalog.photo(id).unwrap().clone();
-    x.s.commit(
-        "test",
-        lcc_catalog::Op::SetContent {
-            id,
-            width: p.width,
-            height: p.height,
-            file_size: p.file_size + 1,
-            content_hash: Some("ffffffffffffffffffffffffffffffff".into()),
-            preview_only: None,
-            preview_checked: String::new(),
-        },
-    )
-    .unwrap();
-    x.s.denoise_pump(crate::denoise::Pace::Pause);
-    assert_ne!(x.s.denoise_photo_state(id), PhotoState::Ready);
-    // the old picture is not used by a render either
-    assert_eq!(x.s.media.denoise_salt(id, &x.s.catalog.photo(id).unwrap().develop), 0);
-    let _ = std::fs::remove_dir_all(&x.dir);
-}
-
-#[test]
-fn a_photo_waits_for_its_turn_unless_pictures_are_not_made_on_their_own_or_have_nowhere_to_go() {
-    let mut x = setup("waits", true);
-    let id = photo(&x.s);
-    set_amount(&mut x.s, 80.0);
-    // automatic off: the open photo is left alone until it is asked for
-    x.s.execute("denoise.settings", &json!({"auto": false})).unwrap();
-    assert!(!x.s.denoise_auto());
-    x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
-    assert_eq!(x.s.denoise_photo_state(id), PhotoState::Idle);
-    assert!(!x.s.denoise_busy());
-    x.s.execute("denoise.queue", &json!({"ids": [id.0]})).unwrap();
     assert!(x.s.denoise_busy(), "queued with a model: the headless runs wait for it");
     pump_until_ready(&mut x.s, 1);
     assert_eq!(x.s.denoise_photo_state(id), PhotoState::Ready);
     assert!(!x.s.denoise_busy());
     // a session whose library is not on disk has nowhere to keep it: the photo says so instead of waiting for ever
-    x.s.denoise.settings.auto = Some(true);
     if let Some(l) = x.s.library.as_mut() {
         l.on_disk = false;
     }
@@ -1077,10 +1056,31 @@ fn a_cancelled_batch_does_not_come_back_while_its_job_winds_down() {
 
 /// Browsing a folder imports nothing: "AI Denoise from ISO N" makes no pictures for the photos browsed.
 #[test]
-fn browsing_a_folder_makes_no_ai_denoise_pictures() {
+fn ai_denoise_above_an_iso_is_switched_on_at_import_and_never_by_browsing() {
     let mut x = setup("browsedenoise", true);
     // (not made because it is looked at either: it is the open photo, and pictures are made on their own)
     x.s.execute("denoise.settings", &json!({"auto": true})).unwrap();
+    // "AI Denoise from ISO N" switches it on for new raw photos shot at that ISO or above (part of the look they start
+    // from), and leaves the others alone
+    let r = x.s.execute("library.preferences", &json!({"import": {"denoiseAboveIso": 3200}})).unwrap();
+    assert_eq!(r["import"]["denoiseAboveIso"], 3200);
+    assert!(x.s.execute("library.preferences", &json!({"import": {"denoiseAboveIso": 7}})).is_err());
+    let mut p = (**x.s.catalog.photo(photo(&x.s)).unwrap()).clone();
+    p.develop = std::sync::Arc::new(lcc_develop::DevelopSettings::default());
+    p.meta.iso = Some(6400);
+    crate::import::apply_import_defaults(&x.s, &mut p);
+    assert!(p.develop.enhance.denoise_enabled() && p.develop.enhance.denoise == 50.0);
+    assert!(p.import_look.as_ref().is_some_and(|l| l.enhance.denoise_enabled()), "where editing starts");
+    p.meta.iso = Some(800);
+    p.develop = std::sync::Arc::new(lcc_develop::DevelopSettings::default());
+    crate::import::apply_import_defaults(&x.s, &mut p);
+    assert!(!p.develop.enhance.denoise_enabled(), "below the ISO");
+    // off again
+    let r = x.s.execute("library.preferences", &json!({"import": {"denoiseAboveIso": 0}})).unwrap();
+    assert!(r["import"].get("denoiseAboveIso").is_none(), "{r}");
+    p.meta.iso = Some(25_600);
+    crate::import::apply_import_defaults(&x.s, &mut p);
+    assert!(!p.develop.enhance.denoise_enabled());
     x.s.execute("library.preferences", &json!({"import": {"denoiseAboveIso": 3200}})).unwrap();
     let folder = x.dir.join("browsed");
     std::fs::create_dir_all(&folder).unwrap();
@@ -1134,34 +1134,6 @@ fn an_import_larger_than_the_queue_makes_every_picture() {
     assert_eq!(x.s.execute("denoise.status", &json!({})).unwrap()["ready"], 2, "the cancelled photo isn't made");
     x.s.execute("denoise.queue", &json!({"ids": [last.0]})).unwrap();
     pump_until_ready(&mut x.s, 3);
-    drop(x.s);
-    let _ = std::fs::remove_dir_all(x.dir);
-}
-
-/// "AI Denoise from ISO N" at import switches it on for new raw photos shot at that ISO or above (part of
-/// the look they start from), and leaves the others alone.
-#[test]
-fn ai_denoise_above_an_iso_is_switched_on_at_import() {
-    let mut x = setup("importiso", true);
-    let r = x.s.execute("library.preferences", &json!({"import": {"denoiseAboveIso": 3200}})).unwrap();
-    assert_eq!(r["import"]["denoiseAboveIso"], 3200);
-    assert!(x.s.execute("library.preferences", &json!({"import": {"denoiseAboveIso": 7}})).is_err());
-    let mut p = (**x.s.catalog.photo(photo(&x.s)).unwrap()).clone();
-    p.develop = std::sync::Arc::new(lcc_develop::DevelopSettings::default());
-    p.meta.iso = Some(6400);
-    crate::import::apply_import_defaults(&x.s, &mut p);
-    assert!(p.develop.enhance.denoise_enabled() && p.develop.enhance.denoise == 50.0);
-    assert!(p.import_look.as_ref().is_some_and(|l| l.enhance.denoise_enabled()), "where editing starts");
-    p.meta.iso = Some(800);
-    p.develop = std::sync::Arc::new(lcc_develop::DevelopSettings::default());
-    crate::import::apply_import_defaults(&x.s, &mut p);
-    assert!(!p.develop.enhance.denoise_enabled(), "below the ISO");
-    // off again
-    let r = x.s.execute("library.preferences", &json!({"import": {"denoiseAboveIso": 0}})).unwrap();
-    assert!(r["import"].get("denoiseAboveIso").is_none(), "{r}");
-    p.meta.iso = Some(25_600);
-    crate::import::apply_import_defaults(&x.s, &mut p);
-    assert!(!p.develop.enhance.denoise_enabled());
     drop(x.s);
     let _ = std::fs::remove_dir_all(x.dir);
 }
@@ -1380,7 +1352,7 @@ fn a_finished_picture_has_a_model_of_its_own_and_its_amount_mixes_in_the_denoise
 }
 
 #[test]
-fn a_finished_pictures_denoised_picture_comes_back_in_the_plain_pictures_colours() {
+fn a_finished_pictures_denoised_picture_comes_back_in_the_plain_pictures_colours_and_on_white() {
     // with a model that changes nothing, Amount 100 must render the plain picture: the trip to sRGB for the model and
     // back to the working space for the render (and the product's half floats) lose nothing that shows
     let mut x = setup("finished-colour", false);
@@ -1398,28 +1370,20 @@ fn a_finished_pictures_denoised_picture_comes_back_in_the_plain_pictures_colours
     assert_eq!((plain.width, plain.height), (denoised.width, denoised.height));
     let worst = plain.data.iter().zip(&denoised.data).flat_map(|(a, b)| (0..3).map(move |c| a[c].abs_diff(b[c]))).max().unwrap();
     assert!(worst <= 2, "a model that changes nothing changed a pixel by {worst} levels");
-    let _ = std::fs::remove_dir_all(&x.dir);
-}
 
-#[test]
-fn a_transparent_finished_picture_is_denoised_on_white_as_it_is_shown() {
-    // the plain picture is flattened onto white: the denoised one must be too, or Amount 100 shows what lies under the
-    // transparency (black here)
-    let mut x = setup("finished-alpha", false);
+    // a transparent picture is flattened onto white when shown plain: the denoised one must be too, or Amount 100 shows
+    // what lies under the transparency (black here)
     let rgba = lcc_raster::Rgba8::from_fn(150, 100, |px, _| if px < 75 { [0, 0, 0, 0] } else { [90, 140, 60, 255] });
-    let id = import_png(&mut x, "half-clear.png", &rgba);
-    x.s.denoise.loader = Arc::new(|_, _| Ok(Arc::new(Same) as Arc<dyn Model>));
-    let onnx = rgb_model_files(&x.dir, "same");
-    x.s.execute("denoise.models.install", &json!({"path": onnx.to_string_lossy(), "acknowledged": true})).unwrap();
-    x.s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
-    let plain = x.s.render_now(id, 160, 160).unwrap().image;
+    let clear = import_png(&mut x, "half-clear.png", &rgba);
+    x.s.execute("library.select", &json!({"ids": [clear.0]})).unwrap();
+    let plain = x.s.render_now(clear, 160, 160).unwrap().image;
     assert!(plain.data[10][0] > 200, "the plain picture shows white where it is clear: {:?}", plain.data[10]);
-    x.s.execute("denoise.toggle", &json!({"id": id.0, "enabled": true})).unwrap();
+    x.s.execute("denoise.toggle", &json!({"id": clear.0, "enabled": true})).unwrap();
     set_amount(&mut x.s, 100.0);
-    pump_until_ready(&mut x.s, 1);
-    let denoised = x.s.render_now(id, 160, 160).unwrap().image;
+    pump_until_ready(&mut x.s, 2);
+    let denoised = x.s.render_now(clear, 160, 160).unwrap().image;
     let worst = plain.data.iter().zip(&denoised.data).flat_map(|(a, b)| (0..3).map(move |c| a[c].abs_diff(b[c]))).max().unwrap();
-    assert!(worst <= 2, "the denoised picture differs by {worst} levels");
+    assert!(worst <= 2, "the transparent picture's denoised twin differs by {worst} levels");
     let _ = std::fs::remove_dir_all(&x.dir);
 }
 
@@ -1440,32 +1404,4 @@ fn choosing_the_model_for_finished_pictures_leaves_the_raw_photos_queue_alone() 
     x.s.denoise_pump(crate::denoise::Pace::Pause);
     assert!(!matches!(x.s.denoise_photo_state(raw), PhotoState::Queued { .. }), "{:?}", x.s.denoise_photo_state(raw));
     let _ = std::fs::remove_dir_all(&x.dir);
-}
-
-#[test]
-fn a_damaged_finished_picture_fails_with_a_reason_and_never_a_panic() {
-    let dir = temp_dir("rgb-makefails");
-    std::fs::create_dir_all(&dir).unwrap();
-    let spec = |path: &Path| crate::denoise::JobSpec {
-        path: path.to_string_lossy().into_owned(),
-        read: None,
-        product: dir.join("p.lcdn"),
-        key: "k".into(),
-        manifest: DenoiserManifest { domain: Domain::RgbToRgb, ..manifest("rgb") },
-        onnx: dir.join("model.onnx"),
-        model: Default::default(),
-        loader: Arc::new(|_, _| Ok(Arc::new(Same) as Arc<dyn Model>)),
-        parallel: 2,
-        run_on: RunOn::Auto,
-    };
-    use crate::denoise::{MakeError, make_product};
-    let junk = dir.join("junk.png");
-    std::fs::write(&junk, b"\x89PNG\r\n\x1a\nnot really").unwrap();
-    assert!(matches!(make_product(&spec(&junk), None), Err(MakeError::Unsupported(_))));
-    // a raw file is not a finished picture
-    let raw = dir.join("ramp.dng");
-    std::fs::write(&raw, ramp_dng(64, 64, "RGGB")).unwrap();
-    assert!(matches!(make_product(&spec(&raw), None), Err(MakeError::Unsupported(_))));
-    assert!(!dir.join("p.lcdn").exists());
-    let _ = std::fs::remove_dir_all(&dir);
 }

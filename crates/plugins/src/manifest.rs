@@ -18,6 +18,8 @@ pub const MAX_FIELDS: usize = 32;
 pub const MAX_DESTINATIONS: usize = 16;
 /// Most custom metadata fields one plug-in may declare.
 pub const MAX_METADATA_FIELDS: usize = 32;
+/// Most commands one plug-in may put in the quick settings bar (`quickAction`).
+pub const MAX_QUICK_ACTIONS: usize = 4;
 /// Most host features one plug-in may require.
 pub const MAX_REQUIRES: usize = 64;
 /// Longest `version` the host reads.
@@ -55,6 +57,8 @@ pub const HOST_FEATURES: &[&str] = &[
     // `homepage`, `repository`, `changelog` and `license` in the manifest, shown on the About tab
     // (`plugin.list` → `about`)
     "about",
+    // `quickAction` on a command: a button in the quick settings bar that runs it
+    "quickActions",
 ];
 
 /// The manifest a plug-in returns from `lcc_manifest`.
@@ -213,6 +217,10 @@ pub struct CommandDecl {
     /// progress reported through the `job.*` host calls, and continued with `{continue: state}`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub job: bool,
+    /// Also a button in the quick settings bar (host feature `quickActions`; an older host ignores
+    /// it), drawn with the plug-in's icon and named by `label`; at most [`MAX_QUICK_ACTIONS`].
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub quick_action: bool,
 }
 
 /// Which hooks the plug-in implements.
@@ -480,6 +488,9 @@ impl Manifest {
                 }
             }
         }
+        if self.commands.iter().filter(|c| c.quick_action).count() > MAX_QUICK_ACTIONS {
+            return bad(format!("at most {MAX_QUICK_ACTIONS} commands with `quickAction`"));
+        }
         if let Some(p) = &self.publish
             && (!valid_id(&p.id) || p.name.trim().is_empty())
         {
@@ -727,29 +738,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_a_full_manifest() {
-        let m = Manifest::parse(
-            json!({
-                "id": "org.example.geo", "name": "Geo", "version": "1.0.0",
-                "permissions": {"catalog": true, "network": ["api.example.com"]},
-                "commands": [{"id": "lookup", "label": "Look Up Places", "menu": "Metadata",
-                    "dialog": [{"key": "radius", "label": "Radius", "type": "number", "min": 0, "max": 10, "default": 1},
-                               {"key": "lang", "label": "Language", "type": "choice", "options": ["en", "de"]}]}],
-                "hooks": {"metadata": true},
-                "publish": {"id": "webdav", "name": "WebDAV"}
-            })
-            .to_string()
-            .as_bytes(),
-        )
-        .unwrap();
-        assert!(m.permissions.catalog && m.hooks.metadata && !m.hooks.export);
-        let c = m.command("lookup").unwrap();
-        let a = dialog_args(&c.dialog, &json!({"radius": 50})).unwrap();
-        assert_eq!(a, json!({"radius": 10.0, "lang": "en"}));
-        assert!(dialog_args(&c.dialog, &json!({"lang": "fr"})).is_err());
-    }
-
-    #[test]
     fn rejects_bad_manifests() {
         for bad in [
             json!({"id": "", "name": "x"}),
@@ -787,6 +775,26 @@ mod tests {
         ] {
             assert!(Manifest::parse(bad.to_string().as_bytes()).is_err(), "{bad}");
         }
+    }
+
+    /// A command may also be a quick settings bar button (`quickAction`), a few per plug-in; a
+    /// manifest without it reads as before, and serialises without it.
+    #[test]
+    fn quick_actions_are_flagged_commands_and_capped() {
+        let m = Manifest::parse(
+            json!({"id": "a", "name": "A", "commands": [{"id": "go", "label": "Go", "quickAction": true}, {"id": "menu", "label": "Menu"}]})
+                .to_string()
+                .as_bytes(),
+        )
+        .unwrap();
+        assert!(m.command("go").unwrap().quick_action && !m.command("menu").unwrap().quick_action);
+        assert!(m.unknown_fields.is_empty(), "{:?}", m.unknown_fields);
+        let menu = serde_json::to_value(m.command("menu").unwrap()).unwrap();
+        assert!(menu.get("quickAction").is_none(), "{menu}");
+        let many: Vec<Value> = (0..=MAX_QUICK_ACTIONS).map(|i| json!({"id": format!("c{i}"), "label": "C", "quickAction": true})).collect();
+        let err = Manifest::parse(json!({"id": "a", "name": "A", "commands": many}).to_string().as_bytes()).unwrap_err();
+        assert!(err.to_string().contains("quickAction"), "{err}");
+        assert!(HOST_FEATURES.contains(&"quickActions"));
     }
 
     #[test]

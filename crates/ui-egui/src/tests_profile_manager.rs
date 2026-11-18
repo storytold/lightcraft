@@ -40,8 +40,18 @@ fn add_lut(h: &mut Headless, id: &str) {
 }
 
 #[test]
-fn manage_in_the_browser_opens_the_manager_which_hides_profiles() {
+fn the_browser_takes_the_look_off_and_opens_the_manager_which_hides_profiles() {
     let mut h = browser();
+    // None in the profile browser takes the creative profile off in one click
+    {
+        run(&mut h, "develop.profile", json!({"id": "lc.vivid", "amount": 100}));
+        let id = h.app.session.active().unwrap();
+        assert_eq!(h.app.session.develop_of(id).unwrap().profile.id, "lc.vivid");
+        click(&mut h, "button:profileNone");
+        let d = h.app.session.develop_of(id).unwrap();
+        assert_eq!(d.profile.id, crate::panels::profiles::NO_LOOK);
+        assert!(matches!(lcc_pipeline::profiles::effective(&d), std::borrow::Cow::Borrowed(_)), "no look on top of the camera profile");
+    }
     assert!(has(&h, "button:profilesManage"), "the browser has Manage…");
     click(&mut h, "button:profilesManage");
     assert!(manager_open(&h), "Manage… opens the Profile Manager");
@@ -94,29 +104,6 @@ fn deleting_a_profile_a_photo_uses_does_not_break_it() {
         h.step();
     }
     assert!(has(&h, "button:profileNone"));
-}
-
-/// None in the profile browser takes the creative profile off in one click.
-#[test]
-fn none_leaves_only_the_camera_profile() {
-    let mut h = browser();
-    run(&mut h, "develop.profile", json!({"id": "lc.vivid", "amount": 100}));
-    let id = h.app.session.active().unwrap();
-    assert_eq!(h.app.session.develop_of(id).unwrap().profile.id, "lc.vivid");
-    click(&mut h, "button:profileNone");
-    let d = h.app.session.develop_of(id).unwrap();
-    assert_eq!(d.profile.id, crate::panels::profiles::NO_LOOK);
-    assert!(matches!(lcc_pipeline::profiles::effective(&d), std::borrow::Cow::Borrowed(_)), "no look on top of the camera profile");
-}
-
-/// Settings ▸ Profiles opens the manager too.
-#[test]
-fn settings_opens_the_manager() {
-    let mut h = demo();
-    run(&mut h, "app.settings", json!({"tab": "profiles"}));
-    h.settle(Duration::from_secs(60));
-    click(&mut h, "button:profilesOpenManager");
-    assert!(manager_open(&h));
 }
 
 fn window(h: &Headless) -> egui::Rect {

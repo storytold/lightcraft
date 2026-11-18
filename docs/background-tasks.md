@@ -21,6 +21,9 @@ Where the tasks show depends on the layout:
   (`Tokens::radius`).
 - **Modern**: a floating card centred under the Library / Develop switch, three rows and "+N more"
   (`activity:more`).
+- **Full-screen preview** (`F`): a quiet card top right over the black, one task's name over a thin bar, several as
+  "N operations in progress…" over a bar each (`activity:fullscreen`, bars `activity:fullscreen:bar:<id>`), never during a
+  slideshow. The same stack's data drawn small — not a second progress system.
 
 The registry is `lcc_engine::activity` (`crates/engine/src/activity.rs`, `Session::activity`). The stack (every layout) is
 `crates/ui-egui/src/panels/activity.rs`; the module bar calls it from `crates/ui-egui/src/module.rs`. Every job that can last more than a moment uses it; **don't add a progress
@@ -75,6 +78,12 @@ guard.detail(&file_name);
     "Stop Waiting…", which shows `text` (translated, names in) and asks first. `activity.list` reports it as
     `stopWarning`, and `activity.cancel` and Quit Anyway still stop it at once. A job that stops between files
     loses nothing already done and needs none.
+- **Pause and settings:** a continuous job the user may want to hold (the face scan, search indexing) calls
+  `guard.set_controls(Some(Controls { paused, pause, resume, settings_tab, settings_section }))`: the engine commands
+  that pause and resume it, and the Settings page with its options. Its row then has a pause button (resume while
+  `paused`) and a gear (`activity:pause:<id>` / `activity:resume:<id>`, `activity:settings:<id>`); `activity.list`
+  reports them as `controls` and `activity.pause {id, paused?}` runs the same commands. Keep the row while paused, with
+  "Paused" as its detail, so resume is there.
 - **Quiet periodic work** shows no row: the auto-import folder listing runs every few seconds through
   `tasks::spawn(.., None, ..)`.
 
@@ -92,6 +101,8 @@ let photo = batch.child("denoise", "AI Denoise"); // the photo in progress, unde
 
 - **Counts:** `item_done` / `item_failed` count one photo each. A job that sets `progress(done, total)` itself counts
   a failure with `count_failed(why)` (it doesn't add to `done`).
+- **Why, while it runs:** `firstFailure` is the first reason given; the stack shows it when the pointer is over the
+  row's "failed" count.
 - **Time left:** `etaMs` comes from the time per photo measured since the first one was done (a slow start, such as
   loading a model, doesn't stretch it). The stack words it ("about 6 min left").
 - **Per-photo rows:** `child` (or `Activity::start_child(parent_id, ..)` from a worker that only has the id) puts a
@@ -106,13 +117,13 @@ let photo = batch.child("denoise", "AI Denoise"); // the photo in progress, unde
 | Job | Where | Shows how to |
 |---|---|---|
 | Export, contact sheet | `crates/ui-egui/src/export_task.rs` | adopt the job's flag; update the row each frame; an export is a batch that reports itself, its failures counted when it ends |
-| Build Previews | `crates/engine/src/cmd/previews.rs` | move the guard into the worker thread |
+| Build Previews | `crates/engine/src/cmd/previews.rs` | move the guard into the worker thread; a build asked for while another runs waits in `Session::preview_queue` and the next one starts (a fresh row) when the running build ends — `library.cancelPreviews` stops the running one and drops the waiting ones |
 | Preparing photos in the background | `crates/engine/src/prep.rs`, `crates/engine/src/cmd/previews.rs` | a background build in one row ("Preparing photos in the background") whose ✕ sets the build's flag; it waits while the photo on screen is being made and says "Paused while exporting" in its detail while the user's own work runs (`Activity::user_work`); a build asked for replaces it |
 | Slideshow export | `crates/engine/src/cmd/slideshow.rs`, `crates/engine/src/slideshow_export.rs` | an engine command that owns its worker and row; progress from the worker through a `TaskHandle`; results read back by command |
 | Folder metadata save / read | `crates/engine/src/cmd/folder_metadata.rs` | a job that needs the session, so a per-frame pump (`folder.metadataPump`) does a few photos at a time and the row's flag stops it |
 | Model downloads | `crates/engine/src/face_download.rs` | report progress through a `TaskHandle` in shared state |
 | Lightroom catalog import | `crates/ui-egui/src/lightroom_import.rs` | stop being cancellable for a phase that must finish |
-| Face scan | `crates/engine/src/cmd/face_recognize.rs` | a continuous job with no ✕, kept in session state |
+| Face scan | `crates/engine/src/cmd/face_recognize.rs` | a continuous job with no ✕, kept in session state; pause / resume and a gear (`set_controls`), the row kept while paused |
 | Filling spots | `crates/ui-egui/src/render.rs` (`Renderer::track_fills`) | a row held while a render that solves a content-aware fill is out, with no ✕ (`Cancel::No`); solved fills are cached, so it shows for a new fill only |
 | AI Denoise | `crates/engine/src/denoise.rs` (`denoise_track`) | a continuous queue shown as a batch while busy (photos counted since it was last idle), the running photo's tiles as its child; ✕ empties the queue and holds those photos until asked for again |
 | Find Missing Photos | `crates/ui-egui/src/tasks.rs` | a generic background task with a row (`kind: Some(..)`) |

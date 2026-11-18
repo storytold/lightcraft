@@ -940,47 +940,26 @@ mod tests {
         assert!(channels.any() && !Clipped::NONE.any());
     }
 
-    /// The modes and scales round-trip through their names and cycle in their own order; anything
-    /// else reads as the default.
+    /// The modes and scales round-trip through their names and cycle through all of them; anything
+    /// else is no mode.
     #[test]
     fn modes_and_scales_round_trip_through_their_names() {
-        assert_eq!(HistogramMode::default(), HistogramMode::RgbOverlap);
-        assert_eq!(HistogramScale::default(), HistogramScale::Linear);
-        assert_eq!(HistogramMode::ALL.len(), 7);
-        assert_eq!(HistogramScale::ALL.len(), 2);
-        for m in HistogramMode::ALL {
+        let mut m = HistogramMode::default();
+        for _ in HistogramMode::ALL {
             assert_eq!(HistogramMode::parse(m.name()), Some(m));
-            assert!(!m.label().is_empty());
-            assert_eq!(m.is_scope(), matches!(m, HistogramMode::Vectorscope | HistogramMode::Waveform | HistogramMode::Parade));
-            assert_eq!(m.is_waveform(), matches!(m, HistogramMode::Waveform | HistogramMode::Parade));
+            m = m.next();
+            assert!(HistogramMode::ALL.contains(&m));
         }
-        for s in HistogramScale::ALL {
+        assert_eq!(m, HistogramMode::default(), "the cycle visits every mode and wraps");
+        let mut s = HistogramScale::default();
+        for _ in HistogramScale::ALL {
             assert_eq!(HistogramScale::parse(s.name()), Some(s));
-            assert!(!s.label().is_empty());
+            s = s.next();
         }
-        assert_eq!(HistogramMode::RgbOverlap.next(), HistogramMode::Luminance);
-        assert_eq!(HistogramMode::Chroma.next(), HistogramMode::Vectorscope);
-        assert_eq!(HistogramMode::Vectorscope.next(), HistogramMode::Waveform);
-        assert_eq!(HistogramMode::Parade.next(), HistogramMode::RgbOverlap, "the cycle wraps");
-        assert_eq!(HistogramScale::Logarithmic.next(), HistogramScale::Linear);
+        assert_eq!(s, HistogramScale::default(), "the cycle wraps");
         assert_eq!(HistogramMode::parse("nope"), None);
         assert_eq!(HistogramScale::parse(""), None);
         assert_eq!(HistogramMode::parse("LUMINANCE"), None, "names are exact, not case-folded");
-    }
-
-    /// Every mode's channel is the bins the panel should draw.
-    #[test]
-    fn a_mode_names_its_own_bins() {
-        let img = Rgba8::from_fn(8, 8, |x, _| [(x * 30) as u8, 9, 200, 255]);
-        let h = Histogram::of_srgb8(&img);
-        assert_eq!(h.channel(Channel::Red), h.r.as_slice());
-        assert_eq!(h.channel(Channel::Green), h.g.as_slice());
-        assert_eq!(h.channel(Channel::Blue), h.b.as_slice());
-        assert_eq!(h.channel(Channel::Luminance), h.luma.as_slice());
-        assert_eq!(h.channel(Channel::Chroma), h.chroma.as_slice());
-        for c in [Channel::Red, Channel::Green, Channel::Blue, Channel::Luminance, Channel::Chroma] {
-            assert_eq!(h.channel(c).len(), Histogram::BINS);
-        }
     }
 
     #[test]

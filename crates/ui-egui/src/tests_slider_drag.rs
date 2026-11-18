@@ -52,7 +52,7 @@ fn spec() -> lcc_develop::ControlSpec {
 }
 
 #[test]
-fn past_the_end_the_thumb_waits_for_the_pointer() {
+fn the_thumb_stays_under_the_pointer_past_the_end_off_centre_and_lags_with_acceleration() {
     let mut h = develop();
     let r = track(&h);
     let s = spec();
@@ -70,13 +70,7 @@ fn past_the_end_the_thumb_waits_for_the_pointer() {
     h.settle(SETTLE);
     let want = s.value_at(0.25);
     assert!((blacks(&h) - want).abs() <= s.step.max(1.0), "under the pointer: {} (want {want})", blacks(&h));
-}
-
-#[test]
-fn a_thumb_grabbed_off_centre_moves_with_the_pointer_without_jumping() {
-    let mut h = develop();
-    let r = track(&h);
-    let s = spec();
+    // a thumb grabbed off-centre moves with the pointer without jumping
     let before = blacks(&h);
     let centre = r.left() + s.position(before) as f32 * r.width();
     let grab = egui::pos2(centre + 4.0, r.center().y);
@@ -88,15 +82,9 @@ fn a_thumb_grabbed_off_centre_moves_with_the_pointer_without_jumping() {
     h.settle(SETTLE);
     let want = s.value_at(s.position(before) + 0.2);
     assert!((blacks(&h) - want).abs() <= s.step.max(1.0), "moved with the pointer: {} (want {want})", blacks(&h));
-}
-
-#[test]
-fn with_acceleration_on_the_slider_a_slow_drag_moves_the_thumb_less_than_the_pointer() {
-    let mut h = develop();
+    // with acceleration on the slider, a slow drag moves the thumb less than the pointer
     h.app.ui.settings.slider_control = crate::theme::SliderControl::AccelSlider;
     h.step();
-    let r = track(&h);
-    let s = spec();
     let before = blacks(&h);
     let thumb = egui::pos2(r.left() + s.position(before) as f32 * r.width(), r.center().y);
     send(&mut h, egui::Event::PointerMoved(thumb));

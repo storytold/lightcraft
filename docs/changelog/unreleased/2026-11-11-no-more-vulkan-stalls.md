@@ -1,3 +1,0 @@
-## Performance
-
-- **No more Vulkan driver stalls at 100 % zoom:** every GPU render created new upload and readback staging buffers, and NVIDIA's Vulkan driver holds a process-wide lock for 80-250 ms on each allocation or free, so drags at 100 % stuttered on Vulkan (22-28 frames over 100 ms in 9 drags) but not on DX12. Staging buffers are now reused from pools, each card's pool may hold up to a third of its own memory while it works (the idle trim still empties it), and every failure path falls back to the old behaviour: nine drags at 100 % stay under 100 ms after the first (worst 36 ms, was 576 ms). Thanks @OneSlips. PR #1062.

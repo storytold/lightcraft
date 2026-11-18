@@ -203,8 +203,9 @@ fn media_box(pdf: &[u8]) -> (f64, f64) {
     (nums[2], nums[3])
 }
 
-fn temp_pdf(name: &str) -> String {
-    std::env::temp_dir().join(format!("app-print-{name}-{}.pdf", std::process::id())).to_string_lossy().to_string()
+/// `<name>.pdf` in a Temp folder of its own, removed when the returned guard is dropped.
+fn temp_pdf(name: &str) -> lcc_testkit::TempFile {
+    lcc_testkit::TempFile::new(&format!("app-print-pdf-{name}"), &format!("{name}.pdf"))
 }
 
 #[test]
@@ -214,43 +215,44 @@ fn export_pdf_prints_the_current_settings() {
     run(
         &mut s,
         "print.set",
-        json!({"layout": {"style": "contactSheet", "grid": {"columns": 1, "rows": 2}, "page": {"paper": "a5"}}, "job": {"ppi": 100.0}}),
+        json!({"layout": {"style": "contactSheet", "grid": {"columns": 1, "rows": 2}, "page": {"paper": "a5"}}, "job": {"ppi": 72.0}}),
     );
     let path = temp_pdf("export");
-    let r = run(&mut s, "print.exportPdf", json!({"path": path, "ids": ids}));
+    let r = run(&mut s, "print.exportPdf", json!({"path": path.path(), "ids": ids}));
     assert_eq!((r["pages"].as_u64(), r["photos"].as_u64()), (Some(2), Some(3)));
     let bytes = std::fs::read(&path).unwrap();
     assert_eq!(bytes.len() as u64, r["bytes"].as_u64().unwrap());
     let text = String::from_utf8_lossy(&bytes);
     assert!(text.starts_with("%PDF-") && text.contains("/Count 2"));
-    // A5 is 148 x 210 mm = 419.53 x 595.28 pt, rounded to whole pixels at 100 ppi (583 x 827)
+    // A5 is 148 x 210 mm = 419.53 x 595.28 pt, rounded to whole pixels at 72 ppi (small cells:
+    // the photos render from their thumbnail-sized sources)
     let (w, h) = media_box(&bytes);
     assert!((w - 419.53).abs() < 1.0 && (h - 595.28).abs() < 1.0, "A5, got {w} x {h} pt");
     // the row in the activity stack is gone when the print is done
     assert!(s.activity.list().is_empty());
     fails(&mut s, "print.exportPdf", json!({}));
-    fails(&mut s, "print.exportPdf", json!({"path": path, "typo": 1}));
-    fails(&mut s, "print.exportPdf", json!({"path": path, "ids": ["x"]}));
-    fails(&mut s, "print.exportPdf", json!({"path": path, "ids": [999_999]}));
+    fails(&mut s, "print.exportPdf", json!({"path": path.path(), "typo": 1}));
+    fails(&mut s, "print.exportPdf", json!({"path": path.path(), "ids": ["x"]}));
+    fails(&mut s, "print.exportPdf", json!({"path": path.path(), "ids": [999_999]}));
     // a package with no cells has nothing to print
     run(&mut s, "print.set", json!({"layout": {"style": "picturePackage"}}));
-    fails(&mut s, "print.exportPdf", json!({"path": path, "ids": ids}));
+    fails(&mut s, "print.exportPdf", json!({"path": path.path(), "ids": ids}));
 }
 
 /// The Japanese photo and postcard papers reach the PDF page at their metric sizes: はがき is
-/// 100 × 148 mm (283.46 × 419.53 pt) and L is 89 × 127 mm (252.28 × 359.99 pt). 254 ppi is exactly
-/// ten pixels per millimetre, so the page pixels are whole millimetres and the MediaBox is exact.
+/// 100 × 148 mm (283.46 × 419.53 pt) and L is 89 × 127 mm (252.28 × 359.99 pt). At 72 ppi a pixel
+/// is a point, so the MediaBox is the size rounded to whole points (and the page renders small).
 #[test]
 fn export_pdf_uses_the_japanese_paper_sizes() {
     let mut s = Session::with_demo();
     let id = s.catalog.photos().next().map(|p| p.id.0).unwrap();
     for (paper, w_pt, h_pt) in [("postcard", 283.46, 419.53), ("はがき", 283.46, 419.53), ("l", 252.28, 359.99)] {
-        run(&mut s, "print.set", json!({"layout": {"style": "singleImage", "page": {"paper": paper}}, "job": {"ppi": 254.0}}));
+        run(&mut s, "print.set", json!({"layout": {"style": "singleImage", "page": {"paper": paper}}, "job": {"ppi": 72.0}}));
         let path = temp_pdf(paper);
-        run(&mut s, "print.exportPdf", json!({"path": path, "ids": [id]}));
+        run(&mut s, "print.exportPdf", json!({"path": path.path(), "ids": [id]}));
         let bytes = std::fs::read(&path).unwrap();
         let (w, h) = media_box(&bytes);
-        assert!((w - w_pt).abs() < 0.1 && (h - h_pt).abs() < 0.1, "{paper}: {w} x {h} pt, wanted {w_pt} x {h_pt}");
+        assert!((w - w_pt).abs() < 0.6 && (h - h_pt).abs() < 0.6, "{paper}: {w} x {h} pt, wanted {w_pt} x {h_pt}");
     }
     // The customary names are accepted and the page size follows them; an unknown name is refused.
     let g = run(&mut s, "print.set", json!({"layout": {"page": {"paper": "はがき"}}}));
@@ -263,8 +265,7 @@ fn export_pdf_uses_the_japanese_paper_sizes() {
 fn export_pdf_with_a_printer_profile() {
     let mut s = Session::with_demo();
     let ids: Vec<u64> = s.catalog.photos().take(1).map(|p| p.id.0).collect();
-    let dir = std::env::temp_dir().join(format!("app-print-icc-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = lcc_testkit::TempDir::new("app-print-icc");
     let icc = dir.join("Fine Art Matte.icc");
     std::fs::write(&icc, lcc_codecs::icc::write_named(lcc_codecs::NamedSpace::AdobeRgb)).unwrap();
     let color = json!({"profile": {"kind": "icc", "path": icc}, "intent": "relative", "sharpen": "high", "media": "matte", "brightness": 10});
@@ -275,13 +276,13 @@ fn export_pdf_with_a_printer_profile() {
     );
     assert_eq!(run(&mut s, "print.get", json!({}))["settings"]["job"]["color"]["media"], "matte");
     let path = temp_pdf("icc");
-    run(&mut s, "print.exportPdf", json!({"path": path, "ids": ids}));
+    run(&mut s, "print.exportPdf", json!({"path": path.path(), "ids": ids}));
     let text = String::from_utf8_lossy(&std::fs::read(&path).unwrap()).into_owned();
     assert!(text.contains("/OutputIntents") && text.contains("/ICCBased") && text.contains("/BitsPerComponent 16"));
     // out-of-range adjustments are refused when set; a missing profile fails before rendering
     fails(&mut s, "print.set", json!({"job": {"color": {"contrast": 150}}}));
     run(&mut s, "print.set", json!({"job": {"color": {"profile": {"kind": "icc", "path": dir.join("gone.icc")}}}}));
-    let err = fails(&mut s, "print.exportPdf", json!({"path": path, "ids": ids}));
+    let err = fails(&mut s, "print.exportPdf", json!({"path": path.path(), "ids": ids}));
     assert!(err.contains("gone.icc"), "{err}");
     assert!(s.activity.list().is_empty(), "nothing started");
 }
@@ -295,7 +296,8 @@ fn custom_package_prints_each_cells_photo() {
     let b = run(&mut s, "print.cell.add", json!({"width": 3.0, "height": 2.0}))["id"].as_u64().unwrap();
     run(&mut s, "print.cell.photo", json!({"id": a, "photo": ids[0]}));
     run(&mut s, "print.cell.photo", json!({"id": b, "photo": ids[1]}));
-    let r = run(&mut s, "print.exportPdf", json!({"path": temp_pdf("custom"), "ids": [ids[0]]}));
+    let pdf = temp_pdf("custom");
+    let r = run(&mut s, "print.exportPdf", json!({"path": pdf.path(), "ids": [ids[0]]}));
     assert_eq!(r["pages"], 1);
 }
 

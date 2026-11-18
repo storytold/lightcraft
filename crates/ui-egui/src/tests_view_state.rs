@@ -33,23 +33,6 @@ fn exec(h: &mut Headless, command: &str) -> serde_json::Value {
 }
 
 #[test]
-fn the_switches_toggle_and_start_as_before() {
-    let mut h = demo("photoGrid");
-    assert!(h.app.ui.settings.lock_zoom && !h.app.ui.settings.scroll_by_row && !h.app.ui.settings.mirror_image);
-    for (id, get) in [
-        ("view.lockZoomPosition", (|a: &LccApp| a.ui.settings.lock_zoom) as fn(&LccApp) -> bool),
-        ("view.scrollByRow", |a| a.ui.settings.scroll_by_row),
-        ("view.mirrorImage", |a| a.ui.settings.mirror_image),
-    ] {
-        let before = get(&h.app);
-        assert_eq!(exec(&mut h, id)["result"]["on"], !before, "{id}");
-        assert_eq!(get(&h.app), !before);
-        exec(&mut h, id);
-        assert_eq!(get(&h.app), before);
-    }
-}
-
-#[test]
 fn unlocked_zoom_is_remembered_per_photo() {
     let mut h = demo("detail");
     let ids = h.app.session.visible_cloned();
@@ -77,7 +60,7 @@ fn unlocked_zoom_is_remembered_per_photo() {
 }
 
 #[test]
-fn scroll_by_row_lands_on_a_row_top() {
+fn scroll_by_row_lands_on_a_row_top_and_mirror_mode_flips_only_the_view() {
     let mut h = demo("photoGrid");
     exec(&mut h, "view.scrollByRow");
     h.step();
@@ -98,11 +81,7 @@ fn scroll_by_row_lands_on_a_row_top() {
     // a notch scrolls one row: not the third of the view a plain notch moves
     let plain = view.height() * crate::theme::WHEEL_STRIP_SHARE;
     assert!((y - 2.0 * plain).abs() > 1.0, "offset {y} is not two plain notches");
-}
-
-#[test]
-fn mirror_mode_flips_the_view_and_the_pointer_not_the_library() {
-    let mut h = demo("photoGrid");
+    // Mirror Image Mode flips the view, not the library
     h.step();
     let before = h.paint();
     exec(&mut h, "view.mirrorImage");

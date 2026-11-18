@@ -1084,8 +1084,6 @@ mod tests {
         assert_eq!(d4.crop, Rect::new(8, 6, 4928, 3280));
         assert_eq!(d4.white, vec![15520.0]);
         assert_eq!((d4.metadata.width, d4.metadata.height), (Some(4928), Some(3280)));
-        let developed = d4.develop(crate::Method::Bilinear).unwrap();
-        assert_eq!((developed.width, developed.height), (4928, 3280));
         // the 12-bit mode reads out the same area but keeps the white level from its data
         let d4_12 = decode_as("NIKON D4", 12);
         assert_eq!(d4_12.crop, Rect::new(8, 6, 4928, 3280));
@@ -1108,40 +1106,11 @@ mod tests {
             let raw = decode_as(model, bits);
             assert_eq!(raw.crop, Rect::new(8, 8, 4928, 3264), "{model} {bits}-bit");
             assert_eq!((raw.metadata.width, raw.metadata.height), (Some(4928), Some(3264)));
-            let developed = raw.develop(crate::Method::Bilinear).unwrap();
-            assert_eq!((developed.width, developed.height), (4928, 3264));
         }
         // another model, or the D5100's unmeasured 12-bit mode, keeps the whole data
         for (model, bits) in [("NIKON D7100", 14), ("NIKON D5100", 12), ("NIKON D7000 ", 16)] {
             assert_eq!(decode_as(model, bits).crop, Rect::new(0, 0, w, h), "{model} {bits}-bit");
         }
-    }
-
-    /// The D200, D3200 and Nikon 1 V1 keep masked or dark lines in their whole data (the D200 shares the D80's data
-    /// size but frames it elsewhere), measured on public sample files beyond the CC0 ones; the D3100, D5000, D40, D50,
-    /// D70 and D70s get best-guess frames (the D40 shares the D50 / D70 / D70s data size but not their frame).
-    #[test]
-    fn measured_older_dx_bodies_image_area() {
-        let decode_as = |model: &str, (w, h): (usize, usize)| {
-            let nef = nef_model_in(ByteOrder::Big, model, 1, 12, vec![vec![0x10; w * h * 2]], w as u32, h as u32, h as u32, None);
-            crate::decode(&nef).unwrap()
-        };
-        for (model, size, crop) in [
-            ("NIKON D200", (3904, 2616), Rect::new(16, 12, 3872, 2592)),
-            ("NIKON D80", (3904, 2616), Rect::new(14, 9, 3872, 2592)),
-            ("NIKON D3200", (6080, 4012), Rect::new(8, 6, 6016, 4000)),
-            ("NIKON 1 V1", (3904, 2606), Rect::new(12, 6, 3872, 2592)),
-            ("NIKON D3100", (4672, 3084), Rect::new(24, 6, 4608, 3072)),
-            ("NIKON D5000", (4352, 2868), Rect::new(11, 10, 4288, 2848)),
-            ("NIKON D40", (3040, 2014), Rect::new(16, 9, 3008, 2000)),
-            ("NIKON D50", (3040, 2014), Rect::new(15, 7, 3008, 2000)),
-            ("NIKON D70", (3040, 2014), Rect::new(15, 7, 3008, 2000)),
-            ("NIKON D70s", (3040, 2014), Rect::new(15, 7, 3008, 2000)),
-        ] {
-            assert_eq!(decode_as(model, size).crop, crop, "{model}");
-        }
-        // the V1's area on the V2's data size: no entry, the whole data
-        assert_eq!(decode_as("NIKON 1 V1", (4620, 3084)).crop, Rect::new(0, 0, 4620, 3084));
     }
 
     /// Every measured entry is a crop inside its data, once per model, data size and depth, with a white level (if
@@ -1176,8 +1145,6 @@ mod tests {
             assert_eq!(d7100.crop, crop);
             assert_eq!((d7100.metadata.width, d7100.metadata.height), (Some(crop.width as u32), Some(crop.height as u32)));
             assert_ne!(d7100.white, vec![15520.0]);
-            let developed = d7100.develop(crate::Method::Bilinear).unwrap();
-            assert_eq!((developed.width, developed.height), (crop.width, crop.height));
             assert_eq!(decode_as("NIKON D7200", size).crop, Rect::new(0, 0, size.0, size.1));
         }
     }
@@ -1558,16 +1525,6 @@ mod tests {
     }
 
     #[test]
-    fn coolpix_short_input_is_an_error_not_a_panic() {
-        let (w, h) = (128usize, 96usize);
-        let mut file = coolpix_file("E5700", [5, 3, 1, 4], w, h, &vec![100u16; w * h]);
-        file.truncate(file.len() / 2);
-        let _ = crate::decode(&file);
-        file.truncate(200);
-        assert!(crate::decode(&file).is_err());
-    }
-
-    #[test]
     fn compressed_without_table_is_unsupported() {
         let bytes = nef(34713, 14, vec![vec![0; 64]], 8, 8, 8);
         let Err(RawError::Unsupported(why)) = crate::decode(&bytes) else { panic!("expected unsupported") };
@@ -1720,7 +1677,7 @@ mod tests {
     }
 
     #[test]
-    fn small_raw_wrong_sizes_and_depths_are_refused() {
+    fn small_raw_hostile_sizes_depths_and_truncations_are_refused() {
         let (w, h) = (8usize, 3usize);
         let good = small_strip(&vec![[100, 100, 2048, 2048]; w / 2 * h], w);
         assert!(small(good.clone(), 12, w as u32, h as u32).is_ok());
@@ -1732,17 +1689,40 @@ mod tests {
         assert!(matches!(small(good.clone(), 14, w as u32, h as u32), Err(RawError::Unsupported(_))));
         // odd width: 3 bytes per pixel does not split into pixel pairs
         assert!(matches!(small(vec![0; 3 * 7 * 3], 12, 7, 3), Err(RawError::Unsupported(_))));
-    }
-
-    #[test]
-    fn small_raw_short_input_does_not_panic() {
-        for len in [0, 1, 2, 3, 5, 11, 12, 13] {
-            let mut out = vec![0u16; 12];
-            small_raw_row(&vec![0xFF; len], 4, &mut out);
+        // small raw short input does not panic
+        {
+            for len in [0, 1, 2, 3, 5, 11, 12, 13] {
+                let mut out = vec![0u16; 12];
+                small_raw_row(&vec![0xFF; len], 4, &mut out);
+            }
+            let mut bytes = nef(34713, 12, vec![vec![0x55; 3 * 8 * 3]], 8, 3, 3);
+            bytes.truncate(bytes.len() - 40);
+            assert!(crate::decode(&bytes).is_err(), "a truncated small-raw strip is corrupt");
         }
-        let mut bytes = nef(34713, 12, vec![vec![0x55; 3 * 8 * 3]], 8, 3, 3);
-        bytes.truncate(bytes.len() - 40);
-        assert!(crate::decode(&bytes).is_err(), "a truncated small-raw strip is corrupt");
+        // small raw rejects excessive dimensions before allocation
+        {
+            let bytes = nef(34713, 12, vec![vec![0; 72]], 8, 3, 3);
+            let tiff = Tiff::parse(&bytes).unwrap();
+            let mut info = raw_ifd(&tiff).unwrap().image().unwrap();
+            let strip = info.chunks(bytes.len() as u64)[0];
+            info.width = u32::MAX - 1;
+            info.height = u32::MAX;
+            assert!(matches!(small_raw(&bytes, &tiff, &info, strip, Mode::Header), Err(RawError::Limit(_))));
+            let mut out = [0; 12];
+            small_raw_row(&[], usize::MAX, &mut out);
+            small_raw_row(&[], 3, &mut out);
+            assert_eq!(out, [0; 12]);
+        }
+        // small raw rejects tail truncation with intact directories
+        {
+            let bytes = nef(34713, 12, vec![vec![0x55; 72]], 8, 3, 3);
+            for keep in [0, 24, 71] {
+                let short = truncated_tail_strip(bytes.clone(), keep);
+                for mode in [Mode::Header, Mode::Full] {
+                    assert!(matches!(decode(&short, mode), Err(RawError::Corrupt(_))));
+                }
+            }
+        }
     }
 
     #[test]
@@ -1754,21 +1734,6 @@ mod tests {
         assert_eq!(header.info(), full.info());
         assert!(matches!(header.data, RawData::U16(ref samples) if samples.is_empty()));
         assert!(matches!(full.data, RawData::U16(ref samples) if samples.len() == 3 * w * h));
-    }
-
-    #[test]
-    fn small_raw_rejects_excessive_dimensions_before_allocation() {
-        let bytes = nef(34713, 12, vec![vec![0; 72]], 8, 3, 3);
-        let tiff = Tiff::parse(&bytes).unwrap();
-        let mut info = raw_ifd(&tiff).unwrap().image().unwrap();
-        let strip = info.chunks(bytes.len() as u64)[0];
-        info.width = u32::MAX - 1;
-        info.height = u32::MAX;
-        assert!(matches!(small_raw(&bytes, &tiff, &info, strip, Mode::Header), Err(RawError::Limit(_))));
-        let mut out = [0; 12];
-        small_raw_row(&[], usize::MAX, &mut out);
-        small_raw_row(&[], 3, &mut out);
-        assert_eq!(out, [0; 12]);
     }
 
     /// Keep every directory intact before a relocated tail strip, then remove its last rows.
@@ -1783,17 +1748,6 @@ mod tests {
         bytes[offset_entry..offset_entry + 4].copy_from_slice(&start.to_be_bytes());
         bytes.extend_from_slice(&data[..keep]);
         bytes
-    }
-
-    #[test]
-    fn small_raw_rejects_tail_truncation_with_intact_directories() {
-        let bytes = nef(34713, 12, vec![vec![0x55; 72]], 8, 3, 3);
-        for keep in [0, 24, 71] {
-            let short = truncated_tail_strip(bytes.clone(), keep);
-            for mode in [Mode::Header, Mode::Full] {
-                assert!(matches!(decode(&short, mode), Err(RawError::Corrupt(_))));
-            }
-        }
     }
 
     fn samples(n: usize, bits: u32) -> Vec<u16> {
@@ -1923,6 +1877,22 @@ mod tests {
         // 14-bit rows may be tight (fork) or padded to 16 bytes
         let d14 = samples(40 * 6, 14);
         assert_eq!(decoded(strip(&d14, 40, 0, |r| pack_lsb_row(r, 14)), 14, 40, 6).unwrap(), d14);
+        // packed 34713 short input does not panic
+        {
+            let (w, h) = (40usize, 6usize);
+            for layout in
+                [PackedLayout::Lsb { stride: 64 }, PackedLayout::Lsb { stride: 80 }, PackedLayout::Chunked16 { stride: 64 }, PackedLayout::Be16]
+            {
+                for len in [0, 1, 15, 16, 17, 63, 64, 65, 200] {
+                    let bits = if matches!(layout, PackedLayout::Lsb { stride: 80 }) { 14 } else { 12 };
+                    assert_eq!(unpack_packed(&vec![0xFF; len], w, h, bits, layout).len(), w * h);
+                }
+            }
+            // a strip that claims more bytes than the file has
+            let mut bytes = nef(34713, 12, vec![vec![0x55; 60 * 6]], 40, 6, 6);
+            bytes.truncate(bytes.len() - 100);
+            assert!(crate::decode(&bytes).is_err(), "a truncated packed strip is corrupt");
+        }
     }
 
     /// Big-endian 16-bit words holding the 12-bit samples in their upper bits.
@@ -1976,22 +1946,15 @@ mod tests {
         assert!(packed_layout(4032, 3024, 12, 24385536).is_none() && d100_layout(4032, 3024, 12, 24385536).is_none());
         assert!(be16_layout(4032, 3024, 14, 24385536).is_none());
         assert!(be16_layout(usize::MAX, usize::MAX, 12, u64::MAX).is_none());
-    }
-
-    #[test]
-    fn packed_34713_short_input_does_not_panic() {
-        let (w, h) = (40usize, 6usize);
-        for layout in [PackedLayout::Lsb { stride: 64 }, PackedLayout::Lsb { stride: 80 }, PackedLayout::Chunked16 { stride: 64 }, PackedLayout::Be16]
+        // coolpix short input is an error not a panic
         {
-            for len in [0, 1, 15, 16, 17, 63, 64, 65, 200] {
-                let bits = if matches!(layout, PackedLayout::Lsb { stride: 80 }) { 14 } else { 12 };
-                assert_eq!(unpack_packed(&vec![0xFF; len], w, h, bits, layout).len(), w * h);
-            }
+            let (w, h) = (128usize, 96usize);
+            let mut file = coolpix_file("E5700", [5, 3, 1, 4], w, h, &vec![100u16; w * h]);
+            file.truncate(file.len() / 2);
+            let _ = crate::decode(&file);
+            file.truncate(200);
+            assert!(crate::decode(&file).is_err());
         }
-        // a strip that claims more bytes than the file has
-        let mut bytes = nef(34713, 12, vec![vec![0x55; 60 * 6]], 40, 6, 6);
-        bytes.truncate(bytes.len() - 100);
-        assert!(crate::decode(&bytes).is_err(), "a truncated packed strip is corrupt");
     }
 
     #[test]

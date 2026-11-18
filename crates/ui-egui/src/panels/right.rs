@@ -740,10 +740,83 @@ fn mode_segmented_bar(ui: &mut egui::Ui, id: &str, active_key: &str) -> Option<&
     chosen
 }
 
+/// Makes (or remakes) the film-dust mask from the infrared pass at the develop settings' sensitivity and expand.
+fn film_dust_mask(app: &mut LccApp, ctx: &egui::Context, d: &lcc_develop::DevelopSettings) {
+    if let Err(e) = app.run("spot.filmDustMask", json!({"sensitivity": d.film_dust.sensitivity, "expand": d.film_dust.expand})) {
+        app.toast(ctx, e);
+    }
+}
+
+/// The Remove panel's Infrared Dust Removal, on a photo with a scanner's infrared pass: one
+/// switch (the develop step), what the photo shows (the photo, the infrared pass, or the marks
+/// that are filled), the two settings, and the marks as a mask for the brush and generative fill.
+fn infrared_dust(app: &mut LccApp, ui: &mut egui::Ui, d: &lcc_develop::DevelopSettings) {
+    let t = Tokens::get(ui.ctx());
+    padded(ui, |ui| {
+        ui.horizontal(|ui| {
+            let mut on = d.film_dust.on();
+            let r = ui.checkbox(&mut on, egui::RichText::new(crate::i18n::tr("Infrared Dust Removal")).strong()).on_hover_text(crate::i18n::tr(
+                "Fill in the dust, hairs and scratches the scanner's infrared pass shows, before the picture is converted (as the scanner's own infrared cleaning does)",
+            ));
+            register(ui.ctx(), "checkbox:filmDustRemove", r.rect);
+            if r.changed() {
+                let _ = app.run("develop.set", json!({"control": "filmDust.remove", "value": if on { 1.0 } else { 0.0 }}));
+            }
+        });
+        ui.label(
+            egui::RichText::new(crate::i18n::tr(
+                "Dust, hairs and scratches block infrared light. Check the Infrared or Mask view, then switch it on.",
+            ))
+            .size(11.0)
+            .color(t.text_dim),
+        );
+        ui.add_space(4.0);
+        // what the photo shows
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(crate::i18n::tr("View")).size(11.5).color(t.text_dim));
+            for (v, label, hint) in [
+                (0u8, "Photo", "The photo, with dust removal as set"),
+                (1, "Infrared", "The scanner's infrared pass, with what will be filled in red"),
+                (2, "Mask", "What will be filled, white on black"),
+            ] {
+                let r = text_button(ui, &format!("filmDustView{v}"), crate::i18n::tr(label), app.ui.film_dust_view == v)
+                    .on_hover_text(crate::i18n::tr(hint));
+                if r.clicked() {
+                    app.ui.film_dust_view = v;
+                }
+            }
+        });
+    });
+    super::edit::control_as(app, ui, d, "filmDust.sensitivity", true, Some("Strength"));
+    super::edit::control_as(app, ui, d, "filmDust.expand", true, Some("Grow"));
+    padded(ui, |ui| {
+        ui.horizontal(|ui| {
+            let film_mask = d.masks.iter().find(|m| m.name == lcc_engine::cmd::film_dust::MASK_NAME).map(|m| m.id);
+            let mask_selected = film_mask.is_some() && app.session.active_mask == film_mask;
+            if text_button(ui, "filmDustMask", crate::i18n::tr("Edit as Mask"), mask_selected)
+                .on_hover_text(crate::i18n::tr(
+                    "The same marks as a mask you can brush and fill: Fill Selected Mask or Generate into Selected Mask removes what it covers (a fibre too large to fill smoothly)",
+                ))
+                .clicked()
+            {
+                film_dust_mask(app, ui.ctx(), d);
+            }
+        });
+    });
+}
+
 fn remove(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Remove");
     let t = Tokens::get(ui.ctx());
+    // a film scanner's RGBI file: its infrared pass drives Remove Film Dust (a develop step)
+    let has_infrared = app.session.source_info(id).infrared.is_some();
+    if has_infrared {
+        infrared_dust(app, ui, &d);
+        divider(ui);
+    } else if app.ui.film_dust_view != 0 {
+        app.ui.film_dust_view = 0;
+    }
 
     padded(ui, |ui| {
         // Mode icon segmented bar
@@ -1621,9 +1694,10 @@ fn activity(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
 
 /// The heading of a History group: its Develop section, or for a step that spans several sections
 /// (a preset, paste, sync…) the step itself.
-fn group_title(section: Option<&str>, step_label: &str, presets: &[lcc_develop::Preset]) -> String {
+pub(crate) fn group_title(section: Option<&str>, step_label: &str, presets: &[lcc_develop::Preset]) -> String {
     let name = match section {
         Some("basic") => "Basic",
+        Some("levels") => "Levels",
         Some("curve") => "Tone Curve",
         Some("color") => "Color",
         Some("grading") => "Color Grading",

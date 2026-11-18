@@ -2,18 +2,16 @@
 //! `album.create {addSelected}`, `album.addPhotos` and `album.toggleTarget` (B), which report how
 //! many; a Local-only selection is refused and leaves Photo ▸ Add to Album off.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use lcc_catalog::{AlbumId, PhotoId};
 use serde_json::json;
 
 use crate::{Selection, Session};
 
-fn temp_dir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("lc-albums-local-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+/// The test's folder in Temp, removed when the test ends.
+fn temp_dir(tag: &str) -> lcc_testkit::TempDir {
+    lcc_testkit::TempDir::new(&format!("lc-albums-local-{tag}"))
 }
 
 fn png(p: &Path, seed: u8) {

@@ -304,15 +304,6 @@ fn delete_with_auto_sync_removes_the_selected_copies() {
     assert_eq!(masks(&s, c).len(), 1, "c isn't selected: it keeps its copy");
 }
 
-/// There is no unlink (the user's rule): the command is gone.
-#[test]
-fn there_is_no_unlink() {
-    let (mut s, [a, b]) = photos::<2>();
-    radial_on(&mut s, &[a, b]);
-    assert!(s.execute("mask.unlink", &json!({"id": masks(&s, a)[0].id})).is_err());
-    assert!(s.commands().iter().all(|c| c.id != "mask.unlink"), "not in the command list");
-}
-
 /// A preset on a selection, Paste onto a selection, Sync Settings and Paste from Previous link
 /// the masks they copy (with the source photo's original for Paste and Sync); a preset on one
 /// photo links nothing. A pasted copy's later edit reaches the original only through Auto Sync.

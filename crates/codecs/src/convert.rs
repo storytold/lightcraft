@@ -32,7 +32,7 @@ pub(crate) enum Buf {
 }
 
 impl Buf {
-    fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         match self {
             Buf::U8(v) => v.len(),
             Buf::U16(v) => v.len(),
@@ -40,7 +40,7 @@ impl Buf {
         }
     }
     #[inline]
-    fn norm(&self, i: usize) -> f32 {
+    pub(crate) fn norm(&self, i: usize) -> f32 {
         match self {
             Buf::U8(v) => v[i] as f32 / 255.0,
             Buf::U16(v) => v[i] as f32 / 65535.0,
@@ -114,6 +114,8 @@ pub(crate) struct Meta {
     pub hint: Option<SourceSpace>,
     /// `image` already went through a CMS/transform producing this space (skip interpretation).
     pub already_linear: Option<SourceSpace>,
+    /// A film scanner's infrared pass (see [`crate::Decoded::infrared`]), the image's size, 0..1.
+    pub infrared: Option<Plane>,
 }
 
 /// [`check_size`], and the decoder's own sample buffer of `bytes_per_pixel` a pixel against
@@ -187,6 +189,7 @@ pub(crate) fn finish(format: Format, mut raw: Raw, meta: Meta, source_dims: (u32
     let summary = meta.exif.as_deref().map(exif::summarize).unwrap_or_default();
     let orientation = meta.orientation.or(summary.orientation).filter(|o| (1..=8).contains(o)).unwrap_or(1);
 
+    let mut infrared = meta.infrared.filter(|p| p.width == image.width && p.height == image.height);
     let (image, alpha) = match opts.max_size {
         Some((mw, mh)) if (image.width as u32 > mw || image.height as u32 > mh) && mw > 0 && mh > 0 => {
             let factor = (image.width as f64 / mw as f64).max(image.height as f64 / mh as f64);
@@ -221,6 +224,14 @@ pub(crate) fn finish(format: Format, mut raw: Raw, meta: Meta, source_dims: (u32
         }
         _ => (image, alpha),
     };
+    // the infrared pass is fitted with the pixels (a dust speck stays where its colour is)
+    if let Some(p) = infrared.take() {
+        let mut p = if (p.width, p.height) != (image.width, image.height) { fit(&p, image.width, image.height, Filter::Mitchell) } else { p };
+        for v in &mut p.data {
+            *v = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+        }
+        infrared = Some(p);
+    }
 
     Ok(Decoded {
         format,
@@ -229,6 +240,7 @@ pub(crate) fn finish(format: Format, mut raw: Raw, meta: Meta, source_dims: (u32
         image,
         has_alpha: alpha.is_some(),
         alpha,
+        infrared,
         space,
         bit_depth: raw.bit_depth,
         float,

@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn menu_dialog_and_background_timelapse() {
-        let dir = std::env::temp_dir().join(format!("lcc-ui-timelapse-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lcc-ui-timelapse");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let out = dir.join("t.mp4");

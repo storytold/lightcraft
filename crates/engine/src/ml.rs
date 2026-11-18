@@ -34,6 +34,12 @@ pub(crate) type Output = Box<dyn Any + Send>;
 pub(crate) const ROW_KIND: &str = "mlIndex";
 pub(crate) const ROW_LABEL: &str = "Indexing photos";
 
+/// The command that pauses search indexing, the one that resumes it, and where its options are (Settings ▸ AI Models ▸
+/// Semantic search): the indexing row's pause button and gear.
+fn row_controls(paused: bool) -> crate::activity::Controls {
+    crate::activity::Controls { paused, pause: "ml.pause", resume: "ml.resume", settings_tab: "ai", settings_section: Some("semanticSearch") }
+}
+
 /// Staging folder inside `ml_models_dir` for in-progress model downloads.
 pub const STAGING_DIR: &str = ".downloads";
 
@@ -57,6 +63,14 @@ const LIGHT_REST: Duration = Duration::from_millis(25);
 
 /// Poll interval when `ml.pump` pauses background work.
 const PAUSE_POLL: Duration = Duration::from_millis(25);
+
+/// Photos in a row that fail to index, with none indexed between them, before background indexing pauses itself: a
+/// fault that fails every photo (a model or device that can't run here) would otherwise read and decode the whole
+/// library, at full speed, on every start. Resuming (the row's button, `ml.resume`) tries again.
+pub(crate) const FAIL_STREAK_PAUSE: u32 = 25;
+
+/// How many failures a session writes to the log with their reason (then every hundredth): enough to say why.
+const FAILURES_LOGGED: u32 = 5;
 
 /// Default `topK` when semantic search filters the grid (`library.filter {semantic}` or `search.semantic {filter: true}`).
 pub const DEFAULT_FILTER_TOP_K: usize = 200;
@@ -104,11 +118,22 @@ impl Pace {
     }
 }
 
+/// Semantic search and its background indexing when the user has not chosen: on, except on Android, where no AI
+/// feature runs until the user switches it on (a phone has neither the memory nor the battery for a library-wide
+/// background scan it did not ask for).
+pub(crate) const DEFAULT_ENABLED: bool = !cfg!(target_os = "android");
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct MlSettings {
     embedder: Option<String>,
     device: Option<String>,
+    /// Semantic search (and its background indexing) on or off (`ml.enable`); unset means [`DEFAULT_ENABLED`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enabled: Option<bool>,
+    /// Background indexing paused by the user (`ml.pause`); unset means not paused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    paused: Option<bool>,
 }
 
 fn read_settings(dir: &Path) -> MlSettings {
@@ -215,10 +240,20 @@ pub(crate) struct State {
     settings_cache: Option<(PathBuf, MlSettings)>,
     /// Cached installed manifests and active embedder id (`(dir, at, installed, active_id)`).
     models_cache: Option<(PathBuf, web_time::Instant, Vec<ModelManifest>, Option<String>)>,
-    /// Whether background indexing is enabled (`ml.enable`).
+    /// Whether background indexing is enabled (`ml.enable`); read it through `Session::ml_enabled`.
     pub enabled: bool,
+    /// `ml_models_dir` whose saved `MlSettings.enabled` was already adopted.
+    enabled_adopted_dir: Option<PathBuf>,
     /// Set when the user clicks ✕ on the `mlIndex` activity row; cleared on library change, import, or `ml.index`.
     pub paused_by_user: bool,
+    /// Background indexing paused (`ml.pause`, the row's pause button), saved in the models folder so it stays paused
+    /// across restarts until `ml.resume`. Adopted with `enabled` ([`Session::ml_enabled`]).
+    pub paused: bool,
+    /// The batch row the queue shows while it has work, to give it pause / resume (it is made on the worker's side).
+    row: Arc<Mutex<Option<TaskHandle>>>,
+    /// The row shown while indexing is paused with photos left and nothing queued (after a restart, say), so the
+    /// row's resume button is there.
+    paused_row: Option<TaskGuard>,
     /// Bumped whenever the library or active model changes so stale in-flight results are ignored.
     pub epoch: u64,
     /// Current pace set by `ml.pump`.
@@ -236,6 +271,10 @@ pub(crate) struct State {
     pub in_flight: HashSet<PhotoId>,
     /// Photos `(id, fingerprint)` whose decode/inference failed this session.
     pub failed_photos: HashSet<(u64, u64)>,
+    /// Photos that failed in a row since one was last indexed ([`FAIL_STREAK_PAUSE`]).
+    fail_streak: u32,
+    /// Failures this session (for [`FAILURES_LOGGED`]).
+    failures_seen: u32,
     /// Last time `store` was saved to disk.
     last_saved: Option<web_time::Instant>,
     /// Last time `ml_models_dir` was checked by `ml.pump`.
@@ -256,8 +295,12 @@ impl Default for State {
             device_adopted_dir: None,
             settings_cache: None,
             models_cache: None,
-            enabled: true,
+            enabled: DEFAULT_ENABLED,
+            enabled_adopted_dir: None,
             paused_by_user: false,
+            paused: false,
+            row: Arc::new(Mutex::new(None)),
+            paused_row: None,
             epoch: 1,
             pace: Arc::new(AtomicU8::new(Pace::Normal as u8)),
             downloads: Downloads::default(),
@@ -267,6 +310,8 @@ impl Default for State {
             store_path: None,
             in_flight: HashSet::new(),
             failed_photos: HashSet::new(),
+            fail_streak: 0,
+            failures_seen: 0,
             last_saved: None,
             last_checked: None,
             query_seq: 0,
@@ -336,7 +381,9 @@ impl State {
             self.in_flight.clear();
         }
         self.failed_photos.clear();
+        self.fail_streak = 0;
         self.paused_by_user = false;
+        self.paused_row = None;
         self.store = None;
         self.store_path = None;
         self.last_checked = None;
@@ -414,17 +461,42 @@ fn make_gpu_probe(device_choice: Arc<Mutex<Option<String>>>) -> Probe {
     })
 }
 
-/// CLIP's transformer blocks on the GPU through `lcc-gpu`'s wgpu kernels (`lcc_ml` checks them against the CPU first).
+/// CLIP's full towers on the GPU through `lcc-gpu`'s wgpu kernels (`lcc_ml` checks them against the CPU first).
 #[cfg(test)]
 pub(crate) fn clip_accelerator() -> lcc_ml::AccelFactory {
     clip_accelerator_for(Arc::new(Mutex::new(None)))
 }
 
-/// CLIP's transformer blocks on the GPU through `lcc-gpu`'s wgpu kernels, bound to the session's `device_choice`.
+#[cfg(not(target_arch = "wasm32"))]
+fn clip_block_refs(blocks: &[lcc_ml::BlockWeights]) -> Vec<lcc_gpu::clip::BlockRef<'_>> {
+    blocks
+        .iter()
+        .map(|b| lcc_gpu::clip::BlockRef {
+            ln1_w: &b.ln1_w,
+            ln1_b: &b.ln1_b,
+            q_w: &b.q_w,
+            q_b: &b.q_b,
+            k_w: &b.k_w,
+            k_b: &b.k_b,
+            v_w: &b.v_w,
+            v_b: &b.v_b,
+            o_w: &b.o_w,
+            o_b: &b.o_b,
+            ln2_w: &b.ln2_w,
+            ln2_b: &b.ln2_b,
+            fc1_w: &b.fc1_w,
+            fc1_b: &b.fc1_b,
+            fc2_w: &b.fc2_w,
+            fc2_b: &b.fc2_b,
+        })
+        .collect()
+}
+
+/// CLIP's full towers on the GPU through `lcc-gpu`'s wgpu kernels, bound to the session's `device_choice`.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn clip_accelerator_for(device_choice: Arc<Mutex<Option<String>>>) -> lcc_ml::AccelFactory {
-    struct Tower(lcc_gpu::clip::ClipTower);
-    impl lcc_ml::Accelerator for Tower {
+    struct BlockRunner(lcc_gpu::clip::ClipTower);
+    impl lcc_ml::Accelerator for BlockRunner {
         fn device(&self) -> String {
             self.0.device()
         }
@@ -432,43 +504,96 @@ pub(crate) fn clip_accelerator_for(device_choice: Arc<Mutex<Option<String>>>) ->
             self.0.run(x, batch, seq)
         }
     }
+    struct VisionRunner(lcc_gpu::clip::ClipVisionTower);
+    impl lcc_ml::Accelerator for VisionRunner {
+        fn device(&self) -> String {
+            self.0.device()
+        }
+        fn run_vision(&self, images: &[f32], batch: usize, h: usize, w: usize) -> Result<Vec<f32>, String> {
+            self.0.run(images, batch, h, w)
+        }
+    }
+    struct TextRunner(lcc_gpu::clip::ClipTextTower);
+    impl lcc_ml::Accelerator for TextRunner {
+        fn device(&self) -> String {
+            self.0.device()
+        }
+        fn run_text(&self, token_ids: &[u32], eot_indices: &[u32], batch: usize, seq: usize) -> Result<Vec<f32>, String> {
+            self.0.run(token_ids, eot_indices, batch, seq)
+        }
+    }
     Arc::new(move |w: &lcc_ml::TowerWeights| {
-        let spec = lcc_gpu::clip::TowerSpec { hidden: w.hidden, intermediate: w.intermediate, heads: w.heads, causal: w.causal, eps: w.eps };
-        let blocks: Vec<lcc_gpu::clip::BlockRef<'_>> = w
-            .blocks
-            .iter()
-            .map(|b| lcc_gpu::clip::BlockRef {
-                ln1_w: &b.ln1_w,
-                ln1_b: &b.ln1_b,
-                q_w: &b.q_w,
-                q_b: &b.q_b,
-                k_w: &b.k_w,
-                k_b: &b.k_b,
-                v_w: &b.v_w,
-                v_b: &b.v_b,
-                o_w: &b.o_w,
-                o_b: &b.o_b,
-                ln2_w: &b.ln2_w,
-                ln2_b: &b.ln2_b,
-                fc1_w: &b.fc1_w,
-                fc1_b: &b.fc1_b,
-                fc2_w: &b.fc2_w,
-                fc2_b: &b.fc2_b,
-            })
-            .collect();
         let target = device_choice.lock().unwrap_or_else(PoisonError::into_inner).clone();
-        let tower = lcc_gpu::clip::tower_for(target.as_deref(), spec, &blocks)?;
-        Ok(Arc::new(Tower(tower)) as Arc<dyn lcc_ml::Accelerator>)
+        match w {
+            lcc_ml::TowerWeights::Vision(vw) => {
+                let blocks = clip_block_refs(&vw.blocks);
+                let spec = lcc_gpu::clip::VisionTowerSpec {
+                    hidden: vw.hidden,
+                    intermediate: vw.intermediate,
+                    heads: vw.heads,
+                    eps: vw.eps,
+                    embed_dim: vw.embed_dim,
+                    patch_size: vw.patch_size,
+                    num_positions: vw.num_positions,
+                    img_w: vw.img_w,
+                    img_h: vw.img_h,
+                    patch_weight: &vw.patch_weight,
+                    class_embedding: &vw.class_embedding,
+                    position_embedding: &vw.position_embedding,
+                    pre_ln_w: &vw.pre_ln_w,
+                    pre_ln_b: &vw.pre_ln_b,
+                    blocks: &blocks,
+                    post_ln_w: &vw.post_ln_w,
+                    post_ln_b: &vw.post_ln_b,
+                    projection: &vw.projection,
+                };
+                let tower = lcc_gpu::clip::vision_tower_for(target.as_deref(), &spec)?;
+                Ok(Arc::new(VisionRunner(tower)) as Arc<dyn lcc_ml::Accelerator>)
+            }
+            lcc_ml::TowerWeights::Text(tw) => {
+                let blocks = clip_block_refs(&tw.blocks);
+                let spec = lcc_gpu::clip::TextTowerSpec {
+                    hidden: tw.hidden,
+                    intermediate: tw.intermediate,
+                    heads: tw.heads,
+                    eps: tw.eps,
+                    embed_dim: tw.embed_dim,
+                    vocab_size: tw.vocab_size,
+                    context_len: tw.context_len,
+                    token_embedding: &tw.token_embedding,
+                    position_embedding: &tw.position_embedding,
+                    blocks: &blocks,
+                    final_ln_w: &tw.final_ln_w,
+                    final_ln_b: &tw.final_ln_b,
+                    projection: &tw.projection,
+                };
+                let tower = lcc_gpu::clip::text_tower_for(target.as_deref(), &spec)?;
+                Ok(Arc::new(TextRunner(tower)) as Arc<dyn lcc_ml::Accelerator>)
+            }
+            lcc_ml::TowerWeights::Blocks { hidden, intermediate, heads, causal, eps, blocks } => {
+                let spec = lcc_gpu::clip::TowerSpec { hidden: *hidden, intermediate: *intermediate, heads: *heads, causal: *causal, eps: *eps };
+                let block_refs = clip_block_refs(blocks);
+                let tower = lcc_gpu::clip::tower_for(target.as_deref(), spec, &block_refs)?;
+                Ok(Arc::new(BlockRunner(tower)) as Arc<dyn lcc_ml::Accelerator>)
+            }
+        }
     })
 }
 
-struct ActivityRows(Activity);
+struct ActivityRows {
+    activity: Activity,
+    /// The row now shown, for `ml.pump` to keep its pause / resume up to date.
+    current: Arc<Mutex<Option<TaskHandle>>>,
+}
 
 struct ActivityRow(TaskGuard);
 
 impl Rows for ActivityRows {
     fn begin(&self, cancel: Arc<AtomicBool>) -> Box<dyn Row> {
-        Box::new(ActivityRow(self.0.start_batch(ROW_KIND, ROW_LABEL, Cancel::Flag(cancel))))
+        let guard = self.activity.start_batch(ROW_KIND, ROW_LABEL, Cancel::Flag(cancel));
+        guard.set_controls(Some(row_controls(false)));
+        *self.current.lock().unwrap_or_else(PoisonError::into_inner) = Some(guard.handle());
+        Box::new(ActivityRow(guard))
     }
 }
 
@@ -607,8 +732,8 @@ impl Session {
     /// The queue, made with `probe` and `config` if it doesn't exist yet (tests pick the GPU this way).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn ml_queue_with(&mut self, config: Config, probe: Probe) -> &Queue<Output> {
-        let activity = self.activity.clone();
-        self.ml.queue.get_or_insert_with(|| Queue::new(config, probe, Some(Arc::new(ActivityRows(activity)) as Arc<dyn Rows>)))
+        let rows = ActivityRows { activity: self.activity.clone(), current: Arc::clone(&self.ml.row) };
+        self.ml.queue.get_or_insert_with(|| Queue::new(config, probe, Some(Arc::new(rows) as Arc<dyn Rows>)))
     }
 
     /// Queue an AI job.
@@ -623,6 +748,29 @@ impl Session {
         let preference = self.ml.preference.unwrap_or_else(env_preference);
         let probe = make_gpu_probe(Arc::clone(&self.ml.device_choice));
         self.ml.query_queue.get_or_insert_with(|| Queue::new(Config { preference, ..Config::default() }, probe, None))
+    }
+
+    /// Whether semantic search is switched on (Settings ▸ AI Models ▸ Semantic search, `ml.enable`): frontends hide
+    /// their AI search button while it is off.
+    pub fn semantic_search_on(&mut self) -> bool {
+        self.ml_enabled()
+    }
+
+    /// Whether background indexing is on, adopting the choice saved in the models folder once per folder (#1133).
+    pub(crate) fn ml_enabled(&mut self) -> bool {
+        if let Some(dir) = self.ml_models_dir.clone()
+            && self.ml.enabled_adopted_dir.as_deref() != Some(dir.as_path())
+        {
+            let saved = self.ml.cached_settings(&dir);
+            if let Some(on) = saved.enabled {
+                self.ml.enabled = on;
+            }
+            if let Some(paused) = saved.paused {
+                self.ml.paused = paused;
+            }
+            self.ml.enabled_adopted_dir = Some(dir);
+        }
+        self.ml.enabled
     }
 
     /// `ml.status {preference?, device?}`.
@@ -762,7 +910,8 @@ impl Session {
         };
         let model_id = self.ml_models_dir.clone().and_then(|d| self.ml.cached_models(&d).1);
         #[cfg(not(target_arch = "wasm32"))]
-        if model_id.is_some() && self.ml.store.is_none() {
+        // (the model is loaded only for semantic search that is on: switched off, an installed model stays on disk)
+        if model_id.is_some() && self.ml.store.is_none() && self.ml_enabled() {
             let _ = self.ensure_ml_encoder(false);
         }
         let indexed = self.ml.store.as_ref().map_or(0, Store::len);
@@ -808,8 +957,11 @@ impl Session {
         .collect();
 
         let device_choice = self.ml.chosen_device();
+        let progress = self.ml_progress()?;
         if let Some(obj) = base.as_object_mut() {
-            obj.insert("enabled".into(), Value::Bool(self.ml.enabled));
+            obj.insert("enabled".into(), Value::Bool(self.ml_enabled()));
+            obj.insert("paused".into(), progress["paused"].clone());
+            obj.insert("state".into(), progress["state"].clone());
             obj.insert("modelId".into(), model_id.as_ref().map(|s| Value::String(s.clone())).unwrap_or(Value::Null));
             obj.insert("modelInstalled".into(), Value::Bool(model_id.is_some()));
             obj.insert("indexedPhotos".into(), json!(indexed));
@@ -831,17 +983,124 @@ impl Session {
     pub(crate) fn ml_enable(&mut self, p: &Value) -> crate::Result<Value> {
         const C: &str = "ml.enable";
         let enabled = p.get("enabled").and_then(Value::as_bool).ok_or_else(|| bad(C, "missing boolean `enabled`"))?;
+        self.ml_enabled();
         self.ml.enabled = enabled;
+        if let Some(dir) = self.ml_models_dir.clone() {
+            let mut settings = self.ml.cached_settings(&dir);
+            settings.enabled = Some(enabled);
+            self.ml.save_settings(&dir, settings).map_err(|e| bad(C, e))?;
+        }
         if enabled {
             self.ml.paused_by_user = false;
-        } else if let Some(q) = &self.ml.queue {
-            for id in self.ml.in_flight.drain() {
-                q.cancel(&format!("embed:{}", id.0));
-            }
         } else {
-            self.ml.in_flight.clear();
+            if let Some(q) = &self.ml.queue {
+                for id in self.ml.in_flight.drain() {
+                    q.cancel(&format!("embed:{}", id.0));
+                }
+            } else {
+                self.ml.in_flight.clear();
+            }
+            self.ml.paused_row = None;
+            // semantic search is off: a description filter on the grid goes with it
+            if self.filter.semantic.is_some() {
+                let _ = self.apply_semantic_filter(C, None, None, None);
+                self.reconcile_view();
+                self.save_view();
+            }
         }
         Ok(json!({"enabled": self.ml.enabled}))
+    }
+
+    /// `ml.pause` / `ml.resume`: hold background indexing (photos being embedded wait; nothing new starts) or let it go
+    /// on, remembered in the models folder so a paused index stays paused across restarts.
+    pub(crate) fn ml_set_paused(&mut self, cmd: &'static str, paused: bool) -> crate::Result<Value> {
+        self.ml_enabled();
+        self.ml.paused = paused;
+        if let Some(dir) = self.ml_models_dir.clone() {
+            let mut settings = self.ml.cached_settings(&dir);
+            settings.paused = Some(paused);
+            self.ml.save_settings(&dir, settings).map_err(|e| bad(cmd, e))?;
+        }
+        if paused {
+            self.ml.pace.store(Pace::Pause as u8, Ordering::Relaxed);
+        } else {
+            self.ml.paused_by_user = false;
+            self.ml.paused_row = None;
+            self.ml.fail_streak = 0;
+        }
+        if let Some(row) = self.ml.row.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+            row.set_controls(Some(row_controls(paused)));
+        }
+        Ok(json!({"enabled": self.ml.enabled, "paused": self.ml.paused}))
+    }
+
+    /// Drop the library's search index: every photo's embedding (of every model), in memory and on disk. Photos being
+    /// embedded finish, and what they bring back is dropped.
+    fn ml_drop_index(&mut self) {
+        self.ml.epoch = self.ml.epoch.wrapping_add(1);
+        if let Some(store) = &mut self.ml.store {
+            store.retain(|_| false);
+        }
+        self.ml.failed_photos.clear();
+        self.ml.paused_row = None;
+        if let Some(dir) = self.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.clone())
+            && let Ok(entries) = std::fs::read_dir(&dir)
+        {
+            for e in entries.flatten() {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with("ml-embeddings-") && name.ends_with(".bin") {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+        // the open model's file comes back empty
+        self.ml.save_store_now();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.refresh_semantic_filter_from_cache();
+    }
+
+    /// `ml.clearIndex`: drop the search index and pause indexing, so it does not start over at once.
+    pub(crate) fn ml_clear_index(&mut self, _p: &Value) -> crate::Result<Value> {
+        self.ml_set_paused("ml.clearIndex", true)?;
+        self.ml_drop_index();
+        self.ml_progress()
+    }
+
+    /// `ml.restart`: drop the search index and index the library again from the start.
+    pub(crate) fn ml_restart(&mut self, _p: &Value) -> crate::Result<Value> {
+        self.ml_set_paused("ml.restart", false)?;
+        self.ml_drop_index();
+        self.ml_progress()
+    }
+
+    /// Where search indexing stands: `off` (semantic search switched off), `paused`, `indexing` (photos left), `complete`
+    /// (none left) or `idle` (no model installed, or not looked at yet), with `done` of `total` photos.
+    pub(crate) fn ml_progress(&mut self) -> crate::Result<Value> {
+        let enabled = self.ml_enabled();
+        let indexed = self.ml.store.as_ref().map_or(0, Store::len);
+        let unindexed = self.unindexed_photo_count();
+        let ready = self.ml.store.is_some() && self.selected_ml_model().is_some();
+        let state = if !enabled {
+            "off"
+        } else if self.ml.paused || self.ml.paused_by_user {
+            "paused"
+        } else if !ready {
+            "idle"
+        } else if unindexed > 0 {
+            "indexing"
+        } else {
+            "complete"
+        };
+        Ok(json!({
+            "enabled": enabled,
+            "paused": self.ml.paused || self.ml.paused_by_user,
+            "state": state,
+            "done": indexed,
+            "total": indexed + unindexed,
+            "indexedPhotos": indexed,
+            "unindexedPhotos": unindexed,
+        }))
     }
 
     /// `ml.models.list {}`.
@@ -873,7 +1132,7 @@ impl Session {
         }
         Ok(json!({
             "dir": self.ml_models_dir.as_ref().map(|d| d.display().to_string()),
-            "enabled": self.ml.enabled,
+            "enabled": self.ml_enabled(),
             "runtime": cfg!(not(target_arch = "wasm32")),
             "models": models,
             "selectedEmbedder": selected,
@@ -1243,6 +1502,7 @@ impl Session {
         let busy = q.busy();
         let mut added = 0usize;
         let mut failed = 0usize;
+        let mut last_failure = None;
         for f in finished {
             if let Some(rest) = f.key.strip_prefix("embed:")
                 && let Ok(raw_id) = rest.parse::<u64>()
@@ -1261,10 +1521,18 @@ impl Session {
                             && store.insert(out.photo_id.0, out.fingerprint, out.embedding).is_ok()
                         {
                             added += 1;
+                            self.ml.fail_streak = 0;
                         }
                     }
-                    Outcome::Failed(_) => {
+                    Outcome::Failed(why) => {
                         failed += 1;
+                        self.ml.fail_streak = self.ml.fail_streak.saturating_add(1);
+                        self.ml.failures_seen = self.ml.failures_seen.saturating_add(1);
+                        let n = self.ml.failures_seen;
+                        if n <= FAILURES_LOGGED || n.is_multiple_of(100) {
+                            log::warn!("ml: photo {raw_id} could not be indexed ({n} so far this session): {why}");
+                        }
+                        last_failure = Some(why);
                         if let Some(photo) = self.catalog.photo(pid) {
                             self.ml.failed_photos.insert((pid.0, photo_fingerprint(photo)));
                         }
@@ -1274,6 +1542,16 @@ impl Session {
                         self.ml.in_flight.clear();
                     }
                 }
+            }
+        }
+        if self.ml.fail_streak >= FAIL_STREAK_PAUSE && !self.ml.paused {
+            log::warn!(
+                "ml: {} photos in a row could not be indexed; background indexing pauses until it is resumed (last: {})",
+                self.ml.fail_streak,
+                last_failure.as_deref().unwrap_or("unknown")
+            );
+            if let Err(e) = self.ml_set_paused("ml.pump", true) {
+                log::warn!("ml: could not save the pause: {e}");
             }
         }
         let should_save =
@@ -1411,12 +1689,14 @@ impl Session {
 
     /// `ml.pump {pace?: pause | light | normal | full}`.
     pub(crate) fn ml_pump(&mut self, p: &Value) -> crate::Result<Value> {
-        let pace = Pace::parse(p.get("pace").and_then(Value::as_str));
+        self.ml_enabled();
+        // paused by the user (`ml.pause`): the photos being embedded wait, nothing new is queued
+        let pace = if self.ml.paused { Pace::Pause } else { Pace::parse(p.get("pace").and_then(Value::as_str)) };
         self.ml.pace.store(pace as u8, Ordering::Relaxed);
         let (added, _) = self.drain_ml_results();
 
         let mut ready = false;
-        if self.ml.enabled
+        if self.ml_enabled()
             && !self.ml.paused_by_user
             && let Ok(enc) = self.ensure_ml_encoder(false)
         {
@@ -1427,6 +1707,23 @@ impl Session {
         }
         let indexed = self.ml.store.as_ref().map_or(0, Store::len);
         let unindexed = self.unindexed_photo_count();
+        // the queue's row (while it has work) says whether it is paused; with nothing queued, a paused index with photos
+        // left keeps a row of its own, so resume is there
+        let busy = self.ml.queue.as_ref().is_some_and(Queue::busy);
+        if let Some(row) = self.ml.row.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+            row.set_controls(Some(row_controls(self.ml.paused)));
+            if self.ml.paused && busy {
+                row.detail("Paused");
+            }
+        }
+        if self.ml.paused && ready && unindexed > 0 && !busy {
+            let row = self.ml.paused_row.get_or_insert_with(|| self.activity.start(ROW_KIND, ROW_LABEL, Cancel::No));
+            row.progress(indexed as u64, (indexed + unindexed) as u64);
+            row.detail("Paused");
+            row.set_controls(Some(row_controls(true)));
+        } else {
+            self.ml.paused_row = None;
+        }
         let in_flight = self.ml.in_flight.len();
         let (pending, running, done, failed) = match &self.ml.queue {
             Some(q) => {
@@ -1435,12 +1732,12 @@ impl Session {
             }
             None => (0, None, 0, 0),
         };
-        let active = ready && self.ml.enabled && !self.ml.paused_by_user;
+        let active = ready && self.ml.enabled && !self.ml.paused_by_user && !self.ml.paused;
         Ok(json!({
             "active": active,
             "ready": ready,
             "enabled": self.ml.enabled,
-            "paused": self.ml.paused_by_user,
+            "paused": self.ml.paused_by_user || self.ml.paused,
             "added": added,
             "indexedPhotos": indexed,
             "unindexedPhotos": unindexed,
@@ -1583,6 +1880,9 @@ impl Session {
             self.ml.last_query = None;
             return Ok(Vec::new());
         };
+        if !self.ml_enabled() {
+            return Err(bad(cmd_name, "semantic search is off (Settings ▸ AI Models ▸ Semantic search)"));
+        }
         let top_k = top_k.unwrap_or(DEFAULT_FILTER_TOP_K);
         let threshold = threshold.unwrap_or(DEFAULT_FILTER_THRESHOLD);
         if cmd_name != "search.semantic" && self.selected_ml_model().is_none() {
@@ -1594,7 +1894,7 @@ impl Session {
             return Ok(Vec::new());
         }
         let (enc, tag, qvec) = self.encode_query_vec(cmd_name, &text)?;
-        if self.ml.enabled && !self.ml.paused_by_user {
+        if self.ml_enabled() && !self.ml.paused_by_user {
             let _ = self.queue_ml_photos(&enc, None, Priority::Background);
         }
         let allowed: HashSet<u64> = self.catalog.photos().filter(|ph| ph.in_library()).map(|ph| ph.id.0).collect();
@@ -1635,6 +1935,9 @@ impl Session {
         }
         if raw_text.is_empty() {
             return Err(bad(C, "missing non-empty `text` query"));
+        }
+        if !self.ml_enabled() {
+            return Err(bad(C, "semantic search is off (Settings ▸ AI Models ▸ Semantic search)"));
         }
         let text = raw_text.to_string();
         let top_k = match p.get("topK").or_else(|| p.get("limit")) {
@@ -1677,7 +1980,7 @@ impl Session {
 
         let (enc, tag, qvec) = self.encode_query_vec(C, &text)?;
         let model_id = enc.manifest().id.clone();
-        if filter_grid && self.ml.enabled && !self.ml.paused_by_user {
+        if filter_grid && self.ml_enabled() && !self.ml.paused_by_user {
             let _ = self.queue_ml_photos(&enc, None, Priority::Background);
         }
         let hits = self
@@ -1739,7 +2042,7 @@ impl Session {
         Ok(json!({
             "active": false,
             "ready": false,
-            "enabled": self.ml.enabled,
+            "enabled": self.ml_enabled(),
             "paused": false,
             "added": 0,
             "indexedPhotos": 0,

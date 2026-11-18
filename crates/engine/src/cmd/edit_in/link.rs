@@ -344,29 +344,31 @@ mod tests {
     const PACKET: &str = "<?xpacket begin=\"\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n  <rdf:Description rdf:about=\"\"\n    xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\">\n   <xmp:Rating>3</xmp:Rating>\n  </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>";
 
     #[test]
-    fn link_round_trips_and_replaces() {
-        let x = add_link(PACKET, "xmp.did:aa", "xmp.did:src&1", "IMG_1.CR3");
-        let l = read_link(&x);
-        assert_eq!(l.document_id.as_deref(), Some("xmp.did:aa"));
-        assert_eq!(l.derived_document.as_deref(), Some("xmp.did:src&1"));
-        assert_eq!(l.derived_path.as_deref(), Some("IMG_1.CR3"));
-        assert!(x.contains("<xmp:Rating>3</xmp:Rating>"));
-        assert!(lcc_meta::parse_xmp(&x).is_ok(), "still a valid packet: {x}");
-        // a second link replaces the first
-        let y = add_link(&x, "xmp.did:bb", "xmp.did:aa", "IMG_1-Edit.psd");
-        assert_eq!(y.matches("<xmpMM:DerivedFrom").count(), 1, "{y}");
-        assert_eq!(y.matches("xmlns:xmpMM=").count(), 1);
-        let l = read_link(&y);
-        assert_eq!((l.document_id.as_deref(), l.derived_document.as_deref()), (Some("xmp.did:bb"), Some("xmp.did:aa")));
-    }
-
-    #[test]
-    fn photoshop_attribute_form_is_read() {
-        let x = r#"<rdf:Description xmpMM:DocumentID="xmp.did:me" xmlns:xmpMM="m"><xmpMM:DerivedFrom stRef:instanceID="i" stRef:documentID="xmp.did:parent"/></rdf:Description>"#;
-        let l = read_link(x);
-        assert_eq!(l.document_id.as_deref(), Some("xmp.did:me"));
-        assert_eq!(l.derived_document.as_deref(), Some("xmp.did:parent"));
-        assert_eq!(l.derived_path, None);
+    fn link_round_trips_and_replaces_and_the_photoshop_attribute_form_is_read() {
+        // link round trips and replaces
+        {
+            let x = add_link(PACKET, "xmp.did:aa", "xmp.did:src&1", "IMG_1.CR3");
+            let l = read_link(&x);
+            assert_eq!(l.document_id.as_deref(), Some("xmp.did:aa"));
+            assert_eq!(l.derived_document.as_deref(), Some("xmp.did:src&1"));
+            assert_eq!(l.derived_path.as_deref(), Some("IMG_1.CR3"));
+            assert!(x.contains("<xmp:Rating>3</xmp:Rating>"));
+            assert!(lcc_meta::parse_xmp(&x).is_ok(), "still a valid packet: {x}");
+            // a second link replaces the first
+            let y = add_link(&x, "xmp.did:bb", "xmp.did:aa", "IMG_1-Edit.psd");
+            assert_eq!(y.matches("<xmpMM:DerivedFrom").count(), 1, "{y}");
+            assert_eq!(y.matches("xmlns:xmpMM=").count(), 1);
+            let l = read_link(&y);
+            assert_eq!((l.document_id.as_deref(), l.derived_document.as_deref()), (Some("xmp.did:bb"), Some("xmp.did:aa")));
+        }
+        // photoshop attribute form is read
+        {
+            let x = r#"<rdf:Description xmpMM:DocumentID="xmp.did:me" xmlns:xmpMM="m"><xmpMM:DerivedFrom stRef:instanceID="i" stRef:documentID="xmp.did:parent"/></rdf:Description>"#;
+            let l = read_link(x);
+            assert_eq!(l.document_id.as_deref(), Some("xmp.did:me"));
+            assert_eq!(l.derived_document.as_deref(), Some("xmp.did:parent"));
+            assert_eq!(l.derived_path, None);
+        }
     }
 
     #[test]
@@ -382,8 +384,7 @@ mod tests {
             let _ = read_link(x);
             let _ = add_link(x, "a", "b", "c");
         }
-        let d = std::env::temp_dir().join(format!("edit-link-{}", std::process::id()));
-        std::fs::create_dir_all(&d).unwrap();
+        let d = lcc_testkit::TempDir::new("edit-link");
         for (name, bytes) in [
             ("a.tif", b"II*\0\xff\xff\xff\xff".to_vec()),
             ("b.tif", b"MM\0*\0\0\0\x08\xff\xff".to_vec()),
@@ -400,9 +401,8 @@ mod tests {
         use serde_json::json;
         // Scenario: parent file is renamed/moved, child's DerivedFrom names the parent's embedded
         // xmpMM:DocumentID (not the hash). stack_derived must find the parent via the embedded ID.
-        let dir = std::env::temp_dir().join(format!("edit-link-embedded-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        // removed when the test ends, after the session (declared after it)
+        let dir = lcc_testkit::TempDir::new("edit-link-embedded");
         // Create parent TIFF with embedded document ID
         let parent = dir.join("parent.tif");
         let parent_bytes = lcc_codecs::encode_tiff(

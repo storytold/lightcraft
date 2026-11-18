@@ -250,10 +250,9 @@ mod tests {
     use super::*;
     use lcc_codecs::print::print_adjust;
 
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("lc-print-color-{}-{name}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    /// The test's folder in Temp, removed when the test ends.
+    fn scratch(name: &str) -> lcc_testkit::TempDir {
+        lcc_testkit::TempDir::new(&format!("lc-print-color-{name}"))
     }
 
     #[test]

@@ -10,7 +10,7 @@ import { Aside } from '@astrojs/starlight/components';
 ## Packages
 | Platform | Download |
 |---|---|
-| macOS | `.dmg` (universal); ad-hoc signed unless the release is notarised |
+| macOS | `.dmg`, one for Apple silicon (`arm64`) and one for Intel (`x64`), plus a universal one for both; not signed with an Apple developer certificate or notarised, so macOS asks you to allow it once (see [Install](../../start/install/)) |
 | Windows | `.msi` installer (x64; an Arm64 build is tested in CI), and a portable zip |
 | Linux | AppImage, `.deb`, `.rpm`, Flatpak bundle (not on Flathub), `.tar.gz` |
 | FreeBSD | `.tar.gz`; the release job is currently disabled |
@@ -22,6 +22,7 @@ import { Aside } from '@astrojs/starlight/components';
 ## Updates
 - **Help ▸ Check for Updates…** reads the release feed, shows the notes and what installing does, then downloads the file for your platform.
 - A download is installed only when the release's checksum list carries a valid signature; it is checked again before install.
+- Installing an update restarts the app. On Windows the app quits, the installer runs, and the app starts again when it is done (after a restart the installer asked for, if it needs one); Start-menu shortcuts, and taskbar entries pinned from them, keep working across updates. macOS, AppImage and portable-zip copies swap the new version in and start it once the app has quit.
 - **Check for updates when the app starts** is off by default (Settings ▸ General ▸ Startup). Nothing else phones home.
 
 ## Display and HDR

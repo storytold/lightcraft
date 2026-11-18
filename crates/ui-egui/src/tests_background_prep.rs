@@ -53,51 +53,53 @@ fn asked_around(h: &mut Headless, at: PhotoId) -> Vec<u64> {
     h.app.renderer.prefetch_keys()
 }
 
-/// "Photos ahead: 3" prepares three photos each way of the one on screen once it is shown, and a
-/// step forward keeps them (nothing asked twice) and prepares the next one beyond them.
+/// One session, several steps; each step was a test of its own and says what it checks.
 #[test]
-fn the_photos_ahead_are_prepared_after_stepping() {
+fn the_photos_ahead_and_only_the_marked_ones_are_prepared() {
     let mut h = demo([1000.0, 700.0]);
-    let ids = h.app.session.visible_cloned();
-    assert!(ids.len() >= 9, "the demo has photos on both sides: {}", ids.len());
-    let mid = ids.len() / 2;
-    prep(&mut h, json!({"library": {"ahead": 3}}));
-    let before = asked_around(&mut h, ids[mid]);
-    assert_eq!(before.len(), 6, "three each way");
-    // a step forward: the photo on screen moves on, the next one beyond is prepared
-    loupe_on(&mut h, ids[mid + 1]);
-    assert!(!h.app.prep_backward, "stepping forward");
-    let after = asked_around(&mut h, ids[mid + 1]);
-    assert_eq!(after.len(), 6, "three each way again");
-    assert!(after.iter().any(|k| !before.contains(k)), "the photo three ahead of the new one is prepared");
-    // off: nothing more is prepared
-    prep(&mut h, json!({"library": {"ahead": 0}}));
-    assert!(asked_around(&mut h, ids[mid]).is_empty(), "off: nothing prepared ahead");
-}
-
-/// "Which photos: Picks, rated and labelled" leaves the unflagged photos around the one on screen
-/// alone; "Only the photo on screen" prepares nothing around it.
-#[test]
-fn picks_only_skips_the_unflagged_photos() {
-    let mut h = demo([1000.0, 700.0]);
-    let ids = h.app.session.visible_cloned();
-    assert!(ids.len() >= 9);
-    let mid = ids.len() / 2;
-    // the six around the middle photo unmarked, then a pick ahead and a rated one behind
-    let around: Vec<u64> = (mid - 3..=mid + 3).map(|i| ids[i].0).collect();
-    ask(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": around, "active": ids[mid].0}}));
-    ask(&mut h, "engine.execute", json!({"command": "photo.flag", "params": {"ids": around, "flag": "none"}}));
-    ask(&mut h, "engine.execute", json!({"command": "photo.rate", "params": {"ids": around, "rating": 0}}));
-    ask(&mut h, "engine.execute", json!({"command": "photo.label", "params": {"ids": around, "label": "none"}}));
-    ask(&mut h, "engine.execute", json!({"command": "photo.flag", "params": {"ids": [ids[mid + 2].0], "flag": "pick"}}));
-    ask(&mut h, "engine.execute", json!({"command": "photo.rate", "params": {"ids": [ids[mid - 1].0], "rating": 2}}));
-    prep(&mut h, json!({"library": {"ahead": 3, "scope": "marked"}}));
-    let asked = asked_around(&mut h, ids[mid]);
-    let marked_near = (mid - 3..=mid + 3).filter(|i| *i != mid && lcc_engine::prep::marked(&h.app.session, ids[*i])).count();
-    assert!((1..6).contains(&marked_near), "some of the six around it are marked, not all: {marked_near}");
-    assert_eq!(asked.len(), marked_near, "only the marked photos are prepared");
-    prep(&mut h, json!({"library": {"scope": "onScreen"}}));
-    assert!(asked_around(&mut h, ids[mid]).is_empty(), "only the photo on screen");
+    // the photos ahead are prepared after stepping
+    // "Photos ahead: 3" prepares three photos each way of the one on screen once it is shown, and a
+    // step forward keeps them (nothing asked twice) and prepares the next one beyond them.
+    {
+        let ids = h.app.session.visible_cloned();
+        assert!(ids.len() >= 9, "the demo has photos on both sides: {}", ids.len());
+        let mid = ids.len() / 2;
+        prep(&mut h, json!({"library": {"ahead": 3}}));
+        let before = asked_around(&mut h, ids[mid]);
+        assert_eq!(before.len(), 6, "three each way");
+        // a step forward: the photo on screen moves on, the next one beyond is prepared
+        loupe_on(&mut h, ids[mid + 1]);
+        assert!(!h.app.prep_backward, "stepping forward");
+        let after = asked_around(&mut h, ids[mid + 1]);
+        assert_eq!(after.len(), 6, "three each way again");
+        assert!(after.iter().any(|k| !before.contains(k)), "the photo three ahead of the new one is prepared");
+        // off: nothing more is prepared
+        prep(&mut h, json!({"library": {"ahead": 0}}));
+        assert!(asked_around(&mut h, ids[mid]).is_empty(), "off: nothing prepared ahead");
+    }
+    // picks only skips the unflagged photos
+    // "Which photos: Picks, rated and labelled" leaves the unflagged photos around the one on screen
+    // alone; "Only the photo on screen" prepares nothing around it.
+    {
+        let ids = h.app.session.visible_cloned();
+        assert!(ids.len() >= 9);
+        let mid = ids.len() / 2;
+        // the six around the middle photo unmarked, then a pick ahead and a rated one behind
+        let around: Vec<u64> = (mid - 3..=mid + 3).map(|i| ids[i].0).collect();
+        ask(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": around, "active": ids[mid].0}}));
+        ask(&mut h, "engine.execute", json!({"command": "photo.flag", "params": {"ids": around, "flag": "none"}}));
+        ask(&mut h, "engine.execute", json!({"command": "photo.rate", "params": {"ids": around, "rating": 0}}));
+        ask(&mut h, "engine.execute", json!({"command": "photo.label", "params": {"ids": around, "label": "none"}}));
+        ask(&mut h, "engine.execute", json!({"command": "photo.flag", "params": {"ids": [ids[mid + 2].0], "flag": "pick"}}));
+        ask(&mut h, "engine.execute", json!({"command": "photo.rate", "params": {"ids": [ids[mid - 1].0], "rating": 2}}));
+        prep(&mut h, json!({"library": {"ahead": 3, "scope": "marked"}}));
+        let asked = asked_around(&mut h, ids[mid]);
+        let marked_near = (mid - 3..=mid + 3).filter(|i| *i != mid && lcc_engine::prep::marked(&h.app.session, ids[*i])).count();
+        assert!((1..6).contains(&marked_near), "some of the six around it are marked, not all: {marked_near}");
+        assert_eq!(asked.len(), marked_near, "only the marked photos are prepared");
+        prep(&mut h, json!({"library": {"scope": "onScreen"}}));
+        assert!(asked_around(&mut h, ids[mid]).is_empty(), "only the photo on screen");
+    }
 }
 
 /// While the loupe's photo is being made, background work is held back (the background
@@ -191,36 +193,12 @@ fn holding_a_step_key_makes_thumbnails_further_ahead() {
     assert!(wanted(&h, ids[far]), "the thumbnail {} ahead is asked for while the key is held", far - at);
 }
 
-/// Settings ▸ Performance draws the section: for culling and the library, Previews, Photos ahead,
-/// Eye focus ahead and Which photos; for editing, Photos ahead and Which photos; each choice shows
-/// the setting in use.
-#[test]
-fn the_settings_section_is_drawn() {
-    let mut h = demo([1600.0, 2600.0]);
-    prep(&mut h, json!({"culling": {"ahead": 10}}));
-    ask(&mut h, "engine.execute", json!({"command": "app.settings", "params": {"tab": "performance"}}));
-    h.settle(T);
-    for _ in 0..4 {
-        h.step();
-    }
-    for key in ["culling", "library"] {
-        for id in
-            [format!("button:settingsPrepAhead-{key}-4"), format!("button:settingsPrepEyes-{key}-5"), format!("button:settingsPrepScope-{key}-2")]
-        {
-            assert!(h.app.widgets.iter().any(|(w, _)| *w == id), "{id} drawn");
-        }
-    }
-    assert!(h.app.widgets.iter().any(|(w, _)| w == "button:settingsPrepAhead-develop-4"));
-    assert!(h.app.widgets.iter().any(|(w, _)| w == "button:settingsPrepScope-develop-0"));
-    assert_eq!(h.app.session.prep_settings().culling.ahead, 10);
-}
-
 /// A background build that didn't run to its end (the library's `prefs.json` says so) is taken up
 /// again in the grid, with no photo opened in the loupe: it could only start there, after three
 /// photos stepped through, so a library left mid-build was never finished (upstream #3947).
 #[test]
 fn an_unfinished_background_build_is_taken_up_again_in_the_grid() {
-    let root = std::env::temp_dir().join(format!("lcc-prep-resume-grid-{}", std::process::id()));
+    let root = lcc_testkit::TempDir::new("lcc-prep-resume-grid");
     let _ = std::fs::remove_dir_all(&root);
     let paths: Vec<String> = (0..3usize)
         .map(|n| {

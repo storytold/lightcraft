@@ -174,58 +174,62 @@ fn the_filter_pill_and_the_info_overlay_do_not_overlap() {
 
 /// Feature: grid cell styles and index numbers are commands; the expanded square cell shows the
 /// index; unknown styles are refused.
-#[test]
-fn grid_cell_style_and_index_numbers() {
-    let mut h = app("squareGrid");
-    let r = exec(&mut h, "view.gridCellStyle", json!({"style": "expanded", "index": true}));
+fn grid_cell_style_and_index_numbers(h: &mut Headless) {
+    h.app.ui.dialog = None;
+    h.step();
+    let r = exec(h, "view.gridCellStyle", json!({"style": "expanded", "index": true}));
     assert_eq!(r, json!({"style": "expanded", "index": true, "badges": true}));
-    let r = exec(&mut h, "view.gridCellStyle", json!({}));
+    let r = exec(h, "view.gridCellStyle", json!({}));
     assert_eq!(r["style"], "compact", "cycles");
-    exec(&mut h, "view.gridCellStyle", json!({"style": "expanded"}));
+    exec(h, "view.gridCellStyle", json!({"style": "expanded"}));
     h.settle(SETTLE);
     let first = h.app.session.visible_cloned()[0];
-    center(&mut h, &format!("cellIndex:{}", first.0));
+    center(h, &format!("cellIndex:{}", first.0));
     let r = h.request("engine.execute", json!({"command": "view.gridCellStyle", "params": {"style": "huge"}}), T);
     assert_eq!(r["ok"], false, "{r}");
 }
 
 /// Feature: thumbnail badges for keywords and collections; the badges setting hides them.
-#[test]
-fn grid_badges_for_keywords_and_collections() {
-    let mut h = app("squareGrid");
+fn grid_badges_for_keywords_and_collections(h: &mut Headless) {
     let first = h.app.session.visible_cloned()[0];
-    exec(&mut h, "photo.setMeta", json!({"ids": [first.0], "keywords": ["sea"]}));
-    exec(&mut h, "album.toggleTarget", json!({"ids": [first.0]}));
+    exec(h, "photo.setMeta", json!({"ids": [first.0], "keywords": ["sea"]}));
+    exec(h, "album.toggleTarget", json!({"ids": [first.0]}));
     h.settle(SETTLE);
-    center(&mut h, &format!("badge:keywords:{}", first.0));
-    center(&mut h, &format!("badge:collections:{}", first.0));
-    exec(&mut h, "view.gridCellStyle", json!({"badges": false}));
+    center(h, &format!("badge:keywords:{}", first.0));
+    center(h, &format!("badge:collections:{}", first.0));
+    exec(h, "view.gridCellStyle", json!({"badges": false}));
     h.step();
     h.step();
     let w = h.request("ui.widgets", json!({}), T);
     assert!(!w.to_string().contains(&format!("badge:keywords:{}", first.0)));
 }
 
+#[test]
+fn grid_cells_show_badges_styles_and_index_numbers() {
+    let mut h = app("squareGrid");
+    grid_badges_for_crop_and_rotation_sit_on_the_photo(&mut h);
+    grid_cell_style_and_index_numbers(&mut h);
+    grid_badges_for_keywords_and_collections(&mut h);
+}
+
 /// Feature: cropped and rotated badges, placed on the photo (inside a portrait photo's width,
 /// not the square around it); the View Options dialog and the View ▸ Grid View Style commands.
-#[test]
-fn grid_badges_for_crop_and_rotation_sit_on_the_photo() {
-    let mut h = app("squareGrid");
+fn grid_badges_for_crop_and_rotation_sit_on_the_photo(h: &mut Headless) {
     let first = h.app.session.visible_cloned()[0];
-    exec(&mut h, "library.select", json!({"ids": [first.0]}));
-    exec(&mut h, "crop.set", json!({"rect": [0.1, 0.1, 0.9, 0.9]}));
-    exec(&mut h, "photo.rotateRight", json!({"ids": [first.0]}));
+    exec(h, "library.select", json!({"ids": [first.0]}));
+    exec(h, "crop.set", json!({"rect": [0.1, 0.1, 0.9, 0.9]}));
+    exec(h, "photo.rotateRight", json!({"ids": [first.0]}));
     h.settle(SETTLE);
-    center(&mut h, &format!("badge:rotated:{}", first.0));
-    center(&mut h, &format!("badge:cropped:{}", first.0));
+    center(h, &format!("badge:rotated:{}", first.0));
+    center(h, &format!("badge:cropped:{}", first.0));
     // View menu entries and the dialog
-    exec(&mut h, "view.cellExpanded", json!({}));
+    exec(h, "view.cellExpanded", json!({}));
     assert_eq!(h.app.ui.lib.cell_style, crate::libtools::CellStyle::Expanded);
-    exec(&mut h, "view.cellIndex", json!({}));
+    exec(h, "view.cellIndex", json!({}));
     assert!(h.app.ui.lib.cell_index);
-    exec(&mut h, "view.cellBadges", json!({}));
+    exec(h, "view.cellBadges", json!({}));
     assert!(!h.app.ui.lib.cell_badges);
-    exec(&mut h, "dialog.viewOptions", json!({}));
+    exec(h, "dialog.viewOptions", json!({}));
     h.step();
     h.step();
     assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::ViewOptions));
@@ -271,7 +275,7 @@ fn plugin_fields_edit_every_selected_photo() {
         ml = manifest.len(),
         rl = reply.len()
     );
-    let dir = std::env::temp_dir().join(format!("plugin-fields-ui-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("plugin-fields-ui");
     std::fs::create_dir_all(&dir).unwrap();
     let wasm = dir.join("fields.wasm");
     std::fs::write(&wasm, wat::parse_str(&src).unwrap()).unwrap();

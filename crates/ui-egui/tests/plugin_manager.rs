@@ -5,7 +5,7 @@
 //! Its own test binary: the Plug-in Manager's window state is the process's, and other UI tests
 //! drawing frames at the same time would race it. The tests here take turns for the same reason.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -25,6 +25,7 @@ fn app() -> Headless {
     // install into memory, never into the real user's settings folder
     lcc_engine::cmd::plugins::use_in_memory_manager();
     let services = Services { png: None, ..Default::default() };
+    lcc_engine::scene_disk::use_build_dir();
     let app = LccApp::new(lcc_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     // a window left open by another test starts closed
@@ -136,8 +137,8 @@ fn filter_module(manifest: &Value, analyze: bool) -> Vec<u8> {
     wat::parse_str(&src).unwrap()
 }
 
-fn folder(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("plugin-manager-ui-{name}-{}", std::process::id()));
+fn folder(name: &str) -> lcc_testkit::TempDir {
+    let dir = lcc_testkit::TempDir::new(&format!("plugin-manager-ui-{name}"));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -482,7 +483,7 @@ fn the_window_keeps_its_width_and_drags_narrower() {
     lcc_engine::filter_plugins::install_in_memory(&filter_module(&filter, false)).unwrap();
     // a folder whose path is longer than the window
     let top_dir = folder("long");
-    let dir = (0..6).fold(top_dir.clone(), |d, i| d.join(format!("a-rather-long-folder-name-{i}")));
+    let dir = (0..6).fold(top_dir.to_path_buf(), |d, i| d.join(format!("a-rather-long-folder-name-{i}")));
     std::fs::create_dir_all(&dir).unwrap();
     let before = lcc_engine::cmd::plugins::manager().replace(lcc_plugins::Manager::open(&dir).unwrap());
     ui_cmd(&mut h, "plugins.page", json!({"id": "test.mgr.wide"}));
@@ -815,6 +816,7 @@ fn the_about_tab_shows_where_a_plugin_comes_from() {
         })),
         ..Default::default()
     };
+    lcc_engine::scene_disk::use_build_dir();
     let mut h = Headless::new(LccApp::new(lcc_engine::Session::with_demo(), services), [1400.0, 900.0], 1.0);
     exec(&mut h, "plugins.manager", json!({"open": false}));
     let before = lcc_engine::cmd::plugins::manager().replace(lcc_plugins::Manager::in_memory());

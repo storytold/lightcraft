@@ -12,7 +12,7 @@ fn rendered_at(s: &DevelopSettings, w: usize, h: usize) -> Vec<[u8; 4]> {
 }
 
 fn rendered(s: &DevelopSettings) -> Vec<[u8; 4]> {
-    rendered_at(s, 360, 240)
+    rendered_at(s, 180, 120)
 }
 
 fn with(process: Process, grain: Grain) -> DevelopSettings {

@@ -303,29 +303,30 @@ mod tests {
     }
 
     #[test]
-    fn round_trips() {
-        let m = sample();
-        assert_eq!(Message::decode(&m.encode().unwrap()), Some(m));
-    }
-
-    #[test]
-    fn reads_compressed_names() {
-        // header, one answer: "a.local" PTR -> pointer to the owner name
-        let mut b = vec![0, 0, 0x84, 0, 0, 0, 0, 1, 0, 0, 0, 0];
-        b.extend_from_slice(&[1, b'a', 5, b'l', b'o', b'c', b'a', b'l', 0]);
-        b.extend_from_slice(&[0, 12, 0, 1, 0, 0, 0, 10, 0, 2, 0xC0, 12]);
-        let m = Message::decode(&b).unwrap();
-        assert_eq!(m.records[0].data, Data::Ptr("a.local".into()));
-    }
-
-    #[test]
-    fn unencodable_names_are_refused() {
-        let long = "a".repeat(64);
-        let m = Message { questions: vec![Question { name: long, qtype: TYPE_PTR }], ..Message::default() };
-        assert_eq!(m.encode(), None);
-        let deep = vec!["abcdefghij"; 30].join(".");
-        let m = Message { questions: vec![Question { name: deep, qtype: TYPE_PTR }], ..Message::default() };
-        assert_eq!(m.encode(), None);
+    fn messages_round_trip_and_unencodable_names_are_refused() {
+        // round trips
+        {
+            let m = sample();
+            assert_eq!(Message::decode(&m.encode().unwrap()), Some(m));
+        }
+        // reads compressed names
+        {
+            // header, one answer: "a.local" PTR -> pointer to the owner name
+            let mut b = vec![0, 0, 0x84, 0, 0, 0, 0, 1, 0, 0, 0, 0];
+            b.extend_from_slice(&[1, b'a', 5, b'l', b'o', b'c', b'a', b'l', 0]);
+            b.extend_from_slice(&[0, 12, 0, 1, 0, 0, 0, 10, 0, 2, 0xC0, 12]);
+            let m = Message::decode(&b).unwrap();
+            assert_eq!(m.records[0].data, Data::Ptr("a.local".into()));
+        }
+        // unencodable names are refused
+        {
+            let long = "a".repeat(64);
+            let m = Message { questions: vec![Question { name: long, qtype: TYPE_PTR }], ..Message::default() };
+            assert_eq!(m.encode(), None);
+            let deep = vec!["abcdefghij"; 30].join(".");
+            let m = Message { questions: vec![Question { name: deep, qtype: TYPE_PTR }], ..Message::default() };
+            assert_eq!(m.encode(), None);
+        }
     }
 
     /// Malformed datagrams are `None` (or harmlessly parsed), never a panic or a hang.

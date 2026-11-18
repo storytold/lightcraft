@@ -960,6 +960,21 @@ mod tests {
         config.levels = 2;
         assert!(matches!(decode(&flat_sample(), &config), Err(RawError::Unsupported(_))));
         assert!(matches!(validate(&flat_sample(), &config), Err(RawError::Unsupported(_))));
+        // unverified variants stay explicit unsupported errors
+        {
+            let (sample, config) = zero_craw(32, 64, 32, 32);
+            // Partial subband flag on the first band (flags at byte 32), then nonzero rounded bits on
+            // the first plane (flags at byte 20).
+            for (at, bit) in [(32, 0x08), (20, 0x02)] {
+                let mut broken = sample.clone();
+                broken[at] |= bit;
+                assert!(matches!(decode(&broken, &config), Err(RawError::Unsupported(_))), "byte {at}");
+                assert!(matches!(validate(&broken, &config), Err(RawError::Unsupported(_))), "byte {at}");
+            }
+            let mut config = config;
+            config.version = 0x200;
+            assert!(matches!(decode(&sample, &config), Err(RawError::Unsupported(_))));
+        }
     }
 
     #[test]
@@ -1078,22 +1093,6 @@ mod tests {
     }
 
     #[test]
-    fn unverified_variants_stay_explicit_unsupported_errors() {
-        let (sample, config) = zero_craw(32, 64, 32, 32);
-        // Partial subband flag on the first band (flags at byte 32), then nonzero rounded bits on
-        // the first plane (flags at byte 20).
-        for (at, bit) in [(32, 0x08), (20, 0x02)] {
-            let mut broken = sample.clone();
-            broken[at] |= bit;
-            assert!(matches!(decode(&broken, &config), Err(RawError::Unsupported(_))), "byte {at}");
-            assert!(matches!(validate(&broken, &config), Err(RawError::Unsupported(_))), "byte {at}");
-        }
-        let mut config = config;
-        config.version = 0x200;
-        assert!(matches!(decode(&sample, &config), Err(RawError::Unsupported(_))));
-    }
-
-    #[test]
     fn vertical_tile_bands_sized_without_top_bottom_overlap_are_errors() {
         // A band laid out as if the tile had no vertical neighbour must not decode as one that has.
         let (sample, mut config) = zero_craw(32, 32, 32, 32);
@@ -1144,14 +1143,13 @@ mod tests {
         assert_eq!(coded_band_width(5, 3, TileEdges { right: true, ..TileEdges::default() }), 3);
         assert_eq!(coded_high_frequency_band(&src, 3, 3, 1).unwrap(), [5, 0, -1]);
         assert_eq!(high_frequency_band(&src, 4, 1).unwrap(), [5, 0, 0, 0]);
-    }
-
-    #[test]
-    fn a_band_that_fails_at_its_coded_width_is_an_error() {
-        // No fallback to another width: a stream that only fits 2 columns is corrupt where 3 are coded.
-        let src = [0xc0, 0x0f];
-        assert!(high_frequency_band(&src, 4, 2).is_err());
-        assert!(coded_high_frequency_band(&src, 3, 4, 2).is_err());
+        // a band that fails at its coded width is an error
+        {
+            // No fallback to another width: a stream that only fits 2 columns is corrupt where 3 are coded.
+            let src = [0xc0, 0x0f];
+            assert!(high_frequency_band(&src, 4, 2).is_err());
+            assert!(coded_high_frequency_band(&src, 3, 4, 2).is_err());
+        }
     }
 
     #[test]
@@ -1199,31 +1197,6 @@ mod tests {
     }
 
     #[test]
-    fn measured_quantization_and_allocation_limits() {
-        for (quant, expected) in [(4, 1), (9, 1), (10, 2), (16, 4), (22, 8), (26, 12), (32, 25), (36, 40), (41, 72), (42, 80), (43, 90), (44, 102)] {
-            assert_eq!(quant_step(quant, MAX_UNIFORM_QUANT).unwrap(), expected);
-        }
-        assert!(matches!(quant_step(3, MAX_UNIFORM_QUANT), Err(RawError::Unsupported(_))));
-        assert!(matches!(quant_step(45, MAX_UNIFORM_QUANT), Err(RawError::Unsupported(_))));
-        // Adaptive QP 169..=175 (EOS R6 Mark II C-RAW) continue the sequence; QP 176 does not decode.
-        for (quant, expected) in [(45, 114), (46, 128), (47, 144), (48, 160), (49, 180), (50, 204), (51, 228)] {
-            assert_eq!(quant_step(quant, MAX_ADAPTIVE_QUANT).unwrap(), expected);
-        }
-        assert!(matches!(quant_step(52, MAX_ADAPTIVE_QUANT), Err(RawError::Unsupported(_))));
-        let high = QpMap { width: 1, height: 2, data: vec![172, 175] };
-        // floor((172+175)/2) = 173 → value 49, step 180; gain 8/8 plus base 1.
-        assert_eq!(adaptive_step(&high, 4, 0, 0, 1, 8).unwrap(), 181);
-        assert_eq!(adaptive_step(&high, 7, 0, 1, 0, 8).unwrap(), 228);
-        for (width, height) in [(20_000, 20_000), (65_538, 2), (2, 65_538)] {
-            let mut config = coding();
-            config.width = width;
-            config.height = height;
-            assert!(matches!(decode(&[], &config), Err(RawError::Limit(_))));
-            assert!(matches!(validate(&[], &config), Err(RawError::Limit(_))));
-        }
-    }
-
-    #[test]
     fn qp_escape_and_average_precede_the_quantization_table() {
         // 23 zeros, the terminating 1, then the symbol in 8 bits.
         let mut bits = Bits { src: &[0, 0, 1, 0x18], at: 0 };
@@ -1264,6 +1237,32 @@ mod tests {
         assert_eq!(map(168).unwrap().data, [168; 4]);
         assert_eq!(map(MAX_QP as u32).unwrap().data, [MAX_QP; 4]);
         assert!(matches!(map(MAX_QP as u32 + 1), Err(RawError::Unsupported(_))));
+        // measured quantization and allocation limits
+        {
+            for (quant, expected) in
+                [(4, 1), (9, 1), (10, 2), (16, 4), (22, 8), (26, 12), (32, 25), (36, 40), (41, 72), (42, 80), (43, 90), (44, 102)]
+            {
+                assert_eq!(quant_step(quant, MAX_UNIFORM_QUANT).unwrap(), expected);
+            }
+            assert!(matches!(quant_step(3, MAX_UNIFORM_QUANT), Err(RawError::Unsupported(_))));
+            assert!(matches!(quant_step(45, MAX_UNIFORM_QUANT), Err(RawError::Unsupported(_))));
+            // Adaptive QP 169..=175 (EOS R6 Mark II C-RAW) continue the sequence; QP 176 does not decode.
+            for (quant, expected) in [(45, 114), (46, 128), (47, 144), (48, 160), (49, 180), (50, 204), (51, 228)] {
+                assert_eq!(quant_step(quant, MAX_ADAPTIVE_QUANT).unwrap(), expected);
+            }
+            assert!(matches!(quant_step(52, MAX_ADAPTIVE_QUANT), Err(RawError::Unsupported(_))));
+            let high = QpMap { width: 1, height: 2, data: vec![172, 175] };
+            // floor((172+175)/2) = 173 → value 49, step 180; gain 8/8 plus base 1.
+            assert_eq!(adaptive_step(&high, 4, 0, 0, 1, 8).unwrap(), 181);
+            assert_eq!(adaptive_step(&high, 7, 0, 1, 0, 8).unwrap(), 228);
+            for (width, height) in [(20_000, 20_000), (65_538, 2), (2, 65_538)] {
+                let mut config = coding();
+                config.width = width;
+                config.height = height;
+                assert!(matches!(decode(&[], &config), Err(RawError::Limit(_))));
+                assert!(matches!(validate(&[], &config), Err(RawError::Limit(_))));
+            }
+        }
     }
 
     #[test]

@@ -53,16 +53,26 @@ fn stage_archive(archive_dir: Option<&Path>, data: &mut CatalogImport) -> crate:
         }
     };
     Ok(match kept {
-        Kept::All(path) => Some(path),
-        Kept::WithoutSettings(path) => {
+        Kept::All(stored) => Some(note_cleanup(stored, dir, data, program)),
+        Kept::WithoutSettings(stored) => {
             data.warnings.push(format!("{program} source archive exceeded {limit} MiB; archived without history-step and snapshot settings"));
-            Some(path)
+            Some(note_cleanup(stored, dir, data, program))
         }
         Kept::Nothing => {
             data.warnings.push(format!("{program} source archive exceeded {limit} MiB; archive skipped"));
             None
         }
     })
+}
+
+/// The saved archive's path. Cleanup that failed after it was published is a warning of its own, first
+/// in the list; the archive itself still counts as saved.
+fn note_cleanup(stored: crate::lightroom_archive::Stored, dir: &Path, data: &mut CatalogImport, program: &str) -> PathBuf {
+    if let Some(problem) = stored.cleanup_failed {
+        data.warnings
+            .insert(0, format!("{program} source archive saved as {}, but cleaning up {} failed: {problem}", stored.path.display(), dir.display()));
+    }
+    stored.path
 }
 
 /// Check that `lightroom-index.json` can be written in `dir` (creating the folder, as the archive
@@ -472,6 +482,7 @@ mod tests {
                     snapshots: Vec::new(),
                     original: lightroom_catalog::Original::Local,
                     as_shot_white: None,
+                    capture_one: None,
                 }],
                 collections: Vec::new(),
                 members: Vec::new(),
@@ -622,6 +633,7 @@ mod tests {
                         snapshots: Vec::new(),
                         original: lightroom_catalog::Original::Local,
                         as_shot_white: None,
+                        capture_one: None,
                     }
                 })
                 .collect();
@@ -675,6 +687,7 @@ mod tests {
                 snapshots: Vec::new(),
                 original: lightroom_catalog::Original::NotHere,
                 as_shot_white: None,
+                capture_one: None,
             })
             .collect();
         let mut session = crate::Session::new();

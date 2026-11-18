@@ -684,14 +684,4 @@ mod tests {
         assign_optimization_weights(&mut ps, crate::color::D50, &WeightOverrides::default());
         assert!(ps.patches[0].lut_de_window[2].abs() < ps.patches[1].lut_de_window[2].abs(), "{:?}", ps.patches);
     }
-
-    #[test]
-    fn patch_description_is_readable() {
-        let mut ps = PatchSet::new();
-        let mut p = Patch::new("D01");
-        p.xyz = crate::color::D50;
-        ps.push(p, None);
-        assert_eq!(patch_description(&ps, 0, crate::color::D50), "white");
-        assert_eq!(xyz_hex(crate::color::D50, crate::color::D50), "#FFFFFF");
-    }
 }

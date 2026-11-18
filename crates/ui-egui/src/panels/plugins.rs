@@ -154,16 +154,34 @@ fn key() -> egui::Id {
 }
 
 /// Window state: one Plug-in Manager per process (the manager itself is process-wide).
+#[cfg(not(test))]
 static STATE: std::sync::Mutex<Option<State>> = std::sync::Mutex::new(None);
+
+// Tests run many apps in one process, each test on its own thread: there every test has a
+// Plug-in Manager of its own. Shared, one test's open manager covered the other tests' windows
+// (tests_i18n_sweep leaves it open; tests_import_tab's clicks in a 900 x 700 window landed on it).
+#[cfg(test)]
+thread_local! {
+    static STATE: std::cell::RefCell<Option<State>> = const { std::cell::RefCell::new(None) };
+}
 
 fn state(ctx: &egui::Context) -> State {
     let _ = ctx;
-    STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone().unwrap_or_default()
+    #[cfg(not(test))]
+    let s = STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    #[cfg(test)]
+    let s = STATE.with_borrow(Clone::clone);
+    s.unwrap_or_default()
 }
 
 fn set_state(ctx: &egui::Context, s: State) {
     let _ = ctx;
-    *STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(s);
+    #[cfg(not(test))]
+    {
+        *STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(s);
+    }
+    #[cfg(test)]
+    STATE.set(Some(s));
 }
 
 fn app_ctx(app: &LccApp) -> egui::Context {
@@ -320,7 +338,8 @@ fn begin_install(app: &mut LccApp, s: &mut State, path: &str) -> Result<Value, S
     if path.is_empty() {
         return Err(tr("Choose a plug-in module (.wasm) first").to_string());
     }
-    let info = app.session.execute("plugin.inspectFile", &json!({"path": path})).map_err(|e| e.to_string())?;
+    // the permissions it lists are lcc_manifest's, never only a stamped section's claim
+    let info = app.session.execute("plugin.inspectFile", &json!({"path": path, "verify": true})).map_err(|e| e.to_string())?;
     if info["installed"]["same"] == true {
         let m = &info["manifest"];
         let id = m["id"].as_str().unwrap_or_default();
@@ -598,10 +617,22 @@ struct ExportHooksTask {
     guard: TaskGuard,
 }
 
+#[cfg(not(test))]
 static TASK: Mutex<Option<ExportHooksTask>> = Mutex::new(None);
 
+// Under test, each test's own (as the manager's [`STATE`]): a lock per test thread, leaked so its
+// guard lives as long as the static's.
+#[cfg(test)]
+thread_local! {
+    static TASK: &'static Mutex<Option<ExportHooksTask>> = Box::leak(Box::new(Mutex::new(None)));
+}
+
 fn task_lock() -> std::sync::MutexGuard<'static, Option<ExportHooksTask>> {
-    TASK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    #[cfg(not(test))]
+    let task = &TASK;
+    #[cfg(test)]
+    let task = TASK.with(|t| *t);
+    task.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Whether export hooks are running (`ui.inspect`, tests).
@@ -669,10 +700,21 @@ fn report(app: &mut LccApp, ctx: &egui::Context, results: &[Value]) {
 }
 
 /// The plug-in export destination chosen in the Export dialog: (plugin, destination, values).
+#[cfg(not(test))]
 static DESTINATION: std::sync::Mutex<Option<(String, String, Value)>> = std::sync::Mutex::new(None);
 
+// Under test, each test's own, as [`TASK`].
+#[cfg(test)]
+thread_local! {
+    static DESTINATION: &'static Mutex<Option<(String, String, Value)>> = Box::leak(Box::new(Mutex::new(None)));
+}
+
 fn destination_lock() -> std::sync::MutexGuard<'static, Option<(String, String, Value)>> {
-    DESTINATION.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    #[cfg(not(test))]
+    let destination = &DESTINATION;
+    #[cfg(test)]
+    let destination = DESTINATION.with(|d| *d);
+    destination.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// What to pass as `app.export {pluginDestination}`: the destination chosen in the Export
@@ -1181,8 +1223,17 @@ fn approval_ui(ctx: &egui::Context, s: &mut State, installs: &Installs, actions:
     let version_error = pending.info["versionError"].as_str().map(str::to_string);
     // a module of the other kind (plug-in or pixel filter) has its id
     let conflict = pending.info["conflict"].as_str().map(str::to_string);
-    let blocked = !missing.is_empty() || version_error.is_some() || conflict.is_some();
+    // the author signature: who signed it, and whether that's the installed version's pinned signer
+    let signature = pending.info["signature"].as_str().unwrap_or("none").to_string();
+    let signer = pending.info["signer"].as_str().unwrap_or_default().to_string();
+    // what the yes is bound to: exactly the key shown, not only its fingerprint
+    let signer_key = pending.info["signerKey"].as_str().unwrap_or_default().to_string();
+    let pinned = pending.info["pinned"].clone();
+    let invalid = (signature == "invalid").then(|| pending.info["signatureError"].as_str().unwrap_or_default().to_string());
+    let blocked = !missing.is_empty() || version_error.is_some() || conflict.is_some() || invalid.is_some();
     let downgrade = pending.info["downgrade"].as_bool() == Some(true);
+    // another signer than the pinned one, or none: installing is the user's yes to it
+    let signer_changed = pending.info["matchesPin"] == false;
     let mut keep = true;
     let window_id = key().with("approve");
     let shown = egui::Window::new(tr("Install Plug-in"))
@@ -1202,6 +1253,35 @@ fn approval_ui(ctx: &egui::Context, s: &mut State, installs: &Installs, actions:
                     ui.label(tr_format!("Version {new} is older than the installed version {installed}", new = new, installed = old));
                 } else if installed.is_object() {
                     ui.label(format!("{} {old}", tr("Updates the installed version")));
+                }
+                match signature.as_str() {
+                    "valid" if pinned["signer"].as_str() == Some(signer.as_str()) => {
+                        ui.label(tr_format!("Signed by {signer}, the same author as the installed version", signer = signer));
+                    }
+                    "valid" => {
+                        ui.label(tr_format!("Signed by {signer}", signer = signer));
+                    }
+                    "none" => {
+                        ui.label(tr("Not signed: nothing shows who made it"));
+                    }
+                    // invalid: what stops the install, below
+                    _ => {}
+                }
+                if signer_changed && !blocked {
+                    let text = match (pinned["readable"] == false, pinned["signer"].as_str(), signature.as_str()) {
+                        (true, ..) => tr("The installed version's signer can't be read. Install it only if you trust where it came from.").to_string(),
+                        (false, Some(old), "valid") => tr_format!(
+                            "The installed version was signed by {old}, but this file is signed by {new}. Install it only if you trust where it came from.",
+                            old = old,
+                            new = signer
+                        ),
+                        (false, Some(old), _) => tr_format!(
+                            "The installed version was signed by {old}, but this file isn't signed. Install it only if you trust where it came from.",
+                            old = old
+                        ),
+                        _ => String::new(),
+                    };
+                    ui.colored_label(ui.visuals().warn_fg_color, text);
                 }
                 // fields this version doesn't know: a typo, or a field from a newer app
                 let unknown: Vec<&str> = pending.info["unknownFields"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
@@ -1228,7 +1308,7 @@ fn approval_ui(ctx: &egui::Context, s: &mut State, installs: &Installs, actions:
                         }
                         ui.label(tr("Install a newer version of the app to use it."));
                     }
-                    for e in version_error.iter().chain(&conflict) {
+                    for e in version_error.iter().chain(&conflict).chain(&invalid) {
                         ui.label(format!("{} {e}", tr("It can't be installed:")));
                     }
                     return;
@@ -1250,9 +1330,22 @@ fn approval_ui(ctx: &egui::Context, s: &mut State, installs: &Installs, actions:
                 ui.separator();
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     use crate::button::{Button, Kind};
-                    let label = if downgrade { "Install Older Version" } else { "Install" };
+                    let label = if signer_changed {
+                        "Install Anyway"
+                    } else if downgrade {
+                        "Install Older Version"
+                    } else {
+                        "Install"
+                    };
                     if !blocked && Button::new(label).kind(Kind::Primary).widget("button:pluginInstall").show(ui).clicked() {
-                        actions.push(("plugins.userInstall", json!({"path": pending.path, "allowDowngrade": downgrade})));
+                        let mut install = json!({"path": pending.path, "allowDowngrade": downgrade});
+                        // the click is the user's yes to the signer the dialog named
+                        if signer_changed && signature == "valid" {
+                            install["acceptSigner"] = json!(signer_key);
+                        } else if signer_changed {
+                            install["acceptUnsigned"] = json!(true);
+                        }
+                        actions.push(("plugins.userInstall", install));
                         keep = false;
                     }
                     if Button::new("Cancel").widget("button:pluginInstallCancel").show(ui).clicked() {
@@ -2049,6 +2142,48 @@ fn field_ui(ui: &mut egui::Ui, scope: &str, f: &Value, values: &mut Value) -> bo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Under test every test has a Plug-in Manager of its own: one opened on another test's thread
+    /// doesn't cover this test's window.
+    #[test]
+    fn a_manager_opened_on_another_test_thread_stays_there() {
+        let ctx = egui::Context::default();
+        let other = std::thread::spawn(|| {
+            let ctx = egui::Context::default();
+            set_state(&ctx, State { open: true, ..State::default() });
+            state(&ctx).open
+        });
+        assert!(other.join().unwrap(), "open on its own thread");
+        assert!(!state(&ctx).open, "and closed on this one");
+    }
+
+    /// So are the running export hooks: hooks started on another test's thread don't run here.
+    #[test]
+    fn export_hooks_started_on_another_test_thread_stay_there() {
+        let other = std::thread::spawn(|| {
+            let session = lcc_engine::Session::new();
+            let (_asks, requests) = std::sync::mpsc::channel();
+            let (_ends, results) = std::sync::mpsc::channel();
+            let guard = session.activity.start("plugins", "Running plug-in export hooks", Cancel::No);
+            *task_lock() = Some(ExportHooksTask { total: 1, progress: Arc::default(), requests, results, guard });
+            let running = export_hooks_running();
+            *task_lock() = None;
+            running
+        });
+        assert!(other.join().unwrap(), "running on its own thread");
+        assert!(!export_hooks_running(), "and not on this one");
+    }
+
+    /// And the plug-in export destination chosen in the Export dialog.
+    #[test]
+    fn a_destination_chosen_on_another_test_thread_stays_there() {
+        let other = std::thread::spawn(|| {
+            *destination_lock() = Some(("test.plugin".into(), "upload".into(), json!({})));
+            destination_lock().is_some()
+        });
+        assert!(other.join().unwrap(), "chosen on its own thread");
+        assert!(destination_lock().is_none(), "and none on this one");
+    }
 
     #[test]
     fn rows_name_the_request_each_one_is() {

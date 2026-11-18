@@ -89,86 +89,79 @@ fn hover(h: &mut Headless, fx: f32) {
 
 /// Dragging one zone moves that control: a sideways travel of the plot's width sweeps its whole
 /// range, and the whole drag is one undo step.
-#[test]
-fn dragging_the_exposure_zone_moves_the_exposure_in_one_undo_step() {
-    let mut h = edit_panel();
-    let w = rect(&h, "histogram").width();
+fn dragging_the_exposure_zone_moves_the_exposure_in_one_undo_step(h: &mut Headless) {
+    let w = rect(h, "histogram").width();
     let undo = h.app.session.undo.len();
-    drag(&mut h, 0.5, w * 0.05, false);
+    drag(h, 0.5, w * 0.05, false);
     // a twentieth of the plot: a twentieth of ±5 EV
-    let exposure = value(&h, "light.exposure");
+    let exposure = value(h, "light.exposure");
     assert!((exposure - 0.5).abs() <= 0.02, "a twentieth of the plot is a twentieth of the range: {exposure}");
     assert_eq!(h.app.session.undo.len() - undo, 1, "one undo step for the whole drag");
     assert!(h.app.session.interaction.is_none(), "the interaction is closed on the release");
     assert!(h.app.ui.dragging_control.is_none(), "no control is left dragged");
-    let mut others = values(&h);
+    let mut others = values(h);
     others.remove(2);
     assert_eq!(others, [0.0, 0.0, 0.0, 0.0], "the zones the drag crossed are untouched");
     // one undo brings the exposure back
     let r = h.request("engine.execute", json!({"command": "edit.undo"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    assert_eq!(value(&h, "light.exposure"), 0.0);
+    assert_eq!(value(h, "light.exposure"), 0.0);
 }
 
 /// The zone a press landed in stays locked for the whole drag: dragging from Exposure across the
 /// Shadows and Blacks zones still only moves the Exposure.
-#[test]
-fn the_zone_locks_at_the_press_however_far_the_drag_travels() {
-    let mut h = edit_panel();
-    let w = rect(&h, "histogram").width();
+fn the_zone_locks_at_the_press_however_far_the_drag_travels(h: &mut Headless) {
+    let w = rect(h, "histogram").width();
     let undo = h.app.session.undo.len();
-    drag(&mut h, 0.5, -w * 0.4, false);
-    let exposure = value(&h, "light.exposure");
+    drag(h, 0.5, -w * 0.4, false);
+    let exposure = value(h, "light.exposure");
     assert!((exposure + 4.0).abs() <= 0.02, "four tenths of the plot to the left is −4 EV: {exposure}");
-    assert_eq!((value(&h, "light.shadows"), value(&h, "light.blacks")), (0.0, 0.0), "the zones crossed stay untouched");
+    assert_eq!((value(h, "light.shadows"), value(h, "light.blacks")), (0.0, 0.0), "the zones crossed stay untouched");
     assert_eq!(h.app.session.undo.len() - undo, 1, "still one undo step");
 }
 
 /// Dragging left lowers the zone's control and dragging right raises it; a drag past either end
 /// clamps at that control's range (the zones' own specs, ±100 for the four, ±5 EV for Exposure).
-#[test]
-fn a_drag_lowers_and_clamps_at_the_controls_range() {
-    let mut h = edit_panel();
-    let w = rect(&h, "histogram").width();
-    drag(&mut h, 0.5, -w * 0.2, false);
-    assert!((value(&h, "light.exposure") + 2.0).abs() <= 0.02, "{}", value(&h, "light.exposure"));
+fn a_drag_lowers_and_clamps_at_the_controls_range(h: &mut Headless) {
+    set(h, "light.exposure", 0.0);
+    let w = rect(h, "histogram").width();
+    drag(h, 0.5, -w * 0.2, false);
+    assert!((value(h, "light.exposure") + 2.0).abs() <= 0.02, "{}", value(h, "light.exposure"));
     // the Blacks zone, dragged right across the whole plot and beyond: clamped at +100
-    drag(&mut h, 0.08, w * 0.9, false);
-    assert_eq!(value(&h, "light.blacks"), 100.0);
-    drag(&mut h, 0.92, -w * 2.0, false);
-    assert_eq!(value(&h, "light.whites"), -100.0);
+    drag(h, 0.08, w * 0.9, false);
+    assert_eq!(value(h, "light.blacks"), 100.0);
+    drag(h, 0.92, -w * 2.0, false);
+    assert_eq!(value(h, "light.whites"), -100.0);
 }
 
 /// Shift is a tenth of the travel, as on the sliders.
-#[test]
-fn shift_drags_a_tenth_as_far() {
-    let mut h = edit_panel();
-    let w = rect(&h, "histogram").width();
-    drag(&mut h, 0.5, w * 0.1, false);
-    let plain = value(&h, "light.exposure");
+fn shift_drags_a_tenth_as_far(h: &mut Headless) {
+    set(h, "light.exposure", 0.0);
+    let w = rect(h, "histogram").width();
+    drag(h, 0.5, w * 0.1, false);
+    let plain = value(h, "light.exposure");
     assert!((plain - 1.0).abs() <= 0.02, "{plain}");
-    set(&mut h, "light.exposure", 0.0);
-    drag(&mut h, 0.5, w * 0.1, true);
-    let fine = value(&h, "light.exposure");
+    set(h, "light.exposure", 0.0);
+    drag(h, 0.5, w * 0.1, true);
+    let fine = value(h, "light.exposure");
     assert!((fine - 0.1).abs() <= 0.02, "a tenth of {plain}: {fine}");
 }
 
 /// A double-click in a zone puts that zone's control back to its default in one undo step, leaving
 /// the other zones' controls alone.
-#[test]
-fn double_clicking_a_zone_resets_that_control_in_one_undo_step() {
-    let mut h = edit_panel();
-    set(&mut h, "light.exposure", 1.25);
-    set(&mut h, "light.shadows", 40.0);
+fn double_clicking_a_zone_resets_that_control_in_one_undo_step(h: &mut Headless) {
+    after(h, 0.7);
+    set(h, "light.exposure", 1.25);
+    set(h, "light.shadows", 40.0);
     let undo = h.app.session.undo.len();
-    double_click(&mut h, 0.5);
-    assert_eq!(value(&h, "light.exposure"), 0.0, "the Exposure zone is reset");
-    assert_eq!(value(&h, "light.shadows"), 40.0, "only the zone that was clicked");
+    double_click(h, 0.5);
+    assert_eq!(value(h, "light.exposure"), 0.0, "the Exposure zone is reset");
+    assert_eq!(value(h, "light.shadows"), 40.0, "only the zone that was clicked");
     assert_eq!(h.app.session.undo.len() - undo, 1, "one undo step");
     // the Shadows zone (0.15–0.35) resets its own control, once the double-click window has passed
-    after(&mut h, 0.7);
-    double_click(&mut h, 0.25);
-    assert_eq!(value(&h, "light.shadows"), 0.0);
+    after(h, 0.7);
+    double_click(h, 0.25);
+    assert_eq!(value(h, "light.shadows"), 0.0);
     // a click on the histogram toggles the clipping warnings (as before this feature): the two
     // clicks of a double-click toggle them twice, so the state is where it started
     assert!(!h.app.ui.show_clipping);
@@ -176,32 +169,28 @@ fn double_clicking_a_zone_resets_that_control_in_one_undo_step() {
 
 /// The strip under the plot — the readout and the EXIF line — is not a zone: a drag there leaves
 /// every control alone.
-#[test]
-fn a_drag_below_the_plot_leaves_the_tones_alone() {
-    let mut h = edit_panel();
-    let w = rect(&h, "histogram").width();
+fn a_drag_below_the_plot_leaves_the_tones_alone(h: &mut Headless) {
+    let w = rect(h, "histogram").width();
     let undo = h.app.session.undo.len();
     let p = json!({"id": "histogram", "fx": 0.5, "fy": 0.97, "dx": w * 0.2, "steps": 6});
     let r = h.request("ui.dragWidget", p.clone(), T);
     assert_eq!(r["ok"], true, "{p}: {r}");
     h.settle(SETTLE);
-    assert_eq!(values(&h), [0.0; 5], "no zone was dragged");
+    assert_eq!(values(h), [0.0; 5], "no zone was dragged");
     assert_eq!(h.app.session.undo.len(), undo, "and nothing was recorded");
     assert!(h.app.session.interaction.is_none(), "no interaction was opened");
 }
 
 /// A drag that starts on a clipping chevron (shadows or highlights) changes no develop tone: the
 /// chevrons are clipping controls, not tonal zones, even though they sit inside the plot.
-#[test]
-fn a_drag_starting_on_a_clipping_chevron_changes_no_develop_value() {
-    let mut h = edit_panel();
+fn a_drag_starting_on_a_clipping_chevron_changes_no_develop_value(h: &mut Headless) {
     let undo = h.app.session.undo.len();
     // Drag starting on the shadow clipping indicator (which sits over the Blacks zone)
     let p = json!({"id": "histogram:shadows", "dx": 40.0, "steps": 8});
     let r = h.request("ui.dragWidget", p.clone(), T);
     assert_eq!(r["ok"], true, "{p}: {r}");
     h.settle(SETTLE);
-    assert_eq!(values(&h), [0.0; 5], "dragging from the shadow chevron moves no tone");
+    assert_eq!(values(h), [0.0; 5], "dragging from the shadow chevron moves no tone");
     assert_eq!(h.app.session.undo.len(), undo, "and leaves undo alone");
     assert!(h.app.session.interaction.is_none(), "no interaction was opened");
 
@@ -210,26 +199,24 @@ fn a_drag_starting_on_a_clipping_chevron_changes_no_develop_value() {
     let r = h.request("ui.dragWidget", p.clone(), T);
     assert_eq!(r["ok"], true, "{p}: {r}");
     h.settle(SETTLE);
-    assert_eq!(values(&h), [0.0; 5], "dragging from the highlight chevron moves no tone");
+    assert_eq!(values(h), [0.0; 5], "dragging from the highlight chevron moves no tone");
     assert_eq!(h.app.session.undo.len(), undo, "undo remains untouched");
     assert!(h.app.session.interaction.is_none(), "no interaction was opened");
 }
 
 /// Hovering a zone highlights it (the band covers that zone's share of the plot) and names it with
 /// its value in the readout; off the histogram both are gone.
-#[test]
-fn hovering_a_zone_highlights_it_and_shows_its_name_and_value() {
-    let mut h = edit_panel();
-    let hist = rect(&h, "histogram");
-    set(&mut h, "light.shadows", 25.0);
-    hover(&mut h, 0.25);
-    let band = rect(&h, "histogram:zone");
+fn hovering_a_zone_highlights_it_and_shows_its_name_and_value(h: &mut Headless) {
+    let hist = rect(h, "histogram");
+    set(h, "light.shadows", 25.0);
+    hover(h, 0.25);
+    let band = rect(h, "histogram:zone");
     let share = |x: f32| hist.left() + hist.width() * x;
     assert!(band.left() >= share(0.14) && band.right() <= share(0.36), "the Shadows band: {band:?} in {hist:?}");
     assert!(h.painted_text().iter().any(|t| t == "Shadows: +25"), "{:?}", h.painted_text());
     // the Exposure zone, with its EV unit
-    hover(&mut h, 0.5);
-    let band = rect(&h, "histogram:zone");
+    hover(h, 0.5);
+    let band = rect(h, "histogram:zone");
     assert!(band.left() >= share(0.34) && band.right() <= share(0.66), "the Exposure band: {band:?}");
     assert!(h.painted_text().iter().any(|t| t == "Exposure: 0.00 EV"), "{:?}", h.painted_text());
     // the pointer off the histogram: no band, no zone readout (the EXIF line is back)
@@ -237,16 +224,28 @@ fn hovering_a_zone_highlights_it_and_shows_its_name_and_value() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     h.step();
-    assert!(widget(&h, "histogram:zone").is_none(), "the highlight is gone");
+    assert!(widget(h, "histogram:zone").is_none(), "the highlight is gone");
     assert!(!h.painted_text().iter().any(|t| t.starts_with("Shadows: ")), "{:?}", h.painted_text());
+}
+
+#[test]
+fn the_zones_drag_reset_and_highlight_and_the_rest_of_the_histogram_moves_no_tone() {
+    let mut h = edit_panel();
+    a_drag_below_the_plot_leaves_the_tones_alone(&mut h);
+    a_drag_starting_on_a_clipping_chevron_changes_no_develop_value(&mut h);
+    the_cursor_over_the_histogram_offers_a_sideways_drag(&mut h);
+    dragging_the_exposure_zone_moves_the_exposure_in_one_undo_step(&mut h);
+    the_zone_locks_at_the_press_however_far_the_drag_travels(&mut h);
+    a_drag_lowers_and_clamps_at_the_controls_range(&mut h);
+    shift_drags_a_tenth_as_far(&mut h);
+    double_clicking_a_zone_resets_that_control_in_one_undo_step(&mut h);
+    hovering_a_zone_highlights_it_and_shows_its_name_and_value(&mut h);
 }
 
 /// The pointer over the histogram says the zones can be dragged sideways; elsewhere the canvas'
 /// own cursor is back.
-#[test]
-fn the_cursor_over_the_histogram_offers_a_sideways_drag() {
-    let mut h = edit_panel();
-    hover(&mut h, 0.5);
+fn the_cursor_over_the_histogram_offers_a_sideways_drag(h: &mut Headless) {
+    hover(h, 0.5);
     assert_eq!(h.last_cursor, egui::CursorIcon::ResizeHorizontal);
     let r = h.request("ui.move", json!({"x": 600.0, "y": 500.0}), T);
     assert_eq!(r["ok"], true, "{r}");

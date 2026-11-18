@@ -8,7 +8,7 @@ use crate::{LccApp, Services};
 
 #[test]
 fn opening_another_library_drops_the_old_librarys_cached_panels() {
-    let dir = std::env::temp_dir().join(format!("lc-ui-switchlib-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lc-ui-switchlib");
     let _ = std::fs::remove_dir_all(&dir);
     let (a, b) = (dir.join("a"), dir.join("b"));
     std::fs::create_dir_all(&a).unwrap();
@@ -42,8 +42,8 @@ fn opening_another_library_drops_the_old_librarys_cached_panels() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-fn temp(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("lc-ui-{tag}-{}", std::process::id()));
+fn temp(tag: &str) -> lcc_testkit::TempDir {
+    let dir = lcc_testkit::TempDir::new(&format!("lc-ui-{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -291,8 +291,8 @@ fn page_title_names_the_active_photo_and_unsaved_changes() {
     assert_eq!(empty.page_title(true), format!("{} •", lcc_brand::DISPLAY_NAME));
 }
 
-fn rename_app(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, LccApp) {
-    let root = std::env::temp_dir().join(format!("lc-ui-renamelib-{tag}-{}", std::process::id()));
+fn rename_app(tag: &str) -> (lcc_testkit::TempDir, std::path::PathBuf, LccApp) {
+    let root = lcc_testkit::TempDir::new(&format!("lc-ui-renamelib-{tag}"));
     let _ = std::fs::remove_dir_all(&root);
     let lib = root.join("Old Name");
     std::fs::create_dir_all(&lib).unwrap();

@@ -537,7 +537,7 @@ mod tests {
     const SPLIT_12: &str = "011 100 11110 1110 0 11110         11111110 11110100 11100111 01110000         00000001 11111110 01111111 11111110";
 
     #[test]
-    fn lossy_after_split_known_answers_12_bit() {
+    fn lossy_after_split_known_answers() {
         let t = split_table(0x40, 252, 4, 4095, 1);
         assert_eq!(t.split, 1);
         let out = decode(&pack(SPLIT_12), 4, 3, 12, &t).unwrap();
@@ -545,17 +545,16 @@ mod tests {
         // row 2: -500 (n9 keeps 6 bits: bin 1 of the negative side, centre -508 + 8), then +252 on the running
         // value -244 which is not clamped (8, not 252)
         assert_eq!(out, [256, 252, 255, 252, 252, 256, 244, 388, 0, 252, 8, 252]);
-    }
-
-    #[test]
-    fn lossy_after_split_known_answers_14_bit() {
-        let t = split_table(0x40, 1008, 16, 16383, 1);
-        // row 0 as in the 0x40 test above; row 1 in 10-bit words: 0 (n0), +32 (n6, exact), -254 (n8, exact),
-        // +510 (n9 keeps 7 bits: 127 << 2 plus 2)
-        let bits = "1100 100 111110 11110 0 111110 1111111110 1110100000 0000000001 1011111111";
-        let out = decode(&pack(bits), 4, 2, 14, &t);
-        // word 3 is `00` + 8 bits: 00 00000001 -> n8 extra 00000001 = -254
-        assert_eq!(out.unwrap(), [1012, 1008, 1011, 1008, 1008, 1040, 754, 1550]);
+        // lossy after split known answers 14 bit
+        {
+            let t = split_table(0x40, 1008, 16, 16383, 1);
+            // row 0 as in the 0x40 test above; row 1 in 10-bit words: 0 (n0), +32 (n6, exact), -254 (n8, exact),
+            // +510 (n9 keeps 7 bits: 127 << 2 plus 2)
+            let bits = "1100 100 111110 11110 0 111110 1111111110 1110100000 0000000001 1011111111";
+            let out = decode(&pack(bits), 4, 2, 14, &t);
+            // word 3 is `00` + 8 bits: 00 00000001 -> n8 extra 00000001 = -254
+            assert_eq!(out.unwrap(), [1012, 1008, 1011, 1008, 1008, 1040, 754, 1550]);
+        }
     }
 
     #[test]

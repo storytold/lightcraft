@@ -21,12 +21,10 @@ pub(crate) fn edges(app: &mut LccApp, ui: &mut egui::Ui, ctx: &egui::Context) ->
         // (the tool strip that stood at the far right is gone: its show/hide button is in the top
         // bar, Versions is in the left column and About in the Help menu)
         // Library's right column is its Classic panels, unless one of the strip's panels (Versions,
-        // History & Activity) is open in its place. Presets is a right panel like Edit or Crop, one
-        // at a time. The strip's top button folds the side away (`right_collapsed`).
-        if app.ui.right_collapsed {
-        } else if app.ui.presets && app.ui.module == module::ModuleId::Develop {
-            right(app, ui);
-        } else if app.ui.module == module::ModuleId::Library && app.ui.right == state::RightPanel::None {
+        // History & Activity) is open in its place. The presets are never here: they are a panel
+        // of Develop's left column. (The top bar's button folding the side away is part of
+        // `edge_visible`.)
+        if app.ui.module == module::ModuleId::Library && app.ui.right == state::RightPanel::None {
             panels::classic::right_column(app, ui);
         } else if app.ui.right != state::RightPanel::None {
             right(app, ui);
@@ -47,14 +45,8 @@ fn right(app: &mut LccApp, ui: &mut egui::Ui) {
     // the left sidebar is laid out after this panel: leave it its room
     let reserve = if app.ui.left_panel { state::LEFT_WIDTH.min } else { 0.0 };
     let width = app.ui.right_width;
-    let presets = app.ui.presets && app.ui.module == module::ModuleId::Develop;
-    let resized = panels::resizable_side(ui, false, "right_panel", egui::Frame::NONE, width, state::RIGHT_WIDTH, reserve, |ui| {
-        if presets {
-            panels::presets::show(app, ui, module::DEVELOP_LEFT, false);
-        } else {
-            panels::right::show(app, ui);
-        }
-    });
+    let resized =
+        panels::resizable_side(ui, false, "right_panel", egui::Frame::NONE, width, state::RIGHT_WIDTH, reserve, |ui| panels::right::show(app, ui));
     if let Some(w) = resized {
         app.ui.right_width = w;
     }

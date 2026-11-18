@@ -54,8 +54,38 @@ fn point_color_pick_and_adjust() {
 }
 
 #[test]
-fn red_eye_commands_and_controls() {
+fn red_eye_commands_controls_update_and_catchlight() {
     let mut s = demo();
+    // update moves and resizes a correction
+    s.execute("redeye.add", &json!({"center": [0.3, 0.4], "rx": 0.03, "ry": 0.02, "darken": 80})).unwrap();
+    s.execute("redeye.update", &json!({"index": 0, "move": [0.1, -0.05]})).unwrap();
+    let e = active_dev(&s).red_eye[0];
+    assert!((e.center.x - 0.4).abs() < 1e-9 && (e.center.y - 0.35).abs() < 1e-9, "{e:?}");
+    assert_eq!((e.rx, e.ry, e.darken), (0.03, 0.02, 80.0), "a move keeps the size and the sliders");
+    s.execute("redeye.update", &json!({"index": 0, "rx": 0.05, "ry": 9.0})).unwrap();
+    let e = active_dev(&s).red_eye[0];
+    assert_eq!((e.rx, e.ry), (0.05, 0.5), "radii are clamped as in redeye.add");
+    // the centre stays on the photo
+    s.execute("redeye.update", &json!({"index": 0, "move": [5.0, -5.0]})).unwrap();
+    assert_eq!(active_dev(&s).red_eye[0].center, lcc_geom::Point::new(1.0, 0.0));
+    assert!(s.execute("redeye.update", &json!({"index": 3, "move": [0.1, 0.0]})).is_err());
+    s.execute("redeye.delete", &json!({"index": 0})).unwrap();
+    // a pet eye's catchlight
+    s.execute("redeye.add", &json!({"center": [0.3, 0.4], "rx": 0.03, "ry": 0.03})).unwrap();
+    s.execute("redeye.add", &json!({"center": [0.6, 0.4], "rx": 0.03, "ry": 0.03, "pet": true})).unwrap();
+    assert!(s.execute("redeye.catchlight", &json!({"index": 0})).is_err(), "red eyes have no catchlight");
+    s.execute("redeye.catchlight", &json!({"index": 1})).unwrap();
+    assert_eq!(active_dev(&s).red_eye[1].catchlight, Some(lcc_geom::Point::new(-0.35, -0.35)));
+    s.execute("redeye.catchlight", &json!({"index": 1, "offset": [0.2, -3.0]})).unwrap();
+    assert_eq!(active_dev(&s).red_eye[1].catchlight, Some(lcc_geom::Point::new(0.2, -1.0)));
+    s.execute("redeye.catchlight", &json!({"index": 1, "on": false})).unwrap();
+    assert_eq!(active_dev(&s).red_eye[1].catchlight, None);
+    for _ in 0..2 {
+        s.execute("redeye.delete", &json!({"index": 0})).unwrap();
+    }
+    assert!(active_dev(&s).red_eye.is_empty());
+
+    // add, the per-eye controls, delete and the limit
     let r = s.execute("redeye.add", &json!({"center": [0.3, 0.4], "rx": 0.03, "ry": 0.02})).unwrap();
     assert_eq!(r["index"], 0);
     s.execute("redeye.add", &json!({"center": [0.6, 0.4], "rx": 0.03, "ry": 0.02, "darken": 80})).unwrap();
@@ -85,37 +115,6 @@ fn red_eye_commands_and_controls() {
     assert_eq!(active_dev(&s).red_eye.len(), lcc_develop::MAX_RED_EYES);
     let d = active_dev(&s);
     assert_eq!(lcc_develop::DevelopSettings::from_json(&d.to_json()).unwrap(), d);
-}
-
-#[test]
-fn red_eye_update_moves_and_resizes_a_correction() {
-    let mut s = demo();
-    s.execute("redeye.add", &json!({"center": [0.3, 0.4], "rx": 0.03, "ry": 0.02, "darken": 80})).unwrap();
-    s.execute("redeye.update", &json!({"index": 0, "move": [0.1, -0.05]})).unwrap();
-    let e = active_dev(&s).red_eye[0];
-    assert!((e.center.x - 0.4).abs() < 1e-9 && (e.center.y - 0.35).abs() < 1e-9, "{e:?}");
-    assert_eq!((e.rx, e.ry, e.darken), (0.03, 0.02, 80.0), "a move keeps the size and the sliders");
-    s.execute("redeye.update", &json!({"index": 0, "rx": 0.05, "ry": 9.0})).unwrap();
-    let e = active_dev(&s).red_eye[0];
-    assert_eq!((e.rx, e.ry), (0.05, 0.5), "radii are clamped as in redeye.add");
-    // the centre stays on the photo
-    s.execute("redeye.update", &json!({"index": 0, "move": [5.0, -5.0]})).unwrap();
-    assert_eq!(active_dev(&s).red_eye[0].center, lcc_geom::Point::new(1.0, 0.0));
-    assert!(s.execute("redeye.update", &json!({"index": 3, "move": [0.1, 0.0]})).is_err());
-}
-
-#[test]
-fn pet_eye_catchlight_command() {
-    let mut s = demo();
-    s.execute("redeye.add", &json!({"center": [0.3, 0.4], "rx": 0.03, "ry": 0.03})).unwrap();
-    s.execute("redeye.add", &json!({"center": [0.6, 0.4], "rx": 0.03, "ry": 0.03, "pet": true})).unwrap();
-    assert!(s.execute("redeye.catchlight", &json!({"index": 0})).is_err(), "red eyes have no catchlight");
-    s.execute("redeye.catchlight", &json!({"index": 1})).unwrap();
-    assert_eq!(active_dev(&s).red_eye[1].catchlight, Some(lcc_geom::Point::new(-0.35, -0.35)));
-    s.execute("redeye.catchlight", &json!({"index": 1, "offset": [0.2, -3.0]})).unwrap();
-    assert_eq!(active_dev(&s).red_eye[1].catchlight, Some(lcc_geom::Point::new(0.2, -1.0)));
-    s.execute("redeye.catchlight", &json!({"index": 1, "on": false})).unwrap();
-    assert_eq!(active_dev(&s).red_eye[1].catchlight, None);
 }
 
 #[test]
@@ -152,19 +151,9 @@ fn targeted_adjustment_on_curve_and_mixer() {
 /// the Custom Kelvin value that renders the same before applying an edit on top of it.
 #[test]
 fn white_balance_commands_write_kelvin_on_raws_whose_camera_has_matrices() {
-    use lcc_catalog::{MediaKind, Op, Photo, Source};
     use lcc_develop::{DevelopSettings, WbMode, WbScale};
     let mut s = Session::new();
-    let add = |s: &mut Session, name: &str, camera: &str, as_shot: (f64, f64)| {
-        let id = s.catalog.alloc_photo_id();
-        let mut p = Photo::new(id, Source::File { path: format!("/photos/{name}") }, name, "ARW", 64, 64, "2026-01-01T00:00:00");
-        p.kind = MediaKind::Raw;
-        p.meta.camera = camera.into();
-        p.as_shot_wb = Some(as_shot);
-        p.develop = std::sync::Arc::new(p.camera_defaults());
-        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
-        id
-    };
+    let add = add_raw;
     let kelvin = add(&mut s, "a.arw", "SONY ILCE-7M3", (4986.0, -2.0));
     let relative = add(&mut s, "b.arw", "HASSELBLAD Lunar", (6500.0, 0.0));
     let dev = |s: &Session, id| (*s.develop_of(id).unwrap()).clone();
@@ -242,6 +231,19 @@ fn white_balance_commands_write_kelvin_on_raws_whose_camera_has_matrices() {
     assert!(!s.catalog.photo(kelvin).unwrap().is_edited());
 }
 
+/// A raw photo of `camera` with the as-shot white balance `as_shot` (no file behind it).
+fn add_raw(s: &mut Session, name: &str, camera: &str, as_shot: (f64, f64)) -> lcc_catalog::PhotoId {
+    use lcc_catalog::{MediaKind, Op, Photo, Source};
+    let id = s.catalog.alloc_photo_id();
+    let mut p = Photo::new(id, Source::File { path: format!("/photos/{name}") }, name, "ARW", 64, 64, "2026-01-01T00:00:00");
+    p.kind = MediaKind::Raw;
+    p.meta.camera = camera.into();
+    p.as_shot_wb = Some(as_shot);
+    p.develop = std::sync::Arc::new(p.camera_defaults());
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    id
+}
+
 fn engine_effective(info: &lcc_pipeline::SourceInfo, d: &lcc_develop::DevelopSettings) -> (f64, f64) {
     lcc_pipeline::local::effective_wb(info, d)
 }
@@ -252,19 +254,9 @@ fn engine_effective(info: &lcc_pipeline::SourceInfo, d: &lcc_develop::DevelopSet
 /// partial that says `scale: "kelvin"` is read in Kelvin.
 #[test]
 fn one_field_wb_partial_merge_keeps_the_other_field_on_its_scale() {
-    use lcc_catalog::{MediaKind, Op, Photo, Source};
     use lcc_develop::{DevelopSettings, WbMode, WbScale};
     let mut s = Session::new();
-    let add = |s: &mut Session, name: &str, camera: &str, as_shot: (f64, f64)| {
-        let id = s.catalog.alloc_photo_id();
-        let mut p = Photo::new(id, Source::File { path: format!("/photos/{name}") }, name, "ARW", 64, 64, "2026-01-01T00:00:00");
-        p.kind = MediaKind::Raw;
-        p.meta.camera = camera.into();
-        p.as_shot_wb = Some(as_shot);
-        p.develop = std::sync::Arc::new(p.camera_defaults());
-        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
-        id
-    };
+    let add = add_raw;
     let as_shot = (4986.0, -2.0);
     let kelvin = add(&mut s, "a.arw", "SONY ILCE-7M3", as_shot);
     let relative = add(&mut s, "b.arw", "NOBODY MADE-UP X1", (6500.0, 0.0));
@@ -423,19 +415,9 @@ fn one_field_wb_partial_merge_keeps_the_other_field_on_its_scale() {
 /// `scale` together, and those keep their old path through `Preset::apply` → `apply_partial` unchanged.
 #[test]
 fn one_field_wb_preset_apply_keeps_the_other_field_on_its_scale() {
-    use lcc_catalog::{MediaKind, Op, Photo, Source};
     use lcc_develop::{DevelopSettings, WbMode, WbScale};
     let mut s = Session::new();
-    let add = |s: &mut Session, name: &str, camera: &str, as_shot: (f64, f64)| {
-        let id = s.catalog.alloc_photo_id();
-        let mut p = Photo::new(id, Source::File { path: format!("/photos/{name}") }, name, "ARW", 64, 64, "2026-01-01T00:00:00");
-        p.kind = MediaKind::Raw;
-        p.meta.camera = camera.into();
-        p.as_shot_wb = Some(as_shot);
-        p.develop = std::sync::Arc::new(p.camera_defaults());
-        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
-        id
-    };
+    let add = add_raw;
     let as_shot = (4986.0, -2.0);
     let kelvin = add(&mut s, "preset-wb.arw", "SONY ILCE-7M3", as_shot);
     let l2k = |t, ti| lcc_pipeline::local::legacy_to_kelvin(t, ti, as_shot);
@@ -491,9 +473,9 @@ fn one_field_wb_preset_apply_keeps_the_other_field_on_its_scale() {
 }
 
 /// A mask's local Point Color: picked into the mask, adjusted, rendered only inside it, deleted;
-/// hostile arguments are errors.
+/// hostile arguments are errors. Then the mask's local Color Mixer.
 #[test]
-fn mask_point_color_pick_set_and_delete() {
+fn mask_point_color_and_color_mixer() {
     let mut s = demo();
     let id = s.active().unwrap();
     // a mask over the top half (the sky)
@@ -522,15 +504,9 @@ fn mask_point_color_pick_set_and_delete() {
     assert!(s.execute("mask.pointColorPick", &json!({"x": 0.3, "y": 0.1})).is_err(), "at most 8");
     s.execute("mask.pointColorDelete", &json!({"index": 0})).unwrap();
     assert_eq!(active_dev(&s).masks[0].point_colors.len(), lcc_develop::MAX_POINT_COLORS - 1);
-}
 
-/// A mask's local Color Mixer: set by band, moved by the targeted tool, rendered only inside the
-/// mask, carried by presets' JSON and Auto Sync; hostile arguments are errors.
-#[test]
-fn mask_color_mixer_set_targeted_and_synced() {
-    let mut s = demo();
-    let id = s.active().unwrap();
-    s.execute("mask.add", &json!({"kind": "linear", "start": [0.5, 0.45], "end": [0.5, 0.55]})).unwrap();
+    // The mask's local Color Mixer: set by band, moved by the targeted tool, rendered only inside the mask, carried by
+    // presets' JSON and Auto Sync; hostile arguments are errors. (The sample left with a shift was deleted above.)
     let before = s.render_now(id, 384, 384).unwrap().image;
     let r = s.execute("mask.mixer", &json!({"values": {"blue.sat": -500, "aqua.sat": -100, "purple.sat": -100, "red.sat": -100, "orange.sat": -100, "yellow.sat": -100, "green.sat": -100, "magenta.sat": -100}})).unwrap();
     assert_eq!(r["mixer"]["blue.sat"], -100.0, "clamped: {r}");

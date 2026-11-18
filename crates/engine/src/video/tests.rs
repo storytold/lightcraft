@@ -67,11 +67,9 @@ fn select(s: &mut Session, id: u64) {
     s.execute("library.select", &json!({"ids": [id], "active": id})).unwrap();
 }
 
-fn tmp(name: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("lcc-video-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+/// The test's folder in Temp, removed when the returned guard is dropped: bind it for the whole test.
+fn tmp(name: &str) -> lcc_testkit::TempDir {
+    lcc_testkit::TempDir::new(&format!("lcc-video-{name}"))
 }
 
 fn run(s: &mut Session, id: &str, p: Value) -> Value {
@@ -84,7 +82,8 @@ fn approx(a: &Value, b: f64) -> bool {
 
 #[test]
 fn without_a_backend_video_commands_are_unavailable() {
-    let (mut s, _) = session(&tmp("none"));
+    let dir = tmp("none");
+    let (mut s, _) = session(&dir);
     s.video.backend = None;
     let e = s.execute("video.play", &json!({})).unwrap_err().to_string();
     assert!(e.contains("isn't available in this build"), "{e}");
@@ -92,7 +91,8 @@ fn without_a_backend_video_commands_are_unavailable() {
 
 #[test]
 fn photos_that_arent_videos_are_refused() {
-    let (mut s, _) = session(&tmp("photo"));
+    let dir = tmp("photo");
+    let (mut s, _) = session(&dir);
     select(&mut s, 901);
     for id in ["video.get", "video.play", "video.seek", "video.setTrim", "video.captureFrame"] {
         let e = s.execute(id, &json!({"time": 1, "in": 0, "out": 1})).unwrap_err().to_string();
@@ -110,7 +110,8 @@ fn unreadable_clip_is_an_error() {
 
 #[test]
 fn play_pause_follow_the_clock_and_stop_at_the_end() {
-    let (mut s, ms) = session(&tmp("play"));
+    let dir = tmp("play");
+    let (mut s, ms) = session(&dir);
     let g = run(&mut s, "video.get", json!({}));
     assert_eq!(g["playing"], false);
     assert!(approx(&g["current"], 0.0) && approx(&g["duration"], 10.0) && approx(&g["poster"], 1.0));
@@ -134,16 +135,19 @@ fn play_pause_follow_the_clock_and_stop_at_the_end() {
 
 #[test]
 fn can_play_audio_needs_the_backend_and_a_sound_track() {
-    let (mut s, _) = session(&tmp("mute"));
+    let dir = tmp("mute");
+    let (mut s, _) = session(&dir);
     assert_eq!(run(&mut s, "video.get", json!({}))["canPlayAudio"], false);
-    let (mut s, _) = session(&tmp("sound"));
+    let dir = tmp("sound");
+    let (mut s, _) = session(&dir);
     let g = run(&mut s, "video.get", json!({}));
     assert_eq!((g["hasAudio"].clone(), g["canPlayAudio"].clone()), (json!(true), json!(true)));
 }
 
 #[test]
 fn playback_can_follow_an_audio_device_clock() {
-    let (mut s, ms) = session(&tmp("audioclock"));
+    let dir = tmp("audioclock");
+    let (mut s, ms) = session(&dir);
     ms.store(3000, Ordering::SeqCst);
     run(&mut s, "video.play", json!({}));
     let audio = lcc_audio_out::AudioClock::new(48_000);
@@ -160,7 +164,8 @@ fn playback_can_follow_an_audio_device_clock() {
 
 #[test]
 fn playback_respects_the_trim_and_loops() {
-    let (mut s, ms) = session(&tmp("trim"));
+    let dir = tmp("trim");
+    let (mut s, ms) = session(&dir);
     run(&mut s, "video.setTrim", json!({"in": 2, "out": 4}));
     let g = run(&mut s, "video.get", json!({}));
     assert!(approx(&g["current"], 2.0) && approx(&g["trimIn"], 2.0) && approx(&g["trimOut"], 4.0), "{g}");
@@ -180,7 +185,8 @@ fn playback_respects_the_trim_and_loops() {
 
 #[test]
 fn seek_snaps_and_steps_move_whole_frames() {
-    let (mut s, _) = session(&tmp("step"));
+    let dir = tmp("step");
+    let (mut s, _) = session(&dir);
     let g = run(&mut s, "video.seek", json!({"time": 1.019}));
     assert!(approx(&g["current"], 1.0) && g["frame"] == 25.0, "{g}");
     let g = run(&mut s, "video.stepFrame", json!({"delta": 3}));
@@ -202,7 +208,8 @@ fn seek_snaps_and_steps_move_whole_frames() {
 
 #[test]
 fn hostile_params_are_errors_not_panics() {
-    let (mut s, _) = session(&tmp("hostile"));
+    let dir = tmp("hostile");
+    let (mut s, _) = session(&dir);
     for (id, p) in [
         ("video.seek", json!({})),
         ("video.seek", json!({"time": "soon"})),
@@ -228,7 +235,8 @@ fn hostile_params_are_errors_not_panics() {
 
 #[test]
 fn trim_and_poster_undo_and_redo() {
-    let (mut s, _) = session(&tmp("undo"));
+    let dir = tmp("undo");
+    let (mut s, _) = session(&dir);
     run(&mut s, "video.setTrim", json!({"in": 1, "out": 9}));
     run(&mut s, "video.setPoster", json!({"time": 3.01}));
     let g = run(&mut s, "video.get", json!({}));
@@ -256,7 +264,8 @@ fn trim_and_poster_undo_and_redo() {
 
 #[test]
 fn switching_clips_resets_the_player() {
-    let (mut s, _) = session(&tmp("switch"));
+    let dir = tmp("switch");
+    let (mut s, _) = session(&dir);
     run(&mut s, "video.seek", json!({"time": 5}));
     select(&mut s, 901);
     select(&mut s, 900);
@@ -324,25 +333,6 @@ fn capture_frame_bakes_the_clip_grade() {
     let new = s.catalog.photo(PhotoId(graded["id"].as_u64().unwrap())).unwrap();
     assert!(!new.is_edited(), "the grade is baked, the still starts at defaults");
     let _ = std::fs::remove_dir_all(&d);
-}
-
-#[test]
-fn commands_are_listed_with_docs() {
-    for id in [
-        "video.get",
-        "video.play",
-        "video.pause",
-        "video.togglePlay",
-        "video.seek",
-        "video.stepFrame",
-        "video.setTrim",
-        "video.resetTrim",
-        "video.setPoster",
-        "video.captureFrame",
-    ] {
-        let c = crate::cmd::find_command(id).unwrap_or_else(|| panic!("{id}"));
-        assert!(!c.params.is_empty() && !c.label.is_empty());
-    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -345,8 +345,7 @@ mod tests {
 
     #[test]
     fn watched_reports_a_settled_change_once() {
-        let d = std::env::temp_dir().join(format!("edit-watch-{}", std::process::id()));
-        std::fs::create_dir_all(&d).unwrap();
+        let d = lcc_testkit::TempDir::new("edit-watch");
         let f = d.join("a.tif");
         std::fs::write(&f, b"1").unwrap();
         let mut w = Watched::default();
@@ -406,39 +405,41 @@ mod tests {
         (port, rx)
     }
 
-    fn control(port: u16) -> Control {
-        let dir = std::env::temp_dir().join(format!("edit-ev-{}-{port}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+    /// The control for `port`, and the Temp folder holding its token file (removed when dropped).
+    fn control(port: u16) -> (lcc_testkit::TempDir, Control) {
+        let dir = lcc_testkit::TempDir::new(&format!("edit-ev-{port}"));
         let token = dir.join("token");
         std::fs::write(&token, "secret\n").unwrap();
-        Control { port, token_file: token.to_string_lossy().to_string(), root: "/root".into() }
+        (dir, Control { port, token_file: token.to_string_lossy().to_string(), root: "/root".into() })
     }
 
     #[test]
-    fn subscribe_delivers_saved_and_closed() {
-        let saved = json!({"event": "document.saved", "params": {"path": "a/b.psd", "format": "psd", "docId": 1}}).to_string();
-        let closed = json!({"event": "document.closed", "params": {"path": "/root/a/b.psd"}}).to_string();
-        let (port, seen) = mock_editor(true, vec!["garbage".into(), saved, closed]);
-        let stop = std::sync::atomic::AtomicBool::new(false);
-        let mut got = Vec::new();
-        subscribe(&control(port), &stop, |e| {
-            got.push(e);
-            got.len() < 2
-        })
-        .unwrap();
-        assert_eq!(got, vec![EditorEvent::Saved("/root/a/b.psd".into()), EditorEvent::Closed("/root/a/b.psd".into())]);
-        assert_eq!(seen.recv().unwrap()["params"]["token"], "secret", "auth first, token trimmed");
-        assert_eq!(seen.recv().unwrap()["method"], "events.subscribe");
-    }
-
-    #[test]
-    fn an_older_editor_without_events_is_an_error() {
-        let (port, _) = mock_editor(false, Vec::new());
-        let stop = std::sync::atomic::AtomicBool::new(false);
-        let e = subscribe(&control(port), &stop, |_| true).unwrap_err();
-        assert!(e.contains("events.subscribe"), "{e}");
-        // nothing listening
-        let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        assert!(subscribe(&control(free), &stop, |_| true).is_err());
+    fn subscribe_delivers_saved_and_closed_and_an_older_editor_without_events_is_an_error() {
+        // subscribe delivers saved and closed
+        {
+            let saved = json!({"event": "document.saved", "params": {"path": "a/b.psd", "format": "psd", "docId": 1}}).to_string();
+            let closed = json!({"event": "document.closed", "params": {"path": "/root/a/b.psd"}}).to_string();
+            let (port, seen) = mock_editor(true, vec!["garbage".into(), saved, closed]);
+            let stop = std::sync::atomic::AtomicBool::new(false);
+            let mut got = Vec::new();
+            subscribe(&control(port).1, &stop, |e| {
+                got.push(e);
+                got.len() < 2
+            })
+            .unwrap();
+            assert_eq!(got, vec![EditorEvent::Saved("/root/a/b.psd".into()), EditorEvent::Closed("/root/a/b.psd".into())]);
+            assert_eq!(seen.recv().unwrap()["params"]["token"], "secret", "auth first, token trimmed");
+            assert_eq!(seen.recv().unwrap()["method"], "events.subscribe");
+        }
+        // an older editor without events is an error
+        {
+            let (port, _) = mock_editor(false, Vec::new());
+            let stop = std::sync::atomic::AtomicBool::new(false);
+            let e = subscribe(&control(port).1, &stop, |_| true).unwrap_err();
+            assert!(e.contains("events.subscribe"), "{e}");
+            // nothing listening
+            let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+            assert!(subscribe(&control(free).1, &stop, |_| true).is_err());
+        }
     }
 }

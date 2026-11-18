@@ -14,7 +14,8 @@ import { Aside } from '@astrojs/starlight/components';
 - **Names from other apps**: face regions that Lightroom, digiKam and others wrote into XMP are read and shown as boxes in the loupe (hide, resize or remove them). No AI needed.
 - **People view**: View ▸ **People** (or the People button in the toolbar) lists each named person with a close-up and photo count. Click one to filter the grid; `person:` works in search.
 - **Detect Faces**: Library ▸ **Detect Faces** finds faces in the selected photos with the MediaPipe Face Landmarker and adds unnamed boxes in one undo step. It offers the small one-time download the first time. Boxes from XMP or that you named are never touched. Finds faces down to about 60 pixels; tiny faces in big group photos can be missed.
-- **Recognise faces (experimental)**: Settings ▸ **Faces**. With a recognition model chosen, a background scan works out what each face looks like and suggests names from faces you have already named. A suggestion is only a label such as "Jane Doe?" until you confirm it; nothing is named for you.
+- **Recognise faces (experimental)**: Settings ▸ **Faces**. Off until you switch it on, even after a model is downloaded: scanning a big library takes a long time. With a recognition model chosen, a background scan works out what each face looks like and suggests names from faces you have already named. A suggestion is only a label such as "Jane Doe?" until you confirm it; nothing is named for you.
+- **Face scan controls**: Settings ▸ Faces ▸ **Face scan** shows where the scan is (not started, indexing, paused, complete, and how many photos are done) with **Pause** / **Resume**, **Clear…** (deletes what the scan learned and leaves it paused; named faces stay) and **Restart…** (deletes it and scans every photo again). Both ask first. While the scan runs, its "Finding faces" row in the activity stack has a pause button (resume while paused; a pause is kept across restarts) and a gear that opens Settings ▸ Faces.
 - **Everything stays local**: face data is cached beside the library, not in the catalog or XMP.
 
 <NeedsImage what="People view with a few named people, each with a face close-up and photo count" />
@@ -24,7 +25,7 @@ import { Aside } from '@astrojs/starlight/components';
 - Detection: the MediaPipe face model (a few MB, Apache-2.0).
 - Recognition: a model you choose in Settings ▸ Faces ▸ Download after accepting its terms (AuraFace 261 MB, SFace 39 MB). Nothing is bundled, and everything else works without one.
 - Faces are found from the photo upright and uncropped, so crops and edits do not matter. Raws use their embedded preview.
-- Face models run on the CPU unless a check shows the GPU gives the same results faster. Settings ▸ Faces has **Run face models on the CPU only**.
+- Face detection and recognition run on the GPU when a background check finds it matches the CPU and is faster; Settings ▸ Faces shows the device. Otherwise they run on the CPU unless a check shows the GPU gives the same results faster. Settings ▸ Faces has **Run face models on the CPU only**.
 
 ## Limits
 

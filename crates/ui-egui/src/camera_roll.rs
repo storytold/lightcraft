@@ -67,11 +67,14 @@ pub fn poll(app: &mut LccApp, ctx: &egui::Context) {
     app.pending_camera_roll = None;
     match answer {
         Ok(paths) if paths.is_empty() => app.toast(ctx, crate::i18n::tr("There are no photos in the camera roll")),
-        Ok(paths) => {
-            if let Err(e) = crate::import::open(app, paths) {
-                app.toast_error(ctx, e);
+        Ok(paths) => match crate::import::open(app, paths) {
+            Ok(_) => {
+                if let Some(scan) = app.scan.as_mut() {
+                    scan.camera_roll = true;
+                }
             }
-        }
+            Err(e) => app.toast_error(ctx, e),
+        },
         Err(e) => app.toast_error(ctx, format!("{}: {e}", crate::i18n::tr("Couldn't add the camera roll"))),
     }
 }
@@ -140,7 +143,11 @@ fn watch_collect(app: &mut LccApp, ctx: &egui::Context) {
     };
     app.pending_camera_roll_watch = None;
     match answer {
-        Ok(paths) => import_new(app, paths),
+        Ok(paths) => {
+            // device sync's camera-roll collection learns where the platform keeps the roll
+            let _ = app.session.execute("sync.cameraRollSeen", &serde_json::json!({"paths": paths.iter().take(16).collect::<Vec<_>>()}));
+            import_new(app, paths)
+        }
         // a watch that can't read the roll says so in the log, not in a toast every few minutes
         Err(e) => log::warn!("camera roll watch: {e}"),
     }
@@ -304,7 +311,7 @@ mod tests {
         let ctx = egui::Context::default();
         let (mut app, answer) = app_with_roll();
         app.run("file.addCameraRoll", json!({})).unwrap();
-        let dir = std::env::temp_dir().join(format!("lc-camera-roll-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lc-camera-roll");
         std::fs::create_dir_all(&dir).unwrap();
         let img = lcc_raster::Rgba8::from_fn(8, 6, |x, y| [(x * 20) as u8, (y * 30) as u8, 9, 255]);
         let o = lcc_engine::export::ExportOptions { format: lcc_engine::export::ExportFormat::Png, ..Default::default() };
@@ -345,7 +352,7 @@ mod tests {
         let ctx = egui::Context::default();
         let (mut app, answer) = app_with_roll();
         app.ui.camera_roll_watch = true;
-        let dir = std::env::temp_dir().join(format!("lc-camera-roll-watch-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lc-camera-roll-watch");
         std::fs::create_dir_all(&dir).unwrap();
         let photo = photo_in(&dir, "IMG_1.png");
         watch_tick(&mut app, &ctx, false);
@@ -365,7 +372,7 @@ mod tests {
         let ctx = egui::Context::default();
         let (mut app, answer) = app_with_roll();
         app.ui.camera_roll_watch = true;
-        let dir = std::env::temp_dir().join(format!("lc-camera-roll-known-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lc-camera-roll-known");
         std::fs::create_dir_all(&dir).unwrap();
         let photo = photo_in(&dir, "IMG_1.png");
         app.session.execute("library.import", &json!({"paths": [photo.clone()]})).unwrap();

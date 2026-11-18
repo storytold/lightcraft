@@ -24,31 +24,32 @@ fn session_with_two_albums() -> Result<(Session, u64, u64)> {
 
 #[test]
 fn showing_an_album_drops_the_album_the_filter_held() {
-    let (mut s, x, a) = session_with_two_albums().unwrap();
-    s.execute("library.filter", &json!({"album": x, "rating": 4})).unwrap();
-    assert_eq!(s.visible().len(), 1, "the album narrows the grid, or the hidden album would not matter");
-    s.execute("library.source", &json!({"kind": "album", "id": a})).unwrap();
-    assert_eq!(s.filter.album, None, "one album at a time: the one shown wins, as for a library folder");
-    assert_eq!(s.filter.rating, 4, "the rest of the filter stays");
-    // the old album must not narrow the next source, with no chip to show it
-    s.execute("library.source", &json!({"kind": "all"})).unwrap();
-    assert_eq!(s.visible().len(), 2, "photos 1 and 2 have four stars or more");
-}
-
-#[test]
-fn the_album_filter_stays_while_the_source_is_not_an_album() {
-    let (mut s, x, _) = session_with_two_albums().unwrap();
-    s.execute("library.filter", &json!({"album": x})).unwrap();
-    s.execute("library.source", &json!({"kind": "picks"})).unwrap();
-    s.execute("library.source", &json!({"kind": "all"})).unwrap();
-    assert_eq!(s.filter.album.map(|a| a.0), Some(x));
-    assert_eq!(s.visible().len(), 1);
-}
-
-#[test]
-fn a_refused_album_source_leaves_the_filter_alone() {
-    let (mut s, x, _) = session_with_two_albums().unwrap();
-    s.execute("library.filter", &json!({"album": x})).unwrap();
-    assert!(s.execute("library.source", &json!({"kind": "album", "id": 9999})).is_err());
-    assert_eq!(s.filter.album.map(|a| a.0), Some(x));
+    // showing an album drops the album the filter held
+    {
+        let (mut s, x, a) = session_with_two_albums().unwrap();
+        s.execute("library.filter", &json!({"album": x, "rating": 4})).unwrap();
+        assert_eq!(s.visible().len(), 1, "the album narrows the grid, or the hidden album would not matter");
+        s.execute("library.source", &json!({"kind": "album", "id": a})).unwrap();
+        assert_eq!(s.filter.album, None, "one album at a time: the one shown wins, as for a library folder");
+        assert_eq!(s.filter.rating, 4, "the rest of the filter stays");
+        // the old album must not narrow the next source, with no chip to show it
+        s.execute("library.source", &json!({"kind": "all"})).unwrap();
+        assert_eq!(s.visible().len(), 2, "photos 1 and 2 have four stars or more");
+    }
+    // the album filter stays while the source is not an album
+    {
+        let (mut s, x, _) = session_with_two_albums().unwrap();
+        s.execute("library.filter", &json!({"album": x})).unwrap();
+        s.execute("library.source", &json!({"kind": "picks"})).unwrap();
+        s.execute("library.source", &json!({"kind": "all"})).unwrap();
+        assert_eq!(s.filter.album.map(|a| a.0), Some(x));
+        assert_eq!(s.visible().len(), 1);
+    }
+    // a refused album source leaves the filter alone
+    {
+        let (mut s, x, _) = session_with_two_albums().unwrap();
+        s.execute("library.filter", &json!({"album": x})).unwrap();
+        assert!(s.execute("library.source", &json!({"kind": "album", "id": 9999})).is_err());
+        assert_eq!(s.filter.album.map(|a| a.0), Some(x));
+    }
 }

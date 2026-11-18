@@ -102,6 +102,25 @@ fn truncated_and_hostile_files_are_reported_never_panic() {
     // garbage and a non-DNG TIFF
     assert!(matches!(check_dng(b"not a tiff at all"), DngCheck::Damaged(_)));
     assert!(matches!(check_dng(&[]), DngCheck::Damaged(_)));
+    // wrong tile offsets are damage not a panic
+    {
+        let whole = dng(DngCompression::Lj92 { tile: 32 });
+        let (at, n) = tile_offsets_at(&whole);
+        assert!(n > 1);
+        // every tile pointing past the end, then every tile pointing into the file's header, then each one swapped
+        for value in [u32::MAX, whole.len() as u32 + 1, 0, 8, (whole.len() / 2) as u32] {
+            let mut bad = whole.clone();
+            for i in 0..n {
+                bad[at + 4 * i..at + 4 * i + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            assert!(matches!(check_dng(&bad), DngCheck::Damaged(_)), "offsets all {value}: {:?}", check_dng(&bad));
+        }
+        let mut swapped = whole.clone();
+        let (a, b) = (swapped[at..at + 4].to_vec(), swapped[at + 4..at + 8].to_vec());
+        swapped[at..at + 4].copy_from_slice(&b);
+        swapped[at + 4..at + 8].copy_from_slice(&a);
+        assert!(matches!(check_dng(&swapped), DngCheck::Damaged(_)), "two tiles swapped: {:?}", check_dng(&swapped));
+    }
 }
 
 /// The stored tile offsets, found in the file's bytes.
@@ -111,26 +130,6 @@ fn tile_offsets_at(bytes: &[u8]) -> (usize, usize) {
     let pattern: Vec<u8> = offsets.iter().flat_map(|o| (*o as u32).to_le_bytes()).collect();
     let at = bytes.windows(pattern.len()).position(|w| w == pattern.as_slice()).unwrap();
     (at, offsets.len())
-}
-
-#[test]
-fn wrong_tile_offsets_are_damage_not_a_panic() {
-    let whole = dng(DngCompression::Lj92 { tile: 32 });
-    let (at, n) = tile_offsets_at(&whole);
-    assert!(n > 1);
-    // every tile pointing past the end, then every tile pointing into the file's header, then each one swapped
-    for value in [u32::MAX, whole.len() as u32 + 1, 0, 8, (whole.len() / 2) as u32] {
-        let mut bad = whole.clone();
-        for i in 0..n {
-            bad[at + 4 * i..at + 4 * i + 4].copy_from_slice(&value.to_le_bytes());
-        }
-        assert!(matches!(check_dng(&bad), DngCheck::Damaged(_)), "offsets all {value}: {:?}", check_dng(&bad));
-    }
-    let mut swapped = whole.clone();
-    let (a, b) = (swapped[at..at + 4].to_vec(), swapped[at + 4..at + 8].to_vec());
-    swapped[at..at + 4].copy_from_slice(&b);
-    swapped[at + 4..at + 8].copy_from_slice(&a);
-    assert!(matches!(check_dng(&swapped), DngCheck::Damaged(_)), "two tiles swapped: {:?}", check_dng(&swapped));
 }
 
 #[test]

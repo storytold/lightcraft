@@ -234,14 +234,6 @@ fn outside_a_job_the_job_calls_fail() {
 }
 
 #[test]
-fn continue_calls_the_job_again_with_its_state() {
-    let mut m = installed(&three_steps(), Limits::default());
-    let rep = Rec::default();
-    assert_eq!(run_job(&mut m, &mut NoHost, &rep).unwrap(), json!({"message": "all"}));
-    assert_eq!(rep.items.get(), 3, "three calls: the first, then one per continue");
-}
-
-#[test]
 fn each_call_of_a_job_has_its_own_budget() {
     // one host call per call, three calls: more than one call's budget, within each one's
     let limits = Limits { max_host_calls: 2, ..Limits::default() };

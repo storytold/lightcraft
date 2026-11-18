@@ -129,40 +129,6 @@ fn a_generated_patch_renders_under_later_white_balance_and_exposure() {
 }
 
 #[test]
-fn a_background_generation_holds_an_activity_row_until_it_is_applied() {
-    let dir = temp("activity");
-    let slow: Filler = Arc::new(|w, h, rgb, mask, v| {
-        std::thread::sleep(std::time::Duration::from_millis(700));
-        (mean_filler())(w, h, rgb, mask, v)
-    });
-    let (mut s, _mock) = session(&dir, slow);
-    s.genfill.background = true;
-    s.execute("genfill.setKey", &json!({"provider": "bfl", "key": KEY})).unwrap();
-    s.execute("genfill.consent", &json!({"provider": "bfl", "accept": true})).unwrap();
-    s.execute("spot.add", &json!({"mode": "generate", "points": [[0.3, 0.6]], "size": 0.02})).unwrap();
-    let r = s.execute("spot.generate", &json!({"provider": "bfl", "prompt": "a lawn"})).unwrap();
-    assert_eq!(r["started"], true);
-    let rows = s.activity.list();
-    assert!(rows.iter().any(|t| t.kind == "genfill" && t.cancellable), "{:?}", rows.iter().map(|t| t.kind).collect::<Vec<_>>());
-    assert!(s.execute("spot.generate", &json!({"provider": "bfl"})).is_err(), "one at a time");
-    let t0 = std::time::Instant::now();
-    let done = loop {
-        if let Some(r) = s.genfill_poll() {
-            break r;
-        }
-        assert!(t0.elapsed().as_secs() < 30, "the generation never finished");
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    };
-    assert!(done.is_ok(), "{done:?}");
-    assert!(!s.activity.list().iter().any(|t| t.kind == "genfill"), "the row goes with the job");
-    let id = s.active().unwrap();
-    assert!(s.develop_of(id).unwrap().spots[0].shown_gen().is_some());
-    let st = s.execute("genfill.status", &json!({})).unwrap();
-    assert_eq!(st["last"]["ok"], true, "{st}");
-    let _ = std::fs::remove_dir_all(dir);
-}
-
-#[test]
 fn a_mask_becomes_a_spot_that_covers_it() {
     let mut s = Session::with_demo();
     let r = s.execute("mask.add", &json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.1, "ry": 0.1, "feather": 0})).unwrap();
@@ -189,13 +155,20 @@ fn generations(mock: &MockServer) -> usize {
     mock.seen().iter().filter(|x| x.image.is_some()).count()
 }
 
+/// Also: a background generation holds a cancellable activity row until it is applied.
+///
 /// Never several pieces (decided): a normal area goes in exactly one request, with its cost known
 /// before; an area too large for one request sends nothing, starts no activity and says so in the
 /// decided words, from the estimate and from Generate alike.
 #[test]
 fn a_fill_is_one_request_or_none() {
     let dir = temp("onerequest");
-    let (mut s, mock) = session(&dir, mean_filler());
+    // slow enough that the job is still running when its activity row is looked at
+    let slow: Filler = Arc::new(|w, h, rgb, mask, v| {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        (mean_filler())(w, h, rgb, mask, v)
+    });
+    let (mut s, mock) = session(&dir, slow);
     s.genfill.background = true;
     s.execute("genfill.setKey", &json!({"provider": "openai", "key": KEY})).unwrap();
     s.execute("genfill.consent", &json!({"provider": "openai", "accept": true})).unwrap();
@@ -217,7 +190,11 @@ fn a_fill_is_one_request_or_none() {
     let plan = s.execute("genfill.plan", &json!({"provider": "openai"})).unwrap();
     assert_eq!(plan["requests"], 1, "{plan}");
     assert!(plan["usd"].as_f64().unwrap() > 0.0 && plan["crop"]["w"].as_u64().unwrap() > 0, "{plan}");
-    assert_eq!(s.execute("spot.generate", &json!({"provider": "openai"})).unwrap()["started"], true);
+    assert_eq!(s.execute("spot.generate", &json!({"provider": "openai", "prompt": "a lawn"})).unwrap()["started"], true);
+    // a background generation holds a cancellable activity row until it is applied, one at a time
+    let rows = s.activity.list();
+    assert!(rows.iter().any(|t| t.kind == "genfill" && t.cancellable), "{:?}", rows.iter().map(|t| t.kind).collect::<Vec<_>>());
+    assert!(s.execute("spot.generate", &json!({"provider": "openai"})).is_err(), "one at a time");
     let t0 = std::time::Instant::now();
     let done = loop {
         if let Some(r) = s.genfill_poll() {
@@ -228,6 +205,10 @@ fn a_fill_is_one_request_or_none() {
     };
     assert!(done.is_ok(), "{done:?}");
     assert_eq!(generations(&mock), 1, "exactly one request");
+    assert!(!s.activity.list().iter().any(|t| t.kind == "genfill"), "the row goes with the job");
+    assert!(s.develop_of(id).unwrap().spots[0].shown_gen().is_some());
+    let st = s.execute("genfill.status", &json!({})).unwrap();
+    assert_eq!(st["last"]["ok"], true, "{st}");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -251,35 +232,72 @@ fn posts(mock: &MockServer) -> usize {
     mock.seen().iter().filter(|x| x.method == "POST").count()
 }
 
-/// Test note 5: the brush size changed with the generated spot still selected resized it, and a nudge moved it, and
-/// either hid the paid fill. Now the spot keeps its stroke; the fill stays.
+/// One paid generation, then everything that must never lose it (one test: each generation renders the full-size
+/// demo photo, so the fixture is the cost).
+///
+/// - Test note 5: the brush size changed with the generated spot still selected resized it, and a nudge moved it,
+///   and either hid the paid fill. The spot keeps its stroke; the fill stays.
+/// - A spot an older build let be resized (its fill hidden) is put back where the fill was made, from the photo's
+///   history when the fill has no record of its stroke.
+/// - Every generation stays in the library and can be put on the photo again, also once no spot refers to it: from
+///   its record, or (fills made before records were kept) from the photo's history.
+/// - Generate Again keeps the earlier paid result: both are offered as variations, either can be shown.
 #[test]
-fn a_brush_size_or_a_nudge_never_hides_a_generated_fill() {
+fn a_paid_generation_is_never_lost() {
     let (mut s, _mock, dir) = generated("keep", "stability");
-    let id0 = shown(&s, 0).expect("generated");
+    let id = s.active().unwrap();
+    let g = shown(&s, 0).expect("generated");
     let blue_px = pixel(&mut s, 0.5, 0.5);
+    let made = (*s.develop_of(id).unwrap()).clone();
+
+    // a brush size or a nudge never hides it
     for p in [json!({"index": 0, "size": 0.004}), json!({"index": 0, "move": [0.003, -0.002]}), json!({"size": 0.01, "feather": 20})] {
         let e = s.execute("spot.update", &p).unwrap_err().to_string();
         assert!(e.contains("stays where it was made"), "{e}");
     }
-    assert_eq!(shown(&s, 0), Some(id0));
-    assert_eq!(pixel(&mut s, 0.5, 0.5), blue_px);
+    assert_eq!(shown(&s, 0), Some(g.clone()));
+    assert_eq!(pixel(&mut s, 0.5, 0.5), blue_px, "refused updates leave the fill");
     // opacity and feather alone still apply
     s.execute("spot.update", &json!({"index": 0, "opacity": 80})).unwrap();
-    let _ = std::fs::remove_dir_all(dir);
-}
 
-/// Generate Again keeps the earlier paid result: both are offered as variations, either can be shown.
-#[test]
-fn generate_again_keeps_the_earlier_result() {
-    let (mut s, _mock, dir) = generated("again", "stability");
-    let first = shown(&s, 0).unwrap();
+    // as an older build left it: resized, and no stroke kept in the fill
+    let mut d = made.clone();
+    d.spots[0].size = 0.004;
+    d.spots[0].generated.as_mut().unwrap().made_for = None;
+    s.set_develop(id, d, "Edit Spot").unwrap();
+    assert!(shown(&s, 0).is_none());
+    let r = s.execute("spot.putBack", &json!({"index": 0})).unwrap();
+    assert_eq!(r["shown"], true, "{r}");
+    assert_eq!(pixel(&mut s, 0.5, 0.5), blue_px, "put back");
+
+    // restored from the library once no spot refers to it
+    s.set_develop(id, made.clone(), "Edit Spot").unwrap();
+    assert!(s.genfill_dir(id).join(format!("{g}.json")).is_file(), "the record is written with the patch");
+    s.execute("spot.delete", &json!({"index": 0})).unwrap();
+    assert_ne!(pixel(&mut s, 0.5, 0.5), blue_px);
+    let list = s.execute("genfill.results", &json!({})).unwrap();
+    // (the demo library is not on disk: its fills share a temporary folder with other tests)
+    let one = list["results"].as_array().unwrap().iter().find(|r| r["id"] == g.as_str()).expect("listed");
+    assert_eq!((one["spot"].is_null(), one["provider"].as_str()), (true, Some("stability")), "{one}");
+    let r = s.execute("spot.restoreGenerated", &json!({"id": g})).unwrap();
+    assert_eq!(shown(&s, r["index"].as_u64().unwrap() as usize), Some(g.clone()));
+    assert_eq!(pixel(&mut s, 0.5, 0.5), blue_px, "restored from its record");
+    // without its record: found in the photo's history
+    std::fs::remove_file(s.genfill_dir(id).join(format!("{g}.json"))).unwrap();
+    s.execute("spot.delete", &json!({})).unwrap();
+    s.execute("spot.restoreGenerated", &json!({"id": g})).unwrap();
+    assert_eq!(pixel(&mut s, 0.5, 0.5), blue_px, "restored from the history");
+    assert!(s.execute("spot.restoreGenerated", &json!({"id": "../../etc/passwd"})).is_err());
+    assert!(s.execute("spot.restoreGenerated", &json!({"id": "00000000000000ff"})).is_err());
+
+    // Generate Again keeps the earlier result
+    s.set_develop(id, made, "Edit Spot").unwrap();
     s.execute("spot.generate", &json!({"provider": "stability"})).unwrap();
     let second = shown(&s, 0).unwrap();
-    assert_ne!(first, second);
+    assert_ne!(g, second);
     let r = s.execute("spot.variation", &json!({"delta": -1})).unwrap();
-    assert_eq!((r["results"].as_u64(), r["result"].as_u64(), r["id"].as_str()), (Some(2), Some(0), Some(first.as_str())), "{r}");
-    assert_eq!(shown(&s, 0), Some(first.clone()));
+    assert_eq!((r["results"].as_u64(), r["result"].as_u64(), r["id"].as_str()), (Some(2), Some(0), Some(g.as_str())), "{r}");
+    assert_eq!(shown(&s, 0), Some(g));
     s.execute("spot.variation", &json!({"result": 1})).unwrap();
     assert_eq!(shown(&s, 0), Some(second));
     let _ = std::fs::remove_dir_all(dir);
@@ -291,7 +309,7 @@ fn generate_again_keeps_the_earlier_result() {
 fn a_finished_generation_lands_whatever_happened_to_its_spot() {
     let dir = temp("lands");
     let slow: Filler = Arc::new(|w, h, rgb, mask, v| {
-        std::thread::sleep(std::time::Duration::from_millis(600));
+        std::thread::sleep(std::time::Duration::from_millis(150));
         (blue())(w, h, rgb, mask, v)
     });
     let (mut s, _mock) = session(&dir, slow);
@@ -321,53 +339,6 @@ fn a_finished_generation_lands_whatever_happened_to_its_spot() {
     s.execute("spot.delete", &json!({"index": 1})).unwrap();
     let r = wait(&mut s).unwrap();
     assert_eq!(shown(&s, 1).as_deref(), Some(r.fill.id.as_str()), "the spot came back with its fill");
-    let _ = std::fs::remove_dir_all(dir);
-}
-
-/// Every generation stays in the library and can be put on the photo again, also once no spot refers to it: from
-/// its record, or (fills made before records were kept) from the photo's history.
-#[test]
-fn every_generation_can_be_restored_from_the_library() {
-    let (mut s, _mock, dir) = generated("restore", "stability");
-    let id = s.active().unwrap();
-    let g = shown(&s, 0).unwrap();
-    let blue_px = pixel(&mut s, 0.5, 0.5);
-    assert!(s.genfill_dir(id).join(format!("{g}.json")).is_file(), "the record is written with the patch");
-    s.execute("spot.delete", &json!({"index": 0})).unwrap();
-    assert_ne!(pixel(&mut s, 0.5, 0.5), blue_px);
-    let list = s.execute("genfill.results", &json!({})).unwrap();
-    // (the demo library is not on disk: its fills share a temporary folder with other tests)
-    let one = list["results"].as_array().unwrap().iter().find(|r| r["id"] == g.as_str()).expect("listed");
-    assert_eq!((one["spot"].is_null(), one["provider"].as_str()), (true, Some("stability")), "{one}");
-    let r = s.execute("spot.restoreGenerated", &json!({"id": g})).unwrap();
-    assert_eq!(shown(&s, r["index"].as_u64().unwrap() as usize), Some(g.clone()));
-    assert_eq!(pixel(&mut s, 0.5, 0.5), blue_px);
-    // without its record: found in the photo's history
-    std::fs::remove_file(s.genfill_dir(id).join(format!("{g}.json"))).unwrap();
-    s.execute("spot.delete", &json!({})).unwrap();
-    s.execute("spot.restoreGenerated", &json!({"id": g})).unwrap();
-    assert_eq!(pixel(&mut s, 0.5, 0.5), blue_px);
-    assert!(s.execute("spot.restoreGenerated", &json!({"id": "../../etc/passwd"})).is_err());
-    assert!(s.execute("spot.restoreGenerated", &json!({"id": "00000000000000ff"})).is_err());
-    let _ = std::fs::remove_dir_all(dir);
-}
-
-/// A spot an older build let be resized (its fill hidden) is put back where the fill was made, from the photo's
-/// history when the fill has no record of its stroke.
-#[test]
-fn a_resized_spot_from_an_older_build_can_be_put_back() {
-    let (mut s, _mock, dir) = generated("putback", "stability");
-    let id = s.active().unwrap();
-    let blue_px = pixel(&mut s, 0.5, 0.5);
-    // as an older build left it: resized, and no stroke kept in the fill
-    let mut d = (*s.develop_of(id).unwrap()).clone();
-    d.spots[0].size = 0.004;
-    d.spots[0].generated.as_mut().unwrap().made_for = None;
-    s.set_develop(id, d, "Edit Spot").unwrap();
-    assert!(shown(&s, 0).is_none());
-    let r = s.execute("spot.putBack", &json!({"index": 0})).unwrap();
-    assert_eq!(r["shown"], true, "{r}");
-    assert_eq!(pixel(&mut s, 0.5, 0.5), blue_px);
     let _ = std::fs::remove_dir_all(dir);
 }
 

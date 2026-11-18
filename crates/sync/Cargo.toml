@@ -1,0 +1,13 @@
+[package]
+name = "lcc-sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Sync (L0): the replicated state devices keep in step: a hybrid clock, collections with what their owner allows and what each device takes, per-photo records merged field by field, and the pill that says where a photo lives. Pure data and merge rules; no sockets, no files."
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

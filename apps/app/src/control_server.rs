@@ -996,9 +996,10 @@ mod tests {
 
     /// A fake control surface drives a headless app over a real loopback socket: it is
     /// refused until paired, pairs, subscribes, turns the dial and hears the new value pushed
-    /// back; the surfaces-only port refuses everything else.
+    /// back; the surfaces-only port refuses everything else. Then a burst of dial ticks from a
+    /// second client is applied within a few frames, without a backlog.
     #[test]
-    fn a_surface_client_pairs_subscribes_and_turns_the_dial_end_to_end() {
+    fn a_surface_client_pairs_and_turns_the_dial_and_a_burst_of_ticks_has_no_backlog() {
         use std::time::Instant;
 
         use lcc_ui_egui::headless::Headless;
@@ -1109,54 +1110,28 @@ mod tests {
         client.join().unwrap();
         let after = h.app.session.develop_of(first).unwrap().light.exposure;
         assert!((after - before - 0.25).abs() < 1e-6, "{before} → {after}");
-        stop.store(true, Ordering::SeqCst);
-    }
 
-    /// TEST-NOTES 2026-10-16 item 8: a knob turned fast sends a tick per request, faster than the
-    /// app draws frames. Ticks used to wait for a frame each (the connection read its next request
-    /// only after the reply), so they queued in the socket and were applied seconds late, a press
-    /// behind them "clicking itself" later. Now hundreds of ticks sent at once, with slow frames
-    /// (40 ms), are all applied within a few frames, the value is their sum, and a press sent
-    /// after them runs in the same breath.
-    #[test]
-    fn a_burst_of_dial_ticks_is_applied_within_a_few_frames_without_a_backlog() {
-        use std::time::Instant;
-
-        use lcc_ui_egui::headless::Headless;
-        use lcc_ui_egui::{LccApp, Services};
-
-        struct Store(Mutex<Option<String>>);
-        impl lcc_ui_egui::surface::SurfaceStore for Store {
-            fn load(&self) -> Result<Option<String>, String> {
-                Ok(self.0.lock().unwrap().clone())
-            }
-            fn save(&self, t: &str) -> Result<(), String> {
-                *self.0.lock().unwrap() = Some(t.to_string());
-                Ok(())
-            }
-        }
+        // TEST-NOTES 2026-10-16 item 8, on the same app (starting one is most of this test's
+        // time): a knob turned fast sends a tick per request, faster than the app draws frames.
+        // Ticks used to wait for a frame each (the connection read its next request only after
+        // the reply), so they queued in the socket and were applied seconds late, a press behind
+        // them "clicking itself" later. Now hundreds of ticks sent at once, with slow frames
+        // (40 ms), are all applied within a few frames, the value is their sum, and a press sent
+        // after them runs in the same breath.
         const TOKEN: &str = "stress-token";
-        let mut settings = lcc_surface::SurfaceSettings { enabled: true, ..Default::default() };
-        settings.paired.push(lcc_surface::settings::PairedClient {
-            client: "stress".into(),
-            name: "Stress".into(),
-            token_sha256: lcc_surface::protocol::token_hash(TOKEN),
-            approved_at: 0,
-        });
-        // a 1:1 step (the shipped feel is slower) and no acceleration: every tick is one step
-        // (0.01 EV), so the sum is exact
-        settings.motion.speed = 1.0;
-        settings.motion.acceleration = 0.1;
-        let services = Services { png: None, surface_store: Some(Box::new(Store(Mutex::new(Some(settings.to_json()))))), ..Default::default() };
-        let mut h = Headless::new(LccApp::new(lcc_engine::Session::with_demo(), services), [1200.0, 800.0], 1.0);
-        h.settle(Duration::from_secs(20));
-        let first = h.app.session.visible_cloned()[0];
-        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [first.0]}}), Duration::from_secs(20));
-        h.app.ui.view = lcc_ui_egui::state::ViewMode::Detail;
-        h.settle(Duration::from_secs(20));
-        let before = h.app.session.develop_of(first).unwrap().light.exposure;
+        {
+            let settings = h.app.surface.runtime.settings_mut();
+            settings.paired.push(lcc_surface::settings::PairedClient {
+                client: "stress".into(),
+                name: "Stress".into(),
+                token_sha256: lcc_surface::protocol::token_hash(TOKEN),
+                approved_at: 0,
+            });
+            // no acceleration: every tick is one step (0.01 EV), so the sum is exact
+            settings.motion.acceleration = 0.1;
+        }
+        let before = after;
         let rating_before = h.app.session.catalog.photo(first).unwrap().rating;
-        let (stop, port) = start_surfaces(0, h.control_sender(), egui::Context::default()).unwrap();
         const TICKS: usize = 300;
         let frames = Arc::new(AtomicU64::new(0));
         let client = {

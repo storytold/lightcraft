@@ -255,7 +255,10 @@ fn value_text(group: &str, tag: u16, v: &Value) -> String {
         {
             // exposure time as a fraction of a second
             let s = n as f64 / d as f64;
-            if s >= 1.0 || n == 0 { format!("{} s", rational(n as f64, d as f64)) } else { format!("1/{} s", (1.0 / s).round()) }
+            match crate::format_exposure_time(s) {
+                Some(text) => format!("{text} s"),
+                None => format!("{} s", rational(n as f64, d as f64)),
+            }
         }
         Value::Rational(a)
             if tag == 0x829d
@@ -505,6 +508,11 @@ mod tests {
     fn raw_compression_is_the_sensor_images_not_the_thumbnails() {
         let b = synthetic_raw(None);
         assert_eq!(compression(&file_tag_rows(&b)), ["Nikon NEF Compressed"]);
+        // plain tiff keeps its own compression
+        {
+            let b = [b"II*    ".to_vec(), ifd(&[entry(0x0103, 3, 1, 8)])].concat();
+            assert_eq!(compression(&file_tag_rows(&b)), ["Deflate"]);
+        }
     }
 
     #[test]
@@ -529,12 +537,6 @@ mod tests {
     }
 
     #[test]
-    fn plain_tiff_keeps_its_own_compression() {
-        let b = [b"II*    ".to_vec(), ifd(&[entry(0x0103, 3, 1, 8)])].concat();
-        assert_eq!(compression(&file_tag_rows(&b)), ["Deflate"]);
-    }
-
-    #[test]
     fn panasonic_lens_is_listed_from_the_maker_note() {
         let lens = |rows: &[TagRow]| rows.iter().filter(|r| r.group == "Panasonic" && r.tag == 0x0051).map(|r| r.value.clone()).collect::<Vec<_>>();
         // a RW2: the note is only in the JpgFromRaw's Exif
@@ -550,5 +552,22 @@ mod tests {
         assert_eq!(lens(&file_tag_rows(&jpg)), ["LUMIX G 25/F1.7"]);
         // no Panasonic note, no row
         assert!(lens(&file_tag_rows(&synthetic_raw(Some(3)))).is_empty());
+    }
+
+    /// All Metadata shows a third-stop time as the camera wrote it, not rounded to a whole denominator (#1619).
+    #[test]
+    fn exposure_rows_do_not_round_third_stop_times() {
+        for (n, d, want) in [
+            (3, 10, "0.3 s"),
+            (4, 10, "0.4 s"),
+            (13, 10, "1.3 s"),
+            (5, 8, "0.625 s"),
+            (1, 3, "1/3 s"),
+            (10, 28, "0.3571 s"),
+            (1, 250, "1/250 s"),
+            (30, 1, "30 s"),
+        ] {
+            assert_eq!(value_text("EXIF", 0x829a, &Value::Rational(vec![(n, d)])), want, "{n}/{d}");
+        }
     }
 }

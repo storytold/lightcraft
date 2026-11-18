@@ -55,7 +55,7 @@ fn develop_set_refuses_ids_that_are_not_photo_ids() {
 }
 
 #[test]
-fn library_select_refuses_ids_that_are_not_photo_ids() {
+fn library_select_refuses_ids_that_are_not_photo_ids_and_drops_repeated_ones() {
     let (mut s, vis, _) = session();
     let before = s.selection.ids.clone();
     for bad in BAD_IDS.map(|f| f()) {
@@ -64,12 +64,8 @@ fn library_select_refuses_ids_that_are_not_photo_ids() {
     }
     s.execute("library.select", &json!({"ids": [vis[2].0]})).unwrap();
     assert_eq!(s.selection.ids, vec![vis[2]]);
-}
 
-/// Replacing the selection with a repeated id holds each photo once, in the order first given.
-#[test]
-fn library_select_replace_drops_repeated_ids() {
-    let (mut s, vis, _) = session();
+    // replacing the selection with a repeated id holds each photo once, in the order first given
     let (a, b) = (vis[0], vis[1]);
     s.execute("library.select", &json!({"ids": [a.0, b.0, a.0]})).unwrap();
     assert_eq!(s.selection.ids, vec![a, b]);
@@ -123,7 +119,7 @@ fn single_photo_commands_refuse_an_id_that_is_not_a_photo_id() {
 /// Mask ids and spot indexes the same way: `mask.delete {"id": "1"}` deleted the selected mask, and an
 /// id past `u32` wrapped (`4294967297 as u32` is 1) onto another mask.
 #[test]
-fn mask_and_spot_commands_refuse_ids_that_are_not_ids() {
+fn mask_spot_effect_and_component_commands_refuse_values_that_are_not_ids() {
     let (mut s, _, _) = session();
     s.execute("mask.add", &json!({"kind": "linear"})).unwrap();
     s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
@@ -157,33 +153,9 @@ fn mask_and_spot_commands_refuse_ids_that_are_not_ids() {
     s.execute("mask.delete", &json!({"id": first})).unwrap();
     s.execute("spot.select", &json!({"index": null})).unwrap();
     assert_eq!(state(&s).0.len(), 1);
-}
 
-/// `photo.label` without a label, or with one that isn't text, cleared the colour label of every
-/// selected photo (a missing `label` read as `none`); now it is an error and only `none` or null clear.
-#[test]
-fn photo_label_refuses_a_missing_or_non_text_label() {
-    let (mut s, vis, _) = session();
-    s.execute("photo.label", &json!({"label": "red"})).unwrap();
-    let labels = |s: &Session| vis.iter().take(2).map(|id| s.catalog.photo(*id).unwrap().label).collect::<Vec<_>>();
-    let before = labels(&s);
-    assert!(before.iter().all(Option::is_some));
-    for params in [json!({}), json!({"label": 3}), json!({"label": true}), json!({"label": ["red"]}), json!({"label": "crimson"})] {
-        assert!(s.execute("photo.label", &params).is_err(), "{params}");
-        assert_eq!(labels(&s), before, "{params} changed the labels");
-    }
-    s.execute("photo.label", &json!({"label": null})).unwrap();
-    assert!(labels(&s).iter().all(Option::is_none));
-    s.execute("photo.label", &json!({"label": "green"})).unwrap();
-    s.execute("photo.label", &json!({"label": "none"})).unwrap();
-    assert!(labels(&s).iter().all(Option::is_none));
-}
-
-/// The mask-effect commands and a mask's `component` the same way: `mask.saveEffect {"id": "2"}`
-/// saved the selected mask's sliders, and `mask.update {"component": "1"}` reshaped component 0.
-#[test]
-fn mask_effects_and_components_refuse_values_that_are_not_ids() {
-    let (mut s, _, _) = session();
+    // The mask-effect commands and a mask's `component` the same way: `mask.saveEffect {"id": "2"}` saved the selected
+    // mask's sliders, and `mask.update {"component": "1"}` reshaped component 0.
     s.execute("mask.add", &json!({"kind": "linear"})).unwrap();
     s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
     s.execute("mask.saveEffect", &json!({"name": "Kept"})).unwrap();
@@ -217,6 +189,26 @@ fn mask_effects_and_components_refuse_values_that_are_not_ids() {
     }
     assert_eq!(s.commits(), commits, "nothing was changed");
     assert_eq!(state(&s), before);
+}
+
+/// `photo.label` without a label, or with one that isn't text, cleared the colour label of every
+/// selected photo (a missing `label` read as `none`); now it is an error and only `none` or null clear.
+#[test]
+fn photo_label_refuses_a_missing_or_non_text_label() {
+    let (mut s, vis, _) = session();
+    s.execute("photo.label", &json!({"label": "red"})).unwrap();
+    let labels = |s: &Session| vis.iter().take(2).map(|id| s.catalog.photo(*id).unwrap().label).collect::<Vec<_>>();
+    let before = labels(&s);
+    assert!(before.iter().all(Option::is_some));
+    for params in [json!({}), json!({"label": 3}), json!({"label": true}), json!({"label": ["red"]}), json!({"label": "crimson"})] {
+        assert!(s.execute("photo.label", &params).is_err(), "{params}");
+        assert_eq!(labels(&s), before, "{params} changed the labels");
+    }
+    s.execute("photo.label", &json!({"label": null})).unwrap();
+    assert!(labels(&s).iter().all(Option::is_none));
+    s.execute("photo.label", &json!({"label": "green"})).unwrap();
+    s.execute("photo.label", &json!({"label": "none"})).unwrap();
+    assert!(labels(&s).iter().all(Option::is_none));
 }
 
 /// Delete All Empty Masks drops the masks that select nothing (an undrawn brush), keeps the rest and the

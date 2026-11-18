@@ -148,41 +148,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn urls_fill_the_template() {
-        let osm = &builtin()[0];
-        assert_eq!(osm.tile_url(TileKey { z: 3, x: 4, y: 5 }), "https://tile.openstreetmap.org/3/4/5.png");
-        let topo = &builtin()[1];
-        assert_eq!(topo.tile_url(TileKey { z: 1, x: 1, y: 0 }), "https://b.tile.opentopomap.org/1/1/0.png");
-        let esri = &builtin()[2];
-        assert!(esri.tile_url(TileKey { z: 2, x: 1, y: 3 }).ends_with("/tile/2/3/1"));
-        for s in builtin() {
-            s.validate().unwrap();
+    fn tile_urls_decoding_and_custom_servers() {
+        // urls fill the template
+        {
+            let osm = &builtin()[0];
+            assert_eq!(osm.tile_url(TileKey { z: 3, x: 4, y: 5 }), "https://tile.openstreetmap.org/3/4/5.png");
+            let topo = &builtin()[1];
+            assert_eq!(topo.tile_url(TileKey { z: 1, x: 1, y: 0 }), "https://b.tile.opentopomap.org/1/1/0.png");
+            let esri = &builtin()[2];
+            assert!(esri.tile_url(TileKey { z: 2, x: 1, y: 3 }).ends_with("/tile/2/3/1"));
+            for s in builtin() {
+                s.validate().unwrap();
+            }
         }
-    }
-
-    #[test]
-    fn decodes_png_tiles_and_rejects_junk() {
-        let mut png = Vec::new();
-        image::RgbaImage::from_pixel(256, 256, image::Rgba([1, 2, 3, 255]))
-            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .unwrap();
-        let (w, h, px) = decode_tile(&png).unwrap();
-        assert_eq!((w, h, &px[..4]), (256, 256, &[1u8, 2, 3, 255][..]));
-        assert!(decode_tile(b"not an image").is_err());
-        assert!(decode_tile(&png[..40]).is_err());
-    }
-
-    #[test]
-    fn custom_servers_are_checked() {
-        assert!(TileServer::custom("mine", "Mine", "https://t.example/{z}/{x}/{y}.png", "© me", 18, TileKind::Road).is_ok());
-        assert!(TileServer::custom("Mine!", "x", "https://t/{z}/{x}/{y}", "a", 1, TileKind::Road).is_err());
-        assert!(TileServer::custom("m", "x", "ftp://t/{z}/{x}/{y}", "a", 1, TileKind::Road).is_err());
-        assert!(TileServer::custom("m", "x", "https://t/{z}/{x}", "a", 1, TileKind::Road).is_err());
-        assert!(TileServer::custom("m", "x", "https://t/{z}/{x}/{y}", " ", 1, TileKind::Road).is_err());
-        let s = TileServer::custom("osm", "Own", "http://localhost/{z}/{x}/{y}.png", "local", 25, TileKind::Road).unwrap();
-        assert_eq!(s.max_zoom, MAX_ZOOM);
-        let a = all(&[s]);
-        assert_eq!(a.len(), 3);
-        assert_eq!(a[0].name, "Own");
+        // decodes png tiles and rejects junk
+        {
+            let mut png = Vec::new();
+            image::RgbaImage::from_pixel(256, 256, image::Rgba([1, 2, 3, 255]))
+                .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                .unwrap();
+            let (w, h, px) = decode_tile(&png).unwrap();
+            assert_eq!((w, h, &px[..4]), (256, 256, &[1u8, 2, 3, 255][..]));
+            assert!(decode_tile(b"not an image").is_err());
+            assert!(decode_tile(&png[..40]).is_err());
+        }
+        // custom servers are checked
+        {
+            assert!(TileServer::custom("mine", "Mine", "https://t.example/{z}/{x}/{y}.png", "© me", 18, TileKind::Road).is_ok());
+            assert!(TileServer::custom("Mine!", "x", "https://t/{z}/{x}/{y}", "a", 1, TileKind::Road).is_err());
+            assert!(TileServer::custom("m", "x", "ftp://t/{z}/{x}/{y}", "a", 1, TileKind::Road).is_err());
+            assert!(TileServer::custom("m", "x", "https://t/{z}/{x}", "a", 1, TileKind::Road).is_err());
+            assert!(TileServer::custom("m", "x", "https://t/{z}/{x}/{y}", " ", 1, TileKind::Road).is_err());
+            let s = TileServer::custom("osm", "Own", "http://localhost/{z}/{x}/{y}.png", "local", 25, TileKind::Road).unwrap();
+            assert_eq!(s.max_zoom, MAX_ZOOM);
+            let a = all(&[s]);
+            assert_eq!(a.len(), 3);
+            assert_eq!(a[0].name, "Own");
+        }
     }
 }

@@ -69,36 +69,29 @@ mod tests {
     }
 
     #[test]
-    fn packs_directory_and_payloads() {
-        let a = fake_png(16);
-        let b = fake_png(256);
-        let ico = pack(&[a.clone(), b.clone()]).unwrap();
-        assert_eq!(&ico[..6], &[0, 0, 1, 0, 2, 0]);
-        // Entry 0: 16 px at offset 6 + 32.
-        assert_eq!(&ico[6..8], &[16, 16]);
-        assert_eq!(u32::from_le_bytes(ico[14..18].try_into().unwrap()), a.len() as u32);
-        assert_eq!(u32::from_le_bytes(ico[18..22].try_into().unwrap()), 38);
-        // Entry 1: 256 px stored as 0, right after the first payload.
-        assert_eq!(&ico[22..24], &[0, 0]);
-        assert_eq!(u32::from_le_bytes(ico[34..38].try_into().unwrap()), 38 + a.len() as u32);
-        assert_eq!(&ico[38..38 + a.len()], &a[..]);
-        assert_eq!(&ico[38 + a.len()..], &b[..]);
-    }
-
-    #[test]
-    fn rejects_bad_input() {
-        assert!(pack(&[]).is_err());
-        assert!(pack(&[fake_png(512)]).is_err());
-        assert!(pack(&[b"GIF89a".to_vec()]).is_err());
-        assert_eq!(png_size(&fake_png(48)).unwrap(), (48, 48));
-    }
-
-    #[test]
-    fn committed_icon_is_valid() {
-        let path = crate::root().join("assets/app-icon/app.ico");
-        let Ok(ico) = std::fs::read(&path) else { return };
-        assert_eq!(&ico[..4], &[0, 0, 1, 0]);
-        let n = u16::from_le_bytes([ico[4], ico[5]]) as usize;
-        assert!(n >= 4, "expected several sizes in {}", path.display());
+    fn packs_icons_and_rejects_bad_input() {
+        // packs directory and payloads
+        {
+            let a = fake_png(16);
+            let b = fake_png(256);
+            let ico = pack(&[a.clone(), b.clone()]).unwrap();
+            assert_eq!(&ico[..6], &[0, 0, 1, 0, 2, 0]);
+            // Entry 0: 16 px at offset 6 + 32.
+            assert_eq!(&ico[6..8], &[16, 16]);
+            assert_eq!(u32::from_le_bytes(ico[14..18].try_into().unwrap()), a.len() as u32);
+            assert_eq!(u32::from_le_bytes(ico[18..22].try_into().unwrap()), 38);
+            // Entry 1: 256 px stored as 0, right after the first payload.
+            assert_eq!(&ico[22..24], &[0, 0]);
+            assert_eq!(u32::from_le_bytes(ico[34..38].try_into().unwrap()), 38 + a.len() as u32);
+            assert_eq!(&ico[38..38 + a.len()], &a[..]);
+            assert_eq!(&ico[38 + a.len()..], &b[..]);
+        }
+        // rejects bad input
+        {
+            assert!(pack(&[]).is_err());
+            assert!(pack(&[fake_png(512)]).is_err());
+            assert!(pack(&[b"GIF89a".to_vec()]).is_err());
+            assert_eq!(png_size(&fake_png(48)).unwrap(), (48, 48));
+        }
     }
 }

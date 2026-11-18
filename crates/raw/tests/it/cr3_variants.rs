@@ -228,24 +228,23 @@ fn control_lossless_fixture_decodes_through_the_container() {
     assert_eq!((raw.width, raw.height, raw.bits, raw.cpp), (4, 4, 14, 1));
     assert_eq!(raw.data, RawData::U16(vec![8193; 16]));
     assert_eq!(probe_info(&file).unwrap(), raw.info());
-}
-
-#[test]
-fn control_craw_and_adaptive_fixtures_decode_through_the_container() {
-    let craw = cr3_file(&craw_coding(), &craw_stream(4));
-    let raw = decode(&craw).unwrap();
-    assert_eq!(raw.data, RawData::U16(vec![8192; 256]));
-    assert_eq!(probe_info(&craw).unwrap(), raw.info());
-    let adaptive = cr3_file(&adaptive_coding(), &adaptive_stream(&ADAPTIVE_GAINS, 0, 0, ADAPTIVE_QP));
-    let raw = decode(&adaptive).unwrap();
-    assert_eq!(raw.data, RawData::U16(vec![8192; 256]));
-    assert_eq!(probe_info(&adaptive).unwrap(), raw.info());
+    // control craw and adaptive fixtures decode through the container
+    {
+        let craw = cr3_file(&craw_coding(), &craw_stream(4));
+        let raw = decode(&craw).unwrap();
+        assert_eq!(raw.data, RawData::U16(vec![8192; 256]));
+        assert_eq!(probe_info(&craw).unwrap(), raw.info());
+        let adaptive = cr3_file(&adaptive_coding(), &adaptive_stream(&ADAPTIVE_GAINS, 0, 0, ADAPTIVE_QP));
+        let raw = decode(&adaptive).unwrap();
+        assert_eq!(raw.data, RawData::U16(vec![8192; 256]));
+        assert_eq!(probe_info(&adaptive).unwrap(), raw.info());
+    }
 }
 
 // --- supports() gates -------------------------------------------------------
 
 #[test]
-fn unknown_version_and_wavelet_level_counts_are_unsupported() {
+fn unverified_container_and_stream_variants_are_unsupported() {
     let mut coding = cmp1();
     coding[4..6].copy_from_slice(&0x300u16.to_be_bytes());
     assert_rejected(
@@ -256,165 +255,152 @@ fn unknown_version_and_wavelet_level_counts_are_unsupported() {
     let mut coding = craw_coding();
     coding[26] = 2; // two wavelet levels: neither lossless nor three-level C-RAW
     assert_rejected("two wavelet levels", &cr3_file(&coding, &craw_stream(4)), "Canon CRX version 0x100, encoding 0, 4 planes, 2 wavelet levels");
-}
-
-#[test]
-fn bit_depth_outside_8_to_16_is_unsupported() {
-    // CMP1 parsing only accepts depths 1..=16, so the reachable side of the gate is 1..=7.
-    let mut coding = cmp1();
-    coding[24] = 7;
-    assert_rejected("7-bit", &cr3_file(&coding, &lossless_stream(0xff01, 0xff02, 0xff03, 0, 0)), "Canon CRX 7-bit samples");
-}
-
-#[test]
-fn v200_requires_a_single_tile_14_bit_image() {
-    let mut coding = adaptive_coding();
-    coding[24] = 12;
-    assert_rejected(
-        "0x200 12-bit",
-        &cr3_file(&coding, &adaptive_stream(&ADAPTIVE_GAINS, 0, 0, ADAPTIVE_QP)),
-        "Canon CRX version 0x200 requires a single-tile 14-bit Bayer C-RAW image",
-    );
-    let mut coding = adaptive_coding();
-    coding[16..20].copy_from_slice(&8u32.to_be_bytes()); // two tile columns
-    assert_rejected(
-        "0x200 two tiles",
-        &cr3_file(&coding, &adaptive_stream(&ADAPTIVE_GAINS, 0, 0, ADAPTIVE_QP)),
-        "Canon CRX version 0x200 requires a single-tile 14-bit Bayer C-RAW image",
-    );
-}
-
-#[test]
-fn extended_median_bit_depth_header_is_unsupported() {
-    assert_rejected(
-        "median extension",
-        &cr3_file(&cmp1_with_median_precision(), &lossless_stream(0xff01, 0xff02, 0xff03, 0, 0)),
-        "Canon CRX extended median-bit-depth header",
-    );
+    // bit depth outside 8 to 16 is unsupported
+    {
+        // CMP1 parsing only accepts depths 1..=16, so the reachable side of the gate is 1..=7.
+        let mut coding = cmp1();
+        coding[24] = 7;
+        assert_rejected("7-bit", &cr3_file(&coding, &lossless_stream(0xff01, 0xff02, 0xff03, 0, 0)), "Canon CRX 7-bit samples");
+    }
+    // v200 requires a single tile 14 bit image
+    {
+        let mut coding = adaptive_coding();
+        coding[24] = 12;
+        assert_rejected(
+            "0x200 12-bit",
+            &cr3_file(&coding, &adaptive_stream(&ADAPTIVE_GAINS, 0, 0, ADAPTIVE_QP)),
+            "Canon CRX version 0x200 requires a single-tile 14-bit Bayer C-RAW image",
+        );
+        let mut coding = adaptive_coding();
+        coding[16..20].copy_from_slice(&8u32.to_be_bytes()); // two tile columns
+        assert_rejected(
+            "0x200 two tiles",
+            &cr3_file(&coding, &adaptive_stream(&ADAPTIVE_GAINS, 0, 0, ADAPTIVE_QP)),
+            "Canon CRX version 0x200 requires a single-tile 14-bit Bayer C-RAW image",
+        );
+    }
+    // ff1x marker family inside a 0x100 stream is unsupported
+    {
+        for (name, tile, plane, band) in
+            [("ff11 tile", 0xff11, 0xff02, 0xff03), ("ff12 plane", 0xff01, 0xff12, 0xff03), ("ff13 band", 0xff01, 0xff02, 0xff13)]
+        {
+            assert_rejected(name, &cr3_file(&cmp1(), &lossless_stream(tile, plane, band, 0, 0)), "Canon CRX ff11/ff12/ff13 marker family");
+        }
+    }
+    // marker header length mismatch is unsupported
+    {
+        let mut stream = lossless_stream(0xff01, 0xff02, 0xff03, 0, 0);
+        stream[2..4].copy_from_slice(&12u16.to_be_bytes()); // tile header claims 12 body bytes, 8 expected
+        assert_rejected("0x100 tile length", &cr3_file(&cmp1(), &stream), "Canon CRX marker 0xff01 header length 12");
+        let mut stream = adaptive_stream(&ADAPTIVE_GAINS, 0, 0, ADAPTIVE_QP);
+        stream[2..4].copy_from_slice(&8u16.to_be_bytes()); // tile header claims 8 body bytes, 16 expected
+        assert_rejected("0x200 tile length", &cr3_file(&adaptive_coding(), &stream), "Canon CRX marker 0xff11 header length 8");
+    }
+    // nonzero reserved fields in 0x200 headers are unsupported
+    {
+        assert_rejected(
+            "tile reserved",
+            &cr3_file(&adaptive_coding(), &adaptive_stream(&ADAPTIVE_GAINS, 1, 0, ADAPTIVE_QP)),
+            "Canon CRX adaptive quantization tile header",
+        );
+        assert_rejected(
+            "band reserved",
+            &cr3_file(&adaptive_coding(), &adaptive_stream(&ADAPTIVE_GAINS, 0, 1, ADAPTIVE_QP)),
+            "Canon CRX adaptive subband reserved field",
+        );
+    }
+    // extended median bit depth header is unsupported
+    {
+        assert_rejected(
+            "median extension",
+            &cr3_file(&cmp1_with_median_precision(), &lossless_stream(0xff01, 0xff02, 0xff03, 0, 0)),
+            "Canon CRX extended median-bit-depth header",
+        );
+    }
+    // rounded plane coding is unsupported
+    {
+        assert_rejected("rounded plane", &cr3_file(&cmp1(), &lossless_stream(0xff01, 0xff02, 0xff03, 1 << 25, 0)), "Canon CRX plane coding flags");
+    }
+    // partial subband coding is unsupported
+    {
+        assert_rejected(
+            "partial subband",
+            &cr3_file(&cmp1(), &lossless_stream(0xff01, 0xff02, 0xff03, 0, 0x0800_0000)),
+            "Canon CRX partial subband coding",
+        );
+    }
+    // adaptive gains on low frequency bands are unsupported
+    {
+        // Plane validation rejects any gain on bands 0-3 before decoding. The deeper dequantization
+        // gate behind it ("Canon CRX adaptive low-frequency quantization") is therefore unreachable
+        // through the public API; this asserts the reachable gate's exact string.
+        let mut gains = ADAPTIVE_GAINS;
+        gains[0] = 4;
+        assert_rejected(
+            "LL band gain",
+            &cr3_file(&adaptive_coding(), &adaptive_stream(&gains, 0, 0, ADAPTIVE_QP)),
+            "Canon CRX adaptive quantization subband parameters",
+        );
+    }
 }
 
 // --- validate_planes gates --------------------------------------------------
 
 #[test]
-fn rounded_plane_coding_is_unsupported() {
-    assert_rejected("rounded plane", &cr3_file(&cmp1(), &lossless_stream(0xff01, 0xff02, 0xff03, 1 << 25, 0)), "Canon CRX plane coding flags");
-}
-
-#[test]
-fn partial_subband_coding_is_unsupported() {
-    assert_rejected(
-        "partial subband",
-        &cr3_file(&cmp1(), &lossless_stream(0xff01, 0xff02, 0xff03, 0, 0x0800_0000)),
-        "Canon CRX partial subband coding",
-    );
-}
-
-#[test]
-fn adaptive_gains_on_low_frequency_bands_are_unsupported() {
-    // Plane validation rejects any gain on bands 0-3 before decoding. The deeper dequantization
-    // gate behind it ("Canon CRX adaptive low-frequency quantization") is therefore unreachable
-    // through the public API; this asserts the reachable gate's exact string.
-    let mut gains = ADAPTIVE_GAINS;
-    gains[0] = 4;
-    assert_rejected(
-        "LL band gain",
-        &cr3_file(&adaptive_coding(), &adaptive_stream(&gains, 0, 0, ADAPTIVE_QP)),
-        "Canon CRX adaptive quantization subband parameters",
-    );
-}
-
-#[test]
-fn uniform_quantization_outside_4_to_44_is_unsupported() {
+fn quantization_decodes_at_the_edges_of_its_range_and_is_unsupported_outside() {
     for quant in [3u8, 45] {
         assert_rejected(&format!("quant {quant}"), &cr3_file(&craw_coding(), &craw_stream(quant)), &format!("Canon CRX quantization value {quant}"));
     }
-}
-
-#[test]
-fn uniform_quantization_edges_of_the_accepted_range_decode() {
-    // Zero coefficients decode to the mid level whatever the step, so only the gate decides.
-    for quant in [4u8, 44] {
-        let file = cr3_file(&craw_coding(), &craw_stream(quant));
-        let raw = decode(&file).unwrap();
-        assert_eq!(raw.data, RawData::U16(vec![8192; 256]), "quant {quant}");
-        assert_eq!(probe_info(&file).unwrap(), raw.info(), "quant {quant}");
+    // uniform quantization edges of the accepted range decode
+    {
+        // Zero coefficients decode to the mid level whatever the step, so only the gate decides.
+        for quant in [4u8, 44] {
+            let file = cr3_file(&craw_coding(), &craw_stream(quant));
+            let raw = decode(&file).unwrap();
+            assert_eq!(raw.data, RawData::U16(vec![8192; 256]), "quant {quant}");
+            assert_eq!(probe_info(&file).unwrap(), raw.info(), "quant {quant}");
+        }
+    }
+    // adaptive qp outside 131 to 175 is unsupported
+    {
+        // Literal 260 → 130 and 352 → 176 sit just outside the accepted range; literal 5 → −3 is far outside.
+        for (literal, value) in [(260u32, 130i32), (352, 176), (5, -3)] {
+            assert_rejected(
+                &format!("QP {value}"),
+                &cr3_file(&adaptive_coding(), &adaptive_stream(&ADAPTIVE_GAINS, 0, 0, qp_with_literal(literal))),
+                &format!("Canon CRX adaptive QP value {value}"),
+            );
+        }
+    }
+    // adaptive qp edges of the accepted range decode
+    {
+        // Literal 262 → QP 131 and 350 → QP 175 (the EOS R6 Mark II's highest); zero coefficients decode to the mid
+        // level whatever the step.
+        for (literal, value) in [(262u32, 131i32), (350, 175)] {
+            let file = cr3_file(&adaptive_coding(), &adaptive_stream(&ADAPTIVE_GAINS, 0, 0, qp_with_literal(literal)));
+            let raw = decode(&file).unwrap();
+            assert_eq!(raw.data, RawData::U16(vec![8192; 256]), "QP {value}");
+            assert_eq!(probe_info(&file).unwrap(), raw.info(), "QP {value}");
+        }
     }
 }
 
 // --- qp_map gate ------------------------------------------------------------
 
-#[test]
-fn adaptive_qp_outside_131_to_175_is_unsupported() {
-    // Literal 260 → 130 and 352 → 176 sit just outside the accepted range; literal 5 → −3 is far outside.
-    for (literal, value) in [(260u32, 130i32), (352, 176), (5, -3)] {
-        assert_rejected(
-            &format!("QP {value}"),
-            &cr3_file(&adaptive_coding(), &adaptive_stream(&ADAPTIVE_GAINS, 0, 0, qp_with_literal(literal))),
-            &format!("Canon CRX adaptive QP value {value}"),
-        );
-    }
-}
-
-#[test]
-fn adaptive_qp_edges_of_the_accepted_range_decode() {
-    // Literal 262 → QP 131 and 350 → QP 175 (the EOS R6 Mark II's highest); zero coefficients decode to the mid
-    // level whatever the step.
-    for (literal, value) in [(262u32, 131i32), (350, 175)] {
-        let file = cr3_file(&adaptive_coding(), &adaptive_stream(&ADAPTIVE_GAINS, 0, 0, qp_with_literal(literal)));
-        let raw = decode(&file).unwrap();
-        assert_eq!(raw.data, RawData::U16(vec![8192; 256]), "QP {value}");
-        assert_eq!(probe_info(&file).unwrap(), raw.info(), "QP {value}");
-    }
-}
-
 // --- layout() marker gates --------------------------------------------------
 
-#[test]
-fn ff1x_marker_family_inside_a_0x100_stream_is_unsupported() {
-    for (name, tile, plane, band) in
-        [("ff11 tile", 0xff11, 0xff02, 0xff03), ("ff12 plane", 0xff01, 0xff12, 0xff03), ("ff13 band", 0xff01, 0xff02, 0xff13)]
-    {
-        assert_rejected(name, &cr3_file(&cmp1(), &lossless_stream(tile, plane, band, 0, 0)), "Canon CRX ff11/ff12/ff13 marker family");
-    }
-}
-
-#[test]
-fn marker_header_length_mismatch_is_unsupported() {
-    let mut stream = lossless_stream(0xff01, 0xff02, 0xff03, 0, 0);
-    stream[2..4].copy_from_slice(&12u16.to_be_bytes()); // tile header claims 12 body bytes, 8 expected
-    assert_rejected("0x100 tile length", &cr3_file(&cmp1(), &stream), "Canon CRX marker 0xff01 header length 12");
-    let mut stream = adaptive_stream(&ADAPTIVE_GAINS, 0, 0, ADAPTIVE_QP);
-    stream[2..4].copy_from_slice(&8u16.to_be_bytes()); // tile header claims 8 body bytes, 16 expected
-    assert_rejected("0x200 tile length", &cr3_file(&adaptive_coding(), &stream), "Canon CRX marker 0xff11 header length 8");
-}
-
-#[test]
-fn nonzero_reserved_fields_in_0x200_headers_are_unsupported() {
-    assert_rejected(
-        "tile reserved",
-        &cr3_file(&adaptive_coding(), &adaptive_stream(&ADAPTIVE_GAINS, 1, 0, ADAPTIVE_QP)),
-        "Canon CRX adaptive quantization tile header",
-    );
-    assert_rejected(
-        "band reserved",
-        &cr3_file(&adaptive_coding(), &adaptive_stream(&ADAPTIVE_GAINS, 0, 1, ADAPTIVE_QP)),
-        "Canon CRX adaptive subband reserved field",
-    );
-}
-
 // --- vendor/cr3.rs adapter gate ---------------------------------------------
-
-#[test]
-fn non_four_plane_codings_are_rejected_at_the_adapter() {
-    // CMP1 parsing allows one plane (with any CFA), which the adapter rejects before the CRX layer.
-    let mut coding = cmp1();
-    coding[25] = 0x10; // one plane
-    assert_rejected("one plane", &cr3_file(&coding, &lossless_stream(0xff01, 0xff02, 0xff03, 0, 0)), "Canon CR3 encoding 0 with 1 planes");
-}
 
 #[test]
 fn non_crx_encodings_are_rejected_at_the_adapter() {
     let mut coding = cmp1();
     coding[26] = 0x10; // encoding 1, still zero wavelet levels
     assert_rejected("encoding 1", &cr3_file(&coding, &lossless_stream(0xff01, 0xff02, 0xff03, 0, 0)), "Canon CR3 encoding 1 with 4 planes");
+    // non four plane codings are rejected at the adapter
+    {
+        // CMP1 parsing allows one plane (with any CFA), which the adapter rejects before the CRX layer.
+        let mut coding = cmp1();
+        coding[25] = 0x10; // one plane
+        assert_rejected("one plane", &cr3_file(&coding, &lossless_stream(0xff01, 0xff02, 0xff03, 0, 0)), "Canon CR3 encoding 0 with 1 planes");
+    }
 }

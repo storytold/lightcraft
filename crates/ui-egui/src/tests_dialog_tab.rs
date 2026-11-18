@@ -34,37 +34,45 @@ fn key(h: &mut Headless, params: serde_json::Value) {
     h.step();
 }
 
-/// Open `dialog`, then Tab through it; the focus order, starting with the field it opens on.
-fn tab_order(dialog: Dialog) -> Vec<String> {
-    let mut h = demo_with_selection();
+/// Open `dialog` (closing any other first) and let it take the focus.
+fn open(h: &mut Headless, dialog: Dialog) {
+    h.app.ui.dialog = None;
+    h.step();
+    h.step();
     h.app.ui.dialog = Some(dialog);
     for _ in 0..4 {
         h.step();
     }
-    let mut order = vec![focused(&h).unwrap_or_default()];
+}
+
+/// Open `dialog`, then Tab through it; the focus order, starting with the field it opens on.
+fn tab_order(h: &mut Headless, dialog: Dialog) -> Vec<String> {
+    open(h, dialog);
+    let mut order = vec![focused(h).unwrap_or_default()];
     for _ in 0..4 {
-        key(&mut h, json!({"key": "Tab"}));
-        order.push(focused(&h).unwrap_or_default());
+        key(h, json!({"key": "Tab"}));
+        order.push(focused(h).unwrap_or_default());
     }
     order
 }
 
-#[test]
-fn new_album_opens_on_its_name_and_tab_reaches_the_check_box_cancel_and_ok() {
-    let order = tab_order(Dialog::NewAlbum { name: "Trip".into(), folder: false, parent: None, include_selected: true });
-    assert_eq!(order[..4], ["field:albumName", "check:albumIncludeSelected", "button:dialogCancel", "button:dialogOk"], "{order:?}");
+fn new_album(name: &str, include_selected: bool) -> Dialog {
+    Dialog::NewAlbum { name: name.into(), folder: false, parent: None, include_selected }
 }
 
+/// One session, a dialog opened for each step: the name field has the focus when a dialog opens, Tab carries it on
+/// to the check box, Cancel and OK and Shift+Tab back; Esc, Return and typing still work around that.
 #[test]
-fn new_smart_album_opens_on_its_name_and_tab_reaches_cancel_and_ok() {
-    let order = tab_order(Dialog::NewSmartAlbum { name: "Rejected".into(), parent: None });
+fn dialogs_open_on_their_name_and_tab_escape_and_return_work_from_there() {
+    let mut h = demo_with_selection();
+    let order = tab_order(&mut h, new_album("Trip", true));
+    assert_eq!(order[..4], ["field:albumName", "check:albumIncludeSelected", "button:dialogCancel", "button:dialogOk"], "New Album: {order:?}");
+
+    let order = tab_order(&mut h, Dialog::NewSmartAlbum { name: "Rejected".into(), parent: None });
     let (cancel, ok) = (order.iter().position(|w| w == "button:dialogCancel"), order.iter().position(|w| w == "button:dialogOk"));
-    assert_eq!(order[0], "field:smartAlbumName", "{order:?}");
+    assert_eq!(order[0], "field:smartAlbumName", "New Smart Album: {order:?}");
     assert!(cancel.is_some() && ok.is_some() && cancel < ok, "Cancel then OK are reached by Tab: {order:?}");
-}
 
-#[test]
-fn save_metadata_preset_opens_on_its_name_and_tab_reaches_cancel_and_ok() {
     let prompt = Dialog::TextPrompt {
         title: "Save Metadata Preset".into(),
         hint: "Preset name".into(),
@@ -73,17 +81,11 @@ fn save_metadata_preset_opens_on_its_name_and_tab_reaches_cancel_and_ok() {
         params: json!({}),
         key: "name".into(),
     };
-    let order = tab_order(prompt);
-    assert_eq!(order[..3], ["field:prompt", "button:dialogCancel", "button:dialogOk"], "{order:?}");
-}
+    let order = tab_order(&mut h, prompt);
+    assert_eq!(order[..3], ["field:prompt", "button:dialogCancel", "button:dialogOk"], "Save Metadata Preset: {order:?}");
 
-#[test]
-fn shift_tab_goes_back_from_ok_to_the_name() {
-    let mut h = demo_with_selection();
-    h.app.ui.dialog = Some(Dialog::NewAlbum { name: "Trip".into(), folder: false, parent: None, include_selected: true });
-    for _ in 0..4 {
-        h.step();
-    }
+    // Shift+Tab goes back from OK to the name
+    open(&mut h, new_album("Trip", true));
     for _ in 0..3 {
         key(&mut h, json!({"key": "Tab"}));
     }
@@ -91,16 +93,23 @@ fn shift_tab_goes_back_from_ok_to_the_name() {
     for _ in 0..3 {
         key(&mut h, json!({"key": "Tab", "shift": true}));
     }
-    assert_eq!(focused(&h).as_deref(), Some("field:albumName"));
-}
+    assert_eq!(focused(&h).as_deref(), Some("field:albumName"), "Shift+Tab back to the name");
 
-#[test]
-fn the_name_still_takes_typing_and_enter_after_opening() {
-    let mut h = demo_with_selection();
-    h.app.ui.dialog = Some(Dialog::NewAlbum { name: String::new(), folder: false, parent: None, include_selected: false });
-    for _ in 0..4 {
-        h.step();
-    }
+    // Esc still cancels after tabbing away from the name
+    open(&mut h, new_album("Trip", true));
+    key(&mut h, json!({"key": "Tab"}));
+    key(&mut h, json!({"key": "Escape"}));
+    assert!(h.app.ui.dialog.is_none(), "Esc closed the dialog");
+
+    // an empty name is refused on Return, and the field has the focus again for the correction
+    open(&mut h, new_album("", false));
+    key(&mut h, json!({"key": "Enter"}));
+    h.step();
+    assert!(h.app.ui.dialog.is_some(), "an empty name is refused and the dialog stays");
+    assert_eq!(focused(&h).as_deref(), Some("field:albumName"), "the field has the focus again");
+
+    // the name still takes typing and Return after opening
+    open(&mut h, new_album("", false));
     let r = h.request("ui.text", json!({"text": "Holiday"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -108,27 +117,9 @@ fn the_name_still_takes_typing_and_enter_after_opening() {
     h.settle(T);
     assert!(h.app.ui.dialog.is_none(), "Enter confirmed the dialog");
     assert!(h.app.session.catalog.albums().any(|a| a.name == "Holiday"), "the typed name made the album");
-}
 
-#[test]
-fn escape_still_cancels_after_tabbing_away_from_the_name() {
-    let mut h = demo_with_selection();
-    h.app.ui.dialog = Some(Dialog::NewAlbum { name: "Trip".into(), folder: false, parent: None, include_selected: true });
-    for _ in 0..4 {
-        h.step();
-    }
-    key(&mut h, json!({"key": "Tab"}));
-    key(&mut h, json!({"key": "Escape"}));
-    assert!(h.app.ui.dialog.is_none(), "Esc closed the dialog");
-}
-
-#[test]
-fn a_click_on_a_check_box_leaves_return_confirming_the_name() {
-    let mut h = demo_with_selection();
-    h.app.ui.dialog = Some(Dialog::NewAlbum { name: "Trip".into(), folder: false, parent: None, include_selected: true });
-    for _ in 0..4 {
-        h.step();
-    }
+    // a click on a check box leaves Return confirming the name
+    open(&mut h, new_album("Trip", true));
     let r = h.request("ui.clickWidget", json!({"id": "check:albumIncludeSelected"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -136,18 +127,5 @@ fn a_click_on_a_check_box_leaves_return_confirming_the_name() {
     key(&mut h, json!({"key": "Enter"}));
     h.settle(T);
     assert!(h.app.ui.dialog.is_none(), "Enter confirmed the dialog after the click");
-    assert!(h.app.session.catalog.albums().any(|a| a.name == "Trip"));
-}
-
-#[test]
-fn a_refused_return_leaves_the_name_focused_for_the_correction() {
-    let mut h = demo_with_selection();
-    h.app.ui.dialog = Some(Dialog::NewAlbum { name: String::new(), folder: false, parent: None, include_selected: false });
-    for _ in 0..4 {
-        h.step();
-    }
-    key(&mut h, json!({"key": "Enter"}));
-    h.step();
-    assert!(h.app.ui.dialog.is_some(), "an empty name is refused and the dialog stays");
-    assert_eq!(focused(&h).as_deref(), Some("field:albumName"), "the field has the focus again");
+    assert!(h.app.session.catalog.albums().any(|a| a.name == "Trip"), "the album was made after the click");
 }

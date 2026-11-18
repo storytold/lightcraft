@@ -111,6 +111,39 @@ fn browse_show_all_and_not_imported() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Subfolders come with a first browse of a folder (the default: a folder picked to import means
+/// the tree under it); a re-browse of the same folder keeps an explicitly-off choice, and a
+/// different folder starts over with subfolders in (the Import tab's browse applies the same rule).
+#[test]
+fn browse_takes_subfolders_by_default_and_keeps_the_same_folders_choice() {
+    let dir = temp_dir("sub-default");
+    png(&dir.join("a.png"), 1);
+    let nested = dir.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    png(&nested.join("b.png"), 2);
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.browse", &json!({"path": dir.to_string_lossy()})).unwrap();
+    assert_eq!(r["subfolders"], true, "{r}");
+    assert_eq!(s.visible().len(), 2, "the nested photo shows");
+    // off, given: only the folder's own file
+    let r = s.execute("library.browse", &json!({"path": dir.to_string_lossy(), "subfolders": false})).unwrap();
+    assert_eq!(r["subfolders"], false, "{r}");
+    assert_eq!(s.visible().len(), 1, "flat");
+    // left out again: the choice stays
+    s.execute("library.browse", &json!({"path": dir.to_string_lossy()})).unwrap();
+    assert_eq!(s.visible().len(), 1, "kept across a re-browse");
+    // a different folder starts over with subfolders in
+    let other = temp_dir("sub-other");
+    let deep = other.join("x");
+    std::fs::create_dir_all(&deep).unwrap();
+    png(&deep.join("c.png"), 3);
+    let r = s.execute("library.browse", &json!({"path": other.to_string_lossy()})).unwrap();
+    assert_eq!(r["subfolders"], true, "{r}");
+    assert_eq!(s.visible().len(), 1, "the nested photo shows");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&other);
+}
+
 /// Issue #881: browsing a folder whose photos are already in the library (Local ▸ folder) shows
 /// them, as Folders ▸ the same folder does.
 #[test]

@@ -33,73 +33,75 @@ fn first_film_cell(h: &Headless) -> egui::Rect {
     h.app.widgets.iter().find(|(w, _)| w.starts_with("film:") && w[5..].parse::<u64>().is_ok()).map(|(_, r)| *r).expect("a filmstrip cell")
 }
 
+/// One session, several steps; each step was a test of its own and says what it checks.
 #[test]
-fn dragging_the_filmstrips_top_edge_resizes_it_and_the_height_is_kept() {
+fn the_filmstrip_resizes_from_its_top_edge_and_the_shot_info_strip_stays_when_zoomed_in() {
     let mut h = loupe();
-    let edge = widget(&h, "filmstrip:resize").expect("the resize edge");
-    let before = first_film_cell(&h);
-    let canvas_before = h.app.canvas_rect.expect("the canvas");
-    let (x, y) = (edge.center().x, edge.center().y);
-    let r = h.request("ui.drag", json!({"x": x, "y": y, "toX": x, "toY": y - 100.0, "steps": 8}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(T);
-    let grown = h.app.ui.film_height();
-    assert!(grown > FILM_HEIGHT.default + 60.0, "dragged up 100 points: {grown}");
-    let after = first_film_cell(&h);
-    assert!(after.width() > before.width() && after.height() > before.height(), "{before:?} → {after:?}");
-    let canvas = h.app.canvas_rect.expect("the canvas");
-    assert!(canvas.height() < canvas_before.height() - 60.0, "the photo leaves the strip its room");
-    // far past the top: capped; a hostile value from a file: clamped
-    let edge = widget(&h, "filmstrip:resize").expect("the edge");
-    h.request("ui.drag", json!({"x": x, "y": edge.center().y, "toX": x, "toY": 0.0, "steps": 8}), T);
-    h.settle(T);
-    assert!(h.app.ui.film_height() <= FILM_HEIGHT.max);
-    // kept across a restart
-    let saved = serde_json::to_string(&h.app.ui).unwrap();
-    let back = serde_json::from_str::<UiState>(&saved).unwrap().sanitized();
-    assert_eq!(back.film_height(), h.app.ui.film_height());
-    let odd: UiState = serde_json::from_str(r#"{"filmHeight": 1e9}"#).unwrap();
-    assert_eq!(odd.sanitized().film_height, FILM_HEIGHT.max);
-    // a double click puts it back
-    let edge = widget(&h, "filmstrip:resize").expect("the edge");
-    let ask = json!({"x": edge.center().x, "y": edge.center().y, "count": 2});
-    let r = h.request("ui.click", ask, T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(T);
-    assert_eq!(h.app.ui.film_height(), FILM_HEIGHT.default);
-}
-
-#[test]
-fn the_shot_info_strip_stays_when_zoomed_in_and_hides_for_tools() {
-    let mut h = loupe();
-    assert_eq!(h.request("engine.execute", json!({"command": "view.shotInfo", "params": {"on": true}}), T)["ok"], true);
-    h.settle(T);
-    let fit = widget(&h, "loupe:shotInfo").expect("the strip at Fit");
-    let img = widget(&h, "canvas:image").expect("the photo");
-    assert!(fit.top() >= img.bottom() - 1.0, "at Fit, under the photo: {fit:?} vs {img:?}");
-    h.app.ui.zoom = Zoom::Percent(200.0);
-    h.settle(T);
-    let canvas = h.app.canvas_rect.expect("the canvas");
-    let img = widget(&h, "canvas:image").expect("the photo");
-    assert!(img.height() > canvas.height(), "zoomed in: {img:?} in {canvas:?}");
-    let strip = widget(&h, "loupe:shotInfo").expect("the strip is still there zoomed in");
-    assert!(canvas.contains_rect(strip), "on screen: {strip:?} in {canvas:?}");
-    // a tool on the pixels: nothing over them
-    h.app.ui.tool = "brush".into();
-    h.app.ui.right = RightPanel::Masking;
-    h.step();
-    h.step();
-    assert!(widget(&h, "loupe:shotInfo").is_none(), "hidden while a tool is armed");
-    h.app.ui.tool.clear();
-    h.app.ui.right = RightPanel::Edit;
-    h.step();
-    h.step();
-    assert!(widget(&h, "loupe:shotInfo").is_some(), "back once the tool is put away");
-    // View ▸ Shot Info turns it off
-    assert_eq!(h.request("engine.execute", json!({"command": "view.shotInfo", "params": {}}), T)["result"]["on"], false);
-    h.step();
-    h.step();
-    assert!(widget(&h, "loupe:shotInfo").is_none());
+    // dragging the filmstrips top edge resizes it and the height is kept
+    {
+        let edge = widget(&h, "filmstrip:resize").expect("the resize edge");
+        let before = first_film_cell(&h);
+        let canvas_before = h.app.canvas_rect.expect("the canvas");
+        let (x, y) = (edge.center().x, edge.center().y);
+        let r = h.request("ui.drag", json!({"x": x, "y": y, "toX": x, "toY": y - 100.0, "steps": 8}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(T);
+        let grown = h.app.ui.film_height();
+        assert!(grown > FILM_HEIGHT.default + 60.0, "dragged up 100 points: {grown}");
+        let after = first_film_cell(&h);
+        assert!(after.width() > before.width() && after.height() > before.height(), "{before:?} → {after:?}");
+        let canvas = h.app.canvas_rect.expect("the canvas");
+        assert!(canvas.height() < canvas_before.height() - 60.0, "the photo leaves the strip its room");
+        // far past the top: capped; a hostile value from a file: clamped
+        let edge = widget(&h, "filmstrip:resize").expect("the edge");
+        h.request("ui.drag", json!({"x": x, "y": edge.center().y, "toX": x, "toY": 0.0, "steps": 8}), T);
+        h.settle(T);
+        assert!(h.app.ui.film_height() <= FILM_HEIGHT.max);
+        // kept across a restart
+        let saved = serde_json::to_string(&h.app.ui).unwrap();
+        let back = serde_json::from_str::<UiState>(&saved).unwrap().sanitized();
+        assert_eq!(back.film_height(), h.app.ui.film_height());
+        let odd: UiState = serde_json::from_str(r#"{"filmHeight": 1e9}"#).unwrap();
+        assert_eq!(odd.sanitized().film_height, FILM_HEIGHT.max);
+        // a double click puts it back
+        let edge = widget(&h, "filmstrip:resize").expect("the edge");
+        let ask = json!({"x": edge.center().x, "y": edge.center().y, "count": 2});
+        let r = h.request("ui.click", ask, T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(T);
+        assert_eq!(h.app.ui.film_height(), FILM_HEIGHT.default);
+    }
+    // the shot info strip stays when zoomed in and hides for tools
+    {
+        assert_eq!(h.request("engine.execute", json!({"command": "view.shotInfo", "params": {"on": true}}), T)["ok"], true);
+        h.settle(T);
+        let fit = widget(&h, "loupe:shotInfo").expect("the strip at Fit");
+        let img = widget(&h, "canvas:image").expect("the photo");
+        assert!(fit.top() >= img.bottom() - 1.0, "at Fit, under the photo: {fit:?} vs {img:?}");
+        h.app.ui.zoom = Zoom::Percent(200.0);
+        h.settle(T);
+        let canvas = h.app.canvas_rect.expect("the canvas");
+        let img = widget(&h, "canvas:image").expect("the photo");
+        assert!(img.height() > canvas.height(), "zoomed in: {img:?} in {canvas:?}");
+        let strip = widget(&h, "loupe:shotInfo").expect("the strip is still there zoomed in");
+        assert!(canvas.contains_rect(strip), "on screen: {strip:?} in {canvas:?}");
+        // a tool on the pixels: nothing over them
+        h.app.ui.tool = "brush".into();
+        h.app.ui.right = RightPanel::Masking;
+        h.step();
+        h.step();
+        assert!(widget(&h, "loupe:shotInfo").is_none(), "hidden while a tool is armed");
+        h.app.ui.tool.clear();
+        h.app.ui.right = RightPanel::Edit;
+        h.step();
+        h.step();
+        assert!(widget(&h, "loupe:shotInfo").is_some(), "back once the tool is put away");
+        // View ▸ Shot Info turns it off
+        assert_eq!(h.request("engine.execute", json!({"command": "view.shotInfo", "params": {}}), T)["result"]["on"], false);
+        h.step();
+        h.step();
+        assert!(widget(&h, "loupe:shotInfo").is_none());
+    }
 }
 
 #[test]

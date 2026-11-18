@@ -42,6 +42,7 @@ fn a_hostile_query_is_an_error_naming_the_problem_never_an_empty_grid() {
         json!({"properties": {"width": {"min": 100, "max": 50}}}),
         json!({"media": {"codec": "h264"}}),
         json!({"words": 5}),
+        json!({"file": {"album": 99}}),
     ] {
         let e = s.execute("library.advancedSearch", &json!({"query": query})).unwrap_err();
         let e = e.to_string();
@@ -49,12 +50,4 @@ fn a_hostile_query_is_an_error_naming_the_problem_never_an_empty_grid() {
         // the filter is untouched by a refused query
         assert_eq!(visible(&mut s), vec![1, 2], "{query}");
     }
-}
-
-#[test]
-fn an_unknown_album_is_refused_and_it_is_a_registered_command() {
-    let mut s = session().unwrap();
-    assert!(s.execute("library.advancedSearch", &json!({"query": {"file": {"album": 99}}})).is_err());
-    let spec = crate::command_specs().iter().find(|c| c.id == "library.advancedSearch").expect("registered");
-    assert_eq!(spec.label, "Advanced Search");
 }

@@ -1,3 +1,0 @@
-## Fixes
-
-- **Develop stops freezing at 100 % zoom and beyond:** returning to 100 % keeps the photo on screen's rendered tiles instead of re-rendering every tile from the original (about 5 s for a 45 MP raw, now about 150 ms), the window's interactive renders are measured separately and go ahead of export and 1:1-preview renders instead of waiting behind them, 1:1 tiles render on the second graphics card when one is present, and big look-ahead pictures upload at most one per frame. The histogram's clipping triangles now start their hover preview once the pointer rests about 0.3 s on one, instead of at every crossing. Thanks @OneSlips. PR #1063.

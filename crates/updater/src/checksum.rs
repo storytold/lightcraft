@@ -50,21 +50,23 @@ mod tests {
     }
 
     #[test]
-    fn finds_a_named_file() {
-        let text = sums();
-        assert_eq!(lookup(&text, "app-1.2.3-windows-x64.msi"), None, "a short digest is not a SHA-256");
-        assert_eq!(lookup(&text, "app-1.2.3-linux-x86_64.AppImage").as_deref(), Some(APPIMAGE_SHA));
-        assert_eq!(lookup(&text, "app-1.2.3-macos-universal.dmg"), None);
-        assert_eq!(lookup(&text, "app-9.9.9-windows-x64.msi"), None);
-        assert_eq!(lookup(&text, ""), None);
-        assert_eq!(lookup("", "x"), None);
-    }
-
-    #[test]
-    fn accepts_paths_and_case() {
-        let text = format!("{APPIMAGE_SHA_UPPER}  dist/app.msi\n");
-        assert_eq!(lookup(&text, "app.msi").as_deref(), Some(APPIMAGE_SHA));
-        let nested = format!("{APPIMAGE_SHA}  ./a/b/app.msi");
-        assert_eq!(lookup(&nested, "app.msi").as_deref(), Some(APPIMAGE_SHA));
+    fn finds_a_named_file_by_name_path_or_case() {
+        // finds a named file
+        {
+            let text = sums();
+            assert_eq!(lookup(&text, "app-1.2.3-windows-x64.msi"), None, "a short digest is not a SHA-256");
+            assert_eq!(lookup(&text, "app-1.2.3-linux-x86_64.AppImage").as_deref(), Some(APPIMAGE_SHA));
+            assert_eq!(lookup(&text, "app-1.2.3-macos-universal.dmg"), None);
+            assert_eq!(lookup(&text, "app-9.9.9-windows-x64.msi"), None);
+            assert_eq!(lookup(&text, ""), None);
+            assert_eq!(lookup("", "x"), None);
+        }
+        // accepts paths and case
+        {
+            let text = format!("{APPIMAGE_SHA_UPPER}  dist/app.msi\n");
+            assert_eq!(lookup(&text, "app.msi").as_deref(), Some(APPIMAGE_SHA));
+            let nested = format!("{APPIMAGE_SHA}  ./a/b/app.msi");
+            assert_eq!(lookup(&nested, "app.msi").as_deref(), Some(APPIMAGE_SHA));
+        }
     }
 }

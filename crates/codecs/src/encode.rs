@@ -703,13 +703,6 @@ mod hlg_tests {
     use super::*;
 
     #[test]
-    fn dimensions_whose_sample_count_wraps_are_refused() {
-        // 2^31 x 2^31 x 4 is 2^64 samples: zero when wrapped, which an empty buffer would satisfy
-        let img = EncodeImage::new(1 << 31, 1 << 31, 4, Samples::U8(&[]));
-        assert!(img.validate().is_err());
-    }
-
-    #[test]
     fn hlg_reference_white_and_peak() {
         // BT.2408: SDR (HDR reference) white sits at 75 % HLG signal
         for v in hlg_signal([1.0; 3]) {
@@ -736,5 +729,11 @@ mod hlg_tests {
         let m = EncodeMeta::default();
         assert!(encode_avif_hdr(4, 4, &[0.5; 10], 80, 10, &m, HdrTransfer::Hlg).is_err());
         assert!(encode_avif_hdr(0, 4, &[], 80, 10, &m, HdrTransfer::Hlg).is_err());
+        // dimensions whose sample count wraps are refused
+        {
+            // 2^31 x 2^31 x 4 is 2^64 samples: zero when wrapped, which an empty buffer would satisfy
+            let img = EncodeImage::new(1 << 31, 1 << 31, 4, Samples::U8(&[]));
+            assert!(img.validate().is_err());
+        }
     }
 }

@@ -341,6 +341,14 @@ fn subject_model_is_optional_and_used_once_installed() {
             ..Default::default()
         });
         let info = lcc_pipeline::SourceInfo::default();
+        // a Sky mask never waits for the Subject model (#969)
+        let mut sky = DevelopSettings::default();
+        sky.masks.push(Mask {
+            components: vec![MaskComponent { anchor: None, name: None, op: Default::default(), invert: false, shape: MaskShape::Sky }],
+            ..Default::default()
+        });
+        let sky_auto = lcc_pipeline::auto_mask::for_source(&src, &info, &sky);
+        assert_ne!((sky_auto.subject.width, sky_auto.subject.height), (1024, 1024), "a Sky mask ran the Subject model");
         let job = std::thread::spawn(move || lcc_pipeline::auto_mask::for_source(&src, &info, &set));
         let mut seen = false;
         while !job.is_finished() {

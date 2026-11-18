@@ -331,8 +331,11 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     each = Some(t.to_string());
                 } else if let Some(t) = str_param(p, "time") {
-                    let t = normalize_iso(t).ok_or_else(|| bad(c, format!("`{t}` is not a date (YYYY-MM-DDTHH:MM:SS, or YYYY / YYYY-MM)")))?;
-                    if bool_or(p, "each", false) {
+                    // the zone typed (`…+01:00`) is kept, as an import from Exif keeps it
+                    let t = lcc_catalog::dates::normalize_iso_keeping_zone(t)
+                        .ok_or_else(|| bad(c, format!("`{t}` is not a date (YYYY-MM-DDTHH:MM:SS[±HH:MM], or YYYY / YYYY-MM)")))?;
+                    // one photo simply gets the time as typed, zone included
+                    if bool_or(p, "each", false) || targets.len() == 1 {
                         each = Some(t);
                     } else {
                         let anchor = s.active().filter(|a| targets.contains(a)).unwrap_or(targets[0]);

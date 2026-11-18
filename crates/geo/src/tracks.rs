@@ -177,34 +177,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn gpx_kml_geojson() {
-        let gpx = r#"<?xml version="1.0"?><gpx version="1.1"><trk><trkseg>
-            <trkpt lat="48.1" lon="11.5"><time>2024-05-01T10:00:00Z</time></trkpt>
-            <trkpt lat="48.2" lon="11.6"><time>2024-05-01T10:10:00Z</time></trkpt></trkseg></trk></gpx>"#;
-        let t = parse("walk.gpx", gpx).unwrap();
-        assert_eq!((t.points(), t.timed, t.name.as_str()), (2, true, "walk.gpx"));
-        assert!(t.span.is_some());
+    fn tracks_parse_and_junk_is_an_error() {
+        // gpx kml geojson
+        {
+            let gpx = r#"<?xml version="1.0"?><gpx version="1.1"><trk><trkseg>
+                <trkpt lat="48.1" lon="11.5"><time>2024-05-01T10:00:00Z</time></trkpt>
+                <trkpt lat="48.2" lon="11.6"><time>2024-05-01T10:10:00Z</time></trkpt></trkseg></trk></gpx>"#;
+            let t = parse("walk.gpx", gpx).unwrap();
+            assert_eq!((t.points(), t.timed, t.name.as_str()), (2, true, "walk.gpx"));
+            assert!(t.span.is_some());
 
-        let kml = "<kml><Placemark><LineString><coordinates>11.5,48.1,0 11.6,48.2 bad 200,0</coordinates></LineString></Placemark>\
-                   <gx:Track><gx:coord>11.7 48.3 5</gx:coord></gx:Track></kml>";
-        let t = parse("a.kml", kml).unwrap();
-        assert_eq!(t.segments.len(), 2);
-        assert_eq!(t.segments[0], vec![LatLon::new(48.1, 11.5), LatLon::new(48.2, 11.6)]);
+            let kml = "<kml><Placemark><LineString><coordinates>11.5,48.1,0 11.6,48.2 bad 200,0</coordinates></LineString></Placemark>\
+                       <gx:Track><gx:coord>11.7 48.3 5</gx:coord></gx:Track></kml>";
+            let t = parse("a.kml", kml).unwrap();
+            assert_eq!(t.segments.len(), 2);
+            assert_eq!(t.segments[0], vec![LatLon::new(48.1, 11.5), LatLon::new(48.2, 11.6)]);
 
-        let gj = r#"{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"LineString","coordinates":[[11.5,48.1],[11.6,48.2]]}},
-                    {"type":"Feature","geometry":{"type":"MultiLineString","coordinates":[[[1,2],[3,4]]]}}]}"#;
-        let t = parse("b.geojson", gj).unwrap();
-        assert_eq!((t.segments.len(), t.points()), (2, 4));
-    }
-
-    #[test]
-    fn junk_is_an_error() {
-        assert!(parse("x", "hello").is_err());
-        assert!(parse("x", "{").is_err());
-        assert!(parse("x", r#"{"type":"Feature"}"#).is_err());
-        assert!(parse("x", "<kml><coordinates>").is_err());
-        // deep nesting stops
-        let deep = format!("{}{}", r#"{"type":"GeometryCollection","geometries":["#.repeat(60), "]}".repeat(60));
-        assert!(parse("x", &deep).is_err());
+            let gj = r#"{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"LineString","coordinates":[[11.5,48.1],[11.6,48.2]]}},
+                        {"type":"Feature","geometry":{"type":"MultiLineString","coordinates":[[[1,2],[3,4]]]}}]}"#;
+            let t = parse("b.geojson", gj).unwrap();
+            assert_eq!((t.segments.len(), t.points()), (2, 4));
+        }
+        // junk is an error
+        {
+            assert!(parse("x", "hello").is_err());
+            assert!(parse("x", "{").is_err());
+            assert!(parse("x", r#"{"type":"Feature"}"#).is_err());
+            assert!(parse("x", "<kml><coordinates>").is_err());
+            // deep nesting stops
+            let deep = format!("{}{}", r#"{"type":"GeometryCollection","geometries":["#.repeat(60), "]}".repeat(60));
+            assert!(parse("x", &deep).is_err());
+        }
     }
 }

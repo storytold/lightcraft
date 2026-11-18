@@ -131,24 +131,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_and_joins() {
-        let u = Url::parse("HTTPS://Photos.Example:8443/api/x?y=1#frag").unwrap();
-        assert_eq!((u.tls, u.host.as_str(), u.port, u.path.as_str()), (true, "photos.example", 8443, "/api/x?y=1"));
-        assert_eq!(u.host_header(), "photos.example:8443");
-        assert_eq!(u.join("/b").unwrap().to_string(), "https://photos.example:8443/b");
-        assert_eq!(u.join("c?d").unwrap().path, "/api/c?d");
-        assert_eq!(u.join("//other/z").unwrap().to_string(), "https://other/z");
-        let v6 = Url::parse("http://[::1]:2283").unwrap();
-        assert_eq!((v6.host.as_str(), v6.port, v6.path.as_str()), ("::1", 2283, "/"));
-        assert_eq!(v6.host_header(), "[::1]:2283");
-        assert_eq!(Url::parse("http://h?q").unwrap().path, "/?q");
-    }
-
-    #[test]
-    fn hostile_urls_are_errors() {
-        for s in ["ftp://x", "http://", "http://a b", "http://u:p@h/", "http://h:0", "http://h:99999", "http://[::1", "http://h\r\n/", "http://é/"] {
-            assert!(Url::parse(s).is_err(), "{s}");
+    fn urls_parse_join_and_hostile_ones_are_errors() {
+        // parses and joins
+        {
+            let u = Url::parse("HTTPS://Photos.Example:8443/api/x?y=1#frag").unwrap();
+            assert_eq!((u.tls, u.host.as_str(), u.port, u.path.as_str()), (true, "photos.example", 8443, "/api/x?y=1"));
+            assert_eq!(u.host_header(), "photos.example:8443");
+            assert_eq!(u.join("/b").unwrap().to_string(), "https://photos.example:8443/b");
+            assert_eq!(u.join("c?d").unwrap().path, "/api/c?d");
+            assert_eq!(u.join("//other/z").unwrap().to_string(), "https://other/z");
+            let v6 = Url::parse("http://[::1]:2283").unwrap();
+            assert_eq!((v6.host.as_str(), v6.port, v6.path.as_str()), ("::1", 2283, "/"));
+            assert_eq!(v6.host_header(), "[::1]:2283");
+            assert_eq!(Url::parse("http://h?q").unwrap().path, "/?q");
         }
-        assert!(Url::parse(&"h".repeat(20_000)).is_err());
+        // hostile urls are errors
+        {
+            for s in
+                ["ftp://x", "http://", "http://a b", "http://u:p@h/", "http://h:0", "http://h:99999", "http://[::1", "http://h\r\n/", "http://é/"]
+            {
+                assert!(Url::parse(s).is_err(), "{s}");
+            }
+            assert!(Url::parse(&"h".repeat(20_000)).is_err());
+        }
     }
 }

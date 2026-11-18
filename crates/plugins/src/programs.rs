@@ -565,45 +565,47 @@ mod tests {
     }
 
     #[test]
-    fn a_program_needs_one_system_and_plain_names() {
-        assert!(decl().validate().is_ok());
-        let none = ProgramDecl { mac_bundle_ids: vec![], windows_exe: None, linux_exe: None, ..decl() };
-        assert!(none.validate().is_err(), "an entry with no system is invalid");
-        let only_linux = ProgramDecl { mac_bundle_ids: vec![], windows_exe: None, linux_exe: Some("tool".into()), ..decl() };
-        assert!(only_linux.validate().is_ok(), "macBundleIds is optional");
-        for exe in [
-            "/usr/bin/tool",
-            "..\\tool.exe",
-            "../tool",
-            "C:tool.exe",
-            "",
-            ".",
-            "tool.",
-            "tool ",
-            "CON",
-            "nul.exe",
-            "com1.txt",
-            "LPT9",
-            "conin$",
-            "CONOUT$.txt",
-            "a|b",
-            "a*",
-            "a?",
-            "<a>",
-            "\"a\"",
-        ] {
-            let p = ProgramDecl { linux_exe: Some(exe.into()), ..decl() };
-            assert!(p.validate().is_err(), "{exe:?} is a path, not a name");
+    fn a_program_needs_one_system_and_plain_file_names() {
+        // a program needs one system and plain names
+        {
+            assert!(decl().validate().is_ok());
+            let none = ProgramDecl { mac_bundle_ids: vec![], windows_exe: None, linux_exe: None, ..decl() };
+            assert!(none.validate().is_err(), "an entry with no system is invalid");
+            let only_linux = ProgramDecl { mac_bundle_ids: vec![], windows_exe: None, linux_exe: Some("tool".into()), ..decl() };
+            assert!(only_linux.validate().is_ok(), "macBundleIds is optional");
+            for exe in [
+                "/usr/bin/tool",
+                "..\\tool.exe",
+                "../tool",
+                "C:tool.exe",
+                "",
+                ".",
+                "tool.",
+                "tool ",
+                "CON",
+                "nul.exe",
+                "com1.txt",
+                "LPT9",
+                "conin$",
+                "CONOUT$.txt",
+                "a|b",
+                "a*",
+                "a?",
+                "<a>",
+                "\"a\"",
+            ] {
+                let p = ProgramDecl { linux_exe: Some(exe.into()), ..decl() };
+                assert!(p.validate().is_err(), "{exe:?} is a path, not a name");
+            }
+            let repeated = ProgramDecl { mac_bundle_ids: vec!["a.b".into(), "a.b".into()], ..decl() };
+            assert!(repeated.validate().is_err());
+            assert!(validate_all(&[decl(), decl()]).is_err(), "ids are unique");
         }
-        let repeated = ProgramDecl { mac_bundle_ids: vec!["a.b".into(), "a.b".into()], ..decl() };
-        assert!(repeated.validate().is_err());
-        assert!(validate_all(&[decl(), decl()]).is_err(), "ids are unique");
-    }
-
-    #[test]
-    fn ordinary_names_are_file_names() {
-        for ok in ["tool", "PureRAW.exe", "COM10", "console.txt", "LPT0", ".hidden", "a b.txt", "NULL"] {
-            assert!(valid_file_name(ok), "{ok:?}");
+        // ordinary names are file names
+        {
+            for ok in ["tool", "PureRAW.exe", "COM10", "console.txt", "LPT0", ".hidden", "a b.txt", "NULL"] {
+                assert!(valid_file_name(ok), "{ok:?}");
+            }
         }
     }
 

@@ -10,7 +10,7 @@ use crate::Session;
 use crate::tests_xmp::{synthetic_dng_with, temp_dir};
 
 /// A session holding the one DNG `bytes` written to a scratch folder.
-fn with_dng(tag: &str, bytes: &[u8]) -> (Session, PathBuf, PathBuf) {
+fn with_dng(tag: &str, bytes: &[u8]) -> (Session, lcc_testkit::TempDir, PathBuf) {
     let dir = temp_dir(tag);
     let file = dir.join("shot.dng");
     std::fs::write(&file, bytes).unwrap();
@@ -31,16 +31,25 @@ fn xmp_of(file: &[u8]) -> String {
 }
 
 #[test]
-fn the_dng_gets_a_preview_and_the_current_xmp_and_keeps_its_raw() {
-    let original = synthetic_dng_with(None, lcc_meta::Metadata::default());
+fn the_dng_gets_a_preview_and_the_current_xmp_merged_and_keeps_its_raw() {
+    // (another writer's XMP is already in the file)
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+      <rdf:Description rdf:about="" xmlns:foo="http://example.com/foo/" foo:Keep="precious"/></rdf:RDF></x:xmpmeta>"#;
+    let original = synthetic_dng_with(Some(xmp), lcc_meta::Metadata::default());
     let (mut s, dir, file) = with_dng("dng-update", &original);
     s.execute("photo.rate", &json!({"rating": 4})).unwrap();
+    // bad parameters are reported, and change nothing
+    for bad in [json!({"longEdge": 10}), json!({"longEdge": "big"}), json!({"quality": 0}), json!({"quality": 101}), json!({"ids": ["x"]})] {
+        assert!(s.execute("photo.updateDngPreview", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(std::fs::read(&file).unwrap(), original, "a refused update leaves the file alone");
     let r = s.execute("photo.updateDngPreview", &json!({})).unwrap();
     assert_eq!(r["updated"].as_array().map(Vec::len), Some(1), "{r}");
     assert_eq!(r["updated"][0]["replacedPreviews"], 0);
     let after = std::fs::read(&file).unwrap();
     assert_eq!(pixels(&after), pixels(&original), "the raw decodes the same");
     assert!(xmp_of(&after).contains("Rating"), "the rating is in the embedded XMP");
+    assert!(xmp_of(&after).contains("precious"), "the other writer's XMP in the file is kept: {}", xmp_of(&after));
     let tiff = lcc_tiff::Tiff::parse(&after).unwrap();
     let preview = tiff.ifds[0].sub_ifds.last().expect("a preview IFD");
     let (at, len) = (preview.u32(lcc_tiff::tags::STRIP_OFFSETS).unwrap() as usize, preview.u32(lcc_tiff::tags::STRIP_BYTE_COUNTS).unwrap() as usize);
@@ -53,22 +62,17 @@ fn the_dng_gets_a_preview_and_the_current_xmp_and_keeps_its_raw() {
     let twice = std::fs::read(&file).unwrap();
     assert_eq!(lcc_tiff::Tiff::parse(&twice).unwrap().ifds[0].sub_ifds.len(), 1);
     assert_eq!(pixels(&twice), pixels(&original));
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn other_writers_xmp_in_the_file_is_kept() {
-    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-      <rdf:Description rdf:about="" xmlns:foo="http://example.com/foo/" foo:Keep="precious"/></rdf:RDF></x:xmpmeta>"#;
-    let (mut s, dir, file) = with_dng("dng-update-merge", &synthetic_dng_with(Some(xmp), lcc_meta::Metadata::default()));
-    s.execute("photo.updateDngPreview", &json!({})).unwrap();
-    let packet = xmp_of(&std::fs::read(&file).unwrap());
-    assert!(packet.contains("precious"), "{packet}");
+    let r: Value = s.execute("photo.updateDngPreview", &json!({"quality": 60})).unwrap();
+    assert_eq!(r["failed"].as_array().map(Vec::len), Some(0));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn files_it_must_not_touch_are_left_byte_for_byte() {
+    // a photo that is not a DNG
+    let mut demo = Session::with_demo();
+    let e = demo.execute("photo.updateDngPreview", &json!({})).unwrap_err().to_string();
+    assert!(e.contains("DNG"), "{e}");
     // Written by Adobe software
     let good = synthetic_dng_with(None, lcc_meta::Metadata::default());
     let sw = lcc_tiff::Tiff::parse(&good).unwrap().ifds[0].get(lcc_tiff::tags::SOFTWARE).unwrap().offset as usize;
@@ -96,19 +100,5 @@ fn files_it_must_not_touch_are_left_byte_for_byte() {
     std::fs::write(&file, &cut).unwrap();
     assert!(s.execute("photo.updateDngPreview", &json!({})).is_err());
     assert_eq!(std::fs::read(&file).unwrap(), cut);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn bad_params_and_non_dng_photos_are_reported() {
-    let mut demo = Session::with_demo();
-    let e = demo.execute("photo.updateDngPreview", &json!({})).unwrap_err().to_string();
-    assert!(e.contains("DNG"), "{e}");
-    let (mut s, dir, _) = with_dng("dng-update-params", &synthetic_dng_with(None, lcc_meta::Metadata::default()));
-    for bad in [json!({"longEdge": 10}), json!({"longEdge": "big"}), json!({"quality": 0}), json!({"quality": 101}), json!({"ids": ["x"]})] {
-        assert!(s.execute("photo.updateDngPreview", &bad).is_err(), "{bad}");
-    }
-    let r: Value = s.execute("photo.updateDngPreview", &json!({"quality": 60})).unwrap();
-    assert_eq!(r["failed"].as_array().map(Vec::len), Some(0));
     let _ = std::fs::remove_dir_all(&dir);
 }

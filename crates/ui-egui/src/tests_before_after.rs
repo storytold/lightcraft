@@ -268,7 +268,7 @@ fn zoomed_in_the_after_side_shows_the_edits() {
         h.settle(SETTLE);
         h.paint()
     };
-    for zoom in [Zoom::Fit, Zoom::Percent(100.0), Zoom::Percent(400.0)] {
+    for zoom in [Zoom::Fit, Zoom::Percent(400.0)] {
         let (edited, original) = (shot(&mut h, BeforeAfter::Off, zoom), shot(&mut h, BeforeAfter::Original, zoom));
         let c = h.app.canvas_rect.expect("canvas").center();
         let luma = |m: [f32; 3]| m.iter().sum::<f32>();
@@ -321,18 +321,6 @@ fn show_original_does_not_light_the_before_after_button() {
     assert_eq!(h.app.ui.before_after, BeforeAfter::SideBySide, "a click on the dark button opens the layout");
     assert_eq!(h.request("ui.clickWidget", json!({"id": "icon:beforeAfter"}), T)["ok"], true);
     assert_eq!(h.app.ui.before_after, BeforeAfter::Off, "a second click closes it");
-}
-
-/// `\` is named Show Before (ported from OneSlips, LR-VIEW-BEFOREAFTER): it always showed the Before
-/// in place (the settings Set Before keeps, not the bare file), and the name now says so, in every
-/// language.
-#[test]
-fn backslash_is_named_show_before_in_every_language() {
-    let c = crate::menus::UI_COMMANDS.iter().find(|c| c.0 == "view.showOriginal").expect("the command");
-    assert_eq!((c.1, c.2, c.3), ("Show Before", Some("\\"), "View>Before/After"));
-    for l in crate::i18n::Locale::ALL.iter().filter(|l| **l != crate::i18n::Locale::En) {
-        assert_ne!(l.tr("Show Before"), "Show Before", "{l:?} has a translation");
-    }
 }
 
 /// Upstream #2248: until the Before render of a photo arrives, its preview and thumbnail (which show

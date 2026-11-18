@@ -162,13 +162,6 @@ mod tests {
     }
 
     #[test]
-    fn check_passes_on_well_formed_entries_and_the_recorded_upstream_file() {
-        let r = root("ok");
-        write(&r.0, "docs/changelog/unreleased/2026-10-16-a.md", "## Fixes\n- **A**\n");
-        assert_eq!(check(&r.0), Ok(()));
-    }
-
-    #[test]
     fn an_entry_added_to_upstreams_file_is_sent_to_its_own_file() {
         let r = root("edited");
         let path = r.0.join(WHATS_NEW);

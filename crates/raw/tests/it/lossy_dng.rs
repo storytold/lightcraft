@@ -70,6 +70,17 @@ fn lossy_dng_round_trips_close_to_the_source() {
     }
     let mean = sum / (a.data.len() * 3) as f64;
     assert!(mean < 0.01 && worst < 0.08, "mean {mean} worst {worst}");
+    // lossy dng of linear data and extreme values
+    {
+        // a 3-sample linear raw with values above white, negative and non-finite samples: no panic, clipped
+        let (w, h) = (20usize, 12usize);
+        let data: Vec<f32> = (0..w * h * 3).map(|i| [2.0, -1.0, f32::NAN, 0.5, f32::INFINITY][i % 5]).collect();
+        let raw = RawImage { cpp: 3, cfa: None, data: RawData::F32(data), white: vec![1.0], black: BlackLevel::uniform(0.0), ..mosaic(w, h) };
+        let back = lcc_raw::decode(&lossy(&raw, Some(4))).unwrap();
+        assert_eq!(back.width.max(back.height), 4);
+        let rgb = back.develop(Method::Bilinear).unwrap();
+        assert!(rgb.data.iter().flatten().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
+    }
 }
 
 #[test]
@@ -82,16 +93,4 @@ fn lossy_dng_scales_to_the_long_edge_and_is_smaller() {
     assert!(back.height == 46 || back.height == 47, "{}", back.height);
     let full = lcc_raw::write_dng(&raw, &DngWriteOptions { compression: DngCompression::Uncompressed, ..Default::default() }).unwrap();
     assert!(small.len() < full.len() / 2, "{} vs {}", small.len(), full.len());
-}
-
-#[test]
-fn lossy_dng_of_linear_data_and_extreme_values() {
-    // a 3-sample linear raw with values above white, negative and non-finite samples: no panic, clipped
-    let (w, h) = (20usize, 12usize);
-    let data: Vec<f32> = (0..w * h * 3).map(|i| [2.0, -1.0, f32::NAN, 0.5, f32::INFINITY][i % 5]).collect();
-    let raw = RawImage { cpp: 3, cfa: None, data: RawData::F32(data), white: vec![1.0], black: BlackLevel::uniform(0.0), ..mosaic(w, h) };
-    let back = lcc_raw::decode(&lossy(&raw, Some(4))).unwrap();
-    assert_eq!(back.width.max(back.height), 4);
-    let rgb = back.develop(Method::Bilinear).unwrap();
-    assert!(rgb.data.iter().flatten().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
 }

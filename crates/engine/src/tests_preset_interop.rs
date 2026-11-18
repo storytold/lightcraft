@@ -100,7 +100,7 @@ fn png(path: &std::path::Path, seed: u8) {
 }
 
 /// A library with two PNG photos, both selected.
-fn two_photos(tag: &str) -> (Session, std::path::PathBuf, Vec<lcc_catalog::PhotoId>) {
+fn two_photos(tag: &str) -> (Session, lcc_testkit::TempDir, Vec<lcc_catalog::PhotoId>) {
     let dir = temp_dir(tag);
     let src = dir.join("src");
     std::fs::create_dir_all(&src).unwrap();

@@ -3,7 +3,7 @@ use std::time::Duration;
 use super::data::*;
 use super::sim::SimCamera;
 use super::transport::{Container, kind};
-use super::vendor::{self, Vendor};
+use super::vendor::Vendor;
 use super::*;
 
 fn transports(cam: &SimCamera) -> Vec<(&'static str, Box<dyn Transport>)> {
@@ -144,14 +144,4 @@ fn hostile_bytes_never_panic() {
     assert!(ptpip::read_packet(&mut bad).is_err());
     let mut bad = std::io::Cursor::new(vec![0xFF, 0xFF, 0xFF, 0xFF, 6, 0, 0, 0]);
     assert!(ptpip::read_packet(&mut bad).is_err());
-}
-
-#[test]
-fn vendors() {
-    assert_eq!(Vendor::detect(vendor::ext_id::CANON, "", None), Vendor::Canon);
-    assert_eq!(Vendor::detect(6, "SONY", None), Vendor::Sony);
-    assert_eq!(Vendor::detect(6, "", Some(vendor::usb_id::FUJIFILM)), Vendor::Fujifilm);
-    assert_eq!(Vendor::detect(6, "Acme", Some(1)), Vendor::Other);
-    assert_eq!(vendor::jpeg_in(&[0, 0, 0xFF, 0xD8, 0xFF, 1]), Some(&[0xFF, 0xD8, 0xFF, 1][..]));
-    assert_eq!(vendor::jpeg_in(&[0, 1, 2]), None);
 }

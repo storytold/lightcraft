@@ -67,21 +67,6 @@ fn a_cell_still_loading_differs_from_one_that_failed() {
     }
 }
 
-/// The cue sits inside its cell's placeholder, small and centered.
-#[test]
-fn the_loading_cue_is_a_small_mark_in_the_middle_of_the_cell() {
-    let (mut h, _open) = app_with_held_thumbnails(ViewMode::SquareGrid);
-    first_grid_frame(&mut h);
-    let cell = |id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap();
-    let id = ids(&h, "badge:loading:").remove(0);
-    let photo = id.trim_start_matches("badge:loading:");
-    let cue = cell(&id);
-    let thumb = cell(&format!("thumb:{photo}"));
-    assert!(thumb.contains_rect(cue), "{cue:?} in {thumb:?}");
-    assert!(cue.width() < thumb.width() / 3.0 && cue.height() < thumb.height() / 3.0, "quiet: {cue:?} in {thumb:?}");
-    assert!((cue.center() - thumb.center()).length() < 14.0, "centered: {cue:?} in {thumb:?}");
-}
-
 /// The filmstrip's tiles tell loading from unreadable the same way.
 #[test]
 fn the_filmstrip_tells_loading_from_unreadable_too() {

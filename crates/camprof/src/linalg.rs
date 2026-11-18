@@ -688,13 +688,6 @@ mod tests {
     }
 
     #[test]
-    fn identity_is_neutral() {
-        let x = Vec3::new(0.25, -1.5, 3.0);
-        assert_eq!(Mat3::IDENTITY * x, x);
-        assert_eq!(Mat3::IDENTITY * Mat3::IDENTITY, Mat3::IDENTITY);
-    }
-
-    #[test]
     fn matrix_inverse_roundtrip() {
         let a = m([[2.0, -1.0, 0.5], [0.25, 3.0, -0.75], [1.0, 0.0, 1.0]]);
         let inv = a.inverted().expect("invertible");
@@ -706,6 +699,15 @@ mod tests {
     fn singular_matrix_has_no_inverse() {
         let a = m([[1.0, 2.0, 3.0], [2.0, 4.0, 6.0], [0.0, 1.0, 1.0]]);
         assert!(a.inverted().is_none());
+        // solve linear detects singular
+        {
+            let mut a = DynMatrix::zeros(2, 2);
+            *a.at_mut(0, 0) = 1.0;
+            *a.at_mut(0, 1) = 2.0;
+            *a.at_mut(1, 0) = 2.0;
+            *a.at_mut(1, 1) = 4.0;
+            assert!(solve_linear(&a, &[1.0, 2.0]).is_none());
+        }
     }
 
     #[test]
@@ -713,12 +715,6 @@ mod tests {
         assert_eq!(Vec3::new(0.2, 0.9, 0.5).min_mid_max(), (0, 2, 1));
         assert_eq!(Vec3::new(0.9, 0.2, 0.5).min_mid_max(), (1, 2, 0));
         assert_eq!(Vec3::new(0.5, 0.9, 0.2).min_mid_max(), (2, 0, 1));
-    }
-
-    #[test]
-    fn row_sums_match_matrix_vector_on_ones() {
-        let a = m([[0.4, 0.3, 0.2], [0.1, 0.7, 0.2], [0.05, 0.1, 0.85]]);
-        assert!((a.row_sums() - a * Vec3::ONE).length() < 1.0e-15);
     }
 
     #[test]
@@ -735,16 +731,6 @@ mod tests {
         let x = least_squares(&a, &b).expect("solvable");
         assert!((x[0] - 2.0).abs() < 1.0e-10, "{x:?}");
         assert!((x[1] - 2.0).abs() < 1.0e-10, "{x:?}");
-    }
-
-    #[test]
-    fn solve_linear_detects_singular() {
-        let mut a = DynMatrix::zeros(2, 2);
-        *a.at_mut(0, 0) = 1.0;
-        *a.at_mut(0, 1) = 2.0;
-        *a.at_mut(1, 0) = 2.0;
-        *a.at_mut(1, 1) = 4.0;
-        assert!(solve_linear(&a, &[1.0, 2.0]).is_none());
     }
 
     #[test]

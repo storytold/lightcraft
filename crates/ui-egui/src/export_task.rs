@@ -29,6 +29,9 @@ pub struct ExportTask {
     guard: TaskGuard,
     /// `app.export {pluginDestination}`: the plug-in export destination the files go to when done.
     pub plugin_destination: Option<Value>,
+    /// The JPEG quality asked for when a file-size limit is set: the toast says when the limit
+    /// settled below it ([`limit_quality_note`]).
+    limit_from: Option<u8>,
 }
 
 impl ExportTask {
@@ -40,7 +43,7 @@ impl ExportTask {
         rx: Receiver<Result<(Vec<Value>, Option<Value>, bool), String>>,
         guard: TaskGuard,
     ) -> Self {
-        Self { total, progress, cancel, rx, guard, plugin_destination: None }
+        Self { total, progress, cancel, rx, guard, plugin_destination: None, limit_from: None }
     }
 
     /// `{total, done, current}` for `ui.inspect`.
@@ -50,9 +53,34 @@ impl ExportTask {
     }
 }
 
+/// An image export asked for while another runs (issue #2965): it waits its turn instead of being refused, and
+/// starts when the exports before it have ended. Its photos are prepared when it is asked for, so it exports them
+/// as they were then. Its row in the activity stack says it is waiting; ✕ there drops it.
+pub struct Queued {
+    items: Vec<PreparedExport>,
+    opts: ExportOptions,
+    to: Destination,
+    /// What to do with the files; `None`: decided when it starts, so a running export that holds the Apple Photos
+    /// import doesn't stop this one from waiting for it.
+    after: Option<AfterExport>,
+    then: Option<Then>,
+    cancel: Arc<AtomicBool>,
+    /// The waiting row; dropped (gone from the stack) when the export starts or is dropped.
+    row: TaskGuard,
+    /// `app.export {pluginDestination}`, handed to the task when it starts.
+    pub plugin_destination: Option<Value>,
+}
+
 /// Start exporting `items` in the background, then do `after` with the files written (Add to Apple
-/// Photos). Errors per photo are collected, not fatal.
-pub fn start(app: &mut LccApp, items: Vec<PreparedExport>, opts: ExportOptions, to: Destination, after: AfterExport) -> Result<Value, String> {
+/// Photos; `None`: work it out from `opts` when the export starts). Errors per photo are collected, not fatal.
+/// While another export runs it is queued behind it ([`Queued`]); the result then says `queued: n`.
+pub fn start(
+    app: &mut LccApp,
+    items: Vec<PreparedExport>,
+    opts: ExportOptions,
+    to: Destination,
+    after: Option<AfterExport>,
+) -> Result<Value, String> {
     start_then(app, items, opts, to, after, None)
 }
 
@@ -64,17 +92,74 @@ pub type Then = Box<dyn FnOnce(&[Value]) -> Option<Value> + Send>;
 /// [`start`] with a step to run on the worker when the files are written ([`Then`]).
 pub fn start_then(
     app: &mut LccApp,
-    mut items: Vec<PreparedExport>,
+    items: Vec<PreparedExport>,
     opts: ExportOptions,
     to: Destination,
-    after: AfterExport,
+    after: Option<AfterExport>,
     then: Option<Then>,
 ) -> Result<Value, String> {
     if app.export.is_some() {
-        return Err("an export is already running".into());
+        app.services.write_shared.as_ref().ok_or("no background writer")?;
+        let total = items.len();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let label = crate::i18n::tr_format!("Waiting to export {total} photo{}", if total == 1 { "" } else { "s" }, total = total);
+        let row = app.session.activity.start("export", &label, Cancel::Flag(cancel.clone()));
+        row.progress(0, total as u64);
+        app.export_queue.push_back(Queued { items, opts, to, after, then, cancel, row, plugin_destination: None });
+        return Ok(json!({"background": true, "total": total, "queued": app.export_queue.len()}));
     }
+    start_now(app, items, opts, to, after, then)
+}
+
+/// The next queued export that hasn't been dropped, started now. One that adds to Apple Photos waits while another
+/// import holds Photos ([`poll`] tries again). The library may have grown while it waited, so what it writes is
+/// checked against the originals as they are now. One that can't start says why, on screen for longer, and the one
+/// after it is tried.
+fn start_next(app: &mut LccApp, ctx: &egui::Context) {
+    app.export_queue.retain(|q| !q.cancel.load(Ordering::Relaxed));
+    while let Some(q) = app.export_queue.front() {
+        #[cfg(not(target_arch = "wasm32"))]
+        let photos_busy = q.opts.add_to_photos && app.session.apple_photos_imports.running().is_some();
+        #[cfg(target_arch = "wasm32")]
+        let photos_busy = false;
+        if photos_busy {
+            q.row.detail(crate::i18n::tr("waiting for Apple Photos"));
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            return;
+        }
+        let Some(Queued { mut items, opts, to, after, then, plugin_destination, .. }) = app.export_queue.pop_front() else { return };
+        let guard = Arc::new(app.session.original_guard());
+        for item in &mut items {
+            item.use_guard(guard.clone());
+        }
+        match start_now(app, items, opts, to, after, then) {
+            Ok(_) => {
+                if let Some(t) = app.export.as_mut() {
+                    t.plugin_destination = plugin_destination;
+                }
+                return;
+            }
+            Err(e) => app.toast_for(ctx, crate::i18n::tr_format!("A waiting export could not start: {e}", e = e), 15.0),
+        }
+    }
+}
+
+fn start_now(
+    app: &mut LccApp,
+    mut items: Vec<PreparedExport>,
+    opts: ExportOptions,
+    to: Destination,
+    after: Option<AfterExport>,
+    then: Option<Then>,
+) -> Result<Value, String> {
+    // a queued export reserves Apple Photos now, when the one before it has let go of it
+    let after = match after {
+        Some(after) => after,
+        None => app.session.after_export(&opts)?,
+    };
     let write = app.services.write_shared.clone().ok_or("no background writer")?;
     let total = items.len();
+    let limit_from = opts.limit_kb.map(|_| opts.quality);
     let progress = Arc::new(Mutex::new((0, String::new())));
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = channel();
@@ -135,7 +220,7 @@ pub fn start_then(
     std::thread::Builder::new().name("export".into()).spawn(work).map_err(|e| e.to_string())?;
     #[cfg(target_arch = "wasm32")]
     work();
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard, plugin_destination: None });
+    app.export = Some(ExportTask { total, progress, cancel, rx, guard, plugin_destination: None, limit_from });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -182,7 +267,7 @@ pub fn start_contact_sheet(app: &mut LccApp, params: &Value) -> Result<Value, St
     work();
     let row = app.session.activity.start("export", "Exporting contact sheet", Cancel::Flag(cancel.clone()));
     row.progress(0, total as u64);
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row, plugin_destination: None });
+    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row, plugin_destination: None, limit_from: None });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -235,7 +320,7 @@ pub fn start_print(app: &mut LccApp, params: &Value) -> Result<Value, String> {
     work();
     let row = app.session.activity.start("export", "Printing to PDF", Cancel::Flag(cancel.clone()));
     row.progress(0, total as u64);
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row, plugin_destination: None });
+    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row, plugin_destination: None, limit_from: None });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -286,13 +371,34 @@ pub fn poll_photos(app: &mut LccApp, ctx: &egui::Context) {
 #[cfg(target_arch = "wasm32")]
 pub fn poll_photos(_: &mut LccApp, _: &egui::Context) {}
 
+/// Below this JPEG quality a file-size limit leaves smooth areas such as skies blotchy (issue #3033).
+const LOW_LIMIT_QUALITY: u64 = 40;
+
+/// The toast's account of a file-size limit set with quality `requested`: the lowest quality it
+/// settled on across `files`, and what to do when that is low. None when the limit lowered no file.
+pub fn limit_quality_note(files: &[Value], requested: u8) -> Option<String> {
+    let q = files.iter().filter_map(|f| f.get("quality").and_then(Value::as_u64)).filter(|&q| q < u64::from(requested)).min()?;
+    Some(if q < LOW_LIMIT_QUALITY {
+        crate::i18n::tr_format!("JPEG quality {q} to fit the size limit (a smaller size or a larger limit keeps more quality)", q = q)
+    } else {
+        crate::i18n::tr_format!("JPEG quality {q} to fit the size limit", q = q)
+    })
+}
+
 /// Per frame: keep the activity row up to date; when the batch finishes, report it.
 pub fn poll(app: &mut LccApp, ctx: &egui::Context) {
-    let Some(task) = &app.export else { return };
+    let Some(task) = &app.export else {
+        // nothing running, but an export waits (for Apple Photos): see whether it can start now
+        if !app.export_queue.is_empty() {
+            start_next(app, ctx);
+        }
+        return;
+    };
     match task.rx.try_recv() {
         Ok(r) => {
             let cancelled = matches!(&r, Ok((_, _, true)));
             let total = task.total;
+            let limit_from = task.limit_from;
             // the batch's summary (`activity.list` → finished): photos placed, the failures and why
             if let Ok((files, _, _)) = &r {
                 task.guard.progress(files.len() as u64, total as u64);
@@ -352,6 +458,10 @@ pub fn poll(app: &mut LccApp, ctx: &egui::Context) {
                         }
                         photos_failed |= e.get("folder").is_some();
                     }
+                    if let Some(note) = limit_from.and_then(|q| limit_quality_note(&files, q)) {
+                        m += " · ";
+                        m += &note;
+                    }
                     if cancelled {
                         m += " · cancelled";
                     }
@@ -374,15 +484,20 @@ pub fn poll(app: &mut LccApp, ctx: &egui::Context) {
             } else {
                 app.toast(ctx, msg);
             }
+            // after this export's toast, so a waiting export that can't start is the one shown
+            start_next(app, ctx);
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => {
             let (done, current) = task.progress.lock().map(|g| g.clone()).unwrap_or_default();
             task.guard.progress(done as u64, task.total as u64);
             task.guard.detail(&current);
+            // a waiting export whose ✕ was pressed leaves the queue (and its row the stack)
+            app.export_queue.retain(|q| !q.cancel.load(Ordering::Relaxed));
         }
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
             app.export = None;
             app.toast(ctx, crate::i18n::tr("Export stopped unexpectedly"));
+            start_next(app, ctx);
         }
     }
 }
@@ -494,6 +609,15 @@ mod contact_sheet_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The toast names the quality a size limit settled on (the lowest of the batch), and nothing
+    /// when the limit lowered no file.
+    #[test]
+    fn a_size_limit_quality_is_reported_only_when_it_lowered_something() {
+        assert_eq!(limit_quality_note(&[json!({"path": "a.jpg"}), json!({"path": "b.jpg", "quality": 90})], 90), None);
+        let files = [json!({"path": "a.jpg", "quality": 72}), json!({"error": "disk full"}), json!({"path": "b.jpg", "quality": 12})];
+        assert!(limit_quality_note(&files, 90).is_some_and(|n| n.contains("12")));
+    }
 
     /// The toast's Apple Photos part (issue #236): the count and album, a partial import's
     /// warning, an error with what to do, a cancelled export.

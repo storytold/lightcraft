@@ -82,7 +82,7 @@ fn panorama_memory_estimate_allows_projected_canvas_larger_than_source_area() {
     use crate::merge::{MergeKind, estimate_merge_working_bytes_with_budget};
     use lcc_merge::{Frame, PanoOptions, Projection};
 
-    let frames: Vec<Frame> = lcc_merge::synth::pano_views(480, 360, 420.0, &[-35.0, 0.0, 35.0])
+    let frames: Vec<Frame> = lcc_merge::synth::pano_views(240, 180, 210.0, &[-35.0, 0.0, 35.0])
         .unwrap()
         .into_iter()
         .map(|image| Frame::from_linear_rec2020(image, None))
@@ -93,7 +93,7 @@ fn panorama_memory_estimate_allows_projected_canvas_larger_than_source_area() {
     let output_pixels = stitched.image.width.checked_mul(stitched.image.height).unwrap();
     assert!(output_pixels > source_pixels, "fixture must reproduce output larger than source area");
 
-    let bounded_frames: Vec<Frame> = lcc_merge::synth::pano_views(480, 360, 420.0, &[-35.0, 0.0, 35.0])
+    let bounded_frames: Vec<Frame> = lcc_merge::synth::pano_views(240, 180, 210.0, &[-35.0, 0.0, 35.0])
         .unwrap()
         .into_iter()
         .map(|image| Frame::from_linear_rec2020(image, None))
@@ -103,7 +103,7 @@ fn panorama_memory_estimate_allows_projected_canvas_larger_than_source_area() {
     assert!(bounded_pixels <= source_pixels, "bounded canvas uses {bounded_pixels} pixels above its {source_pixels}-pixel limit");
     assert!(bounded_pixels < output_pixels, "the native canvas should be scaled down to fit the pixel limit");
 
-    let estimated = estimate_merge_working_bytes_with_budget(&MergeKind::Panorama { pano: options }, &[(480, 360); 3], None, usize::MAX).unwrap();
+    let estimated = estimate_merge_working_bytes_with_budget(&MergeKind::Panorama { pano: options }, &[(240, 180); 3], None, usize::MAX).unwrap();
     assert!(
         estimated >= output_pixels.checked_mul(68).unwrap(),
         "estimated panorama working set {estimated} must cover at least the output blend buffer for {output_pixels} pixels"

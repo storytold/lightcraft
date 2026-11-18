@@ -20,11 +20,9 @@ const FRAMES: u32 = 50;
 /// Luma of the synthetic clip: sRGB ≈ 0.38, linear ≈ 0.12 (room to double without clipping).
 const LUMA: u8 = 100;
 
-fn scratch(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("lcc-engine-video-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+/// The test's folder in Temp, removed when the test ends.
+fn scratch(name: &str) -> lcc_testkit::TempDir {
+    lcc_testkit::TempDir::new(&format!("lcc-engine-video-{name}"))
 }
 
 /// A 2 s, 25 fps, 64×48 flat grey H.264 clip.
@@ -94,7 +92,7 @@ fn export(s: &mut Session, ids: &[PhotoId], o: &ExportOptions, dir: &Path, hooks
 }
 
 #[test]
-fn clip_exports_trimmed_and_graded() {
+fn clip_exports_trimmed_graded_and_cropped() {
     let dir = scratch("graded");
     let src = dir.join("clip.mp4");
     make_clip(&src);
@@ -119,30 +117,18 @@ fn clip_exports_trimmed_and_graded() {
     let (src_y, plain_y, bright_y) = (mean_luma(&src, 0.5), mean_luma(&plain, 0.5), mean_luma(&bright, 0.5));
     assert!((plain_y / src_y - 1.0).abs() < 0.05, "a default grade keeps the clip: {src_y} → {plain_y}");
     assert!((bright_y / plain_y - 2.0).abs() < 0.12, "+1 EV doubles linear light: {plain_y} → {bright_y}");
-    let _ = std::fs::remove_dir_all(&dir);
-}
 
-// Feature: the export carries the clip's crop together with its trim and grade.
-#[test]
-fn clip_exports_cropped_trimmed_and_graded() {
-    let dir = scratch("cropped");
-    let src = dir.join("clip.mp4");
-    make_clip(&src);
-    let mut s = Session::new();
-    let id = add_clip(&mut s, &src, (0.4, Some(1.4)));
+    // the export carries the clip's crop together with its trim and grade: the left half, full height (32×48 of 64×48)
     let mut d = (*s.develop_of(id).unwrap()).clone();
-    d.light.exposure = 1.0;
-    // the left half, full height: 32×48 of the 64×48 clip
     d.crop.geometry.rect = lcc_geom::Rect { x0: 0.0, y0: 0.0, x1: 0.5, y1: 1.0 };
     s.catalog.apply(Op::SetDevelop { id, settings: std::sync::Arc::new(d), label: "Crop".into(), edited: None }).unwrap();
-    let o = ExportOptions::from_params(&json!({"videoQuality": 95})).unwrap();
-    let files = export(&mut s, &[id], &o, &dir.join("out"), &VideoHooks::default()).unwrap();
-    let out = PathBuf::from(files[0]["path"].as_str().unwrap());
-    let info = lcc_video::probe(&out).unwrap();
+    let files = export(&mut s, &[id], &o, &out.join("cropped"), &VideoHooks::default()).unwrap();
+    let cropped = PathBuf::from(files[0]["path"].as_str().unwrap());
+    let info = lcc_video::probe(&cropped).unwrap();
     assert_eq!((info.width, info.height), (W / 2, H), "cropped");
-    assert!((info.duration - 1.0).abs() < 0.05, "trimmed to 1 s: {}", info.duration);
-    let (src_y, out_y) = (mean_luma(&src, 0.5), mean_luma(&out, 0.5));
-    assert!((out_y / src_y - 2.0).abs() < 0.15, "+1 EV graded: {src_y} → {out_y}");
+    assert!((info.duration - 1.0).abs() < 0.05, "cropped and trimmed to 1 s: {}", info.duration);
+    let cropped_y = mean_luma(&cropped, 0.5);
+    assert!((cropped_y / src_y - 2.0).abs() < 0.15, "cropped and +1 EV graded: {src_y} → {cropped_y}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -243,26 +229,63 @@ fn hostile_video_options() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The GPU grade of an exported (H.264) frame matches the CPU float grade within 8-bit rounding.
+/// The GPU grade of an exported (H.264) frame matches the CPU float grade within 8-bit rounding: the export grade
+/// (GPU when it can) with a LUT profile, with a feathered mask in the edit (a video grade leaves masks out), and the
+/// GPU grade called directly.
 #[test]
 fn gpu_grade_matches_cpu_grade() {
     if !lcc_gpu::available() {
-        eprintln!("skipped: no GPU");
+        lcc_testkit::skip!(Gpu, "no GPU adapter ({})", lcc_gpu::unavailable_reason().unwrap_or_default());
         return;
     }
-    let frame = lcc_raster::Rgb32f::from_fn(96, 64, |x, y| {
-        let (u, v) = (x as f32 / 95.0, y as f32 / 63.0);
-        [u * u, v * 0.8, (1.0 - u) * 0.5 * v]
-    });
+    // a clip with a LUT profile exports with the LUT applied
+    let n = 5;
+    let mut cube = format!("LUT_3D_SIZE {n}\n");
+    for b in 0..n {
+        for g in 0..n {
+            for r in 0..n {
+                let f = |i: usize| i as f32 / (n - 1) as f32;
+                // channel swap: far from the identity, so a skipped LUT shows
+                cube.push_str(&format!("{} {} {}\n", f(b), f(g), 1.0 - f(r)));
+            }
+        }
+    }
+    lcc_pipeline::lut::register("lut:video-gpu-parity", lcc_pipeline::lut::Lut3d::parse_cube(&cube).unwrap());
+    let mut d = lcc_develop::DevelopSettings::default();
+    d.profile.id = "lut:video-gpu-parity".into();
+    d.profile.amount = 100.0;
+    assert_export_grade_matches_cpu(&lcc_pipeline::grade::video_settings(&d));
+
+    // a clip whose edit has a feathered mask
+    {
+        use lcc_develop::{Mask, MaskComponent, MaskOp, MaskShape};
+        let mut d = lcc_develop::DevelopSettings::default();
+        d.masks.push(Mask {
+            visible: true,
+            feather: 60.0,
+            components: vec![MaskComponent {
+                anchor: None,
+                name: None,
+                op: MaskOp::Add,
+                invert: false,
+                shape: MaskShape::Radial { center: lcc_geom::Point::new(0.5, 0.5), rx: 0.3, ry: 0.3, angle: 0.0, feather: 20.0, invert: false },
+            }],
+            adjust: lcc_develop::LocalAdjustments { exposure: 1.0, ..Default::default() },
+            ..Default::default()
+        });
+        assert_export_grade_matches_cpu(&lcc_pipeline::grade::video_settings(&d));
+    }
+
+    // the GPU grade itself
     let mut d = lcc_develop::DevelopSettings::default();
     d.light.exposure = 0.5;
     d.light.contrast = 20.0;
     d.color.vibrance = 15.0;
     let vs = lcc_pipeline::grade::video_settings(&d);
-    let (mut cpu, mut gpu) = (frame.clone(), frame);
+    let (mut cpu, mut gpu) = (graded_frame(), graded_frame());
     crate::export_video::grade_linear(&mut cpu, &vs).unwrap();
     if crate::export_video::grade_gpu(&mut gpu, &vs).is_none() {
-        eprintln!("skipped: the GPU did not render");
+        lcc_testkit::skip!(Gpu, "the GPU did not render");
         return;
     }
     let enc = |v: f32| lcc_color::transfer::linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0;
@@ -284,10 +307,6 @@ fn graded_frame() -> lcc_raster::Rgb32f {
 
 /// The export grade (GPU when it can) matches the CPU float grade for `s` within 8-bit rounding.
 fn assert_export_grade_matches_cpu(s: &lcc_develop::DevelopSettings) {
-    if !lcc_gpu::available() {
-        eprintln!("skipped: no GPU");
-        return;
-    }
     let (mut cpu, mut out) = (graded_frame(), graded_frame());
     crate::export_video::grade_linear(&mut cpu, s).unwrap();
     crate::export_video::grade_export(&mut out, s, true).unwrap();
@@ -299,56 +318,4 @@ fn assert_export_grade_matches_cpu(s: &lcc_develop::DevelopSettings) {
         }
     }
     assert!(worst <= 1.0, "export grade vs CPU differ by {worst} 8-bit codes");
-}
-
-/// A clip with a LUT profile exports with the LUT applied, on the GPU as on the CPU.
-#[test]
-fn export_grade_applies_lut_profile() {
-    let n = 5;
-    let mut cube = format!(
-        "LUT_3D_SIZE {n}
-"
-    );
-    for b in 0..n {
-        for g in 0..n {
-            for r in 0..n {
-                let f = |i: usize| i as f32 / (n - 1) as f32;
-                // channel swap: far from the identity, so a skipped LUT shows
-                cube.push_str(&format!(
-                    "{} {} {}
-",
-                    f(b),
-                    f(g),
-                    1.0 - f(r)
-                ));
-            }
-        }
-    }
-    lcc_pipeline::lut::register("lut:video-gpu-parity", lcc_pipeline::lut::Lut3d::parse_cube(&cube).unwrap());
-    let mut d = lcc_develop::DevelopSettings::default();
-    d.profile.id = "lut:video-gpu-parity".into();
-    d.profile.amount = 100.0;
-    let vs = lcc_pipeline::grade::video_settings(&d);
-    assert_export_grade_matches_cpu(&vs);
-}
-
-/// A clip whose edit has a feathered mask grades alike on the GPU and the CPU (a video grade leaves masks out).
-#[test]
-fn export_grade_applies_feathered_mask() {
-    use lcc_develop::{Mask, MaskComponent, MaskOp, MaskShape};
-    let mut d = lcc_develop::DevelopSettings::default();
-    d.masks.push(Mask {
-        visible: true,
-        feather: 60.0,
-        components: vec![MaskComponent {
-            anchor: None,
-            name: None,
-            op: MaskOp::Add,
-            invert: false,
-            shape: MaskShape::Radial { center: lcc_geom::Point::new(0.5, 0.5), rx: 0.3, ry: 0.3, angle: 0.0, feather: 20.0, invert: false },
-        }],
-        adjust: lcc_develop::LocalAdjustments { exposure: 1.0, ..Default::default() },
-        ..Default::default()
-    });
-    assert_export_grade_matches_cpu(&lcc_pipeline::grade::video_settings(&d));
 }

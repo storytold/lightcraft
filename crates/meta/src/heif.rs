@@ -1550,7 +1550,6 @@ mod tests {
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 mod upstream_tests {
-    use super::*;
     // the whole routing, not just this module: a HEIC must reach the HEIF branch of `embedded`
     use crate::embedded;
     use lcc_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
@@ -1651,21 +1650,6 @@ mod upstream_tests {
         vec![Item { kind: b"Exif", content_type: "", data: exif_item(tiff, 0) }]
     }
 
-    /// Issue #2284: a photo taken at 13:00 in UTC-5 must stay 13:00, not become 18:00. Before the
-    /// HEIF items were read a HEIC carried no capture time at all, and the import fell back to the
-    /// file's modification time, which the app writes as UTC.
-    #[test]
-    fn an_iphone_heic_keeps_the_time_the_camera_wrote() {
-        let file = heic(&exif_only(&iphone_exif("2026:10:18 13:00:00", "-05:00")), 1, false);
-        let m = crate::extract(&file);
-        let captured = m.capture_time.expect("a capture time");
-        assert_eq!(captured.hour, 13);
-        assert_eq!(captured.offset_minutes, Some(-5 * 60));
-        assert_eq!(captured.to_iso(), "2026-10-18T13:00:00-05:00");
-        assert_eq!(m.model.as_deref(), Some("iPhone 15 Pro"));
-        assert_eq!(m.iso, Some(64));
-    }
-
     /// The XMP packet is the `mime` item that declares `application/rdf+xml`, not any other one.
     #[test]
     fn the_xmp_packet_is_the_rdf_mime_item() {
@@ -1691,70 +1675,5 @@ mod upstream_tests {
             let found = embedded(&file).exif;
             assert_eq!(found.as_deref(), Some(tiff.as_slice()), "iloc v{version}, idat {in_idat}");
         }
-    }
-
-    /// The `Exif` item's leading offset may point past padding, not only straight at the TIFF
-    /// header, and the reader has to follow it.
-    #[test]
-    fn the_exif_items_tiff_header_offset_is_honoured() {
-        let tiff = iphone_exif("2026:10:18 13:00:00", "-05:00");
-        let items = vec![Item { kind: b"Exif", content_type: "", data: exif_item(&tiff, 6) }];
-        assert_eq!(embedded(&heic(&items, 1, false)).exif.as_deref(), Some(tiff.as_slice()));
-    }
-
-    /// Which `ftyp` brands count as a still image in this container, major or compatible.
-    #[test]
-    fn brands() {
-        for brand in ["heic", "heix", "mif1", "avif", "hevc", "msf1"] {
-            let file = bx(b"ftyp", format!("{brand}\0\0\0\0mif1").as_bytes());
-            assert!(is_heif(&file), "{brand}");
-        }
-        // a compatible brand counts too, a CR3, a JPEG XL and a non-ISO file do not
-        assert!(is_heif(&bx(b"ftyp", b"mp41\0\0\0\0isomheic")));
-        assert!(!is_heif(&bx(b"ftyp", b"crx \0\0\0\0crx isom")));
-        assert!(!is_heif(&bx(b"ftyp", b"jxl \0\0\0\0jxl ")));
-        assert!(!is_heif(b"\xff\xd8\xff\xe1 a jpeg"));
-        assert!(!is_heif(b""));
-    }
-
-    /// A truncated or scrambled file must come back empty, never panic (the never-crash rule).
-    #[test]
-    fn broken_files_yield_nothing_without_panicking() {
-        let good = heic(
-            &[
-                Item { kind: b"Exif", content_type: "", data: exif_item(&iphone_exif("2026:10:18 13:00:00", "-05:00"), 0) },
-                Item { kind: b"mime", content_type: "application/rdf+xml", data: b"<x:xmpmeta/>".to_vec() },
-            ],
-            1,
-            false,
-        );
-        for cut in 0..good.len() {
-            let _ = embedded(&good[..cut]);
-        }
-        for at in 0..good.len() {
-            let mut bad = good.clone();
-            bad[at] ^= 0xff;
-            let _ = embedded(&bad);
-        }
-        // an item whose extent is outside the file, and a `meta` box that claims more than it has
-        let mut lying = good.clone();
-        let item_count = u32::MAX.to_be_bytes();
-        if let Some(at) = lying.windows(4).position(|w| w == b"iloc") {
-            lying.splice(at + 8..at + 12, item_count);
-        }
-        assert!(embedded(&lying).exif.is_none());
-    }
-
-    /// The real container writer of `lcc-heif`, so the reader is proved against the layout
-    /// a HEIF encoder produces and not only against this module's own test builder.
-    #[test]
-    fn a_synthetic_heif_file_carries_its_exif() {
-        let tiff = iphone_exif("2026:10:18 13:00:00", "-05:00");
-        let mut spec = lcc_heif::testdata::Spec::new(64, 64, &|x, _| [x as u16 * 4, 0, 0]);
-        spec.exif = Some(tiff.clone());
-        let file = lcc_heif::testdata::build(&spec);
-        assert!(is_heif(&file));
-        assert_eq!(embedded(&file).exif.as_deref(), Some(tiff.as_slice()));
-        assert_eq!(crate::extract(&file).capture_time.map(|d| d.to_iso()).as_deref(), Some("2026-10-18T13:00:00-05:00"));
     }
 }

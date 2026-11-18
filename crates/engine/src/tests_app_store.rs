@@ -8,10 +8,9 @@ use serde_json::json;
 
 use crate::Session;
 
-fn temp(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("lc-engine-store-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    d
+/// The test's folder in Temp, removed when the test ends.
+fn temp(tag: &str) -> lcc_testkit::TempDir {
+    lcc_testkit::TempDir::new(&format!("lc-engine-store-{tag}"))
 }
 
 fn with_store(store: &Path, lib: &Path) -> Session {
@@ -48,6 +47,7 @@ fn presets_and_export_presets_made_in_one_library_are_in_the_next() {
     let mut s = with_store(&store, &a);
     s.presets.push(user_preset("user.warm", "Warm"));
     s.export_presets.push(export_preset("Web", 80));
+    s.sort = lcc_catalog::Sort { key: lcc_catalog::SortKey::FileName, ascending: false, ..s.sort };
     s.save_prefs().unwrap();
     s.persist().unwrap();
     drop(s);
@@ -56,6 +56,8 @@ fn presets_and_export_presets_made_in_one_library_are_in_the_next() {
     let s = with_store(&store, &b);
     assert!(s.presets.iter().any(|p| p.id == "user.warm"));
     assert!(s.export_presets.iter().any(|p| p.name == "Web"));
+    // LR-PREF-HABITS: the grid's sort follows the user into another library
+    assert_eq!((s.sort.key, s.sort.ascending), (lcc_catalog::SortKey::FileName, false));
     drop(s);
     // without the store a library has its own (nothing of the store's)
     let s = own(&b);
@@ -200,6 +202,18 @@ fn use_library_keeps_a_copy_and_gather_reads_backups() {
     assert!(s.export_presets.iter().any(|p| p.name == "Archive"));
     let r = s.execute("store.gatherPresets", &json!({"paths": [old.to_string_lossy()]})).unwrap();
     assert_eq!(r["count"], 0);
+    // LR-PREF-SHARED: a library whose backups go to another folder (another drive), one per
+    // library name: an export preset kept only there is gathered
+    let (old2, far) = (root.join("old2"), root.join("far"));
+    drop(own(&old2));
+    let settings = lcc_catalog::library::CatalogSettings { backup_dir: Some(far.clone()), ..lcc_catalog::library::CatalogSettings::load(&old2) };
+    settings.save(&old2).unwrap();
+    let backup = far.join("old2").join("2026-02-01");
+    std::fs::create_dir_all(&backup).unwrap();
+    std::fs::write(backup.join("prefs.json"), serde_json::to_vec(&json!({"exportPresets": [{"name": "Far Away", "params": {}}]})).unwrap()).unwrap();
+    let r = s.execute("store.gatherPresets", &json!({"paths": [old2.to_string_lossy()]})).unwrap();
+    assert_eq!(r["count"], 1, "{r}");
+    assert!(s.export_presets.iter().any(|p| p.name == "Far Away"));
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -255,34 +269,6 @@ fn per_setting_picks_update_with_undo_and_remembered_choices() {
     let mut s = Session::new().with_app_store(&store);
     assert!(s.take_library_warnings().is_empty());
     assert!(s.dialogs.is_default());
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-/// LR-PREF-HABITS / LR-PREF-SHARED: the grid's sort follows the user into another library, and an
-/// export preset kept only in a backup in a separate backup folder (another drive) is gathered.
-#[test]
-fn grid_sort_is_a_habit_and_backups_elsewhere_are_gathered() {
-    let root = temp("sort-backup");
-    let (store, a, b, old, far) = (root.join("store"), root.join("a"), root.join("b"), root.join("old"), root.join("far"));
-    let mut s = with_store(&store, &a);
-    s.sort = lcc_catalog::Sort { key: lcc_catalog::SortKey::FileName, ascending: false, ..s.sort };
-    s.save_prefs().unwrap();
-    s.persist().unwrap();
-    drop(s);
-    let s = with_store(&store, &b);
-    assert_eq!((s.sort.key, s.sort.ascending), (lcc_catalog::SortKey::FileName, false));
-    drop(s);
-    // a library whose backups go to another folder, one per library name
-    drop(own(&old));
-    let settings = lcc_catalog::library::CatalogSettings { backup_dir: Some(far.clone()), ..lcc_catalog::library::CatalogSettings::load(&old) };
-    settings.save(&old).unwrap();
-    let backup = far.join("old").join("2026-02-01");
-    std::fs::create_dir_all(&backup).unwrap();
-    std::fs::write(backup.join("prefs.json"), serde_json::to_vec(&json!({"exportPresets": [{"name": "Far Away", "params": {}}]})).unwrap()).unwrap();
-    let mut s = Session::new().with_app_store(&store);
-    let r = s.execute("store.gatherPresets", &json!({"paths": [old.to_string_lossy()]})).unwrap();
-    assert_eq!(r["count"], 1, "{r}");
-    assert!(s.export_presets.iter().any(|p| p.name == "Far Away"));
     let _ = std::fs::remove_dir_all(&root);
 }
 

@@ -25,7 +25,7 @@ fn values(r: &serde_json::Value, field: &str) -> Vec<(String, u64)> {
 }
 
 #[test]
-fn counts_the_values_of_the_photos_in_view() {
+fn counts_the_values_of_the_photos_in_view_bounded_and_without_a_fields_own_constraint() {
     let (mut s, _) = library();
     let shown = s.visible().len() as u64;
     let r = s.execute("library.facets", &json!({"fields": ["camera", "keyword", "rating"]})).unwrap();
@@ -43,23 +43,8 @@ fn counts_the_values_of_the_photos_in_view() {
     let ratings: Vec<u32> = values(&r, "rating").iter().map(|v| v.0.parse().unwrap()).collect();
     assert!(ratings.windows(2).all(|w| w[0] < w[1]), "{ratings:?}");
     assert!(r.get("lens").is_none(), "only the fields asked for");
-}
 
-/// A field narrowed by the filter still lists the values it could take; the other fields count only what matches.
-#[test]
-fn a_fields_own_constraint_is_left_out() {
-    let (mut s, _) = library();
-    s.execute("library.filter", &json!({"camera": "Facet Cam A"})).unwrap();
-    let r = s.execute("library.facets", &json!({"fields": ["camera", "keyword"]})).unwrap();
-    let cams = values(&r, "camera");
-    assert!(cams.iter().any(|c| c.0 == "Facet Cam B"), "the other camera is still offered: {cams:?}");
-    assert_eq!(r["keyword"]["photos"], 2, "keywords of the two Facet Cam A photos");
-    assert_eq!(values(&r, "keyword"), vec![("qq-one".to_string(), 2), ("qq-two".to_string(), 1)]);
-}
-
-#[test]
-fn rejects_unknown_fields_and_bounds_the_values() {
-    let (mut s, _) = library();
+    // unknown fields are rejected and the values bounded
     assert!(s.execute("library.facets", &json!({"fields": ["camera", "shoe size"]})).is_err());
     assert!(s.execute("library.facets", &json!({"fields": "camera"})).is_err());
     assert!(s.execute("library.facets", &json!({"limit": -1})).is_err());
@@ -68,14 +53,42 @@ fn rejects_unknown_fields_and_bounds_the_values() {
     assert!(r["keyword"]["distinct"].as_u64().unwrap() > 1, "distinct counts them all");
     let all = s.execute("library.facets", &json!({})).unwrap();
     assert_eq!(all.as_object().unwrap().len(), crate::cmd::facets::fields().len());
+
+    // a field narrowed by the filter still lists the values it could take; the other fields count only what matches
+    s.execute("library.filter", &json!({"camera": "Facet Cam A"})).unwrap();
+    let r = s.execute("library.facets", &json!({"fields": ["camera", "keyword"]})).unwrap();
+    let cams = values(&r, "camera");
+    assert!(cams.iter().any(|c| c.0 == "Facet Cam B"), "the other camera is still offered: {cams:?}");
+    assert_eq!(r["keyword"]["photos"], 2, "keywords of the two Facet Cam A photos");
+    assert_eq!(values(&r, "keyword"), vec![("qq-one".to_string(), 2), ("qq-two".to_string(), 1)]);
 }
 
-/// Issue #218: a Metadata column's click (`library.facetPick`) narrows the view; the next column counts only what
-/// is left (the columns cascade), a field with several values chosen shows any of them, and the field picked keeps
-/// listing its other values.
+/// `library.facetPick`: hostile arguments are errors that leave the filter alone, never a panic; then every kind of pick.
 #[test]
-fn picking_a_value_narrows_and_cascades() {
+fn picks_narrow_cascade_take_unknown_and_single_values_and_refuse_bad_ones() {
     let (mut s, ids) = library();
+    for p in [
+        json!({}),
+        json!({"field": "shoe size", "value": "9"}),
+        json!({"field": "camera", "value": 3}),
+        json!({"field": "camera", "value": "  "}),
+        json!({"field": "rating", "value": "9"}),
+        json!({"field": "rating", "none": true}),
+        json!({"field": "camera", "none": "yes"}),
+        json!({"field": "rating", "value": "-1"}),
+        json!({"field": "flag", "value": "maybe"}),
+        json!({"field": "kind", "value": "hologram"}),
+        json!({"field": "year", "value": "20x6"}),
+        json!({"field": "year", "value": "é202"}),
+        json!({"field": "label", "value": "Ultraviolet"}),
+    ] {
+        assert!(s.execute("library.facetPick", &p).is_err(), "{p}");
+        assert_eq!(s.filter, lcc_catalog::Filter::default(), "{p} left the filter alone");
+    }
+
+    // Issue #218: a Metadata column's click (`library.facetPick`) narrows the view; the next column counts only what
+    // is left (the columns cascade), a field with several values chosen shows any of them, and the field picked keeps
+    // listing its other values.
     let r = s.execute("library.facetPick", &json!({"field": "camera", "value": "Facet Cam A"})).unwrap();
     assert_eq!(r["count"], 2, "{r}");
     assert_eq!(r["chosen"], json!(["Facet Cam A"]));
@@ -100,57 +113,8 @@ fn picking_a_value_narrows_and_cascades() {
     s.execute("library.facetPick", &json!({"field": "camera"})).unwrap();
     s.execute("library.facetPick", &json!({"field": "keyword", "value": null})).unwrap();
     assert_eq!(s.filter, lcc_catalog::Filter::default(), "nothing left of the picks");
-}
 
-/// Single-valued fields (flag, rating, kind, year) hold the last value clicked; a second click clears it.
-#[test]
-fn single_valued_fields_hold_one_value() {
-    let (mut s, ids) = library();
-    s.execute("photo.rate", &json!({"ids": [ids[0].0], "rating": 4})).unwrap();
-    s.execute("library.facetPick", &json!({"field": "rating", "value": "4"})).unwrap();
-    assert!(!s.visible().is_empty());
-    let shown = s.visible().to_vec();
-    assert!(shown.iter().all(|id| s.catalog.photo(*id).unwrap().rating == 4));
-    assert_eq!(s.execute("library.facets", &json!({"fields": ["rating"]})).unwrap()["rating"]["chosen"], json!(["4"]));
-    s.execute("library.facetPick", &json!({"field": "rating", "value": "4"})).unwrap();
-    assert_eq!(s.filter, lcc_catalog::Filter::default(), "cleared");
-    for (field, value) in [("flag", "pick"), ("kind", "image"), ("year", "2026")] {
-        s.execute("library.facetPick", &json!({"field": field, "value": value})).unwrap();
-        let f = s.execute("library.facets", &json!({"fields": [field]})).unwrap();
-        assert_eq!(f[field]["chosen"], json!([value]), "{field}");
-        s.execute("library.facetPick", &json!({"field": field, "value": value})).unwrap();
-    }
-    assert_eq!(s.filter, lcc_catalog::Filter::default());
-}
-
-/// Hostile arguments are errors that leave the filter alone, never a panic.
-#[test]
-fn bad_picks_are_refused() {
-    let (mut s, _) = library();
-    for p in [
-        json!({}),
-        json!({"field": "shoe size", "value": "9"}),
-        json!({"field": "camera", "value": 3}),
-        json!({"field": "camera", "value": "  "}),
-        json!({"field": "rating", "value": "9"}),
-        json!({"field": "rating", "none": true}),
-        json!({"field": "camera", "none": "yes"}),
-        json!({"field": "rating", "value": "-1"}),
-        json!({"field": "flag", "value": "maybe"}),
-        json!({"field": "kind", "value": "hologram"}),
-        json!({"field": "year", "value": "20x6"}),
-        json!({"field": "year", "value": "é202"}),
-        json!({"field": "label", "value": "Ultraviolet"}),
-    ] {
-        assert!(s.execute("library.facetPick", &p).is_err(), "{p}");
-        assert_eq!(s.filter, lcc_catalog::Filter::default(), "{p} left the filter alone");
-    }
-}
-
-/// Photos without a value can be picked (issue #777): unrated photos, photos without a keyword or camera.
-#[test]
-fn unknown_values_can_be_picked() {
-    let (mut s, ids) = library();
+    // Photos without a value can be picked (issue #777): unrated photos, photos without a keyword or camera.
     let shown = s.visible().len();
     // unrated
     s.execute("library.facetPick", &json!({"field": "rating", "value": "0"})).unwrap();
@@ -172,12 +136,25 @@ fn unknown_values_can_be_picked() {
     s.execute("library.facetPick", &json!({"field": "keyword", "value": null})).unwrap();
     assert_eq!(s.visible().len(), shown);
     assert_eq!(s.filter, lcc_catalog::Filter::default());
-}
 
-/// The fields without a filter field of their own (issue #777): file format, IPTC text, aspect ratio.
-#[test]
-fn new_fields_are_counted_and_picked() {
-    let (mut s, ids) = library();
+    // Single-valued fields (flag, rating, kind, year) hold the last value clicked; a second click clears it.
+    s.execute("photo.rate", &json!({"ids": [ids[0].0], "rating": 4})).unwrap();
+    s.execute("library.facetPick", &json!({"field": "rating", "value": "4"})).unwrap();
+    assert!(!s.visible().is_empty());
+    let shown = s.visible().to_vec();
+    assert!(shown.iter().all(|id| s.catalog.photo(*id).unwrap().rating == 4));
+    assert_eq!(s.execute("library.facets", &json!({"fields": ["rating"]})).unwrap()["rating"]["chosen"], json!(["4"]));
+    s.execute("library.facetPick", &json!({"field": "rating", "value": "4"})).unwrap();
+    assert_eq!(s.filter, lcc_catalog::Filter::default(), "cleared");
+    for (field, value) in [("flag", "pick"), ("kind", "image"), ("year", "2026")] {
+        s.execute("library.facetPick", &json!({"field": field, "value": value})).unwrap();
+        let f = s.execute("library.facets", &json!({"fields": [field]})).unwrap();
+        assert_eq!(f[field]["chosen"], json!([value]), "{field}");
+        s.execute("library.facetPick", &json!({"field": field, "value": value})).unwrap();
+    }
+    assert_eq!(s.filter, lcc_catalog::Filter::default());
+
+    // The fields without a filter field of their own (issue #777): file format, IPTC text, aspect ratio.
     let mut m = s.catalog.photo(ids[0]).unwrap().meta.clone();
     m.headline = "Facet Headline".into();
     s.catalog.apply(Op::SetMeta { id: ids[0], meta: Box::new(m) }).unwrap();

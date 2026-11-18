@@ -261,12 +261,11 @@ mod tests {
         assert_eq!(pick_alpha(&[ExtraChannelType::Depth, ASSOCIATED, STRAIGHT]), Some(AlphaChannel { index: 1, associated: true }));
         assert_eq!(pick_alpha(&[]), None);
         assert_eq!(pick_alpha(&[ExtraChannelType::Black, SPOT, ExtraChannelType::Depth]), None);
-    }
-
-    #[test]
-    fn associated_and_straight_alpha() {
-        assert_eq!(pick_alpha(&[ASSOCIATED]).map(|a| a.associated), Some(true));
-        assert_eq!(pick_alpha(&[STRAIGHT]).map(|a| a.associated), Some(false));
+        // associated and straight alpha
+        {
+            assert_eq!(pick_alpha(&[ASSOCIATED]).map(|a| a.associated), Some(true));
+            assert_eq!(pick_alpha(&[STRAIGHT]).map(|a| a.associated), Some(false));
+        }
     }
 
     #[test]

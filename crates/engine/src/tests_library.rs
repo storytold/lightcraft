@@ -4,10 +4,9 @@ use serde_json::json;
 
 use crate::Session;
 
-fn temp_dir(tag: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("lc-engine-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    d
+/// The test's folder in Temp, removed when the test ends.
+fn temp_dir(tag: &str) -> lcc_testkit::TempDir {
+    lcc_testkit::TempDir::new(&format!("lc-engine-{tag}"))
 }
 
 fn open(dir: &std::path::Path, seed: bool) -> Session {
@@ -600,6 +599,27 @@ fn capture_time_shift_is_bounded() {
     let r = s.execute("photo.setCaptureTime", &serde_json::json!({"ids": [id.0], "hours": 24}));
     assert!(r.as_ref().is_err_and(|e| e.to_string().contains("9999")), "{r:?}");
     assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some("9999-12-31T12:00:00"), "unchanged");
+}
+
+/// Edit Capture Time keeps the zone it is given (`…+01:00`), for one photo and with `each`, and a
+/// later shift keeps it too; a time without a zone stays zone-less.
+#[test]
+fn capture_time_keeps_the_zone_given() {
+    let mut s = crate::Session::with_demo();
+    let ids: Vec<_> = s.catalog.photos().take(2).map(|p| p.id).collect();
+    let captured = |s: &crate::Session, id| s.catalog.photo(id).unwrap().captured.clone();
+    s.execute("photo.setCaptureTime", &serde_json::json!({"ids": [ids[0].0], "time": "2026-07-10T08:47:46+01:00"})).unwrap();
+    assert_eq!(captured(&s, ids[0]).as_deref(), Some("2026-07-10T08:47:46+01:00"));
+    s.execute("photo.setCaptureTime", &serde_json::json!({"ids": [ids[0].0, ids[1].0], "time": "2016-04-09 11:05-05:30", "each": true})).unwrap();
+    for id in &ids {
+        assert_eq!(captured(&s, *id).as_deref(), Some("2016-04-09T11:05:00-05:30"));
+    }
+    s.execute("photo.setCaptureTime", &serde_json::json!({"ids": [ids[0].0], "hours": 1})).unwrap();
+    assert_eq!(captured(&s, ids[0]).as_deref(), Some("2016-04-09T12:05:00-05:30"), "a shift keeps the zone");
+    s.execute("photo.setCaptureTime", &serde_json::json!({"ids": [ids[1].0], "time": "2026-01-01T10:00:00"})).unwrap();
+    assert_eq!(captured(&s, ids[1]).as_deref(), Some("2026-01-01T10:00:00"), "no zone given, none stored");
+    let r = s.execute("photo.setCaptureTime", &serde_json::json!({"ids": [ids[1].0], "time": "2026-01-01T10:00:00+1:00"}));
+    assert!(r.is_err(), "a malformed zone is refused: {r:?}");
 }
 
 /// A capture time that doesn't fully read (a Lightroom catalog's `captureTime` is copied

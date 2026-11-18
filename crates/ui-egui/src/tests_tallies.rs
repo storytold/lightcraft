@@ -44,7 +44,7 @@ fn fresh(a: &LccApp) -> String {
     let cat = &a.session.catalog;
     format!(
         "{:?}\n{:?}\n{:?}\n{:?}\n{:?}",
-        crate::panels::left::sidebar_folders(cat.folder_tree()),
+        crate::panels::left::sidebar_folders(cat.folder_tree(), &Default::default()),
         cat.keyword_tree(),
         cat.date_groups(),
         cat.people().into_iter().map(|p| p.name).collect::<Vec<_>>(),

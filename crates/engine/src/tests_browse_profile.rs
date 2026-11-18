@@ -81,20 +81,6 @@ fn a_body_default_set_after_browsing_applies_to_photos_already_browsed() {
 }
 
 #[test]
-fn a_browsed_photo_given_its_own_profile_keeps_it() {
-    let mut s = Session::new();
-    s.body_profiles.insert(BODY.into(), "lc".into());
-    let id = browsed(&mut s, "/nonexistent/IMG_0004.CR3", "653499300171");
-    // the user picks the camera's default for this photo: an edit, kept over the body's
-    let mut d = (*s.develop_of(id).unwrap()).clone();
-    d.profile.camera = String::new();
-    d.light.exposure = 0.5;
-    s.set_develop(id, d, "Profile").unwrap();
-    assert!(s.catalog.photo(id).unwrap().edited.is_some());
-    assert_eq!(rendered_camera(&mut s, id), "");
-}
-
-#[test]
 fn the_import_panel_choice_previews_on_browsed_photos_as_the_import_applies_it() {
     let mut s = Session::new();
     s.body_profiles.insert(BODY.into(), "lc".into());
@@ -110,6 +96,26 @@ fn the_import_panel_choice_previews_on_browsed_photos_as_the_import_applies_it()
     assert!(!p.local);
     assert_eq!(p.develop.profile.camera, "lc");
     assert_eq!(rendered_camera(&mut s, id), "lc");
+
+    // a browsed photo given its own profile keeps it: the user picks the camera's default for
+    // this photo: an edit, kept over the body's
+    let own = browsed(&mut s, "/nonexistent/IMG_0004.CR3", "653499300171");
+    let mut d = (*s.develop_of(own).unwrap()).clone();
+    d.profile.camera = String::new();
+    d.light.exposure = 0.5;
+    s.set_develop(own, d, "Profile").unwrap();
+    assert!(s.catalog.photo(own).unwrap().edited.is_some());
+    assert_eq!(rendered_camera(&mut s, own), "", "its own profile");
+
+    // A browsed raw shown with its body's profile is still as shot (`import::looks_as_shot`):
+    // culling may show its camera JPEG, and the photo as rendered agrees with the record.
+    let shot = browsed(&mut s, "/nowhere/IMG_0002.CR3", "653499300171");
+    let settings = std::sync::Arc::new(s.catalog.photo(shot).unwrap().camera_defaults());
+    s.commit("As shot", Op::SetDevelop { id: shot, settings, label: "As shot".into(), edited: None }).unwrap();
+    let shown = s.rendered_photo_of(shot).unwrap();
+    assert_eq!(shown.develop.profile.camera, "lc", "rendered with the body's profile");
+    assert!(crate::import::looks_as_shot(s.catalog.photo(shot).unwrap()), "the record is as shot");
+    assert!(crate::import::looks_as_shot(&shown), "and so is the photo as rendered");
 }
 
 #[test]
@@ -182,20 +188,4 @@ fn a_raw_catalogued_without_a_serial_is_known_by_its_files() {
     assert_eq!(crate::profile_bodies::read_serial(&dir.join("x.CR3").to_string_lossy()), None);
     assert_eq!(crate::profile_bodies::read_serial(&dir.join("gone.CR3").to_string_lossy()), None);
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// A browsed raw shown with its body's profile is still as shot (`import::looks_as_shot`): culling
-/// may show its camera JPEG, and the photo as rendered agrees with the record.
-#[test]
-fn a_browsed_raw_with_its_body_profile_still_looks_as_shot() {
-    let mut s = Session::new();
-    s.body_profiles.insert(BODY.into(), "lc".into());
-    let id = browsed(&mut s, "/nowhere/IMG_0002.CR3", "653499300171");
-    // as shot: the raw's own camera defaults
-    let settings = std::sync::Arc::new(s.catalog.photo(id).unwrap().camera_defaults());
-    s.commit("As shot", Op::SetDevelop { id, settings, label: "As shot".into(), edited: None }).unwrap();
-    let shown = s.rendered_photo_of(id).unwrap();
-    assert_eq!(shown.develop.profile.camera, "lc", "rendered with the body's profile");
-    assert!(crate::import::looks_as_shot(s.catalog.photo(id).unwrap()), "the record is as shot");
-    assert!(crate::import::looks_as_shot(&shown), "and so is the photo as rendered");
 }

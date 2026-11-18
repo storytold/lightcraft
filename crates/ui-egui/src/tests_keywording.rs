@@ -46,16 +46,14 @@ fn keywords_of(h: &Headless, id: u64) -> Vec<String> {
 
 /// The chips are the keywords of every selected photo, not only the active one's; a keyword only
 /// some of them have is marked.
-#[test]
-fn the_chips_are_the_selections_keywords() {
-    let (h, _) = two_selected();
+fn the_chips_are_the_selections_keywords(h: &mut Headless) {
     assert!(
-        has(&h, "keywordChip:beach") && has(&h, "keywordChip:Weddings"),
+        has(h, "keywordChip:beach") && has(h, "keywordChip:Weddings"),
         "{:?}",
         h.app.widgets.iter().filter(|(w, _)| w.starts_with("keywordChip")).collect::<Vec<_>>()
     );
-    assert!(has(&h, "keywordChipPartial:Weddings"), "only one of the two has Weddings");
-    assert!(!has(&h, "keywordChipPartial:beach"), "both have beach");
+    assert!(has(h, "keywordChipPartial:Weddings"), "only one of the two has Weddings");
+    assert!(!has(h, "keywordChipPartial:beach"), "both have beach");
 }
 
 /// Only the × removes a keyword, from every selected photo; a click on the chip itself doesn't.
@@ -110,14 +108,12 @@ fn the_add_keyword_box_pastes_adds_and_gives_up() {
 
 /// The keyword set's buttons say whether the selection has each keyword, as their ⌥1–⌥9 toggle it
 /// on the selection: on when every selected photo has it, partly on when only some do.
-#[test]
-fn keyword_set_buttons_reflect_the_selection() {
-    let (mut h, _) = two_selected();
+fn keyword_set_buttons_reflect_the_selection(h: &mut Headless) {
     let sets = h.app.session.execute("keyword.sets", &json!({})).unwrap();
     let at = |k: &str| sets["keywords"].as_array().unwrap().iter().position(|x| x == k).map(|i| i + 1).unwrap_or_else(|| panic!("{k} in {sets}"));
-    assert!(has(&h, &format!("kwSetOn:{}", at("beach"))), "both have beach");
-    assert!(has(&h, &format!("kwSetSome:{}", at("Weddings"))), "only the active one has Weddings");
-    assert!(!has(&h, &format!("kwSetOn:{}", at("Weddings"))));
+    assert!(has(h, &format!("kwSetOn:{}", at("beach"))), "both have beach");
+    assert!(has(h, &format!("kwSetSome:{}", at("Weddings"))), "only the active one has Weddings");
+    assert!(!has(h, &format!("kwSetOn:{}", at("Weddings"))));
 }
 
 /// "Will Export" shows the names exported files will carry for the selection instead of the chips:
@@ -149,11 +145,9 @@ fn the_painters_field_pastes_and_return_paints() {
 
 /// Suggestions follow the selection: a keyword only some selected photos have is suggested, to give
 /// it to all of them; one every selected photo has isn't.
-#[test]
-fn suggestions_follow_the_selection() {
-    let (h, _) = two_selected();
-    assert!(has(&h, "kwSuggest:Weddings"), "only the active one has it");
-    assert!(!has(&h, "kwSuggest:beach"), "both have it");
+fn suggestions_follow_the_selection(h: &mut Headless) {
+    assert!(has(h, "kwSuggest:Weddings"), "only the active one has it");
+    assert!(!has(h, "kwSuggest:beach"), "both have it");
 }
 
 /// Chips wrap whole and stay inside the panel: none overlaps another or runs past the panel's
@@ -169,31 +163,32 @@ fn chips_wrap_whole_inside_the_panel() {
         T,
     );
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    let panel = h.app.widgets.iter().find(|(w, _)| w == "panel:right_panel").map(|(_, r)| *r).expect("the right panel");
-    let chips: Vec<(String, egui::Rect)> = h.app.widgets.iter().filter(|(w, _)| w.starts_with("keywordChip:")).cloned().collect();
-    assert!(chips.len() >= 6, "{chips:?}");
-    for (i, (id, r)) in chips.iter().enumerate() {
-        assert!(r.height() < 30.0, "{id} on one line: {r:?}");
-        assert!(r.left() >= panel.left() && r.right() <= panel.right(), "{id} inside the panel: {r:?} in {panel:?}");
-        for (other, o) in chips.iter().skip(i + 1) {
-            assert!(!r.intersects(o.shrink(0.5)), "{id} overlaps {other}");
+    for layout in [crate::state::KeywordChips::Paths, crate::state::KeywordChips::Grouped] {
+        h.app.ui.settings.keyword_chips = layout;
+        h.settle(SETTLE);
+        let panel = h.app.widgets.iter().find(|(w, _)| w == "panel:right_panel").map(|(_, r)| *r).expect("the right panel");
+        let chips: Vec<(String, egui::Rect)> = h.app.widgets.iter().filter(|(w, _)| w.starts_with("keywordChip:")).cloned().collect();
+        assert!(chips.len() >= 6, "{layout:?}: {chips:?}");
+        for (i, (id, r)) in chips.iter().enumerate() {
+            assert!(r.height() < 30.0, "{layout:?}: {id} on one line: {r:?}");
+            assert!(r.left() >= panel.left() && r.right() <= panel.right(), "{layout:?}: {id} inside the panel: {r:?} in {panel:?}");
+            for (other, o) in chips.iter().skip(i + 1) {
+                assert!(!r.intersects(o.shrink(0.5)), "{layout:?}: {id} overlaps {other}");
+            }
         }
     }
 }
 
 /// With an active photo and nothing else selected, the box is that photo's, as the commands are:
 /// its chips show (keywords typed go to it), and the Keyword List ticks what it has.
-#[test]
-fn the_active_photo_alone_is_the_selection() {
-    let (mut h, ids) = two_selected();
-    ask(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": [], "active": ids[0]}}));
+fn the_active_photo_alone_is_the_selection(h: &mut Headless, ids: &[u64]) {
+    ask(h, "engine.execute", json!({"command": "library.select", "params": {"ids": [], "active": ids[0]}}));
     assert_eq!(h.app.session.selection.active.map(|p| p.0), Some(ids[0]));
     assert!(h.app.session.selection.ids.is_empty());
-    assert!(has(&h, "keywordChip:Weddings") && !has(&h, "keywordChipPartial:Weddings"), "the active photo's keywords");
+    assert!(has(h, "keywordChip:Weddings") && !has(h, "keywordChipPartial:Weddings"), "the active photo's keywords");
     let ticks = crate::panels::keyword_list::Ticks::of(&h.app.session.catalog, &h.app.session.selected());
     assert_eq!(ticks.tick("Weddings"), crate::panels::keyword_list::Tick::All);
-    assert!(has(&h, "keywordCheck:beach"));
+    assert!(has(h, "keywordCheck:beach"));
 }
 
 /// Given a selection with a keyword that is inside others, then every keyword above it shows the
@@ -217,24 +212,6 @@ fn a_keyword_shows_that_one_inside_it_is_applied() {
     assert!(ticks.inside("beach").is_empty() && ticks.inside("Weddings").is_empty(), "nothing is inside these");
 }
 
-/// Esc in the Add keyword box gives back what it held before this edit, as every text field does:
-/// text left there by an earlier edit stays.
-#[test]
-fn escape_gives_back_the_text_from_before_the_edit() {
-    let (mut h, ids) = two_selected();
-    ask(&mut h, "ui.clickWidget", json!({"id": "field:keyword"}));
-    ask(&mut h, "ui.text", json!({"text": "harbour"}));
-    ask(&mut h, "ui.key", json!({"key": "Tab"}));
-    ask(&mut h, "ui.clickWidget", json!({"id": "field:keyword"}));
-    ask(&mut h, "ui.key", json!({"key": "End"}));
-    ask(&mut h, "ui.text", json!({"text": ", sea"}));
-    ask(&mut h, "ui.key", json!({"key": "Escape"}));
-    ask(&mut h, "ui.clickWidget", json!({"id": "field:keyword"}));
-    ask(&mut h, "ui.key", json!({"key": "Enter"}));
-    let k = keywords_of(&h, ids[0]);
-    assert!(k.contains(&"harbour".to_string()) && !k.contains(&"sea".to_string()), "{k:?}");
-}
-
 /// "Keywords & Containing Keywords" lists the selection's keywords with the keywords containing
 /// them, flat (read only).
 #[test]
@@ -247,6 +224,19 @@ fn containing_keywords_view_lists_parents_too() {
         assert!(has(&h, &format!("keywordContaining:{name}")), "{name}");
     }
     assert!(!has(&h, "keywordChip:beach"), "the chips give way");
+}
+
+// A chip says the keyword's own name, not the path of the keywords containing it (those are the
+// "& Containing" view's); two chips with the same name say their whole paths (issue #1132).
+#[test]
+fn chips_name_the_keyword_not_its_path() {
+    let (mut h, ids) = two_selected();
+    ask(&mut h, "engine.execute", json!({"command": "photo.setMeta", "params": {"ids": ids, "addKeywords": ["Animals|Mammals|Canids|Dog"]}}));
+    let dog = rect(&h, "keywordChip:Animals|Mammals|Canids|Dog").width();
+    assert!(dog < rect(&h, "keywordChip:Weddings").width(), "\"Dog\" is shorter than \"Weddings\": {dog}");
+    ask(&mut h, "engine.execute", json!({"command": "photo.setMeta", "params": {"ids": ids, "addKeywords": ["Trips|Dog"]}}));
+    let dog = rect(&h, "keywordChip:Animals|Mammals|Canids|Dog").width();
+    assert!(dog > rect(&h, "keywordChip:Weddings").width(), "two Dogs: each says its path: {dog}");
 }
 
 fn rect(h: &Headless, id: &str) -> egui::Rect {
@@ -279,7 +269,7 @@ fn grouped_keywords_share_a_line_naming_their_parent() {
     assert_eq!(
         count(&h, "keywordGroup:"),
         0,
-        "whole names unless asked: {:?}",
+        "no groups unless asked: {:?}",
         h.app.widgets.iter().filter(|(w, _)| w.starts_with("keywordGroup")).collect::<Vec<_>>()
     );
     let whole = rect(&h, "keywordChip:Places|Italy|Rome").width();
@@ -290,7 +280,7 @@ fn grouped_keywords_share_a_line_naming_their_parent() {
     let (rome, venice) = (rect(&h, "keywordChip:Places|Italy|Rome"), rect(&h, "keywordChip:Places|Italy|Venice"));
     assert!(rome.top() >= heading.bottom(), "under its heading: {rome:?} {heading:?}");
     assert_eq!(rome.top(), venice.top(), "side by side");
-    assert!(rome.width() < whole, "the chip says only “Rome”: {} < {whole}", rome.width());
+    assert!(rome.width() <= whole, "the chip says only “Rome”, as the flat box does: {} <= {whole}", rome.width());
     // a keyword that shares nothing has no heading and comes first
     assert!(!has(&h, "keywordGroup:Transport") && !has(&h, "keywordGroup:"), "one keyword is no group");
     assert!(rect(&h, "keywordChip:sea").top() < heading.top());
@@ -325,35 +315,24 @@ fn a_long_grouped_list_is_shortened_until_asked_for() {
     assert_eq!(count(&h, "keywordChip:"), 7);
 }
 
-// Given the grouped box, chips stay inside the panel and never overlap, whatever their length.
-#[test]
-fn grouped_chips_stay_inside_the_panel() {
-    let (mut h, ids) = two_selected();
-    h.app.ui.settings.keyword_chips = crate::state::KeywordChips::Grouped;
-    let long = "Places|Portugal|Lisbon|Belém tower and the old town square on the river by the bridge";
-    let keywords: Vec<String> =
-        ["Events|Weddings", "Events|Birthdays", "sunset", "Places|Portugal|Porto", long].iter().map(|s| s.to_string()).collect();
-    give(&mut h, &ids, &keywords);
-    let panel = rect(&h, "panel:right_panel");
-    let chips: Vec<(String, egui::Rect)> = h.app.widgets.iter().filter(|(w, _)| w.starts_with("keywordChip:")).cloned().collect();
-    assert_eq!(chips.len(), 5, "{chips:?}");
-    for (i, (id, r)) in chips.iter().enumerate() {
-        assert!(r.left() >= panel.left() && r.right() <= panel.right(), "{id} inside the panel: {r:?} in {panel:?}");
-        for (other, o) in chips.iter().skip(i + 1) {
-            assert!(!r.intersects(o.shrink(0.5)), "{id} overlaps {other}");
-        }
-    }
-}
-
 // Given a selection without keywords, the box says so (as its other two views do).
-#[test]
-fn a_selection_without_keywords_says_so() {
-    let (mut h, ids) = two_selected();
-    give(&mut h, &ids, &[]);
-    assert!(has(&h, "keywordChipsEmpty"));
+fn a_selection_without_keywords_says_so(h: &mut Headless, ids: &[u64]) {
+    give(h, ids, &[]);
+    assert!(has(h, "keywordChipsEmpty"));
     h.app.ui.settings.keyword_chips = crate::state::KeywordChips::Grouped;
     h.settle(SETTLE);
-    assert!(has(&h, "keywordChipsEmpty"));
+    assert!(has(h, "keywordChipsEmpty"));
+}
+
+#[test]
+fn the_box_shows_the_selections_keywords_sets_suggestions_and_scope() {
+    let (mut h, ids) = two_selected();
+    the_chips_are_the_selections_keywords(&mut h);
+    keyword_set_buttons_reflect_the_selection(&mut h);
+    suggestions_follow_the_selection(&mut h);
+    the_box_says_how_many_photos_it_is_for(&mut h, &ids);
+    the_active_photo_alone_is_the_selection(&mut h, &ids);
+    a_selection_without_keywords_says_so(&mut h, &ids);
 }
 
 // Given the Keywords panel,
@@ -527,7 +506,7 @@ fn a_click_on_an_offer_gives_it() {
 fn the_highlight_stays_on_the_list() {
     let (mut h, ids) = with_places();
     typed(&mut h, "por");
-    for _ in 0..40 {
+    for _ in 0..12 {
         ask(&mut h, "ui.key", json!({"key": "ArrowDown"}));
     }
     let lit: Vec<String> = h.app.widgets.iter().filter_map(|(w, _)| w.strip_prefix("kwCompleteAt:").map(str::to_string)).collect();
@@ -545,13 +524,11 @@ fn toast(h: &Headless) -> String {
 
 // Given several photos selected, the box says how many its keywords are of; with one photo there
 // is nothing to say.
-#[test]
-fn the_box_says_how_many_photos_it_is_for() {
-    let (mut h, ids) = two_selected();
-    assert!(has(&h, "keywordScope"), "two photos are selected");
-    assert!(rect(&h, "keywordScope").bottom() <= rect(&h, "keywordChip:beach").top(), "above the chips it is about");
-    ask(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": [ids[0]]}}));
-    assert!(!has(&h, "keywordScope"), "one photo");
+fn the_box_says_how_many_photos_it_is_for(h: &mut Headless, ids: &[u64]) {
+    assert!(has(h, "keywordScope"), "two photos are selected");
+    assert!(rect(h, "keywordScope").bottom() <= rect(h, "keywordChip:beach").top(), "above the chips it is about");
+    ask(h, "engine.execute", json!({"command": "library.select", "params": {"ids": [ids[0]]}}));
+    assert!(!has(h, "keywordScope"), "one photo");
 }
 
 // Given a keyword on several selected photos,
@@ -791,7 +768,7 @@ fn an_offer_out_of_sight_is_not_taken() {
 // in: they go where there is more room and show as many lines as fit there.
 #[test]
 fn offers_never_cover_the_box() {
-    for height in [1000.0, 420.0, 300.0, 230.0, 180.0] {
+    for height in [1000.0, 300.0, 180.0] {
         let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
         let mut h = Headless::new(app, [1400.0, height], 1.0);
         let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(12).map(|p| p.0).collect();

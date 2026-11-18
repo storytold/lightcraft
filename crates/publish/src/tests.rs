@@ -4,13 +4,11 @@ use serde_json::json;
 use crate::hard_drive::{HardDrive, safe_name};
 use crate::*;
 
-fn tmp(tag: &str) -> std::path::PathBuf {
+/// An empty Temp folder of the test's own, removed when the test ends.
+fn tmp(tag: &str) -> lcc_testkit::TempDir {
     static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let d = std::env::temp_dir().join(format!("lcc-publish-{tag}-{}-{n}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+    lcc_testkit::TempDir::new(&format!("lcc-publish-{tag}-{n}"))
 }
 
 fn catalog(n: u64) -> (Catalog, AlbumId) {

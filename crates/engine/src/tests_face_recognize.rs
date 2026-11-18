@@ -24,7 +24,7 @@ pub(crate) fn setup(d: &std::path::Path, dim: u64) -> (Session, String) {
     s.face_models_dir = Some(d.join("models"));
     let model = d.join(format!("tiny{dim}.onnx"));
     std::fs::write(&model, lcc_faces::synthetic::tiny_embedder_model(dim)).unwrap();
-    let r = s.execute("faces.models.install", &json!({"path": model.to_string_lossy(), "acknowledged": true})).unwrap();
+    let r = s.execute("faces.models.install", &json!({"path": model.to_string_lossy(), "acknowledged": true, "enable": true})).unwrap();
     let id = r["installed"]["id"].as_str().unwrap().to_string();
     s.execute("faces.models.select", &json!({"id": id})).unwrap();
     (s, id)
@@ -59,7 +59,7 @@ pub(crate) fn two_photos(s: &Session) -> (PhotoId, PhotoId) {
 }
 
 #[test]
-fn indexing_embeds_each_face_once_and_reports_progress() {
+fn indexing_embeds_each_face_once_and_the_scan_row_starts_over_in_another_library() {
     let d = temp("index");
     let (mut s, _) = setup(&d, 64);
     let (a, b) = two_photos(&s);
@@ -82,6 +82,18 @@ fn indexing_embeds_each_face_once_and_reports_progress() {
     assert_eq!(r["photosDone"], 1, "{r}");
     assert_eq!(r["pendingPhotos"], 1, "{r}");
     assert!(s.faces.index.contains(c.0, &region(0.2, None).rect), "the photo asked for first was done first");
+
+    // issue #2995: the scan's whole was kept from the library opened before, so a smaller one showed most of it done
+    s.faces.peak = 442_717;
+    s.open_library(d.join("other"), true).unwrap();
+    let id = s.catalog.photos().map(|p| p.id).max().unwrap();
+    set_regions(&mut s, id, vec![region(0.1, None)]);
+    let last = s.execute("faces.pump", &json!({})).unwrap();
+    let pending = last["pendingPhotos"].as_u64().unwrap();
+    assert!(pending > 0, "{last}");
+    assert_eq!(last["peak"].as_u64().unwrap(), pending, "{last}");
+    let rows = s.activity.list().into_iter().filter(|t| t.kind == "faces").collect::<Vec<_>>();
+    assert_eq!(rows.iter().map(|t| (t.total, t.done)).collect::<Vec<_>>(), vec![(pending, 0)]);
     let _ = std::fs::remove_dir_all(&d);
 }
 
@@ -132,10 +144,10 @@ fn suggestions_come_from_the_named_faces_and_are_never_applied() {
 }
 
 #[test]
-fn naming_a_face_is_undoable_and_makes_it_yours() {
+fn naming_one_face_or_many_is_one_undo_step_and_makes_them_yours() {
     let d = temp("name");
     let (mut s, _) = setup(&d, 64);
-    let (a, _) = two_photos(&s);
+    let (a, b) = two_photos(&s);
     let mut detected = region(0.1, None);
     detected.description = Some("Detected by MediaPipe Face Landmarker".into());
     set_regions(&mut s, a, vec![detected, region(0.5, None)]);
@@ -166,6 +178,49 @@ fn naming_a_face_is_undoable_and_makes_it_yours() {
     ] {
         assert!(s.execute("faces.setName", &p).is_err(), "{p}");
     }
+
+    // many faces are named in one undo step
+    let detected = |x: f64| Region { description: Some("Detected by MediaPipe Face Landmarker".into()), ..region(x, None) };
+    set_regions(&mut s, a, vec![detected(0.1), region(0.5, None)]);
+    set_regions(&mut s, b, vec![detected(0.3)]);
+    let undo = s.undo.len();
+    let r = s
+        .execute(
+            "faces.nameFaces",
+            &json!({"faces": [{"photo": a.0, "index": 0}, {"photo": a.0, "index": 1}, {"photo": b.0, "index": 0}], "name": "  Jane Doe "}),
+        )
+        .unwrap();
+    assert_eq!((r["named"].clone(), r["photos"].clone()), (json!(3), json!(2)));
+    assert_eq!(s.undo.len(), undo + 1, "one step for the whole group");
+    for (id, i) in [(a, 0), (a, 1), (b, 0)] {
+        let reg = &s.catalog.photo(id).unwrap().meta.regions[i];
+        assert_eq!(reg.name.as_deref(), Some("Jane Doe"));
+        assert!(reg.description.is_none() || !reg.description.as_deref().unwrap().starts_with("Detected by"), "a named face is the user's now");
+    }
+    // undo restores every one of them together
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.photo(a).unwrap().meta.regions.iter().chain(s.catalog.photo(b).unwrap().meta.regions.iter()).all(|r| r.name.is_none()));
+    // an empty name clears; faces that do not exist are skipped, and with none left it is an error
+    s.execute("faces.nameFaces", &json!({"faces": [{"photo": a.0, "index": 0}], "name": "Ann"})).unwrap();
+    let r = s
+        .execute(
+            "faces.nameFaces",
+            &json!({"faces": [{"photo": a.0, "index": 0}, {"photo": a.0, "index": 99}, {"photo": 987_654, "index": 0}], "name": null}),
+        )
+        .unwrap();
+    assert_eq!(r["named"], 1);
+    assert!(s.catalog.photo(a).unwrap().meta.regions[0].name.is_none());
+    for bad in [
+        json!({"name": "x"}),
+        json!({"faces": "x", "name": "x"}),
+        json!({"faces": [{"photo": a.0}], "name": "x"}),
+        json!({"faces": [{"photo": 987_654, "index": 0}], "name": "x"}),
+        json!({"faces": [{"photo": a.0, "index": 0}], "name": 7}),
+        json!({"faces": [{"photo": a.0, "index": 0}], "name": "bad\u{7}name"}),
+        json!({"faces": vec![json!({"photo": a.0, "index": 0}); 5001], "name": "x"}),
+    ] {
+        assert!(s.execute("faces.nameFaces", &bad).is_err(), "{bad}");
+    }
     let _ = std::fs::remove_dir_all(&d);
 }
 
@@ -177,7 +232,7 @@ fn embeddings_are_cached_beside_the_library_and_reset_for_another_model() {
     let install = |s: &mut Session, dim: u64| -> String {
         let model = d.join(format!("tiny{dim}.onnx"));
         std::fs::write(&model, lcc_faces::synthetic::tiny_embedder_model(dim)).unwrap();
-        let r = s.execute("faces.models.install", &json!({"path": model.to_string_lossy(), "acknowledged": true})).unwrap();
+        let r = s.execute("faces.models.install", &json!({"path": model.to_string_lossy(), "acknowledged": true, "enable": true})).unwrap();
         let id = r["installed"]["id"].as_str().unwrap().to_string();
         s.execute("faces.models.select", &json!({"id": id})).unwrap();
         id
@@ -208,20 +263,7 @@ fn embeddings_are_cached_beside_the_library_and_reset_for_another_model() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
-#[test]
-fn without_a_chosen_model_recognition_says_so() {
-    let d = temp("nomodel");
-    let mut s = Session::with_demo();
-    assert!(s.execute("faces.index", &json!({})).is_err(), "no models folder");
-    s.face_models_dir = Some(d.join("models"));
-    for cmd in ["faces.index", "faces.suggest"] {
-        let e = s.execute(cmd, &json!({})).unwrap_err().to_string();
-        assert!(e.contains("no recognition model is chosen"), "{cmd}: {e}");
-    }
-    let _: Value = json!(null);
-    let _ = std::fs::remove_dir_all(&d);
-}
-
+/// Also the scan's activity row: one "Finding faces" row follows the photos left and goes when the scan is done.
 #[test]
 fn the_background_pump_indexes_by_itself_once_recognition_is_on() {
     let d = temp("pump");
@@ -235,16 +277,29 @@ fn the_background_pump_indexes_by_itself_once_recognition_is_on() {
     assert_eq!(s.faces.index.len(), 0);
     s.execute("faces.enable", &json!({"enabled": true})).unwrap();
     // `enabled` is looked up at most once a second, so the first pump may still see "off"
+    let faces_rows = |s: &Session| s.activity.list().into_iter().filter(|t| t.kind == "faces").collect::<Vec<_>>();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    let mut last = json!(null);
+    let (mut last, mut shown) = (json!(null), false);
     while std::time::Instant::now() < deadline {
         last = s.execute("faces.pump", &json!({})).unwrap();
+        let rows = faces_rows(&s);
+        if last["pendingPhotos"].as_u64().unwrap_or(0) > 0 {
+            // while photos are left: one row, not cancellable, its whole the most photos left at once
+            assert_eq!(rows.len(), 1, "{last}");
+            assert_eq!((rows[0].label.as_str(), rows[0].cancellable), ("Finding faces", false));
+            assert_eq!(rows[0].total, last["peak"].as_u64().unwrap(), "{last}");
+            assert_eq!(rows[0].done, rows[0].total - last["pendingPhotos"].as_u64().unwrap());
+            shown = true;
+        }
         if last["active"] == true && last["pendingPhotos"] == 0 && last["indexedFaces"] == 3 {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     assert_eq!((last["active"].clone(), last["pendingPhotos"].clone(), last["indexedFaces"].clone()), (json!(true), json!(0), json!(3)), "{last}");
+    assert!(shown, "the scan never showed a row: {last}");
+    assert_eq!(last["peak"], 0, "{last}");
+    assert!(faces_rows(&s).is_empty(), "the row goes when the scan is done");
     // a new face is picked up (the catalog changed), and suggestions use what the pump embedded
     set_regions(&mut s, b, vec![region(0.3, None), region(0.6, None)]);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
@@ -259,6 +314,63 @@ fn the_background_pump_indexes_by_itself_once_recognition_is_on() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+/// Pump until the index holds `faces` faces (or a minute passes); the last status.
+fn pump_until(s: &mut Session, faces: usize) -> Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while std::time::Instant::now() < deadline && s.faces.index.len() < faces {
+        s.execute("faces.pump", &json!({"pace": "full"})).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    s.execute("faces.pump", &json!({"pace": "full"})).unwrap();
+    s.execute("faces.status", &json!({})).unwrap()
+}
+
+/// The scan pauses (and stays paused: it is saved), its row then offering resume and Settings ▸ Faces; it resumes
+/// through the row; Clear empties the index and leaves the scan paused; Restart scans everything again.
+#[test]
+fn the_face_scan_pauses_resumes_clears_and_restarts() {
+    let d = temp("pause");
+    let (mut s, _) = setup(&d, 64);
+    let (a, b) = two_photos(&s);
+    set_regions(&mut s, a, vec![region(0.1, Some("Ann")), region(0.5, None)]);
+    set_regions(&mut s, b, vec![region(0.3, None)]);
+    assert_eq!(s.execute("faces.pause", &json!({})).unwrap()["paused"], true);
+    for _ in 0..30 {
+        s.execute("faces.pump", &json!({"pace": "full"})).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(s.faces.index.len(), 0, "nothing is embedded while paused");
+    let st = s.execute("faces.status", &json!({})).unwrap();
+    assert_eq!((st["state"].clone(), st["paused"].clone(), st["done"].clone()), (json!("paused"), json!(true), json!(0)), "{st}");
+    assert!(st["total"].as_u64().unwrap() > 0, "{st}");
+    // the pause is saved: a session started now is paused too
+    assert_eq!(s.execute("faces.models.list", &json!({})).unwrap()["paused"], true);
+    // the row stays while paused, with resume and the gear's page
+    let rows: Vec<_> = s.activity.list().into_iter().filter(|t| t.kind == "faces").collect();
+    assert_eq!(rows.len(), 1);
+    let c = rows[0].controls.clone().expect("the scan's row has controls");
+    assert!(c.paused);
+    assert_eq!((c.pause, c.resume, c.settings_tab), ("faces.pause", "faces.resume", "faces"));
+    // resumed through the row, as its button does
+    s.execute("activity.pause", &json!({"id": rows[0].id, "paused": false})).unwrap();
+    let st = pump_until(&mut s, 3);
+    assert_eq!((st["state"].clone(), st["indexedFaces"].clone()), (json!("complete"), json!(3)), "{st}");
+    // Clear: the index is empty and the scan stays paused, however long it is pumped
+    let st = s.execute("faces.clearIndex", &json!({})).unwrap();
+    assert_eq!((st["paused"].clone(), st["indexedFaces"].clone(), st["searchedPhotos"].clone()), (json!(true), json!(0), json!(0)), "{st}");
+    for _ in 0..30 {
+        s.execute("faces.pump", &json!({"pace": "full"})).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(s.faces.index.len(), 0);
+    assert!(s.catalog.photo(a).unwrap().meta.regions.iter().any(|r| r.name.as_deref() == Some("Ann")), "named faces stay");
+    // Restart: everything is scanned again
+    assert_eq!(s.execute("faces.restart", &json!({})).unwrap()["paused"], false);
+    let st = pump_until(&mut s, 3);
+    assert_eq!(st["indexedFaces"], 3, "{st}");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 #[test]
 fn the_background_pump_saves_what_it_embeds_for_the_next_launch() {
     let d = temp("pumpsave");
@@ -269,7 +381,7 @@ fn the_background_pump_saves_what_it_embeds_for_the_next_launch() {
     let model = d.join("tiny64.onnx");
     std::fs::write(&model, lcc_faces::synthetic::tiny_embedder_model(64)).unwrap();
     // installing switches recognition on: nothing else is asked for
-    s.execute("faces.models.install", &json!({"path": model.to_string_lossy(), "acknowledged": true})).unwrap();
+    s.execute("faces.models.install", &json!({"path": model.to_string_lossy(), "acknowledged": true, "enable": true})).unwrap();
     // without the detector (not bundled) photos without faces are left unsearched
     let searching = install_face_model(&mut s);
     let (a, b) = two_photos(&s);
@@ -358,6 +470,13 @@ fn faces_person_lists_a_persons_faces_and_looks_for_more_even_with_background_sc
         assert!(s.execute("faces.person", &bad).is_err(), "{bad}");
     }
     assert!(s.execute("faces.person", &json!({"name": "Ann", "more": u64::MAX})).is_ok());
+    // without a chosen model (or a models folder) recognition says so
+    for cmd in ["faces.index", "faces.suggest"] {
+        let e = s.execute(cmd, &json!({})).unwrap_err().to_string();
+        assert!(e.contains("no recognition model is chosen"), "{cmd}: {e}");
+    }
+    s.face_models_dir = None;
+    assert!(s.execute("faces.index", &json!({})).is_err(), "no models folder");
     let _ = std::fs::remove_dir_all(&d);
 }
 
@@ -368,55 +487,6 @@ fn unit64(parts: &[(usize, f32)]) -> Vec<f32> {
     }
     let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     v.iter().map(|x| x / n).collect()
-}
-
-#[test]
-fn many_faces_are_named_in_one_undo_step() {
-    let d = temp("namemany");
-    let (mut s, _) = setup(&d, 64);
-    let (a, b) = two_photos(&s);
-    let detected = |x: f64| Region { description: Some("Detected by MediaPipe Face Landmarker".into()), ..region(x, None) };
-    set_regions(&mut s, a, vec![detected(0.1), region(0.5, None)]);
-    set_regions(&mut s, b, vec![detected(0.3)]);
-    let undo = s.undo.len();
-    let r = s
-        .execute(
-            "faces.nameFaces",
-            &json!({"faces": [{"photo": a.0, "index": 0}, {"photo": a.0, "index": 1}, {"photo": b.0, "index": 0}], "name": "  Jane Doe "}),
-        )
-        .unwrap();
-    assert_eq!((r["named"].clone(), r["photos"].clone()), (json!(3), json!(2)));
-    assert_eq!(s.undo.len(), undo + 1, "one step for the whole group");
-    for (id, i) in [(a, 0), (a, 1), (b, 0)] {
-        let reg = &s.catalog.photo(id).unwrap().meta.regions[i];
-        assert_eq!(reg.name.as_deref(), Some("Jane Doe"));
-        assert!(reg.description.is_none() || !reg.description.as_deref().unwrap().starts_with("Detected by"), "a named face is the user's now");
-    }
-    // undo restores every one of them together
-    s.execute("edit.undo", &json!({})).unwrap();
-    assert!(s.catalog.photo(a).unwrap().meta.regions.iter().chain(s.catalog.photo(b).unwrap().meta.regions.iter()).all(|r| r.name.is_none()));
-    // an empty name clears; faces that do not exist are skipped, and with none left it is an error
-    s.execute("faces.nameFaces", &json!({"faces": [{"photo": a.0, "index": 0}], "name": "Ann"})).unwrap();
-    let r = s
-        .execute(
-            "faces.nameFaces",
-            &json!({"faces": [{"photo": a.0, "index": 0}, {"photo": a.0, "index": 99}, {"photo": 987_654, "index": 0}], "name": null}),
-        )
-        .unwrap();
-    assert_eq!(r["named"], 1);
-    assert!(s.catalog.photo(a).unwrap().meta.regions[0].name.is_none());
-    for bad in [
-        json!({"name": "x"}),
-        json!({"faces": "x", "name": "x"}),
-        json!({"faces": [{"photo": a.0}], "name": "x"}),
-        json!({"faces": [{"photo": 987_654, "index": 0}], "name": "x"}),
-        json!({"faces": [{"photo": a.0, "index": 0}], "name": 7}),
-        json!({"faces": [{"photo": a.0, "index": 0}], "name": "bad\u{7}name"}),
-        json!({"faces": vec![json!({"photo": a.0, "index": 0}); 5001], "name": "x"}),
-    ] {
-        assert!(s.execute("faces.nameFaces", &bad).is_err(), "{bad}");
-    }
-    let _ = std::fs::remove_dir_all(&d);
 }
 
 #[test]
@@ -465,15 +535,33 @@ fn unnamed_faces_come_with_look_alikes_together_and_the_name_the_named_ones_sugg
     for odd in [json!({"limit": 0}), json!({"limit": "x"}), json!({"limit": u64::MAX})] {
         assert!(s.execute("faces.unnamed", &odd).is_ok(), "{odd}");
     }
-    let _ = std::fs::remove_dir_all(&d);
-}
+    // issue #1050: `bySuggestion: true` puts the faces the named ones recognise under the person they suggest, so a
+    // person's suggestions can be reviewed (and confirmed or rejected) as one group; nothing else gets a group
+    let r = s.execute("faces.unnamed", &json!({"bySuggestion": true})).unwrap();
+    let groups = r["groups"].as_array().expect("groups are there when asked for");
+    assert_eq!(groups.len(), 1, "only Ann is suggested: {groups:?}");
+    assert_eq!((groups[0]["name"].clone(), groups[0]["total"].clone()), (json!("Ann"), json!(2)), "{groups:?}");
+    let in_group: Vec<(u64, u64)> =
+        groups[0]["faces"].as_array().unwrap().iter().map(|f| (f["photo"].as_u64().unwrap(), f["index"].as_u64().unwrap())).collect();
+    assert_eq!(in_group.len(), 2, "{groups:?}");
+    assert!(in_group.contains(&(b.0, 0)) && in_group.contains(&(c.0, 0)), "{in_group:?}");
+    // the most alike first, and each face says which box to show it by and how alike it is
+    let scores: Vec<f64> = groups[0]["faces"].as_array().unwrap().iter().map(|f| f["score"].as_f64().unwrap()).collect();
+    assert!(scores[0] >= scores[1], "{scores:?}");
+    for k in ["x0", "y0", "x1", "y1"] {
+        assert!(groups[0]["faces"][0]["view"][k].is_number(), "{groups:?}");
+    }
+    // a limited list groups only the faces it lists, and a spell of the same name is one group
+    let r = s.execute("faces.unnamed", &json!({"bySuggestion": true, "limit": 1})).unwrap();
+    let total: u64 = r["groups"].as_array().unwrap().iter().filter_map(|g| g["total"].as_u64()).sum();
+    assert_eq!(total, 1, "one listed face, at most one group of it: {r}");
+    // without asking, no groups are worked out; and not true/false is refused
+    assert!(s.execute("faces.unnamed", &json!({})).unwrap().get("groups").is_none());
+    for bad in [json!({"bySuggestion": "yes"}), json!({"bySuggestion": 1})] {
+        assert!(s.execute("faces.unnamed", &bad).is_err(), "{bad}");
+    }
 
-#[test]
-fn every_scanned_face_is_shown_by_the_same_kind_of_box() {
-    let d = temp("view");
-    let (mut s, _) = setup(&d, 64);
-    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
-    let (a, _) = two_photos(&s);
+    // every scanned face is shown by the same kind of box
     // a loosely drawn box (from some other tool) and the detector's tighter box of the same face
     let loose = lcc_geom::Rect { x0: 0.2, y0: 0.1, x1: 0.8, y1: 0.9 };
     let tight = lcc_geom::Rect { x0: 0.35, y0: 0.25, x1: 0.65, y1: 0.65 };
@@ -506,57 +594,120 @@ fn every_scanned_face_is_shown_by_the_same_kind_of_box() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+/// Issue #1050: the Suggested category's two decisions. Confirming names a face the person it is suggested as (one
+/// undo step), rejecting keeps the face unnamed and un-ignored but stops it ever being suggested as that person again,
+/// and both are remembered in people.json; undoing a decision brings the suggestion back.
 #[test]
-fn face_scan_row_follows_pending_photos() {
-    let d = temp("activity");
+fn suggested_faces_are_confirmed_or_rejected_and_a_rejection_sticks() {
+    let d = temp("suggestions");
     let (mut s, _) = setup(&d, 64);
-    // the last two demo photos, not the first two the other scan tests use: two sessions scanning the same demo scene
-    // at once can deadlock (issue #630), and this test is about the row, not that
-    let mut ids = s.catalog.photos().map(|p| p.id).collect::<Vec<_>>();
-    ids.sort();
-    let (a, b) = (ids[ids.len() - 2], ids[ids.len() - 1]);
-    set_regions(&mut s, a, vec![region(0.1, None), region(0.5, None)]);
-    set_regions(&mut s, b, vec![region(0.3, None)]);
-    let faces_rows = |s: &Session| s.activity.list().into_iter().filter(|t| t.kind == "faces").collect::<Vec<_>>();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    let (mut last, mut shown) = (json!(null), false);
-    while std::time::Instant::now() < deadline {
-        last = s.execute("faces.pump", &json!({})).unwrap();
-        let rows = faces_rows(&s);
-        if last["pendingPhotos"].as_u64().unwrap_or(0) > 0 {
-            // while photos are left: one row, not cancellable, its whole the most photos left at once
-            assert_eq!(rows.len(), 1, "{last}");
-            assert_eq!((rows[0].label.as_str(), rows[0].cancellable), ("Finding faces", false));
-            assert_eq!(rows[0].total, last["peak"].as_u64().unwrap(), "{last}");
-            assert_eq!(rows[0].done, rows[0].total - last["pendingPhotos"].as_u64().unwrap());
-            shown = true;
-        }
-        if last["active"] == true && last["pendingPhotos"] == 0 && last["indexedFaces"] == 3 {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    assert!(shown, "the scan never showed a row: {last}");
-    assert_eq!((last["pendingPhotos"].clone(), last["peak"].clone()), (json!(0), json!(0)), "{last}");
-    assert!(faces_rows(&s).is_empty(), "the row goes when the scan is done");
-    let _ = std::fs::remove_dir_all(&d);
-}
+    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    let (a, b) = two_photos(&s);
+    set_regions(&mut s, a, vec![region(0.1, Some("Ann"))]);
+    set_regions(&mut s, b, vec![region(0.1, None), region(0.5, None)]);
+    s.faces.index.insert(a.0, &region(0.1, None).rect, unit64(&[(0, 1.0)]));
+    s.faces.index.insert(b.0, &region(0.1, None).rect, unit64(&[(0, 0.97), (2, 0.2)])); // like Ann
+    s.faces.index.insert(b.0, &region(0.5, None).rect, unit64(&[(3, 1.0)])); // nobody
+    let face = |index: usize| json!({"photo": b.0, "index": index});
+    let suggestions = |s: &mut Session| -> Vec<(u64, u64, Option<String>)> {
+        let r = s.execute("faces.unnamed", &json!({})).unwrap();
+        r["faces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| (f["photo"].as_u64().unwrap(), f["index"].as_u64().unwrap(), f["suggestion"]["name"].as_str().map(str::to_string)))
+            .collect()
+    };
+    // both unnamed faces are listed, and only the one that looks like Ann is suggested
+    assert_eq!(suggestions(&mut s).iter().find(|(_, i, _)| *i == 0).and_then(|s| s.2.clone()), Some("Ann".to_string()));
 
-#[test]
-fn face_scan_row_starts_over_in_another_library() {
-    // issue #2995: the scan's whole was kept from the library opened before, so a smaller one showed most of it done
-    let d = temp("peak-library");
-    let (mut s, _) = setup(&d, 64);
-    s.faces.peak = 442_717;
-    s.open_library(d.join("other"), true).unwrap();
-    let id = s.catalog.photos().map(|p| p.id).max().unwrap();
-    set_regions(&mut s, id, vec![region(0.1, None)]);
-    let last = s.execute("faces.pump", &json!({})).unwrap();
-    let pending = last["pendingPhotos"].as_u64().unwrap();
-    assert!(pending > 0, "{last}");
-    assert_eq!(last["peak"].as_u64().unwrap(), pending, "{last}");
-    let rows = s.activity.list().into_iter().filter(|t| t.kind == "faces").collect::<Vec<_>>();
-    assert_eq!(rows.iter().map(|t| (t.total, t.done)).collect::<Vec<_>>(), vec![(pending, 0)]);
+    // confirming names it, in one undo step, and keeps the decision
+    let undo = s.undo.len();
+    let r = s.execute("faces.confirmSuggestions", &json!({"faces": [face(0)]})).unwrap();
+    assert_eq!((r["confirmed"].clone(), r["kept"].clone()), (json!(1), json!(1)), "{r}");
+    assert_eq!(face_names(&s, b), vec![Some("Ann".into()), None], "only the confirmed face is named");
+    assert_eq!(s.undo.len(), undo + 1, "one undo step");
+    let r = s.execute("faces.suggestionDecisions", &json!({"photo": b.0})).unwrap();
+    assert_eq!(
+        (r["total"].clone(), r["decisions"][0]["person"].clone(), r["decisions"][0]["verdict"].clone()),
+        (json!(1), json!("Ann"), json!("confirmed")),
+        "{r}"
+    );
+    assert!(r["decisions"][0]["decided"].as_str().is_some_and(|d| d.len() == 10 && d.as_bytes()[4] == b'-'), "{r}");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(face_names(&s, b), vec![None, None], "undo takes the name back");
+
+    // rejecting leaves the face as it is, and Ann is not suggested for it again; the other face keeps its own state
+    let undo = s.undo.len();
+    let r = s.execute("faces.rejectSuggestions", &json!({"faces": [face(0), face(1)]})).unwrap();
+    assert_eq!((r["rejected"].clone(), r["faces"].clone()), (json!(1), json!(2)), "{r}");
+    assert_eq!(s.undo.len(), undo, "rejecting changes nothing on the photos, so nothing to undo");
+    let regions = &s.catalog.photo(b).unwrap().meta.regions;
+    assert_eq!((regions[0].kind.clone(), regions[0].name.clone()), (RegionKind::Face, None), "still an unnamed face, not ignored");
+    let listed = suggestions(&mut s);
+    assert!(listed.iter().any(|(_, i, _)| *i == 0), "it is still an unnamed face: {listed:?}");
+    assert_eq!(listed.iter().find(|(_, i, _)| *i == 0).and_then(|s| s.2.clone()), None, "but Ann is not suggested: {listed:?}");
+    let r = s.execute("faces.unnamed", &json!({"bySuggestion": true})).unwrap();
+    assert_eq!(r["rejected"].clone(), json!(1));
+    assert!(r["groups"].as_array().is_some_and(|g| g.is_empty()), "nobody is suggested now: {r}");
+
+    // the decision survives a restart (it is in people.json), and so does the refusal to suggest
+    s.execute("people.forgetAll", &json!({})).unwrap();
+    assert_eq!(s.execute("faces.suggestionDecisions", &json!({})).unwrap()["total"], 0, "forgetAll empties it");
+    assert_eq!(suggestions(&mut s).iter().find(|(_, i, _)| *i == 0).and_then(|s| s.2.clone()), Some("Ann".to_string()), "the suggestion is back");
+    s.execute("faces.rejectSuggestions", &json!({"faces": [face(0)]})).unwrap();
+    assert_eq!(s.people_store().decisions.len(), 1);
+    // a stale confirmation (the list the user looked at still showed Ann) does not name a face rejected as Ann, and
+    // rejecting it again records nothing new
+    let r = s.execute("faces.confirmSuggestions", &json!({"faces": [face(0)]})).unwrap();
+    assert_eq!((r["confirmed"].clone(), r["kept"].clone()), (json!(0), json!(0)), "{r}");
+    assert_eq!(face_names(&s, b), vec![None, None], "the rejected face stays unnamed");
+    let r = s.execute("faces.rejectSuggestions", &json!({"faces": [face(0)]})).unwrap();
+    assert_eq!(r["rejected"].clone(), json!(0), "{r}");
+    assert_eq!(s.people_store().decisions.first().map(|d| d.verdict), Some(crate::people_store::Verdict::Rejected));
+    // undoing the decision brings it back
+    let r = s.execute("faces.undoSuggestionDecision", &json!({"faces": [face(0)]})).unwrap();
+    assert_eq!(r["removed"].clone(), json!(1), "{r}");
+    assert!(s.people_store().decisions.is_empty());
+    assert_eq!(suggestions(&mut s).iter().find(|(_, i, _)| *i == 0).and_then(|s| s.2.clone()), Some("Ann".to_string()));
+
+    // bad input is an error that changes nothing, never a panic
+    let before = s.people_store().clone();
+    for bad in [
+        json!({}),
+        json!({"faces": []}),
+        json!({"faces": "x"}),
+        json!({"faces": [{"photo": b.0}]}),
+        json!({"faces": [{"photo": b.0, "index": -1}]}),
+        json!({"faces": [{"photo": 999_999_999, "index": 0}]}),
+        json!({"faces": [{"photo": b.0, "index": 0, "rect": "nope"}]}),
+        json!({"faces": [{"photo": a.0, "index": 0}]}), // already named: not an unnamed face
+    ] {
+        for cmd in ["faces.confirmSuggestions", "faces.rejectSuggestions"] {
+            assert!(s.execute(cmd, &bad).is_err(), "{cmd}: {bad}");
+        }
+    }
+    for bad in [json!({}), json!({"faces": []}), json!({"faces": [{"photo": b.0}]}), json!({"photo": "x", "faces": []})] {
+        assert!(s.execute("faces.undoSuggestionDecision", &bad).is_err(), "{bad}");
+    }
+    assert!(s.execute("faces.suggestionDecisions", &json!({"photo": "x"})).is_err());
+    assert!(s.execute("faces.suggestionDecisions", &json!({"limit": "x"})).is_err());
+    assert!(s.execute("faces.suggestionDecisions", &json!({"after": -4})).is_err());
+    assert_eq!(s.people_store().decisions, before.decisions);
+    // the decisions list a page at a time, newest first
+    s.execute("faces.rejectSuggestions", &json!({"faces": [face(0)]})).unwrap();
+    let all = s.execute("faces.suggestionDecisions", &json!({})).unwrap();
+    assert_eq!(all["total"].clone(), json!(1), "{all}");
+    let page = s.execute("faces.suggestionDecisions", &json!({"limit": 1, "after": 1})).unwrap();
+    assert_eq!((page["total"].clone(), page["decisions"].clone()), (json!(1), json!([])), "{page}");
+    let one = s.execute("faces.suggestionDecisions", &json!({"limit": 1})).unwrap();
+    assert_eq!(one["decisions"].as_array().map(Vec::len), Some(1), "{one}");
+    s.execute("faces.undoSuggestionDecision", &json!({"faces": [face(0)]})).unwrap();
+    // a face with no suggestion is left alone by a confirmation (nothing is named on a guess)
+    let r = s.execute("faces.confirmSuggestions", &json!({"faces": [face(1)]})).unwrap();
+    assert_eq!((r["confirmed"].clone(), r["kept"].clone()), (json!(0), json!(0)), "{r}");
+    assert_eq!(face_names(&s, b), vec![None, None]);
+    s.close_library().unwrap();
     let _ = std::fs::remove_dir_all(&d);
 }
 
@@ -567,7 +718,7 @@ fn face_names(s: &Session, id: PhotoId) -> Vec<Option<String>> {
 /// Every in-library spelling of a person becomes the exact new name, including a change of case only,
 /// and a person filter follows it. One undo step puts the old names back.
 #[test]
-fn rename_person_rewrites_every_spelling_and_undoes() {
+fn rename_person_rewrites_every_spelling_merges_only_when_asked_and_rejects_bad_input() {
     let mut s = Session::with_demo();
     let (a, b) = two_photos(&s);
     set_regions(&mut s, a, vec![region(0.1, Some("Ann")), region(0.5, Some("  ANN  ")), region(0.7, Some("Rex"))]);
@@ -588,13 +739,9 @@ fn rename_person_rewrites_every_spelling_and_undoes() {
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(face_names(&s, a), vec![Some("Ann".into()), Some("  ANN  ".into()), Some("Rex".into())]);
     assert_eq!(face_names(&s, b)[0], Some("ann".into()));
-}
 
-/// Renaming onto someone else is refused until merge is asked for; then one undo step restores both people.
-#[test]
-fn rename_person_refuses_a_merge_until_it_is_asked_for() {
-    let mut s = Session::with_demo();
-    let (a, b) = two_photos(&s);
+    // renaming onto someone else is refused until merge is asked for; then one undo step restores both people
+    s.filter.person = None;
     set_regions(&mut s, a, vec![region(0.1, Some("Ann"))]);
     set_regions(&mut s, b, vec![region(0.3, Some("Bea"))]);
     let before = (face_names(&s, a), face_names(&s, b), s.undo.len());
@@ -610,14 +757,10 @@ fn rename_person_refuses_a_merge_until_it_is_asked_for() {
     let mut names: Vec<String> = s.catalog.people().into_iter().map(|p| p.name).collect();
     names.sort();
     assert_eq!(names, vec!["Ann".to_string(), "Bea".to_string()]);
-}
 
-/// More faces than `faces.person` lists are still renamed. A bad call, a missing person, or a name that
-/// is already exact changes nothing, and deleted or only-browsed photos are not part of the person.
-#[test]
-fn rename_person_covers_more_than_the_person_query_and_rejects_bad_input() {
-    let mut s = Session::with_demo();
-    let (a, b) = two_photos(&s);
+    // more faces than `faces.person` lists are still renamed. A bad call, a missing person, or a name that is already
+    // exact changes nothing, and deleted or only-browsed photos are not part of the person
+    set_regions(&mut s, b, vec![]);
     set_regions(&mut s, a, vec![region(0.1, Some("Ann"))]);
     let undo = s.undo.len();
     for p in [
@@ -698,9 +841,9 @@ fn ignored_faces_survive_reopening_and_can_be_restored() {
 
 /// Bad input is an error that changes nothing, never a panic.
 #[test]
-fn ignore_faces_refuses_bad_input() {
+fn ignore_faces_refuses_bad_input_and_ignored_faces_follow_renames() {
     let mut s = Session::with_demo();
-    let (a, _) = two_photos(&s);
+    let (a, b) = two_photos(&s);
     set_regions(&mut s, a, vec![region(0.1, None)]);
     let before = s.undo.len();
     for p in [
@@ -722,14 +865,9 @@ fn ignore_faces_refuses_bad_input() {
     }
     assert_eq!(s.undo.len(), before);
     assert!(s.execute("faces.ignored", &json!({"offset": u64::MAX})).unwrap()["faces"].as_array().unwrap().is_empty());
-}
 
-/// An ignored face keeps its person's name through renames and merges, and Detect Faces keeps it (its box stops the
-/// face being found again).
-#[test]
-fn ignored_faces_follow_renames_and_are_kept_by_detection() {
-    let mut s = Session::with_demo();
-    let (a, b) = two_photos(&s);
+    // an ignored face keeps its person's name through renames and merges, and Detect Faces keeps it (its box stops the
+    // face being found again)
     set_regions(&mut s, a, vec![region(0.1, Some("Ann"))]);
     set_regions(&mut s, b, vec![region(0.5, Some("Bea"))]);
     let face = json!([{"photo": a.0, "index": 0}]);
@@ -864,4 +1002,15 @@ fn unnamed_and_suggested_faces_follow_the_library_filter_when_scoped() {
         assert!(s.execute("faces.person", &json!({"name": "Ann", "scope": bad})).is_err(), "{bad}");
     }
     let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn mirror_averaging_is_on_by_default_and_can_be_turned_off() {
+    let d = temp("mirror_option");
+    let (mut s, _) = setup(&d, 64);
+    assert_eq!(s.execute("faces.matching", &json!({})).unwrap()["mirrorAverage"], true);
+    assert_eq!(s.execute("faces.matching", &json!({"mirrorAverage": false})).unwrap()["mirrorAverage"], false);
+    assert!(s.execute("faces.matching", &json!({"mirrorAverage": "no"})).is_err());
+    assert_eq!(s.execute("faces.matching", &json!({})).unwrap()["mirrorAverage"], false, "the choice is kept");
+    assert_eq!(s.execute("faces.matching", &json!({"mirrorAverage": true})).unwrap()["mirrorAverage"], true);
 }

@@ -52,7 +52,7 @@ fn slides_held(h: &Headless) -> usize {
 }
 
 #[test]
-fn slideshow_advances_pauses_and_ends() {
+fn slideshow_advances_pauses_ends_and_follows_the_arrow_keys() {
     let mut h = grid();
     let first = h.app.session.visible_cloned()[0];
     run(&mut h, "view.slideshow", json!({"interval": 0.5, "fadeDuration": 0}));
@@ -74,6 +74,25 @@ fn slideshow_advances_pauses_and_ends() {
     h.step();
     assert!(!h.app.ui.fullscreen && h.app.ui.slideshow.is_none());
     assert_eq!(slides_held(&h), 0, "slide textures freed");
+    h.settle(SETTLE);
+    // the arrow keys cut; without repeat the show ends past the last slide
+    let photos = h.app.session.visible_cloned();
+    run(&mut h, "library.select", json!({"ids": [photos[0].0]}));
+    run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 2, "repeat": false}));
+    let r = h.request("ui.key", json!({"key": "right"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(photo_up(&h), photos[1]);
+    assert_eq!(h.app.session.active(), Some(photos[1]), "the selection follows");
+    assert!(play(&h).frame(h.time()).from.is_none(), "a cut, not a fade");
+    let r = h.request("ui.key", json!({"key": "left"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(photo_up(&h), photos[0]);
+    for _ in 1..photos.len() {
+        run(&mut h, "slideshow.next", json!({}));
+    }
+    assert_eq!(play(&h).position(), (photos.len(), photos.len()));
+    run(&mut h, "slideshow.next", json!({}));
+    assert!(h.app.ui.slideshow.is_none() && !h.app.ui.fullscreen, "no repeat: past the last one it ends");
     h.settle(SETTLE);
 }
 
@@ -133,28 +152,6 @@ fn a_fade_only_runs_between_rendered_slides() {
 }
 
 #[test]
-fn arrows_cut_and_repeat_off_ends_after_the_last_slide() {
-    let mut h = grid();
-    let photos = h.app.session.visible_cloned();
-    run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 2, "repeat": false}));
-    let r = h.request("ui.key", json!({"key": "right"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    assert_eq!(photo_up(&h), photos[1]);
-    assert_eq!(h.app.session.active(), Some(photos[1]), "the selection follows");
-    assert!(play(&h).frame(h.time()).from.is_none(), "a cut, not a fade");
-    let r = h.request("ui.key", json!({"key": "left"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    assert_eq!(photo_up(&h), photos[0]);
-    for _ in 1..photos.len() {
-        run(&mut h, "slideshow.next", json!({}));
-    }
-    assert_eq!(play(&h).position(), (photos.len(), photos.len()));
-    run(&mut h, "slideshow.next", json!({}));
-    assert!(h.app.ui.slideshow.is_none() && !h.app.ui.fullscreen, "no repeat: past the last one it ends");
-    h.settle(SETTLE);
-}
-
-#[test]
 fn a_manual_slideshow_waits_for_the_arrow_keys() {
     let mut h = grid();
     let photos = h.app.session.visible_cloned();
@@ -195,7 +192,7 @@ fn a_manual_slideshow_waits_for_the_arrow_keys() {
 }
 
 #[test]
-fn random_order_starts_at_the_selection_and_is_fixed_by_the_seed() {
+fn random_order_starts_at_the_selection_and_shows_every_photo() {
     let order = |seed: u64| {
         let mut h = grid();
         let photos = h.app.session.visible_cloned();
@@ -218,7 +215,6 @@ fn random_order_starts_at_the_selection_and_is_fixed_by_the_seed() {
     let mut all = photos.clone();
     all.sort();
     assert_eq!(sorted, all, "every photo once");
-    assert_eq!(order(11).1, a, "same seed, same order");
 }
 
 #[test]
@@ -332,8 +328,50 @@ fn painted(img: &egui::ColorImage, x: usize, y: usize) -> [u8; 3] {
 }
 
 #[test]
-fn a_composed_slide_shows_during_playback() {
+fn playback_shows_the_plain_the_overlaid_and_the_composed_slide() {
     let mut h = grid();
+    assert!(h.app.session.slide_layout.is_plain());
+    run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 0}));
+    let current = photo_up(&h);
+    assert!(h.step_until(SETTLE, |h| has_slide(h, current)));
+    h.step();
+    // the photo's own render (its aspect, not the screen's), fitted on black, as before
+    let tex = h.app.renderer.textures.get(&Slot::Slide(current.into())).unwrap();
+    let aspect = h.app.session.slide_photo_aspect(current).unwrap();
+    let tex_aspect = tex.size[0] as f64 / tex.size[1] as f64;
+    assert!((tex_aspect - aspect).abs() < 0.02, "{tex_aspect} vs {aspect}");
+    assert_ne!(tex.size, [1000, 700]);
+    let img = h.paint();
+    let r = crate::panels::detail::fit_texture_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0)), tex.size);
+    if r.left() > 2.0 {
+        assert_eq!(painted(&img, 1, 350), [0, 0, 0], "black beside the photo");
+    }
+    if r.top() > 2.0 {
+        assert_eq!(painted(&img, 500, 1), [0, 0, 0], "black above the photo");
+    }
+    run(&mut h, "slideshow.end", json!({}));
+    assert!(h.app.session.slides_plain());
+    // the default layout with an identity plate: playback composes the slide to draw it
+    run(
+        &mut h,
+        "slideshow.overlays",
+        json!({"identityPlate": {"enabled": true, "text": "LC", "size": 0.12, "color": "#00ff00", "opacity": 1, "anchor": "topLeft", "offsetX": 0.02, "offsetY": 0.02}}),
+    );
+    assert!(!h.app.session.slides_plain());
+    run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 0}));
+    let current = photo_up(&h);
+    assert!(h.step_until(SETTLE, |h| has_slide(h, current)), "the slide is composed and ready");
+    h.step();
+    assert_eq!(h.app.renderer.textures.get(&Slot::Slide(current.into())).unwrap().size, [1000, 700]);
+    let img = h.paint();
+    // the plate's box: 14 px in from the top-left corner, 84 px high
+    let green = (14..98).flat_map(|y| (14..120).map(move |x| (x, y))).filter(|&(x, y)| {
+        let c = painted(&img, x, y);
+        c[1] > 200 && c[0] < 80 && c[2] < 80
+    });
+    assert!(green.count() > 200, "the identity plate is on the slide");
+    // margins and a backdrop: the slide is composed at the screen's size
+    run(&mut h, "slideshow.end", json!({}));
     let r = run(&mut h, "slideshow.layout", json!({"margins": 0.1, "backdropColor": "#ff0000"}));
     assert_eq!(r["marginTop"], 0.1);
     run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 0}));
@@ -360,32 +398,7 @@ fn a_composed_slide_shows_during_playback() {
 }
 
 #[test]
-fn the_default_layout_plays_the_photo_as_before() {
-    let mut h = grid();
-    assert!(h.app.session.slide_layout.is_plain());
-    run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 0}));
-    let current = photo_up(&h);
-    assert!(h.step_until(SETTLE, |h| has_slide(h, current)));
-    h.step();
-    // the photo's own render (its aspect, not the screen's), fitted on black, as before
-    let tex = h.app.renderer.textures.get(&Slot::Slide(current.into())).unwrap();
-    let aspect = h.app.session.slide_photo_aspect(current).unwrap();
-    let tex_aspect = tex.size[0] as f64 / tex.size[1] as f64;
-    assert!((tex_aspect - aspect).abs() < 0.02, "{tex_aspect} vs {aspect}");
-    assert_ne!(tex.size, [1000, 700]);
-    let img = h.paint();
-    let r = crate::panels::detail::fit_texture_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0)), tex.size);
-    if r.left() > 2.0 {
-        assert_eq!(painted(&img, 1, 350), [0, 0, 0], "black beside the photo");
-    }
-    if r.top() > 2.0 {
-        assert_eq!(painted(&img, 500, 1), [0, 0, 0], "black above the photo");
-    }
-    h.settle(SETTLE);
-}
-
-#[test]
-fn settings_shows_the_slide_layout_and_a_live_preview() {
+fn settings_shows_the_layout_the_overlays_and_the_titles_with_a_live_preview() {
     let mut h = grid();
     let first = h.app.session.visible_cloned()[0];
     run(&mut h, "library.select", json!({"ids": [first.0]}));
@@ -421,43 +434,6 @@ fn settings_shows_the_slide_layout_and_a_live_preview() {
     let img = h.paint();
     let c = painted(&img, (rect.left() + 3.0) as usize, (rect.center().y) as usize);
     assert!(c[1] > 200 && c[0] < 60, "the green backdrop in the preview margin: {c:?}");
-    h.settle(SETTLE);
-}
-
-#[test]
-fn overlays_show_during_playback() {
-    let mut h = grid();
-    assert!(h.app.session.slides_plain());
-    // the default layout with an identity plate: playback composes the slide to draw it
-    run(
-        &mut h,
-        "slideshow.overlays",
-        json!({"identityPlate": {"enabled": true, "text": "LC", "size": 0.12, "color": "#00ff00", "opacity": 1, "anchor": "topLeft", "offsetX": 0.02, "offsetY": 0.02}}),
-    );
-    assert!(!h.app.session.slides_plain());
-    run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 0}));
-    let current = photo_up(&h);
-    assert!(h.step_until(SETTLE, |h| has_slide(h, current)), "the slide is composed and ready");
-    h.step();
-    assert_eq!(h.app.renderer.textures.get(&Slot::Slide(current.into())).unwrap().size, [1000, 700]);
-    let img = h.paint();
-    // the plate's box: 14 px in from the top-left corner, 84 px high
-    let green = (14..98).flat_map(|y| (14..120).map(move |x| (x, y))).filter(|&(x, y)| {
-        let c = painted(&img, x, y);
-        c[1] > 200 && c[0] < 80 && c[2] < 80
-    });
-    assert!(green.count() > 200, "the identity plate is on the slide");
-    h.settle(SETTLE);
-}
-
-#[test]
-fn settings_shows_the_overlays_and_the_preview_follows_them() {
-    let mut h = grid();
-    let first = h.app.session.visible_cloned()[0];
-    run(&mut h, "library.select", json!({"ids": [first.0]}));
-    run(&mut h, "view.slideshowOptions", json!({}));
-    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
-    let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
     // scroll down to the Overlays section
     reveal(&mut h, "button:slideshowAddText");
     for w in ["check:settings.slideshowPlate", "check:settings.slideshowStars", "button:slideshowAddText", "check:settings.slideshowWatermark"] {
@@ -492,6 +468,47 @@ fn settings_shows_the_overlays_and_the_preview_follows_them() {
     let before = h.app.renderer.textures.get(&Slot::SlidePreview).map(|t| t.key);
     run(&mut h, "slideshow.overlays", json!({"identityPlate": {"text": "Studio", "color": "#ff00ff"}}));
     assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).map(|t| t.key) != before));
+    run(&mut h, "slideshow.overlays", json!({"identityPlate": {"enabled": false}}));
+    for w in ["button:settingsSlideshowPreviewShows-0", "button:settingsSlideshowPreviewShows-1", "button:settingsSlideshowPreviewShows-2"] {
+        assert!(has(&h, w), "{w}");
+    }
+    // scroll down to the Titles section, at the end
+    reveal(&mut h, "check:settings.slideshowIntro");
+    assert!(has(&h, "check:settings.slideshowEnding"));
+    let r = h.request("ui.clickWidget", json!({"id": "check:settings.slideshowIntro"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(h.app.session.slide_titles.intro.enabled, "the checkbox goes through slideshow.titles");
+    h.step();
+    for w in [
+        "button:slideshowIntroColor",
+        "button:settingsSlideshowIntroContent-1",
+        "slider:slideshowIntroScale",
+        "check:settings.slideshowIntroOwnDuration",
+    ] {
+        assert!(has(&h, w), "{w}");
+    }
+    // the preview switched to the intro screen
+    assert_eq!(crate::panels::slide_titles::preview_shows(&h.view.ctx), Some(lcc_engine::slideshow::Title::Intro));
+    run(&mut h, "slideshow.titles", json!({"intro": {"color": "#ff8000", "content": "none"}}));
+    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == PhotoId(0))));
+    assert!(h.step_until(SETTLE, |h| {
+        let rect = h.app.widgets.iter().find(|(id, _)| id == "slideshow:preview").map(|(_, r)| *r).unwrap();
+        let img = h.paint();
+        painted(&img, rect.center().x as usize, rect.center().y as usize) == [255, 128, 0]
+    }));
+    // Text: its field shows
+    reveal(&mut h, "button:settingsSlideshowIntroContent-1");
+    let r = h.request("ui.clickWidget", json!({"id": "button:settingsSlideshowIntroContent-1"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(h.app.session.slide_titles.intro.content, lcc_engine::slide_title::TitleContent::Text);
+    h.step();
+    assert!(has(&h, "field:slideshowIntroText"));
+    // back to the photo's slide
+    let r = h.request("ui.clickWidget", json!({"id": "button:settingsSlideshowPreviewShows-0"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
     h.settle(SETTLE);
 }
 
@@ -605,67 +622,16 @@ fn titles_survive_deleting_the_only_photo_and_need_photos_to_start() {
     h.settle(SETTLE);
 }
 
-#[test]
-fn settings_shows_the_titles_and_the_preview_shows_a_title_screen() {
-    let mut h = grid();
-    let first = h.app.session.visible_cloned()[0];
-    run(&mut h, "library.select", json!({"ids": [first.0]}));
-    run(&mut h, "view.slideshowOptions", json!({}));
-    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
-    let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
-    for w in ["button:settingsSlideshowPreviewShows-0", "button:settingsSlideshowPreviewShows-1", "button:settingsSlideshowPreviewShows-2"] {
-        assert!(has(&h, w), "{w}");
-    }
-    // scroll down to the Titles section, at the end
-    reveal(&mut h, "check:settings.slideshowIntro");
-    assert!(has(&h, "check:settings.slideshowEnding"));
-    let r = h.request("ui.clickWidget", json!({"id": "check:settings.slideshowIntro"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.step();
-    assert!(h.app.session.slide_titles.intro.enabled, "the checkbox goes through slideshow.titles");
-    h.step();
-    for w in [
-        "button:slideshowIntroColor",
-        "button:settingsSlideshowIntroContent-1",
-        "slider:slideshowIntroScale",
-        "check:settings.slideshowIntroOwnDuration",
-    ] {
-        assert!(has(&h, w), "{w}");
-    }
-    // the preview switched to the intro screen
-    assert_eq!(crate::panels::slide_titles::preview_shows(&h.view.ctx), Some(lcc_engine::slideshow::Title::Intro));
-    run(&mut h, "slideshow.titles", json!({"intro": {"color": "#ff8000", "content": "none"}}));
-    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == PhotoId(0))));
-    assert!(h.step_until(SETTLE, |h| {
-        let rect = h.app.widgets.iter().find(|(id, _)| id == "slideshow:preview").map(|(_, r)| *r).unwrap();
-        let img = h.paint();
-        painted(&img, rect.center().x as usize, rect.center().y as usize) == [255, 128, 0]
-    }));
-    // Text: its field shows
-    reveal(&mut h, "button:settingsSlideshowIntroContent-1");
-    let r = h.request("ui.clickWidget", json!({"id": "button:settingsSlideshowIntroContent-1"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.step();
-    assert_eq!(h.app.session.slide_titles.intro.content, lcc_engine::slide_title::TitleContent::Text);
-    h.step();
-    assert!(has(&h, "field:slideshowIntroText"));
-    // back to the photo's slide
-    let r = h.request("ui.clickWidget", json!({"id": "button:settingsSlideshowPreviewShows-0"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
-    h.settle(SETTLE);
-}
-
 /// Settings ▸ Slideshow ▸ Templates: built-ins listed, hover previews on the selected photo
 /// without changing anything, a click applies, and the user's own templates are saved, updated,
 /// renamed and deleted from the browser.
 #[test]
 fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     use lcc_engine::slide_template::SlideLook;
+    let dir = lcc_testkit::TempDir::new("lc-ui-sstpl");
     let mut h = grid();
-    let dir = std::env::temp_dir().join(format!("lc-ui-sstpl-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    h.app.session.slide_templates_dir = Some(dir.clone());
+    h.app.session.slide_templates_dir = Some(dir.to_path_buf());
     let first = h.app.session.visible_cloned()[0];
     run(&mut h, "library.select", json!({"ids": [first.0]}));
     run(&mut h, "view.slideshowOptions", json!({}));

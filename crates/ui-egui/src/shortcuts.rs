@@ -442,6 +442,29 @@ fn matches(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
 /// preview keeps the grid's view but shows the photo alone, so backslash stays Show Original there.
 /// Remapped brush and Show Original keys retain their action, and a saved assignment of the key to
 /// another command takes precedence over this default.
+/// Like [`matches`] but Alt (macOS Option) may be held: the Masking brush uses it as the
+/// subtract-while-painting modifier, and adjusting the brush with `[` / `]` (size) and ⇧`[` /
+/// ⇧`]` (feather) must keep working while subtracting (issue #1179). Only the event's key matches,
+/// so one press fires one binding (the ⇧`{` / ⇧`}` aliases of feather share the same physical key);
+/// egui-winit already reports the physical key as `key` when Option changes the character.
+fn matches_ignoring_alt(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
+    i.events.iter().any(|e| {
+        let (key, modifiers) = match e {
+            egui::Event::Key { key, pressed: true, modifiers, .. } => (key, modifiers),
+            _ => return false,
+        };
+        let ctrl_ok = if m.ctrl { modifiers.ctrl } else { !modifiers.ctrl || modifiers.command };
+        let cmd_ok = m.ctrl || modifiers.command == m.command;
+        *key == k && ctrl_ok && cmd_ok && modifiers.shift == m.shift
+    })
+}
+
+/// The brush size / feather commands: their bracket keys keep working while Alt (macOS Option) is
+/// held for subtracting a mask (issue #1179).
+fn brush_size_key(id: &str) -> bool {
+    matches!(id, "brush.smaller" | "brush.larger" | "brush.featherLess" | "brush.featherMore")
+}
+
 fn grid_key_command(keymap: &Keymap, grid: bool, fullscreen: bool, id: &'static str, shortcut: (Modifiers, Key)) -> Option<&'static str> {
     let command = match (grid, id, shortcut) {
         (true, "brush.smaller", (m, Key::OpenBracket)) if m == Modifiers::NONE => "photo.decreaseRating",
@@ -622,7 +645,11 @@ pub fn handle(app: &mut LccApp, ctx: &egui::Context) {
                 && !native(sc)
                 && !consumed.contains(&(m, k))
                 && !(k == Key::Escape && popup_open)
-                && matches(i, m, k)
+                // Alt (macOS Option) is the Masking brush's subtract modifier: the bracket size /
+                // feather keys still fire with it held in the photo view, unless the user gave
+                // the Alt chord (or the plain key) to another command. Grids keep their rating keys.
+                && (matches(i, m, k)
+                    || (!grid && brush_size_key(b.id) && !taken.contains(&(m | Modifiers::ALT, k)) && matches_ignoring_alt(i, m, k)))
                 && let Some(id) = grid_key_command(keymap, grid, app.ui.fullscreen, b.id, (m, k))
             {
                 // a rating or label command goes the culling path its digit always took
@@ -636,7 +663,7 @@ pub fn handle(app: &mut LccApp, ctx: &egui::Context) {
                 && !(k == Key::Escape && popup_open)
                 && !(k == Key::Space && space_repeat)
                 && !taken.contains(&(m, k))
-                && matches(i, m, k)
+                && (matches(i, m, k) || (!grid && brush_size_key(id) && !taken.contains(&(m | Modifiers::ALT, k)) && matches_ignoring_alt(i, m, k)))
             {
                 aliased.push((id, serde_json::from_str(params).unwrap_or_default()));
             }
@@ -688,7 +715,7 @@ pub fn handle(app: &mut LccApp, ctx: &egui::Context) {
     // instead of opening Remove; a Remove key moved elsewhere still opens it. The full-screen
     // preview and a hidden tools panel show no panel, so H keeps its own binding there.
     if h_press
-        && app.ui.right == crate::state::RightPanel::Masking
+        && tool_panel(app) == crate::state::RightPanel::Masking
         && !app.ui.fullscreen
         && crate::docking::exposed(app, crate::docking::Panel::Tools)
     {
@@ -832,7 +859,7 @@ pub fn handle(app: &mut LccApp, ctx: &egui::Context) {
         } else if matches!(f.as_str(), "photo.cycleFlag" | "photo.increaseFlag" | "photo.decreaseFlag") {
             // `, ⌘↑, ⌘↓: step the flag; the toast is the command's own (`cull_toast`, shown by `run`)
             cull(app, &f, json!({}), false);
-        } else if matches!(f.as_str(), "photo.pick" | "photo.unflag") || (f == "photo.reject" && app.ui.right != crate::state::RightPanel::Crop) {
+        } else if matches!(f.as_str(), "photo.pick" | "photo.unflag") || (f == "photo.reject" && tool_panel(app) != crate::state::RightPanel::Crop) {
             // P and U flag with Crop open too; X there swaps the crop aspect (#1866)
             cull(app, &f, json!({}), false);
         } else {
@@ -845,7 +872,7 @@ pub fn handle(app: &mut LccApp, ctx: &egui::Context) {
             // spot or red-eye correction; never the photo while retouching.
             if f == "photo.delete" {
                 use crate::state::RightPanel as R;
-                match app.ui.right {
+                match tool_panel(app) {
                     R::Masking => {
                         if app.session.active_mask.is_some() {
                             let _ = app.run("mask.delete", json!({}));
@@ -919,13 +946,13 @@ pub fn handle(app: &mut LccApp, ctx: &egui::Context) {
             }
             // X is both reject (library) and swap crop aspect (crop tool). When both bindings fire,
             // swap once: twice would put the crop straight back (issue #1866).
-            if f == "photo.reject" && app.ui.right == crate::state::RightPanel::Crop {
+            if f == "photo.reject" && tool_panel(app) == crate::state::RightPanel::Crop {
                 if !rotate_fired {
                     let _ = app.run("crop.rotateAspect", json!({}));
                 }
                 continue;
             }
-            if f == "crop.rotateAspect" && app.ui.right != crate::state::RightPanel::Crop {
+            if f == "crop.rotateAspect" && tool_panel(app) != crate::state::RightPanel::Crop {
                 continue;
             }
             // Classic's F8 (`panel.right`) in Library and Develop folds their right panel away and
@@ -936,14 +963,15 @@ pub fn handle(app: &mut LccApp, ctx: &egui::Context) {
                 continue;
             }
             // A is both Visualize Spots and the crop aspect lock: each key only in its own context
-            if f == "view.visualizeSpots" && app.ui.right == crate::state::RightPanel::Crop {
+            // (neither tool is on screen in the grids, Compare/Survey and the full-screen preview, so neither runs there)
+            if f == "view.visualizeSpots" && (tool_panel(app) == crate::state::RightPanel::Crop || !tool_in_view(app)) {
                 continue;
             }
-            if f == "crop.lockAspect" && app.ui.right != crate::state::RightPanel::Crop {
+            if f == "crop.lockAspect" && tool_panel(app) != crate::state::RightPanel::Crop {
                 continue;
             }
             // / refreshes the selected spot's source in the Remove tool (Deselect Active Photo elsewhere)
-            if f == "library.deselectActive" && app.ui.right == crate::state::RightPanel::Remove && app.session.active_spot.is_some() {
+            if f == "library.deselectActive" && tool_panel(app) == crate::state::RightPanel::Remove && app.session.active_spot.is_some() {
                 let _ = app.run("spot.refreshSource", json!({}));
                 continue;
             }
@@ -955,12 +983,12 @@ pub fn handle(app: &mut LccApp, ctx: &egui::Context) {
                 continue;
             }
             // Shift+O cycles the mask overlay colour while masking (the crop overlay elsewhere)
-            if f == "view.cropOverlay" && app.ui.right == crate::state::RightPanel::Masking {
+            if f == "view.cropOverlay" && tool_panel(app) == crate::state::RightPanel::Masking {
                 let _ = app.run("view.maskOverlayColor", json!({}));
                 continue;
             }
             // while cropping: O cycles the guides, Shift+O their orientation
-            if app.ui.right == crate::state::RightPanel::Crop {
+            if tool_panel(app) == crate::state::RightPanel::Crop {
                 let crop_key = match f.as_str() {
                     "view.maskOverlay" => Some(("view.cropOverlay", json!({}))),
                     "view.cropOverlay" => Some(("view.cropOverlayOrientation", json!({}))),
@@ -1015,6 +1043,18 @@ fn change_toast(app: &mut LccApp, ctx: &egui::Context, text: impl Into<String>) 
 /// Whether the on-screen overlay (`panels::surface_osd`) reports the changes keys make.
 pub(crate) fn overlay_reports_changes(app: &LccApp) -> bool {
     app.surface.settings().osd.effective_mode() == lcc_surface::settings::OsdMode::Always
+}
+
+/// Whether a right-panel tool can be on screen: the single-photo view, not full screen.
+fn tool_in_view(app: &LccApp) -> bool {
+    app.ui.view == crate::state::ViewMode::Detail && !app.ui.fullscreen
+}
+
+/// The right panel whose tool is on screen and so owns the keys it shares with the library: `ui.right` itself
+/// outlives its view (it is saved, and stays while the grid, a comparison or the full-screen preview is shown, where
+/// no tool can act), so everywhere but the single-photo view there is none.
+fn tool_panel(app: &LccApp) -> crate::state::RightPanel {
+    if tool_in_view(app) { app.ui.right } else { crate::state::RightPanel::None }
 }
 
 /// Arrow keys reach the canvas tools from the keyboard (accessibility; the tools are otherwise
@@ -1351,7 +1391,7 @@ mod tests {
                 assert_eq!(h.app.session.catalog.photo(before).unwrap().flag, flag, "{view:?} Shift+{k}");
                 assert_eq!(h.app.session.active(), Some(PhotoId(next)), "{view:?} Shift+{k}");
             }
-            assert!(!h.app.ui.presets, "{view:?}: Shift+P must not open Presets");
+            assert!(!crate::panels::presets::shown(&h.app), "{view:?}: Shift+P must not open Presets");
             assert_eq!(h.app.ui.view, view);
         }
     }
@@ -1364,7 +1404,7 @@ mod tests {
         assert_eq!(shortcut_of(&h.app.ui.settings.keymap, "panel.presets"), None);
         assign(&mut h.app.ui.settings.keymap, "panel.presets", Some("Shift+P")).unwrap();
         key(&mut h, "P", true);
-        assert!(h.app.ui.presets);
+        assert!(crate::panels::presets::shown(&h.app));
         assert_eq!(h.app.session.active(), Some(lcc_catalog::PhotoId(1)));
         assert_eq!(h.app.session.catalog.photo(lcc_catalog::PhotoId(1)).unwrap().flag, lcc_catalog::Flag::None);
     }
@@ -1618,9 +1658,27 @@ mod tests {
     }
 
     #[test]
-    fn delete_means_the_backspace_key() {
-        assert_eq!(parse("Delete"), Some((Modifiers::NONE, Key::Backspace)));
-        assert_eq!(parse("Cmd+Delete"), Some((Modifiers::COMMAND, Key::Backspace)));
+    fn delete_and_reject_belong_to_the_photo_when_no_tool_is_on_screen() {
+        use crate::state::{RightPanel, ViewMode};
+        use lcc_catalog::{Flag, PhotoId};
+        // `ui.right` is saved and outlives the view that showed it: in the grid, Delete and X still act on the photo
+        for right in [RightPanel::Masking, RightPanel::Remove, RightPanel::RedEye, RightPanel::Crop] {
+            let mut h = library();
+            h.app.ui.view = ViewMode::PhotoGrid;
+            h.app.ui.right = right;
+            h.app.ui.settings.confirm_delete = false;
+            key(&mut h, "X", false);
+            assert_eq!(h.app.session.catalog.photo(PhotoId(1)).unwrap().flag, Flag::Reject, "X with {right:?}");
+            key(&mut h, "Delete", false);
+            assert!(h.app.session.catalog.photo(PhotoId(1)).unwrap().deleted, "Delete with {right:?}");
+        }
+        // with the tool on screen, Delete stays with the tool and deletes no photo
+        let mut h = library();
+        h.app.ui.view = ViewMode::Detail;
+        h.app.ui.right = RightPanel::Masking;
+        h.app.ui.settings.confirm_delete = false;
+        key(&mut h, "Delete", false);
+        assert!(!h.app.session.catalog.photo(PhotoId(1)).unwrap().deleted);
     }
     use super::*;
 
@@ -1631,6 +1689,9 @@ mod tests {
         assert_eq!(k, Key::Z);
         assert_eq!(parse("Right").unwrap().1, Key::ArrowRight);
         assert_eq!(parse("\\").unwrap().1, Key::Backslash);
+        // Delete means the Backspace key
+        assert_eq!(parse("Delete"), Some((Modifiers::NONE, Key::Backspace)));
+        assert_eq!(parse("Cmd+Delete"), Some((Modifiers::COMMAND, Key::Backspace)));
         // every declared shortcut parses
         for (id, _, sc, _) in crate::menus::ui_commands() {
             if let Some(sc) = sc {

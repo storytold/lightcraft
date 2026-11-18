@@ -7,11 +7,9 @@ use std::path::{Path, PathBuf};
 use crate::lightroom_folder::{LightroomPlace, find_lrcat_among, lightroom_catalog_at};
 use crate::{EngineError, Session};
 
-fn temp_dir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("lc-engine-lrfolder-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+/// The test's folder in Temp, removed when the test ends.
+fn temp_dir(tag: &str) -> lcc_testkit::TempDir {
+    lcc_testkit::TempDir::new(&format!("lc-engine-lrfolder-{tag}"))
 }
 
 /// A Lightroom catalog folder as Lightroom Classic leaves it (fake contents: only names count).

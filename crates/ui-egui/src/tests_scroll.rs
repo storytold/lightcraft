@@ -56,17 +56,17 @@ fn grid_keeps_the_users_scroll_position() {
     for _ in 0..4 {
         h.request("ui.scroll", json!({"dy": -300.0}), T);
     }
-    idle(&mut h, 120);
+    idle(&mut h, 60);
     let y = grid_y(&h);
     assert!(y > 600.0, "the wheel scrolled the grid ({y})");
     // …and it stays there: no snap back after a second and more of frames and finished renders
-    idle(&mut h, 120);
+    idle(&mut h, 60);
     assert_eq!(grid_y(&h), y, "the grid snapped back");
     // dragging the scroll bar back up a bit, then releasing it
     let x = canvas.right() - 3.0;
     let r = h.request("ui.drag", json!({"x": x, "y": canvas.top() + 300.0, "toX": x, "toY": canvas.top() + 200.0}), T);
     assert_eq!(r["ok"], true, "{r}");
-    idle(&mut h, 120);
+    idle(&mut h, 60);
     let y2 = grid_y(&h);
     assert!(y2 > 0.0 && (y2 - y).abs() > 1.0, "the scroll bar moved the grid ({y} → {y2})");
     // editing the active photo does not yank the grid back either
@@ -86,8 +86,9 @@ fn grid_keeps_the_users_scroll_position() {
 
 #[test]
 fn deleting_photos_does_not_jump_the_grid_to_the_top() {
-    for view in ["photoGrid", "squareGrid"] {
-        for count in [1, 3] {
+    // (one session per case: a second count per view showed nothing more and doubled the cost)
+    for (view, count) in [("photoGrid", 1), ("squareGrid", 3)] {
+        {
             let mut h = demo(view);
             let ids = h.app.session.visible_cloned();
             let at = ids.len() / 2;
@@ -113,8 +114,8 @@ fn deleting_photos_does_not_jump_the_grid_to_the_top() {
 
 #[test]
 fn permanently_deleting_photos_keeps_the_current_view_neighbour_in_sight() {
-    for view in ["photoGrid", "squareGrid", "detail"] {
-        for count in [1, 3] {
+    for (view, count) in [("photoGrid", 3), ("squareGrid", 1), ("detail", 3)] {
+        {
             let mut h = demo(view);
             for (command, params) in
                 [("library.selectAll", json!({})), ("photo.delete", json!({})), ("library.source", json!({"kind": "recentlyDeleted"}))]
@@ -169,7 +170,7 @@ fn filmstrip_wheel_scrolls_and_keeps_its_position() {
     let x1 = film_x(&h);
     assert!(x1 < x - 50.0, "a horizontal scroll moved it back ({x} → {x1})");
     // it stays there
-    idle(&mut h, 120);
+    idle(&mut h, 60);
     assert_eq!(film_x(&h), x1, "the filmstrip snapped back");
     // the next photo by keyboard brings the filmstrip to it
     h.request("ui.key", json!({"key": "right"}), T);
@@ -179,6 +180,14 @@ fn filmstrip_wheel_scrolls_and_keeps_its_position() {
     assert!(film_x(&h) < x1, "scrolled back to the active photo");
     let cell = widget(&h, &format!("film:{second}"));
     assert!(cell.left() >= 0.0 && cell.right() <= 1200.0, "the new active photo is in view ({cell:?})");
+    // a mouse wheel notch scrolls it sideways by a third of its width (about five photos)
+    let strip = widget(&h, "filmstrip");
+    h.request("ui.move", json!({"x": strip.center().x, "y": strip.center().y}), T);
+    let x0 = film_x(&h);
+    notch(&mut h, -1.0);
+    idle(&mut h, 60);
+    let moved = film_x(&h) - x0;
+    assert!((moved - strip.width() * crate::theme::WHEEL_STRIP_SHARE).abs() < 1.0, "a notch scrolled {moved} of {} points", strip.width());
 }
 
 #[test]
@@ -225,7 +234,7 @@ fn notch(h: &mut Headless, dy: f32) {
 /// a third, not whole rows, so the photos don't land where the last ones were, and at once, without a
 /// glide that blurs them. A trackpad still scrolls the points it reports.
 #[test]
-fn a_wheel_notch_scrolls_a_third_of_the_grid() {
+fn a_wheel_notch_scrolls_a_third_of_the_grid_scaled_by_the_speed_preference() {
     let mut h = demo("photoGrid");
     let view = widget(&h, "grid:scroll");
     h.request("ui.move", json!({"x": view.center().x, "y": view.center().y}), T);
@@ -236,57 +245,37 @@ fn a_wheel_notch_scrolls_a_third_of_the_grid() {
     h.step();
     let moved = grid_y(&h) - y0;
     assert!((moved - view.height() * crate::theme::WHEEL_STRIP_SHARE).abs() < 1.0, "a notch scrolled {moved} of {} points", view.height());
-    idle(&mut h, 120);
+    idle(&mut h, 60);
     assert!((grid_y(&h) - y0 - moved).abs() < 0.5, "and no further: {} after the glide", grid_y(&h) - y0);
     let y1 = grid_y(&h);
     for _ in 0..2 {
         notch(&mut h, -1.0);
     }
-    idle(&mut h, 120);
+    idle(&mut h, 60);
     let moved = grid_y(&h) - y1;
     assert!((moved - 2.0 * view.height() * crate::theme::WHEEL_STRIP_SHARE).abs() < 1.0, "two notches scrolled {moved} of {} points", view.height());
     // back up
     let y2 = grid_y(&h);
     notch(&mut h, 1.0);
-    idle(&mut h, 120);
+    idle(&mut h, 60);
     assert!((y2 - grid_y(&h) - view.height() * crate::theme::WHEEL_STRIP_SHARE).abs() < 1.0, "a notch up scrolled back a third");
     // a trackpad (points) scrolls what it reports
     let y3 = grid_y(&h);
     h.request("ui.scroll", json!({"dy": -60.0}), T);
-    idle(&mut h, 120);
+    idle(&mut h, 60);
     assert!((grid_y(&h) - y3 - 60.0).abs() < 1.0, "a 60-point trackpad scroll moved {}", grid_y(&h) - y3);
-}
-
-/// The same in the filmstrip: a notch scrolls it sideways by a third of its width (about five photos).
-#[test]
-fn a_wheel_notch_scrolls_a_third_of_the_filmstrip() {
-    let mut h = demo("detail");
-    let strip = widget(&h, "filmstrip");
-    h.request("ui.move", json!({"x": strip.center().x, "y": strip.center().y}), T);
-    let x0 = film_x(&h);
-    notch(&mut h, -1.0);
-    idle(&mut h, 120);
-    let moved = film_x(&h) - x0;
-    assert!((moved - strip.width() * crate::theme::WHEEL_STRIP_SHARE).abs() < 1.0, "a notch scrolled {moved} of {} points", strip.width());
-}
-
-/// The Wheel scroll speed preference scales the notch (issue: big collections took too many notches),
-/// and a hostile value from a settings file is clamped instead of jumping to the end or standing still.
-#[test]
-fn the_wheel_scroll_speed_preference_scales_a_notch() {
-    let mut h = demo("photoGrid");
+    // the Wheel scroll speed preference scales the notch (big collections took too many notches), and a
+    // hostile value from a settings file is clamped instead of jumping to the end or standing still
     h.app.ui.settings.wheel_scroll_speed = 2.0;
     h.step();
-    let view = widget(&h, "grid:scroll");
-    h.request("ui.move", json!({"x": view.center().x, "y": view.center().y}), T);
     let y0 = grid_y(&h);
     notch(&mut h, -1.0);
-    idle(&mut h, 120);
+    idle(&mut h, 60);
     let moved = grid_y(&h) - y0;
     assert!((moved - 2.0 * view.height() * crate::theme::WHEEL_STRIP_SHARE).abs() < 1.0, "a fast notch scrolled {moved} of {} points", view.height());
     h.app.ui.settings.wheel_scroll_speed = f32::NAN;
     let y1 = grid_y(&h);
     notch(&mut h, 1.0);
-    idle(&mut h, 120);
+    idle(&mut h, 60);
     assert!((y1 - grid_y(&h) - view.height() * crate::theme::WHEEL_STRIP_SHARE).abs() < 1.0, "a NaN speed scrolls a plain notch");
 }

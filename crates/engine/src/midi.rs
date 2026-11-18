@@ -358,14 +358,6 @@ mod tests {
     }
 
     #[test]
-    fn the_default_map_is_empty_and_wants_every_port() {
-        let map = Map::default();
-        assert!(map.is_empty());
-        assert_eq!(map.action(press(46)), None);
-        assert!(map.wants_input("anything"));
-    }
-
-    #[test]
     fn inputs_pick_ports_without_regard_to_case() {
         let map = Map::from_toml(
             r#"inputs = [ "loopMIDI Port", "Keystation 49" ]

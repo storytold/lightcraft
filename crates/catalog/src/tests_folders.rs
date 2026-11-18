@@ -54,11 +54,6 @@ fn rows(paths: &[&str]) -> Vec<(String, usize, usize)> {
 }
 
 #[test]
-fn an_empty_library_has_no_folders() {
-    assert!(Catalog::new().folder_tree().is_empty());
-}
-
-#[test]
 fn only_folders_with_imported_photos_are_listed_with_their_counts() {
     let c = library(&["/pics/trip/a.jpg", "/pics/trip/b.jpg", "/pics/home/c.jpg"]);
     let tree = c.folder_tree();
@@ -67,35 +62,111 @@ fn only_folders_with_imported_photos_are_listed_with_their_counts() {
     assert_eq!(tree[0].children[0].children[1].path, "/pics/trip", "a row knows its folder, for choosing it");
 }
 
+/// The tree is made from the catalog's own records (it never looks at a disk): every folder is a row of its own with
+/// the photos in and below it, however it is spelled; each disk and share is a volume; rows are listed by name.
 #[test]
-fn a_folders_count_includes_the_folders_inside_it() {
-    let r = rows(&["/pics/trip/a.jpg", "/pics/trip/day1/b.jpg", "/pics/trip/day1/c.jpg", "/pics/trip/day2/d.jpg"]);
-    assert_eq!(r, vec![row("/", 4, 0), row("pics", 4, 0), row("trip", 4, 1), row("day1", 2, 2), row("day2", 1, 1)]);
-}
-
-#[test]
-fn every_folder_is_a_row_of_its_own_even_when_it_holds_nothing_itself() {
-    let c = library(&["/Users/me/Pictures/2024/a.jpg", "/Users/me/Pictures/2025/b.jpg", "/Volumes/nas/photos/c.jpg"]);
-    let tree = c.folder_tree();
-    assert_eq!(
-        outline(&tree),
-        vec![
-            row("/", 2, 0),
-            row("Users", 2, 0),
-            row("me", 2, 0),
-            row("Pictures", 2, 0),
-            row("2024", 1, 1),
-            row("2025", 1, 1),
-            row("nas", 1, 0),
-            row("photos", 1, 1)
-        ]
-    );
-    assert_eq!(tree[0].children[0].children[0].children[0].path, "/Users/me/Pictures", "a row is exactly the folder it names");
-}
-
-#[test]
-fn a_folder_with_photos_of_its_own_is_not_folded_into_its_child() {
-    assert_eq!(rows(&["/pics/a.jpg", "/pics/trip/b.jpg"]), vec![row("/", 2, 0), row("pics", 2, 1), row("trip", 1, 1)]);
+fn the_folder_tree_of_a_library() {
+    let r = |name: &str, count: usize, own: usize| row(name, count, own);
+    let gvfs = "/run/user/1000/gvfs/smb-share:server=tokyo,share=photos/2024/a.jpg";
+    let cases: Vec<(&str, Vec<&str>, Vec<(String, usize, usize)>)> = vec![
+        ("an empty library", vec![], vec![]),
+        ("photos with no folder are left out", vec!["x.jpg", ""], vec![]),
+        (
+            "a folder's count includes the folders inside it",
+            vec!["/pics/trip/a.jpg", "/pics/trip/day1/b.jpg", "/pics/trip/day1/c.jpg", "/pics/trip/day2/d.jpg"],
+            vec![r("/", 4, 0), r("pics", 4, 0), r("trip", 4, 1), r("day1", 2, 2), r("day2", 1, 1)],
+        ),
+        (
+            "every folder is a row even when it holds nothing itself",
+            vec!["/Users/me/Pictures/2024/a.jpg", "/Users/me/Pictures/2025/b.jpg", "/Volumes/nas/photos/c.jpg"],
+            vec![
+                r("/", 2, 0),
+                r("Users", 2, 0),
+                r("me", 2, 0),
+                r("Pictures", 2, 0),
+                r("2024", 1, 1),
+                r("2025", 1, 1),
+                r("nas", 1, 0),
+                r("photos", 1, 1),
+            ],
+        ),
+        ("a folder with photos of its own", vec!["/pics/a.jpg", "/pics/trip/b.jpg"], vec![r("/", 2, 0), r("pics", 2, 1), r("trip", 1, 1)]),
+        (
+            "one folder however it is spelled",
+            vec!["/pics/trip/a.jpg", "/pics//trip/./b.jpg", "/pics\\trip\\c.jpg", "/pics/x/../trip/d.jpg"],
+            vec![r("/", 4, 0), r("pics", 4, 0), r("trip", 4, 4)],
+        ),
+        // macOS, Linux and Windows habits for where disks appear
+        (
+            "each disk is a volume",
+            vec!["/Volumes/nas/p/1.jpg", "/media/me/usb/2.jpg", "/run/media/me/card/3.jpg", "/mnt/disk/4.jpg"],
+            vec![r("card", 1, 1), r("disk", 1, 1), r("nas", 1, 0), r("p", 1, 1), r("usb", 1, 1)],
+        ),
+        (
+            "drive letters",
+            vec!["D:\\Photos\\2024\\a.jpg", "D:\\Photos\\2025\\b.jpg", "C:\\x\\c.jpg"],
+            vec![r("C:", 1, 0), r("x", 1, 1), r("D:", 2, 0), r("Photos", 2, 0), r("2024", 1, 1), r("2025", 1, 1)],
+        ),
+        (
+            "a network share is a volume",
+            vec!["\\\\srv\\s1\\a\\1.jpg", "\\\\srv\\s2\\b\\2.jpg"],
+            vec![r("//srv/s1", 1, 0), r("a", 1, 1), r("//srv/s2", 1, 0), r("b", 1, 1)],
+        ),
+        (
+            "the verbatim form Windows APIs give is the same share",
+            vec!["\\\\?\\UNC\\srv\\s1\\a\\1.jpg", "\\\\srv\\s1\\a\\2.jpg"],
+            vec![r("//srv/s1", 2, 0), r("a", 2, 2)],
+        ),
+        // Finder mounts every share under /Volumes, and a second mount of the same share gets a suffix
+        (
+            "a share mounted on a Mac is named after the share",
+            vec!["/Volumes/tokyo/Photos/2024/a.jpg", "/Volumes/tokyo/Photos/2025/b.jpg", "/Volumes/tokyo-1/old/c.jpg", "/Volumes/東京 NAS/d.jpg"],
+            vec![r("tokyo", 2, 0), r("Photos", 2, 0), r("2024", 1, 1), r("2025", 1, 1), r("tokyo-1", 1, 0), r("old", 1, 1), r("東京 NAS", 1, 1)],
+        ),
+        // Linux desktops: gvfs mounts per user, with the server and share in the mount's name
+        (
+            "gvfs mounts",
+            vec![gvfs, "/run/user/1000/gvfs/sftp:host=nas/b.jpg"],
+            vec![r("photos on tokyo", 1, 0), r("2024", 1, 1), r("sftp:host=nas", 1, 1)],
+        ),
+        // NFS automounts: Linux /net/<host>, macOS /Network/Servers/<host>
+        (
+            "NFS automounts",
+            vec!["/net/tokyo/export/a.jpg", "/Network/Servers/osaka/vol/b.jpg"],
+            vec![r("osaka", 1, 0), r("vol", 1, 1), r("tokyo", 1, 0), r("export", 1, 1)],
+        ),
+        // Windows: a share by name or by address, the WSL file system, a mapped drive
+        (
+            "Windows shares",
+            vec![r"\\tokyo.local\photos\a.jpg", r"\\192.168.1.5\scans\b.jpg", r"\\wsl$\Ubuntu\home\me\c.jpg", r"Z:\d.jpg"],
+            vec![
+                r("//192.168.1.5/scans", 1, 1),
+                r("//tokyo.local/photos", 1, 1),
+                r("//wsl$/Ubuntu", 1, 0),
+                r("home", 1, 0),
+                r("me", 1, 1),
+                r("Z:", 1, 1),
+            ],
+        ),
+        ("a photo in the root of a disk counts for the disk", vec!["/x.jpg", "/d/y.jpg"], vec![r("/", 2, 1), r("d", 1, 1)]),
+        ("the root of a drive", vec!["C:\\x.jpg"], vec![r("C:", 1, 1)]),
+        (
+            "listed by name ignoring case",
+            vec!["/p/b/1.jpg", "/p/A/2.jpg", "/p/c/3.jpg"],
+            vec![r("/", 3, 0), r("p", 3, 0), r("A", 1, 1), r("b", 1, 1), r("c", 1, 1)],
+        ),
+        // `..` cannot climb above a share, and repeated separators between server and share are one
+        (
+            "odd spellings of shares",
+            vec!["//server/share/../other/1.jpg", "//a b//A/f.jpg"],
+            vec![r("//a b/A", 1, 1), r("//server/share", 1, 0), r("other", 1, 1)],
+        ),
+    ];
+    for (what, paths, want) in cases {
+        assert_eq!(rows(&paths), want, "{what}");
+    }
+    let tree = library(&["/Volumes/tokyo/Photos/a.jpg"]).folder_tree();
+    assert_eq!((tree[0].path.as_str(), tree[0].volume), ("/Volumes/tokyo", true), "choosing the share shows everything on it");
 }
 
 #[test]
@@ -108,100 +179,6 @@ fn browsed_deleted_and_demo_photos_are_not_imported_from_anywhere() {
     let demo = Photo::new(id, Source::Demo { scene: 1 }, "demo", "JPEG", 60, 40, "2026-01-01T10:00:00");
     c.apply(Op::AddPhoto { photo: Box::new(demo) }).unwrap();
     assert_eq!(outline(&c.folder_tree()), vec![row("/", 1, 0), row("pics", 1, 0), row("kept", 1, 1)]);
-}
-
-#[test]
-fn however_a_folder_is_spelled_it_is_one_folder() {
-    let r = rows(&["/pics/trip/a.jpg", "/pics//trip/./b.jpg", "/pics\\trip\\c.jpg", "/pics/x/../trip/d.jpg"]);
-    assert_eq!(r, vec![row("/", 4, 0), row("pics", 4, 0), row("trip", 4, 4)]);
-}
-
-#[test]
-fn each_disk_is_a_volume_of_its_own() {
-    // macOS, Linux and Windows habits for where disks appear
-    let r = rows(&["/Volumes/nas/p/1.jpg", "/media/me/usb/2.jpg", "/run/media/me/card/3.jpg", "/mnt/disk/4.jpg"]);
-    assert_eq!(r, vec![row("card", 1, 1), row("disk", 1, 1), row("nas", 1, 0), row("p", 1, 1), row("usb", 1, 1)]);
-    let r = rows(&["D:\\Photos\\2024\\a.jpg", "D:\\Photos\\2025\\b.jpg", "C:\\x\\c.jpg"]);
-    assert_eq!(r, vec![row("C:", 1, 0), row("x", 1, 1), row("D:", 2, 0), row("Photos", 2, 0), row("2024", 1, 1), row("2025", 1, 1)]);
-}
-
-#[test]
-fn a_network_share_is_a_volume_and_two_spellings_are_one() {
-    let r = rows(&["\\\\srv\\s1\\a\\1.jpg", "\\\\srv\\s2\\b\\2.jpg"]);
-    assert_eq!(r, vec![row("//srv/s1", 1, 0), row("a", 1, 1), row("//srv/s2", 1, 0), row("b", 1, 1)]);
-    // the verbatim form Windows APIs give is the same share
-    let r = rows(&["\\\\?\\UNC\\srv\\s1\\a\\1.jpg", "\\\\srv\\s1\\a\\2.jpg"]);
-    assert_eq!(r, vec![row("//srv/s1", 2, 0), row("a", 2, 2)]);
-}
-
-#[test]
-fn a_samba_share_mounted_on_a_mac_is_a_volume_named_after_the_share() {
-    // Finder mounts every share under /Volumes, and a second mount of the same share gets a suffix
-    let r = rows(&["/Volumes/tokyo/Photos/2024/a.jpg", "/Volumes/tokyo/Photos/2025/b.jpg", "/Volumes/tokyo-1/old/c.jpg", "/Volumes/東京 NAS/d.jpg"]);
-    assert_eq!(
-        r,
-        vec![
-            row("tokyo", 2, 0),
-            row("Photos", 2, 0),
-            row("2024", 1, 1),
-            row("2025", 1, 1),
-            row("tokyo-1", 1, 0),
-            row("old", 1, 1),
-            row("東京 NAS", 1, 1)
-        ]
-    );
-    let tree = library(&["/Volumes/tokyo/Photos/a.jpg"]).folder_tree();
-    assert_eq!((tree[0].path.as_str(), tree[0].volume), ("/Volumes/tokyo", true), "choosing the share shows everything on it");
-}
-
-#[test]
-fn shares_the_other_systems_mount_are_volumes_too() {
-    // Linux desktops: gvfs mounts per user, with the server and share in the mount's name
-    let gvfs = "/run/user/1000/gvfs/smb-share:server=tokyo,share=photos";
-    let r = rows(&[&format!("{gvfs}/2024/a.jpg"), "/run/user/1000/gvfs/sftp:host=nas/b.jpg"]);
-    assert_eq!(r, vec![row("photos on tokyo", 1, 0), row("2024", 1, 1), row("sftp:host=nas", 1, 1)]);
-    // NFS automounts: Linux /net/<host>, macOS /Network/Servers/<host>
-    let r = rows(&["/net/tokyo/export/a.jpg", "/Network/Servers/osaka/vol/b.jpg"]);
-    assert_eq!(r, vec![row("osaka", 1, 0), row("vol", 1, 1), row("tokyo", 1, 0), row("export", 1, 1)]);
-    // Windows: a share by name or by address, the WSL file system, a mapped drive
-    let r = rows(&[r"\\tokyo.local\photos\a.jpg", r"\\192.168.1.5\scans\b.jpg", r"\\wsl$\Ubuntu\home\me\c.jpg", r"Z:\d.jpg"]);
-    assert_eq!(
-        r,
-        vec![
-            row("//192.168.1.5/scans", 1, 1),
-            row("//tokyo.local/photos", 1, 1),
-            row("//wsl$/Ubuntu", 1, 0),
-            row("home", 1, 0),
-            row("me", 1, 1),
-            row("Z:", 1, 1)
-        ]
-    );
-}
-
-#[test]
-fn a_share_that_is_not_mounted_costs_nothing() {
-    // the tree is made from the catalog's own records: it never looks at a disk, so a share that
-    // is asleep or gone lists (and counts) exactly like one that is there
-    let c = library(&["/Volumes/definitely-not-mounted/a/b.jpg", r"\\unreachable.invalid\share\c.jpg"]);
-    let tree = c.folder_tree();
-    assert_eq!(tree.iter().map(|n| n.count).sum::<usize>(), 2);
-}
-
-#[test]
-fn a_photo_in_the_root_of_a_disk_counts_for_the_disk() {
-    assert_eq!(rows(&["/x.jpg", "/d/y.jpg"]), vec![row("/", 2, 1), row("d", 1, 1)]);
-    assert_eq!(rows(&["C:\\x.jpg"]), vec![row("C:", 1, 1)]);
-}
-
-#[test]
-fn photos_with_no_folder_are_left_out() {
-    assert!(rows(&["x.jpg", ""]).is_empty());
-}
-
-#[test]
-fn folders_are_listed_by_name_ignoring_case() {
-    let names: Vec<String> = rows(&["/p/b/1.jpg", "/p/A/2.jpg", "/p/c/3.jpg"]).into_iter().skip(2).map(|r| r.0).collect();
-    assert_eq!(names, ["A", "b", "c"]);
 }
 
 #[test]
@@ -322,13 +299,6 @@ fn a_row_that_would_cover_other_disks_is_not_offered_for_choosing() {
     assert_eq!(sel("/Volumes/tokyo"), Some(true));
     assert_eq!(sel("/Users/me"), Some(true));
     assert_eq!(sel("/mnt"), Some(true), "no disk is mounted below it in this library");
-}
-
-#[test]
-fn the_tree_and_the_filter_read_odd_spellings_the_same_way() {
-    // `..` cannot climb above a share, and repeated separators between server and share are one
-    let tree = library(&["//server/share/../other/1.jpg", "//a b//A/f.jpg"]).folder_tree();
-    assert_eq!(outline(&tree), vec![row("//a b/A", 1, 1), row("//server/share", 1, 0), row("other", 1, 1)]);
 }
 
 #[test]

@@ -5,6 +5,7 @@ use lcc_ui_egui::{LccApp, Services, UiState, state::RightPanel};
 use serde_json::json;
 
 fn harness(state: Option<UiState>, width: f32, scale: f32) -> Harness<'static, LccApp> {
+    lcc_engine::scene_disk::use_build_dir();
     let mut app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     if let Some(state) = state {
         app.ui = state;

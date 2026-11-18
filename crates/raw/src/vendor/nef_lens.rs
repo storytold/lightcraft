@@ -47,10 +47,10 @@ fn nef_info(raw: &Ifd) -> Option<(Ifd, ByteOrder)> {
     Some((ifd, order))
 }
 
-/// DistortionInfo: `"0100"`, the correction mode (0 none), the normalisation radius (mm) at 8, the term count (4)
-/// at 16, the coefficients at 20 / 28 / 36 and the zoom at 64, each a signed rational.
+/// DistortionInfo: `"0100"`, mode (1 optional on, 3 required on; 0 no lens, 2 off), radius (mm) at 8,
+/// term count (4) at 16, coefficients at 20 / 28 / 36 and zoom at 64, each a signed rational.
 fn distortion_info(b: &[u8], order: ByteOrder) -> Option<Distortion> {
-    if b.get(0..4)? != b"0100" || *b.get(4)? == 0 {
+    if b.get(0..4)? != b"0100" || !matches!(*b.get(4)?, 1 | 3) {
         return None;
     }
     let norm = rational(b, 8, order)?;
@@ -228,12 +228,17 @@ pub(in crate::vendor) mod tests {
         assert!(warp("NIKON Z 6_2", &raw_with(&[(DISTORTION_INFO, good.clone())])).is_some());
         assert!(warp("NIKON Z f", &raw_with(&[(DISTORTION_INFO, good.clone())])).is_some());
         assert!(warp("NIKON Z 8", &raw_with(&[(DISTORTION_INFO, good.clone())])).is_some());
+        // "On (Optional)" corrects as "On (Required)" does
+        assert!(warp("NIKON Z 6_2", &raw_with(&[(DISTORTION_INFO, distortion_block(1, 21.6, 4, WIDE.0, WIDE.1))])).is_some());
         for model in ["", "NIKON Z 6", "NIKON Z 6_3", "NIKON Z 9", "NIKON D850", "NIKON Z 6_2 x"] {
             assert!(warp(model, &raw_with(&[(DISTORTION_INFO, good.clone())])).is_none(), "{model}");
         }
         // correction off, a DX radius, another term count, a wild coefficient or zoom, no NEFInfo at all
         for bad in [
             distortion_block(0, 21.6, 4, WIDE.0, WIDE.1),
+            distortion_block(2, 21.6, 4, WIDE.0, WIDE.1),
+            distortion_block(4, 21.6, 4, WIDE.0, WIDE.1),
+            distortion_block(255, 21.6, 4, WIDE.0, WIDE.1),
             distortion_block(3, 14.2, 4, WIDE.0, WIDE.1),
             distortion_block(3, 21.6, 3, WIDE.0, WIDE.1),
             distortion_block(3, 21.6, 4, [0.0, 0.0, 1.5], 0.0),

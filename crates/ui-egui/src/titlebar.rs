@@ -43,34 +43,19 @@ mod tests {
     const ZOOMED: WindowState = WindowState { maximized: true, fullscreen: false };
     const FULL: WindowState = WindowState { maximized: false, fullscreen: true };
 
-    // Scenario: dragging the title bar moves the window
+    /// Dragging the title bar moves the window, zoomed or not (macOS lets a zoomed one be pulled
+    /// free); a double-click zooms it and another restores it; full screen ignores both.
     #[test]
-    fn given_a_normal_window_when_dragging_then_the_window_follows_the_pointer() {
-        assert_eq!(command_for(Gesture::DragStarted, NORMAL), Some(ViewportCommand::StartDrag));
-    }
-
-    // Scenario: a zoomed window can still be dragged (macOS lets you pull it free)
-    #[test]
-    fn given_a_zoomed_window_when_dragging_then_the_window_follows_the_pointer() {
-        assert_eq!(command_for(Gesture::DragStarted, ZOOMED), Some(ViewportCommand::StartDrag));
-    }
-
-    // Scenario: double-click zooms
-    #[test]
-    fn given_a_normal_window_when_double_clicking_then_it_zooms() {
-        assert_eq!(command_for(Gesture::DoubleClicked, NORMAL), Some(ViewportCommand::Maximized(true)));
-    }
-
-    // Scenario: double-click again restores
-    #[test]
-    fn given_a_zoomed_window_when_double_clicking_then_it_is_restored() {
-        assert_eq!(command_for(Gesture::DoubleClicked, ZOOMED), Some(ViewportCommand::Maximized(false)));
-    }
-
-    // Scenario: full screen ignores both
-    #[test]
-    fn given_a_full_screen_window_then_neither_gesture_does_anything() {
-        assert_eq!(command_for(Gesture::DragStarted, FULL), None);
-        assert_eq!(command_for(Gesture::DoubleClicked, FULL), None);
+    fn gestures_move_zoom_and_restore_the_window_except_in_full_screen() {
+        for (gesture, state, want) in [
+            (Gesture::DragStarted, NORMAL, Some(ViewportCommand::StartDrag)),
+            (Gesture::DragStarted, ZOOMED, Some(ViewportCommand::StartDrag)),
+            (Gesture::DoubleClicked, NORMAL, Some(ViewportCommand::Maximized(true))),
+            (Gesture::DoubleClicked, ZOOMED, Some(ViewportCommand::Maximized(false))),
+            (Gesture::DragStarted, FULL, None),
+            (Gesture::DoubleClicked, FULL, None),
+        ] {
+            assert_eq!(command_for(gesture, state), want, "{gesture:?} on {state:?}");
+        }
     }
 }

@@ -18,7 +18,7 @@ fn has(h: &Headless, id: &str) -> bool {
 
 #[test]
 fn unopenable_library_asks_instead_of_running_a_demo() {
-    let dir = std::env::temp_dir().join(format!("lc-ui-libproblem-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lc-ui-libproblem");
     let _ = std::fs::remove_dir_all(&dir);
     let lib = dir.join("lib");
     std::fs::create_dir_all(&lib).unwrap();
@@ -106,7 +106,7 @@ fn unopenable_library_asks_instead_of_running_a_demo() {
 /// then opened (command-line files imported after).
 #[test]
 fn old_catalog_is_upgraded_with_progress_then_opened() {
-    let dir = std::env::temp_dir().join(format!("lc-ui-libupgrade-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lc-ui-libupgrade");
     let _ = std::fs::remove_dir_all(&dir);
     let lib = dir.join("lib");
     std::fs::create_dir_all(&lib).unwrap();
@@ -150,7 +150,7 @@ fn old_catalog_is_upgraded_with_progress_then_opened() {
 /// ends, instead of being dropped (upstream #3403).
 #[test]
 fn files_waiting_for_a_library_wait_for_a_running_import() {
-    let dir = std::env::temp_dir().join(format!("lc-ui-waiting-import-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lc-ui-waiting-import");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     for i in 0..300u32 {
@@ -158,7 +158,7 @@ fn files_waiting_for_a_library_wait_for_a_running_import() {
         let png = lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&img), &lcc_codecs::EncodeMeta::default()).unwrap();
         std::fs::write(dir.join(format!("{i}.png")), png).unwrap();
     }
-    let late = std::env::temp_dir().join(format!("lc-ui-waiting-late-{}.png", std::process::id()));
+    let late = lcc_testkit::TempFile::new("lc-ui-waiting-late", "late.png");
     let img = lcc_raster::Rgba8 { width: 8, height: 8, data: vec![[1, 2, 3, 255]; 64] };
     std::fs::write(&late, lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&img), &lcc_codecs::EncodeMeta::default()).unwrap()).unwrap();
     let mut h = Headless::new(LccApp::new(lcc_engine::Session::new(), Services { png: None, ..Default::default() }), [1200.0, 900.0], 1.0);
@@ -175,4 +175,127 @@ fn files_waiting_for_a_library_wait_for_a_running_import() {
     assert!(h.app.waiting_import.is_empty() && !crate::import::running(&h.app), "imported after the first import ended");
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_file(&late);
+}
+
+/// The catalog opens on a worker thread once the window is up ([`start_open`]): a small window
+/// says so while it runs (the launch open used to block the window's first frames), and is gone
+/// when the library is there; command-line files are imported into it after, as behind the
+/// upgrade window.
+#[test]
+fn catalog_opens_on_a_worker_with_a_window() {
+    let dir = lcc_testkit::TempDir::new("lc-ui-libopen");
+    let _ = std::fs::remove_dir_all(&dir);
+    let lib = dir.join("lib");
+    // a library in the current format: the open is the plain one the worker hands back
+    let mut made = lcc_engine::Session::new().with_fs();
+    made.open_library(&lib, false).unwrap();
+    drop(made);
+    let img = lcc_raster::Rgba8 { width: 8, height: 8, data: vec![[90, 3, 9, 255]; 64] };
+    let png = lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&img), &lcc_codecs::EncodeMeta::default()).unwrap();
+    let photo = dir.join("a.png");
+    std::fs::write(&photo, png).unwrap();
+
+    // the window while the catalog opens: a bar (sweeping, or an upgrade's phase) and no way out
+    // — it is not a choice. A task of the open's label keeps it up, as the real worker would
+    // (one whose worker stopped becomes the problem window instead)
+    let mut held = LccApp::new(lcc_engine::Session::new().with_fs(), Services::default());
+    held.library_problem = Some(LibraryProblem { opening: true, ..LibraryProblem::new(lib.to_string_lossy(), "") });
+    let release = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let wait = {
+        let release = release.clone();
+        move || {
+            while !release.load(std::sync::atomic::Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    };
+    crate::tasks::spawn(&mut held, "Open catalog", None, wait, |_, _, _| {}).unwrap();
+    let mut h = Headless::new(held, [1300.0, 900.0], 1.0);
+    h.step();
+    h.step();
+    assert!(has(&h, "progress:libraryOpening"), "the opening window shows");
+    let inspect = h.request("ui.inspect", json!({}), T);
+    let p = &inspect["result"]["libraryProblem"];
+    assert_eq!(p["opening"], true, "{p}");
+    assert_eq!(p["upgrading"], false, "{p}");
+    release.store(true, std::sync::atomic::Ordering::Relaxed);
+    drop(h);
+
+    // the open itself: the worker prepares the library (a format upgrade on the way), then it
+    // opens; the window goes away and the waiting file is imported
+    let mut app = LccApp::new(lcc_engine::Session::new().with_fs(), Services::default());
+    crate::panels::library_problem::start_open(&mut app, lib.clone(), vec![photo.to_string_lossy().to_string()], false, false);
+    assert!(app.library_problem.as_ref().is_some_and(|p| p.opening));
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+    let t0 = std::time::Instant::now();
+    while h.app.session.library.is_none() {
+        assert!(t0.elapsed() < T, "the open never finished: {:?}", h.app.library_problem);
+        h.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    h.step();
+    assert!(h.app.library_problem.is_none(), "{:?}", h.app.library_problem);
+    assert!(!has(&h, "progress:libraryOpening"), "the window is gone");
+    // imported on the import worker once the library is open (issue #374)
+    h.step_until(T, |h| h.app.import.is_none() && h.app.session.catalog.len() == 1);
+    assert_eq!(h.app.session.catalog.len(), 1, "the command-line photo is imported into the library");
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A catalog the worker can't open (another program has it) ends as the usual problem window
+/// with the error, never a stuck opening.
+#[test]
+fn an_unopenable_catalog_ends_as_the_problem_window() {
+    let dir = lcc_testkit::TempDir::new("lc-ui-libopen-fail");
+    let _ = std::fs::remove_dir_all(&dir);
+    let lib = dir.join("lib");
+    let mut made = lcc_engine::Session::new().with_fs();
+    made.open_library(&lib, false).unwrap();
+    drop(made);
+    let held = lcc_catalog::LibraryLock::acquire(&lib, "another program").unwrap();
+
+    let mut app = LccApp::new(lcc_engine::Session::new().with_fs(), Services::default());
+    crate::panels::library_problem::start_open(&mut app, lib.clone(), Vec::new(), false, false);
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+    let t0 = std::time::Instant::now();
+    while h.app.library_problem.as_ref().is_none_or(|p| p.opening) {
+        assert!(t0.elapsed() < T, "the open never finished");
+        h.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let p = h.app.library_problem.as_ref().unwrap();
+    assert!(p.error.contains("already open in another program"), "{}", p.error);
+    // (the first frame only readies the fonts; the window is drawn on the next, and its centred
+    // position settles once the wrapped error text has its height)
+    h.settle(Duration::from_secs(5));
+    assert!(has(&h, "button:libraryRetry"), "the usual problem window");
+
+    // the other program quits; Try Again opens it and the problem is over
+    drop(held);
+    assert!(h.click_as_user("button:libraryRetry"), "the Try Again button is on screen");
+    let t0 = std::time::Instant::now();
+    while h.app.library_problem.is_some() || h.app.session.library.is_none() {
+        assert!(t0.elapsed() < T, "the retry never finished: {:?}", h.app.library_problem);
+        h.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An opening whose worker stops without an answer (it panicked) becomes the problem window,
+/// never a window without a way out.
+#[test]
+fn a_stopped_open_ends_as_the_problem_window() {
+    let mut app = LccApp::new(lcc_engine::Session::new(), Services::default());
+    app.library_problem = Some(LibraryProblem { opening: true, ..LibraryProblem::new("/nowhere", "") });
+    let mut h = Headless::new(app, [800.0, 600.0], 1.0);
+    h.step();
+    h.step();
+    let p = h.app.library_problem.as_ref().expect("still a problem");
+    assert!(!p.opening, "no longer an opening");
+    assert!(!p.error.is_empty(), "says what happened: {}", p.error);
+    assert!(has(&h, "button:libraryRetry"), "the usual problem window, with a way out");
+    drop(h);
 }

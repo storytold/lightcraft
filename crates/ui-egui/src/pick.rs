@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn import_photos_waits_for_its_dialog_and_runs_with_the_answer() {
-        let dir = std::env::temp_dir().join(format!("lc-pick-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lc-pick");
         let photo = photo_in(&dir);
         let (mut h, asked) = app_with_picker();
         // the command returns at once: no review of its own yet, the native dialog is up
@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn photos_chosen_before_a_restart_still_open_the_import_review() {
-        let dir = std::env::temp_dir().join(format!("lc-pick-restart-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lc-pick-restart");
         let photo = photo_in(&dir);
         let (mut h, _) = app_with_picker();
         let ctx = h.view.ctx.clone();
@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn a_folder_dialog_fills_in_one_path_and_a_save_dialog_names_the_file() {
-        let dir = std::env::temp_dir().join(format!("lc-pick-folder-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lc-pick-folder");
         let _photo = photo_in(&dir);
         let (mut h, asked) = app_with_picker();
         // a host with only background dialogs (Android has no synchronous folder picker) still
@@ -483,7 +483,7 @@ mod tests {
 
     #[test]
     fn without_a_picker_the_synchronous_dialog_answers_at_once() {
-        let dir = std::env::temp_dir().join(format!("lc-pick-sync-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lc-pick-sync");
         let photo = photo_in(&dir);
         let mut app = LccApp::new(lcc_engine::Session::with_demo(), Default::default());
         let p = photo.clone();

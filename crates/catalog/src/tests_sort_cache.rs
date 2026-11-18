@@ -46,7 +46,8 @@ fn check(c: &Catalog, what: &str) {
 #[test]
 fn kept_orders_match_a_fresh_sort_across_ops() {
     let mut c = Catalog::new();
-    for i in 0..3000 {
+    // (above `CACHE_SORT_FROM`, where orders start being kept)
+    for i in 0..2400 {
         let p = photo(&mut c, i);
         c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }

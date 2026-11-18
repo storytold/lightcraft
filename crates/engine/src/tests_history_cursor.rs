@@ -44,9 +44,15 @@ fn going_back_adds_no_step_and_forward_returns() {
 }
 
 #[test]
-fn a_new_edit_behind_the_end_drops_the_later_steps() {
+fn undo_redo_a_new_edit_and_clearing_keep_the_cursor_with_the_settings() {
     let (mut s, n) = three_edits();
     s.execute("history.restore", &json!({"index": n - 3})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!((exposure(&s), list(&mut s)), (3.0, (n, Some(n - 1))), "undoing a step move");
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!((exposure(&s), list(&mut s)), (1.0, (n, Some(n - 3))));
+
+    // a new edit behind the end drops the later steps
     s.execute("develop.set", &json!({"control": "light.exposure", "value": -1.0})).unwrap();
     assert_eq!(list(&mut s), (n - 1, Some(n - 2)), "steps 2 and 3 dropped, the new one appended");
     assert_eq!(exposure(&s), -1.0);
@@ -55,24 +61,11 @@ fn a_new_edit_behind_the_end_drops_the_later_steps() {
     assert_eq!((exposure(&s), list(&mut s)), (1.0, (n, Some(n - 3))));
     s.execute("edit.redo", &json!({})).unwrap();
     assert_eq!((exposure(&s), list(&mut s)), (-1.0, (n - 1, Some(n - 2))));
-}
 
-#[test]
-fn undo_and_redo_move_the_cursor_with_the_settings() {
-    let (mut s, n) = three_edits();
+    // clearing History behind the end keeps the settings shown and resets the cursor
     s.execute("history.restore", &json!({"index": n - 3})).unwrap();
-    s.execute("edit.undo", &json!({})).unwrap();
-    assert_eq!((exposure(&s), list(&mut s)), (3.0, (n, Some(n - 1))), "undoing a step move");
-    s.execute("edit.redo", &json!({})).unwrap();
-    assert_eq!((exposure(&s), list(&mut s)), (1.0, (n, Some(n - 3))));
-}
-
-#[test]
-fn clearing_history_resets_the_cursor() {
-    let (mut s, n) = three_edits();
-    s.execute("history.restore", &json!({"index": n - 2})).unwrap();
     s.execute("history.clear", &json!({})).unwrap();
-    assert_eq!((exposure(&s), list(&mut s)), (2.0, (1, Some(0))));
+    assert_eq!((exposure(&s), list(&mut s)), (1.0, (1, Some(0))));
     assert_eq!(s.catalog.photo(s.active().unwrap()).unwrap().history_cursor, None);
 }
 
@@ -99,34 +92,9 @@ fn the_cursor_survives_the_op_log_and_old_catalogs_load_at_the_end() {
     assert_eq!((old.history_cursor, old.history_index()), (None, Some(n - 1)));
 }
 
-/// A negative `index` must be an error on every indexed command, not element 0 (`-1.0 as usize`
-/// saturates to 0): `history.restore` guards it, `version.*` (and the other `index` commands)
-/// must too. A caller sending `index: -1` used to delete or restore version 0 silently.
-#[test]
-fn negative_indices_are_refused() {
-    let mut s = Session::with_demo();
-    let id = s.active().unwrap();
-    let versions = |s: &Session| s.catalog.photo(id).unwrap().versions.len();
-    s.execute("version.create", &json!({"name": "A"})).unwrap();
-    assert_eq!(versions(&s), 1);
-    assert!(s.execute("version.delete", &json!({"index": -1})).is_err(), "must not delete version 0");
-    assert_eq!(versions(&s), 1, "nothing was deleted");
-    assert!(s.execute("version.restore", &json!({"index": -1})).is_err());
-    assert!(s.execute("version.rename", &json!({"index": -1, "name": "B"})).is_err());
-    assert_eq!(s.catalog.photo(id).unwrap().versions[0].name, "A", "version 0 was not renamed");
-}
-
-#[test]
-fn fractional_version_delete_preserves_the_version() {
-    let mut s = Session::with_demo();
-    s.execute("version.create", &json!({"name": "A"})).unwrap();
-    let before = s.catalog.to_snapshot();
-    let result = s.execute("version.delete", &json!({"index": 0.9}));
-    assert!(result.is_err(), "index 0.9 must be refused; got {result:?}; catalog unchanged: {}", s.catalog.to_snapshot() == before);
-    assert_eq!(s.catalog.to_snapshot(), before, "the version must remain unchanged");
-}
-
-/// Invalid command indices must leave objects, settings, History and undo unchanged.
+/// Invalid command indices must leave objects, settings, History and undo unchanged. A negative `index` must be an
+/// error on every indexed command, not element 0 (`-1.0 as usize` saturates to 0): a caller sending `index: -1` used to
+/// delete or restore version 0 silently; a fractional one (0.9, 1.9) used to be truncated.
 #[test]
 fn invalid_command_indices_leave_the_catalog_and_history_unchanged() {
     let (mut s, _) = three_edits();
@@ -195,15 +163,4 @@ fn whole_command_indices_accept_integer_and_float_numbers() {
     assert!(s.develop_of(id).unwrap().red_eye[0].catchlight.is_some());
     s.execute("redeye.delete", &json!({"index": 0.0})).unwrap();
     assert!(s.develop_of(id).unwrap().red_eye.is_empty());
-}
-
-#[test]
-fn fractional_history_restore_preserves_the_cursor() {
-    let (mut s, _) = three_edits();
-    let before = s.execute("history.list", &json!({})).unwrap();
-    let result = s.execute("history.restore", &json!({"index": 1.9}));
-    let after = s.execute("history.list", &json!({})).unwrap();
-    assert!(result.is_err(), "index 1.9 must be refused; got {result:?}; History unchanged: {}", before == after);
-    assert_eq!(after, before);
-    assert_eq!(exposure(&s), 3.0);
 }

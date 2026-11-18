@@ -286,17 +286,17 @@ fn panoramas_keep_the_photos_resolution_unless_asked() {
 #[test]
 fn the_lens_focal_length_sets_the_native_scale() {
     let e = env();
-    let f = 2000.0; // what the frames were shot with: the fit settles near it
-    let lens = 2400.0; // what EXIF says, on a 4000-pixel long edge
+    let f = 800.0; // what the frames were shot with: the fit settles near it
+    let lens = 960.0; // what EXIF says, on a 1600-pixel long edge
     let shots = [
         Shot { yaw: -20.0, pitch: 0.0, roll: 0.0, gain: 1.0 },
         Shot { yaw: 0.0, pitch: 0.0, roll: 0.0, gain: 1.0 },
         Shot { yaw: 20.0, pitch: 0.0, roll: 0.0, gain: 1.0 },
     ];
     let rs: Vec<M3> = shots.iter().map(|s| rot(s.yaw, s.pitch, s.roll)).collect();
-    let mut frames: Vec<Frame> = shots.iter().zip(&rs).map(|(s, r)| shoot(&e, r, f, 4000, 3000, s.gain)).collect();
+    let mut frames: Vec<Frame> = shots.iter().zip(&rs).map(|(s, r)| shoot(&e, r, f, 1600, 1200, s.gain)).collect();
     for frame in &mut frames {
-        frame.metadata.focal_length_35mm = Some(lens / 4000.0 * 36.0);
+        frame.metadata.focal_length_35mm = Some(lens / 1600.0 * 36.0);
     }
     let res = stitch(frames, &PanoOptions { projection: Projection::Spherical, ..Default::default() }, &no_progress).unwrap();
     assert_eq!(res.used.len(), 3, "all three frames must connect: {:?}", res.used);

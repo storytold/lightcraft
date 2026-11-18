@@ -1419,6 +1419,7 @@ mod tests {
 
     #[test]
     fn the_module_previews_plays_and_saves() {
+        let dir = lcc_testkit::TempDir::new("lcc-slideshow-ui");
         let mut h = demo();
         ok(&mut h, "module.slideshow", json!({}));
         // (wait for what is checked, not a fixed settle: a loaded machine renders slowly)
@@ -1475,7 +1476,6 @@ mod tests {
         assert_eq!(exec(&mut h, "slideshow.addMusic", json!({"path": "/no/such/song.mp3"}))["ok"], false);
         assert!(h.app.ui.slides.settings.music.tracks.is_empty());
         // JPEG sequence
-        let dir = std::env::temp_dir().join(format!("lcc-slideshow-ui-{}", std::process::id()));
         ok(&mut h, "slideshow.closeSaved", json!({}));
         ok(&mut h, "slideshow.set", json!({"usePhotos": "selected"}));
         let first = h.app.session.visible_cloned()[0].0;

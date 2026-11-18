@@ -61,96 +61,72 @@ fn ids(v: &Value, key: &str) -> usize {
     v[key].as_array().map(Vec::len).unwrap_or(0)
 }
 
+/// `expand_report_subfolders`: nested folders are walked only when asked, and the skipped (library) folder is
+/// left out with or without them.
 #[test]
-fn recursive_discovery_includes_sony_sr2_and_srf_case_insensitively() {
-    let src = temp_dir("sony-discovery");
-    std::fs::create_dir_all(src.join("trip/day2")).unwrap();
-    let names = ["r1.SR2", "f828.srf", "trip/r1.sr2", "trip/f828.SRF", "trip/day2/r1.Sr2", "trip/day2/f828.SrF", "control.JPG"];
-    // one component at a time, so the paths have the separators the folder walk gives on every platform
-    let at = |name: &str| name.split('/').fold(src.clone(), |p, c| p.join(c));
-    let mut expected: Vec<String> = names.iter().map(|name| at(name).to_string_lossy().into_owned()).collect();
-    for path in &expected {
-        std::fs::write(path, b"discovery only, not a decoded photo").unwrap();
+fn expand_report_subfolders_respects_the_inclusion_flag_and_the_skipped_folder() {
+    {
+        let src = temp_dir("subfolder-discovery");
+        let nested = src.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let root_file = src.join("root.jpg");
+        let nested_file = nested.join("nested.jpg");
+        let unsupported_file = src.join("notes.txt");
+        let sidecar_file = src.join("root.xmp");
+
+        std::fs::write(&root_file, b"test-root-content").unwrap();
+        std::fs::write(&nested_file, b"test-nested-content").unwrap();
+        std::fs::write(&unsupported_file, b"not an image").unwrap();
+        std::fs::write(&sidecar_file, b"<xmp></xmp>").unwrap();
+
+        let src_str = src.to_string_lossy().to_string();
+
+        let slashes = |v: Vec<String>| {
+            let mut v: Vec<String> = v.into_iter().map(|p| p.replace('\\', "/")).collect();
+            v.sort();
+            v
+        };
+        let root_norm = root_file.to_string_lossy().replace('\\', "/");
+        let nested_norm = nested_file.to_string_lossy().replace('\\', "/");
+
+        // With subfolders: true -> both root and nested photos are discovered
+        let with_sub = crate::import::expand_report_subfolders(std::slice::from_ref(&src_str), None, crate::walk::Limits::default(), true);
+        let files_with_sub = slashes(with_sub.files);
+        assert!(files_with_sub.contains(&root_norm));
+        assert!(files_with_sub.contains(&nested_norm));
+        assert_eq!(files_with_sub.len(), 2);
+
+        // With subfolders: false -> only root photo is discovered; nested directory is excluded
+        let without_sub = crate::import::expand_report_subfolders(std::slice::from_ref(&src_str), None, crate::walk::Limits::default(), false);
+        let files_without_sub = slashes(without_sub.files);
+        assert_eq!(files_without_sub, vec![root_norm]);
+        assert_eq!(without_sub.unsupported, 1, "notes.txt counted as unsupported, sidecar is ignored");
+
+        let _ = std::fs::remove_dir_all(src);
     }
-    std::fs::write(src.join("trip/notes.txt"), b"not a photo").unwrap();
+    {
+        let src = temp_dir("subfolder-skip");
+        let lib = src.join("Library");
+        std::fs::create_dir_all(&lib).unwrap();
+        let img_root = src.join("root.jpg");
+        let img_lib = lib.join("ignored.jpg");
+        std::fs::write(&img_root, b"root").unwrap();
+        std::fs::write(&img_lib, b"lib").unwrap();
 
-    // (compared with `/` separators: on Windows the names above join with `/`, the folder walk with `\`)
-    let slashes = |v: Vec<String>| {
-        let mut v: Vec<String> = v.into_iter().map(|p| p.replace('\\', "/")).collect();
-        v.sort();
-        v
-    };
-    let found = slashes(crate::import::expand(&[src.to_string_lossy().into_owned()], None));
-    expected.sort();
-    assert_eq!(found, slashes(expected.clone()));
-    assert_eq!(slashes(crate::import::expand(&expected, None)), slashes(expected.clone()), "folder and direct discovery agree");
-    std::fs::remove_dir_all(src).unwrap();
-}
+        let src_str = src.to_string_lossy().to_string();
 
-#[test]
-fn expand_report_subfolders_respects_inclusion_flag() {
-    let src = temp_dir("subfolder-discovery");
-    let nested = src.join("nested");
-    std::fs::create_dir_all(&nested).unwrap();
+        // With subfolders: false and skip: Some(&lib), files in lib are skipped
+        let e = crate::import::expand_report_subfolders(std::slice::from_ref(&src_str), Some(&lib), crate::walk::Limits::default(), false);
+        assert_eq!(e.files.len(), 1);
+        assert!(e.files[0].replace('\\', "/").ends_with("root.jpg"));
 
-    let root_file = src.join("root.jpg");
-    let nested_file = nested.join("nested.jpg");
-    let unsupported_file = src.join("notes.txt");
-    let sidecar_file = src.join("root.xmp");
+        // If skip matches the scanned directory itself, nothing is expanded
+        let e_skip_self = crate::import::expand_report_subfolders(std::slice::from_ref(&src_str), Some(&src), crate::walk::Limits::default(), false);
+        assert_eq!(e_skip_self.files.len(), 0);
 
-    std::fs::write(&root_file, b"test-root-content").unwrap();
-    std::fs::write(&nested_file, b"test-nested-content").unwrap();
-    std::fs::write(&unsupported_file, b"not an image").unwrap();
-    std::fs::write(&sidecar_file, b"<xmp></xmp>").unwrap();
-
-    let src_str = src.to_string_lossy().to_string();
-
-    let slashes = |v: Vec<String>| {
-        let mut v: Vec<String> = v.into_iter().map(|p| p.replace('\\', "/")).collect();
-        v.sort();
-        v
-    };
-    let root_norm = root_file.to_string_lossy().replace('\\', "/");
-    let nested_norm = nested_file.to_string_lossy().replace('\\', "/");
-
-    // With subfolders: true -> both root and nested photos are discovered
-    let with_sub = crate::import::expand_report_subfolders(std::slice::from_ref(&src_str), None, crate::walk::Limits::default(), true);
-    let files_with_sub = slashes(with_sub.files);
-    assert!(files_with_sub.contains(&root_norm));
-    assert!(files_with_sub.contains(&nested_norm));
-    assert_eq!(files_with_sub.len(), 2);
-
-    // With subfolders: false -> only root photo is discovered; nested directory is excluded
-    let without_sub = crate::import::expand_report_subfolders(std::slice::from_ref(&src_str), None, crate::walk::Limits::default(), false);
-    let files_without_sub = slashes(without_sub.files);
-    assert_eq!(files_without_sub, vec![root_norm]);
-    assert_eq!(without_sub.unsupported, 1, "notes.txt counted as unsupported, sidecar is ignored");
-
-    let _ = std::fs::remove_dir_all(src);
-}
-
-#[test]
-fn expand_report_subfolders_honours_skip_in_non_recursive_mode() {
-    let src = temp_dir("subfolder-skip");
-    let lib = src.join("Library");
-    std::fs::create_dir_all(&lib).unwrap();
-    let img_root = src.join("root.jpg");
-    let img_lib = lib.join("ignored.jpg");
-    std::fs::write(&img_root, b"root").unwrap();
-    std::fs::write(&img_lib, b"lib").unwrap();
-
-    let src_str = src.to_string_lossy().to_string();
-
-    // With subfolders: false and skip: Some(&lib), files in lib are skipped
-    let e = crate::import::expand_report_subfolders(std::slice::from_ref(&src_str), Some(&lib), crate::walk::Limits::default(), false);
-    assert_eq!(e.files.len(), 1);
-    assert!(e.files[0].replace('\\', "/").ends_with("root.jpg"));
-
-    // If skip matches the scanned directory itself, nothing is expanded
-    let e_skip_self = crate::import::expand_report_subfolders(std::slice::from_ref(&src_str), Some(&src), crate::walk::Limits::default(), false);
-    assert_eq!(e_skip_self.files.len(), 0);
-
-    let _ = std::fs::remove_dir_all(src);
+        let _ = std::fs::remove_dir_all(src);
+    }
 }
 
 /// A file that was only browsed (Local) is not "already in the library": the scan offers it, and
@@ -430,6 +406,16 @@ fn files_imported_although_a_photo_has_their_content_get_keys_of_their_own() {
     keys.dedup();
     assert_eq!(keys.len(), 4, "four photos, four content keys: {keys:?}");
     assert!(!s.import_defaults.import_duplicates, "one import's choice is not remembered by itself");
+    // each has its own content key, so caches keyed by content never mix the photos
+    let cache_keys: std::collections::HashSet<String> = s.catalog.photos().map(|p| crate::media::content_key(p)).collect();
+    assert_eq!(cache_keys.len(), 4, "{cache_keys:?}");
+    let _ = std::fs::remove_dir_all(&src);
+
+    // a photo in Recently Deleted is still restored, not copied
+    let (mut s, src, id) = trashed_photo("dup-copies-trash");
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()], "importDuplicates": true})).unwrap();
+    assert_eq!(r["restored"], json!([id]), "{r}");
+    assert_eq!(s.catalog.len(), 1, "restored, not copied");
     let _ = std::fs::remove_dir_all(&src);
 }
 
@@ -455,41 +441,41 @@ fn only_a_duplicate_keyed_photo_remains(tag: &str) -> (Session, std::path::PathB
     (s, src, twin)
 }
 
-/// The Duplicate left alone still has the content: importing another copy without
-/// `importDuplicates` finds it and leaves the file out, as it did while the original was there.
+/// A Duplicate left as the only photo of its content (key `<hash>:dup<id>`) still stands for that content: in an
+/// import, in a Synchronize Folder scan, and when a Fresh import replaces it from the trash.
 #[test]
-fn a_duplicate_keyed_photo_still_stands_for_its_content_in_an_import() {
-    let (mut s, src, twin) = only_a_duplicate_keyed_photo_remains("dupkey-import");
-    write_png(&src.join("c.png"), 1);
-    let r = s.execute("library.import", &json!({"paths": [src.join("c.png").to_string_lossy()]})).unwrap();
-    assert_eq!((ids(&r, "imported"), ids(&r, "duplicates")), (0, 1), "{r}");
-    assert_eq!(r["duplicates"][0]["existing"].as_u64(), Some(twin), "{r}");
-    let _ = std::fs::remove_dir_all(&src);
-}
-
-/// The same for a Synchronize Folder scan: the copy is a duplicate, not new.
-#[test]
-fn a_duplicate_keyed_photo_still_stands_for_its_content_in_a_scan() {
-    let (mut s, src, twin) = only_a_duplicate_keyed_photo_remains("dupkey-scan");
-    std::fs::copy(src.join("a.png"), src.join("topic/c.png")).unwrap();
-    let r = s.execute("folder.scanChanges", &json!({"path": src.join("topic").to_string_lossy()})).unwrap();
-    assert_eq!((ids(&r, "new"), ids(&r, "duplicates")), (0, 1), "{r}");
-    assert_eq!(r["duplicates"][0]["existing"].as_u64(), Some(twin), "{r}");
-    let _ = std::fs::remove_dir_all(&src);
-}
-
-/// A trashed Duplicate (key `<hash>:dup<id>`) is replaced by a Fresh import of a file with its
-/// content, like any trashed photo.
-#[test]
-fn a_fresh_import_replaces_a_trashed_duplicate_keyed_photo() {
-    let (mut s, src, twin) = only_a_duplicate_keyed_photo_remains("dupkey-fresh");
-    s.execute("photo.delete", &json!({"ids": [twin]})).unwrap();
-    write_png(&src.join("c.png"), 1);
-    let r = s.execute("library.import", &json!({"paths": [src.join("c.png").to_string_lossy()], "onDeleted": "fresh"})).unwrap();
-    assert_eq!(ids(&r, "imported"), 1, "{r}");
-    assert!(s.catalog.photo(lcc_catalog::PhotoId(twin)).is_none(), "the trashed record is replaced");
-    assert_eq!(s.catalog.len(), 1);
-    let _ = std::fs::remove_dir_all(&src);
+fn a_duplicate_keyed_photo_still_stands_for_its_content() {
+    // The Duplicate left alone still has the content: importing another copy without
+    // `importDuplicates` finds it and leaves the file out, as it did while the original was there.
+    {
+        let (mut s, src, twin) = only_a_duplicate_keyed_photo_remains("dupkey-import");
+        write_png(&src.join("c.png"), 1);
+        let r = s.execute("library.import", &json!({"paths": [src.join("c.png").to_string_lossy()]})).unwrap();
+        assert_eq!((ids(&r, "imported"), ids(&r, "duplicates")), (0, 1), "{r}");
+        assert_eq!(r["duplicates"][0]["existing"].as_u64(), Some(twin), "{r}");
+        let _ = std::fs::remove_dir_all(&src);
+    }
+    // The same for a Synchronize Folder scan: the copy is a duplicate, not new.
+    {
+        let (mut s, src, twin) = only_a_duplicate_keyed_photo_remains("dupkey-scan");
+        std::fs::copy(src.join("a.png"), src.join("topic/c.png")).unwrap();
+        let r = s.execute("folder.scanChanges", &json!({"path": src.join("topic").to_string_lossy()})).unwrap();
+        assert_eq!((ids(&r, "new"), ids(&r, "duplicates")), (0, 1), "{r}");
+        assert_eq!(r["duplicates"][0]["existing"].as_u64(), Some(twin), "{r}");
+        let _ = std::fs::remove_dir_all(&src);
+    }
+    // A trashed Duplicate (key `<hash>:dup<id>`) is replaced by a Fresh import of a file with its
+    // content, like any trashed photo.
+    {
+        let (mut s, src, twin) = only_a_duplicate_keyed_photo_remains("dupkey-fresh");
+        s.execute("photo.delete", &json!({"ids": [twin]})).unwrap();
+        write_png(&src.join("c.png"), 1);
+        let r = s.execute("library.import", &json!({"paths": [src.join("c.png").to_string_lossy()], "onDeleted": "fresh"})).unwrap();
+        assert_eq!(ids(&r, "imported"), 1, "{r}");
+        assert!(s.catalog.photo(lcc_catalog::PhotoId(twin)).is_none(), "the trashed record is replaced");
+        assert_eq!(s.catalog.len(), 1);
+        let _ = std::fs::remove_dir_all(&src);
+    }
 }
 
 #[test]
@@ -663,7 +649,8 @@ fn browsing_a_folder_lists_its_photos_without_adding_them() {
     png(&dir.join("sub/c.png"), 3);
     std::fs::write(dir.join("notes.txt"), "x").unwrap();
     let mut s = Session::new().with_fs();
-    let r = s.execute("library.browse", &serde_json::json!({"path": dir.to_string_lossy()})).unwrap();
+    // flat, given: a first browse takes subfolders by default (tests_import_local covers that)
+    let r = s.execute("library.browse", &serde_json::json!({"path": dir.to_string_lossy(), "subfolders": false})).unwrap();
     assert_eq!(r["photos"], 2, "{r}");
     assert_eq!(s.source, LibrarySource::Folder);
     assert_eq!(s.visible_cloned().len(), 2);
@@ -749,28 +736,6 @@ fn renamed_and_ambiguous_scene(tag: &str) -> (std::path::PathBuf, Session) {
     (dir, s)
 }
 
-/// Issue #105: Find Missing finds renamed files by content, prefers the content match over a
-/// same-name same-size impostor, and skips (reports) photos it can't tell apart.
-#[test]
-fn find_missing_matches_renamed_files_by_content() {
-    let (dir, mut s) = renamed_and_ambiguous_scene("missing-content");
-    let r = s.execute("library.findMissing", &json!({"folder": dir.join("moved").to_string_lossy()})).unwrap();
-    let found = r["found"].as_array().unwrap();
-    assert_eq!(found.len(), 2, "{r}");
-    let to = |name: &str| {
-        found.iter().find(|f| f["from"].as_str().unwrap().ends_with(name)).map(|f| (f["to"].as_str().unwrap().to_string(), f["by"].clone()))
-    };
-    assert_eq!(to("a.png"), Some((dir.join("moved").join("Trip-001.png").to_string_lossy().to_string(), json!("content"))));
-    assert_eq!(
-        to("b.png"),
-        Some((dir.join("moved").join("real").join("Trip-002.png").to_string_lossy().to_string(), json!("content"))),
-        "not the impostor"
-    );
-    assert_eq!(r["missing"], 1);
-    assert_eq!(r["ambiguous"][0]["candidates"].as_array().map(Vec::len), Some(2), "{r}");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 /// A renamed file whose size is unknown (0) but whose content hash is known is still found by
 /// content: the hash alone is enough to confirm it is the same photo.
 #[test]
@@ -805,7 +770,7 @@ fn find_missing_matches_renamed_file_by_content_without_size() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Issue #104: the app plans Find Missing on a worker thread (no session) and relinks the plan
+/// Issues #105, #104: the app plans Find Missing on a worker thread (no session) and relinks the plan
 /// afterwards; that gives exactly what the synchronous command gives — renamed files by content,
 /// impostors and look-alikes skipped (`ambiguous`).
 #[test]
@@ -824,6 +789,20 @@ fn find_missing_planned_on_a_worker_matches_the_command() {
     assert_eq!(applied, direct);
     assert_eq!(direct["found"].as_array().map(Vec::len), Some(2), "{direct}");
     assert_eq!(direct["ambiguous"].as_array().map(Vec::len), Some(1), "{direct}");
+    // Issue #105: renamed files are found by content, the content match wins over a same-name same-size impostor,
+    // and photos it can't tell apart are skipped and reported
+    let found = direct["found"].as_array().unwrap();
+    let to = |name: &str| {
+        found.iter().find(|f| f["from"].as_str().unwrap().ends_with(name)).map(|f| (f["to"].as_str().unwrap().to_string(), f["by"].clone()))
+    };
+    assert_eq!(to("a.png"), Some((dir.join("moved").join("Trip-001.png").to_string_lossy().to_string(), json!("content"))));
+    assert_eq!(
+        to("b.png"),
+        Some((dir.join("moved").join("real").join("Trip-002.png").to_string_lossy().to_string(), json!("content"))),
+        "not the impostor"
+    );
+    assert_eq!(direct["missing"], 1);
+    assert_eq!(direct["ambiguous"][0]["candidates"].as_array().map(Vec::len), Some(2), "{direct}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1149,72 +1128,74 @@ fn copy_with_destination_organize_rename_and_metadata_preset() {
     }
 }
 
+/// The rename counter at the end of `usize`: the last value is used once (one undo step, the copy stays on
+/// disk); the file after it fails with an actionable message and the earlier successes are kept.
 #[test]
-fn import_rename_sequence_uses_the_last_value_once() {
-    let base = temp_dir("rename-sequence-last");
-    let (src, dest, lib) = (base.join("source"), base.join("destination"), base.join("library"));
-    write_png(&src.join("one.png"), 1);
-    let mut s = Session::new().with_fs();
-    s.open_library(&lib, false).unwrap();
+fn import_rename_sequence_uses_the_last_value_once_then_reports_exhaustion() {
+    {
+        let base = temp_dir("rename-sequence-last");
+        let (src, dest, lib) = (base.join("source"), base.join("destination"), base.join("library"));
+        write_png(&src.join("one.png"), 1);
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
 
-    let last = usize::MAX;
-    let r = s
-        .execute(
-            "library.import",
-            &json!({
-                "paths": [src.join("one.png").to_string_lossy()],
-                "mode": "copy", "destination": dest.to_string_lossy(), "organize": "flat",
-                "rename": "Shot-{seq}", "renameStart": last as u64
-            }),
-        )
-        .unwrap();
+        let last = usize::MAX;
+        let r = s
+            .execute(
+                "library.import",
+                &json!({
+                    "paths": [src.join("one.png").to_string_lossy()],
+                    "mode": "copy", "destination": dest.to_string_lossy(), "organize": "flat",
+                    "rename": "Shot-{seq}", "renameStart": last as u64
+                }),
+            )
+            .unwrap();
 
-    assert_eq!(ids(&r, "imported"), 1, "{r}");
-    assert_eq!(r["failed"].as_array().map(Vec::len), Some(0), "{r}");
-    assert!(dest.join(format!("Shot-{last}.png")).is_file());
-    assert_eq!(s.catalog.len(), 1);
-    s.execute("edit.undo", &json!({})).unwrap();
-    assert_eq!(s.catalog.len(), 0, "the import remains one undo step");
-    assert!(dest.join(format!("Shot-{last}.png")).is_file(), "undo leaves a successful copy on disk");
-    let _ = std::fs::remove_dir_all(base);
-}
+        assert_eq!(ids(&r, "imported"), 1, "{r}");
+        assert_eq!(r["failed"].as_array().map(Vec::len), Some(0), "{r}");
+        assert!(dest.join(format!("Shot-{last}.png")).is_file());
+        assert_eq!(s.catalog.len(), 1);
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.catalog.len(), 0, "the import remains one undo step");
+        assert!(dest.join(format!("Shot-{last}.png")).is_file(), "undo leaves a successful copy on disk");
+        let _ = std::fs::remove_dir_all(base);
+    }
+    {
+        let base = temp_dir("rename-sequence-exhausted");
+        let (src, dest, lib) = (base.join("source"), base.join("destination"), base.join("library"));
+        let paths: Vec<_> = (1..=3)
+            .map(|i| {
+                let path = src.join(format!("{i:02}.png"));
+                write_png(&path, i as u8);
+                path
+            })
+            .collect();
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
 
-#[test]
-fn import_rename_sequence_reports_exhaustion_and_keeps_prior_successes() {
-    let base = temp_dir("rename-sequence-exhausted");
-    let (src, dest, lib) = (base.join("source"), base.join("destination"), base.join("library"));
-    let paths: Vec<_> = (1..=3)
-        .map(|i| {
-            let path = src.join(format!("{i:02}.png"));
-            write_png(&path, i as u8);
-            path
-        })
-        .collect();
-    let mut s = Session::new().with_fs();
-    s.open_library(&lib, false).unwrap();
+        let start = usize::MAX - 1;
+        let r = s
+            .execute(
+                "library.import",
+                &json!({
+                    "paths": paths.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>(),
+                    "mode": "copy", "destination": dest.to_string_lossy(), "organize": "flat",
+                    "rename": "Shot-{seq}", "renameStart": start as u64
+                }),
+            )
+            .unwrap();
 
-    let start = usize::MAX - 1;
-    let r = s
-        .execute(
-            "library.import",
-            &json!({
-                "paths": paths.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>(),
-                "mode": "copy", "destination": dest.to_string_lossy(), "organize": "flat",
-                "rename": "Shot-{seq}", "renameStart": start as u64
-            }),
-        )
-        .unwrap();
-
-    assert_eq!(ids(&r, "imported"), 2, "the final two representable values are used: {r}");
-    assert_eq!(r["failed"].as_array().map(Vec::len), Some(1), "{r}");
-    let failure = r["failed"][0][1].as_str().unwrap_or_default();
-    assert!(failure.contains("sequence") && failure.contains("renameStart"), "actionable failure: {failure}");
-    assert_eq!(s.catalog.len(), 2);
-    assert!(dest.join(format!("Shot-{start}.png")).is_file());
-    assert!(dest.join(format!("Shot-{}.png", usize::MAX)).is_file());
-    assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 2, "the exhausted file gets no destination entry");
-    assert!(!paths[2].file_name().is_some_and(|name| dest.join(name).exists()), "the exhausted source gets no copy");
-    let _ = std::fs::remove_dir_all(base);
+        assert_eq!(ids(&r, "imported"), 2, "the final two representable values are used: {r}");
+        assert_eq!(r["failed"].as_array().map(Vec::len), Some(1), "{r}");
+        let failure = r["failed"][0][1].as_str().unwrap_or_default();
+        assert!(failure.contains("sequence") && failure.contains("renameStart"), "actionable failure: {failure}");
+        assert_eq!(s.catalog.len(), 2);
+        assert!(dest.join(format!("Shot-{start}.png")).is_file());
+        assert!(dest.join(format!("Shot-{}.png", usize::MAX)).is_file());
+        assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 2, "the exhausted file gets no destination entry");
+        assert!(!paths[2].file_name().is_some_and(|name| dest.join(name).exists()), "the exhausted source gets no copy");
+        let _ = std::fs::remove_dir_all(base);
+    }
 }
 
 #[test]
@@ -1748,7 +1729,7 @@ fn smart_previews_keep_the_decoder_facts_offline_edits_need() {
             gamma: 1.0,
             gains: vec![1.0, 4.0],
         },
-        placement: lcc_raw::gaintable::SourcePlacement { rect: [0.0, 0.0, 1.0, 1.0], orientation: lcc_geom::Orientation::Normal },
+        placement: lcc_raw::gaintable::SourcePlacement::new([0.0, 0.0, 1.0, 1.0], lcc_geom::Orientation::Normal),
     };
     // the facts differ per case; the rest is the raw source's usual shape
     let info = |camera_color: Option<lcc_pipeline::CameraColor>, local_tone: Option<lcc_pipeline::local_tone::LocalTone>, mattes: Option<Mattes>| {
@@ -2050,39 +2031,8 @@ fn lut_profile_paths_in_prefs_stay_inside_profiles() {
     }
 }
 
-/// Folder rename / move on disk: files and sidecars go along, the photos are relinked and
-/// still render; clashes and moving into itself are refused.
-#[test]
-fn folders_rename_and_move_with_their_photos() {
-    let root = temp_dir("folders");
-    let a = root.join("Trip");
-    write_png(&a.join("one.png"), 3);
-    std::fs::write(a.join("one.xmp"), "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>").unwrap();
-    std::fs::create_dir_all(root.join("Taken")).unwrap();
-    let mut s = Session::new().with_fs();
-    s.execute("library.import", &json!({"paths": [a.to_string_lossy()]})).unwrap();
-    let id = s.active().unwrap();
-    assert!(s.execute("folder.rename", &json!({"path": a.to_string_lossy(), "name": "Taken"})).is_err(), "name taken");
-    assert!(s.execute("folder.rename", &json!({"path": a.to_string_lossy(), "name": "a/b"})).is_err());
-    let r = s.execute("folder.rename", &json!({"path": a.to_string_lossy(), "name": "Italy 2026"})).unwrap();
-    assert_eq!(r["relinked"], 1);
-    let b = root.join("Italy 2026");
-    assert!(b.join("one.png").exists() && b.join("one.xmp").exists() && !a.exists());
-    let path = |s: &Session| match &s.catalog.photo(id).unwrap().source {
-        lcc_catalog::Source::File { path } => path.clone(),
-        _ => panic!(),
-    };
-    assert_eq!(path(&s), b.join("one.png").to_string_lossy());
-    s.media.forget(id);
-    assert!(s.render_now(id, 16, 16).is_ok());
-    assert!(s.execute("folder.move", &json!({"path": b.to_string_lossy(), "into": b.join("deeper").to_string_lossy()})).is_err(), "not into itself");
-    let r = s.execute("folder.move", &json!({"path": b.to_string_lossy(), "into": root.join("Archive").to_string_lossy()})).unwrap();
-    assert_eq!(r["relinked"], 1);
-    assert_eq!(path(&s), root.join("Archive").join("Italy 2026").join("one.png").to_string_lossy());
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-/// Rename / Move Folder are undo steps (issue #97): undo renames the folder back on disk (files and
+/// Folder rename / move on disk: files and sidecars go along, the photos are relinked and still render; clashes
+/// and moving into itself are refused. Rename / Move Folder are undo steps (issue #97): undo renames the folder back on disk (files and
 /// sidecars along) and restores the photos' paths, redo repeats it; a destination taken in the
 /// meantime is never overwritten — the step is refused, reported and stays on the stack.
 #[test]
@@ -2098,9 +2048,14 @@ fn folder_rename_and_move_undo_and_redo_on_disk() {
         lcc_catalog::Source::File { path } => path.clone(),
         _ => panic!(),
     };
+    // clashes and names that are paths are refused
+    std::fs::create_dir_all(root.join("Taken")).unwrap();
+    assert!(s.execute("folder.rename", &json!({"path": a.to_string_lossy(), "name": "Taken"})).is_err(), "name taken");
+    assert!(s.execute("folder.rename", &json!({"path": a.to_string_lossy(), "name": "a/b"})).is_err());
     let undo0 = s.undo.len();
     let b = root.join("Italy");
-    s.execute("folder.rename", &json!({"path": a.to_string_lossy(), "name": "Italy"})).unwrap();
+    let r = s.execute("folder.rename", &json!({"path": a.to_string_lossy(), "name": "Italy"})).unwrap();
+    assert_eq!(r["relinked"], 1, "{r}");
     assert_eq!(s.undo.len(), undo0 + 1, "one undo step");
     assert!(s.undo.last().unwrap().label.contains("Rename Folder"));
     assert!(b.join("one.png").exists() && !a.exists());
@@ -2128,8 +2083,10 @@ fn folder_rename_and_move_undo_and_redo_on_disk() {
     std::fs::remove_dir_all(&a).unwrap();
 
     // move into another folder, undo, redo
+    assert!(s.execute("folder.move", &json!({"path": b.to_string_lossy(), "into": b.join("deeper").to_string_lossy()})).is_err(), "not into itself");
     let into = root.join("Archive");
-    s.execute("folder.move", &json!({"path": b.to_string_lossy(), "into": into.to_string_lossy()})).unwrap();
+    let r = s.execute("folder.move", &json!({"path": b.to_string_lossy(), "into": into.to_string_lossy()})).unwrap();
+    assert_eq!(r["relinked"], 1, "{r}");
     let moved = into.join("Italy");
     assert_eq!(path(&s), moved.join("one.png").to_string_lossy());
     s.execute("edit.undo", &json!({})).unwrap();
@@ -2219,29 +2176,21 @@ fn assisted_culling_groups_bursts_and_scores_focus() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Assisted culling: a photo listed twice is analysed once and is not a burst with itself.
+/// Classical aesthetic and cullScore persist without optional models; eyes-open is skipped when
+/// no detector and no face regions (not stored as 0). A photo listed twice is analysed once.
 #[test]
-fn assisted_culling_ignores_repeated_ids() {
+fn assisted_culling_scores_a_photo_once_and_persists_aesthetic_and_cull_score() {
     let mut s = Session::with_demo();
     let id = s.visible_cloned()[0];
+    // a photo listed twice is analysed once and is not a burst with itself
     let r = s.execute("photo.analyze", &json!({"ids": [id.0, id.0]})).unwrap();
     assert_eq!(r["groups"], 0, "a photo listed twice is not a burst of two: {r}");
     assert_eq!(r["photos"].as_array().map(Vec::len), Some(1), "{r}");
-    let an = s.catalog.photo(id).unwrap().analysis.unwrap();
-    assert!(an.group.is_none() && !an.best, "{an:?}");
-}
-
-/// Classical aesthetic and cullScore persist without optional models; eyes-open is skipped when
-/// no detector and no face regions (not stored as 0).
-#[test]
-fn assisted_culling_persists_aesthetic_and_cull_score() {
-    let mut s = Session::with_demo();
-    let id = s.visible_cloned()[0];
-    let r = s.execute("photo.analyze", &json!({"ids": [id.0]})).unwrap();
     let row = &r["photos"][0];
     assert!(row["aesthetic"].as_f64().is_some(), "{r}");
     assert!(row["cullScore"].as_f64().is_some(), "{r}");
     let an = s.catalog.photo(id).unwrap().analysis.unwrap();
+    assert!(an.group.is_none() && !an.best, "{an:?}");
     let aesthetic = an.aesthetic.expect("aesthetic");
     assert!((1.0..=10.0).contains(&aesthetic), "{an:?}");
     let score = an.cull_score.expect("cull_score");
@@ -2250,9 +2199,9 @@ fn assisted_culling_persists_aesthetic_and_cull_score() {
 }
 
 /// Assisted culling: two look-alike shots one second apart across midnight form a burst at the end of
-/// every month, including those with fewer than 31 days.
+/// every month, including those with fewer than 31 days; the burst limits are parameters.
 #[test]
-fn assisted_culling_groups_bursts_across_month_end() {
+fn assisted_culling_groups_bursts_across_month_end_and_within_adjustable_limits() {
     let dir = temp_dir("cull-month-end");
     for (name, (w, h)) in [("a.png", (480, 320)), ("b.png", (482, 321))] {
         let img = lcc_scenes::demo_library()[0].render(w, h);
@@ -2290,36 +2239,8 @@ fn assisted_culling_groups_bursts_across_month_end() {
         let r = s.execute("photo.analyze", &json!({"ids": ids})).unwrap();
         assert_eq!(r["groups"], 1, "shots 1 s apart ({before} / {after}) must form a burst: {r}");
     }
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// Assisted culling: `burstGap` and `similarity` move the burst limits (#2275), and values out of
-/// range are refused before anything is measured or stored.
-#[test]
-fn assisted_culling_burst_limits_are_adjustable() {
-    let dir = temp_dir("cull-limits");
-    for (name, (w, h)) in [("a.png", (480, 320)), ("b.png", (482, 321))] {
-        let img = lcc_scenes::demo_library()[0].render(w, h);
-        let data: Vec<[u8; 4]> = img
-            .data
-            .iter()
-            .map(|c| {
-                let e = |v: f32| (lcc_color::transfer::linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8;
-                [e(c[0]), e(c[1]), e(c[2]), 255]
-            })
-            .collect();
-        let png = lcc_codecs::encode_png(
-            &lcc_codecs::EncodeImage::rgba8(&lcc_raster::Rgba8 { width: img.width, height: img.height, data }),
-            &Default::default(),
-        )
-        .unwrap();
-        std::fs::write(dir.join(name), png).unwrap();
-    }
-    let mut s = Session::new().with_fs();
-    let r = s.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
-    let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().filter_map(Value::as_u64).collect();
-    let by_name = |s: &Session, n: &str| s.catalog.photos().find(|p| p.file_name == n).unwrap().id;
-    let (a, b) = (by_name(&s, "a.png"), by_name(&s, "b.png"));
+    // `burstGap` and `similarity` move the burst limits (#2275), and values out of range are refused before
+    // anything is measured or stored
     s.commit("t", lcc_catalog::Op::SetCaptured { id: a, captured: Some("2026-05-01T10:00:00".into()) }).unwrap();
     s.commit("t", lcc_catalog::Op::SetCaptured { id: b, captured: Some("2026-05-01T10:00:15".into()) }).unwrap();
     // 15 s apart: past the default 10 s, inside a 20 s gap
@@ -2328,7 +2249,6 @@ fn assisted_culling_burst_limits_are_adjustable() {
     // the look-alike pair is a burst at the default similarity, not when it must be identical
     let strict = s.execute("photo.analyze", &json!({"ids": ids, "burstGap": 20, "similarity": 1.0})).unwrap();
     assert_eq!(strict["groups"], 0, "{strict}");
-    // bad values change nothing
     let undo_before = s.commits();
     for bad in
         [json!({"burstGap": -1}), json!({"burstGap": 86401}), json!({"burstGap": "10"}), json!({"similarity": 1.5}), json!({"similarity": -0.1})]
@@ -2337,7 +2257,7 @@ fn assisted_culling_burst_limits_are_adjustable() {
         p["ids"] = json!(ids);
         assert!(s.execute("photo.analyze", &p).is_err(), "{bad} must be refused");
     }
-    assert_eq!(s.commits(), undo_before);
+    assert_eq!(s.commits(), undo_before, "bad values change nothing");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2626,33 +2546,30 @@ fn browsing_and_auto_import_never_restore_a_deleted_photo() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
-/// `onDeleted: skip` keeps the old behaviour for callers that want it: nothing imported, the
-/// duplicate reported with `existingDeleted`.
+/// `onDeleted` for a file whose photo is in Recently Deleted (issues #298, #706): an unknown value is refused;
+/// `skip` leaves the photo there and reports the duplicate with `existingDeleted`; `restore` brings it back with its
+/// edits, into the import's album; `fresh` replaces the trashed record with a new photo.
 #[test]
-fn duplicate_in_recently_deleted_is_reported_as_such() {
-    let (mut s, src, id) = trashed_photo("trash-report");
+fn on_deleted_skips_restores_or_replaces_a_trashed_photo() {
+    let (mut s, src, id) = trashed_photo("trash-on-deleted");
+    let e = s.execute("library.import", &json!({"paths": [], "onDeleted": "bogus"})).unwrap_err().to_string();
+    assert!(e.contains("onDeleted"), "{e}");
+
     let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()], "onDeleted": "skip"})).unwrap();
     assert_eq!(ids(&r, "imported"), 0, "{r}");
     assert_eq!(r["duplicates"][0]["existing"], id, "{r}");
     assert_eq!(r["duplicates"][0]["existingDeleted"], true, "{r}");
     assert!(s.catalog.photo(lcc_catalog::PhotoId(id)).unwrap().deleted, "skip: left in the trash");
-    let _ = std::fs::remove_dir_all(&src);
-}
 
-#[test]
-fn import_can_restore_a_duplicate_from_recently_deleted() {
-    let (mut s, src, id) = trashed_photo("trash-restore");
-    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()], "onDeleted": "restore"})).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()], "onDeleted": "restore", "albumName": "Back"})).unwrap();
     assert_eq!(r["restored"], json!([id]), "{r}");
     assert_eq!(ids(&r, "duplicates"), 0, "{r}");
     let p = s.catalog.photo(lcc_catalog::PhotoId(id)).unwrap();
     assert!(!p.deleted && p.rating == 4, "restored with its edits");
-    let _ = std::fs::remove_dir_all(&src);
-}
+    let album = r["album"].as_u64().expect("album created for the restored photos");
+    assert_eq!(s.catalog.album(lcc_catalog::AlbumId(album)).unwrap().photos.len(), 1);
 
-#[test]
-fn import_can_replace_a_duplicate_from_recently_deleted() {
-    let (mut s, src, id) = trashed_photo("trash-fresh");
+    s.execute("photo.delete", &json!({"ids": [id]})).unwrap();
     let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()], "onDeleted": "fresh"})).unwrap();
     assert_eq!(ids(&r, "imported"), 1, "{r}");
     let new = r["imported"][0].as_u64().unwrap();
@@ -2680,29 +2597,6 @@ fn a_fresh_reimport_reads_its_own_stem_sidecar() {
     let new = r["imported"][0].as_u64().unwrap();
     assert_ne!(new, id);
     assert_eq!(s.catalog.photo(lcc_catalog::PhotoId(new)).unwrap().rating, 3, "the fresh photo reads a.xmp: {r}");
-    let _ = std::fs::remove_dir_all(&src);
-}
-
-#[test]
-fn unknown_on_deleted_is_an_error() {
-    let mut s = Session::new().with_fs();
-    let e = s.execute("library.import", &json!({"paths": [], "onDeleted": "bogus"})).unwrap_err().to_string();
-    assert!(e.contains("onDeleted"), "{e}");
-}
-
-#[test]
-fn empty_recently_deleted_removes_only_trashed_photos() {
-    let (mut s, src, id) = trashed_photo("trash-empty");
-    write_png(&src.join("b.png"), 2);
-    let r = s.execute("library.import", &json!({"paths": [src.join("b.png").to_string_lossy()]})).unwrap();
-    let keep = r["imported"][0].as_u64().unwrap();
-    let r = s.execute("library.emptyRecentlyDeleted", &json!({})).unwrap();
-    assert_eq!(r["deleted"], 1, "{r}");
-    assert!(s.catalog.photo(lcc_catalog::PhotoId(id)).is_none());
-    assert!(s.catalog.photo(lcc_catalog::PhotoId(keep)).is_some());
-    // nothing to empty is not an error
-    assert_eq!(s.execute("library.emptyRecentlyDeleted", &json!({})).unwrap()["deleted"], 0);
-    s.execute("edit.undo", &json!({})).unwrap();
     let _ = std::fs::remove_dir_all(&src);
 }
 
@@ -2769,31 +2663,12 @@ fn deleting_several_photos_permanently_leaves_nothing_dangling() {
 
 #[test]
 fn fresh_import_of_two_trashed_photos_in_one_album_and_stack_works() {
-    let (mut s, src, ids, al) = two_trashed_in_album_and_stack("trash-fresh-refs");
+    let (mut s, src, trashed, al) = two_trashed_in_album_and_stack("trash-fresh-refs");
     let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()], "onDeleted": "fresh"})).unwrap();
-    assert_eq!(ids_len(&r), 2, "{r}");
+    assert_eq!(ids(&r, "imported"), 2, "{r}");
     assert!(s.catalog.album(lcc_catalog::AlbumId(al)).unwrap().photos.is_empty());
-    assert!(ids.iter().all(|i| s.catalog.photo(lcc_catalog::PhotoId(*i)).is_none()));
+    assert!(trashed.iter().all(|i| s.catalog.photo(lcc_catalog::PhotoId(*i)).is_none()));
     let _ = std::fs::remove_dir_all(&src);
-}
-
-fn ids_len(r: &Value) -> usize {
-    ids(r, "imported")
-}
-
-#[test]
-fn restore_import_applies_the_album_to_restored_photos() {
-    let (mut s, src, ids, _) = trashed_photo_ids("trash-restore-album");
-    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()], "onDeleted": "restore", "albumName": "Back"})).unwrap();
-    assert_eq!(r["restored"], json!(ids), "{r}");
-    let album = r["album"].as_u64().expect("album created for the restored photos");
-    assert_eq!(s.catalog.album(lcc_catalog::AlbumId(album)).unwrap().photos.len(), 1);
-    let _ = std::fs::remove_dir_all(&src);
-}
-
-fn trashed_photo_ids(tag: &str) -> (Session, std::path::PathBuf, [u64; 1], u64) {
-    let (s, src, id) = trashed_photo(tag);
-    (s, src, [id], 0)
 }
 
 /// Issue #374: launch arguments never turn into a walk of a whole drive or home folder. An empty
@@ -2830,25 +2705,55 @@ fn launch_paths_never_become_a_drive_root_or_the_home_folder() {
     );
 }
 
-/// Issue #374: a folder import is bounded — a tree deeper or larger than the limits is not walked
-/// to the end (it stops and says so), and what it found is still returned.
+/// Folder expansion is bounded (issue #374) and says what it left out.
 #[test]
-fn expand_stops_at_the_walk_limits() {
-    let d = temp_dir("bounded");
-    let mut deep = d.clone();
-    for i in 0..8 {
-        deep = deep.join(format!("d{i}"));
-        std::fs::create_dir_all(&deep).unwrap();
-        std::fs::write(deep.join(format!("p{i}.jpg")), b"x").unwrap();
+fn expand_stops_at_the_walk_limits_and_reports_what_the_walks_left_out() {
+    // Issue #374: a folder import is bounded — a tree deeper or larger than the limits is not walked
+    // to the end (it stops and says so), and what it found is still returned.
+    {
+        let d = temp_dir("bounded");
+        let mut deep = d.clone();
+        for i in 0..8 {
+            deep = deep.join(format!("d{i}"));
+            std::fs::create_dir_all(&deep).unwrap();
+            std::fs::write(deep.join(format!("p{i}.jpg")), b"x").unwrap();
+        }
+        let top = [d.to_string_lossy().to_string()];
+        let (all, cut) = crate::import::expand_within(&top, None, crate::walk::Limits::default());
+        assert_eq!((all.len(), cut), (8, false));
+        let (some, cut) = crate::import::expand_within(&top, None, crate::walk::Limits { max_depth: 3, max_entries: 1000 });
+        assert_eq!((some.len(), cut), (2, true), "{some:?}");
+        let (few, cut) = crate::import::expand_within(&top, None, crate::walk::Limits { max_depth: 32, max_entries: 5 });
+        assert!(cut && few.len() < 8, "{few:?}");
+        let _ = std::fs::remove_dir_all(&d);
     }
-    let top = [d.to_string_lossy().to_string()];
-    let (all, cut) = crate::import::expand_within(&top, None, crate::walk::Limits::default());
-    assert_eq!((all.len(), cut), (8, false));
-    let (some, cut) = crate::import::expand_within(&top, None, crate::walk::Limits { max_depth: 3, max_entries: 1000 });
-    assert_eq!((some.len(), cut), (2, true), "{some:?}");
-    let (few, cut) = crate::import::expand_within(&top, None, crate::walk::Limits { max_depth: 32, max_entries: 5 });
-    assert!(cut && few.len() < 8, "{few:?}");
-    let _ = std::fs::remove_dir_all(&d);
+    // Expanding folders reports what the walks left out — files of an unsupported type, a walk that
+    // stopped at a bound — and returns the same files as `expand_within`; a file named on its own is
+    // attempted whatever its extension and is not counted as unsupported.
+    {
+        use crate::import::{expand_report, expand_within};
+        let d = temp_dir("expand-report");
+        write_png(&d.join("a.png"), 1);
+        write_png(&d.join("sub/b.png"), 2);
+        std::fs::write(d.join("notes.txt"), "x").unwrap();
+        std::fs::write(d.join("sub/readme.md"), "x").unwrap();
+        std::fs::write(d.join("sub/.hidden.txt"), "x").unwrap();
+        let named = temp_dir("expand-report-named");
+        std::fs::write(named.join("odd.dat"), "x").unwrap();
+        let paths = [d.to_string_lossy().to_string(), named.join("odd.dat").to_string_lossy().to_string()];
+        let limits = crate::walk::Limits::default();
+
+        let e = expand_report(&paths, None, limits);
+        assert_eq!(e.files.len(), 3, "both photos and the named file: {:?}", e.files);
+        assert_eq!((e.unsupported, e.unreadable, e.truncated), (2, 0, false), "notes.txt and readme.md; the hidden file is not counted: {e:?}");
+        assert_eq!(expand_within(&paths, None, limits), (e.files.clone(), false), "expand_within is the same walk");
+
+        // stopping one level down: the second folder is never listed, so its files are not counted
+        let e = expand_report(&paths[..1], None, crate::walk::Limits { max_depth: 1, max_entries: 1000 });
+        assert_eq!((e.files.len(), e.unsupported, e.truncated), (1, 1, true), "{e:?}");
+        let _ = std::fs::remove_dir_all(&d);
+        let _ = std::fs::remove_dir_all(&named);
+    }
 }
 
 /// Raw containers the app cannot decode but shows by their embedded JPEG are picked up from a folder
@@ -3189,77 +3094,96 @@ fn auto_sync_white_balance_gives_every_raw_the_same_kelvin() {
     let _ = std::fs::remove_dir_all(&lib);
 }
 
-/// The look marker: missing, damaged or older than this build's fit version counts as unchecked.
+/// Hostile input for the smart previews' look bookkeeping: the folder's marker file and a proxy's `look_version`.
 #[test]
-fn smart_preview_look_marker_is_read_safely() {
-    let dir = temp_dir("smartlook-marker");
-    assert!(!crate::smart::look_checked(&dir), "no marker");
-    let cur = crate::camera_preview::LOOK_VERSION;
-    let enc = crate::smart::ENCODE_VERSION;
-    for (text, checked) in [
-        (String::new(), false),
-        ("banana".into(), false),
-        ("-1".into(), false),
-        (format!("{}", cur.saturating_sub(1)), false),
-        ("9".repeat(200), false),
-        // Written before the encode version was recorded: only says the look was checked, so the
-        // folder is scanned once more and the old-encoding proxies are rebuilt.
-        (format!("{cur}\n"), false),
-        (format!("{cur} {}\n", enc.saturating_sub(1)), false),
-        (format!("{cur} banana\n"), false),
-        (format!("{cur} {enc}\n"), true),
-        (format!(" {} {}\n", cur + 1, enc + 1), true),
-    ] {
-        std::fs::write(dir.join("look-version"), &text).unwrap();
-        assert_eq!(crate::smart::look_checked(&dir), checked, "{text:?}");
+fn smart_preview_look_markers_and_versions_are_read_safely() {
+    // The look marker: missing, damaged or older than this build's fit version counts as unchecked.
+    {
+        let dir = temp_dir("smartlook-marker");
+        assert!(!crate::smart::look_checked(&dir), "no marker");
+        let cur = crate::camera_preview::LOOK_VERSION;
+        let enc = crate::smart::ENCODE_VERSION;
+        for (text, checked) in [
+            (String::new(), false),
+            ("banana".into(), false),
+            ("-1".into(), false),
+            (format!("{}", cur.saturating_sub(1)), false),
+            ("9".repeat(200), false),
+            // Written before the encode version was recorded: only says the look was checked, so the
+            // folder is scanned once more and the old-encoding proxies are rebuilt.
+            (format!("{cur}\n"), false),
+            (format!("{cur} {}\n", enc.saturating_sub(1)), false),
+            (format!("{cur} banana\n"), false),
+            (format!("{cur} {enc}\n"), true),
+            (format!(" {} {}\n", cur + 1, enc + 1), true),
+        ] {
+            std::fs::write(dir.join("look-version"), &text).unwrap();
+            assert_eq!(crate::smart::look_checked(&dir), checked, "{text:?}");
+        }
+        std::fs::remove_file(dir.join("look-version")).unwrap();
+        crate::smart::mark_look_checked(&dir).unwrap();
+        assert!(crate::smart::look_checked(&dir));
+        assert!(crate::smart::mark_look_checked(&dir.join("missing")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
-    std::fs::remove_file(dir.join("look-version")).unwrap();
-    crate::smart::mark_look_checked(&dir).unwrap();
-    assert!(crate::smart::look_checked(&dir));
-    assert!(crate::smart::mark_look_checked(&dir.join("missing")).is_err());
-    let _ = std::fs::remove_dir_all(&dir);
+    // A hostile or damaged `look_version` never panics: anything that is not a non-negative integer
+    // counts as 0 (rebuilt when the original is online); a version from a newer build is left alone.
+    {
+        let dir = temp_dir("smartlook-bad");
+        let img = lcc_scenes::demo_library()[0].render(32, 20);
+        let file = dir.join("a.lcsp");
+        std::fs::write(&file, crate::smart::encode(&img, None).unwrap()).unwrap();
+        let cur = u64::from(crate::camera_preview::LOOK_VERSION);
+        for bad in [json!("1"), json!(-1), json!(1.5), json!(null), json!([]), json!({}), json!(true), json!(1e30), json!(-0.0)] {
+            let shown = bad.to_string();
+            edit_smart_header(&file, |h| h["look_version"] = bad);
+            assert!(crate::smart::is_valid(&file), "{shown}");
+            assert!(crate::smart::is_stale(&file), "{shown} counts as version 0");
+            assert!(crate::smart::decode(&std::fs::read(&file).unwrap()).is_ok(), "{shown}");
+        }
+        for fine in [json!(cur), json!(cur + 1), json!(u64::MAX)] {
+            let shown = fine.to_string();
+            edit_smart_header(&file, |h| h["look_version"] = fine);
+            assert!(!crate::smart::is_stale(&file), "{shown}");
+        }
+        // not a header at all, or missing
+        assert!(!crate::smart::is_stale(&dir.join("missing.lcsp")));
+        std::fs::write(&file, b"LCSP1\n{not json\n\xFF\xD8").unwrap();
+        assert!(!crate::smart::is_stale(&file));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
-/// A hostile or damaged `look_version` never panics: anything that is not a non-negative integer
-/// counts as 0 (rebuilt when the original is online); a version from a newer build is left alone.
+/// Files an import can't take are reported, never catalogued: one gone since the review, one still being copied in.
 #[test]
-fn malformed_smart_preview_look_versions_are_handled() {
-    let dir = temp_dir("smartlook-bad");
-    let img = lcc_scenes::demo_library()[0].render(32, 20);
-    let file = dir.join("a.lcsp");
-    std::fs::write(&file, crate::smart::encode(&img, None).unwrap()).unwrap();
-    let cur = u64::from(crate::camera_preview::LOOK_VERSION);
-    for bad in [json!("1"), json!(-1), json!(1.5), json!(null), json!([]), json!({}), json!(true), json!(1e30), json!(-0.0)] {
-        let shown = bad.to_string();
-        edit_smart_header(&file, |h| h["look_version"] = bad);
-        assert!(crate::smart::is_valid(&file), "{shown}");
-        assert!(crate::smart::is_stale(&file), "{shown} counts as version 0");
-        assert!(crate::smart::decode(&std::fs::read(&file).unwrap()).is_ok(), "{shown}");
+fn an_import_reports_files_gone_or_still_being_copied() {
+    {
+        let src = temp_dir("gone-since-review");
+        write_png(&src.join("a.png"), 1);
+        write_png(&src.join("b.png"), 2);
+        let mut s = Session::new().with_fs();
+        s.execute("library.importPreview", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+        std::fs::remove_file(src.join("b.png")).unwrap();
+        let r = s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy(), src.join("b.png").to_string_lossy()]})).unwrap();
+        assert_eq!((ids(&r, "imported"), ids(&r, "failed")), (1, 1), "{r}");
+        assert_eq!(s.catalog.len(), 1, "no photo for a file that isn't there");
+        let _ = std::fs::remove_dir_all(&src);
     }
-    for fine in [json!(cur), json!(cur + 1), json!(u64::MAX)] {
-        let shown = fine.to_string();
-        edit_smart_header(&file, |h| h["look_version"] = fine);
-        assert!(!crate::smart::is_stale(&file), "{shown}");
+    // A file skipped as still being copied in is named in the import's result (`still_copying`), not left out silently,
+    // so the caller can say so instead of calling it unreadable.
+    {
+        let dir = temp_dir("still-copying");
+        let raw = dir.join("IMG_0001.NEF");
+        std::fs::write(&raw, short_raw()).unwrap();
+        let mut s = Session::new().with_fs();
+        let r = s.execute("library.import", &json!({"paths": [raw.to_string_lossy()]})).unwrap();
+        assert_eq!(ids(&r, "imported"), 0, "{r}");
+        let copying = r["still_copying"].as_array().unwrap();
+        assert_eq!(copying.len(), 1, "{r}");
+        assert!(copying[0].as_str().unwrap().ends_with("IMG_0001.NEF"), "{r}");
+        assert!(r["failed"].as_array().unwrap().is_empty(), "{r}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
-    // not a header at all, or missing
-    assert!(!crate::smart::is_stale(&dir.join("missing.lcsp")));
-    std::fs::write(&file, b"LCSP1\n{not json\n\xFF\xD8").unwrap();
-    assert!(!crate::smart::is_stale(&file));
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn a_file_gone_since_the_import_review_is_not_imported() {
-    let src = temp_dir("gone-since-review");
-    write_png(&src.join("a.png"), 1);
-    write_png(&src.join("b.png"), 2);
-    let mut s = Session::new().with_fs();
-    s.execute("library.importPreview", &json!({"paths": [src.to_string_lossy()]})).unwrap();
-    std::fs::remove_file(src.join("b.png")).unwrap();
-    let r = s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy(), src.join("b.png").to_string_lossy()]})).unwrap();
-    assert_eq!((ids(&r, "imported"), ids(&r, "failed")), (1, 1), "{r}");
-    assert_eq!(s.catalog.len(), 1, "no photo for a file that isn't there");
-    let _ = std::fs::remove_dir_all(&src);
 }
 
 /// A HEIC laid out like an iPhone's (a grid of HEVC pictures, a Display P3 profile, a quarter turn
@@ -3299,40 +3223,6 @@ fn heic_imports_as_a_normal_photo_or_says_why_not() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
-/// Issue #693: a HEIC's EXIF reaches the catalog (camera, capture time) and All Metadata, as a
-/// JPEG's does. The file is made like the issue sweep's `synthetic-metadata.heic`: the HEIF test
-/// builder, 96 × 64, with an EXIF block naming the camera and the capture time. The container is
-/// read without the decoder; importing needs the codecs' `heif` feature (`cargo xtask ci` runs
-/// this test with it).
-#[test]
-fn heic_exif_reaches_the_catalog_and_all_metadata() {
-    use lcc_heif::testdata::{Spec, build};
-    let photo = |x: u32, y: u32| [((x * 7 + y * 13) % 200 + 30) as u16, 110, 150];
-    let exif = lcc_meta::write_exif(&lcc_meta::Metadata {
-        make: Some("Synthetic".into()),
-        model: Some("Issue sweep camera".into()),
-        capture_time: lcc_meta::DateTime::parse_iso("2026-10-12T12:34:56"),
-        ..Default::default()
-    });
-    let bytes = build(&Spec { exif: Some(exif), ..Spec::new(96, 64, &photo) });
-    let m = lcc_meta::extract(&bytes);
-    assert_eq!(m.model.as_deref(), Some("Issue sweep camera"));
-    assert_eq!(m.capture_time.map(|d| d.to_iso()).as_deref(), Some("2026-10-12T12:34:56"));
-    if !lcc_codecs::Format::Heif.can_decode() {
-        return; // importing needs the decoder; `heic_imports_as_a_normal_photo_or_says_why_not` checks the error
-    }
-    let src = temp_dir("heic-exif");
-    std::fs::write(src.join("IMG_0002.HEIC"), &bytes).unwrap();
-    let mut s = Session::new().with_fs();
-    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
-    assert_eq!(ids(&r, "imported"), 1, "{r}");
-    let p = s.catalog.photos().next().unwrap().clone();
-    assert_eq!((p.meta.camera.as_str(), p.captured.as_deref()), ("Synthetic Issue sweep camera", Some("2026-10-12T12:34:56")));
-    let all = s.execute("photo.allMetadata", &json!({"id": p.id.0})).unwrap();
-    assert!(all["exif"].as_array().unwrap().iter().any(|r| r["name"] == "Model" && r["value"] == "Issue sweep camera"), "{all}");
-    let _ = std::fs::remove_dir_all(&src);
-}
-
 /// Camera tags from #2290's #2284 fixture, including an orientation that must not rotate HEIF pixels.
 fn heic_camera_exif(date: &str) -> Vec<u8> {
     use lcc_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
@@ -3347,7 +3237,7 @@ fn heic_camera_exif(date: &str) -> Vec<u8> {
     TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()
 }
 
-/// Issue #2284: retain the camera's civil time and offset instead of falling back to the file's
+/// Issues #693, #2284: a HEIC's EXIF reaches the catalog and All Metadata; retain the camera's civil time and offset instead of falling back to the file's
 /// modification time. An evening shot must keep its local date when UTC falls on the next day.
 #[test]
 fn a_heic_is_dated_by_its_exif_and_not_by_the_file() {
@@ -3378,6 +3268,10 @@ fn a_heic_is_dated_by_its_exif_and_not_by_the_file() {
             assert_eq!(p.meta.camera, "Apple iPhone 15 Pro");
             assert_eq!((p.width, p.height), (96, 64), "Exif alone must not turn a HEIC");
             assert_eq!(lcc_catalog::dates::display_time(p.date()), display);
+            // issue #693: a HEIC's EXIF reaches All Metadata too, as a JPEG's does
+            let heic_id = p.id.0;
+            let all = s.execute("photo.allMetadata", &json!({"id": heic_id})).unwrap();
+            assert!(all["exif"].as_array().unwrap().iter().any(|row| row["name"] == "Model" && row["value"] == "iPhone 15 Pro"), "{all}");
         } else {
             assert!(info.unwrap_err().contains("isn't included in this build"));
             assert_eq!((ids(&r, "imported"), ids(&r, "failed")), (0, 1), "{r}");
@@ -3482,35 +3376,6 @@ fn upper_and_mixed_case_extensions_are_found_by_import_browse_and_sidecar_lookup
     for n in ["a.JPG", "b.Jpg", "c.JPEG", "d.PNG", "e.NEF"] {
         assert!(shown.iter().any(|f| f == n), "{n} not shown: {shown:?}");
     }
-    let _ = std::fs::remove_dir_all(&src);
-}
-
-/// "Don't Import Suspected Duplicates" off (`importDuplicates: true`): a copy of a photo the
-/// library already has (same bytes, another path) comes in as a new photo; on (the default) it is
-/// skipped. A photo in Recently Deleted is still restored, not copied.
-#[test]
-fn importing_suspected_duplicates_adds_copies_when_asked() {
-    let src = temp_dir("dup-copies");
-    write_png(&src.join("a.png"), 7);
-    std::fs::create_dir_all(src.join("copy")).unwrap();
-    write_png(&src.join("copy/a.png"), 7);
-    let mut s = Session::new().with_fs();
-    s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
-    let copy = src.join("copy/a.png").to_string_lossy().to_string();
-    let r = s.execute("library.import", &json!({"paths": [copy]})).unwrap();
-    assert_eq!((ids(&r, "imported"), ids(&r, "duplicates")), (0, 1), "skipped by default: {r}");
-    let r = s.execute("library.import", &json!({"paths": [copy], "importDuplicates": true})).unwrap();
-    assert_eq!((ids(&r, "imported"), ids(&r, "duplicates")), (1, 0), "{r}");
-    assert_eq!(s.catalog.len(), 2);
-    // the copy has its own content key, so caches keyed by content never mix the two photos
-    let keys: std::collections::HashSet<String> = s.catalog.photos().map(|p| crate::media::content_key(p)).collect();
-    assert_eq!(keys.len(), 2, "{keys:?}");
-    let _ = std::fs::remove_dir_all(&src);
-
-    let (mut s, src, id) = trashed_photo("dup-copies-trash");
-    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()], "importDuplicates": true})).unwrap();
-    assert_eq!(r["restored"], json!([id]), "{r}");
-    assert_eq!(s.catalog.len(), 1, "restored, not copied");
     let _ = std::fs::remove_dir_all(&src);
 }
 
@@ -3659,23 +3524,6 @@ fn short_raw() -> Vec<u8> {
     }
     b.extend([0u8; 100]);
     b
-}
-
-/// A file skipped as still being copied in is named in the import's result (`still_copying`), not left out silently,
-/// so the caller can say so instead of calling it unreadable.
-#[test]
-fn an_import_names_the_files_it_left_as_still_being_copied() {
-    let dir = temp_dir("still-copying");
-    let raw = dir.join("IMG_0001.NEF");
-    std::fs::write(&raw, short_raw()).unwrap();
-    let mut s = Session::new().with_fs();
-    let r = s.execute("library.import", &json!({"paths": [raw.to_string_lossy()]})).unwrap();
-    assert_eq!(ids(&r, "imported"), 0, "{r}");
-    let copying = r["still_copying"].as_array().unwrap();
-    assert_eq!(copying.len(), 1, "{r}");
-    assert!(copying[0].as_str().unwrap().ends_with("IMG_0001.NEF"), "{r}");
-    assert!(r["failed"].as_array().unwrap().is_empty(), "{r}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Lightroom keeps spots and mask shapes on the stored image, before its orientation, as it does the crop; the app
@@ -4052,35 +3900,6 @@ fn nested(root: &Path, levels: usize) -> std::path::PathBuf {
     }
     std::fs::create_dir_all(&dir).unwrap();
     dir
-}
-
-/// Expanding folders reports what the walks left out — files of an unsupported type, a walk that
-/// stopped at a bound — and returns the same files as `expand_within`; a file named on its own is
-/// attempted whatever its extension and is not counted as unsupported.
-#[test]
-fn expand_report_counts_what_the_walks_left_out() {
-    use crate::import::{expand_report, expand_within};
-    let d = temp_dir("expand-report");
-    write_png(&d.join("a.png"), 1);
-    write_png(&d.join("sub/b.png"), 2);
-    std::fs::write(d.join("notes.txt"), "x").unwrap();
-    std::fs::write(d.join("sub/readme.md"), "x").unwrap();
-    std::fs::write(d.join("sub/.hidden.txt"), "x").unwrap();
-    let named = temp_dir("expand-report-named");
-    std::fs::write(named.join("odd.dat"), "x").unwrap();
-    let paths = [d.to_string_lossy().to_string(), named.join("odd.dat").to_string_lossy().to_string()];
-    let limits = crate::walk::Limits::default();
-
-    let e = expand_report(&paths, None, limits);
-    assert_eq!(e.files.len(), 3, "both photos and the named file: {:?}", e.files);
-    assert_eq!((e.unsupported, e.unreadable, e.truncated), (2, 0, false), "notes.txt and readme.md; the hidden file is not counted: {e:?}");
-    assert_eq!(expand_within(&paths, None, limits), (e.files.clone(), false), "expand_within is the same walk");
-
-    // stopping one level down: the second folder is never listed, so its files are not counted
-    let e = expand_report(&paths[..1], None, crate::walk::Limits { max_depth: 1, max_entries: 1000 });
-    assert_eq!((e.files.len(), e.unsupported, e.truncated), (1, 1, true), "{e:?}");
-    let _ = std::fs::remove_dir_all(&d);
-    let _ = std::fs::remove_dir_all(&named);
 }
 
 /// A scan says that its folder walk stopped at the depth limit (there may be more photos), and
@@ -4535,19 +4354,6 @@ fn saved_recipe_presets_get_distinct_ids_and_survive_reopening() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
-/// Both commands are in the command list with their parameters documented, which is where the
-/// control channel, the CLI and MCP's `list_commands` read them.
-#[test]
-fn the_recipe_commands_are_listed_with_their_parameters() {
-    let s = Session::new();
-    let commands = s.commands();
-    let import = commands.iter().find(|c| c.id == "library.import").unwrap();
-    assert!(import.params.contains("recipe?: [{id:") && import.params.contains("Import adjustments"), "{}", import.params);
-    assert!(import.params.contains("no white balance, geometry or crop") && import.params.contains("is not changed"), "{}", import.params);
-    let save = commands.iter().find(|c| c.id == "preset.saveRecipe").expect("preset.saveRecipe is a command");
-    assert!(save.enabled && save.params.contains("recipe: [{id:") && save.params.contains("name"), "{}", save.params);
-}
-
 /// Constrain Crop is on for new photos (item 11 of the evening retest), without counting as an
 /// edit or hiding the camera preview; Settings ▸ Import can turn that off; a Lightroom sidecar
 /// keeps the value it always read (off), and photos already in the library keep theirs.
@@ -4635,24 +4441,22 @@ fn before_is_the_import_state_and_set_before_is_kept() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Reloading a relinked virtual copy reads its own file and leaves the photos on other files unchanged; reloading
+/// the original leaves the relinked copy unchanged.
 #[test]
-fn reload_relinked_virtual_copy_reads_its_own_file() {
-    reload_relinked_virtual_copy(true);
+fn reload_of_a_relinked_virtual_copy_touches_only_the_photos_on_that_file() {
+    for from_copy in [true, false] {
+        reload_relinked_virtual_copy(from_copy);
+    }
 }
 
+/// Reloading a copy refreshes its family and keeps the explicit metadata target; selected copies all get the
+/// metadata after the plan is deduplicated to one probe per file.
 #[test]
-fn reload_original_leaves_relinked_virtual_copy_unchanged() {
-    reload_relinked_virtual_copy(false);
-}
-
-#[test]
-fn reload_copy_refreshes_family_and_keeps_the_metadata_target() {
-    reload_copy_family_metadata(false);
-}
-
-#[test]
-fn reload_selected_copies_fill_metadata_after_deduplication() {
-    reload_copy_family_metadata(true);
+fn reload_of_a_copy_refreshes_its_family_and_fills_the_metadata_targets() {
+    for select_sibling in [false, true] {
+        reload_copy_family_metadata(select_sibling);
+    }
 }
 
 fn reload_copy_family_metadata(select_sibling: bool) {

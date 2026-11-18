@@ -6,7 +6,7 @@ sidebar:
 ---
 
 import Shot from '../../../components/Shot.astro';
-import { Aside } from '@astrojs/starlight/components';
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
 <Shot name="ai-models" alt="Settings, AI Models tab: SAM 3 and BiRefNet_lite with Download buttons, and the Object and Sky model choices" />
 
@@ -21,7 +21,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 | Model | Used for | Size | Licence | Download |
 |---|---|---|---|---|
-| SAM 3 | Object and Describe masks | about 3.4 GB | SAM License (Meta) | in the dialog, but no default address is set yet: see below |
+| SAM 3 | Object and Describe masks | about 3.4 GB | SAM License (Meta) | in the dialog, or install by hand: [see below](#installing-sam-3) |
 | SAM 2.1 Hiera-Tiny | Object clicks, Remembered, small people | 156 MB | Apache-2.0 | in the dialog |
 | BiRefNet_lite | Subject and Background | about 178 MB | MIT | in the dialog |
 | EoMT scene | Sky, Water, Vegetation, People | 96 MB | MIT (trained on COCO, CC BY 4.0) | in the dialog |
@@ -31,8 +31,163 @@ import { Aside } from '@astrojs/starlight/components';
 | Real-ESRGAN General v3 | AI Super Resolution, AI Sharpen | about 5 MB | BSD-3-Clause | see [Super resolution](../super-resolution/) |
 
 <Aside type="caution" title="SAM 3 has no default download address yet">
-Meta's model is gated, so Chromaforge cannot host it by default. Put `model.safetensors`, `vocab.json` and `merges.txt` from Meta's `facebook/sam3` in the model folder, or set a download mirror. Object masks work without it through SAM 2.1; Describe needs SAM 3. Steps: the SAM 3 section of the dialog, **How to install the model**.
+Meta's model is gated, so Chromaforge cannot host it by default. Put `model.safetensors`, `vocab.json` and `merges.txt` from Meta's `facebook/sam3` in the model folder, or set a download mirror. Object masks work without it through SAM 2.1; Describe needs SAM 3. Follow the steps below to request access and install it.
 </Aside>
+
+## Installing SAM 3
+
+SAM 3 (Segment Anything with Concepts, Meta 2025) provides detailed Object clicks and enables Describe (text prompt) masks.
+
+Meta releases the weights under the custom, non-OSI [SAM License](https://github.com/facebookresearch/sam3/blob/main/LICENSE) in a **gated** repository on Hugging Face ([`facebook/sam3`](https://huggingface.co/facebook/sam3)). Because access is gated, Chromaforge cannot download the checkpoint automatically without your Hugging Face credentials.
+
+### 1. Request access on Hugging Face
+
+1. Log in or create an account at [Hugging Face](https://huggingface.co/).
+2. Open the [facebook/sam3 repository page](https://huggingface.co/facebook/sam3).
+3. Review Meta's SAM License agreement, fill out the access form, and submit the request.
+4. Wait for approval from Meta (approvals are usually granted promptly).
+5. Generate a User Access Token with read permissions at [Hugging Face Settings ▸ Access Tokens](https://huggingface.co/settings/tokens) and copy your token (`hf_...`).
+
+### 2. Destination folder
+
+The model files belong in `models/sam3/` inside the per-user settings directory:
+
+- **Linux**: `~/.config/<settings_dir>/models/sam3`
+- **macOS**: `~/Library/Application Support/Chromaforge/models/sam3`
+- **Windows**: `%APPDATA%\Chromaforge\models\sam3`
+
+You can also point Chromaforge at any other folder in Settings ▸ **AI Models** ▸ **SAM 3 model folder**, or override it with the `<PREFIX>_SAM3_DIR` environment variable.
+
+### 3. Install scripts
+
+Run the script for your operating system in a terminal or PowerShell session. Replace `hf_your_token_here` with your Hugging Face access token:
+
+<Tabs syncKey="os">
+<TabItem label="Linux">
+
+```bash
+# 1. Set your Hugging Face access token
+export HF_TOKEN="hf_your_token_here"
+
+# 2. Target folder (default settings directory)
+APP_DIR=$(printf '%s' "Chromaforge" | tr '[:upper:]' '[:lower:]')
+DEST="${XDG_CONFIG_HOME:-$HOME/.config}/$APP_DIR/models/sam3"
+mkdir -p "$DEST"
+
+BASE="https://huggingface.co/facebook/sam3/resolve/main"
+FILES="config.json vocab.json merges.txt tokenizer.json tokenizer_config.json special_tokens_map.json processor_config.json"
+
+# 3. Download configuration and tokenizer files
+for f in $FILES; do
+  echo "Downloading $f..."
+  curl --proto '=https' -fsSL -H "Authorization: Bearer $HF_TOKEN" -o "$DEST/$f.part" "$BASE/$f" && mv -f "$DEST/$f.part" "$DEST/$f"
+done
+
+# 4. Download weights (3.4 GB; resumes if interrupted)
+echo "Downloading model.safetensors (3.4 GB)..."
+curl --proto '=https' -fsSL -C - -H "Authorization: Bearer $HF_TOKEN" -o "$DEST/model.safetensors.part" "$BASE/model.safetensors"
+mv -f "$DEST/model.safetensors.part" "$DEST/model.safetensors"
+
+# 5. Verify official SHA-256 checksum
+echo "Verifying model.safetensors..."
+echo "6d06f0a5f84e435071fe6603e61d0b4cc7b40e0d39d487cfd4d67d8cc11cc14a  $DEST/model.safetensors" | sha256sum -c -
+
+echo "SAM 3 installed successfully in $DEST"
+```
+
+</TabItem>
+<TabItem label="macOS">
+
+```zsh
+# 1. Set your Hugging Face access token
+export HF_TOKEN="hf_your_token_here"
+
+# 2. Target folder (default settings directory)
+DEST="$HOME/Library/Application Support/Chromaforge/models/sam3"
+mkdir -p "$DEST"
+
+BASE="https://huggingface.co/facebook/sam3/resolve/main"
+FILES="config.json vocab.json merges.txt tokenizer.json tokenizer_config.json special_tokens_map.json processor_config.json"
+
+# 3. Download configuration and tokenizer files
+for f in $FILES; do
+  echo "Downloading $f..."
+  curl --proto '=https' -fsSL -H "Authorization: Bearer $HF_TOKEN" -o "$DEST/$f.part" "$BASE/$f" && mv -f "$DEST/$f.part" "$DEST/$f"
+done
+
+# 4. Download weights (3.4 GB; resumes if interrupted)
+echo "Downloading model.safetensors (3.4 GB)..."
+curl --proto '=https' -fsSL -C - -H "Authorization: Bearer $HF_TOKEN" -o "$DEST/model.safetensors.part" "$BASE/model.safetensors"
+mv -f "$DEST/model.safetensors.part" "$DEST/model.safetensors"
+
+# 5. Verify official SHA-256 checksum
+echo "Verifying model.safetensors..."
+echo "6d06f0a5f84e435071fe6603e61d0b4cc7b40e0d39d487cfd4d67d8cc11cc14a  $DEST/model.safetensors" | shasum -a 256 -c -
+
+echo "SAM 3 installed successfully in $DEST"
+```
+
+</TabItem>
+<TabItem label="Windows">
+
+```powershell
+# 1. Set your Hugging Face access token
+$env:HF_TOKEN = "hf_your_token_here"
+
+# 2. Target folder (default settings directory)
+$Dest = Join-Path $env:APPDATA "Chromaforge\models\sam3"
+New-Item -ItemType Directory -Force -Path $Dest | Out-Null
+
+$Base = "https://huggingface.co/facebook/sam3/resolve/main"
+$Files = @(
+    "config.json", "vocab.json", "merges.txt",
+    "tokenizer.json", "tokenizer_config.json",
+    "special_tokens_map.json", "processor_config.json"
+)
+$Headers = @{ Authorization = "Bearer $env:HF_TOKEN" }
+$Sha256 = "6d06f0a5f84e435071fe6603e61d0b4cc7b40e0d39d487cfd4d67d8cc11cc14a"
+
+# 3. Download configuration and tokenizer files
+foreach ($f in $Files) {
+    Write-Host "Downloading $f..."
+    $part = Join-Path $Dest "$f.part"
+    $final = Join-Path $Dest $f
+    Invoke-WebRequest -Uri "$Base/$f" -Headers $Headers -OutFile $part
+    Move-Item -Force $part $final
+}
+
+# 4. Download weights (3.4 GB)
+Write-Host "Downloading model.safetensors (3.4 GB)..."
+$weightsPart = Join-Path $Dest "model.safetensors.part"
+$weightsFinal = Join-Path $Dest "model.safetensors"
+Invoke-WebRequest -Uri "$Base/model.safetensors" -Headers $Headers -OutFile $weightsPart
+
+# 5. Verify official SHA-256 checksum
+Write-Host "Verifying model.safetensors SHA-256..."
+$got = (Get-FileHash $weightsPart -Algorithm SHA256).Hash.ToLower()
+if ($got -ne $Sha256) {
+    Remove-Item -Force $weightsPart
+    throw "Checksum mismatch! Download is incomplete or damaged."
+}
+Move-Item -Force $weightsPart $weightsFinal
+
+Write-Host "SAM 3 installed successfully in $Dest"
+```
+
+</TabItem>
+</Tabs>
+
+### Other install methods
+
+- **Hugging Face CLI**: If you have the `huggingface-cli` or `hf` command installed:
+  ```sh
+  hf auth login
+  huggingface-cli download facebook/sam3 --local-dir "<target-folder>"
+  ```
+- **From repository source**: In a developer checkout, run the bundled installer script:
+  - Linux and macOS: `HF_TOKEN=hf_... tools/install-sam3.sh`
+  - Windows: `$env:HF_TOKEN = "hf_..."; .\tools\install-sam3.ps1`
+- **Verification**: Restart Chromaforge or navigate to Settings ▸ **AI Models**. SAM 3 will show as installed, and Object clicks and Describe masks in the Masking panel will use SAM 3.
 
 ## Where files go
 

@@ -242,21 +242,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn offset_rejects_short_minute_field() {
-        assert_eq!(DateTime::parse_offset("+08:5"), None);
-        assert_eq!(DateTime::parse_offset("+1:2"), None);
-        assert_eq!(DateTime::parse_offset("+08:05"), Some(485));
-        assert_eq!(DateTime::parse_offset("-05:30"), Some(-330));
-    }
-
-    #[test]
-    fn iso_rejects_single_digit_clock_fields() {
-        for value in ["2024-06-01T1:02:03Z", "2024-06-01T01:2:03Z"] {
-            assert!(DateTime::parse_iso(value).is_none(), "accepted malformed timestamp {value:?}");
-        }
-    }
-
-    #[test]
     fn exif_forms() {
         let d = DateTime::parse_exif("2024:06:01 13:45:59").unwrap();
         assert_eq!((d.year, d.month, d.day, d.hour, d.minute, d.second), (2024, 6, 1, 13, 45, 59));
@@ -338,6 +323,13 @@ mod tests {
         assert_eq!(DateTime::parse_offset("-18:01"), None);
         assert_eq!(DateTime::parse_offset("   :  "), None);
         assert_eq!(DateTime::parse_offset("+99:00"), None);
+        // offset rejects short minute field
+        {
+            assert_eq!(DateTime::parse_offset("+08:5"), None);
+            assert_eq!(DateTime::parse_offset("+1:2"), None);
+            assert_eq!(DateTime::parse_offset("+08:05"), Some(485));
+            assert_eq!(DateTime::parse_offset("-05:30"), Some(-330));
+        }
     }
 
     #[test]
@@ -387,6 +379,12 @@ mod tests {
             "2026-01-01T12::34Z",
         ] {
             assert!(DateTime::parse_iso(value).is_none(), "accepted malformed timestamp {value:?}");
+        }
+        // iso rejects single digit clock fields
+        {
+            for value in ["2024-06-01T1:02:03Z", "2024-06-01T01:2:03Z"] {
+                assert!(DateTime::parse_iso(value).is_none(), "accepted malformed timestamp {value:?}");
+            }
         }
     }
 

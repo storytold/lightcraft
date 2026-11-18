@@ -278,30 +278,31 @@ mod tests {
     }
 
     #[test]
-    fn rewrites_all_tokens() {
-        let src = "dac-raw = { path = \"crates/raw\" }\nuse dac_engine::Session;\npkg.strip_prefix(\"dac-\")\nadac-x dac x-dac-y\n";
-        let out = rewrite_all(src, "dac", "foo");
-        assert_eq!(out, "foo-raw = { path = \"crates/raw\" }\nuse foo_engine::Session;\npkg.strip_prefix(\"foo-\")\nadac-x dac x-dac-y\n");
-    }
-
-    #[test]
-    fn upstream_rewrites_known_crates_only() {
-        let suffixes = vec!["denoise".to_string(), "denoise-core".to_string(), "ui-egui".to_string(), "cli".to_string()];
-        let src = "lightcraft-denoise-core lightcraft_ui_egui::x lightcraft-cli lightcraft_zh_hans.otf lightcraft-0.2.tar.gz LightCraft";
-        let out = rewrite_known(src, "lightcraft", "dac", &suffixes);
-        assert_eq!(out, "dac-denoise-core dac_ui_egui::x dac-cli lightcraft_zh_hans.otf lightcraft-0.2.tar.gz LightCraft");
-        assert_eq!(rewrite_known("lightcraft-denoise-extra", "lightcraft", "dac", &suffixes), "lightcraft-denoise-extra");
-    }
-
-    #[test]
-    fn upstream_rewrites_type_names_and_feature_paths() {
-        let suffixes = vec!["ui-egui".to_string()];
-        let src = "use lightcraft_ui_egui::LightcraftApp;\ncargo run -p lightcraft --features lightcraft/heif\nf = [\"lightcraft/heif\"]\nLightCraft Lightcraft github.com/x/lightcraft/y";
-        let out = rewrite_upstream(src, "dac", &suffixes);
-        assert_eq!(
-            out,
-            "use dac_ui_egui::DacApp;\ncargo run -p dac-app --features dac-app/heif\nf = [\"dac-app/heif\"]\nLightCraft Lightcraft github.com/x/lightcraft/y"
-        );
+    fn rewrites_crate_tokens() {
+        // rewrites all tokens
+        {
+            let src = "dac-raw = { path = \"crates/raw\" }\nuse dac_engine::Session;\npkg.strip_prefix(\"dac-\")\nadac-x dac x-dac-y\n";
+            let out = rewrite_all(src, "dac", "foo");
+            assert_eq!(out, "foo-raw = { path = \"crates/raw\" }\nuse foo_engine::Session;\npkg.strip_prefix(\"foo-\")\nadac-x dac x-dac-y\n");
+        }
+        // upstream rewrites known crates only
+        {
+            let suffixes = vec!["denoise".to_string(), "denoise-core".to_string(), "ui-egui".to_string(), "cli".to_string()];
+            let src = "lightcraft-denoise-core lightcraft_ui_egui::x lightcraft-cli lightcraft_zh_hans.otf lightcraft-0.2.tar.gz LightCraft";
+            let out = rewrite_known(src, "lightcraft", "dac", &suffixes);
+            assert_eq!(out, "dac-denoise-core dac_ui_egui::x dac-cli lightcraft_zh_hans.otf lightcraft-0.2.tar.gz LightCraft");
+            assert_eq!(rewrite_known("lightcraft-denoise-extra", "lightcraft", "dac", &suffixes), "lightcraft-denoise-extra");
+        }
+        // upstream rewrites type names and feature paths
+        {
+            let suffixes = vec!["ui-egui".to_string()];
+            let src = "use lightcraft_ui_egui::LightcraftApp;\ncargo run -p lightcraft --features lightcraft/heif\nf = [\"lightcraft/heif\"]\nLightCraft Lightcraft github.com/x/lightcraft/y";
+            let out = rewrite_upstream(src, "dac", &suffixes);
+            assert_eq!(
+                out,
+                "use dac_ui_egui::DacApp;\ncargo run -p dac-app --features dac-app/heif\nf = [\"dac-app/heif\"]\nLightCraft Lightcraft github.com/x/lightcraft/y"
+            );
+        }
     }
 
     #[test]

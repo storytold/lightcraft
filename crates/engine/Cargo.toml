@@ -79,6 +79,7 @@ lcc-updater = { workspace = true }
 lcc-immich = { workspace = true }
 # peer sync between devices on the local network (Settings ▸ Sync)
 lcc-peer = { workspace = true }
+lcc-sync = { workspace = true }
 # peer sync: record digests
 sha2 = { workspace = true }
 lcc-publish = { workspace = true }

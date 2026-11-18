@@ -222,25 +222,27 @@ mod tests {
     }
 
     #[test]
-    fn heads_and_bodies() {
-        let mut r = Cursor::new(b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 3\r\nX-A:  b \r\n\r\nabc".to_vec());
-        let h = read_head(&mut r).unwrap();
-        assert_eq!((h.status, h.reason.as_str(), h.header("x-a")), (200, "OK", Some("b")));
-        assert_eq!(Framing::of(&h, false).unwrap(), Framing::Length(3));
-        assert_eq!(body(b"4;x=y\r\nWiki\r\n5\r\npedia\r\n0\r\nT: v\r\n\r\n", Framing::Chunked).unwrap(), b"Wikipedia");
-        assert_eq!(body(b"rest", Framing::Close).unwrap(), b"rest");
-    }
-
-    #[test]
-    fn hostile_responses_are_errors() {
-        for raw in [&b"SSH-2.0\r\n\r\n"[..], b"HTTP/1.1 abc OK\r\n\r\n", b"HTTP/1.1 200 OK\r\nnocolon\r\n\r\n", b"HTTP/1.1 200"] {
-            assert!(read_head(&mut Cursor::new(raw.to_vec())).is_err());
+    fn heads_bodies_and_hostile_responses() {
+        // heads and bodies
+        {
+            let mut r = Cursor::new(b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 3\r\nX-A:  b \r\n\r\nabc".to_vec());
+            let h = read_head(&mut r).unwrap();
+            assert_eq!((h.status, h.reason.as_str(), h.header("x-a")), (200, "OK", Some("b")));
+            assert_eq!(Framing::of(&h, false).unwrap(), Framing::Length(3));
+            assert_eq!(body(b"4;x=y\r\nWiki\r\n5\r\npedia\r\n0\r\nT: v\r\n\r\n", Framing::Chunked).unwrap(), b"Wikipedia");
+            assert_eq!(body(b"rest", Framing::Close).unwrap(), b"rest");
         }
-        let huge = format!("HTTP/1.1 200 OK\r\n{}\r\n", "X: y\r\n".repeat(20_000));
-        assert!(read_head(&mut Cursor::new(huge.into_bytes())).is_err());
-        assert!(body(b"zz\r\n", Framing::Chunked).is_err());
-        assert!(body(b"ffffffffffffffffffff\r\n", Framing::Chunked).is_err());
-        assert!(body(b"3\r\nabcX", Framing::Chunked).is_err());
-        assert!(body(b"ab", Framing::Length(5)).is_err());
+        // hostile responses are errors
+        {
+            for raw in [&b"SSH-2.0\r\n\r\n"[..], b"HTTP/1.1 abc OK\r\n\r\n", b"HTTP/1.1 200 OK\r\nnocolon\r\n\r\n", b"HTTP/1.1 200"] {
+                assert!(read_head(&mut Cursor::new(raw.to_vec())).is_err());
+            }
+            let huge = format!("HTTP/1.1 200 OK\r\n{}\r\n", "X: y\r\n".repeat(20_000));
+            assert!(read_head(&mut Cursor::new(huge.into_bytes())).is_err());
+            assert!(body(b"zz\r\n", Framing::Chunked).is_err());
+            assert!(body(b"ffffffffffffffffffff\r\n", Framing::Chunked).is_err());
+            assert!(body(b"3\r\nabcX", Framing::Chunked).is_err());
+            assert!(body(b"ab", Framing::Length(5)).is_err());
+        }
     }
 }

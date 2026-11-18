@@ -149,12 +149,11 @@ fn spawn(_ctx: egui::Context, _tx: std::sync::mpsc::Sender<Action>, _shared: Sha
 mod tests {
     use super::*;
 
-    fn write(name: &str, text: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("app-midi-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(name);
-        std::fs::write(&path, text).unwrap();
-        path
+    /// `text` as file `name` in a Temp folder of its own, removed when the test ends.
+    fn write(name: &str, text: &str) -> lcc_testkit::TempFile {
+        let file = lcc_testkit::TempFile::new(&format!("app-midi-test-{name}"), name);
+        std::fs::write(&file, text).unwrap();
+        file
     }
 
     fn shared() -> Shared {
@@ -175,7 +174,7 @@ mod tests {
     fn reload_swaps_in_a_good_file_and_turns_midi_off_when_the_file_is_gone() {
         let shared = shared();
         let path = write("good.toml", r#"bindings = [{ on = "note", number = 1, run = "library.next" }]"#);
-        assert!(reload(Some(path), &shared).unwrap().contains("1 bindings"));
+        assert!(reload(Some(path.to_path_buf()), &shared).unwrap().contains("1 bindings"));
         assert_eq!(bindings(&shared), 1);
         assert!(reload(Some(PathBuf::from("/no/such/midi.toml")), &shared).unwrap().contains("off"));
         assert_eq!(bindings(&shared), 0);
@@ -185,9 +184,9 @@ mod tests {
     fn reload_keeps_the_map_in_use_when_the_file_has_a_mistake() {
         let shared = shared();
         let good = write("keep-good.toml", r#"bindings = [{ on = "note", number = 1, run = "library.next" }]"#);
-        reload(Some(good), &shared).unwrap();
+        reload(Some(good.to_path_buf()), &shared).unwrap();
         let bad = write("keep-bad.toml", r#"bindings = [{ on = "note", number = 1, run = "no.such.command" }]"#);
-        let e = reload(Some(bad), &shared).unwrap_err();
+        let e = reload(Some(bad.to_path_buf()), &shared).unwrap_err();
         assert!(e.contains("binding 1") && e.contains("no.such.command"), "{e}");
         assert_eq!(bindings(&shared), 1);
     }

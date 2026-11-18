@@ -114,6 +114,45 @@ fn tiny_gif_and_bmp_declaring_a_gigapixel_canvas_are_refused_before_allocating()
         let decoded = decode(&bytes, DecodeOptions::default());
         assert!(matches!(&decoded, Err(Error::Malformed(_, m)) if m.contains("can hold")), "{name}: {:?}", decoded.err());
     }
+    // a tiny rle bmp declaring a gigapixel canvas is refused before allocating
+    // A mostly blank canvas still costs its full size to decode, so a tiny RLE BMP can't claim a
+    // gigapixel one: canvases the file's runs can't cover are limited to 4 MP, refused before the
+    // decoder allocates them.
+    {
+        for (w, h) in [(2_001, 2_000), (22_000, 22_000)] {
+            let b = rle_bmp_ending_at_once(w, h);
+            let header = read_header(&b);
+            assert!(matches!(&header, Err(Error::Malformed(_, m)) if m.contains("mostly blank")), "{w} × {h}: {header:?}");
+            let decoded = decode(&b, DecodeOptions::default());
+            assert!(matches!(&decoded, Err(Error::Malformed(_, m)) if m.contains("mostly blank")), "{w} × {h}: {:?}", decoded.err());
+        }
+    }
+    // a gif whose one pixel frame sits on a gigapixel screen is refused before allocating
+    {
+        let b = gif_with_one_pixel_frame(22_000, 22_000);
+        let header = read_header(&b);
+        assert!(matches!(&header, Err(Error::Malformed(_, m)) if m.contains("mostly blank")), "{header:?}");
+        let decoded = decode(&b, DecodeOptions::default());
+        assert!(matches!(&decoded, Err(Error::Malformed(_, m)) if m.contains("mostly blank")), "{:?}", decoded.err());
+    }
+    // a gif padded with comments still cannot claim a gigapixel canvas
+    // A GIF's comments and other extensions describe no pixels, so padding a tiny GIF with 100 KB of
+    // comment doesn't let it claim a gigapixel canvas: only the frame's LZW data counts.
+    {
+        let mut bytes = tiny_gif(22_000, 22_000);
+        let mut comment = vec![0x21, 0xFE];
+        for _ in 0..400 {
+            comment.push(255);
+            comment.extend([b'x'; 255]);
+        }
+        comment.push(0);
+        bytes.splice(13..13, comment);
+        assert!(bytes.len() > 100_000);
+        let header = read_header(&bytes);
+        assert!(matches!(&header, Err(Error::Malformed(_, m)) if m.contains("can hold")), "{header:?}");
+        let decoded = decode(&bytes, DecodeOptions::default());
+        assert!(matches!(&decoded, Err(Error::Malformed(_, m)) if m.contains("can hold")), "{:?}", decoded.err());
+    }
 }
 
 /// Above 4 MP the probe reads GIF and BMP sizes from the header without decoding; the size agrees
@@ -169,20 +208,6 @@ fn an_rle_bmp_that_ends_early_still_opens() {
     assert_eq!((d.source_width, d.source_height), (w as u32, h as u32));
 }
 
-/// A mostly blank canvas still costs its full size to decode, so a tiny RLE BMP can't claim a
-/// gigapixel one: canvases the file's runs can't cover are limited to 4 MP, refused before the
-/// decoder allocates them.
-#[test]
-fn a_tiny_rle_bmp_declaring_a_gigapixel_canvas_is_refused_before_allocating() {
-    for (w, h) in [(2_001, 2_000), (22_000, 22_000)] {
-        let b = rle_bmp_ending_at_once(w, h);
-        let header = read_header(&b);
-        assert!(matches!(&header, Err(Error::Malformed(_, m)) if m.contains("mostly blank")), "{w} × {h}: {header:?}");
-        let decoded = decode(&b, DecodeOptions::default());
-        assert!(matches!(&decoded, Err(Error::Malformed(_, m)) if m.contains("mostly blank")), "{w} × {h}: {:?}", decoded.err());
-    }
-}
-
 /// A `sw` × `sh` GIF screen whose first frame is one pixel (black, from a 2-colour palette).
 fn gif_with_one_pixel_frame(sw: u16, sh: u16) -> Vec<u8> {
     let mut b = b"GIF89a".to_vec();
@@ -206,34 +231,6 @@ fn a_gif_with_a_small_first_frame_on_a_larger_screen_opens() {
     assert_eq!((header.width, header.height), (2_000, 2_000));
     let d = decode(&b, DecodeOptions::fit(64, 64)).unwrap();
     assert_eq!((d.source_width, d.source_height), (2_000, 2_000));
-}
-
-#[test]
-fn a_gif_whose_one_pixel_frame_sits_on_a_gigapixel_screen_is_refused_before_allocating() {
-    let b = gif_with_one_pixel_frame(22_000, 22_000);
-    let header = read_header(&b);
-    assert!(matches!(&header, Err(Error::Malformed(_, m)) if m.contains("mostly blank")), "{header:?}");
-    let decoded = decode(&b, DecodeOptions::default());
-    assert!(matches!(&decoded, Err(Error::Malformed(_, m)) if m.contains("mostly blank")), "{:?}", decoded.err());
-}
-
-/// A GIF's comments and other extensions describe no pixels, so padding a tiny GIF with 100 KB of
-/// comment doesn't let it claim a gigapixel canvas: only the frame's LZW data counts.
-#[test]
-fn a_gif_padded_with_comments_still_cannot_claim_a_gigapixel_canvas() {
-    let mut bytes = tiny_gif(22_000, 22_000);
-    let mut comment = vec![0x21, 0xFE];
-    for _ in 0..400 {
-        comment.push(255);
-        comment.extend([b'x'; 255]);
-    }
-    comment.push(0);
-    bytes.splice(13..13, comment);
-    assert!(bytes.len() > 100_000);
-    let header = read_header(&bytes);
-    assert!(matches!(&header, Err(Error::Malformed(_, m)) if m.contains("can hold")), "{header:?}");
-    let decoded = decode(&bytes, DecodeOptions::default());
-    assert!(matches!(&decoded, Err(Error::Malformed(_, m)) if m.contains("can hold")), "{:?}", decoded.err());
 }
 
 /// Padding is not pixel data: coverage comes from what the pixel data draws, not from the file's

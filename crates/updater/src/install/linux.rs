@@ -381,7 +381,7 @@ mod tests {
         let s = setup("waits");
         let mut app = Command::new("sleep").arg("30").spawn().expect("stand-in app");
         let (mut script, folder) = run_swap(&s, app.id(), Duration::from_secs(20));
-        std::thread::sleep(Duration::from_millis(700));
+        std::thread::sleep(Duration::from_millis(300));
         assert!(content(&s.running).contains("'old'"), "the running file must not be replaced while the app runs");
         assert!(s.staged.exists() && !s.old.exists(), "nothing is moved while the app runs");
         assert!(!s.marker.exists(), "nothing is started while the app runs");

@@ -634,7 +634,13 @@ pub const CALIB_SAT: f32 = 0.6;
 /// The calibration panel's primaries as a white-preserving 3×3 matrix on linear Rec.2020 (row-major):
 /// each primary is rotated in OkLCh hue and scaled in chroma at constant OkLab lightness, then the
 /// columns are rescaled so that neutral (1, 1, 1) maps to itself. `None` when neutral.
-pub fn calibration_matrix(c: &Calibration) -> Option<[[f32; 3]; 3]> {
+///
+/// From process V9 (`linear_sat`) Saturation instead scales the primary's distance from the grey of
+/// its own luminance in linear light (fork issue #1031). In OkLab the line from Rec.2020 blue to white
+/// bends towards cyan/violet, so scaling the primary's OkLab chroma moved every blue mixture in hue
+/// about as much as the Hue slider did, and barely changed its chroma. In linear light the
+/// primary and all its mixtures with grey stay on one straight line, so they keep their hue.
+pub fn calibration_matrix(c: &Calibration, linear_sat: bool) -> Option<[[f32; 3]; 3]> {
     let prim = c.primaries();
     if prim.iter().all(|(h, s)| *h == 0.0 && *s == 0.0) {
         return None;
@@ -645,15 +651,42 @@ pub fn calibration_matrix(c: &Calibration) -> Option<[[f32; 3]; 3]> {
         e[i] = 1.0;
         let [l, ch, h] = lab_to_lch(oklab_from_2020(e));
         let h2 = h + (hue.clamp(-100.0, 100.0) / 100.0) as f32 * CALIB_HUE;
-        let c2 = ch * (1.0 + (sat.clamp(-100.0, 100.0) / 100.0) as f32 * CALIB_SAT);
-        let q = oklab_to_2020(lch_to_lab([l, c2, h2]));
+        let gain = if linear_sat { 1.0 } else { 1.0 + (sat.clamp(-100.0, 100.0) / 100.0) as f32 * CALIB_SAT };
+        let q = oklab_to_2020(lch_to_lab([l, ch * gain, h2]));
         for (r, row) in p.iter_mut().enumerate() {
             row[i] = q[r] as f64;
         }
     }
     let m = Mat3(p);
     let k = m.inverse()?.apply([1.0, 1.0, 1.0]);
-    Some(std::array::from_fn(|r| std::array::from_fn(|col| (p[r][col] * k[col]) as f32)))
+    let mut out: [[f64; 3]; 3] = std::array::from_fn(|r| std::array::from_fn(|col| p[r][col] * k[col]));
+    if linear_sat {
+        // S_i = I + g (e_i − Y_i·1)(e_i − y)ᵀ, y the luminance weights: it moves a colour along its
+        // primary's line through grey by g × how far its channel i stands above its luminance. Grey
+        // and luminance stay; the primary itself gets (1 + g) × its distance from grey.
+        let y: [f64; 3] = std::array::from_fn(|i| {
+            let mut e = [0.0f32; 3];
+            e[i] = 1.0;
+            lcc_color::luminance_2020(e) as f64
+        });
+        for (i, (_, sat)) in prim.iter().enumerate() {
+            let g = sat.clamp(-100.0, 100.0) / 100.0 * CALIB_SAT as f64;
+            if g == 0.0 {
+                continue;
+            }
+            let yi = y.get(i).copied().unwrap_or(0.0);
+            let s: [[f64; 3]; 3] = std::array::from_fn(|r| {
+                std::array::from_fn(|col| {
+                    let u = if r == i { 1.0 - yi } else { -yi };
+                    let v = if col == i { 1.0 - y[col] } else { -y[col] };
+                    let id = if r == col { 1.0 } else { 0.0 };
+                    id + g * u * v
+                })
+            });
+            out = std::array::from_fn(|r| std::array::from_fn(|col| (0..3).map(|t| s[r][t] * out[t][col]).sum()));
+        }
+    }
+    Some(out.map(|row| row.map(|v| v as f32)))
 }
 
 /// Shadows-tint strength at ±100: the green channel's relative change in deep shadows.
@@ -740,9 +773,9 @@ mod tests {
 
     #[test]
     fn calibration_keeps_white_and_moves_primaries() {
-        assert!(calibration_matrix(&Calibration::default()).is_none());
+        assert!(calibration_matrix(&Calibration::default(), false).is_none());
         let cal = Calibration { red_hue: 60.0, blue_sat: -50.0, ..Default::default() };
-        let m = calibration_matrix(&cal).unwrap();
+        let m = calibration_matrix(&cal, false).unwrap();
         let grey = calibrate([0.3, 0.3, 0.3], Some(&m), 0.0);
         assert!(grey.iter().all(|v| (v - 0.3).abs() < 1e-4), "{grey:?}");
         // red rotates in hue, blue loses chroma
@@ -754,6 +787,40 @@ mod tests {
         let c0 = lab_to_lch(oklab_from_2020(blue))[1];
         let c1 = lab_to_lch(oklab_from_2020(calibrate(blue, Some(&m), 0.0)))[1];
         assert!(c1 < c0 * 0.97, "{c0} -> {c1}");
+    }
+
+    /// #1031: from V9 a primary's Saturation changes the chroma of its colours and leaves their hue,
+    /// which the Hue slider moves; grey stays grey.
+    #[test]
+    fn primary_saturation_scales_chroma_not_hue() {
+        let lch = |c: [f32; 3]| lab_to_lch(oklab_from_2020(c));
+        let turn = |a: f32, b: f32| wrap(b - a).abs();
+        for (i, px) in [[0.4f32, 0.05, 0.03], [0.05, 0.35, 0.05], [0.03, 0.05, 0.4], [0.06, 0.08, 0.4]].into_iter().enumerate() {
+            let [_, c0, h0] = lch(px);
+            let prim = if i < 2 { i } else { 2 };
+            let cal = |hue: f64, sat: f64| {
+                let mut c = Calibration::default();
+                match prim {
+                    0 => (c.red_hue, c.red_sat) = (hue, sat),
+                    1 => (c.green_hue, c.green_sat) = (hue, sat),
+                    _ => (c.blue_hue, c.blue_sat) = (hue, sat),
+                }
+                calibration_matrix(&c, true).unwrap()
+            };
+            let more = cal(0.0, 100.0);
+            let less = cal(0.0, -100.0);
+            let hue = cal(100.0, 0.0);
+            let [_, c_more, h_more] = lch(calibrate(px, Some(&more), 0.0));
+            let [_, c_less, h_less] = lch(calibrate(px, Some(&less), 0.0));
+            let [_, _, h_hue] = lch(calibrate(px, Some(&hue), 0.0));
+            assert!(c_more > c0 * 1.15 && c_less < c0 * 0.85, "{px:?}: chroma {c0} -> {c_less} / {c_more}");
+            let rotated = turn(h0, h_hue);
+            assert!(turn(h0, h_more) < rotated * 0.5 && turn(h0, h_less) < rotated * 0.5, "{px:?}: hue {h0} -> {h_less} / {h_more} (Hue: {h_hue})");
+            for m in [more, less, hue] {
+                let grey = calibrate([0.3, 0.3, 0.3], Some(&m), 0.0);
+                assert!(grey.iter().all(|v| (v - 0.3).abs() < 1e-4), "{grey:?}");
+            }
+        }
     }
 
     #[test]

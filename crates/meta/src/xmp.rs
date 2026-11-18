@@ -92,6 +92,8 @@ pub struct XmpData {
     /// item order, language alternatives put `x-default` first. Foreign namespaces that reuse a recognized
     /// prefix use `Q{hex-encoded namespace URI}local` instead, so they cannot impersonate known properties.
     pub properties: BTreeMap<String, Vec<String>>,
+    /// True when flattened properties were omitted after reaching the cumulative key-size limit.
+    pub properties_truncated: bool,
     /// Every top-level property with its full structure (arrays of structs such as local
     /// corrections, which [`XmpData::properties`] flattens).
     pub values: BTreeMap<String, XmpValue>,
@@ -394,10 +396,14 @@ fn is_rdf_meta_attr(k: &str) -> bool {
     matches!(k, "rdf:about" | "rdf:ID" | "rdf:nodeID" | "xml:lang" | "rdf:parseType" | "rdf:resource" | "rdf:datatype") || k.starts_with("xmlns")
 }
 
-fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize) {
+fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut KeyBudget) {
     for (k, v) in &d.attrs {
         // the budget is checked before the path is built, not after
-        if is_rdf_meta_attr(k) || *budget < prefix.len().saturating_add(k.len()) {
+        if is_rdf_meta_attr(k) {
+            continue;
+        }
+        if budget.left < prefix.len().saturating_add(k.len()) {
+            budget.truncated = true;
             continue;
         }
         let key = format!("{prefix}{k}");
@@ -410,21 +416,29 @@ fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<
     }
 }
 
+/// What is left of the flattened-key budget, and whether any property was left out for lack of it.
+struct KeyBudget {
+    left: usize,
+    truncated: bool,
+}
+
 /// Charge one flattened key's length to the key budget; `false` when the budget is spent (the
 /// property is then left out, like other elements a limit has cut).
-fn take_key_bytes(key: &str, budget: &mut usize) -> bool {
+fn take_key_bytes(key: &str, budget: &mut KeyBudget) -> bool {
     let n = key.len();
-    if *budget < n {
+    if budget.left < n {
+        budget.truncated = true;
         return false;
     }
-    *budget = budget.saturating_sub(n);
+    budget.left = budget.left.saturating_sub(n);
     true
 }
 
-fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize) {
+fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut KeyBudget) {
     // a path that can't fit the budget isn't built (a long ancestor path shared by many children
     // would otherwise be copied for each of them after the budget is spent)
-    if *budget < prefix.len().saturating_add(p.name.len()) {
+    if budget.left < prefix.len().saturating_add(p.name.len()) {
+        budget.truncated = true;
         return;
     }
     let key = format!("{prefix}{}", p.name);
@@ -605,7 +619,7 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     let mut props = BTreeMap::new();
     let mut values = BTreeMap::new();
     // One budget for the whole document: several descriptions cannot each spend a fresh one.
-    let mut key_budget = MAX_KEY_BYTES;
+    let mut key_budget = KeyBudget { left: MAX_KEY_BYTES, truncated: false };
     for d in descs {
         collect_description(d, "", &mut props, &mut key_budget);
         if let XmpValue::Struct(m) = node_struct(d) {
@@ -707,7 +721,7 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     }
     m.regions = values.get("mwg-rs:Regions").map(parse_regions).unwrap_or_default();
     let lc_settings = props.get("lc:settings").and_then(|v| v.first()).cloned();
-    Ok(XmpData { metadata: m, lc_settings, properties: props, values })
+    Ok(XmpData { metadata: m, lc_settings, properties: props, properties_truncated: key_budget.truncated, values })
 }
 
 fn frac(v: f64) -> String {
@@ -1081,6 +1095,8 @@ mod tests {
             lens_model: Some("24-70mm".into()),
             lens_serial_number: Some("LS".into()),
             lens_spec: Some([24.0, 70.0, 2.8, 2.8]),
+            // (read from Nikon maker notes only; XMP carries no VR state)
+            stabilization: None,
             capture_time: DateTime::parse_iso("2022-05-06T07:08:09.123-04:00"),
             exposure_time: Some(1.0 / 125.0),
             f_number: Some(5.6),
@@ -1306,24 +1322,6 @@ mod tests {
         assert_eq!(read("True").copyright_url.as_deref(), Some("https://example.org/c"));
     }
 
-    /// A zero or negative `exif:ISOSpeedRatings` is "no ISO" (as in the EXIF reader), not `Some(0)`, and
-    /// must not hide a valid `exifEX:PhotographicSensitivity`.
-    #[test]
-    fn non_positive_iso_is_ignored() {
-        let read = |attrs: &str| {
-            let x = format!(
-                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-                <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:exifEX="http://cipa.jp/exif/1.0/" {attrs}/>
-                </rdf:RDF></x:xmpmeta>"#
-            );
-            parse_xmp(&x).unwrap().metadata.iso
-        };
-        assert_eq!(read(r#"exif:ISOSpeedRatings="0" exifEX:PhotographicSensitivity="400""#), Some(400));
-        assert_eq!(read(r#"exif:ISOSpeedRatings="-100""#), None);
-        assert_eq!(read(r#"exif:ISOSpeedRatings="0""#), None);
-        assert_eq!(read(r#"exif:ISOSpeedRatings="200""#), Some(200));
-    }
-
     /// Fractional, oversized or non-finite ISO values are dropped (never truncated or saturated) and the
     /// alternate property is still considered.
     #[test]
@@ -1342,6 +1340,23 @@ mod tests {
         assert_eq!(read(r#"exif:ISOSpeedRatings="NaN""#), None);
         assert_eq!(read(r#"exif:ISOSpeedRatings="100.5" exifEX:PhotographicSensitivity="400""#), Some(400));
         assert_eq!(read(r#"exif:ISOSpeedRatings="200.0""#), Some(200));
+        // non positive iso is ignored
+        // A zero or negative `exif:ISOSpeedRatings` is "no ISO" (as in the EXIF reader), not `Some(0)`, and
+        // must not hide a valid `exifEX:PhotographicSensitivity`.
+        {
+            let read = |attrs: &str| {
+                let x = format!(
+                    r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                    <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:exifEX="http://cipa.jp/exif/1.0/" {attrs}/>
+                    </rdf:RDF></x:xmpmeta>"#
+                );
+                parse_xmp(&x).unwrap().metadata.iso
+            };
+            assert_eq!(read(r#"exif:ISOSpeedRatings="0" exifEX:PhotographicSensitivity="400""#), Some(400));
+            assert_eq!(read(r#"exif:ISOSpeedRatings="-100""#), None);
+            assert_eq!(read(r#"exif:ISOSpeedRatings="0""#), None);
+            assert_eq!(read(r#"exif:ISOSpeedRatings="200""#), Some(200));
+        }
     }
 
     /// Fractional, oversized or negative pixel dimensions are dropped, not truncated or saturated.
@@ -1361,6 +1376,21 @@ mod tests {
         }
         assert_eq!(read(r#"tiff:ImageWidth="640.5" exif:PixelXDimension="800""#), Some(800));
         assert_eq!(read(r#"tiff:ImageWidth="640""#), Some(640));
+        // negative xmp pixel width is ignored
+        {
+            let read = |attrs: &str| {
+                let x = format!(
+                    r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                    <rdf:Description xmlns:tiff="http://ns.adobe.com/tiff/1.0/" xmlns:exif="http://ns.adobe.com/exif/1.0/" {attrs}/>
+                </rdf:RDF>"#
+                );
+                parse_xmp(&x).unwrap().metadata.width
+            };
+
+            assert_eq!(read(r#"tiff:ImageWidth="-1""#), None);
+            assert_eq!(read(r#"tiff:ImageWidth="-1" exif:PixelXDimension="640""#), Some(640));
+            assert_eq!(read(r#"exif:PixelXDimension="-1""#), None);
+        }
     }
 
     #[test]
@@ -1396,6 +1426,13 @@ mod tests {
             assert_eq!(parsed.properties["tiff:Orientation"], vec![value.to_string()], "{value}");
             assert!(!write_xmp(&parsed.metadata, None).contains("tiff:Orientation"), "rejected {value} must not become a written orientation");
         }
+        // xmp orientation rejects out of range values
+        {
+            for value in ["0", "9", "-1", "nan", "inf"] {
+                let parsed = parse_xmp(&orientation_packet(value)).unwrap();
+                assert_eq!(parsed.metadata.orientation, None, "{value}");
+            }
+        }
     }
 
     #[test]
@@ -1408,30 +1445,6 @@ mod tests {
             let parsed = parse_xmp(&orientation_packet(value)).unwrap();
             assert_eq!(parsed.metadata.orientation.map(|orientation| orientation.to_exif()), Some(6), "{value}");
         }
-    }
-
-    #[test]
-    fn xmp_orientation_rejects_out_of_range_values() {
-        for value in ["0", "9", "-1", "nan", "inf"] {
-            let parsed = parse_xmp(&orientation_packet(value)).unwrap();
-            assert_eq!(parsed.metadata.orientation, None, "{value}");
-        }
-    }
-
-    #[test]
-    fn negative_xmp_pixel_width_is_ignored() {
-        let read = |attrs: &str| {
-            let x = format!(
-                r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-                <rdf:Description xmlns:tiff="http://ns.adobe.com/tiff/1.0/" xmlns:exif="http://ns.adobe.com/exif/1.0/" {attrs}/>
-            </rdf:RDF>"#
-            );
-            parse_xmp(&x).unwrap().metadata.width
-        };
-
-        assert_eq!(read(r#"tiff:ImageWidth="-1""#), None);
-        assert_eq!(read(r#"tiff:ImageWidth="-1" exif:PixelXDimension="640""#), Some(640));
-        assert_eq!(read(r#"exif:PixelXDimension="-1""#), None);
     }
 
     #[test]
@@ -1472,24 +1485,6 @@ mod tests {
         assert_eq!(fmt_gps_coord(-45.51, 'N', 'S'), "45,30.600000S");
         assert_eq!(fmt_gps_coord(10.9999999999, 'N', 'S'), "11,0.000000N");
         assert_eq!(fmt_gps_coord(-0.9999999999, 'E', 'W'), "1,0.000000W");
-    }
-
-    /// Like the EXIF and GPX readers, XMP drops a position outside latitude ±90° / longitude ±180°.
-    #[test]
-    fn xmp_gps_out_of_range_rejected() {
-        let gps = |lat: &str, lon: &str| {
-            let x = format!(
-                r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-                xmlns:e="http://ns.adobe.com/exif/1.0/" e:GPSLatitude="{lat}" e:GPSLongitude="{lon}"/>"#
-            );
-            parse_xmp(&x).unwrap().metadata.gps
-        };
-        assert_eq!(gps("95,0N", "200,30E"), None);
-        assert_eq!(gps("95,0N", "10,0E"), None);
-        assert_eq!(gps("10,0S", "200,30W"), None);
-        assert_eq!(gps("90,0,1N", "0,0E"), None);
-        assert_eq!(gps("90,0N", "180,0E"), Some(Gps { latitude: 90.0, longitude: 180.0, altitude: None }));
-        assert_eq!(gps("90,0S", "180,0W"), Some(Gps { latitude: -90.0, longitude: -180.0, altitude: None }));
     }
 
     #[test]
@@ -1533,6 +1528,23 @@ mod tests {
 
         assert_eq!(parse("95,0N", "7,0E").metadata.gps, None, "combined latitude range remains checked");
         assert_eq!(parse("45,0N", "200,0E").metadata.gps, None, "combined longitude range remains checked");
+        // xmp gps out of range rejected
+        // Like the EXIF and GPX readers, XMP drops a position outside latitude ±90° / longitude ±180°.
+        {
+            let gps = |lat: &str, lon: &str| {
+                let x = format!(
+                    r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                    xmlns:e="http://ns.adobe.com/exif/1.0/" e:GPSLatitude="{lat}" e:GPSLongitude="{lon}"/>"#
+                );
+                parse_xmp(&x).unwrap().metadata.gps
+            };
+            assert_eq!(gps("95,0N", "200,30E"), None);
+            assert_eq!(gps("95,0N", "10,0E"), None);
+            assert_eq!(gps("10,0S", "200,30W"), None);
+            assert_eq!(gps("90,0,1N", "0,0E"), None);
+            assert_eq!(gps("90,0N", "180,0E"), Some(Gps { latitude: 90.0, longitude: 180.0, altitude: None }));
+            assert_eq!(gps("90,0S", "180,0W"), Some(Gps { latitude: -90.0, longitude: -180.0, altitude: None }));
+        }
     }
 
     /// MWG Region Guidelines v2.0, element form (`rdf:parseType="Resource"`, self-closing `Area`) — how
@@ -1836,6 +1848,7 @@ mod tests {
         assert!(total <= MAX_KEY_BYTES, "flattened-key text {total} is over the {MAX_KEY_BYTES} budget");
         assert!(d.properties.len() < 3000, "keys stop being added once the budget is spent");
         assert!(!d.properties.is_empty(), "properties parsed before the budget are kept");
+        assert!(d.properties_truncated, "omitted flattened keys are reported to callers");
     }
 
     #[test]

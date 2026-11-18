@@ -55,41 +55,28 @@ fn exposure(h: &Headless, id: u64) -> f64 {
     h.app.session.develop_of(PhotoId(id)).map(|d| d.light.exposure).unwrap_or_default()
 }
 
+/// Copy Settings and Paste Settings: Esc closes the dialog and does nothing, Return closes it and does the work.
 #[test]
-fn return_copies_the_chosen_settings() {
-    let (mut h, _) = edited();
-    copy_dialog(&mut h);
-    assert!(h.app.session.clipboard.is_none());
-    key(&mut h, json!({"key": "Enter"}));
-    assert!(h.app.ui.dialog.is_none(), "Return closes the dialog");
-    assert!(h.app.session.clipboard.is_some(), "Return copies the settings");
-}
-
-#[test]
-fn escape_closes_copy_settings_without_copying() {
-    let (mut h, _) = edited();
+fn return_confirms_and_escape_cancels_copy_and_paste_settings() {
+    let (mut h, ids) = edited();
     copy_dialog(&mut h);
     key(&mut h, json!({"key": "Escape"}));
-    assert!(h.app.ui.dialog.is_none(), "Esc closes the dialog");
+    assert!(h.app.ui.dialog.is_none(), "Esc closes Copy Settings");
     assert!(h.app.session.clipboard.is_none(), "Esc copies nothing");
-}
-
-#[test]
-fn return_pastes_into_the_selected_photos() {
-    let (mut h, ids) = edited();
-    paste_dialog(&mut h, ids);
+    copy_dialog(&mut h);
     key(&mut h, json!({"key": "Enter"}));
-    assert!(h.app.ui.dialog.is_none(), "Return closes the dialog");
-    assert_eq!(exposure(&h, ids[1]), 1.0, "Return pastes the settings");
-}
+    assert!(h.app.ui.dialog.is_none(), "Return closes Copy Settings");
+    assert!(h.app.session.clipboard.is_some(), "Return copies the settings");
 
-#[test]
-fn escape_closes_paste_settings_without_pasting() {
-    let (mut h, ids) = edited();
     paste_dialog(&mut h, ids);
     key(&mut h, json!({"key": "Escape"}));
-    assert!(h.app.ui.dialog.is_none(), "Esc closes the dialog");
+    assert!(h.app.ui.dialog.is_none(), "Esc closes Paste Settings");
     assert_eq!(exposure(&h, ids[1]), 0.0, "Esc pastes nothing");
+    exec(&mut h, "library.select", json!({"ids": [ids[0]]}));
+    paste_dialog(&mut h, ids);
+    key(&mut h, json!({"key": "Enter"}));
+    assert!(h.app.ui.dialog.is_none(), "Return closes Paste Settings");
+    assert_eq!(exposure(&h, ids[1]), 1.0, "Return pastes the settings");
 }
 
 fn click(h: &mut Headless, id: &str) {
@@ -100,9 +87,9 @@ fn click(h: &mut Headless, id: &str) {
 }
 
 /// Develop's Copy… / Paste buttons under the left column (issue #118) copy through the Copy
-/// Settings dialog and paste into the selected photo.
+/// Settings dialog and paste into the selected photo; Library's Export… opens the Export module.
 #[test]
-fn develop_left_bar_copies_and_pastes() {
+fn the_left_bar_copies_pastes_and_opens_export() {
     let (mut h, ids) = edited();
     h.app.run("module.develop", json!({})).unwrap();
     h.app.run("panel.left", json!({"show": true})).unwrap();
@@ -113,12 +100,7 @@ fn develop_left_bar_copies_and_pastes() {
     exec(&mut h, "library.select", json!({"ids": [ids[1]]}));
     click(&mut h, "button:leftBar-paste");
     assert_eq!(exposure(&h, ids[1]), 1.0, "Paste pastes the copied settings");
-}
-
-/// Library's Import… / Export… buttons under the left column (issue #118).
-#[test]
-fn library_left_bar_opens_export() {
-    let (mut h, _) = edited();
+    // Library's Import… / Export… buttons under the left column (issue #118)
     h.app.run("module.library", json!({})).unwrap();
     h.app.run("panel.left", json!({"show": true})).unwrap();
     click(&mut h, "button:leftBar-export");

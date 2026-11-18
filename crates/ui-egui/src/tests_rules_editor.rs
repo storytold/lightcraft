@@ -35,10 +35,6 @@ fn rect(h: &Headless, id: &str) -> egui::Rect {
     h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"))
 }
 
-fn has(h: &Headless, id: &str) -> bool {
-    h.app.widgets.iter().any(|(w, _)| w == id)
-}
-
 fn request(h: &mut Headless, method: &str, id: &str) {
     let r = h.request(method, json!({"id": id}), T);
     assert_eq!(r["ok"], true, "{method} {id}: {r}");
@@ -54,8 +50,8 @@ fn rule_count(h: &Headless) -> usize {
 /// instead of being drawn over them, the dialog widens to hold it, and every row's buttons stay
 /// lined up at the right.
 #[test]
-fn add_and_remove_never_cover_a_between_dates_rule() {
-    let h = editor(json!([
+fn add_and_remove_never_cover_a_between_dates_rule_and_its_end_calendar_opens() {
+    let mut h = editor(json!([
         {"field": "captureDate", "op": "between", "value": ["2026-02-01", "2026-02-28"]},
         {"field": "rating", "op": "gte", "value": 3},
     ]));
@@ -71,16 +67,13 @@ fn add_and_remove_never_cover_a_between_dates_rule() {
     }
     let (long, short) = (rect(&h, "button:ruleAdd-rules-0"), rect(&h, "button:ruleAdd-rules-1"));
     assert!((long.right() - short.right()).abs() < 0.5, "the rows' + don't line up: {long:?} vs {short:?}");
-}
-
-/// The end date's calendar is there and opens when clicked; the click doesn't land on the + that
-/// used to cover it (and add a rule).
-#[test]
-fn the_end_dates_calendar_opens() {
-    let mut h = editor(json!([{"field": "captureDate", "op": "between", "value": ["2026-03", "2026-06"]}]));
+    // the end date's calendar opens when clicked; the click doesn't land on the + that used to cover it (and add a rule)
     request(&mut h, "ui.clickWidget", "datePicker:rules-0-b");
-    assert!(has(&h, "datePickerCell:2026-06:rules-0-b"), "the end date's calendar opened on its month");
-    assert_eq!(rule_count(&h), 1, "no rule was added");
+    assert!(
+        h.app.widgets.iter().any(|(w, _)| w.starts_with("datePickerCell:2026-02") && w.ends_with(":rules-0-b")),
+        "the end date's calendar opened on its month"
+    );
+    assert_eq!(rule_count(&h), 2, "no rule was added");
 }
 
 /// Hovering any field in the field menu, top-level or in a group's submenu, keeps it the size it

@@ -24,59 +24,59 @@ fn show_album(s: &mut Session, id: u64) {
 }
 
 #[test]
-fn back_and_forward_walk_the_sources_and_are_off_at_the_ends() {
-    let (mut s, a, b) = session();
-    assert!(!can(&s, "library.sourceBack") && !can(&s, "library.sourceForward"));
-    show_album(&mut s, a);
-    show_album(&mut s, b);
-    assert!(can(&s, "library.sourceBack") && !can(&s, "library.sourceForward"));
-    s.execute("library.sourceBack", &json!({})).unwrap();
-    assert_eq!(s.source, LibrarySource::Album(AlbumId(a)));
-    s.execute("library.sourceBack", &json!({})).unwrap();
-    assert_eq!(s.source, LibrarySource::All, "the source shown before the first choice starts the history");
-    assert!(!can(&s, "library.sourceBack") && can(&s, "library.sourceForward"));
-    assert!(s.execute("library.sourceBack", &json!({})).is_err());
-    s.execute("library.sourceForward", &json!({})).unwrap();
-    s.execute("library.sourceForward", &json!({})).unwrap();
-    assert_eq!(s.source, LibrarySource::Album(AlbumId(b)));
-    assert!(!can(&s, "library.sourceForward"));
-}
-
-#[test]
-fn choosing_a_new_source_clears_the_forward_half() {
-    let (mut s, a, b) = session();
-    show_album(&mut s, a);
-    show_album(&mut s, b);
-    s.execute("library.sourceBack", &json!({})).unwrap();
-    s.execute("library.source", &json!({"kind": "picks"})).unwrap();
-    assert!(!can(&s, "library.sourceForward"));
-    s.execute("library.sourceBack", &json!({})).unwrap();
-    assert_eq!(s.source, LibrarySource::Album(AlbumId(a)), "B is gone from the history");
-}
-
-#[test]
-fn sources_that_no_longer_exist_are_skipped() {
-    let (mut s, a, b) = session();
-    show_album(&mut s, a);
-    show_album(&mut s, b);
-    s.execute("library.source", &json!({"kind": "picks"})).unwrap();
-    s.execute("album.delete", &json!({"id": b})).unwrap();
-    s.execute("library.sourceBack", &json!({})).unwrap();
-    assert_eq!(s.source, LibrarySource::Album(AlbumId(a)), "the deleted collection is stepped over");
-    s.execute("library.sourceForward", &json!({})).unwrap();
-    assert_eq!(s.source, LibrarySource::Picks);
-}
-
-#[test]
-fn the_history_is_bounded() {
-    let (mut s, _, _) = session();
-    for i in 0..120 {
-        let kind = if i % 2 == 0 { "picks" } else { "all" };
-        s.execute("library.source", &json!({"kind": kind})).unwrap();
+fn back_and_forward_walk_the_source_history() {
+    // back and forward walk the sources and are off at the ends
+    {
+        let (mut s, a, b) = session();
+        assert!(!can(&s, "library.sourceBack") && !can(&s, "library.sourceForward"));
+        show_album(&mut s, a);
+        show_album(&mut s, b);
+        assert!(can(&s, "library.sourceBack") && !can(&s, "library.sourceForward"));
+        s.execute("library.sourceBack", &json!({})).unwrap();
+        assert_eq!(s.source, LibrarySource::Album(AlbumId(a)));
+        s.execute("library.sourceBack", &json!({})).unwrap();
+        assert_eq!(s.source, LibrarySource::All, "the source shown before the first choice starts the history");
+        assert!(!can(&s, "library.sourceBack") && can(&s, "library.sourceForward"));
+        assert!(s.execute("library.sourceBack", &json!({})).is_err());
+        s.execute("library.sourceForward", &json!({})).unwrap();
+        s.execute("library.sourceForward", &json!({})).unwrap();
+        assert_eq!(s.source, LibrarySource::Album(AlbumId(b)));
+        assert!(!can(&s, "library.sourceForward"));
     }
-    let mut steps = 0;
-    while s.execute("library.sourceBack", &json!({})).is_ok() {
-        steps += 1;
+    // choosing a new source clears the forward half
+    {
+        let (mut s, a, b) = session();
+        show_album(&mut s, a);
+        show_album(&mut s, b);
+        s.execute("library.sourceBack", &json!({})).unwrap();
+        s.execute("library.source", &json!({"kind": "picks"})).unwrap();
+        assert!(!can(&s, "library.sourceForward"));
+        s.execute("library.sourceBack", &json!({})).unwrap();
+        assert_eq!(s.source, LibrarySource::Album(AlbumId(a)), "B is gone from the history");
     }
-    assert!(steps < crate::view::SourceHistory::MAX && steps > 10, "got {steps}");
+    // sources that no longer exist are skipped
+    {
+        let (mut s, a, b) = session();
+        show_album(&mut s, a);
+        show_album(&mut s, b);
+        s.execute("library.source", &json!({"kind": "picks"})).unwrap();
+        s.execute("album.delete", &json!({"id": b})).unwrap();
+        s.execute("library.sourceBack", &json!({})).unwrap();
+        assert_eq!(s.source, LibrarySource::Album(AlbumId(a)), "the deleted collection is stepped over");
+        s.execute("library.sourceForward", &json!({})).unwrap();
+        assert_eq!(s.source, LibrarySource::Picks);
+    }
+    // the history is bounded
+    {
+        let (mut s, _, _) = session();
+        for i in 0..120 {
+            let kind = if i % 2 == 0 { "picks" } else { "all" };
+            s.execute("library.source", &json!({"kind": kind})).unwrap();
+        }
+        let mut steps = 0;
+        while s.execute("library.sourceBack", &json!({})).is_ok() {
+            steps += 1;
+        }
+        assert!(steps < crate::view::SourceHistory::MAX && steps > 10, "got {steps}");
+    }
 }

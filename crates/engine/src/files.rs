@@ -14,9 +14,10 @@ use lcc_raster::resample::{Filter, fit};
 use crate::media::{DenoiseSpec, FileLoader, FileProbe, LoadOptions, PairLoader, PreviewLoader, ProbeInfo, ReducedLoader};
 
 fn meta_of(m: &lcc_meta::Metadata) -> (Meta, Option<String>) {
-    // the camera's own wording, to the tenth of a second: `1/250`, `0.4`, `1.3″` (issue #1619: rounding
-    // `1/0.4` to `1/2` both showed and exported the wrong time)
-    let shutter = m.exposure_time.and_then(lcc_meta::exposure_display_of).unwrap_or_default();
+    // the camera's own wording: `1/250`, `1/3`, `0.4`, `0.3571`, `1.3″` (issue #1619: rounding `1/0.4` to `1/2`
+    // both showed and exported the wrong time); the exact time is kept beside it for export (upstream #1692)
+    let exposure_time = m.exposure_time.filter(|t| t.is_finite() && *t > 0.0);
+    let shutter = exposure_time.and_then(lcc_meta::exposure_display_of).unwrap_or_default();
     let camera_make = m.make.clone().unwrap_or_default();
     let camera_model = m.model.clone().unwrap_or_default();
     let meta = Meta {
@@ -30,6 +31,7 @@ fn meta_of(m: &lcc_meta::Metadata) -> (Meta, Option<String>) {
         focal_mm: m.focal_length.map(|f| f as f32),
         aperture: m.f_number.map(|f| f as f32),
         shutter,
+        exposure_time,
         iso: m.iso,
         flash: m.flash.as_ref().map(|f| f.fired),
         exposure_bias: m.exposure_bias.map(|v| v as f32).filter(|v| v.is_finite()),
@@ -770,6 +772,14 @@ fn load_bytes_now(
         // (removed before the camera look's binned sensor proxy too, which needs an empty `OpcodeList3`).
         let info = raw.info();
         let window = lcc_raw::sensor_window(&bytes, [info.active_area.width, info.active_area.height]);
+        // a flat-field map works in full-resolution sensor pixels: a reduced DNG copy has a smaller active area
+        // of its own, so the full image's comes from the file's header
+        let full_active = if used_reduced {
+            lcc_raw::probe_info(&bytes).ok().map(|i| [i.active_area.width, i.active_area.height])
+        } else {
+            Some([info.active_area.width, info.active_area.height])
+        };
+        let full_window = if used_reduced { full_active.and_then(|a| lcc_raw::sensor_window(&bytes, a)) } else { window };
         let (lens, lens_from_file) = match crate::lens_profiles::resolve_raw(&info, window, || lcc_meta::extract(&bytes), None) {
             Some((l, applied)) => (Some(l), applied == crate::lens_profiles::Applied::Embedded),
             None => (None, false),
@@ -786,6 +796,8 @@ fn load_bytes_now(
         let scale = WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
         // (whether the photo's Profile option can start from measured colour: decided before the colour is chosen)
         let colorimetric = crate::camera_preview::colorimetric_camera(&raw).is_some();
+        // (a DNG of rendered RGB: no camera profile describes it, so the Profiles panel offers none)
+        let rendered_rgb = lcc_raw::color::is_rendered_rgb(&raw.color);
         let t_colour = web_time::Instant::now();
         // the source's segmentation mattes (DNG semantic masks), read while the starting colour is fitted
         let (((xy, t, camera_look), kept_tone), mattes) = rayon::join(
@@ -889,7 +901,8 @@ fn load_bytes_now(
         // a fitted look's tone, else the tone a profile without a curve of its own keeps, else the file's (or profile's) curve
         let camera_tone =
             camera_look.as_ref().map(|p| p.tone).or(kept_tone).or_else(|| raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve));
-        let local_tone = local_tone(&raw);
+        let placement = source_placement(&raw, full_active, full_window);
+        let local_tone = local_tone(&raw, lcc_raw::gaintable::SourcePlacement::new(placement.rect, placement.orientation));
         let (temp, tint) = scale.as_shot(xy);
         return Ok((
             img,
@@ -910,12 +923,17 @@ fn load_bytes_now(
                 // (the catalog knows the original's size: `media::source_info`)
                 native_long: None,
                 colorimetric,
+                rendered_rgb,
                 alpha: None,
+                infrared: None,
                 generated: None,
                 avoid: None,
                 pixels: Some(pixels),
                 // (the catalog knows which photo this is: `media::source_info`)
                 identity: None,
+                placement: Some(placement),
+                // (the session adds the catalog's maps: `media`, as it adds the generated patches)
+                vignetting_maps: None,
             },
             used_reduced,
         ));
@@ -934,13 +952,18 @@ fn load_bytes_now(
         let a = if a.width.max(a.height) > max_edge { fit(&a, max_edge, max_edge, Filter::Mitchell) } else { a };
         Arc::new(a.into_oriented(orientation))
     });
+    // a film scanner's infrared pass, fitted and oriented with the pixels (Find Film Dust reads it)
+    let infrared = d.infrared.filter(|p| (p.width, p.height) == (img.width, img.height)).map(|p| {
+        let p = if p.width.max(p.height) > max_edge { fit(&p, max_edge, max_edge, Filter::Mitchell) } else { p };
+        Arc::new(p.into_oriented(orientation))
+    });
     let finish = |img: Rgb32f| {
         let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
         img.into_oriented(orientation)
     };
     let img = finish(img);
     let twin = twin.map(finish).filter(|t| t.width == img.width && t.height == img.height);
-    Ok((img, twin, SourceInfo { alpha, ..SourceInfo::default() }, false))
+    Ok((img, twin, SourceInfo { alpha, infrared, ..SourceInfo::default() }, false))
 }
 
 /// The cached denoised picture of a finished picture (gamma-encoded sRGB at the file's full size, see
@@ -1064,14 +1087,48 @@ impl WbScaleOf {
 
 /// The raw's gain table map with where its developed picture (the default crop, oriented) sits in
 /// the active area: rendered when the photo's "Camera local tone mapping" option is on.
-fn local_tone(raw: &lcc_raw::RawImage) -> Option<Arc<lcc_pipeline::local_tone::LocalTone>> {
+fn local_tone(raw: &lcc_raw::RawImage, placement: lcc_raw::gaintable::SourcePlacement) -> Option<Arc<lcc_pipeline::local_tone::LocalTone>> {
     let map = raw.color.profile.gain_table_map.clone()?;
-    let a = raw.active_area;
-    let (aw, ah) = (a.width.max(1) as f64, a.height.max(1) as f64);
-    let c = raw.develop_crop(a.width, a.height);
-    let rect = [c.x as f64 / aw, c.y as f64 / ah, c.width as f64 / aw, c.height as f64 / ah];
-    let placement = lcc_raw::gaintable::SourcePlacement { rect, orientation: raw.orientation };
     Some(Arc::new(lcc_pipeline::local_tone::LocalTone { map, placement }))
+}
+
+/// Where a raw's developed picture (the default crop, oriented) sits in its active area, and that area on the sensor:
+/// for the gain table ([`local_tone`]) and a flat-field map (`lcc_pipeline::vignetting_calibration`). `full_active` is the
+/// full-resolution active area's size (a reduced DNG copy has a smaller one of its own; `None` when unknown) and
+/// `window` where it sits on the sensor (`lcc_raw::sensor_window`).
+fn source_placement(
+    raw: &lcc_raw::RawImage,
+    full_active: Option<[usize; 2]>,
+    window: Option<lcc_raw::SensorWindow>,
+) -> lcc_raw::gaintable::SourcePlacement {
+    placement_from(raw.active_area, raw.crop, raw.orientation, full_active, window)
+}
+
+/// [`source_placement`] from the parts of a raw's facts it reads (the decode's and a header read's alike).
+fn placement_from(
+    a: lcc_raw::Rect,
+    crop: lcc_raw::Rect,
+    orientation: lcc_geom::Orientation,
+    full_active: Option<[usize; 2]>,
+    window: Option<lcc_raw::SensorWindow>,
+) -> lcc_raw::gaintable::SourcePlacement {
+    let (aw, ah) = (a.width.max(1) as f64, a.height.max(1) as f64);
+    // (the default crop within the active area, the whole area without one: `RawImage::develop_crop`)
+    let c = crop.clipped(a.width, a.height);
+    let c = if c.width == 0 || c.height == 0 { lcc_raw::Rect::new(0, 0, a.width, a.height) } else { c };
+    let rect = [c.x as f64 / aw, c.y as f64 / ah, c.width as f64 / aw, c.height as f64 / ah];
+    let window = window.filter(|w| Some(w.size) == full_active);
+    lcc_raw::gaintable::SourcePlacement { active_size: full_active, window, ..lcc_raw::gaintable::SourcePlacement::new(rect, orientation) }
+}
+
+/// Where a raw file's developed picture sits on its sensor, from its header (no decode): what a flat-field map is
+/// matched against before the photo is rendered. `None`: not a raw this build reads.
+pub fn placement_of(bytes: &[u8]) -> Option<lcc_raw::gaintable::SourcePlacement> {
+    lcc_raw::probe(bytes)?;
+    let info = lcc_raw::probe_info(bytes).ok()?;
+    let active = [info.active_area.width, info.active_area.height];
+    let window = lcc_raw::sensor_window(bytes, active);
+    Some(placement_from(info.active_area, info.crop, info.orientation, Some(active), window))
 }
 
 /// The semantic masks of a DNG that AI masks understand, over the developed image (default crop,
@@ -1694,12 +1751,42 @@ pub(crate) mod tests {
             let back = lcc_catalog::parse_shutter_seconds(&shutter(t));
             assert!(back.is_some_and(|s| (s - t).abs() < 0.05), "{t} s → {back:?}");
         }
-        // times the old rounding already got right are unchanged
-        for (t, want) in [(0.004, "1/250"), (0.5, "0.5"), (2.0, "2\u{2033}"), (30.0, "30\u{2033}")] {
+        // times the old rounding already got right are unchanged; a half second reads as cameras show it
+        for (t, want) in [(0.004, "1/250"), (0.5, "1/2"), (2.0, "2\u{2033}"), (30.0, "30\u{2033}")] {
             assert_eq!(shutter(t), want, "{t} s");
         }
         assert_eq!(shutter(f64::NAN), "", "no time, no reading");
         assert_eq!(shutter(-1.0), "", "no time, no reading");
+    }
+
+    /// The catalog shows a short shutter speed, never the raw f64 (`0.35714285714285715`), while the exact time
+    /// survives the catalog JSON into exported metadata and the written file (upstream #1692).
+    #[test]
+    fn imported_shutter_times_survive_catalog_and_export_metadata() {
+        use lcc_catalog::{Catalog, Photo, PhotoId};
+        for (t, shown) in [
+            (0.4, "0.4"),
+            (2.5, "2.5\u{2033}"),
+            (30.0, "30\u{2033}"),
+            (0.625, "0.625"),
+            (1.0 / 2.8, "0.3571"),
+            (1.0 / 3.0, "1/3"),
+            (0.003, "0.003"),
+            (1.0 / 250.0, "1/250"),
+            (1.0 / 8000.0, "1/8000"),
+        ] {
+            let (meta, _) = super::meta_of(&lcc_meta::Metadata { exposure_time: Some(t), ..Default::default() });
+            assert_eq!(meta.shutter, shown, "{t}");
+            let meta: Meta = serde_json::from_str(&serde_json::to_string(&meta).unwrap()).unwrap();
+            let mut photo = Photo::new(PhotoId(1), lcc_catalog::Source::Demo { scene: 0 }, "capture.jpg", "JPEG", 2, 2, "");
+            photo.meta = meta;
+            let o = crate::export::ExportOptions::default();
+            let exported = crate::export::export_metadata(&photo, &Catalog::new(), &o).unwrap();
+            assert_eq!(exported.exposure_time, Some(t), "{t}");
+            let bytes = crate::export::encode_with_metadata(&lcc_raster::Rgba8::new(2, 2), &o, Some(&exported)).unwrap();
+            let back = lcc_meta::extract(&bytes).exposure_time.unwrap();
+            assert!((back - t).abs() < 0.000001, "{t}: {back}");
+        }
     }
 
     #[test]

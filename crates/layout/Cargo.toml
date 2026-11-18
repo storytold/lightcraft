@@ -9,6 +9,7 @@ description = "Page layout (L3): pages, cells, grids, packages, guides, snapping
 workspace = true
 
 [dependencies]
+lcc-meta = { workspace = true }
 lcc-raster = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

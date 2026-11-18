@@ -14,14 +14,21 @@ import Shot from '../../../components/Shot.astro';
 
 <NeedsImage what="The People view: Named People cards with face close-ups, photo counts and names, a Search People box, and Unnamed faces to name." />
 
-- **People** view (**View ▸ People**): a card per named person (face close-up, photo count, name), filtered by the current filter chips. Click one to see that person's photos.
+- **People** view (**View ▸ People**): three categories, picked in the row at the top of the view. **Unknown** holds the faces nobody has named that no name is suggested for; **Suggested** holds the faces recognition has matched to a person, grouped under that person; **Confirmed** holds the people the library knows, a card per named person (face close-up, photo count, name). Click a card to see that person's photos.
+- **Reviewing suggestions**: each person's suggested faces sit under their own heading, with **✓ Confirm all** and **✗ Reject all**. **Confirm** names those faces that person — the named faces teach the matching in the same breath — in one undo step. **Reject** names nothing and ignores nothing: the faces go back to **Unknown**, still found by the next scan, and that person is never suggested for them again; the toast's **Undo** puts the suggestion back. Each face's own **✓**, **✗** and **−** decide about it alone (**− Ignore** leaves it out of People altogether, as before).
 - Names written to XMP by other apps (Lightroom, digiKam) are read as face regions.
 - **Face boxes** in the loupe (**View ▸ Face Boxes**): resize, rename or remove one (**Remove Face Box**).
 - **Detect Faces** (**Library** menu) finds faces; the model is an opt-in download (**Settings ▸ Faces**), nothing ships bundled.
 - **Name Faces**: unnamed faces are grouped (**Group Unnamed Faces**); type a name once for a group. With an optional recognition model, **Recognize People** suggests names.
+- **Which face a tile is about**: each face close-up outlines its own face, so a tile with two people in it shows which one you are naming. **Hover** a face (unnamed, or on a person's page) to see the whole photo with that face marked.
+- **Right-click an unnamed face** to select its whole look-alike group, then name or ignore the group at once; the menu can also ignore that face alone.
 - **Ignore** a face; the ignored list can be reviewed.
+- **Unnamed faces**, and on a person's page their faces and the suggested faces, follow the year, folder or album picked in the sidebar.
+- The **review queue** (suggestions, accept, reject) works with automatic background face recognition turned off.
+- Each face is read as it is and mirrored, and the two are averaged, so the same person matches more often. A scan takes about twice as long, and photos scanned before an update with this change are scanned once more in the background. If that cost is not worth it, turn off **Average each face with its mirror image** in Settings ▸ Faces ▸ Matching (changing it scans the faces again).
+- **Settings ▸ Faces** shows the face detector's status and device (GPU or CPU), loaded like the recognition model.
 - **Faces** filter in the filter bar and **People** metadata column.
-- **Roles** (**Set Role…** in the Masking panel's People component): bind a role such as *Bride* to a person per folder, collection or date range, so a mask follows them. Roles stay in the library only.
+- **Roles** (**Show Who & Roles** in a People component's `…` or right-click menu, then **Set Role…**): bind a role such as *Bride* to a person per folder, collection or date range, so a mask follows them. Roles stay in the library only.
 - **Forget This Person** and **Forget All Roles and Appearance Data** erase stored data.
 - Face data never leaves your machine.
 

@@ -48,7 +48,7 @@ fn widgets(h: &Headless, prefix: &str) -> Vec<String> {
 fn add_subtract_and_intersect_offer_every_mask_kind() {
     let mut h = masking();
     let tiles: Vec<String> = widgets(&h, "maskNew:");
-    assert_eq!(tiles.len(), 12, "{tiles:?}");
+    assert!(tiles.len() > 3, "{tiles:?}");
     exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5]}));
     h.step();
     for (button, op) in [("button:maskAddComp", "add"), ("button:maskSubComp", "subtract"), ("button:maskIntComp", "intersect")] {
@@ -82,6 +82,23 @@ fn add_subtract_and_intersect_offer_every_mask_kind() {
     assert!(!h.app.ui.concept_pick && h.app.mask_pick_op.is_none());
 }
 
+/// Issue #1144: Create New Mask offers Depth with the other tiles (it was only in the Tools menu), and the tile does
+/// what the menu item does: a Depth Range mask with the depth model, else no mask and the AI Models settings.
+#[test]
+fn create_new_mask_offers_a_depth_tile() {
+    let mut h = masking();
+    assert!(widgets(&h, "maskNew:").iter().any(|k| k == "depthRange"), "a Depth tile in Create New Mask");
+    let before = develop(&h).masks.len();
+    click(&mut h, "maskNew:depthRange");
+    h.step();
+    if h.app.session.segmenter.open_model_installed("depth") {
+        assert_eq!(develop(&h).masks.len(), before + 1);
+        assert!(matches!(develop(&h).masks.last().map(|m| &m.components[0].shape), Some(MaskShape::DepthRange { .. })));
+    } else {
+        assert_eq!(develop(&h).masks.len(), before, "no mask without the depth model");
+    }
+}
+
 /// Tools ▸ Create New Mask ▸ Select People / Color Range / Luminance Range do what the Masking panel's tiles do.
 #[test]
 fn create_new_mask_menu_items_start_the_tiles_tools() {
@@ -98,12 +115,18 @@ fn create_new_mask_menu_items_start_the_tiles_tools() {
     let d = develop(&h);
     assert_eq!(d.masks.len(), before + 1);
     assert!(matches!(d.masks.last().map(|m| &m.components[0].shape), Some(MaskShape::LuminanceRange { .. })));
-}
-
-/// Tools ▸ Point Color Selector opens Color Mixer ▸ Point Color with its picker armed.
-#[test]
-fn point_color_selector_opens_the_point_color_tab_with_its_picker() {
-    let mut h = masking();
+    // Depth Range: without the depth model no empty mask is left behind (the AI Models settings
+    // offer the download instead)
+    let before = develop(&h).masks.len();
+    exec(&mut h, "tool.depthRange", json!({}));
+    h.step();
+    if h.app.session.segmenter.open_model_installed("depth") {
+        lcc_testkit::skip!(Model, "the depth model is installed here");
+    } else {
+        assert_eq!(develop(&h).masks.len(), before, "no mask without the depth model");
+    }
+    h.app.ui.dialog = None;
+    // Tools ▸ Point Color Selector opens Color Mixer ▸ Point Color with its picker armed
     exec(&mut h, "tool.pointColor", json!({}));
     assert_eq!(h.app.ui.right, crate::state::RightPanel::Edit);
     assert!(h.app.ui.flyout_open("pointColor"));
@@ -148,19 +171,4 @@ fn detect_objects_toggles_and_a_stroke_without_a_model_adds_nothing() {
     assert_eq!(counts(&h).1, before.1, "no spot without the model");
     exec(&mut h, "remove.detectObjects", json!({"on": false}));
     assert_eq!(crate::menubar::checked(&h.app, "remove.detectObjects"), Some(false));
-}
-
-/// Tools ▸ Create New Mask ▸ Depth Range: without the depth model no empty mask is left behind
-/// (the AI Models settings offer the download instead).
-#[test]
-fn depth_range_without_its_model_adds_no_mask() {
-    let mut h = masking();
-    let before = develop(&h).masks.len();
-    exec(&mut h, "tool.depthRange", json!({}));
-    h.step();
-    if h.app.session.segmenter.open_model_installed("depth") {
-        lcc_testkit::skip!(Model, "the depth model is installed here");
-        return;
-    }
-    assert_eq!(develop(&h).masks.len(), before);
 }

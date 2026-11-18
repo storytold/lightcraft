@@ -9,6 +9,8 @@ actions are commands, so the CLI, control channel and MCP can do everything the 
 ## Library
 
 Photo Grid and Square Grid (View menu), loupe (`E`), compare (`C`) and survey (`N`) views of the folder, collection or filter in view.
+Press `F` for the full-screen preview of the active photo: arrows step, `I` cycles the info overlay (at Off the photo is clear of all
+text, the shot-info strip with the pixel size included), `G` returns to the grid, `Esc` goes back.
 
 - **Organise:** folders, collections and smart collections (Library → New Collection… `Cmd+N`, New Smart Collection…), collection sets,
   stacks (`Cmd+G`), virtual copies (`Cmd+'`), people (face regions from XMP or the opt-in face detector).
@@ -16,7 +18,14 @@ Photo Grid and Square Grid (View menu), loupe (`E`), compare (`C`) and survey (`
   ([library-shortcuts.md](../library-shortcuts.md)).
 - **Metadata:** Info and Keywords panels, metadata presets, hierarchical keywords with import/export (File →
   Import/Export Keywords…), the Painter (`Cmd+Alt+K`), Save Metadata to File (`Cmd+S`).
-- **Find:** the filter bar (`Cmd+F`): text, attributes, metadata columns; save it as a smart collection.
+- **Find:** the filter bar (`Cmd+F`): text, attributes, metadata columns (including Aperture and Shutter Speed); save it as a smart collection.
+  Library → Advanced Search… (`Cmd+Shift+F`) filters by structured fields; codec and frame rate are not supported yet.
+- **Clean up:** Library → Find Duplicates… groups exact and look-alike copies (raw + JPEG pairs are offered as stacks, not
+  removals; [duplicates.md](../duplicates.md)); Validate DNG Files checks the DNGs' checksums; Photo → Reset Export Status
+  clears the exported badge; Metadata → Update DNG Preview & Metadata refreshes a DNG's preview and XMP.
+- **Culling suggestions:** Assisted Culling suggests 1–5 stars and Pick / Reject for photos you have not rated or flagged;
+  the smart-collection field Suggested Stars filters on them.
+- **Folders:** Show Parent Folder (right-click) adds a parent to the list; a folder that cannot be read shows the reason.
 
 ## Develop
 
@@ -27,8 +36,36 @@ Calibration (`Cmd+1`…`Cmd+5` jump to sections), plus the tools above them: Cro
 Masking (`Shift+W`: brush `K`, linear `M`, radial `Shift+M`, colour and luminance range, AI
 subject/sky/background/object masks). Presets (`Shift+P`), profiles, snapshots, history and versions (`Shift+V`);
 before/after (`Y`, `\`); clipping (`J`); soft proofing (`S`).
+Show Before (`\`) and Original Photo are momentary and never saved. Delete, `X` and the tool keys act only on a tool that
+is on screen. Calibration's primary Saturation is fixed in process V9 (older photos keep their look). Create Camera
+Profile accepts a ColorChecker 24 or SpyderCHECKR 24 photo.
 Copy and paste settings with `Cmd+C`/`Cmd+V` (`Cmd+Shift+C` to choose which). Photo → Photo Merge makes HDR and
 panorama DNGs. Every slider is a develop control: `<cli> controls` lists ids and ranges.
+
+The row of tools under the histogram is Edit, Crop, Remove, Red Eye, Masking and Browse Profiles (the profile
+browser in the panels' place; a second click puts it away). Basic starts with Auto · B&W | HDR, then the profile's
+Amount and white balance.
+
+### Tool profiles
+
+A tool profile picks which groups and sliders the Develop panel shows. The low row at the top of the panel names the
+profile in use: its menu switches profile, and the gear beside it opens **Settings ▸ Develop**, where profiles are
+made.
+
+- **Default** shows every group and slider, as the panel always did. **Witchcraft** shows the colourist's Primaries
+  and HSL Curves (in either grading mode) and hides Eboda's Color Grading. Both are built in and can't be changed.
+- **New** makes a profile showing everything; **Duplicate** copies the profile in use (a built-in one too) to start
+  from it. Your own profiles can be renamed and deleted (deleting the one in use goes back to Default).
+- **Custom** — one group per profile of the sliders you pick, in the order you set (↑ ↓), shown first in the panel. A
+  slider in it moves there: it isn't drawn again in its own group.
+- **Groups** — switch any group off, or open it to hide single sliders and options (the Auto · B&W | HDR row, the
+  white balance selector, Contrast Mode, AI Denoise, Remove Hot Pixels, the vignette style…).
+
+Profiles are saved with the app's settings. A profile that names a slider a later version no longer has keeps the
+rest. For scripts and agents: `view.toolProfile {id}` picks one (without an id it lists them), and
+`view.toolProfileEdit {op: new | duplicate | rename | delete | group | item | custom | witchcraft, …}` changes your
+own — for example `{"op": "custom", "add": "light.exposure"}` or `{"op": "group", "group": "curve", "on": false}`.
+The Modern layout's cards show their sections whole.
 
 ## Map
 

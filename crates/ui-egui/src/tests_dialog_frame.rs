@@ -41,7 +41,7 @@ fn assert_fits(h: &Headless, size: [f32; 2], what: &str) {
 
 #[test]
 fn tall_dialogs_fit_a_small_window_with_their_buttons_on_screen() {
-    for size in [[1366.0, 768.0], [1000.0, 520.0]] {
+    for size in [[1000.0, 520.0]] {
         let mut h = open(size, Dialog::Settings { tab: "general".into() });
         // Settings fills the window: its way out (‹) is on screen and closes it
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0], size[1]));

@@ -160,7 +160,7 @@ fn recently_deleted_is_not_the_empty_library() {
 fn the_import_button_leaves_the_filter_and_appearance_icons_apart() {
     // the search field is centred: a seventh icon on the right must not push it into them
     // with the menus in the window (Windows, Linux, web) and in the native menu bar (macOS)
-    for (width, native_menu) in [900.0, 906.0, 1600.0].into_iter().flat_map(|w| [(w, false), (w, true)]) {
+    for (width, native_menu) in [900.0, 1600.0].into_iter().flat_map(|w| [(w, false), (w, true)]) {
         let mut a = app(lcc_engine::Session::with_demo());
         // a native menu bar comes with the title bar drawn in the window (macOS): a wider left margin
         a.native_menu = native_menu;

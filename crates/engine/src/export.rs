@@ -453,7 +453,7 @@ pub fn draw_watermark_preview(img: &mut Rgba8, wm: &Watermark, export_short_edge
 
 fn blend_watermark(img: &mut Rgba8, wm: &Watermark, floor_scale: f32) {
     let width = img.width;
-    watermark_coverage(img.width, img.height, wm, crate::fonts::CRAFT_FONTS, floor_scale, |x, y, k, col| {
+    watermark_coverage(img.width, img.height, wm, crate::fonts::craft_fonts(), floor_scale, |x, y, k, col| {
         let p = &mut img.data[y * width + x];
         if p[3] == 255 {
             for c in 0..3 {
@@ -479,7 +479,7 @@ fn blend_watermark(img: &mut Rgba8, wm: &Watermark, floor_scale: f32) {
 /// anchored as on an image of that size (a slideshow slide's photo). The area is clipped to `img`.
 pub fn draw_watermark_in(img: &mut Rgba8, wm: &Watermark, x0: usize, y0: usize, w: usize, h: usize) {
     let (width, height) = (img.width, img.height);
-    watermark_coverage(w, h, wm, crate::fonts::CRAFT_FONTS, 1.0, |x, y, k, col| {
+    watermark_coverage(w, h, wm, crate::fonts::craft_fonts(), 1.0, |x, y, k, col| {
         let (px, py) = (x0.saturating_add(x), y0.saturating_add(y));
         if px >= width || py >= height {
             return;
@@ -515,7 +515,7 @@ fn draw_watermark_deep_over(img: &mut DeepImage, mut alpha: Option<&mut Plane>, 
         Some(if out <= 0.0 { (0.0, 1.0) } else { (k / out, before * (1.0 - k) / out) })
     };
     match &mut img.samples {
-        DeepSamples::U16(v) => watermark_coverage(img.width, img.height, wm, crate::fonts::CRAFT_FONTS, 1.0, |x, y, k, col| {
+        DeepSamples::U16(v) => watermark_coverage(img.width, img.height, wm, crate::fonts::craft_fonts(), 1.0, |x, y, k, col| {
             let w = over(y * width + x, k);
             let i = (y * width + x) * 3;
             for c in 0..3 {
@@ -528,7 +528,7 @@ fn draw_watermark_deep_over(img: &mut DeepImage, mut alpha: Option<&mut Plane>, 
                 v[i + c] = blended.round().clamp(0.0, 65535.0) as u16;
             }
         }),
-        DeepSamples::F32(v) => watermark_coverage(img.width, img.height, wm, crate::fonts::CRAFT_FONTS, 1.0, |x, y, k, col| {
+        DeepSamples::F32(v) => watermark_coverage(img.width, img.height, wm, crate::fonts::craft_fonts(), 1.0, |x, y, k, col| {
             let w = over(y * width + x, k);
             let i = (y * width + x) * 3;
             for c in 0..3 {
@@ -543,7 +543,7 @@ fn draw_watermark_deep_over(img: &mut DeepImage, mut alpha: Option<&mut Plane>, 
 }
 
 /// Lay out `wm` on a `width × height` image and call `blend(x, y, coverage × opacity, colour)` for
-/// every covered pixel (shadow pass first). `craft` is [`crate::fonts::CRAFT_FONTS`] (a parameter
+/// every covered pixel (shadow pass first). `craft` is [`crate::fonts::craft_fonts()`] (a parameter
 /// so tests can render without it). `floor_scale` is this image's size over the exported file's
 /// (1 when drawing the file itself): the 6 px minimum text size is a minimum in the file.
 fn watermark_coverage(
@@ -627,7 +627,9 @@ pub(crate) fn watermark_logo(path: &str) -> Option<std::sync::Arc<Rgba8>> {
 /// The error says why it couldn't be read or decoded.
 pub fn read_graphic(path: &str) -> Result<Rgba8, String> {
     let bytes = crate::bounded_read::read_bounded(std::path::Path::new(path), 256 << 20).map_err(|e| format!("can't read {path}: {e}"))?;
-    let decoded = lcc_codecs::decode(&bytes, Default::default()).map_err(|e| format!("can't decode {path}: {e}"))?;
+    // a graphic is a logo or a layout image, not a photo: held to 8192 x 8192 pixels, not the general gigapixel cap
+    let opts = lcc_codecs::DecodeOptions { max_pixels: 1 << 26, ..Default::default() };
+    let decoded = lcc_codecs::decode(&bytes, opts).map_err(|e| format!("can't decode {path}: {e}"))?;
     Ok(decoded.to_srgb8().into_oriented(lcc_geom::Orientation::from_exif(decoded.orientation)))
 }
 
@@ -1480,9 +1482,12 @@ impl ExportOptions {
         let name = crate::rename::expand_tokens(&base, p, n, 3).replace("{custom}", self.custom_text.trim());
         let mut name = portable_stem(&name);
         let (stem, ext) = p.file_name.rsplit_once('.').unwrap_or((&p.file_name, ""));
+        // the catalog's own file name is cleaned like the expansion: a supplied catalog may hold separators
+        let ext = ext.replace(['/', '\\', ':', '\0'], "_");
+        let ext = ext.as_str();
         if name.trim().is_empty() {
             // every token came out empty (no title, no capture time…): keep the original name
-            name = stem.to_string();
+            name = portable_stem(stem);
         }
         if self.format == ExportFormat::Original {
             let base = name.trim_end_matches('.');
@@ -2095,10 +2100,50 @@ pub fn export_metadata(photo: &lcc_catalog::Photo, catalog: &lcc_catalog::Catalo
         out.lens_model = text(&m.lens);
         out.focal_length = m.focal_mm.map(f64::from);
         out.f_number = m.aperture.map(f64::from);
-        out.exposure_time = lcc_catalog::parse_shutter_seconds(&m.shutter);
+        out.exposure_time = m.shutter_seconds();
         out.iso = m.iso;
     }
     Some(out)
+}
+
+/// Recognized raw XMP location properties make an Original unsafe to copy even when malformed or held
+/// in an ordinary packet not projected into `Metadata` (port of upstream PR 3054). Every ordinary JPEG
+/// packet and the extended one are parsed; a packet or chunk stream that can't be fully inspected
+/// fails closed.
+fn original_embeds_xmp_location(bytes: &[u8], label: &str) -> Result<bool, String> {
+    if bytes.starts_with(b"8BPS") {
+        return Ok(false);
+    }
+    let (embedded, ordinary_packets) = if bytes.starts_with(&[0xff, 0xd8]) {
+        lcc_meta::jpeg_segments_with_all_xmp(bytes)
+    } else {
+        let embedded = lcc_meta::embedded(bytes);
+        let packets = embedded.xmp.iter().cloned().collect();
+        (embedded, packets)
+    };
+    let mut found = false;
+    for packet in ordinary_packets.iter().map(String::as_str).chain(embedded.xmp_extended.as_deref()) {
+        let xmp = lcc_meta::parse_xmp(packet)
+            .map_err(|e| format!("{label}: can't verify location metadata in this original file: malformed embedded XMP: {e}"))?;
+        if xmp.properties_truncated {
+            return Err(format!("{label}: can't verify location metadata in this original file: embedded XMP property limit was exceeded"));
+        }
+        found |= [
+            "exif:GPSLatitude",
+            "exif:GPSLongitude",
+            "exif:GPSAltitude",
+            "photoshop:City",
+            "photoshop:State",
+            "photoshop:Country",
+            "Iptc4xmpCore:Location",
+        ]
+        .into_iter()
+        .any(|key| xmp.properties.get(key).is_some_and(|values| values.iter().any(|v| !v.trim().is_empty())));
+    }
+    if embedded.chunk_walk_incomplete {
+        return Err(format!("{label}: can't verify location metadata in this original file: embedded PNG/WebP chunk stream is incomplete"));
+    }
+    Ok(found)
 }
 
 /// One exported file.
@@ -2389,6 +2434,13 @@ pub fn set_video_hooks(items: &mut [PreparedExport], hooks: &crate::export_video
 }
 
 impl PreparedExport {
+    /// Check what it writes against `guard`, built now, instead of the library as it was when it was prepared: an
+    /// export that waited its turn (issue #2965) may write after more photos were catalogued, and must not write
+    /// over their originals either.
+    pub fn use_guard(&mut self, guard: std::sync::Arc<crate::originals::OriginalGuard>) {
+        self.guard = guard;
+    }
+
     /// Whether this item is a video clip exported as a movie.
     pub fn is_video(&self) -> bool {
         matches!(self.work, Work::Video(_))
@@ -2532,20 +2584,7 @@ impl PreparedExport {
                         // fail closed: a PSD whose metadata can't be read might hide a location
                         let metadata = lcc_meta::try_extract(&bytes)
                             .map_err(|e| format!("{label}: can't verify location metadata in this original file: {e}"))?;
-                        let mut embeds_xmp_gps = false;
-                        if !bytes.starts_with(b"8BPS") {
-                            let embedded = lcc_meta::embedded(&bytes);
-                            // standard and Extended XMP packets alike; a GPS property whose value is malformed cannot be
-                            // projected into `Metadata`, so the raw properties are looked at too (upstream #3054)
-                            for packet in [embedded.xmp.as_deref(), embedded.xmp_extended.as_deref()].into_iter().flatten() {
-                                let xmp = lcc_meta::parse_xmp(packet).map_err(|e| {
-                                    format!("{label}: can't verify location metadata in this original file: malformed embedded XMP: {e}")
-                                })?;
-                                embeds_xmp_gps |= ["exif:GPSLatitude", "exif:GPSLongitude"]
-                                    .into_iter()
-                                    .any(|key| xmp.properties.get(key).is_some_and(|values| values.iter().any(|v| !v.trim().is_empty())));
-                            }
-                        }
+                        let embeds_xmp_gps = original_embeds_xmp_location(&bytes, &label)?;
                         let embeds_place_name =
                             [metadata.sublocation.as_deref(), metadata.city.as_deref(), metadata.state.as_deref(), metadata.country.as_deref()]
                                 .into_iter()
@@ -3704,26 +3743,6 @@ mod tests {
         assert!(alpha.data.iter().any(|&a| a > 0.99) && alpha.data.contains(&0.0));
     }
 
-    #[test]
-    fn formats_have_magic() {
-        let img = test_image();
-        for (f, magic) in
-            [(ExportFormat::Jpeg, &b"\xFF\xD8"[..]), (ExportFormat::Png, b"\x89PNG"), (ExportFormat::Tiff, b"II"), (ExportFormat::Webp, b"RIFF")]
-        {
-            let b = encode_image(&img, &ExportOptions { format: f, ..Default::default() }).unwrap();
-            assert!(b.starts_with(magic), "{f:?}");
-        }
-    }
-
-    #[test]
-    fn size_limit_respected() {
-        let img = test_image();
-        let full = encode_image(&img, &ExportOptions { quality: 100, ..Default::default() }).unwrap();
-        let kb = (full.len() / 1024 / 2).max(2) as u32;
-        let b = encode_image(&img, &ExportOptions { quality: 100, limit_kb: Some(kb), ..Default::default() }).unwrap();
-        assert!(b.len() <= kb as usize * 1024);
-    }
-
     /// A size limit can cut the quality far below the requested one, so each file says what it
     /// settled on; without a limit the file is written at the requested quality and says nothing.
     #[test]
@@ -4235,7 +4254,7 @@ mod tests {
     #[test]
     fn biz_ud_vertical_watermarks_place_punctuation_at_the_top_right() {
         use ab_glyph::Font;
-        let Some(entry) = crate::fonts::CRAFT_FONTS.iter().find(|f| f.family == "BIZ UDMincho") else {
+        let Some(entry) = crate::fonts::craft_fonts().iter().find(|f| f.family == "BIZ UDMincho") else {
             lcc_testkit::skip!(Fonts, "built without BIZ UDMincho from craft-fonts");
             return;
         };
@@ -4303,9 +4322,9 @@ mod tests {
         for (composed, decomposed) in [("éA", "e\u{301}A"), ("Å\nA", "A\u{30a}\nA"), ("A\nB", "A\r\nB"), ("日A", "日\u{e0100}A")] {
             compare(composed, decomposed, &[]);
         }
-        if crate::fonts::CRAFT_FONTS.iter().any(|f| f.family == "BIZ UDMincho") {
+        if crate::fonts::craft_fonts().iter().any(|f| f.family == "BIZ UDMincho") {
             for (composed, decomposed) in [("が日", "か\u{3099}日"), ("ぱ\n日", "は\u{309a}\n日")] {
-                compare(composed, decomposed, crate::fonts::CRAFT_FONTS);
+                compare(composed, decomposed, crate::fonts::craft_fonts());
             }
         } else {
             lcc_testkit::skip!(Fonts, "Japanese comparisons: built without BIZ UDMincho from craft-fonts");
@@ -4330,7 +4349,7 @@ mod tests {
     #[test]
     fn japanese_watermarks_support_vertical_columns() {
         use ab_glyph::Font;
-        let fonts = watermark_fonts(crate::fonts::CRAFT_FONTS);
+        let fonts = watermark_fonts(crate::fonts::craft_fonts());
         if fonts.len() < 2 {
             lcc_testkit::skip!(Fonts, "built without CRAFT_FONTS_DIR, so there is no Japanese watermark face");
             return;

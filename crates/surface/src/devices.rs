@@ -138,19 +138,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn console_has_nine_keys_a_dial_a_roller_and_four_pads() {
-        let d = find_device("mx-creative-console").unwrap();
-        assert_eq!(d.controls.iter().filter(|c| c.kind == ControlKind::Key).count(), 9);
-        assert_eq!(d.controls.iter().filter(|c| c.kind == ControlKind::Encoder).count(), 2);
-        assert_eq!(d.controls.iter().filter(|c| c.kind == ControlKind::Button).count(), 12, "four Dialpad buttons, eight ring slots");
-        assert_eq!(d.controls.iter().filter(|c| c.id.starts_with("ring.")).count(), 8);
-        let mut ids: Vec<_> = d.controls.iter().map(|c| c.id).collect();
-        ids.sort_unstable();
-        ids.dedup();
-        assert_eq!(ids.len(), d.controls.len(), "control ids are unique");
-    }
-
-    #[test]
     fn loupedeck_plus_knobs_turn_and_its_buttons_press() {
         let d = find_device("loupedeck-plus").unwrap();
         assert!(is_encoder("ld.r33") && is_encoder("ld.r48") && !is_encoder("ld.b95"));

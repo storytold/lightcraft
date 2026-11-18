@@ -43,13 +43,20 @@ fn start() -> (Session, usize, usize) {
 }
 
 #[test]
-fn consecutive_steps_on_one_section_form_a_group() {
+fn consecutive_steps_on_one_section_form_a_group_also_in_old_flat_history() {
     let (mut s, g0, _) = start();
     set(&mut s, "light.exposure", 1.0);
     set(&mut s, "light.contrast", 10.0);
     set(&mut s, "color.vibrance", 20.0);
     set(&mut s, "light.exposure", 2.0);
     assert_eq!(shape(&mut s, g0), vec![(sec("basic"), 2), (sec("color"), 1), (sec("basic"), 1)]);
+    // a photo as written before groups existed (plain label + settings steps, no group data) loads grouped the same
+    let id = s.active().unwrap();
+    let v = serde_json::to_value(s.catalog.photo(id).unwrap()).unwrap();
+    let old: lcc_catalog::Photo = serde_json::from_value(v).unwrap();
+    let g = crate::history_groups::groups(&old.history);
+    let tail: Vec<_> = g.iter().rev().take(3).map(|g| (g.section.clone(), g.end - g.start + 1)).collect();
+    assert_eq!(tail, vec![(sec("basic"), 1), (sec("color"), 1), (sec("basic"), 2)]);
 }
 
 #[test]
@@ -113,6 +120,9 @@ fn a_rewrite_is_one_undo_step() {
     let (mut s, _, l0) = start();
     set(&mut s, "light.exposure", 1.0);
     set(&mut s, "color.vibrance", 20.0);
+    // edits at the latest step append as before
+    assert_eq!(len(&s), l0 + 2);
+    assert_eq!(s.catalog.photo(s.active().unwrap()).unwrap().history_cursor, None);
     let before = s.catalog.photo(s.active().unwrap()).unwrap().clone();
     s.execute("history.editAt", &json!({"index": l0, "control": "light.exposure", "value": 2.0})).unwrap();
     s.execute("edit.undo", &json!({})).unwrap();
@@ -120,29 +130,4 @@ fn a_rewrite_is_one_undo_step() {
     assert_eq!((&after.history, after.history_cursor, &after.develop), (&before.history, before.history_cursor, &before.develop));
     s.execute("edit.redo", &json!({})).unwrap();
     assert_eq!(dev(&s).light.exposure, 2.0);
-}
-
-#[test]
-fn edits_at_the_latest_step_append_as_before() {
-    let (mut s, _, l0) = start();
-    set(&mut s, "light.exposure", 1.0);
-    set(&mut s, "color.vibrance", 20.0);
-    assert_eq!(len(&s), l0 + 2);
-    assert_eq!(s.catalog.photo(s.active().unwrap()).unwrap().history_cursor, None);
-}
-
-#[test]
-fn old_flat_history_loads_grouped() {
-    let (mut s, _, _) = start();
-    for v in [1.0, 2.0] {
-        set(&mut s, "light.exposure", v);
-    }
-    set(&mut s, "color.vibrance", 5.0);
-    // a photo as written before groups existed: plain label + settings steps, no group data
-    let id = s.active().unwrap();
-    let v = serde_json::to_value(s.catalog.photo(id).unwrap()).unwrap();
-    let old: lcc_catalog::Photo = serde_json::from_value(v).unwrap();
-    let g = crate::history_groups::groups(&old.history);
-    let tail: Vec<_> = g.iter().rev().take(2).map(|g| (g.section.clone(), g.end - g.start + 1)).collect();
-    assert_eq!(tail, vec![(sec("color"), 1), (sec("basic"), 2)]);
 }

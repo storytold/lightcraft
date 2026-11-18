@@ -30,7 +30,7 @@ fn write(dir: &std::path::Path, name: &str, light: &str) -> String {
 
 #[test]
 fn the_dialog_reads_the_chart_photo_and_suggests_a_name() {
-    let dir = std::env::temp_dir().join(format!("lcc-ui-chart-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lcc-ui-chart");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let paths = [write(&dir, "C_D55.dng", "D55"), write(&dir, "C_D55b.dng", "D55")];

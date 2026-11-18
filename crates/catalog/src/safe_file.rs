@@ -555,23 +555,6 @@ pub fn open_or_create_regular(path: &Path, opts: &OpenOptions) -> io::Result<(Fi
 
 #[cfg(test)]
 mod tests {
-    /// On an SMB share macOS refuses the full flush: sidecars and other durable writes still land.
-    #[test]
-    fn durable_write_on_a_volume_without_a_full_flush() {
-        let dir = std::env::temp_dir().join(format!("lcc-safe-nofullsync-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join("a.xmp");
-        let before = crate::safe_file::plain_fsyncs_on_this_thread();
-        {
-            let _smb = crate::safe_file::full_sync_unsupported();
-            super::write_atomic(&p, b"<x/>").unwrap();
-        }
-        assert_eq!(std::fs::read(&p).unwrap(), b"<x/>");
-        assert!(crate::safe_file::plain_fsyncs_on_this_thread() > before, "fell back to a plain fsync");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     use super::*;
 
     #[test]

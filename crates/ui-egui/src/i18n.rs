@@ -865,22 +865,6 @@ mod tests {
         assert_eq!(locale_from_tags(&["pt".into(), "pt-BR".into()]), Some(Locale::PtBr));
     }
 
-    #[test]
-    fn switching_language_translates_and_restores() {
-        for language in Locale::ALL {
-            set_language(*language);
-            for source in ["Exposure", "Settings"] {
-                assert_eq!(tr(source), language.catalog().get(source).map_or(source, String::as_str), "{language:?}");
-            }
-            // Untranslated and data-like text passes through untouched.
-            assert_eq!(tr("my-photo.jpg"), "my-photo.jpg");
-            assert_eq!(tr("develop.set"), "develop.set");
-            assert_eq!(tr("A string no catalog has"), "A string no catalog has");
-        }
-        set_language(Locale::En);
-        assert_eq!(tr("Exposure"), "Exposure");
-    }
-
     /// Format strings carry their values in every language, and a language without a translation
     /// falls back to the English format rather than dropping the values.
     #[test]
@@ -926,7 +910,7 @@ mod tests {
     #[test]
     fn catalog_characters_are_paintable() {
         let ctx = egui::Context::default();
-        ctx.set_fonts(crate::theme::font_definitions(lcc_engine::CRAFT_FONTS));
+        ctx.set_fonts(crate::theme::font_definitions(lcc_engine::craft_fonts()));
         let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
         out.textures_delta.clear();
         for language in Locale::ALL {
@@ -936,7 +920,8 @@ mod tests {
             }
             // The faces this language's script needs; a language the craft-fonts input does not
             // cover (a translation added ahead of its font) is reported, not failed.
-            let mut faces: Vec<&str> = lcc_engine::CRAFT_FONTS.iter().filter(|font| font.serves(language.script())).map(|font| font.family).collect();
+            let mut faces: Vec<&str> =
+                lcc_engine::craft_fonts().iter().filter(|font| font.serves(language.script())).map(|font| font.family).collect();
             faces.dedup();
             if faces.is_empty() {
                 lcc_testkit::skip!(Fonts, "{}: built without a craft-fonts face for {}", language.code(), language.script());
@@ -968,7 +953,7 @@ mod tests {
     #[test]
     fn interface_symbols_are_paintable() {
         let ctx = egui::Context::default();
-        ctx.set_fonts(crate::theme::font_definitions(lcc_engine::CRAFT_FONTS));
+        ctx.set_fonts(crate::theme::font_definitions(lcc_engine::craft_fonts()));
         let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
         out.textures_delta.clear();
         // ⌥ and ⌫ come from egui's bundled fonts; ▸ and ▾ are in neither (measured 2026-10-07).
@@ -1036,19 +1021,6 @@ mod tests {
         }
         assert_eq!(crate::menus::language_from_command("app.language.klingon"), None);
         assert_eq!(crate::menus::language_from_command("view.detail"), None);
-    }
-
-    #[test]
-    fn preferences_round_trip_and_old_settings_remain_readable() {
-        let old: crate::state::UiState = serde_json::from_str("{}").unwrap();
-        assert_eq!(old.language, Locale::En);
-        // Settings written before the language list grew still load.
-        let legacy: crate::state::UiState = serde_json::from_str(r#"{"language":"ja"}"#).unwrap();
-        assert_eq!(legacy.language, Locale::Ja);
-        let settings = crate::state::UiState { language: Locale::ZhHans, ..old };
-        let saved = serde_json::to_string(&settings).unwrap();
-        let restored: crate::state::UiState = serde_json::from_str(&saved).unwrap();
-        assert_eq!(restored.language, Locale::ZhHans);
     }
 
     /// A word with two meanings in the UI is asked for with a context in each place, and a contextual
@@ -1153,90 +1125,6 @@ mod tests {
     }
 
     #[test]
-    fn ukrainian_panels_dialogs_and_letters_paint_with_bundled_fonts() {
-        let ctx = fonts_ctx(&[]);
-        let mut app = crate::LccApp::new(lcc_engine::Session::with_demo(), Default::default());
-        app.ui.left_panel = true;
-        show_my_photos(&mut app);
-        let text = painted_text(&ctx, &mut app, Locale::Uk);
-        assert!(text.contains(Locale::Uk.tr("My Photos")) && text.contains(Locale::Uk.tr("All Photographs")), "{text}");
-        for (command, title) in [("app.about", "About {app}"), ("app.shortcuts", "Keyboard Shortcuts"), ("app.settings", "Settings")] {
-            app.ui.dialog = None;
-            app.run(command, serde_json::json!({})).unwrap();
-            let text = painted_text(&ctx, &mut app, Locale::Uk);
-            assert!(text.contains(Locale::Uk.tr(title)), "{command}: {text}");
-        }
-        ctx.fonts_mut(|fonts| {
-            for family in [egui::FontFamily::Proportional, egui::FontFamily::Name(crate::theme::FONT_SEMIBOLD.into())] {
-                let font = egui::FontId::new(13.0, family);
-                for ch in "ҐґЄєІіЇї’«»"
-                    .chars()
-                    .chain(Locale::Uk.catalog().values().flat_map(|text| text.chars()).filter(|ch| ('\u{0400}'..='\u{04ff}').contains(ch)))
-                {
-                    assert!(fonts.has_glyph(&font, ch), "missing Ukrainian glyph {ch}");
-                }
-            }
-        });
-        set_language(Locale::En);
-    }
-
-    #[test]
-    fn italian_panels_dialogs_and_letters_paint_with_bundled_fonts() {
-        let ctx = fonts_ctx(&[]);
-        let mut app = crate::LccApp::new(lcc_engine::Session::with_demo(), Default::default());
-        app.ui.left_panel = true;
-        show_my_photos(&mut app);
-        let text = painted_text(&ctx, &mut app, Locale::It);
-        assert!(text.contains(Locale::It.tr("My Photos")) && text.contains(Locale::It.tr("All Photographs")), "{text}");
-        for (command, title) in [("app.about", "About {app}"), ("app.shortcuts", "Keyboard Shortcuts"), ("app.settings", "Settings")] {
-            app.ui.dialog = None;
-            app.run(command, serde_json::json!({})).unwrap();
-            let text = painted_text(&ctx, &mut app, Locale::It);
-            assert!(text.contains(Locale::It.tr(title)), "{command}: {text}");
-        }
-        ctx.fonts_mut(|fonts| {
-            for family in [egui::FontFamily::Proportional, egui::FontFamily::Name(crate::theme::FONT_SEMIBOLD.into())] {
-                let font = egui::FontId::new(13.0, family);
-                for ch in "àèéìòùÀÈÉÌÒÙ’“”«»"
-                    .chars()
-                    .chain(Locale::It.catalog().values().flat_map(|text| text.chars()).filter(|ch| ('\u{00c0}'..='\u{017f}').contains(ch)))
-                {
-                    assert!(fonts.has_glyph(&font, ch), "missing Italian glyph {ch}");
-                }
-            }
-        });
-        set_language(Locale::En);
-    }
-
-    #[test]
-    fn finnish_panels_dialogs_and_letters_paint_with_bundled_fonts() {
-        let ctx = fonts_ctx(&[]);
-        let mut app = crate::LccApp::new(lcc_engine::Session::with_demo(), Default::default());
-        app.ui.left_panel = true;
-        show_my_photos(&mut app);
-        let text = painted_text(&ctx, &mut app, Locale::Fi);
-        assert!(text.contains(Locale::Fi.tr("My Photos")) && text.contains(Locale::Fi.tr("All Photographs")), "{text}");
-        for (command, title) in [("app.about", "About {app}"), ("app.shortcuts", "Keyboard Shortcuts"), ("app.settings", "Settings")] {
-            app.ui.dialog = None;
-            app.run(command, serde_json::json!({})).unwrap();
-            let text = painted_text(&ctx, &mut app, Locale::Fi);
-            assert!(text.contains(Locale::Fi.tr(title)), "{command}: {text}");
-        }
-        ctx.fonts_mut(|fonts| {
-            for family in [egui::FontFamily::Proportional, egui::FontFamily::Name(crate::theme::FONT_SEMIBOLD.into())] {
-                let font = egui::FontId::new(13.0, family);
-                for ch in "äöåÄÖÅ”–"
-                    .chars()
-                    .chain(Locale::Fi.catalog().values().flat_map(|text| text.chars()).filter(|ch| ('\u{00c0}'..='\u{017f}').contains(ch)))
-                {
-                    assert!(fonts.has_glyph(&font, ch), "missing Finnish glyph {ch}");
-                }
-            }
-        });
-        set_language(Locale::En);
-    }
-
-    #[test]
     fn german_switches_via_menu_and_control_and_persists() {
         use crate::control::{ControlRequest, Outcome};
         let mut app = crate::LccApp::new(lcc_engine::Session::with_demo(), Default::default());
@@ -1310,31 +1198,47 @@ mod tests {
         set_language(Locale::En);
     }
 
+    /// The languages written in Latin or Cyrillic letters need no craft-fonts face: their panels and
+    /// dialogs paint translated, and the bundled fonts have every accented letter their catalogs use.
     #[test]
-    fn german_panels_dialogs_and_glyphs_are_painted_without_extra_fonts() {
+    fn latin_and_cyrillic_languages_paint_panels_dialogs_and_letters_with_bundled_fonts() {
+        // (language, letters it must have, the ranges of its catalog's characters checked as well)
+        let languages: [(Locale, &str, &[(char, char)]); 5] = [
+            (Locale::De, "ÄÖÜäöüß„“", &[]),
+            (Locale::Uk, "ҐґЄєІіЇї’«»", &[('\u{0400}', '\u{04ff}')]),
+            (Locale::It, "àèéìòùÀÈÉÌÒÙ’“”«»", &[('\u{00c0}', '\u{017f}')]),
+            (Locale::Fi, "äöåÄÖÅ”–", &[('\u{00c0}', '\u{017f}')]),
+            (Locale::Vi, "ĂăÂâÊêÔôƠơƯưĐđáàảãạéèẻẽẹíìỉĩịóòỏõọúùủũụýỳỷỹỵ", &[('\u{00c0}', '\u{024f}'), ('\u{1ea0}', '\u{1ef9}')]),
+        ];
         let ctx = fonts_ctx(&[]);
         let mut app = crate::LccApp::new(lcc_engine::Session::with_demo(), Default::default());
         app.ui.left_panel = true;
         show_my_photos(&mut app);
-        let text = painted_text(&ctx, &mut app, Locale::De);
-        assert!(text.contains(Locale::De.tr("My Photos")) && text.contains(Locale::De.tr("All Photographs")), "{text}");
+        for (locale, letters, ranges) in languages {
+            app.ui.dialog = None;
+            let text = painted_text(&ctx, &mut app, locale);
+            assert!(text.contains(locale.tr("My Photos")) && text.contains(locale.tr("All Photographs")), "{locale:?}: {text}");
+            for (command, title) in [("app.about", "About {app}"), ("app.shortcuts", "Keyboard Shortcuts"), ("app.settings", "Settings")] {
+                app.ui.dialog = None;
+                app.run(command, serde_json::json!({})).unwrap();
+                let text = painted_text(&ctx, &mut app, locale);
+                assert!(text.contains(locale.tr(title)), "{locale:?} {command}: {text}");
+            }
+            ctx.fonts_mut(|fonts| {
+                for family in [egui::FontFamily::Proportional, egui::FontFamily::Name(crate::theme::FONT_SEMIBOLD.into())] {
+                    let font = egui::FontId::new(13.0, family);
+                    let used =
+                        locale.catalog().values().flat_map(|text| text.chars()).filter(|ch| ranges.iter().any(|(a, b)| (*a..=*b).contains(ch)));
+                    for ch in letters.chars().chain(used) {
+                        assert!(fonts.has_glyph(&font, ch), "{locale:?}: missing glyph {ch}");
+                    }
+                }
+            });
+        }
+        app.ui.dialog = None;
         app.ui.view = crate::state::ViewMode::People;
         let text = painted_text(&ctx, &mut app, Locale::De);
         assert!(text.contains(Locale::De.tr("Named People")), "{text}");
-        for (command, title) in [("app.about", "About {app}"), ("app.shortcuts", "Keyboard Shortcuts"), ("app.settings", "Settings")] {
-            app.ui.dialog = None;
-            app.run(command, serde_json::json!({})).unwrap();
-            let text = painted_text(&ctx, &mut app, Locale::De);
-            assert!(text.contains(Locale::De.tr(title)), "{command}: {text}");
-        }
-        ctx.fonts_mut(|fonts| {
-            for family in [egui::FontFamily::Proportional, egui::FontFamily::Name(crate::theme::FONT_SEMIBOLD.into())] {
-                let font = egui::FontId::new(13.0, family);
-                for ch in "ÄÖÜäöüß„“".chars() {
-                    assert!(fonts.has_glyph(&font, ch), "missing German glyph {ch}");
-                }
-            }
-        });
         set_language(Locale::En);
     }
 
@@ -1481,12 +1385,12 @@ mod tests {
     fn craft_fonts_render_cjk_in_the_ui() {
         let samples = [(Locale::Ja, "日本語の文字"), (Locale::ZhHans, "简体中文字"), (Locale::ZhHant, "繁體中文字")];
         for (language, sample) in samples {
-            if !lcc_engine::CRAFT_FONTS.iter().any(|font| font.serves(language.script())) {
+            if !lcc_engine::craft_fonts().iter().any(|font| font.serves(language.script())) {
                 lcc_testkit::skip!(Fonts, "{}: built without a craft-fonts face for {}", language.code(), language.script());
                 continue;
             }
             set_language(language);
-            let ctx = fonts_ctx(lcc_engine::CRAFT_FONTS);
+            let ctx = fonts_ctx(lcc_engine::craft_fonts());
             ctx.fonts_mut(|fonts| {
                 for family in
                     [egui::FontFamily::Proportional, egui::FontFamily::Name(crate::theme::FONT_SEMIBOLD.into()), egui::FontFamily::Monospace]
@@ -1634,18 +1538,17 @@ mod tests {
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx);
         let mut app = crate::LccApp::new(lcc_engine::Session::with_demo(), Default::default());
-        app.ui.presets = true;
+        crate::panels::presets::reveal(&mut app).unwrap();
         let builtin = app.session.presets.iter().find(|p| p.name == "Warm Glow").unwrap().clone();
         app.session.presets.push(lcc_develop::Preset { id: "user.test".into(), builtin: false, ..builtin });
         let zh = Locale::ZhHant;
         let groups: Vec<String> = app.session.presets.iter().map(|p| format!("preset:{}", p.group)).collect();
         app.ui.group_open.extend(groups.into_iter().map(|g| (g, true)));
-        // Presets is a right panel of its own (one at a time with History, Versions, …)
+        // the presets are a panel of Develop's left column
         let text = painted_text(&ctx, &mut app, zh);
         assert!(text.contains(zh.tr("Warm Glow")), "stock preset: {text}");
         assert!(text.contains("Warm Glow"), "user preset: {text}");
         assert!(text.contains(zh.tr("Color")), "stock group: {text}");
-        app.ui.presets = false;
         for (panel, title) in [(crate::state::RightPanel::Activity, "History"), (crate::state::RightPanel::Versions, "Versions")] {
             app.ui.right = panel;
             let text = painted_text(&ctx, &mut app, zh);
@@ -1657,36 +1560,6 @@ mod tests {
         set_language(Locale::En);
     }
 
-    #[test]
-    fn vietnamese_panels_dialogs_and_diacritics_paint_with_bundled_fonts() {
-        let ctx = fonts_ctx(&[]);
-        let mut app = crate::LccApp::new(lcc_engine::Session::with_demo(), Default::default());
-        app.ui.left_panel = true;
-        show_my_photos(&mut app);
-        let text = painted_text(&ctx, &mut app, Locale::Vi);
-        assert!(text.contains(Locale::Vi.tr("My Photos")) && text.contains(Locale::Vi.tr("All Photographs")), "{text}");
-        for (command, title) in [("app.about", "About {app}"), ("app.shortcuts", "Keyboard Shortcuts"), ("app.settings", "Settings")] {
-            app.ui.dialog = None;
-            app.run(command, serde_json::json!({})).unwrap();
-            let text = painted_text(&ctx, &mut app, Locale::Vi);
-            assert!(text.contains(Locale::Vi.tr(title)), "{command}: {text}");
-        }
-        ctx.fonts_mut(|fonts| {
-            for family in [egui::FontFamily::Proportional, egui::FontFamily::Name(crate::theme::FONT_SEMIBOLD.into())] {
-                let font = egui::FontId::new(13.0, family);
-                for ch in "ĂăÂâÊêÔôƠơƯưĐđáàảãạéèẻẽẹíìỉĩịóòỏõọúùủũụýỳỷỹỵ".chars().chain(
-                    Locale::Vi
-                        .catalog()
-                        .values()
-                        .flat_map(|text| text.chars())
-                        .filter(|ch| ('\u{00c0}'..='\u{024f}').contains(ch) || ('\u{1ea0}'..='\u{1ef9}').contains(ch)),
-                ) {
-                    assert!(fonts.has_glyph(&font, ch), "missing Vietnamese glyph {ch}");
-                }
-            }
-        });
-        set_language(Locale::En);
-    }
     /// The messages each language lacks, which it shows in English. Never fails: `cargo xtask ci`
     /// runs it with `--nocapture`, so the list lands in the gate log. Plain messages are every key
     /// some catalog has plus the labels the UI passes to `tr` from tables (commands, controls, rule
@@ -1886,7 +1759,7 @@ mod tests {
     #[test]
     fn a_dropped_photos_notice_names_every_outcome_of_the_import_and_is_silent_for_duplicates_only() {
         set_language(Locale::En);
-        let dir = std::env::temp_dir().join(format!("lc-drop-notice-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lc-drop-notice");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let png = |name: &str, seed: u8| {

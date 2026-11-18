@@ -31,13 +31,13 @@ Set-up and model locations: [Models and set-up](models/).
 - **Downloads are the only network use** for these models. Each asks first, shows the licence, and is checked against a pinned size and SHA-256 before it is used.
 - **One exception: Generative remove** sends a cropped part of your photo to the cloud service you chose. Read [Generative remove](generative-remove/) first.
 - **Models stay out of your edits.** An AI mask stores its result with the mask, so renders and exports never need the model and the library still opens without it.
-- **Long jobs show in the activity stack** and can be cancelled.
+- **Long jobs show in the activity stack** and can be cancelled. Cancelling a large batch is immediate.
 
 ## Not available
 
 These are planned or absent. Do not expect them:
 
-- **Lens Blur** and **Depth Range** masks (no depth data yet).
+- **Lens Blur** (no depth data yet).
 - **Landscape** mask classes (Mountains, Architecture, ground): no screen for them; only Sky, Water and Vegetation exist internally.
 - **Aesthetic scores, culling suggestions and orientation detection** on the search model: planned.
 - **Automatic keyword tagging or captions by AI**: not built.

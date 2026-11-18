@@ -22,118 +22,111 @@ fn rows(h: &Headless, picker: &str) -> Vec<String> {
     h.app.widgets.iter().filter(|(w, _)| w.starts_with(&prefix)).map(|(w, _)| w.clone()).collect()
 }
 
-#[test]
-fn typing_narrows_the_keyword_rows_and_keeps_any() {
+/// The demo library's grid with the filter bar over it.
+fn filter_bar() -> Headless {
     let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1600.0, 1000.0], 1.0);
-    // the filter bar shows over the grid
     h.app.ui.view = crate::state::ViewMode::PhotoGrid;
     h.app.ui.filter_bar = true;
     h.settle(SETTLE);
-    let keywords = h.app.caches.filter_values(&h.app.session.catalog).keywords.clone();
-    assert!(keywords.len() >= 2, "the demo library has keywords: {keywords:?}");
-    let target = keywords[0].clone();
-    ok(&mut h, "ui.clickWidget", json!({"id": "dropdown:filter-keyword"}));
-    let all = rows(&h, "keyword");
-    // every keyword, Any, and the column's two operator rows (Match any / Match all, issue #683)
-    assert_eq!(all.len(), keywords.len() + 3, "every keyword, Any and the operator rows");
-    // no click into the box first: it has the focus when the dropdown opens
-    ok(&mut h, "ui.text", json!({"text": target.to_uppercase()}));
-    let narrowed = rows(&h, "keyword");
-    let matching = keywords.iter().filter(|k| k.to_lowercase().contains(&target.to_lowercase())).count();
-    assert_eq!(narrowed.len(), matching + 3, "matches (any case), Any and the operator rows: {narrowed:?}");
-    assert!(narrowed.contains(&"filterItem:keyword:0".to_string()), "the Any row stays");
-    assert!(narrowed.len() < all.len());
-    // closed and opened again: the search starts empty, and other pickers never saw it
-    ok(&mut h, "ui.key", json!({"key": "Escape"}));
-    ok(&mut h, "ui.key", json!({"key": "Escape"}));
-    ok(&mut h, "ui.clickWidget", json!({"id": "dropdown:filter-camera"}));
-    let cameras = h.app.caches.filter_values(&h.app.session.catalog).cameras.len();
-    assert_eq!(
-        rows(&h, "camera").len(),
-        cameras + 1,
-        "the camera picker (no operator rows: a photo has one camera) isn't filtered by the keyword search"
-    );
+    h
 }
 
-/// Issue #213: the keyword picker takes several keywords. It stays open while they are clicked, shows any of them,
-/// and "Any keyword" clears them all.
+/// One session, several steps; each step was a test of its own and says what it checks.
 #[test]
-fn the_keyword_picker_takes_several_keywords() {
-    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
-    let mut h = Headless::new(app, [1600.0, 1000.0], 1.0);
-    h.app.ui.view = crate::state::ViewMode::PhotoGrid;
-    h.app.ui.filter_bar = true;
-    h.settle(SETTLE);
-    let keywords = h.app.caches.filter_values(&h.app.session.catalog).keywords.clone();
-    assert!(keywords.len() >= 2, "the demo library has keywords: {keywords:?}");
-    let all = h.app.session.visible_cloned().len();
-    ok(&mut h, "ui.clickWidget", json!({"id": "dropdown:filter-keyword"}));
-    ok(&mut h, "ui.clickWidget", json!({"id": "filterItem:keyword:1"}));
-    assert_eq!(h.app.session.filter.keywords, vec![keywords[0].clone()]);
-    let one = h.app.session.visible_cloned().len();
-    assert!(rows(&h, "keyword").len() > 1, "the list stays open for another keyword");
-    ok(&mut h, "ui.clickWidget", json!({"id": "filterItem:keyword:2"}));
-    assert_eq!(h.app.session.filter.keywords, vec![keywords[0].clone(), keywords[1].clone()]);
-    let two = h.app.session.visible_cloned().len();
-    assert!(one <= two && two <= all, "any of them: {one} ≤ {two} ≤ {all}");
-    // a second click takes one off again
-    ok(&mut h, "ui.clickWidget", json!({"id": "filterItem:keyword:1"}));
-    assert_eq!(h.app.session.filter.keywords, vec![keywords[1].clone()]);
-    ok(&mut h, "ui.clickWidget", json!({"id": "filterItem:keyword:0"}));
-    assert!(h.app.session.filter.keywords.is_empty() && h.app.session.filter.keyword.is_none());
-    assert_eq!(h.app.session.visible_cloned().len(), all);
-    assert!(rows(&h, "keyword").is_empty(), "Any keyword closes the list");
-}
-
-/// Issue #683: the keyword picker (and each Metadata column of a multi-value field) carries an OR / AND toggle:
-/// "Match all (AND)" switches the column's operator. The operator rows sit at the end of the picker's rows.
-#[test]
-fn the_keyword_picker_toggles_between_or_and_and() {
-    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
-    let mut h = Headless::new(app, [1600.0, 1000.0], 1.0);
-    h.app.ui.view = crate::state::ViewMode::PhotoGrid;
-    h.app.ui.filter_bar = true;
-    h.settle(SETTLE);
-    let keywords = h.app.caches.filter_values(&h.app.session.catalog).keywords.clone();
-    assert!(keywords.len() >= 2, "the demo library has keywords: {keywords:?}");
-    ok(&mut h, "ui.clickWidget", json!({"id": "dropdown:filter-keyword"}));
-    ok(&mut h, "ui.clickWidget", json!({"id": "filterItem:keyword:1"}));
-    assert_eq!(h.app.session.filter.keyword_op, lcc_catalog::MatchOp::Any, "OR is the default");
-    let or = h.app.session.visible_cloned().len();
-    // the operator rows are the picker's last two; type a search that keeps only a few rows, so the
-    // rows at the end are laid out (a long list culls the ones below the fold)
-    ok(&mut h, "ui.text", json!({"text": keywords[0]}));
-    let ids = |h: &Headless| -> Vec<u32> {
-        let mut v: Vec<u32> = rows(h, "keyword").iter().filter_map(|w| w.rsplit(':').next().and_then(|n| n.parse().ok())).collect();
-        v.sort_unstable();
-        v
-    };
-    let all_row = ids(&h).last().copied().unwrap();
-    ok(&mut h, "ui.clickWidget", json!({"id": format!("filterItem:keyword:{all_row}")}));
-    assert_eq!(h.app.session.filter.keyword_op, lcc_catalog::MatchOp::All, "the toggle switched to AND");
-    assert!(h.app.session.visible_cloned().len() <= or, "AND with one keyword matches no more than OR");
-    // back to OR
-    let any_row = all_row - 1;
-    ok(&mut h, "ui.clickWidget", json!({"id": format!("filterItem:keyword:{any_row}")}));
-    assert_eq!(h.app.session.filter.keyword_op, lcc_catalog::MatchOp::Any);
-    // "Any keyword" clears the choice and puts the operator back to OR, so the next pick doesn't start in AND
-    ok(&mut h, "ui.clickWidget", json!({"id": format!("filterItem:keyword:{all_row}")}));
-    assert_eq!(h.app.session.filter.keyword_op, lcc_catalog::MatchOp::All);
-    ok(&mut h, "ui.clickWidget", json!({"id": "filterItem:keyword:0"}));
-    assert!(h.app.session.filter.keywords.is_empty(), "Any keyword clears the values");
-    assert_eq!(h.app.session.filter.keyword_op, lcc_catalog::MatchOp::Any, "and the operator");
+fn the_keyword_picker_takes_several_keywords_toggles_or_and_and_narrows_as_you_type() {
+    let mut h = filter_bar();
+    // the keyword picker takes several keywords
+    // Issue #213: the keyword picker takes several keywords. It stays open while they are clicked, shows any of them,
+    // and "Any keyword" clears them all.
+    {
+        let keywords = h.app.caches.filter_values(&h.app.session.catalog).keywords.clone();
+        assert!(keywords.len() >= 2, "the demo library has keywords: {keywords:?}");
+        let all = h.app.session.visible_cloned().len();
+        ok(&mut h, "ui.clickWidget", json!({"id": "dropdown:filter-keyword"}));
+        ok(&mut h, "ui.clickWidget", json!({"id": "filterItem:keyword:1"}));
+        assert_eq!(h.app.session.filter.keywords, vec![keywords[0].clone()]);
+        let one = h.app.session.visible_cloned().len();
+        assert!(rows(&h, "keyword").len() > 1, "the list stays open for another keyword");
+        ok(&mut h, "ui.clickWidget", json!({"id": "filterItem:keyword:2"}));
+        assert_eq!(h.app.session.filter.keywords, vec![keywords[0].clone(), keywords[1].clone()]);
+        let two = h.app.session.visible_cloned().len();
+        assert!(one <= two && two <= all, "any of them: {one} ≤ {two} ≤ {all}");
+        // a second click takes one off again
+        ok(&mut h, "ui.clickWidget", json!({"id": "filterItem:keyword:1"}));
+        assert_eq!(h.app.session.filter.keywords, vec![keywords[1].clone()]);
+        ok(&mut h, "ui.clickWidget", json!({"id": "filterItem:keyword:0"}));
+        assert!(h.app.session.filter.keywords.is_empty() && h.app.session.filter.keyword.is_none());
+        assert_eq!(h.app.session.visible_cloned().len(), all);
+        assert!(rows(&h, "keyword").is_empty(), "Any keyword closes the list");
+    }
+    // the keyword picker toggles between or and and
+    // Issue #683: the keyword picker (and each Metadata column of a multi-value field) carries an OR / AND toggle:
+    // "Match all (AND)" switches the column's operator. The operator rows sit at the end of the picker's rows.
+    {
+        let keywords = h.app.caches.filter_values(&h.app.session.catalog).keywords.clone();
+        assert!(keywords.len() >= 2, "the demo library has keywords: {keywords:?}");
+        ok(&mut h, "ui.clickWidget", json!({"id": "dropdown:filter-keyword"}));
+        ok(&mut h, "ui.clickWidget", json!({"id": "filterItem:keyword:1"}));
+        assert_eq!(h.app.session.filter.keyword_op, lcc_catalog::MatchOp::Any, "OR is the default");
+        let or = h.app.session.visible_cloned().len();
+        // the operator rows are the picker's last two; type a search that keeps only a few rows, so the
+        // rows at the end are laid out (a long list culls the ones below the fold)
+        ok(&mut h, "ui.text", json!({"text": keywords[0]}));
+        let ids = |h: &Headless| -> Vec<u32> {
+            let mut v: Vec<u32> = rows(h, "keyword").iter().filter_map(|w| w.rsplit(':').next().and_then(|n| n.parse().ok())).collect();
+            v.sort_unstable();
+            v
+        };
+        let all_row = ids(&h).last().copied().unwrap();
+        ok(&mut h, "ui.clickWidget", json!({"id": format!("filterItem:keyword:{all_row}")}));
+        assert_eq!(h.app.session.filter.keyword_op, lcc_catalog::MatchOp::All, "the toggle switched to AND");
+        assert!(h.app.session.visible_cloned().len() <= or, "AND with one keyword matches no more than OR");
+        // back to OR
+        let any_row = all_row - 1;
+        ok(&mut h, "ui.clickWidget", json!({"id": format!("filterItem:keyword:{any_row}")}));
+        assert_eq!(h.app.session.filter.keyword_op, lcc_catalog::MatchOp::Any);
+        // "Any keyword" clears the choice and puts the operator back to OR, so the next pick doesn't start in AND
+        ok(&mut h, "ui.clickWidget", json!({"id": format!("filterItem:keyword:{all_row}")}));
+        assert_eq!(h.app.session.filter.keyword_op, lcc_catalog::MatchOp::All);
+        ok(&mut h, "ui.clickWidget", json!({"id": "filterItem:keyword:0"}));
+        assert!(h.app.session.filter.keywords.is_empty(), "Any keyword clears the values");
+        assert_eq!(h.app.session.filter.keyword_op, lcc_catalog::MatchOp::Any, "and the operator");
+    }
+    // typing narrows the keyword rows and keeps any
+    {
+        let keywords = h.app.caches.filter_values(&h.app.session.catalog).keywords.clone();
+        assert!(keywords.len() >= 2, "the demo library has keywords: {keywords:?}");
+        let target = keywords[0].clone();
+        ok(&mut h, "ui.clickWidget", json!({"id": "dropdown:filter-keyword"}));
+        let all = rows(&h, "keyword");
+        // every keyword, Any, and the column's two operator rows (Match any / Match all, issue #683)
+        assert_eq!(all.len(), keywords.len() + 3, "every keyword, Any and the operator rows");
+        // no click into the box first: it has the focus when the dropdown opens
+        ok(&mut h, "ui.text", json!({"text": target.to_uppercase()}));
+        let narrowed = rows(&h, "keyword");
+        let matching = keywords.iter().filter(|k| k.to_lowercase().contains(&target.to_lowercase())).count();
+        assert_eq!(narrowed.len(), matching + 3, "matches (any case), Any and the operator rows: {narrowed:?}");
+        assert!(narrowed.contains(&"filterItem:keyword:0".to_string()), "the Any row stays");
+        assert!(narrowed.len() < all.len());
+        // closed and opened again: the search starts empty, and other pickers never saw it
+        ok(&mut h, "ui.key", json!({"key": "Escape"}));
+        ok(&mut h, "ui.key", json!({"key": "Escape"}));
+        ok(&mut h, "ui.clickWidget", json!({"id": "dropdown:filter-camera"}));
+        let cameras = h.app.caches.filter_values(&h.app.session.catalog).cameras.len();
+        assert_eq!(
+            rows(&h, "camera").len(),
+            cameras + 1,
+            "the camera picker (no operator rows: a photo has one camera) isn't filtered by the keyword search"
+        );
+    }
 }
 
 /// Issue #218: the filter bar's Metadata columns list each field's values with counts; a click narrows the grid,
 /// the next column counts only what is left, and "All" clears the column again.
 #[test]
 fn metadata_columns_narrow_the_grid_and_cascade() {
-    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
-    let mut h = Headless::new(app, [1600.0, 1000.0], 1.0);
-    h.app.ui.view = crate::state::ViewMode::PhotoGrid;
-    h.app.ui.filter_bar = true;
-    h.settle(SETTLE);
+    let mut h = filter_bar();
     let all = h.app.session.visible_cloned().len();
     ok(&mut h, "ui.clickWidget", json!({"id": "button:filterColumns"}));
     assert!(!h.app.ui.filter_columns.is_empty(), "the columns show");
@@ -187,11 +180,7 @@ fn metadata_columns_narrow_the_grid_and_cascade() {
 /// and turning the columns — or the filter bar — off forgets what was typed.
 #[test]
 fn a_metadata_columns_search_narrows_its_rows() {
-    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
-    let mut h = Headless::new(app, [1600.0, 1000.0], 1.0);
-    h.app.ui.view = crate::state::ViewMode::PhotoGrid;
-    h.app.ui.filter_bar = true;
-    h.settle(SETTLE);
+    let mut h = filter_bar();
     let column_rows = |h: &Headless, c: usize| {
         let prefix = format!("filterValue:{c}:");
         h.app.widgets.iter().filter(|(w, _)| w.starts_with(&prefix)).count()
@@ -324,7 +313,7 @@ fn picker_values_survive_changes_to_other_things() {
 /// Semantic search model in Settings ▸ AI Models.
 #[test]
 fn semantic_search_toggle_filters_the_grid_and_shows_chip_and_ai_models_section() {
-    let d = std::env::temp_dir().join(format!("lcc-ui-semantic-{}", std::process::id()));
+    let d = lcc_testkit::TempDir::new("lcc-ui-semantic");
     let _ = std::fs::remove_dir_all(&d);
     let models_dir = d.join("ml-models");
     let src = d.join("synthetic-src");
@@ -374,7 +363,7 @@ fn semantic_search_toggle_filters_the_grid_and_shows_chip_and_ai_models_section(
 
 #[test]
 fn apply_settings_adopts_saved_ml_device_and_retries_on_error() {
-    let d = std::env::temp_dir().join(format!("lcc-ui-ml-dev-{}", std::process::id()));
+    let d = lcc_testkit::TempDir::new("lcc-ui-ml-dev");
     let _ = std::fs::remove_dir_all(&d);
     let models_dir = d.join("ml-models");
 
@@ -405,4 +394,26 @@ fn apply_settings_adopts_saved_ml_device_and_retries_on_error() {
     assert_eq!(st["deviceChoice"], "auto");
 
     let _ = std::fs::remove_dir_all(&d);
+}
+
+/// Semantic search switched off (Settings ▸ AI Models ▸ Semantic search): the search box loses its AI button, an AI
+/// search mode left on falls back to text search, and switching it on again brings the button back.
+#[test]
+fn switching_semantic_search_off_takes_the_ai_button_away() {
+    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1600.0, 1000.0], 1.0);
+    h.app.ui.view = crate::state::ViewMode::PhotoGrid;
+    h.settle(SETTLE);
+    let has_ai = |h: &Headless| h.app.widgets.iter().any(|(w, _)| w == "search:ai");
+    ok(&mut h, "ui.clickWidget", json!({"id": "search:ai"}));
+    assert!(h.app.ui.semantic_search);
+    ok(&mut h, "engine.execute", json!({"command": "ml.enable", "params": {"enabled": false}}));
+    h.step();
+    h.step();
+    assert!(!has_ai(&h), "no AI button while semantic search is off");
+    assert!(!h.app.ui.semantic_search, "the search box searches the text");
+    ok(&mut h, "engine.execute", json!({"command": "ml.enable", "params": {"enabled": true}}));
+    h.step();
+    h.step();
+    assert!(has_ai(&h), "the button is back");
 }

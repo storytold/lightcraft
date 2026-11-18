@@ -224,6 +224,32 @@ pub(crate) fn norm_overflow_model() -> Vec<u8> {
     model
 }
 
+/// A tiny embedder whose output depends on where things are in the picture (one fully connected layer over every
+/// pixel, `dim` numbers out), so unlike [`tiny_embedder_model`] it tells a face from its mirror image.
+pub fn positional_embedder_model(dim: u64) -> Vec<u8> {
+    let mut graph = Vec::new();
+    len_field(1, &node_bytes("Flatten", &["data"], "flat", &[]), &mut graph);
+    len_field(1, &node_bytes("Gemm", &["flat", "w"], "emb", &[("transB", Attribute::Int(1))]), &mut graph);
+    let n = 3 * 112 * 112;
+    // each output weighs the pixels by a different slope across the picture, so left and right count differently
+    let weights: Vec<f32> = (0..dim as usize * n)
+        .map(|i| {
+            let (k, p) = (i / n, i % n);
+            let x = (p % 112) as f32 / 111.0;
+            ((k as f32 + 1.0) * x - 0.4 * (k % 3) as f32) / n as f32
+        })
+        .collect();
+    len_field(5, &float_tensor_bytes("w", &[dim, n as u64], &weights), &mut graph);
+    len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(3), Ok(112), Ok(112)]), &mut graph);
+    len_field(12, &value_info_bytes("emb", 1, &[Ok(1), Ok(dim)]), &mut graph);
+    let mut ops = Vec::new();
+    varint_field(2, 11, &mut ops);
+    let mut model = Vec::new();
+    len_field(7, &graph, &mut model);
+    len_field(8, &ops, &mut model);
+    model
+}
+
 /// A small YuNet-shaped stand-in that reports no faces, independent of the real downloaded model. Like YuNet it is
 /// fully convolutional (a zero 1 x 1 convolution per stride, then `[1, cells, components]`), so it runs at any input
 /// size that is a multiple of 32.

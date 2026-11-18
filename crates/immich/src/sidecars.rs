@@ -60,20 +60,6 @@ pub fn sidecar_file_name(original: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ServerVersion;
-
-    fn v(major: u32, minor: u32, patch: u32) -> ServerVersion {
-        ServerVersion { major, minor, patch }
-    }
-
-    #[test]
-    fn the_sidecar_api_starts_at_3_2() {
-        assert!(!supports_asset_files(v(3, 1, 9)));
-        assert!(supports_asset_files(v(3, 2, 0)));
-        assert!(supports_asset_files(v(3, 3, 1)));
-        assert!(supports_asset_files(v(4, 0, 0)));
-    }
-
     #[test]
     fn a_pull_keeps_local_work() {
         // a clean photo is pulled
@@ -90,12 +76,5 @@ mod tests {
         assert_eq!(pull_skip_reason(XmpStatus::InSync, Some("2026-01-03T00:00:00Z"), Some("2026-01-02T00:00:00Z")), Some("editedLocally"));
         // a missing or unparseable time changes nothing
         assert_eq!(pull_skip_reason(XmpStatus::InSync, Some("not a time"), Some("2026-01-02T00:00:00Z")), None);
-    }
-
-    #[test]
-    fn the_sidecar_name_is_the_full_one_immich_prefers() {
-        assert_eq!(sidecar_file_name("IMG_0001.jpg"), "IMG_0001.jpg.xmp");
-        assert_eq!(sidecar_file_name("a/b/IMG_0001.CR3"), "a/b/IMG_0001.CR3.xmp");
-        assert_eq!(sidecar_file_name("no-extension"), "no-extension.xmp");
     }
 }

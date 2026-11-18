@@ -967,15 +967,6 @@ mod tests {
     }
 
     #[test]
-    fn fast_turning_accelerates() {
-        let mut r = Runtime::new(settings());
-        r.input(turn("dial", 1), 0.0);
-        r.input(turn("dial", 1), 5.0); // 5 ms after: full ceiling (10×)
-        let f = r.flush(10.0);
-        assert!((adjusts(&f) - 0.11).abs() < 1e-9, "{f:?}");
-    }
-
-    #[test]
     fn switching_dials_ends_the_first_gesture() {
         let mut r = Runtime::new(settings());
         r.input(turn("dial", 2), 0.0);

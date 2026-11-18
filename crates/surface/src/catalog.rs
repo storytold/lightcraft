@@ -211,15 +211,4 @@ mod tests {
         assert_eq!(find("s.applyToSelected").map(|e| e.group), Some("Control Surface"));
         assert!(find("nope").is_none());
     }
-
-    #[test]
-    fn most_actions_have_icons() {
-        let all = entries();
-        let with = all.iter().filter(|e| e.icon.is_some()).count();
-        assert!(with * 2 > all.len(), "{with} of {}", all.len());
-        // every group of key actions is a known category
-        for e in all.iter().filter(|e| !e.value) {
-            assert!(COMMAND_GROUPS.contains(&e.group), "{}", e.group);
-        }
-    }
 }

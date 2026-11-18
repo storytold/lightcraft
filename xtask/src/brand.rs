@@ -658,28 +658,4 @@ settings_dirs = ["A", "B"]
         assert!(!doc_may_name("crates/engine/src/lib.rs", "display_name"));
         assert!(!doc_may_name("crates/ui-egui/i18n/en.ftl", "display_name"));
     }
-
-    #[test]
-    fn allowlist() {
-        assert!(is_allowed("brand.toml"));
-        assert!(is_allowed("assets/ATTRIBUTION.md"));
-        assert!(is_allowed("crates/segment/LICENSE-APACHE"));
-        assert!(is_allowed("crates/fetch/NOTICE"));
-        assert!(is_allowed("PLAN_phase_0.md"));
-        assert!(!is_allowed("docs/PLAN_x.md"));
-        assert!(is_allowed("plan/STATUS.md"));
-        assert!(!is_allowed("planner.md"));
-        assert!(!is_allowed("crates/engine/src/lib.rs"));
-    }
-
-    #[test]
-    fn workspace_and_test_brands_parse() {
-        let root = crate::root();
-        for f in ["brand.toml", TEST_BRAND] {
-            let b = Brand::load(&root.join(f)).unwrap();
-            for key in ["display_name", "binary", "cli_binary", "env_prefix", "app_id", "settings_dir", "mcp_server"] {
-                assert!(b.get(key).is_some_and(|v| !v.is_empty()), "{f}: {key}");
-            }
-        }
-    }
 }

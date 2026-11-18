@@ -83,6 +83,9 @@ const REQUIRED: &[&str] = &[
 const OPTIONAL: &[(&str, &str, &str)] = &[
     // no key: the updater checks and links to the release, but installs nothing
     ("updates.public_keys", "UPDATES_PUBLIC_KEYS", "&[&str] = &[]"),
+    // no web site or user guide of its own: the Help menu and About link to the homepage and repository
+    ("product.website", "WEBSITE", "&str = HOMEPAGE"),
+    ("product.docs", "DOCS", "&str = REPOSITORY"),
     // no community chat: no Discord link in the Help menu or About
     ("product.discord", "DISCORD", "&str = \"\""),
     // no calibration channel: contributors attach calibrations to an issue on `product.repository`

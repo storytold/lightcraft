@@ -388,10 +388,7 @@ mod tests {
         let img = Plane { width: 4, height: 4, data: vec![1.0; 3] };
         assert_eq!(img.get_clamped(1, 0), 1.0);
         assert_eq!(img.get_clamped(3, 3), 0.0);
-    }
-
-    #[test]
-    fn get_clamped_still_extends_edges() {
+        // a whole buffer still extends its edges
         let img = Plane::from_fn(3, 2, |x, y| (x + 10 * y) as f32);
         assert_eq!(img.get_clamped(-5, -5), 0.0);
         assert_eq!(img.get_clamped(9, 9), 12.0);

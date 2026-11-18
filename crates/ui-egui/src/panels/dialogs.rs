@@ -167,8 +167,16 @@ fn watermark_preview(app: &mut LccApp, ui: &mut egui::Ui, wm: &lcc_engine::expor
     crate::widgets::register(ui.ctx(), "image:exportWatermarkPreview", r.rect);
 }
 
-/// About dialog tabs: (widget id suffix, label). The credits come from `crate::credits`.
-pub const ABOUT_TABS: &[(&str, &str)] = &[("about", "About"), ("contributors", "Contributors"), ("models", "Models")];
+/// The width most dialogs open at (points).
+const DIALOG_W: f32 = 380.0;
+
+/// Help ▸ What's New's width on a window `screen_w` points wide: three times a dialog's
+/// ([`DIALOG_W`]), so its long lines read as paragraphs, unless the window is narrower than that
+/// (then the window's width, less [`crate::dialog_frame::SCREEN_MARGIN`] each side).
+pub(crate) fn whats_new_width(screen_w: f32) -> f32 {
+    let room = if screen_w.is_finite() { screen_w - 2.0 * crate::dialog_frame::SCREEN_MARGIN } else { 0.0 };
+    (3.0 * DIALOG_W).min(room).max(1.0)
+}
 
 /// Help ▸ What's New: upstream's docs/whats-new.md and our docs/whats-new/ entries, joined by build.rs.
 pub const WHATS_NEW: &str = include_str!(concat!(env!("OUT_DIR"), "/whats-new.md"));
@@ -306,6 +314,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
         Dialog::DeleteEffects { .. } => "Delete Effect Presets",
         Dialog::DeleteRejected { .. } => "Delete Rejected Photos",
         Dialog::StopWaiting { .. } => "Stop Waiting",
+        Dialog::VignettingCreateAnyway { .. } | Dialog::VignettingReplace { .. } => "Vignetting Calibration",
         Dialog::RemoveFolder { disk: true, .. } => "Remove Disk from Catalog",
         Dialog::RemoveFolder { .. } => "Remove Folder from Catalog",
         Dialog::SynchronizeFolder { .. } => "Synchronize Folder",
@@ -391,6 +400,8 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
             sheet_w(screen, insets)
         } else if presets {
             crate::panels::presets_manager::MIN_SIZE[0].min(presets_max.x)
+        } else if matches!(dlg, Dialog::WhatsNew) {
+            whats_new_width(screen.width())
         } else {
             widest
         })
@@ -411,6 +422,8 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
             Dialog::ChartProfile { .. } => 900.0,
             Dialog::AllMetadata { .. } => 620.0,
             Dialog::Update => 500.0,
+            Dialog::About => 480.0,
+            Dialog::WhatsNew => whats_new_width(screen.width()),
             Dialog::Print => 1100.0,
             Dialog::FaceModel { .. } => 460.0,
             Dialog::LightroomCatalog { .. } => 440.0,
@@ -421,7 +434,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
             Dialog::Export { .. } => 900.0_f32.min(screen.width() - 2.0 * crate::dialog_frame::SCREEN_MARGIN),
             Dialog::Rename { .. } | Dialog::ContactSheet { .. } | Dialog::Timelapse { .. } | Dialog::SlideshowExport { .. } | Dialog::EmailPhoto { .. } => 480.0,
             Dialog::CaptureTime { .. } | Dialog::LabelNames { .. } | Dialog::CreatePreset { .. } | Dialog::CreatePresetFolder { .. } => 440.0,
-            _ => 380.0,
+            _ => DIALOG_W,
         } })
         .show(ctx, |ui| {
             ui.spacing_mut().item_spacing.y = 8.0;
@@ -439,9 +452,6 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
             } else {
                 crate::dialog_frame::ModalLayout::begin(ui, window_id)
             };
-            if matches!(dlg, Dialog::About) {
-                about_tabs(ui);
-            }
             // (Settings keeps its category list in place and scrolls its content itself)
             let settings_height = layout.body_max_height(ui);
             // dialogs laid out as a form (a label column beside the controls)
@@ -709,7 +719,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                             .color(t.text_dim),
                     );
                 }
-                Dialog::CaptureTime { mode, time, days, hours, minutes, zone } => {
+                Dialog::CaptureTime { mode, time, days, hours, minutes, zone, each } => {
                     let n = app.session.selected().len();
                     field(ui, "Change", |ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
@@ -725,7 +735,12 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                                 let r = ui.add(egui::TextEdit::singleline(time).hint_text("2026-09-30 14:05:00 · 1983-04 · 1983").desired_width(f32::INFINITY));
                                 crate::widgets::register(ui.ctx(), "field:captureTime", r.rect);
                             });
-                            json!({"time": time})
+                            // several photos: give them all this time, rather than move them by the active photo's change
+                            if n > 1 {
+                                let r = ui.checkbox(each, crate::i18n::tr("Give every selected photo this time"));
+                                crate::widgets::register(ui.ctx(), "captureTimeEach", r.rect);
+                            }
+                            json!({"time": time, "each": *each})
                         }
                         "shift" => {
                             field(ui, "Shift", |ui| {
@@ -772,6 +787,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                         let after = match (mode.as_str(), unreadable && n == 1) {
                             ("name", _) => lcc_catalog::dates::date_from_filename(&name),
                             ("set", _) if partial(time) => Some(time.trim().to_string()),
+                            ("set", _) if *each && n > 1 => lcc_catalog::dates::normalize_iso(time),
                             // alone, it simply gets the time typed (photo.setCaptureTime repairs it)
                             ("set", true) => lcc_catalog::dates::normalize_iso(time),
                             _ => delta.and_then(|d| lcc_catalog::dates::shift_iso(&cur, d)),
@@ -794,6 +810,8 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     }
                     if n > 1 && mode == "set" && lcc_catalog::dates::partial_capture(time.trim()).is_some() {
                         crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr_format!("All {n} selected photos get this date.", n = n)).color(t.text_dim));
+                    } else if n > 1 && mode == "set" && *each {
+                        crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr_format!("All {n} selected photos get this time.", n = n)).color(t.text_dim));
                     } else if n > 1 && !matches!(mode.as_str(), "file" | "name") {
                         crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr_format!("All {n} selected photos move by the same amount.", n = n)).color(t.text_dim));
                     }
@@ -1336,6 +1354,17 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     ui.label(crate::i18n::tr_format!("Stop waiting: {task}?", task = task));
                     crate::dialog_frame::note(ui, egui::RichText::new(warning.as_str()).color(t.text_dim));
                 }
+                Dialog::VignettingReplace { question, .. } => {
+                    ui.label(question.as_str());
+                    crate::dialog_frame::note(
+                        ui,
+                        egui::RichText::new(crate::i18n::tr("Photos that use the old reference keep it.")).color(t.text_dim),
+                    );
+                }
+                Dialog::VignettingCreateAnyway { reasons, .. } => {
+                    ui.label(crate::i18n::tr("This photo doesn't look like a flat-field reference. Create the vignetting calibration anyway?"));
+                    crate::dialog_frame::note(ui, egui::RichText::new(reasons.as_str()).color(t.text_dim));
+                }
                 Dialog::DeleteRejected { count, recycle } => {
                     ui.label(crate::i18n::tr_format!("Delete the {n} rejected photos of this view?", n = count));
                     ui.add_space(6.0);
@@ -1368,32 +1397,25 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     );
                 }
                 Dialog::About => {
-                    ui.set_min_width(680.0);
-                    let tab = ui.data_mut(|d| d.get_temp::<u8>(egui::Id::new(ABOUT_TAB_ID))).unwrap_or(0);
-                    match tab {
-                        1 => crate::credits::contributors_ui(app, ui),
-                        2 => crate::credits::models_ui(ui),
-                        _ => {
-                            ui.label(egui::RichText::new(lcc_brand::DISPLAY_NAME).font(t.semibold(20.0)).color(t.text));
-                            ui.label(crate::i18n::tr_format!("Version {}. A clean-room, pure-Rust photo library and raw developer.", env!("CARGO_PKG_VERSION")));
-                            ui.label(crate::i18n::tr_format!(
-                                "MIT AND Apache-2.0. Fonts: {} (OFL). Icons: original.",
-                                crate::theme::font_credits(app.chinese_font.is_some())
-                            ));
-                            ui.add_space(10.0);
-                            for (label, url) in [
-                                ("{app} website", crate::links::APP_PAGE),
-                                ("Source code", crate::links::GITHUB),
-                                ("Join the Discord", crate::links::DISCORD),
-                            ]
-                            .into_iter()
-                            .filter(|(_, url)| !url.is_empty())
-                            {
-                                let r = ui.link(crate::i18n::tr(label)).on_hover_text(url);
-                                if r.clicked() {
-                                    let _ = crate::links::open(app, url);
-                                }
-                            }
+                    ui.label(egui::RichText::new(lcc_brand::DISPLAY_NAME).font(t.semibold(20.0)).color(t.text));
+                    ui.label(crate::i18n::tr_format!("Version {}. A clean-room, pure-Rust photo library and raw developer.", env!("CARGO_PKG_VERSION")));
+                    ui.label(crate::i18n::tr_format!(
+                        "MIT AND Apache-2.0. Fonts: {} (OFL). Icons: original.",
+                        crate::theme::font_credits(app.chinese_font.is_some())
+                    ));
+                    ui.add_space(10.0);
+                    for (id, label, url) in [
+                        ("website", "{app} website", crate::links::APP_PAGE),
+                        ("source", "Source code", crate::links::GITHUB),
+                        ("discord", "Join the Discord", crate::links::DISCORD),
+                    ]
+                    .into_iter()
+                    .filter(|(_, _, url)| !url.is_empty())
+                    {
+                        let r = ui.link(crate::i18n::tr(label)).on_hover_text(url);
+                        crate::widgets::register(ui.ctx(), format!("link:about-{id}"), r.rect);
+                        if r.clicked() {
+                            let _ = crate::links::open(app, url);
                         }
                     }
                 }
@@ -1623,6 +1645,8 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     Dialog::DeleteRejected { recycle: true, .. } => "Move to Trash",
                     Dialog::DeleteRejected { .. } => "Remove",
                     Dialog::StopWaiting { .. } => "Stop Waiting",
+                    Dialog::VignettingCreateAnyway { .. } => "Create Anyway",
+                    Dialog::VignettingReplace { .. } => "Replace",
                     Dialog::LightroomCatalog { .. } => "Import Lightroom Catalog…",
                     d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::ok_label(d),
                     Dialog::SynchronizeFolder { .. } if informational => "Close",
@@ -1972,24 +1996,6 @@ pub fn cull_params(
 }
 
 /// `90` → `1 min 30 s`.
-/// The About dialog's tabs: the header above its scrolling body.
-const ABOUT_TAB_ID: &str = "about_tab";
-fn about_tabs(ui: &mut egui::Ui) {
-    ui.set_min_width(680.0);
-    let tab_id = egui::Id::new(ABOUT_TAB_ID);
-    let mut tab = ui.data_mut(|d| d.get_temp::<u8>(tab_id)).unwrap_or(0);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
-        for (i, (id, label)) in ABOUT_TABS.iter().enumerate() {
-            if crate::widgets::text_button(ui, &format!("aboutTab-{id}"), label, usize::from(tab) == i).clicked() {
-                tab = u8::try_from(i).unwrap_or(0);
-            }
-        }
-    });
-    ui.data_mut(|d| d.insert_temp(tab_id, tab));
-    ui.separator();
-}
-
 pub fn fmt_gap(v: f64) -> String {
     let v = v.round() as u64;
     match v {
@@ -2191,12 +2197,12 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
             p[key.as_str()] = json!(value.trim());
             app.run(command, p)
         }
-        Dialog::CaptureTime { mode, time, days, hours, minutes, zone } => app.run(
+        Dialog::CaptureTime { mode, time, days, hours, minutes, zone, each } => app.run(
             "photo.setCaptureTime",
             match mode.as_str() {
                 // a year or a month alone has no time to move the others by: every photo gets it
                 "set" if lcc_catalog::dates::partial_capture(time.trim()).is_some() => json!({"time": time, "each": true}),
-                "set" => json!({"time": time}),
+                "set" => json!({"time": time, "each": each}),
                 "shift" => json!({"shift": *days as i64 * 86_400 + *hours as i64 * 3600 + *minutes as i64 * 60}),
                 "file" => json!({"fromFile": true}),
                 "name" => json!({"fromFilename": true}),
@@ -2442,6 +2448,8 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
             crate::panels::activity::cancel(app, *id);
             Ok(serde_json::Value::Null)
         }
+        Dialog::VignettingCreateAnyway { photo, .. } => crate::panels::edit::create_vignetting_calibration_anyway(app, *photo),
+        Dialog::VignettingReplace { photo, .. } => crate::panels::edit::replace_vignetting_calibration(app, *photo),
         Dialog::DeleteRejected { recycle, .. } => {
             let r = app.run("library.deleteRejected", json!({"files": if *recycle { "recycle" } else { "keep" }, "confirm": true}));
             if let Ok(v) = &r {
@@ -4218,7 +4226,9 @@ pub fn confirm_style(dlg: &Dialog) -> ConfirmStyle {
         | Dialog::DeleteEffects { .. }
         | Dialog::RemoveFolder { .. }
         | Dialog::DeleteRejected { .. }
-        | Dialog::StopWaiting { .. } => ConfirmStyle::Plain,
+        | Dialog::StopWaiting { .. }
+        | Dialog::VignettingCreateAnyway { .. }
+        | Dialog::VignettingReplace { .. } => ConfirmStyle::Plain,
         _ if only_shows(dlg) => ConfirmStyle::Plain,
         _ => ConfirmStyle::Primary,
     }

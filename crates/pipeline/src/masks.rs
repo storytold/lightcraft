@@ -1283,6 +1283,31 @@ fn stamp_dabs_with(bd: &BrushDabs, w: usize, h: usize, log_l: &Plane, chroma: &[
     });
 }
 
+/// Whether the strokes of one brush mask hold more dabs than the mask's shared budget ([`MAX_STROKE_DABS`]), so that
+/// rasterizing it would leave later strokes (an erase among them) unapplied. Callers that can fail check this and
+/// report an error rather than render a wrong mask.
+pub fn brush_over_budget(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize) -> bool {
+    let mut room = MAX_STROKE_DABS;
+    for s in strokes {
+        if s.points.is_empty() {
+            continue;
+        }
+        if room == 0 {
+            return true;
+        }
+        let n = brush_dabs_within(s, frame, w, h, room).dabs.len();
+        if n >= room {
+            // the budget is exactly filled, or the stroke was cut off at it: one more dab says which (a stroke
+            // already at its own cap [`MAX_STROKE_DABS`] is cut off, whatever it would have held)
+            if room >= MAX_STROKE_DABS || brush_dabs_within(s, frame, w, h, room + 1).dabs.len() > room {
+                return true;
+            }
+        }
+        room -= n;
+    }
+    false
+}
+
 /// Stamp brush strokes into `out` ([`BrushDabs::combine`]: erase strokes subtract, Lightroom-model
 /// strokes add up, legacy ones take the maximum). Auto Mask strokes weight
 /// each dab by [`auto_similarity`] to the pixel under its centre and are refined with
@@ -1726,6 +1751,17 @@ mod tests {
         let m = Mask { components: vec![MaskComponent { anchor: None, name: None, op: MaskOp::Add, invert: true, shape }], ..Default::default() };
         let e = evaluate(&[m], &f, 100, 100, &img, &l, 0.0, None);
         assert!(e[0].alpha.get(50, 50) < 0.01);
+    }
+
+    /// Past the shared dab budget a brush mask is an error for the caller, not a mask missing its later
+    /// (erase) strokes (upstream #3681).
+    #[test]
+    fn an_over_budget_brush_mask_is_reported() {
+        let (w, h) = (64, 64);
+        let far = BrushStroke { points: vec![Point::new(-4000.0, 0.5), Point::new(4000.0, 0.5)], size: 0.05, ..Default::default() };
+        let near = BrushStroke { points: vec![Point::new(0.1, 0.1), Point::new(0.9, 0.9)], size: 0.05, ..Default::default() };
+        assert!(!brush_over_budget(std::slice::from_ref(&near), &frame(w, h), w, h));
+        assert!(brush_over_budget(&vec![far; 10], &frame(w, h), w, h));
     }
 
     /// #1520: a caller that will not look past its own threshold builds to that threshold, not to

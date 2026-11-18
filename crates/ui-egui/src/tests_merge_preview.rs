@@ -26,7 +26,7 @@ fn click_at(h: &mut Headless, pos: egui::Pos2) {
 
 #[test]
 fn a_click_on_the_merge_preview_zooms_in_and_a_drag_pans() {
-    let dir = std::env::temp_dir().join(format!("lc-merge-zoom-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lc-merge-zoom");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut paths = Vec::new();

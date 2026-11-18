@@ -602,15 +602,6 @@ mod tests {
     }
 
     #[test]
-    fn matches_camera_names() {
-        assert!(matches("NIKON Z 50", Some("NIKON CORPORATION"), "NIKON Z 50"));
-        assert!(matches("RICOH GR III", Some("RICOH IMAGING COMPANY, LTD."), "GR III"));
-        assert!(matches("Canon EOS R5", None, "CANON  EOS_R5"));
-        assert!(!matches("NIKON Z 50", Some("NIKON CORPORATION"), "NIKON Z 5"));
-        assert!(!matches("", None, "X"));
-    }
-
-    #[test]
     fn registry_finds_profiles_by_camera() {
         install(vec![parse(&tiny_dcp("TESTCAM ONE")).unwrap()]);
         assert!(for_camera(Some("TESTCAM CO"), "ONE").is_some());
@@ -746,5 +737,13 @@ mod tests {
         assert_eq!(resolve_camera("", pdcam).unwrap().name, "Test Look");
         install_library(Vec::new());
         install(Vec::new());
+        // matches camera names
+        {
+            assert!(matches("NIKON Z 50", Some("NIKON CORPORATION"), "NIKON Z 50"));
+            assert!(matches("RICOH GR III", Some("RICOH IMAGING COMPANY, LTD."), "GR III"));
+            assert!(matches("Canon EOS R5", None, "CANON  EOS_R5"));
+            assert!(!matches("NIKON Z 50", Some("NIKON CORPORATION"), "NIKON Z 5"));
+            assert!(!matches("", None, "X"));
+        }
     }
 }

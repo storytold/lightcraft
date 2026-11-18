@@ -33,46 +33,49 @@ fn readout(h: &Headless) -> Option<String> {
     h.painted_text().into_iter().find(|t| t.starts_with("R ") || t.starts_with("H ") || t.starts_with("L "))
 }
 
+/// One session, several steps; each step was a test of its own and says what it checks.
 #[test]
-fn hovering_the_photo_shows_its_colour_in_the_chosen_format() {
+fn hovering_shows_the_colour_in_the_chosen_format_and_the_command_cycles_formats() {
     let mut h = demo();
-    assert!(readout(&h).is_none(), "no readout before the pointer is on the photo");
-    hover_photo(&mut h);
-    let rgb = readout(&h).expect("RGB readout while hovering");
-    assert!(rgb.ends_with('%') && rgb.contains(" G ") && rgb.contains(" B "), "{rgb}");
-
-    for (id, want) in [("view.colorReadoutLab", ColorReadout::Lab), ("view.colorReadoutHsl", ColorReadout::Hsl)] {
-        h.app.run(id, json!({})).unwrap();
-        assert_eq!(h.app.ui.settings.color_readout, want);
+    // hovering the photo shows its colour in the chosen format
+    {
+        assert!(readout(&h).is_none(), "no readout before the pointer is on the photo");
         hover_photo(&mut h);
-        let text = readout(&h).expect("readout");
-        match want {
-            ColorReadout::Lab => assert!(text.starts_with("L ") && text.contains(" a ") && text.contains(" b "), "{text}"),
-            _ => assert!(text.starts_with("H ") && text.contains('°'), "{text}"),
-        }
-    }
-    // the pointer off the photo: the EXIF strip is back
-    h.request("ui.move", json!({"x": 2.0, "y": 2.0}), T);
-    h.step();
-    h.step();
-    assert!(readout(&h).is_none(), "{:?}", h.painted_text());
-}
+        let rgb = readout(&h).expect("RGB readout while hovering");
+        assert!(rgb.ends_with('%') && rgb.contains(" G ") && rgb.contains(" B "), "{rgb}");
 
-#[test]
-fn the_readout_command_cycles_and_rejects_unknown_formats() {
-    let mut h = demo();
-    let mut seen = Vec::new();
-    for _ in 0..3 {
-        let r = h.app.run("view.colorReadout", json!({})).unwrap();
-        seen.push(r["format"].as_str().unwrap().to_string());
+        for (id, want) in [("view.colorReadoutLab", ColorReadout::Lab), ("view.colorReadoutHsl", ColorReadout::Hsl)] {
+            h.app.run(id, json!({})).unwrap();
+            assert_eq!(h.app.ui.settings.color_readout, want);
+            hover_photo(&mut h);
+            let text = readout(&h).expect("readout");
+            match want {
+                ColorReadout::Lab => assert!(text.starts_with("L ") && text.contains(" a ") && text.contains(" b "), "{text}"),
+                _ => assert!(text.starts_with("H ") && text.contains('°'), "{text}"),
+            }
+        }
+        // the pointer off the photo: the EXIF strip is back
+        h.request("ui.move", json!({"x": 2.0, "y": 2.0}), T);
+        h.step();
+        h.step();
+        assert!(readout(&h).is_none(), "{:?}", h.painted_text());
     }
-    assert_eq!(seen, ["hsl", "lab", "rgb"]);
-    assert_eq!(h.app.run("view.colorReadout", json!({"format": "LAB"})).unwrap()["format"], "lab");
-    for bad in [json!({"format": "cmyk"}), json!({"format": 3})] {
-        assert!(h.app.run("view.colorReadout", bad).is_err());
+    // the readout command cycles and rejects unknown formats
+    {
+        h.app.ui.settings.color_readout = ColorReadout::Rgb;
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            let r = h.app.run("view.colorReadout", json!({})).unwrap();
+            seen.push(r["format"].as_str().unwrap().to_string());
+        }
+        assert_eq!(seen, ["hsl", "lab", "rgb"]);
+        assert_eq!(h.app.run("view.colorReadout", json!({"format": "LAB"})).unwrap()["format"], "lab");
+        for bad in [json!({"format": "cmyk"}), json!({"format": 3})] {
+            assert!(h.app.run("view.colorReadout", bad).is_err());
+        }
+        assert_eq!(h.app.ui.settings.color_readout, ColorReadout::Lab, "a rejected call changes nothing");
+        // persisted with the settings
+        let saved = serde_json::to_value(&h.app.ui.settings).unwrap();
+        assert_eq!(saved["colorReadout"], "lab");
     }
-    assert_eq!(h.app.ui.settings.color_readout, ColorReadout::Lab, "a rejected call changes nothing");
-    // persisted with the settings
-    let saved = serde_json::to_value(&h.app.ui.settings).unwrap();
-    assert_eq!(saved["colorReadout"], "lab");
 }

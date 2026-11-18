@@ -500,22 +500,21 @@ mod tests {
         assert!(t.ifds[0].exif.is_none());
     }
 
-    #[test]
-    fn shared_children_count_against_the_ifd_limit() {
-        let opts = ParseOptions { max_ifds: 2, ..Default::default() };
-        let t = Tiff::parse_with(&shared_children(38, 38, 38, 0), &opts).unwrap();
-        assert_eq!(t.ifds[0].sub_ifds.len(), 1);
-        assert!(t.ifds[0].exif.is_none());
-    }
-
     /// Hostile input: many pointers to one shared IFD must not clone past the entry limit (each child has one
     /// entry, so three copies need three entries plus the root's two).
     #[test]
-    fn shared_children_count_against_the_entry_limit() {
+    fn shared_children_count_against_the_entry_and_ifd_limits() {
         let opts = ParseOptions { max_entries_total: 4, ..Default::default() };
         let t = Tiff::parse_with(&shared_children(38, 38, 38, 0), &opts).unwrap();
         assert_eq!(t.ifds[0].sub_ifds.len(), 2);
         assert!(t.ifds[0].exif.is_none(), "the third copy would pass the entry limit");
+        // shared children count against the ifd limit
+        {
+            let opts = ParseOptions { max_ifds: 2, ..Default::default() };
+            let t = Tiff::parse_with(&shared_children(38, 38, 38, 0), &opts).unwrap();
+            assert_eq!(t.ifds[0].sub_ifds.len(), 1);
+            assert!(t.ifds[0].exif.is_none());
+        }
     }
 
     #[test]

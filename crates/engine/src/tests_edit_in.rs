@@ -70,11 +70,13 @@ fn edit_in_photocraft_writes_a_stacked_layered_psd() {
 /// Edit a Copy copies the file's bytes; Edit Original hands over the file itself; neither works
 /// for a file an editor can't open.
 #[test]
-fn edit_copy_and_original_modes() {
+fn edit_copy_and_original_modes_and_launching_through_the_desktop_seam() {
     let dir = temp_dir("modes");
     let src = dir.join("pic.png");
     write_png(&src, 3, 16, 16);
     let mut s = session(&dir);
+    let desktop = std::sync::Arc::new(crate::desktop::Recorder::default());
+    s.desktop = desktop.clone();
     let orig = import(&mut s, &src);
     let r = s.execute("photo.editIn", &json!({"mode": "copy"})).unwrap();
     assert!(r["path"].as_str().unwrap().ends_with("pic-Edit.png"), "{r}");
@@ -85,6 +87,14 @@ fn edit_copy_and_original_modes() {
     assert_eq!(r["openWith"]["reload"], json!([orig.0]));
     assert!(s.execute("photo.editIn", &json!({"preset": "nope"})).is_err());
     assert!(s.execute("photo.editIn", &json!({"bitDepth": 12})).is_err());
+    // Handing a file to its editor goes through the session's desktop: a test session records the launch instead of
+    // starting a real program (and nothing above was launched: `launch` was not asked for).
+    assert!(desktop.requests().is_empty(), "{:?}", desktop.requests());
+    let r = s.execute("photo.editIn", &json!({"id": orig.0, "mode": "copy", "launch": true})).unwrap();
+    assert_eq!(r["opened"], json!("launched"), "{r}");
+    let path = r["path"].as_str().unwrap().to_string();
+    let calls = desktop.requests();
+    assert!(matches!(calls.as_slice(), [crate::desktop::Request::Launch(line)] if line.contains(&path)), "{calls:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -228,29 +238,10 @@ fn actions_record_parameterise_and_play_on_a_selection() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Handing a file to its editor goes through the session's desktop: a test session records the
-/// launch instead of starting a real program.
-#[test]
-fn launching_the_editor_goes_through_the_desktop_seam() {
-    let dir = temp_dir("launch");
-    let src = dir.join("pic.png");
-    write_png(&src, 3, 16, 16);
-    let mut s = session(&dir);
-    let desktop = std::sync::Arc::new(crate::desktop::Recorder::default());
-    s.desktop = desktop.clone();
-    let _ = import(&mut s, &src);
-    let r = s.execute("photo.editIn", &json!({"mode": "copy", "launch": true})).unwrap();
-    assert_eq!(r["opened"], json!("launched"), "{r}");
-    let path = r["path"].as_str().unwrap().to_string();
-    let calls = desktop.requests();
-    assert!(matches!(calls.as_slice(), [crate::desktop::Request::Launch(line)] if line.contains(&path)), "{calls:?}");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 /// What an agent may ask for (MCP, the control channel, an action): every parameter that chooses a
 /// program is refused, on every command that takes one; a saved preset by name is not.
 #[test]
-fn agents_cannot_choose_the_program_edit_in_starts() {
+fn agents_cannot_choose_the_program_edit_in_starts_or_a_preset_names() {
     use crate::cmd::edit_in::refuse_program_choice;
     let dir = temp_dir("refuse");
     let mut s = session(&dir);
@@ -269,15 +260,8 @@ fn agents_cannot_choose_the_program_edit_in_starts() {
         refuse_program_choice(&mut s, command, &json!({"app": null})).unwrap();
     }
     refuse_program_choice(&mut s, "photo.rate", &json!({"app": "x"})).unwrap();
-    let _ = std::fs::remove_dir_all(&dir);
-}
 
-/// An agent can still save a preset's other settings, but not set or change the program it starts.
-#[test]
-fn agents_save_presets_but_not_their_program() {
-    use crate::cmd::edit_in::refuse_program_choice;
-    let dir = temp_dir("refuse-save");
-    let mut s = session(&dir);
+    // An agent can still save a preset's other settings, but not set or change the program it starts.
     // the user's own preset, typed in the dialog
     s.execute("editIn.savePreset", &json!({"name": "Gimp", "app": "/usr/bin/gimp", "args": ["-n"]})).unwrap();
     let save = "editIn.savePreset";

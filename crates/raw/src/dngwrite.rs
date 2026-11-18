@@ -668,40 +668,39 @@ mod tests {
     fn float_white_level_is_written_as_long() {
         let dng = write_rendered_dng(2, 2, &[0.25; 12], &lcc_color::SRGB, &Default::default(), None).expect("writes");
         assert_eq!(white_level(&dng), Value::Long(vec![1, 1, 1]));
-    }
-
-    /// A float white level that isn't a whole number can't be stored as LONG, so the samples and black
-    /// level are rescaled to white = 1 and decode to the same normalized values.
-    #[test]
-    fn a_fractional_float_white_level_is_rescaled_to_one() {
-        let full = Rect::new(0, 0, 2, 1);
-        let raw = RawImage {
-            format: RawFormat::Dng,
-            width: 2,
-            height: 1,
-            cpp: 1,
-            data: RawData::F32(vec![0.05, 0.4]),
-            cfa: None,
-            bits: 32,
-            black: BlackLevel::uniform(0.05),
-            white: vec![0.5],
-            active_area: full,
-            crop: full,
-            orientation: lcc_geom::Orientation::Normal,
-            color: crate::ColorData::default(),
-            wb_multipliers: None,
-            linearized: false,
-            pixel_aspect: 1.0,
-            opcodes: OpcodeLists::default(),
-            metadata: Default::default(),
-            lens_metadata: Default::default(),
-        };
-        let dng = write_dng(&raw, &DngWriteOptions { compression: DngCompression::Deflate { tile: 16, half: false }, ..Default::default() })
-            .expect("writes");
-        assert_eq!(white_level(&dng), Value::Long(vec![1]));
-        let back = crate::decode(&dng).expect("decodes");
-        let RawData::F32(got) = &back.data else { panic!("float data expected") };
-        assert_eq!(got, &vec![0.1, 0.8]);
-        assert!((back.black.values[0] - 0.1).abs() < 1e-6, "black rescaled with the data: {:?}", back.black.values);
+        // a fractional float white level is rescaled to one
+        // A float white level that isn't a whole number can't be stored as LONG, so the samples and black
+        // level are rescaled to white = 1 and decode to the same normalized values.
+        {
+            let full = Rect::new(0, 0, 2, 1);
+            let raw = RawImage {
+                format: RawFormat::Dng,
+                width: 2,
+                height: 1,
+                cpp: 1,
+                data: RawData::F32(vec![0.05, 0.4]),
+                cfa: None,
+                bits: 32,
+                black: BlackLevel::uniform(0.05),
+                white: vec![0.5],
+                active_area: full,
+                crop: full,
+                orientation: lcc_geom::Orientation::Normal,
+                color: crate::ColorData::default(),
+                wb_multipliers: None,
+                linearized: false,
+                pixel_aspect: 1.0,
+                opcodes: OpcodeLists::default(),
+                metadata: Default::default(),
+                lens_metadata: Default::default(),
+            };
+            let dng = write_dng(&raw, &DngWriteOptions { compression: DngCompression::Deflate { tile: 16, half: false }, ..Default::default() })
+                .expect("writes");
+            assert_eq!(white_level(&dng), Value::Long(vec![1]));
+            let back = crate::decode(&dng).expect("decodes");
+            let RawData::F32(got) = &back.data else { panic!("float data expected") };
+            assert_eq!(got, &vec![0.1, 0.8]);
+            assert!((back.black.values[0] - 0.1).abs() < 1e-6, "black rescaled with the data: {:?}", back.black.values);
+        }
     }
 }

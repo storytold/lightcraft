@@ -22,45 +22,27 @@ fn press(h: &mut Headless, button: egui::PointerButton) {
 
 /// Forward (Extra2) shows the next photo and Back (Extra1) the previous one, as → and ← do; a
 /// dialog keeps them, as it keeps the keys.
+/// Each press steps once, in the order pressed, also when several arrive in one frame's input
+/// (a fast double press, or a frame that took long): two Forward presses show the photo two
+/// on, and on the last photo Forward (which stays there) then Back shows the one before it
+/// (issue #3303).
 #[test]
-fn mouse_back_and_forward_buttons_step_through_the_photos() {
+fn back_and_forward_step_once_per_press_in_order_even_within_one_frame() {
     let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     let ids = h.app.session.visible_cloned();
-    let (first, second) = (ids[2], ids[3]);
+    let (first, second, third) = (ids[2], ids[3], ids[4]);
     let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [first.0], "active": first.0}}), T);
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("ui.set", json!({"view": "detail"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert_eq!((h.app.ui.view, h.app.session.active()), (ViewMode::Detail, Some(first)));
-
+    // one press at a time: Forward shows the next photo, Back the previous one
     press(&mut h, egui::PointerButton::Extra2);
     assert_eq!(h.app.session.active(), Some(second), "Forward shows the next photo");
     press(&mut h, egui::PointerButton::Extra1);
     assert_eq!(h.app.session.active(), Some(first), "Back shows the previous one");
-
-    // an open dialog keeps the buttons
-    h.app.ui.dialog = Some(Dialog::About);
-    press(&mut h, egui::PointerButton::Extra2);
-    assert_eq!(h.app.session.active(), Some(first));
-}
-
-/// Each press steps once, in the order pressed, also when several arrive in one frame's input
-/// (a fast double press, or a frame that took long): two Forward presses show the photo two
-/// on, and on the last photo Forward (which stays there) then Back shows the one before it
-/// (issue #3303).
-#[test]
-fn presses_in_one_frame_step_once_each_in_order() {
-    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
-    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
-    let ids = h.app.session.visible_cloned();
-    let (first, third) = (ids[2], ids[4]);
-    let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [first.0], "active": first.0}}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    let r = h.request("ui.set", json!({"view": "detail"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
     let pos = h.app.canvas_rect.map_or(egui::pos2(600.0, 400.0), |r| r.center());
     // the host's input for one frame, as a real host hands it over (`synthetic` would spread the
     // presses over several frames)
@@ -84,6 +66,10 @@ fn presses_in_one_frame_step_once_each_in_order() {
     assert_eq!(h.app.session.active(), Some(last), "Forward on the last photo stays there");
     one_frame(&mut h, &[egui::PointerButton::Extra2, egui::PointerButton::Extra1]);
     assert_eq!(h.app.session.active(), Some(before_last), "Forward, then Back");
+    // an open dialog keeps the buttons, as it keeps the keys
+    h.app.ui.dialog = Some(Dialog::About);
+    press(&mut h, egui::PointerButton::Extra2);
+    assert_eq!(h.app.session.active(), Some(before_last), "a dialog keeps the buttons");
 }
 
 /// The develop settings of photo `id`.

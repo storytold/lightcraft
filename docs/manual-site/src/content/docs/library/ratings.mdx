@@ -19,7 +19,10 @@ import Shot from '../../../components/Shot.astro';
 - Bottom bar: stars, colour dots and flag buttons for the selection.
 - Applies to every selected photo; one undo step.
 - **Painter** (`Cmd/Ctrl+Alt+K`) paints a rating, flag or label by clicking photos.
-- **Assisted Culling…** (**Library** menu): focus score, clipping and burst grouping; reject below a threshold and pick the sharpest of each burst. **Reject Closed and Blurry Eyes** is a separate command.
+- **Assisted Culling…** (**Library** menu): focus score, clipping and burst grouping; reject below a threshold and pick the sharpest of each burst.
+  - It also suggests 1–5 stars and a Pick / Reject flag per photo from its focus, exposure and quality scores.
+  - The dialog applies suggestions only to photos you have not rated or flagged yourself; one undo step.
+  - Suggested stars are stored with the photo; the smart-collection field **Suggested Stars** filters on them (see [Collections](../collections/)). **Reject Closed and Blurry Eyes** is a separate command.
 - **Find Similar Photos** (**Library** menu or photo menu): look-alikes by composition and tones, most similar first.
 - **Delete Rejected** removes every rejected photo from the catalog.
 - All keys are remappable in **Help ▸ Keyboard Shortcuts**; see [Shortcuts](../shortcuts/).

@@ -33,10 +33,12 @@ fn ratings(app: &LccApp) -> lcc_engine::Result<Vec<u8>> {
 }
 
 fn frame(app: &mut LccApp, ctx: &egui::Context, key: Option<Key>, text: Option<&mut String>) {
-    let events = key
-        .map(|key| egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers: Modifiers::NONE })
-        .into_iter()
-        .collect();
+    frame_mods(app, ctx, key, Modifiers::NONE, text);
+}
+
+fn frame_mods(app: &mut LccApp, ctx: &egui::Context, key: Option<Key>, mods: Modifiers, text: Option<&mut String>) {
+    let events =
+        key.map(|key| egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers: mods }).into_iter().collect();
     let mut text = text;
     let mut out = ctx.run_ui(
         egui::RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() },
@@ -90,6 +92,49 @@ fn detail_masking_and_remove_keep_bracket_brush_sizing() {
         assert_eq!(ratings(&app).unwrap(), [0, 2, 5]);
         assert!(app.session.undo.is_empty());
     }
+}
+
+/// Option (Alt) is the Masking brush's subtract-while-painting modifier: `[` / `]` (size) and
+/// ⇧`[` / ⇧`]` (feather) keep adjusting the brush while it is held (issue #1179).
+#[test]
+fn alt_brackets_resize_and_refeather_while_masking() {
+    for panel in [RightPanel::Edit, RightPanel::Masking, RightPanel::Remove] {
+        let mut app = app().unwrap();
+        app.ui.view = ViewMode::Detail;
+        app.ui.right = panel;
+        let ctx = egui::Context::default();
+        app.ui.brush_size = 50.0;
+        app.ui.brush_feather = 50.0;
+        app.ui.remove_size = 0.05;
+        app.ui.remove_feather = 50.0;
+        let remove = panel == RightPanel::Remove;
+        let size = |app: &LccApp| if remove { app.ui.remove_size / 0.05 } else { app.ui.brush_size / 50.0 };
+        let feather = |app: &LccApp| if remove { app.ui.remove_feather } else { app.ui.brush_feather };
+        frame_mods(&mut app, &ctx, Some(Key::CloseBracket), Modifiers::ALT, None);
+        assert!((size(&app) - 1.2).abs() < 1e-5, "{}", size(&app));
+        frame_mods(&mut app, &ctx, Some(Key::OpenBracket), Modifiers::ALT, None);
+        assert!((size(&app) - 1.0).abs() < 1e-5, "{}", size(&app));
+        frame_mods(&mut app, &ctx, Some(Key::CloseBracket), Modifiers::ALT | Modifiers::SHIFT, None);
+        assert!((feather(&app) - 60.0).abs() < 1e-5, "{}", feather(&app));
+        frame_mods(&mut app, &ctx, Some(Key::OpenBracket), Modifiers::ALT | Modifiers::SHIFT, None);
+        assert!((feather(&app) - 50.0).abs() < 1e-5, "{}", feather(&app));
+        assert_eq!(ratings(&app).unwrap(), [0, 2, 5], "no rating while the brush is adjusting");
+        assert!(app.session.undo.is_empty());
+    }
+}
+
+/// Grids keep their rating keys exact: Alt+] rates (its remap), it does not resize anything.
+#[test]
+fn grid_brackets_stay_ratings_with_alt_held() {
+    let mut app = app().unwrap();
+    app.ui.view = ViewMode::PhotoGrid;
+    let ctx = egui::Context::default();
+    let (brush, remove) = (app.ui.brush_size, app.ui.remove_size);
+    frame_mods(&mut app, &ctx, Some(Key::CloseBracket), Modifiers::ALT, None);
+    assert_eq!(app.ui.brush_size, brush);
+    assert_eq!(app.ui.remove_size, remove);
+    frame_mods(&mut app, &ctx, Some(Key::CloseBracket), Modifiers::NONE, None);
+    assert_eq!(ratings(&app).unwrap(), [1, 3, 5], "the plain key still rates");
 }
 
 #[test]

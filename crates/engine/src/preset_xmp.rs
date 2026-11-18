@@ -18,6 +18,10 @@ use serde_json::Value;
 /// The property holding our own preset in an exported file.
 pub const LC_SETTINGS: &str = "lc:PresetSettings";
 
+/// A mask Hue past Lightroom's range, whole, in degrees (only then written; `crs:LocalHue` holds it
+/// clamped). Read back in place of `crs:LocalHue`.
+pub const LC_LOCAL_HUE: &str = "lc:LocalHueDegrees";
+
 fn esc(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     for c in s.chars() {
@@ -81,7 +85,16 @@ fn local_attrs(a: &LocalAdjustments) -> String {
             continue;
         }
         done.push(field);
-        let v = ours.get(field).and_then(Value::as_f64).unwrap_or(0.0);
+        let mut v = ours.get(field).and_then(Value::as_f64).unwrap_or(0.0);
+        if field == "hue" {
+            // degrees → Lightroom's −100..100 scale (about ±34°); a wider shift is clamped there and
+            // written whole in our own namespace, which only a value past the standard range gets
+            v = (a.hue / lcc_develop::LEGACY_LOCAL_HUE_DEG).clamp(-100.0, 100.0);
+            if a.hue.is_finite() && a.hue.abs() > lcc_develop::LOCAL_HUE_STANDARD + 1e-9 {
+                let deg = a.hue.clamp(-lcc_develop::LOCAL_HUE_MAX, lcc_develop::LOCAL_HUE_MAX);
+                s.push_str(&format!("\n       {LC_LOCAL_HUE}=\"{}\"", f(deg)));
+            }
+        }
         s.push_str(&format!("\n       crs:{crs}=\"{}\"", f(v / scale)));
     }
     s
@@ -404,6 +417,55 @@ mod tests {
         let back: Value = serde_json::from_str(lc).unwrap();
         assert_eq!(back, preset().settings);
         assert!(xmp.contains("Sun &lt;kissed&gt;"));
+    }
+
+    // issue #1145: the mask Hue is in degrees (±180); Lightroom's `crs:LocalHue` holds about ±34°
+    #[test]
+    fn mask_hue_writes_lightroom_scale_and_clamps_beyond_it() {
+        let attr = |a: &LocalAdjustments| {
+            let s = local_attrs(a);
+            let v = s.split("crs:LocalHue=\"").nth(1).and_then(|t| t.split('"').next()).unwrap().to_string();
+            v.parse::<f64>().unwrap()
+        };
+        // an old in-range value (stored −100..100) writes exactly what it wrote before
+        for old in [-100.0, -42.0, 0.0, 7.0, 100.0] {
+            let a: LocalAdjustments = serde_json::from_value(json!({"hue": old})).unwrap();
+            assert_eq!(f(attr(&a)), f(old / 100.0), "{old}");
+            assert!(!local_attrs(&a).contains(LC_LOCAL_HUE), "in range: no extra field ({old})");
+        }
+        // past the standard range: the extra field holds the whole angle
+        let wide = local_attrs(&LocalAdjustments { hue: 150.0, ..Default::default() });
+        assert!(wide.contains(&format!("{LC_LOCAL_HUE}=\"150.000000\"")), "{wide}");
+        // read back: the extra field wins over the clamped `crs:LocalHue`, which is used without it
+        let corr = |extra: &str| {
+            format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+ <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmlns:lc="{}">
+  <crs:MaskGroupBasedCorrections><rdf:Seq><rdf:li><rdf:Description crs:What="Correction" crs:LocalHue="1" {extra}>
+   <crs:CorrectionMasks><rdf:Seq><rdf:li crs:What="Mask/Gradient" crs:MaskValue="1" crs:ZeroX="0.5" crs:ZeroY="0" crs:FullX="0.5" crs:FullY="1"/></rdf:Seq></crs:CorrectionMasks>
+  </rdf:Description></rdf:li></rdf:Seq></crs:MaskGroupBasedCorrections></rdf:Description></rdf:RDF></x:xmpmeta>"#,
+                lcc_meta::LC_NS
+            )
+        };
+        let hue_of = |x: String| {
+            let d = lcc_meta::parse_xmp(&x).unwrap();
+            let (masks, _) = crate::crs_masks::masks(&d.values, 1.5);
+            serde_json::from_value::<LocalAdjustments>(masks[0]["adjust"].clone()).unwrap().hue
+        };
+        assert_eq!(hue_of(corr(&format!("{LC_LOCAL_HUE}=\"150\""))), 150.0);
+        assert!((hue_of(corr("")) - lcc_develop::LOCAL_HUE_STANDARD).abs() < 1e-9);
+        assert_eq!(hue_of(corr(&format!("{LC_LOCAL_HUE}=\"1e300\""))), 180.0, "hostile: clamped");
+        // beyond Lightroom's reach: clamped there; the full value stays in our own settings
+        assert_eq!(attr(&LocalAdjustments { hue: 150.0, ..Default::default() }), 1.0);
+        assert_eq!(attr(&LocalAdjustments { hue: -180.0, ..Default::default() }), -1.0);
+        assert_eq!(attr(&LocalAdjustments { hue: f64::NAN, ..Default::default() }), 0.0);
+        let mut p = preset();
+        p.settings["masks"][0]["adjust"] = serde_json::to_value(LocalAdjustments { hue: 150.0, ..Default::default() }).unwrap();
+        let (xmp, _) = to_xmp(&p);
+        let d = lcc_meta::parse_xmp(&xmp).unwrap();
+        let lc: Value = serde_json::from_str(d.properties.get(LC_SETTINGS).and_then(|v| v.first()).unwrap()).unwrap();
+        let back: LocalAdjustments = serde_json::from_value(lc["masks"][0]["adjust"].clone()).unwrap();
+        assert_eq!(back.hue, 150.0);
     }
 
     // Notes 18/22: brush strokes go to Lightroom as `Mask/Paint` (Radius = where the halo ends, CenterWeight from

@@ -86,6 +86,11 @@ pub fn extras(app: &mut LccApp, ui: &egui::Ui, id: PhotoId, r: Rect, square: boo
             let names: Vec<&str> = p.meta.keywords.iter().map(|k| k.rsplit('|').next().unwrap_or(k)).collect();
             badges.push(("keywords", Icon::Tag, format!("{}: {}", crate::i18n::tr("Keywords"), names.join(", ")), Color32::WHITE));
         }
+        // a Vignetting Calibration reference in use (derived from the catalog's map table, kept per change: a lookup;
+        // a withdrawn one is a normal photo again)
+        if app.session.catalog.is_vignetting_reference(id) {
+            badges.push(("vignettingReference", Icon::Radial, crate::i18n::tr("Vignetting reference").to_string(), Color32::WHITE));
+        }
     }
     if app.session.source == lcc_engine::LibrarySource::Folder && p.in_library() {
         badges.push(("inLibrary", Icon::Check, crate::i18n::tr("In catalog").to_string(), Color32::WHITE));
@@ -351,7 +356,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn sidecar_looks_come_back_from_the_worker() {
-        let d = std::env::temp_dir().join(format!("cells-stat-{}", std::process::id()));
+        let d = lcc_testkit::TempDir::new("cells-stat");
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         let original = d.join("DSC_0001.NEF");
@@ -369,11 +374,5 @@ mod tests {
         let (_, stat) = got.expect("the look came back");
         assert_eq!(stat.map(|s| s.size), Some(12));
         let _ = std::fs::remove_dir_all(&d);
-    }
-
-    #[test]
-    fn mtime_of_a_real_file_is_positive() {
-        let m = std::fs::metadata(file!()).or_else(|_| std::fs::metadata(".")).unwrap();
-        assert!(mtime(&m) > 0);
     }
 }

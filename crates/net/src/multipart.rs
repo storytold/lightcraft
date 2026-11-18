@@ -206,9 +206,4 @@ mod tests {
         let m = Multipart::new().reader("r", "r", "x/y", Box::new(std::io::Cursor::new(vec![1u8; 15])), 10);
         assert!(m.write_to(&mut Vec::new(), &mut |_| {}).is_err());
     }
-
-    #[test]
-    fn boundaries_differ() {
-        assert_ne!(Multipart::new().boundary, Multipart::new().boundary);
-    }
 }

@@ -24,6 +24,10 @@ use lcc_geom::Rect;
 
 const MAGIC: &[u8; 4] = b"LCFE";
 const VERSION: u8 = 2;
+/// Ends the tag of a cache whose faces are each averaged with their mirror image
+/// ([`lcc_faces::runtime::Embedder::embed_faces`]); a cache made the other way has another tag, so it is not read and
+/// its faces are embedded again rather than mixed with the new ones.
+pub(crate) const MIRROR_TAG: &str = "+mirror";
 
 pub(crate) type Key = (u64, [i32; 4]);
 
@@ -113,6 +117,14 @@ impl Index {
     /// Whether there are embeddings not yet written to the cache file.
     pub fn has_unsaved(&self) -> bool {
         !self.unsaved.is_empty() || self.rewrite
+    }
+
+    /// Forget every embedding (Settings ▸ Faces ▸ Clear): the cache file is written fresh, empty, at the next save.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.unsaved.clear();
+        self.skipped.clear();
+        self.rewrite = true;
     }
 
     /// Start over for `tag` (`dim` numbers per face), loading what the cache file at `path` holds for it. What the
@@ -316,6 +328,13 @@ impl Scanned {
 
     pub fn has_unsaved(&self) -> bool {
         !self.unsaved.is_empty() || self.rewrite
+    }
+
+    /// Forget every photo (they are all searched again): the record is written fresh, empty, at the next save.
+    pub fn clear(&mut self) {
+        self.set.clear();
+        self.unsaved.clear();
+        self.rewrite = true;
     }
 
     /// Start over with the record at `path` (written first: what was not yet saved is not lost).
@@ -588,6 +607,8 @@ mod tests {
 /// What the recognition commands keep between calls: the loaded model and the embeddings made with it.
 #[derive(Default)]
 pub(crate) struct FacesState {
+    /// Whether recognition was switched on and whether the scan was paused when last looked up, and when.
+    pub switches_seen: Option<(std::time::Instant, bool, bool)>,
     /// `<model id>@<sha256>` and the chosen model's manifest (reused without loading the ONNX network).
     pub manifest: Option<(String, lcc_faces::ModelManifest)>,
     /// `<model id>@<sha256>` and the loaded model.
@@ -595,8 +616,6 @@ pub(crate) struct FacesState {
     pub index: Index,
     /// When the models folder was last looked at (the per-frame pump trusts a look for a second).
     pub checked: Option<std::time::Instant>,
-    /// Whether recognition was switched on when last looked up, and when.
-    pub enabled_seen: Option<(std::time::Instant, bool)>,
     /// How many of a person's best matching faces a match is based on when last looked up, and when.
     pub top_seen: Option<(std::time::Instant, usize)>,
     pub worker: Option<crate::faces_worker::Worker>,

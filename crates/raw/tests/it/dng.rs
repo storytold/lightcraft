@@ -616,25 +616,6 @@ fn profile_look_tags_are_read_from_ifd0() {
     }
 }
 
-#[test]
-fn malformed_profile_look_tags_are_ignored() {
-    let bytes = profile_dng(ByteOrder::Little, |ifd0| {
-        // data count doesn't match the dimensions
-        ifd0.set(t::PROFILE_HUE_SAT_MAP_DIMS, Value::Long(vec![6, 3, 1]));
-        ifd0.set(t::PROFILE_HUE_SAT_MAP_DATA_1, Value::Float(vec![0.0, 1.0, 1.0]));
-        // one saturation division is not allowed
-        ifd0.set(t::PROFILE_LOOK_TABLE_DIMS, Value::Long(vec![2, 1, 1]));
-        ifd0.set(t::PROFILE_LOOK_TABLE_DATA, Value::Float(vec![0.0, 1.0, 1.0, 0.0, 1.0, 1.0]));
-        // decreasing inputs and a NaN
-        ifd0.set(t::PROFILE_TONE_CURVE, Value::Float(vec![0.0, 0.0, 0.6, 0.5, 0.4, f32::NAN, 1.0, 1.0]));
-    });
-    let img = decode(&bytes).unwrap();
-    assert!(img.color.profile.is_empty(), "{:?}", img.color.profile);
-    // and without any of the tags there is nothing to apply
-    let plain = decode(&profile_dng(ByteOrder::Little, |_| {})).unwrap();
-    assert!(plain.color.profile.is_empty());
-}
-
 /// Lossless JPEG XL codestream of `px` (`w × h × cpp` interleaved), 16-bit unless `eight`.
 fn jxl_encode(px: &[u16], w: usize, h: usize, cpp: usize, eight: bool) -> Vec<u8> {
     use zune_core::bit_depth::BitDepth;
@@ -896,7 +877,7 @@ fn gain_table_maps_follow_dng_precedence() {
 }
 
 #[test]
-fn malformed_gain_table_maps_are_ignored() {
+fn malformed_gain_maps_profile_looks_and_semantic_masks_are_ignored() {
     let order = ByteOrder::Little;
     let ok = gain_map_tag(order, [1, 1, 2], None, &f32_bytes(&[1.0, 2.0], order));
     let cases: Vec<(&str, Vec<u8>, bool)> = vec![
@@ -915,6 +896,68 @@ fn malformed_gain_table_maps_are_ignored() {
         let tag = if v2 { t::PROFILE_GAIN_TABLE_MAP_2 } else { t::PROFILE_GAIN_TABLE_MAP };
         let img = decode(&gain_map_dng(order, &[(tag, &bytes[..])], &[])).unwrap_or_else(|e| panic!("{what}: {e}"));
         assert_eq!(img.color.profile.gain_table_map.is_some(), what == "valid", "{what}");
+    }
+    // malformed profile look tags are ignored
+    {
+        let bytes = profile_dng(ByteOrder::Little, |ifd0| {
+            // data count doesn't match the dimensions
+            ifd0.set(t::PROFILE_HUE_SAT_MAP_DIMS, Value::Long(vec![6, 3, 1]));
+            ifd0.set(t::PROFILE_HUE_SAT_MAP_DATA_1, Value::Float(vec![0.0, 1.0, 1.0]));
+            // one saturation division is not allowed
+            ifd0.set(t::PROFILE_LOOK_TABLE_DIMS, Value::Long(vec![2, 1, 1]));
+            ifd0.set(t::PROFILE_LOOK_TABLE_DATA, Value::Float(vec![0.0, 1.0, 1.0, 0.0, 1.0, 1.0]));
+            // decreasing inputs and a NaN
+            ifd0.set(t::PROFILE_TONE_CURVE, Value::Float(vec![0.0, 0.0, 0.6, 0.5, 0.4, f32::NAN, 1.0, 1.0]));
+        });
+        let img = decode(&bytes).unwrap();
+        assert!(img.color.profile.is_empty(), "{:?}", img.color.profile);
+        // and without any of the tags there is nothing to apply
+        let plain = decode(&profile_dng(ByteOrder::Little, |_| {})).unwrap();
+        assert!(plain.color.profile.is_empty());
+    }
+    // malformed semantic masks are skipped
+    // Malformed semantic masks are skipped (never a panic), and so is the `MaskSubArea` of a mask it
+    // doesn't fit; the raw image still decodes.
+    {
+        let bytes = profile_dng(ByteOrder::Little, |ifd0| {
+            ifd0.add_sub_ifd(mask_ifd(2, 2, "", vec![1, 2, 3, 4])); // no SemanticName
+            let mut rgb = mask_ifd(2, 2, "rgb", vec![0; 12]);
+            rgb.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![3]));
+            rgb.set(t::BITS_PER_SAMPLE, Value::Short(vec![8, 8, 8]));
+            ifd0.add_sub_ifd(rgb);
+            let mut huge = mask_ifd(2, 2, "huge", vec![0; 4]);
+            huge.set(t::IMAGE_WIDTH, Value::Long(vec![100_000]));
+            huge.set(t::IMAGE_LENGTH, Value::Long(vec![100_000]));
+            ifd0.add_sub_ifd(huge);
+            let mut tiny = mask_ifd(2, 2, "tiny data", vec![0; 4]);
+            tiny.set(t::IMAGE_WIDTH, Value::Long(vec![4000]));
+            tiny.set(t::IMAGE_LENGTH, Value::Long(vec![3000]));
+            ifd0.add_sub_ifd(tiny);
+            let mut jxl = mask_ifd(2, 2, "unknown coding", vec![0; 4]);
+            jxl.set(t::COMPRESSION, Value::Short(vec![60_000]));
+            ifd0.add_sub_ifd(jxl);
+            let mut zero = mask_ifd(2, 2, "zero size", vec![0; 4]);
+            zero.set(t::IMAGE_WIDTH, Value::Long(vec![0]));
+            ifd0.add_sub_ifd(zero);
+            let mut short = mask_ifd(4, 4, "short strip", vec![200; 3]);
+            short.set(t::MASK_SUB_AREA, Value::Long(vec![u32::MAX, u32::MAX, u32::MAX, u32::MAX]));
+            ifd0.add_sub_ifd(short);
+            let mut outside = mask_ifd(2, 2, "sub area too small", vec![255; 4]);
+            outside.set(t::MASK_SUB_AREA, Value::Long(vec![3, 0, 2, 4]));
+            ifd0.add_sub_ifd(outside);
+        });
+        assert_eq!(decode(&bytes).unwrap().cpp, 3);
+        let masks = lcc_raw::semantic_masks(&bytes);
+        let names: Vec<&str> = masks.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, ["short strip", "sub area too small"]);
+        assert!(masks.iter().all(|m| m.sub_area.is_none()), "sub areas the mask doesn't fit are ignored");
+        for m in &masks {
+            let d = m.developed(Rect::new(0, 0, 8, 6), Rect::new(0, 0, 8, 6)).unwrap();
+            assert_eq!((d.width, d.height), (m.width, m.height));
+            assert!(m.developed(Rect::new(0, 0, 8, 6), Rect::new(8, 6, 0, 0)).is_none());
+        }
+        // not a TIFF at all
+        assert!(lcc_raw::semantic_masks(b"not a dng").is_empty());
     }
 }
 
@@ -985,51 +1028,6 @@ fn semantic_masks_are_read_and_placed() {
         assert_eq!((cropped.width, cropped.height), (4, 4));
         assert_eq!((cropped.get(0, 1), cropped.get(3, 2), cropped.get(0, 0)), (10, 255, 0));
     }
-}
-
-/// Malformed semantic masks are skipped (never a panic), and so is the `MaskSubArea` of a mask it
-/// doesn't fit; the raw image still decodes.
-#[test]
-fn malformed_semantic_masks_are_skipped() {
-    let bytes = profile_dng(ByteOrder::Little, |ifd0| {
-        ifd0.add_sub_ifd(mask_ifd(2, 2, "", vec![1, 2, 3, 4])); // no SemanticName
-        let mut rgb = mask_ifd(2, 2, "rgb", vec![0; 12]);
-        rgb.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![3]));
-        rgb.set(t::BITS_PER_SAMPLE, Value::Short(vec![8, 8, 8]));
-        ifd0.add_sub_ifd(rgb);
-        let mut huge = mask_ifd(2, 2, "huge", vec![0; 4]);
-        huge.set(t::IMAGE_WIDTH, Value::Long(vec![100_000]));
-        huge.set(t::IMAGE_LENGTH, Value::Long(vec![100_000]));
-        ifd0.add_sub_ifd(huge);
-        let mut tiny = mask_ifd(2, 2, "tiny data", vec![0; 4]);
-        tiny.set(t::IMAGE_WIDTH, Value::Long(vec![4000]));
-        tiny.set(t::IMAGE_LENGTH, Value::Long(vec![3000]));
-        ifd0.add_sub_ifd(tiny);
-        let mut jxl = mask_ifd(2, 2, "unknown coding", vec![0; 4]);
-        jxl.set(t::COMPRESSION, Value::Short(vec![60_000]));
-        ifd0.add_sub_ifd(jxl);
-        let mut zero = mask_ifd(2, 2, "zero size", vec![0; 4]);
-        zero.set(t::IMAGE_WIDTH, Value::Long(vec![0]));
-        ifd0.add_sub_ifd(zero);
-        let mut short = mask_ifd(4, 4, "short strip", vec![200; 3]);
-        short.set(t::MASK_SUB_AREA, Value::Long(vec![u32::MAX, u32::MAX, u32::MAX, u32::MAX]));
-        ifd0.add_sub_ifd(short);
-        let mut outside = mask_ifd(2, 2, "sub area too small", vec![255; 4]);
-        outside.set(t::MASK_SUB_AREA, Value::Long(vec![3, 0, 2, 4]));
-        ifd0.add_sub_ifd(outside);
-    });
-    assert_eq!(decode(&bytes).unwrap().cpp, 3);
-    let masks = lcc_raw::semantic_masks(&bytes);
-    let names: Vec<&str> = masks.iter().map(|m| m.name.as_str()).collect();
-    assert_eq!(names, ["short strip", "sub area too small"]);
-    assert!(masks.iter().all(|m| m.sub_area.is_none()), "sub areas the mask doesn't fit are ignored");
-    for m in &masks {
-        let d = m.developed(Rect::new(0, 0, 8, 6), Rect::new(0, 0, 8, 6)).unwrap();
-        assert_eq!((d.width, d.height), (m.width, m.height));
-        assert!(m.developed(Rect::new(0, 0, 8, 6), Rect::new(8, 6, 0, 0)).is_none());
-    }
-    // not a TIFF at all
-    assert!(lcc_raw::semantic_masks(b"not a dng").is_empty());
 }
 
 /// Only the first `MAX_MASKS` mask IFDs are decoded, malformed ones included, so a file full of

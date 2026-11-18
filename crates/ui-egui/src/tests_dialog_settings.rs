@@ -36,26 +36,28 @@ fn rect(h: &Headless, id: &str) -> egui::Rect {
     h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"))
 }
 
+/// One session, several steps; each step was a test of its own and says what it checks.
 #[test]
-fn a_label_longer_than_its_column_leaves_the_controls_in_line() {
+fn settings_rows_keep_their_controls_in_line_and_a_short_path_has_no_tooltip() {
     // Given Performance, whose "Forget unchanged photos" label is wider than the label column
     let mut h = demo([1600.0, 1000.0]);
-    show(&mut h, "performance");
-    // Then its choices start where the choices of a short label do
-    let (short, long) = (rect(&h, "button:settingsPreview-0"), rect(&h, "button:settingsForgetLocal-0"));
-    assert!((short.left() - long.left()).abs() < 0.5, "Preview size starts at {} and Forget unchanged photos at {}", short.left(), long.left());
-}
-
-#[test]
-fn a_short_path_is_shown_whole_and_has_no_tooltip() {
-    // Given the in-memory library, whose Location is a short sentence
-    let mut h = demo([1600.0, 1000.0]);
-    show(&mut h, "general");
-    assert!(h.painted_text().iter().any(|text| text == "In memory (nothing is saved)"), "it is all there");
-    let before = h.painted_text().len();
-    // When the pointer rests on it
-    assert_eq!(h.request("ui.hoverWidget", json!({"id": "text:settingsLocation"}), T)["ok"], true);
-    let _ = h.step_until(Duration::from_secs(2), |h| h.painted_text().len() > before);
-    // Then nothing more is drawn: there is nothing a tooltip could add
-    assert_eq!(h.painted_text().len(), before, "no tooltip for a path that is all there");
+    // a label longer than its column leaves the controls in line
+    {
+        show(&mut h, "performance");
+        // Then its choices start where the choices of a short label do
+        let (short, long) = (rect(&h, "button:settingsPreview-0"), rect(&h, "button:settingsForgetLocal-0"));
+        assert!((short.left() - long.left()).abs() < 0.5, "Preview size starts at {} and Forget unchanged photos at {}", short.left(), long.left());
+    }
+    // a short path is shown whole and has no tooltip
+    {
+        // Given the in-memory library, whose Location is a short sentence
+        show(&mut h, "general");
+        assert!(h.painted_text().iter().any(|text| text == "In memory (nothing is saved)"), "it is all there");
+        let before = h.painted_text().len();
+        // When the pointer rests on it
+        assert_eq!(h.request("ui.hoverWidget", json!({"id": "text:settingsLocation"}), T)["ok"], true);
+        let _ = h.step_until(Duration::from_secs(2), |h| h.painted_text().len() > before);
+        // Then nothing more is drawn: there is nothing a tooltip could add
+        assert_eq!(h.painted_text().len(), before, "no tooltip for a path that is all there");
+    }
 }

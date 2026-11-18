@@ -400,25 +400,23 @@ mod tests {
     }
 
     #[test]
-    fn character_reference_elevation_is_not_truncated() {
-        let log = parse_gpx(&point_document("45", "7", "1&#50;3", "2026-01-01T00:00:00Z")).unwrap();
-        assert_eq!(log.points.first().and_then(|p| p.elevation), Some(123.0));
-    }
-
-    #[test]
-    fn character_reference_latitude_is_not_dropped() {
+    fn character_references_in_coordinates_elevation_and_time_are_decoded() {
         let log = parse_gpx(&point_document("4&#53;", "7&#x2E;5", "123", "2026-01-01T00:00:00Z")).unwrap();
         let point = log.points.first().copied();
         assert_eq!(log.points.len(), 1);
         assert_eq!(point.map(|p| (p.latitude, p.longitude)), Some((45.0, 7.5)));
-    }
-
-    #[test]
-    fn character_reference_time_is_not_shifted() {
-        let encoded = parse_gpx(&point_document("45", "7", "123", "2026-01-01T00:00:&#51;0Z")).unwrap();
-        let plain = parse_gpx(&point_document("45", "7", "123", "2026-01-01T00:00:30Z")).unwrap();
-        assert_eq!(encoded.points.first().map(|p| p.time), plain.points.first().map(|p| p.time));
-        assert_eq!(encoded.points.first().map(|p| p.time), Some(1_767_225_630.0));
+        // character reference elevation is not truncated
+        {
+            let log = parse_gpx(&point_document("45", "7", "1&#50;3", "2026-01-01T00:00:00Z")).unwrap();
+            assert_eq!(log.points.first().and_then(|p| p.elevation), Some(123.0));
+        }
+        // character reference time is not shifted
+        {
+            let encoded = parse_gpx(&point_document("45", "7", "123", "2026-01-01T00:00:&#51;0Z")).unwrap();
+            let plain = parse_gpx(&point_document("45", "7", "123", "2026-01-01T00:00:30Z")).unwrap();
+            assert_eq!(encoded.points.first().map(|p| p.time), plain.points.first().map(|p| p.time));
+            assert_eq!(encoded.points.first().map(|p| p.time), Some(1_767_225_630.0));
+        }
     }
 
     #[test]

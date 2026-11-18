@@ -135,7 +135,7 @@ fn offline_originals_never_block_a_frame() {
 /// stops it with what was read so far added.
 #[test]
 fn import_reads_files_off_the_ui_thread_and_can_be_cancelled() {
-    let dir = std::env::temp_dir().join(format!("lc-ui-slow-import-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lc-ui-slow-import");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     // enough files that the import is still running when its activity row shows (after 0.5 s)

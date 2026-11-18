@@ -633,8 +633,11 @@ mod tests {
         h
     }
 
+    /// The activity row follows the task: reading the catalog can be stopped from the stack, adding
+    /// photos can't, the row goes with the task, and whether the task was cancelled is the task's
+    /// flag, not an error's words (#1046).
     #[test]
-    fn lightroom_row_is_not_cancellable_while_committing() {
+    fn lightroom_row_cancels_the_read_not_the_commit_and_cancel_is_the_flag_not_the_words() {
         let mut h = demo();
         let (task, tx, cancel, progress) = fake_import(&h);
         h.app.lightroom = Some(task);
@@ -655,11 +658,8 @@ mod tests {
         h.step();
         assert!(h.app.lightroom.is_none());
         assert!(h.app.session.activity.list().is_empty(), "the row goes with the task");
-    }
 
-    #[test]
-    fn lightroom_cancel_from_the_stack_stops_the_read() {
-        let mut h = demo();
+        // the stack's ✕ stops the read
         let (task, tx, cancel, _) = fake_import(&h);
         h.app.lightroom = Some(task);
         h.step();
@@ -671,13 +671,9 @@ mod tests {
         assert!(h.app.lightroom.is_none());
         assert_eq!(h.app.lightroom_last, Some(serde_json::json!({"cancelled": true, "path": "fixture.lrcat"})));
         assert!(h.app.session.activity.list().is_empty());
-    }
 
-    /// Whether the task was cancelled is the task's flag, not an error's words (#1046): a cancel
-    /// reads as one whatever the message says, and a failure that mentions "cancelled" is a failure.
-    #[test]
-    fn lightroom_cancel_is_the_flag_not_the_words() {
-        let mut h = demo();
+        // #1046: a cancel reads as one whatever the message says, and a failure that mentions
+        // "cancelled" is a failure
         let (task, tx, cancel, _) = fake_import(&h);
         h.app.lightroom = Some(task);
         cancel.store(true, Ordering::Relaxed);
@@ -701,8 +697,8 @@ mod tests {
     /// One, not Lightroom: the activity row, the toast and the result window.
     #[test]
     fn a_capture_one_import_says_capture_one() {
+        let dir = lcc_testkit::TempDir::new("c1-import-words");
         let mut h = demo();
-        let dir = std::env::temp_dir().join(format!("c1-import-words-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let catalog = dir.join("Capture One.cocatalogdb");
         std::fs::write(&catalog, b"").unwrap();
@@ -771,30 +767,24 @@ mod tests {
         assert!(!h.app.session.visible().is_empty());
     }
 
+    /// A failure waits for a dialog that is already open, then stays readable in its own window,
+    /// which offers no success action.
     #[test]
-    fn lightroom_failure_stays_readable_without_offering_a_success_action() {
-        let mut h = demo();
-        let (task, _tx, _, _) = fake_import(&h);
-        terminal(&mut h.app, &h.view.ctx, &task, json!({"error": "catalog or WAL exceeds 1 GiB import limit"}));
-        h.step();
-        h.step();
-        assert!(h.painted_text().join(" ").contains("exceeds 1 GiB import limit"));
-        assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::LightroomResult { first: None, .. })));
-        assert!(!h.app.widgets.iter().any(|(id, _)| id == "button:dialogCancel"));
-    }
-
-    #[test]
-    fn lightroom_result_waits_for_an_existing_dialog() {
+    fn lightroom_failure_waits_for_an_open_dialog_and_stays_readable_without_a_success_action() {
         let mut h = demo();
         h.app.ui.dialog = Some(crate::state::Dialog::About);
         let (task, _tx, _, _) = fake_import(&h);
-        terminal(&mut h.app, &h.view.ctx, &task, json!({"error": "catalog could not be read"}));
+        terminal(&mut h.app, &h.view.ctx, &task, json!({"error": "catalog or WAL exceeds 1 GiB import limit"}));
         assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::About)));
         assert!(h.app.lightroom_result.is_some());
         h.app.ui.dialog = None;
         tick(&mut h.app, &h.view.ctx);
-        assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::LightroomResult { .. })));
+        assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::LightroomResult { first: None, .. })));
         assert!(h.app.lightroom_result.is_none());
+        h.step();
+        h.step();
+        assert!(h.painted_text().join(" ").contains("exceeds 1 GiB import limit"));
+        assert!(!h.app.widgets.iter().any(|(id, _)| id == "button:dialogCancel"));
     }
 
     #[test]

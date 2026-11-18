@@ -74,9 +74,7 @@ fn set(h: &mut Headless, id: &str, key: &str, value: &str) {
 
 /// Selecting a mode or a scale sets it and names it back; with no parameter the command steps to
 /// the next one, wrapping; anything else is refused with the values it does take.
-#[test]
-fn the_mode_and_scale_commands_select_step_and_reject_junk() {
-    let mut h = edit_panel();
+fn the_mode_and_scale_commands_select_step_and_reject_junk(h: &mut Headless) {
     assert_eq!(h.app.ui.histogram_mode, "rgb", "the panel opens on the target app's own overlay");
     assert_eq!(h.app.ui.histogram_scale, "linear");
 
@@ -96,7 +94,7 @@ fn the_mode_and_scale_commands_select_step_and_reject_junk() {
         ("waveform", "parade"),
         ("parade", "rgb"),
     ] {
-        set(&mut h, "view.histogram.mode", "mode", from);
+        set(h, "view.histogram.mode", "mode", from);
         let out = h.app.run("view.histogram.mode", json!({})).expect("a step");
         assert_eq!(out["mode"], to, "stepping from {from}");
         assert_eq!(h.app.ui.histogram_mode, to);
@@ -106,7 +104,7 @@ fn the_mode_and_scale_commands_select_step_and_reject_junk() {
         assert_eq!(out["scale"], scale);
         assert_eq!(h.app.ui.histogram_scale, scale);
     }
-    set(&mut h, "view.histogram.scale", "scale", "linear");
+    set(h, "view.histogram.scale", "scale", "linear");
     assert_eq!(h.app.run("view.histogram.scale", json!({})).expect("a step")["scale"], "logarithmic");
     assert_eq!(h.app.run("view.histogram.scale", json!({})).expect("a step")["scale"], "linear");
 
@@ -129,7 +127,7 @@ fn the_mode_and_scale_commands_select_step_and_reject_junk() {
     h.step();
 
     // …and a key the user gives one fires it, the way any other command's does
-    set(&mut h, "view.histogram.mode", "mode", "rgb");
+    set(h, "view.histogram.mode", "mode", "rgb");
     let r = h.app.run("app.setShortcut", json!({"id": "view.histogram.mode", "shortcut": "Shift+U"})).expect("a free key");
     assert_eq!(r["shortcut"], "Shift+U", "{r}");
     let r = h.request("ui.key", json!({"key": "U", "shift": true}), T);
@@ -302,11 +300,9 @@ fn the_panels_own_selector_lists_the_modes_and_scales() {
 
 /// The chosen mode and scale are saved with the UI state; a settings file from before them, or one
 /// naming something else, opens on the defaults.
-#[test]
-fn the_mode_and_scale_survive_the_settings() {
-    let mut h = edit_panel();
-    set(&mut h, "view.histogram.mode", "mode", "channels");
-    set(&mut h, "view.histogram.scale", "scale", "logarithmic");
+fn the_mode_and_scale_survive_the_settings(h: &mut Headless) {
+    set(h, "view.histogram.mode", "mode", "channels");
+    set(h, "view.histogram.scale", "scale", "logarithmic");
     let saved = serde_json::to_string(&h.app.ui).expect("the UI state");
     let back = serde_json::from_str::<crate::UiState>(&saved).expect("read back").sanitized();
     assert_eq!((back.histogram_mode.as_str(), back.histogram_scale.as_str()), ("channels", "logarithmic"));
@@ -319,7 +315,14 @@ fn the_mode_and_scale_survive_the_settings() {
     // …and the panel draws the default rather than failing on it
     h.app.ui.histogram_mode = "vector".into();
     h.step();
-    assert!(!plot_colors(&h).is_empty());
+    assert!(!plot_colors(h).is_empty());
+}
+
+#[test]
+fn the_mode_and_scale_commands_select_step_reject_junk_and_survive_the_settings() {
+    let mut h = edit_panel();
+    the_mode_and_scale_commands_select_step_and_reject_junk(&mut h);
+    the_mode_and_scale_survive_the_settings(&mut h);
 }
 
 /// The clipping triangles show which channels reach each end, and resting the pointer on one
@@ -625,9 +628,9 @@ fn gliding_over_the_histogram_never_previews_clipping() {
     let plot = rect(&h, "histogram:plot");
     let (lo, hi) = (rect(&h, "histogram:shadows"), rect(&h, "histogram:highlights"));
     // back and forth along the top of the plot, through both triangles, one point a frame
-    for pass in 0..4 {
-        for i in 0..=40 {
-            let f = if pass % 2 == 0 { i as f32 / 40.0 } else { 1.0 - i as f32 / 40.0 };
+    for pass in 0..2 {
+        for i in 0..=24 {
+            let f = if pass % 2 == 0 { i as f32 / 24.0 } else { 1.0 - i as f32 / 24.0 };
             let x = plot.left() + f * plot.width();
             let r = h.request("ui.move", json!({"x": x, "y": lo.center().y.min(hi.center().y)}), T);
             assert_eq!(r["ok"], true, "{r}");

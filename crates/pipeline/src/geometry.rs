@@ -192,6 +192,19 @@ impl Frame {
         w.ca[2] += ca[1];
     }
 
+    /// Apply a flat-field map's gain ([`crate::vignetting_calibration::field_for`]). It takes the place of the lens profile's (or
+    /// the file's) vignetting, which would correct the same fall-off twice; the profile's distortion and lateral CA
+    /// and manual vignetting stay. A gain moves no pixels, so the crop is unaffected.
+    pub fn add_vignetting_calibration(&mut self, field: Option<std::sync::Arc<crate::vignetting_calibration::FieldGain>>) {
+        let Some(field) = field else { return };
+        let w = self.warp.get_or_insert_with(|| Warp::identity(self.ow, self.oh));
+        w.field = Some(field);
+        w.lens_vig = 0.0;
+        if w.is_identity() {
+            self.warp = None;
+        }
+    }
+
     /// Map a point of the transformed image (normalized) to the lens-corrected, pre-perspective image (normalized).
     pub fn transformed_to_corrected(&self, p: Point) -> Point {
         match &self.warp {

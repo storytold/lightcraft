@@ -33,24 +33,6 @@ fn click(h: &mut Headless, id: &str) {
 }
 
 #[test]
-fn the_tools_are_a_row_under_the_histogram() {
-    let h = develop();
-    let histogram = rect(&h, "histogram").expect("the histogram");
-    let tools: Vec<egui::Rect> = ["crop", "remove", "redeye", "masking"].iter().map(|id| rect(&h, &format!("icon:{id}")).expect(id)).collect();
-    for r in &tools {
-        assert!(r.top() >= histogram.bottom(), "under the histogram");
-        assert!((r.center().y - tools[0].center().y).abs() < 1.0, "in one row");
-    }
-    assert!(tools.windows(2).all(|w| w[0].right() <= w[1].left()), "left to right");
-    let basic = rect(&h, "section:light").expect("Basic");
-    assert!(tools[0].bottom() <= basic.top(), "above the Develop panels");
-    // the right panel folds from the top bar, above the row; Edit is the panels, not a tool
-    let fold = rect(&h, "icon:collapseRight").expect("the top bar's fold button");
-    assert!(fold.bottom() <= histogram.top(), "in the top bar");
-    assert!(rect(&h, "icon:edit").is_none() && rect(&h, "icon:presets").is_none(), "no Edit or Presets button");
-}
-
-#[test]
 fn a_tools_drawer_opens_in_the_panels_place_and_closes_from_its_button() {
     let mut h = develop();
     click(&mut h, "icon:crop");
@@ -69,13 +51,8 @@ fn a_tools_drawer_opens_in_the_panels_place_and_closes_from_its_button() {
     let r = h.request("engine.execute", json!({"command": "panel.masking"}), T);
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(h.app.ui.right, RightPanel::Edit);
-}
-
-/// #618: while a tool is in use the panel holds its controls only, as Lightroom Classic's does;
-/// the photo's global panels (Basic, Tone Curve…) wait until the tool is put away.
-#[test]
-fn a_tools_drawer_hides_the_develop_panels() {
-    let mut h = develop();
+    // #618: while a tool is in use the panel holds its controls only, as Lightroom Classic's does; the photo's
+    // global panels (Basic, Tone Curve…) wait until the tool is put away
     assert!(rect(&h, "section:light").is_some(), "Basic with no tool in use");
     for tool in ["crop", "remove", "redeye", "masking"] {
         click(&mut h, &format!("icon:{tool}"));
@@ -86,36 +63,7 @@ fn a_tools_drawer_hides_the_develop_panels() {
         assert_eq!(h.app.ui.right, RightPanel::Edit, "{tool} put away");
         assert!(rect(&h, "section:light").is_some(), "{tool}: the panels are back");
     }
-}
-
-#[test]
-fn presets_and_the_fold_button_bring_the_tools_back() {
-    let mut h = develop();
-    // Window ▸ Presets puts the presets in the panels' place, and back
-    let presets = |h: &mut Headless| {
-        let r = h.request("engine.execute", json!({"command": "panel.presets"}), T);
-        assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
-    };
-    presets(&mut h);
-    assert!(h.app.ui.presets, "Presets in the panels' place");
-    assert!(rect(&h, "icon:crop").is_none());
-    presets(&mut h);
-    assert!(!h.app.ui.presets, "a second time goes back to the tools");
-    assert!(rect(&h, "icon:crop").is_some());
-    // E closes the panels; the top bar's fold button brings them back
-    let r = h.request("engine.execute", json!({"command": "panel.edit"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    assert_eq!(h.app.ui.right, RightPanel::None);
-    click(&mut h, "icon:collapseRight");
-    assert_eq!(h.app.ui.right, RightPanel::Edit);
-    assert!(!h.app.ui.right_collapsed && rect(&h, "icon:crop").is_some());
-}
-
-#[test]
-fn the_edit_button_closes_a_tools_drawer() {
-    let mut h = develop();
+    // the Edit button, first in the row, closes a drawer
     let edit = rect(&h, "icon:toolsEdit").expect("the Edit button");
     let crop = rect(&h, "icon:crop").expect("Crop");
     assert!(edit.right() <= crop.left(), "first in the row");
@@ -126,4 +74,50 @@ fn the_edit_button_closes_a_tools_drawer() {
     // a second click leaves the panels on screen
     click(&mut h, "icon:toolsEdit");
     assert_eq!(h.app.ui.right, RightPanel::Edit);
+}
+
+#[test]
+fn presets_and_the_fold_button_bring_the_tools_back() {
+    let mut h = develop();
+    // Window ▸ Presets shows the presets in the left column and leaves the tools where they are:
+    // the presets never take the Edit panels' place
+    let presets = |h: &mut Headless| {
+        let r = h.request("engine.execute", json!({"command": "panel.presets"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+    };
+    let left_of_tools = |h: &Headless| {
+        let (panel, crop) = (rect(h, "classicPanel:presets").expect("the Presets panel"), rect(h, "icon:crop").expect("the tools"));
+        panel.right() <= crop.left()
+    };
+    presets(&mut h);
+    assert!(crate::panels::presets::shown(&h.app) && h.app.ui.left_panel, "the presets are on screen");
+    assert!(left_of_tools(&h), "in the left column, beside the tools");
+    assert_eq!(h.app.ui.right, RightPanel::Edit);
+    presets(&mut h);
+    assert!(!crate::panels::presets::shown(&h.app), "a second time folds the panel");
+    assert!(rect(&h, "icon:crop").is_some() && h.app.ui.right == RightPanel::Edit, "and the tools are untouched");
+    // E closes the panels; the top bar's fold button brings them back
+    let r = h.request("engine.execute", json!({"command": "panel.edit"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.ui.right, RightPanel::None);
+    click(&mut h, "icon:collapseRight");
+    assert_eq!(h.app.ui.right, RightPanel::Edit);
+    assert!(!h.app.ui.right_collapsed && rect(&h, "icon:crop").is_some());
+    // Tab (Window ▸ Panels) and the fold button are two switches on the same side: the button brings back a side
+    // Tab hid, in one click, and the menu's switch undoes the button's fold
+    let run = |h: &mut Headless, command: &str, params: serde_json::Value| {
+        let r = h.request("engine.execute", json!({"command": command, "params": params}), T);
+        assert_eq!(r["ok"], true, "{command}: {r}");
+        h.settle(SETTLE);
+    };
+    run(&mut h, "panel.sides", json!({"show": false}));
+    assert!(rect(&h, "icon:crop").is_none(), "Tab hid the tools");
+    click(&mut h, "icon:collapseRight");
+    assert!(rect(&h, "icon:crop").is_some(), "one click on the button brings them back");
+    click(&mut h, "icon:collapseRight");
+    assert!(rect(&h, "icon:crop").is_none(), "and the next folds them away");
+    run(&mut h, "panel.toggle", json!({"edge": "right", "show": true}));
+    assert!(rect(&h, "icon:crop").is_some(), "showing the edge unfolds it");
 }

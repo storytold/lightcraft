@@ -20,6 +20,13 @@ const fn shaded(s: ControlSpec, shade: lcc_develop::Shade) -> ControlSpec {
     ControlSpec { shade, ..s }
 }
 
+/// Slider `s` as Settings ▸ Expanded sliders allows: off, the mask Hue keeps Lightroom's range
+/// (about ±34°, [`lcc_develop::LOCAL_HUE_STANDARD`]); on, ±180°. Only the range shown changes; a
+/// stored value past it is kept as it is.
+pub fn local_spec(s: &ControlSpec, expanded: bool) -> ControlSpec {
+    if s.id == "hue" && !expanded { ControlSpec { min: -lcc_develop::LOCAL_HUE_STANDARD, max: lcc_develop::LOCAL_HUE_STANDARD, ..*s } } else { *s }
+}
+
 /// Local adjustment sliders (key = `LocalAdjustments` field name).
 pub const LOCAL: &[ControlSpec] = &[
     spec("temp", "Temp", -100.0, 100.0, 1.0, 0, Track::Temp),
@@ -33,7 +40,7 @@ pub const LOCAL: &[ControlSpec] = &[
     spec("texture", "Texture", -100.0, 100.0, 1.0, 0, Track::Centered),
     shaded(spec("clarity", "Clarity", -100.0, 100.0, 1.0, 0, Track::Centered), lcc_develop::Shade::ReverseRamp),
     spec("dehaze", "Dehaze", -100.0, 100.0, 1.0, 0, Track::Centered),
-    spec("hue", "Hue", -100.0, 100.0, 1.0, 0, Track::Rainbow),
+    spec("hue", "Hue", -lcc_develop::LOCAL_HUE_MAX, lcc_develop::LOCAL_HUE_MAX, 1.0, 0, Track::Rainbow),
     spec("saturation", "Saturation", -100.0, 100.0, 1.0, 0, Track::Gradient { from: "#7a7a7a", to: "#e04a3a" }),
     spec("sharpness", "Sharpness", -100.0, 100.0, 1.0, 0, Track::Centered),
     spec("noise", "Noise", -100.0, 100.0, 1.0, 0, Track::Centered),
@@ -41,11 +48,28 @@ pub const LOCAL: &[ControlSpec] = &[
     spec("defringe", "Defringe", -100.0, 100.0, 1.0, 0, Track::Centered),
 ];
 
+/// The mask's Color tint (Lightroom's Color swatch under Saturation, issue #1145): the hue in
+/// degrees round the wheel and how strongly the masked area takes it.
+pub const TINT: [ControlSpec; 2] = [
+    spec("color_hue", "Hue", 0.0, 360.0, 1.0, 0, Track::Rainbow),
+    spec("color_sat", "Saturation", 0.0, 100.0, 1.0, 0, Track::Gradient { from: "#7a7a7a", to: "#e04a3a" }),
+];
+
+/// The swatch colour of a tint: `hue` in degrees, `sat` 0..100 (no tint: `None`).
+pub(crate) fn tint_swatch(hue: f64, sat: f64) -> Option<egui::Color32> {
+    if !(sat.is_finite() && hue.is_finite()) || sat <= 0.0 {
+        return None;
+    }
+    let h = (hue.rem_euclid(360.0) / 360.0) as f32;
+    let s = (sat.clamp(0.0, 100.0) / 100.0) as f32;
+    Some(egui::Color32::from(egui::ecolor::Hsva::new(h, s, 1.0, 1.0)))
+}
+
 /// The mask's slider sections (issue #642), as Lightroom Classic groups them: (fold key, title,
 /// the [`LOCAL`] sliders in it). Color Grading follows Color ([`grading_section`]).
 pub const GROUPS: &[(&str, &str, &[&str])] = &[
     ("light", "Light", &["exposure", "contrast", "highlights", "shadows", "whites", "blacks"]),
-    ("color", "Color", &["temp", "tint", "hue", "saturation"]),
+    ("color", "Color", &["temp", "tint", "hue", "saturation", "color_sat"]),
     ("effects", "Effects", &["texture", "clarity", "dehaze"]),
     ("detail", "Detail", &["sharpness", "noise", "moire", "defringe"]),
 ];
@@ -156,7 +180,7 @@ pub fn local_get(a: &LocalAdjustments, key: &str) -> f64 {
 
 /// Every kind of mask, in Create New Mask's order, with its tile label (OneSlips 1138a5edd): the tiles and the Add /
 /// Subtract / Intersect menus offer all of them, in the same order, with the same icons.
-pub(crate) const MASK_KINDS: [(&str, &str); 12] = [
+pub(crate) const MASK_KINDS: [(&str, &str); 13] = [
     ("object", "Object"),
     ("prompt", "Describe"),
     ("subject", "Subject"),
@@ -169,6 +193,8 @@ pub(crate) const MASK_KINDS: [(&str, &str); 12] = [
     ("radial", "Radial"),
     ("luminanceRange", "Luminance"),
     ("colorRange", "Color"),
+    // (Depth Anything V2 Small; without it the AI Models settings offer its download, issue #1144)
+    ("depthRange", "Depth"),
 ];
 
 /// The icon of a mask kind, by its `mask.add` kind id: the one table the Create New Mask tiles and
@@ -433,22 +459,14 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
             }
             // only the selected mask's branch opens by itself; the chevron folds it, or opens another's
             let collapsed = !app.ui.mask_branch_open(m.id, sel);
-            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
+            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::click());
             crate::widgets::announce_selected(&resp, m.name.clone(), Some(m.id) == app.session.active_mask);
             register(ui.ctx(), format!("mask:{}", m.id), r);
             // the mask's own row (name, eye, menu) is where its effect is judged, so the pointer on
             // it shows no overlay; a component row under it shows the whole mask's
-            ui.painter().rect_filled(
-                r,
-                4.0,
-                if sel {
-                    t.tool_active
-                } else if resp.hovered() {
-                    t.hover.gamma_multiply(0.7)
-                } else {
-                    t.chrome
-                },
-            );
+            if sel || resp.hovered() {
+                ui.painter().rect_filled(r, 4.0, if sel { t.tool_active } else { t.hover.gamma_multiply(0.7) });
+            }
 
             // Collapse / expand chevron on the left
             let chev_r = Rect::from_center_size(pos2(r.left() + 10.0, r.center().y), vec2(14.0, 14.0));
@@ -466,7 +484,7 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
             }
 
             // the mask's thumbnail (white on black over the photo); its kind's icon until it is ready
-            let thumb_r = Rect::from_min_size(pos2(r.left() + 21.0, r.min.y + 5.0), vec2(20.0, 20.0));
+            let thumb_r = Rect::from_min_size(pos2(r.left() + 21.0, r.center().y - 16.0), vec2(32.0, 32.0));
             match crate::mask_thumbs::thumb(app, ui.ctx(), id, &d, m) {
                 Some(tex) => {
                     crate::mask_thumbs::paint(ui.painter(), thumb_r, Some(&tex), if sel { t.text } else { t.text_dim.gamma_multiply(0.5) });
@@ -474,13 +492,13 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
                 }
                 None => {
                     let icon = m.components.first().map(|c| kind_label(&c.shape).1).unwrap_or(Icon::Mask);
-                    paint(ui.painter(), Rect::from_min_size(pos2(r.left() + 22.0, r.min.y + 7.0), vec2(16.0, 16.0)), icon, t.text_label);
+                    paint(ui.painter(), Rect::from_center_size(thumb_r.center(), vec2(20.0, 20.0)), icon, t.text_label);
                 }
             }
             // a stale AI mask (copied, synced, a preset's): an amber badge on its icon; click to update
             let mut badge_clicked = false;
             if let Some(why) = mask_ai_status(m).filter(|_| !app.session.segmenter.recomputing()) {
-                let br = Rect::from_center_size(pos2(r.left() + 37.0, r.min.y + 9.0), vec2(10.0, 10.0));
+                let br = Rect::from_center_size(pos2(thumb_r.right() - 4.0, thumb_r.top() + 4.0), vec2(10.0, 10.0));
                 register(ui.ctx(), format!("maskStale:{}", m.id), br);
                 let badge = ui.interact(br.expand(2.0), egui::Id::new(("maskStale", m.id)), Sense::click());
                 crate::widgets::announce(&badge, crate::i18n::tr(why));
@@ -510,9 +528,10 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
             } else {
                 m.name.clone()
             };
-            let g = one_line(ui.painter(), &shown, t.font(13.0), color, r.width() - 44.0 - right_room);
+            let text_x = thumb_r.right() + 6.0;
+            let g = one_line(ui.painter(), &shown, t.font(13.0), color, (r.right() - text_x - right_room).max(10.0));
             let elided = g.elided;
-            let at = pos2(r.left() + 44.0, r.center().y - g.size().y / 2.0);
+            let at = pos2(text_x, r.center().y - g.size().y / 2.0);
             register(ui.ctx(), format!("maskName:{}", m.id), Rect::from_min_size(at, g.size()));
             ui.painter().galley(at, g, color);
             let resp = if elided { resp.on_hover_text(&shown) } else { resp };
@@ -668,25 +687,17 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
                         ui.add_space(2.0);
                         let full_w = ui.available_width();
                         let indent = 20.0;
-                        let (full_r, _) = ui.allocate_exact_size(vec2(full_w, 28.0), Sense::hover());
-                        let r = Rect::from_min_size(pos2(full_r.min.x + indent, full_r.min.y), vec2(full_w - indent, 28.0));
+                        let (full_r, _) = ui.allocate_exact_size(vec2(full_w, 36.0), Sense::hover());
+                        let r = Rect::from_min_size(pos2(full_r.min.x + indent, full_r.min.y), vec2(full_w - indent, 36.0));
                         let resp = ui.interact(r, egui::Id::new(("compRow", m.id, i)), Sense::click());
                         crate::widgets::announce_selected(&resp, label.clone(), comp_sel);
                         register(ui.ctx(), format!("component:{i}"), r);
                         if ui.rect_contains_pointer(r) {
                             hovered_row = Some(m.id);
                         }
-                        ui.painter().rect_filled(
-                            r,
-                            4.0,
-                            if comp_sel {
-                                t.tool_active
-                            } else if resp.hovered() {
-                                t.hover.gamma_multiply(0.7)
-                            } else {
-                                t.chrome.gamma_multiply(0.9)
-                            },
-                        );
+                        if comp_sel || resp.hovered() {
+                            ui.painter().rect_filled(r, 4.0, if comp_sel { t.tool_active } else { t.hover.gamma_multiply(0.7) });
+                        }
 
                         // a branch of the tree: a line from the mask down to this row, then across to it
                         let x0 = full_r.left() + 10.0;
@@ -699,7 +710,7 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
                             register(ui.ctx(), format!("componentOp:{i}"), opr);
                             paint(ui.painter(), opr.shrink(1.0), op, t.text_label);
                         }
-                        let icon_r = Rect::from_min_size(pos2(opr.right() + 3.0, r.top() + 5.0), vec2(18.0, 18.0));
+                        let icon_r = Rect::from_min_size(pos2(opr.right() + 4.0, r.center().y - 14.0), vec2(28.0, 28.0));
                         register(ui.ctx(), format!("componentIcon:{i}"), icon_r);
                         // the component's own thumbnail (made into a mask of its own)
                         let alone = lcc_develop::Mask {
@@ -717,11 +728,16 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
                                 );
                                 register(ui.ctx(), format!("componentThumb:{i}"), icon_r);
                             }
-                            None => paint(ui.painter(), icon_r.shrink(1.0), icon, if comp_sel { t.text } else { t.text_label }),
+                            None => paint(
+                                ui.painter(),
+                                Rect::from_center_size(icon_r.center(), vec2(18.0, 18.0)),
+                                icon,
+                                if comp_sel { t.text } else { t.text_label },
+                            ),
                         }
 
                         let text = format!("{label}{}", if c.invert { crate::i18n::tr(" (inverted)") } else { "" });
-                        let text_x = icon_r.right() + 4.0;
+                        let text_x = icon_r.right() + 6.0;
                         let g = one_line(
                             ui.painter(),
                             &text,
@@ -791,7 +807,10 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
                         // each component's sliders in a scope of its own: two radial components each have a
                         // Feather slider, and without it both took the same egui id
                         ui.push_id(("componentControls", m.id, i), |ui| range_controls(app, ui, i, &c.shape));
-                        if comp_sel && let MaskShape::People { .. } = &c.shape {
+                        if comp_sel
+                            && (app.ui.show_people_who || app.ui.role_draft.is_some())
+                            && let MaskShape::People { .. } = &c.shape
+                        {
                             who_picker(app, ui, id, i, &c.shape);
                         }
                     }
@@ -856,7 +875,7 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
             divider(ui);
             object_settings(app, ui);
         }
-        next_mask_settings(app, ui);
+        next_mask_settings(app, ui, !d.masks.is_empty());
         return;
     };
     let Some(m) = d.masks.iter().find(|m| m.id == mid).cloned() else { return };
@@ -873,12 +892,13 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
         object_settings(app, ui);
     }
     divider(ui);
-    super::mask_effects::effect_row(app, ui, &m);
+    super::mask_effects::effect_row(app, ui, &m, true);
     for (key, title, ids) in GROUPS {
         if !section_header(app, ui, key, title, group_changed(&m.adjust, ids)) {
             continue;
         }
-        for s in LOCAL.iter().filter(|s| ids.contains(&s.id)) {
+        for s in LOCAL.iter().filter(|s| ids.contains(&s.id)).map(|s| local_spec(s, app.ui.settings.expanded_sliders)).collect::<Vec<_>>() {
+            let s = &s;
             let v = local_get(&m.adjust, s.id);
             let out = slider(ui, s, v, true, None);
             apply_slider_out(app, s, out, |app, v| app.run("mask.adjust", json!({"values": {s.id: v}})));
@@ -896,6 +916,34 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         }
         if *key == "color" {
+            // the tint swatch under Saturation; its row opens the hue and strength sliders
+            let open = app.ui.flyout_open("maskTint");
+            let row = flyout_row(ui, "maskTint", "Color", Icon::Target, open);
+            let sw = Rect::from_center_size(pos2(row.rect.right() - 36.0, row.rect.center().y), vec2(16.0, 16.0));
+            register(ui.ctx(), "maskTint:swatch", sw);
+            let t = Tokens::get(ui.ctx());
+            match tint_swatch(m.adjust.color_hue, m.adjust.color_sat) {
+                Some(c) => {
+                    ui.painter().rect_filled(sw, 2.0, c);
+                }
+                // no tint: an empty box crossed through, as Lightroom shows it
+                None => {
+                    ui.painter().line_segment([sw.left_bottom(), sw.right_top()], Stroke::new(1.0, t.text_dim));
+                }
+            }
+            ui.painter().rect_stroke(sw, 2.0, Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
+            if row.clicked() {
+                app.ui.toggle_flyout("maskTint");
+            }
+            if open {
+                crate::widgets::slider_group(ui, "maskTint", |ui| {
+                    for s in &TINT {
+                        let v = local_get(&m.adjust, s.id);
+                        let out = slider(ui, s, v, true, None);
+                        apply_slider_out(app, s, out, |app, v| app.run("mask.adjust", json!({"values": {s.id: v}})));
+                    }
+                });
+            }
             divider(ui);
             grading_section(app, ui, &m.adjust);
             // the mask's own Color Mixer and Point Color (a colour photo's tools, as globally)
@@ -919,14 +967,19 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         }
     }
+    if app.ui.roles_window {
+        roles_window(app, ui.ctx());
+    }
     ui.add_space(30.0);
     let _ = Stroke::NONE;
 }
 
 /// With no mask selected: the effect menu and sliders for the next new mask (set the look first,
 /// then draw; `mask.adjust` / `mask.applyEffect` with no mask set them), and Reset Settings on New
-/// Mask.
-fn next_mask_settings(app: &mut LccApp, ui: &mut egui::Ui) {
+/// Mask. With no masks on the photo at all (`enabled = false`, issue #1190: the sliders look like
+/// the image's own and changing them does nothing to it) they are dimmed and inert; the
+/// "No masks yet" hint above says to create one first.
+fn next_mask_settings(app: &mut LccApp, ui: &mut egui::Ui, enabled: bool) {
     let t = Tokens::get(ui.ctx());
     divider(ui);
     egui::Frame::NONE.inner_margin(egui::Margin { left: 12, right: 16, top: 4, bottom: 0 }).show(ui, |ui| {
@@ -941,14 +994,15 @@ fn next_mask_settings(app: &mut LccApp, ui: &mut egui::Ui) {
     });
     // (id 0: no mask; the effect menu then sets the next mask's settings)
     let shown = lcc_develop::Mask { id: 0, adjust: app.session.mask_next, ..Default::default() };
-    super::mask_effects::effect_row(app, ui, &shown);
+    super::mask_effects::effect_row(app, ui, &shown, enabled);
     for (key, title, ids) in GROUPS {
         if !section_header(app, ui, key, title, group_changed(&shown.adjust, ids)) {
             continue;
         }
-        for s in LOCAL.iter().filter(|s| ids.contains(&s.id)) {
+        for s in LOCAL.iter().filter(|s| ids.contains(&s.id)).map(|s| local_spec(s, app.ui.settings.expanded_sliders)).collect::<Vec<_>>() {
+            let s = &s;
             let v = local_get(&shown.adjust, s.id);
-            let out = slider(ui, s, v, true, None);
+            let out = slider(ui, s, v, enabled, None);
             apply_slider_out(app, s, out, |app, v| app.run("mask.adjust", json!({"values": {s.id: v}})));
         }
     }
@@ -1252,10 +1306,15 @@ fn mask_menu(app: &mut LccApp, ui: &mut egui::Ui, id: u32, name: &str, visible: 
 /// Overlay colours offered as swatches (the colour of the selected one is used for the tint).
 pub const OVERLAY_COLORS: [[u8; 3]; 5] = [[230, 30, 40], [40, 200, 70], [40, 110, 240], [250, 210, 30], [255, 255, 255]];
 
+/// Width of the Color Overlay Settings popup: the swatch row plus a short Opacity slider, so the
+/// popup fits beside the right panel instead of reaching over the photo (#1146).
+pub(crate) const COLOR_OVERLAY_POPUP_WIDTH: f32 = 220.0;
+
 /// Color Overlay Settings popup: custom color selection swatches and opacity control.
 pub(crate) fn color_overlay_popup(app: &mut LccApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    ui.set_min_width(200.0);
+    // the slider takes all the width it is offered, and a popup offers the whole window
+    ui.set_width(COLOR_OVERLAY_POPUP_WIDTH);
     ui.label(egui::RichText::new(crate::i18n::tr("Color Overlay Settings")).font(t.semibold(12.0)).color(t.text_label));
     ui.add_space(4.0);
 
@@ -1535,9 +1594,6 @@ fn who_picker(app: &mut LccApp, ui: &mut egui::Ui, photo: PhotoId, comp: usize, 
             app.ui.roles_window = !shown;
         }
     });
-    if app.ui.roles_window {
-        roles_window(app, ui.ctx());
-    }
     // who has a role in this shoot (the photo's folder): "Bride" is Sam here
     let mut set: Option<(String, String)> = None;
     if let Some((role, person)) = app.ui.role_draft.as_mut() {
@@ -1894,7 +1950,26 @@ fn range_controls(app: &mut LccApp, ui: &mut egui::Ui, comp: usize, shape: &Mask
 
 /// The right-click / "…" menu of one component of the selected mask.
 fn component_row_menu(app: &mut LccApp, ui: &mut egui::Ui, mask: u32, k: usize, label: &str, count: usize) {
-    if app.session.active().and_then(|p| app.session.develop_of(p)).is_some_and(|d| d.masks.iter().any(|m| m.id == mask && m.uses_ai())) {
+    let comp_data = app.session.active().and_then(|p| app.session.develop_of(p)).and_then(|d| {
+        let m = d.masks.iter().find(|m| m.id == mask)?;
+        let is_people = matches!(m.components.get(k).map(|c| &c.shape), Some(MaskShape::People { .. }));
+        Some((m.uses_ai(), is_people))
+    });
+    if comp_data.is_some_and(|(_, is_people)| is_people) {
+        let text = if app.ui.show_people_who {
+            format!("✓ {}", crate::i18n::tr("Show Who & Roles"))
+        } else {
+            crate::i18n::tr("Show Who & Roles").to_string()
+        };
+        let b = ui.button(text);
+        register(ui.ctx(), "maskMenu:toggleWho", b.rect);
+        if b.clicked() {
+            app.ui.show_people_who = !app.ui.show_people_who;
+            ui.close();
+        }
+        ui.separator();
+    }
+    if comp_data.is_some_and(|(ai, _)| ai) {
         if ui.button(menu_label("Update AI Mask")).clicked() {
             if let Err(e) = app.run("mask.updateAi", json!({"id": mask})) {
                 app.ai_error(ui.ctx(), e, None);
@@ -2114,6 +2189,7 @@ fn component_menu(app: &mut LccApp, ui: &mut egui::Ui, op: &str) {
             "radial" => "Radial Gradient",
             "luminanceRange" => "Luminance Range",
             "colorRange" => "Color Range",
+            "depthRange" => "Depth Range",
             "people" => "People…",
             "concept" => "Remembered…",
             _ => label,
@@ -2544,6 +2620,20 @@ fn carry_component(app: &mut LccApp, photo: Option<u64>) -> bool {
 mod tests {
     use super::*;
 
+    // issue #1145: Settings ▸ Expanded sliders off keeps the mask Hue to Lightroom's range
+    #[test]
+    fn expanded_sliders_widen_only_the_mask_hue() {
+        let hue = LOCAL.iter().find(|s| s.id == "hue").unwrap();
+        let off = local_spec(hue, false);
+        assert!(off.max < 40.0 && off.min > -40.0 && off.max > 30.0, "{off:?}");
+        let on = local_spec(hue, true);
+        assert_eq!((on.min, on.max), (-180.0, 180.0));
+        for s in LOCAL.iter().filter(|s| s.id != "hue") {
+            let n = local_spec(s, false);
+            assert_eq!((n.min, n.max), (s.min, s.max), "{}", s.id);
+        }
+    }
+
     #[test]
     fn a_detail_pass_counts_as_the_segmenter_working() {
         assert!(segmenter_working(false, false, true, false));
@@ -2564,5 +2654,24 @@ mod tests {
         assert!(!enter_submits(true, true, true));
         assert!(!enter_submits(false, false, true));
         assert!(!enter_submits(false, true, false));
+    }
+
+    #[test]
+    fn the_color_overlay_popup_stays_narrow_on_a_wide_window() {
+        let app = LccApp::new(lcc_engine::Session::new(), crate::Services { png: None, ..Default::default() });
+        // the headless view's context has the app's fonts and theme installed
+        let mut h = crate::headless::Headless::new(app, [3200.0, 1400.0], 1.0);
+        h.settle(std::time::Duration::from_secs(30));
+        let ctx = h.view.ctx.clone();
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(3200.0, 1400.0))), ..Default::default() };
+        let mut width = 0.0;
+        let mut out = ctx.run_ui(input, |root| {
+            egui::Area::new(egui::Id::new("overlayPopupTest")).show(root.ctx(), |ui| {
+                color_overlay_popup(&mut h.app, ui);
+                width = ui.min_rect().width();
+            });
+        });
+        out.textures_delta.clear();
+        assert!(width > 0.0 && width <= COLOR_OVERLAY_POPUP_WIDTH + 1.0, "popup is {width} points wide");
     }
 }

@@ -163,40 +163,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_table_starts_and_steps_as_declared() {
+    fn every_table_is_a_well_formed_observer() {
         for (name, table) in TABLES.iter() {
             assert_eq!(table.rows[0][0], table.start, "{name}");
             for pair in table.rows.windows(2) {
                 assert_eq!(pair[1][0] - pair[0][0], table.spacing, "{name}");
             }
         }
-    }
-
-    #[test]
-    fn all_four_components_are_present_and_finite() {
-        for (name, table) in TABLES.iter() {
-            for row in table.rows {
-                assert!(row.iter().all(|v| v.is_finite()), "{name}");
-                // The wavelength dwarfs every amplitude, so a swapped
-                // column would show up here immediately.
-                assert!(row[1] < row[0], "{name}");
-                assert!(row[2] < row[0], "{name}");
-                assert!(row[3] < row[0], "{name}");
-            }
-        }
-    }
-
-    #[test]
-    fn ybar_peaks_in_the_green() {
-        for (name, table) in TABLES.iter() {
-            let mut peak = table.rows[0];
-            for row in table.rows {
-                if row[2] > peak[2] {
-                    peak = *row;
+        // all four components are present and finite
+        {
+            for (name, table) in TABLES.iter() {
+                for row in table.rows {
+                    assert!(row.iter().all(|v| v.is_finite()), "{name}");
+                    // The wavelength dwarfs every amplitude, so a swapped
+                    // column would show up here immediately.
+                    assert!(row[1] < row[0], "{name}");
+                    assert!(row[2] < row[0], "{name}");
+                    assert!(row[3] < row[0], "{name}");
                 }
             }
-            let peak_nm = peak[0];
-            assert!((500.0..=600.0).contains(&peak_nm), "{name}: luminance peaks at {peak_nm} nm");
+        }
+        // ybar peaks in the green
+        {
+            for (name, table) in TABLES.iter() {
+                let mut peak = table.rows[0];
+                for row in table.rows {
+                    if row[2] > peak[2] {
+                        peak = *row;
+                    }
+                }
+                let peak_nm = peak[0];
+                assert!((500.0..=600.0).contains(&peak_nm), "{name}: luminance peaks at {peak_nm} nm");
+            }
+        }
+        // row counts match nominal ranges
+        {
+            for (name, table) in TABLES.iter() {
+                let last = table.start + table.spacing * (table.rows.len() - 1) as f64;
+                let expected = if *name == "judd_vos_1978_2" { 825 } else { 830 };
+                assert_eq!(last as i32, expected, "{name}");
+            }
         }
     }
 
@@ -206,14 +212,5 @@ mod tests {
         assert!(lookup("1931_2").is_some());
         assert!(lookup("CIE_1931_2").is_some());
         assert!(lookup("nope").is_none());
-    }
-
-    #[test]
-    fn row_counts_match_nominal_ranges() {
-        for (name, table) in TABLES.iter() {
-            let last = table.start + table.spacing * (table.rows.len() - 1) as f64;
-            let expected = if *name == "judd_vos_1978_2" { 825 } else { 830 };
-            assert_eq!(last as i32, expected, "{name}");
-        }
     }
 }

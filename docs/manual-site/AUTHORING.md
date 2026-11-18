@@ -3,6 +3,11 @@
 The manual is a short, picture-first feature guide: bullets and screenshots, almost no prose. Think feature flyer
 with a deep contents tree. Cover every feature by **name** and where to find it; describe only what is not obvious.
 
+## Keeping it current
+This is a standing duty, not a one-off: every change that alters what a user sees or does updates the page that names it in
+the same commit (AGENTS.md → "The manual moves with the product"). Before a release, compare `docs/changelog/<version>.md`
+with the manual: each feature there needs a page or a line, and stale text is fixed.
+
 ## Page shape
 - One `.mdx` (or `.md` when it has no components) per feature or small group, in the section folder
   (`library/`, `develop/`, `ai/`, `output/`, `sync/`, `automate/`, `platforms/`, `reference/`). The sidebar builds itself

@@ -8,17 +8,23 @@
 
 pub mod brush_model;
 pub mod controls;
+pub mod levels_curve;
+mod levels_table;
 pub mod presets;
 pub mod recipe;
 pub mod retouch;
 pub mod segmask;
 pub mod settings;
+pub mod vignetting_calibration;
 
 pub use controls::{CONTROLS, ControlSpec, Section, Shade, Track};
 pub use presets::{Preset, SettingItem, SettingsGroup, SettingsPick, apply_partial, extract_groups};
 pub use retouch::{MAX_RETOUCH_MASKS, PartRequest, Retouch, RetouchAnalysis, RetouchMask, RetouchPart, RetouchTeeth};
 pub use segmask::SegMask;
 pub use settings::*;
+pub use vignetting_calibration::{
+    DEFAULT_VIGNETTING_CALIBRATION_PERCENT, EmbeddedVignettingMap, EvCodes, VignettingMapId, VignettingMapOrigin, absorb_portable, embed_portable,
+};
 
 use serde_json::Value;
 
@@ -67,7 +73,18 @@ impl DevelopSettings {
     /// names no [`WbScale`] keeps the meaning it always had (`Legacy`), whatever scale these settings were on: a
     /// partial from before the scale existed, or one that never said, must not become Kelvin by landing on
     /// Kelvin settings. Out-of-range values are brought back into range ([`DevelopSettings::keep_in_range`]).
+    /// A flat-field map (`optics.vignetting_calibration`, an id) named without `optics.vignetting_calibration_amount` comes at the default
+    /// amount (100); `null` removes it and keeps the amount. A portable partial's map (`optics.vignetting_calibration_map`) only
+    /// sets the id here: storing the map is the catalog's ([`vignetting_calibration::absorb_portable`]).
     pub fn merged(&self, partial: &Value) -> Result<DevelopSettings, serde_json::Error> {
+        let partial = vignetting_calibration::complete_partial(partial);
+        let mut owned;
+        let mut partial = partial.as_ref();
+        if partial.get("optics").is_some_and(|o| o.get(vignetting_calibration::PORTABLE_MAP_KEY).is_some()) {
+            owned = partial.clone();
+            vignetting_calibration::absorb_portable(&mut owned);
+            partial = &owned;
+        }
         let mut v = self.to_json();
         presets::deep_merge(&mut v, partial);
         let mut out = DevelopSettings::from_json(&v)?;
@@ -95,6 +112,11 @@ impl DevelopSettings {
         let c = &mut self.curve;
         for p in [&mut c.master, &mut c.red, &mut c.green, &mut c.blue].into_iter().flatten() {
             *p = lcc_geom::Point::new(p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0));
+        }
+        for ch in Levels::CHANNELS {
+            if let Some(c) = self.levels.channel_mut(ch) {
+                *c = c.sanitized();
+            }
         }
         let hsl = &mut self.hsl_curves;
         for p in [&mut hsl.hue, &mut hsl.sat, &mut hsl.lum].into_iter().flatten() {
@@ -159,6 +181,7 @@ impl DevelopSettings {
             || off("mixer")
             || off("grading")
             || off("primaries")
+            || off("levels")
             || off("detail")
             || (off(PLUGIN_FILTERS_SECTION) && !self.plugin_filters.is_empty()))
         {
@@ -189,6 +212,9 @@ impl DevelopSettings {
         }
         if off("primaries") {
             d.reset_section(Section::Primaries);
+        }
+        if off("levels") {
+            d.reset_section(Section::Levels);
         }
         if off("detail") {
             d.reset_section(Section::Detail);
@@ -230,6 +256,7 @@ impl DevelopSettings {
             controls::set(self, c.id, c.default);
         }
         match section {
+            Section::Light => self.light.contrast_mode = ContrastMode::default(),
             Section::Curve => {
                 let d = ToneCurve::default();
                 self.curve = d;
@@ -238,6 +265,7 @@ impl DevelopSettings {
             Section::Detail => self.enhance.denoise_on = None,
             // the Log variant is a switch, not a control: the whole group goes back to its default
             Section::Primaries => self.primaries = Primaries::default(),
+            Section::Levels => self.levels = Levels::default(),
             // the creative profile is not a control: the chosen look goes back to the default one,
             // and so does the camera's own local tone mapping
             Section::Profile => {
@@ -264,12 +292,35 @@ impl DevelopSettings {
 #[cfg(test)]
 mod tests_genfill;
 #[cfg(test)]
+mod tests_levels;
+#[cfg(test)]
+mod tests_levels_curve;
+#[cfg(test)]
+mod tests_levels_paths;
+#[cfg(test)]
 mod tests_process;
 #[cfg(test)]
 mod tests_skin;
 
 #[cfg(test)]
 mod tests {
+    use crate::{LEGACY_LOCAL_HUE_DEG, LocalAdjustments};
+
+    #[test]
+    fn mask_hue_in_degrees_round_trips_and_old_values_convert() {
+        for deg in [-180.0, -97.5, 0.0, 34.0, 179.0, 180.0] {
+            let a = LocalAdjustments { hue: deg, exposure: 0.5, ..Default::default() };
+            let back: LocalAdjustments = serde_json::from_value(serde_json::to_value(a).unwrap()).unwrap();
+            assert_eq!(back, a, "{deg}");
+        }
+        // an old catalog / preset: the −100..100 slider value, no marker
+        let old: LocalAdjustments = serde_json::from_value(json!({"hue": 100.0, "saturation": 20.0})).unwrap();
+        assert!((old.hue - 100.0 * LEGACY_LOCAL_HUE_DEG).abs() < 1e-12 && (old.hue - 34.377).abs() < 1e-3);
+        assert_eq!((old.saturation, old.amount), (20.0, 100.0), "the other fields and defaults are untouched");
+        // hostile: wrong types are an error, never a panic
+        assert!(serde_json::from_value::<LocalAdjustments>(json!({"hue": "x", "hue_deg": 3})).is_err());
+    }
+
     #[test]
     fn resetting_the_profile_section_restores_the_default_profile() {
         // the chosen creative profile is not a control, so resetting the section must restore it too
@@ -316,6 +367,30 @@ mod tests {
         // a merge can set it back by name
         let back: Profile = serde_json::from_value(json!({"camera_colour": "auto"})).unwrap();
         assert!(back.camera_colour.is_auto());
+    }
+
+    /// `Light::contrast_mode` is omitted while `Luminance` (so existing settings keep their JSON and
+    /// hash), stored when `Rgb`, carried by `light.contrast` presets, and restored by a Light reset.
+    #[test]
+    fn contrast_mode_is_stored_only_when_it_is_rgb() {
+        let lum = DevelopSettings::default();
+        assert_eq!(lum.light.contrast_mode, ContrastMode::Luminance);
+        assert!(!lum.to_json().to_string().contains("contrast_mode"));
+        let mut rgb = lum.clone();
+        rgb.light.contrast = 35.0;
+        rgb.light.contrast_mode = ContrastMode::Rgb;
+        let v = rgb.to_json();
+        assert_eq!(v["light"]["contrast_mode"], json!("rgb"));
+        assert_eq!(DevelopSettings::from_json(&v).unwrap().light.contrast_mode, ContrastMode::Rgb);
+        assert_ne!(rgb.hash64(), lum.hash64());
+        let back = rgb.merged(&json!({"light": {"contrast_mode": "luminance"}})).unwrap();
+        assert_eq!(back.light.contrast_mode, ContrastMode::Luminance);
+        let pick = SettingsPick::from_ids(&["light.contrast"]);
+        let extracted = pick.extract(&rgb);
+        assert_eq!(apply_partial(&lum, &extracted, 1.0).light.contrast_mode, ContrastMode::Rgb);
+        let mut reset = rgb.clone();
+        reset.reset_section(Section::Light);
+        assert_eq!(reset.light.contrast_mode, ContrastMode::Luminance);
     }
 
     /// A preset or sync of the Profile group carries the Camera colour both ways: Colorimetric onto an Auto photo,

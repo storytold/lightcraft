@@ -23,7 +23,10 @@ read ([xmp-interop.md](../xmp-interop.md)). App-wide settings (keymap, language,
 
 File → Libraries → New Catalog… creates an empty catalog folder; File → Libraries → Open Catalog… opens another, and
 the catalogs you opened last are listed below them. Settings → General → At launch opens the last one at the next
-start, or asks which one (*Ask me*); holding Alt (Option on a Mac) as the window appears asks once. From the command line, `--library DIR` opens or creates one:
+start, or asks which one (*Ask me*); holding Alt (Option on a Mac) as the window appears asks once. The catalog opens
+after the window appears, behind a small *Opening your catalog* window — after an update, the catalog's format
+upgrade happens there first, with the bytes of its safety copy as progress, so a long wait says what it is doing
+(a catalog that can't be opened ends at the usual window offering Try Again). From the command line, `--library DIR` opens or creates one:
 
 ```sh
 <cli> run --library ~/Pictures/Test catalog.info
@@ -51,5 +54,11 @@ backup folder, how many backups to keep, and whether to test integrity and optim
 
 Library → Find Missing Photos… lists photos whose originals are offline or moved; relink a folder and its photos
 follow. Missing photos keep their edits and metadata in the catalog.
+
+## Duplicates
+
+Library → Find Duplicates… groups exact copies (from content hashes) and, with Find Similar Copies, resized or
+re-compressed ones; raw + JPEG pairs are offered as stacks. Each copy shows its whole name, folder, date and size, and Compare Group in Survey shows a group large and side by side. Remove sends marked copies to Recently Deleted; see
+[duplicates.md](../duplicates.md). The catalog format is now 17: an older build refuses a catalog this one has opened.
 
 See [catalog.md](../catalog.md) for the storage format and scale benchmarks.

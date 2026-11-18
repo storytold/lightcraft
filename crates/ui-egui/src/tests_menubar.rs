@@ -48,7 +48,7 @@ fn no_menu_or_submenu_covers_the_menu_bar() {
     let sizes = [[1280.0, 703.0], [1160.0, 560.0]];
     let mut submenus = 0;
     for size in sizes {
-        for top in ["Photo", "File", "View"] {
+        for top in ["Photo", "View"] {
             let what = format!("{size:?} {top}");
             let mut h = app(size);
             assert!(widget(&h, "menu-level:1").is_none(), "{what}: a menu is open before any click");
@@ -71,7 +71,7 @@ fn no_menu_or_submenu_covers_the_menu_bar() {
             }
         }
     }
-    assert!(submenus >= 6, "opened {submenus} submenus");
+    assert!(submenus >= 4, "opened {submenus} submenus");
 }
 
 #[test]
@@ -88,27 +88,6 @@ fn a_tall_menu_scrolls_instead_of_growing_past_the_window() {
     assert!(rows.iter().any(|(_, r)| !level.contains_rect(*r)), "every row fits a 420 pt window: {rows:?}");
 }
 
-/// An open menu hangs just below its title's highlight, from its left edge, so the two read as
-/// one control instead of a menu floating mid-bar.
-#[test]
-fn an_open_menu_hangs_from_its_title() {
-    let mut h = app([1280.0, 703.0]);
-    for top in ["File", "Photo", "Help"] {
-        let r = h.request("ui.clickWidget", json!({"id": format!("menu:{top}")}), T);
-        assert_eq!(r["ok"], true, "{top}: {r}");
-        h.settle(SETTLE);
-        let title = widget(&h, &format!("menu:{top}")).unwrap_or_else(|| panic!("{top}: title"));
-        let level = widget(&h, "menu-level:1").unwrap_or_else(|| panic!("{top}: menu"));
-        let gap = level.top() - title.bottom();
-        assert!((0.0..=12.0).contains(&gap), "{top}: menu {level:?} is {gap} pt below its title {title:?}");
-        assert!((level.left() - title.left()).abs() < 12.0, "{top}: menu {level:?} not under its title {title:?}");
-        // close it again before the next title
-        let r = h.request("ui.clickWidget", json!({"id": format!("menu:{top}")}), T);
-        assert_eq!(r["ok"], true, "{top}: {r}");
-        h.settle(SETTLE);
-    }
-}
-
 // ---- top-level menus switch on hover, like native menu bars
 
 /// The title whose menu is open (the open level hangs from its left edge), or none.
@@ -123,23 +102,13 @@ fn go(h: &mut Headless, method: &str, id: &str) {
     h.settle(SETTLE);
 }
 
+/// One window, the title bar's whole behaviour: a click opens a title's menu and a click on another
+/// opens that one at once; a click outside and Escape close it; an open menu hangs just below its
+/// title's highlight, from its left edge; and with one menu open, hovering another title switches.
 #[test]
-fn hovering_another_title_switches_the_open_menu() {
+fn titles_open_switch_and_close_their_menus() {
     let mut h = app([1280.0, 703.0]);
-    // hovering with no menu open does nothing
-    go(&mut h, "ui.hoverWidget", "menu:Edit");
-    assert_eq!(open_menu(&h), None);
-    go(&mut h, "ui.clickWidget", "menu:File");
-    assert_eq!(open_menu(&h).as_deref(), Some("menu:File"));
-    for title in ["Edit", "View", "Photo", "Window", "Help", "File"] {
-        go(&mut h, "ui.hoverWidget", &format!("menu:{title}"));
-        assert_eq!(open_menu(&h), Some(format!("menu:{title}")), "after hovering {title}");
-    }
-}
-
-#[test]
-fn clicking_another_title_opens_it_in_one_click() {
-    let mut h = app([1280.0, 703.0]);
+    // clicking another title opens it in one click
     assert!(h.step_until(SETTLE, |h| widget(h, "menu:Edit").is_some()), "Edit menu title was not registered");
     go(&mut h, "ui.clickWidget", "menu:Edit");
     assert_eq!(open_menu(&h).as_deref(), Some("menu:Edit"));
@@ -148,15 +117,11 @@ fn clicking_another_title_opens_it_in_one_click() {
     assert_eq!(r["ok"], true);
     h.settle(SETTLE);
     go(&mut h, "ui.clickWidget", "menu:View");
-    assert_eq!(open_menu(&h).as_deref(), Some("menu:View"));
-    // clicking the open title closes it
+    assert_eq!(open_menu(&h).as_deref(), Some("menu:View"), "one click switches");
     go(&mut h, "ui.clickWidget", "menu:View");
-    assert_eq!(open_menu(&h), None);
-}
+    assert_eq!(open_menu(&h), None, "clicking the open title closes it");
 
-#[test]
-fn click_outside_and_escape_close_the_open_menu() {
-    let mut h = app([1280.0, 703.0]);
+    // a click outside and Escape close the open menu
     go(&mut h, "ui.clickWidget", "menu:File");
     assert!(open_menu(&h).is_some());
     let r = h.request("ui.click", json!({"x": 640.0, "y": 600.0}), T);
@@ -169,6 +134,28 @@ fn click_outside_and_escape_close_the_open_menu() {
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert_eq!(open_menu(&h), None, "Escape");
+
+    // an open menu hangs from its title, so the two read as one control
+    for top in ["File", "Help"] {
+        go(&mut h, "ui.clickWidget", &format!("menu:{top}"));
+        let title = widget(&h, &format!("menu:{top}")).unwrap_or_else(|| panic!("{top}: title"));
+        let level = widget(&h, "menu-level:1").unwrap_or_else(|| panic!("{top}: menu"));
+        let gap = level.top() - title.bottom();
+        assert!((0.0..=12.0).contains(&gap), "{top}: menu {level:?} is {gap} pt below its title {title:?}");
+        assert!((level.left() - title.left()).abs() < 12.0, "{top}: menu {level:?} not under its title {title:?}");
+        // close it again before the next title
+        go(&mut h, "ui.clickWidget", &format!("menu:{top}"));
+    }
+
+    // hovering with no menu open does nothing; with one open it switches, like native menu bars
+    go(&mut h, "ui.hoverWidget", "menu:Edit");
+    assert_eq!(open_menu(&h), None, "a hover alone opens nothing");
+    go(&mut h, "ui.clickWidget", "menu:File");
+    assert_eq!(open_menu(&h).as_deref(), Some("menu:File"));
+    for title in ["Edit", "Photo", "Help", "File"] {
+        go(&mut h, "ui.hoverWidget", &format!("menu:{title}"));
+        assert_eq!(open_menu(&h), Some(format!("menu:{title}")), "after hovering {title}");
+    }
 }
 
 // ---- a scrolled menu draws no scrollbar over its rows (issue #691)

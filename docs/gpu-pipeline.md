@@ -164,6 +164,16 @@ renderer last. `<PREFIX>_GPU_BACKEND=dx12 | vulkan | gl | glow` (or `WGPU_BACKEN
 first because a broken Vulkan driver can crash the process uncatchably (#136). Compute keeps its own
 device and falls back to the CPU as before.
 
+**A window device lost while running (#1194).** egui-wgpu skips a frame it cannot draw (#1098), so a
+window whose device was lost would skip every frame forever (frozen, "Application Hang"). eframe cannot
+rebuild a window's device in place, so `window_gpu::LossWatch` watches the frames instead (a vendored
+egui-wgpu hook, `on_frame_acquired`, reports each frame that got its texture): an unbroken run of failed
+frames — 30 over at least 2 s after the GPU reported a lost device, 600 over 20 s otherwise — means the
+device is gone. A single skipped frame, a hidden or resizing window never counts. The renderer is then written
+to `window-lost` in the settings folder (at once, so it survives the process being killed) and dropped from
+`window-renderer-2`; every later start tries it last (unless `<PREFIX>_GPU_BACKEND` forces it). The library and
+settings are saved, a native message box says what happened, and the app ends.
+
 **The window's surface: one frame in flight.** The window's wgpu options start from eframe's defaults
 (`NativeOptions::default().wgpu_options`, `window_gpu::base_options`), whose surface is egui-wgpu's
 `SurfaceConfig::LOW_LATENCY`: vsync, at most one frame queued ahead of the display (two drawables on

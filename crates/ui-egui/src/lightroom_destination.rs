@@ -364,11 +364,11 @@ mod tests {
         // nothing to name it after
         assert_eq!(default_name(Path::new(""), None), "Lightroom Catalog");
         // a name taken in the location: the next free one
-        let dir = std::env::temp_dir().join(format!("lc-ui-lrdest-name-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lc-ui-lrdest-name");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("Travel")).unwrap();
-        assert_eq!(default_name(Path::new("/x/Travel.lrcat"), Some(&dir)), "Travel 2");
-        assert_eq!(default_name(Path::new("/x/Family.lrcat"), Some(&dir)), "Family");
+        assert_eq!(default_name(Path::new("/x/Travel.lrcat"), Some(dir.path())), "Travel 2");
+        assert_eq!(default_name(Path::new("/x/Family.lrcat"), Some(dir.path())), "Family");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

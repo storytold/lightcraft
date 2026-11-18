@@ -103,7 +103,7 @@ impl Group {
         match self {
             Group::Light => &[("light", "Basic"), ("profile", "Profile & Treatment")],
             Group::Colour => &[("mixer", "Color Mixer"), ("grading", "Color Grading"), ("calibration", "Calibration")],
-            Group::Tone => &[("curve", "Tone Curve")],
+            Group::Tone => &[("levels", "Levels"), ("curve", "Tone Curve")],
             Group::Detail => &[("detail", "Detail"), ("retouch", "Retouch")],
             Group::Optics => &[("optics", "Lens Corrections"), ("geometry", "Transform")],
             Group::Effects => &[("effects", "Effects"), ("plugins", "Plug-in Filters")],
@@ -127,7 +127,7 @@ impl Group {
                 "detail.nrLuminance",
                 "detail.nrColor",
             ],
-            Group::Optics => &["optics.distortion", "optics.vignetting", "optics.caRed", "optics.caBlue"],
+            Group::Optics => &["optics.distortion", "optics.vignetting", "optics.caRed", "optics.caBlue", "optics.vignettingCalibrationAmount"],
             Group::Effects => &["effects.texture", "effects.clarity", "effects.dehaze", "vignette.amount", "grain.amount"],
             _ => &[],
         }
@@ -141,6 +141,7 @@ fn section_of(control: &str) -> Option<&'static str> {
         (_, "color.saturation" | "color.vibrance") => "mixer",
         ("vignette" | "grain", _) => "effects",
         ("curve", _) => "curve",
+        ("levels", _) => "levels",
         ("wb", _) => "light",
         ("detail", _) => "detail",
         ("optics", _) => "optics",
@@ -172,15 +173,29 @@ pub(crate) fn tool_room(app: &LccApp, area: Rect) -> (f32, f32, f32) {
     if app.ui.modern.dock_side { (RAIL_ITEM.x + 2.0 * PAD + 2.0 * MARGIN, right, MARGIN) } else { (MARGIN, right, ITEM.y + 2.0 * PAD + 2.0 * MARGIN) }
 }
 
+/// The height the floating dock takes from the bottom of the photo's room, when the chrome shows
+/// (0 when it doesn't; a rail down the side takes only its margin). Whatever else floats over the
+/// photo's bottom edge — the loupe's shot-info strip — keeps clear of this.
+pub(crate) fn bottom_clearance(app: &LccApp) -> f32 {
+    if !app.ui.modern.chrome {
+        return 0.0;
+    }
+    if app.ui.modern.dock_side { MARGIN } else { ITEM.y + 2.0 * PAD + 2.0 * MARGIN }
+}
+
 /// The group's controls this photo has. White balance is on the photo's own scale, as the Edit
 /// panel shows it: Kelvin for raw files, relative (−100..100) for rendered ones.
 pub(crate) fn specs(app: &LccApp, g: Group) -> Vec<&'static ControlSpec> {
-    let kelvin = app.session.active().and_then(|id| app.session.catalog.photo(id)).is_some_and(|p| p.develops_raw() && !p.relative_wb());
+    let active = app.session.active().and_then(|id| app.session.catalog.photo(id));
+    let kelvin = active.is_some_and(|p| p.develops_raw() && !p.relative_wb());
+    // the flat field's Amount only while the photo has a map (the rest is in Lens Corrections, which the group opens)
+    let vignetting_calibration = active.is_some_and(|p| p.develop.optics.vignetting_calibration.is_some());
     g.control_ids()
         .iter()
         .filter_map(|id| match *id {
             "wb.temp" if !kelvin => Some(&edit::REL_TEMP),
             "wb.tint" if !kelvin => Some(&edit::REL_TINT),
+            "optics.vignettingCalibrationAmount" if !vignetting_calibration => None,
             id => controls::find(id),
         })
         .collect()
@@ -222,7 +237,6 @@ pub(crate) fn open(app: &mut LccApp, g: Group) -> Result<(), String> {
     if app.session.active().is_none() {
         return Err("no photo is open".into());
     }
-    app.ui.presets = false;
     match g {
         Group::Crop => app.ui.right = RightPanel::Crop,
         Group::Masks => app.ui.right = RightPanel::Masking,
@@ -527,7 +541,8 @@ pub(crate) fn card(app: &mut LccApp, ui: &egui::Ui, area: Rect, dock: Rect) {
 fn pill(app: &mut LccApp, ui: &mut egui::Ui, spec: &'static ControlSpec) {
     let Some(v) = value_of(app, spec) else { return };
     let section = section_of(spec.id);
-    let out = crate::widgets::pill(ui, spec, v, true, section.is_some());
+    let own = edit::photo_default_spec(app, spec);
+    let out = crate::widgets::pill(ui, own.as_ref().unwrap_or(spec), v, true, section.is_some());
     if out.more {
         app.ui.modern.more = section.map(str::to_string);
     }

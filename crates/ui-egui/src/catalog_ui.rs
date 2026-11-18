@@ -367,6 +367,11 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
     }
     let Some(mut dlg) = app.catalog_ui.dialog.clone() else { return };
     let welcoming = matches!(dlg, CatalogDialog::Welcome { .. });
+    // a dialog opened over the welcome card (Help ▸ Check for Updates, About, Settings…) comes
+    // first: the card stands aside until it closes, so it never covers that dialog (issue #929)
+    if welcoming && app.ui.dialog.is_some() {
+        return;
+    }
     if welcoming {
         // nothing behind it can be used before a library is open
         crate::panels::library_problem::dim(ctx);

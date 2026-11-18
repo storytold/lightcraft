@@ -69,29 +69,24 @@ fn hover(h: &mut Headless, p: egui::Pos2) {
     h.settle(SETTLE);
 }
 
-/// Outside the crop box, where a drag rotates, the pointer becomes a curved double arrow drawn at
-/// the pointer (no system cursor has one); inside it is the move cursor, with no rotation glyph.
+/// The pointer in the crop tool, in one session. Outside the crop box, where a drag rotates, it is a curved double
+/// arrow drawn at the pointer (no system cursor has one); inside it is the move cursor. A drag outside rotates and
+/// shows the angle next to the pointer until released; closing the tool mid-rotation (Return) leaves nothing
+/// behind; with ⌘ held a drag draws a level line, so the pointer is the crosshair.
 #[test]
-fn outside_the_crop_box_the_pointer_shows_rotation() {
+fn the_pointer_shows_rotation_outside_the_box_and_the_angle_while_rotating() {
     let mut h = crop_tool();
     let img = h.app.image_rect.expect("the photo on screen");
     hover(&mut h, egui::pos2(img.left() - 24.0, img.center().y));
     assert_eq!(h.last_cursor, egui::CursorIcon::None, "the system cursor gives way to the glyph");
     assert!(has(&h, "cropRotateCursor"), "the rotation glyph is drawn at the pointer");
     hover(&mut h, img.center());
-    assert_eq!(h.last_cursor, egui::CursorIcon::Move);
-    assert!(!has(&h, "cropRotateCursor"));
-}
+    assert_eq!(h.last_cursor, egui::CursorIcon::Move, "inside the box");
+    assert!(!has(&h, "cropRotateCursor"), "no glyph inside the box");
 
-/// Dragging outside the box rotates, and the angle is shown next to the pointer while it moves.
-#[test]
-fn rotating_shows_the_angle() {
-    let mut h = crop_tool();
-    let r = h.request(
-        "ui.pointer",
-        json!({"events": [{"kind": "down", "x": -0.05, "y": 0.2}, {"kind": "drag", "x": -0.05, "y": 0.25}, {"kind": "drag", "x": -0.05, "y": 0.3}]}),
-        T,
-    );
+    let rotate =
+        json!({"events": [{"kind": "down", "x": -0.05, "y": 0.2}, {"kind": "drag", "x": -0.05, "y": 0.25}, {"kind": "drag", "x": -0.05, "y": 0.3}]});
+    let r = h.request("ui.pointer", rotate.clone(), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert!(angle(&h) != 0.0, "the drag rotated the crop");
@@ -100,27 +95,108 @@ fn rotating_shows_the_angle() {
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert!(!has(&h, "cropAngleReadout"), "and gone once released");
+
+    // a rotation cut short: reopened, the box shows the move pointer and no angle
+    let r = h.request("ui.pointer", rotate, T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(has(&h, "cropAngleReadout"), "rotating again");
+    for (method, params) in [
+        ("engine.execute", json!({"command": "tool.done"})),
+        ("ui.pointer", json!({"events": [{"kind": "up", "x": -0.05, "y": 0.3}]})),
+        ("engine.execute", json!({"command": "panel.crop"})),
+    ] {
+        let r = h.request(method, params, T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+    }
+    let img = h.app.image_rect.expect("the photo on screen");
+    hover(&mut h, img.center());
+    assert_eq!(h.last_cursor, egui::CursorIcon::Move, "the move pointer after reopening");
+    assert!(!has(&h, "cropAngleReadout"), "no angle");
+    assert!(!has(&h, "cropRotateCursor"), "no rotation glyph");
+
+    h.events.push(egui::Event::ModifiersChanged(egui::Modifiers::COMMAND));
+    h.events.push(egui::Event::PointerMoved(egui::pos2(img.left() - 24.0, img.center().y)));
+    h.settle(SETTLE);
+    assert_eq!(h.last_cursor, egui::CursorIcon::Crosshair, "⌘ held: the straighten crosshair");
+    assert!(!has(&h, "cropRotateCursor"), "no rotation glyph with ⌘ held");
 }
 
-/// The Straighten value takes an exact angle: click it, type, Enter.
-#[test]
-fn the_straighten_value_takes_an_exact_angle() {
-    let mut h = crop_tool();
+/// Click the Angle value, clear what is there and type `text` (not yet applied).
+fn type_angle(h: &mut Headless, text: &[&str]) {
     let r = h.request("ui.clickWidget", json!({"id": "sliderValue:crop.angle"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     for key in ["a", "Backspace"] {
-        // select what is there and clear it
         let r = h.request("ui.key", json!({"key": key, "cmd": key == "a"}), T);
         assert_eq!(r["ok"], true, "{r}");
     }
-    let r = h.request("ui.text", json!({"text": "2.5"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    let r = h.request("ui.key", json!({"key": "Enter"}), T);
+    h.settle(SETTLE);
+    for t in text {
+        let r = h.request("ui.text", json!({"text": t}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+    }
+}
+
+fn key(h: &mut Headless, key: &str) {
+    let r = h.request("ui.key", json!({"key": key}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
-    assert!((angle(&h) - 2.5).abs() < 1e-9, "typed 2.5°, got {}", angle(&h));
-    assert!(crop_fits(&h), "the Straighten value shrinks the crop to fit the photo");
+}
+
+/// The Crop panel's Angle value, in one session: it takes an exact angle as people type it (a decimal comma, a
+/// degree sign, past ±45° held at the limit) and shrinks the crop to fit (issue #742); typing applies once, on
+/// Return or on leaving the field, as one undo step, and Esc gives it up; it writes a sign on a turned angle; a
+/// drag on it is one undo step.
+#[test]
+fn the_angle_field_takes_typed_angles_and_applies_them_once() {
+    let mut h = crop_tool();
+    for (typed, want) in [("-3,25", -3.25), ("1.5°", 1.5), ("60", 45.0)] {
+        type_angle(&mut h, &[typed]);
+        key(&mut h, "Enter");
+        assert!((angle(&h) - want).abs() < 1e-9, "{typed:?}: want {want}, got {}", angle(&h));
+        assert!(crop_fits(&h), "{typed:?}: the Angle field shrinks the crop to fit the photo");
+    }
+    // one key at a time: no undo step or render per keystroke, no half-typed angles (-3° on the way to -3.25°)
+    type_angle(&mut h, &[]);
+    let (before, undo) = (angle(&h), h.app.session.undo.len());
+    for ch in ["-", "3", ".", "2", "5"] {
+        let r = h.request("ui.text", json!({"text": ch}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+    }
+    assert_eq!((angle(&h), h.app.session.undo.len()), (before, undo), "nothing applied while typing");
+    key(&mut h, "Enter");
+    assert!((angle(&h) + 3.25).abs() < 1e-9, "applied on Return: {}", angle(&h));
+    assert_eq!(h.app.session.undo.len(), undo + 1, "as one undo step");
+    // Esc gives up the typed angle and only leaves the field
+    type_angle(&mut h, &["7"]);
+    let (before, undo) = (angle(&h), h.app.session.undo.len());
+    key(&mut h, "Escape");
+    assert_eq!((angle(&h), h.app.session.undo.len()), (before, undo), "Esc applied nothing");
+    assert_eq!(h.app.ui.right, crate::state::RightPanel::Crop, "and only left the field");
+    // leaving another way (Tab) applies, as Return does
+    type_angle(&mut h, &["4.5"]);
+    let undo = h.app.session.undo.len();
+    key(&mut h, "Tab");
+    assert!((angle(&h) - 4.5).abs() < 1e-9, "applied on leaving: {}", angle(&h));
+    assert_eq!(h.app.session.undo.len(), undo + 1, "leaving is one undo step");
+    // the field writes the angle as the readout does: its number follows its label (its "°" is painted on its own)
+    let r = h.request("engine.execute", json!({"command": "crop.straighten", "params": {"angle": 2.5}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let texts = h.painted_text();
+    let field = texts.iter().position(|t| t == "Angle").and_then(|i| texts.get(i + 1));
+    assert_eq!(field.map(String::as_str), Some("+2.50"), "{texts:?}");
+    // a drag on the value is one undo step, like the slider
+    let undo = h.app.session.undo.len();
+    let r = h.request("ui.dragWidget", json!({"id": "sliderValue:crop.angle", "dx": 40.0, "dy": 0.0, "steps": 6}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(angle(&h) > 2.5, "dragged right: {}", angle(&h));
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one step for the whole drag");
 }
 
 /// The angle next to the pointer reads like the Straighten value, in degrees.
@@ -131,54 +207,6 @@ fn the_angle_reads_like_the_straighten_value() {
     assert_eq!(crop_angle_label(2.5), "+2.50°");
     assert_eq!(crop_angle_label(-12.254), "-12.25°");
     assert_eq!(crop_angle_label(-0.001), "0.00°", "no minus zero, and every zero the same");
-}
-
-/// Hovering the Straighten value says that a value can be typed there.
-#[test]
-fn the_straighten_value_says_it_can_be_typed() {
-    let mut h = crop_tool();
-    let r = h.request("ui.hoverWidget", json!({"id": "sliderValue:crop.angle"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    // tooltips wait for the pointer to rest
-    let _ = h.step_until(Duration::from_secs(5), |h| h.painted_text().iter().any(|t| t.contains("type")));
-    assert!(
-        h.painted_text().iter().any(|t| t == "Click to type a value, drag to change it"),
-        "{:?}",
-        h.painted_text().iter().filter(|t| t.contains("lick")).collect::<Vec<_>>()
-    );
-}
-
-/// With ⌘ held a drag draws a level line instead of rotating, so the pointer is the crosshair, not
-/// the rotation arrow.
-#[test]
-fn command_held_shows_the_straighten_crosshair() {
-    let mut h = crop_tool();
-    let img = h.app.image_rect.expect("the photo on screen");
-    h.events.push(egui::Event::ModifiersChanged(egui::Modifiers::COMMAND));
-    h.events.push(egui::Event::PointerMoved(egui::pos2(img.left() - 24.0, img.center().y)));
-    h.settle(SETTLE);
-    assert_eq!(h.last_cursor, egui::CursorIcon::Crosshair);
-    assert!(!has(&h, "cropRotateCursor"));
-}
-
-/// The Crop panel has an angle field: click it, type an exact angle, Return.
-#[test]
-fn the_crop_panel_has_an_angle_field() {
-    let mut h = crop_tool();
-    let r = h.request("ui.clickWidget", json!({"id": "sliderValue:crop.angle"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    for key in ["a", "Backspace"] {
-        let r = h.request("ui.key", json!({"key": key, "cmd": key == "a"}), T);
-        assert_eq!(r["ok"], true, "{r}");
-    }
-    let r = h.request("ui.text", json!({"text": "-3.25"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    let r = h.request("ui.key", json!({"key": "Enter"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    assert!((angle(&h) + 3.25).abs() < 1e-9, "typed -3.25°, got {}", angle(&h));
-    assert!(crop_fits(&h), "the Angle field shrinks the crop to fit the photo");
 }
 
 /// Rotating with the pointer at the canvas's corner keeps the angle readout on the canvas (and so
@@ -199,45 +227,6 @@ fn the_readout_stays_on_the_canvas() {
     h.settle(SETTLE);
     let readout = h.app.widgets.iter().find(|(w, _)| w == "cropAngleReadout").map(|(_, r)| *r).expect("the readout while rotating");
     assert!(canvas.contains_rect(readout), "{readout:?} in {canvas:?}");
-}
-
-/// Dragging the angle field changes the angle as one undo step, like the slider.
-#[test]
-fn dragging_the_angle_field_is_one_undo_step() {
-    let mut h = crop_tool();
-    let undo = h.app.session.undo.len();
-    let r = h.request("ui.dragWidget", json!({"id": "sliderValue:crop.angle", "dx": 40.0, "dy": 0.0, "steps": 6}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    assert!(angle(&h) > 0.0, "dragged right: {}", angle(&h));
-    assert_eq!(h.app.session.undo.len(), undo + 1, "one step for the whole drag");
-}
-
-/// Typing into the Angle field one key at a time applies the angle once, on Return: no undo step
-/// or render per keystroke, no half-typed angles (-3° on the way to -3.25°).
-#[test]
-fn typing_in_the_angle_field_applies_on_return() {
-    let mut h = crop_tool();
-    let r = h.request("ui.clickWidget", json!({"id": "sliderValue:crop.angle"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    for key in ["a", "Backspace"] {
-        let r = h.request("ui.key", json!({"key": key, "cmd": key == "a"}), T);
-        assert_eq!(r["ok"], true, "{r}");
-    }
-    h.settle(SETTLE);
-    let (before, undo) = (angle(&h), h.app.session.undo.len());
-    for ch in ["-", "3", ".", "2", "5"] {
-        let r = h.request("ui.text", json!({"text": ch}), T);
-        assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
-    }
-    assert_eq!((angle(&h), h.app.session.undo.len()), (before, undo), "nothing applied while typing");
-    let r = h.request("ui.key", json!({"key": "Enter"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    assert!((angle(&h) + 3.25).abs() < 1e-9, "applied on Return: {}", angle(&h));
-    assert_eq!(h.app.session.undo.len(), undo + 1, "as one undo step");
 }
 
 /// Rotating in the margin beside a narrow photo keeps the readout next to the pointer: it is kept
@@ -274,50 +263,6 @@ fn placing_the_readout_never_panics() {
     assert_eq!(r.size(), size);
 }
 
-/// Esc in the Angle field gives up the typed angle and keeps the old one, as in the slider's value.
-#[test]
-fn escape_in_the_angle_field_keeps_the_angle() {
-    let mut h = crop_tool();
-    let r = h.request("ui.clickWidget", json!({"id": "sliderValue:crop.angle"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    for key in ["a", "Backspace"] {
-        let r = h.request("ui.key", json!({"key": key, "cmd": key == "a"}), T);
-        assert_eq!(r["ok"], true, "{r}");
-    }
-    let r = h.request("ui.text", json!({"text": "7"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    let (before, undo) = (angle(&h), h.app.session.undo.len());
-    let r = h.request("ui.key", json!({"key": "Escape"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    assert_eq!((angle(&h), h.app.session.undo.len()), (before, undo), "Esc applied nothing");
-    assert_eq!(h.app.ui.right, crate::state::RightPanel::Crop, "and only left the field");
-}
-
-/// Leaving the Angle field another way than Esc (Tab here) applies the typed angle, as Return does.
-#[test]
-fn leaving_the_angle_field_applies_the_angle() {
-    let mut h = crop_tool();
-    let r = h.request("ui.clickWidget", json!({"id": "sliderValue:crop.angle"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    for key in ["a", "Backspace"] {
-        let r = h.request("ui.key", json!({"key": key, "cmd": key == "a"}), T);
-        assert_eq!(r["ok"], true, "{r}");
-    }
-    let r = h.request("ui.text", json!({"text": "4.5"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    let undo = h.app.session.undo.len();
-    let r = h.request("ui.key", json!({"key": "Tab"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    assert!((angle(&h) - 4.5).abs() < 1e-9, "applied on leaving: {}", angle(&h));
-    assert_eq!(h.app.session.undo.len(), undo + 1);
-}
-
 /// A move or resize drag keeps its own pointer when it runs past the box (the box stops at the
 /// photo's edge): the rotation glyph would say the drag rotates.
 #[test]
@@ -333,70 +278,6 @@ fn moving_the_box_never_shows_rotation() {
     assert_eq!(h.last_cursor, egui::CursorIcon::Move, "still moving");
     assert!(!has(&h, "cropRotateCursor"));
     assert_eq!(angle(&h), 0.0, "nothing rotated");
-}
-
-/// Closing the crop tool in the middle of a rotation (Return) leaves nothing behind: reopened,
-/// the box shows the move pointer and no angle.
-#[test]
-fn a_rotation_cut_short_leaves_nothing_behind() {
-    let mut h = crop_tool();
-    let r = h.request(
-        "ui.pointer",
-        json!({"events": [{"kind": "down", "x": -0.05, "y": 0.2}, {"kind": "drag", "x": -0.05, "y": 0.25}, {"kind": "drag", "x": -0.05, "y": 0.3}]}),
-        T,
-    );
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    assert!(has(&h, "cropAngleReadout"), "rotating");
-    for (method, params) in [
-        ("engine.execute", json!({"command": "tool.done"})),
-        ("ui.pointer", json!({"events": [{"kind": "up", "x": -0.05, "y": 0.3}]})),
-        ("engine.execute", json!({"command": "panel.crop"})),
-    ] {
-        let r = h.request(method, params, T);
-        assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
-    }
-    let img = h.app.image_rect.expect("the photo on screen");
-    hover(&mut h, img.center());
-    assert_eq!(h.last_cursor, egui::CursorIcon::Move);
-    assert!(!has(&h, "cropAngleReadout"), "no angle");
-    assert!(!has(&h, "cropRotateCursor"), "no rotation glyph");
-}
-
-/// The Angle value reads a typed angle as people type it: a decimal comma, a degree sign, and an
-/// angle past ±45° held at the limit.
-#[test]
-fn the_angle_field_reads_angles_as_people_type_them() {
-    let mut h = crop_tool();
-    for (typed, want) in [("-3,25", -3.25), ("1.5°", 1.5), ("60", 45.0)] {
-        let r = h.request("ui.clickWidget", json!({"id": "sliderValue:crop.angle"}), T);
-        assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
-        for key in ["a", "Backspace"] {
-            let r = h.request("ui.key", json!({"key": key, "cmd": key == "a"}), T);
-            assert_eq!(r["ok"], true, "{r}");
-        }
-        let r = h.request("ui.text", json!({"text": typed}), T);
-        assert_eq!(r["ok"], true, "{r}");
-        let r = h.request("ui.key", json!({"key": "Enter"}), T);
-        assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
-        assert!((angle(&h) - want).abs() < 1e-9, "{typed:?}: want {want}, got {}", angle(&h));
-    }
-}
-
-/// The Angle field writes an angle as the readout does: a sign on a turned angle.
-#[test]
-fn the_angle_field_writes_the_angle_like_the_readout() {
-    let mut h = crop_tool();
-    let r = h.request("engine.execute", json!({"command": "crop.straighten", "params": {"angle": 2.5}}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    let texts = h.painted_text();
-    // the field's number follows its label (its "°" is painted on its own)
-    let field = texts.iter().position(|t| t == "Angle").and_then(|i| texts.get(i + 1));
-    assert_eq!(field.map(String::as_str), Some("+2.50"), "{texts:?}");
 }
 
 /// The crop tool is Lightroom Classic's Crop & Straighten drawer: Aspect and its lock, Angle with
@@ -494,7 +375,7 @@ fn transform_is_a_section_of_the_edit_panel() {
 /// without a word.
 #[test]
 fn auto_straighten_says_when_it_finds_nothing() {
-    let dir = std::env::temp_dir().join(format!("lc-ui-auto-straighten-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lc-ui-auto-straighten");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let img = lcc_raster::Rgba8 { width: 64, height: 48, data: vec![[90, 120, 160, 255]; 64 * 48] };

@@ -459,24 +459,36 @@ mod tests {
         assert_eq!(r["cards"], "both", "{r}");
     }
 
-    /// The whole test on two demo photos (one lane setting): a report in plain words, the
+    /// The whole test on two small photos (one lane setting): a report in plain words, the
     /// choice applied only when asked, the settings it changed put back.
     #[test]
     fn a_quick_test_reports_and_restores() {
         let before = (crate::export::export_lanes_override(), crate::export::export_gpu());
+        // (small files of our own: the demo photos are full-size scenes, tens of seconds to export)
+        let dir = lcc_testkit::TempDir::new("machine-test");
+        let paths: Vec<String> = (0..2u8)
+            .map(|i| {
+                let img = lcc_raster::Rgba8::from_fn(96, 64, |x, y| [(x * 2) as u8, (y * 3) as u8, i * 90, 255]);
+                let o = ExportOptions { format: crate::export::ExportFormat::Png, ..Default::default() };
+                let p = dir.path().join(format!("{i}.png"));
+                std::fs::write(&p, crate::export::encode_image(&img, &o).unwrap()).unwrap();
+                p.to_string_lossy().into_owned()
+            })
+            .collect();
+        let options = |lanes| TestOptions { paths: paths.clone(), lanes: vec![lanes], quick: true, long_edge: None };
         let mut steps = Vec::new();
-        let r = run_test(&TestOptions { lanes: vec![2], quick: true, long_edge: Some(800), ..Default::default() }, &mut |d, t, what| {
+        let r = run_test(&options(2), &mut |d, t, what| {
             steps.push((d, t, what.to_string()));
             true
         })
         .unwrap();
         assert_eq!((crate::export::export_lanes_override(), crate::export::export_gpu()), before, "nothing changed until applied");
         assert!(r.photos_per_min > 0.0 && r.lanes == 2, "{r:?}");
-        assert!(r.source.contains("demo photos"), "{}", r.source);
+        assert!(r.source.contains("2 of your photos"), "{}", r.source);
         assert!(r.summary.starts_with("Exports about") && r.summary.contains("What limits it"), "{}", r.summary);
         assert!(steps.last().is_some_and(|(d, t, _)| d == t), "{steps:?}");
         // stopping it
-        let stopped = run_test(&TestOptions { lanes: vec![1], quick: true, long_edge: Some(400), ..Default::default() }, &mut |_, _, _| false);
+        let stopped = run_test(&options(1), &mut |_, _, _| false);
         assert_eq!(stopped.err().as_deref(), Some("cancelled"));
         assert_eq!((crate::export::export_lanes_override(), crate::export::export_gpu()), before);
     }

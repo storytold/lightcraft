@@ -1,6 +1,6 @@
 ---
 title: Lens corrections
-description: Profile corrections, chromatic aberration, defringe and manual distortion.
+description: Profile corrections, chromatic aberration, defringe, manual distortion and vignetting calibration.
 sidebar:
   order: 6
 ---
@@ -25,6 +25,22 @@ import { Aside } from '@astrojs/starlight/components';
 - Adobe lens profiles are never used.
 - **Sensor window**: crop modes are handled so profiles line up.
 
+## Vignetting Calibration
+
+<NeedsImage what="Lens Corrections with a vignetting calibration: Create, Apply, Remove, the reference line with Show Reference, and the Amount slider" />
+
+Light fall-off measured from a reference shot, as Capture One's LCC "Uniform Light". Under **Lens Corrections**, whether or not Enable Lens Corrections is on.
+
+- **Create**: measures the photo on screen as a reference and applies it to that photo. The photo must look like one: only an even surface, one colour, light falling off from the middle. Others are refused with the reason; a near miss (a faint dust spot) asks first, **Create Anyway**.
+- **Apply**: gives the photo, or every selected photo, the reference for its camera model, lens, aperture and (zoom) focal length. Photos without one are left as they are and counted; the tooltip says which aperture is missing.
+- **Amount** 0–120 % (100 % is the measured correction), and **Remove**. Part of the edit: undo, History, Sync, Copy / Paste, presets and sidecars carry it.
+- **One reference per aperture.** A reference serves only photos at its own aperture, from any body of the model. A full-frame reference also serves crop modes (5:4, 1:1, 16:9, DX), not the other way round.
+- **Replacing**: Create for a combination that has a reference asks first; photos that use the old one keep it.
+- **On a reference photo**: the panel says so, with **Stop Using as Reference**. Create on it makes it a reference again.
+- **Finding references**: the Library filter bar's Vignetting Reference picker, a smart collection's **Vignetting Reference** rule (Develop), and a small marker in the grid.
+- Corrects light fall-off only: no colour cast, no dust. While it applies, the profile's vignetting is off; its distortion and CA stay. **Library ▸ Flat-Field Correction…** is a separate tool that writes corrected DNG copies.
+- **Shooting a reference**: an OLED screen showing white or a diffuser over the lens (not an LCD or IPS screen); histogram peak at 2/3 to 3/4; 1/30 s or slower on a screen; focus at infinity, a tripod, VR off; the lens, focal length and aperture of the photos.
+
 <Aside type="note" title="Modern layout">
-  **Optics** in the dock has Distortion, Vignetting and both fringe sliders; **Lens Corrections** under it opens the full section.
+  **Optics** in the dock has Distortion, Vignetting and both fringe sliders, and the vignetting calibration's Amount while the photo has one; **Lens Corrections** under it opens the full section.
 </Aside>

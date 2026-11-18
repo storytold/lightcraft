@@ -91,6 +91,12 @@ fn auto_sync_white_balance_modes_apply_to_each_photo() {
 #[test]
 fn auto_sync_temp_is_the_same_kelvin_and_keeps_each_photos_tint() {
     let (mut s, [a, b, c]) = three_raws();
+    // A photo still holding an old relative-scale value: a Temp synced from a photo in Kelvin
+    // reaches it as Kelvin, never as a number on the relative scale (where 6500 is as shot), which
+    // turned photos blue. Main already got this right; the guard keeps it so.
+    s.execute("develop.set", &json!({"control": "wb.temp", "value": 5600.0})).unwrap();
+    assert!((wb(&s, c).0 - 5600.0).abs() < 1.0, "c renders at {:?}", wb(&s, c));
+    assert_eq!(s.develop_of(c).unwrap().wb.scale, WbScale::Kelvin);
     s.execute("develop.wb", &json!({"mode": "asShot"})).unwrap();
     // typed
     s.execute("develop.set", &json!({"control": "wb.temp", "value": 5600.0})).unwrap();
@@ -109,17 +115,6 @@ fn auto_sync_temp_is_the_same_kelvin_and_keeps_each_photos_tint() {
     for id in [a, b, c] {
         assert!(close(wb(&s, id), (4600.0, 10.0)), "photo {}: {:?}", id.0, wb(&s, id));
     }
-}
-
-/// A photo still holding an old relative-scale value: a Temp synced from a photo in Kelvin reaches
-/// it as Kelvin, never as a number on the relative scale (where 6500 is as shot), which turned
-/// photos blue. Main already got this right; the guard keeps it so.
-#[test]
-fn auto_sync_temp_never_lands_on_an_old_relative_scale() {
-    let (mut s, [_, _, c]) = three_raws();
-    s.execute("develop.set", &json!({"control": "wb.temp", "value": 5600.0})).unwrap();
-    assert!((wb(&s, c).0 - 5600.0).abs() < 1.0, "c renders at {:?}", wb(&s, c));
-    assert_eq!(s.develop_of(c).unwrap().wb.scale, WbScale::Kelvin);
 }
 
 /// A JPEG selected with a raw has no "same" Kelvin (its white balance is relative to its own

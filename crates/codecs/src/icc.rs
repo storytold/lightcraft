@@ -270,6 +270,11 @@ mod tests {
                 k => panic!("{k:?}"),
             }
         }
+        // garbage is none
+        {
+            assert!(parse(&[]).is_none());
+            assert!(parse(&[0u8; 200]).is_none());
+        }
     }
 
     #[test]
@@ -318,11 +323,5 @@ mod tests {
         let lin = write_matrix_trc(&PROPHOTO, &Trc::Linear);
         assert_eq!(lin, write_matrix_trc(&PROPHOTO, &Trc::Linear));
         assert_eq!(&lin[24..36], &[0u8; 12]);
-    }
-
-    #[test]
-    fn garbage_is_none() {
-        assert!(parse(&[]).is_none());
-        assert!(parse(&[0u8; 200]).is_none());
     }
 }

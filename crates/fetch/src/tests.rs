@@ -102,7 +102,7 @@ fn handle(mut s: TcpStream, hits: &AtomicUsize) {
             // half the file, then nothing
             let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).as_bytes());
             let _ = s.write_all(&body[..body.len() / 2]);
-            std::thread::sleep(Duration::from_secs(5));
+            std::thread::sleep(Duration::from_secs(2));
         }
         "slow" => {
             let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).as_bytes());
@@ -140,7 +140,7 @@ fn tmp(name: &str) -> PathBuf {
 }
 
 fn quick() -> Options {
-    Options { connect_timeout: Duration::from_secs(2), stall_timeout: Duration::from_millis(600), attempts: 2, token_env: None, deadline: None }
+    Options { connect_timeout: Duration::from_secs(2), stall_timeout: Duration::from_millis(250), attempts: 2, token_env: None, deadline: None }
 }
 
 fn run(files: &[FileSpec<'_>], mirrors: &[String], dir: &Path, cancel: &AtomicBool) -> (Result<(), DownloadError>, Vec<Progress>) {
@@ -340,7 +340,7 @@ fn cancel_stops_quickly_and_keeps_the_part_for_later() {
     let cancel = Arc::new(AtomicBool::new(false));
     let c = cancel.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(400));
+        std::thread::sleep(Duration::from_millis(120));
         c.store(true, Ordering::SeqCst);
     });
     let t = Instant::now();
@@ -513,7 +513,7 @@ fn the_overall_deadline_stops_a_trickling_server() {
     let srv = server();
     let dir = tmp("deadline");
     // "slow" sends 1 kB every 20 ms (6 s for the file): never stalls, but far past the deadline
-    let opts = Options { deadline: Some(Duration::from_millis(500)), ..quick() };
+    let opts = Options { deadline: Some(Duration::from_millis(200)), ..quick() };
     let start = Instant::now();
     let r = download(&[pinned()], &[format!("{}/slow", srv.base)], &dir, &opts, &AtomicBool::new(false), &mut |_| {});
     assert_eq!(r, Err(DownloadError::TimedOut));

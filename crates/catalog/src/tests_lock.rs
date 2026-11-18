@@ -151,7 +151,7 @@ fn the_library_is_free_once_dropped_even_if_a_child_holds_a_copy() {
 
 /// Issue #680, as it happens in practice: one thread spawns cheap children while another acquires,
 /// drops and re-acquires the lock on its own directory. Every acquire must succeed (before the fix
-/// a few per cent were refused with `InUse(None)`). Bounded: about two seconds of cycles, and on a
+/// a few per cent were refused with `InUse(None)`). Bounded: about a third of a second of cycles (thousands of them), and on a
 /// slow or loaded machine (the FreeBSD CI VM, where a spawn can take longer than that) until a few
 /// children have been spawned during them, at most a minute.
 #[cfg(unix)]
@@ -181,7 +181,7 @@ fn dropping_the_lock_frees_the_library_while_another_thread_spawns_processes() {
         })
     };
     let t0 = Instant::now();
-    let enough = |cycles: usize| (cycles >= 200_000 || t0.elapsed() >= Duration::from_secs(2)) && count.load(Ordering::Relaxed) >= CHILDREN;
+    let enough = |cycles: usize| (cycles >= 200_000 || t0.elapsed() >= Duration::from_millis(300)) && count.load(Ordering::Relaxed) >= CHILDREN;
     let mut cycles = 0usize;
     let mut refused = Vec::new();
     while !enough(cycles) && t0.elapsed() < Duration::from_secs(60) {

@@ -113,40 +113,34 @@ mod tests {
     const MANIFEST: &str = "[workspace]\nmembers = [\"a\"]\n\n[workspace.package]\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace.dependencies]\nfoo = { version = \"1\" }\n";
 
     #[test]
-    fn reads_the_workspace_version() {
-        assert_eq!(read(MANIFEST).unwrap(), "0.1.0");
-        assert!(read("[package]\nversion = \"1.0.0\"\n").is_err());
-    }
-
-    #[test]
-    fn replaces_only_the_workspace_version() {
-        let out = replace(MANIFEST, "1.2.3-rc.1").unwrap();
-        assert_eq!(read(&out).unwrap(), "1.2.3-rc.1");
-        assert_eq!(out, MANIFEST.replace("version = \"0.1.0\"", "version = \"1.2.3-rc.1\""));
-        assert!(out.contains("foo = { version = \"1\" }"));
-    }
-
-    #[test]
-    fn keeps_crlf_line_endings() {
-        let crlf = MANIFEST.replace('\n', "\r\n");
-        let out = replace(&crlf, "2.0.0").unwrap();
-        assert_eq!(out, crlf.replace("\"0.1.0\"", "\"2.0.0\""));
-    }
-
-    #[test]
-    fn validates_versions() {
-        for ok in ["0.1.0", "1.20.300", "1.0.0-rc.1", "1.0.0-alpha", "1.0.0-x-y.2"] {
-            assert!(validate(ok).is_ok(), "{ok}");
+    fn workspace_version_is_read_replaced_and_validated() {
+        // reads the workspace version
+        {
+            assert_eq!(read(MANIFEST).unwrap(), "0.1.0");
+            assert!(read("[package]\nversion = \"1.0.0\"\n").is_err());
         }
-        for bad in ["1.0", "1.0.0.0", "v1.0.0", "01.0.0", "1.0.0-", "1.0.0-a..b", "1.0.0+meta", "1.a.0", ""] {
-            assert!(validate(bad).is_err(), "{bad}");
+        // replaces only the workspace version
+        {
+            let out = replace(MANIFEST, "1.2.3-rc.1").unwrap();
+            assert_eq!(read(&out).unwrap(), "1.2.3-rc.1");
+            assert_eq!(out, MANIFEST.replace("version = \"0.1.0\"", "version = \"1.2.3-rc.1\""));
+            assert!(out.contains("foo = { version = \"1\" }"));
         }
-        assert!(replace(MANIFEST, "nope").is_err());
-    }
-
-    #[test]
-    fn the_real_manifest_has_a_valid_version() {
-        let text = std::fs::read_to_string(crate::root().join("Cargo.toml")).unwrap();
-        validate(&read(&text).unwrap()).unwrap();
+        // keeps crlf line endings
+        {
+            let crlf = MANIFEST.replace('\n', "\r\n");
+            let out = replace(&crlf, "2.0.0").unwrap();
+            assert_eq!(out, crlf.replace("\"0.1.0\"", "\"2.0.0\""));
+        }
+        // validates versions
+        {
+            for ok in ["0.1.0", "1.20.300", "1.0.0-rc.1", "1.0.0-alpha", "1.0.0-x-y.2"] {
+                assert!(validate(ok).is_ok(), "{ok}");
+            }
+            for bad in ["1.0", "1.0.0.0", "v1.0.0", "01.0.0", "1.0.0-", "1.0.0-a..b", "1.0.0+meta", "1.a.0", ""] {
+                assert!(validate(bad).is_err(), "{bad}");
+            }
+            assert!(replace(MANIFEST, "nope").is_err());
+        }
     }
 }

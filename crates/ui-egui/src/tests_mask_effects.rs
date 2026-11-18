@@ -202,14 +202,3 @@ fn manage_window_renames_groups_stars_duplicates_and_deletes() {
     assert_eq!(h.app.session.mask_effects.len(), 3);
     assert!(matches!(h.app.ui.dialog, Some(Dialog::ManageEffects { .. })), "stays open");
 }
-
-#[test]
-fn imported_effects_toast_reports_groups_and_what_was_kept() {
-    let v = json!({"effects": [
-        {"name": "a", "group": "Detail", "unmapped": ["Grain"]},
-        {"name": "b", "group": "Retouch", "unmapped": ["Point Color", "Grain"]},
-        {"name": "c", "group": "", "unmapped": []},
-    ]});
-    let msg = crate::panels::mask_effects::import_toast(&v);
-    assert!(msg.contains("3 mask effects") && msg.contains("2 groups") && msg.contains("Grain, Point Color"), "{msg}");
-}

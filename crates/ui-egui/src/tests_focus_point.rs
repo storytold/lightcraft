@@ -59,26 +59,41 @@ fn on_image(h: &Headless, x: f32, y: f32) -> egui::Pos2 {
     egui::pos2(img.left() + x * img.width(), img.top() + y * img.height())
 }
 
+/// One session, several steps; each step was a test of its own and says what it checks.
 #[test]
-fn the_overlay_draws_on_the_focus_point_and_follows_rotation() {
-    let (mut h, _) = detail_with_focus(Some(focus(0.20, 0.30, 0.26, 0.36)));
-    assert!(widget(&h, "canvas:focusPoint").is_none(), "off by default");
-    // the Info panel names how the camera focused
-    assert!(widget(&h, "info:focus").is_some(), "no Focus row in the Info panel");
-    assert_eq!(run(&mut h, "view.focusPoint", json!({}))["on"], true);
-    let b = widget(&h, "canvas:focusPoint").expect("the focus box is drawn");
-    let want = on_image(&h, 0.23, 0.33);
-    assert!((b.center() - want).length() < 1.5, "box at {:?}, want {want:?}", b.center());
-    let img = h.app.image_rect.unwrap();
-    assert!((b.width() - 0.06 * img.width()).abs() < 1.5, "{b:?} in {img:?}");
-    // Rotate Right turns the photo 90° clockwise: the upright point (x, y) is drawn at (1 − y, x)
-    run(&mut h, "photo.rotateRight", json!({}));
-    let b = widget(&h, "canvas:focusPoint").expect("still drawn after rotating");
-    let want = on_image(&h, 0.67, 0.23);
-    assert!((b.center() - want).length() < 1.5, "rotated box at {:?}, want {want:?}", b.center());
-    // and the command turns it off again
-    assert_eq!(run(&mut h, "view.focusPoint", json!({"on": false}))["on"], false);
-    assert!(widget(&h, "canvas:focusPoint").is_none());
+fn the_overlay_draws_on_the_focus_point_follows_rotation_and_shows_in_compare_and_survey() {
+    let (mut h, id) = detail_with_focus(Some(focus(0.20, 0.30, 0.26, 0.36)));
+    // the overlay draws on the focus point and follows rotation
+    {
+        assert!(widget(&h, "canvas:focusPoint").is_none(), "off by default");
+        // the Info panel names how the camera focused
+        assert!(widget(&h, "info:focus").is_some(), "no Focus row in the Info panel");
+        assert_eq!(run(&mut h, "view.focusPoint", json!({}))["on"], true);
+        let b = widget(&h, "canvas:focusPoint").expect("the focus box is drawn");
+        let want = on_image(&h, 0.23, 0.33);
+        assert!((b.center() - want).length() < 1.5, "box at {:?}, want {want:?}", b.center());
+        let img = h.app.image_rect.unwrap();
+        assert!((b.width() - 0.06 * img.width()).abs() < 1.5, "{b:?} in {img:?}");
+        // Rotate Right turns the photo 90° clockwise: the upright point (x, y) is drawn at (1 − y, x)
+        run(&mut h, "photo.rotateRight", json!({}));
+        let b = widget(&h, "canvas:focusPoint").expect("still drawn after rotating");
+        let want = on_image(&h, 0.67, 0.23);
+        assert!((b.center() - want).length() < 1.5, "rotated box at {:?}, want {want:?}", b.center());
+        // and the command turns it off again
+        assert_eq!(run(&mut h, "view.focusPoint", json!({"on": false}))["on"], false);
+        assert!(widget(&h, "canvas:focusPoint").is_none());
+    }
+    // compare and survey draw each photos focus point
+    {
+        let other = h.app.session.visible_cloned().get(1).copied().expect("a second photo");
+        run(&mut h, "view.focusPoint", json!({"on": true}));
+        run(&mut h, "library.select", json!({"ids": [id.0, other.0], "active": id.0}));
+        for view in ["view.compare", "view.survey"] {
+            run(&mut h, view, json!({}));
+            assert!(widget(&h, &format!("compare:focusPoint:{}", id.0)).is_some(), "{view}: no focus box");
+            assert!(widget(&h, &format!("compare:focusPoint:{}", other.0)).is_none(), "{view}: a box on a photo without one");
+        }
+    }
 }
 
 #[test]
@@ -144,24 +159,11 @@ fn focus_box_follows_the_crop_and_drops_a_point_cropped_away() {
     assert!(crate::panels::detail::focus_box(&z).is_some());
 }
 
-#[test]
-fn compare_and_survey_draw_each_photos_focus_point() {
-    let (mut h, id) = detail_with_focus(Some(focus(0.20, 0.30, 0.26, 0.36)));
-    let other = h.app.session.visible_cloned().get(1).copied().expect("a second photo");
-    run(&mut h, "view.focusPoint", json!({"on": true}));
-    run(&mut h, "library.select", json!({"ids": [id.0, other.0], "active": id.0}));
-    for view in ["view.compare", "view.survey"] {
-        run(&mut h, view, json!({}));
-        assert!(widget(&h, &format!("compare:focusPoint:{}", id.0)).is_some(), "{view}: no focus box");
-        assert!(widget(&h, &format!("compare:focusPoint:{}", other.0)).is_none(), "{view}: a box on a photo without one");
-    }
-}
-
 /// A photo imported before focus points were read gets its point from the background reader the frame loop drives
 /// (`focus.pump`, started by itself once the library is open), and Photo ▸ Read Focus Points runs it on demand.
 #[test]
 fn the_frame_loop_reads_focus_points_for_photos_imported_earlier() {
-    let dir = std::env::temp_dir().join(format!("lc-ui-focus-scan-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lc-ui-focus-scan");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("temp dir");
     let add = |app: &mut LccApp, id: u64, name: &str| {
@@ -186,26 +188,4 @@ fn the_frame_loop_reads_focus_points_for_photos_imported_earlier() {
     assert_eq!(r["queued"], 1, "{r}");
     assert!(h.step_until(SETTLE, |h| has_point(h, 9002)));
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// A Canon file's AF point (AFInfo2 in its maker note, read from the file's header like the background reader
-/// does) puts the box on the photo, and Z zooms to it.
-#[test]
-fn a_canon_files_af_point_is_read_and_z_zooms_to_it() {
-    let bytes = lcc_meta::focus::synthetic_cr2(200_000);
-    let read = lcc_meta::focus::read_header(bytes.len() as u64, &mut |off, buf| {
-        let start = usize::try_from(off).expect("offset");
-        buf.copy_from_slice(bytes.get(start..start + buf.len()).expect("in the file"));
-        Ok(())
-    })
-    .expect("read");
-    let point = read.focus.expect("a Canon AF point");
-    assert_eq!(Some(&point), lcc_meta::extract(&bytes).focus.as_ref(), "header-only and whole-file reads agree");
-    let (mut h, _) = detail_with_focus(Some(point));
-    let r = h.request("ui.key", json!({"key": "z"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    assert!(matches!(h.app.ui.zoom, Zoom::Percent(_)), "{:?}", h.app.ui.zoom);
-    let (u, v) = h.app.ui.pan;
-    assert!((u - 0.75).abs() < 1e-3 && (v - 0.25).abs() < 1e-3, "pan {u} {v}");
 }

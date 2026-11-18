@@ -64,7 +64,11 @@ apps/lightcraft, and the icons in assets/surface-icons port TactileBridge, Porti
 2026 RAD Films - Roman Alurkoff, contributed under the MIT License: its control-surface engine
 (dial acceleration and tuning, coalescing, echo suppression, tool-following layouts, Auto Sync),
 its settings design and defaults, its curated layouts and profiles, and its hand-drawn icon pack
-(assets/surface-icons/LICENSE.txt). Each ported file says so. No Capture One material is included.
+(assets/surface-icons/LICENSE.txt). Each ported file says so. No Capture One material is included in that port.
+
+The Levels tool's midtone table (crates/develop/src/levels_table.rs) and its stage order are black-box
+measurements of Capture One's Levels response, taken by rendering an original synthetic grey ramp; only the
+measured numbers ship, no Capture One files, assets or rendered photos.
 
 crates/inpaint (lightcraft-inpaint) ports the inpainting (PatchMatch completion) and Poisson membrane
 fill code of PhotoCraft (https://github.com/storytold/photocraft, crates/algo/src/inpaint.rs and

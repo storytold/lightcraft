@@ -603,7 +603,9 @@ pub fn specs() -> Vec<CommandSpec> {
             ok()
         }),
         cmd!("develop.merge", "Apply Settings JSON", [], None, "{settings: partial DevelopSettings JSON, label?}", has_active, |s, p| {
-            let partial = p.get("settings").cloned().ok_or_else(|| bad("develop.merge", "missing settings"))?;
+            let mut partial = p.get("settings").cloned().ok_or_else(|| bad("develop.merge", "missing settings"))?;
+            // a flat-field map given with the settings (their portable form) is stored with the edit
+            s.absorb_settings(&mut partial);
             let label = str_param(p, "label").unwrap_or("Edit").to_string();
             let id = active(s, "develop.merge")?;
             let info = s.source_info(id);
@@ -1426,7 +1428,9 @@ pub fn specs() -> Vec<CommandSpec> {
                     remember_dialogs(s);
                 }
                 let d = s.develop_of(id).unwrap_or_default();
-                s.clipboard = Some(s.dialogs.copy.extract(&d));
+                // portable: pasted in another catalog, a flat-field map still applies
+                let copied = s.dialogs.copy.extract(&d);
+                s.clipboard = Some(s.portable(&copied));
                 s.clipboard_from = Some(id);
                 Ok(json!({"groups": s.dialogs.copy.groups, "settings": s.dialogs.copy.settings}))
             }
@@ -1464,11 +1468,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paste Edit Settings",
             ["Photo", "Develop Settings"],
             Some("Cmd+V"),
-            "{ids?, groups?: [settingsGroup], settings?: [settingItem] (paste only these of the copied settings)}",
+            "{ids?, groups?: [settingsGroup], settings?: [settingItem] (paste only these of the copied settings)} → {changed, vignettingCalibrationSkipped: [{id, reason}] (a vignetting map left off a photo it doesn't fit)}",
             has_clipboard,
             |s, p| {
                 let c = "develop.paste";
                 let mut clip = s.clipboard.clone().unwrap_or_default();
+                // (copied in another catalog, the map comes with it: stored with the paste)
+                s.absorb_settings(&mut clip);
                 if let Some(only) = pick_param(p, c)? {
                     // the clipboard holds what was copied: rebuild it with just the chosen part of it
                     let only = only.intersect(&s.dialogs.copy);
@@ -1487,9 +1493,14 @@ pub fn specs() -> Vec<CommandSpec> {
                 let from = s.clipboard_from;
                 let link_source = link_copied_masks(s, &mut clip, from, &ids, "Paste Settings");
                 let mut ops = Vec::new();
+                let mut vignetting_calibration_skipped = Vec::new();
                 for id in ids {
                     let Some(d) = s.develop_of(id) else { continue };
                     let mut pasted = lcc_develop::apply_partial(&d, &clip, 1.0);
+                    // (a vignetting map from another lens stays off this photo)
+                    if let Some(why) = s.keep_fitting_vignetting_calibration(id, &d, &mut pasted) {
+                        vignetting_calibration_skipped.push(json!({"id": id.0, "reason": why}));
+                    }
                     crate::upright_jobs::as_recipe(&d, &mut pasted);
                     let next = crate::smart_masks::completed(s, id, pasted);
                     ops.extend(s.develop_op(id, next, "Paste Settings"));
@@ -1497,7 +1508,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let n = ops.len();
                 ops.extend(link_source);
                 s.commit("Paste Settings", Op::Batch { ops })?;
-                Ok(json!({"changed": n}))
+                Ok(json!({"changed": n, "vignettingCalibrationSkipped": vignetting_calibration_skipped}))
             }
         ),
         cmd!(
@@ -1505,7 +1516,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Sync Settings",
             [],
             None,
-            "{groups?: [settingsGroup], settings?: [settingItem], controls?: [controlId], copies?: bool}: copy the active photo's settings to the other selected photos (with `copies`: to the master and every virtual copy of the active photo instead; Sync Copies): whole groups, single settings of a group (develop.settingItems) and single controls (e.g. [\"light.exposure\"]); with only `controls`, nothing else is copied (default: what Sync ticked last, at first all but crop, masks, remove; the choice is remembered) → {changed}",
+            "{groups?: [settingsGroup], settings?: [settingItem], controls?: [controlId], copies?: bool}: copy the active photo's settings to the other selected photos (with `copies`: to the master and every virtual copy of the active photo instead; Sync Copies): whole groups, single settings of a group (develop.settingItems) and single controls (e.g. [\"light.exposure\"]); with only `controls`, nothing else is copied (default: what Sync ticked last, at first all but crop, masks, remove; the choice is remembered) → {changed, vignettingCalibrationSkipped: [{id, reason}] (a vignetting map left off a photo it doesn't fit: another lens or camera, a zoom at another focal length, another image area)}",
             has_selection,
             |s, p| {
                 let c = "develop.sync";
@@ -1550,12 +1561,17 @@ pub fn specs() -> Vec<CommandSpec> {
                 };
                 let link_source = link_copied_masks(s, &mut partial, Some(id), &targets, "Sync Settings");
                 let mut ops = Vec::new();
+                let mut vignetting_calibration_skipped = Vec::new();
                 // a crop goes on as what it means on each photo's own frame (upstream #3572; as Auto Sync does)
                 let with_crop = partial.get("crop").is_some();
                 let adims = crop_dims(s, id);
                 for x in targets.iter().copied() {
                     let Some(dd) = s.develop_of(x) else { continue };
                     let mut nd = lcc_develop::apply_partial(&dd, &partial, 1.0);
+                    // (a vignetting map from another lens stays off this photo)
+                    if let Some(why) = s.keep_fitting_vignetting_calibration(x, &dd, &mut nd) {
+                        vignetting_calibration_skipped.push(json!({"id": x.0, "reason": why}));
+                    }
                     if with_crop {
                         nd.crop = crate::sync_same::synced_crop(&d.crop, adims, crop_dims(s, x));
                     }
@@ -1569,7 +1585,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let n = ops.len();
                 ops.extend(link_source);
                 s.commit("Sync Settings", Op::Batch { ops })?;
-                Ok(json!({"changed": n}))
+                Ok(json!({"changed": n, "vignettingCalibrationSkipped": vignetting_calibration_skipped}))
             }
         ),
         cmd!(
@@ -1642,7 +1658,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 // log2 of the light the photo gathered (shutter s × ISO / f-number²)
                 let gathered = |s: &Session, id: PhotoId| -> Option<f64> {
                     let m = &s.catalog.photo(id)?.meta;
-                    let t = lcc_catalog::parse_shutter_seconds(&m.shutter)?;
+                    let t = m.shutter_seconds()?;
                     let (n, iso) = (m.aperture? as f64, m.iso? as f64);
                     (n > 0.0 && iso > 0.0).then(|| (t * iso / (n * n)).log2())
                 };
@@ -1688,7 +1704,10 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             |s, p| {
                 let pid = str_param(p, "id").ok_or_else(|| bad("preset.apply", "missing id"))?;
-                let preset = s.presets.iter().find(|x| x.id == pid).cloned().ok_or_else(|| bad("preset.apply", format!("unknown preset `{pid}`")))?;
+                let mut preset =
+                    s.presets.iter().find(|x| x.id == pid).cloned().ok_or_else(|| bad("preset.apply", format!("unknown preset `{pid}`")))?;
+                // a preset's flat-field map is stored with the edit that applies it
+                s.absorb_settings(&mut preset.settings);
                 let amount = f64_or(p, "amount", 100.0).clamp(0.0, 200.0) / 100.0;
                 // `id` names the preset here: the photos are `ids`, else the selection, or (Develop's
                 // Presets panel) the photos a slider would change
@@ -1759,7 +1778,9 @@ pub fn specs() -> Vec<CommandSpec> {
                     pid = format!("{base}-{n}");
                     n += 1;
                 }
-                let preset = Preset { settings: pick.extract(&d), ..Preset::from_settings(&pid, &name, &group, &d, &[]) };
+                // presets serve every catalog: a flat-field map goes with the preset
+                let settings = s.portable(&pick.extract(&d));
+                let preset = Preset { settings, ..Preset::from_settings(&pid, &name, &group, &d, &[]) };
                 s.presets.push(preset);
                 Ok(json!({"id": pid, "group": group}))
             }
@@ -2310,31 +2331,31 @@ fn has_history_after(s: &Session) -> std::result::Result<(), String> {
 mod recipe_tests {
     use super::*;
 
-    /// Equal settings differ nowhere, so there is nothing to store; a difference comes back with
-    /// its path only.
     #[test]
-    fn partial_diff_is_the_changed_leaves_only() {
-        let a = json!({"light": {"exposure": 1.0, "contrast": 0.0}, "color": {"vibrance": 5.0}});
-        assert_eq!(partial_diff(&a, &a), None);
-        let b = json!({"light": {"exposure": 0.0, "contrast": 0.0}, "color": {"vibrance": 5.0}});
-        assert_eq!(partial_diff(&a, &b), Some(json!({"light": {"exposure": 1.0}})));
-        assert_eq!(partial_diff(&a, &json!({})), Some(a.clone()), "a leaf the other side lacks is a difference");
+    fn partial_diff_is_the_changed_leaves_only_and_a_recipe_that_stores_nothing_is_none() {
+        // Equal settings differ nowhere, so there is nothing to store; a difference comes back with
+        // its path only.
+        {
+            let a = json!({"light": {"exposure": 1.0, "contrast": 0.0}, "color": {"vibrance": 5.0}});
+            assert_eq!(partial_diff(&a, &a), None);
+            let b = json!({"light": {"exposure": 0.0, "contrast": 0.0}, "color": {"vibrance": 5.0}});
+            assert_eq!(partial_diff(&a, &b), Some(json!({"light": {"exposure": 1.0}})));
+            assert_eq!(partial_diff(&a, &json!({})), Some(a.clone()), "a leaf the other side lacks is a difference");
+        }
+        // A recipe that names nothing, or a control `set` would drop (a per-photo instance on fresh
+        // settings), stores nothing: the command answers with an error, not an empty preset.
+        {
+            assert_eq!(recipe_partial(&[]), None);
+            assert_eq!(recipe_partial(&recipe(&[("pointColor.0.hueShift", 5.0)])), None, "set returns false for it");
+            assert_eq!(recipe_partial(&recipe(&[("nope.nope", 5.0)])), None);
+            assert_eq!(recipe_partial(&recipe(&[("light.exposure", 0.5)])), Some(json!({"light": {"exposure": 0.5}})));
+            // a reset to the control's default is stored
+            assert_eq!(recipe_partial(&recipe(&[("light.exposure", 0.0)])), Some(json!({"light": {"exposure": 0.0}})));
+        }
     }
 
     fn recipe(items: &[(&str, f64)]) -> Vec<(String, f64)> {
         items.iter().map(|(id, v)| (id.to_string(), *v)).collect()
-    }
-
-    /// A recipe that names nothing, or a control `set` would drop (a per-photo instance on fresh
-    /// settings), stores nothing: the command answers with an error, not an empty preset.
-    #[test]
-    fn a_recipe_that_stores_nothing_is_none() {
-        assert_eq!(recipe_partial(&[]), None);
-        assert_eq!(recipe_partial(&recipe(&[("pointColor.0.hueShift", 5.0)])), None, "set returns false for it");
-        assert_eq!(recipe_partial(&recipe(&[("nope.nope", 5.0)])), None);
-        assert_eq!(recipe_partial(&recipe(&[("light.exposure", 0.5)])), Some(json!({"light": {"exposure": 0.5}})));
-        // a reset to the control's default is stored
-        assert_eq!(recipe_partial(&recipe(&[("light.exposure", 0.0)])), Some(json!({"light": {"exposure": 0.0}})));
     }
 }
 
@@ -2420,7 +2441,7 @@ mod wb_sample_tests {
     use super::*;
 
     #[test]
-    fn clipped_white_and_black_spots_are_refused() {
+    fn clipped_white_and_black_spots_are_refused_and_hostile_sizes_stay_in_range() {
         let mut img = lcc_raster::Rgb32f::filled(32, 32, [0.3, 0.25, 0.2]);
         assert!(matches!(wb_sample(&img, 16, 16, 2), WbSample::Neutral(_)));
         for p in img.data.iter_mut().take(32 * 16) {
@@ -2436,15 +2457,7 @@ mod wb_sample_tests {
         // hostile input: NaN pixels and huge offsets don't panic
         let nan = lcc_raster::Rgb32f::filled(4, 4, [f32::NAN; 3]);
         assert_eq!(wb_sample(&nan, isize::MAX, isize::MIN, 1000), WbSample::TooDark);
-    }
-}
-
-#[cfg(test)]
-mod wb_pick_size_tests {
-    use super::wb_pick_half;
-
-    #[test]
-    fn hostile_sizes_stay_in_range() {
+        // hostile picker sizes stay in range
         for v in [None, Some(f64::NAN), Some(f64::INFINITY), Some(-1e300), Some(1e300), Some(0.0), Some(4.0), Some(31.0)] {
             let h = wb_pick_half(v);
             assert!((0..=15).contains(&h), "{v:?} -> {h}");

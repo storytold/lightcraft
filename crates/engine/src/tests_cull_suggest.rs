@@ -7,11 +7,31 @@ use lcc_catalog::Flag;
 
 use crate::Session;
 
+/// One test: analysing the demo library is the cost.
 #[test]
 fn analyze_suggests_and_applies_stars_and_flags() {
     let mut s = Session::with_demo();
     let vis = s.visible_cloned();
     assert!(vis.len() >= 2);
+
+    // suggestions come back even without applying them: the answer alone is useful for bulk culling
+    let before: Vec<(u8, Flag)> = vis
+        .iter()
+        .map(|id| {
+            let p = s.catalog.photo(*id).unwrap();
+            (p.rating, p.flag)
+        })
+        .collect();
+    let r = s.execute("photo.analyze", &json!({"ids": vis.iter().map(|i| i.0).collect::<Vec<_>>()})).unwrap();
+    for row in r["photos"].as_array().cloned().unwrap_or_default() {
+        assert!((1..=5).contains(&row["suggestedStars"].as_u64().unwrap_or(0)));
+    }
+    for (id, (rating, flag)) in vis.iter().zip(before) {
+        let p = s.catalog.photo(*id).unwrap();
+        assert_eq!(p.rating, rating, "no rating applied");
+        assert_eq!(p.flag, flag, "no flag applied");
+    }
+
     // a photo the user rated and one they flagged: suggestions must not touch them
     s.execute("photo.rate", &json!({"ids": [vis[0].0], "rating": 3})).unwrap();
     s.execute("photo.flag", &json!({"ids": [vis[1].0], "flag": "pick"})).unwrap();
@@ -39,27 +59,4 @@ fn analyze_suggests_and_applies_stars_and_flags() {
     assert_eq!(p1.flag, Flag::Pick, "a user flag is never overwritten");
     // somewhere in the library, unrated photos did get ratings and unflagged ones flags
     assert!(r["rated"].as_u64().unwrap_or(0) + r["flagged"].as_u64().unwrap_or(0) > 0, "nothing applied");
-}
-
-/// Suggestions come back even without applying them: the answer alone is useful for bulk culling.
-#[test]
-fn suggestions_are_reported_without_being_applied() {
-    let mut s = Session::with_demo();
-    let vis = s.visible_cloned();
-    let before: Vec<(u8, Flag)> = vis
-        .iter()
-        .map(|id| {
-            let p = s.catalog.photo(*id).unwrap();
-            (p.rating, p.flag)
-        })
-        .collect();
-    let r = s.execute("photo.analyze", &json!({"ids": vis.iter().map(|i| i.0).collect::<Vec<_>>()})).unwrap();
-    for row in r["photos"].as_array().cloned().unwrap_or_default() {
-        assert!((1..=5).contains(&row["suggestedStars"].as_u64().unwrap_or(0)));
-    }
-    for (id, (rating, flag)) in vis.iter().zip(before) {
-        let p = s.catalog.photo(*id).unwrap();
-        assert_eq!(p.rating, rating, "no rating applied");
-        assert_eq!(p.flag, flag, "no flag applied");
-    }
 }

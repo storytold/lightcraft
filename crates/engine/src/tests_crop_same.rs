@@ -22,7 +22,7 @@ fn crop_ratio(s: &Session, id: PhotoId) -> f64 {
 }
 
 #[test]
-fn same_aspect_hands_the_active_ratio_to_the_others_in_one_undo_step() {
+fn same_aspect_as_shot_and_set_process_work_on_the_selection_in_one_undo_step() {
     let (mut s, ids) = three();
     let active = s.active().unwrap();
     s.execute("crop.aspect", &json!({"aspect": [1, 1]})).unwrap();
@@ -39,42 +39,17 @@ fn same_aspect_hands_the_active_ratio_to_the_others_in_one_undo_step() {
             assert_eq!(s.develop_of(*id).unwrap().crop, b.crop);
         }
     }
-}
 
-#[test]
-fn same_aspect_needs_another_photo_and_a_real_crop() {
-    let mut s = Session::with_demo();
-    let id = s.visible_cloned()[0];
-    s.selection = crate::Selection { ids: vec![id], active: Some(id) };
-    assert!(matches!(s.execute("crop.sameAspect", &json!({})), Err(EngineError::Disabled(..))));
-    // a crop of no size hands on nothing (and stores no NaN)
-    let (mut s, ids) = three();
-    let a = s.active().unwrap();
-    let mut d = (*s.develop_of(a).unwrap()).clone();
-    d.crop.geometry.rect = lcc_geom::Rect::new(0.5, 0.5, 0.5, 0.5);
-    s.set_develop(a, d, "t").unwrap();
-    assert!(s.execute("crop.sameAspect", &json!({})).is_err());
-    for id in ids.iter().skip(1) {
-        assert!(crop_ratio(&s, *id).is_finite());
-    }
-}
-
-#[test]
-fn as_shot_restores_the_full_decoded_frame() {
-    let (mut s, _) = three();
+    // Crop As Shot restores the full decoded frame
     s.execute("crop.aspect", &json!({"aspect": [16, 9]})).unwrap();
     s.execute("crop.asShot", &json!({})).unwrap();
-    let id = s.active().unwrap();
-    let c = s.develop_of(id).unwrap().crop;
+    let c = s.develop_of(active).unwrap().crop;
     assert_eq!(c.geometry, Default::default());
     assert!(c.aspect.is_none());
     s.execute("edit.undo", &json!({})).unwrap();
-    assert!(s.develop_of(id).unwrap().crop.aspect.is_some());
-}
+    assert!(s.develop_of(active).unwrap().crop.aspect.is_some());
 
-#[test]
-fn set_process_moves_the_selection_and_refuses_unknown_versions() {
-    let (mut s, ids) = three();
+    // Process Version moves the selection and refuses unknown versions
     let r = s.execute("develop.setProcess", &json!({"version": 3})).unwrap();
     assert_eq!(r["changed"], 3);
     for id in &ids {
@@ -95,4 +70,16 @@ fn set_process_moves_the_selection_and_refuses_unknown_versions() {
     ] {
         assert!(matches!(s.execute("develop.setProcess", &bad), Err(EngineError::BadParams { .. })), "{bad}");
     }
+
+    // Same Aspect needs a real crop: one of no size hands on nothing (and stores no NaN)
+    let mut d = (*s.develop_of(active).unwrap()).clone();
+    d.crop.geometry.rect = lcc_geom::Rect::new(0.5, 0.5, 0.5, 0.5);
+    s.set_develop(active, d, "t").unwrap();
+    assert!(s.execute("crop.sameAspect", &json!({})).is_err());
+    for id in ids.iter().skip(1) {
+        assert!(crop_ratio(&s, *id).is_finite());
+    }
+    // …and another photo
+    s.selection = crate::Selection { ids: vec![active], active: Some(active) };
+    assert!(matches!(s.execute("crop.sameAspect", &json!({})), Err(EngineError::Disabled(..))));
 }

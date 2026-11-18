@@ -869,8 +869,8 @@ mod tests {
         std::fs::write(path, lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap()).unwrap();
     }
 
-    fn temp(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("ui-editrt-{tag}-{}", std::process::id()));
+    fn temp(tag: &str) -> lcc_testkit::TempDir {
+        let d = lcc_testkit::TempDir::new(&format!("ui-editrt-{tag}"));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d

@@ -1,0 +1,21 @@
+---
+title: Library tools
+description: Validate DNGs, export status, DNG updates, email and publish comments.
+sidebar:
+  order: 16
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+---
+
+- **Validate DNG Files** (**Library** menu): checks the selected DNGs' raw data against the checksum they carry, in the background, and lists the damaged and unverifiable files. DNGs the app writes carry that checksum.
+- **Exported badge**: photos that were exported show a badge in the grid. **Photo ▸ Reset Export Status** clears it for the selection (one undo step).
+- **Update DNG Preview & Metadata** (**Metadata** menu): appends a JPEG preview of the current edit and the current XMP to the selected DNGs. The raw data is left byte for byte as it was. Adobe-written and unrecognised DNGs are refused.
+- **Email Photo…** (**File** menu): exports the selection as small JPEGs (you choose the long edge and quality) and opens a new message with them attached in the system mail program. Without one, the files stay in a temporary folder that is shown.
+- **Review Comments** (**Library** menu): the comments on photos published to Immich, per photo; see [Immich](../../sync/immich/). Not supported by Hard Drive or SFTP publishing.
+- **Find Duplicates…**: see [Find duplicates](../duplicates/).
+
+<Aside type="note" title="Modern layout">
+  All of these are in the ☰ menu: **Library**, **Photo**, **Metadata** and **File**.
+</Aside>

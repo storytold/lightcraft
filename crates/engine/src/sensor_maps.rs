@@ -84,12 +84,35 @@ pub fn body_label(body: &str) -> String {
 pub fn dir() -> Option<PathBuf> {
     #[cfg(test)]
     {
-        Some(std::env::temp_dir().join(format!("lc-sensor-maps-test-{}", std::process::id())))
+        Some(test_dir().clone())
     }
     #[cfg(not(test))]
     {
         lcc_brand::env_os("SENSOR_MAPS").map(PathBuf::from).or_else(|| crate::config::config_dir().map(|d| d.join("sensor-maps")))
     }
+}
+
+/// Under test, the store of this test process, `<temp>/lc-sensor-maps-test-<pid>`, shared by its tests. Nothing
+/// runs when a test process ends (a static's drop never does), so the first use in each process removes the
+/// stores of earlier test processes left unchanged for six hours, which keeps runs from piling them up in Temp
+/// (no test process runs that long, so a live one's store is never taken).
+#[cfg(test)]
+fn test_dir() -> &'static PathBuf {
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let temp = std::env::temp_dir();
+        let own = format!("lc-sensor-maps-test-{}", std::process::id());
+        let old = |e: &std::fs::DirEntry| {
+            e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age.as_secs() > 6 * 3600)
+        };
+        for e in std::fs::read_dir(&temp).into_iter().flatten().flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with("lc-sensor-maps-test-") && name != own && old(&e) {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+        temp.join(own)
+    })
 }
 
 /// File name of a body's map: letters, digits, `-` and `_` kept, anything else `_`.
@@ -796,7 +819,7 @@ impl KeyBaseline {
         if let Some(path) = path {
             let saved = path.parent().map_or(Ok(()), std::fs::create_dir_all).map_err(|e| e.to_string()).and_then(|()| {
                 let json = serde_json::to_vec(&made).map_err(|e| e.to_string())?;
-                lcc_catalog::safe_file::write_atomic(&path, &json).map_err(|e| e.to_string())
+                lcc_catalog::safe_file::write_atomic_nosync(&path, &json).map_err(|e| e.to_string())
             });
             if let Err(e) = saved {
                 log::warn!("sensor maps: {}: {e}", path.display());

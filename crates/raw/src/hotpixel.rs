@@ -458,15 +458,6 @@ mod tests {
     }
 
     #[test]
-    fn an_adjacent_hot_pair_is_replaced() {
-        let mut r = mosaic(256, 256);
-        set(&mut r, 80, 80, 9000);
-        set(&mut r, 80, 81, 8000);
-        assert_eq!(r.suppress_hot_pixels(), 2);
-        assert!(get(&r, 80, 80) < 2700 && get(&r, 80, 81) < 2700);
-    }
-
-    #[test]
     fn a_small_star_is_kept() {
         let mut r = mosaic(256, 256);
         // a point of light over a 3 × 3 block: brightest in the middle, its neighbours lit too
@@ -493,6 +484,14 @@ mod tests {
         set(&mut r, 64, 64, 1500);
         assert_eq!(r.suppress_hot_pixels(), 1);
         assert!(get(&r, 64, 64) < 600);
+        // an adjacent hot pair is replaced
+        {
+            let mut r = mosaic(256, 256);
+            set(&mut r, 80, 80, 9000);
+            set(&mut r, 80, 81, 8000);
+            assert_eq!(r.suppress_hot_pixels(), 2);
+            assert!(get(&r, 80, 80) < 2700 && get(&r, 80, 81) < 2700);
+        }
     }
 
     #[test]

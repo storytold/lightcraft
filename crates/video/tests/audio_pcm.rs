@@ -6,7 +6,7 @@
 
 use std::f32::consts::TAU;
 use std::io::Cursor;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use filmcraft_isobmff::{AvcConfig, Brand, CodecConfig, FourCc, Mp4Writer, PcmConfig, SampleEntry, TrackConfig, WriteSample, WriterOptions};
 use lcc_video::AudioReader;
@@ -19,10 +19,9 @@ const SR: u32 = 48_000;
 const HZ: f32 = 440.0;
 const N: usize = (SR * FRAMES / FPS) as usize;
 
-fn scratch(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("lcc-video-pcm-{}", std::process::id()));
-    std::fs::create_dir_all(&d).unwrap();
-    d.join(name)
+/// The path of a file `name` in a Temp folder of its own, removed when the test ends.
+fn scratch(name: &str) -> lcc_testkit::TempFile {
+    lcc_testkit::TempFile::new(&format!("lcc-video-pcm-{name}"), name)
 }
 
 fn tone(k: usize) -> f32 {

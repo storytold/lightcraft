@@ -1063,11 +1063,10 @@ mod tests {
         if let Some(found) = detect(&pixels, width, &COLORCHECKER_CLASSIC, None) {
             assert!(found.score < 0.02, "blank frame scored {}", found.score);
         }
-    }
-
-    #[test]
-    fn an_empty_input_is_handled() {
-        assert!(detect(&[], 0, &COLORCHECKER_CLASSIC, None).is_none());
+        // an empty input is handled
+        {
+            assert!(detect(&[], 0, &COLORCHECKER_CLASSIC, None).is_none());
+        }
     }
 
     #[test]

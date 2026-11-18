@@ -127,6 +127,17 @@ pub fn subset(cat: &Catalog, opts: &ExportOptions) -> Catalog {
     out.folder_records =
         cat.folder_records.iter().filter(|(k, _)| files.iter().any(|f| folder_within(f, k))).map(|(k, r)| (k.clone(), r.clone())).collect();
     out.saved_locations = cat.saved_locations.clone();
+    // the flat-field maps the exported photos use (History and Versions included); a reference photo left behind
+    // is no link in the new catalog (its ids are only this catalog's)
+    for p in out.photos.values() {
+        for id in p.vignetting_map_ids() {
+            if let Some(r) = cat.vignetting_maps.get(id) {
+                let mut r = (**r).clone();
+                r.photo = r.photo.filter(|pid| keep.contains(pid));
+                out.vignetting_maps.insert(id.clone(), Arc::new(r));
+            }
+        }
+    }
     out.next_photo = cat.next_photo;
     out.next_album = cat.next_album;
     out.next_stack = cat.next_stack;
@@ -354,6 +365,23 @@ impl ImportPlan {
         for src in &self.new_photos {
             map.insert(*src, cat.alloc_photo_id());
         }
+        // the flat-field maps the incoming photos use (added after the new photos, below): the link to the
+        // reference photo becomes this library's id for that photo, or none when it doesn't come along
+        let incoming = self.new_photos.iter().chain(self.changed.iter().map(|c| &c.source));
+        let mut vignetting_calibration_ops = Vec::new();
+        let mut wanted: BTreeMap<lcc_develop::VignettingMapId, ()> = BTreeMap::new();
+        for p in incoming.filter_map(|id| other.photo(*id)) {
+            for id in p.vignetting_map_ids() {
+                wanted.insert(id.clone(), ());
+            }
+        }
+        for id in wanted.into_keys() {
+            if let Some(r) = other.vignetting_map(&id).filter(|_| cat.vignetting_map(&id).is_none()) {
+                let mut r = (**r).clone();
+                r.photo = r.photo.and_then(|p| map.get(&p).copied());
+                vignetting_calibration_ops.push(Op::AddVignettingMap { id, record: Box::new(r) });
+            }
+        }
         // masters before their virtual copies
         let mut new: Vec<&Arc<Photo>> = self.new_photos.iter().filter_map(|id| other.photo(*id)).collect();
         new.sort_by_key(|p| p.copy_of.is_some());
@@ -371,6 +399,8 @@ impl ImportPlan {
                 }
             }
         }
+        // (after the photos they may link to, before the settings that use them)
+        ops.extend(vignetting_calibration_ops);
         for c in &self.changed {
             let Some(p) = other.photo(c.source) else { continue };
             let settings = matches!(rule, ConflictRule::ReplaceSettings | ConflictRule::ReplaceSettingsAndMetadata) && c.settings_differ;

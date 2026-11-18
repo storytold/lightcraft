@@ -5,7 +5,6 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::state::Zoom;
 use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(20);
@@ -14,35 +13,6 @@ const SETTLE: Duration = Duration::from_secs(120);
 fn demo() -> Headless {
     let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     Headless::new(app, [1400.0, 900.0], 1.0)
-}
-
-/// In Compare, the photo the Edit panel and the rating keys act on is always one of the two on
-/// screen: a filmstrip click must not leave the pair showing while a third photo becomes active.
-#[test]
-fn filmstrip_click_in_compare_keeps_the_active_photo_on_screen() {
-    let mut h = demo();
-    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
-    let rating = |h: &Headless, id: u64| h.app.session.catalog.photo(lcc_catalog::PhotoId(id)).map(|p| p.rating);
-    for zoom in [Zoom::Fit, Zoom::Percent(100.0)] {
-        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
-        let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
-        assert_eq!(r["ok"], true, "{r}");
-        h.app.ui.zoom = zoom;
-        h.settle(SETTLE);
-        let target = vis[4];
-        let before = rating(&h, target);
-        let r = h.request("ui.clickWidget", json!({"id": format!("film:{target}")}), T);
-        assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
-        let (sel, cand) = h.app.ui.compare.expect("still comparing");
-        let active = h.app.session.selection.active.map(|p| p.0).expect("an active photo");
-        // a rating key must not change a photo that isn't shown
-        h.request("ui.key", json!({"key": "3"}), T);
-        if target != sel && target != cand {
-            assert_eq!(rating(&h, target), before, "zoom {zoom:?}: the hidden photo {target} was rated");
-        }
-        assert!(active == sel || active == cand, "zoom {zoom:?}: active photo {active} is not on screen (compare shows {sel} | {cand})");
-    }
 }
 
 /// A filmstrip click in Compare puts the photo into the active side: the candidate after
@@ -160,75 +130,56 @@ fn modified_filmstrip_clicks_in_compare_change_the_selection_not_the_pair() {
     assert!(h.app.ui.compare.is_some_and(|(s, c)| s == others[1] || c == others[1]));
 }
 
-/// Compare is where sharpness is judged: while a pane's render of an edit is on its way, that pane
-/// says "Rendering…" once it has lasted a moment, and stops when the render lands.
+/// One session, several steps; each step was a test of its own and says what it checks.
 #[test]
-fn a_compare_pane_says_rendering_while_its_edit_renders() {
+fn a_compare_pane_says_rendering_while_its_edit_renders_and_when_its_render_failed() {
     use std::{cell::Cell, rc::Rc};
     let pill = |h: &Headless| h.app.widgets.iter().any(|(w, _)| w.starts_with("compare:rendering:"));
     let mut h = demo();
-    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
-    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
-    let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    assert!(!pill(&h), "finished renders");
-    let open = Rc::new(Cell::new(false));
-    h.app.renderer.set_offload(Box::new(crate::headless::RenderGate::new(open.clone())));
-    h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.5}}), T);
-    for _ in 0..12 {
-        h.step();
+    // a compare pane says rendering while its edit renders
+    // Compare is where sharpness is judged: while a pane's render of an edit is on its way, that pane
+    // says "Rendering…" once it has lasted a moment, and stops when the render lands.
+    {
+        let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
+        let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert!(!pill(&h), "finished renders");
+        let open = Rc::new(Cell::new(false));
+        h.app.renderer.set_offload(Box::new(crate::headless::RenderGate::new(open.clone())));
+        h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.5}}), T);
+        for _ in 0..12 {
+            h.step();
+        }
+        assert!(!pill(&h), "not at once");
+        for _ in 0..30 {
+            h.step();
+        }
+        assert!(pill(&h), "the edited pane's render is on its way");
+        open.set(true);
+        assert!(h.step_until(SETTLE, |h| !pill(h)), "gone once the render lands");
     }
-    assert!(!pill(&h), "not at once");
-    for _ in 0..30 {
-        h.step();
+    // a compare pane says when its render failed
+    // A pane whose render fails behind its thumbnail says so, as the loupe does, instead of showing
+    // the thumbnail as if it were the photo.
+    {
+        use crate::render::Slot;
+        use std::{cell::Cell, rc::Rc};
+        let failed = |h: &Headless| h.app.widgets.iter().any(|(w, _)| w.starts_with("compare:renderFailed:"));
+        let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
+        h.request("engine.execute", json!({"command": "view.compare"}), T);
+        h.settle(SETTLE);
+        assert!(!failed(&h));
+        let open = Rc::new(Cell::new(true));
+        h.app.renderer.set_offload(Box::new(crate::headless::RenderGate::failing(open, |s| matches!(s, Slot::Compare(_)))));
+        // another photo in the second pane: its render fails, its thumbnail stays up
+        let r = h.request("engine.execute", json!({"command": "compare.set", "params": {"id": vis[2], "side": "candidate"}}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(h.step_until(SETTLE, failed), "the failure is said");
+        assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("compare:rendering:")));
     }
-    assert!(pill(&h), "the edited pane's render is on its way");
-    open.set(true);
-    assert!(h.step_until(SETTLE, |h| !pill(h)), "gone once the render lands");
-}
-
-/// A pane whose render fails behind its thumbnail says so, as the loupe does, instead of showing
-/// the thumbnail as if it were the photo.
-#[test]
-fn a_compare_pane_says_when_its_render_failed() {
-    use crate::render::Slot;
-    use std::{cell::Cell, rc::Rc};
-    let failed = |h: &Headless| h.app.widgets.iter().any(|(w, _)| w.starts_with("compare:renderFailed:"));
-    let mut h = demo();
-    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
-    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
-    h.request("engine.execute", json!({"command": "view.compare"}), T);
-    h.settle(SETTLE);
-    assert!(!failed(&h));
-    let open = Rc::new(Cell::new(true));
-    h.app.renderer.set_offload(Box::new(crate::headless::RenderGate::failing(open, |s| matches!(s, Slot::Compare(_)))));
-    // another photo in the second pane: its render fails, its thumbnail stays up
-    let r = h.request("engine.execute", json!({"command": "compare.set", "params": {"id": vis[2], "side": "candidate"}}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    assert!(h.step_until(SETTLE, failed), "the failure is said");
-    assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("compare:rendering:")));
-}
-
-/// Issue #264: the ✕ over a Survey photo (shown while the pointer is over it) takes the photo out
-/// of the survey; the others stay.
-#[test]
-fn survey_x_removes_the_photo_from_the_survey() {
-    let mut h = demo();
-    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
-    let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1], vis[2]], "active": vis[1]}}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.app.ui.view = crate::state::ViewMode::Survey;
-    h.settle(SETTLE);
-    let img = h.app.image_rect.expect("the active photo is drawn");
-    h.request("ui.move", json!({"x": img.center().x, "y": img.center().y}), T);
-    h.settle(SETTLE);
-    let r = h.request("ui.clickWidget", json!({"id": format!("surveyRemove:{}", vis[1])}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    let s = &h.app.session.selection;
-    let left: Vec<u64> = vis.iter().copied().filter(|v| s.contains(lcc_catalog::PhotoId(*v))).collect();
-    assert_eq!(left, vec![vis[0], vis[2]], "the clicked photo left the survey");
 }
 
 #[test]
@@ -340,43 +291,66 @@ fn info_panel_label_in_compare_labels_the_active_photo_and_shows_it() {
     assert_eq!(photo(&h, sel).rating, 0, "the select is not rated with it");
 }
 
-/// Survey frames its active tile in the theme's active ring, which must not be the white that
-/// vanishes on a light theme's canvas.
+/// One session, several steps; each step was a test of its own and says what it checks.
 #[test]
-fn survey_rings_the_active_tile_in_the_theme_colour() {
+fn survey_rings_the_active_tile_in_the_theme_colour_and_x_removes_a_photo() {
     use egui::epaint::Shape;
     let mut h = demo();
-    h.app.ui.settings.appearance_mode = crate::state::AppearanceMode::Light;
-    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
-    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1], vis[2]], "active": vis[1]}}), T);
-    let r = h.request("engine.execute", json!({"command": "view.survey"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    let t = crate::theme::Tokens::get(&h.view.ctx);
-    assert_ne!(t.ring_active, egui::Color32::WHITE);
-    // the filmstrip below rings its active cell the same way: only the tile counts here
-    let films: Vec<egui::Rect> = h.app.widgets.iter().filter(|(w, _)| w.starts_with("film:")).map(|(_, r)| *r).collect();
-    let rings: Vec<(f32, egui::Color32)> = h
-        .view
-        .painted_shapes()
-        .iter()
-        .filter_map(|s| match s {
-            Shape::Rect(rs)
-                if rs.stroke_kind == egui::StrokeKind::Outside
-                    && rs.stroke.color == t.ring_active
-                    && !films.iter().any(|f| f.intersects(rs.rect)) =>
-            {
-                Some((rs.stroke.width, rs.stroke.color))
-            }
-            _ => None,
-        })
-        .collect();
-    assert_eq!(rings, vec![(3.0, t.ring_active)], "one active tile, ringed once");
-    let white = h
-        .view
-        .painted_shapes()
-        .iter()
-        .filter(|s| matches!(s, Shape::Rect(rs) if rs.stroke.width == 2.0 && rs.stroke.color == egui::Color32::WHITE))
-        .count();
-    assert_eq!(white, 0, "no white 2 pt frame");
+    // survey rings the active tile in the theme colour
+    // Survey frames its active tile in the theme's active ring, which must not be the white that
+    // vanishes on a light theme's canvas.
+    {
+        h.app.ui.settings.appearance_mode = crate::state::AppearanceMode::Light;
+        let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1], vis[2]], "active": vis[1]}}), T);
+        let r = h.request("engine.execute", json!({"command": "view.survey"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        let t = crate::theme::Tokens::get(&h.view.ctx);
+        assert_ne!(t.ring_active, egui::Color32::WHITE);
+        // the filmstrip below rings its active cell the same way: only the tile counts here
+        let films: Vec<egui::Rect> = h.app.widgets.iter().filter(|(w, _)| w.starts_with("film:")).map(|(_, r)| *r).collect();
+        let rings: Vec<(f32, egui::Color32)> = h
+            .view
+            .painted_shapes()
+            .iter()
+            .filter_map(|s| match s {
+                Shape::Rect(rs)
+                    if rs.stroke_kind == egui::StrokeKind::Outside
+                        && rs.stroke.color == t.ring_active
+                        && !films.iter().any(|f| f.intersects(rs.rect)) =>
+                {
+                    Some((rs.stroke.width, rs.stroke.color))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rings, vec![(3.0, t.ring_active)], "one active tile, ringed once");
+        let white = h
+            .view
+            .painted_shapes()
+            .iter()
+            .filter(|s| matches!(s, Shape::Rect(rs) if rs.stroke.width == 2.0 && rs.stroke.color == egui::Color32::WHITE))
+            .count();
+        assert_eq!(white, 0, "no white 2 pt frame");
+    }
+    // survey x removes the photo from the survey
+    // Issue #264: the ✕ over a Survey photo (shown while the pointer is over it) takes the photo out
+    // of the survey; the others stay.
+    {
+        let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+        let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1], vis[2]], "active": vis[1]}}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.app.ui.view = crate::state::ViewMode::Survey;
+        h.settle(SETTLE);
+        let img = h.app.image_rect.expect("the active photo is drawn");
+        h.request("ui.move", json!({"x": img.center().x, "y": img.center().y}), T);
+        h.settle(SETTLE);
+        let r = h.request("ui.clickWidget", json!({"id": format!("surveyRemove:{}", vis[1])}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        let s = &h.app.session.selection;
+        let left: Vec<u64> = vis.iter().copied().filter(|v| s.contains(lcc_catalog::PhotoId(*v))).collect();
+        assert_eq!(left, vec![vis[0], vis[2]], "the clicked photo left the survey");
+    }
 }

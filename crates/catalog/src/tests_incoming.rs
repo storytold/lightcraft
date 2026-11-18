@@ -20,10 +20,12 @@ fn tiff(len: u32) -> Vec<u8> {
 }
 
 #[test]
-fn a_complete_raw_is_not_flagged() {
+fn a_complete_raw_is_not_flagged_and_a_truncated_one_is() {
     let b = tiff(1000);
     assert!(declared_end(&b).is_some());
     assert!(!declared_end_past(&b, b.len() as u64));
+    let head = &b[..500];
+    assert!(declared_end_past(head, head.len() as u64), "a truncated raw is still being written");
 }
 
 /// A complete Panasonic RW2 that gives its strip offset as 0xFFFFFFFF and the real one in tag 0x0118 is not taken for a
@@ -65,13 +67,6 @@ fn an_impossible_strip_end_never_marks_a_file_as_being_copied() {
         assert_eq!(declared_end(&b), None, "offset {offset:#x}, count {count:#x}");
         assert!(!declared_end_past(&b, b.len() as u64));
     }
-}
-
-#[test]
-fn a_truncated_raw_is_still_being_written() {
-    let b = tiff(1000);
-    let head = &b[..500];
-    assert!(declared_end_past(head, head.len() as u64));
 }
 
 #[test]

@@ -17,8 +17,8 @@ fn app() -> Headless {
     h
 }
 
-fn create_test_images(tag: &str, count: usize) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("lc-test-import-meta-{tag}-{}", std::process::id()));
+fn create_test_images(tag: &str, count: usize) -> lcc_testkit::TempDir {
+    let dir = lcc_testkit::TempDir::new(&format!("lc-test-import-meta-{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     for i in 0..count {

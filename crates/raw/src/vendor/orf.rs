@@ -945,20 +945,19 @@ mod tests {
         // the 12.0 bpp layout still decodes through its own branch
         let bytes = orf_with(8, 2, 12, vec![0u8; 8 * 2 * 12 / 8], Some(RGGB));
         assert!(crate::decode(&bytes).is_ok());
-    }
-
-    #[test]
-    fn block16_short_input_is_an_error() {
-        let mut px = [0u16; 10];
-        assert!(unpack_row_blocks16(&[0u8; 15], &mut px).is_err());
-        assert!(unpack_row_blocks16(&[0u8; 32], &mut px).is_err());
-        assert!(unpack_row_blocks16(&[], &mut px).is_err());
-        let mut odd = [0u16; 7];
-        assert!(unpack_row_blocks16(&[0u8; 16], &mut odd).is_err());
-        // a truncated file never panics
-        let bytes = orf_with(20, 4, 16, pack_blocks(&[5u16; 80]), Some(RGGB));
-        for cut in [bytes.len() - 1, bytes.len() - 40, bytes.len() / 2, 100] {
-            let _ = crate::decode(&bytes[..cut]);
+        // block16 short input is an error
+        {
+            let mut px = [0u16; 10];
+            assert!(unpack_row_blocks16(&[0u8; 15], &mut px).is_err());
+            assert!(unpack_row_blocks16(&[0u8; 32], &mut px).is_err());
+            assert!(unpack_row_blocks16(&[], &mut px).is_err());
+            let mut odd = [0u16; 7];
+            assert!(unpack_row_blocks16(&[0u8; 16], &mut odd).is_err());
+            // a truncated file never panics
+            let bytes = orf_with(20, 4, 16, pack_blocks(&[5u16; 80]), Some(RGGB));
+            for cut in [bytes.len() - 1, bytes.len() - 40, bytes.len() / 2, 100] {
+                let _ = crate::decode(&bytes[..cut]);
+            }
         }
     }
 

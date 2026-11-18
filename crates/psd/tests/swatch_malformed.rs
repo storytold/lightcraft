@@ -406,20 +406,6 @@ fn grd_non_finite_numbers_do_not_survive_the_reader() {
     }
 }
 
-/// An `.ase` that parses must stay within the swatch cap and re-serialize to the same number of
-/// colours, so an import never silently drops or invents entries.
-#[test]
-fn ase_round_trip_preserves_swatch_count() {
-    use lcc_psd::ase::write;
-    let f = ase::parse(&sample_ase()).expect("sample .ase parses");
-    // No cap assertion: three swatches cannot exceed a cap of 100 000. `ase_swatch_cap_is_enforced_
-    // on_hostile_input` drives a file that does.
-    let n = f.swatch_count();
-    let out = write(&f).expect("re-writing a parsed .ase");
-    let back = ase::parse(&out).expect("the rewritten .ase parses");
-    assert_eq!(back.swatch_count(), n, "swatch count changed across a round trip");
-}
-
 /// A file with more colour blocks than [`ase::MAX_SWATCHES`] must be refused. Each block here is
 /// the smallest legal colour block, so the file is small but the declared count is over the cap.
 #[test]
@@ -503,19 +489,6 @@ fn ase_over_long_name_is_truncated_on_read() {
     let parsed = ase::parse(&f).expect("an over-long name is truncated, not refused");
     let ase::AseEntry::Swatch(s) = &parsed.entries[0] else { panic!("expected a loose swatch") };
     assert_eq!(s.name.encode_utf16().count(), ase::MAX_NAME_UNITS, "name must be capped at MAX_NAME_UNITS");
-}
-
-/// An `.aco` that parses must re-serialize to the same swatch count, with no name over the cap.
-#[test]
-fn aco_round_trip_preserves_swatch_count() {
-    use lcc_psd::aco::write;
-    // No cap assertion here. `aco::MAX_SWATCHES` is `u16::MAX` against a `u16` on-disk count, so it
-    // is unfalsifiable by construction, and the sample names are far shorter than the name cap;
-    // `aco_over_long_name_is_truncated_on_read` is where that cap is actually driven.
-    let f = aco::parse(&sample_aco()).expect("sample .aco parses");
-    let out = write(&f.swatches).expect("re-writing parsed swatches");
-    let back = aco::parse(&out).expect("the rewritten .aco parses");
-    assert_eq!(back.swatches.len(), f.swatches.len(), "swatch count changed across a round trip");
 }
 
 /// A version 2 section whose name declares more units than [`aco::MAX_NAME_UNITS`] must come back

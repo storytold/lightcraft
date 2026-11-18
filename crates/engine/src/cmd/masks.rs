@@ -1218,7 +1218,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Mask Adjustments",
             [],
             None,
-            "{id?, values: {exposure, contrast, highlights, shadows, whites, blacks, temp, tint, texture, clarity, dehaze, hue, saturation, sharpness, noise, moire, defringe, color_hue, color_sat, grade_{shadows,midtones,highlights,global}_{hue,sat,lum}, amount}}",
+            "{id?, values: {exposure, contrast, highlights, shadows, whites, blacks, temp, tint, texture, clarity, dehaze, hue (degrees −180..180), saturation, sharpness, noise, moire, defringe, color_hue, color_sat, grade_{shadows,midtones,highlights,global}_{hue,sat,lum}, amount}}",
             has_active,
             |s, p| {
                 let vals = p.get("values").cloned().ok_or_else(|| bad("mask.adjust", "missing values"))?;
@@ -1878,7 +1878,6 @@ pub(crate) fn clamp_local(mut a: LocalAdjustments) -> LocalAdjustments {
         &mut a.texture,
         &mut a.clarity,
         &mut a.dehaze,
-        &mut a.hue,
         &mut a.saturation,
         &mut a.sharpness,
         &mut a.noise,
@@ -1887,6 +1886,7 @@ pub(crate) fn clamp_local(mut a: LocalAdjustments) -> LocalAdjustments {
     ] {
         c(v, -100.0, 100.0);
     }
+    c(&mut a.hue, -lcc_develop::LOCAL_HUE_MAX, lcc_develop::LOCAL_HUE_MAX);
     c(&mut a.color_hue, 0.0, 360.0);
     c(&mut a.color_sat, 0.0, 100.0);
     for v in [&mut a.grade_shadows_hue, &mut a.grade_midtones_hue, &mut a.grade_highlights_hue, &mut a.grade_global_hue] {
@@ -1977,6 +1977,14 @@ mod tests_color_range {
 #[cfg(test)]
 mod pick_tests {
     use super::*;
+
+    // issue #1145: the mask Hue clamps to ±180°, hostile values never pass through
+    #[test]
+    fn mask_hue_clamps_to_half_a_turn() {
+        for (bad, want) in [(f64::NAN, 0.0), (f64::INFINITY, 0.0), (1e300, 180.0), (-500.0, -180.0), (-180.0, -180.0), (120.0, 120.0)] {
+            assert_eq!(clamp_local(LocalAdjustments { hue: bad, ..Default::default() }).hue, want, "{bad}");
+        }
+    }
 
     #[test]
     fn an_area_gives_its_main_colours_biggest_first() {

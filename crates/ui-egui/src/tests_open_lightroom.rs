@@ -24,7 +24,7 @@ fn names(dir: &std::path::Path) -> Vec<std::ffi::OsString> {
 
 #[test]
 fn open_library_on_a_lightroom_catalog_offers_its_import() {
-    let dir = std::env::temp_dir().join(format!("lc-ui-openlrcat-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lc-ui-openlrcat");
     let _ = std::fs::remove_dir_all(&dir);
     let lib = dir.join(lcc_brand::LIBRARY_DEFAULT);
     let lr = dir.join("Lightroom");
@@ -107,6 +107,9 @@ fn open_library_on_a_lightroom_catalog_offers_its_import() {
     assert_eq!(last["path"], json!(lrcat), "{last}");
     assert_eq!(h.app.session.library.as_ref().map(|l| l.dir.clone()), Some(lib.clone()));
     assert_eq!(names(&lr), before, "the catalog is only read");
+    // the app's background work (thumbnails, cache records) writes into the library: let it end
+    // before the library goes
+    crate::tests_lightroom_destination::wait_for_background(&mut h);
     drop(h);
-    let _ = std::fs::remove_dir_all(&dir);
+    lcc_testkit::remove_dir_settled(&dir);
 }

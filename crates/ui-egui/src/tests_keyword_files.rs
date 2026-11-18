@@ -21,8 +21,8 @@ fn app() -> Headless {
     h
 }
 
-fn temp_dir(tag: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("lc-ui-keyword-files-{tag}-{}", std::process::id()));
+fn temp_dir(tag: &str) -> lcc_testkit::TempDir {
+    let d = lcc_testkit::TempDir::new(&format!("lc-ui-keyword-files-{tag}"));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d

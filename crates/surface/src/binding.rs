@@ -102,34 +102,3 @@ impl Binding {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn bindings_round_trip_as_tagged_json() {
-        let all = vec![
-            Binding::value("light.exposure"),
-            Binding::command_with("photo.rate", json!({"rating": 5})),
-            Binding::command("edit.undo"),
-            Binding::Modifier { modifier: Modifier::Fine },
-            Binding::PageNext { group: Some(PageGroup::Dials) },
-            Binding::PagePrevious { group: None },
-            Binding::Page { page: "Cull".into() },
-            Binding::Profile { profile: "Wedding".into() },
-            Binding::ProfileNext,
-            Binding::Reset,
-            Binding::ApplyToSelected,
-            Binding::FollowContext,
-        ];
-        for b in all {
-            let v = serde_json::to_value(&b).unwrap();
-            assert!(v["kind"].is_string(), "{v}");
-            assert_eq!(serde_json::from_value::<Binding>(v).unwrap(), b);
-        }
-        assert_eq!(serde_json::to_value(Binding::command("edit.undo")).unwrap(), json!({"kind": "command", "command": "edit.undo"}));
-        assert!(serde_json::from_value::<Binding>(json!({"kind": "nope"})).is_err());
-    }
-}

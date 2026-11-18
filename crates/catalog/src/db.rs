@@ -17,6 +17,7 @@
 //! | `collections` | album id → album JSON (albums, smart albums, folders of albums) |
 //! | `stacks` | stack id → stack JSON |
 //! | `previews` | photo id → [`PreviewEntry`] JSON |
+//! | `vignetting_maps` | vignetting map id → [`crate::VignettingMapRecord`] JSON (only added to; a map can be withdrawn, format 18) |
 //! | `remote_identity` | (photo id, service, account) → [`RemoteIdentity`] JSON |
 //! | `remote_identity_by_remote` | (service, account, remote id) → photo id |
 //! | `folders`, `keywords`, `idx_camera`, `idx_captured_day` | value → photo ids (multimap): secondary indexes (rating and flag have too few values for an index to beat a scan) |
@@ -44,6 +45,8 @@ const SETTINGS: TableDefinition<u128, &[u8]> = TableDefinition::new("develop_set
 const COLLECTIONS: TableDefinition<u64, &[u8]> = TableDefinition::new("collections");
 const STACKS: TableDefinition<u64, &[u8]> = TableDefinition::new("stacks");
 const PREVIEWS: TableDefinition<u64, &[u8]> = TableDefinition::new("previews");
+/// Flat-field maps by id (format 18; absent from older stores until their first checkpoint).
+const VIGNETTING_CALIBRATION: TableDefinition<&str, &[u8]> = TableDefinition::new("vignetting_maps");
 const REMOTE: TableDefinition<(u64, &str, &str), &[u8]> = TableDefinition::new("remote_identity");
 const REMOTE_BY_REMOTE: TableDefinition<(&str, &str, &str), u64> = TableDefinition::new("remote_identity_by_remote");
 const FOLDERS: MultimapTableDefinition<&str, u64> = MultimapTableDefinition::new("folders");
@@ -160,6 +163,9 @@ struct Baseline {
     stacks: BTreeMap<StackId, Stack>,
     previews: BTreeMap<PhotoId, PreviewEntry>,
     remote: RemoteTable,
+    /// The vignetting maps written (the table only grows; a record changes when it is withdrawn or put in use again,
+    /// which [`Arc::ptr_eq`] tells: an op replaces the record it changes).
+    vignetting_maps: BTreeMap<lcc_develop::VignettingMapId, Arc<crate::VignettingMapRecord>>,
     head: Head,
 }
 
@@ -450,7 +456,8 @@ impl CatalogDb {
 
         // settings first: photos refer to them
         let st = r.open_table(SETTINGS).map_err(dberr)?;
-        let mut raw: Vec<(u128, Vec<u8>)> = Vec::with_capacity(st.len().map_err(dberr)? as usize);
+        // (the count a store gives is only a hint: a damaged one can say billions, and reserving that much aborts)
+        let mut raw: Vec<(u128, Vec<u8>)> = Vec::with_capacity((st.len().map_err(dberr)? as usize).min(1 << 16));
         for e in st.iter().map_err(dberr)? {
             let (k, v) = e.map_err(dberr)?;
             raw.push((k.value(), v.value().to_vec()));
@@ -539,6 +546,27 @@ impl CatalogDb {
                 Err(_) => bad += 1,
             }
         }
+        // (a store from before format 18 has no such table)
+        match r.open_table(VIGNETTING_CALIBRATION) {
+            Ok(t) => {
+                for e in t.iter().map_err(dberr)? {
+                    let (k, v) = e.map_err(dberr)?;
+                    let row =
+                        serde_json::from_slice::<serde_json::Value>(v.value()).ok().and_then(|j| crate::vignetting_maps::read_row(k.value(), &j));
+                    match row {
+                        Some((id, rec)) => {
+                            cat.vignetting_maps.insert(id, Arc::new(rec));
+                        }
+                        None => {
+                            log::warn!("catalog: vignetting map {} is damaged and was left out", k.value().get(..8).unwrap_or(k.value()));
+                            bad += 1;
+                        }
+                    }
+                }
+            }
+            Err(redb::TableError::TableDoesNotExist(_)) => {}
+            Err(e) => return Err(dberr(e)),
+        }
         let rt = r.open_table(REMOTE).map_err(dberr)?;
         let mut links = Vec::new();
         for e in rt.iter().map_err(dberr)? {
@@ -556,6 +584,7 @@ impl CatalogDb {
             stacks: cat.stacks.clone(),
             previews: cat.previews.clone(),
             remote: cat.remote.clone(),
+            vignetting_maps: cat.vignetting_maps.clone(),
             head: Head::of(&cat),
         };
         Ok((cat, seq, bad))
@@ -628,6 +657,7 @@ impl CatalogDb {
                 txn.delete_table(t).map_err(dberr)?;
             }
             txn.delete_table(SETTINGS).map_err(dberr)?;
+            txn.delete_table(VIGNETTING_CALIBRATION).map_err(dberr)?;
             txn.delete_table(REMOTE).map_err(dberr)?;
             txn.delete_table(REMOTE_BY_REMOTE).map_err(dberr)?;
             for t in STR_INDEXES {
@@ -694,6 +724,15 @@ impl CatalogDb {
             sync_map(&mut txn.open_table(COLLECTIONS).map_err(dberr)?, &self.base.albums, &cat.albums, |k| k.0, full)?;
             sync_map(&mut txn.open_table(STACKS).map_err(dberr)?, &self.base.stacks, &cat.stacks, |k| k.0, full)?;
             sync_map(&mut txn.open_table(PREVIEWS).map_err(dberr)?, &self.base.previews, &cat.previews, |k| k.0, full)?;
+            // vignetting maps: added or changed (withdrawn, in use again), never removed (the table only grows)
+            let mut ff = txn.open_table(VIGNETTING_CALIBRATION).map_err(dberr)?;
+            for (id, rec) in &cat.vignetting_maps {
+                if full || !self.base.vignetting_maps.get(id).is_some_and(|b| Arc::ptr_eq(b, rec)) {
+                    let j = serde_json::to_vec(rec.as_ref()).map_err(|e| CatalogError::Io(e.to_string()))?;
+                    ff.insert(id.as_str(), j.as_slice()).map_err(dberr)?;
+                }
+            }
+            drop(ff);
 
             let mut rt = txn.open_table(REMOTE).map_err(dberr)?;
             let mut rr = txn.open_table(REMOTE_BY_REMOTE).map_err(dberr)?;
@@ -734,6 +773,7 @@ impl CatalogDb {
         self.base.stacks.clone_from(&cat.stacks);
         self.base.previews.clone_from(&cat.previews);
         self.base.remote.clone_from(&cat.remote);
+        self.base.vignetting_maps.clone_from(&cat.vignetting_maps);
         self.base.head = Head::of(cat);
         self.last = stats;
         Ok(stats)

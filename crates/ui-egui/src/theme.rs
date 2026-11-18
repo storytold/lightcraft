@@ -311,7 +311,7 @@ pub fn install_fonts(ctx: &egui::Context) {
 
 /// Install the browser's separately downloaded Chinese face alongside the embedded faces.
 pub fn install_fonts_with_chinese(ctx: &egui::Context, chinese: Option<&Arc<FontData>>) {
-    let base = font_definitions_with_chinese(lcc_engine::CRAFT_FONTS, chinese);
+    let base = font_definitions_with_chinese(lcc_engine::craft_fonts(), chinese);
     let size = ui_font_size(ctx);
     ctx.set_fonts(scaled_fonts(&base, size));
     if ctx
@@ -415,7 +415,7 @@ fn add_system_fallbacks(fonts: &mut FontDefinitions) {
 /// The font families used by this app instance, including the browser's separately loaded face.
 pub fn font_credits(chinese_loaded: bool) -> String {
     let mut families = vec!["Inter"];
-    for f in lcc_engine::CRAFT_FONTS {
+    for f in lcc_engine::craft_fonts() {
         if !families.contains(&f.family) {
             families.push(f.family);
         }
@@ -935,32 +935,27 @@ mod tests {
         }
     }
 
-    /// #736: the release input must carry Thai, not silently skip the check with an older pin.
-    /// Exercise the Thai characters of the reported folder name through every egui family.
-    #[test]
-    fn thai_folder_name_has_glyphs_in_every_ui_family() {
-        folder_name_has_glyphs_in_every_ui_family("Thai", "Studio34 ถ่ายภาพงานแต่งงาน");
-    }
-
-    /// #1915: Hebrew folder names drew as boxes. The release input carries Noto Sans Hebrew, and
-    /// every egui family reaches it (letters, final forms, maqaf, geresh and gershayim, niqqud).
+    /// #736, #1915: Thai and Hebrew folder names drew as boxes. The release input carries their
+    /// faces (not silently skipped with an older pin), and every egui family reaches them: the
+    /// reported Thai folder name; Hebrew letters, final forms, maqaf, geresh and gershayim, niqqud.
     /// No ₪ here: Inter and Hack draw it before the Hebrew face, and Hack also holds monospace's
     /// replacement glyph, where `has_glyph` answers false (the engine test checks ₪ in the face).
     #[test]
-    fn hebrew_folder_name_has_glyphs_in_every_ui_family() {
+    fn thai_and_hebrew_folder_names_have_glyphs_in_every_ui_family() {
+        folder_name_has_glyphs_in_every_ui_family("Thai", "Studio34 ถ่ายภาพงานแต่งงาน");
         folder_name_has_glyphs_in_every_ui_family("Hebr", "תמונות טנזניה 2024 ךםןףץ ־ ׳ ״ שָׁלוֹם");
     }
 
     /// The craft-fonts face for `script` is in every UI family and draws the non-ASCII
     /// characters of `name` in each of them.
     fn folder_name_has_glyphs_in_every_ui_family(script: &str, name: &str) {
-        if lcc_engine::CRAFT_FONTS.is_empty() {
+        if lcc_engine::craft_fonts().is_empty() {
             lcc_testkit::skip!(Fonts, "built without CRAFT_FONTS_DIR: no craft-fonts to check");
             return;
         }
-        let face = lcc_engine::CRAFT_FONTS.iter().find(|f| f.covers(script)).unwrap_or_else(|| panic!("font input includes {script}"));
+        let face = lcc_engine::craft_fonts().iter().find(|f| f.covers(script)).unwrap_or_else(|| panic!("font input includes {script}"));
         set_language(Locale::En);
-        let definitions = font_definitions(lcc_engine::CRAFT_FONTS);
+        let definitions = font_definitions(lcc_engine::craft_fonts());
         let face_name = craft_font_name(face);
         assert!(definitions.font_data.contains_key(&face_name));
         // (The strong family has the face's heavier twin instead when it is a variable font.)
@@ -1029,7 +1024,7 @@ mod tests {
             scripts: &["Jpan", "Latn"],
             bytes: include_bytes!("../../../assets/fonts/Inter-Regular.ttf"),
         }];
-        let embedded = lcc_engine::CRAFT_FONTS.iter().find(|font| font.family == "Noto Sans CJK SC" && font.style == "Regular");
+        let embedded = lcc_engine::craft_fonts().iter().find(|font| font.family == "Noto Sans CJK SC" && font.style == "Regular");
         let fallback: &'static [u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
         let source = embedded.map_or(fallback, |font| font.bytes);
         let chinese = Arc::new(FontData::from_static(source));
@@ -1095,7 +1090,7 @@ mod tests {
 
     /// The craft-fonts face for Arabic, when it is a variable font with a weight axis.
     fn variable_arabic_face() -> Option<&'static lcc_engine::CraftFont> {
-        let face = lcc_engine::CRAFT_FONTS.iter().find(|font| font.covers("Arab"))?;
+        let face = lcc_engine::craft_fonts().iter().find(|font| font.covers("Arab"))?;
         FontData::from_static(face.bytes).variation_axes().iter().any(|axis| axis.tag.to_be_bytes() == *b"wght").then_some(face)
     }
 
@@ -1110,8 +1105,8 @@ mod tests {
         }
         set_language(Locale::En);
         // When an Arabic word is laid out regular and strong at the same size
-        let (regular_width, regular_ink) = width_and_ink(font_definitions(lcc_engine::CRAFT_FONTS), ARABIC_WORD, FontFamily::Proportional);
-        let (strong_width, strong_ink) = width_and_ink(font_definitions(lcc_engine::CRAFT_FONTS), ARABIC_WORD, semibold_family());
+        let (regular_width, regular_ink) = width_and_ink(font_definitions(lcc_engine::craft_fonts()), ARABIC_WORD, FontFamily::Proportional);
+        let (strong_width, strong_ink) = width_and_ink(font_definitions(lcc_engine::craft_fonts()), ARABIC_WORD, semibold_family());
         eprintln!("{ARABIC_WORD}: regular {regular_width} px, ink {regular_ink}; strong {strong_width} px, ink {strong_ink}");
         // Then the strong one is wider and puts down more ink
         assert!(strong_width > regular_width, "strong Arabic is wider than regular: strong {strong_width} px, regular {regular_width} px");
@@ -1129,7 +1124,7 @@ mod tests {
         };
         set_language(Locale::En);
         // When the UI builds its fonts
-        let definitions = font_definitions(lcc_engine::CRAFT_FONTS);
+        let definitions = font_definitions(lcc_engine::craft_fonts());
         // Then the regular Arabic face is the font file untouched, and the only Arabic face of
         // the regular and monospace families
         let name = craft_font_name(arabic);

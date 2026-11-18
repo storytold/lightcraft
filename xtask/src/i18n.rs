@@ -258,37 +258,39 @@ mod tests {
     }
 
     #[test]
-    fn check_names_the_file_and_the_first_key_out_of_place() {
-        let root = Root::new("check-order", &[("de.json", SORTED), ("fr.json", UNSORTED)], &[]);
-        let err = check(&root.0).unwrap_err();
-        assert!(err.contains("locales/fork/fr.json: \"a\" is out of order"), "the error should name the file and key: {err}");
-        assert!(!err.contains("de.json"), "a sorted catalog should not be reported: {err}");
-    }
-
-    #[test]
-    fn check_passes_sorted_catalogs_and_refuses_another_format() {
-        let root = Root::new("check-format", &[("de.json", SORTED), ("de-formats.json", "{}\n")], &[]);
-        assert_eq!(check(&root.0), Ok(()));
-        let crlf = Root::new("check-crlf", &[("de.json", &SORTED.replace('\n', "\r\n"))], &[]);
-        assert_eq!(check(&crlf.0), Ok(()), "a Windows checkout's line endings should pass");
-        for (test, text) in [("indent", "{\n    \"a\": \"1\"\n}\n"), ("newline", "{\n  \"a\": \"1\"\n}"), ("escape", "{\n  \"a\": \"\\u00fc\"\n}\n")]
+    fn check_reports_order_format_and_repeated_keys() {
+        // check names the file and the first key out of place
         {
-            let root = Root::new(test, &[("de.json", text)], &[]);
+            let root = Root::new("check-order", &[("de.json", SORTED), ("fr.json", UNSORTED)], &[]);
             let err = check(&root.0).unwrap_err();
-            assert!(err.contains("de.json: in order, but not in the catalog format"), "{test}: {err}");
+            assert!(err.contains("locales/fork/fr.json: \"a\" is out of order"), "the error should name the file and key: {err}");
+            assert!(!err.contains("de.json"), "a sorted catalog should not be reported: {err}");
         }
-    }
-
-    #[test]
-    fn check_and_sort_report_a_repeated_key_and_change_nothing() {
-        let dup = "{\n  \"b\": \"2\",\n  \"b\": \"3\"\n}\n";
-        let root = Root::new("dup", &[("de.json", dup), ("fr.json", UNSORTED)], &[]);
-        let err = check(&root.0).unwrap_err();
-        assert!(err.contains("locales/fork/de.json: the key \"b\" appears twice"), "{err}");
-        let err = sort(&root.0).unwrap_err();
-        assert!(err.contains("locales/fork/de.json: the key \"b\" appears twice"), "{err}");
-        assert_eq!(root.fork("de.json"), dup, "a broken catalog should be left as it is");
-        assert_eq!(root.fork("fr.json"), UNSORTED, "no catalog should be written while one is broken");
+        // check passes sorted catalogs and refuses another format
+        {
+            let root = Root::new("check-format", &[("de.json", SORTED), ("de-formats.json", "{}\n")], &[]);
+            assert_eq!(check(&root.0), Ok(()));
+            let crlf = Root::new("check-crlf", &[("de.json", &SORTED.replace('\n', "\r\n"))], &[]);
+            assert_eq!(check(&crlf.0), Ok(()), "a Windows checkout's line endings should pass");
+            for (test, text) in
+                [("indent", "{\n    \"a\": \"1\"\n}\n"), ("newline", "{\n  \"a\": \"1\"\n}"), ("escape", "{\n  \"a\": \"\\u00fc\"\n}\n")]
+            {
+                let root = Root::new(test, &[("de.json", text)], &[]);
+                let err = check(&root.0).unwrap_err();
+                assert!(err.contains("de.json: in order, but not in the catalog format"), "{test}: {err}");
+            }
+        }
+        // check and sort report a repeated key and change nothing
+        {
+            let dup = "{\n  \"b\": \"2\",\n  \"b\": \"3\"\n}\n";
+            let root = Root::new("dup", &[("de.json", dup), ("fr.json", UNSORTED)], &[]);
+            let err = check(&root.0).unwrap_err();
+            assert!(err.contains("locales/fork/de.json: the key \"b\" appears twice"), "{err}");
+            let err = sort(&root.0).unwrap_err();
+            assert!(err.contains("locales/fork/de.json: the key \"b\" appears twice"), "{err}");
+            assert_eq!(root.fork("de.json"), dup, "a broken catalog should be left as it is");
+            assert_eq!(root.fork("fr.json"), UNSORTED, "no catalog should be written while one is broken");
+        }
     }
 
     #[test]

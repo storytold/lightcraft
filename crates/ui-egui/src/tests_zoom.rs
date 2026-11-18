@@ -41,33 +41,23 @@ fn size_of(h: &Headless) -> (f32, f32) {
     (p.width as f32, p.height as f32)
 }
 
-// Given an uncropped photo, 100 % is its pixel size
+// 100 % is the photo's pixel size; with a crop to half the width and a third of the height, the cropped
+// pixels; rotated a quarter turn, its pixel size with the axes swapped
 #[test]
-fn an_uncropped_photo_at_100_is_its_pixel_size() {
+fn a_photo_at_100_is_its_pixel_size_after_the_crop_and_the_rotation() {
     let mut h = detail();
     let (nw, nh) = size_of(&h);
     let (w, hh) = at_100(&mut h);
-    assert!((w - nw).abs() < 1.5 && (hh - nh).abs() < 1.5, "{w}×{hh} for {nw}×{nh}");
-}
-
-// Given a crop to half the width and a third of the height, 100 % is the cropped pixels
-#[test]
-fn a_cropped_photo_at_100_is_the_crops_pixel_size() {
-    let mut h = detail();
-    let (nw, nh) = size_of(&h);
+    assert!((w - nw).abs() < 1.5 && (hh - nh).abs() < 1.5, "uncropped: {w}×{hh} for {nw}×{nh}");
     edit(&mut h, |s| s.crop.geometry.rect = lcc_geom::Rect { x0: 0.25, y0: 0.2, x1: 0.75, y1: 0.2 + 1.0 / 3.0 });
     let (w, hh) = at_100(&mut h);
     assert!((w - nw / 2.0).abs() < 1.5 && (hh - nh / 3.0).abs() < 1.5, "{w}×{hh} for a crop of {}×{}", nw / 2.0, nh / 3.0);
-}
-
-// Given a photo rotated a quarter turn, 100 % is its pixel size with the axes swapped
-#[test]
-fn a_rotated_photo_at_100_is_its_pixel_size_swapped() {
-    let mut h = detail();
-    let (nw, nh) = size_of(&h);
-    edit(&mut h, |s| s.orientation = lcc_geom::Orientation::Rotate90);
+    edit(&mut h, |s| {
+        s.crop.geometry.rect = lcc_geom::Rect { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 };
+        s.orientation = lcc_geom::Orientation::Rotate90;
+    });
     let (w, hh) = at_100(&mut h);
-    assert!((w - nh).abs() < 1.5 && (hh - nw).abs() < 1.5, "{w}×{hh} for {nh}×{nw}");
+    assert!((w - nh).abs() < 1.5 && (hh - nw).abs() < 1.5, "rotated: {w}×{hh} for {nh}×{nw}");
 }
 
 /// Zoomed in, side by side and stacked Before / After views each stay in their pane: the margins
@@ -112,7 +102,7 @@ fn zoomed_before_after_views_stay_in_their_panes() {
 /// The "Before" label (\ or the Before view) at 100 %: the photo's corner is off screen, and the
 /// label used to leave with it (issue #2267). It now sits at the canvas' corner, in view.
 #[test]
-fn zoomed_in_the_before_label_stays_in_view() {
+fn zoomed_in_the_before_label_stays_in_view_and_clear_of_the_info_overlay() {
     use crate::state::{BeforeAfter, Zoom};
     let mut h = detail();
     h.app.ui.before_after = BeforeAfter::Original;
@@ -135,16 +125,8 @@ fn zoomed_in_the_before_label_stays_in_view() {
     let zoomed = label(&mut h);
     assert!(canvas.contains_rect(zoomed), "the label stays in view: {zoomed:?} in {canvas:?}");
     assert_eq!(zoomed.min, canvas.min + egui::vec2(8.0, 8.0));
-}
-
-/// With the info overlay on, zoomed in, the Before label sits below the overlay's lines instead
-/// of under them (both live in the canvas' top-left corner).
-#[test]
-fn zoomed_in_the_before_label_keeps_clear_of_the_info_overlay() {
-    use crate::state::{BeforeAfter, InfoOverlay, Zoom};
-    let mut h = detail();
-    h.app.ui.before_after = BeforeAfter::Original;
-    h.app.ui.info_overlay = InfoOverlay::Exposure;
+    // with the info overlay on, the label sits below the overlay's lines instead of under them
+    h.app.ui.info_overlay = crate::state::InfoOverlay::Exposure;
     h.app.ui.zoom = Zoom::Percent(100.0);
     h.app.ui.pan = (0.3, 0.4);
     h.settle(SETTLE);

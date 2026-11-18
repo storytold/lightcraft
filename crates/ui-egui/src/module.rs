@@ -257,8 +257,6 @@ pub struct ModuleLayout {
     pub toolbar: bool,
     /// The right panel open last in this module.
     pub right: RightPanel,
-    /// Develop's presets column.
-    pub presets: bool,
     /// Solo mode: opening one section closes the others.
     pub solo: bool,
     /// The right group's panel order (tab strip order); empty = the module's declared order.
@@ -277,7 +275,6 @@ impl Default for ModuleLayout {
             auto_hide: EdgeFlags::default(),
             toolbar: true,
             right: RightPanel::None,
-            presets: false,
             solo: false,
             order: Vec::new(),
             hidden: Vec::new(),
@@ -651,7 +648,6 @@ fn capture(app: &LccApp) -> ModuleLayout {
         auto_hide: u.auto_hide,
         toolbar: u.toolbar,
         right,
-        presets: u.presets,
         solo: u.single_panel,
         order: u.panel_order.clone(),
         hidden: u.hidden_panels.clone(),
@@ -673,7 +669,6 @@ fn apply(app: &mut LccApp, l: &ModuleLayout, full: bool) {
     u.panel_order = l.order.clone();
     u.hidden_panels = l.hidden.clone();
     if full {
-        u.presets = l.presets;
         u.right = l.right;
     }
 }
@@ -730,18 +725,26 @@ pub fn sync(app: &mut LccApp) {
 
 /// `module.switch {module}`.
 pub fn switch(app: &mut LccApp, to: ModuleId) -> Result<Value, String> {
+    // a module switch asks for the module's panels: it leaves the full-screen preview (which drew
+    // the photo alone over whatever module and view were up), even for the module already in use
+    app.leave_fullscreen_preview();
     if app.ui.module == to {
         return Ok(json!({"module": to}));
     }
-    // The Browse tab is not a module: a module switch while it is up (the Modern Develop pill, a
-    // shortcut, an agent) leaves it first, as the Classic module bar does — the tab's sheet must
-    // never end up drawn under another module's chrome. With a browsed photo active, Develop
-    // means "Develop without Import": the Library tab's Develop module on the photo in place.
+    // The Browse tab is not a module: a module switch while it is up (the module bar, the Modern
+    // Develop pill, a shortcut, an agent) leaves it first — the tab's sheet must never end up drawn
+    // under another module's chrome. With a browsed photo chosen, Develop, Print, Export and
+    // Slideshow act on it without importing it: the module in the Library tab on the photo in place
+    // (on the library's own photo when the file is in the library already).
     if crate::import_tab::showing(app) {
-        if to == ModuleId::Develop && app.session.source == lcc_engine::LibrarySource::Folder && app.session.active().is_some() {
-            return crate::import_tab::develop_without_import(app);
+        if crate::import_tab::acts_in_place(to) && app.session.source == lcc_engine::LibrarySource::Folder && app.session.active().is_some() {
+            return crate::import_tab::open_without_import(app, to);
         }
         let _ = crate::import_tab::switch(app, crate::import_tab::Tab::Library);
+    } else if app.ui.import_develop && to != ModuleId::Library && !crate::import_tab::acts_in_place(to) {
+        // from a browsed photo opened without import to a module about the library (Map, Book,
+        // Web): the library, never a bounce back to the Browse tab
+        crate::import_tab::end_without_import(app);
     }
     match to {
         ModuleId::Develop => {
@@ -803,8 +806,24 @@ fn edge_shown(app: &LccApp, e: Edge) -> bool {
         Edge::Top => app.ui.module_bar,
         Edge::Bottom => app.ui.filmstrip,
         Edge::Left => app.ui.left_panel,
-        Edge::Right => app.ui.right_edge,
+        // the right side has two switches — the edge (Tab, Window ▸ Panels) and the top bar's
+        // fold button (F8) — and is on screen only with both on, in every module
+        Edge::Right => app.ui.right_edge && !app.ui.right_collapsed,
     }
+}
+
+/// Fold the right side away or bring it back (the top bar's button, F8): bringing it back also
+/// undoes Tab / Window ▸ Panels having hidden the edge, so the button never ends up doing nothing.
+/// Returns whether the side is shown now.
+pub fn toggle_right(app: &mut LccApp) -> bool {
+    let on = !edge_shown(app, Edge::Right);
+    if on {
+        set_edge(app, Edge::Right, true);
+    } else {
+        app.ui.right_collapsed = true;
+        app.ui.peek.set(Edge::Right, false);
+    }
+    on
 }
 
 fn set_edge(app: &mut LccApp, e: Edge, on: bool) {
@@ -812,7 +831,13 @@ fn set_edge(app: &mut LccApp, e: Edge, on: bool) {
         Edge::Top => app.ui.module_bar = on,
         Edge::Bottom => app.ui.filmstrip = on,
         Edge::Left => app.ui.left_panel = on,
-        Edge::Right => app.ui.right_edge = on,
+        Edge::Right => {
+            app.ui.right_edge = on;
+            // showing the edge unfolds it: one of the two switches must not keep it hidden
+            if on {
+                app.ui.right_collapsed = false;
+            }
+        }
     }
     app.ui.peek.set(e, false);
 }
@@ -1066,7 +1091,7 @@ fn run_inner(app: &mut LccApp, id: &str, p: &Value) -> Result<Value, String> {
         }
         "panel.sides" => {
             // Tab: both side panels; shows them when either is hidden
-            let on = bool_param(p, "show").unwrap_or(!(app.ui.left_panel || app.ui.right_edge));
+            let on = bool_param(p, "show").unwrap_or(!(edge_shown(app, Edge::Left) || edge_shown(app, Edge::Right)));
             set_edge(app, Edge::Left, on);
             set_edge(app, Edge::Right, on);
             Ok(edges_json(app))
@@ -1142,6 +1167,7 @@ fn run_inner(app: &mut LccApp, id: &str, p: &Value) -> Result<Value, String> {
             "hiddenModules": app.ui.hidden_modules,
         })),
         "view.loupe" => {
+            app.leave_fullscreen_preview();
             if app.ui.module != ModuleId::Library {
                 switch(app, ModuleId::Library)?;
             }
@@ -1398,6 +1424,24 @@ pub fn module_bar(app: &mut LccApp, ui: &mut egui::Ui) {
                 plate_menu(app, ui, plate);
                 plate
             };
+            // module picker, right-aligned
+            // Import is the first entry (Settings ▸ Import ▸ Import as a tab); it is a tab, not a module
+            let tab = crate::import_tab::enabled(app);
+            let importing = crate::import_tab::showing(app);
+            let shown: Vec<Option<ModuleId>> =
+                tab.then_some(None).into_iter().chain(ModuleId::ALL.into_iter().filter(|m| !app.ui.hidden_modules.contains(m)).map(Some)).collect();
+            let label_of = |m: &Option<ModuleId>| m.map_or("Import", |m| m.label());
+            let sizes: Vec<(Option<ModuleId>, f32)> = shown
+                .iter()
+                .map(|m| (*m, ui.painter().layout_no_wrap(crate::i18n::tr(label_of(m)).to_string(), t.font(15.0), t.text).size().x))
+                .collect();
+            let sep = 22.0;
+            let total: f32 = sizes.iter().map(|(_, w)| w).sum::<f32>() + sep * sizes.len().saturating_sub(1) as f32;
+            let mut x = (full.right() - total).max(plate.right() + 40.0);
+            // the quick settings bar's stretch: from the plate (or the activity area's bars) to the picker;
+            // hovering it fades the bar in and dismisses the status line's message
+            let quick_zone = crate::quick_bar::zone(full, plate.right(), x);
+            let quick_hover = crate::quick_bar::hover(app, ui, quick_zone);
             // the status line beside the plate (imports, exports, builds report here), while no task runs
             if ip.show_status && !busy && !app.ui.status.is_empty() {
                 let w = (full.width() * 0.3).max(120.0);
@@ -1423,20 +1467,8 @@ pub fn module_bar(app: &mut LccApp, ui: &mut egui::Ui) {
                     ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((STATUS_SECS - (now - since)).max(0.05)));
                 }
             }
-            // module picker, right-aligned
-            // Import is the first entry (Settings ▸ Import ▸ Import as a tab); it is a tab, not a module
-            let tab = crate::import_tab::enabled(app);
-            let importing = crate::import_tab::showing(app);
-            let shown: Vec<Option<ModuleId>> =
-                tab.then_some(None).into_iter().chain(ModuleId::ALL.into_iter().filter(|m| !app.ui.hidden_modules.contains(m)).map(Some)).collect();
-            let label_of = |m: &Option<ModuleId>| m.map_or("Import", |m| m.label());
-            let sizes: Vec<(Option<ModuleId>, f32)> = shown
-                .iter()
-                .map(|m| (*m, ui.painter().layout_no_wrap(crate::i18n::tr(label_of(m)).to_string(), t.font(15.0), t.text).size().x))
-                .collect();
-            let sep = 22.0;
-            let total: f32 = sizes.iter().map(|(_, w)| w).sum::<f32>() + sep * sizes.len().saturating_sub(1) as f32;
-            let mut x = (full.right() - total).max(plate.right() + 40.0);
+            // the quick settings bar is drawn after the status line, over the stretch between them
+            crate::quick_bar::show(app, ui, quick_zone, quick_hover);
             let mut switch_to = None;
             for (i, (m, w)) in sizes.iter().enumerate() {
                 if i > 0 {
@@ -1468,11 +1500,11 @@ pub fn module_bar(app: &mut LccApp, ui: &mut egui::Ui) {
             if let Some(m) = switch_to {
                 let result = match m {
                     None => app.run("view.importTab", json!({})),
-                    Some(m) => {
-                        // leaving Import for a module: back to the library first
-                        let back = if importing { app.run("view.libraryTab", json!({})) } else { Ok(json!({})) };
-                        back.and_then(|_| app.run(m.command(), json!({})))
-                    }
+                    // Library from Import: the Library tab (Library is the module the Browse tab shows)
+                    Some(ModuleId::Library) if importing => app.run("view.libraryTab", json!({})),
+                    // another module leaves the tab itself ([`switch`]): Develop, Print, Export… open on
+                    // the browsed selection without importing it
+                    Some(m) => app.run(m.command(), json!({})),
                 };
                 if let Err(e) = result {
                     app.ui.status = e;

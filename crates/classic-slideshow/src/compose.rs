@@ -411,23 +411,25 @@ mod tests {
     }
 
     #[test]
-    fn fit_keeps_the_photo_inside_the_cell() {
-        let s = Settings::default();
-        let g = geometry(1000, 500, 300, 200, &s);
-        assert!(g.photo.x0 >= g.cell.x0 - 0.01 && g.photo.x1 <= g.cell.x1 + 0.01);
-        assert!((g.photo.h() - g.cell.h()).abs() < 0.01);
-        let mut f = s.clone();
-        f.options.zoom_to_fill = true;
-        let g = geometry(1000, 500, 300, 200, &f);
-        assert!((g.photo.w() - g.cell.w()).abs() < 0.01 && g.photo.h() > g.cell.h());
-    }
-
-    #[test]
-    fn aspect_letterboxes_the_slide() {
-        let mut s = Settings::default();
-        s.layout.aspect = crate::settings::Aspect::Classic4x3;
-        let g = geometry(1600, 900, 300, 200, &s);
-        assert!((g.slide.w() - 1200.0).abs() < 0.01);
+    fn geometry_fits_the_photo_and_letterboxes_the_slide() {
+        // fit keeps the photo inside the cell
+        {
+            let s = Settings::default();
+            let g = geometry(1000, 500, 300, 200, &s);
+            assert!(g.photo.x0 >= g.cell.x0 - 0.01 && g.photo.x1 <= g.cell.x1 + 0.01);
+            assert!((g.photo.h() - g.cell.h()).abs() < 0.01);
+            let mut f = s.clone();
+            f.options.zoom_to_fill = true;
+            let g = geometry(1000, 500, 300, 200, &f);
+            assert!((g.photo.w() - g.cell.w()).abs() < 0.01 && g.photo.h() > g.cell.h());
+        }
+        // aspect letterboxes the slide
+        {
+            let mut s = Settings::default();
+            s.layout.aspect = crate::settings::Aspect::Classic4x3;
+            let g = geometry(1600, 900, 300, 200, &s);
+            assert!((g.slide.w() - 1200.0).abs() < 0.01);
+        }
     }
 
     #[test]

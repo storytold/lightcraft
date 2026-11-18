@@ -64,6 +64,11 @@ fn the_keyword_list_shows_every_keyword() {
     ask(&mut h, "ui.clickWidget", json!({"id": "keywordRowToggle:Events"}));
     assert!(has(&h, "keywordRow:Events|Weddings"));
     assert!(has(&h, "keywordCount:aurora"), "photo counts are shown");
+    // typing in the filter box keeps the keywords whose name holds the text, with their parents
+    ask(&mut h, "ui.clickWidget", json!({"id": "field:keywordFilter"}));
+    ask(&mut h, "ui.text", json!({"text": "wed"}));
+    let rows: Vec<String> = h.app.widgets.iter().filter_map(|(w, _)| w.strip_prefix("keywordRow:").map(str::to_string)).collect();
+    assert_eq!(rows, ["Events", "Events|Weddings"]);
 }
 
 /// The tick box gives the keyword to every selected photo, then takes it away; with only some of
@@ -96,17 +101,6 @@ fn a_keyword_below_gives_its_parent_a_dash() {
     ask(&mut h, "ui.clickWidget", json!({"id": "keywordCheck:Events"}));
     assert!(ids.iter().all(|id| keywords_of(&h, *id).iter().any(|k| k == "Events")), "the dash added the parent");
     assert!(ids.iter().all(|id| keywords_of(&h, *id).iter().any(|k| k == "Events|Weddings")), "the child stays");
-}
-
-/// Typing in the filter box keeps the keywords whose name holds the text, with their parents.
-#[test]
-fn the_filter_box_narrows_the_list() {
-    let (mut h, _) = keywords_panel();
-    run(&mut h, "keyword.create", json!({"name": "Weddings", "parent": "Events"}));
-    ask(&mut h, "ui.clickWidget", json!({"id": "field:keywordFilter"}));
-    ask(&mut h, "ui.text", json!({"text": "wed"}));
-    let rows: Vec<String> = h.app.widgets.iter().filter_map(|(w, _)| w.strip_prefix("keywordRow:").map(str::to_string)).collect();
-    assert_eq!(rows, ["Events", "Events|Weddings"]);
 }
 
 /// The arrow on a row shows the photos with that keyword.

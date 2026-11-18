@@ -43,13 +43,12 @@ fn live_connect_list_and_download() {
     }
     let thumb = thumb.unwrap();
     assert!(!thumb.is_empty());
-    let dir = std::env::temp_dir().join(format!("lcc-immich-live-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = lcc_testkit::TempDir::new("lcc-immich-live");
     let dest = dir.join(&a.original_file_name);
     c.download_original(&a.id, &dest, None).unwrap();
     let sha = lcc_hash::sha1_file(&dest).unwrap();
     assert_eq!(sha.to_base64(), a.checksum, "the original's SHA-1 is Immich's checksum");
-    let _ = std::fs::remove_dir_all(&dir);
+    drop(dir);
     // a bad key is refused with BadKey
     let bad = Client::new(&url, Secret::new("not-a-key"), &ServerOptions::default()).unwrap();
     assert_eq!(bad.me().unwrap_err(), ImmichError::BadKey);
@@ -118,9 +117,9 @@ fn live_publish_renames_its_album() {
         let c = Client::new(&url, Secret::new(key.expose()), &ServerOptions::standard()).unwrap();
         lcc_immich::publish::ImmichPublish::new(c, Default::default(), name, "live", Default::default()).with_album_state(state.to_path_buf())
     };
-    let dir = std::env::temp_dir().join(format!("lcc-immich-live-pub-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    let state = dir.join("svc-1-1.album");
+    // the state file's folder doesn't exist yet
+    let tmp = lcc_testkit::TempDir::new("lcc-immich-live-pub");
+    let state = tmp.join("state").join("svc-1-1.album");
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let (first, second) = (format!("live pub {stamp}"), format!("Trips / live pub {stamp}"));
     // a seeded fixture: already on the server, so publishing finds it by checksum
@@ -134,7 +133,6 @@ fn live_publish_renames_its_album() {
     let all = c.albums().unwrap();
     assert!(all.iter().any(|a| a.id == album && a.album_name == second), "renamed in place");
     assert!(!all.iter().any(|a| a.album_name == first));
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// RT.C1/C3 against the real server: stack the fixtures, read the stack back from both

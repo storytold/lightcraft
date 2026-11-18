@@ -1,3 +1,0 @@
-## Performance
-
-- **Culling stays responsive while photos are prepared in the background:** the background build made every photo's render jobs on the interface thread when it started and at every folder change (1.2-1.5 s frozen each time); its jobs are now made a few photos a frame, nearest the user first, and the preparation renders on its own lowest-priority thread pools. The loupe waits up to 1 s for a preview the build is already making instead of decoding the same raw twice (its look-ahead skips the photo being built), its first picture of a raw is the small camera JPEG before the full-size render (slowest first picture 1,338 ms to 384 ms), and holding a step key makes thumbnails 30 photos ahead instead of 5. Thanks @OneSlips. PR #1051.

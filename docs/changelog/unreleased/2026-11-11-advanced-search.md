@@ -1,3 +1,0 @@
-## Features
-
-- **Advanced Search (issue #846):** a dedicated panel (Library > Advanced Search…, Ctrl/Cmd+Shift+F) with granular structured field filtering — global word matching, file/collection/keywords, item properties (dimensions, rating, color label, aspect), caption/title, photograph information (camera, lens, focal length, ISO, shutter speed, aperture), location, audio/video duration, and faces — whose results the grid shows as a filtered view. Codec and frame-rate filtering are declared but not supported yet. Enter Full Screen moves from Cmd/Ctrl+Shift+F to F11 (and the macOS system key Cmd+Ctrl+F).

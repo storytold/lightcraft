@@ -35,10 +35,11 @@ fn export_hooks_run_off_the_ui_thread_with_an_activity_row() {
     // install into memory, never into the real user's settings folder (a failed run left the test
     // plug-in installed there)
     lcc_engine::cmd::plugins::use_in_memory_manager();
-    let dir = std::env::temp_dir().join(format!("plugin-worker-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("plugin-worker");
     std::fs::create_dir_all(&dir).unwrap();
     let wasm = dir.join("slow.wasm");
     std::fs::write(&wasm, slow_hook("test.slowhook", 60_000_000)).unwrap();
+    lcc_engine::scene_disk::use_build_dir();
     let app = lcc_ui_egui::LccApp::new(lcc_engine::Session::with_demo(), lcc_ui_egui::Services { png: None, ..Default::default() });
     let mut h = lcc_ui_egui::headless::Headless::new(app, [1000.0, 700.0], 1.0);
     h.app.session.execute("plugin.install", &json!({"path": wasm.display().to_string()})).unwrap();

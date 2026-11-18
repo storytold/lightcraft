@@ -334,41 +334,43 @@ pub fn hex(c: [u8; 3]) -> String {
 mod tests {
     use super::*;
 
-    /// A linked-margins template with unequal margins survives a JSON round trip: all four
-    /// margin keys are an explicit state, not one margin repeated (upstream #3443).
     #[test]
-    fn merge_restores_unequal_linked_margins() {
-        let d = SlideSettings::default();
-        let st = SlideSettings { link_margins: true, margin_left: 0.1, margin_right: 0.0, margin_top: 0.3, margin_bottom: 0.0, ..d.clone() };
-        assert_eq!(d.merged(&st.to_json()).unwrap(), st);
-    }
-
-    #[test]
-    fn merge_validates_links_margins_and_round_trips() {
-        let d = SlideSettings::default();
-        assert!(d.is_plain(), "the default slide is the plain slideshow");
-        let s = d.merged(&json!({"marginLeft": 0.1})).unwrap();
-        assert_eq!((s.margin_left, s.margin_right, s.margin_top, s.margin_bottom), (0.1, 0.1, 0.1, 0.1), "linked: all four");
-        let s = d.merged(&json!({"linkMargins": false, "marginTop": 0.2})).unwrap();
-        assert_eq!((s.margin_left, s.margin_top), (0.0, 0.2), "unlinked: one");
-        let s = s.merged(&json!({"margins": 0.05})).unwrap();
-        assert_eq!((s.margin_left, s.margin_bottom), (0.05, 0.05));
-        let s = d
-            .merged(&json!({"strokeBorder": true, "strokeColor": "#FF8000", "washColor": [1, 2, 3], "aspect": "16:9", "backgroundImage": 7}))
-            .unwrap();
-        assert_eq!(s.stroke_color, [255, 128, 0]);
-        assert_eq!(s.wash_color, [1, 2, 3]);
-        assert_eq!(s.aspect, Aspect::Wide);
-        assert_eq!(s.background_image, Some(7));
-        assert!(!s.is_plain());
-        // the JSON form reads back as the same settings
-        assert_eq!(d.merged(&s.to_json()).unwrap(), s);
-        // serde (prefs.json) round trip, and missing keys take the defaults
-        let back: SlideSettings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
-        assert_eq!(back, s);
-        let partial: SlideSettings = serde_json::from_str(r#"{"marginTop": 0.3}"#).unwrap();
-        assert_eq!(partial, SlideSettings { margin_top: 0.3, ..d.clone() });
-        assert_eq!(d.merged(&json!({"backgroundImage": null})).unwrap().background_image, None);
+    fn merge_links_margins_validates_and_round_trips() {
+        // merge restores unequal linked margins
+        // A linked-margins template with unequal margins survives a JSON round trip: all four
+        // margin keys are an explicit state, not one margin repeated (upstream #3443).
+        {
+            let d = SlideSettings::default();
+            let st = SlideSettings { link_margins: true, margin_left: 0.1, margin_right: 0.0, margin_top: 0.3, margin_bottom: 0.0, ..d.clone() };
+            assert_eq!(d.merged(&st.to_json()).unwrap(), st);
+        }
+        // merge validates links margins and round trips
+        {
+            let d = SlideSettings::default();
+            assert!(d.is_plain(), "the default slide is the plain slideshow");
+            let s = d.merged(&json!({"marginLeft": 0.1})).unwrap();
+            assert_eq!((s.margin_left, s.margin_right, s.margin_top, s.margin_bottom), (0.1, 0.1, 0.1, 0.1), "linked: all four");
+            let s = d.merged(&json!({"linkMargins": false, "marginTop": 0.2})).unwrap();
+            assert_eq!((s.margin_left, s.margin_top), (0.0, 0.2), "unlinked: one");
+            let s = s.merged(&json!({"margins": 0.05})).unwrap();
+            assert_eq!((s.margin_left, s.margin_bottom), (0.05, 0.05));
+            let s = d
+                .merged(&json!({"strokeBorder": true, "strokeColor": "#FF8000", "washColor": [1, 2, 3], "aspect": "16:9", "backgroundImage": 7}))
+                .unwrap();
+            assert_eq!(s.stroke_color, [255, 128, 0]);
+            assert_eq!(s.wash_color, [1, 2, 3]);
+            assert_eq!(s.aspect, Aspect::Wide);
+            assert_eq!(s.background_image, Some(7));
+            assert!(!s.is_plain());
+            // the JSON form reads back as the same settings
+            assert_eq!(d.merged(&s.to_json()).unwrap(), s);
+            // serde (prefs.json) round trip, and missing keys take the defaults
+            let back: SlideSettings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+            assert_eq!(back, s);
+            let partial: SlideSettings = serde_json::from_str(r#"{"marginTop": 0.3}"#).unwrap();
+            assert_eq!(partial, SlideSettings { margin_top: 0.3, ..d.clone() });
+            assert_eq!(d.merged(&json!({"backgroundImage": null})).unwrap().background_image, None);
+        }
     }
 
     #[test]

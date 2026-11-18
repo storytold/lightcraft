@@ -592,118 +592,112 @@ mod tests {
     use crate::Session;
     use crate::remote::MemorySecrets;
 
-    fn temp_dir(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("lcc-web-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
+    /// The test's folder in Temp, removed when the test ends.
+    fn temp_dir(tag: &str) -> lcc_testkit::TempDir {
+        lcc_testkit::TempDir::new(&format!("lcc-web-{tag}"))
     }
 
-    fn session(tag: &str) -> (Session, std::path::PathBuf) {
+    /// A demo session keeping its connections in a fresh folder. The folder comes first: bound
+    /// first, it is dropped after the session.
+    fn session(tag: &str) -> (lcc_testkit::TempDir, Session) {
         let dir = temp_dir(tag);
         let mut s = Session::with_demo();
         s.remote.connections_path = Some(dir.join("connections.json"));
         s.set_secret_store(Arc::new(MemorySecrets::default()));
-        (s, dir)
+        (dir, s)
     }
 
     #[test]
-    fn preview_lists_pages_and_images_for_the_visible_photos() {
-        let (mut s, _) = session("preview");
-        let n = s.visible().len();
-        let v = s.execute("web.preview", &json!({"settings": {"template": "square", "site": {"title": "Demo <b>"}}})).unwrap();
-        assert_eq!(v["photos"].as_array().unwrap().len(), n);
-        assert_eq!(v["images"].as_array().unwrap().len(), n * 2);
-        let index = v["files"].as_array().unwrap().iter().find(|f| f["path"] == "index.html").unwrap();
-        assert!(index["text"].as_str().unwrap().contains("Demo &lt;b&gt;"));
-        assert!(s.execute("web.preview", &json!({"settings": 3})).is_err());
-        assert!(s.execute("web.preview", &json!({"gallery": "missing"})).is_err());
-    }
-
-    #[test]
-    fn export_writes_a_complete_site() {
-        let (mut s, dir) = session("export");
-        let ids: Vec<u64> = s.visible().iter().take(2).map(|i| i.0).collect();
-        let out = dir.join("site");
-        let v = s
-            .execute(
-                "web.export",
-                &json!({"dir": out.to_string_lossy(), "ids": ids, "settings": {"output": {"largeSize": 400, "watermark": "© me"}, "appearance": {"thumbSize": 100}}}),
+    fn preview_lists_pages_and_saved_galleries_round_trip_without_secrets() {
+        // preview lists pages and images for the visible photos
+        {
+            let (_dir, mut s) = session("preview");
+            let n = s.visible().len();
+            let v = s.execute("web.preview", &json!({"settings": {"template": "square", "site": {"title": "Demo <b>"}}})).unwrap();
+            assert_eq!(v["photos"].as_array().unwrap().len(), n);
+            assert_eq!(v["images"].as_array().unwrap().len(), n * 2);
+            let index = v["files"].as_array().unwrap().iter().find(|f| f["path"] == "index.html").unwrap();
+            assert!(index["text"].as_str().unwrap().contains("Demo &lt;b&gt;"));
+            assert!(s.execute("web.preview", &json!({"settings": 3})).is_err());
+            assert!(s.execute("web.preview", &json!({"gallery": "missing"})).is_err());
+        }
+        // saved galleries and servers round trip without secrets
+        {
+            let (dir, mut s) = session("saved");
+            s.execute("web.saveGallery", &json!({"name": "Trip", "settings": {"site": {"title": "Trip"}}})).unwrap();
+            let g = s.execute("web.galleries", &json!({})).unwrap();
+            assert_eq!(g[0]["settings"]["site"]["title"], "Trip");
+            let v = s.execute("web.preview", &json!({"gallery": "trip", "settings": {"template": "track"}})).unwrap();
+            assert_eq!(v["settings"]["site"]["title"], "Trip");
+            assert_eq!(v["settings"]["template"], "track");
+            s.execute(
+                "web.saveServer",
+                &json!({"server": {"name": "Home", "host": "example.org", "user": "ann", "path": "/www"}, "password": "hunter2"}),
             )
             .unwrap();
-        assert_eq!(v["photos"], 2);
-        for f in ["index.html", "assets/gallery.css", "assets/gallery.js", "content/0002.html", "images/large/0001.jpg", "images/thumb/0002.jpg"] {
-            assert!(out.join(f).is_file(), "{f}");
+            let file = std::fs::read_to_string(dir.join("web.json")).unwrap();
+            assert!(file.contains("example.org") && !file.contains("hunter2"));
+            assert!(!s.execute("web.servers", &json!({})).unwrap().to_string().contains("hunter2"));
+            s.execute("web.deleteServer", &json!({"name": "home"})).unwrap();
+            s.execute("web.deleteGallery", &json!({"name": "Trip"})).unwrap();
+            assert!(s.execute("web.deleteGallery", &json!({"name": "Trip"})).is_err());
+            assert!(s.execute("web.saveServer", &json!({"server": {"name": "x"}})).is_err());
         }
-        let jpg = std::fs::read(out.join("images/large/0001.jpg")).unwrap();
-        assert_eq!(&jpg[..2], &[0xff, 0xd8]);
-        assert!(s.execute("web.export", &json!({})).is_err());
     }
 
     #[test]
-    fn saved_galleries_and_servers_round_trip_without_secrets() {
-        let (mut s, dir) = session("saved");
-        s.execute("web.saveGallery", &json!({"name": "Trip", "settings": {"site": {"title": "Trip"}}})).unwrap();
-        let g = s.execute("web.galleries", &json!({})).unwrap();
-        assert_eq!(g[0]["settings"]["site"]["title"], "Trip");
-        let v = s.execute("web.preview", &json!({"gallery": "trip", "settings": {"template": "track"}})).unwrap();
-        assert_eq!(v["settings"]["site"]["title"], "Trip");
-        assert_eq!(v["settings"]["template"], "track");
-        s.execute(
-            "web.saveServer",
-            &json!({"server": {"name": "Home", "host": "example.org", "user": "ann", "path": "/www"}, "password": "hunter2"}),
-        )
-        .unwrap();
-        let file = std::fs::read_to_string(dir.join("web.json")).unwrap();
-        assert!(file.contains("example.org") && !file.contains("hunter2"));
-        assert!(!s.execute("web.servers", &json!({})).unwrap().to_string().contains("hunter2"));
-        s.execute("web.deleteServer", &json!({"name": "home"})).unwrap();
-        s.execute("web.deleteGallery", &json!({"name": "Trip"})).unwrap();
-        assert!(s.execute("web.deleteGallery", &json!({"name": "Trip"})).is_err());
-        assert!(s.execute("web.saveServer", &json!({"server": {"name": "x"}})).is_err());
-    }
-
-    #[test]
-    fn prepared_export_runs_off_the_session_and_share_needs_an_account() {
-        let (mut s, dir) = session("prepared");
-        let ids: Vec<u64> = s.visible().iter().take(1).map(|i| i.0).collect();
-        let out = dir.join("site");
-        let job = super::prepare(&mut s, "web.export", &json!({"dir": out.to_string_lossy(), "ids": ids})).unwrap();
-        assert_eq!(job.steps(), 3, "thumbnail + large + write");
-        let mut seen = Vec::new();
-        let v = std::thread::spawn(move || {
-            job.run(&mut |d, _| {
-                seen.push(d);
-                true
+    fn export_writes_a_complete_site_also_off_the_session() {
+        // export writes a complete site
+        {
+            let (dir, mut s) = session("export");
+            let ids: Vec<u64> = s.visible().iter().take(2).map(|i| i.0).collect();
+            let out = dir.join("site");
+            let v = s
+                .execute(
+                    "web.export",
+                    &json!({"dir": out.to_string_lossy(), "ids": ids, "settings": {"output": {"largeSize": 400, "watermark": "© me"}, "appearance": {"thumbSize": 100}}}),
+                )
+                .unwrap();
+            assert_eq!(v["photos"], 2);
+            for f in ["index.html", "assets/gallery.css", "assets/gallery.js", "content/0002.html", "images/large/0001.jpg", "images/thumb/0002.jpg"]
+            {
+                assert!(out.join(f).is_file(), "{f}");
+            }
+            let jpg = std::fs::read(out.join("images/large/0001.jpg")).unwrap();
+            assert_eq!(&jpg[..2], &[0xff, 0xd8]);
+            assert!(s.execute("web.export", &json!({})).is_err());
+        }
+        // prepared export runs off the session and share needs an account
+        {
+            let (dir, mut s) = session("prepared");
+            let ids: Vec<u64> = s.visible().iter().take(1).map(|i| i.0).collect();
+            let out = dir.join("site");
+            let job = super::prepare(&mut s, "web.export", &json!({"dir": out.to_string_lossy(), "ids": ids})).unwrap();
+            assert_eq!(job.steps(), 3, "thumbnail + large + write");
+            let mut seen = Vec::new();
+            let v = std::thread::spawn(move || {
+                job.run(&mut |d, _| {
+                    seen.push(d);
+                    true
+                })
             })
-        })
-        .join()
-        .unwrap()
-        .unwrap();
-        assert_eq!(v["photos"], 1);
-        assert!(out.join("index.html").is_file());
-        let job = super::prepare(&mut s, "web.export", &json!({"dir": out.to_string_lossy(), "ids": ids})).unwrap();
-        assert!(job.run(&mut |_, _| false).is_err(), "cancelled");
-        let r = s.execute("web.shareImmich", &json!({"ids": ids}));
-        assert!(r.unwrap_err().to_string().contains("no Immich account"));
-        assert!(s.execute("web.shareImmich", &json!({"ids": ids, "expiresDays": 0})).is_err());
-        assert!(super::prepare(&mut s, "web.nope", &json!({})).is_err());
-    }
-
-    #[test]
-    fn upload_to_an_unreachable_server_is_an_error() {
-        let (mut s, _) = session("upload");
-        // (one photo: the gallery is rendered before the server is tried)
-        let id = s.catalog.photos().next().unwrap().id.0;
-        let server = json!({"host": "127.0.0.1", "port": 1, "user": "u", "path": "g"});
-        let r = s.execute("web.upload", &json!({"server": server, "password": "x", "ids": [id]}));
-        assert!(r.is_err());
-        assert!(s.execute("web.upload", &json!({"server": {"host": "127.0.0.1", "user": "u"}})).is_err(), "no password");
+            .join()
+            .unwrap()
+            .unwrap();
+            assert_eq!(v["photos"], 1);
+            assert!(out.join("index.html").is_file());
+            let job = super::prepare(&mut s, "web.export", &json!({"dir": out.to_string_lossy(), "ids": ids})).unwrap();
+            assert!(job.run(&mut |_, _| false).is_err(), "cancelled");
+            let r = s.execute("web.shareImmich", &json!({"ids": ids}));
+            assert!(r.unwrap_err().to_string().contains("no Immich account"));
+            assert!(s.execute("web.shareImmich", &json!({"ids": ids, "expiresDays": 0})).is_err());
+            assert!(super::prepare(&mut s, "web.nope", &json!({})).is_err());
+        }
     }
 
     #[test]
     fn a_server_that_cannot_be_reached_fails_before_anything_renders() {
-        let (mut s, _) = session("upload-first");
+        let (_dir, mut s) = session("upload-first");
         let p = json!({"server": {"host": "127.0.0.1", "port": 1, "user": "u", "path": "g"}, "password": "x"});
         let job = super::prepare(&mut s, "web.upload", &p).unwrap();
         assert!(job.steps() > 1, "images to render");
@@ -716,11 +710,12 @@ mod tests {
             .unwrap_err();
         assert!(e.contains("cannot connect"), "{e}");
         assert_eq!(asked, 0, "rendering started");
+        assert!(s.execute("web.upload", &json!({"server": {"host": "127.0.0.1", "user": "u"}})).is_err(), "no password");
     }
 
     #[test]
     fn galleries_are_catalog_creations_and_old_ones_move_in() {
-        let (mut s, dir) = session("migrate");
+        let (dir, mut s) = session("migrate");
         let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
         let old = json!({"galleries": [{"name": "Old", "settings": {"site": {"title": "Old"}}, "ids": ids}], "servers": [{"name": "Home", "host": "example.org", "user": "ann", "path": "/www"}]});
         std::fs::write(dir.join("web.json"), old.to_string()).unwrap();

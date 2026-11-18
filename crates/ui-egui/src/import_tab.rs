@@ -200,9 +200,9 @@ pub fn keep_in_step(app: &mut LccApp) {
         return;
     }
     let browsing = app.session.source == LibrarySource::Folder;
-    // "Develop without Import": the Library tab shows the Develop module on the browsed folder's
-    // active photo, the folder view (and so the Browse tab) waiting until it ends
-    let developing = app.ui.import_develop && app.ui.module == crate::module::ModuleId::Develop;
+    // "Develop without Import" (and Print, Export, Slideshow): the Library tab shows the module on
+    // the browsed folder's photos, the folder view (and so the Browse tab) waiting until it ends
+    let developing = app.ui.import_develop && acts_in_place(app.ui.module);
     if !browsing || !developing {
         app.ui.import_develop = browsing && developing;
     }
@@ -282,18 +282,64 @@ pub fn start(app: &mut LccApp, p: &Value) -> Result<Value, String> {
 /// Browse tab (or any change of source) brings it back. The edits go to the photo's XMP sidecar
 /// like any photo added in place; the library catalog stays untouched.
 pub fn develop_without_import(app: &mut LccApp) -> Result<Value, String> {
+    open_without_import(app, crate::module::ModuleId::Develop)
+}
+
+/// The modules that work on browsed photos where they are, without importing them: Develop, Print,
+/// Export and Slideshow act on the photo (or the selection) itself. Map, Book and Web are about the
+/// library (its places, its collections), so they leave the folder for the library.
+pub fn acts_in_place(m: crate::module::ModuleId) -> bool {
+    use crate::module::ModuleId;
+    matches!(m, ModuleId::Develop | ModuleId::Print | ModuleId::Export | ModuleId::Slideshow)
+}
+
+/// Open module `to` on the Import tab's selection without importing it (Develop, Print, Export…
+/// from the Browse tab: the module bar, a shortcut, an agent). The browsed photos stay browsed:
+/// the Library tab shows the module with the folder view kept on, and going back to Library (or
+/// to the Browse tab) brings the folder back. When everything selected is in the library already
+/// (Show All shows those files too), the module opens on the library's own photos instead.
+pub fn open_without_import(app: &mut LccApp, to: crate::module::ModuleId) -> Result<Value, String> {
     if app.session.source != LibrarySource::Folder {
         return Err(crate::i18n::tr("Choose a folder or card to browse first").to_string());
     }
-    if app.session.active().is_none() {
+    let Some(active) = app.session.active() else {
         return Err(crate::i18n::tr("Select a photo to develop").to_string());
+    };
+    let selected = app.session.selected();
+    let in_library = !selected.is_empty() && selected.iter().all(|id| app.session.catalog.photo(*id).is_some_and(|p| p.in_library()));
+    if in_library {
+        // the library's own photos: the Library tab on the whole library, the same selection
+        app.ui.import_develop = false;
+        app.ui.tab = Tab::Library;
+        leave(app);
+        app.ui.library_source = None;
+        app.session.source = LibrarySource::All;
+        app.session.refresh_view();
+        app.ui.import_was_browsing = false;
+        let ids: Vec<u64> = selected.iter().map(|id| id.0).collect();
+        app.run("library.select", json!({"ids": ids, "active": active.0}))?;
+        crate::module::switch(app, to)?;
+        return Ok(json!({"tab": "library", "module": to.key(), "photo": app.session.active(), "inLibrary": true}));
     }
     app.ui.import_develop = true;
     app.ui.import_was_browsing = true;
     leave(app);
     app.ui.tab = Tab::Library;
-    crate::module::switch(app, crate::module::ModuleId::Develop)?;
-    Ok(json!({"tab": "library", "module": "develop", "photo": app.session.active()}))
+    crate::module::switch(app, to)?;
+    Ok(json!({"tab": "library", "module": to.key(), "photo": app.session.active(), "inLibrary": false}))
+}
+
+/// Leave browsed photos opened without import (see [`open_without_import`]) for the library: a module
+/// that is about the library (Map, Book, Web) was chosen from one of them.
+pub(crate) fn end_without_import(app: &mut LccApp) {
+    app.ui.import_develop = false;
+    app.ui.import_was_browsing = false;
+    if app.session.source == LibrarySource::Folder {
+        let back = app.ui.library_source.take().filter(|s| *s != LibrarySource::Folder).unwrap_or(LibrarySource::All);
+        app.session.source = back;
+        app.session.refresh_view();
+        app.session.keep_active_in_view();
+    }
 }
 
 /// Apply an import preset to the Import tab's settings (`import.usePreset {name}`).
@@ -590,10 +636,18 @@ pub(crate) fn test_drive() -> std::path::PathBuf {
     std::env::temp_dir().join(format!("app-test-drive-{}", std::process::id()))
 }
 
+/// A card mounted inside the test drive, as `/run/media/me/CARD` lies inside `/`: listed as a drive of its own too.
+pub(crate) fn test_card() -> std::path::PathBuf {
+    test_drive().join("Card")
+}
+
 pub(crate) fn list_drives(_: &str) -> Vec<(String, String)> {
     // tests never touch this machine's drives (mapped network drives can be slow to answer)
     if cfg!(test) {
-        return vec![("Test drive".into(), test_drive().to_string_lossy().to_string())];
+        return vec![
+            ("Test drive".into(), test_drive().to_string_lossy().to_string()),
+            ("Test card".into(), test_card().to_string_lossy().to_string()),
+        ];
     }
     let mut v: Vec<(String, String)> = Vec::new();
     if cfg!(windows) {
@@ -656,7 +710,9 @@ fn sources(app: &mut LccApp, ui: &mut egui::Ui) {
             });
         }
         for (label, path) in &drives {
-            crate::panels::left::folder_tree(app, ui, "drives", label, path, 0.0, current.as_deref(), true, false);
+            // each drive its own tree (`place` = the drive): a card lies inside the disk it is mounted on too,
+            // and its two rows must not share an arrow (issue #1234)
+            crate::panels::left::folder_tree(app, ui, &format!("drives:{path}"), label, path, 0.0, current.as_deref(), true, false);
         }
         heading(ui, "Folders");
         crate::panels::left::local_body(app, ui);
@@ -720,7 +776,9 @@ fn bar(app: &mut LccApp, ui: &mut egui::Ui, wide: bool, pane: &mut Pane) {
     // where: the folder's name, all of it in a tooltip
     let folder = app.session.browse.as_ref().filter(|_| browsing).map(|b| b.path.clone());
     let name = folder.as_ref().map(|f| std::path::Path::new(f).file_name().map_or_else(|| f.clone(), |n| n.to_string_lossy().to_string()));
-    let import_label = crate::i18n::tr_format!("Import {n} into {library}", n = n, library = library_name(app));
+    // the button says what it does; how many and where to are in its tooltip
+    let import_label = crate::i18n::tr("Import").to_string();
+    let import_tip = crate::i18n::tr_format!("Import {n} into {library}", n = n, library = library_name(app));
     let layout = bar_layout(&row, &import_label, name.as_deref(), folder.as_deref(), wide);
     let mut room = layout.room.max(40.0);
     // the folders above it as a breadcrumb (OneSlips LR-IMP-WINDOW 6e4fa44d0): each opens, those that don't fit
@@ -747,7 +805,7 @@ fn bar(app: &mut LccApp, ui: &mut egui::Ui, wide: bool, pane: &mut Pane) {
         // here, without importing it — the Develop module in the Library tab, edits to the
         // sidecar, the catalog untouched
         if browsing
-            && crate::button::Button::new(develop_label(layout.develop_long))
+            && crate::button::Button::new(crate::i18n::tr("Develop"))
                 .enabled(app.session.active().is_some())
                 .widget("importDevelop")
                 .show(ui)
@@ -759,7 +817,7 @@ fn bar(app: &mut LccApp, ui: &mut egui::Ui, wide: bool, pane: &mut Pane) {
                 Err(e) => app.toast(ui.ctx(), e),
             }
         }
-        if crate::button::Button::new(&import_label).primary().enabled(n > 0).widget("importGo").show(ui).clicked() {
+        if crate::button::Button::new(&import_label).primary().enabled(n > 0).widget("importGo").show(ui).on_hover_text(&import_tip).clicked() {
             match app.run("import.start", json!({})) {
                 Ok(v) => {
                     let n = v["importing"].as_u64().unwrap_or(0);
@@ -768,27 +826,20 @@ fn bar(app: &mut LccApp, ui: &mut egui::Ui, wide: bool, pane: &mut Pane) {
                 Err(e) => app.toast(ui.ctx(), e),
             }
         }
-        if layout.view {
-            view_segments(app, ui);
-        }
         if layout.show {
             show_segments(app, ui);
         }
         if layout.take {
             take_segments(app, ui);
         }
+        if layout.sub {
+            subfolders_check(app, ui);
+        }
     });
 }
 
-const VIEW_LABELS: [&str; 3] = ["Photo Grid", "Grid", "Detail"];
 const SHOW_LABELS: [&str; 2] = ["Show All", "Show Not Imported"];
 const TAKE_LABELS: [&str; 3] = ["Picks", "Selected", "All"];
-
-/// The Develop without Import button's label: its full name, or "Develop" on a crowded bar (the
-/// full name in its tooltip).
-fn develop_label(long: bool) -> &'static str {
-    crate::i18n::tr(if long { "Develop without Import" } else { "Develop" })
-}
 
 /// What the import bar shows, measured so it fits its row: the right-hand group in its fullest
 /// form that leaves the browsed folder's own name whole, and the room left for the folder.
@@ -796,20 +847,18 @@ fn develop_label(long: bool) -> &'static str {
 pub(crate) struct BarLayout {
     /// Picks / Selected / All (also under Import Settings).
     pub take: bool,
-    /// Photo Grid / Grid / Detail (also the bottom bar's view buttons).
-    pub view: bool,
     /// Show All / Show Not Imported.
     pub show: bool,
-    /// Develop without Import by its full name, else "Develop".
-    pub develop_long: bool,
+    /// Include subfolders.
+    pub sub: bool,
     /// What the right-hand group leaves the breadcrumb and the folder's label.
     pub room: f32,
     /// The folder's own name, which the breadcrumb never takes (0 when nothing is browsed).
     pub name_w: f32,
 }
 
-/// Lay out the import bar's right-hand group in `row`: in order, Picks / Selected / All, Photo Grid / Grid /
-/// Detail, the long Develop label and Show All / Show Not Imported go (each also elsewhere, or shorter)
+/// Lay out the import bar's right-hand group in `row`: in order, Picks / Selected / All (also under Import
+/// Settings), Show All / Show Not Imported and Include subfolders go
 /// until what is left holds the browsed folder's whole name with "…" for its parents. Nothing is laid
 /// out past the row, so the bar never runs over the panel beside it.
 fn bar_layout(row: &egui::Ui, import_label: &str, name: Option<&str>, folder: Option<&str>, wide: bool) -> BarLayout {
@@ -827,29 +876,25 @@ fn bar_layout(row: &egui::Ui, import_label: &str, name: Option<&str>, folder: Op
     let parents = folder.map_or(0, |f| crate::panels::grid::crumbs(f).len().saturating_sub(1));
     let crumb_min = if parents > 0 { measure("…") + 14.0 + 3.0 * gap } else { 0.0 };
     let import_w = button(import_label, true);
-    let develop = |long: bool| if browsing { button(develop_label(long), false) + gap } else { 0.0 };
-    let view_w = crate::widgets::segments_width(row, &VIEW_LABELS) + gap;
+    let develop_w = if browsing { button(crate::i18n::tr("Develop"), false) + gap } else { 0.0 };
     let show_w = crate::widgets::segments_width(row, &SHOW_LABELS) + gap;
     let take_w = crate::widgets::segments_width(row, &TAKE_LABELS) + gap;
-    let mut l = BarLayout { take: wide, view: browsing, show: browsing, develop_long: true, room: 0.0, name_w };
+    // the checkbox in its own text style (egui's Button), the icon and the gap between them
+    let button_font = egui::TextStyle::Button.resolve(row.style());
+    let sub_w = row.painter().layout_no_wrap(crate::i18n::tr("Include subfolders").to_string(), button_font, t.text).size().x + 26.0 + gap;
+    let mut l = BarLayout { take: wide, show: browsing, sub: browsing, room: 0.0, name_w };
     let right = |l: &BarLayout| {
-        import_w
-            + develop(l.develop_long)
-            + if l.view { view_w } else { 0.0 }
-            + if l.show { show_w } else { 0.0 }
-            + if l.take { take_w } else { 0.0 }
-            + gap
+        import_w + develop_w + if l.show { show_w } else { 0.0 } + if l.take { take_w } else { 0.0 } + if l.sub { sub_w } else { 0.0 } + gap
     };
     let fits = |l: &BarLayout| avail - right(l) >= name_w + crumb_min;
-    for step in 0..4 {
+    for step in 0..3 {
         if fits(&l) {
             break;
         }
         match step {
             0 => l.take = false,
-            1 => l.view = false,
-            2 => l.develop_long = false,
-            _ => l.show = false,
+            1 => l.show = false,
+            _ => l.sub = false,
         }
     }
     l.room = (avail - right(&l)).max(0.0);
@@ -947,25 +992,18 @@ fn show_segments(app: &mut LccApp, ui: &mut egui::Ui) {
     }
 }
 
-/// Photo Grid / Grid / Detail: the view of the browsed folder's photos, the Library's view
-/// commands on the same state, so the tab shows what the Library would.
-fn view_segments(app: &mut LccApp, ui: &mut egui::Ui) {
-    use crate::state::ViewMode;
-    let chosen = match app.ui.view {
-        ViewMode::PhotoGrid => 0,
-        ViewMode::SquareGrid => 1,
-        _ => 2,
-    };
-    let Some(i) = crate::widgets::segments(ui, "browseView", &["Photo Grid", "Grid", "Detail"], Some(chosen)) else {
-        return;
-    };
-    app.ui.view = match i {
-        0 => ViewMode::PhotoGrid,
-        1 => ViewMode::SquareGrid,
-        _ => ViewMode::Detail,
-    };
-    if app.ui.view.is_grid() {
-        app.ui.grid_style = app.ui.view;
+/// Include subfolders: whether the browse reaches into the folder's subfolders (`library.browse`'s
+/// `subfolders`), as the Local folder header and the import review offer it. A change re-browses
+/// the folder with the choice given, so the view — and the import that follows — take it at once.
+fn subfolders_check(app: &mut LccApp, ui: &mut egui::Ui) {
+    let Some(b) = app.session.browse.clone() else { return };
+    let mut sub = b.subfolders;
+    let c = ui.checkbox(&mut sub, crate::i18n::tr("Include subfolders"));
+    register(ui.ctx(), "check:includeSubfolders", c.rect);
+    if c.changed()
+        && let Err(e) = app.run("library.browse", json!({"path": b.path, "subfolders": sub}))
+    {
+        app.toast(ui.ctx(), e);
     }
 }
 

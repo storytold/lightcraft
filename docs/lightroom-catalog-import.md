@@ -66,12 +66,13 @@ readable in the same result window. If another dialog is open, the result waits 
 is also available through `library.importLightroom {"status":true}` during that session.
 
 Original files are referenced in place. Ratings, picks/rejects, color labels, XMP metadata,
-hierarchical keywords, regular collections/collection sets, smart collections, folder stacks,
+hierarchical keywords, regular collections/collection sets, smart collections, saved prints, folder stacks,
 virtual copies and mapped develop settings are imported. Missing originals remain catalogued for relinking, count as added records and are reported
 separately from failures reading files that are present. Known-missing originals are not probed
 again. Previously browsed Local records join All Photos even when their originals are offline;
 their promotion is counted once and undone together with the catalog import.
-An image whose file, folder or root folder record is gone from the catalog, or whose original path
+An image whose file, folder or root folder record is gone from the catalog, whose reference to one is not a whole
+number (missing, NULL, text or a fraction: it names no record, not record 0), or whose original path
 is empty (Lightroom leaves these behind and ignores them), is skipped together with its virtual
 copies instead of failing the whole import. The result lists them as data (`skipped`: each
 image id with its reason, `missingFile`, `missingFolder`, `missingRoot`, `incompletePath` or
@@ -106,7 +107,9 @@ of them in one table, is left out with a warning (a row past that limit is marke
 (uncompressed and on disk); one past that with its history-step and snapshot settings is saved
 without them, with a warning, and skipped only when still too big. At most eight archives and
 128 MiB total are retained. Oldest managed archives are retired; legacy `.json` archives remain
-untouched.
+untouched. When an archive is saved but cleanup afterwards fails (a temporary file or an old archive that
+can't be removed), the report still names the archive and a separate warning names what was left
+behind; the folder is synced once the archive is saved.
 `Interop/lightroom-index.json` records imported identities. Source catalogs and originals are
 never overwritten.
 
@@ -169,11 +172,30 @@ A Chromaforge album nests only inside a folder (a Lightroom collection set), but
 keeps a saved print, book, slideshow or web gallery (and, in some catalogs, a collection) inside a
 plain or smart collection, and a parent can be system-only (Quick Collection, an unsaved creation:
 not imported) or gone from the catalog. Such an album joins the nearest collection set above it, or
-the top level, and the result names it under warnings; saved prints, books, slideshows and web
-galleries import as regular albums with the photos they hold. On reimport an album keeps the place
-the user gave it. A collection the catalog lists twice imports once; a different collection with
+the top level, and the result names it under warnings; books, slideshows and web galleries import as
+regular albums with the photos they hold. On reimport an album keeps the place the user gave it.
+
+A saved print (`creationId` `com.adobe.ag.print`) becomes a Saved Print: the album holds the
+collection's photos and the print layout, and Print ▸ Saved Prints (or a double-click in Collections)
+opens it. Its layout is the Lua table in `AgLibraryCollectionContent` (`owningModule`
+`com.adobe.ag.print`): the page size and margins (points), the layout style, and the Print Job.
+A Custom Package keeps every cell where Lightroom placed it (`bounds`, points from the page's top
+left, in catalog order, back to front) with the photo it names; a cell whose photo isn't imported
+stays empty. A Picture Package keeps its cells and repeats each photo in them; a Single Image /
+Contact Sheet keeps its rows, columns, gaps and margins (cells fill the margins, so a fixed cell
+size Lightroom kept smaller is reported). Zoom to Fill, Rotate to Fit, the stroke (a package's
+Inner Stroke, a grid's Stroke Border), page background, page numbers, page info, crop marks / cut
+guides, destination (printer or JPEG), resolution, print sharpening, media, rendering intent, Print
+Adjustment, 16-bit output and draft mode carry over. The identity plate, watermark, a package's
+photo border and a named printer profile have no equivalent here and are listed under warnings; the
+original layout stays in the recovery archive. A layout that can't be read (or a saved print the
+catalog keeps no layout for) imports as a plain album with the reason. Reimport gives an earlier
+import's plain album of a saved print its layout once; a Saved Print keeps its layout, so changes
+made since stay. The report counts them as `savedPrints`. An unsaved print is system-only and not
+imported. A collection the catalog lists twice imports once; a different collection with
 the id of an earlier one is left out with a warning naming both, and the photos listed under that
-id go to the first.
+id go to the first. A collection member whose `collection` is not a whole
+number (missing, NULL, text or a fraction) joins no album, with one warning; it does not join collection 0.
 
 Lightroom's develop history (`Adobe_libraryImageDevelopHistoryStep`) becomes the photo's History,
 oldest first, each step named as in Lightroom and mapped like the current settings (so a step shows
@@ -263,7 +285,41 @@ Capture One 16.9.0 on Windows (catalog format 160906).
 - **IPTC fields** become an XMP packet merged like a sidecar.
 - **Albums** keep their projects and groups (a group is a `VirtualFolderCollection`, as are Recent Imports and
   Recent Captures; the folders the catalog itself names are system folders and stay out, with the albums under
-  them). Smart albums are not imported yet (a warning names each one); develop settings are not read yet.
+  them). Smart albums are not imported yet (a warning names each one).
+- **Develop settings** (`crates/engine/src/capture_one_develop.rs`): a variant's layers in `ZVARIANTLAYER`, told
+  apart by `Z_ENT` (`ZENTITIES` names them): the *adjustment* layer holds what the user set (NULL where untouched),
+  *style* layers what applied styles set, the *default* layer the camera's defaults. A setting is the variant's when
+  the adjustment layer (else a style) sets it to something other than the default. Imported so far, on top of the
+  photo's camera defaults:
+  - **Exposure** (`ZEXPOSURE`, EV).
+  - **Orientation and straighten** (`ZROTATION`): the whole turn in degrees, clockwise as shown, including the
+    camera's own orientation (the default layer's value, which the file's orientation already shows). The quarter
+    turns beyond the camera's become the photo's orientation, the rest (±45°) the straighten angle.
+  - **Crop** (`ZCROP` `cx;cy;w;h`): the centre in pixels of the stored image, the size in pixels of the turned frame;
+    its aspect (`ZCROPASPECTRATIONAME`, `16x9`, `1x1 (Square)`; Original and Unconstrained stay free) turned to the
+    crop's shape. **Flips** (`ZFLIP` 1 horizontal, 2 vertical).
+  - **White balance** (`ZWHITEBALANCE`, gains on the raw channels): read as the app reads a raw's own gains (through
+    the camera's matrices when it has them, else as a raw without colour tags), and applied as Capture One's change
+    from as shot on the app's own as-shot white, so a white left as shot stays exactly as shot. A raw edited on the
+    relative scale (no matrices for its camera) gets the same change through that scale, which on those cameras
+    only approximates Capture One's (the result window says so, with the photo count); a rendered file's white
+    balance is not imported.
+  - The ICC profile choice is left out on purpose: photos get the app's camera colour.
+
+  Every other setting a photo uses is named in the result window, by Capture One tool (Brightness, Levels, High
+  Dynamic Range, LCC, Local adjustment layers, …, with how many photos use it), and per photo in the report's
+  `unmapped`. A photo is dated at Capture One's last settings change (`ZSETTINGSMODIFICATIONDATE`).
+
+  Checked against Capture One's own exports of the same raws (`<cli> compare`, aligned, 1000 px renders; 12 photos
+  for geometry, 8 for white balance): straightened and turned photos (−18.9° to +2.4°, camera portraits at +2° and
+  +13.9°, user quarter and half turns) aligned at 0.968–1.003 scale, 10 of 12 with no shift and 2 within 6 px of
+  512. White balance is an approximation. With the app's standard colour (no camera profile installed) it lowered
+  ΔE00 to the export from 14.2 to 7.3 on a raw with a Kelvin scale (a camera with measured matrices), and on raws
+  edited on the relative scale from 6.9–10.6 to 5.1–7.6 (a camera without an entry yet, 4 photos) and from
+  16.3–21.6 to 11.2–20.1 (another, 3 photos). With a camera profile fitted to Capture One's colours, the same 4
+  photos went from 5.6–10.4 to 1.9–5.0. The rest of the difference includes settings not imported yet and the
+  camera colour. A camera that gets an entry in the camera database moves to the Kelvin scale; the import reads
+  the same database, so it follows.
 - The import's activity row, messages, result window, destination window and undo step say Capture One.
 
 ## Historical local validation

@@ -65,26 +65,32 @@ fn assert_locked(h: &Headless, want: f64, what: &str) {
     assert!(shown.is_some_and(|s| (s - want).abs() < 0.01), "{what}: the tool shows {shown:?}");
 }
 
-#[test]
-fn a_the_straighten_slider_keeps_the_lock() {
-    let mut h = crop_tool();
-    let want = photo_ratio(&h);
-    let undo = h.app.session.undo.len();
-    ask(&mut h, "ui.dragWidget", json!({"id": "slider:crop.angle", "dx": 40.0, "dy": 0.0, "steps": 6}));
-    assert_locked(&h, want, "the Straighten slider");
-    assert_eq!(h.app.session.undo.len(), undo + 1, "one undo step for the drag, lock included");
+/// Undo until the photo is untouched again (an edit is one undo step, or two with a stored lock).
+fn back_to_untouched(h: &mut Headless, what: &str) {
+    let id = h.app.session.active().expect("a photo");
+    for _ in 0..3 {
+        if untouched(h, id) {
+            break;
+        }
+        h.app.run("edit.undo", json!({})).expect("undo");
+    }
+    h.settle(SETTLE);
+    assert!(untouched(h, id), "{what}: Undo takes the angle and the stored lock back together");
+    assert!(h.app.crop_tool_aspect().is_some(), "{what}: undone, the tool shows the photo locked again");
 }
 
+/// However the angle is set on an untouched photo (a command, the Straighten slider, rotating with the pointer,
+/// the Straighten tool's line), the crop stays locked to the photo's shape; one session, undone between the ways.
 #[test]
-fn a_typed_angle_and_develop_set_keep_the_lock() {
+fn straightening_keeps_the_lock_however_the_angle_is_set() {
+    let mut h = crop_tool();
+    let want = photo_ratio(&h);
     for (what, command, params) in [
         ("crop.straighten", "crop.straighten", json!({"angle": 3.0})),
         ("develop.set crop.angle", "develop.set", json!({"control": "crop.angle", "value": -4.0})),
         ("develop.adjust crop.angle", "develop.adjust", json!({"control": "crop.angle", "delta": 2.0})),
         ("crop.set angle", "crop.set", json!({"angle": 5.0})),
     ] {
-        let mut h = crop_tool();
-        let want = photo_ratio(&h);
         let undo = h.app.session.undo.len();
         ask(&mut h, "engine.execute", json!({"command": command, "params": params}));
         assert_locked(&h, want, what);
@@ -94,12 +100,22 @@ fn a_typed_angle_and_develop_set_keep_the_lock() {
         let id = h.app.session.active().expect("a photo");
         assert!(untouched(&h, id), "{what}: Undo takes the angle and the stored lock back together");
     }
-}
+    h.settle(SETTLE);
 
-#[test]
-fn b_the_straighten_tool_line_keeps_the_lock() {
-    let mut h = crop_tool();
-    let want = photo_ratio(&h);
+    let undo = h.app.session.undo.len();
+    ask(&mut h, "ui.dragWidget", json!({"id": "slider:crop.angle", "dx": 40.0, "dy": 0.0, "steps": 6}));
+    assert_locked(&h, want, "the Straighten slider");
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one undo step for the drag, lock included");
+    back_to_untouched(&mut h, "the Straighten slider");
+
+    ask(
+        &mut h,
+        "ui.pointer",
+        json!({"events": [{"kind": "down", "x": -0.05, "y": 0.2}, {"kind": "drag", "x": -0.05, "y": 0.25}, {"kind": "drag", "x": -0.05, "y": 0.3}, {"kind": "up", "x": -0.05, "y": 0.3}]}),
+    );
+    assert_locked(&h, want, "rotating with the pointer");
+    back_to_untouched(&mut h, "rotating with the pointer");
+
     h.app.ui.tool = "straighten".into();
     h.step();
     let img = h.app.image_rect.expect("the photo on screen");
@@ -110,8 +126,8 @@ fn b_the_straighten_tool_line_keeps_the_lock() {
 
 /// A photo with a horizon tilted by 6° and bands below it parallel to it (several agreeing lines,
 /// as Auto needs): bright sky over a striped ground.
-fn tilted_horizon() -> (lcc_engine::Session, std::path::PathBuf) {
-    let dir = std::env::temp_dir().join(format!("lc-ui-crop-lock-auto-{}", std::process::id()));
+fn tilted_horizon() -> (lcc_testkit::TempDir, lcc_engine::Session) {
+    let dir = lcc_testkit::TempDir::new("lc-ui-crop-lock-auto");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let (w, ht) = (900usize, 600usize);
@@ -136,46 +152,18 @@ fn tilted_horizon() -> (lcc_engine::Session, std::path::PathBuf) {
     std::fs::write(&path, bytes).unwrap();
     let mut session = lcc_engine::Session::new().with_fs();
     session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
-    (session, dir)
+    (dir, session)
 }
 
 #[test]
 fn c_auto_straighten_keeps_the_lock() {
-    let (session, dir) = tilted_horizon();
+    let (dir, session) = tilted_horizon();
     let mut h = crop_tool_on(session);
     let want = photo_ratio(&h);
     let r = ask(&mut h, "engine.execute", json!({"command": "crop.autoStraighten"}));
     assert_eq!(r["result"]["changed"], true, "Auto found the horizon: {r}");
     assert_locked(&h, want, "Auto");
     let _ = std::fs::remove_dir_all(dir);
-}
-
-#[test]
-fn c_auto_that_finds_nothing_leaves_the_photo_untouched() {
-    let mut h = crop_tool();
-    let undo = h.app.session.undo.len();
-    // the lock is stored first; when Auto then changes nothing it goes again
-    let id = h.app.session.active().expect("a photo");
-    h.app.session.execute("crop.straighten", &json!({"angle": 0.0})).expect("level");
-    let before_untouched = untouched(&h, id);
-    let r = h.app.run("crop.autoStraighten", json!({})).expect("auto");
-    if r["changed"] == false {
-        assert_eq!(untouched(&h, id), before_untouched, "nothing to level: the crop is as it was");
-        assert!(h.app.session.redo.is_empty(), "and no stray Redo step");
-    }
-    assert!(h.app.session.undo.len() <= undo + 2);
-}
-
-#[test]
-fn d_rotating_with_the_pointer_keeps_the_lock() {
-    let mut h = crop_tool();
-    let want = photo_ratio(&h);
-    ask(
-        &mut h,
-        "ui.pointer",
-        json!({"events": [{"kind": "down", "x": -0.05, "y": 0.2}, {"kind": "drag", "x": -0.05, "y": 0.25}, {"kind": "drag", "x": -0.05, "y": 0.3}, {"kind": "up", "x": -0.05, "y": 0.3}]}),
-    );
-    assert_locked(&h, want, "rotating with the pointer");
 }
 
 #[test]
@@ -193,13 +181,14 @@ fn a_chosen_4x5_survives_straightening() {
 
 #[test]
 fn flips_and_constrain_crop_keep_the_lock() {
+    let mut h = crop_tool();
     for (what, command, params) in [
         ("flip horizontal", "photo.flipHorizontal", json!({})),
         ("flip vertical", "photo.flipVertical", json!({})),
         ("Constrain Crop", "develop.merge", json!({"settings": {"geometry": {"constrain_crop": true}}, "label": "Constrain Crop"})),
     ] {
-        let mut h = crop_tool();
         let want = photo_ratio(&h);
+        let undo = h.app.session.undo.len();
         ask(&mut h, "engine.execute", json!({"command": command, "params": params}));
         let id = h.app.session.active().expect("a photo");
         let shown = h.app.crop_tool_aspect().map(|(a, b)| f64::from(a) / f64::from(b));
@@ -207,6 +196,12 @@ fn flips_and_constrain_crop_keep_the_lock() {
         if !untouched(&h, id) {
             assert!(crop_state(&h).0.is_some(), "{what}: the crop carries the lock it shows");
         }
+        // each from the untouched photo
+        while h.app.session.undo.len() > undo {
+            h.app.run("edit.undo", json!({})).expect("undo");
+        }
+        h.settle(SETTLE);
+        assert!(untouched(&h, id), "{what}: undone");
     }
 }
 

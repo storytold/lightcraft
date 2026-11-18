@@ -6,7 +6,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::io::Cursor;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use filmcraft_isobmff::{Brand, FourCc, Mp4Writer, SampleEntry, TrackConfig, WriteSample, WriterOptions};
 use lcc_video::{FrameReader, VideoError, poster, probe};
@@ -15,13 +15,12 @@ const FRAMES: usize = 12;
 const W: u32 = 64;
 const H: u32 = 48;
 
-fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("lcc-video-formats-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("scratch dir");
-    dir.join(name)
+/// The path of a file `name` in a Temp folder of its own, removed when the test ends.
+fn scratch(name: &str) -> lcc_testkit::TempFile {
+    lcc_testkit::TempFile::new(&format!("lcc-video-formats-{name}"), name)
 }
 
-fn save(name: &str, bytes: &[u8]) -> PathBuf {
+fn save(name: &str, bytes: &[u8]) -> lcc_testkit::TempFile {
     let p = scratch(name);
     std::fs::write(&p, bytes).expect("write clip");
     p

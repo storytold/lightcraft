@@ -71,6 +71,12 @@ fn the_info_card_writes_to_every_selected_photo_and_leaves_mixed_values_alone() 
     type_into(&mut h, "modernInfo:keywords", "snow,  peak ,");
     let kw = h.app.session.catalog.photo(lcc_catalog::PhotoId(ids[1])).map(|p| p.meta.keywords.clone()).unwrap_or_default();
     assert!(kw.iter().any(|k| k.ends_with("snow")) && kw.iter().any(|k| k.ends_with("peak")), "{kw:?}");
+    // Window ▸ Panels ▸ Info (I) hides and shows this card in Modern
+    exec(&mut h, "panel.info", json!({}));
+    assert!(!h.app.ui.modern.info, "panel.info hides the card");
+    exec(&mut h, "panel.info", json!({}));
+    assert!(h.app.ui.modern.info, "and shows it again");
+    assert_eq!(crate::menubar::checked(&h.app, "panel.info"), Some(true));
 }
 
 #[test]
@@ -95,27 +101,6 @@ fn the_search_pill_narrows_the_grid_and_takes_any_text() {
     assert_eq!(h.app.session.filter.rating, 0);
     ask(&mut h, "ui.clickWidget", json!({"id": "modern:search:picks"}));
     assert_eq!(h.app.session.filter.flag, Some(lcc_catalog::Flag::Pick));
-}
-
-#[test]
-fn bad_info_commands_are_errors_or_toggles_not_panics() {
-    let mut h = library();
-    assert_eq!(exec(&mut h, "modern.info", json!({"on": "yes"}))["ok"], true, "a non-bool toggles");
-    assert_eq!(exec(&mut h, "modern.info", json!({"on": false}))["ok"], true);
-    assert!(!h.app.ui.modern.info);
-}
-
-/// Window ▸ Panels ▸ Info (I) shows and hides the Modern Info card.
-#[test]
-fn the_info_command_toggles_the_card_in_modern() {
-    let app = crate::LccApp::new(lcc_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
-    let mut h = crate::headless::Headless::new(app, [1280.0, 800.0], 1.0);
-    h.app.run("view.modernLayout", serde_json::json!({"on": true})).unwrap();
-    h.app.run("panel.info", serde_json::json!({})).unwrap();
-    assert!(h.app.ui.modern.info);
-    assert_eq!(crate::menubar::checked(&h.app, "panel.info"), Some(true));
-    h.app.run("panel.info", serde_json::json!({})).unwrap();
-    assert!(!h.app.ui.modern.info);
 }
 
 /// On a phone the Info card is a sheet along the bottom (full width), and its ✕ closes it.

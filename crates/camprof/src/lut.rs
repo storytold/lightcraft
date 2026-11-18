@@ -588,6 +588,13 @@ mod tests {
             let v = t.lookup(Vec3::new(x, x, x));
             assert!(v.distance(&Vec3::new(x, x, x)) < 1.0e-12, "{v:?}");
         }
+        // the identity table is a noop
+        {
+            let t = ChromaTable::identity();
+            assert!(t.is_noop(0.0));
+            let xyz = Vec3::new(0.3, 0.35, 0.25);
+            assert!(t.correct_xyz(xyz).distance(&xyz) < 1.0e-12);
+        }
     }
 
     #[test]
@@ -661,14 +668,6 @@ mod tests {
             out.push(crate::color::lab_to_xyz(lab, crate::color::D50));
         }
         out
-    }
-
-    #[test]
-    fn the_identity_table_is_a_noop() {
-        let t = ChromaTable::identity();
-        assert!(t.is_noop(0.0));
-        let xyz = Vec3::new(0.3, 0.35, 0.25);
-        assert!(t.correct_xyz(xyz).distance(&xyz) < 1.0e-12);
     }
 
     #[test]

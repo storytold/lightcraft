@@ -31,11 +31,13 @@ pub mod cull;
 pub mod curve;
 pub mod depth_model;
 pub mod dust;
+pub mod film_dust;
 pub mod finish;
 pub mod genpatch;
 pub mod geometry;
 pub mod grade;
 pub mod grain;
+pub mod levels;
 pub mod local;
 pub mod local_tone;
 pub mod lut;
@@ -58,6 +60,7 @@ pub mod spots;
 pub mod tone;
 pub mod transform;
 pub mod upright;
+pub mod vignetting_calibration;
 pub mod visualize;
 
 pub use curve::{PARAM_AMOUNTS, PARAM_LUT, ParametricCurve};
@@ -136,12 +139,19 @@ pub struct SourceInfo {
     /// spectral sensitivities, so the photo's Profile option can start from them instead of the
     /// look fitted to its JPEG (`lcc_develop::CameraColour`).
     pub colorimetric: bool,
+    /// A DNG whose "camera" is a linear RGB space (Photo Merge, Render to DNG; `lcc_raw::color::is_rendered_rgb`):
+    /// no camera profile applies to it.
+    pub rendered_rgb: bool,
     /// The source's straight alpha (0..1), EXIF-oriented and the size of the source buffer, when it
     /// has transparency. The pixels handed to the renderer are flattened onto white in linear light
     /// (`lcc_codecs::to_working`, issue #1212); an export that keeps transparency recovers
     /// their colour (`lcc_codecs::unflatten`) and carries this plane through the geometry
     /// beside the render ([`render_alpha`], issue #2976).
     pub alpha: Option<Arc<Plane>>,
+    /// A film scanner's infrared pass ([`lcc_codecs::Decoded::infrared`]), the source's size and
+    /// orientation: dark under dust, hairs and scratches. Never rendered; Find Film Dust reads it
+    /// through the geometry ([`render_plane`]).
+    pub infrared: Option<Arc<Plane>>,
     /// The photo's generative fill patches ([`genpatch`]), read from the library by the engine.
     pub generated: Option<genpatch::GenStore>,
     /// Areas content-aware fill never copies from (faces): `[x0, y0, x1, y1]` normalized to the
@@ -155,6 +165,12 @@ pub struct SourceInfo {
     /// renders share one run. `None`: they are kept by the pixels (a source of another size
     /// runs them again).
     pub identity: Option<SourceIdentity>,
+    /// Raw sources: where the developed picture sits in the active area and on the sensor (the same placement the
+    /// raw's gain table uses), for a flat-field map ([`vignetting_calibration::field_for`]). `None`: not a raw.
+    pub placement: Option<lcc_raw::gaintable::SourcePlacement>,
+    /// The flat-field maps the settings may reference by id (`lcc_develop::Optics::vignetting_calibration`), from the catalog: the
+    /// session fills it as it fills `generated`. `None`: no map renders.
+    pub vignetting_maps: Option<vignetting_calibration::VignettingMapStore>,
 }
 
 /// Hot, dead and stuck pixels corrected on a raw's mosaic while it was decoded.
@@ -193,11 +209,15 @@ impl Default for SourceInfo {
             filters: None,
             native_long: None,
             colorimetric: false,
+            rendered_rgb: false,
             alpha: None,
+            infrared: None,
             generated: None,
             avoid: None,
             pixels: None,
             identity: None,
+            placement: None,
+            vignetting_maps: None,
         }
     }
 }
@@ -313,6 +333,27 @@ pub fn check_output_size(max_w: usize, max_h: usize) -> Result<(), String> {
     Ok(())
 }
 
+/// Fails when a visible brush mask holds more dabs than its budget ([`masks::MAX_STROKE_DABS`]) at this render's
+/// output size: the render would otherwise skip its later strokes (an erase among them) and show a wrong mask
+/// (upstream #3681).
+pub fn check_brush_budget(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> Result<(), String> {
+    let brush = |m: &lcc_develop::Mask| m.visible && m.components.iter().any(|c| matches!(c.shape, lcc_develop::MaskShape::Brush { .. }));
+    if !s.masks.iter().any(brush) {
+        return Ok(());
+    }
+    let p = plan(src, info, s, req);
+    for m in s.masks.iter().filter(|m| brush(m)) {
+        for c in &m.components {
+            if let lcc_develop::MaskShape::Brush { strokes } = &c.shape
+                && masks::brush_over_budget(strokes, &p.frame.for_mask(m.on_photo), p.w, p.h)
+            {
+                return Err(format!("mask \"{}\": the brush strokes hold more than {} dabs at this size", m.name, masks::MAX_STROKE_DABS));
+            }
+        }
+    }
+    Ok(())
+}
+
 impl RenderRequest {
     /// A request fitting in `max_w × max_h` (the size ceiling of [`Self::max_w`] applies).
     pub fn fit(max_w: usize, max_h: usize) -> Self {
@@ -407,6 +448,8 @@ pub fn native_output_size(src_w: usize, src_h: usize, s: &DevelopSettings) -> (f
 /// The geometric frame `render` uses for `src` (lens data, automatic CA estimate included).
 pub fn frame_for(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, apply_crop: bool) -> geometry::Frame {
     let mut frame = geometry::Frame::with_lens(src.width, src.height, s, apply_crop, info.lens.as_ref());
+    // (in every frame of the render: the noise model's tiles, masks, spots and Upright see the corrected light too)
+    frame.add_vignetting_calibration(vignetting_calibration::field_for(info, s, frame.orient));
     if s.optics.remove_ca && s.section_enabled("optics") {
         frame.add_lateral_ca(optics::estimate_lateral_ca(src));
         if apply_crop {
@@ -687,6 +730,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         src_long,
         // the Source plug-in filters run before this stage
         source_filters.key,
+        // and film dust removal before them
+        film_dust_key(info, s),
     ));
     // a generated patch whose file appears (or goes) changes the image
     let shown: Vec<bool> = genpatch::shown(&s.spots, info.generated.as_ref()).iter().map(Option::is_some).collect();
@@ -702,6 +747,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         local_tone::enabled(info, s),
         src_long,
         source_filters.key,
+        film_dust_key(info, s),
         &shown,
         format!("{:?}", info.avoid),
     ));
@@ -949,16 +995,33 @@ pub fn render_cached(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, 
 /// output size. Develop settings never touch it; areas the warp brings in from outside the source
 /// are transparent. `None` when the source has no alpha or a plane that does not match `src`.
 pub fn render_alpha(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> Option<Plane> {
-    let alpha = info.alpha.as_deref().filter(|a| a.width == src.width && a.height == src.height)?;
+    render_plane(src, info.alpha.as_deref()?, info, s, req)
+}
+
+/// A plane of the source's size (its alpha, a scanner's infrared pass) through the same geometry
+/// as [`render`] of the same arguments (see [`render_alpha`]). `None` when the plane is not the
+/// size of `src`.
+pub fn render_plane(src: &Rgb32f, plane: &Plane, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> Option<Plane> {
+    if plane.width != src.width || plane.height != src.height {
+        return None;
+    }
     let effective = s.effective();
     let rendition = settings_for(&effective, req);
     let plan = plan(src, info, &rendition, req);
-    let a = plan.frame.sample_alpha(alpha, plan.w, plan.h);
+    let a = plan.frame.sample_alpha(plane, plan.w, plan.h);
     // (a grown window is cut back to the request, as in `render_impl`)
     Some(match plan.keep {
         Some(k) => a.crop(k.x, k.y, k.w, k.h),
         None => a,
     })
+}
+
+/// What film dust removal does to a render: nothing without the pass or while off, else its settings.
+fn film_dust_key(info: &SourceInfo, s: &DevelopSettings) -> u64 {
+    match info.infrared.as_ref().filter(|_| s.film_dust.on()) {
+        Some(ir) => hash_of((Arc::as_ptr(ir) as usize, ir.width, ir.height, s.film_dust.sensitivity.to_bits(), s.film_dust.expand.to_bits())),
+        None => 0,
+    }
 }
 
 enum Src<'a> {
@@ -999,6 +1062,15 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         None => Arc::new(frame.sample(src_img, w, h)),
     };
     lap("sample", &mut t);
+    // film dust: the infrared pass's marks filled in before anything reads the pixels
+    let sampled = if s.film_dust.on() && info.infrared.is_some() {
+        let mut img = (*sampled).clone();
+        film_dust::stage(&mut img, src_img, info, s, frame);
+        lap("film dust", &mut t);
+        Arc::new(img)
+    } else {
+        sampled
+    };
 
     // Source plug-in filters: cached by their stack; a draft that can't reuse a result runs them
     // on a reduced copy (its key marked, so a full render never takes it, nor what follows it)
@@ -1063,7 +1135,19 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     prep.mask_tone = plan.mask_tone.clone();
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
-        c.put(CacheEntry { src: a.clone(), geo, sampled, filtered, lin: Some((lin_key, lin)), nr: nr.map(|n| (nr_key, n)), colour_noise, planes });
+        // (a render whose filters stopped short at its cancel keeps nothing: its pixels aren't the stack's)
+        if !was_cut() {
+            c.put(CacheEntry {
+                src: a.clone(),
+                geo,
+                sampled,
+                filtered,
+                lin: Some((lin_key, lin)),
+                nr: nr.map(|n| (nr_key, n)),
+                colour_noise,
+                planes,
+            });
+        }
     }
     let display_filters = plugin_filters::Stack::resolve(info, s, lcc_develop::FilterStage::Display);
     let post = finish::Post { stack: &display_filters, frame: plan.filter_frame, warnings: std::cell::RefCell::new(&mut warnings) };
@@ -1100,9 +1184,18 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     };
     lap("histogram", &mut t);
     let mut image = image;
-    let mask = overlay_alpha(req.overlay, &plan, &prep);
+    let mask = if matches!(req.overlay, Overlay::FilmDust | Overlay::Infrared) {
+        film_dust::mask_for(info, src_img, s, frame, w, h)
+    } else {
+        overlay_alpha(req.overlay, &plan, &prep)
+    };
     let masks = overlay_alphas_all(req.overlay, &plan, &prep);
     visualize::apply(&mut image, req.overlay, &plan, mask.as_ref(), masks.as_deref());
+    if req.overlay == Overlay::Infrared
+        && let Some(ir) = film_dust::infrared_for(info, frame, w, h)
+    {
+        film_dust::paint_infrared(&mut image, &ir, mask.as_ref());
+    }
     let mut image = if plan.keep.is_some() { cut(&image) } else { image };
     if req.overlay == Overlay::HdrRange && edit.hdr.enabled {
         // the HDR rendition of the same request says how far above SDR white each pixel goes
@@ -1244,6 +1337,38 @@ pub fn before_settings(s: &DevelopSettings) -> DevelopSettings {
 
 pub(crate) fn is_bw(s: &DevelopSettings) -> bool {
     s.treatment == Treatment::Bw || s.profile.id == "lc.mono" || s.profile.id.starts_with("lc.bw.")
+}
+
+thread_local! {
+    /// The flag that says this thread's render is no longer wanted ([`with_cancel`]), and whether a
+    /// step stopped short because of it.
+    static CANCEL: std::cell::RefCell<(Option<Arc<std::sync::atomic::AtomicBool>>, bool)> = const { std::cell::RefCell::new((None, false)) };
+}
+
+/// Runs `f` (a render on this thread) with `flag` as its cancel: once it is set, the plug-in
+/// filters still to run stop (a render a newer edit replaced would otherwise run its whole stack,
+/// beside the new one, each edit adding one more). The second value is true when something stopped
+/// short: the result is then not the picture asked for, and nothing of it was cached.
+pub fn with_cancel<R>(flag: Option<Arc<std::sync::atomic::AtomicBool>>, f: impl FnOnce() -> R) -> (R, bool) {
+    let before = CANCEL.with(|c| c.replace((flag, false)));
+    let r = f();
+    let (_, cut) = CANCEL.with(|c| c.replace(before));
+    (r, cut)
+}
+
+/// This thread's render's cancel flag ([`with_cancel`]).
+pub(crate) fn cancel_flag() -> Option<Arc<std::sync::atomic::AtomicBool>> {
+    CANCEL.with(|c| c.borrow().0.clone())
+}
+
+/// A step of this thread's render stopped short at its cancel.
+pub(crate) fn note_cut() {
+    CANCEL.with(|c| c.borrow_mut().1 = true);
+}
+
+/// Whether a step of this thread's render stopped short ([`note_cut`]): what it made is not to be kept.
+pub(crate) fn was_cut() -> bool {
+    CANCEL.with(|c| c.borrow().1)
 }
 
 /// `{ENV_PREFIX}_PROFILE` is set: print per-stage timings to stderr.

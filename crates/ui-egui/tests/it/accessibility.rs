@@ -10,6 +10,7 @@ use lcc_ui_egui::{
 };
 
 fn harness(view: ViewMode, right: RightPanel) -> Harness<'static, LccApp> {
+    lcc_engine::scene_disk::use_build_dir();
     let mut app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     app.ui.left_panel = true;
     app.ui.view = view;
@@ -85,25 +86,29 @@ fn audit(h: &Harness<'_, LccApp>, place: &str) -> Vec<String> {
 #[test]
 fn every_interactive_node_has_a_name_in_every_view_and_tool() {
     let mut problems = Vec::new();
+    // (one app per module, switched from view to view and panel to panel: a demo session per place cost 30 of them)
+    let mut h = harness(ViewMode::PhotoGrid, RightPanel::None);
     for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid, ViewMode::Detail, ViewMode::Compare, ViewMode::Survey, ViewMode::Reference] {
-        let h = harness(view, RightPanel::None);
+        h.state_mut().ui.view = view;
+        h.run_steps(10);
         problems.extend(audit(&h, &format!("{view:?}")));
     }
-    for right in [
-        RightPanel::Edit,
-        RightPanel::Profiles,
-        RightPanel::Crop,
-        RightPanel::Remove,
-        RightPanel::Masking,
-        RightPanel::RedEye,
-        RightPanel::Versions,
-        RightPanel::Activity,
-        RightPanel::Keywords,
-        RightPanel::Info,
-    ] {
-        let h = harness(ViewMode::Detail, right);
+    h.state_mut().ui.view = ViewMode::Detail;
+    for right in [RightPanel::Versions, RightPanel::Activity, RightPanel::Keywords, RightPanel::Info] {
+        h.state_mut().ui.right = right;
+        h.run_steps(10);
         problems.extend(audit(&h, &format!("Detail/{right:?}")));
     }
+    let mut develop = harness(ViewMode::Detail, RightPanel::Edit);
+    for right in [RightPanel::Edit, RightPanel::Profiles, RightPanel::Crop, RightPanel::Remove, RightPanel::Masking, RightPanel::RedEye] {
+        develop.state_mut().ui.right = right;
+        develop.run_steps(10);
+        problems.extend(audit(&develop, &format!("Detail/{right:?}")));
+    }
+    drop(develop);
+    h.state_mut().ui.view = ViewMode::PhotoGrid;
+    h.state_mut().ui.right = RightPanel::None;
+    h.run_steps(4);
     // the dialogs: each a window with a title, every control in it named
     for dialog in [
         "dialog.export",
@@ -121,7 +126,8 @@ fn every_interactive_node_has_a_name_in_every_view_and_tool() {
         "dialog.contactSheet",
         "dialog.watermark",
     ] {
-        let mut h = harness(ViewMode::PhotoGrid, RightPanel::None);
+        h.state_mut().ui.dialog = None;
+        h.run_steps(2);
         if let Err(e) = h.state_mut().run(dialog, serde_json::json!({})) {
             problems.push(format!("{dialog}: does not open ({e})"));
             continue;
@@ -179,9 +185,24 @@ fn screen_reader_increment_moves_a_slider() {
 /// Tab alone, and the arrow keys then adjust them. In the Alternative keymap set: the Classic set
 /// gives Tab to Hide/Show Side Panels, as Lightroom does.
 #[test]
-fn canvas_tool_sliders_are_reachable_with_tab() {
+fn canvas_handles_are_named_and_tool_sliders_are_reachable_with_tab() {
     for right in [RightPanel::Crop, RightPanel::Remove] {
         let mut h = harness(ViewMode::Detail, right);
+        // the canvas handles are in the tree by name, with their position as the value
+        if right == RightPanel::Crop {
+            let found: Vec<(String, String)> = h
+                .root()
+                .children_recursive()
+                .map(|n| n.accesskit_node())
+                .filter(|n| n.role() == Role::Button)
+                .map(|n| (n.label().unwrap_or_default(), n.value().unwrap_or_default()))
+                .collect();
+            for name in ["Crop top-left corner", "Crop right edge", "Crop box"] {
+                assert!(found.iter().any(|(l, v)| l == name && v.contains('%')), "{name}: {found:?}");
+            }
+        } else {
+            assert!(h.root().children_recursive().any(|n| n.accesskit_node().label().is_some_and(|l| l.starts_with("New spot"))));
+        }
         h.state_mut().ui.settings.keymap_set = lcc_ui_egui::shortcuts::KeymapSet::Alternative;
         h.run_steps(2);
         let mut reached = None;
@@ -200,24 +221,6 @@ fn canvas_tool_sliders_are_reachable_with_tab() {
         let after = slider_value(&h, &name);
         assert_ne!(before, after, "{right:?}: ArrowUp on the Tab-focused {name:?}");
     }
-}
-
-/// The canvas handles are in the tree by name, with their position as the value.
-#[test]
-fn canvas_handles_are_named_with_their_position() {
-    let h = harness(ViewMode::Detail, RightPanel::Crop);
-    let found: Vec<(String, String)> = h
-        .root()
-        .children_recursive()
-        .map(|n| n.accesskit_node())
-        .filter(|n| n.role() == Role::Button)
-        .map(|n| (n.label().unwrap_or_default(), n.value().unwrap_or_default()))
-        .collect();
-    for name in ["Crop top-left corner", "Crop right edge", "Crop box"] {
-        assert!(found.iter().any(|(l, v)| l == name && v.contains('%')), "{name}: {found:?}");
-    }
-    let h = harness(ViewMode::Detail, RightPanel::Remove);
-    assert!(h.root().children_recursive().any(|n| n.accesskit_node().label().is_some_and(|l| l.starts_with("New spot"))));
 }
 
 /// Tab walks each right panel from top to bottom (rows left to right): the order a sighted user

@@ -238,9 +238,10 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             Ok(v)
         }),
-        cmd!(query "develop.get", "Get Develop Settings", [], None, "{id?} → the photo's develop settings; `process` is the rendering process they are interpreted by (see develop.updateProcess)", always, |s, p| {
+        cmd!(query "develop.get", "Get Develop Settings", [], None, "{id?} → the photo's develop settings; `process` is the rendering process they are interpreted by (see develop.updateProcess); a flat-field map they reference comes with them at `optics.vignetting_calibration_map` (develop.merge takes it back)", always, |s, p| {
             let id = photo_arg(s, p, "develop.get")?;
-            Ok(s.develop_of(id)
+            let mut v = s
+                .develop_of(id)
                 .map(|d| {
                     let mut v = d.to_json();
                     // saved settings leave V1 out (`ProcessVersion::is_legacy`); here it is always stated
@@ -249,7 +250,10 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     v
                 })
-                .unwrap_or(Value::Null))
+                .unwrap_or(Value::Null);
+            // portable: settings an agent takes elsewhere carry their flat-field map
+            s.portable_settings(&mut v);
+            Ok(v)
         }),
         cmd!(query "develop.controls", "List Develop Controls", [], None, "{section?}: every slider with range, default and current value", always, |s, p| {
             let d = s.active().and_then(|id| s.develop_of(id)).unwrap_or_default();
@@ -518,27 +522,27 @@ mod memory_budget_tests {
 
     use crate::{EngineError, Session};
 
-    /// Upstream issue #3706: an `mb` that is there but isn't a number is refused, not taken as "report only".
     #[test]
-    fn a_memory_budget_that_is_not_a_number_is_refused() {
-        let mut s = Session::new();
-        let before = crate::memory::budget();
-        for mb in [json!("512"), json!(true), json!([512]), json!({"mb": 512})] {
-            let r = s.execute("app.memoryBudget", &json!({ "mb": mb }));
-            assert!(matches!(&r, Err(EngineError::BadParams { cmd, .. }) if cmd == "app.memoryBudget"), "{mb}: {r:?}");
+    fn a_memory_budget_that_is_not_a_number_is_refused_and_a_missing_one_changes_nothing() {
+        // Upstream issue #3706: an `mb` that is there but isn't a number is refused, not taken as "report only".
+        {
+            let mut s = Session::new();
+            let before = crate::memory::budget();
+            for mb in [json!("512"), json!(true), json!([512]), json!({"mb": 512})] {
+                let r = s.execute("app.memoryBudget", &json!({ "mb": mb }));
+                assert!(matches!(&r, Err(EngineError::BadParams { cmd, .. }) if cmd == "app.memoryBudget"), "{mb}: {r:?}");
+            }
+            assert_eq!(crate::memory::budget(), before, "a refused call changes nothing");
         }
-        assert_eq!(crate::memory::budget(), before, "a refused call changes nothing");
-    }
-
-    /// Missing or null `mb`: the report only.
-    #[test]
-    fn a_missing_or_null_memory_budget_changes_nothing() {
-        let mut s = Session::new();
-        let before = crate::memory::budget();
-        for p in [json!({}), json!({"mb": null})] {
-            let r = s.execute("app.memoryBudget", &p).unwrap();
-            assert_eq!(r["budget"].as_u64(), Some(before as u64), "{p}: {r}");
+        // Missing or null `mb`: the report only.
+        {
+            let mut s = Session::new();
+            let before = crate::memory::budget();
+            for p in [json!({}), json!({"mb": null})] {
+                let r = s.execute("app.memoryBudget", &p).unwrap();
+                assert_eq!(r["budget"].as_u64(), Some(before as u64), "{p}: {r}");
+            }
+            assert_eq!(crate::memory::budget(), before, "nothing changed");
         }
-        assert_eq!(crate::memory::budget(), before, "nothing changed");
     }
 }

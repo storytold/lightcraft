@@ -620,22 +620,20 @@ mod tests {
     }
 
     #[test]
-    fn packbits_decode_noop_skipped() {
-        assert_eq!(packbits::decode(&[0x80, 0, 42], 1).unwrap(), vec![42]);
-    }
-
-    #[test]
-    fn packbits_decode_errors() {
+    fn packbits_decode_errors_and_edge_cases() {
         assert!(packbits::decode(&[], 1).is_err());
         assert!(packbits::decode(&[2, 1, 2], 3).is_err()); // literal truncated
         assert!(packbits::decode(&[0xfe], 3).is_err()); // run truncated
         assert!(packbits::decode(&[0xfd, 1], 3).is_err()); // run overflows (4 > 3)
         assert!(packbits::decode(&[3, 1, 2, 3, 4], 3).is_err()); // literal overflows
-    }
-
-    #[test]
-    fn packbits_zero_expected_ignores_input() {
-        assert_eq!(packbits::decode(&[0xff, 1], 0).unwrap(), Vec::<u8>::new());
+        // packbits decode noop skipped
+        {
+            assert_eq!(packbits::decode(&[0x80, 0, 42], 1).unwrap(), vec![42]);
+        }
+        // packbits zero expected ignores input
+        {
+            assert_eq!(packbits::decode(&[0xff, 1], 0).unwrap(), Vec::<u8>::new());
+        }
     }
 
     fn sample_data(l: &PlaneLayout) -> Vec<u8> {
@@ -682,7 +680,7 @@ mod tests {
     }
 
     #[test]
-    fn rle_truncated_fails() {
+    fn truncated_garbage_and_mis_sized_planes_fail() {
         let l = layout(1, 10, 10, 8, Version::Psd);
         let data = sample_data(&l);
         let enc = encode_planes(Compression::Rle, &data, &l).unwrap();
@@ -690,16 +688,36 @@ mod tests {
             assert!(decode_planes(Compression::Rle, &enc[..cut], &l).is_err(), "cut {cut}");
             assert!(validate_planes(Compression::Rle, &enc[..cut], &l).is_err(), "cut {cut}");
         }
-    }
-
-    #[test]
-    fn zip_truncated_fails() {
-        let l = layout(1, 10, 10, 8, Version::Psd);
-        let data = sample_data(&l);
-        let enc = encode_planes(Compression::Zip, &data, &l).unwrap();
-        for cut in 0..enc.len() - 4 {
-            assert!(decode_planes(Compression::Zip, &enc[..cut], &l).is_err(), "cut {cut}");
-            assert!(validate_planes(Compression::Zip, &enc[..cut], &l).is_err(), "cut {cut}");
+        // zip truncated fails
+        {
+            let l = layout(1, 10, 10, 8, Version::Psd);
+            let data = sample_data(&l);
+            let enc = encode_planes(Compression::Zip, &data, &l).unwrap();
+            for cut in 0..enc.len() - 4 {
+                assert!(decode_planes(Compression::Zip, &enc[..cut], &l).is_err(), "cut {cut}");
+                assert!(validate_planes(Compression::Zip, &enc[..cut], &l).is_err(), "cut {cut}");
+            }
+        }
+        // zip garbage errors
+        {
+            assert!(zip_decompress(&[1, 2, 3, 4], 4).is_err());
+        }
+        // raw short fails
+        {
+            let l = layout(2, 3, 3, 8, Version::Psd);
+            assert!(decode_planes(Compression::Raw, &[0; 17], &l).is_err());
+            assert!(decode_planes(Compression::Raw, &[0; 18], &l).is_ok());
+        }
+        // unknown compression errors
+        {
+            let l = layout(1, 1, 1, 8, Version::Psd);
+            assert!(decode_planes(Compression::Unknown(7), &[0], &l).is_err());
+            assert!(encode_planes(Compression::Unknown(7), &[0], &l).is_err());
+        }
+        // encode rejects wrong size
+        {
+            let l = layout(1, 2, 2, 8, Version::Psd);
+            assert!(encode_planes(Compression::Raw, &[0; 3], &l).is_err());
         }
     }
 
@@ -718,26 +736,6 @@ mod tests {
         // Within the budget the stream is still checked.
         let small = layout(1, 4, 4, 8, Version::Psd);
         assert!(validate_planes(Compression::Zip, &garbage, &small).is_err());
-    }
-
-    #[test]
-    fn raw_short_fails() {
-        let l = layout(2, 3, 3, 8, Version::Psd);
-        assert!(decode_planes(Compression::Raw, &[0; 17], &l).is_err());
-        assert!(decode_planes(Compression::Raw, &[0; 18], &l).is_ok());
-    }
-
-    #[test]
-    fn unknown_compression_errors() {
-        let l = layout(1, 1, 1, 8, Version::Psd);
-        assert!(decode_planes(Compression::Unknown(7), &[0], &l).is_err());
-        assert!(encode_planes(Compression::Unknown(7), &[0], &l).is_err());
-    }
-
-    #[test]
-    fn encode_rejects_wrong_size() {
-        let l = layout(1, 2, 2, 8, Version::Psd);
-        assert!(encode_planes(Compression::Raw, &[0; 3], &l).is_err());
     }
 
     #[test]
@@ -810,11 +808,6 @@ mod tests {
         let big = zip_compress(&vec![0u8; 1 << 20]);
         let out = zip_decompress(&big, 10).unwrap();
         assert_eq!(out.len(), 10);
-    }
-
-    #[test]
-    fn zip_garbage_errors() {
-        assert!(zip_decompress(&[1, 2, 3, 4], 4).is_err());
     }
 }
 

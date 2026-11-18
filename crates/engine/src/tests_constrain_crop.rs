@@ -35,7 +35,7 @@ fn vertical(s: &mut Session, v: f64) {
 }
 
 #[test]
-fn a_geometry_slider_tightens_the_crop_while_constrained() {
+fn a_geometry_slider_or_ticking_constrain_tightens_the_crop() {
     let mut s = Session::with_demo();
     let full = crop(&s).rect;
     constrain(&mut s, true);
@@ -45,12 +45,9 @@ fn a_geometry_slider_tightens_the_crop_while_constrained() {
     assert!(fits(&s), "and holds no blank corner");
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(crop(&s).rect, full, "undo puts the crop back with the slider");
-}
 
-#[test]
-fn ticking_constrain_after_the_warp_tightens_the_crop() {
-    let mut s = Session::with_demo();
-    let full = crop(&s).rect;
+    // ticking Constrain after the warp tightens the crop
+    constrain(&mut s, false);
     vertical(&mut s, -60.0);
     assert_eq!(crop(&s).rect, full, "unconstrained: the crop keeps the blank corners");
     assert!(!fits(&s));
@@ -62,83 +59,57 @@ fn ticking_constrain_after_the_warp_tightens_the_crop() {
     assert_eq!(crop(&s).rect, tight);
 }
 
+/// Review of #1990: with Auto Sync, a Geometry edit on the active photo fits each selected photo's
+/// own crop; the active photo's fitted crop is never copied over another photo's (smaller) crop.
+/// (CodeRabbit:) the same with a slider drag (an interaction), the path the window uses: the drag fits
+/// A's crop live, and its end must not carry that crop over to B.
 #[test]
-fn a_crop_drawn_by_hand_is_kept_as_drawn() {
+fn auto_sync_fits_each_photos_own_crop_also_after_a_slider_drag() {
+    for drag in [false, true] {
+        let mut s = Session::with_demo();
+        let ids: Vec<_> = s.catalog.photos().take(2).map(|p| p.id).collect();
+        let (a, b) = (ids[0], ids[1]);
+        // B: a small crop off-centre; both constrained
+        s.selection = crate::Selection { ids: vec![b], active: Some(b) };
+        s.execute("crop.set", &json!({"rect": [0.05, 0.1, 0.45, 0.5]})).unwrap();
+        constrain(&mut s, true);
+        s.selection = crate::Selection { ids: vec![a], active: Some(a) };
+        constrain(&mut s, true);
+        let b_before = s.develop_of(b).unwrap().crop.geometry.rect;
+        // A active, both selected, Auto Sync on: a Geometry edit on A
+        s.selection = crate::Selection { ids: vec![a, b], active: Some(a) };
+        s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+        if drag {
+            s.execute("develop.beginInteraction", &json!({"label": "Vertical"})).unwrap();
+            for v in [-20.0, -40.0, -60.0] {
+                vertical(&mut s, v);
+            }
+            s.execute("develop.endInteraction", &json!({})).unwrap();
+        } else {
+            vertical(&mut s, -60.0);
+        }
+        let (da, db) = (s.develop_of(a).unwrap(), s.develop_of(b).unwrap());
+        assert_eq!((da.geometry.vertical, db.geometry.vertical), (-60.0, -60.0), "drag {drag}: the edit reached B");
+        let b_after = db.crop.geometry.rect;
+        assert_ne!(b_after, da.crop.geometry.rect, "drag {drag}: B keeps a crop of its own");
+        let inside = |r: Rect, o: Rect| r.x0 >= o.x0 - 1e-9 && r.y0 >= o.y0 - 1e-9 && r.x1 <= o.x1 + 1e-9 && r.y1 <= o.y1 + 1e-9;
+        assert!(inside(b_after, b_before), "drag {drag}: B's crop only shrinks within itself: {b_before:?} -> {b_after:?}");
+        for photo in [a, b] {
+            s.selection = crate::Selection { ids: vec![photo], active: Some(photo) };
+            assert!(fits(&s), "drag {drag}: each crop fits its photo's warp");
+        }
+    }
+}
+
+/// A crop drawn by hand is kept as drawn. Review of #1990 (CodeRabbit): only the Geometry and Optics
+/// eyes change the warp; turning another section's eye off leaves a crop drawn by hand as it is.
+#[test]
+fn a_hand_drawn_crop_is_kept_and_an_unrelated_section_eye_leaves_it() {
     let mut s = Session::with_demo();
     constrain(&mut s, true);
     vertical(&mut s, -60.0);
     s.execute("crop.set", &json!({"rect": [0.0, 0.0, 1.0, 1.0]})).unwrap();
     assert_eq!(crop(&s).rect, Rect::new(0.0, 0.0, 1.0, 1.0), "the crop edit itself is not refitted");
-}
-
-/// Review of #1990: with Auto Sync, a Geometry edit on the active photo fits each selected photo's
-/// own crop; the active photo's fitted crop is never copied over another photo's (smaller) crop.
-#[test]
-fn auto_sync_fits_each_photos_own_crop() {
-    let mut s = Session::with_demo();
-    let ids: Vec<_> = s.catalog.photos().take(2).map(|p| p.id).collect();
-    let (a, b) = (ids[0], ids[1]);
-    // B: a small crop off-centre; both constrained
-    s.selection = crate::Selection { ids: vec![b], active: Some(b) };
-    s.execute("crop.set", &json!({"rect": [0.05, 0.1, 0.45, 0.5]})).unwrap();
-    constrain(&mut s, true);
-    s.selection = crate::Selection { ids: vec![a], active: Some(a) };
-    constrain(&mut s, true);
-    let b_before = s.develop_of(b).unwrap().crop.geometry.rect;
-    // A active, both selected, Auto Sync on: a Geometry edit on A
-    s.selection = crate::Selection { ids: vec![a, b], active: Some(a) };
-    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
-    vertical(&mut s, -60.0);
-    let (da, db) = (s.develop_of(a).unwrap(), s.develop_of(b).unwrap());
-    assert_eq!(db.geometry.vertical, -60.0, "the edit reached B");
-    let b_after = db.crop.geometry.rect;
-    assert_ne!(b_after, da.crop.geometry.rect, "B keeps a crop of its own");
-    let inside = |r: Rect, o: Rect| r.x0 >= o.x0 - 1e-9 && r.y0 >= o.y0 - 1e-9 && r.x1 <= o.x1 + 1e-9 && r.y1 <= o.y1 + 1e-9;
-    assert!(inside(b_after, b_before), "B's crop only shrinks within itself: {b_before:?} -> {b_after:?}");
-    s.selection = crate::Selection { ids: vec![b], active: Some(b) };
-    assert!(fits(&s), "and fits B's warp");
-}
-
-/// Review of #1990 (CodeRabbit): the same with a slider drag (an interaction), the path the
-/// window uses: the drag fits A's crop live, and its end must not carry that crop over to B.
-#[test]
-fn auto_sync_after_a_slider_drag_fits_each_photos_own_crop() {
-    let mut s = Session::with_demo();
-    let ids: Vec<_> = s.catalog.photos().take(2).map(|p| p.id).collect();
-    let (a, b) = (ids[0], ids[1]);
-    s.selection = crate::Selection { ids: vec![b], active: Some(b) };
-    s.execute("crop.set", &json!({"rect": [0.05, 0.1, 0.45, 0.5]})).unwrap();
-    constrain(&mut s, true);
-    s.selection = crate::Selection { ids: vec![a], active: Some(a) };
-    constrain(&mut s, true);
-    let b_before = s.develop_of(b).unwrap().crop.geometry.rect;
-    s.selection = crate::Selection { ids: vec![a, b], active: Some(a) };
-    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
-    s.execute("develop.beginInteraction", &json!({"label": "Vertical"})).unwrap();
-    for v in [-20.0, -40.0, -60.0] {
-        vertical(&mut s, v);
-    }
-    s.execute("develop.endInteraction", &json!({})).unwrap();
-    let (da, db) = (s.develop_of(a).unwrap(), s.develop_of(b).unwrap());
-    assert_eq!((da.geometry.vertical, db.geometry.vertical), (-60.0, -60.0));
-    let b_after = db.crop.geometry.rect;
-    assert_ne!(b_after, da.crop.geometry.rect, "B keeps a crop of its own");
-    let inside = |r: Rect, o: Rect| r.x0 >= o.x0 - 1e-9 && r.y0 >= o.y0 - 1e-9 && r.x1 <= o.x1 + 1e-9 && r.y1 <= o.y1 + 1e-9;
-    assert!(inside(b_after, b_before), "{b_before:?} -> {b_after:?}");
-    for photo in [a, b] {
-        s.selection = crate::Selection { ids: vec![photo], active: Some(photo) };
-        assert!(fits(&s), "each crop fits its photo's warp");
-    }
-}
-
-/// Review of #1990 (CodeRabbit): only the Geometry and Optics eyes change the warp; turning
-/// another section's eye off leaves a crop drawn by hand as it is.
-#[test]
-fn an_unrelated_section_eye_leaves_a_hand_drawn_crop() {
-    let mut s = Session::with_demo();
-    constrain(&mut s, true);
-    vertical(&mut s, -60.0);
-    s.execute("crop.set", &json!({"rect": [0.0, 0.0, 1.0, 1.0]})).unwrap();
     s.execute("develop.sectionEnabled", &json!({"section": "light", "enabled": false})).unwrap();
     assert_eq!(crop(&s).rect, Rect::new(0.0, 0.0, 1.0, 1.0), "the Light eye is no warp change");
     s.execute("develop.sectionEnabled", &json!({"section": "geometry", "enabled": false})).unwrap();

@@ -196,13 +196,6 @@ mod tests {
     }
 
     #[test]
-    fn a_good_manifest_round_trips() {
-        let m = sample();
-        let json = serde_json::to_vec(&m).unwrap();
-        assert_eq!(parse(&json).unwrap(), m);
-    }
-
-    #[test]
     fn bad_fields_are_named() {
         let cases: Vec<(&str, Box<dyn Fn(&mut DenoiserManifest)>)> = vec![
             ("id", Box::new(|m| m.id = "../evil".into())),

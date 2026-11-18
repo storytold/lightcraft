@@ -172,52 +172,6 @@ mod tests {
         TiffWriter::new(ByteOrder::Big, false).write(&[ifd0]).unwrap()
     }
 
-    /// A strip that cannot hold the declared samples is a truncated file, refused as corrupt
-    /// instead of unpacked: `unpack_msb` would otherwise run `n` samples through the few real
-    /// bytes, filling the rest from nothing.
-    #[test]
-    fn a_strip_too_short_for_the_declared_samples_is_refused() {
-        let px: Vec<u16> = (0..16 * 6).map(|i| (i * 41 % 4096) as u16).collect();
-        let f = sample(16, 6, &px);
-        assert!(crate::decode(&f).is_ok());
-        // A truncated file shaped like a real one: IFD tables first, strip last — only its first
-        // 20 packed bytes remain, while the IFD still declares the full 1.5 B/sample length. The
-        // probe accepts the file on the declared length; before the byte gate below, `unpack_msb`
-        // ran the dimension-sized allocation through those 20 bytes, filling it from nothing.
-        let u32be = |b: &[u8], a: usize| u32::from_be_bytes([b[a], b[a + 1], b[a + 2], b[a + 3]]);
-        let full = pack(&px);
-        let at = f.windows(full.len()).position(|w| w == full).expect("strip bytes in the file");
-        let after_strip = at + full.len();
-        let moved = after_strip - (at + 20);
-        let mut g = f[..8].to_vec();
-        g.extend(std::iter::repeat_n(0u8, at + 20 - 8));
-        g.extend_from_slice(&f[after_strip..]);
-        // repoint the first-IFD pointer and ifd0's MAKE / MODEL / SubIfds offsets (the tables now
-        // sit `moved` earlier); the raw sub-IFD's strip offset and byte count are patched below
-        let poke = |b: &mut [u8], a: usize| {
-            let v = u32::from_be_bytes([b[a], b[a + 1], b[a + 2], b[a + 3]]);
-            if v as usize >= after_strip {
-                b[a..a + 4].copy_from_slice(&(v - moved as u32).to_be_bytes());
-            }
-        };
-        let ifd0_at = u32be(&g, 4) as usize - moved;
-        g[4..8].copy_from_slice(&(ifd0_at as u32).to_be_bytes());
-        let n = u16::from_be_bytes([g[ifd0_at], g[ifd0_at + 1]]) as usize;
-        for i in 0..n {
-            poke(&mut g, ifd0_at + 2 + i * 12 + 8);
-        }
-        // the raw sub-IFD: entries follow its count; tag 273 (StripOffsets) is the seventh, held
-        // inline — repoint it at the strip's new home, and append the truncated strip for real
-        let sub_at = u32be(&g, ifd0_at + 2 + 2 * 12 + 8) as usize;
-        let e_offsets = sub_at + 2 + 6 * 12 + 8;
-        let strip_at = g.len() as u32;
-        g[e_offsets..e_offsets + 4].copy_from_slice(&strip_at.to_be_bytes());
-        g.extend_from_slice(&full[..20]);
-        assert_eq!(crate::probe(&g), Some(RawFormat::Mef));
-        let r = crate::decode(&g);
-        assert!(matches!(r, Err(RawError::Corrupt(_))), "{r:?}");
-    }
-
     #[test]
     fn decodes_packed_12_bit() {
         let px: Vec<u16> = (0..16 * 6).map(|i| (i * 41 % 4096) as u16).collect();
@@ -276,5 +230,50 @@ mod tests {
         assert_eq!(crate::probe(&f), Some(RawFormat::Mef));
         assert!(matches!(crate::probe_info(&f), Err(RawError::Corrupt(_))));
         assert!(matches!(crate::decode(&f), Err(RawError::Corrupt(_))));
+        // a strip too short for the declared samples is refused
+        // A strip that cannot hold the declared samples is a truncated file, refused as corrupt
+        // instead of unpacked: `unpack_msb` would otherwise run `n` samples through the few real
+        // bytes, filling the rest from nothing.
+        {
+            let px: Vec<u16> = (0..16 * 6).map(|i| (i * 41 % 4096) as u16).collect();
+            let f = sample(16, 6, &px);
+            assert!(crate::decode(&f).is_ok());
+            // A truncated file shaped like a real one: IFD tables first, strip last — only its first
+            // 20 packed bytes remain, while the IFD still declares the full 1.5 B/sample length. The
+            // probe accepts the file on the declared length; before the byte gate below, `unpack_msb`
+            // ran the dimension-sized allocation through those 20 bytes, filling it from nothing.
+            let u32be = |b: &[u8], a: usize| u32::from_be_bytes([b[a], b[a + 1], b[a + 2], b[a + 3]]);
+            let full = pack(&px);
+            let at = f.windows(full.len()).position(|w| w == full).expect("strip bytes in the file");
+            let after_strip = at + full.len();
+            let moved = after_strip - (at + 20);
+            let mut g = f[..8].to_vec();
+            g.extend(std::iter::repeat_n(0u8, at + 20 - 8));
+            g.extend_from_slice(&f[after_strip..]);
+            // repoint the first-IFD pointer and ifd0's MAKE / MODEL / SubIfds offsets (the tables now
+            // sit `moved` earlier); the raw sub-IFD's strip offset and byte count are patched below
+            let poke = |b: &mut [u8], a: usize| {
+                let v = u32::from_be_bytes([b[a], b[a + 1], b[a + 2], b[a + 3]]);
+                if v as usize >= after_strip {
+                    b[a..a + 4].copy_from_slice(&(v - moved as u32).to_be_bytes());
+                }
+            };
+            let ifd0_at = u32be(&g, 4) as usize - moved;
+            g[4..8].copy_from_slice(&(ifd0_at as u32).to_be_bytes());
+            let n = u16::from_be_bytes([g[ifd0_at], g[ifd0_at + 1]]) as usize;
+            for i in 0..n {
+                poke(&mut g, ifd0_at + 2 + i * 12 + 8);
+            }
+            // the raw sub-IFD: entries follow its count; tag 273 (StripOffsets) is the seventh, held
+            // inline — repoint it at the strip's new home, and append the truncated strip for real
+            let sub_at = u32be(&g, ifd0_at + 2 + 2 * 12 + 8) as usize;
+            let e_offsets = sub_at + 2 + 6 * 12 + 8;
+            let strip_at = g.len() as u32;
+            g[e_offsets..e_offsets + 4].copy_from_slice(&strip_at.to_be_bytes());
+            g.extend_from_slice(&full[..20]);
+            assert_eq!(crate::probe(&g), Some(RawFormat::Mef));
+            let r = crate::decode(&g);
+            assert!(matches!(r, Err(RawError::Corrupt(_))), "{r:?}");
+        }
     }
 }

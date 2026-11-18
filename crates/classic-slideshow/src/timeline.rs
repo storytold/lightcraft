@@ -206,22 +206,24 @@ mod tests {
     }
 
     #[test]
-    fn fits_slides_to_music() {
-        let mut s = settings(false, false, false);
-        s.music.enabled = true;
-        s.music.fit_to_music = true;
-        let p = Plan::new(4, &s, 1, Some(63.0));
-        assert!((p.duration() - 63.0).abs() < 1e-9);
-        assert!((p.hold - 15.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn fits_repeating_slides_to_music() {
-        let mut s = settings(false, false, true);
-        s.music.enabled = true;
-        s.music.fit_to_music = true;
-        let p = Plan::new(4, &s, 1, Some(63.0));
-        assert!((p.duration() - 63.0).abs() < 1e-9, "one pass lasts as long as the music");
+    fn fits_slides_to_music_once_or_repeating() {
+        // fits slides to music
+        {
+            let mut s = settings(false, false, false);
+            s.music.enabled = true;
+            s.music.fit_to_music = true;
+            let p = Plan::new(4, &s, 1, Some(63.0));
+            assert!((p.duration() - 63.0).abs() < 1e-9);
+            assert!((p.hold - 15.0).abs() < 1e-9);
+        }
+        // fits repeating slides to music
+        {
+            let mut s = settings(false, false, true);
+            s.music.enabled = true;
+            s.music.fit_to_music = true;
+            let p = Plan::new(4, &s, 1, Some(63.0));
+            assert!((p.duration() - 63.0).abs() < 1e-9, "one pass lasts as long as the music");
+        }
     }
 
     #[test]

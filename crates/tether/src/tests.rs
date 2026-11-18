@@ -28,9 +28,7 @@ fn existing_files_can_be_skipped() {
 
 #[test]
 fn session_file_round_trips_and_damage_is_reported() {
-    let d = std::env::temp_dir().join(format!("lcc-tether-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
+    let d = lcc_testkit::TempDir::new("lcc-tether");
     assert_eq!(StudioSession::load(&d).unwrap(), None);
     let mut s = StudioSession::new("A", "/in");
     s.fresh(&l(&[("/in/a", 1)]));
@@ -51,9 +49,7 @@ fn session_file_round_trips_and_damage_is_reported() {
 /// partial temp file behind.
 #[test]
 fn full_disk_save_leaves_no_temp_file() {
-    let d = std::env::temp_dir().join(format!("lcc-tether-full-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
+    let d = lcc_testkit::TempDir::new("lcc-tether-full");
     let s = StudioSession::new("A", "/w");
     StudioSession::save(Some(&s), &d).unwrap();
     let before = std::fs::read(d.join(FILE)).unwrap();
@@ -65,5 +61,4 @@ fn full_disk_save_leaves_no_temp_file() {
     assert_eq!(std::fs::read(d.join(FILE)).unwrap(), before);
     let names: Vec<_> = std::fs::read_dir(&d).unwrap().map(|e| e.unwrap().file_name()).collect();
     assert_eq!(names.len(), 1, "{names:?}");
-    let _ = std::fs::remove_dir_all(&d);
 }

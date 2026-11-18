@@ -108,7 +108,7 @@ fn the_kelvin_temp_slider_has_lightrooms_scale() {
 
 /// The relative temperature of a rendered photo (−100…+100, 0 = as shot, in the middle) is unchanged.
 #[test]
-fn the_relative_temp_slider_stays_linear() {
+fn the_relative_temp_slider_stays_linear_in_every_slider_layout_and_text_size() {
     let mut h = edit_panel(false);
     assert!(h.app.widgets.iter().all(|(w, _)| w != "slider:wb.temp"), "a JPEG has the relative scale");
     assert!((thumb(&h, "wb.tempRel") - 0.5).abs() < 0.005, "as shot in the middle");
@@ -119,13 +119,8 @@ fn the_relative_temp_slider_stays_linear() {
     let k = develop(&h).wb.temp;
     let rel = (1e6 / 6500.0 - 1e6 / k) / 0.8;
     assert!((rel - 50.0).abs() < 0.6, "{k} K is {rel} on the relative scale");
-}
-
-/// Two-row sliders (Settings ▸ Interface, issue #346): the track runs under the name and value, longer than
-/// on one row, and clicking, the name's double-click and the value readout work as on one row.
-#[test]
-fn two_row_sliders_have_a_longer_track_and_work_the_same() {
-    let mut h = edit_panel(false);
+    // two-row sliders (Settings ▸ Interface, issue #346): the track runs under the name and value, longer than on
+    // one row, and clicking works as on one row
     let one = widget(&h, "slider:light.exposure");
     h.app.ui.settings.slider_layout = crate::theme::SliderLayout::TwoRows;
     h.settle(SETTLE);
@@ -142,13 +137,8 @@ fn two_row_sliders_have_a_longer_track_and_work_the_same() {
     h.app.ui.settings.slider_layout = crate::theme::SliderLayout::OneRow;
     h.settle(SETTLE);
     assert_eq!(widget(&h, "slider:light.exposure").width(), one.width());
-}
-
-/// Full Size slider text (Settings ▸ Interface): the name and value get more room on one row and on
-/// two, and the slider still works; Compact gives the layout back.
-#[test]
-fn full_size_slider_text_widens_name_and_value() {
-    let mut h = edit_panel(false);
+    // Full Size slider text (Settings ▸ Interface): the name and value get more room on one row and on two, and
+    // the slider still works; Compact gives the layout back
     // (a pill is all name and value, and a click on it never sets it: `tests_pill_slider`)
     for layout in [crate::theme::SliderLayout::OneRow, crate::theme::SliderLayout::TwoRows] {
         h.app.ui.settings.slider_layout = layout;

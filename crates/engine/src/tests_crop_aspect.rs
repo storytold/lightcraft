@@ -31,8 +31,13 @@ fn ratio(s: &Session) -> f64 {
     w / h
 }
 
+/// A named ratio follows the crop (and X keeps it portrait); a custom ratio is used as given. The window
+/// reapplies the last ratio to an untouched photo with `orientation: "crop"`: on a landscape crop it lands
+/// landscape, whatever photo it was chosen on. A bad `orientation` is refused on every path, the lock-as-is
+/// ones ("current", an unlocked "toggle") included, and whether it is a wrong word or not a string at all;
+/// nothing changes.
 #[test]
-fn a_named_ratio_follows_the_crop_and_x_keeps_it_portrait() {
+fn ratios_keep_the_orientation_asked_for_and_a_bad_orientation_is_refused() {
     let mut s = landscape_photo();
     aspect(&mut s, json!({"aspect": "2x3"}));
     assert!((ratio(&s) - 1.5).abs() < 0.01, "landscape crop: {}", ratio(&s));
@@ -43,35 +48,20 @@ fn a_named_ratio_follows_the_crop_and_x_keeps_it_portrait() {
     assert!((ratio(&s) - 0.8).abs() < 0.01, "still portrait: {}", ratio(&s));
     aspect(&mut s, json!({"aspect": "16x9"}));
     assert!((ratio(&s) - 9.0 / 16.0).abs() < 0.01, "{}", ratio(&s));
-}
 
-#[test]
-fn a_custom_ratio_is_used_as_given() {
-    let mut s = landscape_photo();
+    // a custom ratio is used as given
     aspect(&mut s, json!({"aspect": [2, 3]}));
     assert!((ratio(&s) - 2.0 / 3.0).abs() < 0.01, "custom 2 × 3 is portrait: {}", ratio(&s));
     aspect(&mut s, json!({"aspect": [3, 2]}));
     assert!((ratio(&s) - 1.5).abs() < 0.01, "{}", ratio(&s));
-}
 
-/// The window reapplies the last ratio to an untouched photo with `orientation: "crop"`: on a
-/// landscape photo it lands landscape, whatever photo it was chosen on.
-#[test]
-fn orientation_overrides_and_is_checked() {
-    let mut s = landscape_photo();
+    // `orientation` overrides (the crop is landscape now)
     aspect(&mut s, json!({"aspect": [2, 3], "orientation": "crop"}));
-    assert!((ratio(&s) - 1.5).abs() < 0.01, "{}", ratio(&s));
+    assert!((ratio(&s) - 1.5).abs() < 0.01, "follows the crop: {}", ratio(&s));
     aspect(&mut s, json!({"aspect": "2x3", "orientation": "given"}));
-    assert!((ratio(&s) - 2.0 / 3.0).abs() < 0.01, "{}", ratio(&s));
-    let e = s.execute("crop.aspect", &json!({"aspect": "2x3", "orientation": "sideways"})).unwrap_err();
-    assert!(e.to_string().contains("orientation"), "{e}");
-}
+    assert!((ratio(&s) - 2.0 / 3.0).abs() < 0.01, "as given: {}", ratio(&s));
 
-/// A bad `orientation` is refused on every path, the lock-as-is ones ("current", an unlocked
-/// "toggle") included, and whether it is a wrong word or not a string at all; nothing changes.
-#[test]
-fn a_bad_orientation_is_refused_before_anything_is_locked() {
-    let mut s = landscape_photo();
+    // a bad one is refused before anything is locked
     let before = s.develop_of(s.selection.active.unwrap()).unwrap().crop;
     for aspect in [json!("current"), json!("toggle"), json!("2x3"), json!([2, 3]), json!("free")] {
         for orientation in [json!("sideways"), json!(1), json!(true), json!(null)] {

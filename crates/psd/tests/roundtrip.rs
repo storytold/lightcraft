@@ -16,7 +16,15 @@ fn all_generated_cases_roundtrip() {
     let cases = testgen::all_cases();
     assert!(cases.len() > 100, "only {} cases", cases.len());
     for c in &cases {
-        assert_stable(&c.file, &c.name);
+        let f = &c.file;
+        assert_stable(f, &c.name);
+        if c.name.starts_with("layered") {
+            assert!(f.layers().len() > 30, "{}", c.name);
+            // deeper files keep their layers in a global block (Lr16 / Lr32)
+            assert_eq!(matches!(f.layer_info_placement, LayerInfoPlacement::GlobalBlock { .. }), f.header.depth != 8, "{}", c.name);
+        } else if c.name.starts_with("merged") {
+            assert!(f.layer_info.is_none(), "{}", c.name);
+        }
     }
 }
 
@@ -52,77 +60,6 @@ fn merged_only_decodes_to_pattern() {
         }
     }
 }
-
-macro_rules! layered_case {
-    ($name:ident, $ver:expr, $mode:expr, $depth:expr, $comp:expr) => {
-        #[test]
-        fn $name() {
-            let f = testgen::layered($ver, $mode, $depth, $comp);
-            assert_stable(&f, stringify!($name));
-            assert!(f.layers().len() > 30);
-            let expect_placement = $depth != 8;
-            assert_eq!(matches!(f.layer_info_placement, LayerInfoPlacement::GlobalBlock { .. }), expect_placement);
-        }
-    };
-}
-
-layered_case!(layered_psd_rgb8_raw, Version::Psd, ColorMode::Rgb, 8, Compression::Raw);
-layered_case!(layered_psd_rgb8_rle, Version::Psd, ColorMode::Rgb, 8, Compression::Rle);
-layered_case!(layered_psd_rgb8_zip, Version::Psd, ColorMode::Rgb, 8, Compression::Zip);
-layered_case!(layered_psd_rgb8_zipp, Version::Psd, ColorMode::Rgb, 8, Compression::ZipPrediction);
-layered_case!(layered_psd_rgb16_raw, Version::Psd, ColorMode::Rgb, 16, Compression::Raw);
-layered_case!(layered_psd_rgb16_rle, Version::Psd, ColorMode::Rgb, 16, Compression::Rle);
-layered_case!(layered_psd_rgb16_zip, Version::Psd, ColorMode::Rgb, 16, Compression::Zip);
-layered_case!(layered_psd_rgb16_zipp, Version::Psd, ColorMode::Rgb, 16, Compression::ZipPrediction);
-layered_case!(layered_psd_rgb32_raw, Version::Psd, ColorMode::Rgb, 32, Compression::Raw);
-layered_case!(layered_psd_rgb32_rle, Version::Psd, ColorMode::Rgb, 32, Compression::Rle);
-layered_case!(layered_psd_rgb32_zip, Version::Psd, ColorMode::Rgb, 32, Compression::Zip);
-layered_case!(layered_psd_rgb32_zipp, Version::Psd, ColorMode::Rgb, 32, Compression::ZipPrediction);
-layered_case!(layered_psb_rgb8_raw, Version::Psb, ColorMode::Rgb, 8, Compression::Raw);
-layered_case!(layered_psb_rgb8_rle, Version::Psb, ColorMode::Rgb, 8, Compression::Rle);
-layered_case!(layered_psb_rgb8_zip, Version::Psb, ColorMode::Rgb, 8, Compression::Zip);
-layered_case!(layered_psb_rgb8_zipp, Version::Psb, ColorMode::Rgb, 8, Compression::ZipPrediction);
-layered_case!(layered_psb_rgb16_rle, Version::Psb, ColorMode::Rgb, 16, Compression::Rle);
-layered_case!(layered_psb_rgb32_zipp, Version::Psb, ColorMode::Rgb, 32, Compression::ZipPrediction);
-layered_case!(layered_psd_gray8_rle, Version::Psd, ColorMode::Grayscale, 8, Compression::Rle);
-layered_case!(layered_psd_gray16_zipp, Version::Psd, ColorMode::Grayscale, 16, Compression::ZipPrediction);
-layered_case!(layered_psd_gray32_zip, Version::Psd, ColorMode::Grayscale, 32, Compression::Zip);
-layered_case!(layered_psd_cmyk8_rle, Version::Psd, ColorMode::Cmyk, 8, Compression::Rle);
-layered_case!(layered_psd_cmyk16_raw, Version::Psd, ColorMode::Cmyk, 16, Compression::Raw);
-layered_case!(layered_psb_cmyk8_zip, Version::Psb, ColorMode::Cmyk, 8, Compression::Zip);
-layered_case!(layered_psd_lab8_rle, Version::Psd, ColorMode::Lab, 8, Compression::Rle);
-layered_case!(layered_psb_lab16_zipp, Version::Psb, ColorMode::Lab, 16, Compression::ZipPrediction);
-
-macro_rules! merged_case {
-    ($name:ident, $mode:expr, $depth:expr) => {
-        #[test]
-        fn $name() {
-            for v in [Version::Psd, Version::Psb] {
-                for c in Compression::ALL {
-                    let f = testgen::merged_only(v, $mode, $depth, c, 31, 3);
-                    assert_stable(&f, stringify!($name));
-                    assert!(f.layer_info.is_none());
-                }
-            }
-        }
-    };
-}
-
-merged_case!(merged_bitmap_1, ColorMode::Bitmap, 1);
-merged_case!(merged_gray_8, ColorMode::Grayscale, 8);
-merged_case!(merged_gray_16, ColorMode::Grayscale, 16);
-merged_case!(merged_gray_32, ColorMode::Grayscale, 32);
-merged_case!(merged_indexed_8, ColorMode::Indexed, 8);
-merged_case!(merged_rgb_8, ColorMode::Rgb, 8);
-merged_case!(merged_rgb_16, ColorMode::Rgb, 16);
-merged_case!(merged_rgb_32, ColorMode::Rgb, 32);
-merged_case!(merged_cmyk_8, ColorMode::Cmyk, 8);
-merged_case!(merged_cmyk_16, ColorMode::Cmyk, 16);
-merged_case!(merged_lab_8, ColorMode::Lab, 8);
-merged_case!(merged_lab_16, ColorMode::Lab, 16);
-merged_case!(merged_multichannel_8, ColorMode::Multichannel, 8);
-merged_case!(merged_multichannel_16, ColorMode::Multichannel, 16);
-merged_case!(merged_duotone_8, ColorMode::Duotone, 8);
 
 #[test]
 fn psb_uses_long_section_lengths() {

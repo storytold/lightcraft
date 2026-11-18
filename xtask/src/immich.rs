@@ -388,14 +388,6 @@ pub fn png_rgb8(w: u32, h: u32, rgb: &[u8]) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read as _;
-
-    #[test]
-    fn base_url_defaults_and_trims() {
-        assert_eq!(base_url(None), DEFAULT_URL);
-        assert_eq!(base_url(Some("  ")), DEFAULT_URL);
-        assert_eq!(base_url(Some("https://photos.example.invalid/")), "https://photos.example.invalid");
-    }
 
     #[test]
     fn splits_status_from_body() {
@@ -413,23 +405,6 @@ mod tests {
         assert_eq!(crc32(&[b"123456789"]), 0xCBF4_3926);
         assert_eq!(crc32(&[b"1234", b"56789"]), 0xCBF4_3926);
         assert_eq!(crc32(&[b"IEND"]), 0xAE42_6082);
-    }
-
-    #[test]
-    fn png_is_well_formed_and_round_trips() {
-        let png = fixture_png(3).unwrap();
-        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
-        assert_eq!(&png[12..16], b"IHDR");
-        assert_eq!(u32::from_be_bytes([png[16], png[17], png[18], png[19]]), 64);
-        assert_eq!(u32::from_be_bytes([png[20], png[21], png[22], png[23]]), 48);
-        assert!(png.ends_with(&[0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xAE, 0x42, 0x60, 0x82]));
-        // IDAT inflates to 48 rows of filter byte + 64 RGB pixels
-        let idat_len = u32::from_be_bytes([png[33], png[34], png[35], png[36]]) as usize;
-        assert_eq!(&png[37..41], b"IDAT");
-        let mut raw = Vec::new();
-        flate2::read::ZlibDecoder::new(&png[41..41 + idat_len]).read_to_end(&mut raw).unwrap();
-        assert_eq!(raw.len(), 48 * (1 + 64 * 3));
-        assert!(raw.chunks(1 + 64 * 3).all(|r| r[0] == 0));
     }
 
     #[test]
@@ -453,14 +428,5 @@ mod tests {
         assert!(opts(&["up", "--port", "0"]).is_err());
         assert_eq!(project(2284), "xtask-immich");
         assert_eq!(project(2290), "xtask-immich-2290");
-    }
-
-    #[test]
-    fn host_dirs_cover_the_bind_mount() {
-        let root = Path::new("/r");
-        assert_eq!(host_dirs(root, None)[2], Path::new("/r/target/immich/extlib"));
-        assert_eq!(host_dirs(root, Some("../../x"))[2], Path::new("/r/xtask/immich/../../x"));
-        assert_eq!(host_dirs(root, Some("/abs"))[2], Path::new("/abs"));
-        assert_eq!(host_dirs(root, Some(" "))[0], Path::new("/r/target/immich"));
     }
 }

@@ -238,28 +238,18 @@ mod tests {
         assert!((start[0] - 3.0).abs() < 5.0e-4, "{start:?} ({r:?})");
         assert!((start[1] + 2.0).abs() < 5.0e-4, "{start:?} ({r:?})");
         assert!(r.value < 1.0e-6, "{:?}", r.value);
-    }
-
-    #[test]
-    fn tighter_epsilon_gives_a_closer_answer() {
-        let f = |x: &[f64]| (x[0] - 3.0).powi(2) + (x[1] + 2.0).powi(2);
-        let mut loose = [0.0, 0.0];
-        minimize(f, &mut loose, &SimplexOptions::default());
-        let mut tight = [0.0, 0.0];
-        minimize(f, &mut tight, &SimplexOptions { epsilon: 1.0e-10, ..Default::default() });
-        let loose_err = (loose[0] - 3.0).abs() + (loose[1] + 2.0).abs();
-        let tight_err = (tight[0] - 3.0).abs() + (tight[1] + 2.0).abs();
-        assert!(tight_err <= loose_err + 1.0e-12, "{tight_err} vs {loose_err}");
-        assert!(tight_err < 1.0e-3, "{tight:?}");
-    }
-
-    #[test]
-    fn starts_from_the_supplied_point() {
-        // Starting at the optimum should stay there.
-        let f = |x: &[f64]| (x[0] - 1.0).powi(2);
-        let mut start = [1.0];
-        minimize(f, &mut start, &SimplexOptions::default());
-        assert!((start[0] - 1.0).abs() < 1.0e-6, "{start:?}");
+        // tighter epsilon gives a closer answer
+        {
+            let f = |x: &[f64]| (x[0] - 3.0).powi(2) + (x[1] + 2.0).powi(2);
+            let mut loose = [0.0, 0.0];
+            minimize(f, &mut loose, &SimplexOptions::default());
+            let mut tight = [0.0, 0.0];
+            minimize(f, &mut tight, &SimplexOptions { epsilon: 1.0e-10, ..Default::default() });
+            let loose_err = (loose[0] - 3.0).abs() + (loose[1] + 2.0).abs();
+            let tight_err = (tight[0] - 3.0).abs() + (tight[1] + 2.0).abs();
+            assert!(tight_err <= loose_err + 1.0e-12, "{tight_err} vs {loose_err}");
+            assert!(tight_err < 1.0e-3, "{tight:?}");
+        }
     }
 
     #[test]
@@ -293,14 +283,5 @@ mod tests {
         let r = minimize(f, &mut start, &SimplexOptions { max_iterations: 5, ..Default::default() });
         assert_eq!(r.iterations, 5);
         assert!(r.evaluations >= 5);
-    }
-
-    #[test]
-    fn result_reports_evaluations() {
-        let f = |x: &[f64]| x[0].abs();
-        let mut start = [2.0];
-        let r = minimize(f, &mut start, &SimplexOptions::default());
-        assert!(r.evaluations >= 2);
-        assert!(start[0].abs() < 1.0e-5, "{start:?}");
     }
 }

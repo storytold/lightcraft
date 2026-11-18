@@ -130,6 +130,22 @@ pub fn needed(s: &DevelopSettings) -> bool {
     s.masks.iter().any(|m| m.components.iter().any(|c| wants(&c.shape)))
 }
 
+/// Whether `shape` would use the Subject selection (Subject, Background, People without a person
+/// grid, an Object found by its hint), the one the Subject model gives.
+pub fn wants_subject(shape: &MaskShape) -> bool {
+    match shape {
+        MaskShape::Subject | MaskShape::Background | MaskShape::People { .. } => true,
+        MaskShape::Object { .. } => wants(shape),
+        _ => false,
+    }
+}
+
+/// Whether any mask (or component) of `s` uses the Subject selection: only then does the Subject
+/// model run (a Sky or Landscape mask never waits for it, #969).
+pub fn subject_needed(s: &DevelopSettings) -> bool {
+    s.masks.iter().any(|m| m.components.iter().any(|c| wants_subject(&c.shape)))
+}
+
 /// The selection grid sampled at output pixel `(x, y)` of a `w × h` render of `frame`.
 pub fn sample(grid: &Plane, frame: &Frame, w: usize, h: usize) -> Plane {
     let mut out = Plane::new(w, h);
@@ -238,12 +254,13 @@ pub(crate) fn photo_key(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, fl
 pub fn for_source(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> Arc<AutoMasks> {
     let (t, tint) = crate::local::effective_wb(info, s);
     let want_depth = crate::depth_model::wanted(s);
-    let key = photo_key(src, info, s, false, "auto", (t.to_bits(), tint.to_bits(), want_depth));
+    let want_subject = subject_needed(s) && has_subject_model();
+    let key = photo_key(src, info, s, false, "auto", (t.to_bits(), tint.to_bits(), want_depth, want_subject));
     if let Some((_, a)) = CACHE.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|(k, _)| *k == key) {
         return a.clone();
     }
     let mut analysed = analyze(&proxy(src, info, s));
-    if let Some(subject) = model_subject(src, info, s) {
+    if want_subject && let Some(subject) = model_subject(src, info, s) {
         analysed.subject = subject;
     }
     if let Some(scene) = crate::scene_model::selection(src, info, s) {

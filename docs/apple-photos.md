@@ -124,7 +124,7 @@ Run this once on a Mac whose Photos library you are happy to add a few test imag
 new empty library first: hold ⌥ while opening Photos ▸ Create New).
 
 1. Package the app (ad-hoc signed unless `MACOS_SIGN_IDENTITY` is set): `packaging/macos/package.sh --arch
-   aarch64` (or `x86_64` on an Intel Mac). Check its entitlement: `codesign -d --entitlements -
+   arm64` (or `x64` on an Intel Mac). Check its entitlement: `codesign -d --entitlements -
    target/macos-package/<app>.app` lists `com.apple.security.automation.apple-events`. With a Developer ID
    build, also run the notarized DMG from `dist/release/`.
 2. Open it from the Finder, or with `open target/macos-package/<app>.app --args --demo` (not by running

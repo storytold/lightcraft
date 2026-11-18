@@ -2,16 +2,14 @@
 //! colour written as a `.dcp` that reads back, its look as a `.cube` that reads back, and errors (not panics) for a
 //! missing path or no photo.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 const BIN: &str = env!("CARGO_BIN_EXE_app-cli");
 
-fn scratch(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("lcc-cli-colour-export-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+/// The test's folder in Temp, removed when the test ends.
+fn scratch(name: &str) -> lcc_testkit::TempDir {
+    lcc_testkit::TempDir::new(&format!("lcc-cli-colour-export-{name}"))
 }
 
 fn raw_dng(path: &Path) {

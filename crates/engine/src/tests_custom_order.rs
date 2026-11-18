@@ -25,7 +25,7 @@ fn order(r: &Value) -> Vec<u64> {
 }
 
 #[test]
-fn switching_to_custom_starts_from_the_shown_order() {
+fn switching_to_custom_starts_from_the_shown_order_and_a_move_switches_to_it() {
     let mut s = Session::with_demo();
     let (a, _) = album(&mut s);
     s.execute("library.sort", &json!({"key": "fileName", "ascending": false})).unwrap();
@@ -35,6 +35,13 @@ fn switching_to_custom_starts_from_the_shown_order() {
     assert_eq!(shown(&mut s), before);
     let saved: Vec<u64> = s.catalog.album(AlbumId(a)).unwrap().photo_order.iter().map(|p| p.0).collect();
     assert_eq!(saved, before);
+
+    // moving a photo while another sort is shown switches to Custom
+    s.execute("library.sort", &json!({"key": "fileName", "ascending": true})).unwrap();
+    let o = shown(&mut s);
+    s.execute("album.orderPhotos", &json!({"ids": [o[0]]})).unwrap();
+    assert_eq!(s.sort.key, SortKey::Custom);
+    assert_eq!(shown(&mut s), vec![o[1], o[2], o[3], o[4], o[0]]);
 }
 
 #[test]
@@ -81,17 +88,6 @@ fn order_photos_moves_before_a_photo_or_to_the_end_and_undoes() {
 }
 
 #[test]
-fn moving_in_another_sort_switches_to_custom() {
-    let mut s = Session::with_demo();
-    album(&mut s);
-    s.execute("library.sort", &json!({"key": "fileName", "ascending": true})).unwrap();
-    let o = shown(&mut s);
-    s.execute("album.orderPhotos", &json!({"ids": [o[0]]})).unwrap();
-    assert_eq!(s.sort.key, SortKey::Custom);
-    assert_eq!(shown(&mut s), vec![o[1], o[2], o[3], o[4], o[0]]);
-}
-
-#[test]
 fn set_photo_order_lists_the_rest_after_and_persists() {
     let dir = std::env::temp_dir().join(format!("lc-custom-order-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -127,7 +123,7 @@ fn rename_numbers_the_selection_in_custom_order() {
 // Feature: several orders of the same photos — Duplicate Album keeps the Custom Order, and each
 // copy is then arranged on its own (Lightroom Classic's way: one collection per order).
 #[test]
-fn duplicated_albums_keep_and_then_own_their_orders() {
+fn duplicated_and_new_albums_start_from_the_shown_order_and_then_own_theirs() {
     let mut s = Session::with_demo();
     let (a, ids) = album(&mut s);
     let rev: Vec<u64> = ids.iter().rev().copied().collect();
@@ -147,20 +143,12 @@ fn duplicated_albums_keep_and_then_own_their_orders() {
         assert!(s.execute("album.duplicate", &json!({"id": id})).is_err());
     }
     assert!(s.execute("album.duplicate", &json!({})).is_err());
-}
 
-// Feature: a new album from selected photos starts in the order they are shown.
-#[test]
-fn new_album_from_selection_keeps_the_shown_order() {
-    let mut s = Session::with_demo();
-    let (a, ids) = album(&mut s);
-    let rev: Vec<u64> = ids.iter().rev().copied().collect();
-    s.execute("album.setPhotoOrder", &json!({"album": a, "ids": rev})).unwrap();
+    // Feature: a new album from selected photos starts in the order they are shown (the album is in `rev` order again).
     s.execute("library.sort", &json!({"key": "custom"})).unwrap();
     s.execute("library.select", &json!({"ids": ids})).unwrap();
-    let b = s.execute("album.create", &json!({"name": "Pick", "addSelected": true})).unwrap()["id"].as_u64().unwrap();
-    let got: Vec<u64> = s.catalog.album_photo_order(AlbumId(b)).iter().map(|p| p.0).collect();
-    assert_eq!(got, rev);
+    let picked = s.execute("album.create", &json!({"name": "Pick", "addSelected": true})).unwrap()["id"].as_u64().unwrap();
+    assert_eq!(order_of(&s, picked), rev, "the new album keeps the shown order");
 }
 
 #[test]

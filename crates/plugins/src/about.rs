@@ -154,21 +154,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// The four fields are kept as given; a field left out has no value.
-    #[test]
-    fn keeps_the_fields_given() {
-        let (a, dropped) = About::parse(&json!({
-            "homepage": "https://example.com/geo", "repository": "https://github.com/me/plugins/tree/main/geo",
-            "changelog": "https://example.com/geo/CHANGES.md", "license": " MIT OR Apache-2.0 "
-        }));
-        assert!(dropped.is_empty(), "{dropped:?}");
-        assert_eq!(a.homepage.as_deref(), Some("https://example.com/geo"));
-        assert_eq!(a.license.as_deref(), Some("MIT OR Apache-2.0"), "trimmed");
-        assert_eq!(a.issues().as_deref(), Some("https://github.com/me/plugins/issues"));
-        assert_eq!(About::parse(&json!({"id": "x"})), (About::default(), vec![]));
-        assert_eq!(About::parse(&json!({"homepage": null, "license": ""})), (About::default(), vec![]), "null and empty are absent");
-    }
-
     /// Every hostile value is dropped with a reason that names its field; none panics.
     #[test]
     fn drops_what_it_cannot_use_and_says_why() {

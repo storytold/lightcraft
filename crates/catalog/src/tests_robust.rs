@@ -92,9 +92,13 @@ fn log_records_with_valid_crcs_never_panic() {
 #[test]
 fn damaged_logs_never_panic() {
     let (c, ops) = sample();
+    // the harness opens every prefix of the log twice: a short log of each kind of record (two photos, the album
+    // and its creation) covers every place a record can tear, and each open is cheap
+    let n = ops.len();
+    let ops: Vec<&Op> = ops.iter().enumerate().filter(|(i, _)| *i < 2 || *i + 2 >= n).map(|(_, op)| op).collect();
     let log: String = ops.iter().enumerate().map(|(i, op)| encode_record(i as u64 + 1, op) + "\n").collect();
     let snap = snap_file(VERSION, 2, &c);
-    lcc_fuzzkit::run("catalog.logfile", &[log.as_bytes()], 300, |l| {
+    lcc_fuzzkit::run("catalog.logfile", &[log.as_bytes()], 100, |l| {
         open_and_use(None, Some(l));
         open_and_use(Some(snap.as_bytes()), Some(l));
     });

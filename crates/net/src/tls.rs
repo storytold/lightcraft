@@ -261,21 +261,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fingerprint_round_trip() {
-        let fp = Fingerprint::of(b"abc");
-        let s = fp.to_string();
-        assert_eq!(s.len(), 95);
-        assert_eq!(Fingerprint::parse(&s), Some(fp));
-        assert_eq!(Fingerprint::parse(&s.replace(':', "").to_lowercase()), Some(fp));
-        assert_eq!(Fingerprint::parse("zz"), None);
-        assert_eq!(Fingerprint::parse(&"é".repeat(32)), None);
-    }
-
-    #[test]
-    fn base64() {
-        assert_eq!(base64_decode("aGVsbG8=").unwrap(), b"hello");
-        assert_eq!(base64_decode("!!"), None);
-        assert!(Trust::new().with_ca(b"-----BEGIN CERTIFICATE-----\nAAA").is_err());
-        assert!(Trust::new().with_ca(b"-----nothing").is_err());
+    fn fingerprints_and_pem_parse_or_are_refused() {
+        // fingerprint round trip
+        {
+            let fp = Fingerprint::of(b"abc");
+            let s = fp.to_string();
+            assert_eq!(s.len(), 95);
+            assert_eq!(Fingerprint::parse(&s), Some(fp));
+            assert_eq!(Fingerprint::parse(&s.replace(':', "").to_lowercase()), Some(fp));
+            assert_eq!(Fingerprint::parse("zz"), None);
+            assert_eq!(Fingerprint::parse(&"é".repeat(32)), None);
+        }
+        // base64
+        {
+            assert_eq!(base64_decode("aGVsbG8=").unwrap(), b"hello");
+            assert_eq!(base64_decode("!!"), None);
+            assert!(Trust::new().with_ca(b"-----BEGIN CERTIFICATE-----\nAAA").is_err());
+            assert!(Trust::new().with_ca(b"-----nothing").is_err());
+        }
     }
 }

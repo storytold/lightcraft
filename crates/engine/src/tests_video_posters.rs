@@ -1,18 +1,16 @@
 //! Video import facts and poster thumbnails (M14.2 import side, M14.3) on synthetic H.264 clips
 //! made in-test (filmcraft-h264enc + Mp4Writer, as `crates/video/tests/clips.rs` does).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use lcc_catalog::{MediaKind, Op};
 use serde_json::json;
 
 use crate::Session;
 
-fn temp_dir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("lcc-video-posters-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+/// The test's folder in Temp, removed when the test ends.
+fn temp_dir(tag: &str) -> lcc_testkit::TempDir {
+    lcc_testkit::TempDir::new(&format!("lcc-video-posters-{tag}"))
 }
 
 use lcc_video::test_util::write_clip;

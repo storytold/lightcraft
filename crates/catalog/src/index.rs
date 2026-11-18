@@ -42,6 +42,9 @@ pub(crate) struct Indexes {
     contents: OnceLock<HashMap<String, Vec<PhotoId>>>,
     /// Whether a smart album asks whether a photo has the same content as another ([`Catalog::follows_contents`]).
     contents_asked: OnceLock<bool>,
+    /// Reference photo → its Vignetting Calibration state ([`Catalog::vignetting_reference_states`]), dropped by
+    /// every op that can change it.
+    pub(crate) vignetting_references: OnceLock<HashMap<PhotoId, crate::ReferenceState>>,
 }
 
 /// A copy builds its own when asked (copies are made to be saved, not queried).
@@ -103,6 +106,29 @@ impl Indexes {
         if !keeps_keywords {
             self.keywords = OnceLock::new();
             self.keyword_tree = OnceLock::new();
+        }
+        // (which photo is a reference follows the map table, the photos' files and SHA-1s and whether they're
+        // deleted: only kinds that change none of them keep it)
+        let keeps_references = matches!(
+            op,
+            Op::SetRating { .. }
+                | Op::SetFlag { .. }
+                | Op::SetLabel { .. }
+                | Op::SetDevelop { .. }
+                | Op::SetVersions { .. }
+                | Op::SetHistory { .. }
+                | Op::PushHistory { .. }
+                | Op::SetHistoryCursor { .. }
+                | Op::SetBefore { .. }
+                | Op::SetExported { .. }
+                | Op::SetPreview { .. }
+                | Op::SetCaptured { .. }
+                | Op::SetMeta { .. }
+                | Op::SetAnalysis { .. }
+                | Op::Batch { .. }
+        );
+        if !keeps_references {
+            self.vignetting_references = OnceLock::new();
         }
     }
 

@@ -40,7 +40,7 @@ fn value(h: &Headless, control: &str) -> f64 {
 }
 
 #[test]
-fn a_fader_sets_and_a_knob_nudges_and_each_turn_is_one_undo_step() {
+fn faders_set_knobs_nudge_one_undo_step_a_turn_and_the_buttons_work() {
     let (mut h, tx) = edit_view();
     let (contrast, tint) = (value(&h, "light.contrast"), value(&h, "wb.tint"));
 
@@ -67,27 +67,19 @@ fn a_fader_sets_and_a_knob_nudges_and_each_turn_is_one_undo_step() {
     assert_eq!(value(&h, "wb.tint"), tint);
     h.app.run("edit.undo", json!({})).unwrap();
     assert_eq!(value(&h, "light.contrast"), contrast);
-}
 
-#[test]
-fn the_arrows_step_through_the_photos() {
-    let (mut h, tx) = edit_view();
+    // the arrow buttons step through the photos
     let first = h.app.session.active().unwrap();
     send(&tx, Message::NoteOn { channel: 0, note: 99 }); // Right
     h.step();
-    let second = h.app.session.active().unwrap();
-    assert_ne!(first, second);
+    assert_ne!(h.app.session.active(), Some(first), "Right shows the next photo");
     send(&tx, Message::NoteOn { channel: 0, note: 98 }); // Left
     h.step();
-    assert_eq!(h.app.session.active(), Some(first));
-}
+    assert_eq!(h.app.session.active(), Some(first), "Left goes back");
 
-#[test]
-fn midi_reload_runs_the_hosts_reloader_and_reports_its_answer() {
-    let (mut h, _tx) = edit_view();
-    let r = h.app.run("midi.reload", json!({}));
-    assert_eq!(r, Ok(json!("reloaded")));
-    // without MIDI input (a host that has none) the command says so instead of doing nothing
+    // midi.reload runs the host's reloader and reports its answer; without MIDI input (a host that
+    // has none) the command says so instead of doing nothing
+    assert_eq!(h.app.run("midi.reload", json!({})), Ok(json!("reloaded")));
     let mut bare = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     assert!(bare.run("midi.reload", json!({})).unwrap_err().contains("not available"));
 }

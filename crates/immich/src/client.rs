@@ -12,7 +12,7 @@ use lcc_net::{ClientConfig, DownloadOptions, Fingerprint, Method, Trust};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::error::{ImmichError, status};
+use crate::error::{ImmichError, refusal, status};
 use crate::types::*;
 
 /// How to reach one server.
@@ -130,7 +130,7 @@ impl Client {
             if let Some(b) = body {
                 req = req.json(b);
             }
-            let r = req.send().map_err(ImmichError::from).and_then(|r| if r.is_success() { Ok(r) } else { Err(status(r.status, path)) });
+            let r = req.send().map_err(ImmichError::from).and_then(|r| if r.is_success() { Ok(r) } else { Err(refusal(r, path)) });
             match r {
                 Err(e) if e.retryable() && attempt < self.retries => {
                     let wait = self.backoff.saturating_mul(1 << attempt.min(8));
@@ -186,8 +186,16 @@ impl Client {
     /// `GET /auth/status`: whether this session is elevated (locked-folder assets are visible to
     /// its listings), whether the account unlocks with a password or a PIN code, and when the
     /// elevation ends (the server locks the session again later).
+    ///
+    /// Immich asks an API key for its `all` permission here and, as a key carries no session, the
+    /// answer is never "elevated": a key without `all` is [`ImmichError::SessionRequired`], not a
+    /// missing permission to fix.
     pub fn auth_status(&self) -> Result<AuthStatus, ImmichError> {
-        self.get("/auth/status", true)
+        const PATH: &str = "/auth/status";
+        self.get(PATH, true).map_err(|e| match e {
+            ImmichError::Forbidden(_) => ImmichError::SessionRequired(PATH.into()),
+            e => e,
+        })
     }
 
     /// `POST /auth/session/unlock`: elevate this session with the account's password or PIN code
@@ -202,6 +210,10 @@ impl Client {
             // the server answers 401 (v3.3.1) or 400 for a wrong secret: the user's typo, not the
             // API key this client holds
             ImmichError::BadKey => ImmichError::Status(401, format!("{PATH}: the PIN or password was refused")),
+            // Immich answers 403 to a key without `all` and 400 "only with a session token" to
+            // one with it: an API key has no session to elevate, whatever its permissions
+            ImmichError::Forbidden(_) => ImmichError::SessionRequired(PATH.into()),
+            ImmichError::Status(400, reason) if reason.to_ascii_lowercase().contains("session token") => ImmichError::SessionRequired(PATH.into()),
             e => e,
         })
     }
@@ -261,8 +273,25 @@ impl Client {
 
     /// Download an asset's original to `dest` (resumable; written as `<dest>.part` first).
     pub fn download_original(&self, id: &str, dest: &Path, cancel: Option<Arc<AtomicBool>>) -> Result<u64, ImmichError> {
+        self.download_original_with(id, dest, cancel, None)
+    }
+
+    /// [`Client::download_original`], telling `progress` the bytes so far and the total when the
+    /// server says it.
+    pub fn download_original_with(
+        &self,
+        id: &str,
+        dest: &Path,
+        cancel: Option<Arc<AtomicBool>>,
+        progress: Option<&mut dyn FnMut(u64, Option<u64>)>,
+    ) -> Result<u64, ImmichError> {
         let url = self.url(&format!("/assets/{}/original", path_id(id)?));
-        let opts = DownloadOptions { headers: vec![("x-api-key".into(), self.key.expose().to_string(), true)], cancel, ..DownloadOptions::default() };
+        let opts = DownloadOptions {
+            headers: vec![("x-api-key".into(), self.key.expose().to_string(), true)],
+            cancel,
+            progress,
+            ..DownloadOptions::default()
+        };
         let d = self.http.download(&url, dest, opts).map_err(|e| match e {
             lcc_net::NetError::Status { code, .. } => status(code, "original"),
             e => ImmichError::from(e),
@@ -545,20 +574,58 @@ impl Client {
         self.send(Method::Patch, &format!("/albums/{}", path_id(id)?), Some(&serde_json::json!({ "albumName": name })), true).map(|_| ())
     }
 
-    /// `PUT /albums/{id}/assets`. Needs `albumAsset.create`.
+    /// `PUT /albums/{id}/assets`. Needs `albumAsset.create`. An asset the server refused is an error
+    /// (see [`Client::album_add_checked`] for the per-asset answer).
     pub fn album_add(&self, album: &str, ids: &[String]) -> Result<(), ImmichError> {
-        for chunk in ids.chunks(500) {
-            self.send(Method::Put, &format!("/albums/{}/assets", path_id(album)?), Some(&serde_json::json!({ "ids": chunk })), true)?;
-        }
-        Ok(())
+        refused_as_error(album, ids.len(), self.album_add_checked(album, ids)?)
     }
 
     /// `DELETE /albums/{id}/assets`. Needs `albumAsset.delete`.
     pub fn album_remove(&self, album: &str, ids: &[String]) -> Result<(), ImmichError> {
-        for chunk in ids.chunks(500) {
-            self.send(Method::Delete, &format!("/albums/{}/assets", path_id(album)?), Some(&serde_json::json!({ "ids": chunk })), true)?;
+        refused_as_error(album, ids.len(), self.album_remove_checked(album, ids)?)
+    }
+
+    /// [`Client::album_add`] → the assets the server did **not** put into the album, each with the
+    /// server's reason (`no_permission`, `not_found`, …). An asset that was already in the album
+    /// (`duplicate`) counts as added. `Err`: the request itself failed; chunks sent before it may
+    /// have been applied.
+    pub fn album_add_checked(&self, album: &str, ids: &[String]) -> Result<Vec<(String, String)>, ImmichError> {
+        self.album_bulk(Method::Put, album, ids, "duplicate")
+    }
+
+    /// [`Client::album_remove`] → the assets the server did **not** take out of the album. An
+    /// asset that was not in it (`not_found`) counts as removed.
+    pub fn album_remove_checked(&self, album: &str, ids: &[String]) -> Result<Vec<(String, String)>, ImmichError> {
+        self.album_bulk(Method::Delete, album, ids, "not_found")
+    }
+
+    /// The album add/remove endpoints answer 200 with one `{id, success, error?}` per asset: the
+    /// status alone says nothing about a single asset. `fine`: the per-asset error that means the
+    /// album already is as asked. An asset the answer does not mention is taken as done (some
+    /// servers answer with the album instead of the list).
+    fn album_bulk(&self, method: Method, album: &str, ids: &[String], fine: &str) -> Result<Vec<(String, String)>, ImmichError> {
+        #[derive(serde::Deserialize)]
+        struct Item {
+            #[serde(default)]
+            id: String,
+            #[serde(default)]
+            success: bool,
+            #[serde(default)]
+            error: Option<String>,
         }
-        Ok(())
+        let path = format!("/albums/{}/assets", path_id(album)?);
+        let mut refused = Vec::new();
+        for chunk in ids.chunks(500) {
+            let r = self.send(method, &path, Some(&serde_json::json!({ "ids": chunk })), true)?;
+            let Ok(items) = r.json::<Vec<Item>>() else { continue };
+            for i in items {
+                let why = i.error.unwrap_or_default();
+                if !i.success && why != fine && chunk.contains(&i.id) {
+                    refused.push((i.id, if why.is_empty() { "refused".to_string() } else { why.chars().take(80).collect() }));
+                }
+            }
+        }
+        Ok(refused)
     }
 
     /// The album's asset ids (a metadata search by album: v3's `GET /albums/{id}` leaves them out).
@@ -687,6 +754,14 @@ pub struct NewAsset<'a> {
     pub created: &'a str,
     pub favorite: bool,
     pub sidecar: Option<&'a [u8]>,
+}
+
+/// A bulk album change with refused assets, as one error naming how many and the first reason.
+fn refused_as_error(album: &str, asked: usize, refused: Vec<(String, String)>) -> Result<(), ImmichError> {
+    match refused.first() {
+        None => Ok(()),
+        Some((_, why)) => Err(ImmichError::Status(200, format!("/albums/{album}/assets: {} of {asked} assets were refused ({why})", refused.len()))),
+    }
 }
 
 /// The web page of an asset on server `base`.

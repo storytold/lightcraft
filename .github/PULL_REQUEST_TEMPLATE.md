@@ -67,6 +67,8 @@ Fixes #
       free in `docs/library-shortcuts.md`
 - [ ] The feature's rows in `docs/parity-checklist.md` and its entry in `docs/gaps.md` are updated, honestly (🟡 when
       it is partial), in the same commit
+- [ ] User-visible change: the manual is updated in the same commit (`docs/manual-site/`, `docs/manual/`; pages: ______),
+      and screenshots it made stale are retaken or marked `<NeedsImage>` — or this changes nothing a user sees
 - [ ] New code has a caller: no command, module or setting that nothing reaches yet
 - [ ] Every new image, icon or other asset has its entry in `assets/ATTRIBUTION.md`; no font or media files added
 - [ ] Ready to merge (otherwise open it as a draft)

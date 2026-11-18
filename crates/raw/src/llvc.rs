@@ -355,42 +355,42 @@ mod tests {
         assert_eq!(used, 91);
     }
     #[test]
-    fn sony_zero_at_dpt0_enters_run_state() {
-        // Phase 0 vector "dev1": a "0" at DPT 0 is a zero set that moves to DPTs = 1; the next set uses the "1 0^n 1" code
-        let (v, used) = line("01001101000011001010", 8);
-        assert_eq!(v, vec![0, 0, 0, 0, 5, 0, -3, 1]);
-        assert_eq!(used, 20);
-    }
-    #[test]
-    fn sony_run_value_means_minus_one_zero_sets() {
-        // Phase 0 vector "dev2": run code value 3 = two more zero sets, then "0^n 1" post-run DPT
-        let (v, used) = line("001101100000000", 16);
-        assert_eq!(v, vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0]);
-        assert_eq!(used, 15);
-    }
-    #[test]
-    fn end_of_line_zero_code() {
+    fn vld_lines_decode_to_their_known_vectors() {
         let (v, used) = line("1001110100101100100", 12);
         assert_eq!(v, vec![3, -1, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(used, 19);
-    }
-    #[test]
-    fn dpt_moves_up_down_and_to_zero() {
-        let (v, used) = line("1011000100101111111110011101001011111100000", 20);
-        assert_eq!(v, vec![1, 0, 0, 0, 7, 7, -7, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
-        assert_eq!(used, 43);
-    }
-    #[test]
-    fn all_zero_line_is_two_bits_and_width_truncates() {
-        let (v, used) = line("00", 6); // L = 2 sets, width 6 keeps 6 of 8 values
-        assert_eq!(v, vec![0; 6]);
-        assert_eq!(used, 2);
-    }
-    #[test]
-    fn width_zero_returns_empty_line() {
-        let (v, used) = line("1111", 0);
-        assert!(v.is_empty());
-        assert_eq!(used, 0);
+        // all zero line is two bits and width truncates
+        {
+            let (v, used) = line("00", 6); // L = 2 sets, width 6 keeps 6 of 8 values
+            assert_eq!(v, vec![0; 6]);
+            assert_eq!(used, 2);
+        }
+        // dpt moves up down and to zero
+        {
+            let (v, used) = line("1011000100101111111110011101001011111100000", 20);
+            assert_eq!(v, vec![1, 0, 0, 0, 7, 7, -7, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+            assert_eq!(used, 43);
+        }
+        // width zero returns empty line
+        {
+            let (v, used) = line("1111", 0);
+            assert!(v.is_empty());
+            assert_eq!(used, 0);
+        }
+        // sony run value means minus one zero sets
+        {
+            // Phase 0 vector "dev2": run code value 3 = two more zero sets, then "0^n 1" post-run DPT
+            let (v, used) = line("001101100000000", 16);
+            assert_eq!(v, vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0]);
+            assert_eq!(used, 15);
+        }
+        // sony zero at dpt0 enters run state
+        {
+            // Phase 0 vector "dev1": a "0" at DPT 0 is a zero set that moves to DPTs = 1; the next set uses the "1 0^n 1" code
+            let (v, used) = line("01001101000011001010", 8);
+            assert_eq!(v, vec![0, 0, 0, 0, 5, 0, -3, 1]);
+            assert_eq!(used, 20);
+        }
     }
     #[test]
     fn hostile_input_errors_instead_of_panicking() {
@@ -414,16 +414,6 @@ mod tests {
         Plane { width: 1, height: v.len(), data: v.to_vec() }
     }
     #[test]
-    fn dequant_parity_rule() {
-        for (qi, table) in
-            [(0u32, [-3, -2, -1, 0, 1, 2, 3]), (1, [-6, -5, -2, 0, 2, 5, 6]), (2, [-13, -10, -5, 0, 5, 10, 13]), (3, [-27, -20, -11, 0, 11, 20, 27])]
-        {
-            for (q, v) in (-3..=3).zip(table) {
-                assert_eq!(dequant(q, qi), v, "q={q} qi={qi}");
-            }
-        }
-    }
-    #[test]
     fn quantize_inverts_dequant() {
         for qi in 0..6 {
             for q in -50..=50 {
@@ -435,41 +425,54 @@ mod tests {
     fn dequant_does_not_overflow() {
         assert_eq!(dequant(i32::MAX, 31), i32::MAX);
         assert_eq!(dequant(i32::MIN, 40), -i32::MAX);
-    }
-    #[test]
-    fn extreme_coefficients_do_not_overflow() {
-        for v in [i32::MAX, i32::MIN] {
-            for (w, h) in [(7usize, 9usize), (16, 16), (9, 16)] {
-                let p = |w, h| Plane { width: w, height: h, data: vec![v; w * h] };
-                for ph in 0..2u8 {
-                    let (lh, lw) = (band_rows(h, ph), band_rows(w, 0));
-                    assert!(inverse_53_2d(&p(lw.0, lh.0), &p(lw.0, lh.1), &p(lw.1, lh.0), &p(lw.1, lh.1), ph).is_ok());
+        // extreme coefficients do not overflow
+        {
+            for v in [i32::MAX, i32::MIN] {
+                for (w, h) in [(7usize, 9usize), (16, 16), (9, 16)] {
+                    let p = |w, h| Plane { width: w, height: h, data: vec![v; w * h] };
+                    for ph in 0..2u8 {
+                        let (lh, lw) = (band_rows(h, ph), band_rows(w, 0));
+                        assert!(inverse_53_2d(&p(lw.0, lh.0), &p(lw.0, lh.1), &p(lw.1, lh.0), &p(lw.1, lh.1), ph).is_ok());
+                    }
+                    let (w3, h3) = (w * 8, h * 8);
+                    let mut sizes = vec![];
+                    let (mut cw, mut ch) = (w3, h3);
+                    for ph in [0u8; 3] {
+                        let (a, b) = (band_rows(cw, 0), band_rows(ch, ph));
+                        sizes.push((a, b));
+                        (cw, ch) = (a.0, b.0);
+                    }
+                    let q = |l: usize, xh: bool, yh: bool| {
+                        let ((a, b), (c, d)) = sizes[l];
+                        p(if xh { b } else { a }, if yh { d } else { c })
+                    };
+                    let b = Bands3 {
+                        ll3: q(2, false, false),
+                        hl3: q(2, true, false),
+                        lh3: q(2, false, true),
+                        hh3: q(2, true, true),
+                        hl2: q(1, true, false),
+                        lh2: q(1, false, true),
+                        hh2: q(1, true, true),
+                        hl1: q(0, true, false),
+                        lh1: q(0, false, true),
+                        hh1: q(0, true, true),
+                    };
+                    assert!(reconstruct3(&b, [0, 1, 0]).is_ok());
                 }
-                let (w3, h3) = (w * 8, h * 8);
-                let mut sizes = vec![];
-                let (mut cw, mut ch) = (w3, h3);
-                for ph in [0u8; 3] {
-                    let (a, b) = (band_rows(cw, 0), band_rows(ch, ph));
-                    sizes.push((a, b));
-                    (cw, ch) = (a.0, b.0);
+            }
+        }
+        // dequant parity rule
+        {
+            for (qi, table) in [
+                (0u32, [-3, -2, -1, 0, 1, 2, 3]),
+                (1, [-6, -5, -2, 0, 2, 5, 6]),
+                (2, [-13, -10, -5, 0, 5, 10, 13]),
+                (3, [-27, -20, -11, 0, 11, 20, 27]),
+            ] {
+                for (q, v) in (-3..=3).zip(table) {
+                    assert_eq!(dequant(q, qi), v, "q={q} qi={qi}");
                 }
-                let q = |l: usize, xh: bool, yh: bool| {
-                    let ((a, b), (c, d)) = sizes[l];
-                    p(if xh { b } else { a }, if yh { d } else { c })
-                };
-                let b = Bands3 {
-                    ll3: q(2, false, false),
-                    hl3: q(2, true, false),
-                    lh3: q(2, false, true),
-                    hh3: q(2, true, true),
-                    hl2: q(1, true, false),
-                    lh2: q(1, false, true),
-                    hh2: q(1, true, true),
-                    hl1: q(0, true, false),
-                    lh1: q(0, false, true),
-                    hh1: q(0, true, true),
-                };
-                assert!(reconstruct3(&b, [0, 1, 0]).is_ok());
             }
         }
     }

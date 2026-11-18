@@ -8,18 +8,16 @@
 //!   presets and keywords; a preset that vanished is left out, not a failed scan.
 //! - Given prefs written before these settings existed, then they load with everything off.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde_json::json;
 
 use crate::Session;
 use crate::cmd::library::AutoImportScope;
 
-fn tmp(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("lcc-autoimport-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+/// The test's folder in Temp, removed when the test ends.
+fn tmp(tag: &str) -> lcc_testkit::TempDir {
+    lcc_testkit::TempDir::new(&format!("lcc-autoimport-{tag}"))
 }
 
 fn put(dir: &Path, name: &str) {
@@ -47,28 +45,22 @@ fn subfolders_are_listed_only_when_asked_and_hidden_and_library_folders_are_skip
     let scope = |subfolders| AutoImportScope { folder: dir.to_string_lossy().to_string(), subfolders, skip: Some(dir.join("Library")) };
     assert_eq!(names(&dir, scope(false).list().unwrap()), ["notes.txt", "top.jpg"]);
     assert_eq!(names(&dir, scope(true).list().unwrap()), ["day1/a.jpg", "day1/deep/b.png", "notes.txt", "top.jpg"]);
-    let _ = std::fs::remove_dir_all(&dir);
-}
 
-#[cfg(unix)]
-#[test]
-fn a_folder_link_loop_ends() {
-    let dir = tmp("loop");
-    put(&dir, "sub/a.jpg");
-    std::os::unix::fs::symlink(&dir, dir.join("sub/back")).unwrap();
-    let scope = AutoImportScope { folder: dir.to_string_lossy().to_string(), subfolders: true, skip: None };
-    assert_eq!(names(&dir, scope.list().unwrap()), ["sub/a.jpg"]);
-    let _ = std::fs::remove_dir_all(&dir);
-}
+    // a folder link loop ends
+    #[cfg(unix)]
+    {
+        let dir = tmp("loop");
+        put(&dir, "sub/a.jpg");
+        std::os::unix::fs::symlink(&*dir, dir.join("sub/back")).unwrap();
+        let scope = AutoImportScope { folder: dir.to_string_lossy().to_string(), subfolders: true, skip: None };
+        assert_eq!(names(&dir, scope.list().unwrap()), ["sub/a.jpg"], "link loop");
+    }
 
-#[test]
-fn a_missing_watched_folder_is_an_error_not_an_empty_listing() {
-    let scope = AutoImportScope { folder: tmp("gone").join("nope").to_string_lossy().to_string(), subfolders: true, skip: None };
+    // a missing watched folder is an error, not an empty listing
+    let scope = AutoImportScope { folder: dir.join("nope").to_string_lossy().to_string(), subfolders: true, skip: None };
     assert!(scope.list().is_err());
-}
 
-#[test]
-fn nesting_deeper_than_the_limit_is_cut_off() {
+    // nesting deeper than the limit is cut off
     let dir = tmp("deep");
     let mut sub = String::new();
     for i in 0..(crate::import::AUTO_IMPORT_DEPTH + 4) {
@@ -77,8 +69,7 @@ fn nesting_deeper_than_the_limit_is_cut_off() {
     put(&dir, &format!("{sub}far.jpg"));
     put(&dir, "d0/near.jpg");
     let scope = AutoImportScope { folder: dir.to_string_lossy().to_string(), subfolders: true, skip: None };
-    assert_eq!(names(&dir, scope.list().unwrap()), ["d0/near.jpg"]);
-    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(names(&dir, scope.list().unwrap()), ["d0/near.jpg"], "depth limit");
 }
 
 fn watching(dir: &Path) -> Session {

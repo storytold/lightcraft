@@ -39,8 +39,8 @@ fn ai_mask_errors_offer_the_model_by_kind() {
 /// `run_typed` keeps the engine's kind for the code that decides, and `run` the same message.
 #[test]
 fn run_typed_keeps_the_kind_and_run_the_message() {
+    let dir = lcc_testkit::TempDir::new("lc-ui-error-kinds");
     let mut h = demo();
-    let dir = std::env::temp_dir().join(format!("lc-ui-error-kinds-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     h.app.session.face_models_dir = Some(dir.join("models"));
     // (the app keeps the AI models and the face models in the same folder)
@@ -120,6 +120,7 @@ fn the_ai_models_dialog_offers_the_mediapipe_models() {
 /// `own-model`) with its Download button, which shows the model's terms first.
 #[test]
 fn the_ai_models_dialog_lists_the_downloadable_denoise_models() {
+    let dir = lcc_testkit::TempDir::new("lc-ui-denoise-known");
     let known: Vec<String> = lcc_denoise::known::all().into_iter().filter(|k| k.download.is_some()).map(|k| k.manifest.id).collect();
     if known.is_empty() {
         lcc_testkit::skip!(Feature, "a build without own-model or rawnind-model offers no denoise download");
@@ -128,7 +129,6 @@ fn the_ai_models_dialog_lists_the_downloadable_denoise_models() {
     // tall enough for the whole dialog: the denoise models follow the AI mask and MediaPipe ones
     let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 1800.0], 1.0);
-    let dir = std::env::temp_dir().join(format!("lc-ui-denoise-known-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     h.app.session.set_denoise_models_dir(Some(dir.join("denoise-models")));
     h.app.run("dialog.aiModels", json!({})).unwrap();

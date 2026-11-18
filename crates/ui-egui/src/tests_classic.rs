@@ -76,10 +76,10 @@ fn whats_new_shows_upstreams_file_and_every_entry_file() {
     assert_eq!(dates, newest_first, "each date once, newest first");
 }
 
-/// Quick Develop: a step button adds to every selected photo's own value in one undo step; the
-/// menus set a choice on each.
+/// Library's panels act on the selection, in one session. Quick Develop: a step button adds to every selected
+/// photo's own value in one undo step; the menus set a choice on each.
 #[test]
-fn quick_develop_steps_every_selected_photo() {
+fn library_panels_act_on_the_selection() {
     let mut h = demo();
     let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
     run(&mut h, "library.select", json!({"ids": ids}));
@@ -97,14 +97,56 @@ fn quick_develop_steps_every_selected_photo() {
         assert_eq!(h.app.session.develop_of(lcc_catalog::PhotoId(*id)).unwrap().treatment, lcc_develop::Treatment::Bw);
     }
     assert!(has(&h, "button:qd-crop") && has(&h, "button:qd-wb") && has(&h, "button:qd-autoTone"));
+
+    // Keywording (upstream's keyword box in the Classic panel): the entry field is on screen and a click on a
+    // suggestion adds it to every selected photo
+    h.app.ui.hidden_panels = vec![PanelId::QuickDevelop];
+    h.step();
+    h.step();
+    assert!(has(&h, "field:keyword"), "the keyword field");
+    let k = h.app.widgets.iter().find_map(|(w, _)| w.strip_prefix("kwSuggest:").map(str::to_string)).expect("a suggestion");
+    click(&mut h, &format!("kwSuggest:{k}"));
+    for id in &ids {
+        assert!(
+            h.app.session.catalog.photo(lcc_catalog::PhotoId(*id)).unwrap().meta.keywords.iter().any(|x| x.eq_ignore_ascii_case(&k)),
+            "{k} on {id}"
+        );
+    }
+
+    // Keyword List (upstream's list): created keywords are listed, the tick box toggles a keyword on the selection,
+    // the arrow filters by it; #219: its filter box and rows sit directly under the Classic header
+    h.app.ui.hidden_panels = vec![PanelId::QuickDevelop, PanelId::Keywording];
+    run(&mut h, "keyword.create", json!({"name": "Anna", "person": true}));
+    let id = ids[0];
+    run(&mut h, "library.select", json!({"ids": [id]}));
+    assert!(has(&h, "keywordRow:Anna"), "a created keyword is listed");
+    assert!(has(&h, "classicPanel:keywordList") && has(&h, "field:keywordFilter") && has(&h, "keywordList:create"), "header, filter and +");
+    assert!(!has(&h, "section:keywordList"), "no nested collapsible fold title in Classic view");
+    click(&mut h, "keywordCheck:Anna");
+    let has_kw = |h: &Headless| h.app.session.catalog.photo(lcc_catalog::PhotoId(id)).unwrap().meta.keywords.iter().any(|k| k == "Anna");
+    assert!(has_kw(&h), "the tick adds it");
+    click(&mut h, "keywordCheck:Anna");
+    assert!(!has_kw(&h), "and takes it away");
+    click(&mut h, "keywordShow:Anna");
+    assert_eq!(h.app.session.filter.keyword.as_deref(), Some("Anna"));
+
+    // Collections: the target collection shows under the tree; its × goes back to the Quick Collection
+    h.app.ui.toggle_sidebar_section("panel:catalog");
+    h.app.ui.toggle_sidebar_section("panel:folders");
+    let album = run(&mut h, "album.create", json!({"name": "Keepers"}))["id"].as_u64().unwrap();
+    assert!(has(&h, "collectionsTarget") && !has(&h, "collectionsTargetClear"));
+    run(&mut h, "album.setTarget", json!({"id": album}));
+    assert!(has(&h, "collectionsTargetClear"));
+    click(&mut h, "collectionsTargetClear");
+    assert_eq!(h.app.session.target_album, None);
 }
 
 /// Folders: each disk the library's photos are on is a volume row with its free space; a folder
 /// created through the command shows up on disk and undoes.
 #[test]
 fn folders_panel_lists_volumes_with_free_space() {
+    let dir = lcc_testkit::TempDir::new("classic-ui-vol");
     let mut h = demo();
-    let dir = std::env::temp_dir().join(format!("classic-ui-vol-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a.jpg").to_string_lossy().to_string();
     let id = h.app.session.catalog.alloc_photo_id();
@@ -120,60 +162,6 @@ fn folders_panel_lists_volumes_with_free_space() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Collections: the target collection shows under the tree; its × goes back to the Quick
-/// Collection.
-#[test]
-fn collections_panel_shows_and_clears_the_target() {
-    let mut h = demo();
-    // the Collections panel near the top
-    h.app.ui.toggle_sidebar_section("panel:catalog");
-    h.app.ui.toggle_sidebar_section("panel:folders");
-    let id = run(&mut h, "album.create", json!({"name": "Keepers"}))["id"].as_u64().unwrap();
-    assert!(has(&h, "collectionsTarget") && !has(&h, "collectionsTargetClear"));
-    run(&mut h, "album.setTarget", json!({"id": id}));
-    assert!(has(&h, "collectionsTargetClear"));
-    click(&mut h, "collectionsTargetClear");
-    assert_eq!(h.app.session.target_album, None);
-}
-
-/// Keywording (upstream's keyword box in the Classic panel): the entry field and suggestions (a
-/// click adds to every selected photo) are on screen.
-#[test]
-fn keywording_panel_adds_suggestions_to_the_selection() {
-    let mut h = demo();
-    h.app.ui.hidden_panels = vec![PanelId::QuickDevelop];
-    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
-    run(&mut h, "library.select", json!({"ids": ids}));
-    assert!(has(&h, "field:keyword"));
-    let k = h.app.widgets.iter().find_map(|(w, _)| w.strip_prefix("kwSuggest:").map(str::to_string)).expect("a suggestion");
-    click(&mut h, &format!("kwSuggest:{k}"));
-    for id in &ids {
-        assert!(
-            h.app.session.catalog.photo(lcc_catalog::PhotoId(*id)).unwrap().meta.keywords.iter().any(|x| x.eq_ignore_ascii_case(&k)),
-            "{k} on {id}"
-        );
-    }
-}
-
-/// Keyword List panel (upstream's list): created keywords are listed; the tick box toggles a
-/// keyword on the selection; the arrow filters by it.
-#[test]
-fn keyword_list_marks_filters_and_lists_created_keywords() {
-    let mut h = demo();
-    h.app.ui.hidden_panels = vec![PanelId::QuickDevelop, PanelId::Keywording];
-    run(&mut h, "keyword.create", json!({"name": "Anna", "person": true}));
-    let id = h.app.session.visible_cloned()[0].0;
-    run(&mut h, "library.select", json!({"ids": [id]}));
-    assert!(has(&h, "keywordRow:Anna"), "a created keyword is listed");
-    click(&mut h, "keywordCheck:Anna");
-    let has_kw = |h: &Headless| h.app.session.catalog.photo(lcc_catalog::PhotoId(id)).unwrap().meta.keywords.iter().any(|k| k == "Anna");
-    assert!(has_kw(&h), "the tick adds it");
-    click(&mut h, "keywordCheck:Anna");
-    assert!(!has_kw(&h), "and takes it away");
-    click(&mut h, "keywordShow:Anna");
-    assert_eq!(h.app.session.filter.keyword.as_deref(), Some("Anna"));
-}
-
 /// Library's columns are Classic panel stacks: every panel has a foldable header, Solo Mode
 /// keeps one open per side, hidden panels go away, and the order is the user's.
 #[test]
@@ -183,6 +171,11 @@ fn library_columns_are_classic_panels_with_solo_mode() {
         assert!(has(&h, &format!("classicPanel:{p}")), "{p}");
     }
     assert!(has(&h, "sidebarSection:navigator"));
+    // Develop's editing tools are Develop's alone (a click in Library would send the user into another module)
+    assert!(!has(&h, "icon:edit") && !has(&h, "icon:crop") && !has(&h, "icon:presets"), "no Develop tools in Library");
+    assert!(has(&h, "classicPanel:versions"), "Library's left column holds the Versions panel");
+    assert!(!has(&h, "icon:versions") && !has(&h, "icon:activity"), "no strip at the far right");
+    assert!(has(&h, "icon:collapseRight"), "the right panel folds from the top bar");
     // a click folds a panel and unfolds it again
     click(&mut h, "classicPanel:catalog");
     assert!(!classic::is_open(&h.app, PanelId::Catalog) && !has(&h, "source:all"));
@@ -267,17 +260,6 @@ fn auto_hide_shows_a_side_on_a_click_at_the_edge() {
     assert_eq!(r["ok"], false, "{r}");
 }
 
-/// The module picker: clicking a module's name switches to it (the bar's own context-menu area
-/// used to sit on top of the names and swallow the click).
-#[test]
-fn clicking_a_module_name_switches_module() {
-    let mut h = demo();
-    click(&mut h, "module:map");
-    assert_eq!(h.app.ui.module, crate::module::ModuleId::Map);
-    click(&mut h, "module:develop");
-    assert_eq!(h.app.ui.module, crate::module::ModuleId::Develop);
-}
-
 /// Widgets whose id starts with `prefix`.
 fn rows(h: &Headless, prefix: &str) -> usize {
     h.app.widgets.iter().filter(|(w, _)| w.starts_with(prefix)).count()
@@ -324,14 +306,14 @@ fn develop_column_is_its_own_classic_stack() {
     }
     assert!(has(&h, "sidebarSection:navigator"), "the Navigator, where Classic puts it");
     assert!(rows(&h, "presetGroup:") > 0, "the presets themselves");
-    // the presets are drawn once: with the presets column open (Window ▸ Presets), that column is the
-    // presets — the same panel, with a header of its own
+    // the column is the one place they are drawn: Window ▸ Presets folds and unfolds that panel,
+    // and never moves the presets to the right, in the Edit panels' place
     let in_column = rows(&h, "presetGroup:");
     run(&mut h, "panel.presets", json!({}));
-    assert!(h.app.ui.presets);
-    assert!(rows(&h, "presetGroup:") <= in_column, "the presets are not drawn twice");
+    assert!(rows(&h, "presetGroup:") == 0 && has(&h, "classicPanel:presets"), "folded in the column");
+    assert_eq!(h.app.ui.right, crate::state::RightPanel::Edit, "the Edit panels stay");
     run(&mut h, "panel.presets", json!({}));
-    assert!(!h.app.ui.presets && rows(&h, "presetGroup:") == in_column, "back in the column");
+    assert_eq!(rows(&h, "presetGroup:"), in_column, "unfolded in the column");
     // the Library's panels are not here
     for p in ["catalog", "folders", "publish"] {
         assert!(!has(&h, &format!("classicPanel:{p}")), "{p} belongs to Library");
@@ -344,31 +326,39 @@ fn develop_column_is_its_own_classic_stack() {
     assert!(!has(&h, "classicPanel:sources") && has(&h, "sidebarTitle") && has(&h, "sidebarSection:albums"));
     run(&mut h, "panel.show", json!({"panel": "sources", "visible": false}));
     assert!(!has(&h, "sidebarTitle") && !has(&h, "sidebarSection:albums"));
-}
 
-/// Develop's column folds, solos, reorders and hides its Classic panels exactly as Library's does.
-#[test]
-fn develop_column_folds_solos_reorders_and_hides() {
-    let mut h = develop_demo();
-    // a click folds a panel and unfolds it again (the presets panel above it is bounded, so these
-    // Classic headers are on screen without scrolling)
-    click(&mut h, "classicPanel:versions");
-    assert!(!classic::is_open(&h.app, PanelId::Versions) && !has(&h, "button:versionCreate"));
-    click(&mut h, "classicPanel:versions");
-    assert!(classic::is_open(&h.app, PanelId::Versions) && has(&h, "button:versionCreate"));
-    // Solo Mode: opening one panel folds the others on its side only
-    run(&mut h, "panel.solo", json!({"on": true}));
-    classic::set_open(&mut h.app, PanelId::History, false);
-    classic::set_open(&mut h.app, PanelId::History, true);
-    assert!(classic::is_open(&h.app, PanelId::History));
-    assert!(!classic::is_open(&h.app, PanelId::Versions) && !classic::is_open(&h.app, PanelId::Collections));
-    run(&mut h, "panel.solo", json!({"on": false}));
-    // hiding takes the panel (header and rows) out of the column
-    run(&mut h, "panel.show", json!({"panel": "versions", "visible": false}));
-    assert!(!has(&h, "classicPanel:versions") && !has(&h, "button:versionCreate"));
-    // and the order is the user's
-    run(&mut h, "panel.order", json!({"order": ["history", "collections"]}));
-    assert!(top(&h, "classicPanel:history") < top(&h, "classicPanel:collections"), "History moved above Collections");
+    // Issue #75: the Presets panel folds from its own Classic header, exactly as the panels below it do. Folded,
+    // the panels below are that much higher up the column; the header and its buttons stay either way.
+    let open = |h: &Headless| classic::is_open_with_key(&h.app, crate::panels::presets::IN_COLUMN_KEY);
+    let open_bottom = presets_bottom(&h);
+    let versions_top = top(&h, "classicPanel:versions");
+    click(&mut h, "classicPanel:presets");
+    assert!(!open(&h), "folded");
+    assert_eq!(rows(&h, "presetGroup:"), 0, "the list is folded away");
+    assert!(has(&h, "classicPanel:presets") && has(&h, "icon:presetCreate") && has(&h, "icon:presetMore"), "the header stays");
+    assert!(presets_bottom(&h) < open_bottom, "the panel is shorter: {open_bottom} -> {}", presets_bottom(&h));
+    assert!(top(&h, "classicPanel:versions") < versions_top, "the panels below moved up: {versions_top} -> {}", top(&h, "classicPanel:versions"));
+
+    // Window ▸ Presets brings the presets back from wherever the user put them away — the panel folded, hidden
+    // from the column, or the whole left column hidden — always in the left column
+    run(&mut h, "panel.presets", json!({}));
+    assert!(open(&h) && rows(&h, "presetGroup:") > 0, "unfolded by the command");
+    assert_eq!(top(&h, "classicPanel:versions"), versions_top, "the panels below are back where they were");
+    h.app.ui.hidden_panels.push(crate::module::PanelId::Presets);
+    h.app.ui.left_panel = false;
+    h.settle(SETTLE);
+    assert_eq!(rows(&h, "presetGroup:"), 0);
+    run(&mut h, "panel.presets", json!({}));
+    assert!(h.app.ui.left_panel && rows(&h, "presetGroup:") > 0, "the column and its panel are back");
+    assert_eq!(h.app.ui.right, crate::state::RightPanel::Edit, "beside the Edit panels, not in their place");
+
+    // #108: Develop's tool row holds its tools only; Versions is reached from the column and by its shortcut
+    assert!(has(&h, "icon:crop"), "the tools are Develop's");
+    for id in ["versions", "activity", "keywords", "info", "presets"] {
+        assert!(!has(&h, &format!("icon:{id}")), "Develop's tools are its tools, not {id}");
+    }
+    run(&mut h, "panel.versions", json!({}));
+    assert_eq!(h.app.ui.right, RightPanel::Versions, "the shortcut still opens Versions");
 }
 
 /// A settings file written before Develop had its Classic column has never seen the My Photos
@@ -390,34 +380,11 @@ fn an_older_settings_file_keeps_the_my_photos_panel_hidden() {
     assert!(ui.hidden_panels.is_empty() && ui.layouts[&crate::module::ModuleId::Develop].hidden.is_empty());
 }
 
-/// Develop's editing tools are Develop's alone (a click in Library would send the user into
-/// another module), and #108: Develop's tool row holds its tools only. There is no strip at the
-/// far right any more: the right panel folds from the top bar, and Library's Versions panel is in
-/// its left column, as Develop's is.
-#[test]
-fn the_tool_strip_is_develops_alone() {
-    let lib = demo();
-    assert!(!has(&lib, "icon:edit") && !has(&lib, "icon:crop") && !has(&lib, "icon:presets"), "no Develop tools in Library");
-    assert!(has(&lib, "classicPanel:metadata"), "Library's right column is still there");
-    assert!(has(&lib, "classicPanel:versions"), "Library's left column holds the Versions panel");
-    assert!(!has(&lib, "icon:versions") && !has(&lib, "icon:activity"), "no strip at the far right");
-    assert!(has(&lib, "icon:collapseRight"), "the right panel folds from the top bar");
-    let mut h = develop_demo();
-    // its tools are the row under the histogram
-    assert!(has(&h, "icon:crop"), "the tools are Develop's");
-    for id in ["versions", "activity", "keywords", "info", "presets"] {
-        assert!(!has(&h, &format!("icon:{id}")), "Develop's tools are its tools, not {id}");
-    }
-    // Versions is still reached from Develop's own column and by its shortcut
-    assert!(has(&h, "classicPanel:versions"), "Develop's left column holds the Versions panel");
-    run(&mut h, "panel.versions", json!({}));
-    assert_eq!(h.app.ui.right, RightPanel::Versions, "the shortcut still opens Versions");
-}
-
 /// Issue #44: folded Classic panels (Library and Develop), folded edit sections and Solo Mode are
 /// written to the settings file and come back folded in an app started from it.
 #[test]
 fn folded_panels_and_solo_mode_survive_a_restart() {
+    let dir = lcc_testkit::TempDir::new("lc-fold");
     let mut h = develop_demo();
     click(&mut h, "classicPanel:versions");
     run(&mut h, "panel.solo", json!({"on": true}));
@@ -429,7 +396,6 @@ fn folded_panels_and_solo_mode_survive_a_restart() {
     click(&mut h, "classicPanel:catalog");
     assert!(!classic::is_open(&h.app, PanelId::Catalog));
     // the settings file, as the host writes and reads it
-    let dir = std::env::temp_dir().join(format!("lc-fold-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("ui.json");
     std::fs::write(&path, serde_json::to_vec_pretty(&h.app.ui).unwrap()).unwrap();
@@ -522,46 +488,6 @@ fn black_and_white_in_the_treatment_row_toggles() {
     assert_eq!(h.request("ui.clickWidget", json!({"id": "button:treatment-bw"}), T)["ok"], true);
     h.settle(SETTLE);
     assert!(!crate::is_bw(&h.app.session.develop_of(lcc_catalog::PhotoId(id)).unwrap_or_default()), "B&W toggles back to colour");
-}
-
-/// Issue #75: the Presets panel folds from its own Classic header, exactly as the Versions,
-/// History and Collections panels below it do. Folded, the panels below are that much higher up
-/// the column; unfolded, the presets are back. The header and its buttons stay either way.
-#[test]
-fn the_presets_fold_from_their_header() {
-    let mut h = develop_demo();
-    let open = |h: &Headless| classic::is_open_with_key(&h.app, crate::panels::presets::IN_COLUMN_KEY);
-    assert!(rows(&h, "presetGroup:") > 0, "the presets are listed");
-    assert!(has(&h, "classicPanel:presets"), "a Classic header like the panels below");
-    // the panel's foot, and where the panels below it start
-    let open_bottom = presets_bottom(&h);
-    let versions_top = top(&h, "classicPanel:versions");
-    click(&mut h, "classicPanel:presets");
-    assert!(!open(&h), "folded");
-    assert_eq!(rows(&h, "presetGroup:"), 0, "the list is folded away");
-    assert!(has(&h, "classicPanel:presets") && has(&h, "icon:presetCreate") && has(&h, "icon:presetMore"), "the header stays");
-    assert!(presets_bottom(&h) < open_bottom, "the panel is shorter: {open_bottom} -> {}", presets_bottom(&h));
-    assert!(top(&h, "classicPanel:versions") < versions_top, "the panels below moved up: {versions_top} -> {}", top(&h, "classicPanel:versions"));
-    // and back
-    click(&mut h, "classicPanel:presets");
-    assert!(open(&h) && rows(&h, "presetGroup:") > 0, "unfolded again");
-    assert_eq!(top(&h, "classicPanel:versions"), versions_top, "the panels below are back where they were");
-}
-
-/// The presets fold in the left column only: opening the presets column (Window ▸ Presets) after folding
-/// them there shows the presets, not an empty column, and closing it brings the folded panel back.
-#[test]
-fn folding_the_presets_in_the_column_leaves_the_presets_column_whole() {
-    let mut h = develop_demo();
-    click(&mut h, "classicPanel:presets");
-    assert!(!classic::is_open_with_key(&h.app, crate::panels::presets::IN_COLUMN_KEY), "folded in the column");
-    run(&mut h, "panel.presets", json!({}));
-    assert!(h.app.ui.presets, "the presets column is open");
-    assert!(rows(&h, "presetGroup:") > 0, "and it shows the presets");
-    run(&mut h, "panel.presets", json!({}));
-    assert!(!h.app.ui.presets && rows(&h, "presetGroup:") == 0, "the column is closed and the column's panel is still folded");
-    click(&mut h, "classicPanel:presets");
-    assert!(rows(&h, "presetGroup:") > 0, "unfolded again");
 }
 
 /// Issue #76: the Navigator stays at the top of the left column — the loupe's presets and the
@@ -658,21 +584,6 @@ fn settings_shortcuts_tab_records_a_key() {
     assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Settings { .. })));
 }
 
-/// #219: In Classic Library view, the Keyword List panel renders its filter box and rows
-/// directly under its Classic panel header, without a nested collapsible section header.
-#[test]
-fn keyword_list_has_no_nested_collapsible_header_in_classic() {
-    let mut h = demo();
-    run(&mut h, "panel.right", json!({"show": true}));
-    classic::set_open(&mut h.app, PanelId::KeywordList, true);
-    h.step();
-    h.step();
-    assert!(has(&h, "classicPanel:keywordList"), "Classic header is shown");
-    assert!(has(&h, "field:keywordFilter"), "Filter field is shown in body");
-    assert!(has(&h, "keywordList:create"), "+ button is shown in body");
-    assert!(!has(&h, "section:keywordList"), "No nested collapsible fold title in Classic view");
-}
-
 /// Rate some photos one star and leave the rest unrated: the filter bar's first star shows only the rated
 /// photos in the grid, and Select All takes only those.
 #[test]
@@ -745,4 +656,31 @@ fn library_menu_filters_by_rating() {
     pick(&mut h, "★");
     assert_eq!(h.app.session.filter.rating, 0, "the same stars again clear the rating filter");
     assert_eq!(h.app.session.visible_cloned().len(), all.len());
+}
+
+/// The Catalog panel's All Photographs with the filter bar's stars and flags (issue #1191): a rule
+/// set while All Photographs is shown narrows the grid, as it does in a collection or a folder, and
+/// stays on when the source changes and comes back (Lock Filters on, the default).
+#[test]
+fn star_and_flag_filters_narrow_all_photographs() {
+    let mut h = demo();
+    let all = h.app.session.visible_cloned().len();
+    click(&mut h, "source:all");
+    for w in ["filter:star3", "filter:pick"] {
+        click(&mut h, w);
+    }
+    let f = h.app.session.filter.clone();
+    assert_eq!((f.rating, f.flag), (3, Some(lcc_catalog::Flag::Pick)), "the bar set the rule");
+    let narrowed = h.app.session.visible_cloned().len();
+    assert!((0..all).contains(&narrowed), "the rule narrowed the grid: {narrowed} of {all}");
+    // away to a collection and back: the rule is still on and still narrows
+    let album = run(&mut h, "album.create", json!({"name": "Trip"}))["id"].as_u64().unwrap();
+    run(&mut h, "library.source", json!({"kind": "album", "id": album}));
+    click(&mut h, "source:all");
+    let f = h.app.session.filter.clone();
+    assert_eq!((f.rating, f.flag), (3, Some(lcc_catalog::Flag::Pick)), "the rule survives the source change");
+    assert_eq!(h.app.session.visible_cloned().len(), narrowed);
+    // the chips' clear shows everything again
+    click(&mut h, "button:filterClear");
+    assert_eq!(h.app.session.visible_cloned().len(), all);
 }

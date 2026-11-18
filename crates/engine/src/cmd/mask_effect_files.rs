@@ -599,31 +599,33 @@ mod tests {
 }"#;
 
     #[test]
-    fn reads_a_lightroom_local_template() {
-        assert!(is_lr_local_template(TEMPLATE));
-        let (e, unmapped) = parse_lr_local_template(TEMPLATE, "file").unwrap();
-        assert_eq!(e.name, "Soft Glow");
-        assert!((e.adjust.exposure - 0.5).abs() < 1e-9, "exposure2012 is a quarter of the stops");
-        assert!((e.adjust.clarity + 25.0).abs() < 1e-9, "the 2012 field wins over the old one");
-        assert!((e.adjust.highlights + 50.0).abs() < 1e-9);
-        assert!((e.adjust.temp - 20.0).abs() < 1e-9);
-        assert!((e.adjust.texture + 30.0).abs() < 1e-9);
-        assert!((e.adjust.noise - 10.0).abs() < 1e-9);
-        assert!((e.adjust.amount - 100.0).abs() < 1e-9);
-        assert_eq!(unmapped, vec!["Color luminance".to_string(), "Grain".into()]);
-        assert_eq!(e.extra.get("grain"), Some(&json!(0.25)), "kept for export");
-        assert_eq!(e.point_colors.len(), 1, "the Point Color sample is applied");
-        assert!(e.point_colors[0].hue_shift < 0.0 && e.point_colors[0].range > 0.0);
-        assert!(!e.extra.contains_key("pointColors"));
-        assert!(!e.extra.contains_key("refineSaturation"), "zero settings aren't kept");
-    }
-
-    #[test]
-    fn develop_templates_are_not_local_ones() {
-        let develop = r#"s = { title = "X", type = "Develop", value = { settings = { Exposure2012 = 1 } } }"#;
-        assert!(!is_lr_local_template(develop));
-        assert!(parse_lr_local_template(develop, "x").is_err());
-        assert!(parse_bytes("x.lrtemplate", develop.as_bytes()).is_none(), "left to the develop preset import");
+    fn reads_a_lightroom_local_template_and_leaves_develop_ones() {
+        // reads a lightroom local template
+        {
+            assert!(is_lr_local_template(TEMPLATE));
+            let (e, unmapped) = parse_lr_local_template(TEMPLATE, "file").unwrap();
+            assert_eq!(e.name, "Soft Glow");
+            assert!((e.adjust.exposure - 0.5).abs() < 1e-9, "exposure2012 is a quarter of the stops");
+            assert!((e.adjust.clarity + 25.0).abs() < 1e-9, "the 2012 field wins over the old one");
+            assert!((e.adjust.highlights + 50.0).abs() < 1e-9);
+            assert!((e.adjust.temp - 20.0).abs() < 1e-9);
+            assert!((e.adjust.texture + 30.0).abs() < 1e-9);
+            assert!((e.adjust.noise - 10.0).abs() < 1e-9);
+            assert!((e.adjust.amount - 100.0).abs() < 1e-9);
+            assert_eq!(unmapped, vec!["Color luminance".to_string(), "Grain".into()]);
+            assert_eq!(e.extra.get("grain"), Some(&json!(0.25)), "kept for export");
+            assert_eq!(e.point_colors.len(), 1, "the Point Color sample is applied");
+            assert!(e.point_colors[0].hue_shift < 0.0 && e.point_colors[0].range > 0.0);
+            assert!(!e.extra.contains_key("pointColors"));
+            assert!(!e.extra.contains_key("refineSaturation"), "zero settings aren't kept");
+        }
+        // develop templates are not local ones
+        {
+            let develop = r#"s = { title = "X", type = "Develop", value = { settings = { Exposure2012 = 1 } } }"#;
+            assert!(!is_lr_local_template(develop));
+            assert!(parse_lr_local_template(develop, "x").is_err());
+            assert!(parse_bytes("x.lrtemplate", develop.as_bytes()).is_none(), "left to the develop preset import");
+        }
     }
 
     #[test]
@@ -663,46 +665,48 @@ mod tests {
  <crs:Group><rdf:Alt><rdf:li xml:lang="x-default">Faces</rdf:li></rdf:Alt></crs:Group>
 </rdf:Description></rdf:RDF></x:xmpmeta>"#;
 
-    /// A local preset's Point Color samples land in the effect (not in the unmapped list), and
-    /// unreadable ones are skipped without a panic.
     #[test]
-    fn camera_raw_local_point_colors_are_carried() {
-        let sample = "0.8, 0.5, 0.3, -0.1, 0.2, 0, 0.5, 0, 0.333333, 0.666667, 1, 0.1, 0.3, 0.6, 0.9, 0.2, 0.4, 0.7, 0.9";
-        let seq = format!(
-            "<crs:LocalPointColors><rdf:Seq><rdf:li>{sample}</rdf:li><rdf:li>nonsense</rdf:li><rdf:li>NaN, 1</rdf:li></rdf:Seq></crs:LocalPointColors>\n \
-             <crs:LocalColorVariance><rdf:Seq><rdf:li>-40</rdf:li></rdf:Seq></crs:LocalColorVariance>\n <crs:Name>"
-        );
-        let text = ACR.replacen("<crs:Name>", &seq, 1);
-        let (e, unmapped) = parse_local_xmp(&text, "x").unwrap();
-        assert_eq!(e.point_colors.len(), 1, "{:?}", e.point_colors);
-        assert!(e.point_colors[0].hue_shift < 0.0 && e.point_colors[0].sat_shift > 0.0);
-        assert!((e.point_colors[0].variance + 40.0).abs() < 1e-6);
-        assert!(!unmapped.iter().any(|u| u == "Point Color"), "{unmapped:?}");
-        assert!(!e.is_empty());
-    }
-
-    #[test]
-    fn reads_a_camera_raw_local_preset() {
-        assert!(is_local_xmp(ACR));
-        let (e, unmapped) = parse_local_xmp(ACR, "file").unwrap();
-        assert_eq!((e.name.as_str(), e.group.as_str()), ("Lift Shadows", "Faces"));
-        assert_eq!((e.adjust.exposure, e.adjust.shadows), (1.0, 40.0));
-        assert_eq!(unmapped, vec!["Grain".to_string()]);
-        // a develop preset is not one
-        let develop = ACR
-            .replace(
-                "crs:LocalExposure2012=\"+0.25\" crs:LocalShadows2012=\"0.4\" crs:LocalGrain=\"0.2\" crs:LocalTexture=\"0\"",
-                "crs:Exposure2012=\"1\"",
-            )
-            .replace("PresetType=\"Local\"", "PresetType=\"Normal\"");
-        assert!(!is_local_xmp(&develop));
-        // a preset typed Local that keeps its sliders in a correction
-        let nested = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-<rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:PresetType="Local">
- <crs:MaskGroupBasedCorrections><rdf:Seq><rdf:li><rdf:Description crs:What="Correction" crs:LocalClarity2012="-0.5"/></rdf:li></rdf:Seq></crs:MaskGroupBasedCorrections>
-</rdf:Description></rdf:RDF></x:xmpmeta>"#;
-        let (e, _) = parse_local_xmp(nested, "Soft").unwrap();
-        assert_eq!((e.name.as_str(), e.adjust.clarity), ("Soft", -50.0));
+    fn reads_a_camera_raw_local_preset_with_point_colors() {
+        // camera raw local point colors are carried
+        // A local preset's Point Color samples land in the effect (not in the unmapped list), and
+        // unreadable ones are skipped without a panic.
+        {
+            let sample = "0.8, 0.5, 0.3, -0.1, 0.2, 0, 0.5, 0, 0.333333, 0.666667, 1, 0.1, 0.3, 0.6, 0.9, 0.2, 0.4, 0.7, 0.9";
+            let seq = format!(
+                "<crs:LocalPointColors><rdf:Seq><rdf:li>{sample}</rdf:li><rdf:li>nonsense</rdf:li><rdf:li>NaN, 1</rdf:li></rdf:Seq></crs:LocalPointColors>\n \
+                 <crs:LocalColorVariance><rdf:Seq><rdf:li>-40</rdf:li></rdf:Seq></crs:LocalColorVariance>\n <crs:Name>"
+            );
+            let text = ACR.replacen("<crs:Name>", &seq, 1);
+            let (e, unmapped) = parse_local_xmp(&text, "x").unwrap();
+            assert_eq!(e.point_colors.len(), 1, "{:?}", e.point_colors);
+            assert!(e.point_colors[0].hue_shift < 0.0 && e.point_colors[0].sat_shift > 0.0);
+            assert!((e.point_colors[0].variance + 40.0).abs() < 1e-6);
+            assert!(!unmapped.iter().any(|u| u == "Point Color"), "{unmapped:?}");
+            assert!(!e.is_empty());
+        }
+        // reads a camera raw local preset
+        {
+            assert!(is_local_xmp(ACR));
+            let (e, unmapped) = parse_local_xmp(ACR, "file").unwrap();
+            assert_eq!((e.name.as_str(), e.group.as_str()), ("Lift Shadows", "Faces"));
+            assert_eq!((e.adjust.exposure, e.adjust.shadows), (1.0, 40.0));
+            assert_eq!(unmapped, vec!["Grain".to_string()]);
+            // a develop preset is not one
+            let develop = ACR
+                .replace(
+                    "crs:LocalExposure2012=\"+0.25\" crs:LocalShadows2012=\"0.4\" crs:LocalGrain=\"0.2\" crs:LocalTexture=\"0\"",
+                    "crs:Exposure2012=\"1\"",
+                )
+                .replace("PresetType=\"Local\"", "PresetType=\"Normal\"");
+            assert!(!is_local_xmp(&develop));
+            // a preset typed Local that keeps its sliders in a correction
+            let nested = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:PresetType="Local">
+     <crs:MaskGroupBasedCorrections><rdf:Seq><rdf:li><rdf:Description crs:What="Correction" crs:LocalClarity2012="-0.5"/></rdf:li></rdf:Seq></crs:MaskGroupBasedCorrections>
+    </rdf:Description></rdf:RDF></x:xmpmeta>"#;
+            let (e, _) = parse_local_xmp(nested, "Soft").unwrap();
+            assert_eq!((e.name.as_str(), e.adjust.clarity), ("Soft", -50.0));
+        }
     }
 
     fn found(name: &str, exposure: f64, dir: &str) -> Found {
@@ -717,49 +721,51 @@ mod tests {
     }
 
     #[test]
-    fn dividers_become_groups() {
-        let e = |n: &str| MaskEffect { name: n.into(), ..Default::default() };
-        assert_eq!(divider_title(&e("10 ----- DETAIL ENHANCERS ----- 10")).as_deref(), Some("Detail Enhancers"));
-        assert_eq!(divider_title(&e("50--------MISC-----50")).as_deref(), Some("Misc"));
-        assert_eq!(divider_title(&e("=== Portraits ===")).as_deref(), Some("Portraits"));
-        assert_eq!(divider_title(&e("11_General_-_All_Purpose")), None, "no run of marks");
-        assert_eq!(divider_title(&e("-----")), None, "no title");
-        let busy = MaskEffect { adjust: LocalAdjustments { exposure: 1.0, ..Default::default() }, ..e("20 --- X --- 20") };
-        assert_eq!(divider_title(&busy), None, "a divider sets nothing");
+    fn dividers_and_folders_become_groups() {
+        // dividers become groups
+        {
+            let e = |n: &str| MaskEffect { name: n.into(), ..Default::default() };
+            assert_eq!(divider_title(&e("10 ----- DETAIL ENHANCERS ----- 10")).as_deref(), Some("Detail Enhancers"));
+            assert_eq!(divider_title(&e("50--------MISC-----50")).as_deref(), Some("Misc"));
+            assert_eq!(divider_title(&e("=== Portraits ===")).as_deref(), Some("Portraits"));
+            assert_eq!(divider_title(&e("11_General_-_All_Purpose")), None, "no run of marks");
+            assert_eq!(divider_title(&e("-----")), None, "no title");
+            let busy = MaskEffect { adjust: LocalAdjustments { exposure: 1.0, ..Default::default() }, ..e("20 --- X --- 20") };
+            assert_eq!(divider_title(&busy), None, "a divider sets nothing");
 
-        let list = vec![
-            found("01 Burn", -1.0, "a"),
-            found("10 ----- DETAIL ENHANCERS ----- 10", 0.0, "a"),
-            found("12 Sky", 0.5, "a"),
-            found("20 ----- RETOUCHING ----- 20", 0.0, "a"),
-            found("24a-Eye-Cleaner", 0.1, "a"),
-            found("99 Late", 0.1, "a"),
-            found("Burn (Darken)", -0.5, "a"),
-            Found { dir_group: Some("Other".into()), ..found("15 Elsewhere", 0.2, "b") },
-        ];
-        let (effects, dividers) = assign_groups(list.clone(), None);
-        let groups: Vec<(&str, &str)> = effects.iter().map(|f| (f.effect.name.as_str(), f.effect.group.as_str())).collect();
-        assert_eq!(
-            groups,
-            vec![
-                ("01 Burn", ""),
-                ("12 Sky", "Detail Enhancers"),
-                ("24a-Eye-Cleaner", "Retouching"),
-                ("99 Late", "Retouching"),
-                ("Burn (Darken)", ""),
-                ("15 Elsewhere", "Other"),
-            ]
-        );
-        assert_eq!(dividers.len(), 2);
-        let (effects, _) = assign_groups(list, Some("Mine"));
-        assert!(effects.iter().all(|f| f.effect.group == "Mine"));
-    }
-
-    #[test]
-    fn folder_names_that_only_say_local_presets_give_no_group() {
-        assert_eq!(effect_group_from_dir("Local Adjustment Presets"), None);
-        assert_eq!(effect_group_from_dir("LocalCorrections"), None);
-        assert_eq!(effect_group_from_dir("Local Adjustment Presets/Portrait Brushes"), Some("Portrait Brushes".into()));
-        assert_eq!(effect_group_from_dir("Skin Kit"), Some("Skin Kit".into()));
+            let list = vec![
+                found("01 Burn", -1.0, "a"),
+                found("10 ----- DETAIL ENHANCERS ----- 10", 0.0, "a"),
+                found("12 Sky", 0.5, "a"),
+                found("20 ----- RETOUCHING ----- 20", 0.0, "a"),
+                found("24a-Eye-Cleaner", 0.1, "a"),
+                found("99 Late", 0.1, "a"),
+                found("Burn (Darken)", -0.5, "a"),
+                Found { dir_group: Some("Other".into()), ..found("15 Elsewhere", 0.2, "b") },
+            ];
+            let (effects, dividers) = assign_groups(list.clone(), None);
+            let groups: Vec<(&str, &str)> = effects.iter().map(|f| (f.effect.name.as_str(), f.effect.group.as_str())).collect();
+            assert_eq!(
+                groups,
+                vec![
+                    ("01 Burn", ""),
+                    ("12 Sky", "Detail Enhancers"),
+                    ("24a-Eye-Cleaner", "Retouching"),
+                    ("99 Late", "Retouching"),
+                    ("Burn (Darken)", ""),
+                    ("15 Elsewhere", "Other"),
+                ]
+            );
+            assert_eq!(dividers.len(), 2);
+            let (effects, _) = assign_groups(list, Some("Mine"));
+            assert!(effects.iter().all(|f| f.effect.group == "Mine"));
+        }
+        // folder names that only say local presets give no group
+        {
+            assert_eq!(effect_group_from_dir("Local Adjustment Presets"), None);
+            assert_eq!(effect_group_from_dir("LocalCorrections"), None);
+            assert_eq!(effect_group_from_dir("Local Adjustment Presets/Portrait Brushes"), Some("Portrait Brushes".into()));
+            assert_eq!(effect_group_from_dir("Skin Kit"), Some("Skin Kit".into()));
+        }
     }
 }

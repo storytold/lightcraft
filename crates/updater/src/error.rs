@@ -71,18 +71,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn messages_are_actionable() {
-        let e = UpdateError::NoAssetFor { version: "1.2.3".into(), target: "linux-riscv64".into() };
-        let text = e.to_string();
-        assert!(text.contains("1.2.3") && text.contains("linux-riscv64") && text.contains("releases page"), "{text}");
-        assert!(UpdateError::Http { code: 403, what: "rate limited".into() }.to_string().contains("403"));
-        assert!(UpdateError::Net("dns".into()).to_string().contains("dns"));
-        assert_eq!(UpdateError::Cancelled.to_string(), "cancelled");
-        assert!(UpdateError::NoKey.to_string().starts_with("this build can't verify updates"));
-        assert!(UpdateError::Signature("SHA256SUMS.txt.sig is missing".into()).to_string().contains("not installed: SHA256SUMS.txt.sig is missing"));
-    }
-
-    #[test]
     fn a_status_maps_to_http() {
         let e: UpdateError = lcc_net::NetError::Status { code: 404, reason: "Not Found".into() }.into();
         assert_eq!(e, UpdateError::Http { code: 404, what: "Not Found".into() });

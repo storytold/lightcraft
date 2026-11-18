@@ -72,6 +72,204 @@ fn manifests_never_panic() {
     });
 }
 
+/// The SDK's manifest stamp (`sdk/stamp`) on mutated and malformed modules: errors, never a panic.
+#[test]
+fn stamped_sections_never_panic() {
+    let sandbox = plugin_stamp::Limits { fuel: 5_000_000, ..Default::default() };
+    let stamped = plugin_stamp::stamp(&module(MANIFEST, "{}"), &sandbox).unwrap();
+    lcc_fuzzkit::run("plugins.stamp", &[stamped.as_slice()], 300, |b| {
+        let _ = plugin_stamp::read_section(b);
+        let _ = plugin_stamp::check(b, &sandbox);
+        let _ = plugin_stamp::stamp(b, &sandbox);
+    });
+    for cut in 0..stamped.len() {
+        let _ = plugin_stamp::read_section(&stamped[..cut]);
+        let _ = plugin_stamp::check(&stamped[..cut], &sandbox);
+    }
+    let cut = &stamped[..stamped.len() - 1];
+    assert!(plugin_stamp::read_section(cut).unwrap_err().to_string().contains("past the end"), "a truncated module");
+    let hostile: [(&str, &[u8], &str); 4] = [
+        ("a length over 32 bits", &[0, 0xff, 0xff, 0xff, 0xff, 0x7f], "bad length"),
+        ("a length that never ends", &[0, 0x80], "bad length"),
+        ("a name that isn't UTF-8", &[0, 3, 2, 0xff, 0xfe], "UTF-8"),
+        ("a name longer than its section", &[0, 2, 9, b'x'], "runs past"),
+    ];
+    for (what, tail, needle) in hostile {
+        let wasm = [stamped.as_slice(), tail].concat();
+        let err = plugin_stamp::read_section(&wasm).expect_err(what).to_string();
+        assert!(err.contains(needle), "{what}: {err}");
+        assert!(plugin_stamp::check(&wasm, &sandbox).is_err(), "{what}");
+        assert!(plugin_stamp::stamp(&wasm, &sandbox).is_err(), "{what}");
+    }
+    let twice = plugin_stamp::stamp(&module(MANIFEST, "{}"), &sandbox).unwrap();
+    let section = &twice[module(MANIFEST, "{}").len()..];
+    let doubled = [twice.as_slice(), section].concat();
+    assert_eq!(plugin_stamp::read_section(&doubled), Err(plugin_stamp::Error::Duplicate(2)), "two sections");
+    assert_eq!(plugin_stamp::check(&doubled, &sandbox), Err(plugin_stamp::Error::Duplicate(2)));
+}
+
+/// The host's own read of a stamped section ([`Plugin::inspect`], and [`Plugin::load`]'s check
+/// against `lcc_manifest`) on mutated and malformed modules: errors, never a panic.
+#[test]
+fn inspected_sections_never_panic() {
+    let limits = lcc_plugins::Limits { fuel: 5_000_000, ..Default::default() };
+    let unstamped = module(MANIFEST, "{}");
+    let stamped = plugin_stamp::stamp(&unstamped, &plugin_stamp::Limits::default()).unwrap();
+    assert_eq!(Plugin::inspect(&stamped, limits.clone(), false).unwrap().source, lcc_plugins::ManifestSource::Section);
+    lcc_fuzzkit::run("plugins.inspect", &[stamped.as_slice()], 300, |b| {
+        let _ = Plugin::inspect(b, limits.clone(), false);
+        let _ = Plugin::inspect(b, limits.clone(), true);
+    });
+    // the section goes last: a truncated module fails, or (cut at a section boundary) has no section left
+    for cut in 0..stamped.len() {
+        let read = Plugin::inspect(&stamped[..cut], limits.clone(), false);
+        assert!(read.as_ref().map_or(true, |i| i.source == lcc_plugins::ManifestSource::Export), "cut at {cut}");
+    }
+    let section = |data: &[u8]| {
+        let name = lcc_plugins::MANIFEST_SECTION.as_bytes();
+        let mut payload = vec![u8::try_from(name.len()).unwrap()];
+        payload.extend_from_slice(name);
+        payload.extend_from_slice(data);
+        let mut out = vec![0u8];
+        let mut n = payload.len();
+        loop {
+            let b = (n & 0x7f) as u8;
+            n >>= 7;
+            out.push(if n == 0 { b } else { b | 0x80 });
+            if n == 0 {
+                break;
+            }
+        }
+        out.extend_from_slice(&payload);
+        out
+    };
+    let oversized = format!(r#"{{"id":"t","name":"T","version":"1.0.0","pad":"{}"}}"#, "x".repeat(lcc_plugins::manifest::MAX_MANIFEST_BYTES));
+    let hostile: [(&str, Vec<u8>, &str); 6] = [
+        ("a length over 32 bits", [unstamped.as_slice(), &[0, 0xff, 0xff, 0xff, 0xff, 0x7f]].concat(), "not a valid plug-in module"),
+        ("a length past the end", [unstamped.as_slice(), &[0, 9, 1, b'x']].concat(), "not a valid plug-in module"),
+        ("two sections", [stamped.as_slice(), &section(MANIFEST.as_bytes())].concat(), "2 photo-plugin.manifest sections"),
+        ("an oversized section", [unstamped.as_slice(), &section(oversized.as_bytes())].concat(), "limit 65536"),
+        ("invalid UTF-8", [unstamped.as_slice(), &section(b"{\"id\":\"\xff\"}")].concat(), "plug-in manifest"),
+        ("invalid JSON", [unstamped.as_slice(), &section(b"{\"id\"")].concat(), "plug-in manifest"),
+    ];
+    for (what, wasm, needle) in hostile {
+        let e = Plugin::inspect(&wasm, limits.clone(), false).expect_err(what).to_string();
+        assert!(e.contains(needle), "{what}: {e}");
+        assert!(Plugin::load(&wasm, limits.clone()).is_err(), "{what}: loading refuses it too");
+    }
+}
+
+/// A custom section `name` holding `data`, with the shortest lengths.
+fn custom_section(name: &str, data: &[u8]) -> Vec<u8> {
+    let leb = |out: &mut Vec<u8>, mut n: usize| loop {
+        let b = (n & 0x7f) as u8;
+        n >>= 7;
+        out.push(if n == 0 { b } else { b | 0x80 });
+        if n == 0 {
+            break;
+        }
+    };
+    let mut payload = Vec::new();
+    leb(&mut payload, name.len());
+    payload.extend_from_slice(name.as_bytes());
+    payload.extend_from_slice(data);
+    let mut out = vec![0u8];
+    leb(&mut out, payload.len());
+    out.extend_from_slice(&payload);
+    out
+}
+
+/// Author signature sections that don't hold up, on every path that reads one (`plugin-stamp`,
+/// [`Plugin::inspect`], [`Plugin::load`], installing): each is "invalid" with why, never read as
+/// unsigned, never installed, and mutated or truncated signed modules never panic.
+#[test]
+fn hostile_signature_sections_are_invalid_and_never_panic() {
+    let limits = lcc_plugins::Limits { fuel: 5_000_000, ..Default::default() };
+    let stamped = plugin_stamp::stamp(&module(MANIFEST, r#"{"said":"before"}"#), &plugin_stamp::Limits::default()).unwrap();
+    let signed = plugin_stamp::sign(&stamped, &[5; 32], &plugin_stamp::Limits::default()).unwrap();
+    assert!(matches!(Plugin::inspect(&signed, limits.clone(), false).unwrap().signature, lcc_plugins::Signature::Valid(_)));
+    let sig = |data: &[u8]| custom_section(lcc_plugins::SIGNATURE_SECTION, data);
+    // the section's JSON, as plugin-stamp wrote it: the end of the signed file
+    let own: serde_json::Value = {
+        let tail = &signed[stamped.len()..];
+        let at = tail.iter().position(|&b| b == b'{').unwrap();
+        serde_json::from_slice(&tail[at..]).unwrap()
+    };
+    let with = |field: &str, value: serde_json::Value| {
+        let mut o = own.clone();
+        o[field] = value;
+        [stamped.as_slice(), &sig(o.to_string().as_bytes())].concat()
+    };
+    let without = |field: &str| {
+        let mut o = own.clone();
+        o.as_object_mut().unwrap().remove(field);
+        [stamped.as_slice(), &sig(o.to_string().as_bytes())].concat()
+    };
+    let b64 = |bytes: &[u8]| {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    };
+    // what the code answers, changed after signing: the module is still a valid, current plug-in
+    let mut changed = signed.clone();
+    let at = changed.windows(6).position(|w| w == b"before").unwrap();
+    changed[at] = b'B';
+    // the section with its size written in five bytes instead of the fewest: not what the signer wrote
+    let padded = {
+        let name = lcc_plugins::SIGNATURE_SECTION.as_bytes();
+        let data = own.to_string();
+        let len = 1 + name.len() + data.len();
+        let mut s = vec![0, (len & 0x7f) as u8 | 0x80, ((len >> 7) & 0x7f) as u8 | 0x80, 0x80, 0x80, 0];
+        s.push(u8::try_from(name.len()).unwrap());
+        s.extend_from_slice(name);
+        s.extend_from_slice(data.as_bytes());
+        [stamped.as_slice(), &s].concat()
+    };
+    let pad = format!(r#"{{"v":1,"pad":"{}"}}"#, "x".repeat(lcc_plugins::MAX_SIGNATURE_BYTES));
+    let hostile: Vec<(&str, Vec<u8>, &str)> = vec![
+        ("changed after signing", changed, "doesn't match the file"),
+        ("a section after it", [signed.as_slice(), &custom_section("x", b"y")].concat(), "isn't the file's last section"),
+        ("two signature sections", [signed.as_slice(), &sig(own.to_string().as_bytes())].concat(), "2 photo-plugin.signature sections"),
+        ("an oversized section", [stamped.as_slice(), &sig(pad.as_bytes())].concat(), "limit 1024"),
+        ("a 31-byte key", with("key", b64(&[7; 31]).into()), "isn't 32 bytes"),
+        ("a 63-byte signature", with("sig", b64(&[7; 63]).into()), "isn't 64 bytes"),
+        ("a key that isn't base64", with("key", "not base64!".into()), "isn't base64"),
+        ("a signature that isn't base64", with("sig", "not base64!".into()), "`sig` isn't base64"),
+        ("a padded section size", padded, "isn't the file's last section"),
+        ("a signature that isn't a string", with("sig", json!(7)), "no `sig` string"),
+        ("no key", without("key"), "no `key` string"),
+        ("format version 2", with("v", json!(2)), "format version 2"),
+        ("no format version", without("v"), "no format version"),
+        ("invalid JSON", [stamped.as_slice(), &sig(b"{\"v\":1,")].concat(), "isn't JSON"),
+        ("not an object", [stamped.as_slice(), &sig(b"[1]")].concat(), "isn't a JSON object"),
+        ("invalid UTF-8", [stamped.as_slice(), &sig(b"\xff\xfe")].concat(), "isn't JSON"),
+        ("another key named", with("key", b64(&plugin_stamp::public_key(&[6; 32])).into()), "doesn't match the file"),
+    ];
+    for (what, wasm, why) in &hostile {
+        let lcc_plugins::Signature::Invalid(host) = Plugin::inspect(wasm, limits.clone(), false).expect(what).signature else {
+            panic!("{what}: the host reads it as invalid")
+        };
+        assert!(host.contains(why), "{what}: {host}");
+        assert!(matches!(Plugin::inspect(wasm, limits.clone(), true).expect(what).signature, lcc_plugins::Signature::Invalid(_)), "{what}: verified");
+        assert!(matches!(plugin_stamp::signature(wasm), Ok(plugin_stamp::Signature::Invalid(_))), "{what}: the stamp tool agrees");
+        let e = Plugin::load(wasm, limits.clone()).expect_err(what).to_string();
+        assert!(e.starts_with("plug-in signature:") && e.contains(why), "{what}: {e}");
+        let mut m = Manager::in_memory();
+        assert!(m.install_bytes(wasm, None, false).is_err(), "{what}: never installed");
+        assert!(m.list().next().is_none(), "{what}");
+    }
+    lcc_fuzzkit::run("plugins.signature", &[signed.as_slice()], 300, |b| {
+        let _ = Plugin::inspect(b, limits.clone(), false);
+        let _ = Plugin::load(b, limits.clone());
+        let _ = plugin_stamp::signature(b);
+    });
+    // the signature goes last: a truncated module is no longer validly signed
+    for cut in 0..signed.len() {
+        let read = Plugin::inspect(&signed[..cut], limits.clone(), false);
+        assert!(read.map_or(true, |i| i.signature.signer().is_none()), "cut at {cut}");
+        assert!(!matches!(plugin_stamp::signature(&signed[..cut]), Ok(plugin_stamp::Signature::Valid { .. })), "cut at {cut}");
+    }
+}
+
 /// `requires` and `version` from a hostile manifest: errors, never a panic.
 #[test]
 fn hostile_requires_and_versions_are_errors() {

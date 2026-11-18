@@ -107,22 +107,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn renders_menus_and_hides_the_name() {
-        let reply = r#"{"id":1,"ok":true,"result":[
-            {"id":"a.b","label":"Quit Zzyzx Test","menu":["File"],"shortcut":"Cmd+Q"},
-            {"id":"c.d","label":"None","menu":["File"],"shortcut":null},
-            {"id":"e.f","label":"Pipe","menu":["View","Sub"],"shortcut":"|"}]}"#;
-        let e = parse(reply, "Zzyzx Test").unwrap();
-        assert_eq!(e.len(), 2);
-        let md = render(&e);
-        assert!(md.contains("| `Cmd+Q` | Quit <app> |  | `a.b` |"));
-        assert!(md.contains("## View") && md.contains("| Sub |") && md.contains("`\\|`"));
-        assert!(!md.contains("Zzyzx"));
-    }
-
-    #[test]
-    fn bad_reply_is_an_error() {
-        assert!(parse("not json", "App").is_err());
-        assert!(parse("{}", "App").is_err());
+    fn renders_menus_hides_the_name_and_refuses_bad_replies() {
+        // renders menus and hides the name
+        {
+            let reply = r#"{"id":1,"ok":true,"result":[
+                {"id":"a.b","label":"Quit Zzyzx Test","menu":["File"],"shortcut":"Cmd+Q"},
+                {"id":"c.d","label":"None","menu":["File"],"shortcut":null},
+                {"id":"e.f","label":"Pipe","menu":["View","Sub"],"shortcut":"|"}]}"#;
+            let e = parse(reply, "Zzyzx Test").unwrap();
+            assert_eq!(e.len(), 2);
+            let md = render(&e);
+            assert!(md.contains("| `Cmd+Q` | Quit <app> |  | `a.b` |"));
+            assert!(md.contains("## View") && md.contains("| Sub |") && md.contains("`\\|`"));
+            assert!(!md.contains("Zzyzx"));
+        }
+        // bad reply is an error
+        {
+            assert!(parse("not json", "App").is_err());
+            assert!(parse("{}", "App").is_err());
+        }
     }
 }

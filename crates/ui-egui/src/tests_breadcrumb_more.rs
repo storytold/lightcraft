@@ -12,7 +12,7 @@ const T: Duration = Duration::from_secs(30);
 
 #[test]
 fn the_breadcrumb_dots_list_the_hidden_folders_and_each_opens() {
-    let root = std::env::temp_dir().join(format!("app-crumb-more-{}", std::process::id()));
+    let root = lcc_testkit::TempDir::new("app-crumb-more");
     let deep = root.join("a").join("b").join("c").join("d").join("e");
     std::fs::create_dir_all(&deep).unwrap();
     let img = lcc_raster::Rgba8::from_fn(24, 16, |x, y| [(x * 9) as u8, (y * 12) as u8, 80, 255]);
@@ -40,6 +40,6 @@ fn the_breadcrumb_dots_list_the_hidden_folders_and_each_opens() {
     assert_eq!(h.request("ui.clickWidget", json!({"id": id}), T)["ok"], true);
     h.settle(T);
     let browsed = h.app.session.browse.as_ref().map(|b| std::path::PathBuf::from(&b.path));
-    assert_eq!(browsed.as_deref(), Some(root.as_path()), "the hidden folder opens");
+    assert_eq!(browsed.as_deref(), Some(root.path()), "the hidden folder opens");
     let _ = std::fs::remove_dir_all(&root);
 }

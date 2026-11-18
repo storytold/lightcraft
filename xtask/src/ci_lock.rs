@@ -142,25 +142,27 @@ mod tests {
     }
 
     #[test]
-    fn one_slot_is_exclusive_until_dropped() {
-        let dir = scratch("one");
-        let first = try_acquire(&dir, 1, "first").unwrap().expect("free slot");
-        assert!(try_acquire(&dir, 1, "second").unwrap().is_none());
-        assert_eq!(holders(&dir, 1), ["first"]);
-        drop(first);
-        assert!(holders(&dir, 1).is_empty());
-        assert!(try_acquire(&dir, 1, "third").unwrap().is_some());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn more_slots_admit_more_runs() {
-        let dir = scratch("two");
-        let a = try_acquire(&dir, 2, "a").unwrap();
-        let b = try_acquire(&dir, 2, "b").unwrap();
-        assert!(a.is_some() && b.is_some());
-        assert!(try_acquire(&dir, 2, "c").unwrap().is_none());
-        assert_eq!(holders(&dir, 2), ["a", "b"]);
-        let _ = std::fs::remove_dir_all(&dir);
+    fn slots_are_exclusive_until_dropped() {
+        // one slot is exclusive until dropped
+        {
+            let dir = scratch("one");
+            let first = try_acquire(&dir, 1, "first").unwrap().expect("free slot");
+            assert!(try_acquire(&dir, 1, "second").unwrap().is_none());
+            assert_eq!(holders(&dir, 1), ["first"]);
+            drop(first);
+            assert!(holders(&dir, 1).is_empty());
+            assert!(try_acquire(&dir, 1, "third").unwrap().is_some());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        // more slots admit more runs
+        {
+            let dir = scratch("two");
+            let a = try_acquire(&dir, 2, "a").unwrap();
+            let b = try_acquire(&dir, 2, "b").unwrap();
+            assert!(a.is_some() && b.is_some());
+            assert!(try_acquire(&dir, 2, "c").unwrap().is_none());
+            assert_eq!(holders(&dir, 2), ["a", "b"]);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }

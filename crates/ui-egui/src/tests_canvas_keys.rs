@@ -56,48 +56,50 @@ fn key(h: &mut Headless, name: &str, shift: bool) {
     h.step();
 }
 
+/// One session, several steps; each step was a test of its own and says what it checks.
 #[test]
-fn crop_corner_moves_with_the_arrows_and_shift_moves_further() {
+fn crop_handles_move_with_the_arrows_and_tab_reaches_them() {
     let mut h = detail("panel.crop");
-    let photo = h.app.session.active();
-    let r0 = develop(&h).crop.geometry.rect;
-    focus(&mut h, "crop:2");
-    key(&mut h, "left", false);
-    let r1 = develop(&h).crop.geometry.rect;
-    assert!(r1.x1 < r0.x1 - 0.001 && (r1.x0 - r0.x0).abs() < 1e-9, "{r0:?} -> {r1:?}");
-    key(&mut h, "up", true);
-    let r2 = develop(&h).crop.geometry.rect;
-    // (the corner keeps the crop's aspect, so a big step moves an edge by less than BIG_STEP)
-    assert!(r2.y1 < r1.y1 - 0.02, "Shift is a big step: {r1:?} -> {r2:?}");
-    // the arrows moved the handle, not to another photo
-    assert_eq!(h.app.session.active(), photo);
-    // one undo step a press
-    exec(&mut h, "edit.undo", json!({}));
-    assert!((develop(&h).crop.geometry.rect.y1 - r1.y1).abs() < 1e-9);
-    // the whole box moves with the box's handle
-    focus(&mut h, "crop:8");
-    let before = develop(&h).crop.geometry.rect;
-    key(&mut h, "right", false);
-    let after = develop(&h).crop.geometry.rect;
-    assert!((after.x1 - after.x0 - (before.x1 - before.x0)).abs() < 1e-6, "{before:?} -> {after:?}");
-}
-
-/// Tab walks the focus to the crop handles where no command has Tab: the Alternative set (the
-/// Classic set's Tab hides the side panels, as in Lightroom Classic; see `shell::tests`).
-#[test]
-fn tab_reaches_the_crop_handles() {
-    let mut h = detail("panel.crop");
-    h.app.ui.settings.keymap_set = crate::shortcuts::KeymapSet::Alternative;
-    let handles: Vec<egui::Id> = (0..9).map(|i| canvas_keys::id(&format!("crop:{i}"))).collect();
-    let mut reached = false;
-    for _ in 0..200 {
-        key(&mut h, "tab", false);
-        if h.view.ctx.memory(|m| m.focused()).is_some_and(|f| handles.contains(&f)) {
-            reached = true;
-            break;
-        }
+    // crop corner moves with the arrows and shift moves further
+    {
+        let photo = h.app.session.active();
+        let r0 = develop(&h).crop.geometry.rect;
+        focus(&mut h, "crop:2");
+        key(&mut h, "left", false);
+        let r1 = develop(&h).crop.geometry.rect;
+        assert!(r1.x1 < r0.x1 - 0.001 && (r1.x0 - r0.x0).abs() < 1e-9, "{r0:?} -> {r1:?}");
+        key(&mut h, "up", true);
+        let r2 = develop(&h).crop.geometry.rect;
+        // (the corner keeps the crop's aspect, so a big step moves an edge by less than BIG_STEP)
+        assert!(r2.y1 < r1.y1 - 0.02, "Shift is a big step: {r1:?} -> {r2:?}");
+        // the arrows moved the handle, not to another photo
+        assert_eq!(h.app.session.active(), photo);
+        // one undo step a press
+        exec(&mut h, "edit.undo", json!({}));
+        assert!((develop(&h).crop.geometry.rect.y1 - r1.y1).abs() < 1e-9);
+        // the whole box moves with the box's handle
+        focus(&mut h, "crop:8");
+        let before = develop(&h).crop.geometry.rect;
+        key(&mut h, "right", false);
+        let after = develop(&h).crop.geometry.rect;
+        assert!((after.x1 - after.x0 - (before.x1 - before.x0)).abs() < 1e-6, "{before:?} -> {after:?}");
     }
-    assert!(reached, "Tab reaches a crop handle");
+    // tab reaches the crop handles
+    // Tab walks the focus to the crop handles where no command has Tab: the Alternative set (the
+    // Classic set's Tab hides the side panels, as in Lightroom Classic; see `shell::tests`).
+    {
+        h.app.ui.settings.keymap_set = crate::shortcuts::KeymapSet::Alternative;
+        let handles: Vec<egui::Id> = (0..9).map(|i| canvas_keys::id(&format!("crop:{i}"))).collect();
+        let mut reached = false;
+        for _ in 0..200 {
+            key(&mut h, "tab", false);
+            if h.view.ctx.memory(|m| m.focused()).is_some_and(|f| handles.contains(&f)) {
+                reached = true;
+                break;
+            }
+        }
+        assert!(reached, "Tab reaches a crop handle");
+    }
 }
 
 #[test]

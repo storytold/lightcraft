@@ -334,6 +334,15 @@ pub(crate) fn detection_gpu_state(s: &Session) -> GpuState {
     {
         return st;
     }
+    // Load the installed detector now, as recognition is, so it is offered to the GPU (in the background) before
+    // the first scan instead of the status saying it is not loaded (#978). The model is cached once loaded.
+    #[cfg(all(feature = "sam", not(target_arch = "wasm32")))]
+    if detector(s).is_ok()
+        && let Some(st) = gpu_state("detection")
+        && (st.device.is_some() || st.checking || st.why.is_some())
+    {
+        return st;
+    }
     GpuState {
         why: Some("Face Landmarker runs multithreaded on the CPU until faces are first looked for and the GPU is checked".into()),
         ..GpuState::default()

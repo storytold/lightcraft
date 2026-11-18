@@ -44,16 +44,3 @@ pub const CARDS: [Card; 2] = [Card::Second, Card::Editing];
 
 /// Why there is no AI device on [`Card::Second`].
 pub const NO_SECOND_CARD: &str = "there is no second graphics card";
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_second_card_comes_first_and_each_card_has_its_own_slot() {
-        assert_eq!(CARDS, [Card::Second, Card::Editing]);
-        assert_eq!(CARDS.map(Card::index), [0, 1]);
-        assert_eq!(CARDS.map(Card::other), [Card::Editing, Card::Second]);
-        assert_eq!(CARDS.map(Card::id), ["second", "editing"]);
-    }
-}

@@ -454,46 +454,80 @@ mod tests {
     }
 
     #[test]
-    fn smaller_takes_the_known_minimum() {
-        assert_eq!(smaller(Some(3), Some(2)), Some(2));
-        assert_eq!(smaller(Some(3), None), Some(3));
-        assert_eq!(smaller(None, Some(2)), Some(2));
-        assert_eq!(smaller(None, None), None);
-    }
-
-    #[test]
-    fn a_v2_limit_on_the_own_cgroup_is_found_with_its_headroom() {
-        let s = Scratch::new("v2-own");
-        s.write("user.slice/app.scope/memory.max", "2147483648\n");
-        s.write("user.slice/app.scope/memory.current", "536870912\n");
-        s.write("user.slice/memory.max", "max\n");
-        s.write("user.slice/memory.current", "9999999999\n");
-        let got = cgroup_memory_at(&s.0, None, "0::/user.slice/app.scope\n");
-        assert_eq!(got, CgroupMemory { limit: Some(2 * GIB), headroom: Some(GIB + GIB / 2) });
-    }
-
-    #[test]
-    fn a_limit_on_an_ancestor_only_binds_the_nested_cgroup() {
-        let s = Scratch::new("v2-ancestor");
-        s.write("a/memory.max", "4294967296");
-        s.write("a/memory.current", "1073741824");
-        s.write("a/b/memory.max", "max");
-        s.write("a/b/c/d/memory.max", "max");
-        s.write("a/b/c/d/memory.current", "10");
-        let got = cgroup_memory_at(&s.0, None, "0::/a/b/c/d");
-        assert_eq!(got, CgroupMemory { limit: Some(4 * GIB), headroom: Some(3 * GIB) });
-    }
-
-    #[test]
-    fn the_tightest_limit_and_headroom_win_across_levels() {
-        let s = Scratch::new("v2-tightest");
-        // a looser parent nearly full: its headroom is the smaller one
-        s.write("p/memory.max", &(8 * GIB).to_string());
-        s.write("p/memory.current", &(7 * GIB).to_string());
-        s.write("p/c/memory.max", &(4 * GIB).to_string());
-        s.write("p/c/memory.current", &GIB.to_string());
-        let got = cgroup_memory_at(&s.0, None, "0::/p/c");
-        assert_eq!(got, CgroupMemory { limit: Some(4 * GIB), headroom: Some(GIB) });
+    fn cgroup_v2_limits_and_headroom() {
+        // a v2 limit on the own cgroup is found with its headroom
+        {
+            let s = Scratch::new("v2-own");
+            s.write("user.slice/app.scope/memory.max", "2147483648\n");
+            s.write("user.slice/app.scope/memory.current", "536870912\n");
+            s.write("user.slice/memory.max", "max\n");
+            s.write("user.slice/memory.current", "9999999999\n");
+            let got = cgroup_memory_at(&s.0, None, "0::/user.slice/app.scope\n");
+            assert_eq!(got, CgroupMemory { limit: Some(2 * GIB), headroom: Some(GIB + GIB / 2) });
+        }
+        // a limit on an ancestor only binds the nested cgroup
+        {
+            let s = Scratch::new("v2-ancestor");
+            s.write("a/memory.max", "4294967296");
+            s.write("a/memory.current", "1073741824");
+            s.write("a/b/memory.max", "max");
+            s.write("a/b/c/d/memory.max", "max");
+            s.write("a/b/c/d/memory.current", "10");
+            let got = cgroup_memory_at(&s.0, None, "0::/a/b/c/d");
+            assert_eq!(got, CgroupMemory { limit: Some(4 * GIB), headroom: Some(3 * GIB) });
+        }
+        // the tightest limit and headroom win across levels
+        {
+            let s = Scratch::new("v2-tightest");
+            // a looser parent nearly full: its headroom is the smaller one
+            s.write("p/memory.max", &(8 * GIB).to_string());
+            s.write("p/memory.current", &(7 * GIB).to_string());
+            s.write("p/c/memory.max", &(4 * GIB).to_string());
+            s.write("p/c/memory.current", &GIB.to_string());
+            let got = cgroup_memory_at(&s.0, None, "0::/p/c");
+            assert_eq!(got, CgroupMemory { limit: Some(4 * GIB), headroom: Some(GIB) });
+        }
+        // usage over the limit leaves no headroom and unreadable usage none
+        {
+            let s = Scratch::new("v2-over");
+            s.write("x/memory.max", "1000");
+            s.write("x/memory.current", "5000");
+            assert_eq!(cgroup_memory_at(&s.0, None, "0::/x"), CgroupMemory { limit: Some(1000), headroom: Some(0) });
+            s.write("x/memory.current", "garbage");
+            assert_eq!(cgroup_memory_at(&s.0, None, "0::/x"), CgroupMemory { limit: Some(1000), headroom: None });
+        }
+        // the limit only walk skips usage
+        {
+            let s = Scratch::new("v2-limit-only");
+            s.write("a/memory.max", &(4 * GIB).to_string());
+            s.write("a/memory.current", &GIB.to_string());
+            s.write("a/b/memory.max", &(2 * GIB).to_string());
+            assert_eq!(memory_of(&cgroup_dirs(&s.0, None, "0::/a/b\n"), false), CgroupMemory { limit: Some(2 * GIB), headroom: None });
+            assert_eq!(memory_of(&cgroup_dirs(&s.0, None, "0::/a/b\n"), true), CgroupMemory { limit: Some(2 * GIB), headroom: Some(3 * GIB) });
+        }
+        // no limit anywhere or missing files mean no limit
+        {
+            let s = Scratch::new("v2-none");
+            s.write("u/memory.max", "max\n");
+            s.write("u/memory.current", "123");
+            assert_eq!(cgroup_memory_at(&s.0, None, "0::/u\n"), CgroupMemory::default());
+            // the cgroup directory is gone (or deleted) and the root has no memory.max
+            assert_eq!(cgroup_memory_at(&s.0, None, "0::/gone/away (deleted)\n"), CgroupMemory::default());
+            // no cgroup file system at all
+            assert_eq!(cgroup_memory_at(&s.0.join("absent"), None, "0::/u\n"), CgroupMemory::default());
+            // garbage /proc/self/cgroup
+            assert_eq!(cgroup_memory_at(&s.0, None, ""), CgroupMemory::default());
+            assert_eq!(cgroup_memory_at(&s.0, None, "nonsense\n\n::\n7"), CgroupMemory::default());
+        }
+        // a namespaced root with its own limit is read
+        {
+            // In a container with a cgroup namespace, /proc/self/cgroup says "/" and the mount's root
+            // is the container's cgroup, limit included.
+            let s = Scratch::new("v2-ns");
+            s.write("memory.max", "1073741824\n");
+            s.write("memory.current", "0\n");
+            assert_eq!(cgroup_memory_at(&s.0, None, "0::/\n"), CgroupMemory { limit: Some(GIB), headroom: Some(GIB) });
+        }
     }
 
     #[test]
@@ -522,83 +556,39 @@ mod tests {
     }
 
     #[test]
-    fn usage_over_the_limit_leaves_no_headroom_and_unreadable_usage_none() {
-        let s = Scratch::new("v2-over");
-        s.write("x/memory.max", "1000");
-        s.write("x/memory.current", "5000");
-        assert_eq!(cgroup_memory_at(&s.0, None, "0::/x"), CgroupMemory { limit: Some(1000), headroom: Some(0) });
-        s.write("x/memory.current", "garbage");
-        assert_eq!(cgroup_memory_at(&s.0, None, "0::/x"), CgroupMemory { limit: Some(1000), headroom: None });
-    }
-
-    #[test]
-    fn the_limit_only_walk_skips_usage() {
-        let s = Scratch::new("v2-limit-only");
-        s.write("a/memory.max", &(4 * GIB).to_string());
-        s.write("a/memory.current", &GIB.to_string());
-        s.write("a/b/memory.max", &(2 * GIB).to_string());
-        assert_eq!(memory_of(&cgroup_dirs(&s.0, None, "0::/a/b\n"), false), CgroupMemory { limit: Some(2 * GIB), headroom: None });
-        assert_eq!(memory_of(&cgroup_dirs(&s.0, None, "0::/a/b\n"), true), CgroupMemory { limit: Some(2 * GIB), headroom: Some(3 * GIB) });
-    }
-
-    #[test]
-    fn no_limit_anywhere_or_missing_files_mean_no_limit() {
-        let s = Scratch::new("v2-none");
-        s.write("u/memory.max", "max\n");
-        s.write("u/memory.current", "123");
-        assert_eq!(cgroup_memory_at(&s.0, None, "0::/u\n"), CgroupMemory::default());
-        // the cgroup directory is gone (or deleted) and the root has no memory.max
-        assert_eq!(cgroup_memory_at(&s.0, None, "0::/gone/away (deleted)\n"), CgroupMemory::default());
-        // no cgroup file system at all
-        assert_eq!(cgroup_memory_at(&s.0.join("absent"), None, "0::/u\n"), CgroupMemory::default());
-        // garbage /proc/self/cgroup
-        assert_eq!(cgroup_memory_at(&s.0, None, ""), CgroupMemory::default());
-        assert_eq!(cgroup_memory_at(&s.0, None, "nonsense\n\n::\n7"), CgroupMemory::default());
-    }
-
-    #[test]
-    fn a_namespaced_root_with_its_own_limit_is_read() {
-        // In a container with a cgroup namespace, /proc/self/cgroup says "/" and the mount's root
-        // is the container's cgroup, limit included.
-        let s = Scratch::new("v2-ns");
-        s.write("memory.max", "1073741824\n");
-        s.write("memory.current", "0\n");
-        assert_eq!(cgroup_memory_at(&s.0, None, "0::/\n"), CgroupMemory { limit: Some(GIB), headroom: Some(GIB) });
-    }
-
-    #[test]
-    fn a_v1_only_host_reads_the_memory_controller() {
-        let s = Scratch::new("v1");
-        s.write("memory/docker/abc/memory.limit_in_bytes", "536870912\n");
-        s.write("memory/docker/abc/memory.usage_in_bytes", "268435456\n");
-        s.write("memory/docker/memory.limit_in_bytes", "9223372036854771712\n");
-        s.write("memory/memory.limit_in_bytes", "9223372036854771712\n");
-        // a v2 file in the v1 layout is not read
-        s.write("docker/abc/memory.max", "1");
-        let own = "12:pids:/docker/abc\n11:memory:/docker/abc\n4:cpu,cpuacct:/docker/abc\n";
-        assert_eq!(cgroup_memory_at(&s.0, None, own), CgroupMemory { limit: Some(GIB / 2), headroom: Some(GIB / 4) });
-        // memory co-mounted with other controllers
-        assert_eq!(cgroup_memory_at(&s.0, None, "3:cpuset,memory:/docker/abc\n"), CgroupMemory { limit: Some(GIB / 2), headroom: Some(GIB / 4) });
-        // a v1 host without a memory limit
-        assert_eq!(cgroup_memory_at(&s.0, None, "11:memory:/other\n"), CgroupMemory::default());
-    }
-
-    #[test]
-    fn a_v1_container_whose_host_path_does_not_exist_reads_the_mount_root() {
-        let s = Scratch::new("v1-ns");
-        s.write("memory/memory.limit_in_bytes", "268435456");
-        s.write("memory/memory.usage_in_bytes", "0");
-        assert_eq!(cgroup_memory_at(&s.0, None, "9:memory:/kubepods/pod1/abc\n"), CgroupMemory { limit: Some(GIB / 4), headroom: Some(GIB / 4) });
-    }
-
-    #[test]
-    fn a_hybrid_host_takes_the_tightest_of_both_hierarchies() {
-        let s = Scratch::new("hybrid");
-        s.write("memory/a/memory.limit_in_bytes", &(3 * GIB).to_string());
-        s.write("a/memory.max", &(2 * GIB).to_string());
-        let got = cgroup_memory_at(&s.0, None, "5:memory:/a\n0::/a\n");
-        assert_eq!(got.limit, Some(2 * GIB));
-        assert_eq!(got.headroom, None, "no usage files");
+    fn cgroup_v1_and_hybrid_hosts() {
+        // a v1 only host reads the memory controller
+        {
+            let s = Scratch::new("v1");
+            s.write("memory/docker/abc/memory.limit_in_bytes", "536870912\n");
+            s.write("memory/docker/abc/memory.usage_in_bytes", "268435456\n");
+            s.write("memory/docker/memory.limit_in_bytes", "9223372036854771712\n");
+            s.write("memory/memory.limit_in_bytes", "9223372036854771712\n");
+            // a v2 file in the v1 layout is not read
+            s.write("docker/abc/memory.max", "1");
+            let own = "12:pids:/docker/abc\n11:memory:/docker/abc\n4:cpu,cpuacct:/docker/abc\n";
+            assert_eq!(cgroup_memory_at(&s.0, None, own), CgroupMemory { limit: Some(GIB / 2), headroom: Some(GIB / 4) });
+            // memory co-mounted with other controllers
+            assert_eq!(cgroup_memory_at(&s.0, None, "3:cpuset,memory:/docker/abc\n"), CgroupMemory { limit: Some(GIB / 2), headroom: Some(GIB / 4) });
+            // a v1 host without a memory limit
+            assert_eq!(cgroup_memory_at(&s.0, None, "11:memory:/other\n"), CgroupMemory::default());
+        }
+        // a v1 container whose host path does not exist reads the mount root
+        {
+            let s = Scratch::new("v1-ns");
+            s.write("memory/memory.limit_in_bytes", "268435456");
+            s.write("memory/memory.usage_in_bytes", "0");
+            assert_eq!(cgroup_memory_at(&s.0, None, "9:memory:/kubepods/pod1/abc\n"), CgroupMemory { limit: Some(GIB / 4), headroom: Some(GIB / 4) });
+        }
+        // a hybrid host takes the tightest of both hierarchies
+        {
+            let s = Scratch::new("hybrid");
+            s.write("memory/a/memory.limit_in_bytes", &(3 * GIB).to_string());
+            s.write("a/memory.max", &(2 * GIB).to_string());
+            let got = cgroup_memory_at(&s.0, None, "5:memory:/a\n0::/a\n");
+            assert_eq!(got.limit, Some(2 * GIB));
+            assert_eq!(got.headroom, None, "no usage files");
+        }
     }
 
     #[test]
@@ -670,115 +660,114 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_v2_host_is_found_through_mountinfo() {
-        let s = Scratch::new("mi-v2");
-        s.write("user.slice/app.scope/memory.max", &(2 * GIB).to_string());
-        s.write("user.slice/app.scope/memory.current", &GIB.to_string());
-        s.write("user.slice/memory.max", &GIB.to_string());
-        let info = mount(30, "/", "/sys/fs/cgroup", "cgroup2", "rw,nsdelegate");
-        let got = cgroup_memory_at(&s.0, Some(&info), "0::/user.slice/app.scope\n");
-        assert_eq!(got, CgroupMemory { limit: Some(GIB), headroom: Some(GIB) });
-    }
-
-    #[test]
-    fn a_co_mounted_v1_memory_controller_is_found_where_it_is_mounted() {
-        // `cpuset,memory` mounted together, with no `memory` directory beside it
-        let s = Scratch::new("mi-comount");
-        s.write("cpuset,memory/docker/abc/memory.limit_in_bytes", &GIB.to_string());
-        s.write("cpuset,memory/docker/abc/memory.usage_in_bytes", &(GIB / 4).to_string());
-        s.write("cpuset,memory/memory.limit_in_bytes", "9223372036854771712");
-        let info = [
-            mount(30, "/", "/sys/fs/cgroup/cpu,cpuacct", "cgroup", "rw,cpu,cpuacct"),
-            mount(31, "/", "/sys/fs/cgroup/cpuset,memory", "cgroup", "rw,cpuset,memory"),
-        ]
-        .concat();
-        let own = "4:cpu,cpuacct:/docker/abc\n3:cpuset,memory:/docker/abc\n";
-        assert_eq!(cgroup_memory_at(&s.0, Some(&info), own), CgroupMemory { limit: Some(GIB), headroom: Some(GIB / 4 * 3) });
-        // the conventional layout alone misses it
-        assert_eq!(cgroup_memory_at(&s.0, None, own), CgroupMemory::default());
-    }
-
-    #[test]
-    fn a_subtree_mounted_at_the_mount_point_is_read_relative_to_its_root() {
-        // A container that sees only /docker/abc of the host's hierarchy at /sys/fs/cgroup, while
-        // /proc/self/cgroup still names the host path: the 1 GiB child binds, not the 4 GiB top.
-        let s = Scratch::new("mi-subtree");
-        s.write("memory.max", &(4 * GIB).to_string());
-        s.write("child/memory.max", &GIB.to_string());
-        s.write("child/memory.current", "0");
-        let info = mount(30, "/docker/abc", "/sys/fs/cgroup", "cgroup2", "rw");
-        let own = "0::/docker/abc/child\n";
-        assert_eq!(cgroup_memory_at(&s.0, Some(&info), own), CgroupMemory { limit: Some(GIB), headroom: Some(GIB) });
-        // the conventional layout alone (the code before #3072's mountinfo reading) reads the top
-        assert_eq!(cgroup_memory_at(&s.0, None, own).limit, Some(4 * GIB));
-        // the same for a v1 memory hierarchy
-        s.write("memory/memory.limit_in_bytes", &(4 * GIB).to_string());
-        s.write("memory/child/memory.limit_in_bytes", &(GIB / 2).to_string());
-        let info = mount(31, "/docker/abc", "/sys/fs/cgroup/memory", "cgroup", "rw,memory");
-        assert_eq!(cgroup_memory_at(&s.0, Some(&info), "7:memory:/docker/abc/child\n").limit, Some(GIB / 2));
-        // a membership path outside the mount's root reads the mount point alone
-        assert_eq!(
-            cgroup_memory_at(&s.0, Some(&mount(30, "/docker/abc", "/sys/fs/cgroup", "cgroup2", "rw")), "0::/elsewhere/child\n").limit,
-            Some(4 * GIB)
-        );
-    }
-
-    #[test]
-    fn every_mount_whose_root_holds_the_path_is_read() {
-        let s = Scratch::new("mi-several");
-        s.write_at("a/memory.max", &(8 * GIB).to_string());
-        // /b shows cgroup /p, so /b/x is the same cgroup as /a/p/x
-        for x in ["a/p/x", "b/x"] {
-            s.write_at(&format!("{x}/memory.max"), &(2 * GIB).to_string());
+    fn cgroup_mounts_are_found_through_mountinfo() {
+        // a plain v2 host is found through mountinfo
+        {
+            let s = Scratch::new("mi-v2");
+            s.write("user.slice/app.scope/memory.max", &(2 * GIB).to_string());
+            s.write("user.slice/app.scope/memory.current", &GIB.to_string());
+            s.write("user.slice/memory.max", &GIB.to_string());
+            let info = mount(30, "/", "/sys/fs/cgroup", "cgroup2", "rw,nsdelegate");
+            let got = cgroup_memory_at(&s.0, Some(&info), "0::/user.slice/app.scope\n");
+            assert_eq!(got, CgroupMemory { limit: Some(GIB), headroom: Some(GIB) });
         }
-        s.write_at("c/memory.max", &GIB.to_string());
-        let info = [mount(30, "/", "/a", "cgroup2", "rw"), mount(31, "/p", "/b", "cgroup2", "rw"), mount(32, "/q", "/c", "cgroup2", "rw")].concat();
-        // /p/x is under the roots of /a (as /a/p/x) and of /b (as /b/x), not of /c (root /q)
-        let dirs: Vec<PathBuf> = cgroup_dirs(&s.0, Some(&info), "0::/p/x\n").into_iter().map(|d| d.path).collect();
-        let expected: Vec<PathBuf> = ["a/p/x", "a/p", "a"].iter().map(|d| s.0.join(d)).collect();
-        assert_eq!(dirs, expected, "/p/x and /p are read once, through the first mount that shows them");
-        assert_eq!(cgroup_memory_at(&s.0, Some(&info), "0::/p/x\n").limit, Some(2 * GIB), "/c's 1 GiB is another cgroup");
-        let dirs: Vec<PathBuf> =
-            cgroup_dirs(&s.0, Some(&[mount(31, "/p", "/b", "cgroup2", "rw"), mount(30, "/", "/a", "cgroup2", "rw")].concat()), "0::/p/x\n")
-                .into_iter()
-                .map(|d| d.path)
-                .collect();
-        let expected: Vec<PathBuf> = ["b/x", "b", "a"].iter().map(|d| s.0.join(d)).collect();
-        assert_eq!(dirs, expected, "the other order: /a shows only / that /b doesn't");
-    }
-
-    #[test]
-    fn a_bind_mounted_subtree_does_not_hide_an_ancestor_limit() {
-        // The whole hierarchy at /sys/fs/cgroup and /p/c bind-mounted at /mnt/c: /p's 1 GiB binds
-        // the process in /p/c/child although /p/c (seen at /mnt/c, closest) says 4 GiB.
-        let s = Scratch::new("mi-bind");
-        s.write("p/memory.max", &GIB.to_string());
-        s.write("p/memory.current", &(GIB / 2).to_string());
-        for c in ["sys/fs/cgroup/p/c", "mnt/c"] {
-            s.write_at(&format!("{c}/memory.max"), &(4 * GIB).to_string());
-            s.write_at(&format!("{c}/memory.current"), &(GIB / 4).to_string());
-            s.write_at(&format!("{c}/child/memory.max"), "max");
+        // a co mounted v1 memory controller is found where it is mounted
+        {
+            // `cpuset,memory` mounted together, with no `memory` directory beside it
+            let s = Scratch::new("mi-comount");
+            s.write("cpuset,memory/docker/abc/memory.limit_in_bytes", &GIB.to_string());
+            s.write("cpuset,memory/docker/abc/memory.usage_in_bytes", &(GIB / 4).to_string());
+            s.write("cpuset,memory/memory.limit_in_bytes", "9223372036854771712");
+            let info = [
+                mount(30, "/", "/sys/fs/cgroup/cpu,cpuacct", "cgroup", "rw,cpu,cpuacct"),
+                mount(31, "/", "/sys/fs/cgroup/cpuset,memory", "cgroup", "rw,cpuset,memory"),
+            ]
+            .concat();
+            let own = "4:cpu,cpuacct:/docker/abc\n3:cpuset,memory:/docker/abc\n";
+            assert_eq!(cgroup_memory_at(&s.0, Some(&info), own), CgroupMemory { limit: Some(GIB), headroom: Some(GIB / 4 * 3) });
+            // the conventional layout alone misses it
+            assert_eq!(cgroup_memory_at(&s.0, None, own), CgroupMemory::default());
         }
-        let full = mount(30, "/", "/sys/fs/cgroup", "cgroup2", "rw");
-        let bind = mount(31, "/p/c", "/mnt/c", "cgroup2", "rw");
-        let own = "0::/p/c/child\n";
-        for info in [format!("{full}{bind}"), format!("{bind}{full}")] {
-            assert_eq!(cgroup_memory_at(&s.0, Some(&info), own), CgroupMemory { limit: Some(GIB), headroom: Some(GIB / 2) }, "{info}");
-            // /p/c/child, /p/c, /p and / once each
-            assert_eq!(cgroup_dirs(&s.0, Some(&info), own).len(), 4, "{info}");
+        // a subtree mounted at the mount point is read relative to its root
+        {
+            // A container that sees only /docker/abc of the host's hierarchy at /sys/fs/cgroup, while
+            // /proc/self/cgroup still names the host path: the 1 GiB child binds, not the 4 GiB top.
+            let s = Scratch::new("mi-subtree");
+            s.write("memory.max", &(4 * GIB).to_string());
+            s.write("child/memory.max", &GIB.to_string());
+            s.write("child/memory.current", "0");
+            let info = mount(30, "/docker/abc", "/sys/fs/cgroup", "cgroup2", "rw");
+            let own = "0::/docker/abc/child\n";
+            assert_eq!(cgroup_memory_at(&s.0, Some(&info), own), CgroupMemory { limit: Some(GIB), headroom: Some(GIB) });
+            // the conventional layout alone (the code before #3072's mountinfo reading) reads the top
+            assert_eq!(cgroup_memory_at(&s.0, None, own).limit, Some(4 * GIB));
+            // the same for a v1 memory hierarchy
+            s.write("memory/memory.limit_in_bytes", &(4 * GIB).to_string());
+            s.write("memory/child/memory.limit_in_bytes", &(GIB / 2).to_string());
+            let info = mount(31, "/docker/abc", "/sys/fs/cgroup/memory", "cgroup", "rw,memory");
+            assert_eq!(cgroup_memory_at(&s.0, Some(&info), "7:memory:/docker/abc/child\n").limit, Some(GIB / 2));
+            // a membership path outside the mount's root reads the mount point alone
+            assert_eq!(
+                cgroup_memory_at(&s.0, Some(&mount(30, "/docker/abc", "/sys/fs/cgroup", "cgroup2", "rw")), "0::/elsewhere/child\n").limit,
+                Some(4 * GIB)
+            );
         }
-    }
-
-    #[test]
-    fn a_mountinfo_without_cgroup_mounts_means_no_limit() {
-        // Readable mountinfo is the truth: files at /sys/fs/cgroup that aren't on a cgroup mount
-        // aren't cgroups. Only an unreadable mountinfo falls back to the conventional layout.
-        let s = Scratch::new("mi-none");
-        s.write("memory.max", &GIB.to_string());
-        let info = "22 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw\n23 22 0:5 / /proc rw - proc proc rw\n";
-        assert_eq!(cgroup_memory_at(&s.0, Some(info), "0::/\n"), CgroupMemory::default());
-        assert_eq!(cgroup_memory_at(&s.0, Some(""), "0::/\n"), CgroupMemory::default());
-        assert_eq!(cgroup_memory_at(&s.0, None, "0::/\n").limit, Some(GIB));
+        // every mount whose root holds the path is read
+        {
+            let s = Scratch::new("mi-several");
+            s.write_at("a/memory.max", &(8 * GIB).to_string());
+            // /b shows cgroup /p, so /b/x is the same cgroup as /a/p/x
+            for x in ["a/p/x", "b/x"] {
+                s.write_at(&format!("{x}/memory.max"), &(2 * GIB).to_string());
+            }
+            s.write_at("c/memory.max", &GIB.to_string());
+            let info =
+                [mount(30, "/", "/a", "cgroup2", "rw"), mount(31, "/p", "/b", "cgroup2", "rw"), mount(32, "/q", "/c", "cgroup2", "rw")].concat();
+            // /p/x is under the roots of /a (as /a/p/x) and of /b (as /b/x), not of /c (root /q)
+            let dirs: Vec<PathBuf> = cgroup_dirs(&s.0, Some(&info), "0::/p/x\n").into_iter().map(|d| d.path).collect();
+            let expected: Vec<PathBuf> = ["a/p/x", "a/p", "a"].iter().map(|d| s.0.join(d)).collect();
+            assert_eq!(dirs, expected, "/p/x and /p are read once, through the first mount that shows them");
+            assert_eq!(cgroup_memory_at(&s.0, Some(&info), "0::/p/x\n").limit, Some(2 * GIB), "/c's 1 GiB is another cgroup");
+            let dirs: Vec<PathBuf> =
+                cgroup_dirs(&s.0, Some(&[mount(31, "/p", "/b", "cgroup2", "rw"), mount(30, "/", "/a", "cgroup2", "rw")].concat()), "0::/p/x\n")
+                    .into_iter()
+                    .map(|d| d.path)
+                    .collect();
+            let expected: Vec<PathBuf> = ["b/x", "b", "a"].iter().map(|d| s.0.join(d)).collect();
+            assert_eq!(dirs, expected, "the other order: /a shows only / that /b doesn't");
+        }
+        // a bind mounted subtree does not hide an ancestor limit
+        {
+            // The whole hierarchy at /sys/fs/cgroup and /p/c bind-mounted at /mnt/c: /p's 1 GiB binds
+            // the process in /p/c/child although /p/c (seen at /mnt/c, closest) says 4 GiB.
+            let s = Scratch::new("mi-bind");
+            s.write("p/memory.max", &GIB.to_string());
+            s.write("p/memory.current", &(GIB / 2).to_string());
+            for c in ["sys/fs/cgroup/p/c", "mnt/c"] {
+                s.write_at(&format!("{c}/memory.max"), &(4 * GIB).to_string());
+                s.write_at(&format!("{c}/memory.current"), &(GIB / 4).to_string());
+                s.write_at(&format!("{c}/child/memory.max"), "max");
+            }
+            let full = mount(30, "/", "/sys/fs/cgroup", "cgroup2", "rw");
+            let bind = mount(31, "/p/c", "/mnt/c", "cgroup2", "rw");
+            let own = "0::/p/c/child\n";
+            for info in [format!("{full}{bind}"), format!("{bind}{full}")] {
+                assert_eq!(cgroup_memory_at(&s.0, Some(&info), own), CgroupMemory { limit: Some(GIB), headroom: Some(GIB / 2) }, "{info}");
+                // /p/c/child, /p/c, /p and / once each
+                assert_eq!(cgroup_dirs(&s.0, Some(&info), own).len(), 4, "{info}");
+            }
+        }
+        // a mountinfo without cgroup mounts means no limit
+        {
+            // Readable mountinfo is the truth: files at /sys/fs/cgroup that aren't on a cgroup mount
+            // aren't cgroups. Only an unreadable mountinfo falls back to the conventional layout.
+            let s = Scratch::new("mi-none");
+            s.write("memory.max", &GIB.to_string());
+            let info = "22 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw\n23 22 0:5 / /proc rw - proc proc rw\n";
+            assert_eq!(cgroup_memory_at(&s.0, Some(info), "0::/\n"), CgroupMemory::default());
+            assert_eq!(cgroup_memory_at(&s.0, Some(""), "0::/\n"), CgroupMemory::default());
+            assert_eq!(cgroup_memory_at(&s.0, None, "0::/\n").limit, Some(GIB));
+        }
     }
 
     #[test]

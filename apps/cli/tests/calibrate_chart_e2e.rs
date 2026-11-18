@@ -5,7 +5,7 @@
 //! input fails with a message, not a panic. No Adobe or X-Rite image data is involved: the patches are rendered
 //! from the published reference values.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use lcc_raw::{BlackLevel, Cfa, ColorData, DngWriteOptions, Mat3, OpcodeLists, Orientation, RawData, RawFormat, RawImage, Rect};
@@ -17,11 +17,9 @@ const H: usize = 800;
 const TL: [f64; 2] = [0.20, 0.25];
 const BR: [f64; 2] = [0.80, 0.75];
 
-fn scratch(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("lcc-cli-chart-e2e-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+/// The test's folder in Temp, removed when the test ends.
+fn scratch(name: &str) -> lcc_testkit::TempDir {
+    lcc_testkit::TempDir::new(&format!("lcc-cli-chart-e2e-{name}"))
 }
 
 fn lab_to_xyz(l: [f64; 3]) -> [f64; 3] {

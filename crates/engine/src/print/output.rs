@@ -113,8 +113,7 @@ mod tests {
     #[test]
     fn a_printer_profile_is_converted_to_and_named_as_the_output_intent() {
         use crate::print_color::{PrintColorSettings, PrintIntent, PrintProfile};
-        let dir = std::env::temp_dir().join(format!("lc-print-output-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = lcc_testkit::TempDir::new("lc-print-output");
         let icc = dir.join("Lustre Paper.icc");
         std::fs::write(&icc, lcc_codecs::icc::write_named(lcc_codecs::NamedSpace::AdobeRgb)).unwrap();
         let color =

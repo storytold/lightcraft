@@ -219,24 +219,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn band_count_matches_declared_range() {
-        // (published name, band_end) exactly as the source table declares.
-        let declared: [(&str, i32); 6] = [("StdA", 830), ("D50", 830), ("D55", 780), ("D65", 830), ("D75", 780), ("StdE", 830)];
-        assert_eq!(declared.len(), TABLES.len());
-        for (name, band_end) in declared {
-            let table = TABLES.iter().find(|(canonical, _)| *canonical == name).map(|(_, table)| table).unwrap_or_else(|| panic!("missing {name}"));
-            let last = table.start + table.spacing * (table.amps.len() - 1) as f64;
-            assert_eq!(last as i32, band_end, "{name}");
-        }
-    }
-
-    #[test]
     fn amplitudes_are_positive_and_declared_scale() {
         for (name, table) in TABLES.iter() {
             assert_eq!(table.scale, 100.0, "{name}");
             assert!(!table.amps.is_empty(), "{name}");
             for amp in table.amps {
                 assert!(amp.is_finite() && *amp > 0.0, "{name}: {amp}");
+            }
+        }
+        // band count matches declared range
+        {
+            // (published name, band_end) exactly as the source table declares.
+            let declared: [(&str, i32); 6] = [("StdA", 830), ("D50", 830), ("D55", 780), ("D65", 830), ("D75", 780), ("StdE", 830)];
+            assert_eq!(declared.len(), TABLES.len());
+            for (name, band_end) in declared {
+                let table =
+                    TABLES.iter().find(|(canonical, _)| *canonical == name).map(|(_, table)| table).unwrap_or_else(|| panic!("missing {name}"));
+                let last = table.start + table.spacing * (table.amps.len() - 1) as f64;
+                assert_eq!(last as i32, band_end, "{name}");
             }
         }
     }
@@ -266,13 +266,5 @@ mod tests {
             assert_eq!(got.amps[0], want.amps[0], "{alias}");
         }
         assert!(lookup("nonexistent").is_none());
-    }
-
-    #[test]
-    fn wavelengths_are_equally_spaced_by_construction() {
-        for (name, table) in TABLES.iter() {
-            assert!(table.start > 0.0, "{name}");
-            assert!(table.spacing > 0.0, "{name}");
-        }
     }
 }

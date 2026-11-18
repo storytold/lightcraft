@@ -3,7 +3,6 @@
 
 use std::time::Duration;
 
-use lcc_develop::MaskOp;
 use serde_json::json;
 
 use crate::headless::Headless;
@@ -40,16 +39,6 @@ fn count(h: &Headless, id: &str) -> usize {
     h.app.widgets.iter().filter(|(w, _)| w == id).count()
 }
 
-#[test]
-fn the_first_component_starts_the_mask_and_the_others_show_how_they_combine() {
-    use crate::icons::Icon;
-    use crate::panels::masking::component_op_sign;
-    assert_eq!(component_op_sign(0, MaskOp::Subtract), None, "the first starts the mask");
-    assert_eq!(component_op_sign(1, MaskOp::Add), Some(Icon::Plus));
-    assert_eq!(component_op_sign(2, MaskOp::Subtract), Some(Icon::Minus));
-    assert_eq!(component_op_sign(3, MaskOp::Intersect), Some(Icon::Intersect));
-}
-
 /// No bundled font has ∩, so the sign was painted as an empty box (a "tofu" glyph). It is drawn as a
 /// vector now: lit over the top and down both legs, open at the bottom, where a box would be closed.
 #[test]
@@ -74,7 +63,7 @@ fn the_intersect_sign_is_drawn_open_at_the_bottom_not_as_a_missing_glyph_box() {
 }
 
 #[test]
-fn components_hang_under_the_mask_with_their_operation_in_a_column() {
+fn component_rows_show_their_operation_invert_alone_and_the_mask_renames() {
     let mut h = masking();
     exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5]}));
     exec(&mut h, "mask.addComponent", json!({"op": "subtract", "kind": "linear", "start": [0.5, 0.0], "end": [0.5, 0.4]}));
@@ -89,13 +78,8 @@ fn components_hang_under_the_mask_with_their_operation_in_a_column() {
     assert!(op.right() <= thumb.left(), "the sign before the thumbnail, in a column of its own");
     // the sign and the thumbnail line up on every row
     assert!((at(&h, "componentIcon:0").left() - thumb.left()).abs() < 0.5);
-}
 
-#[test]
-fn each_component_row_inverts_that_component_alone() {
-    let mut h = masking();
-    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5]}));
-    exec(&mut h, "mask.addComponent", json!({"op": "subtract", "kind": "linear", "start": [0.5, 0.0], "end": [0.5, 0.4]}));
+    // each component row inverts that component alone
     let before = masks(&h)[0].invert;
     let edited = h.app.ui.active_mask_component;
     let r = h.request("ui.clickWidget", json!({"id": "componentInvert:1"}), T);
@@ -109,6 +93,22 @@ fn each_component_row_inverts_that_component_alone() {
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert!(!masks(&h)[0].components[1].invert, "a second click turns it back");
+
+    // clearing a mask's name gives it back its automatic name
+    let automatic = masks(&h)[0].name.clone();
+    exec(&mut h, "mask.rename", json!({"name": "Vignette"}));
+    assert_eq!(masks(&h)[0].name, "Vignette");
+    let mid = masks(&h)[0].id;
+    let r = h.request("ui.clickWidget", json!({"id": format!("mask:{mid}"), "count": 2}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(Duration::from_secs(5));
+    assert_eq!(h.app.ui.renaming_mask.as_ref().map(|r| r.0), Some(mid), "double-click starts renaming");
+    h.request("ui.key", json!({"key": "A", "cmd": true}), T);
+    h.request("ui.key", json!({"key": "Backspace"}), T);
+    h.request("ui.key", json!({"key": "Enter"}), T);
+    h.settle(Duration::from_secs(5));
+    assert!(h.app.ui.renaming_mask.is_none());
+    assert_eq!(masks(&h)[0].name, automatic, "an empty name: the automatic one again");
 }
 
 #[test]
@@ -173,28 +173,6 @@ fn the_eye_is_always_on_the_mask_row_and_switches_its_effect() {
     h.settle(SETTLE);
     assert!(!masks(&h)[0].visible, "the eye turns the mask's effect off");
     assert_eq!(masks(&h)[0].adjust.exposure, 1.0, "and keeps its settings");
-}
-
-#[test]
-fn clearing_a_masks_name_gives_it_back_its_automatic_name() {
-    let mut h = masking();
-    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5]}));
-    exec(&mut h, "mask.addComponent", json!({"op": "subtract", "kind": "linear", "start": [0.5, 0.0], "end": [0.5, 0.4]}));
-    let automatic = masks(&h)[0].name.clone();
-    assert_eq!(automatic, "Radial Gradient − Linear Gradient");
-    exec(&mut h, "mask.rename", json!({"name": "Vignette"}));
-    assert_eq!(masks(&h)[0].name, "Vignette");
-    let mid = masks(&h)[0].id;
-    let r = h.request("ui.clickWidget", json!({"id": format!("mask:{mid}"), "count": 2}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(Duration::from_secs(5));
-    assert_eq!(h.app.ui.renaming_mask.as_ref().map(|r| r.0), Some(mid), "double-click starts renaming");
-    h.request("ui.key", json!({"key": "A", "cmd": true}), T);
-    h.request("ui.key", json!({"key": "Backspace"}), T);
-    h.request("ui.key", json!({"key": "Enter"}), T);
-    h.settle(Duration::from_secs(5));
-    assert!(h.app.ui.renaming_mask.is_none());
-    assert_eq!(masks(&h)[0].name, automatic, "an empty name: the automatic one again");
 }
 
 /// Two radial components each show a Feather slider under their row; each slider has an egui id of

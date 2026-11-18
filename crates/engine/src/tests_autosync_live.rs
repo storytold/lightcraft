@@ -31,14 +31,10 @@ fn auto_sync_drag_edits_every_selected_photo_live() {
     assert!((exp(&s, a) - 0.5).abs() < 1e-9 && (exp(&s, b) - 0.5).abs() < 1e-9);
     s.execute("edit.undo", &json!({})).unwrap();
     assert!(exp(&s, a).abs() < 1e-9 && exp(&s, b).abs() < 1e-9, "one undo step for both");
-}
 
-#[test]
-fn cancelled_auto_sync_drag_puts_every_photo_back() {
-    let mut s = Session::with_demo();
-    let (a, b) = two(&mut s);
+    // a cancelled drag puts every photo back
     s.execute("develop.beginInteraction", &json!({"label": "Exposure"})).unwrap();
     s.execute("develop.set", &json!({"control": "light.exposure", "value": 1.0})).unwrap();
     s.execute("develop.cancelInteraction", &json!({})).unwrap();
-    assert!(exp(&s, a).abs() < 1e-9 && exp(&s, b).abs() < 1e-9);
+    assert!(exp(&s, a).abs() < 1e-9 && exp(&s, b).abs() < 1e-9, "cancel");
 }

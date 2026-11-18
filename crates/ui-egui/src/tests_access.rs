@@ -101,54 +101,56 @@ fn panel_area(h: &Headless, id: &str) -> Option<egui::Rect> {
     Some(egui::Rect::from_min_max(head.left_top(), egui::pos2(head.right() + 40.0, next.min(1.0e6))))
 }
 
+/// One session, several steps; each step was a test of its own and says what it checks.
 #[test]
-fn every_module_names_its_interactive_widgets() {
+fn every_module_names_its_interactive_widgets_and_tab_walks_the_web_settings() {
     let mut h = demo();
-    run(&mut h, "module.library", json!({}));
-    run(&mut h, "panel.left", json!({"show": true}));
-    let mut failures = Vec::new();
-    // Library: the module picker and the fork's own panels
-    let owned: Vec<egui::Rect> =
-        [widget(&h, "region:moduleBar"), panel_area(&h, "navigator"), panel_area(&h, "metadata")].into_iter().flatten().collect();
-    assert!(!owned.is_empty(), "the module bar is on screen");
-    let shell: BTreeSet<NodeId> = unnamed(&mut h).into_iter().map(|(id, _, _)| id).collect();
-    for (_, role, b) in unnamed(&mut h) {
-        if owned.iter().any(|r| inside(b, *r)) {
-            failures.push(format!("library: unnamed {role:?} at {b:?}"));
-        }
-    }
-    for m in ["map", "book", "slideshow", "print", "web"] {
-        run(&mut h, "module.switch", json!({"module": m}));
-        let total = h.view.access.as_ref().map_or(0, |u| u.nodes.len());
-        assert!(total > 20, "{m}: the tree has its widgets ({total} nodes)");
-        for (id, role, b) in unnamed(&mut h) {
-            if !shell.contains(&id) {
-                failures.push(format!("{m}: unnamed {role:?} at {b:?}"));
+    // every module names its interactive widgets
+    {
+        run(&mut h, "module.library", json!({}));
+        run(&mut h, "panel.left", json!({"show": true}));
+        let mut failures = Vec::new();
+        // Library: the module picker and the fork's own panels
+        let owned: Vec<egui::Rect> =
+            [widget(&h, "region:moduleBar"), panel_area(&h, "navigator"), panel_area(&h, "metadata")].into_iter().flatten().collect();
+        assert!(!owned.is_empty(), "the module bar is on screen");
+        let shell: BTreeSet<NodeId> = unnamed(&mut h).into_iter().map(|(id, _, _)| id).collect();
+        for (_, role, b) in unnamed(&mut h) {
+            if owned.iter().any(|r| inside(b, *r)) {
+                failures.push(format!("library: unnamed {role:?} at {b:?}"));
             }
         }
+        for m in ["map", "book", "slideshow", "print", "web"] {
+            run(&mut h, "module.switch", json!({"module": m}));
+            let total = h.view.access.as_ref().map_or(0, |u| u.nodes.len());
+            assert!(total > 20, "{m}: the tree has its widgets ({total} nodes)");
+            for (id, role, b) in unnamed(&mut h) {
+                if !shell.contains(&id) {
+                    failures.push(format!("{m}: unnamed {role:?} at {b:?}"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "interactive widgets without an accessible name:\n{}", failures.join("\n"));
     }
-    assert!(failures.is_empty(), "interactive widgets without an accessible name:\n{}", failures.join("\n"));
-}
-
-/// Tab walks the Web module's settings column top to bottom (keyboard users reach every field).
-#[test]
-fn tab_moves_focus_down_the_web_settings() {
-    let mut h = demo();
-    run(&mut h, "module.switch", json!({"module": "web"}));
-    let r = h.request("ui.clickWidget", json!({"id": "field:web:title"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.step();
-    h.step();
-    let focused = |h: &Headless| h.view.ctx.memory(|m| m.focused()).and_then(|id| h.view.ctx.read_response(id)).map(|r| r.rect.top());
-    let mut ys = vec![focused(&h).expect("the clicked field has focus")];
-    for _ in 0..3 {
-        let r = h.request("ui.key", json!({"key": "Tab"}), T);
+    // tab moves focus down the web settings
+    // Tab walks the Web module's settings column top to bottom (keyboard users reach every field).
+    {
+        run(&mut h, "module.switch", json!({"module": "web"}));
+        let r = h.request("ui.clickWidget", json!({"id": "field:web:title"}), T);
         assert_eq!(r["ok"], true, "{r}");
         h.step();
         h.step();
-        ys.push(focused(&h).expect("Tab moves focus to the next field"));
+        let focused = |h: &Headless| h.view.ctx.memory(|m| m.focused()).and_then(|id| h.view.ctx.read_response(id)).map(|r| r.rect.top());
+        let mut ys = vec![focused(&h).expect("the clicked field has focus")];
+        for _ in 0..3 {
+            let r = h.request("ui.key", json!({"key": "Tab"}), T);
+            assert_eq!(r["ok"], true, "{r}");
+            h.step();
+            h.step();
+            ys.push(focused(&h).expect("Tab moves focus to the next field"));
+        }
+        assert!(ys.windows(2).all(|w| w[1] > w[0]), "focus moves down the column: {ys:?}");
     }
-    assert!(ys.windows(2).all(|w| w[1] > w[0]), "focus moves down the column: {ys:?}");
 }
 
 /// The fork's modules draw their text through `tr`: in German, no painted text is an English

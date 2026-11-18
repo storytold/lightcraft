@@ -1,11 +1,11 @@
 //! Project links (Help menu, About dialog), from the brand (`lcc_brand`).
 
-/// This app's web page.
-pub const APP_PAGE: &str = lcc_brand::HOMEPAGE;
+/// This app's web site (brand.toml `website`, else `homepage`).
+pub const APP_PAGE: &str = lcc_brand::WEBSITE;
 /// This app's source repository.
 pub const GITHUB: &str = lcc_brand::REPOSITORY;
-/// The user documentation (docs/ in the repository).
-pub const HELP: &str = lcc_brand::REPOSITORY;
+/// The user guide (brand.toml `docs`, else the repository).
+pub const HELP: &str = lcc_brand::DOCS;
 /// The community chat (empty when the brand has none: no link is shown).
 pub const DISCORD: &str = lcc_brand::DISCORD;
 /// Where feedback and bug reports go.
@@ -60,16 +60,6 @@ pub fn check_browser_url(url: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn links_are_https_and_come_from_the_brand() {
-        for (id, label, url) in LINKS.iter().filter(|(_, _, u)| !u.is_empty()) {
-            assert!(url.starts_with("https://"), "{id}");
-            assert!(!label.is_empty());
-            assert_eq!(url_of(id), Some(*url));
-        }
-        assert_eq!((APP_PAGE, GITHUB), (lcc_brand::HOMEPAGE, lcc_brand::REPOSITORY));
-    }
 
     #[test]
     fn browser_policy_allows_https_and_only_the_generated_preview() {

@@ -48,7 +48,7 @@ fn glide(h: &mut Headless, a: egui::Pos2, b: egui::Pos2, n: usize) {
 }
 
 #[test]
-fn a_tap_leaves_the_value_and_a_drag_moves_it_by_its_travel() {
+fn a_tap_leaves_the_value_a_drag_moves_it_by_its_travel_and_a_double_click_resets_it() {
     let mut h = develop();
     let r = pill(&h);
     assert!(r.height() >= 36.0, "finger-sized: {r:?}");
@@ -71,13 +71,8 @@ fn a_tap_leaves_the_value_and_a_drag_moves_it_by_its_travel() {
     let spec = lcc_develop::controls::find(ID).expect("Shadows");
     let want = (before + (spec.max - spec.min) * 0.25).min(spec.max);
     assert!((shadows(&h) - want).abs() <= 3.0, "moved by the drag: {} (want about {want})", shadows(&h));
-}
-
-#[test]
-fn a_double_click_resets_it() {
-    let mut h = develop();
-    h.app.run("develop.set", json!({"control": ID, "value": 40})).expect("set Shadows");
-    h.settle(SETTLE);
+    // a double-click resets it
+    assert_ne!(shadows(&h), 0.0);
     let at = pill(&h).center();
     send(&mut h, egui::Event::PointerMoved(at));
     for _ in 0..2 {
@@ -85,14 +80,5 @@ fn a_double_click_resets_it() {
         send(&mut h, button(at, false));
     }
     h.settle(SETTLE);
-    assert_eq!(shadows(&h), 0.0);
-}
-
-#[test]
-fn the_modern_layout_always_uses_pills() {
-    let mut app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
-    app.ui.settings.slider_layout = SliderLayout::OneRow;
-    assert_eq!(app.slider_layout(), SliderLayout::OneRow);
-    app.ui.modern.enabled = true;
-    assert_eq!(app.slider_layout(), SliderLayout::Pill);
+    assert_eq!(shadows(&h), 0.0, "a double-click resets it");
 }

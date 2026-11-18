@@ -691,7 +691,7 @@ mod tests {
 
     #[test]
     fn web_export_runs_in_the_background() {
-        let dir = std::env::temp_dir().join(format!("lcc-webui-export-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lcc-webui-export");
         let _ = std::fs::remove_dir_all(&dir);
         let app = LccApp::new(lcc_engine::Session::with_demo(), crate::Services::default());
         let mut h = Headless::new(app, [1200.0, 800.0], 1.0);

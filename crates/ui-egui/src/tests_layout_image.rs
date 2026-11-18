@@ -28,13 +28,10 @@ fn loupe() -> Headless {
 }
 
 /// A portrait "cover": an opaque magenta masthead across its top quarter, transparent below.
-fn cover(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("lc-layout-image-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+fn cover(tag: &str) -> lcc_testkit::TempFile {
+    let path = lcc_testkit::TempFile::new(&format!("lc-layout-image-{tag}"), "cover.png");
     let img = lcc_raster::Rgba8::from_fn(300, 400, |_, y| if y < 100 { BAND } else { [0, 0, 0, 0] });
     let png = lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&img), &lcc_codecs::EncodeMeta::default()).unwrap();
-    let path = dir.join("cover.png");
     std::fs::write(&path, png).unwrap();
     path
 }

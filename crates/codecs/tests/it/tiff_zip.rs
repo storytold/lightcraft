@@ -51,7 +51,7 @@ fn checked_zip_size(img: &EncodeImage<'_>) -> usize {
 
 /// The shipped backend keeps noisy 16-bit ZIP exports smaller than uncompressed TIFFs.
 #[test]
-fn sixteen_bit_zip_tiff_is_never_larger_than_uncompressed() {
+fn zip_tiff_is_never_larger_than_uncompressed() {
     let (w, h) = (512, 384);
     for noise in [0.0, 200.0, 1300.0, 4000.0, 13000.0] {
         let px = noisy16(w, h, noise);
@@ -61,19 +61,18 @@ fn sixteen_bit_zip_tiff_is_never_larger_than_uncompressed() {
         eprintln!("noise {noise} codes: none {none} B, ZIP {zip} B ({:+.1} %)", 100.0 * (zip as f64 / none as f64 - 1.0));
         assert!(zip <= none, "noise {noise}: 16-bit ZIP {zip} B is larger than uncompressed {none} B");
     }
-}
-
-/// The same size guarantee holds for 8-bit ZIP exports across several noise levels.
-#[test]
-fn eight_bit_zip_tiff_is_never_larger_than_uncompressed() {
-    let (w, h) = (512, 384);
-    for noise in [0.0, 4.0, 20.0, 60.0] {
-        let px: Vec<u8> = noisy16(w, h, noise * 257.0).iter().map(|v| (v >> 8) as u8).collect();
-        let img = EncodeImage::new(w, h, 3, Samples::U8(&px));
-        let none = encode_tiff(&img, TiffCompression::None, &EncodeMeta::default()).unwrap().len();
-        let zip = checked_zip_size(&img);
-        eprintln!("8-bit noise {noise}: none {none} B, ZIP {zip} B ({:+.1} %)", 100.0 * (zip as f64 / none as f64 - 1.0));
-        assert!(zip <= none, "8-bit noise {noise}: ZIP {zip} B is larger than uncompressed {none} B");
+    // eight bit zip tiff is never larger than uncompressed
+    // The same size guarantee holds for 8-bit ZIP exports across several noise levels.
+    {
+        let (w, h) = (512, 384);
+        for noise in [0.0, 4.0, 20.0, 60.0] {
+            let px: Vec<u8> = noisy16(w, h, noise * 257.0).iter().map(|v| (v >> 8) as u8).collect();
+            let img = EncodeImage::new(w, h, 3, Samples::U8(&px));
+            let none = encode_tiff(&img, TiffCompression::None, &EncodeMeta::default()).unwrap().len();
+            let zip = checked_zip_size(&img);
+            eprintln!("8-bit noise {noise}: none {none} B, ZIP {zip} B ({:+.1} %)", 100.0 * (zip as f64 / none as f64 - 1.0));
+            assert!(zip <= none, "8-bit noise {noise}: ZIP {zip} B is larger than uncompressed {none} B");
+        }
     }
 }
 

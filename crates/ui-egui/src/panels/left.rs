@@ -1415,6 +1415,13 @@ fn albums_tree(app: &mut LccApp, ui: &mut egui::Ui, all: &AlbumKids, parent: Opt
                 app.ui.dragging_album = Some(a.id.0);
             }
             album_drag_over(app, ui, &resp, a, None, indent);
+            // the device-sync pill, left of the photo count
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(pill) = app.session.sync_collection_pill(a.id) {
+                let size = super::sync_pill::size(ui, &pill);
+                let at = egui::pos2(resp.rect.right() - 44.0 - size.x, resp.rect.center().y - size.y / 2.0);
+                super::sync_pill::paint(ui, at, &pill, &format!("badge:syncCollection:{}", a.id.0));
+            }
             if !a.is_smart() {
                 drop_target(app, ui, &resp, a);
             }
@@ -1886,6 +1893,16 @@ fn folder_menu(app: &mut LccApp, resp: &egui::Response, a: &Album) {
             app.session.catalog.albums().filter(|f| f.folder && !is_within(app, f.id, a.id)).map(|f| (f.id.0, f.name.clone())).collect();
         folders.sort_by_key(|(_, n)| n.to_lowercase());
         super::collections::export_item(app, ui, a.id.0, &a.name);
+        // how this collection syncs with other devices: Settings ▸ Sync
+        #[cfg(not(target_arch = "wasm32"))]
+        if a.smart.is_none() && !a.quick {
+            let b = ui.button(crate::i18n::tr("Sync…"));
+            crate::widgets::register(ui.ctx(), format!("menu:albumSync:{}", a.id.0), b.rect);
+            if b.clicked() {
+                let _ = app.run("app.settings", json!({"tab": "sync"}));
+                ui.close();
+            }
+        }
         if a.folder {
             super::collections::import_item(app, ui, Some(a.id.0));
         }
@@ -2010,16 +2027,29 @@ pub(crate) fn reveal_chosen(app: &mut LccApp, ui: &egui::Ui, tree: &[FolderNode]
 /// instead of under every folder from the disk down to it (the full path is the row's hover
 /// text). Folders listed side by side with the same name say which folder each is in:
 /// `trip (2024)`, `trip (2025)`. Disk rows stay as they are.
-pub(crate) fn sidebar_folders(mut nodes: Vec<FolderNode>) -> Vec<FolderNode> {
-    fn lift(mut n: FolderNode) -> FolderNode {
-        while !n.volume && n.own == 0 && n.label.is_none() && n.children.len() == 1 {
+/// A folder in `shown` (folder keys, added by Show Parent Folder) always keeps its own row.
+pub(crate) fn sidebar_folders(nodes: Vec<FolderNode>, shown: &std::collections::BTreeSet<String>) -> Vec<FolderNode> {
+    shape_folders(nodes, true, shown)
+}
+
+/// Only the chain right below a disk is lifted (`lift`): once a folder is listed, every folder
+/// inside it keeps its own row, so `2026` → `January` → `31st` nests as it does on disk.
+fn shape_folders(mut nodes: Vec<FolderNode>, lift: bool, shown: &std::collections::BTreeSet<String>) -> Vec<FolderNode> {
+    let shape = |mut n: FolderNode| {
+        while lift
+            && !shown.contains(&lcc_catalog::query::folder_key(&n.path))
+            && !n.volume
+            && n.own == 0
+            && n.label.is_none()
+            && n.children.len() == 1
+        {
             let Some(child) = n.children.pop() else { break };
             n = child;
         }
-        n.children = sidebar_folders(std::mem::take(&mut n.children));
+        n.children = shape_folders(std::mem::take(&mut n.children), n.volume, shown);
         n
-    }
-    nodes = nodes.into_iter().map(lift).collect();
+    };
+    nodes = nodes.into_iter().map(shape).collect();
     disambiguate(&mut nodes);
     nodes.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.name.cmp(&b.name)));
     nodes
@@ -2712,6 +2742,9 @@ fn folder_item(app: &mut LccApp, ui: &mut egui::Ui, row: FolderRow, item: Folder
             if r.clicked()
                 && let Some(parent) = parent_folder(path)
             {
+                // the parent gets a row of its own in the Folders list even when it holds no
+                // photo itself; choosing it then opens the rows above it
+                app.caches.show_folder(&parent);
                 if let Err(e) = app.run("library.source", json!({"kind": "libraryFolder", "path": parent})) {
                     app.toast(ui.ctx(), e);
                 }
@@ -2847,27 +2880,21 @@ mod tests {
         elide_head(text, max as f32, |s| s.chars().count() as f32)
     }
 
+    /// A label that fits is left alone; a long path loses its leading folders, not its end; a
+    /// single name too long is cut at the end, on a character boundary.
     #[test]
-    fn a_label_that_fits_is_left_alone() {
-        assert_eq!(fit("/Users/me/Pictures", 18), "/Users/me/Pictures");
-    }
-
-    #[test]
-    fn a_long_path_loses_its_leading_folders_not_its_end() {
-        assert_eq!(fit("/Users/me/Pictures/Lightroom", 20), "…/Pictures/Lightroom");
-        assert_eq!(fit("/Users/me/Pictures/Lightroom", 12), "…/Lightroom");
-    }
-
-    #[test]
-    fn a_single_name_too_long_is_cut_at_the_end() {
-        assert_eq!(fit("2024-summer-holiday", 8), "2024-su…");
-        assert_eq!(fit("2024-summer-holiday", 1), "…");
-        assert_eq!(fit("2024-summer-holiday", 0), "…");
-    }
-
-    #[test]
-    fn multibyte_names_are_cut_on_character_boundaries() {
-        assert_eq!(fit("/写真/夏休み旅行の記録", 6), "夏休み旅行…");
+    fn a_long_label_loses_its_leading_folders_not_its_end() {
+        for (text, max, want) in [
+            ("/Users/me/Pictures", 18, "/Users/me/Pictures"),
+            ("/Users/me/Pictures/Lightroom", 20, "…/Pictures/Lightroom"),
+            ("/Users/me/Pictures/Lightroom", 12, "…/Lightroom"),
+            ("2024-summer-holiday", 8, "2024-su…"),
+            ("2024-summer-holiday", 1, "…"),
+            ("2024-summer-holiday", 0, "…"),
+            ("/写真/夏休み旅行の記録", 6, "夏休み旅行…"),
+        ] {
+            assert_eq!(fit(text, max), want, "{text:?} in {max}");
+        }
     }
 
     fn names(v: &[(String, String)]) -> Vec<&str> {
@@ -2960,7 +2987,7 @@ mod tests {
     /// hidden attribute, so Home's tree does not list AppData and open down into its temp folder.
     #[test]
     fn subfolders_leave_out_hidden_folders() {
-        let dir = std::env::temp_dir().join(format!("lc-ui-hidden-subfolders-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lc-ui-hidden-subfolders");
         let _ = std::fs::remove_dir_all(&dir);
         for name in ["Shown", ".dot", "Hidden"] {
             std::fs::create_dir_all(dir.join(name)).unwrap();

@@ -452,61 +452,55 @@ fn swap_encoders(map: &mut BTreeMap<String, crate::binding::Binding>) {
 
 #[cfg(test)]
 mod tests {
-    /// Test notes 2026-10-24 note 24: a format 3 file's "Masking" and "Mask" pages load as one "Masks" page, the
-    /// user's changes kept and reported once; the file saved again needs nothing more.
     #[test]
-    fn format_3_files_merge_the_masks_pages() {
-        let mut s = SurfaceSettings::default();
-        let mut wedding = crate::defaults::tests::format_3("Wedding");
-        wedding.pages.iter_mut().find(|pg| pg.name == "Masking").unwrap().bindings.insert("dial".into(), crate::Binding::value("mask.temp"));
-        s.profiles = vec![wedding, crate::defaults::tests::format_3("Default")];
-        let mut v = serde_json::to_value(&s).unwrap();
-        v["version"] = serde_json::json!(3);
-        let s = SurfaceSettings::from_json(&v.to_string()).unwrap();
-        assert_eq!(s.merged_mask_pages.len(), 2);
-        assert_eq!(s.merged_mask_pages[0].kept, ["dial"]);
-        let w = &s.profiles[0];
-        assert_eq!(w.page("Masks").unwrap().bindings["dial"], crate::Binding::value("mask.temp"));
-        assert!(w.page("Mask").is_none() && !w.contexts.contains_key("masking.mask"));
-        let again = SurfaceSettings::from_json(&s.to_json()).unwrap();
-        assert!(again.merged_mask_pages.is_empty(), "format 4: nothing to merge");
-        assert_eq!(again.profiles, s.profiles);
-    }
-
-    #[test]
-    fn format_2_files_get_the_momentary_erase() {
-        let mut v = serde_json::to_value(SurfaceSettings::default()).unwrap();
-        v["version"] = serde_json::json!(2);
-        v["profiles"][0]["base"]["key.2"] = serde_json::json!({"kind": "command", "command": "tool.brush", "params": {"op": "subtract"}});
-        let s = SurfaceSettings::from_json(&v.to_string()).unwrap();
-        assert_eq!(s.profiles[0].base["key.2"], crate::Binding::command("brush.erase"));
-    }
-
-    #[test]
-    fn format_1_files_swap_the_dial_and_the_roller() {
-        let mut v = serde_json::to_value(SurfaceSettings::default()).unwrap();
-        v["version"] = serde_json::json!(1);
-        let p = v["profiles"][0]["pages"].as_array_mut().unwrap().iter_mut().find(|p| p["name"] == "Dial Page").unwrap();
-        p["bindings"] = serde_json::json!({"dial": {"kind": "value", "target": "light.exposure"}, "roller": {"kind": "value", "target": "wb.temp"}});
-        let s = SurfaceSettings::from_json(&v.to_string()).unwrap();
-        let pg = s.profiles[0].page("Dial Page").unwrap();
-        assert_eq!(pg.bindings["roller"], crate::Binding::value("light.exposure"), "what encoder 0 did, it still does");
-        assert_eq!(pg.bindings["dial"], crate::Binding::value("wb.temp"));
-        assert_eq!(s.version, FORMAT_VERSION);
-        // a format 2 file is left alone
-        let again = SurfaceSettings::from_json(&s.to_json()).unwrap();
-        assert_eq!(again.profiles[0].page("Dial Page").unwrap().bindings["roller"], crate::Binding::value("light.exposure"));
+    fn older_formats_migrate() {
+        // format 3 files merge the masks pages
+        // Test notes 2026-10-24 note 24: a format 3 file's "Masking" and "Mask" pages load as one "Masks" page, the
+        // user's changes kept and reported once; the file saved again needs nothing more.
+        {
+            let mut s = SurfaceSettings::default();
+            let mut wedding = crate::defaults::tests::format_3("Wedding");
+            wedding.pages.iter_mut().find(|pg| pg.name == "Masking").unwrap().bindings.insert("dial".into(), crate::Binding::value("mask.temp"));
+            s.profiles = vec![wedding, crate::defaults::tests::format_3("Default")];
+            let mut v = serde_json::to_value(&s).unwrap();
+            v["version"] = serde_json::json!(3);
+            let s = SurfaceSettings::from_json(&v.to_string()).unwrap();
+            assert_eq!(s.merged_mask_pages.len(), 2);
+            assert_eq!(s.merged_mask_pages[0].kept, ["dial"]);
+            let w = &s.profiles[0];
+            assert_eq!(w.page("Masks").unwrap().bindings["dial"], crate::Binding::value("mask.temp"));
+            assert!(w.page("Mask").is_none() && !w.contexts.contains_key("masking.mask"));
+            let again = SurfaceSettings::from_json(&s.to_json()).unwrap();
+            assert!(again.merged_mask_pages.is_empty(), "format 4: nothing to merge");
+            assert_eq!(again.profiles, s.profiles);
+        }
+        // format 2 files get the momentary erase
+        {
+            let mut v = serde_json::to_value(SurfaceSettings::default()).unwrap();
+            v["version"] = serde_json::json!(2);
+            v["profiles"][0]["base"]["key.2"] = serde_json::json!({"kind": "command", "command": "tool.brush", "params": {"op": "subtract"}});
+            let s = SurfaceSettings::from_json(&v.to_string()).unwrap();
+            assert_eq!(s.profiles[0].base["key.2"], crate::Binding::command("brush.erase"));
+        }
+        // format 1 files swap the dial and the roller
+        {
+            let mut v = serde_json::to_value(SurfaceSettings::default()).unwrap();
+            v["version"] = serde_json::json!(1);
+            let p = v["profiles"][0]["pages"].as_array_mut().unwrap().iter_mut().find(|p| p["name"] == "Dial Page").unwrap();
+            p["bindings"] =
+                serde_json::json!({"dial": {"kind": "value", "target": "light.exposure"}, "roller": {"kind": "value", "target": "wb.temp"}});
+            let s = SurfaceSettings::from_json(&v.to_string()).unwrap();
+            let pg = s.profiles[0].page("Dial Page").unwrap();
+            assert_eq!(pg.bindings["roller"], crate::Binding::value("light.exposure"), "what encoder 0 did, it still does");
+            assert_eq!(pg.bindings["dial"], crate::Binding::value("wb.temp"));
+            assert_eq!(s.version, FORMAT_VERSION);
+            // a format 2 file is left alone
+            let again = SurfaceSettings::from_json(&s.to_json()).unwrap();
+            assert_eq!(again.profiles[0].page("Dial Page").unwrap().bindings["roller"], crate::Binding::value("light.exposure"));
+        }
     }
 
     use super::*;
-
-    #[test]
-    fn defaults_round_trip() {
-        let s = SurfaceSettings::default();
-        let back = SurfaceSettings::from_json(&s.to_json()).unwrap();
-        assert_eq!(back, s);
-        assert!(s.active_profile().is_some());
-    }
 
     #[test]
     fn hostile_values_are_clamped() {

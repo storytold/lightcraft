@@ -55,7 +55,7 @@ fn cells(h: &Headless) -> usize {
 
 #[test]
 fn the_filters_show_new_photos_and_duplicates() {
-    let dir = std::env::temp_dir().join(format!("lcc-import-screen-filter-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lcc-import-screen-filter");
     let mut h = review(&dir, 3);
     // one of them already in the library
     if let Some(Dialog::Import { opts }) = &mut h.app.ui.dialog {
@@ -75,7 +75,7 @@ fn the_filters_show_new_photos_and_duplicates() {
 
 #[test]
 fn add_in_place_hides_the_copy_rows_and_copy_shows_them() {
-    let dir = std::env::temp_dir().join(format!("lcc-import-screen-how-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lcc-import-screen-how");
     let mut h = review(&dir, 2);
     click(&mut h, "button:importCopy");
     assert!(opts(&h).copy && !opts(&h).move_files);
@@ -91,7 +91,7 @@ fn add_in_place_hides_the_copy_rows_and_copy_shows_them() {
 
 #[test]
 fn the_button_imports_the_checked_photos_and_back_cancels() {
-    let dir = std::env::temp_dir().join(format!("lcc-import-screen-go-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lcc-import-screen-go");
     let mut h = review(&dir, 2);
     click(&mut h, "button:importAdd");
     let before = h.app.session.catalog.photos().count();
@@ -117,7 +117,7 @@ fn the_button_imports_the_checked_photos_and_back_cancels() {
 
 #[test]
 fn nothing_checked_leaves_the_button_doing_nothing() {
-    let dir = std::env::temp_dir().join(format!("lcc-import-screen-none-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lcc-import-screen-none");
     let mut h = review(&dir, 2);
     click(&mut h, "button:importNone");
     assert!(opts(&h).selected_paths().is_empty());
@@ -132,7 +132,7 @@ fn nothing_checked_leaves_the_button_doing_nothing() {
 /// folder shows only once one is set. A card with an empty or odd name still gets a row.
 #[test]
 fn the_rail_lists_cards_and_the_watched_folder_and_picking_one_scans_it() {
-    let tmp = std::env::temp_dir().join(format!("lcc-import-rail-{}", std::process::id()));
+    let tmp = lcc_testkit::TempDir::new("lcc-import-rail");
     let mut h = review(&tmp.join("first"), 1);
     let card = tmp.join("card");
     std::fs::create_dir_all(&card).unwrap();
@@ -160,7 +160,7 @@ fn the_rail_lists_cards_and_the_watched_folder_and_picking_one_scans_it() {
 
 #[test]
 fn dialog_import_with_path_and_paths_populates_candidates() {
-    let tmp = std::env::temp_dir().join(format!("lcc-import-dialog-cmd-{}", std::process::id()));
+    let tmp = lcc_testkit::TempDir::new("lcc-import-dialog-cmd");
     std::fs::create_dir_all(&tmp).unwrap();
 
     let write_small_png = |path: &std::path::Path, seed: u8| {
@@ -207,7 +207,7 @@ fn dialog_import_with_path_and_paths_populates_candidates() {
 
 #[test]
 fn import_settings_survive_subfolder_rescan() {
-    let tmp = std::env::temp_dir().join(format!("lcc-import-settings-survive-{}", std::process::id()));
+    let tmp = lcc_testkit::TempDir::new("lcc-import-settings-survive");
     let sub = tmp.join("sub");
     std::fs::create_dir_all(&sub).unwrap();
 
@@ -266,7 +266,7 @@ fn import_settings_survive_subfolder_rescan() {
 
 #[test]
 fn import_from_folder_with_subfolders_toggle_updates_candidates_and_imports() {
-    let tmp = std::env::temp_dir().join(format!("lcc-import-subfolders-{}", std::process::id()));
+    let tmp = lcc_testkit::TempDir::new("lcc-import-subfolders");
     let sub = tmp.join("sub");
     std::fs::create_dir_all(&sub).unwrap();
 
@@ -315,4 +315,23 @@ fn import_from_folder_with_subfolders_toggle_updates_candidates_and_imports() {
 
     assert_eq!(h.app.session.catalog.photos().count(), before + 2, "only 2 root photos imported");
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+// Scenario (issue #1083): with a macOS integrated title bar the ‹ Back button (and the title after
+// it) starts right of the traffic lights, as Settings' does; in full screen nothing moves
+#[test]
+fn back_clears_the_traffic_lights() {
+    let dir = std::env::temp_dir().join(format!("lcc-import-screen-traffic-{}", std::process::id()));
+    let mut h = review(&dir, 1);
+    let left = |h: &Headless| h.app.widgets.iter().find(|(w, _)| w == "import:back").map(|(_, r)| r.left()).unwrap();
+    assert!((left(&h) - 10.0).abs() < 0.5);
+    h.app.integrated_titlebar = true;
+    h.step();
+    h.step();
+    assert!((left(&h) - 78.0).abs() < 0.5);
+    h.app.window_is_fullscreen = true;
+    h.step();
+    h.step();
+    assert!((left(&h) - 10.0).abs() < 0.5);
+    let _ = std::fs::remove_dir_all(&dir);
 }

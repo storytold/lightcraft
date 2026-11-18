@@ -16,14 +16,23 @@ import Shot from '../../../components/Shot.astro';
 - **Settings ▸ Import ▸ Cameras and Cards**: open the review when a card is inserted (off by default).
 - **Import Camera Roll…** (Android): the photos in `DCIM/Camera`, through the media store.
 - **Auto Import** (**Settings ▸ Import**): a watched folder; new files are added (in place or copied) once complete, into an optional collection. Scanned every few seconds.
+  - Options: include **subfolders** of the watched folder, a file **rename** template for copies, a develop **preset**, a **metadata preset** and **keywords** for arriving photos.
+  - The same options are the parameters of `library.autoImport`.
+- **Android camera roll**: adding it (first-start question or **Settings ▸ Folders**) makes it a watched source; see [Android](../../platforms/android/).
 - **Folder polling** (**Settings ▸ Library ▸ Folder Polling**, off by default): on open, look for new, changed or moved files in the library's folders. Right-click a folder ▸ **Synchronize** does it now.
 - **Import Lightroom or Capture One Catalog…** (**File** menu): reads a `.lrcat` or `.cocatalogdb` read-only. Choose **Merge into the open library** or **Create a new library**. Photos, collections, keywords and edits come across; no Lightroom needed.
+  - Saved prints become **Saved Prints** (page size and margins, Single Image / Contact Sheet / Picture Package / Custom Package layouts with each cell's photo, image settings, page options and print job), not plain collections. Reimporting upgrades earlier plain albums once. The import report lists what did not carry over.
+  - From a Capture One catalog, each photo's exposure, crop, rotation and straighten angle, flips and white balance come across. The result window lists every other Capture One setting your photos use (Brightness, Levels, LCC, local adjustment layers, …) with how many photos use it. White balance is an approximation; for raws the app edits on its relative white balance scale, the result window marks it as approximate, with the photo count.
+  - A failed import takes back the photos it added.
+  - A record with a broken reference (no photo, or a file, folder or root that does not resolve) is skipped with a warning instead of landing on another photo.
 - **Import from Another Library…** (**File ▸ More Imports**): a preview of new and changed photos, and a rule for changed ones (keep, settings, metadata, replace).
 - **Import Profiles & Presets…**: presets, `.lrtemplate`, XMP, `.cube` LUTs, metadata presets; also by drag and drop.
 - **Apple Photos** is an *export* target (**Export** dialog, macOS), not an import source; see the Output section.
 - Tethered shooting: [Tethered capture](../tethering/).
 
 <NeedsImage what="The Lightroom catalog import window asking: Merge into the open library, or Create a new library." />
+
+<Shot name="capture-one-import-result" alt="Capture One catalog import result: the settings not imported yet with their photo counts, and the white balance marked approximate" />
 
 <Aside type="note" title="Modern layout">
   **File ▸ Import …** and **File ▸ More Imports** in the ☰ menu.

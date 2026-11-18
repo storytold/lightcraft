@@ -53,7 +53,7 @@ fn exec(h: &mut Headless, cmd: &str, params: Value) -> Value {
 
 #[test]
 fn loupe_plays_pauses_trims_seeks_and_stops_at_the_trim_end() {
-    let dir = std::env::temp_dir().join(format!("lcc-video-view-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lcc-video-view");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let clip = dir.join("clip.mp4");
@@ -157,7 +157,7 @@ impl crate::VideoGpu for FakeGpu {
 
 #[test]
 fn playing_frames_go_to_the_gpu_grade_and_fall_back_to_the_cpu() {
-    let dir = std::env::temp_dir().join(format!("lcc-video-gpu-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lcc-video-gpu");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let clip = dir.join("clip.mp4");

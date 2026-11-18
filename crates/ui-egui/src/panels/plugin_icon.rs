@@ -144,13 +144,6 @@ pub fn show(ui: &mut Ui, id: &str, size: f32) -> Response {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_same_id_always_gives_the_same_icon() {
-        for id in ["io.github.nwh212.chromaneg", "io.github.clydecbrown.pureraw", ""] {
-            assert_eq!(identicon(id), identicon(id), "{id:?}");
-        }
-    }
-
     /// The hash has no seed: this id's icon is the same on every run and every machine.
     #[test]
     fn an_id_gives_the_icon_it_always_had() {
@@ -173,8 +166,10 @@ mod tests {
     }
 
     #[test]
-    fn icons_are_mirrored_and_never_blank() {
-        for id in ["a", "b", "", "io.github.nwh212.chromaneg"] {
+    fn icons_are_mirrored_and_never_blank_whatever_the_id() {
+        // (hostile ids too: very long, control characters, bidi overrides, astral characters)
+        let long = "x".repeat(10_000);
+        for id in ["a", "b", "", "io.github.nwh212.chromaneg", long.as_str(), "\u{0}\u{7}\n\t\u{202e}☃️漢字\u{10ffff}", "\u{0}\u{0}\u{0}"] {
             let icon = identicon(id);
             for row in icon.cells {
                 for c in 0..CELLS {
@@ -183,16 +178,6 @@ mod tests {
             }
             assert!(icon.cells.iter().flatten().any(|c| *c), "{id:?}: something to see");
             assert!(icon.hue < 360);
-        }
-    }
-
-    #[test]
-    fn hostile_ids_give_an_icon_without_a_panic() {
-        let long = "x".repeat(10_000);
-        let odd = "\u{0}\u{7}\n\t\u{202e}☃️漢字\u{10ffff}";
-        for id in [String::new(), long, odd.to_string(), "\u{0}".repeat(3)] {
-            let icon = identicon(&id);
-            assert!(icon.cells.iter().flatten().any(|c| *c));
         }
     }
 }

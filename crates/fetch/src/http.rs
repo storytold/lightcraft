@@ -893,93 +893,93 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fragment_only_or_empty_location_keeps_file_name_and_query() {
-        let base = Url::parse("https://a.example/x/y/file?q").unwrap();
-        for l in ["#top", "", "  "] {
-            let u = base.join(l).unwrap();
-            assert_eq!((u.tls, u.host.as_str(), u.port, u.path.as_str()), (true, "a.example", 443, "/x/y/file?q"), "{l:?}");
-        }
-    }
-
-    #[test]
-    fn rejects_oversized_and_control_character_urls() {
-        assert!(Url::parse(&format!("https://example.com/{}", "x".repeat(16 * 1024))).is_err());
-        assert!(Url::parse("https://example.com/x?secret=abc\r\nInjected: 1").is_err());
-    }
-
-    #[test]
-    fn join_query_only_keeps_file_name() {
-        let u = Url::parse("https://a.example/x/y/file?q=1").unwrap();
-        assert_eq!(u.join("?page=2").unwrap().path, "/x/y/file?page=2");
-    }
-
-    #[test]
-    fn join_removes_dot_segments() {
-        let base = Url::parse("https://a.example/x/y/file").unwrap();
-        for (loc, want) in
-            [("../z", "/x/z"), ("./z", "/x/y/z"), ("../../../z", "/z"), ("/a/./b/../c", "/a/c"), ("../z?q=1", "/x/z?q=1"), ("..", "/x/")]
+    fn urls_parse_and_hostile_ones_are_refused() {
+        // parses urls
         {
-            assert_eq!(base.join(loc).unwrap().path, want, "{loc}");
+            let u = Url::parse("https://cdn.example.com/models/sam3/model.safetensors?sig=1#x").unwrap();
+            assert_eq!((u.tls, u.host.as_str(), u.port, u.path.as_str()), (true, "cdn.example.com", 443, "/models/sam3/model.safetensors?sig=1"));
+            assert_eq!(u.display(), "https://cdn.example.com/models/sam3/model.safetensors");
+            let u = Url::parse("http://127.0.0.1:8080").unwrap();
+            assert_eq!((u.tls, u.port, u.path.as_str()), (false, 8080, "/"));
+            let u = Url::parse("http://[::1]:9/a").unwrap();
+            assert_eq!((u.host.as_str(), u.port), ("::1", 9));
+            for bad in
+                ["ftp://x/y", "https://", "https://a b/", "https://u:p@h/", "http://h:0/", "http://h:99999/", "https://h/\r\nX: y", "file:///etc"]
+            {
+                assert!(Url::parse(bad).is_err(), "{bad}");
+            }
         }
-    }
-
-    #[test]
-    fn url_scheme_is_matched_case_insensitively() {
-        let u = Url::parse("HTTPS://A.example/z").unwrap();
-        assert_eq!((u.tls, u.host.as_str(), u.port, u.path.as_str()), (true, "a.example", 443, "/z"));
-        assert!(Url::parse("Http://a.example/").is_ok());
-        let j = Url::parse("https://a.example/start").unwrap().join("HTTPS://cdn.example/file").unwrap();
-        assert_eq!((j.tls, j.host.as_str(), j.path.as_str()), (true, "cdn.example", "/file"));
-    }
-
-    #[test]
-    fn parses_urls() {
-        let u = Url::parse("https://cdn.example.com/models/sam3/model.safetensors?sig=1#x").unwrap();
-        assert_eq!((u.tls, u.host.as_str(), u.port, u.path.as_str()), (true, "cdn.example.com", 443, "/models/sam3/model.safetensors?sig=1"));
-        assert_eq!(u.display(), "https://cdn.example.com/models/sam3/model.safetensors");
-        let u = Url::parse("http://127.0.0.1:8080").unwrap();
-        assert_eq!((u.tls, u.port, u.path.as_str()), (false, 8080, "/"));
-        let u = Url::parse("http://[::1]:9/a").unwrap();
-        assert_eq!((u.host.as_str(), u.port), ("::1", 9));
-        for bad in ["ftp://x/y", "https://", "https://a b/", "https://u:p@h/", "http://h:0/", "http://h:99999/", "https://h/\r\nX: y", "file:///etc"]
+        // url scheme is matched case insensitively
         {
-            assert!(Url::parse(bad).is_err(), "{bad}");
+            let u = Url::parse("HTTPS://A.example/z").unwrap();
+            assert_eq!((u.tls, u.host.as_str(), u.port, u.path.as_str()), (true, "a.example", 443, "/z"));
+            assert!(Url::parse("Http://a.example/").is_ok());
+            let j = Url::parse("https://a.example/start").unwrap().join("HTTPS://cdn.example/file").unwrap();
+            assert_eq!((j.tls, j.host.as_str(), j.path.as_str()), (true, "cdn.example", "/file"));
+        }
+        // rejects oversized and control character urls
+        {
+            assert!(Url::parse(&format!("https://example.com/{}", "x".repeat(16 * 1024))).is_err());
+            assert!(Url::parse("https://example.com/x?secret=abc\r\nInjected: 1").is_err());
+        }
+        // rejects signed ports
+        {
+            for bad in ["http://example.com:+80/x", "http://example.com:-80/x", "http://[::1]:+80/x"] {
+                assert!(Url::parse(bad).is_err(), "{bad}");
+            }
+            assert!(Url::parse("http://a.test/").unwrap().join("http://example.com:+80/x").is_err());
+            assert_eq!(Url::parse("http://example.com:80/x").unwrap().port, 80);
+        }
+        // rejects text after a bracketed ipv6 host
+        {
+            for bad in ["http://[::1]junk/x", "https://[::1]junk/x", "http://[::1]8080/x", "http://[::1]8080"] {
+                assert!(matches!(Url::parse(bad), Err(HttpError::BadUrl(_))), "{bad}");
+            }
+            let u = Url::parse("http://[::1]:8080/x").unwrap();
+            assert_eq!((u.host.as_str(), u.port), ("::1", 8080));
+            let u = Url::parse("http://[::1]/x").unwrap();
+            assert_eq!((u.host.as_str(), u.port), ("::1", 80));
         }
     }
 
     #[test]
-    fn rejects_signed_ports() {
-        for bad in ["http://example.com:+80/x", "http://example.com:-80/x", "http://[::1]:+80/x"] {
-            assert!(Url::parse(bad).is_err(), "{bad}");
+    fn redirects_resolve_against_the_current_url() {
+        // resolves redirects
+        {
+            let u = Url::parse("https://a.example/x/y/file?q").unwrap();
+            assert_eq!(u.join("https://b.example/z").unwrap().host, "b.example");
+            assert_eq!(u.join("/root").unwrap().path, "/root");
+            assert_eq!(u.join("other").unwrap().path, "/x/y/other");
+            assert_eq!(u.join("//c.example/p").unwrap().host, "c.example");
+            assert!(u.join("ftp://nope").is_err());
+            // no downgrade from https to http, however the redirect is written
+            assert!(u.join("http://a.example/z").is_err());
+            let plain = Url::parse("http://127.0.0.1:8080/a").unwrap();
+            assert!(!plain.join("http://127.0.0.1:9/b").unwrap().tls);
+            assert!(plain.join("https://b.example/z").unwrap().tls);
         }
-        assert!(Url::parse("http://a.test/").unwrap().join("http://example.com:+80/x").is_err());
-        assert_eq!(Url::parse("http://example.com:80/x").unwrap().port, 80);
-    }
-
-    #[test]
-    fn rejects_text_after_a_bracketed_ipv6_host() {
-        for bad in ["http://[::1]junk/x", "https://[::1]junk/x", "http://[::1]8080/x", "http://[::1]8080"] {
-            assert!(matches!(Url::parse(bad), Err(HttpError::BadUrl(_))), "{bad}");
+        // join removes dot segments
+        {
+            let base = Url::parse("https://a.example/x/y/file").unwrap();
+            for (loc, want) in
+                [("../z", "/x/z"), ("./z", "/x/y/z"), ("../../../z", "/z"), ("/a/./b/../c", "/a/c"), ("../z?q=1", "/x/z?q=1"), ("..", "/x/")]
+            {
+                assert_eq!(base.join(loc).unwrap().path, want, "{loc}");
+            }
         }
-        let u = Url::parse("http://[::1]:8080/x").unwrap();
-        assert_eq!((u.host.as_str(), u.port), ("::1", 8080));
-        let u = Url::parse("http://[::1]/x").unwrap();
-        assert_eq!((u.host.as_str(), u.port), ("::1", 80));
-    }
-
-    #[test]
-    fn resolves_redirects() {
-        let u = Url::parse("https://a.example/x/y/file?q").unwrap();
-        assert_eq!(u.join("https://b.example/z").unwrap().host, "b.example");
-        assert_eq!(u.join("/root").unwrap().path, "/root");
-        assert_eq!(u.join("other").unwrap().path, "/x/y/other");
-        assert_eq!(u.join("//c.example/p").unwrap().host, "c.example");
-        assert!(u.join("ftp://nope").is_err());
-        // no downgrade from https to http, however the redirect is written
-        assert!(u.join("http://a.example/z").is_err());
-        let plain = Url::parse("http://127.0.0.1:8080/a").unwrap();
-        assert!(!plain.join("http://127.0.0.1:9/b").unwrap().tls);
-        assert!(plain.join("https://b.example/z").unwrap().tls);
+        // join query only keeps file name
+        {
+            let u = Url::parse("https://a.example/x/y/file?q=1").unwrap();
+            assert_eq!(u.join("?page=2").unwrap().path, "/x/y/file?page=2");
+        }
+        // fragment only or empty location keeps file name and query
+        {
+            let base = Url::parse("https://a.example/x/y/file?q").unwrap();
+            for l in ["#top", "", "  "] {
+                let u = base.join(l).unwrap();
+                assert_eq!((u.tls, u.host.as_str(), u.port, u.path.as_str()), (true, "a.example", 443, "/x/y/file?q"), "{l:?}");
+            }
+        }
     }
 
     /// A POST reaches a local server with its headers and whole body, and the reply is read back.
@@ -1200,7 +1200,7 @@ sQ6l5HDDBbhGkYuLCq/Hs2w/8suhRANCAATfwLLDsrJ+pxUuCMLz7sTkEYam3ozL\
                 // read in bites with pauses: the client's send buffer fills and its sends wait
                 reads += 1;
                 if reads.is_multiple_of(48) {
-                    std::thread::sleep(Duration::from_millis(400));
+                    std::thread::sleep(Duration::from_millis(50));
                 }
                 conn.process_new_packets().map_err(|e| format!("server: {e}"))?;
                 while let Ok(k) = conn.reader().read(&mut buf) {

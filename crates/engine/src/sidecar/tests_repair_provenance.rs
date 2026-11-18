@@ -60,7 +60,7 @@ fn save(s: &mut Session) -> serde_json::Value {
 }
 struct Partial {
     s: Session,
-    dir: PathBuf,
+    dir: lcc_testkit::TempDir,
     a: PathBuf,
     b: PathBuf,
     companion: PathBuf,

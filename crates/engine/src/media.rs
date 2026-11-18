@@ -136,6 +136,47 @@ fn without_crop(s: &DevelopSettings) -> DevelopSettings {
     s
 }
 
+/// The square a face tile shows ([`crate::Session::face_job`]), in the frame after the user's
+/// Rotate Left/Right: the face box carried over to that frame, the square around it (normalized),
+/// its side and the frame's size in pixels.
+struct FaceSquare {
+    face: lcc_geom::Rect,
+    rect: lcc_geom::Rect,
+    side: f64,
+    w: f64,
+    h: f64,
+}
+
+fn face_square(p: &Photo, face: lcc_geom::Rect) -> FaceSquare {
+    // `face` is on the upright (EXIF-oriented) photo; the crop is in the frame after the user's
+    // Rotate Left/Right, so carry the box (and the photo's size) over to it.
+    let orient = p.develop.orientation;
+    let face = orient.map_norm_rect(face);
+    let (w, h) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
+    let (w, h) = if orient.swaps_axes() { (h, w) } else { (w, h) };
+    let side = ((face.x1 - face.x0) * w).max((face.y1 - face.y0) * h) * 1.7;
+    // finite, within the photo, and never wider than its short side (so the clamps below are valid)
+    let side = if side.is_finite() { side.clamp(1.0, w.min(h)) } else { w.min(h) };
+    let (cx, cy) = ((face.x0 + face.x1) / 2.0 * w, (face.y0 + face.y1) / 2.0 * h);
+    let (cx, cy) = (if cx.is_finite() { cx } else { w / 2.0 }, if cy.is_finite() { cy } else { h / 2.0 });
+    let (x0, y0) = (cx.clamp(side / 2.0, w - side / 2.0) - side / 2.0, cy.clamp(side / 2.0, h - side / 2.0) - side / 2.0);
+    let rect = lcc_geom::Rect { x0: x0 / w, y0: y0 / h, x1: (x0 + side) / w, y1: (y0 + side) / h };
+    FaceSquare { face, rect, side, w, h }
+}
+
+/// `inner` (normalized to the whole frame) as fractions of `outer`, clamped to it: where a box lies
+/// in a picture cut to `outer`. `None` when `outer` is empty or not finite.
+fn rect_within(inner: lcc_geom::Rect, outer: lcc_geom::Rect) -> Option<lcc_geom::Rect> {
+    let (ow, oh) = (outer.x1 - outer.x0, outer.y1 - outer.y0);
+    if !(ow.is_finite() && oh.is_finite() && ow > 0.0 && oh > 0.0) {
+        return None;
+    }
+    let f = |v: f64, o: f64, len: f64| if v.is_finite() { ((v - o) / len).clamp(0.0, 1.0) } else { 0.0 };
+    let r =
+        lcc_geom::Rect { x0: f(inner.x0, outer.x0, ow), y0: f(inner.y0, outer.y0, oh), x1: f(inner.x1, outer.x0, ow), y1: f(inner.y1, outer.y0, oh) };
+    (r.x1 > r.x0 && r.y1 > r.y0).then_some(r)
+}
+
 fn source_edge_needed(p: &Photo, settings: &DevelopSettings, apply_crop: bool, out_long: usize) -> usize {
     let (w, h) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
     let r = settings.crop.geometry.rect;
@@ -346,6 +387,8 @@ impl DecodedSource {
                 generated: header.generated,
                 avoid: header.avoid,
                 identity: header.identity.or(info.identity),
+                // (the catalog's maps, as the session knows them: the decoder doesn't)
+                vignetting_maps: header.vignetting_maps,
                 ..info.clone()
             },
             None => SourceInfo { camera_tone: self.camera_tone.or(header.camera_tone), ..header },
@@ -429,13 +472,11 @@ impl SourceRef {
                 // the output's resolution limit and aliases what is finer
                 let image = lcc_raster::resample::fit(&from.image, *max_edge, *max_edge, lcc_raster::resample::Filter::Lanczos3);
                 // the transparency is fitted with the pixels (the same size and filter)
-                let info = from.info.clone().map(|i| SourceInfo {
-                    alpha: i.alpha.as_ref().map(|a| {
-                        let a = lcc_raster::resample::resize(a, image.width, image.height, lcc_raster::resample::Filter::Lanczos3);
-                        Arc::new(a)
-                    }),
-                    ..i
-                });
+                let fitted = |p: &Arc<lcc_raster::Plane>| {
+                    Arc::new(lcc_raster::resample::resize(p, image.width, image.height, lcc_raster::resample::Filter::Lanczos3))
+                };
+                let info =
+                    from.info.clone().map(|i| SourceInfo { alpha: i.alpha.as_ref().map(fitted), infrared: i.infrared.as_ref().map(fitted), ..i });
                 return Ok(DecodedSource { image: Arc::new(image), denoised: None, info, ..(**from).clone() });
             }
             SourceRef::Demo { scene, max_edge } => crate::demo::scene_pixels(scene, *max_edge)?,
@@ -679,6 +720,8 @@ pub struct MediaCache {
 pub struct ProfileFacts {
     pub colorimetric: bool,
     pub local_tone: bool,
+    /// A DNG of rendered RGB: the Profiles panel offers no camera profile for it (issue #763).
+    pub rendered_rgb: bool,
 }
 
 /// The photos that have a cached denoised picture for the denoise model in use. Only memory: nothing here touches the
@@ -793,6 +836,14 @@ impl MediaCache {
         self.previews.clear();
         self.full.clear();
         self.profile_facts.clear();
+    }
+
+    /// Forget every decoded source but `keep`'s (entering Develop under a small memory budget: the photos browsed
+    /// before are decoded again if they are shown again; their rendered previews stay on disk).
+    pub fn keep_sources_of(&mut self, keep: Option<PhotoId>) {
+        self.thumbs = Lru::new(THUMB_SOURCE_BYTES.min(self.budget));
+        self.previews.retain(|e| Some(e.0) == keep);
+        self.full.retain(|e| Some(e.0) == keep);
     }
 
     /// How many full-resolution originals to keep at once (at least one). Compare and Reference
@@ -939,6 +990,7 @@ impl MediaCache {
             let f = self.profile_facts.entry(id).or_default();
             f.colorimetric |= info.colorimetric;
             f.local_tone |= info.local_tone.is_some();
+            f.rendered_rgb |= info.rendered_rgb;
         }
         let tick = lcc_preview::next_tick();
         match level {
@@ -976,7 +1028,11 @@ impl MediaCache {
     pub fn profile_facts(&self, id: PhotoId) -> ProfileFacts {
         let now = self.source_facts(id, SourceInfo::default());
         let seen = self.profile_facts.get(&id).copied().unwrap_or_default();
-        ProfileFacts { colorimetric: seen.colorimetric || now.colorimetric, local_tone: seen.local_tone || now.local_tone.is_some() }
+        ProfileFacts {
+            colorimetric: seen.colorimetric || now.colorimetric,
+            local_tone: seen.local_tone || now.local_tone.is_some(),
+            rendered_rgb: seen.rendered_rgb || now.rendered_rgb,
+        }
     }
 
     /// (decoded thumbnail sources, bytes).
@@ -1168,6 +1224,10 @@ pub struct RenderJob {
     /// A face tile that can be cut from the raw's embedded preview, tried before `source`
     /// ([`crate::Session::face_job`]; `None` for every other job).
     pub preview_cut: Option<crate::face_tiles::PreviewCut>,
+    /// Don't hand the decoded source back for the session's cache: a grid thumbnail of a tight
+    /// crop decodes a preview-sized source, which must not push the loupe's preview out of the
+    /// few the session keeps (its result goes to the thumbnail cache anyway; issue #1197).
+    pub discard_source: bool,
     /// Shrink a full-quality result to fit this size (physical pixels) with a Lanczos filter once
     /// it is rendered. The loupe renders a little larger than it is drawn (its edge is rounded up
     /// to a 64 px step) and the window would otherwise shrink the texture with 2-tap bilinear sampling, which blurs fine detail at
@@ -1429,7 +1489,15 @@ impl RenderJob {
         let failed = self.failed(String::new());
         // thumbnails go to the second graphics card when there is one: the editing card keeps the views
         let thumb = self.cache.is_some();
-        let run = || crate::guard::catch("the render", || self.run_unguarded()).unwrap_or_else(|e| RenderResult { rendered: Err(e), ..failed });
+        // a render a newer request replaced stops its plug-in filters; what it made then isn't the
+        // picture asked for, and goes back as superseded (the decode it did is still handed on)
+        let cancel = self.superseded.clone();
+        let run = || {
+            let (r, cut) = lcc_pipeline::with_cancel(cancel, || {
+                crate::guard::catch("the render", || self.run_unguarded()).unwrap_or_else(|e| RenderResult { rendered: Err(e), ..failed })
+            });
+            if cut { RenderResult { rendered: Err(SUPERSEDED.into()), ..r } } else { r }
+        };
         if thumb { lcc_gpu::prefer_helper(run) } else { run() }
     }
 
@@ -1549,6 +1617,8 @@ impl RenderJob {
             };
         }
         let was_loaded = matches!(self.source, SourceRef::Loaded(_));
+        // (a source this job decoded goes back for the session to keep, unless the job says not to)
+        let keep_source = !was_loaded && !self.discard_source;
         // The app is closing (issue #620): nobody is left to show this, and quitting waits for the
         // jobs that are running. Without this, one that lost the GPU mid-way would render on the CPU.
         let closing = || lcc_gpu::shutting_down().then(|| "the app is closing".to_string());
@@ -1558,7 +1628,7 @@ impl RenderJob {
         };
         match source {
             Ok(source) if self.superseded.as_ref().is_some_and(|s| s.load(std::sync::atomic::Ordering::Relaxed)) => {
-                RenderResult { loaded: (!was_loaded).then_some(source), ..self.failed(SUPERSEDED.into()) }
+                RenderResult { loaded: keep_source.then_some(source), ..self.failed(SUPERSEDED.into()) }
             }
             Ok(source) => {
                 // the plain picture, or (Denoise amount above 0 and a denoised picture cached) the mix the amount asks for
@@ -1573,6 +1643,24 @@ impl RenderJob {
                 let src = straight.as_ref().unwrap_or(src);
                 // (a straight picture is this job's own: no stage of an earlier render applies to it)
                 let stages = if straight.is_some() { None } else { self.stages.as_deref() };
+                // an over-budget brush mask is an error for the caller, not a view missing its later strokes
+                if let Err(e) = lcc_pipeline::check_brush_budget(src, &info, &self.settings, &self.request) {
+                    return RenderResult {
+                        request_id: self.request_id,
+                        source_key: self.source_key,
+                        placement: self.placement,
+                        photo: self.photo,
+                        level: self.level,
+                        key: self.key,
+                        rendered: Err(e),
+                        gpu_fallback: None,
+                        loaded: keep_source.then_some(source),
+                        quick: None,
+                        display: None,
+                        hdr_texels: None,
+                        frame: None,
+                    };
+                }
                 // Views and exports use the GPU when there is one (waiting for the device if it is
                 // still being created). Thumbnails (grid, filmstrip, preset and profile previews)
                 // use it once it is ready, and never wait for it: at startup they render on the CPU.
@@ -1620,7 +1708,7 @@ impl RenderJob {
                                         alpha: None,
                                     }),
                                     gpu_fallback: None,
-                                    loaded: (!was_loaded).then_some(source),
+                                    loaded: keep_source.then_some(source),
                                     quick: None,
                                     display: None,
                                     hdr_texels: None,
@@ -1706,7 +1794,7 @@ impl RenderJob {
                     key: self.key,
                     rendered: Ok(rendered),
                     gpu_fallback,
-                    loaded: (!was_loaded).then_some(source),
+                    loaded: keep_source.then_some(source),
                     quick: None,
                     display,
                     hdr_texels,
@@ -2312,9 +2400,18 @@ fn header_info(p: &Photo) -> SourceInfo {
 }
 
 impl crate::Session {
-    /// What a render of `p` is interpreted against: [`source_info`] and the photo's generated patches.
+    /// What a render of `p` is interpreted against: [`source_info`], the photo's generated patches and the catalog's
+    /// flat-field maps its settings use.
     pub fn job_info(&self, p: &Photo) -> SourceInfo {
-        SourceInfo { generated: self.genfill_store(p), ..source_info(p) }
+        SourceInfo { generated: self.genfill_store(p), vignetting_maps: self.vignetting_calibration_store(p), ..source_info(p) }
+    }
+
+    /// The catalog's flat-field maps photo `p` uses (its settings, History steps, Versions, Before), for its renders;
+    /// `None` when it uses none.
+    pub fn vignetting_calibration_store(&self, p: &Photo) -> Option<lcc_pipeline::vignetting_calibration::VignettingMapStore> {
+        let maps: std::collections::BTreeMap<lcc_develop::VignettingMapId, Arc<lcc_develop::EmbeddedVignettingMap>> =
+            p.vignetting_map_ids().filter_map(|id| self.catalog.vignetting_map(id).map(|r| (id.clone(), Arc::new(r.map.clone())))).collect();
+        (!maps.is_empty()).then(|| lcc_pipeline::vignetting_calibration::VignettingMapStore(Arc::new(maps)))
     }
 
     /// Build a render job for `id` fitting `max_w × max_h`. `before` renders the unedited look.
@@ -2351,12 +2448,30 @@ impl crate::Session {
         // drag of either must not re-render it (issue #60)
         let uncropped = !apply_crop && !settings.crop.geometry.is_identity();
         let settings = if uncropped { Arc::new(without_crop(&settings)) } else { settings };
-        let level = SourceLevel::for_size(if thumb_bucket.is_some() {
-            max_w.max(max_h) // (grid thumbnails of tight crops stay cheap)
-        } else {
-            source_edge_needed(&p, &settings, apply_crop, max_w.max(max_h))
-        });
-        let source = self.media.source_ref(&p, level);
+        let needed = source_edge_needed(&p, &settings, apply_crop, max_w.max(max_h));
+        // a cropped grid thumbnail stretches the thumbnail source up to 2x; past that (issue #1197:
+        // the tighter the crop, the blurrier) it reads a source of the size it needs, at most the
+        // preview, never the original
+        let level = match thumb_bucket {
+            Some(b) if needed <= b.saturating_mul(2) => SourceLevel::Thumb,
+            Some(_) => SourceLevel::Preview,
+            None => SourceLevel::for_size(needed),
+        };
+        let mut source = self.media.source_ref(&p, level);
+        // an original too big to decode whole within the memory budget is decoded smaller for the window (a 200 MP
+        // phone JPEG); an export reads it whole ([`Self::full_resolution_source`])
+        if level == SourceLevel::Full
+            && thumb_bucket.is_none()
+            && let SourceRef::File { max_edge, .. } = &mut source
+            && let Some(cap) = crate::memory::interactive_edge_cap(p.width, p.height)
+        {
+            *max_edge = cap.min(*max_edge);
+        }
+        let discard_source = thumb_bucket.is_some() && level == SourceLevel::Preview;
+        if discard_source && let SourceRef::File { max_edge, .. } | SourceRef::Demo { max_edge, .. } | SourceRef::Video { max_edge, .. } = &mut source
+        {
+            *max_edge = needed.min(*max_edge);
+        }
         // previews shrink as exports do once they shrink a lot (full quality only): sharpening tuned in the
         // loupe then matches the export's Lanczos-3 downscale; grid thumbnails stay soft
         let downscale = if thumb_bucket.is_none() { lcc_pipeline::Downscale::Preview } else { lcc_pipeline::Downscale::Smooth };
@@ -2386,7 +2501,10 @@ impl crate::Session {
             ^ salt;
         let version = self.media.thumb_version;
         let sensor = sensor_key(&p);
-        let cache = thumb_bucket.map(|b| (self.media.rendered.clone(), thumb_key(&content_key, settings_hash, b, version, sensor, salt)));
+        // (a thumbnail read from the preview source is cached apart from one read from the thumbnail
+        // source: blurry thumbnails cached for tight crops before issue #1197 render again)
+        let thumb_salt = if level == SourceLevel::Thumb { salt } else { salt ^ (level as u64).wrapping_mul(0x5851_f42d_4c95_7f2d) };
+        let cache = thumb_bucket.map(|b| (self.media.rendered.clone(), thumb_key(&content_key, settings_hash, b, version, sensor, thumb_salt)));
         // a thumbnail of the photo's own settings is its latest grid picture too, and the one its cell
         // keeps showing while the original is missing
         let latest = cache.as_ref().filter(|_| !before).map(|(c, _)| (c.clone(), latest_thumb_key(&p)));
@@ -2399,7 +2517,7 @@ impl crate::Session {
             bucket,
             version,
             sensor,
-            salt,
+            salt: thumb_salt,
         });
         let placement = (!before).then(|| self.placement_with(&p, &settings, apply_crop));
         Some(RenderJob {
@@ -2428,6 +2546,7 @@ impl crate::Session {
             display_fit: None,
             hdr_texels: None,
             superseded: None,
+            discard_source,
         })
     }
 
@@ -2512,10 +2631,31 @@ impl crate::Session {
             display_fit: None,
             hdr_texels: None,
             superseded: None,
+            discard_source: false,
             latest: None,
             kept: None,
             placement: None,
         })
+    }
+
+    /// Where `face` (normalized, in the photo's upright frame) lies in its tile ([`Self::face_job`]),
+    /// as fractions of the tile: what a face tile outlines, so a tile with two faces in it says which
+    /// one it is about (issue #1147). `None` for an unknown photo.
+    pub fn face_in_tile(&self, id: PhotoId, face: lcc_geom::Rect) -> Option<lcc_geom::Rect> {
+        let p = self.rendered_photo_of(id)?;
+        let sq = face_square(&p, face);
+        rect_within(sq.face, sq.rect)
+    }
+
+    /// The whole photo a face is in, with the photo's look but without its crop (a face may lie
+    /// outside it), long edge `edge` (≤ 512), and where `face` (normalized, upright frame) lies in
+    /// that picture: the hover preview of a face tile (issue #1147). Cached like [`Self::variant_job`].
+    pub fn face_photo_job(&mut self, id: PhotoId, face: lcc_geom::Rect, edge: usize) -> Option<(RenderJob, lcc_geom::Rect)> {
+        let p = self.rendered_photo_of(id)?;
+        let at = rect_within(p.develop.orientation.map_norm_rect(face), lcc_geom::Rect::UNIT)?;
+        let settings = without_crop(&p.develop);
+        let job = self.variant_job(id, &settings, edge)?;
+        Some((job, at))
     }
 
     /// A square close-up of `face` (normalized, in the photo's upright frame) for a People card: the
@@ -2529,19 +2669,7 @@ impl crate::Session {
     /// the content: a later launch shows the tile without reading the original.
     pub fn face_job(&mut self, id: PhotoId, face: lcc_geom::Rect, edge: usize) -> Option<RenderJob> {
         let p = self.rendered_photo_of(id)?;
-        // `face` is on the upright (EXIF-oriented) photo; the crop below is in the frame after the
-        // user's Rotate Left/Right, so carry the box (and the photo's size) over to it.
-        let orient = p.develop.orientation;
-        let face = orient.map_norm_rect(face);
-        let (w, h) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
-        let (w, h) = if orient.swaps_axes() { (h, w) } else { (w, h) };
-        let side = ((face.x1 - face.x0) * w).max((face.y1 - face.y0) * h) * 1.7;
-        // finite, within the photo, and never wider than its short side (so the clamps below are valid)
-        let side = if side.is_finite() { side.clamp(1.0, w.min(h)) } else { w.min(h) };
-        let (cx, cy) = ((face.x0 + face.x1) / 2.0 * w, (face.y0 + face.y1) / 2.0 * h);
-        let (cx, cy) = (if cx.is_finite() { cx } else { w / 2.0 }, if cy.is_finite() { cy } else { h / 2.0 });
-        let (x0, y0) = (cx.clamp(side / 2.0, w - side / 2.0) - side / 2.0, cy.clamp(side / 2.0, h - side / 2.0) - side / 2.0);
-        let rect = lcc_geom::Rect { x0: x0 / w, y0: y0 / h, x1: (x0 + side) / w, y1: (y0 + side) / h };
+        let FaceSquare { rect, side, w, h, .. } = face_square(&p, face);
         let mut settings = (*p.develop).clone();
         settings.crop = lcc_develop::Crop { geometry: lcc_geom::CropGeometry { rect, angle: 0.0 }, ..Default::default() };
         let edge = face_edge(edge);
@@ -2574,6 +2702,7 @@ impl crate::Session {
             display_fit: None,
             hdr_texels: None,
             superseded: None,
+            discard_source: false,
             latest: None,
             kept: None,
             placement: None,
@@ -2990,7 +3119,8 @@ impl crate::Session {
     /// Synchronous render (CLI, MCP, tests).
     pub fn render_now(&mut self, id: PhotoId, max_w: usize, max_h: usize) -> Result<Rendered, String> {
         lcc_pipeline::check_output_size(max_w, max_h)?;
-        let job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
+        let mut job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
+        self.full_resolution_source(id, &mut job)?;
         let r = job.run();
         self.accept(&r);
         r.rendered
@@ -3037,17 +3167,7 @@ impl crate::Session {
     ) -> Result<RenderJob, String> {
         lcc_pipeline::check_output_size(max_w, max_h)?;
         let mut job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
-        // An export renders the full image: never a thumbnail's source developed from a smaller copy of the raw
-        // image that the file keeps (Lightroom's merged DNGs)
-        let reduced = match &job.source {
-            SourceRef::Loaded(s) => s.reduced,
-            SourceRef::Fit { from, .. } => from.reduced,
-            _ => false,
-        };
-        if reduced {
-            let p = self.rendered_photo_of(id).ok_or("no such photo")?;
-            job.source = self.media.source_ref_uncached(&p, job.level);
-        }
+        self.full_resolution_source(id, &mut job)?;
         // An export is made from the denoised picture its Denoise amount asks for, made when the job runs if the
         // background queue has not got to it. (A source kept in memory may lack the picture, so the job reads the file.)
         if let Some(wanted) = self.denoise_for_export(id, &job.settings)? {
@@ -3068,6 +3188,56 @@ impl crate::Session {
             job.key ^= 0x8ebc_6af0_9c88_c6e3;
         }
         Ok(job)
+    }
+
+    /// Point a full-size job (an export, a render for the CLI) at the original read whole, when what the window uses is
+    /// less: a thumbnail's source developed from a smaller copy of the raw image that the file keeps (Lightroom's merged
+    /// DNGs), or an original too big for the memory budget decoded smaller for the window
+    /// ([`crate::memory::interactive_edge_cap`]).
+    fn full_resolution_source(&mut self, id: PhotoId, job: &mut RenderJob) -> Result<(), String> {
+        let reduced = match &job.source {
+            SourceRef::Loaded(s) => s.reduced,
+            SourceRef::Fit { from, .. } => from.reduced,
+            _ => false,
+        };
+        // (only a capped original's window source is smaller than the export needs: a raw's decode a few pixels short
+        // of the catalog's size is not, and is kept)
+        if reduced || (job.level == SourceLevel::Full && self.full_source_capped(id)) {
+            let p = self.rendered_photo_of(id).ok_or("no such photo")?;
+            job.source = self.media.source_ref_uncached(&p, job.level);
+        }
+        Ok(())
+    }
+
+    /// Pixels along `id`'s original long edge that a render `out_long` pixels long of the photo as edited (its crop
+    /// applied) needs: what a decode for it may be fitted to.
+    pub(crate) fn source_edge_for(&self, id: PhotoId, out_long: usize) -> Option<usize> {
+        let p = self.rendered_photo_of(id)?;
+        Some(source_edge_needed(&p, &p.develop, true, out_long).max(1))
+    }
+
+    /// Make room for editing under a small memory budget ([`crate::memory::constrained`]; elsewhere nothing): the
+    /// background preview build is stopped (it is owed, and taken up again once browsing resumes), every decoded source
+    /// but the photo being edited is dropped, the GPU's recycled buffers are freed, and the allocator hands freed pages
+    /// back to the system. `true` when it did.
+    pub fn make_room_for_editing(&mut self) -> bool {
+        if !crate::memory::constrained() {
+            return false;
+        }
+        if let Some(b) = self.preview_build.as_ref().filter(|b| b.running() && b.background) {
+            b.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let active = self.active();
+        self.media.keep_sources_of(active);
+        crate::gpu::trim_pool(0);
+        crate::memory::release();
+        true
+    }
+
+    /// Whether the original of `id` is too big to decode whole within the memory budget, so the window decodes it
+    /// smaller ([`crate::memory::interactive_edge_cap`]): the loupe does not decode such a one ahead of a zoom.
+    pub fn full_source_capped(&self, id: PhotoId) -> bool {
+        self.catalog.photo(id).is_some_and(|p| crate::memory::interactive_edge_cap(p.width, p.height).is_some())
     }
 
     /// Prefer decoder facts to header-only metadata for pixel-statistics commands.
@@ -3178,9 +3348,14 @@ pub type FileProbe = Arc<dyn Fn(&str) -> Result<ProbeInfo, String> + Send + Sync
 mod thumbnail_hash_tests {
     use super::*;
 
+    /// A session with one JPEG. Each call names its own file: the decode share
+    /// ([`crate::decode_share`]) is process-wide and keyed by path, so tests running in parallel
+    /// must never share one (issue #1068: a test took another's decode, or lost its own).
     fn session() -> crate::Session {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut s = crate::Session::new();
-        let p = Photo::new(PhotoId(1), Source::File { path: "hash-fixture.jpg".into() }, "fixture.jpg", "JPEG", 6000, 4000, "2026-01-01");
+        let p = Photo::new(PhotoId(1), Source::File { path: format!("hash-fixture-{n}.jpg") }, "fixture.jpg", "JPEG", 6000, 4000, "2026-01-01");
         s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
         s
     }
@@ -3520,7 +3695,8 @@ mod thumbnail_hash_tests {
         assert_eq!(seen.lock().unwrap().len(), 2, "and the new source is reused");
         // the late job re-decodes with the old option (its source was the cached one: decode it from the file)
         let mut late = late;
-        late.source = s.media.origin_ref(&Source::File { path: "hash-fixture.jpg".into() }, 64);
+        let path = s.catalog.photo(PhotoId(1)).unwrap().source.clone();
+        late.source = s.media.origin_ref(&path, 64);
         let late = late.run();
         assert_eq!(late.loaded.as_ref().map(|l| l.options.colour), Some(CameraColour::Auto));
         s.accept(&late);
@@ -3570,11 +3746,54 @@ mod thumbnail_hash_tests {
         assert_eq!((r.request_id, r.key), (7, 9));
         assert_eq!(r.rendered.err().as_deref(), Some("the render failed unexpectedly: preview reader bug"));
     }
+
+    /// A raw imported on the relative white balance scale (6500 / 0 meaning as shot) before its camera was edited in
+    /// Kelvin still looks as the camera rendered it, whether or not its as-shot white has been read since: the numbers
+    /// As Shot stores don't change how it renders. Its thumbnail is the camera's JPEG, not a decode of the whole raw.
+    #[test]
+    fn as_shot_on_the_old_relative_scale_keeps_the_camera_thumbnail() {
+        let mut s = crate::Session::new();
+        s.media.preview_loader =
+            Some(Arc::new(|_: &str, edge: usize| Some(Rgba8 { width: edge.min(64), height: 2, data: vec![[9, 8, 7, 255]; edge.min(64) * 2] })));
+        let mut raw = Photo::new(PhotoId(1), Source::File { path: "IMG_1370.CR3".into() }, "IMG_1370.CR3", "CR3", 6000, 4000, "2026-10-01");
+        raw.kind = MediaKind::Raw;
+        raw.meta.camera = "Canon Canon EOS R8".into();
+        assert!(!raw.relative_wb(), "the R8 is edited in Kelvin");
+        assert_eq!(raw.camera_defaults().wb.scale, lcc_develop::WbScale::Kelvin, "its defaults are on the Kelvin scale");
+        raw.develop = Arc::new(lcc_develop::DevelopSettings::for_raw(6500.0, 0.0));
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(raw) }).unwrap();
+        for as_shot in [None, Some((3109.0, 2.0))] {
+            s.catalog.apply(Op::SetAsShotWb { id: PhotoId(1), wb: as_shot }).unwrap();
+            let p = s.catalog.photo(PhotoId(1)).unwrap();
+            assert!(crate::import::has_import_look(p), "as-shot white {as_shot:?}");
+            assert!(s.embedded_thumb_is_final(p), "as-shot white {as_shot:?}");
+        }
+        let mut custom = (*s.catalog.photo(PhotoId(1)).unwrap().develop).clone();
+        custom.wb.mode = lcc_develop::WbMode::Custom;
+        s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(custom), label: "wb".into(), edited: None }).unwrap();
+        assert!(!s.embedded_thumb_is_final(s.catalog.photo(PhotoId(1)).unwrap()), "a white balance of one's own is rendered");
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A session with one camera-sized photo (larger than the preview level) whose original is
+    /// already decoded: a textured picture, made in milliseconds (a full-size demo scene takes
+    /// ten seconds to generate).
+    fn camera_sized() -> (crate::Session, PhotoId, usize, usize) {
+        let (w, h) = (3000usize, 2000usize);
+        let mut s = crate::Session::new();
+        let p = Photo::new(PhotoId(1), Source::File { path: "/nowhere/a.jpg".into() }, "a.jpg", "JPEG", w as u32, h as u32, "");
+        s.catalog.apply(lcc_catalog::Op::AddPhoto { photo: Box::new(p.clone()) }).unwrap();
+        let px = |x: usize, y: usize| {
+            let t = ((x * 7 + y * 13) % 97) as f32 / 97.0;
+            [0.1 + 0.5 * x as f32 / w as f32 + 0.1 * t, 0.2 + 0.4 * y as f32 / h as f32, 0.15 + 0.3 * t]
+        };
+        s.media.insert(p.id, SourceLevel::Full, Arc::new(Rgb32f::from_fn(w, h, px)));
+        (s, p.id, w, h)
+    }
 
     /// A photo edited since its last view (an Auto Sync edit, its thumbnail built with the edit)
     /// steps in with the edit, never with the picture from before it.
@@ -4148,10 +4367,8 @@ mod tests {
     #[test]
     fn region_jobs_render_a_window_of_the_zoomed_frame() {
         use lcc_pipeline::PixelWindow;
-        let mut s = crate::Session::with_demo();
-        let p = s.catalog.photos().next().unwrap().clone();
-        let (w, h) = (p.width as usize, p.height as usize);
-        assert!(w.max(h) > 2560, "demo photos are camera-sized");
+        let (mut s, id, w, h) = camera_sized();
+        let p = s.catalog.photo(id).unwrap().clone();
         let win = PixelWindow { x: w / 3, y: h / 3, w: 300, h: 200 };
         let job = s.region_job(p.id, w, h, win, true).unwrap();
         assert_eq!(job.level, SourceLevel::Full, "a 1:1 window reads the original");
@@ -4189,6 +4406,84 @@ mod tests {
         assert_eq!(s.render_job(id, 600, 600, false, true).unwrap().level, SourceLevel::Preview);
     }
 
+    // Issue #1197 (ported from upstream PR #1931): after an edit, a tight crop's
+    // grid thumbnail was cut from the decoded preview shrunk to the 512 px thumbnail source and
+    // stretched back up, so it lost the detail the cropped photo shown at that size has
+    #[test]
+    fn a_tight_crops_thumbnail_is_as_sharp_as_the_crop_rendered_at_its_size() {
+        let mut s = crate::Session::new();
+        let p = Photo::new(PhotoId(1), Source::File { path: "/nowhere/a.ARW".into() }, "a.ARW", "ARW", 5120, 3414, "");
+        s.catalog.apply(lcc_catalog::Op::AddPhoto { photo: Box::new(p.clone()) }).unwrap();
+        // the preview the loupe decoded while the photo was edited: stripes 2 px wide, detail a
+        // 512 px source can't hold
+        let stripes = |x: usize, _| if (x / 2).is_multiple_of(2) { [0.1, 0.1, 0.1] } else { [0.6, 0.6, 0.6] };
+        s.media.insert(p.id, SourceLevel::Preview, Arc::new(Rgb32f::from_fn(2560, 1707, stripes)));
+        let mut d = (*s.develop_of(p.id).unwrap()).clone();
+        d.crop.geometry.rect = lcc_geom::Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 };
+        s.set_develop(p.id, d, "Crop").unwrap();
+        // mean step between neighbouring pixels: what a stretched small source smooths away
+        let detail = |img: &Rgba8| {
+            let (w, h) = (img.width, img.height);
+            let mut sum = 0u64;
+            for y in 0..h - 1 {
+                for x in 0..w - 1 {
+                    let (p, r, b) = (img.data[y * w + x], img.data[y * w + x + 1], img.data[(y + 1) * w + x]);
+                    sum += (0..3).map(|k| u64::from(p[k].abs_diff(r[k])) + u64::from(p[k].abs_diff(b[k]))).sum::<u64>();
+                }
+            }
+            sum as f64 / ((w - 1) * (h - 1)) as f64
+        };
+        let thumb = s.thumb_job(p.id, 512).unwrap().run().rendered.unwrap().image;
+        let reference = s.render_job(p.id, 512, 512, false, true).unwrap().run().rendered.unwrap().image;
+        assert_eq!((thumb.width, thumb.height), (reference.width, reference.height));
+        let (t, r) = (detail(&thumb), detail(&reference));
+        assert!(t >= 0.8 * r, "the thumbnail has {t:.2} of detail, the crop rendered at its size {r:.2}");
+    }
+
+    // Issue #1197: a grid thumbnail stretches the thumbnail source up to 2x before it reads a
+    // larger one, and then decodes only the pixels its crop needs, under a cache key of its own
+    #[test]
+    fn a_cropped_thumbnail_reads_a_larger_source_only_past_twice_its_size() {
+        let mut s = crate::Session::with_demo();
+        let id = s.catalog.photos().next().unwrap().id;
+        let thumb_with_crop = |s: &mut crate::Session, side: f64| {
+            let mut d = (*s.develop_of(id).unwrap()).clone();
+            d.crop.geometry.rect = lcc_geom::Rect { x0: 0.0, y0: 0.0, x1: side, y1: side };
+            s.set_develop(id, d, "Crop").unwrap();
+            s.thumb_job(id, 512).unwrap()
+        };
+        // a slight crop (a straightened horizon, a trimmed edge) keeps the cheap source
+        assert_eq!(thumb_with_crop(&mut s, 0.9).level, SourceLevel::Thumb);
+        assert_eq!(thumb_with_crop(&mut s, 0.6).level, SourceLevel::Thumb);
+        // a crop to 40 % needs 512 / 0.4 = 1280 px of the source: decoded at that, not at 2560
+        let job = thumb_with_crop(&mut s, 0.4);
+        assert_eq!(job.level, SourceLevel::Preview);
+        assert!(job.discard_source);
+        assert!(matches!(job.source, SourceRef::Demo { max_edge, .. } if (1200..=1360).contains(&max_edge)));
+    }
+
+    // Issue #1197: the filmstrip's thumbnails of tightly cropped neighbours must not push the
+    // preview of the photo being edited out of the session, or the next slider move decodes it again
+    #[test]
+    fn thumbnails_of_tight_crops_leave_the_loupes_preview_in_place() {
+        let mut s = crate::Session::with_demo();
+        let ids: Vec<PhotoId> = s.catalog.photos().map(|p| p.id).take(6).collect();
+        let (shown, others) = ids.split_first().unwrap();
+        s.media.insert(*shown, SourceLevel::Preview, Arc::new(Rgb32f::from_fn(2560, 1707, |_, _| [0.5, 0.5, 0.5])));
+        for &id in others {
+            let mut d = (*s.develop_of(id).unwrap()).clone();
+            d.crop.geometry.rect = lcc_geom::Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 };
+            s.set_develop(id, d, "Crop").unwrap();
+            let job = s.thumb_job(id, 512).unwrap();
+            assert_eq!(job.level, SourceLevel::Preview);
+            let r = job.run();
+            assert!(r.rendered.is_ok());
+            assert!(r.loaded.is_none(), "a thumbnail's preview-sized source is not handed back");
+            s.accept(&r);
+        }
+        assert!(s.media.has_source(*shown, SourceLevel::Preview), "the loupe's preview was evicted by the thumbnails");
+    }
+
     // a window whose spot reads from further away than a render can hold is refused
     #[test]
     fn a_region_job_is_refused_when_a_spot_reads_beyond_what_fits() {
@@ -4217,10 +4512,7 @@ mod tests {
     #[test]
     fn a_before_window_shows_the_unedited_look() {
         use lcc_pipeline::PixelWindow;
-        let mut s = crate::Session::with_demo();
-        let id = s.active().unwrap();
-        let p = s.catalog.photo(id).unwrap().clone();
-        let (w, h) = (p.width as usize, p.height as usize);
+        let (mut s, id, w, h) = camera_sized();
         let mut d = (*s.develop_of(id).unwrap()).clone();
         d.light.exposure = 2.0;
         s.set_develop(id, d, "Exposure").unwrap();
@@ -4232,40 +4524,6 @@ mod tests {
         assert_eq!((a.width, a.height), (b.width, b.height));
         let mean = |i: &Rgba8| i.data.iter().map(|p| p[1] as f64).sum::<f64>() / i.data.len() as f64;
         assert!(mean(&a) > mean(&b) + 10.0, "two stops brighter after: {} vs {}", mean(&a), mean(&b));
-    }
-
-    // LR-VIEW-ZOOM: what the loupe shows at 1:1 is what an export at full size writes. A window of
-    // the zoomed frame (the photo's own pixels) is pixel-for-pixel the export, at the centre and
-    // at a corner, with tone, colour and detail edits on a camera-sized photo
-    #[test]
-    fn one_to_one_window_pixels_are_export_pixels() {
-        use lcc_pipeline::{OutputDepth, OutputSpace, PixelWindow};
-        let mut s = crate::Session::with_demo();
-        let id = s.active().unwrap();
-        let p = s.catalog.photo(id).unwrap().clone();
-        let (w, h) = (p.width as usize, p.height as usize);
-        assert!(w.max(h) > 2560, "larger than the preview cap: {w}×{h}");
-        let mut d = (*s.develop_of(id).unwrap()).clone();
-        d.light.exposure = 0.7;
-        d.light.contrast = 25.0;
-        d.color.saturation = 20.0;
-        s.set_develop(id, d, "Edits").unwrap();
-        let export = s.render_export(id, w, h, OutputSpace::Srgb, OutputDepth::U8).unwrap().image;
-        assert_eq!((export.width, export.height), (w, h), "a full-size export");
-        for win in [PixelWindow { x: w / 2 - 256, y: h / 2 - 256, w: 512, h: 384 }, PixelWindow { x: 0, y: h - 300, w: 400, h: 300 }] {
-            let tile = s.region_job(id, w, h, win, true).unwrap().run().rendered.unwrap().image;
-            assert_eq!((tile.width, tile.height), (win.w, win.h));
-            let mut worst = 0u8;
-            for y in 0..win.h {
-                for x in 0..win.w {
-                    let (a, b) = (tile.data[y * win.w + x], export.data[(win.y + y) * w + win.x + x]);
-                    for k in 0..3 {
-                        worst = worst.max(a[k].abs_diff(b[k]));
-                    }
-                }
-            }
-            assert!(worst <= 1, "window {win:?}: the 1:1 view differs from the export by up to {worst} levels");
-        }
     }
 
     /// The thumbnail of a photo whose preview-level source is decoded is cut from it: the file (here
@@ -4308,14 +4566,14 @@ mod tests {
     fn has_source_follows_what_the_session_accepted() {
         let mut s = crate::Session::with_demo();
         let id = s.active().unwrap();
-        let p = s.catalog.photo(id).unwrap().clone();
-        let long = p.width.max(p.height) as usize;
-        assert!(!s.media.has_source(id, SourceLevel::Full));
-        let r = s.render_job(id, long, long, false, true).unwrap().run();
-        s.accept(&r);
-        assert!(s.media.has_source(id, SourceLevel::Full));
+        // (the thumbnail level: its demo scene is small and quick to generate)
+        assert!(!s.media.has_source(id, SourceLevel::Thumb));
+        let job = s.render_job(id, 256, 256, false, true).unwrap();
+        assert_eq!(job.level, SourceLevel::Thumb);
+        s.accept(&job.run());
+        assert!(s.media.has_source(id, SourceLevel::Thumb));
         assert!(!s.media.has_source(id, SourceLevel::Preview));
-        assert!(!s.media.has_source(PhotoId(id.0 + 1), SourceLevel::Full));
+        assert!(!s.media.has_source(PhotoId(id.0 + 1), SourceLevel::Thumb));
     }
 
     #[test]

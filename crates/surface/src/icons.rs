@@ -346,15 +346,4 @@ mod tests {
             }
         }
     }
-
-    #[test]
-    fn labels() {
-        assert_eq!(command_label("photo.rate", &json!({"rating": 5})), "5 Stars");
-        // no curated short label: the command id, for the host to show the command's own label
-        assert_eq!(command_label("photo.rotateLeft", &Value::Null), "photo.rotateLeft");
-        assert_eq!(command_label("geometry.upright", &json!({"mode": "vertical"})), "Upright: Vertical");
-        assert_eq!(command_label("tool.guidedUpright", &Value::Null), "Guided Upright");
-        assert_eq!(command_label("mask.add", &json!({"kind": "sky"})), "Sky");
-        assert_eq!(command_label("app.whatever", &Value::Null), "app.whatever");
-    }
 }

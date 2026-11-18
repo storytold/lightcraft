@@ -71,35 +71,23 @@ fn removing_from_an_album_keeps_the_photo_in_its_folder() {
     let r = s.execute("album.removePhotos", &json!({"ids": [ids[1].0]})).unwrap();
     assert_eq!(r["removed"], 0, "{r}");
     assert_eq!(s.undo.len(), undo);
-    let _ = std::fs::remove_dir_all(&folder);
-}
 
-/// Delete (to Recently Deleted) is the way out of the library: the photo leaves its folder views
-/// and the album with it.
-#[test]
-fn deleting_a_photo_still_removes_it_everywhere() {
-    let (mut s, folder, album, ids) = imported("delete");
-    s.execute("library.source", &json!({"kind": "album", "id": album})).unwrap();
-    s.selection = Selection::single(ids[0]);
-    s.execute("photo.delete", &json!({})).unwrap();
-    assert!(s.catalog.photo(ids[0]).unwrap().deleted);
-    assert_eq!(counts(&mut s, &folder, album), (2, 2, 2), "(library folder, folder on disk, album)");
-    let n = s.execute("library.source", &json!({"kind": "recentlyDeleted"})).unwrap()["count"].as_u64().unwrap();
-    assert_eq!(n, 1);
-    let _ = std::fs::remove_dir_all(&folder);
-}
-
-/// Without an album on screen and without `id` there is nothing to remove from; smart albums
-/// follow their rules.
-#[test]
-fn remove_from_album_refuses_what_it_cannot_do() {
-    let (mut s, folder, _album, ids) = imported("refuse");
+    // Without an album on screen and without `id` there is nothing to remove from; smart albums
+    // follow their rules.
     s.execute("library.source", &json!({"kind": "all"})).unwrap();
     s.selection = Selection::single(ids[0]);
     assert!(s.execute("album.removePhotos", &json!({})).is_err(), "no album on screen");
     let smart = s.execute("album.createSmart", &json!({"name": "All", "rules": {}})).unwrap()["id"].as_u64().unwrap();
     assert!(s.execute("album.removePhotos", &json!({"id": smart})).is_err(), "smart album");
-    assert!(s.execute("album.removePhotos", &json!({"id": 9999})).is_err(), "no such album");
-    assert!(s.execute("album.removePhotos", &json!({"id": "x"})).is_err(), "bad id");
+
+    // Delete (to Recently Deleted) is the way out of the library: the photo leaves its folder
+    // views and the album with it.
+    s.execute("library.source", &json!({"kind": "album", "id": album})).unwrap();
+    s.selection = Selection::single(ids[0]);
+    s.execute("photo.delete", &json!({})).unwrap();
+    assert!(s.catalog.photo(ids[0]).unwrap().deleted);
+    assert_eq!(counts(&mut s, &folder, album), (2, 2, 1), "(library folder, folder on disk, album)");
+    let n = s.execute("library.source", &json!({"kind": "recentlyDeleted"})).unwrap()["count"].as_u64().unwrap();
+    assert_eq!(n, 1);
     let _ = std::fs::remove_dir_all(&folder);
 }

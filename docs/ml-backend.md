@@ -35,11 +35,14 @@ embedding cache store.
   catalogue includes `clip-vit-b32-laion2b` (`laion/CLIP-ViT-B-32-laion2B-s34B-b79K`, MIT, `Commercial::Yes`), pinned
   to a revision and verified by SHA-256 before installation.
 - **CLIP ViT + Text encoder** (`encoder.rs`, `tokenizer.rs`, `weights.rs`, `clip.rs`): a clean-room MIT CLIP vision +
-  text transformer implementation on `candle-core` (the CPU reference). On the GPU the towers' transformer blocks run
-  on `lcc-gpu`'s wgpu kernels (`crates/gpu/src/clip.rs`, `wgsl/clip.wgsl`: Vulkan, DX12 or Metal, the same on every
-  OS), plugged in by the engine through `accel::Accelerator`; each tower is checked against the CPU on a test input
-  (`accel::agree`) before use, and any error falls back to the CPU via `JobError::Device`, paired with a positional `.safetensors` reader that validates tensor shapes, bounds, and
-  finiteness (rejecting `NaN`/`Inf` weights) and a byte-level BPE tokenizer (`vocab.json` + `merges.txt`).
+  text transformer implementation on `candle-core` (the CPU reference). On the GPU the full vision and text towers
+  (patch/token + position embeddings, layer norms, transformer blocks, CLS/EOT pooling, and final projections) run in
+  a single submission on `lcc-gpu`'s wgpu kernels (`crates/gpu/src/clip.rs`, `wgsl/clip.wgsl`: Vulkan, DX12 or Metal,
+  the same on every OS), reading back only `[batch, embed_dim]` floats; plugged in by the engine through
+  `accel::Accelerator`; each tower is checked against the CPU on a test input (`accel::agree`) before use, and any
+  error falls back to the CPU via `JobError::Device`, paired with a positional `.safetensors` reader that validates
+  tensor shapes, bounds, and finiteness (rejecting `NaN`/`Inf` weights) and a byte-level BPE tokenizer (`vocab.json` +
+  `merges.txt`).
 - **Binary embedding store** (`store.rs`): per-model cache file `ml-embeddings-<id>.bin` stored beside the library
   (rebuildable, never inside `catalog.json`). Stores L2-normalized `f32` embeddings keyed by `(photo_id, fingerprint)`,
   tolerates torn tails on crash recovery, resets cleanly when the model's `tag` (`<id>@<sha256-prefix>`) or dimension
@@ -59,7 +62,17 @@ embedding cache store.
 - commands:
   - `ml.status {preference?: auto | cpu}`: reports device status, queue counts, `enabled`, `modelId`, `modelInstalled`,
     `indexedPhotos`, and `unindexedPhotos`;
-  - `ml.enable {enabled: bool}`: enables or pauses background ML indexing;
+  - `ml.enable {enabled: bool}`: switches semantic search on or off (Settings ▸ AI Models ▸ Semantic search; on unless
+    switched off). Off: nothing is indexed, `search.semantic` and `library.filter {semantic}` are refused, an active
+    description filter is cleared and the search box loses its **AI** button; the index already made is kept. The choice
+    is saved in the models folder's `settings.json` and kept across launches;
+  - `ml.indexStatus`, `ml.pause`, `ml.resume`, `ml.clearIndex`, `ml.restart`: where indexing stands (`state`: `off`,
+    `idle`, `indexing`, `paused`, `complete`, with `done` of `total` photos), pausing it (saved as `paused` in
+    `settings.json`, so it stays paused across launches; queued photos wait on the pace, nothing new is queued), resuming
+    it, deleting this library's `ml-embeddings-*.bin` (leaving indexing paused) and deleting them and indexing again. The
+    "Indexing photos" row carries `controls` (`activity.list`): a pause button and a gear that opens Settings ▸ AI Models
+    at its Semantic search section (`app.settings {section: "semanticSearch"}`); while paused with nothing queued, a row
+    of its own stays so resume is there;
   - `ml.models.list`, `ml.models.install`, `ml.models.select`, `ml.models.remove`, `ml.models.download`,
     `ml.models.downloads`, `ml.models.downloadCancel`: manage installed and downloadable ML models behind explicit
     licence acknowledgement;
@@ -86,8 +99,6 @@ In the order of the plan on issue #491:
 1. **Downstream AI features (#488–#490)** on the cached embeddings: aesthetic scoring
    head (#488), culling suggestions (#489), and orientation suggestions (#490). Suggestions are proposals the user
    accepts, never silent writes.
-2. **More of CLIP on the GPU:** the patch embedding, final layer norm and projections still run on the CPU; moving
-   them would save the per-batch upload of the embedded sequence.
 
 ## Testing
 

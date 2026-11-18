@@ -144,6 +144,16 @@ pub fn align_to_template(img: &Rgb, landmarks: &[(f32, f32); 5], out_w: usize, o
     warp(img, &m, out_w, out_h)
 }
 
+/// An 8-bit RGB picture `width` pixels wide, mirrored left to right. A picture whose bytes are not whole rows of
+/// `width` pixels comes back unchanged (whoever reads it next says what is wrong with it).
+pub fn mirror(rgb: &[u8], width: usize) -> Vec<u8> {
+    let row = width.saturating_mul(3);
+    if row == 0 || !rgb.len().is_multiple_of(row) {
+        return rgb.to_vec();
+    }
+    rgb.chunks_exact(row).flat_map(|r| r.as_chunks::<3>().0.iter().rev().flatten().copied()).collect()
+}
+
 /// A square around a face box (pixels of `img`), `pad` times its larger side, as `out_w` × `out_h`.
 pub fn crop_box(img: &Rgb, x0: f32, y0: f32, x1: f32, y1: f32, pad: f32, out_w: usize, out_h: usize) -> Option<Vec<u8>> {
     if ![x0, y0, x1, y1, pad].iter().all(|v| v.is_finite()) {
@@ -162,6 +172,19 @@ pub fn crop_box(img: &Rgb, x0: f32, y0: f32, x1: f32, y1: f32, pad: f32, out_w: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mirroring_turns_each_row_round_and_twice_is_the_same() {
+        // two rows of three pixels
+        let img: Vec<u8> = (0..18).collect();
+        let m = mirror(&img, 3);
+        assert_eq!(m, vec![6, 7, 8, 3, 4, 5, 0, 1, 2, 15, 16, 17, 12, 13, 14, 9, 10, 11]);
+        assert_eq!(mirror(&m, 3), img);
+        // not whole rows, or no width: unchanged
+        assert_eq!(mirror(&img[..10], 3), img[..10].to_vec());
+        assert_eq!(mirror(&img, 0), img);
+        assert!(mirror(&[], 3).is_empty());
+    }
 
     fn close(a: (f32, f32), b: (f32, f32), tol: f32) -> bool {
         (a.0 - b.0).abs() <= tol && (a.1 - b.1).abs() <= tol

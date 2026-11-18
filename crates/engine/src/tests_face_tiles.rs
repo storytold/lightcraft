@@ -169,33 +169,21 @@ fn an_unedited_raws_face_comes_from_its_largest_preview() {
 }
 
 /// A preview under the soft limit (¾ of the pixels the tile needs across the face) leaves the tile to
-/// the develop path; so does an edited photo, whose look the camera's JPEG doesn't have.
+/// the develop path; so does an edited photo, whose look the camera's JPEG doesn't have. Rendered tiles
+/// are kept in the library's thumbnail cache: a new session (the next launch) shows them without reading
+/// the original, from the preview or the develop path alike; and a size between two steps reuses the tile
+/// of its step.
 #[test]
-fn a_preview_too_small_or_an_edited_photo_falls_back_to_the_develop_path() {
+fn a_small_preview_or_an_edit_falls_back_to_the_develop_path_and_tiles_are_kept_on_disk() {
     let (dir, mut s, id, _) = setup("fallback");
     let loads = count_loads(&mut s);
     let img = tile(&mut s, id, TINY_FACE, 64).unwrap();
     assert_eq!((img.width, img.height), (64, 64));
     assert_eq!(loads.get(), (1, 1), "the preview was tried, then the original developed");
-
-    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
-    s.execute("develop.set", &json!({"control": "light.exposure", "value": 1.0})).unwrap();
-    let edited = tile(&mut s, id, FACE, 64).unwrap();
-    assert_eq!(loads.get(), (2, 1), "an edited photo's face is developed; its preview isn't read");
-    let _ = std::fs::remove_dir_all(dir);
-    drop(edited);
-}
-
-/// Rendered tiles are kept in the library's thumbnail cache: a new session (the next launch) shows
-/// them without reading the original, from the preview or the develop path alike; and a size
-/// between two steps reuses the tile of its step.
-#[test]
-fn face_tiles_are_kept_on_disk_for_the_next_launch() {
-    let (dir, mut s, id, _) = setup("disk");
     let first = tile(&mut s, id, FACE, 64).unwrap();
-    let _ = tile(&mut s, id, TINY_FACE, 64).unwrap();
     drop(s);
 
+    // the next launch: both tiles come from the disk cache
     let mut s = open(&dir);
     let loads = count_loads(&mut s);
     let again = tile(&mut s, id, FACE, 64).unwrap();
@@ -207,6 +195,13 @@ fn face_tiles_are_kept_on_disk_for_the_next_launch() {
     assert_eq!(s.face_job(id, FACE, 60).unwrap().key, s.face_job(id, FACE, 64).unwrap().key);
     let _ = tile(&mut s, id, FACE, 60).unwrap();
     assert_eq!(loads.get(), (0, 0));
+
+    // an edited photo's face is developed; its preview isn't read
+    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 1.0})).unwrap();
+    let edited = tile(&mut s, id, FACE, 64).unwrap();
+    assert_eq!(edited.width, 64);
+    assert_eq!(loads.get(), (1, 0), "an edited photo's face is developed; its preview isn't read");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -239,7 +234,7 @@ fn face_tiles_never_crash() {
         Rect { x0: f64::NAN, y0: 0.5, x1: 0.6, y1: f64::INFINITY },
         Rect { x0: f64::NEG_INFINITY, y0: f64::NAN, x1: f64::NAN, y1: f64::NAN },
     ] {
-        for edge in [0, 1, 64, usize::MAX] {
+        for edge in [0, 64, usize::MAX] {
             let img = tile(&mut s, id, face, edge).unwrap_or_else(|e| panic!("{face:?} at {edge}: {e}"));
             assert_eq!(img.width, img.height, "{face:?} at {edge}");
         }

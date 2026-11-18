@@ -142,9 +142,13 @@ fn malformed_targets() -> Vec<serde_json::Value> {
     vec![json!(-1), json!(0.5), json!("1"), json!(true), json!([]), json!({}), json!(u64::MAX)]
 }
 
+/// Malformed mask ids, mask components, effect targets and spot indices (and ids past `u32`, which
+/// must not wrap to an existing mask) are refused by every command that takes one, with edits,
+/// selection and history left as they were.
 #[test]
-fn malformed_mask_ids_are_rejected_without_changes() {
+fn malformed_mask_and_spot_targets_are_rejected_without_changes() {
     let mut s = target_session();
+    // mask ids
     let commands = [
         ("mask.delete", json!({})),
         ("mask.rename", json!({"name": "Wrong mask"})),
@@ -167,25 +171,11 @@ fn malformed_mask_ids_are_rejected_without_changes() {
             rejects_target(&mut s, command, &params);
         }
     }
-}
-
-#[test]
-fn malformed_mask_selection_is_rejected_without_changes() {
-    let mut s = target_session();
+    // the mask selection
     for target in malformed_targets().into_iter().filter(|v| !v.is_null()).chain([json!(4_294_967_297_u64)]) {
         rejects_target(&mut s, "mask.select", &json!({"id": target}));
     }
-}
-
-#[test]
-fn overflowing_mask_id_does_not_wrap_to_an_existing_mask() {
-    let mut s = target_session();
-    rejects_target(&mut s, "mask.delete", &json!({"id": 4_294_967_297_u64}));
-}
-
-#[test]
-fn malformed_mask_effect_targets_are_rejected_without_changes() {
-    let mut s = target_session();
+    // mask effects
     for (command, mut params) in [
         ("mask.saveEffect", json!({"name": "Wrong effect"})),
         ("mask.updateEffect", json!({"name": "Existing"})),
@@ -198,6 +188,29 @@ fn malformed_mask_effect_targets_are_rejected_without_changes() {
     }
     for target in malformed_targets().into_iter().chain([json!([1, -1]), json!([1, null]), json!([1, 4_294_967_297_u64])]) {
         rejects_target(&mut s, "mask.applyEffect", &json!({"name": "Existing", "ids": target}));
+    }
+    // mask components
+    for (command, mut params) in [
+        ("mask.update", json!({"shape": {"kind": "brush", "strokes": []}})),
+        ("mask.component", json!({"action": "invert"})),
+        ("mask.sampleColor", json!({"x": 0.5, "y": 0.5})),
+        ("mask.refineDetail", json!({})),
+    ] {
+        for target in malformed_targets().into_iter().chain([json!(4_294_967_296_u64)]) {
+            params["component"] = target;
+            rejects_target(&mut s, command, &params);
+        }
+    }
+    // spot indices
+    for (command, mut params) in [("spot.delete", json!({})), ("spot.update", json!({"size": 0.1})), ("spot.refreshSource", json!({}))] {
+        for target in malformed_targets().into_iter().chain([json!(4_294_967_296_u64)]) {
+            params["index"] = target;
+            rejects_target(&mut s, command, &params);
+        }
+    }
+    // the spot selection
+    for target in malformed_targets().into_iter().filter(|v| !v.is_null()).chain([json!(4_294_967_296_u64)]) {
+        rejects_target(&mut s, "spot.select", &json!({"index": target}));
     }
 }
 
@@ -228,41 +241,6 @@ fn mask_effect_targets_preserve_explicit_defaults_and_lists() {
     s.execute("mask.applyEffect", &json!({"name": "Existing", "ids": [1, 2]})).unwrap();
     assert!(s.develop_of(s.active().unwrap()).unwrap().masks.iter().all(|m| m.adjust.exposure == 0.0));
     rejects_target(&mut s, "mask.applyEffect", &json!({"name": "Existing", "ids": []}));
-}
-
-#[test]
-fn malformed_mask_components_are_rejected_without_changes() {
-    let mut s = target_session();
-    for (command, mut params) in [
-        ("mask.update", json!({"shape": {"kind": "brush", "strokes": []}})),
-        ("mask.component", json!({"action": "invert"})),
-        ("mask.sampleColor", json!({"x": 0.5, "y": 0.5})),
-        ("mask.refineDetail", json!({})),
-    ] {
-        for target in malformed_targets().into_iter().chain([json!(4_294_967_296_u64)]) {
-            params["component"] = target;
-            rejects_target(&mut s, command, &params);
-        }
-    }
-}
-
-#[test]
-fn malformed_spot_indices_are_rejected_without_changes() {
-    let mut s = target_session();
-    for (command, mut params) in [("spot.delete", json!({})), ("spot.update", json!({"size": 0.1})), ("spot.refreshSource", json!({}))] {
-        for target in malformed_targets().into_iter().chain([json!(4_294_967_296_u64)]) {
-            params["index"] = target;
-            rejects_target(&mut s, command, &params);
-        }
-    }
-}
-
-#[test]
-fn malformed_spot_selection_is_rejected_without_changes() {
-    let mut s = target_session();
-    for target in malformed_targets().into_iter().filter(|v| !v.is_null()).chain([json!(4_294_967_296_u64)]) {
-        rejects_target(&mut s, "spot.select", &json!({"index": target}));
-    }
 }
 
 #[test]

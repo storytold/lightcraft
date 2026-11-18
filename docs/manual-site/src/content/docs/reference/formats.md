@@ -15,7 +15,7 @@ sidebar:
 | WebP | yes | yes |
 | JPEG XL | yes | yes (lossy or lossless, native builds) |
 | AVIF | yes (native builds) | yes (8/10-bit, HDR) |
-| HEIC / HEIF | yes in release builds | no |
+| HEIC / HEIF | yes in release builds, and on Android | no |
 | PSD / PSB | merged composite | PSD; also Edit In round trips (TIFF) |
 | GIF, BMP | yes | no |
 | DNG | yes (all kinds) | yes (incl. lossy, rendered DNG) |

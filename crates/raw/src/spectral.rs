@@ -176,81 +176,77 @@ mod tests {
         }
         assert_eq!(find(None, "NIKON D850").map(|c| c.model), Some("D850"));
         assert_eq!(find(None, "ILCE-7M3").map(|c| c.model), Some("ILCE-7M3"));
-    }
-
-    #[test]
-    fn aliases_reach_the_camera_they_name() {
-        for (make, model, row) in [
-            ("Canon", "Canon EOS 400D DIGITAL", "Digital Rebel XTi"),
-            ("Canon", "Canon EOS Kiss Digital X", "Digital Rebel XTi"),
-            ("Canon", "Canon EOS REBEL T3i", "EOS 600D"),
-            ("Canon", "Canon EOS Kiss X5", "EOS 600D"),
-            ("Canon", "Canon EOS R5 Mark II", "EOS R5m2"),
-            ("Canon", "Canon EOS R6 Mark II", "EOS R6m2"),
-            ("NIKON CORPORATION", "NIKON D800", "D800E"),
-            ("NIKON CORPORATION", "NIKON Z 6_2", "Z f"),
-            ("SONY", "ILCE-7RM4A", "ILCE-7RM4"),
-            ("FUJIFILM", "GFX100S", "GFX 100"),
-            ("FUJIFILM", "X-T30", "X-T3"),
-            ("FUJIFILM", "X-T30 II", "X-T3"),
-            ("FUJIFILM", "X100V", "X-T3"),
-            ("FUJIFILM", "X-S20", "X-T4"),
-        ] {
-            assert_eq!(find(Some(make), model).map(|c| c.model), Some(row), "{make} {model}");
+        // aliases reach the camera they name
+        {
+            for (make, model, row) in [
+                ("Canon", "Canon EOS 400D DIGITAL", "Digital Rebel XTi"),
+                ("Canon", "Canon EOS Kiss Digital X", "Digital Rebel XTi"),
+                ("Canon", "Canon EOS REBEL T3i", "EOS 600D"),
+                ("Canon", "Canon EOS Kiss X5", "EOS 600D"),
+                ("Canon", "Canon EOS R5 Mark II", "EOS R5m2"),
+                ("Canon", "Canon EOS R6 Mark II", "EOS R6m2"),
+                ("NIKON CORPORATION", "NIKON D800", "D800E"),
+                ("NIKON CORPORATION", "NIKON Z 6_2", "Z f"),
+                ("SONY", "ILCE-7RM4A", "ILCE-7RM4"),
+                ("FUJIFILM", "GFX100S", "GFX 100"),
+                ("FUJIFILM", "X-T30", "X-T3"),
+                ("FUJIFILM", "X-T30 II", "X-T3"),
+                ("FUJIFILM", "X100V", "X-T3"),
+                ("FUJIFILM", "X-S20", "X-T4"),
+            ] {
+                assert_eq!(find(Some(make), model).map(|c| c.model), Some(row), "{make} {model}");
+            }
         }
-    }
-
-    #[test]
-    fn gfx100s_ii_uses_gfx_100_matrices() {
-        // GFX100S II is not in the table, so its raws never get step 4's measured matrices
-        // and fall back to step 5's neutral camera-RGB-approximately-sRGB.
-        assert_eq!(find(Some("FUJIFILM"), "GFX100S II").map(|c| c.model), Some("GFX 100"),);
-    }
-
-    #[test]
-    fn other_cameras_and_other_makes_find_nothing() {
-        assert_eq!(find(Some("Canon"), "Canon EOS 7D"), None);
-        assert_eq!(find(Some("SONY"), "ILCE-7M2"), None);
-        assert_eq!(find(Some("OLYMPUS IMAGING CORP."), "E-M5"), None);
-        // the model of another make
-        assert_eq!(find(Some("Canon"), "D850"), None);
-        assert_eq!(find(Some("SONY"), "X-T4"), None);
-        assert_eq!(find(None, ""), None);
-        assert_eq!(find(Some(""), ""), None);
-    }
-
-    #[test]
-    fn a_make_model_string_finds_what_its_parts_find() {
-        // every row and alias, joined the way the catalog keeps a camera ("Make Model")
-        for c in cameras() {
-            let joined = format!("{} {}", c.make, c.model);
-            assert_eq!(find_camera(&joined), Some(c), "{joined}");
-            assert_eq!(find_camera(&joined), find(Some(c.make), c.model), "{joined}");
+        // a make model string finds what its parts find
+        {
+            // every row and alias, joined the way the catalog keeps a camera ("Make Model")
+            for c in cameras() {
+                let joined = format!("{} {}", c.make, c.model);
+                assert_eq!(find_camera(&joined), Some(c), "{joined}");
+                assert_eq!(find_camera(&joined), find(Some(c.make), c.model), "{joined}");
+            }
+            for (make, alias, _) in table::ALIASES.iter().chain(SAME_SENSOR) {
+                let joined = format!("{make} {alias}");
+                assert_eq!(find_camera(&joined), find(Some(make), alias), "{joined}");
+                assert!(find_camera(&joined).is_some(), "{joined}");
+            }
+            // Exif makes with more words than the brand, and a model that repeats the brand
+            for (make, model, row) in [
+                ("NIKON CORPORATION", "NIKON D850", "D850"),
+                ("NIKON CORPORATION", "NIKON Z 6_2", "Z f"),
+                ("SONY", "ILCE-7M3", "ILCE-7M3"),
+                ("Canon", "Canon EOS 5D Mark III", "EOS 5D Mark III"),
+                ("Canon", "Canon EOS 400D DIGITAL", "Digital Rebel XTi"),
+                ("FUJIFILM", "GFX100S", "GFX 100"),
+                ("Panasonic", "DC-GX9", "DC-GX9"),
+            ] {
+                let joined = format!("{make} {model}");
+                assert_eq!(find_camera(&joined).map(|c| c.model), Some(row), "{joined}");
+                assert_eq!(find_camera(&joined), find(Some(make), model), "{joined}");
+            }
+            // a model alone, as a Lightroom catalog names it
+            assert_eq!(find_camera("ILCE-7M3").map(|c| c.model), Some("ILCE-7M3"));
+            assert_eq!(find_camera("  ILCE-7M3  ").map(|c| c.model), Some("ILCE-7M3"));
+            for none in ["", "   ", "SONY", "SONY ILCE-7M2", "Canon EOS 7D", "D850 SONY", "OLYMPUS IMAGING CORP. E-M5"] {
+                assert_eq!(find_camera(none), None, "{none:?}");
+            }
         }
-        for (make, alias, _) in table::ALIASES.iter().chain(SAME_SENSOR) {
-            let joined = format!("{make} {alias}");
-            assert_eq!(find_camera(&joined), find(Some(make), alias), "{joined}");
-            assert!(find_camera(&joined).is_some(), "{joined}");
+        // gfx100s ii uses gfx 100 matrices
+        {
+            // GFX100S II is not in the table, so its raws never get step 4's measured matrices
+            // and fall back to step 5's neutral camera-RGB-approximately-sRGB.
+            assert_eq!(find(Some("FUJIFILM"), "GFX100S II").map(|c| c.model), Some("GFX 100"),);
         }
-        // Exif makes with more words than the brand, and a model that repeats the brand
-        for (make, model, row) in [
-            ("NIKON CORPORATION", "NIKON D850", "D850"),
-            ("NIKON CORPORATION", "NIKON Z 6_2", "Z f"),
-            ("SONY", "ILCE-7M3", "ILCE-7M3"),
-            ("Canon", "Canon EOS 5D Mark III", "EOS 5D Mark III"),
-            ("Canon", "Canon EOS 400D DIGITAL", "Digital Rebel XTi"),
-            ("FUJIFILM", "GFX100S", "GFX 100"),
-            ("Panasonic", "DC-GX9", "DC-GX9"),
-        ] {
-            let joined = format!("{make} {model}");
-            assert_eq!(find_camera(&joined).map(|c| c.model), Some(row), "{joined}");
-            assert_eq!(find_camera(&joined), find(Some(make), model), "{joined}");
-        }
-        // a model alone, as a Lightroom catalog names it
-        assert_eq!(find_camera("ILCE-7M3").map(|c| c.model), Some("ILCE-7M3"));
-        assert_eq!(find_camera("  ILCE-7M3  ").map(|c| c.model), Some("ILCE-7M3"));
-        for none in ["", "   ", "SONY", "SONY ILCE-7M2", "Canon EOS 7D", "D850 SONY", "OLYMPUS IMAGING CORP. E-M5"] {
-            assert_eq!(find_camera(none), None, "{none:?}");
+        // other cameras and other makes find nothing
+        {
+            assert_eq!(find(Some("Canon"), "Canon EOS 7D"), None);
+            assert_eq!(find(Some("SONY"), "ILCE-7M2"), None);
+            assert_eq!(find(Some("OLYMPUS IMAGING CORP."), "E-M5"), None);
+            // the model of another make
+            assert_eq!(find(Some("Canon"), "D850"), None);
+            assert_eq!(find(Some("SONY"), "X-T4"), None);
+            assert_eq!(find(None, ""), None);
+            assert_eq!(find(Some(""), ""), None);
         }
     }
 

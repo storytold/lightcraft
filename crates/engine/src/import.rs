@@ -340,9 +340,10 @@ pub fn import_defaults(p: &Photo) -> lcc_develop::DevelopSettings {
 }
 
 /// Does the photo still look as the camera rendered it (its embedded camera preview is then a
-/// fair stand-in)? Not when a default preset changed it on import.
+/// fair stand-in)? Not when a default preset changed it on import. As Shot counts as As Shot
+/// whatever numbers it stores ([`Photo::develop_matches`]), as for [`Photo::is_edited`].
 pub fn has_import_look(p: &Photo) -> bool {
-    *p.develop == p.camera_defaults()
+    p.develop_matches(p.camera_defaults())
 }
 
 /// [`has_import_look`], or the only change is the camera profile (colour calibration), such as the
@@ -2031,6 +2032,8 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                         plugin_fields.push((id, sc.plugin_fields.clone()));
                     }
                     crate::sidecar::merge_into(&mut p, sc, &now);
+                    // a flat-field map our own sidecar carried is stored ahead of the photo that uses it
+                    ops.extend(sc.vignetting_calibration_ops(&s.catalog, &now));
                     // a Lightroom edit (crs: settings) keeps Constrain Crop as it always read: off
                     if matches!(sc.develop, Some(crate::sidecar::DevelopPatch::Partial(_))) && p.develop.geometry.constrain_crop {
                         let mut d = (*p.develop).clone();
@@ -2291,6 +2294,7 @@ impl Session {
             display_fit: None,
             hdr_texels: None,
             superseded: None,
+            discard_source: false,
             latest: None,
             kept: None,
             placement: None,

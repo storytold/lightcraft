@@ -58,19 +58,11 @@ fn row(rating: u8) -> Rating {
 fn clicking_a_star_sets_that_rating() {
     let (got, _) = drive(Some(4), &[], |ui| row(2).show(ui));
     assert_eq!(got, vec![4]);
-}
-
-#[test]
-fn clicking_the_current_rating_clears_it() {
     let (got, _) = drive(Some(3), &[], |ui| row(3).show(ui));
-    assert_eq!(got, vec![0]);
-}
-
-#[test]
-fn hovering_alone_changes_nothing() {
-    // the preview is only painted; the rating is reported on click
+    assert_eq!(got, vec![0], "clicking the current rating clears it");
+    // the hover preview is only painted; the rating is reported on click
     let (got, _) = drive(None, &[], |ui| row(2).show(ui));
-    assert!(got.is_empty());
+    assert!(got.is_empty(), "hovering alone changes nothing");
 }
 
 /// How many stars `Rating::show` paints filled (in the star colour) after the pointer has moved to
@@ -136,12 +128,8 @@ fn the_arrow_keys_step_the_rating_of_a_focused_star() {
     assert_eq!(got, vec![4], "{got:?}");
     let (got, _) = drive(None, &[egui::Key::Tab, egui::Key::ArrowLeft], |ui| row(3).show(ui));
     assert_eq!(got, vec![2], "{got:?}");
-}
-
-#[test]
-fn arrow_keys_do_nothing_when_no_star_is_focused() {
     let (got, _) = drive(None, &[egui::Key::ArrowRight], |ui| row(3).show(ui));
-    assert!(got.is_empty(), "{got:?}");
+    assert!(got.is_empty(), "no star focused: the arrows do nothing: {got:?}");
 }
 
 /// Feed the shown rating back each frame, with other focusable widgets on both sides.

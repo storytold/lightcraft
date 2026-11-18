@@ -112,6 +112,29 @@ pub struct ImmichUi {
     smart_query: String,
     smart_pending: Option<(String, Slot<Result<Vec<String>, String>>)>,
     smart_note: Option<String>,
+    /// Server calls this screen made with `background: true` whose answers are still out (their
+    /// `immich.answer` keys, `<command>:<account>`): the window never waits for a server.
+    asked: Vec<String>,
+    /// Accounts whose path-mapping rows are filled from the next `immich.libraries` answer.
+    maps_reload: HashSet<String>,
+    /// A destructive action of an account card, waiting for the user's yes.
+    confirm: Option<Confirm>,
+    /// Link-only photos whose original failed to download and was reported; forgotten (with
+    /// `fetch_tried`) once the user moves on, so opening the photo again tries again.
+    fetch_failed: HashSet<u64>,
+}
+
+/// Something that removes or deletes, asked about before it is done. Shown inline in the account
+/// card (the Settings screen is the modal layer while it is open).
+struct Confirm {
+    account: String,
+    /// Where the question shows: `card` (under the card's buttons) or `sync` (the Sync section).
+    place: &'static str,
+    text: String,
+    /// The confirm button's label: the label of the button that asked.
+    button: &'static str,
+    command: &'static str,
+    params: Value,
 }
 
 #[cfg(test)]
@@ -228,8 +251,159 @@ fn versions_ui(app: &mut LccApp, ctx: &egui::Context) {
     });
 }
 
+/// Make a server call on a worker (the command's `background: true`); its answer comes in
+/// through [`answers_ui`]. A call that could not even start answers at once, the same way.
+fn ask_bg(app: &mut LccApp, ctx: &egui::Context, command: &str, account: &str, mut params: Value) {
+    let key = format!("{command}:{account}");
+    params["account"] = json!(account);
+    params["background"] = json!(true);
+    match app.session.execute(command, &params) {
+        Ok(r) if r["started"] == true || r["key"].is_string() => {
+            if !app.immich.asked.contains(&key) {
+                app.immich.asked.push(key);
+            }
+        }
+        Ok(r) => answer_in(app, ctx, &key, r),
+        Err(e) => answer_in(app, ctx, &key, json!({"ok": false, "error": {"message": e.to_string()}})),
+    }
+}
+
+/// Take in the answers of the background calls this screen made, every frame while one is out.
+fn answers_ui(app: &mut LccApp, ctx: &egui::Context) {
+    if app.immich.asked.is_empty() {
+        return;
+    }
+    for key in std::mem::take(&mut app.immich.asked) {
+        match app.session.execute("immich.answer", &json!({"key": key})) {
+            Ok(v) if v["done"] == true => answer_in(app, ctx, &key, v["result"].clone()),
+            Ok(v) if v["running"] == true => app.immich.asked.push(key),
+            // (neither running nor answered: nothing left to wait for)
+            Ok(_) => answer_in(app, ctx, &key, json!({"ok": false, "error": {"message": "Immich"}})),
+            Err(e) => answer_in(app, ctx, &key, json!({"ok": false, "error": {"message": e.to_string()}})),
+        }
+    }
+    if !app.immich.asked.is_empty() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
+}
+
+/// An Immich error for the user: the catalog's words for a cause the app knows (an API key can't
+/// open locked folders), else the engine's message.
+fn error_text(e: &Value) -> String {
+    if e["kind"] == "sessionRequired" {
+        return crate::i18n::tr(
+            "Immich only opens locked folders for a signed-in session (PIN or password), not for an API key, and this connection uses an API key. Photos in locked folders can't be reached from here.",
+        )
+        .to_string();
+    }
+    e["message"].as_str().unwrap_or("Immich").to_string()
+}
+
+/// One background call's answer: into the section that asked, or a toast. A failure is always
+/// shown: in its section where there is one, else as a toast.
+fn answer_in(app: &mut LccApp, ctx: &egui::Context, key: &str, r: Value) {
+    // (`<command>:<account>`; the account id has colons of its own, the command none)
+    let Some((command, account)) = key.split_once(':') else { return };
+    let failed = r["ok"] == false;
+    let message = error_text(&r["error"]);
+    match command {
+        "immich.libraries" => {
+            if app.immich.maps_reload.remove(account) {
+                let rows = r["pathMaps"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|m| (m["container"].as_str().unwrap_or_default().to_string(), m["local"].as_str().unwrap_or_default().to_string()))
+                    .collect();
+                app.immich.maps.insert(account.to_string(), rows);
+            }
+            app.immich.libraries.insert(account.to_string(), r);
+        }
+        "immich.authStatus" => {
+            app.immich.locked_view.insert(account.to_string(), r);
+        }
+        "immich.unlockSession" if failed => app.immich.unlock_error = Some(message),
+        "immich.unlockSession" => {
+            app.toast(
+                ctx,
+                crate::i18n::tr("Unlocked: locked-folder photos are now visible to link, import and sync until Immich locks the session again."),
+            );
+            // the section's status line is stale now
+            app.immich.locked_view.remove(account);
+            if app.immich.unlock_for.as_deref() == Some(account) {
+                app.immich.unlock_for = None;
+                app.immich.unlock_secret.clear();
+                app.immich.unlock_error = None;
+            }
+        }
+        _ if failed => app.toast(ctx, message),
+        "immich.scanLibraries" => app.toast(ctx, trf!("Immich is rescanning {} libraries", r["scanned"].as_array().map(Vec::len).unwrap_or(0))),
+        "immich.importPeople" => app.toast(ctx, trf!("Imported the faces of {} photos from Immich", r["photos"].as_u64().unwrap_or(0))),
+        "immich.pushPeople" => app.toast(ctx, trf!("Sent {} names to Immich", r["renames"].as_array().map(Vec::len).unwrap_or(0))),
+        _ => {}
+    }
+}
+
+/// Show a command's failure (`{ok: false, error}`, or an error) as a toast → whether it worked.
+fn report(app: &mut LccApp, ctx: &egui::Context, r: Result<Value, String>) -> bool {
+    match r {
+        Ok(r) if r["ok"] == false => {
+            app.toast(ctx, r["error"]["message"].as_str().unwrap_or("Immich"));
+            false
+        }
+        Ok(_) => true,
+        Err(e) => {
+            app.toast(ctx, e);
+            false
+        }
+    }
+}
+
+/// The question of a pending [`Confirm`] of this account and place, with its button and Cancel.
+/// → true when the action was carried out.
+fn confirm_box(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, id: &str, place: &str) -> bool {
+    let Some((text, button)) = app.immich.confirm.as_ref().filter(|c| c.account == id && c.place == place).map(|c| (c.text.clone(), c.button)) else {
+        return false;
+    };
+    let (mut go, mut cancel) = (false, false);
+    let frame = egui::Frame::NONE.stroke(egui::Stroke::new(1.0, t.caution.gamma_multiply(0.5))).corner_radius(6.0).inner_margin(8);
+    let r = frame.show(ui, |ui| {
+        let l = ui.label(RichText::new(text).size(11.5).color(t.text));
+        register(ui.ctx(), format!("label:immichConfirm-{i}"), l.rect);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            go = crate::button::Button::new(button).kind(crate::button::Kind::Danger).widget("button:immichConfirmGo").show(ui).clicked();
+            if text_button(ui, "immichConfirmCancel", crate::i18n::tr("Cancel"), false).clicked() {
+                cancel = true;
+            }
+        });
+    });
+    register(ui.ctx(), format!("immichConfirmBox-{i}"), r.response.rect);
+    if go && let Some(c) = app.immich.confirm.take() {
+        match app.run(c.command, c.params) {
+            Ok(r) if r["ok"] == false => app.toast(ui.ctx(), r["error"]["message"].as_str().unwrap_or("Immich")),
+            // (a deletion the server refused comes back in `failed`)
+            Ok(r) => {
+                if let Some(m) = r["failed"].as_array().and_then(|f| f.first()).and_then(|f| f["error"]["message"].as_str()) {
+                    app.toast(ui.ctx(), m);
+                }
+            }
+            Err(e) => app.toast(ui.ctx(), e),
+        }
+        if c.command == "immich.disconnect" {
+            app.immich.libraries.remove(id);
+        }
+        return true;
+    }
+    if cancel {
+        app.immich.confirm = None;
+    }
+    false
+}
+
 pub fn pump(app: &mut LccApp, ctx: &egui::Context) {
     versions_ui(app, ctx);
+    answers_ui(app, ctx);
     let now = ctx.input(|i| i.time);
     if now - app.immich.last_pump < 0.2 {
         return;
@@ -261,11 +435,32 @@ pub fn pump(app: &mut LccApp, ctx: &egui::Context) {
             app.toast(ctx, trf!("Pushed {} XMP sidecars ({} written beside the originals, {} skipped)", n("pushed"), n("written"), n("skipped")));
         }
     }
+    // an original that could not be downloaded: say why (once per try)
+    for e in v["fetchErrors"].as_array().into_iter().flatten() {
+        if let Some(id) = e["id"].as_u64()
+            && app.immich.fetch_tried.contains(&id)
+            && app.immich.fetch_failed.insert(id)
+        {
+            app.toast(ctx, trf!("Could not download the original from Immich: {}", e["error"].as_str().unwrap_or_default()));
+        }
+    }
+    // …and once the user has moved on from that photo, forget the try: opening it again tries again
+    let active = app.session.active().map(|i| i.0);
+    let im = &mut app.immich;
+    let tried = &mut im.fetch_tried;
+    im.fetch_failed.retain(|id| {
+        if Some(*id) == active {
+            return true;
+        }
+        tried.remove(id);
+        false
+    });
     app.immich.last = v;
     if busy {
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
     }
-    // Develop on a link-only photo: fetch its original (once per photo per session)
+    // Develop on a link-only photo: fetch its original (once per photo; again after a failure
+    // when the photo is opened again)
     // (the Modern layout's Develop has no Edit panel: being in Develop is enough there)
     let developing = app.ui.view == crate::state::ViewMode::Detail
         && (app.ui.right.is_edit_tool() || (crate::modern::on(app) && app.ui.module != crate::module::ModuleId::Library));
@@ -274,35 +469,26 @@ pub fn pump(app: &mut LccApp, ctx: &egui::Context) {
         && app.session.catalog.photo(id).is_some_and(|p| p.preview_only.as_deref() == Some(lcc_engine::remote::LINK_ONLY))
         && app.immich.fetch_tried.insert(id.0)
     {
-        match app.session.execute("immich.fetchOriginal", &json!({"id": id.0})) {
-            Ok(r) if r["started"] == true => app.toast(ctx, crate::i18n::tr("Downloading the original from Immich…")),
-            Ok(r) if r["ok"] == false => app.toast(ctx, r["error"]["message"].as_str().unwrap_or("Immich")),
-            Ok(_) => {}
-            Err(e) => app.toast(ctx, e.to_string()),
+        let failed = match app.session.execute("immich.fetchOriginal", &json!({"id": id.0})) {
+            Ok(r) if r["started"] == true => {
+                app.toast(ctx, crate::i18n::tr("Downloading the original from Immich…"));
+                false
+            }
+            Ok(r) if r["ok"] == false => {
+                app.toast(ctx, r["error"]["message"].as_str().unwrap_or("Immich"));
+                true
+            }
+            Ok(_) => false,
+            Err(e) => {
+                app.toast(ctx, e.to_string());
+                true
+            }
+        };
+        // (a download that could not even start is tried again when the photo is opened again)
+        if failed {
+            app.immich.fetch_failed.insert(id.0);
         }
     }
-}
-
-// --------------------------------------------------------------------------------- grid badge
-
-/// A small "Immich" pill at the top left of a grid cell for photos linked to Immich (dashed
-/// outline when the link is only probable).
-pub fn grid_badge(app: &LccApp, ui: &egui::Ui, id: lcc_catalog::PhotoId, img: Rect) {
-    let state = app.session.catalog.remote_links().link_state(id, lcc_immich::link::SERVICE);
-    if state == "none" {
-        return;
-    }
-    let t = Tokens::get(ui.ctx());
-    let p = ui.painter();
-    let g = p.layout_no_wrap(crate::i18n::tr("Immich").into(), t.semibold(9.0), Color32::WHITE);
-    let r = Rect::from_min_size(pos2(img.left() + 5.0, img.top() + 5.0), vec2(g.size().x + 10.0, 14.0));
-    let fill = if state == "linked" { t.accent.gamma_multiply(0.85) } else { Color32::from_black_alpha(160) };
-    p.rect_filled(r, 7.0, fill);
-    if state == "probable" {
-        p.rect_stroke(r, 7.0, egui::Stroke::new(1.0, t.caution), egui::StrokeKind::Inside);
-    }
-    p.galley(pos2(r.left() + 5.0, r.center().y - g.size().y / 2.0), g, Color32::WHITE);
-    register(ui.ctx(), format!("badge:immich:{}", id.0), r);
 }
 
 // ----------------------------------------------------------------------------- Info panel
@@ -406,7 +592,7 @@ pub fn settings_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
     }
     key_storage(app, ui, t);
-    super::settings::heading(ui, t, "Immich servers");
+    super::settings::heading_help(ui, t, "Immich servers", "connections");
     let st = app.session.execute("immich.status", &json!({})).unwrap_or_default();
     // a background connect that finished
     if app.immich.awaiting_connect && st["connecting"] == false {
@@ -768,36 +954,31 @@ fn account_card(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, a: &V
         if let Some(e) = link["error"].as_str() {
             ui.label(RichText::new(e).color(t.caution));
         }
-        // (wraps: on a narrow window the buttons take two rows instead of running off the edge)
+        // the everyday buttons; the rest behind More (wraps: on a narrow window the buttons take
+        // two rows instead of running off the edge)
+        let more_id = egui::Id::new(("immichMore", i));
+        let any_open = app.immich.libraries.contains_key(&id) || app.immich.sidecars_open.contains(&id) || app.immich.locked_open.contains(&id);
+        let mut more = any_open || ui.data(|d| d.get_temp::<bool>(more_id).unwrap_or(false));
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            if text_button(ui, &format!("immichLink-{i}"), crate::i18n::tr("Link Now"), false).clicked() {
-                let _ = app.run("immich.link", json!({"account": id}));
-            }
-            if text_button(ui, &format!("immichRecheck-{i}"), crate::i18n::tr("Check"), false).clicked() {
-                let _ = app.session.execute("immich.status", &json!({"check": true, "background": true}));
-            }
-            if text_button(ui, &format!("immichLibraries-{i}"), crate::i18n::tr("External Libraries…"), false).clicked() {
-                let v = app
-                    .session
-                    .execute("immich.libraries", &json!({"account": id}))
-                    .unwrap_or_else(|e| json!({"ok": false, "error": {"message": e.to_string()}}));
-                let rows = v["pathMaps"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .map(|m| (m["container"].as_str().unwrap_or_default().to_string(), m["local"].as_str().unwrap_or_default().to_string()))
-                    .collect();
-                app.immich.maps.insert(id.clone(), rows);
-                app.immich.libraries.insert(id.clone(), v);
-            }
-            if text_button(ui, &format!("immichSync-{i}"), crate::i18n::tr("Sync Now"), false).clicked() {
-                let _ = app.run("immich.sync", json!({"account": id, "background": true}));
+            if text_button(ui, &format!("immichSync-{i}"), crate::i18n::tr("Sync Now"), false)
+                .on_hover_text(crate::i18n::tr("Exchanges ratings, captions, keywords and the other fields set below with Immich now."))
+                .clicked()
+            {
+                let r = app.run("immich.sync", json!({"account": id, "background": true}));
+                report(app, ui.ctx(), r);
                 app.immich.sync_open.insert(id.clone());
                 app.immich.sync_view.remove(&id);
             }
+            if text_button(ui, &format!("immichImport-{i}"), crate::i18n::tr("Import…"), false).clicked() {
+                open_import(app, Some(id.clone()));
+            }
+            if a["collections"] == true && text_button(ui, &format!("immichCollectionsOpen-{i}"), crate::i18n::tr("Choose Albums…"), false).clicked()
+            {
+                let _ = app.run("app.settings", json!({"tab": "sync"}));
+            }
             let open = app.immich.sync_open.contains(&id);
-            if text_button(ui, &format!("immichSyncPanel-{i}"), crate::i18n::tr("Sync…"), open).clicked() {
+            if text_button(ui, &format!("immichSyncPanel-{i}"), crate::i18n::tr("Metadata Sync…"), open).clicked() {
                 if open {
                     app.immich.sync_open.remove(&id);
                 } else {
@@ -805,32 +986,69 @@ fn account_card(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, a: &V
                     app.immich.sync_view.remove(&id);
                 }
             }
-            if text_button(ui, &format!("immichImport-{i}"), crate::i18n::tr("Import…"), false).clicked() {
-                open_import(app, Some(id.clone()));
-            }
-            let sidecars_open = app.immich.sidecars_open.contains(&id);
-            if text_button(ui, &format!("immichSidecars-{i}"), crate::i18n::tr("XMP Sidecars"), sidecars_open).clicked() {
-                if sidecars_open {
-                    app.immich.sidecars_open.remove(&id);
-                } else {
-                    app.immich.sidecars_open.insert(id.clone());
-                }
-            }
-            let locked_open = app.immich.locked_open.contains(&id);
-            if text_button(ui, &format!("immichLocked-{i}"), crate::i18n::tr("Locked Folders…"), locked_open).clicked() {
-                if locked_open {
-                    app.immich.locked_open.remove(&id);
-                } else {
-                    // (a fresh status every time the section opens)
-                    app.immich.locked_open.insert(id.clone());
-                    app.immich.locked_view.remove(&id);
-                }
-            }
-            if text_button(ui, &format!("immichDisconnect-{i}"), crate::i18n::tr("Disconnect"), false).clicked() {
-                let _ = app.run("immich.disconnect", json!({"account": id}));
-                app.immich.libraries.remove(&id);
+            if text_button(ui, &format!("immichMore-{i}"), crate::i18n::tr("More"), more).clicked() && !any_open {
+                more = !more;
+                ui.data_mut(|d| d.insert_temp(more_id, more));
             }
         });
+        if more {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                if text_button(ui, &format!("immichLink-{i}"), crate::i18n::tr("Link Now"), false).clicked() {
+                    let r = app.run("immich.link", json!({"account": id}));
+                    report(app, ui.ctx(), r);
+                }
+                if text_button(ui, &format!("immichLinkFull-{i}"), crate::i18n::tr("Full Link Pass"), false)
+                    .on_hover_text(crate::i18n::tr("Looks at every photo on the server again, not only those changed since the last pass."))
+                    .clicked()
+                {
+                    let r = app.run("immich.link", json!({"account": id, "full": true}));
+                    report(app, ui.ctx(), r);
+                }
+                if text_button(ui, &format!("immichRecheck-{i}"), crate::i18n::tr("Check"), false).clicked() {
+                    let _ = app.session.execute("immich.status", &json!({"check": true, "background": true}));
+                }
+                if text_button(ui, &format!("immichLibraries-{i}"), crate::i18n::tr("External Libraries…"), false).clicked() {
+                    // the section opens now and fills in when the server has answered
+                    app.immich.maps_reload.insert(id.clone());
+                    app.immich.libraries.entry(id.clone()).or_insert_with(|| json!({"loading": true}));
+                    ask_bg(app, ui.ctx(), "immich.libraries", &id, json!({}));
+                }
+                let sidecars_open = app.immich.sidecars_open.contains(&id);
+                if text_button(ui, &format!("immichSidecars-{i}"), crate::i18n::tr("XMP Sidecars"), sidecars_open).clicked() {
+                    if sidecars_open {
+                        app.immich.sidecars_open.remove(&id);
+                    } else {
+                        app.immich.sidecars_open.insert(id.clone());
+                    }
+                }
+                let locked_open = app.immich.locked_open.contains(&id);
+                if text_button(ui, &format!("immichLocked-{i}"), crate::i18n::tr("Locked Folders…"), locked_open).clicked() {
+                    if locked_open {
+                        app.immich.locked_open.remove(&id);
+                    } else {
+                        // (a fresh status every time the section opens)
+                        app.immich.locked_open.insert(id.clone());
+                        app.immich.locked_view.remove(&id);
+                    }
+                }
+                if text_button(ui, &format!("immichDisconnect-{i}"), crate::i18n::tr("Disconnect"), false).clicked() {
+                    app.immich.confirm = Some(Confirm {
+                        account: id.clone(),
+                        place: "card",
+                        text: crate::i18n::tr(
+                            "Disconnect this server? Its stored API key is removed. The photos and their Immich links stay in the catalog.",
+                        )
+                        .to_string(),
+                        button: "Disconnect",
+                        command: "immich.disconnect",
+                        params: json!({"account": id}),
+                    });
+                }
+            });
+        }
+        collections_rows(app, ui, t, i, &id, a);
+        confirm_box(app, ui, t, i, &id, "card");
         if app.immich.libraries.contains_key(&id) {
             extlib(app, ui, t, &id);
         }
@@ -846,6 +1064,41 @@ fn account_card(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, a: &V
     });
     register(ui.ctx(), format!("immichAccount:{i}"), r.response.rect);
     ui.add_space(4.0);
+}
+
+/// The account in device sync: its albums as collections (each device picks what it keeps of
+/// each in Settings ▸ Sync).
+fn collections_rows(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, id: &str, a: &Value) {
+    let mut on = a["collections"] == true;
+    let c = ui.checkbox(&mut on, crate::i18n::tr("Sync Immich albums"));
+    register(ui.ctx(), format!("check:immichCollections-{i}"), c.rect);
+    if c.changed() {
+        let r = app.run("immich.collections", json!({"account": id, "on": on}));
+        if report(app, ui.ctx(), r) && on {
+            let _ = app.run("app.settings", json!({"tab": "sync"}));
+        }
+    }
+    let note = if on {
+        "Each album is a collection. In Choose Albums… pick Previews or Full Quality for the albums this device keeps in step; the rest stay on the server."
+    } else {
+        "Keeps chosen albums in step with collections here, both ways. Import… only copies or links photos once."
+    };
+    ui.label(RichText::new(crate::i18n::tr(note)).size(11.0).color(t.text_dim));
+    let mut shared = a["shared"] == true;
+    let c = ui.checkbox(&mut shared, crate::i18n::tr("Share with synced devices"));
+    register(ui.ctx(), format!("check:immichShare-{i}"), c.rect);
+    if c.changed() {
+        let r = app.run("immich.share", json!({"account": id, "on": shared}));
+        report(app, ui.ctx(), r);
+    }
+    let r = ui.label(
+        RichText::new(crate::i18n::tr("Your other devices get this connection and its albums too, over their encrypted link."))
+            .size(11.0)
+            .color(t.text_dim),
+    );
+    r.on_hover_text(crate::i18n::tr(
+        "Shared: this server's API key goes to the devices this catalog syncs with, over their encrypted link, into their key storage, and they see its albums too. Off: the connection and its albums stay on this device.",
+    ));
 }
 
 /// IMM-SIDECARS: push the catalog's metadata to Immich (whole sidecars for external-library
@@ -924,18 +1177,20 @@ fn sidecar_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, id
 /// locks the session again.
 fn locked_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, id: &str) {
     ui.separator();
-    if !app.immich.locked_view.contains_key(id) {
-        let st = app.session.execute("immich.authStatus", &json!({"account": id})).unwrap_or_default();
-        app.immich.locked_view.insert(id.to_string(), st);
+    // the status is asked for on a worker; the section shows "checking" until it is here
+    if !app.immich.locked_view.contains_key(id) && !app.immich.asked.contains(&format!("immich.authStatus:{id}")) {
+        ask_bg(app, ui.ctx(), "immich.authStatus", id, json!({}));
     }
     let st = app.immich.locked_view.get(id).cloned().unwrap_or_default();
     ui.label(RichText::new(crate::i18n::tr("Locked folders")).font(t.semibold(12.0)).color(t.text));
     if st["ok"] == false {
-        let l = ui.label(RichText::new(st["error"]["message"].as_str().unwrap_or("failed")).size(11.5).color(t.caution));
+        let l = ui.label(RichText::new(error_text(&st["error"])).size(11.5).color(t.caution));
         register(ui.ctx(), format!("label:immichLockedStatus-{i}"), l.rect);
         return;
     }
-    let line = if st["isElevated"] == true {
+    let line = if st.is_null() {
+        crate::i18n::tr("Checking the server…").to_string()
+    } else if st["isElevated"] == true {
         match st["pinExpiresAt"].as_str().or_else(|| st["expiresAt"].as_str()) {
             Some(until) => trf!("Unlocked until {}", until.chars().take(16).collect::<String>().replace('T', " ")),
             None => crate::i18n::tr("Unlocked: locked-folder photos are visible to link, import and sync.").to_string(),
@@ -1008,28 +1263,17 @@ fn locked_unlock_box(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, 
         }
     });
     register(ui.ctx(), format!("immichUnlockBox-{i}"), r.response.rect);
-    if go || submit {
+    // one unlock at a time; the server answers on a worker ([`answer_in`] closes the box, or
+    // shows the refusal in it)
+    let pending = app.immich.asked.contains(&format!("immich.unlockSession:{id}"));
+    if pending {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+    }
+    if (go || submit) && !pending {
+        // the typed secret is gone from the field at once, whatever the server says
         let secret = std::mem::take(&mut app.immich.unlock_secret);
-        match app.session.execute("immich.unlockSession", &json!({"account": id, "secret": secret})) {
-            Ok(r) if r["ok"] == true => {
-                app.toast(
-                    ui.ctx(),
-                    crate::i18n::tr("Unlocked: locked-folder photos are now visible to link, import and sync until Immich locks the session again."),
-                );
-                // the section's status line is stale now
-                app.immich.locked_view.remove(id);
-                close = true;
-            }
-            Ok(r) => {
-                app.immich.unlock_error = Some(r["error"]["message"].as_str().unwrap_or("failed").to_string());
-                // the typed secret is gone; the field is empty and ready for the next try
-                app.immich.unlock_secret.clear();
-            }
-            Err(e) => {
-                app.immich.unlock_error = Some(e.to_string());
-                app.immich.unlock_secret.clear();
-            }
-        }
+        app.immich.unlock_error = None;
+        ask_bg(app, ui.ctx(), "immich.unlockSession", id, json!({"secret": secret}));
     }
     if close {
         app.immich.unlock_for = None;
@@ -1044,6 +1288,13 @@ fn extlib(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, id: &str) {
     let Some(v) = app.immich.libraries.get(id).cloned() else { return };
     ui.separator();
     ui.label(RichText::new(crate::i18n::tr("External libraries")).font(t.semibold(12.0)).color(t.text));
+    if v["loading"] == true {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(RichText::new(crate::i18n::tr("Checking the server…")).color(t.text_dim));
+        });
+        return;
+    }
     if v["ok"] == false {
         ui.label(RichText::new(v["error"]["message"].as_str().unwrap_or("failed")).color(t.caution));
         return;
@@ -1097,17 +1348,21 @@ fn extlib(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, id: &str) {
                 .filter(|(c, l)| !c.trim().is_empty() && !l.trim().is_empty())
                 .map(|(c, l)| json!({"container": c.trim(), "local": l.trim()}))
                 .collect();
-            let _ = app.run("immich.setPathMaps", json!({"account": id, "pathMaps": maps}));
-            if let Ok(nv) = app.session.execute("immich.libraries", &json!({"account": id})) {
-                app.immich.libraries.insert(id.to_string(), nv);
+            let r = app.run("immich.setPathMaps", json!({"account": id, "pathMaps": maps}));
+            if report(app, ui.ctx(), r) {
+                // which folders the libraries cover now (the list stays up meanwhile)
+                ask_bg(app, ui.ctx(), "immich.libraries", id, json!({}));
             }
         }
         if text_button(ui, "immichWriteXmp", crate::i18n::tr("Write XMP Sidecars"), false)
             .on_hover_text(crate::i18n::tr("Immich reads ratings, descriptions and keywords from the sidecars on its next library scan"))
             .clicked()
         {
-            match app.session.execute("immich.pushSidecars", &json!({"account": id, "externalOnly": true})) {
-                Ok(r) => app.toast(ui.ctx(), trf!("Wrote {} XMP sidecars", r["written"].as_u64().unwrap_or(0))),
+            // (a finished run says what it did: the pump's toast)
+            match app.session.execute("immich.pushSidecars", &json!({"account": id, "externalOnly": true, "background": true})) {
+                Ok(r) if r["started"] == true => app.toast(ui.ctx(), crate::i18n::tr("Pushing XMP sidecars to Immich…")),
+                Ok(r) if r["ok"] == false => app.toast(ui.ctx(), r["error"]["message"].as_str().unwrap_or("Immich")),
+                Ok(r) => app.toast(ui.ctx(), r["reason"].as_str().unwrap_or("Immich")),
                 Err(e) => app.toast(ui.ctx(), e.to_string()),
             }
         }
@@ -1115,13 +1370,7 @@ fn extlib(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, id: &str) {
             .on_hover_text(crate::i18n::tr("Ask Immich to rescan the external libraries now (needs an admin key)"))
             .clicked()
         {
-            match app.session.execute("immich.scanLibraries", &json!({"account": id})) {
-                Ok(r) if r["ok"] == true => {
-                    app.toast(ui.ctx(), trf!("Immich is rescanning {} libraries", r["scanned"].as_array().map(Vec::len).unwrap_or(0)))
-                }
-                Ok(r) => app.toast(ui.ctx(), r["error"]["message"].as_str().unwrap_or("Immich")),
-                Err(e) => app.toast(ui.ctx(), e.to_string()),
-            }
+            ask_bg(app, ui.ctx(), "immich.scanLibraries", id, json!({}));
         }
     });
     app.immich.maps.insert(id.to_string(), rows);
@@ -1562,31 +1811,52 @@ const SYNC_FIELDS: &[(&str, &str)] = &[
 const DIRECTIONS: &[(&str, &str)] = &[("twoWay", "Two-way"), ("toImmich", "To Immich"), ("fromImmich", "From Immich"), ("off", "Off")];
 const POLICIES: &[(&str, &str)] = &[("newest", "Newest wins"), ("catalog", "Catalog wins"), ("immich", "Immich wins"), ("ask", "Ask")];
 
-/// The last album run as one short line (and whether it failed); None before any run.
-fn album_summary(v: &Value) -> Option<(String, bool)> {
-    if v.is_null() {
-        return None;
-    }
-    if v["ok"] == false {
-        let msg = v["error"]["message"].as_str().or_else(|| v["errors"][0].as_str()).unwrap_or("failed");
-        return Some((trf!("Albums: {}", msg), true));
-    }
-    let n = |k: &str| v[k].as_u64().unwrap_or(0);
-    Some((
-        trf!(
-            "Albums: {} linked, {} created, {} renamed, {} changed, {} deleted",
-            n("albums"),
-            n("created"),
-            n("renamed"),
-            n("membership"),
-            n("deleted")
-        ),
-        false,
-    ))
-}
-
 fn label_of(list: &[(&str, &'static str)], v: &str) -> &'static str {
     list.iter().find(|(k, _)| *k == v).map(|(_, l)| *l).unwrap_or("?")
+}
+
+/// What Preview Changes found (the last dry run): one summary line, then a line per photo saying
+/// which fields would go which way. In the Sync section, where the button is.
+fn preview_list(app: &LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, pv: &Value) {
+    if !pv.is_object() {
+        return;
+    }
+    if pv["ok"] == false {
+        let msg = pv["error"]["message"].as_str().or_else(|| pv["errors"][0].as_str()).unwrap_or("failed");
+        let l = ui.label(RichText::new(msg).size(11.5).color(t.caution));
+        register(ui.ctx(), format!("label:immichPreview-{i}"), l.rect);
+        return;
+    }
+    let n = |k: &str| pv[k].as_u64().unwrap_or(0);
+    let line = trf!("Preview: {} checked, {} from Immich, {} to Immich, {} conflicts", n("checked"), n("pulled"), n("pushed"), n("conflicts"));
+    let l = ui.label(RichText::new(line).size(11.5).color(t.text_label));
+    register(ui.ctx(), format!("label:immichPreview-{i}"), l.rect);
+    let changes = pv["changes"].as_array().cloned().unwrap_or_default();
+    if changes.is_empty() {
+        ui.label(RichText::new(crate::i18n::tr("Nothing would change.")).size(11.5).color(t.text_dim));
+        return;
+    }
+    let fields = |v: &Value| -> String {
+        v.as_object().into_iter().flatten().map(|(f, _)| crate::i18n::tr(label_of(SYNC_FIELDS, f))).collect::<Vec<_>>().join(", ")
+    };
+    egui::ScrollArea::vertical().id_salt(("immich-preview", i)).max_height(140.0).show(ui, |ui| {
+        for c in &changes {
+            let name =
+                c["photo"].as_u64().and_then(|p| app.session.catalog.photo(lcc_catalog::PhotoId(p))).map(|p| p.file_name.clone()).unwrap_or_default();
+            let mut parts = vec![name];
+            for (key, label) in [("toImmich", "To Immich"), ("toCatalog", "From Immich")] {
+                let f = fields(&c[key]);
+                if !f.is_empty() {
+                    parts.push(format!("{}: {f}", crate::i18n::tr(label)));
+                }
+            }
+            let conflicts = c["conflicts"].as_array().map(Vec::len).unwrap_or(0);
+            if conflicts > 0 {
+                parts.push(trf!("Sync conflicts ({})", conflicts));
+            }
+            ui.label(RichText::new(parts.join(" · ")).size(11.0).color(t.text_label));
+        }
+    });
 }
 
 /// Settings → Connections → an account → Sync…: status and activity, per-field rules, the
@@ -1595,7 +1865,7 @@ fn sync_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, id: &
     let now = ui.input(|x| x.time);
     let stale = match app.immich.sync_view.get(id) {
         None => true,
-        Some((st, _, at)) => (st["running"] == true || st["albumsRunning"] == true) && now - at > 0.5,
+        Some((st, _, at)) => (st["running"] == true) && now - at > 0.5,
     };
     if stale {
         let st = app.session.execute("immich.syncStatus", &json!({"account": id, "log": 1})).unwrap_or_default();
@@ -1603,7 +1873,7 @@ fn sync_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, id: &
         app.immich.sync_view.insert(id.to_string(), (st, cf, now));
     }
     let Some((st, cf, _)) = app.immich.sync_view.get(id).cloned() else { return };
-    let running = st["running"] == true || st["albumsRunning"] == true;
+    let running = st["running"] == true;
     if running {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(300));
     }
@@ -1635,39 +1905,30 @@ fn sync_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, id: &
     } else {
         crate::i18n::tr("Not synced yet.").to_string()
     };
-    let albums_line = album_summary(&st["albumsLast"]);
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(crate::i18n::tr("Metadata sync")).font(t.semibold(12.0)).color(t.text));
         let l = ui.label(RichText::new(line).size(11.5).color(if last["ok"] == false { t.caution } else { t.text_label }));
         register(ui.ctx(), format!("label:immichSyncStatus-{i}"), l.rect);
-        if let Some((s, bad)) = albums_line {
-            let l = ui.label(RichText::new(s).size(11.5).color(if bad { t.caution } else { t.text_label }));
-            register(ui.ctx(), format!("label:immichAlbumStatus-{i}"), l.rect);
-        }
     });
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         if text_button(ui, &format!("immichSyncDry-{i}"), crate::i18n::tr("Preview Changes"), false).clicked() {
-            if let Ok(v) = app.session.execute("immich.sync", &json!({"account": id, "dryRun": true})) {
-                app.immich.result = Some(v);
-            }
-            changed = true;
-        }
-        if text_button(ui, &format!("immichSyncAlbums-{i}"), crate::i18n::tr("Sync Albums"), false).clicked() {
-            let _ = app.run("immich.syncAlbums", json!({"account": id, "background": true}));
+            // a dry run on a worker; its changes are listed below when it is back
+            let r = app.session.execute("immich.sync", &json!({"account": id, "dryRun": true, "background": true})).map_err(|e| e.to_string());
+            report(app, ui.ctx(), r);
             changed = true;
         }
         if text_button(ui, &format!("immichPeople-{i}"), crate::i18n::tr("Import People"), false).clicked() {
-            let _ = app.run("immich.importPeople", json!({"account": id}));
+            ask_bg(app, ui.ctx(), "immich.importPeople", id, json!({}));
         }
         if text_button(ui, &format!("immichPushPeople-{i}"), crate::i18n::tr("Send Names"), false).clicked() {
-            let _ = app.run("immich.pushPeople", json!({"account": id}));
+            ask_bg(app, ui.ctx(), "immich.pushPeople", id, json!({}));
         }
     });
+    preview_list(app, ui, t, i, &st["preview"]);
     // rules
     let cfg = &st["config"];
     let mut patch = serde_json::Map::new();
-    let mut album_patch: Option<Value> = None;
     egui::Grid::new(("immich-sync-rules", i)).num_columns(3).spacing([8.0, 2.0]).show(ui, |ui| {
         for (row, rule) in st["rules"].as_array().into_iter().flatten().enumerate() {
             let field = rule["field"].as_str().unwrap_or_default();
@@ -1696,40 +1957,10 @@ fn sync_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, id: &
                 patch.insert(field.to_string(), json!({"direction": d2, "policy": p2}));
             }
         }
-        // collections ↔ albums: off = only albums linked by hand
-        let ar = &st["albumRule"];
-        let (dir, pol) = (ar["direction"].as_str().unwrap_or("off").to_string(), ar["policy"].as_str().unwrap_or("ask").to_string());
-        let (mut d2, mut p2) = (dir.clone(), pol.clone());
-        ui.label(RichText::new(crate::i18n::tr("Collections ↔ albums")).color(t.text_label)).on_hover_text(crate::i18n::tr(
-            "Catalog collections map to the Immich albums of the same name: creates, renames, photos added or removed, and deletes. Deleting a collection or an album never deletes photos. Off: only collections linked by hand.",
-        ));
-        egui::ComboBox::from_id_salt(("immich-dir-albums", i)).width(110.0).selected_text(crate::i18n::tr(label_of(DIRECTIONS, &dir))).show_ui(
-            ui,
-            |ui| {
-                for (k, l) in DIRECTIONS {
-                    ui.selectable_value(&mut d2, k.to_string(), crate::i18n::tr(l));
-                }
-            },
-        );
-        egui::ComboBox::from_id_salt(("immich-pol-albums", i)).width(110.0).selected_text(crate::i18n::tr(label_of(POLICIES, &pol))).show_ui(
-            ui,
-            |ui| {
-                for (k, l) in POLICIES {
-                    ui.selectable_value(&mut p2, k.to_string(), crate::i18n::tr(l));
-                }
-            },
-        );
-        ui.end_row();
-        if d2 != dir || p2 != pol {
-            album_patch = Some(json!({"direction": d2, "policy": p2}));
-        }
     });
     let mut cfg_patch = serde_json::Map::new();
     if !patch.is_empty() {
         cfg_patch.insert("rules".into(), Value::Object(patch));
-    }
-    if let Some(a) = album_patch {
-        cfg_patch.insert("albums".into(), a);
     }
     ui.horizontal(|ui| {
         let mut fav = cfg["favorite"].as_str().unwrap_or("pick").to_string();
@@ -1795,43 +2026,28 @@ fn sync_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, id: &
                 ui.spacing_mut().item_spacing.x = 4.0;
                 let what = if d["side"] == "immich" { crate::i18n::tr("in Immich's trash") } else { crate::i18n::tr("deleted in the catalog") };
                 ui.label(RichText::new(format!("{}: {what}", d["fileName"].as_str().unwrap_or_default())).color(t.text));
-                let apply = if d["side"] == "immich" { "Delete Here Too" } else { "Trash in Immich" };
+                let here = d["side"] == "immich";
+                let apply = if here { "Delete Here Too" } else { "Trash in Immich" };
                 if text_button(ui, &format!("immichDeletion-{i}-{n}-apply"), crate::i18n::tr(apply), false).clicked() {
-                    let _ = app.run("immich.resolveDeletion", json!({"account": id, "assets": [d["asset"]], "action": "apply"}));
-                    changed = true;
+                    let name = d["fileName"].as_str().unwrap_or_default();
+                    app.immich.confirm = Some(Confirm {
+                        account: id.to_string(),
+                        place: "sync",
+                        text: if here { trf!("Move “{}” to Recently Deleted?", name) } else { trf!("Move “{}” to Immich's trash?", name) },
+                        button: apply,
+                        command: "immich.resolveDeletion",
+                        params: json!({"account": id, "assets": [d["asset"]], "action": "apply"}),
+                    });
                 }
                 if text_button(ui, &format!("immichDeletion-{i}-{n}-keep"), crate::i18n::tr("Keep"), false).clicked() {
-                    let _ = app.run("immich.resolveDeletion", json!({"account": id, "assets": [d["asset"]], "action": "keep"}));
+                    let r = app.run("immich.resolveDeletion", json!({"account": id, "assets": [d["asset"]], "action": "keep"}));
+                    report(app, ui.ctx(), r);
                     changed = true;
                 }
             });
         }
     }
-    // albums deleted on one side, waiting for the user
-    let adels = st["albumDeletions"].as_array().cloned().unwrap_or_default();
-    if !adels.is_empty() {
-        ui.label(RichText::new(trf!("Albums deleted on one side ({})", adels.len())).font(t.semibold(12.0)).color(t.caution));
-        for (n, d) in adels.iter().enumerate() {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                let in_catalog = d["deletedOn"] == "catalog";
-                let what = if in_catalog { crate::i18n::tr("deleted in the catalog") } else { crate::i18n::tr("deleted in Immich") };
-                ui.label(RichText::new(format!("{}: {what}", d["name"].as_str().unwrap_or_default())).color(t.text));
-                let apply = if in_catalog { "Delete in Immich Too" } else { "Delete Here Too" };
-                if text_button(ui, &format!("immichAlbumDeletion-{i}-{n}-apply"), crate::i18n::tr(apply), false)
-                    .on_hover_text(crate::i18n::tr("Deletes the album only; its photos stay."))
-                    .clicked()
-                {
-                    let _ = app.run("immich.resolveAlbumDeletion", json!({"account": id, "album": d["album"], "action": "apply"}));
-                    changed = true;
-                }
-                if text_button(ui, &format!("immichAlbumDeletion-{i}-{n}-keep"), crate::i18n::tr("Keep"), false).clicked() {
-                    let _ = app.run("immich.resolveAlbumDeletion", json!({"account": id, "album": d["album"], "action": "keep"}));
-                    changed = true;
-                }
-            });
-        }
-    }
+    changed |= confirm_box(app, ui, t, i, id, "sync");
     if changed {
         app.immich.sync_view.remove(id);
     }

@@ -27,6 +27,20 @@ fn camera_profile_row(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings, 
         return;
     }
     let t = Tokens::get(ui.ctx());
+    // a DNG of rendered RGB (Photo Merge, Render to DNG): no camera profile describes its pixels, so none is offered
+    if app.session.media.profile_facts(id).rendered_rgb {
+        ui.horizontal(|ui| {
+            ui.add_space(24.0);
+            ui.label(egui::RichText::new(crate::i18n::tr("Camera Profile")).color(t.text_dim).font(t.font(13.0)));
+            let r = ui.add(
+                egui::Label::new(egui::RichText::new(crate::i18n::tr("Not used: this DNG holds rendered RGB")).color(t.text_dim).font(t.font(12.0)))
+                    .truncate(),
+            );
+            register(ui.ctx(), "label:cameraProfileRendered", r.rect);
+        });
+        ui.add_space(4.0);
+        return;
+    }
     let camera = photo.meta.camera.clone();
     // (with the camera's Lightroom-matched calibrated looks: Lightroom's "Adobe Color" shown as "Eboda Colour",
     // `lcc_camdb::calibration::display_name`)

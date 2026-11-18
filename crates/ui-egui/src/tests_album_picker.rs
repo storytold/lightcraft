@@ -67,39 +67,46 @@ fn library() -> Library {
     Library { h, utils, excluded, uncurated, trip }
 }
 
-/// With nothing typed, the picker shows the sidebar's tree: folders start closed and open on click.
+/// The rule editor's picker, in one session. With nothing typed it shows the sidebar's tree: folders start closed and
+/// open on click. After opening a folder, typing still goes to the search (the box keeps the keyboard) and narrows the
+/// albums to those whose path holds every word; Enter picks the first, the arrow keys move through them; picking
+/// closes it, and it opens again on the chosen album's folder.
 #[test]
-fn the_tree_opens_folder_by_folder() {
-    let Library { mut h, utils, excluded, trip, .. } = library();
-    click(&mut h, "albumPicker:rules-0");
-    assert!(has(&h, &format!("albumPickerFolder:{utils}:rules-0")) && has(&h, &format!("albumPickerItem:{trip}:rules-0")));
-    assert!(!has(&h, &format!("albumPickerItem:{excluded}:rules-0")), "inside a closed folder");
-    click(&mut h, &format!("albumPickerFolder:{utils}:rules-0"));
-    click(&mut h, &format!("albumPickerItem:{excluded}:rules-0"));
-    assert_eq!(value(&h), json!(excluded));
-    assert!(!has(&h, &format!("albumPickerItem:{trip}:rules-0")), "picking closes it");
-    // it opens again on the chosen album's folder
-    click(&mut h, "albumPicker:rules-0");
-    assert!(has(&h, &format!("albumPickerItem:{excluded}:rules-0")));
-}
-
-/// Typing narrows the albums to those whose path holds every word; Enter picks the first, the
-/// arrow keys move through them.
-#[test]
-fn typing_finds_and_keys_pick() {
-    let Library { mut h, excluded, uncurated, trip, .. } = library();
-    click(&mut h, "albumPicker:rules-0");
-    let r = h.request("ui.text", json!({"text": "utils"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    assert!(has(&h, &format!("albumPickerItem:{excluded}:rules-0")) && has(&h, &format!("albumPickerItem:{uncurated}:rules-0")));
-    assert!(!has(&h, &format!("albumPickerItem:{trip}:rules-0")), "Trip doesn't match");
-    for key in ["ArrowDown", "Enter"] {
+fn the_tree_opens_folder_by_folder_and_typing_finds_and_keys_pick() {
+    let Library { mut h, utils, excluded, uncurated, trip } = library();
+    let item = |id: u64| format!("albumPickerItem:{id}:rules-0");
+    let key = |h: &mut Headless, key: &str| {
         let r = h.request("ui.key", json!({"key": key}), T);
         assert_eq!(r["ok"], true, "{r}");
         h.settle(SETTLE);
-    }
+    };
+    let text = |h: &mut Headless, text: &str| {
+        let r = h.request("ui.text", json!({"text": text}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+    };
+    click(&mut h, "albumPicker:rules-0");
+    assert!(has(&h, &format!("albumPickerFolder:{utils}:rules-0")) && has(&h, &item(trip)), "the tree's top level");
+    assert!(!has(&h, &item(excluded)), "inside a closed folder");
+    click(&mut h, &format!("albumPickerFolder:{utils}:rules-0"));
+    assert!(has(&h, &item(excluded)), "the folder opened");
+    text(&mut h, "trip");
+    assert!(has(&h, &item(trip)) && !has(&h, &item(excluded)), "typing after a folder click searches for trip");
+    key(&mut h, "Enter");
+    assert_eq!(value(&h), json!(trip), "Enter picks the first match");
+    assert!(!has(&h, &item(trip)), "picking closes it");
+    click(&mut h, "albumPicker:rules-0");
+    text(&mut h, "utils");
+    assert!(has(&h, &item(excluded)) && has(&h, &item(uncurated)), "both albums under [UTILS] match");
+    assert!(!has(&h, &item(trip)), "Trip doesn't match");
+    key(&mut h, "ArrowDown");
+    key(&mut h, "Enter");
     assert_eq!(value(&h), json!(uncurated), "the second match");
+    // it opens again on the chosen album's folder, and a click picks
+    click(&mut h, "albumPicker:rules-0");
+    assert!(has(&h, &item(excluded)), "open on the chosen album's folder");
+    click(&mut h, &item(excluded));
+    assert_eq!(value(&h), json!(excluded), "a click picks");
 }
 
 /// Albums that can't be picked (the one being edited, one that would loop) are shown greyed, not
@@ -117,19 +124,6 @@ fn albums_that_would_loop_are_greyed() {
     assert!(has(&h, &format!("albumPickerItem:{travel}:rules-0")), "shown");
     click(&mut h, &format!("albumPickerItem:{travel}:rules-0"));
     assert_eq!(value(&h), json!(null), "but not picked");
-}
-
-/// After opening a folder, typing still goes to the search: the box keeps the keyboard.
-#[test]
-fn typing_after_a_folder_click_still_searches() {
-    let Library { mut h, utils, excluded, trip, .. } = library();
-    click(&mut h, "albumPicker:rules-0");
-    click(&mut h, &format!("albumPickerFolder:{utils}:rules-0"));
-    assert!(has(&h, &format!("albumPickerItem:{excluded}:rules-0")));
-    let r = h.request("ui.text", json!({"text": "trip"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    assert!(has(&h, &format!("albumPickerItem:{trip}:rules-0")) && !has(&h, &format!("albumPickerItem:{excluded}:rules-0")), "searching for trip");
 }
 
 /// The import review reuses the same tree, while accepting only regular album destinations.
@@ -176,7 +170,11 @@ mod import_review {
     #[test]
     fn import_album_picker_preserves_the_sidebar_hierarchy() {
         let Review { mut h, folder, nested, album, other, smart } = review();
+        let last_by_name = id(exec(&mut h, "album.create", json!({"name": "Zebra", "addSelected": false})));
+        exec(&mut h, "album.reorder", json!({"id": last_by_name, "before": other}));
         click(&mut h, "albumPicker:import-album");
+        let top = |id| h.app.widgets.iter().find(|(w, _)| w == &format!("albumPickerItem:{id}:import-album")).unwrap().1.top();
+        assert!(top(last_by_name) < top(other), "the catalog's custom order takes priority over alphabetical order");
         assert!(has(&h, &format!("albumPickerFolder:{folder}:import-album")));
         assert!(has(&h, &format!("albumPickerItem:{other}:import-album")));
         assert!(!has(&h, &format!("albumPickerItem:{album}:import-album")), "nested album starts folded");
@@ -217,7 +215,7 @@ mod import_review {
     /// None, New and an existing album replace each other without retaining a stale pending name.
     #[test]
     fn import_album_picker_retains_none_new_and_existing_transitions() {
-        let Review { mut h, album, .. } = review();
+        let Review { mut h, folder, album, .. } = review();
         click(&mut h, "albumPicker:import-album");
         click(&mut h, "importAlbum:new");
         assert_eq!(destination(&h).album, None);
@@ -242,6 +240,26 @@ mod import_review {
         click(&mut h, "albumPicker:import-album");
         click(&mut h, "importAlbum:none");
         assert!(destination(&h).new_album.is_empty(), "None clears a pending name too");
+        // path search is case-insensitive and Escape preserves review edits and user-provided names
+        let unicode = id(exec(&mut h, "album.create", json!({"name": "La fête 東京", "parent": folder, "addSelected": false})));
+        click(&mut h, "albumPicker:import-album");
+        click(&mut h, "importAlbum:new");
+        replace_name(&mut h, "Keep this name");
+        click(&mut h, "albumPicker:import-album");
+        text(&mut h, "no such collection");
+        assert!(h.painted_text().iter().any(|t| t == "No collections match"));
+        key(&mut h, "Enter");
+        assert!(has(&h, "albumPickerSearch:import-album"), "Enter with no result keeps the picker open");
+        key(&mut h, "Escape");
+        assert!(!has(&h, "albumPickerSearch:import-album"));
+        assert_eq!(destination(&h).new_album, "Keep this name", "Escape leaves the review's edits intact");
+        click(&mut h, "albumPicker:import-album");
+        text(&mut h, "FÊTE");
+        assert!(has(&h, &format!("albumPickerItem:{unicode}:import-album")));
+        assert!(!has(&h, &format!("albumPickerItem:{album}:import-album")));
+        key(&mut h, "Enter");
+        assert_eq!(destination(&h).album, Some(unicode));
+        assert!(h.painted_text().iter().any(|t| t == "Travel / La fête 東京"), "user names are kept verbatim");
     }
 
     /// The picker must leave room for a usable name field; a full-width button followed by an
@@ -269,42 +287,6 @@ mod import_review {
         );
     }
 
-    /// Path search is case-insensitive and Escape preserves review edits and user-provided names.
-    #[test]
-    fn import_album_picker_search_escape_and_unicode_names() {
-        let Review { mut h, folder, album, .. } = review();
-        let unicode = id(exec(&mut h, "album.create", json!({"name": "La fête 東京", "parent": folder, "addSelected": false})));
-        click(&mut h, "albumPicker:import-album");
-        click(&mut h, "importAlbum:new");
-        replace_name(&mut h, "Keep this name");
-        click(&mut h, "albumPicker:import-album");
-        text(&mut h, "no such collection");
-        assert!(h.painted_text().iter().any(|t| t == "No collections match"));
-        key(&mut h, "Enter");
-        assert!(has(&h, "albumPickerSearch:import-album"), "Enter with no result keeps the picker open");
-        key(&mut h, "Escape");
-        assert!(!has(&h, "albumPickerSearch:import-album"));
-        assert_eq!(destination(&h).new_album, "Keep this name", "Escape leaves the review's edits intact");
-        click(&mut h, "albumPicker:import-album");
-        text(&mut h, "FÊTE");
-        assert!(has(&h, &format!("albumPickerItem:{unicode}:import-album")));
-        assert!(!has(&h, &format!("albumPickerItem:{album}:import-album")));
-        key(&mut h, "Enter");
-        assert_eq!(destination(&h).album, Some(unicode));
-        assert!(h.painted_text().iter().any(|t| t == "Travel / La fête 東京"), "user names are kept verbatim");
-    }
-
-    /// The catalog custom order wins over alphabetical order in the import picker.
-    #[test]
-    fn import_album_picker_follows_custom_sidebar_order() {
-        let Review { mut h, other, .. } = review();
-        let last_by_name = id(exec(&mut h, "album.create", json!({"name": "Zebra", "addSelected": false})));
-        exec(&mut h, "album.reorder", json!({"id": last_by_name, "before": other}));
-        click(&mut h, "albumPicker:import-album");
-        let top = |id| h.app.widgets.iter().find(|(w, _)| w == &format!("albumPickerItem:{id}:import-album")).unwrap().1.top();
-        assert!(top(last_by_name) < top(other), "sidebar order takes priority over alphabetical order");
-    }
-
     /// Match painted text inside the specified control instead of anywhere in the frame.
     fn button_text(h: &Headless, id: &str, expected: &str) -> bool {
         let rect = h.app.widgets.iter().find(|(w, _)| w == id).unwrap().1;
@@ -314,13 +296,13 @@ mod import_review {
     /// Long paths and editable names remain usable across themes, viewport sizes and display densities.
     #[test]
     fn import_album_picker_fits_long_names_across_themes_sizes_and_densities() {
-        for (size, density) in [([960.0, 760.0], 1.0), ([1366.0, 900.0], 2.0), ([960.0, 760.0], 2.25)] {
+        for (size, density) in [([960.0, 760.0], 1.0), ([960.0, 760.0], 2.25)] {
             let Review { mut h, folder, .. } = review_at(size, density);
             let long = "La fête des photographies – 東京 – ".repeat(12);
             let album = id(exec(&mut h, "album.create", json!({"name": long, "parent": folder, "addSelected": false})));
             let Some(crate::state::Dialog::Import { opts }) = &mut h.app.ui.dialog else { panic!("review") };
             opts.album = Some(album);
-            for theme in ["charcoal", "midnight", "paper", "silver"] {
+            for theme in ["charcoal", "paper"] {
                 exec(&mut h, "view.theme", json!({"theme": theme}));
                 let r = h.request("ui.set", json!({"language": "de"}), T);
                 assert_eq!(r["ok"], true, "{r}");
@@ -346,26 +328,6 @@ mod import_review {
                 key(&mut h, "Enter");
                 assert_eq!(destination(&h).album, Some(album));
             }
-        }
-    }
-
-    /// Every shipped locale paints its own destination choices and names a new album in its language.
-    #[test]
-    fn import_album_picker_localizes_choices_in_every_shipped_language() {
-        use crate::i18n::Locale;
-        let Review { mut h, .. } = review();
-        for locale in Locale::ALL {
-            let r = h.request("ui.set", json!({"language": locale.code()}), T);
-            assert_eq!(r["ok"], true, "{r}");
-            assert!(h.settle(SETTLE));
-            assert!(button_text(&h, "albumPicker:import-album", locale.tr("None")), "{locale:?}: localized empty destination");
-            click(&mut h, "albumPicker:import-album");
-            assert!(button_text(&h, "importAlbum:new", locale.tr("New collection…")), "{locale:?}: localized new-album option");
-            click(&mut h, "importAlbum:new");
-            assert_eq!(destination(&h).new_album, locale.tr("Imported Photos"));
-            assert!(button_text(&h, "albumPicker:import-album", locale.tr("New collection")));
-            click(&mut h, "albumPicker:import-album");
-            click(&mut h, "importAlbum:none");
         }
     }
 

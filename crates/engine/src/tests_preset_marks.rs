@@ -26,8 +26,7 @@ fn at_import_and_hidden_marks_toggle_and_are_listed() {
 /// group hidden, and Restore Built-ins gives them back as shipped; the edits last in the library.
 #[test]
 fn builtin_edits_group_hiding_and_restore() {
-    let dir = std::env::temp_dir().join(format!("lc-engine-builtin-edits-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = lcc_testkit::TempDir::new("lc-engine-builtin-edits");
     let mut s = Session::new();
     s.open_library(&dir, false).unwrap();
     let b = s.presets.iter().find(|p| p.builtin).unwrap().clone();

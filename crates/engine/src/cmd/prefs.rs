@@ -167,20 +167,28 @@ fn prefs(s: &mut Session, p: &Value) -> Result<Value> {
         }
         changed = true;
     }
+    // Validate every supplied number before applying anything (upstream #4320): a rejected cache size
+    // must not leave import settings, the camera default or the Local retention period changed.
+    let forget_local_days = p
+        .get("forgetLocalDays")
+        .map(|v| v.as_u64().map(|days| days.min(36_500) as u32).ok_or_else(|| bad(ID, "forgetLocalDays must be a whole number of days (0 = never)")))
+        .transpose()?;
+    let cache_mb = p
+        .get("cacheMb")
+        .map(|v| v.as_u64().map(|mb| mb.clamp(0, 1 << 20) as u32).ok_or_else(|| bad(ID, "cacheMb must be a number of megabytes")))
+        .transpose()?;
     s.import_defaults = d;
     // the default camera profile per model (issue #723): saves on its own (the decoder reads it
     // straight away, photos need no restart)
     if let Some(c) = p.get("cameraDefault") {
         camera_default(s, c)?;
     }
-    if let Some(v) = p.get("forgetLocalDays") {
-        let days = v.as_u64().ok_or_else(|| bad(ID, "forgetLocalDays must be a whole number of days (0 = never)"))?;
-        s.forget_local_days = days.min(36_500) as u32;
+    if let Some(days) = forget_local_days {
+        s.forget_local_days = days;
         changed = true;
     }
-    if let Some(mb) = p.get("cacheMb") {
-        let mb = mb.as_u64().ok_or_else(|| bad(ID, "cacheMb must be a number of megabytes"))?;
-        s.set_cache_mb(mb.clamp(0, 1 << 20) as u32)?;
+    if let Some(mb) = cache_mb {
+        s.set_cache_mb(mb)?;
     } else if changed {
         s.save_prefs()?;
     }
@@ -224,15 +232,19 @@ fn set_import_default(s: &mut Session, p: &Value) -> Result<Value> {
                 None => return Err(bad(c, "the preset vanished while it was being updated")),
             };
             let fresh = Preset::from_settings(&pid, &name, &group, &d, &groups);
+            // (presets serve every catalog: a flat-field map goes with the preset)
+            let settings = s.portable(&fresh.settings);
             match s.presets.get_mut(i) {
-                Some(x) => x.settings = fresh.settings,
+                Some(x) => x.settings = settings,
                 None => return Err(bad(c, "the preset vanished while it was being updated")),
             }
             pid
         }
         None => {
             let pid = format!("user.{}.{}", s.presets.len(), name.to_lowercase().replace(' ', "-"));
-            s.presets.push(Preset::from_settings(&pid, &name, "User Presets", &d, &groups));
+            let mut fresh = Preset::from_settings(&pid, &name, "User Presets", &d, &groups);
+            s.portable_settings(&mut fresh.settings);
+            s.presets.push(fresh);
             pid
         }
     };

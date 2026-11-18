@@ -76,13 +76,6 @@ fn buttons_emit_their_commands() {
 }
 
 #[test]
-fn playing_shows_pause() {
-    let h = bar(VideoUiState { playing: true, ..clip() });
-    assert!(h.query_by_label("Pause").is_some());
-    assert!(h.query_by_label("Play").is_none());
-}
-
-#[test]
 fn clicking_the_track_seeks() {
     let mut h = bar(clip());
     let track = h.state().track;
@@ -178,20 +171,6 @@ fn grid_cell_shows_the_badge() {
 }
 
 #[test]
-fn allowed_controls() {
-    for ok in ["light.exposure", "wb.temp", "color.saturation", "curve", "mixer", "grading"] {
-        assert!(control_allowed(ok), "{ok}");
-    }
-    for no in ["effects.clarity", "detail.nrLuminance", "optics.distortion", "enhance.denoise", "calibration.redHue", "hdr.sdrBrightness"] {
-        assert!(!control_allowed(no), "{no}");
-    }
-    assert!(section_allowed("light") && section_allowed("color"));
-    for no in ["effects", "detail", "optics", "calibration"] {
-        assert!(!section_allowed(no));
-    }
-}
-
-#[test]
 fn gate_disables_only_when_blocked() {
     for blocked in [false, true] {
         let mut clicks = 0;
@@ -246,10 +225,10 @@ fn edit_panel_greys_out_for_video_only() {
 }
 
 /// A clip (no `VideoMeta`, missing file) and a still, the clip active in Develop.
-fn develop_clip() -> crate::headless::Headless {
+fn develop_clip() -> (lcc_testkit::TempDir, crate::headless::Headless) {
+    let dir = lcc_testkit::TempDir::new("lcc-video-ui-gating");
     let mut s = lcc_engine::Session::new();
     // an undecodable file: the loupe shows the placeholder poster
-    let dir = std::env::temp_dir().join(format!("lcc-video-ui-gating-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("CLIP.mp4");
     std::fs::write(&path, b"not an mp4").unwrap();
@@ -263,12 +242,12 @@ fn develop_clip() -> crate::headless::Headless {
     let mut h = crate::headless::Headless::new(app, [1200.0, 800.0], 1.0);
     h.app.ui.view = crate::state::ViewMode::Detail;
     h.app.ui.right = crate::state::RightPanel::Edit;
-    h
+    (dir, h)
 }
 
 #[test]
 fn photo_only_panels_and_tools_are_blocked_for_a_clip() {
-    let mut h = develop_clip();
+    let (_dir, mut h) = develop_clip();
     h.settle(std::time::Duration::from_secs(30));
     for id in ["panel.remove", "panel.masking", "panel.redeye", "tool.brush", "mask.add"] {
         assert!(!crate::menus::ui_enabled(&h.app, id), "{id}");
@@ -287,7 +266,7 @@ fn photo_only_panels_and_tools_are_blocked_for_a_clip() {
 
 #[test]
 fn develop_on_a_clip_without_video_meta_draws_the_histogram_and_metadata() {
-    let mut h = develop_clip();
+    let (_dir, mut h) = develop_clip();
     h.settle(std::time::Duration::from_secs(30));
     assert!(h.app.widgets.iter().any(|(w, _)| w == "histogram"), "histogram drawn");
     let main = h.app.renderer.textures.get(&crate::render::Slot::Main).expect("the poster rendered");

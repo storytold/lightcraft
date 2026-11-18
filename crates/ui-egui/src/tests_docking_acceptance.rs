@@ -41,15 +41,14 @@ fn inactive_same_mode_commands_reveal_without_closing_or_editing() {
         assert_eq!(serde_json::to_value(h.app.session.catalog.photos().map(|photo| photo.as_ref()).collect::<Vec<_>>()).unwrap(), photos);
         h.step();
     }
-    h.app.ui.presets = true;
-    h.step();
-    dock(&mut h, json!({"operation":"move","panel":"presets","target":"library","zone":"center"}));
-    dock(&mut h, json!({"operation":"activate","panel":"library"}));
+    // the presets are a panel of the Library column: their command exposes that column, and
+    // never opens a Presets dock panel
+    // they start unfolded and the command toggles them: fold first so the command shows them
+    crate::panels::presets::set_shown(&mut h.app, false);
     h.app.run("panel.presets", json!({})).unwrap();
-    assert!(crate::docking::exposed_in(h.app.ui.docking.as_ref().unwrap(), Panel::Presets));
-    dock(&mut h, json!({"operation":"activate","panel":"library"}));
-    dock(&mut h, json!({"operation":"open","panel":"presets"}));
-    assert!(crate::docking::exposed_in(h.app.ui.docking.as_ref().unwrap(), Panel::Presets));
+    let workspace = h.app.ui.docking.as_ref().unwrap();
+    assert!(crate::docking::exposed_in(workspace, Panel::Library));
+    assert!(!workspace.layout.contains(&Panel::Presets));
 }
 
 #[test]
@@ -58,10 +57,8 @@ fn crop_canvas_double_click_reveals_edit_in_actual_custom_workspace() {
     h.app.ui.view = crate::state::ViewMode::Detail;
     h.app.run("panel.crop", json!({})).unwrap();
     assert!(h.settle(std::time::Duration::from_secs(120)), "the demo photo settles before pointer input");
-    h.app.ui.presets = true;
-    h.step();
-    dock(&mut h, json!({"operation":"move","panel":"tools","target":"presets","zone":"center"}));
-    dock(&mut h, json!({"operation":"activate","panel":"presets"}));
+    dock(&mut h, json!({"operation":"move","panel":"tools","target":"library","zone":"center"}));
+    dock(&mut h, json!({"operation":"activate","panel":"library"}));
     assert_eq!(h.app.ui.right, RightPanel::Crop);
     assert!(!crate::docking::exposed_in(h.app.ui.docking.as_ref().unwrap(), Panel::Tools));
     let library = h.app.ui.docking.as_ref().unwrap().layout.location(&Panel::Library).unwrap();
@@ -77,7 +74,7 @@ fn crop_canvas_double_click_reveals_edit_in_actual_custom_workspace() {
     assert_eq!(h.app.ui.right, RightPanel::Edit, "the real Canvas double-click completes Crop");
     let workspace = h.app.ui.docking.as_ref().unwrap();
     assert!(crate::docking::exposed_in(workspace, Panel::Tools), "tool.done reveals Tools after the Canvas callback");
-    assert_eq!(workspace.layout.location(&Panel::Tools).unwrap().anchor, Some(Panel::Presets));
+    assert_eq!(workspace.layout.location(&Panel::Tools).unwrap().anchor, Some(Panel::Library));
     assert_eq!(workspace.layout.location(&Panel::Library).unwrap(), library);
     assert_eq!(h.app.session.active(), Some(id));
     assert_eq!(h.app.session.undo.len(), undo);
@@ -85,17 +82,19 @@ fn crop_canvas_double_click_reveals_edit_in_actual_custom_workspace() {
 }
 
 #[test]
-fn preset_hover_survives_float_movement_without_mutating_photo() {
+fn preset_hover_survives_dock_changes_without_mutating_photo() {
     let mut h = app();
     // (preset groups start folded)
     let groups: Vec<String> = h.app.session.presets.iter().map(|p| format!("preset:{}", p.group)).collect();
     h.app.ui.group_open.extend(groups.into_iter().map(|g| (g, true)));
+    // they start unfolded and the command toggles them: fold first so the command shows them
+    crate::panels::presets::set_shown(&mut h.app, false);
     h.app.run("panel.presets", json!({})).unwrap();
-    dock(&mut h, json!({"operation":"float","panel":"presets","rect":[500,100,300,700]}));
+    dock(&mut h, json!({"operation":"float","panel":"tools","rect":[500,100,300,700]}));
     let undo = h.app.session.undo.len();
     let photos = serde_json::to_value(h.app.session.catalog.photos().map(|photo| photo.as_ref()).collect::<Vec<_>>()).unwrap();
     for x in [500, 650] {
-        dock(&mut h, json!({"operation":"moveFloating","panel":"presets","rect":[x,100,300,700]}));
+        dock(&mut h, json!({"operation":"moveFloating","panel":"tools","rect":[x,100,300,700]}));
         let row = h.app.widgets.iter().find(|(id, _)| id.starts_with("preset:")).unwrap().1;
         h.app.synthetic.push(Event::PointerMoved(row.center()));
         h.step();

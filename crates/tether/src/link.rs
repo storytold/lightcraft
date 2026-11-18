@@ -260,46 +260,45 @@ pub fn stop_live_view() {
 mod safe_delete_tests {
     use super::*;
 
-    fn dir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("lcc-tether-safe-delete-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
+    /// An empty Temp folder of the test's own, removed when the test ends.
+    fn dir(name: &str) -> lcc_testkit::TempDir {
+        lcc_testkit::TempDir::new(&format!("lcc-tether-safe-delete-{name}"))
     }
 
     #[test]
-    fn complete_copy_allows_delete() {
-        let d = dir("ok");
-        let bytes = vec![7u8; 4096];
-        let path = d.join("IMG_1.CR3");
-        write_durable(&d.join(".IMG_1.CR3.part"), &path, &bytes).unwrap();
-        assert!(copy_verified(&path, 4096, &bytes));
-        assert!(!d.join(".IMG_1.CR3.part").exists());
-    }
-
-    #[test]
-    fn truncated_or_different_file_blocks_delete() {
-        let d = dir("bad");
-        let bytes = vec![7u8; 4096];
-        let path = d.join("IMG_2.CR3");
-        std::fs::write(&path, &bytes[..100]).unwrap();
-        assert!(!copy_verified(&path, 4096, &bytes));
-        let mut other = bytes.clone();
-        other[10] = 0;
-        std::fs::write(&path, &other).unwrap();
-        assert!(!copy_verified(&path, 4096, &bytes));
-        assert!(!copy_verified(&d.join("missing.CR3"), 4096, &bytes));
-    }
-
-    #[test]
-    fn short_download_blocks_delete() {
-        let d = dir("short");
-        let bytes = vec![1u8; 1000];
-        let path = d.join("IMG_3.CR3");
-        std::fs::write(&path, &bytes).unwrap();
-        // camera announced more than it sent: the transfer was cut short
-        assert!(!copy_verified(&path, 5000, &bytes));
-        // a size too big for the 32-bit field is reported as u32::MAX: rely on read-back
-        assert!(copy_verified(&path, u32::MAX, &bytes));
+    fn only_a_complete_identical_copy_allows_delete() {
+        // complete copy allows delete
+        {
+            let d = dir("ok");
+            let bytes = vec![7u8; 4096];
+            let path = d.join("IMG_1.CR3");
+            write_durable(&d.join(".IMG_1.CR3.part"), &path, &bytes).unwrap();
+            assert!(copy_verified(&path, 4096, &bytes));
+            assert!(!d.join(".IMG_1.CR3.part").exists());
+        }
+        // truncated or different file blocks delete
+        {
+            let d = dir("bad");
+            let bytes = vec![7u8; 4096];
+            let path = d.join("IMG_2.CR3");
+            std::fs::write(&path, &bytes[..100]).unwrap();
+            assert!(!copy_verified(&path, 4096, &bytes));
+            let mut other = bytes.clone();
+            other[10] = 0;
+            std::fs::write(&path, &other).unwrap();
+            assert!(!copy_verified(&path, 4096, &bytes));
+            assert!(!copy_verified(&d.join("missing.CR3"), 4096, &bytes));
+        }
+        // short download blocks delete
+        {
+            let d = dir("short");
+            let bytes = vec![1u8; 1000];
+            let path = d.join("IMG_3.CR3");
+            std::fs::write(&path, &bytes).unwrap();
+            // camera announced more than it sent: the transfer was cut short
+            assert!(!copy_verified(&path, 5000, &bytes));
+            // a size too big for the 32-bit field is reported as u32::MAX: rely on read-back
+            assert!(copy_verified(&path, u32::MAX, &bytes));
+        }
     }
 }

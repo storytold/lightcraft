@@ -56,7 +56,7 @@ fn settings_on_a_phone_is_a_section_with_an_icon_rail_and_back_shows_the_list() 
     // a section open beside the icons of the others
     assert!(rail_w(&h) > 0.0 && rail_w(&h) < 80.0, "icons only: {}", rail_w(&h));
     assert!(has(&h, "settings:section:folders") && has(&h, "settings:back"));
-    assert!(has(&h, "button:settingsLayout-0") && has(&h, "button:settingsLayout-1"), "the Layout row");
+    assert!(has(&h, "button:settingsLayout-0") && has(&h, "button:settingsLayout-2"), "the Layout row");
     // the same setting Classic changes
     crate::settings_screen::reveal(&mut h, "button:settingsStartup-1");
     assert_eq!(click(&mut h, "button:settingsStartup-1")["ok"], true);
@@ -114,7 +114,7 @@ fn the_layout_row_switches_both_ways_and_is_saved() {
     // Classic shows the same Settings, with the same row: the way back
     h.settle(SETTLE);
     assert!(has(&h, "settings:section:general"), "Settings in Classic");
-    assert_eq!(click(&mut h, "button:settingsLayout-1")["ok"], true);
+    assert_eq!(click(&mut h, "button:settingsLayout-2")["ok"], true);
     assert!(h.app.ui.modern.enabled, "Modern chosen");
     let back: crate::state::UiState = serde_json::from_str(&serde_json::to_string(&h.app.ui).unwrap()).unwrap();
     assert!(back.modern.enabled);
@@ -205,33 +205,7 @@ fn library_exports_its_selection_to_a_folder_without_a_gallery() {
 }
 
 #[test]
-fn bad_export_requests_are_errors_not_panics() {
-    let mut h = touch(COVER);
-    exec(&mut h, "view.photoGrid", json!({}));
-    exec(&mut h, "library.select", json!({"ids": []}));
-    for params in [
-        json!({"format": "bmp"}),
-        json!({"format": 3}),
-        json!({"longEdge": -1}),
-        json!({"longEdge": 1e12}),
-        json!({"quality": 0}),
-        json!({"quality": 101}),
-        json!({"then": "print"}),
-        json!({"then": "share", "ids": [1]}),
-        json!({"ids": "all"}),
-        json!({"ids": [-4]}),
-        json!({"dir": 5}),
-        json!({"dir": "  ", "then": "folder", "ids": [1]}),
-    ] {
-        let r = exec(&mut h, "modern.export", params.clone());
-        assert_eq!(r["ok"], false, "modern.export {params}: {r}");
-    }
-    let r = exec(&mut h, "modern.exportSheet", json!({}));
-    assert_eq!(r["ok"], false, "nothing selected: {r}");
-}
-
-#[test]
-fn back_leaves_a_settings_page_for_the_list_then_closes_and_closes_the_export_sheet() {
+fn back_leaves_settings_and_the_export_sheet_and_bad_export_requests_are_errors() {
     let mut h = touch(COVER);
     let back = |h: &mut Headless| {
         let r = exec(h, "modern.back", json!({}));
@@ -257,4 +231,26 @@ fn back_leaves_a_settings_page_for_the_list_then_closes_and_closes_the_export_sh
     assert!(h.app.modern_sheets.export.is_none(), "Back closes the Export sheet");
     assert!(!has(&h, "modern:export:go"));
     assert_eq!(h.app.ui.module, crate::module::ModuleId::Library);
+
+    // bad export requests are errors, not panics
+    exec(&mut h, "library.select", json!({"ids": []}));
+    for params in [
+        json!({"format": "bmp"}),
+        json!({"format": 3}),
+        json!({"longEdge": -1}),
+        json!({"longEdge": 1e12}),
+        json!({"quality": 0}),
+        json!({"quality": 101}),
+        json!({"then": "print"}),
+        json!({"then": "share", "ids": [1]}),
+        json!({"ids": "all"}),
+        json!({"ids": [-4]}),
+        json!({"dir": 5}),
+        json!({"dir": "  ", "then": "folder", "ids": [1]}),
+    ] {
+        let r = exec(&mut h, "modern.export", params.clone());
+        assert_eq!(r["ok"], false, "modern.export {params}: {r}");
+    }
+    let r = exec(&mut h, "modern.exportSheet", json!({}));
+    assert_eq!(r["ok"], false, "nothing selected: {r}");
 }

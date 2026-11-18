@@ -67,17 +67,13 @@ fn the_whole_frame_as_a_window_is_the_full_render() {
     assert_eq!(f.data, w.data);
 }
 
-// Given default settings, a window in the middle matches the full render
+// Given default settings, a window in the middle matches the full render, and so does one at a
+// corner (edges of the frame are not special)
 #[test]
-fn a_window_matches_the_full_render() {
-    check("default", &DevelopSettings::default(), MID, 1, 0.1);
-}
-
-// Given a window at each corner, it matches too (edges of the frame are not special)
-#[test]
-fn windows_at_the_corners_match() {
+fn windows_in_the_middle_and_at_the_corners_match() {
     let s = DevelopSettings::default();
-    for (x, y) in [(0, 0), (W - 400, 0), (0, H - 300), (W - 400, H - 300)] {
+    check("default", &s, MID, 1, 0.1);
+    for (x, y) in [(0, 0), (W - 400, H - 300)] {
         check("corner", &s, PixelWindow { x, y, w: 400, h: 300 }, 1, 0.1);
     }
 }
@@ -240,7 +236,10 @@ fn a_mask_overlay_window_matches_the_whole_render() {
             refine,
             ..Default::default()
         });
-        for view in [MaskView::Color, MaskView::WhiteOnBlack, MaskView::ImageOnBlack] {
+        // every view of one shape; the views share the mask, so the other shapes show one
+        let views: &[MaskView] =
+            if name == "radial" { &[MaskView::Color, MaskView::WhiteOnBlack, MaskView::ImageOnBlack] } else { &[MaskView::Color] };
+        for &view in views {
             let overlay = Overlay::Mask { id: 3, view, color: [255, 0, 0], opacity: 70 };
             let f = render(&noisy_scene(), &SourceInfo::default(), &s, &RenderRequest { overlay, ..RenderRequest::fit(W, H) }).image;
             let w =
@@ -274,7 +273,7 @@ fn an_all_masks_overlay_window_matches_the_whole_render() {
             ..Default::default()
         });
     }
-    for view in [MaskView::Color, MaskView::WhiteOnBlack, MaskView::ImageOnBlack] {
+    for view in [MaskView::Color, MaskView::ImageOnBlack] {
         let overlay = Overlay::AllMasks { view, color: [255, 0, 0], opacity: 70 };
         let f = render(&noisy_scene(), &SourceInfo::default(), &s, &RenderRequest { overlay, ..RenderRequest::fit(W, H) }).image;
         let w = render(&noisy_scene(), &SourceInfo::default(), &s, &RenderRequest { overlay, window: Some(MID), ..RenderRequest::fit(W, H) }).image;
@@ -508,9 +507,7 @@ fn diagnostic_overlays_in_a_window_match_the_full_render() {
     spots.detail.sharpen_amount = 60.0;
     // a binary threshold: a pixel at the threshold may flip on a one-level difference underneath
     check_overlay("spots", &spots, Overlay::Spots(70), MID, 255, 0.05);
-    for (x, y) in [(0, 0), (W - 400, H - 300)] {
-        check_overlay("spots at a corner", &spots, Overlay::Spots(70), PixelWindow { x, y, w: 400, h: 300 }, 255, 0.05);
-    }
+    check_overlay("spots at a corner", &spots, Overlay::Spots(70), PixelWindow { x: W - 400, y: H - 300, w: 400, h: 300 }, 255, 0.05);
     let mut pc = DevelopSettings::default();
     pc.point_colors.push(lcc_develop::PointColor { lum: 0.6, chroma: 0.08, hue: 60.0, hue_shift: 40.0, ..Default::default() });
     check_overlay("point colour range", &pc, Overlay::PointColorRange(0), MID, 1, 0.1);

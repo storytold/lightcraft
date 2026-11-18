@@ -99,6 +99,11 @@ pub(crate) fn local_values(get: impl Fn(&str) -> Option<f64>) -> serde_json::Map
 
 fn adjust(c: &XmpValue) -> Value {
     let mut a = local_values(|crs| num(c, &format!("crs:{crs}")));
+    // a mask Hue past Lightroom's range, kept whole in our own namespace: wins over `crs:LocalHue`
+    if let Some(deg) = num(c, crate::preset_xmp::LC_LOCAL_HUE).filter(|v| v.is_finite()) {
+        a.insert("hue".into(), json!(deg.clamp(-lcc_develop::LOCAL_HUE_MAX, lcc_develop::LOCAL_HUE_MAX)));
+        a.insert("hue_deg".into(), json!(true));
+    }
     let amount = num(c, "crs:CorrectionAmount").unwrap_or(1.0);
     a.insert("amount".into(), json!((amount * 100.0).clamp(0.0, 200.0)));
     Value::Object(a)

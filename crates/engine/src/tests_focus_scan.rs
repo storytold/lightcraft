@@ -1,7 +1,7 @@
 //! Reading focus points for photos already in the library (`photo.readFocusPoints`, `focus.pump`): header-only reads,
 //! batches committed without undo steps, "looked, found nothing" remembered across sessions, and the activity row.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use lcc_catalog::{Op, Photo, PhotoId, Source};
@@ -10,11 +10,9 @@ use serde_json::{Value, json};
 use crate::Session;
 use crate::focus_scan::{read_focus, record_contains, record_len};
 
-fn temp_dir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("lc-focus-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+/// The test's folder in Temp, removed when the test ends.
+fn temp_dir(tag: &str) -> lcc_testkit::TempDir {
+    lcc_testkit::TempDir::new(&format!("lc-focus-{tag}"))
 }
 
 fn sony_arw(mode: u8, samples: usize) -> Vec<u8> {
@@ -187,7 +185,7 @@ fn the_activity_row_progresses_pauses_and_cancels() {
     // already running: asking again starts nothing new
     let r = s.execute("photo.readFocusPoints", &json!({})).unwrap();
     assert_eq!((r["queued"].as_u64(), r["running"].as_bool()), (Some(0), Some(true)));
-    std::thread::sleep(Duration::from_millis(300));
+    std::thread::sleep(Duration::from_millis(80));
     let still = s.execute("focus.pump", &json!({"pace": "pause"})).unwrap()["running"]["done"].as_u64().unwrap();
     assert_eq!(still, 0, "paused: nothing read");
     // a few more at a light pace, then cancel

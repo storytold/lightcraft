@@ -110,7 +110,12 @@ fn registry() -> &'static RwLock<HashMap<String, Arc<Lut3d>>> {
 
 /// Make a LUT available to renders under profile id `id` (`lut:…`).
 pub fn register(id: &str, lut: Lut3d) {
-    registry().write().unwrap_or_else(|e| e.into_inner()).insert(id.to_string(), Arc::new(lut));
+    register_shared(id, Arc::new(lut));
+}
+
+/// [`register`] for a table that other profile ids share (one file, several ids): no copy is made.
+pub fn register_shared(id: &str, lut: Arc<Lut3d>) {
+    registry().write().unwrap_or_else(|e| e.into_inner()).insert(id.to_string(), lut);
 }
 
 /// The LUT registered for profile `id`.

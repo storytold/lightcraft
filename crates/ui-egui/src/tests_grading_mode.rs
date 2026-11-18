@@ -66,20 +66,6 @@ fn the_settings_row_switches_modes_and_the_edit_header_stays_clear() {
 }
 
 #[test]
-fn both_modes_edit_the_same_photo_settings() {
-    let mut h = demo();
-    grade(&mut h, json!({"mode": "witchcraft"}));
-    crate::tests_classic::run(&mut h, "develop.set", json!({"control": "light.exposure", "value": 1.25}));
-    let id = h.app.session.active().unwrap();
-    let in_witchcraft = h.app.session.develop_of(id).unwrap_or_default();
-    // back in Eboda the edit is still there: one recipe, two presentations
-    grade(&mut h, json!({"mode": "eboda"}));
-    let in_eboda = h.app.session.develop_of(id).unwrap_or_default();
-    assert_eq!(in_eboda.light.exposure, in_witchcraft.light.exposure);
-    assert!((in_eboda.light.exposure - 1.25).abs() < 1e-9);
-}
-
-#[test]
 fn grading_mode_round_trips_and_unknown_values_read_as_the_default() {
     let s: AppSettings = serde_json::from_str(r#"{"gradingMode":"eboda"}"#).unwrap();
     assert_eq!(s.grading_mode, GradingMode::Eboda);

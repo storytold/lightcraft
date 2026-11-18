@@ -45,13 +45,49 @@ pub(crate) fn control(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings, 
 /// [`control`] under a shorter name, for a slider whose section already says what it belongs to
 /// (issue #346: "Hue" under "Red Primary", not "Red Hue").
 pub(crate) fn control_as(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings, id: &str, enabled: bool, label: Option<&str>) {
+    // the tool profile in use hides it, or holds it in its Custom group
+    if !shown_here(app, ui, id) {
+        return;
+    }
+    draw_control(app, ui, d, id, enabled, label);
+}
+
+/// Whether the Edit panel's tool profile lets a slider or option (`option:*`) show where it is drawn: always outside
+/// the full Edit panel (a Modern card, the profile browser), and in it unless the profile hides it or moved it to its
+/// Custom group.
+pub(crate) fn shown_here(app: &LccApp, ui: &egui::Ui, item: &str) -> bool {
+    !ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::new(TOOL_FILTER))).unwrap_or(false) || crate::tool_profiles::item_shown(app, item)
+}
+
+/// [`shown_here`] for a whole group (an Edit section).
+fn shown_here_group(app: &LccApp, ui: &egui::Ui, group: &str) -> bool {
+    !ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::new(TOOL_FILTER))).unwrap_or(false) || crate::tool_profiles::group_shown(app, group)
+}
+
+/// Set while the full Edit panel draws: the tool profile in use filters its sliders.
+const TOOL_FILTER: &str = "edit-tool-profile-filter";
+
+fn draw_control(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings, id: &str, enabled: bool, label: Option<&str>) {
     let Some(spec) = controls::find(id) else { return };
     let v = controls::get(d, id).unwrap_or(spec.default);
     // Compact: the short name under its group's caption, so the section's name column stays narrow
     let label = label.or_else(|| if crate::theme::compact(ui.ctx()) { short_name(id) } else { None });
     // greyed out inside a disabled scope (a control video can't take)
+    // a double-click on the name resets to this photo's own default (a raw starts with sharpening 40 and colour
+    // noise reduction 25), not to the neutral value of the spec table (issue #1244)
+    let own = photo_default_spec(app, spec);
+    let spec = own.as_ref().unwrap_or(spec);
     let out = slider(ui, spec, v, enabled && ui.is_enabled(), label);
     apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": id, "value": v})));
+}
+
+/// `spec` with the active photo's own default for the control, when it starts from another one than the spec table's
+/// ([`lcc_catalog::Photo::camera_defaults`]); `None` when they agree.
+pub(crate) fn photo_default_spec(app: &LccApp, spec: &ControlSpec) -> Option<ControlSpec> {
+    let id = app.session.active()?;
+    let photo = app.session.catalog.photo(id)?;
+    let default = controls::get(&photo.camera_defaults(), spec.id)?;
+    ((default - spec.default).abs() > 1e-9).then(|| ControlSpec { default: default.clamp(spec.min, spec.max), ..*spec })
 }
 
 /// The short name a slider shows in the Compact layout under its group's caption (Grain ▸ Amount,
@@ -75,6 +111,7 @@ pub(crate) fn short_name(id: &str) -> Option<&'static str> {
         "detail.nrColor" => "Color",
         "optics.profileDistortion" => "Distortion",
         "optics.profileVignetting" => "Vignetting",
+        "optics.vignettingCalibrationAmount" => "Amount",
         "optics.vignettingMidpoint" => "Midpoint",
         "optics.defringePurpleHueLo" | "optics.defringeGreenHueLo" => "Hue Low",
         "optics.defringePurpleHueHi" | "optics.defringeGreenHueHi" => "Hue High",
@@ -182,27 +219,52 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     if app.ui.soft_proof && only.is_none() {
         soft_proofing(app, ui, id);
     }
-    // Compact: no header above the sections; the rows above Basic open Basic itself (as Lightroom
-    // Classic's Basic panel has its Treatment and Profile rows), see `basic_head`
-    let dense = t.dense && only.is_none();
-    if shows("profile") && !dense {
-        header_rows(app, ui, id, &d, preview_only.as_deref());
+    // the full panel: the tool profile in use picks its groups and sliders (a Modern card shows its section whole)
+    let full = only.is_none();
+    ui.ctx().data_mut(|m| m.insert_temp(egui::Id::new(TOOL_FILTER), full));
+    let dense = t.dense && full;
+    // the Modern layout's Profile & Treatment card: the rows above the sliders alone, with the way to the profiles
+    if !full && shows("profile") {
+        header_rows(app, ui, id, &d, preview_only.as_deref(), true);
     }
-
+    // no header above the sections: the tool profile's row, then the rows above the sliders open Basic itself (as
+    // Lightroom Classic's Basic panel has its Treatment row); with Basic switched off they stand on their own
+    let basic = crate::tool_profiles::group_shown(app, "light");
+    if full {
+        tool_profile_row(app, ui);
+        if !basic {
+            header_rows(app, ui, id, &d, preview_only.as_deref(), false);
+        }
+    }
     let video = crate::video_ui::photo_is_video(app, id);
+    // the profile's Custom group: its sliders, in its order, first
+    let custom = app.ui.settings.tool_profiles.active().custom.clone();
+    if full && !custom.is_empty() {
+        section_with(app, ui, &d, crate::tool_profiles::CUSTOM, "Custom", false, None, |app, ui, d| {
+            ui.push_id("toolProfileCustom", |ui| {
+                for c in &custom {
+                    custom_control(app, ui, d, c, raw);
+                }
+            });
+            ui.add_space(8.0);
+        });
+    }
     // Lightroom Classic's Basic panel: white balance, then Tone (with Auto), then Presence
     // (Lightroom Classic's Basic has no on/off switch: it shows only while an older edit has Basic or Color switched off,
     // so that edit can be switched back on)
     let basic_switch = !d.section_enabled("light") || !d.section_enabled("color");
     section_with(app, ui, &d, "light", "Basic", basic_switch, None, |app, ui, d| {
-        if dense {
-            header_rows(app, ui, id, d, preview_only.as_deref());
+        if full {
+            header_rows(app, ui, id, d, preview_only.as_deref(), false);
         }
         wb_rows(app, ui, d, raw);
         sub_title(ui, "Tone");
         crate::video_ui::video_gate(ui, video, |ui| hdr_row(app, ui, d));
         for c in ["light.exposure", "light.contrast", "light.highlights", "light.shadows", "light.whites", "light.blacks"] {
             control(app, ui, d, c, true);
+        }
+        if shown_here(app, ui, "option:contrastMode") {
+            contrast_mode_row(app, ui, d);
         }
         ui.add_space(6.0);
         sub_title(ui, crate::i18n::tr("Presence"));
@@ -256,7 +318,7 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     // then the colourist's Primaries wheels and HSL curves) before Lightroom's own panels — in
     // Eboda all three are away; the histogram's own mode menu (its scopes included) stays
     // Lightroom's way, and the two Witchcraft sections carry the mode's pill beside their titles
-    if app.ui.settings.grading_mode == crate::state::GradingMode::Witchcraft {
+    if crate::tool_profiles::witchcraft_shown(app) {
         if shows("primaries") {
             section_with(app, ui, &d, "primaries", "Primaries", true, Some("Witchcraft"), |app, ui, d| {
                 super::witchcraft::primaries(app, ui, d);
@@ -274,6 +336,10 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     }
     // Lightroom Classic's Develop panels, in its order: Basic, Tone Curve, Color Mixer, Color Grading, Detail, Lens
     // Corrections, Transform, Effects, Calibration (the fork's: upstream groups them as the cloud app does)
+    // Levels come before the Tone Curve in the pipeline (and here): the encoded values after Exposure
+    section(app, ui, &d, "levels", "Levels", |app, ui, d| {
+        super::levels::levels(app, ui, id, d);
+    });
     section(app, ui, &d, "curve", "Tone Curve", |app, ui, d| {
         curve_editor(app, ui, id, d, CurveTarget::Photo);
         ui.add_space(8.0);
@@ -314,13 +380,15 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
             control(app, ui, d, c, c == "detail.sharpenAmount" || d.detail.sharpen_amount > 0.0);
         }
         // AI Denoise is its own tool, apart from the manual noise reduction sliders below it
-        sub_title(ui, crate::i18n::tr("AI Denoise"));
-        // AI Denoise: how much of the photo's cleaned picture to mix in (raw files only), and what that picture is doing
-        let applicable = !matches!(app.session.denoise_photo_state(id), lcc_engine::denoise::PhotoState::NotApplicable);
-        let on = d.enhance.denoise_enabled();
-        super::denoise::detail_toggle(app, ui, id, on, applicable);
-        control(app, ui, d, "enhance.denoise", applicable && on);
-        super::denoise::detail_status(app, ui, id, if on { d.enhance.denoise } else { 0.0 });
+        if shown_here(app, ui, "option:aiDenoise") {
+            sub_title(ui, crate::i18n::tr("AI Denoise"));
+            // AI Denoise: how much of the photo's cleaned picture to mix in (raw files only), and what that picture is doing
+            let applicable = !matches!(app.session.denoise_photo_state(id), lcc_engine::denoise::PhotoState::NotApplicable);
+            let on = d.enhance.denoise_enabled();
+            super::denoise::detail_toggle(app, ui, id, on, applicable);
+            control(app, ui, d, "enhance.denoise", applicable && on);
+            super::denoise::detail_status(app, ui, id, if on { d.enhance.denoise } else { 0.0 });
+        }
         sub_title(ui, crate::i18n::tr("Noise Reduction"));
         // under "Noise Reduction", as in Lightroom Classic: Luminance, Detail, Contrast, Color, …
         for (c, label) in [
@@ -334,7 +402,7 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
             control_as(app, ui, d, c, true, label);
         }
         // single outlier photosites, replaced in the raw mosaic (#1345): raws only
-        if app.session.catalog.photo(id).is_some_and(|p| p.develops_raw()) {
+        if app.session.catalog.photo(id).is_some_and(|p| p.develops_raw()) && shown_here(app, ui, "option:hotPixels") {
             egui::Frame::NONE.inner_margin(crate::widgets::row_margin(ui, egui::Margin { left: 12, right: 16, top: 4, bottom: 0 }, 3, 0)).show(
                 ui,
                 |ui| {
@@ -401,40 +469,46 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
                 control(app, ui, d, c, has_lens);
             }
         }
+        // Capture One's LCC "Uniform Light": shown whether or not lens corrections are on
+        vignetting_calibration_section(app, ui, id, d);
         // What photos imported from now on start from, and one action that makes these settings it
         // (issue #148: the two checkboxes above reset on every photo, so a batch wants a default).
         // One quiet line under the lens controls (issue #346: it used to split them from the sliders).
-        egui::Frame::NONE.inner_margin(crate::widgets::row_margin(ui, egui::Margin { left: 12, right: 16, top: 2, bottom: 4 }, 2, 3)).show(
-            ui,
-            |ui| {
-                let photo_camera = app.session.catalog.photo(id).map(|p| p.meta.camera.trim().to_string()).unwrap_or_default();
-                let current = {
-                    let defaults = &app.session.import_defaults;
-                    if defaults.per_camera && !photo_camera.is_empty() {
-                        defaults.cameras.iter().find(|c| c.camera.eq_ignore_ascii_case(&photo_camera)).and_then(|c| c.preset.clone())
-                    } else {
-                        defaults.raw_preset.clone()
-                    }
-                };
-                // the preset the default points at: its name for the row, and — when it is one of the
-                // user's own — the name the naming dialog starts from (a built-in's would make a twin)
-                let (starts_from, suggested) = match current.as_deref().and_then(|pid| app.session.presets.iter().find(|p| p.id == pid)) {
-                    Some(p) => (crate::i18n::builtin_label(&p.name, p.builtin).to_string(), if p.builtin { String::new() } else { p.name.clone() }),
-                    None => (crate::i18n::tr("{app} Default").to_string(), String::new()),
-                };
-                // which photos it reaches, said on hover rather than as a line of its own
-                let reach = crate::i18n::tr("Photos imported from now on; photos already in the catalog keep theirs.");
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(crate::i18n::tr("New photos start from")).small().weak()).on_hover_text(reach);
-                    ui.label(RichText::new(starts_from).small()).on_hover_text(reach);
-                    // "Save as…": the name is the user's, so several named optics defaults can live side
-                    // by side (one per camera, say) instead of one fixed entry
-                    if text_button(ui, "opticsNewPhotoDefault", "Save as…", false).on_hover_text(reach).clicked() {
-                        app.ui.dialog = Some(crate::state::Dialog::NewPhotoDefault { name: suggested });
-                    }
-                });
-            },
-        );
+        if shown_here(app, ui, "option:newPhotoDefault") {
+            egui::Frame::NONE.inner_margin(crate::widgets::row_margin(ui, egui::Margin { left: 12, right: 16, top: 2, bottom: 4 }, 2, 3)).show(
+                ui,
+                |ui| {
+                    let photo_camera = app.session.catalog.photo(id).map(|p| p.meta.camera.trim().to_string()).unwrap_or_default();
+                    let current = {
+                        let defaults = &app.session.import_defaults;
+                        if defaults.per_camera && !photo_camera.is_empty() {
+                            defaults.cameras.iter().find(|c| c.camera.eq_ignore_ascii_case(&photo_camera)).and_then(|c| c.preset.clone())
+                        } else {
+                            defaults.raw_preset.clone()
+                        }
+                    };
+                    // the preset the default points at: its name for the row, and — when it is one of the
+                    // user's own — the name the naming dialog starts from (a built-in's would make a twin)
+                    let (starts_from, suggested) = match current.as_deref().and_then(|pid| app.session.presets.iter().find(|p| p.id == pid)) {
+                        Some(p) => {
+                            (crate::i18n::builtin_label(&p.name, p.builtin).to_string(), if p.builtin { String::new() } else { p.name.clone() })
+                        }
+                        None => (crate::i18n::tr("{app} Default").to_string(), String::new()),
+                    };
+                    // which photos it reaches, said on hover rather than as a line of its own
+                    let reach = crate::i18n::tr("Photos imported from now on; photos already in the catalog keep theirs.");
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(crate::i18n::tr("New photos start from")).small().weak()).on_hover_text(reach);
+                        ui.label(RichText::new(starts_from).small()).on_hover_text(reach);
+                        // "Save as…": the name is the user's, so several named optics defaults can live side
+                        // by side (one per camera, say) instead of one fixed entry
+                        if text_button(ui, "opticsNewPhotoDefault", "Save as…", false).on_hover_text(reach).clicked() {
+                            app.ui.dialog = Some(crate::state::Dialog::NewPhotoDefault { name: suggested });
+                        }
+                    });
+                },
+            );
+        }
         sub_title(ui, crate::i18n::tr("Manual"));
         for c in ["optics.distortion", "optics.vignetting"] {
             control(app, ui, d, c, true);
@@ -468,7 +542,7 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     section(app, ui, &d, "geometry", "Transform", |app, ui, _| super::right::transform_body(app, ui, id));
     section(app, ui, &d, "effects", "Effects", |app, ui, d| {
         sub_title(ui, crate::i18n::tr("Vignette"));
-        {
+        if shown_here(app, ui, "option:vignetteStyle") {
             use lcc_develop::VignetteStyle as V;
             let styles = [
                 (V::HighlightPriority, "Highlight", "highlightPriority"),
@@ -524,31 +598,119 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
         super::plugin_filters::show(app, ui, &d);
     }
     ui.add_space(40.0);
+    ui.ctx().data_mut(|m| m.remove::<bool>(egui::Id::new(TOOL_FILTER)));
 }
 
-/// The rows above the Develop sections: in Classic the "Edit" title, the Auto · B&W | HDR row,
-/// the notices, Auto Sync and the profile row; in the Compact layout (at the top of Basic) the same
-/// rows without the title and with the panels' shared margins and heights (LAYOUT-DENSE, ported
-/// from OneSlips).
-fn header_rows(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopSettings, preview_only: Option<&str>) {
+/// The tool profile row at the head of the Edit panel: the profile in use, a menu of the others, and the gear to
+/// Settings ▸ Develop where they are made (`view.toolProfile`). A low row, below a slider's height.
+fn tool_profile_row(app: &mut LccApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    let m = crate::widgets::row_margin;
+    let name = app.ui.settings.tool_profiles.active().label();
+    egui::Frame::NONE.inner_margin(m(ui, egui::Margin { left: 12, right: 12, top: 4, bottom: 4 }, 2, 2)).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.set_height(crate::widgets::DENSE_ROW_H - 4.0);
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.label(egui::RichText::new(crate::i18n::tr("Tools:")).font(t.font(11.0)).color(t.text_dim));
+            let gear = 20.0;
+            let max = ui.available_width() - gear - ui.spacing().item_spacing.x;
+            let r = crate::widgets::dropdown_within(ui, "toolProfile", &name, t.font(12.0), t.text_label, max)
+                .on_hover_text(crate::i18n::tr("Tool profile: which groups and sliders the panel shows"));
+            egui::Popup::menu(&r).show(|ui| {
+                ui.set_min_width(160.0);
+                let active = app.ui.settings.tool_profiles.active().id.clone();
+                let all: Vec<(String, String)> = app.ui.settings.tool_profiles.all().map(|p| (p.id.clone(), p.label())).collect();
+                let mut pick = None;
+                for (pid, label) in &all {
+                    let r = ui.selectable_label(*pid == active, label);
+                    register(ui.ctx(), format!("toolProfileMenu:{pid}"), r.rect);
+                    if r.clicked() {
+                        pick = Some(pid.clone());
+                    }
+                }
+                ui.separator();
+                let r = ui.button(crate::i18n::tr("Edit Tool Profiles…"));
+                register(ui.ctx(), "toolProfileMenu:settings", r.rect);
+                if r.clicked() {
+                    let _ = app.run("app.settings", json!({"tab": "develop"}));
+                }
+                if let Some(pid) = pick
+                    && let Err(e) = app.run("view.toolProfile", json!({"id": pid}))
+                {
+                    app.toast(ui.ctx(), e);
+                }
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::widgets::icon_button(
+                    ui,
+                    "toolProfileSettings",
+                    Icon::Gear,
+                    vec2(gear, gear),
+                    false,
+                    true,
+                    crate::i18n::tr("Edit Tool Profiles…"),
+                )
+                .clicked()
+                {
+                    let _ = app.run("app.settings", json!({"tab": "develop"}));
+                }
+            });
+        });
+    });
+    divider(ui);
+}
+
+/// One slider of the tool profile's Custom group: drawn whatever its own group hides, enabled, and with the white
+/// balance on the scale the photo's sliders use (Kelvin for a raw, relative for a rendered file).
+fn custom_control(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings, id: &str, raw: bool) {
+    match id {
+        "wb.temp" if !raw => {
+            let out = slider(ui, &REL_TEMP, k_to_rel(d.wb.temp), true, None);
+            apply_slider_out(app, &REL_TEMP, out, |app, v| app.run("develop.set", json!({"control": "wb.temp", "value": rel_to_k(v)})));
+        }
+        "wb.tint" if !raw => {
+            let out = slider(ui, &REL_TINT, d.wb.tint.clamp(-100.0, 100.0), true, None);
+            apply_slider_out(app, &REL_TINT, out, |app, v| app.run("develop.set", json!({"control": "wb.tint", "value": v})));
+        }
+        _ => draw_control(app, ui, d, id, true, None),
+    }
+}
+
+/// The rows at the top of Basic: Lightroom Classic's Auto · B&W | HDR buttons, the notices, Auto Sync, the profile's
+/// Amount and the file's colour options. `browse`: with Browse Profiles at the buttons' left (the Modern layout's
+/// Profile & Treatment card; elsewhere it is in the tool row above the panels).
+fn header_rows(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopSettings, preview_only: Option<&str>, browse: bool) {
+    // Lightroom Classic's Basic button row: Auto, B&W | HDR (issue #124), right-aligned on one row of the panel's row
+    // height; no title (the tool row says which panel this is). Reset sits in the bar under the panels (issue #116).
+    if browse || shown_here(app, ui, "option:treatment") {
+        treatment_row(app, ui, id, d, browse);
+    }
+    header_notices(app, ui, id, d, preview_only);
+}
+
+/// [`header_rows`]' Auto · B&W | HDR row.
+fn treatment_row(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopSettings, browse: bool) {
     let t = Tokens::get(ui.ctx());
     let dense = t.dense;
     let m = crate::widgets::row_margin;
-    // header: Edit (Reset sits in the bar under the panels, issue #116), then Lightroom Classic's Basic button row:
-    // Auto, B&W | HDR (issue #124). Compact: no title (the tool row says which panel this is), the
-    // buttons on one row of the panel's row height
-    if !dense {
-        egui::Frame::NONE.inner_margin(crate::widgets::row_margin(ui, egui::Margin { left: 12, right: 16, top: 14, bottom: 0 }, 3, 0)).show(
-            ui,
-            |ui| {
-                ui.label(egui::RichText::new(crate::i18n::tr("Edit")).font(t.semibold(15.0)).color(t.text));
-            },
-        );
-    }
-    egui::Frame::NONE.inner_margin(m(ui, egui::Margin { left: 12, right: 16, top: 10, bottom: 14 }, 3, 3)).show(ui, |ui| {
+    egui::Frame::NONE.inner_margin(m(ui, egui::Margin { left: 12, right: 16, top: 6, bottom: 6 }, 3, 3)).show(ui, |ui| {
         ui.horizontal(|ui| {
-            if dense {
-                ui.set_height(crate::widgets::DENSE_ROW_H - 2.0);
+            ui.set_height(crate::widgets::DENSE_ROW_H - 2.0);
+            if browse {
+                let size = if dense { 20.0 } else { 24.0 };
+                if crate::widgets::icon_button(
+                    ui,
+                    "profileBrowser",
+                    Icon::ProfileGrid,
+                    vec2(size, size),
+                    false,
+                    true,
+                    crate::i18n::tr("Browse Profiles"),
+                )
+                .clicked()
+                {
+                    let _ = app.run("panel.profiles", json!({}));
+                }
             }
             ui.spacing_mut().item_spacing.x = 8.0;
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -572,6 +734,13 @@ fn header_rows(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopSett
             });
         });
     });
+}
+
+/// [`header_rows`]' notices and the profile's options under the treatment row.
+fn header_notices(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopSettings, preview_only: Option<&str>) {
+    let t = Tokens::get(ui.ctx());
+    let dense = t.dense;
+    let m = crate::widgets::row_margin;
     if let Some(why) = &preview_only {
         let reload = egui::Frame::NONE
             .inner_margin(m(ui, egui::Margin { left: 12, right: 16, top: 0, bottom: 12 }, 0, 4))
@@ -597,51 +766,6 @@ fn header_rows(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopSett
             });
         });
     }
-    if !dense {
-        divider(ui);
-    }
-    // profile row (Compact: "Profile:" in the label column's small type, the name, the browser at the
-    // right margin, one row; room under it for the camera profile the look sits on)
-    // the camera profile the look sits on (OneSlips, LR-PROF-LAYERS): named in the row when the photo develops
-    // with its own look ("As profile"), else on a line of its own under the look
-    let (shown_look, on) = profile_row_names(app, id, d);
-    egui::Frame::NONE.inner_margin(m(ui, egui::Margin { left: 12, right: 16, top: 12, bottom: 12 }, 2, 2)).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            if dense {
-                ui.set_height(crate::widgets::DENSE_ROW_H);
-                ui.label(egui::RichText::new(crate::i18n::tr("Profile:")).font(t.font(11.0)).color(t.text_dim));
-            } else {
-                ui.label(egui::RichText::new(crate::i18n::tr("Profile")).font(t.font(13.0)).color(t.text_dim));
-            }
-            // a long name is cut short before Browse Profiles: a wider row would widen the whole panel's
-            // content, and the sliders below would run past its edge
-            let browse = if dense { 20.0 } else { 28.0 };
-            let max = ui.available_width() - browse - ui.spacing().item_spacing.x;
-            let font = t.font(if dense { 12.5 } else { 15.0 });
-            let r = crate::widgets::dropdown_within(ui, "profile", &shown_look, font, t.text_label, max);
-            let below = r.rect.bottom();
-            egui::Popup::menu(&r).show(|ui| profile_menu(app, ui, d, below));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if crate::widgets::icon_button(
-                    ui,
-                    "profileBrowser",
-                    Icon::ProfileGrid,
-                    vec2(browse, browse),
-                    false,
-                    true,
-                    crate::i18n::tr("Browse Profiles"),
-                )
-                .clicked()
-                {
-                    let _ = app.run("panel.profiles", json!({}));
-                }
-            });
-        });
-        if let Some(on) = &on {
-            let r = ui.add(egui::Label::new(egui::RichText::new(on).font(t.font(if dense { 11.0 } else { 12.0 })).color(t.text_dim)).truncate());
-            register(ui.ctx(), "label:profileCalibration", r.rect);
-        }
-    });
     if d.profile.id != "lc.color" {
         control(app, ui, d, "profile.amount", true);
         ui.add_space(if dense { 2.0 } else { 6.0 });
@@ -675,15 +799,8 @@ fn header_rows(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopSett
             }
         });
     }
-    if !dense {
-        divider(ui);
-    }
 }
 
-/// The profile dropdown: Favorites, Recent, one submenu per group, then favourite toggle and
-/// Browse…. Like the menu bar's menus, the dropdown and each submenu stay inside the window and
-/// scroll when their rows don't fit (issue #2059: a folder of many imported profiles ran past the
-/// window's bottom edge). `below` is the dropdown's bottom edge, which the menu hangs from.
 /// The profile row's name and the line under it (OneSlips, LR-PROF-LAYERS): a photo that develops with its camera
 /// profile's own look ("As profile") shows the camera profile's name and no line; one with a look of the app's on a
 /// camera profile shows the look and "on <camera profile>".
@@ -725,125 +842,6 @@ pub(crate) fn camera_profile_options(camera: &str) -> Vec<(String, String)> {
         options.extend(cal.looks.iter().map(|(pid, p)| (pid.clone(), p.name.clone())));
     }
     options
-}
-
-fn profile_menu(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings, below: f32) {
-    crate::menu_level::level(ui, 1, Some(below), |ui| profile_menu_rows(app, ui, d, below));
-}
-
-fn profile_menu_rows(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings, below: f32) {
-    let t = Tokens::get(ui.ctx());
-    ui.set_min_width(200.0);
-    let cur = d.profile.id.as_str();
-    // (clicked, hovered)
-    let mut pick: (Option<String>, Option<String>) = (None, None);
-    let item = |ui: &mut egui::Ui, key: &str, id: &str, name: &str, pick: &mut (Option<String>, Option<String>)| {
-        let r = ui.selectable_label(id == cur, crate::i18n::profile_label(id, name));
-        register(ui.ctx(), format!("profileMenu:{key}:{id}"), r.rect);
-        if r.clicked() {
-            pick.0 = Some(id.to_string());
-        }
-        if r.hovered() {
-            pick.1 = Some(id.to_string());
-        }
-    };
-    let heading = |ui: &mut egui::Ui, s: &str| {
-        ui.label(egui::RichText::new(crate::i18n::tr(s)).font(t.semibold(11.5)).color(t.text_dim));
-    };
-    for (title, key, ids) in [("Favorites", "fav", app.session.profile_favorites.clone()), ("Recent", "recent", app.session.profile_recent.clone())] {
-        let list: Vec<_> = ids.iter().filter_map(|id| app.session.profile_info(id).map(|(name, _)| (id.as_str(), name))).collect();
-        if list.is_empty() {
-            continue;
-        }
-        heading(ui, title);
-        for (id, name) in list {
-            item(ui, key, id, name, &mut pick);
-        }
-        ui.separator();
-    }
-    // every group with the Profile Manager's names, groups and order (hidden and removed ones left out)
-    for g in app.session.shown_groups() {
-        // a built-in group is translated; an imported folder or the user's group keeps its name and its own widget id
-        let label = crate::i18n::builtin_label(&g.name, !g.imported).to_string();
-        let r = crate::widgets::menu_button(ui, label, |ui| {
-            crate::menu_level::level(ui, 2, Some(below), |ui| {
-                ui.set_min_width(170.0);
-                for p in &g.profiles {
-                    item(ui, "group", &p.id, &p.name, &mut pick);
-                }
-            });
-        });
-        let wid = if g.imported { format!("profileMenu:lutGroupMenu:{}", g.name) } else { format!("profileMenu:groupMenu:{}", g.name) };
-        register(ui.ctx(), wid, r.response.rect);
-        if r.inner.is_some() {
-            crate::menu_level::set_anchor(ui.ctx(), 2, r.response.rect);
-        }
-    }
-    // the raw's camera profiles (OneSlips, LR-PROF-LAYERS): one with a look of its own comes with it ("As profile")
-    let mut camera_pick: Option<String> = None;
-    if let Some(photo) = app.session.active().and_then(|a| app.session.catalog.photo(a)).filter(|p| p.develops_raw()) {
-        let current = d.profile.camera.clone();
-        let options = shown_camera_profile_options(&app.session.profile_hidden, &photo.meta.camera, &current);
-        let r = crate::widgets::menu_button(ui, crate::i18n::tr("Camera Profiles"), |ui| {
-            crate::menu_level::level(ui, 2, Some(below), |ui| {
-                ui.set_min_width(170.0);
-                for (o, n) in &options {
-                    let r = ui.selectable_label(*o == current, n);
-                    register(ui.ctx(), format!("profileMenu:camera:{o}"), r.rect);
-                    if r.clicked() {
-                        camera_pick = Some(o.clone());
-                    }
-                }
-            });
-        });
-        register(ui.ctx(), "profileMenu:cameraMenu", r.response.rect);
-        if r.inner.is_some() {
-            crate::menu_level::set_anchor(ui.ctx(), 2, r.response.rect);
-        }
-    }
-    ui.separator();
-    if let Some(choice) = camera_pick {
-        // (the camera's default keeps the look: there is no one profile to come with)
-        let c = if choice.is_empty() { "develop.cameraProfile" } else { "develop.profile" };
-        let _ = app.run(c, json!({"id": choice}));
-    }
-    if let Some((name, _)) = app.session.profile_info(cur) {
-        let fav = app.session.profile_favorites.iter().any(|f| f == cur);
-        let label = if fav {
-            crate::i18n::tr_format!("Remove “{}” from Favorites", crate::i18n::profile_label(cur, name))
-        } else {
-            crate::i18n::tr_format!("Add “{}” to Favorites", crate::i18n::profile_label(cur, name))
-        };
-        let r = ui.button(label);
-        register(ui.ctx(), "profileMenu:toggleFavorite", r.rect);
-        if r.clicked() {
-            let _ = app.run("profile.favorite", json!({"id": cur}));
-        }
-    }
-    let r = ui.button(crate::i18n::tr("Browse…"));
-    register(ui.ctx(), "profileMenu:browse", r.rect);
-    if r.clicked() {
-        let _ = app.run("panel.profiles", json!({}));
-    }
-    let r = ui.button(crate::i18n::tr("Manage Profiles…"));
-    register(ui.ctx(), "profileMenu:manage", r.rect);
-    if r.clicked() {
-        let _ = app.run("app.settings", json!({"tab": "profiles"}));
-    }
-    // resting on a profile previews it in the loupe
-    if let Some(hovered_id) = &pick.1
-        && hovered_id != cur
-        && let Some((name, _)) = app.session.profile_info(hovered_id)
-    {
-        let mut s = d.clone();
-        s.profile.id = hovered_id.clone();
-        s.profile.amount = 100.0;
-        app.hover_preview =
-            Some(crate::HoverPreview { label: crate::i18n::tr_format!("Profile: {}", crate::i18n::profile_label(hovered_id, name)), settings: s });
-    }
-    if let Some(id) = pick.0 {
-        let _ = app.run("develop.profile", json!({"id": id}));
-    }
 }
 
 /// Basic ▸ Tone's title row with Classic's Auto button at its right, greyed out while the tone sliders
@@ -903,6 +901,10 @@ pub(crate) fn section_with(
             let blocked = !crate::video_ui::section_allowed(id) && app.session.active().is_some_and(|p| crate::video_ui::photo_is_video(app, p));
             crate::video_ui::video_gate(ui, blocked, |ui| body(app, ui, d));
         }
+        return;
+    }
+    // the tool profile in use switched the group off
+    if !shown_here_group(app, ui, id) {
         return;
     }
     let open = app.ui.section_open(id);
@@ -1533,7 +1535,7 @@ fn curve_histogram_profile(h: &lcc_raster::Histogram, channel: &str) -> [f32; 25
 
 /// Show the currently rendered photo's tonal distribution behind the editable
 /// curve, without requesting another render or blocking pointer interactions.
-fn draw_curve_histogram(p: &egui::Painter, r: Rect, h: &lcc_raster::Histogram, channel: &str) {
+pub(crate) fn draw_curve_histogram(p: &egui::Painter, r: Rect, h: &lcc_raster::Histogram, channel: &str) {
     let profile = curve_histogram_profile(h, channel);
     let color = match channel {
         "red" => hex("#dd3333"),
@@ -1615,7 +1617,7 @@ impl StackedCurve {
 /// for this widget (released outside the window, over a popup, or on a frame the widget does not
 /// run). A dangling interaction would make every later edit a silent preview — Undo would then
 /// appear to do nothing at all. Returns whether the drag is over, so the caller clears its state.
-fn commit_interaction(app: &mut LccApp, ui: &egui::Ui, dragging: bool, stopped: bool) -> bool {
+pub(crate) fn commit_interaction(app: &mut LccApp, ui: &egui::Ui, dragging: bool, stopped: bool) -> bool {
     let released = ui.input(|i| i.pointer.any_released()) || !ui.input(|i| i.pointer.primary_down());
     if !dragging || !(stopped || released) {
         return false;
@@ -2569,57 +2571,67 @@ fn point_color(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings) {
 fn wb_rows(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings, raw: bool) {
     let t = Tokens::get(ui.ctx());
     // White balance row
-    egui::Frame::NONE.inner_margin(crate::widgets::row_margin(ui, egui::Margin { left: 12, right: 16, top: 2, bottom: 2 }, 2, 2)).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            // Lightroom Classic: the selector on the left, then "WB:" and the preset menu
-            let active = app.ui.tool == "wbPicker";
-            // (Compact: the profile row's sizes, so the two rows line up)
-            let dense = t.dense;
-            let icon = if dense { 20.0 } else { 28.0 };
-            if crate::widgets::icon_button(ui, "wbPicker", Icon::Picker, vec2(icon, icon), active, true, "White Balance Selector (W)").clicked() {
-                if active {
-                    app.ui.tool.clear();
-                } else if let Err(e) = app.run("tool.wbPicker", json!({})) {
-                    // the same as W: from Compare, Survey or the grid it opens the photo in Detail
-                    app.toast(ui.ctx(), e);
-                }
-            }
-            if active {
-                // how many pixels a click averages (#644), as Lightroom's selector toolbar offers
-                let n = app.ui.wb_sample;
-                let r = crate::widgets::dropdown(ui, "wbSample", &format!("{n}×{n}"), t.font(13.0), t.text_label)
-                    .on_hover_text(crate::i18n::tr("Sample size: the square of pixels the selector averages"));
-                egui::Popup::menu(&r).show(|ui| {
-                    for s in crate::panels::detail::WB_SAMPLES {
-                        if ui.selectable_label(n == s, format!("{s}×{s}")).clicked() {
-                            app.ui.wb_sample = s;
+    if shown_here(app, ui, "option:wbSelector") {
+        egui::Frame::NONE.inner_margin(crate::widgets::row_margin(ui, egui::Margin { left: 12, right: 16, top: 2, bottom: 2 }, 2, 2)).show(
+            ui,
+            |ui| {
+                ui.horizontal(|ui| {
+                    // Lightroom Classic: the selector on the left, then "WB:" and the preset menu
+                    let active = app.ui.tool == "wbPicker";
+                    // (Compact: the profile row's sizes, so the two rows line up)
+                    let dense = t.dense;
+                    let icon = if dense { 20.0 } else { 28.0 };
+                    if crate::widgets::icon_button(ui, "wbPicker", Icon::Picker, vec2(icon, icon), active, true, "White Balance Selector (W)")
+                        .clicked()
+                    {
+                        if active {
+                            app.ui.tool.clear();
+                        } else if let Err(e) = app.run("tool.wbPicker", json!({})) {
+                            // the same as W: from Compare, Survey or the grid it opens the photo in Detail
+                            app.toast(ui.ctx(), e);
                         }
                     }
+                    if active {
+                        // how many pixels a click averages (#644), as Lightroom's selector toolbar offers
+                        let n = app.ui.wb_sample;
+                        let r = crate::widgets::dropdown(ui, "wbSample", &format!("{n}×{n}"), t.font(13.0), t.text_label)
+                            .on_hover_text(crate::i18n::tr("Sample size: the square of pixels the selector averages"));
+                        egui::Popup::menu(&r).show(|ui| {
+                            for s in crate::panels::detail::WB_SAMPLES {
+                                if ui.selectable_label(n == s, format!("{s}×{s}")).clicked() {
+                                    app.ui.wb_sample = s;
+                                }
+                            }
+                        });
+                    }
+                    ui.label(egui::RichText::new(crate::i18n::tr("WB:")).font(t.font(if dense { 11.0 } else { 13.0 })).color(t.text_dim));
+                    let r = crate::widgets::dropdown(
+                        ui,
+                        "wbMode",
+                        crate::i18n::tr(d.wb.mode.label()),
+                        t.font(if dense { 12.5 } else { 14.0 }),
+                        t.text_label,
+                    );
+                    egui::Popup::menu(&r).show(|ui| {
+                        for m in WbMode::ALL {
+                            if m == WbMode::Custom {
+                                continue;
+                            }
+                            if ui.selectable_label(d.wb.mode == m, crate::i18n::tr(m.label())).clicked() {
+                                let mode = serde_json::to_value(m).unwrap_or_default();
+                                let _ = app.run("develop.wb", json!({"mode": mode}));
+                            }
+                        }
+                    });
                 });
-            }
-            ui.label(egui::RichText::new(crate::i18n::tr("WB:")).font(t.font(if dense { 11.0 } else { 13.0 })).color(t.text_dim));
-            let r = crate::widgets::dropdown(ui, "wbMode", crate::i18n::tr(d.wb.mode.label()), t.font(if dense { 12.5 } else { 14.0 }), t.text_label);
-            egui::Popup::menu(&r).show(|ui| {
-                for m in WbMode::ALL {
-                    if m == WbMode::Custom {
-                        continue;
-                    }
-                    if ui.selectable_label(d.wb.mode == m, crate::i18n::tr(m.label())).clicked() {
-                        let mode = serde_json::to_value(m).unwrap_or_default();
-                        let _ = app.run("develop.wb", json!({"mode": mode}));
-                    }
-                }
-            });
-        });
-    });
-    if raw {
-        control(app, ui, d, "wb.temp", true);
-        control(app, ui, d, "wb.tint", true);
-    } else {
-        let out = slider(ui, &REL_TEMP, k_to_rel(d.wb.temp), true, None);
-        apply_slider_out(app, &REL_TEMP, out, |app, v| app.run("develop.set", json!({"control": "wb.temp", "value": rel_to_k(v)})));
-        let out = slider(ui, &REL_TINT, d.wb.tint.clamp(-100.0, 100.0), true, None);
-        apply_slider_out(app, &REL_TINT, out, |app, v| app.run("develop.set", json!({"control": "wb.tint", "value": v})));
+            },
+        );
+    }
+    // (the Kelvin scale for a raw, the relative one for a rendered file)
+    for c in ["wb.temp", "wb.tint"] {
+        if shown_here(app, ui, c) {
+            custom_control(app, ui, d, c, raw);
+        }
     }
 }
 
@@ -2664,6 +2676,45 @@ fn hdr_row(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings) {
         }
     });
     control(app, ui, d, "hdr.maxEv", true);
+}
+
+const CONTRAST_MODES: [(lcc_develop::ContrastMode, &str, &str); 2] =
+    [(lcc_develop::ContrastMode::Luminance, "Luminance", "luminance"), (lcc_develop::ContrastMode::Rgb, "RGB", "rgb")];
+
+/// The Basic ▸ Tone switch between luminance-only and per-channel RGB Contrast and Blacks (#839).
+fn contrast_mode_row(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings) {
+    let t = Tokens::get(ui.ctx());
+    let items: [(&str, &str); 2] = CONTRAST_MODES.map(|(_, l, k)| (l, k));
+    let active = CONTRAST_MODES.iter().position(|(m, _, _)| *m == d.light.contrast_mode);
+    let mut chosen = None;
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 12, right: 16, top: 4, bottom: 2 }).show(ui, |ui| {
+        let full_w = ui.available_width();
+        let (row_rect, _) = ui.allocate_exact_size(egui::vec2(full_w, 24.0), egui::Sense::hover());
+        let label_w = 90.0f32.min(full_w * 0.4);
+        let label_rect = egui::Rect::from_min_size(row_rect.min, egui::vec2(label_w, row_rect.height()));
+        let seg_rect = egui::Rect::from_min_max(
+            egui::pos2(row_rect.min.x + label_w + 8.0, row_rect.min.y),
+            row_rect.max,
+        );
+        let resp = ui.interact(label_rect, ui.id().with("contrast_mode_label"), egui::Sense::hover());
+        resp.on_hover_text(crate::i18n::tr(
+            "Luminance adjusts tonal brightness while keeping linear channel ratios; RGB applies Contrast and Blacks across the Red, Green and Blue channels like an RGB tone curve",
+        ));
+        ui.painter().text(
+            egui::pos2(label_rect.left(), label_rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            crate::i18n::tr("Contrast Mode"),
+            t.font(11.5),
+            t.text_dim,
+        );
+        let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(seg_rect));
+        chosen = crate::widgets::segmented(&mut child_ui, "contrastMode", &items, active, 2);
+    });
+    if let Some((mode, _, _)) = chosen.and_then(|i| CONTRAST_MODES.get(i)).copied()
+        && mode != d.light.contrast_mode
+    {
+        let _ = app.run("develop.merge", json!({"settings": {"light": {"contrast_mode": mode}}, "label": "Contrast Mode"}));
+    }
 }
 
 // ------------------------------------------------------------------------------ colour grading
@@ -3175,6 +3226,397 @@ fn lens_note(app: &mut LccApp, ui: &mut egui::Ui, id: lcc_catalog::PhotoId, has_
     };
     let r = ui.label(egui::RichText::new(text).size(11.0).color(t.text_dim));
     crate::widgets::register(ui.ctx(), "label:lensNote", r.rect);
+}
+
+/// What the flat-field panel's answers are kept for: the photo's settings, and how many raws' placements the
+/// background reader has found so far (`lcc_engine::vignetting_calibration_placement`): a match waiting for the photo's header
+/// is asked again once it is read.
+fn vignetting_calibration_key(app: &LccApp, d: &DevelopSettings) -> u64 {
+    // (and the catalog's maps and which are withdrawn: an undo of Create or of a withdraw changes no settings; maps are
+    // few)
+    let maps = app.session.catalog.vignetting_maps().fold(0u64, |acc, (id, r)| {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (id.as_str(), r.withdrawn).hash(&mut h);
+        acc ^ h.finish()
+    });
+    d.hash64() ^ app.session.vignetting_calibration_placements.generation().wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ maps.rotate_left(17)
+}
+
+/// `vignettingCalibration.photo` for the photo as its settings are now, read once per change of the settings (or when a raw's
+/// placement read in the background became known: [`vignetting_calibration_key`]).
+fn vignetting_calibration_info(app: &mut LccApp, id: PhotoId, d: &DevelopSettings) -> Value {
+    let hash = vignetting_calibration_key(app, d);
+    if let Some((pid, h, v)) = &app.ui.vignetting_calibration_info
+        && (*pid, *h) == (id, hash)
+    {
+        return v.clone();
+    }
+    let v = app.run("vignettingCalibration.photo", json!({"id": id.0})).unwrap_or(Value::Null);
+    app.ui.vignetting_calibration_info = Some((id, hash, v.clone()));
+    v
+}
+
+/// One line for a map's reference shot: lens, focal length and aperture (numbers stay as they are).
+fn vignetting_calibration_source_line(m: &Value) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(l) = m["lens"].as_str().filter(|l| !l.trim().is_empty()) {
+        parts.push(l.trim().to_string());
+    }
+    if let Some(f) = m["focal"].as_f64() {
+        parts.push(format!("{} mm", f.round()));
+    }
+    if let Some(a) = m["aperture"].as_f64() {
+        parts.push(format!("f/{a:.1}"));
+    }
+    if let Some(b) = m["model"].as_str().filter(|b| !b.trim().is_empty()) {
+        parts.push(b.trim().to_string());
+    }
+    parts.join(", ")
+}
+
+/// Why a map doesn't apply to the photo (`vignettingCalibration.photo`'s match), as one sentence.
+fn vignetting_calibration_refusal(r: &Value) -> Option<String> {
+    use crate::i18n::tr;
+    Some(match r["refused"].as_str()? {
+        "imageArea" => tr("This calibration doesn't fit this photo's image area").to_string(),
+        "anotherCamera" => tr("Made with another camera").to_string(),
+        "anotherLens" => tr("Made with another lens").to_string(),
+        "focalLength" => tr("Made at another focal length").to_string(),
+        "aperture" => tr("Made at another aperture").to_string(),
+        "apertureUnknown" => tr("Only one of the photo and the reference records its aperture").to_string(),
+        _ => return None,
+    })
+}
+
+/// What differs between a map and the photo, as one short, quiet line (`vignettingCalibration.photo`): "+2 mm ·
+/// unevenly lit reference".
+fn vignetting_calibration_note(r: &Value) -> Option<String> {
+    use crate::i18n::tr;
+    let parts: Vec<String> = r["warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|w| {
+            Some(match w["kind"].as_str()? {
+                "focalLength" => format!("{:+} mm", w["diff"].as_f64().unwrap_or(0.0)),
+                "lensUnknown" => tr("lens not recorded, can't be checked").to_string(),
+                "apertureUnknown" => tr("aperture not recorded, can't be checked").to_string(),
+                "uneven" => tr("unevenly lit reference").to_string(),
+                _ => return None,
+            })
+        })
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+/// What the last Create measured on its reference, in camera terms, and a note when it should be shot again.
+fn vignetting_calibration_exposure_lines(report: &Value) -> Vec<String> {
+    use crate::i18n::tr;
+    let e = &report["exposure"];
+    let pct = |v: &Value| format!("{:.0}", v.as_f64().unwrap_or(0.0) * 100.0);
+    let mut out = vec![
+        tr("Reference: centre at {centre} % of white, darkest corner at {corner} %")
+            .replace("{centre}", &pct(&e["centre"][1]))
+            .replace("{corner}", &pct(&e["darkest"])),
+    ];
+    match e["verdict"].as_str() {
+        Some("under") => out.push(tr("Underexposed: aim the histogram peak at 2/3 to 3/4 of its width").to_string()),
+        Some("nearClip") => out.push(tr("Close to clipping: expose a little less").to_string()),
+        _ => {}
+    }
+    if report["keptForOtherAreas"].as_array().is_some_and(|a| !a.is_empty()) {
+        out.push(tr("References for other image areas with this lens and aperture stay in use for those shots").to_string());
+    }
+    if report["vr"].as_bool() == Some(true) {
+        out.push(tr("VR was on: turn it off for references for the most precise result").to_string());
+    }
+    out
+}
+
+/// Create: measure photo `id`'s raw on a worker thread (the decode takes a second or more: the window keeps drawing,
+/// the activity stack shows it), then keep and apply the map here, say "Vignetting calibration created" and keep what
+/// was measured for the panel's exposure lines. (A command run by an agent or the CLI measures in place:
+/// `vignettingCalibration.create`.)
+fn start_vignetting_calibration_create(app: &mut LccApp, ctx: &egui::Context, id: PhotoId) {
+    use crate::i18n::tr;
+    let (path, file_name, captured) = match lcc_engine::cmd::vignetting_calibration::reference_file(&app.session, id) {
+        Ok(f) => f,
+        Err(e) => return app.toast_error(ctx, e.to_string()),
+    };
+    use lcc_engine::cmd::vignetting_calibration::{MeasureError, Measured};
+    app.ui.vignetting_calibration_creating = Some(id);
+    app.ui.vignetting_calibration_pending = None;
+    let work = move || lcc_engine::cmd::vignetting_calibration::measure(&path, &file_name, captured);
+    let done = move |app: &mut LccApp, ctx: &egui::Context, measured: Result<Measured, MeasureError>| {
+        app.ui.vignetting_calibration_creating = None;
+        app.ui.vignetting_calibration_info = None;
+        match measured {
+            // clearly not a flat field: refused, with the reason
+            Err(MeasureError::Implausible(p)) => {
+                app.toast_error(ctx, format!("{}. {}", tr("This photo doesn't look like a flat-field reference"), plausibility_reasons(&p.reasons)));
+            }
+            Err(MeasureError::Other(e)) => app.toast_error(ctx, e),
+            Ok(m) => {
+                if let Err(e) = continue_vignetting_calibration(app, id, m, false) {
+                    app.toast_error(ctx, e);
+                }
+            }
+        }
+    };
+    if let Err(e) = crate::tasks::spawn(app, tr("Measuring the vignetting reference"), Some("vignettingCalibration"), work, done) {
+        app.ui.vignetting_calibration_creating = None;
+        app.toast_error(ctx, e);
+    }
+}
+
+/// What Create does with a measured reference, step by step: a Borderline one asks first (Create Anyway; `anyway`:
+/// asked already), then one for a combination with a reference in use asks whether to replace it, then it is kept and
+/// applied. While a question is open the measured map waits in [`crate::state::UiState::vignetting_calibration_pending`]
+/// (answering doesn't measure again). `Ok(Null)` while asking.
+pub(crate) fn continue_vignetting_calibration(
+    app: &mut LccApp,
+    id: PhotoId,
+    m: lcc_engine::cmd::vignetting_calibration::Measured,
+    anyway: bool,
+) -> Result<Value, String> {
+    use lcc_engine::cmd::vignetting_calibration as vc;
+    if m.plausibility.verdict == lcc_raw::vignetting_plausibility::Verdict::Borderline && !anyway {
+        let reasons = plausibility_reasons(&m.plausibility.reasons);
+        app.ui.vignetting_calibration_pending = Some((id, Box::new(m)));
+        app.ui.dialog = Some(crate::state::Dialog::VignettingCreateAnyway { photo: id.0, reasons });
+        return Ok(Value::Null);
+    }
+    if let Some(old) = vc::conflicts(&app.session, &m).first() {
+        let mut question = replace_question(&old.map);
+        // (a new full-frame reference replacing a crop one: nothing is lost, say so)
+        let lib = &lcc_engine::vignetting_calibration_library::coverage;
+        if lib(&old.map) != lib(&m.map) {
+            question = format!("{question} {}", crate::i18n::tr("The new reference covers its image area too."));
+        }
+        app.ui.vignetting_calibration_pending = Some((id, Box::new(m)));
+        app.ui.dialog = Some(crate::state::Dialog::VignettingReplace { photo: id.0, question });
+        return Ok(Value::Null);
+    }
+    commit_vignetting_calibration(app, id, m, false)
+}
+
+/// "There's already a reference for NIKKOR Z 50mm f/1.8 S at f/1.8 on NIKON Z 8 (from SHOT_0001.NEF, 2026-01-28).
+/// Replace it?"
+fn replace_question(old: &lcc_develop::EmbeddedVignettingMap) -> String {
+    use crate::i18n::tr;
+    let s = &old.source;
+    let mut lens = s.lens.clone().filter(|l| !l.trim().is_empty()).unwrap_or_else(|| tr("this lens").to_string());
+    if let (true, Some(f)) = (s.lens.as_deref().is_some_and(lcc_engine::vignetting_calibration_library::is_zoom), s.focal_length) {
+        lens = format!("{lens} ({} mm)", f.round());
+    }
+    let aperture = s.aperture.map_or_else(|| "?".to_string(), |a| format!("f/{}", lcc_engine::cmd::vignetting_calibration::aperture_text(a)));
+    tr("There's already a reference for {lens} at {aperture} on {camera} (from {file}, {date}). Replace it?")
+        .replace("{lens}", &lens)
+        .replace("{aperture}", &aperture)
+        .replace("{camera}", s.model.as_deref().unwrap_or(""))
+        .replace("{file}", s.file_name.as_deref().unwrap_or(""))
+        .replace("{date}", s.captured.as_deref().map(|c| c.get(..10).unwrap_or(c)).unwrap_or(""))
+}
+
+/// Keep and apply a measured reference (`replace`: the one in use for its combination is withdrawn in the same step)
+/// and say so.
+fn commit_vignetting_calibration(
+    app: &mut LccApp,
+    id: PhotoId,
+    m: lcc_engine::cmd::vignetting_calibration::Measured,
+    replace: bool,
+) -> Result<Value, String> {
+    // (a Borderline one gets here only after Create Anyway)
+    let report = lcc_engine::cmd::vignetting_calibration::commit_measured(&mut app.session, id, m, true, replace).map_err(|e| e.to_string())?;
+    app.ui.vignetting_calibration_info = None;
+    app.ui.vignetting_calibration_report = Some((id, report.clone()));
+    if let Some(ctx) = app.tasks.repaint.clone() {
+        app.toast(&ctx, crate::i18n::tr("Vignetting calibration created"));
+    }
+    Ok(report)
+}
+
+/// The measured reference waiting for `photo`'s question.
+fn take_pending(app: &mut LccApp, photo: u64) -> Result<(PhotoId, lcc_engine::cmd::vignetting_calibration::Measured), String> {
+    app.ui
+        .vignetting_calibration_pending
+        .take()
+        .filter(|(id, _)| id.0 == photo)
+        .map(|(id, m)| (id, *m))
+        .ok_or_else(|| "the measured reference is gone; Create again".into())
+}
+
+/// Create Anyway in [`crate::state::Dialog::VignettingCreateAnyway`]: go on with the reference measured meanwhile.
+pub(crate) fn create_vignetting_calibration_anyway(app: &mut LccApp, photo: u64) -> Result<Value, String> {
+    let (id, m) = take_pending(app, photo)?;
+    continue_vignetting_calibration(app, id, m, true)
+}
+
+/// Replace in [`crate::state::Dialog::VignettingReplace`]: keep the new reference, withdraw the old one (one undo
+/// step; photos that use it keep it).
+pub(crate) fn replace_vignetting_calibration(app: &mut LccApp, photo: u64) -> Result<Value, String> {
+    let (id, m) = take_pending(app, photo)?;
+    commit_vignetting_calibration(app, id, m, true)
+}
+
+/// Why a raw doesn't look like a flat-field reference, as sentences.
+fn plausibility_reasons(reasons: &[lcc_raw::vignetting_plausibility::Reason]) -> String {
+    use crate::i18n::tr;
+    use lcc_raw::vignetting_plausibility::Reason;
+    let text: Vec<&str> = reasons
+        .iter()
+        .map(|r| match r {
+            Reason::Detail => tr("It has detail in it: a flat-field reference shows only an even surface"),
+            Reason::Colour => tr("Its colours aren't even"),
+            Reason::Shape => tr("It doesn't get darker evenly from the middle toward the edges"),
+            Reason::NoFalloff => tr("It doesn't get darker toward the edges"),
+            Reason::Dark => tr("It is too dark"),
+            Reason::Clipped => tr("Parts of it are clipped"),
+        })
+        .collect();
+    format!("{}.", text.join(". "))
+}
+
+/// Develop ▸ Lens Corrections ▸ Vignetting Calibration (design notes §10, *UI*). Two buttons: Create (measure this raw
+/// as a reference) and Apply (each photo of the selection, or this one, gets the reference that fits it, picked by
+/// itself: `vignettingCalibration.apply` without a map). With a calibration: which reference it is, with Show
+/// Reference, what differs, the Amount and Remove.
+fn vignetting_calibration_section(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopSettings) {
+    use crate::i18n::tr;
+    let t = Tokens::get(ui.ctx());
+    sub_title(ui, tr("Vignetting Calibration"));
+    let info = vignetting_calibration_info(app, id, d);
+    let note = |ui: &mut egui::Ui, text: &str, key: &str| {
+        let r = ui.label(egui::RichText::new(text).size(11.0).color(t.text_dim));
+        register(ui.ctx(), key, r.rect);
+    };
+    let mut run: Option<(&str, Value)> = None;
+    let map = &info["map"];
+    let has_map = !map.is_null();
+    let missing = info["missing"].as_bool() == Some(true);
+    egui::Frame::NONE.inner_margin(crate::widgets::row_margin(ui, egui::Margin { left: 12, right: 16, top: 2, bottom: 4 }, 2, 3)).show(ui, |ui| {
+        let raw = info["raw"].as_bool().unwrap_or(false);
+        let measuring = app.ui.vignetting_calibration_creating.is_some();
+        let selected = app.session.selection.ids.len();
+        let auto = &info["auto"];
+        let can_apply = selected > 1 || auto["id"].is_string();
+        ui.horizontal_wrapped(|ui| {
+            let r = ui.add_enabled_ui(raw && !measuring, |ui| text_button(ui, "vignettingCalibrationCreate", "Create", false)).inner;
+            register(ui.ctx(), "button:vignettingCalibrationCreate", r.rect);
+            let r = if raw {
+                r.on_hover_text(tr("Measure this photo as a reference: an even screen or a diffuser, shot with the lens and aperture of the photos"))
+            } else {
+                r.on_disabled_hover_text(tr("Vignetting calibrations are made from raw photos"))
+            };
+            if r.clicked() {
+                start_vignetting_calibration_create(app, ui.ctx(), id);
+            }
+            let r = ui.add_enabled_ui(can_apply, |ui| text_button(ui, "vignettingCalibrationApply", "Apply", false)).inner;
+            register(ui.ctx(), "button:vignettingCalibrationApply", r.rect);
+            let r = if !can_apply {
+                // (there is a reference for the lens, only not at this aperture: say which aperture is missing)
+                let text = match (auto["none"].as_str(), auto["aperture"].as_f64()) {
+                    (Some("noReferenceAtAperture"), Some(a)) => tr("No reference at {aperture} for this lens yet")
+                        .replace("{aperture}", &format!("f/{}", lcc_engine::cmd::vignetting_calibration::aperture_text(a))),
+                    _ => tr("No reference for this camera and lens yet").to_string(),
+                };
+                r.on_disabled_hover_text(text)
+            } else if selected > 1 {
+                r.on_hover_text(tr("Each of the {n} selected photos gets the reference that fits it").replace("{n}", &selected.to_string()))
+            } else {
+                r.on_hover_text(tr("Apply the reference that fits this photo"))
+            };
+            if r.clicked() {
+                // (each photo's own reference; the selection when there is one, else this photo)
+                let ids: Vec<u64> = if selected > 1 { app.session.selection.ids.iter().map(|p| p.0).collect() } else { vec![id.0] };
+                run = Some(("vignettingCalibration.apply", json!({"ids": ids})));
+            }
+            if has_map {
+                let r = text_button(ui, "vignettingCalibrationRemove", "Remove", false);
+                register(ui.ctx(), "button:vignettingCalibrationRemove", r.rect);
+                if r.clicked() {
+                    run = Some(("vignettingCalibration.remove", json!({"ids": [id.0]})));
+                }
+            }
+        });
+        if app.ui.vignetting_calibration_creating == Some(id) {
+            note(ui, tr("Measuring the vignetting reference…"), "label:vignettingCalibrationMeasuring");
+        }
+        // this photo as a reference: each map measured from it and in use, with Stop Using as Reference (one undo
+        // step). A withdrawn one shows nothing: the photo is a normal photo again, and Create makes it a reference again
+        // (the same map, put back in use).
+        let active = info["referenceOf"].as_array().into_iter().flatten().filter(|m| m["withdrawn"].as_bool() != Some(true));
+        for (k, m) in active.enumerate() {
+            let line = tr("This photo is a vignetting reference ({reference})").replace("{reference}", &vignetting_calibration_source_line(m));
+            note(ui, &line, &format!("label:vignettingCalibrationIsReference{k}"));
+            let r = text_button(ui, &format!("vignettingCalibrationWithdraw{k}"), "Stop Using as Reference", false)
+                .on_hover_text(tr("Apply no longer picks this reference; photos that use it keep it"));
+            register(ui.ctx(), format!("button:vignettingCalibrationWithdraw{k}"), r.rect);
+            if r.clicked() {
+                run = Some(("vignettingCalibration.withdraw", json!({"map": m["id"]})));
+            }
+        }
+        if !has_map {
+            if auto["id"].is_string() {
+                note(
+                    ui,
+                    &tr("Apply uses {reference}").replace("{reference}", &vignetting_calibration_source_line(auto)),
+                    "label:vignettingCalibrationAuto",
+                );
+            }
+            return;
+        }
+        if missing {
+            note(ui, tr("This photo's vignetting map is missing"), "label:vignettingCalibrationMissing");
+            return;
+        }
+        let r = ui.label(egui::RichText::new(vignetting_calibration_source_line(map)).size(11.5));
+        register(ui.ctx(), "label:vignettingCalibrationSource", r.rect);
+        let file = map["fileName"].as_str().unwrap_or("");
+        let date = map["captured"].as_str().map(|c| c.get(..10).unwrap_or(c)).unwrap_or("");
+        if info["reference"]["inCatalog"].as_bool() == Some(true) {
+            ui.horizontal_wrapped(|ui| {
+                note(ui, &tr("From {file}, {date}").replace("{file}", file).replace("{date}", date), "label:vignettingCalibrationReference");
+                let link = egui::RichText::new(tr("Show Reference")).size(11.0).color(t.accent).underline();
+                let r = ui.add(egui::Label::new(link).sense(egui::Sense::click()));
+                register(ui.ctx(), "link:vignettingCalibrationShowReference", r.rect);
+                if r.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    run = Some(("vignettingCalibration.showReference", json!({"id": id.0})));
+                }
+            });
+        } else {
+            note(ui, &tr("From {file}, {date}").replace("{file}", file).replace("{date}", date), "label:vignettingCalibrationReference");
+            note(
+                ui,
+                tr("The reference photo is no longer in this catalog; the correction still applies"),
+                "label:vignettingCalibrationReferenceGone",
+            );
+        }
+        if let Some(n) = vignetting_calibration_refusal(&info["match"]) {
+            note(ui, &n, "label:vignettingCalibrationRefused");
+        }
+        if let Some(n) = vignetting_calibration_note(&info["match"]) {
+            note(ui, &n, "label:vignettingCalibrationNote");
+        }
+        if let Some((_, report)) = app.ui.vignetting_calibration_report.as_ref().filter(|(p, r)| *p == id && r["map"]["id"] == map["id"]) {
+            for (k, line) in vignetting_calibration_exposure_lines(report).iter().enumerate() {
+                note(ui, line, &format!("label:vignettingCalibrationExposure{k}"));
+            }
+        }
+        if info["profileVignettingReplaced"].as_bool() == Some(true) {
+            note(ui, tr("Profile vignetting is replaced by the vignetting calibration"), "label:vignettingCalibrationReplacesProfile");
+        }
+    });
+    if has_map {
+        control_as(app, ui, d, "optics.vignettingCalibrationAmount", !missing, Some("Amount"));
+    }
+    if let Some((c, p)) = run {
+        app.ui.vignetting_calibration_info = None;
+        if let Err(e) = app.run(c, p) {
+            app.toast_error(ui.ctx(), e);
+        }
+    }
 }
 
 /// Develop ▸ Lens Corrections' lens picker (issue #307): Make → Model dropdowns filled from the lens database

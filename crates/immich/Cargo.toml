@@ -28,3 +28,4 @@ log = { workspace = true }
 lcc-codecs = { workspace = true }
 lcc-fuzzkit = { workspace = true }
 lcc-raster = { workspace = true }
+lcc-testkit = { workspace = true }

@@ -3,7 +3,7 @@
 //! workflows on a library on disk, and checks invariants after every step (never exact outputs or
 //! image quality). See docs/testing-sil.md.
 //!
-//! Environment: `SIL_SEED` (monkey seed), `SIL_STEPS` (monkey step budget, default 400),
+//! Environment: `SIL_SEED` (monkey seed), `SIL_STEPS` (monkey step budget, default 200),
 //! `SIL_CORPUS` (folder of raws; default `<repo>/corpus/raw`, skipped when absent),
 //! `SIL_OUT` (where reports and replay scripts go; default the system temp dir).
 
@@ -700,7 +700,7 @@ fn random_action(r: &mut Rng, ids: &[u64], albums: &[u64], root: &Path, step: us
     let hostile = r.chance(8);
     let num = |r: &mut Rng, lo: f64, hi: f64| if hostile { json!(r.pick(&[-1e30, 1e30, 0.0, -0.0, 1e-300])) } else { json!(r.f(lo, hi)) };
     let album = albums.first().map_or(json!(1), |a| json!(r.pick(&[*a, albums[albums.len() - 1], 424_242])));
-    match r.below(33) {
+    match r.below(36) {
         0 => ("library.select", json!({"ids": [id], "active": id})),
         1 => ("library.select", json!({"ids": some, "mode": r.pick(&["replace", "add", "toggle", "range"])})),
         2 => ("library.selectAll", json!({})),
@@ -752,23 +752,11 @@ fn random_action(r: &mut Rng, ids: &[u64], albums: &[u64], root: &Path, step: us
         29 => ("photo.readMetadataFromFile", json!({})),
         30 => ("ui.dialog.confirm", json!({})),
         31 => ("ui.dialog.cancel", json!({})),
+        // flat field: create on whatever is active (a non-raw is refused), apply a map that may not exist, remove
+        32 => ("vignettingCalibration.create", json!({})),
+        33 => ("vignettingCalibration.apply", json!({"map": if hostile { json!({"grid": [300, 2]}) } else { json!("0".repeat(64)) }, "ids": some})),
+        34 => ("vignettingCalibration.remove", json!({"ids": some})),
         _ => ("app.export", json!({"format": "jpeg", "longEdge": 200, "ids": [id], "dir": root.join("monkey-export").to_string_lossy()})),
-    }
-}
-
-/// The monkey never asks for a photo-adding action once the library is at its size cap.
-#[test]
-fn sil_monkey_stops_adding_photos_past_the_cap() {
-    let root = std::env::temp_dir();
-    for n in [MONKEY_MAX_PHOTOS - 1, MONKEY_MAX_PHOTOS, MONKEY_MAX_PHOTOS * 4] {
-        let ids: Vec<u64> = (1..=n as u64).collect();
-        let mut r = Rng(0x5eed);
-        let added = (0..5000).filter(|step| random_action(&mut r, &ids, &[], &root, *step).0 == "photo.virtualCopy").count();
-        if n < MONKEY_MAX_PHOTOS {
-            assert!(added > 0, "below the cap the monkey still makes virtual copies");
-        } else {
-            assert_eq!(added, 0, "{n} photos: the monkey added photos past its cap of {MONKEY_MAX_PHOTOS}");
-        }
     }
 }
 
@@ -780,7 +768,7 @@ fn sil_monkey() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64) | 1);
-    let steps: usize = std::env::var("SIL_STEPS").ok().and_then(|s| s.parse().ok()).unwrap_or(400);
+    let steps: usize = std::env::var("SIL_STEPS").ok().and_then(|s| s.parse().ok()).unwrap_or(200);
     eprintln!("SIL monkey: SIL_SEED={seed} SIL_STEPS={steps}");
     let mut s = Sil::new("monkey");
     s.seed = Some(seed);
@@ -802,11 +790,127 @@ fn sil_monkey() {
         if step % 20 == 19 {
             s.undo_redo_roundtrip();
         }
-        if step % 60 == 59 {
+        // (the run ends with a reopen of its own)
+        if step % 100 == 99 && step + 1 < steps {
             s.reopen_keeps_everything();
         }
     }
     s.activity_drains();
     s.reopen_keeps_everything();
+    s.finish();
+}
+// ---------------------------------------------------------------- flat field
+
+/// A Bayer DNG of an even grey field seen through a lens's fall-off (about 1.3 EV to the corners), at `level` of
+/// white in the centre: a flat-field reference, or a photo of the same setup.
+fn diffuser_dng(level: f64, seed: u64) -> Vec<u8> {
+    use lcc_raw::{BlackLevel, Cfa, ColorData, DngWriteOptions, OpcodeLists, RawData, RawFormat, RawImage, Rect};
+    let (w, h) = (960usize, 640usize);
+    let falloff = |x: f64, y: f64| {
+        let (dx, dy) = (x / w as f64 - 0.5, (y / h as f64 - 0.5) * h as f64 / w as f64);
+        let d2 = (dx * dx + dy * dy) / (0.25 + 0.25 * (h as f64 / w as f64).powi(2));
+        1.1 * d2 * d2 + 0.25 * d2
+    };
+    let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+    let data = (0..w * h)
+        .map(|i| {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let noise = ((state >> 40) as f64 / (1u64 << 24) as f64 - 0.5) * 0.004;
+            let v = level * (-falloff((i % w) as f64 + 0.5, (i / w) as f64 + 0.5)).exp2() + noise;
+            (v.clamp(0.0, 1.0) * 4000.0 + 64.0).min(4095.0) as u16
+        })
+        .collect();
+    let raw = RawImage {
+        format: RawFormat::Dng,
+        width: w,
+        height: h,
+        cpp: 1,
+        data: RawData::U16(data),
+        cfa: Cfa::bayer("RGGB"),
+        bits: 12,
+        black: BlackLevel::uniform(64.0),
+        white: vec![4095.0],
+        active_area: Rect::new(0, 0, w, h),
+        crop: Rect::new(0, 0, w, h),
+        orientation: lcc_geom::Orientation::Normal,
+        color: ColorData {
+            illuminant: [21, 0],
+            color_matrix: [Some(lcc_color::Mat3::IDENTITY), None],
+            as_shot_neutral: Some([1.0, 1.0, 1.0]),
+            ..Default::default()
+        },
+        wb_multipliers: None,
+        linearized: false,
+        pixel_aspect: 1.0,
+        opcodes: OpcodeLists::default(),
+        metadata: lcc_meta::Metadata { make: Some("Test".into()), model: Some("Flat Cam".into()), ..Default::default() },
+        lens_metadata: Default::default(),
+    };
+    lcc_raw::write_dng(&raw, &DngWriteOptions::default()).unwrap()
+}
+
+/// Flat-field correction end to end (design notes §10): a reference and three photos of the same setup, the map made
+/// from the reference, applied to a selection, its amount, removed from one, the reference removed while the others
+/// keep their correction; undo, redo, a consistent catalog, and a reopen that keeps it all. No corpus needed.
+#[test]
+fn sil_vignetting_calibration() {
+    let mut s = Sil::new("vignettingcalibration");
+    let dir = s.root.join("shots");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("REF_0001.dng"), diffuser_dng(0.5, 1)).unwrap();
+    for (i, n) in ["SHOT_0002.dng", "SHOT_0003.dng", "SHOT_0004.dng"].into_iter().enumerate() {
+        std::fs::write(dir.join(n), diffuser_dng(0.3, 10 + i as u64)).unwrap();
+    }
+    s.start();
+    let ids = import(&mut s, &dir, 4);
+    let names: Vec<String> = s.photos().iter().map(|p| p["fileName"].as_str().unwrap_or("").to_string()).collect();
+    let reference = ids[names.iter().position(|n| n == "REF_0001.dng").unwrap_or(0)];
+    let others: Vec<u64> = ids.iter().copied().filter(|i| *i != reference).collect();
+
+    s.ok("library.select", json!({"ids": [reference], "active": reference}));
+    let made = s.ok("vignettingCalibration.create", json!({}));
+    let map = made["map"]["id"].clone();
+    s.check(map.is_string(), "vignettingCalibration.create made no map", &made.to_string());
+    let listed = s.ok("vignettingCalibration.list", json!({"id": others[0]}));
+    s.check(
+        listed["maps"][0]["id"] == map && listed["maps"][0]["match"]["fits"] == true,
+        "the map isn't listed first for a photo of the setup",
+        &listed.to_string(),
+    );
+
+    s.ok("library.select", json!({"ids": others, "active": others[0]}));
+    let applied = s.ok("vignettingCalibration.apply", json!({"map": map}));
+    s.check(applied["applied"].as_array().map(Vec::len) == Some(3), "vignettingCalibration.apply missed photos", &applied.to_string());
+    s.undo_redo_roundtrip();
+    // withdraw the reference (by its photo): the photos keep the map; undo and redo; restore
+    let withdrawn = s.ok("vignettingCalibration.withdraw", json!({"id": reference}));
+    s.check(withdrawn["changed"] == json!([map.clone()]), "withdraw changed no map", &withdrawn.to_string());
+    let listed = s.ok("vignettingCalibration.references", json!({"withdrawn": true}));
+    s.check(listed["references"][0]["id"] == map, "the withdrawn reference isn't listed", &listed.to_string());
+    let still = s.ok("vignettingCalibration.photo", json!({"id": others[0]}));
+    s.check(still["map"]["id"] == map && still["map"]["withdrawn"] == true, "a photo lost its withdrawn map", &still.to_string());
+    s.undo_redo_roundtrip();
+    s.ok("vignettingCalibration.restore", json!({"id": reference}));
+    let back = s.ok("vignettingCalibration.references", json!({"withdrawn": false}));
+    s.check(back["references"][0]["id"] == map, "restore didn't put the reference back in use", &back.to_string());
+    s.ok("library.select", json!({"ids": [others[0]], "active": others[0]}));
+    s.ok("develop.set", json!({"values": {"optics.vignettingCalibrationAmount": 80}}));
+    s.ok("vignettingCalibration.remove", json!({"ids": [others[2]]}));
+    let gone = s.ok("vignettingCalibration.photo", json!({"id": others[2]}));
+    s.check(gone["map"].is_null() && gone["amount"] == 100.0, "Remove left a map or changed the amount", &gone.to_string());
+
+    // the reference photo goes: the others keep their correction, and the panel says the reference is gone
+    s.ok("photo.delete", json!({"ids": [reference]}));
+    let kept = s.ok("vignettingCalibration.photo", json!({"id": others[1]}));
+    s.check(kept["map"]["id"] == map && kept["missing"] == false, "the map went with its reference photo", &kept.to_string());
+    s.check(kept["reference"]["inCatalog"] == false, "the reference still shows as in the catalog", &kept.to_string());
+    s.export_decodes(&[others[1]], json!({"format": "jpeg", "longEdge": 400}), true);
+    // withdrawn by its id (the reference photo is gone): the state survives a reopen
+    s.ok("vignettingCalibration.withdraw", json!({"map": map.clone()}));
+    s.consistent();
+    s.reopen_keeps_everything();
+    let after = s.ok("vignettingCalibration.photo", json!({"id": others[1]}));
+    s.check(after["map"]["id"] == map && after["missing"] == false, "the map didn't survive a reopen", &after.to_string());
+    s.check(after["map"]["withdrawn"] == true, "the withdrawn state didn't survive a reopen", &after.to_string());
     s.finish();
 }

@@ -145,7 +145,7 @@ fn ml_status_before_any_job_starts_nothing() {
 }
 
 #[test]
-fn ml_status_sets_device_and_reports_available_devices() {
+fn ml_status_sets_device_reports_available_devices_and_refuses_junk() {
     let mut s = session();
     let st = s.execute("ml.status", &json!({})).unwrap();
     assert_eq!(st["deviceChoice"], "auto");
@@ -157,30 +157,22 @@ fn ml_status_sets_device_and_reports_available_devices() {
     assert_eq!(st["deviceChoice"], "cpu");
     assert_eq!(st["preference"], "cpu");
 
-    let st = s.execute("ml.status", &json!({"device": "auto"})).unwrap();
-    assert_eq!(st["deviceChoice"], "auto");
-    assert_eq!(st["preference"], "auto");
-}
-
-#[test]
-fn ml_status_refuses_non_string_and_invalid_devices() {
-    let mut s = session();
+    // a device that is not a string, or not one there is, is refused and changes nothing
     for bad in [json!({"device": 123}), json!({"device": true}), json!({"device": []}), json!({"device": {}})] {
         assert!(s.execute("ml.status", &bad).is_err(), "{bad:?}");
     }
     for bad in [json!({"device": "potato"}), json!({"device": "vulkan:10de:9999:Fake#1"})] {
         assert!(s.execute("ml.status", &bad).is_err(), "{bad:?}");
     }
-}
-
-#[test]
-fn ml_status_empty_device_resets_preference_to_auto() {
-    let mut s = session();
-    s.execute("ml.status", &json!({"device": "cpu"})).unwrap();
     assert_eq!(s.execute("ml.status", &json!({})).unwrap()["preference"], "cpu");
-    let st = s.execute("ml.status", &json!({"device": ""})).unwrap();
-    assert_eq!(st["deviceChoice"], "auto");
-    assert_eq!(st["preference"], "auto");
+
+    // "auto", and an empty device, go back to the automatic choice
+    for auto in ["auto", ""] {
+        s.execute("ml.status", &json!({"device": "cpu"})).unwrap();
+        let st = s.execute("ml.status", &json!({"device": auto})).unwrap();
+        assert_eq!(st["deviceChoice"], "auto", "{auto:?}");
+        assert_eq!(st["preference"], "auto", "{auto:?}");
+    }
 }
 
 #[test]
@@ -206,6 +198,30 @@ fn ml_status_preference_is_session_only_while_device_persists() {
     let st2 = s2.execute("ml.status", &json!({})).unwrap();
     assert_eq!(st2["deviceChoice"], "cpu");
     assert_eq!(st2["preference"], "cpu");
+
+    let _ = std::fs::remove_dir_all(&temp);
+}
+
+#[test]
+fn turning_background_indexing_off_lasts_across_sessions() {
+    // #1133: the Settings ▸ AI Models checkbox was forgotten on quit, so indexing resumed on the next launch
+    let temp = temp_dir("enable-stick");
+    let mut s = session();
+    s.ml_models_dir = Some(temp.clone());
+    assert_eq!(s.execute("ml.status", &json!({})).unwrap()["enabled"], true, "on by default");
+    s.execute("ml.enable", &json!({"enabled": false})).unwrap();
+
+    let mut s2 = session();
+    s2.ml_models_dir = Some(temp.clone());
+    let pump = s2.execute("ml.pump", &json!({})).unwrap();
+    assert_eq!((pump["enabled"].clone(), pump["active"].clone()), (json!(false), json!(false)), "{pump}");
+    assert_eq!(s2.execute("ml.status", &json!({})).unwrap()["enabled"], false);
+    assert_eq!(s2.execute("ml.models.list", &json!({})).unwrap()["enabled"], false);
+
+    s2.execute("ml.enable", &json!({"enabled": true})).unwrap();
+    let mut s3 = session();
+    s3.ml_models_dir = Some(temp.clone());
+    assert_eq!(s3.execute("ml.status", &json!({})).unwrap()["enabled"], true);
 
     let _ = std::fs::remove_dir_all(&temp);
 }
@@ -483,7 +499,9 @@ fn clip_on_the_gpu_matches_the_cpu() {
     lcc_ml::Clip::write_synthetic_dir(&dir, "test-clip").unwrap();
     let cpu = Arc::new(lcc_ml::Clip::load_lazy(&dir).unwrap());
     let gpu = Arc::new(lcc_ml::Clip::load_lazy(&dir).unwrap().with_accelerator(crate::ml::clip_accelerator()));
-    let img = RgbImage::new(16, 16, (0..16 * 16 * 3).map(|i| (i * 7 % 256) as u8).collect()).unwrap();
+    // A warm-to-cool gradient: a clear signal on the synthetic model's red and blue axes. (A pattern whose patch means
+    // cancel, like `i * 7 % 256`, projects to ~1e-6 before normalization, so its direction is rounding noise on any device.)
+    let img = RgbImage::new(16, 16, (0..16 * 16).flat_map(|i| [(200 - i / 2) as u8, 60, (40 + i / 3) as u8]).collect()).unwrap();
     let run = |clip: Arc<lcc_ml::Clip>, gpu: bool| {
         let probe: lcc_ml::Probe = if gpu { Box::new(lcc_gpu::clip::adapter) } else { Box::new(|| Err("cpu".into())) };
         let pref = if gpu { Preference::Auto } else { Preference::Cpu };
@@ -511,4 +529,136 @@ fn clip_on_the_gpu_matches_the_cpu() {
     assert!(cosine(&ci[0], &gi[0]) > 0.999 && cosine(&ci[1], &gi[1]) > 0.999);
     assert!(cosine(&ct, &gt) > 0.999);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Pump background indexing until `cond` holds for its result (or 30 s pass); the last result.
+fn pump_ml_until(s: &mut Session, mut cond: impl FnMut(&Value) -> bool) -> Value {
+    let start = Instant::now();
+    loop {
+        let v = s.execute("ml.pump", &json!({"pace": "full"})).unwrap();
+        if cond(&v) || start.elapsed() > Duration::from_secs(30) {
+            return v;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Search indexing pauses (saved: a new session is paused too), its row then offering resume and Settings ▸ AI Models;
+/// it resumes, Clear empties the index and leaves indexing paused, Restart indexes everything again; and switching
+/// semantic search off stops indexing and refuses searches, clearing a description filter.
+#[test]
+fn search_indexing_pauses_resumes_clears_restarts_and_semantic_search_switches_off() {
+    let d = temp_dir("pause");
+    let lib_dir = d.join("lib");
+    let models_dir = d.join("ml-models");
+    let src = d.join("synthetic-src");
+    lcc_ml::Clip::write_synthetic_dir(&src, "test-clip").unwrap();
+    let (warm, cool) = (d.join("photos").join("sunset.png"), d.join("photos").join("ocean.png"));
+    write_solid_png(&warm, [240, 30, 20, 255]);
+    write_solid_png(&cool, [20, 50, 240, 255]);
+    let mut s = Session::new().with_fs();
+    s.ml_models_dir = Some(models_dir.clone());
+    s.open_library(&lib_dir, false).unwrap();
+    s.execute("library.import", &json!({"paths": [warm.to_string_lossy(), cool.to_string_lossy()]})).unwrap();
+    s.execute("ml.models.install", &json!({"path": src.to_string_lossy(), "acknowledged": true})).unwrap();
+
+    // paused before anything runs: pumping indexes nothing, and a row offers resume
+    assert_eq!(s.execute("ml.pause", &json!({})).unwrap()["paused"], true);
+    for _ in 0..40 {
+        s.execute("ml.pump", &json!({"pace": "full"})).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let st = s.execute("ml.indexStatus", &json!({})).unwrap();
+    assert_eq!((st["state"].clone(), st["done"].clone(), st["total"].clone()), (json!("paused"), json!(0), json!(2)), "{st}");
+    let rows: Vec<_> = s.activity.list().into_iter().filter(|t| t.kind == ROW_KIND).collect();
+    assert_eq!(rows.len(), 1, "a paused index with photos left keeps its row");
+    let c = rows[0].controls.clone().expect("the indexing row has controls");
+    assert!(c.paused);
+    assert_eq!((c.resume, c.settings_tab, c.settings_section), ("ml.resume", "ai", Some("semanticSearch")));
+    let mut again = Session::new().with_fs();
+    again.ml_models_dir = Some(models_dir.clone());
+    assert_eq!(again.execute("ml.indexStatus", &json!({})).unwrap()["paused"], true, "the pause is saved");
+    drop(again);
+
+    // resumed through the row: it indexes to the end
+    s.execute("activity.pause", &json!({"id": rows[0].id, "paused": false})).unwrap();
+    let v = pump_ml_until(&mut s, |v| v["indexedPhotos"] == 2);
+    assert_eq!(v["indexedPhotos"], 2, "{v}");
+    assert_eq!(s.execute("ml.indexStatus", &json!({})).unwrap()["state"], "complete");
+
+    // Clear: empty, paused, and it stays empty
+    let st = s.execute("ml.clearIndex", &json!({})).unwrap();
+    assert_eq!((st["paused"].clone(), st["indexedPhotos"].clone()), (json!(true), json!(0)), "{st}");
+    for _ in 0..40 {
+        s.execute("ml.pump", &json!({"pace": "full"})).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(s.execute("ml.indexStatus", &json!({})).unwrap()["indexedPhotos"], 0);
+
+    // Restart: indexes everything again
+    assert_eq!(s.execute("ml.restart", &json!({})).unwrap()["paused"], false);
+    let v = pump_ml_until(&mut s, |v| v["indexedPhotos"] == 2);
+    assert_eq!(v["indexedPhotos"], 2, "{v}");
+
+    // semantic search switched off: a description filter goes, searches are refused, nothing is indexed
+    s.execute("library.filter", &json!({"semantic": "golden sunset"})).unwrap();
+    assert!(s.filter.semantic.is_some());
+    s.execute("ml.enable", &json!({"enabled": false})).unwrap();
+    assert!(s.filter.semantic.is_none(), "the description filter is cleared");
+    assert!(s.execute("search.semantic", &json!({"text": "sunset"})).is_err());
+    assert!(s.execute("library.filter", &json!({"semantic": "sunset"})).is_err());
+    let v = s.execute("ml.pump", &json!({})).unwrap();
+    assert_eq!((v["active"].clone(), v["enabled"].clone()), (json!(false), json!(false)), "{v}");
+    assert_eq!(s.execute("ml.indexStatus", &json!({})).unwrap()["state"], "off");
+    assert!(!s.semantic_search_on());
+    s.execute("ml.enable", &json!({"enabled": true})).unwrap();
+    assert!(s.execute("search.semantic", &json!({"text": "sunset"})).is_ok());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// A fault that fails every photo (here: originals that can't be read) pauses background indexing after a run of
+/// failures instead of going through the whole library, on every start; the row says why on hover, and resuming tries
+/// again.
+#[test]
+fn a_run_of_failures_pauses_background_indexing() {
+    let d = temp_dir("fail-streak");
+    let lib_dir = d.join("lib");
+    let models_dir = d.join("ml-models");
+    let src = d.join("synthetic-src");
+    lcc_ml::Clip::write_synthetic_dir(&src, "test-clip").unwrap();
+    let n = crate::ml::FAIL_STREAK_PAUSE as usize + 5;
+    let paths: Vec<PathBuf> = (0..n).map(|i| d.join("photos").join(format!("p{i}.png"))).collect();
+    for (i, p) in paths.iter().enumerate() {
+        write_solid_png(p, [(i * 7) as u8, 100, 50, 255]);
+    }
+    {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib_dir, false).unwrap();
+        let list: Vec<String> = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        s.execute("library.import", &json!({"paths": list})).unwrap();
+    }
+    for p in &paths {
+        std::fs::write(p, b"not an image").unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    s.ml_models_dir = Some(models_dir.clone());
+    s.open_library(&lib_dir, false).unwrap();
+    s.execute("ml.models.install", &json!({"path": src.to_string_lossy(), "acknowledged": true})).unwrap();
+
+    let v = pump_ml_until(&mut s, |v| v["paused"] == true);
+    assert_eq!(v["paused"], true, "{v}");
+    assert_eq!(v["indexedPhotos"], 0, "{v}");
+    let st = s.execute("ml.indexStatus", &json!({})).unwrap();
+    assert_eq!(st["state"], "paused", "{st}");
+    // why: on the row while it runs, in its summary once it ended
+    let live = rows(&s).into_iter().find(|t| t.failed > 0).and_then(|t| t.first_failure);
+    let ended = s.activity.finished().into_iter().find(|b| b.kind == ROW_KIND && b.failed > 0).and_then(|b| b.reasons.first().cloned());
+    assert!(live.or(ended).is_some_and(|w| !w.is_empty()), "the failures say why");
+    let mut again = Session::new().with_fs();
+    again.ml_models_dir = Some(models_dir);
+    assert_eq!(again.execute("ml.indexStatus", &json!({})).unwrap()["paused"], true, "the next start doesn't go through them again");
+    drop(again);
+
+    assert_eq!(s.execute("ml.resume", &json!({})).unwrap()["paused"], false);
+    let _ = std::fs::remove_dir_all(&d);
 }

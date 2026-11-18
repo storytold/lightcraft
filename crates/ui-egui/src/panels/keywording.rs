@@ -182,8 +182,9 @@ pub fn scope(app: &mut LccApp, ui: &mut egui::Ui, selection: &[PhotoId]) {
 }
 
 /// The selection's keywords as chips: the name (right-click for its menu), and × to take it off
-/// every selected photo. One only some of them have is marked with an asterisk. Whole names, or
-/// grouped by the keyword they are inside (Settings ▸ Interface).
+/// every selected photo. One only some of them have is marked with an asterisk. Each chip says the
+/// keyword's own name (its whole path only when another chip has the same name; the tooltip always
+/// gives the path), or grouped by the keyword they are inside (Settings ▸ Interface).
 pub fn chip_row(app: &mut LccApp, ui: &mut egui::Ui, selection: &[PhotoId]) {
     let chips = app.caches.keyword_chips(&app.session.catalog, selection);
     if chips.is_empty() {
@@ -197,9 +198,11 @@ pub fn chip_row(app: &mut LccApp, ui: &mut egui::Ui, selection: &[PhotoId]) {
         chip_groups(app, ui, &groups, crate::key_of(selection));
         return;
     }
+    let paths: Vec<String> = chips.iter().map(|c| c.path.clone()).collect();
+    let names = suggestion_names(&paths);
     ui.horizontal_wrapped(|ui| {
-        for c in chips.iter() {
-            let (body, x) = chip(ui, &c.path, &c.path, !c.on_all(), true, ui.max_rect().width());
+        for (c, name) in chips.iter().zip(names.iter()) {
+            let (body, x) = chip(ui, &c.path, name, !c.on_all(), true, ui.max_rect().width());
             chip_acts(app, ui, c, body, x);
         }
     });

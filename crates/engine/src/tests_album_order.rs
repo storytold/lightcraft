@@ -72,6 +72,14 @@ fn placing_across_folders_moves_it_and_undoes_in_one_step() {
     assert_eq!(names(&s, Some(folder)), ["Y", "X"]);
     assert_eq!(s.catalog.album(AlbumId(loose)).unwrap().parent, None);
     assert_eq!(s.catalog.album(AlbumId(loose)).unwrap().order, None);
+
+    // moving an album with `album.move` out of an ordered folder leaves the old neighbours' order
+    let z = make(&mut s, "Z", Some(folder), false);
+    reorder(&mut s, z, json!({"before": y})).unwrap();
+    assert_eq!(names(&s, Some(folder)), ["Z", "Y", "X"]);
+    s.execute("album.move", &json!({"id": y, "parent": null})).unwrap();
+    assert_eq!(names(&s, Some(folder)), ["Z", "X"]);
+    assert_eq!(s.catalog.album(AlbumId(y)).unwrap().parent, None);
 }
 
 /// Undo and redo of placing across folders, of sorting, and of moving a folder that has children.
@@ -142,18 +150,4 @@ fn sorting_goes_back_to_by_name_for_one_folder() {
     let r = s.execute("album.sort", &json!({})).unwrap();
     assert_eq!(r["changed"], 3, "every child of the top level had a place: F, B and A");
     assert_eq!(names(&s, None), ["F", "A", "B"]);
-}
-
-/// Moving an album with `album.move` out of an ordered folder leaves the old neighbours' order.
-#[test]
-fn moving_out_of_an_ordered_folder_keeps_the_others_in_place() {
-    let mut s = Session::new();
-    let f = make(&mut s, "F", None, true);
-    let (x, y, z) = (make(&mut s, "X", Some(f), false), make(&mut s, "Y", Some(f), false), make(&mut s, "Z", Some(f), false));
-    reorder(&mut s, z, json!({"before": x})).unwrap();
-    assert_eq!(names(&s, Some(f)), ["Z", "X", "Y"]);
-    s.execute("album.move", &json!({"id": x, "parent": null})).unwrap();
-    assert_eq!(names(&s, Some(f)), ["Z", "Y"]);
-    assert_eq!(names(&s, None), ["F", "X"]);
-    let _ = y;
 }

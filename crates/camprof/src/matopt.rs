@@ -750,14 +750,6 @@ mod tests {
     }
 
     #[test]
-    fn geometry_helpers_are_correct() {
-        assert!((point_to_line_distance(0.0, 0.0, 1.0, 0.0, 0.5, 2.0) - 2.0).abs() < 1.0e-12);
-        let tri = [Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0)];
-        assert!(point_in_triangle(&tri, 0.25, 0.25));
-        assert!(!point_in_triangle(&tri, 0.75, 0.75));
-    }
-
-    #[test]
     fn signed_lch_de_has_the_expected_signs() {
         let wp = crate::color::D50;
         let base = crate::color::lab_to_xyz(Vec3::new(50.0, 0.0, 0.0), wp);

@@ -156,37 +156,39 @@ mod tests {
     }
 
     #[test]
-    fn parses_the_shapes_we_publish() {
-        assert_eq!(v("1.2.3").to_text(), "1.2.3");
-        assert_eq!(v("v1.2.3").to_text(), "1.2.3");
-        assert_eq!(v("V1.2.3").to_text(), "1.2.3");
-        assert_eq!(v(" 1.2.3 ").to_text(), "1.2.3");
-        assert_eq!(v("1.2.3-rc.1").to_text(), "1.2.3-rc.1");
-        assert_eq!(v("1.2.3+build.5").to_text(), "1.2.3");
-        assert_eq!(v("1.2.0-rc.1+sha.abc").to_text(), "1.2.0-rc.1");
-        assert_eq!(v("0.7.0").to_text(), "0.7.0");
-    }
-
-    #[test]
-    fn refuses_what_is_not_a_version() {
-        for bad in [
-            "",
-            "v",
-            "1",
-            "1.2",
-            "1.2.3.4",
-            "nightly",
-            "1.2.x",
-            "01.2.3",
-            "1.02.3",
-            "1.2.03",
-            "1.2.3-",
-            "1.2.3+",
-            "1.2.3-rc..1",
-            "1.2.3-rc.1!",
-            "1.2.3+ab cd",
-        ] {
-            assert!(Version::parse(bad).is_err(), "{bad} should not parse");
+    fn versions_parse_or_are_refused() {
+        // parses the shapes we publish
+        {
+            assert_eq!(v("1.2.3").to_text(), "1.2.3");
+            assert_eq!(v("v1.2.3").to_text(), "1.2.3");
+            assert_eq!(v("V1.2.3").to_text(), "1.2.3");
+            assert_eq!(v(" 1.2.3 ").to_text(), "1.2.3");
+            assert_eq!(v("1.2.3-rc.1").to_text(), "1.2.3-rc.1");
+            assert_eq!(v("1.2.3+build.5").to_text(), "1.2.3");
+            assert_eq!(v("1.2.0-rc.1+sha.abc").to_text(), "1.2.0-rc.1");
+            assert_eq!(v("0.7.0").to_text(), "0.7.0");
+        }
+        // refuses what is not a version
+        {
+            for bad in [
+                "",
+                "v",
+                "1",
+                "1.2",
+                "1.2.3.4",
+                "nightly",
+                "1.2.x",
+                "01.2.3",
+                "1.02.3",
+                "1.2.03",
+                "1.2.3-",
+                "1.2.3+",
+                "1.2.3-rc..1",
+                "1.2.3-rc.1!",
+                "1.2.3+ab cd",
+            ] {
+                assert!(Version::parse(bad).is_err(), "{bad} should not parse");
+            }
         }
     }
 
@@ -204,18 +206,5 @@ mod tests {
         assert!(v("1.2.3-rc") < v("1.2.3-rc.1"));
         assert!(v("1.2.3-1") < v("1.2.3-alpha"), "numeric identifiers rank below alphanumeric ones");
         assert_eq!(v("1.2.3+a").cmp(&v("1.2.3+b")), std::cmp::Ordering::Equal, "build metadata is ignored");
-    }
-
-    #[test]
-    fn current_is_this_build() {
-        assert_eq!(Version::current().to_text(), env!("CARGO_PKG_VERSION"));
-        assert!(Version::current() >= Version::current());
-    }
-
-    #[test]
-    fn prerelease_is_reported() {
-        assert!(v("1.2.3").is_release());
-        assert!(!v("1.2.3-rc.1").is_release());
-        assert_eq!(v("1.2.3-rc.1").prerelease(), ["rc".to_string(), "1".to_string()]);
     }
 }

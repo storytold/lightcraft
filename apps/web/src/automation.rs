@@ -26,23 +26,24 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn blank_or_null_params_are_an_empty_object() {
-        for text in ["", "   ", "\n", "null", " null "] {
-            assert_eq!(params(text), Ok(json!({})), "{text:?}");
+    fn params_are_an_object_or_nothing_runs() {
+        // blank or null params are an empty object
+        {
+            for text in ["", "   ", "\n", "null", " null "] {
+                assert_eq!(params(text), Ok(json!({})), "{text:?}");
+            }
         }
-    }
-
-    #[test]
-    fn an_object_is_passed_through() {
-        assert_eq!(params(r#"{"ids": [3], "rating": 5}"#), Ok(json!({"ids": [3], "rating": 5})));
-    }
-
-    /// Before, any of these ran the command with `{}`: `photo.delete` then removed the selection.
-    #[test]
-    fn invalid_json_or_a_non_object_is_refused() {
-        for text in ["{ids: [3]}", "{\"ids\": [3]", "ids=3", "[3]", "3", "\"{}\"", "true"] {
-            assert!(params(text).is_err(), "{text:?} must not run the command");
+        // an object is passed through
+        {
+            assert_eq!(params(r#"{"ids": [3], "rating": 5}"#), Ok(json!({"ids": [3], "rating": 5})));
         }
-        assert!(params("{ids: [3]}").unwrap_err().contains("nothing was run"));
+        // invalid json or a non object is refused
+        // Before, any of these ran the command with `{}`: `photo.delete` then removed the selection.
+        {
+            for text in ["{ids: [3]}", "{\"ids\": [3]", "ids=3", "[3]", "3", "\"{}\"", "true"] {
+                assert!(params(text).is_err(), "{text:?} must not run the command");
+            }
+            assert!(params("{ids: [3]}").unwrap_err().contains("nothing was run"));
+        }
     }
 }

@@ -6,6 +6,11 @@ tagline        = "Photo library and raw development"
 vendor         = "Chromaforge contributors"
 homepage       = "https://github.com/emmertex/chromaforge"
 repository     = "https://github.com/emmertex/chromaforge"
+# The web site (Help menu "<app> Website", About) and the user guide (Help menu "<app> Help"); leave
+# either out for `homepage` / `repository`. Not `homepage` itself: the video sidecar XMP namespace
+# (`lcc_meta::xmp::video_ns`) is built from that, and must not change.
+website        = "https://emmertex.github.io/chromaforge/"
+docs           = "https://emmertex.github.io/chromaforge/"
 # The repository the release manifest (latest.json) names its files under. Installed builds only
 # download files under their own `repository` or a [legacy] `repositories` entry, and GitHub
 # redirects a renamed repository's old URLs: so after a rename this stays the OLD repository
@@ -55,10 +60,11 @@ catalog_exts  = ["nnycat", "lccat"]
 # Repositories this app was released from before: their release files are still accepted as
 # updates (a renamed repository's URLs keep working through GitHub's redirect).
 repositories  = ["https://github.com/emmertex/lightcraft-classic"]
-# Earlier display names: the macOS disk image also carries a hidden `<name>.app` copy under each, because
-# the updater of a build released under that name looks for its own name in the image (fork #411). Remove
-# an entry a few days after the first release that has it, once installs have updated through it.
-display_names = ["LightCraft Classic"]
+# Earlier display names: while an entry exists here, the macOS disk image also carries a hidden
+# `<name>.app` copy under it, because the updater of a build released under that name looks for its own
+# name in the image (fork #411). Add an entry with the rename, remove it a few days after the first
+# release that has it, once installs have updated through it. Empty since 26.46.x: the LightCraft
+# Classic transition completed with v26.43.5+ → v26.46.0.
 app_ids       = ["org.example.NoNameYet", "org.example.LightCraftClassic", "com.emmertex.LightCraftClassic"]
 
 # The project this one is forked from, for docs that compare the two ({{upstream_name}}, … in `*.md.in`).

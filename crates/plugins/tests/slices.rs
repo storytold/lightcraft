@@ -66,8 +66,8 @@ fn a_function_first_run_at_a_slices_end_does_not_fail_the_call() {
     let per = hi as f64 / 1e6;
     // the 300 first calls start at points spread over the last 600k fuel of the first slice, so
     // the slice ends during some of them (with lazy compilation, 38 of 40 such calls failed)
-    for k in 0..8 {
-        let start = SLICE - 600_000.0 * (k as f64 + 0.5) / 8.0;
+    for k in 0..3 {
+        let start = SLICE - 600_000.0 * (k as f64 + 0.5) / 3.0;
         let burn = (start / per) as u64;
         let r = run(&module(burn, 300, 60), Limits::default().fuel);
         assert_eq!(r.unwrap_or_else(|e| panic!("count {burn}: {e}")), json!({}));

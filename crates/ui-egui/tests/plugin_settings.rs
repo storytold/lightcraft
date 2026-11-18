@@ -19,6 +19,7 @@ fn app() -> Headless {
     // install into memory, never into the real user's settings folder
     lcc_engine::cmd::plugins::use_in_memory_manager();
     let services = Services { png: None, ..Default::default() };
+    lcc_engine::scene_disk::use_build_dir();
     let app = LccApp::new(lcc_engine::Session::with_demo(), services);
     Headless::new(app, [1200.0, 800.0], 1.0)
 }
@@ -76,7 +77,7 @@ fn ask(h: &mut Headless, method: &str, params: Value) -> Value {
 
 #[test]
 fn the_plugin_page_saves_settings_and_dialogs_remember() {
-    let dir = std::env::temp_dir().join(format!("plugin-settings-ui-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("plugin-settings-ui");
     std::fs::create_dir_all(&dir).unwrap();
     let settings = json!({"id": "test.uiset", "name": "Set", "version": "1.0.0",
         "settings": [{"key": "name", "label": "Name", "type": "text", "default": "first"}],

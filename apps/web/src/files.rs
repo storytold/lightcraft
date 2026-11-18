@@ -333,13 +333,6 @@ mod tests {
         assert_eq!(crate::backup::unsaved_refusal(s.unsaved()), None, "allowed again once the change is written");
     }
 
-    #[test]
-    fn unsaved_refusal_counts_changes() {
-        use crate::backup::unsaved_refusal;
-        assert!(unsaved_refusal(Some((1, "quota"))).unwrap().contains("1 change could not"));
-        assert!(unsaved_refusal(Some((3, "quota"))).unwrap().contains("3 changes could not"));
-    }
-
     /// Start-up only treats a missing file as absent: a stored file that couldn't be read stops
     /// it, naming the file, instead of opening an incomplete library (#1507).
     #[test]

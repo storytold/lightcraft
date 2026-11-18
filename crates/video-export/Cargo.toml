@@ -21,6 +21,7 @@ thiserror = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 filmcraft-matroska = { git = "https://github.com/emmertex/filmcraft", rev = "3f0cb5f2a906087e5fdc1cd0bb685527da717ba4" }
+lcc-testkit = { workspace = true }
 
 # Never `filmcraft-codecs` / `-media` / `-export`: they pull symphonia (MPL-2.0).
 

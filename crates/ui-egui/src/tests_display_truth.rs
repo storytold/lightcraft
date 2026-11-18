@@ -103,52 +103,54 @@ fn a_slider_drag_on_an_edited_photo_never_shows_the_camera_jpeg() {
     assert!(blank <= 3, "{blank} frames without a picture");
 }
 
-/// "Land on any photo that I just edited and you see the camera JPG".
+/// One session, several steps; each step was a test of its own and says what it checks.
 #[test]
-fn coming_back_to_an_edited_photo_shows_its_edit_first() {
+fn coming_back_to_an_edited_or_synced_photo_shows_its_edit_not_the_camera_jpeg() {
     let mut h = raws(6, Duration::from_millis(400));
-    edited_on_screen(&mut h, 3);
-    let id = PhotoId(3);
-    // away to an unedited photo (its camera JPEG is fine there), and back
-    exec(&mut h, "library.next", json!({}));
-    let mut seen = Vec::new();
-    frames(&mut h, Duration::from_millis(600), &mut seen, |_| false);
-    exec(&mut h, "library.previous", json!({}));
-    seen.clear();
-    assert!(frames(&mut h, T, &mut seen, |h| rendered(h, id) || h.app.loupe_shown == Some((id, "cached"))));
-    let first = seen.iter().find(|(p, _)| *p == id).copied();
-    assert!(matches!(first, Some((_, "cached" | "render" | "last"))), "the first picture of the edited photo: {first:?}");
-    let camera: Vec<_> = seen.iter().filter(|(p, s)| *p == id && *s == "embedded").collect();
-    assert!(camera.is_empty(), "the camera JPEG stood in for the edit: {camera:?}");
-}
-
-/// The photo's settings changed while it wasn't on screen (Auto Sync, Sync,
-/// a preset on the selection): its preview for the new settings isn't there yet, and stepping to it
-/// showed the camera JPEG. Its last rendered picture comes first, then the render.
-#[test]
-fn a_photo_synced_while_away_shows_its_last_render_not_the_camera_jpeg() {
-    let mut h = raws(6, Duration::from_millis(400));
-    edited_on_screen(&mut h, 3);
-    let id = PhotoId(3);
-    exec(&mut h, "library.next", json!({}));
-    let mut seen = Vec::new();
-    frames(&mut h, Duration::from_millis(600), &mut seen, |_| false);
-    // synced from photo 4: another exposure for photo 3
-    let mut d = (*h.app.session.catalog.photo(id).unwrap().develop).clone();
-    d.light.exposure = -0.7;
-    h.app.session.set_develop(id, d, "Sync").unwrap();
-    exec(&mut h, "library.previous", json!({}));
-    seen.clear();
-    assert!(frames(&mut h, T, &mut seen, |h| rendered(h, id)), "its render comes");
-    let first = seen.iter().find(|(p, s)| *p == id && *s != "none").copied();
-    // (its grid thumbnail too, when the background re-render made it first: the loupe draws a
-    // thumbnail only when it shows an edit, never the camera JPEG; or the fast draft with the new
-    // settings when that comes first)
-    assert!(matches!(first, Some((_, "last" | "draft" | "render" | "cached" | "thumb"))), "the first picture of the synced photo: {first:?}");
-    let blank = seen.iter().take_while(|(p, s)| *p != id || *s == "none").count();
-    assert!(blank <= 4, "{blank} frames before its first picture: {seen:?}");
-    let camera: Vec<_> = seen.iter().filter(|(p, s)| *p == id && *s == "embedded").collect();
-    assert!(camera.is_empty(), "the camera JPEG stood in for the edit: {camera:?}");
+    // coming back to an edited photo shows its edit first
+    // "Land on any photo that I just edited and you see the camera JPG".
+    {
+        edited_on_screen(&mut h, 3);
+        let id = PhotoId(3);
+        // away to an unedited photo (its camera JPEG is fine there), and back
+        exec(&mut h, "library.next", json!({}));
+        let mut seen = Vec::new();
+        frames(&mut h, Duration::from_millis(600), &mut seen, |_| false);
+        exec(&mut h, "library.previous", json!({}));
+        seen.clear();
+        assert!(frames(&mut h, T, &mut seen, |h| rendered(h, id) || h.app.loupe_shown == Some((id, "cached"))));
+        let first = seen.iter().find(|(p, _)| *p == id).copied();
+        assert!(matches!(first, Some((_, "cached" | "render" | "last"))), "the first picture of the edited photo: {first:?}");
+        let camera: Vec<_> = seen.iter().filter(|(p, s)| *p == id && *s == "embedded").collect();
+        assert!(camera.is_empty(), "the camera JPEG stood in for the edit: {camera:?}");
+    }
+    // a photo synced while away shows its last render not the camera jpeg
+    // The photo's settings changed while it wasn't on screen (Auto Sync, Sync,
+    // a preset on the selection): its preview for the new settings isn't there yet, and stepping to it
+    // showed the camera JPEG. Its last rendered picture comes first, then the render.
+    {
+        edited_on_screen(&mut h, 3);
+        let id = PhotoId(3);
+        exec(&mut h, "library.next", json!({}));
+        let mut seen = Vec::new();
+        frames(&mut h, Duration::from_millis(600), &mut seen, |_| false);
+        // synced from photo 4: another exposure for photo 3
+        let mut d = (*h.app.session.catalog.photo(id).unwrap().develop).clone();
+        d.light.exposure = -0.7;
+        h.app.session.set_develop(id, d, "Sync").unwrap();
+        exec(&mut h, "library.previous", json!({}));
+        seen.clear();
+        assert!(frames(&mut h, T, &mut seen, |h| rendered(h, id)), "its render comes");
+        let first = seen.iter().find(|(p, s)| *p == id && *s != "none").copied();
+        // (its grid thumbnail too, when the background re-render made it first: the loupe draws a
+        // thumbnail only when it shows an edit, never the camera JPEG; or the fast draft with the new
+        // settings when that comes first)
+        assert!(matches!(first, Some((_, "last" | "draft" | "render" | "cached" | "thumb"))), "the first picture of the synced photo: {first:?}");
+        let blank = seen.iter().take_while(|(p, s)| *p != id || *s == "none").count();
+        assert!(blank <= 4, "{blank} frames before its first picture: {seen:?}");
+        let camera: Vec<_> = seen.iter().filter(|(p, s)| *p == id && *s == "embedded").collect();
+        assert!(camera.is_empty(), "the camera JPEG stood in for the edit: {camera:?}");
+    }
 }
 
 /// An unedited raw still gets its camera JPEG at once (the cull fix stays).

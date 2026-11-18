@@ -483,6 +483,26 @@ fn welcome_is_up(h: &Headless) -> bool {
     matches!(h.app.catalog_ui.dialog, Some(crate::catalog_ui::CatalogDialog::Welcome { .. }))
 }
 
+// Scenario (issue #929): Help > Check for Updates over the welcome dialog is shown on its own, not
+// under the welcome card; closing it brings the welcome dialog back
+#[test]
+fn check_for_updates_over_the_welcome_dialog_is_usable() {
+    let (dir, root) = (Scratch::new("welcome-update"), Scratch::new("welcome-update-lib"));
+    let mut h = welcome(&dir, &root);
+    ask(&mut h, "ui.menu.invoke", json!({"id": "app.checkForUpdates"}));
+    for _ in 0..3 {
+        h.step();
+    }
+    let has = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
+    assert!(!has(&h, "check:welcomeUpdates"), "the welcome dialog stands aside");
+    assert!(has(&h, "check:updateAtStartup"), "the update dialog is up");
+    h.app.ui.dialog = None;
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(welcome_is_up(&h) && has(&h, "check:welcomeUpdates"), "the welcome dialog is back");
+}
+
 #[test]
 fn cancelling_open_catalog_returns_to_the_welcome_dialog() {
     let (dir, root) = (Scratch::new("welcome-back"), Scratch::new("welcome-back-lib"));

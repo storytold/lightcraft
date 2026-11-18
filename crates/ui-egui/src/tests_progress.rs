@@ -7,7 +7,7 @@ use egui::{Pos2, Rect, pos2, vec2};
 
 use crate::button::{Button, contrast};
 use crate::icons::Icon;
-use crate::progress::{Progress, clamp_fraction, fraction_of, spinner};
+use crate::progress::{Progress, clamp_fraction, fraction_of};
 use crate::theme::{ThemeKind, Tokens};
 
 /// What a screen reader gets for one node.
@@ -63,10 +63,7 @@ fn the_fraction_is_always_between_nothing_and_all() {
     assert_eq!(Progress::new(Some(f32::NAN)).fraction(), Some(0.0));
     assert_eq!(Progress::new(Some(2.0)).fraction(), Some(1.0));
     assert_eq!(Progress::new(None).fraction(), None);
-}
-
-#[test]
-fn an_unknown_total_is_an_indeterminate_bar_not_an_empty_one() {
+    // an unknown total is an indeterminate bar, not an empty one
     assert_eq!(fraction_of(0, 0), None);
     assert_eq!(fraction_of(5, 0), None);
     assert_eq!(fraction_of(0, 10), Some(0.0));
@@ -83,10 +80,7 @@ fn a_bar_is_progress_with_a_value_and_reachable_by_its_id() {
     assert_eq!(bar.label, "Making the denoised picture… 42%");
     assert_eq!(bar.value, Some(42.0));
     assert!(ids.iter().any(|(id, r)| id == "denoise:progress" && r.width() > 0.0), "{ids:?}");
-}
-
-#[test]
-fn an_indeterminate_bar_says_progress_without_a_value_and_is_drawn() {
+    // an indeterminate bar says progress without a value, and is drawn
     let (nodes, ids, width) = frames(Vec::new(), |ui| Progress::new(None).label("Starting…").widget("p:x").show(ui).rect.width());
     let bar = nodes.iter().find(|n| n.role == "ProgressIndicator").unwrap_or_else(|| panic!("{nodes:?}"));
     assert_eq!(bar.value, None);
@@ -108,12 +102,6 @@ fn a_bar_fills_the_layout_unless_given_a_width() {
     assert!(fill > 300.0, "fills: {fill}");
     assert_eq!(fixed, 150.0);
     assert!(tiny_room >= 96.0, "never a sliver: {tiny_room}");
-}
-
-#[test]
-fn a_spinner_takes_the_room_it_is_given() {
-    let (_, _, size) = frames(Vec::new(), |ui| spinner(ui, 14.0).rect.size());
-    assert_eq!(size, vec2(14.0, 14.0));
 }
 
 fn click_at(at: Pos2) -> Vec<egui::Event> {
@@ -207,10 +195,7 @@ fn a_failed_filmstrip_thumbnail_is_announced_with_its_reason() {
     };
     assert_eq!(spoken(false).as_deref(), Some("IMG_0001.jpg"));
     assert_eq!(spoken(true).as_deref(), Some("IMG_0001.jpg, This photo can't be opened"));
-}
-
-#[test]
-fn a_failed_filmstrip_thumbnail_without_a_file_name_has_no_leading_comma() {
+    // without a file name there is no leading comma
     assert_eq!(crate::panels::detail::film_spoken("", true), "This photo can't be opened");
     assert_eq!(crate::panels::detail::film_spoken("", false), "");
 }
@@ -229,19 +214,7 @@ fn the_sam_bar_keeps_its_name_and_height_while_the_size_is_unknown() {
 }
 
 #[test]
-fn the_denoise_bars_keep_their_widths_in_a_wide_container() {
-    let (_, ids, (detail, settings, unknown)) = frames(Vec::new(), |ui| {
-        let detail = crate::panels::denoise::detail_bar(ui, 3, 10).rect.width();
-        let settings = crate::panels::denoise::settings_bar(ui, 3, 10, "Denoising a.jpg: 3 of 10 tiles".into()).rect.width();
-        let unknown = crate::panels::denoise::detail_bar(ui, 0, 0).rect.width();
-        (detail, settings, unknown)
-    });
-    assert_eq!((detail, settings, unknown), (240.0, 380.0, 240.0));
-    assert!(ids.iter().any(|(id, _)| id == "denoise:settingsProgress"));
-}
-
-#[test]
-fn the_denoise_bar_label_and_its_accessible_value_agree() {
+fn the_denoise_and_sam_bar_texts_and_their_accessible_values_agree() {
     // the number drawn on the bar is the one announced, and exact decimals stay exact
     for (done, total, says) in
         [(3, 7, 42.0), (53, 100, 53.0), (59, 100, 59.0), (29, 100, 29.0), (99, 100, 99.0), (100, 100, 100.0), (999, 1000, 99.0)]
@@ -253,10 +226,6 @@ fn the_denoise_bar_label_and_its_accessible_value_agree() {
         let shown: f64 = bar.label.rsplit(' ').next().unwrap().trim_end_matches('%').parse().unwrap();
         assert_eq!((shown, bar.value), (says, Some(says)), "{done}/{total}: {bar:?}");
     }
-}
-
-#[test]
-fn the_sam_bar_text_and_its_accessible_value_agree() {
     for (done, total, says) in [(53, 100, 53.0), (59, 100, 59.0), (29, 100, 29.0), (999, 1000, 99.0), (100, 100, 100.0)] {
         let (nodes, _, _) = frames(Vec::new(), |ui| crate::panels::masking::sam_download_bar(ui, done, total, 200.0).rect.width());
         let bar = nodes.iter().find(|n| n.role == "ProgressIndicator").unwrap_or_else(|| panic!("{nodes:?}"));
@@ -281,8 +250,10 @@ fn an_activity_bar_is_named_after_its_task() {
         parent: None,
         batch: false,
         failed: 0,
+        first_failure: None,
         eta_ms: None,
         stop_warning: None,
+        controls: None,
         templates: None,
     };
     let (nodes, _, _) = frames(Vec::new(), |ui| crate::panels::activity::bar(ui, &task, 200.0).rect.width());

@@ -5,9 +5,7 @@ use lcc_tether::{StudioSession, safe_session_name};
 
 #[test]
 fn damaged_tether_json_never_panics() {
-    let dir = std::env::temp_dir().join(format!("lcc-tether-robust-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = lcc_testkit::TempDir::new("lcc-tether-robust");
     let mut s = StudioSession::new("Shoot {1}", "/watched");
     s.copy = true;
     s.naming = Some("{session}-{seq:4}".into());
@@ -30,7 +28,6 @@ fn damaged_tether_json_never_panics() {
         let _ = s.fresh(&listing);
         let _ = (s.taken(), s.to_json());
     });
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

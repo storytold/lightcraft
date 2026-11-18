@@ -127,7 +127,7 @@ const MODULES: &[Module] = &[
     },
     Module {
         src: include_str!("wgsl/geom.wgsl"),
-        bindings: &[("src", false, "f32"), ("dst", true, "f32"), ("coverage", false, "u32")],
+        bindings: &[("src", false, "f32"), ("dst", true, "f32"), ("coverage", false, "u32"), ("field", false, "f32")],
         entries: &["orient", "sample_affine", "sample_warp"],
     },
 ];
@@ -474,7 +474,7 @@ pub struct Gpu {
 /// WGSL constants shared by every module (generated from the CPU pipeline's values).
 fn constants() -> String {
     use lcc_pipeline::finish::{GRAIN_HASH, MASK_SUMS, MASK_TERMS, MASK_TONE, SRGB_LUT_N};
-    use lcc_pipeline::tone::{CHROMA_N, LUT_MAX_EV, LUT_MIN_EV, LUT_N};
+    use lcc_pipeline::tone::{CHROMA_N, LUT_MAX_EV, LUT_MIN_EV, LUT_N, RGB_CONTRAST_N};
     let mut s = String::new();
     let [to_lms, from_lms, to_lab, from_lab] = lcc_color::perceptual::oklab_matrices();
     for (name, m) in [("OK_TO_LMS", to_lms), ("OK_FROM_LMS", from_lms), ("OK_TO_LAB", to_lab), ("OK_FROM_LAB", from_lab)] {
@@ -482,7 +482,7 @@ fn constants() -> String {
         s += &format!("const {name} = array<vec3<f32>, 3>({});\n", rows.join(", "));
     }
     s += &format!(
-        "const TONE_MIN_EV: f32 = {LUT_MIN_EV:?};\nconst TONE_MAX_EV: f32 = {LUT_MAX_EV:?};\nconst TONE_N: u32 = {LUT_N}u;\nconst CHROMA_N: u32 = {CHROMA_N}u;\n"
+        "const TONE_MIN_EV: f32 = {LUT_MIN_EV:?};\nconst TONE_MAX_EV: f32 = {LUT_MAX_EV:?};\nconst TONE_N: u32 = {LUT_N}u;\nconst CHROMA_N: u32 = {CHROMA_N}u;\nconst RGB_CONTRAST_N: u32 = {RGB_CONTRAST_N}u;\n"
     );
     s += &format!("const TONE_MIN_GAIN: f32 = {:?};\n", 2f32.powf(LUT_MIN_EV));
     let b = lcc_pipeline::geometry::BLANK;

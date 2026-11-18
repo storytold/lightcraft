@@ -25,11 +25,9 @@ fn up_and_down_move_by_rows_and_stop_at_the_ends() {
     assert_eq!(s.selection.active, vis.last().copied(), "hostile counts clamp, never overflow");
 }
 
-fn temp_dir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("lc-catcmd-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+/// The test's folder in Temp, removed when the test ends.
+fn temp_dir(tag: &str) -> lcc_testkit::TempDir {
+    lcc_testkit::TempDir::new(&format!("lc-catcmd-{tag}"))
 }
 
 fn write_png(path: &Path, seed: u8) {
@@ -40,8 +38,10 @@ fn write_png(path: &Path, seed: u8) {
     std::fs::write(path, bytes).unwrap();
 }
 
-/// A library at `tag-lib` with `n` imported PNGs from `tag-src`.
-fn library(tag: &str, n: u8) -> (Session, PathBuf, PathBuf) {
+/// A library at `tag-lib` with `n` imported PNGs from `tag-src` (Temp folders, removed when the
+/// test ends) and the session that has it open. Bound in this order, `let (lib, src, s)`, the session
+/// drops first: its catalog is closed when the folders go (Windows keeps an open catalog's folder).
+fn library(tag: &str, n: u8) -> (lcc_testkit::TempDir, lcc_testkit::TempDir, Session) {
     let src = temp_dir(&format!("{tag}-src"));
     let lib = temp_dir(&format!("{tag}-lib"));
     let paths: Vec<String> = (0..n)
@@ -56,7 +56,7 @@ fn library(tag: &str, n: u8) -> (Session, PathBuf, PathBuf) {
     if n > 0 {
         s.execute("library.import", &json!({"paths": paths})).unwrap();
     }
-    (s, lib, src)
+    (lib, src, s)
 }
 
 fn ids(s: &Session) -> Vec<PhotoId> {
@@ -67,7 +67,7 @@ fn ids(s: &Session) -> Vec<PhotoId> {
 
 #[test]
 fn backup_integrity_and_optimise_on_a_disk_catalog() {
-    let (mut s, lib, _) = library("backup", 2);
+    let (lib, _src, mut s) = library("backup", 2);
     let info = s.execute("catalog.info", &json!({})).unwrap();
     assert_eq!(info["onDisk"], true, "{info}");
     let r = s.execute("catalog.checkIntegrity", &json!({})).unwrap();
@@ -91,19 +91,17 @@ fn backup_integrity_and_optimise_on_a_disk_catalog() {
     let r = s.execute("catalog.backupIfDue", &json!({})).unwrap();
     assert!(r["backup"].is_string(), "{r}");
     assert!(s.execute("catalog.settings", &json!({"backup": "hourly"})).is_err());
-}
 
-#[test]
-fn an_in_memory_session_has_no_catalog_to_back_up() {
-    let mut s = Session::with_demo();
-    assert!(s.execute("catalog.backup", &json!({})).is_err());
-    assert!(s.execute("catalog.checkIntegrity", &json!({})).is_err());
-    assert_eq!(s.execute("catalog.backupIfDue", &json!({})).unwrap()["backup"], json!(null));
+    // an in-memory session has no catalog to back up: the commands say so, the exit-time check is quiet
+    let mut mem = Session::new();
+    assert!(mem.execute("catalog.backup", &json!({})).is_err());
+    assert!(mem.execute("catalog.checkIntegrity", &json!({})).is_err());
+    assert_eq!(mem.execute("catalog.backupIfDue", &json!({})).unwrap()["backup"], json!(null), "in memory");
 }
 
 #[test]
 fn preview_settings_live_in_the_catalog_settings() {
-    let (mut s, lib, _) = library("previews", 0);
+    let (lib, _src, mut s) = library("previews", 0);
     s.execute("library.previewSettings", &json!({"standardEdge": 1024, "discardFull": "week"})).unwrap();
     let cs = lcc_catalog::library::CatalogSettings::load(&lib);
     assert_eq!(cs.previews.as_ref().and_then(|v| v["standardEdge"].as_u64()), Some(1024), "{cs:?}");
@@ -139,11 +137,10 @@ fn preview_settings_in_an_old_prefs_file_are_migrated() {
 
 #[test]
 fn export_as_catalog_then_import_it_back_with_a_rule() {
-    let (mut s, lib, _) = library("transfer", 3);
+    // (made first, so it goes after the session that imported from it)
+    let out = temp_dir("out");
+    let (lib, _src, mut s) = library("transfer", 3);
     let all = ids(&s);
-    let out = lib.parent().unwrap().join(format!("lc-catcmd-out-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&out);
-    std::fs::create_dir_all(&out).unwrap();
     let r = s
         .execute("catalog.export", &json!({"parent": out.to_string_lossy(), "name": "Sub", "ids": [all[0].0, all[1].0], "originals": true}))
         .unwrap();
@@ -167,9 +164,9 @@ fn export_as_catalog_then_import_it_back_with_a_rule() {
 
 #[test]
 fn export_without_originals_keeps_paths_and_import_applies_changed_ratings() {
-    let (mut s, _lib, src) = library("rules", 2);
-    let all = ids(&s);
     let out = temp_dir("rules-out");
+    let (_lib, src, mut s) = library("rules", 2);
+    let all = ids(&s);
     let r = s.execute("catalog.export", &json!({"parent": out.to_string_lossy(), "name": "Away", "scope": "all"})).unwrap();
     let entry = r["entry"].as_str().unwrap().to_string();
     // edit the other catalog: rate a photo there
@@ -194,7 +191,7 @@ fn export_without_originals_keeps_paths_and_import_applies_changed_ratings() {
 
 #[test]
 fn reading_and_saving_xmp_records_a_stamp() {
-    let (mut s, _lib, _) = library("xmpstamp", 1);
+    let (_lib, _src, mut s) = library("xmpstamp", 1);
     let id = ids(&s)[0];
     assert_eq!(s.xmp_status(id), XmpStatus::Unknown);
     s.execute("photo.rate", &json!({"ids": [id.0], "rating": 2})).unwrap();
@@ -209,6 +206,17 @@ fn reading_and_saving_xmp_records_a_stamp() {
     s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
     assert_eq!(s.catalog.photo(id).unwrap().rating, 2);
     assert_eq!(s.xmp_status(id), XmpStatus::InSync);
+    // auto write stamps too, and a sidecar another app rewrites shows as changed on disk
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.execute("photo.rate", &json!({"ids": [id.0], "rating": 5})).unwrap();
+    assert_eq!(s.xmp_status(id), XmpStatus::InSync, "auto write");
+    let p = s.catalog.photo(id).unwrap();
+    let orig = crate::sidecar::file_path(p).unwrap().to_string();
+    let side = crate::sidecar::find_sidecar(&orig, s.sidecar_naming(id)).unwrap();
+    let mut body = std::fs::read_to_string(&side).unwrap();
+    body.push_str("\n<!-- edited elsewhere -->\n");
+    std::fs::write(&side, body).unwrap();
+    assert_eq!(s.xmp_status(id), XmpStatus::ChangedOnDisk);
     // the stamp survives a reopen (journaled)
     let dir = s.catalog_dir().unwrap().to_path_buf();
     s.close_library().unwrap();
@@ -218,33 +226,17 @@ fn reading_and_saving_xmp_records_a_stamp() {
     assert!(s.catalog.photo(id).unwrap().xmp.is_some());
 }
 
-#[test]
-fn auto_write_stamps_and_a_changed_sidecar_shows_on_disk() {
-    let (mut s, _lib, _) = library("xmpauto", 1);
-    let id = ids(&s)[0];
-    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
-    s.execute("photo.rate", &json!({"ids": [id.0], "rating": 5})).unwrap();
-    assert_eq!(s.xmp_status(id), XmpStatus::InSync);
-    // another app rewrites the sidecar
-    let p = s.catalog.photo(id).unwrap();
-    let orig = crate::sidecar::file_path(p).unwrap().to_string();
-    let side = crate::sidecar::find_sidecar(&orig, s.sidecar_naming(id)).unwrap();
-    let mut body = std::fs::read_to_string(&side).unwrap();
-    body.push_str("\n<!-- edited elsewhere -->\n");
-    std::fs::write(&side, body).unwrap();
-    assert_eq!(s.xmp_status(id), XmpStatus::ChangedOnDisk);
-}
-
-/// One photo with a written sidecar (rating 5) and that sidecar's path.
-fn synced_photo(name: &str) -> (Session, PathBuf, PhotoId, PathBuf) {
-    let (mut s, lib, _) = library(name, 1);
+/// One photo with a written sidecar (rating 5) and that sidecar's path, with [`library`]'s folders
+/// and session first (bound in this order, the session drops before the folders).
+fn synced_photo(name: &str) -> (lcc_testkit::TempDir, lcc_testkit::TempDir, Session, PhotoId, PathBuf) {
+    let (lib, src, mut s) = library(name, 1);
     let id = ids(&s)[0];
     s.execute("photo.rate", &json!({"ids": [id.0], "rating": 5})).unwrap();
     s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
     let p = s.catalog.photo(id).unwrap();
     let orig = crate::sidecar::file_path(p).unwrap().to_string();
     let side = crate::sidecar::find_sidecar(&orig, s.sidecar_naming(id)).unwrap();
-    (s, lib, id, side)
+    (lib, src, s, id, side)
 }
 
 /// Another app sets the sidecar's rating (the size changes too, so the stat sees it).
@@ -257,8 +249,19 @@ fn rerate_on_disk(side: &Path, rating: u8) {
 
 #[test]
 fn auto_read_applies_a_sidecar_changed_only_on_disk() {
-    let (mut s, _lib, id, side) = synced_photo("xmpautoread");
+    let (_lib, _src, mut s, id, side) = synced_photo("xmpautoread");
     assert!(s.xmp.auto_read, "on by default");
+    // a malformed sidecar is an error or reported, never a panic, and nothing is read from it
+    let good = std::fs::read_to_string(&side).unwrap();
+    for bad in ["", "<x:xmpmeta", "\u{0}\u{1}garbage", "<?xpacket begin=\"\"?><rdf:RDF><rdf:Description xmp:Rating=\"99999999999999\"", "<<<>>>"] {
+        std::fs::write(&side, bad).unwrap();
+        let r = s.execute("photo.autoReadMetadata", &json!({"ids": [id.0]}));
+        if let Ok(r) = r {
+            assert_eq!(r["failed"].as_array().map(Vec::len), Some(1), "{bad:?} is reported: {r}");
+        }
+    }
+    assert_eq!(s.catalog.photo(id).unwrap().rating, 5, "nothing read from a broken file");
+    std::fs::write(&side, good).unwrap();
     rerate_on_disk(&side, 2);
     assert_eq!(s.xmp_status(id), XmpStatus::ChangedOnDisk);
     let r = s.execute("photo.autoReadMetadata", &json!({"ids": [id.0]})).unwrap();
@@ -272,7 +275,7 @@ fn auto_read_applies_a_sidecar_changed_only_on_disk() {
 
 #[test]
 fn auto_read_keeps_a_conflict() {
-    let (mut s, _lib, id, side) = synced_photo("xmpautoconflict");
+    let (_lib, _src, mut s, id, side) = synced_photo("xmpautoconflict");
     s.execute("photo.rate", &json!({"ids": [id.0], "rating": 4})).unwrap();
     rerate_on_disk(&side, 2);
     assert_eq!(s.xmp_status(id), XmpStatus::Conflict);
@@ -284,7 +287,7 @@ fn auto_read_keeps_a_conflict() {
 
 #[test]
 fn folder_sync_auto_reads_unless_turned_off() {
-    let (mut s, _lib, id, side) = synced_photo("xmpautosync");
+    let (_lib, _src, mut s, id, side) = synced_photo("xmpautosync");
     let folder = side.parent().unwrap().to_string_lossy().to_string();
     s.execute("library.xmpPreferences", &json!({"autoRead": false})).unwrap();
     rerate_on_disk(&side, 1);
@@ -296,21 +299,8 @@ fn folder_sync_auto_reads_unless_turned_off() {
 }
 
 #[test]
-fn auto_read_of_a_malformed_sidecar_is_an_error_not_a_panic() {
-    let (mut s, _lib, id, side) = synced_photo("xmpautobad");
-    for bad in ["", "<x:xmpmeta", "\u{0}\u{1}garbage", "<?xpacket begin=\"\"?><rdf:RDF><rdf:Description xmp:Rating=\"99999999999999\"", "<<<>>>"] {
-        std::fs::write(&side, bad).unwrap();
-        let r = s.execute("photo.autoReadMetadata", &json!({"ids": [id.0]}));
-        if let Ok(r) = r {
-            assert_eq!(r["failed"].as_array().map(Vec::len), Some(1), "{bad:?} is reported: {r}");
-        }
-    }
-    assert_eq!(s.catalog.photo(id).unwrap().rating, 5, "nothing read from a broken file");
-}
-
-#[test]
 fn previous_export_source_shows_the_last_exported_photos() {
-    let (mut s, lib, _) = library("prevexport", 3);
+    let (lib, _src, mut s) = library("prevexport", 3);
     let all = ids(&s);
     s.execute("library.source", &json!({"kind": "previousExport"})).unwrap();
     assert_eq!(s.source, LibrarySource::PreviousExport);

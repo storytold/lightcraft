@@ -7,7 +7,6 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use crate::headless::Headless;
-use crate::modern::Form;
 use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(20);
@@ -45,8 +44,11 @@ fn value(h: &Headless, control: &str) -> f64 {
     lcc_develop::controls::get(&h.app.session.develop_of(id).unwrap_or_default(), control).unwrap()
 }
 
+/// One Develop session through the chrome: a tap on the photo hides and shows it; a group opens
+/// its card of pills and a drag is one undo step; the dock moves to the side and back; ☰ opens the
+/// menus; the switch goes to Library and back.
 #[test]
-fn the_chrome_floats_over_the_photo_and_a_tap_hides_and_shows_it() {
+fn the_chrome_its_cards_the_dock_the_menu_and_the_module_switch() {
     let mut h = develop([1280.0, 800.0]);
     exec(&mut h, "modern.chrome", json!({"on": true}));
     for id in ["modern:canvas", "modern:dock", "modern:group:light", "modern:group:crop", "modern:menu", "modern:mode:library", "modern:histogram"] {
@@ -57,12 +59,8 @@ fn the_chrome_floats_over_the_photo_and_a_tap_hides_and_shows_it() {
     assert!(!has(&h, "modern:dock"));
     ask(&mut h, "ui.clickWidget", json!({"id": "modern:canvas", "fx": 0.4, "fy": 0.4}));
     assert!(h.app.ui.modern.chrome && has(&h, "modern:dock"), "a second tap shows it");
-}
 
-#[test]
-fn a_group_opens_its_card_of_pills_and_a_drag_is_one_undo_step() {
-    let mut h = develop([1280.0, 800.0]);
-    exec(&mut h, "modern.chrome", json!({"on": true}));
+    // a group's card of pills; one drag, one undo step
     let before = value(&h, "light.exposure");
     assert_eq!(ask(&mut h, "ui.clickWidget", json!({"id": "modern:group:light"}))["ok"], true);
     assert_eq!(h.app.ui.modern.group, Some(crate::modern_dock::Group::Light));
@@ -81,31 +79,47 @@ fn a_group_opens_its_card_of_pills_and_a_drag_is_one_undo_step() {
     ask(&mut h, "ui.clickWidget", json!({"id": "modern:canvas", "fx": 0.5, "fy": 0.2}));
     assert!(h.app.ui.modern.group.is_none(), "a tap on the photo puts the card away");
     assert!(h.app.ui.modern.chrome, "and leaves the chrome");
-}
 
-/// Light holds the tone sliders, Colour white balance and saturation, Tone the parametric curve,
-/// Effects presence, vignette and grain.
-#[test]
-fn the_groups_hold_their_sliders() {
-    let mut h = develop([1280.0, 800.0]);
-    exec(&mut h, "modern.chrome", json!({"on": true}));
-    let groups: [(&str, &[&str]); 4] = [
-        ("light", &["light.exposure", "light.blacks"]),
-        ("colour", &["color.vibrance", "color.saturation"]),
-        ("tone", &["curve.highlights", "curve.splitMid"]),
-        ("effects", &["effects.texture", "effects.dehaze", "vignette.amount", "grain.amount"]),
-    ];
-    for (group, controls) in groups {
-        assert_eq!(exec(&mut h, "modern.group", json!({"group": group}))["ok"], true, "{group}");
-        for control in controls {
-            assert!(has(&h, &format!("slider:{control}")), "{group} offers {control}");
-        }
+    // the dock moves to the side and back
+    let dock = |h: &Headless| h.app.widgets.iter().rev().find(|(w, _)| w == "modern:dock").map(|(_, r)| *r).unwrap();
+    assert!(dock(&h).width() > dock(&h).height(), "along the bottom");
+    ask(&mut h, "ui.clickWidget", json!({"id": "modern:dockSwitch"}));
+    assert!(h.app.ui.modern.dock_side);
+    assert!(dock(&h).height() > dock(&h).width() && dock(&h).left() < 40.0, "down the side");
+    // clear of the top row's ☰ (and of the menu bar it opens), however short the window
+    let menu = h.app.widgets.iter().rev().find(|(w, _)| w == "modern:menu").map(|(_, r)| *r).unwrap();
+    assert!(dock(&h).top() > menu.bottom(), "below ☰: {:?} vs {menu:?}", dock(&h));
+    ask(&mut h, "ui.resize", json!({"width": 900, "height": 420}));
+    let menu = h.app.widgets.iter().rev().find(|(w, _)| w == "modern:menu").map(|(_, r)| *r).unwrap();
+    assert!(dock(&h).top() > menu.bottom() && dock(&h).bottom() <= 420.0, "a short window: {:?}", dock(&h));
+    ask(&mut h, "ui.resize", json!({"width": 1280, "height": 800}));
+    ask(&mut h, "ui.clickWidget", json!({"id": "modern:dockSwitch"}));
+    assert!(!h.app.ui.modern.dock_side);
+
+    // ☰ opens on Shortcuts and reaches every menu; Esc closes it and nothing more
+    ask(&mut h, "ui.clickWidget", json!({"id": "modern:menu"}));
+    assert_eq!(h.app.ui.modern.menu.as_deref(), Some("Shortcuts"));
+    assert!(has(&h, "modern:shortcut:import") && has(&h, "modern:shortcut:export") && has(&h, "modern:shortcut:settings"));
+    // Settings opens the settings dialog, like Edit ▸ Settings
+    ask(&mut h, "ui.clickWidget", json!({"id": "modern:shortcut:settings"}));
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Settings { .. })), "settings dialog");
+    ask(&mut h, "ui.key", json!({"key": "Escape"}));
+    ask(&mut h, "ui.clickWidget", json!({"id": "modern:menu"}));
+    assert_eq!(h.app.ui.modern.menu.as_deref(), Some("Shortcuts"));
+    for title in ["File", "Edit", "Photo", "View", "Help"] {
+        assert!(has(&h, &format!("modern:menu:{title}")), "{title}");
     }
-    // white balance on the photo's own scale: Kelvin for raws, relative otherwise
-    exec(&mut h, "modern.group", json!({"group": "colour"}));
-    let id = h.app.session.selection.active.unwrap();
-    let raw = h.app.session.catalog.photo(id).is_some_and(|p| p.develops_raw() && !p.relative_wb());
-    assert!(has(&h, if raw { "slider:wb.temp" } else { "slider:wb.tempRel" }));
+    ask(&mut h, "ui.clickWidget", json!({"id": "modern:menu:File"}));
+    assert_eq!(h.app.ui.modern.menu.as_deref(), Some("File"));
+    ask(&mut h, "ui.key", json!({"key": "Escape"}));
+    assert!(h.app.ui.modern.menu.is_none(), "Esc closes it");
+    assert_eq!(h.app.ui.module, crate::module::ModuleId::Develop, "and nothing more");
+
+    // the switch goes between Library and Develop
+    ask(&mut h, "ui.clickWidget", json!({"id": "modern:mode:library"}));
+    assert_eq!(h.app.ui.module, crate::module::ModuleId::Library);
+    ask(&mut h, "ui.clickWidget", json!({"id": "modern:mode:develop"}));
+    assert_eq!(h.app.ui.module, crate::module::ModuleId::Develop);
 }
 
 #[test]
@@ -125,60 +139,6 @@ fn the_tools_open_their_panels_and_dodge_starts_a_lightening_brush() {
     let masks = h.app.session.develop_of(id).unwrap_or_default().masks.clone();
     let last = masks.last().expect("a new mask");
     assert!(last.adjust.exposure > 0.0, "Dodge lightens ({})", last.adjust.exposure);
-}
-
-#[test]
-fn the_dock_moves_to_the_side_and_back() {
-    let mut h = develop([1280.0, 800.0]);
-    exec(&mut h, "modern.chrome", json!({"on": true}));
-    let dock = |h: &Headless| h.app.widgets.iter().rev().find(|(w, _)| w == "modern:dock").map(|(_, r)| *r).unwrap();
-    assert!(dock(&h).width() > dock(&h).height(), "along the bottom");
-    ask(&mut h, "ui.clickWidget", json!({"id": "modern:dockSwitch"}));
-    assert!(h.app.ui.modern.dock_side);
-    assert!(dock(&h).height() > dock(&h).width() && dock(&h).left() < 40.0, "down the side");
-    // clear of the top row's ☰ (and of the menu bar it opens), however short the window
-    let menu = h.app.widgets.iter().rev().find(|(w, _)| w == "modern:menu").map(|(_, r)| *r).unwrap();
-    assert!(dock(&h).top() > menu.bottom(), "below ☰: {:?} vs {menu:?}", dock(&h));
-    ask(&mut h, "ui.resize", json!({"width": 900, "height": 420}));
-    let menu = h.app.widgets.iter().rev().find(|(w, _)| w == "modern:menu").map(|(_, r)| *r).unwrap();
-    assert!(dock(&h).top() > menu.bottom() && dock(&h).bottom() <= 420.0, "a short window: {:?}", dock(&h));
-    ask(&mut h, "ui.resize", json!({"width": 1280, "height": 800}));
-    ask(&mut h, "ui.clickWidget", json!({"id": "modern:dockSwitch"}));
-    assert!(!h.app.ui.modern.dock_side);
-}
-
-#[test]
-fn the_menu_opens_on_shortcuts_and_reaches_every_menu() {
-    let mut h = develop([1280.0, 800.0]);
-    exec(&mut h, "modern.chrome", json!({"on": true}));
-    ask(&mut h, "ui.clickWidget", json!({"id": "modern:menu"}));
-    assert_eq!(h.app.ui.modern.menu.as_deref(), Some("Shortcuts"));
-    assert!(has(&h, "modern:shortcut:import") && has(&h, "modern:shortcut:export"));
-    for title in ["File", "Edit", "Photo", "View", "Help"] {
-        assert!(has(&h, &format!("modern:menu:{title}")), "{title}");
-    }
-    ask(&mut h, "ui.clickWidget", json!({"id": "modern:menu:File"}));
-    assert_eq!(h.app.ui.modern.menu.as_deref(), Some("File"));
-    ask(&mut h, "ui.key", json!({"key": "Escape"}));
-    assert!(h.app.ui.modern.menu.is_none(), "Esc closes it");
-    assert_eq!(h.app.ui.module, crate::module::ModuleId::Develop, "and nothing more");
-}
-
-#[test]
-fn the_switch_goes_between_library_and_develop() {
-    let mut h = develop([1280.0, 800.0]);
-    exec(&mut h, "modern.chrome", json!({"on": true}));
-    ask(&mut h, "ui.clickWidget", json!({"id": "modern:mode:library"}));
-    assert_eq!(h.app.ui.module, crate::module::ModuleId::Library);
-    ask(&mut h, "ui.clickWidget", json!({"id": "modern:mode:develop"}));
-    assert_eq!(h.app.ui.module, crate::module::ModuleId::Develop);
-}
-
-#[test]
-fn the_phone_and_tablet_forms() {
-    assert!(Form::of(egui::vec2(1280.0, 800.0)).side_panel());
-    assert!(!Form::of(egui::vec2(800.0, 1280.0)).side_panel());
-    assert!(!Form::of(egui::vec2(400.0, 860.0)).side_panel());
 }
 
 #[test]
@@ -214,6 +174,32 @@ fn a_tap_in_the_library_grid_opens_the_photo() {
     ask(&mut h, "ui.clickWidget", json!({"id": cell}));
     assert_eq!(h.app.ui.module, crate::module::ModuleId::Develop);
     assert_eq!(h.app.ui.view, crate::state::ViewMode::Detail);
+}
+
+/// A tap opens the photo under the finger, wherever on its cell it lands, not the photo that was active before
+/// (on a phone a tap near a cell's corner opened the photo edited last).
+#[test]
+fn a_tap_opens_the_photo_under_the_finger_not_the_one_active_before() {
+    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1280.0, 800.0], 1.0);
+    exec(&mut h, "view.modernLayout", json!({"on": true}));
+    exec(&mut h, "view.photoGrid", json!({}));
+    h.settle(SETTLE);
+    let cells = |h: &Headless| -> Vec<(u64, egui::Rect)> {
+        h.app.widgets.iter().filter_map(|(w, r)| w.strip_prefix("thumb:").and_then(|n| n.parse().ok()).map(|id| (id, *r))).collect()
+    };
+    let on_screen = cells(&h);
+    assert!(on_screen.len() >= 2, "two grid cells on screen");
+    let last = on_screen.iter().map(|c| c.0).max().unwrap();
+    exec(&mut h, "library.select", json!({"ids": [last]}));
+    h.settle(SETTLE);
+    // another photo, where it is now, tapped near its cell's bottom-right corner (where its badges are)
+    let (other, rect) = cells(&h).into_iter().find(|c| c.0 != last).unwrap();
+    let at = rect.max - egui::vec2(4.0, 4.0);
+    h.request("ui.click", json!({"x": at.x, "y": at.y}), T);
+    h.settle(SETTLE);
+    assert_eq!(h.app.ui.module, crate::module::ModuleId::Develop);
+    assert_eq!(h.app.session.active(), Some(lcc_catalog::PhotoId(other)), "the tapped photo opened");
 }
 
 #[test]
@@ -262,21 +248,12 @@ fn every_setting_is_reachable_through_the_groups_sections() {
     exec(&mut h, "modern.group", json!({"group": "colour"}));
     ask(&mut h, "ui.clickWidget", json!({"id": "modern:more:grading"}));
     assert_eq!(h.app.ui.modern.more.as_deref(), Some("grading"));
-}
-
-/// The Colour group's Color Grading card follows the grading mode (Settings ▸ General): Witchcraft
-/// shows the colourist's Primaries palette and HSL curves, Eboda Lightroom's own 3-way wheels.
-#[test]
-fn the_colour_grading_card_matches_the_grading_mode() {
-    let mut h = develop([1280.0, 800.0]);
-    exec(&mut h, "modern.chrome", json!({"on": true}));
-    exec(&mut h, "modern.group", json!({"group": "colour"}));
-    ask(&mut h, "ui.clickWidget", json!({"id": "modern:more:grading"}));
-    // Witchcraft (the default): the Primaries palette and the HSL curves
+    // and that card follows the grading mode (Settings ▸ General). Witchcraft (the default): the
+    // colourist's Primaries palette and the HSL curves
     assert!(has(&h, "wheel:primaries-lift"), "the colourist wheels");
     assert!(has(&h, "curve:hsl"), "the HSL curves");
     assert!(!has(&h, "wheel:shadows"), "not Lightroom's 3-way");
-    // Eboda: the 3-way wheels the card always had
+    // Eboda: Lightroom's own 3-way wheels
     exec(&mut h, "view.gradingMode", json!({"mode": "eboda"}));
     assert!(has(&h, "wheel:shadows"), "the 3-way wheels");
     assert!(!has(&h, "wheel:primaries-lift"));

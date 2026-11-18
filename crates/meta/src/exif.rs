@@ -81,6 +81,7 @@ pub fn from_tiff(tiff: &Tiff) -> Metadata {
     if m.lens_spec.is_none() {
         m.lens_spec = nikon_lens_spec(exif, m.make.as_deref(), tiff.order);
     }
+    m.stabilization = nikon_vibration_reduction(exif, m.make.as_deref(), tiff.order);
     m.orientation = ifd0.and_then(|i| i.u16(t::ORIENTATION)).filter(|v| (1..=8).contains(v)).map(Orientation::from_exif);
     m.rating = ifd0.and_then(|i| i.i64(t::RATING)).map(|r| r.clamp(-1, 5) as i8);
 
@@ -251,6 +252,30 @@ fn canon_maker_note_lens(data: &[u8], tiff: &Tiff) -> Option<String> {
 /// Nikon maker note tag `0x0084` (Lens in the ExifTool Nikon tag names): shortest and longest focal length, then the
 /// widest aperture at each, as rationals, like Exif LensSpecification. Zero for a lens that doesn't report itself.
 const NIKON_LENS: u16 = 0x0084;
+
+/// Nikon maker note tag `0x001F` (VRInfo in the ExifTool Nikon tag names): a four-digit version (`0200` on the Z 7 and
+/// Z 8), then VibrationReduction (1 on, 2 off, 0 not available), then the VR mode and type. Every Z 7 and Z 8 raw of a
+/// 331-raw sample had it; the value follows the camera's VR setting (in-body, and the lens's VR with it).
+const NIKON_VR_INFO: u16 = 0x001F;
+
+/// Whether VR was on, as a Nikon camera records it; `None` when not recorded.
+fn nikon_vibration_reduction(exif: Option<&Ifd>, make: Option<&str>, order: lcc_tiff::ByteOrder) -> Option<bool> {
+    let make = make?;
+    if !make.trim().to_ascii_uppercase().starts_with("NIKON") {
+        return None;
+    }
+    let note = exif?.bytes(t::MAKER_NOTE)?;
+    let mn = lcc_tiff::makernote::parse_makernote(note, 0, note.len() as u64, order, make)?;
+    let v = mn.ifd.bytes(NIKON_VR_INFO)?;
+    if !v.get(..4)?.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    match v.get(4)? {
+        1 => Some(true),
+        2 => Some(false),
+        _ => None,
+    }
+}
 
 /// The lens a Nikon camera records in its maker note, when it's plausible.
 fn nikon_lens_spec(exif: Option<&Ifd>, make: Option<&str>, order: lcc_tiff::ByteOrder) -> Option<[f64; 4]> {
@@ -562,6 +587,34 @@ pub(crate) mod tests {
         assert_eq!(read_exif(&nikon_exif("NIKON CORPORATION", None, None)).lens_spec, None);
     }
 
+    /// A Nikon Exif block whose maker note records VRInfo `vr` (`0x001F`), as the Z 7 and Z 8 write it.
+    fn nikon_vr_exif(make: &str, vr: &[u8]) -> Vec<u8> {
+        let mut note = IfdBuilder::new();
+        note.set(0x0001, Value::Undefined(b"0210".to_vec()));
+        note.set(NIKON_VR_INFO, Value::Undefined(vr.to_vec()));
+        let mut blob = b"Nikon\0\x02\x10\0\0".to_vec();
+        blob.extend(TiffWriter::new(ByteOrder::Little, false).write(&[note]).unwrap());
+        let mut exif = IfdBuilder::new();
+        exif.set(t::MAKER_NOTE, Value::Undefined(blob));
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::MAKE, Value::Ascii(make.into()));
+        ifd0.set_child(t::EXIF_IFD, exif);
+        TiffWriter::new(ByteOrder::Big, false).write(&[ifd0]).unwrap()
+    }
+
+    #[test]
+    fn nikon_vr_info_says_whether_vr_was_on() {
+        let nikon = "NIKON CORPORATION";
+        assert_eq!(read_exif(&nikon_vr_exif(nikon, b"0200\x01\x00\x01\x02")).stabilization, Some(true));
+        assert_eq!(read_exif(&nikon_vr_exif(nikon, b"0200\x02\x00\x00\x03")).stabilization, Some(false));
+        // not available, a broken version, too short, another make: not recorded
+        assert_eq!(read_exif(&nikon_vr_exif(nikon, b"0200\x00\x00\x00\x00")).stabilization, None);
+        assert_eq!(read_exif(&nikon_vr_exif(nikon, b"\xff\x00\x00\x00\x01\x00")).stabilization, None);
+        assert_eq!(read_exif(&nikon_vr_exif(nikon, b"0200")).stabilization, None);
+        assert_eq!(read_exif(&nikon_vr_exif("Canon", b"0200\x01\x00\x01\x02")).stabilization, None);
+        assert_eq!(read_exif(&nikon_exif(nikon, None, None)).stabilization, None);
+    }
+
     pub(crate) fn sample_exif(order: ByteOrder) -> Vec<u8> {
         let mut exif = IfdBuilder::new();
         exif.set(t::EXPOSURE_TIME, Value::Rational(vec![(1, 250)]));
@@ -838,6 +891,16 @@ mod write_tests {
             let back = read_exif(&write_exif(&Metadata { exposure_time: Some(1.0 / den), ..Default::default() }));
             let got = back.exposure_time.unwrap();
             assert!((1.0 / got - den).abs() < 0.5, "1/{den} s came back as 1/{}", 1.0 / got);
+        }
+    }
+
+    #[test]
+    fn written_shutter_speeds_show_as_the_same_text() {
+        // #1619: the exact time is what export writes, and it reads back as the text shown
+        for (t, want) in [(1.0 / 3.0, "1/3"), (1.0 / 250.0, "1/250"), (1.0 / 12_800.0, "1/12800"), (0.3, "0.3"), (1.0 / 2.8, "0.3571")] {
+            let back = read_exif(&write_exif(&Metadata { exposure_time: Some(t), ..Default::default() }));
+            let got = back.exposure_time.unwrap();
+            assert_eq!(crate::format_exposure_time(got).as_deref(), Some(want), "{t} came back as {got}");
         }
     }
 }

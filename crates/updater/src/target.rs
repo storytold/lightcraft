@@ -113,15 +113,16 @@ impl Asset {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Target {
     pub os: Os,
-    /// `x64`, `x86`, `arm64`, `x86_64`, `aarch64`, `riscv64`.
+    /// `x64`, `x86`, `arm64`, `x86_64`, `aarch64`, `riscv64` (macOS: `arm64`, `x64`).
     pub arch: &'static str,
 }
 
 impl Target {
     /// The running platform, or `None` on a platform the release pipeline does not build for (the
-    /// web build has no updater at all).
+    /// web build has no updater at all). An Intel build running under Rosetta counts as the Mac it
+    /// runs on, so it updates to the Apple silicon build ([`machine_arch`]).
     pub fn current() -> Option<Target> {
-        Target::of(std::env::consts::OS, std::env::consts::ARCH)
+        Target::of(std::env::consts::OS, machine_arch(std::env::consts::ARCH, translated()))
     }
 
     /// [`Target::current`] from a pair of `std::env::consts` strings, so the mapping can be tested
@@ -131,7 +132,8 @@ impl Target {
             ("windows", "x86_64") => (Os::Windows, "x64"),
             ("windows", "x86") => (Os::Windows, "x86"),
             ("windows", "aarch64") => (Os::Windows, "arm64"),
-            ("macos", "aarch64") | ("macos", "x86_64") => (Os::Macos, "universal"),
+            ("macos", "aarch64") => (Os::Macos, "arm64"),
+            ("macos", "x86_64") => (Os::Macos, "x64"),
             ("linux", "x86_64") => (Os::Linux, "x86_64"),
             ("linux", "aarch64") => (Os::Linux, "aarch64"),
             ("linux", "riscv64") => (Os::Linux, "riscv64"),
@@ -151,11 +153,18 @@ impl Target {
         if !lower.contains(&format!("-{}-", self.os.slug())) {
             return false;
         }
-        match self.os {
-            // the macOS build is one universal app; either arch slug is the same file
-            Os::Macos => lower.contains("-macos-universal") || lower.contains("-macos-x86_64") || lower.contains("-macos-aarch64"),
-            _ => lower.contains(&format!("-{}-{}", self.os.slug(), self.arch)),
-        }
+        lower.contains(&format!("-{}-{}", self.os.slug(), self.arch)) || self.is_fallback(&lower)
+    }
+
+    /// Whether `name` is a file this platform takes only when the release has none for its own
+    /// architecture: on macOS, the universal image (Apple silicon and Intel in one app).
+    ///
+    /// The per-architecture images are `-macos-arm64` and `-macos-x64`, not `-macos-aarch64` and
+    /// `-macos-x86_64`: builds before them took any of `-macos-universal`, `-macos-aarch64` and
+    /// `-macos-x86_64` as the one macOS file and picked the smallest, so they would install the
+    /// Apple silicon image on an Intel Mac.
+    pub fn is_fallback(&self, name: &str) -> bool {
+        self.os == Os::Macos && name.to_ascii_lowercase().contains("-macos-universal")
     }
 
     /// [`Target::matches_name`] for a portable copy: the portable zip is its file, and an installer
@@ -181,10 +190,30 @@ impl Target {
             "x64" => "64-bit",
             "x86" => "32-bit",
             "arm64" => "ARM64",
-            "universal" => "universal",
             other => other,
         }
     }
+}
+
+/// The architecture to update to: the machine's, not the build's. An `x86_64` build that macOS
+/// runs under Rosetta (`translated`) is on Apple silicon.
+fn machine_arch(build_arch: &'static str, translated: bool) -> &'static str {
+    if translated && build_arch == "x86_64" { "aarch64" } else { build_arch }
+}
+
+/// Whether this process runs under Rosetta: `sysctl.proc_translated` is 1 then, 0 for a native
+/// process, and missing on an Intel Mac. Asked once; only an Intel macOS build can be translated.
+fn translated() -> bool {
+    if !(cfg!(target_os = "macos") && cfg!(target_arch = "x86_64")) {
+        return false;
+    }
+    static TRANSLATED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *TRANSLATED.get_or_init(|| {
+        std::process::Command::new("/usr/sbin/sysctl")
+            .args(["-n", "sysctl.proc_translated"])
+            .output()
+            .is_ok_and(|o| o.status.success() && o.stdout.trim_ascii() == b"1")
+    })
 }
 
 #[cfg(test)]
@@ -192,72 +221,68 @@ mod tests {
     use super::*;
 
     #[test]
-    fn classifies_artifacts() {
-        assert_eq!(Kind::of("app-1.2.3-windows-x64.msi"), Some(Kind::Msi));
-        assert_eq!(Kind::of("app-1.2.3-windows-x64-portable.zip"), Some(Kind::Archive));
-        assert_eq!(Kind::of("app-1.2.3-macos-universal.dmg"), Some(Kind::Dmg));
-        assert_eq!(Kind::of("app-1.2.3-linux-x86_64.AppImage"), Some(Kind::AppImage));
-        assert_eq!(Kind::of("app-1.2.3-linux-x86_64.tar.gz"), Some(Kind::Archive));
-        assert_eq!(Kind::of("app-1.2.3-freebsd-x86_64.tar.gz"), Some(Kind::Archive));
-        assert_eq!(Kind::of("app-1.2.3-linux-x86_64.flatpak"), Some(Kind::Archive));
-        assert_eq!(Kind::of("SHA256SUMS.txt"), Some(Kind::Checksums));
-        assert_eq!(Kind::of("app-1.2.3-linux-x86_64.AppImage.zsync"), None);
-        assert_eq!(Kind::of("app-1.2.3-web.zip"), Some(Kind::Archive));
-        assert_eq!(Kind::of("notes.md"), None);
-        assert_eq!(Kind::of("app.exe"), None);
-    }
-
-    #[test]
-    fn maps_the_shipped_platforms() {
-        assert_eq!(Target::of("windows", "x86_64"), Some(Target { os: Os::Windows, arch: "x64" }));
-        assert_eq!(Target::of("windows", "x86"), Some(Target { os: Os::Windows, arch: "x86" }));
-        assert_eq!(Target::of("windows", "aarch64"), Some(Target { os: Os::Windows, arch: "arm64" }));
-        assert_eq!(Target::of("macos", "aarch64"), Some(Target { os: Os::Macos, arch: "universal" }));
-        assert_eq!(Target::of("macos", "x86_64"), Some(Target { os: Os::Macos, arch: "universal" }));
-        assert_eq!(Target::of("linux", "riscv64"), Some(Target { os: Os::Linux, arch: "riscv64" }));
-        assert_eq!(Target::of("freebsd", "x86_64"), Some(Target { os: Os::Freebsd, arch: "x86_64" }));
-        assert_eq!(Target::of("android", "aarch64"), None);
-        assert_eq!(Target::of("windows", "powerpc"), None);
-    }
-
-    #[test]
-    fn picks_only_this_platforms_files() {
-        let win = Target { os: Os::Windows, arch: "x64" };
-        assert!(win.matches_name("app-1.2.3-windows-x64.msi"));
-        assert!(!win.matches_name("app-1.2.3-windows-x64-portable.zip"), "the portable zip is a manual install");
-        assert!(!win.matches_name("app-1.2.3-windows-arm64.msi"));
-        assert!(!win.matches_name("app-1.2.3-linux-x86_64.AppImage"));
-        // a Windows version that only ever mentions x64 in prose still matches: the name is ours
-        assert!(!win.matches_name("app-1.2.3-linux-x86_64.tar.gz"));
-        let mac = Target { os: Os::Macos, arch: "universal" };
-        assert!(mac.matches_name("app-1.2.3-macos-universal.dmg"));
-        assert!(mac.matches_name("app-1.2.3-rc.1-macos-universal.dmg"));
-        assert!(mac.matches_name("app-1.2.3-macos-aarch64.dmg"), "a per-arch dmg is still the macOS app");
-        assert!(!mac.matches_name("app-1.2.3-windows-x64.msi"));
-        let lin = Target { os: Os::Linux, arch: "aarch64" };
-        assert!(lin.matches_name("app-1.2.3-linux-aarch64.AppImage"));
-        assert!(!lin.matches_name("app-1.2.3-linux-x86_64.AppImage"));
-        assert!(win.matches_portable("app-1.2.3-windows-x64-portable.zip"));
-        assert!(!win.matches_portable("app-1.2.3-windows-x64.msi"), "the installer is not a portable copy's file");
-        assert!(!win.matches_portable("app-1.2.3-windows-arm64-portable.zip"));
-        assert!(lin.matches_portable("app-1.2.3-linux-aarch64.AppImage"));
-    }
-
-    #[test]
-    fn describes_what_will_happen() {
-        assert!(Target { os: Os::Linux, arch: "x86_64" }.describe().contains("replace this program"));
-        assert!(Target { os: Os::Windows, arch: "x64" }.describe().contains("installer"));
-        assert!(Target { os: Os::Linux, arch: "riscv64" }.describe().contains("open the folder"));
-    }
-
-    #[test]
-    fn asset_ranks_installers_above_archives() {
-        let msi = Asset::new("a-windows-x64.msi", "https://x/1", 10, None).expect("msi");
-        let zip = Asset::new("a-windows-x64-portable.zip", "https://x/2", 10, None).expect("zip");
-        let sums = Asset::new("SHA256SUMS.txt", "https://x/3", 10, None).expect("sums");
-        assert!(msi.kind.rank() < zip.kind.rank());
-        assert!(zip.kind.rank() < sums.kind.rank());
-        assert_eq!(Asset::new("app.exe", "https://x/4", 1, None), None);
-        assert!(msi.kind.installs_by().contains("installer"));
+    fn artifacts_are_classified_matched_and_ranked() {
+        // classifies artifacts
+        {
+            assert_eq!(Kind::of("app-1.2.3-windows-x64.msi"), Some(Kind::Msi));
+            assert_eq!(Kind::of("app-1.2.3-windows-x64-portable.zip"), Some(Kind::Archive));
+            assert_eq!(Kind::of("app-1.2.3-macos-universal.dmg"), Some(Kind::Dmg));
+            assert_eq!(Kind::of("app-1.2.3-linux-x86_64.AppImage"), Some(Kind::AppImage));
+            assert_eq!(Kind::of("app-1.2.3-linux-x86_64.tar.gz"), Some(Kind::Archive));
+            assert_eq!(Kind::of("app-1.2.3-freebsd-x86_64.tar.gz"), Some(Kind::Archive));
+            assert_eq!(Kind::of("app-1.2.3-linux-x86_64.flatpak"), Some(Kind::Archive));
+            assert_eq!(Kind::of("SHA256SUMS.txt"), Some(Kind::Checksums));
+            assert_eq!(Kind::of("app-1.2.3-linux-x86_64.AppImage.zsync"), None);
+            assert_eq!(Kind::of("app-1.2.3-web.zip"), Some(Kind::Archive));
+            assert_eq!(Kind::of("notes.md"), None);
+            assert_eq!(Kind::of("app.exe"), None);
+        }
+        // picks only this platforms files
+        {
+            let win = Target { os: Os::Windows, arch: "x64" };
+            assert!(win.matches_name("app-1.2.3-windows-x64.msi"));
+            assert!(!win.matches_name("app-1.2.3-windows-x64-portable.zip"), "the portable zip is a manual install");
+            assert!(!win.matches_name("app-1.2.3-windows-arm64.msi"));
+            assert!(!win.matches_name("app-1.2.3-linux-x86_64.AppImage"));
+            // a Windows version that only ever mentions x64 in prose still matches: the name is ours
+            assert!(!win.matches_name("app-1.2.3-linux-x86_64.tar.gz"));
+            let mac = Target { os: Os::Macos, arch: "arm64" };
+            assert!(mac.matches_name("app-1.2.3-macos-arm64.dmg"));
+            assert!(mac.matches_name("app-1.2.3-rc.1-macos-arm64.dmg"));
+            assert!(!mac.matches_name("app-1.2.3-macos-x64.dmg"), "the Intel image is not Apple silicon's");
+            assert!(mac.matches_name("app-1.2.3-macos-universal.dmg"), "the universal image runs on both");
+            assert!(mac.is_fallback("app-1.2.3-macos-universal.dmg") && !mac.is_fallback("app-1.2.3-macos-arm64.dmg"));
+            assert!(!mac.matches_name("app-1.2.3-windows-x64.msi"));
+            let intel = Target { os: Os::Macos, arch: "x64" };
+            assert!(intel.matches_name("app-1.2.3-macos-x64.dmg"));
+            assert!(!intel.matches_name("app-1.2.3-macos-arm64.dmg"), "an Intel Mac can't run the Apple silicon image");
+            assert!(intel.matches_name("app-1.2.3-macos-universal.dmg"));
+            assert!(!win.is_fallback("app-1.2.3-macos-universal.dmg"), "only macOS has a universal file");
+            let lin = Target { os: Os::Linux, arch: "aarch64" };
+            assert!(lin.matches_name("app-1.2.3-linux-aarch64.AppImage"));
+            assert!(!lin.matches_name("app-1.2.3-linux-x86_64.AppImage"));
+            assert!(win.matches_portable("app-1.2.3-windows-x64-portable.zip"));
+            assert!(!win.matches_portable("app-1.2.3-windows-x64.msi"), "the installer is not a portable copy's file");
+            assert!(!win.matches_portable("app-1.2.3-windows-arm64-portable.zip"));
+            assert!(lin.matches_portable("app-1.2.3-linux-aarch64.AppImage"));
+        }
+        // each Mac asks for its own architecture; an Intel build under Rosetta asks for the Mac's
+        {
+            assert_eq!(Target::of("macos", "aarch64"), Some(Target { os: Os::Macos, arch: "arm64" }));
+            assert_eq!(Target::of("macos", "x86_64"), Some(Target { os: Os::Macos, arch: "x64" }));
+            assert_eq!(Target::of("macos", machine_arch("x86_64", true)).map(|t| t.arch), Some("arm64"), "Rosetta");
+            assert_eq!(Target::of("macos", machine_arch("x86_64", false)).map(|t| t.arch), Some("x64"));
+            assert_eq!(Target::of("macos", machine_arch("aarch64", false)).map(|t| t.arch), Some("arm64"));
+        }
+        // asset ranks installers above archives
+        {
+            let msi = Asset::new("a-windows-x64.msi", "https://x/1", 10, None).expect("msi");
+            let zip = Asset::new("a-windows-x64-portable.zip", "https://x/2", 10, None).expect("zip");
+            let sums = Asset::new("SHA256SUMS.txt", "https://x/3", 10, None).expect("sums");
+            assert!(msi.kind.rank() < zip.kind.rank());
+            assert!(zip.kind.rank() < sums.kind.rank());
+            assert_eq!(Asset::new("app.exe", "https://x/4", 1, None), None);
+            assert!(msi.kind.installs_by().contains("installer"));
+        }
     }
 }

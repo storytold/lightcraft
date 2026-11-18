@@ -212,6 +212,8 @@ impl WorkerCore {
             None => src,
         };
         let info = src.info_or(job.info());
+        // an over-budget brush mask is an error for the caller, not a preview missing its later strokes
+        lcc_engine::pipeline::check_brush_budget(&src.image, &info, &job.settings, &job.request())?;
         let mut rendered = match &job.stages {
             Some(view) => {
                 let st = self.stages.entry(view.clone()).or_default().clone();
@@ -442,13 +444,8 @@ mod tests {
         // stays within docs/gpu-pipeline.md's bound (≤ 3 LSB per channel) rather than bit-exact
         let max = a.image.data.iter().zip(&b.image.data).flat_map(|(p, q)| (0..3).map(move |c| p[c].abs_diff(q[c]))).max();
         assert!(max.is_some_and(|m| m <= 3), "max channel difference {max:?}");
-    }
 
-    // a job from before windows existed has none
-    #[test]
-    fn a_job_without_a_window_field_has_no_window() {
-        let mut s = Session::with_demo();
-        let id = s.visible_cloned()[0];
+        // a job from before windows existed has none
         let wire = WireJob::from_job(&s.thumb_job(id, 128).unwrap(), false, "Thumb");
         let mut v = serde_json::to_value(&wire).unwrap();
         v.as_object_mut().unwrap().remove("window");

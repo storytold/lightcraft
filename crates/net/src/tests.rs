@@ -129,31 +129,32 @@ fn error_status_and_bad_headers() {
 }
 
 #[test]
-fn hostile_body_content_type_is_rejected_before_sending() {
-    for ct in ["text/plain\r\nX-Injected: 1", "text/plain\nX: 1", "a\0b", "a\x0bb", "a\x7fb", "a\u{85}b"] {
-        let e = client().post("http://127.0.0.1:1/").body(ct, b"x".to_vec()).send().unwrap_err();
-        assert!(matches!(e, NetError::BadHeader(_)), "{ct:?}: {e:?}");
+fn header_and_content_type_values_are_checked_before_sending() {
+    // hostile body content type is rejected before sending
+    {
+        for ct in ["text/plain\r\nX-Injected: 1", "text/plain\nX: 1", "a\0b", "a\x0bb", "a\x7fb", "a\u{85}b"] {
+            let e = client().post("http://127.0.0.1:1/").body(ct, b"x".to_vec()).send().unwrap_err();
+            assert!(matches!(e, NetError::BadHeader(_)), "{ct:?}: {e:?}");
+        }
     }
-}
-
-#[test]
-fn header_values_with_other_control_chars_are_rejected() {
-    for v in ["a\x01b", "a\x1bb", "a\x7fb"] {
-        let e = client().get("http://127.0.0.1:1/").header("X", v).send().unwrap_err();
-        assert!(matches!(e, NetError::BadHeader(_)), "{v:?}");
+    // header values with other control chars are rejected
+    {
+        for v in ["a\x01b", "a\x1bb", "a\x7fb"] {
+            let e = client().get("http://127.0.0.1:1/").header("X", v).send().unwrap_err();
+            assert!(matches!(e, NetError::BadHeader(_)), "{v:?}");
+        }
+        let e = client().get("http://127.0.0.1:1/").bearer("tok\r\nX: 1").send().unwrap_err();
+        assert!(matches!(e, NetError::BadHeader(_)));
     }
-    let e = client().get("http://127.0.0.1:1/").bearer("tok\r\nX: 1").send().unwrap_err();
-    assert!(matches!(e, NetError::BadHeader(_)));
-}
-
-#[test]
-fn ordinary_content_type_with_params_and_tab_is_sent() {
-    let (port, seen, h) = serve(1, |r| response("200 OK", &[], &r.body));
-    let ct = "text/plain;\tcharset=utf-8";
-    let r = client().post(&format!("http://127.0.0.1:{port}/")).body(ct, b"ok".to_vec()).send().unwrap();
-    assert_eq!(r.bytes().unwrap(), b"ok");
-    h.join().unwrap();
-    assert_eq!(seen.lock().unwrap()[0].header("content-type"), Some(ct));
+    // ordinary content type with params and tab is sent
+    {
+        let (port, seen, h) = serve(1, |r| response("200 OK", &[], &r.body));
+        let ct = "text/plain;\tcharset=utf-8";
+        let r = client().post(&format!("http://127.0.0.1:{port}/")).body(ct, b"ok".to_vec()).send().unwrap();
+        assert_eq!(r.bytes().unwrap(), b"ok");
+        h.join().unwrap();
+        assert_eq!(seen.lock().unwrap()[0].header("content-type"), Some(ct));
+    }
 }
 
 #[test]
@@ -218,6 +219,7 @@ fn too_many_redirects() {
 fn stall_timeout_and_cancel() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
+    let (release, done) = std::sync::mpsc::channel::<()>();
     let h = std::thread::spawn(move || {
         let mut held = Vec::new();
         for _ in 0..2 {
@@ -225,9 +227,9 @@ fn stall_timeout_and_cancel() {
                 held.push(s); // never answer
             }
         }
-        std::thread::sleep(Duration::from_secs(3));
+        let _ = done.recv(); // hold the connections open until the client has given up on both
     });
-    let c = Client::new(ClientConfig { stall_timeout: Duration::from_millis(600), ..ClientConfig::default() }).unwrap();
+    let c = Client::new(ClientConfig { stall_timeout: Duration::from_millis(200), ..ClientConfig::default() }).unwrap();
     let t = std::time::Instant::now();
     assert_eq!(c.get(&format!("http://127.0.0.1:{port}/")).send().unwrap_err(), NetError::Stalled);
     assert!(t.elapsed() < Duration::from_secs(60), "hung, not just slow");
@@ -236,12 +238,13 @@ fn stall_timeout_and_cancel() {
     let flag = Arc::new(AtomicBool::new(false));
     let f2 = flag.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(300));
+        std::thread::sleep(Duration::from_millis(80));
         f2.store(true, Ordering::Relaxed);
     });
     let t = std::time::Instant::now();
     assert_eq!(c.get(&format!("http://127.0.0.1:{port}/")).cancel(flag).send().unwrap_err(), NetError::Cancelled);
     assert!(t.elapsed() < Duration::from_secs(60), "hung, not just slow");
+    drop(release);
     h.join().unwrap();
 }
 
@@ -501,7 +504,7 @@ fn a_download_stops_at_its_deadline() {
     let dir = tempdir("dl-deadline");
     let dest = dir.join("slow.bin");
     let start = std::time::Instant::now();
-    let opts = DownloadOptions { deadline: Some(Duration::from_millis(400)), ..Default::default() };
+    let opts = DownloadOptions { deadline: Some(Duration::from_millis(150)), ..Default::default() };
     let r = client().download(&format!("http://127.0.0.1:{port}/m"), &dest, opts);
     assert!(matches!(r, Err(NetError::Io(_))), "{r:?}");
     assert!(start.elapsed() < Duration::from_secs(4));

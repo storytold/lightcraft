@@ -20,6 +20,11 @@ lcc-denoise = { workspace = true }
 lcc-camdb = { workspace = true }
 lcc-colourfit = { workspace = true }
 lcc-raw = { workspace = true }
+lcc-meta = { workspace = true }
+lcc-hash = { workspace = true }
+lcc-geom = { workspace = true }
+lcc-pipeline = { workspace = true }
+lcc-develop = { workspace = true }
 chrono = { workspace = true }
 lcc-sysmem = { workspace = true }
 lcc-mcp = { workspace = true }
@@ -52,6 +57,15 @@ heif = ["lcc-codecs/heif"]
 lcc-testkit = { workspace = true }
 # the SIL harness (tests/sil.rs) generates its test photos
 lcc-scenes = { workspace = true }
+# (the flat-field scenario writes Bayer DNGs)
+lcc-color = { workspace = true }
+
+# P4.7 end-to-end session (tests/session_e2e.rs): an in-process SFTP server, SHA-1s for a fake Immich.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+lcc-hash = { workspace = true }
+russh = { version = "0.65", default-features = false, features = ["ring"] }
+russh-sftp = "3"
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time"] }
 
 # M14: end-to-end video tests encode a synthetic clip in-test and re-decode the export
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies.lcc-video]

@@ -58,6 +58,8 @@ pub mod spectral;
 mod tiffraw;
 mod unpack;
 mod vc5;
+pub mod vignetting_calibration;
+pub mod vignetting_plausibility;
 
 /// Synthetic inputs for other crates' tests.
 #[cfg(feature = "testdata")]
@@ -1576,7 +1578,7 @@ mod checked_arithmetic_tests {
     use super::*;
 
     #[test]
-    fn checked_pixel_count_wrap_inputs_rejected() {
+    fn checked_pixel_count_accepts_up_to_the_cap_and_rejects_wraps() {
         // 65536 × 65536 = 2^32 wraps to 0 on wasm32 usize; u64 math keeps it exact.
         assert_eq!(checked_pixel_count(65536, 65536), None);
         assert_eq!(checked_pixel_count(65536, 65537), None);
@@ -1584,26 +1586,23 @@ mod checked_arithmetic_tests {
         assert_eq!(checked_pixel_count(u64::from(u32::MAX), 2), None);
         // inputs wider than a 32-bit usize reach the gate untruncated (2^40 × 2^40 overflows u64).
         assert_eq!(checked_pixel_count(1 << 40, 1 << 40), None);
-    }
-
-    #[test]
-    fn checked_pixel_count_over_cap_rejected() {
-        // MAX_SAMPLES = 2^30; one over is rejected.
-        assert_eq!(checked_pixel_count((1 << 30) + 1, 1), None);
-        assert_eq!(checked_pixel_count(1, (1 << 30) + 1), None);
-    }
-
-    #[test]
-    fn checked_pixel_count_at_cap_accepted() {
-        assert_eq!(checked_pixel_count(1 << 30, 1), Some(1 << 30));
-        assert_eq!(checked_pixel_count(1 << 15, 1 << 15), Some(1 << 30));
-    }
-
-    #[test]
-    fn checked_pixel_count_small_accepted() {
-        assert_eq!(checked_pixel_count(100, 100), Some(10_000));
-        assert_eq!(checked_pixel_count(1, 1), Some(1));
-        assert_eq!(checked_pixel_count(0, 100), None);
-        assert_eq!(checked_pixel_count(100, 0), None);
+        // checked pixel count over cap rejected
+        {
+            // MAX_SAMPLES = 2^30; one over is rejected.
+            assert_eq!(checked_pixel_count((1 << 30) + 1, 1), None);
+            assert_eq!(checked_pixel_count(1, (1 << 30) + 1), None);
+        }
+        // checked pixel count at cap accepted
+        {
+            assert_eq!(checked_pixel_count(1 << 30, 1), Some(1 << 30));
+            assert_eq!(checked_pixel_count(1 << 15, 1 << 15), Some(1 << 30));
+        }
+        // checked pixel count small accepted
+        {
+            assert_eq!(checked_pixel_count(100, 100), Some(10_000));
+            assert_eq!(checked_pixel_count(1, 1), Some(1));
+            assert_eq!(checked_pixel_count(0, 100), None);
+            assert_eq!(checked_pixel_count(100, 0), None);
+        }
     }
 }

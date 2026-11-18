@@ -259,7 +259,8 @@ pub(crate) fn process(p: Prepared, embedder: &Embedder) -> Done {
             None
         };
         let crops: Vec<&[u8]> = faces.iter().filter_map(|(_, c, _)| c.as_deref()).collect();
-        let mut embedded = embedder.embed_batch(&crops).into_iter();
+        let mut embedded =
+            if tag.ends_with(crate::faces_index::MIRROR_TAG) { embedder.embed_faces(&crops) } else { embedder.embed_batch(&crops) }.into_iter();
         let results: Vec<(Rect, Option<Vec<f32>>, Rect)> =
             faces.into_iter().map(|(rect, crop, view)| (rect, crop.and_then(|_| embedded.next().and_then(Result::ok)), view)).collect();
         (results, new_faces)
@@ -477,15 +478,6 @@ mod tests {
     fn the_second_card_is_held_back_only_at_a_light_pace() {
         use Pace::*;
         assert_eq!([Pause, Light, Normal, Full].map(gpu_pace), [(1, 0.25, 0.25), (1, 0.25, 0.25), (2, 0.75, 1.0), (4, 1.0, 1.0)]);
-    }
-
-    #[test]
-    fn pace_names_are_forgiving() {
-        assert_eq!(["pause", "light", "normal", "full"].map(|n| Pace::parse(Some(n))), [Pace::Pause, Pace::Light, Pace::Normal, Pace::Full]);
-        assert_eq!(
-            (Pace::parse(None), Pace::parse(Some("")), Pace::parse(Some("FULL")), Pace::parse(Some("turbo"))),
-            (Pace::Normal, Pace::Normal, Pace::Normal, Pace::Normal)
-        );
     }
 
     #[test]

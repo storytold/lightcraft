@@ -2240,7 +2240,7 @@ mod tests {
     /// keeps its templates.
     #[test]
     fn template_folders_group_user_templates_and_persist() {
-        let dir = std::env::temp_dir().join(format!("lcc-print-folders-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lcc-print-folders");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let open = || {
@@ -2308,7 +2308,7 @@ mod tests {
 
     #[test]
     fn user_templates_settings_and_printer_paper_persist() {
-        let dir = std::env::temp_dir().join(format!("lcc-print-persist-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lcc-print-persist");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let open = || {
@@ -2346,7 +2346,7 @@ mod tests {
 
     #[test]
     fn info_overlay_toggles_persists_and_describes_the_page() {
-        let dir = std::env::temp_dir().join(format!("lcc-print-info-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lcc-print-info");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let open = || {
@@ -2373,7 +2373,7 @@ mod tests {
 
     #[test]
     fn a_failed_print_json_write_is_reported_and_retried() {
-        let dir = std::env::temp_dir().join(format!("lcc-print-retry-{}", std::process::id()));
+        let dir = lcc_testkit::TempDir::new("lcc-print-retry");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         // the config "directory" is a file, so print.json cannot be written
@@ -2439,6 +2439,7 @@ mod tests {
     #[test]
     fn printer_profile_is_checked_and_a_colour_managed_16_bit_pdf_prints() {
         use std::sync::{Arc, Mutex};
+        let dir = lcc_testkit::TempDir::new("print-profile");
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let written = bytes.clone();
         let services = crate::Services {
@@ -2452,7 +2453,6 @@ mod tests {
         app.run("module.print", json!({})).unwrap();
         assert!(app.run("printui.profile", json!({"path": "/nonexistent/printer.icc"})).is_err());
         assert!(app.print.settings.job.color.profile.is_none());
-        let dir = std::env::temp_dir().join(format!("print-profile-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let icc = dir.join("printer.icc");
         std::fs::write(&icc, lcc_codecs::icc::write_named(lcc_codecs::space::NamedSpace::AdobeRgb)).unwrap();

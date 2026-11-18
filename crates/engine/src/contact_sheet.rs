@@ -275,8 +275,10 @@ mod tests {
     #[test]
     fn pagination_xref_and_cancellation() {
         let mut s = Session::with_demo();
-        let ids: Vec<_> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
-        let p = json!({"ids": ids, "columns": 1, "rows": 2, "captions": false});
+        // (a 3 × 3 grid: cells small enough to render from the photos' thumbnail-sized sources)
+        let ids: Vec<_> = s.catalog.photos().take(10).map(|p| p.id.0).collect();
+        assert_eq!(ids.len(), 10, "the demo library has ten photos");
+        let p = json!({"ids": ids, "columns": 3, "rows": 3, "captions": false});
         let mut seen = Vec::new();
         let doc = prepare(&mut s, &p)
             .unwrap()
@@ -285,14 +287,16 @@ mod tests {
                 true
             })
             .unwrap();
-        assert_eq!((doc.pages, doc.photos), (2, 3));
-        assert_eq!(seen, vec![0, 1, 2, 3]);
+        assert_eq!((doc.pages, doc.photos), (2, 10));
+        assert_eq!(seen, (0..=10).collect::<Vec<_>>());
         let text = String::from_utf8_lossy(&doc.bytes);
-        assert!(text.contains("/Count 2 /Kids [3 0 R 6 0 R]"));
+        assert!(text.contains("/Count 2 "));
+        // every entry of the cross-reference table points at its object
         let xref = text.rsplit("startxref\n").next().unwrap().lines().next().unwrap().parse::<usize>().unwrap();
-        assert!(doc.bytes[xref..].starts_with(b"xref\n0 9\n"));
         let xref_text = std::str::from_utf8(&doc.bytes[xref..]).unwrap();
-        for (index, line) in xref_text.lines().skip(3).take(8).enumerate() {
+        let objects = xref_text.lines().nth(1).and_then(|l| l.strip_prefix("0 ")).unwrap().parse::<usize>().unwrap();
+        assert!(xref_text.starts_with("xref\n") && objects > 2);
+        for (index, line) in xref_text.lines().skip(3).take(objects - 1).enumerate() {
             let offset = line.split_whitespace().next().unwrap().parse::<usize>().unwrap();
             assert!(doc.bytes[offset..].starts_with(format!("{} 0 obj\n", index + 1).as_bytes()));
         }
@@ -308,13 +312,13 @@ mod tests {
     #[test]
     fn sheet_uses_current_edits_and_captions() {
         let mut s = Session::with_demo();
-        let p = json!({"columns": 1, "rows": 2, "captions": false});
+        let p = json!({"columns": 3, "rows": 3, "captions": false});
         let plain = first_page(&prepare(&mut s, &p).unwrap().run(&mut |_, _| true).unwrap().bytes);
         s.execute("develop.set", &json!({"control": "light.exposure", "value": 2.0})).unwrap();
         let bright = first_page(&prepare(&mut s, &p).unwrap().run(&mut |_, _| true).unwrap().bytes);
         let sum = |img: &Rgba8| img.data.iter().map(|p| u64::from(p[0]) + u64::from(p[1]) + u64::from(p[2])).sum::<u64>();
         assert!(sum(&bright) > sum(&plain), "sheet ignored develop settings");
-        let captions = first_page(&prepare(&mut s, &json!({"columns": 1, "rows": 2})).unwrap().run(&mut |_, _| true).unwrap().bytes);
+        let captions = first_page(&prepare(&mut s, &json!({"columns": 3, "rows": 3})).unwrap().run(&mut |_, _| true).unwrap().bytes);
         assert!(sum(&captions) < sum(&bright), "captions absent from PDF pixels");
         assert_eq!((plain.width, plain.height), (1240, 1754));
     }

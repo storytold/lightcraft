@@ -519,53 +519,52 @@ mod tests {
         for (mut predictor, difference) in [(i32::MAX, 1), (i32::MIN, -1)] {
             assert!(matches!(dc_coefficient(&mut predictor, difference, u16::MAX), Err(RawError::Corrupt(_))));
         }
-    }
-
-    #[test]
-    fn large_dc_coefficients_do_not_overflow_dequantisation() {
-        let mut jpg = encode(&[2048; 128], 16, 8, 12, 1, 0);
-        let mut dqt = vec![0xff, 0xdb, 0, 131, 0x10];
-        dqt.extend(std::iter::repeat_n(0xff, 128));
-        jpg.splice(2..71, dqt);
-        let entropy = jpg.windows(2).position(|b| b == [0xff, 0xda]).unwrap() + 10;
-        jpg.truncate(entropy);
-        let mut bits = BitWriter { out: vec![], acc: 0, n: 0 };
-        for _ in 0..2 {
-            bits.put(15, 4); // category 15
-            bits.put(32767, 15);
-            bits.put(0, 8); // EOB
+        // large dc coefficients do not overflow dequantisation
+        {
+            let mut jpg = encode(&[2048; 128], 16, 8, 12, 1, 0);
+            let mut dqt = vec![0xff, 0xdb, 0, 131, 0x10];
+            dqt.extend(std::iter::repeat_n(0xff, 128));
+            jpg.splice(2..71, dqt);
+            let entropy = jpg.windows(2).position(|b| b == [0xff, 0xda]).unwrap() + 10;
+            jpg.truncate(entropy);
+            let mut bits = BitWriter { out: vec![], acc: 0, n: 0 };
+            for _ in 0..2 {
+                bits.put(15, 4); // category 15
+                bits.put(32767, 15);
+                bits.put(0, 8); // EOB
+            }
+            bits.flush();
+            jpg.extend(bits.out);
+            jpg.extend([0xff, 0xd9]);
+            let frame = decode(&jpg, 128).unwrap();
+            assert_eq!(frame.data, vec![4095; 128]);
         }
-        bits.flush();
-        jpg.extend(bits.out);
-        jpg.extend([0xff, 0xd9]);
-        let frame = decode(&jpg, 128).unwrap();
-        assert_eq!(frame.data, vec![4095; 128]);
-    }
-    #[test]
-    fn accumulated_dc_prediction_overflow_is_corrupt() {
-        let (w, h) = (65528u16, 72u16);
-        let mut jpg = vec![0xff, 0xd8, 0xff, 0xdb, 0, 67, 0];
-        jpg.extend([1; 64]);
-        jpg.extend([0xff, 0xc1, 0, 11, 12]);
-        jpg.extend(h.to_be_bytes());
-        jpg.extend(w.to_be_bytes());
-        jpg.extend([1, 1, 0x11, 0]);
-        // One-bit Huffman codes: DC category 15 and AC end-of-block.
-        for (id, symbol) in [(0, 15), (0x10, 0)] {
-            jpg.extend([0xff, 0xc4, 0, 20, id, 1]);
-            jpg.extend([0; 15]);
-            jpg.push(symbol);
+        // accumulated dc prediction overflow is corrupt
+        {
+            let (w, h) = (65528u16, 72u16);
+            let mut jpg = vec![0xff, 0xd8, 0xff, 0xdb, 0, 67, 0];
+            jpg.extend([1; 64]);
+            jpg.extend([0xff, 0xc1, 0, 11, 12]);
+            jpg.extend(h.to_be_bytes());
+            jpg.extend(w.to_be_bytes());
+            jpg.extend([1, 1, 0x11, 0]);
+            // One-bit Huffman codes: DC category 15 and AC end-of-block.
+            for (id, symbol) in [(0, 15), (0x10, 0)] {
+                jpg.extend([0xff, 0xc4, 0, 20, id, 1]);
+                jpg.extend([0; 15]);
+                jpg.push(symbol);
+            }
+            jpg.extend([0xff, 0xda, 0, 8, 1, 1, 0, 0, 63, 0]);
+            let mut bits = BitWriter { out: vec![], acc: 0, n: 0 };
+            for _ in 0..usize::from(w).div_ceil(8) * usize::from(h).div_ceil(8) {
+                bits.put(0, 1);
+                bits.put(32767, 15);
+                bits.put(0, 1);
+            }
+            bits.flush();
+            jpg.extend(bits.out);
+            jpg.extend([0xff, 0xd9]);
+            assert!(matches!(decode(&jpg, 10_000_000), Err(RawError::Corrupt(_))));
         }
-        jpg.extend([0xff, 0xda, 0, 8, 1, 1, 0, 0, 63, 0]);
-        let mut bits = BitWriter { out: vec![], acc: 0, n: 0 };
-        for _ in 0..usize::from(w).div_ceil(8) * usize::from(h).div_ceil(8) {
-            bits.put(0, 1);
-            bits.put(32767, 15);
-            bits.put(0, 1);
-        }
-        bits.flush();
-        jpg.extend(bits.out);
-        jpg.extend([0xff, 0xd9]);
-        assert!(matches!(decode(&jpg, 10_000_000), Err(RawError::Corrupt(_))));
     }
 }

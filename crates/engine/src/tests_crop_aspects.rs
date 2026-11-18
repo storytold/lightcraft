@@ -25,18 +25,6 @@ fn custom_names(s: &Session) -> Vec<String> {
 }
 
 #[test]
-fn the_list_starts_with_the_built_in_ratios() {
-    let mut s = Session::with_demo();
-    let names: Vec<String> = listed(&mut s).into_iter().map(|(n, _)| n).collect();
-    assert_eq!(names.first().map(String::as_str), Some("Free"));
-    assert_eq!(names.get(1).map(String::as_str), Some("Original"));
-    assert_eq!(names.len(), 10, "{names:?}");
-    let r = s.execute("crop.aspects", &json!({})).unwrap();
-    let square = r["aspects"].as_array().unwrap().iter().find(|a| a["aspect"] == "1x1").unwrap();
-    assert_eq!(square["builtin"], true);
-}
-
-#[test]
 fn saving_adds_named_ratios_without_a_limit_and_replaces_one_by_name() {
     let mut s = Session::with_demo();
     for i in 1..=12 {
@@ -56,35 +44,11 @@ fn saving_adds_named_ratios_without_a_limit_and_replaces_one_by_name() {
     assert_eq!(names.last().map(String::as_str), Some("Instagram Portrait"));
 }
 
-#[test]
-fn bad_ratios_and_names_are_refused_and_change_nothing() {
-    let mut s = Session::with_demo();
-    s.execute("crop.saveAspect", &json!({"name": "Print", "aspect": [7, 5]})).unwrap();
-    let before = s.crop_aspects.clone();
-    for p in [
-        json!({"name": "", "aspect": [3, 2]}),
-        json!({"name": "   ", "aspect": [3, 2]}),
-        json!({"aspect": [3, 2]}),
-        json!({"name": "No ratio"}),
-        json!({"name": "Zero", "aspect": [0, 2]}),
-        json!({"name": "Negative", "aspect": [-3, 2]}),
-        json!({"name": "Too wide", "aspect": [1000, 1]}),
-        json!({"name": "One number", "aspect": [3]}),
-        json!({"name": "Text", "aspect": "wide"}),
-        json!({"name": "Free", "aspect": [3, 2]}),
-        json!({"name": "original", "aspect": [3, 2]}),
-        json!({"name": "x".repeat(200), "aspect": [3, 2]}),
-    ] {
-        assert!(s.execute("crop.saveAspect", &p).is_err(), "refused: {p}");
-    }
-    assert_eq!(s.crop_aspects, before);
-}
-
 /// What `crop.saveAspect` keeps, `crop.aspect` applies: a ratio whose numbers round to zero
 /// hundredths (the precision `crop.aspect` stores) is refused when saved and dropped on load,
 /// instead of becoming a menu entry that can't be used (#1856 review).
 #[test]
-fn a_saved_ratio_can_always_be_applied() {
+fn bad_tiny_and_rounded_ratios_names_and_hidden_flags_are_refused_and_change_nothing() {
     let mut s = Session::with_demo();
     for tiny in [[0.001, 0.001], [0.0049, 0.0049], [3.0, 0.004]] {
         let applied = s.execute("crop.aspect", &json!({"aspect": tiny}));
@@ -106,6 +70,40 @@ fn a_saved_ratio_can_always_be_applied() {
     }
     .sanitized();
     assert_eq!(loaded.custom.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["Small"]);
+
+    // CodeRabbit on #3762: a ratio that is over 20:1 once rounded to hundredths is refused (what `crop.aspect` stores
+    // is the rounded pair), and `hidden` must be a boolean when it is given.
+    assert!(s.execute("crop.aspect", &json!({"aspect": [1, 0.044]})).is_err(), "22.7:1 once rounded");
+    assert!(s.execute("crop.saveAspect", &json!({"name": "Thin", "aspect": [1, 0.044]})).is_err());
+    s.execute("crop.aspect", &json!({"aspect": [1, 0.05]})).unwrap();
+    for bad in [json!("yes"), json!(1), json!([true])] {
+        let e = s.execute("crop.hideAspect", &json!({"aspect": "4x5", "hidden": bad})).unwrap_err().to_string();
+        assert!(e.contains("true or false"), "{bad}: {e}");
+    }
+    assert!(s.crop_aspects.hidden.is_empty());
+    s.execute("crop.hideAspect", &json!({"aspect": "4x5", "hidden": null})).unwrap();
+    assert_eq!(s.crop_aspects.hidden, ["4x5"]);
+
+    // bad ratios and names are refused and change nothing
+    s.execute("crop.saveAspect", &json!({"name": "Print", "aspect": [7, 5]})).unwrap();
+    let before = s.crop_aspects.clone();
+    for p in [
+        json!({"name": "", "aspect": [3, 2]}),
+        json!({"name": "   ", "aspect": [3, 2]}),
+        json!({"aspect": [3, 2]}),
+        json!({"name": "No ratio"}),
+        json!({"name": "Zero", "aspect": [0, 2]}),
+        json!({"name": "Negative", "aspect": [-3, 2]}),
+        json!({"name": "Too wide", "aspect": [1000, 1]}),
+        json!({"name": "One number", "aspect": [3]}),
+        json!({"name": "Text", "aspect": "wide"}),
+        json!({"name": "Free", "aspect": [3, 2]}),
+        json!({"name": "original", "aspect": [3, 2]}),
+        json!({"name": "x".repeat(200), "aspect": [3, 2]}),
+    ] {
+        assert!(s.execute("crop.saveAspect", &p).is_err(), "refused: {p}");
+    }
+    assert_eq!(s.crop_aspects, before);
 }
 
 #[test]
@@ -204,6 +202,18 @@ fn a_hand_edited_prefs_file_loads_only_valid_ratios() {
     assert_eq!(s.crop_aspects.hidden, ["4x3"]);
     s.close_library().unwrap();
     let _ = std::fs::remove_dir_all(&lib);
+
+    // a saved ratio that doesn't read is left out; the other ratios, and the rest of the preferences, still load
+    let read: crate::cmd::crop_aspects::CropAspects = serde_json::from_value(json!({
+        "custom": [{"name": "Pano", "aspect": [3, 1]}, {"name": "Broken", "aspect": "3x1"}, {"name": "Story", "aspect": [9, 16]}],
+        "hidden": ["4x5", 7],
+    }))
+    .unwrap();
+    let names: Vec<&str> = read.custom.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names, ["Pano", "Story"]);
+    assert_eq!(read.hidden, ["4x5"]);
+    let not_lists: crate::cmd::crop_aspects::CropAspects = serde_json::from_value(json!({"custom": 3, "hidden": "4x5"})).unwrap();
+    assert_eq!(not_lists, Default::default());
 }
 
 /// A change to the saved ratios that prefs.json can't take isn't kept in the session either: the
@@ -260,37 +270,4 @@ fn a_ratio_change_that_cant_be_saved_is_not_kept() {
     files.fail.store(false, Ordering::Relaxed);
     s.execute("crop.deleteAspect", &json!({"name": "Pano"})).unwrap();
     assert_eq!(s.crop_aspects.custom.len(), 1);
-}
-
-/// CodeRabbit on #3762: a ratio that is over 20:1 once rounded to hundredths is refused (what
-/// `crop.aspect` stores is the rounded pair), and `hidden` must be a boolean when it is given.
-#[test]
-fn rounded_ratios_and_hidden_flags_are_checked() {
-    let mut s = Session::with_demo();
-    assert!(s.execute("crop.aspect", &json!({"aspect": [1, 0.044]})).is_err(), "22.7:1 once rounded");
-    assert!(s.execute("crop.saveAspect", &json!({"name": "Thin", "aspect": [1, 0.044]})).is_err());
-    s.execute("crop.aspect", &json!({"aspect": [1, 0.05]})).unwrap();
-    for bad in [json!("yes"), json!(1), json!([true])] {
-        let e = s.execute("crop.hideAspect", &json!({"aspect": "4x5", "hidden": bad})).unwrap_err().to_string();
-        assert!(e.contains("true or false"), "{bad}: {e}");
-    }
-    assert!(s.crop_aspects.hidden.is_empty());
-    s.execute("crop.hideAspect", &json!({"aspect": "4x5", "hidden": null})).unwrap();
-    assert_eq!(s.crop_aspects.hidden, ["4x5"]);
-}
-
-/// A saved ratio that doesn't read (hand-edited prefs.json) is left out; the other ratios, and
-/// the rest of the preferences, still load.
-#[test]
-fn a_saved_ratio_that_doesnt_read_is_skipped_not_the_whole_file() {
-    let read: crate::cmd::crop_aspects::CropAspects = serde_json::from_value(json!({
-        "custom": [{"name": "Pano", "aspect": [3, 1]}, {"name": "Broken", "aspect": "3x1"}, {"name": "Story", "aspect": [9, 16]}],
-        "hidden": ["4x5", 7],
-    }))
-    .unwrap();
-    let names: Vec<&str> = read.custom.iter().map(|a| a.name.as_str()).collect();
-    assert_eq!(names, ["Pano", "Story"]);
-    assert_eq!(read.hidden, ["4x5"]);
-    let not_lists: crate::cmd::crop_aspects::CropAspects = serde_json::from_value(json!({"custom": 3, "hidden": "4x5"})).unwrap();
-    assert_eq!(not_lists, Default::default());
 }

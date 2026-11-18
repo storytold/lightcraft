@@ -21,6 +21,22 @@ fn tone_apply(y: f32) -> f32 {
     return v;
 }
 
+fn rgb_contrast_apply(v: f32, base: u32, zero: f32, peak: f32) -> f32 {
+    if (v <= 0.0) {
+        return zero;
+    }
+    if (v >= peak) {
+        return aux[base + RGB_CONTRAST_N - 1u] + (v - peak);
+    }
+    let u = sqrt(v / peak);
+    let f = u * f32(RGB_CONTRAST_N - 1u);
+    let i = min(u32(f), RGB_CONTRAST_N - 2u);
+    let t = f - f32(i);
+    let a = aux[base + i];
+    let b = aux[base + i + 1u];
+    return a + (b - a) * t;
+}
+
 // The camera chroma curve follows the tone LUT in `aux` (`ToneMap::chroma_scale`).
 fn chroma_scale(o: f32) -> f32 {
     let f = clamp(o, 0.0, 1.0) * f32(CHROMA_N - 1u);
@@ -62,6 +78,36 @@ fn lut_hdr(o: u32, x: f32, hdr: bool) -> f32 {
 fn curve(ch: u32, x: f32, hdr: bool) -> f32 {
     return lut_hdr(pu(F_CURVE_OFF) + ch * CURVE_N, x, hdr);
 }
+
+// `levels::StageK::eval` on one value: the stage record at word `o` of the parameters (active, black, 1/range,
+// out black, span, slope at 0, slope at 1, has a midtone table) and the table's place `off` in `aux`. The stretch is not
+// limited: the midtone curve (its samples, then its end slopes beyond 0 and 1) runs on, and the result is limited below
+// at 0, and above at 1 unless the render is HDR.
+const MIDTONE_N: u32 = 257u;
+fn levels_stage(o: u32, off: u32, x: f32, hdr: bool) -> f32 {
+    if (pf(o) == 0.0) {
+        return x;
+    }
+    let t = (x - pf(o + 1u)) * pf(o + 2u);
+    var g = t;
+    if (pf(o + 7u) != 0.0) {
+        if (t <= 0.0) {
+            g = pf(o + 5u) * t;
+        } else if (t >= 1.0) {
+            g = 1.0 + pf(o + 6u) * (t - 1.0);
+        } else {
+            let f = t * f32(MIDTONE_N - 1u);
+            let i = min(u32(f), MIDTONE_N - 2u);
+            g = aux[off + i] + (aux[off + i + 1u] - aux[off + i]) * (f - f32(i));
+        }
+    }
+    var y = max(pf(o + 3u) + pf(o + 4u) * g, 0.0);
+    if (!hdr) {
+        y = min(y, 1.0);
+    }
+    return y;
+}
+
 
 // The exact sRGB curve (`lcc_color::transfer`), unbounded above 1 as HDR renders encode.
 fn lin_to_srgb(v: f32) -> f32 {
@@ -961,7 +1007,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- tone map on luminance, highlight desaturation
     let yl = lum2020(c);
-    let o = tone_apply(yl);
+    var o = tone_apply(yl);
     var d = vec3<f32>(0.0);
     if (yl > 1e-9) {
         d = c * o / yl;
@@ -971,6 +1017,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         d = vec3<f32>(o) + (d - vec3<f32>(o)) * k;
     }
     let peak = pf(F_PEAK);
+    if (pu(F_RGB_CONTRAST) != 0u) {
+        let rc_base = pu(F_RGB_CONTRAST_OFF);
+        let rc_zero = pf(F_RGB_CONTRAST_ZERO);
+        d = vec3<f32>(
+            rgb_contrast_apply(d.x, rc_base, rc_zero, peak),
+            rgb_contrast_apply(d.y, rc_base, rc_zero, peak),
+            rgb_contrast_apply(d.z, rc_base, rc_zero, peak),
+        );
+        o = rgb_contrast_apply(o, rc_base, rc_zero, peak);
+    }
     let hdr = peak > 1.0;
     let deep = pu(F_DEEP) != 0u;
     let mx = max(d.x, max(d.y, d.z));
@@ -1092,6 +1148,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         e = vec3<f32>(lin_to_srgb(q.x), lin_to_srgb(q.y), lin_to_srgb(q.z));
     } else {
         e = vec3<f32>(encode_srgb(r.x), encode_srgb(r.y), encode_srgb(r.z));
+    }
+    // --- Levels: each channel's own stage first, then the master's (one call site, as `finish_with`)
+    if (pu(F_LEVELS) != 0u) {
+        let c = vec3<f32>(
+            levels_stage(F_LEVELS_R, pu(F_LEVELS_OFF_R), e.x, hdr),
+            levels_stage(F_LEVELS_G, pu(F_LEVELS_OFF_G), e.y, hdr),
+            levels_stage(F_LEVELS_B, pu(F_LEVELS_OFF_B), e.z, hdr));
+        e = vec3<f32>(
+            levels_stage(F_LEVELS_M, pu(F_LEVELS_OFF_M), c.x, hdr),
+            levels_stage(F_LEVELS_M, pu(F_LEVELS_OFF_M), c.y, hdr),
+            levels_stage(F_LEVELS_M, pu(F_LEVELS_OFF_M), c.z, hdr));
     }
     if (pu(F_CURVES) != 0u) {
         let e0 = e;

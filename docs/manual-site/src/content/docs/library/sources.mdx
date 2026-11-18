@@ -18,7 +18,10 @@ import Shot from '../../../components/Shot.astro';
 - **Folders**: the folders your photos were imported from, with counts including subfolders. Each disk is a row of its own.
   - Right-click: **Rename Folder…**, **Move Folder To…** (on disk; photos relinked; undoable), **Create Folder**, **Show in File Manager**, **Synchronize**, **Remove**, a colour **Label**.
   - **Show photos from subfolders** includes subfolder photos.
-- **Local**: browse any folder on disk without importing; see [Import](../import/).
+  - Folders that only hold subfolders keep their own rows, so the list nests as it does on disk.
+  - **Show Parent Folder** (right-click) adds the parent to the list.
+  - A folder that cannot be listed shows the reason instead of an empty "No photos in this folder".
+- **Local**: browse any folder on disk without importing; see [Import](../import/). A folder under Local shows every photo in it, including those already in the library.
 - **Quick Collection** (`B` toggles a photo in): **Cmd/Ctrl+B** shows it, **Cmd/Ctrl+Alt+B** clears it, **Cmd/Ctrl+Shift+B** saves it as a collection.
 - **Move to Folder**, **Show in file manager**, **Delete** (to Recently Deleted), **Restore**, **Delete Permanently**, **Delete from Disk**.
 - **Delete Rejected** removes every rejected photo; **Hide Rejected Photos** just filters them out.

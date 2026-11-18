@@ -245,11 +245,18 @@ mod tests {
     /// bigger than it is dropped, not inflated. Compressing an 8 MiB string is a few
     /// kilobytes — the reverse of what the unbounded `get_text()` path allowed.
     #[test]
-    fn compressed_xmp_over_the_cap_is_dropped() {
+    fn compressed_xmp_is_read_under_the_cap_and_dropped_over_it() {
         let out = png_with_compressed_xmp(&"x".repeat(8 << 20));
         let d = crate::decode(&out, DecodeOptions::default()).unwrap();
         assert!(d.xmp.is_none());
         assert_eq!((d.width, d.height), (1, 1));
+        // compressed xmp under the cap is read
+        // XMP within the cap is still read, compressed or not.
+        {
+            let out = png_with_compressed_xmp(&"<?xpacket?><xmp/>".repeat(100));
+            let d = crate::decode(&out, DecodeOptions::default()).unwrap();
+            assert!(d.xmp.as_deref().is_some_and(|x| x.contains("xmp/")));
+        }
     }
 
     /// #2562: an IHDR claiming 20000×20000 RGBA16 (3.2 GB of pixel bytes) in a file of under 100 bytes is refused
@@ -332,14 +339,6 @@ mod tests {
         huge.extend(u32::MAX.to_be_bytes());
         huge.extend(b"IDAT");
         assert_eq!(super::idat_bytes(&huge), 0);
-    }
-
-    /// XMP within the cap is still read, compressed or not.
-    #[test]
-    fn compressed_xmp_under_the_cap_is_read() {
-        let out = png_with_compressed_xmp(&"<?xpacket?><xmp/>".repeat(100));
-        let d = crate::decode(&out, DecodeOptions::default()).unwrap();
-        assert!(d.xmp.as_deref().is_some_and(|x| x.contains("xmp/")));
     }
 
     /// A little-endian PNG with one compressed iTXt chunk carrying `payload` as XMP.

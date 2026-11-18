@@ -215,23 +215,25 @@ mod tests {
         }
     }
 
-    /// While the key is being rotated, the build trusts the old and the new one.
     #[test]
-    fn any_key_of_the_list_may_have_signed() {
-        let (old, old_public) = test_key(7);
-        let (new, new_public) = test_key(8);
-        let (stranger, _) = test_key(9);
-        let both = UpdateKey::parse_list(&[&new_public.to_text().join(""), &old_public.to_text().join("")]).expect("two keys");
-        both.verify(LIST, &sign(&old, LIST)).expect("the old key");
-        both.verify(LIST, &sign(&new, LIST)).expect("the new key");
-        assert!(both.verify(LIST, &sign(&stranger, LIST)).is_err(), "no other key");
-    }
-
-    #[test]
-    fn a_list_signed_by_the_key_verifies() {
-        let (signing, public) = test_key(7);
-        public.verify(LIST, &sign(&signing, LIST)).expect("verifies");
-        public.verify(LIST, &format!("{}\n", sign(&signing, LIST))).expect("a trailing newline is fine");
+    fn a_list_signed_by_a_listed_key_verifies() {
+        // a list signed by the key verifies
+        {
+            let (signing, public) = test_key(7);
+            public.verify(LIST, &sign(&signing, LIST)).expect("verifies");
+            public.verify(LIST, &format!("{}\n", sign(&signing, LIST))).expect("a trailing newline is fine");
+        }
+        // any key of the list may have signed
+        // While the key is being rotated, the build trusts the old and the new one.
+        {
+            let (old, old_public) = test_key(7);
+            let (new, new_public) = test_key(8);
+            let (stranger, _) = test_key(9);
+            let both = UpdateKey::parse_list(&[&new_public.to_text().join(""), &old_public.to_text().join("")]).expect("two keys");
+            both.verify(LIST, &sign(&old, LIST)).expect("the old key");
+            both.verify(LIST, &sign(&new, LIST)).expect("the new key");
+            assert!(both.verify(LIST, &sign(&stranger, LIST)).is_err(), "no other key");
+        }
     }
 
     #[test]

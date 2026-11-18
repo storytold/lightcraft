@@ -24,8 +24,13 @@ JSON line for each command says why it failed. If the app does crash, please rep
 
 - GPU problems: start with `<PREFIX>_GPU=0` (CPU only) to confirm, or pick a backend with
   `<PREFIX>_GPU_BACKEND=vulkan|metal|dx12|gl` (`off` also disables the GPU). Settings has a GPU rendering switch too.
+- The window stopped drawing and the app ended with "its window stopped drawing: the graphics driver lost the …
+  renderer's GPU device": the library and settings were saved first. From the next start the window uses the next
+  renderer (Windows: Vulkan → DX12 → GL → OpenGL) and keeps trying the lost one last; `<PREFIX>_GPU_BACKEND=dx12`
+  (or `vulkan`, `gl`, `glow`) still forces one. Deleting `window-lost` in the settings folder forgets the loss.
 - `<PREFIX>_PROFILE=1` prints per-stage pipeline timings to standard error.
 - Library → Previews → Clear Preview Cache rebuilds thumbnails and previews.
+- A very large library on a network share or hard disk opens much faster since 26.46.2; culling stays responsive while previews are prepared in the background, and a raw's first picture is its camera JPEG.
 
 ## A raw file looks wrong or doesn't open
 
@@ -37,10 +42,16 @@ most. `<cli> calibrate` can fit a profile for your camera from your own raws and
 ## Photos are missing
 
 Library → Find Missing Photos… lists photos whose originals can't be found (a disconnected drive, a renamed folder)
-and relinks them. Their edits and metadata are safe in the catalog meanwhile.
+and relinks them. Their edits and metadata are safe in the catalog meanwhile. A folder that can't be read (permissions, a
+disconnected share) shows the reason in the grid instead of an empty "No photos in this folder".
+
+Library → Validate DNG Files checks the selected DNGs' raw data against their checksum and lists damaged files.
 
 ## The catalog won't open
 
+- After an update the app first shows *Opening your catalog* while it makes and checks a safety copy of the
+  catalog (the progress bar moves by the copy's bytes); on a large catalog this takes a little while and is
+  normal, not a hang. A catalog that still can't be opened ends at the usual window offering Try Again.
 - "This library is already open in …": another running program holds the library's lock (the message names the
   process and computer). Close it there. A `catalog.lock` file left by a crash doesn't block anything: the
   operating system releases the lock when the process ends.
@@ -65,6 +76,10 @@ download it for this system and install it; the app restarts afterwards. Things 
   the releases page instead, and tell the project.
 - "This build can't verify updates": the build was made without an update key (a fork or a build from
   source). It still tells you when a new version is out; download it from the releases page.
+- An update installed through the Windows installer (`.msi`): the app quits, the installer runs and
+  the app starts again when it is done. When the installer wants a Windows restart as part of it
+  (rare), the app starts after that restart instead. Start-menu shortcuts — and taskbar entries
+  pinned from them — keep working across updates.
 - A Windows copy unpacked from the portable zip (with or without `portable.txt`) updates itself: the new zip is
   unpacked beside the program, its files replace the copy's own, and the new version starts once the app has quit.
   Only the zip's files are replaced; `portable.txt`, the portable data folder and anything else you put there stay.

@@ -23,6 +23,19 @@ fn click(h: &mut Headless, id: &str) {
     }
 }
 
+/// Step until `done` (a server call made on a worker answers through the pump), at most 10 s.
+fn wait(h: &mut Headless, what: &str, mut done: impl FnMut(&mut Headless) -> bool) {
+    let t = std::time::Instant::now();
+    loop {
+        h.step();
+        if done(h) {
+            return;
+        }
+        assert!(t.elapsed() < Duration::from_secs(10), "timed out: {what}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 fn app(dir: &std::path::Path) -> Headless {
     let mut s = lcc_engine::Session::new();
     s.remote.secrets_file = Some(dir.join("credentials.enc"));
@@ -41,7 +54,7 @@ fn immich_source(h: &Headless) -> Option<bool> {
 // of its own); the dialog switches between Files and Immich.
 #[test]
 fn import_from_immich_is_a_source_of_the_import_dialog() {
-    let dir = std::env::temp_dir().join(format!("lcc-immich-ui-src-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lcc-immich-ui-src");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut h = app(&dir);
@@ -65,7 +78,7 @@ fn import_from_immich_is_a_source_of_the_import_dialog() {
 // Feature: keys kept in the encrypted file are unlocked with a passphrase prompt once per session.
 #[test]
 fn key_file_prompt_creates_and_unlocks_the_file() {
-    let dir = std::env::temp_dir().join(format!("lcc-immich-ui-key-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lcc-immich-ui-key");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut h = app(&dir);
@@ -140,7 +153,7 @@ fn mini_server(perms: Vec<&'static str>) -> String {
 // rule row in the sync rules.
 #[test]
 fn immich_card_is_compact() {
-    let dir = std::env::temp_dir().join(format!("lcc-immich-ui-card-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lcc-immich-ui-card");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut h = app(&dir);
@@ -165,6 +178,10 @@ fn immich_card_is_compact() {
     click(&mut h, "button:immichSyncPanel-0");
     assert!(has(&h, "label:immichSyncStatus-0"));
     // IMM-SIDECARS: the account card opens the sidecar push/pull section
+    // the rarely used buttons are behind More
+    crate::settings_screen::reveal(&mut h, "button:immichMore-0");
+    click(&mut h, "button:immichMore-0");
+    assert!(has(&h, "button:immichDisconnect-0"), "More shows the rest of the buttons");
     crate::settings_screen::reveal(&mut h, "button:immichSidecars-0");
     click(&mut h, "button:immichSidecars-0");
     assert!(has(&h, "button:immichPushXmp-0") && has(&h, "button:immichPullXmp-0"), "push and pull are offered");
@@ -180,7 +197,7 @@ fn immich_card_is_compact() {
     // (further down the Sync section: scrolled to, as a person would)
     let mut text = h.painted_text().join("\n");
     for _ in 0..12 {
-        if text.contains("Collections ↔ albums") {
+        if text.contains("Favourite means") {
             break;
         }
         h.request("ui.hoverWidget", json!({"id": "settings:rows", "fx": 0.98, "fy": 0.5}), T);
@@ -190,7 +207,8 @@ fn immich_card_is_compact() {
         }
         text = h.painted_text().join("\n");
     }
-    assert!(text.contains("Collections ↔ albums"), "the album rule row");
+    assert!(text.contains("Favourite means"), "the rest of the Sync section");
+    assert!(!text.contains("Collections ↔ albums"), "the name-matching album rule is gone");
     if let Some(p) = lcc_brand::env_os("TEST_SHOTS") {
         h.app.services.png = Some(Box::new(|img: &lcc_raster::Rgba8| {
             lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(img), &lcc_codecs::EncodeMeta::default()).unwrap_or_default()
@@ -214,7 +232,7 @@ fn immich_card_is_compact() {
 // that the connection is not encrypted; https and this machine's own address show none.
 #[test]
 fn plain_http_server_url_shows_an_unencrypted_warning() {
-    let dir = std::env::temp_dir().join(format!("lcc-immich-ui-http-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lcc-immich-ui-http");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut h = app(&dir);
@@ -295,7 +313,7 @@ fn locked_folder_server(pin: &'static str) -> String {
 // with the server's refusal, and a unlock refreshes the status line.
 #[test]
 fn locked_folders_section_unlocks_with_a_pin() {
-    let dir = std::env::temp_dir().join(format!("lcc-immich-ui-locked-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lcc-immich-ui-locked");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut h = app(&dir);
@@ -305,6 +323,10 @@ fn locked_folders_section_unlocks_with_a_pin() {
     h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "connections"}}), T);
     h.step();
     h.step();
+    // the rarely used buttons are behind More
+    crate::settings_screen::reveal(&mut h, "button:immichMore-0");
+    click(&mut h, "button:immichMore-0");
+    assert!(has(&h, "button:immichDisconnect-0"), "More shows the rest of the buttons");
     crate::settings_screen::reveal(&mut h, "button:immichLocked-0");
     click(&mut h, "button:immichLocked-0");
     assert!(has(&h, "label:immichLockedStatus-0"), "the status line shows");
@@ -325,6 +347,8 @@ fn locked_folders_section_unlocks_with_a_pin() {
         h.step();
         h.app.immich.locked_status()["isElevated"] == true
     };
+    // (the status is read on a worker: the section says "checking" until it is here)
+    wait(&mut h, "the locked-folder status", |h| !h.app.immich.locked_status().is_null());
     assert!(!status(&mut h), "the session starts locked");
 
     // the dialog takes the secret; a wrong one shows the server's refusal
@@ -332,18 +356,15 @@ fn locked_folders_section_unlocks_with_a_pin() {
     assert!(has(&h, "field:immichUnlockSecret"), "the dialog's secret field");
     h.app.immich.type_unlock_secret("9999");
     click(&mut h, "button:immichUnlockGo");
-    assert!(has(&h, "label:immichUnlockError-0"), "the refusal is shown in the dialog");
+    wait(&mut h, "the refusal is shown in the dialog", |h| has(h, "label:immichUnlockError-0"));
     assert!(has(&h, "field:immichUnlockSecret"), "still open for another try");
     assert!(!status(&mut h), "still locked");
 
     // the right PIN unlocks: the dialog closes and the section's status refreshes
     h.app.immich.type_unlock_secret("1357");
     click(&mut h, "button:immichUnlockGo");
-    for _ in 0..4 {
-        h.step();
-    }
-    assert!(!has(&h, "field:immichUnlockSecret"), "the dialog closed");
-    assert!(status(&mut h), "unlocked");
+    wait(&mut h, "the dialog closed", |h| !has(h, "field:immichUnlockSecret"));
+    wait(&mut h, "unlocked", status);
     let st = h.app.session.execute("immich.authStatus", &json!({})).unwrap();
     assert_eq!(st["isElevated"], true, "{st}");
     // the typed secret is gone, and it never reached the journal

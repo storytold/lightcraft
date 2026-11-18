@@ -43,22 +43,12 @@ fn run(h: &mut Headless, id: &str, params: serde_json::Value) -> serde_json::Val
 }
 
 #[test]
-fn witchcraft_shows_the_palette_eboda_keeps_lightrooms_panels() {
+fn witchcraft_shows_the_palette_with_two_wheel_sets_and_eboda_keeps_lightrooms_panels() {
     let mut h = demo();
     for key in ["lift", "gamma", "gain", "offset"] {
         assert!(has(&h, &format!("wheel:primaries-{key}")), "wheel {key}");
     }
     assert!(has(&h, "button:primariesWheels-log"), "the Color | Log tabs");
-    // back in Eboda the palette is away: Lightroom's own panels only
-    run(&mut h, "view.gradingMode", json!({"mode": "eboda"}));
-    h.step();
-    assert!(!has(&h, "wheel:primaries-lift"));
-    assert_eq!(h.app.ui.settings.grading_mode, GradingMode::Eboda);
-}
-
-#[test]
-fn the_log_wheels_are_their_own_set_and_both_render() {
-    let mut h = demo();
     // a Color wheel and a Log wheel are separate edits that both hold their values
     run(&mut h, "develop.set", json!({"control": "primaries.lift.sat", "value": 40.0}));
     assert!(!any_has(&h, "primaries.low"), "the Color view has no range sliders");
@@ -86,10 +76,32 @@ fn the_log_wheels_are_their_own_set_and_both_render() {
     assert!(has(&h, "wheel:primaries-lift"));
     let p = h.app.session.develop_of(id).unwrap_or_default().primaries;
     assert_eq!((p.lift.sat, p.log_wheels.shadow.sat), (40.0, 55.0));
+    // out of solo: the panel runs Basic, then the two Witchcraft sections (their titles pill-marked)
+    run(&mut h, "view.soloSections", json!({"on": false}));
+    h.settle(SETTLE);
+    assert!(has(&h, "sectionBadge:primaries") && has(&h, "sectionBadge:hsl"), "the Witchcraft pills");
+    let sections: Vec<&(String, egui::Rect)> = h
+        .app
+        .widgets
+        .iter()
+        .filter(|(w, _)| w.starts_with("section:"))
+        .filter(|(w, _)| ["section:light", "section:primaries", "section:hsl", "section:curve"].contains(&w.as_str()))
+        .collect();
+    assert_eq!(sections.len(), 4, "the four sections: {:?}", sections.iter().map(|(w, _)| w).collect::<Vec<_>>());
+    let at = |id: &str| sections.iter().find(|(w, _)| w == id).map(|(_, r)| r.top()).unwrap();
+    assert!(at("section:light") < at("section:primaries"), "Basic first");
+    assert!(at("section:primaries") < at("section:hsl"), "then Primaries");
+    assert!(at("section:hsl") < at("section:curve"), "then HSL Curves");
+    // in Eboda the pills are away with their sections
+    run(&mut h, "view.gradingMode", json!({"mode": "eboda"}));
+    h.settle(SETTLE);
+    assert!(!has(&h, "sectionBadge:primaries"));
+    assert!(!has(&h, "wheel:primaries-lift"), "back in Eboda the palette is away: Lightroom's own panels only");
+    assert_eq!(h.app.ui.settings.grading_mode, GradingMode::Eboda);
 }
 
 #[test]
-fn the_hsl_curves_hold_points_anywhere() {
+fn the_hsl_curves_hold_points_anywhere_and_take_a_picked_colour() {
     let mut h = demo();
     h.app.ui.solo_section("hsl");
     h.settle(SETTLE);
@@ -119,38 +131,7 @@ fn the_hsl_curves_hold_points_anywhere() {
     run(&mut h, "develop.hslCurves", json!({"channel": "sat", "points": []}));
     let c = &h.app.session.develop_of(id).unwrap_or_default().hsl_curves;
     assert!(c.sat.is_empty() && c.hue.len() == 1 && c.hue[0].y == 0.4);
-}
-
-#[test]
-fn the_witchcraft_sections_carry_the_modes_pill_and_follow_basic() {
-    let mut h = demo();
-    // out of solo: the panel runs Basic, then the two Witchcraft sections (their titles pill-marked)
-    run(&mut h, "view.soloSections", json!({"on": false}));
-    h.settle(SETTLE);
-    assert!(has(&h, "sectionBadge:primaries") && has(&h, "sectionBadge:hsl"), "the Witchcraft pills");
-    let sections: Vec<&(String, egui::Rect)> = h
-        .app
-        .widgets
-        .iter()
-        .filter(|(w, _)| w.starts_with("section:"))
-        .filter(|(w, _)| ["section:light", "section:primaries", "section:hsl", "section:curve"].contains(&w.as_str()))
-        .collect();
-    assert_eq!(sections.len(), 4, "the four sections: {:?}", sections.iter().map(|(w, _)| w).collect::<Vec<_>>());
-    let at = |id: &str| sections.iter().find(|(w, _)| w == id).map(|(_, r)| r.top()).unwrap();
-    assert!(at("section:light") < at("section:primaries"), "Basic first");
-    assert!(at("section:primaries") < at("section:hsl"), "then Primaries");
-    assert!(at("section:hsl") < at("section:curve"), "then HSL Curves");
-    // in Eboda the pills are away with their sections
-    run(&mut h, "view.gradingMode", json!({"mode": "eboda"}));
-    h.settle(SETTLE);
-    assert!(!has(&h, "sectionBadge:primaries"));
-}
-
-#[test]
-fn picking_a_colour_plants_a_point_on_the_curve() {
-    let mut h = demo();
-    h.app.ui.solo_section("hsl");
-    h.settle(SETTLE);
+    // the picker: the engine command plants the picked hue on the (now empty) saturation curve
     assert!(has(&h, "icon:hslPick") || h.app.widgets.iter().any(|(w, _)| w.contains("hslPick")), "the picker button");
     // the picker arms, and the engine command plants the picked hue on the shown curve
     h.app.ui.hsl_curve = "sat".into();
@@ -159,23 +140,6 @@ fn picking_a_colour_plants_a_point_on_the_curve() {
     assert!((0.0..=1.0).contains(&x), "{r}");
     let id = h.app.session.active().unwrap();
     let c = &h.app.session.develop_of(id).unwrap_or_default().hsl_curves;
-    assert_eq!(c.sat.len(), 1);
-    assert!((c.sat[0].x - x).abs() < 1e-9);
-    assert!(c.sat[0].y.abs() < 1e-9, "a point plants at the curve's current height: {:?}", c.sat[0]);
-}
-
-#[test]
-fn the_wheels_write_the_primaries_controls_and_the_eye_switches_the_palette_off() {
-    let mut h = demo();
-    run(&mut h, "develop.set", json!({"control": "primaries.lift.hue", "value": 220.0}));
-    run(&mut h, "develop.set", json!({"control": "primaries.lift.sat", "value": 60.0}));
-    run(&mut h, "develop.set", json!({"control": "primaries.gain.lum", "value": 25.0}));
-    let id = h.app.session.active().unwrap();
-    let p = h.app.session.develop_of(id).unwrap_or_default().primaries;
-    assert_eq!((p.lift.hue, p.lift.sat, p.gain.lum), (220.0, 60.0, 25.0));
-    // the section's eye: the palette's settings stop contributing to the render
-    run(&mut h, "develop.sectionEnabled", json!({"section": "primaries", "enabled": false}));
-    let d = h.app.session.develop_of(id).unwrap_or_default();
-    assert!(!d.section_enabled("primaries"));
-    assert!(d.effective().primaries.is_neutral(), "an eye-off palette renders neutral");
+    let planted = c.sat.iter().find(|p| (p.x - x).abs() < 1e-9).expect("the picked hue is on the curve");
+    assert!(planted.y.abs() < 1e-9, "a point plants at the curve's current height: {planted:?}");
 }

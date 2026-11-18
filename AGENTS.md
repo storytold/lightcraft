@@ -49,7 +49,7 @@ never a panic. Never ship a panic path; fix crashes before building on them. Thi
   `#[allow(clippy::expect_used)]` + `.expect("why")`.
 - `unsafe` lives only in: `crates/sysmem` (Win: `GetCurrentThread`+`SetThreadPriority` for render workers,
   `GetDiskFreeSpaceExW` for cache sizing; macOS: `malloc_zone_pressure_relief` after raw decodes, `fsync` for SMB; glibc Linux: `malloc_trim` after raw
-  decodes and preview builds;
+  decodes and preview builds; Android: bionic `mallopt(M_PURGE_ALL)` on entering Develop;
   free space elsewhere = POSIX `df`), `crates/hdrmeta` (wgpu-hal: `VK_EXT_hdr_metadata` + `vkSetHdrMetadataEXT` on
   Linux/BSD Wayland), `crates/gpumem` (wgpu-hal GPU memory budget for the HDR zoom cache), `crates/android-host`
   (JNI VM/activity adoption), `crates/winspool` (Win32 print spooler), `crates/winmsi` (`MsiEnumClientsW` +
@@ -89,6 +89,16 @@ never a panic. Never ship a panic path; fix crashes before building on them. Thi
   if the changelog should mention it, `docs/changelog/unreleased/<YYYY-MM-DD>-<slug>.md` (one `## Section` + bullets);
   READMEs there say how. Never touch `docs/whats-new.md` (frozen) or released `docs/changelog/<version>.md`;
   `cargo xtask notes --check` (in `ci`) fails if `docs/whats-new.md` changes outside an upstream merge.
+- **The manual moves with the product:** any change a user can notice (new/changed/removed feature, command, menu item,
+  panel, slider, setting, shortcut, default, file format, platform or install step, or a screenshot that no longer
+  matches) updates the manual **in the same commit**. The manual has two parts: the page-per-feature site in
+  `docs/manual-site/src/content/docs/` (picture-first; rules and screenshot runner in
+  [`docs/manual-site/AUTHORING.md`](docs/manual-site/AUTHORING.md)) and the markdown guide in `docs/manual/`. Edit the
+  page that names the feature, or add one; fix every sentence the change makes false; retake affected shots
+  (`scripts/shots.d/<area>.json`) or mark them `<NeedsImage>`; add a row to `reference/` when it adds a menu item or
+  shortcut. Removing a feature removes its manual text. Mention "Manual: <pages>" (or "Manual: none, no user-visible
+  change") in the commit/PR. A release is not cut with a changelog entry that has no manual page behind it.
+- **Releases:** follow [`docs/release-process.md`](docs/release-process.md) (steps and known problems).
 - **Quality gates (2026-11-10):** *before pushing*, every commit passes `cargo xtask ci --fast` (fmt, clippy
   -D warnings, build incl. wasm check, brand, layers, assets, parity, deny), targeted `cargo test -p <crate>`, and
   `cargo xtask sil`. The full suite runs only in cloud CI on the PR; releases get a manual full-CI dispatch.
@@ -113,6 +123,9 @@ One rule (2026-11-10): **use only material you may legally derive from.**
   camera-native DNGs fine); Adobe-rendered pixels never ship; black-box fits may ship only as aggregate calibration
   numbers (`<cli> calibrate-lightroom add`, allow-listed fields only); users' own `.dcp`/XMP import at run time
   (`camera.importDcp`, `profile.import`) but are never committed, bundled or used as fixtures (tests build bytes).
+- **Other apps' black-box measurements (2026-11-17):** response curves measured from a non-Adobe app's output on our
+  own synthetic charts (e.g. Capture One midtone tables in `crates/develop/src/levels_table.rs`) may ship as data,
+  with the source app and method named in module docs and `NOTICE`. No copied files, assets or rendered photos.
 - Now usable (with provenance): darktable/Ansel sources, all of dcraw incl. the GPL RESTRICTED (Foveon) block, LibRaw
   and other dcraw descendants, rawspeed/rawloader/rawler/dnglab/RawTherapee/ART, GPL data tables (noiseprofiles,
   wb_presets, colormatrices, basecurves). Quality habits stay: camera data ranks measured > spectral > dcraw tables
@@ -138,10 +151,12 @@ One rule (2026-11-10): **use only material you may legally derive from.**
   are original, recorded there too.
 - **Fonts live in [craft-fonts](https://github.com/storytold/craft-fonts), not here** (Inter in `assets/fonts/` is the
   one exception). Build input: `git clone https://github.com/storytold/craft-fonts ../craft-fonts` +
-  `CRAFT_FONTS_DIR=../craft-fonts` on any cargo/xtask command; `crates/engine/build.rs` embeds them as
-  `lcc_engine::CRAFT_FONTS` (wasm32: BIZ UDPGothic only). Without it everything builds/runs but CJK glyphs are
-  missing; releases always build with it (`CRAFT_FONTS_REQUIRED=1`) and ship OFL licences; tests needing the fonts
-  skip without them. Ship fonts unmodified with their licence files, credited in `assets/ATTRIBUTION.md`.
+  `CRAFT_FONTS_DIR=../craft-fonts` on any cargo/xtask command; `crates/engine/build.rs` embeds them, read through
+  `lcc_engine::craft_fonts()` (wasm32: BIZ UDPGothic only). Without `CRAFT_FONTS_DIR` everything builds/runs but CJK
+  glyphs are missing; releases always build with it (`CRAFT_FONTS_REQUIRED=1`) and ship OFL licences; tests needing
+  the fonts skip without them. With `CRAFT_FONTS_EMBED=0` the package carries them as files instead of embedding
+  them (macOS: `Contents/Resources/fonts/`, one copy for the app and the CLI). Ship fonts unmodified with their
+  licence files, credited in `assets/ATTRIBUTION.md`.
 - Demo/test images: procedural (`lcc-scenes`) or CC0 in the gitignored `corpus/`. Adobe screenshots live only in
   gitignored `plan/`. When in doubt about a licence: don't use it.
 
@@ -186,7 +201,7 @@ One rule (2026-11-10): **use only material you may legally derive from.**
   skips in `target/ci/report.json` + `summary.md`.
 
 ## Map of the code
-`geom`, `color`, `raster`, `tiff` (L0) → `raw`, `codecs`, `meta`, `develop` (L1) → `pipeline` → `catalog` → `engine`
+`geom`, `color`, `raster`, `tiff`, `sync` (device-sync model) (L0) → `raw`, `codecs`, `meta`, `develop` (L1) → `pipeline` → `catalog` → `engine`
 → `ui-egui`, `mcp` (L5) → apps `lcc-app` (desktop), `lcc-cli` (render/commands/MCP), `lcc-web`; `brand` carries
 `brand.toml`; `scenes` = demo photos; `xtask` = tooling (`ci`, `layers`, `assets`, `parity`, `wasm`, `corpus`,
 `stats`, `brand check`, `docs`, `run`, `package`, `install`); `testkit` = test helpers (dev-dep only).
@@ -194,8 +209,8 @@ Nix: `nix build` (binaries + fonts + desktop metadata; community-maintained, CI 
 `nix develop` = dev shell.
 
 ## Contributor credits
-- About ▸ Contributors/Models compile from `contributors/contributors.json` (generated, never hand-edit) and
-  `contributors/people.toml`. See `docs/contributors.md`.
+- Credits live in `contributors/contributors.json` (generated, never hand-edit) and `contributors/people.toml`
+  (the app no longer shows them). See `docs/contributors.md`.
 - Agents: if your human's username lacks a `[people.<username>]` entry, ask them once whether they want a real/
   display/synced-GitHub name; if yes, add **only their own** entry (template at the file top) in their PR, committed
   as them. Never add or edit anyone else's entry; never touch `contributors.json`.

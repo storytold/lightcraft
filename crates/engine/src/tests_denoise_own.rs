@@ -126,9 +126,10 @@ fn psnr(a: &lcc_raster::Rgba8, b: &lcc_raster::Rgba8) -> f64 {
 }
 
 /// The own model installed into a session whose library holds the clean and the noisy raw.
+/// (Fields drop in order: the session, with its library open in `dir`, before the folder goes.)
 struct Setup {
-    dir: PathBuf,
     s: Session,
+    dir: lcc_testkit::TempDir,
     clean: lcc_catalog::PhotoId,
     noisy: lcc_catalog::PhotoId,
 }

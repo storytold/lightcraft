@@ -1121,15 +1121,15 @@ mod tests {
     /// Review of #236: shutdown while an export is still writing the files it reserved the import
     /// for. The deadline follows the job: the write allowance while the export writes, then the
     /// import's own time limit from when Photos was asked, not one deadline fixed at the start
-    /// (which gave up with the import still inside its limit). Scaled down: 300 ms of writing,
-    /// imports limited to 1.5 s (+ 0.1 s).
+    /// (which gave up with the import still inside its limit). Scaled down: 150 ms of writing,
+    /// imports limited to 0.75 s (+ 0.05 s).
     #[test]
     fn shutdown_follows_an_export_into_its_import() {
         let (dir, paths) = files("shutdown", 2);
         let limits = WaitLimits {
-            writing: Duration::from_millis(300),
-            import: |_| Duration::from_millis(1500),
-            margin: Duration::from_millis(100),
+            writing: Duration::from_millis(150),
+            import: |_| Duration::from_millis(750),
+            margin: Duration::from_millis(50),
             cap: Duration::from_secs(20),
         };
         let taking = |ms: u64| -> Runner {
@@ -1140,24 +1140,24 @@ mod tests {
             })
         };
         let imports = Imports::default();
-        // the export is still writing when the wait begins; Photos then takes 1 s, past the write
+        // the export is still writing when the wait begins; Photos then takes 0.5 s, past the write
         // allowance but inside the import's own limit
-        let reserved = imports.reserve(taking(1000), "").unwrap();
+        let reserved = imports.reserve(taking(500), "").unwrap();
         let written: Vec<Value> = paths.iter().map(|p| json!({"path": p})).collect();
         let exporter = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(150));
+            std::thread::sleep(Duration::from_millis(75));
             reserved.run(&written, false)
         });
         let t0 = std::time::Instant::now();
         assert!(imports.wait_idle_within(limits), "waited for the import, not just the write allowance");
-        assert!(t0.elapsed() >= Duration::from_millis(1000), "{:?}", t0.elapsed());
+        assert!(t0.elapsed() >= Duration::from_millis(500), "{:?}", t0.elapsed());
         assert_eq!(exporter.join().unwrap()["imported"], 2);
         // an import past its own limit is given up on at its deadline (not the cap)
-        let job = import_job(&taking(3000), &imports, paths.clone(), "", true, None).unwrap();
+        let job = import_job(&taking(1500), &imports, paths.clone(), "", true, None).unwrap();
         let t0 = std::time::Instant::now();
         assert!(!imports.wait_idle_within(limits));
         let waited = t0.elapsed();
-        assert!(waited >= Duration::from_millis(1500) && waited < Duration::from_millis(2900), "{waited:?}");
+        assert!(waited >= Duration::from_millis(750) && waited < Duration::from_millis(1450), "{waited:?}");
         while !job.finished() {
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -1166,14 +1166,14 @@ mod tests {
         let t0 = std::time::Instant::now();
         assert!(!imports.wait_idle_within(limits));
         let waited = t0.elapsed();
-        assert!(waited >= Duration::from_millis(300) && waited < Duration::from_millis(1500), "{waited:?}");
+        assert!(waited >= Duration::from_millis(150) && waited < Duration::from_millis(750), "{waited:?}");
         drop(held);
         assert!(imports.wait_idle_within(limits));
         // and the cap holds over everything
-        let job = import_job(&taking(1000), &imports, paths, "", true, None).unwrap();
+        let job = import_job(&taking(500), &imports, paths, "", true, None).unwrap();
         let t0 = std::time::Instant::now();
-        assert!(!imports.wait_idle_within(WaitLimits { cap: Duration::from_millis(200), ..limits }));
-        assert!(t0.elapsed() < Duration::from_millis(900));
+        assert!(!imports.wait_idle_within(WaitLimits { cap: Duration::from_millis(100), ..limits }));
+        assert!(t0.elapsed() < Duration::from_millis(450));
         while !job.finished() {
             std::thread::sleep(Duration::from_millis(20));
         }

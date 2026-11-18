@@ -585,17 +585,7 @@ mod tests {
     }
 
     #[test]
-    fn tile_table_round_trips() {
-        let (tile, _) = one_tile(64, 48, 0, Qis::ZERO);
-        let file = arw6_file(&[(0, 0, 64, 48, tile.clone())], 64, 48);
-        let strip = strip_of(&file);
-        let t = parse_tile_table(strip, 64, 48).unwrap();
-        assert_eq!(t.len(), 1);
-        assert_eq!((t[0].x, t[0].y, t[0].width, t[0].height, t[0].offset), (0, 0, 64, 48, 512));
-    }
-
-    #[test]
-    fn tile_table_rejects_bad_layouts() {
+    fn tile_table_round_trips_and_rejects_bad_layouts() {
         let (tile, _) = one_tile(64, 48, 0, Qis::ZERO);
         let strip = strip_of(&arw6_file(&[(0, 0, 64, 48, tile.clone())], 64, 48)).to_vec();
         let mut zero = strip.clone();
@@ -611,6 +601,48 @@ mod tests {
         let two = arw6_file(&[(0, 0, 64, 48, tile.clone()), (0, 0, 64, 48, tile.clone())], 128, 48);
         assert!(parse_tile_table(strip_of(&two), 128, 48).is_err()); // overlapping
         assert!(parse_tile_table(&strip[..7], 64, 48).is_err()); // truncated table
+        // tile table validation cases
+        {
+            let (tile, _) = one_tile(64, 48, 0, Qis::ZERO);
+            let many = |n: usize| {
+                let tiles: Vec<_> = (0..n).map(|i| (64 * i, 0, 64, 48, tile.clone())).collect();
+                strip_of(&arw6_file(&tiles, 64 * n, 48)).to_vec()
+            };
+            let sixteen = many(16);
+            assert_eq!(parse_tile_table(&sixteen, 1024, 48).unwrap().len(), 16);
+            let mut seventeen = sixteen.clone();
+            seventeen[0] = 17;
+            assert!(parse_tile_table(&seventeen, 1088, 48).is_err());
+
+            let two = strip_of(&arw6_file(&[(0, 0, 64, 48, tile.clone()), (64, 0, 64, 48, tile.clone())], 128, 48)).to_vec();
+            assert_eq!(parse_tile_table(&two, 128, 48).unwrap().len(), 2);
+            let mut swapped = two.clone();
+            let (a, b) = (two[8..16].to_vec(), two[32..40].to_vec());
+            swapped[8..16].copy_from_slice(&b);
+            swapped[32..40].copy_from_slice(&a);
+            assert!(parse_tile_table(&swapped, 128, 48).is_err());
+            let mut at_end = two.clone();
+            at_end[32..40].copy_from_slice(&(two.len() as u64).to_le_bytes());
+            assert!(parse_tile_table(&at_end, 128, 48).is_err());
+
+            let one = many(1);
+            let mut wide = one.clone();
+            put32(&mut wide, 24, 72); // w / 2 = 36 is not a multiple of 8
+            assert!(parse_tile_table(&wide, 72, 48).is_err());
+            let mut huge = one.clone();
+            put32(&mut huge, 24, 1 << 20);
+            put32(&mut huge, 28, 1 << 20);
+            assert!(matches!(parse_tile_table(&huge, 1 << 20, 1 << 20), Err(RawError::Limit(_))));
+        }
+        // tile table round trips
+        {
+            let (tile, _) = one_tile(64, 48, 0, Qis::ZERO);
+            let file = arw6_file(&[(0, 0, 64, 48, tile.clone())], 64, 48);
+            let strip = strip_of(&file);
+            let t = parse_tile_table(strip, 64, 48).unwrap();
+            assert_eq!(t.len(), 1);
+            assert_eq!((t[0].x, t[0].y, t[0].width, t[0].height, t[0].offset), (0, 0, 64, 48, 512));
+        }
     }
 
     #[test]
@@ -634,44 +666,32 @@ mod tests {
         bad[13] = 0xff; // corrupts word 0's BBD bits: any picture-header deviation is Unsupported
         assert!(matches!(parse_tile_header(&bad, 64, 48), Err(RawError::Unsupported(_))));
         assert!(parse_tile_header(&tile, 64, 50).is_err()); // VS != th / 2
+        // tile header and stream validation cases
+        {
+            let (tile, _) = one_tile(64, 48, 0, Qis::REAL);
+            let h = parse_tile_header(&tile, 64, 48).unwrap();
+            let mut two_streams = tile.clone();
+            two_streams[3 * 16] = 2;
+            assert!(parse_tile_header(&two_streams, 64, 48).is_err());
+            let mut big = tile.clone();
+            big[3 * 16 + 1..3 * 16 + 4].copy_from_slice(&[0xff; 3]); // stream 0 larger than the tile
+            assert!(parse_tile_header(&big, 64, 48).is_err());
+            let mut idx = tile.clone();
+            idx[8 * 16..8 * 16 + 2].copy_from_slice(&[0xff, 0xff]); // index words beyond the stream
+            assert!(parse_tile_header(&idx, 64, 48).is_err());
+
+            let s = &h.streams[9];
+            let mut bad_half = tile.clone();
+            let idx_start = (s.word + 1) * 16;
+            bad_half[idx_start..idx_start + 2].copy_from_slice(&[0xff, 0xff]); // A past the data area
+            assert!(stream_halves(&bad_half, s, tu_count(24, 0)).is_err());
+            let outside = StreamRef { index_words: 0xffff, ..s.clone() };
+            assert!(stream_halves(&tile, &outside, tu_count(24, 0)).is_err());
+        }
     }
 
     fn put32(b: &mut [u8], at: usize, v: u32) {
         b[at..at + 4].copy_from_slice(&v.to_le_bytes());
-    }
-
-    #[test]
-    fn tile_table_validation_cases() {
-        let (tile, _) = one_tile(64, 48, 0, Qis::ZERO);
-        let many = |n: usize| {
-            let tiles: Vec<_> = (0..n).map(|i| (64 * i, 0, 64, 48, tile.clone())).collect();
-            strip_of(&arw6_file(&tiles, 64 * n, 48)).to_vec()
-        };
-        let sixteen = many(16);
-        assert_eq!(parse_tile_table(&sixteen, 1024, 48).unwrap().len(), 16);
-        let mut seventeen = sixteen.clone();
-        seventeen[0] = 17;
-        assert!(parse_tile_table(&seventeen, 1088, 48).is_err());
-
-        let two = strip_of(&arw6_file(&[(0, 0, 64, 48, tile.clone()), (64, 0, 64, 48, tile.clone())], 128, 48)).to_vec();
-        assert_eq!(parse_tile_table(&two, 128, 48).unwrap().len(), 2);
-        let mut swapped = two.clone();
-        let (a, b) = (two[8..16].to_vec(), two[32..40].to_vec());
-        swapped[8..16].copy_from_slice(&b);
-        swapped[32..40].copy_from_slice(&a);
-        assert!(parse_tile_table(&swapped, 128, 48).is_err());
-        let mut at_end = two.clone();
-        at_end[32..40].copy_from_slice(&(two.len() as u64).to_le_bytes());
-        assert!(parse_tile_table(&at_end, 128, 48).is_err());
-
-        let one = many(1);
-        let mut wide = one.clone();
-        put32(&mut wide, 24, 72); // w / 2 = 36 is not a multiple of 8
-        assert!(parse_tile_table(&wide, 72, 48).is_err());
-        let mut huge = one.clone();
-        put32(&mut huge, 24, 1 << 20);
-        put32(&mut huge, 28, 1 << 20);
-        assert!(matches!(parse_tile_table(&huge, 1 << 20, 1 << 20), Err(RawError::Limit(_))));
     }
 
     #[test]
@@ -685,29 +705,6 @@ mod tests {
         assert_eq!(t0, &tile[..]);
         assert_eq!(t1.as_ptr() as usize + t1.len(), strip.as_ptr() as usize + strip.len());
         assert!(tile_bytes(strip, &tiles, 2).is_none());
-    }
-
-    #[test]
-    fn tile_header_and_stream_validation_cases() {
-        let (tile, _) = one_tile(64, 48, 0, Qis::REAL);
-        let h = parse_tile_header(&tile, 64, 48).unwrap();
-        let mut two_streams = tile.clone();
-        two_streams[3 * 16] = 2;
-        assert!(parse_tile_header(&two_streams, 64, 48).is_err());
-        let mut big = tile.clone();
-        big[3 * 16 + 1..3 * 16 + 4].copy_from_slice(&[0xff; 3]); // stream 0 larger than the tile
-        assert!(parse_tile_header(&big, 64, 48).is_err());
-        let mut idx = tile.clone();
-        idx[8 * 16..8 * 16 + 2].copy_from_slice(&[0xff, 0xff]); // index words beyond the stream
-        assert!(parse_tile_header(&idx, 64, 48).is_err());
-
-        let s = &h.streams[9];
-        let mut bad_half = tile.clone();
-        let idx_start = (s.word + 1) * 16;
-        bad_half[idx_start..idx_start + 2].copy_from_slice(&[0xff, 0xff]); // A past the data area
-        assert!(stream_halves(&bad_half, s, tu_count(24, 0)).is_err());
-        let outside = StreamRef { index_words: 0xffff, ..s.clone() };
-        assert!(stream_halves(&tile, &outside, tu_count(24, 0)).is_err());
     }
 
     #[test]
@@ -899,20 +896,6 @@ mod tests {
     }
 
     #[test]
-    fn garbage_streams_import_then_fail() {
-        let (mut tile, _) = one_tile(64, 48, 0, Qis::REAL);
-        let h = parse_tile_header(&tile, 64, 48).unwrap();
-        let st = &h.streams[9]; // g3 c0
-        let start = (st.word + 1 + st.index_words) * 16;
-        for (i, b) in tile[start..start + st.data_words * 16].iter_mut().enumerate() {
-            *b = (i as u8).wrapping_mul(97) ^ 0xa5;
-        }
-        let strip = strip_of(&arw6_file(&[(0, 0, 64, 48, tile)], 64, 48)).to_vec();
-        assert!(decode(&strip, 64, 48, crate::Mode::Header).is_ok());
-        assert!(matches!(decode(&strip, 64, 48, crate::Mode::Full), Err(RawError::Corrupt(_))));
-    }
-
-    #[test]
     fn chroma_planes_are_base_free() {
         let (w2, h2) = (32, 24);
         let flat = |v: i32| Plane { width: w2, height: h2, data: vec![v; w2 * h2] };
@@ -945,18 +928,17 @@ mod tests {
     }
 
     #[test]
-    fn twelve_bit_mode_is_unsupported() {
-        let (tile, _) = one_tile(64, 48, 0, Qis::ZERO);
-        let file = arw6_file_bits(&[(0, 0, 64, 48, tile)], 64, 48, 12);
-        assert!(matches!(crate::decode(&file), Err(RawError::Unsupported(_))));
-    }
-
-    #[test]
     fn shift_out_of_range_is_unsupported() {
         let (w2, h2) = (32, 24);
         let (m, c1, c2, res) = planes(w2, h2, 7);
         let tile = encode_tile(&TileSpec { s: 6, qi: Qis::ZERO, m, c1, c2, res });
         assert!(matches!(decode_tile_planes(&tile, 64, 48), Err(RawError::Unsupported(_))));
+        // twelve bit mode is unsupported
+        {
+            let (tile, _) = one_tile(64, 48, 0, Qis::ZERO);
+            let file = arw6_file_bits(&[(0, 0, 64, 48, tile)], 64, 48, 12);
+            assert!(matches!(crate::decode(&file), Err(RawError::Unsupported(_))));
+        }
     }
 
     #[test]
@@ -971,6 +953,19 @@ mod tests {
         let strip = strip_of(&arw6_file(&[(0, 0, 64, 48, tile)], 64, 48)).to_vec();
         assert!(decode(&strip, 64, 48, crate::Mode::Header).is_ok());
         assert!(matches!(decode(&strip, 64, 48, crate::Mode::Full), Err(RawError::Corrupt(_))));
+        // garbage streams import then fail
+        {
+            let (mut tile, _) = one_tile(64, 48, 0, Qis::REAL);
+            let h = parse_tile_header(&tile, 64, 48).unwrap();
+            let st = &h.streams[9]; // g3 c0
+            let start = (st.word + 1 + st.index_words) * 16;
+            for (i, b) in tile[start..start + st.data_words * 16].iter_mut().enumerate() {
+                *b = (i as u8).wrapping_mul(97) ^ 0xa5;
+            }
+            let strip = strip_of(&arw6_file(&[(0, 0, 64, 48, tile)], 64, 48)).to_vec();
+            assert!(decode(&strip, 64, 48, crate::Mode::Header).is_ok());
+            assert!(matches!(decode(&strip, 64, 48, crate::Mode::Full), Err(RawError::Corrupt(_))));
+        }
     }
 
     #[test]

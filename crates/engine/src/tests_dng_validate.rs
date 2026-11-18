@@ -75,13 +75,6 @@ fn validate_dng_files_reports_the_damaged_ones() {
 }
 
 #[test]
-fn only_dng_files_are_checked() {
-    let s = Session::with_demo();
-    let ids: Vec<_> = s.catalog.photos().map(|p| p.id).collect();
-    assert!(dng_targets(&s, &ids).is_empty(), "demo photos are not DNG files");
-}
-
-#[test]
 fn exported_photos_are_marked_and_reset_export_status_clears_them() {
     let dir = temp_dir("export-status");
     let src = dir.join("IMG_1.jpg");
@@ -92,6 +85,7 @@ fn exported_photos_are_marked_and_reset_export_status_clears_them() {
     let id = s.catalog.photos().next().unwrap().id;
     s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
     assert_eq!(s.catalog.photo(id).unwrap().exported, None, "never exported yet");
+    assert!(dng_targets(&s, &[id]).is_empty(), "only DNG files are checked: a JPEG is not one");
 
     let out = dir.join("out");
     let to = Destination { dir: out.to_string_lossy().into(), exact: None };

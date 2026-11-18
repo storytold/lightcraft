@@ -30,6 +30,28 @@ Resolve-style grading: the Edit panel runs Basic, **Primaries**, **HSL Curves**.
 
 - **Color Grading**: 3-way, Shadows, Midtones, Highlights, Global; Blending and Balance.
 
+## Levels
+
+The **Levels** section sits in the Edit panel just before the Tone Curve (the Modern layout puts it on the Tone card). It is the classic black, midtone and white tool, beyond what Lightroom offers.
+
+<Shot name="levels-section" alt="The Levels section" menu="Window ▸ Edit Sections ▸ Levels" />
+
+- **Tabs**: RGB, Red, Green and Blue. Each channel has its own levels; the RGB tab works on all three together. A channel's own levels apply first, then the RGB ones.
+- **Histogram**: the photo as the Levels receive it (before the levels themselves), as thin red, green, blue and luminance lines.
+- **Input markers** under the histogram: black, midtone (a grey marker) and white. Drag them, or type into the boxes below. The midtone box takes a signed number from -1 to +1: 0 is neutral, positive brightens, negative darkens (a comma works as the decimal point). Double-click a marker to bring it back.
+- **Output markers** above the histogram, with their boxes in the top row, limit the darkest and brightest result. Output black above output white flips the picture.
+- **Inverted range**: an input black above the white point inverts the picture. The two points keep at least 2 levels apart.
+- **Pickers** (RGB tab): click the black or white eyedropper, then the photo. The reading is the brightness of the spot as the Levels receive it. A picker stays armed, so every further click sets the point again (one undo step each), until you press Esc, click its icon again, pick the other one or leave the section.
+- **Reset** returns the tab's levels to neutral; the eye in the section header shows the photo without them. Levels copy and paste, travel in presets and show in History as their own group. There is no automatic Levels button.
+- **Scripts and agents**: `develop.levels`, `levels.reset`, `develop.levelsPick` and `levels.histogram`.
+
+### Good to know
+
+- **Lightroom does not see Levels.** They are saved in the app's own settings only, with no `crs:` equivalent written, so Lightroom shows the photo without Levels.
+- **Beyond SDR white** (HDR edits) is a design choice of this app, not something measured against another program: values above white are not held at white, each stage carries on with the slope it has there.
+- **Presets blend Levels from neutral.** At an Amount below 100 % the levels sit that far from neutral toward the preset's, whatever the photo had before, and a preset without the Levels group leaves them alone. Primaries do not work this way.
+- **An inverted range combined with a midtone** has not been checked against Capture One's Levels. Each alone has.
+
 ## Other colour tools
 - **Tone Curve**: point (RGB or per channel) and parametric, presets, import and export.
 - **Color Mixer**: eight-band HSL and B&W mix.
@@ -45,8 +67,8 @@ Resolve-style grading: the Edit panel runs Basic, **Primaries**, **HSL Curves**.
 - Built-in raw and creative looks, with an Amount slider.
 - **Import** `.cube` LUT profiles; **export** a look as a LUT.
 - **Camera profiles**: import, use, export DCP profiles; per-camera-body defaults.
-- **Create a camera profile** from a colour chart (ColorChecker).
-- **Camera colour**: Auto or Colorimetric calibration.
+- **Create a camera profile** from a colour chart photo: **ColorChecker 24** or **SpyderCHECKR 24**. Uneven light across the chart (falloff, glare) is evened out before fitting by default.
+- **Camera colour**: Auto or Colorimetric calibration. Some cameras have a built-in calibration fitted to Lightroom's exports; the Pentax K-3 and Sony ILCE-7M5 are the newest. Colour for other models is estimated (partial; see [Raw support](../raw-support/)).
 
 ## Presets
 <Shot name="presets" alt="The Presets panel" />

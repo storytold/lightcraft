@@ -442,48 +442,45 @@ mod tests {
         // The whole image, as stored for a shot at the sensor's own aspect, changes nothing.
         let image = decode(&synthetic_header_with(Some([0, 56, 42, 0, 0])), Mode::Header).unwrap();
         assert_eq!(image.crop, Rect::new(2, 2, 56, 42));
-    }
-
-    #[test]
-    fn aspect_info_that_does_not_fit_is_ignored() {
-        for bad in [[7, 57, 30, 0, 6], [7, 56, 30, 0, 13], [7, 56, 30, 1, 6], [7, 1, 30, 0, 0], [7, 56, 0, 0, 0], [7, u32::MAX, 30, 0, 0]] {
-            let image = decode(&synthetic_header_with(Some(bad)), Mode::Header).unwrap();
-            assert_eq!(image.crop, Rect::new(2, 2, 56, 42), "{bad:?}");
+        // aspect info that does not fit is ignored
+        {
+            for bad in [[7, 57, 30, 0, 6], [7, 56, 30, 0, 13], [7, 56, 30, 1, 6], [7, 1, 30, 0, 0], [7, 56, 0, 0, 0], [7, u32::MAX, 30, 0, 0]] {
+                let image = decode(&synthetic_header_with(Some(bad)), Mode::Header).unwrap();
+                assert_eq!(image.crop, Rect::new(2, 2, 56, 42), "{bad:?}");
+            }
         }
-    }
-
-    /// Some crop-mode files (EOS R5 Mark II 7883) record a recommended crop that reaches past their stated active
-    /// area, which starts in dark columns. The recommended crop is then the valid area (no black band on the left),
-    /// and `AspectInfo` applies from its origin.
-    #[test]
-    fn aspect_info_needs_a_consistent_recommended_crop() {
-        let aspect = lcc_tiff::IfdBuilder::new().with(CANON_ASPECT_INFO, Value::Long(vec![13, 5088, 3392, 0, 0]));
-        let bytes = lcc_tiff::TiffWriter::new(lcc_tiff::ByteOrder::Little, false).write(&[aspect]).unwrap();
-        let maker = Tiff::parse(&bytes).unwrap().ifds.remove(0);
-        let area =
-            |crop| Cr3ImageArea { width: 5376, height: 3574, crop, active: Some([132, 160, 5243, 3567]), masked_left: [0; 4], masked_top: None };
-        // crop right edge 5359 > active right edge 5243: the recommended crop becomes the valid area
-        assert_eq!(
-            geometry(Some(&area([272, 172, 5359, 3563])), Some(&maker), 5376, 3574),
-            (Rect::new(272, 172, 5088, 3392), Rect::new(0, 0, 5088, 3392))
-        );
-        // consistent crop: AspectInfo applies from its origin
-        assert_eq!(geometry(Some(&area([140, 172, 5227, 3563])), Some(&maker), 5376, 3574).1, Rect::new(8, 12, 5088, 3392));
-    }
-
-    /// `AspectInfo` as the SX70 HS 16:9 sample stores it, byte for byte (little-endian LONG x 5), read through
-    /// the TIFF parser: AspectRatio 7, 5184 x 2912 at (0, 488).
-    #[test]
-    fn aspect_info_known_bytes() {
-        let mut tiff = b"II*     ".to_vec();
-        tiff.extend_from_slice(&[0x9a, 0x00, 0x04, 0x00, 0x05, 0x00, 0x00, 0x00, 0x1a, 0x00, 0x00, 0x00]);
-        tiff.extend_from_slice(&[0, 0, 0, 0]);
-        tiff.extend_from_slice(&[0x07, 0, 0, 0, 0x40, 0x14, 0, 0, 0x60, 0x0b, 0, 0, 0, 0, 0, 0, 0xe8, 0x01, 0, 0]);
-        let parsed = Tiff::parse(&tiff).unwrap();
-        let maker = parsed.ifds.first();
-        assert_eq!(canon_aspect_crop(maker, Rect::new(132, 40, 5184, 3888)), Some(Rect::new(132, 528, 5184, 2912)));
-        assert_eq!(canon_aspect_crop(maker, Rect::new(0, 0, 5184, 2000)), None);
-        assert_eq!(canon_aspect_crop(None, Rect::new(0, 0, 5184, 3888)), None);
+        // aspect info known bytes
+        // `AspectInfo` as the SX70 HS 16:9 sample stores it, byte for byte (little-endian LONG x 5), read through
+        // the TIFF parser: AspectRatio 7, 5184 x 2912 at (0, 488).
+        {
+            let mut tiff = b"II*     ".to_vec();
+            tiff.extend_from_slice(&[0x9a, 0x00, 0x04, 0x00, 0x05, 0x00, 0x00, 0x00, 0x1a, 0x00, 0x00, 0x00]);
+            tiff.extend_from_slice(&[0, 0, 0, 0]);
+            tiff.extend_from_slice(&[0x07, 0, 0, 0, 0x40, 0x14, 0, 0, 0x60, 0x0b, 0, 0, 0, 0, 0, 0, 0xe8, 0x01, 0, 0]);
+            let parsed = Tiff::parse(&tiff).unwrap();
+            let maker = parsed.ifds.first();
+            assert_eq!(canon_aspect_crop(maker, Rect::new(132, 40, 5184, 3888)), Some(Rect::new(132, 528, 5184, 2912)));
+            assert_eq!(canon_aspect_crop(maker, Rect::new(0, 0, 5184, 2000)), None);
+            assert_eq!(canon_aspect_crop(None, Rect::new(0, 0, 5184, 3888)), None);
+        }
+        // aspect info needs a consistent recommended crop
+        // Some crop-mode files (EOS R5 Mark II 7883) record a recommended crop that reaches past their stated active
+        // area, which starts in dark columns. The recommended crop is then the valid area (no black band on the left),
+        // and `AspectInfo` applies from its origin.
+        {
+            let aspect = lcc_tiff::IfdBuilder::new().with(CANON_ASPECT_INFO, Value::Long(vec![13, 5088, 3392, 0, 0]));
+            let bytes = lcc_tiff::TiffWriter::new(lcc_tiff::ByteOrder::Little, false).write(&[aspect]).unwrap();
+            let maker = Tiff::parse(&bytes).unwrap().ifds.remove(0);
+            let area =
+                |crop| Cr3ImageArea { width: 5376, height: 3574, crop, active: Some([132, 160, 5243, 3567]), masked_left: [0; 4], masked_top: None };
+            // crop right edge 5359 > active right edge 5243: the recommended crop becomes the valid area
+            assert_eq!(
+                geometry(Some(&area([272, 172, 5359, 3563])), Some(&maker), 5376, 3574),
+                (Rect::new(272, 172, 5088, 3392), Rect::new(0, 0, 5088, 3392))
+            );
+            // consistent crop: AspectInfo applies from its origin
+            assert_eq!(geometry(Some(&area([140, 172, 5227, 3563])), Some(&maker), 5376, 3574).1, Rect::new(8, 12, 5088, 3392));
+        }
     }
 
     fn prepend_tracks(bytes: &[u8], tracks: &[u8]) -> Vec<u8> {

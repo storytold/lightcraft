@@ -47,7 +47,7 @@ fn first_slider(h: &Headless) -> (String, egui::Rect) {
 }
 
 #[test]
-fn the_edit_panel_comes_back_after_masking_and_crop_where_it_was() {
+fn the_panel_a_tool_replaced_comes_back_where_it_was_and_a_hidden_one_stays_hidden() {
     let mut h = detail();
     // scroll the Edit panel down a little (the wheel scrolls what the pointer is over)
     let panel = widget(&h, "panel:right_panel").expect("the right panel");
@@ -79,11 +79,7 @@ fn the_edit_panel_comes_back_after_masking_and_crop_where_it_was() {
     exec(&mut h, "panel.masking");
     exec(&mut h, "tool.done");
     assert_eq!(h.app.ui.right, RightPanel::Edit);
-}
-
-#[test]
-fn a_hidden_panel_stays_hidden_after_a_tool() {
-    let mut h = detail();
+    // a hidden panel stays hidden after a tool
     exec(&mut h, "panel.close");
     assert_eq!(h.app.ui.right, RightPanel::None);
     let photo = widget(&h, "canvas:image").expect("the photo");

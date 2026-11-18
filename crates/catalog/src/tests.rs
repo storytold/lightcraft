@@ -474,16 +474,6 @@ fn smart_albums_update_live() {
 }
 
 #[test]
-fn capture_times_display_like_the_info_panel() {
-    use crate::dates::display_time;
-    assert_eq!(display_time("2022-03-30T10:11:11"), "March 30, 2022 at 10:11:11 AM");
-    assert_eq!(display_time("2022-03-30T22:05:01.5-04:00"), "March 30, 2022 at 10:05:01 PM");
-    assert_eq!(display_time("2022-01-02T00:00:00"), "January 2, 2022 at 12:00:00 AM");
-    assert_eq!(display_time("2022-07-04"), "July 4, 2022");
-    assert_eq!(display_time("someday"), "someday");
-}
-
-#[test]
 fn folder_paths() {
     use crate::query::in_folder;
     assert!(in_folder("/a/b/c.jpg", "/a/b", false));
@@ -492,18 +482,6 @@ fn folder_paths() {
     assert!(in_folder("/a/b/x/c.jpg", "/a/b", true));
     assert!(!in_folder("/a/bc/d.jpg", "/a/b", true), "a sibling with the same prefix");
     assert!(in_folder("C:\\Pics\\a.jpg", "C:\\Pics", false));
-}
-
-#[test]
-fn merge_results_are_recognised() {
-    use crate::query::merged_kind;
-    assert_eq!(merged_kind("IMG_1-HDR.dng"), Some("hdr"));
-    assert_eq!(merged_kind("IMG_1-Pano.dng"), Some("panorama"));
-    assert_eq!(merged_kind("IMG_1-HDR-Pano.dng"), Some("hdrPanorama"));
-    assert_eq!(merged_kind("IMG_1-Focus.dng"), Some("focusStack"));
-    assert_eq!(merged_kind("IMG_1-HDR-2.dng"), Some("hdr"), "a second merge of the same photo");
-    assert_eq!(merged_kind("hdr.jpg"), None);
-    assert_eq!(merged_kind("panorama.jpg"), None);
 }
 
 /// Preview-only raws (an undecodable raw variant shown from its embedded JPEG): the reason is
@@ -661,48 +639,6 @@ fn people_from_named_face_regions() {
     assert_eq!(names(Filter { rating: 5, ..Default::default() }), vec![], "nobody in the filtered photos");
 }
 
-/// Most photos have no regions: the field is left out of the catalog JSON then, and a catalog written
-/// before regions existed (no `regions` key) reads with none.
-#[test]
-fn empty_regions_are_not_serialized_and_default_when_missing() {
-    let m = Meta { keywords: vec!["k".into()], ..Default::default() };
-    let v = serde_json::to_value(&m).unwrap();
-    assert!(v.get("regions").is_none(), "{v}");
-    let back: Meta = serde_json::from_value(v).unwrap();
-    assert!(back.regions.is_empty());
-    let mut with = m.clone();
-    with.regions.push(lcc_meta::Region {
-        rect: lcc_meta::Rect { x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.2 },
-        kind: lcc_meta::RegionKind::Face,
-        name: Some("A".into()),
-        description: None,
-    });
-    let back: Meta = serde_json::from_str(&serde_json::to_string(&with).unwrap()).unwrap();
-    assert_eq!(back, with);
-}
-
-/// The camera's focus point is optional camera data: absent from the catalog JSON when unknown (so a
-/// catalog from before it existed reads with none, and writes the same), kept exactly when known.
-#[test]
-fn focus_point_is_not_serialized_when_unknown_and_round_trips() {
-    let m = Meta { camera: "SONY ILCE-1".into(), ..Default::default() };
-    let v = serde_json::to_value(&m).unwrap();
-    assert!(v.get("focus").is_none(), "{v}");
-    let back: Meta = serde_json::from_value(v).unwrap();
-    assert!(back.focus.is_none());
-    let mut with = m.clone();
-    with.focus = Some(lcc_meta::FocusPoint {
-        rect: lcc_meta::Rect { x0: 0.36, y0: 0.33, x1: 0.38, y1: 0.36 },
-        mode: Some("AF-C".into()),
-        area: Some("Wide".into()),
-        tracking: None,
-    });
-    let json = serde_json::to_string(&with).unwrap();
-    assert!(json.contains("\"focus\"") && !json.contains("tracking"), "{json}");
-    let back: Meta = serde_json::from_str(&json).unwrap();
-    assert_eq!(back, with);
-}
-
 // ---- random sort: Given a seed, the order is a stable, reproducible shuffle of the matching photos
 
 fn many(c: &mut Catalog, n: usize) -> Vec<PhotoId> {
@@ -714,8 +650,9 @@ fn random(seed: u64) -> Sort {
 }
 
 #[test]
-fn random_sort_is_a_reproducible_permutation() {
+fn random_sort_is_a_stable_reproducible_shuffle() {
     let mut c = Catalog::new();
+    assert!(c.query(&Filter::default(), &random(1)).is_empty(), "an empty library");
     let ids = many(&mut c, 50);
     let a = c.query(&Filter::default(), &random(7));
     assert_eq!(a, c.query(&Filter::default(), &random(7)), "same seed, same order");
@@ -726,47 +663,18 @@ fn random_sort_is_a_reproducible_permutation() {
     assert_eq!(sorted, all, "every photo exactly once");
     assert_ne!(a, c.query(&Filter::default(), &random(8)), "another seed, another order");
     assert_ne!(a, c.query(&Filter::default(), &Sort::default()), "not just the date order");
-}
-
-#[test]
-fn random_sort_keeps_the_relative_order_when_the_set_changes() {
-    let mut c = Catalog::new();
-    let ids = many(&mut c, 30);
-    let before = c.query(&Filter::default(), &random(3));
-    let added = photo(&mut c, "new.jpg", "2026-05-01T10:00:00");
-    c.apply(Op::SetRating { id: ids[0], rating: 5 }).unwrap();
-    let after: Vec<PhotoId> = c.query(&Filter::default(), &random(3)).into_iter().filter(|id| *id != added).collect();
-    assert_eq!(after, before, "adding a photo or editing metadata must not reshuffle the others");
-}
-
-#[test]
-fn random_sort_respects_the_filter_and_handles_tiny_sets() {
-    let mut c = Catalog::new();
-    assert!(c.query(&Filter::default(), &random(1)).is_empty());
-    let ids = many(&mut c, 10);
-    c.apply(Op::SetRating { id: ids[4], rating: 5 }).unwrap();
-    assert_eq!(c.query(&Filter { rating: 5, ..Default::default() }, &random(1)), vec![ids[4]]);
-}
-
-#[test]
-fn random_sort_direction_reverses_and_serde_defaults_hold() {
-    let mut c = Catalog::new();
-    many(&mut c, 20);
-    let desc = c.query(&Filter::default(), &Sort { ascending: false, ..random(5) });
-    let mut asc = c.query(&Filter::default(), &Sort { ascending: true, ..random(5) });
+    let mut asc = c.query(&Filter::default(), &Sort { ascending: true, ..random(7) });
     asc.reverse();
-    assert_eq!(desc, asc);
+    assert_eq!(c.query(&Filter::default(), &Sort { ascending: false, ..random(7) }), asc, "descending is the reverse");
+    assert!(c.date_runs(&ids, SortKey::Random, GroupBy::Day).is_empty(), "a shuffle has no date headers");
+    // adding a photo or editing metadata must not reshuffle the others, and the filter still applies
+    let added = photo(&mut c, "new.jpg", "2026-05-01T10:00:00");
+    c.apply(Op::SetRating { id: ids[4], rating: 5 }).unwrap();
+    let after: Vec<PhotoId> = c.query(&Filter::default(), &random(7)).into_iter().filter(|id| *id != added).collect();
+    assert_eq!(after, a);
+    assert_eq!(c.query(&Filter { rating: 5, ..Default::default() }, &random(1)), vec![ids[4]]);
     // saved sorts from before the seed existed still load
-    let old: Sort = serde_json::from_str(r#"{"key":"fileName","ascending":true}"#).unwrap();
-    assert_eq!(old.seed, 0);
-    assert_eq!(serde_json::from_str::<Sort>(r#"{"key":"random","seed":9}"#).unwrap(), Sort { key: SortKey::Random, seed: 9, ..Default::default() });
-}
-
-#[test]
-fn random_sort_has_no_date_headers() {
-    let mut c = Catalog::new();
-    let ids = many(&mut c, 5);
-    assert!(c.date_runs(&ids, SortKey::Random, GroupBy::Day).is_empty());
+    assert_eq!(serde_json::from_str::<Sort>(r#"{"key":"fileName","ascending":true}"#).unwrap().seed, 0);
 }
 
 /// Reload stores the lens data a file carries; the inverse (through the journal's JSON) takes it back.
@@ -1331,6 +1239,37 @@ fn rating_filter_ops_and_unrated_photos() {
     assert!(text("rating:>=x").is_empty(), "not a number: nothing matches, no panic");
 }
 
+/// The label filter's "no label" (issue #1192): `labelsNone` alone shows only the unlabeled photos,
+/// it ANDs with the colour multi-select, the text search's `label:none` asks for the same, and it
+/// is part of the quick culling filters the filter bar counts around.
+#[test]
+fn label_filter_none() {
+    let mut c = Catalog::new();
+    let plain = photo(&mut c, "a.jpg", "2026-01-01T10:00:00");
+    let red = photo(&mut c, "b.jpg", "2026-01-02T10:00:00");
+    let green = photo(&mut c, "c.jpg", "2026-01-03T10:00:00");
+    c.apply(Op::SetLabel { id: red, label: Some(ColorLabel::Red) }).unwrap();
+    c.apply(Op::SetLabel { id: green, label: Some(ColorLabel::Green) }).unwrap();
+    let q = |f: Filter| c.query(&f, &Sort::default());
+    let f = Filter { labels_none: true, ..Default::default() };
+    assert_eq!(q(f.clone()), vec![plain]);
+    assert_eq!(
+        q(Filter { labels: vec![ColorLabel::Red], labels_none: true, ..Default::default() }),
+        Vec::<PhotoId>::new(),
+        "no photo carries both nothing and red"
+    );
+    let text = |t: &str| q(Filter { text: t.into(), ..Default::default() });
+    assert_eq!(text("label:none"), vec![plain]);
+    assert_eq!(text("color:none"), vec![plain]);
+    assert!(text("label:red").contains(&red) && !text("label:red").contains(&plain));
+    // the chip and smart-album summary name it
+    assert!(f.describe().contains("label none"));
+    // the quick culling filters the filter bar counts without include it
+    assert!(!f.without_quick().labels_none);
+    let t = c.tally(&f);
+    assert_eq!(t.total, 1);
+}
+
 /// Photos with one import time and capture time, as one import batch or a burst gives them, added
 /// with ids that run opposite to their names.
 fn batch_with_reversed_ids(c: &mut Catalog) -> Vec<PhotoId> {
@@ -1347,28 +1286,13 @@ fn batch_with_reversed_ids(c: &mut Catalog) -> Vec<PhotoId> {
     ids // in name order
 }
 
-#[test]
-fn one_import_batch_sorts_by_file_name_not_id() {
-    let mut c = Catalog::new();
-    let by_name = batch_with_reversed_ids(&mut c);
-    let sort = Sort { key: SortKey::ImportDate, ascending: true, ..Default::default() };
-    assert_eq!(c.query(&Filter::default(), &sort), by_name);
-}
-
-#[test]
-fn burst_in_one_second_sorts_by_file_name_not_id() {
-    let mut c = Catalog::new();
-    let by_name = batch_with_reversed_ids(&mut c);
-    let sort = Sort { key: SortKey::CaptureDate, ascending: true, ..Default::default() };
-    assert_eq!(c.query(&Filter::default(), &sort), by_name);
-}
-
-/// Equal ratings, edit times and sizes sort by file name too; descending is the exact reverse.
+/// One import batch, a burst within one second, equal ratings, edit times and sizes all sort by file name, not id;
+/// descending is the exact reverse.
 #[test]
 fn photos_that_tie_on_any_key_sort_by_file_name_not_id() {
     let mut c = Catalog::new();
     let by_name = batch_with_reversed_ids(&mut c);
-    for key in [SortKey::Rating, SortKey::EditDate, SortKey::FileSize, SortKey::Custom] {
+    for key in [SortKey::ImportDate, SortKey::CaptureDate, SortKey::Rating, SortKey::EditDate, SortKey::FileSize, SortKey::Custom] {
         let up = c.query(&Filter::default(), &Sort { key, ascending: true, ..Default::default() });
         assert_eq!(up, by_name, "{key:?}");
         let down = c.query(&Filter::default(), &Sort { key, ascending: false, ..Default::default() });

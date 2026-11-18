@@ -4,16 +4,14 @@
 //! must find the default renders alike, leave the −1 step where the import maps it and move the +1 step to about
 //! +1.5. No Adobe data is involved.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 const BIN: &str = env!("CARGO_BIN_EXE_app-cli");
 
-fn scratch(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("lcc-cli-probe-e2e-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+/// The test's folder in Temp, removed when the test ends.
+fn scratch(name: &str) -> lcc_testkit::TempDir {
+    lcc_testkit::TempDir::new(&format!("lcc-cli-probe-e2e-{name}"))
 }
 
 fn run(cmd: &mut Command) -> String {

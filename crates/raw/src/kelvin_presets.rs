@@ -496,6 +496,10 @@ mod tests {
         assert_eq!(KelvinPresets::new(p.points[..2].to_vec()), None, "too few");
         let with = ColorData { kelvin_presets: Some(p), ..Default::default() };
         assert!(as_shot_white(&with, Some([2.0, 1.0, 1.5])).is_some());
+        // unusable pairs give nothing
+        {
+            assert_eq!(KelvinPresets::from_neutral_pair([0.0, 1.0, 1.0], [2.0, 1.0, 1.5]), None);
+        }
     }
 
     /// Canon lists its presets by name, not by temperature, with repeats and an off-curve one among them: the
@@ -556,29 +560,6 @@ mod tests {
     }
 
     #[test]
-    fn unusable_pairs_give_nothing() {
-        assert_eq!(KelvinPresets::from_neutral_pair([0.0, 1.0, 1.0], [2.0, 1.0, 1.5]), None);
-    }
-
-    #[test]
-    fn fujifilm_x_trans_iii_models_are_covered() {
-        for c in ["FUJIFILM X-T20", "Fujifilm X-T2", "FUJIFILM X100F", "FUJIFILM X-H1", "FUJIFILM X-Pro2", "FUJIFILM X-E3"] {
-            assert!(covers_camera(c), "{c}");
-        }
-        for c in ["FUJIFILM X-T3", "FUJIFILM X-T30", "Canon X-T20", "FUJIFILM GFX 100"] {
-            assert!(!covers_camera(c), "{c}");
-        }
-    }
-
-    #[test]
-    fn dxo_dng_fujifilm_model_is_covered_for_kelvin() {
-        // A DxO demosaiced DNG carries DxO as its make, not FUJIFILM, but it is still a Fujifilm model.
-        assert!(covers(Some("DxO"), "X-T2"));
-        assert!(covers_camera("DxO X-T2"));
-        assert!(!covers(Some("DxO"), "X-T3"));
-    }
-
-    #[test]
     fn covered_models() {
         assert!(covers_camera("NIKON CORPORATION NIKON Z5_2") && covers_camera("NIKON Z5_2") && !covers_camera("NIKON CORPORATION NIKON Z6"));
         let covered = ["SONY ILCA-99M2", "SONY DSC-RX10", "SONY ILCE-1M2", "SONY ILCE-1", "SONY DSLR-A200", "SONY ZV-E10M2", "SONY ILME-FX3A"];
@@ -604,17 +585,32 @@ mod tests {
         }
         assert!(covers(Some("SONY"), "ILCA-99M2") && covers(None, "ILCA-99M2") && !covers(Some("NIKON CORPORATION"), "ILCA-99M2"));
         assert!(!covers(Some("SONY"), "  ") && !covers(Some("HASSELBLAD"), "Lunar") && !covers(None, "ILC"));
-    }
-
-    /// The catalog keeps joined camera names; Nikon Z5II's make-model split is not at the first word,
-    /// so covers_camera must try every split, not just the first.
-    #[test]
-    fn joined_nikon_z5ii_covers_camera() {
-        // Direct lookup works
-        assert!(covers(Some("NIKON CORPORATION"), "NIKON Z5_2"));
-        // Joined catalog string must also work (regression for PR #2006)
-        assert!(covers_camera("NIKON CORPORATION NIKON Z5_2"));
-        // D850 has no Kelvin presets; still not covered through the joined path
-        assert!(!covers_camera("NIKON CORPORATION NIKON D850"));
+        // fujifilm x trans iii models are covered
+        {
+            for c in ["FUJIFILM X-T20", "Fujifilm X-T2", "FUJIFILM X100F", "FUJIFILM X-H1", "FUJIFILM X-Pro2", "FUJIFILM X-E3"] {
+                assert!(covers_camera(c), "{c}");
+            }
+            for c in ["FUJIFILM X-T3", "FUJIFILM X-T30", "Canon X-T20", "FUJIFILM GFX 100"] {
+                assert!(!covers_camera(c), "{c}");
+            }
+        }
+        // dxo dng fujifilm model is covered for kelvin
+        {
+            // A DxO demosaiced DNG carries DxO as its make, not FUJIFILM, but it is still a Fujifilm model.
+            assert!(covers(Some("DxO"), "X-T2"));
+            assert!(covers_camera("DxO X-T2"));
+            assert!(!covers(Some("DxO"), "X-T3"));
+        }
+        // joined nikon z5ii covers camera
+        // The catalog keeps joined camera names; Nikon Z5II's make-model split is not at the first word,
+        // so covers_camera must try every split, not just the first.
+        {
+            // Direct lookup works
+            assert!(covers(Some("NIKON CORPORATION"), "NIKON Z5_2"));
+            // Joined catalog string must also work (regression for PR #2006)
+            assert!(covers_camera("NIKON CORPORATION NIKON Z5_2"));
+            // D850 has no Kelvin presets; still not covered through the joined path
+            assert!(!covers_camera("NIKON CORPORATION NIKON D850"));
+        }
     }
 }

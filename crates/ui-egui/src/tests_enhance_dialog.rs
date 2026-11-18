@@ -21,7 +21,7 @@ fn click_at(h: &mut Headless, pos: egui::Pos2) {
 
 #[test]
 fn the_enhance_dialog_previews_both_methods_and_enhances_the_selection() {
-    let dir = std::env::temp_dir().join(format!("lc-enhance-dialog-{}", std::process::id()));
+    let dir = lcc_testkit::TempDir::new("lc-enhance-dialog");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let bytes = lcc_merge::synth::bracket_dngs(640, 480, &[0.0]).unwrap().remove(0);

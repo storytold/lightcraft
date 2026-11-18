@@ -894,139 +894,128 @@ mod tests {
     }
 
     #[test]
-    fn lab_white_is_hundred_and_neutral() {
+    fn white_and_black_land_on_their_known_values() {
         let lab = xyz_to_lab(D50, D50);
         close(lab[0], 100.0, 1.0e-9);
         close(lab[1], 0.0, 1.0e-6);
         close(lab[2], 0.0, 1.0e-6);
+        // lab black is zero
+        {
+            let lab = xyz_to_lab(Vec3::ZERO, D50);
+            close(lab[0], 0.0, 1.0e-9);
+        }
+        // srgb of d65 white is unit rgb
+        {
+            let rgb = xyz_to_srgb(D65, D65);
+            assert!((rgb[0] - 1.0).abs() < 2.0e-3, "{rgb:?}");
+            assert!((rgb[1] - 1.0).abs() < 2.0e-3, "{rgb:?}");
+            assert!((rgb[2] - 1.0).abs() < 2.0e-3, "{rgb:?}");
+        }
+        // srgb u24 packs known colors
+        {
+            assert_eq!(xyz_to_srgb_u24(D65, D65), 0xff_ff_ff);
+            assert_eq!(xyz_to_srgb_u24(Vec3::ZERO, D65), 0x00_00_00);
+        }
     }
 
     #[test]
-    fn lab_black_is_zero() {
-        let lab = xyz_to_lab(Vec3::ZERO, D50);
-        close(lab[0], 0.0, 1.0e-9);
-    }
-
-    #[test]
-    fn lab_roundtrip_is_stable() {
+    fn colour_space_roundtrips_are_stable() {
         for xyz in [Vec3::new(0.2, 0.3, 0.4), Vec3::new(0.9, 0.8, 0.7), Vec3::new(0.001, 0.002, 0.003)] {
             let back = lab_to_xyz(xyz_to_lab(xyz, D50), D50);
             assert!(back.distance(&xyz) < 1.0e-10, "{back:?}");
         }
+        // lch roundtrip is stable
+        {
+            let lab = Vec3::new(55.0, -30.0, 42.0);
+            let back = lch_to_lab(lab_to_lch(lab));
+            assert!(back.distance(&lab) < 1.0e-10, "{back:?}");
+            let lch = lab_to_lch(lab);
+            assert!((0.0..360.0).contains(&lch[2]));
+        }
+        // hsl roundtrip is stable
+        {
+            for rgb in [Vec3::new(0.2, 0.4, 0.6), Vec3::new(1.0, 1.0, 1.0), Vec3::new(0.5, 0.5, 0.5), Vec3::new(0.9, 0.1, 0.1)] {
+                let back = hsl_to_rgb(rgb_to_hsl(rgb));
+                assert!(back.distance(&rgb) < 1.0e-9, "{rgb:?} -> {back:?}");
+            }
+        }
+        // hsv roundtrip is stable
+        {
+            for rgb in [Vec3::new(0.2, 0.4, 0.6), Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.9, 0.1, 0.1)] {
+                let back = hsv_to_rgb(rgb_to_hsv(rgb));
+                assert!(back.distance(&rgb) < 1.0e-9, "{rgb:?} -> {back:?}");
+            }
+        }
+        // ipt roundtrip is stable
+        {
+            for xyz in [Vec3::new(0.35, 0.4, 0.3), Vec3::new(0.9, 0.8, 0.7), Vec3::new(0.05, 0.02, 0.01)] {
+                let back = ipt_to_xyz(xyz_to_ipt(xyz, D65), D65);
+                // The 0.43 power is conditioned well enough for colour work but
+                // not for machine-precision round trips.
+                assert!(back.distance(&xyz) < 1.0e-3, "{xyz:?} -> {back:?}");
+            }
+        }
+        // jab roundtrip is stable
+        {
+            for xyz in [Vec3::new(0.2, 0.3, 0.4), Vec3::new(0.9, 0.8, 0.7), Vec3::new(0.05, 0.02, 0.01)] {
+                let back = jab_to_xyz(xyz_to_jab(xyz, D65), D65);
+                // The quantiser is exact to double precision over this range.
+                assert!(back.distance(&xyz) < 1.0e-6, "{xyz:?} -> {back:?}");
+            }
+        }
+        // lut space roundtrip is stable
+        {
+            let xyz = Vec3::new(0.3, 0.35, 0.25);
+            let back = lut_space_to_xyz(xyz_to_lut_space(xyz));
+            assert!(back.distance(&xyz) < 1.0e-10, "{back:?}");
+        }
+        // luv roundtrip is stable
+        {
+            let xyz = Vec3::new(0.4, 0.5, 0.6);
+            let back = luv_to_xyz(xyz_to_luv(xyz, D65), D65);
+            assert!(back.distance(&xyz) < 1.0e-9, "{back:?}");
+        }
+        // ucs scaling roundtrips
+        {
+            let jch = Vec3::new(0.5, 20.0, 120.0);
+            let back = ucs_to_jch(jch_to_ucs(jch));
+            assert!(back.distance(&jch) < 1.0e-12, "{back:?}");
+        }
+        // uvy roundtrip is stable
+        {
+            let xyz = Vec3::new(0.31, 0.34, 0.35);
+            let back = uvy_to_xyz(xyz_to_uvy(xyz));
+            assert!(back.distance(&xyz) < 1.0e-12, "{back:?}");
+        }
+        // xyy roundtrip is stable
+        {
+            let xyz = Vec3::new(0.31, 0.34, 0.35);
+            let back = xyy_to_xyz(xyz_to_xyy(xyz));
+            assert!(back.distance(&xyz) < 1.0e-12, "{back:?}");
+        }
+        // srgb transfer roundtrip
+        {
+            for x in [0.0, 0.001, 0.0031308, 0.02, 0.5, 1.0] {
+                close(srgb_decode(srgb_encode(x)), x, 1.0e-12);
+            }
+        }
     }
 
     #[test]
-    fn lch_roundtrip_is_stable() {
-        let lab = Vec3::new(55.0, -30.0, 42.0);
-        let back = lch_to_lab(lab_to_lch(lab));
-        assert!(back.distance(&lab) < 1.0e-10, "{back:?}");
-        let lch = lab_to_lch(lab);
-        assert!((0.0..360.0).contains(&lch[2]));
-    }
-
-    #[test]
-    fn xyy_roundtrip_is_stable() {
-        let xyz = Vec3::new(0.31, 0.34, 0.35);
-        let back = xyy_to_xyz(xyz_to_xyy(xyz));
-        assert!(back.distance(&xyz) < 1.0e-12, "{back:?}");
-    }
-
-    #[test]
-    fn uvy_roundtrip_is_stable() {
-        let xyz = Vec3::new(0.31, 0.34, 0.35);
-        let back = uvy_to_xyz(xyz_to_uvy(xyz));
-        assert!(back.distance(&xyz) < 1.0e-12, "{back:?}");
-    }
-
-    #[test]
-    fn luv_roundtrip_is_stable() {
-        let xyz = Vec3::new(0.4, 0.5, 0.6);
-        let back = luv_to_xyz(xyz_to_luv(xyz, D65), D65);
-        assert!(back.distance(&xyz) < 1.0e-9, "{back:?}");
-    }
-
-    #[test]
-    fn bradford_maps_source_white_exactly() {
+    fn adaptations_map_the_source_white_exactly() {
         let t = bradford_map_white(D65, D50);
         let mapped = t * D65;
         assert!(mapped.distance(&D50) < 1.0e-12, "{mapped:?}");
-    }
-
-    #[test]
-    fn bradford_is_identity_for_equal_white() {
-        let t = bradford_map_white(D50, D50);
-        assert!(t.approx_eq(&Mat3::IDENTITY, 1.0e-12), "{t:?}");
-    }
-
-    #[test]
-    fn cat02_maps_source_white_exactly() {
-        let t = white_map(Cat::Cat02, D50, D65);
-        assert!((t * D50).distance(&D65) < 1.0e-12);
-    }
-
-    #[test]
-    fn srgb_of_d65_white_is_unit_rgb() {
-        let rgb = xyz_to_srgb(D65, D65);
-        assert!((rgb[0] - 1.0).abs() < 2.0e-3, "{rgb:?}");
-        assert!((rgb[1] - 1.0).abs() < 2.0e-3, "{rgb:?}");
-        assert!((rgb[2] - 1.0).abs() < 2.0e-3, "{rgb:?}");
-    }
-
-    #[test]
-    fn srgb_u24_packs_known_colors() {
-        assert_eq!(xyz_to_srgb_u24(D65, D65), 0xff_ff_ff);
-        assert_eq!(xyz_to_srgb_u24(Vec3::ZERO, D65), 0x00_00_00);
-    }
-
-    #[test]
-    fn srgb_transfer_roundtrip() {
-        for x in [0.0, 0.001, 0.0031308, 0.02, 0.5, 1.0] {
-            close(srgb_decode(srgb_encode(x)), x, 1.0e-12);
+        // bradford is identity for equal white
+        {
+            let t = bradford_map_white(D50, D50);
+            assert!(t.approx_eq(&Mat3::IDENTITY, 1.0e-12), "{t:?}");
         }
-    }
-
-    #[test]
-    fn hsl_roundtrip_is_stable() {
-        for rgb in [Vec3::new(0.2, 0.4, 0.6), Vec3::new(1.0, 1.0, 1.0), Vec3::new(0.5, 0.5, 0.5), Vec3::new(0.9, 0.1, 0.1)] {
-            let back = hsl_to_rgb(rgb_to_hsl(rgb));
-            assert!(back.distance(&rgb) < 1.0e-9, "{rgb:?} -> {back:?}");
+        // cat02 maps source white exactly
+        {
+            let t = white_map(Cat::Cat02, D50, D65);
+            assert!((t * D50).distance(&D65) < 1.0e-12);
         }
-    }
-
-    #[test]
-    fn hsv_roundtrip_is_stable() {
-        for rgb in [Vec3::new(0.2, 0.4, 0.6), Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.9, 0.1, 0.1)] {
-            let back = hsv_to_rgb(rgb_to_hsv(rgb));
-            assert!(back.distance(&rgb) < 1.0e-9, "{rgb:?} -> {back:?}");
-        }
-    }
-
-    #[test]
-    fn ciede2000_identity_is_zero() {
-        let wp = D50;
-        close(ciede2000(Vec3::new(0.3, 0.4, 0.5), Vec3::new(0.3, 0.4, 0.5), wp), 0.0, 1.0e-12);
-    }
-
-    #[test]
-    fn ciede2000_matches_sharma_reference_pair() {
-        // Sharma et al. test data set, pair 1, in Lab; converted through the
-        // D50 white point used here.
-        let wp = D50;
-        let a = Vec3::new(50.0, 2.6772, -79.7751);
-        let b = Vec3::new(50.0, 0.0, -82.7485);
-        let xa = lab_to_xyz(a, wp);
-        let xb = lab_to_xyz(b, wp);
-        close(ciede2000(xa, xb, wp), 2.0425, 5.0e-4);
-    }
-
-    #[test]
-    fn ciede2000_matches_sharma_reference_pair_two() {
-        let wp = D50;
-        let a = Vec3::new(50.0, 3.1571, -77.2803);
-        let b = Vec3::new(50.0, 0.0, -82.7485);
-        let xa = lab_to_xyz(a, wp);
-        let xb = lab_to_xyz(b, wp);
-        close(ciede2000(xa, xb, wp), 2.8615, 5.0e-4);
     }
 
     #[test]
@@ -1075,6 +1064,11 @@ mod tests {
             let xb = lab_to_xyz(Vec3::new(l2, a2, b2), wp);
             let got = ciede2000(xa, xb, wp);
             assert!((got - expected).abs() <= 2.0e-3, "Lab ({l1}, {a1}, {b1}) vs ({l2}, {a2}, {b2}): {got} vs {expected}");
+        }
+        // ciede2000 identity is zero
+        {
+            let wp = D50;
+            close(ciede2000(Vec3::new(0.3, 0.4, 0.5), Vec3::new(0.3, 0.4, 0.5), wp), 0.0, 1.0e-12);
         }
     }
 
@@ -1151,33 +1145,10 @@ mod tests {
     }
 
     #[test]
-    fn jab_roundtrip_is_stable() {
-        for xyz in [Vec3::new(0.2, 0.3, 0.4), Vec3::new(0.9, 0.8, 0.7), Vec3::new(0.05, 0.02, 0.01)] {
-            let back = jab_to_xyz(xyz_to_jab(xyz, D65), D65);
-            // The quantiser is exact to double precision over this range.
-            assert!(back.distance(&xyz) < 1.0e-6, "{xyz:?} -> {back:?}");
-        }
-    }
-
-    #[test]
     fn jch_hue_is_bounded() {
         let jch = xyz_to_jch(Vec3::new(0.4, 0.3, 0.2), D50);
         assert!(jch.is_finite());
         assert!((0.0..360.0).contains(&jch[2]), "{jch:?}");
-    }
-
-    #[test]
-    fn ucs_scaling_roundtrips() {
-        let jch = Vec3::new(0.5, 20.0, 120.0);
-        let back = ucs_to_jch(jch_to_ucs(jch));
-        assert!(back.distance(&jch) < 1.0e-12, "{back:?}");
-    }
-
-    #[test]
-    fn lut_space_roundtrip_is_stable() {
-        let xyz = Vec3::new(0.3, 0.35, 0.25);
-        let back = lut_space_to_xyz(xyz_to_lut_space(xyz));
-        assert!(back.distance(&xyz) < 1.0e-10, "{back:?}");
     }
 
     #[test]
@@ -1189,16 +1160,6 @@ mod tests {
         let inverse = Mat3::from_rows([1.0000, 0.0976, 0.2052], [1.0000, -0.1139, 0.1332], [1.0000, 0.0326, -0.6769])
             * Mat3::from_rows([1.850_242_94, -1.138_301_64, 0.238_434_96], [0.366_830_78, 0.643_884_54, -0.010_673_44], [0.0, 0.0, 1.088_850_17]);
         assert!((forward * inverse).approx_eq(&Mat3::IDENTITY, 1.0e-3), "{:?}", forward * inverse);
-    }
-
-    #[test]
-    fn ipt_roundtrip_is_stable() {
-        for xyz in [Vec3::new(0.35, 0.4, 0.3), Vec3::new(0.9, 0.8, 0.7), Vec3::new(0.05, 0.02, 0.01)] {
-            let back = ipt_to_xyz(xyz_to_ipt(xyz, D65), D65);
-            // The 0.43 power is conditioned well enough for colour work but
-            // not for machine-precision round trips.
-            assert!(back.distance(&xyz) < 1.0e-3, "{xyz:?} -> {back:?}");
-        }
     }
 
     #[test]

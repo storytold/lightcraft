@@ -75,28 +75,38 @@ fn the_aspect_button_names_a_saved_ratio() {
     assert_eq!(label(Some((100, 100))), "1 × 1");
     assert_eq!(label(Some((300, 200))), "Original");
     assert_eq!(label(None), "Free");
+    // CodeRabbit on #3762: the saved ratio whose rounded value is the lock, not the first one within the label's
+    // tolerance
+    let custom = [
+        lcc_engine::cmd::crop_aspects::CustomAspect { name: "Close".into(), aspect: [3.01, 2.0] },
+        lcc_engine::cmd::crop_aspects::CustomAspect { name: "Exact".into(), aspect: [1.5, 1.0] },
+    ];
+    assert_eq!(crate::panels::right::aspect_label(Some((150, 100)), None, &custom), "Exact");
+    assert_eq!(crate::panels::right::aspect_label(Some((100, 150)), None, &custom), "Exact", "either orientation");
 }
 
+/// One session, several steps; each step was a test of its own and says what it checks.
 #[test]
-fn a_saved_ratio_is_in_the_menu_and_locks_the_crop() {
+fn a_saved_ratio_is_in_the_menu_and_a_hidden_built_in_leaves_it() {
     let mut h = crop_panel();
-    exec(&mut h, "crop.saveAspect", json!({"name": "Instagram Portrait", "aspect": [4, 5]}));
-    open_menu(&mut h);
-    assert_eq!(widgets(&mut h, "cropAspectSaved:"), ["cropAspectSaved:0"]);
-    click(&mut h, "cropAspectSaved:0");
-    assert_eq!(h.app.crop_tool_aspect(), Some((400, 500)));
-    assert!(widgets(&mut h, "cropAspectSaved:").is_empty(), "picking a ratio closes the menu");
-}
-
-#[test]
-fn a_hidden_built_in_ratio_leaves_the_menu() {
-    let mut h = crop_panel();
-    exec(&mut h, "crop.hideAspect", json!({"aspect": "16x9"}));
-    open_menu(&mut h);
-    let shown = widgets(&mut h, "cropAspectPreset:");
-    assert!(shown.iter().any(|w| w == "cropAspectPreset:1x1"), "{shown:?}");
-    assert!(shown.iter().any(|w| w == "cropAspectPreset:free"), "{shown:?}");
-    assert!(!shown.iter().any(|w| w == "cropAspectPreset:16x9"), "{shown:?}");
+    // a saved ratio is in the menu and locks the crop
+    {
+        exec(&mut h, "crop.saveAspect", json!({"name": "Instagram Portrait", "aspect": [4, 5]}));
+        open_menu(&mut h);
+        assert_eq!(widgets(&mut h, "cropAspectSaved:"), ["cropAspectSaved:0"]);
+        click(&mut h, "cropAspectSaved:0");
+        assert_eq!(h.app.crop_tool_aspect(), Some((400, 500)));
+        assert!(widgets(&mut h, "cropAspectSaved:").is_empty(), "picking a ratio closes the menu");
+    }
+    // a hidden built in ratio leaves the menu
+    {
+        exec(&mut h, "crop.hideAspect", json!({"aspect": "16x9"}));
+        open_menu(&mut h);
+        let shown = widgets(&mut h, "cropAspectPreset:");
+        assert!(shown.iter().any(|w| w == "cropAspectPreset:1x1"), "{shown:?}");
+        assert!(shown.iter().any(|w| w == "cropAspectPreset:free"), "{shown:?}");
+        assert!(!shown.iter().any(|w| w == "cropAspectPreset:16x9"), "{shown:?}");
+    }
 }
 
 #[test]
@@ -167,16 +177,4 @@ fn edit_list_reorders_deletes_and_hides_without_closing_the_menu() {
     let shown = widgets(&mut h, "cropAspectPreset:");
     assert!(!shown.iter().any(|w| w == "cropAspectPreset:4x5"), "{shown:?}");
     assert_eq!(widgets(&mut h, "cropAspectSaved:").len(), 2);
-}
-
-/// CodeRabbit on #3762: the button names the saved ratio whose rounded value is the lock, not
-/// the first one within the label's tolerance.
-#[test]
-fn the_aspect_button_names_the_exact_saved_ratio_first() {
-    let custom = [
-        lcc_engine::cmd::crop_aspects::CustomAspect { name: "Close".into(), aspect: [3.01, 2.0] },
-        lcc_engine::cmd::crop_aspects::CustomAspect { name: "Exact".into(), aspect: [1.5, 1.0] },
-    ];
-    assert_eq!(crate::panels::right::aspect_label(Some((150, 100)), None, &custom), "Exact");
-    assert_eq!(crate::panels::right::aspect_label(Some((100, 150)), None, &custom), "Exact", "either orientation");
 }

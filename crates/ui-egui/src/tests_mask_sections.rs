@@ -42,7 +42,7 @@ fn masks(h: &Headless) -> Vec<lcc_develop::Mask> {
 }
 
 #[test]
-fn a_section_folds_its_sliders_away_and_back() {
+fn sections_fold_grading_sets_its_zone_and_the_row_bin_deletes() {
     let mut h = masking();
     for s in ["section:mask:light", "section:mask:color", "section:mask:grading", "section:mask:effects", "section:mask:detail"] {
         assert!(has(&mut h, s), "{s} shown");
@@ -56,11 +56,8 @@ fn a_section_folds_its_sliders_away_and_back() {
     req(&mut h, "ui.clickWidget", json!({"id": "section:mask:light"}));
     h.settle(SETTLE);
     assert!(has(&mut h, "slider:exposure"), "Light open again");
-}
 
-#[test]
-fn color_grading_in_a_mask_sets_the_picked_zone() {
-    let mut h = masking();
+    // Color Grading in a mask sets the picked zone
     assert!(has(&mut h, "slider:grade_shadows_sat"), "Shadows is the first zone");
     req(&mut h, "ui.clickWidget", json!({"id": "button:maskGradeZone:highlights"}));
     h.settle(SETTLE);
@@ -71,24 +68,19 @@ fn color_grading_in_a_mask_sets_the_picked_zone() {
     let a = masks(&h)[0].adjust;
     assert!(a.grade_highlights_sat > 50.0, "highlights saturation raised: {}", a.grade_highlights_sat);
     assert_eq!(a.grade_shadows_sat, 0.0, "other zones untouched");
-}
-
-#[test]
-fn mask_adjust_clamps_grading_values() {
-    let mut h = masking();
+    // and `mask.adjust` clamps grading values
     exec(&mut h, "mask.adjust", json!({"values": {"grade_midtones_hue": 720, "grade_midtones_sat": 150, "grade_global_lum": -400}}));
     let a = masks(&h)[0].adjust;
     assert_eq!((a.grade_midtones_hue, a.grade_midtones_sat, a.grade_global_lum), (360.0, 100.0, -100.0));
-}
 
-#[test]
-fn the_bin_on_a_hovered_mask_row_deletes_that_mask() {
-    let mut h = masking();
+    // the bin on a hovered mask row deletes that mask
     exec(&mut h, "mask.add", json!({"kind": "linear"}));
     h.settle(SETTLE);
     let list = masks(&h);
     assert_eq!(list.len(), 2);
     let first = list[0].id;
+    req(&mut h, "ui.move", json!({"x": 5.0, "y": 5.0}));
+    h.settle(SETTLE);
     assert!(!has(&mut h, &format!("maskDeleteRow:{first}")), "the bin shows only on hover");
     req(&mut h, "ui.hoverWidget", json!({"id": format!("mask:{first}")}));
     h.settle(SETTLE);
@@ -97,4 +89,23 @@ fn the_bin_on_a_hovered_mask_row_deletes_that_mask() {
     let left = masks(&h);
     assert_eq!(left.len(), 1, "one mask deleted");
     assert_ne!(left[0].id, first, "the hovered one");
+}
+
+/// Issue #1145: the Color swatch under Saturation opens a tint (hue in degrees, strength) that
+/// the mask takes; with no strength there is no tint.
+#[test]
+fn the_color_swatch_tints_the_mask() {
+    let mut h = masking();
+    assert!(has(&mut h, "maskTint:swatch"), "the swatch row is under the Color sliders");
+    assert!(!has(&mut h, "slider:color_sat"), "the tint sliders wait for the row");
+    req(&mut h, "ui.clickWidget", json!({"id": "flyout:maskTint"}));
+    h.settle(SETTLE);
+    assert!(has(&mut h, "slider:color_hue") && has(&mut h, "slider:color_sat"));
+    req(&mut h, "ui.dragWidget", json!({"id": "slider:color_sat", "fx": 0.1, "dx": 600.0, "steps": 8}));
+    h.settle(SETTLE);
+    let a = masks(&h)[0].adjust;
+    assert!(a.color_sat > 50.0, "tint strength raised: {}", a.color_sat);
+    assert!(crate::panels::masking::tint_swatch(a.color_hue, a.color_sat).is_some());
+    assert!(crate::panels::masking::tint_swatch(200.0, 0.0).is_none(), "no strength, no tint");
+    assert!(crate::panels::masking::tint_swatch(f64::NAN, 50.0).is_none());
 }

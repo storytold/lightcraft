@@ -24,3 +24,7 @@ zip = { version = "9.0", default-features = false, features = ["deflate-flate2"]
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 # whether Windows Installer owns the running program (an MSI install updates through the installer)
 lcc-winmsi = { workspace = true }
+
+[dev-dependencies]
+# tests' Temp folders, removed when each test ends
+lcc-testkit = { workspace = true }

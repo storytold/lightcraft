@@ -500,13 +500,18 @@ fn backup_integrity_optimise() {
     let report = j.check_integrity(&c).unwrap();
     assert!(report.ok(), "{report:?}");
     let root = s.path().join("elsewhere");
+    // backups are named by the second they were made in: the earlier two are renamed to earlier times instead of
+    // waiting a second between them
     let mut made = Vec::new();
-    for _ in 0..3 {
-        made.push(j.backup(&c, &root, 2).unwrap());
-        std::thread::sleep(std::time::Duration::from_millis(1100));
+    for old in ["2001-01-01 000000", "2002-01-01 000000"] {
+        let b = j.backup(&c, &root, 2).unwrap();
+        std::fs::rename(&b, root.join(old)).unwrap();
+        made.push(root.join(old));
     }
-    let left: Vec<PathBuf> = std::fs::read_dir(&root).unwrap().map(|e| e.unwrap().path()).collect();
-    assert_eq!(left.len(), 2, "pruned to 2: {left:?}");
+    made.push(j.backup(&c, &root, 2).unwrap());
+    let mut left: Vec<PathBuf> = std::fs::read_dir(&root).unwrap().map(|e| e.unwrap().path()).collect();
+    left.sort();
+    assert_eq!(left, made[1..], "pruned to the newest 2");
     // a backup opens as a catalog of its own
     {
         let copy = Scratch::new("bk-copy");
@@ -929,12 +934,10 @@ fn exit_backup_skips_a_catalog_unchanged_since_the_last() {
     let op = Op::AddAlbum { album };
     c.apply(op.clone()).unwrap();
     j.append(&[op]).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(1100));
     assert!(j.backup_if_due(&c).unwrap().is_some(), "an op since");
     assert!(j.backup_if_due(&c).unwrap().is_none());
     // the library's presets and habits since
     std::fs::write(s.path().join("prefs.json"), b"{\"presets\": []}").unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(1100));
     assert!(j.backup_if_due(&c).unwrap().is_some(), "prefs.json changed");
     // unknown: changed
     assert!(CatalogSettings::load(s.path()).backup_wanted(library::now_secs(), None));

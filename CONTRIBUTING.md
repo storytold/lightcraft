@@ -30,6 +30,9 @@ issue. A checklist row with no issue is named in the PR title instead.
   New features ship with a test that fails without them; crash fixes with a hostile-input no-panic check.
 - **One task id per commit**, with the docs it moves (parity-checklist rows, gaps entry, ROADMAP/target-app-parity
   numbers) in the same commit.
+- **Manual:** a user-visible change (feature, menu item, setting, shortcut, default, platform, screenshot) updates the
+  matching page in `docs/manual-site/src/content/docs/` and/or `docs/manual/` in the same commit; see
+  [`docs/manual-site/AUTHORING.md`](docs/manual-site/AUTHORING.md). The PR says which pages, or "none".
 - **Release notes:** user-visible changes add `docs/whats-new/<date>-<slug>.md` (+ `docs/changelog/unreleased/…`);
   the READMEs there say how.
 - **Sources:** an algorithm PR names what it was built from on a `Sources:` line (paper, prose spec, "own design").

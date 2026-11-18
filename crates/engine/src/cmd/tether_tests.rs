@@ -7,9 +7,8 @@ use crate::Session;
 
 #[test]
 fn simulated_camera_captures_downloads_and_imports() {
-    let root = std::env::temp_dir().join(format!("lcc-tether-native-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
+    // removed when the test ends, after the session (declared after it)
+    let root = lcc_testkit::TempDir::new("lcc-tether-native");
     let mut s = Session::new().with_fs();
 
     // no library on disk: refused before touching a camera
@@ -82,5 +81,4 @@ fn simulated_camera_captures_downloads_and_imports() {
     assert!(r["error"].as_str().unwrap_or("").contains("cancelled"), "{r}");
     assert!(s.execute("tether.camera", &json!({})).unwrap().is_null());
     assert!(!s.activity.list().iter().any(|t| t.kind == "tether"));
-    let _ = std::fs::remove_dir_all(&root);
 }

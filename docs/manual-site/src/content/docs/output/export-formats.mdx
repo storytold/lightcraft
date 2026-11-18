@@ -10,7 +10,7 @@ import NeedsImage from '../../../components/NeedsImage.astro';
 import { Aside } from '@astrojs/starlight/components';
 
 ## File Settings ▸ Format
-- **JPEG**: **Quality** 1–100; **Limit file size (KB)** finds the quality that fits.
+- **JPEG**: **Quality** 1–100; **Limit file size (KB)** finds the quality that fits; when it has to go below **Quality**, the message after the export and the command-line tool say which quality it settled on.
 - **PNG**, **TIFF**, **PSD** (flat, 8/16-bit, no layers), **WebP**, **AVIF**.
 - **JPEG XL**: native builds only; lossy or lossless, 8/16-bit.
 - **DNG**: raw photos only, a lossless re-encode with the edits in the embedded XMP. Compression: lossless JPEG (default), ZIP, none or lossy.

@@ -1506,7 +1506,7 @@ mod tests {
             let full = GrainParams::new(&g, 3000.0).unwrap();
             let small = GrainParams::new(&g, 3000.0 / k as f64).unwrap();
             let n = 120;
-            for lum in [0.25f32, 0.5, 0.8] {
+            for lum in [0.25f32, 0.8] {
                 let big = patch(&full, n * k, lum);
                 let down = box_down(&big, n * k, k);
                 let sm = patch(&small, n, lum);

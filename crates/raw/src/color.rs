@@ -83,12 +83,30 @@ pub fn has_matrix(color: &ColorData) -> bool {
 /// Whether the file's "camera" is a linear RGB space and not a sensor: one matrix pair and a neutral of exactly
 /// (1, 1, 1), which no sensor's response gives. Photo Merge of JPEGs and rendered DNGs are written this way, and a
 /// camera profile, made for its sensor's RGB, doesn't describe their pixels.
+///
+/// The pair must also be the one our writers emit for an RGB space (Photo Merge, Render to DNG): `ColorMatrix1` is
+/// exactly the inverse of `ForwardMatrix1` adapted from D50 to the matrix's illuminant (D65 or D50). A sensor's pair
+/// leaves its white balance in that product, so a third-party linear DNG that was white-balanced before writing
+/// (neutral (1, 1, 1) too) keeps its camera profile (issue #763).
 pub fn is_rendered_rgb(color: &ColorData) -> bool {
-    color.as_shot_neutral == Some([1.0; 3])
-        && color.color_matrix[0].is_some()
-        && color.forward_matrix[0].is_some()
-        && color.color_matrix[1].is_none()
-        && color.forward_matrix[1].is_none()
+    let (Some(cm), Some(fm)) = (color.color_matrix[0], color.forward_matrix[0]) else {
+        return false;
+    };
+    if color.as_shot_neutral != Some([1.0; 3]) || color.color_matrix[1].is_some() || color.forward_matrix[1].is_some() {
+        return false;
+    }
+    let white = match color.illuminant[0] {
+        21 => D65,
+        23 => D50,
+        _ => return false,
+    };
+    let product = cm.mul(&bradford(D50, white)).mul(&fm);
+    product.0.iter().enumerate().all(|(r, row)| {
+        row.iter().enumerate().all(|(c, &v)| {
+            let want = if r == c { 1.0 } else { 0.0 };
+            v.is_finite() && (v - want).abs() < 2e-3
+        })
+    })
 }
 
 /// `XYZtoCamera` for white `xy` (fallback: XYZ → linear sRGB).
@@ -313,8 +331,54 @@ mod tests {
     #[test]
     fn rendered_rgb_is_told_from_a_sensor() {
         let m = Some(Mat3::IDENTITY);
-        let rendered = ColorData { color_matrix: [m, None], forward_matrix: [m, None], as_shot_neutral: Some([1.0; 3]), ..Default::default() };
-        assert!(is_rendered_rgb(&rendered));
+        // what Render to DNG and Photo Merge write for linear sRGB / Rec.2020 / ProPhoto
+        for space in [SRGB, REC2020] {
+            let fm = bradford(space.white, D50).mul(&space.to_xyz());
+            let c = ColorData {
+                illuminant: [21, 0],
+                color_matrix: [Some(space.from_xyz()), None],
+                forward_matrix: [Some(fm), None],
+                as_shot_neutral: Some([1.0; 3]),
+                ..Default::default()
+            };
+            assert!(is_rendered_rgb(&c), "{}", space.name);
+        }
+        let pro = lcc_color::PROPHOTO;
+        let pro = ColorData {
+            illuminant: [23, 0],
+            color_matrix: [Some(pro.from_xyz()), None],
+            forward_matrix: [Some(pro.to_xyz()), None],
+            as_shot_neutral: Some([1.0; 3]),
+            ..Default::default()
+        };
+        assert!(is_rendered_rgb(&pro), "ProPhoto (D50)");
+        let fm = bradford(D65, D50).mul(&SRGB.to_xyz());
+        let rendered = ColorData {
+            illuminant: [21, 0],
+            color_matrix: [bradford(D50, D65).mul(&fm).inverse(), None],
+            forward_matrix: [Some(fm), None],
+            as_shot_neutral: Some([1.0; 3]),
+            ..Default::default()
+        };
+        assert!(is_rendered_rgb(&rendered), "Photo Merge of JPEGs");
+        // a third-party linear DNG, white-balanced before writing: a sensor's matrices with a (1, 1, 1) neutral
+        let sensor = Mat3([[0.6722, -0.0635, -0.0963], [-0.4287, 1.2460, 0.2028], [-0.0908, 0.2162, 0.5668]]);
+        let sensor_fm = Mat3([[0.7978, 0.1352, 0.0313], [0.2880, 0.7119, 0.0001], [0.0, 0.0, 0.8251]]);
+        let balanced = ColorData {
+            illuminant: [21, 0],
+            color_matrix: [Some(sensor), None],
+            forward_matrix: [Some(sensor_fm), None],
+            as_shot_neutral: Some([1.0; 3]),
+            ..Default::default()
+        };
+        assert!(!is_rendered_rgb(&balanced), "a sensor's pair keeps its camera profile");
+        assert!(
+            !is_rendered_rgb(&ColorData { color_matrix: [m, None], forward_matrix: [m, None], ..balanced.clone() }),
+            "identity pair is no RGB space"
+        );
+        assert!(!is_rendered_rgb(&ColorData { illuminant: [17, 0], ..rendered.clone() }), "unexpected illuminant");
+        let nan = Mat3([[f64::NAN; 3]; 3]);
+        assert!(!is_rendered_rgb(&ColorData { color_matrix: [Some(nan), None], ..rendered.clone() }), "hostile matrix");
         assert!(!is_rendered_rgb(&ColorData { as_shot_neutral: Some([0.5, 1.0, 0.7]), ..rendered.clone() }));
         assert!(!is_rendered_rgb(&ColorData { color_matrix: [m, m], forward_matrix: [m, m], ..rendered.clone() }));
         assert!(!is_rendered_rgb(&ColorData { as_shot_neutral: Some([1.0; 3]), ..Default::default() }));

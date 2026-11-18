@@ -340,21 +340,19 @@ mod tests {
             assert_eq!(ExifLightSource::from_tag(src.tag()), Some(src));
             assert_eq!(ExifLightSource::from_name(src.name()), Some(src));
         }
-    }
-
-    #[test]
-    fn exif_names_are_unique() {
-        let mut tags: Vec<u8> = EXIF_LIGHT_SOURCES.iter().map(|s| s.tag()).collect();
-        tags.sort_unstable();
-        tags.dedup();
-        assert_eq!(tags.len(), EXIF_LIGHT_SOURCES.len());
-    }
-
-    #[test]
-    fn name_parsing_is_forgiving() {
-        assert_eq!(ExifLightSource::from_name("  standard light a "), Some(ExifLightSource::StandardLightA));
-        assert_eq!(ExifLightSource::from_name("d-65"), Some(ExifLightSource::D65));
-        assert_eq!(ExifLightSource::from_name("nope"), None);
+        // exif names are unique
+        {
+            let mut tags: Vec<u8> = EXIF_LIGHT_SOURCES.iter().map(|s| s.tag()).collect();
+            tags.sort_unstable();
+            tags.dedup();
+            assert_eq!(tags.len(), EXIF_LIGHT_SOURCES.len());
+        }
+        // exif tagged spectra exist for standard sources
+        {
+            for src in [ExifLightSource::D50, ExifLightSource::D65, ExifLightSource::D75, ExifLightSource::StandardLightA] {
+                assert!(spectrum_for(src).is_some(), "{src}");
+            }
+        }
     }
 
     #[test]
@@ -368,20 +366,22 @@ mod tests {
     }
 
     #[test]
-    fn illuminant_data_has_positive_amplitudes() {
-        for (name, table) in ill_data::TABLES {
-            for a in table.amps {
-                assert!(a.is_finite() && *a > 0.0, "{name}");
-            }
-        }
-    }
-
-    #[test]
     fn temperature_parsing() {
         assert_eq!(parse_temperature("3200K"), Some(3200.0));
         assert_eq!(parse_temperature(" 2854 k "), Some(2854.0));
         assert_eq!(parse_temperature("D65"), None);
         assert_eq!(parse_temperature("0K"), None);
+        // name parsing is forgiving
+        {
+            assert_eq!(ExifLightSource::from_name("  standard light a "), Some(ExifLightSource::StandardLightA));
+            assert_eq!(ExifLightSource::from_name("d-65"), Some(ExifLightSource::D65));
+            assert_eq!(ExifLightSource::from_name("nope"), None);
+        }
+        // unknown illuminant reports its name
+        {
+            let e = spectrum("NorthLight").unwrap_err();
+            assert_eq!(e, ColorError::UnknownIlluminant("NorthLight".into()));
+        }
     }
 
     #[test]
@@ -439,18 +439,5 @@ mod tests {
         assert_eq!(g.end(), BLACKBODY_END);
         assert!((g.at(450.0) - 1.0).abs() < 1.0e-12);
         assert_eq!(g.at(300.0), 0.0);
-    }
-
-    #[test]
-    fn unknown_illuminant_reports_its_name() {
-        let e = spectrum("NorthLight").unwrap_err();
-        assert_eq!(e, ColorError::UnknownIlluminant("NorthLight".into()));
-    }
-
-    #[test]
-    fn exif_tagged_spectra_exist_for_standard_sources() {
-        for src in [ExifLightSource::D50, ExifLightSource::D65, ExifLightSource::D75, ExifLightSource::StandardLightA] {
-            assert!(spectrum_for(src).is_some(), "{src}");
-        }
     }
 }

@@ -152,15 +152,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn orientation_roundtrip() {
+    fn orientation_roundtrips_and_garbage_reads_as_nothing() {
         for o in 1..=8 {
             assert_eq!(summarize(&minimal_exif(o)).orientation, Some(o));
         }
-    }
-
-    #[test]
-    fn garbage_ok() {
-        assert_eq!(summarize(b"II*\0\xff\xff\xff\xff"), ExifSummary::default());
-        assert_eq!(summarize(&[]), ExifSummary::default());
+        // garbage ok
+        {
+            assert_eq!(summarize(b"II*\0\xff\xff\xff\xff"), ExifSummary::default());
+            assert_eq!(summarize(&[]), ExifSummary::default());
+        }
     }
 }

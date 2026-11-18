@@ -1,7 +1,7 @@
 //! Library preferences: import defaults (raw / other / per camera) applied by import, and their
 //! persistence in prefs.json.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use lcc_catalog::MediaKind;
@@ -10,11 +10,9 @@ use serde_json::json;
 
 use crate::Session;
 
-fn temp_dir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("lc-prefs-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+/// The test's folder in Temp, removed when the test ends.
+fn temp_dir(tag: &str) -> lcc_testkit::TempDir {
+    lcc_testkit::TempDir::new(&format!("lc-prefs-{tag}"))
 }
 
 fn user_preset(id: &str, settings: serde_json::Value) -> Preset {
@@ -440,7 +438,8 @@ fn slideshow_playback_settings_persist_with_the_library() {
 fn a_photo_makes_its_optics_the_default_for_new_photos() {
     let before = temp_dir("newdefault-before");
     let after = temp_dir("newdefault-after");
-    let lib = temp_dir("newdefault-lib").join("lib");
+    let lib_root = temp_dir("newdefault-lib");
+    let lib = lib_root.join("lib");
     dng(&before, "one.dng", "Nikon", "Z 9");
     dng(&after, "two.dng", "Nikon", "Z 9 II");
     let mut s = Session::new().with_fs();
@@ -491,4 +490,62 @@ fn a_photo_makes_its_optics_the_default_for_new_photos() {
     assert_eq!(s.presets.iter().filter(|p| p.name == "Birding optics").count(), 1, "and saving that name again reuses it");
     let _ = std::fs::remove_dir_all(&before);
     let _ = std::fs::remove_dir_all(&after);
+}
+
+/// A malformed numeric preference must not commit the otherwise valid import and camera edits.
+#[test]
+fn malformed_numeric_preferences_leave_all_preferences_unchanged() {
+    let mut s = Session::new();
+    with_presets(&mut s);
+    s.execute(
+        "library.preferences",
+        &json!({"import": {"rawPreset": "user.rawlook", "otherPreset": "user.jpeglook", "creator": "Original", "copyright": "Original"},
+            "camera": {"camera": "Original Camera", "preset": "user.canonlook"}, "forgetLocalDays": 7, "cacheMb": 128}),
+    )
+    .unwrap();
+    let defaults = s.import_defaults.clone();
+    let (days, mb, bytes) = (s.forget_local_days, s.cache_mb, s.cache_bytes());
+    for field in ["forgetLocalDays", "cacheMb"] {
+        for bad in [json!(null), json!(false), json!("12"), json!(-1), json!(1.5), json!([]), json!({})] {
+            let mut params = json!({"import": {"rawPreset": "user.canonlook", "otherPreset": "user.rawlook", "perCamera": true,
+                "showOnCard": true, "creator": "Changed", "copyright": "Changed", "cameras": [{"camera": "Replacement Camera", "preset": "user.rawlook"}]},
+                "camera": {"camera": "Added Camera", "preset": "user.jpeglook"}, "forgetLocalDays": 14, "cacheMb": 512});
+            params[field] = bad.clone();
+            let err = s.execute("library.preferences", &params).unwrap_err().to_string();
+            assert!(err.contains(field), "{field}={bad}: {err}");
+            assert_eq!(s.import_defaults, defaults, "{field}={bad}: import defaults changed on error");
+            assert_eq!((s.forget_local_days, s.cache_mb, s.cache_bytes()), (days, mb, bytes), "{field}={bad}");
+        }
+    }
+}
+
+/// Valid combined updates still apply together; omission, zero and upper bounds keep their meaning.
+#[test]
+fn numeric_preferences_apply_together_and_keep_existing_limits() {
+    let mut s = Session::new();
+    with_presets(&mut s);
+    let default_cache_bytes = s.cache_bytes();
+    let r = s
+        .execute(
+            "library.preferences",
+            &json!({"import": {"rawPreset": "user.rawlook", "perCamera": true, "creator": "Creator"},
+                "camera": {"camera": "Canon EOS R5", "preset": "user.canonlook"}, "forgetLocalDays": 14, "cacheMb": 512}),
+        )
+        .unwrap();
+    assert_eq!(s.import_defaults.creator, "Creator");
+    assert_eq!(s.import_defaults.raw_preset.as_deref(), Some("user.rawlook"));
+    assert_eq!(s.import_defaults.preset_for(true, "Canon EOS R5"), Some("user.canonlook"));
+    assert_eq!((s.forget_local_days, s.cache_mb, s.cache_bytes()), (14, 512, 512 << 20));
+    assert_eq!((r["forgetLocalDays"].as_u64(), r["cacheMb"].as_u64()), (Some(14), Some(512)));
+    let defaults = s.import_defaults.clone();
+    s.execute("library.preferences", &json!({})).unwrap();
+    assert_eq!(s.import_defaults, defaults);
+    assert_eq!((s.forget_local_days, s.cache_mb), (14, 512));
+    s.execute("library.preferences", &json!({"import": {"copyright": "New copyright"}})).unwrap();
+    assert_eq!(s.import_defaults.copyright, "New copyright");
+    assert_eq!((s.forget_local_days, s.cache_mb), (14, 512), "omitted numeric preferences stay unchanged");
+    s.execute("library.preferences", &json!({"forgetLocalDays": u64::MAX, "cacheMb": u64::MAX})).unwrap();
+    assert_eq!((s.forget_local_days, s.cache_mb, s.cache_bytes()), (36_500, 1 << 20, 1 << 40));
+    s.execute("library.preferences", &json!({"forgetLocalDays": 0, "cacheMb": 0})).unwrap();
+    assert_eq!((s.forget_local_days, s.cache_mb, s.cache_bytes()), (0, 0, default_cache_bytes));
 }

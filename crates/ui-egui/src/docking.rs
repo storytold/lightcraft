@@ -190,12 +190,13 @@ fn from_ui(app: &crate::LccApp) -> Workspace {
 fn sync(workspace: &mut Workspace, app: &crate::LccApp) -> Result<(), String> {
     set_visible(workspace, Panel::Library, app.ui.left_panel)?;
     set_visible(workspace, Panel::Tools, app.ui.right != crate::state::RightPanel::None)?;
-    set_visible(workspace, Panel::Presets, app.ui.presets)
+    // the presets are a panel of Develop's left column, never a dock panel of their own: a
+    // workspace that had one (an older ui.json, a script) loses it here
+    set_visible(workspace, Panel::Presets, false)
 }
 
 fn publish_visibility(app: &mut crate::LccApp, workspace: &Workspace) {
     app.ui.left_panel = workspace.layout.contains(&Panel::Library);
-    app.ui.presets = workspace.layout.contains(&Panel::Presets);
     if !workspace.layout.contains(&Panel::Tools) {
         app.ui.right = crate::state::RightPanel::None;
     } else if app.ui.right == crate::state::RightPanel::None {
@@ -225,10 +226,9 @@ pub(crate) fn exposed(app: &crate::LccApp, panel: Panel) -> bool {
 }
 
 pub(crate) fn reveal_command(app: &mut crate::LccApp, id: &str) -> Result<(), String> {
-    let panel = if id == "panel.presets" && app.ui.presets {
-        Some(Panel::Presets)
-    } else if id == "app.showInFolders" {
-        // the sidebar it scrolls, also when it is a tab behind another panel
+    let panel = if id == "app.showInFolders" || id == "panel.presets" && crate::panels::presets::shown(app) {
+        // the sidebar it scrolls (and the one the presets are a panel of), also when it is a tab
+        // behind another panel
         Some(Panel::Library)
     } else if (id.starts_with("panel.") && id != "panel.close" && id != "panel.presets"
         || id.starts_with("section.")

@@ -20,8 +20,8 @@ mod common;
 use common::Rng;
 use lcc_raster::resample::{Filter, fit};
 
-const W: usize = 3200;
-const H: usize = 2000;
+const W: usize = 1600;
+const H: usize = 1000;
 const N: usize = 9;
 /// Magnification step between frames.
 const BREATHING: f64 = 0.004;
@@ -172,12 +172,12 @@ fn focus_stack_keeps_the_texture() {
 fn focus_stack_edge_halo() {
     use lcc_raster::Plane;
     use lcc_raster::blur::gaussian;
-    const HW: usize = 1600;
-    const HH: usize = 1000;
+    const HW: usize = 800;
+    const HH: usize = 500;
     const HN: usize = 5;
     const HSIGMA: f64 = 8.0;
     let w = waves();
-    let (cx, cy, rad) = (800.0, 500.0, 300.0);
+    let (cx, cy, rad) = (400.0, 250.0, 150.0);
     let matte = Plane::from_fn(HW, HH, |x, y| {
         let d = ((x as f64 + 0.5 - cx).powi(2) + (y as f64 + 0.5 - cy).powi(2)).sqrt();
         (rad + 0.5 - d).clamp(0.0, 1.0) as f32

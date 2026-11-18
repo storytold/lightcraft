@@ -19,6 +19,8 @@ import { Aside } from '@astrojs/starlight/components';
 - **Reference View** (`Shift+R`): a reference photo beside the active one (**Photo ▸ Set as Reference Photo**).
 - **People** view: faces grouped by person, see [People and faces](../people/).
 - Move with arrows, `Home` / `End`; `Shift` + arrows extend the selection; **Select Only Active Photo** narrows it.
+- The header shows "1 selected" when one photo is selected.
+- Resizing the filmstrip keeps the active photo in place.
 - **Auto Advance** (**Photo** menu) steps forward after each rating or flag.
 - Cull with stars, flags and labels: [Ratings, flags, labels](../ratings/). **Assisted Culling** scores focus and bursts.
 - **Quick Develop** panel (right): Saved Preset, Crop Ratio, Treatment, White Balance, Auto Tone and stepped tone buttons for the selection.
@@ -28,6 +30,10 @@ import { Aside } from '@astrojs/starlight/components';
 ## Loupe
 
 <Shot name="lib-loupe" alt="Loupe view with filmstrip" />
+
+## Full-screen preview
+
+Press `F` for the photo alone on a black screen. Arrows step through the photos; `I` cycles the info overlay (file name, capture date, exposure) and at **Off** clears the photo of all text — the shot-info strip with the pixel size goes with it, and it stays that way from photo to photo. `G` returns to the grid; `Esc` (or `F` again) goes back to where you were.
 
 ## Compare
 
@@ -40,5 +46,5 @@ import { Aside } from '@astrojs/starlight/components';
 <Shot name="lib-survey" alt="Survey view of four photos" />
 
 <Aside type="note" title="Modern layout">
-  The grid, filter, search chips, flag and stars are on screen. Loupe, Compare, Survey: **View** menu. Sort and grid style: **View ▸ Sort**, **View ▸ Grid View Style**. Stacks, Photo Merge, Edit In: **Photo** menu. See [Three layouts](../../start/layouts/).
+  The grid, filter, search chips, flag and stars are on screen. Scroll the grid and a fast-scroll handle appears on the right edge; drag its thumb to jump to the start or end of the library. Loupe, Compare, Survey: **View** menu. Sort and grid style: **View ▸ Sort**, **View ▸ Grid View Style**. Stacks, Photo Merge, Edit In: **Photo** menu. See [Three layouts](../../start/layouts/).
 </Aside>

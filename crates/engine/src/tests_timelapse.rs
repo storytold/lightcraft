@@ -1,6 +1,6 @@
 //! Upstream #497: `export.timelapse` from synthetic photos, re-decoded with `lcc-video`.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use lcc_catalog::{Op, Photo, PhotoId, Source};
@@ -8,11 +8,9 @@ use serde_json::json;
 
 use crate::{Selection, Session};
 
-fn scratch(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("lcc-engine-timelapse-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+/// The test's folder in Temp, removed when the test ends.
+fn scratch(name: &str) -> lcc_testkit::TempDir {
+    lcc_testkit::TempDir::new(&format!("lcc-engine-timelapse-{name}"))
 }
 
 /// A flat grey PNG photo (`w × h`, sRGB code value `v`) in the catalog.

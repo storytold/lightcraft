@@ -204,74 +204,76 @@ mod tests {
     }
 
     #[test]
-    fn changed_files_pick_their_innermost_package() {
-        let p = plan(&[ch("crates/raw/src/lib.rs"), ch("crates/raw/nested/src/x.rs"), ch("crates/rawx/y.rs")], &pkgs(), "b".into());
-        assert_eq!(p.packages.iter().map(String::as_str).collect::<Vec<_>>(), ["lcc-raw", "lcc-raw-nested"]);
-        assert!(p.rust() && !p.workspace_wide && !p.heif && !p.parity);
+    fn changed_files_plan_the_right_checks() {
+        // changed files pick their innermost package
+        {
+            let p = plan(&[ch("crates/raw/src/lib.rs"), ch("crates/raw/nested/src/x.rs"), ch("crates/rawx/y.rs")], &pkgs(), "b".into());
+            assert_eq!(p.packages.iter().map(String::as_str).collect::<Vec<_>>(), ["lcc-raw", "lcc-raw-nested"]);
+            assert!(p.rust() && !p.workspace_wide && !p.heif && !p.parity);
+        }
+        // docs only skip the builds but tracker docs run parity
+        {
+            let p = plan(&[ch("README.md"), ch("docs/raw-parity.md")], &pkgs(), "b".into());
+            assert!(!p.rust() && !p.parity);
+            let p = plan(&[ch("docs/gaps.md")], &pkgs(), "b".into());
+            assert!(!p.rust() && p.parity);
+        }
+        // workspace files heif and parity triggers
+        {
+            let p = plan(&[ch("Cargo.lock")], &pkgs(), "b".into());
+            assert!(p.workspace_wide && p.rust() && p.heif && p.parity);
+            let p = plan(&[ch("crates/codecs/src/heif.rs")], &pkgs(), "b".into());
+            assert!(p.heif && !p.parity);
+            let p = plan(&[ch("crates/engine/src/commands.rs")], &pkgs(), "b".into());
+            assert!(p.parity && !p.heif);
+            let p = plan(&[Changed { path: "crates/raw/src/old.rs".into(), gone: true }], &pkgs(), "b".into());
+            assert!(p.parity, "a removed path may be cited by the tracker");
+        }
+        // embedded files outside a crate test the crates that embed them
+        {
+            let p = plan(&[ch("docs/raw/coverage-sweep.tsv")], &pkgs(), "b".into());
+            assert!(p.rust());
+            assert_eq!(p.packages.iter().map(String::as_str).collect::<Vec<_>>(), ["lcc-raw"]);
+            let p = plan(&[ch("assets/fonts/Inter-Regular.ttf")], &pkgs(), "b".into());
+            assert!(p.rust() && p.packages.contains("lcc-engine"));
+            // a consumer missing from the workspace's package list is not invented
+            assert!(!p.packages.contains("lcc-ui-egui"));
+            let p = plan(&[ch("assets/ATTRIBUTION.md"), ch("docs/raw-parity.md")], &pkgs(), "b".into());
+            assert!(!p.rust(), "only files something compiles in");
+        }
     }
 
     #[test]
-    fn docs_only_skip_the_builds_but_tracker_docs_run_parity() {
-        let p = plan(&[ch("README.md"), ch("docs/raw-parity.md")], &pkgs(), "b".into());
-        assert!(!p.rust() && !p.parity);
-        let p = plan(&[ch("docs/gaps.md")], &pkgs(), "b".into());
-        assert!(!p.rust() && p.parity);
-    }
-
-    #[test]
-    fn workspace_files_heif_and_parity_triggers() {
-        let p = plan(&[ch("Cargo.lock")], &pkgs(), "b".into());
-        assert!(p.workspace_wide && p.rust() && p.heif && p.parity);
-        let p = plan(&[ch("crates/codecs/src/heif.rs")], &pkgs(), "b".into());
-        assert!(p.heif && !p.parity);
-        let p = plan(&[ch("crates/engine/src/commands.rs")], &pkgs(), "b".into());
-        assert!(p.parity && !p.heif);
-        let p = plan(&[Changed { path: "crates/raw/src/old.rs".into(), gone: true }], &pkgs(), "b".into());
-        assert!(p.parity, "a removed path may be cited by the tracker");
-    }
-
-    #[test]
-    fn name_status_parses_renames_and_deletions() {
-        let v = parse_name_status("M\0a.rs\0R087\0old.rs\0new.rs\0D\0gone.rs\0C100\0src.rs\0copy.rs\0A\0added.rs\0");
-        assert_eq!(
-            v,
-            [
-                ch("a.rs"),
-                Changed { path: "old.rs".into(), gone: true },
-                ch("new.rs"),
-                Changed { path: "gone.rs".into(), gone: true },
-                ch("src.rs"),
-                ch("copy.rs"),
-                ch("added.rs"),
-            ]
-        );
-        // truncated output: no panic, keeps what it could read
-        assert_eq!(parse_name_status("M\0a.rs\0R100\0x.rs"), [ch("a.rs"), Changed { path: "x.rs".into(), gone: true }]);
-    }
-
-    #[test]
-    fn non_ascii_paths_still_map_to_their_package() {
-        // without -z, git prints these quoted and octal-escaped ("crates/raw/src/\303\251t\303\251.rs")
-        let v = parse_name_status("M\0crates/raw/src/été.rs\0R100\0crates/engine/a.rs\0crates/engine/日本.rs\0");
-        assert_eq!(v[0], ch("crates/raw/src/été.rs"));
-        assert_eq!(v[2], ch("crates/engine/日本.rs"));
-        let untracked: Vec<_> = parse_paths_z("crates/codecs/ünï code.rs\0").collect();
-        assert_eq!(untracked, [ch("crates/codecs/ünï code.rs")]);
-        let p = plan(&[v, untracked].concat(), &pkgs(), "b".into());
-        assert_eq!(p.packages.iter().map(String::as_str).collect::<Vec<_>>(), ["lcc-codecs", "lcc-engine", "lcc-raw"]);
-    }
-
-    #[test]
-    fn embedded_files_outside_a_crate_test_the_crates_that_embed_them() {
-        let p = plan(&[ch("docs/raw/coverage-sweep.tsv")], &pkgs(), "b".into());
-        assert!(p.rust());
-        assert_eq!(p.packages.iter().map(String::as_str).collect::<Vec<_>>(), ["lcc-raw"]);
-        let p = plan(&[ch("assets/fonts/Inter-Regular.ttf")], &pkgs(), "b".into());
-        assert!(p.rust() && p.packages.contains("lcc-engine"));
-        // a consumer missing from the workspace's package list is not invented
-        assert!(!p.packages.contains("lcc-ui-egui"));
-        let p = plan(&[ch("assets/ATTRIBUTION.md"), ch("docs/raw-parity.md")], &pkgs(), "b".into());
-        assert!(!p.rust(), "only files something compiles in");
+    fn git_name_status_output_is_parsed() {
+        // name status parses renames and deletions
+        {
+            let v = parse_name_status("M\0a.rs\0R087\0old.rs\0new.rs\0D\0gone.rs\0C100\0src.rs\0copy.rs\0A\0added.rs\0");
+            assert_eq!(
+                v,
+                [
+                    ch("a.rs"),
+                    Changed { path: "old.rs".into(), gone: true },
+                    ch("new.rs"),
+                    Changed { path: "gone.rs".into(), gone: true },
+                    ch("src.rs"),
+                    ch("copy.rs"),
+                    ch("added.rs"),
+                ]
+            );
+            // truncated output: no panic, keeps what it could read
+            assert_eq!(parse_name_status("M\0a.rs\0R100\0x.rs"), [ch("a.rs"), Changed { path: "x.rs".into(), gone: true }]);
+        }
+        // non ascii paths still map to their package
+        {
+            // without -z, git prints these quoted and octal-escaped ("crates/raw/src/\303\251t\303\251.rs")
+            let v = parse_name_status("M\0crates/raw/src/été.rs\0R100\0crates/engine/a.rs\0crates/engine/日本.rs\0");
+            assert_eq!(v[0], ch("crates/raw/src/été.rs"));
+            assert_eq!(v[2], ch("crates/engine/日本.rs"));
+            let untracked: Vec<_> = parse_paths_z("crates/codecs/ünï code.rs\0").collect();
+            assert_eq!(untracked, [ch("crates/codecs/ünï code.rs")]);
+            let p = plan(&[v, untracked].concat(), &pkgs(), "b".into());
+            assert_eq!(p.packages.iter().map(String::as_str).collect::<Vec<_>>(), ["lcc-codecs", "lcc-engine", "lcc-raw"]);
+        }
     }
 
     /// Every `include_str!` / `include_bytes!` of a file outside its package, and every `"../…"`

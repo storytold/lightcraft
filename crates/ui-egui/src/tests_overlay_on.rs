@@ -36,10 +36,13 @@ fn has(h: &Headless, id: &str) -> bool {
     h.app.widgets.iter().any(|(w, _)| w == id)
 }
 
-/// The overlay switched on with O: the photo says so; while a slider adjusts it steps aside with the overlay, and
-/// comes back after. Classic draws no such note.
+/// Compact: the overlay switched on with O is named on the photo; while a slider adjusts the note steps aside with
+/// the overlay, and comes back after; the switch is an icon button of its own, and a click turns the overlay on to
+/// stay and another off. Classic draws no such note and keeps its checkbox. Choosing how the overlay looks (the
+/// overlay menu) leaves it as it was, which is how it got stuck on; ⇧O, cycling the look from the keyboard, still
+/// shows it.
 #[test]
-fn compact_overlay_on_is_named_on_the_photo_and_steps_aside_while_adjusting() {
+fn the_compact_overlay_switch_and_note_and_the_look_menu_never_latching_it_on() {
     let mut h = masking(true);
     assert!(!has(&h, "canvas:overlayOn"), "the overlay isn't on to stay yet");
     exec(&mut h, "view.maskOverlay", json!({"show": true}));
@@ -52,17 +55,10 @@ fn compact_overlay_on_is_named_on_the_photo_and_steps_aside_while_adjusting() {
     h.step();
     assert!(has(&h, "canvas:overlayOn"), "back once the slider is let go");
 
-    let mut classic = masking(false);
-    exec(&mut classic, "view.maskOverlay", json!({"show": true}));
-    classic.step();
-    assert!(!has(&classic, "canvas:overlayOn"), "Classic is as it was");
-}
-
-/// The Compact switch has its own icon button; a click turns the overlay on to stay and another off. Classic keeps its
-/// checkbox.
-#[test]
-fn compact_overlay_switch_is_a_button_of_its_own() {
-    let mut h = masking(true);
+    // the switch: a button of its own
+    exec(&mut h, "view.maskOverlay", json!({"show": false}));
+    h.step();
+    h.step();
     assert!(has(&h, "icon:maskOverlayOn"), "the overlay's own button");
     assert!(!h.app.ui.mask_overlay);
     let r = h.request("ui.clickWidget", json!({"id": "icon:maskOverlayOn"}), T);
@@ -73,18 +69,15 @@ fn compact_overlay_switch_is_a_button_of_its_own() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert!(!h.app.ui.mask_overlay, "the same switch turns it off");
-    let classic = masking(false);
-    assert!(!has(&classic, "icon:maskOverlayOn") && has(&classic, "check:maskOverlay"), "Classic keeps its checkbox");
-}
 
-/// Choosing how the overlay looks (the overlay menu) leaves it as it was, which is how it got stuck on; ⇧O, cycling
-/// the look from the keyboard, still shows it.
-#[test]
-fn the_overlay_look_menu_does_not_latch_the_overlay_on() {
-    let mut h = masking(false);
-    assert!(!h.app.ui.mask_overlay);
-    exec(&mut h, "view.maskOverlayMode", json!({"mode": "whiteOnBlack", "show": false}));
-    assert!(!h.app.ui.mask_overlay, "picking a look leaves the overlay as it was");
-    exec(&mut h, "view.maskOverlayMode", json!({}));
-    assert!(h.app.ui.mask_overlay, "⇧O cycles the look and shows it");
+    let mut classic = masking(false);
+    assert!(!has(&classic, "icon:maskOverlayOn") && has(&classic, "check:maskOverlay"), "Classic keeps its checkbox");
+    // the look menu does not latch the overlay on
+    assert!(!classic.app.ui.mask_overlay);
+    exec(&mut classic, "view.maskOverlayMode", json!({"mode": "whiteOnBlack", "show": false}));
+    assert!(!classic.app.ui.mask_overlay, "picking a look leaves the overlay as it was");
+    exec(&mut classic, "view.maskOverlayMode", json!({}));
+    assert!(classic.app.ui.mask_overlay, "⇧O cycles the look and shows it");
+    classic.step();
+    assert!(!has(&classic, "canvas:overlayOn"), "Classic draws no note on the photo");
 }

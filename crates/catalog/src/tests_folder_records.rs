@@ -51,20 +51,29 @@ fn tree_labels(c: &Catalog) -> Vec<(String, ColorLabel)> {
     out
 }
 
+/// A new library knows nothing about its folders; a label shows on its folder's row and only there; a second label
+/// replaces it; undo puts back what the folder had; taking the label off (or an empty record) leaves no record.
 #[test]
-fn a_new_library_knows_nothing_about_its_folders() {
-    let c = library();
+fn a_folders_label_is_set_shown_undone_and_cleared() {
+    let mut c = library();
     assert_eq!(c.folder_record("/pics/trip"), None);
     assert_eq!(c.folder_color_label("/pics/trip"), None);
     assert!(tree_labels(&c).is_empty());
-}
-
-#[test]
-fn a_labelled_folder_shows_its_label_in_the_tree_and_only_there() {
-    let mut c = library();
-    label(&mut c, "/pics/trip", Some(ColorLabel::Red));
-    assert_eq!(c.folder_color_label("/pics/trip"), Some(ColorLabel::Red));
-    assert_eq!(tree_labels(&c), vec![("/pics/trip".to_string(), ColorLabel::Red)]);
+    let undo_first = label(&mut c, "/pics/trip", Some(ColorLabel::Yellow));
+    assert_eq!(c.folder_color_label("/pics/trip"), Some(ColorLabel::Yellow));
+    assert_eq!(tree_labels(&c), vec![("/pics/trip".to_string(), ColorLabel::Yellow)], "its row, and only that one");
+    let undo_second = label(&mut c, "/pics/trip", Some(ColorLabel::Red));
+    c.apply(undo_second).unwrap();
+    assert_eq!(c.folder_color_label("/pics/trip"), Some(ColorLabel::Yellow));
+    c.apply(undo_first).unwrap();
+    assert_eq!(c.folder_record("/pics/trip"), None);
+    label(&mut c, "/pics/trip", Some(ColorLabel::Purple));
+    label(&mut c, "/pics/trip", None);
+    assert_eq!(c.folder_record("/pics/trip"), None);
+    assert!(!c.to_snapshot().contains("folder_records"), "nothing empty is saved");
+    c.apply(Op::SetFolderRecord { folder: "/pics/trip".into(), record: Some(FolderRecord::default()) }).unwrap();
+    assert_eq!(c.folder_record("/pics/trip"), None, "an empty record is no record");
+    assert!(c.folder_records_follow("/pics/trip", "/elsewhere/trip").is_empty(), "a folder without labels moves without ops");
 }
 
 #[test]
@@ -75,33 +84,6 @@ fn however_a_folder_is_spelled_it_has_one_label() {
     label(&mut c, "/pics/home/../trip", Some(ColorLabel::Blue));
     assert_eq!(c.folder_color_label("/pics/trip"), Some(ColorLabel::Blue));
     assert_eq!(tree_labels(&c).len(), 1, "one folder, one record");
-}
-
-#[test]
-fn taking_the_label_off_leaves_no_record() {
-    let mut c = library();
-    label(&mut c, "/pics/trip", Some(ColorLabel::Purple));
-    label(&mut c, "/pics/trip", None);
-    assert_eq!(c.folder_record("/pics/trip"), None);
-    assert!(!c.to_snapshot().contains("folder_records"), "nothing empty is saved");
-}
-
-#[test]
-fn an_empty_record_is_no_record() {
-    let mut c = library();
-    c.apply(Op::SetFolderRecord { folder: "/pics/trip".into(), record: Some(FolderRecord::default()) }).unwrap();
-    assert_eq!(c.folder_record("/pics/trip"), None);
-}
-
-#[test]
-fn undo_puts_back_the_label_the_folder_had() {
-    let mut c = library();
-    let undo_first = label(&mut c, "/pics/trip", Some(ColorLabel::Yellow));
-    let undo_second = label(&mut c, "/pics/trip", Some(ColorLabel::Red));
-    c.apply(undo_second).unwrap();
-    assert_eq!(c.folder_color_label("/pics/trip"), Some(ColorLabel::Yellow));
-    c.apply(undo_first).unwrap();
-    assert_eq!(c.folder_record("/pics/trip"), None);
 }
 
 #[test]
@@ -143,12 +125,6 @@ fn undoing_a_move_brings_back_every_label_also_one_left_at_the_destination() {
     assert_eq!(c.folder_record("/pics/holiday/day9"), None, "what was known about the old folder goes");
     c.apply(undo).unwrap();
     assert_eq!(c.to_snapshot(), before);
-}
-
-#[test]
-fn a_folder_without_labels_moves_without_ops() {
-    let c = library();
-    assert!(c.folder_records_follow("/pics/trip", "/elsewhere/trip").is_empty());
 }
 
 #[test]

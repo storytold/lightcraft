@@ -96,7 +96,14 @@ pub fn people_picker(app: &mut LccApp, ui: &mut egui::Ui, photo: PhotoId) {
         }
         _ => {}
     }
-    ui.horizontal_wrapped(|ui| {
+    ui.scope(|ui| {
+        ui.add_space(4.0);
+        ui.spacing_mut().item_spacing.y = 3.0;
+        let check_radius = egui::CornerRadius::same(t.radius(3.0) as u8);
+        let w = &mut ui.style_mut().visuals.widgets;
+        for state in [&mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
+            state.corner_radius = check_radius;
+        }
         for part in PEOPLE_PARTS {
             let whole = part == "Entire Person";
             let mut on = if whole { parts.is_empty() } else { parts.iter().any(|p| p == part) };
@@ -112,6 +119,7 @@ pub fn people_picker(app: &mut LccApp, ui: &mut egui::Ui, photo: PhotoId) {
                 }
             }
         }
+        ui.add_space(4.0);
     });
     ui.horizontal(|ui| {
         let create = text_button(ui, "maskPeople:create", tr("Create Mask"), false);

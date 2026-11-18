@@ -40,6 +40,15 @@ fn click(h: &mut Headless, params: serde_json::Value) {
 #[test]
 fn solo_mode_closes_the_other_sections_when_one_opens() {
     let mut h = edit_open();
+    // bad flags and unknown sections are refused and change nothing
+    for (command, params) in
+        [("view.soloSections", json!({"on": "yes"})), ("section.color", json!({"solo": 1})), ("section.typo", json!({"solo": true}))]
+    {
+        let r = h.request("engine.execute", json!({"command": command, "params": params}), T);
+        assert_eq!(r["ok"], false, "{command} {params}: {r}");
+    }
+    assert!(!h.app.ui.single_panel);
+    assert_eq!(h.app.ui.open_sections, ["light"]);
     click(&mut h, json!({"id": "section:mixer"}));
     assert_eq!(h.app.ui.open_sections, ["light", "mixer"], "off: sections open side by side");
 
@@ -64,18 +73,7 @@ fn solo_mode_closes_the_other_sections_when_one_opens() {
 }
 
 #[test]
-fn the_section_header_menu_turns_solo_mode_on() {
-    let mut h = edit_open();
-    click(&mut h, json!({"id": "section:mixer"}));
-    // (a header near the top: the ones further down sit under the panel's Previous / Reset bar)
-    click(&mut h, json!({"id": "section:light", "button": "right"}));
-    click(&mut h, json!({"id": "sectionMenu:solo"}));
-    assert!(h.app.ui.single_panel, "the header's Solo Mode item turns it on");
-    assert_eq!(h.app.ui.open_sections, ["mixer"]);
-}
-
-#[test]
-fn option_click_opens_just_that_section() {
+fn option_click_opens_just_that_section_and_the_header_menu_turns_solo_mode_on() {
     let mut h = edit_open();
     click(&mut h, json!({"id": "section:mixer"}));
     // (headers on screen: with Light and Color open, the ones below sit under the panel's
@@ -88,17 +86,10 @@ fn option_click_opens_just_that_section() {
     // agents do the same with the section's command (Calibration has one, though not in the menu)
     exec(&mut h, "section.calibration", json!({"solo": true}));
     assert_eq!(h.app.ui.open_sections, ["calibration"]);
-}
-
-#[test]
-fn bad_flags_and_unknown_sections_are_refused() {
-    let mut h = edit_open();
-    for (command, params) in
-        [("view.soloSections", json!({"on": "yes"})), ("section.color", json!({"solo": 1})), ("section.typo", json!({"solo": true}))]
-    {
-        let r = h.request("engine.execute", json!({"command": command, "params": params}), T);
-        assert_eq!(r["ok"], false, "{command} {params}: {r}");
-    }
-    assert!(!h.app.ui.single_panel);
-    assert_eq!(h.app.ui.open_sections, ["light"]);
+    // the header's Solo Mode item turns the mode on and keeps the one open section
+    // (a header near the top: the ones further down sit under the panel's Previous / Reset bar)
+    click(&mut h, json!({"id": "section:light", "button": "right"}));
+    click(&mut h, json!({"id": "sectionMenu:solo"}));
+    assert!(h.app.ui.single_panel, "the header's Solo Mode item turns it on");
+    assert_eq!(h.app.ui.open_sections, ["calibration"]);
 }

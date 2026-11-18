@@ -158,7 +158,8 @@ struct Scope {
 /// GPU work in flight ([`crate::wait_idle`] is not idle until it ends, issue #620) and runs under
 /// the crash sentinel ([`crate::backend::set_init_marker`]). So a creation left behind past its
 /// limit keeps both: a quit meanwhile reports the GPU busy, and leaves the marker for the next
-/// launch, which then starts on the CPU.
+/// launch, which then starts on the CPU. A creation that finishes in time leaves the gate before
+/// its result is handed over: once `create` returns, its thread is no longer in flight.
 pub(crate) fn create<T: Send + 'static>(backends: wgpu::Backends, make: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
     let scope = Scope { stuck: &STUCK, gate: crate::exit::gate(), marker: InitMarker::current() };
     create_on(scope, limit(), backends, make)
@@ -178,6 +179,7 @@ fn create_on<T: Send + 'static>(
         return Err(why);
     }
     // the thread's own share of "GPU work in flight", released when the driver work really ends
+    // (before the result is sent; with the thread when it was given up on)
     let work = gate.enter().ok_or(CLOSING)?;
     let phase = Arc::new(AtomicU8::new(WAITING));
     let (tx, rx) = mpsc::sync_channel(1);
@@ -187,7 +189,7 @@ fn create_on<T: Send + 'static>(
     std::thread::Builder::new()
         .name("lc-gpu-device".into())
         .spawn(move || {
-            let _work = work;
+            let work = work;
             PROGRESS.with(|p| *p.borrow_mut() = Some(worker_progress));
             let r = marker
                 .run(backends, || std::panic::catch_unwind(std::panic::AssertUnwindSafe(make)).unwrap_or_else(|_| Err(format!("{WHAT} panicked"))));
@@ -202,11 +204,21 @@ fn create_on<T: Send + 'static>(
                     drop(s);
                     log::warn!("gpu: a device creation that was given up on has finished after all");
                     std::mem::forget(r);
+                    // (nobody waits for its result: its work in flight ends with the thread)
+                    drop(work);
                     return;
                 }
                 worker_phase.store(DONE, Ordering::Relaxed);
             }
-            let _ = tx.send(r);
+            // the driver work is over: leave before handing the result over, so that a caller that
+            // has it never still sees this thread in flight (one that needs the gate held across
+            // the hand-over holds a work of its own, as `crate::device` does)
+            drop(work);
+            if let Err(mpsc::SendError(r)) = tx.send(r) {
+                // can't happen (once DONE, the caller waits for the result); never drop a device
+                // into the driver outside the gate
+                std::mem::forget(r);
+            }
         })
         .map_err(|e| format!("{WHAT}: could not start its thread ({e})"))?;
     // checked a few times per limit: a creation that keeps making progress gets the limit again
@@ -429,13 +441,6 @@ mod tests {
         eventually("the released thread never finished", || STUCK.reason().is_none());
     }
 
-    /// Progress outside a device creation goes nowhere.
-    #[test]
-    fn progress_outside_a_creation_does_nothing() {
-        Progress::current().tick();
-        Progress::default().tick();
-    }
-
     // Given a creation left behind past its limit, the process is not idle for a quit (issue #620:
     // no driver teardown under it) and the crash sentinel stays, until the driver work really
     // ends; the quit's own wait stays bounded meanwhile
@@ -495,6 +500,28 @@ mod tests {
         // once the process is ending, nothing is created
         GATE.close();
         assert_eq!(create_on::<u32>(local.scope(), Duration::from_secs(30), B, || Ok(1)), Err(CLOSING.to_string()));
+    }
+
+    // Given a creation that returned (a device or a reason), its thread is no longer GPU work in
+    // flight: a quit right after it doesn't wait for it (the flaky `wait_idle(ZERO)` right after
+    // `available()` in tests/shutdown.rs, which found the creation thread still between handing
+    // its result over and leaving the gate)
+    #[test]
+    fn a_creation_that_returned_is_no_longer_in_flight() {
+        static STUCK: Stuck = Stuck::new();
+        static GATE: Gate = Gate::new();
+        static ACTIVE: Mutex<u32> = Mutex::new(0);
+        let local = Local::new("returned", &STUCK, &GATE, &ACTIVE);
+        let mut busy = 0;
+        for i in 0..400u32 {
+            let r = create_on(local.scope(), Duration::from_secs(30), B, move || if i % 2 == 0 { Ok(i) } else { Err("no GPU adapter".into()) });
+            assert_eq!(r.is_ok(), i % 2 == 0, "{r:?}");
+            if !GATE.wait_idle(Duration::ZERO) {
+                busy += 1;
+                assert!(GATE.wait_idle(Duration::from_secs(20)), "the creation thread ends");
+            }
+        }
+        assert_eq!(busy, 0, "a returned creation was still in flight {busy} of 400 times");
     }
 
     // Given a creation that panics (inside the driver or ours), the caller gets an error, not the

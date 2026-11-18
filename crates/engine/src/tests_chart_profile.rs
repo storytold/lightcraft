@@ -74,6 +74,29 @@ fn a_chart_photo_becomes_a_camera_profile_the_photo_develops_with() {
     assert_ne!(both["id"], first["id"]);
     let replaced = cp::install(&mut s, &lib, &out.dcp, &[], OnExists::Replace, &[]).unwrap();
     assert_eq!((replaced["id"].as_str(), replaced["replaced"].as_bool()), (Some(pid.as_str()), Some(true)));
+
+    // Replace keeps the old profile beside the new one, and undo puts it back
+    let req = cp::Request { illuminant: "D55".into(), ..Default::default() };
+    let photo = |natural| lcc_camprof::BuildOptions { name: "Swap Test".into(), natural, ..Default::default() };
+    let swap_a = cp::build((&prep, &req), None, &photo(true)).unwrap().dcp;
+    let swap_b = cp::build((&prep, &req), None, &photo(false)).unwrap().dcp;
+    let lib = dir.join("dcp-swap");
+    let r = cp::install(&mut s, &lib, &swap_a, &[], OnExists::Fail, &[]).unwrap();
+    let file = PathBuf::from(r["file"].as_str().unwrap());
+    let old = std::fs::read(&file).unwrap();
+    let r2 = cp::install(&mut s, &lib, &swap_b, &[], OnExists::Replace, &[]).unwrap();
+    assert_eq!(r2["replaced"], true);
+    let new = std::fs::read(&file).unwrap();
+    assert_ne!(old, new, "written over");
+    // the old one is kept beside it
+    let kept: Vec<_> = std::fs::read_dir(lib.join(".replaced")).unwrap().flatten().map(|e| std::fs::read(e.path()).unwrap()).collect();
+    assert_eq!(kept, std::slice::from_ref(&old));
+    // undo puts it back, redo the new one again
+    assert_eq!(s.undo_step().unwrap(), "Replace Camera Profile");
+    assert_eq!(std::fs::read(&file).unwrap(), old);
+    s.redo_step().unwrap();
+    assert_eq!(std::fs::read(&file).unwrap(), new);
+    assert!(!lib.join(format!("{}.tmp", file.file_name().unwrap().to_string_lossy())).exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -131,37 +154,6 @@ fn hostile_chart_requests_are_errors() {
     }
     assert!(s.activity.list().is_empty(), "no task row is left behind");
     assert!(cp::prepare(b"").is_err());
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn replace_keeps_the_old_profile_and_undo_puts_it_back() {
-    let dir = temp_dir("replace");
-    let path = dir.join("CHART.dng");
-    std::fs::write(&path, lit_dng("D55", false)).unwrap();
-    let mut s = Session::new();
-    let prep = cp::prepare_path(&path.to_string_lossy()).unwrap();
-    let req = cp::Request { illuminant: "D55".into(), ..Default::default() };
-    let photo = |natural| lcc_camprof::BuildOptions { name: "Swap Test".into(), natural, ..Default::default() };
-    let first = cp::build((&prep, &req), None, &photo(true)).unwrap().dcp;
-    let second = cp::build((&prep, &req), None, &photo(false)).unwrap().dcp;
-    let lib = dir.join("dcp");
-    let r = cp::install(&mut s, &lib, &first, &[], OnExists::Fail, &[]).unwrap();
-    let file = PathBuf::from(r["file"].as_str().unwrap());
-    let old = std::fs::read(&file).unwrap();
-    let r2 = cp::install(&mut s, &lib, &second, &[], OnExists::Replace, &[]).unwrap();
-    assert_eq!(r2["replaced"], true);
-    let new = std::fs::read(&file).unwrap();
-    assert_ne!(old, new, "written over");
-    // the old one is kept beside it
-    let kept: Vec<_> = std::fs::read_dir(lib.join(".replaced")).unwrap().flatten().map(|e| std::fs::read(e.path()).unwrap()).collect();
-    assert_eq!(kept, std::slice::from_ref(&old));
-    // undo puts it back, redo the new one again
-    assert_eq!(s.undo_step().unwrap(), "Replace Camera Profile");
-    assert_eq!(std::fs::read(&file).unwrap(), old);
-    s.redo_step().unwrap();
-    assert_eq!(std::fs::read(&file).unwrap(), new);
-    assert!(!lib.join(format!("{}.tmp", file.file_name().unwrap().to_string_lossy())).exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
 

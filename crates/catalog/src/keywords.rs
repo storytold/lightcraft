@@ -1657,16 +1657,10 @@ mod tests {
         assert!(err("Events\nTravel|Lisbon\n").contains("line 2"), "“|” separates levels here");
         let deep: String = (0..70).map(|i| format!("{}k{i}\n", "\t".repeat(i))).collect();
         assert!(err(&deep).contains("line 65"), "a file is input: 64 levels at most");
-    }
-
-    /// Files from elsewhere read as they were meant or say why not: classic Mac line ends (a lone
-    /// carriage return) are lines; indenting with spaces, which would flatten the hierarchy, is
-    /// refused at its line; so are control characters in a name and "|" in a synonym.
-    #[test]
-    fn a_keyword_list_from_elsewhere_reads_or_says_why_not() {
+        // files from elsewhere: classic Mac line ends (a lone carriage return) are lines; indenting with spaces, which
+        // would flatten the hierarchy, is refused at its line; so are control characters in a name and "|" in a synonym
         let paths = |text: &str| parse_keyword_list(text).unwrap().into_iter().map(|(p, _)| p).collect::<Vec<_>>();
         assert_eq!(paths("Events\r\tWeddings\rPlaces\r"), ["Events", "Events|Weddings", "Places"]);
-        let err = |text: &str| parse_keyword_list(text).unwrap_err().to_string();
         assert!(err("Events\n    Weddings\n").contains("line 2"), "space indentation");
         assert!(err("Events\n\t Weddings\n").contains("line 2"), "a space after the tabs");
         assert!(err("Events\nx\u{0}y\n").contains("line 2"), "a control character");
@@ -1679,6 +1673,10 @@ mod tests {
     fn a_repeated_keyword_keeps_its_first_spelling() {
         let read = parse_keyword_list("Events\n\tWeddings\nevents\n\tBirthdays\n").unwrap();
         assert_eq!(read.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(), ["Events", "Events|Weddings", "Events|Birthdays"]);
+        // the same synonym, in any spelling, is kept once
+        let read = parse_keyword_list("Travel\n\t{Trip}\n\t{journey}\n\t{TRIP}\n").unwrap();
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].1.synonyms, ["Trip", "journey"]);
     }
 
     /// What the list can't hold is left out and named, so the file always reads back: a name the
@@ -1723,11 +1721,11 @@ mod tests {
 
     /// A big list reads and imports at once, against a big library too: 40,000 keywords used to take
     /// half a minute to read, and checking 5,000 new ones against 20,000 photos over a minute, with
-    /// the app frozen.
+    /// the app frozen (both quadratic: at half the size here they would still take many seconds).
     #[test]
     fn a_big_keyword_list_imports_quickly() {
         let mut text = String::new();
-        for g in 0..400 {
+        for g in 0..200 {
             text.push_str(&format!("group {g}\n"));
             for k in 0..99 {
                 text.push_str(&format!("\tkeyword {g}-{k}\n"));
@@ -1735,21 +1733,21 @@ mod tests {
         }
         let t0 = std::time::Instant::now();
         let read = parse_keyword_list(&text).unwrap();
-        assert_eq!(read.len(), 40_000);
+        assert_eq!(read.len(), 20_000);
         let mut c = Catalog::new();
         let mut ops = Vec::new();
-        for i in 0..20_000u32 {
+        for i in 0..10_000u32 {
             let id = c.alloc_photo_id();
             let mut p = Photo::new(id, Source::Demo { scene: 1 }, "a.jpg", "JPEG", 3, 2, "2026-01-01");
             p.meta.keywords = (0..5).map(|k| format!("library {}|tag {}", k, (i + k) % 3000)).collect();
             ops.push(Op::AddPhoto { photo: Box::new(p) });
         }
         c.apply(Op::Batch { ops }).unwrap();
-        let (op, added, _) = c.import_keywords_ops(&read[..5_000]);
+        let (op, added, _) = c.import_keywords_ops(&read[..2_500]);
         c.apply(op).unwrap();
-        assert_eq!(added, 5_000);
+        assert_eq!(added, 2_500);
         let took = t0.elapsed();
-        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+        assert!(took < std::time::Duration::from_secs(5), "{took:?}");
     }
 
     /// Importing a list adds the keywords the library doesn't have, with their attributes, and gives
@@ -1797,15 +1795,6 @@ mod tests {
         let flat = ["Rome".to_string(), "Seaside".to_string()];
         let hierarchical = ["travel|ITALY|rome".to_string()];
         assert_eq!(from_file(&flat, &hierarchical), ["travel|ITALY|rome", "Seaside"]);
-    }
-
-    /// The same synonym, in any spelling, is kept once (the search of each keyword's growing
-    /// synonym list per line was quadratic, with lower-cased copies made per comparison).(CWE-407)
-    #[test]
-    fn parse_keyword_list_keeps_a_synonym_once() {
-        let read = parse_keyword_list("Travel\n\t{Trip}\n\t{journey}\n\t{TRIP}\n").unwrap();
-        assert_eq!(read.len(), 1);
-        assert_eq!(read[0].1.synonyms, ["Trip", "journey"]);
     }
 }
 

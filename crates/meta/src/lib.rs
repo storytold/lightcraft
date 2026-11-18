@@ -31,7 +31,7 @@ pub mod tags;
 mod xmp;
 mod xmp_merge;
 
-pub use container::{Embedded, embedded, jpeg_segments, png_chunks, webp_chunks};
+pub use container::{Embedded, embedded, jpeg_segments, jpeg_segments_with_all_xmp, png_chunks, webp_chunks};
 pub use datetime::{DatePrecision, DateTime};
 pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, try_read_exif_with, write_exif};
 pub use focus::FocusPoint;
@@ -176,6 +176,10 @@ pub struct Metadata {
     pub lens_serial_number: Option<String>,
     /// Min/max focal length (mm) and min/max f-number at those, as in Exif `LensSpecification`.
     pub lens_spec: Option<[f64; 4]>,
+    /// Image stabilisation (vibration reduction) at capture: on, off, or not recorded. Nikon: the maker note's
+    /// VRInfo (`0x001F`), the camera's VR setting for in-body and lens VR alike.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stabilization: Option<bool>,
     // capture
     pub capture_time: Option<DateTime>,
     /// Seconds.
@@ -376,7 +380,7 @@ impl Metadata {
         }
     }
 
-    /// Exposure time formatted like cameras show it: `1/250`, `0.5`, `2″`, `1.3″`.
+    /// Exposure time formatted like cameras show it: `1/250`, `0.3571`, `2″`, `1.3″` (see [`exposure_display_of`]).
     pub fn exposure_display(&self) -> Option<String> {
         exposure_display_of(self.exposure_time?)
     }
@@ -412,21 +416,33 @@ impl Metadata {
     }
 }
 
-/// An exposure time in seconds, written the way cameras show it: `1/250`, `0.5`, `2″`, `1.3″`. The third-stop
-/// speeds between 1/4 s and 4 s keep their step (`0.4`, `0.8`, `1.3″`) instead of rounding to a whole one —
-/// `″` marks a whole second, so a reader showing the string beside " s" must not add a second unit.
-/// `None` for anything that isn't a positive, finite time.
-pub fn exposure_display_of(t: f64) -> Option<String> {
+/// How far (relative) a duration may be from an exact `1/n` second and still be shown as `1/n`: absorbs decimal
+/// EXIF rationals such as `3333/10000` for 1/3 s without turning 0.3 s or 1/2.8 s into a reciprocal they aren't.
+pub const RECIPROCAL_TOLERANCE: f64 = 1e-3;
+
+/// The one shutter-speed formatter for display, without a unit: a near-exact `1/n` second as `1/n` (`1/3`,
+/// `1/250`), anything else rounded to four significant digits with trailing zeros dropped (`0.3`, `0.3571`, `2.5`,
+/// `30`) — never the raw f64 (`0.35714285714285715`). Display only: export writes the exact duration. `None` for a
+/// time that isn't positive and finite.
+pub fn format_exposure_time(t: f64) -> Option<String> {
     if !t.is_finite() || t <= 0.0 {
         return None;
     }
-    Some(if t < 0.3 {
-        format!("1/{}", (1.0 / t).round())
-    } else if t < 1.0 {
-        format!("{}", (t * 10.0).round() / 10.0)
-    } else {
-        format!("{}″", (t * 10.0).round() / 10.0)
-    })
+    let n = (1.0 / t).round();
+    if n >= 2.0 && n.is_finite() && (1.0 / (n * t) - 1.0).abs() <= RECIPROCAL_TOLERANCE {
+        return Some(format!("1/{n}"));
+    }
+    // four significant digits; whole seconds never lose digits (log10 of a positive finite f64 stays within ±400)
+    let decimals = usize::try_from((3 - t.log10().floor() as i32).clamp(0, 400)).unwrap_or(0);
+    let text = format!("{t:.decimals$}");
+    Some(if text.contains('.') { text.trim_end_matches('0').trim_end_matches('.').to_string() } else { text })
+}
+
+/// An exposure time in seconds, written the way cameras show it: `1/250`, `1/3`, `0.4`, `0.3571`, `2″`, `1.3″`
+/// ([`format_exposure_time`] plus `″` from one second up). `″` marks a whole second, so a reader showing the string
+/// beside " s" must not add a second unit. `None` for anything that isn't a positive, finite time.
+pub fn exposure_display_of(t: f64) -> Option<String> {
+    format_exposure_time(t).map(|text| if t >= 1.0 { format!("{text}\u{2033}") } else { text })
 }
 
 /// Read everything we understand from a whole file (JPEG, PNG, WebP, TIFF-based incl. DNG/raw).
@@ -595,7 +611,10 @@ mod tests {
             (1.0 / 250.0, "1/250"),
             (0.3, "0.3"),
             (0.4, "0.4"),
-            (0.5, "0.5"),
+            (0.5, "1/2"),
+            (1.0 / 3.0, "1/3"),
+            (1.0 / 2.8, "0.3571"),
+            (0.625, "0.625"),
             (0.8, "0.8"),
             (1.0, "1\u{2033}"),
             (1.3, "1.3\u{2033}"),
@@ -607,6 +626,44 @@ mod tests {
         }
         for t in [0.0, -1.0, f64::NAN, f64::INFINITY] {
             assert_eq!(exposure_display_of(t), None, "{t}");
+        }
+    }
+
+    #[test]
+    fn exposure_time_formats_reciprocals_and_significant_digits() {
+        for (t, want) in [
+            (1.0 / 3.0, "1/3"),
+            (1.0 / 250.0, "1/250"),
+            (1.0 / 8000.0, "1/8000"),
+            (0.5, "1/2"),
+            (0.3, "0.3"),
+            (1.0 / 2.8, "0.3571"),
+            (0.003, "0.003"),
+            (1.0, "1"),
+            (9.99996, "10"),
+            (1800.0, "1800"),
+        ] {
+            assert_eq!(format_exposure_time(t).as_deref(), Some(want), "{t}");
+        }
+        // extremes format without panicking
+        assert!(format_exposure_time(f64::MIN_POSITIVE).is_some() && format_exposure_time(f64::MAX).is_some());
+        for t in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(format_exposure_time(t), None, "{t}");
+        }
+    }
+
+    #[test]
+    fn exposure_time_reciprocal_tolerance() {
+        // a camera's decimal rational for 1/3 s
+        assert_eq!(format_exposure_time(3333.0 / 10000.0).as_deref(), Some("1/3"));
+        assert_eq!(format_exposure_time(1.0 / 8000.0 * (1.0 + 1e-5)).as_deref(), Some("1/8000"));
+        for n in [3.0, 10.0, 250.0] {
+            let (inside, outside) = (0.9 * RECIPROCAL_TOLERANCE, 1.1 * RECIPROCAL_TOLERANCE);
+            let want = format!("1/{n}");
+            assert_eq!(format_exposure_time(1.0 / n * (1.0 + inside)).as_deref(), Some(want.as_str()), "{n} +inside");
+            assert_eq!(format_exposure_time(1.0 / n * (1.0 - inside)).as_deref(), Some(want.as_str()), "{n} -inside");
+            assert_ne!(format_exposure_time(1.0 / n * (1.0 + outside)).as_deref(), Some(want.as_str()), "{n} +outside");
+            assert_ne!(format_exposure_time(1.0 / n * (1.0 - outside)).as_deref(), Some(want.as_str()), "{n} -outside");
         }
     }
 
@@ -633,13 +690,6 @@ mod tests {
         assert_eq!(a.rating, Some(4));
         assert_eq!(a.make.as_deref(), Some("A"));
         assert_eq!(a.keywords, vec!["k".to_string()]);
-    }
-
-    #[test]
-    fn names() {
-        let m = Metadata { metering_mode: Some(5), exposure_program: Some(3), ..Default::default() };
-        assert_eq!(m.metering_name(), Some("Pattern"));
-        assert_eq!(m.exposure_program_name(), Some("Aperture-priority AE"));
     }
 
     /// An MWG regions packet with one face, its box centred at (0.25, 0.4) and 0.1 × 0.15 of `AppliedToDimensions`

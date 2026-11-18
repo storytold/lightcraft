@@ -1246,6 +1246,32 @@ pub(crate) mod tests {
             bad[i] ^= 0x5a;
         }
         let _ = decode(&bad, usize::MAX);
+        // selection value 8 rejects bad streams
+        {
+            // one word is not enough for the second row
+            let short = hasselblad_stream(4, 2, &HAND_COUNTS, &HAND_VALUES, &HAND_WORDS[..4]);
+            assert!(decode(&short, 8).is_err());
+            // a category above 16
+            let enc = hasselblad_stream(4, 2, &HAND_COUNTS, &[0, 1, 2, 15, 17], &HAND_WORDS);
+            assert!(decode(&enc, 8).is_err());
+            // layouts never seen with selection value 8 are not guessed at
+            let mut odd = hasselblad_stream(3, 2, &HAND_COUNTS, &HAND_VALUES, &HAND_WORDS);
+            assert!(matches!(frame_info(&odd), Err(RawError::Unsupported(_))));
+            assert!(matches!(decode(&odd, 8), Err(RawError::Unsupported(_))));
+            odd = hasselblad_stream(4, 2, &HAND_COUNTS, &HAND_VALUES, &HAND_WORDS);
+            odd[6] = 14; // precision
+            assert!(matches!(decode(&odd, 8), Err(RawError::Unsupported(_))));
+            // selection values above 8 stay unknown
+            let mut nine = hasselblad_stream(4, 2, &HAND_COUNTS, &HAND_VALUES, &HAND_WORDS);
+            let sos = nine.windows(2).position(|w| w == [0xff, 0xda]).unwrap();
+            nine[sos + 7] = 9;
+            assert!(matches!(decode(&nine, 8), Err(RawError::Unsupported(w)) if w.contains("selection value 9")));
+            // every prefix fails cleanly
+            let enc = hasselblad_stream(4, 2, &HAND_COUNTS, &HAND_VALUES, &HAND_WORDS);
+            for n in 0..enc.len() {
+                let _ = decode(&enc[..n], 8);
+            }
+        }
     }
 
     // --- selection value 8 (Hasselblad 3FR / FFF) ---
@@ -1293,42 +1319,25 @@ pub(crate) mod tests {
         assert_eq!(f.data, HAND_SAMPLES);
         assert_eq!(decode_hasselblad(&enc, 8).unwrap().data, HAND_SAMPLES);
         assert!(matches!(decode(&enc, 7), Err(RawError::Limit(_))));
-    }
-
-    /// The same bits in plain byte order (not 32-bit little-endian words) are a different stream.
-    #[test]
-    fn selection_value_8_reads_little_endian_words() {
-        let mut plain = HAND_WORDS;
-        plain[..4].reverse();
-        plain[4..].reverse();
-        let enc = hasselblad_stream(4, 2, &HAND_COUNTS, &HAND_VALUES, &plain);
-        assert_ne!(decode(&enc, 8).map(|f| f.data).ok(), Some(HAND_SAMPLES.to_vec()));
-    }
-
-    #[test]
-    fn selection_value_8_rejects_bad_streams() {
-        // one word is not enough for the second row
-        let short = hasselblad_stream(4, 2, &HAND_COUNTS, &HAND_VALUES, &HAND_WORDS[..4]);
-        assert!(decode(&short, 8).is_err());
-        // a category above 16
-        let enc = hasselblad_stream(4, 2, &HAND_COUNTS, &[0, 1, 2, 15, 17], &HAND_WORDS);
-        assert!(decode(&enc, 8).is_err());
-        // layouts never seen with selection value 8 are not guessed at
-        let mut odd = hasselblad_stream(3, 2, &HAND_COUNTS, &HAND_VALUES, &HAND_WORDS);
-        assert!(matches!(frame_info(&odd), Err(RawError::Unsupported(_))));
-        assert!(matches!(decode(&odd, 8), Err(RawError::Unsupported(_))));
-        odd = hasselblad_stream(4, 2, &HAND_COUNTS, &HAND_VALUES, &HAND_WORDS);
-        odd[6] = 14; // precision
-        assert!(matches!(decode(&odd, 8), Err(RawError::Unsupported(_))));
-        // selection values above 8 stay unknown
-        let mut nine = hasselblad_stream(4, 2, &HAND_COUNTS, &HAND_VALUES, &HAND_WORDS);
-        let sos = nine.windows(2).position(|w| w == [0xff, 0xda]).unwrap();
-        nine[sos + 7] = 9;
-        assert!(matches!(decode(&nine, 8), Err(RawError::Unsupported(w)) if w.contains("selection value 9")));
-        // every prefix fails cleanly
-        let enc = hasselblad_stream(4, 2, &HAND_COUNTS, &HAND_VALUES, &HAND_WORDS);
-        for n in 0..enc.len() {
-            let _ = decode(&enc[..n], 8);
+        // selection value 8 reads little endian words
+        // The same bits in plain byte order (not 32-bit little-endian words) are a different stream.
+        {
+            let mut plain = HAND_WORDS;
+            plain[..4].reverse();
+            plain[4..].reverse();
+            let enc = hasselblad_stream(4, 2, &HAND_COUNTS, &HAND_VALUES, &plain);
+            assert_ne!(decode(&enc, 8).map(|f| f.data).ok(), Some(HAND_SAMPLES.to_vec()));
+        }
+        // selection value 8 round trips through the test writer
+        {
+            // extremes force SSSS 16 and wrap-around; noise exercises every other category
+            let mut data = noise(10 * 7, 16, 9);
+            data[0] = 0;
+            data[1] = 65535;
+            data[2] = 65535;
+            data[3] = 0;
+            let enc = encode_hasselblad(&data, 10, 7);
+            assert_eq!(decode(&enc, 70).unwrap().data, data);
         }
     }
 
@@ -1378,18 +1387,6 @@ pub(crate) mod tests {
         counts[4] = 17;
         let values: Vec<u8> = (0..=16).collect();
         hasselblad_stream(width as u16, height as u16, &counts, &values, &entropy)
-    }
-
-    #[test]
-    fn selection_value_8_round_trips_through_the_test_writer() {
-        // extremes force SSSS 16 and wrap-around; noise exercises every other category
-        let mut data = noise(10 * 7, 16, 9);
-        data[0] = 0;
-        data[1] = 65535;
-        data[2] = 65535;
-        data[3] = 0;
-        let enc = encode_hasselblad(&data, 10, 7);
-        assert_eq!(decode(&enc, 70).unwrap().data, data);
     }
 
     #[test]

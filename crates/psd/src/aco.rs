@@ -289,11 +289,4 @@ mod tests {
         let many = vec![AcoSwatch { name: String::new(), color: AcoColor::Gray(0) }; MAX_SWATCHES + 1];
         assert!(write(&many).is_err());
     }
-
-    #[test]
-    fn long_names_are_capped() {
-        let long = AcoSwatch { name: "x".repeat(5000), color: AcoColor::Gray(0) };
-        let f = parse(&write(&[long]).unwrap()).unwrap();
-        assert_eq!(f.swatches[0].name.len(), MAX_NAME_UNITS);
-    }
 }

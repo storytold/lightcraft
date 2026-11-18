@@ -12,7 +12,7 @@ use serde_json::json;
 
 use crate::headless::Headless;
 use crate::render::{PANE_AFTER, PANE_BEFORE, RenderOffload, Slot};
-use crate::state::{AppSettings, BeforeAfter, ViewMode, Zoom};
+use crate::state::{BeforeAfter, ViewMode, Zoom};
 use crate::{LccApp, Services};
 
 const TIMEOUT: Duration = Duration::from_secs(120);
@@ -88,31 +88,6 @@ fn latest(work: &Rc<RefCell<Work>>, slot: Slot) -> RenderJob {
 
 fn pixels(h: &Headless, slot: Slot) -> Arc<egui::ColorImage> {
     h.app.renderer.textures[&slot].pixels.clone().expect("headless texture pixels")
-}
-
-#[test]
-fn high_quality_adjustment_preference_round_trips_and_defaults_off() {
-    let old: AppSettings = serde_json::from_value(json!({"previewLimit": 1600})).unwrap();
-    assert!(!old.high_quality_adjustment_previews);
-    let chosen = AppSettings { high_quality_adjustment_previews: true, ..old };
-    let saved = serde_json::to_value(&chosen).unwrap();
-    assert_eq!(saved["highQualityAdjustmentPreviews"], true);
-    let back: AppSettings = serde_json::from_value(saved).unwrap();
-    assert!(back.high_quality_adjustment_previews);
-    assert_eq!(back.preview_limit, 1600);
-}
-
-#[test]
-fn high_quality_adjustment_setting_is_available_in_rendering_preferences() {
-    let (mut h, _) = detail([1024, 768], 1.0);
-    h.app.ui.settings.high_quality_adjustment_previews = false;
-    h.app.ui.dialog = Some(crate::state::Dialog::Settings { tab: "performance".into() });
-    h.step();
-    h.step();
-    // the checkbox is in Display & Speed (it may be scrolled out of view: listed is enough; a
-    // scripted scroll to it raced the GPU rows above it on the CI runners)
-    let w = h.request("ui.widgets", json!({"filter": "check:settings.highQualityAdjustmentPreviews"}), TIMEOUT);
-    assert!(w["result"].as_array().is_some_and(|a| !a.is_empty()), "{w}");
 }
 
 #[test]

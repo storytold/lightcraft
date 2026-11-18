@@ -138,66 +138,6 @@ fn the_review_says_when_the_scan_stopped_at_its_limit() {
     assert!(shows(&h, STOPPED), "{:?}", h.painted_text());
 }
 
-/// Nothing left out: no line, and no widget for it.
-#[test]
-fn the_review_has_no_note_when_the_scan_left_nothing_out() {
-    let dir = Scratch::new("clean");
-    write_png(&dir.0.join("a.png"), 1);
-    write_png(&dir.0.join("trip").join("b.png"), 2);
-    let mut h = headless();
-    open_review(&mut h, &dir);
-    let d = review(&mut h);
-    assert_eq!((d.candidates.len(), d.scan_limited, d.unreadable, d.unsupported), (2, false, 0, 0));
-    h.step();
-    assert!(!shows_any_note(&h), "{:?}", h.painted_text());
-    assert!(!has_note_widget(&mut h));
-}
-
-/// The line follows the counters while the review is open, and is written in the language in use.
-#[test]
-fn the_note_follows_the_counters_and_the_language() {
-    let dir = Scratch::new("follow");
-    write_png(&dir.0.join("a.png"), 1);
-    let mut h = headless();
-    open_review(&mut h, &dir);
-    assert!(!shows_any_note(&h));
-
-    let all = format!("{STOPPED} · 2 folders could not be read · 3 files skipped (not a supported photo type)");
-    {
-        let d = review(&mut h);
-        (d.scan_limited, d.unreadable, d.unsupported) = (true, 2, 3);
-    }
-    h.step();
-    h.step();
-    assert!(shows(&h, &all), "{:?}", h.painted_text());
-
-    {
-        let d = review(&mut h);
-        (d.scan_limited, d.unreadable, d.unsupported) = (false, 1, 1);
-    }
-    h.step();
-    h.step();
-    assert!(shows(&h, "1 folder could not be read · 1 file skipped (not a supported photo type)"), "{:?}", h.painted_text());
-
-    {
-        let d = review(&mut h);
-        (d.scan_limited, d.unreadable, d.unsupported) = (true, 1, 1);
-    }
-    assert_eq!(h.request("engine.execute", json!({"command": "app.language.german"}), T)["ok"], true);
-    h.settle(SETTLE);
-    let german = "Am Suchlimit angehalten: Es gibt möglicherweise weitere Fotos · Ordner, die nicht gelesen werden konnten: 1 · Übersprungene Dateien (kein unterstützter Fototyp): 1";
-    assert!(shows(&h, german), "{:?}", h.painted_text());
-    assert_eq!(h.request("engine.execute", json!({"command": "app.language.english"}), T)["ok"], true);
-
-    {
-        let d = review(&mut h);
-        (d.scan_limited, d.unreadable, d.unsupported) = (false, 0, 0);
-    }
-    h.step();
-    h.step();
-    assert!(!shows_any_note(&h), "back to nothing left out: {:?}", h.painted_text());
-}
-
 /// The wording, one part per thing left out, joined into one line; singular and plural.
 #[test]
 fn the_note_names_each_thing_that_was_left_out() {

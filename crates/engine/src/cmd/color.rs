@@ -297,25 +297,27 @@ mod fringe_tests {
     use super::*;
 
     #[test]
-    fn fringe_pick_chooses_colour_and_window() {
-        let p = fringe_pick(0.1, 300.0).unwrap();
-        assert!(p.purple && p.lo < 50.0 && p.hi > 50.0 && p.lo >= 0.0 && p.hi <= 100.0, "{p:?}");
-        let g = fringe_pick(0.1, 150.0).unwrap();
-        assert!(!g.purple && g.lo < 50.0 && g.hi > 50.0, "{g:?}");
-        // wraps: 10 degrees is nearer the purple span's end (360) than green's start (90)
-        assert!(fringe_pick(0.1, 10.0).unwrap().purple);
-        assert!(fringe_pick(0.1, -60.0).unwrap().purple);
-    }
-
-    #[test]
-    fn fringe_pick_refuses_unreadable_samples() {
-        for (c, h) in [(f32::NAN, 100.0), (0.1, f32::NAN), (0.1, f32::INFINITY), (0.0, 100.0), (-1.0, 100.0), (f32::INFINITY, f32::NAN)] {
-            assert!(fringe_pick(c, h).is_none(), "{c} {h}");
+    fn fringe_pick_chooses_colour_and_window_and_refuses_unreadable_samples() {
+        // fringe pick chooses colour and window
+        {
+            let p = fringe_pick(0.1, 300.0).unwrap();
+            assert!(p.purple && p.lo < 50.0 && p.hi > 50.0 && p.lo >= 0.0 && p.hi <= 100.0, "{p:?}");
+            let g = fringe_pick(0.1, 150.0).unwrap();
+            assert!(!g.purple && g.lo < 50.0 && g.hi > 50.0, "{g:?}");
+            // wraps: 10 degrees is nearer the purple span's end (360) than green's start (90)
+            assert!(fringe_pick(0.1, 10.0).unwrap().purple);
+            assert!(fringe_pick(0.1, -60.0).unwrap().purple);
         }
-        // any finite hue gives an in-range window
-        for h in [-1e9f32, -720.5, 0.0, 359.99, 1e9] {
-            let p = fringe_pick(0.2, h).unwrap();
-            assert!(p.lo >= 0.0 && p.hi <= 100.0 && p.lo <= p.hi, "{h}: {p:?}");
+        // fringe pick refuses unreadable samples
+        {
+            for (c, h) in [(f32::NAN, 100.0), (0.1, f32::NAN), (0.1, f32::INFINITY), (0.0, 100.0), (-1.0, 100.0), (f32::INFINITY, f32::NAN)] {
+                assert!(fringe_pick(c, h).is_none(), "{c} {h}");
+            }
+            // any finite hue gives an in-range window
+            for h in [-1e9f32, -720.5, 0.0, 359.99, 1e9] {
+                let p = fringe_pick(0.2, h).unwrap();
+                assert!(p.lo >= 0.0 && p.hi <= 100.0 && p.lo <= p.hi, "{h}: {p:?}");
+            }
         }
     }
 }

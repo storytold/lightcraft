@@ -25,29 +25,20 @@ fn built(b: &PsdBuilder) -> PsdFile {
     f
 }
 
-macro_rules! rgba8_case {
-    ($name:ident, $ver:expr, $comp:expr) => {
-        #[test]
-        fn $name() {
+#[test]
+fn rgba8_layers_read_back_in_every_version_and_compression() {
+    for v in [Version::Psd, Version::Psb] {
+        for c in Compression::ALL {
             let px = rgba_pattern(7, 5, 3);
-            let mut b = PsdBuilder::new(10, 8).version($ver).compression($comp);
+            let mut b = PsdBuilder::new(10, 8).version(v).compression(c);
             b.push_layer(LayerSpec::new("L", -2, 1, 7, 5, PixelData::Rgba8(px.clone())));
             let f = built(&b);
             let img = f.layer(0).unwrap().rgba8().unwrap();
-            assert_eq!((img.left, img.top, img.width, img.height), (-2, 1, 7, 5));
-            assert_eq!(img.data, px);
+            assert_eq!((img.left, img.top, img.width, img.height), (-2, 1, 7, 5), "{v:?} {c:?}");
+            assert_eq!(img.data, px, "{v:?} {c:?}");
         }
-    };
+    }
 }
-
-rgba8_case!(rgba8_psd_raw, Version::Psd, Compression::Raw);
-rgba8_case!(rgba8_psd_rle, Version::Psd, Compression::Rle);
-rgba8_case!(rgba8_psd_zip, Version::Psd, Compression::Zip);
-rgba8_case!(rgba8_psd_zipp, Version::Psd, Compression::ZipPrediction);
-rgba8_case!(rgba8_psb_raw, Version::Psb, Compression::Raw);
-rgba8_case!(rgba8_psb_rle, Version::Psb, Compression::Rle);
-rgba8_case!(rgba8_psb_zip, Version::Psb, Compression::Zip);
-rgba8_case!(rgba8_psb_zipp, Version::Psb, Compression::ZipPrediction);
 
 #[test]
 fn rgba16_layers_scale_to_8bit() {

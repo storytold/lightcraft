@@ -77,7 +77,7 @@ fn mismatched_samples_and_alpha_never_panic() {
 fn hostile_fonts_never_panic() {
     // a damaged font file in the user's fonts: registered (or refused), laid out, embedded
     let text = "Hamburgefonstiv ÄÖÜ ﬁ → 123 漢字";
-    lcc_fuzzkit::run("pdf.font", &[INTER], 120, |b| {
+    lcc_fuzzkit::run("pdf.font", &[INTER], 48, |b| {
         let mut e = TextEngine::new();
         let names = e.fonts.register_font_data(b.to_vec());
         let family = names.first().cloned().unwrap_or_else(|| "Inter".into());

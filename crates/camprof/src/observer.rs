@@ -126,13 +126,12 @@ mod tests {
             let o = Observer::by_name(n).unwrap_or_else(|e| panic!("{n}: {e}"));
             assert_eq!(o.name(), n);
         }
-    }
-
-    #[test]
-    fn aliases_and_case_are_accepted() {
-        assert!(Observer::by_name("CIE_1931_2").is_ok());
-        assert!(Observer::by_name(" 1931-2 ").is_ok());
-        assert!(Observer::by_name("nonsense").is_err());
+        // aliases and case are accepted
+        {
+            assert!(Observer::by_name("CIE_1931_2").is_ok());
+            assert!(Observer::by_name(" 1931-2 ").is_ok());
+            assert!(Observer::by_name("nonsense").is_err());
+        }
     }
 
     #[test]

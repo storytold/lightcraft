@@ -9,6 +9,7 @@ plug-ins are not supported.
 | Contribution | Manifest | Request it receives |
 |---|---|---|
 | Menu commands, optionally with a dialog | `commands: [{id, label, menu, dialog, prepare?, job?}]` (`job: true`: see [Jobs](#jobs-long-commands-with-progress)) | `{"hook":"command","command","args","selection","source"}`; with `prepare: true`, first `{"hook":"command.prepare","command","selection","source"}` (`source`: see [Adding files to the library](#adding-files-to-the-library); see [Settings, remembered values and prepare steps](#settings-remembered-values-and-prepare-steps)) |
+| Quick settings bar buttons | `quickAction: true` on a command (at most 4 a plug-in; host feature `quickActions`) | the command's own `{"hook":"command",…}` request, exactly as from its menu item (see [Quick actions](#quick-actions)) |
 | Settings (the plug-in's page in the Plug-in Manager) | `settings: [{key, label, type, …, prepare?}]` | none, or `{"hook":"settings.prepare"}` when a field has `prepare: true`; the plug-in reads them with `settings.get` |
 | Export post-processing | `hooks.export: true` | `{"hook":"export","files":[{path, photo}]}`; the exported files are lent to the call for reading and writing |
 | Metadata and keyword suggestions | `hooks.metadata: true` | `{"hook":"metadata","photos":[photo.inspect JSON]}` → `{"suggestions":[{photo, fields?, keywords?}]}` |
@@ -46,6 +47,29 @@ link`), and so do the install dialog and `plugin.inspectFile` (`dropped`). `plug
 license?, issues?}`, `issues` being Report a Problem's page. The host feature `about` names them.
 The SDK can fill them from the plug-in crate's `Cargo.toml` ([Writing one in
 Rust](#2-declare-a-manifest-and-handle-requests)).
+
+### Quick actions
+
+A command with `"quickAction": true` also gets a button in the **quick settings bar**, the row of
+switches that fades in when the pointer is in the blank stretch of the module bar between the
+identity plate and the module names. Its buttons come after the app's own (info overlay,
+on-screen overlay, eye focus strip, …), in install order, drawn with the plug-in's icon (its
+`icon` picture, else the identicon the Plug-in Manager draws) and named by the command's `label`
+on hover. A click runs the command as its File ▸ Plug-in Extras item does (`plugins.runItem
+{plugin, command}`): a `prepare` step, a dialog and a job all work as from the menu. A plug-in
+may flag at most 4 commands (`lcc_plugins::MAX_QUICK_ACTIONS`); more is a manifest error. Only
+enabled plug-ins show; a bar too narrow for every button drops plug-ins' buttons first.
+`view.quickSettings` lists the bar's entries, plug-ins' included (`plugin:<id>/<command>`), and
+`plugin.commands` gives each command's `quickAction`.
+
+The field is additive (ABI v1 is unchanged): a host without the bar ignores it as an unknown field,
+and the command stays in the menu. A plug-in that needs the button to be useful says
+`"requires": ["quickActions"]`.
+
+```json
+{"id": "org.example.tools", "name": "Tools", "version": "1.0.0",
+ "commands": [{"id": "stamp", "label": "Stamp Copyright", "quickAction": true}]}
+```
 
 Commands appear under File ▸ Plug-ins and run as the engine command `plugin.run {plugin, command, args?, ids?, source?, wait?}`. The UI, CLI,
 control channel and MCP all use this command. `plugin.commands` lists the commands so front
@@ -413,7 +437,7 @@ hook that's never called, a host call that fails as an unknown method).
 
 - **The host's list** is `lcc_plugins::HOST_FEATURES`, and `plugin.list` returns it as
   `host: {abi, features}`. Everything the host had when `requires` arrived is the baseline and
-  has no name. Names so far: `programs` ([Programs](#programs)), `settings` ([below](#settings-remembered-values-and-prepare-steps)), `libraryAdd` ([Adding files to the library](#adding-files-to-the-library)), `jobs` ([Jobs](#jobs-long-commands-with-progress)), `pixels`, `crop` and `virtualCopy` ([Pixels and crop](#pixels-and-crop)), `pictures` (`icon` and `header`) and `about` (`homepage`, `repository`, `changelog`, `license`; both in [What a plug-in can add](#what-a-plug-in-can-add)). Every manifest field, permission group or host call added
+  has no name. Names so far: `programs` ([Programs](#programs)), `settings` ([below](#settings-remembered-values-and-prepare-steps)), `libraryAdd` ([Adding files to the library](#adding-files-to-the-library)), `jobs` ([Jobs](#jobs-long-commands-with-progress)), `pixels`, `crop` and `virtualCopy` ([Pixels and crop](#pixels-and-crop)), `pictures` (`icon` and `header`) and `about` (`homepage`, `repository`, `changelog`, `license`; both in [What a plug-in can add](#what-a-plug-in-can-add)), and `quickActions` (`quickAction` on a command, [Quick actions](#quick-actions)). Every manifest field, permission group or host call added
   from then on gets a name there in the change that adds it, and its documentation here says
   which name to require.
 - **Names** are `[A-Za-z0-9._-]{1,64}`, at most 64, none repeated; anything else is a manifest
@@ -494,6 +518,15 @@ Imports (module `host`):
   which is `{"ok": value}` or `{"error": "message"}`;
 - `response(ptr)`: copies that reply into a buffer of that length;
 - `log(ptr, len)`: adds one line to the plug-in's log, shown in the Plug-in Manager.
+
+A module may also carry its manifest in a custom section named `photo-plugin.manifest`: the exact
+bytes `lcc_manifest` returns, written by the SDK's stamp tool so a tool can read what a plug-in is
+and asks for without running it (Stamping your plug-in, below). The section is optional and only a
+copy: `lcc_manifest` stays the authority, a module without the section (absent means it wasn't
+stamped) works as before, and the ABI version doesn't change. When a module has the section, the
+app checks it against `lcc_manifest` every time it loads the plug-in (install, update, start-up)
+and refuses a module whose section differs, naming the fields that do; so an installed plug-in's
+section is always true, and only then.
 
 ## Writing one in Rust
 
@@ -589,7 +622,7 @@ The manifest fields:
 | `homepage`, `repository`, `changelog`, `license` | optional, shown on the About tab: `https://` links and the licence as text (see [Where it comes from](#what-a-plug-in-can-add)); host feature `about` |
 | `icon`, `header` | optional SVG pictures (see [Its own pictures](#what-a-plug-in-can-add)); host feature `pictures` |
 | `permissions` | what the plug-in asks for (see [Permissions](#permissions)); ask for as little as possible |
-| `commands` | `[{id, label, menu?, dialog?, prepare?}]`, File ▸ Plug-ins ▸ `name` ▸ `menu` ▸ `label`; dialog fields may say `remember: false` |
+| `commands` | `[{id, label, menu?, dialog?, prepare?, job?, quickAction?}]`, File ▸ Plug-ins ▸ `name` ▸ `menu` ▸ `label`; dialog fields may say `remember: false`; `quickAction: true` adds a quick settings bar button ([Quick actions](#quick-actions)) |
 | `settings` | `[{key, label, type, …, prepare?}]`, at most 32; needs `requires: ["settings"]` |
 | `hooks` | `{export?: true, metadata?: true}` |
 | `publish` | `{id, name}`: one publish service |
@@ -657,23 +690,140 @@ The manifest fields:
   the CLI, the control channel or MCP.
 - Raise `version` with every release you hand out, and list in `requires` each host feature you
   use beyond the baseline.
-- Distribute the `.wasm` file. There is no store and no signing yet: tell users what each
-  permission is for.
+- Stamp and sign the release build (Stamping your plug-in and Signing your plug-in, below) and
+  distribute that `.wasm` file. There is no store yet: tell users what each permission is for.
+
+## Stamping your plug-in
+
+`plugin-stamp` (`sdk/stamp`, a small program of its own) copies your plug-in's manifest into its
+`.wasm` as a custom section, `photo-plugin.manifest`. It runs the module once in a sandbox of its
+own (every import traps, fuel and memory are capped), calls `lcc_manifest` and writes what it
+returns, byte for byte. So the section matches however you build the manifest: a literal, a string
+filled in at run time, or `export_plugin!(package: …)`. It needs no Chromaforge install (its only
+dependencies are `wasmi` and `serde_json`) and runs in any CI. Get it at the same `rev` as your
+`lcc-plugin-sdk` dependency, so the tool and the SDK always match:
+
+```sh
+cargo install --locked --git <this repository's URL> --rev <the SDK's rev> plugin-stamp
+```
+
+1. **Build** as usual: `cargo build --release --target wasm32-unknown-unknown`. Nothing in your
+   code or `Cargo.toml` changes, and a plug-in that is never stamped keeps working.
+2. **Stamp** the built file:
+   `plugin-stamp target/wasm32-unknown-unknown/release/my_plugin.wasm -o my_plugin.wasm` (in place
+   without `-o`). It refuses a module the app wouldn't load (an import other than the host's three, a
+   missing ABI export) or that can't answer (a trap, a call to a host import, out of fuel, an answer
+   over 64 KiB or not a UTF-8 JSON object), and then leaves both files as they were. Stamp after
+   every build that changes the manifest or the version; stamping again replaces the section, and
+   the same input always gives the same bytes. Stamp after any `wasm-opt`
+   or strip step, which may drop custom sections (the release profile's `strip = true` runs during
+   the build, so it can't).
+3. **Publish the stamped file**, not the raw build: it is the file you sign (Signing your plug-in,
+   below), checksum and attach to the release.
+4. **Check it in CI**: `plugin-stamp --check my_plugin.wasm` exits 0 when the file has exactly one
+   section and it equals what `lcc_manifest` returns, and 1 when the section is missing, stale
+   (naming the fields that differ) or duplicated. It writes nothing. Run it after the stamp, so a
+   release can't go out unstamped.
+5. **Install** it as before. The app checks the section against `lcc_manifest` when it loads the
+   plug-in (install, update, every start) and refuses a stale stamp, naming the fields that differ:
+   at start-up the plug-in is listed as failed with that reason. `plugin.inspectFile` reads a
+   stamped file from the section without running it (Engine commands, below).
+
+Plug-in updates from a feed (not done yet) will be offered only for stamped plug-ins, which is the
+reason to add step 2 to your release build now.
+
+## Signing your plug-in
+
+`plugin-stamp` also signs a stamped plug-in with your own author key, so the app can tell that a
+new version comes from whoever made the one installed. The signature is a custom section,
+`photo-plugin.signature`, at the end of the `.wasm`: one file, so it survives a download, a copy
+and a hand install. It holds `{"v": 1, "key", "sig"}`, an ed25519 public key and its signature
+over every byte of the file before the section (the code and the stamped manifest), in standard
+base64. No certificate or authority is involved: the key is the author's identity.
+
+1. **Make a key, once:** `plugin-stamp keygen my-author.key`. It writes a new secret key (readable
+   by you only on macOS and Linux; on Windows it takes the folder's permissions, so make it in a
+   folder only you can read) and never overwrites a file. It prints the key's **fingerprint**, the first 16 hex digits
+   of the public key's SHA-256 in groups of four (`3f2a 9c41 07be d5e8`). Users see that
+   fingerprint in the install dialog; put it on your plug-in's page so they can compare.
+2. **Keep the secret key out of the repository**: in a password manager, or your CI's secrets. A
+   release tool can sign without writing it to disk: the `plugin-stamp` library's `sign` takes the
+   key's 32 bytes, and `secret_key_from_text` reads the key file's text from a variable.
+3. **Sign after stamping**, as the last step that changes the file:
+   `plugin-stamp sign --key my-author.key my_plugin.wasm` (in place, or `-o signed.wasm`). It
+   refuses a file whose stamp is missing or stale, and replaces an earlier signature. Stamping a
+   signed file drops its signature and says so: sign it again after. Any later rewrite of the file
+   (`wasm-opt`, a strip) breaks the signature, as it should.
+4. **Check it:** `plugin-stamp --check my_plugin.wasm` also reports the signature (none, valid
+   with its fingerprint, or invalid with why) and exits 1 on an invalid one.
+
+What the app does with it:
+
+- **The first signed install pins its key:** `plugins.json` keeps it as the plug-in's `signer`.
+  An update or a rollback signed by the same key keeps the pin; uninstalling removes it.
+- **Going back checks the kept file:** an update records the signer of the version it replaces
+  beside it (`previous/<id>.json`), and `plugin.rollback` refuses that file if it is no longer
+  signed that way, unless it gets the same `acceptSigner` / `acceptUnsigned` answer. A version kept
+  before signers were recorded goes back as before.
+- **Another key, or no signature, over a pinned plug-in asks the user first**, naming both
+  signers; a yes pins the new key (or removes the pin, for an unsigned file). `plugin.install` takes
+  that answer as `acceptSigner` (the file's full key, `signerKey` from `plugin.inspectFile`, or its
+  fingerprint) or `acceptUnsigned: true`; the dialog passes the full key, so its yes covers exactly
+  the key it showed, and without it refuses
+  the install, saying which to pass. A pin the app can't read asks the same way.
+- **An invalid signature is never "unsigned"**: a signature that doesn't match the bytes, a
+  section that isn't last, two sections, one over 1 KiB, a key or signature of the wrong length,
+  bad base64 or JSON, or another format version. The file isn't installed or loaded, and
+  `plugin.inspectFile` says why.
+- **At start-up** a plug-in whose file no longer matches its pin (the signature gone, invalid or by
+  another key) isn't loaded: it is listed under `failed` with why, and keeps its grants, data and
+  settings until it is reinstalled or removed. A plug-in installed before signatures existed pins
+  its signer at the next start, written to `plugins.json` then.
+- **An unsigned plug-in installs as before**; the dialog says nobody signed it.
+
+**A lost or changed key** has no recovery step: sign the next version with the new key and tell
+users to expect the question. They install it by hand, see both fingerprints, and say yes.
 
 ## Engine commands
 
-`plugin.list`, `plugin.inspectFile {path}`, `plugin.install {path, grant?, allowDowngrade?}`,
-`plugin.uninstall {id | file, keepData?}`, `plugin.rollback {id}`, `plugin.enable {id, enabled}`, `plugin.grant {id, grant}` (revokes only), `plugin.revoke {id, group, value?}`,
+`plugin.list`, `plugin.inspectFile {path, verify?}`, `plugin.install {path, grant?, allowDowngrade?, acceptSigner?, acceptUnsigned?}`,
+`plugin.uninstall {id | file, keepData?}`, `plugin.rollback {id, acceptSigner?, acceptUnsigned?}`, `plugin.enable {id, enabled}`, `plugin.grant {id, grant}` (revokes only), `plugin.revoke {id, group, value?}`,
 `plugin.log {id}`, `plugin.commands`, `plugin.prepare {plugin, command, ids?, source?}`,
 `plugin.run {plugin, command, args?, ids?, source?, wait?}` (a job: `{job}` at once, or its result with `wait`), `plugin.settings {id}`, `plugin.setSettings {id, values}`,
 `plugin.suggestMetadata {ids?}`, `plugin.postExport {files}`, `plugin.publishServices`,
 `plugin.exportDestinations`, `plugin.exportTo {plugin, destination, files, args?}`,
 `plugin.metadataFields {id?}`, `plugin.setField {plugin, field, value, id?}`.
 
+`plugin.inspectFile {path, verify?}` says what a `.wasm` is and what installing it would do,
+without installing it. Its result says where the manifest came from:
+
+- `source: "section"`, `verified: false`: the file is stamped, and the manifest was read from its
+  `photo-plugin.manifest` section without running the module (it is validated, its imports and
+  ABI exports checked by name and type, but never instantiated; so the ABI version
+  `lcc_abi_version` returns is checked only at install or with `verify: true`). That makes it safe on any file an agent or script
+  was handed, but the section is only **the file's claim**: nothing has compared it with
+  `lcc_manifest` yet. Installing does, and refuses the file if they differ.
+- `source: "export"`, `verified: true`: the module was loaded in the sandbox and the manifest is
+  `lcc_manifest`'s answer, as at install. That's how a file without the section is read, and any
+  file with `verify: true`; a stamped file whose section differs is then an error naming the
+  fields. The install dialog inspects with `verify: true`, so the permissions it lists are
+  `lcc_manifest`'s.
+
+Every other field (`installed`, `missing`, `versionError`, `downgrade`, `conflict`,
+`unknownFields`, `dropped`) is the same either way. So is the author signature
+([Signing your plug-in](#signing-your-plug-in)), read without running the module: `signature`
+(`"none"`, `"valid"` or `"invalid"`), `signer` (its fingerprint, or `null`), `signerKey` (the full
+key in base64, or `null`), `signatureError` (why an invalid one is, or `null`), `pinned` (the
+installed plug-in's pin: `{signer, readable}`, `signer` being `null` when it was installed unsigned;
+`null` when it isn't installed) and `matchesPin` (whether installing needs no `acceptSigner` /
+`acceptUnsigned`: `true` over an unsigned install; `null` when it isn't installed). A pixel filter's result has neither field: its
+manifest is always read from `pc_manifest`.
+
 `plugin.list` gives `{dir, host, plugins, failed, skipped}`: `dir` is the plug-ins folder (`null`
 when plug-ins are kept in memory), each plug-in has its module's `moduleHash` (sha256), a
-`settingsRevision` that changes when one of its settings does, and `previousVersion` (the version
-`plugin.rollback` goes back to, or `null`), each `failed` row has `file`, `error`, `kind` (`plugin` or
+`settingsRevision` that changes when one of its settings does, `previousVersion` (the version
+`plugin.rollback` goes back to, or `null`) and `signer` (the pinned signer's fingerprint, or
+`null`), each `failed` row has `file`, `error`, `kind` (`plugin` or
 `filter`) and, when the module named one, `id`, and `skipped` counts the modules past the most the
 folder loads.
 
@@ -740,7 +890,7 @@ toast and to `ui.inspect` → `export.last.plugins` when they finish. An export 
 (`app.export` without `background`, the CLI, MCP) runs them before it returns, as before.
 
 Plug-ins are installed per user in `<settings_dir>/plugins`, or in `<PREFIX>_PLUGINS` if that
-is set. That folder holds `<id>.wasm`, `plugins.json` (enabled state and grants) and
+is set. That folder holds `<id>.wasm`, `plugins.json` (enabled state, grants and the pinned signer) and
 `data/<id>.json` (the plug-in's namespace: `{"format": 2, "libraries": {<library id>: {<photo id>:
 {…}}}}`; a file written before namespaces were kept per library is claimed whole by the first
 library opened from a folder, so no value is lost), and `settings/<id>.json` (its settings and
@@ -748,7 +898,7 @@ remembered dialog values: `{"format": 1, "settings": {…}, "dialogs": {"command
 "destination/<id>": {…}}}`; a damaged file reads as empty, says so in the plug-in's log, and is
 kept as `<id>.json.bad` when the next save replaces it; an update drops the keys the new version no
 longer declares, and removing the plug-in deletes the file unless its data is kept), and
-`previous/<id>.wasm` and `previous/<id>.json` (the version an update replaced and its settings,
+`previous/<id>.wasm` and `previous/<id>.json` (the version an update replaced, its settings and its signer,
 [Going back](#compatibility-requires-and-version)). A module copied into the folder by hand loads
 disabled and with no permissions granted.
 
@@ -814,6 +964,14 @@ inside the user's crop, say). The measurement still doesn't move with later crop
 picks up a new one. Hosts without the field measure the frame. `plugin.list` shows it as
 `analyzeArea`.
 
+**Tiles (ABI v1.1 proposal).** A filter with an `overlap` is run in bands, each read with that many
+pixels of margin on every side. By default a band is a strip as wide as the frame; a manifest may set
+`"bands": "tiles"` (default `"rows"`; other values mean rows) to be run on near-square tiles instead,
+which repeat less of the frame in their margins: with a 48 px margin, strips of a 2624 px-wide frame
+read about four times what they keep, tiles under one and a half times. Every pixel still sees the
+same neighbourhood, so the result is the same; only the work changes. A filter without an `overlap`
+runs in strips whatever it asks (there is no margin to save). Hosts without the field cut strips.
+
 **Menu groups (ABI v1.1 proposal).** A choice parameter may carry `"groups"`, one name per option
 (`""` = not in a group): `{"type": "choice", "options": ["Generic", "Portra 400", "Superia 400"],
 "groups": ["", "Kodak", "Fujifilm"]}`. Develop ▸ Plug-in Filters shows each group as a collapsible
@@ -842,6 +1000,15 @@ The key runs `develop.pluginFilter.addTo {plugin, ids?}`: a new entry of the plu
 defaults, its stage) on every selected photo that has none, in one History step, then opens
 Develop ▸ Plug-in Filters and says what it did. `plugin.list` shows the manifest's key as
 `shortcut`.
+
+**Parameters that remember (ABI v1.1 proposal).** A parameter may carry `"remember": true` (a film
+type, a border width: what a user sets the same way on photo after photo). A newly added copy of
+the filter (`develop.pluginFilter.add`, `addTo`, the filter's key) then starts with the value
+last set for it, by `develop.pluginFilter.set` or given to `add`, instead of its default; values
+given to `add` still win, and the other parameters start at their defaults. The values are kept
+per plug-in for the whole app (`filter-remembered.json` in the settings folder) and survive a
+restart; one the manifest no longer takes (a plug-in update changed the parameter) leaves the
+remembered values out for that copy. Hosts without the field ignore it.
 
 **Base tone (ABI v1.1 proposal).** A raw is toned after the Source stage: by its camera's own
 curve when the file has one, else by the default raw curve. A Source filter whose output is
@@ -899,7 +1066,8 @@ filters turn it (long edge 2048, cached per photo and stack; a change of the sta
   are skipped with a message.
 - Network and filesystem permissions are fixed in the manifest: a WebDAV destination for "any
   server the user types" isn't possible; the author names the hosts.
-- No plug-in store, signing or automatic updates; Lightroom Lua plug-ins don't run.
+- No plug-in store or automatic updates; Lightroom Lua plug-ins don't run. Signatures say who made
+  a plug-in, not whether it is safe: the permissions still decide what it may do.
 - Programs: a plug-in can't read a program's output while it runs, or stop it; ✕ only stops
   waiting. It adds what a program made only from the folder of the source photo, and can't make
   an album for the results. Versions are read on macOS only.

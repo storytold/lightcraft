@@ -128,6 +128,34 @@ fn presets_sharing_a_name_and_id_get_unique_ids_and_repeats_are_reported() {
     assert!(again.get(1).is_some_and(Option::is_some));
 }
 
+/// Hostile import (upstream #3680): `0`, `0.0` and `-0.0` are one number, so thousands of presets
+/// spelling the same settings in different ways are one preset, found without a linear scan.
+#[test]
+fn integer_and_float_spellings_of_one_number_are_one_preset() {
+    let spellings = [json!(0), json!(0.0), json!(-0.0)];
+    let many_spelled: Vec<Preset> = (0..2_000usize)
+        .map(|i| {
+            let slots: serde_json::Map<String, serde_json::Value> =
+                (0..15).map(|k| (format!("s{k}"), spellings[(i / 3usize.pow(k % 7)) % 3].clone())).collect();
+            Preset {
+                id: "user.x".into(),
+                name: "Look".into(),
+                group: "Coll".into(),
+                settings: json!({"light": slots}),
+                favorite: false,
+                builtin: false,
+            }
+        })
+        .collect();
+    let mut s = Session::new();
+    let t0 = Instant::now();
+    let each = s.add_presets_each(many_spelled);
+    assert!(t0.elapsed().as_secs() < 20, "a crafted import must not go quadratic");
+    assert!(each.first().is_some_and(Option::is_some));
+    // only presets whose numbers differ (0 vs 0.0 vs -0.0 are equal) remain; all the slots here are zero
+    assert_eq!(each.iter().filter(|e| e.is_some()).count(), 1);
+}
+
 /// With the shared settings store (`Library Store`), a command that leaves the presets alone
 /// doesn't copy or serialize them: shared.json is checked after every command, and building it
 /// from a deep copy of every preset made each command (and the frame loop) take seconds with a

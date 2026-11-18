@@ -33,11 +33,9 @@ fn exec(h: &mut Headless, command: &str, params: Value) -> Value {
     r["result"].clone()
 }
 
-/// A folder of `n` small PNGs in the temporary folder.
-fn folder(name: &str, n: u8) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("lc-ui-importloupe-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+/// A folder of `n` small PNGs in the temporary folder, removed when the test ends.
+fn folder(name: &str, n: u8) -> lcc_testkit::TempDir {
+    let dir = lcc_testkit::TempDir::new(&format!("lc-ui-importloupe-{name}"));
     let o = lcc_engine::export::ExportOptions { format: lcc_engine::export::ExportFormat::Png, ..Default::default() };
     for i in 0..n {
         let img = lcc_raster::Rgba8::from_fn(240, 160, |x, y| [(x % 255) as u8, (y % 255) as u8, 40 * i, 255]);
@@ -66,8 +64,9 @@ fn click_at(h: &mut Headless, at: egui::Pos2) {
 }
 
 /// The Import tab's loupe on a browsed folder, the right panel left on Masks (from Develop) with the overlay
-/// switched on to stay (O), as the user had it.
-fn import_loupe(name: &str) -> (Headless, std::path::PathBuf) {
+/// switched on to stay (O), as the user had it. The folder comes first: bound as `let (dir, h)`, the app
+/// drops before the folder goes.
+fn import_loupe(name: &str) -> (lcc_testkit::TempDir, Headless) {
     let mut h = app(true);
     h.settle(SETTLE);
     exec(&mut h, "dialog.import", json!({}));
@@ -80,7 +79,7 @@ fn import_loupe(name: &str) -> (Headless, std::path::PathBuf) {
     h.settle(SETTLE);
     steps(&mut h, 3);
     assert!(widget(&h, "canvas:image").is_some(), "the loupe shows the photo");
-    (h, dir)
+    (dir, h)
 }
 
 /// The Folders panel (the sources on the left of the Import tab) drags wider by its right edge, as Library's left
@@ -128,7 +127,7 @@ fn the_import_folders_panel_resizes_by_its_right_edge_and_remembers_it() {
 /// left on in Develop.
 #[test]
 fn the_import_loupe_shows_no_overlay_on_note() {
-    let (h, dir) = import_loupe("pill");
+    let (dir, h) = import_loupe("pill");
     assert!(widget(&h, "canvas:overlayOn").is_none(), "no Overlay on note in the Import tab");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -137,7 +136,7 @@ fn the_import_loupe_shows_no_overlay_on_note() {
 /// A mask tool left armed in Develop (the Brush) took the click before: it painted a mask on the browsed photo.
 #[test]
 fn one_click_zooms_the_import_loupe_and_back() {
-    let (mut h, dir) = import_loupe("zoom");
+    let (dir, mut h) = import_loupe("zoom");
     h.app.ui.tool = "brush".into();
     steps(&mut h, 2);
     assert!(matches!(h.app.ui.zoom, Zoom::Fit));

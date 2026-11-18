@@ -12,28 +12,16 @@ use crate::{LccApp, Services};
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
 
+/// A file name with multi-byte (CJK) characters is drawn without panicking (#266), and a stack's badge expands and
+/// collapses the stack while the loupe keeps its photo.
 #[test]
-fn filmstrip_shows_a_cjk_file_name() {
-    let mut session = lcc_engine::Session::with_demo();
-    let first = session.visible_cloned()[0];
-    let source = session.catalog.photo(first).expect("demo photo").source.clone();
-    // the name from #266: cutting it at byte 13 lands inside '限'
-    session.catalog.apply(Op::SetFile { id: first, file_name: "202407層三限定訂閱圖(4).jpg".into(), source }).unwrap();
-    let app = LccApp::new(session, Services { png: None, ..Default::default() });
-    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
-    let r = h.request("ui.set", json!({"view": "detail"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    assert!(h.app.ui.settings.film_names);
-    let film = format!("film:{}", first.0);
-    assert!(h.app.widgets.iter().any(|(w, _)| *w == film), "{film} drawn in the filmstrip");
-}
-
-#[test]
-fn filmstrip_stack_badge_expands_and_collapses_the_stack() {
+fn filmstrip_shows_a_cjk_file_name_and_its_stack_badge_expands_and_collapses_the_stack() {
     let mut session = lcc_engine::Session::with_demo();
     let vis = session.visible_cloned();
     let (loose, top, member) = (vis[0], vis[1], vis[2]);
+    let source = session.catalog.photo(loose).expect("demo photo").source.clone();
+    // the name from #266: cutting it at byte 13 lands inside '限'
+    session.catalog.apply(Op::SetFile { id: loose, file_name: "202407層三限定訂閱圖(4).jpg".into(), source }).unwrap();
     let stack = Stack { id: StackId(1), photos: vec![top, member], collapsed: true };
     session.catalog.apply(Op::AddStack { stack }).unwrap();
     let app = LccApp::new(session, Services { png: None, ..Default::default() });
@@ -44,6 +32,9 @@ fn filmstrip_stack_badge_expands_and_collapses_the_stack() {
     let r = h.request("ui.set", json!({"view": "detail"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
+    assert!(h.app.ui.settings.film_names);
+    let film = format!("film:{}", loose.0);
+    assert!(h.app.widgets.iter().any(|(w, _)| *w == film), "{film} drawn in the filmstrip with its CJK name");
     assert!(!h.app.session.visible_cloned().contains(&member), "collapsed: only the top shows");
     let badge = format!("filmstack:{}", top.0);
     let r = h.request("ui.clickWidget", json!({"id": badge}), T);
@@ -97,4 +88,19 @@ fn the_filmstrip_marks_the_active_photo_heavier_than_the_other_selected_one() {
     assert_eq!(on_active, vec![(3.0, t.ring_active), (1.0, t.ring_inner)]);
     assert_eq!(on_other, vec![(1.5, t.ring_selected)]);
     assert!(on_unselected.is_empty(), "{on_unselected:?}");
+}
+
+/// Resizing the strip keeps the active photo where it was on screen (#1082).
+#[test]
+fn resizing_the_filmstrip_keeps_the_active_photo_in_place() {
+    use crate::panels::detail::film_rescroll;
+    // photo 40 drawn with its centre 300 points into the strip
+    let (old_w, new_w, at) = (100.0, 150.0, 40usize);
+    let old_off = (at as f32 + 0.5) * old_w - 300.0;
+    let new_off = film_rescroll(old_off, old_w, new_w, Some(at));
+    assert!(((at as f32 + 0.5) * new_w - new_off - 300.0).abs() < 0.01);
+    // never before the start, and hostile numbers do not escape
+    assert_eq!(film_rescroll(0.0, 100.0, 50.0, Some(0)), 0.0);
+    assert_eq!(film_rescroll(f32::NAN, 100.0, 50.0, None), 0.0);
+    assert_eq!(film_rescroll(10.0, 0.0, 50.0, None), 0.0);
 }

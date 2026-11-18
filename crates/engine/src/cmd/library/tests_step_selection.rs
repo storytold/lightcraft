@@ -45,41 +45,42 @@ fn selected(s: &Session) -> Vec<u64> {
 }
 
 #[test]
-fn arrows_step_through_ctrl_clicked_photos_and_wrap() {
-    let mut s = thirty().unwrap();
-    s.execute("library.select", &json!({"ids": [5]})).unwrap();
-    s.execute("library.select", &json!({"ids": [13], "mode": "toggle"})).unwrap();
-    s.execute("library.select", &json!({"ids": [25], "mode": "toggle"})).unwrap();
-    s.execute("library.select", &json!({"ids": [5], "mode": "click"})).unwrap();
-    assert_eq!(s.active(), Some(PhotoId(5)));
-    assert_eq!(walk(&mut s, "library.next", 4), vec![13, 25, 5, 13], "→ skips the photos between and wraps");
-    assert_eq!(selected(&s), vec![5, 13, 25], "the selection is kept");
-    assert_eq!(walk(&mut s, "library.previous", 4), vec![5, 25, 13, 5], "← wraps from the first to the last");
-    assert_eq!(selected(&s), vec![5, 13, 25]);
-}
-
-#[test]
-fn arrows_loop_through_a_shift_range() {
-    let mut s = thirty().unwrap();
-    s.execute("library.select", &json!({"ids": [10]})).unwrap();
-    s.execute("library.select", &json!({"ids": [13], "mode": "range"})).unwrap();
-    assert_eq!(selected(&s), vec![10, 11, 12, 13]);
-    s.execute("library.select", &json!({"ids": [10], "mode": "click"})).unwrap();
-    assert_eq!(walk(&mut s, "library.next", 5), vec![11, 12, 13, 10, 11]);
-    assert_eq!(walk(&mut s, "library.previous", 3), vec![10, 13, 12]);
-    assert_eq!(selected(&s), vec![10, 11, 12, 13]);
-}
-
-#[test]
-fn arrows_visit_a_range_and_a_far_photo_in_view_order() {
-    let mut s = thirty().unwrap();
-    s.execute("library.select", &json!({"ids": [3]})).unwrap();
-    s.execute("library.select", &json!({"ids": [5], "mode": "range"})).unwrap();
-    s.execute("library.select", &json!({"ids": [20], "mode": "toggle"})).unwrap();
-    s.execute("library.select", &json!({"ids": [3], "mode": "click"})).unwrap();
-    assert_eq!(walk(&mut s, "library.next", 5), vec![4, 5, 20, 3, 4]);
-    assert_eq!(walk(&mut s, "library.previous", 3), vec![3, 20, 5]);
-    assert_eq!(selected(&s), vec![3, 4, 5, 20]);
+fn arrows_step_through_a_multi_selection_and_wrap() {
+    // arrows step through ctrl clicked photos and wrap
+    {
+        let mut s = thirty().unwrap();
+        s.execute("library.select", &json!({"ids": [5]})).unwrap();
+        s.execute("library.select", &json!({"ids": [13], "mode": "toggle"})).unwrap();
+        s.execute("library.select", &json!({"ids": [25], "mode": "toggle"})).unwrap();
+        s.execute("library.select", &json!({"ids": [5], "mode": "click"})).unwrap();
+        assert_eq!(s.active(), Some(PhotoId(5)));
+        assert_eq!(walk(&mut s, "library.next", 4), vec![13, 25, 5, 13], "→ skips the photos between and wraps");
+        assert_eq!(selected(&s), vec![5, 13, 25], "the selection is kept");
+        assert_eq!(walk(&mut s, "library.previous", 4), vec![5, 25, 13, 5], "← wraps from the first to the last");
+        assert_eq!(selected(&s), vec![5, 13, 25]);
+    }
+    // arrows loop through a shift range
+    {
+        let mut s = thirty().unwrap();
+        s.execute("library.select", &json!({"ids": [10]})).unwrap();
+        s.execute("library.select", &json!({"ids": [13], "mode": "range"})).unwrap();
+        assert_eq!(selected(&s), vec![10, 11, 12, 13]);
+        s.execute("library.select", &json!({"ids": [10], "mode": "click"})).unwrap();
+        assert_eq!(walk(&mut s, "library.next", 5), vec![11, 12, 13, 10, 11]);
+        assert_eq!(walk(&mut s, "library.previous", 3), vec![10, 13, 12]);
+        assert_eq!(selected(&s), vec![10, 11, 12, 13]);
+    }
+    // arrows visit a range and a far photo in view order
+    {
+        let mut s = thirty().unwrap();
+        s.execute("library.select", &json!({"ids": [3]})).unwrap();
+        s.execute("library.select", &json!({"ids": [5], "mode": "range"})).unwrap();
+        s.execute("library.select", &json!({"ids": [20], "mode": "toggle"})).unwrap();
+        s.execute("library.select", &json!({"ids": [3], "mode": "click"})).unwrap();
+        assert_eq!(walk(&mut s, "library.next", 5), vec![4, 5, 20, 3, 4]);
+        assert_eq!(walk(&mut s, "library.previous", 3), vec![3, 20, 5]);
+        assert_eq!(selected(&s), vec![3, 4, 5, 20]);
+    }
 }
 
 #[test]

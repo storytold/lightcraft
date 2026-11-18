@@ -4,20 +4,41 @@
 //! data over the active area), normalised so the centre of the frame keeps its level; [`apply`] adds them to a
 //! target raw of the same sensor layout, which `write_dng` then stores.
 //!
-//! The fit: the active area's samples of each CFA phase are box-averaged into a coarse grid (clipped, non-finite
-//! and non-positive samples left out), a least-squares polynomial surface (degree 4) is fitted through the cell
-//! means so sensor noise and dust don't end up in the map and empty cells are filled, and each gain is `centre / level`,
-//! clamped to [`MIN_GAIN`, `MAX_GAIN`]. The opcode layout follows the DNG specification (1.3+, chapter 6);
-//! filmcraft's `crates/dng/src/opcode.rs` was not needed.
+//! The fit, per CFA phase (or plane): a lattice of points that includes the frame's edges, about one every
+//! [`POINT_SPACING_PX`] pixels. Each point's level comes from the phase's samples within half a spacing of it
+//! (clipped, non-finite and non-positive samples left out): a least-squares plane through their log levels, around
+//! the point, fitted again without the [`OUTLIER_SHARE`] of samples farthest from the first fit (dust is dark, hot
+//! pixels bright), and evaluated at the point itself. A window the frame cuts (at an edge or a corner) has its
+//! samples on one side of the point; the plane carries the slope out to it, where a mean would stop short of the
+//! fall-off. Points without usable samples are filled from their neighbours; then a 3 × 3 median and a Gaussian of
+//! [`SMOOTHING`] points, both padded by odd reflection (`2·edge − inner`, which continues a slope, so the corners
+//! keep theirs). Each gain is `centre / level`, clamped to [`MIN_GAIN`, `MAX_GAIN`]. The lattice lies on the
+//! frame's edges (origin 0, spacing `1/(n − 1)`), so the decoder's bilinear interpolation never extrapolates. The
+//! opcode layout follows the DNG specification (1.3+, chapter 6); filmcraft's `crates/dng/src/opcode.rs` was not
+//! needed. Sources: own design (the window plane fit, odd-reflection padding; the cell statistics and smoothing as
+//! the Develop LCC map's in `flat-field-render`).
+
+use rayon::prelude::*;
 
 use crate::opcodes::{Area, Opcode};
 use crate::{Cfa, RawImage};
 
-/// Grid points along each axis of a fitted gain map.
-pub const GRID: u32 = 17;
-/// Gains are clamped to this range: a darker corner than 1/8 of the centre is not a lens to correct.
+/// About this many pixels between the lattice points along the long side: on a 45 MP sensor about 97 points, each
+/// from about 1800 samples of one Bayer site, fine enough to follow a fall-off that steepens toward the corners.
+pub const POINT_SPACING_PX: f64 = 86.0;
+/// Fewest and most lattice points along the long side; the short side gets as many as keep the spacing square (3 at
+/// least).
+pub const MIN_POINTS: usize = 17;
+pub const MAX_POINTS: usize = 97;
+/// The smallest reference measured, in pixels per side.
+const MIN_SIDE: usize = 68;
+/// The share of a window's samples left out of the second plane fit (those farthest from the first).
+pub const OUTLIER_SHARE: f64 = 0.2;
+/// Gaussian smoothing of the lattice, σ in points.
+pub const SMOOTHING: f64 = 1.0;
+/// Gains are clamped to this range: a corner darker than 1/16 of the centre (4 EV) is not a lens to correct.
 pub const MIN_GAIN: f32 = 0.25;
-pub const MAX_GAIN: f32 = 8.0;
+pub const MAX_GAIN: f32 = 16.0;
 /// Samples at or above this normalised level count as clipped.
 const CLIP: f32 = 0.98;
 
@@ -76,50 +97,23 @@ pub fn fit(reference: &RawImage) -> Result<FlatField, FlatFieldError> {
         (None, 1 | 3) => (0..cpp).map(|p| (0, 0, 1, 1, p)).collect(),
         (None, _) => return Err(FlatFieldError::Reference(format!("flat-field correction doesn't support {cpp} samples per pixel"))),
     };
-    let g = GRID as usize;
-    if w < 4 * g || h < 4 * g {
+    if w < MIN_SIDE || h < MIN_SIDE {
         return Err(FlatFieldError::Reference(format!("the flat-field reference is too small ({w}×{h})")));
     }
+    let [ph, pv] = lattice(w, h);
     let mut ops = Vec::with_capacity(phases.len());
     for &(px, py, sx, sy, plane) in &phases {
-        // per grid cell: sum of levels, of x and y (normalised to -1..1), count
-        let mut cells = vec![(0f64, 0f64, 0f64, 0u32); g * g];
-        let mut y = py;
-        while y < h {
-            // nearest grid cell: grid point i sits at i/(g-1) of the frame
-            let gy = ((y as f64 / h as f64) * (g - 1) as f64).round() as usize;
-            let ny = 2.0 * y as f64 / h as f64 - 1.0;
-            let mut x = px;
-            while x < w {
-                let gx = ((x as f64 / w as f64) * (g - 1) as f64).round() as usize;
-                if let Some(&v) = n.data.get((y * w + x) * cpp + plane)
-                    && v.is_finite()
-                    && v > 0.0
-                    && v < CLIP
-                    && let Some(c) = cells.get_mut(gy * g + gx)
-                {
-                    *c = (c.0 + v as f64, c.1 + 2.0 * x as f64 / w as f64 - 1.0, c.2 + ny, c.3 + 1);
-                }
-                x += sx;
-            }
-            y += sy;
-        }
-        // a low-order surface through the cell means (at their samples' centroids) is the smooth map: it ignores
-        // noise and dust, and fills cells without usable samples
-        let pts: Vec<(f64, f64, f64)> = cells.iter().filter(|c| c.3 > 0).map(|c| (c.1 / c.3 as f64, c.2 / c.3 as f64, c.0 / c.3 as f64)).collect();
-        let coef = fit_surface(&pts)
+        let site = Site { data: &n.data, w, h, cpp, px, py, sx, sy, plane };
+        let mut levels = site.levels([ph, pv]);
+        fill_holes(&mut levels, ph, pv)
             .ok_or_else(|| FlatFieldError::Reference("the flat-field reference has too few usable samples (black or clipped)".into()))?;
-        let grid: Vec<f64> = (0..g * g)
-            .map(|i| {
-                let t = |k: usize| 2.0 * k as f64 / (g - 1) as f64 - 1.0;
-                eval_surface(&coef, t(i % g), t(i / g))
-            })
-            .collect();
-        let centre = grid.get((g / 2) * g + g / 2).copied().unwrap_or(0.0);
-        if !(centre.is_finite() && centre > 1e-4) {
+        let smooth = gaussian(&median3(&levels, ph, pv), ph, pv, SMOOTHING);
+        // the frame centre's level (between lattice points when their count is even)
+        let centre = bilinear(&smooth, ph, pv, 0.5, 0.5);
+        if !(centre.is_finite() && centre > 1e-4f64.log2()) {
             return Err(FlatFieldError::Reference("the flat-field reference's centre is black".into()));
         }
-        let gains = grid.iter().map(|&l| if l.is_finite() && l > 0.0 { ((centre / l) as f32).clamp(MIN_GAIN, MAX_GAIN) } else { 1.0 }).collect();
+        let gains = smooth.iter().map(|&l| if l.is_finite() { ((centre - l).exp2() as f32).clamp(MIN_GAIN, MAX_GAIN) } else { 1.0 }).collect();
         let as_u32 = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
         ops.push(Opcode::GainMap {
             area: Area {
@@ -132,9 +126,9 @@ pub fn fit(reference: &RawImage) -> Result<FlatField, FlatFieldError> {
                 row_pitch: as_u32(sy),
                 col_pitch: as_u32(sx),
             },
-            points_v: GRID,
-            points_h: GRID,
-            spacing: [1.0 / (GRID - 1) as f64, 1.0 / (GRID - 1) as f64],
+            points_v: as_u32(pv),
+            points_h: as_u32(ph),
+            spacing: [1.0 / (pv - 1) as f64, 1.0 / (ph - 1) as f64],
             origin: [0.0, 0.0],
             map_planes: 1,
             gains,
@@ -143,71 +137,291 @@ pub fn fit(reference: &RawImage) -> Result<FlatField, FlatFieldError> {
     Ok(FlatField { layout, ops })
 }
 
-/// Monomials x^i y^j with i + j <= [`DEGREE`].
-const DEGREE: usize = 4;
-const TERMS: usize = (DEGREE + 1) * (DEGREE + 2) / 2;
+/// Lattice points across and down for a `w × h` frame: about one every [`POINT_SPACING_PX`] along the long side
+/// ([`MIN_POINTS`]..=[`MAX_POINTS`]), as many on the short side as keep the spacing square (at least 3).
+fn lattice(w: usize, h: usize) -> [usize; 2] {
+    let long = w.max(h) as f64;
+    let n_long = ((long / POINT_SPACING_PX).round() as usize + 1).clamp(MIN_POINTS, MAX_POINTS);
+    let n_short = ((w.min(h) as f64 / long * (n_long - 1) as f64).round() as usize + 1).max(3);
+    if w >= h { [n_long, n_short] } else { [n_short, n_long] }
+}
 
-fn monomials(x: f64, y: f64) -> [f64; TERMS] {
-    let mut m = [0.0; TERMS];
-    let mut k = 0;
-    for d in 0..=DEGREE {
-        for j in 0..=d {
-            if let Some(v) = m.get_mut(k) {
-                *v = x.powi((d - j) as i32) * y.powi(j as i32);
-            }
-            k += 1;
-        }
+/// One CFA phase's (or plane's) samples of the normalised reference.
+struct Site<'a> {
+    data: &'a [f32],
+    w: usize,
+    h: usize,
+    cpp: usize,
+    px: usize,
+    py: usize,
+    sx: usize,
+    sy: usize,
+    plane: usize,
+}
+
+impl Site<'_> {
+    /// Log2 level at every lattice point (`ph` across, `pv` down, row-major; NaN where no sample is usable), each from
+    /// the samples in its window ([`fit_point`]). Lattice point `i` sits at `i / (n − 1)` of the frame, as the decoder
+    /// places a GainMap's points (position `x / w`). An inner point's window reaches half a spacing each way; a point
+    /// on the frame's edge has no samples outside, so its window reaches a whole spacing inward instead (as many samples
+    /// as an inner point's, all on one side: the plane carries the slope out to the edge).
+    fn levels(&self, [ph, pv]: [usize; 2]) -> Vec<f64> {
+        let (w, h) = (self.w as f64, self.h as f64);
+        let (gx, gy) = ((ph - 1) as f64, (pv - 1) as f64);
+        (0..pv)
+            .into_par_iter()
+            .flat_map_iter(|j| {
+                let mut windows: Vec<Vec<(f64, f64, f64, bool)>> = vec![Vec::new(); ph];
+                let (py_px, spacing_y, spacing_x) = (j as f64 / gy * h, h / gy, w / gx);
+                let rows = (0..self.h).filter(|y| *y >= self.py && (*y - self.py).is_multiple_of(self.sy));
+                for (y, y_reach) in rows.filter_map(|y| windows_of(y as f64 / h * gy, pv).find(|(k, _)| *k == j).map(|(_, reach)| (y, reach))) {
+                    let mut x = self.px;
+                    while x < self.w {
+                        if let Some(&v) = self.data.get((y * self.w + x) * self.cpp + self.plane)
+                            && v.is_finite()
+                            && v > 0.0
+                            && v < CLIP
+                        {
+                            let dy = (y as f64 - py_px) / spacing_y;
+                            for (i, x_reach) in windows_of(x as f64 / w * gx, ph) {
+                                if let Some(win) = windows.get_mut(i) {
+                                    win.push(((x as f64 - i as f64 / gx * w) / spacing_x, dy, f64::from(v).log2(), x_reach || y_reach));
+                                }
+                            }
+                        }
+                        x += self.sx;
+                    }
+                }
+                windows.into_iter().map(|win| fit_point(&in_window(&win)).unwrap_or(f64::NAN)).collect::<Vec<_>>()
+            })
+            .collect()
     }
-    m
 }
 
-fn eval_surface(c: &[f64; TERMS], x: f64, y: f64) -> f64 {
-    monomials(x, y).iter().zip(c).map(|(m, c)| m * c).sum()
+/// Fewest samples a window has before an edge point reaches farther in for more ([`in_window`]).
+const MIN_WINDOW_SAMPLES: usize = 12;
+
+/// The lattice points (along one axis of `n`) that may use a sample at lattice position `f` (`0..=n − 1`), each with
+/// whether the sample is only in its reach: the nearest point (`false`), and the edge point too (`true`) while `f` is
+/// within a spacing of the edge.
+fn windows_of(f: f64, n: usize) -> impl Iterator<Item = (usize, bool)> {
+    let last = n.saturating_sub(1);
+    let nearest = (f.round().max(0.0) as usize).min(last);
+    let first_edge = (nearest == 1 && f < 1.0).then_some((0, true));
+    let last_edge = (last >= 1 && nearest + 1 == last && f > (last - 1) as f64).then_some((last, true));
+    std::iter::once((nearest, false)).chain(first_edge).chain(last_edge)
 }
 
-/// Least-squares polynomial surface through `(x, y, z)` points (normal equations, Gaussian elimination with partial
-/// pivoting); `None` when there are too few points or the system is singular.
-fn fit_surface(pts: &[(f64, f64, f64)]) -> Option<[f64; TERMS]> {
-    if pts.len() < 2 * TERMS {
+/// A point's window: the samples within half a spacing of it, or, when that holds fewer than
+/// [`MIN_WINDOW_SAMPLES`] (a point on the edge of a small frame), those within a spacing inward too.
+fn in_window(win: &[(f64, f64, f64, bool)]) -> Vec<(f64, f64, f64)> {
+    let near = win.iter().filter(|s| !s.3).count();
+    win.iter().filter(|s| near < MIN_WINDOW_SAMPLES || !s.3).map(|s| (s.0, s.1, s.2)).collect()
+}
+
+/// The level at a lattice point from the `(dx, dy, log2 level)` samples around it (offsets in lattice spacings): a
+/// least-squares plane, fitted again without the [`OUTLIER_SHARE`] of samples farthest from it, at (0, 0). With too
+/// few samples for a plane, or a degenerate one (all on a line), their trimmed mean. `None` without samples.
+fn fit_point(s: &[(f64, f64, f64)]) -> Option<f64> {
+    if s.is_empty() {
         return None;
     }
-    let mut a = [[0f64; TERMS + 1]; TERMS];
-    for &(x, y, z) in pts {
-        let m = monomials(x, y);
-        for (r, row) in a.iter_mut().enumerate() {
-            let mr = m.get(r).copied().unwrap_or(0.0);
-            for (c, v) in row.iter_mut().enumerate().take(TERMS) {
-                *v += mr * m.get(c).copied().unwrap_or(0.0);
-            }
-            if let Some(v) = row.get_mut(TERMS) {
-                *v += mr * z;
-            }
-        }
+    let Some(first) = plane(s.iter()) else { return Some(trimmed_mean(s)) };
+    let mut res: Vec<(f64, usize)> = s.iter().enumerate().map(|(k, &(x, y, z))| ((z - first.at(x, y)).abs(), k)).collect();
+    let keep = s.len() - ((s.len() as f64 * OUTLIER_SHARE) as usize).min(s.len().saturating_sub(3));
+    if keep < res.len() {
+        res.select_nth_unstable_by(keep, |a, b| a.0.total_cmp(&b.0));
     }
-    for col in 0..TERMS {
-        let piv = (col..TERMS).max_by(|&i, &j| a[i][col].abs().total_cmp(&a[j][col].abs()))?;
-        a.swap(col, piv);
-        let d = a[col][col];
-        if d.is_nan() || d.abs() <= 1e-12 {
-            return None;
+    let kept = res.iter().take(keep).filter_map(|&(_, k)| s.get(k));
+    Some(plane(kept).unwrap_or(first).at(0.0, 0.0))
+}
+
+/// `z = a + b·x + c·y`.
+#[derive(Clone, Copy)]
+struct Plane {
+    a: f64,
+    b: f64,
+    c: f64,
+}
+
+impl Plane {
+    fn at(&self, x: f64, y: f64) -> f64 {
+        self.a + self.b * x + self.c * y
+    }
+}
+
+/// Least-squares plane through `(x, y, z)` points (normal equations, Cramer's rule); `None` with fewer than 6 points
+/// or when they don't span a plane.
+fn plane<'a>(pts: impl Iterator<Item = &'a (f64, f64, f64)>) -> Option<Plane> {
+    let (mut n, mut sx, mut sy, mut sz, mut sxx, mut syy, mut sxy, mut sxz, mut syz) = (0.0f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    for &(x, y, z) in pts {
+        n += 1.0;
+        sx += x;
+        sy += y;
+        sz += z;
+        sxx += x * x;
+        syy += y * y;
+        sxy += x * y;
+        sxz += x * z;
+        syz += y * z;
+    }
+    if n < 6.0 {
+        return None;
+    }
+    let det3 = |m: [[f64; 3]; 3]| {
+        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+    };
+    let m = [[n, sx, sy], [sx, sxx, sxy], [sy, sxy, syy]];
+    let d = det3(m);
+    // (relative to the spread of the offsets: samples along one line don't fix a plane)
+    if !(d.is_finite() && d.abs() > 1e-9 * n * n * n) {
+        return None;
+    }
+    let r = [sz, sxz, syz];
+    let col = |k: usize| {
+        let mut c = m;
+        for (row, v) in c.iter_mut().zip(r) {
+            row[k] = v;
         }
-        for r in 0..TERMS {
-            if r != col {
-                let f = a[r][col] / d;
-                for c in col..=TERMS {
-                    a[r][c] -= f * a[col][c];
+        det3(c) / d
+    };
+    let p = Plane { a: col(0), b: col(1), c: col(2) };
+    (p.a.is_finite() && p.b.is_finite() && p.c.is_finite()).then_some(p)
+}
+
+/// Mean of the `z`s without the lowest and highest [`OUTLIER_SHARE`] / 2 each.
+fn trimmed_mean(s: &[(f64, f64, f64)]) -> f64 {
+    let mut z: Vec<f64> = s.iter().map(|p| p.2).collect();
+    z.sort_unstable_by(f64::total_cmp);
+    let k = ((z.len() as f64 * OUTLIER_SHARE / 2.0) as usize).min(z.len().saturating_sub(1) / 2);
+    let kept = z.get(k..z.len() - k).unwrap_or(&z);
+    kept.iter().sum::<f64>() / kept.len().max(1) as f64
+}
+
+/// Fill the NaN points of a `cols × rows` lattice from their valid neighbours, a ring at a time; `None` when no point
+/// is valid.
+fn fill_holes(v: &mut [f64], cols: usize, rows: usize) -> Option<()> {
+    if !v.iter().any(|x| x.is_finite()) {
+        return None;
+    }
+    while v.iter().any(|x| !x.is_finite()) {
+        let before = v.to_vec();
+        for r in 0..rows {
+            for c in 0..cols {
+                if before.get(r * cols + c).is_some_and(|x| x.is_finite()) {
+                    continue;
+                }
+                let (mut sum, mut k) = (0.0, 0);
+                for (dc, dr) in [(-1isize, 0isize), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)] {
+                    let (cc, rr) = (c as isize + dc, r as isize + dr);
+                    if cc >= 0
+                        && rr >= 0
+                        && (cc as usize) < cols
+                        && (rr as usize) < rows
+                        && let Some(&x) = before.get(rr as usize * cols + cc as usize)
+                        && x.is_finite()
+                    {
+                        sum += x;
+                        k += 1;
+                    }
+                }
+                if k > 0
+                    && let Some(slot) = v.get_mut(r * cols + c)
+                {
+                    *slot = sum / k as f64;
                 }
             }
         }
     }
-    let mut out = [0f64; TERMS];
-    for (i, o) in out.iter_mut().enumerate() {
-        *o = a[i][TERMS] / a[i][i];
-        if !o.is_finite() {
-            return None;
+    Some(())
+}
+
+/// Value of a `cols × rows` lattice at `(c, r)`, extended past its edges by odd reflection (`2·edge − mirror`), which
+/// continues a linear ramp exactly. Each axis is reflected in turn, so corners continue a plane too.
+fn padded(v: &[f64], cols: usize, rows: usize, c: isize, r: isize) -> f64 {
+    let (ci, ri) = (cols as isize, rows as isize);
+    // (edge index, mirrored index) for an index outside 0..n; a mirrored index still outside (a kernel wider than the
+    // lattice) is reflected again by the recursion, each bounce n − 1 ≥ 1 nearer, so any depth stays linear
+    let mirror = |i: isize, n: isize| -> (isize, isize) { if i < 0 { (0, -i) } else { (n - 1, 2 * (n - 1) - i) } };
+    // (an axis of one point has no slope to continue: it stays as it is)
+    if (c < 0 || c >= ci) && cols < 2 {
+        return padded(v, cols, rows, 0, r);
+    }
+    if (r < 0 || r >= ri) && rows < 2 {
+        return padded(v, cols, rows, c, 0);
+    }
+    if c < 0 || c >= ci {
+        let (e, m) = mirror(c, ci);
+        return 2.0 * padded(v, cols, rows, e, r) - padded(v, cols, rows, m, r);
+    }
+    if r < 0 || r >= ri {
+        let (e, m) = mirror(r, ri);
+        return 2.0 * padded(v, cols, rows, c, e) - padded(v, cols, rows, c, m);
+    }
+    v.get(r as usize * cols + c as usize).copied().unwrap_or(0.0)
+}
+
+/// 3 × 3 median, odd-reflection padded.
+fn median3(v: &[f64], cols: usize, rows: usize) -> Vec<f64> {
+    let mut out = Vec::with_capacity(v.len());
+    for r in 0..rows as isize {
+        for c in 0..cols as isize {
+            let mut k = [0.0f64; 9];
+            let mut i = 0;
+            for dr in -1..=1 {
+                for dc in -1..=1 {
+                    if let Some(slot) = k.get_mut(i) {
+                        *slot = padded(v, cols, rows, c + dc, r + dr);
+                    }
+                    i += 1;
+                }
+            }
+            k.sort_unstable_by(f64::total_cmp);
+            let [_, _, _, _, median, ..] = k;
+            out.push(median);
         }
     }
-    Some(out)
+    out
+}
+
+/// Separable Gaussian of σ `sigma` points, odd-reflection padded.
+fn gaussian(v: &[f64], cols: usize, rows: usize, sigma: f64) -> Vec<f64> {
+    if sigma.is_nan() || sigma <= 0.0 {
+        return v.to_vec();
+    }
+    let radius = (3.0 * sigma).ceil() as isize;
+    let kernel: Vec<f64> = (-radius..=radius).map(|i| (-(i * i) as f64 / (2.0 * sigma * sigma)).exp()).collect();
+    let sum: f64 = kernel.iter().sum();
+    let kernel: Vec<f64> = kernel.iter().map(|k| k / sum).collect();
+    let pass = |src: &[f64], horizontal: bool| -> Vec<f64> {
+        let mut out = Vec::with_capacity(src.len());
+        for r in 0..rows as isize {
+            for c in 0..cols as isize {
+                let mut acc = 0.0;
+                for (k, i) in kernel.iter().zip(-radius..=radius) {
+                    let (cc, rr) = if horizontal { (c + i, r) } else { (c, r + i) };
+                    acc += k * padded(src, cols, rows, cc, rr);
+                }
+                out.push(acc);
+            }
+        }
+        out
+    };
+    let horizontal = pass(v, true);
+    pass(&horizontal, false)
+}
+
+/// A `cols × rows` lattice (points at `i / (n − 1)`) at relative position `(u, v)`, bilinear.
+fn bilinear(g: &[f64], cols: usize, rows: usize, u: f64, v: f64) -> f64 {
+    let fx = u.clamp(0.0, 1.0) * (cols - 1) as f64;
+    let fy = v.clamp(0.0, 1.0) * (rows - 1) as f64;
+    let (x0, y0) = ((fx.floor() as usize).min(cols.saturating_sub(2)), (fy.floor() as usize).min(rows.saturating_sub(2)));
+    let (tx, ty) = (fx - x0 as f64, fy - y0 as f64);
+    let at = |x: usize, y: usize| g.get(y * cols + x).copied().unwrap_or(f64::NAN);
+    let top = at(x0, y0) + (at(x0 + 1, y0) - at(x0, y0)) * tx;
+    let bottom = at(x0, y0 + 1) + (at(x0 + 1, y0 + 1) - at(x0, y0 + 1)) * tx;
+    top + (bottom - top) * ty
 }
 
 /// Add `ff`'s gain maps to `target`'s `OpcodeList2`, after checking it has the reference's sensor layout.
@@ -300,6 +514,80 @@ mod tests {
         // the centre keeps its level
         let c = n.data[(h / 2) * w + w / 2];
         assert!((c - before.data[(h / 2) * w + w / 2]).abs() < 0.01);
+    }
+
+    /// A wide lens wide open: about 3 EV darker in the corners than in the middle, steepening toward them (r², r⁴, r⁶
+    /// terms, the shape of a Nikon Z 24 mm f/1.8 reference), blue 4 % stronger than green, red as green.
+    fn steep_ev(w: usize, h: usize, x: usize, y: usize, c: u8) -> f64 {
+        let (dx, dy) = ((x as f64 + 0.5) / w as f64 - 0.5, (y as f64 + 0.5) / h as f64 - 0.5);
+        // 0 in the middle, 1 in the corners
+        let d2 = (dx * dx + dy * dy) / 0.5f64.hypot(0.5).powi(2);
+        let ev = 0.55 * d2 + 1.2 * d2 * d2 + 1.25 * d2 * d2 * d2;
+        ev * if c == 2 { 1.04 } else { 1.0 }
+    }
+
+    /// Mean level of colour `c` in the `s × s` box at (x0, y0).
+    fn box_mean(n: &crate::Normalized, c: u8, x0: usize, y0: usize, s: usize) -> f64 {
+        let cfa = n.cfa.clone().unwrap();
+        let v: Vec<f64> = (y0..y0 + s)
+            .flat_map(|y| (x0..x0 + s).map(move |x| (x, y)))
+            .filter(|&(x, y)| cfa.color_at(x, y) == c)
+            .map(|(x, y)| f64::from(n.data[y * n.width + x]))
+            .collect();
+        v.iter().sum::<f64>() / v.len() as f64
+    }
+
+    /// A steep fall-off is followed to the corners and edges: corrected, every colour is within 0.03 EV of the middle
+    /// there. The frame is large enough for a lattice as dense, relative to the fall-off, as a real raw's (43 points
+    /// along the long side here, 97 on a 45 MP raw). A degree-4 surface through 17 × 17 points missed by more.
+    #[test]
+    fn a_steep_fall_off_is_followed_to_the_corners() {
+        let (w, h) = (3600, 2400);
+        assert_eq!(lattice(w, h), [43, 29]);
+        let reference = mosaic(w, h, |x, y, c| 0.6 * (-steep_ev(w, h, x, y, c)).exp2());
+        let ff = fit(&reference).unwrap();
+        let mut target = mosaic(w, h, |x, y, c| 0.5 * (-steep_ev(w, h, x, y, c)).exp2());
+        apply(&ff, &mut target).unwrap();
+        let n = crate::decode(&crate::write_dng(&target, &Default::default()).unwrap()).unwrap().normalized().unwrap();
+        let s = 8;
+        let spots = [
+            ("top-left", 0, 0),
+            ("top-right", w - s, 0),
+            ("bottom-left", 0, h - s),
+            ("bottom-right", w - s, h - s),
+            ("left edge", 0, h / 2 - s / 2),
+            ("right edge", w - s, h / 2 - s / 2),
+            ("top edge", w / 2 - s / 2, 0),
+            ("bottom edge", w / 2 - s / 2, h - s),
+        ];
+        let mut worst = (0.0f64, "", 0u8);
+        for c in 0..3u8 {
+            let middle = box_mean(&n, c, w / 2 - s / 2, h / 2 - s / 2, s);
+            for (name, x, y) in spots {
+                let left = (middle / box_mean(&n, c, x, y, s)).log2();
+                if left.abs() > worst.0.abs() {
+                    worst = (left, name, c);
+                }
+            }
+        }
+        assert!(worst.0.abs() < 0.03, "{:+.3} EV left at the {} (colour {})", worst.0, worst.1, worst.2);
+    }
+
+    /// The 3 × 3 median and the Gaussian pad by odd reflection, which continues a slope: a linear ramp (a plane, in
+    /// log levels) comes through both unchanged, corners and edges included. Padding by repeating the edge would flatten
+    /// the corners.
+    #[test]
+    fn smoothing_keeps_a_linear_ramp() {
+        let (cols, rows) = (13, 9);
+        let ramp: Vec<f64> = (0..rows).flat_map(|r| (0..cols).map(move |c| 1.0 + 0.3 * c as f64 - 0.2 * r as f64)).collect();
+        let smooth = gaussian(&median3(&ramp, cols, rows), cols, rows, SMOOTHING);
+        for (a, b) in ramp.iter().zip(&smooth) {
+            assert!((a - b).abs() < 1e-9, "{a} became {b}");
+        }
+        // (a wider kernel than the lattice still continues it)
+        let small: Vec<f64> = (0..3).flat_map(|r| (0..3).map(move |c| 1.0 + 0.3 * c as f64 - 0.2 * r as f64)).collect();
+        let wide = gaussian(&small, 3, 3, 4.0);
+        assert!(wide.iter().zip(&small).all(|(a, b)| (a - b).abs() < 1e-9), "{wide:?}");
     }
 
     #[test]

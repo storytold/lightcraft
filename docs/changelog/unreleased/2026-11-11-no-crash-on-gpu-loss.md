@@ -1,3 +1,0 @@
-## Fixes
-
-- **No crash when the GPU device runs out of memory or is lost:** egui-wgpu panicked when the window's device gave no staging buffer for a frame's index/vertex data, and wgpu's `create_buffer_init` panicked on the invalid buffer in GPU renders, face/CLIP/denoise jobs. The window now logs and skips the frame, and every GPU buffer upload goes through `Queue::write_buffer`, which reports the failure as a device error so the render falls back to the CPU; clippy now bans `create_buffer_init`. Seen on a Qualcomm Adreno X1-45 (Vulkan, Windows on ARM) while scrolling a 49k-photo library. Issue #1029, thanks @pokemonbattledroid.

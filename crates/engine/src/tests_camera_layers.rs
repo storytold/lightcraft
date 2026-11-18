@@ -119,12 +119,9 @@ fn choosing_a_camera_profile_with_a_look_is_as_profile_and_a_look_keeps_its_cali
     assert_eq!((p.develop.profile.camera.as_str(), p.develop.profile.id.as_str()), (PLAIN, "lc.vivid"));
     assert!(LoadOptions::for_photo(&p).camera_look);
     assert!(s.execute("develop.profile", &json!({"id": "dcp:no-such-profile"})).is_err());
-}
 
-#[test]
-fn settings_from_before_the_two_layers_keep_their_look_on_the_default() {
-    let _lock = install();
-    // an old edit: the camera profile chosen with develop.cameraProfile, the look left at the default
+    // settings from before the two layers keep their look on the default: an old edit, the camera
+    // profile chosen with develop.cameraProfile, the look left at the default
     let mut s = Session::new();
     let id = raw_photo(&mut s);
     s.execute("develop.cameraProfile", &json!({"id": WITH_LOOK})).unwrap();
@@ -251,15 +248,9 @@ fn a_camera_profile_without_a_tone_curve_keeps_the_photos_own_tone() {
     let flat = spread(&lcc_pipeline::SourceInfo { camera_tone: None, ..info.clone() });
     eprintln!("luma standard deviation under the matrix-only profile: {kept:.2} (default tone before: {flat:.2})");
     assert!(kept > flat * 1.05, "the photo's tone keeps more contrast: {kept} vs {flat}");
-}
 
-/// An imported photo carries its camera profile in its settings (`develop.profile.camera`, from the import's
-/// camera-profile choice); its grid and loupe renders decode with the photo's own tone under a matrix-only profile.
-#[test]
-fn an_imported_photo_with_a_matrix_only_profile_renders_with_the_photos_tone() {
-    let _lock = install();
-    let bytes = dng_with_camera_jpeg();
-    let own = camera_tone_with(&bytes, "lc", true).expect("the tone fitted to the camera JPEG");
+    // An imported photo carries its camera profile in its settings (`develop.profile.camera`, from the import's
+    // camera-profile choice); its grid and loupe renders decode with the photo's own tone under a matrix-only profile.
     let dir = std::env::temp_dir().join(format!("lc-camera-layers-import-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

@@ -2,7 +2,6 @@
 //! the photos it adds, "Save as Preset" needs a name and a recipe, and cancelling the review
 //! changes neither the catalog nor the presets.
 
-use std::path::PathBuf;
 use std::time::Duration;
 
 use serde_json::json;
@@ -15,11 +14,9 @@ use crate::{LccApp, Services};
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
 
-/// A folder of two small PNGs.
-fn folder(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("lc-ui-import-recipe-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+/// A folder of two small PNGs, removed when the test ends.
+fn folder(tag: &str) -> lcc_testkit::TempDir {
+    let dir = lcc_testkit::TempDir::new(&format!("lc-ui-import-recipe-{tag}"));
     for i in 0..2u8 {
         let data: Vec<[u8; 4]> = (0..40 * 30).map(|k| [(k % 40 * 6) as u8, i * 90, 7, 255]).collect();
         let img = lcc_raster::Rgba8 { width: 40, height: 30, data };
@@ -29,8 +26,9 @@ fn folder(tag: &str) -> PathBuf {
     dir
 }
 
-/// The app with an empty library and the import review open on a folder of two photos.
-fn review(tag: &str) -> (Headless, PathBuf) {
+/// The app with an empty library and the import review open on a folder of two photos. The folder comes
+/// first: bound as `let (dir, h)`, the app drops before the folder goes.
+fn review(tag: &str) -> (lcc_testkit::TempDir, Headless) {
     let dir = folder(tag);
     let app = LccApp::new(lcc_engine::Session::new().with_fs(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1300.0, 1400.0], 1.0);
@@ -39,7 +37,7 @@ fn review(tag: &str) -> (Headless, PathBuf) {
     assert_eq!(r["result"]["scanning"], true, "{r}");
     assert!(h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(Dialog::Import { .. }))), "the review opens");
     h.settle(SETTLE);
-    (h, dir)
+    (dir, h)
 }
 
 fn dialog(h: &mut Headless) -> &mut ImportDialog {
@@ -75,7 +73,7 @@ fn finish_import(h: &mut Headless) {
 /// the recipe as a preset, leaving the review's own choices (its preset, the photos) as they were.
 #[test]
 fn save_as_preset_needs_a_name_and_a_recipe() {
-    let (mut h, dir) = review("save");
+    let (dir, mut h) = review("save");
     let presets0 = h.app.session.presets.len();
     click(&mut h, "button:importRecipeToggle");
     assert!(
@@ -109,7 +107,7 @@ fn save_as_preset_needs_a_name_and_a_recipe() {
 /// Cancelling the review with a recipe in it adds no photo and saves no preset.
 #[test]
 fn cancelling_the_review_discards_the_recipe() {
-    let (mut h, dir) = review("cancel");
+    let (dir, mut h) = review("cancel");
     let presets0 = h.app.session.presets.len();
     let undo0 = h.app.session.undo.len();
     let d = dialog(&mut h);
@@ -128,7 +126,7 @@ fn cancelling_the_review_discards_the_recipe() {
 /// Import adjustments step, and the import is still one undo step.
 #[test]
 fn confirming_with_a_recipe_sets_it_on_the_new_photos() {
-    let (mut h, dir) = review("confirm");
+    let (dir, mut h) = review("confirm");
     let undo0 = h.app.session.undo.len();
     let d = dialog(&mut h);
     d.recipe.insert("light.exposure".into(), 0.5);
@@ -150,7 +148,7 @@ fn confirming_with_a_recipe_sets_it_on_the_new_photos() {
 /// Confirming without a recipe adds no Import adjustments step.
 #[test]
 fn confirming_without_a_recipe_adds_no_adjustment_step() {
-    let (mut h, dir) = review("plain");
+    let (dir, mut h) = review("plain");
     let r = h.request("ui.dialog.confirm", json!({}), T);
     assert_eq!(r["ok"], true, "{r}");
     finish_import(&mut h);

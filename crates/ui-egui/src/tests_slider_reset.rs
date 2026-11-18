@@ -62,7 +62,7 @@ fn double_click(h: &mut Headless, id: &str, fx: f32) {
 }
 
 #[test]
-fn double_clicking_a_sliders_name_resets_it_in_one_step() {
+fn double_clicking_a_sliders_name_or_thumb_resets_it_in_one_step() {
     let mut h = edit_panel();
     for (control, edited) in EDITED {
         set(&mut h, control, edited);
@@ -73,13 +73,8 @@ fn double_clicking_a_sliders_name_resets_it_in_one_step() {
         ask(&mut h, "engine.execute", json!({"command": "edit.undo"}));
         assert_eq!(value(&h, control), edited, "{control}: undo brings the edit back");
     }
-}
-
-/// The first click of the double-click lands a few points off the thumb's centre: it leaves the value
-/// alone (it used to move it there, a history step of its own before the reset).
-#[test]
-fn double_clicking_a_sliders_thumb_resets_it_in_one_step() {
-    let mut h = edit_panel();
+    // the thumb: the first click of the double-click lands a few points off its centre and leaves the value alone
+    // (it used to move it there, a history step of its own before the reset)
     for (control, edited) in EDITED {
         set(&mut h, control, edited);
         let undo = h.app.session.undo.len();
@@ -90,12 +85,7 @@ fn double_clicking_a_sliders_thumb_resets_it_in_one_step() {
         ask(&mut h, "engine.execute", json!({"command": "edit.undo"}));
         assert_eq!(value(&h, control), edited, "{control}: undo brings the edit back");
     }
-}
-
-/// A click on the thumb leaves the value alone; a click elsewhere on the track still moves it there.
-#[test]
-fn a_click_on_the_thumb_keeps_the_value() {
-    let mut h = edit_panel();
+    // a click on the thumb leaves the value alone; a click elsewhere on the track still moves it there
     set(&mut h, "light.exposure", 1.25);
     let fx = thumb_fx(&h, "light.exposure", -4.0);
     ask(&mut h, "ui.clickWidget", json!({"id": "slider:light.exposure", "fx": fx}));
@@ -136,4 +126,30 @@ fn arrows_still_change_the_photo_after_a_slider_edit() {
     assert_ne!(next, first, "Right shows the next photo after a develop edit");
     ask(&mut h, "ui.key", json!({"key": "ArrowLeft"}));
     assert_eq!(h.app.session.selection.active.unwrap(), first, "Left goes back");
+}
+
+/// A raw starts with sharpening 40 and colour noise reduction 25 (issue #1244): resetting a slider by its name goes
+/// back to the photo's own default, not the spec table's neutral 0, for every control that starts elsewhere.
+#[test]
+fn a_reset_goes_to_the_photos_own_default_for_every_control() {
+    let mut app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let id = lcc_catalog::PhotoId(app.session.visible_cloned()[0].0);
+    let mut raw = (*app.session.catalog.photo(id).unwrap().clone()).clone();
+    let id = lcc_catalog::PhotoId(9_000_001);
+    raw.id = id;
+    raw.kind = lcc_catalog::MediaKind::Raw;
+    raw.preview_only = None;
+    app.session.catalog.apply(lcc_catalog::Op::AddPhoto { photo: Box::new(raw.clone()) }).unwrap();
+    app.session.selection.active = Some(id);
+    let defaults = raw.camera_defaults();
+    let mut nonzero = Vec::new();
+    for spec in lcc_develop::controls::CONTROLS {
+        let Some(own) = lcc_develop::controls::get(&defaults, spec.id) else { continue };
+        let reset = crate::panels::edit::photo_default_spec(&app, spec).map_or(spec.default, |s| s.default);
+        assert!((reset - own.clamp(spec.min, spec.max)).abs() < 1e-9, "{}: resets to {reset}, the photo starts at {own}", spec.id);
+        if own != spec.default {
+            nonzero.push(spec.id);
+        }
+    }
+    assert!(nonzero.contains(&"detail.sharpenAmount"), "{nonzero:?}");
 }

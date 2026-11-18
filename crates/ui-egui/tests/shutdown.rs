@@ -11,6 +11,7 @@ use lcc_ui_egui::{LccApp, Services};
 #[test]
 fn shutdown_leaves_no_render_worker_running() {
     let services = Services { png: None, ..Default::default() };
+    lcc_engine::scene_disk::use_build_dir();
     let mut h = Headless::new(LccApp::new(lcc_engine::Session::with_demo(), services), [1200.0, 760.0], 1.0);
     // frames until the grid's thumbnails are being rendered on the workers
     let t0 = Instant::now();

@@ -35,17 +35,49 @@ const OPEN: Option<SectionType> = Some(SectionType::OpenFolder);
 const CLOSED: Option<SectionType> = Some(SectionType::ClosedFolder);
 
 #[test]
-fn flat_layers() {
+fn flat_grouped_and_irregular_layer_lists_become_trees() {
     let f = file_with(vec![rec("a", None), rec("b", None), rec("c", None)]);
     let t = f.layer_tree();
     assert_eq!(names(&f, &t), "a,b,c");
     assert!(t.iter().all(|n| !n.is_group()));
-}
-
-#[test]
-fn empty_file_has_empty_tree() {
-    let f = testgen::merged_only(Version::Psd, ColorMode::Rgb, 8, Compression::Raw, 1, 1);
-    assert!(f.layer_tree().is_empty());
+    // empty file has empty tree
+    {
+        let f = testgen::merged_only(Version::Psd, ColorMode::Rgb, 8, Compression::Raw, 1, 1);
+        assert!(f.layer_tree().is_empty());
+    }
+    // closed group
+    {
+        let f = file_with(vec![rec("</Layer group>", END), rec("x", None), rec("G", CLOSED)]);
+        assert_eq!(names(&f, &f.layer_tree()), "G[x]");
+    }
+    // empty group
+    {
+        let f = file_with(vec![rec("</Layer group>", END), rec("G", OPEN)]);
+        let t = f.layer_tree();
+        assert_eq!(names(&f, &t), "G[]");
+        assert!(t[0].children().is_empty());
+    }
+    // sibling groups
+    {
+        let f =
+            file_with(vec![rec("</Layer group>", END), rec("a", None), rec("G1", OPEN), rec("</Layer group>", END), rec("b", None), rec("G2", OPEN)]);
+        assert_eq!(names(&f, &f.layer_tree()), "G1[a],G2[b]");
+    }
+    // folder without divider is empty group
+    {
+        let f = file_with(vec![rec("a", None), rec("G", OPEN), rec("b", None)]);
+        assert_eq!(names(&f, &f.layer_tree()), "a,G[],b");
+    }
+    // unclosed divider hoists children
+    {
+        let f = file_with(vec![rec("a", None), rec("</Layer group>", END), rec("b", None), rec("c", None)]);
+        assert_eq!(names(&f, &f.layer_tree()), "a,b,c");
+    }
+    // other section type is layer
+    {
+        let f = file_with(vec![rec("a", Some(SectionType::Other)), rec("b", Some(SectionType::Unknown(9)))]);
+        assert_eq!(names(&f, &f.layer_tree()), "a,b");
+    }
 }
 
 #[test]
@@ -64,12 +96,6 @@ fn single_group() {
 }
 
 #[test]
-fn closed_group() {
-    let f = file_with(vec![rec("</Layer group>", END), rec("x", None), rec("G", CLOSED)]);
-    assert_eq!(names(&f, &f.layer_tree()), "G[x]");
-}
-
-#[test]
 fn nested_groups() {
     let f = file_with(vec![
         rec("</Layer group>", END),
@@ -84,20 +110,6 @@ fn nested_groups() {
     let t = f.layer_tree();
     assert_eq!(names(&f, &t), "Outer[a,Inner[b],c],top");
     assert_eq!(t[0].count(), 5);
-}
-
-#[test]
-fn empty_group() {
-    let f = file_with(vec![rec("</Layer group>", END), rec("G", OPEN)]);
-    let t = f.layer_tree();
-    assert_eq!(names(&f, &t), "G[]");
-    assert!(t[0].children().is_empty());
-}
-
-#[test]
-fn sibling_groups() {
-    let f = file_with(vec![rec("</Layer group>", END), rec("a", None), rec("G1", OPEN), rec("</Layer group>", END), rec("b", None), rec("G2", OPEN)]);
-    assert_eq!(names(&f, &f.layer_tree()), "G1[a],G2[b]");
 }
 
 #[test]
@@ -192,18 +204,6 @@ fn layer_tree_max_depth_bounds_deep_unclosed_chain() {
     assert_eq!(names(&f, &capped[..2]), "l0,l1");
 }
 #[test]
-fn folder_without_divider_is_empty_group() {
-    let f = file_with(vec![rec("a", None), rec("G", OPEN), rec("b", None)]);
-    assert_eq!(names(&f, &f.layer_tree()), "a,G[],b");
-}
-
-#[test]
-fn unclosed_divider_hoists_children() {
-    let f = file_with(vec![rec("a", None), rec("</Layer group>", END), rec("b", None), rec("c", None)]);
-    assert_eq!(names(&f, &f.layer_tree()), "a,b,c");
-}
-
-#[test]
 fn lsdk_is_honored() {
     let mut end = rec("</Layer group>", None);
     let mut b = TaggedBlock::section_divider(SectionType::BoundingDivider, None, None);
@@ -211,12 +211,6 @@ fn lsdk_is_honored() {
     end.blocks.push(b);
     let f = file_with(vec![end, rec("x", None), rec("G", OPEN)]);
     assert_eq!(names(&f, &f.layer_tree()), "G[x]");
-}
-
-#[test]
-fn other_section_type_is_layer() {
-    let f = file_with(vec![rec("a", Some(SectionType::Other)), rec("b", Some(SectionType::Unknown(9)))]);
-    assert_eq!(names(&f, &f.layer_tree()), "a,b");
 }
 
 #[test]

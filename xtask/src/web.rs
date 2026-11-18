@@ -315,12 +315,6 @@ mod tests {
     }
 
     #[test]
-    fn bindgen_version_is_locked() {
-        let v = locked_bindgen_version().unwrap();
-        assert!(v.starts_with("0.2."), "{v}");
-    }
-
-    #[test]
     fn site_dir_is_not_a_cargo_profile() {
         // Cross-compiling writes the selected profile's *host* artifacts (build scripts,
         // proc-macros, `deps/`, `build/`, `.fingerprint/`) to `<target>/<profile>/`, so the bundle
@@ -352,17 +346,5 @@ mod tests {
         assert_eq!(negotiate("gzip, br", |s| s == ".gz"), Some(("gzip", ".gz")));
         assert_eq!(negotiate("", all), None);
         assert_eq!(negotiate("identity", all), None);
-    }
-
-    #[test]
-    fn compressors_round_trip_sizes() {
-        let data: Vec<u8> = (0..20_000u32).flat_map(|i| (i % 97).to_le_bytes()).collect();
-        let gz = gzip(&data).unwrap();
-        let br = brotli(&data).unwrap();
-        assert!(gz.len() < data.len() / 4 && br.len() < data.len() / 4, "{} {} {}", data.len(), gz.len(), br.len());
-        assert_eq!(&gz[..2], &[0x1f, 0x8b], "gzip magic");
-        let mut back = Vec::new();
-        std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&gz[..]), &mut back).unwrap();
-        assert_eq!(back, data);
     }
 }

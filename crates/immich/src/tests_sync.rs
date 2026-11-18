@@ -438,3 +438,66 @@ fn hostile_json_never_panics_the_decoders() {
         }
     }
 }
+
+/// Immich has no "none" for a location or a capture time. Cleared in the catalog, the field is
+/// held: nothing is sent or pulled, and the base keeps Immich's value so every later run reads
+/// the same one-sided catalog change (not an Immich change to pull back, not a conflict).
+#[test]
+fn a_cleared_location_or_date_is_held_not_pulled_back() {
+    let cfg = SyncConfig::default();
+    let with = Snapshot { location: Some((48.0, 2.0)), captured: Some("2024-01-02T03:04:05".into()), ..Snapshot::default() };
+    let cleared = Snapshot::default();
+    let none = BTreeSet::new();
+    let mut base = with.clone();
+    for _ in 0..3 {
+        let o = run(Some(&base), &cleared, &with, &cfg);
+        assert_eq!(o.held, [Field::Location, Field::Captured].into());
+        assert!(o.is_noop(), "nothing to send, nothing to take, no conflict: {o:?}");
+        assert!(sync::remote_update(&o.target, &o.held, &cfg, None).is_empty(), "there is nothing Immich could be sent");
+        base = sync::next_base(&o, Some(&base), &cleared, &with, &none);
+        assert_eq!(base.location, with.location, "the base does not move to the cleared value");
+        assert_eq!(base.captured, with.captured);
+    }
+    // the bug: with the cleared value as the base, the next run reads Immich's old value as a
+    // change made there and pulls it back
+    let o = run(Some(&cleared), &cleared, &with, &cfg);
+    assert_eq!(o.to_local, [Field::Location, Field::Captured].into());
+    // Immich changing it afterwards is a change on both sides: the rule (ask) decides
+    let moved = Snapshot { location: Some((1.0, 1.0)), ..with.clone() };
+    let o = run(Some(&base), &cleared, &moved, &cfg);
+    assert_eq!(o.conflicts, [Field::Location].into());
+    // a value set in the catalog is still sent
+    let o = run(Some(&with), &moved, &with, &cfg);
+    assert_eq!(o.to_remote, [Field::Location].into());
+    assert!(o.held.is_empty());
+}
+
+/// A pull the catalog did not take (the photo changed during the run, or the write failed) does
+/// not move the base for those fields, so the next run comes to the same decision.
+#[test]
+fn an_unapplied_pull_keeps_the_base_of_its_fields() {
+    let cfg = SyncConfig::default();
+    let base = snap(2, "old", &["a"]);
+    let (l, r) = (snap(4, "old", &["a"]), snap(2, "new", &["a", "b"]));
+    let o = run(Some(&base), &l, &r, &cfg);
+    assert_eq!(o.to_local, [Field::Description, Field::Keywords].into());
+    assert_eq!(o.to_remote, [Field::Rating].into());
+    // applied: the base is what both sides hold
+    assert_eq!(sync::next_base(&o, Some(&base), &l, &r, &BTreeSet::new()), o.target);
+    // not applied: the pushed rating is common now, the pulled fields are as they were
+    let kept = sync::next_base(&o, Some(&base), &l, &r, &o.to_local);
+    assert_eq!((kept.rating, kept.description.as_str()), (4, "old"));
+    assert_eq!(kept.keywords, base.keywords);
+    // …so the next run (Immich now has the rating) pulls the same fields again and pushes nothing
+    let r2 = snap(4, "new", &["a", "b"]);
+    let again = run(Some(&kept), &l, &r2, &cfg);
+    assert_eq!(again.to_local, [Field::Description, Field::Keywords].into());
+    assert!(again.to_remote.is_empty() && again.conflicts.is_empty(), "{again:?}");
+    // whereas the moved base makes the catalog's old text look like a new edit to send
+    let wrong = run(Some(&o.target), &l, &r2, &cfg);
+    assert_eq!(wrong.to_remote, [Field::Description, Field::Keywords].into());
+    // never synced before: the catalog's own value at the start of the run stands in
+    let o = run(None, &snap(0, "", &[]), &snap(3, "theirs", &[]), &cfg);
+    let kept = sync::next_base(&o, None, &snap(0, "", &[]), &snap(3, "theirs", &[]), &o.to_local);
+    assert_eq!((kept.rating, kept.description.as_str()), (0, ""));
+}

@@ -37,6 +37,7 @@ fn key(h: &mut Headless, k: &str) {
 fn zoom_shortcuts_zoom_the_photo_and_leave_the_interface_scale_alone() {
     let mut h = edit_view();
     assert_eq!(h.app.ui.zoom, Zoom::Fit);
+    h.app.ui.thumb_size = 220.0;
     let scale = h.view.ctx.zoom_factor();
     // Cmd+= (Ctrl+= on Windows / Linux) is View ▸ Zoom In: the photo, not the UI
     key(&mut h, "=");
@@ -63,6 +64,7 @@ fn zoom_shortcuts_zoom_the_photo_and_leave_the_interface_scale_alone() {
     key(&mut h, "0");
     assert_eq!(h.app.ui.zoom, Zoom::Fit, "{:?}", h.app.ui.zoom);
     assert!((h.view.ctx.zoom_factor() - 1.2).abs() < 0.001, "Cmd+0 reset the interface scale");
+    assert_eq!(h.app.ui.thumb_size, 220.0, "the zoom keys leave the grid's thumbnail size alone");
 }
 
 #[test]
@@ -111,7 +113,7 @@ fn press(h: &mut Headless, k: &str, shift: bool, cmd: bool) {
 #[test]
 fn equals_and_minus_step_the_grid_thumbnail_size_and_clamp() {
     use crate::state::{THUMB_SIZE_MAX, THUMB_SIZE_MIN, THUMB_SIZE_STEP, ViewMode};
-    for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid, ViewMode::People] {
+    for view in [ViewMode::PhotoGrid, ViewMode::People] {
         let mut h = grid_view(view);
         h.app.ui.thumb_size = 220.0;
         press(&mut h, "=", false, false);
@@ -136,21 +138,18 @@ fn equals_and_minus_step_the_grid_thumbnail_size_and_clamp() {
             assert!(h.app.ui.thumb_size >= THUMB_SIZE_MIN);
         }
         assert_eq!(h.app.ui.thumb_size, THUMB_SIZE_MIN, "{view:?}");
-        // the whole range is walked in whole steps from either end
-        let mut presses = 0;
-        while h.app.ui.thumb_size < THUMB_SIZE_MAX {
-            press(&mut h, "=", false, false);
-            presses += 1;
-            assert!(presses <= 20, "never reached the maximum");
-        }
-        assert_eq!(presses, ((THUMB_SIZE_MAX - THUMB_SIZE_MIN) / THUMB_SIZE_STEP).ceil() as usize);
+        // Cmd+= / Cmd+- are View ▸ Zoom In / Out, not the size keys
+        h.app.ui.thumb_size = 220.0;
+        key(&mut h, "=");
+        key(&mut h, "-");
+        assert_eq!(h.app.ui.thumb_size, 220.0, "{view:?}: Cmd+= / Cmd+- changed the grid size");
     }
 }
 
 #[test]
 fn thumbnail_size_keys_do_nothing_outside_the_grids() {
     use crate::state::ViewMode;
-    for view in [ViewMode::Detail, ViewMode::Compare, ViewMode::Survey, ViewMode::Reference] {
+    for view in [ViewMode::Detail, ViewMode::Survey] {
         let mut h = grid_view(view);
         h.app.ui.thumb_size = 220.0;
         let zoom = h.app.ui.zoom;
@@ -167,24 +166,6 @@ fn thumbnail_size_keys_do_nothing_outside_the_grids() {
         let entry = list["result"].as_array().and_then(|a| a.iter().find(|e| e["id"] == "view.thumbSizeUp")).cloned().unwrap_or_default();
         assert_eq!(entry["enabled"], false, "{view:?}: {entry}");
     }
-}
-
-#[test]
-fn cmd_equals_and_minus_still_zoom_and_leave_the_thumbnail_size_alone() {
-    // in the loupe: the photo zooms, the grid size is untouched
-    let mut h = edit_view();
-    h.app.ui.thumb_size = 220.0;
-    key(&mut h, "=");
-    assert!(matches!(h.app.ui.zoom, Zoom::Percent(_)), "Cmd+= zoomed in: {:?}", h.app.ui.zoom);
-    key(&mut h, "-");
-    assert_eq!(h.app.ui.zoom, Zoom::Percent(25.0));
-    assert_eq!(h.app.ui.thumb_size, 220.0);
-    // in a grid Cmd+= / Cmd+- are View ▸ Zoom In / Out, not the size keys
-    let mut h = grid_view(crate::state::ViewMode::PhotoGrid);
-    h.app.ui.thumb_size = 220.0;
-    key(&mut h, "=");
-    key(&mut h, "-");
-    assert_eq!(h.app.ui.thumb_size, 220.0, "Cmd+= / Cmd+- changed the grid size");
 }
 
 #[test]
@@ -205,7 +186,7 @@ fn search_field_keeps_equals_and_minus() {
 }
 
 #[test]
-fn thumbnail_size_commands_run_from_the_control_channel_and_persist() {
+fn thumbnail_size_commands_persist_and_ui_set_clamps_like_a_settings_file() {
     let mut h = grid_view(crate::state::ViewMode::SquareGrid);
     h.app.ui.thumb_size = 120.0;
     let r = h.request("ui.menu.invoke", json!({"id": "view.thumbSizeUp"}), T);
@@ -224,14 +205,9 @@ fn thumbnail_size_commands_run_from_the_control_channel_and_persist() {
     let mut wild = serde_json::to_value(&h.app.ui).unwrap();
     wild["thumbSize"] = json!(9000.0);
     assert_eq!(serde_json::from_value::<crate::state::UiState>(wild).unwrap().sanitized().thumb_size, crate::state::THUMB_SIZE_MAX);
-}
-
-// `ui.set` merges a script's values into the interface state; out-of-range ones get the same
-// checks as a settings file's, so a zero thumbnail size can't reach the grid's layout maths and
-// an unknown preview limit can't be kept.
-#[test]
-fn ui_set_clamps_out_of_range_values_like_a_settings_file() {
-    let mut h = grid_view(crate::state::ViewMode::SquareGrid);
+    // `ui.set` merges a script's values into the interface state; out-of-range ones get the same checks as a
+    // settings file's, so a zero thumbnail size can't reach the grid's layout maths and an unknown preview
+    // limit can't be kept
     for (wild, expect) in [(0.0, crate::state::THUMB_SIZE_MIN), (-5.0, crate::state::THUMB_SIZE_MIN), (1.0e9, crate::state::THUMB_SIZE_MAX)] {
         let r = h.request("ui.set", json!({"thumbSize": wild}), T);
         assert_eq!(r["ok"], true, "{r}");

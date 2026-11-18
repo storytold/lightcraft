@@ -183,59 +183,62 @@ mod cancellation_tests {
     use lcc_catalog::PhotoId;
 
     #[test]
-    fn pre_cancelled_recheck_does_not_read_files_or_advance_progress() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let probe_calls = calls.clone();
-        let probe: FileProbe = Arc::new(move |_| {
-            probe_calls.fetch_add(1, Ordering::Relaxed);
-            Ok(ProbeInfo::default())
-        });
-        let stale = vec![Stale { id: PhotoId(1), path: "photo.raw".into(), preview_only: Some("preview".into()), preview_checked: "0.5.0".into() }];
-        let cancel = AtomicBool::new(true);
-        let progress = Mutex::new(Vec::new());
+    fn a_pre_cancelled_recheck_reads_no_files_and_progress_counts_failed_probes_as_completed() {
+        // pre cancelled recheck does not read files or advance progress
+        {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let probe_calls = calls.clone();
+            let probe: FileProbe = Arc::new(move |_| {
+                probe_calls.fetch_add(1, Ordering::Relaxed);
+                Ok(ProbeInfo::default())
+            });
+            let stale =
+                vec![Stale { id: PhotoId(1), path: "photo.raw".into(), preview_only: Some("preview".into()), preview_checked: "0.5.0".into() }];
+            let cancel = AtomicBool::new(true);
+            let progress = Mutex::new(Vec::new());
 
-        let results = probe_cancellable_with_progress(&probe, stale, &cancel, &|done| {
-            progress.lock().unwrap_or_else(|e| e.into_inner()).push(done);
-        });
+            let results = probe_cancellable_with_progress(&probe, stale, &cancel, &|done| {
+                progress.lock().unwrap_or_else(|e| e.into_inner()).push(done);
+            });
 
-        assert_eq!(calls.load(Ordering::Relaxed), 0);
-        assert_eq!(results.len(), 1);
-        assert!(results[0].1.is_err(), "a pre-cancelled file has no probe result");
-        assert_eq!(progress.lock().unwrap_or_else(|e| e.into_inner()).last(), Some(&0));
-    }
+            assert_eq!(calls.load(Ordering::Relaxed), 0);
+            assert_eq!(results.len(), 1);
+            assert!(results[0].1.is_err(), "a pre-cancelled file has no probe result");
+            assert_eq!(progress.lock().unwrap_or_else(|e| e.into_inner()).last(), Some(&0));
+        }
+        // recheck progress counts failed probes as completed
+        {
+            const FILES: usize = 3;
+            let calls = Arc::new(AtomicUsize::new(0));
+            let probe_calls = calls.clone();
+            let probe: FileProbe = Arc::new(move |path| {
+                probe_calls.fetch_add(1, Ordering::Relaxed);
+                if path == "unreadable.raw" { Err("injected probe failure".into()) } else { Ok(ProbeInfo::default()) }
+            });
+            let stale: Vec<_> = ["first.raw", "unreadable.raw", "last.raw"]
+                .into_iter()
+                .enumerate()
+                .map(|(i, path)| Stale {
+                    id: PhotoId(i as u64),
+                    path: path.into(),
+                    preview_only: Some("preview".into()),
+                    preview_checked: "0.5.0".into(),
+                })
+                .collect();
+            let cancel = AtomicBool::new(false);
+            let progress = Mutex::new(Vec::new());
 
-    #[test]
-    fn recheck_progress_counts_failed_probes_as_completed() {
-        const FILES: usize = 3;
-        let calls = Arc::new(AtomicUsize::new(0));
-        let probe_calls = calls.clone();
-        let probe: FileProbe = Arc::new(move |path| {
-            probe_calls.fetch_add(1, Ordering::Relaxed);
-            if path == "unreadable.raw" { Err("injected probe failure".into()) } else { Ok(ProbeInfo::default()) }
-        });
-        let stale: Vec<_> = ["first.raw", "unreadable.raw", "last.raw"]
-            .into_iter()
-            .enumerate()
-            .map(|(i, path)| Stale {
-                id: PhotoId(i as u64),
-                path: path.into(),
-                preview_only: Some("preview".into()),
-                preview_checked: "0.5.0".into(),
-            })
-            .collect();
-        let cancel = AtomicBool::new(false);
-        let progress = Mutex::new(Vec::new());
+            let results = probe_cancellable_with_progress(&probe, stale, &cancel, &|done| {
+                progress.lock().unwrap_or_else(|e| e.into_inner()).push(done);
+            });
 
-        let results = probe_cancellable_with_progress(&probe, stale, &cancel, &|done| {
-            progress.lock().unwrap_or_else(|e| e.into_inner()).push(done);
-        });
-
-        assert_eq!(calls.load(Ordering::Relaxed), FILES);
-        assert_eq!(results.iter().filter(|(_, result)| result.is_err()).count(), 1);
-        assert_eq!(results[1].0.path, "unreadable.raw");
-        assert!(results[1].1.is_err());
-        assert_eq!(results.len(), FILES);
-        assert_eq!(progress.lock().unwrap_or_else(|e| e.into_inner()).last(), Some(&FILES));
+            assert_eq!(calls.load(Ordering::Relaxed), FILES);
+            assert_eq!(results.iter().filter(|(_, result)| result.is_err()).count(), 1);
+            assert_eq!(results[1].0.path, "unreadable.raw");
+            assert!(results[1].1.is_err());
+            assert_eq!(results.len(), FILES);
+            assert_eq!(progress.lock().unwrap_or_else(|e| e.into_inner()).last(), Some(&FILES));
+        }
     }
 
     #[test]

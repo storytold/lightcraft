@@ -61,7 +61,12 @@ fn widgets(h: &Headless, prefix: &str) -> Vec<String> {
 fn colour_range_picks_add_remove_and_move() {
     let mut h = detail("panel.masking");
     click(&mut h, "maskNew:colorRange");
+    // it arms like the other tools: no mask until the first click on the photo
+    h.step();
+    assert!(develop(&h).masks.is_empty(), "armed: no mask yet");
+    assert_eq!(h.app.session.active_mask, None);
     pointer(&mut h, json!([{"kind": "down", "x": 0.3, "y": 0.3}, {"kind": "up", "x": 0.3, "y": 0.3}]));
+    assert_eq!(h.app.ui.tool, "colorRange", "the picker stays on to add more");
     let samples = |h: &Headless| match develop(h).masks.first().and_then(|m| m.components.first()).map(|c| c.shape.clone()) {
         Some(MaskShape::ColorRange { samples, areas, .. }) => (samples.len(), lcc_develop::color_range_pins(&areas).len()),
         other => panic!("{other:?}"),
@@ -134,22 +139,6 @@ fn a_hovered_spot_shows_both_pins() {
     assert!(!widgets(&h, "spotSource:").contains(&"spotSource:0".to_string()));
     pointer(&mut h, json!([{"kind": "move", "x": 0.3, "y": 0.5}]));
     assert!(widgets(&h, "spotSource:").contains(&"spotSource:0".to_string()), "the hovered spot's source pin, to move it");
-}
-
-/// Color Range arms like the other tools: the tile makes no mask until the first click on the
-/// photo, which makes it and picks the colour there.
-#[test]
-fn color_range_is_armed_until_the_first_click() {
-    let mut h = detail("panel.masking");
-    click(&mut h, "maskNew:colorRange");
-    h.step();
-    assert!(develop(&h).masks.is_empty(), "armed: no mask yet");
-    assert_eq!(h.app.session.active_mask, None);
-    pointer(&mut h, json!([{"kind": "down", "x": 0.4, "y": 0.4}, {"kind": "up", "x": 0.4, "y": 0.4}]));
-    let d = develop(&h);
-    assert_eq!(d.masks.len(), 1);
-    assert!(matches!(&d.masks[0].components[0].shape, MaskShape::ColorRange { samples, .. } if samples.len() == 1), "{:?}", d.masks[0]);
-    assert_eq!(h.app.ui.tool, "colorRange", "the picker stays on to add more");
 }
 
 /// Object, with SAM 2.1 installed (`<PREFIX>_SAM2_DIR` = its folder): armed until the first
