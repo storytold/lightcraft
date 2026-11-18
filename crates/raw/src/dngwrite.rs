@@ -123,6 +123,9 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
         data: &raw.data,
         cfa: raw.cfa.as_ref(),
         bits: raw.bits,
+        linearized: raw.linearized,
+        // The app model stores already-decoded samples, not a pending source table.
+        linearization_table: None,
         black: &raw.black,
         white: &raw.white,
         active_area: raw.active_area,
