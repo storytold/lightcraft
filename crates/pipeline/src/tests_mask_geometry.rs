@@ -71,7 +71,12 @@ fn mark_at(s: &DevelopSettings) -> (f64, f64) {
     let req = RenderRequest::fit(W, H);
     let info = SourceInfo::default();
     let (a, b) = (render(&marked(true), &info, s, &req).image, render(&marked(false), &info, s, &req).image);
-    centroid(a.width, (0..a.data.len()).map(|i| (luma(&a, i) - luma(&b, i)).max(0.0)))
+    centroid(a.width, (0..a.data.len()).map(|i| above_dither(luma(&a, i) - luma(&b, i))))
+}
+
+/// A difference between two renders, without the one level of 8-bit dither any pixel can differ by.
+fn above_dither(d: f64) -> f64 {
+    (d - 1.5).max(0.0)
 }
 
 fn centroid(w: usize, weights: impl Iterator<Item = f64>) -> (f64, f64) {
@@ -87,7 +92,7 @@ fn centroid(w: usize, weights: impl Iterator<Item = f64>) -> (f64, f64) {
 
 /// Where the mask brightened the render (`plain` is the same render without the mask).
 fn mask_at(masked: &Rgba8, plain: &Rgba8) -> (f64, f64) {
-    centroid(masked.width, (0..masked.data.len()).map(|i| (luma(masked, i) - luma(plain, i)).max(0.0)))
+    centroid(masked.width, (0..masked.data.len()).map(|i| above_dither(luma(masked, i) - luma(plain, i))))
 }
 
 /// The geometry changes a user makes after drawing a mask.

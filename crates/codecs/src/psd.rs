@@ -40,36 +40,51 @@ impl<'a> Rd<'a> {
     }
 }
 
-pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
-    let mut r = Rd { b: bytes, p: 0 };
-    if r.take(4)? != b"8BPS" {
-        return Err(err("bad signature"));
-    }
-    let version = r.u16()?;
-    let psb = match version {
-        1 => false,
-        2 => true,
-        _ => return Err(err("bad version")),
-    };
-    r.take(6)?;
-    let channels = r.u16()? as usize;
-    let height = r.u32()? as usize;
-    let width = r.u32()? as usize;
-    let depth = r.u16()?;
-    let mode = r.u16()?;
-    check_size(F, width as u64, height as u64, opts)?;
-    if channels == 0 || channels > 56 {
-        return Err(err("bad channel count"));
-    }
+/// The header (`craft-psd`), colour mode data and image resources, with a reader at the layer and mask section.
+struct Start<'a> {
+    psb: bool,
+    channels: usize,
+    width: usize,
+    height: usize,
+    depth: u16,
+    mode: u16,
+    color_mode_data: &'a [u8],
+    resources: Vec<craft_psd::ImageResource>,
+    r: Rd<'a>,
+}
 
-    // Colour mode data (palette for indexed).
+fn start<'a>(bytes: &'a [u8], opts: &DecodeOptions) -> Result<Start<'a>> {
+    // the size limit first, from the header's fixed fields, so an oversized file is `TooLarge` as for other formats
+    if let (Some(&[h0, h1, h2, h3]), Some(&[w0, w1, w2, w3])) = (bytes.get(14..18), bytes.get(18..22)) {
+        check_size(F, u64::from(u32::from_be_bytes([w0, w1, w2, w3])), u64::from(u32::from_be_bytes([h0, h1, h2, h3])), opts)?;
+    }
+    let h = craft_psd::Header::from_bytes(bytes).map_err(|e| match e {
+        craft_psd::PsdError::UnexpectedEof { .. } => err("truncated"),
+        e => err(&e.to_string()),
+    })?;
+    let mut r = Rd { b: bytes, p: 26 };
     let cm_len = r.u32()? as usize;
     let color_mode_data = r.take(cm_len)?;
-
-    // Image resources.
     let res_len = r.u32()? as usize;
-    let res = r.take(res_len)?;
-    let (icc, exif, xmp) = resources(res);
+    r.take(res_len)?;
+    // a resource section that doesn't parse is left out: the picture still decodes, without its profile and metadata
+    let resources = craft_psd::Head::from_bytes(bytes).map(|head| head.resources).unwrap_or_default();
+    Ok(Start {
+        psb: h.version.is_psb(),
+        channels: usize::from(h.channels),
+        width: h.width as usize,
+        height: h.height as usize,
+        depth: h.depth,
+        mode: h.color_mode.as_u16(),
+        color_mode_data,
+        resources,
+        r,
+    })
+}
+
+pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
+    let Start { psb, channels, width, height, depth, mode, color_mode_data, resources: res, mut r } = start(bytes, opts)?;
+    let (icc, exif, xmp) = resources(&res);
 
     // Layer and mask information: only the layer count sign matters (merged transparency).
     let lm_len = if psb { r.u64()? } else { u64::from(r.u32()?) };
@@ -227,114 +242,13 @@ pub(crate) fn encode(img: &EncodeImage, meta: &EncodeMeta) -> Result<Vec<u8>> {
     if w > MAX_SIDE || h > MAX_SIDE {
         return Err(Error::Encode(format!("{w} × {h} is larger than a PSD can hold ({MAX_SIDE} px a side): use TIFF")));
     }
-    let ch = usize::from(img.channels);
-    let color = if ch <= 2 { 1 } else { 3 };
-    let (depth, bpc) = match img.samples {
-        Samples::U8(_) => (8u16, 1usize),
-        Samples::U16(_) => (16, 2),
+    let samples = match img.samples {
+        Samples::U8(s) => craft_psd::flat::Samples::U8(s),
+        Samples::U16(s) => craft_psd::flat::Samples::U16(s),
         Samples::F32(_) => return Err(Error::Encode("32-bit float PSD is not supported: use TIFF".into())),
     };
-    let (wu, hu) = (w as usize, h as usize);
-    let mut b = Vec::new();
-    b.extend_from_slice(b"8BPS");
-    b.extend_from_slice(&1u16.to_be_bytes());
-    b.extend_from_slice(&[0; 6]);
-    b.extend_from_slice(&(color as u16).to_be_bytes());
-    b.extend_from_slice(&h.to_be_bytes());
-    b.extend_from_slice(&w.to_be_bytes());
-    b.extend_from_slice(&depth.to_be_bytes());
-    b.extend_from_slice(&(if color == 1 { 1u16 } else { 3 }).to_be_bytes());
-    b.extend_from_slice(&0u32.to_be_bytes()); // colour mode data
-    let res = resource_section(meta);
-    b.extend_from_slice(&u32::try_from(res.len()).map_err(|_| Error::Encode("metadata too large for PSD".into()))?.to_be_bytes());
-    b.extend_from_slice(&res);
-    b.extend_from_slice(&0u32.to_be_bytes()); // layer and mask information: none
-    // planar samples, one plane per colour channel (big-endian)
-    let plane = |c: usize| -> Vec<u8> {
-        let mut p = Vec::with_capacity(wu * hu * bpc);
-        match img.samples {
-            Samples::U8(s) => p.extend(s.iter().skip(c).step_by(ch).take(wu * hu)),
-            Samples::U16(s) => s.iter().skip(c).step_by(ch).take(wu * hu).for_each(|v| p.extend_from_slice(&v.to_be_bytes())),
-            Samples::F32(_) => {}
-        }
-        p
-    };
-    if bpc == 1 {
-        b.extend_from_slice(&1u16.to_be_bytes());
-        let mut counts = Vec::with_capacity(color * hu * 2);
-        let mut data = Vec::new();
-        for c in 0..color {
-            for row in plane(c).chunks_exact(wu) {
-                let start = data.len();
-                packbits(row, &mut data);
-                let n = u16::try_from(data.len() - start).map_err(|_| Error::Encode("PSD row too long".into()))?;
-                counts.extend_from_slice(&n.to_be_bytes());
-            }
-        }
-        b.extend_from_slice(&counts);
-        b.extend_from_slice(&data);
-    } else {
-        b.extend_from_slice(&0u16.to_be_bytes());
-        for c in 0..color {
-            b.extend_from_slice(&plane(c));
-        }
-    }
-    Ok(b)
-}
-
-/// The image resources section for `meta`.
-fn resource_section(meta: &EncodeMeta) -> Vec<u8> {
-    let mut out = Vec::new();
-    let mut add = |id: u16, data: &[u8]| {
-        out.extend_from_slice(b"8BIM");
-        out.extend_from_slice(&id.to_be_bytes());
-        out.extend_from_slice(&[0, 0]); // empty Pascal name, padded to even
-        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
-        out.extend_from_slice(data);
-        if data.len() % 2 == 1 {
-            out.push(0);
-        }
-    };
-    if let Some(ppi) = meta.ppi.filter(|p| *p > 0) {
-        // ResolutionInfo: 16.16 fixed pixels per inch, unit 1 (ppi), display unit 1 (inches), twice
-        let fixed = (u32::from(ppi) << 16).to_be_bytes();
-        let one = 1u16.to_be_bytes();
-        add(1005, &[&fixed[..], &one, &one, &fixed, &one, &one].concat());
-    }
-    if let Some(icc) = meta.icc {
-        add(1039, icc);
-    }
-    if let Some(exif) = meta.exif {
-        add(1058, exif);
-    }
-    if let Some(xmp) = meta.xmp {
-        add(1060, xmp.as_bytes());
-    }
-    out
-}
-
-/// PackBits: append one encoded row of `src` to `out` (runs of 2+ equal bytes as repeats, the
-/// rest as literals of at most 128 bytes).
-fn packbits(src: &[u8], out: &mut Vec<u8>) {
-    let mut rest = src;
-    while let Some(&b) = rest.first() {
-        // a run of 2 to 128 equal bytes
-        let run = rest.iter().take(128).take_while(|&&x| x == b).count();
-        if run >= 2 {
-            // 1 - run in 2..=128: -1..=-127, as a signed byte
-            out.push((1 - run as i16) as i8 as u8);
-            out.push(b);
-            rest = rest.get(run..).unwrap_or_default();
-            continue;
-        }
-        // a literal of 1 to 128 bytes: up to the next pair of equal bytes, or the end of the row
-        let unpaired = rest.windows(2).take(128).take_while(|w| w.first() != w.get(1)).count();
-        let len = if unpaired.saturating_add(1) == rest.len() { rest.len() } else { unpaired };
-        let (lit, tail) = rest.split_at_checked(len.clamp(1, 128)).unwrap_or((rest, &[][..]));
-        out.push(lit.len().saturating_sub(1) as u8);
-        out.extend_from_slice(lit);
-        rest = tail;
-    }
+    let metadata = craft_psd::flat::Metadata { icc: meta.icc, exif: meta.exif, xmp: meta.xmp, ppi: meta.ppi };
+    craft_psd::flat::write(w, h, img.channels, samples, metadata).map_err(|error| Error::Encode(error.to_string()))
 }
 
 /// Stored dimensions and EXIF orientation (resource 1058) from the header and image resources,
@@ -342,29 +256,8 @@ fn packbits(src: &[u8], out: &mut Vec<u8>) {
 /// depth, colour mode or compression, or merged image data that runs past the end of the file
 /// (truncated). The run-length data itself is not unpacked.
 pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
-    let mut r = Rd { b: bytes, p: 0 };
-    if r.take(4)? != b"8BPS" {
-        return Err(err("bad signature"));
-    }
-    let psb = match r.u16()? {
-        1 => false,
-        2 => true,
-        _ => return Err(err("bad version")),
-    };
-    r.take(6)?;
-    let channels = r.u16()? as usize;
-    let height = r.u32()? as usize;
-    let width = r.u32()? as usize;
-    let depth = r.u16()?;
-    let mode = r.u16()?;
-    check_size(F, width as u64, height as u64, &DecodeOptions::default())?;
-    if channels == 0 || channels > 56 {
-        return Err(err("bad channel count"));
-    }
-    let cm_len = r.u32()? as usize;
-    let color_mode_data = r.take(cm_len)?;
-    let res_len = r.u32()? as usize;
-    let (_, exif, _) = resources(r.take(res_len)?);
+    let Start { psb, channels, width, height, depth, mode, color_mode_data, resources: res, mut r } = start(bytes, &DecodeOptions::default())?;
+    let (_, exif, _) = resources(&res);
     let lm_len = if psb { r.u64()? as usize } else { r.u32()? as usize };
     r.take(lm_len)?;
     let compression = r.u16()?;
@@ -444,28 +337,12 @@ fn unpackbits(mut src: &[u8], row: &mut [u8]) -> Result<()> {
     Ok(())
 }
 
-fn resources(mut b: &[u8]) -> (Option<Vec<u8>>, Option<Vec<u8>>, Option<String>) {
-    let (mut icc, mut exif, mut xmp) = (None, None, None);
-    while b.len() >= 12 && &b[0..4] == b"8BIM" {
-        let id = u16::from_be_bytes([b[4], b[5]]);
-        let name_len = b[6] as usize;
-        let name_total = (1 + name_len + 1) & !1;
-        let p = 6 + name_total;
-        if p + 4 > b.len() {
-            break;
-        }
-        let size = u32::from_be_bytes([b[p], b[p + 1], b[p + 2], b[p + 3]]) as usize;
-        let start = p + 4;
-        let Some(data) = start.checked_add(size).and_then(|end| b.get(start..end)) else { break };
-        match id {
-            1039 => icc = Some(data.to_vec()),
-            1058 => exif = Some(if data.starts_with(b"Exif\0\0") { data[6..].to_vec() } else { data.to_vec() }),
-            1060 => xmp = Some(String::from_utf8_lossy(data).trim_end_matches('\0').to_string()),
-            _ => {}
-        }
-        let next = start + ((size + 1) & !1);
-        b = b.get(next..).unwrap_or(&[]);
-    }
+/// ICC (1039), EXIF (1058, without its optional `Exif\0\0` prefix) and XMP (1060) resources; the last of each id.
+fn resources(res: &[craft_psd::ImageResource]) -> (Option<Vec<u8>>, Option<Vec<u8>>, Option<String>) {
+    let last = |id: u16| res.iter().rev().find(|r| r.id == id).map(|r| r.data.as_slice());
+    let icc = last(1039).map(<[u8]>::to_vec);
+    let exif = last(1058).map(|d| d.strip_prefix(b"Exif\0\0").unwrap_or(d).to_vec());
+    let xmp = last(1060).map(|d| String::from_utf8_lossy(d).trim_end_matches('\0').to_string());
     (icc, exif, xmp)
 }
 
@@ -514,8 +391,8 @@ mod tests {
 
     #[test]
     fn huge_rle_with_truncated_count_table_is_rejected_before_allocating() {
-        // 1 × 2^30 px, 56 channels: the row table alone would be 56 Gi entries; the file has 4 bytes.
-        let mut b = header(56, 1, 1 << 30, 32, 3, 1);
+        // 1 × 300 000 px, 56 channels: the row table alone would be 16.8 M entries; the file has 4 bytes.
+        let mut b = header(56, 1, 300_000, 32, 3, 1);
         b.extend_from_slice(&[0, 0, 0, 0]);
         let e = decode(&b, &DecodeOptions::default()).unwrap_err();
         assert!(matches!(e, Error::Malformed(_, ref m) if m == "truncated"), "{e:?}");
@@ -523,16 +400,28 @@ mod tests {
 
     #[test]
     fn huge_rle_of_empty_rows_is_rejected_before_allocating() {
-        // 2^30 × 1 px RGB at 32 bits: every row count is 0, which used to zero-pad 3 × 4 GiB.
-        let mut b = header(3, 1 << 30, 1, 32, 3, 1);
+        // 300 000 × 1 px RGB at 32 bits: every row count is 0, which used to zero-pad 3 × 1.2 MB.
+        let mut b = header(3, 300_000, 1, 32, 3, 1);
         b.extend_from_slice(&[0; 6]);
         let e = decode(&b, &DecodeOptions::default()).unwrap_err();
         assert!(matches!(e, Error::Malformed(_, ref m) if m.contains("too short")), "{e:?}");
-        // 1 Gpx RGB 8-bit whose (plausible) row counts claim more data than the file holds.
-        let mut b = header(3, 1 << 20, 1 << 10, 8, 3, 1);
+        // 0.27 Gpx RGB 8-bit whose (plausible) row counts claim more data than the file holds.
+        let mut b = header(3, 1 << 18, 1 << 10, 8, 3, 1);
         b.extend_from_slice(&[0xFF; 3 * 1024 * 2]);
         let e = decode(&b, &DecodeOptions::default()).unwrap_err();
         assert!(matches!(e, Error::Malformed(_, ref m) if m == "truncated"), "{e:?}");
+    }
+
+    #[test]
+    fn a_damaged_resource_section_is_left_out() {
+        // a resource section of 4 bytes that is not an `8BIM` record: the picture decodes without it
+        let mut b = header(3, 1, 1, 8, 3, 0);
+        b[30..34].copy_from_slice(&4u32.to_be_bytes());
+        b.splice(34..34, *b"JUNK");
+        b.extend_from_slice(&[1, 2, 3]);
+        let d = decode(&b, &DecodeOptions::default()).unwrap();
+        assert_eq!((d.width, d.height, d.icc.is_none()), (1, 1, true));
+        assert_eq!(super::header(&b).unwrap(), (1, 1, 1));
     }
 
     #[test]
@@ -565,7 +454,7 @@ mod tests {
         let rows: [&[u8]; 6] = [&[], &[7], &[1, 1], &[1, 2, 3, 3, 3, 4, 5, 5], &[9; 300], &(0..=255u8).cycle().take(700).collect::<Vec<_>>()];
         for row in rows {
             let mut enc = Vec::new();
-            super::packbits(row, &mut enc);
+            craft_psd::compression::packbits::encode(row, &mut enc);
             let mut out = vec![0u8; row.len()];
             unpackbits(&enc, &mut out).unwrap();
             assert_eq!(out, row);
