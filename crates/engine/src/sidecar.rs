@@ -418,12 +418,11 @@ impl SidecarData {
 }
 
 /// The orientation the photo file at `path` was (or would be) made upright by on import
-/// ([`crate::media::ProbeInfo::upright_by`]), probed the same way: the whole file is read. For a photo catalogued
-/// before [`lightcraft_catalog::Meta::file_orientation`] was kept, by Read Metadata from File only.
-fn upright_orientation(path: &str) -> Option<lightcraft_meta::Orientation> {
-    let bytes = std::fs::read(path).ok()?;
-    let name = Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    crate::files::probe_bytes(&name, &bytes).ok()?.upright_by
+/// ([`crate::media::ProbeInfo::upright_by`], by [`crate::files::upright_by`]'s rule): the file is read, up to `max`
+/// bytes (none past that), and nothing but its orientation is worked out. For a photo catalogued before
+/// [`lightcraft_catalog::Meta::file_orientation`] was kept, by Read Metadata from File only.
+fn upright_orientation(path: &str, max: u64) -> Option<lightcraft_meta::Orientation> {
+    crate::files::upright_by(&crate::read_file::read_regular(path, max).ok()?)
 }
 
 /// The orientation the photo file at `path` states, matching what the import stores as
@@ -1306,7 +1305,7 @@ fn file_path(p: &Photo) -> Option<&str> {
 
 /// The XMP packet that describes a photo on disk: its sidecar, else embedded raw/DNG or JPEG XMP.
 pub fn read_packet(original: &str, kind: MediaKind, lookup: SidecarLookup) -> Option<(String, PathBuf)> {
-    match find_packet(original, kind, lookup) {
+    match find_packet(original, kind, lookup, None) {
         Packet::Found(packet, from) => Some((packet, from)),
         Packet::Unreadable(..) | Packet::None => None,
     }
@@ -1322,8 +1321,8 @@ enum Packet {
     None,
 }
 
-/// [`read_packet`], telling a packet that can't be read from none.
-fn find_packet(original: &str, kind: MediaKind, lookup: SidecarLookup) -> Packet {
+/// [`read_packet`], telling a packet that can't be read from none. `raw` is a raw's bytes already read, if they were.
+fn find_packet(original: &str, kind: MediaKind, lookup: SidecarLookup, raw: Option<&[u8]>) -> Packet {
     if let Some(sc) = lookup.find(original) {
         // A discovered sidecar keeps precedence even when reading it fails.
         return match crate::read_file::read_regular(&sc, SIDECAR_READ_MAX) {
@@ -1335,7 +1334,11 @@ fn find_packet(original: &str, kind: MediaKind, lookup: SidecarLookup) -> Packet
         };
     }
     if kind == MediaKind::Raw {
-        return match crate::read_file::read_regular(original, crate::read_file::MAX_MEDIA_BYTES) {
+        let bytes = match raw {
+            Some(b) => Ok(std::borrow::Cow::Borrowed(b)),
+            None => crate::read_file::read_regular(original, crate::read_file::MAX_MEDIA_BYTES).map(std::borrow::Cow::Owned),
+        };
+        return match bytes {
             Ok(bytes) => match lightcraft_meta::embedded(&bytes).xmp {
                 Some(x) => Packet::Found(x, PathBuf::from(original)),
                 None => Packet::None,
@@ -1672,18 +1675,29 @@ impl Session {
     pub fn read_sidecar_op_with_warnings(&self, id: PhotoId) -> Result<Option<(Op, PathBuf, Vec<crate::import::ImportWarning>)>> {
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let Some(orig) = file_path(p) else { return Ok(None) };
-        // a photo catalogued before the file's orientation was kept: Read Metadata from File reads it, once, so its
-        // face boxes are written in the frame the file is stored in from then on (the file is read at most once here)
-        // (probed as the import probes it, so it is the one the photo's size was made upright by)
-        let backfill = if p.meta.file_orientation.is_none() { upright_orientation(orig) } else { None };
-        let mut known: Option<Option<lightcraft_meta::Orientation>> = p.meta.file_orientation.or(backfill).map(Some);
-        let mut orientation_of_file = || *known.get_or_insert_with(|| file_orientation(orig));
-        let (packet, from) = match find_packet(orig, p.kind, self.sidecar_lookup(id)) {
+        // A photo catalogued before the file's orientation was kept gets it here, so its face boxes are written in the
+        // frame the file is stored in from then on. Only a photo with boxes to write needs it: the file isn't read for
+        // one without. It is probed by the import's rule, from the file read at most once, within the media limit.
+        let lookup = self.sidecar_lookup(id);
+        let unknown = p.meta.file_orientation.is_none();
+        // a raw with no sidecar is read whole for its embedded XMP anyway: the orientation comes from the same bytes
+        let raw_bytes = (unknown && p.kind == MediaKind::Raw && lookup.find(orig).is_none())
+            .then(|| crate::read_file::read_regular(orig, crate::read_file::MAX_MEDIA_BYTES).ok())
+            .flatten();
+        let mut probed: Option<Option<lightcraft_meta::Orientation>> = None;
+        let backfill_now = |probed: &mut Option<Option<lightcraft_meta::Orientation>>| {
+            *probed.get_or_insert_with(|| match &raw_bytes {
+                Some(bytes) => crate::files::upright_by(bytes),
+                None => upright_orientation(orig, crate::read_file::MAX_MEDIA_BYTES),
+            })
+        };
+        let (packet, from) = match find_packet(orig, p.kind, lookup, raw_bytes.as_deref()) {
             Packet::Found(packet, from) => (packet, from),
             // one that is there but can't be read fails the read, as before: nothing is reported read from it
             Packet::Unreadable(from, why) => return Err(EngineError::Other(format!("{} can't be read: {why}", from.display()))),
-            // no packet at all: the orientation alone is still news
+            // no packet at all: the orientation alone is news for a photo with boxes to write
             Packet::None => {
+                let backfill = if unknown && !file_regions(p).is_empty() { backfill_now(&mut probed) } else { None };
                 return match backfill {
                     Some(o) => Ok(Some((
                         self.sidecar_op(id, SidecarData { file_orientation: Some(o), ..SidecarData::default() })?,
@@ -1695,9 +1709,15 @@ impl Session {
             }
         };
         let sc = parse_sidecar(&packet, crate::crs::Target::for_photo(p)).map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?;
-        // (as `with_orientation_known`: the catalog's orientation, else the file's, read at most once)
+        // the photo has boxes to write once this is read: its own, or the packet's
+        let backfill = if unknown && (!file_regions(p).is_empty() || sc.regions.as_ref().is_some_and(|r| !r.is_empty())) {
+            backfill_now(&mut probed)
+        } else {
+            None
+        };
+        // The catalog's orientation, else the bounded probe's. Not `file_orientation`: it reads a raw whole, with no limit.
         let sc = match sc.regions_drawn_on {
-            Some(_) => SidecarData { orientation: orientation_of_file().or(sc.orientation), ..sc },
+            Some(_) => SidecarData { orientation: p.meta.file_orientation.or(backfill).or(sc.orientation), ..sc },
             None => sc,
         };
         let sc = SidecarData { file_orientation: backfill, ..sc };
@@ -2882,6 +2902,31 @@ mod tests {
         p.source = Source::File { path: file.to_string_lossy().into() };
         p.meta.file_orientation = None;
         assert!(!sidecar_packet(&p, &lightcraft_catalog::Catalog::new()).contains("mwg-rs:Rotation"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_orientation_backfill_reads_no_more_than_its_limit() {
+        let dir = std::env::temp_dir().join(format!("lc-upright-limit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("t.jpg");
+        let img = lightcraft_raster::Rgba8::from_fn(32, 24, |_, _| [1, 2, 3, 255]);
+        let exif = lightcraft_meta::write_exif(&lightcraft_meta::Metadata {
+            orientation: Some(lightcraft_meta::Orientation::Rotate90),
+            ..Default::default()
+        });
+        let bytes = lightcraft_codecs::encode_jpeg(
+            &lightcraft_codecs::EncodeImage::rgba8(&img),
+            90,
+            Default::default(),
+            &lightcraft_codecs::EncodeMeta { exif: Some(&exif), ..Default::default() },
+        )
+        .unwrap();
+        std::fs::write(&file, &bytes).unwrap();
+        let path = file.to_string_lossy();
+        assert_eq!(upright_orientation(&path, crate::read_file::MAX_MEDIA_BYTES), Some(lightcraft_meta::Orientation::Rotate90));
+        // a file past the limit isn't read (nor held in memory) at all
+        assert_eq!(upright_orientation(&path, bytes.len() as u64 - 1), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -2118,14 +2118,9 @@ fn the_orientation_comes_from_the_catalog_and_read_metadata_fills_it_in() {
         // as a photo catalogued before: no orientation kept
         let mut meta = s.catalog.photo(id).unwrap().meta.clone();
         meta.file_orientation = None;
-        if with_packet {
-            meta.regions = vec![Region {
-                rect: Rect { x0: 0.1, y0: 0.2, x1: 0.3, y1: 0.6 },
-                kind: RegionKind::Face,
-                name: Some("Ann".into()),
-                description: None,
-            }];
-        }
+        // (a face: the orientation is needed, and read, only for a photo with boxes to write)
+        meta.regions =
+            vec![Region { rect: Rect { x0: 0.1, y0: 0.2, x1: 0.3, y1: 0.6 }, kind: RegionKind::Face, name: Some("Ann".into()), description: None }];
         s.commit("Old", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
         if with_packet {
             // saved upright: the file isn't read for it
@@ -2190,44 +2185,7 @@ fn a_face_on_a_turned_mirrored_photo_is_written_in_the_stored_frame() {
 fn an_orientation_only_xmp_states_turns_neither_the_size_nor_the_boxes() {
     use lightcraft_meta::{Orientation, Rect, Region, RegionKind};
     let src = temp_dir("face-xmp-only-orientation");
-    let img = lightcraft_raster::Rgba8::from_fn(32, 24, |x, y| [(x * 7) as u8, (y * 9) as u8, 90, 255]);
-    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:Orientation="6"/></rdf:RDF></x:xmpmeta>"#;
-    let encoded = lightcraft_codecs::encode_png(
-        &lightcraft_codecs::EncodeImage::rgba8(&img),
-        &lightcraft_codecs::EncodeMeta { xmp: Some(xmp), ..Default::default() },
-    )
-    .unwrap();
-    // the encoder sets the XMP's orientation to 1 (it applies none to the pixels): state 6 in the XMP chunk again,
-    // with no Exif, as another app could have written it
-    let crc = |bytes: &[u8]| {
-        let mut c = 0xffff_ffffu32;
-        for &b in bytes {
-            c ^= u32::from(b);
-            for _ in 0..8 {
-                c = if c & 1 == 1 { (c >> 1) ^ 0xedb8_8320 } else { c >> 1 };
-            }
-        }
-        !c
-    };
-    let mut png = encoded[..8].to_vec();
-    let mut at = 8;
-    while at + 8 <= encoded.len() {
-        let len = u32::from_be_bytes(encoded[at..at + 4].try_into().unwrap()) as usize;
-        let (kind, data) = (&encoded[at + 4..at + 8], &encoded[at + 8..at + 8 + len]);
-        let data = if kind == b"iTXt" {
-            String::from_utf8_lossy(data).replace(r#"tiff:Orientation="1""#, r#"tiff:Orientation="6""#).into_bytes()
-        } else {
-            data.to_vec()
-        };
-        if kind != b"eXIf" {
-            png.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
-            png.extend_from_slice(kind);
-            png.extend_from_slice(&data);
-            png.extend_from_slice(&crc(&[kind, data.as_slice()].concat()).to_be_bytes());
-        }
-        at += 12 + len;
-    }
-    assert!(!png.windows(4).any(|w| w == b"eXIf"));
+    let png = png_orientation_only_in_xmp();
     assert_eq!(lightcraft_meta::extract(&png).orientation, Some(Orientation::Rotate90), "the XMP states 6");
     assert_eq!(lightcraft_codecs::read_header(&png).unwrap().orientation, 1, "the header (what it's shown by) doesn't");
     std::fs::write(src.join("x.png"), png).unwrap();
@@ -2295,6 +2253,12 @@ fn an_unreadable_sidecar_fails_the_read_even_when_the_orientation_is_news() {
     let id = s.catalog.photos().next().unwrap().id;
     let mut meta = s.catalog.photo(id).unwrap().meta.clone();
     meta.file_orientation = None;
+    meta.regions = vec![lightcraft_meta::Region {
+        rect: lightcraft_meta::Rect { x0: 0.1, y0: 0.2, x1: 0.3, y1: 0.6 },
+        kind: lightcraft_meta::RegionKind::Face,
+        name: Some("Ann".into()),
+        description: None,
+    }];
     s.commit("Old", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
 
     std::fs::write(src.join("t.xmp"), [0xff, 0xfe, 0x00, 0x3c]).unwrap();
@@ -2310,4 +2274,155 @@ fn an_unreadable_sidecar_fails_the_read_even_when_the_orientation_is_news() {
     assert_eq!(read["read"].as_array().map(Vec::len), Some(1), "{read}");
     assert_eq!(s.catalog.photo(id).unwrap().meta.file_orientation, Some(lightcraft_meta::Orientation::Rotate90));
     let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A 32 × 24 PNG whose orientation (6) only its XMP states: no Exif.
+fn png_orientation_only_in_xmp() -> Vec<u8> {
+    let img = lightcraft_raster::Rgba8::from_fn(32, 24, |x, y| [(x * 7) as u8, (y * 9) as u8, 90, 255]);
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:Orientation="6"/></rdf:RDF></x:xmpmeta>"#;
+    let encoded = lightcraft_codecs::encode_png(
+        &lightcraft_codecs::EncodeImage::rgba8(&img),
+        &lightcraft_codecs::EncodeMeta { xmp: Some(xmp), ..Default::default() },
+    )
+    .unwrap();
+    // the encoder sets the XMP's orientation to 1 (it applies none to the pixels): state 6 in the XMP chunk again,
+    // with no Exif, as another app could have written it
+    let crc = |bytes: &[u8]| {
+        let mut c = 0xffff_ffffu32;
+        for &b in bytes {
+            c ^= u32::from(b);
+            for _ in 0..8 {
+                c = if c & 1 == 1 { (c >> 1) ^ 0xedb8_8320 } else { c >> 1 };
+            }
+        }
+        !c
+    };
+    let mut png = encoded[..8].to_vec();
+    let mut at = 8;
+    while at + 8 <= encoded.len() {
+        let len = u32::from_be_bytes(encoded[at..at + 4].try_into().unwrap()) as usize;
+        let (kind, data) = (&encoded[at + 4..at + 8], &encoded[at + 8..at + 8 + len]);
+        let data = if kind == b"iTXt" {
+            String::from_utf8_lossy(data).replace(r#"tiff:Orientation="1""#, r#"tiff:Orientation="6""#).into_bytes()
+        } else {
+            data.to_vec()
+        };
+        if kind != b"eXIf" {
+            png.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+            png.extend_from_slice(kind);
+            png.extend_from_slice(&data);
+            png.extend_from_slice(&crc(&[kind, data.as_slice()].concat()).to_be_bytes());
+        }
+        at += 12 + len;
+    }
+    assert!(!png.windows(4).any(|w| w == b"eXIf"));
+    png
+}
+
+/// Review of #4512: `files::upright_by` (what Read Metadata from File fills a missing orientation in with) gives what
+/// the import probe keeps, for raws and images alike, without the rest of the probe.
+#[test]
+fn upright_by_is_the_import_probes_orientation() {
+    use lightcraft_meta::{Metadata, Orientation};
+    let jpeg = |o: Option<Orientation>| {
+        let img = lightcraft_raster::Rgba8::from_fn(32, 24, |_, _| [9, 9, 9, 255]);
+        let exif = o.map(|o| lightcraft_meta::write_exif(&Metadata { orientation: Some(o), ..Default::default() }));
+        let meta = lightcraft_codecs::EncodeMeta { exif: exif.as_deref(), ..Default::default() };
+        lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &meta).unwrap()
+    };
+    let dng = |o| turned_dng(o, None);
+    let files: Vec<(&str, Vec<u8>, Option<Orientation>)> = vec![
+        ("a.jpg", jpeg(None), Some(Orientation::Normal)),
+        ("b.jpg", jpeg(Some(Orientation::Rotate90)), Some(Orientation::Rotate90)),
+        ("c.jpg", jpeg(Some(Orientation::Transpose)), Some(Orientation::Transpose)),
+        ("d.png", png_orientation_only_in_xmp(), Some(Orientation::Normal)),
+        ("e.dng", dng(Orientation::Rotate90), Some(Orientation::Rotate90)),
+        ("f.dng", dng(Orientation::Rotate270), Some(Orientation::Rotate270)),
+        ("g.dng", dng(Orientation::Normal), Some(Orientation::Normal)),
+        ("h.txt", b"not a photo".to_vec(), None),
+    ];
+    for (name, bytes, want) in files {
+        assert_eq!(crate::files::upright_by(&bytes), want, "{name}");
+        if want.is_some() {
+            assert_eq!(crate::files::probe_bytes(name, &bytes).unwrap().upright_by, want, "{name}: the import's");
+        }
+    }
+}
+
+/// Review of #4512: Read Metadata from File reads a photo file for its orientation only when the photo has face
+/// boxes to write: a rating-only refresh of an older photo leaves the original alone, and with no XMP at all it fails
+/// as before. A face (in the catalog or the packet) makes it probe the file, and a raw read for its embedded XMP
+/// gives the orientation from the same bytes.
+#[test]
+fn the_orientation_is_read_only_for_a_photo_with_faces() {
+    use lightcraft_meta::{Metadata, Orientation, Rect, Region, RegionKind};
+    let src = temp_dir("orientation-only-with-faces");
+    let plain = {
+        let img = lightcraft_raster::Rgba8::from_fn(32, 24, |_, _| [9, 9, 9, 255]);
+        lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &Default::default()).unwrap()
+    };
+    std::fs::write(src.join("a.jpg"), &plain).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    let forget = |s: &mut Session, regions: Vec<Region>| {
+        let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+        meta.file_orientation = None;
+        meta.regions = regions;
+        s.commit("Old", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    };
+    forget(&mut s, vec![]);
+    // the original now says something else: probing it would be seen
+    let turned = {
+        let img = lightcraft_raster::Rgba8::from_fn(32, 24, |_, _| [9, 9, 9, 255]);
+        let exif = lightcraft_meta::write_exif(&Metadata { orientation: Some(Orientation::Rotate90), ..Default::default() });
+        let meta = lightcraft_codecs::EncodeMeta { exif: Some(&exif), ..Default::default() };
+        lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &meta).unwrap()
+    };
+    std::fs::write(src.join("a.jpg"), &turned).unwrap();
+
+    // no faces, a rating-only sidecar: read, the original isn't probed
+    std::fs::write(
+        src.join("a.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="3"/></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    let read = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(read["read"].as_array().map(Vec::len), Some(1), "{read}");
+    assert_eq!((s.catalog.photo(id).unwrap().rating, s.catalog.photo(id).unwrap().meta.file_orientation), (3, None));
+    // no faces and no XMP at all: a failed read, as before the orientation was kept
+    std::fs::remove_file(src.join("a.xmp")).unwrap();
+    let read = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(read["failed"].as_array().map(Vec::len), Some(1), "{read}");
+    assert_eq!(s.catalog.photo(id).unwrap().meta.file_orientation, None);
+    // a face in the catalog: probed
+    let face = Region { rect: Rect { x0: 0.1, y0: 0.2, x1: 0.3, y1: 0.6 }, kind: RegionKind::Face, name: Some("Ann".into()), description: None };
+    forget(&mut s, vec![face.clone()]);
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().meta.file_orientation, Some(Orientation::Rotate90));
+    let _ = std::fs::remove_dir_all(&src);
+
+    // a raw with a face only in its embedded XMP and no sidecar: probed, from the bytes read for that XMP
+    let src = temp_dir("orientation-only-with-faces-raw");
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:mwg-rs="http://www.metadataworkinggroup.com/schemas/regions/" xmlns:stArea="http://ns.adobe.com/xmp/sType/Area#"><mwg-rs:Regions rdf:parseType="Resource"><mwg-rs:RegionList><rdf:Bag><rdf:li rdf:parseType="Resource"><mwg-rs:Area stArea:x="0.5" stArea:y="0.5" stArea:w="0.2" stArea:h="0.2" stArea:unit="normalized"/><mwg-rs:Type>Face</mwg-rs:Type><mwg-rs:Name>Bo</mwg-rs:Name></rdf:li></rdf:Bag></mwg-rs:RegionList></mwg-rs:Regions></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(src.join("r.dng"), turned_dng(Orientation::Rotate270, Some(xmp))).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+    meta.file_orientation = None;
+    meta.regions.clear();
+    s.commit("Old", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    let read = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(read["read"].as_array().map(Vec::len), Some(1), "{read}");
+    let p = s.catalog.photo(id).unwrap();
+    assert_eq!((p.meta.file_orientation, p.meta.regions.len()), (Some(Orientation::Rotate270), 1));
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A synthetic DNG stored turned by `o` (its own Orientation tag, what the raw decoder reads), with `xmp` embedded.
+fn turned_dng(o: lightcraft_meta::Orientation, xmp: Option<&str>) -> Vec<u8> {
+    let mut raw = lightcraft_raw::decode(&synthetic_dng_with(None, Default::default())).unwrap();
+    raw.orientation = o;
+    lightcraft_raw::write_dng(&raw, &lightcraft_raw::DngWriteOptions { xmp: xmp.map(str::to_string), ..Default::default() }).unwrap()
 }

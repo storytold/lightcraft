@@ -127,6 +127,20 @@ fn ext_upper(name: &str) -> String {
     std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_uppercase()).unwrap_or_default()
 }
 
+/// The orientation a file's size is made upright by on import ([`ProbeInfo::upright_by`]) and nothing else: a raw's
+/// from its decoder, an image's from its header's Exif (what [`probe_bytes`] turns them by). `None` where the import
+/// has none: a raw described from its embedded preview, or a file it can't read. No hashing, no metadata.
+pub fn upright_by(bytes: &[u8]) -> Option<Orientation> {
+    if lightcraft_raw::probe(bytes).is_some() {
+        return lightcraft_raw::probe_info(bytes).ok().map(|raw| raw.orientation);
+    }
+    let fmt = lightcraft_codecs::sniff(bytes)?;
+    if fmt.not_decodable().is_some() {
+        return None;
+    }
+    lightcraft_codecs::read_header(bytes).ok().map(|h| Orientation::from_exif(h.orientation))
+}
+
 /// Probe a file's bytes: kind, dimensions (oriented), metadata. No pixel data is decompressed:
 /// raws are described from their headers ([`lightcraft_raw::probe_info`]), other images too
 /// ([`lightcraft_codecs::read_header`], which refuses truncated files but can't see damage inside

@@ -133,7 +133,8 @@ write them, from sidecars and from XMP embedded in the file. Named faces become 
   LightCraft reads them; MWG readers that apply the mirror place those mirrored. Orientation 1 is written upright. The file's orientation is the one
   the import read, kept in the catalog: a save never reads the photo file for it, and neither does reading a sidecar
   back (Read Metadata from File, Synchronize Folder) when the catalog knows it. A photo catalogued before LightCraft
-  kept it has its boxes written upright until Read Metadata from File reads it. Either way they read back as they
+  kept it has its boxes written upright until Read Metadata from File reads it: by the import's rule, only for a photo
+  with face boxes, from the file read at most once and within the media size limit. Either way they read back as they
   were. When the photo has no regions left to write (none, or only the detector's) but the sidecar has regions
   LightCraft read, an empty list
   is written, so another library reading the file drops them too. Otherwise the sidecar's own list stays: a sidecar
