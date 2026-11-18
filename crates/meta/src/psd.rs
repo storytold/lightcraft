@@ -1,36 +1,19 @@
 //! EXIF and XMP image resources in Photoshop PSD and PSB files.
 
-use crate::container::Embedded;
-
-pub(crate) fn embedded(bytes: &[u8]) -> Embedded {
-    parse(bytes).unwrap_or_default()
-}
+use crate::Embedded;
 
 /// The EXIF (1058) and XMP (1060) resources of the head `craft-psd` reads (header, colour mode data, image
 /// resources). `None` for a head that does not parse, a second EXIF or XMP resource, or XMP that is not UTF-8.
 pub(crate) fn parse(bytes: &[u8]) -> Option<Embedded> {
     let head = craft_psd::Head::from_bytes(bytes).ok()?;
-    let (mut exif, mut xmp) = (None, None);
-    for r in &head.resources {
-        match r.id {
-            1058 if exif.is_some() => return None,
-            1058 => exif = Some(r.data.as_slice()),
-            1060 if xmp.is_some() => return None,
-            1060 => xmp = Some(std::str::from_utf8(&r.data).ok()?),
-            _ => {}
-        }
-    }
-    Some(Embedded {
-        exif: exif.map(crate::strip_exif_header).map(<[u8]>::to_vec),
-        xmp: xmp.map(|text| text.trim_end_matches('\0').to_string()),
-        ..Default::default()
-    })
+    let (exif, xmp) = craft_psd::resources::unique_exif_xmp(&head.resources)?;
+    Some(Embedded { exif: exif.map(crate::strip_exif_header).map(<[u8]>::to_vec), xmp: xmp.map(str::to_owned), ..Default::default() })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::embedded;
-    use crate::container::Embedded;
+    use crate::Embedded;
+    use crate::embedded;
     use crate::{DateTime, Gps, Metadata};
 
     fn resource(id: u16, name: &[u8], data: &[u8]) -> Vec<u8> {
