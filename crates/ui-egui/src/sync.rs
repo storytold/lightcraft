@@ -290,7 +290,9 @@ pub struct SyncRun {
     /// Steps that went into the catalog but could not be saved (a full disk…), and why.
     not_saved: Vec<String>,
     commit: Option<SyncCommit>,
-    /// Cancel was pressed: nothing new is started; what was readied is still committed.
+    /// Cancel was pressed: nothing new is started; what was readied is still committed. Whether
+    /// that left work undone is decided when the worker ends (a Cancel after the last piece was
+    /// handed over stops nothing).
     stopping: bool,
     /// Its row in the activity stack (its ✕ is Cancel).
     guard: TaskGuard,
@@ -337,6 +339,32 @@ pub(crate) fn stall_run(app: &mut LightcraftApp, name: &str) -> Box<dyn std::any
     Box::new(tx)
 }
 
+/// Tests: a synchronize whose worker is over once the returned sender is dropped, having done
+/// `done` of `total` pieces of work (what [`SyncRun::counts`] says): the end of a run, without a
+/// real folder to race against. It has nothing to commit; the caller cancels it (or not) before
+/// the drop.
+#[cfg(test)]
+pub(crate) fn ending_run(app: &mut LightcraftApp, name: &str, (done, total): (usize, usize)) -> std::sync::mpsc::Sender<SyncStep> {
+    let progress = Arc::new(SyncProgress::default());
+    progress.to_check.store(total, Ordering::Relaxed);
+    progress.checked.store(done, Ordering::Relaxed);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let guard = app.session.activity.start("sync", "Synchronizing folder", Cancel::Flag(progress.files.cancel.clone()));
+    guard.detail(name);
+    let (_, commit) = SyncJob::start(&mut app.session, FolderChanges::default(), SyncChoice::default()).expect("nothing to ready");
+    app.sync_run = Some(SyncRun {
+        name: name.to_string(),
+        progress,
+        crashed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        rx,
+        commit: Some(commit),
+        stopping: false,
+        not_saved: Vec::new(),
+        guard,
+    });
+    tx
+}
+
 /// Commit what the worker readied (called every frame); when it is done, one undo step and a
 /// word on what happened.
 pub fn poll_run(app: &mut LightcraftApp, ctx: &egui::Context) {
@@ -372,8 +400,12 @@ pub fn poll_run(app: &mut LightcraftApp, ctx: &egui::Context) {
         run.commit = Some(commit);
         return;
     }
+    // The worker is over, so its counts are final. A Cancel that came after the last piece was
+    // handed over left nothing undone: that run finished.
+    let counts = run.counts();
+    let undone = counts.0 < counts.1;
     let (name, stopped, crashed, mut not_saved) =
-        (run.name.clone(), run.stopping, run.crashed.load(Ordering::Relaxed), std::mem::take(&mut run.not_saved));
+        (run.name.clone(), run.stopping && undone, run.crashed.load(Ordering::Relaxed), std::mem::take(&mut run.not_saved));
     app.sync_run = None;
     let mut report = None;
     if let Err(e) = app.session.execute_fn("folder.synchronize", |s| {

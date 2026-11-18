@@ -755,7 +755,12 @@ impl SyncWork {
                     return;
                 }
                 let prepared = job.prepare_files(chunk.to_vec(), cancel);
-                step(chunk.len());
+                // (a batch Cancel cut short left files undone: it is not counted, so the count
+                // says whether everything was done; its files that were ready are still sent. A
+                // Cancel after its last file was prepared cut nothing: the batch says so itself)
+                if !prepared.cut_short {
+                    step(chunk.len());
+                }
                 // (the files are added in place: a batch nobody takes leaves nothing behind on disk)
                 if !send(SyncStep::Import(prepared)) {
                     return;

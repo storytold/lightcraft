@@ -62,6 +62,9 @@ pub struct ImportJob {
 #[derive(Debug, Default)]
 pub struct Prepared {
     pub scanned: usize,
+    /// A Cancel left files of the batch undone (they have no item): the batch is not the whole of
+    /// what was asked. A Cancel that came after the last file was prepared leaves this `false`.
+    pub cut_short: bool,
     pub(super) items: Vec<PreparedItem>,
 }
 
@@ -256,7 +259,7 @@ impl ImportJob {
         let library = self.look_up_library();
         let opts = self.opts.clone();
         let mode = self.mode;
-        let mut out = Prepared { scanned: files.len(), items: Vec::new() };
+        let mut out = Prepared { scanned: files.len(), cut_short: false, items: Vec::new() };
         let mut todo = Vec::new();
         for f in files {
             match self.by_path.get(f.as_str()).copied() {
@@ -315,6 +318,7 @@ impl ImportJob {
         let mut plan = Plan::default();
         for (path, info) in todo.into_iter().zip(probed) {
             if cancel.load(Relaxed) {
+                out.cut_short = true;
                 break;
             }
             let mut info = match info {
@@ -335,6 +339,7 @@ impl ImportJob {
             {
                 self.run_plan(&mut plan, &mut out, cancel);
                 if cancel.load(Relaxed) {
+                    out.cut_short = true;
                     break;
                 }
             }
@@ -408,6 +413,7 @@ impl ImportJob {
                     if plan.pending_families.contains(&family) {
                         self.run_plan(&mut plan, &mut out, cancel);
                         if cancel.load(Relaxed) {
+                            out.cut_short = true;
                             break;
                         }
                     }
@@ -443,6 +449,8 @@ impl ImportJob {
             plan.slots.push(Slot::Item(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed: None }))));
         }
         self.run_plan(&mut plan, &mut out, cancel);
+        // (`cut_short` says whether a Cancel stopped a file from being prepared: the flag itself may
+        // have been set after the last one was)
         out
     }
 
@@ -457,7 +465,10 @@ impl ImportJob {
                 Slot::Item(it) => it,
                 Slot::Transfer => match done.next().flatten() {
                     Some(it) => it,
-                    None => continue,
+                    None => {
+                        out.cut_short = true;
+                        continue;
+                    }
                 },
             };
             if let PreparedItem::Ready(r) = &item
