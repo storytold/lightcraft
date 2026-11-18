@@ -1764,10 +1764,9 @@ dependencies = [
 [[package]]
 name = "craft-xml"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=2d4b8b8ecd79f87c847961901c40305e7f448d6f#2d4b8b8ecd79f87c847961901c40305e7f448d6f"
+source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
 dependencies = [
  "quick-xml 0.41.0",
- "serde",
  "thiserror 2.0.21",
 ]
 
@@ -8868,3 +8867,18 @@ dependencies = [
  "syn 3.0.6",
  "winnow",
 ]
+
+[[patch.unused]]
+name = "egui_demo_lib"
+version = "0.37.0"
+source = "git+https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc799681571963842f95b55a6b68431b15a"
+
+[[patch.unused]]
+name = "egui_inspection"
+version = "0.37.0"
+source = "git+https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc799681571963842f95b55a6b68431b15a"
+
+[[patch.unused]]
+name = "egui_system_font_provider"
+version = "0.37.0"
+source = "git+https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc799681571963842f95b55a6b68431b15a"

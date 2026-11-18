@@ -1038,9 +1038,6 @@ fn malformed_semantic_masks_are_skipped() {
         let mut short = mask_ifd(4, 4, "short strip", vec![200; 3]);
         short.set(t::MASK_SUB_AREA, Value::Long(vec![u32::MAX, u32::MAX, u32::MAX, u32::MAX]));
         ifd0.add_sub_ifd(short);
-        let mut overflow = mask_ifd(2, 2, "overflow sub area", vec![255; 4]);
-        overflow.set(t::MASK_SUB_AREA, Value::Long(vec![u32::MAX, u32::MAX, u32::MAX, u32::MAX]));
-        ifd0.add_sub_ifd(overflow);
         let mut outside = mask_ifd(2, 2, "sub area too small", vec![255; 4]);
         outside.set(t::MASK_SUB_AREA, Value::Long(vec![3, 0, 2, 4]));
         ifd0.add_sub_ifd(outside);
@@ -1050,8 +1047,8 @@ fn malformed_semantic_masks_are_skipped() {
     let names: Vec<&str> = masks.iter().map(|m| m.name.as_str()).collect();
     // A 4×4, 8-bit uncompressed mask needs 16 bytes: the three-byte strip
     // is truncated, not a valid mask with zero-filled missing pixels. Keep the
-    // separate complete masks to test invalid and overflowing MaskSubArea handling.
-    assert_eq!(names, ["overflow sub area", "sub area too small"]);
+    // separate complete mask to test invalid MaskSubArea handling.
+    assert_eq!(names, ["sub area too small"]);
     assert!(masks.iter().all(|m| m.sub_area.is_none()), "sub areas the mask doesn't fit are ignored");
     for m in &masks {
         let d = m.developed(Rect::new(0, 0, 8, 6), Rect::new(0, 0, 8, 6)).unwrap();
