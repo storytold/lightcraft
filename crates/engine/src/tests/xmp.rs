@@ -2182,3 +2182,103 @@ fn a_face_on_a_turned_mirrored_photo_is_written_in_the_stored_frame() {
     assert!([(g.x0, 0.1), (g.y0, 0.2), (g.x1, 0.3), (g.y1, 0.6)].iter().all(|(a, b)| (a - b).abs() < 1e-5), "{g:?}");
     let _ = std::fs::remove_dir_all(&src);
 }
+
+/// Review of #4512: a PNG whose orientation only its XMP states (no Exif) is shown, and sized, as stored. The catalog
+/// keeps the orientation the size was made upright by (none), so face boxes are written and read back on the photo
+/// as shown, not turned for an orientation the size doesn't have. Read Metadata from File fills it in the same way.
+#[test]
+fn an_orientation_only_xmp_states_turns_neither_the_size_nor_the_boxes() {
+    use lightcraft_meta::{Orientation, Rect, Region, RegionKind};
+    let src = temp_dir("face-xmp-only-orientation");
+    let img = lightcraft_raster::Rgba8::from_fn(32, 24, |x, y| [(x * 7) as u8, (y * 9) as u8, 90, 255]);
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:Orientation="6"/></rdf:RDF></x:xmpmeta>"#;
+    let encoded = lightcraft_codecs::encode_png(
+        &lightcraft_codecs::EncodeImage::rgba8(&img),
+        &lightcraft_codecs::EncodeMeta { xmp: Some(xmp), ..Default::default() },
+    )
+    .unwrap();
+    // the encoder sets the XMP's orientation to 1 (it applies none to the pixels): state 6 in the XMP chunk again,
+    // with no Exif, as another app could have written it
+    let crc = |bytes: &[u8]| {
+        let mut c = 0xffff_ffffu32;
+        for &b in bytes {
+            c ^= u32::from(b);
+            for _ in 0..8 {
+                c = if c & 1 == 1 { (c >> 1) ^ 0xedb8_8320 } else { c >> 1 };
+            }
+        }
+        !c
+    };
+    let mut png = encoded[..8].to_vec();
+    let mut at = 8;
+    while at + 8 <= encoded.len() {
+        let len = u32::from_be_bytes(encoded[at..at + 4].try_into().unwrap()) as usize;
+        let (kind, data) = (&encoded[at + 4..at + 8], &encoded[at + 8..at + 8 + len]);
+        let data = if kind == b"iTXt" {
+            String::from_utf8_lossy(data).replace(r#"tiff:Orientation="1""#, r#"tiff:Orientation="6""#).into_bytes()
+        } else {
+            data.to_vec()
+        };
+        if kind != b"eXIf" {
+            png.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+            png.extend_from_slice(kind);
+            png.extend_from_slice(&data);
+            png.extend_from_slice(&crc(&[kind, data.as_slice()].concat()).to_be_bytes());
+        }
+        at += 12 + len;
+    }
+    assert!(!png.windows(4).any(|w| w == b"eXIf"));
+    assert_eq!(lightcraft_meta::extract(&png).orientation, Some(Orientation::Rotate90), "the XMP states 6");
+    assert_eq!(lightcraft_codecs::read_header(&png).unwrap().orientation, 1, "the header (what it's shown by) doesn't");
+    std::fs::write(src.join("x.png"), png).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    let p = s.catalog.photo(id).unwrap();
+    assert_eq!(((p.width, p.height), p.meta.file_orientation), ((32, 24), Some(Orientation::Normal)), "one rule for both");
+
+    let rect = Rect { x0: 0.1, y0: 0.2, x1: 0.3, y1: 0.6 };
+    let mut meta = p.meta.clone();
+    meta.regions = vec![Region { rect, kind: RegionKind::Face, name: Some("Ann".into()), description: None }];
+    s.commit("Name", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let x = std::fs::read_to_string(src.join("x.xmp")).unwrap();
+    assert!(!x.contains("mwg-rs:Rotation") && x.contains("<stArea:x>0.200000</stArea:x>") && x.contains("<stDim:w>32</stDim:w>"), "as shown: {x}");
+
+    // as catalogued before the orientation was kept: Read Metadata from File probes it the way the import does
+    let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+    meta.file_orientation = None;
+    meta.regions.clear();
+    s.commit("Old", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let p = s.catalog.photo(id).unwrap();
+    assert_eq!(p.meta.file_orientation, Some(Orientation::Normal));
+    let g = p.meta.regions[0].rect;
+    assert!([(g.x0, 0.1), (g.y0, 0.2), (g.x1, 0.3), (g.y1, 0.6)].iter().all(|(a, b)| (a - b).abs() < 1e-5), "{g:?}");
+
+    // and a second library importing the photo with that sidecar reads the box where it is
+    let mut b = Session::new().with_fs();
+    b.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let idb = b.catalog.photos().next().unwrap().id;
+    let g = b.catalog.photo(idb).unwrap().meta.regions[0].rect;
+    assert!([(g.x0, 0.1), (g.y0, 0.2), (g.x1, 0.3), (g.y1, 0.6)].iter().all(|(a, b)| (a - b).abs() < 1e-5), "{g:?}");
+
+    // another app's sidecar drawn on the turned shape (24 × 32): the import and a re-read go by the same orientation,
+    // so reading the file again changes nothing (or Synchronize Folder would report it every pass, #2857)
+    let other = temp_dir("face-xmp-only-orientation-other");
+    std::fs::copy(src.join("x.png"), other.join("y.png")).unwrap();
+    std::fs::write(
+        other.join("y.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:mwg-rs="http://www.metadataworkinggroup.com/schemas/regions/" xmlns:stArea="http://ns.adobe.com/xmp/sType/Area#" xmlns:stDim="http://ns.adobe.com/xap/1.0/sType/Dimensions#"><mwg-rs:Regions rdf:parseType="Resource"><mwg-rs:AppliedToDimensions stDim:w="24" stDim:h="32" stDim:unit="pixel"/><mwg-rs:RegionList><rdf:Bag><rdf:li rdf:parseType="Resource"><mwg-rs:Area stArea:x="0.2" stArea:y="0.3" stArea:w="0.1" stArea:h="0.2" stArea:unit="normalized"/><mwg-rs:Type>Face</mwg-rs:Type><mwg-rs:Name>Cy</mwg-rs:Name></rdf:li></rdf:Bag></mwg-rs:RegionList></mwg-rs:Regions></rdf:Description></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    let mut c = Session::new().with_fs();
+    c.execute("library.import", &json!({"paths": [other.to_string_lossy()]})).unwrap();
+    let idc = c.catalog.photos().next().unwrap().id;
+    let imported = c.catalog.photo(idc).unwrap().meta.regions.clone();
+    assert_eq!(imported.len(), 1);
+    c.execute("photo.readMetadataFromFile", &json!({"ids": [idc.0]})).unwrap();
+    assert_eq!(c.catalog.photo(idc).unwrap().meta.regions, imported, "a re-read agrees with the import");
+    let _ = std::fs::remove_dir_all(&other);
+    let _ = std::fs::remove_dir_all(&src);
+}

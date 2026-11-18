@@ -393,6 +393,11 @@ pub struct ProbeInfo {
     /// The file's Exif orientation, when it states one: how its stored pixels turn upright (`width` and `height` are
     /// the upright size).
     pub orientation: Option<lightcraft_geom::Orientation>,
+    /// The orientation `width` × `height` were turned upright by, the one the photo is shown by: a raw decoder's, or
+    /// an image header's Exif (an orientation only XMP states turns neither the pixels nor the size). `None` when the
+    /// size came from something else (a raw described from its embedded preview). The catalog keeps it
+    /// (`Meta::file_orientation`): face boxes are written and read back by it.
+    pub upright_by: Option<lightcraft_geom::Orientation>,
     /// A raw variant that can't be decoded yet: why. The file is described (and will be shown and
     /// edited) from its embedded preview; see [`lightcraft_catalog::Photo::preview_only`].
     pub preview_only: Option<String>,

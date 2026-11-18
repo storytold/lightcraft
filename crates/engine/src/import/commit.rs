@@ -254,7 +254,10 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 }
                 let sidecar = sidecar.map(|sc| sc.resolve_label(&s.catalog)).filter(|sc| *sc != crate::sidecar::SidecarData::default());
                 // the photo is upright as the file's own orientation turns it, when the file states one
-                let sidecar = sidecar.map(|sc| crate::sidecar::SidecarData { orientation: info.orientation.or(sc.orientation), ..sc });
+                // the orientation the photo's size was made upright by turns the sidecar's boxes too, so the import, a
+                // save (`Meta::file_orientation`) and a re-read go by the same one
+                let sidecar =
+                    sidecar.map(|sc| crate::sidecar::SidecarData { orientation: info.upright_by.or(info.orientation).or(sc.orientation), ..sc });
                 // a copy is catalogued under its new name
                 let name = Path::new(&stored).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.clone());
                 let mut p = Photo::new(id, Source::File { path: stored }, &name, &info.format, info.width, info.height, &now);
@@ -262,8 +265,8 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 p.file_size = info.file_size;
                 p.captured = info.captured;
                 p.meta = info.meta;
-                // how the file turns upright, as this probe read it: a sidecar save writes face boxes by it
-                p.meta.file_orientation = info.orientation;
+                // what the size was made upright by: a sidecar save writes face boxes by it
+                p.meta.file_orientation = info.upright_by;
                 p.as_shot_wb = info.as_shot_wb;
                 p.content_hash = info.content_hash;
                 p.embedded_lens = info.embedded_lens;

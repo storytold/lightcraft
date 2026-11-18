@@ -229,8 +229,8 @@ pub struct Meta {
     /// written to XMP. Left out of the catalog JSON when unknown, so older catalogs read unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<lightcraft_meta::FocusPoint>,
-    /// The photo file's own orientation, as the import read it (`ProbeInfo::orientation`, the one that made `width` ×
-    /// `height` upright): how its stored pixels turn upright. A sidecar save writes face regions in the stored frame by
+    /// The photo file's own orientation, as the import read it (`ProbeInfo::upright_by`, the one that made `width` ×
+    /// `height` upright and the photo is shown by): how its stored pixels turn upright. A sidecar save writes face regions in the stored frame by
     /// it (`lightcraft_engine::sidecar`) without reading the file. `None` for a file that states none, and for a photo
     /// catalogued before it was kept until Read Metadata from File reads it. Left out of the catalog JSON when unknown,
     /// so older catalogs read unchanged.

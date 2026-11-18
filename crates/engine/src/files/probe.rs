@@ -38,7 +38,7 @@ pub(super) fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
         keywords: lightcraft_catalog::keywords::from_file(&m.keywords, &m.hierarchical_keywords),
         regions: m.regions.clone(),
         focus: m.focus.clone(),
-        // (the import keeps `ProbeInfo::orientation`, which for a raw is the decoder's)
+        // (the import keeps `ProbeInfo::upright_by`)
         file_orientation: None,
     };
     (meta, m.capture_time.as_ref().map(|d| d.to_iso()))
@@ -188,6 +188,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
             content_hash,
             xmp: lightcraft_meta::embedded(bytes).xmp,
             orientation: Some(raw.orientation),
+            upright_by: Some(raw.orientation),
             preview_only: None,
         });
     }
@@ -234,6 +235,8 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         embedded_lens: None,
         xmp: None,
         orientation: m.orientation,
+        // the header's: what the size was turned by, and what the decoder shows
+        upright_by: Some(o),
         preview_only: None,
     })
 }

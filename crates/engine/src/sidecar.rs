@@ -417,7 +417,17 @@ impl SidecarData {
     }
 }
 
-/// The orientation the photo file at `path` states, matching what the import stores on [`crate::media::ProbeInfo`]:
+/// The orientation the photo file at `path` was (or would be) made upright by on import
+/// ([`crate::media::ProbeInfo::upright_by`]), probed the same way: the whole file is read. For a photo catalogued
+/// before [`lightcraft_catalog::Meta::file_orientation`] was kept, by Read Metadata from File only.
+fn upright_orientation(path: &str) -> Option<lightcraft_meta::Orientation> {
+    let bytes = std::fs::read(path).ok()?;
+    let name = Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    crate::files::probe_bytes(&name, &bytes).ok()?.upright_by
+}
+
+/// The orientation the photo file at `path` states, matching what the import stores as
+/// [`crate::media::ProbeInfo::orientation`]:
 /// for a raw, the decoder's (`lightcraft_raw::probe_info`: CIFF for a CRW, the raw IFD for a MEF, …); otherwise Exif,
 /// else XMP, as [`lightcraft_meta::extract`] reads it. A file shorter than [`ORIENTATION_SPAN`] is read whole. Most
 /// non-raws state it in the Exif of their first [`ORIENTATION_SPAN`]; when that part doesn't, the Exif may come later
@@ -1595,9 +1605,10 @@ impl Session {
         let Some(orig) = file_path(p) else { return Ok(None) };
         // a photo catalogued before the file's orientation was kept: Read Metadata from File reads it, once, so its
         // face boxes are written in the frame the file is stored in from then on (the file is read at most once here)
-        let mut known: Option<Option<lightcraft_meta::Orientation>> = p.meta.file_orientation.map(Some);
+        // (probed as the import probes it, so it is the one the photo's size was made upright by)
+        let backfill = if p.meta.file_orientation.is_none() { upright_orientation(orig) } else { None };
+        let mut known: Option<Option<lightcraft_meta::Orientation>> = p.meta.file_orientation.or(backfill).map(Some);
         let mut orientation_of_file = || *known.get_or_insert_with(|| file_orientation(orig));
-        let backfill = if p.meta.file_orientation.is_none() { orientation_of_file() } else { None };
         let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_lookup(id)) else {
             // no packet to read; the orientation alone is still news
             return match backfill {
