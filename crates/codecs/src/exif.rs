@@ -57,6 +57,7 @@ impl<'a> Tiff<'a> {
         Some((v, next))
     }
     /// First value of a SHORT/LONG entry.
+    #[cfg(test)]
     pub fn uint(&self, e: &Entry) -> Option<u32> {
         match e.typ {
             3 => self.u16_at(e.value_pos).map(u32::from),
@@ -80,6 +81,10 @@ impl<'a> Tiff<'a> {
     }
 }
 
+pub use craft_metadata::compat_orientation::minimal_exif;
+pub(crate) use craft_metadata::compat_orientation::summarize;
+
+#[cfg(test)]
 /// What the decoder cares about from an EXIF (TIFF-structured) blob.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ExifSummary {
@@ -90,7 +95,8 @@ pub(crate) struct ExifSummary {
     pub adobe_rgb_hint: bool,
 }
 
-pub(crate) fn summarize(blob: &[u8]) -> ExifSummary {
+#[cfg(test)]
+pub(crate) fn legacy_reference(blob: &[u8]) -> ExifSummary {
     let mut s = ExifSummary::default();
     let Some(t) = Tiff::new(blob) else { return s };
     let Some(ifd0) = t.first_ifd() else { return s };
@@ -130,23 +136,6 @@ pub(crate) fn summarize(blob: &[u8]) -> ExifSummary {
     s
 }
 
-/// Build a tiny EXIF blob (little-endian TIFF) with just an orientation tag. Used by tests and by
-/// callers that need to stamp orientation on export when no source EXIF exists.
-pub fn minimal_exif(orientation: u16) -> Vec<u8> {
-    let mut v = Vec::with_capacity(26);
-    v.extend_from_slice(b"II");
-    v.extend_from_slice(&42u16.to_le_bytes());
-    v.extend_from_slice(&8u32.to_le_bytes());
-    v.extend_from_slice(&1u16.to_le_bytes());
-    v.extend_from_slice(&0x0112u16.to_le_bytes());
-    v.extend_from_slice(&3u16.to_le_bytes());
-    v.extend_from_slice(&1u32.to_le_bytes());
-    v.extend_from_slice(&orientation.to_le_bytes());
-    v.extend_from_slice(&[0, 0]);
-    v.extend_from_slice(&0u32.to_le_bytes());
-    v
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,7 +149,7 @@ mod tests {
 
     #[test]
     fn garbage_ok() {
-        assert_eq!(summarize(b"II*\0\xff\xff\xff\xff"), ExifSummary::default());
-        assert_eq!(summarize(&[]), ExifSummary::default());
+        assert_eq!(legacy_reference(b"II*\0\xff\xff\xff\xff"), ExifSummary::default());
+        assert_eq!(legacy_reference(&[]), ExifSummary::default());
     }
 }
