@@ -182,6 +182,11 @@ const FIELDS: &[(&str, usize)] = &[
     ("RGB_CONTRAST", 1),
     ("RGB_CONTRAST_OFF", 1),
     ("RGB_CONTRAST_ZERO", 1),
+    // Brightness (`FinishParams::brightness`): on/off, `E = e^phi`, the saturation weight and the HDR headroom (encoded peak, 1 for SDR)
+    ("BRIGHTNESS", 1),
+    ("BRIGHTNESS_E", 1),
+    ("BRIGHTNESS_W", 1),
+    ("BRIGHTNESS_H", 1),
     // first row of a band dispatch (the kernel runs over rows Y0.., see `render`)
     ("Y0", 1),
     // the mask planes' stride (0: the whole image's, `w × h`) and the band's first pixel in them
@@ -494,6 +499,12 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], curves: &[Op
         p.b("RGB_CONTRAST", true);
         p.u("RGB_CONTRAST_OFF", rgb_contrast_off as u32);
         p.f("RGB_CONTRAST_ZERO", rc.zero());
+    }
+    if let Some(b) = &fp.brightness {
+        p.b("BRIGHTNESS", true);
+        p.f("BRIGHTNESS_E", b.e);
+        p.f("BRIGHTNESS_W", b.sat_weight());
+        p.f("BRIGHTNESS_H", b.h);
     }
     let grain_on = fp.grain.is_some() || fp.particles.is_some();
     if let Some((amt, cell, rough, seed)) = fp.grain {

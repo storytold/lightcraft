@@ -108,6 +108,63 @@ fn levels_stage(o: u32, off: u32, x: f32, hdr: bool) -> f32 {
     return y;
 }
 
+// `brightness::curve`: v·E / (1 + v·(E − 1)) on 0..1. Above 1 an SDR render holds 1; an HDR render (headroom `h`, the encoded
+// peak) applies the same curve rescaled onto 1..h and passes values above `h` through. Below 0 the result is 0.
+// `e` is E = e^phi from the parameter block.
+fn brightness_curve(v0: f32, e: f32, hdr: bool, h: f32) -> f32 {
+    let v = min(max(v0, 0.0), 10000.0);
+    if (v < 1.0) {
+        return v * e / (1.0 + v * (e - 1.0));
+    }
+    if (!hdr) {
+        return 1.0;
+    }
+    if (v < h) {
+        let r = h - 1.0;
+        let x = (v - 1.0) / r;
+        return 1.0 + r * (x * e / (1.0 + x * (e - 1.0)));
+    }
+    return v;
+}
+
+// One channel of `BrightnessK::apply`: the brightest takes `vp`, the darkest `mp`, the others sit between by hue.
+fn brightness_channel(v: f32, mx: f32, mn: f32, range: f32, vp: f32, mp: f32) -> f32 {
+    if (v >= mx) {
+        return vp;
+    }
+    if (v <= mn) {
+        return mp;
+    }
+    return mp + (v - mn) / range * (vp - mp);
+}
+
+// `BrightnessK::apply_with`: the brightest channel gets the curve, the hue is kept, the saturation is a blend of the
+// original and the per-channel one (weight `F_BRIGHTNESS_W`).
+fn brightness_core(c0: vec3<f32>, hdr: bool, h: f32) -> vec3<f32> {
+    let e = pf(F_BRIGHTNESS_E);
+    let w = pf(F_BRIGHTNESS_W);
+    let c = min(max(c0, vec3<f32>(0.0)), vec3<f32>(10000.0));
+    let mx = max(c.x, max(c.y, c.z));
+    let mn = min(c.x, min(c.y, c.z));
+    if (mx <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+    let vp = brightness_curve(mx, e, hdr, h);
+    let range = mx - mn;
+    if (range <= 0.0) {
+        return vec3<f32>(vp);
+    }
+    let mp = (1.0 - w) * vp * (mn / mx) + w * brightness_curve(mn, e, hdr, h);
+    return vec3<f32>(
+        brightness_channel(c.x, mx, mn, range, vp, mp),
+        brightness_channel(c.y, mx, mn, range, vp, mp),
+        brightness_channel(c.z, mx, mn, range, vp, mp));
+}
+
+// `BrightnessK::apply`
+fn brightness_apply(c0: vec3<f32>, hdr: bool) -> vec3<f32> {
+    return brightness_core(c0, hdr, max(pf(F_BRIGHTNESS_H), 1.0));
+}
 
 // The exact sRGB curve (`lcc_color::transfer`), unbounded above 1 as HDR renders encode.
 fn lin_to_srgb(v: f32) -> f32 {
@@ -1148,6 +1205,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         e = vec3<f32>(lin_to_srgb(q.x), lin_to_srgb(q.y), lin_to_srgb(q.z));
     } else {
         e = vec3<f32>(encode_srgb(r.x), encode_srgb(r.y), encode_srgb(r.z));
+    }
+    // --- Brightness (`finish::finish_with`): right after the encode, before the Tone Curve
+    if (pu(F_BRIGHTNESS) != 0u) {
+        e = brightness_apply(e, hdr);
     }
     // --- Levels: each channel's own stage first, then the master's (one call site, as `finish_with`)
     if (pu(F_LEVELS) != 0u) {

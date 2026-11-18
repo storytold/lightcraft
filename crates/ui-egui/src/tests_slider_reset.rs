@@ -11,7 +11,7 @@ use crate::{LccApp, Services};
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
 /// The sliders the issue names, each set away from its default.
-const EDITED: [(&str, f64); 2] = [("light.exposure", 1.25), ("light.contrast", 40.0)];
+const EDITED: [(&str, f64); 3] = [("light.exposure", 1.25), ("light.contrast", 40.0), ("light.brightness", 40.0)];
 
 /// The demo library in Detail with the Edit panel's Light section open.
 fn edit_panel() -> Headless {
@@ -152,4 +152,35 @@ fn a_reset_goes_to_the_photos_own_default_for_every_control() {
         }
     }
     assert!(nonzero.contains(&"detail.sharpenAmount"), "{nonzero:?}");
+    // the Light sliders, Brightness among them, start at the neutral 0 on a raw as on any photo: their reset is the spec table's
+    for id in ["light.contrast", "light.brightness"] {
+        let spec = lcc_develop::controls::CONTROLS.iter().find(|s| s.id == id).expect(id);
+        assert_eq!(lcc_develop::controls::get(&defaults, id), Some(0.0), "{id}: the photo's own default");
+        assert!(!nonzero.contains(&id), "{id}: {nonzero:?}");
+        assert!(crate::panels::edit::photo_default_spec(&app, spec).is_none(), "{id}: no photo-specific default");
+    }
+}
+
+/// Brightness has its row right after Contrast in the Basic section and moves like its neighbours: Up / Down nudge it by
+/// one, Shift + Up / Down by five (a click on the slider selects it first).
+#[test]
+fn the_brightness_row_follows_contrast_and_steps_like_its_neighbours() {
+    let mut h = edit_panel();
+    let (contrast, brightness, highlights) =
+        (widget(&h, "slider:light.contrast"), widget(&h, "slider:light.brightness"), widget(&h, "slider:light.highlights"));
+    assert!(contrast.top() < brightness.top() && brightness.top() < highlights.top(), "{contrast:?} {brightness:?} {highlights:?}");
+    assert_eq!(value(&h, "light.brightness"), 0.0);
+    ask(&mut h, "ui.clickWidget", json!({"id": "slider:light.brightness", "fx": 0.75}));
+    let start = value(&h, "light.brightness");
+    assert!(start > 0.0, "the click set it ({start})");
+    ask(&mut h, "ui.key", json!({"key": "ArrowUp"}));
+    assert_eq!(value(&h, "light.brightness"), start + 1.0, "Up: one step");
+    ask(&mut h, "ui.key", json!({"key": "ArrowDown"}));
+    assert_eq!(value(&h, "light.brightness"), start, "Down: back");
+    ask(&mut h, "ui.key", json!({"key": "ArrowUp", "shift": true}));
+    assert_eq!(value(&h, "light.brightness"), start + 5.0, "Shift + Up: five steps");
+    ask(&mut h, "ui.key", json!({"key": "ArrowDown", "shift": true}));
+    assert_eq!(value(&h, "light.brightness"), start, "Shift + Down: back");
+    // the other Light sliders were left alone
+    assert_eq!(value(&h, "light.contrast"), 0.0);
 }

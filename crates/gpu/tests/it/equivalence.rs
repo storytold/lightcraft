@@ -2375,3 +2375,150 @@ fn levels_match_in_16_bit_and_float_output() {
         check_hdr_req(&format!("{name} (float)"), &src, &info, &s, &reqf);
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Brightness: the stage is closed form on both sides (`lcc_pipeline::brightness`, `brightness_*` in finish.wgsl), so the
+// float renders agree far closer than the 8-bit bounds above: within 0.1 of an 8-bit level on a dense sweep of greys and
+// colours and on the 63 colour patches of the calibration chart, SDR and HDR (the stage adds at most 0.1 of a level on top of
+// the difference the two renderers already have before it, scaled by its steepest slope).
+
+/// The 63 colour patches of the Brightness calibration chart (sRGB-encoded): 6 hues × 2 saturations × 3 levels, and 9
+/// natural tones (skin, foliage, sky, stone) at 3 levels.
+fn brightness_chart_colours() -> Vec<[f32; 3]> {
+    let mut v = Vec::new();
+    let hues = [[1.0f32, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 0.0]];
+    for h in hues {
+        for s in [1.0f32, 0.5] {
+            for level in [0.30f32, 0.60, 0.90] {
+                v.push(h.map(|c| level * ((1.0 - s) + s * c)));
+            }
+        }
+    }
+    let tones = [
+        [1.00f32, 0.82, 0.72],
+        [0.93, 0.68, 0.50],
+        [0.80, 0.55, 0.40],
+        [0.55, 0.70, 0.20],
+        [0.25, 0.60, 0.25],
+        [0.20, 0.50, 0.40],
+        [0.45, 0.65, 1.00],
+        [0.70, 0.82, 1.00],
+        [0.85, 0.75, 0.55],
+    ];
+    for t in tones {
+        for k in [0.35f32, 0.65, 1.0] {
+            v.push(t.map(|c| c * k));
+        }
+    }
+    v
+}
+
+/// A dense set of sRGB-encoded colours: a grey ramp (up to `top`, encoded), a hue ring at several saturations and
+/// levels, a colour cube, and the chart's patches.
+fn brightness_sweep(top: f32) -> Vec<[f32; 3]> {
+    let mut v = Vec::new();
+    for i in 0..2048 {
+        let g = top * i as f32 / 2047.0;
+        v.push([g; 3]);
+    }
+    for h in 0..180 {
+        let a = h as f32 / 180.0 * std::f32::consts::TAU;
+        let rgb = [a.cos(), (a - 2.0944).cos(), (a + 2.0944).cos()].map(|c| 0.5 + 0.5 * c.clamp(-1.0, 1.0));
+        for s in [0.15f32, 0.5, 1.0] {
+            for level in [0.05f32, 0.3, 0.6, 0.95] {
+                v.push(rgb.map(|c| (level * ((1.0 - s) + s * c)).min(top)));
+            }
+        }
+    }
+    for r in 0..17 {
+        for g in 0..17 {
+            for b in 0..17 {
+                v.push([r, g, b].map(|c| top * c as f32 / 16.0));
+            }
+        }
+    }
+    v.extend(brightness_chart_colours());
+    v
+}
+
+/// `colours` (encoded in sRGB) as a scene-linear Rec.2020 image `w` wide, padded with mid grey.
+fn brightness_image(colours: &[[f32; 3]], w: usize) -> (Arc<Rgb32f>, usize) {
+    let h = colours.len().div_ceil(w);
+    let m = lcc_color::SRGB.to_space(&lcc_color::REC2020);
+    let mut img = Rgb32f::new(w, h);
+    for (i, px) in img.data.iter_mut().enumerate() {
+        let e = colours.get(i).copied().unwrap_or([0.5; 3]);
+        *px = m.apply_f32(e.map(lcc_color::transfer::srgb_to_linear));
+    }
+    (Arc::new(img), h)
+}
+
+fn brightness_codes(src: &Arc<Rgb32f>, s: &DevelopSettings, w: usize, h: usize, gpu_side: bool) -> Vec<f32> {
+    let req = RenderRequest { depth: lcc_pipeline::OutputDepth::F32Hdr, ..RenderRequest::fit(w, h) };
+    let info = SourceInfo::default();
+    let r =
+        if gpu_side { lcc_gpu::try_render(src, &info, s, &req, None).expect("the GPU renders float requests") } else { render(src, &info, s, &req) };
+    hdr_codes(&r)
+}
+
+fn brightness_agreement(name: &str, stops: Option<f64>) {
+    let hdr = stops.is_some();
+    // an HDR render of `stops` stops of headroom has the encoded headroom H; the grey ramp runs up to just below it, so it covers
+    // the whole range from SDR white to H (the pass-through above H is in the CPU stage tests)
+    let top = stops.map_or(1.0, |ev| {
+        let h = lcc_pipeline::brightness::BrightnessK::for_peak(1.0, 2f32.powf(ev as f32)).expect("a stage").h;
+        0.98 * h
+    });
+    let colours = brightness_sweep(top);
+    let (src, h) = brightness_image(&colours, 128);
+    let mut flat = DevelopSettings::default();
+    if let Some(ev) = stops {
+        flat.hdr.enabled = true;
+        flat.hdr.max_ev = ev;
+    }
+    // the two renderers' own difference without Brightness, for reference
+    let base = {
+        let (a, b) = (brightness_codes(&src, &flat, 128, h, false), brightness_codes(&src, &flat, 128, h, true));
+        a.iter().zip(&b).map(|(p, q)| (p - q).abs()).fold(0.0f32, f32::max)
+    };
+    eprintln!("{name:<24} without Brightness: CPU and GPU differ by at most {base:.4} of an 8-bit level");
+    for cf in [-100.0, -50.0, -20.0, -1.0, 1.0, 20.0, 50.0, 100.0] {
+        let mut s = flat.clone();
+        s.light.brightness = cf;
+        let (a, b) = (brightness_codes(&src, &s, 128, h, false), brightness_codes(&src, &s, 128, h, true));
+        assert_eq!(a.len(), b.len());
+        let (mut max, mut sum) = (0.0f32, 0.0f64);
+        for (p, q) in a.iter().zip(&b) {
+            let d = (p - q).abs();
+            max = max.max(d);
+            sum += d as f64;
+        }
+        eprintln!("{name:<24} cf {cf:>6}: max {max:.4}  mean {:.5} (8-bit levels, {} samples)", sum / a.len() as f64, a.len());
+        // the two renderers already differ by `base` before the stage (the sRGB encode near black), and the stage amplifies
+        // that by at most its steepest slope; what it adds itself must stay within 0.1 of a level
+        let slope = (lcc_pipeline::brightness::PHI_PER_UNIT * f64::abs(cf) / lcc_pipeline::brightness::CF_PER_C1).exp() as f32;
+        assert!(
+            max <= slope * base + 0.1,
+            "{name}, cf {cf}: CPU and GPU differ by {max:.4} of an 8-bit level (before the stage {base:.4}, slope {slope:.2})"
+        );
+        // the stage did something
+        let plain = brightness_codes(&src, &flat, 128, h, false);
+        let moved = a.iter().zip(&plain).map(|(p, q)| (p - q).abs()).fold(0.0f32, f32::max);
+        assert!(moved > 0.1, "{name}, cf {cf}: Brightness changed nothing ({moved})");
+        if hdr {
+            assert!(a.iter().any(|&c| c > 255.5), "{name}, cf {cf}: the sweep reaches above SDR white");
+        }
+    }
+}
+
+#[test]
+fn brightness_matches_the_cpu_on_a_dense_sweep_and_the_chart_colours() {
+    if !gpu() {
+        return;
+    }
+    brightness_agreement("brightness SDR", None);
+    // the HDR headroom from 1 stop to the largest (5 stops, peak 32, H = 4.42 encoded)
+    for ev in [1.0, 2.0, 3.0, 5.0] {
+        brightness_agreement(&format!("brightness HDR {ev} stops"), Some(ev));
+    }
+}

@@ -132,7 +132,7 @@ the only copy of those edits outside that application's catalog. Saving never dr
 Limits: the app writes keywords to `dc:subject` only, so another application's `lr:hierarchicalSubject` is kept as
 it was and may still list keywords removed in the app. The app doesn't write `crs:`: the other application's
 develop settings stay as that application left them, next to the app's own (`lc:settings`, which the app reads
-first). Levels (the Levels section) are only in `lc:settings`: they have no `crs:` equivalent, so Lightroom shows the photo without them.
+first). Levels (the Levels section) are only in `lc:settings`: they have no `crs:` equivalent, so Lightroom shows the photo without them. Brightness (the Basic section's slider after Contrast) is only in `lc:settings`: it is not written to `crs:` and not mapped to Lightroom's legacy `crs:Brightness` (Process Version 2010), which is a different operation, so Lightroom shows the photo without it.
 
 ## Shared names
 

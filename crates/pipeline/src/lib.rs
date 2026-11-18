@@ -26,6 +26,7 @@
 pub mod auto;
 pub mod auto_mask;
 pub mod blemish;
+pub mod brightness;
 pub mod colorops;
 pub mod cull;
 pub mod curve;
