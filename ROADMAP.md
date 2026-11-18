@@ -85,13 +85,13 @@ while lower-layer errors stay English. Detail: [localization-parity.md](docs/loc
 |---|---|---:|---|
 | English | en | 100% | full (source) |
 | Simplified Chinese | zh-hans | 87% | partial |
-| Spanish | es | 86% | partial |
+| Spanish | es | 98% | partial |
 | Hindi | hi | 0% | none (no Devanagari shaping) |
 | Arabic | ar | 0% | none (no RTL / shaping) |
-| French | fr | 88% | partial |
+| French | fr | 97% | partial |
 | Portuguese (Brazil) | pt-br | 85% | partial |
 | Indonesian | id | 100% (What's New in English) | partial |
-| Japanese | ja | 87% | partial |
+| Japanese | ja | 99% | partial |
 | German | de | 97% (3,644/3,754) | partial |
 | Korean | ko | 0% | none (no Hangul face) |
 | Vietnamese | vi | 97% (What's New in English) | partial |
@@ -199,7 +199,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-18 | patch | Vietnamese (`vi`), shipped with 97% of its messages and formats (2,893 of 2,988 measured on 2026-11-18; What's New in English), counted in the key languages (#4460): Localization ~64% → ~72% (mean of the 12 key languages), 9 of 12 present; new-script estimate 124–222 h |
+| 2026-11-18 | patch | Vietnamese (`vi`), shipped with 97% of its messages and formats (2,893 of 2,988 measured on 2026-11-18; What's New in English), counted in the key languages (#4460): Localization ~64% → ~72% (mean of the 12 key languages; the Spanish, French and Japanese rows of the language table updated to the 2026-10-12 measurements the mean uses), 9 of 12 present; new-script estimate 124–222 h |
 | 2026-11-15 | minor | Lens Blur with AI subject focus and per-mask bokeh; survey tiles fit the photos' shapes and glide to their new places; direct import of Lightroom backup zips (#2592); legacy shutter repair in virtual copies; the opened-library folder-safety fix; v0.21.0 and v0.21.1 released; craft-libs cutover for TIFF/JPEG/JXL/GIF/PSD/HEIF/raw, metadata and gain maps, plus a security-hardening batch; headline numbers not re-measured |
 | 2026-10-24 | minor | Priority 7 (lens profile database) links its tracking issue #329; headline numbers unchanged |
 | 2026-10-24 | patch | Alpha rationale: tests run in CI on Linux x64 (#2667) and FreeBSD nightly, not on macOS or Windows; ranked item 8 now reads "Tests in CI on macOS and Windows, and the GPU tests in CI"; percentages and hours unchanged |
