@@ -1708,6 +1708,8 @@ mod tests {
         }
         let open_people = |h: &mut Headless| {
             h.request("engine.execute", json!({"command": "view.people"}), t);
+            // the people's cards are under Confirmed; the view opens on the unknown faces (issue #1050)
+            h.app.ui.people_category = crate::state::PeopleCategory::Confirmed;
             h.settle(SETTLE);
             h.step();
         };
