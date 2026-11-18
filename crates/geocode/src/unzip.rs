@@ -62,7 +62,7 @@ pub fn extract(zip: &[u8], name: &str, max: usize) -> Result<Vec<u8>, GeocodeErr
             0 if data.len() <= max => Ok(data.to_vec()),
             0 => Err(GeocodeError::Invalid(format!("{name} is larger than {max} bytes"))),
             8 => {
-                let decoded = miniz_oxide::inflate::decompress_to_vec_with_limit(data, max).map_err(|e| bad(&format!("deflate: {e:?}")))?;
+                let decoded = miniz_oxide::inflate::decompress_to_vec_with_limit(data, max).map_err(|e| bad(&format!("deflate: {:?}", e.status)))?;
                 if decoded.len() != usize_ {
                     return Err(bad("uncompressed size"));
                 }

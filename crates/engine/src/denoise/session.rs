@@ -1,3 +1,5 @@
+#[cfg(feature = "denoise")]
+use super::builtin::{builtin_card, builtin_marker};
 #[cfg(doc)]
 use super::model::Model;
 use super::model::STACK;
@@ -15,6 +17,11 @@ impl Session {
         let loaded = self.denoise.active.as_ref().and_then(|a| a.model.lock().unwrap_or_else(PoisonError::into_inner).clone());
         match loaded {
             Some(m) => m.device(self.denoise.settings.run_on()),
+            #[cfg(feature = "denoise")]
+            None if self.denoise.active.as_ref().is_some_and(|a| a.id == lightcraft_denoise::builtin::ID) => {
+                let onnx = self.denoise.active.as_ref().map(|a| a.onnx.clone()).unwrap_or_default();
+                builtin_card(&builtin_marker(&onnx)).device(self.denoise.settings.run_on())
+            }
             None => json!({"kind": "none"}),
         }
     }
@@ -37,23 +44,20 @@ impl Session {
             let id = self.denoise.settings.model.clone()?;
             installed_models(dir).into_iter().find(|i| i.manifest.id == id)
         });
-        let found = chosen.map(|i| (i.fingerprint(), i));
-        let same = match (&self.denoise.active, &found) {
-            (None, None) => true,
-            (Some(a), Some((fp, _))) => a.fingerprint == *fp,
-            _ => false,
+        // no model chosen (or the one chosen is gone): the built-in denoiser
+        let (fingerprint, manifest, onnx) = match chosen {
+            Some(i) => (i.fingerprint(), i.manifest, i.onnx),
+            None => {
+                let manifest = lightcraft_denoise::builtin::manifest();
+                let onnx = self.denoise.models_dir.as_deref().map(|d| d.join(lightcraft_denoise::builtin::ID)).unwrap_or_default();
+                (format!("{}@{}", manifest.id, manifest.version), manifest, onnx)
+            }
         };
-        if same {
+        if self.denoise.active.as_ref().is_some_and(|a| a.fingerprint == fingerprint) {
             return;
         }
         // another model: what was made with the old one is not this one's, and what failed may work now
-        self.denoise.active = found.map(|(fingerprint, i)| Active {
-            id: i.manifest.id.clone(),
-            manifest: i.manifest,
-            onnx: i.onnx,
-            fingerprint,
-            model: Arc::new(Mutex::new(None)),
-        });
+        self.denoise.active = Some(Active { id: manifest.id.clone(), manifest, onnx, fingerprint, model: Arc::new(Mutex::new(None)) });
         if let Some(r) = self.denoise.running.take() {
             r.progress.cancel_now();
         }
@@ -142,8 +146,8 @@ impl Session {
             return PhotoState::NotApplicable;
         }
         if self.denoise.active.is_none() {
-            // the model folder has not been looked at yet (just started): not "no model" until it has been
-            return if self.denoise.active_seen.is_none() { PhotoState::Idle } else { PhotoState::NoModel };
+            // the model in use has not been looked at yet (just started)
+            return PhotoState::Idle;
         }
         if self.denoise_products_dir().is_none() {
             return PhotoState::Failed {
@@ -310,8 +314,12 @@ impl Session {
     /// Keep the cache within its limit: the pictures nobody asks for go first, the oldest first; `keep` (the one just
     /// made) never goes. The index forgets what was deleted.
     pub(crate) fn denoise_evict(&mut self, keep: Option<&Path>) {
-        let Some(models) = self.denoise.models_dir.clone() else { return };
-        self.denoise_evict_to(read_settings(&models).cache_bytes(), keep);
+        self.denoise_evict_to(self.denoise_cache_limit(), keep);
+    }
+
+    /// The cache's size limit in bytes (the default without a models folder).
+    pub(crate) fn denoise_cache_limit(&self) -> u64 {
+        self.denoise.models_dir.as_deref().map(read_settings).unwrap_or_default().cache_bytes()
     }
 
     /// [`Self::denoise_evict`] for a limit of `limit` bytes.

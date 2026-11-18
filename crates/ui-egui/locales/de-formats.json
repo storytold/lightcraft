@@ -23,6 +23,7 @@
   "Added {n} photo{} to My Photos": "{n} Foto{} zu „Meine Fotos“ hinzugefügt",
   "Added {n} photo{} to “{}”": "{n} Foto{0} zu „{1}“ hinzugefügt",
   "Added {what} to {name}": "{what} zu {name} hinzugefügt",
+  "Adjustments: {n}": "Anpassungen: {n}",
   "Adding photos… {} of {}": "Fotos werden hinzugefügt… {} von {}",
   "All {n} selected photos move by the same amount.": "Alle {n} ausgewählten Fotos werden um denselben Betrag verschoben.",
   "Already in the library, in Recently Deleted: {} photo{} selected · right-click ▸ Restore, or Delete Permanently to import afresh": "Bereits in der Bibliothek unter „Zuletzt gelöscht“: {} Foto{} ausgewählt · Rechtsklick → Wiederherstellen, oder endgültig löschen, um neu zu importieren",
@@ -161,6 +162,8 @@
   "{n} change{} couldn't be written to disk: {e}\nIf you quit now, {} lost.": "{n} Änderung(en) konnten nicht auf den Datenträger geschrieben werden{0:.0}: {e}\nWenn du jetzt beendest, gehen sie verloren.{1:.0}",
   "{n} change{} saved in memory but not written to disk: {e}\nLightCraft retries automatically; quitting now would lose {}.": "{n} Änderung(en) nur im Arbeitsspeicher, nicht auf dem Datenträger gespeichert{0:.0}: {e}\nLightCraft versucht es automatisch erneut; wenn du jetzt beendest, gehen sie verloren.{1:.0}",
   "{n} change{} saved in memory but not written to disk: {e} — LightCraft will retry": "{n} Änderung(en) nur im Arbeitsspeicher gespeichert{:.0}: {e} – LightCraft versucht es erneut",
+  "{n} file{} skipped (not a supported photo type)": "Übersprungene Dateien (kein unterstützter Fototyp): {n}{:.0}",
+  "{n} folder{} could not be read": "Ordner, die nicht gelesen werden konnten: {n}{:.0}",
   "{n} found · {sel} selected": "{n} gefunden · {sel} ausgewählt",
   "{n} photos": "Fotos: {n}",
   "{n} photos in {} are hidden by the filters above": "{n} Fotos in {} werden durch die obigen Filter ausgeblendet",
@@ -313,9 +316,15 @@
   "Added {n} photo{}": "{n} Foto{} hinzugefügt",
   "Where should the Lightroom catalog “{catalog}” go?": "Wohin soll der Lightroom-Katalog „{catalog}“?",
   "Merge into the open library “{library}” ({count} photo{})": "Mit der geöffneten Bibliothek „{library}“ zusammenführen ({count} Foto{})",
+  "Profile: {} (lens database)": "Profil: {} (Objektivdatenbank)",
+  "No lens profile found for {}.": "Kein Objektivprofil für {} gefunden.",
+  "{n} photos got their lens profile": "{n} Fotos haben ihr Objektivprofil erhalten",
   "Photo: {name}": "Foto: {name}",
   "Panel layout could not be restored: {error}": "Die Bereichsanordnung konnte nicht wiederhergestellt werden: {error}",
   "Panel move was not applied: {error}": "Das Verschieben des Bereichs wurde nicht ausgeführt: {error}",
   "{name} is installed": "{name} ist installiert",
-  "{name} is installed and in use: face recognition is on": "{name} ist installiert und in Gebrauch: Gesichtserkennung ist eingeschaltet"
+  "{name} is installed and in use: face recognition is on": "{name} ist installiert und in Gebrauch: Gesichtserkennung ist eingeschaltet",
+  "Bring photos in with File › Import Photos… ({keys}).": "Fotos holen Sie mit Datei › Fotos importieren… ({keys}) in die Bibliothek.",
+  "View › Detail View ({keys}).": "Ansicht › Detailansicht ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "Datei › Exportieren… · Datei › Drucken… ({keys})."
 }

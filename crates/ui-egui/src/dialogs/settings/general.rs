@@ -109,6 +109,50 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
             "To hand this editor the original file itself instead (the raw, without a copy: DxO PhotoLab, for example), right-click a photo → Edit In → Open Original in Other Editor (RAW, no copy).",
         ),
     );
+    #[cfg(not(target_arch = "wasm32"))]
+    lens_profiles(app, ui, t);
+}
+
+/// Lens profiles: whether the lens database is here, a button that downloads it (nothing is fetched without a
+/// click: the first launch offers it once, [`crate::lens_db`]), and the startup offer turned back on or off.
+#[cfg(not(target_arch = "wasm32"))]
+fn lens_profiles(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    use lightcraft_engine::lensfun_download::{self, Offer};
+    heading(ui, t, crate::i18n::tr("Lens profiles"));
+    let running = app.session.lensfun.running();
+    // (the user's own folder, LIGHTCRAFT_LENSFUN_DIR, is read instead and never replaced)
+    let own = std::env::var_os(lightcraft_engine::lens_profiles::ENV).is_some_and(|v| !v.is_empty());
+    let installed = lensfun_download::default_dir().is_some_and(|d| lensfun_download::installed(&d));
+    let status = if own {
+        crate::i18n::tr("Lens profiles are read from the folder LIGHTCRAFT_LENSFUN_DIR names.").to_string()
+    } else if running {
+        crate::i18n::tr("Downloading the lens database…").to_string()
+    } else if installed {
+        crate::i18n::tr("The lens database is installed.").to_string()
+    } else {
+        crate::i18n::tr_format!("The lens database is not installed (about {size} MB).", size = lensfun_download::download_megabytes())
+    };
+    row(ui, t, crate::i18n::tr("Lens database"), |ui| {
+        ui.label(RichText::new(status).color(t.text));
+        let r = ui.add_enabled(!own && !running && !installed, egui::Button::new(crate::i18n::tr("Download Lens Database")));
+        register(ui, "button:settingsLensDatabase", r.rect);
+        if r.clicked()
+            && let Err(e) = crate::lens_db::download_default(app)
+        {
+            app.toast(ui.ctx(), e);
+        }
+    });
+    let mut offer = app.ui.settings.lens_database != Offer::Declined;
+    if check(ui, "settings.lensDatabaseOffer", &mut offer, "Offer the lens database download when LightCraft starts") {
+        app.ui.settings.lens_database = if offer { Offer::Ask } else { Offer::Declined };
+    }
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(
+            "lensfun's open lens database (CC BY-SA 3.0) corrects distortion and vignetting for many lenses. It is only downloaded when you choose to.",
+        ),
+    );
 }
 
 /// The file Edit In hands an editor: format, colour space and bit depth (`button:{id}Format-…`).
