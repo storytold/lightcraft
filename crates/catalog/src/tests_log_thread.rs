@@ -105,7 +105,21 @@ fn a_failed_write_is_held_reported_and_retried() {
     store.flush().unwrap();
     let fail = Arc::new(AtomicBool::new(true));
     let f = fail.clone();
-    fault::install(&dir, Arc::new(move |_| if f.load(Ordering::SeqCst) { Err(std::io::Error::other("disk full (test)")) } else { Ok(()) }));
+    let log_path = dir.join(LOG);
+    fault::install(
+        &dir,
+        Arc::new(move |step| {
+            if f.load(Ordering::SeqCst) && step == fault::Step::Sync {
+                // Inject the torn tail before the failed sync returns. Writing it from the test
+                // thread races a successful retry and can append a foreign tail after that retry.
+                use std::io::Write;
+                std::fs::OpenOptions::new().append(true).open(&log_path)?.write_all(b"{\"seq\":")?;
+                Err(std::io::Error::other("disk full (test)"))
+            } else {
+                Ok(())
+            }
+        }),
+    );
     // (one append: the log thread can fail the first before a second arrives, and then refuses it)
     store.append(LOG, b"1\n2\n").unwrap();
     wait_until("the failure is published", || store.unwritten().is_some());
@@ -120,17 +134,41 @@ fn a_failed_write_is_held_reported_and_retried() {
     // a cut within what is held keeps it (the journal cuts back to its own length on an error)
     store.truncate(LOG, 6).unwrap();
     assert_eq!(store.read(LOG).unwrap().unwrap(), b"0\n1\n2\n");
-    // a fragment of a failed write left in the file is cut before the retry
-    {
-        use std::io::Write;
-        let mut file = std::fs::OpenOptions::new().append(true).open(dir.join(LOG)).unwrap();
-        file.write_all(b"{\"seq\":").unwrap();
-    }
+    // The failed sync injected a fragment: the retry must remove it before writing the held bytes.
     fail.store(false, Ordering::SeqCst);
     wait_until("retried on its own", || store.unwritten().is_none());
     store.append(LOG, b"3\n").unwrap();
     store.flush().unwrap();
     assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), b"0\n1\n2\n3\n");
+    fault::remove(&dir);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A log longer than the thread wrote is cut back only when a write of its own failed (that
+/// fragment is its own). A failure that never touched the file (here the write step, as a folder
+/// refused while another is put at the path) leaves the log it finds alone: it may be another
+/// folder's, and cutting it would corrupt it.
+#[test]
+fn a_log_longer_than_the_thread_wrote_is_not_cut_unless_its_own_write_failed() {
+    let dir = temp_dir("not-torn");
+    let mut store = FsStore::open(&dir).unwrap();
+    store.append(LOG, b"0\n").unwrap();
+    store.flush().unwrap();
+    let fail = Arc::new(AtomicBool::new(true));
+    let f = fail.clone();
+    fault::install(
+        &dir,
+        Arc::new(
+            move |step| if f.load(Ordering::SeqCst) && step == fault::Step::Write { Err(std::io::Error::other("refused (test)")) } else { Ok(()) },
+        ),
+    );
+    store.append(LOG, b"1\n").unwrap();
+    wait_until("the failure is published", || store.unwritten().is_some());
+    let theirs = b"0\nrecords of another log\n";
+    std::fs::write(dir.join(LOG), theirs).unwrap();
+    fail.store(false, Ordering::SeqCst);
+    wait_until("looked at again", || store.unwritten().is_some_and(|(_, why)| why.contains("another file")));
+    assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), theirs, "left as it was found");
     fault::remove(&dir);
     let _ = std::fs::remove_dir_all(&dir);
 }
