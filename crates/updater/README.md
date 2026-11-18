@@ -109,8 +109,8 @@ unset MACOS_SIGN_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID   # ad-hoc signi
 mkdir -p "$S/old" "$S/cfg" "$S/lib" "$S/m"
 # no update check in the relaunched app (the test refuses to run without this)
 echo '{"version": 1, "updates": {"checkAtStartup": false}}' > "$S/cfg/updates.json"
-DIST="$S/a" PACKAGE_VERSION=0.0.1 packaging/macos/package.sh --arch aarch64
-DIST="$S/b" PACKAGE_VERSION="$V" packaging/macos/package.sh --arch aarch64 --skip-build
+DIST="$S/a" PACKAGE_VERSION=0.0.1 packaging/macos/package.sh --arch arm64
+DIST="$S/b" PACKAGE_VERSION="$V" packaging/macos/package.sh --arch arm64 --skip-build
 hdiutil attach -readonly -nobrowse -mountpoint "$S/m" "$S"/a/*.dmg
 ditto "$S/m/$APP" "$S/old/$APP" && hdiutil detach "$S/m"
 UPDATER_TEST_DMG="$(ls "$S"/b/*.dmg)" UPDATER_TEST_BUNDLE="$S/old/$APP" \

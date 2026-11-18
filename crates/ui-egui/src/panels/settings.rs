@@ -2074,6 +2074,9 @@ fn interface_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     check(ui, "settings.reduceMotion", &mut app.ui.settings.reduce_motion, "Reduce motion");
     hint(ui, t, crate::i18n::tr("Turns off zoom and spinner animations. Fades stay."));
     check(ui, "settings.wheelResizesBrush", &mut app.ui.settings.wheel_resizes_brush, "Wheel resizes brush instead of zooming");
+    if app.ui.settings.wheel_resizes_brush {
+        check(ui, "settings.invertBrushResize", &mut app.ui.settings.invert_brush_resize, "Invert brush resize direction");
+    }
     check(ui, "settings.expandedSliders", &mut app.ui.settings.expanded_sliders, "Expanded sliders");
     hint(ui, t, crate::i18n::tr("Warning, expanding sliders is not XMP compliant."));
     heading(ui, t, crate::i18n::tr("Keywords"));

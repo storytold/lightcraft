@@ -73,8 +73,21 @@ fn draw_control(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings, id: &s
     // Compact: the short name under its group's caption, so the section's name column stays narrow
     let label = label.or_else(|| if crate::theme::compact(ui.ctx()) { short_name(id) } else { None });
     // greyed out inside a disabled scope (a control video can't take)
+    // a double-click on the name resets to this photo's own default (a raw starts with sharpening 40 and colour
+    // noise reduction 25), not to the neutral value of the spec table (issue #1244)
+    let own = photo_default_spec(app, spec);
+    let spec = own.as_ref().unwrap_or(spec);
     let out = slider(ui, spec, v, enabled && ui.is_enabled(), label);
     apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": id, "value": v})));
+}
+
+/// `spec` with the active photo's own default for the control, when it starts from another one than the spec table's
+/// ([`lcc_catalog::Photo::camera_defaults`]); `None` when they agree.
+pub(crate) fn photo_default_spec(app: &LccApp, spec: &ControlSpec) -> Option<ControlSpec> {
+    let id = app.session.active()?;
+    let photo = app.session.catalog.photo(id)?;
+    let default = controls::get(&photo.camera_defaults(), spec.id)?;
+    ((default - spec.default).abs() > 1e-9).then(|| ControlSpec { default: default.clamp(spec.min, spec.max), ..*spec })
 }
 
 /// The short name a slider shows in the Compact layout under its group's caption (Grain ▸ Amount,
@@ -323,6 +336,10 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     }
     // Lightroom Classic's Develop panels, in its order: Basic, Tone Curve, Color Mixer, Color Grading, Detail, Lens
     // Corrections, Transform, Effects, Calibration (the fork's: upstream groups them as the cloud app does)
+    // Levels come before the Tone Curve in the pipeline (and here): the encoded values after Exposure
+    section(app, ui, &d, "levels", "Levels", |app, ui, d| {
+        super::levels::levels(app, ui, id, d);
+    });
     section(app, ui, &d, "curve", "Tone Curve", |app, ui, d| {
         curve_editor(app, ui, id, d, CurveTarget::Photo);
         ui.add_space(8.0);
@@ -1518,7 +1535,7 @@ fn curve_histogram_profile(h: &lcc_raster::Histogram, channel: &str) -> [f32; 25
 
 /// Show the currently rendered photo's tonal distribution behind the editable
 /// curve, without requesting another render or blocking pointer interactions.
-fn draw_curve_histogram(p: &egui::Painter, r: Rect, h: &lcc_raster::Histogram, channel: &str) {
+pub(crate) fn draw_curve_histogram(p: &egui::Painter, r: Rect, h: &lcc_raster::Histogram, channel: &str) {
     let profile = curve_histogram_profile(h, channel);
     let color = match channel {
         "red" => hex("#dd3333"),
@@ -1600,7 +1617,7 @@ impl StackedCurve {
 /// for this widget (released outside the window, over a popup, or on a frame the widget does not
 /// run). A dangling interaction would make every later edit a silent preview — Undo would then
 /// appear to do nothing at all. Returns whether the drag is over, so the caller clears its state.
-fn commit_interaction(app: &mut LccApp, ui: &egui::Ui, dragging: bool, stopped: bool) -> bool {
+pub(crate) fn commit_interaction(app: &mut LccApp, ui: &egui::Ui, dragging: bool, stopped: bool) -> bool {
     let released = ui.input(|i| i.pointer.any_released()) || !ui.input(|i| i.pointer.primary_down());
     if !dragging || !(stopped || released) {
         return false;

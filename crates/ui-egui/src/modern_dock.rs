@@ -103,7 +103,7 @@ impl Group {
         match self {
             Group::Light => &[("light", "Basic"), ("profile", "Profile & Treatment")],
             Group::Colour => &[("mixer", "Color Mixer"), ("grading", "Color Grading"), ("calibration", "Calibration")],
-            Group::Tone => &[("curve", "Tone Curve")],
+            Group::Tone => &[("levels", "Levels"), ("curve", "Tone Curve")],
             Group::Detail => &[("detail", "Detail"), ("retouch", "Retouch")],
             Group::Optics => &[("optics", "Lens Corrections"), ("geometry", "Transform")],
             Group::Effects => &[("effects", "Effects"), ("plugins", "Plug-in Filters")],
@@ -141,6 +141,7 @@ fn section_of(control: &str) -> Option<&'static str> {
         (_, "color.saturation" | "color.vibrance") => "mixer",
         ("vignette" | "grain", _) => "effects",
         ("curve", _) => "curve",
+        ("levels", _) => "levels",
         ("wb", _) => "light",
         ("detail", _) => "detail",
         ("optics", _) => "optics",
@@ -540,7 +541,8 @@ pub(crate) fn card(app: &mut LccApp, ui: &egui::Ui, area: Rect, dock: Rect) {
 fn pill(app: &mut LccApp, ui: &mut egui::Ui, spec: &'static ControlSpec) {
     let Some(v) = value_of(app, spec) else { return };
     let section = section_of(spec.id);
-    let out = crate::widgets::pill(ui, spec, v, true, section.is_some());
+    let own = edit::photo_default_spec(app, spec);
+    let out = crate::widgets::pill(ui, own.as_ref().unwrap_or(spec), v, true, section.is_some());
     if out.more {
         app.ui.modern.more = section.map(str::to_string);
     }

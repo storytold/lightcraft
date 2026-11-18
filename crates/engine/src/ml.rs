@@ -64,6 +64,14 @@ const LIGHT_REST: Duration = Duration::from_millis(25);
 /// Poll interval when `ml.pump` pauses background work.
 const PAUSE_POLL: Duration = Duration::from_millis(25);
 
+/// Photos in a row that fail to index, with none indexed between them, before background indexing pauses itself: a
+/// fault that fails every photo (a model or device that can't run here) would otherwise read and decode the whole
+/// library, at full speed, on every start. Resuming (the row's button, `ml.resume`) tries again.
+pub(crate) const FAIL_STREAK_PAUSE: u32 = 25;
+
+/// How many failures a session writes to the log with their reason (then every hundredth): enough to say why.
+const FAILURES_LOGGED: u32 = 5;
+
 /// Default `topK` when semantic search filters the grid (`library.filter {semantic}` or `search.semantic {filter: true}`).
 pub const DEFAULT_FILTER_TOP_K: usize = 200;
 
@@ -263,6 +271,10 @@ pub(crate) struct State {
     pub in_flight: HashSet<PhotoId>,
     /// Photos `(id, fingerprint)` whose decode/inference failed this session.
     pub failed_photos: HashSet<(u64, u64)>,
+    /// Photos that failed in a row since one was last indexed ([`FAIL_STREAK_PAUSE`]).
+    fail_streak: u32,
+    /// Failures this session (for [`FAILURES_LOGGED`]).
+    failures_seen: u32,
     /// Last time `store` was saved to disk.
     last_saved: Option<web_time::Instant>,
     /// Last time `ml_models_dir` was checked by `ml.pump`.
@@ -298,6 +310,8 @@ impl Default for State {
             store_path: None,
             in_flight: HashSet::new(),
             failed_photos: HashSet::new(),
+            fail_streak: 0,
+            failures_seen: 0,
             last_saved: None,
             last_checked: None,
             query_seq: 0,
@@ -367,6 +381,7 @@ impl State {
             self.in_flight.clear();
         }
         self.failed_photos.clear();
+        self.fail_streak = 0;
         self.paused_by_user = false;
         self.paused_row = None;
         self.store = None;
@@ -1011,6 +1026,7 @@ impl Session {
         } else {
             self.ml.paused_by_user = false;
             self.ml.paused_row = None;
+            self.ml.fail_streak = 0;
         }
         if let Some(row) = self.ml.row.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
             row.set_controls(Some(row_controls(paused)));
@@ -1486,6 +1502,7 @@ impl Session {
         let busy = q.busy();
         let mut added = 0usize;
         let mut failed = 0usize;
+        let mut last_failure = None;
         for f in finished {
             if let Some(rest) = f.key.strip_prefix("embed:")
                 && let Ok(raw_id) = rest.parse::<u64>()
@@ -1504,10 +1521,18 @@ impl Session {
                             && store.insert(out.photo_id.0, out.fingerprint, out.embedding).is_ok()
                         {
                             added += 1;
+                            self.ml.fail_streak = 0;
                         }
                     }
-                    Outcome::Failed(_) => {
+                    Outcome::Failed(why) => {
                         failed += 1;
+                        self.ml.fail_streak = self.ml.fail_streak.saturating_add(1);
+                        self.ml.failures_seen = self.ml.failures_seen.saturating_add(1);
+                        let n = self.ml.failures_seen;
+                        if n <= FAILURES_LOGGED || n.is_multiple_of(100) {
+                            log::warn!("ml: photo {raw_id} could not be indexed ({n} so far this session): {why}");
+                        }
+                        last_failure = Some(why);
                         if let Some(photo) = self.catalog.photo(pid) {
                             self.ml.failed_photos.insert((pid.0, photo_fingerprint(photo)));
                         }
@@ -1517,6 +1542,16 @@ impl Session {
                         self.ml.in_flight.clear();
                     }
                 }
+            }
+        }
+        if self.ml.fail_streak >= FAIL_STREAK_PAUSE && !self.ml.paused {
+            log::warn!(
+                "ml: {} photos in a row could not be indexed; background indexing pauses until it is resumed (last: {})",
+                self.ml.fail_streak,
+                last_failure.as_deref().unwrap_or("unknown")
+            );
+            if let Err(e) = self.ml_set_paused("ml.pump", true) {
+                log::warn!("ml: could not save the pause: {e}");
             }
         }
         let should_save =

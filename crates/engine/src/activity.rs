@@ -165,6 +165,9 @@ pub struct TaskInfo {
     pub batch: bool,
     /// Items that failed so far (counted in `done` too).
     pub failed: u64,
+    /// Why the first of them failed ("IMG_2.CR3: the file is damaged"), for the row's hover while it still runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_failure: Option<String>,
     /// Time left (ms), estimated from the measured time per item; none until an item is done, or while the total
     /// isn't known.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -403,6 +406,7 @@ impl Entry {
             parent: self.parent,
             batch: self.batch,
             failed: self.failed.load(Ordering::Relaxed),
+            first_failure: lock(&self.reasons).first().cloned(),
             eta_ms: if self.batch && unit == Unit::Count { self.eta_ms(done, total) } else { None },
             stop_warning,
             controls: lock(&self.controls).clone(),

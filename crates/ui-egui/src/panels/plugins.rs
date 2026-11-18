@@ -1223,8 +1223,17 @@ fn approval_ui(ctx: &egui::Context, s: &mut State, installs: &Installs, actions:
     let version_error = pending.info["versionError"].as_str().map(str::to_string);
     // a module of the other kind (plug-in or pixel filter) has its id
     let conflict = pending.info["conflict"].as_str().map(str::to_string);
-    let blocked = !missing.is_empty() || version_error.is_some() || conflict.is_some();
+    // the author signature: who signed it, and whether that's the installed version's pinned signer
+    let signature = pending.info["signature"].as_str().unwrap_or("none").to_string();
+    let signer = pending.info["signer"].as_str().unwrap_or_default().to_string();
+    // what the yes is bound to: exactly the key shown, not only its fingerprint
+    let signer_key = pending.info["signerKey"].as_str().unwrap_or_default().to_string();
+    let pinned = pending.info["pinned"].clone();
+    let invalid = (signature == "invalid").then(|| pending.info["signatureError"].as_str().unwrap_or_default().to_string());
+    let blocked = !missing.is_empty() || version_error.is_some() || conflict.is_some() || invalid.is_some();
     let downgrade = pending.info["downgrade"].as_bool() == Some(true);
+    // another signer than the pinned one, or none: installing is the user's yes to it
+    let signer_changed = pending.info["matchesPin"] == false;
     let mut keep = true;
     let window_id = key().with("approve");
     let shown = egui::Window::new(tr("Install Plug-in"))
@@ -1244,6 +1253,35 @@ fn approval_ui(ctx: &egui::Context, s: &mut State, installs: &Installs, actions:
                     ui.label(tr_format!("Version {new} is older than the installed version {installed}", new = new, installed = old));
                 } else if installed.is_object() {
                     ui.label(format!("{} {old}", tr("Updates the installed version")));
+                }
+                match signature.as_str() {
+                    "valid" if pinned["signer"].as_str() == Some(signer.as_str()) => {
+                        ui.label(tr_format!("Signed by {signer}, the same author as the installed version", signer = signer));
+                    }
+                    "valid" => {
+                        ui.label(tr_format!("Signed by {signer}", signer = signer));
+                    }
+                    "none" => {
+                        ui.label(tr("Not signed: nothing shows who made it"));
+                    }
+                    // invalid: what stops the install, below
+                    _ => {}
+                }
+                if signer_changed && !blocked {
+                    let text = match (pinned["readable"] == false, pinned["signer"].as_str(), signature.as_str()) {
+                        (true, ..) => tr("The installed version's signer can't be read. Install it only if you trust where it came from.").to_string(),
+                        (false, Some(old), "valid") => tr_format!(
+                            "The installed version was signed by {old}, but this file is signed by {new}. Install it only if you trust where it came from.",
+                            old = old,
+                            new = signer
+                        ),
+                        (false, Some(old), _) => tr_format!(
+                            "The installed version was signed by {old}, but this file isn't signed. Install it only if you trust where it came from.",
+                            old = old
+                        ),
+                        _ => String::new(),
+                    };
+                    ui.colored_label(ui.visuals().warn_fg_color, text);
                 }
                 // fields this version doesn't know: a typo, or a field from a newer app
                 let unknown: Vec<&str> = pending.info["unknownFields"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
@@ -1270,7 +1308,7 @@ fn approval_ui(ctx: &egui::Context, s: &mut State, installs: &Installs, actions:
                         }
                         ui.label(tr("Install a newer version of the app to use it."));
                     }
-                    for e in version_error.iter().chain(&conflict) {
+                    for e in version_error.iter().chain(&conflict).chain(&invalid) {
                         ui.label(format!("{} {e}", tr("It can't be installed:")));
                     }
                     return;
@@ -1292,9 +1330,22 @@ fn approval_ui(ctx: &egui::Context, s: &mut State, installs: &Installs, actions:
                 ui.separator();
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     use crate::button::{Button, Kind};
-                    let label = if downgrade { "Install Older Version" } else { "Install" };
+                    let label = if signer_changed {
+                        "Install Anyway"
+                    } else if downgrade {
+                        "Install Older Version"
+                    } else {
+                        "Install"
+                    };
                     if !blocked && Button::new(label).kind(Kind::Primary).widget("button:pluginInstall").show(ui).clicked() {
-                        actions.push(("plugins.userInstall", json!({"path": pending.path, "allowDowngrade": downgrade})));
+                        let mut install = json!({"path": pending.path, "allowDowngrade": downgrade});
+                        // the click is the user's yes to the signer the dialog named
+                        if signer_changed && signature == "valid" {
+                            install["acceptSigner"] = json!(signer_key);
+                        } else if signer_changed {
+                            install["acceptUnsigned"] = json!(true);
+                        }
+                        actions.push(("plugins.userInstall", install));
                         keep = false;
                     }
                     if Button::new("Cancel").widget("button:pluginInstallCancel").show(ui).clicked() {

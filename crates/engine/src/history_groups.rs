@@ -29,6 +29,7 @@ const SECTIONS: &[(&str, &str)] = &[
     ("bw", "color"),
     ("grading", "grading"),
     ("primaries", "grading"),
+    ("levels", "levels"),
     ("detail", "detail"),
     ("effects", "effects"),
     ("vignette", "effects"),

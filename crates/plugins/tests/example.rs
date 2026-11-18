@@ -621,3 +621,58 @@ fn stamped_example_installs_and_the_tool_checks_it() {
     assert_eq!(info["id"], section["id"], "the stamped example installs as itself");
     assert_eq!(info["version"], section["version"]);
 }
+
+/// The tool's signing commands, as an author runs them: `keygen` makes a key once, `sign` signs a
+/// stamped file, `--check` reports the signature, and stamping a signed file says to sign it again.
+#[test]
+fn the_stamp_tool_makes_a_key_signs_and_checks_the_signature() {
+    let tool = build_stamp_tool();
+    let dir = temp("stamp-sign");
+    let run = |args: &[&Path]| Command::new(&tool).args(args).output().unwrap();
+    let text = |o: &std::process::Output| format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    let manifest = r#"{"id":"test.cli.signed","name":"Signed","version":"1.0.0"}"#;
+    let raw = wat::parse_str(format!(
+        r#"(module (memory (export "memory") 1) (data (i32.const 16) "{m}") (data (i32.const 4096) "{{}}")
+  (func (export "lcc_abi_version") (result i32) (i32.const 1))
+  (func (export "lcc_manifest") (result i64) (i64.or (i64.shl (i64.const {ml}) (i64.const 32)) (i64.const 16)))
+  (func (export "lcc_alloc") (param i32) (result i32) (i32.const 8192))
+  (func (export "lcc_handle") (param i32 i32) (result i64) (i64.or (i64.shl (i64.const 2) (i64.const 32)) (i64.const 4096))))"#,
+        m = manifest.replace('"', "\\\""),
+        ml = manifest.len()
+    ))
+    .unwrap();
+    let (key, plugin, signed) = (dir.join("author.key"), dir.join("p.wasm"), dir.join("signed.wasm"));
+    std::fs::write(&plugin, &raw).unwrap();
+
+    let out = run(&[Path::new("keygen"), &key]);
+    assert!(out.status.success(), "keygen: {}", text(&out));
+    let secret = plugin_stamp::secret_key_from_text(&std::fs::read_to_string(&key).unwrap()).unwrap();
+    let fingerprint = plugin_stamp::fingerprint(&plugin_stamp::public_key(&secret));
+    assert!(text(&out).contains(&fingerprint), "keygen prints the fingerprint: {}", text(&out));
+    let again = run(&[Path::new("keygen"), &key]);
+    assert_eq!(again.status.code(), Some(1), "a second keygen to the same file fails");
+    assert!(text(&again).contains("never overwritten"), "{}", text(&again));
+    assert_eq!(plugin_stamp::secret_key_from_text(&std::fs::read_to_string(&key).unwrap()).unwrap(), secret, "the key is kept");
+
+    let unstamped = run(&[Path::new("sign"), Path::new("--key"), &key, &plugin]);
+    assert_eq!(unstamped.status.code(), Some(1), "an unstamped file isn't signed: {}", text(&unstamped));
+    assert_eq!(run(&[Path::new("sign"), &plugin]).status.code(), Some(2), "sign without --key is a usage error");
+    assert!(run(&[&plugin]).status.success(), "stamp");
+    let out = run(&[Path::new("sign"), Path::new("--key"), &key, &plugin, Path::new("-o"), &signed]);
+    assert!(out.status.success() && text(&out).contains(&fingerprint), "sign: {}", text(&out));
+    let check = run(&[Path::new("--check"), &signed]);
+    assert!(check.status.success() && text(&check).contains(&format!("signed by {fingerprint}")), "--check: {}", text(&check));
+    assert!(text(&run(&[Path::new("--check"), &plugin])).contains("not signed"), "the unsigned input");
+
+    // changed after signing: --check fails and says why
+    let tampered = dir.join("tampered.wasm");
+    std::fs::write(&tampered, [std::fs::read(&signed).unwrap().as_slice(), &[0, 2, 1, b'x']].concat()).unwrap();
+    let check = run(&[Path::new("--check"), &tampered]);
+    assert_eq!(check.status.code(), Some(1), "{}", text(&check));
+    assert!(text(&check).contains("invalid"), "{}", text(&check));
+
+    // stamping the signed file again drops the signature, and says so
+    let out = run(&[&signed]);
+    assert!(out.status.success() && text(&out).contains("sign it again"), "{}", text(&out));
+    assert!(text(&run(&[Path::new("--check"), &signed])).contains("not signed"));
+}

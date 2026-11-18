@@ -8,6 +8,8 @@
 
 pub mod brush_model;
 pub mod controls;
+pub mod levels_curve;
+mod levels_table;
 pub mod presets;
 pub mod recipe;
 pub mod retouch;
@@ -111,6 +113,11 @@ impl DevelopSettings {
         for p in [&mut c.master, &mut c.red, &mut c.green, &mut c.blue].into_iter().flatten() {
             *p = lcc_geom::Point::new(p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0));
         }
+        for ch in Levels::CHANNELS {
+            if let Some(c) = self.levels.channel_mut(ch) {
+                *c = c.sanitized();
+            }
+        }
         let hsl = &mut self.hsl_curves;
         for p in [&mut hsl.hue, &mut hsl.sat, &mut hsl.lum].into_iter().flatten() {
             *p = lcc_geom::Point::new(p.x.clamp(0.0, 1.0), p.y.clamp(-1.0, 1.0));
@@ -174,6 +181,7 @@ impl DevelopSettings {
             || off("mixer")
             || off("grading")
             || off("primaries")
+            || off("levels")
             || off("detail")
             || (off(PLUGIN_FILTERS_SECTION) && !self.plugin_filters.is_empty()))
         {
@@ -204,6 +212,9 @@ impl DevelopSettings {
         }
         if off("primaries") {
             d.reset_section(Section::Primaries);
+        }
+        if off("levels") {
+            d.reset_section(Section::Levels);
         }
         if off("detail") {
             d.reset_section(Section::Detail);
@@ -254,6 +265,7 @@ impl DevelopSettings {
             Section::Detail => self.enhance.denoise_on = None,
             // the Log variant is a switch, not a control: the whole group goes back to its default
             Section::Primaries => self.primaries = Primaries::default(),
+            Section::Levels => self.levels = Levels::default(),
             // the creative profile is not a control: the chosen look goes back to the default one,
             // and so does the camera's own local tone mapping
             Section::Profile => {
@@ -279,6 +291,12 @@ impl DevelopSettings {
 
 #[cfg(test)]
 mod tests_genfill;
+#[cfg(test)]
+mod tests_levels;
+#[cfg(test)]
+mod tests_levels_curve;
+#[cfg(test)]
+mod tests_levels_paths;
 #[cfg(test)]
 mod tests_process;
 #[cfg(test)]

@@ -14,7 +14,8 @@ import Shot from '../../../components/Shot.astro';
 
 <NeedsImage what="The People view: Named People cards with face close-ups, photo counts and names, a Search People box, and Unnamed faces to name." />
 
-- **People** view (**View ▸ People**): a card per named person (face close-up, photo count, name), filtered by the folder, collection or catalog item picked in the sidebar (such as Missing Photos) and the current filter chips; the counts are photos among those. Click one to see that person's photos.
+- **People** view (**View ▸ People**): three categories, picked in the row at the top of the view. **Unknown** holds the faces nobody has named that no name is suggested for; **Suggested** holds the faces recognition has matched to a person, grouped under that person; **Confirmed** holds the people the library knows, a card per named person (face close-up, photo count, name). Click a card to see that person's photos.
+- **Reviewing suggestions**: each person's suggested faces sit under their own heading, with **✓ Confirm all** and **✗ Reject all**. **Confirm** names those faces that person — the named faces teach the matching in the same breath — in one undo step. **Reject** names nothing and ignores nothing: the faces go back to **Unknown**, still found by the next scan, and that person is never suggested for them again; the toast's **Undo** puts the suggestion back. Each face's own **✓**, **✗** and **−** decide about it alone (**− Ignore** leaves it out of People altogether, as before).
 - Names written to XMP by other apps (Lightroom, digiKam) are read as face regions.
 - **Face boxes** in the loupe (**View ▸ Face Boxes**): resize, rename or remove one (**Remove Face Box**).
 - **Detect Faces** (**Library** menu) finds faces; the model is an opt-in download (**Settings ▸ Faces**), nothing ships bundled.

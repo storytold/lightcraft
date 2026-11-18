@@ -5,7 +5,10 @@
 # (names from brand.toml). The headless CLI is inside the app, Contents/MacOS/<cli_binary>, and the
 # craft-fonts faces are files in Contents/Resources/fonts/, one copy read by both programs.
 #
-# Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build]
+# Usage: packaging/macos/package.sh [--arch universal|arm64|x64] [--skip-build]
+#   arm64 (Apple silicon) and x64 (Intel) hold one build each; universal holds both. The names are
+#   arm64 and x64, never aarch64 and x86_64: earlier builds take any `-macos-universal`,
+#   `-macos-aarch64` or `-macos-x86_64` image as theirs and pick the smallest (issue #1228).
 # Fonts: use CRAFT_FONTS_DIR or ../craft-fonts; download the pinned checkout if absent.
 #
 # Signing (env):
@@ -25,15 +28,16 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --arch) ARCH="$2"; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
-    -h | --help) sed -n '2,16p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,19p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+# LIPO_ARCHS: what `lipo -archs` must print for each binary, sorted
 case "$ARCH" in
-  universal) TARGETS=(aarch64-apple-darwin x86_64-apple-darwin) ;;
-  aarch64) TARGETS=(aarch64-apple-darwin) ;;
-  x86_64) TARGETS=(x86_64-apple-darwin) ;;
-  *) echo "unknown --arch $ARCH" >&2; exit 2 ;;
+  universal) TARGETS=(aarch64-apple-darwin x86_64-apple-darwin) LIPO_ARCHS="arm64 x86_64" ;;
+  arm64) TARGETS=(aarch64-apple-darwin) LIPO_ARCHS="arm64" ;;
+  x64) TARGETS=(x86_64-apple-darwin) LIPO_ARCHS="x86_64" ;;
+  *) echo "unknown --arch $ARCH (universal, arm64 or x64)" >&2; exit 2 ;;
 esac
 
 # Keep in sync with LSMinimumSystemVersion in Info.plist.in.
@@ -78,6 +82,16 @@ for pair in "app:$BRAND_BINARY" "app-cli:$CLI"; do
   for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/release/$bin"); done
   lipo -create -output "$WORK/bin/$out" "${inputs[@]}"
   lipo -info "$WORK/bin/$out"
+  archs="$(lipo -archs "$WORK/bin/$out" | tr ' ' '\n' | sort | xargs)"
+  if [[ "$archs" != "$LIPO_ARCHS" ]]; then
+    echo "error: $out holds '$archs', expected '$LIPO_ARCHS' for --arch $ARCH" >&2
+    exit 1
+  fi
+  # Symbols out, as Linux and FreeBSD do, before signing (docs/packaging.md → Symbols).
+  # Apple's strip by path: a Homebrew binutils strip earlier on PATH can't read every Mach-O.
+  before="$(wc -c <"$WORK/bin/$out" | tr -d ' ')"
+  /usr/bin/strip "$WORK/bin/$out"
+  echo "==> stripped $out: $before -> $(wc -c <"$WORK/bin/$out" | tr -d ' ') bytes"
 done
 
 # ---- signing helpers ---------------------------------------------------------------------------
@@ -281,6 +295,12 @@ if [[ "$NOTARIZE" = 1 ]]; then
   spctl --assess --type open --context context:primary-signature -vvv "$DMG"
 fi
 
-"$APP/Contents/MacOS/$CLI" --version
+# only where this Mac runs it natively: an Intel build on Apple silicon needs Rosetta, which a
+# build machine needn't have
+if [[ " $LIPO_ARCHS " == *" $(uname -m) "* ]]; then
+  "$APP/Contents/MacOS/$CLI" --version
+else
+  echo "==> not running the $ARCH CLI on this $(uname -m) Mac"
+fi
 echo "==> done"
 ls -lh "$DMG"

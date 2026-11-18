@@ -101,6 +101,8 @@ let photo = batch.child("denoise", "AI Denoise"); // the photo in progress, unde
 
 - **Counts:** `item_done` / `item_failed` count one photo each. A job that sets `progress(done, total)` itself counts
   a failure with `count_failed(why)` (it doesn't add to `done`).
+- **Why, while it runs:** `firstFailure` is the first reason given; the stack shows it when the pointer is over the
+  row's "failed" count.
 - **Time left:** `etaMs` comes from the time per photo measured since the first one was done (a slow start, such as
   loading a model, doesn't stretch it). The stack words it ("about 6 min left").
 - **Per-photo rows:** `child` (or `Activity::start_child(parent_id, ..)` from a worker that only has the id) puts a

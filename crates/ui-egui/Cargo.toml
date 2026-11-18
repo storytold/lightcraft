@@ -71,6 +71,9 @@ filmcraft-isobmff = { git = "https://github.com/emmertex/filmcraft", rev = "3f0c
 wat = "1.228" # G19: a slow export-hook plug-in for the worker test
 # the Plug-in Manager test lists a module that didn't load
 lcc-plugins = { workspace = true }
+# the install dialog's signer tests sign their plug-in modules with throwaway keys
+ed25519-dalek = { workspace = true }
+base64 = { workspace = true }
 
 [build-dependencies]
 lcc-brand = { workspace = true }

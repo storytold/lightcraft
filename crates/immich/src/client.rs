@@ -12,7 +12,7 @@ use lcc_net::{ClientConfig, DownloadOptions, Fingerprint, Method, Trust};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::error::{ImmichError, status};
+use crate::error::{ImmichError, refusal, status};
 use crate::types::*;
 
 /// How to reach one server.
@@ -130,7 +130,7 @@ impl Client {
             if let Some(b) = body {
                 req = req.json(b);
             }
-            let r = req.send().map_err(ImmichError::from).and_then(|r| if r.is_success() { Ok(r) } else { Err(status(r.status, path)) });
+            let r = req.send().map_err(ImmichError::from).and_then(|r| if r.is_success() { Ok(r) } else { Err(refusal(r, path)) });
             match r {
                 Err(e) if e.retryable() && attempt < self.retries => {
                     let wait = self.backoff.saturating_mul(1 << attempt.min(8));
@@ -186,8 +186,16 @@ impl Client {
     /// `GET /auth/status`: whether this session is elevated (locked-folder assets are visible to
     /// its listings), whether the account unlocks with a password or a PIN code, and when the
     /// elevation ends (the server locks the session again later).
+    ///
+    /// Immich asks an API key for its `all` permission here and, as a key carries no session, the
+    /// answer is never "elevated": a key without `all` is [`ImmichError::SessionRequired`], not a
+    /// missing permission to fix.
     pub fn auth_status(&self) -> Result<AuthStatus, ImmichError> {
-        self.get("/auth/status", true)
+        const PATH: &str = "/auth/status";
+        self.get(PATH, true).map_err(|e| match e {
+            ImmichError::Forbidden(_) => ImmichError::SessionRequired(PATH.into()),
+            e => e,
+        })
     }
 
     /// `POST /auth/session/unlock`: elevate this session with the account's password or PIN code
@@ -202,6 +210,10 @@ impl Client {
             // the server answers 401 (v3.3.1) or 400 for a wrong secret: the user's typo, not the
             // API key this client holds
             ImmichError::BadKey => ImmichError::Status(401, format!("{PATH}: the PIN or password was refused")),
+            // Immich answers 403 to a key without `all` and 400 "only with a session token" to
+            // one with it: an API key has no session to elevate, whatever its permissions
+            ImmichError::Forbidden(_) => ImmichError::SessionRequired(PATH.into()),
+            ImmichError::Status(400, reason) if reason.to_ascii_lowercase().contains("session token") => ImmichError::SessionRequired(PATH.into()),
             e => e,
         })
     }

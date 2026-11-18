@@ -98,6 +98,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.eyeFocus", "Eye Focus Strip", None, "View>Loupe Info"),
     ("view.people", "People", None, "View"),
     ("view.person", "Show Person", None, ""),
+    ("people.category", "Face Category", None, ""),
     ("view.faceBoxes", "Face Boxes", None, "View>Loupe Info"),
     ("view.focusPoint", "Show Focus Point", Some("Alt+F"), "View>Loupe Info"),
     ("view.zoomToFocus", "Zoom to Focus Point", None, "View>Loupe Info"),
@@ -1046,6 +1047,17 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             // everyone, not what the search box last narrowed the cards to
             app.ui.people_search.clear();
             Ok(json!({"people": app.session.catalog.people().len()}))
+        }
+        "people.category" => {
+            // {category}: which of the People view's three categories is on screen (issue #1050), for a control surface
+            // or a script (a person's page is left: a category shows everyone)
+            let Some(category) = p.get("category").and_then(Value::as_str).and_then(crate::state::PeopleCategory::parse) else {
+                return Some(Err("people.category: `category` must be unknown, suggested or confirmed".into()));
+            };
+            app.ui.view = ViewMode::People;
+            app.ui.person_page = None;
+            app.ui.people_category = category;
+            Ok(json!({"category": category.id()}))
         }
         "view.person" => {
             // {name}: one person's page in the People view: their faces, and the faces that look like them

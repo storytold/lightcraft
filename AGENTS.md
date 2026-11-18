@@ -123,6 +123,9 @@ One rule (2026-11-10): **use only material you may legally derive from.**
   camera-native DNGs fine); Adobe-rendered pixels never ship; black-box fits may ship only as aggregate calibration
   numbers (`<cli> calibrate-lightroom add`, allow-listed fields only); users' own `.dcp`/XMP import at run time
   (`camera.importDcp`, `profile.import`) but are never committed, bundled or used as fixtures (tests build bytes).
+- **Other apps' black-box measurements (2026-11-17):** response curves measured from a non-Adobe app's output on our
+  own synthetic charts (e.g. Capture One midtone tables in `crates/develop/src/levels_table.rs`) may ship as data,
+  with the source app and method named in module docs and `NOTICE`. No copied files, assets or rendered photos.
 - Now usable (with provenance): darktable/Ansel sources, all of dcraw incl. the GPL RESTRICTED (Foveon) block, LibRaw
   and other dcraw descendants, rawspeed/rawloader/rawler/dnglab/RawTherapee/ART, GPL data tables (noiseprofiles,
   wb_presets, colormatrices, basecurves). Quality habits stay: camera data ranks measured > spectral > dcraw tables

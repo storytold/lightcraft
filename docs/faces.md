@@ -337,13 +337,16 @@ yet: it opens Settings ▸ Faces, where the download is) or **Turn on** (a model
 on there and then). The loupe's name box offers the same ("Set up name suggestions…" / "Turn on name suggestions"), and so
 does a person's page.
 
-**People** shows a card for each named person (their face, with the number of photos they are in on the picture) and, below
-a line, the **Unnamed faces**: every face nobody has named, as cropped pictures. With recognition running, faces that look
-alike are next to each other (put in order by looking at every pair, for up to the first 1,500 embedded faces), and a face
-the named ones recognise carries the name they suggest along its bottom edge; click that name to accept it for that face.
-To name a group: click faces to select them (Shift-click selects a range, **Select all** takes every one listed), type a
-name in the bar that appears (people already named complete as you type), press Enter: all of them are named at once, as
-one undo step. Selecting names nothing.
+**People** has three categories, picked in the row at the top of the view (each shows its count):
+
+- **Unknown**: every face nobody has named and no name is suggested for, as cropped pictures. With recognition running,
+  faces that look alike are next to each other (put in order by looking at every pair, for up to the first 1,500 embedded
+  faces). To name a group: click faces to select them (Shift-click selects a range, **Select all** takes every one listed),
+  type a name in the bar that appears (people already named complete as you type), press Enter: all of them are named at
+  once, as one undo step. Selecting names nothing.
+- **Suggested**: the faces recognition has matched to a person, each person's faces under their own name, so one person's
+  suggestions are reviewed together. See [Suggested faces](#suggested-faces).
+- **Confirmed**: a card for each named person (their face, with the number of photos they are in on the picture).
 
 The unnamed faces follow the sidebar: pick a year, a folder or an album and only the faces in those photos are listed
 (`faces.unnamed {scope: "filter"}`), as the person cards are. A person filter is left aside here. On a person's page the
@@ -361,6 +364,32 @@ The thumbnail-size slider in the bottom bar sizes the faces here too, with limit
 same kind of box: the detector's own box once the scan has looked at it (kept beside its embedding), so a loosely drawn box
 from another tool does not make one face look farther away than the next; before the scan has looked at a face it is shown
 by its own box.
+
+### Suggested faces
+
+Recognition suggests a person for a face when that face looks like the ones named with them. Those faces wait in
+**Suggested**, grouped under the person the named faces picked out, the person with the most waiting faces first and each
+person's faces most alike first (`faces.unnamed {bySuggestion: true}`, which adds `groups` to its answer). A group is
+reviewed as a whole:
+
+- **✓ Confirm all** (or the **Confirm** button beside them in a group's own heading) names every one of that person's
+  suggested faces, in one undo step (`faces.confirmSuggestions`). It names a face what the named faces suggest for it
+  *now*, not what the list showed: a face whose suggestion has changed is left alone rather than named something it no
+  longer looks like.
+- **✗ Reject all** (`faces.rejectSuggestions`) says they are not that person. Nothing is named and nothing is ignored: the
+  face stays in **Unknown**, still detected, and that person is never suggested for it again — the rejection is kept in
+  `people.json` (`faces.suggestionDecisions` lists the decisions, and a person's page shows none of their rejected faces
+  again). A rejection changes no photo, so the catalog keeps no undo step for it: the toast's **Undo** calls
+  `faces.undoSuggestionDecision`, which forgets the decision so the suggestion comes back.
+- **− Ignore** leaves the face out of People altogether (`faces.ignore`), as it always has; see below.
+
+A click on one face's **✓**, **✗** or **−** decides about that face alone, with the same commands. A click on the person's
+name in a group's heading opens their page, where the same faces are offered face by face.
+
+The decisions are per face region, and the engine applies them before anything is grouped, so a session's decisions show
+at once: a confirmed face is named (and leaves the list), a rejected face moves to **Unknown**, and neither is suggested
+as that person again. The heading over **Suggested** offers to confirm every suggestion on screen at once, in one undo
+step.
 
 ### Ignored faces
 
@@ -439,7 +468,7 @@ reuses the pictures of its step instead of rendering every face again.
 
 All of this is reachable from the control channel, the CLI and MCP: `faces.models.list`, `faces.models.inspect {path}`,
 `faces.models.install {path, acknowledged: true, activate?}`, `faces.models.download {id, acknowledged: true}` (then `faces.models.downloads`, which also installs what has arrived, and `faces.models.downloadCancel {id}`), `faces.models.remove {id}`, `faces.models.select {id}`,
-`faces.enable {enabled?}`, `faces.detect {ids?, apply?}`, `faces.index {budgetMs?, ids?}`, `faces.pump` (what the app calls every frame), `faces.suggest {ids?, threshold?, margin?}`, `faces.person {name, more?}` (a person's faces and the unnamed faces that look like them), `faces.unnamed {limit?}` (every unnamed face, look-alikes together, with suggested names), `faces.setName {id?, index, name}`, `faces.nameFaces {faces: [{photo, index}], name}` (name many at once, one undo step), `faces.renamePerson {from, to, merge?}` (rename every in-library face of one person, or merge two when `merge` is true, one undo step) and `faces.evaluate`. `acknowledged` must be `true`: the caller has shown the user the terms and the user agreed. Installing makes the model the one in use and switches recognition on unless `activate` is `false`.
+`faces.enable {enabled?}`, `faces.detect {ids?, apply?}`, `faces.index {budgetMs?, ids?}`, `faces.pump` (what the app calls every frame), `faces.suggest {ids?, threshold?, margin?}`, `faces.person {name, more?}` (a person's faces and the unnamed faces that look like them), `faces.unnamed {limit?}` (every unnamed face, look-alikes together, with suggested names), `faces.setName {id?, index, name}`, `faces.nameFaces {faces: [{photo, index}], name}` (name many at once, one undo step), `faces.renamePerson {from, to, merge?}` (rename every in-library face of one person, or merge two when `merge` is true, one undo step), `faces.confirmSuggestions {faces}` and `faces.rejectSuggestions {faces}` (the Suggested category's decisions: name the faces what is suggested for them now, one undo step; or keep them unknown and suggest that person no more), `faces.undoSuggestionDecision {faces}` (forget a decision, so the suggestion is back) and `faces.suggestionDecisions {photo?}` (what was decided, a page at a time), and `faces.evaluate`. `faces.unnamed {bySuggestion: true}` also answers `groups`: the suggested faces under the person suggested, the most faces first. Neither a confirmation nor a rejection writes to a photo's sidecar: a confirmation is a name on a face region (catalog only, undoable), a rejection is a line in `people.json`. `acknowledged` must be `true`: the caller has shown the user the terms and the user agreed. Installing makes the model the one in use and switches recognition on unless `activate` is `false`.
 
 ## Find Blemishes
 

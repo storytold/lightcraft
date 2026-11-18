@@ -48,6 +48,7 @@ pub mod immich;
 pub mod import_tab;
 pub mod keywords;
 mod lens_db;
+pub mod levels;
 pub mod library;
 pub mod lut_profiles;
 pub mod manage;
@@ -255,6 +256,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(color::specs());
         v.extend(plugin_filters::specs());
         v.extend(curves::specs());
+        v.extend(levels::specs());
         v.extend(crop_aspects::specs());
         v.extend(masks::specs());
         v.extend(retouch::specs());

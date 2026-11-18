@@ -615,3 +615,50 @@ fn search_indexing_pauses_resumes_clears_restarts_and_semantic_search_switches_o
     assert!(s.execute("search.semantic", &json!({"text": "sunset"})).is_ok());
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// A fault that fails every photo (here: originals that can't be read) pauses background indexing after a run of
+/// failures instead of going through the whole library, on every start; the row says why on hover, and resuming tries
+/// again.
+#[test]
+fn a_run_of_failures_pauses_background_indexing() {
+    let d = temp_dir("fail-streak");
+    let lib_dir = d.join("lib");
+    let models_dir = d.join("ml-models");
+    let src = d.join("synthetic-src");
+    lcc_ml::Clip::write_synthetic_dir(&src, "test-clip").unwrap();
+    let n = crate::ml::FAIL_STREAK_PAUSE as usize + 5;
+    let paths: Vec<PathBuf> = (0..n).map(|i| d.join("photos").join(format!("p{i}.png"))).collect();
+    for (i, p) in paths.iter().enumerate() {
+        write_solid_png(p, [(i * 7) as u8, 100, 50, 255]);
+    }
+    {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib_dir, false).unwrap();
+        let list: Vec<String> = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        s.execute("library.import", &json!({"paths": list})).unwrap();
+    }
+    for p in &paths {
+        std::fs::write(p, b"not an image").unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    s.ml_models_dir = Some(models_dir.clone());
+    s.open_library(&lib_dir, false).unwrap();
+    s.execute("ml.models.install", &json!({"path": src.to_string_lossy(), "acknowledged": true})).unwrap();
+
+    let v = pump_ml_until(&mut s, |v| v["paused"] == true);
+    assert_eq!(v["paused"], true, "{v}");
+    assert_eq!(v["indexedPhotos"], 0, "{v}");
+    let st = s.execute("ml.indexStatus", &json!({})).unwrap();
+    assert_eq!(st["state"], "paused", "{st}");
+    // why: on the row while it runs, in its summary once it ended
+    let live = rows(&s).into_iter().find(|t| t.failed > 0).and_then(|t| t.first_failure);
+    let ended = s.activity.finished().into_iter().find(|b| b.kind == ROW_KIND && b.failed > 0).and_then(|b| b.reasons.first().cloned());
+    assert!(live.or(ended).is_some_and(|w| !w.is_empty()), "the failures say why");
+    let mut again = Session::new().with_fs();
+    again.ml_models_dir = Some(models_dir);
+    assert_eq!(again.execute("ml.indexStatus", &json!({})).unwrap()["paused"], true, "the next start doesn't go through them again");
+    drop(again);
+
+    assert_eq!(s.execute("ml.resume", &json!({})).unwrap()["paused"], false);
+    let _ = std::fs::remove_dir_all(&d);
+}

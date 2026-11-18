@@ -324,6 +324,8 @@ mod tests_layout_image;
 #[cfg(test)]
 mod tests_lens_db;
 #[cfg(test)]
+mod tests_levels;
+#[cfg(test)]
 mod tests_library_grid;
 #[cfg(test)]
 mod tests_library_problem;
@@ -381,6 +383,8 @@ mod tests_panels;
 mod tests_pickers;
 #[cfg(test)]
 mod tests_plugin_jobs;
+#[cfg(test)]
+mod tests_plugin_signing;
 #[cfg(test)]
 mod tests_preset_favorites;
 #[cfg(test)]

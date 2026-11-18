@@ -43,11 +43,13 @@ fn the_edit_panel_is_lightroom_classics_develop_panels_and_every_header_folds() 
         h.settle(SETTLE);
         assert_eq!(
             sections(&h),
-            ["light", "curve", "mixer", "grading", "detail", "retouch", "optics", "geometry", "effects", "calibration", "pluginFilters"],
+            ["light", "levels", "curve", "mixer", "grading", "detail", "retouch", "optics", "geometry", "effects", "calibration", "pluginFilters"],
             "then the fork's Plug-in Filters"
         );
         let text = h.painted_text();
-        for title in ["Basic", "Tone Curve", "Color Mixer", "Color Grading", "Detail", "Lens Corrections", "Transform", "Effects", "Calibration"] {
+        for title in
+            ["Basic", "Levels", "Tone Curve", "Color Mixer", "Color Grading", "Detail", "Lens Corrections", "Transform", "Effects", "Calibration"]
+        {
             assert!(text.iter().any(|t| t == title), "{title}: {text:?}");
         }
         // a section's on/off switch shows while the pointer is on its header; Basic has none, as in Lightroom Classic

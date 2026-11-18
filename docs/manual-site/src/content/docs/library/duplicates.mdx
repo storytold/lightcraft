@@ -10,17 +10,19 @@ import NeedsImage from '../../../components/NeedsImage.astro';
 
 ---
 
-<NeedsImage what="The Find Duplicates window: groups of copies with the best copy first and unmarked, the rest marked, and the Remove, Reject and Stack Groups buttons." />
+<NeedsImage what="The Find Duplicates window: each group as large cards (thumbnail, whole file name, folder path, date, size), the best copy first and unmarked, the rest marked, the Compare Group in Survey button, and the Remove, Reject and Stack Groups buttons." />
 
 - **Find Duplicates…** (**Library** menu): groups photos that are copies of one another across the whole library.
 - **Exact copies** (same file) are found at once from the content hashes the catalog keeps.
 - **Find Similar Copies** reads every photo's picture in the background (a raw by its camera JPEG, a clip by a poster frame) and also finds copies that differ: resized, re-compressed or renamed. A different photo of the same scene is not a copy. Progress and Stop show in the activity stack.
 - **Raw + JPEG pairs** of the same shot are their own kind: offered as something to stack, never marked for removal.
+- Each photo is a card: a large thumbnail, then its whole file name, its whole folder path, capture date, size in pixels, file size and format. Nothing is cut short; long names and paths wrap, and hovering the thumbnail shows the path again.
+- **Compare Group in Survey** (at the top of each group) shows that group's photos large and side by side in [Survey](../browse/), the same view as **View ▸ Survey**. The window steps aside; choose **Library ▸ Find Duplicates…** again to come back to it with your marks kept.
 - The best copy of each group comes first and is unmarked; the rest start marked. Click a photo to change its mark.
 - **Remove** sends the marked photos to Recently Deleted (one undo step). **Reject** flags them. **Stack Groups** stacks each group; see [Stacks](../stacks/).
 - Nothing is deleted from disk by the window.
 - Photos in Recently Deleted, virtual copies and photos only browsed in Local never group.
-- Not in the web build. Command: `library.findDuplicates` (`similar` for the second scan).
+- Not in the web build. Commands: `library.findDuplicates` (`similar` for the second scan), `library.compareDuplicateGroup` (`group`).
 
 <Aside type="note" title="Modern layout">
   **Library ▸ Find Duplicates…** in the ☰ menu.
