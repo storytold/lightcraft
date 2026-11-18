@@ -128,6 +128,9 @@ pub struct DiskCache {
     /// Pictures a full cache lets go only after everything else ([`Self::keep_last`]): the edited
     /// photos' latest previews, the only pictures of their edits (a photo as shot has its camera JPEG).
     last: Mutex<std::collections::HashSet<u128>>,
+    /// The set of [`Self::keep_last`] is being worked out (in the background, issue #979): a full
+    /// cache prunes nothing meanwhile, so the pictures to keep last are not let go before they are known.
+    last_pending: std::sync::atomic::AtomicBool,
 }
 
 impl DiskCache {
@@ -143,14 +146,40 @@ impl DiskCache {
             writes: AtomicU64::new(0),
             read: Mutex::new(Default::default()),
             last: Mutex::new(Default::default()),
+            last_pending: Default::default(),
         }
     }
 
     /// Let the pictures under `keys` go last when the cache is full (after the ones read in this
     /// session too): the edited photos' latest previews (a full cache pruned the rendered edits and
-    /// the loupe had nothing but the unedited camera JPEG). Replaces the set.
+    /// the loupe had nothing but the unedited camera JPEG). Added to the set (keys added one by one
+    /// with [`Self::keep_last_one`] meanwhile stay), and the set is known from now on
+    /// ([`Self::keep_last_pending`]).
     pub fn keep_last(&self, keys: impl IntoIterator<Item = Hash128>) {
-        *self.last.lock().unwrap_or_else(|e| e.into_inner()) = keys.into_iter().map(|k| k.0).collect();
+        self.last.lock().unwrap_or_else(|e| e.into_inner()).extend(keys.into_iter().map(|k| k.0));
+        self.last_pending.store(false, Ordering::Release);
+    }
+
+    /// Say that [`Self::keep_last`]'s set is being worked out: until it is given (or
+    /// [`Self::keep_last_unknown`] says it won't be), a full cache prunes nothing.
+    pub fn keep_last_pending(&self) {
+        self.last_pending.store(true, Ordering::Release);
+    }
+
+    /// The set [`Self::keep_last_pending`] waited for won't come (the work was stopped): the cache
+    /// prunes again as it fills, with the keys it has.
+    pub fn keep_last_unknown(&self) {
+        self.last_pending.store(false, Ordering::Release);
+    }
+
+    /// Whether [`Self::keep_last`]'s set is still being worked out.
+    pub fn is_keep_last_pending(&self) -> bool {
+        self.last_pending.load(Ordering::Acquire)
+    }
+
+    /// Whether `key` is among the pictures a full cache lets go last ([`Self::keep_last`]).
+    pub fn is_kept_last(&self, key: Hash128) -> bool {
+        self.last.lock().unwrap_or_else(|e| e.into_inner()).contains(&key.0)
     }
 
     /// Add one key to [`Self::keep_last`]'s set.
@@ -336,7 +365,8 @@ impl DiskCache {
         self.known.store(*used, Ordering::Relaxed);
         let over = *used > self.budget();
         drop(total);
-        if over {
+        // (not while the pictures to keep last are being worked out: the first write after prunes)
+        if over && !self.is_keep_last_pending() {
             self.prune();
         }
     }

@@ -692,6 +692,10 @@ impl Photo {
     pub fn relative_wb(&self) -> bool {
         self.develops_raw() && relative_wb_camera_as(&self.format, &self.meta.camera, &self.develop.profile.camera)
     }
+    /// What [`Self::relative_wb`] depends on: photos with equal keys have the same answer.
+    pub fn relative_wb_key(&self) -> (bool, &str, &str, &str) {
+        (self.develops_raw(), &self.format, &self.meta.camera, &self.develop.profile.camera)
+    }
     /// The settings the Before view starts from: the one set by the user, else the photo as it
     /// came into the library (its import state), else its import defaults.
     pub fn before_base(&self) -> DevelopSettings {
@@ -717,7 +721,12 @@ impl Photo {
     /// process a photo renders with is not an edit, so comparisons with its defaults (edited?
     /// still as imported?) don't change when a newer process exists. A new photo has the latest.
     pub fn camera_defaults(&self) -> DevelopSettings {
-        let relative = self.relative_wb();
+        self.camera_defaults_as(self.relative_wb())
+    }
+    /// [`Self::camera_defaults`] of a photo whose [`Self::relative_wb`] is `relative`: that looks the
+    /// camera up by name in the camera tables and profiles, so a pass over many photos asks it once
+    /// per camera ([`Self::relative_wb_key`]) instead of once per photo (issue #979).
+    pub fn camera_defaults_as(&self, relative: bool) -> DevelopSettings {
         let wb = if relative { Some((6500.0, 0.0)) } else { self.as_shot_wb };
         let mut d = match wb {
             Some((t, tint)) => DevelopSettings::for_raw(t, tint),
