@@ -4110,6 +4110,7 @@ dependencies = [
  "log",
  "miniz_oxide 0.9.1",
  "rayon",
+ "roxmltree",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

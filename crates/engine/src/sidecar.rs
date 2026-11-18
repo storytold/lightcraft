@@ -872,7 +872,9 @@ fn people_block(names: &[String]) -> String {
 ///   nothing to a reader, so another library that read them would keep them. The detector's unnamed boxes are never
 ///   written, so a photo left with only those counts as cleared too; reading the file back keeps them ([`merge_into`]).
 ///   A file with no list keeps none, one with an empty list keeps it, and one with a list LightCraft reads nothing
-///   from keeps it as it is ([`OWNED_IF_STATED`]).
+///   from keeps it as it is ([`OWNED_IF_STATED`]). Entries of the file's list that LightCraft can't read (boxes in
+///   pixels with no size, say) are kept whenever the list is written ([`unreadable_regions`]); if they can't be singled
+///   out, the file's list is left as it is.
 fn fit_to_old(old: &str, fresh: String) -> String {
     let old = old.strip_prefix('\u{feff}').unwrap_or(old);
     // (a file that isn't XMP can't be merged either: `sidecar_contents` handles it)
@@ -907,17 +909,173 @@ fn fit_to_old(old: &str, fresh: String) -> String {
             names.push(t);
         }
     }
-    // the photo has none left to write and the file held regions LightCraft read: say so. A file stating an empty list
-    // is given it again, so the save leaves it where it was rather than moving it about (a list LightCraft read
-    // nothing from is neither: it stays as it is)
-    let empty_list = data.values.get("mwg-rs:Regions").and_then(|v| v.field("mwg-rs:RegionList")).is_some_and(|l| l.items().is_empty());
-    if (empty_list || regions.as_ref().is_some_and(|r| !r.is_empty())) && !fresh.contains("<mwg-rs:Regions") {
-        fresh = into_description(
-            fresh,
-            "   <mwg-rs:Regions rdf:parseType=\"Resource\">\n    <mwg-rs:RegionList>\n     <rdf:Bag/>\n    </mwg-rs:RegionList>\n   </mwg-rs:Regions>\n",
-        );
+    let readable = regions.as_ref().map_or(0, Vec::len);
+    let carried = unreadable_regions(old, &data, readable);
+    if fresh.contains(REGIONS_OPEN) {
+        match carried {
+            // the file's entries LightCraft can't read go on after the photo's own, as they were
+            Some(c) => {
+                if !c.items.is_empty() {
+                    let items: String = c.items.iter().map(|i| format!("      {i}\n")).collect();
+                    fresh = fresh.replacen(REGION_LIST_CLOSE, &format!("{items}{REGION_LIST_CLOSE}"), 1);
+                }
+                // boxes in pixels that had no size to go by keep having none, rather than taking the photo's
+                if c.pixels_without_size {
+                    fresh = cut(fresh, DIMS_OPEN, DIMS_CLOSE);
+                }
+            }
+            // entries it can't read that it can't single out either: rather than lose them, the file's list stays
+            None => {
+                log::warn!("a face region list LightCraft can't fully read was left as it is; its own regions were not written to it");
+                fresh = cut(fresh, REGIONS_OPEN, REGIONS_CLOSE);
+            }
+        }
+    } else {
+        // the photo has none left to write and the file held regions LightCraft read: say so, keeping the entries it
+        // can't read. A file stating an empty list is given it again, so the save leaves it where it was rather than
+        // moving it about. A list LightCraft read nothing from is neither: it stays as it is.
+        let empty_list = data.values.get("mwg-rs:Regions").and_then(|v| v.field("mwg-rs:RegionList")).is_some_and(|l| l.items().is_empty());
+        // A list of entries it can't read only is given again too, as it was, for the same reason.
+        if (empty_list || readable > 0 || carried.as_ref().is_some_and(|c| !c.items.is_empty()))
+            && let Some(c) = carried
+        {
+            let dims = match (&c.dims, c.items.is_empty()) {
+                (Some((w, h)), false) => format!(
+                    "    <mwg-rs:AppliedToDimensions rdf:parseType=\"Resource\">\n     <stDim:w>{}</stDim:w>\n     <stDim:h>{}</stDim:h>\n     <stDim:unit>pixel</stDim:unit>\n    </mwg-rs:AppliedToDimensions>\n",
+                    xml_text(w),
+                    xml_text(h)
+                ),
+                _ => String::new(),
+            };
+            let list = if c.items.is_empty() {
+                "     <rdf:Bag/>\n".to_string()
+            } else {
+                let items: String = c.items.iter().map(|i| format!("      {i}\n")).collect();
+                format!("     <rdf:Bag>\n{items}     </rdf:Bag>\n")
+            };
+            fresh = into_description(fresh, &format!("{REGIONS_OPEN}{dims}    <mwg-rs:RegionList>\n{list}    </mwg-rs:RegionList>\n{REGIONS_CLOSE}"));
+        }
     }
-    into_description(fresh, &people_block(&names))
+    let fitted = into_description(fresh, &people_block(&names));
+    // the file's own entries went in as text: never write a packet that doesn't parse as namespaced XML
+    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: 1 << 20, ..Default::default() };
+    if roxmltree::Document::parse_with_options(&fitted, opts).is_err() || lightcraft_meta::parse_xmp(&fitted).is_err() {
+        log::warn!("a face region list couldn't be written with the file's own entries; the file's list was left as it is");
+        return cut(fitted, REGIONS_OPEN, REGIONS_CLOSE);
+    }
+    fitted
+}
+
+const REGIONS_OPEN: &str = "   <mwg-rs:Regions rdf:parseType=\"Resource\">\n";
+const REGIONS_CLOSE: &str = "   </mwg-rs:Regions>\n";
+const REGION_LIST_CLOSE: &str = "     </rdf:Bag>\n    </mwg-rs:RegionList>\n";
+const DIMS_OPEN: &str = "    <mwg-rs:AppliedToDimensions";
+const DIMS_CLOSE: &str = "    </mwg-rs:AppliedToDimensions>\n";
+const MWG_RS: &str = "http://www.metadataworkinggroup.com/schemas/regions/";
+const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+
+/// `text` without its first `open … close` (both included), or `text` itself without one.
+fn cut(text: String, open: &str, close: &str) -> String {
+    let Some(a) = text.find(open) else { return text };
+    let Some(b) = text.get(a..).and_then(|t| t.find(close)).map(|b| a + b + close.len()) else { return text };
+    match (text.get(..a), text.get(b..)) {
+        (Some(before), Some(after)) => format!("{before}{after}"),
+        _ => text,
+    }
+}
+
+/// The entries of a sidecar's region list that LightCraft can't read into the catalog (boxes in pixels with no size
+/// to go by, off the photo, without an area…), to be kept when the list is written again.
+struct Carried {
+    /// Each entry's own text from the file, with the namespaces it uses declared on it.
+    items: Vec<String>,
+    /// The list's `AppliedToDimensions` (width, height), as written.
+    dims: Option<(String, String)>,
+    /// One of them is in pixels and the list has no size.
+    pixels_without_size: bool,
+}
+
+/// [`Carried`] for the sidecar `old` (parsed as `data`, `readable` regions of it read), or `None` when its list has
+/// entries LightCraft can't read but they can't be singled out (a list in an unusual form).
+fn unreadable_regions(old: &str, data: &lightcraft_meta::XmpData, readable: usize) -> Option<Carried> {
+    let regions = data.values.get("mwg-rs:Regions");
+    let n = regions.and_then(|r| r.field("mwg-rs:RegionList")).map_or(0, |l| l.items().len());
+    let dims = regions
+        .and_then(|r| r.field("mwg-rs:AppliedToDimensions"))
+        .and_then(|d| Some((d.field("stDim:w")?.text()?.to_string(), d.field("stDim:h")?.text()?.to_string())));
+    let mut carried = Carried { items: Vec::new(), dims, pixels_without_size: false };
+    if n <= readable {
+        return Some(carried);
+    }
+    // (the file was parsed whole already, within the reader's limits; this is a second look at the same text)
+    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: 1 << 20, ..Default::default() };
+    let doc = roxmltree::Document::parse_with_options(old, opts).ok()?;
+    let is = |n: &roxmltree::Node, ns: &str, name: &str| n.is_element() && n.tag_name().namespace() == Some(ns) && n.tag_name().name() == name;
+    let list = doc.descendants().find(|n| is(n, MWG_RS, "RegionList"))?;
+    let container = list.children().find(roxmltree::Node::is_element)?;
+    let mut any_pixels = false;
+    for li in container.children().filter(|n| is(n, RDF, "li")) {
+        let item = with_namespaces(old, &li)?;
+        let dims = carried.dims.as_ref().map_or(String::new(), |(w, h)| {
+            format!("<mwg-rs:AppliedToDimensions rdf:parseType=\"Resource\"><stDim:w>{}</stDim:w><stDim:h>{}</stDim:h><stDim:unit>pixel</stDim:unit></mwg-rs:AppliedToDimensions>", xml_text(w), xml_text(h))
+        });
+        let alone = format!(
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"{RDF}\"><rdf:Description rdf:about=\"\" xmlns:mwg-rs=\"{MWG_RS}\" xmlns:stArea=\"http://ns.adobe.com/xmp/sType/Area#\" xmlns:stDim=\"http://ns.adobe.com/xap/1.0/sType/Dimensions#\"><mwg-rs:Regions rdf:parseType=\"Resource\">{dims}<mwg-rs:RegionList><rdf:Bag>{item}</rdf:Bag></mwg-rs:RegionList></mwg-rs:Regions></rdf:Description></rdf:RDF></x:xmpmeta>"
+        );
+        let readable = parse_sidecar(&alone, crate::crs::Target::Rendered).ok().and_then(|sc| sc.regions).is_some_and(|r| !r.is_empty());
+        if readable {
+            continue;
+        }
+        any_pixels |= lightcraft_meta::parse_xmp(&alone).ok().is_some_and(|d| {
+            d.values
+                .get("mwg-rs:Regions")
+                .and_then(|r| r.field("mwg-rs:RegionList"))
+                .and_then(|l| l.items().first().and_then(|i| i.field("mwg-rs:Area")).and_then(|a| a.field("stArea:unit")).and_then(|u| u.text()))
+                .is_some_and(|u| u.eq_ignore_ascii_case("pixel"))
+        });
+        carried.items.push(item);
+    }
+    // every entry accounted for: those read, and those kept as they are
+    if carried.items.len() != n - readable {
+        return None;
+    }
+    carried.pixels_without_size = any_pixels && carried.dims.is_none();
+    Some(carried)
+}
+
+/// The text of the element `node` of `doc`, with the namespaces its names use (and it doesn't declare itself) declared
+/// on it, so it can stand in another packet. `None` if its text can't be taken out.
+fn with_namespaces(doc: &str, node: &roxmltree::Node) -> Option<String> {
+    let text = doc.get(node.range())?;
+    let qname_of = |at: usize| doc.get(at..).map(|t| t.split(|c: char| c.is_whitespace() || c == '/' || c == '>').next().unwrap_or(""));
+    // the element's start tag, where its own declarations are
+    let tag_end = node.children().next().map_or(node.range().end, |c| c.range().start).min(node.range().end);
+    let start_tag = doc.get(node.range().start..tag_end)?;
+    let own_qname = qname_of(node.range().start + 1)?;
+    let mut used: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for e in node.descendants().filter(roxmltree::Node::is_element) {
+        let q = qname_of(e.range().start + 1)?;
+        let prefix = q.split_once(':').map_or("", |(p, _)| p);
+        if let Some(uri) = e.tag_name().namespace() {
+            used.insert(prefix.to_string(), uri.to_string());
+        }
+        for a in e.attributes() {
+            let q = doc.get(a.range_qname())?;
+            if let (Some((prefix, _)), Some(uri)) = (q.split_once(':'), a.namespace()) {
+                used.insert(prefix.to_string(), uri.to_string());
+            }
+        }
+    }
+    let mut decls = String::new();
+    for (prefix, uri) in used.iter().filter(|(p, _)| p.as_str() != "xml" && p.as_str() != "xmlns") {
+        let attr = if prefix.is_empty() { "xmlns".to_string() } else { format!("xmlns:{prefix}") };
+        if start_tag.contains(&format!(" {attr}=")) || start_tag.contains(&format!("\n{attr}=")) || start_tag.contains(&format!("\t{attr}=")) {
+            continue;
+        }
+        decls.push_str(&format!(" {attr}=\"{}\"", uri.replace('&', "&amp;").replace('<', "&lt;").replace('"', "&quot;")));
+    }
+    let rest = text.get(1 + own_qname.len()..)?;
+    Some(format!("<{own_qname}{decls}{rest}"))
 }
 
 /// The properties LightCraft writes and owns in a sidecar: replaced on every save (removed when
@@ -2224,6 +2382,105 @@ mod tests {
         }
     }
 
+    /// An entry LightCraft can't read: a box in pixels in a list with no size, named "Pixel Box", with a field of a
+    /// namespace of its own declared on the description (as another app would write it).
+    const PIXEL_ENTRY: &str = r#"<rdf:li rdf:parseType="Resource"><mwg-rs:Area stArea:x="120" stArea:y="80" stArea:w="40" stArea:h="40" stArea:unit="pixel"/><mwg-rs:Type>Face</mwg-rs:Type><mwg-rs:Name>Pixel Box</mwg-rs:Name><other:note>kept as is &amp; untouched</other:note></rdf:li>"#;
+
+    /// [`sidecar_with`] plus [`PIXEL_ENTRY`] at the end of its list.
+    fn sidecar_with_pixel_entry(regions: &[(f64, f64, f64, f64, Option<&str>)]) -> String {
+        sidecar_with(regions, &[])
+            .replace("</rdf:Bag></mwg-rs:RegionList>", &format!("{PIXEL_ENTRY}</rdf:Bag></mwg-rs:RegionList>"))
+            .replace("photomechanic:ColorClass", "xmlns:other=\"http://example.com/other/\" photomechanic:ColorClass")
+    }
+
+    /// The region entries a sidecar has, readable or not, by name.
+    fn entry_names(x: &str) -> Vec<String> {
+        let d = lightcraft_meta::parse_xmp(x).unwrap();
+        d.values
+            .get("mwg-rs:Regions")
+            .and_then(|r| r.field("mwg-rs:RegionList"))
+            .map(|l| l.items().iter().map(|i| i.field("mwg-rs:Name").and_then(|n| n.text()).unwrap_or("").to_string()).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn entries_lightcraft_cant_read_are_kept_when_the_list_is_written() {
+        use lightcraft_meta::RegionKind::Face;
+        let detected = format!("{}YuNet 2023mar", crate::cmd::face_detect::MARK);
+        let path = scratch("pixel-entry");
+        std::fs::write(&path, sidecar_with_pixel_entry(&[(0.5, 0.5, 0.2, 0.2, Some("Ann"))])).unwrap();
+        // as imported: Ann (the pixel box can't be read), and a face the detector found
+        let mut p = photo();
+        merge_into(&mut p, &parse_sidecar(&std::fs::read_to_string(&path).unwrap(), crate::crs::Target::Rendered).unwrap(), "now");
+        assert_eq!(p.meta.regions.len(), 1);
+        p.meta.regions.push(region(0.05, 0.05, 0.15, 0.15, Face, None, Some(&detected)));
+
+        // naming the detected face writes the list: Ann, the new face, and the pixel box as it was
+        p.meta.regions[1].name = Some("Bob".into());
+        let x = save_over(&path, &p);
+        assert_eq!(entry_names(&x), ["Ann", "Bob", "Pixel Box"], "{x}");
+        assert!(x.contains("stArea:x=\"120\"") && x.contains("stArea:unit=\"pixel\"") && x.contains("kept as is &amp; untouched"), "{x}");
+        // its boxes in pixels had no size to go by and still have none (the photo's would give them one)
+        assert!(!x.contains("AppliedToDimensions"), "{x}");
+        // still readable: the catalog's two, nothing else
+        let read: Vec<Option<String>> =
+            parse_sidecar(&x, crate::crs::Target::Rendered).unwrap().regions.unwrap().into_iter().map(|r| r.name).collect();
+        assert_eq!(read, [Some("Ann".to_string()), Some("Bob".to_string())]);
+        // a second save changes nothing
+        assert_eq!(save_over(&path, &p), x);
+
+        // removing Ann, then Bob: the pixel box stays through both
+        p.meta.regions.remove(0);
+        assert_eq!(entry_names(&save_over(&path, &p)), ["Bob", "Pixel Box"]);
+        p.meta.regions.clear();
+        let x = save_over(&path, &p);
+        assert_eq!(entry_names(&x), ["Pixel Box"], "{x}");
+        assert!(x.contains("kept as is &amp; untouched"), "{x}");
+        assert_eq!(parse_sidecar(&x, crate::crs::Target::Rendered).unwrap().regions, Some(vec![]));
+        assert_eq!(save_over(&path, &p), x, "stable");
+        // and a face named again joins it
+        p.meta.regions.push(region(0.3, 0.3, 0.4, 0.4, Face, Some("Cy"), None));
+        assert_eq!(entry_names(&save_over(&path, &p)), ["Cy", "Pixel Box"]);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_kept_entry_keeps_its_size_when_the_list_had_one() {
+        // an entry off the photo in a list with a size: unreadable, kept, and the list keeps its size when cleared
+        let path = scratch("off-photo");
+        let old = sidecar_with(&[(0.5, 0.5, 0.2, 0.2, Some("Ann")), (5.0, 5.0, 0.1, 0.1, Some("Off"))], &[]).replace(
+            "<mwg-rs:RegionList>",
+            "<mwg-rs:AppliedToDimensions stDim:w=\"300\" stDim:h=\"200\" stDim:unit=\"pixel\" xmlns:stDim=\"http://ns.adobe.com/xap/1.0/sType/Dimensions#\"/><mwg-rs:RegionList>",
+        );
+        std::fs::write(&path, &old).unwrap();
+        let mut p = photo();
+        merge_into(&mut p, &parse_sidecar(&old, crate::crs::Target::Rendered).unwrap(), "now");
+        assert_eq!(p.meta.regions.len(), 1, "Off can't be read");
+        p.meta.regions.clear();
+        let x = save_over(&path, &p);
+        assert_eq!(entry_names(&x), ["Off"], "{x}");
+        assert!(x.contains("<stDim:w>300</stDim:w>") && x.contains("<stDim:h>200</stDim:h>"), "{x}");
+        assert_eq!(save_over(&path, &p), x, "stable");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_list_whose_unreadable_entries_cant_be_singled_out_is_left_as_it_is() {
+        // LightCraft's reader takes a sidecar roxmltree won't parse (one with a DTD): the unreadable entry can't be
+        // singled out, so rather than lose it the save leaves the file's list as it is
+        let path = scratch("odd-list");
+        let old = sidecar_with_pixel_entry(&[(0.5, 0.5, 0.2, 0.2, Some("Ann"))]);
+        let odd = format!("<!DOCTYPE x:xmpmeta []>\n{old}");
+        assert!(lightcraft_meta::parse_xmp(&odd).is_ok(), "LightCraft's reader takes it");
+        assert!(unreadable_regions(&odd, &lightcraft_meta::parse_xmp(&odd).unwrap(), 1).is_none(), "roxmltree doesn't");
+        std::fs::write(&path, &odd).unwrap();
+        let mut p = photo();
+        p.meta.regions = vec![region(0.3, 0.3, 0.4, 0.4, lightcraft_meta::RegionKind::Face, Some("New"), None)];
+        let (x, _, _) = sidecar_contents(&path, sidecar_packet(&p, &lightcraft_catalog::Catalog::new()), "now").unwrap();
+        assert_eq!(entry_names(&x), ["Ann", "Pixel Box"], "the file's list is left: {x}");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
     #[test]
     fn reading_back_keeps_the_detectors_boxes_but_not_on_a_face_the_file_has() {
         let detected = format!("{}YuNet 2023mar", crate::cmd::face_detect::MARK);
@@ -2290,7 +2547,10 @@ mod tests {
             };
             let path = scratch(&format!("random-{run}"));
             // start from a sidecar another app wrote: a named face and a name typed in elsewhere
-            std::fs::write(&path, sidecar_with(&[(0.5, 0.5, 0.2, 0.2, Some("Lightroom Face"))], &["Typed Elsewhere", "Lightroom Face"])).unwrap();
+            let start = sidecar_with(&[(0.5, 0.5, 0.2, 0.2, Some("Lightroom Face"))], &["Typed Elsewhere", "Lightroom Face"])
+                .replace("</rdf:Bag></mwg-rs:RegionList>", &format!("{PIXEL_ENTRY}</rdf:Bag></mwg-rs:RegionList>"))
+                .replace("photomechanic:ColorClass", "xmlns:other=\"http://example.com/other/\" photomechanic:ColorClass");
+            std::fs::write(&path, start).unwrap();
             let mut p = photo();
             merge_into(&mut p, &parse_sidecar(&std::fs::read_to_string(&path).unwrap(), crate::crs::Target::Rendered).unwrap(), "now");
             let clean = |n: &str| n.chars().filter(|c| !c.is_control()).collect::<String>().trim().to_string();
@@ -2348,6 +2608,10 @@ mod tests {
                     None => assert!(want.is_empty() && !had_regions, "run {run} step {step}: list missing: {x}"),
                 }
                 had_regions |= sc.regions.as_ref().is_some_and(|r| !r.is_empty());
+                // the entry LightCraft can't read is there, last, every time
+                assert_eq!(entry_names(&x).last().map(String::as_str), Some("Pixel Box"), "run {run} step {step}: {x}");
+                assert_eq!(entry_names(&x).len(), want.len() + 1, "run {run} step {step}");
+                assert!(x.contains("kept as is &amp; untouched"), "run {run} step {step}");
                 // the names on the faces, each once, then the one typed elsewhere
                 let d = lightcraft_meta::parse_xmp(&x).unwrap();
                 let people: Vec<String> = d

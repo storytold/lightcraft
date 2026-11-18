@@ -29,6 +29,8 @@ lightcraft-raw = { workspace = true }
 lightcraft-denoise-core = { workspace = true }
 lightcraft-denoise = { workspace = true, optional = true }
 lightcraft-meta = { workspace = true }
+# finds the text of the region entries in a sidecar that LightCraft can't read, to keep them on save (sidecar.rs)
+roxmltree = "0.21"
 lightcraft-lensdb = { workspace = true }
 lightcraft-faces = { workspace = true }
 miniz_oxide = { workspace = true }
