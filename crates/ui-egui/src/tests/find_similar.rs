@@ -229,6 +229,18 @@ fn a_photo_that_cannot_be_read_says_so() {
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
     assert!(toast.contains("can't read the photo"), "{toast}");
     assert_eq!(h.app.session.filter, Default::default());
+
+    // Headless frames can start process-wide GPU warm-up. Keep the original assertions and
+    // GPU enabled, but do not let this one-test process exit while driver work is in flight.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::enabled() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(lightcraft_engine::gpu::ready() || !lightcraft_engine::gpu::enabled(), "GPU warm-up did not finish");
+        assert!(lightcraft_engine::gpu::wait_idle(Duration::from_secs(30)), "GPU work did not finish");
+    }
 }
 
 /// A control request is answered when the search ends, with the command's `{photos}`, and the window
