@@ -121,7 +121,7 @@ sidebar:
 
 ### Filmstrip, grid, keywords and presets
 - Filmstrip file names and badges; when the grid shows ratings and flags; **Double-click opens the photo in Develop**;
-  Square Grid file names; **Wheel scroll speed**; **Reduce motion**; **Wheel resizes brush instead of zooming**.
+  Square Grid file names; **Wheel scroll speed**; **Reduce motion**; **Wheel resizes brush instead of zooming**; **Invert brush resize direction**.
 - **Keywords of the selection**: whole names, or grouped by parent.
 - **List User Presets first**, and whether this catalog keeps its own presets, profiles and habits.
 

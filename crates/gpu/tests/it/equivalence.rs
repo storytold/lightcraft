@@ -317,6 +317,59 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.curve.master = vec![Point::new(0.0, 0.05), Point::new(0.5, 0.55), Point::new(1.0, 0.95)];
             s.curve.blue = vec![Point::new(0.0, 0.0), Point::new(0.5, 0.45), Point::new(1.0, 1.0)];
         }),
+        ("levels (master points)", |s| {
+            s.levels.master.black = 24.0;
+            s.levels.master.white = 232.0;
+        }),
+        ("levels (midtone + output)", |s| {
+            s.levels.master.midtone = 0.5;
+            s.levels.master.out_black = 12.0;
+            s.levels.master.out_white = 244.0;
+        }),
+        ("levels (channels + master + curve)", |s| {
+            s.levels.master.black = 10.0;
+            s.levels.master.midtone = -0.3;
+            s.levels.red.white = 220.0;
+            s.levels.red.midtone = 0.6;
+            s.levels.green.black = 18.0;
+            s.levels.blue.out_black = 30.0;
+            s.levels.blue.out_white = 200.0;
+            s.curve.master = vec![Point::new(0.0, 0.03), Point::new(0.5, 0.55), Point::new(1.0, 0.97)];
+        }),
+        ("levels (inverted output, strong midtone)", |s| {
+            s.levels.master.midtone = 0.8;
+            s.levels.master.out_black = 255.0;
+            s.levels.master.out_white = 0.0;
+        }),
+        ("levels (hdr edit)", |s| {
+            s.hdr.enabled = true;
+            s.light.exposure = 1.5;
+            s.levels.master.black = 20.0;
+            s.levels.master.midtone = 0.4;
+            s.levels.master.white = 230.0;
+        }),
+        ("levels (inverted input range)", |s| {
+            s.levels.master.black = 215.0;
+            s.levels.master.white = 40.0;
+        }),
+        ("levels (inverted input, midtone, channels)", |s| {
+            s.levels.master.black = 230.0;
+            s.levels.master.white = 25.0;
+            s.levels.master.midtone = -0.5;
+            s.levels.red.black = 10.0;
+            s.levels.red.white = 200.0;
+            s.levels.green.out_black = 240.0;
+            s.levels.green.out_white = 15.0;
+            s.curve.master = vec![Point::new(0.0, 0.03), Point::new(0.5, 0.55), Point::new(1.0, 0.97)];
+        }),
+        ("levels (inverted red, hdr edit)", |s| {
+            // red runs backwards and holds its end value above SDR white; green and blue rise and continue
+            s.hdr.enabled = true;
+            s.light.exposure = 1.5;
+            s.levels.master.midtone = 0.3;
+            s.levels.red.black = 235.0;
+            s.levels.red.white = 15.0;
+        }),
         ("tone curves + refine saturation", |s| {
             s.curve.master = vec![Point::new(0.0, 0.0), Point::new(0.25, 0.15), Point::new(0.75, 0.88), Point::new(1.0, 1.0)];
             s.curve.lights = 30.0;
@@ -2212,4 +2265,113 @@ fn vignetting_calibration_matches() {
     check("flat field + colour NR preview", &src, &preview, &s, &RenderRequest::fit(636, 792));
     let w = lcc_pipeline::PixelWindow { x: 0, y: 500, w: 300, h: 260 };
     check("flat field + colour NR window", &src, &info, &s, &RenderRequest { window: Some(w), ..RenderRequest::fit(636, 792) });
+}
+
+/// Levels at their defaults, spelled out, change nothing: the same settings, no stage, and the GPU
+/// render equals the render of settings that never had Levels.
+#[test]
+fn neutral_levels_render_like_no_levels() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(1, 320, 240);
+    let info = SourceInfo::default();
+    let req = RenderRequest::fit(320, 240);
+    let plain = DevelopSettings::default();
+    let mut spelled = DevelopSettings::default();
+    spelled.levels.master = Default::default();
+    spelled.levels.red.black = 0.0;
+    assert_eq!(plain, spelled);
+    assert!(lcc_pipeline::levels::LevelsK::new(&spelled.levels).is_none());
+    let a = lcc_gpu::render(&src, &info, &plain, &req, None).unwrap().image;
+    let b = lcc_gpu::render(&src, &info, &spelled, &req, None).unwrap().image;
+    assert_eq!(a.data, b.data, "GPU");
+    let (ca, cb) = (render(&src, &info, &plain, &req).image, render(&src, &info, &spelled, &req).image);
+    assert_eq!(ca.data, cb.data, "CPU");
+}
+
+/// The ends of the midtone range (and some values between), ordinary and inverted (output levels reversed, and on
+/// every other scene the input range too), on every demo scene: the GPU matches the CPU within [`MAX_LSB`] everywhere
+/// and no pixel is off by more than that (the scales are 8-bit levels).
+#[test]
+fn midtone_extremes_match_cpu_on_every_scene() {
+    if !gpu() {
+        return;
+    }
+    let (info, req) = (SourceInfo::default(), RenderRequest::fit(720, 480));
+    let (mut worst_max, mut worst_share) = (0u8, 0.0f64);
+    for i in 0..lcc_scenes::demo_library().len().min(6) {
+        let src = scene(i, 720, 480);
+        for midtone in [1.0, -1.0, 0.5, -0.5, 0.1, -0.1] {
+            for inverted in [false, true] {
+                let mut s = DevelopSettings::default();
+                s.levels.master.midtone = midtone;
+                if inverted && i % 2 == 1 {
+                    s.levels.master.black = 215.0;
+                    s.levels.master.white = 40.0;
+                }
+                if inverted {
+                    s.levels.master.out_black = 255.0;
+                    s.levels.master.out_white = 0.0;
+                }
+                let cpu = render(&src, &info, &s, &req).image;
+                let gpu = lcc_gpu::render(&src, &info, &s, &req, None)
+                    .unwrap_or_else(|| panic!("scene {i} midtone {midtone}: gpu render ({:?})", lcc_gpu::last_fallback()));
+                let (mean, max, _) = diff(&cpu, &gpu.image);
+                let far = cpu.data.iter().zip(&gpu.image.data).filter(|(p, q)| (0..3).any(|c| p[c].abs_diff(q[c]) > MAX_LSB)).count();
+                let share = far as f64 / cpu.data.len() as f64;
+                worst_max = worst_max.max(max);
+                worst_share = worst_share.max(share);
+                assert!(
+                    mean < MEAN_LSB && share == 0.0,
+                    "scene {i} midtone {midtone} inverted {inverted}: mean {mean:.4}, max {max}, share {share:.5}"
+                );
+            }
+        }
+    }
+    eprintln!("levels midtone extremes: worst max {worst_max} LSB (8-bit), worst share {worst_share:.5}");
+}
+
+/// 16-bit output samples of a render.
+fn u16_samples(r: &lcc_pipeline::Rendered) -> &[u16] {
+    let Some(lcc_pipeline::DeepImage { samples: lcc_pipeline::DeepSamples::U16(v), .. }) = &r.deep else { panic!("no 16-bit samples") };
+    v
+}
+
+/// Levels in the deep outputs, for every Levels case. The GPU renders two depths only (8-bit and the float
+/// HDR path; 16-bit and linear-float requests are the CPU's by design, `lcc_gpu::handles`), so:
+/// - the GPU's float samples match the CPU's, in 8-bit steps of the encoding they decode to
+///   (`check_hdr_req`, which also holds the 8-bit reductions together);
+/// - the CPU's 16-bit samples agree with its own 8-bit render to within the 8-bit rounding and dither
+///   (one level), so Levels act the same at every depth.
+#[test]
+fn levels_match_in_16_bit_and_float_output() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(2, 480, 320);
+    let info = SourceInfo::default();
+    for (name, edit) in cases().into_iter().filter(|(n, _)| n.starts_with("levels")) {
+        let mut s = DevelopSettings::default();
+        edit(&mut s);
+        let req = RenderRequest::fit(480, 320);
+        let eight = render(&src, &info, &s, &req);
+        let req16 = RenderRequest { depth: lcc_pipeline::OutputDepth::U16, ..req };
+        let sixteen = render(&src, &info, &s, &req16);
+        let deep = u16_samples(&sixteen);
+        let (mut sum, mut max) = (0.0f64, 0.0f64);
+        for (px, d) in eight.image.data.iter().zip(deep.as_chunks::<3>().0) {
+            for c in 0..3 {
+                let diff = (f64::from(px[c]) - f64::from(d[c]) / 257.0).abs();
+                sum += diff;
+                max = max.max(diff);
+            }
+        }
+        let mean = sum / (deep.len() as f64);
+        eprintln!("{name:<42} CPU 16-bit vs 8-bit: mean {mean:.4}  max {max:.3} (8-bit levels)");
+        assert!(mean < 0.6 && max <= 1.01, "{name}: 16-bit against 8-bit: mean {mean:.4}, max {max:.3}");
+        // float, linear (the HDR path): GPU against CPU
+        let reqf = RenderRequest { depth: lcc_pipeline::OutputDepth::F32Hdr, ..req };
+        check_hdr_req(&format!("{name} (float)"), &src, &info, &s, &reqf);
+    }
 }

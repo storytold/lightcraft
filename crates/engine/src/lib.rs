@@ -2820,6 +2820,8 @@ mod tests_keyword_list;
 #[cfg(not(target_arch = "wasm32"))]
 mod tests_lens_db;
 #[cfg(test)]
+mod tests_levels;
+#[cfg(test)]
 mod tests_libops;
 #[cfg(test)]
 mod tests_library;

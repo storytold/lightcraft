@@ -36,6 +36,7 @@ pub const GROUPS: &[(&str, &str)] = &[
     ("light", "Basic"),
     ("primaries", "Primaries"),
     ("hsl", "HSL Curves"),
+    ("levels", "Levels"),
     ("curve", "Tone Curve"),
     ("mixer", "Color Mixer"),
     ("grading", "Color Grading"),
@@ -69,6 +70,7 @@ pub fn group_of(control: &str) -> Option<&'static str> {
     }
     Some(match prefix {
         "profile" | "wb" | "light" | "hdr" | "color" | "effects" => "light",
+        "levels" => "levels",
         "curve" => "curve",
         "mixer" | "bw" => "mixer",
         "grading" => "grading",

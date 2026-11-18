@@ -79,6 +79,36 @@ fn curve(ch: u32, x: f32, hdr: bool) -> f32 {
     return lut_hdr(pu(F_CURVE_OFF) + ch * CURVE_N, x, hdr);
 }
 
+// `levels::StageK::eval` on one value: the stage record at word `o` of the parameters (active, black, 1/range,
+// out black, span, slope at 0, slope at 1, has a midtone table) and the table's place `off` in `aux`. The stretch is not
+// limited: the midtone curve (its samples, then its end slopes beyond 0 and 1) runs on, and the result is limited below
+// at 0, and above at 1 unless the render is HDR.
+const MIDTONE_N: u32 = 257u;
+fn levels_stage(o: u32, off: u32, x: f32, hdr: bool) -> f32 {
+    if (pf(o) == 0.0) {
+        return x;
+    }
+    let t = (x - pf(o + 1u)) * pf(o + 2u);
+    var g = t;
+    if (pf(o + 7u) != 0.0) {
+        if (t <= 0.0) {
+            g = pf(o + 5u) * t;
+        } else if (t >= 1.0) {
+            g = 1.0 + pf(o + 6u) * (t - 1.0);
+        } else {
+            let f = t * f32(MIDTONE_N - 1u);
+            let i = min(u32(f), MIDTONE_N - 2u);
+            g = aux[off + i] + (aux[off + i + 1u] - aux[off + i]) * (f - f32(i));
+        }
+    }
+    var y = max(pf(o + 3u) + pf(o + 4u) * g, 0.0);
+    if (!hdr) {
+        y = min(y, 1.0);
+    }
+    return y;
+}
+
+
 // The exact sRGB curve (`lcc_color::transfer`), unbounded above 1 as HDR renders encode.
 fn lin_to_srgb(v: f32) -> f32 {
     if (v <= 0.0031308) {
@@ -1118,6 +1148,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         e = vec3<f32>(lin_to_srgb(q.x), lin_to_srgb(q.y), lin_to_srgb(q.z));
     } else {
         e = vec3<f32>(encode_srgb(r.x), encode_srgb(r.y), encode_srgb(r.z));
+    }
+    // --- Levels: each channel's own stage first, then the master's (one call site, as `finish_with`)
+    if (pu(F_LEVELS) != 0u) {
+        let c = vec3<f32>(
+            levels_stage(F_LEVELS_R, pu(F_LEVELS_OFF_R), e.x, hdr),
+            levels_stage(F_LEVELS_G, pu(F_LEVELS_OFF_G), e.y, hdr),
+            levels_stage(F_LEVELS_B, pu(F_LEVELS_OFF_B), e.z, hdr));
+        e = vec3<f32>(
+            levels_stage(F_LEVELS_M, pu(F_LEVELS_OFF_M), c.x, hdr),
+            levels_stage(F_LEVELS_M, pu(F_LEVELS_OFF_M), c.y, hdr),
+            levels_stage(F_LEVELS_M, pu(F_LEVELS_OFF_M), c.z, hdr));
     }
     if (pu(F_CURVES) != 0u) {
         let e0 = e;

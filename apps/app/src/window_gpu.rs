@@ -12,6 +12,14 @@
 //! - The renderer that worked is remembered (`<config>/window-renderer-2`, Windows only; the `-2`
 //!   drops the DX12 that 26.45.4 remembered, so Vulkan is tried again: issue #934) and tried
 //!   first next time. `<PREFIX>_GPU_BACKEND=dx12|vulkan|gl|glow` (or `WGPU_BACKEND`) forces one.
+//! - **A device lost while running (issue #1194):** egui-wgpu skips a frame it cannot draw instead
+//!   of panicking (#1098), so a window whose device is gone would skip every frame forever. The
+//!   window's frames are watched ([`LossWatch`]): a long unbroken run of failed frames — shorter
+//!   after the GPU reported a lost device — means the device is gone for good. The renderer is then
+//!   recorded as lost (`<config>/window-lost`, kept: every later start tries it last), the library
+//!   and settings are saved, the user is told in a native message box, and the app ends. eframe
+//!   cannot rebuild a window's device in place (its painter, egui's textures and the GPU renderer's
+//!   textures all live on the one device).
 
 use eframe::egui_wgpu::{WgpuConfiguration, WgpuSetup, WgpuSetupExisting};
 use eframe::wgpu;
@@ -45,6 +53,23 @@ impl Files {
     }
     fn marker(&self) -> Option<PathBuf> {
         self.dir.as_ref().map(|d| d.join("window-init.marker"))
+    }
+    fn lost(&self) -> Option<PathBuf> {
+        self.dir.as_ref().map(|d| d.join("window-lost"))
+    }
+    /// The renderer whose device was lost while running (kept across starts).
+    pub fn lost_renderer(&self) -> Option<WindowRenderer> {
+        Self::read(self.lost())
+    }
+    /// The window's device was lost for good with `r`: tried last from now on, and no longer the
+    /// remembered one.
+    pub fn record_lost(&self, r: WindowRenderer) {
+        Self::write(self.lost(), r);
+        if let Some(p) = self.remembered()
+            && Self::read(Some(p.clone())) == Some(r)
+        {
+            let _ = std::fs::remove_file(p);
+        }
     }
     fn remembered(&self) -> Option<PathBuf> {
         self.dir.as_ref().map(|d| d.join("window-renderer-2"))
@@ -99,7 +124,7 @@ pub fn choose(files: &Files, compose_window: bool) -> Chosen {
     let remembered = if cfg!(windows) { Files::read(files.remembered()) } else { None };
     let compiled = wgpu::Instance::enabled_backend_features();
     let os = std::env::consts::OS;
-    let order = backend::window_renderer_order(forced, remembered, failed, os, compiled, true);
+    let order = demote_lost(backend::window_renderer_order(forced, remembered, failed, os, compiled, true), forced, files.lost_renderer());
     let mut problems = Vec::new();
     let chosen = if cfg!(windows) {
         pick_probed(files, &order, &mut problems, compose_window)
@@ -127,6 +152,116 @@ pub fn choose(files: &Files, compose_window: bool) -> Chosen {
         }
     };
     Chosen { renderer, wgpu_options, which, notice }
+}
+
+/// A renderer whose device was lost while running goes last (unless the environment forces it).
+fn demote_lost(mut order: Vec<WindowRenderer>, forced: Option<WindowRenderer>, lost: Option<WindowRenderer>) -> Vec<WindowRenderer> {
+    if let Some(l) = lost.filter(|l| Some(*l) != forced)
+        && let Some(i) = order.iter().position(|r| *r == l)
+    {
+        let r = order.remove(i);
+        order.push(r);
+    }
+    order
+}
+
+/// Watches the window's frames for a device that is gone for good (issue #1194). A skipped frame
+/// is harmless: any frame that gets its surface texture starts the count again.
+#[derive(Debug, Default)]
+pub struct LossWatch {
+    streak: u32,
+    since: Option<std::time::Instant>,
+    tripped: bool,
+}
+
+/// Failed frames in a row, and for how long, that mean the device is gone: after the GPU reported
+/// a lost device, and without such a report (a device of its own, or GPU rendering off).
+const AFTER_LOSS: (u32, std::time::Duration) = (30, std::time::Duration::from_secs(2));
+const WITHOUT_LOSS: (u32, std::time::Duration) = (600, std::time::Duration::from_secs(20));
+
+impl LossWatch {
+    /// A frame got its surface texture.
+    pub fn acquired(&mut self) {
+        self.streak = 0;
+        self.since = None;
+    }
+    /// A frame was dropped at `now` (`device_lost`: the GPU reported a lost device). `true` once,
+    /// when the window's device is judged gone for good.
+    pub fn dropped(&mut self, now: std::time::Instant, device_lost: bool) -> bool {
+        self.streak = self.streak.saturating_add(1);
+        let since = *self.since.get_or_insert(now);
+        let (n, d) = if device_lost { AFTER_LOSS } else { WITHOUT_LOSS };
+        if !self.tripped && self.streak >= n && now.saturating_duration_since(since) >= d {
+            self.tripped = true;
+            return true;
+        }
+        false
+    }
+}
+
+/// Whether a dropped frame counts towards a lost device: not a hidden window (`Occluded`), one
+/// being resized (`Outdated`, reconfigured right away), or a compositor that hands out no frame
+/// for now (`Timeout`: a minimised or covered window can time out for as long as it stays hidden,
+/// and the device is fine).
+fn counts_as_failure(status: &wgpu::CurrentSurfaceTexture) -> bool {
+    !matches!(
+        status,
+        wgpu::CurrentSurfaceTexture::Occluded
+            | wgpu::CurrentSurfaceTexture::Outdated
+            | wgpu::CurrentSurfaceTexture::Timeout
+            | wgpu::CurrentSurfaceTexture::Success(_)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(_)
+    )
+}
+
+static WATCH: std::sync::Mutex<LossWatch> = std::sync::Mutex::new(LossWatch { streak: 0, since: None, tripped: false });
+static LOST: std::sync::Mutex<Option<WindowRenderer>> = std::sync::Mutex::new(None);
+static CTX: std::sync::OnceLock<eframe::egui::Context> = std::sync::OnceLock::new();
+
+fn watch() -> std::sync::MutexGuard<'static, LossWatch> {
+    WATCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Watch the window's frames (see [`LossWatch`]); `which` is recorded in `files` when its device
+/// is judged lost. egui-wgpu's own handling of each dropped frame is kept.
+pub fn watch_device_loss(options: &mut WgpuConfiguration, files: std::sync::Arc<Files>, which: WindowRenderer) {
+    let inner = options.on_surface_status.clone();
+    options.on_surface_status = std::sync::Arc::new(move |status| {
+        let action = inner(status);
+        if counts_as_failure(status) && watch().dropped(std::time::Instant::now(), lcc_engine::gpu::last_loss().is_some()) {
+            log::error!("window: the {} renderer has drawn nothing since its GPU device was lost ({status:?}); ending the run", which.name());
+            // on disk now: the process may yet be ended by hand
+            files.record_lost(which);
+            *LOST.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(which);
+            if let Some(ctx) = CTX.get() {
+                ctx.request_repaint();
+            }
+        }
+        action
+    });
+    options.on_frame_acquired = Some(std::sync::Arc::new(|| watch().acquired()));
+}
+
+/// The window's context, so a lost device can wake the app (see [`watch_device_loss`]).
+pub fn set_context(ctx: &eframe::egui::Context) {
+    let _ = CTX.set(ctx.clone());
+}
+
+/// The renderer whose device was judged lost for good (once): the app should save and end.
+pub fn take_device_lost() -> Option<WindowRenderer> {
+    LOST.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+}
+
+/// What to tell the user when the window's device was lost with `which`.
+pub fn lost_text(which: WindowRenderer) -> String {
+    format!(
+        "its window stopped drawing: the graphics driver lost the {} renderer's GPU device. The library and settings were saved. \
+         {app} draws its window with another renderer from its next start; {var}=dx12, vulkan, gl or glow chooses one \
+         (see docs/gpu-pipeline.md → Troubleshooting)",
+        which.name(),
+        app = lcc_brand::DISPLAY_NAME,
+        var = lcc_brand::env_var("GPU_BACKEND"),
+    )
 }
 
 /// What to tell the user about the window's renderer. A renderer that failed its probe is skipped
@@ -336,6 +471,60 @@ mod tests {
         assert!(forced.starts_with("The dx12 renderer failed") && forced.contains("now draws its window with vulkan"), "{forced}");
         let died = user_notice(Some(dx), None, &problems, vk).unwrap();
         assert!(died.contains("last time") && !died.contains("Validation Error"), "{died}");
+    }
+
+    /// #1194: a skipped frame, or a burst of them, is harmless; failed frames that never stop
+    /// (shorter after the GPU reported a lost device) trip once.
+    #[test]
+    fn only_an_unbroken_run_of_failed_frames_means_the_device_is_lost() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let ms = |m: u64| t0 + Duration::from_millis(m);
+        let mut w = LossWatch::default();
+        // many failures, each followed by a good frame: never
+        for i in 0..2000 {
+            assert!(!w.dropped(ms(i * 16), true));
+            w.acquired();
+        }
+        // a fast burst after a device loss: not yet (too short); keeps failing: trips, once
+        let mut w = LossWatch::default();
+        assert!((0..100).all(|i| !w.dropped(ms(i), true)));
+        assert!(w.dropped(ms(2100), true));
+        assert!(!w.dropped(ms(2200), true));
+        // without a reported loss it takes far longer
+        let mut w = LossWatch::default();
+        assert!((0..1000).all(|i| !w.dropped(ms(i * 16), false)));
+        assert!(w.dropped(ms(20_100), false));
+        // hidden / resized windows do not count
+        assert!(!counts_as_failure(&wgpu::CurrentSurfaceTexture::Occluded));
+        assert!(!counts_as_failure(&wgpu::CurrentSurfaceTexture::Outdated));
+        assert!(!counts_as_failure(&wgpu::CurrentSurfaceTexture::Timeout));
+        assert!(counts_as_failure(&wgpu::CurrentSurfaceTexture::Validation));
+        assert!(counts_as_failure(&wgpu::CurrentSurfaceTexture::Lost));
+    }
+
+    /// #1194: the renderer that lost its device is kept on disk, stops being the remembered one and
+    /// goes last in every later order (not when forced); an unreadable file is ignored.
+    #[test]
+    fn a_lost_renderer_is_tried_last_from_then_on() {
+        let (vk, dx, gl) = (WindowRenderer::Wgpu(Backends::VULKAN), WindowRenderer::Wgpu(Backends::DX12), WindowRenderer::Wgpu(Backends::GL));
+        let d = dir("lost");
+        let f = Files::new(Some(d.clone()));
+        assert_eq!(f.lost_renderer(), None);
+        f.started(vk);
+        f.record_lost(vk);
+        assert_eq!(f.lost_renderer(), Some(vk));
+        assert_eq!(Files::read(f.remembered()), None);
+        assert_eq!(f.lost_renderer(), Some(vk), "kept across starts");
+        let order = vec![vk, dx, gl, WindowRenderer::Glow];
+        assert_eq!(demote_lost(order.clone(), None, Some(vk)), vec![dx, gl, WindowRenderer::Glow, vk]);
+        assert_eq!(demote_lost(order.clone(), Some(vk), Some(vk)), order);
+        assert_eq!(demote_lost(order.clone(), None, None), order);
+        std::fs::write(d.join("window-lost"), b"\xff\x00garbage").unwrap();
+        assert_eq!(f.lost_renderer(), None);
+        Files::new(None).record_lost(vk);
+        assert!(lost_text(vk).contains("vulkan"));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// The window keeps eframe's low-latency surface: one frame queued (two Metal drawables), not

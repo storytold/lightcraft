@@ -144,11 +144,18 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     let plugin = text(p, "plugin", c)?;
     let (mut params, mut stage_given) = (params(p, c)?.unwrap_or_default(), stage(p, c)?);
     // an installed plug-in: checked against its manifest, defaults filled in, its build recorded
+    let mut remember_after = None;
     let (module_hash, name) = match crate::filter_plugins::registry().get(&plugin) {
         Some(f) => {
             // no stage given: the one the plug-in asks for
             stage_given = stage_given.or(Some(crate::filter_plugins::preferred_stage(&f)));
-            params = f.manifest().resolve_params(&Value::Object(params)).map_err(|e| bad(c, e.to_string()))?;
+            let given = params.clone();
+            params = start_params(&f, &plugin, params).map_err(|e| bad(c, e))?;
+            // (what was given for the parameters it remembers is remembered, once added: a copy
+            // added with a preset's values, say)
+            let set_now: serde_json::Map<String, Value> =
+                params.iter().filter(|(k, _)| given.contains_key(*k)).map(|(k, v)| (k.clone(), v.clone())).collect();
+            remember_after = Some((f.manifest().remember.clone(), set_now));
             if let Some(h) = p.get("module_hash").and_then(Value::as_str)
                 && h != f.module_hash()
             {
@@ -169,9 +176,32 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
         None => 1,
     };
     let l = label(&name);
+    let remembering = remember_after.map(|(keys, now)| (plugin.clone(), keys, now));
     d.plugin_filters.push(PluginFilter { uid, plugin, module_hash, name, params, enabled: true, stage, analysis: None });
     s.set_develop(id, d, &l)?;
+    if let Some((plugin, keys, now)) = remembering {
+        crate::filter_plugins::remember(&plugin, &keys, &now);
+    }
     Ok(json!({ "uid": uid }))
+}
+
+/// A new copy of filter `f` (plug-in `plugin`)'s parameters: `given`, the values last set for the
+/// parameters it remembers ([`crate::filter_plugins::remembered`]; `given` wins), and defaults for
+/// the rest, checked against its manifest. A remembered value the manifest no longer takes (a
+/// plug-in update changed it) leaves them all out.
+fn start_params(
+    f: &lcc_filters::Filter,
+    plugin: &str,
+    given: serde_json::Map<String, Value>,
+) -> std::result::Result<serde_json::Map<String, Value>, String> {
+    let keep = &f.manifest().remember;
+    let mut start = given.clone();
+    for (k, v) in crate::filter_plugins::remembered(plugin) {
+        if keep.contains(&k) && !start.contains_key(&k) {
+            start.insert(k, v);
+        }
+    }
+    f.manifest().resolve_params(&Value::Object(start)).or_else(|_| f.manifest().resolve_params(&Value::Object(given))).map_err(|e| e.to_string())
 }
 
 fn remove(s: &mut Session, p: &Value) -> Result<Value> {
@@ -197,10 +227,12 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     let i = position(&d, u, c)?;
     let f = d.plugin_filters.get_mut(i).ok_or_else(|| bad(c, "no such plug-in filter"))?;
     let mut l = label(&f.name);
+    let mut changed = Vec::new();
     if let Some(m) = patch {
         if let [(k, _)] = m.iter().collect::<Vec<_>>().as_slice() {
             l = format!("{l} › {k}");
         }
+        changed = m.keys().cloned().collect();
         f.params.extend(m);
         if f.params.len() > MAX_PARAMS {
             return Err(bad(c, format!("at most {MAX_PARAMS} parameters")));
@@ -212,7 +244,17 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(st) = st {
         f.stage = st;
     }
+    // what this changes of the parameters the filter remembers, as its manifest takes them, is
+    // where the next copy added starts
+    let kept = crate::filter_plugins::registry().get(&f.plugin).filter(|r| !changed.is_empty() && !r.manifest().remember.is_empty()).and_then(|r| {
+        let resolved = r.manifest().resolve_params(&Value::Object(f.params.clone())).ok()?;
+        let now: serde_json::Map<String, Value> = resolved.into_iter().filter(|(k, _)| changed.contains(k)).collect();
+        Some((f.plugin.clone(), r.manifest().remember.clone(), now))
+    });
     s.set_develop(id, d, &l)?;
+    if let Some((plugin, keys, now)) = kept {
+        crate::filter_plugins::remember(&plugin, &keys, &now);
+    }
     Ok(Value::Null)
 }
 
@@ -537,14 +579,15 @@ fn fail_all(tx: &std::sync::mpsc::Sender<(PhotoId, u32, Measured)>, frames: &[Fr
     }
 }
 
-/// `develop.pluginFilter.addTo {plugin, ids?}`: a new entry of `plugin` (its defaults, its own
-/// stage) on every photo of `ids` (else the selection) that has none yet; photos that have one are
-/// left as they are. One History step; `{added, had}` say how many got one and how many had one.
+/// `develop.pluginFilter.addTo {plugin, ids?}`: a new entry of `plugin` (its defaults, and the
+/// values last set for the parameters it remembers; its own stage) on every photo of `ids` (else
+/// the selection) that has none yet; photos that have one are left as they are. One History step;
+/// `{added, had}` say how many got one and how many had one.
 fn add_to(s: &mut Session, p: &Value) -> Result<Value> {
     let c = "develop.pluginFilter.addTo";
     let plugin = text(p, "plugin", c)?;
     let f = crate::filter_plugins::registry().get(&plugin).ok_or_else(|| bad(c, format!("plug-in {plugin:?} is not installed")))?;
-    let params = f.manifest().resolve_params(&json!({})).map_err(|e| bad(c, e.to_string()))?;
+    let params = start_params(&f, &plugin, serde_json::Map::new()).map_err(|e| bad(c, e))?;
     let stage = crate::filter_plugins::preferred_stage(&f);
     let name = f.manifest().name.clone();
     let ids = super::photo_ids(p, c)?.unwrap_or_else(|| s.selected());

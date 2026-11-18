@@ -420,6 +420,11 @@ pub struct WgpuConfiguration {
     /// from the hook keeps [`SurfaceConfig::present_mode`]. A mode the surface doesn't offer
     /// falls back to `AutoVsync` (FIFO), so the hook can never break presentation.
     pub choose_present_mode: Option<PresentModeHook>,
+
+    /// Patch (device loss): called whenever a window frame acquired its surface texture, so the
+    /// app can tell a frame that was skipped once from a window that never draws again (a lost
+    /// device makes every later frame fail, see [`Self::on_surface_status`]).
+    pub on_frame_acquired: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 /// See [`WgpuConfiguration::open_device`].
@@ -458,6 +463,7 @@ impl core::fmt::Debug for WgpuConfiguration {
             open_device,
             on_surface_configured,
             choose_present_mode,
+            on_frame_acquired,
         } = self;
         f.debug_struct("WgpuConfiguration")
             .field("surface", &surface)
@@ -466,6 +472,7 @@ impl core::fmt::Debug for WgpuConfiguration {
             .field("open_device", &open_device.is_some())
             .field("on_surface_configured", &on_surface_configured.is_some())
             .field("choose_present_mode", &choose_present_mode.is_some())
+            .field("on_frame_acquired", &on_frame_acquired.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -513,6 +520,7 @@ impl Default for WgpuConfiguration {
             open_device: None,
             on_surface_configured: None,
             choose_present_mode: None,
+            on_frame_acquired: None,
         }
     }
 }

@@ -636,10 +636,18 @@ pub(crate) fn test_drive() -> std::path::PathBuf {
     std::env::temp_dir().join(format!("app-test-drive-{}", std::process::id()))
 }
 
+/// A card mounted inside the test drive, as `/run/media/me/CARD` lies inside `/`: listed as a drive of its own too.
+pub(crate) fn test_card() -> std::path::PathBuf {
+    test_drive().join("Card")
+}
+
 pub(crate) fn list_drives(_: &str) -> Vec<(String, String)> {
     // tests never touch this machine's drives (mapped network drives can be slow to answer)
     if cfg!(test) {
-        return vec![("Test drive".into(), test_drive().to_string_lossy().to_string())];
+        return vec![
+            ("Test drive".into(), test_drive().to_string_lossy().to_string()),
+            ("Test card".into(), test_card().to_string_lossy().to_string()),
+        ];
     }
     let mut v: Vec<(String, String)> = Vec::new();
     if cfg!(windows) {
@@ -702,7 +710,9 @@ fn sources(app: &mut LccApp, ui: &mut egui::Ui) {
             });
         }
         for (label, path) in &drives {
-            crate::panels::left::folder_tree(app, ui, "drives", label, path, 0.0, current.as_deref(), true, false);
+            // each drive its own tree (`place` = the drive): a card lies inside the disk it is mounted on too,
+            // and its two rows must not share an arrow (issue #1234)
+            crate::panels::left::folder_tree(app, ui, &format!("drives:{path}"), label, path, 0.0, current.as_deref(), true, false);
         }
         heading(ui, "Folders");
         crate::panels::left::local_body(app, ui);

@@ -475,6 +475,7 @@ fn placeholder_manifest() -> Manifest {
         bands: crate::Bands::Rows,
         labels: Vec::new(),
         groups: Vec::new(),
+        remember: Vec::new(),
         header: None,
         icon: None,
         about: Default::default(),

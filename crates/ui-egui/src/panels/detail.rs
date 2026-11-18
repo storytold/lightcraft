@@ -472,8 +472,10 @@ pub(crate) fn navigate_gesture(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui:
     // Holding Space lends the hand tool back so the scroll gesture moves the frame around instead;
     // Ctrl/Cmd+wheel still zooms.
     if app.ui.settings.wheel_resizes_brush && is_brush && !cmd_or_ctrl && !space_held {
+        let invert = if app.ui.settings.invert_brush_resize { -1.0 } else { 1.0 };
         if notches != 0.0 {
-            crate::menus::adjust_brush(app, (notches * BRUSH_PER_NOTCH).exp().clamp(0.25, 4.0), 0.0);
+            let step = notches * invert;
+            crate::menus::adjust_brush(app, (step * BRUSH_PER_NOTCH).exp().clamp(0.25, 4.0), 0.0);
             ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
             ui.ctx().request_repaint();
             // Not a view change: the frame still draws the tool overlay, so the brush ring stays
@@ -481,9 +483,12 @@ pub(crate) fn navigate_gesture(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui:
             return false;
         }
         if trackpad_delta.y != 0.0 {
+            // Trackpad natural scroll up generates negative delta.y; negate so scrolling up
+            // grows the brush (matching Lightroom Classic and mouse wheel forward, issue #1257).
             // Scales with the scroll distance, so a trackpad's many small deltas and a wheel's line
             // add up to the same growth per distance scrolled (#867).
-            let k = (trackpad_delta.y * (BRUSH_PER_NOTCH / crate::theme::WHEEL_LINE_POINTS)).exp().clamp(0.25, 4.0);
+            let step = -trackpad_delta.y * invert;
+            let k = (step * (BRUSH_PER_NOTCH / crate::theme::WHEEL_LINE_POINTS)).exp().clamp(0.25, 4.0);
             crate::menus::adjust_brush(app, k, 0.0);
             ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
             ui.ctx().request_repaint();
@@ -3287,7 +3292,7 @@ fn general_cursor(app: &LccApp, ui: &egui::Ui, resp: &egui::Response, img: Rect,
     }
     let cursor = match app.ui.tool.as_str() {
         // the colour pickers: an eyedropper, its tip on the pixel picked
-        "wbPicker" | "fringe" | "colorRange" | "pointColor" | "hslPick" => {
+        "wbPicker" | "fringe" | "colorRange" | "pointColor" | "hslPick" | "levelsBlack" | "levelsWhite" => {
             if let Some(q) = resp.hover_pos().or_else(|| ui.input(|i| i.pointer.latest_pos())) {
                 crate::eyedropper::show(ui.ctx(), q);
             }
@@ -3369,6 +3374,22 @@ fn general_interaction(
                 }
                 _ => app.ui.tool.clear(),
             }
+        }
+        return;
+    }
+    if matches!(app.ui.tool.as_str(), "levelsBlack" | "levelsWhite") {
+        // the Levels pickers: the photo's brightness under the pointer, as the Levels receive it, becomes the
+        // black or white point of the RGB channel
+        if resp.clicked()
+            && let Some(q) = resp.interact_pointer_pos()
+        {
+            let n = map.norm(q);
+            let target = if app.ui.tool == "levelsBlack" { "black" } else { "white" };
+            // the picker stays armed: each click sets the point again, one undo step each
+            let _ = app.run("develop.levelsPick", json!({"target": target, "x": n.x, "y": n.y}));
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            app.ui.tool.clear();
         }
         return;
     }

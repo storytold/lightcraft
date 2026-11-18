@@ -33,6 +33,11 @@ fn screens() -> Vec<(String, Vec<(&'static str, serde_json::Value)>)> {
     for panel in ["edit", "crop", "masking", "remove", "redeye", "presets", "profiles", "activity", "versions", "info", "keywords"] {
         out.push((format!("Develop {panel}"), vec![("module.develop", json!({})), (leak(format!("panel.{panel}")), json!({}))]));
     }
+    // Issue #1050: the People view's three categories, each with its own headings, empty states and
+    // counts (the demo library has no faces, which is the empty state's own text)
+    for category in ["unknown", "suggested", "confirmed"] {
+        out.push((format!("People {category}"), vec![("view.people", json!({})), ("people.category", json!({"category": category}))]));
+    }
     for module in ["map", "book", "slideshow", "print", "web"] {
         out.push((format!("{module} module"), vec![("module.switch", json!({"module": module}))]));
     }

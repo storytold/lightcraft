@@ -127,3 +127,29 @@ fn arrows_still_change_the_photo_after_a_slider_edit() {
     ask(&mut h, "ui.key", json!({"key": "ArrowLeft"}));
     assert_eq!(h.app.session.selection.active.unwrap(), first, "Left goes back");
 }
+
+/// A raw starts with sharpening 40 and colour noise reduction 25 (issue #1244): resetting a slider by its name goes
+/// back to the photo's own default, not the spec table's neutral 0, for every control that starts elsewhere.
+#[test]
+fn a_reset_goes_to_the_photos_own_default_for_every_control() {
+    let mut app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let id = lcc_catalog::PhotoId(app.session.visible_cloned()[0].0);
+    let mut raw = (*app.session.catalog.photo(id).unwrap().clone()).clone();
+    let id = lcc_catalog::PhotoId(9_000_001);
+    raw.id = id;
+    raw.kind = lcc_catalog::MediaKind::Raw;
+    raw.preview_only = None;
+    app.session.catalog.apply(lcc_catalog::Op::AddPhoto { photo: Box::new(raw.clone()) }).unwrap();
+    app.session.selection.active = Some(id);
+    let defaults = raw.camera_defaults();
+    let mut nonzero = Vec::new();
+    for spec in lcc_develop::controls::CONTROLS {
+        let Some(own) = lcc_develop::controls::get(&defaults, spec.id) else { continue };
+        let reset = crate::panels::edit::photo_default_spec(&app, spec).map_or(spec.default, |s| s.default);
+        assert!((reset - own.clamp(spec.min, spec.max)).abs() < 1e-9, "{}: resets to {reset}, the photo starts at {own}", spec.id);
+        if own != spec.default {
+            nonzero.push(spec.id);
+        }
+    }
+    assert!(nonzero.contains(&"detail.sharpenAmount"), "{nonzero:?}");
+}

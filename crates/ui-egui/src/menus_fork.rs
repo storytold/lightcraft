@@ -44,6 +44,7 @@ const GRADING_COMMANDS: &[UiCommand] = &[("view.gradingMode", "Grading Mode", So
 /// Crop tool), as Lightroom Classic's Transform panel, and Plug-in Filters (the photo's pixel-filter stack). Opened and
 /// closed like the others (`section.*`).
 const EDIT_SECTIONS: &[UiCommand] = &[
+    ("section.levels", "Levels", None, "Window>Edit Sections"),
     ("section.curve", "Tone Curve", Some("Cmd+2"), "Window>Edit Sections"),
     ("section.mixer", "Color Mixer", Some("Cmd+3"), "Window>Edit Sections"),
     ("section.grading", "Color Grading", Some("Cmd+4"), "Window>Edit Sections"),
@@ -135,7 +136,8 @@ pub(super) fn run(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Value,
     }
     Some(match id {
         // the fork's Edit sections, opened and closed as upstream's are (⌥-click: just this one)
-        "section.curve"
+        "section.levels"
+        | "section.curve"
         | "section.mixer"
         | "section.grading"
         | "section.primaries"

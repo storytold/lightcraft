@@ -42,7 +42,7 @@ On ARM PCs the files say `arm64` instead of `x64`.
 
 ### macOS
 
-The tool is inside the app (`{{binary}}-<version>-macos-universal.dmg`; earlier releases had it as a separate
+The tool is inside the app (`{{binary}}-<version>-macos-arm64.dmg`, or `-macos-x64.dmg` on Intel; earlier releases had it as a separate
 `{{cli_binary}}-<version>-macos-universal.zip`). Open the app once first, so macOS knows you allowed it (the
 manual's Install page has the steps), then open **Terminal** (Applications ▸ Utilities) and run it from there:
 
