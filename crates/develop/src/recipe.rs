@@ -176,6 +176,34 @@ pub fn generic_name(name: &str) -> bool {
     n.is_empty() || n == "Mask" || n.strip_prefix("Mask ").is_some_and(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit()))
 }
 
+/// Whether `name` is `base` or `base` numbered ("Brush", "Brush 2"): an automatic name that
+/// [`unique_name`] may have numbered.
+pub fn numbered_name(name: &str, base: &str) -> bool {
+    name == base || name.strip_prefix(base).and_then(|r| r.strip_prefix(' ')).is_some_and(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// `base`, or `base` with the lowest number from 2 up that none of `taken` has ("Brush 2"), so
+/// two masks of a photo never share an automatic name.
+pub fn unique_name(base: &str, taken: &[&str]) -> String {
+    if !taken.contains(&base) {
+        return base.to_string();
+    }
+    (2..=taken.len().saturating_add(2)).map(|n| format!("{base} {n}")).find(|c| !taken.contains(&c.as_str())).unwrap_or_else(|| base.to_string())
+}
+
+/// What a mask is made of: the kinds of its components in order, each once ("Radial Gradient,
+/// Brush", "People - Eyes"); Copy Settings shows it next to each mask's name.
+pub fn composition(m: &Mask) -> String {
+    let mut kinds: Vec<String> = Vec::new();
+    for c in &m.components {
+        let n = shape_name(&c.shape);
+        if !kinds.contains(&n) {
+            kinds.push(n);
+        }
+    }
+    kinds.join(", ")
+}
+
 /// A preset's name without a leading catalogue code and trailing filler ("P10 Sun Kissed" → "Sun
 /// Kissed", "P5 Enhance Portrait......" → "Enhance Portrait").
 pub fn short_preset_name(name: &str) -> String {
@@ -653,6 +681,34 @@ mod tests {
         assert_eq!(short_preset_name("P10 Sun Kissed"), "Sun Kissed");
         assert_eq!(short_preset_name("P5 Enhance Portrait......"), "Enhance Portrait");
         assert_eq!(short_preset_name("2026"), "2026");
+    }
+
+    #[test]
+    fn automatic_names_are_numbered_only_where_they_would_repeat() {
+        assert_eq!(unique_name("Brush", &["Sky", "Subject"]), "Brush");
+        assert_eq!(unique_name("Brush", &["Brush"]), "Brush 2");
+        assert_eq!(unique_name("Brush", &["Brush", "Brush 2", "Brush 4"]), "Brush 3");
+        assert_eq!(unique_name("", &[""]), " 2");
+        assert!(numbered_name("Brush", "Brush") && numbered_name("Brush 12", "Brush"));
+        assert!(!numbered_name("Brush two", "Brush") && !numbered_name("Brush ", "Brush") && !numbered_name("Brushes", "Brush"));
+        assert!(!numbered_name("Sky", "Brush"));
+        let comp = |op, shape| MaskComponent { anchor: None, name: None, op, invert: false, shape };
+        let radial = MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.2, ry: 0.2, angle: 0.0, feather: 50.0, invert: false };
+        let m = Mask {
+            components: vec![
+                comp(MaskOp::Add, radial.clone()),
+                comp(MaskOp::Add, MaskShape::Brush { strokes: vec![] }),
+                comp(MaskOp::Subtract, radial),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(composition(&m), "Radial Gradient, Brush");
+        let eyes = Mask {
+            components: vec![comp(MaskOp::Add, MaskShape::People { person: 0, parts: vec!["Eyes".into()], who: None, seg: None })],
+            ..Default::default()
+        };
+        assert_eq!(composition(&eyes), "People - Eyes");
+        assert_eq!(composition(&Mask::default()), "");
     }
 
     #[test]
