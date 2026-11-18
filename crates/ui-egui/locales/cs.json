@@ -2513,5 +2513,7 @@
   "Welcome": "Vítejte",
   "Next": "Další",
   "Get Started": "Začít",
-  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie"
+  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie",
+  "To be asked again: Settings → General → When importing a Lightroom or Capture One catalog.": "Chcete-li být znovu dotázáni: Nastavení → Obecné → Při importu katalogu Lightroom nebo Capture One.",
+  "When importing a Lightroom or Capture One catalog": "Při importu katalogu Lightroom nebo Capture One"
 }

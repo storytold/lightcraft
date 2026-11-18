@@ -2467,5 +2467,7 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Inicia la aplicación con --control 7980 (o LIGHTCRAFT_CONTROL_PORT), y lightcraft-cli mcp --connect conecta un agente a ella.",
   "Welcome": "Bienvenido",
   "Next": "Siguiente",
-  "Get Started": "Empezar"
+  "Get Started": "Empezar",
+  "To be asked again: Settings → General → When importing a Lightroom or Capture One catalog.": "Para que se vuelva a preguntar: Ajustes → General → Al importar un catálogo de Lightroom o Capture One.",
+  "When importing a Lightroom or Capture One catalog": "Al importar un catálogo de Lightroom o Capture One"
 }

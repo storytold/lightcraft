@@ -2438,5 +2438,7 @@
   "Top bar": "Bilah atas",
   "Tool strip": "Bilah alat",
   "Bottom bar": "Bilah bawah",
-  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto"
+  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto",
+  "To be asked again: Settings → General → When importing a Lightroom or Capture One catalog.": "Agar ditanya lagi: Pengaturan → Umum → Saat mengimpor katalog Lightroom atau Capture One.",
+  "When importing a Lightroom or Capture One catalog": "Saat mengimpor katalog Lightroom atau Capture One"
 }

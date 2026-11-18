@@ -2388,5 +2388,7 @@
   "Welcome": "Witamy",
   "Next": "Dalej",
   "Get Started": "Zaczynamy",
-  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć"
+  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć",
+  "To be asked again: Settings → General → When importing a Lightroom or Capture One catalog.": "Aby pytanie pojawiało się ponownie: Ustawienia → Ogólne → Przy imporcie katalogu Lightrooma lub Capture One.",
+  "When importing a Lightroom or Capture One catalog": "Przy imporcie katalogu Lightrooma lub Capture One"
 }

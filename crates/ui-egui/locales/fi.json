@@ -2423,5 +2423,7 @@
   "Top bar": "Yläpalkki",
   "Tool strip": "Työkalupalkki",
   "Bottom bar": "Alapalkki",
-  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää"
+  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää",
+  "To be asked again: Settings → General → When importing a Lightroom or Capture One catalog.": "Jos haluat, että tätä kysytään taas: Asetukset → Yleiset → Kun tuodaan Lightroom- tai Capture One -katalogi.",
+  "When importing a Lightroom or Capture One catalog": "Kun tuodaan Lightroom- tai Capture One -katalogi"
 }

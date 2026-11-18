@@ -2528,5 +2528,7 @@
   "Top bar": "Övre fältet",
   "Tool strip": "Verktygsfält",
   "Bottom bar": "Nedre fältet",
-  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton"
+  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton",
+  "To be asked again: Settings → General → When importing a Lightroom or Capture One catalog.": "Om du vill få frågan igen: Inställningar → Allmänt → Vid import av en Lightroom- eller Capture One-katalog.",
+  "When importing a Lightroom or Capture One catalog": "Vid import av en Lightroom- eller Capture One-katalog"
 }
