@@ -1295,3 +1295,13 @@ fn polish_switches_formats_dates_and_reads_every_count() {
     assert_polish_glyphs(&ctx);
     set_language(Locale::En);
 }
+
+#[test]
+fn perspective_labels_are_translated_in_every_shipped_locale() {
+    for locale in Locale::ALL.iter().filter(|locale| **locale != Locale::En) {
+        for source in ["Perspective Correction", "Guided Perspective", "Perspective Guides"] {
+            assert!(locale.catalog().contains_key(source), "{}: {source}", locale.code());
+            assert!(!locale.tr(source).contains("Upright"), "{}: {source}", locale.code());
+        }
+    }
+}
