@@ -3,7 +3,7 @@
 
 use crate::convert::{Buf, Meta, Model, Raw, check_size, finish};
 use crate::{DecodeOptions, Decoded, Error, Format, Result, Thumbnail, ThumbnailSource, exif};
-use craft_image_codecs_sef::jpeg_sef::{reaches_eoi, repair as without_sef_trailer};
+use craft_image_codecs::jpeg_sef::{reaches_eoi, repair as without_sef_trailer};
 
 const F: Format = Format::Jpeg;
 
