@@ -59,10 +59,16 @@ const PATCH_K: usize = 3 * PATCH * PATCH;
 
 /// Longest wait for one forward pass before the device is given up on.
 const TIMEOUT: Duration = Duration::from_secs(120);
-/// Workgroup memory the attention kernel needs: its key and value tiles (2 × [`ATTENTION_KEYS`] × 64 floats).
+/// Conservative workgroup memory for key and value tiles (2 × [`ATTENTION_KEYS`] × 64 floats).
 const ATTENTION_BYTES: u32 = 2 * ATTENTION_KEYS * HEAD_DIM as u32 * 4;
-/// Keys per step of the attention kernel.
+/// The maximum keys per step; also used to bound the required workgroup memory.
 const ATTENTION_KEYS: u32 = 32;
+
+/// On DX12, creating the fully unrolled 32-key shader can be very slow on some drivers. Smaller
+/// tiles shorten initialization; the existing 32-key limits remain conservative for every backend.
+fn attention_keys(backend: wgpu::Backend) -> u32 {
+    if backend == wgpu::Backend::Dx12 { 8 } else { ATTENTION_KEYS }
+}
 /// The matrix product's blocking.
 const TILE: Tile = Tile { rows: 4, cols: 4, bk: 16 };
 
@@ -255,7 +261,7 @@ fn make_device(backends: wgpu::Backends) -> Result<Dev, String> {
     let k = Kernels {
         matmul: Matmul { pipeline: pipe("sam3 matmul", &matmul_source(TILE, false), "main"), tile: TILE },
         matmul16: OnceLock::new(),
-        attention: pipe("sam3 attention", &attention_source(ATTENTION_KEYS), "main"),
+        attention: pipe("sam3 attention", &attention_source(attention_keys(info.backend)), "main"),
         layernorm: pipe("sam3 ops", ops, "layernorm"),
         rope: pipe("sam3 ops", ops, "rope"),
         im2col: pipe("sam3 ops", ops, "im2col"),

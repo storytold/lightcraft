@@ -30,7 +30,7 @@ const MLP: usize = 2048;
 const LAYERS: usize = 6;
 /// PyTorch's `nn.LayerNorm` default (`TORCH_LN_EPS`).
 const EPS: f32 = 1e-5;
-/// Keys per step of the attention kernel (the prompt's 32 tokens are one step).
+/// Required key-count alignment, kept at 32 even when the DX12 kernel uses smaller tiles.
 const KEYS: u32 = 32;
 /// `p.gelu` of the matrix product: ReLU.
 const RELU: u32 = 2;
@@ -49,7 +49,7 @@ pub(super) fn kernels(dev: &'static Dev) -> Result<&'static Kernels, String> {
     KERNELS
         .get_or_init(|| {
             let validation = dev.device.push_error_scope(wgpu::ErrorFilter::Validation);
-            let source = attention_source(KEYS);
+            let source = attention_source(super::attention_keys(dev.info.backend));
             let pipe = |entry: &str| pipeline(&dev.device, &dev.pipeline_layout, "sam3 detr", &source, entry);
             let k = Kernels { attention: pipe("attention"), add: pipe("add") };
             match pollster::block_on(validation.pop()) {

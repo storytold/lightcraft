@@ -83,6 +83,8 @@ fn the_kernel_source_is_written_out() {
     assert!(!src.contains("{{"), "a mark is left");
     assert!(src.contains("let s31 = ") && !src.contains("let s32 = "));
     assert!(src.contains("let q7 = ") && !src.contains("let q8 = "));
+    let dx12 = attention_source(super::super::attention_keys(wgpu::Backend::Dx12));
+    assert!(dx12.contains("let s7 = ") && !dx12.contains("let s8 = "));
 }
 
 #[test]
