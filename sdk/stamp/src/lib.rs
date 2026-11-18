@@ -9,6 +9,12 @@
 //! the SDK's `package:` form). `lcc_manifest` stays the authority: the section is a copy for tools
 //! that must not run the module, and nothing has to trust this tool to have written it.
 //!
+//! It also signs a stamped plug-in with its author's ed25519 key ([`sign`]): a [`SIGNATURE_SECTION`]
+//! appended as the file's last section, holding the public key and a signature over every byte
+//! before it (the code and the stamped manifest). The app pins the key at the first signed install
+//! and asks the user when a later file is signed by another one (`docs/plugins.md` → Signing your
+//! plug-in). Stamping a signed file drops its signature: the bytes it covered changed.
+//!
 //! Everything here reads hostile input: a malformed module or section is an [`Error`], never a
 //! panic.
 
@@ -20,7 +26,11 @@ use std::fmt;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Map, Value};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
+use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
+use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use wasmi::{Config, EnforcedLimits, Engine, ExternType, Linker, Module, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
 
 /// The custom section's name. Neutral on purpose: it is stored in plug-in files, so it never follows
@@ -32,6 +42,14 @@ pub const ABI_VERSION: i32 = 1;
 pub const MAX_MODULE_BYTES: usize = 32 << 20;
 /// Largest manifest accepted (the host's limit); the section is capped at the same size.
 pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
+/// The author signature's custom section ([`sign`]). Neutral on purpose, as [`SECTION`].
+pub const SIGNATURE_SECTION: &str = "photo-plugin.signature";
+/// Largest signature section accepted (the host's limit); [`sign`] writes about 150 bytes.
+pub const MAX_SIGNATURE_BYTES: usize = 1024;
+/// The signature section's format version.
+pub const SIGNATURE_VERSION: u64 = 1;
+/// How a secret key file's text starts ([`secret_key_text`]).
+pub const SECRET_KEY_PREFIX: &str = "photo-plugin-secret-key:";
 
 /// The only imports a plug-in may have, all in module `host` (as the app's host requires).
 const HOST_IMPORTS: &[&str] = &["call", "response", "log"];
@@ -74,6 +92,8 @@ pub enum Error {
     Stale(Vec<String>),
     /// Reading or writing a file.
     Io(String),
+    /// A secret key that can't be used: not a key file's text, not base64, not 32 bytes.
+    Key(String),
 }
 
 impl fmt::Display for Error {
@@ -89,6 +109,7 @@ impl fmt::Display for Error {
                 write!(f, "the {SECTION} section differs from what lcc_manifest returns in {} (stamp it again)", fields.join(", "))
             }
             Error::Io(m) => write!(f, "{m}"),
+            Error::Key(m) => write!(f, "not a usable secret key: {m}"),
         }
     }
 }
@@ -165,7 +186,8 @@ pub fn manifest(wasm: &[u8], limits: &Limits) -> Result<Vec<u8>> {
 
 /// Returns `wasm` with exactly one [`SECTION`], holding what `lcc_manifest` returns. Every other
 /// section is kept as it was, in its place; an earlier [`SECTION`] is dropped and the new one goes
-/// last. The same input always gives the same output.
+/// last. A [`SIGNATURE_SECTION`] is dropped too (the bytes it signed change): sign the result
+/// again. The same input always gives the same output.
 pub fn stamp(wasm: &[u8], limits: &Limits) -> Result<Vec<u8>> {
     stamp_and_manifest(wasm, limits).map(|(stamped, _)| stamped)
 }
@@ -182,7 +204,7 @@ fn stamp_and_manifest(wasm: &[u8], limits: &Limits) -> Result<(Vec<u8>, Vec<u8>)
     out.extend_from_slice(HEADER);
     for s in sections(wasm)? {
         let s = s?;
-        if s.name != Some(SECTION) {
+        if s.name != Some(SECTION) && s.name != Some(SIGNATURE_SECTION) {
             out.extend_from_slice(s.raw);
         }
     }
@@ -249,6 +271,197 @@ pub fn stamp_file(input: &Path, output: Option<&Path>, limits: &Limits) -> Resul
 /// [`check`] on a file; writes nothing.
 pub fn check_file(path: &Path, limits: &Limits) -> Result<Vec<u8>> {
     check(&read_file(path)?, limits)
+}
+
+/// A module's author signature ([`signature`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Signature {
+    /// No [`SIGNATURE_SECTION`]: the file isn't signed.
+    None,
+    /// Signed by this public key, and nothing was changed since.
+    Valid { key: [u8; 32] },
+    /// A signature section that doesn't hold up, and why. Never the same as unsigned: the app
+    /// refuses such a file.
+    Invalid(String),
+}
+
+/// Reads and checks the module's [`SIGNATURE_SECTION`], without running anything. It is valid when
+/// there is exactly one, it is the file's last section (written as [`sign`] writes it, with the
+/// shortest lengths), it is at most [`MAX_SIGNATURE_BYTES`], its JSON is `{"v": 1, "key", "sig"}`
+/// with a 32-byte ed25519 public key and a 64-byte signature in standard base64, and the signature
+/// is the key's over every byte before the section. An error only when the module's sections
+/// can't be walked.
+pub fn signature(wasm: &[u8]) -> Result<Signature> {
+    check_size(wasm)?;
+    let mut count = 0usize;
+    let mut data = None;
+    for s in sections(wasm)? {
+        let s = s?;
+        if s.name == Some(SIGNATURE_SECTION) {
+            count = count.saturating_add(1);
+            data.get_or_insert(s.data);
+        }
+    }
+    let Some(data) = data else { return Ok(Signature::None) };
+    Ok(match verify(wasm, data, count) {
+        Ok(key) => Signature::Valid { key },
+        Err(why) => Signature::Invalid(why),
+    })
+}
+
+/// [`signature`]'s checks on a module whose first signature section holds `data`.
+fn verify(wasm: &[u8], data: &[u8], count: usize) -> std::result::Result<[u8; 32], String> {
+    if count > 1 {
+        return Err(format!("the file has {count} {SIGNATURE_SECTION} sections; a signed plug-in has one"));
+    }
+    if data.len() > MAX_SIGNATURE_BYTES {
+        return Err(format!("the {SIGNATURE_SECTION} section is {} bytes (limit {MAX_SIGNATURE_BYTES})", data.len()));
+    }
+    let tail = signature_section(data);
+    let signed = wasm
+        .strip_suffix(tail.as_slice())
+        .ok_or_else(|| format!("the {SIGNATURE_SECTION} section isn't the file's last section: the file was changed after signing"))?;
+    let (key, sig) = parse_signature(data)?;
+    let key = VerifyingKey::from_bytes(&key).map_err(|_| "its key isn't an ed25519 public key".to_string())?;
+    key.verify_strict(signed, &ed25519_dalek::Signature::from_bytes(&sig))
+        .map_err(|_| "the signature doesn't match the file: it was changed after signing, or signed with another key".to_string())?;
+    Ok(key.to_bytes())
+}
+
+/// The key and signature in a signature section's JSON.
+fn parse_signature(data: &[u8]) -> std::result::Result<([u8; 32], [u8; 64]), String> {
+    let object = match serde_json::from_slice::<Value>(data) {
+        Ok(Value::Object(m)) => m,
+        Ok(_) => return Err("its content isn't a JSON object".into()),
+        Err(e) => return Err(format!("its content isn't JSON ({e})")),
+    };
+    match object.get("v").and_then(Value::as_u64) {
+        Some(SIGNATURE_VERSION) => {}
+        Some(v) => return Err(format!("it is format version {v}; this tool reads version {SIGNATURE_VERSION}")),
+        None => return Err("it has no format version `v`".into()),
+    }
+    let field = |name: &str| -> std::result::Result<Vec<u8>, String> {
+        let text = object.get(name).and_then(Value::as_str).ok_or_else(|| format!("it has no `{name}` string"))?;
+        STANDARD.decode(text).map_err(|_| format!("its `{name}` isn't base64"))
+    };
+    let key: [u8; 32] = field("key")?.try_into().map_err(|_| "its `key` isn't 32 bytes".to_string())?;
+    let sig: [u8; 64] = field("sig")?.try_into().map_err(|_| "its `sig` isn't 64 bytes".to_string())?;
+    Ok((key, sig))
+}
+
+/// The whole signature section holding `data`: id, size, name and data, with the shortest lengths.
+fn signature_section(data: &[u8]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(data.len().saturating_add(SIGNATURE_SECTION.len()).saturating_add(5));
+    leb128(&mut payload, SIGNATURE_SECTION.len());
+    payload.extend_from_slice(SIGNATURE_SECTION.as_bytes());
+    payload.extend_from_slice(data);
+    let mut out = Vec::with_capacity(payload.len().saturating_add(6));
+    out.push(0);
+    leb128(&mut out, payload.len());
+    out.extend_from_slice(&payload);
+    out
+}
+
+/// Signs a stamped module with the 32-byte ed25519 secret key `secret` (a seed, as
+/// [`secret_key_from_text`] reads it): returns it with a [`SIGNATURE_SECTION`] as its last section,
+/// an earlier one dropped. Refused unless the module has exactly one [`SECTION`] equal to what
+/// `lcc_manifest` returns ([`check`]): the app refuses a stale stamp anyway. Takes the key's bytes,
+/// not a file, so a release tool can pass a key from a CI secret without writing it to disk. The
+/// same input always gives the same output (ed25519 is deterministic).
+pub fn sign(wasm: &[u8], secret: &[u8; 32], limits: &Limits) -> Result<Vec<u8>> {
+    check(wasm, limits)?;
+    let mut out = Vec::with_capacity(wasm.len().saturating_add(256));
+    out.extend_from_slice(HEADER);
+    for s in sections(wasm)? {
+        let s = s?;
+        if s.name != Some(SIGNATURE_SECTION) {
+            out.extend_from_slice(s.raw);
+        }
+    }
+    let signing = SigningKey::from_bytes(secret);
+    let sig = signing.sign(&out);
+    let data = json!({"v": SIGNATURE_VERSION, "key": STANDARD.encode(signing.verifying_key().as_bytes()), "sig": STANDARD.encode(sig.to_bytes())});
+    let data = serde_json::to_vec(&data).map_err(|e| Error::Io(e.to_string()))?;
+    out.extend_from_slice(&signature_section(&data));
+    if out.len() > MAX_MODULE_BYTES {
+        return Err(Error::Module(format!("signed, it would be {} bytes (limit {MAX_MODULE_BYTES})", out.len())));
+    }
+    Ok(out)
+}
+
+/// [`sign`] on the file `input`, written to `output` (`input` itself when `None`) as
+/// [`stamp_file`] writes. Returns the public key it signed with.
+pub fn sign_file(input: &Path, output: Option<&Path>, secret: &[u8; 32], limits: &Limits) -> Result<[u8; 32]> {
+    let wasm = read_file(input)?;
+    let signed = sign(&wasm, secret, limits)?;
+    let target = output.unwrap_or(input);
+    let file = |p: &Path| std::fs::metadata(p).ok().filter(std::fs::Metadata::is_file);
+    let permissions = file(target).or_else(|| file(input)).map(|m| m.permissions());
+    write_file(target, &signed, permissions)?;
+    Ok(public_key(secret))
+}
+
+/// [`signature`] of a file; writes nothing.
+pub fn signature_file(path: &Path) -> Result<Signature> {
+    signature(&read_file(path)?)
+}
+
+/// The public key of the secret key `secret`.
+pub fn public_key(secret: &[u8; 32]) -> [u8; 32] {
+    SigningKey::from_bytes(secret).verifying_key().to_bytes()
+}
+
+/// A public key's fingerprint, as the app shows it: the first 16 hex digits of the key's SHA-256,
+/// in groups of four (`3f2a 9c41 07be d5e8`).
+pub fn fingerprint(key: &[u8; 32]) -> String {
+    let digest = Sha256::digest(key);
+    let hex: Vec<String> = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
+    hex.chunks(2).map(|c| c.concat()).collect::<Vec<_>>().join(" ")
+}
+
+/// Makes a new secret key and writes it to `out` ([`secret_key_text`]), readable by its owner only
+/// (on Unix); an existing file is never overwritten. Returns the public key.
+pub fn new_key_file(out: &Path) -> Result<[u8; 32]> {
+    let named = |e: std::io::Error| Error::Io(format!("writing {}: {e}", out.display()));
+    let mut seed = [0u8; 32];
+    getrandom::fill(&mut seed).map_err(|e| Error::Key(format!("no randomness from the system: {e}")))?;
+    let text = zeroize::Zeroizing::new(secret_key_text(&seed));
+    let public = public_key(&seed);
+    zeroize::Zeroize::zeroize(&mut seed);
+    let mut options = std::fs::OpenOptions::new();
+    // create_new: an existing file (perhaps a key) is never overwritten
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options.open(out).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            Error::Io(format!("{} already exists: a key file is never overwritten", out.display()))
+        } else {
+            named(e)
+        }
+    })?;
+    if let Err(e) = file.write_all(text.as_bytes()).and_then(|()| file.sync_all()) {
+        // a partial key is no key: gone, so trying again isn't refused as "already exists"
+        drop(file);
+        let _ = std::fs::remove_file(out);
+        return Err(named(e));
+    }
+    Ok(public)
+}
+
+/// A secret key file's text: [`SECRET_KEY_PREFIX`], the key in standard base64, a newline.
+pub fn secret_key_text(secret: &[u8; 32]) -> String {
+    format!("{SECRET_KEY_PREFIX}{}\n", STANDARD.encode(secret))
+}
+
+/// The secret key in a key file's text ([`secret_key_text`]; surrounding white space is ignored).
+pub fn secret_key_from_text(text: &str) -> Result<[u8; 32]> {
+    let body = text.trim().strip_prefix(SECRET_KEY_PREFIX).ok_or_else(|| Error::Key(format!("it doesn't start with `{SECRET_KEY_PREFIX}`")))?;
+    let bytes = zeroize::Zeroizing::new(STANDARD.decode(body.trim()).map_err(|_| Error::Key("it isn't base64".into()))?);
+    bytes.as_slice().try_into().map_err(|_| Error::Key("it isn't 32 bytes".into()))
 }
 
 fn read_file(path: &Path) -> Result<Vec<u8>> {

@@ -1,6 +1,6 @@
 [package]
 name = "plugin-stamp"
-description = "Copies a WebAssembly plug-in's manifest (what lcc_manifest returns) into a photo-plugin.manifest custom section"
+description = "Copies a WebAssembly plug-in's manifest (what lcc_manifest returns) into a photo-plugin.manifest custom section, and signs it"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
@@ -14,3 +14,14 @@ publish = false
 serde_json = "1"
 # Pure-Rust WebAssembly interpreter (MIT OR Apache-2.0), with the features the app's plug-in host uses.
 wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "stable", "portable-dispatch"] }
+# Author signatures (`sign`, `keygen`): the same versions as the app's workspace.
+# ed25519 signing (BSD-3-Clause).
+ed25519-dalek = { version = "2.2", default-features = false, features = ["std", "zeroize"] }
+# Key fingerprints (MIT OR Apache-2.0).
+sha2 = "0.10"
+# The key and signature in the section and the key file (MIT OR Apache-2.0).
+base64 = "0.22"
+# A new secret key's seed (MIT OR Apache-2.0).
+getrandom = "0.3"
+# Wipes the secret key's text from memory once it is written or read (MIT OR Apache-2.0).
+zeroize = "1"

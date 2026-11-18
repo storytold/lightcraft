@@ -5248,6 +5248,8 @@ dependencies = [
 name = "lcc-plugins"
 version = "26.47.1"
 dependencies = [
+ "base64",
+ "ed25519-dalek 2.2.0",
  "lcc-fuzzkit",
  "lcc-net",
  "lcc-testkit",
@@ -5486,8 +5488,10 @@ dependencies = [
 name = "lcc-ui-egui"
 version = "26.47.1"
 dependencies = [
+ "base64",
  "chrono",
  "craft-ui",
+ "ed25519-dalek 2.2.0",
  "egui",
  "egui_kittest",
  "filmcraft-h264enc",
@@ -7224,8 +7228,13 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 name = "plugin-stamp"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "ed25519-dalek 2.2.0",
+ "getrandom 0.3.4",
  "serde_json",
+ "sha2 0.10.9",
  "wasmi",
+ "zeroize",
 ]
 
 [[package]]

@@ -575,3 +575,97 @@ fn a_section_that_differs_from_lcc_manifest_is_refused() {
     assert!(installed.contains("`permissions`"), "{installed}");
     assert!(listed(&mut s, "test.installs.lying").is_none(), "nothing installed");
 }
+
+/// `bytes` with an author signature section appended, signed with the key whose seed is all `seed`
+/// (as `plugin-stamp sign` writes it), and that key's fingerprint.
+fn signed(bytes: &[u8], seed: u8) -> (Vec<u8>, String) {
+    use base64::Engine as _;
+    use ed25519_dalek::Signer as _;
+    let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+    let data = json!({"v": 1, "key": b64(key.verifying_key().as_bytes()), "sig": b64(&key.sign(bytes).to_bytes())}).to_string();
+    let leb = |out: &mut Vec<u8>, mut n: usize| loop {
+        let b = (n & 0x7f) as u8;
+        n >>= 7;
+        out.push(if n == 0 { b } else { b | 0x80 });
+        if n == 0 {
+            break;
+        }
+    };
+    let name = lcc_plugins::SIGNATURE_SECTION;
+    let mut payload = Vec::new();
+    leb(&mut payload, name.len());
+    payload.extend_from_slice(name.as_bytes());
+    payload.extend_from_slice(data.as_bytes());
+    let mut out = bytes.to_vec();
+    out.push(0);
+    leb(&mut out, payload.len());
+    out.extend_from_slice(&payload);
+    let fingerprint = lcc_plugins::Signer::from_base64(&b64(key.verifying_key().as_bytes())).unwrap().fingerprint();
+    (out, fingerprint)
+}
+
+/// `plugin.inspectFile` says who signed a file and whether that's the installed plug-in's pinned
+/// signer; `plugin.install` pins the first signer and takes `acceptSigner` / `acceptUnsigned` for a
+/// file that isn't signed by it; `plugin.list` shows the pin.
+#[test]
+fn signed_files_are_inspected_and_another_signer_installs_on_the_users_yes() {
+    let _turn = turn();
+    let mut s = Session::with_demo();
+    let id = "test.installs.signed";
+    let dir = folder("signed");
+    let version = |v: &str| {
+        let f = module_file(&format!("signed-{v}"), &json!({"id": id, "name": "Signed", "version": v}));
+        std::fs::read(f.path()).unwrap()
+    };
+    let write = |name: &str, bytes: &[u8]| {
+        let p = dir.join(name);
+        std::fs::write(&p, bytes).unwrap();
+        p
+    };
+    let (v1, fp1) = signed(&version("1.0.0"), 1);
+    let (v2, fp2) = signed(&version("2.0.0"), 2);
+    let (v1, v2) = (write("v1.wasm", &v1), write("v2.wasm", &v2));
+    let invalid = write("bad.wasm", &[std::fs::read(&v2).unwrap().as_slice(), &[0, 2, 1, b'x']].concat());
+    let unsigned = write("v3.wasm", &version("3.0.0"));
+    let inspect = |s: &mut Session, p: &std::path::Path| s.execute("plugin.inspectFile", &json!({"path": p, "verify": true})).unwrap();
+
+    let info = inspect(&mut s, &v1);
+    assert_eq!(
+        (&info["signature"], &info["signer"], &info["pinned"], &info["matchesPin"]),
+        (&json!("valid"), &json!(fp1), &Value::Null, &Value::Null),
+        "{info}"
+    );
+    s.execute("plugin.install", &json!({"path": v1})).unwrap();
+    assert_eq!(listed(&mut s, id).unwrap()["signer"], fp1, "pinned at the first signed install");
+
+    let info = inspect(&mut s, &v2);
+    assert_eq!(info["signer"], fp2);
+    let key2 = info["signerKey"].as_str().unwrap().to_string();
+    assert_eq!(lcc_plugins::Signer::from_base64(&key2).unwrap().fingerprint(), fp2, "the full key behind the fingerprint");
+    assert_eq!(info["pinned"], json!({"signer": fp1, "readable": true}), "{info}");
+    assert_eq!(info["matchesPin"], false);
+    let e = s.execute("plugin.install", &json!({"path": v2})).unwrap_err().to_string();
+    assert!(e.contains(&fp1) && e.contains(&fp2) && e.contains("acceptSigner"), "{e}");
+    assert!(s.execute("plugin.install", &json!({"path": v2, "acceptSigner": fp2, "acceptUnsigned": true})).is_err(), "one answer at a time");
+    assert!(s.execute("plugin.install", &json!({"path": v2, "acceptSigner": 7})).is_err());
+    let other_key = signed(&version("9.0.0"), 9).0;
+    let other_key = s.execute("plugin.inspectFile", &json!({"path": write("other.wasm", &other_key)})).unwrap()["signerKey"].clone();
+    assert!(s.execute("plugin.install", &json!({"path": v2, "acceptSigner": other_key})).is_err(), "another signer's full key");
+    s.execute("plugin.install", &json!({"path": v2, "acceptSigner": key2})).unwrap();
+    assert_eq!(listed(&mut s, id).unwrap()["signer"], fp2);
+    assert_eq!(inspect(&mut s, &v2)["matchesPin"], true);
+
+    let info = inspect(&mut s, &invalid);
+    assert_eq!(info["signature"], "invalid", "{info}");
+    assert!(info["signatureError"].as_str().unwrap().contains("last section"), "{info}");
+    assert!(s.execute("plugin.install", &json!({"path": invalid, "acceptSigner": fp2})).unwrap_err().to_string().contains("plug-in signature"));
+
+    assert_eq!(inspect(&mut s, &unsigned)["signature"], "none");
+    assert!(s.execute("plugin.install", &json!({"path": unsigned})).unwrap_err().to_string().contains("acceptUnsigned"));
+    s.execute("plugin.install", &json!({"path": unsigned, "acceptUnsigned": true})).unwrap();
+    let after = listed(&mut s, id).unwrap();
+    s.execute("plugin.uninstall", &json!({"id": id})).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!((&after["version"], &after["signer"]), (&json!("3.0.0"), &Value::Null), "installed unsigned, as the user said yes to");
+}
