@@ -18,6 +18,21 @@ fn writable_check_does_not_create_missing_parents() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+#[cfg(unix)]
+#[test]
+fn writable_probe_never_writes_through_a_planted_link() {
+    let base = temp("probe-link");
+    std::fs::create_dir_all(&base).unwrap();
+    let victim = base.join("victim");
+    std::fs::write(&victim, b"keep").unwrap();
+    let probe = base.join(format!(".lightcraft-write-test-{}", std::process::id()));
+    std::os::unix::fs::symlink(&victim, &probe).unwrap();
+    assert!(check_writable(&base).is_ok());
+    assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+    assert!(!probe.exists());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[test]
 fn migrate_moves_leaves_or_discards() {
     let base = temp("migrate");

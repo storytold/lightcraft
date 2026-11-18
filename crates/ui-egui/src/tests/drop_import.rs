@@ -568,6 +568,32 @@ fn a_queued_drop_waits_for_a_dialog_opened_before_the_launch_list_closes() {
     assert!(h.app.dropped_files.is_empty(), "the deferred drop was consumed only when safe");
 }
 
+/// A drop delivered on the very first frame is queued by `raw_input_hook` before the same frame's
+/// `logic` assigns the startup dialog. The dialog did not exist when the drop arrived, so the
+/// drop must not take the "close the open dialog" refusal on the first UI pass that can see it:
+/// it waits behind the startup dialog and is imported once the tour closes.
+#[test]
+fn a_drop_delivered_on_the_first_frame_waits_behind_the_startup_dialog() {
+    let dir = Scratch::new("startup-drop");
+    write_png(&dir.path("trip/a.png"), 1);
+    let mut session = lightcraft_engine::Session::new().with_fs();
+    session.open_library(dir.path("library"), false).unwrap();
+    let mut h = Headless::new(LightcraftApp::new(session, services()), [1300.0, 900.0], 1.0);
+    // a window host on its first launch, with the drop riding the first frame's raw input
+    h.app.headless_host = false;
+    h.app.drop_pending = vec![dir.path("trip/a.png")];
+    h.step();
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::Welcome { page: 0 })), "{:?}", h.app.ui.dialog);
+    assert_eq!(h.app.dropped_files.len(), 1, "the first-frame drop is queued");
+    h.step();
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::Welcome { .. })), "the tour stays: {:?}", h.app.ui.dialog);
+    assert_eq!(h.app.dropped_files.len(), 1, "the first-frame drop waits behind the startup dialog instead of being refused");
+    assert!(h.app.import.is_none(), "nothing starts behind the dialog");
+    h.app.ui.dialog = None;
+    assert!(h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(Dialog::Import { .. }))), "the drop opens its review once the tour is closed");
+    assert!(h.app.dropped_files.is_empty(), "the queued drop was consumed only when safe");
+}
+
 /// A drop queued behind the launch list may be released while a Synchronize Folder runs. It
 /// waits for that run to finish instead of taking `import::start_paths`'s "A folder is being
 /// synchronized" refusal and being lost. A drop made while no barrier was up still gets that
@@ -1193,13 +1219,19 @@ fn auto_import_waits_for_a_browse_that_starts_during_its_listing() {
     let dir = Scratch::new("auto-browse");
     let mut h = app(&dir);
     second_auto_import_listing(&mut h, &dir);
-    let scan = crate::import::stall_scan_of(&mut h.app, true);
+    let tx = crate::import::scan_by_hand(&mut h.app, true);
     apply_auto_import_listing(&mut h);
     assert!(h.app.import.is_none(), "no Auto Import for the browse to replace");
     // the browse finds one photo of its own and imports it
-    let Ok(tx) = scan.downcast::<std::sync::mpsc::Sender<ScanOutput>>() else { panic!("the stalled scan's sender") };
     let found = ImportCandidate { path: dir.path("trip/a.png"), ..Default::default() };
-    tx.send(ScanOutput { candidates: vec![found], probes: Default::default() }).unwrap();
+    tx.send(crate::import::ScanEnd::Done(ScanOutput {
+        candidates: vec![found],
+        probes: Default::default(),
+        truncated: false,
+        unreadable: 0,
+        unsupported: 0,
+    }))
+    .unwrap();
     drop(tx);
     assert!(h.step_until(T, |h| h.app.import.is_some()), "the browse starts its import");
     assert!(h.step_until(T, |h| h.app.import.is_none()), "and it ends");

@@ -433,6 +433,7 @@ fn move_to_folder(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut plans: Vec<crate::rename::RenamePlan> = Vec::new();
     let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut moving: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut clashes: Vec<String> = Vec::new();
     for id in ids {
         let ph = s.catalog.photo(id).ok_or_else(|| bad(C, format!("no photo {}", id.0)))?;
@@ -442,7 +443,7 @@ fn move_to_folder(s: &mut Session, p: &Value) -> Result<Value> {
         let lightcraft_catalog::Source::File { path } = &ph.source else {
             return Err(bad(C, format!("{} has no file on disk", ph.file_name)));
         };
-        if plans.iter().any(|pl| pl.from_path.as_deref() == Some(path.as_str())) {
+        if !moving.insert(path.as_str()) {
             continue; // a virtual copy of a photo already moving
         }
         let src = Path::new(path);
@@ -521,7 +522,13 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
     if !src.is_dir() {
         return Err(format!("{from} is not a folder"));
     }
-    if s.library.as_ref().is_some_and(|l| l.dir.starts_with(src) || src.starts_with(&l.dir)) {
+    // compared as the folders are on disk (a differently spelled or linked path to the library
+    // names the same folder), with the spelling as a fallback where that can't be told
+    let same_folder = |l: &Path| {
+        let (lib, chosen) = (l.canonicalize().unwrap_or_else(|_| l.to_path_buf()), src.canonicalize().unwrap_or_else(|_| src.to_path_buf()));
+        lib.starts_with(&chosen) || chosen.starts_with(&lib) || l.starts_with(src) || src.starts_with(l)
+    };
+    if s.library.as_ref().is_some_and(|l| same_folder(&l.dir)) {
         return Err("the library's own folders can't be moved here".into());
     }
     // Repairs retain their exact old paths, including those on surviving history entries.

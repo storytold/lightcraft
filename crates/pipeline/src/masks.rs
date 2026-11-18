@@ -93,6 +93,12 @@ impl Mattes {
         self.mattes.iter().filter(|(k, _)| kinds.contains(k)).map(|(_, m)| m).collect()
     }
 
+    /// Whether a mask of the photo's Subject comes from these mattes (a person, or a person's
+    /// parts) rather than from the saliency heuristic.
+    pub fn selects_subject(&self) -> bool {
+        !self.for_shape(&MaskShape::Subject).is_empty()
+    }
+
     /// The mattes a shape uses instead of its heuristic (empty: none fits).
     fn for_shape(&self, shape: &MaskShape) -> Vec<&Image<u8>> {
         use MatteKind::*;
@@ -152,6 +158,8 @@ pub fn evaluate(masks: &[Mask], frame: &Frame, w: usize, h: usize, img: &Rgb32f,
 /// scaled by its amount.
 #[allow(clippy::too_many_arguments)]
 pub fn evaluate_one(m: &Mask, frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32, mattes: Option<&Mattes>) -> Plane {
+    // its coordinates on the photo before the warp, or (an old mask) on the corrected frame
+    let frame = &*frame.for_mask(m.on_photo);
     let mut alpha = Plane::new(w, h);
     let mut first = true;
     for comp in &m.components {
@@ -159,7 +167,7 @@ pub fn evaluate_one(m: &Mask, frame: &Frame, w: usize, h: usize, img: &Rgb32f, l
         if comp.invert {
             c.data.iter_mut().for_each(|v| *v = 1.0 - *v);
         }
-        if first && comp.op != MaskOp::Intersect {
+        if first {
             alpha = c;
             first = false;
             continue;
@@ -195,7 +203,7 @@ pub fn evaluate_one(m: &Mask, frame: &Frame, w: usize, h: usize, img: &Rgb32f, l
 
 /// Per-pixel positions in long-edge units for output pixel centres.
 fn for_each_pos(frame: &Frame, w: usize, h: usize, out: &mut Plane, f: impl Fn(Point, usize) -> f32 + Sync + Send) {
-    let m = frame.out_to_norm(w, h);
+    let m = frame.out_to_mask(w, h);
     let (ow, oh, l) = (frame.ow, frame.oh, frame.ow.max(frame.oh));
     for_rows(&mut out.data, w, |y, row| {
         for (x, v) in row.iter_mut().enumerate() {
@@ -266,7 +274,7 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
         MaskShape::Sky => {
             // Classical sky heuristic until the segmenter lands (M12): bright, smooth, blue-ish or
             // unsaturated, and connected to the top of the frame.
-            let m = frame.out_to_norm(w, h);
+            let m = frame.out_to_mask(w, h);
             for (i, v) in out.data.iter_mut().enumerate() {
                 let (x, y) = (i % w, i / w);
                 let n = m.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
@@ -293,7 +301,7 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
         MaskShape::Prompt { .. } => {}
         MaskShape::Subject | MaskShape::Object { .. } | MaskShape::People { .. } => {
             // Saliency heuristic: centre-weighted local contrast (replaced by the segmenter in M12).
-            let m = frame.out_to_norm(w, h);
+            let m = frame.out_to_mask(w, h);
             let blur = lightcraft_raster::blur::gaussian(log_l, 0.03 * frame_px(frame, w));
             for (i, v) in out.data.iter_mut().enumerate() {
                 let (x, y) = (i % w, i / w);
@@ -315,24 +323,24 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
 }
 
 /// A decoded [`SegMask`]: its logits and the normalized rectangle they cover.
-struct SegGrid {
+pub struct SegGrid {
     logits: Vec<f32>,
     side: usize,
     r: [f64; 4],
 }
 
 impl SegGrid {
-    fn new(seg: &SegMask) -> Option<SegGrid> {
+    pub fn new(seg: &SegMask) -> Option<SegGrid> {
         Some(SegGrid { logits: seg.logits()?, side: seg.side as usize, r: seg.bounds()? })
     }
 
-    fn contains(&self, n: Point) -> bool {
+    pub fn contains(&self, n: Point) -> bool {
         n.x >= self.r[0] && n.x <= self.r[2] && n.y >= self.r[1] && n.y <= self.r[3]
     }
 
     /// The bilinearly sampled logit at normalized image point `n` (cell centres at
     /// `(i + 0.5) / side` of the rectangle).
-    fn logit(&self, n: Point) -> f32 {
+    pub fn logit(&self, n: Point) -> f32 {
         let side = self.side;
         let at = |x: usize, y: usize| self.logits.get(y.min(side - 1) * side + x.min(side - 1)).copied().unwrap_or(-16.0);
         let u = (n.x - self.r[0]) / (self.r[2] - self.r[0]);
@@ -385,7 +393,7 @@ fn sample_seg(seg: Option<&SegMask>, detail: &[SegMask], gain: f32, frame: &Fram
     if coarse.is_none() && patches.is_empty() {
         return;
     }
-    let m = frame.out_to_norm(w, h);
+    let m = frame.out_to_mask(w, h);
     for_rows(&mut out.data, w, |y, row| {
         for (x, v) in row.iter_mut().enumerate() {
             let n = m.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
@@ -571,7 +579,7 @@ pub fn brush_dabs(s: &BrushStroke, frame: &Frame, w: usize, h: usize) -> BrushDa
 /// Ask for one more than the threshold to tell "at it" from "past it": a result shorter than
 /// `max` is the whole stroke.
 pub fn brush_dabs_within(s: &BrushStroke, frame: &Frame, w: usize, h: usize, max: usize) -> BrushDabs {
-    let to_out = frame.norm_to_out(w, h);
+    let to_out = frame.mask_to_out(w, h);
     let ppl = frame.px_per_long(w);
     let r = (s.size * ppl).max(0.5);
     let hard = r * (1.0 - (s.feather / 100.0).clamp(0.0, 1.0));
@@ -588,7 +596,8 @@ pub fn brush_dabs_within(s: &BrushStroke, frame: &Frame, w: usize, h: usize, max
         if emitted >= max {
             break;
         }
-        let q = to_out.apply(*p);
+        // (a point the warp can't place lays no dab, rather than one at its unwarped place)
+        let Some(q) = to_out(*p) else { continue };
         let before = dabs.len();
         if push_dabs_within(&mut dabs, &mut emitted, prev, q, r, max) {
             let pq = s.pressure_at(i);
@@ -810,6 +819,31 @@ fn guided_cross_fast(guide: &Plane, p: &mut Plane, sigma: f32, eps: f32, weight:
     });
 }
 
+/// Whether the strokes of one brush mask hold more dabs than the mask's shared budget ([`MAX_STROKE_DABS`]), so that
+/// rasterizing it would leave later strokes (an erase among them) unapplied. Callers that can fail check this and
+/// report an error rather than render a wrong mask.
+pub fn brush_over_budget(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize) -> bool {
+    let mut room = MAX_STROKE_DABS;
+    for s in strokes {
+        if s.points.is_empty() {
+            continue;
+        }
+        if room == 0 {
+            return true;
+        }
+        let n = brush_dabs_within(s, frame, w, h, room).dabs.len();
+        if n >= room {
+            // the budget is exactly filled, or the stroke was cut off at it: one more dab says which (a stroke
+            // already at its own cap [`MAX_STROKE_DABS`] is cut off, whatever it would have held)
+            if room >= MAX_STROKE_DABS || brush_dabs_within(s, frame, w, h, room + 1).dabs.len() > room {
+                return true;
+            }
+        }
+        room -= n;
+    }
+    false
+}
+
 /// Stamp brush strokes into `out` (max-combine; erase strokes subtract). Auto Mask strokes weight
 /// each dab by [`auto_similarity`] to the pixel under its centre and are refined with
 /// [`guided_cross`] on log luminance.
@@ -817,8 +851,15 @@ fn rasterize_brush(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, i
     if w == 0 || h == 0 {
         return;
     }
+    // one dab budget for the whole mask, as the GPU path keeps: a stroke's own cap alone let a
+    // thousand far-flung two-point strokes build and stamp a billion dabs
+    let mut room = MAX_STROKE_DABS;
     for s in strokes {
-        let bd = brush_dabs(s, frame, w, h);
+        if room == 0 {
+            break;
+        }
+        let bd = brush_dabs_within(s, frame, w, h, room);
+        room = room.saturating_sub(bd.dabs.len());
         let (dens, erase, auto) = (bd.density, bd.erase, bd.auto);
         let mut stroke_alpha = Plane::new(w, h);
         for (k, d) in bd.dabs.iter().enumerate() {
