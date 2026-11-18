@@ -47,7 +47,9 @@ pub mod kelvin_presets;
 pub mod lens_metadata;
 pub mod ljpeg;
 pub(crate) mod llvc;
+pub mod merge_provenance;
 pub mod opcodes;
+pub mod pixel_shift;
 mod preview;
 pub mod profile;
 mod saturation;
@@ -70,7 +72,7 @@ mod vendor;
 mod wb_estimate;
 
 pub use demosaic::{Method, demosaic};
-pub use dngwrite::{DngCompression, DngWriteOptions, write_dng, write_rendered_dng};
+pub use dngwrite::{DngCompression, DngPreview, DngWriteOptions, write_dng, write_rendered_dng};
 pub use lcc_color::Mat3;
 pub use lcc_geom::Orientation;
 pub use lcc_meta::Metadata;
