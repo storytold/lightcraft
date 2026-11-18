@@ -101,7 +101,8 @@ fn spot_apply(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let gi = (pu(3u) + gid.y) * pu(0u) + pu(2u) + gid.x;
     let t = vec3<f32>(img[3u * gi], img[3u * gi + 1u], img[3u * gi + 2u]);
-    let o = max(t + (v - t) * a, vec3<f32>(0.0));
+    // signed, as `spots::apply`: noise reduction clamps later
+    let o = t + (v - t) * a;
     img[3u * gi] = o.x;
     img[3u * gi + 1u] = o.y;
     img[3u * gi + 2u] = o.z;
