@@ -38,8 +38,8 @@ use crate::media::ProbeInfo;
 /// File extensions offered by import discovery and file pickers (lower case).
 /// This includes preview-only raws; the file probe decides whether sensor decoding is available.
 pub const EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "tif", "tiff", "webp", "dng", "cr2", "cr3", "nef", "nrw", "arw", "sr2", "srf", "raf", "orf", "rw2", "rwl", "raw", "pef",
-    "srw", "psd", "psb", "jxl", "gif", "bmp",
+    "jpg", "jpeg", "png", "tif", "tiff", "webp", "dng", "cr2", "cr3", "nef", "nefx", "nrw", "arw", "sr2", "srf", "raf", "orf", "rw2", "rwl", "raw",
+    "pef", "srw", "psd", "psb", "jxl", "gif", "bmp",
     // Decoded when built with the codecs' `heif` feature; otherwise the import reports them as
     // failed with the reason ("HEIC/HEIF support isn't included in this build").
     "heic", "heif", "avif", // a HEIC without the `heif` feature is reported as failed
@@ -2334,6 +2334,14 @@ mod tests_known;
 #[cfg(test)]
 mod prepared_tests {
     use super::*;
+
+    /// Nikon's merged pixel-shift NEFX is a raw the app decodes, whatever case its extension is in.
+    #[test]
+    fn nefx_files_are_supported_in_any_letter_case() {
+        for name in ["a.nefx", "A.NEFX", "a.Nefx"] {
+            assert!(is_supported(Path::new(name)), "{name}");
+        }
+    }
 
     /// Extensions the picker may offer: every one in [`EXTENSIONS`], minus the
     /// files this build cannot import (see [`accept_list`]).
