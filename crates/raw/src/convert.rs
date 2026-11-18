@@ -85,11 +85,9 @@ fn metadata(bytes: &[u8], format: RawFormat, camera: &craft_raw::Camera, size: (
                 .as_ref()
                 .map(lightcraft_meta::from_tiff)
                 .unwrap_or_default(),
-            _ => Tiff::parse_with(bytes, &craft_tiff::ParseOptions { max_ifds: 256, ..Default::default() })
-                .ok()
-                .as_ref()
-                .map(lightcraft_meta::from_tiff)
-                .unwrap_or_default(),
+            // the full Exif reader, not `from_tiff` alone: it also takes what the TIFF's IFDs leave out from the
+            // file's own records (a RW2's JpgFromRaw Exif and the ISO in its IFD0, a maker-note lens name)
+            _ => lightcraft_meta::try_read_exif_with(bytes, &craft_tiff::ParseOptions { max_ifds: 256, ..Default::default() }).unwrap_or_default(),
         }
     };
     m.width = Some(size.0 as u32);
@@ -252,5 +250,48 @@ mod tests {
         let c = color(craft_raw::ColorData { kelvin_presets: craft_raw::kelvin::KelvinPresets::new(points), ..Default::default() });
         assert_eq!(c.kelvin_presets, crate::kelvin_presets::KelvinPresets::new(points));
         assert!(c.kelvin_presets.is_some());
+    }
+
+    use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
+
+    /// A RW2 header: Panasonic IFD0 ISO 160 (tag 0x0017), an Exif IFD without ISOSpeedRatings, and optionally a
+    /// JpgFromRaw (tag 0x002E) whose APP1 Exif states `preview_iso`.
+    fn rw2(standard_iso: Option<u16>, preview_iso: Option<u16>) -> Vec<u8> {
+        let mut exif = IfdBuilder::new();
+        exif.set(t::EXPOSURE_TIME, Value::Rational(vec![(1, 100)]));
+        if let Some(iso) = standard_iso {
+            exif.set(t::ISO_SPEED, Value::Short(vec![iso]));
+        }
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::MAKE, Value::Ascii("Panasonic".into()));
+        ifd0.set(t::MODEL, Value::Ascii("DMC-GF6".into()));
+        ifd0.set(0x0017, Value::Short(vec![160]));
+        if let Some(iso) = preview_iso {
+            let mut inner_exif = IfdBuilder::new();
+            inner_exif.set(t::ISO_SPEED, Value::Short(vec![iso]));
+            let mut inner = IfdBuilder::new();
+            inner.set_child(t::EXIF_IFD, inner_exif);
+            let mut app1 = b"Exif\0\0".to_vec();
+            app1.extend(TiffWriter::new(ByteOrder::Little, false).write(&[inner]).unwrap());
+            let mut jpg = vec![0xff, 0xd8, 0xff, 0xe1];
+            jpg.extend(((app1.len() + 2) as u16).to_be_bytes());
+            jpg.extend(app1);
+            jpg.extend([0xff, 0xda, 0, 2, 0xff, 0xd9]);
+            ifd0.set(0x002e, Value::Undefined(jpg));
+        }
+        ifd0.set_child(t::EXIF_IFD, exif);
+        let mut bytes = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+        bytes[2] = b'U'; // IIU\0, the RW2 signature
+        bytes
+    }
+
+    /// storytold/lightcraft#3508: a RW2's short Exif IFD has no ISO; the decoder's metadata takes it from the JpgFromRaw
+    /// Exif, else the Panasonic IFD0 tag, while an ISO the raw's own Exif states keeps precedence.
+    #[test]
+    fn rw2_metadata_iso_falls_back_to_the_file_records() {
+        let iso = |b: &[u8]| metadata(b, RawFormat::Rw2, &craft_raw::Camera::default(), (8, 8)).iso;
+        assert_eq!(iso(&rw2(None, None)), Some(160));
+        assert_eq!(iso(&rw2(None, Some(320))), Some(320));
+        assert_eq!(iso(&rw2(Some(400), Some(320))), Some(400));
     }
 }
