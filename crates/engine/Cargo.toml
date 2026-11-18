@@ -48,6 +48,8 @@ harfrust = { version = "0.13", default-features = false, features = ["std"] }
 unicode-normalization = "0.1"
 unicode-segmentation = "1.13"
 lightcraft-segment = { workspace = true, optional = true }
+# Command plug-ins (WebAssembly, RFC-0046): `plugin` and the `plugin.*` commands.
+craft-plugin = { workspace = true }
 
 # model downloads run natively only (the web build fetches no models)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -72,3 +74,5 @@ craft-jxl = { workspace = true }
 craft-heif = { workspace = true, features = ["testdata"] }
 libc = { workspace = true }
 craft-tiff = { workspace = true }
+# Plug-in tests assemble their modules from WebAssembly text.
+wat = "1.261"

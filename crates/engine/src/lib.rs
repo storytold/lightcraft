@@ -64,6 +64,7 @@ mod model_download;
 pub mod open_path;
 pub mod originals;
 mod pdf;
+pub mod plugin;
 pub mod prep;
 pub mod preset_import;
 pub mod preset_luminar;
@@ -453,6 +454,10 @@ pub struct Session {
     /// (lightcraft-cli, a script) never ends in the middle of one.
     #[cfg(not(target_arch = "wasm32"))]
     pub apple_photos_background: bool,
+    /// WebAssembly plug-ins (`plugin.*`, [`plugin`]): the installed ones, their settings and
+    /// catalogs. Kept for the session until a host opens the user's folder
+    /// ([`plugin::Runtime::open_store`]).
+    pub plugins: plugin::Runtime,
 }
 
 impl Default for Session {
@@ -572,6 +577,7 @@ impl Session {
             apple_photos_imports: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             apple_photos_background: false,
+            plugins: Default::default(),
         }
     }
 
