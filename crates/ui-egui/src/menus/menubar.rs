@@ -797,7 +797,7 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                     v.push(MenuNode::Separator);
                 }
                 builtin = b;
-                v.push(item("app.export", json!({"preset": p.name, "background": true}), p.name, None, sel, None));
+                v.push(item("app.export", json!({"preset": p.name, "background": true}), crate::i18n::builtin_label(&p.name, b), None, sel, None));
             }
             v.push(MenuNode::Separator);
             v.push(item("dialog.export", Value::Null, "Custom…", None, sel, None));

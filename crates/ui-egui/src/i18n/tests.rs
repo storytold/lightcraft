@@ -389,6 +389,7 @@ fn language_commands_cover_every_language() {
         ("app.language.georgian", Locale::Ka),
         ("app.language.swedish", Locale::Sv),
         ("app.language.finnish", Locale::Fi),
+        ("app.language.estonian", Locale::Et),
         ("app.language.indonesian", Locale::Id),
         ("app.language.vietnamese", Locale::Vi),
     ];
