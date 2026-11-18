@@ -1404,6 +1404,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-image-codecs"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=cae7c1d8a6fec9a9ee136169918c5dd20ca509a0#cae7c1d8a6fec9a9ee136169918c5dd20ca509a0"
+dependencies = [
+ "craft-jpeg 0.1.0 (git+https://github.com/storytold/craft-libs?rev=cae7c1d8a6fec9a9ee136169918c5dd20ca509a0)",
+ "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=cae7c1d8a6fec9a9ee136169918c5dd20ca509a0)",
+ "crc32fast",
+ "exr",
+ "flate2",
+ "half",
+ "hayro-jpeg2000",
+ "image",
+ "image-webp",
+ "jpeg-encoder 0.6.1",
+ "png",
+ "rayon",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tiff",
+ "zune-core",
+ "zune-jpeg",
+ "zune-jpegxl",
+]
+
+[[package]]
 name = "craft-jpeg"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=478c50560d3c6fad3d613af2a30b35c3bc9f4c0f#478c50560d3c6fad3d613af2a30b35c3bc9f4c0f"
@@ -1440,6 +1465,14 @@ dependencies = [
 name = "craft-jpeg"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=c28356d400aed7575b04ec1551b4665107cfe845#c28356d400aed7575b04ec1551b4665107cfe845"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-jpeg"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=cae7c1d8a6fec9a9ee136169918c5dd20ca509a0#cae7c1d8a6fec9a9ee136169918c5dd20ca509a0"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -1523,6 +1556,18 @@ dependencies = [
  "brotli-decompressor 6.0.1",
  "chrono",
  "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=c28356d400aed7575b04ec1551b4665107cfe845)",
+ "quick-xml 0.41.0",
+ "serde",
+]
+
+[[package]]
+name = "craft-metadata"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=cae7c1d8a6fec9a9ee136169918c5dd20ca509a0#cae7c1d8a6fec9a9ee136169918c5dd20ca509a0"
+dependencies = [
+ "brotli-decompressor 6.0.1",
+ "chrono",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=cae7c1d8a6fec9a9ee136169918c5dd20ca509a0)",
  "quick-xml 0.41.0",
  "serde",
 ]
@@ -1623,6 +1668,15 @@ dependencies = [
 name = "craft-tiff"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=c28356d400aed7575b04ec1551b4665107cfe845#c28356d400aed7575b04ec1551b4665107cfe845"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-tiff"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=cae7c1d8a6fec9a9ee136169918c5dd20ca509a0#cae7c1d8a6fec9a9ee136169918c5dd20ca509a0"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -4146,6 +4200,7 @@ dependencies = [
  "craft-image-codecs 0.1.0 (git+https://github.com/storytold/craft-libs?rev=5ef5134ccc28db3a3aaba1e1a0c189340c5d277c)",
  "craft-image-codecs 0.1.0 (git+https://github.com/storytold/craft-libs?rev=a9efd722b49924588448fba5c59f36d3aee3f4c6)",
  "craft-image-codecs 0.1.0 (git+https://github.com/storytold/craft-libs?rev=c28356d400aed7575b04ec1551b4665107cfe845)",
+ "craft-image-codecs 0.1.0 (git+https://github.com/storytold/craft-libs?rev=cae7c1d8a6fec9a9ee136169918c5dd20ca509a0)",
  "craft-jpeg 0.1.0 (git+https://github.com/storytold/craft-libs?rev=478c50560d3c6fad3d613af2a30b35c3bc9f4c0f)",
  "craft-jxl",
  "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=3a6613f058e355a4fd8d196b2f385260bd4b4a8e)",
