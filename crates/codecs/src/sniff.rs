@@ -1,5 +1,6 @@
 //! Format detection from leading bytes.
 
+#[cfg(test)]
 use crate::exif::Tiff;
 use serde::{Deserialize, Serialize};
 
@@ -75,7 +76,8 @@ impl Format {
             Format::Jxl => Some("built without the `jxl` feature"),
             #[cfg(not(feature = "heif"))]
             Format::Heif => Some(crate::heif::NOT_IN_BUILD),
-            Format::Avif => Some("no pure-Rust, permissively licensed AV1 decoder yet"),
+            #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
+            Format::Avif => Some("AVIF decoding is not included in this build"),
             Format::RawTiffLike | Format::RawOther => Some("camera raw: decode with lightcraft-raw"),
             _ => None,
         }
@@ -125,16 +127,13 @@ pub fn sniff(b: &[u8]) -> Option<Format> {
         return Some(Format::RawTiffLike);
     }
     if b.starts_with(b"II*\0") || b.starts_with(b"MM\0*") {
-        return Some(if tiff_is_raw(b) { Format::RawTiffLike } else { Format::Tiff });
+        return Some(if craft_image_codecs::legacy_tiff_raw_hint(b) { Format::RawTiffLike } else { Format::Tiff });
     }
     if b.starts_with(b"II+\0") || b.starts_with(b"MM\0+") {
         return Some(Format::Tiff);
     }
-    if b.len() >= 26 && b.starts_with(b"BM") {
-        let dib = u32::from_le_bytes([b[14], b[15], b[16], b[17]]);
-        if matches!(dib, 12 | 16 | 40 | 52 | 56 | 64 | 108 | 124) {
-            return Some(Format::Bmp);
-        }
+    if craft_bmp_header::bmp_probe::is_supported_header(b) {
+        return Some(Format::Bmp);
     }
     None
 }
@@ -167,6 +166,7 @@ fn sniff_bmff(b: &[u8]) -> Option<Format> {
 /// Heuristic camera-raw detection for classic TIFF: DNGVersion, the CR2 signature, CFA/LinearRaw
 /// photometric or raw-only compressions in IFD0 or its SubIFDs, or a camera Make with 10–16-bit data
 /// and no ordinary photometric.
+#[cfg(test)]
 fn tiff_is_raw(b: &[u8]) -> bool {
     if b.len() >= 10 && &b[8..10] == b"CR" {
         return true;
@@ -220,6 +220,43 @@ fn tiff_is_raw(b: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bmp_routing_retains_supported_dib_and_truncation_rules() {
+        let mut b = [0_u8; 26];
+        b[..2].copy_from_slice(b"BM");
+        for dib in [12_u32, 16, 40, 52, 56, 64, 108, 124] {
+            b[14..18].copy_from_slice(&dib.to_le_bytes());
+            assert_eq!(sniff(&b), Some(Format::Bmp));
+            assert_eq!(sniff(&b[..25]), None);
+        }
+        for dib in [0_u32, 13, 39, 125, u32::MAX] {
+            b[14..18].copy_from_slice(&dib.to_le_bytes());
+            assert_eq!(sniff(&b), None);
+        }
+    }
+
+    #[test]
+    fn raw_tiff_classifier_matches_legacy_on_mutations() {
+        let fixtures: &[&[u8]] = &[
+            b"II*\0\x08\0\0\0\x01\0\x12\xc6\x01\0\x04\0\0\0\x01\x04\0\0\0\0\0\0",
+            b"II*\0\x08\0\0\0\x01\0\x03\x01\x03\0\x01\0\0\0\x09\x80\0\0\0\0\0\0",
+            b"II*\0\x10\0\0\0CR\x02\0",
+        ];
+        for fixture in fixtures {
+            for end in 0..=fixture.len() {
+                let bytes = &fixture[..end];
+                assert_eq!(craft_image_codecs::legacy_tiff_raw_hint(bytes), tiff_is_raw(bytes), "truncation {end}");
+                for i in 0..bytes.len() {
+                    for value in [0, 255] {
+                        let mut changed = bytes.to_vec();
+                        changed[i] = value;
+                        assert_eq!(craft_image_codecs::legacy_tiff_raw_hint(&changed), tiff_is_raw(&changed), "byte {i} value {value} length {end}");
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn magic_numbers() {
