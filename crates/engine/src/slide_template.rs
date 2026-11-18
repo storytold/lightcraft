@@ -389,7 +389,7 @@ fn read_user(file: &str, path: &Path) -> Result<Template, String> {
     if meta.len() > MAX_FILE {
         return Err(format!("{} bytes is too large for a slideshow template (at most {} KB)", meta.len(), MAX_FILE / 1024));
     }
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let bytes = crate::read_file::read_regular(path, MAX_FILE).map_err(|e| e.to_string())?;
     let p = parse(&bytes)?;
     Ok(Template {
         id: format!("{USER}{stem}"),
@@ -411,7 +411,7 @@ pub fn read_file(path: &Path) -> Result<Parsed, String> {
     if meta.len() > MAX_FILE {
         return Err(format!("{}: {} bytes is too large for a slideshow template (at most {} KB)", path.display(), meta.len(), MAX_FILE / 1024));
     }
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let bytes = crate::read_file::read_regular(path, MAX_FILE).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut p = parse(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
     if p.name.is_none() {
         let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
