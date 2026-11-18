@@ -270,3 +270,181 @@ fn a_wheel_notch_scrolls_a_third_of_the_filmstrip() {
     let moved = film_x(&h) - x0;
     assert!((moved - strip.width() * crate::theme::WHEEL_STRIP_SHARE).abs() < 1.0, "a notch scrolled {moved} of {} points", strip.width());
 }
+
+/// Where the active photo's thumbnail is drawn, if it is drawn at all (the grid also draws a screen of
+/// photos above and below the view, so callers check it against the `grid:scroll` widget).
+fn active_thumb(h: &Headless) -> Option<egui::Rect> {
+    let id = h.app.session.active()?.0;
+    h.app.widgets.iter().find(|(w, _)| *w == format!("thumb:{id}")).map(|(_, r)| *r)
+}
+
+fn execute(h: &mut Headless, command: &str, params: serde_json::Value) {
+    let r = h.request("engine.execute", json!({"command": command, "params": params}), T);
+    assert_eq!(r["ok"], true, "{command}: {r}");
+}
+
+/// A photo in the middle of the library, selected and scrolled to, under a random order.
+fn shuffled_halfway(view: &str) -> Headless {
+    let mut h = demo(view);
+    execute(&mut h, "library.sort", json!({"key": "random", "seed": 7}));
+    let ids = h.app.session.visible_cloned();
+    execute(&mut h, "library.select", json!({"ids": [ids[ids.len() / 2].0]}));
+    idle(&mut h, 60);
+    h
+}
+
+/// Given the active photo is on screen / When the person reshuffles or picks another sort / Then the grid
+/// keeps it on screen, instead of leaving the scroll position where the photo no longer is.
+#[test]
+fn a_new_order_keeps_the_active_photo_in_sight_in_the_grid() {
+    let mut h = shuffled_halfway("photoGrid");
+    let canvas = widget(&h, "grid:scroll");
+    assert!(grid_y(&h) > 600.0, "the grid is scrolled to a photo halfway down ({})", grid_y(&h));
+    let active = h.app.session.active();
+    assert!(active_thumb(&h).is_some_and(|r| r.intersects(canvas)), "the photo starts on screen");
+    let place = |h: &mut Headless| {
+        let active = h.app.session.active();
+        h.app.session.visible_cloned().iter().position(|id| Some(*id) == active)
+    };
+    let mut moved = 0;
+    for seed in [11, 12, 13, 14] {
+        let before = place(&mut h);
+        execute(&mut h, "library.shuffle", json!({"seed": seed}));
+        idle(&mut h, 60);
+        moved += usize::from(place(&mut h) != before);
+        assert_eq!(h.app.session.active(), active, "the shuffle keeps the active photo");
+        let cell = active_thumb(&h).expect("the active photo is drawn");
+        assert!(cell.intersects(canvas), "seed {seed}: the active photo is off screen ({cell:?} vs {canvas:?})");
+    }
+    assert!(moved >= 3, "the shuffles really moved the photo ({moved} of 4)");
+    // another sort key and a flipped direction do the same
+    for params in [json!({"key": "fileName", "ascending": true}), json!({"ascending": false}), json!({"key": "captureDate"})] {
+        execute(&mut h, "library.sort", params.clone());
+        idle(&mut h, 60);
+        let cell = active_thumb(&h).expect("the active photo is drawn");
+        assert!(cell.intersects(canvas), "{params}: the active photo is off screen ({cell:?} vs {canvas:?})");
+    }
+}
+
+/// When the active photo was not on screen (the person scrolled away) the new order starts at the top: its
+/// first photos are what they want to see, not wherever the old scroll position falls in a new order.
+#[test]
+fn a_new_order_starts_at_the_top_when_the_active_photo_was_off_screen() {
+    let mut h = demo("photoGrid");
+    let canvas = widget(&h, "grid:scroll");
+    h.request("ui.move", json!({"x": canvas.center().x, "y": canvas.center().y}), T);
+    for _ in 0..4 {
+        h.request("ui.scroll", json!({"dy": -300.0}), T);
+    }
+    idle(&mut h, 60);
+    assert!(grid_y(&h) > 600.0, "scrolled away from the active (first) photo ({})", grid_y(&h));
+    assert!(!active_thumb(&h).is_some_and(|r| r.intersects(canvas)), "the active photo is off screen");
+    execute(&mut h, "library.shuffle", json!({}));
+    idle(&mut h, 60);
+    assert_eq!(grid_y(&h), 0.0, "a new order starts at the top");
+    // no active photo: the same
+    let mut h = demo("photoGrid");
+    h.request("ui.move", json!({"x": canvas.center().x, "y": canvas.center().y}), T);
+    h.request("ui.scroll", json!({"dy": -900.0}), T);
+    execute(&mut h, "library.select", json!({"ids": []}));
+    idle(&mut h, 60);
+    assert!(grid_y(&h) > 0.0);
+    execute(&mut h, "library.sort", json!({"key": "fileName"}));
+    idle(&mut h, 60);
+    assert_eq!(grid_y(&h), 0.0, "no active photo: from the top");
+}
+
+/// Edits that reorder the view under the sort the person chose (a rating under a rating sort) never move
+/// the scroll position: only a new order asked for does (issue #11).
+#[test]
+fn an_edit_that_reorders_the_view_does_not_move_the_grid() {
+    let mut h = demo("photoGrid");
+    execute(&mut h, "library.sort", json!({"key": "rating", "ascending": true}));
+    let ids = h.app.session.visible_cloned();
+    execute(&mut h, "library.select", json!({"ids": [ids[ids.len() / 2].0]}));
+    idle(&mut h, 60);
+    let canvas = widget(&h, "grid:scroll");
+    h.request("ui.move", json!({"x": canvas.center().x, "y": canvas.center().y}), T);
+    h.request("ui.scroll", json!({"dy": -200.0}), T);
+    idle(&mut h, 60);
+    let y = grid_y(&h);
+    assert!(y > 600.0, "the person scrolled somewhere ({y})");
+    let active = h.app.session.active().expect("active photo");
+    let before = h.app.session.visible_cloned().iter().position(|id| *id == active);
+    let rating = h.app.session.catalog.photo(active).map_or(0, |p| p.rating);
+    execute(&mut h, "photo.rate", json!({"rating": (rating + 3) % 6}));
+    idle(&mut h, 60);
+    assert_ne!(h.app.session.visible_cloned().iter().position(|id| *id == active), before, "the rating moved the photo in the order");
+    assert_eq!(grid_y(&h), y, "an edit moved the grid");
+}
+
+/// Another date grouping lays the photos out again (their day headers come and go): that is the person's
+/// choice too, so the active photo stays in view instead of ending up wherever the old scroll position falls.
+/// A name sort has no date headers, so grouping changes nothing there and the scroll position stays.
+#[test]
+fn changing_the_date_grouping_keeps_the_active_photo_in_sight() {
+    let mut h = demo("photoGrid");
+    let ids = h.app.session.visible_cloned();
+    execute(&mut h, "library.select", json!({"ids": [ids[ids.len() / 2].0]}));
+    idle(&mut h, 60);
+    let canvas = widget(&h, "grid:scroll");
+    assert!(grid_y(&h) > 600.0);
+    for group in ["none", "month", "day"] {
+        execute(&mut h, "library.sort", json!({"group": group}));
+        idle(&mut h, 60);
+        let cell = active_thumb(&h).expect("the active photo is drawn");
+        assert!(cell.intersects(canvas), "{group}: the active photo is off screen ({cell:?} vs {canvas:?})");
+    }
+    execute(&mut h, "library.sort", json!({"key": "fileName"}));
+    idle(&mut h, 60);
+    let y = grid_y(&h);
+    h.request("ui.move", json!({"x": canvas.center().x, "y": canvas.center().y}), T);
+    h.request("ui.scroll", json!({"dy": -200.0}), T);
+    idle(&mut h, 60);
+    let y2 = grid_y(&h);
+    assert!(y2 > y, "the person scrolled ({y} → {y2})");
+    execute(&mut h, "library.sort", json!({"group": "year"}));
+    idle(&mut h, 60);
+    assert_eq!(grid_y(&h), y2, "a name sort has no headers: the scroll position is the user's");
+}
+
+/// The filmstrip follows a new order to the active photo, wherever it lands.
+#[test]
+fn a_new_order_brings_the_active_photo_into_the_filmstrip() {
+    let mut h = shuffled_halfway("detail");
+    let active = h.app.session.active().expect("active photo").0;
+    let in_view = |h: &Headless| widget_opt(h, &format!("film:{active}")).is_some_and(|c| c.left() >= 0.0 && c.right() <= 1200.0);
+    assert!(in_view(&h), "the photo starts in view");
+    let mut moved = 0;
+    for seed in [21, 22, 23, 24] {
+        let x = film_x(&h);
+        execute(&mut h, "library.shuffle", json!({"seed": seed}));
+        idle(&mut h, 60);
+        moved += usize::from(film_x(&h) != x);
+        assert!(in_view(&h), "seed {seed}: the active photo is out of the filmstrip's view");
+    }
+    assert!(moved >= 3, "the strip followed the photo ({moved} of 4)");
+}
+
+fn widget_opt(h: &Headless, id: &str) -> Option<egui::Rect> {
+    h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r)
+}
+
+/// A new order right after a scroll to the active photo, while egui's scroll still glides there, counts the
+/// photo as on screen: the grid follows it instead of starting over at the top.
+#[test]
+fn a_new_order_during_the_glide_to_the_active_photo_still_follows_it() {
+    let mut h = demo("photoGrid");
+    execute(&mut h, "library.sort", json!({"key": "random", "seed": 7}));
+    idle(&mut h, 30);
+    let ids = h.app.session.visible_cloned();
+    execute(&mut h, "library.select", json!({"ids": [ids[ids.len() / 2].0]}));
+    h.step();
+    h.step();
+    execute(&mut h, "library.shuffle", json!({"seed": 11}));
+    idle(&mut h, 60);
+    let view = widget(&h, "grid:scroll");
+    let cell = active_thumb(&h).expect("the active photo is drawn");
+    assert!(grid_y(&h) > 0.0, "the grid went to the top ({})", grid_y(&h));
+    assert!(cell.intersects(view), "the active photo is off screen ({cell:?} vs {view:?})");
+}
