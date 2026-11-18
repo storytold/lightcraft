@@ -928,7 +928,7 @@ fn outer_bindings(data: &str, at: usize) -> Vec<(String, String)> {
             }
             continue;
         }
-        if let Some(stripped) = rest.strip_prefix("<!") {
+        if rest.starts_with("<!") {
             // tag_end already moved i past the closing '>'; advancing again
             // would skip the following tag and its xmlns declarations.
             continue;
@@ -1225,8 +1225,8 @@ fn update_existing_crs(data: &mut String, name: &str, value: &str) -> bool {
                 }
                 continue;
             }
-            if rest.starts_with("<!") {
-                if let Some(rel2) = rest[2..].find('>') {
+            if let Some(stripped) = rest.strip_prefix("<!") {
+                if let Some(rel2) = stripped.find('>') {
                     from = s + 2 + rel2 + 1;
                 } else {
                     break;
@@ -1767,7 +1767,6 @@ fn write_correction_components(
         // Write MaskInverted for all component kinds if it changed
         if invert_changed {
             put_attr_on_tag(data, cstart, cend, prefix, "MaskInverted", if cur_comp_invert { "true" } else { "false" });
-            cend = tag_end(data, cstart).unwrap_or(cend);
         }
         length_delta += data.len() as i64 - len_before as i64;
     }
