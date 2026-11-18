@@ -17,6 +17,9 @@ pub enum Operation {
     Prepare,
     Clicks(Vec<[f32; 3]>),
     Text(String),
+    /// The photo's subject among its people and animals ([`Sam3::segment_subject`]), from where
+    /// the camera focused (normalized `[x, y]`) when the file records it.
+    Subject(Option<[f32; 2]>),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -36,7 +39,8 @@ impl Request {
             return Err("detail pass requires an image".into());
         }
         match &self.operation {
-            Operation::Prepare => {}
+            Operation::Prepare | Operation::Subject(None) => {}
+            Operation::Subject(Some(f)) if f.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)) => {}
             Operation::Text(text) if text.len() <= 4096 && text.split([',', ';']).any(|p| !p.trim().is_empty()) => {}
             Operation::Clicks(clicks)
                 if !clicks.is_empty()
@@ -131,6 +135,11 @@ fn predict(model: &mut Sam3, enc: &mut Encoded, operation: Operation) -> Result<
             Ok(None)
         }
         Operation::Text(text) => text_logits(model, enc, &text).map_err(|e| e.to_string()),
+        // (the reference score threshold, as a local Find Subject uses)
+        Operation::Subject(focus) => {
+            let p = model.segment_subject(enc, focus.map(|f| (f[0], f[1])), 0.5).map_err(|e| e.to_string())?;
+            Ok(p.map(|p| p.logits))
+        }
         Operation::Clicks(points) => {
             let clicks: Vec<_> = points.into_iter().map(|p| Click { x: p[0], y: p[1], positive: p[2] == 1.0 }).collect();
             Ok(Some(model.segment_clicks(enc, &clicks).map_err(|e| e.to_string())?.logits))

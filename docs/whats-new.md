@@ -2,6 +2,80 @@
 
 ## Unreleased
 
+### Flatpak updates
+- Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
+  This permissions repair must first arrive through your existing host-side update method. Flatpaks
+  managed by a software repository continue to use its package manager, and launcher-pinned versions
+  keep their selected version.
+
+### Export Effect Presets leaves your originals alone
+- Export Effect Presets… (`mask.exportEffects`) now refuses a path that is a photo's original or its XMP sidecar, as
+  the other exports do, and writes the file atomically. It used to write the presets over whatever file it was given,
+  and a failed write (a full disk) could leave a cut-off file where an earlier export was.
+
+### Film grain that looks like film (process V7)
+- Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
+  rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth
+  and blown highlights stay clean, and the fit-to-window preview shows the grain you will export. Amount, Size and
+  Roughness keep their meaning and Lightroom Classic's strength and grain size. This is rendering process 7: new photos
+  (and Reset) get it, photos you already edited keep their grain until you choose Photo ▸ Update to Current Process.
+  See [film grain](grain.md).
+
+### Colour noise reduction (process V6)
+- Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
+  colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences
+  R−Y and B−Y, leaving brightness exactly as it was, along edges found in a denoised guide, and takes isolated
+  coloured specks out. New photos get it; photos edited before keep their look until Update to Current Process. A zoomed
+  view is smoothed like the same part of the whole photo and the export.
+
+### The web build can be embedded
+- A page framing LightCraft in an iframe can open it with `?host=parent` and speak to it over `postMessage`, the
+  protocol PdfCraft, GridCraft and DeckCraft share: it hands photos in, receives exports and backups instead of
+  downloads, runs commands and hears whether closing would lose unsaved changes (issue #2270; `docs/web.md`).
+  A parent on another origin, or a page with an opaque origin, keeps the normal downloads.
+- A page can also run LightCraft in its own document, with no iframe: `data-host="page"` on the canvas carries the same
+  messages as `CustomEvent`s on the canvas instead of `postMessage` (issue #2270; `docs/web.md`). `?host=parent` wins
+  when a page asks for both.
+
+### A library is written only to the folder it was opened from
+- LightCraft wrote a library's files to wherever the library's path led at that moment, not to the folder it had opened.
+  When a share was mounted over the library's folder, or the folder was moved away and another put in its place while
+  the library was open, it wrote into that other folder: it could replace another library's catalog (`catalog.snap`
+  and `catalog.log`) with its own, and closing the library removed the note another program had left in
+  `catalog.lock.owner` to say that it has the library open (issue #3240).
+- LightCraft now remembers the folder it opened (its device and inode number) and, before every save, checks that the
+  library's path still leads to it. If it doesn't, nothing is written: not the catalog, its log, the library's
+  settings, the lock note or a thumbnail. The not-saved warning says why, names the path and asks you to put the
+  original folder back; your changes are kept in memory, quitting asks first as it does for any unsaved change, and
+  saving goes on by itself once the original folder is at its path again. That holds for photos, albums and presets; a
+  preference that could not be saved is reported where you changed it, and is written with the next preference you
+  save. Opening the library at that path again takes the lock of the folder that is there now, so it is refused while
+  another program has that library open.
+- Saving keeps working after a drive or share is mounted again. A volume that is mounted again gets a new device
+  number, and some file systems number their folders anew at every mount (FAT and exFAT drives on Linux, sshfs). The
+  folder at the path still counts as the one that was opened when it holds exactly the lock note this session wrote
+  into the folder it opened (the note holds a value no other lock's note has), or when it is the same volume mounted
+  again: the same inode number and the same creation time under another device number (a system that doesn't know
+  when a folder was created can't tell that from another folder). On the same device an inode number is given again
+  to a folder made later, so two creation times that are known and differ are two folders. A copy of the library's
+  folder made while the library was open holds that note too and counts as the library, and so does a clone of its
+  volume; a share mounted over the folder, with another library in it or with nothing, never does. A copy lacks the
+  changes made after it was made: they are written to it by the next snapshot, which holds them all, and until then
+  they are kept in memory and reported as not saved. If neither tells, the folder counts as another one and nothing is
+  written.
+- Dropping the lock removes the lock note only if it is the one this session wrote, with the bytes it wrote, in the
+  folder it locked or one that holds that note; another program's note is left alone.
+- Import ▸ Move removes the originals from the card only after the library's catalog is on disk, not just handed over
+  to be written: when the library can't be saved, the originals stay on the card.
+- On Windows a folder's identity isn't available to the program yet (Rust's standard library offers it only on its
+  nightly builds), so there the check notices a path that no longer leads to a folder, not one that leads to another
+  folder; the lock note is protected there too.
+- On every system, files outside the library's catalog and settings are still written by path, some of them over what
+  is there: originals copied into the library (always under a new name), Smart Previews, profiles, the face-scan
+  record (`focus-scanned.bin`), the Lightroom import's `Interop` folder, and what is done to the photos stored in the
+  library's `Originals` folder (their sidecars, Save Metadata to File, rename, delete from disk, duplicate and
+  conversion to DNG).
+
 ### Remove Hot Pixels
 - Detail ▸ Noise Reduction has a new box, Remove Hot Pixels (raws only), on for newly imported raws (issue #1345).
   At high ISO single photosites read far brighter than all their neighbours and turn into small red, green or blue
@@ -11,6 +85,16 @@
 - A raw that would have more than 0.2 % of its photosites replaced is left unchanged: such a photo doesn't look like
   hot pixels on a sensor. Stars and other points of light that are kept don't count, so a dense star field still
   loses its hot pixels. Settings ▸ Performance ▸ Hot pixel limit sets the share (0.05 % to 1 %).
+
+### Raising Exposure keeps raw highlights (process 5)
+- Raising Exposure on a raw no longer turns the brightest tones the sensor recorded white (issue #1632). The tone
+  curve now eases into white a stop at a time instead of reaching it within about a stop of the sensor's white: at
+  Exposure +1 and +2 a sky, a lit wall or a face keeps its detail where it used to go flat white. At Exposure 0 the
+  brightest tones render a few codes darker (on average 1 code or less on the photos measured), and fully clipped
+  areas such as a blown sky stay slightly below pure white until Exposure lifts them further. A DNG whose own tone
+  curve already reaches white at the sensor's white renders as before. This is rendering
+  process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
+  to Current Process. See [process versions](process-versions.md).
 
 ## 2026-11-02
 
@@ -40,7 +124,24 @@
   gives a request 60 s) can ask again once that search has ended (while it runs, a new request is refused as already
   running), and what was read isn't read again.
 
+## 2026-11-01
+
+### Import a Lightroom catalog backup as it is
+- File ▸ Import Lightroom Catalog… also takes the `.zip` backups Lightroom Classic writes in its `Backups` folder
+  (issue #2592), for when Lightroom and its catalog are gone and only the backups and the photos are left. LightCraft
+  unpacks the catalog into a temporary folder in the library, imports it and deletes the copy; the zip is not
+  changed. Open Library given a `Backups` folder, or one of its dated folders, offers to import the backup.
+- Importing a backup of a catalog you already imported no longer adds every collection a second time: collections
+  are matched by the catalog's own id, which its backups keep, instead of by the catalog file's path.
+
 ## 2026-10-30
+
+### Lightroom catalogs with a print inside a collection import their collections
+- Lightroom Classic can keep a saved print, book, slideshow or web gallery inside a plain collection, but a
+  LightCraft album sits only inside a folder. Importing such a catalog stopped at the end with "parent must be an
+  existing folder" and brought over no collections, and photos whose originals were offline were lost with them
+  (issues #2165, #2532). Such a collection now joins the nearest collection set above it, or the top level, and the
+  import result names it under warnings; so does one whose parent is system-only or gone from the catalog.
 
 ### Lens distortion correction for the Sony A7 III
 - Raws from the Sony A7 III (ILCE-7M3) now get the camera's own distortion correction, read from the file, like

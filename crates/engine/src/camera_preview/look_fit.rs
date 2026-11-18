@@ -169,7 +169,12 @@ pub(super) fn dro_off(own_tone: &CameraTone) -> CameraTone {
     // Past its last knot a curve goes on as a shoulder whose rate comes from its last two knots
     // (`CameraTone::apply`): lowering the second-last knot more than the last steepens it, and the
     // extended highlights would end up above the fitted curve. Raise the second-last knot (never
-    // above the fitted curve) until the rate is at most the fitted curve's.
+    // above the fitted curve) until the rate is at most the fitted curve's. Process V5's shoulder
+    // (`CameraTone::apply_rolloff`) is not part of this bound or of `at_most`: V1 to V4 read the
+    // same curve, and a V5 bound here would change their renders. It stays below the fitted
+    // curve's too when the last segment's slope over the squared gap to white is at most the fitted
+    // curve's; a lowered curve with a nearly flat last segment can end up above it far past the last
+    // knot under V5 (issue #1632).
     let ([a, b], last) = ([own[30], own[31]], knots[31]);
     let rate = ((b[1] - a[1]) / (b[0] - a[0])).clamp(0.1, 16.0) / (1.0 - b[1]).max(0.01);
     let floor = last[1] - rate * (1.0 - last[1]).max(0.01) * (b[0] - a[0]);
