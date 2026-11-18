@@ -18,12 +18,9 @@ fn corpus() -> PathBuf {
 
 /// Green of the decoded mosaic against the camera's embedded JPEG on a `gw × gh` grid of the active area.
 fn green_vs_camera_jpeg(raw: &lightcraft_raw::RawImage, jpeg: &[u8], gw: usize, gh: usize) -> f64 {
-    use zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
-    let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB);
-    let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(jpeg), opts);
-    let px = d.decode().unwrap();
-    let info = d.info().unwrap();
-    let (jw, jh) = (info.width as usize, info.height as usize);
+    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Jpeg, jpeg, &craft_image_codecs::DecodeOptions::default()).unwrap();
+    let (jw, jh) = (img.width() as usize, img.height() as usize);
+    let px = img.as_u8().unwrap();
     let mean = |sum: Vec<f64>, n: Vec<f64>| sum.iter().zip(&n).map(|(s, n)| s / n.max(1.0)).collect::<Vec<f64>>();
     let (mut js, mut jn) = (vec![0f64; gw * gh], vec![0f64; gw * gh]);
     for y in 0..jh {
