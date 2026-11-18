@@ -3070,32 +3070,51 @@ fn check_cr3_profile_geometry_orientation(vignetted: bool) {
 /// Sensor, JPEG and clipping samples returned by the diagnostic proxy calls.
 type DiagnosticProxy = (Rgb32f, Rgb32f, Vec<bool>);
 
+/// Keep diagnostic TSV fields single-line and reversible, including literal backslashes.
+fn diagnostic_tsv_field(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\t', "\\t").replace('\r', "\\r").replace('\n', "\\n")
+}
+
+/// Remove only this source's three owned output files; filesystem errors must stop the diagnostic.
+fn remove_diagnostic_pngs(output: &std::path::Path, name: &str) -> std::io::Result<()> {
+    for label in ["plain", "chosen", "jpeg"] {
+        match std::fs::remove_file(output.join(format!("{name}-{label}.png"))) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
 /// Preserve missing-proxy cases in the diagnostic TSV without inventing geometry or fit results.
 /// `proxies` exposes no rejection reason, so the row records only which call returned `None`.
 fn diagnostic_proxies_or_report(
+    output: &std::path::Path,
     name: &str,
     raw: &RawImage,
     profile_warp: bool,
     plain: Option<DiagnosticProxy>,
     chosen: Option<DiagnosticProxy>,
     report: &mut String,
-) -> Option<(DiagnosticProxy, DiagnosticProxy)> {
+) -> std::io::Result<Option<(DiagnosticProxy, DiagnosticProxy)>> {
     let status = match (plain, chosen) {
-        (Some(plain), Some(chosen)) => return Some((plain, chosen)),
+        (Some(plain), Some(chosen)) => return Ok(Some((plain, chosen))),
         (None, Some(_)) => "missing_plain_proxy",
         (Some(_), None) => "missing_chosen_proxy",
         (None, None) => "missing_both_proxies",
     };
+    remove_diagnostic_pngs(output, name)?;
     let mut fields = vec![String::new(); 17];
-    fields[0] = name.to_owned();
-    fields[1] = raw.metadata.model.clone().unwrap_or_default();
+    fields[0] = diagnostic_tsv_field(name);
+    fields[1] = diagnostic_tsv_field(raw.metadata.model.as_deref().unwrap_or(""));
     fields[2] = format!("{:?}", raw.orientation);
     fields[3] = profile_warp.to_string();
     fields[15] = status.to_owned();
     fields[16] = "proxies returned None; underlying cause unavailable".to_owned();
     report.push_str(&fields.join("\t"));
     report.push('\n');
-    None
+    Ok(None)
 }
 
 /// Build a small RGB CR3-shaped raw and embedded JPEG without opening any real photo.
@@ -3131,6 +3150,7 @@ fn diagnostic_proxy_fixture() -> (RawImage, Vec<u8>) {
 /// Exercise the corpus diagnostic's actual proxy-result handling across missing and available inputs.
 #[test]
 fn cr3_diagnostics_report_missing_proxies_and_continue() {
+    let output = std::env::temp_dir().join(format!("lc-cr3-missing-{}", std::process::id()));
     let (mut raw, bytes) = diagnostic_proxy_fixture();
     let transform = lightcraft_raw::color::camera_transform(&raw, D65);
     let available = proxies(&raw, &bytes, &transform, PROXY, 0.0, None, None).unwrap();
@@ -3152,10 +3172,12 @@ fn cr3_diagnostics_report_missing_proxies_and_continue() {
         (missing.clone(), Some(available.clone()), "missing_plain_proxy"),
         (Some(available.clone()), missing, "missing_chosen_proxy"),
     ] {
-        assert!(diagnostic_proxies_or_report(status, &raw, true, plain, chosen, &mut report).is_none());
+        assert!(diagnostic_proxies_or_report(&output, status, &raw, true, plain, chosen, &mut report).unwrap().is_none());
     }
-    let (plain, chosen) = diagnostic_proxies_or_report("available", &raw, false, Some(available.clone()), Some(available.clone()), &mut report)
-        .expect("a later usable file must still reach measurement and image export");
+    let (plain, chosen) =
+        diagnostic_proxies_or_report(&output, "available", &raw, false, Some(available.clone()), Some(available.clone()), &mut report)
+            .unwrap()
+            .expect("a later usable file must still reach measurement and image export");
     let bits = |image: &Rgb32f| image.data.iter().flatten().map(|v| v.to_bits()).collect::<Vec<_>>();
     assert_eq!(bits(&plain.0), bits(&available.0));
     assert_eq!(chosen.1.data, available.1.data);
@@ -3168,6 +3190,63 @@ fn cr3_diagnostics_report_missing_proxies_and_continue() {
         assert!(fields[4..15].iter().all(|v| v.is_empty()), "unavailable metrics, gates and fits stay empty");
         assert_eq!(fields[16], "proxies returned None; underlying cause unavailable");
     }
+}
+
+/// Tabs, line endings and literal escape sequences remain distinguishable without changing the TSV schema.
+#[test]
+fn cr3_diagnostics_escape_text_fields_in_missing_rows() {
+    let name = "A\tB\nC\rD\\t.CR3";
+    let model = "Camera\tmodel\nline\rreturn\\n";
+    assert_eq!(diagnostic_tsv_field(name), r"A\tB\nC\rD\\t.CR3");
+    assert_eq!(diagnostic_tsv_field(model), r"Camera\tmodel\nline\rreturn\\n");
+    let (mut raw, _) = diagnostic_proxy_fixture();
+    raw.metadata.model = Some(model.into());
+    let output = std::env::temp_dir().join(format!("lc-cr3-tsv-{}", std::process::id()));
+    let mut report = String::new();
+    assert!(diagnostic_proxies_or_report(&output, name, &raw, false, None, None, &mut report).unwrap().is_none());
+    assert_eq!(report.lines().count(), 1);
+    let fields: Vec<_> = report.trim_end_matches('\n').split('\t').collect();
+    assert_eq!(fields.len(), 17);
+    assert_eq!(fields[0], diagnostic_tsv_field(name));
+    assert_eq!(fields[1], diagnostic_tsv_field(model));
+    assert_eq!(fields[15], "missing_both_proxies");
+    assert_eq!(fields[16], "proxies returned None; underlying cause unavailable");
+}
+
+/// A missing-proxy rerun removes old owned PNGs and preserves unrelated files and directories.
+#[test]
+fn cr3_diagnostics_missing_rerun_removes_stale_pngs() {
+    let output = std::env::temp_dir().join(format!("lc-cr3-rerun-{}", std::process::id()));
+    std::fs::create_dir_all(&output).unwrap();
+    let pixels = [23u8, 41, 59];
+    let image = lightcraft_codecs::EncodeImage::new(1, 1, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let png = lightcraft_codecs::encode_png(&image, &Default::default()).unwrap();
+    for label in ["plain", "chosen", "jpeg"] {
+        std::fs::write(output.join(format!("A.CR3-{label}.png")), &png).unwrap();
+    }
+    std::fs::write(output.join("other.png"), &png).unwrap();
+    std::fs::create_dir_all(output.join("other-directory")).unwrap();
+    let (raw, _) = diagnostic_proxy_fixture();
+    let mut report = String::new();
+    assert!(diagnostic_proxies_or_report(&output, "A.CR3", &raw, true, None, None, &mut report).unwrap().is_none());
+    std::fs::write(output.join("geometry.tsv"), &report).unwrap();
+    assert_eq!(std::fs::read_to_string(output.join("geometry.tsv")).unwrap(), report);
+    let fields: Vec<_> = report.trim_end_matches('\n').split('\t').collect();
+    assert_eq!(fields.len(), 17);
+    assert_eq!(fields[0], "A.CR3");
+    assert_eq!(fields[15], "missing_both_proxies");
+    for label in ["plain", "chosen", "jpeg"] {
+        assert!(!output.join(format!("A.CR3-{label}.png")).exists(), "no earlier PNG can appear current");
+    }
+    assert_eq!(std::fs::read(output.join("other.png")).unwrap(), png);
+    assert!(output.join("other-directory").is_dir());
+    // A directory occupying an owned filename is an error, never a request for recursive deletion.
+    std::fs::create_dir(output.join("A.CR3-plain.png")).unwrap();
+    let before = report.clone();
+    assert!(diagnostic_proxies_or_report(&output, "A.CR3", &raw, true, None, None, &mut report).is_err());
+    assert_eq!(report, before, "failed cleanup must not publish a misleading missing-result row");
+    assert!(output.join("A.CR3-plain.png").is_dir());
+    std::fs::remove_dir_all(output).unwrap();
 }
 
 /// Opt-in diagnostic only: never opens the app or changes a catalogue. It exports the actual
@@ -3206,7 +3285,7 @@ fn corpus_cr3_profile_geometry_diagnostics() {
         let chosen = proxies(&raw, &bytes, &transform, PROXY, 0.0, lens.as_ref(), correction.as_ref());
         let name = path.file_name().unwrap().to_string_lossy();
         let profile_warp = correction.as_ref().is_some_and(|l| l.warp.is_some());
-        let Some((plain, chosen)) = diagnostic_proxies_or_report(&name, &raw, profile_warp, plain, chosen, &mut report) else {
+        let Some((plain, chosen)) = diagnostic_proxies_or_report(&output, &name, &raw, profile_warp, plain, chosen, &mut report).unwrap() else {
             std::fs::write(output.join("geometry.tsv"), &report).unwrap();
             continue;
         };
@@ -3220,8 +3299,9 @@ fn corpus_cr3_profile_geometry_diagnostics() {
         let before = fit_preview(&raw, &bytes, &transform, lens.as_ref(), plain_correction.as_ref()).0.is_some();
         let after = fit_preview(&raw, &bytes, &transform, lens.as_ref(), correction.as_ref()).0.is_some();
         report.push_str(&format!(
-            "{name}\t{}\t{:?}\t{}\t{accepted}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}\t{before}\t{after}\t{framed_scores:?}\t{original_scores:?}\tmeasured\t\n",
-            raw.metadata.model.as_deref().unwrap_or(""),
+            "{}\t{}\t{:?}\t{}\t{accepted}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}\t{before}\t{after}\t{framed_scores:?}\t{original_scores:?}\tmeasured\t\n",
+            diagnostic_tsv_field(&name),
+            diagnostic_tsv_field(raw.metadata.model.as_deref().unwrap_or("")),
             raw.orientation,
             profile_warp,
             alignment(&plain.0, &plain.1),
