@@ -229,6 +229,12 @@ fn curve(props: &Props, k: &str) -> Option<Value> {
 ///
 /// `target` decides how the white balance is read (see [`Target`]).
 pub fn to_partial(props: &Props, target: Target) -> Value {
+    to_partial_with_as_shot(props, target, None)
+}
+
+/// [`to_partial`] with the photo's own as-shot white as the white-balance anchor when the
+/// packet carries no `AsShotTemperature` of its own (#4432).
+pub fn to_partial_with_as_shot(props: &Props, target: Target, as_shot: Option<(f64, f64)>) -> Value {
     let mut out = Value::Object(Map::new());
     let o = &mut out;
     let n = |o: &mut Value, crs: &str, path: &str| {
@@ -293,15 +299,19 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
         .map(|t| (rel_to_kelvin(t), num(props, "crs:IncrementalTint")));
     // A Kelvin value for something we develop relative to its as-shot look: the other app's
     // as-shot white (`AsShotTemperature` / `AsShotTint`, written next to the edit) is the
-    // reference, so the edit is the same mired shift from ours (issue #510).
+    // reference, so the edit is the same mired shift from ours (issue #510); without that
+    // reference in the packet, the photo's own as-shot white from the file anchors the same
+    // shift (#4432)
     let shifted = || {
         let (t, tint) = abs?;
-        let as_shot = num(props, "crs:AsShotTemperature").filter(|k| *k > 0.0)?;
+        let packet = num(props, "crs:AsShotTemperature").filter(|k| *k > 0.0).map(|k| (k, num(props, "crs:AsShotTint").unwrap_or(0.0)));
+        let photo = as_shot.filter(|(k, tint)| k.is_finite() && *k > 0.0 && tint.is_finite());
+        let (anchor, anchor_tint) = packet.or(photo)?;
         if t <= 0.0 {
             return None;
         }
-        let r = (1e6 / as_shot - 1e6 / t) / 0.8;
-        let tint = tint.map(|v| v - num(props, "crs:AsShotTint").unwrap_or(0.0));
+        let r = (1e6 / anchor - 1e6 / t) / 0.8;
+        let tint = tint.map(|v| v - anchor_tint);
         Some((rel_to_kelvin(r), tint))
     };
     let wb = match target {
@@ -503,9 +513,21 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
 /// ([`crate::crs_masks`]; radial masks fitted to `aspect` = width / height); components that
 /// can't be carried over are reported as `Mask: <kind>`.
 pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values>, target: Target, aspect: f64) -> (Value, Vec<String>) {
+    to_partial_report_with_as_shot(props, values, target, aspect, None)
+}
+
+/// [`to_partial_report`] with the photo's own as-shot white as the white-balance anchor when
+/// the packet carries no `AsShotTemperature` of its own (#4432).
+pub fn to_partial_report_with_as_shot(
+    props: &Props,
+    values: Option<&crate::crs_masks::Values>,
+    target: Target,
+    aspect: f64,
+    as_shot: Option<(f64, f64)>,
+) -> (Value, Vec<String>) {
     READ.with(|r| *r.borrow_mut() = Some(Default::default()));
     SKIPPED.with(|r| *r.borrow_mut() = Some(Vec::new()));
-    let mut out = to_partial(props, target);
+    let mut out = to_partial_with_as_shot(props, target, as_shot);
     let mut read = READ.with(|r| r.borrow_mut().take()).unwrap_or_default();
     let mut mask_skips = SKIPPED.with(|r| r.borrow_mut().take()).unwrap_or_default();
     if let Some(values) = values {

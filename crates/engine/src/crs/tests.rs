@@ -421,6 +421,25 @@ fn custom_kelvin_without_an_as_shot_reference_stays_as_shot_and_is_reported() {
     assert_eq!(to_partial(&zero, Target::RawRelative)["wb"], json!({"mode": "asShot"}));
 }
 
+/// The photo's own as-shot white anchors the shift when the packet carries no reference: the
+/// same Lightroom edit as the test above, kept from the file instead of the packet (#4432).
+#[test]
+fn custom_wb_without_packet_anchors_shifts_from_the_photos_as_shot() {
+    // 3578 K / -5 next to an as-shot white of 3650 K / -2, recorded by the file, not the packet
+    let x = r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+             crs:WhiteBalance="Custom" crs:Temperature="3578" crs:Tint="-5"/>"#;
+    let p = props(x);
+    let rel = to_partial_with_as_shot(&p, Target::RawRelative, Some((3650.0, -2.0)));
+    let t = rel["wb"]["temp"].as_f64().unwrap();
+    assert!((t - 6275.0).abs() < 5.0, "{t}");
+    assert_eq!(rel["wb"]["tint"], -3.0);
+    assert_eq!(rel["wb"]["mode"], "custom");
+    // nothing to report: the anchor was there, just not in the packet
+    assert!(to_partial_report_with_as_shot(&p, None, Target::RawRelative, 1.5, Some((3650.0, -2.0))).1.is_empty());
+    // without the photo's white either it stays As Shot and is reported, as before
+    assert_eq!(to_partial(&p, Target::RawRelative)["wb"], json!({"mode": "asShot"}));
+}
+
 #[test]
 fn target_follows_the_file() {
     use lightcraft_catalog::MediaKind;
