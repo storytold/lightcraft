@@ -3,169 +3,14 @@
 
 use crate::convert::{Buf, Meta, Model, Raw, check_size, finish};
 use crate::{DecodeOptions, Decoded, Error, Format, Result, Thumbnail, ThumbnailSource, exif};
+use craft_image_codecs_sef::jpeg_sef::{reaches_eoi, repair as without_sef_trailer};
 
 const F: Format = Format::Jpeg;
 
-/// What we learn from walking the marker segments before the first scan.
-#[derive(Default, Debug)]
-pub(crate) struct Markers {
-    pub width: u32,
-    pub height: u32,
-    pub components: u8,
-    pub precision: u8,
-    /// SOFn marker byte (0xC0 baseline, 0xC1 extended, 0xC2 progressive, …).
-    pub sof: u8,
-    /// Number of components in the first scan (< `components` for non-interleaved sequential files).
-    pub first_scan_components: u8,
-    /// Number of APP1 segments: capped before the allocating decoders walk them again.
-    pub app1: u32,
-    pub exif: Option<Vec<u8>>,
-    /// Offset of the EXIF TIFF header within the file.
-    pub exif_offset: usize,
-    pub xmp: Option<String>,
-    pub icc: Option<Vec<u8>>,
-    /// An ICC_PROFILE APP2 segment was present but its sequence was invalid.
-    pub icc_invalid: bool,
-    pub adobe_transform: Option<u8>,
-    /// Offset of the MPF TIFF header within the file and its bytes.
-    pub mpf: Option<(usize, Vec<u8>)>,
-    /// The ISO 21496-1 APP2 payload after its URN: 4 bytes (versions only) on a primary image
-    /// that has a gain map, the full metadata on the gain map image itself.
-    pub iso_gainmap: Option<Vec<u8>>,
-}
+pub(crate) type Markers = craft_metadata::JpegInspection;
 
-impl Markers {
-    /// This image is a gain map (ISO 21496-1 metadata or Adobe `hdrgm` gain parameters), not a
-    /// picture: never a preview, never the image to show.
-    pub fn is_gain_map(&self) -> bool {
-        self.iso_gainmap.as_ref().is_some_and(|p| p.len() > 4) || self.xmp.as_deref().is_some_and(|x| x.contains("hdrgm:GainMapMax"))
-    }
-}
-
-pub(crate) fn parse_markers(b: &[u8]) -> Option<Markers> {
-    if !b.starts_with(&[0xFF, 0xD8]) {
-        return None;
-    }
-    let mut m = Markers::default();
-    let mut icc_chunks: [Option<&[u8]>; 255] = [None; 255];
-    let mut icc_total = None;
-    let mut p = 2;
-    while p + 4 <= b.len() {
-        if b[p] != 0xFF {
-            // Tolerate garbage between segments: resync on the next 0xFF.
-            p += 1;
-            continue;
-        }
-        let marker = b[p + 1];
-        if marker == 0xFF {
-            p += 1;
-            continue;
-        }
-        if marker == 0xD8 || (0xD0..=0xD7).contains(&marker) || marker == 0x01 {
-            p += 2;
-            continue;
-        }
-        if marker == 0xD9 {
-            break;
-        }
-        if marker == 0xDA {
-            m.first_scan_components = b.get(p + 4).copied().unwrap_or(0);
-            break;
-        }
-        let len = u16::from_be_bytes([b[p + 2], b[p + 3]]) as usize;
-        if len < 2 {
-            return None;
-        }
-        let start = p.checked_add(4)?;
-        let declared_end = p.checked_add(2)?.checked_add(len)?;
-        let complete = declared_end <= b.len();
-        let end = declared_end.min(b.len());
-        let seg = b.get(start..end)?;
-        match marker {
-            0xC0..=0xCF if marker != 0xC4 && marker != 0xC8 && marker != 0xCC && seg.len() >= 6 && m.components == 0 => {
-                m.precision = seg[0];
-                m.sof = marker;
-                m.height = u16::from_be_bytes([seg[1], seg[2]]) as u32;
-                m.width = u16::from_be_bytes([seg[3], seg[4]]) as u32;
-                m.components = seg[5];
-            }
-            0xE1 => {
-                m.app1 = m.app1.saturating_add(1);
-                if seg.starts_with(b"Exif\0\0") && m.exif.is_none() {
-                    m.exif = Some(seg[6..].to_vec());
-                    m.exif_offset = start + 6;
-                } else if let Some(x) = seg.strip_prefix(b"http://ns.adobe.com/xap/1.0/\0")
-                    && m.xmp.is_none()
-                {
-                    m.xmp = Some(String::from_utf8_lossy(x).trim_end_matches('\0').to_string());
-                }
-            }
-            0xE2 => {
-                if seg.starts_with(b"ICC_PROFILE\0") {
-                    if !complete || seg.len() < 14 {
-                        m.icc_invalid = true;
-                    } else if let (Some(&sequence), Some(&total)) = (seg.get(12), seg.get(13)) {
-                        if sequence == 0 || total == 0 || sequence > total || icc_total.is_some_and(|expected| expected != total) {
-                            m.icc_invalid = true;
-                        } else {
-                            icc_total = Some(total);
-                            let Some(slot) = icc_chunks.get_mut(usize::from(sequence - 1)) else {
-                                m.icc_invalid = true;
-                                p = declared_end;
-                                continue;
-                            };
-                            if slot.is_some() {
-                                m.icc_invalid = true;
-                            } else if let Some(data) = seg.get(14..) {
-                                *slot = Some(data);
-                            } else {
-                                m.icc_invalid = true;
-                            }
-                        }
-                    } else {
-                        m.icc_invalid = true;
-                    }
-                } else if seg.starts_with(b"MPF\0") && m.mpf.is_none() {
-                    m.mpf = Some((start + 4, seg[4..].to_vec()));
-                } else if let Some(p) = seg.strip_prefix(crate::gainmap::ISO_URN)
-                    && m.iso_gainmap.is_none()
-                {
-                    m.iso_gainmap = Some(p.to_vec());
-                }
-            }
-            0xEE if seg.starts_with(b"Adobe") && seg.len() >= 12 => {
-                m.adobe_transform = Some(seg[11]);
-            }
-            _ => {}
-        }
-        p = declared_end;
-    }
-    if let Some(total) = icc_total {
-        let mut profile_len = 0usize;
-        for chunk in icc_chunks.iter().take(usize::from(total)) {
-            let Some(bytes) = chunk else {
-                m.icc_invalid = true;
-                break;
-            };
-            let Some(next_len) = profile_len.checked_add(bytes.len()) else {
-                m.icc_invalid = true;
-                break;
-            };
-            profile_len = next_len;
-        }
-        let maximum_len = usize::from(total).checked_mul(65_519);
-        if maximum_len.is_none_or(|maximum| profile_len > maximum) {
-            m.icc_invalid = true;
-        }
-        if !m.icc_invalid {
-            let mut profile = Vec::with_capacity(profile_len);
-            for bytes in icc_chunks.iter().take(usize::from(total)).flatten() {
-                profile.extend_from_slice(bytes);
-            }
-            m.icc = Some(profile);
-        }
-    }
-    Some(m)
+pub(crate) fn parse_markers(bytes: &[u8]) -> Option<Markers> {
+    craft_metadata::inspect_jpeg(bytes)
 }
 
 pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
@@ -196,88 +41,6 @@ pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
     }
     let orientation = m.exif.as_deref().map(exif::summarize).unwrap_or_default().orientation.unwrap_or(1);
     Ok((m.width, m.height, orientation))
-}
-
-/// Whether the markers after SOI, followed through every segment and scan, reach an EOI marker
-/// (the first one: the primary image's, ahead of any MPF images appended to the file). Segments
-/// are skipped by their length; in scan data `FF 00` (stuffing), `FF FF` (fill) and RSTn are not
-/// markers that end it.
-fn reaches_eoi(b: &[u8]) -> bool {
-    let mut p = 2usize;
-    loop {
-        // entropy-coded data (or garbage between segments, as `parse_markers` tolerates it)
-        let Some(skip) = b.get(p..).and_then(find_ff) else { return false };
-        p = p.saturating_add(skip);
-        let Some(&marker) = b.get(p.saturating_add(1)) else { return false };
-        p = match marker {
-            0xD9 => return true,
-            0xFF => p.saturating_add(1),
-            0x00 | 0x01 | 0xD0..=0xD8 => p.saturating_add(2),
-            _ => {
-                let Some(len) = b.get(p.saturating_add(2)..p.saturating_add(4)).map(|l| u16::from_be_bytes([l[0], l[1]]) as usize) else {
-                    return false;
-                };
-                if len < 2 {
-                    return false;
-                }
-                p.saturating_add(2).saturating_add(len)
-            }
-        };
-    }
-}
-
-/// A Samsung panorama whose scan runs straight into its SEF trailer, with no EOI marker (issue
-/// #3350), as the file it stands for: the bytes before the trailer's earliest data block plus an
-/// EOI. Every other file, a genuinely truncated one included, is borrowed unchanged.
-fn without_sef_trailer(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
-    use std::borrow::Cow;
-    // The trailer is checked first: it reads only the file's last bytes, not the scan data.
-    let Some(image) = sef_image_end(bytes).and_then(|end| bytes.get(..end)) else { return Cow::Borrowed(bytes) };
-    // the image before the trailer: an FF D9 inside the SEF data doesn't end the scan
-    if reaches_eoi(image) {
-        return Cow::Borrowed(bytes);
-    }
-    let mut fixed = Vec::with_capacity(image.len().saturating_add(2));
-    fixed.extend_from_slice(image);
-    fixed.extend_from_slice(&[0xFF, 0xD9]);
-    // The cut must leave the scan data, not a segment or anything before the first scan, open.
-    let in_scan = parse_markers(&fixed).is_some_and(|m| m.first_scan_components > 0) && reaches_eoi(&fixed);
-    if in_scan { Cow::Owned(fixed) } else { Cow::Borrowed(bytes) }
-}
-
-/// Where the image ends in a file carrying a Samsung SEF trailer: the start of its earliest data
-/// block. The trailer is the file's last bytes: `SEFH`, a u32 LE version and entry count, 12-byte
-/// entries (u16 padding, u16 type, u32 LE offset of the block back from `SEFH`, u32 LE length),
-/// then the u32 LE length of that directory and `SEFT`. Each block starts with the same padding
-/// and type as its entry. `None` unless every entry's block is nonempty, starts with its entry's
-/// type and lies inside the file, before `SEFH`.
-fn sef_image_end(b: &[u8]) -> Option<usize> {
-    let le32 = |at: usize| b.get(at..at.checked_add(4)?)?.try_into().ok().map(|v| u32::from_le_bytes(v) as usize);
-    let tail = b.len().checked_sub(8)?;
-    if b.get(tail.checked_add(4)?..)? != b"SEFT" {
-        return None;
-    }
-    let dir = tail.checked_sub(le32(tail)?)?;
-    if b.get(dir..dir.checked_add(4)?)? != b"SEFH" {
-        return None;
-    }
-    let count = le32(dir.checked_add(8)?)?;
-    let entries = dir.checked_add(12)?;
-    if count == 0 || count > tail.checked_sub(entries)? / 12 {
-        return None;
-    }
-    let mut start = dir;
-    for i in 0..count {
-        let entry = entries.checked_add(i.checked_mul(12)?)?;
-        let block = dir.checked_sub(le32(entry.checked_add(4)?)?)?;
-        let len = le32(entry.checked_add(8)?)?;
-        let kind = |at: usize| b.get(at.checked_add(2)?..at.checked_add(4)?);
-        if len < 4 || block.checked_add(len)? > dir || kind(block)? != kind(entry)? {
-            return None;
-        }
-        start = start.min(block);
-    }
-    Some(start)
 }
 
 pub(crate) fn decode_with_fallback(bytes: &[u8], opts: &DecodeOptions, fallback: Option<crate::NamedSpace>) -> Result<Decoded> {
@@ -335,21 +98,6 @@ fn decode_via_craft_codecs(bytes: &[u8], budget: &DecodeOptions) -> Result<Raw> 
     Ok(Raw { width: w, height: h, model, alpha: false, premultiplied: false, buf, bit_depth })
 }
 
-/// The first `0xFF` byte, eight bytes at a time (scan data has one every few hundred bytes: this
-/// is most of [`header`]'s time).
-fn find_ff(b: &[u8]) -> Option<usize> {
-    const ONES: u64 = 0x0101_0101_0101_0101;
-    let (words, tail) = b.as_chunks::<8>();
-    for (i, w) in words.iter().enumerate() {
-        // a zero byte in !w is an 0xFF byte in w
-        let x = !u64::from_ne_bytes(*w);
-        if x.wrapping_sub(ONES) & !x & (ONES << 7) != 0 {
-            return w.iter().position(|&v| v == 0xFF).map(|j| i * 8 + j);
-        }
-    }
-    tail.iter().position(|&v| v == 0xFF).map(|j| words.len() * 8 + j)
-}
-
 /// Fast path: an embedded JPEG preview (EXIF IFD1 thumbnail, or the largest MPF preview) whose long
 /// edge is ≥ `max_edge`, decoded with DCT scaling and fitted.
 pub(crate) fn embedded_thumbnail(bytes: &[u8], max_edge: u32, min_edge: u32) -> Option<Thumbnail> {
@@ -400,39 +148,9 @@ pub(crate) fn embedded_thumbnail(bytes: &[u8], max_edge: u32, min_edge: u32) -> 
 /// MP type code of a gain map image (CIPA DC-007 entry attribute, low 24 bits).
 pub(crate) const MPF_GAIN_MAP: u32 = 0x05_0000;
 
-/// An MPF-listed image other than the primary.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct MpfEntry {
-    /// File offset and length of the image.
-    pub offset: usize,
-    pub len: usize,
-    /// MP type code (attribute low 24 bits).
-    pub kind: u32,
-}
-
 /// The MPF-listed images other than the primary.
-pub(crate) fn mpf_images(m: &Markers) -> Vec<MpfEntry> {
-    let Some((base, data)) = &m.mpf else { return vec![] };
-    let Some(t) = exif::Tiff::new(data) else { return vec![] };
-    let Some(ifd) = t.first_ifd() else { return vec![] };
-    let Some((entries, _)) = t.ifd(ifd) else { return vec![] };
-    let Some(e) = entries.iter().find(|e| e.tag == 0xB002) else { return vec![] };
-    let Some(list) = t.bytes(e) else { return vec![] };
-    let mut out = Vec::new();
-    for (i, rec) in list.as_chunks::<16>().0.iter().enumerate().take(16) {
-        if i == 0 {
-            continue;
-        }
-        let rd = |o: usize| {
-            let a = [rec[o], rec[o + 1], rec[o + 2], rec[o + 3]];
-            if data.starts_with(b"II") { u32::from_le_bytes(a) } else { u32::from_be_bytes(a) }
-        };
-        let (attr, size, off) = (rd(0), rd(4) as usize, rd(8) as usize);
-        if size > 0 && off > 0 {
-            out.push(MpfEntry { offset: base.saturating_add(off), len: size, kind: attr & 0x00FF_FFFF });
-        }
-    }
-    out
+pub(crate) fn mpf_images(m: &Markers) -> Vec<craft_metadata::mpf::MpfImage> {
+    m.mpf.as_ref().map_or_else(Vec::new, |(base, data)| craft_metadata::mpf::images_from_index(data, *base))
 }
 
 /// Decode to the file's 8-bit samples as stored (no colour management): 1 channel for greyscale
@@ -460,6 +178,78 @@ pub(crate) fn decode_codes8(bytes: &[u8]) -> Result<(usize, usize, usize, Vec<u8
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_eoi_walk_matches_previous_on_mutated_streams() {
+        fn previous(b: &[u8]) -> bool {
+            let mut p = 2usize;
+            loop {
+                let Some(skip) = b.get(p..).and_then(|s| s.iter().position(|&v| v == 0xff)) else { return false };
+                p = p.saturating_add(skip);
+                let Some(&marker) = b.get(p.saturating_add(1)) else { return false };
+                p = match marker {
+                    0xd9 => return true,
+                    0xff => p.saturating_add(1),
+                    0x00 | 0x01 | 0xd0..=0xd8 => p.saturating_add(2),
+                    _ => {
+                        let Some(len) = b.get(p.saturating_add(2)..p.saturating_add(4)).map(|s| u16::from_be_bytes([s[0], s[1]]) as usize) else {
+                            return false;
+                        };
+                        if len < 2 {
+                            return false;
+                        }
+                        p.saturating_add(2).saturating_add(len)
+                    }
+                };
+            }
+        }
+        let base = [0xff, 0xd8, 0xff, 0xe1, 0, 4, 1, 2, 0xff, 0xda, 0, 3, 1, 1, 0xff, 0, 3, 0xff, 0xd0, 4, 0xff, 0xd9];
+        for end in 0..=base.len() {
+            for at in 0..end {
+                for value in [0, 1, 0xff, 0xd9] {
+                    let mut bytes = base[..end].to_vec();
+                    bytes[at] = value;
+                    assert_eq!(reaches_eoi(&bytes), previous(&bytes), "end {end}, at {at}, value {value}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mpf_shared_matches_previous_reader_on_mutated_indices() {
+        fn previous(base: usize, data: &[u8]) -> Vec<craft_metadata::mpf::MpfImage> {
+            let Some(t) = exif::Tiff::new(data) else { return vec![] };
+            let Some(ifd) = t.first_ifd() else { return vec![] };
+            let Some((entries, _)) = t.ifd(ifd) else { return vec![] };
+            let Some(e) = entries.iter().find(|e| e.tag == 0xb002) else { return vec![] };
+            let Some(list) = t.bytes(e) else { return vec![] };
+            list.as_chunks::<16>()
+                .0
+                .iter()
+                .enumerate()
+                .take(16)
+                .skip(1)
+                .filter_map(|(_, rec)| {
+                    let rd = |i| {
+                        let b = [rec[i], rec[i + 1], rec[i + 2], rec[i + 3]];
+                        if data.starts_with(b"II") { u32::from_le_bytes(b) } else { u32::from_be_bytes(b) }
+                    };
+                    let (attr, len, off) = (rd(0), rd(4) as usize, rd(8) as usize);
+                    (len > 0 && off > 0).then_some(craft_metadata::mpf::MpfImage { offset: base.saturating_add(off), len, kind: attr & 0x00ff_ffff })
+                })
+                .collect()
+        }
+        let file = craft_metadata::mpf::write(&[0xff, 0xd8, 0xff, 0xd9], &[(0x050000, &[0xff, 0xd8, 0xff, 0xd9])]).unwrap();
+        let m = parse_markers(&file).unwrap();
+        let (base, data) = m.mpf.unwrap();
+        for at in 0..data.len() {
+            for value in [0u8, 0xff] {
+                let mut altered = data.clone();
+                altered[at] = value;
+                assert_eq!(craft_metadata::mpf::images_from_index(&altered, base), previous(base, &altered), "mutation at {at}, value {value}");
+            }
+        }
+    }
 
     #[test]
     fn container_fallback_matches_tagged_jpeg_before_resizing_and_keeps_own_metadata() {
@@ -601,20 +391,6 @@ mod tests {
         let markers = parse_markers(&jpeg).unwrap();
         assert!(markers.icc.is_none());
         assert!(markers.icc_invalid);
-    }
-
-    #[test]
-    fn find_ff_matches_a_plain_search() {
-        let mut b: Vec<u8> = (0..300u32).map(|i| (i * 7 % 255) as u8).collect();
-        for at in [None, Some(0), Some(7), Some(8), Some(15), Some(203), Some(296), Some(299)] {
-            if let Some(i) = at {
-                b[i] = 0xFF;
-            }
-            for start in [0, 1, 5, 9, 290, 299, 300] {
-                let s = &b[start..];
-                assert_eq!(find_ff(s), s.iter().position(|&v| v == 0xFF), "{at:?} from {start}");
-            }
-        }
     }
 
     #[test]
