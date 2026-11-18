@@ -732,7 +732,8 @@ fn is_detected(r: &lightcraft_meta::Region) -> bool {
     r.description.as_deref().is_some_and(|d| d.starts_with(crate::cmd::face_detect::MARK))
 }
 
-/// A box as it can be written: clamped to the photo, finite and not empty. A catalog box that isn't is never
+/// A box as it is written: each coordinate clipped to the photo (an infinite one becomes its edge), kept only if it
+/// still has an area. One with none left (empty, entirely off the photo, a coordinate that isn't a number) is never
 /// written, and a photo with only such boxes has none to write.
 fn writable_rect(r: lightcraft_meta::Rect) -> Option<(f64, f64, f64, f64)> {
     let (x0, y0) = (r.x0.clamp(0.0, 1.0), r.y0.clamp(0.0, 1.0));
@@ -2361,21 +2362,27 @@ mod tests {
         assert_eq!(stated(&old), Some(vec![]), "the reader can't use pixel areas without a size");
         let x = save_over(&path, &photo());
         assert!(x.contains("stArea:unit=\"pixel\"") && x.contains("<mwg-rs:Name>Ann</mwg-rs:Name>"), "kept: {x}");
-        // a catalog box that can't be written (not finite, empty, off the photo) counts as none
+        // a catalog box is clipped to the photo; one with no area left (a coordinate that isn't a number, empty,
+        // entirely off the photo, or infinite on the same side) counts as none, while one an infinite edge clips to
+        // the photo's edge is written
         for bad in [
             region(f64::NAN, 0.1, 0.2, 0.2, lightcraft_meta::RegionKind::Face, Some("Nan"), None),
             region(0.3, 0.3, 0.3, 0.5, lightcraft_meta::RegionKind::Face, Some("Flat"), None),
             region(1.2, 1.2, 1.5, 1.5, lightcraft_meta::RegionKind::Face, Some("Off"), None),
             region(f64::NEG_INFINITY, 0.1, f64::INFINITY, 0.2, lightcraft_meta::RegionKind::Face, Some("Inf"), None),
+            region(f64::INFINITY, 0.1, f64::INFINITY, 0.2, lightcraft_meta::RegionKind::Face, Some("BothInf"), None),
         ] {
             let path = scratch("bad");
             let mut p = photo();
             std::fs::write(&path, sidecar_packet(&p, &lightcraft_catalog::Catalog::new())).unwrap();
             p.meta.regions = vec![bad.clone()];
             let x = save_over(&path, &p);
-            // (an infinite box clamps to the photo's width: that one is writable)
+            // (−∞..+∞ clips to the photo's width and is written: x 0..1, y as given)
             if bad.name.as_deref() == Some("Inf") {
-                assert_eq!(stated(&x).map(|r| r.len()), Some(1), "{x}");
+                let r = stated(&x).unwrap_or_default();
+                assert_eq!(r.len(), 1, "{x}");
+                let g = r[0].rect;
+                assert!([(g.x0, 0.0), (g.y0, 0.1), (g.x1, 1.0), (g.y1, 0.2)].iter().all(|(a, b)| (a - b).abs() < 1e-5), "{g:?}");
             } else {
                 assert!(!x.contains("mwg-rs:Regions"), "{bad:?}: {x}");
             }
@@ -2501,7 +2508,8 @@ mod tests {
         assert!((got[1].1 - 0.05).abs() < 1e-9, "{got:?}");
     }
 
-    /// A random box: one in ten can't be written as it is (not finite, empty, off the photo, hanging off an edge).
+    /// A random box: one in ten is odd. It hangs off an edge (written clipped), or has no area left after clipping
+    /// (a coordinate that isn't a number, empty, entirely off the photo: not written).
     fn box_at(next: &mut impl FnMut(usize) -> usize) -> lightcraft_meta::Rect {
         if next(10) == 0 {
             match next(4) {

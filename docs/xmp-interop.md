@@ -135,8 +135,9 @@ write them, from sidecars and from XMP embedded in the file. Named faces become 
   no size, say) is not thrown away by a save. Entries of the sidecar's list that LightCraft can't read are kept, as
   they were, after the photo's own whenever the list is written (with their namespaces declared on them, and with no
   `AppliedToDimensions` given to pixel boxes that had none); if they can't be singled out (a sidecar with a DTD, say),
-  the sidecar's list is left as it is. A box that can't be written (not finite, empty or off the photo) counts as
-  none.
+  the sidecar's list is left as it is. A catalog box is clipped to the photo before it is written (an infinite edge
+  becomes the photo's edge); one with no area left after clipping (empty, entirely off the photo, or with a
+  coordinate that isn't a number) is skipped, and a photo with only such boxes counts as having none.
 - **Names in `Iptc4xmpExt:PersonInImage`.** The names on the photo's faces are listed there too. Names in the
   sidecar's list that are not the name of one of its face regions (typed in another application) are kept; a name
   that belonged to a face goes when the face is renamed, cleared or removed. LightCraft doesn't read this list.
