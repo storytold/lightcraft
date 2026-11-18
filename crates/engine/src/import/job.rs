@@ -215,7 +215,7 @@ impl ImportJob {
         self.prepare_files(files, cancel)
     }
 
-    /// Expand `paths` (folders recursively, the library's own folder skipped) into the files an
+    /// Expand `paths` (folders recursively, the library's data folders skipped) into the files an
     /// import would handle; counted in [`ImportJob::total`].
     pub fn expand(&self, paths: &[String]) -> Vec<String> {
         let files = expand(paths, self.lib_dir.as_deref());

@@ -65,8 +65,9 @@ pub fn accept_list() -> String {
     out
 }
 
-/// Expand files and folders (recursively) into supported files. `skip` (e.g. the library folder)
-/// is never descended into. Each folder's walk is bounded ([`crate::walk::Limits::default`]); a
+/// Expand files and folders (recursively) into supported files. `skip` is the library's folder:
+/// its data folders are never descended into ([`crate::walk::keeps_out`]); folders of photos in it
+/// are. Each folder's walk is bounded ([`crate::walk::Limits::default`]); a
 /// walk that stops at a bound is logged.
 pub fn expand(paths: &[String], skip: Option<&Path>) -> Vec<String> {
     expand_within(paths, skip, crate::walk::Limits::default()).0
@@ -118,9 +119,7 @@ fn expand_report_noting(paths: &[String], skip: Option<&Path>, limits: crate::wa
     let mut out = Expansion::default();
     for p in paths {
         let p = Path::new(p);
-        if skip.is_some_and(|s| p == s) {
-            continue;
-        }
+        // (the library's folder itself is walked too: the walk stays out of its data folders)
         if p.is_dir() {
             // XMP sidecars are read with their photos, not skipped: they are left out of the count
             let mut sidecars = 0usize;

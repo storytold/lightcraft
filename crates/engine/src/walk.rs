@@ -99,11 +99,51 @@ pub enum EntryKind {
 pub type NoteFolder<'a> = &'a mut dyn FnMut(&Path, Vec<(std::ffi::OsString, EntryKind)>, bool) -> bool;
 
 /// The files below folder `root` that `keep` accepts. Hidden entries (names starting with `.`)
-/// are left out, the folder `skip` (e.g. the library's own) is never entered, and the walk stops
-/// at `limits` (see [`Walked::truncated`]). Unreadable folders are skipped and counted
+/// are left out, the walk stays out of what [`keeps_out`] says of the folder `library` (the open
+/// library's: its data folders, and the library reached under another name), and stops at
+/// `limits` (see [`Walked::truncated`]). Unreadable folders are skipped and counted
 /// ([`Walked::unreadable`]), as are the files `keep` refuses ([`Walked::skipped`]).
-pub fn files_in(root: &Path, skip: Option<&Path>, limits: Limits, keep: impl FnMut(&Path) -> bool) -> Walked {
-    walk(root, skip, limits, keep, |_| true, None)
+pub fn files_in(root: &Path, library: Option<&Path>, limits: Limits, keep: impl FnMut(&Path) -> bool) -> Walked {
+    walk(root, library, limits, keep, |_| true, None)
+}
+
+/// A library folder as a walk compares folders with it: as named and as resolved on disk.
+struct LibraryFolder<'a> {
+    named: &'a Path,
+    resolved: Option<PathBuf>,
+}
+
+impl<'a> LibraryFolder<'a> {
+    fn new(named: &'a Path) -> Self {
+        LibraryFolder { named, resolved: std::fs::canonicalize(named).ok() }
+    }
+
+    /// Whether a walk stays out of `folder` ([`keeps_out`]).
+    fn keeps_out(&self, folder: &Path) -> bool {
+        let data = |rest: &Path| rest.components().next().is_some_and(|c| crate::library::DATA_FOLDERS.iter().any(|d| c.as_os_str() == *d));
+        let by_name = folder.strip_prefix(self.named).ok();
+        // one of the library's data folders (or a folder in one), named as the library is
+        if by_name.is_some_and(data) {
+            return true;
+        }
+        let Some(lib) = &self.resolved else { return false };
+        let Some(rest) = std::fs::canonicalize(folder).ok().and_then(|f| f.strip_prefix(lib).ok().map(Path::to_path_buf)) else {
+            return false;
+        };
+        // a data folder reached through a link, or the library reached under another name: a link
+        // or alias to it or to a folder above it (issue #1077), whose photos the library knows by
+        // their own path
+        data(&rest) || by_name.is_none()
+    }
+}
+
+/// Whether a walk given the open library's folder `library` stays out of `folder`: one of the
+/// library's own [`crate::library::DATA_FOLDERS`] (its thumbnails, the photos copied into it…),
+/// however it is reached, or the library reached under another name than `library` (a link to it
+/// or to a folder above it). The library's folder itself and the folders people keep their photos
+/// in there (a library made in a folder of photos) are walked like any other folder.
+pub fn keeps_out(folder: &Path, library: &Path) -> bool {
+    LibraryFolder::new(library).keeps_out(folder)
 }
 
 /// [`files_in`], entering a folder below `root` only when `enter` accepts it: a folder it turns
@@ -111,24 +151,24 @@ pub fn files_in(root: &Path, skip: Option<&Path>, limits: Limits, keep: impl FnM
 /// which can hold more entries than the photos beside them).
 pub fn files_in_entering(
     root: &Path,
-    skip: Option<&Path>,
+    library: Option<&Path>,
     limits: Limits,
     keep: impl FnMut(&Path) -> bool,
     enter: impl FnMut(&Path) -> bool,
 ) -> Walked {
-    walk(root, skip, limits, keep, enter, None)
+    walk(root, library, limits, keep, enter, None)
 }
 
 /// [`files_in`], handing the listing of every folder it reads to `note`: who walks a folder to
 /// find its files has, with that, the answer to "is this name there" for everything in it, and
 /// need not ask the disk again (a round trip for each name on a network share).
-pub fn files_in_noting(root: &Path, skip: Option<&Path>, limits: Limits, keep: impl FnMut(&Path) -> bool, note: NoteFolder) -> Walked {
-    walk(root, skip, limits, keep, |_| true, Some(note))
+pub fn files_in_noting(root: &Path, library: Option<&Path>, limits: Limits, keep: impl FnMut(&Path) -> bool, note: NoteFolder) -> Walked {
+    walk(root, library, limits, keep, |_| true, Some(note))
 }
 
 fn walk(
     root: &Path,
-    skip: Option<&Path>,
+    library: Option<&Path>,
     limits: Limits,
     mut keep: impl FnMut(&Path) -> bool,
     mut enter: impl FnMut(&Path) -> bool,
@@ -140,8 +180,8 @@ fn walk(
     if let Ok(c) = std::fs::canonicalize(root) {
         linked.insert(c);
     }
-    // Include aliases to the library in the exclusion, not just its lexical path.
-    let skip_canonical = skip.and_then(|p| std::fs::canonicalize(p).ok());
+    // (resolved once: every folder of the walk is compared with it, aliases to it included)
+    let library = library.map(LibraryFolder::new);
     // (path, depth of the folder it is in, is a folder); popped in path order
     let mut stack: Vec<(PathBuf, usize, bool)> = vec![(root.to_path_buf(), 0, true)];
     while let Some((path, depth, is_dir)) = stack.pop() {
@@ -153,7 +193,7 @@ fn walk(
             }
             continue;
         }
-        if skip.is_some_and(|s| path == s) || skip_canonical.as_ref().is_some_and(|s| std::fs::canonicalize(&path).is_ok_and(|p| p.starts_with(s))) {
+        if library.as_ref().is_some_and(|l| l.keeps_out(&path)) {
             continue;
         }
         if depth >= limits.max_depth {
@@ -318,9 +358,9 @@ mod tests {
     }
 
     #[test]
-    fn files_come_in_path_order_without_hidden_ones_or_the_skipped_folder() {
+    fn files_come_in_path_order_without_hidden_ones_or_the_librarys_data() {
         let d = tmp("order");
-        for f in ["b/2.jpg", "a/1.jpg", "a/x/0.jpg", "c.jpg", ".hidden/h.jpg", "a/.h.jpg", "lib/l.jpg", "a/n.txt"] {
+        for f in ["b/2.jpg", "a/1.jpg", "a/x/0.jpg", "c.jpg", ".hidden/h.jpg", "a/.h.jpg", "lib/thumbs/l.jpg", "a/n.txt"] {
             let p = d.join(f);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(p, b"x").unwrap();
@@ -362,12 +402,12 @@ mod tests {
     }
 
     /// Files the caller's `keep` refuses are counted (an import reports most of them as
-    /// unsupported), and so are only those: hidden files and the skipped folder are left out without a count, and
-    /// the files returned are the same ones in the same order.
+    /// unsupported), and so are only those: hidden files and the library's data folders are left out without a count,
+    /// and the files returned are the same ones in the same order.
     #[test]
     fn unkept_files_are_counted_as_skipped() {
         let d = tmp("skipped");
-        for f in ["a.jpg", "b.txt", "c.png", "sub/d.jpg", "sub/e.md", ".hidden.txt", "lib/l.txt"] {
+        for f in ["a.jpg", "b.txt", "c.png", "sub/d.jpg", "sub/e.md", ".hidden.txt", "lib/thumbs/l.txt"] {
             let p = d.join(f);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(p, b"x").unwrap();
@@ -427,6 +467,42 @@ mod tests {
         // Scanning a subfolder already inside the excluded library is also forbidden.
         let inside = files_in(&library.join("Originals"), Some(&library), Limits::default(), |_| true);
         assert!(inside.files.is_empty(), "{inside:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A library made in a folder of photos: the photo folders beside its catalog are walked, from
+    /// the library's folder or from one of them, and its data folders (thumbnail cache, copied
+    /// originals, smart previews…) never are, by name or through a link. Before, nothing inside
+    /// the library's folder was walked, so Synchronize Folder found no new photo there.
+    #[test]
+    fn photo_folders_inside_the_library_are_walked_but_not_its_data_folders() {
+        let d = tmp("in-library");
+        let library = d.join("TAKEN");
+        for folder in crate::library::DATA_FOLDERS {
+            std::fs::create_dir_all(library.join(folder)).unwrap();
+            std::fs::write(library.join(folder).join("data.jpg"), b"cache").unwrap();
+        }
+        std::fs::create_dir_all(library.join("misc").join("day1")).unwrap();
+        std::fs::write(library.join("catalog.snap"), b"{}").unwrap();
+        std::fs::write(library.join("misc").join("a.jpg"), b"photo").unwrap();
+        std::fs::write(library.join("misc").join("day1").join("b.jpg"), b"photo").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(library.join("thumbs"), library.join("misc").join("thumbs-link")).unwrap();
+        let jpg = |p: &Path| p.extension().is_some_and(|e| e == "jpg");
+        let photos = [library.join("misc").join("a.jpg"), library.join("misc").join("day1").join("b.jpg")];
+
+        let from_folder = files_in(&library.join("misc"), Some(&library), Limits::default(), jpg);
+        assert_eq!(from_folder.files, photos, "{from_folder:?}");
+        let from_library = files_in(&library, Some(&library), Limits::default(), jpg);
+        assert_eq!(from_library.files, photos, "{from_library:?}");
+        for folder in crate::library::DATA_FOLDERS {
+            assert!(keeps_out(&library.join(folder), &library), "{folder}");
+            assert!(keeps_out(&library.join(folder).join("below"), &library), "{folder}/below");
+        }
+        assert!(!keeps_out(&library, &library));
+        assert!(!keeps_out(&library.join("misc"), &library));
+        // (a folder merely named like one, elsewhere, is not the library's)
+        assert!(!keeps_out(&library.join("misc").join("thumbs"), &library));
         let _ = std::fs::remove_dir_all(&d);
     }
 

@@ -8,7 +8,12 @@
 //!   prefs.json     (library preferences: XMP sidecars, import defaults, cache size, last export)
 //!   thumbs/        (rendered thumbnail cache, safe to delete)
 //!   Originals/     (photos imported with "copy into library")
+//!   Smart Previews/  Profiles/  Interop/  denoise/   (see [`DATA_FOLDERS`])
 //! ```
+//!
+//! People may keep their own photo folders in the library's folder too (a library made inside a
+//! folder of photos): imports, Synchronize Folder and Local walk those like any other folder, and
+//! stay out of the library's own [`DATA_FOLDERS`] ([`crate::walk::files_in`]).
 //!
 //! The files live in [`Store`]s: a directory ([`FsStore`]) natively, or any other implementation
 //! via [`Session::open_library_in`] (the browser build keeps them in OPFS or IndexedDB).
@@ -35,6 +40,12 @@ use crate::{EngineError, LibrarySource, Result, Selection, Session};
 
 /// Library directory name inside the user's Pictures folder.
 pub const DEFAULT_NAME: &str = "LightCraft Library";
+
+/// The folders LightCraft keeps its own files in, directly inside a library's folder: the
+/// thumbnail cache, photos copied into the library, smart previews, camera and LUT profiles,
+/// Lightroom catalog archives and denoised results. A folder walk (import, Synchronize Folder,
+/// Local) never enters them; the rest of the library's folder is walked like any other.
+pub const DATA_FOLDERS: &[&str] = &["thumbs", "Originals", "Smart Previews", "Profiles", "Interop", crate::denoise::DIR];
 
 /// The library folder `path` names. A library is a folder; naming one of its own files
 /// (`catalog.snap`, `catalog.log`, `catalog.lock`) means the folder that holds it. Any other

@@ -211,7 +211,7 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
             }
         };
         let _ = resolved_tx.send(root.clone());
-        // (never the library's own folder, which the import would otherwise read as photos)
+        // (never the library's data folders, whose thumbnails the import would otherwise read as photos)
         let files = match lightcraft_engine::import::browse_files(&input, &root, subfolders) {
             Ok(files) => files,
             Err(e) => {

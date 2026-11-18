@@ -13,6 +13,9 @@
 //! * Synchronizing imports the new files; it removes missing photos (to Recently Deleted) and
 //!   reads metadata updates only when asked. Whatever it does is one undo step.
 //! * Only a folder of the library can be synchronized, never the whole startup disk.
+//! * Given a library made inside a folder of photos (its catalog beside the photo folders), files
+//!   added to those folders are new like anywhere else; the library's own data folders (its
+//!   thumbnail cache, the photos copied into it) are never taken for new photos.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -95,6 +98,37 @@ fn holdings(s: &Session) -> Vec<(String, bool, u8)> {
 
 fn scan(s: &mut Session, path: &str) -> Value {
     s.execute("folder.scanChanges", &json!({"path": path})).unwrap()
+}
+
+/// A library made in a folder of photos (`TAKEN/` holds the catalog and `TAKEN/misc/`): a photo
+/// added to `misc/` is new, whether `misc/` or the library's whole folder is scanned, and
+/// synchronizing imports it. The thumbnail cache and the copied originals beside it are not new
+/// photos. Before, the scan never looked inside the library's folder and said it was up to date.
+#[test]
+fn a_photo_folder_inside_the_library_folder_finds_new_files() {
+    let dir = Scratch::new("in-library");
+    let library = dir.path("TAKEN");
+    let mut s = Session::new().with_fs();
+    s.open_library(&library, false).unwrap();
+    write_png(&dir.path("TAKEN/misc/a.png"), 1);
+    // (the file named on its own, as Import Photos does with files: no folder is walked)
+    s.execute("library.import", &json!({"paths": [dir.path("TAKEN/misc/a.png")]})).unwrap();
+    assert_eq!(s.catalog.len(), 1);
+
+    write_png(&dir.path("TAKEN/misc/b.png"), 2);
+    write_png(&dir.path("TAKEN/thumbs/cached.png"), 3);
+    write_png(&dir.path("TAKEN/Originals/copied.png"), 4);
+    let new = vec![dir.path("TAKEN/misc/b.png")];
+    let r = scan(&mut s, &dir.path("TAKEN/misc"));
+    assert_eq!(paths(&r, "new"), new, "{r}");
+    let r = scan(&mut s, &library);
+    assert_eq!(paths(&r, "new"), new, "{r}");
+
+    s.execute("folder.synchronize", &json!({"path": dir.path("TAKEN/misc")})).unwrap();
+    let mut files: Vec<String> = s.catalog.photos().map(|p| p.file_name.clone()).collect();
+    files.sort();
+    assert_eq!(files, ["a.png", "b.png"]);
+    assert!(paths(&scan(&mut s, &dir.path("TAKEN/misc")), "new").is_empty());
 }
 
 #[test]
