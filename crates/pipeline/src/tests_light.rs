@@ -135,11 +135,13 @@ fn golden(process: ProcessVersion) -> u64 {
     h
 }
 
-/// V1 and V2 render byte for byte as on main. The hashes originally captured before `light_v3`
-/// at e2d18b5fb were refreshed by running this exact fixture on clean main at 56d1cc2865,
-/// after the shared 8-bit Bayer quantization change. They are checked on macOS aarch64: the
-/// renders call the platform's `powf` / `exp2` / `log2`, whose last bit can differ elsewhere.
-/// Before updating them during a rebase, run this exact fixture on main and confirm both hashes.
+/// V1 and V2 render byte for byte as they do on main after #3509's intentional 8-bit dithering.
+/// The hashes were captured on unchanged main at a220d3eb on macOS aarch64, where they are checked: the renders
+/// call the platform's `powf` / `exp2` / `log2`, whose last bit can differ on other platforms, so
+/// elsewhere the test only prints them. Before updating them during a rebase, run this exact fixture
+/// on main and confirm that both hashes match. Restoring only the pre-#3509 quantizer on that
+/// baseline reproduces the original e2d18b5fb goldens (0x5bf0a7c8579f3f34, 0x87a3598c15979e4d)
+/// exactly: only the intended final quantization change requires this baseline update.
 #[test]
 fn v1_and_v2_render_as_before_v3() {
     let got = [golden(ProcessVersion(1)), golden(ProcessVersion(2))];

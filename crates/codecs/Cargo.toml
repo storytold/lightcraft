@@ -20,7 +20,7 @@ craft-metadata = { workspace = true }
 craft-tiff = { workspace = true }
 craft-gif = { workspace = true }
 craft-psd = { workspace = true }
-craft-heif = { workspace = true, optional = true }
+craft-heif = { workspace = true, optional = true, features = ["decode"] }
 serde = { workspace = true }
 bytemuck = { workspace = true }
 thiserror = { workspace = true }
@@ -40,8 +40,8 @@ jxl = ["dep:craft-jxl"]
 # distributors choose it at build time (HEVC patents are a distributor's call, same policy as
 # PhotoCraft); `cargo xtask ci` clippies and tests it (`--features heif`), releases don't ship it yet.
 heif = ["dep:craft-heif"]
-## AVIF/AV1 encoding via craft-image-codecs / craft-video (pure Rust). Native targets only; a no-op on wasm32.
-avif = ["dep:craft-video", "dep:craft-avif-encode"]
+## AVIF/AV1 encoding via craft-image-codecs / craft-video (pure Rust), plus the shared AVIF decoder. Native targets only; a no-op on wasm32.
+avif = ["dep:craft-video", "dep:craft-avif-encode", "craft-image-codecs/avif-decode"]
 
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
