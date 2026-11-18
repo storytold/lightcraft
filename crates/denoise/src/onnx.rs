@@ -104,7 +104,7 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
             ids.get(name).copied().ok_or_else(|| NetError::Invalid(format!("`{}` reads `{name}`, which nothing makes", node.op_type)))
         };
         // a LeakyRelu consuming this output, which nothing else reads, is part of it
-        let mut fuse_leaky = |out: &str| -> Result<(Option<f32>, String), NetError> {
+        let mut fuse_leaky = |out: &str, joins: &HashMap<String, (TensorId, TensorId)>| -> Result<(Option<f32>, String), NetError> {
             // Search forward for a LeakyRelu consuming this output
             for j in i..nodes.len() {
                 if fused_indices.contains(&j) {
@@ -122,6 +122,9 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                         _ => return invalid("LeakyRelu alpha is not a single float"),
                     };
                     let name = next.output.first().cloned().ok_or_else(|| NetError::Invalid("LeakyRelu without an output".into()))?;
+                    if name.is_empty() || ids.contains_key(&name) || joins.contains_key(&name) {
+                        continue;
+                    }
                     // Fusing gives the LeakyRelu's output the id of this op. If that output is the graph
                     // output it must stay the last tensor, so decline the fusion when another node after
                     // this one emits an operation: it would push the graph output before a later tensor.
@@ -172,7 +175,7 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                     None => (lookup(src_name)?, None),
                 };
                 let out = node.output.first().ok_or_else(|| NetError::Invalid("Conv without an output".into()))?;
-                let (leaky, out_name) = fuse_leaky(out)?;
+                let (leaky, out_name) = fuse_leaky(out, &joins)?;
                 ids.insert(out_name, this);
                 shapes.push((cout, shapes.get(src).copied().map_or(0, |s| s.1)));
                 ops.push(Op::Conv(Conv { src, src2, cin, cout, k: kh, weight: w.1, bias: b, leaky }));
@@ -198,7 +201,7 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                 }
                 let src = lookup(node.input.first().map_or("", String::as_str))?;
                 let out = node.output.first().ok_or_else(|| NetError::Invalid("ConvTranspose without an output".into()))?;
-                let (leaky, out_name) = fuse_leaky(out)?;
+                let (leaky, out_name) = fuse_leaky(out, &joins)?;
                 ids.insert(out_name, this);
                 shapes.push((cout, shapes.get(src).copied().map_or(0, |s| s.1) - 1));
                 ops.push(Op::ConvT2(ConvT2 { src, cin, cout, weight: w.1, bias: b, leaky }));
@@ -807,10 +810,6 @@ mod tests {
     #[test]
     fn add_operator_model_is_accepted_review_regression_1() {
         // An Add residual block: the convolution output is added back to the input.
-        // The fixture builders write op_type to protobuf field 8, but the node
-        // decoder reads it from field 4, so the operator type arrives empty and
-        // the model is rejected as an unknown operator until the builders write
-        // op_type to field 4.
         let mut graph = Vec::new();
         len_field(1, &node("Conv", &["data", "w1"], "c1", &[("group", 1)]), &mut graph);
         len_field(1, &node("Add", &["c1", "data"], "a1", &[]), &mut graph);
