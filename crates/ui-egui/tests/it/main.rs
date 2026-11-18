@@ -4,9 +4,11 @@
 mod accessibility;
 mod dialog_role;
 mod docking_workflows;
+mod filmstrip_names;
 mod grid_names;
 mod landmarks;
 mod local_places;
 mod photo_name;
 mod sidebar_names;
+mod thumb_cells;
 mod thumb_size_slider;
