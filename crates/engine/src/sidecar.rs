@@ -764,6 +764,40 @@ fn writable_rect(r: lightcraft_meta::Rect) -> Option<(f64, f64, f64, f64)> {
     (x1 > x0 && y1 > y0).then_some((x0, y0, x1, y1))
 }
 
+/// The packets a save of a photo's sidecar chooses from ([`fit_to_old`]).
+#[derive(Clone)]
+struct Fresh {
+    /// The photo's packet ([`sidecar_packet`]).
+    packet: String,
+    /// The same with its face boxes on the upright photo, when `packet` has them in the frame the file is stored in
+    /// with no rotation (Exif 5, 7): only the list's `AppliedToDimensions` tells that frame, so a save that has to
+    /// leave the size out writes this one.
+    upright: Option<String>,
+}
+
+impl From<String> for Fresh {
+    fn from(packet: String) -> Self {
+        Fresh { packet, upright: None }
+    }
+}
+
+/// [`Fresh`] for a save of `p`'s sidecar.
+fn sidecar_packets(p: &Photo, cat: &lightcraft_catalog::Catalog) -> Fresh {
+    let upright = unrotated_stored_frame(p, p.meta.file_orientation)
+        .then(|| with_regions(sidecar_packet_with(p, cat, false), p, None))
+        .filter(|_| !file_regions(p).is_empty());
+    Fresh { packet: sidecar_packet(p, cat), upright }
+}
+
+/// Whether `p`'s boxes are written in the frame its file is stored in with no rotation: a quarter turn and a mirror
+/// (Exif 5, 7) on a photo that isn't square, which the reader tells from an upright packet by the list's size only.
+fn unrotated_stored_frame(p: &Photo, orientation: Option<lightcraft_meta::Orientation>) -> bool {
+    matches!(orientation, Some(lightcraft_meta::Orientation::Transpose | lightcraft_meta::Orientation::Transverse))
+        && p.width > 0
+        && p.height > 0
+        && p.width != p.height
+}
+
 /// The people named on the photo's faces that are written ([`file_regions`]), trimmed, each once (case-insensitive),
 /// in region order.
 fn face_names(p: &Photo) -> Vec<String> {
@@ -814,10 +848,7 @@ fn with_regions(packet: String, p: &Photo, orientation: Option<lightcraft_meta::
     let mut x = String::from("   <mwg-rs:Regions rdf:parseType=\"Resource\">\n");
     // a photo turned a quarter and mirrored (Exif 5, 7) and not square: in the frame of the photo as stored, with the
     // stored size, which the reader tells from the upright size and turns back (#2674)
-    let mirrored_turn = matches!(orientation, Some(lightcraft_meta::Orientation::Transpose | lightcraft_meta::Orientation::Transverse))
-        && p.width > 0
-        && p.height > 0
-        && p.width != p.height;
+    let mirrored_turn = unrotated_stored_frame(p, orientation);
     let (dw, dh) = if mirrored_turn { (p.height, p.width) } else { (p.width, p.height) };
     if dw > 0 && dh > 0 {
         x.push_str(&format!(
@@ -898,7 +929,7 @@ fn people_block(names: &[String]) -> String {
     x
 }
 
-/// `fresh` (a packet from [`sidecar_packet`]) fitted to the sidecar it replaces, `old`, for the two properties whose
+/// `fresh` (packets from [`sidecar_packets`]) fitted to the sidecar it replaces, `old`, for the two properties whose
 /// right value depends on what the file already says:
 /// - `Iptc4xmpExt:PersonInImage`: the names on the photo's faces, plus the names in the file's list that are not the
 ///   name of a face region in the file (typed in another application). A name that belonged to one of the file's
@@ -911,14 +942,21 @@ fn people_block(names: &[String]) -> String {
 ///   from keeps it as it is ([`OWNED_IF_STATED`]). Entries of the file's list that LightCraft can't read (boxes in
 ///   pixels with no size, say) are kept whenever the list is written ([`unreadable_regions`]); if they can't be singled
 ///   out, the file's list is left as it is.
-fn fit_to_old(old: &str, fresh: String) -> String {
+fn fit_to_old(old: &str, fresh: Fresh) -> String {
     let old = old.strip_prefix('\u{feff}').unwrap_or(old);
     // (a file that isn't XMP can't be merged either: `sidecar_contents` handles it)
     let Ok(data) = lightcraft_meta::parse_xmp(old) else {
-        return fresh;
+        return fresh.packet;
     };
     // its regions; if they can't be read, every name in its list is kept as typed in elsewhere
     let regions = parse_sidecar(old, crate::crs::Target::Rendered).ok().and_then(|sc| sc.regions);
+    let readable = regions.as_ref().map_or(0, Vec::len);
+    let carried = unreadable_regions(old, &data, readable);
+    // the list's size goes when kept pixel boxes had none (below); boxes only that size tells the frame of go upright
+    let fresh = match fresh.upright {
+        Some(upright) if carried.as_ref().is_some_and(|c| c.pixels_without_size) => upright,
+        _ => fresh.packet,
+    };
     let lower = |s: &str| s.trim().to_lowercase();
     let face_names: Vec<String> = regions.iter().flatten().filter_map(|r| r.name.as_deref()).map(lower).collect();
     let typed: Vec<String> = data
@@ -945,8 +983,6 @@ fn fit_to_old(old: &str, fresh: String) -> String {
             names.push(t);
         }
     }
-    let readable = regions.as_ref().map_or(0, Vec::len);
-    let carried = unreadable_regions(old, &data, readable);
     if fresh.contains(REGIONS_OPEN) {
         match carried {
             // the file's entries LightCraft can't read go on after the photo's own, as they were
@@ -1193,15 +1229,16 @@ pub struct SidecarSaved {
 
 /// The new contents for the sidecar at `path`: `fresh` merged into the existing file, if any.
 /// Returns (contents, merged, backup).
-fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>)> {
+fn sidecar_contents(path: &Path, fresh: impl Into<Fresh>, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>)> {
+    let fresh: Fresh = fresh.into();
     let bytes = match crate::read_file::read_regular(path, SIDECAR_READ_MAX) {
         Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((fresh, false, None)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((fresh.packet, false, None)),
         // can't see what is there: never overwrite it blindly
         Err(e) => return Err(e),
     };
     if bytes.iter().all(u8::is_ascii_whitespace) {
-        return Ok((fresh, false, None));
+        return Ok((fresh.packet, false, None));
     }
     let rules = lightcraft_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
     let why = match std::str::from_utf8(&bytes) {
@@ -1225,7 +1262,7 @@ fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<
     };
     let b = backup(path, stamp)?;
     log::warn!("{}: not readable as XMP ({why}); kept a copy as {} before replacing it", path.display(), b.display());
-    Ok((fresh, false, Some(b)))
+    Ok((fresh.packet, false, Some(b)))
 }
 
 /// Key of the stem sidecar a file maps to (case-insensitive).
@@ -1588,7 +1625,7 @@ impl Session {
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
-        let (data, merged, backup) = sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)()).map_err(err)?;
+        let (data, merged, backup) = sidecar_contents(&path, sidecar_packets(p, &self.catalog), &(self.clock)()).map_err(err)?;
         write_atomic(&path, data.as_bytes()).map_err(err)?;
         self.note_sidecar_write(&path, data.as_bytes());
         Ok(SidecarSaved { path, merged, backup })
@@ -2389,7 +2426,7 @@ mod tests {
 
     /// Save `p` over `path` as the app does; the new contents.
     fn save_over(path: &Path, p: &Photo) -> String {
-        let (x, _, _) = sidecar_contents(path, sidecar_packet(p, &lightcraft_catalog::Catalog::new()), "now").unwrap();
+        let (x, _, _) = sidecar_contents(path, sidecar_packets(p, &lightcraft_catalog::Catalog::new()), "now").unwrap();
         std::fs::write(path, &x).unwrap();
         x
     }
@@ -2520,6 +2557,46 @@ mod tests {
         p.meta.regions.push(region(0.3, 0.3, 0.4, 0.4, Face, Some("Cy"), None));
         assert_eq!(entry_names(&save_over(&path, &p)), ["Cy", "Pixel Box"]);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn boxes_go_upright_when_a_kept_pixel_entry_takes_the_lists_size_away() {
+        use lightcraft_meta::Orientation::{Rotate90, Transpose, Transverse};
+        let upright = lightcraft_meta::Rect { x0: 0.1, y0: 0.2, x1: 0.3, y1: 0.6 };
+        let read_back = |x: &str, o| {
+            let sc = parse_sidecar(x, crate::crs::Target::Rendered).unwrap().with_orientation_known(Some(o), "/no/such/file");
+            let mut q = photo();
+            merge_into(&mut q, &sc, "now");
+            q.meta.regions.iter().find(|r| r.name.as_deref() == Some("Ann")).map(|r| r.rect).unwrap()
+        };
+        let near = |g: lightcraft_meta::Rect| [(g.x0, 0.1), (g.y0, 0.2), (g.x1, 0.3), (g.y1, 0.6)].iter().all(|(a, b)| (a - b).abs() < 1e-5);
+        for o in [Transpose, Transverse, Rotate90] {
+            let mut p = photo();
+            p.meta.file_orientation = Some(o);
+            p.meta.regions =
+                vec![lightcraft_meta::Region { rect: upright, kind: lightcraft_meta::RegionKind::Face, name: Some("Ann".into()), description: None }];
+
+            // a sidecar with a pixel box and no size: the list keeps having no size, so the boxes can't be in a frame
+            // only the size tells (5, 7) and go upright; a rotation still says Lightroom's frame (6)
+            let path = scratch("upright-fallback");
+            std::fs::write(&path, sidecar_with_pixel_entry(&[])).unwrap();
+            let x = save_over(&path, &p);
+            assert!(!x.contains("AppliedToDimensions") && x.contains("stArea:unit=\"pixel\""), "{o:?}: {x}");
+            assert!(near(read_back(&x, o)), "{o:?}: {:?} {x}", read_back(&x, o));
+            assert_eq!(x.contains("mwg-rs:Rotation"), o == Rotate90, "{o:?}");
+            assert_eq!(save_over(&path, &p), x, "{o:?}: stable");
+
+            // with no pixel box to keep, the list has its size and 5, 7 are in the stored frame
+            let path = scratch("stored-frame");
+            std::fs::write(&path, sidecar_with(&[], &[])).unwrap();
+            let x = save_over(&path, &p);
+            assert!(x.contains("AppliedToDimensions"), "{o:?}: {x}");
+            if o != Rotate90 {
+                assert!(x.contains("<stDim:w>30</stDim:w>"), "{o:?}: stored size: {x}");
+            }
+            assert!(near(read_back(&x, o)), "{o:?}: {:?}", read_back(&x, o));
+            let _ = std::fs::remove_dir_all(path.parent().unwrap());
+        }
     }
 
     #[test]
