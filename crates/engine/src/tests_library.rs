@@ -1037,7 +1037,8 @@ fn large_library(dir: &std::path::Path, n: usize, edited: usize) -> (lcc_catalog
     for i in 0..n {
         let id = s.catalog.alloc_photo_id();
         let path = format!("/photos/IMG_{i:05}.CR3");
-        let mut p = lcc_catalog::Photo::new(id, lcc_catalog::Source::File { path }, &format!("IMG_{i:05}.CR3"), "CR3", 6000, 4000, "2026-01-01T00:00:00");
+        let mut p =
+            lcc_catalog::Photo::new(id, lcc_catalog::Source::File { path }, &format!("IMG_{i:05}.CR3"), "CR3", 6000, 4000, "2026-01-01T00:00:00");
         p.kind = lcc_catalog::MediaKind::Raw;
         p.meta.camera = "Canon EOS R5".into();
         p.as_shot_wb = Some((5200.0, 3.0));

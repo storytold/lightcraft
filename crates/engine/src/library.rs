@@ -567,7 +567,11 @@ thread_local! {
 
 /// The latest-preview keys of the edited photos among `photos` ([`Session::keep_edited_previews_last`]):
 /// `None` when `stop` said so. `stop` is asked, and `progress` told (done, of), every few thousand photos.
-fn edited_preview_keys(photos: &[std::sync::Arc<lcc_catalog::Photo>], stop: &dyn Fn() -> bool, progress: &dyn Fn(usize, usize)) -> Option<Vec<lcc_preview::Hash128>> {
+fn edited_preview_keys(
+    photos: &[std::sync::Arc<lcc_catalog::Photo>],
+    stop: &dyn Fn() -> bool,
+    progress: &dyn Fn(usize, usize),
+) -> Option<Vec<lcc_preview::Hash128>> {
     const STEP: usize = 4096;
     let mut keys = Vec::new();
     // (a camera is looked up by name once, not once per photo: most of the time this took)

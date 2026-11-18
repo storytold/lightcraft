@@ -13,7 +13,8 @@ use std::time::Instant;
 use lcc_catalog::{MediaKind, Op, Photo, Source};
 use lcc_engine::Session;
 
-const BODIES: [(&str, &str); 4] = [("Canon EOS R5", "CR3"), ("SONY ILCE-7M4", "ARW"), ("NIKON CORPORATION NIKON Z 6_2", "NEF"), ("FUJIFILM X-T4", "RAF")];
+const BODIES: [(&str, &str); 4] =
+    [("Canon EOS R5", "CR3"), ("SONY ILCE-7M4", "ARW"), ("NIKON CORPORATION NIKON Z 6_2", "NEF"), ("FUJIFILM X-T4", "RAF")];
 
 fn main() {
     let _ = env_logger_lite();
