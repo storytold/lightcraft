@@ -2028,3 +2028,33 @@ fn naming_a_face_writes_it_into_the_sidecar() {
     assert_eq!((r[1].name.as_deref(), r[1].rect), (None, other));
     let _ = std::fs::remove_dir_all(&src);
 }
+
+/// A face named on a photo whose file is stored sideways (Exif orientation 6) is written in the stored frame with
+/// Lightroom's `mwg-rs:Rotation`, and reading the sidecar back puts it on the same face of the upright photo.
+#[test]
+fn a_face_on_a_turned_photo_is_written_in_the_stored_frame_and_read_back_upright() {
+    use lightcraft_meta::{Rect, Region, RegionKind};
+    let src = temp_dir("face-write-turned");
+    write_turned_jpeg(&src.join("t.jpg"), None);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    assert_eq!((s.catalog.photo(id).unwrap().width, s.catalog.photo(id).unwrap().height), (24, 32), "upright");
+    let rect = Rect { x0: 0.1, y0: 0.2, x1: 0.3, y1: 0.6 };
+    let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+    meta.regions = vec![Region { rect, kind: RegionKind::Face, name: Some("Ann".into()), description: None }];
+    s.commit("Name", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let x = std::fs::read_to_string(src.join("t.xmp")).unwrap();
+    assert!(x.contains("<mwg-rs:Rotation>-1.57080</mwg-rs:Rotation>") && x.contains("<stDim:w>24</stDim:w>"), "{x}");
+    // the catalog forgets the box; reading the sidecar brings it back where it was
+    let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+    meta.regions.clear();
+    s.commit("Forget", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let r = s.catalog.photo(id).unwrap().meta.regions.clone();
+    assert_eq!(r.len(), 1);
+    let g = r[0].rect;
+    assert!([(g.x0, 0.1), (g.y0, 0.2), (g.x1, 0.3), (g.y1, 0.6)].iter().all(|(a, b)| (a - b).abs() < 1e-5), "{g:?}");
+    let _ = std::fs::remove_dir_all(&src);
+}

@@ -123,8 +123,12 @@ write them, from sidecars and from XMP embedded in the file. Named faces become 
   into XMP sidecars" on, each naming, renaming, resizing or removal of a box, and their undo) writes the photo's
   regions as `mwg-rs:Regions`, replacing the sidecar's own. Detection alone (Detect Faces, the background scan) does
   not rewrite a sidecar: the detector's unnamed boxes are LightCraft's bookkeeping and are left out until someone
-  names them, and reading the sidecar back keeps them. The boxes are written on the upright photo with the upright
-  size as `mwg-rs:AppliedToDimensions` and no `mwg-rs:Rotation`, so they read back as they were. When the photo has
+  names them, and reading the sidecar back keeps them. `mwg-rs:AppliedToDimensions` is the upright size, and the
+  boxes are written as Lightroom Classic writes them: for a file whose Exif orientation is 3, 6 or 8, in the frame of
+  the photo as stored (where the MWG guidelines place regions) with that turn as `mwg-rs:Rotation`; otherwise, and on
+  mirrored photos (2, 4, 5, 7), which MWG can't describe, on the upright photo. The file's orientation is read for
+  this when the photo has regions to write (for a raw, the whole file, as Read Metadata from File does). Either way
+  they read back as they were. When the photo has
   no regions left but the sidecar has a list, an empty list is written, so another library reading the file drops
   them too; a sidecar that never had one gets none.
 - **Names in `Iptc4xmpExt:PersonInImage`.** The names on the photo's faces are listed there too. Names in the

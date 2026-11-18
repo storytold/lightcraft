@@ -665,7 +665,10 @@ const ORIENTATION_SPAN: u64 = 1 << 20;
 pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
     // the regions go into the photo's own sidecar only: an export's packet describes the picture as exported, which a
     // crop or a resize leaves the boxes no longer fit
-    with_regions(sidecar_packet_with(p, cat, false), p)
+    // the file's own orientation decides how the boxes are written (`with_regions`); a photo with none to write
+    // doesn't need its file read
+    let orientation = if file_regions(p).is_empty() { None } else { file_path(p).and_then(file_orientation) };
+    with_regions(sidecar_packet_with(p, cat, false), p, orientation)
 }
 
 /// [`sidecar_packet`], without any location (GPS, sublocation, city, state, country) when
@@ -752,10 +755,14 @@ fn xml_text(s: &str) -> String {
 }
 
 /// `packet` with the photo's regions (`mwg-rs:Regions`, MWG Region Guidelines 2.0) and the names on its faces
-/// (`Iptc4xmpExt:PersonInImage`) added to its description. The boxes are written on the upright photo, as LightCraft
-/// keeps them, with the upright size as `AppliedToDimensions` (the photo's own `width` × `height`), so reading the
-/// sidecar back gives the same boxes. Nothing is added for a photo without regions.
-fn with_regions(packet: String, p: &Photo) -> String {
+/// (`Iptc4xmpExt:PersonInImage`) added to its description. Nothing is added for a photo without regions.
+///
+/// `AppliedToDimensions` is the photo's upright size (its `width` × `height`). The boxes are written the way
+/// Lightroom Classic writes them, which [`lightcraft_meta::parse_xmp`] turns back upright: for a file whose Exif
+/// orientation is 3, 6 or 8 (`orientation`), in the frame of the photo as stored, with that turn as `mwg-rs:Rotation`
+/// (π, −π/2, +π/2), as the MWG guidelines place regions on the stored image; otherwise on the upright photo. MWG
+/// can't say "mirrored", so boxes on mirrored photos (2, 4, 5, 7) are written upright, as the reader takes them.
+fn with_regions(packet: String, p: &Photo, orientation: Option<lightcraft_meta::Orientation>) -> String {
     let regions = file_regions(p);
     if regions.is_empty() {
         return packet;
@@ -775,14 +782,20 @@ fn with_regions(packet: String, p: &Photo) -> String {
             continue;
         }
         x.push_str("      <rdf:li rdf:parseType=\"Resource\">\n");
-        // stArea:x/y are the box's centre (MWG Region Guidelines §Area)
+        // stArea:x/y are the box's centre (MWG Region Guidelines §Area); (ux, uy, uw, uh) on the upright photo
+        let (ux, uy, uw, uh) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, x1 - x0, y1 - y0);
+        let (cx, cy, w, h, rotation) = match orientation {
+            Some(lightcraft_meta::Orientation::Rotate90) => (uy, 1.0 - ux, uh, uw, Some("-1.57080")),
+            Some(lightcraft_meta::Orientation::Rotate270) => (1.0 - uy, ux, uh, uw, Some("1.57080")),
+            Some(lightcraft_meta::Orientation::Rotate180) => (1.0 - ux, 1.0 - uy, uw, uh, Some("3.14159")),
+            _ => (ux, uy, uw, uh, None),
+        };
         x.push_str(&format!(
-            "       <mwg-rs:Area rdf:parseType=\"Resource\">\n        <stArea:x>{:.6}</stArea:x>\n        <stArea:y>{:.6}</stArea:y>\n        <stArea:w>{:.6}</stArea:w>\n        <stArea:h>{:.6}</stArea:h>\n        <stArea:unit>normalized</stArea:unit>\n       </mwg-rs:Area>\n",
-            (x0 + x1) / 2.0,
-            (y0 + y1) / 2.0,
-            x1 - x0,
-            y1 - y0
+            "       <mwg-rs:Area rdf:parseType=\"Resource\">\n        <stArea:x>{cx:.6}</stArea:x>\n        <stArea:y>{cy:.6}</stArea:y>\n        <stArea:w>{w:.6}</stArea:w>\n        <stArea:h>{h:.6}</stArea:h>\n        <stArea:unit>normalized</stArea:unit>\n       </mwg-rs:Area>\n"
         ));
+        if let Some(r) = rotation {
+            x.push_str(&format!("       <mwg-rs:Rotation>{r}</mwg-rs:Rotation>\n"));
+        }
         let kind = match &r.kind {
             lightcraft_meta::RegionKind::Face => "Face",
             lightcraft_meta::RegionKind::Pet => "Pet",
@@ -809,7 +822,10 @@ fn with_regions(packet: String, p: &Photo) -> String {
 /// `xml` added to the packet's one description, just before it closes.
 fn into_description(packet: String, xml: &str) -> String {
     match packet.rfind("  </rdf:Description>") {
-        Some(at) => format!("{}{xml}{}", &packet[..at], &packet[at..]),
+        Some(at) => match (packet.get(..at), packet.get(at..)) {
+            (Some(before), Some(after)) => format!("{before}{xml}{after}"),
+            _ => packet,
+        },
         None => packet,
     }
 }
@@ -841,11 +857,14 @@ fn people_block(names: &[String]) -> String {
 ///   that never had one gets none.
 fn fit_to_old(old: &str, fresh: String) -> String {
     let old = old.strip_prefix('\u{feff}').unwrap_or(old);
-    let (Ok(data), Ok(sc)) = (lightcraft_meta::parse_xmp(old), parse_sidecar(old, crate::crs::Target::Rendered)) else {
+    // (a file that isn't XMP can't be merged either: `sidecar_contents` handles it)
+    let Ok(data) = lightcraft_meta::parse_xmp(old) else {
         return fresh;
     };
+    // its regions; if they can't be read, every name in its list is kept as typed in elsewhere
+    let regions = parse_sidecar(old, crate::crs::Target::Rendered).ok().and_then(|sc| sc.regions);
     let lower = |s: &str| s.trim().to_lowercase();
-    let face_names: Vec<String> = sc.regions.iter().flatten().filter_map(|r| r.name.as_deref()).map(lower).collect();
+    let face_names: Vec<String> = regions.iter().flatten().filter_map(|r| r.name.as_deref()).map(lower).collect();
     let typed: Vec<String> = data
         .values
         .get("Iptc4xmpExt:PersonInImage")
@@ -859,7 +878,10 @@ fn fit_to_old(old: &str, fresh: String) -> String {
         .and_then(|d| d.values.get("Iptc4xmpExt:PersonInImage").map(|v| v.items().iter().filter_map(|i| i.text().map(str::to_string)).collect()))
         .unwrap_or_default();
     let mut fresh = match (fresh.find(PEOPLE_OPEN), fresh.find(PEOPLE_CLOSE)) {
-        (Some(a), Some(b)) if b > a => format!("{}{}", &fresh[..a], &fresh[b + PEOPLE_CLOSE.len()..]),
+        (Some(a), Some(b)) if b > a => match (fresh.get(..a), fresh.get(b.saturating_add(PEOPLE_CLOSE.len())..)) {
+            (Some(before), Some(after)) => format!("{before}{after}"),
+            _ => fresh,
+        },
         _ => fresh,
     };
     for t in typed {
@@ -867,7 +889,7 @@ fn fit_to_old(old: &str, fresh: String) -> String {
             names.push(t);
         }
     }
-    if sc.regions.is_some() && !fresh.contains("<mwg-rs:Regions") {
+    if regions.is_some() && !fresh.contains("<mwg-rs:Regions") {
         fresh = into_description(
             fresh,
             "   <mwg-rs:Regions rdf:parseType=\"Resource\">\n    <mwg-rs:RegionList>\n     <rdf:Bag/>\n    </mwg-rs:RegionList>\n   </mwg-rs:Regions>\n",
@@ -2043,6 +2065,38 @@ mod tests {
         let (x, _, _) = sidecar_contents(&path, sidecar_packet(&p, &lightcraft_catalog::Catalog::new()), "now").unwrap();
         assert!(!x.contains("mwg-rs:Regions") && !x.contains("PersonInImage"), "{x}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn boxes_on_a_turned_file_are_written_as_lightroom_writes_them() {
+        use lightcraft_meta::Orientation::{FlipH, Normal, Rotate90, Rotate180, Rotate270, Transpose};
+        let mut p = photo();
+        let upright = region(0.1, 0.2, 0.3, 0.6, lightcraft_meta::RegionKind::Face, Some("Ann"), None);
+        p.meta.regions = vec![upright.clone()];
+        for (o, rotation, area) in [
+            (Rotate90, Some("-1.57080"), [0.4, 0.8, 0.4, 0.2]),
+            (Rotate270, Some("1.57080"), [0.6, 0.2, 0.4, 0.2]),
+            (Rotate180, Some("3.14159"), [0.8, 0.6, 0.2, 0.4]),
+            (Normal, None, [0.2, 0.4, 0.2, 0.4]),
+            (FlipH, None, [0.2, 0.4, 0.2, 0.4]),
+            (Transpose, None, [0.2, 0.4, 0.2, 0.4]),
+        ] {
+            let x = with_regions(sidecar_packet_with(&p, &lightcraft_catalog::Catalog::new(), false), &p, Some(o));
+            assert_eq!(x.contains("<mwg-rs:Rotation>"), rotation.is_some(), "{o:?}: {x}");
+            if let Some(r) = rotation {
+                assert!(x.contains(&format!("<mwg-rs:Rotation>{r}</mwg-rs:Rotation>")), "{o:?}: {x}");
+            }
+            for (tag, v) in ["x", "y", "w", "h"].iter().zip(area) {
+                assert!(x.contains(&format!("<stArea:{tag}>{v:.6}</stArea:{tag}>")), "{o:?} {tag}: {x}");
+            }
+            // read back (the reader turns Lightroom's boxes upright): the same box
+            let got = parse_sidecar(&x, crate::crs::Target::Rendered).unwrap().regions.unwrap()[0].rect;
+            let want = upright.rect;
+            assert!(
+                [(got.x0, want.x0), (got.y0, want.y0), (got.x1, want.x1), (got.y1, want.y1)].iter().all(|(a, b)| (a - b).abs() < 1e-5),
+                "{o:?}: {got:?}"
+            );
+        }
     }
 
     #[test]
