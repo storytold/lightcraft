@@ -620,7 +620,7 @@ fn sidecar_has_news(labels: &Catalog, p: &Photo, naming: SidecarLookup, listing:
     }
     let Ok(text) = std::fs::read_to_string(&file) else { return false };
     let Ok(sc) = crate::sidecar::parse_sidecar(&text, crate::crs::Target::for_photo(p)) else { return false };
-    let sc = sc.with_file_orientation(path).resolve_label(labels);
+    let sc = sc.with_orientation_known(p.meta.file_orientation, path).resolve_label(labels);
     let mut q = p.clone();
     crate::sidecar::merge_into(&mut q, &sc, "");
     (q.rating, q.flag, q.label, &q.meta, &q.captured, &q.develop) != (p.rating, p.flag, p.label, &p.meta, &p.captured, &p.develop)
@@ -655,8 +655,8 @@ pub struct SyncWork {
     import: Option<(crate::import::ImportJob, Vec<String>)>,
     moved: Vec<FolderMoved>,
     missing: Vec<FolderPhoto>,
-    /// (photo, its file, how its sidecar is named)
-    sidecars: Vec<(PhotoId, String, SidecarLookup, crate::crs::Target)>,
+    /// (photo, its file, how its sidecar is named, the orientation the catalog keeps for the file)
+    sidecars: Vec<(PhotoId, String, SidecarLookup, crate::crs::Target, Option<lightcraft_geom::Orientation>)>,
 }
 
 /// The catalog half of a synchronize (see [`SyncJob`]).
@@ -710,7 +710,7 @@ impl SyncJob {
                 .zip(namings)
                 .filter_map(|(m, naming)| {
                     let p = s.catalog.photo(PhotoId(m.id))?;
-                    Some((p.id, m.path, naming, crate::crs::Target::for_photo(p)))
+                    Some((p.id, m.path, naming, crate::crs::Target::for_photo(p), p.meta.file_orientation))
                 })
                 .collect()
         } else {
@@ -782,11 +782,11 @@ impl SyncWork {
             return;
         }
         let mut read = Vec::with_capacity(sidecars.len());
-        for (id, path, naming, target) in sidecars {
+        for (id, path, naming, target, known) in sidecars {
             if cancel.load(Relaxed) {
                 break;
             }
-            read.push((id, path.clone(), read_sidecar(&path, naming, target)));
+            read.push((id, path.clone(), read_sidecar(&path, naming, target, known)));
             step(1);
         }
         if !read.is_empty() {
@@ -796,14 +796,19 @@ impl SyncWork {
 }
 
 /// Read and parse photo file `path`'s XMP sidecar file.
-fn read_sidecar(path: &str, naming: SidecarLookup, target: crate::crs::Target) -> std::result::Result<crate::sidecar::SidecarData, String> {
+fn read_sidecar(
+    path: &str,
+    naming: SidecarLookup,
+    target: crate::crs::Target,
+    known: Option<lightcraft_geom::Orientation>,
+) -> std::result::Result<crate::sidecar::SidecarData, String> {
     let file = naming.find(path).ok_or_else(|| "no XMP sidecar".to_string())?;
     let len = std::fs::metadata(&file).map_err(|e| format!("{}: {e}", file.display()))?.len();
     if len > MAX_SIDECAR_BYTES {
         return Err(format!("{}: too large for an XMP sidecar", file.display()));
     }
     let text = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
-    crate::sidecar::parse_sidecar(&text, target).map(|sc| sc.with_file_orientation(path)).map_err(|e| format!("{}: {e}", file.display()))
+    crate::sidecar::parse_sidecar(&text, target).map(|sc| sc.with_orientation_known(known, path)).map_err(|e| format!("{}: {e}", file.display()))
 }
 
 impl SyncCommit {

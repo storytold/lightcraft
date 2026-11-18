@@ -2145,3 +2145,40 @@ fn the_orientation_comes_from_the_catalog_and_read_metadata_fills_it_in() {
         let _ = std::fs::remove_dir_all(&src);
     }
 }
+
+/// Review of #4512: a face on a photo stored turned and mirrored (Exif 5) is written in the frame of the photo as
+/// stored, with the stored size, and reading the sidecar back puts it on the same face of the upright photo.
+#[test]
+fn a_face_on_a_turned_mirrored_photo_is_written_in_the_stored_frame() {
+    use lightcraft_meta::{Orientation, Rect, Region, RegionKind};
+    let src = temp_dir("face-write-transpose");
+    let img = lightcraft_raster::Rgba8::from_fn(32, 24, |x, y| [(x * 7) as u8, (y * 9) as u8, 90, 255]);
+    let exif = lightcraft_meta::write_exif(&lightcraft_meta::Metadata { orientation: Some(Orientation::Transpose), ..Default::default() });
+    let meta = lightcraft_codecs::EncodeMeta { exif: Some(&exif), ..Default::default() };
+    std::fs::write(
+        src.join("m.jpg"),
+        lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &meta).unwrap(),
+    )
+    .unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    let p = s.catalog.photo(id).unwrap();
+    assert_eq!(((p.width, p.height), p.meta.file_orientation), ((24, 32), Some(Orientation::Transpose)));
+    let rect = Rect { x0: 0.1, y0: 0.2, x1: 0.3, y1: 0.6 };
+    let mut meta = p.meta.clone();
+    meta.regions = vec![Region { rect, kind: RegionKind::Face, name: Some("Ann".into()), description: None }];
+    s.commit("Name", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let x = std::fs::read_to_string(src.join("m.xmp")).unwrap();
+    // stored frame: x and y swapped, the stored size, no rotation
+    assert!(x.contains("<stDim:w>32</stDim:w>") && x.contains("<stDim:h>24</stDim:h>") && !x.contains("mwg-rs:Rotation"), "{x}");
+    assert!(x.contains("<stArea:x>0.400000</stArea:x>") && x.contains("<stArea:y>0.200000</stArea:y>"), "{x}");
+    let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+    meta.regions.clear();
+    s.commit("Forget", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let g = s.catalog.photo(id).unwrap().meta.regions[0].rect;
+    assert!([(g.x0, 0.1), (g.y0, 0.2), (g.x1, 0.3), (g.y1, 0.6)].iter().all(|(a, b)| (a - b).abs() < 1e-5), "{g:?}");
+    let _ = std::fs::remove_dir_all(&src);
+}

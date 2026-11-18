@@ -404,10 +404,16 @@ impl SidecarData {
     /// may not repeat it) when the regions need it: they were drawn on a stated size ([`SidecarData::regions_drawn_on`]).
     /// Only then is the file read ([`file_orientation`]).
     pub fn with_file_orientation(self, original: &str) -> Self {
+        self.with_orientation_known(None, original)
+    }
+
+    /// [`SidecarData::with_file_orientation`], taking the orientation the catalog keeps for the photo
+    /// (`Meta::file_orientation`, the import's) when it has one, so the file isn't read for it.
+    pub fn with_orientation_known(self, known: Option<lightcraft_meta::Orientation>, original: &str) -> Self {
         if self.regions_drawn_on.is_none() {
             return self;
         }
-        SidecarData { orientation: file_orientation(original).or(self.orientation), ..self }
+        SidecarData { orientation: known.or_else(|| file_orientation(original)).or(self.orientation), ..self }
     }
 }
 
@@ -784,18 +790,28 @@ fn xml_text(s: &str) -> String {
 /// `AppliedToDimensions` is the photo's upright size (its `width` × `height`). The boxes are written the way
 /// Lightroom Classic writes them, which [`lightcraft_meta::parse_xmp`] turns back upright: for a file whose Exif
 /// orientation is 3, 6 or 8 (`orientation`), in the frame of the photo as stored, with that turn as `mwg-rs:Rotation`
-/// (π, −π/2, +π/2), as the MWG guidelines place regions on the stored image; otherwise on the upright photo. MWG
-/// can't say "mirrored", so boxes on mirrored photos (2, 4, 5, 7) are written upright, as the reader takes them.
+/// (π, −π/2, +π/2), as the MWG guidelines place regions on the stored image. A photo turned a quarter and mirrored
+/// (5, 7) and not square is written in the stored frame too, with the stored size as `AppliedToDimensions` and no
+/// rotation (MWG has no way to say "mirrored"): the reader tells it from an upright packet by that size and turns
+/// it back with the file's orientation (#2674). One mirrored without a turn (2, 4), or a square one, looks the
+/// same either way, so it is written on the upright photo, as the reader takes it; MWG readers that apply the
+/// mirror place those boxes mirrored.
 fn with_regions(packet: String, p: &Photo, orientation: Option<lightcraft_meta::Orientation>) -> String {
     let regions = file_regions(p);
     if regions.is_empty() {
         return packet;
     }
     let mut x = String::from("   <mwg-rs:Regions rdf:parseType=\"Resource\">\n");
-    if p.width > 0 && p.height > 0 {
+    // a photo turned a quarter and mirrored (Exif 5, 7) and not square: in the frame of the photo as stored, with the
+    // stored size, which the reader tells from the upright size and turns back (#2674)
+    let mirrored_turn = matches!(orientation, Some(lightcraft_meta::Orientation::Transpose | lightcraft_meta::Orientation::Transverse))
+        && p.width > 0
+        && p.height > 0
+        && p.width != p.height;
+    let (dw, dh) = if mirrored_turn { (p.height, p.width) } else { (p.width, p.height) };
+    if dw > 0 && dh > 0 {
         x.push_str(&format!(
-            "    <mwg-rs:AppliedToDimensions rdf:parseType=\"Resource\">\n     <stDim:w>{}</stDim:w>\n     <stDim:h>{}</stDim:h>\n     <stDim:unit>pixel</stDim:unit>\n    </mwg-rs:AppliedToDimensions>\n",
-            p.width, p.height
+            "    <mwg-rs:AppliedToDimensions rdf:parseType=\"Resource\">\n     <stDim:w>{dw}</stDim:w>\n     <stDim:h>{dh}</stDim:h>\n     <stDim:unit>pixel</stDim:unit>\n    </mwg-rs:AppliedToDimensions>\n"
         ));
     }
     x.push_str("    <mwg-rs:RegionList>\n     <rdf:Bag>\n");
@@ -810,6 +826,9 @@ fn with_regions(packet: String, p: &Photo, orientation: Option<lightcraft_meta::
             Some(lightcraft_meta::Orientation::Rotate90) => (uy, 1.0 - ux, uh, uw, Some("-1.57080")),
             Some(lightcraft_meta::Orientation::Rotate270) => (1.0 - uy, ux, uh, uw, Some("1.57080")),
             Some(lightcraft_meta::Orientation::Rotate180) => (1.0 - ux, 1.0 - uy, uw, uh, Some("3.14159")),
+            // the stored frame is the upright one mirrored across a diagonal: 5 across the main one, 7 the other
+            Some(lightcraft_meta::Orientation::Transpose) if mirrored_turn => (uy, ux, uh, uw, None),
+            Some(lightcraft_meta::Orientation::Transverse) if mirrored_turn => (1.0 - uy, 1.0 - ux, uh, uw, None),
             _ => (ux, uy, uw, uh, None),
         };
         x.push_str(&format!(
@@ -1576,7 +1595,7 @@ impl Session {
         let Some(orig) = file_path(p) else { return Ok(None) };
         // a photo catalogued before the file's orientation was kept: Read Metadata from File reads it, once, so its
         // face boxes are written in the frame the file is stored in from then on (the file is read at most once here)
-        let mut known: Option<Option<lightcraft_meta::Orientation>> = None;
+        let mut known: Option<Option<lightcraft_meta::Orientation>> = p.meta.file_orientation.map(Some);
         let mut orientation_of_file = || *known.get_or_insert_with(|| file_orientation(orig));
         let backfill = if p.meta.file_orientation.is_none() { orientation_of_file() } else { None };
         let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_lookup(id)) else {
@@ -1591,7 +1610,7 @@ impl Session {
             };
         };
         let sc = parse_sidecar(&packet, crate::crs::Target::for_photo(p)).map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?;
-        // (as `with_file_orientation`, reusing a read already made)
+        // (as `with_orientation_known`: the catalog's orientation, else the file's, read at most once)
         let sc = match sc.regions_drawn_on {
             Some(_) => SidecarData { orientation: orientation_of_file().or(sc.orientation), ..sc },
             None => sc,
@@ -2278,17 +2297,22 @@ mod tests {
 
     #[test]
     fn boxes_on_a_turned_file_are_written_as_lightroom_writes_them() {
-        use lightcraft_meta::Orientation::{FlipH, Normal, Rotate90, Rotate180, Rotate270, Transpose};
+        use lightcraft_meta::Orientation::{FlipH, FlipV, Normal, Rotate90, Rotate180, Rotate270, Transpose, Transverse};
+        // a 40 × 30 photo (upright)
         let mut p = photo();
         let upright = region(0.1, 0.2, 0.3, 0.6, lightcraft_meta::RegionKind::Face, Some("Ann"), None);
         p.meta.regions = vec![upright.clone()];
-        for (o, rotation, area) in [
-            (Rotate90, Some("-1.57080"), [0.4, 0.8, 0.4, 0.2]),
-            (Rotate270, Some("1.57080"), [0.6, 0.2, 0.4, 0.2]),
-            (Rotate180, Some("3.14159"), [0.8, 0.6, 0.2, 0.4]),
-            (Normal, None, [0.2, 0.4, 0.2, 0.4]),
-            (FlipH, None, [0.2, 0.4, 0.2, 0.4]),
-            (Transpose, None, [0.2, 0.4, 0.2, 0.4]),
+        for (o, rotation, area, size) in [
+            (Rotate90, Some("-1.57080"), [0.4, 0.8, 0.4, 0.2], (40, 30)),
+            (Rotate270, Some("1.57080"), [0.6, 0.2, 0.4, 0.2], (40, 30)),
+            (Rotate180, Some("3.14159"), [0.8, 0.6, 0.2, 0.4], (40, 30)),
+            (Normal, None, [0.2, 0.4, 0.2, 0.4], (40, 30)),
+            // mirrored without a turn: upright (MWG can't tell it apart)
+            (FlipH, None, [0.2, 0.4, 0.2, 0.4], (40, 30)),
+            (FlipV, None, [0.2, 0.4, 0.2, 0.4], (40, 30)),
+            // mirrored and turned: the stored frame, with the stored size
+            (Transpose, None, [0.4, 0.2, 0.4, 0.2], (30, 40)),
+            (Transverse, None, [0.6, 0.8, 0.4, 0.2], (30, 40)),
         ] {
             let x = with_regions(sidecar_packet_with(&p, &lightcraft_catalog::Catalog::new(), false), &p, Some(o));
             assert_eq!(x.contains("<mwg-rs:Rotation>"), rotation.is_some(), "{o:?}: {x}");
@@ -2298,14 +2322,24 @@ mod tests {
             for (tag, v) in ["x", "y", "w", "h"].iter().zip(area) {
                 assert!(x.contains(&format!("<stArea:{tag}>{v:.6}</stArea:{tag}>")), "{o:?} {tag}: {x}");
             }
-            // read back (the reader turns Lightroom's boxes upright): the same box
-            let got = parse_sidecar(&x, crate::crs::Target::Rendered).unwrap().regions.unwrap()[0].rect;
+            assert!(x.contains(&format!("<stDim:w>{}</stDim:w>", size.0)) && x.contains(&format!("<stDim:h>{}</stDim:h>", size.1)), "{o:?}: {x}");
+            // read back as LightCraft reads a sidecar (the file's orientation known): the same box, upright
+            let sc = parse_sidecar(&x, crate::crs::Target::Rendered).unwrap().with_orientation_known(Some(o), "/no/such/file");
+            let mut q = photo();
+            merge_into(&mut q, &sc, "now");
+            let got = q.meta.regions[0].rect;
             let want = upright.rect;
             assert!(
                 [(got.x0, want.x0), (got.y0, want.y0), (got.x1, want.x1), (got.y1, want.y1)].iter().all(|(a, b)| (a - b).abs() < 1e-5),
                 "{o:?}: {got:?}"
             );
         }
+        // a square photo mirrored and turned looks the same either way: upright, as the reader takes it
+        let mut sq = photo();
+        (sq.width, sq.height) = (30, 30);
+        sq.meta.regions = vec![upright.clone()];
+        let x = with_regions(sidecar_packet_with(&sq, &lightcraft_catalog::Catalog::new(), false), &sq, Some(Transpose));
+        assert!(x.contains("<stArea:x>0.200000</stArea:x>") && x.contains("<stArea:y>0.400000</stArea:y>"), "{x}");
     }
 
     /// A sidecar with Lightroom-style regions (in the order given, upright) and `people` as PersonInImage.

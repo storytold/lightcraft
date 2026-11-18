@@ -125,9 +125,13 @@ write them, from sidecars and from XMP embedded in the file. Named faces become 
   not rewrite a sidecar: the detector's unnamed boxes are LightCraft's bookkeeping and are left out until someone
   names them, and reading the sidecar back keeps them. `mwg-rs:AppliedToDimensions` is the upright size, and the
   boxes are written as Lightroom Classic writes them: for a file whose Exif orientation is 3, 6 or 8, in the frame of
-  the photo as stored (where the MWG guidelines place regions) with that turn as `mwg-rs:Rotation`; otherwise, and on
-  mirrored photos (2, 4, 5, 7), which MWG can't describe, on the upright photo. The file's orientation is the one
-  the import read, kept in the catalog: a save never reads the photo file for it. A photo catalogued before LightCraft
+  the photo as stored (where the MWG guidelines place regions) with that turn as `mwg-rs:Rotation`. A photo turned a
+  quarter and mirrored (5, 7) that isn't square is written in the stored frame too, with the stored size as
+  `AppliedToDimensions` and no rotation; LightCraft tells it from an upright packet by that size, as below. A photo
+  mirrored without a turn (2, 4) or a square one looks the same either way, so its boxes are written upright, as
+  LightCraft reads them; MWG readers that apply the mirror place those mirrored. Orientation 1 is written upright. The file's orientation is the one
+  the import read, kept in the catalog: a save never reads the photo file for it, and neither does reading a sidecar
+  back (Read Metadata from File, Synchronize Folder) when the catalog knows it. A photo catalogued before LightCraft
   kept it has its boxes written upright until Read Metadata from File reads it. Either way they read back as they
   were. When the photo has no regions left to write (none, or only the detector's) but the sidecar has regions
   LightCraft read, an empty list
