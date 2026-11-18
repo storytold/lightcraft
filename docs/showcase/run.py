@@ -14,8 +14,7 @@ def _jsonl_path(arg):
     if not path.is_file():
         sys.exit(f"not a readable file: {arg}")
     try:
-        with path.open("rb"):
-            pass
+        path.open("rb").close()
     except OSError:
         sys.exit(f"not a readable file: {arg}")
     return path

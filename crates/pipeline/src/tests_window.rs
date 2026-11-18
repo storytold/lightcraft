@@ -6,7 +6,7 @@ use lightcraft_develop::{DevelopSettings, controls};
 use lightcraft_geom::{Orientation, Rect};
 use lightcraft_raster::{Rgb32f, Rgba8};
 
-use crate::{PixelWindow, RenderRequest, SourceInfo, render};
+use crate::{OutputDepth, PixelWindow, RenderRequest, SourceInfo, render};
 
 const W: usize = 960;
 const H: usize = 640;
@@ -156,6 +156,18 @@ fn windows_outside_or_degenerate_are_clamped() {
     }
 }
 
+/// A model's segmentation on a `side²` grid: an ellipse in the middle of the photo.
+fn middle_seg(side: usize) -> lightcraft_develop::SegMask {
+    let logits: Vec<f32> = (0..side * side)
+        .map(|i| {
+            let (x, y) = (((i % side) as f32 + 0.5) / side as f32, ((i / side) as f32 + 0.5) / side as f32);
+            let r = (((x - 0.5) / 0.3).powi(2) + ((y - 0.5) / 0.25).powi(2)).sqrt();
+            (12.0 * (1.0 - r) * 4.0).clamp(-12.0, 12.0)
+        })
+        .collect();
+    lightcraft_develop::SegMask::from_logits(side, &logits)
+}
+
 /// A textured, noisy source: what noise reduction and edge refinement act on.
 fn noisy_scene() -> Rgb32f {
     let base = scene();
@@ -216,6 +228,8 @@ fn a_mask_overlay_window_matches_the_whole_render() {
         ("radial", MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.2, ry: 0.15, angle: 20.0, feather: 50.0, invert: false }, 0.0),
         ("linear refined", MaskShape::Linear { start: Point::new(0.45, 0.5), end: Point::new(0.55, 0.5) }, 100.0),
         ("sky", MaskShape::Sky, 0.0),
+        // a model's grid, enlarged along the photo's edges (issue #3272)
+        ("prompt", MaskShape::Prompt { text: "middle".into(), seg: Some(middle_seg(32)), detail: vec![], edge: 0.0 }, 0.0),
     ];
     for (name, shape, refine) in shapes {
         let mut s = DevelopSettings::default();
@@ -406,6 +420,113 @@ fn auto_mask_strokes_match_the_whole_render() {
         ..Default::default()
     };
     check_noisy("auto mask", &s, PixelWindow { x: 400, y: 300, w: 300, h: 250 }, 2, 0.1);
+}
+
+// Given a lens blur, a window (zoomed view) blurs right up to its edges as the whole render does:
+// it is rendered with the blur's reach around it
+#[test]
+fn lens_blur_matches_the_whole_render_up_to_the_window_edges() {
+    lens_blur_window_matches(OutputDepth::U8);
+    lens_blur_window_matches(OutputDepth::U16);
+}
+
+/// A high-bit-depth window grows for the lens blur too, and is cut back to the request.
+fn lens_blur_window_matches(depth: OutputDepth) {
+    use lightcraft_develop::{Mask, MaskComponent, MaskOp, MaskShape};
+    use lightcraft_geom::Point;
+    let radial = MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.15, ry: 0.2, angle: 0.0, feather: 30.0, invert: false };
+    let mut s = DevelopSettings {
+        masks: vec![Mask {
+            id: 4,
+            components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: radial }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    s.lens_blur.enabled = true;
+    s.lens_blur.amount = 80.0;
+    s.lens_blur.boost = 40.0;
+    s.lens_blur.focus_mask = Some(4);
+    let deep = |win: Option<PixelWindow>| {
+        let r = render(&scene(), &SourceInfo::default(), &s, &RenderRequest { window: win, depth, ..RenderRequest::fit(W, H) });
+        if let Some(d) = &r.deep {
+            assert_eq!((d.width, d.height), (r.image.width, r.image.height));
+        }
+        r.image
+    };
+    let (f, w) = (deep(None), deep(Some(MID)));
+    assert_eq!((w.width, w.height), (MID.w, MID.h));
+    let (max, mean) = compare_inset(&f, &w, MID, 0);
+    assert!(max <= 6 && mean <= 0.4, "max {max}, mean {mean:.3}");
+    // and the blur shows: the whole render differs from the one without it
+    let mut off = s.clone();
+    off.lens_blur.enabled = false;
+    let (_, mean) = compare_inset(&full(&off), &f, PixelWindow { x: 0, y: 0, w: f.width, h: f.height }, 0);
+    assert!(mean > 1.0, "{mean:.3}");
+}
+
+/// With the automatic subject focus (no focus mask, no fixed shape, no person matte) a window
+/// focuses where the whole render does: the estimate comes from the whole photo, not from the
+/// pixels the window holds.
+#[test]
+fn lens_blur_on_the_estimated_subject_matches_the_whole_render() {
+    let mut s = DevelopSettings::default();
+    s.lens_blur.enabled = true;
+    s.lens_blur.amount = 80.0;
+    // a sharp cut: the window then grows only by the blur's radius, less than the estimate reads
+    s.lens_blur.transition = 0.0;
+    for depth in [OutputDepth::U8, OutputDepth::U16] {
+        let r = |win: Option<PixelWindow>| {
+            render(&scene(), &SourceInfo::default(), &s, &RenderRequest { window: win, depth, ..RenderRequest::fit(W, H) }).image
+        };
+        // a window at the middle and one at an edge, where the estimate's neighbourhood is cut off
+        for win in [MID, PixelWindow { x: 0, y: 0, w: 300, h: 220 }] {
+            let (f, w) = (r(None), r(Some(win)));
+            assert_eq!((w.width, w.height), (win.w, win.h));
+            let (max, mean) = compare_inset(&f, &w, win, 0);
+            assert!(max <= 6 && mean <= 0.4, "{depth:?} {win:?}: max {max}, mean {mean:.3}");
+        }
+    }
+}
+
+// Given the joint colour NR, a window is filtered with the whole frame's noise model: a quiet part of
+// the frame does not make a window of its noisy part (or the other way round) smooth differently
+#[test]
+fn joint_colour_nr_measures_the_noise_of_the_whole_frame() {
+    let mut s = DevelopSettings::default();
+    s.detail.nr_color = 25.0;
+    s.detail.nr_color_smoothness = 0.0;
+    // a frame that is one noise tile, and one of many tiles (`nrc_joint::tiles`)
+    for (w, h, win) in [(768, 128, PixelWindow { x: 640, y: 32, w: 64, h: 64 }), (1664, 1536, PixelWindow { x: 1400, y: 700, w: 128, h: 128 })] {
+        let src = crate::tests::colour_noise_scene(w, h, w * 2 / 3);
+        let req = RenderRequest::fit(w, h);
+        let f = render(&src, &SourceInfo::default(), &s, &req).image;
+        let part = render(&src, &SourceInfo::default(), &s, &RenderRequest { window: Some(win), ..req }).image;
+        let (max, mean) = compare_inset(&f, &part, win, win.w / 4);
+        assert!(max <= 2 && mean <= 0.1, "{w}×{h}: max {max}, mean {mean:.3}");
+    }
+}
+
+// Given a 16-bit or float render of a window with the joint colour NR, then its edges are the whole
+// render's too: the window is grown by the filter's reach and cut back
+#[test]
+fn a_deep_window_with_colour_noise_reduction_matches_the_whole_render() {
+    use crate::OutputDepth;
+    let (w, h, win) = (768, 128, PixelWindow { x: 600, y: 32, w: 96, h: 64 });
+    let src = crate::tests::colour_noise_scene(w, h, w * 2 / 3);
+    let mut s = DevelopSettings::default();
+    s.detail.nr_color = 25.0;
+    s.detail.nr_color_smoothness = 0.0;
+    for depth in [OutputDepth::U16, OutputDepth::F32Linear] {
+        let req = RenderRequest { depth, ..RenderRequest::fit(w, h) };
+        let deep = |req: &RenderRequest| render(&src, &SourceInfo::default(), &s, req).deep.map(|d| d.to_rgba8());
+        let (Some(f), Some(part)) = (deep(&req), deep(&RenderRequest { window: Some(win), ..req })) else {
+            panic!("{depth:?}: no deep image");
+        };
+        assert_eq!((part.width, part.height), (win.w, win.h), "{depth:?}: the window's own size");
+        let (max, mean) = compare_inset(&f, &part, win, 0);
+        assert!(max <= 1 && mean <= 0.01, "{depth:?}: max {max}, mean {mean:.3}");
+    }
 }
 
 /// The margin the loupe's windows carry around what they show at this size (`region::margin_for`:

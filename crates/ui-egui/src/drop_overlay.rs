@@ -32,13 +32,15 @@ fn lines(app: &LightcraftApp, paths: Vec<String>, unknown: bool) -> Vec<String> 
     }
     let drop = classify(paths);
     let mut out = Vec::new();
-    if !drop.models.is_empty() {
-        out.push(crate::i18n::tr("Drop to open the face model").to_string());
-    }
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     // no library open yet (desktop: the web build's drops import into its session as before):
-    // photos wait for the library chosen, presets are refused (the drop handler does the same)
+    // photos wait for the library chosen, presets and models are refused (the drop handler does the same)
     let waiting = crate::panels::library_problem::holds_drops(app) && !cfg!(target_arch = "wasm32");
+    if !drop.models.is_empty() && waiting {
+        out.push(crate::i18n::tr("Open a library first, then drop the model again").to_string());
+    } else if !drop.models.is_empty() {
+        out.push(crate::i18n::tr("Drop to open the face model").to_string());
+    }
     if !drop.presets.is_empty() && waiting {
         out.push(crate::i18n::tr("Open a library first, then drop the presets again").to_string());
     } else if !drop.presets.is_empty() {
@@ -69,9 +71,11 @@ fn lines(app: &LightcraftApp, paths: Vec<String>, unknown: bool) -> Vec<String> 
 
 /// Veil and card while files are dragged over the window.
 pub fn show(app: &LightcraftApp, ctx: &Context) {
-    // This card is an `Order::Tooltip` layer, above the prompt's Foreground window. While a prompt
-    // owns input the drag can only be background noise: do not paint over or register it.
-    if crate::panels::notices::blocks_input(app) {
+    // This card is an `Order::Tooltip` layer, above the prompt's or blocking library window's
+    // Foreground layer (and any dialog that holds a no-library window's drops). While input is
+    // owned the drag can only be background noise: do not paint over or register it, or the card
+    // would promise a drop the barrier is holding back.
+    if crate::panels::notices::blocks_input(app) || crate::panels::library_problem::blocks_file_drops(app) {
         return;
     }
     let count = ctx.input(|i| i.raw.hovered_files.len());

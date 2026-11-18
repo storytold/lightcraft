@@ -153,6 +153,30 @@ pub fn ui_command_ids(menus_rs: &str) -> Vec<String> {
     ids
 }
 
+/// The source of the UI menu module: `menus.rs` and every `.rs` file under `menus/`, so the
+/// tables are found in whichever file of the module holds them.
+pub fn menu_sources(ui_src: &Path) -> Result<String, String> {
+    let mut text = std::fs::read_to_string(ui_src.join("menus.rs")).map_err(|e| format!("menus.rs: {e}"))?;
+    let mut dirs = vec![ui_src.join("menus")];
+    let mut files = Vec::new();
+    while let Some(dir) = dirs.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for path in entries.flatten().map(|e| e.path()) {
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    for path in files {
+        text.push('\n');
+        text.push_str(&std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?);
+    }
+    Ok(text)
+}
+
 fn known(set: &BTreeSet<String>, id: &str) -> bool {
     match id.strip_suffix('*') {
         Some(prefix) => set.iter().any(|s| s.starts_with(prefix)),
@@ -213,6 +237,7 @@ pub fn summarize(doc: &Doc) -> (Vec<(String, Counts)>, Counts) {
         if sections.last().is_none_or(|(s, _)| *s != r.section) {
             sections.push((r.section.clone(), Counts::default()));
         }
+        #[allow(clippy::expect_used)] // either non-empty above or a section was just pushed
         sections.last_mut().expect("pushed").1.add(r);
         total.add(r);
     }
@@ -298,6 +323,45 @@ pub fn check_gaps(md: &str) -> Vec<String> {
     problems
 }
 
+/// The header's `**Changes:**` field: only this link.
+const CHANGES_LINK: &str = "**Changes:** [revision history](#revision-history)";
+
+/// A doc whose header (the lines before its first `## ` heading) carries a `Last updated` date or a
+/// change note (a `Change` field, or a `Changes` field holding more than [`CHANGES_LINK`], or followed by another field): every
+/// PR that touches the doc would edit that one line and conflict with every other open PR. Changes
+/// go in the doc's `## Revision history` table instead.
+pub fn check_header(path: &str, md: &str) -> Option<String> {
+    let (i, _) = md.lines().enumerate().take_while(|(_, l)| !l.starts_with("## ")).find(|(_, l)| {
+        l.contains("**Last updated:**") || l.contains("**Change:**") || {
+            // The `Changes` field must be exactly the link, and the line's last field: text after
+            // it (`… · 2026-11-05: gap closed`) is a change note too.
+            let fields: Vec<&str> = l.split(" · ").map(|f| f.trim_start_matches("> ").trim()).collect();
+            fields.iter().enumerate().any(|(i, f)| f.starts_with("**Changes:**") && (*f != CHANGES_LINK || i + 1 < fields.len()))
+        }
+    })?;
+    Some(format!(
+        "{path}:{}: the header has a `Last updated` date or a change note: keep `{CHANGES_LINK}` there and add a row to the doc's revision history instead",
+        i + 1
+    ))
+}
+
+fn check_headers(root: &Path) -> Result<Vec<String>, String> {
+    let mut files: Vec<String> = std::fs::read_dir(root.join("docs"))
+        .map_err(|e| format!("docs: {e}"))?
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|n| n.ends_with(".md"))
+        .map(|n| format!("docs/{n}"))
+        .collect();
+    files.sort();
+    files.push("ROADMAP.md".into());
+    let mut problems = Vec::new();
+    for f in files {
+        let md = std::fs::read_to_string(root.join(&f)).map_err(|e| format!("{f}: {e}"))?;
+        problems.extend(check_header(&f, &md));
+    }
+    Ok(problems)
+}
+
 fn registry(what: &str) -> Result<BTreeSet<String>, String> {
     let out = crate::cargo()
         .args(["run", "-q", "-p", "lightcraft-cli", "--", what, "--json"])
@@ -314,7 +378,7 @@ pub fn run(root: &Path, write: bool) -> Result<(), String> {
     let path = root.join(DOC);
     let md = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let doc = parse(&md);
-    let menus = std::fs::read_to_string(root.join("crates/ui-egui/src/menus.rs")).map_err(|e| format!("menus.rs: {e}"))?;
+    let menus = menu_sources(&root.join("crates/ui-egui/src"))?;
     let mut commands = registry("commands")?;
     commands.extend(ui_command_ids(&menus));
     let controls = registry("controls")?;
@@ -324,6 +388,7 @@ pub fn run(root: &Path, write: bool) -> Result<(), String> {
     });
     let gaps = std::fs::read_to_string(root.join(GAPS)).map_err(|e| format!("{GAPS}: {e}"))?;
     problems.extend(check_gaps(&gaps));
+    problems.extend(check_headers(root)?);
 
     let table = summary_table(&doc);
     println!("Lightroom parity ({DOC}): {} rows, {} references\n", doc.rows.len(), doc.refs.len());
@@ -449,6 +514,22 @@ old
     }
 
     #[test]
+    fn header_without_dates_or_change_notes() {
+        let ok = "# Doc\n\n> **Last reviewed:** 2026-10-10 · **Changes:** [revision history](#revision-history)\n\n## A\n\n**Change:** in the body is fine\n";
+        assert_eq!(check_header("docs/a.md", ok), None);
+        let dated = "# Doc\n\n> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05\n\n## A\n";
+        assert!(check_header("docs/a.md", dated).is_some_and(|p| p.starts_with("docs/a.md:3: ")));
+        let noted = "# Doc\n> **Change:** minor (x)\n";
+        assert!(check_header("docs/b.md", noted).is_some_and(|p| p.starts_with("docs/b.md:2: ")));
+        let in_link = "# Doc\n> **Changes:** [revision history](#revision-history) (2026-11-05: x)\n";
+        assert!(check_header("docs/c.md", in_link).is_some_and(|p| p.starts_with("docs/c.md:2: ")));
+        let trailing = "# Doc\n> **Changes:** [revision history](#revision-history) · 2026-11-05: gap closed\n";
+        assert!(check_header("docs/e.md", trailing).is_some_and(|p| p.starts_with("docs/e.md:2: ")));
+        let instead = "# Doc\n> **Last reviewed:** 2026-10-10 · **Changes:** minor (x)\n";
+        assert!(check_header("docs/d.md", instead).is_some());
+    }
+
+    #[test]
     fn collects_references_everywhere() {
         let d = parse(SAMPLE);
         let refs: Vec<&Ref> = d.refs.iter().map(|(_, r)| r).collect();
@@ -510,8 +591,8 @@ old
     /// The real menu tables: both are found, so every language command is a known id.
     #[test]
     fn reads_the_language_commands_from_menus_rs() {
-        let menus = include_str!("../../crates/ui-egui/src/menus.rs");
-        let ids = ui_command_ids(menus);
+        let ui_src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/ui-egui/src");
+        let ids = ui_command_ids(&menu_sources(&ui_src).unwrap());
         for id in ["view.detail", "app.language.english", "app.language.japanese", "app.language.simplifiedChinese", "app.language.portuguese"] {
             assert!(ids.iter().any(|known| known == id), "{id} not found");
         }

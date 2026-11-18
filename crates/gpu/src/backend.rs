@@ -12,6 +12,9 @@
 //!   (the platform default), or `off` (no GPU compute; the window still needs one backend and
 //!   keeps the platform default);
 //! - else `WGPU_BACKEND` (wgpu's own variable, same names) for both the window and compute.
+//! - `LIGHTCRAFT_GPU_ADAPTER` = (part of) a graphics card's name, any case (`4070`): the card for
+//!   the compute devices — the render device, the denoise network's, the face detector's
+//!   ([`pick_adapter`]). The window stays on the card that drives the screen.
 //!
 //! Backends this build doesn't contain (e.g. `gl`: the GL backend isn't compiled in) are ignored
 //! with a warning and the platform default is used.
@@ -166,6 +169,173 @@ pub fn instance_flags_from_env(flags: wgpu::InstanceFlags) -> wgpu::InstanceFlag
     instance_flags(flags, std::env::var("WGPU_VALIDATION_INDIRECT_CALL").ok().as_deref())
 }
 
+/// The graphics card `LIGHTCRAFT_GPU_ADAPTER` asks for: (part of) its name, trimmed and in lower
+/// case; `None` when it is unset or blank.
+pub fn wanted_adapter() -> Option<String> {
+    wanted_adapter_from(std::env::var("LIGHTCRAFT_GPU_ADAPTER").ok().as_deref())
+}
+
+/// [`wanted_adapter`] from the variable's value `env`.
+pub fn wanted_adapter_from(env: Option<&str>) -> Option<String> {
+    env.map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty())
+}
+
+/// Whether the adapter called `name` is the one `wanted` asks for: `wanted` is part of its name,
+/// ignoring case (`4070` matches "NVIDIA GeForce RTX 4070 SUPER").
+pub fn adapter_name_matches(wanted: &str, name: &str) -> bool {
+    let wanted = wanted.trim().to_lowercase();
+    !wanted.is_empty() && name.to_lowercase().contains(&wanted)
+}
+
+/// One adapter as [`choose_named_adapter`] sees it, in wgpu's order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Candidate<'a> {
+    pub name: &'a str,
+    /// Order among several matching cards, lower first ([`kind_rank`]).
+    pub rank: u8,
+    /// A software renderer (WARP, llvmpipe): never picked, the CPU pipeline is faster.
+    pub software: bool,
+}
+
+impl<'a> Candidate<'a> {
+    /// A candidate from an adapter's name and kind.
+    pub fn of(name: &'a str, kind: wgpu::DeviceType) -> Candidate<'a> {
+        Candidate { name, rank: kind_rank(kind), software: kind == wgpu::DeviceType::Cpu }
+    }
+}
+
+/// The order among cards that all match: dedicated, built-in, virtual, other, software.
+pub fn kind_rank(kind: wgpu::DeviceType) -> u8 {
+    match kind {
+        wgpu::DeviceType::DiscreteGpu => 0,
+        wgpu::DeviceType::IntegratedGpu => 1,
+        wgpu::DeviceType::VirtualGpu => 2,
+        wgpu::DeviceType::Other => 3,
+        wgpu::DeviceType::Cpu => 4,
+    }
+}
+
+/// What a `LIGHTCRAFT_GPU_ADAPTER` name picks among the candidates ([`choose_named_adapter`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NamedChoice {
+    /// The card used (the first of `matches`), `None`: the default choice.
+    pub index: Option<usize>,
+    /// Every hardware card whose name matches, in the defined order.
+    pub matches: Vec<usize>,
+    /// Software renderers whose name matches (never used).
+    pub software: Vec<usize>,
+}
+
+/// Which of `candidates` (in wgpu's order) `wanted` picks: of the hardware cards whose name
+/// contains it (any case), the one whose whole name it is, then dedicated before built-in before
+/// virtual cards ([`kind_rank`]), then wgpu's order. Software renderers are never picked.
+pub fn choose_named_adapter(wanted: &str, candidates: &[Candidate<'_>]) -> NamedChoice {
+    let w = wanted.trim().to_lowercase();
+    let hits = || candidates.iter().enumerate().filter(|(_, c)| adapter_name_matches(&w, c.name));
+    let software: Vec<usize> = hits().filter(|(_, c)| c.software).map(|(i, _)| i).collect();
+    let mut ranked: Vec<(bool, u8, usize)> =
+        hits().filter(|(_, c)| !c.software).map(|(i, c)| (c.name.trim().to_lowercase() != w, c.rank, i)).collect();
+    // (the index last: equal ones keep wgpu's order)
+    ranked.sort_unstable();
+    let matches: Vec<usize> = ranked.into_iter().map(|(_, _, i)| i).collect();
+    NamedChoice { index: matches.first().copied(), matches, software }
+}
+
+/// The log line for `choice` (warning: `true`): which card the name picked and why, or why none.
+pub fn named_choice_note(wanted: &str, choice: &NamedChoice, candidates: &[Candidate<'_>]) -> (bool, String) {
+    let name = |i: &usize| candidates.get(*i).map_or("?", |c| c.name);
+    let list = |v: &[usize]| v.iter().map(name).collect::<Vec<_>>().join(", ");
+    match (choice.index, choice.matches.len()) {
+        (Some(i), 1) => (false, format!("gpu: LIGHTCRAFT_GPU_ADAPTER={wanted}: using {}", name(&i))),
+        (Some(i), n) => (
+            false,
+            format!(
+                "gpu: LIGHTCRAFT_GPU_ADAPTER={wanted} matches {n} graphics cards ({}): using {} (a card's whole name first, then dedicated before built-in cards, then the system's order); give more of the name to pick another",
+                list(&choice.matches),
+                name(&i)
+            ),
+        ),
+        (None, _) if !choice.software.is_empty() => (
+            true,
+            format!(
+                "gpu: LIGHTCRAFT_GPU_ADAPTER={wanted} names only a software renderer ({}), never used: the processor is faster; using the default choice",
+                list(&choice.software)
+            ),
+        ),
+        (None, _) => {
+            let all: Vec<&str> = candidates.iter().map(|c| c.name).collect();
+            (true, format!("gpu: LIGHTCRAFT_GPU_ADAPTER={wanted} names none of the graphics cards ({}); using the default choice", all.join(", ")))
+        }
+    }
+}
+
+/// Lines already logged by [`log_once`] (each device that picks a card asks again).
+static LOGGED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Log `line` (as a warning when `warn`) the first time only; whether it was logged now.
+pub fn log_once(warn: bool, line: &str) -> bool {
+    let mut seen = LOGGED.lock().unwrap_or_else(|e| e.into_inner());
+    if seen.iter().any(|l| l == line) {
+        return false;
+    }
+    // (a handful of distinct lines in a run; the cap only bounds a pathological caller)
+    if seen.len() < 64 {
+        seen.push(line.to_string());
+    }
+    if warn {
+        log::warn!("{line}");
+    } else {
+        log::info!("{line}");
+    }
+    true
+}
+
+/// Which of `adapters` (name and kind, in wgpu's order) `wanted` picks ([`choose_named_adapter`]).
+pub fn find_named_adapter<'a>(wanted: &str, adapters: impl IntoIterator<Item = (&'a str, wgpu::DeviceType)>) -> Option<usize> {
+    let candidates: Vec<Candidate<'a>> = adapters.into_iter().map(|(n, k)| Candidate::of(n, k)).collect();
+    choose_named_adapter(wanted, &candidates).index
+}
+
+/// The adapter for a compute device (the render device, the denoise network's, the face detector's)
+/// on `instance` with `backends`: the card `LIGHTCRAFT_GPU_ADAPTER` names, else the
+/// high-performance one. A name that matches no card is logged (once) and the high-performance one
+/// is used; never a panic. Each device makes its own instance and device on the card, so two
+/// devices never share a buffer, pipeline or queue.
+pub fn pick_adapter(instance: &wgpu::Instance, backends: Backends) -> Result<wgpu::Adapter, String> {
+    pick_adapter_named(instance, backends, wanted_adapter().as_deref())
+}
+
+/// [`pick_adapter`] for an explicit `wanted` name (part of it, any case) instead of the variable's.
+pub fn pick_adapter_named(instance: &wgpu::Instance, backends: Backends, wanted: Option<&str>) -> Result<wgpu::Adapter, String> {
+    if let Some(w) = wanted {
+        let all = pollster::block_on(instance.enumerate_adapters(backends));
+        let infos: Vec<wgpu::AdapterInfo> = all.iter().map(|a| a.get_info()).collect();
+        let candidates: Vec<Candidate<'_>> = infos.iter().map(|i| Candidate::of(&i.name, i.device_type)).collect();
+        let choice = choose_named_adapter(w, &candidates);
+        let (warn, line) = named_choice_note(w, &choice, &candidates);
+        log_once(warn, &line);
+        if let Some(adapter) = choice.index.and_then(|i| all.into_iter().nth(i)) {
+            return Ok(adapter);
+        }
+    }
+    pollster::block_on(
+        instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() }),
+    )
+    .map_err(|e| format!("no GPU adapter among {backends:?} ({e})"))
+}
+
+/// Whether the render device may share the window's device (adapter `window_adapter`): yes unless
+/// `LIGHTCRAFT_GPU_ADAPTER` names another card, which then renders on a device of its own (the
+/// window stays on the card that drives the screen; renders come back as pixels).
+pub fn may_adopt_window_device(window_adapter: &str) -> bool {
+    may_adopt_window_device_for(wanted_adapter().as_deref(), window_adapter)
+}
+
+/// [`may_adopt_window_device`] for an explicit `wanted` name.
+pub fn may_adopt_window_device_for(wanted: Option<&str>, window_adapter: &str) -> bool {
+    wanted.is_none_or(|w| adapter_name_matches(w, window_adapter))
+}
+
 /// `LIGHTCRAFT_GPU_BACKEND=off`.
 pub(crate) fn env_off() -> bool {
     env_choice() == BackendChoice::Off
@@ -306,8 +476,10 @@ pub fn forced_window_renderer(app: Option<&str>, wgpu: Option<&str>) -> Option<W
 
 /// The order in which the window's renderers are tried on `os`: the forced one (environment)
 /// first, then the one remembered from the last good start, then the platform chain — on Windows
-/// DX12, Vulkan, GL, then glow. DX12 stays first: with Vulkan loaded, a broken Vulkan driver can
-/// crash the process uncatchably (issue #136), so Vulkan is touched only after DX12 failed.
+/// DX12, GL, then glow. On Windows Vulkan is used only when the environment asks for it: with
+/// Vulkan loaded, a broken Vulkan driver can crash the process uncatchably (issue #136), so it is
+/// never in the automatic chain, and the renderer remembered from the last run cannot put it
+/// first either.
 /// `failed` (the renderer the last start died in) goes last, as a last resort only. Backends not
 /// in `compiled`, and glow without `glow`, are left out; the list is never empty.
 pub fn window_renderer_order(
@@ -319,7 +491,8 @@ pub fn window_renderer_order(
     glow: bool,
 ) -> Vec<WindowRenderer> {
     let platform = match os {
-        "windows" => vec![Backends::DX12, Backends::VULKAN, Backends::GL],
+        // no Vulkan on Windows: its driver can crash the process uncatchably (issue #136)
+        "windows" => vec![Backends::DX12, Backends::GL],
         "macos" | "ios" => vec![Backends::METAL],
         _ => vec![Backends::VULKAN, Backends::GL],
     };
@@ -329,7 +502,15 @@ pub fn window_renderer_order(
         WindowRenderer::Wgpu(b) => !b.is_empty() && compiled.contains(*b),
     };
     let not_failed = |r: &WindowRenderer| Some(*r) != failed;
-    let candidates = forced.into_iter().chain(remembered.filter(not_failed)).chain(chain.filter(not_failed)).chain(failed);
+    // On Windows the Vulkan driver is loaded only when the environment asks for it (the forced
+    // renderer): a broken one crashes the process uncatchably (issue #136). So neither the
+    // renderer remembered from the last run nor the one the last start died in can bring it back.
+    let no_vulkan = |r: &WindowRenderer| os != "windows" || !matches!(r, WindowRenderer::Wgpu(b) if b.contains(Backends::VULKAN));
+    let candidates = forced
+        .into_iter()
+        .chain(remembered.filter(|r| not_failed(r) && no_vulkan(r)))
+        .chain(chain.filter(not_failed))
+        .chain(failed.filter(no_vulkan));
     let mut out: Vec<WindowRenderer> = Vec::new();
     for r in candidates {
         if usable(&r) && !out.contains(&r) {
@@ -410,6 +591,97 @@ mod tests {
         }
     }
 
+    /// `LIGHTCRAFT_GPU_ADAPTER` picks a card by part of its name, any case; software adapters never.
+    #[test]
+    fn gpu_adapter_variable_matches_part_of_the_card_name() {
+        use wgpu::DeviceType::{Cpu, DiscreteGpu, IntegratedGpu};
+        assert_eq!(wanted_adapter_from(None), None);
+        assert_eq!(wanted_adapter_from(Some("  ")), None);
+        assert_eq!(wanted_adapter_from(Some(" RTX 4070 ")).as_deref(), Some("rtx 4070"));
+        assert!(adapter_name_matches("4070", "NVIDIA GeForce RTX 4070 SUPER"));
+        assert!(adapter_name_matches("geforce rtx 4070 super", "NVIDIA GeForce RTX 4070 SUPER"));
+        assert!(adapter_name_matches(" Super ", "NVIDIA GeForce RTX 4070 SUPER"));
+        assert!(!adapter_name_matches("4070", "NVIDIA GeForce RTX 5070"));
+        assert!(!adapter_name_matches("", "NVIDIA GeForce RTX 5070"), "a blank name matches nothing");
+        // two cards: the screen's card first in wgpu's order, as here
+        let two = [("NVIDIA GeForce RTX 5070", DiscreteGpu), ("NVIDIA GeForce RTX 4070 SUPER", DiscreteGpu), ("Microsoft Basic Render Driver", Cpu)];
+        assert_eq!(find_named_adapter("4070", two), Some(1));
+        assert_eq!(find_named_adapter("5070", two), Some(0));
+        // "070" is in both: the first one in wgpu's order
+        assert_eq!(find_named_adapter("070", two), Some(0));
+        assert_eq!(find_named_adapter("radeon", two), None, "no match: the caller falls back to the default choice");
+        assert_eq!(find_named_adapter("basic render", two), None, "a software adapter is never picked");
+        assert_eq!(find_named_adapter("intel", [("Intel(R) UHD Graphics 770", IntegratedGpu)]), Some(0));
+        assert_eq!(find_named_adapter("4070", [] as [(&str, wgpu::DeviceType); 0]), None);
+    }
+
+    /// A fake adapter list (a laptop: built-in card first, a dedicated one, WARP; and two of a
+    /// kind): no match, several matches, software, and the one log line each gives.
+    #[test]
+    fn a_fake_adapter_list_picks_in_a_defined_order() {
+        use wgpu::DeviceType::{Cpu, DiscreteGpu, IntegratedGpu, VirtualGpu};
+        let laptop = [
+            Candidate::of("Intel(R) Iris(R) Xe Graphics", IntegratedGpu),
+            Candidate::of("NVIDIA GeForce RTX 4060 Laptop GPU", DiscreteGpu),
+            Candidate::of("Microsoft Basic Render Driver", Cpu),
+        ];
+        // no match: the default choice, and a warning that lists the cards
+        let none = choose_named_adapter("radeon", &laptop);
+        assert_eq!(none, NamedChoice::default());
+        let (warn, line) = named_choice_note("radeon", &none, &laptop);
+        assert!(warn && line.contains("names none") && line.contains("RTX 4060 Laptop GPU") && line.contains("default choice"), "{line}");
+        // several: dedicated before built-in although the built-in card comes first in wgpu's order
+        let g = choose_named_adapter("g", &laptop);
+        assert_eq!((g.index, g.matches.clone()), (Some(1), vec![1, 0]));
+        let (warn, line) = named_choice_note("g", &g, &laptop);
+        assert!(!warn && line.contains("matches 2") && line.contains("using NVIDIA GeForce RTX 4060 Laptop GPU"), "{line}");
+        // one: says which
+        let one = choose_named_adapter("iris", &laptop);
+        assert_eq!(one.index, Some(0));
+        assert_eq!(
+            named_choice_note("iris", &one, &laptop),
+            (false, "gpu: LIGHTCRAFT_GPU_ADAPTER=iris: using Intel(R) Iris(R) Xe Graphics".to_string())
+        );
+        // a software renderer: never, and the warning says so
+        let warp = choose_named_adapter("basic render", &laptop);
+        assert_eq!((warp.index, warp.software.clone()), (None, vec![2]));
+        let (warn, line) = named_choice_note("basic render", &warp, &laptop);
+        assert!(warn && line.contains("only a software renderer"), "{line}");
+        // a card's whole name beats a longer name that contains it, wherever it is listed
+        let twins = [
+            Candidate::of("NVIDIA GeForce RTX 4070 SUPER", DiscreteGpu),
+            Candidate::of("NVIDIA GeForce RTX 4070", DiscreteGpu),
+            Candidate::of("Virtual RTX 4070", VirtualGpu),
+        ];
+        assert_eq!(choose_named_adapter("nvidia geforce rtx 4070", &twins).matches, vec![1, 0]);
+        // same kind: wgpu's order; virtual after dedicated
+        assert_eq!(choose_named_adapter("4070", &twins).matches, vec![0, 1, 2]);
+        // the same card on two backends (Vulkan and GL on Linux): the first listed
+        let both = [Candidate::of("AMD Radeon RX 7800 XT", DiscreteGpu), Candidate::of("AMD Radeon RX 7800 XT", DiscreteGpu)];
+        assert_eq!(choose_named_adapter("7800", &both).index, Some(0));
+        assert_eq!(choose_named_adapter("7800", &[]), NamedChoice::default());
+    }
+
+    /// The render device, the denoise network's and the face detector's each ask for a card: the
+    /// line about it is logged once, not three times.
+    #[test]
+    fn a_choice_is_logged_once() {
+        let line = "gpu: LIGHTCRAFT_GPU_ADAPTER=test-only-name names none of the graphics cards (); using the default choice";
+        assert!(log_once(true, line));
+        assert!(!log_once(true, line));
+        assert!(!log_once(false, line));
+        assert!(log_once(true, &format!("{line} (another)")));
+    }
+
+    /// The render device shares the window's device only when the variable names the window's card.
+    #[test]
+    fn window_device_is_adopted_only_for_the_wanted_card() {
+        assert!(may_adopt_window_device_for(None, "NVIDIA GeForce RTX 5070"));
+        assert!(may_adopt_window_device_for(Some("5070"), "NVIDIA GeForce RTX 5070"));
+        assert!(!may_adopt_window_device_for(Some("4070"), "NVIDIA GeForce RTX 5070"));
+        assert!(may_adopt_window_device_for(Some("4070"), "NVIDIA GeForce RTX 4070 SUPER"));
+    }
+
     #[test]
     fn resolves_against_the_build() {
         let compiled = Backends::DX12 | Backends::VULKAN;
@@ -427,6 +699,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lc-gpu-marker-{}", std::process::id()));
         let m = dir.join("gpu-init.marker");
         let _ = std::fs::remove_dir_all(&dir);
+        // exclusive: a directory planted at this predictable name fails the test instead of receiving the marker
+        std::fs::create_dir(&dir).unwrap();
         // a local scope counter: other tests create real devices through the process-wide one
         let active = Mutex::new(0);
         let seen = with_marker_on(Some(m.clone()), &active, "device creation", || m.exists());
@@ -447,6 +721,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lc-gpu-global-{}", std::process::id()));
         let m = dir.join("gpu-init.marker");
         let _ = std::fs::remove_dir_all(&dir);
+        // exclusive: a directory planted at this predictable name fails the test instead of receiving the marker
+        std::fs::create_dir(&dir).unwrap();
         set_init_marker(Some(m.clone()));
         let seen = with_init_marker(Backends::DX12, || m.exists());
         set_init_marker(None);
@@ -457,27 +733,51 @@ mod tests {
     }
 
     /// The window's renderer fallback: forced, remembered, the platform chain, the failed one last.
+    /// On Windows Vulkan is not in the chain (issue #136) — see
+    /// `windows_never_uses_vulkan_unless_it_is_asked_for`.
     #[test]
     fn window_renderer_fallback_order() {
         use WindowRenderer::{Glow, Wgpu};
         let all = Backends::DX12 | Backends::VULKAN | Backends::GL | Backends::METAL;
         let (dx, vk, gl) = (Wgpu(Backends::DX12), Wgpu(Backends::VULKAN), Wgpu(Backends::GL));
-        assert_eq!(window_renderer_order(None, None, None, "windows", all, true), [dx, vk, gl, Glow]);
-        assert_eq!(window_renderer_order(None, None, None, "windows", all, false), [dx, vk, gl]);
+        assert_eq!(window_renderer_order(None, None, None, "windows", all, true), [dx, gl, Glow]);
+        assert_eq!(window_renderer_order(None, None, None, "windows", all, false), [dx, gl]);
         // a build without GL
-        assert_eq!(window_renderer_order(None, None, None, "windows", Backends::DX12 | Backends::VULKAN, true), [dx, vk, Glow]);
+        assert_eq!(window_renderer_order(None, None, None, "windows", Backends::DX12 | Backends::VULKAN, true), [dx, Glow]);
         // remembered from the last good start goes first
-        assert_eq!(window_renderer_order(None, Some(vk), None, "windows", all, true), [vk, dx, gl, Glow]);
+        assert_eq!(window_renderer_order(None, Some(gl), None, "windows", all, true), [gl, dx, Glow]);
         // the environment wins over the remembered one
-        assert_eq!(window_renderer_order(Some(gl), Some(vk), None, "windows", all, true), [gl, vk, dx, Glow]);
+        assert_eq!(window_renderer_order(Some(gl), Some(dx), None, "windows", all, true), [gl, dx, Glow]);
         assert_eq!(window_renderer_order(Some(Glow), None, None, "windows", all, true)[0], Glow);
         // the last start died in DX12: tried last only (also when it was remembered)
-        assert_eq!(window_renderer_order(None, Some(dx), Some(dx), "windows", all, true), [vk, gl, Glow, dx]);
+        assert_eq!(window_renderer_order(None, Some(dx), Some(dx), "windows", all, true), [gl, Glow, dx]);
         // a forced backend that is not in the build is skipped
         assert_eq!(window_renderer_order(Some(Wgpu(Backends::METAL)), None, None, "windows", Backends::DX12, false), [dx]);
         // never empty
         assert!(!window_renderer_order(None, None, None, "windows", Backends::empty(), false).is_empty());
         assert_eq!(window_renderer_order(None, None, None, "macos", all, true), [Wgpu(Backends::METAL), Glow]);
+        // Vulkan is asked for on Windows: it is used
+        assert_eq!(window_renderer_order(Some(vk), None, None, "windows", all, true), [vk, dx, gl, Glow]);
+    }
+
+    /// Issue #136: on Windows the Vulkan driver is never loaded unless it is asked for — a
+    /// broken one crashes the process uncatchably. The renderer remembered from the last run
+    /// must not put Vulkan before DX12 either.
+    #[test]
+    fn windows_never_uses_vulkan_unless_it_is_asked_for() {
+        let all = Backends::DX12 | Backends::VULKAN | Backends::GL | Backends::METAL;
+        let dx = WindowRenderer::Wgpu(Backends::DX12);
+        let vk = WindowRenderer::Wgpu(Backends::VULKAN);
+        // the automatic chain: DX12 first, no Vulkan in it
+        let automatic = window_renderer_order(None, None, None, "windows", all, true);
+        assert!(!automatic.contains(&vk), "the automatic Windows chain must not contain Vulkan: {automatic:?}");
+        assert_eq!(automatic.first(), Some(&dx));
+        // the renderer remembered from the last run does not put Vulkan first either
+        let remembered = window_renderer_order(None, Some(vk), None, "windows", all, true);
+        assert!(!remembered.contains(&vk), "a remembered Vulkan must not be tried: {remembered:?}");
+        assert_eq!(remembered.first(), Some(&dx));
+        // asked for explicitly (the environment), Vulkan is used
+        assert_eq!(window_renderer_order(Some(vk), None, None, "windows", all, true).first(), Some(&vk));
     }
 
     #[test]
@@ -501,6 +801,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lc-gpu-scopes-{}", std::process::id()));
         let m = dir.join("gpu-init.marker");
         let _ = std::fs::remove_dir_all(&dir);
+        // exclusive: a directory planted at this predictable name fails the test instead of receiving the marker
+        std::fs::create_dir(&dir).unwrap();
         let active = Mutex::new(0);
         arm(&m, &active, "device creation");
         assert!(read_init_marker(&m).unwrap().contains("device creation"));
@@ -524,6 +826,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lc-gpu-panic-{}", std::process::id()));
         let m = dir.join("gpu-init.marker");
         let _ = std::fs::remove_dir_all(&dir);
+        // exclusive: a directory planted at this predictable name fails the test instead of receiving the marker
+        std::fs::create_dir(&dir).unwrap();
         let active = Mutex::new(0);
         let r = std::panic::catch_unwind(|| with_marker_on(Some(m.clone()), &active, "kernel compilation", || panic!("compile")));
         assert!(r.is_err());

@@ -2,10 +2,10 @@
 //! bit-exact decoder round-trip tests. The raw image is stored in IFD0 (allowed by DNG 1.7 §"File Structure").
 
 use crate::{RawData, RawError, RawImage, Result, ljpeg, opcodes};
+use craft_tiff::tags::{self as t, compression, photometric};
+use craft_tiff::writer::{rational, srational};
+use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
 use lightcraft_color::Mat3;
-use lightcraft_tiff::tags::{self as t, compression, photometric};
-use lightcraft_tiff::writer::{rational, srational};
-use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
 use rayon::prelude::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -284,48 +284,8 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     if let Some(v) = c.baseline_sharpness {
         ifd.set(t::BASELINE_SHARPNESS, rat_vec(&[v]));
     }
-    // the source's own profile look travels with its data (conversions, smart previews, merges)
-    let p = &c.profile;
-    let table_tags = |ifd: &mut IfdBuilder, table: &crate::profile::HsvTable, dims: u16, enc: u16| {
-        ifd.set(dims, Value::Long(vec![table.hue_divisions as u32, table.sat_divisions as u32, table.val_divisions as u32]));
-        if table.srgb_value {
-            ifd.set(enc, Value::Long(vec![1]));
-        }
-    };
-    let flat = |table: &crate::profile::HsvTable| Value::Float(table.data.iter().flatten().copied().collect());
-    match &p.hue_sat_map {
-        [Some(a), b] => {
-            table_tags(&mut ifd, a, t::PROFILE_HUE_SAT_MAP_DIMS, t::PROFILE_HUE_SAT_MAP_ENCODING);
-            ifd.set(t::PROFILE_HUE_SAT_MAP_DATA_1, flat(a));
-            if let Some(b) =
-                b.as_ref().filter(|b| (b.hue_divisions, b.sat_divisions, b.val_divisions) == (a.hue_divisions, a.sat_divisions, a.val_divisions))
-            {
-                ifd.set(t::PROFILE_HUE_SAT_MAP_DATA_2, flat(b));
-            }
-        }
-        [None, Some(b)] => {
-            table_tags(&mut ifd, b, t::PROFILE_HUE_SAT_MAP_DIMS, t::PROFILE_HUE_SAT_MAP_ENCODING);
-            ifd.set(t::PROFILE_HUE_SAT_MAP_DATA_1, flat(b));
-        }
-        [None, None] => {}
-    }
-    if let Some(l) = &p.look_table {
-        table_tags(&mut ifd, l, t::PROFILE_LOOK_TABLE_DIMS, t::PROFILE_LOOK_TABLE_ENCODING);
-        ifd.set(t::PROFILE_LOOK_TABLE_DATA, flat(l));
-    }
-    if let Some(curve) = &p.tone_curve {
-        ifd.set(t::PROFILE_TONE_CURVE, Value::Float(curve.points.iter().flatten().copied().collect()));
-    }
-    if let Some(map) = &p.gain_table_map {
-        // the raw IFD is IFD 0 here, where both tag versions are valid
-        let (version2, bytes) = map.to_bytes(opts.order);
-        ifd.set(if version2 { t::PROFILE_GAIN_TABLE_MAP_2 } else { t::PROFILE_GAIN_TABLE_MAP }, Value::Undefined(bytes));
-    }
-    for (list, tag) in [(&raw.opcodes.list1, t::OPCODE_LIST_1), (&raw.opcodes.list2, t::OPCODE_LIST_2), (&raw.opcodes.list3, t::OPCODE_LIST_3)] {
-        if !list.is_empty() {
-            ifd.set(tag, Value::Undefined(opcodes::write_list(list)));
-        }
-    }
+    write_profile_tags(&mut ifd, raw, opts.order);
+    write_opcode_tags(&mut ifd, raw);
 
     match (&raw.data, opts.compression) {
         (RawData::F32(v), DngCompression::Deflate { tile, half }) => {
@@ -397,10 +357,10 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
                             }
                         }
                     }
-                    let mut out = Vec::new();
-                    jpeg_encoder::Encoder::new(&mut out, quality)
-                        .encode(&buf, tile as u16, tile as u16, jpeg_encoder::ColorType::Rgb)
-                        .map(|()| out)
+                    let ic_img = craft_image_codecs::Image::from_u8(tile as u32, tile as u32, craft_image_codecs::ChannelLayout::Rgb, buf)
+                        .map_err(|e| RawError::Corrupt(format!("lossy JPEG tile: {e}")))?;
+                    let opts = craft_image_codecs::EncodeOptions { jpeg_quality: quality, ..Default::default() };
+                    craft_image_codecs::encode(&ic_img, craft_image_codecs::Format::Jpeg, &opts)
                         .map_err(|e| RawError::Corrupt(format!("lossy JPEG tile: {e}")))
                 })
                 .collect::<Result<_>>()?;
@@ -493,6 +453,54 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
         }
     }
     Ok(TiffWriter::new(opts.order, false).write(&[ifd])?)
+}
+
+fn write_profile_tags(ifd: &mut IfdBuilder, raw: &RawImage, order: ByteOrder) {
+    // The source's own profile look travels with its data (conversions, smart previews, merges).
+    let profile = &raw.color.profile;
+    let table_tags = |ifd: &mut IfdBuilder, table: &crate::profile::HsvTable, dims: u16, enc: u16| {
+        ifd.set(dims, Value::Long(vec![table.hue_divisions as u32, table.sat_divisions as u32, table.val_divisions as u32]));
+        if table.srgb_value {
+            ifd.set(enc, Value::Long(vec![1]));
+        }
+    };
+    let flat = |table: &crate::profile::HsvTable| Value::Float(table.data.iter().flatten().copied().collect());
+    match &profile.hue_sat_map {
+        [Some(first), second] => {
+            table_tags(ifd, first, t::PROFILE_HUE_SAT_MAP_DIMS, t::PROFILE_HUE_SAT_MAP_ENCODING);
+            ifd.set(t::PROFILE_HUE_SAT_MAP_DATA_1, flat(first));
+            if let Some(second) = second.as_ref().filter(|second| {
+                (second.hue_divisions, second.sat_divisions, second.val_divisions) == (first.hue_divisions, first.sat_divisions, first.val_divisions)
+            }) {
+                ifd.set(t::PROFILE_HUE_SAT_MAP_DATA_2, flat(second));
+            }
+        }
+        [None, Some(table)] => {
+            table_tags(ifd, table, t::PROFILE_HUE_SAT_MAP_DIMS, t::PROFILE_HUE_SAT_MAP_ENCODING);
+            ifd.set(t::PROFILE_HUE_SAT_MAP_DATA_1, flat(table));
+        }
+        [None, None] => {}
+    }
+    if let Some(table) = &profile.look_table {
+        table_tags(ifd, table, t::PROFILE_LOOK_TABLE_DIMS, t::PROFILE_LOOK_TABLE_ENCODING);
+        ifd.set(t::PROFILE_LOOK_TABLE_DATA, flat(table));
+    }
+    if let Some(curve) = &profile.tone_curve {
+        ifd.set(t::PROFILE_TONE_CURVE, Value::Float(curve.points.iter().flatten().copied().collect()));
+    }
+    if let Some(map) = &profile.gain_table_map {
+        // The raw IFD is IFD 0 here, where both tag versions are valid.
+        let (version2, bytes) = map.to_bytes(order);
+        ifd.set(if version2 { t::PROFILE_GAIN_TABLE_MAP_2 } else { t::PROFILE_GAIN_TABLE_MAP }, Value::Undefined(bytes));
+    }
+}
+
+fn write_opcode_tags(ifd: &mut IfdBuilder, raw: &RawImage) {
+    for (list, tag) in [(&raw.opcodes.list1, t::OPCODE_LIST_1), (&raw.opcodes.list2, t::OPCODE_LIST_2), (&raw.opcodes.list3, t::OPCODE_LIST_3)] {
+        if !list.is_empty() {
+            ifd.set(tag, Value::Undefined(opcodes::write_list(list)));
+        }
+    }
 }
 
 /// Exif `LightSource` code of a white point the rendered DNG writer knows (D65 = 21, D50 = 23).
@@ -597,5 +605,8 @@ mod tests {
         assert_eq!(hostile, write_dng(&raw, &opts(2048)).expect("the cap itself writes"), "u32::MAX is clamped to the cap");
         assert_ne!(hostile, write_dng(&raw, &opts(256)).expect("a normal tile writes"), "the clamp is not a no-op");
         assert_eq!(crate::probe(&hostile), Some(RawFormat::Dng), "the clamped output is still a DNG");
+        // the writer's own padded tile (2048 × 2048 around an 8 × 8 image) reads back
+        let back = crate::decode(&hostile).expect("a tile this writer pads to decodes");
+        assert_eq!((back.width, back.height), (w, h));
     }
 }

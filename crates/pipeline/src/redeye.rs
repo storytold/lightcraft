@@ -142,6 +142,7 @@ pub fn resolve(src: &Rgb32f, eyes: &[RedEye], orientation: Orientation, frame: &
     }
     let to_out = frame.norm_to_out(w, h);
     eyes.iter()
+        .take(lightcraft_develop::MAX_RED_EYES)
         .map(|e| {
             let p = detect(src, orientation, frame.ow, frame.oh, e);
             let r = (p.radius * (0.5 + e.pupil_size.clamp(0.0, 100.0) / 100.0)).min(e.rx.max(e.ry) * 1.1);
@@ -244,6 +245,16 @@ mod tests {
         // nothing red: fallback
         let plain = eye_image(200, 100, 90.0, 52.0, 6.0, [0.03, 0.03, 0.03]);
         assert!(!detect(&plain, Orientation::Normal, 200.0, 100.0, &eye).found);
+    }
+
+    #[test]
+    fn at_most_max_red_eyes_render() {
+        // a sidecar, preset or agent can hold any number; each one costs a pass over every pixel (issue #2556)
+        let src = eye_image(40, 20, 18.0, 10.0, 2.0, [0.5, 0.04, 0.04]);
+        let s = lightcraft_develop::DevelopSettings { red_eye: vec![RedEye::default(); 10_000], ..Default::default() };
+        let frame = Frame::new(40, 20, &s, true);
+        let eyes = resolve(&src, &s.red_eye, Orientation::Normal, &frame, 40, 20, 40.0);
+        assert_eq!(eyes.len(), lightcraft_develop::MAX_RED_EYES);
     }
 
     #[test]
