@@ -599,7 +599,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Remove Face Box",
             [],
             None,
-            "{id?, index} — remove one face / pet region (by its position in the photo's regions) from the photo in the catalog; undoable. The XMP sidecar is never rewritten for this, even with auto-write on, so reading the metadata from the file brings the region back",
+            "{id?, index} — remove one face / pet region (by its position in the photo's regions) from the photo; undoable. With auto-write on, the sidecar of each changed original is rewritten (its `mwg-rs:Regions` and `Iptc4xmpExt:PersonInImage`)",
             always,
             |s, p| {
                 let id =
@@ -623,7 +623,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Resize Face Box",
             [],
             None,
-            "{id?, index, rect: {x0, y0, x1, y1}} — set one face / pet region's box (normalized, in the photo's upright frame; clamped to the photo, at least 0.5 % each way) in the catalog; undoable. Like photo.removeRegion it never rewrites the XMP sidecar",
+            "{id?, index, rect: {x0, y0, x1, y1}} — set one face / pet region's box (normalized, in the photo's upright frame; clamped to the photo, at least 0.5 % each way) ; undoable. With auto-write on, the sidecar of each changed original is rewritten (its `mwg-rs:Regions` and `Iptc4xmpExt:PersonInImage`)",
             always,
             |s, p| {
                 const C: &str = "photo.setRegion";

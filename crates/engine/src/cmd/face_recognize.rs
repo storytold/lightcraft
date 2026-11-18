@@ -1179,7 +1179,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Name Faces",
             [],
             None,
-            "{faces: [{photo, index}], name} → {named, photos} — name (or, with a null or empty name, clear) many face regions as one undoable step; the sidecar is not touched",
+            "{faces: [{photo, index}], name} → {named, photos} — name (or, with a null or empty name, clear) many face regions as one undoable step; with auto-write on, the sidecar of each changed original is rewritten (its `mwg-rs:Regions` and `Iptc4xmpExt:PersonInImage`)",
             super::always,
             name_faces
         ),
@@ -1197,7 +1197,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Name Face",
             [],
             None,
-            "{id?, index, name} — name a face region (null or empty clears it); undoable; the sidecar is not touched",
+            "{id?, index, name} — name a face region (null or empty clears it); undoable; with auto-write on, the sidecar of each changed original is rewritten (its `mwg-rs:Regions` and `Iptc4xmpExt:PersonInImage`)",
             super::always,
             set_name
         ),
@@ -1206,7 +1206,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Rename Person",
             [],
             None,
-            "{from, to, merge?: bool} → {faces, photos, from, to, merged} — give every in-library face of `from` the name `to` (trimmed, any capitalization), one undo step; refused when `to` is already someone else unless `merge` is true, which combines the two; the sidecar is not touched",
+            "{from, to, merge?: bool} → {faces, photos, from, to, merged} — give every in-library face of `from` the name `to` (trimmed, any capitalization), one undo step; refused when `to` is already someone else unless `merge` is true, which combines the two; with auto-write on, the sidecar of each changed original is rewritten (its `mwg-rs:Regions` and `Iptc4xmpExt:PersonInImage`)",
             super::always,
             rename_person
         ),

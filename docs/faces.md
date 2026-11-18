@@ -311,7 +311,7 @@ at once (`faces.renamePerson`). The name is matched the way the cards are groupe
 every matching face is stored with the exact new spelling, so a change of capitalization alone updates them all. The
 dialog says how many faces that is. If the new name is already someone else, it refuses until **Combine with the existing
 person** is ticked; that makes one person, and Undo separates them again. Cancelling changes nothing. A person filter,
-the open person page and the way back to it follow the new name. With automatic XMP writing on, every renamed photo's sidecar is rewritten.
+the open person page and the way back to it follow the new name. With automatic XMP writing on, the sidecar of each renamed file-backed original is rewritten (virtual copies have none).
 
 The thumbnail-size slider in the bottom bar sizes the faces here too, with limits of their own. Every face is shown by the
 same kind of box: the detector's own box once the scan has looked at it (kept beside its embedding), so a loosely drawn box

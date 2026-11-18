@@ -119,14 +119,18 @@ LightCraft reads face, pet, focus and barcode regions in the Metadata Working Gr
 write them, from sidecars and from XMP embedded in the file. Named faces become people in the People view
 (LR-LIB-PEOPLE in [`parity-checklist.md`](parity-checklist.md)), and every region is drawn as a box in the loupe.
 
-- **Written to the photo's sidecar.** Saving a sidecar (Save Metadata to File, or every change with "Automatically
-  write changes into XMP sidecars" on) writes the photo's regions as `mwg-rs:Regions`, replacing the sidecar's own:
-  naming, renaming, resizing or removing a box reaches the file. The boxes are written on the upright photo with the
-  upright size as `mwg-rs:AppliedToDimensions` and no `mwg-rs:Rotation`, so they read back as they were. The unnamed
-  boxes LightCraft's detector found (its bookkeeping) are left out until someone names them. The names on the faces
-  also go into `Iptc4xmpExt:PersonInImage`, which is replaced only when there is at least one name (LightCraft doesn't
-  read it, so a list another application wrote stays when nobody is named here). Exports carry no regions: a crop or
-  resize would leave the boxes off.
+- **Written to the photo's sidecar.** Saving a sidecar (Save Metadata to File, or, with "Automatically write changes
+  into XMP sidecars" on, each naming, renaming, resizing or removal of a box, and their undo) writes the photo's
+  regions as `mwg-rs:Regions`, replacing the sidecar's own. Detection alone (Detect Faces, the background scan) does
+  not rewrite a sidecar: the detector's unnamed boxes are LightCraft's bookkeeping and are left out until someone
+  names them, and reading the sidecar back keeps them. The boxes are written on the upright photo with the upright
+  size as `mwg-rs:AppliedToDimensions` and no `mwg-rs:Rotation`, so they read back as they were. When the photo has
+  no regions left but the sidecar has a list, an empty list is written, so another library reading the file drops
+  them too; a sidecar that never had one gets none.
+- **Names in `Iptc4xmpExt:PersonInImage`.** The names on the photo's faces are listed there too. Names in the
+  sidecar's list that are not the name of one of its face regions (typed in another application) are kept; a name
+  that belonged to a face goes when the face is renamed, cleared or removed. LightCraft doesn't read this list.
+- Exports carry no regions: a crop or resize would leave the boxes off.
 - **Areas**: `stArea:x`/`y` are the box's centre, `w`/`h` its size, normalized to the photo (`stArea:unit="pixel"`
   areas are divided by `mwg-rs:AppliedToDimensions`, and dropped without it). Boxes are clipped to the photo; one
   that misses it entirely, or has a non-finite, zero or negative size, is skipped (the rest of the list is kept).

@@ -2012,11 +2012,19 @@ fn naming_a_face_writes_it_into_the_sidecar() {
     if let Ok(keep) = std::env::var("LC_KEEP_FACE_SIDECAR") {
         std::fs::copy(src.join("a.xmp"), keep).unwrap();
     }
-    // reading the file again gives the same face
+    // the catalog loses the face (not written: no auto-write outside a command) and the detector finds another box
+    let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+    let other = Rect { x0: 0.05, y0: 0.1, x1: 0.15, y1: 0.2 };
+    meta.regions = vec![Region { rect: other, kind: RegionKind::Face, name: None, description: Some("Detected by YuNet 2023mar".into()) }];
+    s.commit("Detect Faces", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    assert_eq!(std::fs::read_to_string(src.join("a.xmp")).unwrap(), x, "the sidecar is as named");
+    // reading the file brings the named face back and keeps the detector's catalog-only box
     s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
     let r = &s.catalog.photo(id).unwrap().meta.regions;
-    assert_eq!(r.len(), 1);
+    assert_eq!(r.len(), 2, "{r:?}");
     assert_eq!(r[0].name.as_deref(), Some("Jane Doe"));
-    assert!((r[0].rect.x0 - 0.25).abs() < 1e-5 && (r[0].rect.y1 - 0.75).abs() < 1e-5, "{:?}", r[0].rect);
+    let close = |a: &Rect, b: &Rect| [(a.x0, b.x0), (a.y0, b.y0), (a.x1, b.x1), (a.y1, b.y1)].iter().all(|(p, q)| (p - q).abs() < 1e-5);
+    assert!(close(&r[0].rect, &rect), "{:?}", r[0].rect);
+    assert_eq!((r[1].name.as_deref(), r[1].rect), (None, other));
     let _ = std::fs::remove_dir_all(&src);
 }
