@@ -116,6 +116,7 @@ fn new_brush_starts_a_separate_mask_in_paint_mode() {
     let original = develop(&h).masks[0].clone();
     h.app.ui.brush_erase = true;
     h.app.ui.mask_overlay = false;
+    click(&mut h, "button:maskCreate");
     click(&mut h, "maskNew:brush");
     assert_eq!(h.app.session.active_mask, Some(2));
     assert!(!h.app.ui.brush_erase);
@@ -138,19 +139,23 @@ fn mask_adjustments_hide_overlay_without_disabling_the_mask() {
     use lightcraft_pipeline::Overlay;
     let mut h = detail("panel.masking");
     exec(&mut h, "mask.add", json!({"kind": "linear", "start": [0.5, 0.2], "end": [0.5, 0.7]}));
+    click(&mut h, "button:maskEditorTab-selection");
     assert!(h.app.ui.mask_overlay);
 
     // Changing the shape needs the overlay; changing the image needs an unobscured preview.
     exec(&mut h, "mask.refine", json!({"value": 10.0}));
     assert!(h.app.ui.mask_overlay);
+    click(&mut h, "button:maskEditorTab-adjustments");
+    exec(&mut h, "view.maskOverlay", json!({"show": true}));
     // The dock header pushes this adjustment below the initial viewport. Exercise the
     // actual visible slider rather than sending a synthetic click outside its clipped body.
     let panel = h.app.widgets.iter().find(|(id, _)| id == "panel:right_panel").unwrap().1;
     let slider = h.app.widgets.iter().find(|(id, _)| id == "slider:exposure").unwrap().1;
-    assert!(!panel.contains_rect(slider), "exposure initially needs scrolling: {slider:?} in {panel:?}");
-    h.request("ui.move", json!({"x": panel.center().x, "y": panel.center().y}), T);
-    h.request("ui.scroll", json!({"dy": -160.0}), T);
-    h.settle(SETTLE);
+    if !panel.contains_rect(slider) {
+        h.request("ui.move", json!({"x": panel.center().x, "y": panel.center().y}), T);
+        h.request("ui.scroll", json!({"dy": -160.0}), T);
+        h.settle(SETTLE);
+    }
     let slider = h.app.widgets.iter().find(|(id, _)| id == "slider:exposure").unwrap().1;
     assert!(panel.contains_rect(slider), "exposure is visible before clicking: {slider:?} in {panel:?}");
     let r = h.request("ui.clickWidget", json!({"id": "slider:exposure", "fx": 0.7}), T);
@@ -192,34 +197,56 @@ fn mask_adjustments_hide_overlay_without_disabling_the_mask() {
     h.settle(SETTLE);
 }
 
-/// A slider hides the overlay (above); a new mask, an added part, a duplicate or picking a mask in
-/// the list shows it again, so the Overlay menu's mode is what the photo shows (issue #1800).
+/// Creating and refining a region uses Selection; photographic adjustments stay unobscured.
 #[test]
-fn a_new_or_picked_mask_shows_the_overlay_hidden_by_a_slider() {
+fn mask_workspace_preserves_edits_and_keeps_selection_tools_reachable() {
     use lightcraft_pipeline::Overlay;
     let mut h = detail("panel.masking");
-    exec(&mut h, "mask.add", json!({"kind": "linear", "start": [0.5, 0.2], "end": [0.5, 0.7]}));
+    click(&mut h, "maskNew:radial");
     let first = h.app.session.active_mask.unwrap();
-    let hide = |h: &mut Headless| {
-        exec(h, "mask.adjust", json!({"values": {"exposure": 0.5}}));
-        assert!(!h.app.ui.mask_overlay);
-    };
-    let shown = |h: &Headless| matches!(crate::panels::detail::view_overlay(&h.app, &develop(h)), Overlay::Mask { .. });
-    hide(&mut h);
-    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.4, 0.5], "rx": 0.2, "ry": 0.2}));
-    assert!(shown(&h), "a new mask shows its overlay");
-    hide(&mut h);
-    let r = h.request("ui.clickWidget", json!({"id": format!("mask:{first}")}), T);
-    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.app.ui.mask_overlay);
+    assert!(h.app.widgets.iter().any(|(id, _)| id.starts_with("maskHandle:")));
+    let original = develop(&h);
+
+    click(&mut h, "button:maskEditorTab-adjustments");
+    assert!(!h.app.ui.mask_overlay && !h.app.ui.mask_overlay_all);
+    assert!(h.app.ui.tool.is_empty());
+    assert!(!h.app.widgets.iter().any(|(id, _)| id.starts_with("maskHandle:")), "adjustments leave the photo clear");
+    assert!(h.app.widgets.iter().any(|(id, _)| id == "slider:exposure"));
+    assert_eq!(develop(&h), original, "changing workspace does not change the mask");
+    exec(&mut h, "mask.adjust", json!({"values":{"exposure":0.5}}));
+    let adjusted = develop(&h);
+    exec(&mut h, "view.maskOverlay", json!({"show":true}));
+    assert!(h.app.ui.mask_overlay, "manual overlay remains available in adjustment mode");
+    assert_eq!(develop(&h), adjusted);
+    exec(&mut h, "view.maskOverlayAll", json!({}));
+    exec(&mut h, "view.maskOverlay", json!({}));
+    assert!(!h.app.ui.mask_overlay && !h.app.ui.mask_overlay_all, "O hides every overlay, including all-masks mode");
+    click(&mut h, "button:maskEditorTab-selection");
+    assert!(h.app.widgets.iter().any(|(id, _)| id.starts_with("maskHandle:")));
+    assert_eq!(develop(&h), adjusted);
+    click(&mut h, "button:maskEditorTab-adjustments");
+    assert!(matches!(crate::panels::detail::view_overlay(&h.app, &develop(&h)), Overlay::None));
+
+    click(&mut h, "button:maskCreate");
+    click(&mut h, "maskNew:linear");
+    assert_eq!(develop(&h).masks.len(), 2, "new masks remain reachable from the popover");
+    assert!(h.app.ui.mask_overlay);
+    click(&mut h, &format!("mask:{first}"));
     assert_eq!(h.app.session.active_mask, Some(first));
-    assert!(shown(&h), "picking a mask in the list shows its overlay");
-    for (cmd, params) in
-        [("mask.addComponent", json!({"kind": "radial", "op": "add", "center": [0.6, 0.5], "rx": 0.1, "ry": 0.1})), ("mask.duplicate", json!({}))]
-    {
-        hide(&mut h);
-        exec(&mut h, cmd, params);
-        assert!(shown(&h), "{cmd} shows the overlay");
-    }
+    assert!(!h.app.ui.mask_overlay && !h.app.ui.mask_overlay_all);
+    assert_eq!(develop(&h).masks[0], adjusted.masks[0]);
+    click(&mut h, "button:maskCreate");
+    click(&mut h, "maskNew:range");
+    click(&mut h, "maskNew:colorRange");
+    assert_eq!(develop(&h).masks.len(), 3, "nested range choices create the requested mask");
+    assert!(!h.app.widgets.iter().any(|(id, _)| id == "maskNew:subject"), "creation popover closes after the choice");
+    click(&mut h, "button:maskEditorTab-adjustments");
+    click(&mut h, "icon:maskOverlaySettings");
+    click(&mut h, "dropdown:maskOverlayMode");
+    click(&mut h, "maskOverlayView:whiteOnBlack");
+    assert_eq!(h.app.ui.mask_overlay_mode, "whiteOnBlack", "overlay views stay reachable inside the options popover");
+    h.request("ui.key", json!({"key":"Escape"}), T);
     h.settle(SETTLE);
 }
 
@@ -619,8 +646,107 @@ fn brush_strokes_carry_auto_mask() {
 }
 
 #[test]
+fn remove_fast_stroke_keeps_its_press_and_shows_a_continuous_preview() {
+    let mut h = detail("panel.remove");
+    h.settle(SETTLE);
+    let image = h.app.image_rect.unwrap();
+    let before = h.view.paint(&Default::default());
+    let x = (image.left() + image.width() * 0.5) as usize;
+    let y = (image.top() + image.height() * 0.6) as usize;
+    let previous = before.pixels[y * before.size[0] + x];
+    let radius = image.width().max(image.height()) * h.app.ui.remove_size;
+    let cap_x = (image.left() + image.width() * 0.2 - radius * 0.5) as usize;
+    let cap_before = before.pixels[y * before.size[0] + cap_x];
+    pointer(&mut h, json!([{"kind":"down","x":0.2,"y":0.6},{"kind":"drag","x":0.8,"y":0.6}]));
+    let count = match &h.app.gesture {
+        Some(crate::panels::detail::Gesture::Spot { points }) => {
+            // CanvasMap uses an integer subpixel frame; pointer normalization is approximate.
+            assert!((points[0].x - 0.2).abs() < 0.005, "the press starts the stroke: {points:?}");
+            assert!((points.last().unwrap().x - 0.8).abs() < 0.005, "stroke end: {points:?}");
+            points.len()
+        }
+        _ => panic!("a stroke is in progress"),
+    };
+    for _ in 0..5 {
+        h.step();
+    }
+    assert!(
+        matches!(&h.app.gesture,Some(crate::panels::detail::Gesture::Spot{points}) if points.len()==count),
+        "idle frames do not duplicate brush points"
+    );
+    let held = h.view.paint(&Default::default());
+    assert_ne!(held.pixels[y * held.size[0] + x], previous, "the preview covers the middle of a fast stroke");
+    assert_ne!(held.pixels[y * held.size[0] + cap_x], cap_before, "the preview includes the round brush cap before the press");
+    assert!(develop(&h).spots.is_empty(), "the preview has not committed an edit");
+    pointer(&mut h, json!([{"kind":"up","x":0.8,"y":0.6}]));
+    assert_eq!(develop(&h).spots.len(), 1);
+    assert!((develop(&h).spots[0].points[0].x - 0.2).abs() < 0.005);
+}
+
+#[test]
+fn remove_clear_button_restores_all_corrections_with_one_undo() {
+    let mut h = detail("panel.remove");
+    assert_eq!(h.request("ui.resize", json!({"width":1200,"height":1400}), T)["ok"], true);
+    for x in [0.3, 0.6] {
+        exec(&mut h, "spot.add", json!({"points":[[x,0.5]]}));
+    }
+    let before = develop(&h);
+    click(&mut h, "button:removeReset");
+    click(&mut h, "button:removeResetConfirm");
+    assert!(develop(&h).spots.is_empty());
+    exec(&mut h, "edit.undo", json!({}));
+    assert_eq!(develop(&h).spots, before.spots);
+}
+
+#[test]
+fn remove_blemish_detection_opens_model_settings_without_changing_the_photo() {
+    let mut h = detail("panel.remove");
+    assert_eq!(h.request("ui.resize", json!({"width":1200,"height":1400}), T)["ok"], true);
+    h.app.session.face_models_dir = Some(std::env::temp_dir().join(format!("lightcraft-missing-detector-test-{}", std::process::id())));
+    let before = develop(&h);
+    click(&mut h, "section:removeAdvanced");
+    click(&mut h, "button:findBlemishes");
+    assert!(matches!(&h.app.ui.dialog,Some(crate::state::Dialog::Settings{tab}) if tab=="faces"));
+    assert_eq!(develop(&h), before);
+}
+
+#[test]
+fn mask_overlay_options_keep_nested_pin_choices_reachable() {
+    let mut h = detail("panel.masking");
+    click(&mut h, "maskNew:radial");
+    click(&mut h, "button:maskEditorTab-adjustments");
+    let before = develop(&h);
+    click(&mut h, "icon:maskOverlaySettings");
+    click(&mut h, "dropdown:toolOverlay");
+    click(&mut h, "toolOverlay:never");
+    assert_eq!(h.app.ui.tool_overlay, crate::state::ToolOverlay::Never);
+    assert_eq!(develop(&h), before);
+}
+
+#[test]
+fn remove_panel_tools_and_selected_card_keep_edits_reachable() {
+    let mut h = detail("panel.remove");
+    assert_eq!(h.request("ui.resize", json!({"width":1200,"height":1400}), T)["ok"], true);
+    click(&mut h, "button:removeMode-clone");
+    assert_eq!(h.app.ui.tool, "clone");
+    pointer(&mut h, json!([{"kind":"down","x":0.4,"y":0.5},{"kind":"up","x":0.4,"y":0.5}]));
+    assert_eq!(develop(&h).spots.len(), 1);
+    click(&mut h, "dropdown:selectedSpotMode");
+    click(&mut h, "spotMode:heal");
+    assert_eq!(develop(&h).spots[0].mode, lightcraft_develop::SpotMode::Heal);
+    click(&mut h, "check:removeOverlayHover");
+    assert_eq!(h.app.ui.tool_overlay, crate::state::ToolOverlay::Never);
+    click(&mut h, "section:removeAdvanced");
+    assert!(h.app.widgets.iter().any(|(id, _)| id == "slider:ui.removeFeather"));
+    assert!(h.app.widgets.iter().any(|(id, _)| id == "button:findDust"));
+    click(&mut h, "button:spotDelete");
+    assert!(develop(&h).spots.is_empty());
+}
+
+#[test]
 fn remove_spots_by_pointer_and_keyboard() {
     let mut h = detail("panel.remove");
+    click(&mut h, "button:removeMode-heal");
     assert_eq!(h.app.ui.right, RightPanel::Remove);
     let spots = |h: &Headless| develop(h).spots;
     // paint a spot: it's added with the brush's size/feather/opacity and selected
@@ -2133,6 +2259,7 @@ fn a_brush_stroke_is_not_tinted_while_the_mask_overlay_is_hidden() {
 fn effect_dropdown_applies_saves_and_shows_the_matching_effect() {
     let mut h = detail("panel.masking");
     exec(&mut h, "mask.add", json!({"kind": "radial"}));
+    click(&mut h, "button:maskEditorTab-adjustments");
     exec(&mut h, "mask.adjust", json!({"values": {"exposure": 0.7, "shadows": 25, "amount": 80}}));
     h.step();
     // save the mask's sliders from the menu (the New Effect Preset dialog)
@@ -2278,6 +2405,8 @@ fn a_masks_lens_blur_block_picks_the_side_and_switches_off() {
     let mut h = detail("panel.masking");
     assert_eq!(h.request("ui.resize", json!({"width": 1200, "height": 3200}), T)["ok"], true);
     exec(&mut h, "mask.add", json!({"kind": "linear", "start": [0.5, 0.2], "end": [0.5, 0.7]}));
+    click(&mut h, "button:maskEditorTab-adjustments");
+    click(&mut h, "section:maskLensBlur");
     h.settle(SETTLE);
     let adjust = |h: &Headless| develop(h).masks[0].adjust;
     // the block's own sliders, not one more in the list

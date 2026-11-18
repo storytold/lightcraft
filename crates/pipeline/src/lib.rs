@@ -32,6 +32,7 @@ pub mod curve;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
+pub mod glow;
 pub mod lens_blur;
 pub mod light_v3;
 // generated (`light_v3_params.rs`), kept in its own compact layout
@@ -484,9 +485,15 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     visualize::adjust_settings(req.overlay, &mut settings);
     // a window must not choose a spot's source from the pixels it happens to hold: fix them
     // from a fixed-size render of the whole frame first
-    if req.window.is_some() && settings.spots.iter().any(|sp| sp.source_offset.is_none()) {
-        let picked: Vec<Option<lightcraft_geom::Point>> =
-            settings.spots.iter().map(|sp| sp.source_offset.or_else(|| spots::pick_source(src, info, &settings, sp, None))).collect();
+    let needs_source = |sp: &lightcraft_develop::Spot| {
+        matches!(sp.mode, lightcraft_develop::SpotMode::Heal | lightcraft_develop::SpotMode::Clone) && sp.source_offset.is_none()
+    };
+    if req.window.is_some() && settings.spots.iter().any(needs_source) {
+        let picked: Vec<Option<lightcraft_geom::Point>> = settings
+            .spots
+            .iter()
+            .map(|sp| if needs_source(sp) { spots::pick_source(src, info, &settings, sp, None) } else { sp.source_offset })
+            .collect();
         for (sp, o) in settings.to_mut().spots.iter_mut().zip(picked) {
             sp.source_offset = o;
         }
@@ -527,6 +534,11 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
                 let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
                 work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
             }
+            // Glow scatters across the frame. Render its full context before cropping,
+            // so a zoom window never changes highlight extraction or clips light trails.
+            if glow::active(s) {
+                work = PixelWindow { x: 0, y: 0, w: full_w, h: full_h };
+            }
             if work != win {
                 keep = Some(PixelWindow { x: win.x - work.x, y: win.y - work.y, ..win });
             }
@@ -550,6 +562,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         src_long,
         // and the lens blur (after noise reduction, but a draft must not reuse planes without it)
         lens_blur::key(s),
+        glow::key(s),
     ));
     let lin_key = hash_of((
         pre_nr_key,
@@ -754,6 +767,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
             }
             local::denoise(&mut img, s, detail_scale, colour_noise.as_ref().map(|c| &c.1));
             lens_blur::apply_with(&mut img, s, frame, px_per_long, plan.mattes.as_deref(), plan.lens_subject.as_deref());
+            glow::apply(&mut img, s, px_per_long);
             Arc::new(img)
         }
     };

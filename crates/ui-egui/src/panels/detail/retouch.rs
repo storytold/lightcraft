@@ -34,7 +34,8 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
         }
         let Some(&t) = s.points.first() else { continue };
         let tq = map.screen(t);
-        if let Some(o) = s.source_offset.filter(|_| sel) {
+        if let Some(o) = s.source_offset.filter(|_| sel && matches!(s.mode, lightcraft_develop::SpotMode::Heal | lightcraft_develop::SpotMode::Clone))
+        {
             let sq = map.screen(Point::new(t.x + o.x, t.y + o.y));
             for q in &s.points {
                 p.circle_stroke(map.screen(Point::new(q.x + o.x, q.y + o.y)), r, Stroke::new(1.0, Color32::from_white_alpha(170)));
@@ -109,14 +110,29 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
     {
         let n = map.norm(q);
         match &mut app.gesture {
-            Some(Gesture::Spot { points }) => points.push(n),
-            _ => app.gesture = Some(Gesture::Spot { points: vec![n] }),
+            Some(Gesture::Spot { points }) => {
+                if points.last() != Some(&n) {
+                    points.push(n);
+                }
+            }
+            _ => {
+                let mut points = Vec::new();
+                // The first drag event can be far from the press on a slow frame. Preserve
+                // the press itself, rather than starting the edit at that later position.
+                if resp.drag_started()
+                    && let Some(start) = press
+                {
+                    points.push(map.norm(start));
+                }
+                if points.last() != Some(&n) {
+                    points.push(n);
+                }
+                app.gesture = Some(Gesture::Spot { points });
+            }
         }
     }
     if let Some(Gesture::Spot { points }) = &app.gesture {
-        for q in points {
-            p.circle_filled(map.screen(*q), r, Color32::from_white_alpha(60));
-        }
+        spot_preview(&p, map, points, r);
     }
     if (resp.drag_stopped() || resp.clicked())
         && let Some(Gesture::Spot { points }) = app.gesture.take()
@@ -132,6 +148,29 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
             "spot.add",
             json!({"mode": mode, "points": pts, "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity}),
         );
+    }
+}
+
+fn spot_preview(p: &egui::Painter, map: &CanvasMap, points: &[Point], r: f32) {
+    let color = Color32::from_white_alpha(60);
+    if points.len() == 1 {
+        p.circle_filled(map.screen(points[0]), r, color);
+    } else if !points.is_empty() {
+        let path: Vec<_> = points.iter().map(|q| map.screen(*q)).collect();
+        // egui's polyline has flat ends. Add only the outward half-circles so
+        // translucent caps do not double the opacity over the stroke itself.
+        for pair in [path.first().zip(path.get(1)), path.last().zip(path.iter().rev().nth(1))].into_iter().flatten() {
+            let (end, neighbor) = pair;
+            let direction = (*end - *neighbor).angle();
+            let cap = (0..=16)
+                .map(|step| {
+                    let angle = direction + std::f32::consts::PI * (step as f32 / 16.0 - 0.5);
+                    *end + vec2(angle.cos(), angle.sin()) * r
+                })
+                .collect();
+            p.add(egui::Shape::convex_polygon(cap, color, Stroke::NONE));
+        }
+        p.add(egui::Shape::line(path, Stroke::new(2.0 * r, color)));
     }
 }
 

@@ -169,13 +169,18 @@ fn shift_h_and_the_command_cycle_the_tool_overlay() {
 #[test]
 fn view_menu_and_remove_panel_choose_the_tool_overlay() {
     let mut h = three_spots();
+    assert_eq!(h.request("ui.resize", json!({"width":1200,"height":1400}), T)["ok"], true);
     exec(&mut h, "view.toolOverlay", json!({"mode": "never"}));
     let bar = crate::menubar::menu_bar(&h.app);
     let view = &bar.iter().find(|(t, _)| t == "View").unwrap().1;
-    let Some(MenuNode::Submenu { children, .. }) = view.iter().find(|n| matches!(n, MenuNode::Submenu { label, .. } if label == "Tool Overlay"))
-    else {
-        panic!("View ▸ Tool Overlay")
-    };
+    fn overlay_menu(nodes: &[MenuNode]) -> Option<&[MenuNode]> {
+        nodes.iter().find_map(|node| match node {
+            MenuNode::Submenu { label, children } if label == "Tool Overlay" => Some(children.as_slice()),
+            MenuNode::Submenu { children, .. } => overlay_menu(children),
+            _ => None,
+        })
+    }
+    let children = overlay_menu(view).expect("View contains Tool Overlay");
     let items: Vec<(String, serde_json::Value, Option<bool>, Option<String>)> = children
         .iter()
         .filter_map(|n| match n {
@@ -195,6 +200,8 @@ fn view_menu_and_remove_panel_choose_the_tool_overlay() {
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(h.app.ui.tool_overlay, ToolOverlay::Always);
     // the Remove panel's dropdown
+    let r = h.request("ui.clickWidget", json!({"id": "section:removeAdvanced"}), T);
+    assert_eq!(r["ok"], true, "{r}");
     let r = h.request("ui.clickWidget", json!({"id": "dropdown:toolOverlay"}), T);
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("ui.clickWidget", json!({"id": "toolOverlay:selected"}), T);

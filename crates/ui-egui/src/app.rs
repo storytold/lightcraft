@@ -242,15 +242,17 @@ impl LightcraftApp {
         {
             self.ui.tool.clear();
         }
-        if r.is_ok() && id == "mask.adjust" {
+        if r.is_ok() && matches!(id, "mask.adjust" | "mask.select" | "mask.applyEffect") {
             // Judge local adjustments on the photo, without the selection overlay obscuring them.
             // Keep it hidden after release; O / the overlay eye can show it again.
             self.ui.mask_overlay = false;
+            self.ui.mask_overlay_all = false;
         }
-        if r.is_ok() && matches!(id, "mask.add" | "mask.addComponent" | "mask.duplicate" | "mask.select") {
-            // A new or newly picked mask shows its overlay again, as in Lightroom: hidden by a slider
-            // drag above, it stayed hidden while the Overlay menu still named a mode (issue #1800).
+        if r.is_ok() && matches!(id, "mask.add" | "mask.addComponent" | "mask.duplicate") {
+            // Show the region while constructing a mask or adding a component.
+            // Selecting an existing mask above keeps the photo clear for local adjustments.
             self.ui.mask_overlay = true;
+            self.ui.mask_workspace_request = Some(true);
         }
         if r.is_ok() {
             // These commands finish synchronously, so their completion would otherwise

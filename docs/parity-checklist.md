@@ -31,7 +31,7 @@ cited here still exists. Formerly docs/parity.md.
 | C. Views & navigation (VIEW) | 16 | 1 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 42 | 6 | 2 | 1 | 25/28 (89%) | 14/15 (93%) |
+| F. Edit panel — global adjustments (EDIT) | 42 | 7 | 2 | 1 | 25/28 (89%) | 14/16 (88%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 10 | 1 | 0 | 1 | 8/8 (100%) | 2/3 (67%) |
 | I. Remove / healing (REM) | 8 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 26 | 21 | 8 | — | 24/27 (89%) |
-| **Total** | 419 | 71 | 56 | 35 | 193/203 (95%) | 147/163 (90%) |
+| **Total** | 419 | 72 | 56 | 35 | 193/203 (95%) | 147/164 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 546 in-scope rows — P0 97.5% of 203 · P1 94.2% of 163 · P2 57.0% of 179.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 547 in-scope rows — P0 97.5% of 203 · P1 93.9% of 164 · P2 57.0% of 179.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -205,6 +205,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-EDIT-EFFECTS-DEHAZE | Dehaze | P0 | ✅ | `ctl:effects.dehaze` | |
 | LR-EDIT-EFFECTS-VIGNETTE | Post-crop vignette | P0 | ✅ | `ctl:vignette.*`, `crates/pipeline/src/finish.rs`, `crates/ui-egui/src/panels/edit.rs` | style picker (Highlight / Color / Paint) in the Effects section |
 | LR-EDIT-EFFECTS-GRAIN | Grain | P1 | ✅ | `ctl:grain.*`, `crates/pipeline/src/crystal.rs` | Process V7: crystal-layer grain ([grain.md](grain.md)), Lightroom Classic's strength and width at mid grey, fades out at black and white, preview = export box-downscaled; CPU + GPU. V1 to V6 keep value noise |
+| LR-EDIT-EFFECTS-GLOW | Glow (Lightroom Classic 16) | P1 | 🟡 | `ctl:effects.glow.*`, `crates/pipeline/src/glow.rs` | Five global styles and non-destructive controls; independent kernels, visual equivalence unmeasured; [glow.md](glow.md) |
 | LR-EDIT-DETAIL-SHARPEN | Sharpening | P0 | ✅ | `ctl:detail.sharpenAmount`, `ctl:detail.sharpenRadius`, `ctl:detail.sharpenDetail`, `ctl:detail.sharpenMasking`, `crates/pipeline/src/visualize.rs` | Process V3: pixel-scale sharpening, working Radius and Detail, original-photo scale in previews and exports; V1/V2 preserve the previous rendering (`crates/pipeline/src/tests_sharpen.rs`). Alt/Option-drag previews: Amount greyscale, Radius / Detail the detail band sharpening amplifies, Masking the mask (white = sharpened) |
 | LR-EDIT-DETAIL-NR | Luminance noise reduction | P0 | ✅ | `ctl:detail.nrLuminance`, `ctl:detail.nrDetail`, `ctl:detail.nrContrast` | radii in the original's pixels, so grid, loupe and smaller exports look like the full-size render scaled down (`local::nr_params`, `Plan::detail_scale`, #960). Alt/Option-drag on Luminance, Detail and Contrast shows the photo in greyscale |
 | LR-EDIT-DETAIL-CNR | Colour noise reduction | P0 | ✅ | `ctl:detail.nrColor`, `ctl:detail.nrColorDetail`, `ctl:detail.nrColorSmoothness` | preview-size independent like luminance NR (#960). From process V6 the joint method (#815, `docs/nr-color-joint.md`): linear R−Y / B−Y, edge-aware weights from a denoised guide, a speck brake; acts clearly at the default 25 and keeps colour edges at 100. CPU and GPU within 1/255 |
@@ -266,13 +267,13 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| LR-REM-CONTENTAWARE | Content-aware remove | P1 | 🟡 | `cmd:spot.add` (`mode: remove` / `fill`), `crates/pipeline/src/spots.rs`, `crates/inpaint/src/lib.rs` | Remove heals with an automatic source; Fill synthesises the area from its surroundings (PatchMatch completion over a membrane-blended start, `crates/inpaint`, ported from PhotoCraft; bounded by the spot size limit); no generative fill (M8.4) |
+| LR-REM-CONTENTAWARE | Content-aware remove | P1 | 🟡 | `cmd:spot.add` (`mode: remove` / `fill`), `crates/pipeline/src/spots.rs`, `crates/inpaint/src/lib.rs` | Remove and Fill reconstruct the painted path from its surroundings (PatchMatch completion over a membrane-blended start, `crates/inpaint`, ported from PhotoCraft; bounded by the spot size limit); no generative fill (M8.4) |
 | LR-REM-HEAL | Heal | P0 | ✅ | `cmd:spot.add` (`mode: heal`), `crates/pipeline/src/spots.rs` | Zero-feather edges use a hard step; zero-opacity spots preserve all pixels, including exact-radius pixels and image corners |
 | LR-REM-CLONE | Clone | P0 | ✅ | `cmd:spot.add` (`mode: clone`), `crates/pipeline/src/spots.rs` | Hard-edge source copying and unchanged radius pixels regression-tested at two output sizes |
 | LR-REM-GEN | Generative remove | OOS | 🚫 | | |
 | LR-REM-DETECT | Object detection for remove | P2 | ⬜ | | |
 | LR-REM-BRUSH-PARAMS | Brush size / feather / opacity | P0 | ✅ | `cmd:spot.add` (`size`, `feather`, `opacity`), `cmd:brush.smaller`, `cmd:brush.larger`, `cmd:brush.featherLess`, `cmd:brush.featherMore`, `crates/ui-egui/src/panels/right.rs` | Size / Feather / Opacity sliders (for new spots and the selected one); `[` `]` size, ⇧`[` ⇧`]` feather (also the Masking brush) |
-| LR-REM-SPOT-EDIT | Edit existing spots | P0 | ✅ | `cmd:spot.select`, `cmd:spot.update`, `cmd:spot.refreshSource`, `cmd:spot.delete`, `cmd:view.toolOverlay` | click a pin to select, drag target or source, ⌫ deletes the selected spot, `/` picks another source; automatic sources are resolved when the spot is added; Tool Overlay (Remove panel, View menu, ⇧H) shows the spots' pins Auto (pointer over the photo, hidden while painting) / Always / Selected / Never, and a hidden spot can't be grabbed (#224) |
+| LR-REM-SPOT-EDIT | Edit existing spots | P0 | ✅ | `cmd:spot.select`, `cmd:spot.update`, `cmd:spot.refreshSource`, `cmd:spot.delete`, `cmd:spot.clear`, `cmd:view.toolOverlay` | click a pin to select, drag target or source, ⌫ deletes the selected spot, `/` picks another source for Heal / Clone; their sources are resolved when added or selected as a replacement mode; clearing all retouches is one undo step; Tool Overlay (Remove panel, View menu, ⇧H) shows the spots' pins Auto (pointer over the photo, hidden while painting) / Always / Selected / Never, and a hidden spot can't be grabbed (#224) |
 | LR-REM-VISUALIZE | Visualize spots | P1 | ✅ | `cmd:view.visualizeSpots` | |
 | LR-REM-PEOPLE | Remove people (generative) | OOS | 🚫 | | |
 | LR-REM-REFLECT | Remove reflections | P2 | ⬜ | | |

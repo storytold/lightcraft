@@ -764,7 +764,8 @@ fn ui_commands_5(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             Ok(Value::Null)
         }
         "view.maskOverlay" => {
-            app.ui.mask_overlay = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.mask_overlay);
+            app.ui.mask_overlay = p.get("show").and_then(Value::as_bool).unwrap_or(!(app.ui.mask_overlay || app.ui.mask_overlay_all));
+            app.ui.mask_overlay_all = false;
             Ok(json!({"maskOverlay": app.ui.mask_overlay}))
         }
         "view.maskOverlayAll" => {

@@ -1055,12 +1055,13 @@ fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, ho
         }
     };
     let img = denoise(cx, img, plan, colour_noise);
-    if !lightcraft_pipeline::lens_blur::renders(s) {
+    if !lightcraft_pipeline::lens_blur::renders(s) && !lightcraft_pipeline::glow::active(s) {
         return img;
     }
     // Lens Blur (global or a mask's): on the CPU, like the CPU renderer's (`lens_blur::apply`)
     let mut host_img = cx.read_rgb(&img, w, h);
     lightcraft_pipeline::lens_blur::apply_with(&mut host_img, s, &plan.frame, plan.px_per_long, plan.mattes.as_deref(), plan.lens_subject.as_deref());
+    lightcraft_pipeline::glow::apply(&mut host_img, s, plan.px_per_long);
     cx.gpu.upload(rgb_words(&host_img))
 }
 
@@ -1094,11 +1095,34 @@ fn defringe(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
 
 /// Spot removal (`spots::apply`), spot by spot on `img` in place: each spot reads the image as
 /// the earlier ones left it.
-fn spots(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
+fn spots(cx: &mut Cx<'_>, mut img: Buf, plan: &Plan<'_>) -> Buf {
     use lightcraft_pipeline::spots;
     let (w, h) = (plan.w, plan.h);
-    for spot in &plan.settings.spots {
+    let all = &plan.settings.spots;
+    let mut index = 0;
+    while index < all.len() {
+        let spot = &all[index];
+        if matches!(spot.mode, lightcraft_develop::SpotMode::Remove | lightcraft_develop::SpotMode::Fill) {
+            let start = index;
+            while index < all.len() && matches!(all[index].mode, lightcraft_develop::SpotMode::Remove | lightcraft_develop::SpotMode::Fill) {
+                index += 1;
+            }
+            let batch = &all[start..index];
+            if !batch.iter().any(|spot| spot.opacity > 0.0 && !spot.points.is_empty()) {
+                continue;
+            }
+            // Consecutive reconstructions share one transfer in each direction. CPU apply
+            // retains their order, so later edits still see the results of earlier ones.
+            let mut host = cx.read_rgb(&img, w, h);
+            spots::apply(&mut host, batch, &plan.frame, plan.px_per_long);
+            img = cx.gpu.upload(rgb_words(&host));
+            continue;
+        }
+        index += 1;
         let Some(l) = spots::layout(spot, &plan.frame, w, h, plan.px_per_long) else { continue };
+        if l.opacity <= 0.0 {
+            continue;
+        }
         let Some(&first) = l.pts.first() else { continue };
         let offset = match l.offset {
             Some(o) => o,

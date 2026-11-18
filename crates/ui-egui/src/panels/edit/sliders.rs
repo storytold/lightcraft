@@ -180,6 +180,33 @@ pub fn sub_title(ui: &mut egui::Ui, title: &str) {
     ui.painter().text(pos2(r.left() + 24.0, r.center().y + 4.0), Align2::LEFT_CENTER, crate::i18n::tr(title), t.semibold(13.0), t.text_label);
 }
 
+/// Advanced effect settings stay out of the way until their disclosure is opened.
+pub(super) fn effect_group(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, title: &str) -> bool {
+    let key = format!("effects.{id}");
+    let mut open = app.ui.flyout_open(&key);
+    let t = Tokens::get(ui.ctx());
+    let (outer, _) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::hover());
+    let r = outer.shrink2(vec2(16.0, 2.0));
+    let resp = ui.interact(r, ui.scope_id().with(("effectGroup", id)), Sense::click());
+    crate::widgets::announce_disclosure(&resp, true, open, crate::i18n::tr(title));
+    register(ui, format!("effectGroup:{id}"), r);
+    if resp.hovered() {
+        ui.painter().rect_filled(r, 4.0, t.hover);
+    }
+    crate::icons::paint(
+        ui.painter(),
+        egui::Rect::from_center_size(pos2(r.left() + 10.0, r.center().y), vec2(14.0, 14.0)),
+        if open { Icon::ChevronDown } else { Icon::ChevronRight },
+        t.text_dim,
+    );
+    ui.painter().text(pos2(r.left() + 24.0, r.center().y), egui::Align2::LEFT_CENTER, crate::i18n::tr(title), t.semibold(12.5), t.text_label);
+    if resp.on_hover_text(crate::i18n::tr("Show advanced controls")).clicked() {
+        app.ui.toggle_flyout(&key);
+        open = !open;
+    }
+    open
+}
+
 pub(super) fn section(
     app: &mut LightcraftApp,
     ui: &mut egui::Ui,
@@ -310,62 +337,41 @@ pub(super) struct HeaderClicks {
     pub(super) reset: bool,
 }
 
-/// The Edit header's buttons: Auto, B&W and HDR on the left, Reset on the right. A button that doesn't fit on the
-/// row starts the next one (long translations in a narrow panel, such as German *Zurücksetzen* beside HDR), so none
-/// covers another; Reset stays right-aligned on whichever row it lands.
+/// Equal-width action rows keep translated labels inside the editing panel.
 pub(super) fn header_buttons(ui: &mut egui::Ui, bw: bool, hdr: bool, reset_tip: &str) -> HeaderClicks {
-    const GAP: f32 = 8.0;
     let mut clicks = HeaderClicks::default();
-    let avail = ui.available_width();
-    let left = [("auto", "Auto", false), ("bw", "B&W", bw), ("hdr", "HDR", hdr)];
-    // rows of `left` indices, filled greedily; `used` is the width taken on the current (last) row
-    let mut rows: Vec<Vec<usize>> = Vec::new();
-    let mut row: Vec<usize> = Vec::new();
-    let mut used = 0.0;
-    for (i, (_, label, _)) in left.iter().enumerate() {
-        let w = crate::widgets::text_button_size(ui, label);
-        if row.is_empty() {
-            used = w;
-        } else if used + GAP + w > avail {
-            rows.push(std::mem::take(&mut row));
-            used = w;
-        } else {
-            used += GAP + w;
-        }
-        row.push(i);
-    }
-    rows.push(row);
-    let reset_on_last = used + GAP + crate::widgets::text_button_size(ui, "Reset") <= avail;
-    let reset = |ui: &mut egui::Ui, clicks: &mut HeaderClicks| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            clicks.reset = crate::widgets::text_button(ui, "reset", crate::i18n::tr("Reset"), false).on_hover_text(reset_tip).clicked();
-        });
-    };
-    let last = rows.len() - 1;
-    for (r, row) in rows.iter().enumerate() {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let width = ((ui.available_width() - 6.0) / 2.0).max(1.0);
+    let items = [("auto", "Auto", false), ("reset", "Reset", false), ("bw", "B&W", bw), ("hdr", "HDR", hdr)];
+    for row in items.chunks(2) {
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = GAP;
-            for &i in row {
-                let (id, label, active) = left[i];
-                let mut resp = crate::widgets::text_button(ui, id, crate::i18n::tr(label), active);
-                if id == "hdr" {
-                    // HDR editing, next to B&W as Lightroom has it
-                    resp = resp.on_hover_text(crate::i18n::tr("Edit in HDR: highlights above SDR white, for HDR exports and displays"));
-                }
-                let clicked = resp.clicked();
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for &(id, label, active) in row {
+                let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::click());
+                crate::widgets::announce_selected(&response, crate::i18n::tr(label), active);
+                let fill = if active {
+                    t.button.lerp_to_gamma(t.accent, 0.32)
+                } else if response.hovered() {
+                    t.hover
+                } else {
+                    t.button
+                };
+                ui.painter().rect(rect, 6.0, fill, egui::Stroke::new(1.0, if active { t.accent } else { t.field_border }), egui::StrokeKind::Inside);
+                let text = ui.painter().layout(crate::i18n::tr(label).to_string(), t.font(12.0), t.text, (width - 12.0).max(1.0));
+                ui.painter().with_clip_rect(rect.shrink(2.0)).galley(rect.center() - text.size() / 2.0, text, t.text);
+                crate::widgets::register(ui, format!("button:{id}"), response.rect);
+                let response = if id == "reset" { response.on_hover_text(reset_tip) } else { response };
                 match id {
-                    "auto" => clicks.auto = clicked,
-                    "bw" => clicks.bw = clicked,
-                    _ => clicks.hdr = clicked,
+                    "auto" => clicks.auto = response.clicked(),
+                    "reset" => clicks.reset = response.clicked(),
+                    "bw" => clicks.bw = response.clicked(),
+                    _ => {
+                        clicks.hdr =
+                            response.on_hover_text(crate::i18n::tr("Edit in HDR: highlights above SDR white, for HDR exports and displays")).clicked()
+                    }
                 }
-            }
-            if r == last && reset_on_last {
-                reset(ui, &mut clicks);
             }
         });
-    }
-    if !reset_on_last {
-        ui.horizontal(|ui| reset(ui, &mut clicks));
     }
     clicks
 }
@@ -383,17 +389,14 @@ pub(super) fn reset_tip(keymap: &crate::shortcuts::Keymap, mac: bool) -> String 
 mod tests {
     use super::*;
 
-    /// The Edit header's buttons never cover each other or run past the panel, in any language: a button that doesn't
-    /// fit starts the next row, and Reset stays right-aligned. Before, Reset covered HDR in 11 of the 18 languages at
-    /// the default 222 pt (German *Zurücksetzen* among them) and in all but the two Chinese ones at some width. 200 pt
-    /// is about the narrowest panel (`RIGHT_WIDTH.min` less the margins).
+    /// The two action rows fit every locale without overlapping or changing order.
     #[test]
     fn edit_header_buttons_do_not_overlap_in_any_language() {
         use crate::i18n::Locale;
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx);
         crate::theme::apply(&ctx);
-        let mut wrapped = Vec::new();
+
         for &locale in Locale::ALL {
             crate::i18n::set_language(locale);
             for width in [200.0, 222.0, 260.0, 400.0] {
@@ -416,16 +419,13 @@ mod tests {
                         assert!(!a.intersects(b.shrink(0.5)), "{locale:?} {width}: {a:?} overlaps {b:?}");
                     }
                 }
-                let [_, _, hdr, reset] = buttons;
-                assert!((reset.right() - width).abs() < 0.5, "{locale:?} {width}: Reset stays right-aligned: {reset:?}");
-                if reset.top() > hdr.top() {
-                    wrapped.push((locale, width));
-                }
+                let [auto, bw, hdr, reset] = buttons;
+                assert!((reset.right() - width).abs() < 0.5, "{locale:?} {width}: reset alignment");
+                assert!((auto.top() - reset.top()).abs() < 0.5);
+                assert!((bw.top() - hdr.top()).abs() < 0.5);
+                assert!(bw.top() >= auto.bottom());
             }
         }
         crate::i18n::set_language(Locale::En);
-        assert!(wrapped.contains(&(Locale::De, 222.0)), "German wraps in the default panel: {wrapped:?}");
-        // English keeps its single row from the default width up
-        assert!(!wrapped.iter().any(|&(l, w)| l == Locale::En && w >= 222.0), "{wrapped:?}");
     }
 }

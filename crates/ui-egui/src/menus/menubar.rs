@@ -926,9 +926,68 @@ pub fn menu_bar(app: &LightcraftApp) -> Vec<(String, Vec<MenuNode>)> {
             items.push(MenuNode::Separator);
             items.extend(last);
         }
-        bar.push((title.to_string(), tidy(items)));
+        let items = tidy(items);
+        let items = if *title == "View" { organize_view_menu(items) } else { items };
+        bar.push((title.to_string(), items));
     }
     bar
+}
+
+/// Keep the View menu scannable without changing command identities or shortcuts.
+fn organize_view_menu(nodes: Vec<MenuNode>) -> Vec<MenuNode> {
+    fn group(node: &MenuNode) -> Option<&'static str> {
+        match node {
+            MenuNode::Item { id, .. } => match id.as_str() {
+                "view.rightPanel" | "view.leftPanel" | "view.filmstrip" | "view.histogram" | "view.navigator" | "view.photoCounts"
+                | "view.faceBoxes" | "view.focusPoint" | "view.zoomToFocus" | "view.infoOverlay" => Some("Panels"),
+                "view.zoomIn" | "view.zoomOut" | "view.zoomToggle" | "view.zoomFit" | "view.zoom100" => Some("Zoom"),
+                "view.showOriginal"
+                | "view.beforeAfter"
+                | "view.beforeAfterSplit"
+                | "view.beforeAfterTopBottom"
+                | "view.beforeAfterSplitTopBottom" => Some("Before / After"),
+                "view.thumbSizeUp" | "view.thumbSizeDown" => Some("Grid Options"),
+                "view.compare" | "view.survey" | "view.reference" | "compare.swap" | "compare.makeSelect" => Some("Compare and Reference"),
+                "view.fullScreenPreview" | "view.lightsOut" | "view.enterFullScreen" => Some("Screen Mode"),
+                "view.slideshow" | "view.slideshowOptions" | "dialog.slideshowExport" => Some("Slideshow"),
+                "view.clipping"
+                | "view.visualizeHdr"
+                | "view.softProof"
+                | "view.maskOverlay"
+                | "view.maskOverlayAll"
+                | "view.maskOverlayMode"
+                | "view.maskOverlayColor"
+                | "view.maskPins"
+                | "view.cropOverlay"
+                | "view.cropOverlayOrientation"
+                | "view.visualizeSpots"
+                | "view.layoutImage"
+                | "view.chooseLayoutImage" => Some("Overlays"),
+                "view.filterBar" | "library.toggleFilters" | "library.clearFilter" | "library.refresh" | "library.holdView" => Some("Filters"),
+                _ => None,
+            },
+            MenuNode::Submenu { label, .. } => match label.as_str() {
+                "Grid Info" => Some("Grid Options"),
+                "Sidebar Sections" | "Loupe Overlay" => Some("Panels"),
+                "Before/After Settings" => Some("Before / After"),
+                "Tool Overlay" => Some("Overlays"),
+                _ => None,
+            },
+            MenuNode::Separator => None,
+        }
+    }
+    let mut output = Vec::new();
+    for node in &nodes {
+        if let Some(label) = group(node) {
+            if !output.iter().any(|n| matches!(n, MenuNode::Submenu { label: l, .. } if l == label)) {
+                let children = nodes.iter().filter(|n| group(n) == Some(label)).cloned().collect();
+                output.push(MenuNode::Submenu { label: label.into(), children });
+            }
+        } else {
+            output.push(node.clone());
+        }
+    }
+    tidy(output)
 }
 
 /// Run a menu item. Rating, flag and label items behave like their keys (the active photo only in

@@ -3,6 +3,8 @@
 use egui::{Align2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::json;
 
+mod workspace;
+
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
@@ -67,6 +69,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if let Some(slot) = slot {
         ui.ctx().layer_painter(ui.layer_id()).set(slot, egui::Shape::rect_filled(panel.response.rect, 0.0, t.chrome));
     }
+    workspace::show(app, ui);
 }
 
 /// Sidebar toggle, back/forward and, without a native menu bar, the in-window menus.
@@ -175,18 +178,9 @@ fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rec
     // saving is failing: a warning shows until a save succeeds (nothing is shown otherwise)
     let unsaved = app.session.unsaved().map(|(n, e)| unsaved_tip(n, e));
     let cloud_tip = unsaved.as_deref().unwrap_or_default();
-    // Import Photos… beside Export, always one click away, with the key it is bound to now
-    let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
-    let import_tip = match crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "file.addPhotos") {
-        Some(sc) => format!("{} ({})", crate::i18n::tr("Import Photos…"), crate::menubar::shortcut_text(sc, mac)),
-        None => crate::i18n::tr("Import Photos…").to_string(),
-    };
     for (id, icon, tip, cmd) in [
-        ("discord", Icon::Chat, "Join the ArtCraft community on Discord", "app.discord"),
         ("cloud", Icon::Cloud, cloud_tip, ""),
         ("help", Icon::Help, "Keyboard shortcuts", "app.shortcuts"),
-        ("share", Icon::Share, "Export", "dialog.export"),
-        ("import", Icon::Plus, import_tip.as_str(), "file.addPhotos"),
         ("bell", Icon::Bell, "Activity", "panel.activity"),
     ] {
         let warn = id == "cloud" && unsaved.is_some();

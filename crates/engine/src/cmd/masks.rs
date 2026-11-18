@@ -934,7 +934,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 };
                 let id = s.active().ok_or_else(|| bad("spot.add", "no active photo"))?;
                 let mut dd = (*s.develop_of(id).unwrap_or_default()).clone();
-                if spot.source_offset.is_none() && spot.mode != SpotMode::Fill {
+                if spot.source_offset.is_none() && matches!(spot.mode, SpotMode::Heal | SpotMode::Clone) {
                     // resolve the automatic source now: it gets a pin and stays put at every size
                     spot.source_offset = pick_source(s, id, &dd, &spot, None);
                 }
@@ -968,8 +968,24 @@ pub fn specs() -> Vec<CommandSpec> {
                     Some(m) => Some(serde_json::from_value(m.clone()).map_err(|e| bad(c, e.to_string()))?),
                     None => None,
                 };
+                let source = if matches!(mode, Some(SpotMode::Heal | SpotMode::Clone)) {
+                    let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                    let settings = s.develop_of(id).unwrap_or_default();
+                    let mut spot = settings.spots[i].clone();
+                    spot.mode = mode.unwrap_or(spot.mode);
+                    if spot.source_offset.is_none() && p.get("source").is_none() && p.get("moveSource").is_none() {
+                        pick_source(s, id, &settings, &spot, None)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 spots_edit(s, c, "Edit Spot", |spots| {
                     let sp = &mut spots[i];
+                    if let Some(source) = source {
+                        sp.source_offset = Some(source);
+                    }
                     if let Some(d) = point(p, "move") {
                         sp.points.iter_mut().for_each(|q| *q = Point::new(q.x + d.x, q.y + d.y));
                         // the source moves along (its offset is relative to the target)
@@ -1011,6 +1027,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
                 let dd = (*s.develop_of(id).unwrap_or_default()).clone();
                 let spot = dd.spots[i].clone();
+                if !matches!(spot.mode, SpotMode::Heal | SpotMode::Clone) {
+                    return Err(bad(c, "automatic reconstruction has no manual source; choose Heal or Clone"));
+                }
                 let next = pick_source(s, id, &dd, &spot, spot.source_offset).ok_or_else(|| bad(c, "no other source fits in the photo"))?;
                 spots_edit(s, c, "Refresh Source", |spots| {
                     spots[i].source_offset = Some(next);
@@ -1019,6 +1038,18 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"index": i, "source": [next.x, next.y]}))
             }
         ),
+        cmd!("spot.clear", "Delete all spots", [], None, "{} — clear retouches in one undo step", has_active, |s, _| {
+            s.active().ok_or_else(|| bad("spot.clear", "no active photo"))?;
+            let count = spots_len(s);
+            if count > 0 {
+                spots_edit(s, "spot.clear", "Delete all spots", |spots| {
+                    spots.clear();
+                    Ok(())
+                })?;
+            }
+            s.active_spot = None;
+            Ok(json!({"removed": count}))
+        }),
         cmd!("spot.delete", "Delete Spot", [], None, "{index? (the selected spot)}", has_active, |s, p| {
             let c = "spot.delete";
             let i = spot_index(s, p, c)?;

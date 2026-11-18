@@ -16,7 +16,13 @@ pub enum Icon {
     Cloud,
     Sliders,
     Crop,
+    Lock,
+    Unlock,
+    RotateRight,
+    FlipVertical,
     Eraser,
+    Heal,
+    Clone,
     Mask,
     Eye,
     /// Eye with a slash (hidden).
@@ -71,6 +77,8 @@ pub enum Icon {
     Radial,
     Sky,
     Subject,
+    BackgroundMask,
+    ObjectSelection,
     Picker,
     Rotate,
     /// A curved line with an arrow at both ends: drag to rotate, either way (the crop tool's pointer).
@@ -264,9 +272,26 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             }
         }
         Crop => {
-            pen.line(&[(6.0, 2.5), (6.0, 14.0), (17.5, 14.0)]);
-            pen.line(&[(2.5, 6.0), (14.0, 6.0), (14.0, 17.5)]);
-            pen.line(&[(15.5, 2.0), (17.5, 4.0), (15.5, 6.0)]);
+            pen.line(&[(6.0, 2.0), (6.0, 14.0), (18.0, 14.0)]);
+            pen.line(&[(2.0, 6.0), (14.0, 6.0), (14.0, 18.0)]);
+        }
+        Lock | Unlock => {
+            pen.closed(&[(5.0, 9.0), (15.0, 9.0), (15.0, 17.0), (5.0, 17.0)]);
+            pen.arc(10.0, 7.0, 4.0, 180.0, 360.0);
+            pen.line(&[(6.0, 7.0), (6.0, 9.0)]);
+            if icon == Lock {
+                pen.line(&[(14.0, 7.0), (14.0, 9.0)]);
+            }
+            pen.line(&[(10.0, 12.0), (10.0, 14.0)]);
+        }
+        RotateRight => {
+            pen.arc(10.0, 10.0, 6.5, 70.0, 340.0);
+            pen.line(&[(12.5, 8.0), (16.0, 9.0), (17.0, 5.5)]);
+        }
+        FlipVertical => {
+            pen.line(&[(2.5, 10.0), (17.5, 10.0)]);
+            pen.closed(&[(5.0, 8.0), (15.0, 8.0), (15.0, 3.0)]);
+            pen.fill(&[(5.0, 12.0), (15.0, 12.0), (15.0, 17.0)], color);
         }
         Eraser => {
             pen.closed(&[(3.0, 12.0), (10.0, 5.0), (16.0, 11.0), (11.0, 16.0), (7.0, 16.0)]);
@@ -505,6 +530,18 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.line(&[(15.0, 5.0), (5.0, 15.0)]);
         }
         Check => pen.line(&[(4.0, 10.5), (8.5, 15.0), (16.0, 5.5)]),
+        Heal => {
+            pen.closed(&[(3.0, 11.0), (11.0, 3.0), (17.0, 9.0), (9.0, 17.0)]);
+            pen.line(&[(6.0, 8.0), (12.0, 14.0)]);
+            pen.line(&[(8.0, 6.0), (14.0, 12.0)]);
+            pen.circle(10.0, 9.0, 0.5);
+            pen.circle(10.0, 11.0, 0.5);
+        }
+        Clone => {
+            pen.circle(10.0, 5.0, 2.5);
+            pen.line(&[(8.0, 7.0), (8.0, 11.0), (5.0, 13.0), (5.0, 15.0), (15.0, 15.0), (15.0, 13.0), (12.0, 11.0), (12.0, 7.0)]);
+            pen.line(&[(4.0, 18.0), (16.0, 18.0)]);
+        }
         Brush => {
             pen.line(&[(16.5, 3.5), (9.0, 11.0)]);
             pen.closed(&[(9.0, 11.0), (6.0, 11.5), (4.0, 14.5), (3.5, 17.0), (6.0, 16.5), (8.5, 14.0)]);
@@ -529,6 +566,22 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.circle(10.0, 7.0, 3.0);
             pen.arc(10.0, 18.0, 6.5, 200.0, 340.0);
             pen.rect(2.5, 2.5, 17.5, 17.5, 2.0);
+        }
+        BackgroundMask => {
+            pen.rect(2.5, 2.5, 17.5, 17.5, 2.0);
+            pen.circle(10.0, 7.5, 2.0);
+            pen.arc(10.0, 15.5, 4.0, 200.0, 340.0);
+            for y in [6.0, 10.0, 14.0] {
+                pen.line(&[(3.0, y), (5.0, y)]);
+                pen.line(&[(15.0, y), (17.0, y)]);
+            }
+        }
+        ObjectSelection => {
+            pen.line(&[(2.5, 7.0), (2.5, 2.5), (7.0, 2.5)]);
+            pen.line(&[(13.0, 2.5), (17.5, 2.5), (17.5, 7.0)]);
+            pen.line(&[(2.5, 13.0), (2.5, 17.5), (7.0, 17.5)]);
+            pen.line(&[(13.0, 17.5), (17.5, 17.5), (17.5, 13.0)]);
+            pen.closed(&[(10.0, 6.0), (14.0, 10.0), (10.0, 14.0), (6.0, 10.0)]);
         }
         Play => pen.fill(&[(6.0, 4.0), (6.0, 16.0), (16.0, 10.0)], color),
         Pause => {
