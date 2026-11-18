@@ -1,7 +1,7 @@
 # Suomi
 
 Suomen (`fi`, englanniksi **Finnish**, omakielinen nimi **Suomi**) saa käyttöön valitsemalla
-**Muokkaa → Kieli → Suomi** tai **Asetukset → Yleiset → Kieli**. Muutos tulee voimaan heti ja
+**Asetukset → Yleiset → Kieli → Suomi**. Muutos tulee voimaan heti ja
 tallentuu seuraavaa käynnistystä varten. Komento on `app.language.finnish`; ohjauskanava
 hyväksyy `ui.set {"language":"fi"}` sekä tunnisteet `fi-FI` ja `fi_FI.UTF-8`. Ikkunattomassa
 ajossa voi käyttää `LIGHTCRAFT_LANGUAGE=fi`.
