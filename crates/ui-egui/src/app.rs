@@ -247,6 +247,8 @@ impl LightcraftApp {
             // Keep it hidden after release; O / the overlay eye can show it again.
             self.ui.mask_overlay = false;
             self.ui.mask_overlay_all = false;
+            // a pending Selection-entry request from an earlier mask.add must not show it again
+            self.ui.mask_workspace_request = None;
         }
         if r.is_ok() && matches!(id, "mask.add" | "mask.addComponent" | "mask.duplicate") {
             // Show the region while constructing a mask or adding a component.

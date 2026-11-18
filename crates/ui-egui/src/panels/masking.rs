@@ -896,57 +896,6 @@ fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_detail_pass_counts_as_the_segmenter_working() {
-        assert!(segmenter_working(false, false, true, false));
-        assert!(segmenter_working(true, false, false, false));
-        assert!(segmenter_working(false, true, false, false));
-        assert!(!segmenter_working(false, false, false, false));
-    }
-
-    #[test]
-    fn a_pending_detail_pass_counts_as_the_segmenter_working() {
-        // a new prompt finishing before it starts would replace its target, and that mask never refines
-        assert!(segmenter_working(false, false, false, true));
-    }
-
-    #[test]
-    fn enter_in_the_describe_field_starts_nothing_while_the_segmenter_works() {
-        assert!(enter_submits(false, true, true));
-        assert!(!enter_submits(true, true, true));
-        assert!(!enter_submits(false, false, true));
-        assert!(!enter_submits(false, true, false));
-    }
-
-    /// The grid keeps four 52 pt tiles when the labels fit, and gives a long (translated) label
-    /// room by dropping a column rather than drawing it past its tile.
-    #[test]
-    fn tile_labels_get_the_room_they_need() {
-        let short = |size: f32| size * 4.0; // "Luminance"-ish: 42 pt at 10.5
-        let long = |size: f32| size * 5.6; // "Background"/"Hintergrund": 59 pt at 10.5, 53 at 9.5
-        assert_eq!(tile_layout(224.0, short), (4, 51.0, 10.5));
-        // too wide for four at either size: three tiles, wider than 52 so the label fits
-        let (n, w, size) = tile_layout(224.0, long);
-        assert_eq!((n, size), (3, 10.5));
-        assert!(w >= long(10.5) + 2.0 * TILE_PAD && w <= (224.0 - 2.0 * TILE_GAP) / 3.0, "{w}");
-        // a smaller label keeps a column: 9.5 pt fits where 10.5 doesn't
-        let mid = |size: f32| size * 4.6; // 48.3 at 10.5, 43.7 at 9.5
-        assert_eq!(tile_layout(224.0, mid), (4, 51.0, 9.5));
-        // a wide panel: tiles stay 52 pt (or as wide as the label)
-        assert_eq!(tile_layout(474.0, short).0, 4);
-        assert_eq!(tile_layout(474.0, short).1, TILE);
-        // far too narrow for any label: two tiles (labels cut short), never a negative width
-        let (n, w, _) = tile_layout(60.0, long);
-        assert_eq!(n, 2);
-        assert!(w >= 24.0);
-        assert_eq!(tile_layout(f32::NAN, long).0, 2);
-    }
-}
-
 /// One quiet, full-width action in the mask creation menu.
 fn mask_creation_row(ui: &mut egui::Ui, kind: &str, label: &str, icon: Icon, enabled: bool) -> egui::Response {
     let t = Tokens::get(ui.ctx());
@@ -996,7 +945,10 @@ fn create_mask(app: &mut LightcraftApp, ui: &mut egui::Ui, kind: &str) {
     }
     set_selection_mode(app, ui, true);
     ui.data_mut(|data| data.insert_temp(egui::Id::unique("mask-create-range"), false));
-    egui::Popup::close_all(ui.ctx());
+    // Describe's field is drawn in the popup (existing mask) or below the tiles: keep the popup open
+    if kind != "prompt" {
+        egui::Popup::close_all(ui.ctx());
+    }
 }
 
 fn creation_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
@@ -1232,5 +1184,56 @@ fn sync_editor_target(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // Pins can select another mask while its selection is being refined. Keep that
         // workspace and the explicitly chosen overlay state; list clicks switch to Adjustments.
         ui.data_mut(|data| data.insert_temp(egui::Id::unique("mask-editor-target"), target));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_detail_pass_counts_as_the_segmenter_working() {
+        assert!(segmenter_working(false, false, true, false));
+        assert!(segmenter_working(true, false, false, false));
+        assert!(segmenter_working(false, true, false, false));
+        assert!(!segmenter_working(false, false, false, false));
+    }
+
+    #[test]
+    fn a_pending_detail_pass_counts_as_the_segmenter_working() {
+        // a new prompt finishing before it starts would replace its target, and that mask never refines
+        assert!(segmenter_working(false, false, false, true));
+    }
+
+    #[test]
+    fn enter_in_the_describe_field_starts_nothing_while_the_segmenter_works() {
+        assert!(enter_submits(false, true, true));
+        assert!(!enter_submits(true, true, true));
+        assert!(!enter_submits(false, false, true));
+        assert!(!enter_submits(false, true, false));
+    }
+
+    /// The grid keeps four 52 pt tiles when the labels fit, and gives a long (translated) label
+    /// room by dropping a column rather than drawing it past its tile.
+    #[test]
+    fn tile_labels_get_the_room_they_need() {
+        let short = |size: f32| size * 4.0; // "Luminance"-ish: 42 pt at 10.5
+        let long = |size: f32| size * 5.6; // "Background"/"Hintergrund": 59 pt at 10.5, 53 at 9.5
+        assert_eq!(tile_layout(224.0, short), (4, 51.0, 10.5));
+        // too wide for four at either size: three tiles, wider than 52 so the label fits
+        let (n, w, size) = tile_layout(224.0, long);
+        assert_eq!((n, size), (3, 10.5));
+        assert!(w >= long(10.5) + 2.0 * TILE_PAD && w <= (224.0 - 2.0 * TILE_GAP) / 3.0, "{w}");
+        // a smaller label keeps a column: 9.5 pt fits where 10.5 doesn't
+        let mid = |size: f32| size * 4.6; // 48.3 at 10.5, 43.7 at 9.5
+        assert_eq!(tile_layout(224.0, mid), (4, 51.0, 9.5));
+        // a wide panel: tiles stay 52 pt (or as wide as the label)
+        assert_eq!(tile_layout(474.0, short).0, 4);
+        assert_eq!(tile_layout(474.0, short).1, TILE);
+        // far too narrow for any label: two tiles (labels cut short), never a negative width
+        let (n, w, _) = tile_layout(60.0, long);
+        assert_eq!(n, 2);
+        assert!(w >= 24.0);
+        assert_eq!(tile_layout(f32::NAN, long).0, 2);
     }
 }

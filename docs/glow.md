@@ -31,8 +31,8 @@ Glow runs after denoise/Lens Blur and before tone mapping on linear Rec.2020 rad
 is considered during highlight extraction. It preserves HDR headroom and supports every output
 depth. Amount zero and the Effects eye off bypass the operator. Default Glow settings are omitted
 from serialized settings, preserving old settings hashes. Reset/copy uses explicit defaults.
-Rendered Glow edits include a kernel revision in their preview key, so older Glow previews
-are rebuilt while unrelated photos retain their cache identity.
+The Glow preview key (`glow::key`) covers the Glow settings and exposure. A kernel change alone
+does not invalidate cached Glow previews; they refresh on the next Glow or exposure edit.
 
 A grid with at most 768 pixels per edge area-averages extracted radiance so small lamps survive
 reduction. Fractional box radii approximate Gaussian scattering without slider dead zones.

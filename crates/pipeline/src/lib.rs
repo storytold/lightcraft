@@ -550,7 +550,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let (wb_t, wb_tint) = local::effective_wb(info, s);
     let eyes = redeye::resolve(src, &s.red_eye, s.orientation, &frame, w, h, px_per_long);
     let d = &s.detail;
-    let pre_nr_key = hash_of((
+    let pre_nr_base = hash_of((
         geo,
         [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
         format!("{:?}", s.spots),
@@ -562,8 +562,10 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         src_long,
         // and the lens blur (after noise reduction, but a draft must not reuse planes without it)
         lens_blur::key(s),
-        glow::key(s),
     ));
+    // Glow runs after noise reduction, so only the plane-reuse key tracks it; the colour-noise
+    // estimate is keyed from the Glow-independent base.
+    let pre_nr_key = hash_of((pre_nr_base, glow::key(s)));
     let lin_key = hash_of((
         pre_nr_key,
         [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
@@ -572,7 +574,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         local::joint_colour_nr(s),
     ));
     let lens_subject = lens_blur::subject_estimate(src, s, info.mattes.as_deref()).map(Arc::new);
-    let noise_key = hash_of((pre_nr_key, [d.nr_luminance, d.nr_detail].map(f64::to_bits), detail_scale.to_bits()));
+    let noise_key = hash_of((pre_nr_base, [d.nr_luminance, d.nr_detail].map(f64::to_bits), detail_scale.to_bits()));
     Plan {
         settings,
         frame,
@@ -945,6 +947,22 @@ fn plan_preserves_matching_box_size() {
     let preview = Rgb32f::from_fn(120, 100, |_, _| [0.5; 3]);
     let p = plan(&preview, &info, &s, &req);
     assert_eq!((p.w, p.h), (192, 160));
+}
+
+/// Glow runs after noise reduction: a Glow-only edit must keep the colour-noise cache key
+/// (so the whole-frame estimate is not recomputed) yet still change the plane-reuse key.
+#[cfg(test)]
+#[test]
+fn glow_edit_keeps_noise_key() {
+    let src = Rgb32f::from_fn(64, 48, |_, _| [0.5; 3]);
+    let info = SourceInfo::default();
+    let req = RenderRequest::fit(64, 48);
+    let base = DevelopSettings::default();
+    let mut glowing = base.clone();
+    glowing.effects.glow.amount = 60.0;
+    let (a, b) = (plan(&src, &info, &base, &req), plan(&src, &info, &glowing, &req));
+    assert_eq!(a.noise_key, b.noise_key);
+    assert_ne!(a.pre_nr_key, b.pre_nr_key);
 }
 
 #[cfg(test)]

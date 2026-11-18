@@ -11,10 +11,6 @@ and [ROADMAP.md](../ROADMAP.md) if they move.
 Hours are Opus 5.5 agent wall-clock hours (see [target-app-parity.md](target-app-parity.md#how-hours-are-calibrated)).
 `B` marks a gap that blocks **beta**.
 
-## Glow follow-up
-
-The Lightroom Classic 16 Glow control is implemented with five original styles. Pixel equivalence, local mask support, Adobe crs sidecar interoperability and interactive GPU performance remain unverified or missing; see [glow.md](glow.md).
-
 ## Ranked
 
 | # | Gap | Evidence | User impact | Hours | Doc |
@@ -49,6 +45,7 @@ The Lightroom Classic 16 Glow control is implemented with five original styles. 
 | 29 | **HDR merge leftovers** (LR-MERGE-HDR): AI Denoise doesn't run on merged (linear) DNGs; JPEG brackets are treated as linear (no camera response curve); every frame is held as 32-bit float, ~0.86 GB per 67 MP frame (half-float frames would halve it) | tested on Sony A7R VI brackets 2026-10-14 ([merge.md](merge.md)); Lightroom's Denoise supports HDR DNGs | HDR shooters who denoise their merges, merge JPEGs, or merge 7+ frames of high-resolution raws on 16 GB machines | 10–20 (+ denoise linear-RGB contract, gap 11) | [merge](merge.md) |
 | 28 | **Small Classic shortcuts and keys**: Tab / ⇧Tab (hide the side panels / all panels; Tab moves the keyboard focus here) and F5. Rating `[` `]`, flag cycling (`` ` ``), `\` (Filter Bar), ⌘L (Enable Filters), ⌘⌥⇧C / ⌘⌥⇧V (Copy / Paste Metadata), F1 help, F6 / F7 / F8 (filmstrip, left panel, right panel) are bound; the grid-cycle key is shown beside both grid rows in View (#2500) | [ui-parity](ui-parity.md#shortcuts) | Classic muscle memory | 2–4 | [ui-parity](ui-parity.md) |
 | 30 | **Multi-select metadata editing in the UI**: `photo.setMeta` already iterates all selected photos, so the engine applies changes to every target. The Info panel's Show Metadata For choice (Target Photo / Selected Photos) shows the values the selected photos share and marks each field where they differ as Mixed; the All Metadata dialog still shows one photo's values with no "mixed" indication | standard in Lightroom Classic's multi-select Info panel | anyone editing metadata on a batch (copyright, keywords, custom fields) | 1–3 | [ui-parity](ui-parity.md) |
+| 31 | **Glow leftovers** (LR-EFFECTS-GLOW): five original styles ship; pixel equivalence with Lightroom Classic 16 is unverified, Glow is global only (no local masks), Adobe crs sidecar interoperability is missing, interactive GPU performance is unmeasured | [glow.md](glow.md) | photographers using Glow on masked regions or round-tripping with Lightroom | 15–30 | [glow](glow.md) |
 
 Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform work they need around them,
 **~340–600 h** to beta (incl. 40–80 h for the ~92 open core-path user issues) (see [target-app-parity.md](target-app-parity.md#stage)).

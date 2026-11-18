@@ -973,6 +973,13 @@ pub fn specs() -> Vec<CommandSpec> {
                     let settings = s.develop_of(id).unwrap_or_default();
                     let mut spot = settings.spots[i].clone();
                     spot.mode = mode.unwrap_or(spot.mode);
+                    // pick the source for the geometry the edit will produce, not the old one
+                    if let Some(d) = point(p, "move") {
+                        spot.points.iter_mut().for_each(|q| *q = Point::new(q.x + d.x, q.y + d.y));
+                    }
+                    if let Some(v) = p.get("size").and_then(Value::as_f64) {
+                        spot.size = v.clamp(SPOT_SIZE.0, SPOT_SIZE.1);
+                    }
                     if spot.source_offset.is_none() && p.get("source").is_none() && p.get("moveSource").is_none() {
                         pick_source(s, id, &settings, &spot, None)
                     } else {
