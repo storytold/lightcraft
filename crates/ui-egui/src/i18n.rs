@@ -132,6 +132,7 @@ language_table! {
     Pl, "pl", "Polski", "Latn", include_str!("../locales/pl.json");
     Cs, "cs", "Čeština", "Latn", include_str!("../locales/cs.json");
     It, "it", "Italiano", "Latn", include_str!("../locales/it.json");
+    Lt, "lt", "Lietuvių", "Latn", include_str!("../locales/lt.json");
     Ka, "ka", "ქართული", "Geor", include_str!("../locales/ka.json");
     Sv, "sv", "Svenska", "Latn", include_str!("../locales/sv.json");
     Fi, "fi", "Suomi", "Latn", include_str!("../locales/fi.json");
