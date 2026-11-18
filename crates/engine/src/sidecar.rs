@@ -344,22 +344,25 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
     }
     if let Some(r) = &sc.regions {
         // the detector's unnamed boxes are never written to the file (`file_regions`): reading it keeps them
-        let detected: Vec<lightcraft_meta::Region> = m
-            .regions
-            .iter()
-            .filter(|r| {
-                r.name.as_deref().is_none_or(|n| n.trim().is_empty())
-                    && r.description.as_deref().is_some_and(|d| d.starts_with(crate::cmd::face_detect::MARK))
-            })
-            .cloned()
-            .collect();
+        let detected: Vec<lightcraft_meta::Region> =
+            m.regions.iter().filter(|r| r.name.as_deref().is_none_or(|n| n.trim().is_empty()) && is_detected(r)).cloned().collect();
         m.regions = r.clone();
         // (the photo's size is the upright one)
         if let (Some(drawn_on), Some(o)) = (sc.regions_drawn_on, sc.orientation) {
             let stored = if o.swaps_axes() { (p.height, p.width) } else { (p.width, p.height) };
             lightcraft_meta::upright_regions(&mut m.regions, drawn_on, o, stored);
         }
-        m.regions.extend(detected);
+        // …except one on a face the file has a box for (named in another library, say): the file's box stands for it
+        let overlaps = |a: &lightcraft_meta::Rect, b: &lightcraft_meta::Rect| {
+            let common = a.intersect(b).area();
+            let all = a.area() + b.area() - common;
+            all > 0.0 && common / all >= 0.5
+        };
+        let kept: Vec<lightcraft_meta::Region> = detected
+            .into_iter()
+            .filter(|d| !m.regions.iter().any(|f| f.kind == lightcraft_meta::RegionKind::Face && overlaps(&d.rect, &f.rect)))
+            .collect();
+        m.regions.extend(kept);
     }
     let develop = match &sc.develop {
         Some(DevelopPatch::Full(s)) => (**s).clone(),
@@ -720,15 +723,29 @@ pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_
 /// The regions a sidecar carries: every region of the photo except the unnamed faces LightCraft's own detector
 /// found (its bookkeeping, marked `Detected by …`), which are not worth a file write until someone names them.
 fn file_regions(p: &Photo) -> Vec<&lightcraft_meta::Region> {
-    let detected = |r: &lightcraft_meta::Region| r.description.as_deref().is_some_and(|d| d.starts_with(crate::cmd::face_detect::MARK));
     let named = |r: &lightcraft_meta::Region| r.name.as_deref().is_some_and(|n| !n.trim().is_empty());
-    p.meta.regions.iter().filter(|r| named(r) || !detected(r)).collect()
+    p.meta.regions.iter().filter(|r| (named(r) || !is_detected(r)) && writable_rect(r.rect).is_some()).collect()
 }
 
-/// The people named on a photo's faces, trimmed, each once (case-insensitive), in region order.
+/// One of the detector's boxes (`Detected by …`; see [`crate::cmd::face_detect::MARK`]).
+fn is_detected(r: &lightcraft_meta::Region) -> bool {
+    r.description.as_deref().is_some_and(|d| d.starts_with(crate::cmd::face_detect::MARK))
+}
+
+/// A box as it can be written: clamped to the photo, finite and not empty. A catalog box that isn't is never
+/// written, and a photo with only such boxes has none to write.
+fn writable_rect(r: lightcraft_meta::Rect) -> Option<(f64, f64, f64, f64)> {
+    let (x0, y0) = (r.x0.clamp(0.0, 1.0), r.y0.clamp(0.0, 1.0));
+    let (x1, y1) = (r.x1.clamp(0.0, 1.0), r.y1.clamp(0.0, 1.0));
+    // (`clamp` keeps NaN, which fails these comparisons)
+    (x1 > x0 && y1 > y0).then_some((x0, y0, x1, y1))
+}
+
+/// The people named on the photo's faces that are written ([`file_regions`]), trimmed, each once (case-insensitive),
+/// in region order.
 fn face_names(p: &Photo) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
-    for r in p.meta.regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::Face) {
+    for r in file_regions(p).into_iter().filter(|r| r.kind == lightcraft_meta::RegionKind::Face) {
         let Some(n) = r.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) else { continue };
         if !names.iter().any(|m| m.to_lowercase() == n.to_lowercase()) {
             names.push(n.to_string());
@@ -776,11 +793,9 @@ fn with_regions(packet: String, p: &Photo, orientation: Option<lightcraft_meta::
     }
     x.push_str("    <mwg-rs:RegionList>\n     <rdf:Bag>\n");
     for r in &regions {
-        let (x0, y0) = (r.rect.x0.clamp(0.0, 1.0), r.rect.y0.clamp(0.0, 1.0));
-        let (x1, y1) = (r.rect.x1.clamp(0.0, 1.0), r.rect.y1.clamp(0.0, 1.0));
-        if !(x1 > x0 && y1 > y0) {
+        let Some((x0, y0, x1, y1)) = writable_rect(r.rect) else {
             continue;
-        }
+        };
         x.push_str("      <rdf:li rdf:parseType=\"Resource\">\n");
         // stArea:x/y are the box's centre (MWG Region Guidelines §Area); (ux, uy, uw, uh) on the upright photo
         let (ux, uy, uw, uh) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, x1 - x0, y1 - y0);
@@ -852,9 +867,12 @@ fn people_block(names: &[String]) -> String {
 /// - `Iptc4xmpExt:PersonInImage`: the names on the photo's faces, plus the names in the file's list that are not the
 ///   name of a face region in the file (typed in another application). A name that belonged to one of the file's
 ///   faces goes with it, so clearing a face's name clears it from the list too.
-/// - `mwg-rs:Regions`: when the photo has no regions to write but the file states a list, an empty list says they were
-///   removed (a missing list says nothing to a reader, so another library that read them would keep them). A file
-///   that never had one gets none.
+/// - `mwg-rs:Regions`: when the photo has no regions to write but the file has regions LightCraft can read, they were
+///   removed here (every region in the file is read into the catalog), and an empty list says so: a missing list says
+///   nothing to a reader, so another library that read them would keep them. The detector's unnamed boxes are never
+///   written, so a photo left with only those counts as cleared too; reading the file back keeps them ([`merge_into`]).
+///   A file with no list keeps none, one with an empty list keeps it, and one with a list LightCraft reads nothing
+///   from keeps it as it is ([`OWNED_IF_STATED`]).
 fn fit_to_old(old: &str, fresh: String) -> String {
     let old = old.strip_prefix('\u{feff}').unwrap_or(old);
     // (a file that isn't XMP can't be merged either: `sidecar_contents` handles it)
@@ -889,7 +907,11 @@ fn fit_to_old(old: &str, fresh: String) -> String {
             names.push(t);
         }
     }
-    if regions.is_some() && !fresh.contains("<mwg-rs:Regions") {
+    // the photo has none left to write and the file held regions LightCraft read: say so. A file stating an empty list
+    // is given it again, so the save leaves it where it was rather than moving it about (a list LightCraft read
+    // nothing from is neither: it stays as it is)
+    let empty_list = data.values.get("mwg-rs:Regions").and_then(|v| v.field("mwg-rs:RegionList")).is_some_and(|l| l.items().is_empty());
+    if (empty_list || regions.as_ref().is_some_and(|r| !r.is_empty())) && !fresh.contains("<mwg-rs:Regions") {
         fresh = into_description(
             fresh,
             "   <mwg-rs:Regions rdf:parseType=\"Resource\">\n    <mwg-rs:RegionList>\n     <rdf:Bag/>\n    </mwg-rs:RegionList>\n   </mwg-rs:Regions>\n",
@@ -919,9 +941,6 @@ pub const OWNED: &[&str] = &[
     "xmpRights:Marked",
     "xmpRights:UsageTerms",
     "xmpRights:WebStatement",
-    // the photo's face, pet and focus regions: LightCraft reads every region of a sidecar into the catalog, so the
-    // catalog's list is the file's list as edited here (see `with_regions`)
-    "mwg-rs:Regions",
     // the names on the photo's faces, with any another application listed kept (see `fit_to_old`)
     "Iptc4xmpExt:PersonInImage",
     "lc:*",
@@ -930,7 +949,12 @@ pub const OWNED: &[&str] = &[
 /// Properties replaced only when LightCraft has a value (capture time; GPS, which LightCraft
 /// doesn't read from sidecars): otherwise the sidecar's own value stays. Anything else LightCraft
 /// writes (`xmp:CreatorTool`) goes only into new sidecars.
-pub const OWNED_IF_STATED: &[&str] = &["exif:DateTimeOriginal", "photoshop:DateCreated", "exif:GPSLatitude", "exif:GPSLongitude"];
+///
+/// `mwg-rs:Regions` is one of them. A packet states it when the photo has regions to write ([`with_regions`]), and
+/// states an empty list when the photo's last readable region in the file was removed ([`fit_to_old`]); otherwise
+/// the file's list stays as it is: one that never had a list gets none, an empty one stays empty, and a list
+/// LightCraft could read nothing from (boxes in pixels with no size, say) is not thrown away by a save.
+pub const OWNED_IF_STATED: &[&str] = &["exif:DateTimeOriginal", "photoshop:DateCreated", "exif:GPSLatitude", "exif:GPSLongitude", "mwg-rs:Regions"];
 
 /// Write `data` to `path` atomically: a temp file next to it, synced, then renamed over it.
 fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
@@ -2096,6 +2120,265 @@ mod tests {
                 [(got.x0, want.x0), (got.y0, want.y0), (got.x1, want.x1), (got.y1, want.y1)].iter().all(|(a, b)| (a - b).abs() < 1e-5),
                 "{o:?}: {got:?}"
             );
+        }
+    }
+
+    /// A sidecar with Lightroom-style regions (in the order given, upright) and `people` as PersonInImage.
+    fn sidecar_with(regions: &[(f64, f64, f64, f64, Option<&str>)], people: &[&str]) -> String {
+        let mut items = String::new();
+        for (cx, cy, w, h, name) in regions {
+            items.push_str(&format!(
+                "<rdf:li rdf:parseType=\"Resource\"><mwg-rs:Area stArea:x=\"{cx}\" stArea:y=\"{cy}\" stArea:w=\"{w}\" stArea:h=\"{h}\" stArea:unit=\"normalized\"/><mwg-rs:Type>Face</mwg-rs:Type>{}</rdf:li>",
+                name.map(|n| format!("<mwg-rs:Name>{n}</mwg-rs:Name>")).unwrap_or_default()
+            ));
+        }
+        let people: String = people.iter().map(|n| format!("<rdf:li>{n}</rdf:li>")).collect();
+        let people = if people.is_empty() {
+            String::new()
+        } else {
+            format!("<Iptc4xmpExt:PersonInImage><rdf:Bag>{people}</rdf:Bag></Iptc4xmpExt:PersonInImage>")
+        };
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:mwg-rs="http://www.metadataworkinggroup.com/schemas/regions/"
+            xmlns:stArea="http://ns.adobe.com/xmp/sType/Area#" xmlns:Iptc4xmpExt="http://iptc.org/std/Iptc4xmpExt/2008-02-29/"
+            xmlns:photomechanic="http://ns.camerabits.com/photomechanic/1.0/" photomechanic:ColorClass="1">
+           <mwg-rs:Regions rdf:parseType="Resource"><mwg-rs:RegionList><rdf:Bag>{items}</rdf:Bag></mwg-rs:RegionList></mwg-rs:Regions>
+           {people}
+          </rdf:Description></rdf:RDF></x:xmpmeta>"#
+        )
+    }
+
+    /// A scratch sidecar path, unique to the test.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("lc-regions-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("a.xmp")
+    }
+
+    /// Save `p` over `path` as the app does; the new contents.
+    fn save_over(path: &Path, p: &Photo) -> String {
+        let (x, _, _) = sidecar_contents(path, sidecar_packet(p, &lightcraft_catalog::Catalog::new()), "now").unwrap();
+        std::fs::write(path, &x).unwrap();
+        x
+    }
+
+    #[test]
+    fn a_cleared_photo_states_an_empty_list_only_when_its_file_had_regions() {
+        let detected = format!("{}YuNet 2023mar", crate::cmd::face_detect::MARK);
+        let det = || region(0.6, 0.6, 0.7, 0.7, lightcraft_meta::RegionKind::Face, None, Some(&detected));
+        let stated = |x: &str| parse_sidecar(x, crate::crs::Target::Rendered).unwrap().regions;
+
+        // the file had a readable face; the photo has none left, or only the detector's boxes: an empty list
+        for left in [vec![], vec![det()]] {
+            let path = scratch("cleared");
+            std::fs::write(&path, sidecar_with(&[(0.5, 0.5, 0.2, 0.2, Some("Ann"))], &[])).unwrap();
+            let mut p = photo();
+            p.meta.regions = left.clone();
+            let x = save_over(&path, &p);
+            assert_eq!(stated(&x), Some(vec![]), "{left:?}: {x}");
+            assert!(x.contains("photomechanic:ColorClass=\"1\""));
+            // saving again leaves it as it is
+            assert_eq!(save_over(&path, &p), x);
+        }
+        // a file with no list: none, with or without the detector's boxes
+        for left in [vec![], vec![det()]] {
+            let path = scratch("never");
+            let mut p = photo();
+            std::fs::write(&path, sidecar_packet(&p, &lightcraft_catalog::Catalog::new())).unwrap();
+            p.meta.regions = left;
+            let x = save_over(&path, &p);
+            assert!(!x.contains("mwg-rs:Regions"), "{x}");
+        }
+        // a file stating an empty list keeps it
+        let path = scratch("empty");
+        std::fs::write(&path, sidecar_with(&[], &[])).unwrap();
+        let x = save_over(&path, &photo());
+        assert_eq!(stated(&x), Some(vec![]), "{x}");
+        // a list LightCraft reads nothing from (pixel areas with no size): a save leaves it alone
+        let path = scratch("unreadable");
+        let old = sidecar_with(&[(0.5, 0.5, 0.2, 0.2, Some("Ann"))], &[]).replace("stArea:unit=\"normalized\"", "stArea:unit=\"pixel\"");
+        std::fs::write(&path, &old).unwrap();
+        assert_eq!(stated(&old), Some(vec![]), "the reader can't use pixel areas without a size");
+        let x = save_over(&path, &photo());
+        assert!(x.contains("stArea:unit=\"pixel\"") && x.contains("<mwg-rs:Name>Ann</mwg-rs:Name>"), "kept: {x}");
+        // a catalog box that can't be written (not finite, empty, off the photo) counts as none
+        for bad in [
+            region(f64::NAN, 0.1, 0.2, 0.2, lightcraft_meta::RegionKind::Face, Some("Nan"), None),
+            region(0.3, 0.3, 0.3, 0.5, lightcraft_meta::RegionKind::Face, Some("Flat"), None),
+            region(1.2, 1.2, 1.5, 1.5, lightcraft_meta::RegionKind::Face, Some("Off"), None),
+            region(f64::NEG_INFINITY, 0.1, f64::INFINITY, 0.2, lightcraft_meta::RegionKind::Face, Some("Inf"), None),
+        ] {
+            let path = scratch("bad");
+            let mut p = photo();
+            std::fs::write(&path, sidecar_packet(&p, &lightcraft_catalog::Catalog::new())).unwrap();
+            p.meta.regions = vec![bad.clone()];
+            let x = save_over(&path, &p);
+            // (an infinite box clamps to the photo's width: that one is writable)
+            if bad.name.as_deref() == Some("Inf") {
+                assert_eq!(stated(&x).map(|r| r.len()), Some(1), "{x}");
+            } else {
+                assert!(!x.contains("mwg-rs:Regions"), "{bad:?}: {x}");
+            }
+        }
+    }
+
+    #[test]
+    fn reading_back_keeps_the_detectors_boxes_but_not_on_a_face_the_file_has() {
+        let detected = format!("{}YuNet 2023mar", crate::cmd::face_detect::MARK);
+        let mut p = photo();
+        p.meta.regions = vec![
+            // the same face as the file's Ann (named in another library)
+            region(0.41, 0.41, 0.6, 0.6, lightcraft_meta::RegionKind::Face, None, Some(&detected)),
+            // a face the file doesn't have
+            region(0.05, 0.05, 0.15, 0.15, lightcraft_meta::RegionKind::Face, None, Some(&detected)),
+            // a box another app drew, gone from the file now
+            region(0.7, 0.7, 0.9, 0.9, lightcraft_meta::RegionKind::Face, None, None),
+        ];
+        let sc = parse_sidecar(&sidecar_with(&[(0.5, 0.5, 0.2, 0.2, Some("Ann"))], &[]), crate::crs::Target::Rendered).unwrap();
+        merge_into(&mut p, &sc, "now");
+        let got: Vec<(Option<&str>, f64)> = p.meta.regions.iter().map(|r| (r.name.as_deref(), r.rect.x0)).collect();
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert_eq!(got[0].0, Some("Ann"));
+        assert!((got[1].1 - 0.05).abs() < 1e-9, "{got:?}");
+    }
+
+    /// A random box: one in ten can't be written as it is (not finite, empty, off the photo, hanging off an edge).
+    fn box_at(next: &mut impl FnMut(usize) -> usize) -> lightcraft_meta::Rect {
+        if next(10) == 0 {
+            match next(4) {
+                0 => lightcraft_meta::Rect { x0: f64::NAN, y0: 0.1, x1: 0.2, y1: 0.3 },
+                1 => lightcraft_meta::Rect { x0: 0.5, y0: 0.5, x1: 0.5, y1: 0.9 },
+                2 => lightcraft_meta::Rect { x0: 1.1, y0: 1.1, x1: 1.4, y1: 1.4 },
+                _ => lightcraft_meta::Rect { x0: -0.2, y0: 0.9, x1: 0.1, y1: 1.3 },
+            }
+        } else {
+            let (x, y) = (next(80) as f64 / 100.0, next(80) as f64 / 100.0);
+            lightcraft_meta::Rect { x0: x, y0: y, x1: x + 0.02 + next(18) as f64 / 100.0, y1: y + 0.02 + next(18) as f64 / 100.0 }
+        }
+    }
+
+    /// Hundreds of random edits, each saved over the last sidecar: the file always says exactly what the catalog
+    /// would write, reading it back gives the catalog's boxes, the names typed elsewhere survive, and a second save
+    /// changes nothing. Bad boxes, odd names and clears included.
+    #[test]
+    fn random_edits_keep_the_sidecar_and_the_catalog_in_step() {
+        use lightcraft_meta::RegionKind::{Face, Pet};
+        let detected = format!("{}YuNet 2023mar", crate::cmd::face_detect::MARK);
+        let names = [
+            "Ann",
+            "ann",
+            "Mimì",
+            "A & B <c> \"d\" 'e'",
+            "  Padded  ",
+            "",
+            "   ",
+            "x,y]z|{w}",
+            "Ünïcödé 名前",
+            "a\u{1}b",
+            "Rodolfo [tenor]",
+            "Very Long Name Very Long Name Very Long Name Very Long Name Very Long Name Very Long Name",
+        ];
+        // eight runs by default; LC_REGION_FUZZ_RUNS=n for more
+        let runs: u64 = std::env::var("LC_REGION_FUZZ_RUNS").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
+        for run in 0..runs {
+            let mut seed: u64 = 0x5eed_1234_abcd ^ run.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            let mut next = move |n: usize| -> usize {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                ((seed >> 33) as usize) % n.max(1)
+            };
+            let path = scratch(&format!("random-{run}"));
+            // start from a sidecar another app wrote: a named face and a name typed in elsewhere
+            std::fs::write(&path, sidecar_with(&[(0.5, 0.5, 0.2, 0.2, Some("Lightroom Face"))], &["Typed Elsewhere", "Lightroom Face"])).unwrap();
+            let mut p = photo();
+            merge_into(&mut p, &parse_sidecar(&std::fs::read_to_string(&path).unwrap(), crate::crs::Target::Rendered).unwrap(), "now");
+            let clean = |n: &str| n.chars().filter(|c| !c.is_control()).collect::<String>().trim().to_string();
+            let mut had_regions = true;
+            for step in 0..400 {
+                let n = p.meta.regions.len();
+                match next(8) {
+                    0 => {
+                        let rect = box_at(&mut next);
+                        let kind = if next(8) == 0 { Pet } else { Face };
+                        p.meta.regions.push(lightcraft_meta::Region { rect, kind, name: Some(names[next(names.len())].into()), description: None });
+                    }
+                    1 => {
+                        let rect = box_at(&mut next);
+                        p.meta.regions.push(lightcraft_meta::Region { rect, kind: Face, name: None, description: Some(detected.clone()) });
+                    }
+                    2 if n > 0 => p.meta.regions[next(n)].name = Some(names[next(names.len())].into()),
+                    3 if n > 0 => p.meta.regions[next(n)].name = None,
+                    4 if n > 0 => {
+                        p.meta.regions.remove(next(n));
+                    }
+                    5 if n > 0 => {
+                        let from = p.meta.regions[next(n)].name.clone();
+                        let to = names[next(names.len())];
+                        for r in &mut p.meta.regions {
+                            if r.name == from {
+                                r.name = Some(to.into());
+                            }
+                        }
+                    }
+                    6 => p.meta.regions.clear(),
+                    _ => p.rating = next(6) as u8, // a save that changes no region
+                }
+
+                let x = save_over(&path, &p);
+                let sc = parse_sidecar(&x, crate::crs::Target::Rendered).unwrap();
+                let want: Vec<&lightcraft_meta::Region> = file_regions(&p);
+                // the file's list is exactly what the catalog writes (or an empty one once it had regions)
+                match &sc.regions {
+                    Some(got) => {
+                        assert_eq!(got.len(), want.len(), "run {run} step {step}: {x}");
+                        for (g, w) in got.iter().zip(&want) {
+                            let wr = w.rect.intersect(&lightcraft_meta::Rect::UNIT);
+                            assert!(
+                                [(g.rect.x0, wr.x0), (g.rect.y0, wr.y0), (g.rect.x1, wr.x1), (g.rect.y1, wr.y1)]
+                                    .iter()
+                                    .all(|(a, b)| (a - b).abs() < 1e-5),
+                                "run {run} step {step}: {g:?} vs {w:?}"
+                            );
+                            let wn = w.name.as_deref().map(clean).filter(|n| !n.is_empty());
+                            assert_eq!(g.name.as_deref().map(str::trim), wn.as_deref(), "run {run} step {step}");
+                            assert_eq!(g.kind, w.kind, "run {run} step {step}");
+                        }
+                    }
+                    None => assert!(want.is_empty() && !had_regions, "run {run} step {step}: list missing: {x}"),
+                }
+                had_regions |= sc.regions.as_ref().is_some_and(|r| !r.is_empty());
+                // the names on the faces, each once, then the one typed elsewhere
+                let d = lightcraft_meta::parse_xmp(&x).unwrap();
+                let people: Vec<String> = d
+                    .values
+                    .get("Iptc4xmpExt:PersonInImage")
+                    .map(|v| v.items().iter().filter_map(|i| i.text().map(str::to_string)).collect())
+                    .unwrap_or_default();
+                let mut expect: Vec<String> = Vec::new();
+                for r in file_regions(&p).into_iter().filter(|r| r.kind == Face) {
+                    let n = clean(r.name.as_deref().unwrap_or(""));
+                    if !n.is_empty() && !expect.iter().any(|e| e.to_lowercase() == n.to_lowercase()) {
+                        expect.push(n);
+                    }
+                }
+                if !expect.iter().any(|e| e.to_lowercase() == "typed elsewhere") {
+                    expect.push("Typed Elsewhere".into());
+                }
+                let people: Vec<String> = people.iter().map(|n| clean(n)).collect();
+                assert_eq!(people, expect, "run {run} step {step}: {x}");
+                // reading the file back gives the catalog's boxes: the written ones, then the detector's not on a written face
+                let mut q = p.clone();
+                merge_into(&mut q, &sc, "now");
+                let written = want.len();
+                assert!(q.meta.regions.len() >= written, "run {run} step {step}");
+                for d in &q.meta.regions[written..] {
+                    assert!(is_detected(d) && d.name.as_deref().is_none_or(|n| n.trim().is_empty()), "run {run} step {step}: {d:?}");
+                }
+                // and a second save changes nothing
+                assert_eq!(save_over(&path, &p), x, "run {run} step {step}: not stable");
+            }
+            let _ = std::fs::remove_dir_all(path.parent().unwrap());
         }
     }
 

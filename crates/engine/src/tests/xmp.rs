@@ -2058,3 +2058,47 @@ fn a_face_on_a_turned_photo_is_written_in_the_stored_frame_and_read_back_upright
     assert!([(g.x0, 0.1), (g.y0, 0.2), (g.x1, 0.3), (g.y1, 0.6)].iter().all(|(a, b)| (a - b).abs() < 1e-5), "{g:?}");
     let _ = std::fs::remove_dir_all(&src);
 }
+
+/// Review of #4512: removing the last face writes an empty region list, so a second library that read the face drops
+/// it when it reads the file again (keeping its own detector boxes), and undo brings the face back to both.
+#[test]
+fn a_removed_face_leaves_a_second_library_too_and_undo_brings_it_back() {
+    use lightcraft_meta::{Rect, Region, RegionKind};
+    let src = temp_dir("face-two-libraries");
+    write_png(&src.join("a.png"), 4);
+    let (mut a, mut b) = (Session::new().with_fs(), Session::new().with_fs());
+    for s in [&mut a, &mut b] {
+        s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+        s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    }
+    let (ida, idb) = (a.catalog.photos().next().unwrap().id, b.catalog.photos().next().unwrap().id);
+    let face = Rect { x0: 0.25, y0: 0.25, x1: 0.75, y1: 0.75 };
+    let det = |rect| Region { rect, kind: RegionKind::Face, name: None, description: Some("Detected by YuNet 2023mar".into()) };
+    for (s, id, extra) in [(&mut a, ida, None), (&mut b, idb, Some(Rect { x0: 0.0, y0: 0.0, x1: 0.1, y1: 0.1 }))] {
+        let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+        meta.regions = std::iter::once(det(face)).chain(extra.map(det)).collect();
+        s.commit("Detect Faces", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    }
+    let names = |s: &Session, id| s.catalog.photo(id).unwrap().meta.regions.iter().map(|r| r.name.clone()).collect::<Vec<_>>();
+
+    // A names the face; B reads it (its own box on that face gives way to the file's, its other box stays)
+    a.execute("faces.nameFaces", &json!({"faces": [{"photo": ida.0, "index": 0}], "name": "Jane"})).unwrap();
+    b.execute("photo.readMetadataFromFile", &json!({"ids": [idb.0]})).unwrap();
+    assert_eq!(names(&b, idb), [Some("Jane".to_string()), None]);
+
+    // A removes it: the file says there are no regions, and B drops Jane on reading it
+    a.execute("photo.removeRegion", &json!({"id": ida.0, "index": 0})).unwrap();
+    let x = std::fs::read_to_string(src.join("a.xmp")).unwrap();
+    assert!(x.contains("<mwg-rs:RegionList>") && !x.contains("Jane"), "{x}");
+    let sc = crate::sidecar::parse_sidecar(&x, crate::crs::Target::Rendered).unwrap();
+    assert_eq!(sc.regions.map(|r| r.len()), Some(0), "an empty list, not a missing one: {x}");
+    b.execute("photo.readMetadataFromFile", &json!({"ids": [idb.0]})).unwrap();
+    assert_eq!(names(&b, idb), [None], "B keeps only its own detector box");
+
+    // undo in A writes Jane back; B gets her again
+    a.execute("edit.undo", &json!({})).unwrap();
+    assert!(std::fs::read_to_string(src.join("a.xmp")).unwrap().contains("<mwg-rs:Name>Jane</mwg-rs:Name>"));
+    b.execute("photo.readMetadataFromFile", &json!({"ids": [idb.0]})).unwrap();
+    assert_eq!(names(&b, idb), [Some("Jane".to_string()), None]);
+    let _ = std::fs::remove_dir_all(&src);
+}

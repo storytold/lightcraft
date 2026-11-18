@@ -129,8 +129,11 @@ write them, from sidecars and from XMP embedded in the file. Named faces become 
   mirrored photos (2, 4, 5, 7), which MWG can't describe, on the upright photo. The file's orientation is read for
   this when the photo has regions to write (for a raw, the whole file, as Read Metadata from File does). Either way
   they read back as they were. When the photo has
-  no regions left but the sidecar has a list, an empty list is written, so another library reading the file drops
-  them too; a sidecar that never had one gets none.
+  no regions left to write (none, or only the detector's) but the sidecar has regions LightCraft read, an empty list
+  is written, so another library reading the file drops them too. Otherwise the sidecar's own list stays: a sidecar
+  that never had one gets none, an empty one stays empty, and a list LightCraft reads nothing from (pixel areas with
+  no size, say) is not thrown away by a save. A box that can't be written (not finite, empty or off the photo) counts
+  as none.
 - **Names in `Iptc4xmpExt:PersonInImage`.** The names on the photo's faces are listed there too. Names in the
   sidecar's list that are not the name of one of its face regions (typed in another application) are kept; a name
   that belonged to a face goes when the face is renamed, cleared or removed. LightCraft doesn't read this list.
@@ -150,7 +153,8 @@ write them, from sidecars and from XMP embedded in the file. Named faces become 
   its Exif states decides, and with no such size they are taken as written. A square photo or size looks the same both
   ways and is taken as written. Boxes follow LightCraft's own Rotate Left/Right and flips.
 - **Re-reading**: a sidecar that has `mwg-rs:Regions` — even with an empty list — replaces the photo's regions, so
-  regions removed in another application go away here too. A sidecar without `mwg-rs:Regions` (an application that
+  regions removed in another application go away here too. The detector's unnamed boxes, which are never written,
+  are kept, except one on a face the sidecar has a box for (half or more of the two boxes in common). A sidecar without `mwg-rs:Regions` (an application that
   doesn't do regions) leaves the photo's regions as they are.
 
 ## Reading `crs:` develop fields
