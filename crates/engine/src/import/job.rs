@@ -451,7 +451,7 @@ impl ImportJob {
             let mut embedded_sidecar = if skip_sidecar {
                 None
             } else {
-                info.xmp.as_deref().filter(|_| has_embedded_xmp).and_then(|x| match crate::sidecar::parse_sidecar(x, target) {
+                info.xmp.as_deref().filter(|_| has_embedded_xmp).and_then(|x| match crate::sidecar::parse_sidecar_with_as_shot(x, target, info.as_shot_wb) {
                     Ok(sc) => Some(sc),
                     Err(e) => {
                         log::warn!("import {path}: embedded XMP: {e}");
@@ -468,7 +468,7 @@ impl ImportJob {
             let external_sidecar = if skip_sidecar {
                 None
             } else {
-                found_sidecar.and_then(|f| std::fs::read_to_string(f).ok()).and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
+                found_sidecar.and_then(|f| std::fs::read_to_string(f).ok()).and_then(|x| match crate::sidecar::parse_sidecar_with_as_shot(&x, target, info.as_shot_wb) {
                     Ok(sc) => Some(sc),
                     Err(e) => {
                         log::warn!("import {path}: XMP: {e}");
