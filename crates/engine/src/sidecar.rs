@@ -3256,6 +3256,29 @@ mod tests {
         assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
         assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
     }
+
+    /// A nested self-closing `rdf:Description` must not make CRS write-back skip a
+    /// following sibling description that carries a `crs:` field in element form: the
+    /// sibling's field is updated in place rather than duplicated.
+    #[test]
+    fn crs_write_updates_sibling_after_nested_self_closing_description() {
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <dc:title>Some title</dc:title>
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains("<crs:Exposure2012>0.9</crs:Exposure2012>"), "the sibling field is updated in place:\n{data}");
+        assert!(!data.contains("crs:Exposure2012=\""), "no attribute duplicate is added:\n{data}");
+        assert_eq!(data.matches("<crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
 }
 
 #[cfg(test)]
