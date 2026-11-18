@@ -331,7 +331,7 @@ impl Frame {
     pub fn sample(&self, src: &Rgb32f, w: usize, h: usize) -> Rgb32f {
         let oriented = if self.orient == Orientation::Normal { None } else { Some(src.oriented(self.orient)) };
         let o = oriented.as_ref().unwrap_or(src);
-        let plan =self.sample_plan(src.width, src.height, w, h);
+        let plan = self.sample_plan(src.width, src.height, w, h);
         let base = match plan.prefilter {
             Some((nw, nh)) => std::borrow::Cow::Owned(resize(o, nw, nh, Filter::Mitchell)),
             None => std::borrow::Cow::Borrowed(o),
