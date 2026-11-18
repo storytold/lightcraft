@@ -21,8 +21,11 @@ pub enum Domain {
     /// `[R, G1, G2, B]` of its 2 × 2 cells, forced to RGGB; gives camera RGB at the mosaic's resolution, so
     /// the picture is denoised and demosaiced in one step and must not be demosaiced again.
     BayerToRgb,
-    /// Demosaiced linear camera RGB packed as three planes `[R, G, B]` (NCHW); gives linear camera RGB at the
-    /// same resolution. Sensor-agnostic (works for X-Trans, Bayer, Foveon, linear DNG, HDR merges).
+    /// Demosaiced linear RGB packed as three planes `[R, G, B]` (NCHW), in the colour space [`DenoiserManifest::space`]
+    /// selects: linear camera RGB by default, or linear Rec. 2020 with the as-shot white balance and the camera matrix
+    /// applied. The answer must come back in the same space; the engine converts it to linear camera RGB for the
+    /// pipeline, so the product is always camera RGB. Sensor-agnostic (works for X-Trans, Bayer, Foveon, linear DNG,
+    /// HDR merges).
     LinearRgb,
 }
 

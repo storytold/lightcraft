@@ -971,21 +971,34 @@ mod tests {
     }
     use lightcraft_denoise::{onnx, reference, synthetic};
 
+    /// Reads a synthetic model from a folder made for this call alone: the name a shared temp folder would give it could
+    /// be prepared by another local user, and a plain write would follow their link.
+    fn read_synthetic(tag: &str, bytes: Vec<u8>) -> Net {
+        let mut last = std::io::ErrorKind::AlreadyExists;
+        for n in 0..100u32 {
+            let dir = std::env::temp_dir().join(format!("lc-nn-{tag}-{}-{n}", std::process::id()));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => {
+                    let path = dir.join("model.onnx");
+                    std::fs::write(&path, bytes).unwrap();
+                    let read = onnx::read(&path).unwrap();
+                    let _ = std::fs::remove_dir_all(&dir);
+                    return read;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = e.kind(),
+                Err(e) => panic!("no folder for the model: {e}"),
+            }
+        }
+        panic!("no folder for the model: {last:?} every time");
+    }
+
     fn net(tile: u64, ch: u64, depth: usize, seed: u64) -> Net {
-        let path = std::env::temp_dir().join(format!("lc-nn-{}-{tile}-{ch}-{depth}-{seed}.onnx", std::process::id()));
-        std::fs::write(&path, synthetic::unet_onnx(tile, ch, depth, seed)).unwrap();
-        let n = onnx::read(&path).unwrap();
-        let _ = std::fs::remove_file(&path);
-        n
+        read_synthetic(&format!("{tile}-{ch}-{depth}-{seed}"), synthetic::unet_onnx(tile, ch, depth, seed))
     }
 
     /// Generates and loads a synthetic linear RGB U-Net ONNX model for GPU testing.
     fn linear_rgb_net(tile: u64, ch: u64, depth: usize, seed: u64) -> Net {
-        let path = std::env::temp_dir().join(format!("lc-nn-lin-{}-{tile}-{ch}-{depth}-{seed}.onnx", std::process::id()));
-        std::fs::write(&path, synthetic::unet_linear_rgb_onnx(tile, ch, depth, seed)).unwrap();
-        let n = onnx::read(&path).unwrap();
-        let _ = std::fs::remove_file(&path);
-        n
+        read_synthetic(&format!("lin-{tile}-{ch}-{depth}-{seed}"), synthetic::unet_linear_rgb_onnx(tile, ch, depth, seed))
     }
 
     fn picture(len: usize, seed: u64) -> Vec<f32> {

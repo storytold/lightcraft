@@ -89,8 +89,27 @@ fn self_test(runner: &dyn TileRunner, manifest: &DenoiserManifest, load_ms: f64)
                 let tolerance = f64::from(max_deviation).max(0.05) * 4.0;
                 checks.push((format!("its scale is the {nominal:.3e} the description says (found {scale:.3e})"), (ratio - 1.0).abs() <= tolerance));
             }
-            // noise left after bringing the answer back to the input's scale, against the noise that went in
-            let g = if scale.abs() > 0.0 { 1.0 / scale } else { 1.0 };
+            // noise left after bringing the answer back to the input's scale, against the noise that went in. The photo
+            // path matches each colour plane on its own for a linear picture, so the diagnostic does too: one pooled
+            // reciprocal would leave a model whose planes scale differently looking as if it kept the noise.
+            let g = if is_linear_rgb {
+                let cells = t * t;
+                let mut per = [1.0f64; 3];
+                for (c, gc) in per.iter_mut().enumerate() {
+                    if mean_in.abs() > 0.0
+                        && let Some(plane) = a.get(c * cells..(c + 1) * cells)
+                    {
+                        let mean = plane.iter().map(|&v| f64::from(v)).sum::<f64>() / cells as f64;
+                        let scale = mean / mean_in;
+                        if scale.abs() > 0.0 {
+                            *gc = 1.0 / scale;
+                        }
+                    }
+                }
+                per
+            } else {
+                [if scale.abs() > 0.0 { 1.0 / scale } else { 1.0 }; 3]
+            };
             let (mut noise_in, mut noise_out, mut n_in, mut n_out) = (0.0f64, 0.0f64, 0usize, 0usize);
             for (i, (&v, &s)) in input.iter().zip(base.iter().cycle()).enumerate() {
                 // centre of each plane only: edges are the model's guess
@@ -105,7 +124,7 @@ fn self_test(runner: &dyn TileRunner, manifest: &DenoiserManifest, load_ms: f64)
                     for x in side / 4..3 * side / 4 {
                         let sample_idx = if is_linear_rgb { y * t + x } else { (y / 2) * t + x / 2 };
                         if let (Some(&o), Some(&s)) = (a.get(c * side * side + y * side + x), base.get(sample_idx)) {
-                            noise_out += (f64::from(o) * g - f64::from(s)).powi(2);
+                            noise_out += (f64::from(o) * g[c] - f64::from(s)).powi(2);
                             n_out += 1;
                         }
                     }
@@ -236,7 +255,7 @@ pub fn check_tile_linear_rgb(t: usize) -> Vec<f32> {
 mod tests {
     use super::*;
     use crate::licence::Licence;
-    use crate::manifest::{Domain, LinearSpace};
+    use crate::manifest::{Domain, Gain, LinearSpace};
     use crate::synthetic;
     use crate::synthetic_proto::{len_field, value_info_bytes};
 
@@ -379,6 +398,35 @@ mod tests {
         assert!(t.ok, "self test passed: {t:?}");
         assert_eq!(t.tile_megapixels, (64 * 64) as f64 / 1e6);
         let _ = std::fs::remove_file(p);
+    }
+
+    /// The diagnostic matches each linear-RGB plane on its own, as the photo path does: a model whose planes have
+    /// different scales passes when each plane is brought back correctly, instead of failing on a pooled scale.
+    #[test]
+    fn the_self_test_reads_each_plane_scale_on_its_own() {
+        struct Planes;
+        impl TileRunner for Planes {
+            fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error> {
+                // the three planes averaged (so the noise goes down), then each written out on a scale of its own
+                let cell = (input.len() / 3).max(1);
+                let t = cell.isqrt();
+                let plane = t * t;
+                let scale = [1.0f32, 2.0, 2.0];
+                let mut out = vec![0.0f32; 3 * plane];
+                for i in 0..plane {
+                    let mean = (input[i] + input[plane + i] + input[2 * plane + i]) / 3.0;
+                    for c in 0..3 {
+                        out[c * plane + i] = mean * scale[c];
+                    }
+                }
+                Ok(out)
+            }
+        }
+        let mut m = manifest(64, 1.0);
+        m.domain = Domain::LinearRgb;
+        m.gain = Gain::None;
+        let t = self_test(&Planes, &m, 0.0);
+        assert!(t.ok, "each plane's own scale is taken out: {t:?}");
     }
 
     #[test]

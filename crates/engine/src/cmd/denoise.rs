@@ -540,8 +540,9 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
     write_settings(&dir, &st).map_err(EngineError::Other)?;
     if run_on.is_some() {
         // a choice of where denoise runs is also a go-ahead to try the card again: a set-up that crashed or gave up
-        // before is forgotten, and the loaded model sets the card up afresh for the next photo
-        forget_gpu_set_ups(&dir);
+        // before is forgotten, and the loaded model sets the card up afresh for the next photo. A marker that cannot be
+        // cleared is reported: the card stays off until it is, and the caller must not be told otherwise.
+        forget_gpu_set_ups(&dir).map_err(EngineError::Other)?;
         if let Some(a) = &s.denoise.active {
             *a.model.lock().unwrap_or_else(PoisonError::into_inner) = None;
         }

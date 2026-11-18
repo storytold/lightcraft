@@ -129,11 +129,23 @@ pub(crate) fn installed_models(dir: &Path) -> Vec<Installed> {
 }
 
 /// Forget that setting the graphics card up for a model closed LightCraft before (the markers [`set_up_card`] leaves):
-/// the user chose where denoise runs, so the card may be tried again.
-pub(crate) fn forget_gpu_set_ups(dir: &Path) {
+/// the user chose where denoise runs, so the card may be tried again. Every marker is attempted, so one that cannot be
+/// cleared does not keep the others; the first failure is returned, since a marker that stays leaves its card off and the
+/// caller must not report success.
+pub(crate) fn forget_gpu_set_ups(dir: &Path) -> Result<(), String> {
+    let mut failed: Option<String> = None;
+    let mut remember = |r: Result<(), String>| {
+        if let Err(why) = r {
+            failed.get_or_insert(why);
+        }
+    };
     for i in installed_models(dir) {
-        let _ = std::fs::remove_file(i.onnx.with_file_name(GPU_SETUP_MARKER));
+        remember(super::gpu::forget_marker(&i.onnx.with_file_name(GPU_SETUP_MARKER)));
     }
     #[cfg(feature = "denoise")]
-    forget_builtin_card(&builtin_marker(&dir.join(lightcraft_denoise::builtin::ID)));
+    remember(forget_builtin_card(&builtin_marker(&dir.join(lightcraft_denoise::builtin::ID))));
+    match failed {
+        Some(why) => Err(why),
+        None => Ok(()),
+    }
 }

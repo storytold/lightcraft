@@ -328,71 +328,149 @@ fn a_set_up_that_takes_too_long_is_given_up_on() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The lock a set-up holds for its whole run is what says another process is setting the card up: a set-up that finds it
+/// held waits for it (up to its deadline) instead of taking the marker for a crash's.
 #[test]
-fn a_marker_that_another_process_holds_locked_is_waited_for_not_taken_for_a_crash() {
-    // another LightCraft process is setting the card up: it made the marker and holds its lock (a second handle stands for it)
+fn a_set_up_that_another_process_is_running_is_waited_for_not_taken_for_a_crash() {
     let dir = folder("otherprocess");
     let marker = dir.join(GPU_SETUP_MARKER);
-    use std::io::Write;
-    let mut other = std::fs::OpenOptions::new().write(true).create_new(true).open(&marker).unwrap();
-    other.write_all(b"setting up the graphics card for AI Denoise (unix time 0)").unwrap();
+    // another LightCraft process: it took the lock and made its marker
+    let other = std::fs::OpenOptions::new().read(true).write(true).truncate(false).create(true).open(dir.join(super::gpu::GPU_SETUP_LOCK)).unwrap();
     other.lock().unwrap();
-    // it ends after a moment: the lock goes, then the file
+    std::fs::write(&marker, "setting up the graphics card for AI Denoise (unix time 0)").unwrap();
+    // it ends after a moment: the marker goes, then the lock
     let m = marker.clone();
     let ender = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(400));
-        drop(other);
         let _ = std::fs::remove_file(&m);
+        drop(other);
     });
     let started = web_time::Instant::now();
     let r = set_up_card(&marker, Duration::from_secs(10), || Ok(3), || 4);
     ender.join().unwrap();
     assert_eq!(r, Ok((3, 4)), "the card is set up once the other set-up has ended");
-    assert!(started.elapsed() >= Duration::from_millis(300), "it waited for the other set-up");
+    assert!(started.elapsed() < Duration::from_secs(10), "the wait took less than its limit");
     // a lock that is not released in time: the card is not used, and the reason says why
-    let mut other = std::fs::OpenOptions::new().write(true).create_new(true).open(&marker).unwrap();
-    other.write_all(b"setting up the graphics card for AI Denoise (unix time 0)").unwrap();
+    let other = std::fs::OpenOptions::new().read(true).write(true).truncate(false).create(true).open(dir.join(super::gpu::GPU_SETUP_LOCK)).unwrap();
     other.lock().unwrap();
+    std::fs::write(&marker, "setting up the graphics card for AI Denoise (unix time 0)").unwrap();
     let r = set_up_card(&marker, Duration::from_millis(250), || Ok(()), || ());
     assert_eq!(r, Err(super::gpu::GPU_STUCK.to_string()));
     drop(other);
     let _ = std::fs::remove_file(&marker);
-    // a marker that a set-up has unlocked but not yet deleted (Windows deletes after closing) is not a crash either
-    let mut leaving = std::fs::OpenOptions::new().write(true).create_new(true).open(&marker).unwrap();
-    leaving.write_all(b"setting up the graphics card for AI Denoise (unix time 0)").unwrap();
-    leaving.lock().unwrap();
-    drop(leaving);
-    let m = marker.clone();
-    let remover = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(200));
-        let _ = std::fs::remove_file(&m);
-    });
-    let r = set_up_card(&marker, Duration::from_secs(10), || Ok(5), || 6);
-    remover.join().unwrap();
-    assert_eq!(r, Ok((5, 6)), "a marker on its way out is waited for, not taken for a crash");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A caller that has spent its coordination deadline does not start a set-up after it, however long the other process's
+/// set-up goes on: the deadline is one for the whole coordination.
 #[test]
-fn a_marker_held_past_the_crash_grace_is_waited_for_when_its_set_up_ends() {
-    // a real set-up holds its marker for longer than the grace an unlocked one gets, then unlocks it and deletes it: that
-    // is a set-up that ended, not a crash, and the grace counts from the unlock rather than from the start of the wait
-    let dir = folder("longheld");
+fn a_set_up_does_not_start_after_its_coordination_deadline() {
+    let dir = folder("deadline");
     let marker = dir.join(GPU_SETUP_MARKER);
-    use std::io::Write;
-    let mut other = std::fs::OpenOptions::new().write(true).create_new(true).open(&marker).unwrap();
-    other.write_all(b"setting up the graphics card for AI Denoise (unix time 0)").unwrap();
+    let other = std::fs::OpenOptions::new().read(true).write(true).truncate(false).create(true).open(dir.join(super::gpu::GPU_SETUP_LOCK)).unwrap();
     other.lock().unwrap();
-    let m = marker.clone();
-    let ender = std::thread::spawn(move || {
-        std::thread::sleep(super::gpu::MARKER_GRACE + Duration::from_millis(300));
+    std::fs::write(&marker, "setting up the graphics card for AI Denoise (unix time 0)").unwrap();
+    let holder = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(600));
         drop(other);
-        // unlocked but not deleted yet: the window Windows needs to close the file before it can go
-        std::thread::sleep(Duration::from_millis(200));
-        let _ = std::fs::remove_file(&m);
     });
-    let r = set_up_card(&marker, Duration::from_secs(10), || Ok(8), || 9);
-    ender.join().unwrap();
-    assert_eq!(r, Ok((8, 9)), "a set-up that ended after the grace is not taken for a crash");
+    let started = web_time::Instant::now();
+    let r = set_up_card(&marker, Duration::from_millis(250), || Ok(1), || 2);
+    let took = started.elapsed();
+    holder.join().unwrap();
+    assert_eq!(r, Err(super::gpu::GPU_STUCK.to_string()), "no new set-up after the deadline: {r:?}");
+    assert!(took < Duration::from_millis(600), "it gives up at its deadline, not when the other set-up ends: {took:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Choosing where denoise runs clears a marker a crash left behind, but not one a set-up that is under way owns: that
+/// set-up's own end removes its marker, and clearing it would let a second set-up start beside it.
+#[test]
+fn forgetting_set_ups_leaves_a_marker_another_process_holds() {
+    let dir = folder("forget");
+    let marker = dir.join(GPU_SETUP_MARKER);
+    std::fs::write(&marker, "setting up the graphics card for AI Denoise (unix time 0)").unwrap();
+    super::gpu::forget_marker(&marker).unwrap();
+    assert!(!marker.exists(), "a marker nobody holds is one a crash left behind");
+    // another process takes the lock and makes its own marker
+    let other = std::fs::OpenOptions::new().read(true).write(true).truncate(false).create(true).open(dir.join(super::gpu::GPU_SETUP_LOCK)).unwrap();
+    other.lock().unwrap();
+    std::fs::write(&marker, "setting up the graphics card for AI Denoise (unix time 0)").unwrap();
+    super::gpu::forget_marker(&marker).unwrap();
+    assert!(marker.exists(), "a set-up that is under way keeps its marker");
+    drop(other);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A marker that cannot be removed (a models folder that takes no change) is reported, so the caller does not say the
+/// card may be tried again while its marker stays.
+#[cfg(unix)]
+#[test]
+fn forgetting_a_marker_that_cannot_be_removed_says_so() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = folder("forget-unremovable");
+    let marker = dir.join(GPU_SETUP_MARKER);
+    std::fs::write(&marker, "setting up the graphics card for AI Denoise (unix time 0)").unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    // a process that writes anywhere (root) cannot make the failure this test is about
+    if std::fs::write(dir.join("made-anyway"), b"").is_ok() {
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        return lightcraft_testkit::skip!(System, "this process writes to a mode-500 folder, so an unremovable marker cannot be made");
+    }
+    let r = super::gpu::forget_marker(&marker);
+    assert!(r.as_ref().is_err_and(|e| e.contains("cannot be removed")), "the caller is told: {r:?}");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(marker.exists(), "the marker is still there, as the error said");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A marker whose contents cannot be read is still just a marker: the set-up never reads it, and choosing where denoise
+/// runs removes it (unlinking needs the folder's permission, not the file's). This used to leave the card off for good.
+#[cfg(unix)]
+#[test]
+fn a_marker_that_cannot_be_read_still_keeps_the_card_off_and_can_be_cleared() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = folder("unreadable");
+    let marker = dir.join(GPU_SETUP_MARKER);
+    std::fs::write(&marker, "setting up the graphics card for AI Denoise (unix time 0)").unwrap();
+    std::fs::set_permissions(&marker, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let started = web_time::Instant::now();
+    let r = set_up_card(&marker, Duration::from_secs(10), || Ok(1), || 2);
+    assert_eq!(r, Err(GPU_CRASHED.to_string()), "the card is not used");
+    assert!(started.elapsed() < Duration::from_secs(5), "and it does not try for ever");
+    super::gpu::forget_marker(&marker).unwrap();
+    assert!(!marker.exists(), "choosing where denoise runs clears it");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_set_up_that_could_not_make_its_marker_leaves_the_next_ones_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = folder("unmade");
+    let marker = dir.join(GPU_SETUP_MARKER);
+    // the folder takes no new file, so this set-up runs without its crash guard
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    if std::fs::write(dir.join("made-anyway"), b"").is_ok() {
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        return lightcraft_testkit::skip!(System, "this process writes to a mode-500 folder, so a marker that cannot be made cannot be made");
+    }
+    let (m, d) = (marker.clone(), dir.clone());
+    let r = set_up_card(
+        &marker,
+        Duration::from_secs(10),
+        move || {
+            // meanwhile another process makes its own marker
+            std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::write(&m, "setting up the graphics card for AI Denoise (unix time 1)").unwrap();
+            Ok(())
+        },
+        || (),
+    );
+    assert_eq!(r, Ok(((), ())), "the set-up still runs, without its crash guard");
+    assert!(marker.exists(), "the other process's marker is still there");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }

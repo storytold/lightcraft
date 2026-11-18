@@ -86,7 +86,8 @@ pub fn grid_linear_rgb(width: usize, height: usize, tile: usize, overlap: usize)
     (starts(width, tile, overlap), starts(height, tile, overlap))
 }
 
-/// How many model calls [`denoise_linear_rgb`] makes for a picture.
+/// How many model calls [`denoise_linear_rgb`] makes for a picture: the size of its tile grid, for geometry that run
+/// accepts. A picture with no width or no height is rejected before any tile runs, so its count is not used.
 pub fn tile_count_linear_rgb(width: usize, height: usize, tile: usize, overlap: usize) -> usize {
     let (sx, sy) = grid_linear_rgb(width, height, tile, overlap);
     sx.len().saturating_mul(sy.len())
@@ -242,13 +243,16 @@ pub fn denoise_bayer(
     Ok(Rgb32f { width, height, data: acc })
 }
 
-/// Denoise a linear camera RGB image `image` of `width × height` pixels using a tile model.
-/// Gives camera RGB at the image's original resolution. Sensor-agnostic (works for X-Trans, Bayer, HDR merges, etc.).
+/// Denoise a linear image `image` of `width × height` pixels using a tile model, and give the denoised picture at the
+/// image's original resolution, in the colour space of the input: a linear Rec.2020 input gives a linear Rec.2020 answer
+/// (the caller converts it back to camera RGB) and a camera RGB input gives camera RGB. Sensor-agnostic (works for
+/// X-Trans, Bayer, HDR merges, etc.).
 ///
 /// `clip_from` is one `max(R, G, B)` per pixel in the sensor's own domain, for an `image` that was white-balanced
 /// and converted to another colour space before the model ran: an image channel at the clip threshold then no
-/// longer means the sensor clipped, so the highlight protector must decide on these values instead. `None` reads
-/// the clipping straight from `image`.
+/// longer means the sensor clipped, so the highlight protector must decide on these values instead. It decides
+/// whether a pixel is clipped and does not change the colour space of the answer. `None` reads the clipping
+/// straight from `image`.
 pub fn denoise_linear_rgb(
     image: &Rgb32f,
     clip_from: Option<&[f32]>,
@@ -628,7 +632,9 @@ fn finish_tile_linear_rgb(input: &[f32], clip_from: Option<&[f32]>, out: &mut [f
                 let offset = c * side;
                 let mean_in = plane_sum(input, offset) / cells;
                 let mean_out = plane_sum(out, offset) / cells;
-                let measured = if mean_in >= f64::from(MIN_SIGNAL) && mean_out.abs() > 0.0 { (mean_out / mean_in) as f32 } else { nominal };
+                // the size of the plane decides whether its mean can be measured from: a converted linear picture can have
+                // a plane whose mean is below zero (colours outside the camera's gamut), and its gain is still measurable
+                let measured = if mean_in.abs() >= f64::from(MIN_SIGNAL) && mean_out.abs() > 0.0 { (mean_out / mean_in) as f32 } else { nominal };
                 let g = measured.clamp(min_g, max_g);
                 if g.is_finite() && g != 0.0 {
                     let inv = 1.0 / g;
@@ -665,7 +671,11 @@ fn protect_clipped_linear_rgb(input: &[f32], clip_from: Option<&[f32]>, out: &mu
             })
             .collect(),
     };
-    if !m.iter().any(|&v| v >= clip) {
+    // the protection fades in below the clip threshold, so the work is skipped only when nothing is inside that band: a
+    // tile whose brightest pixel sits just under the threshold must be protected like any other, not lose it because no
+    // pixel of this tile reached the threshold itself
+    let lo = clip - 0.03;
+    if !m.iter().any(|&v| v >= lo) {
         return;
     }
     // 3×3 maximum over pixels (separable)
@@ -690,7 +700,6 @@ fn protect_clipped_linear_rgb(input: &[f32], clip_from: Option<&[f32]>, out: &mu
             .collect()
     };
     m = dilate(&dilate(&m, true), false);
-    let lo = clip - 0.03;
     for j in 0..t {
         for i in 0..t {
             let k = j * t + i;
@@ -703,7 +712,9 @@ fn protect_clipped_linear_rgb(input: &[f32], clip_from: Option<&[f32]>, out: &mu
             let plain = [r.get(k).copied().unwrap_or(0.0), g.get(k).copied().unwrap_or(0.0), b.get(k).copied().unwrap_or(0.0)];
             for (c, &pv) in plain.iter().enumerate() {
                 if let Some(v) = out.get_mut(c * plane + k) {
-                    *v += (pv - *v) * s;
+                    // fully protected means the answer is the input itself: `v + (pv - v)` loses it to rounding when
+                    // the model's value is far from the input's (1.0 against 1e8 comes out as 0)
+                    *v = if s >= 1.0 { pv } else { *v + (pv - *v) * s };
                 }
             }
         }
@@ -1174,6 +1185,65 @@ mod tests {
         assert!(converted_white.iter().all(|&v| (v - 0.9).abs() < 0.01), "unclipped pixel denoised: {converted_white:?}");
         let plain = got.data[48 * w + 5];
         assert!(plain.iter().all(|&v| (v - 0.36).abs() < 0.01), "other pixels denoised: {plain:?}");
+    }
+
+    /// A fully protected pixel is the input itself, not an interpolation that can round to zero: a model answer far from
+    /// the input (1e8 against white) used to come out black.
+    #[test]
+    fn linear_rgb_protected_highlights_copy_the_input_sample() {
+        struct Huge;
+        impl TileRunner for Huge {
+            fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error> {
+                Ok(input.iter().map(|&v| if v >= 0.99 { 1.0e8 } else { v }).collect())
+            }
+        }
+        let (w, h) = (96usize, 96usize);
+        let data: Vec<[f32; 3]> = (0..w * h)
+            .map(|i| {
+                let val = if (40..70).contains(&(i % w)) { 1.0 } else { 0.4 };
+                [val, val, val]
+            })
+            .collect();
+        let img = Rgb32f { width: w, height: h, data };
+        let mut p = params(32, 8, Gain::None);
+        p.clip = Some(0.99);
+        let got = denoise_linear_rgb(&img, None, &Huge, &p, &Control::default()).unwrap();
+        let plateau = got.data[48 * w + 55];
+        assert!(plateau.iter().all(|&v| (v - 1.0).abs() < 1e-6), "a protected pixel keeps white, not zero: {plateau:?}");
+    }
+
+    /// The protection fades in just below the clip threshold, so a tile whose brightest pixel sits in that band is
+    /// protected as well: whether it was used to depend on another pixel of the same tile reaching the threshold.
+    #[test]
+    fn linear_rgb_highlights_just_below_the_threshold_are_protected() {
+        struct Dim(MockLinearRgb);
+        impl TileRunner for Dim {
+            fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error> {
+                Ok(self.0.run(input)?.into_iter().map(|v| v * 0.9).collect())
+            }
+        }
+        let (w, h) = (96usize, 96usize);
+        let data = vec![[0.98f32; 3]; w * h];
+        let img = Rgb32f { width: w, height: h, data };
+        let mut p = params(32, 8, Gain::None);
+        p.clip = Some(0.99);
+        let got = denoise_linear_rgb(&img, None, &Dim(MockLinearRgb { scale: 1.0 }), &p, &Control::default()).unwrap();
+        let near_white = got.data[48 * w + 48];
+        assert!(near_white.iter().all(|&v| v > 0.93), "a pixel inside the transition keeps most of its value: {near_white:?}");
+    }
+
+    /// A colour plane whose mean is below zero (colours outside the camera's gamut in a converted picture) still has its
+    /// own scale measured, instead of falling back to the nominal one.
+    #[test]
+    fn linear_rgb_a_plane_with_a_negative_mean_still_measures_its_gain() {
+        let (w, h) = (96usize, 96usize);
+        let data = vec![[-0.1f32; 3]; w * h];
+        let img = Rgb32f { width: w, height: h, data };
+        // the model's own scale is 2.5 % away from the nominal one, inside the deviation window
+        let gain = Gain::MatchMean { nominal: -2.0, max_deviation: 0.05 };
+        let got = denoise_linear_rgb(&img, None, &MockLinearRgb { scale: -1.95 }, &params(32, 8, gain), &Control::default()).unwrap();
+        let mean: f64 = got.data.iter().map(|px| f64::from(px[0])).sum::<f64>() / got.data.len() as f64;
+        assert!((mean + 0.1).abs() < 5e-4, "the measured gain brings the plane back to its input mean (-0.1): {mean}");
     }
 
     /// Verifies cancellation and tile progress reporting for linear RGB denoising.

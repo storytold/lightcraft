@@ -20,17 +20,18 @@ pub(super) const GPU_SETUP_LIMIT: Duration = Duration::from_secs(30);
 #[cfg(feature = "denoise")]
 pub(super) const GPU_MAX_FALLBACKS: usize = 3;
 
-/// The file beside a model while the graphics card is set up for it (see [`set_up_card`]).
+/// The file beside a model while the graphics card is set up for it (see [`set_up_card`]): it is there while a set-up
+/// runs and after one that a crash cut short, and gone otherwise.
 pub(crate) const GPU_SETUP_MARKER: &str = "gpu-setup.marker";
+
+/// The file beside a model that serialises everything done to its marker: a set-up, a reset and a look at the marker hold
+/// its operating-system lock, so no two of them can create, see and delete the marker in the wrong order. It stays after a
+/// set-up ends (deleting a lock file would bring back the very window it exists to close) and carries nothing.
+pub(crate) const GPU_SETUP_LOCK: &str = "gpu-setup.lock";
 
 /// Why the card is not tried when a set-up marker is found.
 #[cfg(feature = "denoise")]
 pub(super) const GPU_CRASHED: &str = "LightCraft closed while it was setting up the graphics card for AI Denoise last time";
-
-/// How long a set-up marker may stay unlocked before it is taken for one a crash left behind: a set-up that ends unlocks
-/// its marker and then deletes it, and the two are not one step.
-#[cfg(feature = "denoise")]
-pub(super) const MARKER_GRACE: Duration = Duration::from_secs(1);
 
 /// Why the card is not used when its set-up ran out of time (the start of it).
 #[cfg(feature = "denoise")]
@@ -53,63 +54,110 @@ pub(super) fn card_is_faster(card_ms: f64, cpu_ms: f64, threads: usize) -> bool 
 #[cfg(feature = "denoise")]
 pub(super) static SETTING_UP: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
-/// Removes a set-up's marker when the set-up ends, however it ends — but not when the process dies inside the driver.
-/// The file holds an operating-system lock for as long as the set-up runs, so that another LightCraft process can tell a
-/// set-up under way (locked) from one that a crash left behind (not locked: the system frees the lock of a dead process).
+/// The lock file that serialises a model's set-ups (see [`GPU_SETUP_LOCK`]).
+fn lock_beside(marker: &std::path::Path) -> std::path::PathBuf {
+    marker.with_file_name(GPU_SETUP_LOCK)
+}
+
+/// Remove a set-up's marker when the set-up ends, however it ends — but not when the process dies inside the driver. The
+/// marker is removed while the set-up lock is still held, so a reset or a set-up of another process cannot look at the
+/// path in between.
 #[cfg(feature = "denoise")]
-struct SetUpEnded(PathBuf, Option<std::fs::File>);
+struct SetUpEnded {
+    marker: PathBuf,
+    /// Whether this set-up made the marker (and so removes it): one it could not make removes nothing, since the file at
+    /// that path, if there is one, is another process's.
+    made: bool,
+    /// The lock that kept this set-up's marker its own, held until the marker is gone.
+    _lock: Option<std::fs::File>,
+}
 
 #[cfg(feature = "denoise")]
 impl Drop for SetUpEnded {
     fn drop(&mut self) {
-        drop(self.1.take()); // release the lock before the file goes
-        let _ = std::fs::remove_file(&self.0);
-        SETTING_UP.lock().unwrap_or_else(PoisonError::into_inner).retain(|m| m != &self.0);
+        if self.made {
+            let _ = std::fs::remove_file(&self.marker);
+        }
+        SETTING_UP.lock().unwrap_or_else(PoisonError::into_inner).retain(|m| m != &self.marker);
     }
 }
 
-/// A marker that another process holds locked is that process's set-up under way, not a crash's: wait for it to end (up to
-/// `limit`). It returns `Ok` when the marker is gone. A marker that nobody holds is one a crash left behind — unless it
-/// disappears within [`MARKER_GRACE`], which is the process that has just ended removing it (it unlocks before it deletes:
-/// Windows cannot delete a file another handle still holds open, so the two are not atomic). The grace is counted from
-/// when the marker was first seen unlocked, not from the start of this wait: a set-up holds its marker for as long as it
-/// takes, and one that ends after that is still a set-up that ended, not a crash.
+/// Open the set-up lock, making it when it is not there yet: a reset and a set-up have to serialise even on a marker that
+/// no set-up of this build has touched (one an older build left). A lock that is only read is enough for a shared lock,
+/// which is what a reset takes; a set-up makes the file when it creates the lock it holds exclusively.
+fn open_set_up_lock(lock: &std::path::Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new().read(true).open(lock).or_else(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            std::fs::OpenOptions::new().read(true).write(true).truncate(false).create(true).open(lock)
+        } else {
+            Err(e)
+        }
+    })
+}
+
+/// Clear the marker a crash left behind — but not one another process's set-up is running beside: its own end removes
+/// that. The marker goes while the set-up lock is held, so a set-up cannot make one at the path in between, and removing
+/// needs the folder's permission only (the marker itself is never read).
+///
+/// `Err` when the marker could not be removed: the caller is told rather than left saying the card may be tried again
+/// while it may not.
+pub(super) fn forget_marker(marker: &std::path::Path) -> Result<(), String> {
+    // a shared lock is all a reset needs: it never makes a marker, and a set-up's exclusive lock still keeps it out (so
+    // no set-up can be between making its marker and owning it), while a read-only handle works on every file system
+    let lock = match open_set_up_lock(&lock_beside(marker)) {
+        Ok(file) => match file.try_lock_shared() {
+            Ok(()) => Some(file),
+            // a set-up under way: its own end clears its marker
+            Err(std::fs::TryLockError::WouldBlock) => return Ok(()),
+            // locks are not supported here: the marker alone decides, as it always has
+            Err(std::fs::TryLockError::Error(_)) => None,
+        },
+        // no lock file, and none could be made (a folder that takes no new file): nothing to serialise with
+        Err(_) => None,
+    };
+    let removed = std::fs::remove_file(marker);
+    drop(lock);
+    match removed {
+        Ok(()) => Ok(()),
+        // gone already: there is nothing to forget
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("the AI Denoise set-up marker {} cannot be removed: {e}", marker.display())),
+    }
+}
+
+/// Take the set-up lock beside `marker`, waiting up to `limit` for a set-up another process is running to end. `Ok(None)`
+/// when there is no lock to hold (a folder that takes no lock file, or a system without locks): the set-up then runs with
+/// the marker alone, as it did before there were locks.
 #[cfg(feature = "denoise")]
-fn wait_for_other_set_up(marker: &Path, limit: Duration) -> Result<(), String> {
+fn lock_set_up(marker: &Path, limit: Duration) -> Result<Option<std::fs::File>, String> {
     let began = web_time::Instant::now();
-    let mut unlocked_since: Option<web_time::Instant> = None;
+    let file = match std::fs::OpenOptions::new().read(true).write(true).truncate(false).create(true).open(lock_beside(marker)) {
+        Ok(file) => file,
+        // the models folder may not exist yet, or may take no new file: a marker that cannot be written only loses the
+        // crash guard
+        Err(_) => return Ok(None),
+    };
     loop {
-        let Ok(file) = std::fs::OpenOptions::new().read(true).open(marker) else { return Ok(()) };
         match file.try_lock() {
-            Ok(()) => {
-                // nobody holds it: either it is about to go or a crash left it
-                drop(file);
-                let since = *unlocked_since.get_or_insert_with(web_time::Instant::now);
-                if since.elapsed() >= MARKER_GRACE {
-                    return Err(GPU_CRASHED.into());
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
+            Ok(()) => return Ok(Some(file)),
+            Err(std::fs::TryLockError::Error(_)) => return Ok(None),
             Err(std::fs::TryLockError::WouldBlock) => {
-                // held again: the set-up is still under way, so the grace starts over if it unlocks later
-                unlocked_since = None;
+                // another process is setting the card up: wait for it, but never past the one deadline of this call
                 if began.elapsed() >= limit {
                     return Err(GPU_STUCK.into());
                 }
-                drop(file);
-                std::thread::sleep(Duration::from_millis(100));
+                std::thread::sleep(Duration::from_millis(20));
             }
-            // locks are not supported here: the marker alone decides, as before
-            Err(std::fs::TryLockError::Error(_)) => return Err(GPU_CRASHED.into()),
         }
     }
 }
 
 /// Set the graphics card up with `card` on a thread of its own while `meanwhile` runs here, and give up on the card when
 /// it takes longer than `limit` (a driver building kernels for minutes, or stuck). The `marker` file exists while `card`
-/// runs: one found before it starts is another process's set-up, waited for (see `wait_for_other_set_up`), or one left by
-/// a LightCraft that closed during a set-up (a driver crash takes the app with it), so the card is not tried again until
-/// the user chooses where denoise runs (`denoise.settings {runOn}`).
+/// runs: one found before it starts was left by a LightCraft that closed during a set-up (a driver crash takes the app
+/// with it), so the card is not tried again until the user chooses where denoise runs (`denoise.settings {runOn}`). The
+/// set-up lock beside it keeps this process, other LightCraft processes and the reset that choosing makes from creating,
+/// seeing and deleting the marker in the wrong order.
 #[cfg(feature = "denoise")]
 pub(super) fn set_up_card<T: Send + 'static, R>(
     marker: &Path,
@@ -117,36 +165,50 @@ pub(super) fn set_up_card<T: Send + 'static, R>(
     card: impl FnOnce() -> Result<T, String> + Send + 'static,
     meanwhile: impl FnOnce() -> R,
 ) -> Result<(T, R), String> {
-    // the models folder may not exist yet; a marker that cannot be written only loses the crash guard
     if let Some(parent) = marker.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let ended = loop {
-        {
-            let mut running = SETTING_UP.lock().unwrap_or_else(PoisonError::into_inner);
-            if running.iter().any(|m| m == marker) {
-                return Err(GPU_STUCK.into());
-            }
-            // the marker is made new and locked at once; one that exists is another process's (see wait_for_other_set_up)
-            match std::fs::OpenOptions::new().write(true).create_new(true).open(marker) {
-                Ok(mut file) => {
-                    use std::io::Write;
-                    let _ = file.lock();
-                    let secs = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-                    let _ = file.write_all(format!("setting up the graphics card for AI Denoise (unix time {secs})\n").as_bytes());
-                    running.push(marker.to_path_buf());
-                    break SetUpEnded(marker.to_path_buf(), Some(file));
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(_) => {
-                    // a marker that cannot be written only loses the crash guard
-                    running.push(marker.to_path_buf());
-                    break SetUpEnded(marker.to_path_buf(), None);
-                }
-            }
+    // one deadline for the whole coordination: waiting for another process's set-up and starting this one must fit in the
+    // same `limit`, or a handoff from one set-up to the next would give this caller a fresh one each time
+    let coordination_began = web_time::Instant::now();
+    if SETTING_UP.lock().unwrap_or_else(PoisonError::into_inner).iter().any(|m| m == marker) {
+        return Err(GPU_STUCK.into());
+    }
+    // the lock is taken before the marker is looked at, and any wait for another process's set-up happens outside the
+    // list of this process's set-ups, so one model's card never holds another's up
+    let lock = lock_set_up(marker, limit.saturating_sub(coordination_began.elapsed()))?;
+    // the other process may have given the lock up after the deadline passed: this caller has spent its one limit
+    // waiting, so it does not start a set-up now
+    if coordination_began.elapsed() >= limit {
+        return Err(GPU_STUCK.into());
+    }
+    let mut running = SETTING_UP.lock().unwrap_or_else(PoisonError::into_inner);
+    // a thread of this process may have taken the marker up while this call waited for the lock
+    if running.iter().any(|m| m == marker) {
+        return Err(GPU_STUCK.into());
+    }
+    // with the lock held, a set-up that exists is a crash's: another process's would hold the lock, and this process's
+    // are listed above
+    if marker.exists() {
+        return Err(GPU_CRASHED.into());
+    }
+    // made and described while the lock is held, so a reset never finds a marker it could take for a crash's
+    let secs = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let made = match std::fs::OpenOptions::new().write(true).create_new(true).open(marker) {
+        Ok(mut file) => {
+            use std::io::Write;
+            let _ = file.write_all(format!("setting up the graphics card for AI Denoise (unix time {secs})\n").as_bytes());
+            true
         }
-        wait_for_other_set_up(marker, limit)?;
+        // a marker came to the path between the look above and this make (an older build's set-up, which holds no lock):
+        // that is a set-up under way as far as this one can tell, so the card is left alone
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Err(GPU_CRASHED.into()),
+        // a marker that cannot be written only loses the crash guard
+        Err(_) => false,
     };
+    running.push(marker.to_path_buf());
+    let ended = SetUpEnded { marker: marker.to_path_buf(), made, _lock: lock };
+    drop(running);
     let started = web_time::Instant::now();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::Builder::new()

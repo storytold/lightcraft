@@ -171,6 +171,25 @@ enum DenoiseInput {
     },
 }
 
+/// Bytes the memory gate holds while a raw picture becomes a product, from the file's header, before anything is
+/// allocated: the model's scratch, and the picture's own allocations at their peak.
+///
+/// For a Bayer model that is the mosaic and the tiles. For a linear-RGB model the demosaic's own needs (its mosaic beside
+/// the 12 B/px RGB it makes) and the tiles' (the model's input and the result accumulator at 12 B/px each, its weights at
+/// 4 B/px and, for a converted input, the camera-domain clip map at 4 B/px) do not overlap in time, but the RGB lives
+/// through both, so the larger of the two is reserved.
+fn reservation(domain: Domain, space: LinearSpace, pixels: usize, cpp: usize, scratch: usize, parallel: usize) -> usize {
+    let (tile_bytes, demosaic_bytes) = match domain {
+        Domain::BayerToRgb => (20, 0),
+        Domain::LinearRgb => (if space.is_default() { 28 } else { 32 }, if cpp == 3 { 24 } else { 16 }),
+    };
+    let tiles = pixels.saturating_mul(tile_bytes).saturating_add(scratch.saturating_mul(parallel));
+    if demosaic_bytes == 0 {
+        return tiles;
+    }
+    tiles.max(pixels.saturating_mul(demosaic_bytes).saturating_add(16 * 1024 * 1024))
+}
+
 /// Make the product of `spec` unless it is there: decode the photo, run the model over its mosaic, write the result.
 /// `Ok(true)` when it was made now, `Ok(false)` when it already existed.
 pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Result<bool, MakeError> {
@@ -187,12 +206,30 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
         Some(r) => r(&spec.path).map_err(MakeError::Failed)?,
         None => std::fs::read(&spec.path).map_err(|e| MakeError::Failed(format!("{}: {e}", spec.path)))?,
     };
-    // the decode and the normalised mosaic wait their turn at the process-wide memory gate, as every decode does
+    if lightcraft_raw::probe(&bytes).is_none() {
+        return Err(MakeError::Unsupported("not a raw file".into()));
+    }
+    // headers only: how big the picture is decides what making it reserves, before it is allocated
+    let info = match lightcraft_raw::probe_info(&bytes) {
+        Ok(info) => info,
+        Err(lightcraft_raw::RawError::Unsupported(why)) => return Err(MakeError::Unsupported(why)),
+        Err(e) => return Err(MakeError::Failed(e.to_string())),
+    };
+    let model = loaded(spec)?;
+    // Packed input, returned RGB and the preceding group's RGB overlap while tiles run.
+    let scratch =
+        model.bytes_per_tile().saturating_add(128usize.saturating_mul(spec.manifest.tile as usize).saturating_mul(spec.manifest.tile as usize));
+    let (_, budget) = crate::memory::work_gate().usage();
+    let parallel = spec.parallel.clamp(1, 4).min((budget / scratch.max(1)).max(1));
+    // one reservation for the whole making, taken before the first allocation: the samples the decode leaves and the RGB
+    // the demosaic makes are charged from the moment they exist, never held uncharged while the model loads or the tiles
+    // wait for their turn
+    let pixels = info.active_area.width.saturating_mul(info.active_area.height);
+    let reserved = reservation(spec.manifest.domain, spec.manifest.space, pixels, info.cpp, scratch, parallel);
+    let _held = crate::memory::work_gate().acquire(reserved.max(bytes.len().saturating_mul(4)));
+    let read = began.elapsed();
+    let demosaic_started = web_time::Instant::now();
     let input = {
-        let _held = crate::memory::work_gate().acquire(bytes.len().saturating_mul(4));
-        if lightcraft_raw::probe(&bytes).is_none() {
-            return Err(MakeError::Unsupported("not a raw file".into()));
-        }
         let raw = match lightcraft_raw::decode(&bytes) {
             Ok(r) => r,
             Err(lightcraft_raw::RawError::Unsupported(why)) => return Err(MakeError::Unsupported(why)),
@@ -234,12 +271,6 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
                 };
                 let n = raw.normalized().map_err(|e| MakeError::Failed(e.to_string()))?;
                 drop(raw);
-                drop(_held);
-                let pixels = (n.width as usize).saturating_mul(n.height as usize);
-                // three-sample data (already demosaiced or an HDR merge) keeps its 12 B/px mosaic and the 12 B/px RGB
-                // result alive together; a one-sample mosaic adds only 4 B/px
-                let demosaic_bytes = if n.cpp == 3 { 24 } else { 16 };
-                let _demosaic_permit = crate::memory::work_gate().acquire(pixels.saturating_mul(demosaic_bytes).saturating_add(16 * 1024 * 1024));
                 let mut camera_rgb = lightcraft_raw::demosaic(&n, lightcraft_raw::Method::Ahd);
                 drop(n);
                 let (color_transform, clip_from) = match color_transform_info {
@@ -263,23 +294,8 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
             }
         }
     };
-    if cancelled() {
-        return Err(MakeError::Cancelled);
-    }
-    let decoded = began.elapsed();
-    let model = loaded(spec)?;
-    // Packed input, returned RGB and the preceding group's RGB overlap while tiles run.
-    let scratch =
-        model.bytes_per_tile().saturating_add(128usize.saturating_mul(spec.manifest.tile as usize).saturating_mul(spec.manifest.tile as usize));
-    let (_, budget) = crate::memory::work_gate().usage();
-    let parallel = spec.parallel.clamp(1, 4).min((budget / scratch.max(1)).max(1));
-    let (pixel_count, byte_multiplier) = match &input {
-        DenoiseInput::Bayer { mosaic, .. } => (mosaic.data.len(), 20),
-        // the model input (12 B/px), the result accumulator (12 B/px), its weights (4 B/px) and, for a converted
-        // input, the camera-domain clip map (4 B/px) all live through tiling
-        DenoiseInput::LinearRgb { camera_rgb, clip_from, .. } => (camera_rgb.data.len(), if clip_from.is_some() { 32 } else { 28 }),
-    };
-    let _held = crate::memory::work_gate().acquire(pixel_count.saturating_mul(byte_multiplier).saturating_add(scratch.saturating_mul(parallel)));
+    let decoded = demosaic_started.elapsed();
+    let tiled = web_time::Instant::now();
     // the built-in denoiser measures the whole photo's noise once, from its mosaic; a linear-RGB model has no mosaic to measure
     if let DenoiseInput::Bayer { mosaic, .. } = &input {
         model.prepare(&mosaic.data, mosaic.width, mosaic.height);
@@ -336,15 +352,20 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
     if cancelled() {
         return Err(MakeError::Cancelled);
     }
+    let modelled = tiled.elapsed();
     let ran = began.elapsed();
     product::write(&spec.product, &rgb, &spec.key).map_err(|e| MakeError::Failed(format!("could not save the denoised picture: {e}")))?;
     if std::env::var_os("LIGHTCRAFT_PROFILE").is_some() {
         eprintln!(
-            "[denoise] read + decode {:.0} ms, model (set-up, tiles, blend) {:.0} ms, write {:.0} ms",
+            "[denoise] load + read (with the memory wait) {:.0} ms, decode + demosaic {:.0} ms, model (set-up, tiles, blend) {:.0} ms, write {:.0} ms",
+            read.as_secs_f64() * 1e3,
             decoded.as_secs_f64() * 1e3,
-            (ran - decoded).as_secs_f64() * 1e3,
+            modelled.as_secs_f64() * 1e3,
             (began.elapsed() - ran).as_secs_f64() * 1e3
         );
     }
     Ok(true)
 }
+
+#[cfg(test)]
+mod tests;

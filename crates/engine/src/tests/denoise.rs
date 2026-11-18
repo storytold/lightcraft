@@ -1043,6 +1043,45 @@ fn dim_linear_loader(runs: &Arc<AtomicUsize>) -> Loader {
     Arc::new(move |_, _| Ok(Arc::new(DimLinear { runs: runs.clone() }) as Arc<dyn Model>))
 }
 
+/// A linear stand-in model that scales each plane of the space it is given by a gain of its own. Unlike a single gain,
+/// this tells a picture the engine converted and converted back (its channels come out mixed) from one it did not (each
+/// channel comes out multiplied on its own).
+struct GainsLinear {
+    runs: Arc<AtomicUsize>,
+    gains: [f32; 3],
+}
+
+impl TileRunner for GainsLinear {
+    fn run(&self, input: &[f32]) -> Result<Vec<f32>, lightcraft_denoise::Error> {
+        self.runs.fetch_add(1, Ordering::Relaxed);
+        let plane = (input.len() / 3).max(1);
+        let mut out = vec![0.0f32; input.len()];
+        for (c, px) in out.chunks_mut(plane).enumerate() {
+            let g = self.gains.get(c).copied().unwrap_or(1.0);
+            for (o, i) in px.iter_mut().zip(input.get(c * plane..).unwrap_or_default()) {
+                *o = i * g;
+            }
+        }
+        Ok(out)
+    }
+}
+
+impl Model for GainsLinear {
+    fn runner(&self, _: RunOn, threads: usize) -> (&dyn TileRunner, usize) {
+        (self, threads)
+    }
+
+    fn self_test(&self, _: RunOn) -> Result<Value, String> {
+        Ok(json!({"ok": true}))
+    }
+}
+
+/// A loader for a linear model whose three planes have gains of their own.
+fn gains_linear_loader(runs: &Arc<AtomicUsize>, gains: [f32; 3]) -> Loader {
+    let runs = runs.clone();
+    Arc::new(move |_, _| Ok(Arc::new(GainsLinear { runs: runs.clone(), gains }) as Arc<dyn Model>))
+}
+
 /// Generates a test DenoiserManifest for a linear RGB model.
 fn linear_manifest(id: &str) -> DenoiserManifest {
     DenoiserManifest {
@@ -1133,7 +1172,10 @@ fn an_xtrans_photo_is_rejected_by_bayer_model_but_denoised_by_linear_rgb_model()
     s.execute("denoise.models.install", &json!({"path": bayer_onnx.to_string_lossy(), "acknowledged": true})).unwrap();
 
     set_amount(&mut s, 100.0);
-    for _ in 0..200 {
+    // the model refuses the file at once; the wait is bounded by time rather than by a count of pump calls, so a loaded
+    // machine or an instrumented build does not end the wait before the queue has run
+    let deadline = std::time::Instant::now() + denoise_ready_timeout();
+    while std::time::Instant::now() < deadline {
         let _ = s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
         if matches!(s.denoise_photo_state(id), PhotoState::Failed { .. }) {
             break;
@@ -1179,6 +1221,9 @@ fn an_xtrans_photo_is_rejected_by_bayer_model_but_denoised_by_linear_rgb_model()
 /// transforms correctly back into camera space and exports successfully.
 #[test]
 fn an_xtrans_photo_denoised_by_linear_rec2020_model_transforms_and_exports_cleanly() {
+    /// What the stand-in model does to each of its three planes: three gains of their own, so a picture converted and
+    /// converted back cannot be mistaken for one that was not.
+    const REC2020_GAINS: [f32; 3] = [0.4, 0.7, 0.9];
     let dir = temp_dir("xtrans-rec2020-denoise");
     let originals = dir.join("originals");
     std::fs::create_dir_all(&originals).unwrap();
@@ -1206,7 +1251,7 @@ fn an_xtrans_photo_denoised_by_linear_rec2020_model_transforms_and_exports_clean
     s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
     s.set_denoise_models_dir(Some(dir.join("denoise-models")));
 
-    s.denoise.loader = dim_linear_loader(&runs_linear);
+    s.denoise.loader = gains_linear_loader(&runs_linear, REC2020_GAINS);
     let mut manifest = linear_manifest("stand-in-rec2020");
     manifest.space = LinearSpace::LinRec2020;
     let src = dir.join("src-stand-in-rec2020");
@@ -1232,20 +1277,37 @@ fn an_xtrans_photo_denoised_by_linear_rec2020_model_transforms_and_exports_clean
     let denoised = rendered_mean(&mut s, id);
     assert!(denoised < plain - 3.0, "denoised {denoised} vs plain {plain}");
 
-    // The stand-in model halves every Rec.2020 sample, so the product is half the demosaiced camera RGB: compare each
-    // channel against the values the sensor recorded, which a wrong inverse matrix or a missing white-balance step fails.
+    // The stand-in model scales each plane of the space it is given by a gain of its own, so the picture only comes back
+    // to the sensor's own channels when the white balance and both colour matrices really ran: a picture the engine left
+    // in camera RGB would have each channel multiplied on its own, with no mixing at all.
     let spec = s.media.denoise.spec(id).unwrap().clone();
     let product = lightcraft_denoise::product::read(&spec.product, &spec.key, 1).unwrap();
     let decoded = lightcraft_raw::decode(&std::fs::read(&xtrans_path).unwrap()).unwrap();
     let normalized = decoded.normalized().unwrap();
-    let expected = lightcraft_raw::demosaic(&normalized, lightcraft_raw::Method::Ahd);
-    assert_eq!((product.width, product.height), (expected.width, expected.height));
-    let channel_mean =
-        |img: &lightcraft_raster::Rgb32f, c: usize| -> f64 { img.data.iter().map(|p| f64::from(p[c])).sum::<f64>() / img.data.len() as f64 };
-    for c in 0..3 {
-        let got = channel_mean(&product, c);
-        let want = 0.5 * channel_mean(&expected, c);
-        assert!((got - want).abs() <= 0.01 * want, "channel {c}: {got} vs {want}");
+    let camera = lightcraft_raw::demosaic(&normalized, lightcraft_raw::Method::Ahd);
+    assert_eq!((product.width, product.height), (camera.width, camera.height));
+    let as_shot_xy = lightcraft_raw::color::as_shot_white_xy(&decoded);
+    let (matrix, wb) = lightcraft_raw::color::camera_to_rec2020(&decoded, as_shot_xy);
+    let m = matrix.to_f32();
+    let inv = matrix.inverse().unwrap().to_f32();
+    let apply = |k: &[[f32; 3]; 3], v: [f32; 3]| -> [f32; 3] {
+        [
+            k[0][0] * v[0] + k[0][1] * v[1] + k[0][2] * v[2],
+            k[1][0] * v[0] + k[1][1] * v[1] + k[1][2] * v[2],
+            k[2][0] * v[0] + k[2][1] * v[1] + k[2][2] * v[2],
+        ]
+    };
+    for (i, px) in camera.data.iter().enumerate() {
+        // camera RGB → balanced → Rec. 2020 → the model's gains → back to Rec. 2020 → balanced → camera RGB
+        let balanced = [px[0] * wb[0], px[1] * wb[1], px[2] * wb[2]];
+        let rec = apply(&m, balanced);
+        let denoised = [rec[0] * REC2020_GAINS[0], rec[1] * REC2020_GAINS[1], rec[2] * REC2020_GAINS[2]];
+        let cam = apply(&inv, denoised);
+        let want = [cam[0] / wb[0], cam[1] / wb[1], cam[2] / wb[2]];
+        for c in 0..3 {
+            let (got, want) = (product.data[i][c], want[c]);
+            assert!((got - want).abs() <= 0.01 * want.abs().max(1e-4), "pixel {i} channel {c}: {got} vs {want} (camera RGB input {px:?})");
+        }
     }
 
     let o = ExportOptions::from_json(&json!({"format": "png", "width": 160, "height": 160}));
@@ -1313,9 +1375,14 @@ fn a_linear_rec2020_product_keeps_the_negative_camera_values_the_inverse_transfo
 
     let spec = s.media.denoise.spec(id).unwrap().clone();
     let product = lightcraft_denoise::product::read(&spec.product, &spec.key, 1).unwrap();
-    let lowest = product.data.iter().flatten().copied().fold(f32::INFINITY, f32::min);
-    assert!(lowest.is_finite(), "the product has a value that is not a number: {lowest}");
-    assert!(lowest < -1e-5, "the inverse transform's negative values are kept, not clipped at zero (lowest {lowest})");
+    // every sample, because `f32::min` ignores a NaN beside a number and would hide one
+    assert!(product.data.iter().flatten().all(|v| v.is_finite()), "the product has a value that is not a number");
+    // each channel, not just the picture: the inverse matrix mixes the channels, so one clipped channel moves the hue of
+    // colours that only leave the camera's gamut in another
+    for c in 0..3 {
+        let lowest = product.data.iter().map(|px| px[c]).fold(f32::INFINITY, f32::min);
+        assert!(lowest < -1e-5, "channel {c} keeps its own negative values, not clipped at zero (lowest {lowest})");
+    }
 
     let _ = std::fs::remove_dir_all(&dir);
 }
