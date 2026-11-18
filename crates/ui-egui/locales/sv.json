@@ -2515,5 +2515,7 @@
   "Top bar": "Övre fältet",
   "Tool strip": "Verktygsfält",
   "Bottom bar": "Nedre fältet",
-  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton"
+  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton",
+  "Recently Added always shows the newest imports first.": "Nyligen tillagda visar alltid de senaste importerna först.",
+  "Recently Deleted shows no date groups.": "Nyligen raderade visar inga datumgrupper."
 }

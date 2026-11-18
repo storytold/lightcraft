@@ -2411,5 +2411,7 @@
   "Top bar": "Yläpalkki",
   "Tool strip": "Työkalupalkki",
   "Bottom bar": "Alapalkki",
-  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää"
+  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää",
+  "Recently Added always shows the newest imports first.": "Äskettäin lisätyt näyttää aina uusimmat tuonnit ensin.",
+  "Recently Deleted shows no date groups.": "Äskettäin poistetut ei näytä päivämääräryhmiä."
 }

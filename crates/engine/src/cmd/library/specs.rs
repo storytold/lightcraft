@@ -233,7 +233,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Sort",
             ["View", "Sort"],
             None,
-            "{key?: captureDate|importDate|editDate|fileName|rating|fileSize|random, ascending?: bool, group?: auto|none|day|month|year, seed?: u64 (the shuffle `random` gives)}",
+            "{key?: captureDate|importDate|editDate|fileName|rating|fileSize|random, ascending?: bool, group?: auto|none|day|month|year, seed?: u64 (the shuffle `random` gives)} — the sort is kept as asked in every view, but Recently Added is always newest import first whatever it says (its menus turn the keys and the direction off; it still groups by import date, at the chosen grouping). Elsewhere only the date keys (captureDate, importDate, editDate) draw date headers, so `group` is kept but unused for the other keys, and Recently Deleted draws none",
             always,
             |s, p| {
                 let key: SortKey = match p.get("key") {
@@ -297,7 +297,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Reshuffle",
             ["View", "Sort"],
             None,
-            "{seed?: 0..2^53-1} — sort at random; without `seed` a new shuffle each time",
+            "{seed?: 0..2^53-1} — sort at random; without `seed` a new shuffle each time. Recently Added ignores the sort and stays newest import first, so a reshuffle there only switches the stored sort to Random with a new seed and changes no order on screen (it still ends a held view, like any sort change; the menus keep Reshuffle off in that view)",
             always,
             |s, p| {
                 let seed = match seed_param(p, "library.shuffle", s.sort.seed)? {
