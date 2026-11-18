@@ -412,6 +412,8 @@ mod tests {
     }
 
     /// Progress that stops is a creation that hangs: given up on a limit after the last step.
+    /// The limit leaves room for a busy machine: against 100 ms steps, 200 ms ended the creation
+    /// early whenever one step ran 100 ms late (Windows, builds running).
     #[test]
     fn a_creation_that_stops_making_progress_fails_a_limit_after_its_last_step() {
         static STUCK: Stuck = Stuck::new();
@@ -422,7 +424,7 @@ mod tests {
         let t0 = Instant::now();
         let scope = local.scope();
         let r = within_20_s(move || {
-            create_on(scope, Duration::from_millis(200), B, move || -> Result<u32, String> {
+            create_on(scope, Duration::from_secs(1), B, move || -> Result<u32, String> {
                 let progress = Progress::current();
                 for _ in 0..4 {
                     std::thread::sleep(Duration::from_millis(100));
@@ -434,9 +436,9 @@ mod tests {
         });
         let took = t0.elapsed();
         let why = r.expect_err("a creation that stops making progress is an error");
-        assert!(why.contains("stopped making progress for 200 ms"), "{why}");
+        assert!(why.contains("stopped making progress for 1 s"), "{why}");
         assert!(why.contains("after 4 kernels"), "{why}");
-        assert!(took >= Duration::from_millis(600), "waited past the last step: {took:?}");
+        assert!(took >= Duration::from_millis(1400), "waited past the last step: {took:?}");
         drop(release);
         eventually("the released thread never finished", || STUCK.reason().is_none());
     }
