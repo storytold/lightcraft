@@ -20,9 +20,8 @@ Windows and Linux files use the full-bleed tile so the lynx reads at 16-48 px.
 
 ## Provenance
 
-The owner's original drawing, made in ArtCraft (2880 px, keyed to the three colours), vectorised with
-craftrules `assets/logo-options/_tools/vectorize_tile.py`. The source drawing stays in craftrules at
-`assets/app-icons/lightcraft/source.png`; `lightcraft.svg` here is the canonical artwork. Licence:
+The owner's original drawing, made in ArtCraft (2880 px, keyed to the three colours) and
+vectorised. `lightcraft.svg` here is the canonical artwork. Licence:
 `LICENSE.txt` (MIT OR Apache-2.0, like the repo).
 
 ## Files

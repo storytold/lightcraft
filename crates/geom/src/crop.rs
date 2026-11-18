@@ -44,6 +44,31 @@ impl CropGeometry {
         Affine::rotate_about(-self.angle.to_radians(), c) * to_rot
     }
 
+    /// This crop with values no crop tool can produce taken out, for settings read from a file or an
+    /// agent (issue #2555): the angle within ±45° (not finite: 0), and the rect clipped to the
+    /// bounding box of the image turned by that angle, which holds every crop that stays on the
+    /// photo, so a real crop is unchanged while one reaching far past the photo can no longer make
+    /// a full-size output of billions of pixels. A rect with nothing left (reversed, or not finite)
+    /// is the whole frame.
+    pub fn bounded(&self, w: f64, h: f64) -> CropGeometry {
+        let angle = if self.angle.is_finite() { self.angle.clamp(-45.0, 45.0) } else { 0.0 };
+        let (sin, cos) = angle.to_radians().sin_cos();
+        let (bw, bh) = (w * cos.abs() + h * sin.abs(), w * sin.abs() + h * cos.abs());
+        let bbox = Rect::from_center(Point::new(w / 2.0, h / 2.0), bw, bh);
+        let r = self.rect_px(w, h);
+        let finite = [r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite());
+        let inside = r.x0 >= bbox.x0 && r.y0 >= bbox.y0 && r.x1 <= bbox.x1 && r.y1 <= bbox.y1;
+        // a reversed rect (right edge left of its left edge, or bottom above top) has a negative size
+        let ordered = r.x0 <= r.x1 && r.y0 <= r.y1;
+        if finite && inside && ordered {
+            // left exactly as stored: a round trip through pixels would change its last bits
+            return CropGeometry { rect: self.rect, angle };
+        }
+        let rect = if finite { r.intersect(&bbox) } else { Rect::new(0.0, 0.0, 0.0, 0.0) };
+        let rect = if rect.is_empty() || w <= 0.0 || h <= 0.0 { Rect::UNIT } else { rect.scale(1.0 / w, 1.0 / h) };
+        CropGeometry { rect, angle }
+    }
+
     /// Whether every crop corner lies within the rotated image.
     pub fn is_within_image(&self, w: f64, h: f64) -> bool {
         let r = self.rect_px(w, h);
@@ -175,6 +200,41 @@ pub fn crop_fit_angle(w: f64, h: f64, angle_deg: f64, aspect: Option<f64>) -> Cr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #2555: `bounded` leaves every crop that stays on the photo exactly as it was, and
+    /// clips one reaching far past it to the turned photo's bounding box.
+    #[test]
+    fn bounded_keeps_real_crops_and_clips_the_rest() {
+        for (w, h) in [(6000.0, 4000.0), (4000.0, 6000.0), (9000.0, 1000.0)] {
+            for angle in [-45.0, -12.5, 0.0, 0.1, 7.0, 45.0] {
+                for aspect in [None, Some(1.0), Some(3.0), Some(0.25)] {
+                    let real = crop_fit_angle(w, h, angle, aspect);
+                    assert_eq!(real.bounded(w, h), real, "{w}x{h} {angle} {aspect:?}");
+                }
+            }
+            assert_eq!(CropGeometry::default().bounded(w, h), CropGeometry::default());
+        }
+        let (w, h) = (6000.0, 4000.0);
+        let wild = CropGeometry { rect: Rect::new(0.0, 0.0, 1000.0, 1000.0), angle: 5.0 };
+        let b = wild.bounded(w, h).rect_px(w, h);
+        assert!(b.width() <= w * 1.5 && b.height() <= h * 1.5, "{b:?}");
+        // angle beyond the tools' range, or not a number; a rect that is not a number
+        assert_eq!(CropGeometry { rect: Rect::UNIT, angle: 400.0 }.bounded(w, h).angle, 45.0);
+        assert_eq!(CropGeometry { rect: Rect::UNIT, angle: f64::NAN }.bounded(w, h).angle, 0.0);
+        let nan = CropGeometry { rect: Rect::new(f64::NAN, 0.0, 1.0, 1.0), angle: 3.0 }.bounded(w, h);
+        assert_eq!(nan.rect, Rect::UNIT);
+        // a crop entirely off the turned photo has nothing left: the whole frame
+        let off = CropGeometry { rect: Rect::new(50.0, 50.0, 60.0, 60.0), angle: 10.0 }.bounded(w, h);
+        assert_eq!(off.rect, Rect::UNIT);
+        // a reversed rect inside the photo is the whole frame, never a negative size
+        let reversed = CropGeometry { rect: Rect::new(0.8, 0.2, 0.2, 0.8), angle: 0.0 }.bounded(w, h);
+        assert_eq!(reversed.rect, Rect::UNIT);
+        let flipped = CropGeometry { rect: Rect::new(0.2, 0.8, 0.8, 0.2), angle: 3.0 }.bounded(w, h);
+        assert_eq!(flipped.rect, Rect::UNIT);
+        // a zero-size crop is left as it was
+        let line = CropGeometry { rect: Rect::new(0.5, 0.2, 0.5, 0.8), angle: 0.0 };
+        assert_eq!(line.bounded(w, h), line);
+    }
 
     #[test]
     fn identity_maps_pixels() {

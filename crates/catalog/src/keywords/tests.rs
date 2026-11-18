@@ -424,6 +424,36 @@ fn one_keyword_is_where_new_keywords_go() {
     assert_eq!(c.default_keyword_parent(), None, "undo of the first: none was");
 }
 
+/// The keyword shortcut is a mark on its keywords: setting it is one undo step (a new name is
+/// listed), and the mark moves with its keyword (also into a merge), goes with it, and comes
+/// back with undo.
+#[test]
+fn the_keyword_shortcut_moves_with_its_keywords() {
+    let (mut c, _) = lib(&[&["Events|Weddings"], &["Travel"]]);
+    let op = c.set_keyword_shortcut_ops(&["travel".into(), "Lisbon".into()]);
+    let undo = c.apply(op).unwrap();
+    assert_eq!(c.keyword_shortcut(), ["Lisbon", "Travel"], "spelled as the library spells it; a new name listed");
+    let op = c.set_keyword_shortcut_ops(&["events|weddings".into(), "Travel".into()]);
+    c.apply(op).unwrap();
+    assert_eq!(c.keyword_shortcut(), ["Events|Weddings", "Travel"], "the old marks are cleared");
+    let op = c.rename_keyword_ops("travel", "Trips").unwrap();
+    let undo_rename = c.apply(op).unwrap();
+    assert_eq!(c.keyword_shortcut(), ["Events|Weddings", "Trips"]);
+    c.apply(undo_rename).unwrap();
+    assert_eq!(c.keyword_shortcut(), ["Events|Weddings", "Travel"], "undo moves it back");
+    let op = c.set_keyword_shortcut_ops(&["Travel".into()]);
+    c.apply(op).unwrap();
+    let op = c.merge_keywords_ops(&["travel".into()], "Events|Weddings").unwrap();
+    c.apply(op).unwrap();
+    assert_eq!(c.keyword_shortcut(), ["Events|Weddings"], "into the merge");
+    let op = c.delete_keyword_ops("events").unwrap();
+    c.apply(op).unwrap();
+    assert!(c.keyword_shortcut().is_empty());
+    assert_eq!(c.set_keyword_shortcut_ops(&[]), Op::Batch { ops: vec![] }, "none to clear");
+    c.apply(undo).unwrap();
+    assert!(c.keyword_shortcut().is_empty(), "undo of the first: there was none");
+}
+
 /// A file's keywords as a photo carries them: the paths of `lr:hierarchicalSubject`, and the
 /// names of `dc:subject` that aren't levels of those paths (an exported `travel|Italy` comes
 /// back as one keyword, not three). Without paths, the names as they are.
@@ -433,7 +463,38 @@ fn a_files_keywords_keep_their_hierarchy() {
     assert_eq!(from_file(&v(&["Rome", "Italy", "travel", "beach"]), &v(&["travel|Italy|Rome"])), ["travel|Italy|Rome", "beach"]);
     assert_eq!(from_file(&v(&["ROME"]), &v(&["travel|Rome", " travel | rome "])), ["travel|Rome"], "each once, cleaned");
     assert_eq!(from_file(&v(&["beach", " sea "]), &[]), ["beach", "sea"]);
-    assert_eq!(from_file(&v(&["a|b"]), &[]), ["a|b"], "LightCraft's own sidecars write paths flat");
+    assert_eq!(from_file(&v(&["a|b"]), &[]), ["a|b"], "sidecars from LightCraft 0.13 and older wrote paths flat");
+}
+
+/// A sidecar's keywords: names in `dc:subject`, never paths, and the paths in
+/// `lr:hierarchicalSubject`; read back, the same keywords, however they were spelt or nested.
+#[test]
+fn a_sidecar_writes_names_flat_and_paths_hierarchical() {
+    let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let f = to_file(&v(&["Places|Italy|Rome", "sunset"]));
+    assert_eq!(f.flat, ["Places", "Italy", "Rome", "sunset"]);
+    assert_eq!(f.hierarchical, ["Places|Italy|Rome", "sunset"]);
+    assert!(f.flat.iter().all(|k| !k.contains(SEP)), "no path in dc:subject");
+
+    let f = to_file(&v(&["beach", " sea ", "Beach"]));
+    assert_eq!((f.flat, f.hierarchical), (v(&["beach", "sea"]), v(&[])), "no hierarchy: no lr:hierarchicalSubject");
+    assert_eq!(to_file(&[]), FileKeywords::default());
+
+    for keywords in [
+        v(&["Places|Italy|Rome", "sunset"]),
+        v(&["travel|Italy|Rome", "Rome"]),
+        v(&["travel|Italy", "travel|France", "Italy"]),
+        v(&["beach", "sea"]),
+        v(&[" a | b ", "A|B|c"]),
+    ] {
+        let f = to_file(&keywords);
+        let mut back = from_file(&f.flat, &f.hierarchical);
+        let mut want: Vec<String> = keywords.iter().map(|k| clean(k)).collect();
+        dedupe(&mut want);
+        back.sort_by_key(|k| k.to_lowercase());
+        want.sort_by_key(|k| k.to_lowercase());
+        assert_eq!(back, want, "round trip of {keywords:?}");
+    }
 }
 
 /// A new keyword inside one the library has takes the library's spelling of it: creating
@@ -493,6 +554,17 @@ fn the_keyword_list_is_written_as_tab_indented_text() {
     c.apply(Op::SetKeyword { path: "Places|Lisbon".into(), info: Some(with_synonyms(&["Lisboa"])) }).unwrap();
     c.apply(Op::SetKeyword { path: "Events|Weddings".into(), info: Some(KeywordInfo::default()) }).unwrap();
     assert_eq!(c.keyword_list_text().text, "beach\nEvents\n\tWeddings\n[Places]\n\tLisbon\n\t\t{Lisboa}\n");
+}
+
+/// The path budget the reader enforces holds for the writer too: a keyword past it, and its
+/// subtree, is named unwritable instead of making a file `keyword.import` rejects.
+#[test]
+fn the_keyword_list_written_stays_within_the_path_budget() {
+    let (c, _) = lib(&[&["Places|Lisbon", "beach"], &["Events|Weddings"]]);
+    let file = c.keyword_list_text_within(17);
+    assert_eq!(file.text, "beach\nEvents\nPlaces\n");
+    assert_eq!(file.unwritable, ["Events|Weddings", "Places|Lisbon"]);
+    assert_eq!(c.keyword_list_text().unwritable, Vec::<String>::new());
 }
 
 /// Reading a list gives each keyword's path and attributes: what was written comes back, and a
@@ -703,4 +775,48 @@ fn keyword_tree_caps_a_keyword_at_the_list_depth() {
     let (c, _) = lib(&[&[joined.as_str()]]);
     let deepest = tree_paths(&c.keyword_tree()).iter().map(|(p, _)| p.split(SEP).count()).max().unwrap_or(0);
     assert_eq!(deepest, MAX_LEVELS);
+}
+
+/// A keyword list file spells each keyword's whole path, so one long keyword with many short ones
+/// inside it expands into far more than its own size: past `MAX_LIST_PATH_BYTES` it is refused
+/// with the line where that happened, instead of growing without bound (CWE-400).
+#[test]
+fn a_list_whose_paths_expand_past_the_budget_is_refused() {
+    let parent = "p".repeat(1 << 20);
+    let children = MAX_LIST_PATH_BYTES / parent.len() + 2;
+    let mut text = format!("{parent}\n");
+    for i in 0..children {
+        text.push_str(&format!("\tc{i}\n"));
+    }
+    let err = parse_keyword_list(&text).unwrap_err().to_string();
+    assert!(err.contains("full paths come to more than"), "{err}");
+    // a list within the budget still reads
+    let ok = parse_keyword_list(&format!("{parent}\n\tchild\n")).unwrap();
+    assert_eq!(ok.len(), 2);
+    assert_eq!(ok[1].0, format!("{parent}|child"));
+}
+
+/// Many synonyms joining a keyword the library has, its export and its keyword list file each keep
+/// every spelling once, in order, without a search of the growing list per synonym (CWE-407).
+#[test]
+fn many_synonyms_are_gathered_once_each_in_order() {
+    const N: usize = 40_000;
+    let mut c = Catalog::new();
+    c.apply(Op::SetKeyword { path: "travel".into(), info: Some(with_synonyms(&["Trip"])) }).unwrap();
+    let mut incoming: Vec<String> = (0..N).map(|i| format!("syn{i}")).collect();
+    incoming.push("TRIP".into());
+    incoming.push("SYN7".into());
+    let started = std::time::Instant::now();
+    let (op, added, updated) = c.import_keywords_ops(&[("travel".into(), KeywordInfo { synonyms: incoming, ..KeywordInfo::default() })]);
+    c.apply(op).unwrap();
+    assert_eq!((added, updated), (0, 1));
+    let synonyms = c.keyword_info("travel").unwrap().synonyms.clone();
+    assert_eq!(synonyms.len(), N + 1);
+    assert_eq!(synonyms[0], "Trip");
+    assert_eq!(synonyms[8], "syn7");
+    let exported = c.export_keywords(&["travel".into()]);
+    assert_eq!(exported.flat.len(), N + 2);
+    let file = c.keyword_list_text();
+    assert_eq!(file.text.lines().count(), N + 2);
+    assert!(started.elapsed() < std::time::Duration::from_secs(20), "took {:?}", started.elapsed());
 }
