@@ -520,6 +520,8 @@ pub struct BrushDabs {
     /// What each dab adds under process V9 ([`travel_flow`], pressure applied), parallel to `dabs`;
     /// empty before V9, where every dab adds the stroke's flow.
     pub flows: Vec<f32>,
+    /// The stroke's edge is feathered as one dab's is (process V10, [`stroke_feather`]).
+    pub feather_by_stroke: bool,
 }
 
 impl BrushDabs {
@@ -557,6 +559,30 @@ impl BrushDabs {
         self.flows = flows;
         self
     }
+}
+
+/// Whether a brush stroke's edge is feathered as one dab's is (process V10 on): its coverage is
+/// [`stroke_coverage`] of its Flow build-up and its dabs' highest falloff, not every dab's falloff
+/// accumulated ([`accumulate`]), which piles the soft edges of overlapping dabs up into a hard one.
+pub fn stroke_feather(s: &lightcraft_develop::DevelopSettings) -> bool {
+    s.process.process() >= lightcraft_develop::Process::V10
+}
+
+/// One dab's paint at a pixel of a stroke under [`stroke_feather`]: the Flow build-up `build` grows
+/// by the dab's `flow` wherever the dab reaches, and the edge `edge` keeps the highest falloff `a`.
+#[inline]
+pub fn feather_dab(build: &mut f32, edge: &mut f32, a: f32, flow: f32) {
+    *build = accumulate(*build, 1.0, flow, 1.0);
+    *edge = edge.max(a);
+}
+
+/// A stroke's coverage under [`stroke_feather`] from its Flow build-up and its edge
+/// ([`feather_dab`]), up to its density. At Flow 100 the build-up is full wherever a dab reaches,
+/// so a stroke's edge falls off over the feather exactly as one dab's does; below it, the build-up
+/// is [`travel_flow`]'s, as under V9, shaped by the same edge.
+#[inline]
+pub fn stroke_coverage(build: f32, edge: f32, density: f32) -> f32 {
+    (build * edge).min(density)
 }
 
 /// Whether brush Flow is the coverage a stroke adds per brush radius it travels (process V9 on), as
@@ -670,6 +696,7 @@ pub fn brush_dabs_within(s: &BrushStroke, frame: &Frame, w: usize, h: usize, max
         auto: s.auto_mask,
         pressure,
         flows: Vec::new(),
+        feather_by_stroke: frame.brush_stroke_feather,
     };
     if frame.brush_flow_per_radius { bd.flow_by_travel() } else { bd }
 }
@@ -882,6 +909,8 @@ fn rasterize_brush(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, i
         let bd = brush_dabs(s, frame, w, h);
         let (dens, erase, auto) = (bd.density, bd.erase, bd.auto);
         let mut stroke_alpha = Plane::new(w, h);
+        // process V10: the Flow build-up goes in `stroke_alpha`, the edge in `edge` (`feather_dab`)
+        let mut edge = bd.feather_by_stroke.then(|| Plane::new(w, h));
         for (k, d) in bd.dabs.iter().enumerate() {
             let (r, hard, flow) = bd.dab(k);
             let refc = auto.then(|| {
@@ -902,10 +931,16 @@ fn rasterize_brush(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, i
                         a *= auto_similarity(log_l.data[i], chromaticity(img.data[i]), rl, rch);
                     }
                     let v = &mut stroke_alpha.data[i];
-                    // flow accumulates within a stroke up to density
-                    *v = accumulate(*v, a, flow, dens);
+                    match edge.as_mut().and_then(|e| e.data.get_mut(i)) {
+                        Some(e) => feather_dab(v, e, a, flow),
+                        // flow accumulates within a stroke up to density
+                        None => *v = accumulate(*v, a, flow, dens),
+                    }
                 }
             }
+        }
+        if let Some(edge) = &edge {
+            stroke_alpha = stroke_alpha.zip_map(edge, |b, e| stroke_coverage(b, e, dens));
         }
         if auto {
             let (sigma, eps) = auto_refine(bd.r);

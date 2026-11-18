@@ -1485,12 +1485,13 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, pla
 /// Most brush dabs the mask kernel evaluates per pixel (more: the CPU rasterizes the brush).
 const MAX_DABS: usize = 4096;
 
-/// The `shape` kernel's brush data for `dabs`: stroke records (12 words: dab offset, dab count,
-/// r, hard, flow, density, erase, bbox x0 y0 x1 y1, auto) then each dab's centre and the flow it
+/// The `shape` kernel's brush data for `dabs`: stroke records (13 words: dab offset, dab count,
+/// r, hard, flow, density, erase, bbox x0 y0 x1 y1, auto, the edge feathered by stroke (process
+/// V10, [`lightcraft_pipeline::masks::stroke_feather`])) then each dab's centre and the flow it
 /// adds (3 words; the stroke's flow before process V9, [`lightcraft_pipeline::masks::BrushDabs::dab`]).
 fn brush_aux(dabs: &[&lightcraft_pipeline::masks::BrushDabs], erase: bool) -> Vec<f32> {
     let mut aux = Vec::new();
-    let mut off = 12 * dabs.len();
+    let mut off = 13 * dabs.len();
     for d in dabs {
         let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
         for q in &d.dabs {
@@ -1499,6 +1500,7 @@ fn brush_aux(dabs: &[&lightcraft_pipeline::masks::BrushDabs], erase: bool) -> Ve
         aux.extend([off as f32, d.dabs.len() as f32, d.r as f32, d.hard as f32, d.flow, d.density, (erase && d.erase) as u8 as f32]);
         aux.extend([x0, y0, x1, y1].map(|v| v as f32));
         aux.push(d.auto as u8 as f32);
+        aux.push(d.feather_by_stroke as u8 as f32);
         off += 3 * d.dabs.len();
     }
     for d in dabs {

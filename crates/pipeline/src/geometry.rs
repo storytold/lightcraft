@@ -40,6 +40,8 @@ pub struct Frame {
     /// Brush Flow is coverage per brush radius travelled (process V9, [`crate::masks::flow_per_radius`]),
     /// not per dab.
     pub brush_flow_per_radius: bool,
+    /// A brush stroke's edge is feathered as one dab's is (process V10, [`crate::masks::stroke_feather`]).
+    pub brush_stroke_feather: bool,
 }
 
 /// Where a windowed [`Frame`]'s pixels sit in the full output: its offset and the full output's
@@ -86,6 +88,7 @@ impl Frame {
             view: None,
             masks_on_photo: false,
             brush_flow_per_radius: crate::masks::flow_per_radius(s),
+            brush_stroke_feather: crate::masks::stroke_feather(s),
         };
         if apply_crop {
             f.constrain_to_image(s.geometry.constrain_crop);

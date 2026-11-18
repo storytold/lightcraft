@@ -122,8 +122,9 @@ pub(super) fn lens_blur_brush_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui
             hard: r * (1.0 - (app.ui.brush_feather / 100.0).clamp(0.0, 1.0)),
             flow: (app.ui.brush_flow / 100.0).clamp(0.0, 1.0),
             density: (app.ui.lens_blur_brush_amount / 100.0).clamp(0.0, 1.0),
-            // (its strokes render as a mask brush does, Flow per radius travelled from V9)
+            // (its strokes render as a mask brush does: Flow per radius travelled from V9, the edge by stroke from V10)
             per_radius: lightcraft_pipeline::masks::flow_per_radius(d),
+            by_stroke: lightcraft_pipeline::masks::stroke_feather(d),
             color: if focus { [70, 200, 120] } else { [230, 70, 70] },
             opacity: 0.45,
         };

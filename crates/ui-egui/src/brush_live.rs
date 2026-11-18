@@ -9,7 +9,9 @@
 
 use egui::{Color32, ColorImage, Pos2, Rect, TextureHandle, TextureOptions, pos2};
 use lightcraft_geom::Point;
-use lightcraft_pipeline::masks::{accumulate, dab_alpha, pressure_flow, pressure_radius, push_dabs_counted, push_pressures, travel_flow};
+use lightcraft_pipeline::masks::{
+    accumulate, dab_alpha, feather_dab, pressure_flow, pressure_radius, push_dabs_counted, push_pressures, stroke_coverage, travel_flow,
+};
 
 /// The largest live-stroke buffer edge (pixels); a bigger canvas is painted at a lower resolution.
 const MAX_SIDE: usize = 4096;
@@ -31,6 +33,9 @@ pub struct LiveParams {
     /// Flow is coverage per brush radius travelled (process V9, `masks::flow_per_radius`), as the
     /// committed stroke paints it.
     pub per_radius: bool,
+    /// The stroke's edge is feathered as one dab's is (process V10, `masks::stroke_feather`), as
+    /// the committed stroke paints it.
+    pub by_stroke: bool,
     /// Overlay colour and its opacity (0..1) at full coverage.
     pub color: [u8; 3],
     pub opacity: f32,
@@ -42,6 +47,9 @@ pub struct LiveStroke {
     w: usize,
     h: usize,
     alpha: Vec<f32>,
+    /// Under `by_stroke`, the Flow build-up and the edge `alpha` is made of (`masks::feather_dab`).
+    build: Vec<f32>,
+    edge: Vec<f32>,
     /// Samples stamped so far, and the last one (buffer pixels).
     placed: usize,
     /// Total dabs emitted across every stamp, including the first sample.
@@ -66,6 +74,8 @@ impl LiveStroke {
             w,
             h,
             alpha: vec![0.0; w * h],
+            build: if params.by_stroke { vec![0.0; w * h] } else { Vec::new() },
+            edge: if params.by_stroke { vec![0.0; w * h] } else { Vec::new() },
             placed: 0,
             emitted: 0,
             last: None,
@@ -97,7 +107,7 @@ impl LiveStroke {
         if new.is_empty() {
             return false;
         }
-        let LiveParams { clip, scale, r, hard, flow, density, per_radius, .. } = self.params;
+        let LiveParams { clip, scale, r, hard, flow, density, per_radius, by_stroke, .. } = self.params;
         let (r, hard) = ((r * scale) as f64, (hard * scale) as f64);
         let mut dabs = Vec::new();
         let mut pressures = Vec::new();
@@ -134,13 +144,29 @@ impl LiveStroke {
                 continue;
             }
             for y in y0..y1 {
-                let Some(row) = self.alpha.get_mut(y * self.w + x0..y * self.w + x1) else { continue };
-                for (x, v) in (x0..x1).zip(row.iter_mut()) {
-                    let dd = Point::new(x as f64 + 0.5, y as f64 + 0.5).dist(d);
-                    if dd > r {
-                        continue;
+                let span = y * self.w + x0..y * self.w + x1;
+                let Some(row) = self.alpha.get_mut(span.clone()) else { continue };
+                let (build, edge) = (self.build.get_mut(span.clone()), self.edge.get_mut(span));
+                match (build, edge) {
+                    (Some(build), Some(edge)) if by_stroke => {
+                        for (x, ((v, b), e)) in (x0..x1).zip(row.iter_mut().zip(build.iter_mut()).zip(edge.iter_mut())) {
+                            let dd = Point::new(x as f64 + 0.5, y as f64 + 0.5).dist(d);
+                            if dd > r {
+                                continue;
+                            }
+                            feather_dab(b, e, dab_alpha(dd, r, hard), flow);
+                            *v = stroke_coverage(*b, *e, density);
+                        }
                     }
-                    *v = accumulate(*v, dab_alpha(dd, r, hard), flow, density);
+                    _ => {
+                        for (x, v) in (x0..x1).zip(row.iter_mut()) {
+                            let dd = Point::new(x as f64 + 0.5, y as f64 + 0.5).dist(d);
+                            if dd > r {
+                                continue;
+                            }
+                            *v = accumulate(*v, dab_alpha(dd, r, hard), flow, density);
+                        }
+                    }
                 }
             }
             self.dirty = Some(match self.dirty {
@@ -242,6 +268,7 @@ mod tests {
             flow: 1.0,
             density: 1.0,
             per_radius: true,
+            by_stroke: false,
             color: [230, 30, 40],
             opacity: 0.5,
         }
@@ -281,6 +308,31 @@ mod tests {
         assert!(s.coverage(200, 104) > 0.99);
         assert!((0.01..0.99).contains(&s.coverage(200, 108)), "{}", s.coverage(200, 108));
         assert_eq!(s.coverage(200, 111), 0.0);
+    }
+
+    /// Process V10 (`by_stroke`): the live stroke's edge falls off over the feather as one dab's
+    /// does, as the committed stroke's does (`masks::stroke_coverage`), where accumulating every
+    /// dab piles the soft edges up; stamped a frame at a time it is the same.
+    #[test]
+    fn by_stroke_the_live_edge_is_feathered_as_one_dab() {
+        let soft = LiveParams { hard: 0.0, by_stroke: true, ..params() };
+        let mut s = LiveStroke::new(soft);
+        s.stamp(&[pos2(20.0, 100.0), pos2(380.0, 100.0)], &[]);
+        for dy in 0..10 {
+            let want = dab_alpha(dy as f64 + 0.5, 10.0, 0.0);
+            let got = s.coverage(200, 100 + dy);
+            assert!((got - want).abs() < 0.02, "{dy} px off the line: {got}, one dab paints {want}");
+        }
+        let mut old = LiveStroke::new(LiveParams { by_stroke: false, ..soft });
+        old.stamp(&[pos2(20.0, 100.0), pos2(380.0, 100.0)], &[]);
+        assert!(old.coverage(200, 105) > s.coverage(200, 105) + 0.2, "{} vs {}", old.coverage(200, 105), s.coverage(200, 105));
+        let pts = [pos2(30.0, 40.0), pos2(200.0, 150.0), pos2(390.0, 20.0)];
+        let (mut once, mut steps) = (LiveStroke::new(LiveParams { flow: 0.4, ..soft }), LiveStroke::new(LiveParams { flow: 0.4, ..soft }));
+        once.stamp(&pts, &[]);
+        for n in 1..=pts.len() {
+            steps.stamp(&pts[..n], &[]);
+        }
+        assert_eq!(once.alpha, steps.alpha);
     }
 
     /// Painting the samples one frame at a time gives the same coverage as all at once (what the
