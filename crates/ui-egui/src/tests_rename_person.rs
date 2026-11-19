@@ -56,6 +56,8 @@ fn right_click(h: &mut Headless, id: &str) {
 fn open_people(h: &mut Headless) {
     let r = h.request("engine.execute", json!({"command": "view.people"}), T);
     assert_eq!(r["ok"], true, "{r}");
+    // the people's cards are under Confirmed; the view opens on the unknown faces (issue #1050)
+    h.app.ui.people_category = crate::state::PeopleCategory::Confirmed;
     h.settle(T);
     h.step();
 }

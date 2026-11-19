@@ -55,8 +55,11 @@ use lcc_raw::{
 /// #3402).
 /// 22: a camera profile without a tone curve of its own keeps the tone the photo has without it (its DNG tone curve,
 /// else the tone fitted to its camera JPEG) instead of the default tone (OneSlips).
-/// 23: the bundled Panasonic DMC-GM5 profile (upstream #4064).
-pub const LOOK_VERSION: u32 = 23;
+/// 23-27: skipped (used by forks' builds that carried this change early).
+/// 28: the fit's sensor proxy gets only the share of a lens's vignetting correction its camera JPEG shows
+/// ([`vignetting_shown`]; Canon EOS 6D frames had rendered 5-11 L* under their camera JPEGs).
+/// 29: the bundled Panasonic DMC-GM5 profile (upstream #4064).
+pub const LOOK_VERSION: u32 = 29;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
@@ -1093,6 +1096,11 @@ fn clips_more(sensor: &Rgb32f, reference: &Rgb32f, fitted: &ToneMap, plain: &Ton
 /// pipeline applies to the render (`optics::embedded_vignette_gain`; `lens` is in the oriented, cropped frame): the
 /// camera JPEG has it applied, so a tone fitted without it brightens the render's corners twice.
 fn correct_vignetting(sensor: &mut Rgb32f, lens: Option<&lcc_develop::EmbeddedLens>, orientation: lcc_geom::Orientation) {
+    correct_vignetting_by(sensor, lens, orientation, 1.0);
+}
+
+/// [`correct_vignetting`] with `share` of the correction (its gain to the power `share`; 1 = all of it, 0 = none).
+fn correct_vignetting_by(sensor: &mut Rgb32f, lens: Option<&lcc_develop::EmbeddedLens>, orientation: lcc_geom::Orientation, share: f32) {
     let Some(vignette) = lens.and_then(|l| l.vignette) else { return };
     let (w, h) = (sensor.width as f64, sensor.height as f64);
     let (ow, oh) = if orientation.swaps_axes() { (h, w) } else { (w, h) };
@@ -1100,6 +1108,7 @@ fn correct_vignetting(sensor: &mut Rgb32f, lens: Option<&lcc_develop::EmbeddedLe
     for (i, p) in sensor.data.iter_mut().enumerate() {
         let (x, y) = orientation.map((i % width) as f64 + 0.5, (i / width) as f64 + 0.5, w, h);
         let gain = lcc_pipeline::optics::embedded_vignette_gain(&vignette, lcc_geom::Point::new(x, y), ow, oh) as f32;
+        let gain = if share == 1.0 { gain } else { gain.powf(share) };
         *p = p.map(|v| v * gain);
     }
 }
@@ -1228,13 +1237,14 @@ fn proxies(
     let k = (crop.width.max(crop.height).div_ceil(edge as usize).max(2)).div_ceil(2) * 2;
     let mut sensor = sensor_proxy(raw, k, edge as usize)?;
     let mut clipped = clip_mask(&sensor, sensor_clip(raw));
+    // the sensor as recorded, for the check below of how much of the vignetting correction the camera JPEG shows
+    let vignetted = (raw.format != RawFormat::Cr3 && embedded.is_some_and(|l| l.vignette.is_some())).then(|| sensor.clone());
     correct_vignetting(&mut sensor, embedded, raw.orientation);
     // The camera may have corrected its JPEG with the lens warp the file carries (Nikon Z lenses always, at up to 9 %
     // zoom; other cameras when their correction setting is on): the sensor moved into that geometry is a candidate,
     // kept below when it lines up with the JPEG better than the uncorrected one.
-    let warped = lens
-        .filter(|_| raw.format != RawFormat::Cr3)
-        .and_then(|l| Some((into_lens_geometry(&sensor, raw, k, l)?, into_lens_geometry(&clipped, raw, k, l)?)));
+    let warp = lens.filter(|_| raw.format != RawFormat::Cr3);
+    let warped = warp.and_then(|l| Some((into_lens_geometry(&sensor, raw, k, l)?, into_lens_geometry(&clipped, raw, k, l)?)));
     let gain = 2f32.powf(transform.baseline_exposure as f32);
     let to_working = |p: [f32; 3]| transform.matrix.apply_f32(std::array::from_fn(|i| p[i] * transform.wb[i] * gain));
     if raw.format == RawFormat::Cr3 {
@@ -1249,11 +1259,36 @@ fn proxies(
     }
     let mut sensor = fit(&sensor, size, size, Filter::Box);
     let mut reference_small = reference_at(&reference, &sensor);
+    let mut in_warp = false;
     if let Some((warped, warped_clipped)) = warped {
         let candidate = fit(&warped, size, size, Filter::Box);
         let candidate_reference = reference_at(&reference, &candidate);
         if alignment(&candidate, &candidate_reference) > alignment(&sensor, &reference_small) {
             (sensor, reference_small, clipped) = (candidate, candidate_reference, warped_clipped);
+            in_warp = true;
+        }
+    }
+    // the proxy of the recorded sensor with `share` of the correction, in the geometry chosen above
+    let proxy_with = |recorded: &Rgb32f, share: f32| -> Option<Rgb32f> {
+        let mut image = recorded.clone();
+        correct_vignetting_by(&mut image, embedded, raw.orientation, share);
+        let image = match warp.filter(|_| in_warp) {
+            Some(l) => into_lens_geometry(&image, raw, k, l)?,
+            None => image,
+        };
+        Some(fit(&image, size, size, Filter::Box))
+    };
+    if let Some(vignetted) = vignetted
+        && let Some(plain) = proxy_with(&vignetted, 0.0)
+    {
+        let working = |image: &Rgb32f| {
+            let mut image = image.clone();
+            image.map_in_place(to_working);
+            image
+        };
+        let shown = vignetting_shown(&working(&plain), &working(&sensor), &reference_small);
+        if shown < VIGNETTING_FULL {
+            sensor = if shown <= 0.0 { plain } else { proxy_with(&vignetted, shown.min(1.0) as f32)? };
         }
     }
     let reference = reference_small;
@@ -1265,6 +1300,84 @@ fn proxies(
         sensor.map_in_place(to_working);
     }
     Some((sensor, reference, clipped))
+}
+
+/// Share of a lens's vignetting correction ([`vignetting_shown`]) from which the look is fitted on the sensor with all of
+/// it, as before: a camera JPEG that applied the file's own correction (a Fujifilm RAF's, upstream #3402) measures a
+/// little under 1.
+const VIGNETTING_FULL: f64 = 0.9;
+
+/// Spread (standard deviation of its natural log over the proxy) below which a correction is too weak for
+/// [`vignetting_shown`] to tell, and for the fit to care: about 3 % brighter or darker.
+const VIGNETTING_MIN_SPREAD: f64 = 0.03;
+
+/// The share of the vignetting correction the lens gives the sensor that the camera JPEG shows, so the look is fitted on
+/// the sensor as the camera saw it: about 1 when the camera applied the whole correction, 0 when it applied none,
+/// between when its own correction is weaker than the lens profile's. A tone curve maps each sensor level to one JPEG
+/// level, so the share sought is the one with which the JPEG follows the sensor most tightly: for shares 0, 0.05, ..,
+/// 1, the spread of the JPEG's log luminance around its mean among pixels of nearly the same sensor luminance (32
+/// equal bins) with that share of the correction, smallest wins. In the working space (the proxies' camera RGB through
+/// the camera transform), so that saturated colours, which a chart shows in its middle and not at its edges, add about
+/// the same scatter at every share rather than a radial trend.
+///
+/// A lens the database matched says nothing about whether the camera corrected its JPEG: Canon EOS 6D portraits with
+/// an EF 50mm f/1.8 STM or EF 70-200mm f/2.8L II wide open show none of it, while chart frames with an EF 24-70mm
+/// f/2.8L II show part of it. Fitted on the fully corrected sensor, the portraits paired corners lifted by up to 1.6 EV
+/// with the JPEG's dark ones, which lowered the whole curve: they rendered 5-11 L* under their camera JPEGs at every
+/// radius (LrC 2-5 L* over them, with the same falloff). 1 (the whole correction, as before) when too few pixels or
+/// too weak a correction tell.
+fn vignetting_shown(plain: &Rgb32f, corrected: &Rgb32f, reference: &Rgb32f) -> f64 {
+    let reference = reference_at(reference, plain);
+    // per usable pixel: ln sensor luminance as recorded, ln of the correction's gain, ln JPEG luminance
+    let mut pixels: Vec<[f64; 3]> = Vec::new();
+    for (i, ((input, fixed), output)) in plain.data.iter().zip(&corrected.data).zip(&reference.data).enumerate() {
+        let (x, c, y) = (luminance_2020(*input), luminance_2020(*fixed), luminance_2020(*output));
+        let usable = input.iter().all(|v| v.is_finite() && *v > 0.001 && *v < 1.5)
+            && output.iter().all(|v| v.is_finite())
+            && (0.005..0.85).contains(&y)
+            && local_contrast(plain, i) <= EDGE_CONTRAST
+            && local_contrast(&reference, i) <= EDGE_CONTRAST;
+        let row = [f64::from(x).ln(), f64::from(c / x).ln(), f64::from(y).ln()];
+        if usable && x > 0.0 && row.iter().all(|v| v.is_finite()) {
+            pixels.push(row);
+        }
+    }
+    const BINS: usize = 32;
+    const STEPS: usize = 20;
+    let n = pixels.len();
+    if n < 16 * BINS {
+        return 1.0;
+    }
+    let mean_gain = pixels.iter().map(|p| p[1]).sum::<f64>() / n as f64;
+    let gain_spread = (pixels.iter().map(|p| (p[1] - mean_gain).powi(2)).sum::<f64>() / n as f64).sqrt();
+    // the JPEG's spread around its bin means with `share` of the correction
+    let spread = |share: f64| -> f64 {
+        let mut rows: Vec<(f64, f64)> = pixels.iter().map(|p| (p[0] + share * p[1], p[2])).collect();
+        rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+        (0..BINS)
+            .map(|b| {
+                let bin = rows.get(b * n / BINS..(b + 1) * n / BINS).unwrap_or(&[]);
+                let mean = bin.iter().map(|r| r.1).sum::<f64>() / bin.len().max(1) as f64;
+                bin.iter().map(|r| (r.1 - mean).powi(2)).sum::<f64>()
+            })
+            .sum::<f64>()
+            / n as f64
+    };
+    let (shown, least) = (0..=STEPS)
+        .map(|k| {
+            let share = k as f64 / STEPS as f64;
+            (share, spread(share))
+        })
+        .filter(|(_, s)| s.is_finite())
+        .fold((1.0, f64::INFINITY), |best, (share, s)| if s < best.1 { (share, s) } else { best });
+    let told = gain_spread >= VIGNETTING_MIN_SPREAD && least.is_finite();
+    if lcc_pipeline::profiling() {
+        eprintln!(
+            "[profile] camera look: the camera JPEG shows {shown:.2} of the lens's vignetting correction (gain spread {gain_spread:.3}){}",
+            if told { "" } else { ": too little to tell, all of it" }
+        );
+    }
+    if told { shown } else { 1.0 }
 }
 
 /// The camera JPEG at exactly the sensor proxy's size, so the two pair pixel for pixel. Fitting it
@@ -5206,6 +5319,69 @@ mod tests {
         };
         let (corrected, uncorrected) = (at_quarter(Some(&lens)), at_quarter(None));
         assert!(uncorrected > corrected + 0.03, "without the correction the curve brightens: {uncorrected} vs {corrected}");
+    }
+
+    /// A lens the database matched brings a vignetting correction the camera need not have applied to its JPEG. When the
+    /// JPEG keeps the sensor's vignetting, the fit leaves the correction out ([`vignetting_shown`]) and gets the
+    /// curve it gets without the lens; fitted on the corrected sensor, the curve came out darker (Canon EOS 6D frames
+    /// 5-11 L* under their camera JPEGs).
+    #[test]
+    fn a_jpeg_that_keeps_the_vignetting_is_fitted_on_the_recorded_sensor() {
+        use lcc_develop::EmbeddedLens;
+        let (w, h) = (192usize, 128usize);
+        let (vignette, gain) = test_vignette(w, h);
+        let scene = |x: usize, y: usize| 0.01 + 0.5 * (x as f32 / w as f32) * (0.3 + 0.7 * y as f32 / h as f32);
+        let recorded = |x: usize, y: usize| scene(x, y) / gain(x, y);
+        let lens = EmbeddedLens { vignette: Some(vignette), ..Default::default() };
+        let camera = 1.0 - (-0.75f32).exp();
+        // black and white: the tone-only fit
+        let (raw, bytes) = grey_raw_with_jpeg((w, h), recorded, recorded, [1.0; 3]);
+        let t = lcc_raw::color::camera_transform(&raw, lcc_raw::color::as_shot_white_xy(&raw));
+        let at_quarter = |embedded: Option<&EmbeddedLens>| {
+            let look = monochrome_look(&raw, &bytes, &t, None, embedded).expect("a tone curve");
+            ToneMap::camera(&look.tone, 0.0, 0.0, 0.0).apply(0.25)
+        };
+        let (with, without) = (at_quarter(Some(&lens)), at_quarter(None));
+        assert!((with - without).abs() < 0.005, "the lens changes nothing: {with} vs {without}");
+        assert!((with - camera).abs() < 0.03, "the camera's curve at 0.25: {with} vs {camera}");
+        // colour: the full look
+        let (raw, bytes) = grey_raw_with_jpeg((w, h), recorded, recorded, [1.0, 0.9, 0.8]);
+        let at_quarter = |embedded: Option<&EmbeddedLens>| {
+            let (_, _, look) = starting_colour(&mut raw.clone(), &bytes, None, embedded, CameraColour::Auto, false);
+            ToneMap::camera(&look.expect("a colour look").tone, 0.0, 0.0, 0.0).apply(0.25)
+        };
+        let (with, without) = (at_quarter(Some(&lens)), at_quarter(None));
+        assert!((with - without).abs() < 0.005, "the lens changes nothing: {with} vs {without}");
+    }
+
+    /// [`vignetting_shown`] reads the share of a correction a camera JPEG applied: none, half or all of it, through a
+    /// camera curve, on a smooth scene with colour that doesn't follow the radius.
+    #[test]
+    fn the_share_of_the_vignetting_correction_a_jpeg_shows_is_measured() {
+        let (w, h) = (96usize, 64usize);
+        let (_, gain) = test_vignette(w, h);
+        let scene = |x: usize, y: usize| {
+            let (x, y) = (x as f32, y as f32);
+            let l = 0.02 + 0.25 * (1.0 + (x / 9.0).sin() * (y / 7.0).cos()) + 0.1 * x / w as f32;
+            [l * (1.0 + 0.2 * (y / 5.0).sin()), l, l * (1.0 + 0.2 * (x / 6.0).cos())]
+        };
+        let image = |f: &dyn Fn(usize, usize) -> [f32; 3]| {
+            let mut out = Rgb32f::new(w, h);
+            for (i, p) in out.data.iter_mut().enumerate() {
+                *p = f(i % w, i / w);
+            }
+            out
+        };
+        let camera = |v: f32| 1.0 - (-3.0 * v).exp();
+        let plain = image(&|x, y| scene(x, y).map(|v| v / gain(x, y)));
+        let corrected = image(&scene);
+        for share in [0.0f32, 0.5, 1.0] {
+            let jpeg = image(&|x, y| scene(x, y).map(|v| camera(v * gain(x, y).powf(share - 1.0))));
+            let shown = vignetting_shown(&plain, &corrected, &jpeg);
+            assert!((shown - f64::from(share)).abs() < 0.1, "share {share}: measured {shown}");
+        }
+        // no vignetting at all: nothing to tell, the whole (no-op) correction
+        assert_eq!(vignetting_shown(&corrected, &corrected, &corrected), 1.0);
     }
 
     /// A lens-warped sensor proxy gets the vignetting gain of the position it samples, as the render applies it: the

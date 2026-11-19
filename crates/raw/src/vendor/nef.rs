@@ -20,7 +20,7 @@ use lcc_tiff::image::ImageInfo;
 use lcc_tiff::tags::{self as t, photometric};
 use lcc_tiff::{ByteOrder, Ifd, Tiff, makernote};
 
-const WB_RB_LEVELS: u16 = 0x000c;
+pub(super) const WB_RB_LEVELS: u16 = 0x000c;
 /// ColorBalance (named in the ExifTool Nikon tag-name documentation, which gives the channel order per version but
 /// not where the levels sit): a 4-character version, then, in the versions that aren't enciphered, the as-shot
 /// levels as four `u16` in the maker note's byte order: `0102` (D2H) RGGB from byte 10, `0103` (D70, D70s) RGBG
@@ -31,7 +31,7 @@ const WB_RB_LEVELS: u16 = 0x000c;
 /// 388 256, 589 256 366 256), and the gains they give are within 2 to 8 % of what the neutral areas of each camera
 /// JPEG imply. The D50's `0205` is enciphered.
 const COLOR_BALANCE: u16 = 0x0097;
-const BLACK_LEVEL: u16 = 0x003d;
+pub(super) const BLACK_LEVEL: u16 = 0x003d;
 const LINEARIZATION_TABLE: u16 = 0x0096;
 const CROP_AREA: u16 = 0x0045;
 /// Maker note `0x0014`, the "NRW" data block of Coolpix raws: `"NRW "` + a 4-character version, then fields. In
@@ -72,7 +72,7 @@ fn color_balance_wb(mn: Option<&makernote::MakerNote>) -> Option<[f32; 3]> {
 
 /// Nikon CropArea is `[left, top, width, height]` in sensor pixels (maker-note tag documentation).
 /// Keep the active area/CFA origin unchanged: the default crop is applied after demosaicing.
-fn default_crop(mn: Option<&makernote::MakerNote>, w: usize, h: usize) -> Rect {
+pub(super) fn default_crop(mn: Option<&makernote::MakerNote>, w: usize, h: usize) -> Rect {
     let fallback = Rect::new(0, 0, w, h);
     let Some(values) = mn.and_then(|m| m.ifd.u64s(CROP_AREA)) else { return fallback };
     let [x, y, width, height] = values.as_slice() else { return fallback };
@@ -299,7 +299,13 @@ fn legacy_field_layout(info: &ImageInfo, mn: Option<&makernote::MakerNote>, file
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let tiff = Tiff::parse(bytes)?;
     let ifd0 = &tiff.ifds[0];
-    let raw = raw_ifd(&tiff).ok_or_else(|| RawError::Unsupported("NEF without a CFA image IFD".into()))?;
+    let Some(raw) = raw_ifd(&tiff) else {
+        // no CFA image IFD: a merged pixel-shift image from NX Studio keeps its RGB samples in a raw SubIFD of its own
+        return match super::nefx::raw_ifd(&tiff) {
+            Some(raw) => super::nefx::decode(bytes, &tiff, raw, mode),
+            None => Err(RawError::Unsupported("NEF without a CFA image IFD".into())),
+        };
+    };
     let info = raw.image()?;
     let (w, h) = (info.width as usize, info.height as usize);
     let bits = info.bits() as u32;

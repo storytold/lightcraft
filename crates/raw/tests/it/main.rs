@@ -12,6 +12,7 @@ mod dng;
 mod dng_digest;
 mod gpr_corpus;
 mod lossy_dng;
+mod merged_dng;
 mod nrw_be16;
 mod olympus_samsung_corpus;
 mod rendered_dng;

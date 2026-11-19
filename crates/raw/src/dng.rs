@@ -419,6 +419,28 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
         crate::OpcodeLists { list1: opcode_list(t::OPCODE_LIST_1), list2: opcode_list(t::OPCODE_LIST_2), list3: opcode_list(t::OPCODE_LIST_3) };
 
     let mut metadata = lcc_meta::from_tiff(tiff);
+    let mut color = color_data(ifd0, raw, tiff.order);
+    let (mut format, mut wb_multipliers) = (format, None);
+    // a pixel-shift merge made by this app is recognised by the provenance block in its XMP
+    if ifd0.bytes(t::XMP).is_some_and(crate::merge_provenance::is_marked) {
+        metadata.software = Some(crate::merge_provenance::software());
+        // Its colour is the camera's: the same raw data as the NEFX of the same series, so it is read like one (the white
+        // balance multipliers, no colour matrices: the starting look is fitted to its preview, the camera profile and
+        // the white balance scale are as for the camera's raw). The colour tags (and the baseline exposure) stay in the
+        // file for other converters; this reader ignores them.
+        if format == RawFormat::Dng && cpp == 3 && cfa.is_none() {
+            wb_multipliers = color
+                .as_shot_neutral
+                .filter(|n| n.iter().all(|v| *v > 0.0 && v.is_finite()))
+                .map(|n| [(n[1] / n[0]) as f32, 1.0, (n[1] / n[2]) as f32])
+                .filter(|m| m.iter().all(|v| v.is_finite()));
+            color = ColorData {
+                kelvin_presets: metadata.model.as_deref().and_then(|model| crate::kelvin_builtin::find(metadata.make.as_deref(), model)),
+                ..Default::default()
+            };
+            format = RawFormat::Nef;
+        }
+    }
     metadata.width = Some(developed.0 as u32);
     metadata.height = Some(developed.1 as u32);
     let img = RawImage {
@@ -434,8 +456,8 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
         active_area,
         crop,
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
-        color: color_data(ifd0, raw, tiff.order),
-        wb_multipliers: None,
+        color,
+        wb_multipliers,
         linearized,
         pixel_aspect: default_scale_aspect(raw.f64s(t::DEFAULT_SCALE).as_deref()),
         opcodes,

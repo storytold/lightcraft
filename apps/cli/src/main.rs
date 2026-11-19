@@ -7,7 +7,7 @@
 //! <cli> mcp [--connect [ADDR]] [--demo] [--compact] [FILES/FOLDERS…]
 //! <cli> render <in> -o <out> [--set control=value]… [--settings FILE.json|PRESET-FILE] [--preset ID] [--size N] [--quality Q] [--trim IN,OUT]
 //! <cli> snapshot [--library DIR | --demo] [--script FILE.jsonl|-] [-o OUT.png] [--size WxH] [--scale S] [FILES…]
-//! <cli> merge hdr|panorama|hdr-panorama|hdr-batch|focus [OPTIONS] FILES…
+//! <cli> merge hdr|panorama|hdr-panorama|hdr-batch|focus|pixel-shift [OPTIONS] FILES…
 //! <cli> synth-merge hdr|panorama|focus -o DIR
 //! <cli> denoise-serve [--model ID] [--models DIR] [--listen ADDR] [--token-env VAR] [--run-on auto|gpu|cpu]
 //! <cli> genfill-mock [--port N] [--key KEY] [--fill patchmatch|mean]
@@ -112,13 +112,13 @@ USAGE:
         -o, --output OUT  PNG path (a final screenshot is written here if the script took none)
         --size WxH        window size in points (default 1600x1000)
         --scale S         pixels per point (default 1)
-  {cli} merge hdr|panorama|hdr-panorama|hdr-batch|focus [OPTIONS] FILES…
-      Photo Merge: writes <first>-HDR.dng / -Pano.dng / -HDR-Pano.dng / -Focus.dng next to the first file and
+  {cli} merge hdr|panorama|hdr-panorama|hdr-batch|focus|pixel-shift [OPTIONS] FILES…
+      Photo Merge: writes <first>-HDR.dng / -Pano.dng / -HDR-Pano.dng / -Focus.dng / -PixelShift.dng next to the first file and
       prints the result as JSON. hdr-batch merges each bracket set among the files (photos taken
       less than a second apart at different exposures), e.g. a whole folder. Options:
         --deghost none|low|medium|high   --no-align   --bracket N (HDR panorama)
         --projection auto|spherical|cylindrical|perspective   --boundary-warp 0..100
-        --auto-crop   --fill-edges   --no-auto-settings
+        --auto-crop   --fill-edges   --no-auto-settings   --output-dir DIR (write the result there)
         --preview OUT.png   only render a ≤ 1024 px preview (nothing written next to the files)
       focus takes only --no-align, --no-auto-settings and --preview.
   {cli} synth-merge hdr|panorama|focus -o DIR
@@ -604,7 +604,8 @@ fn merge(args: &[String]) -> Result<(), String> {
         Some("hdr-panorama") => "merge.hdrPanorama",
         Some("hdr-batch") => "merge.hdrBatch",
         Some("focus" | "focus-stack") => "merge.focusStack",
-        _ => return Err("merge: expected hdr, panorama, hdr-panorama, hdr-batch or focus".into()),
+        Some("pixel-shift" | "pixelshift") => "merge.pixelShift",
+        _ => return Err("merge: expected hdr, panorama, hdr-panorama, hdr-batch, focus or pixel-shift".into()),
     };
     let mut p = serde_json::Map::new();
     let mut files = Vec::new();
@@ -631,6 +632,9 @@ fn merge(args: &[String]) -> Result<(), String> {
             }
             "--fill-edges" => {
                 p.insert("fillEdges".into(), json!(true));
+            }
+            "--output-dir" => {
+                p.insert("outputDir".into(), json!(take_value(args, &mut i, "--output-dir")?));
             }
             "--no-auto-settings" => {
                 p.insert("autoSettings".into(), json!(false));

@@ -171,6 +171,13 @@ pub enum Op {
         #[serde(default)]
         exported: Option<String>,
     },
+    /// Where a pixel-shift merge came from (see [`Photo::merge_sources`]; `None`: not a merge, or cleared). Format
+    /// version 19.
+    SetMergeSources {
+        id: PhotoId,
+        #[serde(default)]
+        sources: Option<Box<MergeSources>>,
+    },
     /// Move the History cursor (see [`Photo::history_cursor`]) without changing the steps.
     SetHistoryCursor {
         id: PhotoId,
@@ -956,7 +963,9 @@ impl Catalog {
             Op::SetLabel { .. } => self.changes.now = Aspects::LABEL,
             Op::SetMeta { .. } | Op::SetXmpStamp { .. } => self.changes.now = Aspects::META,
             Op::SetCaptured { .. } => self.changes.now = Aspects::CAPTURED,
-            Op::SetFile { .. } | Op::Relink { .. } | Op::SetSha1 { .. } | Op::SetExported { .. } => self.changes.now = Aspects::FILE,
+            Op::SetFile { .. } | Op::Relink { .. } | Op::SetSha1 { .. } | Op::SetExported { .. } | Op::SetMergeSources { .. } => {
+                self.changes.now = Aspects::FILE
+            }
             Op::SetAnalysis { .. } => self.changes.now = Aspects::ANALYSIS,
             Op::SetDevelop { .. }
             | Op::SetVersions { .. }
@@ -1128,6 +1137,10 @@ impl Catalog {
             Op::SetExported { id, exported } => {
                 let p = self.photo_mut(id)?;
                 Op::SetExported { id, exported: std::mem::replace(&mut p.exported, exported) }
+            }
+            Op::SetMergeSources { id, sources } => {
+                let p = self.photo_mut(id)?;
+                Op::SetMergeSources { id, sources: std::mem::replace(&mut p.merge_sources, sources) }
             }
             Op::SetHistoryCursor { id, cursor } => {
                 let p = self.photo_mut(id)?;
@@ -1750,6 +1763,7 @@ fn changes_what_albums_test(op: &Op) -> bool {
         | Op::SetHistoryCursor { .. }
         | Op::SetBefore { .. }
         | Op::SetExported { .. }
+        | Op::SetMergeSources { .. }
         | Op::RenameAlbum { .. }
         | Op::MoveAlbum { .. }
         | Op::SetAlbumOrder { .. }

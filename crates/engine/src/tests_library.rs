@@ -1028,3 +1028,107 @@ fn a_selection_restored_from_view_json_names_each_photo_once() {
     assert_eq!(s.selection.active, Some(ids[1]));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A library of `n` raws on disk in `dir`, the `edited`-th of them edited: its id and that of an unedited one.
+fn large_library(dir: &std::path::Path, n: usize, edited: usize) -> (lcc_catalog::PhotoId, lcc_catalog::PhotoId) {
+    let mut s = Session::new().with_fs();
+    s.open_library(dir, false).unwrap();
+    let mut ids = Vec::new();
+    for i in 0..n {
+        let id = s.catalog.alloc_photo_id();
+        let path = format!("/photos/IMG_{i:05}.CR3");
+        let mut p =
+            lcc_catalog::Photo::new(id, lcc_catalog::Source::File { path }, &format!("IMG_{i:05}.CR3"), "CR3", 6000, 4000, "2026-01-01T00:00:00");
+        p.kind = lcc_catalog::MediaKind::Raw;
+        p.meta.camera = "Canon EOS R5".into();
+        p.as_shot_wb = Some((5200.0, 3.0));
+        let mut d = p.camera_defaults();
+        if i == edited {
+            d.light.exposure = 0.7;
+        }
+        p.develop = std::sync::Arc::new(d);
+        s.catalog.apply(lcc_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        ids.push(id);
+    }
+    s.close_library().unwrap();
+    (ids[edited], ids[(edited + 1) % n])
+}
+
+/// Issue #979: opening a large library looked at every photo's camera defaults on the thread that
+/// opens it, to find the edited photos whose previews a full cache lets go last (most of a minute
+/// for 300 000 photos). Given a library over the inline limit, when it opens, then the opening
+/// thread looks at no photo, and the edited photo's latest previews are still kept last once the
+/// background work ends (the cache pruned nothing meanwhile).
+#[test]
+fn opening_a_large_library_finds_its_edited_photos_off_the_opening_thread() {
+    use crate::library::EDITED_LOOKED_AT;
+    let dir = temp_dir("edited-bg");
+    let (edited, plain) = large_library(&dir, crate::library::INLINE_EDITED_PHOTOS + 500, 7);
+    let before = EDITED_LOOKED_AT.with(std::cell::Cell::get);
+    let mut s = Session::new().with_fs();
+    s.open_library(&dir, false).unwrap();
+    assert_eq!(EDITED_LOOKED_AT.with(std::cell::Cell::get) - before, 0, "no photo looked at while opening");
+    let d = s.media.rendered.disk().unwrap();
+    // (a machine busy with other tests can take a while)
+    let t0 = std::time::Instant::now();
+    while d.is_keep_last_pending() && t0.elapsed() < std::time::Duration::from_secs(120) {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!d.is_keep_last_pending(), "the background work ended");
+    let p = s.catalog.photo(edited).unwrap();
+    assert!(d.is_kept_last(crate::media::latest_thumb_key(p)) && d.is_kept_last(crate::media::latest_view_key(p, true)));
+    assert!(!d.is_kept_last(crate::media::latest_thumb_key(s.catalog.photo(plain).unwrap())), "a photo as shot has its camera JPEG");
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A small library still works it out as it opens (a moment), with no row in the activity stack.
+#[test]
+fn opening_a_small_library_finds_its_edited_photos_at_once() {
+    use crate::library::EDITED_LOOKED_AT;
+    let dir = temp_dir("edited-inline");
+    let (edited, _) = large_library(&dir, 20, 3);
+    let before = EDITED_LOOKED_AT.with(std::cell::Cell::get);
+    let mut s = Session::new().with_fs();
+    s.open_library(&dir, false).unwrap();
+    assert_eq!(EDITED_LOOKED_AT.with(std::cell::Cell::get) - before, 20);
+    assert!(s.activity.list().is_empty());
+    let d = s.media.rendered.disk().unwrap();
+    assert!(!d.is_keep_last_pending() && d.is_kept_last(crate::media::latest_thumb_key(s.catalog.photo(edited).unwrap())));
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A thumbnail cache left damaged (files cut short or emptied, a file where a shard folder goes,
+/// stray names) never stops a library from opening: the damaged thumbnails are misses that go.
+#[test]
+fn a_damaged_thumbnail_cache_opens_and_its_bad_files_go() {
+    let dir = temp_dir("bad-thumbs");
+    let (edited, _) = large_library(&dir, 20, 3);
+    let thumbs = dir.join("thumbs");
+    std::fs::create_dir_all(&thumbs).unwrap();
+    std::fs::write(thumbs.join("ab"), b"a file where a shard folder goes").unwrap();
+    std::fs::create_dir_all(thumbs.join("zz")).unwrap();
+    std::fs::write(thumbs.join("zz").join("not-a-key.lcthumb"), b"x").unwrap();
+    let img = lcc_raster::Rgba8 { width: 32, height: 20, data: vec![[90, 120, 150, 255]; 640] };
+    let jpeg = lcc_preview::encode_jpeg(&img).unwrap();
+    let keys: Vec<lcc_preview::Hash128> = (0..4u8).map(|i| lcc_preview::hash_bytes(&[i, 42])).collect();
+    for (k, bytes) in keys.iter().zip([&jpeg[..jpeg.len() / 3], &[][..], &[0xff, 0xd8][..], &jpeg[..]]) {
+        let hex = k.to_string();
+        std::fs::create_dir_all(thumbs.join(&hex[..2])).unwrap();
+        std::fs::write(thumbs.join(&hex[..2]).join(format!("{hex}.lcthumb")), bytes).unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    s.open_library(&dir, false).unwrap();
+    assert!(s.catalog.photo(edited).is_some());
+    let d = s.media.rendered.disk().unwrap();
+    for k in &keys[1..3] {
+        assert!(d.get(*k).is_none());
+    }
+    assert!(d.get(keys[3]).is_some(), "a whole thumbnail is read");
+    // (a JPEG cut short may decode with its end grey or be refused: either way no panic)
+    let _ = d.get(keys[0]);
+    assert!(d.size() > 0);
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
+}

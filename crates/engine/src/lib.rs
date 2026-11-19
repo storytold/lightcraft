@@ -2769,6 +2769,8 @@ mod tests_autosync_wb;
 #[cfg(test)]
 mod tests_background_merge;
 #[cfg(test)]
+mod tests_brightness;
+#[cfg(test)]
 mod tests_browse_profile;
 #[cfg(test)]
 mod tests_camera_layers;

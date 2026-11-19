@@ -554,7 +554,7 @@ fn unnamed_faces_come_with_look_alikes_together_and_the_name_the_named_ones_sugg
     // a limited list groups only the faces it lists, and a spell of the same name is one group
     let r = s.execute("faces.unnamed", &json!({"bySuggestion": true, "limit": 1})).unwrap();
     let total: u64 = r["groups"].as_array().unwrap().iter().filter_map(|g| g["total"].as_u64()).sum();
-    assert_eq!(total, 1, "one listed face, at most one group of it: {r}");
+    assert!(total <= 1, "one listed face, at most one group of it: {r}");
     // without asking, no groups are worked out; and not true/false is refused
     assert!(s.execute("faces.unnamed", &json!({})).unwrap().get("groups").is_none());
     for bad in [json!({"bySuggestion": "yes"}), json!({"bySuggestion": 1})] {

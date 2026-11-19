@@ -51,6 +51,10 @@ pub fn groups(list: &Unnamed, decided: &[(u64, usize)]) -> Vec<SuggestionGroup> 
         let Some(name) = face.suggestion.as_deref().map(str::trim).filter(|n| !n.is_empty()) else { continue };
         match out.iter_mut().find(|g| g.name.eq_ignore_ascii_case(name)) {
             Some(group) => {
+                // one person's spellings are one group, shown by a capitalised spelling when there is one
+                if !starts_upper(&group.name) && starts_upper(name) {
+                    group.name = name.to_string();
+                }
                 group.faces.push(face.clone());
                 group.total = group.faces.len();
             }
@@ -59,6 +63,10 @@ pub fn groups(list: &Unnamed, decided: &[(u64, usize)]) -> Vec<SuggestionGroup> 
     }
     out.sort_by(|a, b| b.total.cmp(&a.total).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
     out
+}
+
+fn starts_upper(name: &str) -> bool {
+    name.chars().next().is_some_and(char::is_uppercase)
 }
 
 /// The command `d` runs, with the faces it covers and the box each has in its photo (so a face that changed in the

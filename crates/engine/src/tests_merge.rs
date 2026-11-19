@@ -640,3 +640,318 @@ fn a_merge_started_from_an_album_joins_that_album() {
     assert!(smart_album.photos.is_empty() && s.catalog.albums_of(id).iter().all(|a| *a == smart_album.id), "a smart album gains nothing");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A header-only synthetic NEF: Exif and a Nikon maker note with the pixel-shift numbers of frame `index` (all values
+/// invented; no pixels).
+fn pixel_shift_header(index: u8, count: u16, shutter: f64) -> Vec<u8> {
+    use lcc_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t, writer::rational};
+    let mut note = IfdBuilder::new();
+    note.set(0x0034, Value::Short(vec![count]));
+    let mut a = vec![0u8; 16];
+    a[8] = index;
+    note.set(0x0056, Value::Undefined(a));
+    let mut b = vec![0u8; 28];
+    b[5] = index;
+    note.set(0x005e, Value::Undefined(b));
+    note.set(0x00a7, Value::Long(vec![5000 + u32::from(index)]));
+    let mut maker = b"Nikon\0\x02\0\0\0".to_vec();
+    maker.extend(TiffWriter::new(ByteOrder::Little, false).write(&[note]).unwrap());
+    let mut exif = IfdBuilder::new();
+    exif.set(t::MAKER_NOTE, Value::Undefined(maker));
+    exif.set(t::EXPOSURE_TIME, Value::Rational(vec![rational(shutter)]));
+    exif.set(t::DATE_TIME_ORIGINAL, Value::Ascii("2030:05:06 07:08:09".into()));
+    exif.set(0x9291, Value::Ascii(format!("{:02}", u32::from(index) * 6)));
+    let mut ifd0 = IfdBuilder::new();
+    ifd0.set(t::MAKE, Value::Ascii("NIKON CORPORATION".into()));
+    ifd0.set(t::MODEL, Value::Ascii("NIKON Z 8".into()));
+    ifd0.set_child(t::EXIF_IFD, exif);
+    TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()
+}
+
+/// Photo Merge ▸ Pixel Shift finds the series among the selected photos in any order, puts frame 01 first, and says what
+/// is wrong with a selection that is not one complete series.
+#[test]
+fn pixel_shift_plans_a_series_in_order_and_refuses_the_rest() {
+    let mut s = Session::new();
+    let mut ids = Vec::new();
+    let mut files = std::collections::HashMap::new();
+    // frames added newest first, so the catalog order is the reverse of the series
+    for i in (1..=16u8).rev() {
+        let id = s.catalog.alloc_photo_id();
+        let path = format!("synthetic-shift-{i}.nef");
+        let photo = lcc_catalog::Photo::new(id, lcc_catalog::Source::File { path: path.clone() }, &path, "NEF", 8256, 5504, "2030-05-06T07:08:09");
+        s.catalog.apply(lcc_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        files.insert(path, pixel_shift_header(i, 16, 0.01));
+        ids.push(id);
+    }
+    let odd = s.catalog.alloc_photo_id();
+    let odd_path = "synthetic-odd.nef".to_string();
+    s.catalog
+        .apply(lcc_catalog::Op::AddPhoto {
+            photo: Box::new(lcc_catalog::Photo::new(
+                odd,
+                lcc_catalog::Source::File { path: odd_path.clone() },
+                &odd_path,
+                "NEF",
+                8256,
+                5504,
+                "2030-05-06T07:08:09",
+            )),
+        })
+        .unwrap();
+    files.insert(odd_path, pixel_shift_header(1, 16, 0.02));
+    let files = std::sync::Arc::new(files);
+    s.media.file_bytes = Some(std::sync::Arc::new(move |p: &str| files.get(p).cloned().ok_or_else(|| format!("no {p}"))));
+    let sources = |ids: &[lcc_catalog::PhotoId]| -> Vec<(lcc_catalog::PhotoId, String)> {
+        ids.iter().map(|id| (*id, s.catalog.photo(*id).map(|p| p.file_name.clone()).unwrap())).collect()
+    };
+    let (ordered, plan) = s.plan_pixel_shift(&sources(&ids)).unwrap();
+    assert_eq!(plan.count, 16);
+    assert_eq!(ordered[0].1, "synthetic-shift-1.nef");
+    assert_eq!(ordered[15].1, "synthetic-shift-16.nef");
+    assert_eq!(plan.frames.iter().map(|f| f.index).collect::<Vec<_>>(), (1..=16).collect::<Vec<_>>());
+    assert_eq!(plan.frames[2].counter, 5003);
+    assert_eq!(plan.frames[0].file_name, "synthetic-shift-1.nef");
+    // 15 frames
+    let msg = s.plan_pixel_shift(&sources(&ids[1..])).unwrap_err().to_string();
+    assert!(msg.contains("Pixel Shift") && msg.contains("frame 16"), "{msg}");
+    // a frame with another exposure
+    let mut mixed = ids[1..].to_vec();
+    mixed.push(odd);
+    let msg = s.plan_pixel_shift(&sources(&mixed)).unwrap_err().to_string();
+    assert!(msg.contains("exposure"), "{msg}");
+    // through the command, the plan runs before anything is read for merging; the same refusal comes back
+    let err = s.execute("merge.pixelShift", &json!({"ids": ids[1..].iter().map(|i| i.0).collect::<Vec<_>>()})).unwrap_err().to_string();
+    assert!(err.contains("frame 16"), "{err}");
+}
+
+/// What a pixel-shift merge takes from the catalog: the keywords of every frame (hierarchy kept, each once whatever its
+/// case) and frame 01's descriptive fields; not the rating, colour label or flag, and not another frame's fields.
+#[test]
+fn pixel_shift_takes_the_keyword_union_and_frame_ones_descriptive_fields_but_no_marks() {
+    use lcc_catalog::{ColorLabel, Flag, Op, Photo, Source};
+    let mut s = Session::new();
+    let mut ids = Vec::new();
+    for i in 0..3u8 {
+        let id = s.catalog.alloc_photo_id();
+        let path = format!("synthetic-kw-{i}.nef");
+        let mut photo = Photo::new(id, Source::File { path: path.clone() }, &path, "NEF", 100, 100, "2030-05-06T07:08:09");
+        let strs = |v: &[&str]| v.iter().map(|k| k.to_string()).collect::<Vec<_>>();
+        photo.meta.keywords = match i {
+            0 => strs(&["travel|Italy|Rome", "macro"]),
+            1 => strs(&["Macro", "rock", "travel|Italy|Rome"]),
+            _ => strs(&["lichen", "travel|Italy"]),
+        };
+        photo.meta.creator = format!("Creator {i}");
+        photo.meta.title = format!("Title {i}");
+        photo.meta.caption = if i == 0 { "Caption 0".into() } else { String::new() };
+        photo.meta.city = format!("City {i}");
+        photo.meta.gps = Some((10.0 + f64::from(i), 20.0));
+        photo.meta.copyright = format!("Copyright {i}");
+        photo.rating = 4;
+        photo.flag = Flag::Pick;
+        photo.label = Some(ColorLabel::Red);
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        ids.push(id);
+    }
+    let m = super::merge::pixel_shift_metadata(&s.catalog, &ids);
+    assert_eq!(m.keywords, ["travel", "Italy", "Rome", "macro", "rock", "lichen"], "each name once, whatever its case");
+    assert_eq!(m.hierarchical_keywords, ["travel|Italy|Rome", "macro", "rock", "lichen", "travel|Italy"]);
+    assert_eq!(
+        (m.artist.as_deref(), m.title.as_deref(), m.caption.as_deref(), m.city.as_deref()),
+        (Some("Creator 0"), Some("Title 0"), Some("Caption 0"), Some("City 0"))
+    );
+    assert_eq!(m.copyright.as_deref(), Some("Copyright 0"));
+    assert_eq!(m.gps.map(|g| (g.latitude, g.longitude)), Some((10.0, 20.0)));
+    assert_eq!((m.rating, m.label.clone(), m.capture_time), (None, None, None), "marks and the file's own facts are not taken");
+    // another order: frame 01 is whichever comes first
+    let rev: Vec<_> = ids.iter().rev().copied().collect();
+    let m = super::merge::pixel_shift_metadata(&s.catalog, &rev);
+    assert_eq!(m.artist.as_deref(), Some("Creator 2"));
+    assert_eq!(m.caption, None, "an empty field stays empty");
+    assert!(m.keywords.contains(&"lichen".to_string()) && m.keywords.contains(&"Macro".to_string()));
+}
+
+/// A merged DNG, once imported, has frame 01's capture time (sub-seconds and offset included), the union keywords and the
+/// descriptive fields, and is not dated by its file time.
+#[test]
+fn an_imported_pixel_shift_dng_has_its_capture_time_and_keywords() {
+    use lcc_geom::Orientation;
+    use lcc_merge::pixelshift::{DngPacking, DngSource, Merger, SHOT_16, write_dng};
+    use lcc_raw::{BlackLevel, Cfa, ColorData, RawData, RawFormat, RawImage, Rect};
+    let (w, h) = (24usize, 24usize);
+    let frame = |k: usize| RawImage {
+        format: RawFormat::Nef,
+        width: w,
+        height: h,
+        cpp: 1,
+        data: RawData::U16((0..w * h).map(|i| 1100 + ((i * 7 + k * 13) % 3000) as u16).collect()),
+        cfa: Cfa::bayer("RGGB"),
+        bits: 14,
+        black: BlackLevel::uniform(1008.0),
+        white: vec![16383.0],
+        active_area: Rect::new(0, 0, w, h),
+        crop: Rect::new(2, 2, 20, 20),
+        orientation: Orientation::Normal,
+        color: ColorData::default(),
+        wb_multipliers: None,
+        linearized: false,
+        pixel_aspect: 1.0,
+        opcodes: Default::default(),
+        metadata: Default::default(),
+        lens_metadata: Default::default(),
+    };
+    let mut merger = Merger::new(&SHOT_16, &frame(0)).unwrap();
+    for k in 0..16 {
+        merger.add_frame(k, &frame(k)).unwrap();
+    }
+    let merged = merger.finish().unwrap();
+    let time = "2025-08-07T11:22:27.150+02:00";
+    let metadata = lcc_meta::Metadata {
+        make: Some("NIKON CORPORATION".into()),
+        model: Some("NIKON Z 8".into()),
+        capture_time: lcc_meta::DateTime::parse_iso(time),
+        keywords: vec!["travel".into(), "Italy".into(), "Rome".into(), "macro".into()],
+        hierarchical_keywords: vec!["travel|Italy|Rome".into(), "macro".into()],
+        artist: Some("Test Creator".into()),
+        city: Some("Testville".into()),
+        ..Default::default()
+    };
+    let provenance = lcc_raw::merge_provenance::Provenance { engine: 1, shot_count: 16, reference: 1, scale: 2, window: None, frames: vec![] };
+    let color = ColorData { as_shot_neutral: Some([0.54, 1.0, 0.7]), ..Default::default() };
+    let dng = write_dng(
+        merged,
+        DngSource { metadata, color, orientation: Orientation::Normal, lens: vec![], provenance, preview: None },
+        DngPacking::Deflate,
+    )
+    .unwrap();
+    let dir = std::env::temp_dir().join(format!("lcc-ps-meta-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("merged-PixelShift.dng"), &dng).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    assert_eq!(r["imported"].as_array().unwrap().len(), 1, "{r}");
+    let p = s.catalog.photos().next().unwrap();
+    assert_eq!(p.captured.as_deref(), Some(time));
+    assert_eq!(p.captured_fallback, None, "dated by the file, not by its modification time");
+    assert_eq!(p.meta.keywords, ["travel|Italy|Rome", "macro"]);
+    assert_eq!((p.meta.creator.as_str(), p.meta.city.as_str()), ("Test Creator", "Testville"));
+    assert_eq!(p.meta.camera_model, "NIKON Z 8");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A pixel-shift merge started from the app's menu: the result is imported, selected and stacked over its frames,
+/// and opens with default develop settings, as a newly imported NEF does (no Auto Settings).
+#[test]
+fn a_pixel_shift_merge_from_the_menu_opens_unedited_and_stacked() {
+    let dir = std::env::temp_dir().join(format!("lcc-ps-menu-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Session::new().with_fs();
+    let mut ids = Vec::new();
+    for i in 1..=16u8 {
+        let path = dir.join(format!("frame-{i:02}.nef"));
+        std::fs::write(&path, pixel_shift_header(i, 16, 0.01)).unwrap();
+        let path = path.to_string_lossy().to_string();
+        let id = s.catalog.alloc_photo_id();
+        let photo = lcc_catalog::Photo::new(id, lcc_catalog::Source::File { path: path.clone() }, &path, "NEF", 8256, 5504, "2030-05-06T07:08:09");
+        s.catalog.apply(lcc_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        ids.push(id);
+    }
+    // what the Photo Merge dialog sends for this command with its own defaults (Auto Settings on, Create Stack off)
+    let dialog = json!({"command": "merge.pixelShift", "align": true, "deghost": "none", "showOverlay": false, "autoSettings": true,
+        "stack": false, "projection": "auto", "boundaryWarp": 0.0, "autoCrop": true, "fillEdges": false, "bracket": 0, "includeMerged": true});
+    let (kind, finish) = crate::merge::parse_dialog(dialog["command"].as_str().unwrap(), &dialog).unwrap();
+    let job = s.plan_merge(kind, finish, &ids, false).unwrap();
+    let out = crate::merge::MergeOutput {
+        dng: crate::tests_xmp::synthetic_dng_with(None, lcc_meta::Metadata::default()),
+        preview: None,
+        crop: None,
+        info: json!({}),
+        layers: None,
+    };
+    let info = s.finish_merge(&job, out).unwrap();
+    let id = lcc_catalog::PhotoId(info["id"].as_u64().unwrap());
+    let photo = s.catalog.photo(id).unwrap();
+    assert!(!photo.is_edited(), "opens unedited, as a newly imported file does: {:?}", photo.develop.light);
+    assert!(photo.history.is_empty(), "no history steps");
+    assert!(
+        photo.history.iter().all(|h| h.label != "Auto"),
+        "no Auto Settings step: {:?}",
+        photo.history.iter().map(|h| &h.label).collect::<Vec<_>>()
+    );
+    let stack = s.catalog.stack_of(id).expect("stacked over its frames");
+    assert_eq!(stack.photos.len(), 17, "the result and its 16 frames");
+    assert_eq!(s.active(), Some(id));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A small merged DNG (the merge's own writer), without a first frame's JPEG.
+fn synthetic_merged_dng() -> Vec<u8> {
+    use lcc_geom::Orientation;
+    use lcc_merge::pixelshift::{DngPacking, DngSource, Merger, SHOT_16, write_dng};
+    use lcc_raw::{BlackLevel, Cfa, ColorData, RawData, RawFormat, RawImage, Rect};
+    let (w, h) = (24usize, 24usize);
+    let frame = |k: usize| RawImage {
+        format: RawFormat::Nef,
+        width: w,
+        height: h,
+        cpp: 1,
+        data: RawData::U16((0..w * h).map(|i| 1100 + ((i * 7 + k * 13) % 3000) as u16).collect()),
+        cfa: Cfa::bayer("RGGB"),
+        bits: 14,
+        black: BlackLevel::uniform(1008.0),
+        white: vec![16383.0],
+        active_area: Rect::new(0, 0, w, h),
+        crop: Rect::new(2, 2, 20, 20),
+        orientation: Orientation::Normal,
+        color: ColorData::default(),
+        wb_multipliers: None,
+        linearized: false,
+        pixel_aspect: 1.0,
+        opcodes: Default::default(),
+        metadata: Default::default(),
+        lens_metadata: Default::default(),
+    };
+    let mut merger = Merger::new(&SHOT_16, &frame(0)).unwrap();
+    for k in 0..16 {
+        merger.add_frame(k, &frame(k)).unwrap();
+    }
+    let metadata = lcc_meta::Metadata { make: Some("NIKON CORPORATION".into()), model: Some("NIKON Z 8".into()), ..Default::default() };
+    let provenance = lcc_raw::merge_provenance::Provenance { engine: 1, shot_count: 16, reference: 1, scale: 2, window: None, frames: vec![] };
+    let color = ColorData { as_shot_neutral: Some([0.54, 1.0, 0.7]), baseline_exposure: 0.018, ..Default::default() };
+    write_dng(
+        merger.finish().unwrap(),
+        DngSource { metadata, color, orientation: Orientation::Normal, lens: vec![], provenance, preview: None },
+        DngPacking::Deflate,
+    )
+    .unwrap()
+}
+
+/// The report of how a file's colour starts (`photo.sourceReport`).
+fn colour_report(file: &[u8], tag: &str) -> serde_json::Value {
+    let dir = std::env::temp_dir().join(format!("lcc-ps-colour-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.dng"), file).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    let id = r["imported"][0].as_u64().expect("imported");
+    let report = s.execute("photo.sourceReport", &json!({"ids": [id]})).unwrap()["photos"][0]["report"].clone();
+    let _ = std::fs::remove_dir_all(&dir);
+    report
+}
+
+/// A pixel-shift merge starts its colour as the camera's raw does (white balance relative to as shot, no colour tags
+/// of the file); a DNG of any other writer, with the same data and tags, starts as it always did.
+#[test]
+fn a_merged_dng_starts_its_colour_like_the_cameras_raw_and_a_normal_dng_does_not() {
+    let merged = colour_report(&synthetic_merged_dng(), "merged");
+    assert_eq!(merged["format"], "Nef", "{merged}");
+    assert_eq!(merged["whiteBalance"], "relative", "{merged}");
+    assert_ne!(merged["colour"]["kind"], "file", "{merged}");
+    assert_eq!(merged["dngProfile"]["toneCurve"], false, "{merged}");
+    // a DNG with colour tags: its own
+    let normal = colour_report(&crate::tests_xmp::synthetic_dng_with(None, lcc_meta::Metadata::default()), "normal");
+    assert_eq!(normal["format"], "Dng", "{normal}");
+    assert_eq!(normal["colour"]["kind"], "file", "{normal}");
+    assert_eq!(normal["whiteBalance"], "absolute", "{normal}");
+}

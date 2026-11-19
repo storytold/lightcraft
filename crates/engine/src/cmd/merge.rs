@@ -1,4 +1,4 @@
-//! Photo Merge commands: `merge.hdr`, `merge.panorama`, `merge.hdrPanorama`, `merge.hdrBatch`, `merge.focusStack`.
+//! Photo Merge commands: `merge.hdr`, `merge.panorama`, `merge.hdrPanorama`, `merge.hdrBatch`, `merge.focusStack`, `merge.pixelShift`.
 //!
 //! Run synchronously here (CLI, MCP, control channel); the desktop UI plans the same job with
 //! [`Session::plan_merge`] and runs it on a worker thread. `preview: true` merges ≤ 1024 px frames
@@ -60,6 +60,34 @@ fn run_batch(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"merged": merged, "failed": failed}))
 }
 
+/// A merged pixel-shift photo is selected and still has frames other than its reference.
+fn can_delete_sources(s: &Session) -> std::result::Result<(), String> {
+    let id = s.active().ok_or("no photo selected")?;
+    match s.merge_sources_to_delete(id) {
+        None => Err("the photo is not a pixel-shift merge".into()),
+        Some((present, _)) if present.is_empty() => Err("no merge sources other than frame 01 are left".into()),
+        Some(_) => Ok(()),
+    }
+}
+
+/// `merge.deleteSources`: the merged photo's frames other than its reference (frame 01) go to Recently Deleted.
+fn delete_sources(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "merge.deleteSources";
+    let id = match p.get("id").and_then(Value::as_u64) {
+        Some(n) => PhotoId(n),
+        None => s.active().ok_or_else(|| bad(ID, "no photo selected"))?,
+    };
+    let (present, missing) = s.merge_sources_to_delete(id).ok_or_else(|| bad(ID, "the photo is not a pixel-shift merge"))?;
+    if present.is_empty() {
+        return Err(bad(ID, "no merge sources other than the reference frame are left"));
+    }
+    let ids: Vec<u64> = present.iter().map(|p| p.0).collect();
+    s.execute("photo.delete", &json!({"ids": ids}))?;
+    // the merged photo and its reference frame stay, with the merged photo selected
+    s.selection = crate::Selection::single(id);
+    Ok(json!({"deleted": present.len(), "missing": missing, "ids": ids}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -97,6 +125,24 @@ pub fn specs() -> Vec<CommandSpec> {
             "{ids?, align=true, deghost=none|low|medium|high, autoSettings=true, stack=false}: an HDR merge of each bracket set among the photos (each stack, then photos taken less than a second apart at exposures ≥ ½ EV apart) → {merged: [{id, path, …}], failed: [{photos, error}]}",
             can_merge,
             run_batch
+        ),
+        cmd!(
+            "merge.pixelShift",
+            "Pixel Shift Merge",
+            [],
+            None,
+            "{ids?, autoSettings=false, stack=true, outputDir?}: the frames of one complete Nikon pixel-shift series (16 shots; the photos' own pixel-shift numbers say whether they are one) merged on the raw mosaics into one image with full colour at twice the resolution, written next to frame 01 as <name>-PixelShift.dng (16-bit LinearRaw on the camera's own scale, carrying frame 01's colour, lens data and metadata and where it came from), added to the library and stacked on its frames. A selection that is not a complete series is refused with the reason → {id, path, shots, width, height, …}",
+            can_merge,
+            |s, p| run(s, "merge.pixelShift", p)
+        ),
+        cmd!(
+            "merge.deleteSources",
+            "Delete Merge Sources",
+            [],
+            None,
+            "{id?}: the merged pixel-shift photo's frames other than frame 01 (the reference) are moved to Recently Deleted like any deleted photo; frame 01 and the merged photo stay, stacked. Frames already gone are counted → {deleted, missing, ids}",
+            can_delete_sources,
+            delete_sources
         ),
         cmd!(
             "merge.focusStack",

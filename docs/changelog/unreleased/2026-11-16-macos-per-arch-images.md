@@ -1,3 +1,0 @@
-## Release builds and CI
-
-- **One macOS disk image per architecture:** releases add `-macos-arm64.dmg` (Apple silicon) and `-macos-x64.dmg` (Intel), each holding one build, beside the universal image, which is about twice their size. The updater takes the image for the Mac it runs on (an Intel build under Rosetta takes the Apple silicon one) and falls back to the universal image. The names are `arm64` and `x64` because installed builds take any `-macos-universal`, `-macos-aarch64` or `-macos-x86_64` file and pick the smallest, which would put the Apple silicon image on Intel Macs; they keep updating through the universal image, which a later release drops (issue #1228).

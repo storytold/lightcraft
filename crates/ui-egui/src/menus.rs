@@ -72,6 +72,16 @@ pub fn language_from_command(id: &str) -> Option<crate::i18n::Locale> {
     }
 }
 
+/// Photo Merge ▸ Pixel Shift: one definition for the menu bar, the command palette and the grid's context menu, so
+/// they always match.
+pub const PIXEL_SHIFT_ID: &str = "merge.pixelShiftNow";
+pub const PIXEL_SHIFT_LABEL: &str = "Pixel Shift…";
+
+/// Photo Merge ▸ Delete Merge Sources: the same one definition for the menu bar, the command palette and the grid's
+/// context menu.
+pub const DELETE_SOURCES_ID: &str = "merge.deleteSourcesNow";
+pub const DELETE_SOURCES_LABEL: &str = "Delete Merge Sources";
+
 pub const UI_COMMANDS: &[UiCommand] = &[
     ("ui.dock", "Arrange Panel", None, ""),
     ("ui.dock.reset", "Reset Panel Layout", None, "Window>Panels"),
@@ -363,6 +373,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("merge.panoramaLast", "Panorama with Last Settings", Some("Ctrl+Shift+M"), "Photo>Photo Merge"),
     ("merge.hdrPanoramaLast", "HDR Panorama with Last Settings", None, "Photo>Photo Merge"),
     ("merge.focusStackLast", "Focus Stack with Last Settings", None, "Photo>Photo Merge"),
+    // the frames of one Nikon pixel-shift series (no dialog: a selection that is not a complete series is refused
+    // with the reason)
+    (PIXEL_SHIFT_ID, PIXEL_SHIFT_LABEL, None, "Photo>Photo Merge"),
+    // a merged pixel-shift photo's other frames go to Recently Deleted (frame 01 and the merged photo stay)
+    (DELETE_SOURCES_ID, DELETE_SOURCES_LABEL, None, "Photo>Photo Merge"),
     ("file.addPhotos", "Import Photos…", None, "File"),
     // the workspace tabs (Settings ▸ Import ▸ Import as a tab; OneSlips LR-IMP-WINDOW)
     ("view.importTab", "Browse Tab", None, "Window>Modules"),
@@ -2399,7 +2414,7 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
         }
         "dialog.copySettings" => {
             let groups = app.session.dialogs.copy.to_ids();
-            app.ui.dialog = Some(Dialog::CopySettings { groups });
+            app.ui.dialog = Some(Dialog::CopySettings { groups, masks_off: Vec::new() });
             Ok(Value::Null)
         }
         "dialog.slideshowExport" => {
@@ -2478,13 +2493,39 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             app.ui.dialog = Some(Dialog::Export { opts, full_size, resize, preset_name: String::new(), limit_kb: u("limitKb", 0) as u32, dir });
             Ok(Value::Null)
         }
-        "merge.hdrLast" => crate::merge::start_last(app, "merge.hdr"),
-        "merge.hdrBatch" => crate::merge::start_batch(app, p),
-        "merge.panoramaLast" => crate::merge::start_last(app, "merge.panorama"),
-        "merge.hdrPanoramaLast" => crate::merge::start_last(app, "merge.hdrPanorama"),
-        "merge.focusStackLast" => crate::merge::start_last(app, "merge.focusStack"),
+        "merge.hdrLast" => {
+            let r = crate::merge::start_last(app, "merge.hdr");
+            crate::merge::reported(app, r)
+        }
+        "merge.hdrBatch" => {
+            let r = crate::merge::start_batch(app, p);
+            crate::merge::reported(app, r)
+        }
+        "merge.panoramaLast" => {
+            let r = crate::merge::start_last(app, "merge.panorama");
+            crate::merge::reported(app, r)
+        }
+        "merge.hdrPanoramaLast" => {
+            let r = crate::merge::start_last(app, "merge.hdrPanorama");
+            crate::merge::reported(app, r)
+        }
+        "merge.focusStackLast" => {
+            let r = crate::merge::start_last(app, "merge.focusStack");
+            crate::merge::reported(app, r)
+        }
+        "merge.pixelShiftNow" => {
+            let r = crate::merge::start_last(app, "merge.pixelShift");
+            crate::merge::reported(app, r)
+        }
+        "merge.deleteSourcesNow" => {
+            let r = crate::merge::ask_delete_sources(app);
+            crate::merge::reported(app, r)
+        }
         "dialog.enhance" => crate::enhance_ui::open(app),
-        "dialog.mergeHdr" => crate::merge::open(app, "merge.hdr"),
+        "dialog.mergeHdr" => {
+            let r = crate::merge::open(app, "merge.hdr");
+            crate::merge::reported(app, r)
+        }
         "dialog.faceModel" => {
             let path = match p.get("path").and_then(Value::as_str) {
                 Some(x) => Some(x.to_string()),
@@ -2495,9 +2536,18 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
                 None => Ok(Value::Null),
             }
         }
-        "dialog.mergePanorama" => crate::merge::open(app, "merge.panorama"),
-        "dialog.mergeHdrPanorama" => crate::merge::open(app, "merge.hdrPanorama"),
-        "dialog.mergeFocusStack" => crate::merge::open(app, "merge.focusStack"),
+        "dialog.mergePanorama" => {
+            let r = crate::merge::open(app, "merge.panorama");
+            crate::merge::reported(app, r)
+        }
+        "dialog.mergeHdrPanorama" => {
+            let r = crate::merge::open(app, "merge.hdrPanorama");
+            crate::merge::reported(app, r)
+        }
+        "dialog.mergeFocusStack" => {
+            let r = crate::merge::open(app, "merge.focusStack");
+            crate::merge::reported(app, r)
+        }
         "app.openSamModelFolder" => crate::panels::dialogs::show_model_folder(app),
         "dialog.aiModels" => {
             app.ui.dialog = Some(Dialog::Settings { tab: "ai".into() });
@@ -3571,6 +3621,9 @@ pub fn ui_enabled(app: &LccApp, id: &str) -> bool {
         return e;
     }
     match id {
+        "merge.deleteSourcesNow" => {
+            app.session.active().and_then(|id| app.session.merge_sources_to_delete(id)).is_some_and(|(present, _)| !present.is_empty())
+        }
         "library.selectOnlyActive" => app.session.active().is_some(),
         "view.loupeToggle" => app.session.active().is_some() || app.ui.view == ViewMode::Detail,
         "dialog.newDiskFolder" | "dialog.synchronizeFolder" => chosen_library_folder(app).is_ok(),

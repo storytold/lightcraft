@@ -331,12 +331,13 @@ fn plugin_state_and_store_files_never_panic() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("test.wasm"), module(MANIFEST, "{}")).unwrap();
-    let state = r#"{"plugins":{"test.plugin":{"enabled":true,"grant":{"catalog":true,"fs":[{"path":"/x","write":true}]}}}}"#;
+    let state = r#"{"plugins":{"test.plugin":{"enabled":true,"grant":{"catalog":true,"fs":[{"path":"/x","write":true}]},"checkUpdates":true,
+        "lastCheck":{"at":5,"version":"1.0.0","offer":{"version":"1.1.0","url":"https://x.org/a.wasm","sha256":"00","permissions":["catalog"],"notes":"n"}}}}}"#;
     lcc_fuzzkit::run_json("plugins.state", &[state], 200, |s| {
         std::fs::write(dir.join("plugins.json"), s).unwrap();
         if let Ok(m) = Manager::open(&dir) {
             for p in m.list() {
-                let _ = (p.effective(), p.info());
+                let _ = (p.effective(), p.info(), p.updates_info(m.features()));
             }
         }
     });
@@ -352,4 +353,25 @@ fn plugin_state_and_store_files_never_panic() {
         }
     });
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// AC-7: an update feed, every truncation and mutation of it, offers something or nothing and never
+/// panics.
+#[test]
+fn hostile_update_feeds_never_panic() {
+    let feed = json!({"geo": {"id": "test.plugin", "version": "1.1.0", "url": "https://x.org/geo.wasm",
+        "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "requires": ["settings"],
+        "permissions": ["catalog", "network"], "changelog": "https://x.org/CHANGELOG.md", "notes": "Faster \u{e9}t\u{e9} lookups."}})
+    .to_string();
+    let read = |b: &[u8]| lcc_plugins::updates::read_feed(b, "test.plugin", "1.0.0", &mut Vec::new());
+    assert!(matches!(read(feed.as_bytes()), Ok(Some(_))));
+    for n in 0..feed.len() {
+        let _ = read(&feed.as_bytes()[..n]);
+    }
+    lcc_fuzzkit::run("plugins.feed", &[feed.as_bytes()], 2000, |b| {
+        if let Ok(Some(o)) = read(b) {
+            assert!(o.notes.as_ref().is_none_or(|n| n.chars().count() <= lcc_plugins::updates::MAX_NOTES_CHARS));
+            let _ = (o.adds(&Permissions::default()), o.missing(&[]));
+        }
+    });
 }

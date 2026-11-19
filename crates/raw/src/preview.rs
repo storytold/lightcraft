@@ -24,6 +24,10 @@ pub enum PreviewColorSpace {
 pub fn embedded_preview_color_space(bytes: &[u8]) -> Option<PreviewColorSpace> {
     let Ok(tiff) = Tiff::parse(bytes) else { return cr3_color_space(bytes) };
     let make = tiff.ifds.first()?.string(t::MAKE).unwrap_or_default();
+    // a pixel-shift merge made by this app keeps its first frame's JPEG as its preview and says which space it is in
+    if let Some(space) = merged_preview_space(&tiff) {
+        return Some(space);
+    }
     let exif = tiff.exif()?;
     if make.to_ascii_uppercase().starts_with("NIKON")
         && let Some(space) = nikon_color_space(bytes, &tiff, exif, &make)
@@ -46,6 +50,19 @@ pub fn embedded_preview_color_space(bytes: &[u8]) -> Option<PreviewColorSpace> {
         0xFFFF if exif.interop.as_deref()?.bytes(0x0001)?.starts_with(b"R03") => Some(PreviewColorSpace::AdobeRgb),
         _ => None,
     }
+}
+
+/// The colour space a pixel-shift merge's preview says it is in (`PreviewColorSpace` of its preview IFD, DNG tag
+/// 50970: 2 = sRGB, 3 = Adobe RGB); `None` for any other file, DNGs of other writers included.
+fn merged_preview_space(tiff: &Tiff) -> Option<PreviewColorSpace> {
+    if !tiff.ifds.first()?.bytes(t::XMP).is_some_and(crate::merge_provenance::is_marked) {
+        return None;
+    }
+    tiff.all_ifds().into_iter().find_map(|ifd| match ifd.u16(t::PREVIEW_COLOR_SPACE)? {
+        2 => Some(PreviewColorSpace::Srgb),
+        3 => Some(PreviewColorSpace::AdobeRgb),
+        _ => None,
+    })
 }
 
 /// A CR3 keeps its EXIF and maker note in `CMT2`/`CMT3` TIFF blocks and its JPEGs carry no EXIF; a body shot in
@@ -128,7 +145,7 @@ fn is_dct_jpeg(b: &[u8]) -> bool {
 }
 
 /// Width, height and component count of a displayable (DCT) JPEG, from its frame header.
-fn jpeg_frame(b: &[u8]) -> Option<(u32, u32, u8)> {
+pub(crate) fn jpeg_frame(b: &[u8]) -> Option<(u32, u32, u8)> {
     let (_, i) = first_frame(b).filter(|(m, _)| matches!(m, 0xc0..=0xc2))?;
     let at = |k: usize| b.get(i.checked_add(k)?).copied();
     let be16 = |k: usize| Some(u32::from(u16::from_be_bytes([at(k)?, at(k + 1)?])));

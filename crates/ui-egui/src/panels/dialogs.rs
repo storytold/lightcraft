@@ -295,6 +295,8 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
         Dialog::SlideshowExport { .. } => "Export Slideshow",
         Dialog::Print => "Print",
         Dialog::Merge { opts } => opts.title(),
+        Dialog::PixelShiftOffer { .. } => "Pixel Shift Merge",
+        Dialog::ConfirmDeleteSources { .. } => "Delete Merge Sources",
         Dialog::Enhance { .. } => "Enhance Preview",
         Dialog::Settings { .. } => "Settings",
         Dialog::ConfirmDelete { .. } => "Delete Photos",
@@ -1041,8 +1043,10 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                         crate::widgets::named(r, crate::i18n::tr("Folder name"));
                     });
                 }
-                Dialog::CopySettings { groups } => {
-                    let _ = group_checklist(ui, "copyGroup", groups, None);
+                Dialog::CopySettings { groups, masks_off } => {
+                    let rows = copy_mask_rows(&app.session);
+                    let mask_rows = MaskRows { rows: &rows, off: masks_off };
+                    let _ = group_checklist_with(ui, "copyGroup", groups, None, Some(mask_rows));
                 }
                 Dialog::SyncSettings { groups, controls } => {
                     let n = app.session.selection.ids.len().saturating_sub(1);
@@ -1147,6 +1151,14 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     export_body(app, ui, ExportForm { opts, full_size, resize, preset_name, limit_kb, dir }, window_id, settings_height)
                 }
                 Dialog::Merge { opts } => crate::merge::body(app, ui, opts),
+                Dialog::PixelShiftOffer { .. } => {
+                    ui.label(crate::i18n::tr("This selection is a complete pixel-shift series. Merge as Pixel Shift instead?"));
+                }
+                Dialog::ConfirmDeleteSources { count, .. } => {
+                    let what = if *count == 1 { crate::i18n::tr("this photo").to_string() } else { crate::i18n::tr_format!("these {count} photos", count = count) };
+                    ui.label(crate::i18n::tr_format!("Move {what} to Recently Deleted?", what = what));
+                    crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr("They can be restored from Recently Deleted until it is emptied.")).color(t.text_dim));
+                }
                 Dialog::Enhance { opts } => crate::enhance_ui::body(app, ui, opts),
                 Dialog::Import { opts } => crate::import::body(app, ui, opts),
                 Dialog::Settings { tab } => crate::panels::settings::body(app, ui, tab, 0.0),
@@ -1606,6 +1618,21 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                         close = true;
                     }
                 }
+                if let Dialog::PixelShiftOffer { command } = &dlg {
+                    let mode = crate::i18n::tr(match command.as_str() {
+                        "merge.panorama" => "Panorama",
+                        "merge.hdrPanorama" => "HDR panorama",
+                        "merge.focusStack" => "Focus stack",
+                        _ => "HDR",
+                    });
+                    let label = crate::i18n::tr_format!("Continue with {mode}", mode = mode);
+                    if crate::button::Button::new(&label).widget("button:dialogContinueMerge").show(ui).clicked() {
+                        let r = crate::merge::answer_offer(app, command, crate::merge::OfferChoice::Continue);
+                        let _ = crate::merge::reported(app, r);
+                        // (the dialog it opens takes this one's place)
+                        return;
+                    }
+                }
                 let add_label;
                 let ok = match &dlg {
                     Dialog::Import { opts } => {
@@ -1624,6 +1651,8 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     Dialog::SlideshowExport { .. } => "Export…",
                     Dialog::Print => "Print to PDF…",
                     Dialog::Merge { .. } => "Merge",
+                    Dialog::PixelShiftOffer { .. } => "Pixel Shift",
+                    Dialog::ConfirmDeleteSources { .. } => "Delete",
                     Dialog::Enhance { .. } => "Enhance",
                     Dialog::DenoiseModel { info, .. } if info["download"].is_string() => "Accept & Download",
                     Dialog::DenoiseModel { .. } => "Install",
@@ -2399,7 +2428,10 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
         Dialog::Print => app.run("app.print", json!({})),
         Dialog::CropOverlays { picked } => app.run("view.cropOverlays", json!({"overlays": picked})),
         Dialog::BookPrefs { prefs } => app.run("book.preferences", json!(prefs)),
-        Dialog::CopySettings { groups } => app.run("develop.copy", pick_params(groups)),
+        Dialog::CopySettings { groups, masks_off } => {
+            let params = copy_params(&app.session, groups, masks_off);
+            app.run("develop.copy", params)
+        }
         Dialog::PasteSettings { groups } => app.run("develop.paste", pick_params(groups)),
         Dialog::SyncSettings { groups, .. } => app.run("develop.sync", pick_params(groups)),
         Dialog::SyncCopies { groups } => {
@@ -2413,7 +2445,12 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
         Dialog::Export { opts, full_size, resize, limit_kb, dir, preset_name } => {
             start_export(app, opts, *full_size, resize, *limit_kb, dir, preset_name)
         }
-        Dialog::Merge { opts } => crate::merge::start_final(app, opts),
+        Dialog::Merge { opts } => {
+            let r = crate::merge::start_final(app, opts);
+            crate::merge::reported(app, r)
+        }
+        Dialog::PixelShiftOffer { command } => crate::merge::answer_offer(app, command, crate::merge::OfferChoice::PixelShift),
+        Dialog::ConfirmDeleteSources { id, .. } => crate::merge::delete_sources(app, *id),
         Dialog::Enhance { opts } => crate::enhance_ui::confirm(app, opts),
         Dialog::Import { opts } => crate::import::start(app, opts),
         Dialog::ConfirmDelete { .. } => app.run("photo.delete", json!({})),
@@ -3652,6 +3689,124 @@ pub(crate) fn export_settings(app: &mut LccApp, ui: &mut egui::Ui, f: ExportForm
 /// `<tag>:<setting>`, `<tag>:open:<group>`, `<tag>:all`, `<tag>:none`. → `Some(true/false)` when
 /// Check All / Check None was pressed.
 fn group_checklist(ui: &mut egui::Ui, tag: &str, ids: &mut Vec<String>, offered: Option<&SettingsPick>) -> Option<bool> {
+    group_checklist_with(ui, tag, ids, offered, None)
+}
+
+/// The masks of the active photo under Masking in Copy Settings (issue #1268): a box per mask, its
+/// name and what it is made of. `off` holds the masks left unticked while Masking is ticked.
+struct MaskRows<'a> {
+    rows: &'a [(u32, String)],
+    off: &'a mut Vec<u32>,
+}
+
+/// Each mask of the active photo with its row text: its name and what it is made of ("Mask 2:
+/// Radial Gradient, Brush"); an automatic name that already says it is shown alone.
+pub(crate) fn copy_mask_rows(session: &lcc_engine::Session) -> Vec<(u32, String)> {
+    let Some(d) = session.active().and_then(|id| session.develop_of(id)) else { return Vec::new() };
+    d.masks
+        .iter()
+        .map(|m| {
+            let comp = lcc_develop::recipe::composition(m);
+            let name = m.name.trim();
+            let text = if name.is_empty() {
+                lcc_develop::recipe::content_name(m)
+            } else if comp.is_empty() || lcc_develop::recipe::numbered_name(name, &lcc_develop::recipe::content_name(m)) || name == comp {
+                name.to_string()
+            } else {
+                format!("{name}: {comp}")
+            };
+            (m.id, text)
+        })
+        .collect()
+}
+
+/// Copy Settings' parameters: the ticked settings, and the masks ticked when some are left out.
+fn copy_params(session: &lcc_engine::Session, ids: &[String], masks_off: &[u32]) -> serde_json::Value {
+    let mut p = pick_params(ids);
+    let masks_ticked = SettingsPick::from_ids(ids).has(SettingsGroup::Masks.id());
+    if masks_ticked && !masks_off.is_empty() {
+        let on: Vec<u32> = copy_mask_rows(session).iter().map(|(id, _)| *id).filter(|id| !masks_off.contains(id)).collect();
+        if let Some(o) = p.as_object_mut() {
+            o.insert("masks".into(), json!(on));
+        }
+    }
+    p
+}
+
+/// The Masking group with a box per mask under it (opened with the arrow, as a group's single
+/// settings). Widget ids: `<tag>:masks`, `<tag>:open:masks`, `<tag>:mask:<id>`.
+fn mask_group(ui: &mut egui::Ui, tag: &str, ids: &mut Vec<String>, m: &mut MaskRows<'_>, t: &Tokens) {
+    let gid = SettingsGroup::Masks.id();
+    let rows = m.rows;
+    // (a mask deleted since is forgotten; none ticked is Masking unticked)
+    m.off.retain(|x| rows.iter().any(|(id, _)| id == x));
+    if m.off.len() >= rows.len() {
+        ids.retain(|x| x != gid);
+        m.off.clear();
+    }
+    let copied = ids.iter().any(|x| x == gid);
+    let open_id = egui::Id::new(("settings-tree-open", tag, gid));
+    let mut open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let (rect, arrow) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
+        let colour = if arrow.hovered() { t.text } else { t.text_dim };
+        let icon = if open { crate::icons::Icon::ChevronDown } else { crate::icons::Icon::ChevronRight };
+        crate::icons::paint(ui.painter(), egui::Rect::from_center_size(rect.center(), egui::vec2(14.0, 14.0)), icon, colour);
+        let arrow = arrow.on_hover_text(crate::i18n::tr(if open { "Hide the single settings" } else { "Show the single settings" }));
+        crate::access::button(&arrow, if open { "Hide the single settings" } else { "Show the single settings" });
+        crate::widgets::register(ui.ctx(), format!("{tag}:open:{gid}"), arrow.rect);
+        if arrow.clicked() {
+            open = !open;
+            ui.data_mut(|d| d.insert_temp(open_id, open));
+        }
+        let mut on = copied && m.off.is_empty();
+        let partial = copied && !m.off.is_empty();
+        let r = ui.add(egui::Checkbox::new(&mut on, crate::i18n::tr(SettingsGroup::Masks.label())).indeterminate(partial));
+        crate::widgets::register(ui.ctx(), format!("{tag}:{gid}"), r.rect);
+        if r.changed() {
+            // a partly ticked group ticks all of it, as the other groups do
+            let on = partial || on;
+            m.off.clear();
+            ids.retain(|x| x != gid);
+            if on {
+                ids.push(gid.to_string());
+            }
+        }
+    });
+    if !open {
+        return;
+    }
+    for (mid, text) in rows {
+        ui.horizontal(|ui| {
+            ui.add_space(38.0);
+            let mut on = copied && !m.off.contains(mid);
+            let r = ui.checkbox(&mut on, text.as_str());
+            crate::widgets::register(ui.ctx(), format!("{tag}:mask:{mid}"), r.rect);
+            if !r.changed() {
+                return;
+            }
+            if on && !ids.iter().any(|x| x == gid) {
+                // the first mask ticked: Masking with just this one
+                ids.push(gid.to_string());
+                *m.off = rows.iter().map(|(id, _)| *id).filter(|id| id != mid).collect();
+            } else if on {
+                m.off.retain(|x| x != mid);
+            } else if !m.off.contains(mid) {
+                m.off.push(*mid);
+            }
+        });
+    }
+}
+
+/// [`group_checklist`] with the masks of the photo under Masking (Copy Settings).
+fn group_checklist_with(
+    ui: &mut egui::Ui,
+    tag: &str,
+    ids: &mut Vec<String>,
+    offered: Option<&SettingsPick>,
+    mut masks: Option<MaskRows<'_>>,
+) -> Option<bool> {
     // (ids from an older ui.json may name whole groups: one tick per setting from here on)
     let normal = SettingsPick::from_ids(ids).to_ids();
     if normal != *ids {
@@ -3675,6 +3830,14 @@ fn group_checklist(ui: &mut egui::Ui, tag: &str, ids: &mut Vec<String>, offered:
         let half = SettingsGroup::ALL.len().div_ceil(2);
         for (i, g) in SettingsGroup::ALL.into_iter().enumerate() {
             let Some(ui) = cols.get_mut(usize::from(i >= half)) else { continue };
+            if g == SettingsGroup::Masks
+                && can(g.id())
+                && let Some(m) = masks.as_mut()
+                && !m.rows.is_empty()
+            {
+                mask_group(ui, tag, ids, m, &t);
+                continue;
+            }
             let mine: Vec<&str> = leaves(g).into_iter().filter(|id| can(id)).collect();
             let ticked = mine.iter().filter(|id| ids.iter().any(|x| x == *id)).count();
             let open_id = egui::Id::new(("settings-tree-open", tag, g.id()));
@@ -3728,12 +3891,18 @@ fn group_checklist(ui: &mut egui::Ui, tag: &str, ids: &mut Vec<String>, offered:
         crate::widgets::register(ui.ctx(), format!("{tag}:all"), all.rect);
         if all.clicked() {
             *ids = SettingsGroup::ALL.into_iter().flat_map(leaves).filter(|id| can(id)).map(str::to_string).collect();
+            if let Some(m) = masks.as_mut() {
+                m.off.clear();
+            }
             return Some(true);
         }
         let none = ui.small_button(crate::i18n::tr("Check None"));
         crate::widgets::register(ui.ctx(), format!("{tag}:none"), none.rect);
         if none.clicked() {
             ids.clear();
+            if let Some(m) = masks.as_mut() {
+                m.off.clear();
+            }
             return Some(false);
         }
         ui.label(egui::RichText::new(crate::i18n::tr("Open a group with its arrow to pick single settings.")).small().color(t.text_dim));
@@ -4221,6 +4390,7 @@ pub enum ConfirmStyle {
 pub fn confirm_style(dlg: &Dialog) -> ConfirmStyle {
     match dlg {
         Dialog::ConfirmDelete { .. }
+        | Dialog::ConfirmDeleteSources { .. }
         | Dialog::ConfirmPurge { .. }
         | Dialog::DeleteKeyword { .. }
         | Dialog::DeleteEffects { .. }

@@ -730,6 +730,12 @@ pub struct Light {
     /// Mode for Contrast and Blacks: `Luminance` (default) or `Rgb` (issue #839).
     #[serde(skip_serializing_if = "ContrastMode::is_default")]
     pub contrast_mode: ContrastMode,
+    /// Brightness (beyond Lightroom; Capture One's Brightness), -100..100 (C1's -50..50 doubled). Lifts or darkens the
+    /// midtones, black and white stay fixed (`lcc_pipeline::brightness`, a stage on the encoded display values
+    /// before Levels / the Tone Curve). Left out of the JSON while 0, so existing settings keep their JSON and hash;
+    /// copying and presets write it explicitly (`presets::full_json`), so pasting an unedited photo resets it.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub brightness: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

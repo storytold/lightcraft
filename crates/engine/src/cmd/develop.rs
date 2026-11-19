@@ -106,6 +106,19 @@ fn pick_param(p: &Value, c: &str) -> Result<Option<SettingsPick>> {
     Ok(Some(SettingsPick { groups: groups.unwrap_or_default(), settings }.normalized()))
 }
 
+/// `masks` (Copy: which of the photo's masks, by id); `None` when not given.
+fn mask_ids_param(p: &Value, c: &str) -> Result<Option<Vec<u32>>> {
+    match p.get("masks") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|v| v.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(|| bad(c, format!("invalid mask id `{v}` (develop.get: masks[].id)"))))
+            .collect::<Result<Vec<u32>>>()
+            .map(Some),
+        Some(_) => Err(bad(c, "`masks` must be a list of mask ids (develop.get: masks[].id)")),
+    }
+}
+
 /// A preset group named like `name` (trimmed, any case) that exists already, else `name` trimmed:
 /// typing "wedding " never makes a second "Wedding" group.
 pub(crate) fn existing_preset_group(s: &Session, name: &str) -> String {
@@ -1436,24 +1449,48 @@ pub fn specs() -> Vec<CommandSpec> {
             "Copy Edit Settings",
             ["Photo", "Develop Settings"],
             Some("Cmd+C"),
-            "{groups?: [settingsGroup], settings?: [settingItem] (single settings of a group, develop.settingItems)} (default: what was ticked last; at first all but crop, masks, remove): the choice is remembered → {groups, settings}",
+            "{groups?: [settingsGroup], settings?: [settingItem] (single settings of a group, develop.settingItems), masks?: [maskId] (with the masks group: only these of the photo's masks, by id (develop.get); default all)} (default: what was ticked last; at first all but crop, masks, remove): the group choice is remembered, the masks one is for this copy only → {groups, settings, masks? (the mask ids copied, when `masks` was given)}",
             has_active,
             |s, p| {
                 let c = "develop.copy";
                 let id = active(s, c)?;
-                if let Some(pick) = pick_param(p, c)?
+                let pick = pick_param(p, c)?;
+                let only_masks = mask_ids_param(p, c)?;
+                let d = s.develop_of(id).unwrap_or_default();
+                if let Some(only) = &only_masks {
+                    if !pick.as_ref().unwrap_or(&s.dialogs.copy).has(SettingsGroup::Masks.id()) {
+                        return Err(bad(c, "`masks` picks which masks to copy: add \"masks\" to `groups`"));
+                    }
+                    if let Some(unknown) = only.iter().find(|m| !d.masks.iter().any(|x| x.id == **m)) {
+                        return Err(bad(c, format!("this photo has no mask {unknown} (develop.get: masks[].id)")));
+                    }
+                }
+                if let Some(pick) = pick
                     && pick != s.dialogs.copy
                 {
                     s.dialogs.copy = pick;
                     remember_dialogs(s);
                 }
-                let d = s.develop_of(id).unwrap_or_default();
-                // the whole settings: Paste Selected Settings can paste a group the copy left out (upstream #3148);
+                // the whole settings: Paste Selected Settings can paste a group the copy left out (upstream #3148)
+                let mut copied = d.to_json();
+                if let Some(only) = &only_masks
+                    && let Some(masks) = copied.get_mut("masks").and_then(Value::as_array_mut)
+                {
+                    // (in the photo's own order, whatever order they were named in)
+                    masks.retain(|m| m.get("id").and_then(Value::as_u64).and_then(|v| u32::try_from(v).ok()).is_some_and(|mid| only.contains(&mid)));
+                }
                 // portable: pasted in another catalog, a flat-field map still applies
-                s.clipboard = Some(s.portable(&d.to_json()));
+                s.clipboard = Some(s.portable(&copied));
                 s.clipboard_dims = oriented_dims(s, id, d.orientation);
                 s.clipboard_from = Some(id);
-                Ok(json!({"groups": s.dialogs.copy.groups, "settings": s.dialogs.copy.settings}))
+                let mut out = json!({"groups": s.dialogs.copy.groups, "settings": s.dialogs.copy.settings});
+                if let Some(only) = only_masks
+                    && let Some(o) = out.as_object_mut()
+                {
+                    let ids: Vec<u32> = d.masks.iter().map(|m| m.id).filter(|mid| only.contains(mid)).collect();
+                    o.insert("masks".into(), json!(ids));
+                }
+                Ok(out)
             }
         ),
         cmd!(
@@ -1787,7 +1824,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 // photographer gave it ("Warmth") is kept
                 for k in 0..d.masks.len() {
                     let Some(m) = d.masks.get(k).cloned() else { continue };
-                    if s.auto_mask_name(id, &m) == m.name
+                    // (numbered too: "Brush 2" next to another Brush)
+                    if lcc_develop::recipe::numbered_name(&m.name, &s.auto_mask_name(id, &m))
                         && let Some(m) = d.masks.get_mut(k)
                     {
                         m.name.clear();

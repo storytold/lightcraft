@@ -23,6 +23,7 @@ pub mod nef;
 mod nef_lens;
 pub mod nefc;
 mod nefhe;
+mod nefx;
 pub mod orf;
 pub mod pef;
 pub mod raf;

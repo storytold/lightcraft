@@ -212,3 +212,9 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   shots (rotation about the lens's side, tilt) is not followed; no retouching from single frames,
   no depth-map mode, no halo control; frames must share their size. A preview keeps its ≤ 1024 px
   frames between the two passes (≈ 8 MB each).
+
+## Pixel Shift
+
+*Photo ▸ Photo Merge ▸ Pixel Shift* (`merge.pixelShift`, `<cli> merge pixel-shift`) merges the frames of a Nikon pixel-shift
+series on the raw mosaics into `<name>-PixelShift.dng`, stacked on its frames; `merge.deleteSources` deletes the frames other than
+frame 01 afterwards. See [pixel-shift.md](pixel-shift.md).

@@ -260,7 +260,7 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
         wb_rows(app, ui, d, raw);
         sub_title(ui, "Tone");
         crate::video_ui::video_gate(ui, video, |ui| hdr_row(app, ui, d));
-        for c in ["light.exposure", "light.contrast", "light.highlights", "light.shadows", "light.whites", "light.blacks"] {
+        for c in ["light.exposure", "light.contrast", "light.brightness", "light.highlights", "light.shadows", "light.whites", "light.blacks"] {
             control(app, ui, d, c, true);
         }
         if shown_here(app, ui, "option:contrastMode") {
