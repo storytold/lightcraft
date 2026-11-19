@@ -1520,7 +1520,7 @@ dependencies = [
 [[package]]
 name = "craft-zip"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=5c496f6e962fcccd8ba91704994c4c06c2fc6a6f#5c496f6e962fcccd8ba91704994c4c06c2fc6a6f"
+source = "git+https://github.com/storytold/craft-libs?rev=23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3#23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3"
 dependencies = [
  "flate2",
  "thiserror 2.0.21",
@@ -4116,8 +4116,6 @@ name = "lightcraft-geocode"
 version = "0.21.1"
 dependencies = [
  "craft-zip",
- "crc32fast",
- "miniz_oxide 0.9.1",
  "serde",
 ]
 

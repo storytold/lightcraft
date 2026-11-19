@@ -38,38 +38,15 @@ pub fn extract(zip: &[u8], name: &str, max: usize) -> Result<Vec<u8>, GeocodeErr
     Ok(decoded)
 }
 
-/// A one-file deflated ZIP (test fixtures: the engine's download test serves one).
+/// A one-file deflated ZIP (test fixtures: the engine's download test serves one). A writer error
+/// gives an empty archive, which [`extract`] refuses.
 #[doc(hidden)]
 pub fn make(name: &str, data: &[u8]) -> Vec<u8> {
-    let c = miniz_oxide::deflate::compress_to_vec(data, 6);
-    let checksum = crc32fast::hash(data).to_le_bytes();
-    let mut z = Vec::new();
-    z.extend_from_slice(b"PK\x03\x04");
-    z.extend_from_slice(&[20, 0, 0, 0, 8, 0, 0, 0, 0, 0]);
-    z.extend_from_slice(&checksum);
-    z.extend_from_slice(&(c.len() as u32).to_le_bytes());
-    z.extend_from_slice(&(data.len() as u32).to_le_bytes());
-    z.extend_from_slice(&(name.len() as u16).to_le_bytes());
-    z.extend_from_slice(&[0, 0]);
-    z.extend_from_slice(name.as_bytes());
-    z.extend_from_slice(&c);
-    let cd = z.len();
-    z.extend_from_slice(b"PK\x01\x02");
-    z.extend_from_slice(&[20, 0, 20, 0, 0, 0, 8, 0, 0, 0, 0, 0]);
-    z.extend_from_slice(&checksum);
-    z.extend_from_slice(&(c.len() as u32).to_le_bytes());
-    z.extend_from_slice(&(data.len() as u32).to_le_bytes());
-    z.extend_from_slice(&(name.len() as u16).to_le_bytes());
-    z.extend_from_slice(&[0; 12]);
-    z.extend_from_slice(&0u32.to_le_bytes());
-    z.extend_from_slice(name.as_bytes());
-    let cdlen = z.len() - cd;
-    z.extend_from_slice(b"PK\x05\x06");
-    z.extend_from_slice(&[0, 0, 0, 0, 1, 0, 1, 0]);
-    z.extend_from_slice(&(cdlen as u32).to_le_bytes());
-    z.extend_from_slice(&(cd as u32).to_le_bytes());
-    z.extend_from_slice(&[0, 0]);
-    z
+    let mut writer = craft_zip::Writer::new();
+    if writer.add(name, data, craft_zip::Compression::Deflated).is_err() {
+        return Vec::new();
+    }
+    writer.finish().unwrap_or_default()
 }
 
 #[cfg(test)]

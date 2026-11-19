@@ -10,6 +10,4 @@ workspace = true
 
 [dependencies]
 craft-zip = { workspace = true }
-crc32fast = { workspace = true }
-miniz_oxide = { workspace = true }
 serde = { workspace = true }
