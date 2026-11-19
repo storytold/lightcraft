@@ -4084,3 +4084,60 @@ mod sidecar_nested_self_closing_sibling_crs_regression {
         assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
     }
 }
+
+#[cfg(test)]
+mod sidecar_self_closing_nested_sibling_crs_regression {
+    use super::*;
+
+    /// Regression: a self-closing `rdf:Description` nested in a direct-child
+    /// description must not make CRS write-back skip or duplicate a `crs:`
+    /// field on the following sibling description.
+    #[test]
+    fn a_self_closing_nested_description_does_not_hide_a_sibling_crs_field() {
+        let nested = r#"<rdf:Description rdf:about="nested"/>"#;
+
+        // Attribute form, with the CRS namespace declared on the sibling.
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+        assert_eq!(data.matches(nested).count(), 1, "precondition: one nested description:\n{data}");
+
+        let descs = global_descriptions(&data);
+        assert_eq!(descs.len(), 2, "the nested self-closing description does not consume the sibling:\n{data}");
+        let (start, end) = descs[1];
+        assert!(data[start..=end].contains(r#"crs:Exposure2012="0.5""#), "the sibling description is found:\n{data}");
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the sibling field is updated in place:\n{data}");
+        assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert_eq!(data.matches(nested).count(), 1, "the nested description is unchanged:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+
+        // Element form, with the CRS namespace declared on rdf:RDF.
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+        assert_eq!(data.matches(nested).count(), 1, "precondition: one nested description:\n{data}");
+
+        let descs = global_descriptions(&data);
+        assert_eq!(descs.len(), 2, "the nested self-closing description does not consume the sibling:\n{data}");
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains("<crs:Exposure2012>0.9</crs:Exposure2012>"), "the sibling field is updated in place:\n{data}");
+        assert!(!data.contains("crs:Exposure2012=\""), "no attribute duplicate is added:\n{data}");
+        assert_eq!(data.matches("<crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert_eq!(data.matches(nested).count(), 1, "the nested description is unchanged:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
+}
