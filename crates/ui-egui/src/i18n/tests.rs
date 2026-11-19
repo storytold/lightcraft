@@ -1320,6 +1320,7 @@ fn hebrew_switches_formats_dates_and_reads_every_count() {
     let ctx = egui::Context::default();
     let text = painted_text(&ctx, &mut app, Locale::He);
     assert!(text.contains("קובץ") && text.contains("חשיפה"), "{text}");
+    assert_eq!(craft_ui::direction::HasDirection::direction(&ctx), craft_ui::direction::Direction::Rtl);
     if lightcraft_engine::CRAFT_FONTS.iter().any(|font| font.serves("Hebr")) {
         ctx.fonts_mut(|fonts| {
             for family in [egui::FontFamily::Proportional, egui::FontFamily::Name(crate::theme::FONT_SEMIBOLD.into())] {
@@ -1330,6 +1331,9 @@ fn hebrew_switches_formats_dates_and_reads_every_count() {
             }
         });
     }
+    app.run("app.language.english", serde_json::json!({})).unwrap();
+    let _ = painted_text(&ctx, &mut app, Locale::En);
+    assert_eq!(craft_ui::direction::HasDirection::direction(&ctx), craft_ui::direction::Direction::Ltr);
     set_language(Locale::En);
 }
 
