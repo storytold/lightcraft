@@ -54,17 +54,19 @@ fn open_merged<'a>(bytes: &'a [u8], opts: &DecodeOptions, spare: &'a mut Vec<u8>
     open_exact(spare, opts).map_err(|_| error)
 }
 
-/// `bytes` with an empty image resources section, when the header parses but the resources don't.
+/// `bytes` with an empty image resources section, when the head framing parses via
+/// [`craft_psd::HeadView`] but strict resource parsing in [`craft_psd::Head`] fails.
 fn without_resources(bytes: &[u8]) -> Option<Vec<u8>> {
-    if craft_psd::Head::from_bytes(bytes).is_ok() || craft_psd::Header::from_bytes(bytes).is_err() {
+    if craft_psd::Head::from_bytes(bytes).is_ok() {
         return None;
     }
-    let len_at = |at: usize| -> Option<usize> { usize::try_from(u32::from_be_bytes(bytes.get(at..at.checked_add(4)?)?.try_into().ok()?)).ok() };
-    let res_at = 30usize.checked_add(len_at(26)?)?;
-    let tail = bytes.get(res_at.checked_add(4)?.checked_add(len_at(res_at)?)?..)?;
+    let view = craft_psd::HeadView::from_bytes(bytes).ok()?;
+    let res_at = 30usize.checked_add(view.color_mode_data.len())?;
+    let tail_at = usize::try_from(view.layer_section_offset).ok()?;
+    let tail = bytes.get(tail_at..)?;
     let mut out = Vec::new();
     // a failed allocation leaves the original parse error, not an abort
-    out.try_reserve_exact(bytes.len()).ok()?;
+    out.try_reserve_exact(res_at.checked_add(4)?.checked_add(tail.len())?).ok()?;
     out.extend_from_slice(bytes.get(..res_at)?);
     out.extend_from_slice(&0u32.to_be_bytes());
     out.extend_from_slice(tail);
