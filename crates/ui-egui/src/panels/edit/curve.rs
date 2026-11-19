@@ -204,13 +204,7 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
                 if sel {
                     ui.painter().line_segment([r.left_bottom() + vec2(4.0, 1.0), r.right_bottom() + vec2(-4.0, 1.0)], Stroke::new(2.0, t.text));
                 }
-                let name = match ch {
-                    "parametric" => "Parametric curve",
-                    "master" => "Point curve",
-                    "red" => "Red channel",
-                    "green" => "Green channel",
-                    _ => "Blue channel",
-                };
+                let name = channel_name(ch);
                 let resp = resp.on_hover_text(crate::i18n::tr_format!("{name} — double-click to reset it", name = name));
                 if resp.double_clicked() {
                     app.ui.curve_channel = ch.into();
@@ -423,7 +417,8 @@ fn curve_eye(app: &mut LightcraftApp, ui: &egui::Ui, id: PhotoId, r: Rect, ch: &
     // shown, it takes drags too: a drag that starts on the eye must not reach the graph under it
     // and add a curve point (a viewing aid never edits)
     let er = ui.interact(eye, eye_id, if shown { Sense::click_and_drag() } else { Sense::focusable_noninteractive() });
-    crate::widgets::announce(&er, crate::i18n::tr("Show / hide"));
+    // (which channel, and whether it is hidden now)
+    crate::widgets::announce_selected(&er, format!("{} — {}", crate::i18n::tr(channel_name(ch)), crate::i18n::tr("Show / hide")), hidden);
     register(ui, format!("curveEye:{ch}"), eye);
     if !shown {
         return;
@@ -525,6 +520,17 @@ fn curve_reset_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, ch: &str) {
     if r.clicked() {
         let _ = app.run("curve.reset", json!({"channel": "all"}));
         ui.close();
+    }
+}
+
+/// A curve channel's name in the selector's tooltip and to a screen reader.
+fn channel_name(ch: &str) -> &'static str {
+    match ch {
+        "parametric" => "Parametric curve",
+        "master" => "Point curve",
+        "red" => "Red channel",
+        "green" => "Green channel",
+        _ => "Blue channel",
     }
 }
 
