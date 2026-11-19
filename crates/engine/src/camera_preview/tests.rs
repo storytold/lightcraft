@@ -2693,7 +2693,7 @@ fn cr3_unchanged_geometry_preserves_allocations_and_bounds_search_work() {
         let mask_ptr = mask.data.as_ptr();
         let mask_bits: Vec<_> = mask.data.iter().map(|p| p.map(f32::to_bits)).collect();
         super::proxy::take_framing_search_count();
-        let (aligned, aligned_mask) = super::proxy::align_cr3_geometry(sensor, mask, &reference, correction.as_ref());
+        let (aligned, aligned_mask) = super::proxy::align_cr3_geometry(sensor, mask, &reference, correction.as_ref(), None);
         assert_eq!(super::proxy::take_framing_search_count(), searches, "bounded search budget for missing or rejected geometry");
         assert_eq!(aligned.data.as_ptr(), sensor_ptr, "no accepted framing or warp: retain sensor allocation");
         assert_eq!(aligned_mask.data.as_ptr(), mask_ptr, "no accepted framing or warp: retain mask allocation");
@@ -2715,7 +2715,7 @@ fn cr3_geometry_selects_matching_profile_with_one_search_per_geometry() {
     let mask = Rgb32f::new(sensor.width, sensor.height);
     let expected_mask = profile_geometry_target(&mask, &lens, framing);
     super::proxy::take_framing_search_count();
-    let (aligned, aligned_mask) = super::proxy::align_cr3_geometry(sensor, mask, &reference, Some(&lens));
+    let (aligned, aligned_mask) = super::proxy::align_cr3_geometry(sensor, mask, &reference, Some(&lens), None);
     assert_eq!(super::proxy::take_framing_search_count(), 2);
     assert!(super::proxy::geometry_gate_scores().is_some(), "proposal passed original geometry gates");
     assert!(super::proxy::geometry_framed_scores().is_some(), "proposal was compared with fallback on both splits");
@@ -3043,7 +3043,15 @@ fn check_cr3_profile_geometry_orientation(vignetted: bool) {
         let orientation = lightcraft_geom::Orientation::from_exif(exif);
         raw.orientation = orientation;
         let oriented_lens = lightcraft_pipeline::optics::reorient_lens(&lens, orientation, 384.0, 256.0);
-        let (aligned, reference, _) = proxies(&raw, &file, &transform, PROFILE_PROXY, 0.0, None, Some(&oriented_lens)).unwrap();
+        let (aligned, reference, clipped) = proxies(&raw, &file, &transform, PROFILE_PROXY, 0.0, None, Some(&oriented_lens)).unwrap();
+        if vignetted && exif == 6 {
+            let sensor = without_clipped(&aligned, &clipped).unwrap_or_else(|| aligned.clone());
+            let to_camera = transform.matrix.inverse().unwrap();
+            let expected: Vec<_> =
+                collect_pairs(&sensor, &reference, 0.05, None, false).unwrap().0.into_iter().map(|(x, y)| (to_camera.apply(x), y)).collect();
+            let pairs = profile_pairs(&raw, &file, None, Some(&oriented_lens)).unwrap();
+            assert!(pairs == expected, "an accepted pooled warp keeps the source-position vignette in a rotated crop");
+        }
         let mut no_warp = oriented_lens;
         no_warp.warp = None;
         let (baseline, _, _) = proxies(&raw, &file, &transform, PROFILE_PROXY, 0.0, None, Some(&no_warp)).unwrap();
@@ -3385,4 +3393,15 @@ fn cr3_rejected_profile_preserves_accepted_framing_fallback() {
     );
     assert_eq!(reference.data, fallback_reference.data);
     assert_eq!(mask, fallback_mask);
+
+    let plain_pairs = profile_pairs(&raw, &file, None, None).expect("the uncorrected fallback contributes colour pairs");
+    let mut correction = lens;
+    correction.vignette =
+        Some(lightcraft_develop::EmbeddedVignette { k: [0.15, 0.0, 0.0, 0.0, 0.0], center: lightcraft_geom::Point::new(0.5, 0.5), radius: 0.6 });
+    let rejected_warp = correction.warp;
+    for (case, warp) in [("rejected warp", rejected_warp), ("absent warp", None)] {
+        correction.warp = warp;
+        let pairs = profile_pairs(&raw, &file, None, Some(&correction)).expect("the fallback still contributes colour pairs");
+        assert!(pairs == plain_pairs, "{case} must preserve the original pooled samples with a nonzero vignette");
+    }
 }

@@ -80,6 +80,11 @@ pub(super) fn structure_agrees(sensor: &Rgb32f, reference: &Rgb32f) -> bool {
     at_zero >= MIN_STRUCTURE && shift.0.abs() <= 1 && shift.1.abs() <= 1
 }
 
+enum ProxyLens<'a> {
+    PerFile(Option<&'a lightcraft_develop::EmbeddedLens>),
+    Pooled(Option<&'a lightcraft_develop::EmbeddedLens>),
+}
+
 /// Same-size proxies of the sensor (white-balanced, baseline exposure, through `transform`'s
 /// matrix: the generic camera ≈ sRGB model) and of the file's embedded camera JPEG (linear Rec.2020),
 /// and per proxy pixel whether any sensor sample it covers is clipped. `embedded`'s vignetting correction is applied to
@@ -93,6 +98,18 @@ pub(super) fn proxies(
     min_fraction: f64,
     lens: Option<&LensGeometry>,
     embedded: Option<&lightcraft_develop::EmbeddedLens>,
+) -> Option<(Rgb32f, Rgb32f, Vec<bool>)> {
+    proxies_with_lens(raw, bytes, transform, size, min_fraction, lens, ProxyLens::PerFile(embedded))
+}
+
+fn proxies_with_lens(
+    raw: &RawImage,
+    bytes: &[u8],
+    transform: &CameraTransform,
+    size: usize,
+    min_fraction: f64,
+    lens: Option<&LensGeometry>,
+    profile: ProxyLens<'_>,
 ) -> Option<(Rgb32f, Rgb32f, Vec<bool>)> {
     let edge = (2 * size).max(384) as u32;
     let decoded = crate::files::decode_raw_preview(
@@ -128,7 +145,13 @@ pub(super) fn proxies(
     let k = (crop.width.max(crop.height).div_ceil(edge as usize).max(2)).div_ceil(2) * 2;
     let mut sensor = sensor_proxy(raw, k, edge as usize)?;
     let mut clipped = clip_mask(&sensor);
-    correct_vignetting(&mut sensor, embedded, raw.orientation);
+    let embedded = match profile {
+        ProxyLens::PerFile(embedded) => {
+            correct_vignetting(&mut sensor, embedded, raw.orientation);
+            embedded
+        }
+        ProxyLens::Pooled(embedded) => embedded,
+    };
     // The camera may have corrected its JPEG with the lens warp the file carries (Nikon Z lenses always, at up to 9 %
     // zoom; other cameras when their correction setting is on): the sensor moved into that geometry is a candidate,
     // kept below when it lines up with the JPEG better than the uncorrected one.
@@ -139,12 +162,21 @@ pub(super) fn proxies(
     let to_working = |p: [f32; 3]| transform.matrix.apply_f32(std::array::from_fn(|i| p[i] * transform.wb[i] * gain));
     if raw.format == RawFormat::Cr3 {
         // Orient the camera JPEG and the sensor identically before collecting pixel correspondences.
+        let correction = embedded.filter(|correction| transform.matrix_is_fallback && lens.is_none() && correction.warp.is_some());
+        // A pooled fit historically used an unshaded framing fallback. Apply database shading
+        // only to the proposed sensor, at the source position before orientation and the warp.
+        let pooled_candidate = correction.filter(|c| matches!(profile, ProxyLens::Pooled(_)) && c.vignette.is_some()).map(|correction| {
+            let mut candidate = sensor.clone();
+            correct_vignetting(&mut candidate, Some(correction), raw.orientation);
+            let mut candidate = candidate.into_oriented(raw.orientation);
+            candidate.map_in_place(to_working);
+            candidate
+        });
         sensor = sensor.into_oriented(raw.orientation);
         clipped = clipped.into_oriented(raw.orientation);
         reference = reference.into_oriented(raw.orientation);
         sensor.map_in_place(to_working);
-        let correction = embedded.filter(|correction| transform.matrix_is_fallback && lens.is_none() && correction.warp.is_some());
-        (sensor, clipped) = align_cr3_geometry(sensor, clipped, &reference, correction);
+        (sensor, clipped) = align_cr3_geometry(sensor, clipped, &reference, correction, pooled_candidate.as_ref());
     }
     let mut sensor = fit(&sensor, size, size, Filter::Box);
     let mut reference_small = reference_at(&reference, &sensor);
@@ -412,20 +444,30 @@ pub(super) fn align_cr3_geometry(
     clipped: Rgb32f,
     reference: &Rgb32f,
     correction: Option<&lightcraft_develop::EmbeddedLens>,
+    candidate_sensor: Option<&Rgb32f>,
 ) -> (Rgb32f, Rgb32f) {
-    let framing = estimate_cr3_framing(&sensor, reference);
-    let fallback = framing.map(|framing| apply_cr3_framing(&sensor, framing));
+    let frame = |source: &Rgb32f| {
+        let framing = estimate_cr3_framing(source, reference);
+        (framing, framing.map(|framing| apply_cr3_framing(source, framing)))
+    };
+    // Score the warp against the same shading on the original and framed baselines.
+    let source = candidate_sensor.unwrap_or(&sensor);
+    let (mut framing, mut fallback) = frame(source);
     if let Some(proposed) = correction.and_then(|correction| {
         align_profile_geometry_against(
-            &sensor,
+            source,
             &clipped,
             reference,
             correction,
             lightcraft_geom::Orientation::Normal,
-            Some(fallback.as_ref().unwrap_or(&sensor)),
+            Some(fallback.as_ref().unwrap_or(source)),
         )
     }) {
         return proposed;
+    }
+    if candidate_sensor.is_some() {
+        // The pooled proposal was rejected. Restore the framing selected on the original samples.
+        (framing, fallback) = frame(&sensor);
     }
     // The mask is needed only if the fallback wins; when no framing is accepted,
     // return both original allocations unchanged.
@@ -519,7 +561,7 @@ pub(crate) fn profile_pairs(
         return None;
     }
     let transform = lightcraft_raw::color::camera_transform(raw, lightcraft_raw::color::as_shot_white_xy(raw));
-    let (sensor, reference, clipped) = proxies(raw, bytes, &transform, PROFILE_PROXY, 0.0, lens, correction)?;
+    let (sensor, reference, clipped) = proxies_with_lens(raw, bytes, &transform, PROFILE_PROXY, 0.0, lens, ProxyLens::Pooled(correction))?;
     let to_camera = transform.matrix.inverse()?;
     // clipped sensor pixels don't record the scene's colour (see `fit_look`)
     let sensor = without_clipped(&sensor, &clipped).unwrap_or(sensor);
