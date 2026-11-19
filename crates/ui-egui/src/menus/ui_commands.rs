@@ -50,6 +50,7 @@ pub fn language_from_command(id: &str) -> Option<crate::i18n::Locale> {
         "app.language.polish" => Some(crate::i18n::Locale::Pl),
         "app.language.czech" => Some(crate::i18n::Locale::Cs),
         "app.language.italian" => Some(crate::i18n::Locale::It),
+        "app.language.lithuanian" => Some(crate::i18n::Locale::Lt),
         "app.language.georgian" => Some(crate::i18n::Locale::Ka),
         "app.language.swedish" => Some(crate::i18n::Locale::Sv),
         "app.language.finnish" => Some(crate::i18n::Locale::Fi),
