@@ -459,7 +459,7 @@ fn dont_ask_again_moves_the_next_drop_at_once() {
     // (synthetic pointer events reach the app one a frame, the press's two included: one more
     // frame brings the pointer to the end of the glide)
     h.step();
-    assert_eq!(hint(&h).as_deref(), Some("Move 1 photo to “home”"), "over home");
+    assert_eq!(hint(&h).as_deref(), Some("Move 1 file to “home”"), "over home");
     release(&mut h, target.center());
     h.step();
     assert!(h.app.ui.dialog.is_none(), "not asked");
