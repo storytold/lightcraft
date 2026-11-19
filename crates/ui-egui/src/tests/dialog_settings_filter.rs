@@ -120,10 +120,10 @@ fn every_word_typed_has_to_be_there() {
     let cache = found(&h);
     assert!(cache.len() > 1 && cache.contains(&"performance:Preview cache".to_string()), "{cache:?}");
     // When a second word narrows it
-    filter(&mut h, "cache limit");
+    filter(&mut h, "cache disk");
     assert_eq!(found(&h), ["performance:Preview cache"]);
     // And the words can come in any order
-    filter(&mut h, "limit cache");
+    filter(&mut h, "disk cache");
     assert_eq!(found(&h), ["performance:Preview cache"]);
 }
 
@@ -301,7 +301,7 @@ fn what_a_page_shows_now_is_what_is_found() {
 fn the_arrow_goes_from_the_filter_to_what_was_found_and_return_opens_it() {
     let mut h = demo([1200.0, 1000.0]);
     show(&mut h, "general");
-    filter(&mut h, "cache limit");
+    filter(&mut h, "cache disk");
     assert_eq!(found(&h), ["performance:Preview cache"]);
     // When ↓ is pressed in the filter (the focus goes to the first result), then Return
     key(&mut h, "ArrowDown");
