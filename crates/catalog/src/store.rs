@@ -146,7 +146,8 @@ pub struct FsStore {
     /// Length of the log the journal read, retained through the first asynchronous or caller append.
     known_log_len: Option<u64>,
     /// The thread that writes the log (natively). An append to a file of the library's own folder starts it when none runs
-    /// (a segment's appends are written without it); `remove` of the log's file ends it, and the next append starts it again.
+    /// (a segment's appends are written without it, and so are all appends once the synchronous fallback has been used); `remove`
+    /// of the log's file ends it, and the next append starts it again.
     #[cfg(not(target_arch = "wasm32"))]
     log: Option<crate::log_writer::LogWriter>,
 }
@@ -493,7 +494,11 @@ impl Store for FsStore {
         #[cfg(not(target_arch = "wasm32"))]
         {
             // (not a segment: that is appended to by the code below, which checks its folder on every append)
-            if self.log.is_none() && self.sync_log.is_none() && !name.starts_with(crate::segments::SEGMENT_PREFIX) && !crate::fault::on_caller(&self.dir) {
+            if self.log.is_none()
+                && self.sync_log.is_none()
+                && !name.starts_with(crate::segments::SEGMENT_PREFIX)
+                && !crate::fault::on_caller(&self.dir)
+            {
                 self.folder.check()?;
                 let path = self.path(name)?;
                 check_regular_directory_entry(&path)?;
@@ -595,22 +600,26 @@ impl Store for FsStore {
     }
 
     fn remove(&mut self, name: &str) -> io::Result<()> {
-        // The log's file is held open by its thread, which would go on writing into a file that is gone: what was handed over
-        // is written first (a failure is the caller's: nothing is dropped), then the thread goes, and the next append starts one.
+        // What was handed to the log's thread is written first (a failure is the caller's: nothing is dropped). The thread
+        // goes only once the file is gone (it would read a missing file as another log), and the next append starts one.
         #[cfg(not(target_arch = "wasm32"))]
-        if self.log_for(name).is_some() {
+        let thread = self.log_for(name).is_some();
+        #[cfg(not(target_arch = "wasm32"))]
+        if thread {
             self.flush_log()?;
-            self.log = None;
         }
         self.folder.check()?;
         // (a file in a folder of the library's own, as for writing and listing: never through a link)
-        if self.existing_folder_of(name)?.is_none() {
-            return Ok(());
+        if self.existing_folder_of(name)?.is_some() {
+            match std::fs::remove_file(self.path(name)?) {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
         }
-        match std::fs::remove_file(self.path(name)?) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e),
+        #[cfg(not(target_arch = "wasm32"))]
+        if thread {
+            self.log = None;
         }
         // (a removed log is a log of no bytes: what the next append is checked against)
         self.reset_sync_log(name, 0);
