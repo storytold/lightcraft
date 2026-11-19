@@ -278,10 +278,14 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 if let Some(mp) = opts.metadata_preset.as_ref().and_then(|n| s.metadata_presets.iter().find(|m| m.name.eq_ignore_ascii_case(n))) {
                     crate::cmd::metadata::apply_to(&mut p.meta, &mp.fields);
                 }
-                for k in &opts.keywords {
-                    let k = lightcraft_catalog::keywords::clean(k);
-                    if !k.is_empty() && !p.meta.keywords.iter().any(|x| x.eq_ignore_ascii_case(&k)) {
-                        p.meta.keywords.push(k);
+                // Most imports add no keywords: don't index the file's existing keywords then.
+                if !opts.keywords.is_empty() {
+                    let mut seen: std::collections::HashSet<String> = p.meta.keywords.iter().map(|k| k.to_lowercase()).collect();
+                    for k in &opts.keywords {
+                        let k = lightcraft_catalog::keywords::clean(k);
+                        if !k.is_empty() && seen.insert(k.to_lowercase()) {
+                            p.meta.keywords.push(k);
+                        }
                     }
                 }
                 if let Some(preset) = &opts.preset {
