@@ -61,7 +61,9 @@ impl crate::Session {
         // Temporary "before" settings must not replace the photo's cached develop hash.
         let settings_hash =
             if before { settings.hash64() ^ crate::files::hot_pixel_key(&settings) } else { self.media.settings_hashes.get(id, &settings) };
-        let salt = self.media.denoise_salt(id, &settings);
+        // AI Defringe's correction, when it is on and made: its key is part of the render's
+        let ai_defringe = if before { None } else { self.aidefringe_for_render(&p, &settings, false).ok().flatten() };
+        let salt = self.media.denoise_salt(id, &settings) ^ ai_defringe.as_ref().map_or(0, |a| a.key().rotate_left(11));
         let profile_salt = self.media.camera_profile_salt(&settings.profile.id);
         let lens = super::quick::lens_key(&p);
         let key = settings_hash
@@ -116,6 +118,7 @@ impl crate::Session {
             slide: None,
             preview_cut: None,
             display_fit: None,
+            ai_defringe,
         })
     }
 
@@ -131,6 +134,7 @@ impl crate::Session {
             job.source = self.media.source_ref(&p, job.level);
         }
         job.settings = Arc::new(settings.clone());
+        job.ai_defringe = self.aidefringe_for_render(&p, settings, false).ok().flatten();
         // (the imported camera profile's file is in the key, as in `render_job`'s: a profile file replaced under the
         // same id is a new picture)
         let profile_salt = self.media.camera_profile_salt(&settings.profile.id);
@@ -206,6 +210,7 @@ impl crate::Session {
             slide: None,
             preview_cut: None,
             display_fit: None,
+            ai_defringe: None,
         })
     }
 
@@ -262,6 +267,7 @@ impl crate::Session {
             slide: None,
             preview_cut,
             display_fit: None,
+            ai_defringe: None,
         })
     }
 
@@ -286,7 +292,7 @@ impl crate::Session {
     /// key, [`Self::variant_key`]): a view rendered before the photo's AI Denoise result was there is
     /// not shown as the denoised one.
     pub(crate) fn view_key(&self, p: &Photo, apply_crop: bool) -> Hash128 {
-        let salt = self.media.denoise_salt(p.id, &p.develop);
+        let salt = self.media.denoise_salt(p.id, &p.develop) ^ self.aidefringe_salt(p).rotate_left(11);
         let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
         let mut k = Hasher128::new();
         k.str(&content_key(p))
@@ -599,6 +605,9 @@ impl crate::Session {
                 *denoise = Some(wanted);
             }
         }
+        // …and with AI Defringe's correction, made when the job runs if it isn't yet
+        let p = self.catalog.photo(id).ok_or("no such photo")?.clone();
+        job.ai_defringe = self.aidefringe_for_render(&p, &job.settings, true)?;
         job.request.space = space;
         job.request.depth = depth;
         job.key ^= (space as u64 + 1).wrapping_mul(0xa076_1d64_78bd_642f) ^ (depth as u64 + 1).wrapping_mul(0xe703_7ed1_a0b4_28db);

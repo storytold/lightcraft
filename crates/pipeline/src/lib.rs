@@ -651,6 +651,21 @@ pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     redeye::apply(img, &p.eyes);
 }
 
+/// The picture the AI Defringe model reads ([`lightcraft_denoise::defringe`], docs/ai-defringe.md): `s` rendered for
+/// `req` up to the Defringe stage (resampled, white balance, exposure, lateral chromatic aberration corrected), with
+/// the Defringe sliders left out.
+pub fn defringe_tap(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> Rgb32f {
+    let effective = s.effective();
+    let mut rendition = settings_for(&effective, req).into_owned();
+    rendition.optics.defringe_purple_amount = 0.0;
+    rendition.optics.defringe_green_amount = 0.0;
+    rendition.optics.remove_ca = true;
+    let plan = plan(src, info, &rendition, req);
+    let mut img = plan.frame.sample(src, plan.w, plan.h);
+    lin_cpu(&mut img, info, &plan);
+    img
+}
+
 /// The settings a render of `s` for `req` uses: the HDR edit for an [`OutputDepth::F32Hdr`]
 /// render, otherwise its SDR rendition (see [`DevelopSettings::sdr_rendition`]). Every renderer
 /// (CPU and GPU) goes through this, so an SDR render of an HDR edit looks the same everywhere.

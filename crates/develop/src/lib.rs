@@ -167,6 +167,12 @@ impl DevelopSettings {
         if a.is_finite() && self.enhance.denoise_enabled() && self.section_enabled("detail") { (a / 100.0).clamp(0.0, 1.0) as f32 } else { 0.0 }
     }
 
+    /// How much of AI Defringe's correction a render uses, 0..1 (0 when it is off or Optics is disabled).
+    pub fn ai_defringe_amount(&self) -> f32 {
+        let a = self.optics.ai_defringe;
+        if a.is_finite() && self.optics.ai_defringe_enabled() && self.section_enabled("optics") { (a / 100.0).clamp(0.0, 1.0) as f32 } else { 0.0 }
+    }
+
     pub fn set_section_enabled(&mut self, section: &str, on: bool) {
         self.disabled_sections.retain(|s| s != section);
         if !on {
