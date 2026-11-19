@@ -840,8 +840,9 @@ fn node(app: &LightcraftApp, e: &MenuEntry) -> MenuNode {
         "view.photoGrid" | "view.squareGrid" => shortcut.or_else(|| crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "view.gridToggle")),
         "album.removePhotos" => delete_key,
         "photo.delete" if matches!(app.session.source, lightcraft_engine::LibrarySource::Album(_)) => None,
-        "mask.copy" if mask_keys.contains(&"develop.copy") => settings_key("develop.copy"),
-        "mask.paste" if mask_keys.contains(&"develop.paste") => settings_key("develop.paste"),
+        // (its own binding when the settings command has none)
+        "mask.copy" if mask_keys.contains(&"develop.copy") => settings_key("develop.copy").or(shortcut),
+        "mask.paste" if mask_keys.contains(&"develop.paste") => settings_key("develop.paste").or(shortcut),
         id if mask_keys.contains(&id) => None,
         _ => shortcut,
     };

@@ -2361,6 +2361,12 @@ fn in_masking_the_menus_put_cmd_c_and_cmd_v_on_copy_and_paste_mask() {
     assert_eq!(keys(&h), [None, c.clone(), v.clone(), None], "a mask selected: ⌘C copies it");
     exec(&mut h, "mask.copy", json!({}));
     assert_eq!(keys(&h), [None, c.clone(), None, v.clone()], "a mask copied: ⌘V pastes it");
+    // with Paste Settings unbound, Paste Mask keeps a key of its own
+    crate::shortcuts::assign(&mut h.app.ui.settings.keymap, "develop.paste", None).unwrap();
+    crate::shortcuts::assign(&mut h.app.ui.settings.keymap, "mask.paste", Some("Cmd+Shift+M")).unwrap();
+    assert_eq!(keys(&h)[3], Some("Cmd+Shift+M".to_string()), "its own binding when the settings have none");
+    crate::shortcuts::reset(&mut h.app.ui.settings.keymap, "develop.paste").unwrap();
+    crate::shortcuts::reset(&mut h.app.ui.settings.keymap, "mask.paste").unwrap();
     exec(&mut h, "panel.edit", json!({}));
     assert_eq!(keys(&h), [c, None, v, None], "outside Masking the settings have them again");
 }
