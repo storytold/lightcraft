@@ -366,3 +366,14 @@ fn a_pin_hidden_by_the_untagged_filter_cant_be_dragged() {
     assert_eq!(gps(&h, ids[0]), Some(PLACES[0]), "the photo didn't move");
     assert_ne!((s["lat"].clone(), s["lon"].clone()), before_view, "the drag panned");
 }
+
+/// Show in Map on a photo without GPS must not leave the previous photo's pin active.
+#[test]
+fn show_in_map_on_a_photo_without_gps_clears_the_active_pin() {
+    let (mut h, ids) = demo();
+    h.app.run("photo.showInMap", json!({"id": ids[0]})).unwrap();
+    assert_eq!(h.app.ui.map.active_pin_photo, Some(PhotoId(ids[0])));
+    h.app.run("photo.removeGps", json!({"ids": [ids[1]]})).unwrap();
+    h.app.run("photo.showInMap", json!({"id": ids[1]})).unwrap();
+    assert_eq!(h.app.ui.map.active_pin_photo, None, "no pin to show for a photo without GPS");
+}

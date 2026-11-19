@@ -137,8 +137,10 @@ pub fn draw(session: &mut Session, painter: &Painter, rect: Rect, center: LatLon
         return Drawn { offline: true, ..Drawn::default() };
     }
     let Some(svc) = session.map_tiles() else { return Drawn { offline: true, ..Drawn::default() } };
-    if !svc.can_load() {
-        // wasm32 has no tile transport yet: say so instead of leaving a silent grey map
+    if cfg!(target_arch = "wasm32") && !svc.can_load() {
+        // wasm32 has no tile transport yet: say so instead of leaving a silent grey map (a native
+        // session not put online also can't load, but stays a plain grey map: see
+        // `a_session_not_put_online_never_fetches`)
         let at = if rect.height() < 240.0 { egui::pos2(rect.center().x, rect.top() + 14.0) } else { rect.center() };
         painter.text(
             at,

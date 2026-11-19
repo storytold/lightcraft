@@ -421,6 +421,8 @@ fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
                         // the view is set: the first showing doesn't fit every photo over it
                         app.ui.map.fitted = true;
                     } else {
+                        // no pin to show: don't leave the previous photo's pin active
+                        app.ui.map.active_pin_photo = None;
                         app.toast(ctx, crate::i18n::tr("Photo has no GPS coordinates"));
                     }
                 }
