@@ -10,8 +10,7 @@ use crate::LightcraftApp;
 const BUSY_SECS: f64 = 0.25;
 
 /// Called every frame. Idle, it costs a comparison and wakes nothing; reading, it asks again every [`BUSY_SECS`].
-pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
-    let now = ctx.input(|i| i.time);
+pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
     if now < app.caches.focus_next_pump {
         return;
     }

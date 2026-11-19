@@ -1,6 +1,6 @@
 # LightCraft auf Deutsch
 
-Wähle **Bearbeiten → Sprache → Deutsch** oder **Einstellungen → Allgemein → Sprache**.
+Wähle **Einstellungen → Allgemein → Sprache → Deutsch**.
 Die Auswahl gilt sofort und wird für den nächsten Start gespeichert (`language: "de"` in `ui.json`).
 
 Die deutschen Kataloge decken alle Schlüssel der bisherigen Übersetzungen sowie sämtliche

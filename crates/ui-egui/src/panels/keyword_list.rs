@@ -23,7 +23,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     crate::widgets::divider(ui);
     // the title, where a dragged keyword goes back to the top level
     let (title, title_resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
-    register(ui.ctx(), "keywordList:topLevel", title);
+    register(ui, "keywordList:topLevel", title);
     let dragging = app.ui.dragging_keyword.clone();
     let (pointer, released) = ui.input(|i| (i.pointer.latest_pos(), i.pointer.any_released()));
     let over_title = shown_under(ui, title, pointer);
@@ -42,7 +42,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if !open {
         return;
     }
-    let fid = egui::Id::new("keyword-list-filter");
+    let fid = egui::Id::unique("keyword-list-filter");
     let mut filter: String = ui.data(|d| d.get_temp(fid)).unwrap_or_default();
     ui.horizontal(|ui| {
         ui.add_space(24.0);
@@ -52,13 +52,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             .show(ui);
         // + creates a keyword (inside the picked one), − deletes the picked one
         let plus = ui.button("+").on_hover_text(crate::i18n::tr("Create Keyword Tag"));
-        register(ui.ctx(), "keywordList:create", plus.rect);
+        register(ui, "keywordList:create", plus.rect);
         if plus.clicked() {
             app.ui.dialog = Some(create_dialog(app));
         }
         let picked = app.ui.keyword_list_selected.clone().filter(|k| in_tree(&app.caches.keyword_tree(&app.session.catalog), k));
         let minus = ui.add_enabled(picked.is_some(), egui::Button::new("−")).on_hover_text(crate::i18n::tr("Delete Keyword"));
-        register(ui.ctx(), "keywordList:delete", minus.rect);
+        register(ui, "keywordList:delete", minus.rect);
         if minus.clicked()
             && let Some(k) = picked
         {
@@ -130,11 +130,14 @@ pub fn drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
     let name = keyword.rsplit('|').next().unwrap_or(&keyword).to_string();
-    egui::Area::new(egui::Id::new("drag-keyword")).order(egui::Order::Tooltip).interactable(false).fixed_pos(at + vec2(14.0, 10.0)).show(ctx, |ui| {
-        egui::Frame::NONE.fill(t.accent).corner_radius(10.0).inner_margin(egui::Margin::symmetric(9, 3)).show(ui, |ui| {
-            ui.label(egui::RichText::new(name).color(Color32::WHITE).font(t.semibold(12.0)));
-        });
-    });
+    egui::Area::new(egui::Id::unique("drag-keyword")).order(egui::Order::Tooltip).interactable(false).fixed_pos(at + vec2(14.0, 10.0)).show(
+        ctx,
+        |ui| {
+            egui::Frame::NONE.fill(t.accent).corner_radius(10.0).inner_margin(egui::Margin::symmetric(9, 3)).show(ui, |ui| {
+                ui.label(egui::RichText::new(name).color(Color32::WHITE).font(t.semibold(12.0)));
+            });
+        },
+    );
 }
 
 /// Drop the dragged `keyword` inside `parent` (`None`: the top level). Where one of its name is
@@ -167,7 +170,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click_and_drag());
     crate::widgets::announce(&resp, r.path.clone());
-    register(ui.ctx(), format!("keywordRow:{}", r.path), rect);
+    register(ui, format!("keywordRow:{}", r.path), rect);
     if resp.drag_started() {
         app.ui.dragging_keyword = Some(r.path.clone());
     }
@@ -185,9 +188,9 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     if r.has_children {
         let c = pos2(x + 6.0, cy);
         let tri = Rect::from_center_size(c, vec2(16.0, 16.0));
-        let tr = ui.interact(tri, egui::Id::new(("keyword-list-tri", r.path.to_lowercase())), Sense::click());
-        crate::widgets::announce(&tr, crate::i18n::tr(if r.open { "Collapse" } else { "Expand" }));
-        register(ui.ctx(), format!("keywordRowToggle:{}", r.path), tri);
+        let tr = ui.interact(tri, egui::Id::unique(("keyword-list-tri", r.path.to_lowercase())), Sense::click());
+        crate::widgets::announce(&tr, super::left::disclosure_name(r.open, &r.name));
+        register(ui, format!("keywordRowToggle:{}", r.path), tri);
         // while a filter opens the levels the triangle does nothing: it doesn't light up either
         let lit = tr.hovered() && can_fold;
         paint(ui.painter(), tri, if r.open { Icon::ChevronDown } else { Icon::ChevronRight }, if lit { t.text } else { t.text_dim });
@@ -207,9 +210,9 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     let on = !selection.is_empty();
     // (it senses drags too, so a press there that moves doesn't pick the keyword up)
     let sense = if on { Sense::click_and_drag() } else { Sense::hover() };
-    let tb = ui.interact(boxr.expand(3.0), egui::Id::new(("keyword-list-tick", r.path.to_lowercase())), sense);
+    let tb = ui.interact(boxr.expand(3.0), egui::Id::unique(("keyword-list-tick", r.path.to_lowercase())), sense);
     crate::widgets::announce(&tb, format!("{} {}", crate::i18n::tr("Keyword"), r.path));
-    register(ui.ctx(), format!("keywordCheck:{}", r.path), boxr);
+    register(ui, format!("keywordCheck:{}", r.path), boxr);
     let edge = if on { t.text_label } else { t.text_dim.gamma_multiply(0.5) };
     match state {
         Tick::All => {
@@ -229,7 +232,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
             if !inside.is_empty() {
                 let dot = Rect::from_center_size(boxr.center(), vec2(5.0, 5.0));
                 ui.painter().circle_filled(dot.center(), 2.5, t.text);
-                register(ui.ctx(), format!("keywordInside:{}", r.path), dot);
+                register(ui, format!("keywordInside:{}", r.path), dot);
             }
         }
     }
@@ -254,12 +257,12 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     // the count, then the arrow left of it (shown on hover)
     let count = ui.painter().layout_no_wrap(r.count.to_string(), t.font(12.0), t.text_dim);
     let count_rect = Rect::from_min_size(pos2(inner.right() - 6.0 - count.size().x, cy - count.size().y / 2.0), count.size());
-    register(ui.ctx(), format!("keywordCount:{}", r.path), count_rect);
+    register(ui, format!("keywordCount:{}", r.path), count_rect);
     ui.painter().galley(count_rect.min, count, t.text_dim);
     let arrow = Rect::from_center_size(pos2(count_rect.left() - 12.0, cy), vec2(16.0, 16.0));
-    let ar = ui.interact(arrow, egui::Id::new(("keyword-list-show", r.path.to_lowercase())), Sense::click());
+    let ar = ui.interact(arrow, egui::Id::unique(("keyword-list-show", r.path.to_lowercase())), Sense::click());
     crate::widgets::announce(&ar, crate::i18n::tr("Show photos"));
-    register(ui.ctx(), format!("keywordShow:{}", r.path), arrow);
+    register(ui, format!("keywordShow:{}", r.path), arrow);
     if resp.hovered() || ar.hovered() {
         paint(ui.painter(), arrow, Icon::ChevronRight, if ar.hovered() { t.text } else { t.text_dim });
     }
@@ -267,17 +270,29 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
         super::left::browse_all_photos(app, true);
         let _ = app.run("library.filter", json!({"keyword": r.path}));
     }
-    // the name, cut short before the arrow
-    let room = (arrow.left() - 4.0 - (x + 34.0)).max(0.0);
+    // the name, cut short before the arrow, leaving room for the dot and the + that follow it
+    let is_default = app.session.catalog.default_keyword_parent().as_deref().is_some_and(|k| same(k, &r.path));
+    let in_shortcut = app.session.catalog.keyword_info(&r.path).is_some_and(|i| i.keyword_shortcut);
     let font = t.font(13.0);
     let measure = |s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text_label).size().x;
+    let marks = if is_default { 10.0 } else { 0.0 } + if in_shortcut { 5.0 + measure("+") } else { 0.0 };
+    let room = (arrow.left() - 4.0 - (x + 34.0) - marks).max(0.0);
     let name = if measure(&r.name) <= room { r.name.clone() } else { crate::widgets::elide_head(&r.name, room, measure) };
     let label = ui.painter().text(pos2(x + 34.0, cy), Align2::LEFT_CENTER, name, font.clone(), if picked { t.text } else { t.text_label });
     // where new keywords go (Put New Keywords Inside This Keyword): a dot after the name
-    if app.session.catalog.default_keyword_parent().as_deref().is_some_and(|k| same(k, &r.path)) {
+    let mut after = label.right();
+    if is_default {
         let dot = Rect::from_center_size(pos2(label.right() + 7.0, cy), vec2(6.0, 6.0));
         ui.painter().circle_filled(dot.center(), 3.0, t.accent);
-        register(ui.ctx(), format!("keywordDefault:{}", r.path), dot);
+        register(ui, format!("keywordDefault:{}", r.path), dot);
+        after = dot.right();
+    }
+    // part of the keyword shortcut (⇧K adds it): a + after the name
+    if in_shortcut {
+        let plus = ui.painter().text(pos2(after + 5.0, cy), Align2::LEFT_CENTER, "+", font.clone(), t.accent);
+        register(ui, format!("keywordShortcut:{}", r.path), plus);
+        ui.interact(plus, egui::Id::unique(("keyword-list-shortcut", r.path.to_lowercase())), Sense::hover())
+            .on_hover_text(crate::i18n::tr("Part of the keyword shortcut"));
     }
     let resp = resp.on_hover_text(r.path.replace('|', " › "));
     if resp.clicked() {
@@ -304,7 +319,9 @@ fn inside_said(inside: &[String]) -> Option<String> {
 /// do something (a keyword never goes inside itself), and a release there does it: nests the
 /// keyword inside this one, or gives this keyword to the photos.
 fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, path: &str) {
-    let (pointer, released) = ui.input(|i| (i.pointer.latest_pos(), i.pointer.any_released()));
+    // a dragged keyword drops on any button's release (it began with any button); photos only on the primary's
+    let (pointer, released) =
+        ui.input(|i| (i.pointer.latest_pos(), i.pointer.primary_released() || (app.ui.dragging_keyword.is_some() && i.pointer.any_released())));
     if !shown_under(ui, rect, pointer) {
         return;
     }
@@ -351,7 +368,7 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str, selection: &[Pho
     let name = path.replace('|', " › ");
     let item = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool| {
         let r = ui.add_enabled(enabled, egui::Button::new(label));
-        register(ui.ctx(), format!("keywordMenu:{id}"), r.rect);
+        register(ui, format!("keywordMenu:{id}"), r.rect);
         r.clicked()
     };
     if item(ui, "create", &crate::i18n::tr_format!("Create Keyword Tag Inside “{name}”…", name = name), true) {
@@ -369,6 +386,10 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str, selection: &[Pho
     let label = format!("{}{}", if is_default { "✓ " } else { "" }, crate::i18n::tr("Put New Keywords Inside This Keyword"));
     if item(ui, "defaultParent", &label, true) {
         let _ = app.run("keyword.setDefaultParent", json!({"keyword": if is_default { serde_json::Value::Null } else { json!(path) }}));
+    }
+    // the keyword shortcut becomes this keyword alone
+    if item(ui, "useAsShortcut", crate::i18n::tr("Use This as Keyword Shortcut"), true) {
+        let _ = app.run("keyword.setShortcut", json!({"keywords": [path]}));
     }
     ui.separator();
     let some = !selection.is_empty();

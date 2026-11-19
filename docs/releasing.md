@@ -66,7 +66,7 @@ the web build requires BIZ UDPGothic Regular and packages Noto Sans CJK SC as a 
 
 Local macOS, Linux and Windows packaging scripts automatically use the sibling `../craft-fonts`
 checkout. If it is absent, they clone it at revision
-`3d9ab3a132ed0eff457e424226a435a901da30d3` (keep the pins in `packaging/fonts.sh` and
+`b076417b5880bd4154bd22f00695b1d28c6bea83` (keep the pins in `packaging/fonts.sh` and
 `packaging/windows/fonts.ps1` in sync with the release workflow). Existing checkouts are left untouched.
 Set `CRAFT_FONTS_DIR` to use another
 checkout; relative paths resolve from the workspace root. The script requires the Chinese and Japanese

@@ -43,8 +43,9 @@ struct Hud {
     logged: Option<f64>,
 }
 
+/// Stable egui data id under which the FPS HUD's per-frame state is stored.
 fn hud_id() -> egui::Id {
-    egui::Id::new("fps-hud-state")
+    egui::Id::unique("fps-hud-state")
 }
 
 /// The display is off: drop its state, so the time it was off never shows as one long frame.
@@ -146,7 +147,7 @@ pub fn show(ctx: &egui::Context, app: &LightcraftApp) {
 
     let screen = ctx.content_rect();
     let width = 300.0;
-    egui::Area::new(egui::Id::new("fps-hud"))
+    egui::Area::new(egui::Id::unique("fps-hud"))
         .order(egui::Order::Tooltip)
         .fixed_pos(egui::pos2(screen.right() - width - 24.0, screen.top() + 56.0))
         .interactable(false)

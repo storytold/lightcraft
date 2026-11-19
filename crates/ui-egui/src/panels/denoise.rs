@@ -41,9 +41,16 @@ pub struct Ui {
 
 /// Called every frame: keeps the engine's denoise work going and asks for a redraw when a photo's picture appears (the
 /// loupe and the thumbnails then render from it) or while one is being made (the progress).
+/// `pump_background` plus the UI-input half, for hosts/tests that have no phase split (the app's
+/// own `logic` and `ui_pass` keep them apart so a hidden tick never paces work from stale input).
 pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
-    watch_downloads(app, ctx);
-    let now = ctx.input(|i| i.time);
+    let now = app.tick_now();
+    pump_ui_input(app, ctx, now);
+    pump_background(app, ctx, now);
+}
+
+/// The input-reading half: fresh pointer/key activity and its timestamp. UI phase only.
+pub fn pump_ui_input(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
     let (working, moving) = ctx.input(|i| {
         let keys = i.events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::MouseWheel { .. }));
         (i.pointer.any_down() || keys, i.pointer.is_moving())
@@ -54,6 +61,11 @@ pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
     if moving || working {
         app.caches.last_move = now;
     }
+}
+
+/// Worker results and pacing on monotonic deadlines; safe in `logic`, including while hidden.
+pub fn pump_background(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
+    watch_downloads(app, ctx);
     if now < app.caches.denoise.next_pump {
         return;
     }
@@ -85,8 +97,8 @@ pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
 }
 
 /// The engine's model list, re-read at most every [`REFRESH_SECS`], or at once after an action changed it.
-fn models(app: &mut LightcraftApp, ctx: &egui::Context) -> Value {
-    let now = ctx.input(|i| i.time);
+fn models(app: &mut LightcraftApp, _ctx: &egui::Context) -> Value {
+    let now = app.tick_now();
     let epoch = app.caches.denoise.epoch;
     if let Some((e, at, v)) = &app.caches.denoise.list
         && *e == epoch
@@ -129,12 +141,12 @@ fn watch_downloads(app: &mut LightcraftApp, ctx: &egui::Context) {
     ctx.request_repaint_after(std::time::Duration::from_millis(120));
 }
 
-/// Per-photo AI Denoise switch, including a request waiting for model installation.
+/// Per-photo AI Denoise switch.
 pub fn detail_toggle(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, on: bool, applicable: bool) {
-    let mut enabled = on || crate::model_setup::denoise_requested(app, id);
+    let mut enabled = on;
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 2 }).show(ui, |ui| {
         let r = ui.add_enabled(applicable, egui::Checkbox::new(&mut enabled, crate::i18n::tr("AI Denoise")));
-        register(ui.ctx(), "denoise:enabled", r.rect);
+        register(ui, "denoise:enabled", r.rect);
         if r.changed() {
             let _ = app.run("denoise.toggle", json!({"id": id.0, "enabled": enabled}));
         }
@@ -168,21 +180,10 @@ pub fn detail_status(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, am
     };
     match state {
         PhotoState::NotApplicable | PhotoState::Ready => {}
-        PhotoState::NoModel => {
-            egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
-                note(ui, "AI Denoise needs a model. Install one in Settings.", t.text_dim);
-                ui.add_space(2.0);
-                let r = ui.small_button(crate::i18n::tr("Set up AI Denoise…"));
-                register(ui.ctx(), "denoise:setup", r.rect);
-                if r.clicked() {
-                    let _ = app.run("denoise.toggle", json!({"id": id.0, "enabled": true}));
-                }
-            });
-        }
         PhotoState::Idle => {
             if amount > 0.0 && app.session.denoise_auto() {
                 // the pump has not met this photo yet: let it come round soon instead of waiting out its pause
-                let now = ui.ctx().input(|i| i.time);
+                let now = app.tick_now();
                 app.caches.denoise.next_pump = app.caches.denoise.next_pump.min(now + 0.05);
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
                 egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
@@ -196,7 +197,7 @@ pub fn detail_status(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, am
                     note(ui, "Its denoised picture is not made yet, and pictures are not made on their own (Settings, AI Denoise).", t.text_dim);
                     ui.add_space(2.0);
                     let r = ui.small_button(crate::i18n::tr("Make it now"));
-                    register(ui.ctx(), "denoise:make", r.rect);
+                    register(ui, "denoise:make", r.rect);
                     if r.clicked() {
                         let _ = app.run("denoise.queue", json!({"ids": [id.0]}));
                     }
@@ -224,7 +225,7 @@ pub fn detail_status(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, am
                 note(ui, &sentence(&why), color);
                 if !unsupported {
                     let r = ui.small_button(crate::i18n::tr("Try again"));
-                    register(ui.ctx(), "denoise:retry", r.rect);
+                    register(ui, "denoise:retry", r.rect);
                     if r.clicked() {
                         let _ = app.run("denoise.queue", json!({"ids": [id.0], "retry": true}));
                     }
@@ -238,20 +239,22 @@ pub fn detail_status(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, am
 pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let list = models(app, ui.ctx());
     heading(ui, t, "AI Denoise");
-    crate::model_setup::notice(app, ui, "denoise");
     if list["dir"].is_null() {
-        hint(ui, t, "This build has nowhere to keep denoise models, so AI Denoise is not available. (The desktop app has.)");
+        hint(ui, t, "This build has nowhere to keep your own denoise models, so it cannot use one. (The desktop app has.)");
         return;
     }
     hint(
         ui,
         t,
-        "Cleans noise out of raw photos with an AI model, before the picture is built: the AI Denoise Amount slider under Detail sets how much of it you see. \
+        "Cleans noise out of raw photos before the picture is built: the AI Denoise Amount slider under Detail sets how much of it you see. \
          Your files are never changed and no extra files are made in your library: the cleaned picture is cached data that is made again when needed.",
     );
     let runtime = list["runtime"].as_bool() == Some(true);
+    if list["model"].is_null() {
+        hint(ui, t, "In use: the built-in denoiser. It needs nothing installed, so turning AI Denoise on just works.");
+    }
     if !runtime {
-        hint(ui, t, "This build cannot run denoise models.");
+        hint(ui, t, "This build cannot run your own denoise models.");
     }
     let all: Vec<Value> = list["models"].as_array().cloned().unwrap_or_default();
     let downloads = app
@@ -259,7 +262,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         .execute("denoise.models.downloads", &json!({}))
         .map(|v| v["downloads"].as_array().cloned().unwrap_or_default())
         .unwrap_or_default();
-    heading(ui, t, "Models");
+    heading(ui, t, "Your own model (optional)");
     let installing = downloads.iter().any(|d| d["id"] == "local-install" && d["state"].as_str() == Some("installing"));
     let r = crate::button::Button::new("Install from file…")
         .enabled(runtime && app.services.pick_denoise_model.is_some())
@@ -281,7 +284,11 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         hint(ui, t, why);
     }
     if all.is_empty() {
-        hint(ui, t, "Install your own ONNX model with denoise-model.json beside it. This build offers no model downloads.");
+        hint(
+            ui,
+            t,
+            "To use a model of your own instead of the built-in denoiser, install an ONNX file with denoise-model.json beside it. This build offers no model downloads.",
+        );
     }
     if let Some(job) = downloads.iter().find(|d| d["id"] == "local-install") {
         match job["state"].as_str() {
@@ -295,7 +302,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         model_row(app, ui, t, m, dl, runtime);
     }
     if all.iter().all(|m| m["selected"] != true) && all.iter().any(|m| m["installed"] == true) {
-        hint(ui, t, "AI Denoise is off: press Use on a model.");
+        hint(ui, t, "The built-in denoiser is in use: press Use on a model to use that instead.");
     }
     hint(ui, t, "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.");
     work_section(app, ui, t, &list);
@@ -307,6 +314,13 @@ fn work_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &V
     if status["enabled"] != true {
         return;
     }
+    speed_section(app, ui, t, list, &status);
+    photos_section(app, ui, t, list, &status);
+    cache_section(app, ui, t, list, &status);
+}
+
+/// Where the work runs.
+fn speed_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &Value, status: &Value) {
     heading(ui, t, "Speed");
     let current = list["runOn"].as_str().unwrap_or("auto").to_string();
     let mut run_on = current.as_str();
@@ -323,13 +337,17 @@ fn work_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &V
     hint(ui, t, &device_line(&status["device"], run_on));
     if run_on != "cpu" && status["device"]["retry"] == true {
         let r = ui.small_button(crate::i18n::tr("Try the graphics card again"));
-        register(ui.ctx(), "denoise:retryGpu", r.rect);
+        register(ui, "denoise:retryGpu", r.rect);
         if r.clicked() {
             // choosing where it runs, even the same again, forgets the failed set-up
             let _ = app.run("denoise.settings", json!({"runOn": run_on}));
             app.caches.denoise.epoch += 1;
         }
     }
+}
+
+/// Whether photos are made as they are looked at, and the progress of what is being made.
+fn photos_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &Value, status: &Value) {
     heading(ui, t, "Photos");
     let mut auto = list["auto"].as_bool().unwrap_or(true);
     if check(ui, "settings.denoiseAuto", &mut auto, "Make the denoised picture of the photos I am looking at") {
@@ -338,19 +356,40 @@ fn work_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &V
     }
     hint(ui, t, "Only photos whose AI Denoise amount is above 0 are made. Exports always make theirs if it is missing.");
     let (running, queued) = (app.caches.denoise.running, app.caches.denoise.queued);
+    progress_line(app, ui, t, status, running, queued);
+    ui.horizontal(|ui| {
+        let r = ui.button(tr("Denoise all photos with an Amount"));
+        register(ui, "denoise:queueAll", r.rect);
+        if r.clicked() {
+            let _ = app.run("denoise.queue", json!({"scope": "withAmount"}));
+        }
+        if running.is_some() || queued > 0 {
+            let r = ui.button(tr("Stop"));
+            register(ui, "denoise:stop", r.rect);
+            if r.clicked() {
+                let _ = app.run("denoise.cancel", json!({}));
+            }
+        }
+    });
+}
+
+/// "Denoising {photo}: {done} of {total} tiles", and how many photos wait.
+fn running_text(app: &LightcraftApp, status: &Value, done: u64, total: u64, queued: u64) -> String {
+    let name =
+        status["running"]["photo"].as_u64().and_then(|p| app.session.catalog.photo(PhotoId(p)).map(|p| p.file_name.clone())).unwrap_or_default();
+    tr_format!("Denoising {name}: {done} of {total} tiles{}", waiting_suffix(queued), name = name, done = done, total = total)
+}
+
+/// " · N waiting" after the running photo, when any wait.
+fn waiting_suffix(queued: u64) -> String {
+    if queued > 0 { tr_format!(" · {queued} waiting", queued = queued) } else { String::new() }
+}
+
+/// What is being made now, or how many photos wait or are done.
+fn progress_line(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, status: &Value, running: Option<(u64, u64)>, queued: u64) {
     match running {
         Some((done, total)) => {
-            let name = status["running"]["photo"]
-                .as_u64()
-                .and_then(|p| app.session.catalog.photo(PhotoId(p)).map(|p| p.file_name.clone()))
-                .unwrap_or_default();
-            let text = tr_format!(
-                "Denoising {name}: {done} of {total} tiles{}",
-                if queued > 0 { tr_format!(" · {queued} waiting", queued = queued) } else { String::new() },
-                name = name,
-                done = done,
-                total = total
-            );
+            let text = running_text(app, status, done, total, queued);
             settings_bar(ui, done, total, text);
         }
         None if queued > 0 => hint(ui, t, &count(queued, "photo waiting", "photos waiting")),
@@ -359,20 +398,10 @@ fn work_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &V
             hint(ui, t, &count(ready, "photo has its denoised picture.", "photos have their denoised picture."))
         }
     }
-    ui.horizontal(|ui| {
-        let r = ui.button(tr("Denoise all photos with an Amount"));
-        register(ui.ctx(), "denoise:queueAll", r.rect);
-        if r.clicked() {
-            let _ = app.run("denoise.queue", json!({"scope": "withAmount"}));
-        }
-        if running.is_some() || queued > 0 {
-            let r = ui.button(tr("Stop"));
-            register(ui.ctx(), "denoise:stop", r.rect);
-            if r.clicked() {
-                let _ = app.run("denoise.cancel", json!({}));
-            }
-        }
-    });
+}
+
+/// The cache's contents and limit.
+fn cache_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &Value, status: &Value) {
     heading(ui, t, "Cache");
     let (files, bytes) = (status["cache"]["files"].as_u64().unwrap_or(0), status["cache"]["bytes"].as_u64().unwrap_or(0));
     hint(
@@ -388,17 +417,18 @@ fn work_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &V
         ui.label(RichText::new(crate::i18n::tr("Limit")).color(t.text_label));
         let current = list["cacheGb"].as_u64().unwrap_or(20) as u32;
         let mut choice = current;
-        crate::widgets::combo_box("denoise-cache-limit").selected_text(tr_format!("{size} GB", size = current)).show_ui(ui, |ui| {
+        let combo = crate::widgets::combo_box("denoise-cache-limit").selected_text(tr_format!("{size} GB", size = current)).show_ui(ui, |ui| {
             for gb in CACHE_LIMITS {
                 ui.selectable_value(&mut choice, gb, tr_format!("{size} GB", size = gb));
             }
         });
+        crate::widgets::name_combo(&combo.response, tr("Cache limit"));
         if choice != current {
             let _ = app.run("denoise.settings", json!({"cacheGb": choice}));
             app.caches.denoise.epoch += 1;
         }
         let r = ui.button(tr("Clear cache"));
-        register(ui.ctx(), "denoise:clear", r.rect);
+        register(ui, "denoise:clear", r.rect);
         if r.clicked() {
             let _ = app.run("denoise.clear", json!({}));
         }
@@ -473,7 +503,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                         });
                     }
                     (Some("failed"), Some(d)) => {
-                        let why = sentence(d["error"].as_str().unwrap_or("The download failed"));
+                        let why = download_failure(d);
                         ui.add(egui::Label::new(RichText::new(why).font(t.font(11.5)).color(t.caution)).wrap());
                     }
                     _ => {}
@@ -482,21 +512,21 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if installed {
                     let r = ui.button(tr("Remove"));
-                    register(ui.ctx(), format!("denoise:remove:{id}"), r.rect);
+                    register(ui, format!("denoise:remove:{id}"), r.rect);
                     if r.clicked() {
                         let _ = app.run("denoise.models.remove", json!({"id": id}));
                         app.caches.denoise.epoch += 1;
                     }
                     if selected {
-                        let r = ui.button(tr("Turn off"));
-                        register(ui.ctx(), format!("denoise:off:{id}"), r.rect);
+                        let r = ui.button(tr("Stop using"));
+                        register(ui, format!("denoise:off:{id}"), r.rect);
                         if r.clicked() {
                             let _ = app.run("denoise.models.select", json!({"id": null}));
                             app.caches.denoise.epoch += 1;
                         }
                     } else {
                         let r = ui.button(tr("Use"));
-                        register(ui.ctx(), format!("denoise:use:{id}"), r.rect);
+                        register(ui, format!("denoise:use:{id}"), r.rect);
                         if r.clicked() {
                             let _ = app.run("denoise.models.select", json!({"id": id}));
                             app.caches.denoise.epoch += 1;
@@ -506,7 +536,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                     match dl_state {
                         Some("running") => {
                             let r = ui.button(tr("Cancel"));
-                            register(ui.ctx(), format!("denoise:cancelDownload:{id}"), r.rect);
+                            register(ui, format!("denoise:cancelDownload:{id}"), r.rect);
                             if r.clicked() {
                                 let _ = app.run("denoise.models.downloadCancel", json!({"id": id}));
                                 app.caches.denoise.dl_watch.retain(|w| w != &id);
@@ -519,7 +549,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                                 let r = ui
                                     .button(tr("Open page"))
                                     .on_hover_text(tr("Opens the model's own page in your browser, to read about it or get the file yourself."));
-                                register(ui.ctx(), format!("denoise:get:{id}"), r.rect);
+                                register(ui, format!("denoise:get:{id}"), r.rect);
                                 if r.clicked() {
                                     open_page(app, url);
                                 }
@@ -532,7 +562,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                                     host = host
                                 );
                                 let r = ui.button(tr(label)).on_hover_text(tip);
-                                register(ui.ctx(), format!("denoise:download:{id}"), r.rect);
+                                register(ui, format!("denoise:download:{id}"), r.rect);
                                 if r.clicked() {
                                     open_download_dialog(app, m);
                                 }
@@ -595,8 +625,11 @@ fn count(n: u64, one: &str, many: &str) -> String {
     tr_format!("{n} {noun}", n = n, noun = tr(if n == 1 { one } else { many }))
 }
 
+/// The pace to ask the denoise worker for: "light" when minimized, "normal" while unfocused,
+/// "pause" shortly after input, then "light"/"full"/"normal" according to move recency and
+/// whether the Denoise settings tab is being watched.
 pub(super) fn window_pace(app: &LightcraftApp, ctx: &egui::Context, now: f64, watching: bool) -> &'static str {
-    let (focused, minimized) = ctx.input(|i| (i.focused, i.raw.viewports.get(&i.raw.viewport_id).and_then(|v| v.minimized).unwrap_or(false)));
+    let (focused, minimized) = ctx.input(|i| (i.raw.focused, i.viewport().minimized.unwrap_or(false)));
     pace_for(focused, minimized, now - app.caches.last_input, now - app.caches.last_move, watching)
 }
 
@@ -626,10 +659,15 @@ pub(super) fn mb(bytes: Option<u64>) -> String {
     }
 }
 
+/// Why a model download failed, as a sentence: the engine's reason, or, when it gave none, a message in the UI language.
+pub(crate) fn download_failure(d: &Value) -> String {
+    sentence(d["error"].as_str().unwrap_or_else(|| tr("The download failed")))
+}
+
 pub(super) fn sentence(s: &str) -> String {
     let s = s.trim();
     let mut out = crate::i18n::upper_first(s);
-    if !out.is_empty() && !out.ends_with(['.', '!', '?']) {
+    if !out.is_empty() && !out.ends_with(['.', '!', '?', '。', '！', '？']) {
         out.push('.');
     }
     out
@@ -652,6 +690,9 @@ pub(super) fn open_page(app: &mut LightcraftApp, url: &str) {
     }
 }
 
+/// Draw the denoise model's terms dialog from the engine's model info: unsupported files show
+/// why; otherwise the name/size, download host, licence and provenance, an optional page link,
+/// and the acceptance checkbox in `accepted`.
 pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info: &Value, accepted: &mut bool) {
     let kind = info["kind"].as_str().unwrap_or("unsupported");
     let file = info["fileName"].as_str().unwrap_or("");
@@ -710,7 +751,7 @@ pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info
     }
     if let Some(url) = m["source"].as_str().or(m["licence"]["url"].as_str()) {
         let r = ui.link(tr("Open the model's page"));
-        register(ui.ctx(), "denoiseModel:page", r.rect);
+        register(ui, "denoiseModel:page", r.rect);
         if r.clicked() {
             open_page(app, url);
         }
@@ -723,4 +764,20 @@ pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info
         "The model is kept on this computer only. LightCraft never uploads or shares it."
     };
     ui.label(RichText::new(tr(closing)).font(t.font(11.5)).color(t.text_dim));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_download_failure_without_a_reason_is_said_in_the_ui_language() {
+        let de = crate::i18n::Locale::De;
+        crate::i18n::set_language(de);
+        let said = download_failure(&json!({}));
+        crate::i18n::set_language(crate::i18n::Locale::En);
+        assert_eq!(said, sentence(de.tr("The download failed")));
+        assert_eq!(download_failure(&json!({"error": "no space left"})), "No space left.", "the engine's own reason is shown as given");
+        assert_eq!(sentence("下载失败。"), "下载失败。", "a Chinese or Japanese full stop ends the sentence");
+    }
 }

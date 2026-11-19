@@ -74,7 +74,17 @@ pub fn try_acquire(dir: &Path, slots: usize, owner: &str) -> Result<Option<Held>
             Ok(()) => {
                 // a sidecar file, not the lock file: Windows locks are mandatory, so others couldn't read it
                 let owner_file = owner_path(&path);
-                let _ = std::fs::File::create(&owner_file).and_then(|mut f| f.write_all(owner.as_bytes()));
+                // a new file: an entry left under the name (a link planted in a shared lock folder)
+                // is removed, never written through
+                let removed = std::fs::remove_file(&owner_file);
+                let written = OpenOptions::new().write(true).create_new(true).open(&owner_file).and_then(|mut f| f.write_all(owner.as_bytes()));
+                // when the file could be neither replaced nor written it may still name an earlier
+                // holder: say so rather than let `holders` report it as this run's slot's owner
+                if let (Err(e), Err(w)) = (&removed, &written)
+                    && e.kind() != std::io::ErrorKind::NotFound
+                {
+                    eprintln!("ci lock: could not record the owner in {} ({e}; {w}): waiting runs may show a stale owner", owner_file.display());
+                }
                 return Ok(Some(Held { _file: file, owner: owner_file }));
             }
             Err(TryLockError::WouldBlock) => continue,
