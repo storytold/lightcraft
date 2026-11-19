@@ -264,14 +264,21 @@ pub fn specs() -> Vec<CommandSpec> {
                     ),
                     None => None,
                 };
-                // keywords not given: the renamed set's own, else the current nine
-                let keywords = if p.get("keywords").is_some() {
-                    slots(&strs(p, "keywords"))
-                } else {
-                    match renames.and_then(|at| s.keyword_sets.get(at)) {
+                // Validate every supplied slot before replacing or renaming the saved set.
+                let invalid_keywords = || bad("keyword.saveSet", "`keywords` must be a string, null or an array of strings");
+                let keywords = match p.get("keywords") {
+                    Some(Value::String(k)) => slots(std::slice::from_ref(k)),
+                    Some(Value::Array(a)) => {
+                        let typed = a.iter().map(|k| k.as_str().map(str::to_string).ok_or_else(invalid_keywords)).collect::<Result<Vec<_>>>()?;
+                        slots(&typed)
+                    }
+                    Some(Value::Null) => Vec::new(),
+                    Some(_) => return Err(invalid_keywords()),
+                    // keywords not given: the renamed set's own, else the current nine
+                    None => match renames.and_then(|at| s.keyword_sets.get(at)) {
                         Some(x) => x.keywords.clone(),
                         None => current_keywords(s),
-                    }
+                    },
                 };
                 let set = KeywordSet { name: name.clone(), keywords };
                 match renames {
