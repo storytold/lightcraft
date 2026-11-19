@@ -58,6 +58,9 @@ pub const FAILED_RETRY: Duration = Duration::from_secs(10 * 60);
 pub const MAX_WANTED: usize = 4096;
 /// Decoded tiles kept in memory (256 × 256 × 4 bytes each: 64 MB).
 pub const MEMORY_TILES: usize = 256;
+/// Decoded bytes kept in memory: [`MEMORY_TILES`] ordinary 256 px tiles. A server sending larger
+/// tiles (up to [`MAX_TILE_EDGE`], kept whole) gets fewer of them, not more memory.
+pub const MEMORY_BYTES: usize = MEMORY_TILES * 256 * 256 * 4;
 /// First backoff after an error, and the longest.
 const BACKOFF_START: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(300);
@@ -92,11 +95,35 @@ impl HttpResponse {
     }
 }
 
+/// Why a [`Transport`] GET gave no answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TransportError {
+    /// The body was longer than allowed: the server answered, only that tile is refused (the host
+    /// is not backed off for it).
+    TooLarge(String),
+    /// Connecting, a timeout, a broken connection: the host may be in trouble.
+    Failed(String),
+}
+
+impl std::fmt::Display for TransportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TransportError::TooLarge(m) | TransportError::Failed(m) => f.write_str(m),
+        }
+    }
+}
+
+impl From<String> for TransportError {
+    fn from(m: String) -> Self {
+        TransportError::Failed(m)
+    }
+}
+
 /// Does one GET. The real one is [`HttpTransport`] (native only); tests use an in-process fake.
 pub trait Transport: Send + Sync {
-    /// GET `url` with `headers`; a body longer than `max_body` is an error. Must give up within a
-    /// bounded time (timeouts), and soon after `cancel` is raised.
-    fn get(&self, url: &str, headers: &[(&'static str, String)], max_body: usize, cancel: &AtomicBool) -> Result<HttpResponse, String>;
+    /// GET `url` with `headers`; a body longer than `max_body` is [`TransportError::TooLarge`].
+    /// Must give up within a bounded time (timeouts), and soon after `cancel` is raised.
+    fn get(&self, url: &str, headers: &[(&'static str, String)], max_body: usize, cancel: &AtomicBool) -> Result<HttpResponse, TransportError>;
 }
 
 /// HTTPS through `lightcraft-fetch` (pure Rust, rustls), with connect and stall timeouts, and a
@@ -120,28 +147,28 @@ impl Default for HttpTransport {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Transport for HttpTransport {
-    fn get(&self, url: &str, headers: &[(&'static str, String)], max_body: usize, cancel: &AtomicBool) -> Result<HttpResponse, String> {
+    fn get(&self, url: &str, headers: &[(&'static str, String)], max_body: usize, cancel: &AtomicBool) -> Result<HttpResponse, TransportError> {
         use lightcraft_fetch::http;
         let url = http::Url::parse(url).map_err(|e| e.to_string())?;
         let limits = http::Limits { connect: self.connect_timeout, stall: self.stall_timeout, cancel };
         let hs: Vec<(&str, String)> = headers.iter().map(|(k, v)| (*k, v.clone())).collect();
         let mut r = http::get(&url, &hs, &limits).map_err(|e| e.to_string())?;
         if r.content_length().is_some_and(|n| n > max_body as u64) {
-            return Err(format!("tile larger than {max_body} bytes"));
+            return Err(TransportError::TooLarge(format!("tile larger than {max_body} bytes")));
         }
         let mut body = Vec::new();
         let mut buf = [0u8; 16 * 1024];
         let started = Instant::now();
         loop {
             if started.elapsed() >= self.body_timeout {
-                return Err(format!("tile not received within {} s", self.body_timeout.as_secs()));
+                return Err(TransportError::Failed(format!("tile not received within {} s", self.body_timeout.as_secs())));
             }
             let n = r.read(&mut buf, &limits).map_err(|e| e.to_string())?;
             if n == 0 {
                 break;
             }
             if body.len().saturating_add(n) > max_body {
-                return Err(format!("tile larger than {max_body} bytes"));
+                return Err(TransportError::TooLarge(format!("tile larger than {max_body} bytes")));
             }
             body.extend_from_slice(buf.get(..n).unwrap_or_default());
         }
@@ -315,7 +342,13 @@ struct State {
     /// The host's backoff: consecutive errors and the time it may be asked again.
     errors_in_row: u32,
     backoff_until: Option<Instant>,
+    /// Host failures so far. A request notes it when it is let through; only one let through
+    /// after the last failure (the probe) ends the backoff when it succeeds, not one that was
+    /// already on the wire when the host began failing.
+    failures: u64,
     memory: HashMap<TileKey, MemTile>,
+    /// The decoded bytes in `memory` (at most [`MEMORY_BYTES`], beyond the newest tile).
+    memory_bytes: usize,
     use_counter: u64,
     events: Vec<TileEvent>,
     stats: ServiceStats,
@@ -343,24 +376,37 @@ impl State {
 
     fn remember(&mut self, key: TileKey, image: Arc<TileImage>, expires: i64) {
         self.use_counter += 1;
-        self.memory.insert(key, MemTile { image, expires, used: self.use_counter });
-        while self.memory.len() > MEMORY_TILES {
+        self.memory_bytes = self.memory_bytes.saturating_add(image.rgba.len());
+        if let Some(old) = self.memory.insert(key, MemTile { image, expires, used: self.use_counter }) {
+            self.memory_bytes = self.memory_bytes.saturating_sub(old.image.rgba.len());
+        }
+        while self.memory.len() > MEMORY_TILES || (self.memory_bytes > MEMORY_BYTES && self.memory.len() > 1) {
             // never drop a tile of the current view for an older one
             let victim = self.memory.iter().filter(|(k, _)| !self.rank.contains_key(k)).min_by_key(|(_, t)| t.used).map(|(k, _)| *k);
             let victim = victim.or_else(|| self.memory.iter().min_by_key(|(_, t)| t.used).map(|(k, _)| *k));
-            match victim {
-                Some(k) => self.memory.remove(&k),
+            match victim.and_then(|k| self.memory.remove(&k)) {
+                Some(t) => self.memory_bytes = self.memory_bytes.saturating_sub(t.image.rgba.len()),
                 None => break,
-            };
+            }
         }
     }
 
     /// The host had an error: back off (doubling, at least `retry_after`).
     fn back_off(&mut self, retry_after: Option<Duration>) {
+        self.failures = self.failures.wrapping_add(1);
         self.errors_in_row = self.errors_in_row.saturating_add(1);
         let exp = BACKOFF_START.saturating_mul(1u32 << self.errors_in_row.saturating_sub(1).min(16));
         let wait = exp.min(BACKOFF_MAX).max(retry_after.unwrap_or_default().min(RETRY_AFTER_MAX));
         self.backoff_until = Some(Instant::now() + wait);
+    }
+
+    /// A request let through at failure count `started` succeeded: the host is fine again, unless
+    /// it failed since that request started.
+    fn host_ok(&mut self, started: u64) {
+        if started == self.failures {
+            self.errors_in_row = 0;
+            self.backoff_until = None;
+        }
     }
 
     /// Show the activity row while tiles are queued or loading, with how many are done; drop it
@@ -412,7 +458,8 @@ impl std::fmt::Debug for TileService {
 
 enum Job {
     Disk(TileKey),
-    Net(TileKey),
+    /// The tile, and the host's failure count when the request was let through.
+    Net(TileKey, u64),
     Meta,
 }
 
@@ -658,7 +705,7 @@ fn next_job(sh: &Shared) -> Option<Job> {
                     st.busy.insert(k);
                     st.net_in_flight += 1;
                     st.stats.max_in_flight = st.stats.max_in_flight.max(st.net_in_flight);
-                    return Some(Job::Net(k));
+                    return Some(Job::Net(k, st.failures));
                 }
                 continue;
             }
@@ -674,7 +721,7 @@ fn worker(sh: &Shared) {
     while let Some(job) = next_job(sh) {
         // a panic in a decoder or the transport is that tile's error, not a dead thread
         let key = match job {
-            Job::Disk(k) | Job::Net(k) => k,
+            Job::Disk(k) | Job::Net(k, _) => k,
             Job::Meta => {
                 let credit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| meta_job(sh))).ok().flatten();
                 let mut st = sh.lock();
@@ -686,10 +733,10 @@ fn worker(sh: &Shared) {
                 continue;
             }
         };
-        let net = matches!(job, Job::Net(_));
+        let net = matches!(job, Job::Net(..));
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match job {
             Job::Disk(k) => disk_job(sh, k),
-            Job::Net(k) => net_job(sh, k),
+            Job::Net(k, started) => net_job(sh, k, started),
             Job::Meta => {}
         }));
         let mut st = sh.lock();
@@ -732,7 +779,7 @@ fn meta_job(sh: &Shared) -> Option<String> {
             None
         }
         Err(e) => {
-            log::warn!("map: {url}: {}", hide(&e, token.as_ref()));
+            log::warn!("map: {url}: {}", hide(&e.to_string(), token.as_ref()));
             None
         }
     }
@@ -795,8 +842,9 @@ fn retry_after(r: &HttpResponse) -> Option<Duration> {
     Some(Duration::from_secs(u64::try_from(at.saturating_sub(crate::map::now_secs())).unwrap_or(0)))
 }
 
-/// Fetch `k` from the server (conditionally when a copy is cached).
-fn net_job(sh: &Shared, k: TileKey) {
+/// Fetch `k` from the server (conditionally when a copy is cached); `started`: the host's failure
+/// count when the request was let through.
+fn net_job(sh: &Shared, k: TileKey, started: u64) {
     let (Some(transport), Some(url)) = (sh.transport.as_ref(), sh.source.url(k)) else { return };
     let cached = sh.cache.as_ref().and_then(|c| c.read(k)).map(|c| c.meta);
     let mut headers: Vec<(&'static str, String)> = vec![("User-Agent", sh.source.user_agent().to_string())];
@@ -826,7 +874,10 @@ fn net_job(sh: &Shared, k: TileKey) {
                 Some(t) => with_token(&url, t.secret()),
                 None => url.clone(),
             };
-            let r = transport.get(&full, &headers, MAX_TILE_BYTES, &sh.cancel).map_err(|e| hide(&e, token.as_ref()));
+            let r = transport.get(&full, &headers, MAX_TILE_BYTES, &sh.cancel).map_err(|e| match e {
+                TransportError::TooLarge(m) => TransportError::TooLarge(hide(&m, token.as_ref())),
+                TransportError::Failed(m) => TransportError::Failed(hide(&m, token.as_ref())),
+            });
             if let Ok(resp) = &r
                 && resp.status == 200
                 && cropped
@@ -864,8 +915,15 @@ fn net_job(sh: &Shared, k: TileKey) {
             if sh.cancel.load(Ordering::Relaxed) {
                 return;
             }
-            st.back_off(None);
-            fail(&mut st, e, true);
+            match e {
+                // the server answered with a tile too large: refuse that tile for a while, as a
+                // garbage one; the host is fine and the other tiles go on
+                TransportError::TooLarge(m) => fail(&mut st, format!("{url}: {m}"), false),
+                TransportError::Failed(m) => {
+                    st.back_off(None);
+                    fail(&mut st, m, true);
+                }
+            }
             return;
         }
     };
@@ -875,8 +933,7 @@ fn net_job(sh: &Shared, k: TileKey) {
             let decoded = decode_for(sh, k, &resp.body);
             let (meta, store) = TileMeta::from_response(now, header);
             let mut st = sh.lock();
-            st.errors_in_row = 0;
-            st.backoff_until = None;
+            st.host_ok(started);
             match decoded {
                 Ok(img) => {
                     drop(st);
@@ -919,8 +976,7 @@ fn net_job(sh: &Shared, k: TileKey) {
             };
             let mut st = sh.lock();
             st.stats.not_modified += 1;
-            st.errors_in_row = 0;
-            st.backoff_until = None;
+            st.host_ok(started);
             match refreshed {
                 Some(meta) => {
                     if let Some(t) = st.memory.get_mut(&k) {

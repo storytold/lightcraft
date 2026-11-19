@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use egui::{Align2, Color32, ColorImage, FontId, Painter, Rect, Stroke, StrokeKind, TextureHandle, TextureOptions, pos2, vec2};
 use lightcraft_engine::Session;
-use lightcraft_engine::map::{TileEvent, TileKey, TileService, Viewport};
+use lightcraft_engine::map::{TileEvent, TileImage, TileKey, TileService, Viewport};
 use lightcraft_geom::LatLon;
 
 /// Tile textures kept on the GPU (256 × 256 × 4 bytes each: 64 MB at most).
@@ -37,6 +37,10 @@ pub(crate) struct Store {
     this_frame: Vec<TileKey>,
     last_frame: Vec<TileKey>,
     frame: u64,
+    /// The tiles that arrived this pass, as the service reported them: drawn from here when the
+    /// service already let go of them (more tiles arrived at once than it keeps in memory), so a
+    /// tile in view isn't left blank until the view changes.
+    arrived: HashMap<TexKey, Arc<TileImage>>,
 }
 
 impl Store {
@@ -45,6 +49,7 @@ impl Store {
         if self.frame != pass {
             self.last_frame = std::mem::take(&mut self.this_frame);
             self.frame = pass;
+            self.arrived.clear();
         }
     }
 
@@ -59,14 +64,15 @@ impl Store {
         out
     }
 
-    /// The texture of `key`, uploading the service's decoded tile if it has one.
+    /// The texture of `key`, uploading the service's decoded tile (or the one that arrived this
+    /// pass) if there is one.
     fn texture(&mut self, ctx: &egui::Context, svc: &TileService, source: &str, key: TileKey, pass: u64) -> Option<egui::TextureId> {
         let k = (source.to_string(), key);
         if let Some((tex, used)) = self.textures.get_mut(&k) {
             *used = pass;
             return Some(tex.id());
         }
-        let img = svc.get(key)?;
+        let img = svc.get(key).or_else(|| self.arrived.get(&k).cloned())?;
         let size = [usize::try_from(img.width).ok()?, usize::try_from(img.height).ok()?];
         if size[0].checked_mul(size[1]).and_then(|n| n.checked_mul(4)) != Some(img.rgba.len()) {
             return None;
@@ -162,8 +168,9 @@ pub fn draw(session: &mut Session, painter: &Painter, rect: Rect, center: LatLon
     // a refreshed tile replaces its texture (uploaded again from the service on the next draw)
     let events = svc.poll();
     for e in &events {
-        if let TileEvent::Ready { key, .. } = e {
+        if let TileEvent::Ready { key, image, .. } = e {
             store.textures.remove(&(source_id.clone(), *key));
+            store.arrived.insert((source_id.clone(), *key), Arc::clone(image));
         }
     }
     for k in view.tile_keys(max_zoom, ring.min(1)) {

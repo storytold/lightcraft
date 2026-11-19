@@ -24,7 +24,7 @@ impl lightcraft_engine::map::Transport for FakeTiles {
         _headers: &[(&'static str, String)],
         _max: usize,
         _cancel: &std::sync::atomic::AtomicBool,
-    ) -> Result<lightcraft_engine::map::HttpResponse, String> {
+    ) -> Result<lightcraft_engine::map::HttpResponse, lightcraft_engine::map::TransportError> {
         self.urls.lock().unwrap().push(url.to_string());
         Ok(lightcraft_engine::map::HttpResponse { status: 200, headers: vec![], body: self.png.clone() })
     }

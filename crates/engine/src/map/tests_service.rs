@@ -17,7 +17,7 @@ use super::mercator::{LatLon, TileKey, Viewport};
 use super::service::*;
 use super::source::{TileSource, USER_AGENT};
 
-type Handler = Box<dyn Fn(&str, &[(&'static str, String)]) -> Result<HttpResponse, String> + Send + Sync>;
+type Handler = Box<dyn Fn(&str, &[(&'static str, String)]) -> Result<HttpResponse, TransportError> + Send + Sync>;
 
 struct Fake {
     log: Mutex<Vec<(String, Vec<(&'static str, String)>)>>,
@@ -27,7 +27,7 @@ struct Fake {
 }
 
 impl Fake {
-    fn new(handler: impl Fn(&str, &[(&'static str, String)]) -> Result<HttpResponse, String> + Send + Sync + 'static) -> Arc<Fake> {
+    fn new(handler: impl Fn(&str, &[(&'static str, String)]) -> Result<HttpResponse, TransportError> + Send + Sync + 'static) -> Arc<Fake> {
         Arc::new(Fake { log: Mutex::new(Vec::new()), active: AtomicUsize::new(0), max_active: AtomicUsize::new(0), handler: Box::new(handler) })
     }
     fn urls(&self) -> Vec<String> {
@@ -39,7 +39,7 @@ impl Fake {
 }
 
 impl Transport for Fake {
-    fn get(&self, url: &str, headers: &[(&'static str, String)], _max: usize, _cancel: &AtomicBool) -> Result<HttpResponse, String> {
+    fn get(&self, url: &str, headers: &[(&'static str, String)], _max: usize, _cancel: &AtomicBool) -> Result<HttpResponse, TransportError> {
         self.log.lock().unwrap().push((url.to_string(), headers.to_vec()));
         let n = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.max_active.fetch_max(n, Ordering::SeqCst);
@@ -452,8 +452,12 @@ fn the_http_transport_sends_the_right_headers_and_caps_bodies() {
     cond.extend(TileMeta { etag: Some("\"t\"".into()), ..Default::default() }.conditional_headers());
     let r = t.get(&format!("{base}/1/0/0.png"), &cond, MAX_TILE_BYTES, &cancel).unwrap();
     assert_eq!((r.status, r.body.len()), (304, 0));
-    assert!(t.get(&format!("{base}/1/0/1.png"), &ua, MAX_TILE_BYTES, &cancel).unwrap_err().contains("larger"));
-    assert!(t.get(&format!("{base}/1/1/1.png"), &ua, MAX_TILE_BYTES, &cancel).unwrap_err().contains("larger"));
+    assert!(
+        matches!(t.get(&format!("{base}/1/0/1.png"), &ua, MAX_TILE_BYTES, &cancel).unwrap_err(), TransportError::TooLarge(m) if m.contains("larger"))
+    );
+    assert!(
+        matches!(t.get(&format!("{base}/1/1/1.png"), &ua, MAX_TILE_BYTES, &cancel).unwrap_err(), TransportError::TooLarge(m) if m.contains("larger"))
+    );
     let requests = server.join().unwrap();
     for head in &requests {
         let agents: Vec<_> = head.iter().filter(|l| l.to_ascii_lowercase().starts_with("user-agent:")).collect();
@@ -528,7 +532,7 @@ fn a_huge_announced_tile_length_is_an_error_not_an_allocation() {
     });
     let ua = vec![("User-Agent", USER_AGENT.to_string())];
     let err = HttpTransport::default().get(&url, &ua, MAX_TILE_BYTES, &AtomicBool::new(false)).unwrap_err();
-    assert!(err.contains("larger"), "{err}");
+    assert!(matches!(&err, TransportError::TooLarge(m) if m.contains("larger")), "{err}");
     server.join().unwrap();
 }
 
@@ -557,7 +561,7 @@ fn a_trickling_tile_body_gives_up_at_its_deadline() {
     let ua = vec![("User-Agent", USER_AGENT.to_string())];
     let start = std::time::Instant::now();
     let err = t.get(&url, &ua, MAX_TILE_BYTES, &AtomicBool::new(false)).unwrap_err();
-    assert!(err.contains("not received within"), "{err}");
+    assert!(matches!(&err, TransportError::Failed(m) if m.contains("not received within")), "{err}");
     assert!(start.elapsed() < Duration::from_secs(5), "{:?}", start.elapsed());
     server.join().unwrap();
 }
@@ -580,7 +584,7 @@ fn esri_tiles_carry_the_key_in_the_request_only_and_are_cut_in_quarters() {
         }
         if url.contains("/tile/3/") {
             // a failing tile whose transport error quotes the URL (and so the key)
-            return Err(format!("connection reset fetching {url}"));
+            return Err(format!("connection reset fetching {url}").into());
         }
         Ok(HttpResponse { status: 200, headers: vec![("Cache-Control".into(), "max-age=86400".into())], body: png(512, 512) })
     });
@@ -690,4 +694,73 @@ fn a_service_whose_threads_never_start_queues_nothing() {
     assert!(svc.is_idle(), "nothing left waiting for a worker");
     assert!(activity.list().is_empty(), "no loading row that never ends");
     assert!(fake.urls().is_empty());
+}
+
+/// A tile the transport refuses as too large is refused like a garbage one (not asked for again
+/// for a while); the host isn't backed off, so the other tiles still load.
+#[test]
+fn an_oversized_tile_is_refused_without_backing_off_the_host() {
+    let fake = Fake::new(|url, _| {
+        if url.ends_with("/4/0/4.png") {
+            return Err(TransportError::TooLarge(format!("tile larger than {MAX_TILE_BYTES} bytes")));
+        }
+        Ok(ok_png("max-age=60"))
+    });
+    let svc = TileService::with_transport(source(), None, Some(fake.clone()));
+    let keys: Vec<TileKey> = (0..4).map(|x| TileKey::new(4, x, 4).unwrap()).collect();
+    svc.want(&keys);
+    wait_until("every tile answered", 10, || svc.is_idle() && fake.urls().len() >= 4);
+    let s = svc.stats();
+    assert_eq!(s.backoff_ms, 0, "{s:?}");
+    assert!(keys[1..].iter().all(|k| svc.get(*k).is_some()));
+    assert!(svc.poll().iter().any(|e| matches!(e, TileEvent::Failed { key, error } if *key == keys[0] && error.contains("larger"))));
+    svc.want(&keys);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(fake.keys().iter().filter(|k| **k == keys[0]).count(), 1, "not asked for again: {:?}", fake.urls());
+}
+
+/// A request already on the wire when the host starts failing doesn't end the backoff when it
+/// succeeds: only a request let through after the failure (the probe) does.
+#[test]
+fn an_earlier_request_does_not_end_a_newer_backoff() {
+    let slow = TileKey::new(4, 0, 4).unwrap();
+    let started = Arc::new(AtomicBool::new(false));
+    let seen = Arc::clone(&started);
+    let fake = Fake::new(move |url, _| {
+        if url.ends_with("/4/0/4.png") {
+            seen.store(true, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(300));
+            return Ok(ok_png("max-age=60"));
+        }
+        // fail only once the slow request is on the wire
+        let end = Instant::now() + Duration::from_secs(5);
+        while !seen.load(Ordering::SeqCst) && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        Ok(HttpResponse { status: 503, headers: vec![("Retry-After".into(), "120".into())], body: vec![] })
+    });
+    let svc = TileService::with_transport(source(), None, Some(fake.clone()));
+    svc.want(&[slow, TileKey::new(4, 1, 4).unwrap()]);
+    wait_until("the slow tile", 10, || svc.get(slow).is_some());
+    assert!(started.load(Ordering::SeqCst));
+    std::thread::sleep(Duration::from_millis(300));
+    // the failed tile waits out its Retry-After: not asked for again
+    assert_eq!(fake.urls().len(), 2, "{:?}", fake.urls());
+    assert!(svc.stats().backoff_ms > 100_000, "{:?}", svc.stats());
+}
+
+/// Decoded tiles are bounded by bytes, not only by count: a server sending 1024 px tiles (kept
+/// whole) gets [`MEMORY_BYTES`] of them, not 256 × 4 MB.
+#[test]
+fn large_tiles_are_kept_within_the_memory_budget() {
+    let big = png(1024, 1024);
+    let fake =
+        Fake::new(move |_, _| Ok(HttpResponse { status: 200, headers: vec![("Cache-Control".into(), "max-age=60".into())], body: big.clone() }));
+    let svc = TileService::with_transport(source(), None, Some(fake.clone()));
+    let keys: Vec<TileKey> = (0..24).map(|x| TileKey::new(5, x, 4).unwrap()).collect();
+    svc.want(&keys);
+    wait_until("every tile", 30, || svc.is_idle() && fake.urls().len() >= keys.len());
+    let in_memory = svc.stats().in_memory;
+    assert!(in_memory <= MEMORY_BYTES / (1024 * 1024 * 4), "{in_memory} tiles of 4 MB");
+    assert!(in_memory > 0);
 }

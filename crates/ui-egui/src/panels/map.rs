@@ -60,6 +60,12 @@ pub(super) const FIT_MAX_ZOOM: f64 = 16.0;
 /// The lowest zoom the map shows.
 const MIN_ZOOM: f64 = 1.0;
 
+/// The lowest zoom for a source whose deepest is `max_zoom`: [`MIN_ZOOM`], or less for a custom
+/// source with no tiles past zoom 0 (`clamp` panics when its minimum is above its maximum).
+fn min_zoom(max_zoom: f64) -> f64 {
+    MIN_ZOOM.min(max_zoom)
+}
+
 /// How long the view must rest before Visible on Map narrows the filmstrip to it (seconds).
 pub const AREA_SETTLE_S: f64 = 0.25;
 
@@ -297,7 +303,7 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Va
         "map.zoomIn" | "map.zoomOut" => {
             let step = if id == "map.zoomIn" { 1.0 } else { -1.0 };
             let m = &mut app.ui.map;
-            m.zoom = (m.zoom.round() + step).clamp(MIN_ZOOM, max_zoom);
+            m.zoom = (m.zoom.round() + step).clamp(min_zoom(max_zoom), max_zoom);
             m.fitted = true;
             apply_view_area(app);
             Ok(state(app))
@@ -445,7 +451,7 @@ fn set_view(app: &mut LightcraftApp, p: &Value, max_zoom: f64) -> Result<(), Str
         m.center_lon = lightcraft_engine::map::mercator::wrap_lon(l);
     }
     if let Some(z) = zoom {
-        m.zoom = z.clamp(MIN_ZOOM, max_zoom);
+        m.zoom = z.clamp(min_zoom(max_zoom), max_zoom);
     }
     m.fitted = true;
     Ok(())
@@ -470,7 +476,7 @@ fn fit(app: &mut LightcraftApp) {
     let m = &mut app.ui.map;
     m.center_lat = center.lat;
     m.center_lon = center.lon;
-    m.zoom = v.zoom.max(MIN_ZOOM);
+    m.zoom = v.zoom.max(min_zoom(max_zoom));
 }
 
 /// Draw the Map view: the map, and the shared filmstrip under it when it is on (View ▸
@@ -505,7 +511,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
     let mut map_ui = app.ui.map.clone();
     let mut center = LatLon::new(map_ui.center_lat, map_ui.center_lon).unwrap_or(LatLon { lat: 45.57, lon: -73.2 });
-    let mut zoom = if map_ui.zoom.is_finite() { map_ui.zoom.clamp(MIN_ZOOM, max_zoom) } else { MIN_ZOOM };
+    let mut zoom = if map_ui.zoom.is_finite() { map_ui.zoom.clamp(min_zoom(max_zoom), max_zoom) } else { min_zoom(max_zoom) };
 
     // 1. Background Map Canvas & Interaction
     let canvas_response = ui.allocate_rect(canvas_rect, Sense::click_and_drag());
@@ -682,7 +688,7 @@ fn navigate(
             0.0
         };
         if delta_zoom != 0.0 {
-            let new_zoom = (vp.zoom + delta_zoom).clamp(MIN_ZOOM, max_zoom);
+            let new_zoom = (vp.zoom + delta_zoom).clamp(min_zoom(max_zoom), max_zoom);
             let anchor = pointer.filter(|p| canvas_rect.contains(*p)).map_or(Point::new(w / 2.0, h / 2.0), local);
             vp = vp.zoomed_around(anchor, new_zoom);
         }
@@ -1192,9 +1198,9 @@ fn render_bottom_toolbar(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rec
 
         ui.add_space(12.0);
         if ui.button("-").clicked() {
-            *zoom = (*zoom - 1.0).max(1.0);
+            *zoom = (*zoom - 1.0).max(min_zoom(max_zoom));
         }
-        ui.add(egui::Slider::new(zoom, 1.0..=max_zoom).show_value(false));
+        ui.add(egui::Slider::new(zoom, min_zoom(max_zoom)..=max_zoom).show_value(false));
         if ui.button("+").clicked() {
             *zoom = (*zoom + 1.0).min(max_zoom);
         }
@@ -1452,6 +1458,28 @@ mod tests {
         assert_eq!(app.ui.map.navigator_zoom, 3.0);
     }
 
+    /// A custom source may stop at zoom 0 (`maxZoom: 0` is accepted): drawing the map, the zoom
+    /// commands, `map.setView` and Fit to Photos keep the view at 0 instead of panicking in `clamp`.
+    #[test]
+    fn a_source_with_no_zoom_past_zero_draws_and_zooms() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
+        app.session
+            .execute(
+                "map.tileSource",
+                &json!({"id": "world", "urlTemplate": "https://tiles.test/{z}/{x}/{y}.png", "attribution": "© Test", "maxZoom": 0}),
+            )
+            .unwrap();
+        app.ui.view = ViewMode::Map;
+        app.ui.map.zoom = 5.0;
+        let mut view = HeadlessView::new();
+        let raw = HeadlessView::raw_input(vec2(1000.0, 700.0), 1.0, 0.0, vec![]);
+        view.run(raw, |ui| show(&mut app, ui));
+        for (id, p) in [("map.zoomIn", json!({})), ("map.zoomOut", json!({})), ("map.setView", json!({"zoom": 3})), ("map.fit", json!({}))] {
+            command(&mut app, id, &p).unwrap().unwrap();
+            assert_eq!(app.ui.map.zoom, 0.0, "{id}");
+        }
+    }
+
     /// A transport that serves a flat 256 × 256 PNG for every tile and records the URLs (never
     /// the internet).
     struct FakeTiles {
@@ -1466,7 +1494,7 @@ mod tests {
             _headers: &[(&'static str, String)],
             _max: usize,
             _cancel: &std::sync::atomic::AtomicBool,
-        ) -> Result<lightcraft_engine::map::HttpResponse, String> {
+        ) -> Result<lightcraft_engine::map::HttpResponse, lightcraft_engine::map::TransportError> {
             self.urls.lock().unwrap().push(url.to_string());
             Ok(lightcraft_engine::map::HttpResponse { status: 200, headers: vec![], body: self.png.clone() })
         }
@@ -1531,6 +1559,31 @@ mod tests {
         let deeper = draw_once(&mut session, center, 12.0);
         assert!(deeper.from_parent > 0 && deeper.tiles == 0, "{deeper:?}");
         assert!(fake.urls.lock().unwrap().iter().all(|u| u.starts_with("https://tiles.test/")));
+    }
+
+    /// A view with more tiles than the service keeps decoded: the ones it let go of before they
+    /// were drawn come from the arrival events, so none stays blank while the view doesn't change.
+    #[test]
+    fn tiles_evicted_before_they_were_drawn_are_still_drawn() {
+        let fake = fake_tiles();
+        let mut session = session_with_fake_tiles("ui-evicted", fake.clone());
+        let center = LatLon::new(48.8566, 2.3522).unwrap();
+        let draw = |session: &mut lightcraft_engine::Session| {
+            let mut view = HeadlessView::new();
+            let raw = HeadlessView::raw_input(vec2(600.0, 600.0), 1.0, 0.0, vec![]);
+            let mut drawn = tiles::Drawn::default();
+            view.run(raw, |ui| {
+                // about 19 × 19 tiles: more than the service's MEMORY_TILES
+                let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(4800.0, 4800.0));
+                drawn = tiles::draw(session, &ui.painter_at(rect), rect, center, 10.0, 0);
+            });
+            drawn
+        };
+        let first = draw(&mut session);
+        assert!(first.missing > lightcraft_engine::map::service::MEMORY_TILES, "{first:?}");
+        wait_idle(&session);
+        let loaded = draw(&mut session);
+        assert_eq!(loaded.missing + loaded.from_parent, 0, "{loaded:?}");
     }
 
     /// The offline source draws a grey map and starts no tile service (no threads, no network).
