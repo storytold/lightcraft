@@ -1,6 +1,7 @@
 //! The integration tests, one module per file, linked into one test binary.
 
 mod cli;
+mod mcp_empty_folder;
 mod mcp_shutdown;
 
 /// Nextest archives relocate the executable; plain Cargo uses its compile-time path.
