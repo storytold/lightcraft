@@ -14,7 +14,7 @@ fn fixture(preview_edge: Option<usize>, renderable: bool, preview_only: bool) ->
     let mut session = Session::new();
     let reads = Arc::new(AtomicUsize::new(0));
     let count = reads.clone();
-    session.media.file_loader = Some(Arc::new(move |_, edge| {
+    session.media.file_loader = Some(Arc::new(move |_, edge, _| {
         count.fetch_add(1, Ordering::SeqCst);
         if !renderable {
             return Err("synthetic raw cannot be rendered".into());

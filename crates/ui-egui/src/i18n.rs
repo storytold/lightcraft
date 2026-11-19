@@ -1,10 +1,10 @@
 //! Presentation-only localization. Command ids, user names and catalog data remain unchanged.
 //!
 //! A language is one entry in [`language_table!`] below: its BCP-47 code, the endonym shown in the
-//! Language menus, the ISO 15924 script its text needs (which picks the CJK font fallback), and its
+//! Settings language row, the ISO 15924 script its text needs (which picks the CJK font fallback), and its
 //! message catalog (`locales/<code>.json`, embedded at build time). Adding a language is that entry
 //! plus its catalogs and the corresponding language command in `menus.rs`. Settings read the
-//! locale table, while menus and the control channel share the command mapping.
+//! locale table, while the control channel uses the command mapping.
 
 use std::{cell::RefCell, collections::BTreeMap, sync::OnceLock};
 
@@ -34,7 +34,7 @@ macro_rules! language_table {
                 match self { Self::$source => $source_code, $(Self::$variant => $code,)* }
             }
 
-            /// The language's own name, as shown in the Language menus.
+            /// The language's own name, as shown in the Settings language row.
             pub const fn name(self) -> &'static str {
                 match self { Self::$source => "English", $(Self::$variant => $name,)* }
             }
@@ -140,7 +140,7 @@ language_table! {
 }
 
 impl Locale {
-    /// Every language in the order the Settings row and Edit ▸ Language list them: English first
+    /// Every language in the order the Settings row lists them: English first
     /// (the source language), then the rest by their own name with accents folded, so Čeština
     /// sits under C. Names in other scripts follow the Latin ones in code point order: Cyrillic,
     /// Georgian, then the CJK languages.
@@ -590,9 +590,9 @@ mod picker_order_tests {
     }
 
     #[test]
-    fn language_menu_lists_the_picker_order() {
+    fn language_commands_list_the_picker_order() {
         let menu: Vec<&str> = crate::menus::LANGUAGE_COMMANDS.iter().map(|c| c.1).collect();
         let picker: Vec<&str> = Locale::for_picker().into_iter().map(Locale::name).collect();
-        assert_eq!(menu, picker, "Edit ▸ Language and the Settings row list the languages the same way");
+        assert_eq!(menu, picker, "the language commands and the Settings row list the languages the same way");
     }
 }

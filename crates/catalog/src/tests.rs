@@ -12,6 +12,37 @@ fn photo(c: &mut Catalog, name: &str, date: &str) -> PhotoId {
     id
 }
 
+/// ORF probes record both supported and preview-only outcomes, without changing other formats.
+#[test]
+fn orf_support_checks_keep_a_stamp_even_when_sensor_data_decodes() {
+    let mut p = Photo::new(PhotoId(1), Source::File { path: "a.orf".into() }, "a.orf", "ORF", 4, 3, "2026-01-01");
+    p.kind = MediaKind::Raw;
+    assert!(p.preview_only_stale(), "legacy supported ORF needs the withdrawal recheck");
+    p.set_preview_only(None);
+    assert_eq!(p.preview_checked, APP_VERSION);
+    assert!(!p.preview_only_stale());
+    assert!(p.develops_raw(), "supported uncompressed ORF remains sensor-decodable");
+    p.set_preview_only(Some("Olympus compressed ORF".into()));
+    assert_eq!(p.preview_checked, APP_VERSION);
+    assert!(!p.preview_only_stale());
+    assert!(!p.develops_raw());
+    p.format = "DNG".into();
+    p.set_preview_only(None);
+    assert!(p.preview_checked.is_empty(), "other supported formats keep their existing semantics");
+    assert!(!p.preview_only_stale());
+}
+
+#[test]
+fn date_token_matches_time_part_case_insensitively() {
+    let mut c = Catalog::new();
+    let a = photo(&mut c, "a.jpg", "2026-05-01T10:00:00");
+    let q = |c: &Catalog, text: &str| c.query(&Filter { text: text.into(), ..Default::default() }, &Sort::default());
+    assert_eq!(q(&c, "date:2026-05-01T10"), vec![a]);
+    assert_eq!(q(&c, "date:2026-05-01t10"), vec![a]);
+    assert_eq!(q(&c, "date:2026-05"), vec![a]);
+    assert!(q(&c, "date:2026-05-01T11").is_empty());
+}
+
 #[test]
 fn apply_and_inverse_roundtrip() {
     let mut c = Catalog::new();
@@ -625,7 +656,8 @@ fn set_embedded_lens_is_undoable_and_journaled() {
         photo: Box::new(Photo::new(a, Source::File { path: "/x.rw2".into() }, "x.rw2", "RW2", 4000, 3000, "2026-10-06T00:00:00")),
     })
     .unwrap();
-    let lens = lightcraft_develop::EmbeddedLens { warp: Some(Default::default()), vignette: None, stages: Default::default() };
+    let lens =
+        lightcraft_develop::EmbeddedLens { warp: Some(Default::default()), vignette: None, stages: Default::default(), source: Default::default() };
     let op = Op::SetEmbeddedLens { id: a, lens: Some(Box::new(lens)) };
     let op: Op = serde_json::from_str(&serde_json::to_string(&op).unwrap()).unwrap();
     let inv = c.apply(op).unwrap();
