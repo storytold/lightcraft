@@ -207,11 +207,20 @@ impl DecodedSource {
         mixed
     }
 
-    /// Cache cost: the picture, its segmentation mattes, its denoised twin and room for the lazy mix.
+    /// Cache cost: pixels, decoder tables, mattes, denoised twin and room for its lazy mix.
     pub fn bytes(&self) -> usize {
         let mattes = self.info.as_ref().and_then(|i| i.mattes.as_ref()).map_or(0, |m| m.bytes());
-        let mattes = mattes + self.info.as_ref().and_then(|i| i.local_tone.as_ref()).map_or(0, |t| t.map.gains.len() * 4);
-        self.image.data.len() * 12 + 64 + std::mem::size_of::<SourceInfo>() + mattes + self.denoised.as_ref().map_or(0, |t| t.bytes())
+        let local = self.info.as_ref().and_then(|i| i.local_tone.as_ref()).map_or(0, |t| t.map.gains.capacity().saturating_mul(4));
+        let color = self.info.as_ref().and_then(|i| i.camera_color.as_ref()).map_or(0, |c| c.bytes());
+        self.image
+            .data
+            .len()
+            .saturating_mul(12)
+            .saturating_add(64 + std::mem::size_of::<SourceInfo>())
+            .saturating_add(mattes)
+            .saturating_add(local)
+            .saturating_add(color)
+            .saturating_add(self.denoised.as_ref().map_or(0, |t| t.bytes()))
     }
 
     /// What to render these pixels against: the decoder's facts, else `header` (the catalog's)
