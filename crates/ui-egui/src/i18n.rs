@@ -137,6 +137,7 @@ language_table! {
     Fi, "fi", "Suomi", "Latn", include_str!("../locales/fi.json");
     Id, "id", "Bahasa Indonesia", "Latn", include_str!("../locales/id.json");
     Vi, "vi", "Tiếng Việt", "Latn", include_str!("../locales/vi.json");
+    Tr, "tr", "Türkçe", "Latn", include_str!("../locales/tr.json");
 }
 
 impl Locale {
