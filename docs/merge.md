@@ -80,12 +80,12 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   error < 0.02 EV, radiance median log error < 0.03 (noise-limited, bias < 0.01), recovered
   highlights < 0.05; moving object: ghost error 0.2–2.0 without deghosting, < 0.06 with High; a star that moves
   across a night sky keeps its clipped core and, with High, leaves no ghost of the brightest frame.
-- HDR at full size (`tests/sharpness.rs`): three 3000 × 2000 frames of an analytic scene (texture up to 0.35 cycles
+- HDR at full size (`tests/it/sharpness.rs`): three 3000 × 2000 frames of an analytic scene (texture up to 0.35 cycles
   per pixel), each turned ≤ 0.11° and moved by a fraction of a pixel, the brightest over half clipped. Alignment
   corner error 0.014 and 0.11 px, 98.8 % of the scene's detail kept; before the refinement and the Lanczos-3 warp
   0.43 and 6.2 px (the bright frame wasn't aligned) and 86 %. Measured with `metrics.rs` (`detail`, `detail_ratio`,
   `detail_gain`, `residual`).
-- Real handheld bracket (Sony, 33 MP, gravel a few metres away, a building ~1 km off; `tests/real_bracket.rs`, run
+- Real handheld bracket (Sony, 33 MP, gravel a few metres away, a building ~1 km off; `tests/it/real_bracket.rs`, run
   by hand): the global fit, dominated by the foreground, left the building 2.3 px off (median; 95th percentile
   3.0 px) and the merge doubled its inscription; with local alignment 0.20 px (0.43 px), the whole frame 0.13 px.
   With the reference's detail the merged building is as crisp as the single raw (by eye; it keeps less of the raw's
