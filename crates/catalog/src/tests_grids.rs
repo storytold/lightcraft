@@ -436,3 +436,35 @@ fn resolved_grid_references_share_equal_settings() {
         assert!(p.versions.iter().all(|v| Arc::ptr_eq(&v.settings, first)), "photo {n}'s versions");
     }
 }
+
+/// A masked photo whose history is longer than the few values sharing remembers still holds its
+/// settings and its last step once: the references of equal holders resolve to one value, not to
+/// a copy per holder that is shared only when it happens to be remembered.
+#[test]
+fn a_masked_photos_settings_share_with_its_last_step_after_a_long_history() {
+    let seg = SegMask::from_logits(32, &vec![1.0f32; 32 * 32]);
+    let id = PhotoId(1);
+    let mut live = Catalog::new();
+    let mut ops = vec![Op::AddPhoto { photo: Box::new(Photo::new(id, Source::Demo { scene: 0 }, "1.jpg", "JPEG", 60, 40, "2026-01-01")) }];
+    let mut last = Arc::new(DevelopSettings::default());
+    for i in 1..=10u32 {
+        last = Arc::new(settings_with_seg(seg.clone(), f64::from(i) * 0.1));
+        ops.push(Op::PushHistory { id, step: HistoryStep { label: "Exposure".into(), settings: last.clone() } });
+    }
+    ops.push(Op::SetDevelop { id, settings: last, label: "Exposure".into(), edited: Some("t".into()) });
+    for op in &ops {
+        live.apply(op.clone()).unwrap();
+    }
+    let m = MemStore::new();
+    let (mut j, _, _) = open(&m);
+    j.append(&ops).unwrap();
+    j.snapshot(&live).unwrap();
+    drop(j);
+    let (_, loaded, report) = open(&m);
+    assert_eq!(report.repaired, Vec::<String>::new(), "{:?}", report.repaired);
+    assert_eq!(loaded.to_snapshot(), live.to_snapshot());
+    let p = loaded.photo(id).unwrap();
+    assert_eq!(p.history.len(), 10);
+    let last = p.history.last().unwrap();
+    assert!(Arc::ptr_eq(&p.develop, &last.settings), "the photo's settings and its last step are one value");
+}

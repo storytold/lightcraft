@@ -377,6 +377,12 @@ impl std::fmt::Debug for PlansMemo {
     }
 }
 
+/// What [`resolve_grids`] has made of each value with references so far: the value as read (held
+/// here so its address stays its own), what it resolved to and how many dangling references it
+/// held. Holders that shared a value before resolving share the result, whatever else is between
+/// them (a photo's settings and its last history step, with the earlier steps in between).
+type ResolvedGrids = std::collections::HashMap<*const DevelopSettings, (Arc<DevelopSettings>, Arc<DevelopSettings>, usize)>;
+
 /// Resolves the shared-grid references of one settings holder (see [`Photo::settings_holders`])
 /// against a snapshot's grid table: each referenced mask takes its
 /// grid's data and the reference is cleared. A reference past the table (a damaged snapshot)
@@ -384,26 +390,33 @@ impl std::fmt::Debug for PlansMemo {
 /// mask itself wins over a stray reference. Returns the dangling count added to `dangling`.
 ///
 /// Settings that refer to no grid (nearly all of them) are left alone, so a value shared by many
-/// holders stays shared: [`Arc::make_mut`] would copy it for each. Settings that were changed are
-/// handed to [`shared::settings`] again, so holders that are equal once resolved share one value.
-fn resolve_grids(settings: &mut Arc<DevelopSettings>, grids: &[String], dangling: usize) -> usize {
-    let mut dangling = dangling;
+/// holders stays shared: [`Arc::make_mut`] would copy it for each. A value with references is
+/// resolved once (`done`): every holder that held it takes the same result, which is handed to
+/// [`shared::settings`], so holders that are equal once resolved share one value too.
+fn resolve_grids(settings: &mut Arc<DevelopSettings>, grids: &[String], dangling: usize, done: &mut ResolvedGrids) -> usize {
     let mut referenced = false;
     settings.visit_seg_masks(&mut |m| referenced |= m.grid.is_some());
     if !referenced {
         return dangling;
     }
+    if let Some((_, resolved, dangled)) = done.get(&Arc::as_ptr(settings)) {
+        *settings = resolved.clone();
+        return dangling + dangled;
+    }
+    let original = settings.clone();
+    let mut dangled = 0usize;
     Arc::make_mut(settings).visit_seg_masks_mut(&mut |m| {
         if let Some(i) = m.grid.take() {
             match (m.data.is_empty(), grids.get(i as usize)) {
                 (true, Some(data)) => m.data = data.clone(),
-                (true, None) => dangling += 1,
+                (true, None) => dangled += 1,
                 (false, _) => {}
             }
         }
     });
     *settings = shared::settings(settings.clone());
-    dangling
+    done.insert(Arc::as_ptr(&original), (original, settings.clone(), dangled));
+    dangling + dangled
 }
 
 /// A short memory of what the latest ops changed, so that what is derived from the catalog (the grid's list) can
@@ -1244,10 +1257,11 @@ impl Catalog {
         // an empty table, which is always dangling, so the table being empty does not skip it.
         let grids = std::mem::take(&mut self.grids);
         let mut dangling = 0usize;
+        let mut done = ResolvedGrids::new();
         for p in self.photos.values_mut() {
             let photo = Arc::make_mut(p);
             for settings in photo.settings_holders_mut() {
-                dangling = resolve_grids(settings, &grids, dangling);
+                dangling = resolve_grids(settings, &grids, dangling, &mut done);
             }
         }
         if dangling > 0 {
