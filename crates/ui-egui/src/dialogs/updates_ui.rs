@@ -5,6 +5,8 @@ use serde_json::Value;
 use crate::LightcraftApp;
 
 #[cfg(not(target_arch = "wasm32"))]
+use craft_update::dialog::{CheckResultDialog, CheckResultResponse};
+#[cfg(not(target_arch = "wasm32"))]
 use craft_update::updater::{Action, Status, Updater};
 
 pub(crate) struct Runtime {
@@ -18,7 +20,10 @@ pub(crate) struct Runtime {
     /// The context of the last frame, to wake the UI when a check is queued from a menu callback.
     #[cfg(not(target_arch = "wasm32"))]
     repaint: Option<egui::Context>,
+    /// A requested check's result dialog is showing.
+    #[cfg(target_arch = "wasm32")]
     pub(crate) manual_window_open: bool,
+    #[cfg(target_arch = "wasm32")]
     pub(crate) status_message: Option<String>,
 }
 
@@ -33,7 +38,9 @@ impl Default for Runtime {
             check_requested: false,
             #[cfg(not(target_arch = "wasm32"))]
             repaint: None,
+            #[cfg(target_arch = "wasm32")]
             manual_window_open: false,
+            #[cfg(target_arch = "wasm32")]
             status_message: None,
         }
     }
@@ -44,6 +51,13 @@ impl LightcraftApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_startup_update_check(&mut self, on: bool) {
         self.updates_rt.startup_check = on;
+    }
+
+    /// Starts the helper of a ready update, which installs it once the process has exited. Call it
+    /// in `on_exit` when the process ends there without dropping the app.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn start_pending_update(&mut self) {
+        self.updates_rt.updater.start_pending_update();
     }
 }
 
@@ -93,35 +107,43 @@ pub(crate) fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
     let _ = (app, ctx);
 }
 
+/// Whether the result dialog shows: for every status but idle (a requested check, and the first
+/// start after an update, which reports that it installed or why it failed), and never over the
+/// startup prompt.
+#[cfg(not(target_arch = "wasm32"))]
+fn result_window_shows(status: &Status, prompt_open: bool) -> bool {
+    !prompt_open && !matches!(status, Status::Idle)
+}
+
 pub(crate) fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // The restart helper is scheduled before the app closes, so no update starts over unsaved work.
+        // The close for a ready update waits until nothing is unsaved.
         let clean = app.session.unsaved().is_none();
         match app.updates_rt.updater.show_if(ctx, clean) {
             Action::OpenUrl(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
             Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Action::None => {}
         }
-        // The window answers Help ▸ Check for Updates, so it follows the updater's status.
+        // A found update opens the startup prompt and leaves the status idle, which ends the result dialog.
         let rt = &mut app.updates_rt;
-        (rt.manual_window_open, rt.status_message) = match rt.updater.status() {
-            Status::Idle => (false, None),
-            Status::Checking => (true, Some(crate::i18n::tr("Checking for updates…").to_string())),
-            Status::UpToDate => (
-                true,
-                Some(
-                    crate::i18n::tr("LightCraft {version} is currently the newest version available.")
-                        .replace("{version}", env!("CARGO_PKG_VERSION")),
-                ),
-            ),
-            Status::Failed(e) => (true, Some(crate::i18n::tr("Could not check for updates:\n{error}").replace("{error}", e))),
-        };
+        if result_window_shows(rt.updater.status(), rt.updater.prompt_open()) {
+            let dialog = CheckResultDialog::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION"));
+            match dialog.show(ctx, rt.updater.status()) {
+                CheckResultResponse::None => {}
+                // Closing the dialog dismisses the outcome it showed.
+                CheckResultResponse::Close => rt.updater.dismiss_status(),
+                CheckResultResponse::CheckAgain => rt.check_requested = true,
+                // The next `show_if` asks the window to close once nothing is unsaved.
+                CheckResultResponse::RestartToUpdate => rt.updater.restart_to_update(),
+            }
+        }
     }
 
+    #[cfg(target_arch = "wasm32")]
     if app.updates_rt.manual_window_open {
         let mut open = true;
-        egui::Window::new(crate::i18n::tr("LightCraft Updates"))
+        let shown = egui::Window::new(crate::i18n::tr("LightCraft Updates"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -136,15 +158,12 @@ pub(crate) fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     app.updates_rt.manual_window_open = false;
                 }
             });
+        if let Some(w) = &shown {
+            crate::widgets::announce_dialog(ctx, &w.response, crate::widgets::Modal::Window);
+        }
         if !open {
             app.updates_rt.manual_window_open = false;
         }
-    }
-
-    // Closing the window dismisses the outcome it showed.
-    #[cfg(not(target_arch = "wasm32"))]
-    if !app.updates_rt.manual_window_open {
-        app.updates_rt.updater.dismiss_status();
     }
 }
 
@@ -156,6 +175,7 @@ mod tests {
     #[test]
     fn default_runtime_is_idle() {
         let rt = Runtime::default();
+        #[cfg(target_arch = "wasm32")]
         assert!(!rt.manual_window_open);
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -184,5 +204,25 @@ mod tests {
         });
         output.textures_delta.clear();
         assert!(app.updates_rt.updater.prompt_open());
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn result_window_shows_every_status_but_idle() {
+        let shown = [
+            Status::Checking,
+            Status::UpToDate,
+            Status::Failed("no network".into()),
+            Status::Installing,
+            Status::Ready,
+            Status::Managed,
+            Status::Updated("0.2.0".into()),
+            Status::InstallFailed("disk full".into()),
+        ];
+        for status in &shown {
+            assert!(result_window_shows(status, false), "{status:?}");
+            assert!(!result_window_shows(status, true), "{status:?} over the prompt");
+        }
+        assert!(!result_window_shows(&Status::Idle, false));
     }
 }

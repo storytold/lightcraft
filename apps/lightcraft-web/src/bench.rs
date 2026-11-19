@@ -2,6 +2,9 @@
 //! control exactly like a slider drag (begin interaction → N `develop.set` → end) and time each
 //! step from the command to the moment the new loupe texture is ready. Results go to the log
 //! (the browser console on the web) as one `lightcraft-bench {…json…}` line.
+//!
+//! The web host runs it only on the generated demo photos in an unsaved library (`?bench` implies `?store=memory`): it
+//! commits edits to the photo it opens, which must never be one in the user's stored library.
 
 use lightcraft_ui_egui::LightcraftApp;
 use lightcraft_ui_egui::render::Slot;

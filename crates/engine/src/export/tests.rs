@@ -225,7 +225,7 @@ fn sharpened_pixels_are_pinned() {
         let samples = src.data.iter().flat_map(|p| [p[0], p[1], p[2]].map(|v| u16::from(v) * 257)).collect();
         let mut deep = DeepImage { width: src.width, height: src.height, samples: DeepSamples::U16(samples), space: OutputSpace::Srgb };
         output_sharpen_deep(&mut deep, target, SharpenAmount::Standard);
-        let DeepSamples::U16(v) = &deep.samples else { unreachable!() };
+        let DeepSamples::U16(v) = &deep.samples else { panic!("expected U16 samples") };
         got.push(fnv(&v.iter().flat_map(|s| s.to_le_bytes()).collect::<Vec<u8>>()));
     }
     assert_eq!(got, SHARPENED, "{got:#x?}");
@@ -912,8 +912,55 @@ fn ramp(depth: OutputDepth, space: OutputSpace) -> lightcraft_pipeline::Rendered
 fn distinct_levels(bytes: &[u8]) -> (usize, lightcraft_codecs::Decoded) {
     let d = lightcraft_codecs::decode(bytes, Default::default()).expect("decodes");
     let mut v: Vec<u32> = (0..d.image.width).map(|x| d.image.get(x, 1)[1].to_bits()).collect();
+    // sorted first: 8-bit output is dithered, so equal levels aren't all side by side
+    v.sort_unstable();
     v.dedup();
     (v.len(), d)
+}
+
+/// A 16-bit render of a photo-like scene: smooth colour gradients plus sensor-like noise of
+/// `noise` (linear, about 0.002 to 0.03 for clean to high-ISO raws), the case where the low
+/// byte of every 16-bit sample is mostly noise.
+fn noisy_render(noise: f32) -> lightcraft_pipeline::Rendered {
+    let (w, h) = (512, 384);
+    // a hash of the position and channel: the same noise every run
+    let hash = |x: usize, y: usize, c: usize| {
+        let mut z = (x as u64) << 32 ^ (y as u64) << 2 ^ c as u64 ^ 0x2882;
+        z = (z ^ (z >> 33)).wrapping_mul(0xff51_afd7_ed55_8ccd);
+        z = (z ^ (z >> 33)).wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+        (z ^ (z >> 33)) as f32 / u64::MAX as f32 - 0.5
+    };
+    let src = lightcraft_raster::Rgb32f::from_fn(w, h, |x, y| {
+        let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
+        let base = [0.05 + 0.4 * u, 0.1 + 0.3 * v, 0.2 + 0.2 * (u * v)];
+        [0, 1, 2].map(|c| (base[c] + noise * hash(x, y, c)).max(0.0))
+    });
+    let req = lightcraft_pipeline::RenderRequest { depth: OutputDepth::U16, ..lightcraft_pipeline::RenderRequest::fit(w, h) };
+    lightcraft_pipeline::render(&src, &Default::default(), &Default::default(), &req)
+}
+
+/// Issue #2882: a 16-bit TIFF with ZIP (the default) is never larger than the same render
+/// uncompressed, from smooth to noisy. (LZW can be: it is printed, not checked, and the export
+/// dialog says so when it is picked.)
+#[test]
+fn sixteen_bit_zip_tiff_is_never_larger_than_uncompressed() {
+    assert_eq!(ExportOptions::default().tiff_compression, TiffCompression::Deflate, "ZIP is the default");
+    for noise in [0.0, 0.002, 0.01, 0.03, 0.1] {
+        let r = noisy_render(noise);
+        assert!(matches!(r.deep.as_ref().unwrap().samples, DeepSamples::U16(_)));
+        let size = |tiff_compression| {
+            let o = ExportOptions { format: ExportFormat::Tiff, bit_depth: Some(16), tiff_compression, ..Default::default() };
+            assert_eq!(o.effective_depth(), OutputDepth::U16);
+            encode_rendered(&r, &o, None).unwrap().len()
+        };
+        let (none, zip, lzw) = (size(TiffCompression::None), size(TiffCompression::Deflate), size(TiffCompression::Lzw));
+        eprintln!(
+            "noise {noise}: none {none} B, ZIP {zip} B ({:+.1} %), LZW {lzw} B ({:+.1} %)",
+            100.0 * (zip as f64 / none as f64 - 1.0),
+            100.0 * (lzw as f64 / none as f64 - 1.0)
+        );
+        assert!(zip <= none, "noise {noise}: 16-bit ZIP {zip} B is larger than uncompressed {none} B");
+    }
 }
 
 #[test]
@@ -1477,4 +1524,51 @@ fn export_weights_follow_the_source_and_output_sizes() {
     assert_eq!(render_weight(1000 * 500, 1000, SourceLevel::Preview, 0), 1000 * 500 * 12);
     assert_eq!(render_weight(0, 0, SourceLevel::Full, 0), 0);
     assert!(render_weight(usize::MAX, 1, SourceLevel::Full, usize::MAX) > 0, "no overflow");
+}
+
+/// A catalog's file name never adds a folder level through the empty-naming fallback or the original's extension.
+#[test]
+fn file_name_fallback_and_extension_are_one_path_component() {
+    let empty = |format| ExportOptions { format, naming: "{title}".into(), ..Default::default() };
+    for name in ["../../x.jpg", "..\\y.jpg", "a/b/c.jpg"] {
+        let f = empty(ExportFormat::Jpeg).file_name_for(&named(name), 1);
+        assert!(!f.contains(['/', '\\']), "{f}");
+    }
+    let f = empty(ExportFormat::Original).file_name_for(&named("x.a/../b"), 1);
+    assert!(!f.contains(['/', '\\']), "{f}");
+    assert_eq!(empty(ExportFormat::Jpeg).file_name_for(&named("IMG_1.jpg"), 1), "IMG_1.jpg");
+}
+
+/// A graphic is read within 8192 x 8192 pixels: a PNG header declaring more is refused before any pixel is allocated.
+#[test]
+fn a_graphic_past_the_pixel_cap_is_refused_before_it_is_decoded() {
+    fn crc32(data: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for &b in data {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            }
+        }
+        !crc
+    }
+    let mut ihdr = b"IHDR".to_vec();
+    ihdr.extend(10_000u32.to_be_bytes());
+    ihdr.extend(10_000u32.to_be_bytes());
+    ihdr.extend([8, 0, 0, 0, 0]);
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend(13u32.to_be_bytes());
+    png.extend(&ihdr);
+    png.extend(crc32(&ihdr).to_be_bytes());
+    // the start of the image data, so the header is read to its end (no pixels follow)
+    png.extend(0u32.to_be_bytes());
+    png.extend(b"IDAT");
+    png.extend(crc32(b"IDAT").to_be_bytes());
+    let dir = std::env::temp_dir().join(format!("lc-graphic-cap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("huge.png");
+    std::fs::write(&path, &png).unwrap();
+    let e = read_graphic(&path.to_string_lossy()).unwrap_err();
+    assert!(e.contains("too large") || e.contains("10000"), "{e}");
+    let _ = std::fs::remove_dir_all(&dir);
 }

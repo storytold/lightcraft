@@ -1,6 +1,21 @@
+fn settle_timeout_for_instrumentation(instrumented: bool) -> std::time::Duration {
+    std::time::Duration::from_secs(if instrumented { 600 } else { 120 })
+}
+
+fn ui_settle_timeout() -> std::time::Duration {
+    settle_timeout_for_instrumentation(std::env::var_os("LLVM_PROFILE_FILE").is_some())
+}
+
+#[test]
+fn settle_budget_only_expands_for_llvm_coverage_runs() {
+    assert_eq!(settle_timeout_for_instrumentation(false), std::time::Duration::from_secs(120));
+    assert_eq!(settle_timeout_for_instrumentation(true), std::time::Duration::from_secs(600));
+}
+
 mod activity;
 mod album_picker;
 mod album_remove;
+mod alt_preview;
 mod appearance;
 mod before_after;
 mod browse_active;
@@ -8,29 +23,40 @@ mod button;
 mod canvas_keys;
 mod canvas_pan;
 mod capture_time;
+mod carried_right_click;
+mod carried_text_field_menu;
 mod compare;
 mod copy_paste_dialogs;
 mod crop_rotate;
 mod crop_tool;
 mod curve;
 mod date_picker;
+mod dialog_copy;
 mod dialog_fit;
 mod dialog_primary;
 mod dialog_settings;
+mod dialog_settings_text;
 mod dialog_tab;
 mod dialogs;
+mod disk_space;
 mod docking_acceptance;
 mod drop_import;
 mod edit_layout;
 mod empty_library;
 mod error_kinds;
 mod filmstrip;
+mod filmstrip_drag;
+mod find_similar;
 mod focus_point;
 mod folder_drop;
 mod grading;
 mod grid;
+mod grid_drag;
 mod guided_guides;
 mod histogram_drag;
+mod import_recipe;
+mod import_scan_note;
+mod import_thumbnails;
 mod info_dialogs;
 mod keymap;
 mod keyword_files;
@@ -41,6 +67,8 @@ mod keywording;
 mod labels;
 mod launch_library;
 mod layout_image;
+mod lens_lookup;
+mod lens_offer;
 mod library_problem;
 mod lifecycle_037;
 mod lightroom_destination;
@@ -50,7 +78,8 @@ mod masking;
 mod masking_layout;
 mod menubar;
 mod merge_preview;
-mod model_setup;
+mod missing_sweep;
+mod move_folder;
 mod offline;
 mod open_lightroom;
 pub(super) mod panels;
@@ -67,19 +96,23 @@ mod recheck;
 mod rename_person;
 mod rules_editor;
 mod sam_setup;
+mod scan_probes;
 mod scroll;
 mod slider_reset;
 mod slideshow;
 mod solo_sections;
+mod space_hand;
 mod switch_library;
 mod sync;
 mod tallies;
 mod temp_slider;
+mod text_prompt;
 mod titlebar;
 mod tool_overlay;
 mod unsaved;
 mod view_cost;
 mod wb_selector;
+mod welcome;
 mod zoom;
 mod zoom_keys;
 

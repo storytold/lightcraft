@@ -288,6 +288,80 @@ fn a_crs_change_after_a_read_is_taken_with_auto_write_on() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// A sidecar with keywords as Lightroom Classic and darktable write them: names in `dc:subject`,
+/// paths in `lr:hierarchicalSubject`.
+const KEYWORDED: &str = r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:lr="http://ns.adobe.com/lightroom/1.0/"
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+    xmp:Rating="0" crs:Exposure2012="+0.40">
+   <dc:subject><rdf:Bag><rdf:li>Places</rdf:li><rdf:li>Italy</rdf:li><rdf:li>Rome</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></dc:subject>
+   <lr:hierarchicalSubject><rdf:Bag><rdf:li>Places|Italy|Rome</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></lr:hierarchicalSubject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>"#;
+
+/// Saving a sidecar keeps keywords where other applications look for them: names in `dc:subject`
+/// and paths in `lr:hierarchicalSubject`, each property once. LightCraft 0.13 wrote the paths into
+/// `dc:subject` (`Places|Italy|Rome`), so after any change, even a rating, a search for "Rome" in
+/// another DAM no longer found the photo. A sidecar written that way is put right on the next save,
+/// and keywords added here keep their hierarchy when the sidecar is read back.
+#[test]
+fn saving_a_sidecar_writes_keyword_names_flat_and_paths_hierarchical() {
+    let src = temp_dir("keywords-flat");
+    write_png(&src.join("rome.png"), 8);
+    let sidecar = src.join("rome.xmp");
+    std::fs::write(&sidecar, KEYWORDED).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, ["Places|Italy|Rome", "sunset"]);
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.execute("photo.rate", &json!({"ids": [id.0], "rating": 3})).unwrap();
+
+    let lists = |text: &str| {
+        let x = lightcraft_meta::parse_xmp(text).unwrap();
+        (x.metadata.keywords, x.metadata.hierarchical_keywords)
+    };
+    let text = std::fs::read_to_string(&sidecar).unwrap();
+    let (flat, hierarchical) = lists(&text);
+    assert_eq!(flat, ["Places", "Italy", "Rome", "sunset"], "names, not paths, in dc:subject:\n{text}");
+    assert_eq!(hierarchical, ["Places|Italy|Rome", "sunset"], "{text}");
+    assert_eq!(text.matches("<dc:subject>").count(), 1, "{text}");
+    assert_eq!(text.matches("lr:hierarchicalSubject>").count(), 2, "one lr:hierarchicalSubject, opened and closed:\n{text}");
+    assert!(text.contains("<xmp:Rating>3</xmp:Rating>") && text.contains(r#"crs:Exposure2012="+0.40""#), "{text}");
+
+    // a keyword added here keeps its hierarchy through the file
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "keywords": ["Places|Italy|Rome", "sunset", "people|Ada"]})).unwrap();
+    let (flat, hierarchical) = lists(&std::fs::read_to_string(&sidecar).unwrap());
+    assert_eq!(flat, ["Places", "Italy", "Rome", "sunset", "people", "Ada"]);
+    assert_eq!(hierarchical, ["Places|Italy|Rome", "sunset", "people|Ada"]);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "keywords": []})).unwrap();
+    let text = std::fs::read_to_string(&sidecar).unwrap();
+    assert!(!text.contains("dc:subject") && !text.contains("lr:hierarchicalSubject"), "clearing keywords clears both lists:\n{text}");
+    s.execute("edit.undo", &json!({})).unwrap(); // undo rewrites the sidecar with the three keywords
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, ["Places|Italy|Rome", "sunset", "people|Ada"], "read back as written");
+
+    // a sidecar from LightCraft 0.13 (paths in dc:subject) reads as paths and is written properly
+    let old = KEYWORDED
+        .replace("<rdf:li>Places</rdf:li><rdf:li>Italy</rdf:li><rdf:li>Rome</rdf:li>", "<rdf:li>Places|Italy|Rome</rdf:li>")
+        .replace("<lr:hierarchicalSubject><rdf:Bag><rdf:li>Places|Italy|Rome</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></lr:hierarchicalSubject>", "");
+    std::fs::write(&sidecar, old).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, ["Places|Italy|Rome", "sunset"]);
+    s.execute("photo.rate", &json!({"ids": [id.0], "rating": 4})).unwrap();
+    let (flat, hierarchical) = lists(&std::fs::read_to_string(&sidecar).unwrap());
+    assert_eq!(flat, ["Places", "Italy", "Rome", "sunset"]);
+    assert_eq!(hierarchical, ["Places|Italy|Rome", "sunset"]);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// Lightroom's default profiles (`Adobe Standard`, `Adobe Color`) are named by nearly every sidecar
 /// and our own starting look stands in for them: importing one gives no camera-profile warning.
 #[test]
@@ -459,6 +533,249 @@ fn regions_from_sidecar_are_read_on_import() {
     assert_eq!(region.name.as_deref(), Some("Jane Doe"));
     assert_eq!(region.kind, lightcraft_meta::RegionKind::Face);
     assert!((region.rect.width() - 0.3).abs() < 1e-9, "{:?}", region.rect);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// MWG regions as an app that draws on the photo as stored writes them for [`write_turned_jpeg`]'s photo: its stored
+/// 32 × 24 as `AppliedToDimensions` and no box saying how the photo was turned (no `mwg-rs:Rotation`). One face, its
+/// box centred at (0.25, 0.4), 0.1 × 0.15 of that size.
+const STORED_FRAME_REGIONS: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:mwg-rs="http://www.metadataworkinggroup.com/schemas/regions/"
+    xmlns:stArea="http://ns.adobe.com/xmp/sType/Area#"
+    xmlns:stDim="http://ns.adobe.com/xap/1.0/sType/Dimensions#">
+   <mwg-rs:Regions rdf:parseType="Resource">
+    <mwg-rs:AppliedToDimensions rdf:parseType="Resource" stDim:w="32" stDim:h="24" stDim:unit="pixel"/>
+    <mwg-rs:RegionList>
+     <rdf:Bag>
+      <rdf:li rdf:parseType="Resource" mwg-rs:Name="Hannah" mwg-rs:Type="Face">
+       <mwg-rs:Area rdf:parseType="Resource" stArea:x="0.25" stArea:y="0.4" stArea:w="0.1" stArea:h="0.15" stArea:unit="normalized"/>
+      </rdf:li>
+     </rdf:Bag>
+    </mwg-rs:RegionList>
+   </mwg-rs:Regions>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+/// A JPEG of 32 × 24 pixels stored sideways (Exif orientation 6, shown 24 × 32), with `packet` embedded when given.
+fn write_turned_jpeg(path: &Path, packet: Option<&str>) {
+    let img = lightcraft_raster::Rgba8::from_fn(32, 24, |x, y| [(x * 7) as u8, (y * 9) as u8, 90, 255]);
+    let exif =
+        lightcraft_meta::write_exif(&lightcraft_meta::Metadata { orientation: Some(lightcraft_meta::Orientation::Rotate90), ..Default::default() });
+    let meta = lightcraft_codecs::EncodeMeta { exif: Some(&exif), xmp: packet, ..Default::default() };
+    let bytes = lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &meta).unwrap();
+    std::fs::write(path, bytes).unwrap();
+}
+
+/// Put more than the first MiB of APP15 segments between the JPEG at `path`'s start and its Exif.
+fn pad_before_exif(path: &Path) {
+    let bytes = std::fs::read(path).unwrap();
+    let mut padded = bytes[..2].to_vec();
+    for _ in 0..17 {
+        padded.extend_from_slice(&[0xFF, 0xEF, 0xFF, 0xFF]);
+        padded.extend(std::iter::repeat_n(0, 0xFFFD));
+    }
+    padded.extend_from_slice(&bytes[2..]);
+    std::fs::write(path, padded).unwrap();
+}
+
+/// The face's box from [`STORED_FRAME_REGIONS`] on the upright photo: turned a quarter turn clockwise with it.
+fn assert_on_the_upright_face(s: &Session, id: PhotoId, when: &str) {
+    let p = s.catalog.photo(id).unwrap();
+    assert_eq!((p.width, p.height), (24, 32), "the photo is upright");
+    let r = p.meta.regions.first().map(|r| r.rect).unwrap_or_default();
+    let want = [0.525, 0.2, 0.675, 0.3];
+    let got = [r.x0, r.y0, r.x1, r.y1];
+    assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-9), "{when}: the box is where the photo as stored had the face: {got:?}");
+    assert_eq!(p.meta.regions.len(), 1, "{when}");
+}
+
+/// Issue #2674: face boxes an app drew on a photo as stored (its sideways size as `AppliedToDimensions`, no
+/// `mwg-rs:Rotation`) land on the faces of the photo as LightCraft shows it, upright: when imported, and when the
+/// file's metadata is read again (the packet itself doesn't say how the photo turns; the file's Exif does). The
+/// image's own size decides, not one the XMP states upright, and the Exif is found past the first MiB of the file.
+#[test]
+fn regions_drawn_on_the_photo_as_stored_land_on_the_upright_photo() {
+    let src = temp_dir("regions-stored-frame");
+    let embedded = src.join("embedded.jpg");
+    write_turned_jpeg(&embedded, Some(STORED_FRAME_REGIONS));
+    let beside = src.join("sidecar.jpg");
+    write_turned_jpeg(&beside, None);
+    std::fs::write(src.join("sidecar.xmp"), STORED_FRAME_REGIONS).unwrap();
+    // an Exif without a pixel size, and an XMP size of the upright photo
+    let stated = src.join("stated.jpg");
+    let upright_size = r#"rdf:about="" xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:ImageWidth="24" tiff:ImageLength="32""#;
+    write_turned_jpeg(&stated, Some(&STORED_FRAME_REGIONS.replace(r#"rdf:about="""#, upright_size)));
+    let late = src.join("late.jpg");
+    write_turned_jpeg(&late, None);
+    pad_before_exif(&late);
+    std::fs::write(src.join("late.xmp"), STORED_FRAME_REGIONS).unwrap();
+    for (file, what) in [(&embedded, "embedded XMP"), (&beside, "sidecar"), (&stated, "upright size in the XMP"), (&late, "Exif after the first MiB")]
+    {
+        let mut s = Session::new().with_fs();
+        let r = s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+        assert_eq!(r["imported"].as_array().map(Vec::len), Some(1), "{r}");
+        let id = only(&s);
+        assert_on_the_upright_face(&s, id, &format!("{what}, imported"));
+        let read = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+        assert_eq!(read["failed"], json!([]), "{read}");
+        assert_eq!(read["read"].as_array().map(Vec::len), Some(1), "{what}: {read}");
+        assert_on_the_upright_face(&s, id, &format!("{what}, read again"));
+    }
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// Review of #2857: a photo whose Exif states no orientation, but whose XMP says `tiff:Orientation=6`, is shown as
+/// stored (LightCraft turns by the Exif alone), so boxes drawn on its stored frame are right as written: at import
+/// and when the file's metadata is read again, which must agree.
+#[test]
+fn an_orientation_only_the_xmp_states_leaves_stored_frame_regions_as_written() {
+    let src = temp_dir("regions-xmp-orientation");
+    let file = src.join("p.jpg");
+    let packet = STORED_FRAME_REGIONS.replace(r#"rdf:about="""#, r#"rdf:about="" xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:Orientation="6""#);
+    let img = lightcraft_raster::Rgba8::from_fn(32, 24, |x, y| [(x * 7) as u8, (y * 9) as u8, 90, 255]);
+    // an Exif that states the size as stored (32 × 24, as cameras do) and no orientation
+    let exif = {
+        use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
+        let mut sub = IfdBuilder::new();
+        sub.set(t::PIXEL_X_DIMENSION, Value::Long(vec![32]));
+        sub.set(t::PIXEL_Y_DIMENSION, Value::Long(vec![24]));
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set_child(t::EXIF_IFD, sub);
+        [b"Exif\0\0".as_slice(), &TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()].concat()
+    };
+    let meta = lightcraft_codecs::EncodeMeta { exif: Some(&exif), xmp: Some(&packet), ..Default::default() };
+    std::fs::write(&file, lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &meta).unwrap())
+        .unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let boxes = |s: &Session, when: &str| {
+        let p = s.catalog.photo(id).unwrap();
+        assert_eq!((p.width, p.height), (32, 24), "{when}: shown as stored");
+        assert_eq!(p.meta.regions.len(), 1, "{when}");
+        let r = p.meta.regions[0].rect;
+        [r.x0, r.y0, r.x1, r.y1]
+    };
+    let want = [0.2, 0.325, 0.3, 0.475];
+    let close = |got: [f64; 4]| got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-9);
+    let imported = boxes(&s, "imported");
+    assert!(close(imported), "imported: the box was turned by an orientation the Exif doesn't state: {imported:?}");
+    let read = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(read["failed"], json!([]), "{read}");
+    let again = boxes(&s, "read again");
+    assert!(close(again), "read again: {again:?}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// Review of #2857 (P2): a MEF keeps orientation on its raw IFD, not IFD0. Import turns face boxes by the decoder's
+/// orientation; Read Metadata from File must use the same source, or the boxes go back to the stored frame and
+/// Synchronize Folder reports changes every pass. The sidecar has no `tiff:Orientation`.
+#[test]
+fn a_raws_decoder_orientation_turns_stored_frame_regions_on_import_and_reread() {
+    let src = temp_dir("regions-mef-orientation");
+    let file = src.join("p.mef");
+    // 16 × 6 CFA strip, orientation 6 on the raw IFD only (IFD0 has none) — same shape as `lightcraft_raw`'s MEF fixture.
+    let px: Vec<u16> = (0..16 * 6).map(|i| (i * 41 % 4096) as u16).collect();
+    let strip: Vec<u8> = px.chunks(2).flat_map(|p| [(p[0] >> 4) as u8, ((p[0] & 15) << 4) as u8 | (p[1] >> 8) as u8, p[1] as u8]).collect();
+    {
+        use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+        let mut raw = IfdBuilder::new();
+        raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
+        raw.set(t::IMAGE_WIDTH, Value::Long(vec![16]));
+        raw.set(t::IMAGE_LENGTH, Value::Long(vec![6]));
+        raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![12]));
+        raw.set(t::COMPRESSION, Value::Short(vec![1]));
+        raw.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::CFA]));
+        raw.set(t::ORIENTATION, Value::Short(vec![6]));
+        raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
+        raw.set(t::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 1, 2]));
+        raw.set_image(ImageData::Strips { rows_per_strip: 6, strips: vec![strip] });
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::MAKE, Value::Ascii("Mamiya-OP Co.,Ltd.".into()));
+        ifd0.set(t::MODEL, Value::Ascii("MAMIYA ZD".into()));
+        ifd0.add_sub_ifd(raw);
+        std::fs::write(&file, TiffWriter::new(ByteOrder::Big, false).write(&[ifd0]).unwrap()).unwrap();
+    }
+    assert!(lightcraft_meta::extract(&std::fs::read(&file).unwrap()).orientation.is_none(), "IFD0 states no orientation");
+    assert_eq!(
+        lightcraft_raw::probe_info(&std::fs::read(&file).unwrap()).unwrap().orientation,
+        lightcraft_meta::Orientation::Rotate90,
+        "decoder reads the raw IFD"
+    );
+    let packet = STORED_FRAME_REGIONS.replace(r#"stDim:w="32" stDim:h="24""#, r#"stDim:w="16" stDim:h="6""#);
+    std::fs::write(src.join("p.xmp"), packet).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let boxes = |s: &Session, when: &str| {
+        let p = s.catalog.photo(id).unwrap();
+        assert_eq!((p.width, p.height), (6, 16), "{when}: upright from orientation 6");
+        assert_eq!(p.meta.regions.len(), 1, "{when}");
+        let r = p.meta.regions[0].rect;
+        [r.x0, r.y0, r.x1, r.y1]
+    };
+    let imported = boxes(&s, "imported");
+    // Without the decoder orientation on re-read, readMetadataFromFile puts the box back to the stored-frame coords.
+    let read = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(read["failed"], json!([]), "{read}");
+    let again = boxes(&s, "read again");
+    assert_eq!(imported, again, "import and re-read must agree: imported={imported:?} again={again:?}");
+    let stored = [0.2, 0.325, 0.3, 0.475]; // STORED_FRAME_REGIONS centre/size as x0,y0,x1,y1 for 0.25,0.4,0.1,0.15
+    assert!(
+        imported.iter().zip(stored).any(|(g, w)| (g - w).abs() > 1e-6),
+        "imported boxes should have been turned off the stored frame: {imported:?}"
+    );
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A raw LightCraft can't decode: a TIFF whose first IFD holds Exif orientation 6, a 40 × 30 JPEG and `packet`.
+fn turned_preview_only_raw(packet: &str) -> Vec<u8> {
+    let img = lightcraft_raster::Rgba8::from_fn(40, 30, |x, y| [(x * 6) as u8, (y * 8) as u8, 90, 255]);
+    let jpeg = lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &Default::default()).unwrap();
+    let data = 8 + 2 + 4 * 12 + 4;
+    let (jpeg_len, packet_at) = (u32::try_from(jpeg.len()).unwrap(), u32::try_from(data + jpeg.len()).unwrap());
+    let mut f = b"II*\0\x08\0\0\0\x04\0".to_vec();
+    for (tag, kind, count, value) in [(274u16, 3u16, 1, 6), (513, 4, 1, data as u32), (514, 4, 1, jpeg_len), (700, 1, packet.len() as u32, packet_at)]
+    {
+        f.extend(tag.to_le_bytes());
+        f.extend(kind.to_le_bytes());
+        f.extend(u32::to_le_bytes(count));
+        f.extend(u32::to_le_bytes(value));
+    }
+    f.extend([0; 4]);
+    f.extend(jpeg);
+    f.extend(packet.as_bytes());
+    f
+}
+
+/// A sidecar with no `mwg-rs:Regions` leaves the boxes read from the file itself, and a raw's Exif may state no pixel
+/// size. A size only its XMP states, of the upright photo, has the shape of boxes drawn on it upright: they stay put.
+#[test]
+fn a_size_only_a_raws_xmp_states_leaves_upright_regions_as_written() {
+    let src = temp_dir("regions-xmp-size");
+    let file = src.join("p.iiq");
+    let upright_size = r#"rdf:about="" xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:ImageWidth="24" tiff:ImageLength="32""#;
+    let packet =
+        STORED_FRAME_REGIONS.replace(r#"stDim:w="32" stDim:h="24""#, r#"stDim:w="24" stDim:h="32""#).replace(r#"rdf:about="""#, upright_size);
+    std::fs::write(&file, turned_preview_only_raw(&packet)).unwrap();
+    std::fs::write(
+        src.join("p.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="2"/></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+    let p = s.catalog.photo(only(&s)).unwrap();
+    assert!(p.preview_only.is_some() && (p.width, p.height) == (30, 40), "{:?} {}x{}", p.preview_only, p.width, p.height);
+    assert_eq!(p.rating, 2, "the sidecar was read");
+    assert_eq!(p.meta.regions.len(), 1);
+    let r = p.meta.regions[0].rect;
+    let got = [r.x0, r.y0, r.x1, r.y1];
+    assert!(got.iter().zip([0.2, 0.325, 0.3, 0.475]).all(|(g, w)| (g - w).abs() < 1e-9), "{got:?}");
     let _ = std::fs::remove_dir_all(&src);
 }
 
@@ -1572,6 +1889,39 @@ fn files_sharing_a_stem_get_their_own_sidecars() {
     s.execute("photo.rate", &json!({"ids": [j.0, p.0], "rating": 0})).unwrap();
     s.execute("photo.readMetadataFromFile", &json!({"ids": [j.0, p.0]})).unwrap();
     assert_eq!((s.catalog.photo(j).unwrap().rating, s.catalog.photo(p).unwrap().rating), (2, 5));
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// A file that shares its stem with another catalogued file never reads the stem sidecar the
+/// other one owns, whichever naming the library uses (issue #1523).
+#[test]
+fn a_non_owner_does_not_read_its_siblings_stem_sidecar() {
+    let src = temp_dir("stem-read");
+    let lib = temp_dir("stem-read-lib");
+    write_png(&src.join("IMG_1.png"), 1);
+    let img = lightcraft_raster::Rgba8::from_fn(40, 24, |x, y| [(x * 6) as u8, (y * 9) as u8, 7, 255]);
+    let jpg =
+        crate::export::encode_image(&img, &crate::export::ExportOptions { format: crate::export::ExportFormat::Jpeg, ..Default::default() }).unwrap();
+    std::fs::write(src.join("IMG_1.jpg"), jpg).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = |s: &Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().id;
+    let (j, p) = (id(&s, "IMG_1.jpg"), id(&s, "IMG_1.png"));
+    s.execute("photo.rate", &json!({"ids": [j.0], "rating": 2})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [j.0]})).unwrap();
+    assert!(src.join("IMG_1.xmp").is_file());
+    assert!(!src.join("IMG_1.png.xmp").exists());
+    for naming in [crate::sidecar::SidecarNaming::Stem, crate::sidecar::SidecarNaming::Full] {
+        s.xmp.naming = naming;
+        // the owner reads its packet; the other file has none of its own
+        assert!(s.read_sidecar_op(j).unwrap().is_some(), "{naming:?}");
+        assert!(s.read_sidecar_op(p).unwrap().is_none(), "{naming:?}");
+        let (jpg_file, png_file) = (src.join("IMG_1.jpg"), src.join("IMG_1.png"));
+        assert_eq!(s.sidecar_lookup(j).find(&jpg_file.to_string_lossy()), Some(src.join("IMG_1.xmp")), "{naming:?}");
+        assert_eq!(s.sidecar_lookup(p).find(&png_file.to_string_lossy()), None, "{naming:?}");
+    }
     let _ = std::fs::remove_dir_all(&src);
     let _ = std::fs::remove_dir_all(&lib);
 }
