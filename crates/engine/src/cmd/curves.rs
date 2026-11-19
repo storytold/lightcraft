@@ -311,6 +311,13 @@ fn import_presets(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, "missing `path` / `paths`"));
     }
     let (mut imported, mut failed) = (Vec::new(), Vec::new());
+    // the user presets by name, kept up to date: a file of many presets replaces or adds each
+    // without a scan of all the others
+    // (the first of two same-named presets, as `upsert` and the lookups find it)
+    let mut by_name: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (i, x) in s.curve_presets.iter().enumerate() {
+        by_name.entry(x.name.to_ascii_lowercase()).or_insert(i);
+    }
     for f in &paths {
         match std::fs::read(f).map_err(|e| e.to_string()).and_then(|b| parse_file(&b)) {
             Ok(list) => {
@@ -321,7 +328,13 @@ fn import_presets(s: &mut Session, p: &Value) -> Result<Value> {
                         preset.name = format!("{} (imported)", preset.name);
                     }
                     imported.push(preset.name.clone());
-                    upsert(s, preset);
+                    match by_name.get(&preset.name.to_ascii_lowercase()).and_then(|&i| s.curve_presets.get_mut(i)) {
+                        Some(x) => *x = preset,
+                        None => {
+                            by_name.insert(preset.name.to_ascii_lowercase(), s.curve_presets.len());
+                            s.curve_presets.push(preset);
+                        }
+                    }
                 }
             }
             Err(e) => failed.push(json!([f, e])),
