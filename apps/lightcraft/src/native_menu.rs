@@ -198,13 +198,6 @@ fn sync_needed(focus: bool, capturing: bool, synced_focus: bool, synced_capturin
     focus != synced_focus || capturing != synced_capturing || pending
 }
 
-/// Whether an item for command `cmd` with shortcut `sc` keeps its native accelerator: none while a
-/// shortcut is being recorded, none for the keys a focused text field needs, and none for the
-/// commands whose keys mean something else here (`shortcuts::native_yields`, e.g. ⌘C in Masking).
-fn keeps_accelerator(cmd: &str, sc: &str, text_focus: bool, capturing: bool, yields: &[&str]) -> bool {
-    !(capturing || (text_focus && yields_to_text(sc)) || yields.contains(&cmd))
-}
-
 /// The three submenu calls a swap needs, so the failure paths can be tested without a main-thread
 /// `muda::Menu`.
 trait SwapTarget {
@@ -241,9 +234,10 @@ fn swap_item<T: SwapTarget + ?Sized>(target: &T, old: &T::Row, new: &T::Row, pos
     false
 }
 
-/// The accelerator a native item has ([`keeps_accelerator`]).
-fn wanted_accelerator(accel: Option<Accelerator>, cmd: &str, sc: &str, text_focus: bool, capturing: bool, yields: &[&str]) -> Option<Accelerator> {
-    if keeps_accelerator(cmd, sc, text_focus, capturing, yields) { accel } else { None }
+/// The accelerator a native item has: none while a shortcut is being recorded, and none for the
+/// keys a focused text field needs.
+fn wanted_accelerator(accel: Option<Accelerator>, sc: &str, text_focus: bool, capturing: bool) -> Option<Accelerator> {
+    if capturing || (text_focus && yields_to_text(sc)) { None } else { accel }
 }
 
 pub struct NativeMenu {
@@ -263,8 +257,6 @@ pub struct NativeMenu {
     capturing: bool,
     /// An item's native accelerator is not the wanted one (its swap or accelerator call failed): sync again next frame.
     accelerators_pending: bool,
-    /// The commands whose accelerators were last given up to the app (`shortcuts::native_yields`).
-    yields: Vec<&'static str>,
 }
 
 /// `Cmd+Shift+Z` → a muda accelerator (`None` for keys we leave to egui, e.g. Escape).
@@ -449,7 +441,6 @@ impl NativeMenu {
             text_focus: false,
             capturing: false,
             accelerators_pending: false,
-            yields: Vec::new(),
         };
         m.rebuild(app);
         app.native_menu = true;
@@ -542,7 +533,6 @@ impl NativeMenu {
         }
         self.text_focus = false;
         self.capturing = false;
-        self.yields = Vec::new();
         self.accelerators_pending = false;
         self.publish_shortcuts(app);
     }
@@ -599,9 +589,7 @@ impl NativeMenu {
 
     /// Tell the egui shortcut handler which shortcuts the menu bar currently owns.
     fn publish_shortcuts(&self, app: &mut LightcraftApp) {
-        // (an item whose key means something else here leaves it to the app)
-        let installed =
-            self.items.values().filter(|i| i.accel.is_some() && !self.yields.contains(&i.cmd.as_str())).filter_map(|i| i.shortcut.as_deref());
+        let installed = self.items.values().filter(|i| i.accel.is_some()).filter_map(|i| i.shortcut.as_deref());
         // (none while the keymap editor records a shortcut: every key goes to it)
         app.native_shortcuts = if self.capturing { HashSet::new() } else { owned_by_menu(installed, self.text_focus) };
         app.native_shortcuts.insert(SETTINGS_KEY.to_string());
@@ -643,18 +631,16 @@ impl NativeMenu {
 
         let focus = ctx.egui_wants_keyboard_input();
         let capturing = app.recording_shortcut.is_some();
-        let yields = lightcraft_ui_egui::shortcuts::native_yields(app);
-        if sync_needed(focus, capturing, self.text_focus, self.capturing, self.accelerators_pending) || yields != self.yields {
+        if sync_needed(focus, capturing, self.text_focus, self.capturing, self.accelerators_pending) {
             self.text_focus = focus;
             self.capturing = capturing;
-            self.yields = yields;
             let mut pending = false;
             for it in self.items.values_mut().chain(self.app_items.iter_mut()) {
                 let Some(sc) = it.shortcut.as_deref() else { continue };
                 if it.accel.is_none() {
                     continue;
                 }
-                let want = wanted_accelerator(it.accel, &it.cmd, sc, focus, capturing, &self.yields);
+                let want = wanted_accelerator(it.accel, sc, focus, capturing);
                 it.set_accelerator(want);
                 pending |= it.current != want;
             }
@@ -833,31 +819,22 @@ mod tests {
     }
 
     #[test]
-    fn a_key_with_another_meaning_here_is_left_to_the_app() {
-        // in Masking ⌘C copies the selected mask: the menu item gives up ⌘C, its click still copies settings
-        let y = ["develop.copy"];
-        assert!(!keeps_accelerator("develop.copy", "Cmd+C", false, false, &y));
-        assert!(keeps_accelerator("develop.paste", "Cmd+V", false, false, &y), "only the commands named");
-        assert!(keeps_accelerator("develop.copy", "Cmd+C", false, false, &[]), "elsewhere the menu keeps it");
-    }
-
-    #[test]
     fn accelerators_yield_to_text_focus_and_shortcut_recording() {
         let g = accelerator("G");
         let cmd_s = accelerator("Cmd+S");
-        assert_eq!(wanted_accelerator(g, "app.test", "G", false, false, &[]), g);
-        assert_eq!(wanted_accelerator(g, "app.test", "G", true, false, &[]), None, "typing a G in a field");
-        assert_eq!(wanted_accelerator(cmd_s, "app.test", "Cmd+S", true, false, &[]), cmd_s, "⌘S still saves while typing");
-        assert_eq!(wanted_accelerator(cmd_s, "app.test", "Cmd+S", false, true, &[]), None, "the editor records the key");
-        assert_eq!(wanted_accelerator(cmd_s, "app.test", "Cmd+S", true, true, &[]), None, "recording wins over typing");
+        assert_eq!(wanted_accelerator(g, "G", false, false), g);
+        assert_eq!(wanted_accelerator(g, "G", true, false), None, "typing a G in a field");
+        assert_eq!(wanted_accelerator(cmd_s, "Cmd+S", true, false), cmd_s, "⌘S still saves while typing");
+        assert_eq!(wanted_accelerator(cmd_s, "Cmd+S", false, true), None, "the editor records the key");
+        assert_eq!(wanted_accelerator(cmd_s, "Cmd+S", true, true), None, "recording wins over typing");
         // the application menu's Settings… and Quit are tracked like the other items
         for sc in [SETTINGS_KEY, "Cmd+Q"] {
             let a = accelerator(sc);
             assert!(a.is_some());
-            assert_eq!(wanted_accelerator(a, "app.test", sc, true, false, &[]), a, "{sc} stays while typing");
-            assert_eq!(wanted_accelerator(a, "app.test", sc, false, true, &[]), None, "{sc} goes while recording");
+            assert_eq!(wanted_accelerator(a, sc, true, false), a, "{sc} stays while typing");
+            assert_eq!(wanted_accelerator(a, sc, false, true), None, "{sc} goes while recording");
         }
-        assert_eq!(wanted_accelerator(None, "app.test", "Escape", false, false, &[]), None, "no accelerator stays none");
+        assert_eq!(wanted_accelerator(None, "Escape", false, false), None, "no accelerator stays none");
     }
 
     /// A submenu of numbers whose calls can be made to fail, to run `swap_item`'s failure paths.

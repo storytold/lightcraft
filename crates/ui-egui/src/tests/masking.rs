@@ -2341,13 +2341,26 @@ fn cmd_c_and_cmd_v_copy_and_paste_the_selected_mask_while_masking() {
 }
 
 #[test]
-fn the_native_menu_leaves_cmd_c_and_cmd_v_to_masking_only_when_they_mean_the_mask() {
+fn in_masking_the_menus_put_cmd_c_and_cmd_v_on_copy_and_paste_mask() {
+    use crate::menus::menubar::{MenuNode, menu_bar};
+    fn key_of(nodes: &[MenuNode], want: &str) -> Option<Option<String>> {
+        nodes.iter().find_map(|n| match n {
+            MenuNode::Item { id, shortcut, .. } if id == want => Some(shortcut.clone()),
+            MenuNode::Submenu { children, .. } => key_of(children, want),
+            _ => None,
+        })
+    }
+    let keys = |h: &Headless| {
+        let bar: Vec<MenuNode> = menu_bar(&h.app).into_iter().flat_map(|(_, v)| v).collect();
+        ["develop.copy", "mask.copy", "develop.paste", "mask.paste"].map(|id| key_of(&bar, id).flatten())
+    };
     let mut h = detail("panel.masking");
-    assert!(crate::shortcuts::native_yields(&h.app).is_empty(), "no mask, nothing copied: the menu keeps ⌘C / ⌘V");
+    let (c, v) = (Some("Cmd+C".to_string()), Some("Cmd+V".to_string()));
+    assert_eq!(keys(&h), [c.clone(), None, v.clone(), None], "no mask: the settings keep ⌘C / ⌘V");
     exec(&mut h, "mask.add", json!({"kind": "radial"}));
-    assert_eq!(crate::shortcuts::native_yields(&h.app), vec!["develop.copy"]);
+    assert_eq!(keys(&h), [None, c.clone(), v.clone(), None], "a mask selected: ⌘C copies it");
     exec(&mut h, "mask.copy", json!({}));
-    assert_eq!(crate::shortcuts::native_yields(&h.app), vec!["develop.copy", "develop.paste"]);
+    assert_eq!(keys(&h), [None, c.clone(), None, v.clone()], "a mask copied: ⌘V pastes it");
     exec(&mut h, "panel.edit", json!({}));
-    assert!(crate::shortcuts::native_yields(&h.app).is_empty(), "outside Masking they copy settings");
+    assert_eq!(keys(&h), [c, None, v, None], "outside Masking the settings have them again");
 }
