@@ -73,7 +73,8 @@ pub struct Services {
     /// Open dialog for a monitor ICC profile (`.icc` / `.icm`; Settings ▸ Display; desktop only).
     pub pick_display_profile: Option<PickFiles>,
     /// The profile of the screen showing the window, used while none is chosen in Settings ▸
-    /// Display (macOS, whose windows aren't colour-managed: issue #787).
+    /// Display: macOS's screen profile (its windows aren't colour-managed: issue #787), colord's on
+    /// Linux, and on Windows the monitor's (none while Windows colour-manages the desktop itself).
     pub screen_profile: Option<ScreenProfileFn>,
     /// The system's Reduce Motion setting (macOS), followed while Settings ▸ Interface ▸ Reduce motion
     /// has not been changed by the user; read at most once a second, on frames the app draws (an idle

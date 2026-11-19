@@ -291,35 +291,20 @@ pub fn rows_between(rows: &[GridRow], top: f32, bottom: f32) -> &[GridRow] {
 }
 
 fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
     let (generation, ids) = app.session.visible_shared();
     // header: source title + count
     let sel_n = app.session.selection.ids.len();
     let chips = lightcraft_engine::filter_chips(&app.session.filter, &app.session.catalog);
     let total = app.session.source_total();
     let counted = super::chips::count_text(ids.len(), total, !chips.is_empty());
-    let cnt = if sel_n > 1 { crate::i18n::tr_format!("{sel_n} selected · {counted}", counted = counted, sel_n = sel_n) } else { counted };
+    let cnt = if sel_n > 0 { crate::i18n::tr_format!("{sel_n} selected · {counted}", counted = counted, sel_n = sel_n) } else { counted };
     match app.session.browse.clone().filter(|_| app.session.source == lightcraft_engine::LibrarySource::Folder) {
         Some(b) => {
             let local = app.caches.grid.local(&app.session.catalog, &ids, generation);
             folder_header(app, ui, &b, &ids, local, &cnt);
         }
         None => {
-            let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover());
-            ui.painter().rect_filled(hr, 0.0, t.canvas);
-            let full = crate::i18n::source_title(&app.session);
-            let count_w = ui.painter().layout_no_wrap(cnt.clone(), t.font(12.5), t.text_dim).size().x;
-            // the title gives way to the count: a long album or folder name is trimmed, in full on hover
-            let room = (hr.width() - 20.0 - count_w - 36.0).max(0.0);
-            let font = t.semibold(17.0);
-            let title = crate::widgets::elide_head(&full, room, |s| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text).size().x);
-            let title_rect = ui.painter().text(pos2(hr.left() + 20.0, hr.center().y), Align2::LEFT_CENTER, &title, font, t.text);
-            let count_rect = ui.painter().text(pos2(hr.right() - 20.0, hr.center().y), Align2::RIGHT_CENTER, cnt, t.font(12.5), t.text_dim);
-            crate::widgets::register(ui, "grid:title", title_rect);
-            crate::widgets::register(ui, "grid:count", count_rect);
-            if title != full {
-                ui.interact(title_rect, ui.scope_id().with("grid-title"), Sense::hover()).on_hover_text(full);
-            }
+            library_header(app, ui, &cnt);
         }
     }
     super::chips::show(app, ui, &chips);
@@ -806,15 +791,15 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     } else {
         r
     };
-    paint_cell_thumbnail(app, p, &t, id, img_rect, ThumbFlags { square, state, onscreen, ppp });
+    let photo_rect = paint_cell_thumbnail(app, p, &t, id, img_rect, ThumbFlags { square, state, onscreen, ppp });
     // labels and badges
     paint_cell_caption(app, p, &t, &photo, r, square);
-    paint_cell_badges(app, p, &t, &photo, img_rect, BadgeFlags { square, selected, hovered: resp.hovered() });
+    paint_cell_badges(app, p, &t, &photo, photo_rect, BadgeFlags { square, selected, hovered: resp.hovered() });
     if let Some(name) = &photo.copy_name {
         paint_copy_tag(p, &t, name, img_rect, square);
     }
     if let Some(why) = &photo.preview_only {
-        paint_preview_pill(ui, p, &t, id, why, img_rect);
+        paint_preview_pill(ui, p, &t, id, why, photo_rect);
     }
     if photo.flag == Flag::Reject {
         p.rect_filled(img_rect, 0.0, Color32::from_black_alpha(110));
@@ -838,7 +823,7 @@ pub(crate) fn cell_description(app: &LightcraftApp, photo: &lightcraft_catalog::
     spoken
 }
 
-fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, id: PhotoId, img_rect: Rect, flags: ThumbFlags) {
+fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, id: PhotoId, img_rect: Rect, flags: ThumbFlags) -> Rect {
     let ThumbFlags { square, state, onscreen, ppp } = flags;
     let size = thumb_px(img_rect.width().max(img_rect.height()), ppp);
     request_thumb(app, id, size, if onscreen { 10 } else { 5 });
@@ -846,8 +831,9 @@ fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, 
         let [tw, th] = tex.size;
         // Preserve the decoded preview's ratio when it differs from the catalog dimensions.
         let fit = super::detail::fit_texture_rect(img_rect, [tw, th]);
-        p.image(tex.tex.id(), fit, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        p.image(tex.id(), fit, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         selection_ring(p, t, fit, state);
+        fit
     } else {
         let ph = img_rect.shrink(if square { 20.0 } else { 0.0 });
         p.rect_filled(ph, 0.0, t.skeleton);
@@ -857,6 +843,7 @@ fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, 
             // unreadable / missing file
             p.text(ph.center(), Align2::CENTER_CENTER, "!", t.semibold(18.0), t.text);
         }
+        ph
     }
 }
 
@@ -890,14 +877,22 @@ fn paint_cell_caption(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, photo:
     }
 }
 
-fn paint_cell_badges(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, photo: &lightcraft_catalog::Photo, img_rect: Rect, flags: BadgeFlags) {
+/// The 24-pixel band the badges sit in, on the photo itself: a portrait's fitted rect is
+/// narrower than the cell's image area and a landscape's is shorter, so a band sized from
+/// the image area sticks out past the photo and crosses its selection frame (#3601). A photo
+/// shorter than the band keeps its own top edge.
+fn photo_badge_bar(photo_rect: Rect) -> Rect {
+    Rect::from_min_max(pos2(photo_rect.left(), (photo_rect.bottom() - 24.0).max(photo_rect.top())), photo_rect.right_bottom())
+}
+
+fn paint_cell_badges(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, photo: &lightcraft_catalog::Photo, photo_rect: Rect, flags: BadgeFlags) {
     let BadgeFlags { square, selected, hovered } = flags;
     let show_badges = match app.ui.settings.grid_badges {
         crate::state::GridBadges::Auto => hovered || selected || photo.rating > 0 || photo.flag != Flag::None || photo.label.is_some(),
         crate::state::GridBadges::Always => true,
         crate::state::GridBadges::Never => false,
     };
-    let badge_bar = Rect::from_min_max(pos2(img_rect.left(), img_rect.bottom() - 24.0), img_rect.right_bottom());
+    let badge_bar = photo_badge_bar(photo_rect);
     if !square && photo.label.is_some() {
         // Justified photos fill the whole cell, so the label shows as a translucent tinted footer
         // over the photo's bottom edge (opaque, it would hide 24 px of every labelled photo).
@@ -944,11 +939,11 @@ fn paint_copy_tag(p: &egui::Painter, t: &Tokens, name: &str, img_rect: Rect, squ
     p.galley(pos2(br.left() + 22.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
 }
 
-fn paint_preview_pill(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId, why: &str, img_rect: Rect) {
-    // a raw shown from its embedded JPEG: a small amber "Preview" pill at the image's bottom
+fn paint_preview_pill(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId, why: &str, photo_rect: Rect) {
+    // a raw shown from its embedded JPEG: a small amber "Preview" pill at the photo's bottom
     // left, above the badge bar (always shown: it changes what editing does)
     let g = p.layout_no_wrap(crate::i18n::tr("Preview").into(), t.semibold(9.5), Color32::WHITE);
-    let at = pos2(img_rect.left() + 6.0, img_rect.bottom() - 30.0 - 16.0);
+    let at = pos2(photo_rect.left() + 6.0, photo_rect.bottom() - 30.0 - 16.0);
     let br = Rect::from_min_size(at, vec2(g.size().x + 24.0, 16.0));
     p.rect_filled(br, 8.0, Color32::from_black_alpha(170));
     paint(p, Rect::from_center_size(pos2(br.left() + 9.0, br.center().y), vec2(12.0, 12.0)), Icon::Info, t.caution);
@@ -1004,6 +999,35 @@ struct BadgeFlags {
     square: bool,
     selected: bool,
     hovered: bool,
+}
+
+/// The header of a library view (All Photos, an album, a library folder…): the source's title and
+/// the photo count.
+fn library_header(app: &LightcraftApp, ui: &mut egui::Ui, cnt: &str) -> Rect {
+    let t = Tokens::get(ui.ctx());
+    let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover());
+    ui.painter().rect_filled(hr, 0.0, t.canvas);
+    let full = crate::i18n::source_title(&app.session);
+    // the title gives way to the count: a long album or folder name is trimmed, in full on hover;
+    // a count wider than all but the title's ellipsis (a narrow centre pane) is cut, as a Local
+    // folder's is, and reads in full on hover
+    let count_w = ui.painter().layout_no_wrap(cnt.to_owned(), t.font(12.5), t.text_dim).size().x.ceil().min((hr.width() - 96.0).max(0.0).floor());
+    let room = (hr.width() - 20.0 - count_w - 36.0).max(0.0);
+    let font = t.semibold(17.0);
+    let title = crate::widgets::elide_head(&full, room, |s| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text).size().x);
+    let title_rect = ui.painter().text(pos2(hr.left() + 20.0, hr.center().y), Align2::LEFT_CENTER, &title, font, t.text);
+    let count_box = Rect::from_min_max(pos2(hr.right() - 20.0 - count_w, hr.top()), pos2(hr.right() - 20.0, hr.bottom()));
+    let label = egui::Label::new(egui::RichText::new(cnt).font(t.font(12.5)).color(t.text_dim)).truncate().show_tooltip_when_elided(false);
+    let count = ui
+        .scope_builder(egui::UiBuilder::new().max_rect(count_box).layout(egui::Layout::right_to_left(egui::Align::Center)), |ui| ui.add(label))
+        .inner;
+    crate::widgets::register(ui, "grid:title", title_rect);
+    crate::widgets::register(ui, "grid:count", count.rect);
+    count.on_hover_text(cnt);
+    if title != full {
+        ui.interact(title_rect, ui.scope_id().with("grid-title"), Sense::hover()).on_hover_text(full);
+    }
+    hr
 }
 
 /// The header of a Local folder view: the path as a breadcrumb (each part opens that folder),
@@ -1315,18 +1339,11 @@ fn context_menu_open_and_edit(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Ph
             }
         });
     });
-    if ui.button(crate::i18n::tr("Find Similar Photos")).clicked() {
-        match app.run("library.findSimilar", json!({"id": id.0})) {
-            Ok(r) => {
-                let n = r["photos"].as_array().map_or(0, Vec::len);
-                app.ui.view = crate::state::ViewMode::PhotoGrid;
-                app.toast(
-                    ui.ctx(),
-                    crate::i18n::tr_format!("{n} similar photo{} · View ▸ Clear Filters to see all", if n == 1 { "" } else { "s" }, n = n),
-                );
-            }
-            Err(e) => app.toast(ui.ctx(), e),
-        }
+    let can_search = lightcraft_engine::cmd::similar::no_search_running(&app.session).is_ok();
+    if ui.add_enabled(can_search, egui::Button::new(crate::i18n::tr("Find Similar Photos"))).clicked()
+        && let Err(e) = app.run("library.findSimilar", json!({"id": id.0}))
+    {
+        app.toast(ui.ctx(), e);
     }
     let live = super::compare::live(app, id);
     let set_reference = ui
@@ -1661,5 +1678,28 @@ mod tests {
         assert_eq!(resolve_group(GroupBy::Auto, 90.0), GroupBy::Year);
         assert_eq!(resolve_group(GroupBy::None, 220.0), GroupBy::None);
         assert_eq!(resolve_group(GroupBy::Year, 400.0), GroupBy::Year);
+    }
+
+    /// The badge band sits on the photo itself — a portrait's fitted rect is narrower than the
+    /// cell's image area, a landscape's is shorter — so it never sticks out past the photo or
+    /// crosses its selection frame (#3601).
+    #[test]
+    fn the_badge_band_stays_on_the_photo() {
+        let cell = Rect::from_min_size(pos2(10.0, 24.0), vec2(180.0, 180.0));
+        // A photo that fills the image area: the band is the usual 24 px footer
+        let full = photo_badge_bar(cell);
+        assert!((full.height() - 24.0).abs() < 0.01, "{full:?}");
+        assert!((full.bottom() - cell.bottom()).abs() < 0.01);
+        assert!((full.left() - cell.left()).abs() < 0.01 && (full.right() - cell.right()).abs() < 0.01);
+        // A portrait photo fitted inside it: the band is no wider than the photo
+        let portrait = Rect::from_min_size(pos2(cell.left() + 55.0, cell.top()), vec2(70.0, 180.0));
+        let bar = photo_badge_bar(portrait);
+        assert!(bar.left() >= portrait.left() && bar.right() <= portrait.right(), "{bar:?}");
+        assert!((bar.height() - 24.0).abs() < 0.01);
+        // A landscape photo shorter than the band: its own top edge, never a negative rect
+        let wide = Rect::from_min_size(pos2(cell.left(), cell.top() + 80.0), vec2(180.0, 20.0));
+        let bar = photo_badge_bar(wide);
+        assert!((bar.top() - wide.top()).abs() < 0.01, "{bar:?}");
+        assert!(bar.bottom() <= wide.bottom() + 0.01);
     }
 }

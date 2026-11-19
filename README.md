@@ -349,8 +349,8 @@ LightCraft is young and moving fast: **alpha**. **Where we honestly stand** (det
   casual use.** It's great for JPEG/DNG and most Sony / Panasonic /
   Fujifilm / Nikon / older-Canon raws on one machine; see [docs/raw-parity.md](docs/raw-parity.md) for your camera.
 - **The biggest gaps:**
-  - **camera colour calibration:** Sony, Nikon, Panasonic, Fujifilm and Canon CR3 raws have guarded estimates from their camera JPEGs, with built-in ILCA-99M2, ILCE-7CR, ILCE-7M4, ILCE-7RM5, X-H2S, X-T4, Nikon Z 6II, Z 8 and D5300 profiles; measured calibration is missing, and other raws or rejected fits retain a neutral matrix;
-  - **compressed Olympus raws and unsupported CR3 variants:** these use embedded JPEG previews when present. Fujifilm lossless/lossy compressed RAF now decodes sensor data; [verification and existing-library reload instructions](docs/raf-compression.md);
+  - **camera colour calibration:** Sony, Nikon, Panasonic, Fujifilm and Canon CR3 and CRW raws have guarded estimates from their camera JPEGs, with built-in Canon EOS D60, ILCA-99M2, ILCE-7CR, ILCE-7M4, ILCE-7RM5, X-H2S, X-T4, Nikon Z 6II, Z 8 and D5300 profiles; measured calibration covers one model so far (chart-measured matrices for the Canon EOS D60), and other raws or rejected fits retain a neutral matrix;
+  - **unsupported CR3 variants and Nikon High Efficiency NEFs:** these use embedded JPEG previews when present. Olympus compressed ORF is unsupported for sensor decoding and uses embedded JPEG previews when available ([docs/orf-compression.md](docs/orf-compression.md)); Fujifilm lossless/lossy compressed RAF now decodes sensor data; [verification and existing-library reload instructions](docs/raf-compression.md);
   - **AI quality and model setup:** Subject and Sky selection are classical heuristics; Object/Describe use an
     optional SAM 3 model. AI Denoise supports Bayer RAW with separately installed weights, while X-Trans and
     linear-RGB denoise and Super Resolution remain missing; see [AI masks](docs/ai-masks.md) and [AI Denoise](docs/denoise.md);
@@ -499,8 +499,7 @@ CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p lightcraft
 Without it LightCraft builds and runs the same, but Chinese and Japanese text have no glyphs. Fonts are never committed to this
 repo — what goes there is described in the [craft-fonts README](https://github.com/storytold/craft-fonts#readme).
 
-**Interface language:** **Edit → Language** (English, 简体中文, 繁體中文（台灣）, 日本語, Português (Brasil), Español, Deutsch, Русский, Français, Українська, Polski, Čeština, Italiano, ქართული, Svenska, Suomi, Bahasa Indonesia, Tiếng Việt) or **Settings → General →
-Language**; the choice applies immediately and persists. See [docs/localization.md](docs/localization.md).
+**Interface language:** **Settings → General → Language** (English, 简体中文, 繁體中文（台灣）, 日本語, Português (Brasil), Español, Deutsch, Русский, Français, Українська, Polski, Čeština, Italiano, ქართული, Svenska, Suomi, Bahasa Indonesia, Tiếng Việt); the choice applies immediately and persists. See [docs/localization.md](docs/localization.md).
 
 **Logs:** the desktop app writes its log to standard error and to `logs/lightcraft.log` in its settings folder
 (Linux `$XDG_CONFIG_HOME/lightcraft/logs/`, by default `~/.config/lightcraft/logs/`; macOS
