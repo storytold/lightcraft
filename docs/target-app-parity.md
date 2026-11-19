@@ -173,7 +173,7 @@ than the user's own.
 |---|---:|---:|
 | Import and library | 18% | 80% |
 | Cull: views, compare, zoom, ratings | 12% | 70% |
-| Raw decoding for their camera | 27% | 95% (measured use-weighted share whose camera fully works, [raw-parity.md](raw-parity.md#by-use-estimated)) |
+| Raw decoding for their camera | 27% | 95% (measured use-weighted decoding coverage, [raw-parity.md](raw-parity.md#by-use-estimated)) |
 | Global develop adjustments | 15% | 70% |
 | Crop, geometry, lens corrections | 6% | 50% |
 | Masking (manual, subject / sky; no generative) | 8% | 45% |
@@ -201,7 +201,7 @@ basic sliders, crop, apply a preset, undo, export JPEGs.
 | Crop and straighten | 10% | 80% |
 | Presets and profiles | 8% | 80% |
 | Undo and history | 5% | 90% |
-| Their camera's raws: decode × default look | 10% | 71.3% (95% whose camera fully works × colour factor 0.75) |
+| Their camera's raws: decode × default look | 10% | 71.3% (95% decoding coverage × colour factor 0.75) |
 | Export JPEG | 10% | 85% |
 | **Weighted depth** | 100% | **78.2%** |
 
