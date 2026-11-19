@@ -1520,7 +1520,7 @@ dependencies = [
 [[package]]
 name = "craft-zip"
 version = "0.1.0"
-source = "git+https://github.com/dylanmtaylor/craft-libs?rev=74b1184ee6cf1936282d851af475664eebcf0f81#74b1184ee6cf1936282d851af475664eebcf0f81"
+source = "git+https://github.com/storytold/craft-libs?rev=5c496f6e962fcccd8ba91704994c4c06c2fc6a6f#5c496f6e962fcccd8ba91704994c4c06c2fc6a6f"
 dependencies = [
  "flate2",
  "thiserror 2.0.21",

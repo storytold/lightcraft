@@ -35,7 +35,7 @@ craft-window = { git = "https://github.com/storytold/craft-libs", rev = "23acc70
 craft-gainmap = { git = "https://github.com/storytold/craft-libs", rev = "23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3" }
 # PSD/PSB: the header, colour mode data and image resources (craft-libs#885).
 craft-psd = { git = "https://github.com/storytold/craft-libs", rev = "010702ee9b030844c852939095b1da0d0656a890" }
-craft-zip = { git = "https://github.com/dylanmtaylor/craft-libs", rev = "74b1184ee6cf1936282d851af475664eebcf0f81" }
+craft-zip = { git = "https://github.com/storytold/craft-libs", rev = "5c496f6e962fcccd8ba91704994c4c06c2fc6a6f" }
 jpeg-encoder = { version = "0.7", default-features = false, features = ["std"] }
 # internal
 lightcraft-denoise-core = { path = "crates/denoise-core" }
