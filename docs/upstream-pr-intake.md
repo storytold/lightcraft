@@ -1,6 +1,6 @@
 # Pulling upstream work: the intake runbook
 
-> **Last updated:** 2026-11-08 · **Change:** an intake PR merges when it is ready, in any order with other PRs, as
+> **Last updated:** 2026-11-17 · **Change:** `drift` reports waiting rows whose upstream PR moved. Previously: 2026-11-08, an intake PR merges when it is ready, in any order with other PRs, as
 > every round so far has; it is no longer held for a release. Previously: 2026-11-02, created (per-PR and per-commit
 > intake, one PR per round, release-gated; the merge routine is retired).
 
@@ -235,14 +235,16 @@ row `URGENT` in `Reason` and ask; do not decide it alone, and do not let an urge
 ```sh
 python3 tools/upstream_intake.py enumerate --since 2026-10-29 --out target/upstream/intake-2026-11-02.md
 python3 tools/upstream_intake.py check          # ledger schema, duplicates, missing refs/links
+python3 tools/upstream_intake.py drift --out target/upstream/drift.md   # waiting rows whose PR moved
 ```
 
 It never decides anything and never writes to the repository: it lists candidates, marks owned paths, and
 cross-references the ledger. Suggested next steps, in value order:
 
 1. **`cargo xtask upstream-prs`** — the same report as a workspace command so CI and agents share one implementation.
-2. **Head-drift detection** — `check` compares each row's `Upstream ref` with the live `headRefOid` and lists rows whose
-   PR changed after review (today that is a manual `gh` call per row).
+2. **Head-drift detection** — done (2026-11-17): `drift` lists the `PENDING`/`WATCH` rows whose PR merged, closed, was
+   approved, left draft or moved its head since review (`--all` adds `LEARN`/`ADOPT`). A daily local monitor runs it
+   and re-reads the movers; its reports land in `target/upstream/monitor/`.
 3. **Comment digest** — a per-row summary of unresolved human/CodeRabbit threads, so `PENDING` rows re-open with their
    open questions first.
 4. **A ledger merge helper** — one row per PR keyed by number, with the banded archives folded in, so a PR cannot appear

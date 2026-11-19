@@ -238,6 +238,15 @@ pub struct Duplicate {
     pub existing_deleted: bool,
 }
 
+/// Files an import's folder walk left out ([`Expansion::unreadable`], [`Expansion::unsupported`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Skipped {
+    /// Folders whose contents couldn't be listed.
+    pub unreadable: usize,
+    /// Files in the folders walked that are not a supported photo type (XMP sidecars not counted).
+    pub unsupported: usize,
+}
+
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ImportReport {
     pub imported: Vec<u64>,
@@ -265,6 +274,8 @@ pub struct ImportReport {
     pub scanned: usize,
     /// Photos whose metadata/develop settings were read from an XMP sidecar (or embedded XMP).
     pub sidecars: usize,
+    /// What the folder walk left out ([`Expansion`]), as `library.importPreview` reports it.
+    pub skipped: Skipped,
     /// Per-photo diagnostics from foreign XMP develop settings that could not be fully carried over.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<ImportWarning>,
@@ -343,7 +354,11 @@ pub fn import_defaults(p: &Photo) -> lcc_develop::DevelopSettings {
 /// fair stand-in)? Not when a default preset changed it on import. As Shot counts as As Shot
 /// whatever numbers it stores ([`Photo::develop_matches`]), as for [`Photo::is_edited`].
 pub fn has_import_look(p: &Photo) -> bool {
-    p.develop_matches(p.camera_defaults())
+    // Remove Hot Pixels doesn't count: raws imported since the box exists start with it on, older
+    // ones with it off, and the camera's JPEG is the picture as imported either way (upstream #4389).
+    let mut defaults = p.camera_defaults();
+    defaults.detail.nr_outliers = p.develop.detail.nr_outliers;
+    p.develop_matches(defaults)
 }
 
 /// [`has_import_look`], or the only change is the camera profile (colour calibration), such as the
@@ -1246,6 +1261,8 @@ pub struct Prepared {
     /// A Cancel left files of the batch undone (they have no item): the batch is not the whole of
     /// what was asked. A Cancel that came after the last file was prepared leaves this `false`.
     pub cut_short: bool,
+    /// What [`ImportJob::prepare`]'s folder walk left out.
+    pub skipped: Skipped,
     items: Vec<PreparedItem>,
 }
 
@@ -1397,16 +1414,23 @@ impl ImportJob {
     /// with the names and outcomes of one after another. Nothing in the catalog changes. Stops
     /// before the next file once `cancel` is set.
     pub fn prepare(&mut self, paths: &[String], cancel: &std::sync::atomic::AtomicBool) -> Prepared {
-        let files = self.expand(paths);
-        self.prepare_files(files, cancel)
+        let found = self.expand_report(paths);
+        let mut prepared = self.prepare_files(found.files, cancel);
+        prepared.skipped = Skipped { unreadable: found.unreadable, unsupported: found.unsupported };
+        prepared
     }
 
     /// Expand `paths` (folders recursively, the library's own folder skipped) into the files an
     /// import would handle; counted in [`ImportJob::total`].
     pub fn expand(&self, paths: &[String]) -> Vec<String> {
-        let files = expand(paths, self.lib_dir.as_deref());
-        self.total.fetch_add(files.len(), std::sync::atomic::Ordering::Relaxed);
-        files
+        self.expand_report(paths).files
+    }
+
+    /// [`ImportJob::expand`], with what the folder walk left out.
+    fn expand_report(&self, paths: &[String]) -> Expansion {
+        let found = expand_report(paths, self.lib_dir.as_deref(), crate::walk::Limits::default());
+        self.total.fetch_add(found.files.len(), std::sync::atomic::Ordering::Relaxed);
+        found
     }
 
     /// Whether `path` is copied or moved into the destination (else it is added where it is).
@@ -1458,7 +1482,7 @@ impl ImportJob {
         let library = self.look_up_library();
         let opts = self.opts.clone();
         let mode = self.mode;
-        let mut out = Prepared { scanned: files.len(), cut_short: false, items: Vec::new() };
+        let mut out = Prepared { scanned: files.len(), ..Default::default() };
         let mut todo = Vec::new();
         // browsed (Local) records whose files are copied or moved: the record follows its file
         let mut follow: HashMap<String, PhotoId> = HashMap::new();
@@ -1884,7 +1908,7 @@ fn trashed_file_is_gone(cat: &lcc_catalog::Catalog, id: PhotoId) -> bool {
 /// taken back.
 pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepared: Prepared) -> crate::Result<ImportReport> {
     let now = now.to_string();
-    let mut report = ImportReport { scanned: prepared.scanned, ..Default::default() };
+    let mut report = ImportReport { scanned: prepared.scanned, skipped: prepared.skipped, ..Default::default() };
     let mut ops = Vec::new();
     // Move: placed at the destination, sources untouched until the records are committed
     let mut placed: Vec<crate::import_move::Placed> = Vec::new();
@@ -2348,6 +2372,21 @@ mod tests_known;
 mod prepared_tests {
     use super::*;
 
+    /// The CLI's `calibrate` collects the extensions the profile fit reads
+    /// ([`crate::camera_profiles::CALIBRATION_EXTENSIONS`]): each must be an import extension too, so
+    /// a format the CLI calibrates can also be imported, and a typo cannot silently drop one (upstream #4284).
+    #[test]
+    fn calibration_extensions_are_import_extensions() {
+        let calibration = crate::camera_profiles::CALIBRATION_EXTENSIONS;
+        for ext in calibration {
+            assert!(EXTENSIONS.contains(ext), "{ext} is not an import extension");
+            assert_eq!(*ext, ext.to_lowercase(), "{ext} must be lower case");
+        }
+        let unique: std::collections::HashSet<_> = calibration.iter().collect();
+        assert_eq!(calibration.len(), unique.len(), "a duplicate extension would be walked twice");
+        assert!(!calibration.contains(&"dng"), "a DNG carries its own matrices and is not fitted to its preview");
+    }
+
     /// Nikon's merged pixel-shift NEFX is a raw the app decodes, whatever case its extension is in.
     #[test]
     fn nefx_files_are_supported_in_any_letter_case() {
@@ -2420,6 +2459,7 @@ mod prepared_tests {
         let mut prepared = Prepared {
             scanned: 2,
             cut_short: false,
+            skipped: Skipped::default(),
             items: vec![PreparedItem::Ready(Box::new(ready(&existing_path))), PreparedItem::Ready(Box::new(ready(&other_path)))],
         };
         prepared.revalidate_add(&s);

@@ -125,6 +125,7 @@
   "Page {n} (blank)": "第 {n} 页（空白）",
   "Page {page} of {pages}": "第 {page} 页，共 {pages} 页",
   "Panning back or zooming in again on an HDR edit shows it at once instead of rendering it again. Uses up to {need} MB of graphics memory on this screen.": "在 HDR 编辑中平移回来或再次放大时会立即显示，而无需重新渲染。在此屏幕上最多占用 {need} MB 显存。",
+  "Paste into {n} photo{}": "粘贴到 {n} 张照片{0:.0}",
   "Person {n}": "人物 {n}",
   "Photo {n} has no valid pixel-shift frame number": "照片 {n} 没有有效的像素偏移帧序号",
   "Photos in {folder} go into the collection “Camera Roll - this device's name”.": "{folder} 中的照片会放入收藏集“Camera Roll - 此设备名称”。",

@@ -1647,10 +1647,18 @@ impl Geometry {
 #[serde(default)]
 pub struct Crop {
     pub geometry: CropGeometry,
-    /// Locked aspect (w, h); None = free / original.
+    /// Locked aspect (w × 100, h × 100); None = free. "Original" is the photo's own size as
+    /// oriented ([`Crop::original_aspect`]).
     pub aspect: Option<(u32, u32)>,
     pub flip_h: bool,
     pub flip_v: bool,
+}
+
+impl Crop {
+    /// The "Original" aspect lock of a `w × h` photo (as oriented): its own size, in hundredths.
+    pub fn original_aspect(w: f64, h: f64) -> (u32, u32) {
+        ((w * 100.0) as u32, (h * 100.0) as u32)
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

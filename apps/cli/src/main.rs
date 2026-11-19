@@ -145,7 +145,7 @@ USAGE:
   {cli} controls [--json]   list every develop control id with its range
   {cli} calibrate [--max N] [--out DIR] FOLDERS/FILES…
       Fit a colour profile per camera model from raw files and their embedded camera JPEGs
-      (Sony ARW, Nikon NEF, Fujifilm RAF, Canon CR3/CR2, Panasonic RW2, Olympus ORF, Pentax PEF…): up to N files spread over the folders (default 300; 0 = all), pooled per
+      (Sony ARW, Nikon NEF/NRW, Canon CR2/CR3/CRW, Fujifilm RAF, Panasonic RW2/RWL, Olympus ORF, Pentax PEF, Samsung SRW, Minolta MRW, Epson ERF): up to N files spread over the folders (default 300; 0 = all), pooled per
       model, written as <model>.json to DIR (default: the profiles folder {app} reads,
       <config>/camera-profiles, or ${P}_CAMERA_PROFILES). Raws of a profiled model then
       take their colour from the profile and only their tone from their own JPEG.
@@ -360,7 +360,7 @@ fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>) {
     let is_raw = |p: &Path| {
         p.extension()
             .and_then(|e| e.to_str())
-            .is_some_and(|e| ["arw", "nef", "nrw", "raf", "cr3", "cr2", "rw2", "orf", "pef", "srw", "erf"].iter().any(|x| e.eq_ignore_ascii_case(x)))
+            .is_some_and(|e| lcc_engine::camera_profiles::CALIBRATION_EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)))
     };
     if path.is_file() {
         if is_raw(path) {
@@ -1454,6 +1454,33 @@ mod tests {
         assert_eq!(app_library_with(None, false, None), None);
         assert_eq!(library_arg("/some/dir").unwrap(), "/some/dir");
         let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+#[cfg(test)]
+mod raw_formats_tests {
+    use super::raw_files;
+
+    /// Every format whose camera JPEG the profile fit reads is collected, not only the ones the command was first
+    /// written for (upstream #4284: a folder of Leica RWLs or Canon CRWs found nothing).
+    #[test]
+    fn formats_the_profile_fit_reads_are_collected() {
+        let dir = std::env::temp_dir().join(format!("lcc-cli-raw-formats-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["a.RW2", "b.cr3", "c.ORF", "d.arw", "e.jpg", "f.rwl", "g.dng"] {
+            std::fs::write(dir.join(name), b"").unwrap();
+        }
+        let mut files = Vec::new();
+        raw_files(&dir, &mut files);
+        files.sort();
+        let names: Vec<_> = files.iter().filter_map(|p| p.file_name().and_then(|n| n.to_str())).collect();
+        assert_eq!(
+            names,
+            ["a.RW2", "b.cr3", "c.ORF", "d.arw", "f.rwl"],
+            "RW2, CR3, ORF and the Leica RWL variant carry usable camera JPEGs; a JPEG or DNG is not a calibration input"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

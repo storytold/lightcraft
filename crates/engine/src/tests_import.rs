@@ -4039,6 +4039,30 @@ fn import_preview_reports_what_the_scan_skipped() {
     let _ = std::fs::remove_dir_all(&deep);
 }
 
+/// Upstream issue #4319: `library.import` says what its folder walk left out, as `library.importPreview` does, so a
+/// script that imports a folder directly can tell a file that was skipped from one that is missing. A file named on its
+/// own is tried (and fails), never counted as skipped; XMP sidecars aren't counted.
+#[test]
+fn import_reports_what_the_folder_walk_skipped() {
+    let src = temp_dir("import-skipped");
+    write_png(&src.join("a.png"), 1);
+    write_png(&src.join("sub/b.png"), 2);
+    std::fs::write(src.join("a.xmp"), b"x").unwrap();
+    std::fs::write(src.join("notes.txt"), b"not a photo").unwrap();
+    std::fs::write(src.join("sub/readme.md"), b"x").unwrap();
+    let mut s = Session::new().with_fs();
+    let preview = s.execute("library.importPreview", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()], "mode": "add"})).unwrap();
+    assert_eq!(ids(&r, "imported"), 2, "{r}");
+    assert_eq!(r["skipped"], json!({"unreadable": 0, "unsupported": 2}), "notes.txt and readme.md are reported: {r}");
+    assert_eq!(r["skipped"], preview["skipped"], "the import and its preview agree");
+
+    let r = s.execute("library.import", &json!({"paths": [src.join("notes.txt").to_string_lossy()], "mode": "add"})).unwrap();
+    assert_eq!(r["failed"].as_array().map(Vec::len), Some(1), "a file named on its own is tried: {r}");
+    assert_eq!(r["skipped"], json!({"unreadable": 0, "unsupported": 0}), "{r}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// XMP sidecars are read with their photos, so they are not "skipped": the expansion, the scan and
 /// `library.importPreview` count them (in any letter case, in subfolders too) as nothing, and still
 /// count every other file that is not a photo.

@@ -379,6 +379,10 @@ pub struct CatalogPhoto {
     pub keywords: Vec<String>,
     pub history: Vec<Row>,
     pub snapshots: Vec<Row>,
+    /// The caption Lightroom shows, from its `AgLibraryIPTC` table: the cached XMP packet ([`CatalogPhoto::xmp`]) can
+    /// lack it (upstream #4293, issue #4043). Empty when the table has none.
+    #[serde(default)]
+    pub caption: String,
     /// Whether `path` may be looked at (derived when the catalog is read; not archived).
     #[serde(skip)]
     pub original: Original,
@@ -850,6 +854,12 @@ fn read_lightroom(path: &Path, reader: Reader, source_guard: SourceGuard, cancel
     };
     warnings.extend(metadata_warnings);
     done.fetch_add(1, Ordering::Relaxed);
+    // the caption each image has in Lightroom's own IPTC table (the cached XMP may not restate it)
+    let mut captions: HashMap<i64, String> = optional_table("AgLibraryIPTC", &mut warnings)?
+        .into_iter()
+        .filter(|r| !text(r, "caption").trim().is_empty())
+        .map(|r| (number(&r, "image"), text(&r, "caption").to_string()))
+        .collect();
     let keyword_rows: HashMap<_, _> = optional_table("AgLibraryKeyword", &mut warnings)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
     let mut keywords: HashMap<i64, Vec<String>> = HashMap::new();
     // each keyword's path is resolved once, however many photos carry it
@@ -1007,6 +1017,7 @@ fn read_lightroom(path: &Path, reader: Reader, source_guard: SourceGuard, cancel
             keywords: keywords.remove(&id).unwrap_or_default(),
             history: history.remove(&id).unwrap_or_default(),
             snapshots: snapshots.remove(&id).unwrap_or_default(),
+            caption: captions.remove(&id).unwrap_or_default(),
             original,
             as_shot_white: as_shot_whites.get(&id).copied(),
             capture_one: None,
@@ -1567,6 +1578,10 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
                 }
                 Err(e) => warnings.push(format!("image {} XMP: {e}", src.source_id)),
             }
+        }
+        // Lightroom's own caption, over the cached packet's (which can lack it or be older)
+        if !src.caption.is_empty() {
+            p.meta.caption = src.caption.clone();
         }
         p.rating = number(&src.image, "rating").clamp(0, 5) as u8;
         p.flag = match number(&src.image, "pick") {
@@ -2159,6 +2174,7 @@ pub(crate) mod tests {
             keywords: vec!["Travel|Goa".into()],
             history: vec![row(json!({"text":"s = { Exposure2012 = 0.5 }"}))],
             snapshots: Vec::new(),
+            caption: String::new(),
             original: Original::Local,
             as_shot_white: None,
             capture_one: None,
@@ -4175,6 +4191,43 @@ pub(crate) mod tests {
         result
     }
 
+    /// Upstream #4293 (issue #4043): Lightroom keeps an image's caption in its `AgLibraryIPTC` table, and the XMP
+    /// packet it caches may not restate it. The table's caption wins; a blank one, another image's row or no table
+    /// leaves the packet's.
+    #[test]
+    fn a_catalog_caption_comes_from_lightrooms_iptc_table() {
+        use SqlValue::{Integer as I, Null as N, Text as T};
+        let dir = std::env::temp_dir().join(format!("app-lrcat-iptc-caption-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let packet = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:description><rdf:Alt><rdf:li xml:lang="x-default">From the packet</rdf:li></rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+        let import_with = |iptc: Option<Vec<SqlValue>>, cached: bool| {
+            let path = dir.join("captions.lrcat");
+            let mut tables = photo_tables((dir.to_str().unwrap(), ""));
+            if cached {
+                tables.push(("Adobe_AdditionalMetadata", "id_local INTEGER PRIMARY KEY, image, xmp", vec![N, I(1), T(packet.into())]));
+            }
+            if let Some(row) = iptc {
+                tables.push(("AgLibraryIPTC", "id_local INTEGER PRIMARY KEY, caption, copyright, image", row));
+            }
+            std::fs::write(&path, native_catalog(&tables)).unwrap();
+            let mut s = crate::Session::new();
+            let imported = s.execute("library.importLightroom", &json!({"path": path})).unwrap();
+            let id = PhotoId(imported["mapping"]["1"].as_u64().unwrap());
+            s.catalog.photo(id).unwrap().meta.caption.clone()
+        };
+        let import = |iptc| import_with(iptc, false);
+        assert_eq!(import(Some(vec![N, T("Harbour at dawn".into()), N, I(1)])), "Harbour at dawn");
+        assert_eq!(import(Some(vec![N, T("  ".into()), N, I(1)])), "", "a blank caption isn't one");
+        assert_eq!(import(Some(vec![N, T("Another image's".into()), N, I(2)])), "", "only the image's own row");
+        assert_eq!(import(None), "", "a catalog without the table imports as before");
+        let cached = |iptc| import_with(iptc, true);
+        assert_eq!(cached(None), "From the packet", "the packet's caption imports as before");
+        assert_eq!(cached(Some(vec![N, T("Harbour at dawn".into()), N, I(1)])), "Harbour at dawn", "the table's caption wins");
+        assert_eq!(cached(Some(vec![N, T("  ".into()), N, I(1)])), "From the packet", "a blank caption keeps the packet's");
+        assert_eq!(cached(Some(vec![N, T("Another image's".into()), N, I(2)])), "From the packet", "another image's row keeps it");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn native_video_import_is_visible_in_video_filter() {
         let dir = std::env::temp_dir().join(format!("app-lrcat-video-filter-{}", std::process::id()));
@@ -5159,6 +5212,7 @@ pub(crate) mod tests {
                 row(json!({"id_local":id * 10 + 1,"dateCreated":2.0,"name":"Dehaze","text":"s = { Exposure2012 = 1, Dehaze = -50 }"})),
             ],
             snapshots: Vec::new(),
+            caption: String::new(),
             original: Original::Local,
             as_shot_white: None,
             capture_one: None,
@@ -5219,6 +5273,7 @@ pub(crate) mod tests {
                 keywords: Vec::new(),
                 history: Vec::new(),
                 snapshots: Vec::new(),
+                caption: String::new(),
                 original: Original::Local,
                 as_shot_white: None,
                 capture_one: None,
@@ -5341,6 +5396,7 @@ pub(crate) mod tests {
             keywords: Vec::new(),
             history: Vec::new(),
             snapshots: Vec::new(),
+            caption: String::new(),
             original: Original::Local,
             as_shot_white: None,
             capture_one: None,

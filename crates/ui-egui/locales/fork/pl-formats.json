@@ -130,6 +130,7 @@
   "Page {n} (blank)": "Strona {n} (pusta)",
   "Page {page} of {pages}": "Strona {page} z {pages}",
   "Panning back or zooming in again on an HDR edit shows it at once instead of rendering it again. Uses up to {need} MB of graphics memory on this screen.": "Powrót przesunięciem lub ponowne powiększenie edycji HDR pokazuje ją od razu, bez ponownego renderowania. Używa do {need} MB pamięci graficznej przy tym ekranie.",
+  "Paste into {n} photo{}": "Wklej do zdjęć ({n}){:.0}",
   "Person {n}": "Osoba {n}",
   "Photo {n} has no valid pixel-shift frame number": "Zdjęcie {n} nie ma prawidłowego numeru klatki Pixel Shift",
   "Photos in {folder} go into the collection “Camera Roll - this device's name”.": "Zdjęcia z {folder} trafiają do kolekcji „Camera Roll - nazwa tego urządzenia”.",

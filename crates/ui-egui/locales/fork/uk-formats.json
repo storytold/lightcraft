@@ -121,6 +121,7 @@
   "Page {n} (blank)": "Сторінка {n} (порожня)",
   "Page {page} of {pages}": "Сторінка {page} з {pages}",
   "Panning back or zooming in again on an HDR edit shows it at once instead of rendering it again. Uses up to {need} MB of graphics memory on this screen.": "Повернення панорамуванням або повторне збільшення HDR-зміни показує її одразу, без повторного рендерингу. Використовує до {need} МБ графічної пам’яті на цьому екрані.",
+  "Paste into {n} photo{}": "Вставка у фото: {n}{:.0}",
   "Person {n}": "Людина {n}",
   "Photo {n} has no valid pixel-shift frame number": "Фото {n} не має припустимого номера кадру Pixel Shift",
   "Photos in {folder} go into the collection “Camera Roll - this device's name”.": "Фото з {folder} потрапляють до колекції «Camera Roll - назва цього пристрою».",

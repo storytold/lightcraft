@@ -125,6 +125,7 @@
   "Page {n} (blank)": "Seite {n} (leer)",
   "Page {page} of {pages}": "Seite {page} von {pages}",
   "Panning back or zooming in again on an HDR edit shows it at once instead of rendering it again. Uses up to {need} MB of graphics memory on this screen.": "Zurückschwenken oder erneutes Hineinzoomen in eine HDR-Bearbeitung zeigt sie sofort, statt sie neu zu rendern. Belegt auf diesem Bildschirm bis zu {need} MB Grafikspeicher.",
+  "Paste into {n} photo{}": "In {n} Foto{} einfügen",
   "Person {n}": "Person {n}",
   "Photo {n} has no valid pixel-shift frame number": "Foto {n} hat keine gültige Pixel-Shift-Bildnummer",
   "Photos in {folder} go into the collection “Camera Roll - this device's name”.": "Fotos in {folder} kommen in die Sammlung „Camera Roll - Name dieses Geräts“.",

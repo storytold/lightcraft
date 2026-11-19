@@ -1262,19 +1262,26 @@ mod imp {
 
     /// The unnamed faces that look most like the person whose lower-cased name is `key`, best first, at most `limit`: each
     /// is scored like a suggestion (the mean of its two closest faces of theirs) and kept above four fifths of the
-    /// model's suggestion bar, since a person looks at these before anything is named. Only faces already embedded can be
-    /// found; `ready` says whether a recognition model is chosen and its index is available.
+    /// model's suggestion bar, since a person looks at these before anything is named; a face that does not look clearly
+    /// more like them than like anyone else already named (by [`DEFAULT_MARGIN`]) is left out. Only faces already embedded
+    /// can be found, and only named faces already embedded count as someone else: while the scan runs, a face can be
+    /// offered until the faces of the person it looks more like are embedded. [`RIVAL_CHECKS`] times `limit` faces are
+    /// checked against everyone else, and up to [`RIVAL_CHECKS`] times as many until one is kept; `ready` says whether a
+    /// recognition model is chosen and its index is available.
     pub fn similar(s: &mut Session, key: &str, limit: usize, scope: &super::Scope) -> Similar {
         let none = Similar { items: Vec::new(), ready: false, pending: 0 };
         let Some(_) = s.face_models_dir.clone() else { return none };
         let Ok(manifest) = current_manifest(s, "faces.person", false) else { return none };
         let pending = s.faces.queue.len() + s.faces.in_flight.len();
         let (mut gallery, mut candidates): (Vec<Arc<[f32]>>, Vec<(u64, usize, Rect, Arc<[f32]>)>) = (Vec::new(), Vec::new());
+        // everyone else's named faces, by person (anywhere in the library, like theirs)
+        let mut others: std::collections::HashMap<String, Vec<Arc<[f32]>>> = std::collections::HashMap::new();
         for ph in s.catalog.photos().filter(|ph| ph.in_library()) {
             for (index, r) in ph.meta.regions.iter().enumerate().filter(|(_, r)| r.kind == RegionKind::Face) {
                 let Some(e) = s.faces.index.get(ph.id.0, &r.rect) else { continue };
-                match r.name.as_deref() {
-                    Some(n) if n.trim().to_lowercase() == key => gallery.push(e.clone()),
+                match r.name.as_deref().map(|n| n.trim().to_lowercase()) {
+                    Some(n) if n == key => gallery.push(e.clone()),
+                    Some(n) if !n.is_empty() => others.entry(n).or_default().push(e.clone()),
                     Some(_) => {}
                     // their faces anywhere teach the match; only faces in scope are offered
                     None if super::in_scope(scope, ph.id.0) => candidates.push((ph.id.0, index, r.rect, e.clone())),
@@ -1287,19 +1294,50 @@ mod imp {
             return ready;
         }
         let bar = manifest.thresholds.match_cosine.unwrap_or(DEFAULT_THRESHOLD) * 0.8;
-        let refs: Vec<&[f32]> = gallery.iter().map(|e| &e[..]).collect();
+        // with Settings ▸ Faces ▸ Ignore a person's odd faces, only their typical faces: a face from behind named after
+        // them would bring every other back of a head along
+        let skip_odd = s.face_models_dir.as_deref().is_some_and(|d| read_settings(d).skip_odd);
+        fn faces_of(faces: &[Arc<[f32]>], skip_odd: bool) -> Vec<&[f32]> {
+            let all: Vec<&[f32]> = faces.iter().map(|e| &e[..]).collect();
+            if skip_odd { matching::typical(&all) } else { all }
+        }
+        let refs: Vec<&[f32]> = faces_of(&gallery, skip_odd);
         let top = top_faces(s);
         // every unnamed face against every face of theirs: hundreds of millions of comparisons in a large
         // library, so on every core (minutes on one)
-        let mut scored: Vec<(f32, u64, usize, Rect)> = candidates
+        let mut scored: Vec<(f32, u64, usize, Rect, Arc<[f32]>)> = candidates
             .into_par_iter()
             .filter_map(|(photo, index, rect, e)| {
                 let score = matching::person_score(&e, &refs, top)?;
-                (score >= bar).then_some((score, photo, index, rect))
+                (score >= bar).then_some((score, photo, index, rect, e))
             })
             .collect();
         scored.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
-        scored.truncate(limit);
+        // a face is offered only when it looks clearly more like this person than like anyone else already named, by the
+        // margin name suggestions ask for: one that looks more like someone else is theirs (two people who look alike),
+        // and one that looks about as much like everybody is a poor face (tiny, blurred, from behind) that would fill
+        // the page. Best first, a batch at a time until the page is full
+        let others: Vec<Vec<&[f32]>> = others.values().map(|faces| faces_of(faces, skip_odd)).collect();
+        let mut kept = Vec::with_capacity(limit.min(scored.len()));
+        let window = limit.saturating_mul(RIVAL_CHECKS);
+        scored.truncate(window.saturating_mul(RIVAL_CHECKS));
+        let mut checked = 0usize;
+        for batch in scored.chunks(256) {
+            if checked >= window && !kept.is_empty() {
+                break;
+            }
+            checked = checked.saturating_add(batch.len());
+            let theirs: Vec<bool> = batch
+                .par_iter()
+                .map(|(score, .., e)| others.iter().any(|g| matching::person_score(e, g, top).is_some_and(|o| o > *score - DEFAULT_MARGIN)))
+                .collect();
+            kept.extend(batch.iter().zip(theirs).filter(|(_, theirs)| !theirs).map(|(c, _)| (c.0, c.1, c.2, c.3)));
+            if kept.len() >= limit {
+                break;
+            }
+        }
+        kept.truncate(limit);
+        let scored = kept;
         let items = scored
             .into_iter()
             .map(|(score, photo, index, rect)| {
@@ -1309,6 +1347,13 @@ mod imp {
             .collect();
         Similar { items, ..ready }
     }
+
+    /// How many times the page's size in faces a person's page checks against everyone else already named, best first:
+    /// each check is a pass over every named face in the library, and it runs while the window waits, so a person whose
+    /// look-alikes are mostly someone else's gets a shorter page rather than a frozen window. When none of those is kept,
+    /// up to that many times as many are checked, so a page is not left empty while faces further down would do. The
+    /// next page (after a face is named) checks the next ones.
+    const RIVAL_CHECKS: usize = 4;
 
     /// Most faces put in order of likeness (the order is a pass over every pair of them).
     const MAX_ARRANGED: usize = 1500;
@@ -1678,6 +1723,31 @@ mod imp {
             assert!(r.items[0]["score"].as_f64().unwrap() > r.items[1]["score"].as_f64().unwrap());
             assert_eq!(similar(&mut s, "ann", 1, &None).items.len(), 1, "capped");
             assert!(similar(&mut s, "nobody", 10, &None).items.is_empty());
+            let _ = std::fs::remove_dir_all(&d);
+        }
+
+        #[test]
+        fn a_page_whose_first_faces_all_look_more_like_someone_else_checks_further() {
+            let (mut s, d) = loaded("similar-further");
+            let (a, b) = two_photos(&s);
+            let c = s.catalog.photos().map(|p| p.id).find(|id| *id != a && *id != b).unwrap();
+            set_regions(&mut s, a, vec![region(0.1, Some("Ann")), region(0.5, Some("Bob"))]);
+            // a full first window of faces like Ann but more like Bob, then ten a little less like her and nothing like him
+            let (limit, window) = (64, 64 * RIVAL_CHECKS);
+            set_regions(&mut s, b, (0..window).map(|i| region(i as f64 * 0.001, None)).collect());
+            set_regions(&mut s, c, (0..10).map(|i| region(i as f64 * 0.01, None)).collect());
+            let put = |s: &mut Session, id: PhotoId, x: f64, v: Vec<f32>| s.faces.index.insert(id.0, &region(x, None).rect, v);
+            put(&mut s, a, 0.1, unit(&[(0, 1.0)])); // Ann
+            put(&mut s, a, 0.5, unit(&[(0, 0.6), (1, 0.8)])); // Bob
+            for i in 0..window {
+                put(&mut s, b, i as f64 * 0.001, unit(&[(0, 0.75), (1, 0.66)]));
+            }
+            for i in 0..10 {
+                put(&mut s, c, i as f64 * 0.01, unit(&[(0, 0.7), (2, 0.714)]));
+            }
+            let r = similar(&mut s, "ann", limit, &None);
+            let photos: Vec<u64> = r.items.iter().map(|i| i["photo"].as_u64().unwrap()).collect();
+            assert_eq!(photos, vec![c.0; 10], "the faces past the first window are found, the ones like Bob are not");
             let _ = std::fs::remove_dir_all(&d);
         }
     }

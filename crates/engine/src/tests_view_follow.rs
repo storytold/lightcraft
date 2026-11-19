@@ -1,7 +1,7 @@
 //! The view follows a small edit from the list it had ([`Session::visible`]): whatever the edit, the result has to
 //! be the list worked out from every photo.
 
-use lcc_catalog::{Album, Op, Photo, PhotoId, Source};
+use lcc_catalog::{Album, Filter, Op, Photo, PhotoId, Source};
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -280,6 +280,7 @@ fn relative_clock_source_total_expires_before_or_after_visible_refresh() {
         s.execute("library.filter", &json!({"text": "synthetic"})).unwrap();
         assert_eq!(s.source_total(), Some(1), "the initial total is computed without asking for visible photos");
         let revision = s.catalog.revision;
+        let (counted, followed) = (s.total_counted, s.total_followed);
 
         *now.lock().unwrap() = "2026-10-24T12:01:00".to_string();
         if refresh_visible {
@@ -287,6 +288,8 @@ fn relative_clock_source_total_expires_before_or_after_visible_refresh() {
             assert!(s.visible_cloned().is_empty());
         }
         assert_eq!(s.source_total(), Some(0), "refresh_visible={refresh_visible}");
+        // a rule that reads the clock is counted again once the minute moved, never followed
+        assert_eq!((s.total_counted, s.total_followed), (counted + 1, followed), "refresh_visible={refresh_visible}");
         assert_eq!(s.catalog.revision, revision, "refresh_visible={refresh_visible}");
     }
 }
@@ -500,4 +503,173 @@ fn the_albums_counts_followed_through_edits_are_the_counts_made_from_every_photo
         assert_eq!(shown(&tally), before, "not followed: left as they were, to be counted again");
         assert_eq!(shown(&AlbumTally::of(&s.catalog)), fresh(&s));
     }
+}
+/// [`edit`], and also the ops it never makes: a color label, a redo, a photo brought back from Recently Deleted.
+fn more_edits(s: &mut Session, dice: &mut Dice, ids: &mut Vec<PhotoId>, album: u64) {
+    match dice.roll(8) {
+        0 | 1 => {
+            let chosen: Vec<u64> = (0..1 + dice.roll(3)).map(|_| ids[dice.roll(ids.len())].0).collect();
+            let label = ["red", "green", "none"][dice.roll(3)];
+            let _ = s.execute("library.select", &json!({"ids": chosen}));
+            let _ = s.execute("photo.label", &json!({"label": label}));
+        }
+        2 => {
+            let _ = s.redo_step();
+        }
+        3 => {
+            let gone: Vec<u64> = ids.iter().filter(|id| s.catalog.photo(**id).is_some_and(|p| p.deleted)).take(2).map(|id| id.0).collect();
+            let _ = s.execute("photo.restore", &json!({"ids": gone}));
+        }
+        _ => edit(s, dice, ids, album),
+    }
+}
+
+#[test]
+fn the_total_followed_through_edits_is_the_count_of_every_photo() {
+    let (mut s, mut ids, album, smart) = library(240);
+    let mut dice = Dice(41);
+    let sources = [
+        json!({"kind": "all"}),
+        json!({"kind": "picks"}),
+        json!({"kind": "album", "id": smart}),
+        json!({"kind": "album", "id": album}),
+        json!({"kind": "libraryFolder", "path": "/pics/1"}),
+        json!({"kind": "recentlyDeleted"}),
+        json!({"kind": "recentlyAdded"}),
+    ];
+    let filters = [json!({"rating": 0, "text": ""}), json!({"rating": 3, "text": ""}), json!({"rating": 0, "text": "travel"})];
+    let mut checked = 0;
+    // per source and filter: (source, filter, edits checked, followed, counted)
+    let mut table: Vec<(String, String, usize, u64, u64)> = Vec::new();
+    for (i, source) in sources.iter().enumerate() {
+        for (j, filter) in filters.iter().enumerate() {
+            let (followed_before, counted_before, checked_before) = (s.total_followed, s.total_counted, checked);
+            s.execute("library.source", source).unwrap();
+            s.execute("library.filter", filter).unwrap();
+            s.execute("library.holdView", &json!({"on": (i + j) % 2 == 1})).unwrap();
+            for step in 0..40 {
+                more_edits(&mut s, &mut dice, &mut ids, album);
+                // (not every frame asks for the view, or for the total: edits pass between two looks)
+                if dice.roll(3) != 0 {
+                    let _ = s.visible_cloned();
+                }
+                if dice.roll(4) == 0 {
+                    continue;
+                }
+                let whole = s.catalog.count(&s.view_filter(s.source, &Filter::default()));
+                assert_eq!(s.source_total(), Some(whole), "source {source}, filter {filter}, hold {}, edit {step}", s.hold_view);
+                checked += 1;
+            }
+            table.push((
+                source.to_string(),
+                filter.to_string(),
+                checked - checked_before,
+                s.total_followed - followed_before,
+                s.total_counted - counted_before,
+            ));
+        }
+    }
+    assert!(checked > 600, "checked {checked}");
+    // and it was following that was checked, source by source: most edits touch a photo or two, so a source whose
+    // filter narrows it (the view's own pass is no answer) follows, and counts only when an edit is large or not
+    // photos'. Recently Added reaches over the library (its cut-off moves with the newest photo): always counted
+    for (source, filter, edits, followed, counted) in &table {
+        let row = format!("{source} with {filter}: {edits} checked, followed {followed}, counted {counted}\n{table:#?}");
+        let narrowed = !filter.contains("\"rating\":0") || !filter.contains("\"text\":\"\"");
+        if !narrowed {
+            // (nothing narrows the source: the view's own pass or length answers, and nothing is followed or counted)
+        } else if source.contains("recentlyAdded") {
+            assert!(*followed == 0 && *counted > 0, "{row}");
+        } else {
+            assert!(*followed > 0, "never followed: {row}");
+            assert!(*counted * 2 <= *edits as u64 + 1, "counted from every photo too often: {row}");
+        }
+    }
+}
+
+#[test]
+fn a_one_photo_edit_does_not_count_the_whole_library_again_for_the_source_total() {
+    let (mut s, ids, _, smart) = library(600);
+    // a filter that narrows the source: the view's own pass is no answer
+    s.execute("library.filter", &json!({"rating": 3, "text": ""})).unwrap();
+    let _ = s.visible_cloned();
+    let first = s.source_total();
+    assert_eq!((s.total_counted, s.total_followed), (1, 0));
+    // one photo rated: the total is asked of that photo, no other
+    s.execute("library.select", &json!({"ids": [ids[5].0]})).unwrap();
+    s.execute("photo.rate", &json!({"rating": 1})).unwrap();
+    let _ = s.visible_cloned();
+    assert_eq!(s.source_total(), first);
+    assert_eq!((s.total_counted, s.total_followed), (1, 1), "followed, not counted again");
+    // a photo that leaves the library goes off the total
+    s.execute("library.select", &json!({"ids": [ids[6].0]})).unwrap();
+    s.execute("photo.delete", &json!({})).unwrap();
+    assert_eq!(s.source_total(), first.map(|n| n - 1));
+    assert_eq!((s.total_counted, s.total_followed), (1, 2));
+    // five hundred photos at once, and an album's photos: counted from every photo
+    s.execute("library.select", &json!({"ids": ids.iter().skip(20).take(500).map(|id| id.0).collect::<Vec<_>>()})).unwrap();
+    s.execute("photo.rate", &json!({"rating": 2})).unwrap();
+    let whole = s.catalog.count(&s.view_filter(s.source, &Filter::default()));
+    assert_eq!(s.source_total(), Some(whole));
+    assert_eq!((s.total_counted, s.total_followed), (2, 2));
+    // another source is counted for itself, and its total is the count of its photos
+    s.execute("library.source", &json!({"kind": "album", "id": smart})).unwrap();
+    let whole = s.catalog.count(&s.view_filter(s.source, &Filter::default()));
+    assert_eq!(s.source_total(), Some(whole));
+    assert_eq!((s.total_counted, s.total_followed), (3, 2));
+    // and an edit after that is followed again: a keyword given to a photo takes it out of the smart album
+    s.execute("library.select", &json!({"ids": [ids[7].0]})).unwrap();
+    s.execute("photo.setMeta", &json!({"addKeywords": ["fresh"]})).unwrap();
+    let whole = s.catalog.count(&s.view_filter(s.source, &Filter::default()));
+    assert_eq!(s.source_total(), Some(whole));
+    assert_eq!((s.total_counted, s.total_followed), (3, 3), "following resumed after the recount");
+}
+
+#[test]
+fn a_view_just_built_for_the_source_gives_its_pass_as_the_total() {
+    let (mut s, ids, album, smart) = library(600);
+    // (source, hold the view, what a small edit after it does to the total: the total is followed from the view's pass
+    // for a smart album whose held view may show photos that stopped matching; for the others the view's own
+    // length answers, and nothing is followed or counted)
+    let sources =
+        [(json!({"kind": "all"}), false, 0), (json!({"kind": "album", "id": smart}), true, 1), (json!({"kind": "album", "id": album}), true, 0)];
+    for (source, hold, follows) in sources {
+        // (taken before the commands: they may build the view themselves, which is when its pass is kept)
+        let (counted, from_view) = (s.total_counted, s.total_from_view);
+        s.execute("library.holdView", &json!({"on": hold})).unwrap();
+        s.execute("library.source", &source).unwrap();
+        // (the view folds a stack into one photo: its length is not the source's, the pass before that is)
+        let _ = s.visible_cloned();
+        let whole = s.catalog.count(&s.view_filter(s.source, &Filter::default()));
+        assert!(s.total_from_view > from_view, "{source}: the view's pass was kept as the total");
+        let kept = s.total.as_ref().unwrap_or_else(|| panic!("{source}: no total kept"));
+        assert_eq!((kept.tally.len(), kept.tally.revision()), (whole, s.catalog.revision), "{source}: the tally is the view's pass");
+        assert_eq!(s.source_total(), Some(whole), "{source}");
+        assert_eq!(s.total_counted, counted, "{source}: no second pass over the library");
+        // and a small edit after it is followed from that pass
+        s.execute("library.select", &json!({"ids": [ids[9].0]})).unwrap();
+        s.execute("photo.rate", &json!({"rating": 4})).unwrap();
+        let whole = s.catalog.count(&s.view_filter(s.source, &Filter::default()));
+        let followed = s.total_followed;
+        assert_eq!(s.source_total(), Some(whole), "{source}");
+        assert_eq!(s.total_counted, counted, "{source}: followed, not counted");
+        assert_eq!(s.total_followed, followed + follows, "{source}");
+    }
+}
+
+/// Recently Added reaches over the library (its cut-off moves with the newest photo), so its total is never followed
+/// from the photos an edit touched: counted again after each edit, and right.
+#[test]
+fn the_total_of_recently_added_is_counted_again_after_an_edit_never_followed() {
+    let (mut s, ids, _, _) = library(100);
+    s.execute("library.source", &json!({"kind": "recentlyAdded"})).unwrap();
+    s.execute("library.filter", &json!({"rating": 3, "text": ""})).unwrap();
+    let first = s.source_total();
+    assert_eq!(first, Some(s.catalog.count(&s.view_filter(s.source, &Filter::default()))));
+    let (counted, followed) = (s.total_counted, s.total_followed);
+    s.execute("library.select", &json!({"ids": [ids[4].0]})).unwrap();
+    s.execute("photo.rate", &json!({"rating": 2})).unwrap();
+    let whole = s.catalog.count(&s.view_filter(s.source, &Filter::default()));
+    assert_eq!(s.source_total(), Some(whole));
+    assert_eq!((s.total_counted, s.total_followed), (counted + 1, followed));
 }

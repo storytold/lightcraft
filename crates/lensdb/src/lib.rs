@@ -204,10 +204,17 @@ impl LensDb {
         self.best_lens(lens_make, name, camera, |l| l.names_exactly(name))
     }
 
-    /// The profile of `camera`'s built-in lens for EXIF lens text such as a [`spec_name`] ("6-72mm f/2.7-3.5"): only
-    /// profiles for the camera's own mount are considered, so another maker's lens with the same specification can't
-    /// win (as it could in [`find_lens`](Self::find_lens)'s match by name).
+    /// The profile of `camera`'s built-in lens for EXIF lens text such as a [`spec_name`] ("6-72mm f/2.7-3.5"), or
+    /// none for a file that names no lens: only profiles for the camera's own mount are considered, so another maker's
+    /// lens with the same specification can't win (as it could in [`find_lens`](Self::find_lens)'s match by name).
+    /// With several profiles on the mount (the lens alone, the lens with a converter) the focal range picks one, and
+    /// without it only a sole profile is taken. `None` for a body whose lens can be changed, since any lens of its
+    /// mount could be on it: the database starts the mount name of a camera with a fixed lens with a lower-case letter
+    /// ("canonG7X"), a body's with a capital ("Canon EF").
     pub fn find_built_in_lens(&self, lens_model: &str, camera: &Camera) -> Option<&Profile> {
+        if !camera.mount.starts_with(char::is_lowercase) {
+            return None;
+        }
         self.find_fixed_lens(&tokens(lens_model), camera)
     }
 

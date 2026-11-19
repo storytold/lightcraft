@@ -1014,3 +1014,139 @@ fn mirror_averaging_is_on_by_default_and_can_be_turned_off() {
     assert_eq!(s.execute("faces.matching", &json!({})).unwrap()["mirrorAverage"], false, "the choice is kept");
     assert_eq!(s.execute("faces.matching", &json!({"mirrorAverage": true})).unwrap()["mirrorAverage"], true);
 }
+
+/// `faces.matching`: the count and Ignore a person's odd faces are kept beside the other face settings, and a refused
+/// value changes nothing (#3318).
+#[test]
+fn the_faces_a_match_is_based_on_are_kept_and_bad_values_are_refused() {
+    let d = temp("top-faces");
+    let session = |d: &std::path::Path| {
+        let mut s = Session::with_demo();
+        s.face_models_dir = Some(d.join("models"));
+        s
+    };
+    let mut s = session(&d);
+    let v = s.execute("faces.matching", &json!({})).unwrap();
+    assert_eq!((v["topFaces"].clone(), v["topFacesDefault"].clone(), v["topFacesMax"].clone()), (json!(2), json!(2), json!(8)), "{v}");
+    assert_eq!(s.execute("faces.matching", &json!({"topFaces": 4})).unwrap()["topFaces"], 4);
+    // kept with the models, beside the other face settings, which it leaves alone
+    assert_eq!(s.execute("faces.gpu", &json!({"cpuOnly": true})).unwrap()["cpuOnly"], true);
+    let mut again = session(&d);
+    let l = again.execute("faces.models.list", &json!({})).unwrap();
+    assert_eq!((l["topFaces"].clone(), l["gpu"]["cpuOnly"].clone()), (json!(4), json!(true)), "{l}");
+    for bad in [json!(0), json!(9), json!(-1), json!(2.5), json!("3")] {
+        assert!(again.execute("faces.matching", &json!({"topFaces": bad})).is_err(), "{bad}");
+    }
+    assert_eq!(again.execute("faces.matching", &json!({})).unwrap()["topFaces"], 4, "a refused value changes nothing");
+    assert_eq!(again.execute("faces.matching", &json!({"topFaces": null})).unwrap()["topFaces"], 2, "null is the default again");
+    // a person's odd faces: off by default, kept, beside the count it leaves alone
+    assert_eq!(again.execute("faces.matching", &json!({})).unwrap()["skipOdd"], false);
+    assert_eq!(again.execute("faces.matching", &json!({"skipOdd": true})).unwrap()["skipOdd"], true);
+    assert!(again.execute("faces.matching", &json!({"skipOdd": "yes"})).is_err());
+    assert!(again.execute("faces.matching", &json!({"topFaces": 3, "skipOdd": 1})).is_err());
+    assert!(again.execute("faces.matching", &json!({"topFaces": 3, "mirrorAverage": "no"})).is_err());
+    let l = session(&d).execute("faces.models.list", &json!({})).unwrap();
+    assert_eq!(
+        (l["skipOdd"].clone(), l["topFaces"].clone(), l["mirrorAverage"].clone()),
+        (json!(true), json!(2), json!(true)),
+        "a refused call changes nothing: {l}"
+    );
+    // a hand-edited file out of range is read within range, not trusted
+    std::fs::write(d.join("models").join("settings.json"), br#"{"topFaces":1000}"#).unwrap();
+    assert_eq!(session(&d).execute("faces.matching", &json!({})).unwrap()["topFaces"], 8);
+    // and a count that is no whole number, or a switch that is no true or false, is no choice, without losing the
+    // other face settings
+    for bad in [
+        &br#"{"enabled":true,"embedder":"m","topFaces":-1}"#[..],
+        br#"{"enabled":true,"embedder":"m","topFaces":"3"}"#,
+        br#"{"enabled":true,"embedder":"m","skipOdd":"yes"}"#,
+    ] {
+        std::fs::write(d.join("models").join("settings.json"), bad).unwrap();
+        let l = session(&d).execute("faces.models.list", &json!({})).unwrap();
+        assert_eq!(
+            (l["enabled"].clone(), l["embedder"].clone(), l["topFaces"].clone(), l["skipOdd"].clone()),
+            (json!(true), json!("m"), json!(2), json!(false)),
+            "{l}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(d);
+}
+
+fn more_for(s: &mut Session, name: &str) -> Vec<u64> {
+    let r = s.execute("faces.person", &json!({"name": name})).unwrap();
+    r["more"].as_array().unwrap().iter().map(|f| f["index"].as_u64().unwrap()).collect()
+}
+
+/// A face that looks like a person but even more like someone else already named (two people who look alike) is not
+/// offered on that person's page: it is offered on the other one's. A face about as much like both is offered to neither.
+#[test]
+fn a_face_that_looks_more_like_someone_else_is_offered_to_them_only() {
+    let d = temp("elsewhere");
+    let (mut s, _) = setup(&d, 64);
+    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    let (a, b) = two_photos(&s);
+    set_regions(&mut s, a, vec![region(0.1, Some("Paul")), region(0.5, Some("Paul Jr"))]);
+    set_regions(&mut s, b, vec![region(0.1, None), region(0.5, None)]);
+    // Paul and Paul Jr look alike; the first unnamed face is Paul Jr's, the second Paul's
+    let (paul, junior) = (unit64(&[(0, 1.0), (1, 0.6)]), unit64(&[(0, 0.6), (1, 1.0)]));
+    let (like_junior, like_paul) = (unit64(&[(0, 0.55), (1, 1.0)]), unit64(&[(0, 1.0), (1, 0.55)]));
+    for (id, x, v) in [(a, 0.1, paul), (a, 0.5, junior), (b, 0.1, like_junior), (b, 0.5, like_paul)] {
+        s.faces.index.insert(id.0, &region(x, None).rect, v);
+    }
+    assert_eq!(more_for(&mut s, "Paul"), vec![1], "Paul Jr's face, alike enough to pass the bar, is not offered to Paul");
+    assert_eq!(more_for(&mut s, "Paul Jr"), vec![0]);
+    // a poor face, about as much like both, is offered to neither (it would fill both pages)
+    set_regions(&mut s, b, vec![region(0.1, None), region(0.5, None), region(0.7, None)]);
+    s.faces.index.insert(b.0, &region(0.7, None).rect, unit64(&[(0, 1.0), (1, 0.97)]));
+    assert_eq!(more_for(&mut s, "Paul"), vec![1]);
+    assert_eq!(more_for(&mut s, "Paul Jr"), vec![0]);
+    // someone else is judged like anyone, by the mean of their closest faces: Zed has one face even more like this one
+    // than Paul's and one nothing like it, so the face is still Paul's (judged by Zed's best face alone, it would be Zed's)
+    let near = unit64(&[(0, 1.0), (1, 0.6), (2, 0.3)]);
+    let (zed_close, zed_far) = (unit64(&[(0, 1.0), (1, 0.6), (2, 0.35)]), unit64(&[(3, 1.0)]));
+    set_regions(&mut s, a, vec![region(0.1, Some("Paul")), region(0.5, Some("Paul Jr")), region(0.7, Some("Zed")), region(0.75, Some("Zed"))]);
+    set_regions(&mut s, b, vec![region(0.1, None), region(0.5, None), region(0.7, None), region(0.3, None)]);
+    for (id, x, v) in [(a, 0.7, zed_close), (a, 0.75, zed_far), (b, 0.3, near)] {
+        s.faces.index.insert(id.0, &region(x, None).rect, v);
+    }
+    assert_eq!(more_for(&mut s, "Paul"), vec![1, 3], "Zed's mean is far below Paul's score");
+    // with one face per match, Zed is judged by that close face alone, and both faces like Paul's look more like Zed's
+    s.execute("faces.matching", &json!({"topFaces": 1})).unwrap();
+    assert_eq!(more_for(&mut s, "Paul"), Vec::<u64>::new(), "the count chosen in Settings judges someone else too");
+    s.execute("faces.matching", &json!({"topFaces": null})).unwrap();
+    assert_eq!(more_for(&mut s, "Paul"), vec![1, 3]);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// With Ignore a person's odd faces on, a face of a person far from their average face (from behind, someone else named
+/// by mistake) does not bring its look-alikes onto their page: every back of a head looks like every other.
+#[test]
+fn a_persons_odd_face_brings_no_look_alikes() {
+    let d = temp("odd");
+    let (mut s, _) = setup(&d, 64);
+    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    let (a, b) = two_photos(&s);
+    let named = |x: f64| region(x, Some("Ann"));
+    set_regions(&mut s, a, vec![named(0.0), named(0.2), named(0.4), named(0.6), named(0.7)]);
+    set_regions(&mut s, b, vec![region(0.1, None), region(0.5, None)]);
+    // four faces of Ann, one from behind; and two unnamed faces: another one of her, and another back of a head
+    for (id, x, v) in [
+        (a, 0.0, unit64(&[(0, 1.0)])),
+        (a, 0.2, unit64(&[(0, 1.0), (1, 0.1)])),
+        (a, 0.4, unit64(&[(0, 1.0), (2, 0.1)])),
+        (a, 0.6, unit64(&[(5, 1.0)])),
+        (a, 0.7, unit64(&[(0, 1.0), (4, 0.1)])),
+        (b, 0.1, unit64(&[(0, 1.0), (3, 0.2)])),
+        (b, 0.5, unit64(&[(5, 1.0), (6, 0.1)])),
+    ] {
+        s.faces.index.insert(id.0, &region(x, None).rect, v);
+    }
+    // off by default: every face of hers counts, the back of a head too
+    assert_eq!(more_for(&mut s, "Ann"), vec![0, 1]);
+    // Settings ▸ Faces ▸ Ignore a person's odd faces
+    assert_eq!(s.execute("faces.matching", &json!({"skipOdd": true})).unwrap()["skipOdd"], true);
+    assert_eq!(more_for(&mut s, "Ann"), vec![0], "her face, not the other back of a head");
+    assert_eq!(s.execute("faces.matching", &json!({"skipOdd": false})).unwrap()["skipOdd"], false);
+    assert_eq!(more_for(&mut s, "Ann"), vec![0, 1]);
+    let _ = std::fs::remove_dir_all(&d);
+}

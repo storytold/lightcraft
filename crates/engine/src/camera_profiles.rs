@@ -1,6 +1,7 @@
 //! Camera colour profiles of our own, pooled from many photos of one camera model.
 //!
-//! A raw file without colour matrices (Sony ARW, Nikon NEF, Fujifilm RAF) gets its look fitted to its own embedded camera
+//! A raw file without colour matrices (Sony ARW, Nikon NEF, Fujifilm RAF, Panasonic RW2, Canon CR2 / CR3 / CRW and
+//! the other formats in [`CALIBRATION_EXTENSIONS`]) gets its look fitted to its own embedded camera
 //! JPEG (`camera_preview`), but one photo shows too little of some colours: a lime shirt covering a
 //! few dozen proxy pixels next to a hillside of foliage at the same hue. the CLI's `calibrate`
 //! pools the colour pairs of many photos per model and fits one matrix and hue/saturation/value
@@ -30,6 +31,7 @@ pub const BUNDLED: &[(&str, &str)] = &[
     ("ILCE-7CR", include_str!("../../../assets/camera-profiles/ILCE-7CR.json")),
     ("ILCE-7M4", include_str!("../../../assets/camera-profiles/ILCE-7M4.json")),
     ("ILCE-7RM5", include_str!("../../../assets/camera-profiles/ILCE-7RM5.json")),
+    ("DMC-GM5", include_str!("../../../assets/camera-profiles/DMC-GM5.json")),
     ("NIKON D5300", include_str!("../../../assets/camera-profiles/NIKON_D5300.json")),
     ("NIKON D750", include_str!("../../../assets/camera-profiles/NIKON_D750.json")),
     ("NIKON D780", include_str!("../../../assets/camera-profiles/NIKON_D780.json")),
@@ -460,6 +462,11 @@ struct Model {
 /// Most colour pairs (and, separately, tone samples) kept per photo, so a few busy photos can't dominate a profile.
 const PAIRS_PER_FILE: usize = 4000;
 
+/// Extensions (lower case) of the raw formats [`Pool::add`] can read a look from: the ones whose own
+/// camera JPEG the profile fit reads (`camera_preview::file_local_look`). The CLI's `calibrate` collects
+/// these, so a format the fit supports is not silently left out of a calibration run (upstream #4284).
+pub const CALIBRATION_EXTENSIONS: &[&str] = &["arw", "nef", "nrw", "rw2", "rwl", "raf", "cr3", "cr2", "pef", "srw", "orf", "crw", "mrw", "erf"];
+
 /// Every `n`-th item, `n` chosen to keep at most [`PAIRS_PER_FILE`].
 fn thinned<T>(items: Vec<T>) -> impl Iterator<Item = T> {
     let step = items.len().div_ceil(PAIRS_PER_FILE).max(1);
@@ -467,8 +474,8 @@ fn thinned<T>(items: Vec<T>) -> impl Iterator<Item = T> {
 }
 
 impl Pool {
-    /// Add one raw file's colour pairs. `Ok(None)` when the file can't contribute (not an ARW,
-    /// NEF or RAF without colour matrices, no usable camera JPEG, too little colour).
+    /// Add one raw file's colour pairs. `Ok(None)` when the file can't contribute (not a raw
+    /// without colour matrices, no usable camera JPEG, too little colour).
     pub fn add(&mut self, bytes: &[u8]) -> Result<Option<String>, String> {
         let mut raw = lcc_raw::decode(bytes).map_err(|e| e.to_string())?;
         // colour only: geometric lens corrections would stop the sensor proxy from binning (the pairs still follow

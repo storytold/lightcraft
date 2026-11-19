@@ -157,6 +157,7 @@
   "Page {page} of {pages}": "Trang {page} / {pages}",
   "Paint over what to replace, then click Generate. About ${usd} per variation.": "Tô lên phần cần thay thế, rồi nhấn Tạo. Khoảng ${usd} mỗi biến thể.",
   "Panning back or zooming in again on an HDR edit shows it at once instead of rendering it again. Uses up to {need} MB of graphics memory on this screen.": "Khi kéo lại hoặc phóng to lần nữa trên ảnh HDR đang chỉnh, ảnh hiện ngay thay vì kết xuất lại. Dùng tối đa {need} MB bộ nhớ đồ họa trên màn hình này.",
+  "Paste into {n} photo{}": "Dán vào {n} ảnh{:.0}",
   "Person {n}": "Người {n}",
   "Photo {n} has no valid pixel-shift frame number": "Ảnh {n} không có số khung hình Pixel Shift hợp lệ",
   "Photos in {folder} go into the collection “Camera Roll - this device's name”.": "Ảnh trong {folder} được đưa vào bộ sưu tập “Camera Roll - tên thiết bị này”.",

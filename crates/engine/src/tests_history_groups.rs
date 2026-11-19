@@ -34,12 +34,14 @@ fn sec(x: &str) -> Option<String> {
     Some(x.to_string())
 }
 
-/// Demo session plus the number of groups (and steps) it starts with.
+/// Demo session plus the number of groups (and steps) it starts with, counting the Import step
+/// (a group of its own) that the first edit of a photo with no History adds.
 fn start() -> (Session, usize, usize) {
     let mut s = Session::with_demo();
     let n = groups(&mut s)["groups"].as_array().unwrap().len();
     let l = len(&s);
-    (s, n, l)
+    let import = usize::from(l == 0);
+    (s, n + import, l + import)
 }
 
 #[test]
