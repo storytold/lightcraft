@@ -232,8 +232,9 @@ fn tiff<R: Read + Seek>(f: &mut At<R>) -> io::Result<Option<u16>> {
     Ok(Some(found.and_then(|v| u16::try_from(v).ok()).filter(|o| (1..=8).contains(o)).unwrap_or(1)))
 }
 
-/// As [`crate::psd`]'s header: the head (header, colour mode data, image resources) parsed by `craft_psd`, the last
-/// Exif resource (1058) counting.
+/// As [`crate::psd`]'s header: a fixed header `craft_psd` rejects is `Ok(None)` (the header reader rejects the file);
+/// past it, the head (colour mode data, image resources) parsed by `craft_psd`, a resource section that doesn't parse
+/// counting as none (as the header reader takes it), and the last Exif resource (1058) counting.
 fn psd<R: Read + Seek>(f: &mut At<R>) -> io::Result<Option<u16>> {
     let mut h = [0; 30];
     if !f.fill(0, &mut h)? {
@@ -247,6 +248,9 @@ fn psd<R: Read + Seek>(f: &mut At<R>) -> io::Result<Option<u16>> {
     }
     let head_len = res_len_at.saturating_add(4).saturating_add(u64::from(u32::from_be_bytes(r)));
     let Some(head) = f.block(0, head_len)? else { return Ok(None) };
+    if craft_psd::Header::from_bytes(&head).is_err() {
+        return Ok(None);
+    }
     let resources = craft_psd::Head::from_bytes(&head).map(|head| head.resources).unwrap_or_default();
     let exif = resources.iter().rev().find(|r| r.id == 1058).map(|r| r.data.as_slice());
     Ok(Some(exif.map(|d| crate::exif::summarize(d.strip_prefix(b"Exif\0\0").unwrap_or(d))).unwrap_or_default().orientation.unwrap_or(1)))
@@ -484,5 +488,26 @@ mod tests {
         ] {
             assert_eq!(probe(&tiff_with(&base, &added)).0, None, "{name}");
         }
+    }
+
+    /// A PSD whose fixed header the reader rejects is not given an orientation; one whose resources don't parse is
+    /// given 1, as the reader gives it.
+    #[test]
+    fn a_psd_with_a_bad_fixed_header_is_none_and_bad_resources_are_none_found() {
+        let six = crate::exif::minimal_exif(6);
+        let good = encode(Format::Psd, 16, 12, Some(&six), None);
+        assert_eq!(same("good", &good), 6);
+        // no channels: the fixed header's own check
+        let mut no_channels = good.clone();
+        no_channels[12..14].copy_from_slice(&0u16.to_be_bytes());
+        assert!(read_header(&no_channels).is_err(), "the reader rejects it");
+        assert_eq!(probe(&no_channels).0, None, "no channels");
+        // the first resource's signature spoiled, the section's length kept: no metadata, as the reader takes it
+        let cm = u32::from_be_bytes(good[26..30].try_into().unwrap()) as usize;
+        let first = 30 + cm + 4;
+        assert_eq!(&good[first..first + 4], b"8BIM");
+        let mut bad_resources = good.clone();
+        bad_resources[first..first + 4].copy_from_slice(b"JUNK");
+        assert_eq!(same("bad resources", &bad_resources), 1);
     }
 }
