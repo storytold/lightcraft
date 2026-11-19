@@ -18,6 +18,21 @@ fn writable_check_does_not_create_missing_parents() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+#[cfg(unix)]
+#[test]
+fn writable_probe_never_writes_through_a_planted_link() {
+    let base = temp("probe-link");
+    std::fs::create_dir_all(&base).unwrap();
+    let victim = base.join("victim");
+    std::fs::write(&victim, b"keep").unwrap();
+    let probe = base.join(format!(".lightcraft-write-test-{}", std::process::id()));
+    std::os::unix::fs::symlink(&victim, &probe).unwrap();
+    assert!(check_writable(&base).is_ok());
+    assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+    assert!(!probe.exists());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[test]
 fn migrate_moves_leaves_or_discards() {
     let base = temp("migrate");
@@ -317,6 +332,27 @@ fn a_smooth_proxy_keeps_the_scene_closer_than_the_old_quality() {
         PROXY_BLOCK_GAIN * block.1,
         block.1
     );
+}
+
+#[test]
+fn a_proxy_from_the_previous_look_version_is_stale() {
+    let dir = temp("look-version");
+    let img = lightcraft_scenes::demo_library()[0].render(64, 40);
+    let bytes = encode(&img, None).unwrap();
+    let nl = MAGIC.len() + bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
+    let head: serde_json::Value = serde_json::from_slice(&bytes[MAGIC.len()..nl]).unwrap();
+    let path = dir.join("p.lcsp");
+    std::fs::write(&path, &bytes).unwrap();
+    assert!(!is_stale(&path), "this build's own proxy is up to date");
+    // a proxy fitted at the previous look version, with no profile for the camera, is rebuilt
+    let mut older = head.as_object().cloned().unwrap_or_default();
+    older.insert(LOOK_FIELD.to_owned(), serde_json::json!(13));
+    let mut old = MAGIC.to_vec();
+    old.extend_from_slice(serde_json::Value::Object(older).to_string().as_bytes());
+    old.extend_from_slice(&bytes[nl..]);
+    std::fs::write(&path, &old).unwrap();
+    assert!(is_valid(&path), "the previous look version keeps the file readable");
+    assert!(is_stale(&path), "a proxy from the previous look version is rebuilt");
 }
 
 #[test]

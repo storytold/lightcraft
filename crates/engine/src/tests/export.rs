@@ -189,6 +189,97 @@ fn presets_conflicts_and_subfolders() {
     assert_eq!(written, ["out/Sub/LC01347.png"]);
 }
 
+/// Each of the four named delivery-target built-ins: listed as built-in, expanded to the settings the
+/// issue asks for, valid as `app.export` params, round-tripped through a user preset, and rendered at
+/// its size. A long edge is all a preset sets, so none of them crops the photo.
+#[test]
+fn named_builtin_presets_expand_round_trip_and_apply() {
+    use crate::export::output_size;
+    let mut s = Session::with_demo();
+    // the issue's four named built-ins are listed, marked builtin
+    let builtin: Vec<String> = s
+        .execute("export.presets", &json!({}))
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["builtin"].as_bool().unwrap())
+        .map(|p| p["name"].as_str().unwrap().to_string())
+        .collect();
+    // 0 = no resize: the photo's own (cropped) full size
+    let issue = [
+        ("Instagram Feed", json!({"format": "jpeg", "quality": 85, "longEdge": 1080, "colorSpace": "srgb", "sharpen": "screen"})),
+        ("Instagram Story / Reel", json!({"format": "jpeg", "quality": 85, "longEdge": 1920, "colorSpace": "srgb", "sharpen": "screen"})),
+        ("Web / Portfolio", json!({"format": "jpeg", "quality": 85, "longEdge": 2048, "colorSpace": "srgb", "metadata": "copyright"})),
+        ("Full Resolution Master", json!({"format": "jpeg", "quality": 95, "longEdge": 0, "colorSpace": "displayP3"})),
+    ];
+    for (name, settings) in &issue {
+        assert!(builtin.contains(&name.to_string()), "{name}: {builtin:?}");
+        // expanding one yields exactly the issue's settings, and they validate as app.export params
+        let params = s.export_params(&json!({"preset": name})).unwrap();
+        assert_eq!(&params, settings, "{name}");
+        ExportOptions::validate("app.export", &params).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        // round trip: save as a user preset → expand again → identical ExportOptions
+        let mine = format!("My {name}");
+        s.execute("export.savePreset", &json!({"name": mine, "params": params})).unwrap();
+        let again = s.export_params(&json!({"preset": mine})).unwrap();
+        assert_eq!(ExportOptions::from_json(&params), ExportOptions::from_json(&again), "{name}");
+    }
+    // built-in names (the new ones too) are reserved
+    assert!(s.execute("export.savePreset", &json!({"name": "web / portfolio", "params": {}})).is_err());
+    // applying each one really renders at its size, and the photo keeps its own shape. The fixture
+    // is a demo scene at 2048×1365 instead of the demo library's 6000×4000: a preset only sets a
+    // long edge, so its behaviour is the same at this size, and every preset edge (1080, 1920,
+    // 2048) still lands — the largest one exactly at the fixture's own size, unresized.
+    use lightcraft_catalog::{Op, Photo, Source};
+    let id = s.catalog.alloc_photo_id();
+    let photo = Photo::new(id, Source::Demo { scene: 1 }, "LC01200.JPG", "JPEG", 2048, 1365, "2026-09-28T09:30:00");
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(photo.clone()) }).unwrap();
+    for (name, settings) in &issue {
+        let o = ExportOptions::from_json(settings);
+        let e = export_photo(&mut s, id, &o, 1).unwrap();
+        assert_eq!((e.width, e.height), output_size(&photo, &o), "{name}");
+        match settings["longEdge"].as_u64().unwrap_or(0) {
+            0 => assert!(o.resize.is_none(), "{name}: full size means no resize"),
+            edge => assert_eq!(e.width.max(e.height) as u64, edge, "{name}: {}×{}", e.width, e.height),
+        }
+    }
+}
+
+/// Issue #2571: a subfolder with `..`, a root or a drive wrote outside the chosen folder. It is
+/// cleaned where the folder is used, so a preset or the Export dialog's field (which set it
+/// without `from_json`) are covered as well as command parameters.
+#[test]
+fn a_subfolder_never_leaves_the_destination_folder() {
+    use crate::export::{Destination, export_batch};
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    let to = Destination { dir: "out".into(), exact: None };
+    let written_to = |s: &mut Session, sub: &str| {
+        let o = ExportOptions { subfolder: sub.into(), naming: "x".into(), ..ExportOptions::from_json(&json!({"format": "png", "width": 16})) };
+        let mut written: Vec<String> = Vec::new();
+        let mut write = |p: &str, _: &[u8]| {
+            written.push(p.to_string());
+            Ok(())
+        };
+        export_batch(s, &[id], &o, &to, &mut write, &|_| false).unwrap();
+        written
+    };
+    for (sub, want) in [
+        ("../../escaped", "out/escaped/x.png"),
+        ("..", "out/x.png"),
+        ("/etc", "out/etc/x.png"),
+        ("C:\\Windows", "out/C__Windows/x.png"),
+        ("a/./b/../c", "out/a/b/c/x.png"),
+        (" Client / Jobs ", "out/Client/Jobs/x.png"),
+    ] {
+        assert_eq!(written_to(&mut s, sub), [want], "{sub:?}");
+    }
+    // command parameters get the same cleaning
+    let o = ExportOptions::from_json(&json!({"subfolder": "../up"}));
+    assert_eq!(o.subfolder, "up");
+}
+
 #[test]
 fn prepared_exports_run_on_another_thread() {
     fn send<T: Send>(_: &T) {}
@@ -283,6 +374,8 @@ fn library_with_jpeg(tag: &str) -> (Session, lightcraft_catalog::PhotoId, std::p
 
 fn preset_export_preserves_originals(command: &str, selection: serde_json::Value, tag: &str) {
     let (mut s, _, dir, src, original) = library_with_jpeg(tag);
+    // something for mask.exportEffects to write (the other commands ignore it)
+    s.mask_effects.push(crate::cmd::mask_effects::MaskEffect { name: "Glow".into(), ..Default::default() });
     let sidecar = src.with_extension("xmp");
     let appended_sidecar = dir.join("IMG_1.jpg.xmp");
     std::fs::write(&sidecar, b"existing sidecar").unwrap();
@@ -308,6 +401,14 @@ fn preset_export_preserves_originals(command: &str, selection: serde_json::Value
         assert_eq!(std::fs::read(&sidecar).unwrap(), b"existing sidecar");
         assert_eq!(std::fs::read(&appended_sidecar).unwrap(), b"appended sidecar");
     }
+    // `..` through a folder that does not exist yet could reach the original once it is created
+    let mut params = selection.clone();
+    params["path"] = json!(dir.join("missing/../IMG_1.jpg").to_string_lossy());
+    let error = s.execute(command, &params).unwrap_err().to_string();
+    // Windows resolves `..` lexically and finds the original; Unix cannot resolve it and refuses
+    assert!(error.contains("cannot be resolved") || error.contains("never writes over an original"), "{error}");
+    assert!(!dir.join("missing").exists());
+    assert_eq!(std::fs::read(&src).unwrap(), original);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -369,9 +470,12 @@ fn keyword_export_preserves_the_previous_file_on_write_failure() {
 fn preset_exports_preserve_previous_files_on_write_failure() {
     let dir = temp_dir("preset-export-failure");
     let mut s = Session::new();
-    for (command, selection, file) in
-        [("preset.export", json!({"ids": ["lc.warm-glow"]}), "look.lcpreset"), ("curve.exportPresets", json!({"names": ["Linear"]}), "curve.lccurve")]
-    {
+    s.mask_effects.push(crate::cmd::mask_effects::MaskEffect { name: "Glow".into(), ..Default::default() });
+    for (command, selection, file) in [
+        ("preset.export", json!({"ids": ["lc.warm-glow"]}), "look.lcpreset"),
+        ("curve.exportPresets", json!({"names": ["Linear"]}), "curve.lccurve"),
+        ("mask.exportEffects", json!({"names": ["Glow"]}), "effects.lceffect"),
+    ] {
         let path = dir.join(file);
         let mut params = selection;
         params["path"] = json!(path.to_string_lossy());
@@ -384,8 +488,13 @@ fn preset_exports_preserve_previous_files_on_write_failure() {
         assert_eq!(std::fs::read(&path).unwrap(), previous, "{command} preserves the prior export");
         assert_eq!(s.execute(command, &params).unwrap()["count"], 1, "replacement still succeeds");
     }
-    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "no temporary files remain");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3, "no temporary files remain");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn mask_effect_export_never_overwrites_originals_or_sidecars() {
+    preset_export_preserves_originals("mask.exportEffects", json!({"names": ["Glow"]}), "effect-export-guard");
 }
 
 fn disk_batch(
@@ -622,6 +731,23 @@ fn hdr_avif_export_hlg() {
     assert!(!hdr.bytes.windows(4).any(|w| w == b"clli"));
 }
 
+/// An exported AVIF's metadata reads back (issue #693: HEIF-family files had no metadata reader).
+/// avif-serialize writes the EXIF as an `Exif` item in two extents, its offset field and the TIFF.
+#[test]
+fn exported_avif_metadata_reads_back() {
+    use lightcraft_catalog::{Catalog, Photo, PhotoId, Source};
+    let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.jpg", "jpeg", 10, 10, "2026-09-30T00:00:00");
+    p.meta.camera = "Synthetic X2".into();
+    p.captured = Some("2026-10-12T12:34:56".into());
+    let m = crate::export::export_metadata(&p, &Catalog::new(), &ExportOptions::default()).unwrap();
+    let img = lightcraft_raster::Rgba8::new(48, 32);
+    let avif = crate::export::encode_with_metadata(&img, &ExportOptions::from_json(&json!({"format": "avif", "quality": 60})), Some(&m)).unwrap();
+    assert_eq!(lightcraft_codecs::sniff(&avif), Some(lightcraft_codecs::Format::Avif));
+    let back = lightcraft_meta::extract(&avif);
+    assert_eq!(back.model.as_deref(), Some("Synthetic X2"));
+    assert_eq!(back.capture_time.map(|d| d.to_iso()).as_deref(), Some("2026-10-12T12:34:56"));
+}
+
 /// "Remove location info" holds for the file-copying formats too: the sidecar and the DNG's
 /// packet carry no location, and an original that embeds GPS is refused rather than copied.
 #[test]
@@ -665,6 +791,7 @@ fn remove_location_holds_for_original_and_dng_exports() {
     assert!(lightcraft_meta::extract(&e.bytes).gps.is_some());
     let err = export_photo(&mut s, jid, &opts("original", true), 1).err().unwrap();
     assert!(err.contains("can't remove the location") && err.contains("export as JPEG"), "{err}");
+    assert!(!err.contains("DNG"), "a JPEG can't be exported as DNG: {err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -854,6 +981,30 @@ fn metadata_none_in_any_case_exports_no_metadata() {
     assert!(m.gps.is_none() && m.city.is_none(), "{m:?}");
 }
 
+/// A raw's Exif Make, Model and LensMake reach an exported JPEG apart, as stitching tools read them.
+#[test]
+fn export_writes_camera_make_and_lens_make_to_exif() {
+    let dir = temp_dir("export-raw-exif");
+    let src = dir.join("Canon.dng");
+    let meta = lightcraft_meta::Metadata {
+        make: Some("Canon".into()),
+        model: Some("EOS R5".into()),
+        lens_make: Some("Sigma".into()),
+        lens_model: Some("RF 24-105mm f/4L IS USM".into()),
+        ..Default::default()
+    };
+    std::fs::write(&src, synthetic_dng_with(None, meta)).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    let e = export_photo(&mut s, id, &ExportOptions::from_json(&json!({"format": "jpeg", "longEdge": 64, "metadata": "all"})), 1).unwrap();
+    let back = lightcraft_meta::extract(&e.bytes);
+    assert_eq!(back.make.as_deref(), Some("Canon"), "EXIF Make is missing: {back:?}");
+    assert_eq!(back.model.as_deref(), Some("EOS R5"), "EXIF Model holds the model alone: {back:?}");
+    assert_eq!(back.lens_make.as_deref(), Some("Sigma"), "EXIF LensMake is missing: {back:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// An original raw whose own metadata holds GPS is refused under "Remove location info".
 #[test]
 fn remove_location_refuses_a_raw_that_embeds_gps() {
@@ -867,7 +1018,147 @@ fn remove_location_refuses_a_raw_that_embeds_gps() {
     s.execute("library.import", &json!({"paths": [raw.to_string_lossy()]})).unwrap();
     let id = s.catalog.photos().next().unwrap().id;
     let err = export_photo(&mut s, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
-    assert!(err.contains("can't remove the location"), "{err}");
+    assert!(err.contains("can't remove the location") && err.contains("DNG"), "a raw can go out as DNG: {err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A HEIC whose only GPS is in its thumbnail's EXIF (the pictures have no data: an original's
+/// export never decodes it). Item 1 is the photo, 2 its thumbnail, 3 the thumbnail's EXIF, kept in
+/// the `meta` box's `idat`.
+fn heic_with_gps_in_its_thumbnail() -> Vec<u8> {
+    let gps = lightcraft_meta::Gps { latitude: 48.85, longitude: 2.35, altitude: None };
+    let exif = [&[0u8, 0, 0, 0][..], &lightcraft_meta::write_exif(&lightcraft_meta::Metadata { gps: Some(gps), ..Default::default() })].concat();
+    heic_with_metadata_in_its_thumbnail(b"Exif", &exif)
+}
+
+fn heic_with_metadata_in_its_thumbnail(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+    let bx = |kind: &[u8], body: &[u8]| [&((body.len() + 8) as u32).to_be_bytes()[..], kind, body].concat();
+    let full = |kind: &[u8], body: &[u8]| bx(kind, &[&[0u8, 0, 0, 0][..], body].concat());
+    let infe = |id: u8, kind: &[u8]| {
+        let fields = if kind == b"mime" { b"\0application/rdf+xml\0".as_slice() } else { b"\0" };
+        bx(b"infe", &[&[2, 0, 0, 0, 0, id, 0, 0][..], kind, fields].concat())
+    };
+    let iinf = full(b"iinf", &[&[0, 3][..], &infe(1, b"hvc1"), &infe(2, b"hvc1"), &infe(3, kind)].concat());
+    let iref = full(b"iref", &[bx(b"thmb", &[0, 2, 0, 1, 0, 1]), bx(b"cdsc", &[0, 3, 0, 1, 0, 2])].concat());
+    // `iloc` version 1, 4-byte offsets and lengths: item 3 from `idat` (construction method 1)
+    let mut iloc = vec![1, 0, 0, 0, 0x44, 0, 0, 1, 0, 3, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0];
+    iloc.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    let meta = full(b"meta", &[full(b"pitm", &[0, 1]), iinf, iref, bx(b"iloc", &iloc), bx(b"idat", payload)].concat());
+    [bx(b"ftyp", b"heic\0\0\0\0mif1heic"), meta].concat()
+}
+
+/// "Remove location info" refuses an original that embeds GPS anywhere it can be read, here only
+/// in a HEIC's thumbnail (#693 review), and doesn't offer DNG for a photo that isn't a raw.
+#[test]
+fn remove_location_refuses_a_heic_whose_thumbnail_has_gps() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let dir = temp_dir("export-noloc-heic");
+    let path = dir.join("IMG_0003.HEIC");
+    std::fs::write(&path, heic_with_gps_in_its_thumbnail()).unwrap();
+    let mut s = Session::new().with_fs();
+    let id = s.catalog.alloc_photo_id();
+    let p = Photo::new(id, Source::File { path: path.to_string_lossy().into() }, "IMG_0003.HEIC", "HEIC", 32, 32, "2026-10-12T00:00:00");
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let opts = |remove: bool| ExportOptions::from_json(&json!({"format": "original", "removeLocation": remove}));
+    assert!(export_photo(&mut s, id, &opts(false), 1).is_ok(), "copied as is when the location may stay");
+    let err = export_photo(&mut s, id, &opts(true), 1).err().expect("refused: the thumbnail's EXIF has GPS");
+    assert!(err.contains("can't remove the location") && err.contains("export as JPEG or TIFF"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A listed metadata item with an unreadable placement is not proof that an original has no GPS.
+/// Exercise the real file-copy path; these damaged containers do not need a working decoder.
+#[test]
+fn remove_location_refuses_heic_with_unresolved_iloc() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let dir = temp_dir("export-noloc-heic-iloc");
+    let path = dir.join("Placement.HEIC");
+    let mut s = Session::new().with_fs();
+    let id = s.catalog.alloc_photo_id();
+    let p = Photo::new(id, Source::File { path: path.to_string_lossy().into() }, "Placement.HEIC", "HEIC", 32, 32, "2026-10-12T00:00:00");
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let opts = |remove: bool| ExportOptions::from_json(&json!({"format": "original", "removeLocation": remove}));
+
+    let original = heic_with_gps_in_its_thumbnail();
+    assert!(lightcraft_meta::embeds_location(&original), "the intact fixture has GPS");
+    let kind_at = original.windows(4).position(|w| w == b"iloc").unwrap();
+    let body = kind_at + 4;
+    for damage in ["none", "missing", "version", "field size", "truncated entry"] {
+        let mut bytes = original.clone();
+        match damage {
+            "missing" => bytes[kind_at..body].copy_from_slice(b"free"),
+            "version" => bytes[body] = 3,
+            "field size" => bytes[body + 4] = 0x24,
+            "truncated entry" => bytes[body + 15] = 2, // two extents declared, only one present
+            _ => {}
+        }
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(export_photo(&mut s, id, &opts(false), 1).unwrap().bytes, bytes, "location may stay: {damage}");
+        let err = export_photo(&mut s, id, &opts(true), 1).err().expect("unresolved GPS must not be copied");
+        assert!(err.contains("can't remove the location") && err.contains("export as JPEG or TIFF"), "{damage}: {err}");
+    }
+
+    // Ordinary files without GPS still export, with and without an EXIF item.
+    for exif in [None, Some(lightcraft_meta::write_exif(&lightcraft_meta::Metadata { model: Some("Synthetic".into()), ..Default::default() }))] {
+        let mut spec = craft_heif::testdata::Spec::new(32, 32, &|_, _| [0, 0, 0]);
+        spec.exif = exif;
+        let bytes = craft_heif::testdata::build(&spec);
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(export_photo(&mut s, id, &opts(true), 1).unwrap().bytes, bytes);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A damaged item catalog cannot authorize copying the GPS bytes that `iloc` still references.
+#[test]
+fn remove_location_refuses_heic_with_incomplete_exif_catalog() {
+    let original = heic_with_gps_in_its_thumbnail();
+    let idat = original.windows(4).position(|w| w == b"idat").unwrap();
+    assert!(lightcraft_meta::try_read_exif(&original[idat + 8..]).unwrap().gps.is_some(), "real EXIF payload");
+    assert_incomplete_catalog_refused(&original, "exif");
+}
+
+#[test]
+fn remove_location_refuses_heic_with_incomplete_xmp_catalog() {
+    let gps =
+        lightcraft_meta::Metadata { gps: Some(lightcraft_meta::Gps { latitude: 48.85, longitude: 2.35, altitude: None }), ..Default::default() };
+    let xmp = lightcraft_meta::write_xmp(&gps, None);
+    assert!(lightcraft_meta::parse_xmp(&xmp).unwrap().metadata.gps.is_some(), "real XMP payload");
+    assert_incomplete_catalog_refused(&heic_with_metadata_in_its_thumbnail(b"mime", xmp.as_bytes()), "xmp");
+}
+
+fn assert_incomplete_catalog_refused(original: &[u8], label: &str) {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let dir = temp_dir(&format!("export-noloc-heic-catalog-{label}"));
+    let path = dir.join("Catalog.HEIC");
+    let mut s = Session::new().with_fs();
+    let id = s.catalog.alloc_photo_id();
+    let p = Photo::new(id, Source::File { path: path.to_string_lossy().into() }, "Catalog.HEIC", "HEIC", 32, 32, "2026-10-12T00:00:00");
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let opts = |remove: bool| ExportOptions::from_json(&json!({"format": "original", "removeLocation": remove}));
+    let iinf = original.windows(4).position(|w| w == b"iinf").unwrap();
+    let infe = original.windows(4).rposition(|w| w == b"infe").unwrap();
+    let idat = original.windows(4).position(|w| w == b"idat").unwrap();
+    assert!(lightcraft_meta::embeds_location(original), "intact GPS container");
+    for damage in ["truncated type", "missing catalog", "unsupported table", "unsupported entry", "unknown entry", "truncated catalog"] {
+        let mut bytes = original.to_vec();
+        match damage {
+            "truncated type" => bytes[infe - 4..infe].copy_from_slice(&18u32.to_be_bytes()),
+            "missing catalog" => bytes[iinf..iinf + 4].copy_from_slice(b"free"),
+            "unsupported table" => bytes[iinf + 4] = 2,
+            "unsupported entry" => bytes[infe + 4] = 4,
+            "unknown entry" => bytes[infe..infe + 4].copy_from_slice(b"free"),
+            "truncated catalog" => bytes[iinf - 4..iinf].copy_from_slice(&u32::MAX.to_be_bytes()),
+            other => panic!("unknown damage {other}"),
+        }
+        assert_eq!(&bytes[idat..], &original[idat..], "GPS bytes retained");
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(export_photo(&mut s, id, &opts(false), 1).unwrap().bytes, bytes, "location may stay: {damage}");
+        let result = export_photo(&mut s, id, &opts(true), 1);
+        assert!(result.is_err(), "Remove location copied the original with {damage}");
+        let err = result.err().unwrap();
+        assert!(err.contains("can't remove the location") && err.contains("export as JPEG or TIFF"), "{damage}: {err}");
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -938,6 +1229,12 @@ fn remove_location_refuses_a_psd_with_unreadable_resources() {
     let path = dir.join("Geo.psd");
     let valid_bytes = synthetic_psd_with_metadata(&gps);
     assert_eq!(lightcraft_meta::extract(&valid_bytes).gps, gps.gps, "the fixture embeds EXIF GPS before corruption");
+    std::fs::write(&path, &valid_bytes).unwrap();
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    // Import the decodable original first. The malformed resource list below is the file state the
+    // export safety check must refuse; it is not a fixture the image importer should have to decode.
     let mut bytes = valid_bytes;
     let colour_length = usize::try_from(u32::from_be_bytes(bytes[26..30].try_into().unwrap())).unwrap();
     let resource_length_at = 30 + colour_length;
@@ -949,9 +1246,6 @@ fn remove_location_refuses_a_psd_with_unreadable_resources() {
 
     assert!(lightcraft_meta::extract(&bytes).gps.is_none(), "the malformed trailing resource reproduces the metadata gap");
     std::fs::write(&path, bytes).unwrap();
-    let mut session = Session::new().with_fs();
-    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
-    let id = session.catalog.photos().next().unwrap().id;
     let err = export_photo(&mut session, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
     assert!(err.contains("can't verify location metadata") && err.contains("malformed PSD/PSB"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
@@ -992,16 +1286,15 @@ fn hdr_jxl_export_is_pq_rec2020() {
     s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 2})).unwrap();
     let hdr = export_photo(&mut s, id, &o, 1).unwrap();
     let encoding = |b: &[u8]| {
-        let img = jxl_oxide::JxlImage::builder().read(std::io::Cursor::new(b)).unwrap();
-        let m = &img.image_header().metadata;
-        (format!("{:?}", m.colour_encoding), m.bit_depth.bits_per_sample())
+        let dec = craft_jxl::decode(b, craft_jxl::DecodeLimits::default()).unwrap();
+        (dec.rendered_cicp, dec.bit_depth)
     };
-    let (c, bits) = encoding(&hdr.bytes);
-    assert!(c.contains("Bt2100") && c.contains("Pq"), "{c}");
+    let (cicp, bits) = encoding(&hdr.bytes);
+    assert_eq!(cicp, Some([9, 16, 0, 1]), "{cicp:?}");
     assert_eq!(bits, 16);
     // a photo without an HDR edit exports as an ordinary SDR file
-    let (c, _) = encoding(&sdr.bytes);
-    assert!(!c.contains("Pq"), "{c}");
+    let (cicp, _) = encoding(&sdr.bytes);
+    assert_ne!(cicp.map(|c| c[1]), Some(16), "{cicp:?}");
 }
 
 #[test]
@@ -1428,4 +1721,34 @@ fn huge_export_size_is_an_error() {
     assert!(s.render_export(id, 70_000, 10, OutputSpace::Srgb, OutputDepth::U8).is_err());
     assert!(s.render_now(id, huge, huge).is_err());
     assert!(s.render_now(id, 10, 70_000).is_err());
+}
+
+/// A user export preset whose name collides with a built-in one (in any case) is shadowed by it:
+/// the built-ins are looked up first, so the user's preset can never be selected or exported, and
+/// the save path refuses to recreate it under a free name. Loading the preferences renames it to a
+/// name of its own instead, keeping its settings.
+#[test]
+fn a_user_preset_naming_a_built_in_is_renamed_when_the_library_opens() {
+    let lib = temp_dir("export-preset-rename");
+    {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
+        s.close_library().unwrap();
+    }
+    std::fs::write(lib.join("prefs.json"), r#"{"exportPresets": [{"name": "web / portfolio", "params": {"format": "png", "width": 64}}]}"#).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+
+    let builtins: Vec<String> = crate::export::builtin_presets().into_iter().map(|p| p.name).collect();
+    assert_eq!(s.export_presets.len(), 1, "the user's preset is kept");
+    let name = s.export_presets[0].name.clone();
+    assert!(!builtins.iter().any(|b| b.eq_ignore_ascii_case(&name)), "{name} still shadows a built-in");
+    assert_eq!(s.export_presets[0].params, json!({"format": "png", "width": 64}), "its settings are kept");
+    // it is reachable under its own name: the export takes the user's settings
+    let p = s.export_params(&json!({"preset": name})).unwrap();
+    assert_eq!((p["format"].as_str(), p["width"].as_u64()), (Some("png"), Some(64)), "{p}");
+    // and the built-in of that name is still the built-in
+    let b = s.export_params(&json!({"preset": "Web / Portfolio"})).unwrap();
+    assert_eq!((b["format"].as_str(), b["longEdge"].as_u64()), (Some("jpeg"), Some(2048)), "{b}");
+    let _ = std::fs::remove_dir_all(&lib);
 }

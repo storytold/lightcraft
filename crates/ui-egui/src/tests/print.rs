@@ -454,7 +454,37 @@ fn page_options_checkboxes_set_the_page_and_hide_for_packages() {
     scroll(&mut h, 600.0);
     click(&mut h, "button:printStyle-1");
     assert!(has(&h, "check:printCropMarks"), "a contact sheet has Page Options");
-    // Lightroom's packages have no Page Options
+    // Lightroom's packages have no page numbers or page info (they have Cut Guides, tested below)
     click(&mut h, "button:printStyle-2");
-    assert!(!has(&h, "check:printPageNumbers") && !has(&h, "check:printCropMarks"));
+    assert!(!has(&h, "check:printPageNumbers") && !has(&h, "check:printPageInfo"));
+}
+
+#[test]
+fn picture_package_and_custom_package_pages_can_print_cut_guide() {
+    let mut h = demo(Services::default());
+    open_print(&mut h);
+    let scroll = |h: &mut Headless, dy: f32| {
+        // The pointer position from the last widget interaction stays over the settings column,
+        // so scrolling keeps working even after combo:printPaper is out of view.
+        for _ in 0..4 {
+            h.request("ui.scroll", json!({"dy": dy}), T);
+            h.settle(T);
+        }
+    };
+    // picture package (style 2) and custom package (style 3) both offer Cut Guides, not the
+    // Page Options: only crop marks, reusing page.cropMarks, labelled for packages
+    for style in ["button:printStyle-2", "button:printStyle-3"] {
+        click(&mut h, style);
+        scroll(&mut h, -600.0);
+        assert!(has(&h, "check:printCropMarks"), "{style}: a package has Cut Guides");
+        assert!(!has(&h, "check:printPageNumbers") && !has(&h, "check:printPageInfo"), "{style}: packages have no page numbers or page info");
+        assert!(h.painted_text().iter().any(|t| t == "Cut Guides"), "{style}: the checkbox is labelled Cut Guides: {:?}", h.painted_text());
+        assert!(!h.painted_text().iter().any(|t| t == "Crop Marks"), "{style}: packages do not label it Crop Marks: {:?}", h.painted_text());
+        assert!(!h.app.session.print.page.crop_marks);
+        click(&mut h, "check:printCropMarks");
+        assert!(h.app.session.print.page.crop_marks, "{style}: Cut Guides sets crop_marks");
+        click(&mut h, "check:printCropMarks");
+        assert!(!h.app.session.print.page.crop_marks, "{style}: the reuse keeps reading page.cropMarks");
+        scroll(&mut h, 600.0);
+    }
 }
