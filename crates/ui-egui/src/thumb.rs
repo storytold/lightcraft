@@ -632,6 +632,30 @@ fn preview_pill(ui: &mut egui::Ui, th: &Thumb, t: &Tokens, why: &str, stack: Opt
 mod tests {
     use super::*;
 
+    /// The marks band sits on the photo itself — a portrait's fitted rect is narrower than the
+    /// cell's image area, a landscape's is shorter — so it never sticks out past the photo or
+    /// crosses its selection frame (#3601).
+    #[test]
+    fn the_marks_band_stays_on_the_photo() {
+        let m = Surface::Grid.metrics();
+        let cell = Rect::from_min_size(pos2(10.0, 24.0), vec2(180.0, 180.0));
+        // A photo that fills the image area: the band is the usual footer
+        let full = marks_bar(cell, &m);
+        assert!((full.height() - m.bar).abs() < 0.01, "{full:?}");
+        assert!((full.bottom() - cell.bottom()).abs() < 0.01);
+        assert!((full.left() - cell.left()).abs() < 0.01 && (full.right() - cell.right()).abs() < 0.01);
+        // A portrait photo fitted inside it: the band is no wider than the photo
+        let portrait = Rect::from_min_size(pos2(cell.left() + 55.0, cell.top()), vec2(70.0, 180.0));
+        let bar = marks_bar(portrait, &m);
+        assert!(bar.left() >= portrait.left() && bar.right() <= portrait.right(), "{bar:?}");
+        assert!((bar.height() - m.bar).abs() < 0.01);
+        // A landscape photo shorter than the band: its own top edge, never a negative rect
+        let wide = Rect::from_min_size(pos2(cell.left(), cell.top() + 80.0), vec2(180.0, 20.0));
+        let bar = marks_bar(wide, &m);
+        assert!((bar.top() - wide.top()).abs() < 0.01, "{bar:?}");
+        assert!(bar.bottom() <= wide.bottom() + 0.01);
+    }
+
     fn all_marks() -> Vec<Marks> {
         let mut out = Vec::new();
         for rating in 0..=5 {

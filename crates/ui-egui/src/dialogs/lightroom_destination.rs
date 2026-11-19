@@ -99,7 +99,7 @@ pub fn default_location(app: &LightcraftApp) -> Option<PathBuf> {
 }
 
 /// The new library's default name: the catalog's file name without `.lrcat` (`Travel.lrcat` →
-/// `Travel`), or `Travel 2`, `Travel 3`… when `location` has something by that name already.
+/// `Travel`; a backup's `Travel.zip` gives `Travel` too), or `Travel 2`, `Travel 3`… when `location` has something by that name already.
 pub fn default_name(catalog: &Path, location: Option<&Path>) -> String {
     let stem = catalog.file_stem().map(|s| s.to_string_lossy().trim().to_string()).filter(|s| !s.is_empty());
     let stem = stem.unwrap_or_else(|| "Lightroom Catalog".to_string());
@@ -353,6 +353,7 @@ mod tests {
     fn the_new_library_is_named_after_the_catalog() {
         assert_eq!(default_name(Path::new("/x/Travel.lrcat"), None), "Travel");
         assert_eq!(default_name(Path::new("/x/Lightroom Catalog-v13-3.lrcat"), None), "Lightroom Catalog-v13-3");
+        assert_eq!(default_name(Path::new("/x/Backups/2026-10-22 1200/Travel.zip"), None), "Travel");
         // nothing to name it after
         assert_eq!(default_name(Path::new(""), None), "Lightroom Catalog");
         // a name taken in the location: the next free one

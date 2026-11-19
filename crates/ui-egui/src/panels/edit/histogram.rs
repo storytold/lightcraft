@@ -1,8 +1,9 @@
+use super::hdr_flow::{LayoutFlow, hdr_histogram_key, sdr_histogram_key};
 #[cfg(test)]
 use super::sliders::reset_tip;
 use super::{
-    Align2, Color32, Histogram, Icon, LightcraftApp, Mesh, PhotoId, Pos2, Rect, RichText, RightPanel, Sense, Slot, Stroke, Tokens, Vertex, divider,
-    hex, json, paint, pos2, register, vec2,
+    Align2, Color32, Histogram, Icon, LightcraftApp, PhotoId, Rect, RichText, RightPanel, Sense, Slot, Stroke, Tokens, divider, json, paint, pos2,
+    register, vec2,
 };
 
 // ------------------------------------------------------------------------------ histogram
@@ -20,16 +21,21 @@ pub(super) fn preview_histogram(app: &LightcraftApp, id: PhotoId) -> Option<ligh
 /// An HDR edit's histogram stays an HDR histogram: some renders carry only their 8-bit image's
 /// (a drag's drafts, a cached thumbnail or stand-in), and showing those would swap the panel to
 /// the SDR layout and back while a slider moves. Every render with HDR bins replaces the one kept for the photo, so
-/// the histogram still follows the edit live; an SDR edit shows what it gets.
+/// the histogram still follows the edit live. An SDR edit likewise never shows an HDR histogram
+/// (one rendered before HDR was turned off, or a stale thumbnail's): it keeps its last SDR one.
 fn steady_hdr_histogram(ctx: &egui::Context, id: PhotoId, hdr_edit: bool, hist: Option<Histogram>) -> Option<Histogram> {
-    let key = egui::Id::unique(("hdrHistogram", id));
+    let (hdr_key, sdr_key) = (hdr_histogram_key(id), sdr_histogram_key(id));
     match hist {
         Some(h) if h.hdr.is_some() => {
-            ctx.data_mut(|d| d.insert_temp(key, h.clone()));
-            Some(h)
+            ctx.data_mut(|d| d.insert_temp(hdr_key, h.clone()));
+            if hdr_edit { Some(h) } else { ctx.data(|d| d.get_temp::<Histogram>(sdr_key)) }
         }
-        h if hdr_edit => ctx.data(|d| d.get_temp::<Histogram>(key)).or(h),
-        h => h,
+        Some(h) => {
+            ctx.data_mut(|d| d.insert_temp(sdr_key, h.clone()));
+            if hdr_edit { ctx.data(|d| d.get_temp::<Histogram>(hdr_key)).or(Some(h)) } else { Some(h) }
+        }
+        None if hdr_edit => ctx.data(|d| d.get_temp::<Histogram>(hdr_key)),
+        None => None,
     }
 }
 
@@ -62,10 +68,12 @@ pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
     // rendered it)
     let hist = live.or_else(|| preview_histogram(app, id));
     let hist = steady_hdr_histogram(ui.ctx(), id, hdr_edit, hist);
+    // the SDR ⇄ HDR layout change flows instead of cutting
+    let flow = LayoutFlow::of(ui.ctx(), id, hist.as_ref());
     // an HDR edit's histogram (`pipeline::hdr_histogram`) gets a colour bar and an SDR / HDR label
     // row under the plot
-    let hdr = hist.as_ref().and_then(|h| h.hdr);
-    let legend = if hdr.is_some() { 26.0 } else { 0.0 };
+    let hdr = flow.hdr_bins();
+    let legend = 26.0 * flow.morph;
     let (r, resp) = ui.allocate_exact_size(vec2(w, 118.0 + legend), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Histogram"));
     register(ui, "histogram", r);
@@ -79,10 +87,11 @@ pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
     if let Some(a) = &zone {
         crate::panels::histogram::paint_zone(p, plot, a, &t);
     }
+    let x0 = flow.sdr_white_x(plot);
     if let Some(b) = hdr {
         // white for SDR, then one band per stop above SDR white: white too, or (Visualize HDR
-        // range on) in its colours
-        let x0 = plot.left() + plot.width() * b.from as f32 / 255.0;
+        // range on) in its colours; the row is revealed as it opens
+        let p = &p.with_clip_rect(Rect::from_min_max(pos2(r.left(), plot.bottom()), pos2(r.right(), plot.bottom() + legend)));
         let bar = |a: f32, z: f32, c: Color32| p.rect_filled(Rect::from_min_max(pos2(a, plot.bottom() + 2.0), pos2(z, plot.bottom() + 7.0)), 0.0, c);
         let white = Color32::from_rgb(228, 228, 230);
         bar(plot.left(), x0 - 1.0, white);
@@ -104,18 +113,10 @@ pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
         ));
     }
     let clipping = hist.as_ref().map(|h| h.clipping());
-    if let Some(h) = hist {
-        let smooth = |v: &[u32]| -> Vec<f32> {
-            (0..256)
-                .map(|i| {
-                    let (a, b) = (i.max(2) - 2, (i + 3).min(256));
-                    v[a..b].iter().map(|x| *x as f32).sum::<f32>() / (b - a) as f32
-                })
-                .collect()
-        };
-        // HDR: SDR on the left half, a solid line at SDR white and dashed ones between the stops
-        if let Some(b) = h.hdr {
-            let x0 = plot.left() + plot.width() * b.from as f32 / 255.0;
+    // mid-way with no histogram of the new kind yet, the one being left is drawn alone
+    if let Some(h) = hist.or_else(|| flow.leaving()) {
+        // HDR: SDR on the left, a solid line at SDR white and dashed ones between the stops
+        if let Some(b) = hdr {
             let stops = b.stops.round().max(1.0) as usize;
             for k in 1..stops {
                 let x = x0 + (plot.right() - x0) * k as f32 / stops as f32;
@@ -134,34 +135,7 @@ pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
                 p.line_segment([pos2(x, plot.top()), pos2(x, plot.bottom())], Stroke::new(1.0, Color32::from_rgb(230, 150, 60)));
             }
         }
-        let chans = [(smooth(&h.r), hex("#df3939")), (smooth(&h.g), hex("#44b072")), (smooth(&h.b), hex("#3b6fe0"))];
-        let peak = chans.iter().flat_map(|(v, _)| v.iter().skip(2).take(252)).fold(1.0f32, |a, b| a.max(*b));
-        let to = |i: usize, v: f32| pos2(plot.left() + plot.width() * i as f32 / 255.0, plot.bottom() - plot.height() * (v / peak).sqrt().min(1.0));
-        // luminance fill
-        let lum = smooth(&h.luma);
-        let mut mesh = Mesh::default();
-        for i in 0..256 {
-            let top = to(i, lum[i]);
-            mesh.vertices.push(Vertex { pos: top, uv: Pos2::ZERO, color: Color32::from_gray(120).gamma_multiply(0.35) });
-            mesh.vertices.push(Vertex { pos: pos2(top.x, plot.bottom()), uv: Pos2::ZERO, color: Color32::from_gray(120).gamma_multiply(0.35) });
-            if i > 0 {
-                let k = (i as u32) * 2;
-                mesh.indices.extend([k - 2, k - 1, k, k - 1, k + 1, k]);
-            }
-        }
-        p.add(mesh);
-        // greyscale images: the three channels coincide — draw one neutral line
-        let spread: f32 = (0..256).map(|i| (chans[0].0[i] - chans[1].0[i]).abs() + (chans[1].0[i] - chans[2].0[i]).abs()).sum();
-        let total: f32 = chans[1].0.iter().sum::<f32>().max(1.0);
-        if spread / total < 0.02 {
-            let pts: Vec<Pos2> = (0..256).map(|i| to(i, chans[1].0[i])).collect();
-            p.add(egui::Shape::line(pts, Stroke::new(1.5, Color32::from_gray(200))));
-        } else {
-            for (v, c) in &chans {
-                let pts: Vec<Pos2> = (0..256).map(|i| to(i, v[i])).collect();
-                p.add(egui::Shape::line(pts, Stroke::new(1.5, *c)));
-            }
-        }
+        flow.paint_curve(p, plot, &h);
     }
     let mut clicked = resp.clicked();
     // both buttons keep clear of the panel's right edge, where its floating scroll bar widens when
@@ -363,6 +337,10 @@ mod tests {
         assert_eq!(steady_hdr_histogram(&ctx, id, true, Some(sdr.clone())), Some(hdr(4.0)));
         // HDR turned off: the SDR histogram at once; other photos keep their own
         assert_eq!(steady_hdr_histogram(&ctx, id, false, Some(sdr.clone())), Some(sdr.clone()));
+        // an SDR edit never shows an HDR histogram (a stale thumbnail's): its last SDR one instead,
+        // or none yet
+        assert_eq!(steady_hdr_histogram(&ctx, id, false, Some(hdr(4.0))), Some(sdr.clone()));
+        assert_eq!(steady_hdr_histogram(&ctx, PhotoId(9), false, Some(hdr(4.0))), None);
         assert_eq!(steady_hdr_histogram(&ctx, PhotoId(8), true, Some(sdr.clone())), Some(sdr));
     }
 
