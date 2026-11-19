@@ -1,7 +1,7 @@
 //! 3D LUT profiles: `.cube` files (the plain-text Cube LUT format: `LUT_3D_SIZE`, optional
 //! `DOMAIN_MIN` / `DOMAIN_MAX`, then size³ "r g b" lines with red changing fastest), applied to
 //! the display-encoded output colour and blended by the profile amount. Profiles are registered
-//! here by id (`lut:…`) and found by the finishing stage; LUT profiles render on the CPU.
+//! here by id (`lut:…`) and found by the finishing stage (CPU loop and GPU kernel alike).
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
@@ -19,48 +19,8 @@ pub struct Lut3d {
 impl Lut3d {
     /// Parse a `.cube` file.
     pub fn parse_cube(text: &str) -> Result<Lut3d, String> {
-        let (mut size, mut title) = (0usize, None);
-        let (mut min, mut max) = ([0.0f32; 3], [1.0f32; 3]);
-        let mut data = Vec::new();
-        let three = |rest: &str| -> Option<[f32; 3]> {
-            let v: Vec<f32> = rest.split_whitespace().filter_map(|x| x.parse().ok()).collect();
-            (v.len() == 3 && v.iter().all(|x| x.is_finite())).then(|| [v[0], v[1], v[2]])
-        };
-        for line in text.lines() {
-            let l = line.trim();
-            if l.is_empty() || l.starts_with('#') {
-                continue;
-            }
-            if let Some(r) = l.strip_prefix("TITLE") {
-                title = Some(r.trim().trim_matches('"').to_string());
-            } else if let Some(r) = l.strip_prefix("LUT_3D_SIZE") {
-                size = r.trim().parse().map_err(|_| format!("bad LUT_3D_SIZE `{}`", r.trim()))?;
-                if !(2..=256).contains(&size) {
-                    return Err(format!("LUT_3D_SIZE {size} out of range"));
-                }
-            } else if l.starts_with("LUT_1D_SIZE") {
-                return Err("1D LUTs are not supported (only 3D .cube files)".into());
-            } else if let Some(r) = l.strip_prefix("DOMAIN_MIN") {
-                min = three(r).ok_or("bad DOMAIN_MIN")?;
-            } else if let Some(r) = l.strip_prefix("DOMAIN_MAX") {
-                max = three(r).ok_or("bad DOMAIN_MAX")?;
-            } else if l.starts_with(|c: char| c.is_ascii_alphabetic()) {
-                // a data line of `nan` / `inf` starts with a letter too: it is bad data, not a keyword
-                if l.split_whitespace().next().is_some_and(|w| w.parse::<f32>().is_ok()) {
-                    return Err(format!("bad line `{l}`"));
-                }
-                // other keywords (LUT_IN_VIDEO_RANGE…) are ignored
-            } else {
-                data.push(three(l).ok_or_else(|| format!("bad line `{l}`"))?);
-            }
-        }
-        if size == 0 {
-            return Err("not a 3D .cube LUT (no LUT_3D_SIZE)".into());
-        }
-        if data.len() != size * size * size {
-            return Err(format!("expected {} entries, found {}", size * size * size, data.len()));
-        }
-        Ok(Lut3d { size, data, domain_min: min, domain_max: max, title })
+        let table = craft_cms_profile::lutfile::parse_cube_3d(text, 256).map_err(|error| error.to_string())?;
+        Ok(Lut3d { size: table.size, data: table.data, domain_min: table.domain_min, domain_max: table.domain_max, title: table.title })
     }
 
     /// Look up `c` (trilinear).
@@ -110,7 +70,7 @@ pub fn unregister(id: &str) {
     registry().write().unwrap_or_else(|e| e.into_inner()).remove(id);
 }
 
-/// Profile ids that render with a LUT (and so on the CPU).
+/// Profile ids that render with a LUT.
 pub fn is_lut_profile(id: &str) -> bool {
     id.starts_with("lut:")
 }
@@ -130,6 +90,25 @@ mod tests {
             }
         }
         s
+    }
+
+    #[test]
+    fn shared_profile_parser_keeps_domain_and_title_policy() {
+        let text = format!(
+            "TITLE \"literal # title\"\nDOMAIN_MIN 1 0 2\nDOMAIN_MAX 0 0 1\n{}",
+            cube(|c| c, 2).lines().skip(1).collect::<Vec<_>>().join("\n")
+        );
+        let profile = Lut3d::parse_cube(&text).unwrap();
+        assert_eq!(profile.title.as_deref(), Some("literal # title"));
+        assert_eq!(profile.domain_min, [1.0, 0.0, 2.0]);
+        assert_eq!(profile.domain_max, [0.0, 0.0, 1.0]);
+        assert!(profile.apply([0.0; 3]).iter().all(|v| v.is_finite()));
+        let unlabelled = cube(|c| c, 2).lines().skip(1).collect::<Vec<_>>().join("\n");
+        assert_eq!(Lut3d::parse_cube(&unlabelled).unwrap().title, None);
+        assert!(Lut3d::parse_cube("LUT_3D_SIZE 256").unwrap_err().contains("16777216"));
+        for bad in ["0 ignored 0 0", "0 0 0 ignored", "NaN 0 0"] {
+            assert!(Lut3d::parse_cube(&format!("LUT_3D_SIZE 2\n{bad}\n{}", "0 0 0\n".repeat(7))).is_err());
+        }
     }
 
     #[test]

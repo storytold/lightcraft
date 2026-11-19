@@ -18,8 +18,6 @@ use std::time::Duration;
 const POLL: Duration = Duration::from_secs(3);
 /// A wait before trying again when colord isn't there (not installed, no system bus).
 const RETRY: Duration = Duration::from_secs(30);
-/// The largest profile file read (real display profiles are a few KiB to a few MiB).
-const MAX_PROFILE: u64 = 16 << 20;
 
 const SERVICE: &str = "org.freedesktop.ColorManager";
 const DEVICE: &str = "org.freedesktop.ColorManager.Device";
@@ -72,7 +70,7 @@ fn read(conn: &zbus::blocking::Connection) -> Option<Vec<u8>> {
         }
     }
     let file = pick(&files)?;
-    load(std::path::Path::new(file))
+    crate::profile_file::load(std::path::Path::new(file))
 }
 
 /// The profile to use for these displays' profile files: the one they share, `None` with none or
@@ -81,15 +79,6 @@ fn pick(files: &[String]) -> Option<&str> {
     let mut named = files.iter().map(String::as_str).filter(|f| !f.is_empty());
     let first = named.next()?;
     named.all(|f| f == first).then_some(first)
-}
-
-/// The bytes of profile file `path`, `None` when it can't be read or is implausibly large.
-fn load(path: &std::path::Path) -> Option<Vec<u8>> {
-    use std::io::Read as _;
-    let file = std::fs::File::open(path).ok()?;
-    let mut bytes = Vec::new();
-    file.take(MAX_PROFILE + 1).read_to_end(&mut bytes).ok()?;
-    (!bytes.is_empty() && bytes.len() as u64 <= MAX_PROFILE).then_some(bytes)
 }
 
 #[cfg(test)]
@@ -104,22 +93,5 @@ mod tests {
         assert_eq!(pick(&s(&["/a.icc", "", "/a.icc"])), Some("/a.icc"));
         assert_eq!(pick(&s(&["/a.icc", "/b.icc"])), None, "which one the window is on isn't known");
         assert_eq!(pick(&s(&[""])), None);
-    }
-
-    #[test]
-    fn profile_files_are_read_with_a_size_cap() {
-        let dir = std::env::temp_dir().join(format!("colord-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let small = dir.join("small.icc");
-        std::fs::write(&small, b"acsp").unwrap();
-        assert_eq!(load(&small).as_deref(), Some(&b"acsp"[..]));
-        let empty = dir.join("empty.icc");
-        std::fs::write(&empty, b"").unwrap();
-        assert_eq!(load(&empty), None);
-        assert_eq!(load(&dir.join("missing.icc")), None);
-        let big = dir.join("big.icc");
-        std::fs::File::create(&big).unwrap().set_len(MAX_PROFILE + 1).unwrap();
-        assert_eq!(load(&big), None);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

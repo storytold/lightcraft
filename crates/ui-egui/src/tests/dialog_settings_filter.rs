@@ -101,7 +101,7 @@ fn a_word_from_a_row_a_hint_or_a_button_finds_its_section() {
     assert_eq!(found(&h), ["performance:Local folders"]);
     // (a button)
     filter(&mut h, "Clear Cache");
-    assert_eq!(found(&h), ["performance:Thumbnail cache"]);
+    assert_eq!(found(&h), ["performance:Preview cache"]);
     // (a hint, in other letter case)
     filter(&mut h, "CHOOSES THE LINES");
     assert_eq!(found(&h), ["interface:Detail View"]);
@@ -118,13 +118,13 @@ fn every_word_typed_has_to_be_there() {
     show(&mut h, "general");
     filter(&mut h, "cache");
     let cache = found(&h);
-    assert!(cache.len() > 1 && cache.contains(&"performance:Thumbnail cache".to_string()), "{cache:?}");
+    assert!(cache.len() > 1 && cache.contains(&"performance:Preview cache".to_string()), "{cache:?}");
     // When a second word narrows it
     filter(&mut h, "cache limit");
-    assert_eq!(found(&h), ["performance:Thumbnail cache"]);
+    assert_eq!(found(&h), ["performance:Preview cache"]);
     // And the words can come in any order
     filter(&mut h, "limit cache");
-    assert_eq!(found(&h), ["performance:Thumbnail cache"]);
+    assert_eq!(found(&h), ["performance:Preview cache"]);
 }
 
 #[test]
@@ -302,7 +302,7 @@ fn the_arrow_goes_from_the_filter_to_what_was_found_and_return_opens_it() {
     let mut h = demo([1200.0, 1000.0]);
     show(&mut h, "general");
     filter(&mut h, "cache limit");
-    assert_eq!(found(&h), ["performance:Thumbnail cache"]);
+    assert_eq!(found(&h), ["performance:Preview cache"]);
     // When ↓ is pressed in the filter (the focus goes to the first result), then Return
     key(&mut h, "ArrowDown");
     assert!(on_a_result(&h), "↓ leaves the filter for what was found");

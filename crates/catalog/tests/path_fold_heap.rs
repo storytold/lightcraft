@@ -55,5 +55,8 @@ fn a_file_path_rule_allocates_nothing_per_photo() {
     }
     let blocks = dhat::HeapStats::get().total_blocks - before;
     assert!(hits > 0, "the rules matched nothing: the test measures nothing");
-    assert_eq!(blocks, 0, "{blocks} heap blocks for {} rule tests", 100 * rules.len() * photos.len());
+    // dhat counts every thread, and the test harness's own thread can allocate a few blocks while this
+    // runs. An allocation per photo would be thousands, two per rule test.
+    let tests = 100 * rules.len() * photos.len();
+    assert!(blocks < 64, "{blocks} heap blocks for {tests} rule tests");
 }
