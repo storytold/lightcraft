@@ -2339,3 +2339,15 @@ fn cmd_c_and_cmd_v_copy_and_paste_the_selected_mask_while_masking() {
     h.step();
     assert!(h.app.session.clipboard.is_some(), "⌘C in Edit copies the settings");
 }
+
+#[test]
+fn the_native_menu_leaves_cmd_c_and_cmd_v_to_masking_only_when_they_mean_the_mask() {
+    let mut h = detail("panel.masking");
+    assert!(crate::shortcuts::native_yields(&h.app).is_empty(), "no mask, nothing copied: the menu keeps ⌘C / ⌘V");
+    exec(&mut h, "mask.add", json!({"kind": "radial"}));
+    assert_eq!(crate::shortcuts::native_yields(&h.app), vec!["develop.copy"]);
+    exec(&mut h, "mask.copy", json!({}));
+    assert_eq!(crate::shortcuts::native_yields(&h.app), vec!["develop.copy", "develop.paste"]);
+    exec(&mut h, "panel.edit", json!({}));
+    assert!(crate::shortcuts::native_yields(&h.app).is_empty(), "outside Masking they copy settings");
+}

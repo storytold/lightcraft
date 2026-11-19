@@ -778,3 +778,12 @@ fn paste_mask_recomputes_only_the_pasted_mask_not_the_photos_own_ai_masks() {
     assert!(pending.queue.iter().all(|q| q.mask == 1));
     assert_eq!(pending.targets[0].settings.masks[0], proposed.masks[0], "the photo's own mask keeps its selection");
 }
+
+#[test]
+fn paste_mask_takes_explicit_photos_without_a_selection() {
+    let (mut s, _, target) = mask_copied(true);
+    s.execute("library.select", &json!({"ids": []})).unwrap();
+    let out = s.execute("mask.paste", &json!({"ids": [target.0]})).unwrap();
+    assert_eq!(out["changed"], 1);
+    assert_eq!(s.develop_of(target).unwrap().masks.last().unwrap().name, "People");
+}

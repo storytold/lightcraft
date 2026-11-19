@@ -760,19 +760,22 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"name": name}))
             }
         ),
-        cmd!(
-            "mask.paste",
-            "Paste Mask",
-            ["Photo"],
-            None,
-            "{ids?} — adds the copied mask to each photo (default: the selected ones), beside its own masks; its Object and Describe selections are recomputed on each photo (SAM 3 required), as Paste Settings does → {changed} or {pending, …}",
-            has_mask_clipboard,
-            |s, p| {
-                let m = s.mask_clipboard.clone().ok_or_else(|| bad("mask.paste", "copy a mask first"))?;
-                let ids = s.targets(p)?;
-                s.paste_mask(&ids, &m, "Paste Mask")
-            }
-        ),
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "mask.paste",
+                "Paste Mask",
+                ["Photo"],
+                None,
+                "{ids?} — adds the copied mask to each photo (default: the selected ones), beside its own masks; its Object and Describe selections are recomputed on each photo (SAM 3 required), as Paste Settings does → {changed} or {pending, …}",
+                has_mask_clipboard,
+                |s, p| {
+                    let m = s.mask_clipboard.clone().ok_or_else(|| bad("mask.paste", "copy a mask first"))?;
+                    let ids = s.targets(p)?;
+                    s.paste_mask(&ids, &m, "Paste Mask")
+                }
+            )
+        },
         cmd!(
             "mask.component",
             "Edit Mask Component",

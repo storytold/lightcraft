@@ -762,6 +762,22 @@ fn brush_key(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
 
 /// Keys that two bindings share, and that mean something only in one panel: whether `f` was used up (or ignored)
 /// here, so nothing else runs for it.
+/// The commands whose keys the native menu bar must leave to [`handle`] now, because a key gives
+/// them another meaning here ([`context_key_skipped`]): in Masking, ⌘C copies the selected mask
+/// and ⌘V pastes a copied one. A click on their menu items still copies or pastes the settings.
+pub fn native_yields(app: &LightcraftApp) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    if app.ui.right == crate::state::RightPanel::Masking {
+        if app.session.active_mask.is_some() {
+            out.push("develop.copy");
+        }
+        if app.session.mask_clipboard.is_some() {
+            out.push("develop.paste");
+        }
+    }
+    out
+}
+
 fn context_key_skipped(app: &mut LightcraftApp, f: &str, rotate_fires: bool) -> bool {
     use crate::state::RightPanel as R;
     let right = app.ui.right;
