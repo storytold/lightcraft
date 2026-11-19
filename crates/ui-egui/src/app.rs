@@ -543,7 +543,10 @@ impl LightcraftApp {
         }
         if let Some(mask) = polled.refine {
             // a new selection from a click or a description: show it, as `run` does for new masks
-            self.ui.mask_overlay = true;
+            // only while Selection is the workspace: a late sample must not re-show it elsewhere
+            if crate::panels::masking::selection_mode(ctx) {
+                self.ui.mask_overlay = true;
+            }
             self.ui.detail_due = Some((now + 0.3, mask));
         }
         if let Some(e) = polled.messages.into_iter().last() {

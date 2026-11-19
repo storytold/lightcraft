@@ -363,7 +363,11 @@ pub(super) fn color_range_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &eg
 pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
     // Adjustment mode presents the photo without editable outlines or draggable pins.
     // The rendered overlay remains available independently through O / Show overlay.
-    if !crate::panels::masking::selection_mode(ui.ctx()) && !matches!(app.ui.tool.as_str(), "brush" | "linear" | "radial" | "object" | "colorRange") {
+    // A handle drag still in progress keeps going so its release can end the interaction.
+    if !crate::panels::masking::selection_mode(ui.ctx())
+        && !matches!(app.ui.tool.as_str(), "brush" | "linear" | "radial" | "object" | "colorRange")
+        && !matches!(app.gesture, Some(Gesture::MaskHandle { .. }))
+    {
         return;
     }
     let active = app.session.active_mask;

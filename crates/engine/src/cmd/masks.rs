@@ -1047,6 +1047,8 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("spot.clear", "Delete all spots", [], None, "{} — clear retouches in one undo step", has_active, |s, _| {
             s.active().ok_or_else(|| bad("spot.clear", "no active photo"))?;
+            // an open interaction commits as its own step, so the clear records one of its own
+            s.end_interaction()?;
             let count = spots_len(s);
             if count > 0 {
                 spots_edit(s, "spot.clear", "Delete all spots", |spots| {

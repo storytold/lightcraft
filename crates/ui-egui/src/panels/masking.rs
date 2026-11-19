@@ -473,7 +473,7 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         decimals: 0,
         track: Track::Plain,
     };
-    let out = slider(ui, &spec, app.ui.mask_overlay_opacity as f64, colored && app.ui.mask_overlay, None);
+    let out = slider(ui, &spec, app.ui.mask_overlay_opacity as f64, colored && (app.ui.mask_overlay || app.ui.mask_overlay_all), None);
     if let Some(v) = out.value {
         app.ui.mask_overlay_opacity = v as f32;
     }
@@ -692,9 +692,10 @@ fn needs_model(app: &mut LightcraftApp, kind: &str, op: &str) -> bool {
 
 /// Start an Object selection (SAM 3 clicks): a new mask, or a component of the selected one
 /// combined by `op`; the photo is analyzed meanwhile (in the background).
-pub(crate) fn start_object(app: &mut LightcraftApp, ctx: &egui::Context, op: &str) {
+/// Returns whether editing started (false: the model download was offered instead).
+pub(crate) fn start_object(app: &mut LightcraftApp, ctx: &egui::Context, op: &str) -> bool {
     if needs_model(app, "object", op) {
-        return;
+        return false;
     }
     let r = if op == "new" {
         app.run_typed("mask.add", json!({"kind": "object"}))
@@ -705,8 +706,12 @@ pub(crate) fn start_object(app: &mut LightcraftApp, ctx: &egui::Context, op: &st
         Ok(_) => {
             app.ui.tool = "object".into();
             app.toast(ctx, crate::i18n::tr("Click the object to select it · ⌥-click leaves a part out"));
+            true
         }
-        Err(e) => app.ai_error(ctx, e, Some(("object", op))),
+        Err(e) => {
+            app.ai_error(ctx, e, Some(("object", op)));
+            false
+        }
     }
 }
 
@@ -731,11 +736,12 @@ pub(crate) fn begin_ai(app: &mut LightcraftApp, kind: &str, op: &str) -> Result<
 }
 
 /// Open the Describe field (a new mask, or a component combined by `op`).
-pub(crate) fn start_describe(app: &mut LightcraftApp, op: &str) {
+pub(crate) fn start_describe(app: &mut LightcraftApp, op: &str) -> bool {
     if needs_model(app, "prompt", op) {
-        return;
+        return false;
     }
     app.ui.describe = Some((op.to_string(), String::new()));
+    true
 }
 
 /// The SAM model's download, `width` wide. The label is a percentage once the size is known and
@@ -930,8 +936,17 @@ fn create_mask(app: &mut LightcraftApp, ui: &mut egui::Ui, kind: &str) {
             app.ui.tool = "colorRange".into();
             app.toast(ui.ctx(), crate::i18n::tr("Click the photo to pick a colour · ⇧-click adds more"));
         }
-        "object" => start_object(app, ui.ctx(), "new"),
-        "prompt" => start_describe(app, "new"),
+        // a model download offer keeps the current workspace and overlay state
+        "object" => {
+            if !start_object(app, ui.ctx(), "new") {
+                return;
+            }
+        }
+        "prompt" => {
+            if !start_describe(app, "new") {
+                return;
+            }
+        }
         "brush" => {
             let _ = app.run("tool.brush", json!({"new": true}));
         }

@@ -116,6 +116,24 @@ fn clearing_all_spots_is_one_undo_step_and_empty_clear_is_a_noop() {
     assert!(spots(&s).is_empty());
 }
 
+#[test]
+fn clearing_spots_commits_an_open_interaction_as_its_own_step() {
+    let mut s = Session::with_demo();
+    s.execute("spot.add", &json!({"points":[[0.3,0.5]]})).unwrap();
+    let photo = s.active().unwrap();
+    let history = s.catalog.photo(photo).unwrap().history.len();
+    // an edit still open (a drag in progress) when Clear All runs
+    s.begin_interaction("Edit Spot").unwrap();
+    s.execute("spot.update", &json!({"index": 0, "opacity": 40})).unwrap();
+    s.execute("spot.clear", &json!({})).unwrap();
+    assert!(spots(&s).is_empty());
+    // the open edit and the clear are two steps: one undo brings the edited spot back
+    assert_eq!(s.catalog.photo(photo).unwrap().history.len(), history + 2);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(spots(&s).len(), 1);
+    assert_eq!(spots(&s)[0].opacity, 40.0);
+}
+
 fn target_session() -> Session {
     let mut s = Session::with_demo();
     s.execute("mask.add", &json!({"kind": "colorRange"})).unwrap();
