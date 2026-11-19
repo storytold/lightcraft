@@ -143,6 +143,12 @@ fn check_space(root: &Path, needed: u64, available: Option<u64>) -> Result<(), S
 /// Unpack the catalog of the backup `zip` into a new private folder under `root`, checking its
 /// size and CRC-32. Stops with an error when `cancel` is set; the folder is removed then too.
 pub fn extract(zip: &Path, root: &Path, cancel: &AtomicBool) -> Result<Extracted, String> {
+    extract_inner(zip, root, cancel, || {})
+}
+
+/// Core extraction loop; `on_chunk` runs after each written chunk (a no-op in production, used
+/// in tests to trigger mid-stream cancellation deterministically).
+fn extract_inner(zip: &Path, root: &Path, cancel: &AtomicBool, mut on_chunk: impl FnMut()) -> Result<Extracted, String> {
     let mut archive = open_archive(zip)?;
     let (index, entry_name, entry_size) = catalog_entry(&mut archive)?;
     if entry_size > MAX_CATALOG_BYTES {
@@ -184,6 +190,7 @@ pub fn extract(zip: &Path, root: &Path, cancel: &AtomicBool) -> Result<Extracted
             break;
         }
         writer.write_all(buf.get(..n).unwrap_or_default()).map_err(|e| format!("writing {}: {e}", out.catalog.display()))?;
+        on_chunk();
     }
     writer.flush().map_err(|e| format!("writing {}: {e}", out.catalog.display()))?;
     Ok(out)
@@ -340,6 +347,33 @@ pub(crate) mod tests {
         std::fs::write(dir.join("x.zip"), &good).unwrap();
         assert!(extract(&dir.join("x.zip"), &root, &AtomicBool::new(true)).is_err(), "cancel stops");
         assert!(leftovers(&root).is_empty(), "cancel cleans up");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Setting the cancel flag mid-stream stops extraction cleanly and removes the partial temp folder.
+    #[test]
+    fn mid_stream_cancellation_stops_extraction_and_cleans_up() {
+        let dir = temp("cancel-mid-stream");
+        let root = dir.join("tmp");
+        let path = dir.join("Cat.zip");
+        // Larger than two CHUNK reads so the loop must iterate multiple times.
+        let catalog = vec![0x5Au8; CHUNK * 2 + 123];
+        std::fs::write(&path, zip(&[("Cat.lrcat", &catalog)], false, false)).unwrap();
+
+        let cancel = AtomicBool::new(false);
+        let mut chunks = 0usize;
+        let err = extract_inner(&path, &root, &cancel, || {
+            chunks += 1;
+            if chunks == 1 {
+                assert_eq!(leftovers(&root).len(), 1, "temp folder must exist while extracting");
+                cancel.store(true, Ordering::Relaxed);
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, "cancelled");
+        assert_eq!(chunks, 1, "extraction must stop before reading remaining chunks");
+        assert!(leftovers(&root).is_empty(), "mid-stream cancel must clean up temp files");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
