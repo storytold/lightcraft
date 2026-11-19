@@ -675,3 +675,19 @@ fn cropping_checks_the_tile() {
     assert_eq!(crop_tile(img(3, 3), Crop::Half).unwrap().width, 3, "odd sizes are kept");
     assert!(crop_tile(TileImage { width: 4, height: 4, rgba: vec![0; 3] }, Crop::Half).is_err(), "pixel data too short");
 }
+
+/// When no worker thread starts, nothing is queued: the service is idle, says it can't load, and
+/// leaves no "Loading map tiles" row behind (no one would ever finish it).
+#[test]
+fn a_service_whose_threads_never_start_queues_nothing() {
+    let fake = Fake::new(|_, _| Ok(ok_png("max-age=60")));
+    let activity = crate::activity::Activity::default();
+    let refuse: &Spawn = &|_, _| Err(std::io::Error::other("no threads"));
+    let svc = TileService::with_spawner(source(), Some(TileCache::new(tmp("nothreads"), "test", 1 << 20).unwrap()), Some(fake.clone()), refuse)
+        .with_activity(Some(activity.clone()));
+    svc.show(&paris());
+    assert!(!svc.can_load());
+    assert!(svc.is_idle(), "nothing left waiting for a worker");
+    assert!(activity.list().is_empty(), "no loading row that never ends");
+    assert!(fake.urls().is_empty());
+}

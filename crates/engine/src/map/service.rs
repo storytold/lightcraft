@@ -74,6 +74,9 @@ const RECENT_FOR: Duration = Duration::from_secs(120);
 /// Worker threads: [`MAX_IN_FLIGHT`] for the network plus one so cache reads never wait behind it.
 const WORKERS: usize = MAX_IN_FLIGHT + 1;
 
+/// Starts a named worker thread running the job (`std::thread::Builder` outside tests).
+pub(super) type Spawn = dyn Fn(String, Box<dyn FnOnce() + Send + 'static>) -> std::io::Result<()>;
+
 /// A tile server's answer, as a [`Transport`] returns it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HttpResponse {
@@ -328,6 +331,9 @@ struct State {
     meta: Meta,
     /// Recent server answers by URL (without key), newest last.
     recent: VecDeque<(String, Instant, Arc<HttpResponse>)>,
+    /// Worker threads that started. None (the OS refused every thread): nothing is queued, since
+    /// no one would run it and the view's tiles would stay "loading" forever.
+    workers: usize,
 }
 
 impl State {
@@ -456,26 +462,37 @@ impl TileService {
     /// The service with an explicit cache and transport (tests use a fake transport). No
     /// transport, or an offline source: nothing is ever fetched.
     pub fn with_transport(source: TileSource, cache: Option<TileCache>, transport: Option<Arc<dyn Transport>>) -> TileService {
+        TileService::with_spawner(source, cache, transport, &|name, job| std::thread::Builder::new().name(name).spawn(job).map(drop))
+    }
+
+    /// [`TileService::with_transport`] starting its workers with `spawn` (tests make it fail).
+    pub(super) fn with_spawner(source: TileSource, cache: Option<TileCache>, transport: Option<Arc<dyn Transport>>, spawn: &Spawn) -> TileService {
         let transport = transport.filter(|_| !source.is_offline());
         let active = transport.is_some() || cache.is_some();
         let shared =
             Arc::new(Shared { source, cache, transport, state: Mutex::new(State::default()), wake: Condvar::new(), cancel: AtomicBool::new(false) });
+        let mut workers = 0;
         if active {
             for i in 0..WORKERS {
                 let s = Arc::clone(&shared);
-                if let Err(e) = std::thread::Builder::new().name(format!("map-tiles-{i}")).spawn(move || worker(&s)) {
+                if let Err(e) = spawn(format!("map-tiles-{i}"), Box::new(move || worker(&s))) {
                     log::warn!("map: can't start a tile thread: {e}");
                     break;
                 }
+                workers += 1;
+            }
+            if workers == 0 {
+                log::warn!("map: no tile thread started; the map shows no tiles");
             }
         }
+        shared.lock().workers = workers;
         TileService { shared }
     }
 
     /// Whether this service can ever deliver a tile: it has a transport or a cache. False on wasm32
     /// (no browser fetch yet) and for the offline source; nothing is queued then, so it stays idle.
     pub fn can_load(&self) -> bool {
-        self.shared.transport.is_some() || self.shared.cache.is_some()
+        (self.shared.transport.is_some() || self.shared.cache.is_some()) && self.shared.lock().workers > 0
     }
 
     pub fn source(&self) -> &TileSource {
@@ -527,8 +544,9 @@ impl TileService {
             keep
         });
         st.failed.retain(|_, until| *until > now);
-        let has_cache = self.shared.cache.is_some();
-        let can_fetch = self.shared.transport.is_some();
+        // no worker: queue nothing (see `State::workers`)
+        let has_cache = self.shared.cache.is_some() && st.workers > 0;
+        let can_fetch = self.shared.transport.is_some() && st.workers > 0;
         // the credit: asked for once, with the first tiles
         if can_fetch && !st.wanted.is_empty() && st.meta == Meta::NotAsked && self.shared.source.metadata_url().is_some() {
             st.meta = Meta::Queued;
