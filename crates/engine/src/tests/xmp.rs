@@ -2452,3 +2452,26 @@ fn read_metadata_turns_a_preview_only_raws_boxes_as_the_import_does() {
     assert_eq!(s.catalog.photo(id).unwrap().meta.file_orientation, None, "the metadata's orientation isn't kept");
     let _ = std::fs::remove_dir_all(&src);
 }
+
+/// Review of #4512: Synchronize Folder, for a photo whose orientation the catalog doesn't keep, reads its sidecar's
+/// boxes by the import's rule, as Read Metadata from File does: a PNG whose only orientation is in its XMP is shown,
+/// and its boxes read, as stored (no Exif to turn it), not by the XMP's 6.
+#[test]
+fn synchronize_reads_boxes_by_the_imports_orientation_as_read_metadata_does() {
+    use lightcraft_meta::Orientation;
+    let src = temp_dir("sync-read-by");
+    let png = src.join("x.png");
+    let bytes = png_orientation_only_in_xmp();
+    std::fs::write(&png, &bytes).unwrap();
+    assert_eq!(lightcraft_meta::extract(&bytes).orientation, Some(Orientation::Rotate90), "the XMP says 6");
+    let want = crate::files::orientations(&bytes).read_by;
+    assert_eq!(want, Some(Orientation::Normal), "the import's rule: the header's");
+    let sc = crate::sidecar::parse_sidecar(STORED_FRAME_REGIONS, crate::crs::Target::Rendered).unwrap();
+    assert!(sc.regions_drawn_on.is_some(), "the boxes were drawn on a stated size");
+    // the fallback Synchronize Folder takes when the catalog has no orientation (`sync::read_sidecar`, `sidecar_has_news`)
+    let path = png.to_string_lossy();
+    assert_eq!(sc.clone().with_orientation_known(None, &path).orientation, want);
+    // and the catalog's own wins without the file being read
+    assert_eq!(sc.with_orientation_known(Some(Orientation::Rotate180), "/no/such/file").orientation, Some(Orientation::Rotate180));
+    let _ = std::fs::remove_dir_all(&src);
+}
