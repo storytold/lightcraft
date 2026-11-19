@@ -773,3 +773,60 @@ fn a_hard_brush_is_unchanged_by_the_stroke_feather() {
         assert_eq!(feathered_stroke(Process::V10, flow, 0.0).data, feathered_stroke(Process::V9, flow, 0.0).data, "Flow {flow}");
     }
 }
+
+/// Process V10: a dab with no Flow (pen pressure 0) neither builds up nor sets the edge.
+#[test]
+fn a_dab_with_no_flow_shapes_nothing() {
+    let (mut build, mut edge) = (0.2, 0.3);
+    feather_dab(&mut build, &mut edge, 1.0, 0.0);
+    assert_eq!((build, edge), (0.2, 0.3));
+    feather_dab(&mut build, &mut edge, 0.6, 0.5);
+    assert!((build - 0.6).abs() < 1e-6 && (edge - 0.6).abs() < 1e-6, "{build} {edge}");
+}
+
+/// An Auto Mask stroke keeps V9's accumulation on V10: its edge follows the photo, not the feather.
+#[test]
+fn an_auto_mask_stroke_keeps_v9_accumulation() {
+    use lightcraft_develop::Process;
+    let (w, h) = (400, 100);
+    let img = Rgb32f::new(w, h);
+    let paint = |p: Process| {
+        let d = DevelopSettings { process: p.version(), ..Default::default() };
+        let f = Frame::new(w, h, &d, true);
+        let s = BrushStroke {
+            points: vec![Point::new(0.1, 0.5), Point::new(0.9, 0.5)],
+            size: 0.05,
+            feather: 100.0,
+            auto_mask: true,
+            ..Default::default()
+        };
+        assert!(!brush_dabs(&s, &f, w, h).feather_by_stroke);
+        shape_alpha(&MaskShape::Brush { strokes: vec![s] }, &f, w, h, &img, &Plane::new(w, h), 0.0, None)
+    };
+    assert_eq!(paint(Process::V10).data, paint(Process::V9).data);
+}
+
+/// Process V10's edge plane covers only the stroke's bounds: a stroke across the corner of the
+/// frame and one in the middle paint as a full-frame plane would (nothing outside the bounds).
+#[test]
+fn the_stroke_bounds_hold_every_dab() {
+    let (w, h) = (400, 100);
+    let d = DevelopSettings::default();
+    let f = Frame::new(w, h, &d, true);
+    for points in [vec![Point::new(-0.05, -0.1), Point::new(0.1, 0.2)], vec![Point::new(0.4, 0.5), Point::new(0.6, 0.55)]] {
+        let s = BrushStroke { points, size: 0.05, feather: 100.0, ..Default::default() };
+        let bd = brush_dabs(&s, &f, w, h);
+        let (x0, y0, x1, y1) = stroke_bounds(&bd, w, h);
+        assert!(x0 <= x1 && y0 <= y1 && x1 <= w && y1 <= h);
+        let a = shape_alpha(&MaskShape::Brush { strokes: vec![s] }, &f, w, h, &Rgb32f::new(w, h), &Plane::new(w, h), 0.0, None);
+        for y in 0..h {
+            for x in 0..w {
+                if !(x0..x1).contains(&x) || !(y0..y1).contains(&y) {
+                    assert_eq!(a.get(x, y), 0.0, "({x}, {y}) outside {:?}", (x0, y0, x1, y1));
+                }
+            }
+        }
+        assert!(a.data.iter().any(|v| *v > 0.5), "it painted");
+    }
+    assert_eq!(stroke_bounds(&brush_dabs(&BrushStroke::default(), &f, w, h), w, h), (0, 0, 0, 0), "no dabs");
+}

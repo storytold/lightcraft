@@ -4,8 +4,9 @@
 
 ### Brush Feather works on strokes (process V10)
 - A brush stroke's edge now fades over the Feather you set. Overlapping dabs used to pile their soft edges up into an
-  almost hard one: at Feather 100, halfway out from a stroke's centre line was 90 % covered, and is now 50 %, as one
-  dab is. A soft brush at low Flow also builds up at its centre as a hard one does. New photos (and Reset) get it;
+  almost hard one: at Feather 100 and Flow 100, halfway out from a stroke's centre line was 90 % covered, and is
+  now 50 %, as one dab is. A soft brush at low Flow also builds up at its centre as a hard one does. Auto Mask strokes, whose edge
+  follows the photo's, are unchanged. New photos (and Reset) get it;
   photos you already edited keep their brushes until Photo ▸ Update to Current Process.
 
 ### Brush Flow as in Lightroom (process V9)

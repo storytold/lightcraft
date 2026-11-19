@@ -520,7 +520,9 @@ pub struct BrushDabs {
     /// What each dab adds under process V9 ([`travel_flow`], pressure applied), parallel to `dabs`;
     /// empty before V9, where every dab adds the stroke's flow.
     pub flows: Vec<f32>,
-    /// The stroke's edge is feathered as one dab's is (process V10, [`stroke_feather`]).
+    /// The stroke's edge is feathered as one dab's is (process V10, [`stroke_feather`]), unless it
+    /// is an Auto Mask stroke: its edge follows the photo's, not the feather, and it keeps V9's
+    /// accumulation, which its colour weighting stays stable under.
     pub feather_by_stroke: bool,
 }
 
@@ -569,11 +571,16 @@ pub fn stroke_feather(s: &lightcraft_develop::DevelopSettings) -> bool {
 }
 
 /// One dab's paint at a pixel of a stroke under [`stroke_feather`]: the Flow build-up `build` grows
-/// by the dab's `flow` wherever the dab reaches, and the edge `edge` keeps the highest falloff `a`.
+/// by the dab's `flow` wherever the dab reaches, and the edge `edge` keeps the highest falloff
+/// `falloff`. A dab with no Flow (at pen pressure 0) paints nothing and shapes nothing. (Auto Mask
+/// strokes don't take this: [`BrushDabs::feather_by_stroke`].)
 #[inline]
-pub fn feather_dab(build: &mut f32, edge: &mut f32, a: f32, flow: f32) {
+pub fn feather_dab(build: &mut f32, edge: &mut f32, falloff: f32, flow: f32) {
+    if flow.is_nan() || flow <= 0.0 {
+        return;
+    }
     *build = accumulate(*build, 1.0, flow, 1.0);
-    *edge = edge.max(a);
+    *edge = edge.max(falloff);
 }
 
 /// A stroke's coverage under [`stroke_feather`] from its Flow build-up and its edge
@@ -696,7 +703,7 @@ pub fn brush_dabs_within(s: &BrushStroke, frame: &Frame, w: usize, h: usize, max
         auto: s.auto_mask,
         pressure,
         flows: Vec::new(),
-        feather_by_stroke: frame.brush_stroke_feather,
+        feather_by_stroke: frame.brush_stroke_feather && !s.auto_mask,
     };
     if frame.brush_flow_per_radius { bd.flow_by_travel() } else { bd }
 }
@@ -898,6 +905,21 @@ fn guided_cross_fast(guide: &Plane, p: &mut Plane, sigma: f32, eps: f32, weight:
     });
 }
 
+/// The pixels stroke `bd`'s dabs can reach in a `w × h` output, `(x0, y0, x1, y1)` (end
+/// exclusive, empty when it has no dabs): its dabs' centres ± its radius (pen pressure only shrinks it).
+fn stroke_bounds(bd: &BrushDabs, w: usize, h: usize) -> (usize, usize, usize, usize) {
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for d in bd.dabs.iter().filter(|d| d.x.is_finite() && d.y.is_finite()) {
+        (x0, y0, x1, y1) = (x0.min(d.x - bd.r), y0.min(d.y - bd.r), x1.max(d.x + bd.r), y1.max(d.y + bd.r));
+    }
+    if x0 > x1 || y0 > y1 {
+        return (0, 0, 0, 0);
+    }
+    let clip = |v: f64, n: usize| v.clamp(0.0, n as f64) as usize;
+    let (x0, y0) = (clip(x0.floor(), w), clip(y0.floor(), h));
+    (x0, y0, clip(x1.ceil(), w).max(x0), clip(y1.ceil(), h).max(y0))
+}
+
 /// Stamp brush strokes into `out` (max-combine; erase strokes subtract). Auto Mask strokes weight
 /// each dab by [`auto_similarity`] to the pixel under its centre and are refined with
 /// [`guided_cross`] on log luminance.
@@ -910,7 +932,9 @@ fn rasterize_brush(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, i
         let (dens, erase, auto) = (bd.density, bd.erase, bd.auto);
         let mut stroke_alpha = Plane::new(w, h);
         // process V10: the Flow build-up goes in `stroke_alpha`, the edge in `edge` (`feather_dab`)
-        let mut edge = bd.feather_by_stroke.then(|| Plane::new(w, h));
+        // (the edge plane covers only the stroke's bounds: a short stroke on a big render is small)
+        let bounds = stroke_bounds(&bd, w, h);
+        let mut edge = bd.feather_by_stroke.then(|| Plane::new(bounds.2 - bounds.0, bounds.3 - bounds.1));
         for (k, d) in bd.dabs.iter().enumerate() {
             let (r, hard, flow) = bd.dab(k);
             let refc = auto.then(|| {
@@ -925,22 +949,29 @@ fn rasterize_brush(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, i
                     if dd > r {
                         continue;
                     }
-                    let mut a = dab_alpha(dd, r, hard);
                     let i = y * w + x;
-                    if let Some((rl, rch)) = refc {
-                        a *= auto_similarity(log_l.data[i], chromaticity(img.data[i]), rl, rch);
-                    }
+                    let sim = refc.map_or(1.0, |(rl, rch)| auto_similarity(log_l.data[i], chromaticity(img.data[i]), rl, rch));
+                    let falloff = dab_alpha(dd, r, hard);
                     let v = &mut stroke_alpha.data[i];
-                    match edge.as_mut().and_then(|e| e.data.get_mut(i)) {
-                        Some(e) => feather_dab(v, e, a, flow),
+                    let ei = y.saturating_sub(bounds.1) * (bounds.2 - bounds.0) + x.saturating_sub(bounds.0);
+                    match edge.as_mut().and_then(|e| e.data.get_mut(ei)) {
+                        Some(e) => feather_dab(v, e, falloff, flow),
                         // flow accumulates within a stroke up to density
-                        None => *v = accumulate(*v, a, flow, dens),
+                        None => *v = accumulate(*v, falloff * sim, flow, dens),
                     }
                 }
             }
         }
         if let Some(edge) = &edge {
-            stroke_alpha = stroke_alpha.zip_map(edge, |b, e| stroke_coverage(b, e, dens));
+            // in place, within the bounds (outside them nothing was painted)
+            let ew = bounds.2 - bounds.0;
+            for y in bounds.1..bounds.3 {
+                for x in bounds.0..bounds.2 {
+                    if let (Some(v), Some(e)) = (stroke_alpha.data.get_mut(y * w + x), edge.data.get((y - bounds.1) * ew + (x - bounds.0))) {
+                        *v = stroke_coverage(*v, *e, dens);
+                    }
+                }
+            }
         }
         if auto {
             let (sigma, eps) = auto_refine(bd.r);

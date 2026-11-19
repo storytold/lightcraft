@@ -469,6 +469,22 @@ fn cases() -> Vec<(&'static str, Edit)> {
                 ..Default::default()
             }];
         }),
+        ("masks (brush, process V10: an Auto Mask stroke keeps V9 accumulation)", |s| {
+            s.process = lightcraft_develop::Process::V10.version();
+            let stroke = BrushStroke {
+                points: vec![Point::new(0.1, 0.3), Point::new(0.5, 0.45), Point::new(0.85, 0.4)],
+                size: 0.06,
+                feather: 100.0,
+                flow: 40.0,
+                auto_mask: true,
+                ..Default::default()
+            };
+            s.masks = vec![Mask {
+                components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Brush { strokes: vec![stroke] } }],
+                adjust: lightcraft_develop::LocalAdjustments { exposure: -1.0, ..Default::default() },
+                ..Default::default()
+            }];
+        }),
         ("masks (brush, process V9: a soft stroke's dabs accumulated)", |s| {
             s.process = lightcraft_develop::Process::V9.version();
             let stroke = BrushStroke {

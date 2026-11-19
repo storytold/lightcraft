@@ -2021,8 +2021,9 @@ fn a_fast_brush_stroke_shows_without_gaps_before_the_button_is_released() {
     }
 }
 
-/// Process V9: a Flow 25 stroke shows while the button is held as it will once committed, both
-/// adding Flow per brush radius travelled (#4045): partly covered along its centre, not almost fully.
+/// Process V9 (and V10, the same for this Feather 0 brush): a Flow 25 stroke shows while the button
+/// is held as it will once committed, both adding Flow per brush radius travelled (#4045): partly
+/// covered along its centre, not almost fully.
 #[test]
 fn a_low_flow_stroke_shows_as_it_will_be_committed() {
     let mut h = detail("panel.masking");

@@ -109,18 +109,22 @@ fn shape(@builtin(global_invocation_id) g: vec3<u32>) {
                 if (dd > hard) {
                     a = 1.0 - sstep(hard, r, dd);
                 }
+                var sim = 1.0;
                 if (auto_mask) {
                     let rx = min(u32(max(floor(aux[off + 3u * j]), 0.0)), w - 1u);
                     let ry = min(u32(max(floor(aux[off + 3u * j + 1u]), 0.0)), h - 1u);
                     let ri = ry * w + rx;
-                    a *= auto_similarity(lp, chp, log_l[ri], chroma_at(ri));
+                    sim = auto_similarity(lp, chp, log_l[ri], chroma_at(ri));
                 }
                 if (by_stroke) {
-                    // masks::feather_dab: the build-up grows by the flow, the edge keeps the highest falloff
-                    keep *= 1.0 - flow;
-                    edge = max(edge, a);
+                    // masks::feather_dab (never an Auto Mask stroke): the build-up grows by the flow,
+                    // the edge keeps the highest falloff; a dab with no Flow changes neither
+                    if (flow > 0.0) {
+                        keep *= 1.0 - flow;
+                        edge = max(edge, a);
+                    }
                 } else {
-                    keep *= 1.0 - a * flow;
+                    keep *= 1.0 - a * sim * flow;
                 }
             }
             var sa = min(1.0 - keep, aux[o + 5u]);
