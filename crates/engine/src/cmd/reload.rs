@@ -16,37 +16,49 @@ use serde_json::{Value, json};
 use crate::media::{FileProbe, ProbeInfo};
 use crate::{Result, Session};
 
-/// A photo to re-read: its id and the file it had when it was listed (a photo relinked meanwhile
-/// is skipped by [`apply`]).
+/// One family’s file to re-read, retaining every explicitly selected metadata target.
+/// [`apply`] skips targets removed or relinked meanwhile.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Item {
     pub id: PhotoId,
     pub path: String,
+    /// Explicitly selected photos sharing this probe; each may gain missing metadata.
+    pub metadata_targets: Vec<PhotoId>,
+    family: PhotoId,
     /// The [`plan`] it came from, in the order reloads were started (see [`Tickets`]).
     pub ticket: u64,
 }
 
-/// Which reload each photo last took its file information from, so a reload started earlier but
-/// finishing later doesn't put back what its file was before (session memory, not saved).
+/// Which reload each same-file family last took its file information from, so an older read
+/// cannot replace a newer one. A relink must not carry freshness to another file (session memory).
 #[derive(Debug, Default)]
 pub struct Tickets {
     last: u64,
-    applied: std::collections::BTreeMap<PhotoId, u64>,
+    applied: std::collections::BTreeMap<(PhotoId, String), u64>,
 }
 
-/// The photos `p` targets (`ids`, else the selection) that have a file, under a new ticket. No
-/// file-system calls.
+/// The files `p` targets (`ids`, else the selection), grouped by family and path under a new
+/// ticket. No file-system calls.
 pub fn plan(s: &mut Session, p: &Value) -> Result<Vec<Item>> {
     let ids = s.targets(p)?;
+    let mut groups = std::collections::HashMap::<(PhotoId, String), usize>::new();
+    let mut items: Vec<Item> = Vec::new();
     s.reload_tickets.last = s.reload_tickets.last.saturating_add(1);
     let ticket = s.reload_tickets.last;
-    Ok(ids
-        .into_iter()
-        .filter_map(|id| match s.catalog.photo(id).map(|ph| &ph.source) {
-            Some(Source::File { path }) => Some(Item { id, path: path.clone(), ticket }),
-            _ => None,
-        })
-        .collect())
+    for id in ids {
+        let Some(ph) = s.catalog.photo(id) else { continue };
+        let Source::File { path } = &ph.source else { continue };
+        let family = ph.copy_of.unwrap_or(ph.id);
+        let key = (family, path.clone());
+        // Sharing a probe must not drop any explicitly selected metadata target.
+        if let Some(item) = groups.get(&key).and_then(|index| items.get_mut(*index)) {
+            item.metadata_targets.push(id);
+        } else {
+            groups.insert(key, items.len());
+            items.push(Item { id, path: path.clone(), metadata_targets: vec![id], family, ticket });
+        }
+    }
+    Ok(items)
 }
 
 /// The session's file probe, to [`probe`] with on a worker thread (`None` in a session without file
@@ -82,8 +94,8 @@ pub fn probe(
     r
 }
 
-/// Commit [`probe`]'s results as one undo step ("Reload Changed Files"): each photo and its virtual
-/// copies get what their file is now. A file that couldn't be read changes nothing; a photo removed
+/// Commit [`probe`]'s results as one undo step ("Reload Changed Files"): each selected photo and
+/// its same-file family get what their file is now. A file that couldn't be read changes nothing; a photo removed
 /// or relinked since it was listed, or already given a newer reload's result, is skipped. Returns
 /// the photos that changed.
 pub fn apply(s: &mut Session, items: Vec<Item>, results: Vec<std::result::Result<ProbeInfo, String>>) -> Result<Vec<PhotoId>> {
@@ -91,13 +103,32 @@ pub fn apply(s: &mut Session, items: Vec<Item>, results: Vec<std::result::Result
     let mut reloaded = Vec::new();
     for (item, info) in items.into_iter().zip(results) {
         let Ok(info) = info else { continue };
-        let current = s.catalog.photo(item.id).is_some_and(|ph| matches!(&ph.source, Source::File { path } if *path == item.path));
-        let superseded = s.reload_tickets.applied.get(&item.id).is_some_and(|t| *t > item.ticket);
-        if !current || superseded {
+        // Deduplication must not discard still-current targets when the first selected photo relinks.
+        let Some(ph) = item.metadata_targets.iter().find_map(|id| {
+            s.catalog
+                .photo(*id)
+                .filter(|p| p.copy_of.unwrap_or(p.id) == item.family && matches!(&p.source, Source::File { path } if *path == item.path))
+        }) else {
+            continue;
+        };
+        let id = ph.id;
+        let key = (item.family, item.path);
+        // Sibling reloads supersede each other only while they read the same file.
+        if s.reload_tickets.applied.get(&key).is_some_and(|t| *t > item.ticket) {
             continue;
         }
-        s.reload_tickets.applied.insert(item.id, item.ticket);
-        crate::cmd::convert::reload_ops(&s.catalog, item.id, &info, &mut ops, &mut reloaded);
+        s.reload_tickets.applied.insert(key, item.ticket);
+        crate::cmd::convert::reload_ops(&s.catalog, id, &info, &mut ops, &mut reloaded);
+        for id in item.metadata_targets.into_iter().filter(|target| *target != id) {
+            let Some(ph) = s.catalog.photo(id).filter(|p| super::convert::shares_reload_source(p, ph)) else { continue };
+            let meta = super::convert::fill_missing_meta(id, ph, &info);
+            if !meta.is_empty() {
+                ops.extend(meta);
+                if !reloaded.contains(&id) {
+                    reloaded.push(id);
+                }
+            }
+        }
     }
     for id in &reloaded {
         s.media.forget(*id);

@@ -43,12 +43,20 @@ impl Stale {
 }
 
 /// The library's preview-only photos and ORFs whose support another app version checked (or
-/// every such photo, with `all`): library photos with a file, not virtual copies (they follow
-/// the photo they were copied from). No file-system calls.
+/// every such photo, with `all`). A virtual copy follows its parent's probe only when that
+/// parent is being checked against the same file. No file-system calls.
 pub fn stale(cat: &Catalog, all: bool) -> Vec<Stale> {
+    let eligible = |p: &Photo| p.preview_only_stale() || (all && (p.preview_only.is_some() || p.format.eq_ignore_ascii_case("orf")));
     cat.photos()
-        .filter(|p| p.copy_of.is_none() && (p.preview_only_stale() || (all && (p.preview_only.is_some() || p.format.eq_ignore_ascii_case("orf")))))
-        .filter_map(|p| crate::cmd::missing::checked_path(p).map(|path| Stale::of(p, path)))
+        .filter(|p| eligible(p))
+        .filter_map(|p| {
+            let path = crate::cmd::missing::checked_path(p)?;
+            let follows_parent = p
+                .copy_of
+                .and_then(|id| cat.photo(id))
+                .is_some_and(|parent| eligible(parent) && parent.copy_of.is_none() && crate::cmd::missing::checked_path(parent) == Some(path));
+            (!follows_parent).then(|| Stale::of(p, path))
+        })
         .collect()
 }
 
