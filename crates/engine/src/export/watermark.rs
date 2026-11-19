@@ -223,6 +223,7 @@ pub(crate) fn watermark_logo(path: &str) -> Option<std::sync::Arc<Rgba8>> {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     static CACHE: Mutex<Option<HashMap<String, (std::time::SystemTime, Arc<Rgba8>)>>> = Mutex::new(None);
+    crate::file_access::check_read(path).ok()?;
     let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok()?;
     let mut c = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     let map = c.get_or_insert_with(HashMap::new);
@@ -246,6 +247,7 @@ const MAX_GRAPHIC_BYTES: u64 = 256 << 20;
 /// watermark logo, the loupe's layout image. Applies EXIF orientation before either consumer sizes it.
 /// The error says why it couldn't be read or decoded.
 pub fn read_graphic(path: &str) -> Result<Rgba8, String> {
+    crate::file_access::check_read(path)?;
     let bytes = crate::read_file::read_regular(path, MAX_GRAPHIC_BYTES).map_err(|e| format!("can't read {path}: {e}"))?;
     // a graphic is a logo or a layout image, not a photo: its decode is held to 8192 x 8192 pixels, not the general gigapixel
     let opts = lightcraft_codecs::DecodeOptions { max_pixels: MAX_GRAPHIC_PIXELS, ..Default::default() };

@@ -162,10 +162,7 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
     if cancelled() {
         return Err(MakeError::Cancelled);
     }
-    let bytes = match &spec.read {
-        Some(r) => r(&spec.path).map_err(MakeError::Failed)?,
-        None => std::fs::read(&spec.path).map_err(|e| MakeError::Failed(format!("{}: {e}", spec.path)))?,
-    };
+    let bytes = crate::merge::read_file(spec.read.as_ref(), &spec.path).map_err(MakeError::Failed)?;
     // the decode and the normalised mosaic wait their turn at the process-wide memory gate, as every decode does
     let (mosaic, layout) = {
         let _held = crate::memory::work_gate().acquire(bytes.len().saturating_mul(4));

@@ -32,6 +32,9 @@ pub use tools::{COMMAND_TOOL_PREFIX, ToolResult, call_tool, command_tool_name, h
 pub const DEFAULT_ADDR: &str = "127.0.0.1:7980";
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod automation_roots_tests;
+#[cfg(test)]
 mod tests;
 
 /// Held by tests that start a child process (a copy of the test binary) and by tests that run a

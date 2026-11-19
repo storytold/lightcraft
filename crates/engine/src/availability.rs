@@ -37,9 +37,13 @@ const YIELD_POLL: Duration = Duration::from_millis(250);
 /// How long a cached answer is used before it is checked again (it is still returned meanwhile).
 pub const RECHECK: Duration = Duration::from_secs(15);
 
+/// Whether `path` can be read: `check_read` first, then whether the file is there.
+///
+/// A path outside the automation roots and a path that is not there both come back false, so a
+/// caller cannot tell those two apart.
 fn fs_exists(path: &str) -> bool {
     // the browser build has no file system: its originals are always "there"
-    cfg!(target_arch = "wasm32") || std::path::Path::new(path).exists()
+    cfg!(target_arch = "wasm32") || (crate::file_access::check_read(path).is_ok() && std::path::Path::new(path).exists())
 }
 
 #[derive(Default)]

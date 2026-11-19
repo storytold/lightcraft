@@ -17,6 +17,7 @@ pub struct ProofProfile {
 /// Load the profile at `path` for proofing with `intent`, simulating paper and ink or not.
 pub fn load(path: &str, intent: ProofIntent, paper_ink: bool) -> Result<ProofProfile, String> {
     let path = path.trim();
+    crate::file_access::check_read(path)?;
     let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
     if meta.len() > MAX_PROFILE_BYTES as u64 {
         return Err(format!("{path}: too large for an ICC profile"));

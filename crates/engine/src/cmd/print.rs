@@ -353,9 +353,11 @@ fn template_export(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"name": name, "path": target}))
 }
 
+/// Import a print template from a file into the library.
 fn template_import(s: &mut Session, p: &Value) -> Result<Value> {
     const ID: &str = "print.template.import";
     let path = std::path::Path::new(template_path(p, ID)?);
+    crate::file_access::check_read(path).map_err(|e| bad(ID, e))?;
     let meta = std::fs::metadata(path).map_err(|e| bad(ID, format!("{}: {e}", path.display())))?;
     if !meta.is_file() {
         return Err(bad(ID, format!("{}: not a file", path.display())));

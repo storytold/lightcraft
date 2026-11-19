@@ -29,6 +29,7 @@ impl Display {
     /// Load the ICC profile at `path`.
     pub fn load(path: &str) -> Result<Display, String> {
         let path = path.trim();
+        crate::file_access::check_read(path)?;
         let bytes = crate::read_file::read_regular(path, MAX_PROFILE_BYTES as u64).map_err(|e| format!("{path}: {e} (an ICC profile)"))?;
         Display::from_bytes(path, &bytes)
     }

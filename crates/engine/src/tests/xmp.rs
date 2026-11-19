@@ -1204,6 +1204,86 @@ fn all_metadata_lists_exif_and_xmp() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A photo stored under a bare file name is in the working folder, so that is the folder a DNG
+/// needs write access to: its parent is an empty path, which is always refused.
+#[test]
+fn convert_to_dng_checks_the_working_folder_for_a_bare_file_name() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let here = Path::new(".");
+    let roots = crate::file_access::AutomationRoots::new(Some(here), Some(here)).unwrap().unwrap();
+    let mut s = Session::new();
+    let id = s.catalog.alloc_photo_id();
+    let photo = Photo::new(id, Source::File { path: "shot.jpg".into() }, "shot.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00");
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+    let r = crate::file_access::confine(Some(&roots), || s.execute("photo.convertToDng", &json!({}))).unwrap();
+    assert_eq!(r["skipped"][0][1], "not a raw photo", "{r}");
+}
+
+/// A photo reached through a folder link may be duplicated into the resolved write root.
+#[cfg(unix)]
+#[test]
+fn duplicate_accepts_a_folder_link_into_the_write_root() {
+    use crate::file_access::{AutomationRoots, confine};
+    let base = temp_dir("duplicate-folder-link");
+    let root = base.join("photos");
+    let alias = base.join("alias");
+    std::fs::create_dir_all(&root).unwrap();
+    std::os::unix::fs::symlink(&root, &alias).unwrap();
+    let source = alias.join("shot.png");
+    write_png(&source, 3);
+
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [source.to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+    let result = confine(Some(&roots), || s.execute("photo.duplicate", &json!({"ids": [id.0]}))).unwrap();
+
+    assert_eq!(result["ids"].as_array().unwrap().len(), 1, "{result}");
+    assert!(root.join("shot-copy.png").exists(), "the copy is created inside the resolved write root");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// One refused photo in a batch leaves nothing behind for the photos before it: no DNG the library
+/// doesn't know about, no copy and no edit copy.
+#[test]
+fn a_batch_with_a_refused_photo_writes_nothing() {
+    use crate::file_access::{AutomationRoots, confine};
+    let dir = temp_dir("refused-batch");
+    let (writable, read_only) = (dir.join("out"), dir.join("in"));
+    std::fs::create_dir_all(&writable).unwrap();
+    std::fs::create_dir_all(&read_only).unwrap();
+    let raw = writable.join("shot.dng");
+    std::fs::write(&raw, synthetic_dng_with(None, Default::default())).unwrap();
+    let png = read_only.join("b.png");
+    write_png(&png, 3);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [raw.to_string_lossy()]})).unwrap();
+    let first = s.catalog.photos().next().unwrap().id;
+    s.catalog
+        .apply(lightcraft_catalog::Op::Relink {
+            id: first,
+            file_name: "shot.dng".into(),
+            source: lightcraft_catalog::Source::File { path: raw.to_string_lossy().to_string() },
+            format: Some("NEF".into()),
+        })
+        .unwrap();
+    s.execute("library.import", &json!({"paths": [png.to_string_lossy()]})).unwrap();
+    let second = s.catalog.photos().map(|p| p.id).find(|id| *id != first).unwrap();
+    let names = || std::fs::read_dir(&writable).unwrap().flatten().map(|e| e.file_name()).collect::<Vec<_>>();
+    let before = names();
+    let roots = AutomationRoots::new(Some(&dir), Some(&writable)).unwrap().unwrap();
+    for command in ["photo.convertToDng", "photo.duplicate", "photo.editExternal"] {
+        let result = confine(Some(&roots), || s.execute(command, &json!({"ids": [first.0, second.0]})));
+        let refused = result.unwrap_err().to_string();
+        assert!(refused.contains("outside the write root"), "{command}: {refused}");
+        assert_eq!(names(), before, "{command} wrote next to the first photo");
+        assert_eq!(s.catalog.photos().count(), 2, "{command}");
+    }
+    assert_eq!(s.catalog.photo(first).unwrap().format, "NEF", "not relinked");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Convert to DNG: a corpus raw (skipped without the corpus) becomes a DNG next to it with the
 /// photo relinked and its edits kept; undo goes back to the original; non-raws are skipped.
 #[test]

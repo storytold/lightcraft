@@ -146,6 +146,7 @@ impl PrintColorSettings {
 /// Read a printer profile, refusing files that can't be one (the parse happens later).
 fn read_profile(path: &Path) -> Result<Vec<u8>, String> {
     let shown = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string());
+    crate::file_access::check_read(path)?;
     let len = std::fs::metadata(path).map_err(|e| format!("can't read the printer profile {shown}: {e}"))?.len();
     if len > MAX_PROFILE_BYTES as u64 {
         return Err(format!("the printer profile {shown} is too large"));

@@ -39,6 +39,10 @@ const O_NONBLOCK: i32 = if cfg!(all(
 /// Opens `path` for reading without waiting for a FIFO's writer (a FIFO is refused by [`read_open`], not waited on). A
 /// regular file is unaffected by the flag.
 pub(crate) fn open_for_read(path: impl AsRef<Path>) -> io::Result<std::fs::File> {
+    let path = path.as_ref();
+    // Every read of a named file is held to the automation roots. Callers that already checked
+    // pay for a second stat; a caller that forgot cannot skip it.
+    crate::file_access::check_read(path).map_err(io::Error::other)?;
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]

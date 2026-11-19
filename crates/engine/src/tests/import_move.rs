@@ -504,6 +504,7 @@ fn copies_run_side_by_side_with_the_same_outcome() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// Verify that changed copies never cause the original import to be removed.
 #[test]
 fn finish_keeps_the_original_when_the_copy_changed_to_the_same_length() {
     use crate::import_move::{finish, place};
@@ -528,5 +529,172 @@ fn finish_keeps_the_original_when_the_copy_changed_to_the_same_length() {
     assert!(finish(&placed).is_err());
     assert_eq!(std::fs::read(&src).unwrap(), b"edited  bytes!");
     inject(Fault::None);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A confined same-volume move may remove a source with exactly one placed hard-link name.
+#[test]
+fn a_confined_move_removes_its_placed_photo_and_sidecar_hard_links() {
+    use crate::file_access::{AutomationRoots, confine};
+    use crate::import_move::{finish, place};
+    let base = temp_dir("move-hard-links-confined");
+    let root = base.join("root");
+    let src = root.join("card/a.png");
+    let dst_dir = root.join("library");
+    std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(&dst_dir).unwrap();
+    write_png(&src, 1);
+    let sidecar = src.with_extension("png.xmp");
+    std::fs::write(&sidecar, xmp(1)).unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+
+    let placed = confine(Some(&roots), || place(&src, &dst_dir, "a.png")).unwrap();
+    assert!(lightcraft_catalog::safe_file::same_file(&src, &placed.dst), "the photo was linked on the same volume");
+    assert!(lightcraft_catalog::safe_file::same_file(&sidecar, &placed.sidecars[0].dst), "the sidecar was linked too");
+    assert!(confine(Some(&roots), || finish(&placed)).unwrap().is_empty());
+    assert!(!src.exists() && !sidecar.exists(), "both source names were removed");
+    assert!(placed.dst.exists() && placed.sidecars[0].dst.exists(), "both placed files remain");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A third hard-link name outside the roots keeps a placed sidecar's source in place.
+#[test]
+fn a_confined_move_keeps_a_sidecar_with_an_unknown_hard_link_name() {
+    use crate::file_access::{AutomationRoots, confine};
+    use crate::import_move::{finish, place};
+    let base = temp_dir("move-hard-link-escape");
+    let root = base.join("root");
+    let outside = base.join("outside");
+    let src = root.join("card/a.png");
+    let dst_dir = root.join("library");
+    std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(&dst_dir).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    write_png(&src, 1);
+    let sidecar = src.with_extension("png.xmp");
+    std::fs::write(&sidecar, xmp(1)).unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+
+    let placed = confine(Some(&roots), || place(&src, &dst_dir, "a.png")).unwrap();
+    let unknown = outside.join("a.png.xmp");
+    std::fs::hard_link(&sidecar, &unknown).unwrap();
+    let kept = confine(Some(&roots), || finish(&placed)).unwrap();
+    assert!(!src.exists(), "the photo pair is wholly inside the roots and is removed");
+    assert!(sidecar.exists() && unknown.exists(), "the sidecar's untrusted third name is preserved");
+    assert!(kept.iter().any(|(_, why)| why.contains("has 3 names")), "{kept:?}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A sidecar link leading out of the automation roots stops the move, and nothing is left behind.
+#[cfg(unix)]
+#[test]
+fn a_sidecar_link_out_of_the_roots_stops_the_move_and_leaves_nothing() {
+    use crate::file_access::{AutomationRoots, confine};
+    use crate::import_move::place;
+    let base = temp_dir("sidecar-link");
+    let (root, dst, outside) = (base.join("root"), base.join("root/dst"), base.join("outside"));
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::create_dir_all(&root).unwrap();
+    let secret = outside.join("secret.xmp");
+    std::fs::write(&secret, xmp(5)).unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+
+    // the source's sidecar is the link
+    let a = root.join("src/a.png");
+    write_png(&a, 1);
+    std::os::unix::fs::symlink(&secret, root.join("src/a.png.xmp")).unwrap();
+    assert!(confine(Some(&roots), || place(&a, &dst, "a.png")).is_err());
+    assert!(!dst.exists(), "refused before anything is placed");
+
+    // a sidecar is already at the destination, and it's the link
+    let b = root.join("src/b.png");
+    write_png(&b, 2);
+    std::fs::write(root.join("src/b.png.xmp"), xmp(1)).unwrap();
+    std::fs::create_dir_all(&dst).unwrap();
+    std::os::unix::fs::symlink(&secret, dst.join("b.png.xmp")).unwrap();
+    assert!(confine(Some(&roots), || place(&b, &dst, "b.png")).is_err());
+    assert!(!dst.join("b.png").exists(), "the placed photo is rolled back");
+
+    assert!(a.is_file() && b.is_file(), "the sources stay");
+    assert_eq!(std::fs::read_to_string(&secret).unwrap(), xmp(5));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Moving a link from outside the write root would remove the link, outside the write root.
+#[cfg(unix)]
+#[test]
+fn a_link_from_outside_the_roots_is_not_moved_or_removed() {
+    use crate::file_access::{AutomationRoots, confine};
+    use crate::import_move::{finish, place};
+    let base = temp_dir("link-from-outside");
+    let (root, dst, outside) = (base.join("root"), base.join("root/dst"), base.join("outside"));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    write_png(&root.join("target.png"), 1);
+    let link = outside.join("a.png");
+    std::os::unix::fs::symlink(root.join("target.png"), &link).unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+
+    assert!(confine(Some(&roots), || place(&link, &dst, "a.png")).is_err());
+    assert!(!dst.exists(), "nothing is placed");
+    // placed before the roots came into force: the removal is still refused
+    let placed = place(&link, &dst, "a.png").unwrap();
+    assert!(confine(Some(&roots), || finish(&placed)).is_err());
+    assert!(link.symlink_metadata().is_ok(), "the link stays");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Planning a rename asks whether names are taken in the photo's folder: not outside the roots.
+#[test]
+fn a_rename_of_a_photo_outside_the_roots_is_refused_before_it_is_planned() {
+    use crate::file_access::{AutomationRoots, confine};
+    let base = temp_dir("rename-outside");
+    let (root, outside) = (base.join("root"), base.join("outside"));
+    std::fs::create_dir_all(&root).unwrap();
+    let photo = outside.join("a.png");
+    write_png(&photo, 1);
+    let mut s = session();
+    let r = s.execute("library.import", &json!({"paths": [photo.to_string_lossy()]})).unwrap();
+    let id = r["imported"][0].clone();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+    for cmd in ["photo.renamePreview", "photo.rename"] {
+        let e = confine(Some(&roots), || s.execute(cmd, &json!({"ids": [id], "template": "new"}))).expect_err(cmd);
+        assert!(e.to_string().contains("outside the read root"), "{cmd}: {e}");
+    }
+    assert!(photo.is_file());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Renaming a folder link or saving a sidecar through a link acts where the link stands: outside.
+#[cfg(unix)]
+#[test]
+fn folder_renames_and_sidecars_refuse_a_link_standing_outside_the_roots() {
+    use crate::file_access::{AutomationRoots, confine};
+    let base = temp_dir("writers-link");
+    let (root, outside) = (base.join("root"), base.join("outside"));
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    write_png(&root.join("target.png"), 1);
+    std::fs::write(root.join("kept.xmp"), xmp(1)).unwrap();
+    let dir_link = outside.join("backdir");
+    let photo_link = outside.join("a.png");
+    let sidecar_link = outside.join("a.png.xmp");
+    std::os::unix::fs::symlink(root.join("sub"), &dir_link).unwrap();
+    std::os::unix::fs::symlink(root.join("target.png"), &photo_link).unwrap();
+    std::os::unix::fs::symlink(root.join("kept.xmp"), &sidecar_link).unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+    let text = |p: &Path| p.to_string_lossy().to_string();
+
+    let to = text(&root.join("moved"));
+    let e = confine(Some(&roots), || crate::cmd::browse::rename_folder_on_disk(&text(&dir_link), &to)).unwrap_err();
+    assert!(e.contains("outside the write root"), "{e}");
+    assert!(dir_link.symlink_metadata().is_ok() && !root.join("moved").exists());
+
+    let mut s = session();
+    let id = confine(Some(&roots), || s.execute("library.import", &json!({"paths": [text(&photo_link)]}))).unwrap()["imported"][0].as_u64().unwrap();
+    let e = confine(Some(&roots), || s.save_sidecar(lightcraft_catalog::PhotoId(id))).expect_err("a sidecar outside");
+    assert!(e.to_string().contains("outside the write root"), "{e}");
+    assert_eq!(std::fs::read_to_string(root.join("kept.xmp")).unwrap(), xmp(1));
+    assert!(sidecar_link.symlink_metadata().unwrap().file_type().is_symlink());
     let _ = std::fs::remove_dir_all(&base);
 }

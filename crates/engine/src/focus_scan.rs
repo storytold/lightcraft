@@ -74,6 +74,7 @@ impl Pace {
 /// The focus point in the file at `path`, read from its header only.
 pub fn read_focus(path: &str) -> std::result::Result<HeaderRead, String> {
     use std::io::{Read, Seek, SeekFrom};
+    crate::file_access::check_read(path)?;
     let mut file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
     let len = file.metadata().map_err(|e| format!("{path}: {e}"))?.len();
     lightcraft_meta::focus::read_header(len, &mut |off, buf| {

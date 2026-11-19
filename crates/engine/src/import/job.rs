@@ -347,7 +347,10 @@ impl ImportJob {
             let packet = if duplicate_of.is_some() && info.captured.is_some() {
                 None
             } else {
-                found_sidecar.and_then(|f| std::fs::read_to_string(f).ok()).or_else(|| info.xmp.clone().filter(|_| raw))
+                found_sidecar
+                    .filter(|f| crate::file_access::check_read(f).is_ok())
+                    .and_then(|f| std::fs::read_to_string(f).ok())
+                    .or_else(|| info.xmp.clone().filter(|_| raw))
             };
             let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);
             let sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {

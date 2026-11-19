@@ -147,6 +147,14 @@ pub(crate) fn sidecars_of(src: &Path) -> Vec<(PathBuf, bool)> {
 /// Put `src` into `dir` as `name` (-1, -2… when taken) with its sidecars, leaving the source
 /// untouched. On failure nothing is left at the destination.
 pub(crate) fn place(src: &Path, dir: &Path, name: &str) -> Result<Placed, String> {
+    crate::file_access::check_read(src)?;
+    crate::file_access::check_write(src)?;
+    crate::file_access::check_write(dir)?;
+    // before anything is placed, so a refusal leaves nothing behind
+    for (sc, _) in sidecars_of(src) {
+        crate::file_access::check_read(&sc)?;
+        crate::file_access::check_write(&sc)?;
+    }
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let (stem, ext) = match name.rsplit_once('.') {
         Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
@@ -171,10 +179,13 @@ pub(crate) fn place(src: &Path, dir: &Path, name: &str) -> Result<Placed, String
         let sc_dst =
             if stem_named { placed.dst.with_extension(&sc_ext) } else { PathBuf::from(format!("{}.{sc_ext}", placed.dst.to_string_lossy())) };
         let r = if sc_dst.exists() {
-            match same_bytes(&sc, &sc_dst) {
+            // one already there is compared, so it has to be readable: a link out of the roots isn't
+            match crate::file_access::check_read(&sc_dst)
+                .and_then(|()| same_bytes(&sc, &sc_dst).map_err(|e| format!("{}: {e} (the original is kept)", sc_dst.display())))
+            {
                 Ok(true) => Ok(false),
                 Ok(false) => Err(format!("a different sidecar is already at {} (the original is kept)", sc_dst.display())),
-                Err(e) => Err(format!("{}: {e} (the original is kept)", sc_dst.display())),
+                Err(e) => Err(e),
             }
         } else {
             link_or_copy(&sc, &sc_dst).map(|()| true).map_err(|e| format!("move {}: {e} (the original is kept)", sc.display()))
@@ -201,6 +212,8 @@ pub(crate) fn place(src: &Path, dir: &Path, name: &str) -> Result<Placed, String
 /// (whose recorded metadata and hash would be stale). Without one the copy is compared byte for
 /// byte with the source.
 pub(crate) fn copy_new(src: &Path, dir: &Path, name: &str, expect: Option<lightcraft_preview::Hash128>) -> Result<PathBuf, String> {
+    crate::file_access::check_read(src)?;
+    crate::file_access::check_write(dir)?;
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let (stem, ext) = match name.rsplit_once('.') {
         Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
@@ -240,6 +253,7 @@ pub(crate) fn finish(p: &Placed) -> Result<Vec<(String, String)>, String> {
     if injected(Fault::FailRemove) {
         return Err("could not remove the original (injected): it stays where it was".into());
     }
+    crate::file_access::check_write_pair(&p.src, &p.dst)?;
     fs::remove_file(&p.src).map_err(|e| format!("could not remove the original ({e}): it stays where it was"))?;
     let mut kept = Vec::new();
     for sc in &p.sidecars {
@@ -254,7 +268,7 @@ pub(crate) fn finish(p: &Placed) -> Result<Vec<(String, String)>, String> {
             kept.push((path, format!("also the sidecar of {other}: kept beside it")));
             continue;
         }
-        if let Err(e) = fs::remove_file(&sc.src) {
+        if let Err(e) = crate::file_access::check_write_pair(&sc.src, &sc.dst).and_then(|()| fs::remove_file(&sc.src).map_err(|e| e.to_string())) {
             kept.push((path, format!("could not remove the sidecar ({e})")));
         }
     }

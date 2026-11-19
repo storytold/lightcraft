@@ -28,6 +28,7 @@ pub fn openable(path: &str, label: &str) -> Result<String, String> {
         "" => p.file_name().map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned()),
         l => l.to_string(),
     };
+    crate::file_access::check_read(p)?;
     if !is_media(p) {
         return Err(format!("{name} isn't one of the file types LightCraft reads, so it isn't handed to another application"));
     }

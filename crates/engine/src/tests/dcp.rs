@@ -561,3 +561,227 @@ fn an_oversized_camera_profile_is_refused_while_it_is_read() {
     assert_eq!(r["failed"][0][1], json!("the camera profile is larger than 64 MiB"), "{r}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A saved or named profile outside the automation roots counts as missing, and the same one loads without roots.
+#[test]
+fn a_profile_outside_the_roots_counts_as_missing() {
+    use crate::cmd::dcp_profiles::{DcpEntry, import_files, register_all};
+    use crate::file_access::{AutomationRoots, confine};
+    let base = temp_dir("outside-roots");
+    let (root, outside) = (base.join("root"), base.join("outside"));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let file = outside.join("Swap.dcp");
+    std::fs::write(&file, write_dcp(&swapping_profile("Swap")).unwrap()).unwrap();
+    let shown = file.to_string_lossy().to_string();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+
+    let mut s = Session::new().with_fs();
+    s.dcp_profiles.push(DcpEntry { id: "dcp:swap".into(), name: "Swap".into(), camera_model: "LightCraft Test Camera".into(), file: shown.clone() });
+    confine(Some(&roots), || register_all(&mut s, None));
+    assert!(s.media.camera_profiles.is_empty());
+    register_all(&mut s, None);
+    assert_eq!(s.media.camera_profiles.len(), 1);
+
+    let mut s = Session::new().with_fs();
+    let (imported, failed) = confine(Some(&roots), || import_files(&mut s, std::slice::from_ref(&shown))).unwrap();
+    assert!(imported.is_empty(), "{imported:?}");
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A link standing in the library's `Profiles` folder is not written through to a file outside the roots.
+#[cfg(unix)]
+#[test]
+fn an_import_does_not_write_through_a_link_in_the_profiles_folder() {
+    use crate::cmd::dcp_profiles::import_files;
+    use crate::file_access::{AutomationRoots, confine};
+    let base = temp_dir("profiles-link");
+    let (root, outside) = (base.join("root"), base.join("outside"));
+    let lib = root.join("lib");
+    std::fs::create_dir_all(lib.join("Profiles")).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let source = root.join("Swap.dcp");
+    std::fs::write(&source, write_dcp(&swapping_profile("Swap")).unwrap()).unwrap();
+    let secret = outside.join("secret.dcp");
+    std::fs::write(&secret, b"kept").unwrap();
+    let slug = crate::presets::slug("LightCraft Test Camera-Swap");
+    std::os::unix::fs::symlink(&secret, lib.join("Profiles").join(format!("{slug}.dcp"))).unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let paths = [source.to_string_lossy().to_string()];
+    let (imported, failed) = confine(Some(&roots), || import_files(&mut s, &paths)).unwrap();
+    assert!(imported.is_empty(), "{imported:?}");
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    assert_eq!(std::fs::read(&secret).unwrap(), b"kept");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The library is the operator's choice: outside the automation roots its own profile copies still work, but a link
+/// standing in its `Profiles` folder is judged like any other path.
+#[cfg(unix)]
+#[test]
+fn a_library_outside_the_roots_keeps_its_own_profiles() {
+    use crate::cmd::dcp_profiles::{DcpEntry, import_files, register_all};
+    use crate::file_access::{AutomationRoots, confine};
+    let base = temp_dir("library-outside");
+    let (root, lib, outside) = (base.join("root"), base.join("lib"), base.join("outside"));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let source = root.join("Swap.dcp");
+    let bytes = write_dcp(&swapping_profile("Swap")).unwrap();
+    std::fs::write(&source, &bytes).unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let paths = [source.to_string_lossy().to_string()];
+    let (imported, failed) = confine(Some(&roots), || import_files(&mut s, &paths)).unwrap();
+    assert_eq!(imported.len(), 1, "{failed:?}");
+    let profiles = lib.join("Profiles");
+    let copy = std::path::Path::new(&s.dcp_profiles[0].file).to_path_buf();
+    assert_eq!(copy.parent(), Some(profiles.as_path()));
+    s.media.camera_profiles.clear();
+    confine(Some(&roots), || register_all(&mut s, Some(&profiles)));
+    assert_eq!(s.media.camera_profiles.len(), 1);
+    let id = s.dcp_profiles[0].id.clone();
+    confine(Some(&roots), || s.execute("profile.deleteCamera", &json!({"id": id}))).unwrap();
+    assert!(!copy.exists());
+
+    let secret = outside.join("secret.dcp");
+    std::fs::write(&secret, &bytes).unwrap();
+    let link = profiles.join("link.dcp");
+    std::os::unix::fs::symlink(&secret, &link).unwrap();
+    s.dcp_profiles =
+        vec![DcpEntry { id: "dcp:link".into(), name: "Link".into(), camera_model: String::new(), file: link.to_string_lossy().to_string() }];
+    confine(Some(&roots), || register_all(&mut s, Some(&profiles)));
+    assert!(s.media.camera_profiles.is_empty());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Importing over a hard-linked library profile replaces its name without truncating the other name.
+#[cfg(unix)]
+#[test]
+fn importing_over_a_hard_linked_library_profile_preserves_the_other_name() {
+    use crate::cmd::dcp_profiles::import_files;
+    use crate::file_access::{AutomationRoots, confine};
+    let base = temp_dir("profile-hard-link");
+    let (root, lib, outside) = (base.join("root"), base.join("lib"), base.join("outside"));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let source = root.join("Swap.dcp");
+    let bytes = write_dcp(&swapping_profile("Swap")).unwrap();
+    std::fs::write(&source, &bytes).unwrap();
+    let secret = outside.join("secret.dcp");
+    std::fs::write(&secret, b"preserve this linked file").unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let paths = [source.to_string_lossy().to_string()];
+    let (first, failed) = confine(Some(&roots), || import_files(&mut s, &paths)).unwrap();
+    assert_eq!(first.len(), 1, "{failed:?}");
+    let profile = PathBuf::from(&s.dcp_profiles[0].file);
+    std::fs::remove_file(&profile).unwrap();
+    std::fs::hard_link(&secret, &profile).unwrap();
+    s.dcp_profiles.clear();
+    let (again, failed) = confine(Some(&roots), || import_files(&mut s, &paths)).unwrap();
+    assert_eq!(again.len(), 1, "{failed:?}");
+    assert_eq!(std::fs::read(&secret).unwrap(), b"preserve this linked file");
+    assert_eq!(std::fs::read(&profile).unwrap(), bytes);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A `Profiles` folder that is a link out of the automation roots: deleting a profile leaves the file it leads to alone.
+#[cfg(unix)]
+#[test]
+fn a_delete_does_not_follow_a_profiles_folder_link_out_of_the_roots() {
+    use crate::cmd::dcp_profiles::DcpEntry;
+    use crate::file_access::{AutomationRoots, confine};
+    let base = temp_dir("profiles-folder-link");
+    let (root, outside) = (base.join("root"), base.join("outside"));
+    let lib = root.join("lib");
+    std::fs::create_dir_all(&lib).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let secret = outside.join("secret.dcp");
+    std::fs::write(&secret, b"kept").unwrap();
+    std::os::unix::fs::symlink(&outside, lib.join("Profiles")).unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.dcp_profiles.push(DcpEntry {
+        id: "dcp:secret".into(),
+        name: "Secret".into(),
+        camera_model: String::new(),
+        file: lib.join("Profiles").join("secret.dcp").to_string_lossy().to_string(),
+    });
+    assert!(confine(Some(&roots), || s.execute("profile.deleteCamera", &json!({"id": "dcp:secret"}))).is_err());
+    assert!(secret.exists());
+    assert_eq!(s.dcp_profiles.len(), 1, "a profile that can't be removed stays");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A small identity `.cube`.
+#[cfg(unix)]
+fn identity_cube() -> String {
+    let mut cube = String::from("LUT_3D_SIZE 2\n");
+    for b in 0..2 {
+        for g in 0..2 {
+            for r in 0..2 {
+                cube.push_str(&format!("{r} {g} {b}\n"));
+            }
+        }
+    }
+    cube
+}
+
+/// `.cube` profiles under automation roots: a saved one outside them counts as missing, a library outside them keeps its
+/// own, and a `Profiles` folder that is a link out of them is neither written to nor deleted from.
+#[cfg(unix)]
+#[test]
+fn lut_profiles_stay_inside_the_roots() {
+    use crate::cmd::lut_profiles::{LutProfile, register_all};
+    use crate::file_access::{AutomationRoots, confine};
+    let base = temp_dir("lut-roots");
+    let (root, outside) = (base.join("root"), base.join("outside"));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+    let entry = |id: &str, file: &std::path::Path| LutProfile {
+        id: id.into(),
+        name: id.into(),
+        group: "Imported".into(),
+        file: file.to_string_lossy().to_string(),
+    };
+
+    // a saved profile outside the roots, then the library's own copy with the library outside them
+    let secret = outside.join("secret.cube");
+    std::fs::write(&secret, identity_cube()).unwrap();
+    let mut s = Session::new().with_fs();
+    s.lut_profiles.push(entry("lut:roots-outside", &secret));
+    confine(Some(&roots), || register_all(&s, None));
+    assert!(lightcraft_pipeline::lut::get("lut:roots-outside").is_none());
+    confine(Some(&roots), || register_all(&s, secret.parent()));
+    assert!(lightcraft_pipeline::lut::get("lut:roots-outside").is_some());
+    lightcraft_pipeline::lut::unregister("lut:roots-outside");
+
+    // a `Profiles` folder that leads out of the roots
+    let lib = root.join("lib");
+    std::fs::create_dir_all(&lib).unwrap();
+    std::os::unix::fs::symlink(&outside, lib.join("Profiles")).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let source = root.join("look.cube");
+    std::fs::write(&source, identity_cube()).unwrap();
+    let r = confine(Some(&roots), || s.execute("profile.import", &json!({"paths": [source.to_string_lossy()]}))).unwrap();
+    assert_eq!(r["imported"], json!([]), "{r}");
+    assert_eq!(r["failed"].as_array().unwrap().len(), 1, "{r}");
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1, "nothing new outside");
+    s.lut_profiles.push(entry("lut:roots-linked", &lib.join("Profiles").join("secret.cube")));
+    assert!(confine(Some(&roots), || s.execute("profile.deleteImported", &json!({"id": "lut:roots-linked"}))).is_err());
+    assert!(secret.exists());
+    assert_eq!(s.lut_profiles.len(), 1, "a profile that can't be removed stays");
+    let _ = std::fs::remove_dir_all(&base);
+}

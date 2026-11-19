@@ -65,6 +65,7 @@ fn is_lrcat_name(name: &str) -> bool {
 /// The first `*.lrcat` file (by name) at the top level of `dir`, looking at no more than
 /// [`SCAN_LIMIT`] entries. Unreadable folders and entries are skipped.
 pub fn find_lrcat(dir: &Path) -> Option<PathBuf> {
+    crate::file_access::check_read(dir).ok()?;
     let entries = std::fs::read_dir(dir).ok()?;
     let mut found: Option<PathBuf> = None;
     for entry in entries.take(SCAN_LIMIT).flatten() {
@@ -160,6 +161,7 @@ pub fn lightroom_catalog_at(path: &Path) -> Option<LightroomPlace> {
 /// The first `*.zip` file (by name) at the top level of `dir` that holds a Lightroom catalog,
 /// looking at no more than [`SCAN_LIMIT`] entries.
 fn find_backup_zip(dir: &Path) -> Option<PathBuf> {
+    crate::file_access::check_read(dir).ok()?;
     let entries = std::fs::read_dir(dir).ok()?;
     entries
         .take(SCAN_LIMIT)
@@ -172,6 +174,7 @@ fn find_backup_zip(dir: &Path) -> Option<PathBuf> {
 
 /// The backup zips in the dated folders of `backups`, one per folder; `None` when there are none.
 fn backup_zips(backups: &Path) -> Option<Vec<PathBuf>> {
+    crate::file_access::check_read(backups).ok()?;
     let entries = std::fs::read_dir(backups).ok()?;
     let zips: Vec<PathBuf> =
         entries.take(SCAN_LIMIT).flatten().map(|e| e.path()).filter(|p| p.is_dir()).filter_map(|d| find_backup_zip(&d)).collect();

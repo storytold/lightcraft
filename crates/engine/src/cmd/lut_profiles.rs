@@ -26,8 +26,19 @@ fn profiles_dir(s: &Session) -> Option<PathBuf> {
 }
 
 /// Register every imported profile's LUT with the pipeline (missing files are skipped).
-pub fn register_all(s: &Session) {
+///
+/// `profiles` is the `Profiles/` folder of the library being opened; another file outside the automation roots counts as
+/// missing.
+pub fn register_all(s: &Session, profiles: Option<&Path>) {
     for p in &s.lut_profiles {
+        let file = Path::new(&p.file);
+        if super::dcp_profiles::library_owned(profiles, file) {
+            if crate::file_access::reject_other_names(file).is_err() {
+                continue;
+            }
+        } else if crate::file_access::check_read(file).is_err() {
+            continue;
+        }
         if let Some(l) = std::fs::read_to_string(&p.file).ok().and_then(|t| lightcraft_pipeline::lut::Lut3d::parse_cube(&t).ok()) {
             lightcraft_pipeline::lut::register(&p.id, l);
         }
@@ -42,10 +53,18 @@ fn cube_files(paths: &[String]) -> (Vec<(String, String, Option<String>)>, Vec<V
     let mut failed = Vec::new();
     let stem = |f: &Path| f.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     for p in paths {
+        if let Err(e) = crate::file_access::check_read(p) {
+            failed.push(json!([stem(Path::new(p)), e]));
+            continue;
+        }
         let path = Path::new(p);
         if path.is_dir() {
             let cube = |f: &Path| f.extension().is_some_and(|x| x.eq_ignore_ascii_case("cube"));
             for ep in crate::walk::files_in(path, None, crate::walk::Limits::default(), cube).files {
+                if let Err(e) = crate::file_access::check_read(&ep) {
+                    failed.push(json!([stem(&ep), e]));
+                    continue;
+                }
                 match std::fs::read_to_string(&ep) {
                     Ok(t) => {
                         let group = ep.parent().and_then(|d| d.file_name()).map(|n| n.to_string_lossy().to_string());
@@ -90,6 +109,7 @@ fn cube_files(paths: &[String]) -> (Vec<(String, String, Option<String>)>, Vec<V
     (out, failed)
 }
 
+/// Import LUT profiles from the supplied files into the library.
 fn import(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "profile.import";
     let paths: Vec<String> =
@@ -128,6 +148,10 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         let file = match &dir {
             Some(d) => {
                 let f = d.join(format!("{}.cube", id.trim_start_matches("lut:")));
+                if let Err(e) = super::dcp_profiles::write_allowed(Some(d), &f) {
+                    failed.push(json!([name, format!("{}: {e}", f.display())]));
+                    continue;
+                }
                 // a new file renamed into place: an entry already under the name (a link planted
                 // in the Profiles folder) is replaced, never written through
                 lightcraft_catalog::safe_file::write_atomic(&f, text.as_bytes()).map_err(|e| bad(C, format!("{}: {e}", f.display())))?;
@@ -151,6 +175,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"imported": imported, "failed": failed}))
 }
 
+/// The LUT profile commands and their parameter schemas.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -170,8 +195,13 @@ pub fn specs() -> Vec<CommandSpec> {
             let Some(i) = s.lut_profiles.iter().position(|x| x.id == id) else {
                 return Err(bad("profile.deleteImported", format!("no imported profile `{id}`")));
             };
+            let dir = profiles_dir(s).filter(|d| Path::new(&s.lut_profiles[i].file).starts_with(d));
+            if let Some(d) = &dir {
+                let file = &s.lut_profiles[i].file;
+                super::dcp_profiles::write_allowed(Some(d), Path::new(file)).map_err(|e| bad("profile.deleteImported", format!("{file}: {e}")))?;
+            }
             let gone = s.lut_profiles.remove(i);
-            if profiles_dir(s).is_some_and(|d| Path::new(&gone.file).starts_with(d)) {
+            if dir.is_some() {
                 let _ = std::fs::remove_file(&gone.file);
             }
             lightcraft_pipeline::lut::unregister(&id);
