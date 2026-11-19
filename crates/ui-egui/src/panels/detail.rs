@@ -1159,8 +1159,18 @@ fn targeted_drag(app: &mut LightcraftApp, resp: &egui::Response, map: &CanvasMap
     }
 }
 
+/// Focus peaking as the view settings ask for it (`view.focusPeaking`; `None` when it is off),
+/// carrying the clipping warnings when J is on too.
+pub(crate) fn peaking_overlay(app: &LightcraftApp) -> Option<lightcraft_pipeline::Overlay> {
+    app.ui.focus_peaking.then(|| lightcraft_pipeline::Overlay::FocusPeaking {
+        color: app.ui.peaking_color,
+        sensitivity: app.ui.peaking_sensitivity.clamp(0.0, 100.0).round() as u8,
+        clip: app.ui.show_clipping,
+    })
+}
+
 /// The diagnostic overlay the loupe shows (an Alt-drag preview, the selected mask, Point Color's
-/// visualized range, Visualize Spots, the clipping warnings).
+/// visualized range, Visualize Spots, focus peaking, the clipping warnings).
 pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcraft_pipeline::Overlay {
     use lightcraft_pipeline::{MaskView, Overlay};
     if app.ui.fullscreen {
@@ -1203,6 +1213,10 @@ pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcra
     }
     if edit && app.ui.hdr_visualize && d.hdr.enabled {
         return Overlay::HdrRange;
+    }
+    // Focus peaking, with the clipping warnings under it when both are on
+    if let Some(o) = peaking_overlay(app) {
+        return o;
     }
     // Clipping warnings (J): clipped highlights red, clipped shadows blue, on the photo itself
     if app.ui.show_clipping {

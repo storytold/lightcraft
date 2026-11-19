@@ -153,6 +153,10 @@ The camera's focus point ([focus-points.md](focus-points.md)) is `meta.focus` in
 x1, y1}, mode?, area?, tracking?}`, normalized to the upright photo (absent when the file records none).
 `view.focusPoint {on?}` shows it over the photo (no params toggles; replies `{on}`), and `view.zoomToFocus {on?}`
 (on by default) makes `view.zoomToggle` zoom in centred on it, replying `{focus: [x, y]}` (the `pan` it set).
+`view.focusPeaking {on?, color?, sensitivity?}` paints the sharp edges of the photo over it in Detail and Survey (off
+by default; no params toggles, a `color` (`"#rrggbb"` or `[r, g, b]`, whole numbers 0 to 255) or `sensitivity` (0 to
+100, higher marks softer edges) alone changes only the setting; a malformed value is refused and changes nothing;
+replies `{on, color, sensitivity}`). It is a view setting: the edit, its history and exports never include it.
 `photo.readFocusPoints {ids?, wait?}` reads the point for photos imported before it was read, from a few KB of each
 file, on a background job (activity kind `focus`); `wait: true` returns the run's counts when done. The app calls
 `focus.pump {pace}` every frame to drive it.

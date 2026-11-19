@@ -753,6 +753,7 @@ fn ui_commands_5(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             app.ui.show_clipping = !app.ui.show_clipping;
             Ok(Value::Null)
         }
+        "view.focusPeaking" => view_focus_peaking_command(app, p),
         "view.visualizeHdr" => {
             // {on?}; no params toggles. Shown on photos edited in HDR (see `develop.hdr`).
             app.ui.hdr_visualize = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.hdr_visualize);
@@ -1577,6 +1578,56 @@ fn view_view_options_command(app: &mut LightcraftApp, p: &Value) -> Result<Value
         app.ui.dialog = Some(Dialog::ViewOptions);
     }
     Ok(json!({"loupeInfo": app.ui.settings.loupe_info, "loupeMessages": app.ui.settings.loupe_messages}))
+}
+
+/// The `view.focusPeaking` command: `{on?, color?, sensitivity?}`. `on` (true, false or null) sets
+/// it; without `on`, a `color` (`"#rrggbb"` or `[r, g, b]`, whole numbers 0..255) or `sensitivity`
+/// (0..100) changes only the setting and no params toggles. A malformed value changes nothing.
+/// Replies `{on, color, sensitivity}`. A view setting only: no edit, no history step.
+fn view_focus_peaking_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    let on = match p.get("on") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(on)) => Some(*on),
+        Some(v) => return Err(format!("view.focusPeaking: `on` must be true or false, not {v}")),
+    };
+    let color = match p.get("color") {
+        None | Some(Value::Null) => None,
+        Some(v) => match peaking_color(v) {
+            Some(c) => Some(c),
+            None => return Err(format!("view.focusPeaking: `color` is \"#rrggbb\" or [r, g, b] with whole numbers from 0 to 255, not {v}")),
+        },
+    };
+    let sensitivity = match p.get("sensitivity") {
+        None | Some(Value::Null) => None,
+        Some(v) => match v.as_f64() {
+            Some(s) if (0.0..=100.0).contains(&s) => Some(s as f32),
+            _ => return Err(format!("view.focusPeaking: `sensitivity` must be a number from 0 to 100, not {v}")),
+        },
+    };
+    let toggle = on.is_none() && color.is_none() && sensitivity.is_none();
+    if let Some(c) = color {
+        app.ui.peaking_color = c;
+    }
+    if let Some(s) = sensitivity {
+        app.ui.peaking_sensitivity = s;
+    }
+    app.ui.focus_peaking = match on {
+        Some(on) => on,
+        None if toggle => !app.ui.focus_peaking,
+        None => app.ui.focus_peaking,
+    };
+    let [r, g, b] = app.ui.peaking_color;
+    Ok(json!({"on": app.ui.focus_peaking, "color": format!("#{r:02x}{g:02x}{b:02x}"), "sensitivity": app.ui.peaking_sensitivity}))
+}
+
+/// A focus peaking colour: `"#rrggbb"`, or `[r, g, b]` of exactly three whole numbers 0..255.
+fn peaking_color(v: &Value) -> Option<[u8; 3]> {
+    if v.is_string() {
+        return parse_rgb(v);
+    }
+    let a = v.as_array().filter(|a| a.len() == 3)?;
+    let c = |i: usize| a.get(i)?.as_u64().and_then(|x| u8::try_from(x).ok());
+    Some([c(0)?, c(1)?, c(2)?])
 }
 
 /// The `view.softProof` command.

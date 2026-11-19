@@ -566,4 +566,12 @@ fn diagnostic_overlays_in_a_window_match_the_full_render() {
     hdr.hdr.max_ev = 3.0;
     hdr.light.exposure = 1.5;
     check_overlay("hdr range", &hdr, Overlay::HdrRange, MID, 1, 0.1);
+    let mut sharp = DevelopSettings::default();
+    sharp.detail.sharpen_amount = 60.0;
+    let peaking = Overlay::FocusPeaking { color: [0, 255, 0], sensitivity: 70, clip: true };
+    // a threshold, as with spots: a pixel at it may flip on a one-level difference underneath
+    check_overlay("focus peaking", &sharp, peaking, MID, 255, 0.05);
+    for (x, y) in [(0, 0), (W - 400, H - 300)] {
+        check_overlay("focus peaking at a corner", &sharp, peaking, PixelWindow { x, y, w: 400, h: 300 }, 255, 0.05);
+    }
 }
