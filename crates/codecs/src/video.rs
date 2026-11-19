@@ -232,7 +232,7 @@ impl<W: Write + Seek> Mp4Writer<W> {
 
 enum WebmState<W: Write + Seek> {
     Pending { w: W, config: Option<Vec<u8>> },
-    Active(MkvWriter<W>),
+    Active(Box<MkvWriter<W>>),
 }
 
 /// A WebM writer (see the module docs). Timestamps are in milliseconds.
@@ -283,7 +283,7 @@ impl<W: Write + Seek> WebmWriter<W> {
             spec.video_size = Some((self.width, self.height));
             let opts = MuxOptions { doc_type: "webm".into(), cluster_duration_ns: 0, writing_app: "LightCraft".into(), ..Default::default() };
             let mkv = MkvWriter::new(w, vec![spec], opts).map_err(media_err)?;
-            self.state = Some(WebmState::Active(mkv));
+            self.state = Some(WebmState::Active(Box::new(mkv)));
         }
         match self.state.as_mut() {
             Some(WebmState::Active(mkv)) => Ok(mkv),
