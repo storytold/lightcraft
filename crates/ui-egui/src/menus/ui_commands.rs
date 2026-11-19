@@ -13,6 +13,7 @@ pub const LANGUAGE_COMMANDS: &[UiCommand] = &[
     ("app.language.spanish", crate::i18n::Locale::Es.name(), None, ""),
     ("app.language.french", crate::i18n::Locale::Fr.name(), None, ""),
     ("app.language.italian", crate::i18n::Locale::It.name(), None, ""),
+    ("app.language.lithuanian", crate::i18n::Locale::Lt.name(), None, ""),
     ("app.language.polish", crate::i18n::Locale::Pl.name(), None, ""),
     ("app.language.portuguese", crate::i18n::Locale::PtBr.name(), None, ""),
     ("app.language.finnish", crate::i18n::Locale::Fi.name(), None, ""),
