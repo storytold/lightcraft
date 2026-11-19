@@ -3,6 +3,7 @@
 //! on a worker thread, and recorded back here unless another library was opened meanwhile. A file
 //! that can't be read then (a share gone offline, a file changed since) is tried again later.
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use lightcraft_catalog::PhotoId;
@@ -39,11 +40,9 @@ impl Retry {
             self.ids.clear();
             self.library = library;
         }
-        for id in ids {
-            if !self.ids.contains(&id) {
-                self.ids.push(id);
-            }
-        }
+        // a set of those waiting: a long round of failures stays linear, not quadratic
+        let mut waiting: HashSet<PhotoId> = self.ids.iter().copied().collect();
+        self.ids.extend(ids.into_iter().filter(|&id| waiting.insert(id)));
         let wait = if self.wait.is_zero() { RETRY_FIRST } else { self.wait };
         let now = Instant::now();
         self.at = Some(now.checked_add(wait).unwrap_or(now));
@@ -65,11 +64,15 @@ impl Retry {
 }
 
 /// Start working out the queued hashes (called every frame); one batch at a time, later ones wait.
-pub fn tick(app: &mut LightcraftApp) {
+pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
     let library = app.session.library_generation();
     let again = app.hash_retry.due(library, Instant::now());
     if !again.is_empty() {
         app.session.queue_hash(again);
+    }
+    // nothing else may ask for a frame when the retry is due (an idle window draws none)
+    if let Some(at) = app.hash_retry.at {
+        ctx.request_repaint_after(at.saturating_duration_since(Instant::now()));
     }
     if !app.session.hashes_queued() || app.tasks.is_running(LABEL) {
         return;
@@ -171,7 +174,7 @@ mod tests {
         let ctx = egui::Context::default();
         assert!(app.session.catalog.photo(id).unwrap().content_hash.is_none(), "not on the UI thread");
         let hold = HOLD.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        super::tick(&mut app);
+        super::tick(&mut app, &ctx);
         let rows: Vec<_> = app.session.activity.list().into_iter().filter(|r| r.kind == "hash").collect();
         assert_eq!(rows.len(), 1, "one row, not one per layer: {rows:?}");
         assert_eq!(rows[0].label, super::LABEL);
@@ -193,7 +196,7 @@ mod tests {
         assert!(app.session.hashes_queued());
         let err = crate::dialogs::settings::can_switch_library(&app).unwrap_err();
         assert!(err.contains("checking added photos"), "{err}");
-        super::tick(&mut app);
+        super::tick(&mut app, &ctx);
         assert!(crate::dialogs::settings::can_switch_library(&app).is_err(), "refused while the worker runs");
         assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
         assert!(crate::dialogs::settings::can_switch_library(&app).is_ok());
@@ -207,11 +210,11 @@ mod tests {
         let (mut app, id, file, dir) = added_unhashed_photo("nospawn");
         let ctx = egui::Context::default();
         crate::tasks::fail_next_spawn();
-        super::tick(&mut app);
+        super::tick(&mut app, &ctx);
         assert!(app.session.hashes_queued(), "the photos are queued again");
         assert!(!app.tasks.is_running(super::LABEL));
         assert!(app.session.activity.list().iter().all(|r| r.kind != "hash"), "no row left behind");
-        super::tick(&mut app);
+        super::tick(&mut app, &ctx);
         assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
         assert_eq!(app.session.catalog.photo(id).unwrap().content_hash, lightcraft_engine::hashing::file_hash(&file.to_string_lossy()));
         assert!(!app.session.hashes_queued());
@@ -226,17 +229,17 @@ mod tests {
         let ctx = egui::Context::default();
         let bytes = std::fs::read(&file).unwrap();
         std::fs::write(&file, [bytes.as_slice(), b"more"].concat()).unwrap();
-        super::tick(&mut app);
+        super::tick(&mut app, &ctx);
         assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
         assert!(app.session.catalog.photo(id).unwrap().content_hash.is_none());
         assert!(!app.session.hashes_queued(), "not queued again at once: the file would be read every frame");
         assert_eq!(app.hash_retry.ids, vec![id]);
         assert!(crate::dialogs::settings::can_switch_library(&app).is_ok(), "an offline file doesn't block switching");
-        super::tick(&mut app);
+        super::tick(&mut app, &ctx);
         assert!(!app.tasks.is_running(super::LABEL), "not before its wait");
         std::fs::write(&file, &bytes).unwrap();
         app.hash_retry.at = Some(std::time::Instant::now());
-        super::tick(&mut app);
+        super::tick(&mut app, &ctx);
         assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
         assert_eq!(app.session.catalog.photo(id).unwrap().content_hash, lightcraft_engine::hashing::file_hash(&file.to_string_lossy()));
         assert!(app.hash_retry.ids.is_empty());
@@ -251,7 +254,7 @@ mod tests {
         let (mut app, id, file, dir) = added_unhashed_photo("redo");
         let ctx = egui::Context::default();
         let hold = HOLD.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        super::tick(&mut app);
+        super::tick(&mut app, &ctx);
         app.run("edit.undo", json!({})).unwrap();
         assert!(app.session.catalog.photo(id).unwrap().local);
         drop(hold);
@@ -260,7 +263,7 @@ mod tests {
         assert!(!app.session.hashes_queued());
         app.run("edit.redo", json!({})).unwrap();
         assert!(app.session.hashes_queued(), "the redo queues it again");
-        super::tick(&mut app);
+        super::tick(&mut app, &ctx);
         assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
         assert_eq!(app.session.catalog.photo(id).unwrap().content_hash, lightcraft_engine::hashing::file_hash(&file.to_string_lossy()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -281,6 +284,9 @@ mod tests {
             r.fail(7, vec![a]);
         }
         assert_eq!(r.wait, super::RETRY_MAX);
+        let b = lightcraft_catalog::PhotoId(2);
+        r.fail(7, vec![b, a, b]);
+        assert_eq!(r.ids, vec![a, b], "each once, in the order they first failed");
         let later = std::time::Instant::now() + super::RETRY_MAX * 2;
         assert!(r.due(7, std::time::Instant::now()).is_empty(), "not yet");
         assert!(r.due(8, later).is_empty(), "another library's photos are dropped");
@@ -292,7 +298,7 @@ mod tests {
     #[test]
     fn a_finished_batch_asks_for_a_frame_when_more_photos_wait() {
         let (mut app, id, _file, dir) = added_unhashed_photo("repaint");
-        super::tick(&mut app);
+        super::tick(&mut app, &egui::Context::default());
         app.session.queue_hash([id]);
         let t0 = std::time::Instant::now();
         loop {
@@ -313,6 +319,36 @@ mod tests {
             assert!(t0.elapsed() < Duration::from_secs(10));
             std::thread::sleep(Duration::from_millis(2));
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Photos waiting to be tried again ask for a frame when their wait is over: an idle window
+    /// draws none, and the retry happens only in a frame.
+    #[test]
+    fn a_waiting_retry_asks_for_a_frame_at_its_time() {
+        let (mut app, id, _file, dir) = added_unhashed_photo("retry-frame");
+        // a fresh, settled context: only the tick can ask it for a frame
+        let settled = || {
+            let ctx = egui::Context::default();
+            for _ in 0..8 {
+                if !ctx.has_requested_repaint() {
+                    break;
+                }
+                ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+            }
+            assert!(!ctx.has_requested_repaint());
+            ctx
+        };
+        app.session.take_hash_jobs();
+        let ctx = settled();
+        super::tick(&mut app, &ctx);
+        assert!(!ctx.has_requested_repaint(), "nothing waits: no frame asked for");
+        let library = app.session.library_generation();
+        app.hash_retry.fail(library, vec![id]);
+        let ctx = settled();
+        super::tick(&mut app, &ctx);
+        assert!(!app.session.hashes_queued(), "not yet due");
+        assert!(ctx.has_requested_repaint(), "the retry would wait for unrelated input");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
