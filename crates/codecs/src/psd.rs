@@ -39,38 +39,21 @@ impl<'a> Rd<'a> {
 }
 
 /// The merged composite of `bytes`. A file whose image resources section doesn't parse is opened
-/// with that section emptied (a copy in `spare`): the picture still decodes, without its profile
-/// and metadata.
-fn open_merged<'a>(bytes: &'a [u8], opts: &DecodeOptions, spare: &'a mut Vec<u8>) -> Result<craft_psd::merged::Merged<'a>> {
+/// from the original bytes with its resources omitted: the picture still decodes, without its
+/// profile and metadata.
+fn open_merged<'a>(bytes: &'a [u8], opts: &DecodeOptions) -> Result<craft_psd::merged::Merged<'a>> {
     let error = match open_exact(bytes, opts) {
         Ok(merged) => return Ok(merged),
-        // a pixel-limit refusal reads the header, which the copy keeps: no retry
+        // A pixel-limit refusal is final, so recovery cannot decode an oversized image.
         Err(error @ Error::TooLarge(..)) => return Err(error),
         Err(error) => error,
     };
-    let Some(stripped) = without_resources(bytes) else { return Err(error) };
-    *spare = stripped;
-    let spare: &'a Vec<u8> = spare;
-    open_exact(spare, opts).map_err(|_| error)
-}
-
-/// `bytes` with an empty image resources section, when the head framing parses via
-/// [`craft_psd::HeadView`] but strict resource parsing in [`craft_psd::Head`] fails.
-fn without_resources(bytes: &[u8]) -> Option<Vec<u8>> {
-    if craft_psd::Head::from_bytes(bytes).is_ok() {
-        return None;
+    let Ok(head) = craft_psd::HeadView::from_bytes(bytes) else { return Err(error) };
+    // Only malformed resource records permit recovery; valid heads keep their original errors.
+    if !head.resources().any(|resource| resource.is_err()) {
+        return Err(error);
     }
-    let view = craft_psd::HeadView::from_bytes(bytes).ok()?;
-    let res_at = 30usize.checked_add(view.color_mode_data.len())?;
-    let tail_at = usize::try_from(view.layer_section_offset).ok()?;
-    let tail = bytes.get(tail_at..)?;
-    let mut out = Vec::new();
-    // a failed allocation leaves the original parse error, not an abort
-    out.try_reserve_exact(res_at.checked_add(4)?.checked_add(tail.len())?).ok()?;
-    out.extend_from_slice(bytes.get(..res_at)?);
-    out.extend_from_slice(&0u32.to_be_bytes());
-    out.extend_from_slice(tail);
-    Some(out)
+    craft_psd::merged::Merged::open_without_resources(bytes, opts.max_pixels).map_err(|_| error)
 }
 
 fn open_exact<'a>(bytes: &'a [u8], opts: &DecodeOptions) -> Result<craft_psd::merged::Merged<'a>> {
@@ -86,8 +69,7 @@ fn open_exact<'a>(bytes: &'a [u8], opts: &DecodeOptions) -> Result<craft_psd::me
 }
 
 pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
-    let mut spare = Vec::new();
-    let merged = open_merged(bytes, opts, &mut spare)?;
+    let merged = open_merged(bytes, opts)?;
     let head = &merged.head;
     let h = &head.header;
     let (channels, width, height, depth, mode) = (usize::from(h.channels), h.width as usize, h.height as usize, h.depth, h.color_mode.as_u16());
@@ -209,8 +191,7 @@ pub(crate) fn encode(img: &EncodeImage, meta: &EncodeMeta) -> Result<Vec<u8>> {
 /// depth, colour mode or compression, or merged image data that runs past the end of the file
 /// (truncated). The run-length data itself is not unpacked.
 pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
-    let mut spare = Vec::new();
-    let merged = open_merged(bytes, &DecodeOptions::default(), &mut spare)?;
+    let merged = open_merged(bytes, &DecodeOptions::default())?;
     let head = &merged.head;
     let h = &head.header;
     let (channels, width, height, depth, mode) = (usize::from(h.channels), h.width as usize, h.height as usize, h.depth, h.color_mode.as_u16());
@@ -430,5 +411,159 @@ mod tests {
         assert!(e.to_string().contains("float"), "{e}");
         let e = encode(&EncodeImage::new(MAX_SIDE + 1, 1, 1, Samples::U8(&vec![0; MAX_SIDE as usize + 1])), &EncodeMeta::default()).unwrap_err();
         assert!(e.to_string().contains("TIFF"), "{e}");
+    }
+
+    #[test]
+    fn public_psd_and_psb_recovery_matches_empty_resources() {
+        for (version, compression) in [(1, 0), (2, 1)] {
+            let metadata = recovery_metadata();
+            let mut damaged_resources = metadata;
+            damaged_resources.extend_from_slice(b"JUNK");
+            let damaged = recovery_image(version, compression, &damaged_resources);
+            let control = recovery_image(version, compression, &[]);
+            let recovered = crate::decode(&damaged, DecodeOptions::default()).unwrap();
+            let expected = crate::decode(&control, DecodeOptions::default()).unwrap();
+            assert_recovery_pixels(&recovered, &expected);
+            assert!(recovered.icc.is_none());
+            assert!(recovered.exif.is_none());
+            assert!(recovered.xmp.is_none());
+            assert_eq!(recovered.orientation, 1);
+            assert_eq!(recovered.alpha.as_ref().unwrap().data, [64.0 / 255.0, 1.0]);
+            assert_eq!(crate::read_header(&damaged).unwrap(), crate::read_header(&control).unwrap());
+        }
+    }
+
+    #[test]
+    fn public_psd_and_psb_keep_valid_metadata() {
+        let icc = crate::icc::write_named(crate::NamedSpace::AdobeRgb);
+        for (version, compression) in [(1, 0), (2, 1)] {
+            let bytes = recovery_image(version, compression, &recovery_metadata());
+            let decoded = crate::decode(&bytes, DecodeOptions::default()).unwrap();
+            assert_eq!(decoded.icc.as_deref(), Some(icc.as_slice()));
+            assert_eq!(decoded.exif.as_deref(), Some(recovery_exif().as_slice()));
+            assert_eq!(decoded.xmp.as_deref(), Some("<x:xmpmeta/>"));
+            assert_eq!(decoded.orientation, 6);
+            let header = crate::read_header(&bytes).unwrap();
+            assert_eq!((header.width, header.height, header.orientation), (2, 1, 6));
+            assert_eq!((decoded.width, decoded.height, decoded.bit_depth, decoded.has_alpha), (2, 1, 8, true));
+        }
+    }
+
+    #[test]
+    fn public_psd_recovery_preserves_size_and_framing_errors() {
+        for version in [1, 2] {
+            let mut oversized = recovery_image(version, 0, b"JUNK");
+            oversized[14..18].copy_from_slice(&4u32.to_be_bytes());
+            oversized[18..22].copy_from_slice(&4u32.to_be_bytes());
+            let options = DecodeOptions { max_pixels: 15, ..DecodeOptions::default() };
+            assert!(matches!(crate::decode(&oversized, options), Err(Error::TooLarge(4, 4))));
+
+            let mut beyond_eof = recovery_image(version, 0, b"JUNK");
+            beyond_eof[30..34].copy_from_slice(&u32::MAX.to_be_bytes());
+            assert_public_open_error(&beyond_eof);
+
+            let mut truncated_layer = recovery_image(version, 0, b"JUNK");
+            truncated_layer.truncate(34 + 4 + if version == 2 { 7 } else { 3 });
+            assert_public_open_error(&truncated_layer);
+
+            let mut truncated_compression = recovery_image(version, 0, b"JUNK");
+            truncated_compression.truncate(truncated_compression.len() - 9);
+            assert_public_open_error(&truncated_compression);
+
+            let mut valid_resources_broken_tail = recovery_image(version, 0, &recovery_metadata());
+            valid_resources_broken_tail.truncate(valid_resources_broken_tail.len() - 9);
+            assert_public_open_error(&valid_resources_broken_tail);
+        }
+    }
+
+    #[test]
+    fn public_psd_recovery_keeps_selected_plane_and_probe_validation_distinct() {
+        for (version, compression) in [(1, 0), (2, 1)] {
+            let mut bytes = recovery_image(version, compression, b"JUNK");
+            // Four channels remain declared, but a positive layer count makes the last unused.
+            let layer_start = 38 + if version == 2 { 8 } else { 4 };
+            let count_at = layer_start + if version == 2 { 8 } else { 4 };
+            bytes[count_at..count_at + 2].copy_from_slice(&1i16.to_be_bytes());
+            bytes.truncate(bytes.len() - if compression == 0 { 2 } else { 3 });
+            let decoded = crate::decode(&bytes, DecodeOptions::default()).unwrap();
+            assert!(!decoded.has_alpha);
+            assert!(matches!(crate::read_header(&bytes), Err(Error::Malformed(Format::Psd, ref message)) if message == "truncated"));
+
+            // A used color plane missing after recovery opens keeps the downstream error.
+            bytes.pop();
+            assert!(
+                matches!(crate::decode(&bytes, DecodeOptions::default()), Err(Error::Malformed(Format::Psd, ref message)) if message == "truncated")
+            );
+        }
+    }
+
+    fn assert_public_open_error(bytes: &[u8]) {
+        let expected = open_exact(bytes, &DecodeOptions::default()).err().unwrap().to_string();
+        assert_eq!(crate::decode(bytes, DecodeOptions::default()).unwrap_err().to_string(), expected);
+        assert_eq!(crate::read_header(bytes).unwrap_err().to_string(), expected);
+    }
+
+    fn assert_recovery_pixels(actual: &Decoded, expected: &Decoded) {
+        assert_eq!(actual.image, expected.image);
+        assert_eq!(actual.alpha, expected.alpha);
+        assert_eq!(actual.space, expected.space);
+        assert_eq!((actual.width, actual.height, actual.source_width, actual.source_height), (2, 1, 2, 1));
+        assert_eq!((actual.bit_depth, actual.float, actual.has_alpha, actual.grayscale, actual.cmyk), (8, false, true, false, false));
+    }
+
+    fn recovery_image(version: u16, compression: u16, resources: &[u8]) -> Vec<u8> {
+        let mut bytes = header(4, 2, 1, 8, 3, 0);
+        bytes.truncate(30);
+        bytes[4..6].copy_from_slice(&version.to_be_bytes());
+        bytes.extend_from_slice(&(resources.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(resources);
+        if version == 2 {
+            bytes.extend_from_slice(&10u64.to_be_bytes());
+            bytes.extend_from_slice(&2u64.to_be_bytes());
+        } else {
+            bytes.extend_from_slice(&6u32.to_be_bytes());
+            bytes.extend_from_slice(&2u32.to_be_bytes());
+        }
+        bytes.extend_from_slice(&(-1i16).to_be_bytes());
+        bytes.extend_from_slice(&compression.to_be_bytes());
+        let planes = [[10, 20], [30, 40], [50, 60], [64, 255]];
+        if compression == 1 {
+            for _ in planes {
+                if version == 2 {
+                    bytes.extend_from_slice(&3u32.to_be_bytes());
+                } else {
+                    bytes.extend_from_slice(&3u16.to_be_bytes());
+                }
+            }
+        }
+        for plane in planes {
+            if compression == 1 {
+                bytes.push(1);
+            }
+            bytes.extend_from_slice(&plane);
+        }
+        bytes
+    }
+
+    fn recovery_metadata() -> Vec<u8> {
+        let mut resources = Vec::new();
+        let icc = crate::icc::write_named(crate::NamedSpace::AdobeRgb);
+        let exif = recovery_exif();
+        for (id, payload) in [(1039u16, icc.as_slice()), (1058, exif.as_slice()), (1060, b"<x:xmpmeta/>".as_slice())] {
+            resources.extend_from_slice(b"8BIM");
+            resources.extend_from_slice(&id.to_be_bytes());
+            resources.extend_from_slice(&[0, 0]);
+            resources.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+            resources.extend_from_slice(payload);
+            if payload.len() % 2 == 1 {
+                resources.push(0);
+            }
+        }
+        resources
+    }
+
+    fn recovery_exif() -> Vec<u8> {
+        // Little-endian TIFF with one inline SHORT orientation entry.
+        vec![b'I', b'I', 42, 0, 8, 0, 0, 0, 1, 0, 0x12, 1, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0]
     }
 }
