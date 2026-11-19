@@ -153,3 +153,64 @@ fn session_without_file_access_refuses() {
     assert!(e.contains("no file access"), "{e}");
     assert!(x.s.catalog.photo(x.id).unwrap().preview_only.is_some());
 }
+
+/// Relinked copies must be checked independently, and must not receive their parent's file facts.
+#[test]
+fn relinked_copy_rechecks_its_own_file() {
+    let mut x = library("relinked-copy");
+    let r = x.s.execute("photo.virtualCopy", &json!({"ids": [x.id.0]})).unwrap();
+    let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+    let other = x.dir.join("files/other.cr3");
+    std::fs::write(&other, cr3_with_preview(120, 80)).unwrap();
+    x.s.execute("photo.relink", &json!({"id": copy.0, "path": other.to_string_lossy()})).unwrap();
+    let p = x.s.catalog.photo(copy).unwrap();
+    x.s.apply_system(Op::SetContent {
+        id: copy,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: p.content_hash.clone(),
+        preview_only: p.preview_only.clone(),
+        preview_checked: OTHER.into(),
+    })
+    .unwrap();
+    let listed = recheck::stale(&x.s.catalog, false);
+    assert_eq!(listed.iter().map(|p| p.id).collect::<Vec<_>>(), vec![x.id, copy]);
+    let original = x.s.catalog.photo(x.id).unwrap().clone();
+    std::fs::write(&other, crate::tests_xmp::synthetic_dng_with(None, lightcraft_meta::Metadata::default())).unwrap();
+    let r = x.s.execute("library.recheckPreviewOnly", &json!({})).unwrap();
+    assert_eq!(r["checked"], 2);
+    assert_eq!(r["cleared"], json!([copy.0]));
+    let parent = x.s.catalog.photo(x.id).unwrap();
+    assert_eq!(parent.content_hash, original.content_hash);
+    assert_eq!(parent.preview_only, original.preview_only);
+    assert_eq!(parent.preview_checked, APP_VERSION);
+    assert!(x.s.catalog.photo(copy).unwrap().develops_raw());
+}
+
+/// A same-file copy still needs its own probe when its parent's stamp is already current.
+#[test]
+fn stale_copy_is_checked_when_its_parent_is_current() {
+    let mut x = library("copy-only-stale");
+    let r = x.s.execute("photo.virtualCopy", &json!({"ids": [x.id.0]})).unwrap();
+    let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+    let p = x.s.catalog.photo(x.id).unwrap();
+    x.s.apply_system(Op::SetContent {
+        id: x.id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: p.content_hash.clone(),
+        preview_only: p.preview_only.clone(),
+        preview_checked: APP_VERSION.into(),
+    })
+    .unwrap();
+    assert_eq!(recheck::stale(&x.s.catalog, false).iter().map(|p| p.id).collect::<Vec<_>>(), vec![copy]);
+    assert_eq!(recheck::stale(&x.s.catalog, true).iter().map(|p| p.id).collect::<Vec<_>>(), vec![x.id]);
+    decodable_now(&x);
+    let r = x.s.execute("library.recheckPreviewOnly", &json!({})).unwrap();
+    assert_eq!(r["checked"], 1);
+    assert_eq!(r["cleared"], json!([copy.0, x.id.0]));
+    assert!(x.s.catalog.photo(copy).unwrap().develops_raw());
+    assert!(x.s.catalog.photo(x.id).unwrap().develops_raw());
+}

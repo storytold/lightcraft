@@ -224,7 +224,7 @@ pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalo
 }
 
 /// Ops that fill a photo's empty camera fields (camera, lens, exposure, GPS, capture time) from a fresh probe.
-fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Vec<Op> {
+pub(crate) fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Vec<Op> {
     let (mut m, src) = (ph.meta.clone(), &info.meta);
     let before = m.clone();
     if m.camera.is_empty() {
@@ -315,7 +315,7 @@ pub(crate) fn as_shot_wb_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_cat
     (ph.develops_raw() && !ph.relative_wb() && ph.as_shot_wb != Some(read)).then_some(Op::SetAsShotWb { id, wb: Some(read) })
 }
 
-/// The ops that bring photo `id` and its virtual copies up to date with what their file is now
+/// The ops that bring photo `id` and its same-file family up to date with what their file is now
 /// (`info`, a fresh probe), appended to `ops`; the photos they change are appended to `changed`.
 /// Reload and the preview-only recheck (`library.recheckPreviewOnly`) share it.
 pub(crate) fn reload_ops(
@@ -335,8 +335,8 @@ pub(crate) fn reload_ops(
         ops.append(&mut mine);
         changed.push(id);
     }
-    // virtual copies share the file
-    for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
+    // Only same-file family members share a probe; independently relinked copies keep their facts.
+    for c in cat.photos().filter(|c| c.id != id && shares_reload_source(c, ph)) {
         let mut meta = c.meta.clone();
         // Copies share the source file but may have independently edited metadata. Repair only
         // recognizable legacy shutter values, not every missing field on the copy.
@@ -352,6 +352,12 @@ pub(crate) fn reload_ops(
             changed.push(c.id);
         }
     }
+}
+
+/// Copies share probe results only while both the family and the actual file agree.
+pub(crate) fn shares_reload_source(a: &lightcraft_catalog::Photo, b: &lightcraft_catalog::Photo) -> bool {
+    a.copy_of.unwrap_or(a.id) == b.copy_of.unwrap_or(b.id)
+        && matches!((&a.source, &b.source), (Source::File { path: a }, Source::File { path: b }) if a == b)
 }
 
 /// Re-read photos whose files changed on disk (an external editor saved them): new size,
