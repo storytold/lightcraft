@@ -224,11 +224,21 @@ impl MergeJob {
             metadata.caption = Some(format!("Merged from {}", names.join(", ")));
         }
         metadata.software = Some("LightCraft Photo Merge".into());
-        let dng = lightcraft_merge::write_linear_dng(&image, &color, orientation, &metadata, baseline, samples, &lens).map_err(err)?;
+        // Auto Settings: the brightness Auto would choose goes into the DNG itself (BaselineExposure, as a camera's
+        // does), so the result opens well exposed with every slider at 0 and its whole range free
+        let baseline = if self.finish.auto_settings {
+            baseline + auto_exposure(&image, crop, &color, orientation, &metadata, baseline, &lens).unwrap_or(0.0)
+        } else {
+            baseline
+        };
+        // the auto crop is the DNG's default crop (a preview's DNG stays whole: the dialog draws the crop on it)
+        let dng_crop = if self.preview.is_some() { None } else { crop };
+        let dng =
+            lightcraft_merge::write_linear_dng_cropped(&image, &color, orientation, &metadata, baseline, samples, &lens, dng_crop).map_err(err)?;
         info["width"] = json!(image.width);
         info["height"] = json!(image.height);
         let preview = match self.preview {
-            Some(edge) => Some(render_preview(&dng, edge, self.finish.auto_settings, crop, ghost.as_ref().filter(|_| self.finish.show_overlay))?),
+            Some(edge) => Some(render_preview(&dng, edge, false, crop, ghost.as_ref().filter(|_| self.finish.show_overlay))?),
             None => None,
         };
         progress(1.0, "Done");
@@ -354,6 +364,39 @@ fn render_preview(
     Ok(img)
 }
 
+/// The Exposure Auto Settings would give the merged picture (`crop`: the part that will show), in EV: measured on
+/// a small DNG of it, opened as the library opens the result.
+fn auto_exposure(
+    image: &Rgb32f,
+    crop: Option<[f64; 4]>,
+    color: &lightcraft_merge::FrameColor,
+    orientation: lightcraft_geom::Orientation,
+    metadata: &lightcraft_meta::Metadata,
+    baseline: f64,
+    lens: &[lightcraft_raw::Opcode],
+) -> Option<f64> {
+    use lightcraft_raster::resample::{Filter, fit};
+    let small = fit(image, 512, 512, Filter::Box);
+    let small = match crop {
+        Some(c) if small.width > 4 && small.height > 4 => {
+            let (w, h) = (small.width as f64, small.height as f64);
+            let (x0, y0) = ((c[0] * w).max(0.0) as usize, (c[1] * h).max(0.0) as usize);
+            let (cw, ch) = (
+                ((c[2] * w) as usize).clamp(1, small.width.saturating_sub(x0).max(1)),
+                ((c[3] * h) as usize).clamp(1, small.height.saturating_sub(y0).max(1)),
+            );
+            let (x0, y0) = (x0.min(small.width - 1), y0.min(small.height - 1));
+            small.into_crop(x0, y0, cw, ch)
+        }
+        _ => small,
+    };
+    let dng = lightcraft_merge::write_linear_dng(&small, color, orientation, metadata, baseline, lightcraft_merge::DngSamples::Half, lens).ok()?;
+    let (src, info) = crate::files::load_bytes(&dng, 512).ok()?;
+    let s = DevelopSettings::for_raw(info.as_shot_temp, info.as_shot_tint);
+    let ev = lightcraft_pipeline::auto::auto_tone(&src, &info, &s).exposure;
+    ev.is_finite().then_some(ev)
+}
+
 fn apply_auto(s: &mut DevelopSettings, src: &Rgb32f, info: &SourceInfo) {
     let a = lightcraft_pipeline::auto::auto_tone(src, info, s);
     s.light.exposure = a.exposure;
@@ -449,16 +492,6 @@ impl Session {
             }
         }
         self.selection = crate::Selection::single(id);
-        if job.finish.auto_settings {
-            self.execute("develop.auto", &json!({}))?;
-        }
-        if let Some(c) = out.crop
-            && let Some(d) = self.develop_of(id)
-        {
-            let mut d = (*d).clone();
-            d.crop.geometry.rect = lightcraft_geom::Rect::from_xywh(c[0], c[1], c[2], c[3]);
-            self.set_develop(id, d, "Auto Crop")?;
-        }
         let mut info = out.info;
         info["id"] = json!(id.0);
         info["path"] = json!(path);

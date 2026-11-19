@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Merged photos open with free sliders and their own crop
+- Photo Merge with Auto Settings now writes the brightness Auto picks into the merged DNG itself, as a camera does,
+  instead of setting Exposure, Contrast, Highlights and the rest. The merged photo opens well exposed with every
+  slider at 0, so each one keeps its whole range.
+- A panorama's Auto Crop is now the DNG's own crop instead of a crop edit: the photo shows the cropped part and the
+  crop tool starts from it. *Show Full Image* in the crop tool shows the whole merged picture, edges included, for
+  when you want to crop it differently or fill the corners yourself.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

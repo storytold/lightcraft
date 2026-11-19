@@ -19,8 +19,12 @@ impl crate::Session {
         }
         let b = thumb_bucket(long_edge);
         let mut job = self.build_job(id, b, b, false, true, Some(b))?;
-        // (a thumbnail may develop a smaller copy of the raw image that the file keeps)
-        if let SourceRef::File { reduced, .. } = &mut job.source {
+        // (a thumbnail may develop a smaller copy of the raw image that the file keeps; not one shown whole, whose
+        // full-frame loader the reduced one would replace)
+        let full_frame = self.catalog.photo(id).is_some_and(|p| p.develop.crop.full_frame);
+        if let SourceRef::File { reduced, .. } = &mut job.source
+            && !full_frame
+        {
             reduced.clone_from(&self.media.reduced_loader);
         }
         Some(job)
@@ -56,7 +60,7 @@ impl crate::Session {
         // …and so is the file's content: a file changed on disk (Reload) renders afresh
         let content_key = content_key(&p);
         let content = Hasher128::new().str(&content_key).finish().0 as u64;
-        let source_key = super::quick::source_identity(&p);
+        let source_key = self.media.source_key(&p);
         let decoder = super::quick::decoder_key(&p);
         // Temporary "before" settings must not replace the photo's cached develop hash.
         let settings_hash =
@@ -189,7 +193,7 @@ impl crate::Session {
         Some(RenderJob {
             request_id: 0,
             cache_generation: self.media.rendered.generation(),
-            source_key: Some(super::quick::source_identity(&p)),
+            source_key: Some(self.media.source_key(&p)),
             photo: id,
             level,
             source,
@@ -245,7 +249,7 @@ impl crate::Session {
         Some(RenderJob {
             request_id: 0,
             cache_generation: self.media.rendered.generation(),
-            source_key: Some(super::quick::source_identity(&p)),
+            source_key: Some(self.media.source_key(&p)),
             photo: id,
             level,
             source,
@@ -507,7 +511,7 @@ impl crate::Session {
     /// has wrong is corrected too ([`Self::learn_as_shot_wb`]).
     pub fn accept(&mut self, r: &RenderResult) {
         if let Some(src) = &r.loaded
-            && r.source_key.is_none_or(|key| self.catalog.photo(r.photo).is_some_and(|p| super::quick::source_identity(p) == key))
+            && r.source_key.is_none_or(|key| self.catalog.photo(r.photo).is_some_and(|p| self.media.source_key(p) == key))
         {
             if let Some(info) = &src.info {
                 self.learn_as_shot_wb(r.photo, info);
@@ -594,6 +598,13 @@ impl crate::Session {
         // background queue has not got to it. (A source kept in memory may lack the picture, so the job reads the file.)
         if let Some(wanted) = self.denoise_for_export(id, &job.settings)? {
             let p = self.catalog.photo(id).ok_or("no such photo")?.clone();
+            // the denoised picture is made for the default crop: scaled to the whole picture it would be the wrong one
+            if self.media.shows_full_frame(&p) {
+                return Err(format!(
+                    "{}: AI Denoise can't be exported with Show Full Image yet; turn off Show Full Image, or set Denoise to 0",
+                    p.file_name
+                ));
+            }
             job.source = self.media.source_ref_uncached(&p, job.level);
             if let SourceRef::File { denoise, .. } = &mut job.source {
                 *denoise = Some(wanted);
