@@ -484,8 +484,9 @@
 - When a change made of several steps (such as deleting photos that sit in stacks) failed part-way and LightCraft
   could not put everything back, what it had changed stayed in the open library but was neither saved nor undoable,
   so a restart brought back the old state and Undo could not finish the job. Such a change is now saved as it
-  stands, the error says it was only partly taken back, and Undo finishes taking it back once the file error that
-  stopped the rollback is gone. While that error remains, Undo reports it and keeps the rest of the change.
+  stands, the error says it was only partly taken back, and Undo finishes taking it back once whatever stopped the
+  rollback (such as a file that could not be moved back) is gone. While that remains, Undo reports it and keeps the
+  rest of the change.
 
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
