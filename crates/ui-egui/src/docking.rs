@@ -123,7 +123,7 @@ fn home(workspace: &Workspace, panel: Panel) -> Location<Panel> {
         size: None,
         stack: None,
         sibling: Vec::new(),
-        group: Some(GroupLocation { minimized: false, height: None, column: Some(column) }),
+        group: Some(GroupLocation { minimized: false, height: None, flyout_width: None, flyout_offset: None, column: Some(column) }),
     }
 }
 
