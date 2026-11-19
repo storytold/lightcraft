@@ -134,17 +134,17 @@ pub fn choose(files: &Files, compose_window: bool) -> Chosen {
         }
         (WindowRenderer::Wgpu(b), None) => {
             if let WgpuSetup::CreateNew(n) = &mut wgpu_options.wgpu_setup {
-                            n.instance_descriptor.backends = b;
-                            // On Linux, GL needs a display handle to avoid surfaceless EGL
-                            // which passes the offscreen probe but fails to create a window surface
-                            // with presentable formats.
-                            #[cfg(target_os = "linux")]
-                            if b.contains(Backends::GL) {
-                                if let Ok(el) = winit::event_loop::EventLoop::<()>::new() {
-                                    n.instance_descriptor.display = Some(Box::new(el.owned_display_handle()) as Box<dyn wgpu::wgt::WgpuHasDisplayHandle>);
-                                }
-                            }
-                        }
+                n.instance_descriptor.backends = b;
+                // On Linux, GL needs a display handle to avoid surfaceless EGL
+                // which passes the offscreen probe but fails to create a window surface
+                // with presentable formats.
+                #[cfg(target_os = "linux")]
+                if b.contains(Backends::GL) {
+                    if let Ok(el) = winit::event_loop::EventLoop::<()>::new() {
+                        n.instance_descriptor.display = Some(Box::new(el.owned_display_handle()) as Box<dyn wgpu::wgt::WgpuHasDisplayHandle>);
+                    }
+                }
+            }
             eframe::Renderer::Wgpu
         }
     };
@@ -260,11 +260,7 @@ fn probe(backends: Backends, compose_window: bool) -> Result<WgpuSetupExisting, 
             Err(_) => return Err("GL probe requires a display handle on Linux; XOpenDisplay failed".into()),
         };
         let owned_display = event_loop.owned_display_handle();
-        let window = match event_loop.create_window(
-            Window::default_attributes()
-                .with_visible(false)
-                .with_title("LightCraft GL Probe"),
-        ) {
+        let window = match event_loop.create_window(Window::default_attributes().with_visible(false).with_title("LightCraft GL Probe")) {
             Ok(w) => w,
             Err(_) => return Err("GL probe requires a display handle on Linux; XOpenDisplay failed".into()),
         };
@@ -294,8 +290,7 @@ fn probe(backends: Backends, compose_window: bool) -> Result<WgpuSetupExisting, 
             drop(eframe::egui_wgpu::Renderer::new(d, wgpu::TextureFormat::Bgra8Unorm, eframe::egui_wgpu::RendererOptions::default()));
         })?;
         // Verify the surface has presentable formats
-        let surface = instance.create_surface(&window)
-            .map_err(|e| format!("failed to create probe surface: {e}"))?;
+        let surface = instance.create_surface(&window).map_err(|e| format!("failed to create probe surface: {e}"))?;
         let caps = surface.get_capabilities(&adapter);
         let has_formats = !caps.formats.is_empty();
         drop(surface);
@@ -309,35 +304,35 @@ fn probe(backends: Backends, compose_window: bool) -> Result<WgpuSetupExisting, 
     }
 
     // Original path for other backends/platforms
-        let descriptor = probe_instance_descriptor(backends, compose_window);
+    let descriptor = probe_instance_descriptor(backends, compose_window);
 
-        // On Linux with GL backend, we need a display handle to avoid surfaceless EGL
-        // which passes the offscreen probe but fails to create a window surface with presentable formats.
-        #[cfg(target_os = "linux")]
-        if backends.contains(Backends::GL) && descriptor.display.is_none() {
-            return Err("GL probe requires a display handle on Linux; XOpenDisplay failed".into());
-        }
+    // On Linux with GL backend, we need a display handle to avoid surfaceless EGL
+    // which passes the offscreen probe but fails to create a window surface with presentable formats.
+    #[cfg(target_os = "linux")]
+    if backends.contains(Backends::GL) && descriptor.display.is_none() {
+        return Err("GL probe requires a display handle on Linux; XOpenDisplay failed".into());
+    }
 
-        let instance = wgpu::Instance::new(descriptor);
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::from_env().unwrap_or(wgpu::PowerPreference::HighPerformance),
-            ..Default::default()
-        }))
-        .map_err(|e| format!("no adapter: {e}"))?;
-        // (not GL: the adapter's own limits, which the GPU renderer needs when it adopts this device)
-        let base = if adapter.get_info().backend == wgpu::Backend::Gl { wgpu::Limits::downlevel_webgl2_defaults() } else { adapter.limits() };
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("egui wgpu device"),
-            // (GL takes the conservative defaults for everything else, whose 2048 is too small for a window)
-            required_limits: wgpu::Limits { max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d, ..base },
-            ..Default::default()
-        }))
-        .map_err(|e| format!("{}: no device: {e}", adapter.get_info().name))?;
-        install_error_handler(&device);
-        check_pipeline(&device, |d| {
-            drop(eframe::egui_wgpu::Renderer::new(d, wgpu::TextureFormat::Bgra8Unorm, eframe::egui_wgpu::RendererOptions::default()));
-        })?;
-        Ok(WgpuSetupExisting { instance, adapter, device, queue })
+    let instance = wgpu::Instance::new(descriptor);
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::from_env().unwrap_or(wgpu::PowerPreference::HighPerformance),
+        ..Default::default()
+    }))
+    .map_err(|e| format!("no adapter: {e}"))?;
+    // (not GL: the adapter's own limits, which the GPU renderer needs when it adopts this device)
+    let base = if adapter.get_info().backend == wgpu::Backend::Gl { wgpu::Limits::downlevel_webgl2_defaults() } else { adapter.limits() };
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("egui wgpu device"),
+        // (GL takes the conservative defaults for everything else, whose 2048 is too small for a window)
+        required_limits: wgpu::Limits { max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d, ..base },
+        ..Default::default()
+    }))
+    .map_err(|e| format!("{}: no device: {e}", adapter.get_info().name))?;
+    install_error_handler(&device);
+    check_pipeline(&device, |d| {
+        drop(eframe::egui_wgpu::Renderer::new(d, wgpu::TextureFormat::Bgra8Unorm, eframe::egui_wgpu::RendererOptions::default()));
+    })?;
+    Ok(WgpuSetupExisting { instance, adapter, device, queue })
 }
 
 /// wgpu's default handler for errors outside an error scope panics ("Handling wgpu errors as
