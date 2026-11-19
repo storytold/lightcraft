@@ -11,6 +11,7 @@
 use std::sync::Arc;
 
 use lightcraft_catalog::{PhotoId, Source};
+use lightcraft_catalog::query::merged_kind;
 use lightcraft_develop::DevelopSettings;
 use lightcraft_merge::pano::MAX_MEGAPIXELS;
 use lightcraft_merge::{Deghost, Frame, HdrOptions, PanoOptions, Projection};
@@ -444,7 +445,10 @@ impl Session {
                 }
                 continue;
             }
-            let sources = self.merge_sources(&group, &mut seen)?;
+            let sources = match self.merge_sources(&group, &mut seen) {
+                Ok(sources) => sources,
+                Err(_) => continue,
+            };
             if !sources.is_empty() {
                 planned.push(sources);
             }
@@ -497,7 +501,10 @@ impl Session {
                 skipped.push(group);
                 continue;
             }
-            let sources = self.merge_sources(&group, &mut seen)?;
+            let sources = match self.merge_sources(&group, &mut seen) {
+                Ok(sources) => sources,
+                Err(_) => continue,
+            };
             if sources.is_empty() {
                 continue;
             }
@@ -573,20 +580,25 @@ impl Session {
                     if !expanded_stacks.insert(st.id) {
                         continue;
                     }
-                    let members: Vec<PhotoId> =
-                        st.photos.iter().copied().filter(|id| self.catalog.photo(*id).is_none_or(|p| !p.is_merge_result)).collect();
+                    let members: Vec<PhotoId> = st
+                        .photos
+                        .iter()
+                        .copied()
+                        .filter(|id| {
+                            self.catalog.photo(*id).is_none_or(|p| merged_kind(&p.file_name).is_none())
+                        })
+                        .collect();
                     // Capture order, not stack order (top first): an HDR panorama's bracket
                     // detection expects the periodic exposure sequence from the earliest capture.
                     // File names do not reflect capture sequence (renamed files, several cameras), so
-                    // ties on capture date fall back to explicit capture_order, then PhotoId (catalog order).
+                    // ties on capture date fall back to PhotoId (catalog order).
                     // Keys are computed once per member, not once per comparison.
                     let mut keyed: Vec<(String, u32, PhotoId)> = members
                         .iter()
-                        .map(|id| {
-                            let p = self.catalog.photo(*id).unwrap();
+                        .filter_map(|id| {
+                            let p = self.catalog.photo(*id)?;
                             let date = p.date().to_string();
-                            let order = p.capture_order.unwrap_or(0);
-                            (date, order, *id)
+                            Some((date, 0, *id))
                         })
                         .collect();
                     keyed.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)).then_with(|| a.2.cmp(&b.2)));

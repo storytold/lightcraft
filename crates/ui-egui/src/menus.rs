@@ -81,9 +81,13 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
         s if s.starts_with("dialog.merge") || (s.starts_with("merge.") && s.ends_with("Last")) => {
             app.merge.final_task.is_none()
                 && crate::merge::merge_command_of(s).is_some_and(|command| {
-                    let (kind, finish) = lightcraft_engine::merge::parse(command, &json!({})).ok()?;
-                    let ids = app.session.selected();
-                    app.session.plan_merges(kind, finish, &ids, false).ok()?.len() > 0
+                    match lightcraft_engine::merge::parse(&command, &json!({})) {
+                        Ok((kind, _)) => {
+                            let ids = app.session.selected();
+                            app.session.merge_selection_ready(&kind, &ids)
+                        }
+                        Err(_) => false,
+                    }
                 })
         }
         _ => true,

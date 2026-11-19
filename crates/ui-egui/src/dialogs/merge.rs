@@ -139,18 +139,22 @@ pub fn merge_command_of(item: &str) -> Option<String> {
 pub fn check_selection(app: &LightcraftApp, command: &str) -> Result<(), String> {
     let (kind, finish) = lightcraft_engine::merge::parse(command, &json!({})).map_err(|e| e.to_string())?;
     let ids = app.session.selected();
-    // Use plan_merges (like the command layer) to allow multiple collapsed stacks.
-    // At least one group must be ready.
+    // Validate with the same single-group planning contract that spawn() executes.
     app.session
-        .plan_merges(kind, finish, &ids, false)
-        .map(|jobs| if jobs.is_empty() { Err("select at least 2 photos to merge".to_string()) } else { Ok(()) })?
+        .plan_merge(kind, finish, &ids, false)
+        .map(|_| ())
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn spawn(app: &LightcraftApp, options: &MergeDialog, ids: &[PhotoId], preview: bool, explicit_group: bool) -> Result<MergeTask, String> {
     let (kind, finish) = lightcraft_engine::merge::parse(&options.command, &options.params()).map_err(|e| e.to_string())?;
-    let job =
-        if explicit_group { app.session.plan_merge_group(kind, finish, ids, preview) } else { app.session.plan_merge(kind, finish, ids, preview) }
-            .map_err(|e| e.to_string())?;
+    let job = if explicit_group {
+        app.session.plan_merge_group(kind, finish, ids, preview)
+    } else {
+        app.session.plan_merge(kind, finish, ids, preview)
+    }
+    .map_err(|e| e.to_string())?;
     let progress = Arc::new(Mutex::new((0.0, "Starting".to_string())));
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = channel();

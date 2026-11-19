@@ -693,3 +693,93 @@ fn explicit_bracket_set_is_merged_as_given() {
     assert!(one.is_err(), "a set of one photo is not a merge");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+
+/// Regression check for the merge planning fixes: a collapsed stack counts as
+/// all of its members for enablement, `plan_merge` keeps the one-group contract
+/// (refusing a selection that spans stacks) while `plan_merges` plans one job per
+/// stack, and an earlier merge result in a stack is excluded by its file name
+/// (`merged_kind`, catalog-supported data) rather than by photo fields that do
+/// not exist.
+#[test]
+fn test_merge_compilation_and_grouping_fixes() {
+    let dir = temp_dir("merge-fixes");
+    let mut paths = Vec::new();
+    for (set, evs) in [
+        ("A", &[-2.0, 0.0, 2.0][..]),
+        ("B", &[-1.0, 0.0, 1.0][..]),
+        ("C", &[-0.5, 0.5, 1.5][..]),
+    ] {
+        for (i, b) in lightcraft_merge::synth::bracket_dngs(96, 64, evs).unwrap().into_iter().enumerate() {
+            let p = dir.join(format!("{set}_{i}.dng"));
+            std::fs::write(&p, b).unwrap();
+            paths.push(p.to_string_lossy().to_string());
+        }
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    assert_eq!(ids.len(), 9);
+    s.execute("stack.group", &json!({"ids": ids[..3]})).unwrap();
+    s.execute("stack.group", &json!({"ids": ids[3..6]})).unwrap();
+
+    let top_a = lightcraft_catalog::PhotoId(ids[0]);
+    let top_b = lightcraft_catalog::PhotoId(ids[3]);
+    let (kind, finish) = crate::merge::parse("merge.hdr", &json!({})).unwrap();
+
+    // Enable
+    assert_eq!(s.expanded_merge_count(&[top_a]), 3, "one selected id counts the stack's members");
+    assert!(s.merge_selection_ready(&kind, &[top_a]), "a collapsed stack of three enables HDR");
+    assert!(!s.merge_selection_ready(&kind, &[top_a, top_b]), "two stacks are more than one group");
+
+    // plan_merge expands the collapsed stack to its members, in capture order.
+    let job = s.plan_merge(kind.clone(), finish.clone(), &[top_a], true).unwrap();
+    assert_eq!(
+        job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(),
+        ids[0..3].to_vec(),
+        "plan_merge expands the stack",
+    );
+
+    // plan_merges plans one job per stack; plan_merge refuses that same selection.
+    let jobs = s.plan_merges(kind.clone(), finish.clone(), &[top_a, top_b], true).unwrap();
+    assert_eq!(jobs.len(), 2, "one job per stack");
+    assert_eq!(
+        jobs[0].sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(),
+        ids[0..3].to_vec()
+    );
+    assert_eq!(
+        jobs[1].sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(),
+        ids[3..6].to_vec()
+    );
+    let err = s.plan_merge(kind.clone(), finish.clone(), &[top_a, top_b], true).err().unwrap();
+    assert!(err.to_string().contains("more than one merge group"), "{err}");
+    assert!(matches!(err, crate::EngineError::Other(_)), "an EngineError, not a String");
+
+    // An earlier merge result in the stack is excluded by its file name (catalog
+    // data), so planning the stack merges its sources only, not the result again.
+    let result_id = s.catalog.alloc_photo_id();
+    let result = lightcraft_catalog::Photo::new(
+        result_id,
+        lightcraft_catalog::Source::File { path: "IMG_0-HDR.dng".into() },
+        "IMG_0-HDR.dng",
+        "DNG",
+        96,
+        64,
+        "2026-01-01T00:00:00",
+    );
+    s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(result) }).unwrap();
+    let members: [lightcraft_catalog::PhotoId; 4] = [
+        result_id,
+        lightcraft_catalog::PhotoId(ids[6]),
+        lightcraft_catalog::PhotoId(ids[7]),
+        lightcraft_catalog::PhotoId(ids[8]),
+    ];
+    let op = s.catalog.group_ops(result_id, &members, true).unwrap();
+    s.catalog.apply(op).unwrap();
+    let job = s.plan_merge(kind, finish, &[result_id], true).unwrap();
+    assert_eq!(
+        job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(),
+        ids[6..9].to_vec(),
+        "the earlier merge result is not merged again",
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
