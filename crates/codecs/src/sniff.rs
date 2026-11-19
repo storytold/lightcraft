@@ -95,21 +95,6 @@ pub fn sniff(b: &[u8]) -> Option<Format> {
     if b.len() < 4 {
         return None;
     }
-    if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        return Some(Format::Jpeg);
-    }
-    if b.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return Some(Format::Png);
-    }
-    if b.starts_with(b"GIF87a") || b.starts_with(b"GIF89a") {
-        return Some(Format::Gif);
-    }
-    if b.len() >= 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP" {
-        return Some(Format::WebP);
-    }
-    if b.starts_with(&[0xFF, 0x0A]) || b.starts_with(&[0, 0, 0, 0x0C, b'J', b'X', b'L', b' ', 0x0D, 0x0A, 0x87, 0x0A]) {
-        return Some(Format::Jxl);
-    }
     if b.starts_with(b"8BPS") && b.len() >= 6 && matches!(u16::from_be_bytes([b[4], b[5]]), 1 | 2) {
         return Some(Format::Psd);
     }
@@ -129,13 +114,18 @@ pub fn sniff(b: &[u8]) -> Option<Format> {
     if b.starts_with(b"II*\0") || b.starts_with(b"MM\0*") {
         return Some(if craft_image_codecs::legacy_tiff_raw_hint(b) { Format::RawTiffLike } else { Format::Tiff });
     }
-    if b.starts_with(b"II+\0") || b.starts_with(b"MM\0+") {
-        return Some(Format::Tiff);
-    }
     if craft_image_codecs::bmp_probe::is_supported_header(b) {
         return Some(Format::Bmp);
     }
-    None
+    match craft_image_codecs::detect(b) {
+        Some(craft_image_codecs::Format::Jpeg | craft_image_codecs::Format::JpegLs) => Some(Format::Jpeg),
+        Some(craft_image_codecs::Format::Png) => Some(Format::Png),
+        Some(craft_image_codecs::Format::Gif) => Some(Format::Gif),
+        Some(craft_image_codecs::Format::WebP) => Some(Format::WebP),
+        Some(craft_image_codecs::Format::Jxl) => Some(Format::Jxl),
+        Some(craft_image_codecs::Format::Tiff) => Some(Format::Tiff),
+        _ => None,
+    }
 }
 
 fn sniff_bmff(b: &[u8]) -> Option<Format> {
