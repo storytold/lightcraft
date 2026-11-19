@@ -41,7 +41,7 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
 /// animation frame), or one that runs past the end of the file (truncated). The compressed data
 /// itself is not checked.
 pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
-    let (w, h, orientation) = craft_webp_header::webp_probe::header(bytes).map_err(err)?;
+    let (w, h, orientation) = craft_image_codecs::webp_probe::header(bytes).map_err(err)?;
     check_size(F, w as u64, h as u64, &DecodeOptions::default())?;
     Ok((w, h, orientation))
 }
