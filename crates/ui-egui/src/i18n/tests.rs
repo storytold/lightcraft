@@ -13,6 +13,7 @@ fn languages_switch_persist_and_keep_user_values() {
         (Locale::Uk, "ukrainian", &["uk", "uk-UA", "uk_UA.UTF-8", "uk-Cyrl-UA"], ""),
         (Locale::Ka, "georgian", &["ka", "ka-GE", "ka_GE.UTF-8"], ""),
         (Locale::It, "italian", &["it", "it-IT", "it_IT.UTF-8", "it-Latn-IT", "it-CH"], ""),
+        (Locale::Lt, "lithuanian", &["lt", "lt-LT", "lt_LT.UTF-8"], "ąčęėįšųūžĄČĘĖĮŠŲŪŽ„“"),
         (Locale::Fi, "finnish", &["fi", "fi-FI", "fi_FI.UTF-8", "fi-Latn-FI"], ""),
         (Locale::Vi, "vietnamese", &["vi", "vi-VN", "vi_VN", "vi_VN.UTF-8"], ""),
     ];
