@@ -196,12 +196,12 @@ impl FsStore {
             Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{name:?} is not a name of the catalog's files")))
         }
     }
-    /// The staging file of `name` (`<name>.tmp`, beside it). A name that itself ends in `.tmp` is a
-    /// staging name, which a write clears (a leftover of a crashed save): no file is written under
-    /// one, so a write never removes a file that was stored. Such a name can still be read, listed
-    /// and removed, so that a leftover can be.
+    /// The staging file of `name` (`<name>.tmp`, beside it). A name that itself ends in `.tmp` (in any case: a folder that
+    /// ignores case makes `a.TMP` the file `a.tmp`) is a staging name, which a write clears (a leftover of a crashed save):
+    /// no file is written under one, so a write never removes a file that was stored. Such a name can still be read,
+    /// listed and removed, so that a leftover can be.
     fn staging_path(&self, name: &str) -> io::Result<PathBuf> {
-        if name.ends_with(".tmp") {
+        if name.as_bytes().last_chunk::<4>().is_some_and(|end| end.eq_ignore_ascii_case(b".tmp")) {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{name:?} is a staging name, no file is written under it")));
         }
         self.path(&format!("{name}.tmp"))
@@ -1019,7 +1019,7 @@ mod tests_names_and_sync {
         std::fs::create_dir_all(dir.join("segments")).unwrap();
         std::fs::write(dir.join("segments/a.json.tmp"), b"old").unwrap();
         let fill = &mut |w: &mut dyn io::Write| w.write_all(b"new");
-        for name in ["segments/a.json.tmp", "x.tmp"] {
+        for name in ["segments/a.json.tmp", "x.tmp", "x.TMP"] {
             assert_eq!(store.write_new_with(name, fill).unwrap_err().kind(), io::ErrorKind::InvalidInput, "{name}");
             assert_eq!(store.write_atomic_with(name, fill).unwrap_err().kind(), io::ErrorKind::InvalidInput, "{name}");
             assert_eq!(store.write_atomic(name, b"new").unwrap_err().kind(), io::ErrorKind::InvalidInput, "{name}");
