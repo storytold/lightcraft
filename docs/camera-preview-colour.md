@@ -261,7 +261,7 @@ A smart preview keeps the result of the fit twice: the colour matrix is baked in
 
 This independent proposal applies directly to upstream main; it requires no prior merge of the separate CR3 proposal #3138. CR3 retains upstream framing and its existing per-file source-position vignetting. The newly added Pool/DNG profile lookup excludes CR3, including a resolved profile that carries both warp and nonzero vignetting.
 
-The synchronized geometry-gated external-profile correspondence fit uses `LOOK_VERSION = 14` and `RENDER_CACHE_VERSION = 77`, after upstream versions 13 and 76, invalidating both stale smart-preview looks and rendered thumbnails. The private-file observations above predate this synchronization; they have not been repeated on this merged source state.
+The synchronized geometry-gated external-profile correspondence fit uses `LOOK_VERSION = 15` and `RENDER_CACHE_VERSION = 78`, after upstream versions 14 and 77, invalidating both stale smart-preview looks and rendered thumbnails. The private-file observations above predate this synchronization; they have not been repeated on this merged source state.
 
 The fit therefore has a version, `LOOK_VERSION` in `crates/engine/src/camera_preview.rs`, and every smart preview records the version that wrote it in its header line (`look_version`). **Bump the constant in any change that makes the fit give a different result for the same file**: the matrix, hue/saturation, tone or chroma fit, their gates and fallbacks, or how a camera profile feeds them. Changes that leave the fitted look alone don't need it. A header without the field (everything built before it existed) counts as version 0, and so does a value that is not a non-negative integer; a value from a newer build is left alone.
 

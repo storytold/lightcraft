@@ -335,6 +335,31 @@ fn a_smooth_proxy_keeps_the_scene_closer_than_the_old_quality() {
 }
 
 #[test]
+fn a_proxy_from_the_previous_look_version_is_stale() {
+    let dir = temp("look-version");
+    let img = lightcraft_scenes::demo_library()[0].render(64, 40);
+    let bytes = encode(&img, None).unwrap();
+    let nl = MAGIC.len() + bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
+    let head: serde_json::Value = serde_json::from_slice(&bytes[MAGIC.len()..nl]).unwrap();
+    let path = dir.join("p.lcsp");
+    std::fs::write(&path, &bytes).unwrap();
+    assert!(!is_stale(&path), "this build's own proxy is up to date");
+    // Both the pre-Nikon look and the previous integration's look remain readable offline
+    // and are rebuilt when the original is available. Keep the lens provenance current.
+    for version in [13, 14] {
+        let mut older = head.clone();
+        older[LOOK_FIELD] = serde_json::json!(version);
+        let mut old = MAGIC.to_vec();
+        old.extend_from_slice(older.to_string().as_bytes());
+        old.extend_from_slice(&bytes[nl..]);
+        std::fs::write(&path, &old).unwrap();
+        assert!(is_valid(&path), "look {version} remains readable");
+        assert!(is_stale(&path), "look {version} is rebuilt");
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn a_proxy_from_an_older_encode_is_stale() {
     let dir = temp("encode-version");
     let img = lightcraft_scenes::demo_library()[0].render(64, 40);

@@ -34,7 +34,7 @@ craft-window = { git = "https://github.com/storytold/craft-libs", rev = "23acc70
 # HDR gain maps: ISO 21496-1 and hdrgm metadata, compute and apply (moved from crates/codecs; craft-libs#904).
 craft-gainmap = { git = "https://github.com/storytold/craft-libs", rev = "23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3" }
 # PSD/PSB: the header, colour mode data and image resources (craft-libs#885).
-craft-psd = { git = "https://github.com/storytold/craft-libs", rev = "23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3" }
+craft-psd = { git = "https://github.com/storytold/craft-libs", rev = "010702ee9b030844c852939095b1da0d0656a890" }
 jpeg-encoder = { version = "0.7", default-features = false, features = ["std"] }
 # internal
 lightcraft-denoise-core = { path = "crates/denoise-core" }
@@ -47,7 +47,9 @@ lightcraft-color = { path = "crates/color" }
 lightcraft-raster = { path = "crates/raster" }
 # TIFF/IFD: the shared reader and writer (moved from crates/tiff; craft-libs#783).
 craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3" }
-craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3" }
+craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "f589ff485707007e814671229d0f4e77bc06968a" }
+# Match the RAW writer’s TIFF type without changing other app TIFF consumers.
+craft-raw-tiff = { package = "craft-tiff", git = "https://github.com/storytold/craft-libs", rev = "f589ff485707007e814671229d0f4e77bc06968a" }
 lightcraft-raw = { path = "crates/raw" }
 lightcraft-codecs = { path = "crates/codecs" }
 lightcraft-meta = { path = "crates/meta" }

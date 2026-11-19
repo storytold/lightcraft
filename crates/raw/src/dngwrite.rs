@@ -158,7 +158,7 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     };
     let options = craft_raw::DngWriteOptions {
         compression,
-        order: opts.order,
+        order: raw_byte_order(opts.order),
         software: SOFTWARE.into(),
         xmp: Some(opts.xmp.clone().unwrap_or_else(|| lightcraft_meta::write_xmp(&raw.metadata, None))),
     };
@@ -239,6 +239,13 @@ pub fn write_rendered_dng(
     write_dng(&raw, &DngWriteOptions { compression: DngCompression::Deflate { tile: 256, half: true }, order, xmp })
 }
 
+fn raw_byte_order(order: ByteOrder) -> craft_raw_tiff::ByteOrder {
+    match order {
+        ByteOrder::Little => craft_raw_tiff::ByteOrder::Little,
+        ByteOrder::Big => craft_raw_tiff::ByteOrder::Big,
+    }
+}
+
 #[cfg(test)]
 #[path = "dngwrite_legacy_tests.rs"]
 mod legacy;
@@ -305,7 +312,7 @@ mod tests {
                 ),
             ] {
                 let options = DngWriteOptions { compression, order, xmp: None };
-                let old_options = legacy::DngWriteOptions { compression: old_compression, order, xmp: None };
+                let old_options = legacy::DngWriteOptions { compression: old_compression, order: raw_byte_order(order), xmp: None };
                 assert_eq!(write_dng(&raw, &options).unwrap(), legacy::write_dng(&raw, &old_options).unwrap());
             }
         }
