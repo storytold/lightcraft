@@ -17,14 +17,19 @@ pub fn extract(zip: &[u8], name: &str, max: usize) -> Result<Vec<u8>, GeocodeErr
     if archive.has_duplicate_names() {
         return Err(bad("duplicate entry name"));
     }
-    let selected = archive
-        .names()
-        .find(|entry| entry.ends_with(name))
-        .map(|entry| entry.into_owned())
-        .ok_or_else(|| GeocodeError::Invalid(format!("{name} is not in the archive")))?;
-    let declared = archive.declared_size(&selected).ok_or_else(|| bad("entry size"))?;
+    // Different raw names can decode to the same text. Keep the first matching index.
+    let mut selected = None;
+    for index in 0..archive.len() {
+        let entry = archive.entry_name(index).map_err(|error| bad(&error.to_string()))?;
+        if entry.is_some_and(|entry| entry.ends_with(name)) {
+            selected = Some(index);
+            break;
+        }
+    }
+    let index = selected.ok_or_else(|| GeocodeError::Invalid(format!("{name} is not in the archive")))?;
+    let (declared, _) = archive.entry_sizes(index).map_err(|error| bad(&error.to_string()))?.ok_or_else(|| bad("entry size"))?;
     let decoded = archive
-        .read(&selected, max_bytes)
+        .read_index(index, max_bytes)
         .map_err(
             |error| {
                 if error.is_limit() { GeocodeError::Invalid(format!("{name} is larger than {max} bytes")) } else { bad(&error.to_string()) }
@@ -96,6 +101,19 @@ mod tests {
     #[test]
     fn reads_the_first_distinct_suffix_match_in_directory_order() {
         let zip = archive(&[("z/cities15000.txt", b"first"), ("a/cities15000.txt", b"second")], Compression::Deflated);
+        assert_eq!(extract(&zip, "cities15000.txt", 100).unwrap(), b"first");
+    }
+
+    #[test]
+    fn reads_first_suffix_match_with_colliding_decoded_names() {
+        let mut zip = archive(&[("a/cities15000.txt", b"first"), ("é/cities15000.txt", b"second")], Compression::Stored);
+        let first_directory = directory_entries(&zip)[0];
+        // Keep the name length, replace 'a' with CP437 'é' and clear the UTF-8 flags.
+        zip[30] = 0x82;
+        zip[7] &= !0x08;
+        zip[first_directory + 46] = 0x82;
+        zip[first_directory + 9] &= !0x08;
+
         assert_eq!(extract(&zip, "cities15000.txt", 100).unwrap(), b"first");
     }
 
