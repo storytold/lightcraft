@@ -40,7 +40,7 @@ mantener coherentes:
 
 | Inglés | Español |
 |---|---|
-| Highlights / Shadows | Altas luces / Sombras |
+| Highlights / Shadows | Iluminaciones / Sombras |
 | Dehaze | Eliminar neblina |
 | Vibrance | Intensidad |
 | Tint | Matiz |
@@ -58,8 +58,9 @@ mantener coherentes:
 | HDR headroom | Margen HDR |
 | What's New | Novedades |
 
-Se unificó «Highlights» como «Altas luces» (antes «Iluminaciones») en todo el catálogo, incluidas
-las etiquetas del mezclador de color y el estilo de viñeteado, para usar el término de Lightroom.
+Se unificó «Highlights» como «Iluminaciones» en todo el catálogo, incluidas las etiquetas del
+mezclador de color y el estilo de viñeteado, para usar el término del Lightroom actual en español.
+Las versiones antiguas de Lightroom usaban «Altas luces».
 
 Se mantienen sin traducir las marcas y los nombres de producto (LightCraft, PhotoCraft, Lightroom,
 lensfun, intoPIX TicoRAW, Adobe RGB), los formatos y códecs (JPEG, PNG, TIFF, WebP, DNG, RAW, AVIF,
