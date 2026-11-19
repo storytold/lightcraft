@@ -5,8 +5,6 @@
 //! `UniqueCameraModel`, `ProfileName`, the colour/forward matrices and calibration illuminants, the
 //! hue/saturation map, look table and tone curve. Nothing here ships a profile.
 
-// Keep shared RAW field types aligned; this TIFF source is unchanged across the pin.
-use craft_raw_tiff as craft_tiff;
 use craft_tiff::{ByteOrder, Ifd, ParseOptions, Tiff, tags as t};
 use lightcraft_color::Xy;
 
