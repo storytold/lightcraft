@@ -20,7 +20,7 @@ pub(crate) fn can_switch_library(app: &LightcraftApp) -> Result<(), String> {
     // what waits in line for the library lane, and files held back by a scan or a review, were meant for the library
     // open now (issue #2779)
     if app.session.activity.lane_waiting(lightcraft_engine::activity::Lane::Library) || !app.waiting_import.files.is_empty() {
-        return Err("wait for the photos waiting to be imported before switching libraries".into());
+        return Err("wait for the import or Synchronize Folder waiting in line (or take it out of the line) before switching libraries".into());
     }
     Ok(())
 }

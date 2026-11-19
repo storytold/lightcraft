@@ -3,7 +3,7 @@
 Everything that takes a while runs off the UI thread and shows up in **one** place: the activity stack in the
 top-left corner under the top bar (issue #345). Each task has a row with its name, a progress bar (a sweep while
 the amount of work isn't known), the count and what it's working on, and ✕ if it can stop. Quitting asks first while
-a task that can stop is running. Agents see the same list through `activity.list` / `activity.cancel`, and
+a task that can stop is running or any task waits in line (Quit Anyway gives the waiting ones up). Agents see the same list through `activity.list` / `activity.cancel`, and
 `ui.inspect` reports it as `activity`.
 
 The registry is `lightcraft_engine::activity` (`crates/engine/src/activity.rs`, `Session::activity`). The stack is
@@ -77,7 +77,8 @@ and `Session::start_waiting` runs it, under the id it had in line, once the lane
 every command and the app every frame. `activity.list` shows a waiting task after the running ones (`waiting`,
 `place`, `lane`); the activity stack in the app draws a waiting task too, at once, as a row without a bar ("Starts next" or "Starts after N more") with ✕, "Remove from Queue", which runs `activity.cancel`. `activity.cancel` takes a waiting task out
 of the line, `activity.cancel {all: true}` empties it, and opening another library drops it: the photos it names
-belong to the old one. At most `MAX_WAITING` (100) tasks wait. Without `queue` a call is refused while its lane is
+belong to the old one (the app refuses Open Library while an import or a Synchronize Folder waits in the library lane, so
+nothing is lost that way). At most `MAX_WAITING` (100) tasks wait. Without `queue` a call is refused while its lane is
 busy, as before. A waiting task whose start fails (there is no smart previews folder any more, say) is logged (the app's own, an import or a Synchronize Folder, also says why in a toast) and the next in line goes on.
 
 ## Examples in the code
