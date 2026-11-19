@@ -150,3 +150,26 @@ fn an_export_makes_the_correction_when_it_is_missing_and_never_comes_out_without
     assert!(export_photo(&mut x.s, id, &o, 1).is_err());
     let _ = std::fs::remove_dir_all(&x.dir);
 }
+
+#[test]
+fn any_defringe_shaped_onnx_installs_without_a_manifest_and_anything_else_is_refused() {
+    let mut x = setup("adf-bare");
+    let bare = x.dir.join("bare");
+    std::fs::create_dir_all(&bare).unwrap();
+    // a denoiser (the wrong shape) is refused when it is run, and nothing is installed
+    let wrong = bare.join("smoothing.onnx");
+    std::fs::write(&wrong, lightcraft_denoise::synthetic::smoothing_onnx()).unwrap();
+    assert!(x.s.execute("aiDefringe.models.install", &json!({"path": wrong.to_string_lossy(), "acknowledged": true})).is_err());
+    assert_eq!(x.s.execute("aiDefringe.status", &json!({})).unwrap()["model"], Value::Null);
+    // a defringe network on its own: named after its file, its licence unknown
+    let path = bare.join("My Defringe v2.onnx");
+    std::fs::write(&path, lightcraft_denoise::synthetic::defringe_onnx([-3.0, 3.0, 10.0])).unwrap();
+    let m = x.s.execute("aiDefringe.models.inspect", &json!({"path": path.to_string_lossy()})).unwrap();
+    assert_eq!((m["name"].as_str(), m["licence"].as_str()), (Some("My Defringe v2"), Some("Not stated")));
+    assert!(m["notice"].as_str().unwrap().contains("doesn't know who made it"));
+    x.s.execute("aiDefringe.models.install", &json!({"path": path.to_string_lossy(), "acknowledged": true})).unwrap();
+    assert_eq!(x.s.execute("aiDefringe.status", &json!({})).unwrap()["model"]["id"], "My-Defringe-v2");
+    x.s.execute("aiDefringe.toggle", &json!({"enabled": true})).unwrap();
+    assert!(x.s.execute("aiDefringe.make", &json!({})).unwrap()["changed"].as_u64().unwrap() > 0);
+    let _ = std::fs::remove_dir_all(&x.dir);
+}

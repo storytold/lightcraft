@@ -6,8 +6,10 @@ time starts at 100; turning it off keeps the Amount. It acts on the requesting p
 and is undoable. The manual Defringe sliders below it (Purple and Green Amount and their hue ranges) still work, on
 their own or together with it.
 
-AI Defringe needs a model, and **LightCraft ships none**. Settings ▸ AI Defringe ▸ **Install from file…** takes an ONNX
-file with a `defringe-model.json` beside it (see [The model contract](#the-model-contract)). Before anything is
+AI Defringe needs a model, and **LightCraft ships none**. Settings ▸ AI Defringe ▸ **Install from file…** takes any ONNX
+file that has the defringe shape (see [The model contract](#the-model-contract)). A `defringe-model.json` beside it gives
+its name, version and licence. Without one, LightCraft names the model after its file, gives the licence as "Not
+stated" with a notice saying it doesn't know who made it, and installs it only if it runs as a defringe model. Before anything is
 installed, Settings shows the model's name, licence and notice, and the user accepts them. Without a model the section
 says where to install one. Builds without the model runtime (the web build, or a native build without the `denoise`
 feature) say so and never offer the switch.
@@ -57,7 +59,7 @@ The network only proposes a change; the host decides how much of it to keep. The
 
 ## The model contract
 
-`defringe-model.json` (checked, unknown fields refused):
+`defringe-model.json` (optional; checked, unknown fields refused):
 
 ```json
 {

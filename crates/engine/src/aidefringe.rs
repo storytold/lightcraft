@@ -123,15 +123,52 @@ pub fn installed(dir: &Path) -> Option<(Manifest, PathBuf)> {
     file.is_file().then_some((m, file))
 }
 
-/// The manifest beside model file `onnx`, checked, without reading the model.
+/// The manifest beside model file `onnx`, checked, without running the model. A file with no `defringe-model.json`
+/// describing it (any ONNX the user has) gets one made up from the file: its name, its SHA-256, and a licence that
+/// says none was given. Installing it then checks that it really is a defringe model by running it.
 pub fn inspect(onnx: &Path) -> Result<Manifest, String> {
     let dir = onnx.parent().ok_or("the model file has no folder")?;
-    let text = std::fs::read_to_string(dir.join(MANIFEST)).map_err(|e| format!("{MANIFEST} beside the model: {e}"))?;
-    let m = Manifest::parse(&text)?;
-    if onnx.file_name().and_then(|n| n.to_str()) != Some(m.file.as_str()) {
-        return Err(format!("{MANIFEST} describes `{}`, not this file", m.file));
+    let name = onnx.file_name().and_then(|n| n.to_str()).ok_or("the model file has no name")?;
+    if let Ok(text) = std::fs::read_to_string(dir.join(MANIFEST)) {
+        let m = Manifest::parse(&text)?;
+        if m.file == name {
+            return Ok(m);
+        }
     }
-    Ok(m)
+    bare(onnx, name)
+}
+
+/// The manifest of an ONNX file that came without one.
+fn bare(onnx: &Path, name: &str) -> Result<Manifest, String> {
+    let len = std::fs::metadata(onnx).map_err(|e| e.to_string())?.len();
+    if len > MAX_MODEL_BYTES {
+        return Err("the model file is too large".into());
+    }
+    let sha256 = lightcraft_denoise_core::hash::sha256_file(onnx).map_err(|e| e.to_string())?;
+    let stem = onnx.file_stem().and_then(|n| n.to_str()).unwrap_or("model");
+    let id: String = stem.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '-' }).take(64).collect();
+    let plain = |v: &str| v.chars().filter(|c| !c.is_control()).take(120).collect::<String>();
+    let file = if name.len() <= 120 && !name.starts_with('.') && !name.contains(['/', '\\']) && name.to_ascii_lowercase().ends_with(".onnx") {
+        name.to_string()
+    } else {
+        "model.onnx".into()
+    };
+    let m = Manifest {
+        id: if id.trim_matches(['-', '.', '_']).is_empty() { "model".into() } else { id },
+        name: Some(plain(stem)).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "Defringe model".into()),
+        version: sha256.get(..8).unwrap_or("1").to_string(),
+        licence: "Not stated".into(),
+        file,
+        sha256,
+        contract: CONTRACT.into(),
+        notice: Some(format!(
+            "This model came without a {MANIFEST}, so LightCraft doesn't know who made it or under which terms. \
+             Use it only if you are allowed to. LightCraft checks that it runs as a defringe model before installing it."
+        )),
+        url: None,
+    };
+    // the made-up manifest must read back as a valid one once installed
+    Manifest::parse(&serde_json::to_string(&m).map_err(|e| e.to_string())?)
 }
 
 fn read_model_file(path: &Path, m: &Manifest) -> Result<Vec<u8>, String> {

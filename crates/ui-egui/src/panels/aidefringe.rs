@@ -156,7 +156,11 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             app.caches.aidefringe.next_pump = 0.0;
         }
     } else {
-        hint(ui, t, "No defringe model is installed. LightCraft doesn't come with one: install an ONNX file with defringe-model.json beside it.");
+        hint(
+            ui,
+            t,
+            "No defringe model is installed. LightCraft doesn't come with one: install any ONNX defringe model. A defringe-model.json beside it gives its name and licence; without one, LightCraft names it after its file.",
+        );
     }
     ui.add_space(6.0);
     let r = crate::button::Button::new("Install from file…")
