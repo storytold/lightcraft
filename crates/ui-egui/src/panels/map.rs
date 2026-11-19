@@ -518,7 +518,6 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let vp = navigate(app, ui, &canvas_response, Viewport::new(center, zoom, w, h), (canvas_rect, zone, max_zoom), &mut map_ui);
     center = vp.center;
     zoom = vp.zoom;
-    let pointer = ui.input(|i| i.pointer.latest_pos());
     let carrying = app.ui.dragging_photos.is_some();
 
     follow_view_area(app, ui, &mut map_ui, center, zoom);
@@ -541,7 +540,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     app.map_drawn.without_gps = app.map_points.without;
 
     // 3. Render Clusters and Markers
-    let PinInput { clicked, double_clicked_photo, zoom_target, hovered } = draw_pins(app, ui, &painter, &clusters, (canvas_rect, pointer), &map_ui);
+    let PinInput { clicked, double_clicked_photo, zoom_target, hovered } =
+        draw_pins(app, ui, &painter, &clusters, (canvas_rect, &canvas_response), &map_ui);
     if let Some((target, next_z)) = zoom_target {
         center = target;
         zoom = next_z.min(max_zoom);
@@ -886,15 +886,18 @@ struct PinInput {
 }
 
 /// Draw the pins and clusters (selected ones highlighted, a cluster with its selected count),
-/// record them for `map.state` and read their clicks.
+/// record them for `map.state` and read their clicks. Hover and clicks come from the canvas's
+/// response, not the raw pointer: a widget over the map (the toolbar, the filter bar, a pin's
+/// card) takes the pointer, so a click on it never also lands on a pin beneath.
 fn draw_pins(
     app: &mut LightcraftApp,
     ui: &egui::Ui,
     painter: &Painter,
     clusters: &[Cluster],
-    (canvas, pointer): (Rect, Option<Pos2>),
+    (canvas, canvas_response): (Rect, &egui::Response),
     map_ui: &crate::state::MapUi,
 ) -> PinInput {
+    let pointer = canvas_response.hover_pos();
     let mut input = PinInput { clicked: None, double_clicked_photo: None, zoom_target: None, hovered: None };
     // while photos are carried over the map, or a pin is moved, pins are not hovered or clicked
     let busy = app.ui.dragging_photos.is_some() || map_ui.pin_drag.is_some();
@@ -927,13 +930,13 @@ fn draw_pins(
         input.hovered = Some(c.ids.clone());
         let movable = c.len() == 1 && !map_ui.locked;
         ui.ctx().set_cursor_icon(if movable { egui::CursorIcon::Grab } else { egui::CursorIcon::PointingHand });
-        if ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary)) {
+        if canvas_response.double_clicked() {
             match c.ids[..] {
                 [id] => input.double_clicked_photo = Some(PhotoId(id)),
                 _ => input.zoom_target = Some((c.pos, app.ui.map.zoom.round() + 2.0)),
             }
         }
-        if ui.input(|i| i.pointer.primary_clicked()) {
+        if canvas_response.clicked() {
             input.clicked = Some((c.ids.iter().map(|id| PhotoId(*id)).collect(), ui.input(|i| i.modifiers)));
         }
     }

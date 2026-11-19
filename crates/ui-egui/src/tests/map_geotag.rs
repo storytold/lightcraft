@@ -377,3 +377,26 @@ fn show_in_map_on_a_photo_without_gps_clears_the_active_pin() {
     h.app.run("photo.showInMap", json!({"id": ids[1]})).unwrap();
     assert_eq!(h.app.ui.map.active_pin_photo, None, "no pin to show for a photo without GPS");
 }
+
+/// A click on a toolbar button over a pin is the button's: the pin beneath isn't selected.
+#[test]
+fn a_click_on_a_button_over_a_pin_does_not_select_the_pin() {
+    let (mut h, ids) = demo();
+    view(&mut h, 40.7484, -73.9857, 10.0);
+    let lock = widget(&h, "map:lockMarkers").expect("the toolbar's Lock Markers button").center();
+    // pan so New York's pin sits under the button: the view's centre moves by the pin's offset
+    let s = state(&mut h);
+    let ny = xy(&pin_of(&s, ids[5]));
+    let centre = canvas(&s).center() + (ny - lock);
+    let to = place_at(&s, centre);
+    view(&mut h, to.lat, to.lon, 10.0);
+    let s = state(&mut h);
+    assert!((xy(&pin_of(&s, ids[5])) - lock).length() < 2.0, "the pin is under the button: {s}");
+    h.app.run("library.select", json!({"ids": [ids[0]]})).unwrap();
+    let locked = s["lockMarkers"].as_bool();
+    press(&mut h, lock, true);
+    press(&mut h, lock, false);
+    frames(&mut h, 2);
+    assert_ne!(state(&mut h)["lockMarkers"].as_bool(), locked, "the button took the click");
+    assert_eq!(h.app.session.selection.ids, vec![PhotoId(ids[0])], "the pin beneath wasn't selected");
+}
