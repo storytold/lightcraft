@@ -895,6 +895,8 @@ fn show_in_map_and_window_map_menu() {
     a.ui.view = ViewMode::PhotoGrid;
     run_item(&mut a, "panel.map", Value::Null).unwrap();
     assert_eq!(a.ui.view, ViewMode::Map);
+}
+
 /// The interface language is chosen in Settings ▸ General (one choice per language), so Edit has no
 /// Language submenu of 18 rows. The commands stay: agents and tests still switch language by id.
 #[test]
