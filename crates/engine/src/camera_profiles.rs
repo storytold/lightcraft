@@ -173,6 +173,8 @@ fn cache() -> &'static Mutex<Cache> {
 
 /// The profile for camera `model`: from [`dir`], else built in; read once per process.
 pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
+    // Capture the process fingerprint before a profile can enter the lookup cache.
+    stable_profile_key();
     get_from(model, dir().as_deref())
 }
 
@@ -232,29 +234,23 @@ fn get_from(model: &str, directory: Option<&Path>) -> Option<Arc<CameraProfile>>
     profile
 }
 
-/// Changes when the profiles folder's contents change (per process): part of the render cache
-/// keys, so thumbnails rendered before a profile existed are not reused after. Includes the
-/// loaded lens database: its geometry determines which sensor/JPEG samples fit the camera look.
+/// Identity of the camera-profile lookup cache and of the currently loaded lens database.
+/// The camera profiles already loaded by this process outlive file changes on disk. A lens
+/// reload changes only the lens part of the key used by thumbnails and rendered views.
 pub fn cache_key() -> u64 {
-    static KEY: Mutex<Option<(u64, u64)>> = Mutex::new(None);
-    let lens_key = crate::lens_profiles::cache_key();
-    let mut key = KEY.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some((previous_lens, value)) = *key
-        && previous_lens == lens_key
-    {
-        return value;
-    }
-    let value = cache_key_with_lens(dir().as_deref(), lens_key);
-    *key = Some((lens_key, value));
-    value
+    cache_key_with_lens(stable_profile_key(), crate::lens_profiles::cache_key())
 }
 
-#[cfg(test)]
+fn stable_profile_key() -> u64 {
+    static KEY: OnceLock<u64> = OnceLock::new();
+    *KEY.get_or_init(|| cache_key_for(dir().as_deref()))
+}
+
+fn cache_key_with_lens(profile_key: u64, lens_key: u64) -> u64 {
+    lightcraft_preview::Hasher128::new().str("camera-profiles-with-lens-v2").u64(profile_key).u64(lens_key).finish().0 as u64
+}
+
 fn cache_key_for(directory: Option<&Path>) -> u64 {
-    cache_key_with_lens(directory, 0)
-}
-
-fn cache_key_with_lens(directory: Option<&Path>, lens_key: u64) -> u64 {
     let entries = directory.and_then(|d| std::fs::read_dir(d).ok());
     let mut files: Vec<(String, u64, std::time::Duration)> = entries
         .into_iter()
@@ -269,7 +265,6 @@ fn cache_key_with_lens(directory: Option<&Path>, lens_key: u64) -> u64 {
         .collect();
     files.sort();
     let mut h = lightcraft_preview::Hasher128::new();
-    h.str("camera-profiles-with-lens-v1").u64(lens_key);
     for (name, len, modified) in &files {
         h.str(name).u64(*len).u64(modified.as_secs()).u64(u64::from(modified.subsec_nanos()));
     }
@@ -375,10 +370,14 @@ mod tests {
         assert!(crate::lens_profiles::database().is_some(), "fixture database was loaded by the public loader");
         let lens_key = crate::lens_profiles::cache_key();
         assert_ne!(lens_key, 0);
-        let directory = dir();
-        assert_eq!(cache_key(), cache_key_with_lens(directory.as_deref(), lens_key));
-        assert_ne!(cache_key(), cache_key_with_lens(directory.as_deref(), 0), "public camera key must forward the loaded lens key");
+        let directory = dir().unwrap();
+        let profile = profile();
+        save(&profile, &directory).unwrap();
+        assert_eq!(get(&profile.model).as_deref(), Some(&profile));
+        let profile_key = cache_key_for(Some(&directory));
         let first = cache_key();
+        assert_eq!(first, cache_key_with_lens(profile_key, lens_key));
+        assert_ne!(first, cache_key_with_lens(profile_key, 0), "public camera key must forward the loaded lens key");
         // The culling path now reuses rendered views before decoding. Their identity
         // must follow the same loaded lens snapshot as camera fitting and thumbnails.
         let mut session = crate::Session::with_demo();
@@ -387,14 +386,21 @@ mod tests {
         let (views, view_key) = view.view_cache.as_ref().unwrap();
         views.put_memory(*view_key, std::sync::Arc::new(lightcraft_raster::Rgba8::from_fn(64, 64, |_, _| [7, 19, 31, 255])));
         assert!(session.loupe_job(id, 64, 64, true).unwrap().cached_view().is_some());
-        let file = directory.unwrap().join("lens.xml");
+        let mut replacement = profile.clone();
+        replacement.samples *= 100;
+        save(&replacement, &directory).unwrap();
+        assert_ne!(cache_key_for(Some(&directory)), profile_key, "a fresh process sees a different camera profile fingerprint");
+        assert_eq!(get(&profile.model).as_deref(), Some(&profile), "the loaded profile stays cached");
+
+        let file = directory.join("lens.xml");
         let xml = std::fs::read_to_string(&file).unwrap();
         std::fs::write(&file, xml.replace("-0.03", "-0.05")).unwrap();
         assert_eq!(cache_key(), first, "unreloaded files do not change the loaded database");
         crate::lens_profiles::replaced();
         assert_ne!(cache_key(), first, "camera keys follow runtime lens replacements too");
+        let new_lens_key = crate::lens_profiles::cache_key();
+        assert_eq!(cache_key(), cache_key_with_lens(profile_key, new_lens_key));
         assert!(session.loupe_job(id, 64, 64, true).unwrap().cached_view().is_none(), "a view from the old snapshot is not reused");
-        assert_eq!(cache_key(), cache_key_with_lens(dir().as_deref(), crate::lens_profiles::cache_key()));
         std::fs::write(&file, xml).unwrap();
         crate::lens_profiles::reload();
         assert_eq!(cache_key(), first, "restored semantic data restores the camera key");
@@ -491,9 +497,9 @@ mod tests {
 
     #[test]
     fn lens_database_identity_invalidates_camera_render_cache() {
-        assert_ne!(cache_key_with_lens(None, 0), cache_key_with_lens(None, 123));
-        assert_ne!(cache_key_with_lens(None, 123), cache_key_with_lens(None, 456));
-        assert_eq!(cache_key_with_lens(None, 123), cache_key_with_lens(None, 123));
+        assert_ne!(cache_key_with_lens(1234, 0), cache_key_with_lens(1234, 123));
+        assert_ne!(cache_key_with_lens(1234, 123), cache_key_with_lens(1234, 456));
+        assert_eq!(cache_key_with_lens(1234, 123), cache_key_with_lens(1234, 123));
     }
 
     #[test]
