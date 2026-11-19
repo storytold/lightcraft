@@ -443,7 +443,10 @@ fn finish_tile(input: &[f32], out: &mut [f32], p: &Params, edges: (bool, bool, b
                 .sum();
             let mean_out = sum_out / (4.0 * cells);
             let measured = if mean_in as f32 >= MIN_SIGNAL && mean_out > 0.0 { (mean_out / mean_in) as f32 } else { nominal };
-            let g = measured.clamp(nominal * (1.0 - max_deviation), nominal * (1.0 + max_deviation));
+            // the shared window keeps this safe as well: validation refuses a negative nominal for a Bayer model, and
+            // ordering by sign would keep a clamp valid even if that ever changed
+            let (lo, hi) = crate::manifest::gain_window(nominal, max_deviation);
+            let g = measured.clamp(lo, hi);
             if g.is_finite() && g > 0.0 {
                 let inv = 1.0 / g;
                 if let Some(plane) = out.get_mut(c * side * side..(c + 1) * side * side) {
@@ -641,11 +644,7 @@ fn finish_tile_linear_rgb(input: &[f32], clip_from: Option<&[f32]>, out: &mut [f
                     .map(|j| src.get(offset + j * t + i0..offset + j * t + i1).map_or(0.0, |r| r.iter().map(|&v| f64::from(v)).sum::<f64>()))
                     .sum()
             };
-            let (min_g, max_g) = if nominal >= 0.0 {
-                (nominal * (1.0 - max_deviation), nominal * (1.0 + max_deviation))
-            } else {
-                (nominal * (1.0 + max_deviation), nominal * (1.0 - max_deviation))
-            };
+            let (min_g, max_g) = crate::manifest::gain_window(nominal, max_deviation);
             for c in 0..3 {
                 let offset = c * side;
                 let mean_in = plane_sum(input, offset) / cells;

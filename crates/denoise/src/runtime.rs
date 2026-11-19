@@ -97,9 +97,12 @@ fn self_test(runner: &dyn TileRunner, manifest: &DenoiserManifest, load_ms: f64)
             let g = if is_linear_rgb {
                 let cells = t * t;
                 let mut per = [1.0f64; 3];
-                if let Gain::MatchMean { nominal, max_deviation } = manifest.gain {
-                    let nominal = f64::from(nominal);
-                    let (lo, hi) = (nominal * (1.0 - f64::from(max_deviation)), nominal * (1.0 + f64::from(max_deviation)));
+                if let Gain::MatchMean { nominal: declared, max_deviation } = manifest.gain {
+                    // the same window the photo path clamps to, ordered by the sign of the scale, so a model whose
+                    // scale is negative is judged instead of panicking on a window whose bounds are the wrong way round
+                    let (lo, hi) = crate::manifest::gain_window(declared, max_deviation);
+                    let (lo, hi) = (f64::from(lo), f64::from(hi));
+                    let nominal = f64::from(declared);
                     for (c, gc) in per.iter_mut().enumerate() {
                         let measured = if mean_in.abs() > 0.0 {
                             a.get(c * cells..(c + 1) * cells).map(|plane| {
@@ -441,6 +444,34 @@ mod tests {
         // a model that declares no scale of its own is not rescaled here either: the photo keeps what it gives
         m.gain = Gain::None;
         assert!(!self_test(&Planes, &m, 0.0).ok, "a model that says its scale is the input's is judged on the answer it gives");
+    }
+
+    /// The X-Trans model's scale is negative (−3.184e9), so a window written as `nominal × (1 ∓ deviation)` comes out
+    /// with its low bound above its high bound, and clamping to it panics. The window is ordered by sign instead, as the
+    /// photo path does, so a negative-scale model's self-test runs and passes.
+    #[test]
+    fn the_self_test_handles_a_model_whose_scale_is_negative() {
+        struct Negative;
+        impl TileRunner for Negative {
+            fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error> {
+                // the planes averaged (so the noise goes down), then written out on a scale of −2
+                let plane = (input.len() / 3).max(1);
+                let mut out = vec![0.0f32; 3 * plane];
+                for i in 0..plane {
+                    let mean = (input[i] + input[plane + i] + input[2 * plane + i]) / 3.0;
+                    for c in 0..3 {
+                        out[c * plane + i] = mean * -2.0;
+                    }
+                }
+                Ok(out)
+            }
+        }
+        let mut m = manifest(64, -2.0);
+        m.domain = Domain::LinearRgb;
+        m.gain = Gain::MatchMean { nominal: -2.0, max_deviation: 0.15 };
+        let t = self_test(&Negative, &m, 0.0);
+        assert!(t.ok, "a negative scale is measured and taken out like a positive one: {t:?}");
+        assert!((t.scale / -2.0 - 1.0).abs() < 0.01, "the scale it reports is the model's own: {t:?}");
     }
 
     #[test]

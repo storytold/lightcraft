@@ -78,6 +78,19 @@ pub enum Gain {
     MatchMean { nominal: f32, max_deviation: f32 },
 }
 
+/// The window a tile's measured scale is clamped to for a `MatchMean` gain: `nominal` within `max_deviation` on either
+/// side, smaller bound first.
+///
+/// The bounds are ordered by the sign of `nominal`, so a linear-RGB model with a negative scale (the X-Trans model's is
+/// −3.184e9) gets a window that a clamp accepts. Written as `nominal × (1 ∓ deviation)`, such a model's low bound comes
+/// out above its high bound and clamping to it panics; validation lets a linear-RGB model be negative
+/// ([`validate`]), so the ordering belongs here rather than at one call site. `max_deviation` is validated to be
+/// non-negative and both to be finite, so the only other caller-side duty is not to pass an unvalidated gain.
+pub fn gain_window(nominal: f32, max_deviation: f32) -> (f32, f32) {
+    let (a, b) = (nominal * (1.0 - max_deviation), nominal * (1.0 + max_deviation));
+    if a <= b { (a, b) } else { (b, a) }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DenoiserManifest {
@@ -229,6 +242,21 @@ mod tests {
         let m = sample();
         let json = serde_json::to_vec(&m).unwrap();
         assert_eq!(parse(&json).unwrap(), m);
+    }
+
+    /// The window is ordered by the sign of the scale: a linear-RGB model's negative scale must not produce a low
+    /// bound above its high bound, which would make every clamp to it panic.
+    #[test]
+    fn the_gain_window_is_ordered_by_the_sign_of_the_scale() {
+        let (lo, hi) = gain_window(1.0e6, 0.05);
+        assert!((lo - 950_000.0).abs() < 10.0 && (hi - 1_050_000.0).abs() < 10.0, "a positive scale: {lo}, {hi}");
+        // rawnind-linear's own numbers: −3.184e9 ± 15 %
+        let (lo, hi) = gain_window(-3.184e9, 0.15);
+        assert!(lo < hi, "a negative scale gets a window the right way round: {lo} < {hi}");
+        assert!((lo + 3.184e9 * 1.15).abs() / 3.184e9 < 1e-6);
+        assert!((hi + 3.184e9 * 0.85).abs() / 3.184e9 < 1e-6);
+        // zero deviation is a window of one value either way
+        assert_eq!(gain_window(-2.0, 0.0), (-2.0, -2.0));
     }
 
     /// A manifest specifying Domain::LinearRgb and LinearSpace::LinRec2020 serializes and round-trips cleanly.
