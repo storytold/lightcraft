@@ -85,12 +85,14 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// 13: the sensor proxy of every per-file fit gets the embedded vignetting correction the render applies (Fujifilm
 /// RAF; other makes with a lens database), so the render no longer applies it twice, at the position a lens warp samples;
 /// the warped candidate's alignment leaves out the pixels outside the sensor instead of reading them as black.
-/// 14: a photo no look fits keeps its camera profile's colour instead of the neutral fallback.
-/// 15: a camera profile's pooled tone curve continues a photo's own past what its JPEG showed.
-/// 16: only a look with the profile's colour continues along its pooled tone curve.
-/// 17: continuing a photo's curve keeps it as it was where its JPEG taught it (`thinned_knots`).
-/// 18: the bundled NIKON D780, D750 and D90 profiles.
-pub const LOOK_VERSION: u32 = 18;
+/// 14: bundled camera profiles also match the Nikon model spellings that differ in case, spacing or the Z8 alias,
+/// so previews made without the profile are rebuilt.
+/// 15: a photo no look fits keeps its camera profile's colour instead of the neutral fallback.
+/// 16: a camera profile's pooled tone curve continues a photo's own past what its JPEG showed.
+/// 17: only a look with the profile's colour continues along its pooled tone curve.
+/// 18: continuing a photo's curve keeps it as it was where its JPEG taught it (`thinned_knots`).
+/// 19: the bundled NIKON D780, D750 and D90 profiles.
+pub const LOOK_VERSION: u32 = 19;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {

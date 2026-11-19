@@ -631,18 +631,47 @@ fn malformed_profile_look_tags_are_ignored() {
 
 /// Lossless JPEG XL codestream of `px` (`w × h × cpp` interleaved), 16-bit unless `eight`.
 fn jxl_encode(px: &[u16], w: usize, h: usize, cpp: usize, eight: bool) -> Vec<u8> {
-    use zune_core::bit_depth::BitDepth;
-    use zune_core::colorspace::ColorSpace;
-    use zune_core::options::EncoderOptions;
-    let cs = if cpp == 1 { ColorSpace::Luma } else { ColorSpace::RGB };
-    let (bytes, depth): (Vec<u8>, _) = if eight {
-        (px.iter().map(|&v| v as u8).collect(), BitDepth::Eight)
-    } else {
-        (px.iter().flat_map(|v| v.to_ne_bytes()).collect(), BitDepth::Sixteen)
-    };
-    let mut out = Vec::new();
-    zune_jpegxl::JxlSimpleEncoder::new(&bytes, EncoderOptions::new(w, h, cs, depth)).encode(&mut out).unwrap();
-    out
+    if cpp == 1 {
+        // craft-jxl's public image encoder deliberately widens Gray to RGB. DNG RAW tiles need
+        // a genuine single-plane codestream, so use jixel's grayscale encoder for these fixtures.
+        let config = jixel::EncodeConfig::default().with_lossless(true);
+        let u8_buf: Vec<u8> = if eight { px.iter().map(|&v| v as u8).collect() } else { Vec::new() };
+        return if eight {
+            jixel::encode_image_gray(&u8_buf, w, h, &config).unwrap()
+        } else {
+            jixel::encode_image_gray_16bit(px, w, h, &config).unwrap()
+        };
+    }
+    let layout = craft_jxl::Layout::Rgb;
+    let u8_buf: Vec<u8> = if eight { px.iter().map(|&v| v as u8).collect() } else { Vec::new() };
+    let samples = if eight { craft_jxl::Samples::U8(&u8_buf) } else { craft_jxl::Samples::U16(px) };
+    let img = craft_jxl::ImageRef { width: w as u32, height: h as u32, layout, samples };
+    let opts = craft_jxl::EncodeOptions { lossless: true, ..Default::default() };
+    craft_jxl::encode(&img, opts, &craft_jxl::Metadata::default()).unwrap()
+}
+
+/// The encoder may return an ISO-BMFF container for a level-10 codestream. Extract its `jxlc`
+/// payload so the tile fixture can deliberately exercise the bare-codestream form too.
+fn bare_jxl_codestream(bytes: &[u8]) -> Vec<u8> {
+    const SIGNATURE: &[u8] = &[0, 0, 0, 0x0c, b'J', b'X', b'L', b' ', 0x0d, 0x0a, 0x87, 0x0a];
+    if !bytes.starts_with(SIGNATURE) {
+        return bytes.to_vec();
+    }
+    let mut at = SIGNATURE.len();
+    while let Some(end_header) = at.checked_add(8) {
+        let Some(header) = bytes.get(at..end_header) else { break };
+        let size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as usize;
+        if size < 8 {
+            break;
+        }
+        let Some(end) = at.checked_add(size) else { break };
+        let Some(box_bytes) = bytes.get(at..end) else { break };
+        if &header[4..8] == b"jxlc" {
+            return box_bytes[8..].to_vec();
+        }
+        at = end;
+    }
+    panic!("the JPEG XL encoder returned a container without a complete jxlc box");
 }
 
 /// A bare codestream wrapped in the ISO-BMFF container (signature, `ftyp`, `jxlc`).
@@ -674,7 +703,7 @@ fn jxl_tiled(px: &[u16], w: usize, h: usize, cpp: usize, bits: u16, cfa: bool, t
                     }
                 }
             }
-            let cs = jxl_encode(&t, cw, ch, cpp, bits == 8);
+            let cs = bare_jxl_codestream(&jxl_encode(&t, cw, ch, cpp, bits == 8));
             tiles.push(if i % 3 == 1 { jxl_container(&cs) } else { cs });
         }
     }
@@ -773,21 +802,21 @@ fn a_jpeg_xl_tile_that_fails_is_an_error_for_the_image() {
 #[test]
 fn jpeg_xl_tiles_beyond_their_decode_budget_are_errors() {
     use lightcraft_raw::RawError;
-    use zune_core::bit_depth::BitDepth;
-    use zune_core::colorspace::ColorSpace;
-    use zune_core::options::EncoderOptions;
     let (w, h) = (512, 512);
     let grey: Vec<u16> = (0..w * h).map(|i| ((i % w) * 97 + (i / w) * 31) as u16 & 0x0fff).collect();
-    let with_alpha: Vec<u8> = grey.iter().flat_map(|&v| [v, 4095 - v]).flat_map(u16::to_ne_bytes).collect();
-    let mut tile = Vec::new();
-    zune_jpegxl::JxlSimpleEncoder::new(&with_alpha, EncoderOptions::new(w, h, ColorSpace::LumaA, BitDepth::Sixteen)).encode(&mut tile).unwrap();
+    let with_alpha: Vec<u16> = grey.iter().flat_map(|&v| [v, 4095 - v]).collect();
+    // The public craft-jxl image encoder widens GrayAlpha to RGBA. This budget fixture
+    // specifically needs two encoded planes, not a four-plane layout mismatch.
+    let config = jixel::EncodeConfig::default().with_lossless(true);
+    let tile = jixel::encode_image_gray_alpha_16bit(&with_alpha, w, h, &config).unwrap();
     let one = |tile: Vec<u8>| {
         let mut raw = base_ifd(w, h, 12, 1, true);
         raw.set(t::COMPRESSION, Value::Short(vec![compression::JPEG_XL]));
         raw.set_image(ImageData::Tiles { tile_width: w as u32, tile_height: h as u32, tiles: vec![tile] });
         dng(raw, ByteOrder::Little)
     };
-    assert!(matches!(decode(&one(tile)), Err(RawError::Corrupt(_))));
+    let Err(RawError::Corrupt(error)) = decode(&one(tile)) else { panic!("the extra plane must exceed the tile budget") };
+    assert!(!error.contains("colour planes"), "must fail the budget, not the fixture layout: {error}");
     assert_eq!(decode(&one(jxl_encode(&grey, w, h, 1, false))).unwrap().data, RawData::U16(grey));
 }
 
@@ -1016,7 +1045,10 @@ fn malformed_semantic_masks_are_skipped() {
     assert_eq!(decode(&bytes).unwrap().cpp, 3);
     let masks = lightcraft_raw::semantic_masks(&bytes);
     let names: Vec<&str> = masks.iter().map(|m| m.name.as_str()).collect();
-    assert_eq!(names, ["short strip", "sub area too small"]);
+    // A 4×4, 8-bit uncompressed mask needs 16 bytes: the three-byte strip
+    // is truncated, not a valid mask with zero-filled missing pixels. Keep the
+    // separate complete mask to test invalid MaskSubArea handling.
+    assert_eq!(names, ["sub area too small"]);
     assert!(masks.iter().all(|m| m.sub_area.is_none()), "sub areas the mask doesn't fit are ignored");
     for m in &masks {
         let d = m.developed(Rect::new(0, 0, 8, 6), Rect::new(0, 0, 8, 6)).unwrap();
@@ -1131,4 +1163,28 @@ fn legacy_lightcraft_dng_keeps_the_sensor_anchored_pattern() {
     assert_eq!(build("LightCraft").cfa.unwrap().name(), "GRBG");
     assert_eq!(build("Adobe Photoshop Lightroom").cfa.unwrap().name(), "BGGR");
     assert_ne!(lightcraft_raw::dngwrite::SOFTWARE, "LightCraft");
+}
+
+/// The DJI compatibility fix in craft-raw #2042 must reach the application decoder,
+/// without making a genuinely truncated raster acceptable.
+#[test]
+fn active_width_strip_count_keeps_the_full_sensor_raster() {
+    let mut raw = synthetic(16, 16, Some(Cfa::bayer("RGGB").unwrap()), 1);
+    raw.active_area = Rect::new(0, 0, 12, 16);
+    raw.crop = raw.active_area;
+    let mut bytes = write_dng(&raw, &DngWriteOptions { compression: DngCompression::Uncompressed, order: ByteOrder::Little, xmp: None }).unwrap();
+    let ifd = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+    let count = u16::from_le_bytes(bytes[ifd..ifd + 2].try_into().unwrap()) as usize;
+    let entry =
+        (0..count).map(|i| ifd + 2 + i * 12).find(|&at| u16::from_le_bytes(bytes[at..at + 2].try_into().unwrap()) == t::STRIP_BYTE_COUNTS).unwrap();
+    assert_eq!(u16::from_le_bytes(bytes[entry + 2..entry + 4].try_into().unwrap()), 4);
+    assert_eq!(u32::from_le_bytes(bytes[entry + 4..entry + 8].try_into().unwrap()), 1);
+    bytes[entry + 8..entry + 12].copy_from_slice(&(12u32 * 16 * 2).to_le_bytes());
+    let decoded = decode(&bytes).unwrap();
+    assert_eq!((decoded.width, decoded.height), (16, 16));
+    assert_eq!(decoded.data, raw.data);
+    assert_eq!(decoded.active_area, raw.active_area);
+    assert_eq!(lightcraft_raw::probe_info(&bytes).unwrap(), decoded.info());
+    bytes.truncate(bytes.len() - 8);
+    assert!(decode(&bytes).is_err(), "a short raster must still be refused");
 }

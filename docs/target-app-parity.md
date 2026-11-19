@@ -1,6 +1,6 @@
 # Target-app parity: LightCraft vs Adobe Lightroom
 
-> **Last reviewed:** 2026-10-10 · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop) · **Changes:** [revision history](#revision-history)
+> **Last reviewed:** 2026-11-15 · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop) · **Changes:** [revision history](#revision-history)
 
 The authoritative assessment of how close LightCraft is to Lightroom. The row-by-row checklist is
 [parity-checklist.md](parity-checklist.md); the ranked work list is [gaps.md](gaps.md); deep areas
@@ -159,7 +159,7 @@ essentials replaces its guessed 45% raw look with 84% × 0.75 (+1 point).
 |---|---:|---:|---|
 | Interaction fidelity / UI clarity | ×0.95 | ×0.95 | brush live preview gaps and feathering (#517, #518); crop artefacts and limits (#731, #742, #770, #771); Compare white-balance selector (#743–#745); low-res slider previews (#330); dialogs taller than the window (#781); mouse-wheel scroll (#714) |
 | Stability on real machines | ×0.92 | ×0.92 | launch and quit crashes or silent startup failures (#250 macOS 12 Intel, #315 Windows Intel GPU, #431 Intel Mac, #260, #462, #783 Linux / Nouveau, #790 Windows installer, fixed in 0.9.1); tests run in CI on Linux x64 and FreeBSD (nightly), not on macOS or Windows (gap 9) |
-| File exchange with Lightroom users (mainstream) / opening files people send (essentials) | ×0.92 | ×0.95 | Adobe XMP sidecars change colours (#290), XMP CameraProfile and Upright ignored (#204, #205), catalog import fails (#599), same Light values render differently (#523, #209), no write-back to `.lrcat`; for casual users: CR3 beyond verified bodies, HE NEF open as previews (#473, #556), HEIC trouble (#693) |
+| File exchange with Lightroom users (mainstream) / opening files people send (essentials) | ×0.92 | ×0.95 | Adobe XMP sidecars change colours (#290), XMP CameraProfile and Upright ignored (#204, #205), catalog import fails (#599), same Light values render differently (#523, #209), no write-back to `.lrcat`; for casual users: CR3 beyond verified bodies, HE NEF open as previews (#473, #556) |
 | **Product** | **×0.804** | **×0.830** | |
 
 ### Mainstream practitioner: ~51%
@@ -299,6 +299,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-15 | minor | Lens Blur renders with AI subject focus and per-mask bokeh (the AI table's 🟡 and the missing depth map are unchanged); survey layout, opened-library folder safety, direct Lightroom backup-zip import, legacy shutter repair and the Highlights/Shadows block fix landed; craft-libs cutover (TIFF/JPEG/JXL/GIF/PSD/HEIF/raw, metadata, gain maps); v0.21.0 and v0.21.1 released. Headline numbers, coverage and estimates were not re-measured. |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-05 | minor | AI table: Lens Blur ⬜ → 🟡 (subject- or mask-focused disc blur, no depth map); headline numbers unchanged |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |
@@ -318,6 +319,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 | 2026-10-14 | minor | Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (`coverage_sweep_corpus.rs`, `coverage-sweep.tsv`; `docs/raw/coverage.py` 515 → 545 verified rows); the counts above are not re-measured here. Sensor verification does not establish colour parity (#1277); headline numbers unchanged |
 | 2026-10-12 | minor | 22 more CR3 bodies verified on one CC0 file each (raw-parity.md): use-weighted share whose camera decodes 85% → 92%, RAW decoding 77% → 83%; full 60.7% → 61.2% (~61%), mainstream depth 72.1% → 74.0% (~49% → ~51%), essentials depth 77.5% → 78.0% (~64% → ~65%) |
 | 2026-10-12 | minor | 117 Nikon and Fujifilm bodies verified (raw-parity.md): use-weighted share whose camera decodes 85% → 86%, RAW decoding 77% (unchanged); mainstream depth 72.1% → 72.4%, essentials depth 77.5% → 77.6%; headline numbers unchanged |
+| 2026-10-12 | minor | File-exchange discount: "HEIC trouble (#693)" is no longer among its reasons (HEIC decodes in release builds since #609 and keeps its EXIF and XMP since #693); the factor (×0.92 / ×0.95) is not re-measured and stays as it is |
 | 2026-10-11 | minor | EOS R5 Mark II CR3 verified (raw-parity.md): use-weighted share whose camera decodes 84% → 85%, RAW decoding 76% → 77%; full 60.6% → 60.7%, mainstream depth 71.8% → 72.1%, essentials depth 77.4% → 77.5%; the rounded numbers (~61%, ~49%, ~64%) are unchanged |
 | 2026-10-10 | minor | RAW measured model by model (raw-parity.md): RAW decoding (76%) and colour (35%) are explicit rows of the full sum (59% → 61%); mainstream uses the use-weighted 84% plus a ×0.85 colour discount (51% → 49%); essentials uses 84% × colour 0.75 (63% → 64%); beta ~14 points |
 | 2026-10-10 | minor | Full number restored to an additive weighted sum over the dimensions (~59%; no new evidence); hours to ~95% for each of the three audiences; beta distance ~16 points |
