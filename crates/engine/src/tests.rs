@@ -42,6 +42,8 @@ mod merge;
 mod move_to_share;
 #[cfg(unix)]
 mod opened_folder;
+#[cfg(not(target_arch = "wasm32"))]
+mod orf_adoption;
 mod organize;
 mod persist;
 mod prefs;

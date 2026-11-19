@@ -376,9 +376,8 @@ impl MediaCache {
         #[cfg(not(target_arch = "wasm32"))]
         if let (Source::File { path }, Some(dir)) = (&p.source, &self.smart_dir) {
             let sp = crate::smart::PreviewPath::new(dir, p);
-            // The worker checks completeness and old ORF compatibility before using any of
-            // these candidates; existence alone does not establish the pixel interpretation.
-            if self.availability.is_offline(path) && sp.candidates().iter().any(|p| self.availability.exists(&p.to_string_lossy()) == Some(true)) {
+            // Cached validation establishes pixel compatibility; existence alone cannot.
+            if self.availability.is_offline(path) && self.smart_availability.exists(dir, p) {
                 return SourceRef::Smart { path: sp };
             }
             let mut r = self.origin_ref(&p.source, max_edge);

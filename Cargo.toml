@@ -49,9 +49,9 @@ lightcraft-color = { path = "crates/color" }
 lightcraft-raster = { path = "crates/raster" }
 # TIFF/IFD: the shared reader and writer (moved from crates/tiff; craft-libs#783).
 craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3" }
-craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "f589ff485707007e814671229d0f4e77bc06968a" }
+craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "8e52aea6f589a3ffa5ada8a91c050678f2d8cfb5" }
 # Match the RAW writer’s TIFF type without changing other app TIFF consumers.
-craft-raw-tiff = { package = "craft-tiff", git = "https://github.com/storytold/craft-libs", rev = "f589ff485707007e814671229d0f4e77bc06968a" }
+craft-raw-tiff = { package = "craft-tiff", git = "https://github.com/storytold/craft-libs", rev = "8e52aea6f589a3ffa5ada8a91c050678f2d8cfb5" }
 lightcraft-raw = { path = "crates/raw" }
 lightcraft-codecs = { path = "crates/codecs" }
 lightcraft-meta = { path = "crates/meta" }

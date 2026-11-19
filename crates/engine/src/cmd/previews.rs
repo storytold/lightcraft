@@ -689,7 +689,7 @@ fn smart_run(
                 // is offline, when it is the only copy — the sync is small next to the decode
                 let mut loaded = false;
                 let r = source
-                    .ok_or_else(|| "nothing to build from".to_string())
+                    .ok_or_else(|| "original unavailable; reconnect it and use Build Smart Previews".to_string())
                     .and_then(|s| s.load_source())
                     .and_then(|src| {
                         loaded = true;

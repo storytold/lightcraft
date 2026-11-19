@@ -56,7 +56,7 @@ impl Availability {
             Some(false) => &self.preview,
             Some(true) => &self.sensor,
         };
-        preview.candidates().iter().any(|path| cache.exists(&path.to_string_lossy()) == Some(true))
+        preview.load_candidates().iter().any(|path| cache.exists(&path.to_string_lossy()) == Some(true))
     }
 }
 

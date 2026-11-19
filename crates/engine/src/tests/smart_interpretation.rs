@@ -447,3 +447,107 @@ fn an_unremovable_old_candidate_does_not_block_an_interpretation_edit() {
     assert!(flat.is_dir());
     x.finish();
 }
+
+#[test]
+fn orf_decoder_upgrades_keep_edits_and_require_explicit_same_version_rechecking() {
+    use crate::media::ProbeInfo;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    for (case, command, auto) in [
+        ("reload", "photo.reload", false),
+        ("manual-recheck", "library.recheckPreviewOnly", false),
+        ("stale-version", "library.recheckPreviewOnly", true),
+    ] {
+        let mut x = Lib::new(&format!("orf-upgrade-{case}"), false);
+        let file = x.dir.join("source.orf");
+        std::fs::rename(&x.file, &file).unwrap();
+        x.file = file;
+        x.s.catalog
+            .apply(Op::Relink {
+                id: x.id,
+                file_name: "source.orf".into(),
+                source: lightcraft_catalog::Source::File { path: x.file.to_string_lossy().into() },
+                format: Some("ORF".into()),
+                kind: None,
+            })
+            .unwrap();
+        let original = std::fs::read(&x.file).unwrap();
+        let photo = x.photo();
+        let (width, height, size, hash) = (photo.width, photo.height, photo.file_size, photo.content_hash.clone());
+        let supported = Arc::new(AtomicBool::new(false));
+        let current = supported.clone();
+        x.s.media.file_probe = Some(Arc::new(move |path| {
+            std::fs::read(path).map_err(|e| e.to_string())?;
+            Ok(ProbeInfo {
+                width,
+                height,
+                file_size: size,
+                content_hash: hash.clone(),
+                format: "ORF".into(),
+                kind: lightcraft_catalog::MediaKind::Raw,
+                preview_only: (!current.load(Ordering::SeqCst)).then(|| "previous decoder".into()),
+                ..Default::default()
+            })
+        }));
+        let current = supported.clone();
+        x.s.media.file_loader = Some(Arc::new(move |path, _, _| {
+            std::fs::read(path).map_err(|e| e.to_string())?;
+            let raw = current.load(Ordering::SeqCst);
+            Ok((Rgb32f::filled(width as usize, height as usize, if raw { [0.2; 3] } else { [0.7; 3] }), SourceInfo { raw, ..Default::default() }))
+        }));
+        x.s.execute("develop.set", &json!({"id": x.id.0, "control": "light.exposure", "value": 0.4})).unwrap();
+        let r = x.s.execute("photo.virtualCopy", &json!({"id": x.id.0})).unwrap();
+        let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+        if auto {
+            let p = x.photo();
+            x.s.apply_system(Op::SetContent {
+                id: p.id,
+                width: p.width,
+                height: p.height,
+                file_size: p.file_size,
+                content_hash: p.content_hash.clone(),
+                preview_only: p.preview_only.clone(),
+                preview_checked: "0.5.0".into(),
+            })
+            .unwrap();
+        }
+        let before = x.photo();
+        let dir = x.smart_dir();
+        assert_eq!(x.build()["built"], 1);
+        let preview = crate::smart::sharded_file_path(&dir, &before);
+        let preview_bytes = std::fs::read(&preview).unwrap();
+        let legacy = old_path(&dir, &before, true);
+        std::fs::write(&legacy, &preview_bytes).unwrap();
+        supported.store(true, Ordering::SeqCst);
+        if !auto {
+            assert_eq!(x.s.execute("library.recheckPreviewOnly", &json!({})).unwrap()["checked"], 0, "APP_VERSION alone controls automatic rechecks");
+            assert!(x.photo().preview_only.is_some());
+        }
+        let params = if auto { json!({}) } else { json!({"ids": [x.id.0], "all": true}) };
+        x.s.execute(command, &params).unwrap();
+        let after = x.photo();
+        assert!(after.develops_raw());
+        assert_eq!(after.develop, before.develop);
+        assert_eq!(after.meta, before.meta);
+        assert_eq!(crate::media::content_key(&after), crate::media::content_key(&before));
+        let sensor = crate::smart::sharded_file_path(&dir, &after);
+        assert_ne!(sensor, preview);
+        assert_eq!(sensor, crate::smart::sharded_file_path(&dir, x.s.catalog.photo(copy).unwrap()));
+        std::fs::remove_file(&x.file).unwrap();
+        assert!(x.offline_source().is_err(), "preview pixels cannot satisfy the new sensor interpretation");
+        assert_eq!(x.build()["built"], 0);
+        std::fs::write(&x.file, &original).unwrap();
+        assert_eq!(x.s.execute("library.smartPreviews", &json!({"ids": [x.id.0, copy.0]})).unwrap()["built"], 2);
+        std::fs::remove_file(&x.file).unwrap();
+        assert!(x.offline_source().unwrap().info.unwrap().raw);
+        assert_eq!(std::fs::read(&preview).unwrap(), preview_bytes);
+        assert_eq!(std::fs::read(&legacy).unwrap(), preview_bytes);
+        if command == "photo.reload" {
+            x.s.execute("edit.undo", &json!({})).unwrap();
+            assert_eq!(crate::smart::sharded_file_path(&dir, &x.photo()), preview);
+            assert!(!x.offline_source().unwrap().info.unwrap().raw, "Undo retains its preview identity");
+            x.s.execute("edit.redo", &json!({})).unwrap();
+            assert!(x.offline_source().unwrap().info.unwrap().raw);
+        }
+        x.finish();
+    }
+}

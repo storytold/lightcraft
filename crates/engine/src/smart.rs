@@ -56,6 +56,8 @@ pub struct PreviewPath {
     current: PathBuf,
     previous: Option<PathBuf>,
     raw: Option<bool>,
+    // A content-only sensor ORF cannot identify which withdrawn decoder wrote its pixels.
+    legacy_sensor_orf: bool,
 }
 
 impl PreviewPath {
@@ -65,13 +67,23 @@ impl PreviewPath {
             let h = lightcraft_preview::Hasher128::new().str(&crate::media::content_key(p)).finish();
             shard(dir, &format!("{:032x}.lcsp", h.0))
         });
-        Self { dir: dir.to_path_buf(), current: sharded_file_path(dir, p), previous, raw }
+        let legacy_sensor_orf = raw == Some(true) && p.format.eq_ignore_ascii_case("ORF");
+        Self { dir: dir.to_path_buf(), current: sharded_file_path(dir, p), previous, raw, legacy_sensor_orf }
     }
 
-    /// Current and content-only legacy identities, in both folder layouts.
+    /// Current and content-only legacy identities, including files retained only for recovery.
     pub(crate) fn candidates(&self) -> Vec<PathBuf> {
+        self.paths(true)
+    }
+
+    /// Raw facts do not identify an old ORF writer; only this decoder's sensor identity is trusted.
+    pub(crate) fn load_candidates(&self) -> Vec<PathBuf> {
+        self.paths(!self.legacy_sensor_orf)
+    }
+
+    fn paths(&self, legacy: bool) -> Vec<PathBuf> {
         std::iter::once(&self.current)
-            .chain(self.previous.iter())
+            .chain(self.previous.iter().filter(|_| legacy))
             .flat_map(|path| std::iter::once(path.clone()).chain(path.file_name().map(|name| self.dir.join(name))))
             .collect()
     }
@@ -103,7 +115,7 @@ impl PreviewPath {
     /// Framing alone cannot establish that the JPEG decodes or the facts match its consumer.
     pub(crate) fn load_with_path(&self) -> Result<(PathBuf, crate::media::DecodedSource), String> {
         let mut error = format!("{}: missing or incomplete smart preview", self.current.display());
-        for path in self.candidates() {
+        for path in self.load_candidates() {
             match load_compatible(&path, self.raw) {
                 Ok(source) => return Ok((path, source)),
                 Err(e) => error = e,
