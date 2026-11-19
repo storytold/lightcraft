@@ -414,11 +414,23 @@ impl Store for FsStore {
     }
 
     fn remove(&mut self, name: &str) -> io::Result<()> {
+        // What was handed to the log's thread is written first (a failure is the caller's: nothing is dropped). The thread
+        // goes only once the file is gone (it would read a missing file as another log), and the next append starts one.
+        #[cfg(not(target_arch = "wasm32"))]
+        let thread = self.log_for(name).is_some();
+        #[cfg(not(target_arch = "wasm32"))]
+        if thread {
+            self.flush_log()?;
+        }
         self.folder.check()?;
         match std::fs::remove_file(self.path(name)) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => return Err(e),
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if thread {
+            self.log = None;
         }
         // (a removed log is a log of no bytes: what the next append is checked against)
         self.reset_sync_log(name, 0);
@@ -590,6 +602,24 @@ mod tests_failed_write {
         let mut store = FsStore::open(&dir).unwrap();
         assert!(store.write_atomic_with("catalog.log", &mut |w| w.write_all(b"[1]")).is_err());
         assert!(!dir.join("catalog.log.tmp").exists(), "a staging file was left behind");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A log that is removed while its thread runs ends the thread: the next append starts one for the new, empty file, and is
+    /// written (a thread that outlived its file would find another file than the one it wrote and hold the record back).
+    #[test]
+    fn removing_the_log_ends_its_writer() {
+        let dir = std::env::temp_dir().join(format!("lc-remove-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut store = FsStore::open(&dir).unwrap();
+        store.append("catalog.log", b"abc\n").unwrap();
+        store.flush().unwrap();
+        store.remove("catalog.log").unwrap();
+        assert!(!dir.join("catalog.log").exists());
+        store.append("catalog.log", b"de\n").unwrap();
+        store.flush().unwrap();
+        assert!(store.unwritten().is_none(), "nothing is held back");
+        assert_eq!(std::fs::read(dir.join("catalog.log")).unwrap(), b"de\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
