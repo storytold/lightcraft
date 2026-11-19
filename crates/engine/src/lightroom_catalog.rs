@@ -1318,6 +1318,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             p.file_size = duplicate.file_size;
             p.duration = duplicate.duration;
             p.as_shot_wb = duplicate.as_shot_wb;
+            p.as_shot_physical = duplicate.as_shot_physical;
             p.content_hash = duplicate.content_hash.clone();
             p.embedded_lens = duplicate.embedded_lens;
             p.preview_only = duplicate.preview_only.clone();

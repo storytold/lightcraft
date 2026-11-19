@@ -304,6 +304,11 @@ pub struct Photo {
     /// Raw files: the camera's as-shot white balance (Kelvin, tint).
     #[serde(default)]
     pub as_shot_wb: Option<(f64, f64)>,
+    /// The physical white the file recorded (Kelvin, tint): on a relative-WB camera
+    /// `as_shot_wb` is that scale's 6500 / 0 reference, and this is what a Lightroom custom
+    /// white balance shifts from when the packet carries no reference (#4432).
+    #[serde(default)]
+    pub as_shot_physical: Option<(f64, f64)>,
     /// Hash of the file's bytes (hex), for duplicate detection and preview-cache keys.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
@@ -432,6 +437,7 @@ impl Photo {
             local: false,
             duration: None,
             as_shot_wb: None,
+            as_shot_physical: None,
             content_hash: None,
             embedded_lens: None,
             copy_of: None,

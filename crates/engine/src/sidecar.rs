@@ -1191,7 +1191,7 @@ impl Session {
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let Some(orig) = file_path(p) else { return Ok(None) };
         let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_lookup(id)) else { return Ok(None) };
-        let sc = parse_sidecar_with_as_shot(&packet, crate::crs::Target::for_photo(p), p.as_shot_wb)
+        let sc = parse_sidecar_with_as_shot(&packet, crate::crs::Target::for_photo(p), p.as_shot_physical)
             .map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?;
         let sc = sc.with_file_orientation(orig);
         let mut warnings = sc.warnings.clone();

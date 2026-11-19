@@ -356,6 +356,17 @@ impl WbScaleOf {
         let (t, tint) = xy_to_temp_tint(self.scale_white.unwrap_or(own));
         (t.round(), tint.round())
     }
+    /// The physical white the file recorded (Kelvin, tint) on every scale: the relative scale
+    /// shows its as-shot as 6500 / 0, so another app's custom white balance has to shift from
+    /// the file's own white instead (#4432).
+    pub(super) fn as_shot_physical(&self, own: lightcraft_color::Xy) -> (f64, f64) {
+        if self.relative {
+            let (t, tint) = xy_to_temp_tint(own);
+            (t.round(), tint.round())
+        } else {
+            self.as_shot(own)
+        }
+    }
 }
 
 /// The raw's gain table map with where its developed picture (the default crop, oriented) sits in
