@@ -417,12 +417,11 @@ impl SidecarData {
     }
 }
 
-/// The orientation the photo file at `path` was (or would be) made upright by on import
-/// ([`crate::media::ProbeInfo::upright_by`], by [`crate::files::upright_by`]'s rule): the file is read, up to `max`
-/// bytes (none past that), and nothing but its orientation is worked out. For a photo catalogued before
-/// [`lightcraft_catalog::Meta::file_orientation`] was kept, by Read Metadata from File only.
-fn upright_orientation(path: &str, max: u64) -> Option<lightcraft_meta::Orientation> {
-    crate::files::upright_by(&crate::read_file::read_regular(path, max).ok()?)
+/// The orientations of the photo file at `path` by the import's rules ([`crate::files::orientations`]): the file is
+/// read, up to `max` bytes (none past that, and then none are known), and nothing but its orientation is worked out.
+/// For a photo whose [`lightcraft_catalog::Meta::file_orientation`] isn't known, by Read Metadata from File only.
+fn upright_orientation(path: &str, max: u64) -> crate::files::Orientations {
+    crate::read_file::read_regular(path, max).map(|bytes| crate::files::orientations(&bytes)).unwrap_or_default()
 }
 
 /// The orientation the photo file at `path` states, matching what the import stores as
@@ -1710,10 +1709,10 @@ impl Session {
         let raw_bytes = (unknown && p.kind == MediaKind::Raw && lookup.find(orig).is_none())
             .then(|| crate::read_file::read_regular(orig, crate::read_file::MAX_MEDIA_BYTES).ok())
             .flatten();
-        let mut probed: Option<Option<lightcraft_meta::Orientation>> = None;
-        let backfill_now = |probed: &mut Option<Option<lightcraft_meta::Orientation>>| {
+        let mut probed: Option<crate::files::Orientations> = None;
+        let backfill_now = |probed: &mut Option<crate::files::Orientations>| {
             *probed.get_or_insert_with(|| match &raw_bytes {
-                Some(bytes) => crate::files::upright_by(bytes),
+                Some(bytes) => crate::files::orientations(bytes),
                 None => upright_orientation(orig, crate::read_file::MAX_MEDIA_BYTES),
             })
         };
@@ -1723,7 +1722,7 @@ impl Session {
             Packet::Unreadable(from, why) => return Err(EngineError::Other(format!("{} can't be read: {why}", from.display()))),
             // no packet at all: the orientation alone is news for a photo with boxes to write
             Packet::None => {
-                let backfill = if unknown && !file_regions(p).is_empty() { backfill_now(&mut probed) } else { None };
+                let backfill = if unknown && !file_regions(p).is_empty() { backfill_now(&mut probed).kept } else { None };
                 return match backfill {
                     Some(o) => Ok(Some((
                         self.sidecar_op(id, SidecarData { file_orientation: Some(o), ..SidecarData::default() })?,
@@ -1736,17 +1735,19 @@ impl Session {
         };
         let sc = parse_sidecar(&packet, crate::crs::Target::for_photo(p)).map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?;
         // the photo has boxes to write once this is read: its own, or the packet's
-        let backfill = if unknown && (!file_regions(p).is_empty() || sc.regions.as_ref().is_some_and(|r| !r.is_empty())) {
+        let probe = if unknown && (!file_regions(p).is_empty() || sc.regions.as_ref().is_some_and(|r| !r.is_empty())) {
             backfill_now(&mut probed)
         } else {
-            None
+            crate::files::Orientations::default()
         };
-        // The catalog's orientation, else the bounded probe's. Not `file_orientation`: it reads a raw whole, with no limit.
+        // The boxes are read by the catalog's orientation, else the bounded probe's, as the import reads them: for a raw
+        // described from its preview, the orientation its metadata states. Not `file_orientation`: it reads a raw
+        // whole, with no limit. Only the import's kept orientation is stored.
         let sc = match sc.regions_drawn_on {
-            Some(_) => SidecarData { orientation: p.meta.file_orientation.or(backfill).or(sc.orientation), ..sc },
+            Some(_) => SidecarData { orientation: p.meta.file_orientation.or(probe.read_by).or(sc.orientation), ..sc },
             None => sc,
         };
-        let sc = SidecarData { file_orientation: backfill, ..sc };
+        let sc = SidecarData { file_orientation: probe.kept, ..sc };
         let mut warnings = sc.warnings.clone();
         for warning in &mut warnings {
             warning.path = orig.to_string();
@@ -2967,9 +2968,10 @@ mod tests {
         .unwrap();
         std::fs::write(&file, &bytes).unwrap();
         let path = file.to_string_lossy();
-        assert_eq!(upright_orientation(&path, crate::read_file::MAX_MEDIA_BYTES), Some(lightcraft_meta::Orientation::Rotate90));
+        let turned = Some(lightcraft_meta::Orientation::Rotate90);
+        assert_eq!(upright_orientation(&path, crate::read_file::MAX_MEDIA_BYTES), crate::files::Orientations { kept: turned, read_by: turned });
         // a file past the limit isn't read (nor held in memory) at all
-        assert_eq!(upright_orientation(&path, bytes.len() as u64 - 1), None);
+        assert_eq!(upright_orientation(&path, bytes.len() as u64 - 1), crate::files::Orientations::default());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

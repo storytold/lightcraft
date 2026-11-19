@@ -131,14 +131,34 @@ fn ext_upper(name: &str) -> String {
 /// from its decoder, an image's from its header's Exif (what [`probe_bytes`] turns them by). `None` where the import
 /// has none: a raw described from its embedded preview, or a file it can't read. No hashing, no metadata.
 pub fn upright_by(bytes: &[u8]) -> Option<Orientation> {
+    orientations(bytes).kept
+}
+
+/// A file's orientations, from its bytes, by the import's rules.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Orientations {
+    /// What the catalog keeps as the file's orientation: [`upright_by`].
+    pub kept: Option<Orientation>,
+    /// What the import reads the file's face boxes by: `kept`, else (a raw described from its embedded preview) the
+    /// orientation its metadata states ([`ProbeInfo::orientation`]). Not kept: it isn't what the size was turned by.
+    pub read_by: Option<Orientation>,
+}
+
+/// [`Orientations`] of a file's bytes. Like [`upright_by`], no hashing; the metadata is read only for a raw the decoder
+/// can't describe.
+pub fn orientations(bytes: &[u8]) -> Orientations {
     if lightcraft_raw::probe(bytes).is_some() {
-        return lightcraft_raw::probe_info(bytes).ok().map(|raw| raw.orientation);
+        return match lightcraft_raw::probe_info(bytes) {
+            Ok(raw) => Orientations { kept: Some(raw.orientation), read_by: Some(raw.orientation) },
+            Err(_) => Orientations { kept: None, read_by: lightcraft_meta::extract(bytes).orientation },
+        };
     }
-    let fmt = lightcraft_codecs::sniff(bytes)?;
+    let Some(fmt) = lightcraft_codecs::sniff(bytes) else { return Orientations::default() };
     if fmt.not_decodable().is_some() {
-        return None;
+        return Orientations::default();
     }
-    lightcraft_codecs::read_header(bytes).ok().map(|h| Orientation::from_exif(h.orientation))
+    let kept = lightcraft_codecs::read_header(bytes).ok().map(|h| Orientation::from_exif(h.orientation));
+    Orientations { kept, read_by: kept }
 }
 
 /// Probe a file's bytes: kind, dimensions (oriented), metadata. No pixel data is decompressed:

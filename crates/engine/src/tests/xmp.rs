@@ -2426,3 +2426,29 @@ fn turned_dng(o: lightcraft_meta::Orientation, xmp: Option<&str>) -> Vec<u8> {
     raw.orientation = o;
     lightcraft_raw::write_dng(&raw, &lightcraft_raw::DngWriteOptions { xmp: xmp.map(str::to_string), ..Default::default() }).unwrap()
 }
+
+/// Review of #4512: a raw described from its embedded preview keeps no orientation in the catalog, so Read Metadata
+/// from File reads its face boxes the way the import does: by the orientation the raw's metadata states, not left as
+/// drawn on the stored image. That orientation isn't stored.
+#[test]
+fn read_metadata_turns_a_preview_only_raws_boxes_as_the_import_does() {
+    let src = temp_dir("preview-only-read-by");
+    let file = src.join("p.iiq");
+    let empty = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/></x:xmpmeta>"#;
+    std::fs::write(&file, turned_preview_only_raw(empty)).unwrap();
+    std::fs::write(src.join("p.xmp"), STORED_FRAME_REGIONS).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let rects = |s: &Session| s.catalog.photo(id).unwrap().meta.regions.iter().map(|r| r.rect).collect::<Vec<_>>();
+    let imported = rects(&s);
+    let p = s.catalog.photo(id).unwrap();
+    assert!(p.preview_only.is_some() && p.meta.file_orientation.is_none(), "{:?} {:?}", p.preview_only, p.meta.file_orientation);
+    let r = imported.first().copied().expect("the sidecar's box");
+    let as_drawn = [0.2, 0.325, 0.3, 0.475];
+    assert!([r.x0, r.y0, r.x1, r.y1].iter().zip(as_drawn).any(|(g, w)| (g - w).abs() > 1e-6), "the import turned it: {r:?}");
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(rects(&s), imported, "read back where the import put it");
+    assert_eq!(s.catalog.photo(id).unwrap().meta.file_orientation, None, "the metadata's orientation isn't kept");
+    let _ = std::fs::remove_dir_all(&src);
+}
