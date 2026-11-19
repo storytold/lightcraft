@@ -13,8 +13,7 @@ use lightcraft_merge::metrics::{detail, detail_gain, detail_ratio};
 use lightcraft_merge::no_progress;
 use lightcraft_raster::Rgb32f;
 
-mod common;
-use common::{Rng, corner_error};
+use crate::common::{Rng, corner_error};
 
 const W: usize = 3000;
 const H: usize = 2000;

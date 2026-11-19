@@ -2,7 +2,7 @@
 //! HDR merge's alignment, tile by tile.
 //!
 //! `LIGHTCRAFT_BRACKET=a.ARW,b.ARW,c.ARW [LIGHTCRAFT_REGION=x0,y0,x1,y1] cargo test --release -p lightcraft-merge
-//! --test real_bracket -- --ignored --nocapture`
+//! --test it real_bracket:: -- --ignored --nocapture`
 
 use lightcraft_geom::Homography;
 use lightcraft_merge::hdr::{Deghost, HdrOptions, merge_hdr};
@@ -17,7 +17,10 @@ fn crop(p: &Plane, r: [usize; 4]) -> Plane {
 #[test]
 #[ignore]
 fn residual_after_alignment() {
-    let Ok(paths) = std::env::var("LIGHTCRAFT_BRACKET") else { return };
+    let Ok(paths) = std::env::var("LIGHTCRAFT_BRACKET") else {
+        lightcraft_testkit::skip!(Input, "set LIGHTCRAFT_BRACKET=a.ARW,b.ARW,c.ARW");
+        return;
+    };
     let frames: Vec<_> = paths.split(',').map(|p| load_frame(&std::fs::read(p).unwrap(), None, true).unwrap()).collect();
     let r = merge_hdr(frames.clone(), &HdrOptions { align: true, deghost: Deghost::None }, &no_progress).unwrap();
     let (w, h) = (frames[0].width(), frames[0].height());
