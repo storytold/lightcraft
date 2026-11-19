@@ -307,8 +307,10 @@ impl Store for FsStore {
         };
         check_staging(&self.folder, &tmp, &file)?;
         if let Err(e) = std::fs::rename(&tmp, self.path(name)) {
-            // (the staging file is ours: it was just checked)
-            let _ = std::fs::remove_file(&tmp);
+            // (as in `write_atomic`: the staging file goes unless it came to belong to another save)
+            if check_staging(&self.folder, &tmp, &file).is_ok() {
+                let _ = std::fs::remove_file(&tmp);
+            }
             return Err(e);
         }
         self.sync_dir();
