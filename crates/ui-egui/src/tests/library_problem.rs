@@ -841,9 +841,10 @@ fn waiting_files_wait_for_a_running_import_instead_of_being_dropped() {
     h.step();
     h.step();
     assert!(h.app.library_problem.is_none(), "the problem is over");
-    assert_eq!(h.app.waiting_import.files, vec![waiting.to_string_lossy().to_string()], "the waiting file is kept");
+    assert!(h.app.waiting_import.files.is_empty(), "the file was handed to the line: {:?}", h.app.waiting_import.files);
+    assert!(h.app.session.activity.lane_waiting(lightcraft_engine::activity::Lane::Library), "the file waits in line");
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
-    assert!(toast.contains("An import is running") && toast.contains("once it ends"), "{toast}");
+    assert!(toast.starts_with("Queued"), "{toast}");
     // the files belong to this library: no switch while they wait, also when what they wait for
     // is a Synchronize Folder, which doesn't hold switching back by itself (the import set aside)
     let running = h.app.import.take();
@@ -856,18 +857,17 @@ fn waiting_files_wait_for_a_running_import_instead_of_being_dropped() {
     assert!(!crate::panels::notices::may_close(&mut h.app));
     h.app.quit_prompt = None;
 
-    // the window is hidden from here on: only the background logic runs. The tick that hands the
-    // file to a new import (once the first one ends) leaves that import unlisted until its own
-    // first tick, and quitting right then still asks
+    // the window is hidden from here on: only the background logic runs. The tick that starts the
+    // waiting import (once the first one ends) gives it its row at once, so quitting right then asks
     let t0 = std::time::Instant::now();
-    while !h.app.waiting_import.files.is_empty() && t0.elapsed() < T {
+    while h.app.session.activity.lane_waiting(lightcraft_engine::activity::Lane::Library) && t0.elapsed() < T {
         let ctx = h.view.ctx.clone();
         h.app.logic(&ctx);
         std::thread::sleep(Duration::from_millis(2));
     }
-    assert!(h.app.waiting_import.files.is_empty(), "the file was handed to a new import");
-    assert!(h.app.import.as_ref().is_some_and(|t| !t.listed()), "not listed before its first tick");
-    assert!(!crate::panels::notices::may_close(&mut h.app), "quitting asks about the import just handed over");
+    assert!(!h.app.session.activity.lane_waiting(lightcraft_engine::activity::Lane::Library), "the file left the line to be imported");
+    assert!(h.app.import.is_some(), "its import started");
+    assert!(!crate::panels::notices::may_close(&mut h.app), "quitting asks about the import just started");
     h.app.quit_prompt = None;
     while !(h.app.import.is_none() && h.app.session.catalog.len() == 101) && t0.elapsed() < T {
         let ctx = h.view.ctx.clone();

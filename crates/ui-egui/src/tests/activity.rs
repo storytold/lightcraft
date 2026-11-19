@@ -175,8 +175,41 @@ fn quit_with_a_running_task_asks_and_quit_anyway_cancels() {
     assert!(g.is_cancelled() && h.quit_requested());
 }
 
+/// An import waiting in line for the library lane (issue #2779's files that waited for a library wait there now)
+/// makes quitting ask, though nothing runs that could be cancelled, and Quit Anyway empties the line.
+#[test]
+fn a_task_waiting_in_line_makes_quitting_ask_and_quit_anyway_empties_the_line() {
+    let mut h = demo();
+    // the lane is held by a task that can't be cancelled: only the waiting import is left to ask about
+    let _held = h.app.session.activity.start("import", "Importing", Cancel::No);
+    h.app.session.activity.enqueue("import", "Importing", waiting_import_request()).unwrap();
+    assert!(h.app.session.activity.running_cancellable().is_empty(), "nothing runs that quitting could cut short");
+    assert!(!crate::panels::notices::may_close(&mut h.app), "quitting asks about the waiting import");
+    assert!(matches!(h.app.quit_prompt, Some(crate::QuitPrompt::Tasks(_))), "{:?}", h.app.quit_prompt);
+    click(&mut h, "button:quitAnyway");
+    assert!(h.app.session.activity.waiting().is_empty(), "the line is emptied");
+    assert!(h.quit_requested());
+}
+
+/// What waits in line for the library lane was meant for the library open now: no switch while it waits.
+#[test]
+fn switching_libraries_is_refused_while_a_task_waits_in_line() {
+    let mut h = demo();
+    let _held = h.app.session.activity.start("import", "Importing", Cancel::No);
+    h.app.session.activity.enqueue("import", "Importing", waiting_import_request()).unwrap();
+    let r = h.app.run("app.openLibrary", serde_json::json!({"path": "/nowhere/else"}));
+    assert!(r.as_ref().is_err_and(|e| e.contains("waiting")), "{r:?}");
+}
+
+fn waiting_import_request() -> lightcraft_engine::activity::Request {
+    lightcraft_engine::activity::Request {
+        command: crate::import::IMPORT_REQUEST.into(),
+        params: serde_json::json!({"paths": ["/nowhere/a.png"], "params": {}, "auto": false}),
+    }
+}
+
 /// Files waiting for a running import or Synchronize Folder (issue #2779) make quitting ask, and
-/// Quit Anyway gives them up instead of asking about them again and again.
+/// Quit Anyway gives them up instead of asking about them again and again. They wait in line.
 #[test]
 fn quit_anyway_gives_up_files_waiting_to_be_imported() {
     let dir = std::env::temp_dir().join(format!("lightcraft-quit-waiting-{}", std::process::id()));
@@ -188,19 +221,21 @@ fn quit_anyway_gives_up_files_waiting_to_be_imported() {
         std::fs::write(dir.join(format!("{i}.png")), png).unwrap();
     }
     let mut h = demo();
-    // the file waits behind an import that is still running
+    // the file waits in line behind an import that is still running
     crate::import::start_paths(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
-    h.app.waiting_import.files = vec![dir.join("0.png").to_string_lossy().to_string()];
+    let queued = crate::import::start_paths(&mut h.app, vec![dir.join("0.png").to_string_lossy().to_string()]).unwrap();
+    assert!(queued["queued"].is_u64(), "{queued}");
     wait_visible(&mut h);
-    assert!(h.app.import.is_some() && !h.app.waiting_import.files.is_empty(), "still waiting");
+    let waiting = |h: &Headless| h.app.session.activity.lane_waiting(lightcraft_engine::activity::Lane::Library);
+    assert!(h.app.import.is_some() && waiting(&h), "still waiting");
     assert!(!crate::panels::notices::may_close(&mut h.app));
     assert!(matches!(h.app.quit_prompt, Some(crate::QuitPrompt::Tasks(_))), "{:?}", h.app.quit_prompt);
     h.step();
-    assert!(h.app.import.is_some() && !h.app.waiting_import.files.is_empty(), "still waiting at the click");
+    assert!(h.app.import.is_some() && waiting(&h), "still waiting at the click");
     click(&mut h, "button:quitAnyway");
     assert!(h.app.quit_prompt.is_none(), "not asked again: {:?}", h.app.quit_prompt);
     assert!(h.quit_requested());
-    assert!(h.app.waiting_import.files.is_empty());
+    assert!(!waiting(&h));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
