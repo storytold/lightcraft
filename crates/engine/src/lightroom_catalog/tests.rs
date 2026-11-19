@@ -1337,7 +1337,7 @@ fn leaf(page: &mut [u8], offset: usize, rows: &[Vec<SqlValue>]) {
     page[offset + 5..offset + 7].copy_from_slice(&(end as u16).to_be_bytes());
 }
 /// A one-row-per-table SQLite file: `(name, columns, row)` each.
-fn native_catalog(tables: &[(&str, &str, Vec<SqlValue>)]) -> Vec<u8> {
+pub(crate) fn native_catalog(tables: &[(&str, &str, Vec<SqlValue>)]) -> Vec<u8> {
     native_catalog_with_last_table_page(tables, None)
 }
 /// [`native_catalog`] whose last table claims `last_page` as its root page.
@@ -1347,7 +1347,7 @@ fn native_catalog_with_last_table_page(tables: &[(&str, &str, Vec<SqlValue>)], l
 }
 /// A SQLite file with one leaf page per table: `(name, columns, rows)` each. `last_page` overrides the last
 /// table's root page.
-fn native_catalog_rows(tables: &[(&str, &str, Vec<Vec<SqlValue>>)], last_page: Option<i64>) -> Vec<u8> {
+pub(crate) fn native_catalog_rows(tables: &[(&str, &str, Vec<Vec<SqlValue>>)], last_page: Option<i64>) -> Vec<u8> {
     use SqlValue::{Integer as I, Text as T};
     // the schema page, then one page per table (at least four: the photo tables)
     let pages = (tables.len() + 1).max(5);
@@ -1377,7 +1377,7 @@ fn native_catalog_rows(tables: &[(&str, &str, Vec<Vec<SqlValue>>)], last_page: O
     bytes
 }
 
-fn photo_tables(root: (&str, &str)) -> Vec<(&'static str, &'static str, Vec<SqlValue>)> {
+pub(crate) fn photo_tables(root: (&str, &str)) -> Vec<(&'static str, &'static str, Vec<SqlValue>)> {
     use SqlValue::{Integer as I, Null as N, Text as T};
     vec![
         (

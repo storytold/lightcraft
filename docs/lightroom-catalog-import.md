@@ -167,6 +167,30 @@ photo and its virtual copies out of the library. To import originals on a share,
 from that share. A path that is not a path on this computer (a Windows drive path read on macOS or
 Linux) is not looked at either and stays catalogued as missing.
 
+## Online-only originals and Lightroom's previews
+
+Originals in a cloud-synced folder (Dropbox, iCloud Drive, OneDrive, Google Drive) are often
+online-only: a placeholder that the sync client downloads when it is read. The import asks only the
+file's metadata whether it is one (`crates/engine/src/cloud_files.rs`: `SF_DATALESS` on macOS, the
+Cloud Files recall attributes on Windows; nothing on other systems), and does not read it: the photo is
+added from the catalog's record, like a missing original, but is not reported missing (the report
+counts these as `cloudOnly`). "Preparing photos in the background" skips them too; a photo's original
+is downloaded when it is opened.
+
+For the photos whose originals were not read (online-only or missing), Lightroom's own standard
+previews become their grid thumbnails (`crates/engine/src/lightroom_previews.rs`, issues #2613 and
+#4549). The previews are read from `<catalog name> Previews.lrdata` beside the `.lrcat`, whose layout
+was observed on our own Lightroom Classic 13 catalogs: `previews.db` maps each `Adobe_images.id_local`
+(`ImageCacheEntry.imageId`) to a pyramid of plain JPEGs at
+`<uuid[0]>/<uuid[0..4]>/<uuid>-<digest>_<long edge>`, cropped as the photo is but in the stored
+image's orientation (`ImageCacheEntry.orientation`) and in the colour space `Pyramid.colorProfile`
+names (`AdobeRGB` or `sRGB`). The largest size on disk is decoded to sRGB, turned upright and kept
+under every grid thumbnail size's cache key, after the import, on a worker of its own ("Using
+Lightroom previews" in the activity stack; the report's `lightroomPreviews`). A thumbnail LightCraft
+rendered itself is never replaced, and an edit renders the photo afresh. The loupe is not seeded: the
+standard previews (mostly 1024 px) are smaller than it draws. A store that is missing, unreadable or
+laid out otherwise gives no thumbnails and changes nothing else.
+
 ## Catalog backups
 
 Lightroom Classic backs a catalog up as `<catalog folder>/Backups/YYYY-MM-DD HHMM/<name>.zip`: one `.lrcat` (plus,

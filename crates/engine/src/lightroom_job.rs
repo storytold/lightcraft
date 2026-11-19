@@ -5,7 +5,7 @@
 //! to the session that created the job.  Archive index bytes are returned for a worker to finish
 //! after the owner has accepted the catalog operation.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
@@ -16,6 +16,7 @@ use serde_json::Value;
 
 use crate::import::{ImportJob, ImportMode, ImportOptions, Prepared};
 use crate::lightroom_catalog::{self, CatalogImport, ImportIndex};
+use crate::lightroom_previews::{PreviewSeed, StandIn};
 
 const COMMAND: &str = "library.importLightroom";
 const MAX_INDEX_BYTES: usize = 16 * 1024 * 1024;
@@ -76,6 +77,12 @@ pub struct PreparedLightroom {
     pub(crate) archive_path: Option<PathBuf>,
     pub(crate) token: LightroomLibraryToken,
     pub(crate) missing_sources: HashSet<String>,
+    /// Originals that are online-only placeholders of a cloud folder ([`crate::cloud_files`]): not
+    /// read, so not downloaded; added from the catalog's record like missing ones, but not missing.
+    pub(crate) cloud_only: HashSet<String>,
+    /// Lightroom's previews of the catalog images whose originals were not read (online only or
+    /// missing), by `Adobe_images.id_local` ([`crate::lightroom_previews`]).
+    pub(crate) stand_ins: HashMap<i64, StandIn>,
     pub(crate) update_existing: bool,
     pub(crate) now: String,
     cancelled: bool,
@@ -130,6 +137,9 @@ impl LightroomArchiveFinalization {
 pub struct LightroomCompletion {
     pub report: Value,
     pub finalization: LightroomArchiveFinalization,
+    /// Lightroom's previews to put in the thumbnail cache for the photos whose originals were not
+    /// read: run on a worker ([`PreviewSeed::spawn`]) after the owner has accepted the import.
+    pub previews: Option<PreviewSeed>,
 }
 
 /// Alias used by hosts that call the result a commit.
@@ -202,6 +212,8 @@ pub struct LightroomJob {
     token: LightroomLibraryToken,
     archive_dir: Option<PathBuf>,
     progress: LightroomProgress,
+    /// Whether an original is an online-only placeholder ([`crate::cloud_files::path_is_placeholder`]).
+    placeholder: fn(&Path) -> bool,
 }
 
 impl LightroomJob {
@@ -218,7 +230,22 @@ impl LightroomJob {
             add_done: Arc::clone(&import.done),
             ..LightroomProgress::default()
         };
-        Ok(Self { path, update_existing, import, token: LightroomLibraryToken::capture(s), archive_dir, progress })
+        Ok(Self {
+            path,
+            update_existing,
+            import,
+            token: LightroomLibraryToken::capture(s),
+            archive_dir,
+            progress,
+            placeholder: crate::cloud_files::path_is_placeholder,
+        })
+    }
+
+    /// Tests: tell online-only placeholders by `placeholder` (a test can't make a real one).
+    #[cfg(test)]
+    pub(crate) fn with_placeholder_check(mut self, placeholder: fn(&Path) -> bool) -> Self {
+        self.placeholder = placeholder;
+        self
     }
 
     /// The job's progress, to watch from another thread while [`LightroomJob::prepare`] runs.
@@ -253,7 +280,9 @@ impl LightroomJob {
         if cancel.load(Ordering::Relaxed) {
             return Err(cancelled());
         }
-        let (paths, missing_sources) = original_paths(&data, cancel)?;
+        let Originals { read: paths, missing: missing_sources, cloud_only } = original_paths(&data, self.placeholder, cancel)?;
+        // Lightroom's previews stand in for the photos whose originals are not read here
+        let stand_ins = self.stand_ins(&data, &missing_sources, &cloud_only, cancel);
         // Catalog entries name files, never folders. Missing originals already have enough
         // catalog metadata for placeholders; probing them again only adds failed I/O and errors.
         // Complete the catalog step before the separate read/add photo progress starts.
@@ -275,10 +304,36 @@ impl LightroomJob {
             archive_path,
             token: self.token.clone(),
             missing_sources,
+            cloud_only,
+            stand_ins,
             update_existing: self.update_existing,
             now: self.import.now().to_string(),
             cancelled: cancel.load(Ordering::Relaxed),
         })
+    }
+}
+
+impl LightroomJob {
+    /// Lightroom's previews (beside the catalog) of the images whose originals are not read: online
+    /// only or missing. Best effort: a store that is missing or can't be read gives none.
+    fn stand_ins(&self, data: &CatalogImport, missing: &HashSet<String>, cloud_only: &HashSet<String>, cancel: &AtomicBool) -> HashMap<i64, StandIn> {
+        let Some(store) = crate::lightroom_previews::store_of(&self.path) else { return HashMap::new() };
+        let wanted: HashSet<i64> = data
+            .photos
+            .iter()
+            .filter(|p| {
+                let key = normalize(&p.path);
+                missing.contains(&key) || cloud_only.contains(&key)
+            })
+            .map(|p| p.source_id)
+            .collect();
+        match crate::lightroom_previews::read(&store, &wanted, cancel) {
+            Ok(found) => found,
+            Err(e) => {
+                log::warn!("Lightroom previews in {}: {e}", store.display());
+                HashMap::new()
+            }
+        }
     }
 }
 
@@ -315,14 +370,33 @@ pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) 
             undo0,
         },
     )?;
+    let mut report = applied.report;
+    let stand_ins: Vec<_> =
+        prepared.stand_ins.into_iter().filter_map(|(image, stand_in)| applied.ids.get(&image).map(|id| (*id, stand_in))).collect();
+    let previews = PreviewSeed::plan(s, stand_ins);
+    if let Some(o) = report.as_object_mut() {
+        o.insert("cloudOnly".into(), serde_json::json!(prepared.cloud_only.len()));
+        o.insert("lightroomPreviews".into(), serde_json::json!(previews.as_ref().map_or(0, PreviewSeed::len)));
+    }
     let path = prepared.token.library_dir().map(|dir| dir.join("Interop/lightroom-index.json"));
     let bytes = if path.is_some() { Some(serde_json::to_vec(&applied.index).map_err(|e| error(e.to_string()))?) } else { None };
-    Ok(LightroomCompletion { report: applied.report, finalization: LightroomArchiveFinalization { path, bytes } })
+    Ok(LightroomCompletion { report, finalization: LightroomArchiveFinalization { path, bytes }, previews })
 }
 
-fn original_paths(data: &CatalogImport, cancel: &AtomicBool) -> crate::Result<(Vec<String>, HashSet<String>)> {
+/// The catalog's originals by what the import does with them.
+struct Originals {
+    /// Read (probed) as a file import reads them.
+    read: Vec<String>,
+    /// Not there: offline records.
+    missing: HashSet<String>,
+    /// There, but online-only placeholders: not read, so a cloud client downloads nothing.
+    cloud_only: HashSet<String>,
+}
+
+fn original_paths(data: &CatalogImport, placeholder: fn(&Path) -> bool, cancel: &AtomicBool) -> crate::Result<Originals> {
     let mut paths = Vec::new();
     let mut missing = HashSet::new();
+    let mut cloud_only = HashSet::new();
     let mut seen = HashSet::new();
     for photo in &data.photos {
         if cancel.load(Ordering::Relaxed) {
@@ -335,13 +409,15 @@ fn original_paths(data: &CatalogImport, cancel: &AtomicBool) -> crate::Result<(V
         if !seen.insert(key.clone()) {
             continue;
         }
-        if photo.original_is_file() {
-            paths.push(photo.path.clone());
-        } else {
+        if !photo.original_is_file() {
             missing.insert(key);
+        } else if placeholder(Path::new(&photo.path)) {
+            cloud_only.insert(key);
+        } else {
+            paths.push(photo.path.clone());
         }
     }
-    Ok((paths, missing))
+    Ok(Originals { read: paths, missing, cloud_only })
 }
 
 fn normalize(path: &str) -> String {
@@ -375,6 +451,8 @@ mod tests {
             archive_path: None,
             token: LightroomLibraryToken::capture(s),
             missing_sources: HashSet::new(),
+            cloud_only: HashSet::new(),
+            stand_ins: HashMap::new(),
             update_existing: false,
             now: "2026-01-01T00:00:00".into(),
             cancelled: true,
@@ -417,6 +495,8 @@ mod tests {
             archive_path: None,
             token: LightroomLibraryToken::capture(s),
             missing_sources: [normalize(path)].into_iter().collect(),
+            cloud_only: HashSet::new(),
+            stand_ins: HashMap::new(),
             update_existing: false,
             now: "2026-01-01T00:00:00".into(),
             cancelled: false,
@@ -559,6 +639,8 @@ mod tests {
             archive_path,
             token,
             missing_sources: HashSet::new(),
+            cloud_only: HashSet::new(),
+            stand_ins: HashMap::new(),
             update_existing: false,
             now: "2026-01-01T00:00:00".into(),
             cancelled: false,
