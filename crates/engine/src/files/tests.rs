@@ -68,6 +68,25 @@ fn crw_probes_name_their_camera_from_the_ciff_records() {
     }
 }
 
+/// On the relative scale the as-shot reference is 6500 / 0; the physical white the file
+/// recorded is what another app's custom white balance shifts from (#4432).
+#[test]
+fn as_shot_physical_is_the_files_white_on_every_scale() {
+    use lightcraft_raw::{ColorData, RawFormat};
+    let meta = |make: &str, model: &str| lightcraft_meta::Metadata { make: Some(make.into()), model: Some(model.into()), ..Default::default() };
+    let mul = Some([2.2f32, 1.0, 1.6]);
+    let d65 = lightcraft_color::D65;
+    // a relative camera: the scale says 6500 / 0, the file's white is its own temperature
+    let rel = WbScaleOf::new(RawFormat::Arw, &ColorData::default(), mul, &meta("SONY", "ILCE-7M2"));
+    assert!(rel.relative);
+    assert_eq!(rel.as_shot(d65), (6500.0, 0.0));
+    let white = lightcraft_color::cct::temp_tint_to_xy(5200.0, 5.0);
+    assert_eq!(rel.as_shot_physical(white), (5200.0, 5.0));
+    // a covered camera reads the same white through its matrices on both scales
+    let kelvin = WbScaleOf::new(RawFormat::Arw, &ColorData::default(), mul, &meta("SONY", "ILCE-7M3"));
+    assert_eq!(kelvin.as_shot_physical(d65), kelvin.as_shot(d65));
+}
+
 /// Which white-balance scale a raw gets (issue #730): a file with matrices of its own is absolute from them; a
 /// fitted-look file is absolute through its camera's measured matrices, which only read the as-shot
 /// multipliers as Kelvin; any other raw stays relative (6500 / 0 = as shot). The catalog's decision from the

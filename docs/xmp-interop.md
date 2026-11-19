@@ -148,10 +148,10 @@ Our pipeline renders differently, so **values carry over but the look is approxi
 
 We read these fields; we never write them. Only fields in the packet are applied: the result is a partial settings
 object that gets merged like a preset, so everything else keeps its current or default value. Packets marked
-`crs:AlreadyApplied="True"` are skipped, because those pixels already contain the edit. Only process-version 2012+ field
-names are read on a packet that has them; a packet with none (a `.lrtemplate` preset) is read through its older names
-instead (`Exposure`, `Contrast`, `HighlightRecovery`, `FillLight`, `Shadows`, `Brightness`, `Clarity`), approximated
-from their defaults. `crs:ProcessVersion` itself numbers the other
+`crs:AlreadyApplied="True"` are skipped, because those pixels already contain the edit. Fields with no version suffix (`Vibrance`, `Saturation`, `Texture`, `Dehaze`, ...) are read on every packet;
+the process-version 2012 names are read on a packet that carries them; a packet with none of those (a `.lrtemplate`
+preset) is read through its older names instead (`Exposure`, `Contrast`, `HighlightRecovery`, `FillLight`, `Shadows`,
+`Brightness`, `Clarity`), approximated from their defaults. `crs:ProcessVersion` itself numbers the other
 application's renderer and is ignored: the photo keeps LightCraft's own process, the latest for a newly imported photo
 ([process-versions.md](process-versions.md)).
 
@@ -206,7 +206,7 @@ References are resolved again whenever profiles are imported or deleted, so a pa
 either order. The look's embedded `Parameters` are not read.
 
 **Not mapped:** camera profiles (`CameraProfile`; we have our own profile set), red eye, lens blur,
-process-version 2010 field names, and AI features. Local adjustments and spot removal are read as described below.
+and AI features. Local adjustments and spot removal are read as described below.
 
 **Reported, not applied:** the legacy leftovers (`Defringe`, `Smoothness`, the process-version 2010 channel curves
 `ToneCurveRed/Green/Blue` - the old master `ToneCurve` is read when the packet has no 2012 curve), the ACR HDR display fields (`SDRBlend` and its siblings, `HDRMaxValue`,
