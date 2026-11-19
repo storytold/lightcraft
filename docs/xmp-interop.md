@@ -149,9 +149,10 @@ Our pipeline renders differently, so **values carry over but the look is approxi
 We read these fields; we never write them. Only fields in the packet are applied: the result is a partial settings
 object that gets merged like a preset, so everything else keeps its current or default value. Packets marked
 `crs:AlreadyApplied="True"` are skipped, because those pixels already contain the edit. Fields with no version suffix (`Vibrance`, `Saturation`, `Texture`, `Dehaze`, ...) are read on every packet;
-the process-version 2012 names are read on a packet that carries them; a packet with none of those (a `.lrtemplate`
-preset) is read through its older names instead (`Exposure`, `Contrast`, `HighlightRecovery`, `FillLight`, `Shadows`,
-`Brightness`, `Clarity`), approximated from their defaults. `crs:ProcessVersion` itself numbers the other
+the process-version 2012 names are read on a packet that carries them; the older names (`Exposure`, `Contrast`,
+`HighlightRecovery`, `FillLight`, `Shadows`, `Brightness`, `Clarity`) apply only while no property key in the packet
+ends in `2012` - the gate is that suffix on any key, not the adjustment names - which is what a `.lrtemplate` preset
+reads through, approximated from their defaults. `crs:ProcessVersion` itself numbers the other
 application's renderer and is ignored: the photo keeps LightCraft's own process, the latest for a newly imported photo
 ([process-versions.md](process-versions.md)).
 
