@@ -471,6 +471,11 @@ pub struct Plan<'a> {
     pub lens_subject: Option<Arc<lens_blur::SubjectEstimate>>,
     /// The whole frame and its output size (a windowed render's [`Self::frame`] is part of it).
     pub full: (geometry::Frame, usize, usize),
+    /// Top-left of the rendered window in the whole output (zero for a whole-frame render).
+    pub origin: (usize, usize),
+    /// Set when Glow must take its light field from a whole-frame proxy ([`glow_field`]) because
+    /// only a window of a large frame is rendered; the key of everything that field depends on.
+    pub glow_key: Option<u64>,
 }
 
 /// Long edge of the small render a windowed render estimates the whole frame's airlight from.
@@ -509,6 +514,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let detail_scale = local::detail_scale(px_per_long, native_long);
     let mut fixed_air = None;
     let mut keep = None;
+    let mut origin = (0, 0);
+    let mut glow_proxy = false;
     let full = (frame.clone(), full_w, full_h);
     let (frame, w, h) = match req.window {
         Some(win) => {
@@ -534,11 +541,17 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
                 let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
                 work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
             }
-            // Glow scatters across the frame. Render its full context before cropping,
-            // so a zoom window never changes highlight extraction or clips light trails.
+            // Glow scatters across the frame, so a zoom window must not change its highlight
+            // extraction or clip its light trails. A small frame renders whole before cropping
+            // (exact); a large one adds the light field of a whole-frame proxy ([`glow_field`]).
             if glow::active(s) {
-                work = PixelWindow { x: 0, y: 0, w: full_w, h: full_h };
+                if full_w.saturating_mul(full_h) <= glow::EXACT_WINDOW_PIXELS {
+                    work = PixelWindow { x: 0, y: 0, w: full_w, h: full_h };
+                } else {
+                    glow_proxy = (work.w, work.h) != (full_w, full_h);
+                }
             }
+            origin = (work.x, work.y);
             if work != win {
                 keep = Some(PixelWindow { x: win.x - work.x, y: win.y - work.y, ..win });
             }
@@ -573,6 +586,22 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         // the process picks the colour filter (Update to Current Process, undo)
         local::joint_colour_nr(s),
     ));
+    // Window-independent key of the light field a proxy supplies: the frame, the stages before Glow
+    // (all of them, whole-frame) and Glow's own settings.
+    let glow_key = glow_proxy.then(|| {
+        hash_of((
+            format!("{:?}", full.0),
+            (full.1, full.2),
+            [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
+            format!("{:?}", (&s.spots, &s.red_eye, &s.optics)),
+            local_tone::enabled(info, s),
+            src_long,
+            lens_blur::key(s),
+            [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
+            local::joint_colour_nr(s),
+            glow::key(s),
+        ))
+    });
     let lens_subject = lens_blur::subject_estimate(src, s, info.mattes.as_deref()).map(Arc::new);
     let noise_key = hash_of((pre_nr_base, [d.nr_luminance, d.nr_detail].map(f64::to_bits), detail_scale.to_bits()));
     Plan {
@@ -594,6 +623,68 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         mattes: info.mattes.clone(),
         lens_subject,
         full,
+        origin,
+        glow_key,
+    }
+}
+
+/// How many Glow light fields [`glow_field`] keeps (one per photo and view being zoomed into).
+const GLOW_FIELDS_KEPT: usize = 2;
+
+/// The light field of the whole frame behind a windowed render of `p` ([`Plan::glow_key`]), computed
+/// from a render of the whole frame at Glow's grid size through the stages before Glow, and kept for
+/// the next window of the same view: panning or zooming reuses it. `None` when `p` renders the whole
+/// frame (Glow then scatters its own pixels, [`glow::apply`]).
+pub fn glow_field(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<Arc<glow::Field>> {
+    type Entry = (u64, u64, Arc<glow::Field>);
+    static CACHE: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
+    let key = p.glow_key?;
+    let source = optics::fingerprint(src);
+    let lock = || CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(e) = lock().iter().find(|e| e.0 == source && e.1 == key) {
+        return Some(e.2.clone());
+    }
+    let s = &*p.settings;
+    let (full, fw, fh) = &p.full;
+    let (gw, gh) = glow::grid_size(*fw, *fh);
+    let px_per_long = full.px_per_long(gw);
+    let detail_scale = local::detail_scale(px_per_long, p.native_long);
+    let proxy = Plan {
+        settings: Cow::Borrowed(s),
+        frame: full.clone(),
+        w: gw,
+        h: gh,
+        px_per_long,
+        detail_scale,
+        eyes: redeye::resolve(src, &s.red_eye, s.orientation, full, gw, gh, px_per_long),
+        fixed_air: None,
+        keep: None,
+        mattes: p.mattes.clone(),
+        lens_subject: p.lens_subject.clone(),
+        full: p.full.clone(),
+        origin: (0, 0),
+        glow_key: None,
+        ..*p
+    };
+    let mut img = Rgb32f::clone(&local::frame_proxy(src, full, gw, gh));
+    lin_cpu(&mut img, info, &proxy);
+    local::denoise(&mut img, s, detail_scale, None);
+    lens_blur::apply_with(&mut img, s, full, px_per_long, proxy.mattes.as_deref(), proxy.lens_subject.as_deref());
+    let field = Arc::new(glow::field(&img, s, (*fw, *fh), p.px_per_long)?);
+    let mut c = lock();
+    c.push((source, key, field.clone()));
+    if c.len() > GLOW_FIELDS_KEPT {
+        c.remove(0);
+    }
+    Some(field)
+}
+
+/// Glow on the scene-linear image `img` of `p`'s render: scattered from its own pixels for a
+/// whole-frame render, from the whole frame's light field for a window of a large frame.
+pub fn apply_glow(img: &mut Rgb32f, src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
+    match glow_field(src, info, p) {
+        Some(f) => f.add_to(img, p.origin, (p.full.1, p.full.2)),
+        None => glow::apply(img, &p.settings, p.px_per_long),
     }
 }
 
@@ -632,6 +723,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
                 mattes: None,
                 lens_subject: None,
                 full: p.full.clone(),
+                glow_key: None,
                 ..*p
             };
             local_tone::apply(&mut img, info, &tile);
@@ -769,7 +861,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
             }
             local::denoise(&mut img, s, detail_scale, colour_noise.as_ref().map(|c| &c.1));
             lens_blur::apply_with(&mut img, s, frame, px_per_long, plan.mattes.as_deref(), plan.lens_subject.as_deref());
-            glow::apply(&mut img, s, px_per_long);
+            apply_glow(&mut img, src_img, info, &plan);
             Arc::new(img)
         }
     };

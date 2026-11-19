@@ -758,7 +758,7 @@ pub fn render(
             if colour_noise.is_none() {
                 colour_noise = lightcraft_pipeline::colour_noise(src, info, &plan).map(|n| (plan.noise_key, n));
             }
-            Arc::new(linear(&mut cx, &sampled, info, &plan, &mut host, colour_noise.as_ref().map(|c| &c.1)))
+            Arc::new(linear(&mut cx, src, &sampled, info, &plan, &mut host, colour_noise.as_ref().map(|c| &c.1)))
         }
     };
     lap("wb/nr", &mut t, &mut cx);
@@ -1022,7 +1022,15 @@ fn unwritten(data: &[[u8; 4]]) -> usize {
 }
 
 /// The white-balanced, retouched, denoised image (`colour_noise`: see `denoise`).
-fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, host: &mut Host, colour_noise: Option<&JointNoise>) -> Buf {
+fn linear(
+    cx: &mut Cx<'_>,
+    src: &Rgb32f,
+    sampled: &Buf,
+    info: &SourceInfo,
+    plan: &Plan<'_>,
+    host: &mut Host,
+    colour_noise: Option<&JointNoise>,
+) -> Buf {
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
     let s = &*plan.settings;
@@ -1061,7 +1069,7 @@ fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, ho
     // Lens Blur (global or a mask's): on the CPU, like the CPU renderer's (`lens_blur::apply`)
     let mut host_img = cx.read_rgb(&img, w, h);
     lightcraft_pipeline::lens_blur::apply_with(&mut host_img, s, &plan.frame, plan.px_per_long, plan.mattes.as_deref(), plan.lens_subject.as_deref());
-    lightcraft_pipeline::glow::apply(&mut host_img, s, plan.px_per_long);
+    lightcraft_pipeline::apply_glow(&mut host_img, src, info, plan);
     cx.gpu.upload(rgb_words(&host_img))
 }
 

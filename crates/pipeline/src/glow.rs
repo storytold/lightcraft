@@ -20,9 +20,37 @@ fn bounded(v: f64, lo: f64, hi: f64, default: f64) -> f32 {
     if v.is_finite() { v.clamp(lo, hi) as f32 } else { default as f32 }
 }
 
-pub fn apply(img: &mut Rgb32f, s: &DevelopSettings, px_per_long: f64) {
-    if !active(s) || img.width == 0 || img.height == 0 || !px_per_long.is_finite() || px_per_long <= 0.0 {
-        return;
+/// Frames above this many pixels get their Glow light field from a whole-frame proxy when only a
+/// window of them is rendered ([`field`]); at or below it a window renders the whole frame, which is
+/// exact and cheap enough.
+pub const EXACT_WINDOW_PIXELS: usize = 2_500_000;
+
+/// Size of the low-resolution grid Glow scatters on for a frame of `w` x `h` output pixels.
+pub fn grid_size(w: usize, h: usize) -> (usize, usize) {
+    let scale = grid_scale(w, h);
+    (((w as f64 * scale).ceil() as usize).max(1), ((h as f64 * scale).ceil() as usize).max(1))
+}
+
+fn grid_scale(w: usize, h: usize) -> f64 {
+    (GRID_EDGE as f64 / w.max(h).max(1) as f64).min(1.0)
+}
+
+/// The scattered light of a whole frame on the bounded grid: independent of any window of it, so it
+/// can be computed once and added to every window (see [`Field::add_to`]).
+pub struct Field {
+    seed: Rgb32f,
+    light: Rgb32f,
+    amount: f32,
+    tint: [f32; 3],
+    halation: bool,
+}
+
+/// The light field of the frame `full` (output pixels) whose scene-linear pixels are `img`: the frame
+/// itself, or any image of it at least as large as [`grid_size`] (a reduced render of the frame).
+/// `None` when Glow is off or `img`/`px_per_long` is unusable.
+pub fn field(img: &Rgb32f, s: &DevelopSettings, full: (usize, usize), px_per_long: f64) -> Option<Field> {
+    if !active(s) || img.width == 0 || img.height == 0 || full.0 == 0 || full.1 == 0 || !px_per_long.is_finite() || px_per_long <= 0.0 {
+        return None;
     }
     let g = &s.effects.glow;
     let amount = bounded(g.amount, 0.0, 100.0, 0.0) / 100.0;
@@ -32,9 +60,8 @@ pub fn apply(img: &mut Rgb32f, s: &DevelopSettings, px_per_long: f64) {
     let softness = bounded(g.softness, 0.0, 100.0, 50.0) / 100.0;
     let angle = bounded(g.direction, -180.0, 180.0, 0.0).to_radians();
     let exposure = bounded(s.light.exposure, -5.0, 5.0, 0.0).exp2();
-    let scale = (GRID_EDGE as f64 / img.width.max(img.height) as f64).min(1.0);
-    let w = ((img.width as f64 * scale).ceil() as usize).max(1);
-    let h = ((img.height as f64 * scale).ceil() as usize).max(1);
+    let scale = grid_scale(full.0, full.1);
+    let (w, h) = grid_size(full.0, full.1);
     let mut seed = extract_seed(img, w, h, 0.88 - 0.78 * range, exposure, g.style == GlowStyle::Diffusion);
     if g.style == GlowStyle::Halation {
         // Film-like halation is warm even around blue lamps, rather than a channelwise tint.
@@ -59,7 +86,21 @@ pub fn apply(img: &mut Rgb32f, s: &DevelopSettings, px_per_long: f64) {
     } else {
         [1.0 + 0.35 * warmth, 1.0, 1.0 - 0.35 * warmth]
     };
-    add_light(img, &seed, &light, amount, tint, g.style == GlowStyle::Halation);
+    Some(Field { seed, light, amount, tint, halation: g.style == GlowStyle::Halation })
+}
+
+impl Field {
+    /// Add the light to `img`, the window of the frame `full` whose top-left pixel is `origin`.
+    pub fn add_to(&self, img: &mut Rgb32f, origin: (usize, usize), full: (usize, usize)) {
+        add_light(img, origin, full, self);
+    }
+}
+
+pub fn apply(img: &mut Rgb32f, s: &DevelopSettings, px_per_long: f64) {
+    let full = (img.width, img.height);
+    if let Some(f) = field(img, s, full, px_per_long) {
+        f.add_to(img, (0, 0), full);
+    }
 }
 
 fn extract_seed(img: &Rgb32f, w: usize, h: usize, threshold: f32, exposure: f32, diffusion: bool) -> Rgb32f {
@@ -96,19 +137,20 @@ fn extract_seed(img: &Rgb32f, w: usize, h: usize, threshold: f32, exposure: f32,
     seed
 }
 
-fn add_light(img: &mut Rgb32f, seed: &Rgb32f, light: &Rgb32f, amount: f32, tint: [f32; 3], halation: bool) {
-    let (w, h) = (seed.width, seed.height);
+fn add_light(img: &mut Rgb32f, origin: (usize, usize), full: (usize, usize), f: &Field) {
+    let (w, h) = (f.seed.width, f.seed.height);
+    let (fw, fh) = (full.0.max(1), full.1.max(1));
     for y in 0..img.height {
         for x in 0..img.width {
-            let gx = (x as f32 + 0.5) * w as f32 / img.width as f32 - 0.5;
-            let gy = (y as f32 + 0.5) * h as f32 / img.height as f32 - 0.5;
-            let glow = sample(light, gx, gy);
-            let source = sample(seed, gx, gy);
+            let gx = ((x + origin.0) as f32 + 0.5) * w as f32 / fw as f32 - 0.5;
+            let gy = ((y + origin.1) as f32 + 0.5) * h as f32 / fh as f32 - 0.5;
+            let glow = sample(&f.light, gx, gy);
+            let source = sample(&f.seed, gx, gy);
             let mut p = img.get(x, y);
             for c in 0..3 {
-                let halo = if halation { (glow[c] - source[c]).max(0.0) } else { glow[c] };
+                let halo = if f.halation { (glow[c] - source[c]).max(0.0) } else { glow[c] };
                 // Keep scene headroom: output conversion/tone mapping happens downstream.
-                let v = p[c] + amount * halo * tint[c];
+                let v = p[c] + f.amount * halo * f.tint[c];
                 if v.is_finite() {
                     p[c] = v;
                 }
@@ -422,5 +464,53 @@ mod integration_tests {
         assert!(matches!(d.samples, DeepSamples::U16(_)));
         s.effects.glow.amount = 0.0;
         assert_eq!(before.image, render_cached(&src, &info, &s, &req, &cache).image);
+    }
+
+    /// A window of a frame too large to render whole takes its light from a whole-frame field that
+    /// every window of the view shares, and matches the same crop of the full render closely.
+    #[test]
+    fn windows_of_a_large_frame_share_one_field_and_match_the_full_render() {
+        let (w, h) = (2000, 1400);
+        assert!(w * h > EXACT_WINDOW_PIXELS);
+        let lamp = |x: usize, y: usize, cx: usize, cy: usize| x.abs_diff(cx) < 14 && y.abs_diff(cy) < 14;
+        let src = Arc::new(Rgb32f::from_fn(w, h, |x, y| {
+            if lamp(x, y, 700, 500) || lamp(x, y, 1500, 900) { [6.0, 5.0, 4.0] } else { [0.02 + 0.00002 * x as f32; 3] }
+        }));
+        let info = SourceInfo::default();
+        let mut s = DevelopSettings::default();
+        s.effects.glow.amount = 80.0;
+        s.effects.glow.spread = 100.0;
+        let req = RenderRequest::fit(w, h);
+        let full = render(&src, &info, &s, &req).image;
+        let mut max_diff = 0i32;
+        let mut keys = Vec::new();
+        let mut fields = Vec::new();
+        for win in [PixelWindow { x: 560, y: 380, w: 300, h: 260 }, PixelWindow { x: 1300, y: 760, w: 300, h: 260 }] {
+            let mut wr = req;
+            wr.window = Some(win);
+            let plan = crate::plan(&src, &info, &s, &wr);
+            assert_eq!((plan.w, plan.h), (win.w, win.h), "a window of a large frame must not render the whole frame");
+            keys.push(plan.glow_key);
+            fields.push(crate::glow_field(&src, &info, &plan).expect("a window of a large frame has a proxy field"));
+            let part = render(&src, &info, &s, &wr).image;
+            let crop = full.crop(win.x, win.y, win.w, win.h);
+            for (a, b) in part.data.iter().zip(&crop.data) {
+                for c in 0..3 {
+                    max_diff = max_diff.max((a[c] as i32 - b[c] as i32).abs());
+                }
+            }
+        }
+        eprintln!("largest 8-bit difference between a window and the full render: {max_diff}");
+        assert!(max_diff <= 3, "window and full render differ by {max_diff} levels");
+        assert!(keys[0].is_some() && keys[0] == keys[1], "both windows share the same key");
+        assert!(Arc::ptr_eq(&fields[0], &fields[1]), "the second window must reuse the cached whole-frame field");
+        // the whole frame is not a window: it scatters its own pixels, bit for bit as before
+        let whole = crate::plan(&src, &info, &s, &req);
+        assert!(whole.glow_key.is_none());
+        s.effects.glow.amount = 40.0;
+        let mut wr = req;
+        wr.window = Some(PixelWindow { x: 560, y: 380, w: 300, h: 260 });
+        let other = crate::plan(&src, &info, &s, &wr);
+        assert_ne!(other.glow_key, keys[0], "a Glow edit must not reuse the old field");
     }
 }
