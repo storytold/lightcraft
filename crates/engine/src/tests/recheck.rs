@@ -1,4 +1,4 @@
-//! Issue #662: preview-only raws are rechecked when a library opens in another app version.
+//! Issue #662: preview-only raws are rechecked when a library opens with another app version.
 
 use std::path::PathBuf;
 
@@ -14,23 +14,16 @@ const OTHER: &str = "0.5.0";
 
 struct Lib {
     s: Session,
-    dir: PathBuf,
+    dir: super::TestDir,
     lib: PathBuf,
     file: PathBuf,
     id: PhotoId,
 }
 
-impl Drop for Lib {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
 /// A library with one preview-only CR3, its flag stamped by [`OTHER`] as a library saved by
 /// another version would be.
 fn library(name: &str) -> Lib {
-    let dir = std::env::temp_dir().join(format!("lc-recheck-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = super::TestDir::new(&format!("recheck-{name}"));
     let (lib, files) = (dir.join("lib"), dir.join("files"));
     std::fs::create_dir_all(&files).unwrap();
     let file = files.join("IMG_0001.cr3");
@@ -118,7 +111,7 @@ fn missing_file_keeps_its_flag_and_stamp_and_is_retried() {
 #[test]
 fn photo_changed_while_probing_is_skipped() {
     let mut x = library("changed");
-    let listed = recheck::stale(&x.s.catalog, false);
+    let listed = recheck::stale(&mut x.s, false);
     assert_eq!(listed.iter().map(|i| i.id).collect::<Vec<_>>(), vec![x.id]);
     let probed = recheck::probe(&recheck::file_probe(&x.s).unwrap(), listed);
     decodable_now(&x);
@@ -137,7 +130,7 @@ fn virtual_copies_follow_their_photo() {
     let r = x.s.execute("photo.virtualCopy", &json!({"ids": [x.id.0]})).unwrap();
     let copy = PhotoId(r["ids"][0].as_u64().unwrap());
     assert!(x.s.catalog.photo(copy).unwrap().preview_only.is_some());
-    assert_eq!(recheck::stale(&x.s.catalog, true).len(), 1, "copies aren't probed on their own");
+    assert_eq!(recheck::stale(&mut x.s, true).len(), 1, "copies aren't probed on their own");
     decodable_now(&x);
     let r = x.s.execute("library.recheckPreviewOnly", &json!({})).unwrap();
     assert_eq!(r["cleared"], json!([x.id.0, copy.0]));
@@ -152,4 +145,286 @@ fn session_without_file_access_refuses() {
     let e = x.s.execute("library.recheckPreviewOnly", &json!({})).unwrap_err().to_string();
     assert!(e.contains("no file access"), "{e}");
     assert!(x.s.catalog.photo(x.id).unwrap().preview_only.is_some());
+}
+
+/// Relinked copies must be checked independently, and must not receive their parent's file facts.
+#[test]
+fn relinked_copy_rechecks_its_own_file() {
+    let mut x = library("relinked-copy");
+    let r = x.s.execute("photo.virtualCopy", &json!({"ids": [x.id.0]})).unwrap();
+    let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+    let other = x.dir.join("files/other.cr3");
+    std::fs::write(&other, cr3_with_preview(120, 80)).unwrap();
+    x.s.execute("photo.relink", &json!({"id": copy.0, "path": other.to_string_lossy()})).unwrap();
+    let p = x.s.catalog.photo(copy).unwrap();
+    x.s.apply_system(Op::SetContent {
+        id: copy,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: p.content_hash.clone(),
+        preview_only: p.preview_only.clone(),
+        preview_checked: OTHER.into(),
+    })
+    .unwrap();
+    let listed = recheck::stale(&mut x.s, false);
+    assert_eq!(listed.iter().map(|p| p.id).collect::<Vec<_>>(), vec![x.id, copy]);
+    let original = x.s.catalog.photo(x.id).unwrap().clone();
+    std::fs::write(&other, crate::tests_xmp::synthetic_dng_with(None, lightcraft_meta::Metadata::default())).unwrap();
+    let r = x.s.execute("library.recheckPreviewOnly", &json!({})).unwrap();
+    assert_eq!(r["checked"], 2);
+    assert_eq!(r["cleared"], json!([copy.0]));
+    let parent = x.s.catalog.photo(x.id).unwrap();
+    assert_eq!(parent.content_hash, original.content_hash);
+    assert_eq!(parent.preview_only, original.preview_only);
+    assert_eq!(parent.preview_checked, APP_VERSION);
+    assert!(x.s.catalog.photo(copy).unwrap().develops_raw());
+}
+
+/// A same-file copy still needs its own probe when its parent's stamp is already current.
+#[test]
+fn stale_copy_is_checked_when_its_parent_is_current() {
+    let mut x = library("copy-only-stale");
+    let r = x.s.execute("photo.virtualCopy", &json!({"ids": [x.id.0]})).unwrap();
+    let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+    let p = x.s.catalog.photo(x.id).unwrap();
+    x.s.apply_system(Op::SetContent {
+        id: x.id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: p.content_hash.clone(),
+        preview_only: p.preview_only.clone(),
+        preview_checked: APP_VERSION.into(),
+    })
+    .unwrap();
+    assert_eq!(recheck::stale(&mut x.s, false).iter().map(|p| p.id).collect::<Vec<_>>(), vec![copy]);
+    assert_eq!(recheck::stale(&mut x.s, true).iter().map(|p| p.id).collect::<Vec<_>>(), vec![x.id]);
+    decodable_now(&x);
+    let r = x.s.execute("library.recheckPreviewOnly", &json!({})).unwrap();
+    assert_eq!(r["checked"], 1);
+    assert_eq!(r["cleared"], json!([copy.0, x.id.0]));
+    assert!(x.s.catalog.photo(copy).unwrap().develops_raw());
+    assert!(x.s.catalog.photo(x.id).unwrap().develops_raw());
+}
+
+#[test]
+fn review_stale_copies_share_one_probe_when_the_parent_is_current() {
+    let mut x = library("stale-siblings");
+    let mut copies = Vec::new();
+    for _ in 0..2 {
+        copies.push(PhotoId(x.s.execute("photo.virtualCopy", &json!({"ids": [x.id.0]})).unwrap()["ids"][0].as_u64().unwrap()));
+    }
+    let p = x.s.catalog.photo(x.id).unwrap();
+    x.s.apply_system(Op::SetContent {
+        id: x.id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: p.content_hash.clone(),
+        preview_only: p.preview_only.clone(),
+        preview_checked: APP_VERSION.into(),
+    })
+    .unwrap();
+    decodable_now(&x);
+    let r = x.s.execute("library.recheckPreviewOnly", &json!({})).unwrap();
+    assert_eq!(r["checked"], 1, "same-file siblings share a probe even without an eligible parent");
+    let mut expected = vec![x.id.0];
+    expected.extend(copies.iter().map(|id| id.0));
+    for field in ["updated", "cleared"] {
+        let mut ids: Vec<_> = r[field].as_array().unwrap().iter().map(|id| id.as_u64().unwrap()).collect();
+        ids.sort();
+        assert_eq!(ids, expected, "{field} reports each recovered photo once");
+    }
+}
+
+#[test]
+fn review_recheck_keeps_a_listed_copy_after_its_parent_moves() {
+    for relink_copy in [false, true] {
+        let mut x = library(&format!("parent-moves-{relink_copy}"));
+        let copy = PhotoId(x.s.execute("photo.virtualCopy", &json!({"ids": [x.id.0]})).unwrap()["ids"][0].as_u64().unwrap());
+        let listed = recheck::stale(&mut x.s, false);
+        assert_eq!(listed.len(), 1);
+        decodable_now(&x);
+        let mut info = recheck::file_probe(&x.s).unwrap()(&x.file.to_string_lossy()).unwrap();
+        info.meta.camera = "must not fill implicit metadata".into();
+        let other = x.dir.join("other.cr3");
+        std::fs::write(&other, cr3_with_preview(120, 80)).unwrap();
+        x.s.execute("photo.relink", &json!({"id": x.id.0, "path": other.to_string_lossy()})).unwrap();
+        if relink_copy {
+            x.s.execute("photo.relink", &json!({"id": copy.0, "path": x.file.to_string_lossy()})).unwrap();
+        }
+        let parent = x.s.catalog.photo(x.id).unwrap().clone();
+        let before = x.s.catalog.photo(copy).unwrap().clone();
+        let out = recheck::apply(&mut x.s, listed.into_iter().map(|item| (item, Ok(info.clone()))).collect()).unwrap();
+        assert_eq!(x.s.catalog.photo(x.id).unwrap(), &parent);
+        if relink_copy {
+            assert!(out.updated.is_empty());
+            assert_eq!(x.s.catalog.photo(copy).unwrap(), &before);
+        } else {
+            assert_eq!(out.cleared, vec![copy]);
+            let photo = x.s.catalog.photo(copy).unwrap();
+            assert!(photo.develops_raw());
+            assert_eq!(photo.meta.camera, before.meta.camera);
+        }
+    }
+}
+
+#[test]
+fn review_same_path_relink_invalidates_older_reads_even_when_facts_match() {
+    let mut x = checked_orf("same-path");
+    let listed = recheck::stale(&mut x.s, true);
+    let current = x.s.catalog.photo(x.id).unwrap().clone();
+    replace_checked_orf(&x.file);
+    let old = recheck::probe(&recheck::file_probe(&x.s).unwrap(), listed);
+    std::fs::write(&x.file, crate::files::tests::sensor_orf()).unwrap();
+    x.s.execute("photo.relink", &json!({"id": x.id.0, "path": x.file.to_string_lossy()})).unwrap();
+    assert_eq!(x.s.catalog.photo(x.id).unwrap(), &current, "relink confirmed exactly the same facts");
+    assert!(recheck::apply(&mut x.s, old).unwrap().updated.is_empty());
+    assert_eq!(x.s.catalog.photo(x.id).unwrap(), &current);
+    replace_checked_orf(&x.file);
+    assert_eq!(x.s.execute("library.recheckPreviewOnly", &json!({"all": true})).unwrap()["updated"], json!([x.id.0]));
+}
+
+#[test]
+fn recheck_does_not_overwrite_copies_created_after_its_listing() {
+    let mut x = checked_orf("late-copy");
+    let copy = PhotoId(x.s.execute("photo.virtualCopy", &json!({"id": x.id.0})).unwrap()["ids"][0].as_u64().unwrap());
+    let listed = recheck::stale(&mut x.s, true);
+    replace_checked_orf(&x.file);
+    let old = recheck::file_probe(&x.s).unwrap()(&x.file.to_string_lossy()).unwrap();
+    replace_checked_orf(&x.file);
+    x.s.execute("photo.relink", &json!({"id": x.id.0, "path": x.file.to_string_lossy()})).unwrap();
+    let late = PhotoId(x.s.execute("photo.virtualCopy", &json!({"id": x.id.0})).unwrap()["ids"][0].as_u64().unwrap());
+    let current = x.s.catalog.photo(late).unwrap().clone();
+    let out = recheck::apply(&mut x.s, listed.into_iter().map(|item| (item, Ok(old.clone()))).collect()).unwrap();
+    assert_eq!(x.s.catalog.photo(late).unwrap(), &current, "a copy inheriting newer facts keeps them");
+    assert_eq!(out.updated, [copy], "the untouched listed sibling still accepts its pending result");
+    assert_eq!(x.s.catalog.photo(copy).unwrap().file_size, old.file_size);
+}
+
+fn checked_orf(name: &str) -> Lib {
+    let dir = super::TestDir::new(&format!("recheck-checked-{name}"));
+    let file = dir.join("original.orf");
+    let mut x = Lib { s: Session::new().with_fs(), lib: dir.join("lib"), dir, file, id: PhotoId(0) };
+    std::fs::write(&x.file, crate::files::tests::sensor_orf()).unwrap();
+    let r = x.s.execute("library.import", &json!({"paths": [x.file.to_string_lossy()]})).unwrap();
+    x.id = PhotoId(r["imported"][0].as_u64().unwrap());
+    let photo = x.s.catalog.photo(x.id).unwrap();
+    assert!(photo.preview_only.is_none() && !photo.preview_only_stale() && photo.format == "ORF");
+    x
+}
+
+#[test]
+fn review_recheck_after_relink_keeps_fresh_facts_and_the_untouched_copy() {
+    let mut x = checked_orf("aba");
+    let copy = PhotoId(x.s.execute("photo.virtualCopy", &json!({"ids": [x.id.0]})).unwrap()["ids"][0].as_u64().unwrap());
+    let p = x.s.catalog.photo(copy).unwrap();
+    x.s.catalog
+        .apply(Op::SetContent {
+            id: copy,
+            width: p.width,
+            height: p.height,
+            file_size: 0,
+            content_hash: p.content_hash.clone(),
+            preview_only: None,
+            preview_checked: p.preview_checked.clone(),
+        })
+        .unwrap();
+    let listed = recheck::stale(&mut x.s, true);
+    assert_eq!(listed.len(), 1, "the eligible parent owns one grouped probe");
+    let mut old = recheck::file_probe(&x.s).unwrap()(&x.file.to_string_lossy()).unwrap();
+    old.meta.lens = "must not fill the unselected copy".into();
+    let old_size = old.file_size;
+    let other = x.dir.join("other.orf");
+    std::fs::copy(&x.file, &other).unwrap();
+    x.s.execute("photo.relink", &json!({"id": x.id.0, "path": other.to_string_lossy()})).unwrap();
+    replace_checked_orf(&x.file);
+    x.s.execute("photo.relink", &json!({"id": x.id.0, "path": x.file.to_string_lossy()})).unwrap();
+    let current = x.s.catalog.photo(x.id).unwrap().clone();
+    let out = recheck::apply(&mut x.s, listed.into_iter().map(|item| (item, Ok(old.clone()))).collect()).unwrap();
+    assert_eq!(x.s.catalog.photo(x.id).unwrap(), &current);
+    assert!(!out.updated.contains(&x.id) && out.updated.contains(&copy));
+    let sibling = x.s.catalog.photo(copy).unwrap();
+    assert_eq!(sibling.file_size, old_size);
+    assert!(sibling.meta.lens.is_empty(), "automatic grouping does not select a copy's metadata");
+}
+
+#[test]
+fn review_a_new_reload_supersedes_an_older_recheck() {
+    overlapping_source_checks(true);
+}
+
+#[test]
+fn an_older_reload_finishing_first_keeps_a_newer_pending_read() {
+    use crate::cmd::reload;
+    let mut x = checked_orf("older-first");
+    let older = reload::plan(&mut x.s, &json!({"id": x.id.0})).unwrap();
+    replace_checked_orf(&x.file);
+    let old = reload::file_probe(&x.s).unwrap()(&x.file.to_string_lossy()).unwrap();
+    let newer = reload::plan(&mut x.s, &json!({"id": x.id.0})).unwrap();
+    replace_checked_orf(&x.file);
+    let new = reload::file_probe(&x.s).unwrap()(&x.file.to_string_lossy()).unwrap();
+    let expected = new.content_hash.clone();
+    assert_eq!(reload::apply(&mut x.s, older, vec![Ok(old)]).unwrap().reloaded, [x.id]);
+    assert_eq!(reload::apply(&mut x.s, newer, vec![Ok(new)]).unwrap().reloaded, [x.id]);
+    assert_eq!(x.s.catalog.photo(x.id).unwrap().content_hash, expected);
+}
+
+#[test]
+fn an_older_source_read_refreshing_the_stamp_keeps_a_newer_recheck() {
+    use crate::cmd::reload;
+    for older_reload in [false, true] {
+        let mut x = library(&format!("older-stamp-{older_reload}"));
+        let reloading = older_reload.then(|| reload::plan(&mut x.s, &json!({"id": x.id.0})).unwrap());
+        let checking = (!older_reload).then(|| recheck::stale(&mut x.s, false));
+        let probe = recheck::file_probe(&x.s).unwrap();
+        let old = probe(&x.file.to_string_lossy()).unwrap();
+        let newer = recheck::stale(&mut x.s, false);
+        decodable_now(&x);
+        let newer = recheck::probe(&probe, newer);
+        if let Some(items) = reloading {
+            reload::apply(&mut x.s, items, vec![Ok(old)]).unwrap();
+        } else {
+            recheck::apply(&mut x.s, checking.unwrap().into_iter().map(|item| (item, Ok(old.clone()))).collect()).unwrap();
+        }
+        assert!(!x.s.catalog.photo(x.id).unwrap().preview_only_stale(), "the older read refreshed the stamp");
+        assert_eq!(recheck::apply(&mut x.s, newer).unwrap().cleared, [x.id]);
+        assert!(x.s.catalog.photo(x.id).unwrap().develops_raw());
+    }
+}
+
+#[test]
+fn review_a_new_recheck_supersedes_an_older_reload() {
+    overlapping_source_checks(false);
+}
+
+fn replace_checked_orf(file: &std::path::Path) {
+    let mut bytes = std::fs::read(file).unwrap();
+    bytes.push(42);
+    std::fs::write(file, bytes).unwrap();
+}
+
+fn overlapping_source_checks(older_recheck: bool) {
+    let mut x = checked_orf(if older_recheck { "old-recheck" } else { "old-reload" });
+    let checking = older_recheck.then(|| recheck::stale(&mut x.s, true));
+    let reloading = (!older_recheck).then(|| crate::cmd::reload::plan(&mut x.s, &json!({"ids": [x.id.0]})).unwrap());
+    let old = recheck::file_probe(&x.s).unwrap()(&x.file.to_string_lossy()).unwrap();
+    replace_checked_orf(&x.file);
+    let replacement = Some(lightcraft_preview::hash_bytes(&std::fs::read(&x.file).unwrap()).to_string());
+    assert_ne!(replacement, old.content_hash);
+    let command = if older_recheck { "photo.reload" } else { "library.recheckPreviewOnly" };
+    let result = x.s.execute(command, &json!({"ids": [x.id.0], "all": true})).unwrap();
+    assert_eq!(result[if older_recheck { "reloaded" } else { "updated" }], json!([x.id.0]));
+    let current = x.s.catalog.photo(x.id).unwrap().clone();
+    assert_eq!(current.content_hash, replacement, "the newer check applied the replacement bytes");
+    assert!(current.format == "ORF" && !current.preview_only_stale(), "current decoder facts still require ticket ordering");
+    let updated = if let Some(items) = checking {
+        recheck::apply(&mut x.s, items.into_iter().map(|item| (item, Ok(old.clone()))).collect()).unwrap().updated
+    } else {
+        crate::cmd::reload::apply(&mut x.s, reloading.unwrap(), vec![Ok(old)]).unwrap().reloaded
+    };
+    assert!(updated.is_empty());
+    assert_eq!(x.s.catalog.photo(x.id).unwrap(), &current);
+    assert_eq!(x.s.catalog.photo(x.id).unwrap().content_hash, replacement);
 }

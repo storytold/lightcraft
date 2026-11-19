@@ -1,7 +1,7 @@
 //! Preview-only raws rechecked after an update (issue #662): a raw imported while its format or
-//! variant couldn't be decoded keeps [`Photo::preview_only`] until something re-reads its file.
-//! Each flag is stamped with the app version that set it ([`Photo::preview_checked`]); when a
-//! library opens in another version, its stale preview-only photos are probed again and get
+//! variant couldn't be decoded keeps [`lightcraft_catalog::Photo::preview_only`] until something re-reads its file.
+//! Each flag is stamped with the app version that set it ([`lightcraft_catalog::Photo::preview_checked`]);
+//! when a library opens with another version, its stale preview-only photos are probed again and get
 //! exactly what Reload from Disk would give them: a file that decodes now loses the flag, one that
 //! still doesn't gets the new reason and a fresh stamp, so it isn't probed again.
 //! ORF records are rechecked even when previously sensor-decodable: compressed sensor support
@@ -12,42 +12,28 @@
 //! results as LightCraft's own bookkeeping (journaled, not an undo step). Agents and tests use
 //! `library.recheckPreviewOnly`, which does all three at once.
 
-use lightcraft_catalog::{Catalog, Op, Photo, PhotoId};
+use lightcraft_catalog::{Op, PhotoId};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd};
 use crate::media::{FileProbe, ProbeInfo};
 use crate::{Result, Session};
 
-/// A photo to probe, and what the library knew about it when it was listed (so a
-/// result for a photo that changed meanwhile is dropped).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Stale {
-    pub id: PhotoId,
-    pub path: String,
-    preview_only: Option<String>,
-    preview_checked: String,
-}
-
-impl Stale {
-    fn of(p: &Photo, path: &str) -> Stale {
-        Stale { id: p.id, path: path.to_string(), preview_only: p.preview_only.clone(), preview_checked: p.preview_checked.clone() }
-    }
-
-    /// The photo is still as it was listed: same file, flag and stamp.
-    fn current(&self, p: &Photo) -> bool {
-        p.library_file() == Some(self.path.as_str()) && p.preview_only == self.preview_only && p.preview_checked == self.preview_checked
-    }
-}
+/// A grouped source read, with Reload's membership and freshness checks.
+pub use super::reload::Item as Stale;
 
 /// The library's preview-only photos and ORFs whose support another app version checked (or
-/// every such photo, with `all`): library photos with a file, not virtual copies (they follow
-/// the photo they were copied from). No file-system calls.
-pub fn stale(cat: &Catalog, all: bool) -> Vec<Stale> {
-    cat.photos()
-        .filter(|p| p.copy_of.is_none() && (p.preview_only_stale() || (all && (p.preview_only.is_some() || p.format.eq_ignore_ascii_case("orf")))))
-        .filter_map(|p| p.library_file().map(|path| Stale::of(p, path)))
-        .collect()
+/// every such photo, with `all`), grouped by family and path under a new source-read ticket. Every
+/// same-file member retains its ticket so a copy can use the result if its representative relinks.
+/// Local browsing records are included. No file-system calls.
+pub fn stale(s: &mut Session, all: bool) -> Vec<Stale> {
+    let ids = s
+        .catalog
+        .photos()
+        .filter(|p| p.preview_only_stale() || (all && (p.preview_only.is_some() || p.format.eq_ignore_ascii_case("orf"))))
+        .map(|p| p.id)
+        .collect();
+    super::reload::plan_ids(s, ids)
 }
 
 /// The session's file probe, to [`probe`] with on a worker thread; `None` when the session has no
@@ -79,18 +65,16 @@ impl Rechecked {
 
 /// Apply [`probe`]'s results: each photo gets the ops Reload would give it, all in one batch that is
 /// journaled but isn't an undo step. A file that can't be read (missing, offline) changes nothing,
-/// so it is tried again next time; a photo that changed since it was listed (relinked, reloaded,
-/// removed) is skipped.
+/// so it is tried again next time. Relink, removal and source history invalidate pending reads;
+/// a completed older read leaves newer pending reads usable.
 pub fn apply(s: &mut Session, results: Vec<(Stale, std::result::Result<ProbeInfo, String>)>) -> Result<Rechecked> {
     let mut ops = Vec::new();
     let mut out = Rechecked::default();
-    for (item, info) in results {
+    for (mut item, info) in results {
         let Ok(info) = info else { continue };
-        if !s.catalog.photo(item.id).is_some_and(|p| item.current(p)) {
-            continue;
-        }
+        let Some(id) = item.accept(s) else { continue };
         let first = out.updated.len();
-        crate::cmd::convert::reload_ops(&s.catalog, item.id, &info, &mut ops, &mut out.updated);
+        crate::cmd::convert::reload_ops(&s.catalog, id, &info, &mut ops, &mut out.updated, item.source_targets, |id| id == item.id);
         if info.preview_only.is_none() {
             out.cleared.extend(out.updated[first..].iter().copied().filter(|id| s.catalog.photo(*id).is_some_and(|p| p.preview_only.is_some())));
         }
@@ -98,6 +82,7 @@ pub fn apply(s: &mut Session, results: Vec<(Stale, std::result::Result<ProbeInfo
     if !ops.is_empty() {
         s.apply_system(Op::Batch { ops })?;
     }
+    out.cleared.retain(|id| s.catalog.photo(*id).is_some_and(|p| p.develops_raw()));
     for id in &out.updated {
         s.media.forget(*id);
     }
@@ -109,7 +94,7 @@ fn recheck(s: &mut Session, p: &Value) -> Result<Value> {
     let all = p.get("all").and_then(Value::as_bool).unwrap_or(false);
     // without file access every probe "succeeds" with nothing known, which would clear every flag
     let fp = file_probe(s).ok_or_else(|| bad(C, "this session has no file access"))?;
-    let listed = stale(&s.catalog, all);
+    let listed = stale(s, all);
     let n = listed.len();
     let mut r = apply(s, probe(&fp, listed))?.to_json();
     r["checked"] = json!(n);
@@ -122,7 +107,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Recheck Preview-Only Raws",
         [],
         None,
-        "{all?: bool} — probe again preview-only raws and ORFs whose support another LightCraft version checked (the app does this in the background when a library opens; `all` rechecks every preview-only raw and ORF, e.g. when testing a decoder build of the same version), and bring each up to date as Reload from Disk would; not an undo step, develop settings and history are kept; files that can't be read are left for next time → {checked, updated: [ids], cleared: [ids] (develop from their raw data now)}",
+        "{all?: bool} — probe again preview-only raws and ORFs whose support another app version checked (the app does this in the background when a library opens; `all` rechecks every preview-only raw and ORF), and bring each up to date as Reload from Disk would; not an undo step, develop settings and history are kept; files that can't be read are left for next time → {checked, updated: [ids], cleared: [ids] (develop from their raw data now)}",
         always,
         recheck
     )]

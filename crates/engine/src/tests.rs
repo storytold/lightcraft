@@ -67,6 +67,30 @@ mod task_queue;
 mod view_follow;
 pub(super) mod xmp;
 
+pub(crate) struct TestDir(std::path::PathBuf);
+
+impl TestDir {
+    pub(crate) fn new(tag: &str) -> Self {
+        let dir = Self(std::env::temp_dir().join(format!("lc-{tag}-{}", std::process::id())));
+        let _ = std::fs::remove_dir_all(&dir.0);
+        std::fs::create_dir_all(&dir.0).unwrap();
+        dir
+    }
+}
+
+impl std::ops::Deref for TestDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for TestDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 fn demo() -> Session {
     Session::with_demo()
 }

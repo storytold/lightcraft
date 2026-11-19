@@ -44,6 +44,21 @@ fn psd_probe_reads_embedded_capture_time_gps_and_title() {
 use super::*;
 use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
 
+pub(crate) fn sensor_orf() -> Vec<u8> {
+    use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+    let mut raw = IfdBuilder::new();
+    raw.set(t::IMAGE_WIDTH, Value::Long(vec![8]));
+    raw.set(t::IMAGE_LENGTH, Value::Long(vec![8]));
+    raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+    raw.set(t::COMPRESSION, Value::Short(vec![1]));
+    raw.set(t::PHOTOMETRIC, Value::Short(vec![1]));
+    raw.set(t::MAKE, Value::Ascii("OLYMPUS IMAGING CORP.".into()));
+    raw.set_image(ImageData::Strips { rows_per_strip: 8, strips: vec![vec![17; 8 * 8 * 2]] });
+    let mut sensor = TiffWriter::default().write(&[raw]).unwrap();
+    sensor[..4].copy_from_slice(b"IIRO");
+    sensor
+}
+
 #[test]
 fn crw_probes_name_their_camera_from_the_ciff_records() {
     // no Exif in a CRW: the camera and capture time come from the decoder's records, and the catalog's camera

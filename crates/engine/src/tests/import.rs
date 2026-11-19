@@ -4740,3 +4740,307 @@ fn a_broken_link_before_dotdot_is_an_error() {
     assert_eq!(crate::import::browse_spelling(&link.join("..")).unwrap(), dir);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn reload_relinked_virtual_copy_reads_its_own_file() {
+    reload_relinked_virtual_copy(true);
+}
+
+#[test]
+fn reload_original_leaves_relinked_virtual_copy_unchanged() {
+    reload_relinked_virtual_copy(false);
+}
+
+#[test]
+fn reload_copy_refreshes_family_and_keeps_the_metadata_target() {
+    reload_copy_family_metadata(false);
+}
+
+#[test]
+fn reload_selected_copies_fill_metadata_after_deduplication() {
+    reload_copy_family_metadata(true);
+}
+
+fn reload_copy_family_metadata(select_sibling: bool) {
+    use crate::cmd::reload;
+    let dir = super::TestDir::new(&format!("reload-copy-family-{select_sibling}"));
+    let path = dir.join("original.png");
+    write_png(&path, 10);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let original = s.active().unwrap();
+    let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
+    let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+    let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
+    let sibling = PhotoId(r["ids"][0].as_u64().unwrap());
+    s.execute("develop.set", &json!({"ids": [copy.0], "control": "light.exposure", "value": 0.7})).unwrap();
+    let before: Vec<_> = [original, copy, sibling].map(|id| s.catalog.photo(id).unwrap().clone()).into();
+    let old_items = reload::plan(&mut s, &json!({"ids": [original.0]})).unwrap();
+    let old_info = reload::file_probe(&s).unwrap()(&path.to_string_lossy()).unwrap();
+    write_png(&path, 200);
+    let targets = if select_sibling { vec![copy.0, sibling.0, copy.0, sibling.0] } else { vec![copy.0, copy.0] };
+    let items = reload::plan(&mut s, &json!({"ids": targets})).unwrap();
+    assert_eq!(items.len(), 1, "one probe per shared file");
+    assert_eq!(items[0].id, copy, "keep the explicit metadata target");
+    assert_eq!(items[0].metadata_targets.len(), if select_sibling { 2 } else { 1 }, "each selected photo counts once");
+    let mut info = reload::file_probe(&s).unwrap()(&path.to_string_lossy()).unwrap();
+    info.meta.camera = "new camera metadata".into();
+    let changed = reload::apply(&mut s, items, vec![Ok(info)]).unwrap().reloaded;
+    assert_eq!(changed.len(), 3);
+    for old in &before {
+        let new = s.catalog.photo(old.id).unwrap();
+        assert_ne!(new.content_hash, old.content_hash);
+        assert_eq!(new.develop, old.develop);
+        assert_eq!(new.meta.camera, if old.id == copy || (select_sibling && old.id == sibling) { "new camera metadata" } else { "" });
+    }
+    assert!(
+        reload::apply(&mut s, old_items, vec![Ok(old_info)]).unwrap().reloaded.is_empty(),
+        "the newer copy reload supersedes its original's old result"
+    );
+    s.execute("edit.undo", &json!({})).unwrap();
+    for old in &before {
+        assert_eq!(s.catalog.photo(old.id).unwrap(), old);
+    }
+    s.execute("edit.redo", &json!({})).unwrap();
+    for old in &before {
+        assert_ne!(s.catalog.photo(old.id).unwrap().content_hash, old.content_hash);
+    }
+}
+
+fn reload_relinked_virtual_copy(from_copy: bool) {
+    let dir = super::TestDir::new(&format!("reload-relinked-copy-{from_copy}"));
+    let original_path = dir.join("original.png");
+    let copy_path = dir.join("other.png");
+    write_png(&original_path, 10);
+    write_png(&copy_path, 20);
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [original_path.to_string_lossy()]})).unwrap();
+    let original = PhotoId(r["imported"][0].as_u64().unwrap());
+    let mut copies = Vec::new();
+    for _ in 0..2 {
+        let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
+        copies.push(PhotoId(r["ids"][0].as_u64().unwrap()));
+    }
+    let (copy, sibling) = (copies[0], copies[1]);
+    s.execute("photo.relink", &json!({"id": copy.0, "path": copy_path.to_string_lossy()})).unwrap();
+    assert_eq!(s.catalog.photo(copy).unwrap().copy_of, Some(original));
+    let before: Vec<_> = [original, sibling, copy].into_iter().map(|id| s.catalog.photo(id).unwrap().clone()).collect();
+    write_png(&original_path, 100);
+    write_png(&copy_path, 200);
+
+    if from_copy {
+        // A relinked copy keeps its own probe; same-file siblings still share one original probe.
+        let items = crate::cmd::reload::plan(&mut s, &json!({"ids": [copy.0, original.0, sibling.0]})).unwrap();
+        assert_eq!(items.iter().map(|item| item.id).collect::<Vec<_>>(), vec![copy, original]);
+        assert_eq!(items[0].path, copy_path.to_string_lossy());
+        assert_eq!(items[1].path, original_path.to_string_lossy());
+    }
+    let target = if from_copy { copy } else { original };
+    let changed = if from_copy { vec![copy] } else { vec![original, sibling] };
+    let r = s.execute("photo.reload", &json!({"ids": [target.0]})).unwrap();
+    assert_eq!(r["reloaded"], json!(changed.iter().map(|id| id.0).collect::<Vec<_>>()));
+    for old in &before {
+        let new = s.catalog.photo(old.id).unwrap();
+        if changed.contains(&old.id) {
+            assert_ne!(new.content_hash, old.content_hash);
+            assert_eq!(new.develop, old.develop);
+        } else {
+            assert_eq!(new, old, "a photo using another file stays unchanged");
+        }
+    }
+    s.execute("edit.undo", &json!({})).unwrap();
+    for old in &before {
+        assert_eq!(s.catalog.photo(old.id).unwrap(), old, "reload remains one undo step");
+    }
+}
+
+#[test]
+fn reload_ticket_stays_with_its_file_after_a_copy_is_relinked() {
+    use crate::cmd::reload;
+    let dir = super::TestDir::new("reload-relinked-ticket");
+    let original_path = dir.join("original.png");
+    let other_path = dir.join("other.png");
+    write_png(&original_path, 10);
+    write_png(&other_path, 20);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [original_path.to_string_lossy()]})).unwrap();
+    let original = s.active().unwrap();
+    let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
+    let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+    s.execute("photo.relink", &json!({"id": copy.0, "path": other_path.to_string_lossy()})).unwrap();
+    write_png(&original_path, 100);
+    let original_items = reload::plan(&mut s, &json!({"ids": [original.0]})).unwrap();
+    let original_info = reload::file_probe(&s).unwrap()(&original_path.to_string_lossy()).unwrap();
+    let expected = original_info.content_hash.clone();
+    let copy_items = reload::plan(&mut s, &json!({"ids": [copy.0]})).unwrap();
+    let copy_info = reload::file_probe(&s).unwrap()(&other_path.to_string_lossy()).unwrap();
+    reload::apply(&mut s, copy_items, vec![Ok(copy_info)]).unwrap();
+    s.execute("photo.relink", &json!({"id": copy.0, "path": original_path.to_string_lossy()})).unwrap();
+
+    let changed = reload::apply(&mut s, original_items, vec![Ok(original_info)]).unwrap().reloaded;
+    assert!(changed.contains(&original), "a newer read of another file must not supersede this result");
+    assert_eq!(s.catalog.photo(original).unwrap().content_hash, expected);
+    assert_eq!(s.catalog.photo(copy).unwrap().content_hash, expected);
+}
+
+#[test]
+fn reload_keeps_selected_targets_when_the_probe_representative_relinks() {
+    use crate::cmd::reload;
+    let dir = super::TestDir::new("reload-relinked-representative");
+    let original_path = dir.join("original.png");
+    let other_path = dir.join("other.png");
+    write_png(&original_path, 10);
+    write_png(&other_path, 20);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [original_path.to_string_lossy()]})).unwrap();
+    let original = s.active().unwrap();
+    let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
+    let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+    let items = reload::plan(&mut s, &json!({"ids": [copy.0, original.0]})).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id, copy);
+    write_png(&original_path, 100);
+    let mut info = reload::file_probe(&s).unwrap()(&original_path.to_string_lossy()).unwrap();
+    let expected = info.content_hash.clone();
+    info.meta.camera = "fresh metadata".into();
+    s.execute("photo.relink", &json!({"id": copy.0, "path": other_path.to_string_lossy()})).unwrap();
+    let relinked = s.catalog.photo(copy).unwrap().clone();
+
+    assert_eq!(reload::apply(&mut s, items, vec![Ok(info)]).unwrap().reloaded, vec![original]);
+    let parent = s.catalog.photo(original).unwrap();
+    assert_eq!(parent.content_hash, expected);
+    assert_eq!(parent.meta.camera, "fresh metadata");
+    assert_eq!(s.catalog.photo(copy).unwrap(), &relinked);
+}
+
+#[test]
+fn review_relink_rejects_old_reload_facts_only_for_the_changed_photo() {
+    use crate::cmd::reload;
+    let dir = super::TestDir::new("reload-relink-aba");
+    let a = dir.join("a.png");
+    let b = dir.join("b.png");
+    write_png(&a, 10);
+    write_png(&b, 20);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [a.to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    let copy = PhotoId(s.execute("photo.virtualCopy", &json!({"ids": [id.0]})).unwrap()["ids"][0].as_u64().unwrap());
+    s.execute("photo.relink", &json!({"id": copy.0, "path": a.to_string_lossy()})).unwrap();
+    let items = reload::plan(&mut s, &json!({"ids": [id.0, copy.0]})).unwrap();
+    let mut old = reload::file_probe(&s).unwrap()(&a.to_string_lossy()).unwrap();
+    old.meta.camera = "old probe metadata".into();
+    s.execute("photo.relink", &json!({"id": id.0, "path": b.to_string_lossy()})).unwrap();
+    write_png(&a, 200);
+    s.execute("photo.relink", &json!({"id": id.0, "path": a.to_string_lossy()})).unwrap();
+    let current = s.catalog.photo(id).unwrap().clone();
+    let changed = reload::apply(&mut s, items, vec![Ok(old)]).unwrap().reloaded;
+    assert!(!changed.contains(&id));
+    assert_eq!(s.catalog.photo(id).unwrap(), &current, "the replaced A keeps its current facts");
+    assert_eq!(s.catalog.photo(copy).unwrap().meta.camera, "old probe metadata", "the untouched sibling keeps its pending reload");
+    write_png(&a, 201);
+    let fresh = s.execute("photo.reload", &json!({"ids": [id.0]})).unwrap();
+    assert!(fresh["reloaded"].as_array().unwrap().contains(&json!(id.0)), "a newly planned reload is accepted");
+}
+
+#[test]
+fn source_history_rejects_pending_reload_without_cancelling_untouched_siblings() {
+    use crate::cmd::reload;
+    for redo in [false, true] {
+        let dir = super::TestDir::new(&format!("reload-history-{redo}"));
+        let path = dir.join("original.png");
+        write_png(&path, 10);
+        let mut s = Session::new().with_fs();
+        s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+        let id = s.active().unwrap();
+        let copy = PhotoId(s.execute("photo.virtualCopy", &json!({"id": id.0})).unwrap()["ids"][0].as_u64().unwrap());
+        write_png(&path, 20);
+        s.execute("photo.relink", &json!({"id": id.0, "path": path.to_string_lossy()})).unwrap();
+        if redo {
+            s.execute("edit.undo", &json!({})).unwrap();
+        }
+        let items = reload::plan(&mut s, &json!({"ids": [id.0, copy.0]})).unwrap();
+        write_png(&path, 30);
+        let old = reload::file_probe(&s).unwrap()(&path.to_string_lossy()).unwrap();
+        s.execute(if redo { "edit.redo" } else { "edit.undo" }, &json!({})).unwrap();
+        let current = s.catalog.photo(id).unwrap().clone();
+        let changed = reload::apply(&mut s, items, vec![Ok(old)]).unwrap().reloaded;
+        assert_eq!(s.catalog.photo(id).unwrap(), &current, "history protects the restored source facts");
+        assert_eq!(changed, [copy], "history leaves an untouched sibling's pending read usable");
+        assert_eq!(s.execute("photo.reload", &json!({"id": id.0})).unwrap()["reloaded"], json!([id.0]));
+    }
+}
+
+#[test]
+fn review_relinked_reload_keeps_an_implicit_same_file_copy() {
+    use crate::cmd::reload;
+    use lightcraft_catalog::Op;
+    let dir = super::TestDir::new("reload-relink-implicit-copy");
+    let a = dir.join("a.png");
+    let b = dir.join("b.png");
+    write_png(&a, 10);
+    write_png(&b, 20);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [a.to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    let copy = PhotoId(s.execute("photo.virtualCopy", &json!({"ids": [id.0]})).unwrap()["ids"][0].as_u64().unwrap());
+    let p = s.catalog.photo(copy).unwrap().clone();
+    let mut metadata = p.meta.clone();
+    metadata.shutter = "1/2".into();
+    s.catalog.apply(Op::SetMeta { id: copy, meta: Box::new(metadata) }).unwrap();
+    s.catalog
+        .apply(Op::SetContent {
+            id: copy,
+            width: p.width,
+            height: p.height,
+            file_size: p.file_size,
+            content_hash: p.content_hash.clone(),
+            preview_only: Some("old unsupported source".into()),
+            preview_checked: "old".into(),
+        })
+        .unwrap();
+    let items = reload::plan(&mut s, &json!({"ids": [id.0]})).unwrap();
+    let mut old = reload::file_probe(&s).unwrap()(&a.to_string_lossy()).unwrap();
+    old.meta.camera = "must not fill the unselected copy".into();
+    old.meta.lens = "must not fill the unselected copy".into();
+    old.meta.shutter = "0.4".into();
+    old.meta.exposure_time = Some(0.4);
+    s.execute("photo.relink", &json!({"id": id.0, "path": b.to_string_lossy()})).unwrap();
+    write_png(&a, 200);
+    s.execute("photo.relink", &json!({"id": id.0, "path": a.to_string_lossy()})).unwrap();
+    let current = s.catalog.photo(id).unwrap().clone();
+    let changed = reload::apply(&mut s, items, vec![Ok(old)]).unwrap().reloaded;
+    assert!(!changed.contains(&id) && changed.contains(&copy));
+    assert_eq!(s.catalog.photo(id).unwrap(), &current);
+    let sibling = s.catalog.photo(copy).unwrap();
+    assert!(sibling.preview_only.is_none());
+    assert!(sibling.meta.camera.is_empty() && sibling.meta.lens.is_empty());
+    assert_eq!((sibling.meta.shutter.as_str(), sibling.meta.exposure_time), ("0.4", Some(0.4)));
+}
+
+#[test]
+fn review_reload_keeps_an_implicit_copy_when_its_selected_parent_moves() {
+    use crate::cmd::reload;
+    let dir = super::TestDir::new("reload-parent-moves");
+    let a = dir.join("a.png");
+    let b = dir.join("b.png");
+    write_png(&a, 10);
+    write_png(&b, 20);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [a.to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    let copy = PhotoId(s.execute("photo.virtualCopy", &json!({"ids": [id.0]})).unwrap()["ids"][0].as_u64().unwrap());
+    let items = reload::plan(&mut s, &json!({"ids": [id.0]})).unwrap();
+    write_png(&a, 200);
+    let mut info = reload::file_probe(&s).unwrap()(&a.to_string_lossy()).unwrap();
+    let hash = info.content_hash.clone();
+    info.meta.camera = "must not fill implicit metadata".into();
+    s.execute("photo.relink", &json!({"id": id.0, "path": b.to_string_lossy()})).unwrap();
+    let parent = s.catalog.photo(id).unwrap().clone();
+    let before = s.catalog.photo(copy).unwrap().clone();
+    assert_eq!(reload::apply(&mut s, items, vec![Ok(info)]).unwrap().reloaded, vec![copy]);
+    let photo = s.catalog.photo(copy).unwrap();
+    assert_eq!(photo.content_hash, hash);
+    assert_ne!(photo.content_hash, before.content_hash);
+    assert_eq!(photo.meta.camera, before.meta.camera);
+    assert_eq!(s.catalog.photo(id).unwrap(), &parent);
+}
