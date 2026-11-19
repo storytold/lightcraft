@@ -1237,8 +1237,8 @@ fn update_existing_crs(data: &mut String, name: &str, value: &str) -> bool {
                 }
                 continue;
             }
-            if rest.starts_with("<!") {
-                if let Some(rel) = rest[2..].find('>') {
+            if let Some(stripped) = rest.strip_prefix("<!") {
+                if let Some(rel) = stripped.find('>') {
                     i = s + 2 + rel + 1;
                 } else {
                     break;
