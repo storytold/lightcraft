@@ -239,10 +239,10 @@ pub fn write_rendered_dng(
     write_dng(&raw, &DngWriteOptions { compression: DngCompression::Deflate { tile: 256, half: true }, order, xmp })
 }
 
-fn raw_byte_order(order: ByteOrder) -> craft_raw_tiff::ByteOrder {
+fn raw_byte_order(order: ByteOrder) -> craft_tiff::ByteOrder {
     match order {
-        ByteOrder::Little => craft_raw_tiff::ByteOrder::Little,
-        ByteOrder::Big => craft_raw_tiff::ByteOrder::Big,
+        ByteOrder::Little => craft_tiff::ByteOrder::Little,
+        ByteOrder::Big => craft_tiff::ByteOrder::Big,
     }
 }
 
