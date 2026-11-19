@@ -69,7 +69,9 @@ fn threshold_compaction_runs_in_the_background() {
             background += 1;
         }
         if k == 30 {
-            // a crash while a compaction may be in flight
+            // a crash while a compaction may be in flight (once the log's thread has written what it
+            // was handed: a process that crashes in LightCraft's code keeps running it)
+            s.library.as_mut().unwrap().journal_mut().flush().unwrap();
             let expect = s.catalog.to_snapshot();
             let copy = temp_dir("bg-compact-crash");
             std::fs::create_dir_all(&copy).unwrap();
@@ -544,6 +546,8 @@ fn a_library_open_elsewhere_is_refused() {
     let dir = temp_dir("locked");
     let mut s = open(&dir, true);
     s.execute("photo.rate", &json!({"rating": 3})).unwrap();
+    // (written by the log's own thread)
+    s.library.as_mut().unwrap().journal_mut().flush().unwrap();
     let log = std::fs::read(dir.join("catalog.log")).unwrap();
 
     let mut other = Session::new();

@@ -556,6 +556,17 @@ fn the_keyword_list_is_written_as_tab_indented_text() {
     assert_eq!(c.keyword_list_text().text, "beach\nEvents\n\tWeddings\n[Places]\n\tLisbon\n\t\t{Lisboa}\n");
 }
 
+/// The path budget the reader enforces holds for the writer too: a keyword past it, and its
+/// subtree, is named unwritable instead of making a file `keyword.import` rejects.
+#[test]
+fn the_keyword_list_written_stays_within_the_path_budget() {
+    let (c, _) = lib(&[&["Places|Lisbon", "beach"], &["Events|Weddings"]]);
+    let file = c.keyword_list_text_within(17);
+    assert_eq!(file.text, "beach\nEvents\nPlaces\n");
+    assert_eq!(file.unwritable, ["Events|Weddings", "Places|Lisbon"]);
+    assert_eq!(c.keyword_list_text().unwritable, Vec::<String>::new());
+}
+
 /// Reading a list gives each keyword's path and attributes: what was written comes back, and a
 /// file from elsewhere (Windows line ends, a byte-order mark, blank lines) reads too.
 #[test]
@@ -764,4 +775,48 @@ fn keyword_tree_caps_a_keyword_at_the_list_depth() {
     let (c, _) = lib(&[&[joined.as_str()]]);
     let deepest = tree_paths(&c.keyword_tree()).iter().map(|(p, _)| p.split(SEP).count()).max().unwrap_or(0);
     assert_eq!(deepest, MAX_LEVELS);
+}
+
+/// A keyword list file spells each keyword's whole path, so one long keyword with many short ones
+/// inside it expands into far more than its own size: past `MAX_LIST_PATH_BYTES` it is refused
+/// with the line where that happened, instead of growing without bound (CWE-400).
+#[test]
+fn a_list_whose_paths_expand_past_the_budget_is_refused() {
+    let parent = "p".repeat(1 << 20);
+    let children = MAX_LIST_PATH_BYTES / parent.len() + 2;
+    let mut text = format!("{parent}\n");
+    for i in 0..children {
+        text.push_str(&format!("\tc{i}\n"));
+    }
+    let err = parse_keyword_list(&text).unwrap_err().to_string();
+    assert!(err.contains("full paths come to more than"), "{err}");
+    // a list within the budget still reads
+    let ok = parse_keyword_list(&format!("{parent}\n\tchild\n")).unwrap();
+    assert_eq!(ok.len(), 2);
+    assert_eq!(ok[1].0, format!("{parent}|child"));
+}
+
+/// Many synonyms joining a keyword the library has, its export and its keyword list file each keep
+/// every spelling once, in order, without a search of the growing list per synonym (CWE-407).
+#[test]
+fn many_synonyms_are_gathered_once_each_in_order() {
+    const N: usize = 40_000;
+    let mut c = Catalog::new();
+    c.apply(Op::SetKeyword { path: "travel".into(), info: Some(with_synonyms(&["Trip"])) }).unwrap();
+    let mut incoming: Vec<String> = (0..N).map(|i| format!("syn{i}")).collect();
+    incoming.push("TRIP".into());
+    incoming.push("SYN7".into());
+    let started = std::time::Instant::now();
+    let (op, added, updated) = c.import_keywords_ops(&[("travel".into(), KeywordInfo { synonyms: incoming, ..KeywordInfo::default() })]);
+    c.apply(op).unwrap();
+    assert_eq!((added, updated), (0, 1));
+    let synonyms = c.keyword_info("travel").unwrap().synonyms.clone();
+    assert_eq!(synonyms.len(), N + 1);
+    assert_eq!(synonyms[0], "Trip");
+    assert_eq!(synonyms[8], "syn7");
+    let exported = c.export_keywords(&["travel".into()]);
+    assert_eq!(exported.flat.len(), N + 2);
+    let file = c.keyword_list_text();
+    assert_eq!(file.text.lines().count(), N + 2);
+    assert!(started.elapsed() < std::time::Duration::from_secs(20), "took {:?}", started.elapsed());
 }

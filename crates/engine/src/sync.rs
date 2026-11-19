@@ -334,8 +334,9 @@ fn match_moved(
 ) -> HashMap<String, String> {
     // distinct missing files (a photo's virtual copies share its file), with what is known of them
     let mut files: Vec<(&str, Option<&Photo>)> = Vec::new();
+    let mut seen_paths: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for m in missing {
-        if !files.iter().any(|(p, _)| *p == m.path) {
+        if seen_paths.insert(m.path.as_str()) {
             files.push((m.path.as_str(), labels.photo(PhotoId(m.id)).map(|p| &**p)));
         }
     }
@@ -363,7 +364,8 @@ fn match_moved(
         }
     }
     let mut found: HashMap<(u64, u32, u32), Vec<&str>> = HashMap::new();
-    for c in candidates.iter().filter(usable).filter(|c| !moved.values().any(|to| *to == c.path)) {
+    let taken: std::collections::HashSet<&str> = moved.values().map(String::as_str).collect();
+    for c in candidates.iter().filter(usable).filter(|c| !taken.contains(c.path.as_str())) {
         if let Some(k) = key(c.file_size, c.width, c.height) {
             found.entry(k).or_default().push(c.path.as_str());
         }
@@ -618,7 +620,7 @@ fn sidecar_has_news(labels: &Catalog, p: &Photo, naming: SidecarLookup, listing:
     }
     let Ok(text) = std::fs::read_to_string(&file) else { return false };
     let Ok(sc) = crate::sidecar::parse_sidecar(&text, crate::crs::Target::for_photo(p)) else { return false };
-    let sc = sc.resolve_label(labels);
+    let sc = sc.with_file_orientation(path).resolve_label(labels);
     let mut q = p.clone();
     crate::sidecar::merge_into(&mut q, &sc, "");
     (q.rating, q.flag, q.label, &q.meta, &q.captured, &q.develop) != (p.rating, p.flag, p.label, &p.meta, &p.captured, &p.develop)
@@ -801,7 +803,7 @@ fn read_sidecar(path: &str, naming: SidecarLookup, target: crate::crs::Target) -
         return Err(format!("{}: too large for an XMP sidecar", file.display()));
     }
     let text = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
-    crate::sidecar::parse_sidecar(&text, target).map_err(|e| format!("{}: {e}", file.display()))
+    crate::sidecar::parse_sidecar(&text, target).map(|sc| sc.with_file_orientation(path)).map_err(|e| format!("{}: {e}", file.display()))
 }
 
 impl SyncCommit {
