@@ -2309,3 +2309,33 @@ fn a_masks_lens_blur_block_picks_the_side_and_switches_off() {
     assert!(!h.app.ui.section_folded("maskLensBlur"));
     h.settle(SETTLE);
 }
+
+#[test]
+fn cmd_c_and_cmd_v_copy_and_paste_the_selected_mask_while_masking() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.4, 0.5], "rx": 0.2, "ry": 0.1}));
+    let r = h.request("ui.key", json!({"key": "C", "cmd": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(h.app.session.mask_clipboard.is_some(), "⌘C copied the mask");
+    assert!(h.app.session.clipboard.is_none(), "not the settings");
+    // another photo, still masking: ⌘V adds the mask beside its own
+    let source = h.app.session.active().unwrap();
+    let other = h.app.session.visible_cloned().into_iter().find(|p| *p != source).unwrap();
+    exec(&mut h, "library.select", json!({"ids": [other.0], "active": other.0}));
+    h.step();
+    let before = develop(&h).masks.len();
+    let r = h.request("ui.key", json!({"key": "V", "cmd": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let d = develop(&h);
+    assert_eq!(d.masks.len(), before + 1, "⌘V pasted the mask");
+    assert!(matches!(d.masks.last().unwrap().components[0].shape, MaskShape::Radial { .. }));
+    // outside Masking, ⌘C copies the settings again
+    exec(&mut h, "panel.edit", json!({}));
+    h.step();
+    let r = h.request("ui.key", json!({"key": "C", "cmd": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(h.app.session.clipboard.is_some(), "⌘C in Edit copies the settings");
+}

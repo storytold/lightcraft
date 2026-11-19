@@ -783,6 +783,16 @@ fn context_key_skipped(app: &mut LightcraftApp, f: &str, rotate_fires: bool) -> 
             let _ = app.run("spot.refreshSource", json!({}));
             true
         }
+        // in Masking, ⌘C / ⌘V copy and paste the selected mask, as in Lightroom (settings
+        // elsewhere, and ⌘V while no mask is copied)
+        "develop.copy" if right == R::Masking && app.session.active_mask.is_some() => {
+            let _ = app.run("mask.copy", json!({}));
+            true
+        }
+        "develop.paste" if right == R::Masking && app.session.mask_clipboard.is_some() => {
+            let _ = app.run("mask.paste", json!({}));
+            true
+        }
         // Shift+O cycles the mask overlay colour while masking (the crop overlay elsewhere)
         "view.cropOverlay" if right == R::Masking => {
             let _ = app.run("view.maskOverlayColor", json!({}));
