@@ -16,8 +16,8 @@ pub const EXTENSIONS: &[&str] = &[
     "srw", "psd", "psb", "jxl", "gif", "bmp",
     // Decoded when built with the codecs' `heif` feature; otherwise the import reports them as
     // failed with the reason ("HEIC/HEIF support isn't included in this build").
-    "heic", "heif", "avif", // no AV1 decoder yet: reported as failed, like a HEIC without the feature
-    "iiq", "crw", "mrw", "x3f", "kdc", "mos", "erf", "3fr", "fff", "mef",
+    "heic", "heif", // AVIF decoding is available in native builds with the codecs' `avif` feature.
+    "avif", "iiq", "crw", "mrw", "x3f", "kdc", "mos", "erf", "3fr", "fff", "mef",
 ];
 
 pub fn is_supported(path: &Path) -> bool {
