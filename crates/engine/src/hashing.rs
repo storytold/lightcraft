@@ -45,11 +45,16 @@ pub struct HashDone {
 /// The content hash of the file at `path`, as an import works it out; `None` when it can't be read.
 /// Read in pieces: the file is whatever is on the disk, of any size.
 pub fn file_hash(path: &str) -> Option<String> {
+    hash_reader(open_regular(path)?)
+}
+
+/// The file at `path` to read to its end: it must be regular (a FIFO or device would never end),
+/// and no more than its size at open is read.
+fn open_regular(path: &str) -> Option<std::io::Take<std::fs::File>> {
     use std::io::Read;
-    // the opened file must be regular (a FIFO or device would never end), and no more than its size at open is read
     let file = std::fs::File::open(path).ok()?;
     let meta = file.metadata().ok().filter(|m| m.is_file())?;
-    hash_reader(file.take(meta.len()))
+    Some(file.take(meta.len()))
 }
 
 /// The content hash of what `r` gives, read in pieces (the hash import computes of the whole).
@@ -81,24 +86,22 @@ impl HashJob {
     /// queued any more (another size), or changed while it was read (the hash would be of neither
     /// version): the job is then tried again later.
     pub fn run(&self) -> Option<HashDone> {
-        self.run_reading(|path| std::fs::read(path).ok())
+        self.run_reading(open_regular)
     }
 
-    /// [`Self::run`] with the file read by `read` (tests change the file while it is read).
-    pub(crate) fn run_reading(&self, read: impl FnOnce(&str) -> Option<Vec<u8>>) -> Option<HashDone> {
+    /// [`Self::run`] with the file read from what `open` gives (tests change the file while it is
+    /// read). It is streamed in pieces, so a job holds no more than one piece of the file in memory.
+    pub(crate) fn run_reading<R: std::io::Read>(&self, open: impl FnOnce(&str) -> Option<R>) -> Option<HashDone> {
         let Source::File { path } = &self.photo.source else { return None };
         let before = revision(path)?;
         let len = before.0;
         if len != self.photo.file_size {
             return None;
         }
-        let _permit = crate::memory::work_gate().acquire(usize::try_from(len).unwrap_or(usize::MAX));
-        let bytes = read(path)?;
+        let hash = hash_reader(open(path)?)?;
         if revision(path)? != before {
             return None;
         }
-        let hash = lightcraft_preview::hash_bytes(&bytes).to_string();
-        drop(bytes);
         // Only looked up here, off the UI thread: the photo keeps its old key until the hash is recorded.
         let smart_move = self.smart_dir.as_ref().and_then(|dir| {
             let old = crate::smart::file_path(dir, &self.photo);

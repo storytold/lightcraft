@@ -246,7 +246,7 @@ fn a_file_changed_while_it_is_hashed_gets_no_hash_from_that_read() {
         std::fs::write(path, &other).unwrap();
         let f = std::fs::File::options().write(true).open(path).unwrap();
         f.set_modified(modified + std::time::Duration::from_secs(2)).unwrap();
-        read
+        read.map(std::io::Cursor::new)
     });
     assert!(done.is_none(), "the read is of a file that changed meanwhile");
     assert!(s.catalog.photo(id).unwrap().content_hash.is_none());
