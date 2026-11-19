@@ -22,7 +22,6 @@ fn languages_switch_persist_and_keep_user_values() {
         app.run(&command, serde_json::json!({})).unwrap();
         assert_eq!(app.ui.language, locale);
         assert_eq!(language(), locale);
-        assert_eq!(crate::menubar::checked(&app, &command), Some(true));
         assert_eq!(builtin_label("Warm Glow", false), "Warm Glow");
         assert_eq!(builtin_label("Warm Glow", true), locale.tr("Warm Glow"));
         assert_eq!(tr("photo-{title}.jpg"), "photo-{title}.jpg");
@@ -133,6 +132,33 @@ fn catalogs_agree_on_placeholders() {
         for (key, value) in language.catalog() {
             assert_eq!(fields(key), fields(value), "{language:?}: {key:?} -> {value:?}");
         }
+    }
+}
+
+/// The tour's text (its pages, and its window and button labels) is in every catalog: a language
+/// missing one of these keys would show that line in English on the first launch. The pages that
+/// name a shortcut carry the live chord through a format message (`menubar::shortcut_text` paints
+/// it), so their `{keys}` forms are pinned in every `*-formats.json` too.
+#[test]
+fn the_welcome_tour_is_translated_in_every_catalog() {
+    use crate::dialogs::{WELCOME_NEXT, WELCOME_PAGES, WELCOME_START, WELCOME_TITLE};
+    let keys: Vec<&str> = WELCOME_PAGES
+        .iter()
+        .flat_map(|(title, text, opening)| [*title, *text, *opening])
+        .chain([WELCOME_TITLE, WELCOME_NEXT, WELCOME_START])
+        .collect();
+    let format_keys = [
+        "Bring photos in with File \u{203a} Import Photos\u{2026} ({keys}).",
+        "View \u{203a} Detail View ({keys}).",
+        "File \u{203a} Export\u{2026} \u{b7} File \u{203a} Print\u{2026} ({keys}).",
+    ];
+    for language in Locale::ALL.iter().copied().filter(|language| *language != Locale::En) {
+        let catalog = language.catalog();
+        let missing: Vec<&str> = keys.iter().copied().filter(|key| !catalog.contains_key(*key)).collect();
+        assert!(missing.is_empty(), "{}: no translation for {missing:?}", language.code());
+        let own_formats = formats_catalog(language.code());
+        let missing_formats: Vec<&str> = format_keys.iter().copied().filter(|key| !own_formats.contains_key(*key)).collect();
+        assert!(missing_formats.is_empty(), "{}: no translation for {missing_formats:?}", language.code());
     }
 }
 
@@ -342,7 +368,7 @@ fn translated_catalogs_do_not_use_missing_menu_triangles() {
     }
 }
 
-/// The language menu covers every language, and a language's own command selects it.
+/// Every language has a command, and a language's own command selects it.
 #[test]
 fn language_commands_cover_every_language() {
     let commands = [
@@ -365,11 +391,11 @@ fn language_commands_cover_every_language() {
         ("app.language.indonesian", Locale::Id),
         ("app.language.vietnamese", Locale::Vi),
     ];
-    // One command per language, and every command reachable from the menu table.
+    // One command per language, and every command in the UI command tables.
     assert_eq!(commands.len(), Locale::ALL.len());
     for (id, language) in commands {
         assert_eq!(crate::menus::language_from_command(id), Some(language), "{id}");
-        assert!(crate::menus::ui_commands().any(|command| command.0 == id), "{id} is not in the menu");
+        assert!(crate::menus::ui_commands().any(|command| command.0 == id), "{id} is not a UI command");
     }
     assert_eq!(crate::menus::language_from_command("app.language.klingon"), None);
     assert_eq!(crate::menus::language_from_command("view.detail"), None);
@@ -388,9 +414,33 @@ fn preferences_round_trip_and_old_settings_remain_readable() {
     assert_eq!(restored.language, Locale::ZhHans);
 }
 
-/// Smart-album choice values read as words in every language (English "Public Domain"), never as
-/// rule ids like `publicDomain`; an id the field doesn't know shows as written. A yes/no value
-/// reads Yes / No, or the language's contextual entry for it where it has one.
+#[test]
+fn catalogs_contain_core_workflows() {
+    for language in Locale::ALL.iter().filter(|language| **language != Locale::En) {
+        for key in ["Import Photos…", "Export…", "Exposure", "White Balance", "Settings", "Language"] {
+            let value = language.tr(key);
+            assert!(!value.is_empty() && value != key, "{language:?}: {key}");
+        }
+    }
+}
+
+/// The built-in export presets' names show translated in the Export dialog (`builtin_label`), so
+/// every catalog carries them. A translation may keep the English text, so this checks that an
+/// entry exists: the catalog comparison only reports gaps, and a gap would show English silently.
+#[test]
+fn export_preset_names_are_translated_in_every_catalog() {
+    for language in Locale::ALL.iter().filter(|language| **language != Locale::En) {
+        for key in ["Instagram Feed", "Instagram Story / Reel", "Web / Portfolio", "Full Resolution Master"] {
+            assert!(language.catalog().contains_key(key), "{language:?} has no translation for {key:?}");
+        }
+    }
+}
+
+/// Smart-album choice values read as words in every language (English "Public Domain", German
+/// "Gemeinfrei"), never as rule ids like `publicDomain`; an id the field doesn't know shows as
+/// written. Unlike other labels these must be translated: an untranslated one would be English
+/// in the middle of a translated rule. A yes/no value reads Yes / No, or the language's
+/// contextual entry for it where it has one.
 #[test]
 fn choice_values_read_as_words_in_every_language() {
     use lightcraft_catalog::rules::{FIELDS, Kind, bool_label};
@@ -535,7 +585,6 @@ fn german_switches_via_menu_and_control_and_persists() {
     app.run("app.language.german", serde_json::json!({})).unwrap();
     assert_eq!(app.ui.language, Locale::De);
     assert_eq!(language(), Locale::De);
-    assert_eq!(crate::menubar::checked(&app, "app.language.german"), Some(true));
     let saved = serde_json::to_string(&app.ui).unwrap();
     assert!(saved.contains(r#""language":"de""#));
     assert_eq!(serde_json::from_str::<crate::state::UiState>(&saved).unwrap().language, Locale::De);
@@ -655,6 +704,9 @@ fn german_ukrainian_italian_and_finnish_buttons_fit_the_bottom_bar_and_export_di
         let ctx = fonts_ctx(&[]);
         let services = crate::Services { pick_folder: Some(Box::new(|| None)), ..Default::default() };
         let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+        // a headless host never gains the first-run tour: this harness drives `ui` directly and
+        // measures the export dialog's own layout
+        app.headless_host = true;
         app.ui.language = language;
         let mut bounds = Vec::new();
         for export in [false, true] {
@@ -714,6 +766,7 @@ fn painted_text(ctx: &egui::Context, app: &mut crate::LightcraftApp, language: L
             _ => {}
         }
     }
+    app.headless_host = true;
     app.ui.language = language;
     let mut text = String::new();
     for frame in 0..4 {
@@ -803,6 +856,8 @@ fn the_ui_works_without_craft_fonts() {
         }
     });
     let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+    // a headless host never gains the first-run tour: this pass just warms every language up
+    app.headless_host = true;
     for language in Locale::ALL {
         app.ui.language = *language;
         for frame in 0..3 {
@@ -830,8 +885,6 @@ fn traditional_chinese_switches_through_menu_and_control_and_persists() {
     assert_eq!(source_label(lightcraft_engine::LibrarySource::All, &app.session.catalog), Locale::ZhHant.tr("All Photos"));
     assert_eq!(date_group_label("", false), Locale::ZhHant.tr("Unknown Date"));
     assert_eq!(display_time("a-user-value"), "a-user-value");
-    assert_eq!(crate::menubar::checked(&app, "app.language.traditionalChinese"), Some(true));
-    assert_eq!(crate::menubar::checked(&app, "app.language.english"), Some(false));
     assert_eq!(tr("my-photo.jpg"), "my-photo.jpg");
     for id in ["album.addPhotos", "metadata.applyPreset", "label.applySet"] {
         assert_eq!(crate::menubar::display_item_label(id, &serde_json::json!({"id": 1}), "Color"), "Color");
@@ -1218,7 +1271,6 @@ fn polish_switches_formats_dates_and_reads_every_count() {
     app.run("app.language.polish", serde_json::json!({})).unwrap();
     assert_eq!(app.ui.language, Locale::Pl);
     assert_eq!(Locale::Pl.name(), "Polski");
-    assert_eq!(crate::menubar::checked(&app, "app.language.polish"), Some(true));
     assert_eq!(tr("File"), "Plik");
     assert_eq!(tr("Exposure"), "Ekspozycja");
     assert_eq!(date_group_label("2026-09-20", false), "Niedziela, 20.09.2026");
@@ -1237,4 +1289,14 @@ fn polish_switches_formats_dates_and_reads_every_count() {
     assert!(text.contains("Plik") && text.contains("Ekspozycja"), "{text}");
     assert_polish_glyphs(&ctx);
     set_language(Locale::En);
+}
+
+#[test]
+fn perspective_labels_are_translated_in_every_shipped_locale() {
+    for locale in Locale::ALL.iter().filter(|locale| **locale != Locale::En) {
+        for source in ["Perspective Correction", "Guided Perspective", "Perspective Guides"] {
+            assert!(locale.catalog().contains_key(source), "{}: {source}", locale.code());
+            assert!(!locale.tr(source).contains("Upright"), "{}: {source}", locale.code());
+        }
+    }
 }

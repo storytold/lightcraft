@@ -389,7 +389,10 @@ impl PartFile {
         let mut name = target.file_name().ok_or_else(|| format!("{}: not a file name", target.display()))?.to_os_string();
         name.push(".part");
         let part = target.with_file_name(name);
-        let f = std::fs::File::create(&part).map_err(|e| format!("{}: {e}", part.display()))?;
+        // an entry already under the staging name (a leftover, or a link planted to point the
+        // encoder's bytes at another file) is removed, never opened and written through
+        let _ = std::fs::remove_file(&part);
+        let f = std::fs::OpenOptions::new().write(true).create_new(true).open(&part).map_err(|e| format!("{}: {e}", part.display()))?;
         Ok((PartFile { part, target: target.to_path_buf(), done: false }, f))
     }
 

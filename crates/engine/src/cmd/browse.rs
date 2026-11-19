@@ -522,7 +522,13 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
     if !src.is_dir() {
         return Err(format!("{from} is not a folder"));
     }
-    if s.library.as_ref().is_some_and(|l| l.dir.starts_with(src) || src.starts_with(&l.dir)) {
+    // compared as the folders are on disk (a differently spelled or linked path to the library
+    // names the same folder), with the spelling as a fallback where that can't be told
+    let same_folder = |l: &Path| {
+        let (lib, chosen) = (l.canonicalize().unwrap_or_else(|_| l.to_path_buf()), src.canonicalize().unwrap_or_else(|_| src.to_path_buf()));
+        lib.starts_with(&chosen) || chosen.starts_with(&lib) || l.starts_with(src) || src.starts_with(l)
+    };
+    if s.library.as_ref().is_some_and(|l| same_folder(&l.dir)) {
         return Err("the library's own folders can't be moved here".into());
     }
     // Repairs retain their exact old paths, including those on surviving history entries.
