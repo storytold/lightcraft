@@ -190,8 +190,13 @@ fn a_check_over_changing_photos_answers_what_still_holds() {
     let cat = &mut h.app.session.catalog;
     cat.apply(Op::RemovePhoto { id: PhotoId(1) }).unwrap();
     cat.apply(Op::SetDeleted { id: PhotoId(2), deleted: true }).unwrap();
-    let relinked =
-        Op::Relink { id: PhotoId(3), file_name: "y.jpg".into(), source: Source::File { path: "/share/IMG_9998.jpg".into() }, format: None };
+    let relinked = Op::Relink {
+        id: PhotoId(3),
+        file_name: "y.jpg".into(),
+        source: Source::File { path: "/share/IMG_9998.jpg".into() },
+        format: None,
+        kind: None,
+    };
     cat.apply(relinked).unwrap();
     cat.apply(Op::AddPhoto { photo: new_photo(PHOTOS + 1, "/share/IMG_0000x.jpg") }).unwrap();
     share.open.store(true, Ordering::SeqCst);

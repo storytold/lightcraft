@@ -593,6 +593,7 @@ mod prepared_tests {
             path: path.to_string_lossy().into(),
             stored: path.to_string_lossy().into(),
             info: ProbeInfo { format: "JPG".into(), ..ProbeInfo::default() },
+            input_hash: None,
             sidecar: None,
             placed: None,
         };

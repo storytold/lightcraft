@@ -65,6 +65,7 @@
 //! | 11 | lens database profiles named in the Optics panel | `EmbeddedLens.source` |
 //! | 12 | history steps and versions share segmentation grids (#2154) | `Catalog.grids`, `SegMask.grid` |
 //! | 13 | Lens Blur | `DevelopSettings.lens_blur`, `Mask.adjust.lens_blur` |
+//! | 14 | probed source classification on Relink and Reload | `Op::Relink.kind` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -89,7 +90,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 13;
+pub const VERSION: u32 = 14;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]
@@ -428,7 +429,7 @@ struct SnapFile {
 
 impl Journal {
     /// Open (or create) the catalog in `store`: load the snapshot, replay the log, repair a torn
-    /// tail. Fails only if the snapshot itself is unreadable (then nothing is modified).
+    /// tail. A new or upgraded format snapshot must be durable before the journal accepts writes.
     pub fn open(mut store: Box<dyn Store>) -> Result<(Journal, Catalog, LoadReport)> {
         let mut report = LoadReport::default();
         let snap = store.read(SNAPSHOT).map_err(io)?;
@@ -567,19 +568,20 @@ impl Journal {
         if report.created {
             // tiny: written directly, not counted as a compaction
             let empty = format!("{{\"format\":\"{FORMAT}\",\"version\":{VERSION},\"seq\":0,\"catalog\":{}}}\n", catalog.to_snapshot());
-            if let Err(e) = j.store.write_atomic(SNAPSHOT, empty.as_bytes()) {
-                log::warn!("catalog: can't write the new library's snapshot: {e}");
-            }
+            j.store.write_atomic(SNAPSHOT, empty.as_bytes()).map_err(io)?;
         } else if report.damaged.is_none() && snapshot_version != Some(VERSION) {
+            let started = web_time::Instant::now();
+            // Without this durable format barrier, older builds could silently drop fields
+            // from newer ops appended under the previous snapshot's version.
+            let timing = write_snapshot(j.store.as_mut(), j.seq, &catalog).map_err(io)?;
+            j.snapshot_seq = j.seq;
             report.upgraded_from = Some(snapshot_version.unwrap_or(0));
-            match j.snapshot(&catalog) {
-                Ok(()) => {
-                    if let Some(v) = report.upgraded_from {
-                        log::info!("catalog: upgraded from format v{v} to v{VERSION}");
-                    }
-                }
-                // nothing lost: the old files are intact and still load; retried on next open
-                Err(e) => log::warn!("catalog: can't write the format v{VERSION} snapshot: {e}"),
+            if let Err(e) = j.reset_log_after_snapshot(timing, started) {
+                // The new header already blocks older builds; stale log records are skipped.
+                log::warn!("catalog: can't reset the log after the format v{VERSION} snapshot: {e}");
+            }
+            if let Some(v) = report.upgraded_from {
+                log::info!("catalog: upgraded from format v{v} to v{VERSION}");
             }
         }
         catalog.revision = 0;
@@ -648,7 +650,7 @@ impl Journal {
         }
         let t0 = web_time::Instant::now();
         let seq = self.seq.checked_add(unlogged).ok_or_else(|| CatalogError::Corrupt(format!("{SNAPSHOT}: op counter overflow")))?;
-        let mut timing = match write_snapshot(self.store.as_mut(), seq, catalog) {
+        let timing = match write_snapshot(self.store.as_mut(), seq, catalog) {
             Ok(t) => t,
             Err(e) => {
                 // nothing lost (the log is whole); don't retry on every append
@@ -660,11 +662,15 @@ impl Journal {
         // the snapshot is durable: it holds every op up to `seq`
         self.seq = seq;
         self.snapshot_seq = seq;
+        self.reset_log_after_snapshot(timing, t0)
+    }
+
+    fn reset_log_after_snapshot(&mut self, mut timing: SnapshotTiming, started: web_time::Instant) -> Result<()> {
         let t2 = web_time::Instant::now();
         // A crash here leaves old records in the log; they are skipped by seq on load.
         self.store.write_atomic(LOG, b"").map_err(io)?;
         timing.reset_ms = ms_since(t2);
-        timing.total_ms = ms_since(t0);
+        timing.total_ms = ms_since(started);
         timing.blocking_ms = timing.total_ms;
         timing.records = self.log_records;
         self.record_snapshot(timing);

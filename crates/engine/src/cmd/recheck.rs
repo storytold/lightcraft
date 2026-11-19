@@ -12,7 +12,7 @@
 //! results as LightCraft's own bookkeeping (journaled, not an undo step). Agents and tests use
 //! `library.recheckPreviewOnly`, which does all three at once.
 
-use lightcraft_catalog::{Catalog, Op, Photo, PhotoId};
+use lightcraft_catalog::{Op, Photo, PhotoId};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd};
@@ -25,27 +25,39 @@ use crate::{Result, Session};
 pub struct Stale {
     pub id: PhotoId,
     pub path: String,
+    family: PhotoId,
+    ticket: u64,
     preview_only: Option<String>,
     preview_checked: String,
 }
 
 impl Stale {
-    fn of(p: &Photo, path: &str) -> Stale {
-        Stale { id: p.id, path: path.to_string(), preview_only: p.preview_only.clone(), preview_checked: p.preview_checked.clone() }
+    fn of(p: &Photo, path: &str, ticket: u64) -> Stale {
+        Stale {
+            id: p.id,
+            path: path.to_string(),
+            family: p.copy_of.unwrap_or(p.id),
+            ticket,
+            preview_only: p.preview_only.clone(),
+            preview_checked: p.preview_checked.clone(),
+        }
     }
 
     /// The photo is still as it was listed: same file, flag and stamp.
     fn current(&self, p: &Photo) -> bool {
-        crate::cmd::missing::checked_path(p) == Some(self.path.as_str())
+        p.copy_of.unwrap_or(p.id) == self.family
+            && crate::cmd::missing::checked_path(p) == Some(self.path.as_str())
             && p.preview_only == self.preview_only
             && p.preview_checked == self.preview_checked
     }
 }
 
 /// The library's preview-only photos and ORFs whose support another app version checked (or
-/// every such photo, with `all`). A virtual copy follows its parent's probe only when that
-/// parent is being checked against the same file. No file-system calls.
-pub fn stale(cat: &Catalog, all: bool) -> Vec<Stale> {
+/// every such photo, with `all`), under a new source-read ticket. A virtual copy follows its
+/// parent's probe only when that parent is being checked against the same file. No file-system calls.
+pub fn stale(s: &mut Session, all: bool) -> Vec<Stale> {
+    let ticket = s.reload_tickets.next();
+    let cat = &s.catalog;
     let eligible = |p: &Photo| p.preview_only_stale() || (all && (p.preview_only.is_some() || p.format.eq_ignore_ascii_case("orf")));
     cat.photos()
         .filter(|p| eligible(p))
@@ -55,7 +67,7 @@ pub fn stale(cat: &Catalog, all: bool) -> Vec<Stale> {
                 .copy_of
                 .and_then(|id| cat.photo(id))
                 .is_some_and(|parent| eligible(parent) && parent.copy_of.is_none() && crate::cmd::missing::checked_path(parent) == Some(path));
-            (!follows_parent).then(|| Stale::of(p, path))
+            (!follows_parent).then(|| Stale::of(p, path, ticket))
         })
         .collect()
 }
@@ -99,8 +111,11 @@ pub fn apply(s: &mut Session, results: Vec<(Stale, std::result::Result<ProbeInfo
         if !s.catalog.photo(item.id).is_some_and(|p| item.current(p)) {
             continue;
         }
+        if !s.reload_tickets.accept(item.family, item.path, item.ticket) {
+            continue;
+        }
         let first = out.updated.len();
-        crate::cmd::convert::reload_ops(&s.catalog, item.id, &info, &mut ops, &mut out.updated);
+        crate::cmd::convert::reload_ops(&s.catalog, item.id, &info, &mut ops, &mut out.updated, |id| s.reload_tickets.valid(id, item.ticket));
         if info.preview_only.is_none() {
             out.cleared.extend(out.updated[first..].iter().copied().filter(|id| s.catalog.photo(*id).is_some_and(|p| p.preview_only.is_some())));
         }
@@ -119,7 +134,7 @@ fn recheck(s: &mut Session, p: &Value) -> Result<Value> {
     let all = p.get("all").and_then(Value::as_bool).unwrap_or(false);
     // without file access every probe "succeeds" with nothing known, which would clear every flag
     let fp = file_probe(s).ok_or_else(|| bad(C, "this session has no file access"))?;
-    let listed = stale(&s.catalog, all);
+    let listed = stale(s, all);
     let n = listed.len();
     let mut r = apply(s, probe(&fp, listed))?.to_json();
     r["checked"] = json!(n);

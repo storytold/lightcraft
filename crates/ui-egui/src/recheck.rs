@@ -19,7 +19,7 @@ pub fn tick(app: &mut LightcraftApp) {
     app.ui.rechecked_library = Some(library);
     // a demo or browser session has no files to read
     let Some(probe) = recheck::file_probe(&app.session) else { return };
-    let stale = recheck::stale(&app.session.catalog, false);
+    let stale = recheck::stale(&mut app.session, false);
     if stale.is_empty() {
         return;
     }

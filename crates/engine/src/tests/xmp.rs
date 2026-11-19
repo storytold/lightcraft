@@ -1281,6 +1281,7 @@ fn convert_to_dng_is_verified_and_atomic() {
             file_name: "shot.dng".into(),
             source: lightcraft_catalog::Source::File { path: path.clone() },
             format: Some("NEF".into()),
+            kind: None,
         })
         .unwrap();
     s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
@@ -1586,7 +1587,7 @@ fn dngs_of_raws_without_colour_matrices_carry_the_colour_they_open_with() {
             Ok(())
         };
         crate::export::export_batch(&mut s, &[id], &o, &crate::export::Destination { dir: "x".into(), exact: None }, &mut write, &|_| false).unwrap();
-        let converted = crate::cmd::convert::write_dng_with(None, &path.to_string_lossy(), String::new()).unwrap();
+        let (converted, _) = crate::cmd::convert::write_dng_with(None, &path.to_string_lossy(), String::new()).unwrap();
         for (how, dng) in [("export", exported), ("convert", std::fs::read(&converted).unwrap())] {
             let back = lightcraft_raw::decode(&dng).unwrap();
             assert!(back.color.color_matrix[0].is_some() && back.color.illuminant[0] != 0, "{model} {how}: {:?}", back.color);

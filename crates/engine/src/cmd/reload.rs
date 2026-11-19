@@ -29,12 +29,41 @@ pub struct Item {
     pub ticket: u64,
 }
 
-/// Which reload each same-file family last took its file information from, so an older read
+/// Which Reload or recheck each same-file family last took its file information from, so an older read
 /// cannot replace a newer one. A relink must not carry freshness to another file (session memory).
 #[derive(Debug, Default)]
 pub struct Tickets {
     last: u64,
     applied: std::collections::BTreeMap<(PhotoId, String), u64>,
+    invalidated: std::collections::BTreeMap<PhotoId, u64>,
+}
+
+impl Tickets {
+    /// Planning order shared by Reload and automatic raw rechecks.
+    pub(crate) fn next(&mut self) -> u64 {
+        self.last = self.last.saturating_add(1);
+        self.last
+    }
+
+    /// A relink's changed facts must not be replaced by a read planned before it.
+    pub(crate) fn invalidate(&mut self, id: PhotoId) {
+        self.invalidated.insert(id, self.last);
+    }
+
+    /// Keep changed file facts without cancelling an untouched sibling's pending read.
+    pub(crate) fn valid(&self, id: PhotoId, ticket: u64) -> bool {
+        self.invalidated.get(&id).is_none_or(|cutoff| *cutoff < ticket)
+    }
+
+    /// Only a newer completed read of this family's file supersedes its result.
+    pub(crate) fn accept(&mut self, family: PhotoId, path: String, ticket: u64) -> bool {
+        let key = (family, path);
+        if self.applied.get(&key).is_some_and(|latest| *latest > ticket) {
+            return false;
+        }
+        self.applied.insert(key, ticket);
+        true
+    }
 }
 
 /// The files `p` targets (`ids`, else the selection), grouped by family and path under a new
@@ -43,8 +72,7 @@ pub fn plan(s: &mut Session, p: &Value) -> Result<Vec<Item>> {
     let ids = s.targets(p)?;
     let mut groups = std::collections::HashMap::<(PhotoId, String), usize>::new();
     let mut items: Vec<Item> = Vec::new();
-    s.reload_tickets.last = s.reload_tickets.last.saturating_add(1);
-    let ticket = s.reload_tickets.last;
+    let ticket = s.reload_tickets.next();
     for id in ids {
         let Some(ph) = s.catalog.photo(id) else { continue };
         let Source::File { path } = &ph.source else { continue };
@@ -112,16 +140,19 @@ pub fn apply(s: &mut Session, items: Vec<Item>, results: Vec<std::result::Result
             continue;
         };
         let id = ph.id;
-        let key = (item.family, item.path);
         // Sibling reloads supersede each other only while they read the same file.
-        if s.reload_tickets.applied.get(&key).is_some_and(|t| *t > item.ticket) {
+        if !s.reload_tickets.accept(item.family, item.path, item.ticket) {
             continue;
         }
-        s.reload_tickets.applied.insert(key, item.ticket);
-        crate::cmd::convert::reload_ops(&s.catalog, id, &info, &mut ops, &mut reloaded);
-        for id in item.metadata_targets.into_iter().filter(|target| *target != id) {
+        let valid = |id| s.reload_tickets.valid(id, item.ticket);
+        crate::cmd::convert::reload_ops(&s.catalog, id, &info, &mut ops, &mut reloaded, valid);
+        for id in item.metadata_targets.into_iter().filter(|target| *target != id && valid(*target)) {
             let Some(ph) = s.catalog.photo(id).filter(|p| super::convert::shares_reload_source(p, ph)) else { continue };
-            let meta = super::convert::fill_missing_meta(id, ph, &info);
+            let mut meta = super::convert::fill_missing_meta(id, ph, &info);
+            let wb = super::convert::reload_wb_op(ph, &info, &meta);
+            if wb != super::convert::reload_wb_op(ph, &info, &[]) {
+                meta.extend(wb);
+            }
             if !meta.is_empty() {
                 ops.extend(meta);
                 if !reloaded.contains(&id) {

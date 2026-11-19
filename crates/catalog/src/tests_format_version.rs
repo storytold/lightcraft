@@ -238,9 +238,138 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v13: Lens Blur in develop settings and mask adjustments (v12: `Catalog.grids` and `SegMask.grid`; v11: `EmbeddedLens.source`;
+    /// v14: `Op::Relink.kind`; v13: Lens Blur in develop settings and mask adjustments (v12: `Catalog.grids` and `SegMask.grid`; v11: `EmbeddedLens.source`;
     /// v10: `Mask.on_photo`; v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`).
-    const NEWEST_FIELDS: u32 = 13;
+    const NEWEST_FIELDS: u32 = 14;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
+}
+
+#[test]
+fn v13_relink_replays_without_kind_and_new_classification_has_an_exact_inverse() {
+    let mut c = Catalog::new();
+    let id = c.alloc_photo_id();
+    let mut p = Photo::new(id, Source::File { path: "/old.dng".into() }, "old.dng", "DNG", 4, 3, "");
+    p.kind = MediaKind::Raw;
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let legacy: Op = serde_json::from_value(serde_json::json!({
+        "op": "relink", "id": id.0, "file_name": "moved.dng",
+        "source": {"type": "file", "path": "/moved.dng"}, "format": "DNG"
+    }))
+    .unwrap();
+    let record = encode_record(1, &legacy);
+    assert!(!record.contains("\"kind\""), "old path-only records omit classification");
+    let store = MemStore::new();
+    store.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":13,\"seq\":0,\"catalog\":{}}}\n", c.to_snapshot()).into_bytes());
+    store.set(LOG, format!("{record}\n").into_bytes());
+    let (mut journal, mut c, report) = Journal::open(Box::new(store.clone())).unwrap();
+    assert_eq!((report.replayed, report.upgraded_from), (1, Some(13)));
+    assert_eq!(snapshot_version(&store), u64::from(VERSION));
+    assert_eq!(c.photo(id).unwrap().file_name, "moved.dng");
+    assert_eq!(c.photo(id).unwrap().source, Source::File { path: "/moved.dng".into() });
+    let before = c.photo(id).unwrap().clone();
+    assert_eq!(before.kind, MediaKind::Raw);
+    let updated = Op::Relink {
+        id,
+        file_name: "image.png".into(),
+        source: Source::File { path: "/image.png".into() },
+        format: Some("PNG".into()),
+        kind: Some(MediaKind::Image),
+    };
+    let inverse = c.apply(updated.clone()).unwrap();
+    assert_eq!((c.photo(id).unwrap().kind, c.photo(id).unwrap().format.as_str()), (MediaKind::Image, "PNG"));
+    assert!(matches!(&inverse, Op::Relink { kind: Some(MediaKind::Raw), format: Some(format), .. } if format == "DNG"));
+    c.apply(inverse).unwrap();
+    assert_eq!(c.photo(id).unwrap(), &before);
+    c.apply(updated.clone()).unwrap();
+    journal.append(&[updated]).unwrap();
+    drop(journal);
+    let (_, reopened, _) = Journal::open(Box::new(store)).unwrap();
+    assert_eq!((reopened.photo(id).unwrap().kind, reopened.photo(id).unwrap().format.as_str()), (MediaKind::Image, "PNG"));
+}
+
+/// Fail only the selected atomic replacement; log appends remain writable.
+struct FailedReplacement {
+    files: MemStore,
+    name: &'static str,
+}
+
+impl Store for FailedReplacement {
+    fn read(&mut self, name: &str) -> std::io::Result<Option<Vec<u8>>> {
+        self.files.read(name)
+    }
+    fn write_atomic(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        if name == self.name {
+            return Err(std::io::Error::other(format!("can't replace {name}")));
+        }
+        self.files.write_atomic(name, data)
+    }
+    fn append(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        self.files.append(name, data)
+    }
+    fn truncate(&mut self, name: &str, len: u64) -> std::io::Result<()> {
+        self.files.truncate(name, len)
+    }
+    fn describe(&self) -> String {
+        self.files.describe()
+    }
+}
+
+#[test]
+fn format_upgrade_snapshot_failure_refuses_legacy_writes() {
+    for with_log in [false, true] {
+        let (base, log, _) = legacy_parts();
+        let files = MemStore::new();
+        files.set(
+            SNAPSHOT,
+            format!("{{\"format\":\"lightcraft-catalog\",\"version\":13,\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes(),
+        );
+        if with_log {
+            files.set(LOG, log.into_bytes());
+        }
+        let before = files.files.lock().unwrap().clone();
+        let error =
+            Journal::open(Box::new(FailedReplacement { files: files.clone(), name: SNAPSHOT })).err().expect("the v14 barrier must be durable");
+        assert!(matches!(error, CatalogError::Io(_)), "{error:?}");
+        assert!(error.to_string().contains(SNAPSHOT), "{error}");
+        assert_eq!(*files.files.lock().unwrap(), before, "no v14 changes may be appended under the v13 snapshot");
+    }
+}
+
+#[test]
+fn format_upgrade_new_library_failure_is_refused() {
+    let files = MemStore::new();
+    let error =
+        Journal::open(Box::new(FailedReplacement { files: files.clone(), name: SNAPSHOT })).err().expect("a new library needs its format header");
+    assert!(matches!(error, CatalogError::Io(_)), "{error:?}");
+    assert!(files.files.lock().unwrap().is_empty(), "never return a writable headerless log");
+}
+
+#[test]
+fn format_upgrade_log_reset_failure_keeps_durable_v14_and_all_edits() {
+    let (base, log, _) = legacy_parts();
+    let files = MemStore::new();
+    files.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":13,\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
+    files.set(LOG, log.clone().into_bytes());
+    let (mut journal, mut catalog, report) = Journal::open(Box::new(FailedReplacement { files: files.clone(), name: LOG })).unwrap();
+    assert_eq!(report.upgraded_from, Some(13));
+    assert_eq!(snapshot_version(&files), u64::from(VERSION), "older builds must refuse the library even when log reset fails");
+    assert_eq!(files.get(LOG).unwrap(), log.as_bytes());
+    assert_eq!((journal.seq(), journal.snapshot_seq()), (3, 3));
+    let id = catalog.photos().next().unwrap().id;
+    let relink = Op::Relink {
+        id,
+        file_name: "raw.dng".into(),
+        source: Source::File { path: "/raw.dng".into() },
+        format: Some("DNG".into()),
+        kind: Some(MediaKind::Raw),
+    };
+    catalog.apply(relink.clone()).unwrap();
+    journal.append(&[relink]).unwrap();
+    drop(journal);
+    let (journal, reopened, report) = Journal::open(Box::new(files)).unwrap();
+    assert_eq!((report.stale, report.replayed, report.upgraded_from), (1, 1, None));
+    assert_eq!((journal.seq(), journal.snapshot_seq()), (4, 3));
+    assert_eq!(reopened.to_snapshot(), catalog.to_snapshot());
+    assert_eq!(reopened.photo(id).unwrap().kind, MediaKind::Raw);
 }

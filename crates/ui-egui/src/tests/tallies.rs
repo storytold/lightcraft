@@ -77,7 +77,7 @@ fn a_tally_kept_through_an_edit_is_the_tally_made_from_every_photo() {
                 0 => {
                     let name = format!("MOVED_{n:03}.jpg");
                     let source = Source::File { path: format!("/elsewhere/{}/{name}", n % 3) };
-                    Some(a.session.commit("Locate", Op::Relink { id: PhotoId(id), file_name: name, source, format: None }))
+                    Some(a.session.commit("Locate", Op::Relink { id: PhotoId(id), file_name: name, source, format: None, kind: None }))
                 }
                 1 => Some(
                     a.session

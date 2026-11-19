@@ -547,6 +547,7 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
             file_name,
             source: lightcraft_catalog::Source::File { path: np.to_string_lossy().to_string() },
             format: None,
+            kind: None,
         })
         .collect();
     let n = ops.len();

@@ -85,7 +85,7 @@ fn a_scan_knows_who_has_the_contents_it_probed() {
     // (the content of /pics/006/a.jpg, which /pics/007/c.jpg has too; and one nobody has)
     let shared = format!("{:032x}", 6 * 3);
     let nobody = format!("{:032x}", 999_999);
-    let known = library_hashes(&c, [shared.as_str(), nobody.as_str()].into_iter());
+    let known = library_hashes(c.photos(), [shared.as_str(), nobody.as_str()].into_iter());
     assert_eq!(known.len(), 1);
     let whole: HashMap<String, PhotoId> = c.photos().filter_map(|p| p.content_hash.clone().map(|h| (h, p.id))).collect();
     assert_eq!(known.get(&shared), whole.get(&shared));
