@@ -694,10 +694,12 @@ impl Session {
 
     /// A Subject / Background tile's component still waiting for its selection after its request
     /// failed: removed (with its mask when it was the only component), so nothing half-made stays.
-    /// Lens Blur's Find Subject (`fill.invert` `None`) keeps its waiting mask, as before.
+    /// The other waiting requests of the mask move with their components. Lens Blur's Find Subject
+    /// (`fill.invert` `None`) keeps its waiting mask, as before; and so does a request waited for in
+    /// the foreground, whose caller undoes the whole mask or component itself.
     #[cfg_attr(not(feature = "sam"), allow(dead_code))]
     fn drop_waiting(&mut self, (photo, mask, comp): (PhotoId, u32, usize), fill: SubjectFill, polled: &mut Polled) {
-        if fill.invert.is_none() {
+        if fill.invert.is_none() || !self.segmenter.background {
             return;
         }
         let Some(d) = self.develop_of(photo) else { return };
@@ -708,7 +710,8 @@ impl Session {
             return;
         }
         d.masks[i].components.remove(comp);
-        if d.masks[i].components.is_empty() {
+        let gone = d.masks[i].components.is_empty();
+        if gone {
             d.masks.remove(i);
             if self.active_mask == Some(mask) {
                 self.active_mask = None;
@@ -716,7 +719,19 @@ impl Session {
         }
         match self.set_develop(photo, d, "Subject") {
             Ok(()) => polled.changed = true,
-            Err(e) => polled.messages.push(e.to_string()),
+            Err(e) => return polled.messages.push(e.to_string()),
+        }
+        #[cfg(feature = "sam")]
+        {
+            // the mask's later waiting components moved up one; with the mask gone, so did theirs
+            let moved: Vec<_> = self.segmenter.subjects.keys().filter(|k| k.0 == photo && k.1 == mask && (gone || k.2 > comp)).copied().collect();
+            for k in moved {
+                if let Some(f) = self.segmenter.subjects.remove(&k)
+                    && !gone
+                {
+                    self.segmenter.subjects.insert((k.0, k.1, k.2 - 1), f);
+                }
+            }
         }
     }
 
@@ -819,11 +834,15 @@ impl Session {
                     Err(e) => polled.messages.push(e.to_string()),
                 }
             }
-            Tag::Subject { photo, mask, comp, point, request } => {
-                let slot = (photo, mask, comp);
-                // only the latest request for this component: not one for a mask removed or
-                // replaced (an undo, then a new one with the same id) meanwhile
-                let Some(fill) = self.segmenter.subjects.get(&slot).copied().filter(|f| f.request == request) else { return };
+            Tag::Subject { photo, point, request, .. } => {
+                // only the latest request for its component: not one for a mask removed or
+                // replaced (an undo, then a new one with the same id) meanwhile. The record, not the
+                // tag, says where the component is now: removing an earlier one moves it up.
+                let Some((slot, fill)) = self.segmenter.subjects.iter().find(|(k, f)| k.0 == photo && f.request == request).map(|(k, f)| (*k, *f))
+                else {
+                    return;
+                };
+                let (_, mask, comp) = slot;
                 let found = match o.result {
                     Ok(found) => found,
                     Err(e) => {
@@ -1029,6 +1048,8 @@ mod tests {
     fn stale_subject_results_are_dropped_and_failures_leave_nothing_half_made() {
         use lightcraft_develop::{Mask, MaskComponent, MaskOp};
         let mut s = Session::with_demo();
+        // (the app's background worker: the foreground's caller cleans up itself)
+        s.segmenter.background = true;
         let id = s.active().unwrap();
         let waiting = || MaskShape::Object { hint: vec![], exclude: vec![], seg: None, detail: vec![], edge: 0.0 };
         let mut d = (*s.develop_of(id).unwrap()).clone();
@@ -1058,6 +1079,65 @@ mod tests {
         s.segmenter.subjects.insert((id, 5, 0), SubjectFill { request: 3, invert: None });
         send(&mut s, 3, Err("boom".into()));
         assert_eq!(s.develop_of(id).unwrap().masks[0].components[0].shape, waiting());
+    }
+
+    /// Two Background components of one mask wait; the first one's request fails and its component
+    /// goes: the second, moved up, still gets its own selection, inverted.
+    #[cfg(feature = "sam")]
+    #[test]
+    fn a_failed_subject_before_another_moves_the_other_request_with_its_component() {
+        use lightcraft_develop::{Mask, MaskComponent, MaskOp};
+        let mut s = Session::with_demo();
+        s.segmenter.background = true;
+        let id = s.active().unwrap();
+        let waiting = || MaskShape::Object { hint: vec![], exclude: vec![], seg: None, detail: vec![], edge: 0.0 };
+        let comp = |shape| MaskComponent { name: None, op: MaskOp::Add, invert: false, shape };
+        let mut d = (*s.develop_of(id).unwrap()).clone();
+        let brush = MaskShape::Brush { strokes: vec![] };
+        d.masks.push(Mask { id: 4, components: vec![comp(brush.clone()), comp(waiting()), comp(waiting())], ..Default::default() });
+        s.set_develop(id, d, "test").unwrap();
+        s.segmenter.subjects.insert((id, 4, 1), SubjectFill { request: 10, invert: Some(true) });
+        s.segmenter.subjects.insert((id, 4, 2), SubjectFill { request: 11, invert: Some(true) });
+        let point = Point::new(0.5, 0.5);
+        let send = |s: &mut Session, comp, request, result| {
+            let tag = Tag::Subject { photo: id, mask: 4, comp, point, request };
+            s.segmenter.results.0.send(worker::Outcome { tag, result, superseded: false, notice: None }).unwrap();
+            s.segment_poll()
+        };
+        send(&mut s, 1, 10, Err("boom".into()));
+        assert_eq!(s.develop_of(id).unwrap().masks[0].components.len(), 2, "the failed one went");
+        let found = seg_box(20, 5, 5, 15, 15);
+        assert!(send(&mut s, 2, 11, Ok(Some(found.clone()))).changed);
+        let d = s.develop_of(id).unwrap();
+        assert_eq!(d.masks[0].components[0].shape, brush, "the brush is untouched");
+        let c = &d.masks[0].components[1];
+        assert!(matches!(&c.shape, MaskShape::Prompt { seg: Some(seg), .. } if seg == &found), "{:?}", c.shape);
+        assert!(c.invert, "its own Background inversion");
+        assert!(s.segmenter.subjects.is_empty());
+    }
+
+    /// A request waited for in the foreground that fails is undone by its caller alone: nothing
+    /// is removed underneath it (the caller's undo would put it back).
+    #[cfg(feature = "sam")]
+    #[test]
+    fn a_foreground_failure_leaves_the_cleanup_to_the_caller() {
+        use lightcraft_develop::{Mask, MaskComponent, MaskOp};
+        let mut s = Session::with_demo();
+        s.segmenter.background = false;
+        let id = s.active().unwrap();
+        let waiting = MaskShape::Object { hint: vec![], exclude: vec![], seg: None, detail: vec![], edge: 0.0 };
+        let mut d = (*s.develop_of(id).unwrap()).clone();
+        d.masks.push(Mask {
+            id: 6,
+            components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: waiting }],
+            ..Default::default()
+        });
+        s.set_develop(id, d, "test").unwrap();
+        let commits = s.commits();
+        let mut polled = Polled::default();
+        s.drop_waiting((id, 6, 0), SubjectFill { request: 1, invert: Some(true) }, &mut polled);
+        assert_eq!(s.commits(), commits, "no removal step of its own");
+        assert_eq!(s.develop_of(id).unwrap().masks.len(), 1);
     }
 
     /// Waiting for the model (no background worker) that then fails leaves no half-made mask.
