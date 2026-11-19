@@ -231,6 +231,7 @@ fn pick_probed(
 /// handle: `display: None` lets wgpu select a surfaceless EGL display whose window surface lacks
 /// presentable formats, which the offscreen pipeline check cannot detect.
 fn probe_instance_descriptor(backends: Backends, compose_window: bool) -> wgpu::InstanceDescriptor {
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut desc = wgpu::InstanceDescriptor {
         backends,
         flags: backend::instance_flags_from_env(wgpu::InstanceFlags::from_build_config().with_env()),
