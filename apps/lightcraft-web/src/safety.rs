@@ -149,10 +149,14 @@ pub fn download_blob(name: &str, blob: &web_sys::Blob) -> Result<(), String> {
     Ok(())
 }
 
+/// Where a finished backup goes: the browser's downloads ([`download_blob`]), or the page framing
+/// LightCraft (`?host=parent`). Awaited, so the backup counts as done only once it is handed over.
+pub type Deliver = Box<dyn FnOnce(String, web_sys::Blob) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>>>>>;
+
 /// File ▸ Back Up Library…: a zip of the library files (as the app has them, saved or not) and
 /// every original in storage, built entry by entry into the browser's memory (outside the wasm
-/// heap) and downloaded. `names`: content hash → the photo's file name.
-pub async fn backup(files: Files, backend: Backend, names: HashMap<String, String>) -> Result<(usize, f64), String> {
+/// heap) and handed to `deliver`. `names`: content hash → the photo's file name.
+pub async fn backup(files: Files, backend: Backend, names: HashMap<String, String>, deliver: Deliver) -> Result<(usize, f64), String> {
     let parts = js_sys::Array::new();
     let mut zip = ZipWriter::default();
     let mut bytes = 0f64;
@@ -190,7 +194,7 @@ pub async fn backup(files: Files, backend: Backend, names: HashMap<String, Strin
     opts.set_type("application/zip");
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts).map_err(|e| format!("{e:?}"))?;
     let day: String = String::from(js_sys::Date::new_0().to_iso_string()).chars().take(10).collect();
-    download_blob(&format!("lightcraft-library-backup-{day}.zip"), &blob)?;
+    deliver(format!("lightcraft-library-backup-{day}.zip"), blob).await?;
     Ok((originals, bytes + tail.len() as f64))
 }
 
