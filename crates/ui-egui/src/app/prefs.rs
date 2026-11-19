@@ -10,8 +10,13 @@ impl LightcraftApp {
     /// themes, the system's appearance in Auto) is not the one it shows. A no-op otherwise.
     pub fn sync_theme(&mut self, ctx: &egui::Context) {
         let wanted = self.ui.settings.theme(self.system_theme(ctx));
-        if theme::current(ctx) != Some(wanted) {
+        let theme_changed = theme::current(ctx) != Some(wanted);
+        if theme_changed {
             theme::apply_kind(ctx, wanted);
+        }
+        let dir = craft_ui::direction::resolve(self.ui.language.code(), craft_ui::direction::Setting::Language);
+        if theme_changed || craft_ui::direction::HasDirection::direction(ctx) != dir {
+            craft_ui::direction::apply(ctx, dir);
         }
     }
 
