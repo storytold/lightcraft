@@ -11,7 +11,7 @@
 //! - [`product`]: the cache file the denoised picture is kept in (half floats, compressed in strips) and the
 //!   blend with the plain demosaic that the Amount slider controls.
 //! - [`cpu`] and [`runtime`]: a single-thread pure-Rust CPU runner and its installation self-test.
-//! - [`defringe`]: AI Defringe, a defringe network run over a whole picture with its guards.
+//! - `defringe` (with the `runtime` feature): AI Defringe, a defringe network run over a whole picture with its guards.
 //! - [`net`] and [`onnx`]: checked plain network data and bounded ONNX decoding, shared by CPU and GPU.
 //! - [`remote`]: running tiles on another computer's graphics card over TCP (a [`run::TileRunner`] and its server).
 //!

@@ -2,8 +2,8 @@
 
 Optics ▸ Defringe ▸ **AI Defringe** is a per-photo switch with an **Amount** (0 to 100). It removes colour fringes of
 every hue (purple, blue-violet, green) with a trained network, and leaves real colours alone. Turning it on the first
-time starts at 100; turning it off keeps the Amount. It acts on the requesting photo only, independently of Auto Sync,
-and is undoable. The manual Defringe sliders below it (Purple and Green Amount and their hue ranges) still work, on
+time starts at 100; turning it off keeps the Amount. It acts on the requesting photo only (Auto Sync never copies its switch or Amount),
+and is undoable. Resetting Optics clears the switch. The manual Defringe sliders below it (Purple and Green Amount and their hue ranges) still work, on
 their own or together with it.
 
 AI Defringe needs a model, and **LightCraft ships none**. Settings ▸ AI Defringe ▸ **Install from file…** takes any ONNX
@@ -11,8 +11,8 @@ file that has the defringe shape (see [The model contract](#the-model-contract))
 its name, version and licence. Without one, LightCraft names the model after its file, gives the licence as "Not
 stated" with a notice saying it doesn't know who made it, and installs it only if it runs as a defringe model. Before anything is
 installed, Settings shows the model's name, licence and notice, and the user accepts them. Without a model the section
-says where to install one. Builds without the model runtime (the web build, or a native build without the `denoise`
-feature) say so and never offer the switch.
+says where to install one; a photo still switched on (its model since removed) keeps the switch, so it can be switched
+off. Builds without the model runtime (the web build, or a native build without the `denoise` feature) say so.
 
 ## How it works
 
@@ -85,7 +85,8 @@ The ONNX file is read by LightCraft's own bounded reader: operators Conv, LeakyR
   and converted to OkLab by way of linear Rec.709 with negative values clamped.
 - **Output** `[1, 3, 256, 256]`: Δa and Δb before `tanh`, and the gate before its sigmoid.
 
-Installation checks the manifest, the file's size (at most 256 MB) and SHA-256, the network's shape, and runs it twice
+The install command takes back the model description `aiDefringe.models.inspect` gave, which the user accepted, and
+installs nothing if the file or its description changed since. Installation checks the manifest, the file's size (at most 256 MB) and SHA-256, the network's shape, and runs it twice
 on a synthetic fringe: it must give finite colours, the same answer both times, and keep lightness. A model that fails
 is not installed and the one already there stays.
 
@@ -94,8 +95,10 @@ is not installed and the one already there stays.
 `aiDefringe.toggle {id?, enabled?}`, `aiDefringe.status {id?}`, `aiDefringe.pump`, `aiDefringe.make {id?}` (makes a
 correction now and waits, for scripts), `aiDefringe.retry {id?}`, `aiDefringe.clear`, and `aiDefringe.models.inspect
 {path}`, `.install {path, acknowledged: true}`, `.remove`. The develop control is `optics.aiDefringe` (with
-`optics.ai_defringe_on` in the settings, as AI Denoise has `enhance.denoise_on`). The model folder is
-`<config>/defringe-models`, or `$LIGHTCRAFT_DEFRINGE_MODELS`.
+`optics.ai_defringe_on` in the settings, as AI Denoise has `enhance.denoise_on`). The models folder is
+`<config>/defringe-models`, or `$LIGHTCRAFT_DEFRINGE_MODELS`. The model goes in an `installed` folder inside it, the
+only thing LightCraft writes or deletes there, so the models folder can be one that holds other files. During an install
+the previous model is kept as `.installed-previous` until the new one is in place.
 
 ## Limits
 

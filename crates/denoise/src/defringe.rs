@@ -80,9 +80,12 @@ impl Model {
         progress: &(dyn Fn(usize, usize) + Sync),
         cancel: &AtomicBool,
     ) -> Result<Vec<(u32, [f32; 3])>, Error> {
-        if w == 0 || h == 0 || rgb.len() != w * h || clip.len() != w * h || u32::try_from(w * h).is_err() {
+        let n = w.checked_mul(h).filter(|&n| n > 0 && u32::try_from(n).is_ok());
+        if n.is_none_or(|n| rgb.len() != n || clip.len() != n) {
             return Err(Error::Input("the picture and its clip mask don't match its size".into()));
         }
+        let stop = || if cancel.load(Ordering::Relaxed) { Err(Error::Cancelled) } else { Ok(()) };
+        stop()?;
         if rgb.iter().any(|p| p.iter().any(|v| !v.is_finite())) {
             return Err(Error::Input("the picture has non-finite values".into()));
         }
@@ -107,6 +110,7 @@ impl Model {
         let ramp = ramp();
         let mut changed = Vec::new();
         for &(r0, r1, e0, e1) in &bands {
+            stop()?;
             let rows = e1 - e0;
             let mut acc = vec![[0f32; 3]; rows * w];
             let mut wsum = vec![0f32; rows * w];
@@ -139,6 +143,7 @@ impl Model {
                 acc.iter().zip(&wsum).map(|(a, &s)| if s > 0.0 { a.map(|v| v / s.max(1e-6)) } else { [0.0, 0.0, -20.0] }).collect();
             band(rgb, w, h, (r0, r1, e0, e1), &raw, &mut changed);
         }
+        stop()?;
         progress(total, total);
         Ok(changed)
     }
@@ -263,6 +268,12 @@ fn band(rgb: &[[f32; 3]], w: usize, h: usize, (r0, r1, e0, e1): (usize, usize, u
                 let (d, to) = ([nab[0] - a[0], nab[1] - a[1]], [bg[0] - a[0], bg[1] - a[1]]);
                 let t = ((d[0] * to[0] + d[1] * to[1]) / (to[0] * to[0] + to[1] * to[1]).max(1e-8)).clamp(0.0, 1.0);
                 nab = [a[0] + t * to[0], a[1] + t * to[1]];
+                // the pull toward the surroundings may not make a pixel green that wasn't either
+                let (ca, cn) = ((a[0] * a[0] + a[1] * a[1] + 1e-12).sqrt(), (nab[0] * nab[0] + nab[1] * nab[1] + 1e-12).sqrt());
+                if green(nab, cn) && !green(a, ca) {
+                    let s = (0.01 / cn).min(1.0);
+                    nab = [nab[0] * s, nab[1] * s];
+                }
             }
             if dist(a, nab) <= MOVED {
                 return None;
@@ -409,17 +420,53 @@ fn log_luminance(p: [f32; 3]) -> f32 {
 
 /// The clip mask a defringe model reads, for a `w × h` picture: pixels whose 5 × 5 mean of the brightest channel is
 /// within 7 % of `top`.
+/// Worked row by row with running sums, so it needs no picture-sized buffers beyond the mask.
 pub fn clip_mask(rgb: &[[f32; 3]], w: usize, h: usize, top: f32) -> Vec<bool> {
-    let m: Vec<f32> = rgb.iter().map(|p| p[0].max(p[1]).max(p[2])).collect();
-    box_sum(&m, w, h, 2)
-        .iter()
-        .enumerate()
-        .map(|(i, s)| {
-            let (x, y) = (i % w, i / w);
-            let n = ((x + 2).min(w - 1) - x.saturating_sub(2) + 1) * ((y + 2).min(h - 1) - y.saturating_sub(2) + 1);
-            s / n as f32 >= 0.93 * top
-        })
-        .collect()
+    if w.checked_mul(h) != Some(rgb.len()) || rgb.is_empty() {
+        return vec![false; rgb.len()];
+    }
+    // a row's 5-wide sums of the brightest channel
+    let row = |y: usize| -> Vec<f64> {
+        let line = &rgb[y * w..(y + 1) * w];
+        let m = |x: usize| f64::from(line[x][0].max(line[x][1]).max(line[x][2]));
+        let mut out = vec![0f64; w];
+        let mut run: f64 = (0..3.min(w)).map(m).sum();
+        for (x, o) in out.iter_mut().enumerate() {
+            *o = run;
+            if x + 3 < w {
+                run += m(x + 3);
+            }
+            if x >= 2 {
+                run -= m(x - 2);
+            }
+        }
+        out
+    };
+    let mut cols = vec![0f64; w];
+    for y in 0..3.min(h) {
+        for (c, v) in cols.iter_mut().zip(row(y)) {
+            *c += v;
+        }
+    }
+    let mut mask = Vec::with_capacity(w * h);
+    for y in 0..h {
+        let ny = (y + 2).min(h - 1) - y.saturating_sub(2) + 1;
+        for (x, c) in cols.iter().enumerate() {
+            let nx = (x + 2).min(w - 1) - x.saturating_sub(2) + 1;
+            mask.push(c / (nx * ny) as f64 >= 0.93 * f64::from(top));
+        }
+        if y + 3 < h {
+            for (c, v) in cols.iter_mut().zip(row(y + 3)) {
+                *c += v;
+            }
+        }
+        if y >= 2 {
+            for (c, v) in cols.iter_mut().zip(row(y - 2)) {
+                *c -= v;
+            }
+        }
+    }
+    mask
 }
 
 /// The 99.9th percentile of the brightest channel (over every third pixel): the value a picture is divided by so

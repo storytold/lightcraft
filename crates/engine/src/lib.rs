@@ -1038,6 +1038,14 @@ impl Session {
             for k in ["spots", "red_eye", "version", "process"] {
                 o.remove(k);
             }
+            // AI Defringe is per photo, like AI Denoise's switch: its switch and Amount stay with the photo they were set on
+            if let Some(optics) = o.get_mut("optics").and_then(Value::as_object_mut) {
+                optics.remove("ai_defringe");
+                optics.remove("ai_defringe_on");
+                if optics.is_empty() {
+                    o.remove("optics");
+                }
+            }
             if o.is_empty() {
                 return Vec::new();
             }

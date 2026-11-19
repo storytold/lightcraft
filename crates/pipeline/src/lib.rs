@@ -662,7 +662,9 @@ pub fn defringe_tap(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &
     rendition.optics.remove_ca = true;
     let plan = plan(src, info, &rendition, req);
     let mut img = plan.frame.sample(src, plan.w, plan.h);
-    lin_cpu(&mut img, info, &plan);
+    // `lin_cpu` up to the Defringe stage: retouching and red-eye come after it
+    local_tone::apply(&mut img, info, &plan);
+    local::white_balance(&mut img, info, &plan.settings);
     img
 }
 

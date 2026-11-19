@@ -192,6 +192,7 @@ impl DevelopSettings {
                 self.curve = d;
             }
             Section::Color => self.wb.mode = WbMode::AsShot,
+            Section::Optics => self.optics.ai_defringe_on = None,
             Section::Detail => {
                 self.enhance.denoise_on = None;
                 // not a slider: reset like them, to the general default (off)
@@ -477,6 +478,18 @@ mod tests {
         s.profile.camera_local_tone = true;
         s.reset_section(Section::Profile);
         assert!(!s.profile.camera_local_tone);
+    }
+
+    #[test]
+    fn resetting_optics_clears_the_ai_defringe_switch() {
+        // switched off by hand, then Optics reset: a later Amount turns it on, as on a fresh photo
+        let mut s = DevelopSettings::default();
+        s.optics.ai_defringe = 60.0;
+        s.optics.ai_defringe_on = Some(false);
+        s.reset_section(Section::Optics);
+        assert_eq!((s.optics.ai_defringe, s.optics.ai_defringe_on), (0.0, None));
+        s.optics.ai_defringe = 30.0;
+        assert!(s.optics.ai_defringe_enabled());
     }
 
     #[test]

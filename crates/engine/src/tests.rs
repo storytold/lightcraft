@@ -646,6 +646,9 @@ fn op_log_replay_reproduces_catalog() {
 #[test]
 fn command_sweep() {
     let mut s = demo();
+    // `aiDefringe.models.remove` would delete the model installed in the real defringe models folder
+    let models = std::env::temp_dir().join(format!("lc-sweep-defringe-models-{}", std::process::id()));
+    s.set_aidefringe_models_dir(Some(models.clone()));
     let mut ids = std::collections::HashSet::new();
     for c in command_specs() {
         assert!(ids.insert(c.id), "duplicate {}", c.id);
@@ -659,6 +662,7 @@ fn command_sweep() {
     // empty params must never start a download from the internet
     assert!(!s.place_names.download_started(), "the sweep started a place names download");
     assert!(s.commands().len() >= 70, "{}", s.commands().len());
+    let _ = std::fs::remove_dir_all(&models);
 }
 
 #[test]

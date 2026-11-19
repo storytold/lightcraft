@@ -98,7 +98,8 @@ fn the_switch_turns_it_on_and_the_correction_arrives() {
     let dir = temp("switch");
     let mut h = defringe_open(&dir);
     let path = model_file(&dir);
-    h.app.session.execute("aiDefringe.models.install", &json!({"path": path, "acknowledged": true})).unwrap();
+    let model = h.app.session.execute("aiDefringe.models.inspect", &json!({"path": path})).unwrap();
+    h.app.session.execute("aiDefringe.models.install", &json!({"path": path, "model": model, "acknowledged": true})).unwrap();
     h.app.caches.aidefringe = Default::default();
     h.step();
     h.step();
@@ -125,5 +126,27 @@ fn the_switch_turns_it_on_and_the_correction_arrives() {
     let d = h.app.session.develop_of(id).unwrap();
     assert!(!d.optics.ai_defringe_enabled());
     assert_eq!(d.optics.ai_defringe, 100.0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_photo_left_on_without_a_model_can_be_switched_off() {
+    let dir = temp("orphan");
+    let mut h = defringe_open(&dir);
+    let path = model_file(&dir);
+    let model = h.app.session.execute("aiDefringe.models.inspect", &json!({"path": path})).unwrap();
+    h.app.session.execute("aiDefringe.models.install", &json!({"path": path, "model": model, "acknowledged": true})).unwrap();
+    let id = h.app.session.active().unwrap();
+    h.app.session.execute("aiDefringe.toggle", &json!({"id": id.0, "enabled": true})).unwrap();
+    h.app.session.execute("aiDefringe.models.remove", &json!({})).unwrap();
+    h.app.caches.aidefringe = Default::default();
+    h.step();
+    h.step();
+    assert!(on_screen(&mut h, "aidefringe:settings"));
+    assert!(on_screen(&mut h, "aidefringe:enabled"), "the switch stays while it is on");
+    click(&mut h, "aidefringe:enabled");
+    assert!(!h.app.session.develop_of(id).unwrap().optics.ai_defringe_enabled());
+    h.step();
+    assert!(!on_screen(&mut h, "aidefringe:enabled"));
     let _ = std::fs::remove_dir_all(&dir);
 }

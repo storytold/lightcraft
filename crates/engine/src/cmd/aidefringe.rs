@@ -16,8 +16,9 @@ fn photo(s: &Session, p: &Value, c: &str) -> Result<PhotoId> {
     }
 }
 
+/// The manifest as JSON: what the user is shown, and what `aiDefringe.models.install` takes back as `model`.
 fn model_json(m: &aidefringe::Manifest) -> Value {
-    json!({"id": m.id, "name": m.name, "version": m.version, "licence": m.licence, "sha256": m.sha256, "notice": m.notice, "url": m.url})
+    serde_json::to_value(m).unwrap_or(Value::Null)
 }
 
 /// A per-photo switch, independent of the selection and Auto Sync. Turning on starts at 100.
@@ -31,6 +32,14 @@ fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
     };
     if on && s.aidefringe_model().is_none() {
         return Err(bad(C, "AI Defringe needs a model: install one in Settings > AI Defringe"));
+    }
+    // switching off a photo that was never switched on changes nothing (so the first switch on still starts at 100)
+    if !on && d.optics.ai_defringe_on.is_none() && !d.optics.ai_defringe_enabled() {
+        return Ok(json!({"id": id.0, "enabled": false, "amount": d.optics.ai_defringe}));
+    }
+    if on {
+        // switching on asks for the correction again, even one the user cancelled
+        s.aidefringe_retry(id);
     }
     // the switch is its own setting: the Amount stays where it is when it is flipped, so flipping compares with and
     // without; a photo that never had an Amount starts at 100
@@ -98,8 +107,13 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
     if !bool_or(p, "acknowledged", false) {
         return Err(bad(C, "show the user the model's licence and notice first, then pass `acknowledged: true`"));
     }
+    // what the user accepted: the model `aiDefringe.models.inspect` gave, which must still be what the path holds
+    let accepted = p
+        .get("model")
+        .ok_or_else(|| bad(C, "`model` is required: the model `aiDefringe.models.inspect` gave, as the user accepted it"))
+        .and_then(|v| aidefringe::Manifest::parse(&v.to_string()).map_err(|e| bad(C, e)))?;
     let dir = s.aidefringe_models_dir().ok_or_else(|| bad(C, "no folder for defringe models (set LIGHTCRAFT_DEFRINGE_MODELS)"))?;
-    let m = aidefringe::install(Path::new(path), &dir).map_err(|e| bad(C, e))?;
+    let m = aidefringe::install(Path::new(path), &dir, &accepted).map_err(|e| bad(C, e))?;
     s.aidefringe_model_changed();
     Ok(json!({"installed": true, "model": model_json(&m)}))
 }
@@ -133,8 +147,8 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "aiDefringe.pump", "AI Defringe Pump", [], None, "{} → {arrived, generation} — called every frame by the app: takes in a finished correction and starts the active photo's when AI Defringe is on and it has none", always, pump),
         cmd!(query "aiDefringe.make", "Make AI Defringe Correction", [], None, "{id?} → {id, changed} — make a photo's correction now and wait for it (for scripts); `changed` is how many pixels it changes", always, make),
         cmd!(query "aiDefringe.retry", "Retry AI Defringe", [], None, "{id?} → {id, photo} — try a photo whose correction failed again", always, retry),
-        cmd!(query "aiDefringe.models.inspect", "Inspect Defringe Model", [], None, "{path} → {id, name, version, licence, sha256, notice, url} — the defringe-model.json beside an .onnx file, checked; never runs the file", always, inspect),
-        cmd!(query "aiDefringe.models.install", "Install Defringe Model", [], None, "{path, acknowledged: true} → {installed, model} — install a defringe model from an .onnx file with a defringe-model.json beside it, after checking its SHA-256 and running it once; it replaces the installed one. `acknowledged` must be true: the user has been shown the model's licence and notice", always, install),
+        cmd!(query "aiDefringe.models.inspect", "Inspect Defringe Model", [], None, "{path} → {id, name, version, licence, file, sha256, contract, notice?, url?} — the defringe-model.json beside an .onnx file, checked, or one made up from the file when there is none (licence \"Not stated\"); never runs the file", always, inspect),
+        cmd!(query "aiDefringe.models.install", "Install Defringe Model", [], None, "{path, model, acknowledged: true} → {installed, model} — install a defringe model from an .onnx file (with a defringe-model.json beside it, or without one: `aiDefringe.models.inspect` describes it), after checking its SHA-256 and running it once; it replaces the installed one. `model` is what `aiDefringe.models.inspect` gave and `acknowledged` must be true: the user has been shown that model's licence and notice and accepted them. If the file or its description changed since, nothing is installed", always, install),
         cmd!(query "aiDefringe.models.remove", "Remove Defringe Model", [], None, "{} → {removed} — delete the installed defringe model (corrections already made stay until cleared)", always, remove),
         cmd!(query "aiDefringe.clear", "Clear AI Defringe Cache", [], None, "{} → {deleted, bytes} — delete every cached AI Defringe correction of this library (they are made again when wanted)", always, clear),
     ]

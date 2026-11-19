@@ -1,4 +1,5 @@
 use super::*;
+use std::path::PathBuf;
 
 fn manifest_json(sha: &str) -> String {
     format!(
@@ -30,12 +31,33 @@ fn correction(w: usize, h: usize, at: &[(usize, [f32; 3])]) -> Correction {
     }
 }
 
+/// A folder of this test's own, removed when it ends (also when an assertion fails).
+struct TempDir(PathBuf);
+
+impl TempDir {
+    fn new(tag: &str) -> TempDir {
+        TempDir(crate::tests_xmp::temp_dir(tag))
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn publish() -> Publish {
+    Publish { epoch: Arc::new(Mutex::new(0)), at: 0 }
+}
+
 #[test]
 fn a_correction_survives_the_disk_and_a_damaged_one_is_refused() {
-    let dir = std::env::temp_dir().join(format!("lc-adf-{}", std::process::id()));
-    let path = dir.join("c.lcadf");
+    let dir = TempDir::new("adf-file");
+    let path = dir.0.join("c.lcadf");
     let c = correction(10, 4, &[(3, [0.5, -0.25, 0.0]), (17, [0.0, 0.125, -0.5])]);
-    c.write(&path).unwrap();
+    c.write(&path, &publish()).unwrap();
+    // a second writer of the same correction (the background job and an export) succeeds too
+    c.write(&path, &publish()).unwrap();
     let back = Correction::read(&path, 7).unwrap();
     assert_eq!((back.w, back.h, &back.index, &back.gain), (10, 4, &c.index, &c.gain));
     assert!(Correction::read(&path, 8).is_none(), "another key");
@@ -44,7 +66,12 @@ fn a_correction_survives_the_disk_and_a_damaged_one_is_refused() {
     bytes[last] ^= 0xff;
     std::fs::write(&path, &bytes).unwrap();
     assert!(Correction::read(&path, 7).is_none(), "damaged");
-    let _ = std::fs::remove_dir_all(&dir);
+    // after the cache was cleared, work started before it is not published
+    let stale = Publish { epoch: Arc::new(Mutex::new(1)), at: 0 };
+    let other = dir.0.join("d.lcadf");
+    assert!(c.write(&other, &stale).is_err());
+    assert!(!other.exists());
+    assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 1, "no temporary file left behind");
 }
 
 #[test]
@@ -70,4 +97,29 @@ fn half_floats_round_trip() {
         assert!((f16_value(f16_bits(v)) - v).abs() <= v.abs() * 1e-3 + 1e-7, "{v}");
     }
     assert_eq!(f16_value(f16_bits(1e9)), 65504.0);
+}
+
+#[test]
+fn a_smaller_source_whose_size_does_not_divide_keeps_a_constant_gain() {
+    // 3 × 1 with the same gain everywhere, rendered 2 × 1: two pixels of it map to the first, one to the second
+    let c = correction(3, 1, &[(0, [0.5; 3]), (1, [0.5; 3]), (2, [0.5; 3])]);
+    let src = Arc::new(Rgb32f { width: 2, height: 1, data: vec![[0.4; 3]; 2] });
+    let out = c.apply(&src, 1.0);
+    for p in &out.data {
+        assert!(p.iter().all(|v| (v - 0.6).abs() < 1e-6), "{:?}", out.data);
+    }
+}
+
+#[test]
+fn the_memo_keeps_nothing_alive_and_never_mistakes_a_new_picture_for_an_old_one() {
+    let c = correction(2, 1, &[(0, [1.0, 0.0, 0.0])]);
+    let a = Arc::new(Rgb32f { width: 2, height: 1, data: vec![[0.5; 3]; 2] });
+    let first = c.apply(&a, 1.0);
+    assert!(Arc::ptr_eq(&first, &c.apply(&a, 1.0)), "the same view reuses its picture");
+    assert_eq!(Arc::strong_count(&first), 1, "the memo holds no strong reference");
+    drop(first);
+    drop(a);
+    // a new picture, maybe at the old one's address: corrected afresh
+    let b = Arc::new(Rgb32f { width: 2, height: 1, data: vec![[0.25; 3]; 2] });
+    assert_eq!(c.apply(&b, 1.0).data[0], [0.5, 0.25, 0.25]);
 }

@@ -116,10 +116,17 @@ pub fn models_dir() -> Option<PathBuf> {
         .or_else(|| crate::config::config_dir().map(|d| d.join("defringe-models")))
 }
 
-/// The model installed in `dir`: its manifest and file, if there is one.
+/// The folder inside the models folder that holds the installed model. LightCraft owns it and nothing else there:
+/// the models folder may be one the user keeps other files in.
+const CURRENT: &str = "installed";
+/// The previous installation while a new one replaces it, kept until the replacement is in place.
+const PREVIOUS: &str = ".installed-previous";
+
+/// The model installed in models folder `dir`: its manifest and file, if there is one.
 pub fn installed(dir: &Path) -> Option<(Manifest, PathBuf)> {
-    let m = Manifest::parse(&std::fs::read_to_string(dir.join(MANIFEST)).ok()?).ok()?;
-    let file = dir.join(&m.file);
+    let cur = dir.join(CURRENT);
+    let m = Manifest::parse(&std::fs::read_to_string(cur.join(MANIFEST)).ok()?).ok()?;
+    let file = cur.join(&m.file);
     file.is_file().then_some((m, file))
 }
 
@@ -172,26 +179,38 @@ fn bare(onnx: &Path, name: &str) -> Result<Manifest, String> {
 }
 
 fn read_model_file(path: &Path, m: &Manifest) -> Result<Vec<u8>, String> {
-    let len = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
-    if len > MAX_MODEL_BYTES {
+    use std::io::Read;
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    // read at most one byte past the limit, whatever the file says its size is
+    file.take(MAX_MODEL_BYTES + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_MODEL_BYTES {
         return Err("the model file is too large".into());
     }
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     if lightcraft_denoise_core::hash::sha256_hex(&bytes) != m.sha256 {
         return Err("the model file's SHA-256 is not the one its manifest gives".into());
     }
     Ok(bytes)
 }
 
-/// Install the model `onnx` (with its manifest beside it) in `dir`, after checking its hash and running it once: it
-/// replaces the installed one. The caller has shown the user the manifest's licence and notice.
-pub fn install(onnx: &Path, dir: &Path) -> Result<Manifest, String> {
+/// Install the model `onnx` (with its manifest beside it, or without one: [`inspect`]) in models folder `dir`, after
+/// checking its hash and running it once: it replaces the installed one. `accepted` is the manifest the user was shown
+/// and accepted ([`inspect`]'s answer); if the file or its manifest changed since, nothing is installed.
+pub fn install(onnx: &Path, dir: &Path, accepted: &Manifest) -> Result<Manifest, String> {
     let m = inspect(onnx)?;
+    if &m != accepted {
+        return Err("the model or its description changed after you accepted it: install it again to see its terms".into());
+    }
+    // the bytes read here are the ones checked, run and installed
     let bytes = read_model_file(onnx, &m)?;
     self_test(&bytes)?;
-    let parent = dir.parent().ok_or("the defringe models folder has no parent")?;
-    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let staging = parent.join(format!(".defringe-models-{}", std::process::id()));
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let (cur, prev) = (dir.join(CURRENT), dir.join(PREVIOUS));
+    // a previous installation left behind by an install that could not put it back is restored first, never deleted
+    if !cur.exists() && prev.exists() {
+        std::fs::rename(&prev, &cur).map_err(|e| format!("couldn't restore the previous model from {}: {e}", prev.display()))?;
+    }
+    let staging = dir.join(format!(".installing-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
     let write = || -> std::io::Result<()> {
@@ -202,25 +221,33 @@ pub fn install(onnx: &Path, dir: &Path) -> Result<Manifest, String> {
         let _ = std::fs::remove_dir_all(&staging);
         return Err(e.to_string());
     }
-    let old = parent.join(format!(".defringe-models-old-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&old);
-    if dir.exists() {
-        std::fs::rename(dir, &old).map_err(|e| e.to_string())?;
+    if prev.exists() {
+        std::fs::remove_dir_all(&prev).map_err(|e| e.to_string())?;
     }
-    if let Err(e) = std::fs::rename(&staging, dir) {
-        let _ = std::fs::rename(&old, dir);
+    if cur.exists() {
+        std::fs::rename(&cur, &prev).map_err(|e| e.to_string())?;
+    }
+    if let Err(e) = std::fs::rename(&staging, &cur) {
+        let _ = std::fs::remove_dir_all(&staging);
+        if prev.exists()
+            && let Err(back) = std::fs::rename(&prev, &cur)
+        {
+            return Err(format!("couldn't install the model ({e}), nor put the previous one back ({back}); it is kept in {}", prev.display()));
+        }
         return Err(e.to_string());
     }
-    let _ = std::fs::remove_dir_all(&old);
+    let _ = std::fs::remove_dir_all(&prev);
     Ok(m)
 }
 
-/// Delete the model installed in `dir` (corrections already made stay until the cache is cleared).
+/// Delete the model installed in models folder `dir` (only LightCraft's own folder in it; corrections already made
+/// stay until the cache is cleared).
 pub fn remove(dir: &Path) -> Result<bool, String> {
-    if !dir.exists() {
+    let cur = dir.join(CURRENT);
+    if !cur.exists() {
         return Ok(false);
     }
-    std::fs::remove_dir_all(dir).map_err(|e| e.to_string())?;
+    std::fs::remove_dir_all(&cur).map_err(|e| e.to_string())?;
     Ok(true)
 }
 
@@ -284,9 +311,16 @@ pub struct Correction {
     h: usize,
     index: Vec<u32>,
     gain: Vec<[u16; 3]>,
-    /// The last source it was applied to (address and size) at an amount (thousandths), and the result: renders of
-    /// one view reuse the corrected picture, so the stage cache keeps working while sliders move.
-    memo: Mutex<Option<((usize, usize, usize, u32), Arc<Rgb32f>)>>,
+    /// The last source it was applied to, at an amount (thousandths), and the result: renders of one view reuse the
+    /// corrected picture, so the stage cache keeps working while sliders move. Both are weak: the memo keeps no picture
+    /// alive (each would be a whole picture), and a source freed and replaced at the same address never matches.
+    memo: Mutex<Option<Memo>>,
+}
+
+struct Memo {
+    source: std::sync::Weak<Rgb32f>,
+    thousandths: u32,
+    result: std::sync::Weak<Rgb32f>,
 }
 
 impl Correction {
@@ -301,12 +335,14 @@ impl Correction {
             return src.clone();
         }
         let k = amount.min(1.0);
-        let tag = (Arc::as_ptr(src) as usize, src.width, src.height, (k * 1000.0).round() as u32);
+        let thousandths = (k * 1000.0).round() as u32;
         let mut memo = self.memo.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some((t, img)) = memo.as_ref()
-            && *t == tag
+        if let Some(m) = memo.as_ref()
+            && m.thousandths == thousandths
+            && m.source.upgrade().is_some_and(|s| Arc::ptr_eq(&s, src))
+            && let Some(img) = m.result.upgrade()
         {
-            return img.clone();
+            return img;
         }
         let (w, h) = (src.width, src.height);
         let mut out = (**src).clone();
@@ -319,8 +355,18 @@ impl Correction {
                 }
             }
         } else {
-            // each source pixel covers (self.w / w) × (self.h / h) pixels of the correction
-            let area = (self.w as f32 / w as f32).max(1.0) * (self.h as f32 / h as f32).max(1.0);
+            // each pixel of the render takes the mean gain over the pixels of the correction that map to it (how many
+            // depends on where it is when the sizes don't divide)
+            let covers = |big: usize, small: usize| -> Vec<u32> {
+                let mut n = vec![0u32; small];
+                for x in 0..big {
+                    if let Some(c) = n.get_mut((x * small / big).min(small - 1)) {
+                        *c += 1;
+                    }
+                }
+                n
+            };
+            let (nx, ny) = (covers(self.w, w), covers(self.h, h));
             let mut acc: HashMap<usize, [f32; 3]> = HashMap::new();
             for (&i, g) in self.index.iter().zip(&self.gain) {
                 let (x, y) = (i as usize % self.w, i as usize / self.w);
@@ -331,6 +377,7 @@ impl Correction {
                 }
             }
             for (i, s) in acc {
+                let area = (nx.get(i % w).copied().unwrap_or(1) * ny.get(i / w).copied().unwrap_or(1)).max(1) as f32;
                 if let Some(p) = out.data.get_mut(i) {
                     for (v, d) in p.iter_mut().zip(s) {
                         *v *= 1.0 + d / area * k;
@@ -339,12 +386,15 @@ impl Correction {
             }
         }
         let out = Arc::new(out);
-        *memo = Some((tag, out.clone()));
+        *memo = Some(Memo { source: Arc::downgrade(src), thousandths, result: Arc::downgrade(&out) });
         out
     }
 
+    /// Write the correction to `path` through a temporary file of this writer's own, if `publish` still allows it
+    /// (the cache was not cleared since the work started). Another writer that published the same correction first
+    /// is a success.
     #[cfg_attr(not(feature = "denoise"), allow(dead_code))]
-    fn write(&self, path: &Path) -> Result<(), String> {
+    fn write(&self, path: &Path, publish: &Publish) -> Result<(), String> {
         let mut body = Vec::with_capacity(self.index.len() * 10);
         for (i, g) in self.index.iter().zip(&self.gain) {
             body.extend_from_slice(&i.to_le_bytes());
@@ -363,9 +413,22 @@ impl Correction {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        let tmp = path.with_extension("tmp");
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let tmp = path.with_extension(format!("{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
         std::fs::write(&tmp, &b).map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+        let epoch = publish.epoch.lock().unwrap_or_else(PoisonError::into_inner);
+        let done = if *epoch != publish.at {
+            Err("the AI Defringe cache was cleared while this correction was made".into())
+        } else {
+            match std::fs::rename(&tmp, path) {
+                Ok(()) => Ok(()),
+                Err(_) if Correction::read(path, self.key).is_some() => Ok(()),
+                Err(e) => Err(e.to_string()),
+            }
+        };
+        drop(epoch);
+        let _ = std::fs::remove_file(&tmp);
+        done
     }
 
     /// The correction at `path`, if it is one, for `key`, and intact.
@@ -427,6 +490,14 @@ fn f16_value(b: u16) -> f32 {
     if sign == 1 { -v } else { v }
 }
 
+/// Whether a correction may still be published: the cache's epoch when its work started, and the cache's epoch now
+/// (bumped, under the lock, when the cache is cleared).
+#[derive(Clone)]
+pub struct Publish {
+    epoch: Arc<Mutex<u64>>,
+    at: u64,
+}
+
 /// The name of photo `p`'s correction by the model with SHA-256 `model`.
 pub fn key(p: &Photo, model: &str) -> u64 {
     let mut h = Hasher128::new();
@@ -443,6 +514,7 @@ pub struct Recipe {
     info: SourceInfo,
     model: Arc<Model>,
     path: Option<PathBuf>,
+    publish: Publish,
 }
 
 impl Recipe {
@@ -476,14 +548,14 @@ impl Recipe {
         }
         let c = Correction { key: self.key, w, h, index, gain, memo: Mutex::new(None) };
         if let Some(path) = &self.path {
-            c.write(path)?;
+            c.write(path, &self.publish)?;
         }
         Ok(c)
     }
 
     #[cfg(not(feature = "denoise"))]
     pub fn make(&self, _: &(dyn Fn(usize, usize) + Sync), _: &AtomicBool) -> Result<Correction, String> {
-        let _ = (&self.source, &self.info, &self.model, &self.path);
+        let _ = (&self.source, &self.info, &self.model, &self.path, &self.publish);
         Err("this build of LightCraft can't run AI models".into())
     }
 }
@@ -521,6 +593,8 @@ struct Job {
     done: Arc<AtomicUsize>,
     total: Arc<AtomicUsize>,
     cancel: Arc<AtomicBool>,
+    /// The cache's epoch when it started: a result from before a clear is dropped.
+    epoch: u64,
     _task: crate::activity::TaskGuard,
 }
 
@@ -535,6 +609,10 @@ pub struct State {
     job: Option<Job>,
     /// Corrections that failed, by key, and why (not tried again until asked).
     failed: HashMap<u64, String>,
+    /// Corrections the user cancelled, by key (not started again until asked: Try Again, or switching it on).
+    cancelled: std::collections::HashSet<u64>,
+    /// The cache's epoch, bumped (under this lock) when it is cleared ([`Publish`]).
+    epoch: Arc<Mutex<u64>>,
     /// Corrections in memory, most recently used last.
     ready: Vec<(PhotoId, Arc<Correction>)>,
     /// Bumped whenever a correction arrives (renders made before it are stale).
@@ -616,7 +694,12 @@ impl Session {
         let key = key(&p, &sha);
         let path = self.aidefringe_dir().map(|d| d.join(format!("{key:016x}.lcadf")));
         let source = self.media.source_ref_uncached(&p, SourceLevel::Full);
-        Ok(Recipe { photo: id, key, source, info: self.source_info(id), model, path })
+        let publish = Publish { epoch: self.aidefringe.epoch.clone(), at: self.aidefringe_epoch() };
+        Ok(Recipe { photo: id, key, source, info: self.source_info(id), model, path, publish })
+    }
+
+    fn aidefringe_epoch(&self) -> u64 {
+        *self.aidefringe.epoch.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The installed model's key for photo `p`, if a model is installed.
@@ -703,12 +786,13 @@ impl Session {
         }
     }
 
-    /// Forget why photo `id`'s correction failed, so it is tried again.
+    /// Forget why photo `id`'s correction failed or that it was cancelled, so it is tried again.
     pub fn aidefringe_retry(&mut self, id: PhotoId) {
         if let Some(p) = self.catalog.photo(id).cloned()
             && let Some(key) = self.aidefringe_key(&p)
         {
             self.aidefringe.failed.remove(&key);
+            self.aidefringe.cancelled.remove(&key);
         }
     }
 
@@ -732,13 +816,19 @@ impl Session {
                 }
                 r => {
                     let Some(job) = self.aidefringe.job.take() else { return false };
+                    let stale = job.epoch != self.aidefringe_epoch();
                     match r {
+                        _ if stale => {}
                         Ok(Ok(c)) => {
                             self.aidefringe_keep(job.photo, Arc::new(c));
                             arrived = true;
                         }
                         Ok(Err(e)) if !job.cancel.load(Ordering::Relaxed) => {
                             self.aidefringe.failed.insert(job.key, e);
+                        }
+                        // cancelled while still wanted: by the user, so not started again by itself
+                        Ok(Err(_)) if still => {
+                            self.aidefringe.cancelled.insert(job.key);
                         }
                         Ok(Err(_)) => {}
                         Err(_) => {
@@ -757,7 +847,7 @@ impl Session {
             return arrived;
         }
         let Some(key) = self.aidefringe_key(&p) else { return arrived };
-        if self.aidefringe.failed.contains_key(&key) || self.aidefringe_get(id, key).is_some() {
+        if self.aidefringe.failed.contains_key(&key) || self.aidefringe.cancelled.contains(&key) || self.aidefringe_get(id, key).is_some() {
             return arrived;
         }
         match self.aidefringe_recipe(id) {
@@ -774,7 +864,7 @@ impl Session {
         let task = self.activity.start("aidefringe", "AI Defringe", crate::activity::Cancel::Flag(cancel.clone()));
         task.detail(name);
         let (tx, rx) = channel();
-        let (d, t, c, key, photo) = (done.clone(), total.clone(), cancel.clone(), r.key, r.photo);
+        let (d, t, c, key, photo, epoch) = (done.clone(), total.clone(), cancel.clone(), r.key, r.photo, r.publish.at);
         std::thread::Builder::new()
             .name("ai-defringe".into())
             .spawn(move || {
@@ -787,7 +877,7 @@ impl Session {
                 let _ = tx.send(made);
             })
             .ok();
-        self.aidefringe.job = Some(Job { photo, key, rx, done, total, cancel, _task: task });
+        self.aidefringe.job = Some(Job { photo, key, rx, done, total, cancel, epoch, _task: task });
     }
 
     /// Make photo `id`'s correction now, on this thread (for scripts and tests) → how many pixels it changes.
@@ -796,14 +886,23 @@ impl Session {
         let c = Arc::new(r.make(&|_, _| {}, &AtomicBool::new(false))?);
         let n = c.changed();
         self.aidefringe.failed.remove(&r.key);
+        self.aidefringe.cancelled.remove(&r.key);
         self.aidefringe_keep(id, c);
         Ok(n)
     }
 
-    /// Delete every cached correction of this library → (files, bytes).
+    /// Delete every cached correction of this library → (files, bytes). Work started before is not published: the
+    /// epoch is bumped under the lock writers publish under, so none can write after the files are deleted.
     pub fn aidefringe_clear(&mut self) -> (usize, u64) {
+        let epoch = self.aidefringe.epoch.clone();
+        let mut epoch = epoch.lock().unwrap_or_else(PoisonError::into_inner);
+        *epoch += 1;
+        if let Some(j) = &self.aidefringe.job {
+            j.cancel.store(true, Ordering::Relaxed);
+        }
         self.aidefringe.ready.clear();
         self.aidefringe.failed.clear();
+        self.aidefringe.cancelled.clear();
         self.aidefringe.generation += 1;
         let Some(dir) = self.aidefringe_dir() else { return (0, 0) };
         let (mut files, mut bytes) = (0, 0);
@@ -827,6 +926,7 @@ impl Session {
         }
         self.aidefringe.model = None;
         self.aidefringe.failed.clear();
+        self.aidefringe.cancelled.clear();
         self.aidefringe.generation += 1;
         self.aidefringe_refresh(true);
     }

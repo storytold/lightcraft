@@ -149,8 +149,22 @@ impl crate::Session {
             ^ (job.level as u64) << 60
             ^ profile_salt.rotate_left(29)
             ^ lens.rotate_left(37)
-            ^ decoder.rotate_left(43);
+            ^ decoder.rotate_left(43)
+            ^ job.ai_defringe.as_ref().map_or(0, |a| a.key().rotate_left(11));
         Some(job)
+    }
+
+    /// `ck` with AI Defringe's correction in it, when the render uses one: a thumbnail rendered before the correction
+    /// was there is not taken for one with it.
+    fn with_ai_defringe(ck: Hash128, a: Option<&crate::aidefringe::ForRender>) -> Hash128 {
+        match a {
+            Some(a) => {
+                let mut k = Hasher128::new();
+                k.u64(ck.0 as u64).u64((ck.0 >> 64) as u64).str("aidefringe").u64(a.key());
+                k.finish()
+            }
+            None => ck,
+        }
     }
 
     /// Cache key of a variant thumbnail ([`Self::variant_job`]).
@@ -189,7 +203,10 @@ impl crate::Session {
         // decoded as these settings develop it (their camera profile, or none)
         p.develop = Arc::new(settings.clone());
         let source = self.media.source_ref(&p, level);
-        let ck = Self::variant_key(&p, settings, edge, self.media.camera_profile_salt(&settings.profile.id));
+        // with AI Defringe's correction when these settings use it and it is made
+        let ai_defringe = self.aidefringe_for_render(&p, settings, false).ok().flatten();
+        let ck =
+            Self::with_ai_defringe(Self::variant_key(&p, settings, edge, self.media.camera_profile_salt(&settings.profile.id)), ai_defringe.as_ref());
         Some(RenderJob {
             request_id: 0,
             cache_generation: self.media.rendered.generation(),
@@ -210,7 +227,7 @@ impl crate::Session {
             slide: None,
             preview_cut: None,
             display_fit: None,
-            ai_defringe: None,
+            ai_defringe,
         })
     }
 
@@ -245,8 +262,14 @@ impl crate::Session {
         let needed = (edge as f64 * w.max(h) / side).ceil().min(SourceLevel::Preview.max_edge() as f64);
         let level = SourceLevel::for_size(needed as usize);
         let source = self.media.source_ref(&p, level);
-        let ck = Self::variant_key(&p, &settings, edge, self.media.camera_profile_salt(&settings.profile.id));
-        let preview_cut = self.face_preview_cut(&p, rect, edge, needed as usize);
+        // the photo's own look, so with its AI Defringe correction when it is on and made
+        let ai_defringe = self.aidefringe_for_render(&p, &settings, false).ok().flatten();
+        let ck = Self::with_ai_defringe(
+            Self::variant_key(&p, &settings, edge, self.media.camera_profile_salt(&settings.profile.id)),
+            ai_defringe.as_ref(),
+        );
+        // (a raw's embedded preview has no correction: a corrected tile is rendered)
+        let preview_cut = if ai_defringe.is_some() { None } else { self.face_preview_cut(&p, rect, edge, needed as usize) };
         Some(RenderJob {
             request_id: 0,
             cache_generation: self.media.rendered.generation(),
@@ -267,7 +290,7 @@ impl crate::Session {
             slide: None,
             preview_cut,
             display_fit: None,
-            ai_defringe: None,
+            ai_defringe,
         })
     }
 

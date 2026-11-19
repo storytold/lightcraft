@@ -29,6 +29,8 @@ pub struct Ui {
 /// with it) and keeps the open photo's coming; while one is being made, asks again for its progress.
 pub fn pump_background(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
     if now < app.caches.aidefringe.next_pump {
+        // come back at the deadline even if nothing else asks for a frame
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(app.caches.aidefringe.next_pump - now));
         return;
     }
     let Ok(v) = app.session.execute("aiDefringe.pump", &json!({})) else { return };
@@ -45,6 +47,22 @@ pub fn pump_background(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
     if running {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
+}
+
+/// The AI Defringe check → whether it is on now.
+fn switch(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, mut on: bool) -> bool {
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 2 }).show(ui, |ui| {
+        let r = ui.add(egui::Checkbox::new(&mut on, tr("AI Defringe"))).on_hover_text(tr(
+            "Removes colour fringes of every hue (purple, blue, green) with the installed defringe model, leaving real colours alone. \
+             The correction is made once in the background and kept; switching it off and on, or changing Amount, is instant.",
+        ));
+        register(ui, "aidefringe:enabled", r.rect);
+        if r.changed() {
+            let _ = app.run("aiDefringe.toggle", json!({"id": id.0, "enabled": on}));
+            app.caches.aidefringe.next_pump = 0.0;
+        }
+    });
+    on
 }
 
 fn note(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
@@ -75,19 +93,13 @@ pub fn section(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Deve
                 }
             }
         });
+        // a photo left with it on (its model since removed) can still be switched off
+        if d.optics.ai_defringe_enabled() {
+            switch(app, ui, id, true);
+        }
         return;
     }
-    let mut on = d.optics.ai_defringe_enabled();
-    egui::Frame::NONE.inner_margin(pad(6, 2)).show(ui, |ui| {
-        let r = ui.add(egui::Checkbox::new(&mut on, tr("AI Defringe"))).on_hover_text(tr(
-            "Removes colour fringes of every hue (purple, blue, green) with the installed defringe model, leaving real colours alone. \
-             The correction is made once in the background and kept; switching it off and on, or changing Amount, is instant.",
-        ));
-        register(ui, "aidefringe:enabled", r.rect);
-        if r.changed() {
-            let _ = app.run("aiDefringe.toggle", json!({"id": id.0, "enabled": on}));
-        }
-    });
+    let on = switch(app, ui, id, d.optics.ai_defringe_enabled());
     crate::panels::edit::control(app, ui, d, "optics.aiDefringe", on);
     if !on || status["photo"].is_null() {
         return;
@@ -191,7 +203,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 let install = crate::button::Button::new("Accept and Install").widget("aidefringe:accept").show(ui);
                 let cancel = crate::button::Button::new("Cancel").widget("aidefringe:cancel").show(ui);
                 if install.clicked() {
-                    match app.session.execute("aiDefringe.models.install", &json!({"path": path, "acknowledged": true})) {
+                    match app.session.execute("aiDefringe.models.install", &json!({"path": path, "model": info, "acknowledged": true})) {
                         Ok(_) => app.caches.aidefringe.rejected = None,
                         Err(e) => app.caches.aidefringe.rejected = Some(plain(&e)),
                     }

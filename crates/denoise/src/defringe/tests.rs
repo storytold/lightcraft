@@ -123,3 +123,38 @@ fn the_clip_mask_marks_the_brightest_pixels() {
     let mask = clip_mask(&rgb, 300, 20, t);
     assert!(mask[10 * 300 + 50] && !mask[10 * 300 + 200] && !mask[10 * 300 + 98]);
 }
+
+#[test]
+fn cancelling_is_honoured_with_no_tile_to_run() {
+    // flat: no tile is run, and the flag is still seen
+    let rgb = vec![[0.18f32; 3]; 300 * 280];
+    let clip = vec![false; 300 * 280];
+    let r = model([0.0, 0.0, 0.0]).correct(&rgb, &clip, 300, 280, &|_, _| {}, &AtomicBool::new(true));
+    assert!(matches!(r, Err(Error::Cancelled)));
+}
+
+#[test]
+fn sizes_that_overflow_are_refused() {
+    let r = model([0.0, 0.0, 0.0]).correct(&[], &[], usize::MAX / 2 + 1, 2, &|_, _| {}, &AtomicBool::new(false));
+    assert!(matches!(r, Err(Error::Input(_))));
+}
+
+#[test]
+fn the_clip_mask_matches_a_plain_5_by_5_mean() {
+    let (w, h) = (23, 17);
+    let rgb: Vec<[f32; 3]> = (0..w * h).map(|i| [((i * 37) % 11) as f32 / 10.0, 0.2, ((i * 13) % 7) as f32 / 6.0]).collect();
+    let mask = clip_mask(&rgb, w, h, 0.9);
+    for y in 0..h {
+        for x in 0..w {
+            let (mut s, mut n) = (0f64, 0);
+            for yy in y.saturating_sub(2)..(y + 3).min(h) {
+                for xx in x.saturating_sub(2)..(x + 3).min(w) {
+                    let p = rgb[yy * w + xx];
+                    s += f64::from(p[0].max(p[1]).max(p[2]));
+                    n += 1;
+                }
+            }
+            assert_eq!(mask[y * w + x], s / n as f64 >= 0.93 * 0.9, "({x}, {y})");
+        }
+    }
+}
