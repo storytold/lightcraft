@@ -134,7 +134,8 @@ impl std::hash::Hasher for IdHasher {
 
 /// Where `p` is in memory. The contract of the kept texts: a text is used only for the photo at the
 /// address it was made for. The catalog's own photos (`Arc<Photo>` contents) stay where they are
-/// until `Arc::make_mut` copies one that others hold, which `photo_mut` reports ([`Indexes::text_moved`]);
+/// until `Arc::make_mut` copies one that others hold, which `photo_mut` reports ([`Indexes::text_moved`]; `repair`
+/// copies them in bulk and drops every lookup instead);
 /// every op that changes a searched field makes the text again ([`Indexes::text_changed`]). A copy
 /// of a photo (a candidate tried with other values) is at another address, so it is read from its
 /// own fields, never from a text kept for the photo with its id. Only ids and addresses are

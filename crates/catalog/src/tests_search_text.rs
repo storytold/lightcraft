@@ -373,6 +373,27 @@ fn a_clone_builds_its_own() {
     assert_current(&c);
 }
 
+/// `repair` copies the photos others hold (`Arc::make_mut`) without reporting a change, so the cache would
+/// still keep a text for the address the retained photo has. The retained photo, changed on its own, is
+/// read from its fields, never from the text kept for the photo with its id.
+#[test]
+fn repair_keeps_no_text_for_a_photo_it_copied() {
+    let mut c = library();
+    warm(&c);
+    let mut held = c.photo(PhotoId(1)).unwrap().clone();
+    assert!(c.repair().is_empty(), "a sound catalog");
+    assert!(!std::ptr::eq(&*held, &**c.photo(PhotoId(1)).unwrap()), "repair copied the photo");
+    std::sync::Arc::make_mut(&mut held).meta.title = "Trip to Nara".into();
+    let nara = Filter { text: "nara".into(), ..Default::default() };
+    let osaka = Filter { text: "ōsaka".into(), ..Default::default() };
+    assert!(nara.matches(&held, &c), "the retained photo's own title");
+    assert!(!osaka.matches(&held, &c), "not the title it had");
+    assert!(text_rule("contains", "nara").matches(&held, &c), "the Text rule reads the retained photo's own title");
+    assert!(!text_rule("contains", "ōsaka").matches(&held, &c));
+    warm(&c);
+    assert_eq!((found(&c, "ōsaka"), found(&c, "nara")), (1, 0));
+}
+
 /// The words of Text rules (not the search) read the same with the cache as without: what the fields give when each
 /// photo is read alone (a copy of a photo is not the catalog's own, so the text kept for its id is not used), and what the
 /// kept text gives.

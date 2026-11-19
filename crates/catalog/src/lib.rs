@@ -1231,6 +1231,10 @@ impl Catalog {
     /// wrote).
     pub fn repair(&mut self) -> Vec<String> {
         let mut changed = Vec::new();
+        // Photos others hold are copied below (`Arc::make_mut`), which moves them in memory and strands the text kept
+        // for their address ([`index::Indexes`]), and stacks and albums change outside `apply`: nothing derived is
+        // kept across a repair, and the lookups are built again when asked.
+        self.index = index::Indexes::default();
         // Segmentation grids shared by the snapshot this was read from (issue #2154): each
         // reference takes its grid's data, and the table is not kept — a live catalog always
         // stores the data inline, so masks render and serialize without the snapshot's table.
@@ -1341,9 +1345,8 @@ impl Catalog {
             self.next_stack = self.next_stack.max(stack);
         }
         if !changed.is_empty() {
-            // stacks and albums changed outside `apply`: the lookups are built again when asked
-            self.index = index::Indexes::default();
-            // (and what was worked out from the albums, the guard of [`Self::keeps_written_order`] too)
+            // stacks and albums changed outside `apply`: what was worked out from the albums is made again (the guard of
+            // [`Self::keeps_written_order`] too)
             self.plans = PlansMemo::default();
         }
         changed
