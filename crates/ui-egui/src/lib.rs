@@ -320,6 +320,8 @@ pub struct LightcraftApp {
     pub(crate) compare_tiles: std::collections::HashMap<(u8, u64), region::RegionView>,
     /// Until when (s) a pinch or scroll in Compare / Reference holds the windows there are.
     pub(crate) compare_hold_until: f64,
+    /// Survey tiles gliding to new cells, and the render slot each surveyed photo keeps.
+    pub(crate) survey_motion: panels::compare::survey::SurveyMotion,
     /// Photo Merge dialog previews and background merges.
     pub merge: merge::MergeState,
     /// An import in progress (the import review dialog's batches).

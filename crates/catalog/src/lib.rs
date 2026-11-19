@@ -26,6 +26,7 @@ pub mod lock;
 #[cfg(not(target_arch = "wasm32"))]
 mod log_writer;
 pub mod model;
+pub mod opened_folder;
 pub mod query;
 pub mod rules;
 pub mod safe_file;
@@ -44,6 +45,7 @@ use lightcraft_develop::DevelopSettings;
 pub use local::{DEFAULT_FORGET_DAYS, ForgetPlan, LocalRecords, folder_of};
 pub use lock::{LibraryLock, LockError, LockOwner};
 pub use model::*;
+pub use opened_folder::OpenedFolder;
 pub use query::{DateGroup, Filter, Person, RatingOp, Sort, SortKey, mix64};
 pub use rules::{Match, Rule, RuleSet};
 use serde::{Deserialize, Serialize};
@@ -221,8 +223,8 @@ pub enum Op {
         /// `None` = its raw data decodes (or it isn't a raw).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         preview_only: Option<String>,
-        /// The app version that decided `preview_only` (see [`Photo::preview_checked`]); empty
-        /// when it is `None`.
+        /// The app version that decided `preview_only` (see [`Photo::preview_checked`]); also
+        /// retained for supported ORF files so their withdrawal recheck runs only once.
         #[serde(default, skip_serializing_if = "String::is_empty")]
         preview_checked: String,
     },
@@ -1566,6 +1568,8 @@ mod tests_local;
 mod tests_lock;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests_log_thread;
+#[cfg(test)]
+mod tests_opened_folder;
 #[cfg(test)]
 mod tests_repair;
 #[cfg(test)]
