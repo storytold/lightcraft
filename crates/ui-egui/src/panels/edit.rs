@@ -362,6 +362,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             app.ui.toggle_flyout("defringe");
         }
         if open {
+            crate::panels::aidefringe::section(app, ui, id, d);
+            sub_title(ui, crate::i18n::tr("Manual"));
             control(app, ui, d, "optics.defringePurple", true);
             let on = d.optics.defringe_purple_amount > 0.0;
             control(app, ui, d, "optics.defringePurpleHueLo", on);

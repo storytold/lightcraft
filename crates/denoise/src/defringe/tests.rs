@@ -78,8 +78,8 @@ fn small_pictures_are_padded() {
 #[test]
 fn a_correction_stops_at_grey_and_does_not_make_green() {
     // a huge push against the pixel's own colour ends at grey, not past it
-    let ab = [0.05, -0.05];
-    let c = (ab[0] * ab[0] + ab[1] * ab[1] as f32).sqrt();
+    let ab: [f32; 2] = [0.05, -0.05];
+    let c = (ab[0] * ab[0] + ab[1] * ab[1]).sqrt();
     let new = compose(ab, c, 1.0, c, [-20.0, 20.0, 20.0]);
     assert!(new[0] >= -1e-6 && new[1] <= 1e-6, "{new:?}");
     // a push across into green on a grey-ish pixel stays under 0.01 of green chroma

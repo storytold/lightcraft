@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### AI Defringe
+- Optics ▸ Defringe has an AI Defringe switch with an Amount. It removes colour fringes of every hue (purple,
+  blue-violet and green edges from the lens) with a trained model and leaves real colours alone. Install a model of your
+  own in Settings ▸ AI Defringe: LightCraft comes with none. Each photo's correction is made once in the background and
+  kept, so switching it off and on or moving Amount is instant, and an export makes it if it is missing. See
+  [AI Defringe](ai-defringe.md).
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

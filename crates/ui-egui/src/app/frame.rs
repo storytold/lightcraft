@@ -99,6 +99,7 @@ impl LightcraftApp {
         self.place_names_outcome(ctx);
         self.slideshow_tick(ctx, now);
         panels::denoise::pump_background(self, ctx, now);
+        panels::aidefringe::pump_background(self, ctx, now);
         panels::faces::pump_background(self, ctx, now);
         focus_scan::pump(self, ctx, now);
         // auto import: list the watched folder every few seconds (on a worker thread: it may be on

@@ -55,6 +55,7 @@ pub const TABS: &[(&str, &str)] = &[
     ("slideshow", "Slideshow"),
     ("faces", "Faces"),
     ("denoise", "AI Denoise"),
+    ("aidefringe", "AI Defringe"),
 ];
 
 /// Preview cache sizes offered (MB; 0 = automatic: room for every photo of the library).
@@ -73,6 +74,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &str) {
         "slideshow" => slideshow_tab(app, ui, &t, true),
         "faces" => crate::panels::faces::settings_tab(app, ui, &t),
         "denoise" => crate::panels::denoise::settings_tab(app, ui, &t),
+        "aidefringe" => crate::panels::aidefringe::settings_tab(app, ui, &t),
         _ => general_tab(app, ui, &t),
     }
 }

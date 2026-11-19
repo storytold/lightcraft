@@ -139,4 +139,3 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "aiDefringe.clear", "Clear AI Defringe Cache", [], None, "{} → {deleted, bytes} — delete every cached AI Defringe correction of this library (they are made again when wanted)", always, clear),
     ]
 }
-

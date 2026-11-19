@@ -642,6 +642,8 @@ pub struct Caches {
     pub smart_problem_scans: usize,
     /// AI denoise: what the pump last saw, the model list and the downloads being watched.
     pub denoise: panels::denoise::Ui,
+    /// AI Defringe: what the pump last saw and a model file waiting to be accepted.
+    pub aidefringe: panels::aidefringe::Ui,
     /// Bumped when a face model is installed, removed or chosen, so Settings re-reads the list at once.
     pub faces_epoch: u64,
     /// Face model downloads the user started, followed until installed (see `panels::faces::pump`).

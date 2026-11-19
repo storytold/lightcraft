@@ -137,8 +137,10 @@ fn an_export_makes_the_correction_when_it_is_missing_and_never_comes_out_without
     // no pump: the export makes the correction itself
     let fixed = decode(&export_photo(&mut x.s, id, &o, 1).unwrap().bytes);
     assert_eq!((plain.width, plain.height), (fixed.width, fixed.height));
-    let differs: Vec<usize> =
-        (0..plain.data.len()).filter(|&i| plain.data[i].iter().zip(&fixed.data[i]).any(|(a, b)| (a - b).abs() > 1e-3)).map(|i| i % plain.width).collect();
+    let differs: Vec<usize> = (0..plain.data.len())
+        .filter(|&i| plain.data[i].iter().zip(&fixed.data[i]).any(|(a, b)| (a - b).abs() > 1e-3))
+        .map(|i| i % plain.width)
+        .collect();
     assert!(!differs.is_empty(), "the export has no correction");
     let edge = plain.width * 96 / 320;
     assert!(differs.iter().all(|&x| x.abs_diff(edge) < 12), "pixels away from the stripe changed: {:?}", differs.iter().max());

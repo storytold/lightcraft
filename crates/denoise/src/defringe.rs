@@ -135,7 +135,8 @@ impl Model {
                 done += batch.len();
                 progress(done, total);
             }
-            let raw: Vec<[f32; 3]> = acc.iter().zip(&wsum).map(|(a, &s)| if s > 0.0 { a.map(|v| v / s.max(1e-6)) } else { [0.0, 0.0, -20.0] }).collect();
+            let raw: Vec<[f32; 3]> =
+                acc.iter().zip(&wsum).map(|(a, &s)| if s > 0.0 { a.map(|v| v / s.max(1e-6)) } else { [0.0, 0.0, -20.0] }).collect();
             band(rgb, w, h, (r0, r1, e0, e1), &raw, &mut changed);
         }
         progress(total, total);
@@ -230,10 +231,12 @@ fn band(rgb: &[[f32; 3]], w: usize, h: usize, (r0, r1, e0, e1): (usize, usize, u
     let c_hi = max_filter(&chroma, w, lrows, 3);
     let rows = e1 - e0;
     // the guarded change, for rows e0..e1
-    let ab: Vec<[f32; 2]> = (0..rows * w).map(|i| {
-        let j = (i / w + e0 - l0) * w + i % w;
-        [lab[j][1], lab[j][2]]
-    }).collect();
+    let ab: Vec<[f32; 2]> = (0..rows * w)
+        .map(|i| {
+            let j = (i / w + e0 - l0) * w + i % w;
+            [lab[j][1], lab[j][2]]
+        })
+        .collect();
     let new: Vec<[f32; 2]> = (0..rows * w)
         .into_par_iter()
         .map(|i| {
@@ -364,8 +367,10 @@ fn box_sum(v: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
 }
 
 const REC2020_TO_709: [[f32; 3]; 3] = [[1.6605, -0.5876, -0.0728], [-0.1246, 1.1329, -0.0083], [-0.0182, -0.1006, 1.1187]];
-const M1: [[f32; 3]; 3] = [[0.412_221_47, 0.536_332_55, 0.051_445_995], [0.211_903_5, 0.680_699_5, 0.107_396_96], [0.088_302_46, 0.281_718_85, 0.629_978_7]];
-const M2: [[f32; 3]; 3] = [[0.210_454_26, 0.793_617_8, -0.004_072_047], [1.977_998_5, -2.428_592_2, 0.450_593_7], [0.025_904_037, 0.782_771_77, -0.808_675_77]];
+const M1: [[f32; 3]; 3] =
+    [[0.412_221_47, 0.536_332_55, 0.051_445_995], [0.211_903_5, 0.680_699_5, 0.107_396_96], [0.088_302_46, 0.281_718_85, 0.629_978_7]];
+const M2: [[f32; 3]; 3] =
+    [[0.210_454_26, 0.793_617_8, -0.004_072_047], [1.977_998_5, -2.428_592_2, 0.450_593_7], [0.025_904_037, 0.782_771_77, -0.808_675_77]];
 
 fn mul(m: &[[f32; 3]; 3], v: [f32; 3]) -> [f32; 3] {
     [0, 1, 2].map(|r| m[r][0] * v[0] + m[r][1] * v[1] + m[r][2] * v[2])

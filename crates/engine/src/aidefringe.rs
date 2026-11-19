@@ -347,7 +347,7 @@ impl Correction {
             return None;
         }
         let (mut index, mut gain) = (Vec::with_capacity(n), Vec::with_capacity(n));
-        for r in body.chunks_exact(10) {
+        for r in body.as_chunks::<10>().0 {
             let i = u32::from_le_bytes(r.get(..4)?.try_into().ok()?);
             if i as usize >= w * h || index.last().is_some_and(|&l| l >= i) {
                 return None;
@@ -457,7 +457,7 @@ pub enum ForRender {
     /// Apply this correction at this amount.
     Ready(Arc<Correction>, f32),
     /// Make the correction first (an export whose photo has none yet).
-    Make(Recipe, f32),
+    Make(Box<Recipe>, f32),
 }
 
 impl ForRender {
@@ -514,9 +514,16 @@ pub enum PhotoState {
     Off,
     /// No model is installed (or this build can't run one).
     NoModel,
-    Ready { changed: usize },
-    Running { done: usize, total: usize },
-    Failed { error: String },
+    Ready {
+        changed: usize,
+    },
+    Running {
+        done: usize,
+        total: usize,
+    },
+    Failed {
+        error: String,
+    },
     Waiting,
 }
 
@@ -624,7 +631,11 @@ impl Session {
             return Ok(None);
         }
         let Some(key) = self.aidefringe_key(p) else {
-            return if make { Err(format!("{}: AI Defringe is on for this photo but no defringe model is installed", p.file_name)) } else { Ok(None) };
+            return if make {
+                Err(format!("{}: AI Defringe is on for this photo but no defringe model is installed", p.file_name))
+            } else {
+                Ok(None)
+            };
         };
         if let Some(c) = self.aidefringe_get(p.id, key) {
             return Ok(Some(ForRender::Ready(c, amount)));
@@ -633,7 +644,7 @@ impl Session {
             return Ok(None);
         }
         let r = self.aidefringe_recipe(p.id).map_err(|e| format!("{}: {e}", p.file_name))?;
-        Ok(Some(ForRender::Make(r, amount)))
+        Ok(Some(ForRender::Make(Box::new(r), amount)))
     }
 
     /// Where photo `id`'s correction stands.

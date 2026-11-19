@@ -2,13 +2,13 @@ use serde_json::{Value, json};
 
 use crate::{Selection, Session, command_specs};
 
+#[cfg(feature = "denoise")]
+mod aidefringe;
 mod album_loops;
 mod album_missing;
 mod album_order;
 mod album_remove;
 mod albums_local;
-#[cfg(feature = "denoise")]
-mod aidefringe;
 mod autosync_wb;
 mod color;
 mod constrain_crop;
