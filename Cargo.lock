@@ -1254,6 +1254,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-http-url"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=c247a085be0b2db5456f1f9178024d6a12e4cc57#c247a085be0b2db5456f1f9178024d6a12e4cc57"
+
+[[package]]
 name = "craft-i18n"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3#23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3"
@@ -4081,6 +4086,7 @@ dependencies = [
 name = "lightcraft-fetch"
 version = "0.21.1"
 dependencies = [
+ "craft-http-url",
  "log",
  "rustls",
  "rustls-rustcrypto",
