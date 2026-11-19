@@ -1256,7 +1256,7 @@ dependencies = [
 [[package]]
 name = "craft-http-url"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=c247a085be0b2db5456f1f9178024d6a12e4cc57#c247a085be0b2db5456f1f9178024d6a12e4cc57"
+source = "git+https://github.com/storytold/craft-libs?rev=48c57b5fafa170eb9c77c1d9fef0be0f09876f1f#48c57b5fafa170eb9c77c1d9fef0be0f09876f1f"
 
 [[package]]
 name = "craft-i18n"
