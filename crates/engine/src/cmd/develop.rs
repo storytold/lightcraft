@@ -291,6 +291,32 @@ fn edit_version(s: &mut Session, p: &Value, c: &str, label: &str, f: impl FnOnce
     ok()
 }
 
+/// Where to look for photo `id`'s subject: the camera's focus point when the file records it
+/// (`"camera"`), else the likeliest subject in the photo (`"photo"`,
+/// [`lightcraft_pipeline::lens_blur::subject_point`]). Normalized, on the upright photo.
+pub(super) fn subject_point(s: &mut Session, id: PhotoId, c: &str) -> Result<(Point, &'static str)> {
+    let d = s.develop_of(id).unwrap_or_default();
+    let camera = s.catalog.photo(id).and_then(|p| p.meta.focus.clone());
+    let (point, from) = match camera {
+        // stored on the upright photo: the user's Rotate / Flip on top, as masks are
+        Some(f) => {
+            let r = d.orientation.map_norm_rect(f.rect);
+            (Point::new((r.x0 + r.x1) / 2.0, (r.y0 + r.y1) / 2.0), "camera")
+        }
+        None => {
+            let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad(c, e))?;
+            let info = s.source_info(id);
+            let p = lightcraft_pipeline::lens_blur::subject_point(&src, &d, info.mattes.as_deref())
+                .ok_or_else(|| bad(c, "the photo has no picture to look for a subject in"))?;
+            (p, "photo")
+        }
+    };
+    if !(point.x.is_finite() && point.y.is_finite()) {
+        return Err(bad(c, "the camera's focus point is not usable"));
+    }
+    Ok((Point::new(point.x.clamp(0.0, 1.0), point.y.clamp(0.0, 1.0)), from))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -545,26 +571,7 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, _| {
                 const C: &str = "lensBlur.findSubject";
                 let id = active(s, C)?;
-                let d = s.develop_of(id).unwrap_or_default();
-                let camera = s.catalog.photo(id).and_then(|p| p.meta.focus.clone());
-                let (point, from) = match camera {
-                    // stored on the upright photo: the user's Rotate / Flip on top, as masks are
-                    Some(f) => {
-                        let r = d.orientation.map_norm_rect(f.rect);
-                        (Point::new((r.x0 + r.x1) / 2.0, (r.y0 + r.y1) / 2.0), "camera")
-                    }
-                    None => {
-                        let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad(C, e))?;
-                        let info = s.source_info(id);
-                        let p = lightcraft_pipeline::lens_blur::subject_point(&src, &d, info.mattes.as_deref())
-                            .ok_or_else(|| bad(C, "the photo has no picture to look for a subject in"))?;
-                        (p, "photo")
-                    }
-                };
-                if !(point.x.is_finite() && point.y.is_finite()) {
-                    return Err(bad(C, "the camera's focus point is not usable"));
-                }
-                let point = Point::new(point.x.clamp(0.0, 1.0), point.y.clamp(0.0, 1.0));
+                let (point, from) = subject_point(s, id, C)?;
                 // an Object waiting for the subject (the photo is analyzed meanwhile); the
                 // segmenter fills it with the people / animals the focus falls on, or the object
                 // at the point

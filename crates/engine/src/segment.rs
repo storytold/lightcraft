@@ -37,6 +37,9 @@ pub const LICENSE_NAME: &str = "SAM License (Meta)";
 pub const LICENSE_URL: &str = "https://github.com/facebookresearch/sam3/blob/main/LICENSE";
 /// How errors about a missing model start (frontends decide on [`crate::ErrorKind::ModelMissing`], not on this text).
 pub const NOT_INSTALLED: &str = "The SAM 3 model is not installed";
+/// The text of a Describe selection Find Subject (and the Subject / Background masks) made: the
+/// concepts it looks for (`lightcraft_segment::SUBJECT_CONCEPTS`), so a frontend can name it.
+pub const SUBJECT_PROMPT: &str = "person, animal";
 /// Longest a waiting command (CLI, MCP) waits for the model (loading on a CPU can take minutes).
 #[cfg_attr(not(feature = "sam"), allow(dead_code))]
 const WAIT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
@@ -787,7 +790,7 @@ impl Session {
                         return;
                     }
                 };
-                let text = lightcraft_segment::SUBJECT_CONCEPTS.join(", ");
+                let text = SUBJECT_PROMPT.to_string();
                 c.shape = MaskShape::Prompt { text, seg: Some(seg), detail: Vec::new(), edge };
                 match self.set_develop(photo, d, "Find Subject") {
                     Ok(()) => polled.changed = true,
@@ -866,6 +869,88 @@ mod tests {
         let polled = s.segment_poll();
         assert_eq!(polled.messages, vec![worker::GPU_FAILED.to_string()]);
         assert!(s.segment_poll().messages.is_empty(), "once");
+    }
+
+    /// A folder that looks like an installed model (it can't load: inference fails).
+    #[cfg(feature = "sam")]
+    fn looks_installed(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("lc-sam3-subject-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("model.safetensors"), b"\x10\x00\x00\x00\x00\x00\x00\x00{not json at all}").unwrap();
+        std::fs::write(d.join("vocab.json"), b"{}").unwrap();
+        std::fs::write(d.join("merges.txt"), b"#version: 0.2\n").unwrap();
+        d
+    }
+
+    /// With SAM 3, Subject and Background are an Object waiting for Find Subject's selection;
+    /// Background is the same selection inverted, a component of a mask too. The people / animals
+    /// found fill it as a Describe selection, the inversion kept.
+    #[cfg(feature = "sam")]
+    #[test]
+    fn subject_and_background_wait_for_find_subject_and_background_is_inverted() {
+        use lightcraft_develop::MaskOp;
+        let dir = looks_installed("bg");
+        for (kind, invert) in [("subject", false), ("background", true)] {
+            let mut s = Session::with_demo();
+            s.segmenter.background = true;
+            s.segmenter.dir = Some(dir.clone());
+            let id = s.active().unwrap();
+            let r = s.execute("mask.add", &serde_json::json!({"kind": kind})).unwrap();
+            assert_eq!(r["pending"], true, "{kind}: {r}");
+            assert!(r.get("legacySubject").is_none());
+            assert_eq!(r["subject"], "photo", "the demo photo records no focus point");
+            let d = s.develop_of(id).unwrap();
+            let (mask, c) = (d.masks[0].id, &d.masks[0].components[0]);
+            assert!(matches!(&c.shape, MaskShape::Object { hint, seg: None, .. } if hint.is_empty()), "{kind}: {:?}", c.shape);
+            assert_eq!(c.invert, invert, "{kind}");
+            // the people / animals found (the worker's own result, failing on this model, is a message)
+            let point = Point::new(0.5, 0.5);
+            let tag = Tag::Subject { photo: id, mask, comp: 0, point };
+            let found = seg_box(20, 5, 5, 15, 15);
+            s.segmenter.results.0.send(worker::Outcome { tag, result: Ok(Some(found.clone())), superseded: false, notice: None }).unwrap();
+            let start = std::time::Instant::now();
+            loop {
+                let _ = s.segment_poll();
+                let c = s.develop_of(id).unwrap().masks[0].components[0].clone();
+                if let MaskShape::Prompt { text, seg: Some(seg), .. } = &c.shape {
+                    assert_eq!(text, SUBJECT_PROMPT);
+                    assert_eq!(seg, &found);
+                    assert_eq!(c.invert, invert, "{kind}: the inversion is kept");
+                    break;
+                }
+                assert!(start.elapsed() < std::time::Duration::from_secs(30), "{kind}: never filled");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            // as a component: Subtract ▸ Background
+            let r = s.execute("mask.addComponent", &serde_json::json!({"kind": kind, "op": "subtract"})).unwrap();
+            assert_eq!(r["pending"], true);
+            let d = s.develop_of(id).unwrap();
+            let c = d.masks[0].components.last().unwrap();
+            assert_eq!((c.op, c.invert), (MaskOp::Subtract, invert), "{kind}");
+            assert!(matches!(&c.shape, MaskShape::Object { hint, .. } if hint.is_empty()));
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Waiting for the model (no background worker) that then fails leaves no half-made mask.
+    #[cfg(feature = "sam")]
+    #[test]
+    fn a_failed_subject_leaves_no_waiting_mask() {
+        let dir = looks_installed("fail");
+        let mut s = Session::with_demo();
+        s.segmenter.background = false;
+        s.segmenter.dir = Some(dir.clone());
+        let id = s.active().unwrap();
+        let before = s.develop_of(id).unwrap();
+        assert!(s.execute("mask.add", &serde_json::json!({"kind": "subject"})).is_err());
+        assert_eq!(s.develop_of(id).unwrap().masks, before.masks);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(feature = "sam")]
+    #[test]
+    fn the_subject_prompt_names_the_concepts_find_subject_looks_for() {
+        assert_eq!(SUBJECT_PROMPT, lightcraft_segment::SUBJECT_CONCEPTS.join(", "));
     }
 
     /// Find Subject's result: people / animals found become a Describe selection of the waiting

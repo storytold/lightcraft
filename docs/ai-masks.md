@@ -1,4 +1,4 @@
-# AI masks (Sky, Object and Describe)
+# AI masks (Sky, Subject, Background, Object and Describe)
 
 LightCraft selects objects with **SAM 3** (Segment Anything with Concepts, Meta 2025), run in
 pure Rust by `crates/segment` on [candle](https://github.com/huggingface/candle): on the GPU
@@ -6,8 +6,8 @@ through Metal on macOS, on the CPU elsewhere (for now). If the Mac's GPU can't r
 the CPU (see the worker below).
 
 **The model is optional.** It is not part of LightCraft, and nothing requires it: without it,
-Object, Describe and Lens Blur's **Find Subject** offer to download it; Sky uses the legacy
-detector. Every other feature (and every existing mask, see below) works, and no render, export or command ever waits for it.
+Object, Describe and Lens Blur's **Find Subject** offer to download it; Sky, Subject and
+Background use the legacy detectors. Every other feature (and every existing mask, see below) works, and no render, export or command ever waits for it.
 
 Lens Blur reuses this same optional SAM 3 model for **Find Subject**; it does not add or download a
 separate model. The automatic subject estimate used before Find Subject finishes (or when **Auto**
@@ -18,6 +18,17 @@ that fallback does not require SAM 3.
 
 In the Masking panel (M):
 
+- **Subject** and **Background**: with SAM 3, select the photo's subject as Lens Blur's **Find
+  Subject** does: the people and animals at the camera's recorded focus point, or at the likeliest
+  subject in the photo (`lens_blur::subject_point`), else the object there. The mask starts as an
+  Object waiting for that selection and becomes a Describe selection of `person, animal` (shown as
+  Subject); the selection is stored with the mask. **Background** is the same selection as one
+  inverted component, so its edge is the subject's. Both also work as Add / Subtract / Intersect
+  components, and `mask.add` reports `{pending, subject: "camera" | "photo"}`. Adding the mask and
+  filling it are two undo steps, as with Find Subject. Without the model they keep the legacy
+  estimate (the photo's person mattes when present, else the saliency heuristic): `mask.add` /
+  `mask.addComponent` report `legacySubject: true`, and the app says so once per session, as for
+  Sky. Saved Subject and Background masks keep their legacy rendering.
 - **Sky**: selects the sky using SAM 3 with the fixed prompt `sky`, including when adding,
   subtracting or intersecting a component. It uses the same background worker, stored mask,
   edge controls and detail refinement as Describe. If no sky is found, no mask is created.

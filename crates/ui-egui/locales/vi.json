@@ -2739,5 +2739,6 @@
   "Top bar": "Thanh trên cùng",
   "Tool strip": "Thanh công cụ",
   "Bottom bar": "Thanh dưới cùng",
-  "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác"
+  "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác",
+  "Subject used basic detection. Install the SAM 3 model for better results.": "Chủ thể được chọn bằng nhận diện cơ bản. Hãy cài mô hình SAM 3 để có kết quả tốt hơn."
 }

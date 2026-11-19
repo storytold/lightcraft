@@ -300,6 +300,11 @@ pub fn mask_tool(m: &Mask) -> Option<String> {
     if matches!(&m.components.first()?.shape, lightcraft_develop::MaskShape::Prompt { text, .. } if text == "sky") {
         return Some("sky".into());
     }
+    // a SAM Subject / Background (Find Subject's selection; Background inverted), as the legacy ones
+    let first = m.components.first()?;
+    if matches!(&first.shape, lightcraft_develop::MaskShape::Prompt { text, .. } if text == crate::segment::SUBJECT_PROMPT) {
+        return Some(if first.invert { "background" } else { "subject" }.into());
+    }
     m.components.first().and_then(|c| serde_json::to_value(&c.shape).ok()).and_then(|v| v.get("kind").and_then(Value::as_str).map(str::to_string))
 }
 

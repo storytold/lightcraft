@@ -78,13 +78,81 @@ fn new_shape(s: &Session, kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
     Ok(shape)
 }
 
-/// Tell the caller a Sky selection used legacy detection, so it can say so: the mask itself is
-/// not marked, and redoing it once SAM 3 is available can give a different selection.
-fn with_legacy_sky(mut out: Value, legacy: bool) -> Value {
-    if let (true, Some(o)) = (legacy, out.as_object_mut()) {
-        o.insert("legacySky".into(), json!(true));
+/// The result key telling the caller a Sky, Subject or Background selection used legacy detection
+/// (`legacySky` / `legacySubject`), so it can say so: the mask itself is not marked, and redoing
+/// it once SAM 3 is available can give a different selection.
+fn legacy_key(shape: &MaskShape) -> Option<&'static str> {
+    match shape {
+        MaskShape::Sky => Some("legacySky"),
+        MaskShape::Subject | MaskShape::Background => Some("legacySubject"),
+        _ => None,
+    }
+}
+
+fn with_legacy(mut out: Value, key: Option<&str>) -> Value {
+    if let (Some(key), Some(o)) = (key, out.as_object_mut()) {
+        o.insert(key.into(), json!(true));
     }
     out
+}
+
+fn is_subject(kind: &str) -> bool {
+    matches!(kind, "subject" | "background")
+}
+
+/// SAM 3 can run: installed locally, or a remote worker configured.
+fn sam_available(s: &Session) -> bool {
+    s.segmenter.installed() || s.segmenter.remote_endpoint().is_some()
+}
+
+/// Subject / Background with SAM 3: a new mask (or, with `into`, a component of mask `into.0`
+/// combined by `into.1`) holding an Object that waits for the photo's subject, found as Lens
+/// Blur's Find Subject finds it (`develop::subject_point`, `Session::segment_subject_later`: the
+/// people / animals at the camera's focus point or the likeliest subject, else the object there).
+/// Background is the same selection inverted, so its edge is the subject's. The selection is
+/// stored with the mask, so renders and exports never need the model.
+fn add_sam_subject(s: &mut Session, kind: &str, p: &Value, into: Option<(u32, MaskOp)>, c: &str) -> Result<Value> {
+    let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+    let (point, from) = super::develop::subject_point(s, id, c)?;
+    let invert = (kind == "background") != bool_or(p, "invert", false);
+    let waiting = MaskComponent {
+        name: None,
+        op: into.map_or(MaskOp::Add, |(_, op)| op),
+        invert,
+        shape: MaskShape::Object { hint: vec![], exclude: vec![], seg: None, detail: vec![], edge: 0.0 },
+    };
+    let (mask, comp, mut out) = match into {
+        None => {
+            let next = s.develop_of(id).map(|d| d.next_mask_id()).unwrap_or(1);
+            let name = str_param(p, "name").map_or_else(|| format!("Mask {next}"), str::to_string);
+            let adjust = super::mask_effects::new_mask_adjust(s, kind);
+            let out = masks_edit(s, c, "Add Mask", |masks, active| {
+                masks.push(Mask { id: next, name, components: vec![waiting], adjust, ..Default::default() });
+                *active = Some(next);
+                Ok(())
+            })?;
+            (next, 0, out)
+        }
+        Some((mid, _)) => {
+            let mut comp = 0;
+            let out = masks_edit(s, c, "Edit Mask", |masks, _| {
+                let i = find(masks, mid, c)?;
+                masks[i].components.push(waiting);
+                comp = masks[i].components.len() - 1;
+                Ok(())
+            })?;
+            (mid, comp, out)
+        }
+    };
+    let focus = (from == "camera").then_some(point);
+    if let Err(e) = s.segment_subject_later(id, mask, comp, point, focus) {
+        // nothing half-made: the waiting component goes again
+        let _ = s.execute("edit.undo", &json!({}));
+        return Err(ai_err(e));
+    }
+    out["pending"] = json!(s.segmenter.background);
+    out["subject"] = json!(from);
+    Ok(out)
 }
 
 /// `[[x, y], …]` normalized points under `key`.
@@ -277,12 +345,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "Create New Mask",
             [],
             None,
-            "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…; object: points/exclude [[x,y],…]; prompt: text; sky/object/prompt: seg? a stored segmentation, no model needed), name?} — sky uses SAM 3 when installed or configured remotely, otherwise legacy sky detection and the result has legacySky: true; object/prompt need the model; in the app a text selection returns {pending} and the mask appears when found",
+            "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…; object: points/exclude [[x,y],…]; prompt: text; sky/object/prompt: seg? a stored segmentation, no model needed), name?} — sky uses SAM 3 when installed or configured remotely, otherwise legacy sky detection and the result has legacySky: true; subject / background (the same selection, inverted) find the photo's subject with SAM 3 as lensBlur.findSubject does (→ {pending, subject: camera|photo}), otherwise the legacy estimate and legacySubject: true; object/prompt need the model; in the app a text selection returns {pending} and the mask appears when found",
             has_active,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("radial").to_string();
+                if is_subject(&kind) && sam_available(s) {
+                    return add_sam_subject(s, &kind, p, None, "mask.add");
+                }
                 let mut shape = new_shape(s, &kind, p, "mask.add")?;
-                let legacy_sky = matches!(shape, MaskShape::Sky);
+                let legacy = legacy_key(&shape);
                 let later = resolve_ai(s, &mut shape, "mask.add")?;
                 let name = str_param(p, "name").map(str::to_string);
                 if let Later::Text(text) = &later {
@@ -308,7 +379,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     *active = Some(next);
                     Ok(())
                 })?;
-                queue_later(s, later, next, 0, out).map(|out| with_legacy_sky(out, legacy_sky))
+                queue_later(s, later, next, 0, out).map(|out| with_legacy(out, legacy))
             }
         ),
         cmd!(
@@ -328,8 +399,11 @@ pub fn specs() -> Vec<CommandSpec> {
                 if !s.develop_of(id).is_some_and(|d| d.masks.iter().any(|m| m.id == mid)) {
                     return Err(bad("mask.addComponent", format!("no mask {mid}")));
                 }
+                if is_subject(&kind) && sam_available(s) {
+                    return add_sam_subject(s, &kind, p, Some((mid, op)), "mask.addComponent");
+                }
                 let mut shape = new_shape(s, &kind, p, "mask.addComponent")?;
-                let legacy_sky = matches!(shape, MaskShape::Sky);
+                let legacy = legacy_key(&shape);
                 let later = resolve_ai(s, &mut shape, "mask.addComponent")?;
                 if let Later::Text(text) = &later {
                     let op = p.get("op").and_then(Value::as_str).unwrap_or("add");
@@ -343,7 +417,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     comp = masks[i].components.len() - 1;
                     Ok(())
                 })?;
-                queue_later(s, later, mid, comp, out).map(|out| with_legacy_sky(out, legacy_sky))
+                queue_later(s, later, mid, comp, out).map(|out| with_legacy(out, legacy))
             }
         ),
         cmd!(

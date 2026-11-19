@@ -248,6 +248,9 @@ impl LightcraftApp {
         if matches!(id, "mask.add" | "mask.addComponent") && r.as_ref().is_ok_and(|v| v.get("legacySky") == Some(&Value::Bool(true))) {
             self.legacy_sky_notice();
         }
+        if matches!(id, "mask.add" | "mask.addComponent") && r.as_ref().is_ok_and(|v| v.get("legacySubject") == Some(&Value::Bool(true))) {
+            self.legacy_subject_notice();
+        }
         if r.is_ok() && id == "mask.adjust" {
             // Judge local adjustments on the photo, without the selection overlay obscuring them.
             // Keep it hidden after release; O / the overlay eye can show it again.
@@ -481,6 +484,17 @@ impl LightcraftApp {
         // long enough to read: a sentence with something to do, unlike a one-word confirmation
         let until = self.tick_now() + LEGACY_SKY_NOTICE_SECONDS;
         self.ui.toast = Some((i18n::tr("Sky used basic detection. Install the SAM 3 model for better results.").to_string(), until, None));
+    }
+
+    /// As [`Self::legacy_sky_notice`], for Subject and Background (once per session).
+    fn legacy_subject_notice(&mut self) {
+        use lightcraft_engine::segment::Segmenter;
+        if self.ui.legacy_subject_noticed || !Segmenter::AVAILABLE || self.session.segmenter.download_status().running {
+            return;
+        }
+        self.ui.legacy_subject_noticed = true;
+        let until = self.tick_now() + LEGACY_SKY_NOTICE_SECONDS;
+        self.ui.toast = Some((i18n::tr("Subject used basic detection. Install the SAM 3 model for better results.").to_string(), until, None));
     }
 
     /// Auto straighten (the crop panel's Auto, a double-click with the Straighten tool), saying so

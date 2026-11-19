@@ -49,6 +49,30 @@ fn sky_uses_legacy_detection_without_sam() {
     }
 }
 
+/// Without SAM 3, Subject and Background keep their legacy estimate (as saved masks always do)
+/// and say so (`legacySubject`), for a new mask and a component alike.
+#[test]
+fn subject_and_background_use_the_legacy_estimate_without_sam() {
+    use lightcraft_develop::MaskShape;
+    if let Some(remote) = Session::with_demo().segmenter.remote_endpoint() {
+        lightcraft_testkit::skip!(Model, "LIGHTCRAFT_SAM3_REMOTE is set ({remote}), so Subject uses the remote SAM 3 worker");
+        return;
+    }
+    for (kind, shape) in [("subject", MaskShape::Subject), ("background", MaskShape::Background)] {
+        let mut s = Session::with_demo();
+        s.segmenter.dir = Some(tmp(&format!("{kind}-missing")));
+        let id = s.active().unwrap();
+        let r = s.execute("mask.add", &json!({"kind": kind})).unwrap();
+        assert_eq!(r["legacySubject"], true, "{kind}: {r}");
+        assert!(r.get("legacySky").is_none());
+        assert_ne!(r["pending"], true);
+        assert_eq!(s.develop_of(id).unwrap().masks[0].components[0].shape, shape);
+        let r = s.execute("mask.addComponent", &json!({"kind": kind, "op": "add"})).unwrap();
+        assert_eq!(r["legacySubject"], true);
+        assert_eq!(s.develop_of(id).unwrap().masks[0].components[1].shape, shape);
+    }
+}
+
 #[cfg(feature = "sam")]
 #[test]
 fn sky_uses_an_installed_model_and_reports_inference_errors() {

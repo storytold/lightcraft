@@ -43,9 +43,14 @@ pub fn local_get(a: &LocalAdjustments, key: &str) -> f64 {
 }
 
 /// A component's row text: its name, else a Describe component's prompt in quotes, else the
-/// tool's label (a SAM sky selection reads "Sky", like a legacy one).
+/// tool's label (a SAM sky selection reads "Sky", and a SAM subject "Subject" or, inverted,
+/// "Background", like legacy ones).
 pub(crate) fn component_label(c: &lightcraft_develop::MaskComponent) -> String {
     c.name.clone().unwrap_or_else(|| match &c.shape {
+        // a Subject / Background selection (Find Subject's people and animals; Background inverted)
+        MaskShape::Prompt { text, .. } if text == lightcraft_engine::segment::SUBJECT_PROMPT => {
+            menu_label(if c.invert { "Background" } else { "Subject" }).to_string()
+        }
         MaskShape::Prompt { text, .. } if text != "sky" => format!("“{text}”"),
         shape => menu_label(kind_label(shape).0).to_string(),
     })

@@ -2377,5 +2377,6 @@
   "Welcome": "Witamy",
   "Next": "Dalej",
   "Get Started": "Zaczynamy",
-  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć"
+  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć",
+  "Subject used basic detection. Install the SAM 3 model for better results.": "Obiekt wybrano podstawowym wykrywaniem. Zainstaluj model SAM 3, aby uzyskać lepsze wyniki."
 }

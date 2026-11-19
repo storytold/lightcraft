@@ -2394,3 +2394,35 @@ fn a_masks_lens_blur_block_picks_the_side_and_switches_off() {
     assert!(!h.app.ui.section_folded("maskLensBlur"));
     h.settle(SETTLE);
 }
+
+#[test]
+fn legacy_subject_says_so_once_per_session() {
+    let mut h = detail("panel.masking");
+    if h.app.session.segmenter.remote_endpoint().is_some() || !lightcraft_engine::segment::Segmenter::AVAILABLE {
+        lightcraft_testkit::skip!(Feature, "Subject only falls back with a notice in a SAM build with no remote worker");
+        return;
+    }
+    h.app.session.segmenter.dir = Some(std::env::temp_dir().join(format!("lc-subject-notice-{}", std::process::id())));
+    let toast = |h: &Headless| h.app.ui.toast.as_ref().map(|t| t.0.clone());
+    h.app.ui.toast = None;
+    exec(&mut h, "mask.add", json!({"kind": "subject"}));
+    assert!(toast(&h).is_some_and(|t| t.contains("Subject") && t.contains("SAM 3")), "{:?}", toast(&h));
+    assert_eq!(develop(&h).masks[0].components[0].shape, MaskShape::Subject);
+    h.app.ui.toast = None;
+    exec(&mut h, "mask.add", json!({"kind": "background"}));
+    assert_eq!(toast(&h), None, "said once per session");
+    assert_eq!(develop(&h).masks[1].components[0].shape, MaskShape::Background);
+}
+
+#[test]
+fn a_sam_subject_reads_subject_and_inverted_background() {
+    use lightcraft_develop::{MaskComponent, MaskOp};
+    let c = |invert| MaskComponent {
+        name: None,
+        op: MaskOp::Add,
+        invert,
+        shape: MaskShape::Prompt { text: lightcraft_engine::segment::SUBJECT_PROMPT.into(), seg: None, detail: vec![], edge: 0.0 },
+    };
+    assert_eq!(crate::panels::masking::component_label(&c(false)), "Subject");
+    assert_eq!(crate::panels::masking::component_label(&c(true)), "Background");
+}
