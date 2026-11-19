@@ -110,13 +110,14 @@ pub fn files_in(root: &Path, skip: Option<&Path>, limits: Limits, keep: impl FnM
 
 /// [`files_in`], entering a folder below `root` only when `enter` accepts it: a folder it turns
 /// down is neither listed nor counted against `limits` (e.g. a NAS's `@eaDir` thumbnail folders,
-/// which can hold more entries than the photos beside them).
+/// which can hold more entries than the photos beside them). `enter` is asked from the threads
+/// that read folders ahead as well, so it is a pure function of the path (`Fn`, `Sync`).
 pub fn files_in_entering(
     root: &Path,
     skip: Option<&Path>,
     limits: Limits,
     keep: impl FnMut(&Path) -> bool,
-    enter: impl FnMut(&Path) -> bool,
+    enter: impl Fn(&Path) -> bool + Sync,
 ) -> Walked {
     walk(root, skip, limits, keep, enter, None)
 }
@@ -284,7 +285,7 @@ impl Shared {
     /// Queues the folders in `listing` (a folder at `depth`) for the readers, in path order. Only
     /// plain folders: a link to a folder is entered, if at all, by the walk itself, in the order it
     /// goes through them (which of several links to one folder wins depends on that order).
-    fn enqueue(&self, pool: &mut Pool, listing: &Listing, depth: usize, max_depth: usize) {
+    fn enqueue(&self, pool: &mut Pool, listing: &Listing, depth: usize, max_depth: usize, enter: &(dyn Fn(&Path) -> bool + Sync)) {
         let below = depth.saturating_add(1);
         if pool.stop || below >= max_depth {
             return; // (the walk does not list those, it only reports it stopped)
@@ -293,7 +294,7 @@ impl Shared {
         let mut dirs: Vec<PathBuf> = entries
             .iter()
             .flatten()
-            .filter(|e| !e.hidden && matches!(e.link, Link::No) && e.file_type.is_some_and(|t| t.is_dir()))
+            .filter(|e| !e.hidden && matches!(e.link, Link::No) && e.file_type.is_some_and(|t| t.is_dir()) && enter(&e.path))
             .map(|e| e.path.clone())
             .collect();
         dirs.sort();
@@ -312,24 +313,6 @@ impl Shared {
         let mut pool = self.lock();
         pool.stop = true;
         pool.queue.clear();
-        self.changed.notify_all();
-    }
-
-    /// The walk turned folder `path` down ([`files_in_entering`]): a reader that has not started
-    /// it passes it by, and a listing already read is dropped. One being read now is left to end.
-    fn forget(&self, path: &Path) {
-        let mut pool = self.lock();
-        match pool.slots.get(path) {
-            Some(Slot::Queued) => {
-                pool.slots.remove(path);
-            }
-            Some(Slot::Done(_)) => {
-                if let Some(Slot::Done(l)) = pool.slots.remove(path) {
-                    pool.buffered = pool.buffered.saturating_sub(l.held());
-                }
-            }
-            Some(Slot::Running) | None => {}
-        }
         self.changed.notify_all();
     }
 }
@@ -388,11 +371,19 @@ impl Drop for Reading<'_> {
 #[derive(Clone, Copy)]
 struct ReadCfg<'a> {
     skip: Skip<'a>,
+    /// Whether to enter a folder below the root ([`files_in_entering`]); asked by the readers (to
+    /// queue it) and by the walk (to go on to it), so it must give the same answer each time.
+    enter: &'a (dyn Fn(&Path) -> bool + Sync),
     want_all: bool,
     /// Note each listing as it finishes ([`Pool::finished`]): the consumer takes them in that order.
     completion: bool,
     max_depth: usize,
     max_entries: usize,
+}
+
+/// The `enter` of a walk that turns no folder down.
+fn all_folders(_: &Path) -> bool {
+    true
 }
 
 /// A reader: takes the next queued folder, lists it, queues the folders in it.
@@ -426,7 +417,7 @@ fn read_ahead(shared: &Shared, cfg: ReadCfg) {
         pool.read_entries = pool.read_entries.saturating_add(listing.oks.max(1));
         if !listing.cut {
             // (a cut one is not worth the walk's folders: it stops in it, or lists it again)
-            shared.enqueue(&mut pool, &listing, depth, cfg.max_depth);
+            shared.enqueue(&mut pool, &listing, depth, cfg.max_depth, cfg.enter);
         }
         pool.buffered = pool.buffered.saturating_add(listing.held());
         if listing.entries.is_some() && !listing.skipped {
@@ -446,7 +437,7 @@ fn walk(
     skip: Option<&Path>,
     limits: Limits,
     keep: impl FnMut(&Path) -> bool,
-    enter: impl FnMut(&Path) -> bool,
+    enter: impl Fn(&Path) -> bool + Sync,
     note: Option<NoteFolder>,
 ) -> Walked {
     walk_with(root, skip, limits, keep, enter, note, WORKERS).0
@@ -460,8 +451,7 @@ fn enters_as_folder(
     ft: std::fs::FileType,
     link: Link,
     linked: &mut HashSet<PathBuf>,
-    enter: &mut impl FnMut(&Path) -> bool,
-    shared: &Shared,
+    enter: &(dyn Fn(&Path) -> bool + Sync),
 ) -> Option<bool> {
     if ft.is_symlink() {
         // a link (or a Windows junction): a folder is entered once, a file is a file
@@ -475,13 +465,8 @@ fn enters_as_folder(
             Link::File | Link::No => Some(false),
         }
     } else if ft.is_dir() {
-        if enter(path) {
-            Some(true)
-        } else {
-            // (the readers queued it as a plain folder: it is not read if they have not started it)
-            shared.forget(path);
-            None
-        }
+        // (the readers did not queue a folder `enter` turns down)
+        enter(path).then_some(true)
     } else {
         Some(false)
     }
@@ -570,7 +555,14 @@ pub fn files_in_parallel(
         return true;
     }
     let skipper = Skip { path: None, canonical: None };
-    let cfg = ReadCfg { skip: skipper, want_all: false, completion: true, max_depth: limits.max_depth, max_entries: limits.max_entries };
+    let cfg = ReadCfg {
+        skip: skipper,
+        enter: &all_folders,
+        want_all: false,
+        completion: true,
+        max_depth: limits.max_depth,
+        max_entries: limits.max_entries,
+    };
     let shared = Shared { pool: Mutex::new(Pool::default()), changed: Condvar::new(), stopped: AtomicBool::new(false) };
     // canonical folders reached through a link, so a link loop is walked at most once
     let mut linked: HashSet<PathBuf> = HashSet::new();
@@ -615,7 +607,7 @@ pub fn files_in_parallel(
             if own && !listing.cut {
                 // (the readers queue the folders in the listings they read; this one they did not)
                 let mut pool = shared.lock();
-                shared.enqueue(&mut pool, &listing, depth, limits.max_depth);
+                shared.enqueue(&mut pool, &listing, depth, limits.max_depth, cfg.enter);
             }
             let cut = listing.cut;
             let Some(entries) = listing.entries else { continue };
@@ -702,7 +694,7 @@ fn walk_with(
     skip: Option<&Path>,
     limits: Limits,
     mut keep: impl FnMut(&Path) -> bool,
-    mut enter: impl FnMut(&Path) -> bool,
+    enter: impl Fn(&Path) -> bool + Sync,
     mut note: Option<NoteFolder>,
     workers: usize,
 ) -> (Walked, usize) {
@@ -716,7 +708,9 @@ fn walk_with(
     let skip_canonical = skip.and_then(|p| std::fs::canonicalize(p).ok());
     let skipper = Skip { path: skip, canonical: skip_canonical.as_ref() };
     let want_all = note.is_some();
-    let cfg = ReadCfg { skip: skipper, want_all, completion: false, max_depth: limits.max_depth, max_entries: limits.max_entries };
+    // (the readers ask it too, so no folder it turns down is read ahead)
+    let enter: &(dyn Fn(&Path) -> bool + Sync) = &enter;
+    let cfg = ReadCfg { skip: skipper, enter, want_all, completion: false, max_depth: limits.max_depth, max_entries: limits.max_entries };
     let shared = Shared { pool: Mutex::new(Pool::default()), changed: Condvar::new(), stopped: AtomicBool::new(false) };
     let read_by_workers = std::thread::scope(|scope| {
         let _halt = Halt(&shared);
@@ -763,7 +757,7 @@ fn walk_with(
                     }
                 }
                 let mut pool = shared.lock();
-                shared.enqueue(&mut pool, &listing, depth, limits.max_depth);
+                shared.enqueue(&mut pool, &listing, depth, limits.max_depth, enter);
             }
             if listing.skipped {
                 continue;
@@ -805,7 +799,7 @@ fn walk_with(
                     continue;
                 }
                 let Some(ft) = e.file_type else { continue };
-                let Some(dir) = enters_as_folder(&e.path, ft, e.link, &mut linked, &mut enter, &shared) else { continue };
+                let Some(dir) = enters_as_folder(&e.path, ft, e.link, &mut linked, enter) else { continue };
                 children.push((e.path, dir));
             }
             // (more entries than could be read: the limit is next)
@@ -1139,6 +1133,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// The readers do not read ahead a folder `enter` turns down (they would, on a NAS, read the
+    /// whole `@eaDir` tree for nothing): with them running, none of its folders is listed by them,
+    /// and the result is the one a walk without readers gives.
+    #[test]
+    fn readers_do_not_read_a_folder_that_is_turned_down() {
+        let d = tmp("enter-readers");
+        for dir in ["@meta/a", "@meta/b", "x", "y"] {
+            std::fs::create_dir_all(d.join(dir)).unwrap();
+            std::fs::write(d.join(dir).join("p.jpg"), b"x").unwrap();
+        }
+        let not_at = |p: &Path| !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('@'));
+        let plain = walk_with(&d, None, Limits::default(), |_| true, not_at, None, 0).0;
+        assert_eq!(plain.files, vec![d.join("x/p.jpg"), d.join("y/p.jpg")]);
+        for _ in 0..20 {
+            let (w, by_workers) = walk_with(&d, None, Limits::default(), |_| true, not_at, None, 8);
+            assert_eq!(w, plain);
+            assert!(by_workers <= 2, "only x and y may be read ahead: {by_workers}");
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     /// A link back up the tree (a loop) is followed at most once: the walk ends.
     #[cfg(unix)]
     #[test]
@@ -1275,6 +1290,7 @@ mod tests {
         let (parallel, _) = seen(&d, Some(&lib), Limits::default(), 8);
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(parallel, serial);
+        assert_eq!(serial.0.unreadable, usize::from(!readable));
         assert!(readable || !serial.0.files.iter().any(|p| p.starts_with(&locked)));
         assert!(serial.0.files.iter().any(|p| p.starts_with(d.join("w10/s2"))));
         let _ = std::fs::remove_dir_all(&d);
@@ -1392,7 +1408,14 @@ mod tests {
                 pool.queue.push_back((p, 1));
             }
         }
-        let cfg = ReadCfg { skip: Skip { path: None, canonical: None }, want_all: false, completion: false, max_depth: MAX_DEPTH, max_entries: 10 };
+        let cfg = ReadCfg {
+            skip: Skip { path: None, canonical: None },
+            enter: &all_folders,
+            want_all: false,
+            completion: false,
+            max_depth: MAX_DEPTH,
+            max_entries: 10,
+        };
         let listed = std::thread::scope(|scope| {
             let reader = scope.spawn(|| read_ahead(&shared, cfg));
             let t0 = std::time::Instant::now();
