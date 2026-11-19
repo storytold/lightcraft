@@ -148,7 +148,7 @@ mod tests {
         );
         assert_eq!(
             backend::choose_non_windows_window_renderer(None, None, None, false, "freebsd", all, true),
-            backend::WindowRenderer::Wgpu(backend::default_window_backends("freebsd") & all)
+            backend::WindowRenderer::Wgpu(backend::default_window_backends("freebsd"))
         );
     }
 }

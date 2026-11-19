@@ -1069,7 +1069,7 @@ mod tests {
         // Non-Linux control keeps its platform wgpu backends with or without a marker
         assert_eq!(
             choose_non_windows_window_renderer(None, None, None, false, "freebsd", all, true),
-            WindowRenderer::Wgpu(default_window_backends("freebsd") & all)
+            WindowRenderer::Wgpu(default_window_backends("freebsd"))
         );
         assert_eq!(choose_non_windows_window_renderer(None, None, None, false, "macos", all, true), WindowRenderer::Wgpu(Backends::METAL));
     }
