@@ -106,6 +106,15 @@ fn failed_gpu_renders_fall_back_with_a_reason() {
     assert!(!lightcraft_gpu::available());
     lightcraft_gpu::reset_failures();
     ok("after dropped work");
+    // ... and the float render, where a cleared word would pass for a valid 0
+    lightcraft_gpu::inject_fault(Fault::DropWork);
+    let hdr = RenderRequest { depth: lightcraft_pipeline::OutputDepth::F32Hdr, ..req };
+    match lightcraft_gpu::try_render(&src, &info, &s, &hdr, None) {
+        Err(Fallback::Failed(why)) => assert!(why.contains("incomplete"), "an unwritten float image must not be returned: {why}"),
+        other => panic!("a float render with dropped work is redone on the CPU: {:?}", other.map(|_| ())),
+    }
+    lightcraft_gpu::reset_failures();
+    ok("after dropped float work");
 
     // a black photo is still rendered (on the CPU, to be sure)
     let black = Arc::new(lightcraft_raster::Rgb32f::from_fn(256, 256, |_, _| [0.0; 3]));
