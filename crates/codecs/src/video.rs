@@ -252,14 +252,7 @@ impl<W: Write + Seek> WebmWriter<W> {
         if width == 0 || height == 0 || width > 65_535 || height > 65_535 || !(1..=240).contains(&fps) {
             return Err(bad("bad size or frame rate"));
         }
-        Ok(WebmWriter {
-            state: Some(WebmState::Pending { w, config: None }),
-            width,
-            height,
-            fps,
-            periods: 0,
-            pending: None,
-        })
+        Ok(WebmWriter { state: Some(WebmState::Pending { w, config: None }), width, height, fps, periods: 0, pending: None })
     }
 
     /// The `CodecPrivate` (the `av1C` record, [`av1_config`]); needed before the first sample.
@@ -282,18 +275,13 @@ impl<W: Write + Seek> WebmWriter<W> {
                 return Err(bad("no AV1 configuration"));
             }
             let Some(WebmState::Pending { w, config: Some(config) }) = self.state.take() else {
-                unreachable!();
+                return Err(bad("writer already finished"));
             };
             let mut spec = TrackSpec::new(TrackKind::Video, "V_AV1");
             spec.codec_private = config;
             spec.default_duration_ns = Some(1_000_000_000 / u64::from(self.fps));
             spec.video_size = Some((self.width, self.height));
-            let opts = MuxOptions {
-                doc_type: "webm".into(),
-                cluster_duration_ns: 0,
-                writing_app: "LightCraft".into(),
-                ..Default::default()
-            };
+            let opts = MuxOptions { doc_type: "webm".into(), cluster_duration_ns: 0, writing_app: "LightCraft".into(), ..Default::default() };
             let mkv = MkvWriter::new(w, vec![spec], opts).map_err(media_err)?;
             self.state = Some(WebmState::Active(mkv));
         }
