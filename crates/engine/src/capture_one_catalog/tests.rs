@@ -686,6 +686,17 @@ fn a_catalog_capture_one_is_writing_is_refused_and_an_open_one_is_reported() {
 }
 
 #[test]
+fn a_write_capture_one_starts_while_the_file_is_taken_is_refused() {
+    let scratch = Scratch::new("race");
+    let package = scratch.catalog(&sample(&scratch.0));
+    let database = package.join("Test.cocatalogdb");
+    let mut hot = vec![0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7];
+    hot.resize(512, 0);
+    let begin = || std::fs::write(package.join("Test.cocatalogdb-journal"), &hot).unwrap();
+    assert!(matches!(tables::Db::open_observed(&database, &begin), Err(ReadError::Busy)));
+}
+
+#[test]
 fn a_set_cancel_flag_stops_the_read() {
     let scratch = Scratch::new("cancel");
     let package = scratch.catalog(&sample(&scratch.0));

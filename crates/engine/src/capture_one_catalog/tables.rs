@@ -43,7 +43,14 @@ fn sqlite_error(e: String) -> ReadError {
 
 impl Db {
     pub(super) fn open(database: &Path) -> Result<Self, ReadError> {
+        Self::open_observed(database, &|| ())
+    }
+
+    /// [`Db::open`], calling `taken` once the file's baseline is taken: a test starts a write
+    /// there, which the check that follows has to see.
+    pub(super) fn open_observed(database: &Path, taken: &dyn Fn()) -> Result<Self, ReadError> {
         let source = FileSource::open(database).map_err(sqlite_error)?;
+        taken();
         // only once the file is taken as it is: a transaction Capture One began before would
         // otherwise be read as the catalog, and one it begins after changes the file, which
         // `ensure_unchanged` sees
