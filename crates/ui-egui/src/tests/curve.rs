@@ -655,3 +655,21 @@ fn hidden_curves_and_wheels_are_forgotten_once_another_photo_is_shown() {
     assert_eq!(h.app.ui.curve_hidden_for(a), [false; 5], "back on the photo: its curves show again");
     assert_eq!(h.app.ui.grading_hidden_for(a), [false; 3], "and its wheels");
 }
+
+#[test]
+fn a_drag_that_starts_on_the_curve_eye_does_not_edit_the_curve() {
+    let mut h = curve_open("master");
+    let r = h.request("ui.hoverWidget", json!({"id": "curve"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    let eye = h.app.widgets.iter().find(|(w, _)| w == "curveEye:master").unwrap().1;
+    let before = develop(&h);
+    let (a, b) = (eye.center(), eye.center() + egui::vec2(40.0, 60.0));
+    let r = h.request("ui.drag", json!({"x": a.x, "y": a.y, "toX": b.x, "toY": b.y}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    for _ in 0..4 {
+        h.step();
+    }
+    assert_eq!(develop(&h).curve, before.curve, "no curve point from a drag on the eye");
+}

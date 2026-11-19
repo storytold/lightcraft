@@ -420,7 +420,9 @@ fn curve_eye(app: &mut LightcraftApp, ui: &egui::Ui, id: PhotoId, r: Rect, ch: &
     let eye_id = curve_eye_id(ch);
     let shown = hidden || ui.rect_contains_pointer(r) || ui.memory(|m| m.has_focus(eye_id));
     let eye = Rect::from_center_size(r.left_top() + vec2(12.0, 12.0), vec2(16.0, 16.0));
-    let er = ui.interact(eye, eye_id, if shown { Sense::click() } else { Sense::focusable_noninteractive() });
+    // shown, it takes drags too: a drag that starts on the eye must not reach the graph under it
+    // and add a curve point (a viewing aid never edits)
+    let er = ui.interact(eye, eye_id, if shown { Sense::click_and_drag() } else { Sense::focusable_noninteractive() });
     crate::widgets::announce(&er, crate::i18n::tr("Show / hide"));
     register(ui, format!("curveEye:{ch}"), eye);
     if !shown {
