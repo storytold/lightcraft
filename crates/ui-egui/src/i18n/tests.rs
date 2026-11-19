@@ -1299,7 +1299,7 @@ fn hebrew_switches_formats_dates_and_reads_every_count() {
     assert_eq!(app.ui.language, Locale::He);
     assert_eq!(Locale::He.name(), "עברית");
     assert_eq!(Locale::He.script(), "Hebr");
-    assert_eq!(craft_ui::direction::resolve(Locale::He.code(), craft_ui::direction::Setting::Language), craft_ui::direction::Direction::Rtl);
+    assert_eq!(craft_ui::direction::Setting::Language.direction(Locale::He.code()), craft_ui::direction::Direction::Rtl);
     assert_eq!(tr("File"), "קובץ");
     assert_eq!(tr("Exposure"), "חשיפה");
     assert_eq!(date_group_label("2026-09-20", false), "יום ראשון, 20.09.2026");
