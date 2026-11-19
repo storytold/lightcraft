@@ -116,6 +116,8 @@ pub struct MergeState {
     pub ids: Vec<PhotoId>,
     /// HDR for Each Bracket Set: the sets still to merge after the running one.
     pub batch: std::collections::VecDeque<Vec<PhotoId>>,
+    /// Whether the current dialog selection was planned as expanded groups.
+    pub explicit_group: bool,
 }
 
 impl MergeState {
@@ -139,22 +141,16 @@ pub fn merge_command_of(item: &str) -> Option<String> {
 pub fn check_selection(app: &LightcraftApp, command: &str) -> Result<(), String> {
     let (kind, finish) = lightcraft_engine::merge::parse(command, &json!({})).map_err(|e| e.to_string())?;
     let ids = app.session.selected();
-    // Validate with the same single-group planning contract that spawn() executes.
-    app.session
-        .plan_merge(kind, finish, &ids, false)
-        .map(|_| ())
-        .map_err(|e| e.to_string())?;
+    // Validate with the same planning contract that spawn() executes, including one job per group.
+    app.session.plan_merges(kind, finish, &ids, false).map(|_| ()).map_err(|e| e.to_string())?;
     Ok(())
 }
 
 fn spawn(app: &LightcraftApp, options: &MergeDialog, ids: &[PhotoId], preview: bool, explicit_group: bool) -> Result<MergeTask, String> {
     let (kind, finish) = lightcraft_engine::merge::parse(&options.command, &options.params()).map_err(|e| e.to_string())?;
-    let job = if explicit_group {
-        app.session.plan_merge_group(kind, finish, ids, preview)
-    } else {
-        app.session.plan_merge(kind, finish, ids, preview)
-    }
-    .map_err(|e| e.to_string())?;
+    let job =
+        if explicit_group { app.session.plan_merge_group(kind, finish, ids, preview) } else { app.session.plan_merge(kind, finish, ids, preview) }
+            .map_err(|e| e.to_string())?;
     let progress = Arc::new(Mutex::new((0.0, "Starting".to_string())));
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = channel();
@@ -189,9 +185,17 @@ pub fn last_options(app: &LightcraftApp, command: &str) -> MergeDialog {
 
 /// Open the merge dialog for the selection, with the options of the last merge of this kind.
 pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
-    check_selection(app, command)?;
+    let (kind, finish) = lightcraft_engine::merge::parse(command, &json!({})).map_err(|e| e.to_string())?;
     let ids = app.session.selected();
-    app.merge.ids = ids;
+    let jobs = app.session.plan_merges(kind, finish, &ids, false).map_err(|e| e.to_string())?;
+    if jobs.len() == 1 {
+        app.merge.ids = ids;
+        app.merge.explicit_group = false;
+    } else {
+        app.merge.ids = jobs[0].sources.iter().map(|(p, _)| *p).collect();
+        app.merge.batch = jobs[1..].iter().map(|job| job.sources.iter().map(|(p, _)| *p).collect()).collect();
+        app.merge.explicit_group = true;
+    }
     app.merge.error = None;
     // a preview that failed before is tried again, or the dialog would show neither a preview nor its error (#2708)
     app.merge.failed_options = None;
@@ -207,7 +211,7 @@ pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
 
 /// Start the full-resolution merge (the dialog's Merge button / `ui.dialog.confirm`).
 pub fn start_final(app: &mut LightcraftApp, opts: &MergeDialog) -> Result<Value, String> {
-    start_final_planned(app, opts, false)
+    start_final_planned(app, opts, app.merge.explicit_group)
 }
 
 /// [`start_final`]; with `explicit_group` the merge is the group `app.merge.ids` as given, without re-expanding
@@ -236,8 +240,17 @@ fn start_final_planned(app: &mut LightcraftApp, opts: &MergeDialog, explicit_gro
 /// Merge the selection without the dialog, with the options last used for `command` (the
 /// defaults the first time).
 pub fn start_last(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
-    check_selection(app, command)?;
-    app.merge.ids = app.session.selected();
+    let (kind, finish) = lightcraft_engine::merge::parse(command, &json!({})).map_err(|e| e.to_string())?;
+    let ids = app.session.selected();
+    let jobs = app.session.plan_merges(kind, finish, &ids, false).map_err(|e| e.to_string())?;
+    if jobs.len() == 1 {
+        app.merge.ids = ids;
+        app.merge.explicit_group = false;
+    } else {
+        app.merge.ids = jobs[0].sources.iter().map(|(p, _)| *p).collect();
+        app.merge.batch = jobs[1..].iter().map(|job| job.sources.iter().map(|(p, _)| *p).collect()).collect();
+        app.merge.explicit_group = true;
+    }
     let opts = last_options(app, command);
     start_final(app, &opts)
 }
@@ -255,16 +268,17 @@ pub fn start_batch(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> 
     }
     let n = sets.len();
     app.merge.batch = sets.into();
-    next_in_batch(app)?;
+    let opts = last_options(app, "merge.hdr");
+    next_in_batch(app, &opts)?;
     Ok(json!({"started": true, "sets": n}))
 }
 
 /// Start the next bracket set of a batch, if any.
-fn next_in_batch(app: &mut LightcraftApp) -> Result<(), String> {
+fn next_in_batch(app: &mut LightcraftApp, opts: &MergeDialog) -> Result<(), String> {
     let Some(ids) = app.merge.batch.pop_front() else { return Ok(()) };
     app.merge.ids = ids;
-    let opts = last_options(app, "merge.hdr");
-    start_final_planned(app, &opts, true).map(|_| ())
+    app.merge.explicit_group = true;
+    start_final_planned(app, opts, true).map(|_| ())
 }
 
 /// Per frame: keep the preview in sync with the dialog's options, collect finished jobs.
@@ -283,7 +297,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     t.cancel.store(true, Ordering::Relaxed);
                 }
                 let ids = app.merge.ids.clone();
-                match spawn(app, opts, &ids, true, false) {
+                match spawn(app, opts, &ids, true, app.merge.explicit_group) {
                     Ok(t) => {
                         app.merge.error = None;
                         app.merge.preview_task = Some(t);
@@ -358,7 +372,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
                 // a failed set doesn't stop the others
                 while !app.merge.batch.is_empty() {
-                    match next_in_batch(app) {
+                    match next_in_batch(app, &t.options) {
                         Ok(()) => break,
                         Err(e) => app.toast(ctx, crate::i18n::tr_format!("{what} merge failed: {e}", e = e, what = what)),
                     }
@@ -641,5 +655,34 @@ mod tests {
         assert_eq!(added(json!({"limit": null, "megapixels": 90.0, "nativeMegapixels": 90.0})), "Panorama merge added");
         assert_eq!(added(json!({"limit": "asked", "megapixels": 20.0, "nativeMegapixels": 90.0})), "Panorama merge added");
         assert_eq!(added_message("HDR", &json!({"ev": [0.0]})), "HDR merge added");
+    }
+
+    #[test]
+    fn one_collapsed_stack_enables_all_three_merge_actions() {
+        use serde_json::json;
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), Default::default());
+        let mut ids = Vec::new();
+        for i in 0..4 {
+            let id = app.session.catalog.alloc_photo_id();
+            let name = format!("IMG_{i}.dng");
+            let photo = lightcraft_engine::catalog::Photo::new(
+                id,
+                lightcraft_engine::catalog::Source::File { path: name.clone() },
+                &name,
+                "DNG",
+                96,
+                64,
+                "2026-01-01T00:00:00",
+            );
+            app.session.catalog.apply(lightcraft_engine::catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+            ids.push(id);
+        }
+        let op = app.session.catalog.group_ops(ids[0], &ids, true).unwrap();
+        app.session.catalog.apply(op).unwrap();
+        app.run("library.select", json!({"ids": [ids[0].0]})).unwrap();
+        for command in ["dialog.mergeHdr", "dialog.mergePanorama", "dialog.mergeHdrPanorama"] {
+            assert!(crate::menus::ui_enabled(&app, command), "{command} should be enabled for one collapsed stack");
+            assert!(app.run(command, json!({})).is_ok(), "{command} should open for one collapsed stack");
+        }
     }
 }

@@ -10,8 +10,8 @@
 
 use std::sync::Arc;
 
-use lightcraft_catalog::{PhotoId, Source};
 use lightcraft_catalog::query::merged_kind;
+use lightcraft_catalog::{PhotoId, Source};
 use lightcraft_develop::DevelopSettings;
 use lightcraft_merge::pano::MAX_MEGAPIXELS;
 use lightcraft_merge::{Deghost, Frame, HdrOptions, PanoOptions, Projection};
@@ -580,14 +580,8 @@ impl Session {
                     if !expanded_stacks.insert(st.id) {
                         continue;
                     }
-                    let members: Vec<PhotoId> = st
-                        .photos
-                        .iter()
-                        .copied()
-                        .filter(|id| {
-                            self.catalog.photo(*id).is_none_or(|p| merged_kind(&p.file_name).is_none())
-                        })
-                        .collect();
+                    let members: Vec<PhotoId> =
+                        st.photos.iter().copied().filter(|id| self.catalog.photo(*id).is_none_or(|p| merged_kind(&p.file_name).is_none())).collect();
                     // Capture order, not stack order (top first): an HDR panorama's bracket
                     // detection expects the periodic exposure sequence from the earliest capture.
                     // File names do not reflect capture sequence (renamed files, several cameras), so

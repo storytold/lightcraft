@@ -694,7 +694,6 @@ fn explicit_bracket_set_is_merged_as_given() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-
 /// Regression check for the merge planning fixes: a collapsed stack counts as
 /// all of its members for enablement, `plan_merge` keeps the one-group contract
 /// (refusing a selection that spans stacks) while `plan_merges` plans one job per
@@ -705,12 +704,10 @@ fn explicit_bracket_set_is_merged_as_given() {
 fn test_merge_compilation_and_grouping_fixes() {
     let dir = temp_dir("merge-fixes");
     let mut paths = Vec::new();
-    for (set, evs) in [
-        ("A", &[-2.0, 0.0, 2.0][..]),
-        ("B", &[-1.0, 0.0, 1.0][..]),
-        ("C", &[-0.5, 0.5, 1.5][..]),
-    ] {
-        for (i, b) in lightcraft_merge::synth::bracket_dngs(96, 64, evs).unwrap().into_iter().enumerate() {
+    for (n, (set, evs)) in [("A", &[-2.0, 0.0, 2.0][..]), ("B", &[-1.0, 0.0, 1.0][..]), ("C", &[-0.5, 0.5, 1.5][..])].into_iter().enumerate() {
+        // A different width per set: A and B both hold a 0 EV frame, and the catalog keeps one
+        // photo per file content.
+        for (i, b) in lightcraft_merge::synth::bracket_dngs(96 + 4 * n, 64, evs).unwrap().into_iter().enumerate() {
             let p = dir.join(format!("{set}_{i}.dng"));
             std::fs::write(&p, b).unwrap();
             paths.push(p.to_string_lossy().to_string());
@@ -733,23 +730,13 @@ fn test_merge_compilation_and_grouping_fixes() {
 
     // plan_merge expands the collapsed stack to its members, in capture order.
     let job = s.plan_merge(kind.clone(), finish.clone(), &[top_a], true).unwrap();
-    assert_eq!(
-        job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(),
-        ids[0..3].to_vec(),
-        "plan_merge expands the stack",
-    );
+    assert_eq!(job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), ids[0..3].to_vec(), "plan_merge expands the stack",);
 
     // plan_merges plans one job per stack; plan_merge refuses that same selection.
     let jobs = s.plan_merges(kind.clone(), finish.clone(), &[top_a, top_b], true).unwrap();
     assert_eq!(jobs.len(), 2, "one job per stack");
-    assert_eq!(
-        jobs[0].sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(),
-        ids[0..3].to_vec()
-    );
-    assert_eq!(
-        jobs[1].sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(),
-        ids[3..6].to_vec()
-    );
+    assert_eq!(jobs[0].sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), ids[0..3].to_vec());
+    assert_eq!(jobs[1].sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), ids[3..6].to_vec());
     let err = s.plan_merge(kind.clone(), finish.clone(), &[top_a, top_b], true).err().unwrap();
     assert!(err.to_string().contains("more than one merge group"), "{err}");
     assert!(matches!(err, crate::EngineError::Other(_)), "an EngineError, not a String");
@@ -767,19 +754,11 @@ fn test_merge_compilation_and_grouping_fixes() {
         "2026-01-01T00:00:00",
     );
     s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(result) }).unwrap();
-    let members: [lightcraft_catalog::PhotoId; 4] = [
-        result_id,
-        lightcraft_catalog::PhotoId(ids[6]),
-        lightcraft_catalog::PhotoId(ids[7]),
-        lightcraft_catalog::PhotoId(ids[8]),
-    ];
+    let members: [lightcraft_catalog::PhotoId; 4] =
+        [result_id, lightcraft_catalog::PhotoId(ids[6]), lightcraft_catalog::PhotoId(ids[7]), lightcraft_catalog::PhotoId(ids[8])];
     let op = s.catalog.group_ops(result_id, &members, true).unwrap();
     s.catalog.apply(op).unwrap();
     let job = s.plan_merge(kind, finish, &[result_id], true).unwrap();
-    assert_eq!(
-        job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(),
-        ids[6..9].to_vec(),
-        "the earlier merge result is not merged again",
-    );
+    assert_eq!(job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), ids[6..9].to_vec(), "the earlier merge result is not merged again",);
     let _ = std::fs::remove_dir_all(&dir);
 }
