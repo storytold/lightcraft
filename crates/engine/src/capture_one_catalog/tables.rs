@@ -177,6 +177,11 @@ impl<'a> Row<'a> {
         }
     }
 
+    /// The names of the row's columns.
+    pub(super) fn names(&self) -> impl Iterator<Item = &'a str> {
+        self.columns.keys().map(String::as_str)
+    }
+
     pub(super) fn flag(&self, column: &str) -> bool {
         self.int(column).is_some_and(|n| n != 0)
     }

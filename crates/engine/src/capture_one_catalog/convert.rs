@@ -7,8 +7,9 @@
 //! variant is the master and its further variants are virtual copies, a project or group is a
 //! collection set, and IPTC fields travel as an XMP packet.
 //!
-//! Not carried yet, and said so in the import's warnings: adjustments and smart albums. The
-//! orange and pink colour tags have no label in the library: the colour is kept with the photo
+//! A smart album keeps its rule where LightCraft has a rule for every condition, else it holds
+//! the photos its rule selects (see [`super::smart`]). Not carried yet, and said so in the
+//! import's warnings: adjustments. The orange and pink colour tags have no label in the library: the colour is kept with the photo
 //! (`Meta::label_text`) and a keyword finds it. Each photo's row keeps what was read under
 //! `captureOne`, so the import's recovery archive has it.
 
@@ -18,7 +19,7 @@ use std::sync::atomic::AtomicBool;
 
 use serde_json::{Value, json};
 
-use super::{CaptureOneCatalog, CatalogPhoto, Collection, CollectionKind, ColorTag, Original, OriginalKind};
+use super::{CaptureOneCatalog, CatalogPhoto, Collection, CollectionKind, ColorTag, Original, OriginalKind, smart};
 use crate::lightroom_catalog::{CatalogImport, CatalogPhoto as ImportPhoto};
 
 /// Most warnings that name a single photo or album; the rest are counted.
@@ -26,7 +27,7 @@ const MAX_NAMED: usize = 50;
 /// What marks a catalog id and a photo's identity as Capture One's in the import's index.
 const PREFIX: &str = "captureone:";
 /// The keyword the colour keywords are inside.
-const KEYWORD_PARENT: &str = "Capture One";
+pub(super) const KEYWORD_PARENT: &str = "Capture One";
 
 /// Read the Capture One catalog at `path` for the catalog import.
 pub(crate) fn read_for_import(path: &Path, cancel: &AtomicBool) -> Result<CatalogImport, String> {
@@ -101,7 +102,7 @@ pub(crate) fn to_import(catalog: CaptureOneCatalog) -> CatalogImport {
         warnings.push(format!("{} more image(s) are not opened; listed as missing and not added", refused - MAX_NAMED));
     }
 
-    let (collections, members) = collections(&catalog.collections, &mut warnings);
+    let (collections, members) = collections(&catalog.collections, &catalog.photos, &mut warnings);
     CatalogImport {
         source: catalog.database,
         catalog_id: catalog.document_uuid.map(|id| format!("{PREFIX}{id}")),
@@ -252,6 +253,8 @@ fn kept(photo: &CatalogPhoto) -> Value {
         "headline": photo.iptc.headline,
         "countryCode": photo.iptc.country_code,
         "iptc": photo.iptc.other,
+        "exif": photo.exif,
+        "annotated": photo.annotated,
     })
 }
 
@@ -274,36 +277,74 @@ fn iptc_packet(photo: &CatalogPhoto) -> String {
     if meta == lightcraft_meta::Metadata::default() { String::new() } else { lightcraft_meta::write_xmp(&meta, None) }
 }
 
-/// Albums, projects and groups as the import's collection rows and album memberships. A smart
-/// album's rule isn't read, so it is named in a warning instead of coming in empty.
-fn collections(all: &[Collection], warnings: &mut Vec<String>) -> (Vec<BTreeMap<String, Value>>, Vec<BTreeMap<String, Value>>) {
+/// Albums, projects, groups and smart albums as the import's collection rows and album
+/// memberships. A smart album whose rule LightCraft can express keeps it (`smartRules`); one whose
+/// rule tests something LightCraft has no rule for holds the photos its rule selects now; one
+/// whose rule can't be read or evaluated is named in a warning instead.
+fn collections(
+    all: &[Collection],
+    photos: &[CatalogPhoto],
+    warnings: &mut Vec<String>,
+) -> (Vec<BTreeMap<String, Value>>, Vec<BTreeMap<String, Value>>) {
     let row = |pairs: &[(&str, Value)]| pairs.iter().map(|(key, value)| ((*key).to_string(), value.clone())).collect::<BTreeMap<_, _>>();
     let (mut rows, mut members) = (Vec::new(), Vec::new());
-    let mut smart = 0usize;
+    let mut named = 0usize;
+    let mut warn = |text: String| {
+        named = named.saturating_add(1);
+        if named <= MAX_NAMED {
+            warnings.push(text);
+        }
+    };
     for collection in all {
-        let creation = match collection.kind {
-            CollectionKind::Album => "com.adobe.ag.library.collection",
-            CollectionKind::Project | CollectionKind::Group => "com.adobe.ag.library.group",
-            CollectionKind::SmartAlbum => {
-                smart = smart.saturating_add(1);
-                if smart <= MAX_NAMED {
-                    warnings.push(format!("smart album “{}”: not imported; smart album rules can't be converted yet", collection.name));
-                }
-                continue;
-            }
-        };
         let name = if collection.name.is_empty() { "Untitled" } else { collection.name.as_str() };
-        rows.push(row(&[
+        let mut album = row(&[
             ("id_local", json!(collection.id)),
             ("name", json!(name)),
             ("parent", json!(collection.parent.unwrap_or(0))),
-            ("creationId", json!(creation)),
+            ("creationId", json!("com.adobe.ag.library.collection")),
             ("systemOnly", json!(0)),
-        ]));
-        members.extend(collection.photos.iter().map(|at| row(&[("collection", json!(collection.id)), ("image", json!(source_id(*at)))])));
+        ]);
+        let mut photos_in = collection.photos.clone();
+        match collection.kind {
+            CollectionKind::Album => {}
+            CollectionKind::Project | CollectionKind::Group => {
+                album.insert("creationId".into(), json!("com.adobe.ag.library.group"));
+            }
+            CollectionKind::SmartAlbum => {
+                let rule = match smart::parse(&collection.rule) {
+                    Ok(rule) => rule,
+                    Err(why) => {
+                        warn(format!("smart album “{name}”: not imported; {why}"));
+                        continue;
+                    }
+                };
+                album.insert("captureOneRule".into(), smart::archived(&rule));
+                match smart::outcome(&rule, photos) {
+                    smart::Outcome::Smart(rules) => {
+                        album.insert("smartRules".into(), json!(rules));
+                        // what it shows now, should the library refuse the rules
+                        photos_in = smart::select(&rule, photos).unwrap_or_default();
+                    }
+                    smart::Outcome::Selected(selected, missing) => {
+                        warn(format!(
+                            "smart album “{name}”: imported as an album with the {} photo(s) its rule selects now; LightCraft has no smart album rule for {}",
+                            selected.len(),
+                            missing.join(", ")
+                        ));
+                        photos_in = selected;
+                    }
+                    smart::Outcome::Skipped(why) => {
+                        warn(format!("smart album “{name}”: not imported; {why}"));
+                        continue;
+                    }
+                }
+            }
+        }
+        rows.push(album);
+        members.extend(photos_in.iter().map(|at| row(&[("collection", json!(collection.id)), ("image", json!(source_id(*at)))])));
     }
-    if smart > MAX_NAMED {
-        warnings.push(format!("{} more smart album(s) were not imported", smart - MAX_NAMED));
+    if named > MAX_NAMED {
+        warnings.push(format!("{} more smart album(s) were not imported as smart albums", named - MAX_NAMED));
     }
     (rows, members)
 }

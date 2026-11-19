@@ -1245,11 +1245,34 @@ fn stage_collections(
             }
             if album.folder {
                 added_folders.insert(id);
+            } else if let Some(rules) = smart_rules(s, collection, program, warnings) {
+                album.smart = Some(rules);
+                album.photos.clear();
             }
             ops.push(Op::AddAlbum { album });
         }
     }
     Ok(albums.len())
+}
+
+/// The smart album rules a collection row brings (`smartRules`, a Capture One smart album's,
+/// in [`lightcraft_catalog::RuleSet`] terms); `None` when it has none, or rules the library
+/// refuses, which are named in a warning (the album then keeps the photos the row lists).
+fn smart_rules(s: &crate::Session, collection: &Row, program: &str, warnings: &mut Vec<String>) -> Option<Box<lightcraft_catalog::Filter>> {
+    let rules = collection.get("smartRules")?;
+    let refused = |why: String| format!("smart album “{}”: {why}; imported with the photos its {program} rule selects now", text(collection, "name"));
+    let rules: lightcraft_catalog::RuleSet = match serde_json::from_value(rules.clone()) {
+        Ok(rules) => rules,
+        Err(e) => {
+            warnings.push(refused(format!("its rules can't be read ({e})")));
+            return None;
+        }
+    };
+    if let Some(problem) = rules.check(&s.catalog).first() {
+        warnings.push(refused(format!("its rules can't be used here ({problem})")));
+        return None;
+    }
+    Some(Box::new(lightcraft_catalog::Filter { rule_set: Some(rules), ..lightcraft_catalog::Filter::default() }))
 }
 
 /// Turn the read catalog into library records in one undo step and return the import report

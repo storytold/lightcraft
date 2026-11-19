@@ -3556,6 +3556,9 @@
   "virtual copies, star ratings, colour tags, keywords and the whole keyword list, IPTC fields, camera data, and the": "virtuelle Kopien, Sternebewertungen, Farbmarkierungen, Stichwörter samt der ganzen Stichwortliste, IPTC-Felder, Kameradaten und die",
   "albums, projects and groups they are in. The catalog is only read, and Capture One isn't needed. Orange and pink,": "Alben, Projekte und Gruppen, in denen sie liegen. Der Katalog wird nur gelesen, Capture One wird nicht gebraucht. Orange und Rosa,",
   "which LightCraft has no labels for, are kept with the photo and found by the keywords “Capture One|Orange” and": "für die LightCraft keine Farbmarkierung hat, bleiben am Foto erhalten und lassen sich über die Stichwörter „Capture One|Orange“ und",
-  "“Capture One|Pink”. Adjustments, smart albums and Capture One sessions don't come over yet. See": "„Capture One|Pink“ finden. Bearbeitungen, Smart-Alben und Capture-One-Sessions werden noch nicht übernommen. Siehe",
-  "[Capture One catalog import](capture-one-catalog-import.md).": "[Capture-One-Katalogimport](capture-one-catalog-import.md)."
+  "“Capture One|Pink”. Adjustments and Capture One sessions don't come over yet. See": "„Capture One|Pink“ finden. Bearbeitungen und Capture-One-Sessions werden noch nicht übernommen. Siehe",
+  "[Capture One catalog import](capture-one-catalog-import.md).": "[Capture-One-Katalogimport](capture-one-catalog-import.md).",
+  "Capture One smart albums come in as LightCraft smart albums with the same rules. One that tests something": "Smart-Alben aus Capture One werden LightCraft-Smart-Alben mit denselben Regeln. Eines, das etwas prüft,",
+  "LightCraft has no rule for, such as file size or flash mode, becomes an album with the photos it shows at the": "wofür LightCraft keine Regel hat, etwa Dateigröße oder Blitzmodus, wird ein Album mit den Fotos, die es zum",
+  "time of the import, and the import's result says so.": "Zeitpunkt des Imports zeigt, und das Importergebnis sagt das."
 }

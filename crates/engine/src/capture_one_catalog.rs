@@ -44,6 +44,7 @@ mod keywords;
 mod locate;
 mod paths;
 mod photos;
+mod smart;
 mod tables;
 
 /// A Capture One catalog's library data.
@@ -202,6 +203,12 @@ pub struct CatalogPhoto {
     pub iptc: Iptc,
     /// The variant has adjustments (`ZVARIANT.ZISMODIFIED`). They are not read.
     pub adjusted: bool,
+    /// The variant has an annotation (`ZVARIANT.ZANNOTATION`, not read).
+    pub annotated: bool,
+    /// The image's other camera and exposure columns (`ZEXP_…`, `ZCAMERA_…`, `ZMULTISHOT_…`,
+    /// `ZGPSALTITUDE`) by name without the leading `Z`, as text; empty when unset. Kept for the
+    /// recovery archive and for smart album rules that test them.
+    pub exif: BTreeMap<String, String>,
 }
 
 /// IPTC fields of a variant, trimmed. Fields without a place of their own are in `other`, keyed
@@ -226,7 +233,7 @@ pub struct Iptc {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CollectionKind {
     Album,
-    /// Its rule (`ZSMARTCRITERIA`) is not read, so it has no photos here.
+    /// Its photos come from its rule ([`Collection::rule`]), not from memberships.
     SmartAlbum,
     Project,
     Group,
@@ -244,6 +251,9 @@ pub struct Collection {
     pub parent: Option<i64>,
     /// An album's photos, as indexes into [`CaptureOneCatalog::photos`].
     pub photos: Vec<usize>,
+    /// A smart album's rule as Capture One stores it (`ZSMARTCRITERIA`, XML); empty for the
+    /// other kinds.
+    pub rule: String,
 }
 
 /// Why a catalog was not read.

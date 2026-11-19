@@ -91,6 +91,7 @@ pub(super) fn read(db: &Db, photos: &Read, warnings: &mut Vec<String>) -> Result
             kind,
             parent,
             photos: Vec::new(),
+            rule: if kind == CollectionKind::SmartAlbum { row.text("ZSMARTCRITERIA").to_string() } else { String::new() },
         });
     }
     if orphans > 0 {

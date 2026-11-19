@@ -1,6 +1,6 @@
 //! Images, their variants and each variant's metadata.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use super::tables::{Db, Row, Table};
@@ -82,6 +82,7 @@ pub(super) fn read(db: &Db, database: &Path, warnings: &mut Vec<String>, active:
             photo.variant_index = index;
             photo.variant_uuid = variant.text("ZVARIANTUUID").trim().to_string();
             photo.adjusted = variant.flag("ZISMODIFIED");
+            photo.annotated = !variant.text("ZANNOTATION").trim().is_empty();
             if let Some(row) = shown_metadata(variant, &metadata_of) {
                 variant_metadata(&mut photo, row, &metadata, &mut notes);
             }
@@ -151,8 +152,31 @@ fn image_fields(image_id: i64, image: Row<'_>, location: Option<Row<'_>>, databa
         focal_mm: positive("ZEXP_FOCALLENGTH").map(|n| n as f32),
         exposure_bias: fraction(image.text("ZEXP_EXPOSURECOMPENSATION")),
         gps: gps(image),
+        exif: exif(image),
         ..CatalogPhoto::default()
     }
+}
+
+/// Column groups of `ZIMAGE` kept in [`CatalogPhoto::exif`].
+const EXIF_GROUPS: &[&str] = &["ZEXP_", "ZCAMERA_", "ZMULTISHOT_", "ZGPSALTITUDE"];
+
+fn exif(image: Row<'_>) -> BTreeMap<String, String> {
+    image
+        .names()
+        .filter(|column| EXIF_GROUPS.iter().any(|group| column.starts_with(group)))
+        .map(|column| {
+            let text = image.text(column).trim();
+            let value = if text.is_empty() {
+                image
+                    .real(column)
+                    .map(|n| if n.fract() == 0.0 && n.abs() < 1e15 { format!("{}", n as i64) } else { n.to_string() })
+                    .unwrap_or_default()
+            } else {
+                text.to_string()
+            };
+            (column.trim_start_matches('Z').to_string(), value)
+        })
+        .collect()
 }
 
 /// Unix seconds as a calendar time in UTC (`YYYY-MM-DDTHH:MM:SS`) followed by `zone`; `None`
