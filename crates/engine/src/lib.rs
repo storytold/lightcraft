@@ -818,6 +818,7 @@ impl Session {
             }
         };
         self.show_undone(&e.op);
+        self.forget_stale_subject_requests();
         self.pending_log.push(e.op);
         self.redo.push(UndoEntry {
             label: e.label.clone(),
@@ -843,6 +844,7 @@ impl Session {
             }
         };
         self.show_undone(&e.op);
+        self.forget_stale_subject_requests();
         self.pending_log.push(e.op);
         self.undo.push(UndoEntry {
             label: e.label.clone(),
