@@ -382,8 +382,17 @@ impl std::fmt::Debug for PlansMemo {
 /// grid's data and the reference is cleared. A reference past the table (a damaged snapshot)
 /// leaves the mask empty — it renders nothing, like any other damaged grid. Data present on the
 /// mask itself wins over a stray reference. Returns the dangling count added to `dangling`.
+///
+/// Settings that refer to no grid (nearly all of them) are left alone, so a value shared by many
+/// holders stays shared: [`Arc::make_mut`] would copy it for each. Settings that were changed are
+/// handed to [`shared::settings`] again, so holders that are equal once resolved share one value.
 fn resolve_grids(settings: &mut Arc<DevelopSettings>, grids: &[String], dangling: usize) -> usize {
     let mut dangling = dangling;
+    let mut referenced = false;
+    settings.visit_seg_masks(&mut |m| referenced |= m.grid.is_some());
+    if !referenced {
+        return dangling;
+    }
     Arc::make_mut(settings).visit_seg_masks_mut(&mut |m| {
         if let Some(i) = m.grid.take() {
             match (m.data.is_empty(), grids.get(i as usize)) {
@@ -393,6 +402,7 @@ fn resolve_grids(settings: &mut Arc<DevelopSettings>, grids: &[String], dangling
             }
         }
     });
+    *settings = shared::settings(settings.clone());
     dangling
 }
 

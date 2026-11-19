@@ -6,6 +6,8 @@
 //! raw with the same import look. Here every
 //! settings value that enters a catalog, read from a saved library or given by a change, is
 //! replaced by the one already held when an equal one is.
+//! Settings whose masks refer to a snapshot's grid table are shared again once the references are
+//! resolved (`resolve_grids` in `lib.rs`); settings without a reference are left as they were read.
 //!
 //! Sharing never lets one photo's edit reach another: settings behind an `Arc` are not changed
 //! in place (the catalog replaces them; `Arc::make_mut` copies a value that is shared).

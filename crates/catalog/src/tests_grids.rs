@@ -390,3 +390,49 @@ fn omitted_shared_grid_table_clears_dangling_references() {
     let MaskShape::Object { seg: Some(seg), .. } = &p.history[0].settings.masks[0].components[0].shape else { panic!("an Object mask") };
     assert_eq!(seg.data, blob, "the history step's inline grid is untouched");
 }
+
+/// Equal settings that refer to the same grid in a snapshot's table are held once after the
+/// snapshot is read: resolving the references gives every holder its grid's data, and the
+/// holders that are equal again share one value (a library with many masked photos is not
+/// held once per photo and step). What is written back is unchanged.
+#[test]
+fn resolved_grid_references_share_equal_settings() {
+    let seg = SegMask::from_logits(32, &vec![1.0f32; 32 * 32]);
+    let settings = Arc::new(settings_with_seg(seg, 0.5));
+    let mut live = Catalog::new();
+    let mut ops = Vec::new();
+    for n in 1..=2u64 {
+        let id = PhotoId(n);
+        let name = format!("{n}.jpg");
+        ops.push(Op::AddPhoto { photo: Box::new(Photo::new(id, Source::Demo { scene: 0 }, &name, "JPEG", 60, 40, "2026-01-01")) });
+        ops.push(Op::SetDevelop { id, settings: settings.clone(), label: "Exposure".into(), edited: Some("t".into()) });
+        ops.push(Op::PushHistory { id, step: HistoryStep { label: "Exposure".into(), settings: settings.clone() } });
+        ops.push(Op::SetVersions {
+            id,
+            versions: vec![Version { name: "v".into(), created: "2026-01-01".into(), settings: settings.clone(), auto: false }],
+        });
+    }
+    for op in &ops {
+        live.apply(op.clone()).unwrap();
+    }
+    let m = MemStore::new();
+    let (mut j, _, _) = open(&m);
+    j.append(&ops).unwrap();
+    j.snapshot(&live).unwrap();
+    drop(j);
+    let snap_bytes = m.get(SNAPSHOT).unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&snap_bytes).unwrap();
+    assert_eq!(v["catalog"]["grids"].as_array().unwrap().len(), 1, "the snapshot refers to its one grid");
+    assert!(std::str::from_utf8(&snap_bytes).unwrap().contains("\"grid\":0"), "and its masks hold references");
+
+    let (_, loaded, report) = open(&m);
+    assert_eq!(report.repaired, Vec::<String>::new(), "{:?}", report.repaired);
+    assert_eq!(loaded.to_snapshot(), live.to_snapshot());
+    let first = &loaded.photo(PhotoId(1)).unwrap().develop;
+    for n in 1..=2 {
+        let p = loaded.photo(PhotoId(n)).unwrap();
+        assert!(Arc::ptr_eq(&p.develop, first), "photo {n}'s settings");
+        assert!(p.history.iter().all(|h| Arc::ptr_eq(&h.settings, first)), "photo {n}'s history");
+        assert!(p.versions.iter().all(|v| Arc::ptr_eq(&v.settings, first)), "photo {n}'s versions");
+    }
+}
