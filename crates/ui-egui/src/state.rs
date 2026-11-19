@@ -2364,6 +2364,17 @@ pub enum Dialog {
     Merge {
         opts: crate::merge::MergeDialog,
     },
+    /// The selection is one complete pixel-shift series, and `command` (another kind of merge) was chosen: merge it
+    /// as Pixel Shift instead, go on with `command`, or cancel.
+    PixelShiftOffer {
+        command: String,
+    },
+    /// Photo ▸ Photo Merge ▸ Delete Merge Sources with "Confirm before deleting" on: the merged photo `id`, whose other
+    /// frames (`count` of them in the library) would go to Recently Deleted.
+    ConfirmDeleteSources {
+        id: u64,
+        count: usize,
+    },
     /// Settings (preferences): `tab` = general | import | performance | interface.
     Settings {
         tab: String,

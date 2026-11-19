@@ -382,6 +382,8 @@ mod tests_panels;
 #[cfg(test)]
 mod tests_pickers;
 #[cfg(test)]
+mod tests_pixel_shift;
+#[cfg(test)]
 mod tests_plugin_jobs;
 #[cfg(test)]
 mod tests_plugin_signing;

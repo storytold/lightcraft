@@ -95,6 +95,7 @@ impl Indexes {
                 | Op::SetHistoryCursor { .. }
                 | Op::SetBefore { .. }
                 | Op::SetExported { .. }
+                | Op::SetMergeSources { .. }
                 | Op::SetPreview { .. }
                 | Op::SetCaptured { .. }
                 | Op::SetFile { .. }
@@ -121,6 +122,7 @@ impl Indexes {
                 | Op::SetHistoryCursor { .. }
                 | Op::SetBefore { .. }
                 | Op::SetExported { .. }
+                | Op::SetMergeSources { .. }
                 | Op::SetPreview { .. }
                 | Op::SetCaptured { .. }
                 | Op::SetMeta { .. }
