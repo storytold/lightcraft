@@ -348,5 +348,5 @@ pixels cannot be relabelled as current; existing offline proxies remain readable
 The fresh original path retains the photo's hot-pixel decode setting. This infrastructure
 does not enable non-CR3 profile geometry or unnamed fixed-mount matching.
 The proposal applies directly to upstream main, without a prior #2675 merge, and uses
-look14/render77 against upstream look13/render76. Historical image measurements above
+look15/render78 against upstream look14/render77. Historical image measurements above
 have not been repeated on this integrated source.
