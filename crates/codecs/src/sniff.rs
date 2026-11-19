@@ -150,7 +150,7 @@ pub fn sniff(b: &[u8]) -> Option<Format> {
     if b.starts_with(b"II+\0") || b.starts_with(b"MM\0+") {
         return Some(Format::Tiff);
     }
-    if craft_bmp_header::bmp_probe::is_supported_header(b) {
+    if craft_image_codecs::bmp_probe::is_supported_header(b) {
         return Some(Format::Bmp);
     }
     None
