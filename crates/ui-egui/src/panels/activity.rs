@@ -24,6 +24,9 @@ pub const WIDTH: f32 = 280.0;
 const MARGIN: i8 = 8;
 /// Size of the ✕ cancel cross (points).
 const CROSS: f32 = 16.0;
+/// Height of the grip strip at the top of the stack (points): a drag there always moves the stack, also when the
+/// task list overflows and a drag over its rows scrolls it (touch screens).
+const HANDLE_H: f32 = 10.0;
 
 /// "3 of 25", "12 of 340 MB", "40 %"; empty while the amount of work isn't known.
 pub fn count_text(t: &TaskInfo) -> String {
@@ -85,7 +88,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             // is: the stack would never grow when rows are added. Give it the whole height below its position instead
             // (the scroll area keeps to `max_scroll_h`).
             let has_footer = hidden > 0 || (app.activity_expanded && tasks.len() > MAX_ROWS);
-            let footer_reserve = if has_footer { 44.0 } else { 20.0 };
+            // the footer (or the frame's margins alone) and the grip strip with its spacing
+            let footer_reserve = if has_footer { 44.0 } else { 20.0 } + HANDLE_H + 3.0;
             let space_below = (ctx.content_rect().bottom() - ui.cursor().top() - 16.0).max(0.0);
             // Cap at the true viewport capacity so the stack never claims more height
             // than the viewport can provide, even when it is shorter than `footer_reserve`.
@@ -97,6 +101,13 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 ui.set_width(inner);
                 ui.spacing_mut().item_spacing.y = 3.0;
                 let mut interactive_hovered = false;
+                // the grip: not a widget, so a drag on it is the area's (moves the stack), never the list's
+                let (grip, _) = ui.allocate_exact_size(vec2(inner, HANDLE_H), Sense::hover());
+                register(ui, "activity:handle", grip);
+                for dy in [-1.5, 1.5] {
+                    let y = grip.center().y + dy;
+                    ui.painter().line_segment([pos2(grip.center().x - 12.0, y), pos2(grip.center().x + 12.0, y)], Stroke::new(1.0, t.text_dim));
+                }
                 let max_scroll_h = (available_h - footer_reserve).max(0.0);
                 egui::ScrollArea::vertical().max_height(max_scroll_h).min_scrolled_height(0.0).auto_shrink([false, true]).show(ui, |ui| {
                     for (i, task) in tasks.iter().take(shown).enumerate() {

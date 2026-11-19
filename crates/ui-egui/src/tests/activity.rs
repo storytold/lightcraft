@@ -695,6 +695,32 @@ fn activity_stack_short_viewport_near_bottom_keeps_controls_reachable() {
     assert!(dragged_rect.max.y <= content.bottom() + 1.0, "stack stays within viewport after near-bottom drag: {dragged_rect:?} vs {content:?}");
 }
 
+/// The grip at the top of the stack sits outside the task list: dragging it moves the stack even when the list
+/// overflows (a drag over the rows would scroll the list instead).
+#[test]
+fn the_grip_moves_the_stack_when_the_list_overflows() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [600.0, 300.0], 1.0);
+    h.step();
+    h.step();
+    let _guards: Vec<_> = (0..8).map(|i| h.app.session.activity.start("export", &format!("Task {i}"), Cancel::Yes)).collect();
+    wait_visible(&mut h);
+    click(&mut h, "activity:more");
+    assert!(h.app.activity_expanded, "the stack shows every task");
+    let grip = rect(&h, "activity:handle");
+    let first_row = h.app.widgets.iter().filter(|(w, _)| w.starts_with("activity:row:")).map(|(_, r)| r.min.y).fold(f32::MAX, f32::min);
+    assert!(grip.max.y <= first_row, "the grip is above the list: {grip:?} vs first row at {first_row}");
+    let id = egui::Id::unique("activity-stack");
+    let before = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    let from = grip.center();
+    let r = h.request("ui.drag", json!({"x": from.x, "y": from.y, "toX": from.x + 120.0, "toY": from.y, "steps": 6}), T);
+    assert_eq!(r["ok"], true, "{r:?}");
+    h.step();
+    h.step();
+    let after = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    assert!((after.min.x - (before.min.x + 120.0)).abs() < 5.0, "the grip moved the stack: {before:?} -> {after:?}");
+}
+
 #[test]
 fn immediate_library_commands_and_auto_sync_show_completion() {
     let mut h = demo();
