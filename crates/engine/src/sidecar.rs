@@ -419,12 +419,13 @@ impl SidecarData {
     }
 }
 
-/// The orientations of the photo file at `path` by the import's rules ([`crate::files::orientations`]): the file is
-/// read, up to `max` bytes (none past that, and then none are known), and nothing but its orientation is worked out.
+/// The orientations of the photo file at `path` by the import's rules ([`crate::files::orientations_of_file`]): a raw
+/// is read whole, up to `max` bytes (none past that, and then none are known); another image only where its
+/// orientation is. Nothing but its orientation is worked out.
 /// For a photo whose [`lightcraft_catalog::Meta::file_orientation`] isn't known: by Read Metadata from File and
 /// Synchronize Folder.
 fn upright_orientation(path: &str, max: u64) -> crate::files::Orientations {
-    crate::read_file::read_regular(path, max).map(|bytes| crate::files::orientations(&bytes)).unwrap_or_default()
+    crate::files::orientations_of_file(path, max)
 }
 
 /// The sidecar packet for a photo; the colour label is written by its name in `cat` (custom

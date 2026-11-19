@@ -30,6 +30,7 @@ mod jpeg;
 #[cfg(feature = "jxl")]
 mod jxl;
 mod jxl_encode;
+pub mod orientation;
 mod other;
 mod png_codec;
 pub mod print;

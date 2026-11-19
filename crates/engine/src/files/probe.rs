@@ -161,6 +161,54 @@ pub fn orientations(bytes: &[u8]) -> Orientations {
     Orientations { kept, read_by: kept }
 }
 
+/// [`Orientations`] of the file at `path` (none when it can't be read or is over `max` bytes), reading no more of it
+/// than its orientation needs. A raw, and a file of at most [`ORIENTATION_HEAD`] bytes, is read whole (within `max`)
+/// and given [`orientations`]. Any other image is read where its header reader finds the orientation
+/// ([`lightcraft_codecs::orientation::header_orientation`]: a few reads, however large the file), and whole only where
+/// that can't tell.
+pub fn orientations_of_file(path: &str, max: u64) -> Orientations {
+    orientations_read(path, max).unwrap_or_default()
+}
+
+/// How much of a file [`orientations_of_file`] reads first: enough to tell a raw (as upstream's sync did) and to
+/// take a small file whole.
+pub const ORIENTATION_HEAD: u64 = 1 << 20;
+
+fn orientations_read(path: &str, max: u64) -> Option<Orientations> {
+    use std::io::{Read, Seek};
+    let mut file = crate::read_file::open_for_read(path).ok()?;
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() || meta.len() > max {
+        return None;
+    }
+    let len = meta.len();
+    let mut head = Vec::new();
+    (&mut file).take(ORIENTATION_HEAD.min(len)).read_to_end(&mut head).ok()?;
+    if head.len() as u64 >= len {
+        return Some(orientations(&head));
+    }
+    let whole = |mut file: std::fs::File| -> Option<Orientations> {
+        file.rewind().ok()?;
+        crate::read_file::read_open(file, max).ok().map(|bytes| orientations(&bytes))
+    };
+    // a raw's orientation is its decoder's, which needs the file
+    if lightcraft_raw::probe(&head).is_some() {
+        return whole(file);
+    }
+    let format = lightcraft_codecs::sniff(&head)?;
+    if format.not_decodable().is_some() {
+        return None;
+    }
+    match lightcraft_codecs::orientation::header_orientation(&mut file, len, format) {
+        Ok(Some(o)) => {
+            let o = Some(Orientation::from_exif(o));
+            Some(Orientations { kept: o, read_by: o })
+        }
+        Ok(None) => whole(file),
+        Err(_) => None,
+    }
+}
+
 /// Probe a file's bytes: kind, dimensions (oriented), metadata. No pixel data is decompressed:
 /// raws are described from their headers ([`lightcraft_raw::probe_info`]), other images too
 /// ([`lightcraft_codecs::read_header`], which refuses truncated files but can't see damage inside

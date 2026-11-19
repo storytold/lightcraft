@@ -32,7 +32,7 @@ pub use load::{load_bytes, load_bytes_decoded, load_bytes_with, load_vec, load_v
 use preview::PLAN_PREFIX;
 pub(crate) use preview::decode_raw_preview;
 pub use preview::{PreviewRead, embedded_preview_srgb, fs_preview_loader, load_embedded_preview, preview_window};
-pub use probe::{Orientations, embedded_lens, orientations, probe_bytes, upright_by};
+pub use probe::{ORIENTATION_HEAD, Orientations, embedded_lens, orientations, orientations_of_file, probe_bytes, upright_by};
 #[cfg(test)]
 use probe::{meta_of, preview_reason};
 

@@ -2475,3 +2475,58 @@ fn synchronize_reads_boxes_by_the_imports_orientation_as_read_metadata_does() {
     assert_eq!(sc.with_orientation_known(Some(Orientation::Rotate180), "/no/such/file").orientation, Some(Orientation::Rotate180));
     let _ = std::fs::remove_dir_all(&src);
 }
+
+/// A 1024 × 1024 8-bit grey TIFF, padded past [`crate::files::ORIENTATION_HEAD`], stating orientation 6 as `typ`
+/// (3 SHORT, 8 SSHORT), its strip at `strip_at`.
+fn grey_tiff(typ: u16, strip_at: u32) -> Vec<u8> {
+    let entries: [(u16, u16, u32); 10] = [
+        (256, 3, 1024),
+        (257, 3, 1024),
+        (258, 3, 8),
+        (259, 3, 1),
+        (262, 3, 1),
+        (273, 4, strip_at),
+        (274, typ, 6),
+        (277, 3, 1),
+        (278, 3, 1024),
+        (279, 4, 1 << 20),
+    ];
+    let mut t = b"II*\0\x08\0\0\0".to_vec();
+    t.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    for (tag, kind, value) in entries {
+        t.extend_from_slice(&tag.to_le_bytes());
+        t.extend_from_slice(&kind.to_le_bytes());
+        t.extend_from_slice(&1u32.to_le_bytes());
+        t.extend_from_slice(&if kind == 4 { value.to_le_bytes() } else { [value as u8, (value >> 8) as u8, 0, 0] });
+    }
+    t.extend_from_slice(&[0; 4]);
+    t.resize(256 + (1 << 20), 0x80);
+    t
+}
+
+/// Review of #4512: an image past the first MiB is read only where its header reader finds the orientation, not whole;
+/// and whole, within the limit, where the header probe can't tell.
+#[test]
+fn a_large_images_orientation_is_read_from_its_header() {
+    use lightcraft_meta::Orientation;
+    let dir = temp_dir("header-orientation");
+    // its strip runs past the end of the file: read whole, the header reader refuses it, so only a header read gives 6
+    let cut = grey_tiff(3, 1 << 30);
+    assert!(cut.len() as u64 > crate::files::ORIENTATION_HEAD);
+    assert_eq!(crate::files::orientations(&cut), crate::files::Orientations::default(), "the whole file gives none");
+    let path = dir.join("cut.tif");
+    std::fs::write(&path, &cut).unwrap();
+    let six = Some(Orientation::Rotate90);
+    let read = crate::files::orientations_of_file(&path.to_string_lossy(), crate::read_file::MAX_MEDIA_BYTES);
+    assert_eq!(read, crate::files::Orientations { kept: six, read_by: six }, "read from its header");
+    // a SSHORT orientation the header probe doesn't follow: the file is read whole, and gives the header reader's 6
+    let signed = grey_tiff(8, 256);
+    assert_eq!(crate::files::orientations(&signed).kept, six, "the header reader takes a SSHORT");
+    let path = dir.join("signed.tif");
+    std::fs::write(&path, &signed).unwrap();
+    let file = path.to_string_lossy();
+    assert_eq!(crate::files::orientations_of_file(&file, crate::read_file::MAX_MEDIA_BYTES).kept, six, "read whole");
+    // over the limit: not read at all
+    assert_eq!(crate::files::orientations_of_file(&file, signed.len() as u64 - 1), crate::files::Orientations::default());
+    let _ = std::fs::remove_dir_all(&dir);
+}
