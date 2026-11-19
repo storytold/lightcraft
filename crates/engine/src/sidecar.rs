@@ -3522,6 +3522,7 @@ mod tests {
             assert_eq!(data.matches(r#"<rdf:Description rdf:about="nested"/>"#).count(), 1, "the nested description is unchanged:\n{data}");
             assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
         }
+    }
     /// Regression requested by review: an outer description containing a
     /// self-closing nested description must not make `global_descriptions` or
     /// CRS write-back skip the following sibling description. The sibling's
