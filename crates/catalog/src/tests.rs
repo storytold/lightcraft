@@ -1199,3 +1199,35 @@ fn the_inverse_of_a_nested_batch_is_taken_back_op_by_op() {
     c.apply(*remaining).unwrap();
     assert_eq!(c.to_snapshot(), before);
 }
+
+/// A batch that was only partly taken back is logged as it was and leaves the same changes when the log is replayed: the
+/// replay counts it and goes on with the records after it (the journal's open does the same).
+#[test]
+fn replaying_a_log_goes_on_after_a_partly_applied_batch() {
+    let mut c = Catalog::default();
+    let mut ids = Vec::new();
+    for name in ["a.jpg", "b.jpg"] {
+        let id = c.alloc_photo_id();
+        let photo = Photo::new(id, Source::File { path: format!("/p/{name}") }, name, "JPEG", 60, 40, "2026-01-01T10:00:00");
+        c.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        ids.push(id);
+    }
+    let stack = c.alloc_stack_id();
+    c.apply(Op::AddStack { stack: Stack { id: stack, photos: ids.clone(), collapsed: false } }).unwrap();
+    let start = c.clone();
+    // the photo goes, then its stack, then an op fails: putting the stack back needs the photo, which comes later
+    let torn =
+        Op::Batch { ops: vec![Op::RemovePhoto { id: ids[0] }, Op::RemoveStack { id: stack }, Op::SetRating { id: PhotoId(9_999), rating: 1 }] };
+    let rate = Op::SetRating { id: ids[1], rating: 4 };
+    assert!(matches!(c.apply(torn.clone()), Err(CatalogError::PartlyApplied { .. })));
+    c.apply(rate.clone()).unwrap();
+
+    let log = format!("{}{}", Catalog::op_to_log_line(&torn), Catalog::op_to_log_line(&rate));
+    let mut replayed = start;
+    assert_eq!(replayed.replay(&log).unwrap(), 2, "both records were replayed");
+    assert_eq!(replayed.to_snapshot(), c.to_snapshot(), "the log gives what the session had");
+
+    // an op that fails plainly still stops the replay
+    let bad = Op::SetRating { id: PhotoId(9_999), rating: 1 };
+    assert_eq!(replayed.replay(&Catalog::op_to_log_line(&bad)), Err(CatalogError::NoPhoto(PhotoId(9_999))));
+}

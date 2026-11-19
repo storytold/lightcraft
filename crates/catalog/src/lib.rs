@@ -1370,7 +1370,7 @@ impl Catalog {
         for (i, line) in lines.iter().enumerate() {
             match serde_json::from_str::<Op>(line) {
                 Ok(op) => {
-                    self.apply(op)?;
+                    self.replay_op(op)?;
                     n += 1;
                 }
                 Err(e) if i + 1 == lines.len() => {
@@ -1381,6 +1381,17 @@ impl Catalog {
             }
         }
         Ok(n)
+    }
+
+    /// Apply one op of a saved log: the one place that says which failures of a logged op are the log being replayed, not
+    /// damage (`Journal::open` and [`Self::replay`] both go through it). A batch that was only partly taken back when it
+    /// was applied is logged as it was ([`CatalogError::PartlyApplied`]) and fails the same way again, leaving the same
+    /// changes, so replaying it counts as done; any other error is the caller's to handle.
+    pub(crate) fn replay_op(&mut self, op: Op) -> Result<()> {
+        match self.apply(op) {
+            Ok(_) | Err(CatalogError::PartlyApplied { .. }) => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 
     pub fn op_to_log_line(op: &Op) -> String {
