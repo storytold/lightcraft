@@ -78,16 +78,13 @@ fn list(s: &Session) -> Value {
 fn plan(s: &mut Session, p: &Value) -> Result<Value> {
     const ID: &str = "export.plan";
     let p = &s.export_params(p).map_err(|e| bad(ID, e))?;
-    let mut opts = crate::export::ExportOptions::from_params(p).map_err(|e| bad(ID, e.to_string()))?;
-    if !crate::export::ExportOptions::has_size_param(p) {
-        opts.resize = Some(crate::export::Resize::long_edge(3000));
-    }
-    let ids = crate::cmd::photo_ids(p, ID)?.unwrap_or_else(|| {
-        // An explicit `id` takes precedence over the ambient selection, as in headless
-        // `app.export`; without it, a multi-photo selection is planned as before.
-        if let Some(id) = p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId) {
-            vec![id]
-        } else {
+    let opts = crate::export::ExportOptions::from_params(p).map_err(|e| bad(ID, e.to_string()))?;
+    // An explicit `id` takes precedence over the ambient selection, as in headless
+    // `app.export`; without it, a multi-photo selection is planned as before.
+    let ids = if let Some(id) = p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId) {
+        vec![id]
+    } else {
+        crate::cmd::photo_ids(p, ID)?.unwrap_or_else(|| {
             let sel: std::collections::HashSet<_> = s.selection.ids.iter().copied().collect();
             let ordered: Vec<_> = s.visible_cloned().into_iter().filter(|id| sel.contains(id)).collect();
             if ordered.len() > 1 {
@@ -97,8 +94,8 @@ fn plan(s: &mut Session, p: &Value) -> Result<Value> {
             } else {
                 ordered
             }
-        }
-    });
+        })
+    };
     let dir = p.get("dir").and_then(Value::as_str).unwrap_or("");
     let exact = p.get("path").and_then(Value::as_str);
     let files =

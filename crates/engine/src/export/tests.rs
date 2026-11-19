@@ -1643,3 +1643,40 @@ fn export_plan_honors_explicit_id_over_selection() {
     let files = result["files"].as_array().unwrap();
     assert_eq!(files.len(), 1, "explicit id should plan one photo, got {result}");
 }
+
+/// With no size param, `export.plan` reports the same size the real batch writes (full size).
+#[test]
+fn export_plan_matches_app_export_full_size_default() {
+    let mut session = crate::Session::with_demo();
+    let id = session.visible_cloned()[0];
+    let plan = session.execute("export.plan", &json!({"id": id.0, "dir": "out", "format": "png"})).unwrap();
+    let plan_files = plan["files"].as_array().unwrap();
+    assert_eq!(plan_files.len(), 1, "{plan}");
+    let o = ExportOptions::from_json(&json!({"format": "png"}));
+    let to = Destination { dir: "out".into(), exact: None };
+    let mut write = |_: &str, _: &[u8]| Ok::<(), String>(());
+    let real = run_batch(prepare_batch(&mut session, &[id], &o).unwrap(), &o, &to, &mut write, &|_| false, false, &mut |_, _| true).unwrap();
+    assert_eq!(plan_files[0]["width"], real[0]["width"], "{plan} vs {real:?}");
+    assert_eq!(plan_files[0]["height"], real[0]["height"], "{plan} vs {real:?}");
+}
+
+/// Two photos through the command: fixed-name paths are planned and the folder stays empty.
+#[test]
+fn export_plan_command_lists_two_photos_without_writing() {
+    let dir = std::env::temp_dir().join(format!("lc-plan-cmd-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir_s = dir.to_string_lossy().to_string();
+    let mut session = crate::Session::with_demo();
+    let ids: Vec<u64> = session.visible_cloned().iter().take(2).map(|photo| photo.0).collect();
+    let plan = session
+        .execute(
+            "export.plan",
+            &json!({"ids": ids, "dir": dir_s, "format": "png", "naming": "plan-{seq}", "resize": {"mode": "longEdge", "value": 100}}),
+        )
+        .unwrap();
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "a plan must not write files");
+    let planned: Vec<String> = plan["files"].as_array().unwrap().iter().map(|f| f["path"].as_str().unwrap().to_string()).collect();
+    assert_eq!(planned, vec![format!("{dir_s}/plan-001.png"), format!("{dir_s}/plan-002.png")], "{plan}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
