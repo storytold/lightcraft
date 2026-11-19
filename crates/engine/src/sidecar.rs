@@ -1046,8 +1046,12 @@ fn global_descriptions(data: &str) -> Vec<(usize, usize)> {
                     break;
                 }
             } else {
-                if let Some(rel) = rest[2..].find('>') {
-                    i += 2 + rel + 1;
+                if let Some(stripped) = rest.strip_prefix("<!") {
+                    if let Some(rel) = stripped.find('>') {
+                        i += 2 + rel + 1;
+                    } else {
+                        break;
+                    }
                 } else {
                     break;
                 }
@@ -1108,8 +1112,8 @@ fn global_descriptions(data: &str) -> Vec<(usize, usize)> {
                                 k = data.len();
                                 break;
                             }
-                        } else if rest2.starts_with("<?") {
-                            if let Some(rel2) = rest2[2..].find("?>") {
+                        } else if let Some(stripped) = rest2.strip_prefix("<?") {
+                            if let Some(rel2) = stripped.find("?>") {
                                 k = s2 + 2 + rel2 + 2;
                             } else {
                                 k = data.len();
