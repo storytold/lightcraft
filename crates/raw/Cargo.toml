@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 craft-tiff = { workspace = true }
 craft-raw = { workspace = true }
+craft-raw-tiff = { workspace = true }
 lightcraft-meta = { workspace = true }
 lightcraft-raster = { workspace = true }
 lightcraft-color = { workspace = true }
@@ -26,8 +27,8 @@ craft-image-codecs = { workspace = true }
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
 proptest = { workspace = true }
-zune-jpegxl = { workspace = true }
-zune-core = { workspace = true }
+craft-jxl = { workspace = true }
+jixel = { workspace = true }
 # Pinned CC0 corpus identities; not a product dependency.
 sha2 = { version = "0.10", default-features = false, features = ["std"] }
 # Peak-heap regression tests (tests/sr2_heap.rs); not a product dependency.

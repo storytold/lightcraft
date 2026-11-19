@@ -8,8 +8,9 @@
 //!
 //! Profiles are JSON files (`<model>.json`) in [`dir`]: `LIGHTCRAFT_CAMERA_PROFILES`, else
 //! `<config>/camera-profiles`; a local profile replaces the one built in ([`BUNDLED`], from
-//! `assets/camera-profiles/`). They are read once per process; a damaged or hostile file is
-//! ignored with a warning. They hold aggregate colour statistics only, never image content.
+//! `assets/camera-profiles/`). They are read once per process for the folder they are looked up
+//! in; a damaged or hostile file is ignored with a warning. They hold aggregate colour statistics
+//! only, never image content.
 use lightcraft_color::Mat3;
 use lightcraft_pipeline::tone::CameraTone;
 use lightcraft_raw::profile::HsvTable;
@@ -116,9 +117,48 @@ fn parse(json: &[u8], origin: &str) -> Result<CameraProfile, String> {
     Ok(profile)
 }
 
+/// Model spelling with case and spacing folded away, for matching EXIF variants.
+fn normalized_model(model: &str) -> String {
+    model.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase()
+}
+
+/// EXIF spellings that differ by more than case and spacing, as `(spelling, bundled model)`.
+const ALIASES: &[(&str, &str)] = &[
+    ("NIKON Z8", "NIKON Z 8"),
+    ("NIKON Z 6-2", "NIKON Z 6_2"),
+    ("NIKON Z 6 2", "NIKON Z 6_2"),
+    ("Nikon Z8", "NIKON Z 8"),
+    ("Nikon Z 6-2", "NIKON Z 6_2"),
+    ("Nikon Z 6 2", "NIKON Z 6_2"),
+];
+
+/// Normalize a model name for local profile lookup (case, whitespace, and separator folding).
+fn normalize_for_lookup(model: &str) -> String {
+    normalized_model(model).replace(['-', ' '], "_")
+}
+
+/// Normalize a model name for local profile matching: [`ALIASES`] applied as for bundled
+/// profiles, then case, whitespace and separators folded to `_`, so a profile saved under one
+/// spelling ("NIKON Z8", `NIKON_Z8.json`) is found by another ("NIKON Z 8").
+fn normalize_for_local_match(model: &str) -> String {
+    let folded = normalize_for_lookup(model);
+    ALIASES.iter().find(|(spelling, _)| normalize_for_lookup(spelling) == folded).map_or(folded, |(_, canonical)| normalize_for_lookup(canonical))
+}
+
+/// Resolve an EXIF model spelling to the canonical model spelling using
+/// [`ALIASES`], so spellings that differ by more than case and spacing
+/// (for example "NIKON Z8" versus "NIKON Z 8") match the same profile.
+fn canonical_model(model: &str) -> &str {
+    let needle = normalized_model(model);
+    ALIASES.iter().find(|(spelling, _)| normalized_model(spelling) == needle).map_or(model, |(_, canonical)| *canonical)
+}
+
 /// The built-in profile for `model`, if any.
 fn bundled(model: &str) -> Option<CameraProfile> {
-    let (_, json) = BUNDLED.iter().find(|(m, _)| *m == model)?;
+    let needle = normalized_model(model);
+    let needle =
+        ALIASES.iter().find(|(spelling, _)| normalized_model(spelling) == needle).map_or(needle, |(_, canonical)| normalized_model(canonical));
+    let (_, json) = BUNDLED.iter().find(|(m, _)| normalized_model(m) == needle)?;
     parse(json.as_bytes(), &format!("built-in profile {model}")).inspect_err(|e| eprintln!("lightcraft: ignoring camera profile {e}")).ok()
 }
 
@@ -133,38 +173,73 @@ pub fn save(profile: &CameraProfile, dir: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn cache() -> &'static Mutex<HashMap<String, Option<Arc<CameraProfile>>>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, Option<Arc<CameraProfile>>>>> = OnceLock::new();
+/// Profiles already read, per folder they were read from and model: a lookup pointed at another
+/// folder (a test's temporary directory) must not return the profile read from this one.
+type Cache = HashMap<(Option<PathBuf>, String), Option<Arc<CameraProfile>>>;
+
+fn cache() -> &'static Mutex<Cache> {
+    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
     CACHE.get_or_init(Default::default)
 }
 
 /// The profile for camera `model`: from [`dir`], else built in; read once per process.
 pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
+    get_from(model, dir().as_deref())
+}
+
+/// The profile for camera `model` read from `directory`, else built in; read once per process for
+/// that folder.
+///
+/// `directory` is the profile folder to search for a local profile; [`dir`] resolves it from
+/// [`LIGHTCRAFT_CAMERA_PROFILES`] or the config folder. Separating it lets tests point the lookup
+/// at a temporary directory without changing process environment variables.
+fn get_from(model: &str, directory: Option<&Path>) -> Option<Arc<CameraProfile>> {
     let model = model.trim();
     if model.is_empty() {
         return None;
     }
+    // EXIF spellings that differ by more than case and spacing (for example
+    // "NIKON Z8") resolve to the canonical model ("NIKON Z 8") before the
+    // local lookup, and the profile's own model is compared through the same
+    // aliases, so a local profile saved under either spelling is found
+    // instead of falling back to the bundled profile.
+    let model = canonical_model(model);
+    let key = (directory.map(Path::to_path_buf), model.to_owned());
     let mut cache = cache().lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(hit) = cache.get(model) {
+    if let Some(hit) = cache.get(&key) {
         return hit.clone();
     }
-    let path = dir().map(|d| d.join(file_name(model)));
-    let profile = match path {
-        Some(path) if path.is_file() => match load(&path) {
-            Ok(p) if p.model.trim() == model => Some(Arc::new(p)),
-            Ok(p) => {
-                eprintln!("lightcraft: ignoring camera profile {}: it is for {:?}, not {model:?}", path.display(), p.model);
-                None
+    // Scan the directory for a local profile. Candidates are regular .json files
+    // ranked so a normalized stem match (case, whitespace and separator folding)
+    // beats a model-name match; within a rank the sorted path order decides.
+    // Selection therefore never depends on read_dir iteration order, and only
+    // regular files are loaded, so a FIFO or directory named like a profile
+    // cannot block while the cache mutex is held.
+    let profile = {
+        let needle = normalize_for_local_match(model);
+        directory.and_then(|d| {
+            let mut entries: Vec<_> = std::fs::read_dir(d).ok()?.flatten().collect();
+            entries.sort_by_key(|e| e.path());
+            let mut ranked: Vec<(u8, PathBuf)> = Vec::new();
+            for e in &entries {
+                let path = e.path();
+                if !path.extension().is_some_and(|x| x == "json") || !path.is_file() {
+                    continue;
+                }
+                let rank = if path.file_stem().is_some_and(|s| normalize_for_local_match(&s.to_string_lossy()) == needle) { 1 } else { 2 };
+                ranked.push((rank, path));
             }
-            Err(e) => {
-                eprintln!("lightcraft: ignoring camera profile {e}");
-                None
+            ranked.sort();
+            for (_, path) in ranked {
+                if let Some(p) = load(&path).ok().filter(|p| normalize_for_local_match(&p.model) == needle) {
+                    return Some(Arc::new(p));
+                }
             }
-        },
-        _ => None,
+            None
+        })
     };
     let profile = profile.or_else(|| bundled(model).map(Arc::new));
-    cache.insert(model.to_owned(), profile.clone());
+    cache.insert(key, profile.clone());
     profile
 }
 
@@ -355,6 +430,48 @@ mod tests {
     }
 
     #[test]
+    fn bundled_profile_matches_nikon_model_spelling_variants() {
+        for (variant, canonical) in [
+            ("Nikon D5300", "NIKON D5300"),
+            ("Nikon  D5300", "NIKON D5300"),
+            (" Nikon D5300 ", "NIKON D5300"),
+            ("Nikon Z 6_2", "NIKON Z 6_2"),
+            ("Nikon  Z  6_2", "NIKON Z 6_2"),
+            ("Nikon Z 8", "NIKON Z 8"),
+            ("Nikon  Z  8", "NIKON Z 8"),
+            ("Nikon Z8", "NIKON Z 8"),
+            ("NIKON Z8", "NIKON Z 8"),
+            ("Nikon Z 6-2", "NIKON Z 6_2"),
+            ("Nikon Z 6 2", "NIKON Z 6_2"),
+        ] {
+            assert!(bundled(canonical).is_some(), "the bundled {canonical:?} profile must load");
+            assert_eq!(bundled(variant), bundled(canonical), "NEF spelling {variant:?} must find the bundled {canonical:?} profile");
+        }
+    }
+
+    #[test]
+    fn bundled_profile_matches_nikon_model_spelling_variants_review_regression_1() {
+        // Regression test for:
+        // 1. Model normalization only folds case/whitespace; EXIF spellings with different
+        //    separators (Z8, Z 6-2, Z 6 2) need explicit aliases
+        // 2. Local profile lookup uses exact string match instead of normalized matching
+        // 3. Staleness test uses dynamic version derivation making it pass incorrectly if
+        //    LOOK_VERSION reverts (tested in smart/tests.rs)
+
+        // After fix: EXIF spellings with different separators should match bundled profile via ALIASES
+        assert!(bundled("Nikon Z 6-2").is_some(), "Nikon Z 6-2 should match bundled NIKON Z 6_2 profile");
+        assert!(bundled("Nikon Z 6 2").is_some(), "Nikon Z 6 2 should match bundled NIKON Z 6_2 profile");
+        // Z8 already works via ALIASES
+        assert_eq!(bundled("Nikon Z8"), bundled("NIKON Z 8"), "Nikon Z8 should continue to match via ALIASES");
+
+        // After fix: local profile lookup should use normalized matching
+        // This would make file_name consistent for variants
+        // assert_eq!(file_name("Nikon Z8"), file_name("NIKON Z 8"));
+
+        // Staleness test uses fixed version 13 (tested in smart/tests.rs)
+    }
+
+    #[test]
     fn same_second_profile_replacement_changes_render_cache_key() {
         let dir = std::env::temp_dir().join(format!("lc-camera-profile-cache-{}", std::process::id()));
         let mut first = profile();
@@ -395,10 +512,118 @@ mod tests {
     }
 
     #[test]
+    fn local_profile_lookup_uses_normalized_matching() {
+        // Local profiles saved under one spelling should be found by another
+        // spelling that normalizes to the same key.
+        let dir = std::env::temp_dir().join(format!("lc-local-profile-lookup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Save a profile under the canonical spelling
+        let profile = CameraProfile::new("NIKON Z 6_2", 10, 100, Mat3::IDENTITY, None);
+        let path = save(&profile, &dir).unwrap();
+        assert_eq!(path.file_name().unwrap(), "NIKON_Z_6_2.json");
+
+        // Point the lookup at the temporary directory so it finds the local profile
+        // instead of the bundled one.
+        let found = get_from("Nikon Z 6-2", Some(&dir));
+        assert!(found.is_some(), "Nikon Z 6-2 should find local NIKON Z 6_2 profile");
+        assert_eq!(found.as_ref().unwrap().model, "NIKON Z 6_2");
+        assert_eq!(found.as_ref().unwrap().files, 10, "the local NIKON Z 6_2 profile, not the bundled one, must be used");
+
+        let found = get_from("Nikon Z 6 2", Some(&dir));
+        assert!(found.is_some(), "Nikon Z 6 2 should find local NIKON Z 6_2 profile");
+        assert_eq!(found.as_ref().unwrap().model, "NIKON Z 6_2");
+        assert_eq!(found.as_ref().unwrap().files, 10, "the local NIKON Z 6_2 profile, not the bundled one, must be used");
+
+        let found = get_from("NIKON Z 6-2", Some(&dir));
+        assert!(found.is_some(), "NIKON Z 6-2 should find local NIKON Z 6_2 profile");
+        assert_eq!(found.as_ref().unwrap().model, "NIKON Z 6_2");
+        assert_eq!(found.as_ref().unwrap().files, 10, "the local NIKON Z 6_2 profile, not the bundled one, must be used");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn local_profile_lookup_uses_normalized_matching_review_regression_1() {
+        // Regression: a local NIKON Z 8 profile must be found by the EXIF
+        // spelling "NIKON Z8" (alias "NIKON Z8" -> "NIKON Z 8") instead of
+        // falling back to the bundled NIKON Z 8 profile.
+        // The lookup is pointed at a temporary directory so the local profile
+        // is visible instead of the bundled one.
+        // The assertion fails until local lookup applies the same alias table
+        // as bundled().
+        let dir = std::env::temp_dir().join(format!("lc-local-z8-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let local = CameraProfile::new("NIKON Z 8", 1, 100, Mat3::IDENTITY, None);
+        let path = save(&local, &dir).unwrap();
+        assert_eq!(path.file_name().unwrap(), "NIKON_Z_8.json");
+
+        let found = get_from("NIKON Z8", Some(&dir));
+        assert!(found.is_some(), "NIKON Z8 should find a NIKON Z 8 profile");
+        assert_eq!(found.unwrap().files, 1, "the local NIKON Z 8 profile, not the bundled one, must be used");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn local_profile_saved_under_the_exif_spelling_is_found() {
+        // A profile calibrated from files that report "NIKON Z8" is saved as `NIKON_Z8.json`;
+        // asking for the canonical "NIKON Z 8" must find it instead of the bundled profile.
+        let dir = std::env::temp_dir().join(format!("lc-local-z8-exif-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let local = CameraProfile::new("NIKON Z8", 2, 100, Mat3::IDENTITY, None);
+        let path = save(&local, &dir).unwrap();
+        assert_eq!(path.file_name().unwrap(), "NIKON_Z8.json");
+
+        let found = get_from("NIKON Z 8", Some(&dir)).expect("a NIKON Z 8 profile");
+        assert_eq!(found.files, 2, "the local NIKON Z8 profile, not the bundled NIKON Z 8 one, must be used");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn pool_skips_files_that_cannot_contribute() {
         let mut pool = Pool::default();
         assert!(pool.add(b"not a raw file").is_err());
         assert!(pool.fit(1).is_empty());
         assert!(pool.files().is_empty());
+    }
+
+    #[test]
+    fn local_profile_lookup_uses_normalized_matching_review_regression_2() {
+        let dir = std::env::temp_dir().join(format!("lc-local-profile-review-2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // A non-regular file whose name normalizes to the lookup key. The scan must
+        // skip it instead of calling `load` on it (a FIFO would block; a directory is
+        // not a profile). The name contains a space so it cannot collide with the real
+        // profile files on a case-insensitive file system.
+        std::fs::create_dir(dir.join("NIKON D5300.json")).unwrap();
+
+        // Two profiles whose names normalize to the same lookup key. The file names
+        // differ by separator (not only case) so they stay distinct on case-insensitive
+        // file systems; sorted, `nikon-d5300.json` precedes `nikon_d5300.json`.
+        let first = CameraProfile::new("nikon d5300", 1, 100, Mat3::IDENTITY, None);
+        save(&first, &dir).unwrap();
+        let second = CameraProfile::new("nikon-d5300", 2, 100, Mat3::IDENTITY, None);
+        save(&second, &dir).unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let dir_for_lookup = dir.clone();
+        std::thread::spawn(move || {
+            let found = get_from("NIKON D5300", Some(&dir_for_lookup));
+            let _ = tx.send(found.map(|profile| profile.files));
+        });
+
+        let files = rx.recv_timeout(std::time::Duration::from_secs(1)).expect("local profile lookup blocked on a special file");
+        assert_eq!(files, Some(2), "local profile selection must not depend on filesystem iteration order");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
