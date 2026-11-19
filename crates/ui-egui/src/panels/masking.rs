@@ -209,6 +209,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
             crate::widgets::context_menu(&resp, |ui| mask_menu(app, ui, m.id, &m.name, m.visible, index, count));
         }
+        // a new mask's Describe field sits under the list (the Create popup has closed by then)
+        describe_field(app, ui, true);
         ui.add_space(8.0);
         overlay_toolbar(app, ui);
     });
@@ -960,10 +962,7 @@ fn create_mask(app: &mut LightcraftApp, ui: &mut egui::Ui, kind: &str) {
     }
     set_selection_mode(app, ui, true);
     ui.data_mut(|data| data.insert_temp(egui::Id::unique("mask-create-range"), false));
-    // Describe's field is drawn in the popup (existing mask) or below the tiles: keep the popup open
-    if kind != "prompt" {
-        egui::Popup::close_all(ui.ctx());
-    }
+    egui::Popup::close_all(ui.ctx());
 }
 
 fn creation_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {

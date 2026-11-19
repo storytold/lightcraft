@@ -974,12 +974,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     let mut spot = settings.spots[i].clone();
                     spot.mode = mode.unwrap_or(spot.mode);
                     // pick the source for the geometry the edit will produce, not the old one
-                    if let Some(d) = point(p, "move") {
-                        spot.points.iter_mut().for_each(|q| *q = Point::new(q.x + d.x, q.y + d.y));
-                    }
-                    if let Some(v) = p.get("size").and_then(Value::as_f64) {
-                        spot.size = v.clamp(SPOT_SIZE.0, SPOT_SIZE.1);
-                    }
+                    apply_target_geometry(&mut spot, p);
                     if spot.source_offset.is_none() && p.get("source").is_none() && p.get("moveSource").is_none() {
                         pick_source(s, id, &settings, &spot, None)
                     } else {
@@ -993,19 +988,14 @@ pub fn specs() -> Vec<CommandSpec> {
                     if let Some(source) = source {
                         sp.source_offset = Some(source);
                     }
-                    if let Some(d) = point(p, "move") {
-                        sp.points.iter_mut().for_each(|q| *q = Point::new(q.x + d.x, q.y + d.y));
-                        // the source moves along (its offset is relative to the target)
-                    }
+                    // the source moves along with the target (its offset is relative to it)
+                    apply_target_geometry(sp, p);
                     if let Some(o) = point(p, "source") {
                         sp.source_offset = Some(o);
                     }
                     if let Some(d) = point(p, "moveSource") {
                         let o = sp.source_offset.unwrap_or(Point::new(0.0, 0.0));
                         sp.source_offset = Some(Point::new(o.x + d.x, o.y + d.y));
-                    }
-                    if let Some(v) = p.get("size").and_then(Value::as_f64) {
-                        sp.size = v.clamp(SPOT_SIZE.0, SPOT_SIZE.1);
                     }
                     if let Some(v) = p.get("feather").and_then(Value::as_f64) {
                         sp.feather = v.clamp(0.0, 100.0);
@@ -1166,6 +1156,17 @@ fn spots_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Spo
 }
 
 /// An automatic source for `spot` on photo `id` (a small proxy of the photo, framed by `d`).
+/// The `move` and `size` of a `spot.update`: used both to choose a Heal / Clone source for the
+/// geometry the edit produces and to commit that geometry, so the two never differ.
+fn apply_target_geometry(spot: &mut Spot, p: &Value) {
+    if let Some(d) = point(p, "move") {
+        spot.points.iter_mut().for_each(|q| *q = Point::new(q.x + d.x, q.y + d.y));
+    }
+    if let Some(v) = p.get("size").and_then(Value::as_f64) {
+        spot.size = v.clamp(SPOT_SIZE.0, SPOT_SIZE.1);
+    }
+}
+
 fn pick_source(s: &mut Session, id: crate::PhotoId, d: &lightcraft_develop::DevelopSettings, spot: &Spot, avoid: Option<Point>) -> Option<Point> {
     let src = s.source_now(id, crate::media::SourceLevel::Thumb).ok()?;
     let info = s.source_info(id);
