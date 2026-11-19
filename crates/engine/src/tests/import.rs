@@ -2540,13 +2540,13 @@ impl SmartLookCase {
     fn new(format: &str) -> Self {
         let src = temp_dir(&format!("smartlook-src-{format}"));
         let lib = temp_dir(&format!("smartlook-lib-{format}"));
-        write_png(&src.join("a.png"), 3);
+        std::fs::write(src.join("a.dng"), crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
         write_png(&src.join("b.png"), 9);
         let mut session = Session::new().with_fs();
         session.open_library(&lib, false).unwrap();
-        session.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy(), src.join("b.png").to_string_lossy()]})).unwrap();
+        session.execute("library.import", &json!({"paths": [src.join("a.dng").to_string_lossy(), src.join("b.png").to_string_lossy()]})).unwrap();
         let find = |s: &Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().id;
-        let (id, png_id) = (find(&session, "a.png"), find(&session, "b.png"));
+        let (id, png_id) = (find(&session, "a.dng"), find(&session, "b.png"));
         // `a` stands for a raw that takes the per-file camera look (the test loader decodes its pixels)
         let mut raw = (**session.catalog.photo(id).unwrap()).clone();
         raw.format = format.into();

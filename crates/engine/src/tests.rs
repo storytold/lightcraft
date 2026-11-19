@@ -57,6 +57,8 @@ mod slide;
 mod slideshow_export;
 #[cfg(not(target_arch = "wasm32"))]
 mod slow_drive;
+#[cfg(not(target_arch = "wasm32"))]
+mod smart_interpretation;
 mod spots;
 mod sync;
 mod view_follow;

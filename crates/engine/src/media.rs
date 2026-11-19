@@ -37,6 +37,7 @@ mod source;
 pub use cache::DenoiseIndex;
 #[cfg(test)]
 pub(crate) use cache::rendered_budget;
+pub(crate) use quick::decoder_key;
 pub use quick::{QuickJob, QuickSource, content_key, source_info};
 pub use render::{RenderJob, RenderResult, ScreenFrame, develop, develop_reporting, fit_cached, fit_for_display};
 #[cfg(test)]
@@ -78,6 +79,8 @@ pub struct MediaCache {
     /// Whether originals (and smart previews) are on disk: cached and checked off the UI thread
     /// in the app (see [`crate::availability`]).
     pub availability: crate::availability::Availability,
+    /// Compatible, decodable smart previews: background-checked for UI status in the app.
+    pub smart_availability: crate::smart::Availability,
     scenes: Vec<lightcraft_scenes::Scene>,
     /// Rendered thumbnails (memory, plus disk once a library is attached).
     pub rendered: Arc<PreviewCache>,
