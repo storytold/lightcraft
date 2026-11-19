@@ -2409,6 +2409,9 @@ fn legacy_subject_says_so_once_per_session() {
     assert!(toast(&h).is_some_and(|t| t.contains("Subject") && t.contains("SAM 3")), "{:?}", toast(&h));
     assert_eq!(develop(&h).masks[0].components[0].shape, MaskShape::Subject);
     h.app.ui.toast = None;
+    // a ui.set (a script, the control channel) doesn't make the session forget it said so
+    let r = h.request("ui.set", json!({"brushSize": 0.05}), T);
+    assert_eq!(r["ok"], true, "{r}");
     exec(&mut h, "mask.add", json!({"kind": "background"}));
     assert_eq!(toast(&h), None, "said once per session");
     assert_eq!(develop(&h).masks[1].components[0].shape, MaskShape::Background);

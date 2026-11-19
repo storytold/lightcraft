@@ -424,6 +424,9 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                     u.toast = app.ui.toast.clone();
                     u.dialog = app.ui.dialog.clone();
                     u.status = app.ui.status.clone();
+                    // (session state: "said once per session" must survive a ui.set)
+                    u.legacy_sky_noticed = app.ui.legacy_sky_noticed;
+                    u.legacy_subject_noticed = app.ui.legacy_subject_noticed;
                     crate::docking::cancel_replaced_gesture(app, u.docking.as_ref());
                     app.ui = u;
                     crate::i18n::set_language(app.ui.language);

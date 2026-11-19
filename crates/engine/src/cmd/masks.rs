@@ -115,10 +115,12 @@ fn add_sam_subject(s: &mut Session, kind: &str, p: &Value, into: Option<(u32, Ma
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
     let (point, from) = super::develop::subject_point(s, id, c)?;
     let invert = (kind == "background") != bool_or(p, "invert", false);
+    // (not inverted while it waits: an inverted empty component would select the whole photo;
+    // the result sets it)
     let waiting = MaskComponent {
         name: None,
         op: into.map_or(MaskOp::Add, |(_, op)| op),
-        invert,
+        invert: false,
         shape: MaskShape::Object { hint: vec![], exclude: vec![], seg: None, detail: vec![], edge: 0.0 },
     };
     let (mask, comp, mut out) = match into {
@@ -145,7 +147,7 @@ fn add_sam_subject(s: &mut Session, kind: &str, p: &Value, into: Option<(u32, Ma
         }
     };
     let focus = (from == "camera").then_some(point);
-    if let Err(e) = s.segment_subject_later(id, mask, comp, point, focus) {
+    if let Err(e) = s.segment_subject_later(id, mask, comp, point, focus, Some(invert)) {
         // nothing half-made: the waiting component goes again
         let _ = s.execute("edit.undo", &json!({}));
         return Err(ai_err(e));

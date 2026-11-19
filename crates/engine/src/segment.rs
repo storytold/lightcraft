@@ -69,7 +69,7 @@ pub(crate) enum Tag {
     Detail { photo: PhotoId, mask: u32, comp: usize, shape: MaskShape },
     /// Find Subject for component `comp` of mask `mask` (an Object waiting for it): the people /
     /// animals found become a "person" Describe selection; none, the object at `point`.
-    Subject { photo: PhotoId, mask: u32, comp: usize, point: Point },
+    Subject { photo: PhotoId, mask: u32, comp: usize, point: Point, request: u64 },
 }
 
 /// The model input: 8-bit RGB.
@@ -97,6 +97,16 @@ pub struct PendingClicks {
     pub comp: usize,
     pub hint: Vec<Point>,
     pub exclude: Vec<Point>,
+}
+
+/// A Find Subject request a component waits for ([`Session::segment_subject_later`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SubjectFill {
+    pub request: u64,
+    /// For the Subject / Background tiles: the component's inversion once filled (Background's
+    /// is set only then, so the waiting, empty component doesn't select the whole photo), and a
+    /// failed request removes the waiting component. `None` (Lens Blur's Find Subject): neither.
+    pub invert: Option<bool>,
 }
 
 /// What [`Session::segment_poll`] did.
@@ -133,6 +143,12 @@ pub struct Segmenter {
     /// desktop app); otherwise commands wait for their result (CLI, MCP, tests).
     pub background: bool,
     pending: Option<PendingClicks>,
+    /// The Find Subject requests waiting, by (photo, mask, component): a result for a request that
+    /// isn't the latest for its component (removed, or replaced after an undo) is dropped.
+    #[cfg(feature = "sam")]
+    subjects: std::collections::HashMap<(PhotoId, u32, usize), SubjectFill>,
+    #[cfg(feature = "sam")]
+    next_request: u64,
     messages: Vec<String>,
     #[cfg(feature = "sam")]
     worker: worker::Worker,
@@ -151,6 +167,10 @@ impl Default for Segmenter {
             mirrors_file: None,
             background: false,
             pending: None,
+            #[cfg(feature = "sam")]
+            subjects: std::collections::HashMap::new(),
+            #[cfg(feature = "sam")]
+            next_request: 0,
             messages: Vec::new(),
             #[cfg(feature = "sam")]
             worker: worker::Worker::default(),
@@ -592,12 +612,23 @@ impl Session {
     /// falls on when the file records it; when the subject is neither, the object at `point`. In
     /// background mode [`Session::segment_poll`] applies the result; otherwise it is applied
     /// before this returns.
-    pub(crate) fn segment_subject_later(&mut self, id: PhotoId, mask: u32, comp: usize, point: Point, focus: Option<Point>) -> Result<(), String> {
+    pub(crate) fn segment_subject_later(
+        &mut self,
+        id: PhotoId,
+        mask: u32,
+        comp: usize,
+        point: Point,
+        focus: Option<Point>,
+        invert: Option<bool>,
+    ) -> Result<(), String> {
         self.segmenter.model_dir()?;
         #[cfg(feature = "sam")]
         {
             let kind = worker::Kind::Subject { focus: focus.map(|p| (p.x as f32, p.y as f32)) };
-            let tag = Tag::Subject { photo: id, mask, comp, point };
+            let request = self.segmenter.next_request;
+            self.segmenter.next_request = request.wrapping_add(1);
+            self.segmenter.subjects.insert((id, mask, comp), SubjectFill { request, invert });
+            let tag = Tag::Subject { photo: id, mask, comp, point, request };
             if self.segmenter.background {
                 return self.segment_queue(id, kind, tag, None);
             }
@@ -611,7 +642,7 @@ impl Session {
         }
         #[cfg(not(feature = "sam"))]
         {
-            let _ = (id, mask, comp, point, focus);
+            let _ = (id, mask, comp, point, focus, invert);
             Err("AI masks are not available in this build".into())
         }
     }
@@ -661,6 +692,34 @@ impl Session {
         }
     }
 
+    /// A Subject / Background tile's component still waiting for its selection after its request
+    /// failed: removed (with its mask when it was the only component), so nothing half-made stays.
+    /// Lens Blur's Find Subject (`fill.invert` `None`) keeps its waiting mask, as before.
+    #[cfg_attr(not(feature = "sam"), allow(dead_code))]
+    fn drop_waiting(&mut self, (photo, mask, comp): (PhotoId, u32, usize), fill: SubjectFill, polled: &mut Polled) {
+        if fill.invert.is_none() {
+            return;
+        }
+        let Some(d) = self.develop_of(photo) else { return };
+        let mut d = (*d).clone();
+        let Some(i) = d.masks.iter().position(|m| m.id == mask) else { return };
+        let waiting = |c: &lightcraft_develop::MaskComponent| matches!(&c.shape, MaskShape::Object { hint, seg: None, .. } if hint.is_empty());
+        if !d.masks[i].components.get(comp).is_some_and(waiting) {
+            return;
+        }
+        d.masks[i].components.remove(comp);
+        if d.masks[i].components.is_empty() {
+            d.masks.remove(i);
+            if self.active_mask == Some(mask) {
+                self.active_mask = None;
+            }
+        }
+        match self.set_develop(photo, d, "Subject") {
+            Ok(()) => polled.changed = true,
+            Err(e) => polled.messages.push(e.to_string()),
+        }
+    }
+
     /// Apply finished background requests (to masks that haven't changed since) and collect
     /// their messages. Cheap when nothing is pending: call it every frame.
     pub fn segment_poll(&mut self) -> Polled {
@@ -701,16 +760,24 @@ impl Session {
                     return; // newer clicks are on their way
                 }
                 self.segmenter.pending = None;
+                // (Find Subject's object at the point: the waiting Subject / Background's fill)
+                let fill = self.segmenter.subjects.remove(&(photo, mask, comp));
                 let seg = match o.result {
                     Ok(Some(seg)) => seg,
-                    Ok(None) => return,
-                    Err(e) => return polled.messages.push(e),
+                    Ok(None) => return fill.into_iter().for_each(|f| self.drop_waiting((photo, mask, comp), f, polled)),
+                    Err(e) => {
+                        fill.into_iter().for_each(|f| self.drop_waiting((photo, mask, comp), f, polled));
+                        return polled.messages.push(e);
+                    }
                 };
                 let Some(d) = self.develop_of(photo) else { return };
                 let mut d = (*d).clone();
                 let Some(c) = d.masks.iter_mut().find(|m| m.id == mask).and_then(|m| m.components.get_mut(comp)) else { return };
                 let MaskShape::Object { edge, .. } = c.shape else { return };
                 c.shape = MaskShape::Object { hint: latest.hint, exclude: latest.exclude, seg: Some(seg), detail: vec![], edge };
+                if let Some(invert) = fill.and_then(|f| f.invert) {
+                    c.invert = invert;
+                }
                 match self.set_develop(photo, d, "Object Mask") {
                     Ok(()) => {
                         polled.changed = true;
@@ -752,10 +819,18 @@ impl Session {
                     Err(e) => polled.messages.push(e.to_string()),
                 }
             }
-            Tag::Subject { photo, mask, comp, point } => {
+            Tag::Subject { photo, mask, comp, point, request } => {
+                let slot = (photo, mask, comp);
+                // only the latest request for this component: not one for a mask removed or
+                // replaced (an undo, then a new one with the same id) meanwhile
+                let Some(fill) = self.segmenter.subjects.get(&slot).copied().filter(|f| f.request == request) else { return };
                 let found = match o.result {
                     Ok(found) => found,
-                    Err(e) => return polled.messages.push(e),
+                    Err(e) => {
+                        self.segmenter.subjects.remove(&slot);
+                        self.drop_waiting(slot, fill, polled);
+                        return polled.messages.push(e);
+                    }
                 };
                 let Some(d) = self.develop_of(photo) else { return };
                 let mut d = (*d).clone();
@@ -768,19 +843,27 @@ impl Session {
                 let edge = *edge;
                 let seg = match found {
                     Some(seg) => seg,
-                    // neither a person nor an animal: the object at the point
+                    // neither a person nor an animal: the object at the point (the fill stays
+                    // for the clicks' result, which inverts Background)
                     None if self.segmenter.background => {
                         if let Err(e) = self.segment_clicks_later(photo, mask, comp, vec![point], Vec::new()) {
+                            self.segmenter.subjects.remove(&slot);
+                            self.drop_waiting(slot, fill, polled);
                             polled.messages.push(e);
                         }
                         return;
                     }
                     None => {
+                        self.segmenter.subjects.remove(&slot);
                         match self.segment_clicks(photo, &clicks_of(&[point], &[])) {
                             Ok(seg) => {
-                                c.shape = MaskShape::Object { hint: vec![point], exclude: Vec::new(), seg: Some(seg), detail: Vec::new(), edge }
+                                c.shape = MaskShape::Object { hint: vec![point], exclude: Vec::new(), seg: Some(seg), detail: Vec::new(), edge };
+                                c.invert = fill.invert.unwrap_or(c.invert);
                             }
-                            Err(e) => return polled.messages.push(e),
+                            Err(e) => {
+                                self.drop_waiting(slot, fill, polled);
+                                return polled.messages.push(e);
+                            }
                         }
                         if let Err(e) = self.set_develop(photo, d, "Find Subject") {
                             polled.messages.push(e.to_string());
@@ -790,8 +873,10 @@ impl Session {
                         return;
                     }
                 };
+                self.segmenter.subjects.remove(&slot);
                 let text = SUBJECT_PROMPT.to_string();
                 c.shape = MaskShape::Prompt { text, seg: Some(seg), detail: Vec::new(), edge };
+                c.invert = fill.invert.unwrap_or(c.invert);
                 match self.set_develop(photo, d, "Find Subject") {
                     Ok(()) => polled.changed = true,
                     Err(e) => polled.messages.push(e.to_string()),
@@ -902,10 +987,14 @@ mod tests {
             let d = s.develop_of(id).unwrap();
             let (mask, c) = (d.masks[0].id, &d.masks[0].components[0]);
             assert!(matches!(&c.shape, MaskShape::Object { hint, seg: None, .. } if hint.is_empty()), "{kind}: {:?}", c.shape);
-            assert_eq!(c.invert, invert, "{kind}");
             // the people / animals found (the worker's own result, failing on this model, is a message)
             let point = Point::new(0.5, 0.5);
-            let tag = Tag::Subject { photo: id, mask, comp: 0, point };
+            // a newer request for the component: the worker's own (failing) result is now stale
+            let fill = s.segmenter.subjects.get(&(id, mask, 0)).copied().expect("the request is recorded");
+            assert_eq!(fill.invert, Some(invert), "{kind}: inverted once filled");
+            assert!(!c.invert, "{kind}: not while it waits, so it selects nothing meanwhile");
+            s.segmenter.subjects.insert((id, mask, 0), SubjectFill { request: 999, invert: Some(invert) });
+            let tag = Tag::Subject { photo: id, mask, comp: 0, point, request: 999 };
             let found = seg_box(20, 5, 5, 15, 15);
             s.segmenter.results.0.send(worker::Outcome { tag, result: Ok(Some(found.clone())), superseded: false, notice: None }).unwrap();
             let start = std::time::Instant::now();
@@ -926,10 +1015,49 @@ mod tests {
             assert_eq!(r["pending"], true);
             let d = s.develop_of(id).unwrap();
             let c = d.masks[0].components.last().unwrap();
-            assert_eq!((c.op, c.invert), (MaskOp::Subtract, invert), "{kind}");
+            assert_eq!((c.op, c.invert), (MaskOp::Subtract, false), "{kind}: inverted only once filled");
             assert!(matches!(&c.shape, MaskShape::Object { hint, .. } if hint.is_empty()));
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A Subject result for a request that isn't the component's latest (its mask undone and a new
+    /// one made with the same id) is dropped; a failed request removes the waiting component, and
+    /// its mask when that was the only one; Lens Blur's Find Subject keeps its waiting mask.
+    #[cfg(feature = "sam")]
+    #[test]
+    fn stale_subject_results_are_dropped_and_failures_leave_nothing_half_made() {
+        use lightcraft_develop::{Mask, MaskComponent, MaskOp};
+        let mut s = Session::with_demo();
+        let id = s.active().unwrap();
+        let waiting = || MaskShape::Object { hint: vec![], exclude: vec![], seg: None, detail: vec![], edge: 0.0 };
+        let mut d = (*s.develop_of(id).unwrap()).clone();
+        d.masks.push(Mask {
+            id: 5,
+            components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: waiting() }],
+            ..Default::default()
+        });
+        s.set_develop(id, d, "test").unwrap();
+        let point = Point::new(0.5, 0.5);
+        let send = |s: &mut Session, request, result| {
+            let tag = Tag::Subject { photo: id, mask: 5, comp: 0, point, request };
+            s.segmenter.results.0.send(worker::Outcome { tag, result, superseded: false, notice: None }).unwrap();
+            s.segment_poll()
+        };
+        // the latest request is 2: request 1's result is stale
+        s.segmenter.subjects.insert((id, 5, 0), SubjectFill { request: 2, invert: Some(true) });
+        assert!(!send(&mut s, 1, Ok(Some(seg_box(20, 5, 5, 15, 15)))).changed, "a stale result is dropped");
+        assert_eq!(s.develop_of(id).unwrap().masks[0].components[0].shape, waiting());
+        // the latest one fails: the waiting component goes, with its mask
+        let polled = send(&mut s, 2, Err("boom".into()));
+        assert_eq!(polled.messages, vec!["boom".to_string()]);
+        assert!(s.develop_of(id).unwrap().masks.is_empty(), "no half-made mask stays");
+        assert!(s.segmenter.subjects.is_empty());
+        // Lens Blur's Find Subject (no fill inversion) keeps its waiting mask on failure, as before
+        s.execute("edit.undo", &serde_json::json!({})).unwrap();
+        s.segmenter.subjects.insert((id, 5, 0), SubjectFill { request: 3, invert: None });
+        send(&mut s, 3, Err("boom".into()));
+        assert_eq!(s.develop_of(id).unwrap().masks[0].components[0].shape, waiting());
     }
 
     /// Waiting for the model (no background worker) that then fails leaves no half-made mask.
@@ -973,7 +1101,8 @@ mod tests {
         s.set_develop(id, d, "test").unwrap();
         let point = Point::new(0.4, 0.5);
         let send = |s: &mut Session, result| {
-            let tag = Tag::Subject { photo: id, mask: 3, comp: 0, point };
+            s.segmenter.subjects.insert((id, 3, 0), SubjectFill { request: 7, invert: None });
+            let tag = Tag::Subject { photo: id, mask: 3, comp: 0, point, request: 7 };
             s.segmenter.results.0.send(worker::Outcome { tag, result, superseded: false, notice: None }).unwrap();
             s.segment_poll()
         };

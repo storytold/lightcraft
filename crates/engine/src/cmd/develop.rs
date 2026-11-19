@@ -582,7 +582,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     .and_then(|v| u32::try_from(v).ok())
                     .ok_or_else(|| bad(C, "the subject mask was not created"))?;
                 let focus = (from == "camera").then_some(point);
-                if let Err(e) = s.segment_subject_later(id, mask, 0, point, focus) {
+                if let Err(e) = s.segment_subject_later(id, mask, 0, point, focus, None) {
                     // nothing half-made: the empty mask goes again
                     let _ = s.execute("edit.undo", &json!({}));
                     return Err(crate::EngineError::Other(e));
