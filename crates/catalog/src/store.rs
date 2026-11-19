@@ -180,11 +180,14 @@ impl FsStore {
     }
     /// Where the file `name` is. A name is a file of the library's folder, or of its segments
     /// folder (`segments/<file>`): anything else (an absolute name, `..`, deeper folders) would
-    /// leave the library and is refused before the file system is touched.
+    /// leave the library and is refused before the file system is touched. The log has one
+    /// spelling only: the store knows it (its thread, its recorded length) by that name, while a
+    /// case-insensitive folder would let another spelling reach the same file behind its back.
     fn path(&self, name: &str) -> io::Result<PathBuf> {
         let valid_part = |p: &str| !matches!(p, "" | "." | "..") && !p.contains(['\\', ':', '\0', '/']);
+        let other_spelling_of_the_log = name != crate::journal::LOG && name.eq_ignore_ascii_case(crate::journal::LOG);
         let ok = match name.split_once('/') {
-            None => valid_part(name) && name != crate::segments::SEGMENT_DIR,
+            None => valid_part(name) && name != crate::segments::SEGMENT_DIR && !other_spelling_of_the_log,
             Some((folder, file)) => folder == crate::segments::SEGMENT_DIR && valid_part(file),
         };
         if ok {
@@ -192,6 +195,16 @@ impl FsStore {
         } else {
             Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{name:?} is not a name of the catalog's files")))
         }
+    }
+    /// The staging file of `name` (`<name>.tmp`, beside it). A name that itself ends in `.tmp` is a
+    /// staging name, which a write clears (a leftover of a crashed save): no file is written under
+    /// one, so a write never removes a file that was stored. Such a name can still be read, listed
+    /// and removed, so that a leftover can be.
+    fn staging_path(&self, name: &str) -> io::Result<PathBuf> {
+        if name.ends_with(".tmp") {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{name:?} is a staging name, no file is written under it")));
+        }
+        self.path(&format!("{name}.tmp"))
     }
     /// The folder a file is in: the library's, or the one its name states (`segments/…`).
     fn folder_of(&self, name: &str) -> io::Result<PathBuf> {
@@ -201,8 +214,12 @@ impl FsStore {
     /// folder isn't there (yet), an error when it is a file or a link (to a folder elsewhere).
     /// Nothing is created, so reading, cutting and removing never make a folder.
     fn existing_folder_of(&self, name: &str) -> io::Result<Option<PathBuf>> {
-        let folder = self.folder_of(name)?;
-        if folder == self.dir {
+        Self::existing_folder(self.folder_of(name)?, &self.dir)
+    }
+    /// `folder` if it is the library's folder or a real folder inside it; `Ok(None)` when it isn't
+    /// there (yet), an error when it is a file or a link.
+    fn existing_folder(folder: PathBuf, library: &Path) -> io::Result<Option<PathBuf>> {
+        if folder == library {
             return Ok(Some(folder));
         }
         match std::fs::symlink_metadata(&folder) {
@@ -269,7 +286,7 @@ impl FsStore {
     fn stage(&mut self, name: &str, fill: &mut dyn FnMut(&mut dyn io::Write) -> io::Result<()>) -> io::Result<(PathBuf, u64)> {
         use std::io::Write;
         self.folder.check()?;
-        let tmp = self.path(&format!("{name}.tmp"))?;
+        let tmp = self.staging_path(name)?;
         // (a file in a folder of the library: the folder is made when its first file is)
         self.folder_for(name)?;
         let mut file = create_staging(&tmp)?;
@@ -442,7 +459,7 @@ impl Store for FsStore {
             return Ok(());
         }
         self.folder.check()?;
-        let tmp = self.path(&format!("{name}.tmp"))?;
+        let tmp = self.staging_path(name)?;
         let folder = self.folder_for(name)?;
         let mut f = create_staging(&tmp)?;
         f.write_all(data)?;
@@ -479,13 +496,17 @@ impl Store for FsStore {
         // folder too, for that folder itself when it is new.
         // A failure is the snapshot's: `catalog.snap` must not name segments whose entries may
         // not survive a crash.
-        Self::sync_folder_checked(&self.dir.join(crate::segments::SEGMENT_DIR))?;
+        // (the segments folder, where it is: a link or a file there is an error, as for every other operation on it)
+        if let Some(segments) = Self::existing_folder(self.dir.join(crate::segments::SEGMENT_DIR), &self.dir)? {
+            Self::sync_folder_checked(&segments)?;
+        }
         Self::sync_folder_checked(&self.dir)
     }
 
     fn write_new_with(&mut self, name: &str, fill: &mut dyn FnMut(&mut dyn io::Write) -> io::Result<()>) -> io::Result<u64> {
         let (tmp, n) = self.stage(name, fill)?;
         commit_new(&tmp, &self.path(name)?)?;
+        self.reset_sync_log(name, n);
         Ok(n)
     }
 
@@ -976,5 +997,89 @@ mod tests_segment_folder {
         assert_eq!(std::fs::read(root.join("segments/1.json")).unwrap(), b"ab");
         assert_eq!(store.read("segments/2.json").unwrap(), None);
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod tests_names_and_sync {
+    use super::*;
+
+    fn library(tag: &str) -> (PathBuf, FsStore) {
+        let dir = std::env::temp_dir().join(format!("lc-names-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = FsStore::open(&dir).unwrap();
+        (dir, store)
+    }
+
+    /// A name that ends in `.tmp` is a staging name, which a write clears: no write is made under one, so no stored
+    /// file is lost to a staging file, while a leftover can still be read, listed and removed.
+    #[test]
+    fn no_file_is_written_under_a_staging_name() {
+        let (dir, mut store) = library("staging");
+        std::fs::create_dir_all(dir.join("segments")).unwrap();
+        std::fs::write(dir.join("segments/a.json.tmp"), b"old").unwrap();
+        let fill = &mut |w: &mut dyn io::Write| w.write_all(b"new");
+        for name in ["segments/a.json.tmp", "x.tmp"] {
+            assert_eq!(store.write_new_with(name, fill).unwrap_err().kind(), io::ErrorKind::InvalidInput, "{name}");
+            assert_eq!(store.write_atomic_with(name, fill).unwrap_err().kind(), io::ErrorKind::InvalidInput, "{name}");
+            assert_eq!(store.write_atomic(name, b"new").unwrap_err().kind(), io::ErrorKind::InvalidInput, "{name}");
+        }
+        assert_eq!(std::fs::read(dir.join("segments/a.json.tmp")).unwrap(), b"old", "the leftover was not touched");
+        assert!(!dir.join("x.tmp").exists() && !dir.join("x.tmp.tmp").exists());
+        assert_eq!(store.read("segments/a.json.tmp").unwrap(), Some(b"old".to_vec()));
+        assert!(store.list().unwrap().contains(&"segments/a.json.tmp".to_string()));
+        store.remove("segments/a.json.tmp").unwrap();
+        assert!(!dir.join("segments/a.json.tmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The log is known by one spelling (its thread and recorded length are kept under it), and a folder that ignores case
+    /// would let another one reach the same file: no call accepts one.
+    #[test]
+    fn the_log_has_one_spelling() {
+        let (dir, mut store) = library("log-name");
+        std::fs::write(dir.join("catalog.log"), b"abc").unwrap();
+        for name in ["CATALOG.LOG", "Catalog.log"] {
+            assert_eq!(store.remove(name).unwrap_err().kind(), io::ErrorKind::InvalidInput, "{name}");
+            assert_eq!(store.read(name).unwrap_err().kind(), io::ErrorKind::InvalidInput, "{name}");
+            assert_eq!(store.truncate(name, 1).unwrap_err().kind(), io::ErrorKind::InvalidInput, "{name}");
+            assert_eq!(store.append(name, b"d").unwrap_err().kind(), io::ErrorKind::InvalidInput, "{name}");
+            assert_eq!(store.write_atomic(name, b"d").unwrap_err().kind(), io::ErrorKind::InvalidInput, "{name}");
+        }
+        assert_eq!(std::fs::read(dir.join("catalog.log")).unwrap(), b"abc");
+        assert_eq!(store.read("catalog.log").unwrap(), Some(b"abc".to_vec()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A log made by `write_new_with` is the length the store recorded for it: after a read that found no log, cutting it
+    /// back is not refused as the replacement of a log of another length.
+    #[test]
+    fn a_log_created_by_write_new_with_can_be_cut() {
+        let (dir, mut store) = library("new-log");
+        assert_eq!(store.read("catalog.log").unwrap(), None);
+        store.write_new_with("catalog.log", &mut |w| w.write_all(b"abc")).unwrap();
+        store.truncate("catalog.log", 2).unwrap();
+        assert_eq!(std::fs::read(dir.join("catalog.log")).unwrap(), b"ab");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `sync` is for the folder that holds the new segments: a link or a file at `segments` is an error (the entries of the
+    /// folder it stands for are not made durable), a missing folder is nothing to sync, a real one is synced.
+    #[cfg(unix)]
+    #[test]
+    fn sync_refuses_a_segments_folder_that_is_not_a_real_folder() {
+        let (dir, mut store) = library("sync");
+        store.sync().unwrap();
+        std::fs::create_dir_all(dir.join("segments")).unwrap();
+        store.sync().unwrap();
+        std::fs::remove_dir(dir.join("segments")).unwrap();
+        let outside = dir.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("segments")).unwrap();
+        assert!(store.sync().unwrap_err().to_string().contains("not a folder"));
+        std::fs::remove_file(dir.join("segments")).unwrap();
+        std::fs::write(dir.join("segments"), b"not a folder").unwrap();
+        assert!(store.sync().unwrap_err().to_string().contains("not a folder"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
