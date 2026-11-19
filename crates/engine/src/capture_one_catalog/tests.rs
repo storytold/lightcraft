@@ -580,15 +580,40 @@ fn a_reference_with_a_fraction_points_at_no_row() {
 }
 
 #[test]
-fn without_a_variant_uuid_a_variant_is_known_by_its_key_not_its_place() {
-    let photo = CatalogPhoto { image_uuid: "IMAGE".into(), variant_id: Some(7), variant_index: 2, ..Default::default() };
+fn without_uuids_a_variant_is_known_by_its_keys_not_its_place() {
+    let photo = CatalogPhoto { image_id: 3, image_uuid: "IMAGE".into(), variant_id: Some(7), variant_index: 2, ..Default::default() };
     // an earlier variant was deleted: the same variant is now second
     let moved = CatalogPhoto { variant_index: 1, ..photo.clone() };
-    assert_eq!(convert::identity(&photo), "captureone:image:IMAGE:7");
-    assert_eq!(convert::identity(&moved), convert::identity(&photo));
+    assert_eq!(convert::identity(&photo, "DOC"), "captureone:image:IMAGE:7");
+    assert_eq!(convert::identity(&moved, "DOC"), convert::identity(&photo, "DOC"));
     let without_variant = CatalogPhoto { variant_id: None, variant_index: 0, ..photo.clone() };
-    assert_eq!(convert::identity(&without_variant), "captureone:image:IMAGE");
-    assert_eq!(convert::identity(&CatalogPhoto { variant_uuid: "V".into(), ..photo }), "captureone:V");
+    assert_eq!(convert::identity(&without_variant, "DOC"), "captureone:image:IMAGE");
+    assert_eq!(convert::identity(&CatalogPhoto { variant_uuid: "V".into(), ..photo.clone() }, "DOC"), "captureone:V");
+    // neither UUID: the rows' keys in this catalog
+    let bare = CatalogPhoto { image_uuid: String::new(), ..photo };
+    assert_eq!(convert::identity(&bare, "DOC"), "captureone:DOC:row:3:7");
+    assert_ne!(convert::identity(&bare, "DOC"), convert::identity(&bare, "OTHER"));
+}
+
+#[test]
+fn photos_without_uuids_keep_their_keys_when_an_earlier_image_is_deleted() {
+    let scratch = Scratch::new("bare");
+    let mut tables = sample(&scratch.0);
+    for name in ["ZIMAGE", "ZVARIANT"] {
+        for row in &mut table(&mut tables, name).rows {
+            row.retain(|(column, _)| !column.ends_with("UUID"));
+        }
+    }
+    let keys = |tables: &[Spec]| -> Vec<(i64, String)> {
+        let data = convert::to_import(read(&scratch.catalog(tables)).unwrap());
+        let catalog = read(&scratch.catalog(tables)).unwrap();
+        catalog.photos.iter().map(|p| p.image_id).zip(data.photos.into_iter().map(|p| p.uuid)).collect()
+    };
+    let before = keys(&tables);
+    assert!(before.iter().all(|(_, key)| key.contains(":row:")), "{before:?}");
+    table(&mut tables, "ZIMAGE").rows.remove(0);
+    let after = keys(&tables);
+    assert!(!after.is_empty() && after.iter().all(|kept| before.contains(kept)), "{before:?} {after:?}");
 }
 
 // ---- finding the database

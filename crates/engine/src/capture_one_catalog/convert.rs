@@ -79,6 +79,8 @@ pub(crate) fn to_import(catalog: CaptureOneCatalog) -> CatalogImport {
     let mut masters: HashMap<i64, i64> = HashMap::new();
     let mut photos = Vec::with_capacity(catalog.photos.len());
     let mut refused = 0usize;
+    // whose rows a photo without UUIDs is keyed on: the catalog's id, which its backups share
+    let rows_of = catalog.document_uuid.clone().unwrap_or_else(|| catalog.database.clone());
     for (at, photo) in catalog.photos.iter().enumerate() {
         let source_id = source_id(at);
         let master = if photo.variant_index == 0 {
@@ -93,7 +95,7 @@ pub(crate) fn to_import(catalog: CaptureOneCatalog) -> CatalogImport {
                 warnings.push(format!("image {source_id}: {} is not opened: {why}; listed as missing and not added", photo.path));
             }
         }
-        photos.push(import_photo(photo, source_id, master));
+        photos.push(import_photo(photo, source_id, master, &rows_of));
     }
     if refused > MAX_NAMED {
         warnings.push(format!("{} more image(s) are not opened; listed as missing and not added", refused - MAX_NAMED));
@@ -123,7 +125,7 @@ fn source_id(at: usize) -> i64 {
     i64::try_from(at).unwrap_or(i64::MAX - 1).saturating_add(1)
 }
 
-fn import_photo(photo: &CatalogPhoto, source_id: i64, master: i64) -> ImportPhoto {
+fn import_photo(photo: &CatalogPhoto, source_id: i64, master: i64, rows_of: &str) -> ImportPhoto {
     let here = photo.original == Original::Local && Path::new(&photo.path).is_file();
     let mut image: BTreeMap<String, Value> = BTreeMap::new();
     let mut set = |key: &str, value: Value| {
@@ -153,7 +155,7 @@ fn import_photo(photo: &CatalogPhoto, source_id: i64, master: i64) -> ImportPhot
     set("captureOne", kept(photo));
     ImportPhoto {
         source_id,
-        uuid: identity(photo),
+        uuid: identity(photo, rows_of),
         path: photo.path.clone(),
         image,
         settings: String::new(),
@@ -166,14 +168,15 @@ fn import_photo(photo: &CatalogPhoto, source_id: i64, master: i64) -> ImportPhot
 }
 
 /// What tells an earlier import of the same variant apart from a new photo: the variant's UUID,
-/// else the image's with the variant's key (not its place, which moves when an earlier variant
-/// is deleted). Empty when the catalog has neither (the import then goes by path and id).
-pub(super) fn identity(photo: &CatalogPhoto) -> String {
-    match (photo.variant_uuid.is_empty(), photo.image_uuid.is_empty(), photo.variant_id) {
-        (false, _, _) => format!("{PREFIX}{}", photo.variant_uuid),
-        (true, false, Some(variant)) => format!("{PREFIX}image:{}:{variant}", photo.image_uuid),
-        (true, false, None) => format!("{PREFIX}image:{}", photo.image_uuid),
-        (true, true, _) => String::new(),
+/// else the image's with the variant's key, else the image's and the variant's keys in the
+/// catalog `rows_of` names (its id, or its database's path). Never a photo's place in the catalog,
+/// which moves when an earlier image or variant is deleted.
+pub(super) fn identity(photo: &CatalogPhoto, rows_of: &str) -> String {
+    let variant = photo.variant_id.map(|id| format!(":{id}")).unwrap_or_default();
+    match (photo.variant_uuid.is_empty(), photo.image_uuid.is_empty()) {
+        (false, _) => format!("{PREFIX}{}", photo.variant_uuid),
+        (true, false) => format!("{PREFIX}image:{}{variant}", photo.image_uuid),
+        (true, true) => format!("{PREFIX}{rows_of}:row:{}{variant}", photo.image_id),
     }
 }
 

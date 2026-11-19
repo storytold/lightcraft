@@ -44,6 +44,10 @@ fn sqlite_error(e: String) -> ReadError {
 impl Db {
     pub(super) fn open(database: &Path) -> Result<Self, ReadError> {
         let source = FileSource::open(database).map_err(sqlite_error)?;
+        // only once the file is taken as it is: a transaction Capture One began before would
+        // otherwise be read as the catalog, and one it begins after changes the file, which
+        // `ensure_unchanged` sees
+        super::locate::refuse_while_written(database)?;
         let db = Database::open_file_with_wal(source, &[]).map_err(sqlite_error)?;
         let tables = db.live_tables().map_err(sqlite_error)?;
         Ok(Self { db, tables })

@@ -325,11 +325,7 @@ pub fn read(path: &Path) -> Result<CaptureOneCatalog, ReadError> {
 /// [`read`], stopping with [`ReadError::Cancelled`] once `cancel` is set.
 pub fn read_with_cancel(path: &Path, cancel: &AtomicBool) -> Result<CaptureOneCatalog, ReadError> {
     let found = locate::locate(path)?;
-    locate::refuse_while_written(&found.database)?;
     let db = tables::Db::open(&found.database)?;
-    // again, now that the reader has taken the file as it is: a transaction Capture One began
-    // between the first look and the open would otherwise be read as the baseline
-    locate::refuse_while_written(&found.database)?;
     db.check_schema()?;
     let active = || if cancel.load(Ordering::Relaxed) { Err(ReadError::Cancelled) } else { Ok(()) };
 
