@@ -1108,6 +1108,13 @@ fn global_descriptions(data: &str) -> Vec<(usize, usize)> {
                                 k = data.len();
                                 break;
                             }
+                        } else if rest2.starts_with("<?") {
+                            if let Some(rel2) = rest2[2..].find("?>") {
+                                k = s2 + 2 + rel2 + 2;
+                            } else {
+                                k = data.len();
+                                break;
+                            }
                         } else if let Some(rel2) = rest2[2..].find('>') {
                             k = s2 + 2 + rel2 + 1;
                         } else {
@@ -1197,6 +1204,38 @@ fn update_existing_crs(data: &mut String, name: &str, value: &str) -> bool {
                         close_depth += 1;
                     }
                     i = e + 1;
+                } else {
+                    break;
+                }
+                continue;
+            }
+            if rest.starts_with("<?") {
+                if let Some(rel) = data[s..].find("?>") {
+                    i = s + rel + 2;
+                } else {
+                    break;
+                }
+                continue;
+            }
+            if rest.starts_with("<!--") {
+                if let Some(rel) = data[s..].find("-->") {
+                    i = s + rel + 3;
+                } else {
+                    break;
+                }
+                continue;
+            }
+            if rest.starts_with("<![CDATA[") {
+                if let Some(rel) = data[s..].find("]]>") {
+                    i = s + rel + 3;
+                } else {
+                    break;
+                }
+                continue;
+            }
+            if rest.starts_with("<!") {
+                if let Some(rel) = rest[2..].find('>') {
+                    i = s + 2 + rel + 1;
                 } else {
                     break;
                 }
