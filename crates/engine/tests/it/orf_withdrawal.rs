@@ -262,13 +262,16 @@ fn withdrawn_orf_decoder_has_distinct_render_keys_without_changing_file_identity
     let arw = decoder_keys(&mut decoder_session("ARW"));
     let cr2 = decoder_keys(&mut decoder_session("CR2"));
     let orf = decoder_keys(&mut decoder_session("ORF"));
-    for (a, b) in jpeg.1.iter().zip(&arw.1) {
+    // The first three keys are the persistent render families (thumbnail, loupe view, variant).
+    // The fourth is the original file's identity, which no decoder version may change.
+    for (a, b) in jpeg.1.iter().zip(&arw.1).take(3) {
         assert_ne!(a, b, "ARW persistent keys must differ from JPEG's by decoder_cache_version");
     }
-    for (a, b) in jpeg.1.iter().zip(&cr2.1) {
+    for (a, b) in jpeg.1.iter().zip(&cr2.1).take(3) {
         assert_ne!(a, b, "CR2 persistent keys must differ from JPEG's by decoder_cache_version");
     }
-    for (a, b) in jpeg.1.iter().zip(&orf.1) {
+    for (a, b) in jpeg.1.iter().zip(&orf.1).take(3) {
         assert_ne!(a, b, "ORF persistent keys must differ from JPEG's by decoder_cache_version");
     }
+    assert_eq!(jpeg.1[3], arw.1[3], "the original file's identity must not change with the decoder version");
 }
