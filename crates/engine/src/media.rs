@@ -58,7 +58,7 @@ pub(crate) fn decoder_cache_version(format: &str) -> u64 {
         "CR3" => 1002,
         "NEF" => 1003,
         "NRW" => 1004,
-        "DNG" => 1005,
+        "DNG" => 0, // base version: DNG decoder unchanged, keep legacy keys stable
         "RAF" => 1006,
         "ORF" => 1007,
         "RW2" => 1008,
@@ -75,6 +75,7 @@ pub(crate) fn decoder_cache_version(format: &str) -> u64 {
         "GIF" => 2004,
         "BMP" => 2005,
         "AVIF" => 2006,
+        "JPEG" | "JPG" => 0,
         _ => 0,
     };
     RENDER_CACHE_VERSION.wrapping_add(decoder)
