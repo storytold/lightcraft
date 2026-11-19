@@ -469,8 +469,8 @@ impl Catalog {
         self.albums.values()
     }
     /// The albums and folders directly inside `parent` (`None`: the top level), in the order the
-    /// sidebar lists them: folders first, then by their place if the user ordered them (those
-    /// without one after, by name), else by name.
+    /// sidebar lists them: by their place if the user ordered them, folders and albums mixed as
+    /// they were put; those without a place after, folders first, by name.
     pub fn album_children(&self, parent: Option<AlbumId>) -> Vec<&Album> {
         let mut kids: Vec<&Album> = self.albums.values().filter(|a| a.parent == parent).collect();
         kids.sort_by_cached_key(|a| album_order_key(a));
@@ -1512,10 +1512,11 @@ impl AlbumGraph {
     }
 }
 
-/// How siblings are listed: folders first, then the ones with a place of their own by it, then by
-/// name; the id settles any tie.
-fn album_order_key(a: &Album) -> (bool, bool, u32, String, AlbumId) {
-    (!a.folder, a.order.is_none(), a.order.unwrap_or(0), a.name.to_lowercase(), a.id)
+/// How siblings are listed: the ones with a place of their own by it, whether folder or album (a
+/// folder can be put after albums by hand); then the others, folders first, by name. The id
+/// settles any tie.
+fn album_order_key(a: &Album) -> (bool, u32, bool, String, AlbumId) {
+    (a.order.is_none(), a.order.unwrap_or(0), !a.folder, a.name.to_lowercase(), a.id)
 }
 
 #[cfg(test)]
