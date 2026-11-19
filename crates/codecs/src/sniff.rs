@@ -268,6 +268,14 @@ mod tests {
     }
 
     #[test]
+    fn shared_detection_keeps_bigtiff_and_jpeg_ls_routing() {
+        for header in [b"II+\0".as_slice(), b"MM\0+".as_slice()] {
+            assert_eq!(sniff(header), Some(Format::Tiff));
+        }
+        assert_eq!(sniff(&[0xff, 0xd8, 0xff, 0xf7, 0, 2]), Some(Format::Jpeg));
+    }
+
+    #[test]
     fn dng_detected() {
         // II*, IFD at 8 with a single DNGVersion entry.
         let mut b = b"II*\0\x08\0\0\0".to_vec();
