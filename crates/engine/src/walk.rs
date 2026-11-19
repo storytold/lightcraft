@@ -111,7 +111,7 @@ pub fn files_in(root: &Path, skip: Option<&Path>, limits: Limits, keep: impl FnM
 /// [`files_in`], entering a folder below `root` only when `enter` accepts it: a folder it turns
 /// down is neither listed nor counted against `limits` (e.g. a NAS's `@eaDir` thumbnail folders,
 /// which can hold more entries than the photos beside them). `enter` is asked from the threads
-/// that read folders ahead as well, so it is a pure function of the path (`Fn`, `Sync`).
+/// that read folders ahead as well, so it is a pure, quick function of the path (`Fn`, `Sync`; no I/O).
 pub fn files_in_entering(
     root: &Path,
     skip: Option<&Path>,
@@ -282,7 +282,8 @@ impl Shared {
         self.pool.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Queues the folders in `listing` (a folder at `depth`) for the readers, in path order. Only
+    /// Queues the folders in `listing` (a folder at `depth`) for the readers, in path order, unless
+    /// `enter` turns them down (it runs under the pool's lock: no I/O in it). Only
     /// plain folders: a link to a folder is entered, if at all, by the walk itself, in the order it
     /// goes through them (which of several links to one folder wins depends on that order).
     fn enqueue(&self, pool: &mut Pool, listing: &Listing, depth: usize, max_depth: usize, enter: &(dyn Fn(&Path) -> bool + Sync)) {
