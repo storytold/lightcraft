@@ -472,6 +472,12 @@ impl TileService {
         TileService { shared }
     }
 
+    /// Whether this service can ever deliver a tile: it has a transport or a cache. False on wasm32
+    /// (no browser fetch yet) and for the offline source; nothing is queued then, so it stays idle.
+    pub fn can_load(&self) -> bool {
+        self.shared.transport.is_some() || self.shared.cache.is_some()
+    }
+
     pub fn source(&self) -> &TileSource {
         &self.shared.source
     }

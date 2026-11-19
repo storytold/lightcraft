@@ -137,6 +137,18 @@ pub fn draw(session: &mut Session, painter: &Painter, rect: Rect, center: LatLon
         return Drawn { offline: true, ..Drawn::default() };
     }
     let Some(svc) = session.map_tiles() else { return Drawn { offline: true, ..Drawn::default() } };
+    if !svc.can_load() {
+        // wasm32 has no tile transport yet: say so instead of leaving a silent grey map
+        let at = if rect.height() < 240.0 { egui::pos2(rect.center().x, rect.top() + 14.0) } else { rect.center() };
+        painter.text(
+            at,
+            Align2::CENTER_CENTER,
+            crate::i18n::tr("Map tiles can't load in this build"),
+            FontId::proportional(12.0),
+            Color32::from_rgb(90, 96, 104),
+        );
+        return Drawn { offline: true, ..Drawn::default() };
+    }
     let view = viewport(rect, center, zoom);
     let max_zoom = source.max_zoom();
     let source_id = source.id().to_string();

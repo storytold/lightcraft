@@ -384,6 +384,8 @@ fn offline_and_transportless_services_never_fetch() {
     inert.show(&paris());
     std::thread::sleep(Duration::from_millis(50));
     assert!(fake.urls().is_empty());
+    assert!(!inert.can_load() && !svc.can_load());
+    assert!(inert.is_idle(), "a service that can't load leaves nothing pending");
     assert!(svc.poll().is_empty() && inert.poll().is_empty());
     // the offline source has no cache either
     let svc = TileService::new(TileSource::Offline, Some(tmp("offline")), 1 << 20, None, true);
