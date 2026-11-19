@@ -97,32 +97,44 @@ fn v6_preview_only_photo_loads_unstamped_and_is_upgraded() {
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
 }
 
-/// A v12 library with a folder label (a record without `made`) opens as it was and is rewritten in
-/// the current format; a folder made afterwards is saved with it. (An older build refuses the new
-/// format by the rule `newer_snapshot_is_refused_untouched` tests.)
-#[test]
-fn v12_library_with_folder_records_is_upgraded_and_the_new_format_is_refused_by_older_builds() {
+/// A library of format `from` with a folder label (a record without `made`) opens as it was and is
+/// rewritten in the current format; a folder made afterwards is saved with it. A build of format
+/// `from` then refuses the library by the rule `newer_snapshot_is_refused_untouched` tests.
+fn folder_records_library_is_upgraded(from: u32) {
     let (mut base, _, _) = legacy_parts();
     let op = base.folder_label_op("/p", Some(ColorLabel::Red));
     base.apply(op).unwrap();
     let m = MemStore::new();
-    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":12,\"seq\":3,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":{from},\"seq\":3,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
     m.set(LOG, Vec::new());
     let (mut j, mut c, r) = Journal::open(Box::new(m.clone())).unwrap();
-    assert_eq!(r.upgraded_from, Some(12));
+    assert_eq!(r.upgraded_from, Some(from));
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
     assert_eq!(c.folder_color_label("/p"), Some(ColorLabel::Red));
-    assert!(!c.holds_made_folder("/p"), "no folder was made in a v12 library");
+    assert!(!c.holds_made_folder("/p"), "no folder was made in a v{from} library");
     let made = c.folder_made_op("/p/new");
     c.apply(made.clone()).unwrap();
     j.append(&[made]).unwrap();
     j.snapshot(&c).unwrap();
     drop(j);
-    let (_, reopened, _) = Journal::open(Box::new(m.clone())).unwrap();
+    let (_, reopened, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.upgraded_from, None);
     assert!(reopened.holds_made_folder("/p/new"));
-    // a v12 build refuses a snapshot above 12
-    let v: serde_json::Value = serde_json::from_slice(&m.get(SNAPSHOT).unwrap()).unwrap();
-    assert!(v["version"].as_u64().unwrap() > 12);
+    assert_eq!(reopened.folder_color_label("/p"), Some(ColorLabel::Red));
+    // a build of format `from` refuses a snapshot above it
+    assert!(snapshot_version(&m) > u64::from(from));
+}
+
+#[test]
+fn v12_library_with_folder_records_is_upgraded_and_the_new_format_is_refused_by_older_builds() {
+    folder_records_library_is_upgraded(12);
+}
+
+/// Format 13 is what `main` wrote before `FolderRecord.made` (Lens Blur): such a library has no
+/// `made`, and must still be upgraded, not read as current.
+#[test]
+fn v13_library_written_without_made_is_upgraded_and_the_new_format_is_refused_by_older_builds() {
+    folder_records_library_is_upgraded(13);
 }
 
 #[test]
@@ -266,9 +278,9 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v13: Lens Blur in develop settings and mask adjustments (v12: `Catalog.grids` and `SegMask.grid`; v11: `EmbeddedLens.source`;
+    /// v14: `FolderRecord.made` (v13: Lens Blur in develop settings and mask adjustments; v12: `Catalog.grids` and `SegMask.grid`; v11: `EmbeddedLens.source`;
     /// v10: `Mask.on_photo`; v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`).
-    const NEWEST_FIELDS: u32 = 13;
+    const NEWEST_FIELDS: u32 = 14;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }
