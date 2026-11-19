@@ -513,7 +513,7 @@ struct Fresh {
     packet: String,
     /// The same with its face boxes on the upright photo, when `packet` has them in the frame the file is stored in
     /// with no rotation (Exif 5, 7): only the list's `AppliedToDimensions` tells that frame, so a save that has to
-    /// leave the size out writes this one.
+    /// leave the size out, or keeps an entry whose `mwg-rs:Rotation` makes readers ignore the size, writes this one.
     upright: Option<String>,
 }
 
@@ -694,9 +694,10 @@ fn fit_to_old(old: &str, fresh: Fresh) -> String {
     let regions = parse_sidecar(old, crate::crs::Target::Rendered).ok().and_then(|sc| sc.regions);
     let readable = regions.as_ref().map_or(0, Vec::len);
     let carried = unreadable_regions(old, &data, readable);
-    // the list's size goes when kept pixel boxes had none (below); boxes only that size tells the frame of go upright
+    // the list's size goes when kept pixel boxes had none (below), and says nothing when a kept entry has a rotation:
+    // boxes only that size tells the frame of go upright
     let fresh = match fresh.upright {
-        Some(upright) if carried.as_ref().is_some_and(|c| c.pixels_without_size) => upright,
+        Some(upright) if carried.as_ref().is_some_and(Carried::size_untold) => upright,
         _ => fresh.packet,
     };
     let lower = |s: &str| s.trim().to_lowercase();
@@ -807,6 +808,17 @@ struct Carried {
     dims: Option<(String, String)>,
     /// One of them is in pixels and the list has no size.
     pixels_without_size: bool,
+    /// One of them has a `mwg-rs:Rotation`: a reader then takes the whole list as marked by rotation, not by its size
+    /// ([`lightcraft_meta::XmpData::regions_drawn_on`]), even though it can't read that entry.
+    rotation: bool,
+}
+
+impl Carried {
+    /// The list, written with these entries, can't tell its frame by its size: boxes only that size tells the frame of
+    /// (Exif 5, 7) must go upright.
+    fn size_untold(&self) -> bool {
+        self.pixels_without_size || self.rotation
+    }
 }
 
 /// [`Carried`] for the sidecar `old` (parsed as `data`, `readable` regions of it read), or `None` when its list has
@@ -817,7 +829,7 @@ fn unreadable_regions(old: &str, data: &lightcraft_meta::XmpData, readable: usiz
     let dims = regions
         .and_then(|r| r.field("mwg-rs:AppliedToDimensions"))
         .and_then(|d| Some((d.field("stDim:w")?.text()?.to_string(), d.field("stDim:h")?.text()?.to_string())));
-    let mut carried = Carried { items: Vec::new(), dims, pixels_without_size: false };
+    let mut carried = Carried { items: Vec::new(), dims, pixels_without_size: false, rotation: false };
     if n <= readable {
         return Some(carried);
     }
@@ -840,13 +852,16 @@ fn unreadable_regions(old: &str, data: &lightcraft_meta::XmpData, readable: usiz
         if readable {
             continue;
         }
-        any_pixels |= lightcraft_meta::parse_xmp(&alone).ok().is_some_and(|d| {
-            d.values
-                .get("mwg-rs:Regions")
-                .and_then(|r| r.field("mwg-rs:RegionList"))
-                .and_then(|l| l.items().first().and_then(|i| i.field("mwg-rs:Area")).and_then(|a| a.field("stArea:unit")).and_then(|u| u.text()))
-                .is_some_and(|u| u.eq_ignore_ascii_case("pixel"))
-        });
+        let parsed = lightcraft_meta::parse_xmp(&alone).ok();
+        let entry =
+            parsed.as_ref().and_then(|d| d.values.get("mwg-rs:Regions")).and_then(|r| r.field("mwg-rs:RegionList")).and_then(|l| l.items().first());
+        any_pixels |= entry
+            .and_then(|i| i.field("mwg-rs:Area"))
+            .and_then(|a| a.field("stArea:unit"))
+            .and_then(|u| u.text())
+            .is_some_and(|u| u.eq_ignore_ascii_case("pixel"));
+        // the test `regions_drawn_on` makes of every entry, this one included
+        carried.rotation |= entry.is_some_and(|i| i.field("mwg-rs:Rotation").is_some());
         carried.items.push(item);
     }
     // every entry accounted for: those read, and those kept as they are
@@ -2132,6 +2147,50 @@ mod tests {
                 assert!(x.contains("<stDim:w>30</stDim:w>"), "{o:?}: stored size: {x}");
             }
             assert!(near(read_back(&x, o)), "{o:?}: {:?}", read_back(&x, o));
+            let _ = std::fs::remove_dir_all(path.parent().unwrap());
+        }
+    }
+
+    /// Review of #4512: a kept entry LightCraft can't read but that has a `mwg-rs:Rotation` makes readers take the
+    /// whole list as marked by rotation, its size ignored. Boxes on an Exif 5 or 7 photo, which only that size would
+    /// put in the stored frame, are written upright then.
+    #[test]
+    fn boxes_go_upright_when_a_kept_entry_has_a_rotation() {
+        use lightcraft_meta::Orientation::{Transpose, Transverse};
+        let upright = lightcraft_meta::Rect { x0: 0.1, y0: 0.2, x1: 0.3, y1: 0.6 };
+        let ann = |x: &str, o| {
+            let sc = parse_sidecar(x, crate::crs::Target::Rendered).unwrap().with_orientation_known(Some(o), "/no/such/file");
+            let mut q = photo();
+            merge_into(&mut q, &sc, "now");
+            q.meta.regions.iter().find(|r| r.name.as_deref() == Some("Ann")).map(|r| r.rect).unwrap()
+        };
+        let near = |g: lightcraft_meta::Rect| [(g.x0, 0.1), (g.y0, 0.2), (g.x1, 0.3), (g.y1, 0.6)].iter().all(|(a, b)| (a - b).abs() < 1e-5);
+        // a zero-width box (unreadable, so kept as it is), with or without a rotation of 0
+        let with_entry = |rotation: bool| {
+            let x = sidecar_with(&[(0.5, 0.5, 0.0, 0.2, None)], &[]);
+            let end = "<mwg-rs:Type>Face</mwg-rs:Type></rdf:li>";
+            if rotation { x.replacen(end, "<mwg-rs:Type>Face</mwg-rs:Type><mwg-rs:Rotation>0</mwg-rs:Rotation></rdf:li>", 1) } else { x }
+        };
+        for o in [Transpose, Transverse] {
+            let mut p = photo();
+            p.meta.file_orientation = Some(o);
+            p.meta.regions =
+                vec![lightcraft_meta::Region { rect: upright, kind: lightcraft_meta::RegionKind::Face, name: Some("Ann".into()), description: None }];
+
+            let path = scratch("kept-rotation");
+            std::fs::write(&path, with_entry(true)).unwrap();
+            let x = save_over(&path, &p);
+            assert!(x.contains("stArea:w=\"0\"") && x.contains("<mwg-rs:Rotation>0</mwg-rs:Rotation>"), "{o:?}: kept: {x}");
+            assert_eq!(parse_sidecar(&x, crate::crs::Target::Rendered).unwrap().regions_drawn_on, None, "{o:?}: readers ignore the size");
+            assert!(near(ann(&x, o)), "{o:?}: {:?} {x}", ann(&x, o));
+            assert_eq!(save_over(&path, &p), x, "{o:?}: stable");
+
+            // without the rotation the list's size tells the stored frame, which the boxes are written in
+            let path = scratch("kept-no-rotation");
+            std::fs::write(&path, with_entry(false)).unwrap();
+            let x = save_over(&path, &p);
+            assert!(x.contains("stArea:w=\"0\"") && x.contains("<stDim:w>30</stDim:w>"), "{o:?}: stored frame: {x}");
+            assert!(near(ann(&x, o)), "{o:?}: {:?}", ann(&x, o));
             let _ = std::fs::remove_dir_all(path.parent().unwrap());
         }
     }
