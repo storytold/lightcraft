@@ -10,7 +10,7 @@ What Lightroom does with the machine's hardware, per platform, and what LightCra
 |---|---|---|---|---|---|---|
 | GPU for display and editing | Metal / DX12, "Use GPU for display / image processing / export" | wgpu Metal: geometry, resize, blur, WB, NR, guided filter, dehaze, masks, finish; CPU fallback per render | DX12 only (Vulkan opt-in, #136) | Vulkan (CPU ↔ GPU equivalence verified on an AMD Radeon 8060S, RADV) | CPU only (no WebGPU yet) | 🟡 defringe, spot removal, heuristic masks, long brushes and high-bit exports stay on CPU |
 | GPU export | ✅ | ✅ (6000 × 4000 in ~0.3 s vs ~1.2 s CPU) | ✅ | ✅ | — | ✅ (black-export fix on an Intel iGPU, #78) |
-| AI on GPU / neural engine | Metal / DirectML / Core ML, model per feature | AI denoise on GPU or CPU (setting); SAM 3 on Metal via candle; faces on CPU | CPU / GPU denoise | CPU / GPU denoise | — | 🟡 no Core ML / Neural Engine / DirectML |
+| AI on GPU / neural engine | Metal / DirectML / Core ML, model per feature | AI denoise on the Neural Engine (Core ML, Apple silicon), GPU or CPU (setting; 7.8 ms vs 238 ms a tile on an A18 Pro); SAM 3 on Metal via candle; faces on CPU | CPU / GPU denoise | CPU / GPU denoise | — | 🟡 denoise only: SAM 3 and faces not on the Neural Engine; no DirectML |
 | HDR (EDR) display | ✅ (macOS EDR, Windows HDR) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ (LR-VIEW-HDR-DISPLAY) |
 | Monitor profile | automatic per display, follows the window | ✅ the screen's profile, followed across screens | ✅ the profile Windows Color System assigns to the window's monitor, followed across monitors and profile changes; sRGB while Windows colour-manages the desktop (HDR, Auto Color Management) | 🟡 colord's profile (one display, or all sharing one); no follow across monitors | — | 🟡 Linux per-monitor follow missing |
 | Second window / second monitor | ✅ (Classic) | ✅ (⌘F11) | ✅ | ✅ | — | ✅ (Classic secondary-window keys missing) |
@@ -27,7 +27,8 @@ What Lightroom does with the machine's hardware, per platform, and what LightCra
 
 **~40% ready** (estimated): the GPU editing path is real and fast (measured: 24 MP exposure drag
 3.9 ms on GPU vs 22–42 ms CPU; NR drag 18 ms vs 301–471 ms), but HDR display, pen pressure,
-tethering, printing, per-monitor profiles on Linux and neural-engine inference are missing. GPU
+tethering, printing and per-monitor profiles on Linux are missing. AI denoise runs on the Neural Engine; the
+Neural Engine work still missing is SAM 3 and face processing. GPU
 correctness is proven on Apple GPUs and on one AMD GPU on Linux (Radeon 8060S, Vulkan / RADV: the
 equivalence suite passes with the same max 1–2 LSB as on Metal, [gpu-pipeline.md](gpu-pipeline.md#correctness-cpu-oracle-and-equivalence-tests)).
 NVIDIA, Intel and Windows DX12 still rely on user reports.
@@ -42,13 +43,15 @@ NVIDIA, Intel and Windows DX12 still rely on user reports.
 | Remaining stages on GPU (defringe, spot removal, masks) | 10–20 | |
 | Tethered capture (PTP over USB in pure Rust, Canon / Nikon / Sony first) | 25–45 | cameras (human) |
 | Printing with colour management | 15–25 | printers (human) |
-| Neural-engine / DirectML inference for AI features | 10–20 | depends on the AI model decision |
-| **Total** | **75–142 h** (the core set for beta, HDR display + monitor profile + pen pressure: 15–32 h) | |
+| Neural-engine inference for the other AI features (SAM 3, faces) and DirectML | 8–16 | depends on the AI model decision; denoise on the Neural Engine is done |
+| **Total** | **73–138 h** (the core set for beta, HDR display + monitor profile + pen pressure: 15–32 h) | |
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | Score: AI denoise on the Neural Engine is no longer listed as missing; SAM 3 and faces remain |
+| 2026-10-30 | minor | AI Denoise runs on the Apple Neural Engine through Core ML (`crates/coreml`, the model rewritten in pure Rust with an exact fp16 rescale); AI row updated, remaining hours revised |
 | 2026-10-20 | minor | Monitor profile: Windows reads the window's monitor profile from Windows Color System (`crates/wincolor`), sRGB while Windows colour-manages the desktop; verified on Windows 11 by setting and clearing a Display P3 profile while the app ran. Remaining monitor-profile work 4–8 h → 2–4 h |
 | 2026-10-12 | minor | Monitor profile: Linux reads the display profile from colord; macOS row reflects #787 |
 | 2026-10-12 | minor | CPU ↔ GPU equivalence suite run on an AMD Radeon 8060S (Vulkan, RADV, Linux): 16 tests / 135 cases pass, max 2 LSB, mean ≤ 0.0003; first GPU verified outside Apple |

@@ -36,6 +36,8 @@ use crate::merge::ByteReader;
 use crate::model_download::Downloads;
 use crate::{Selection, Session};
 
+#[cfg(feature = "denoise")]
+mod ane;
 mod builtin;
 mod gpu;
 mod model;
@@ -48,12 +50,12 @@ mod state;
 pub(crate) use gpu::GPU_SETUP_MARKER;
 #[cfg(all(feature = "denoise", test))]
 use gpu::{GPU_CRASHED, GPU_MAX_FALLBACKS, GPU_PARALLEL, SETTING_UP, card_is_faster, set_up_card};
-pub use model::RunOn;
 #[cfg(all(feature = "denoise", test))]
 pub(crate) use model::default_loader;
 #[cfg(all(feature = "denoise", test))]
 use model::{GpuSide, Network, RemoteSide, network, worth_retrying};
 pub(crate) use model::{Loader, Model};
+pub use model::{RunOn, neural_engine_possible};
 #[cfg(feature = "denoise")]
 pub use model::{Serving, serving};
 pub(crate) use products::eligible;
@@ -66,6 +68,9 @@ pub use state::{Pace, PhotoState};
 
 // Two stacked cfgs (not `all(test, feature = …)`): clippy only recognises a plain `cfg(test)`
 // module as test code, so the `allow-*-in-tests` settings in clippy.toml apply to its helpers.
+#[cfg(test)]
+#[cfg(feature = "denoise")]
+mod ane_tests;
 #[cfg(test)]
 #[cfg(feature = "denoise")]
 mod gpu_tests;
