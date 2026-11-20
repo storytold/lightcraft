@@ -132,7 +132,9 @@ fn hue_of(c: [f32; 3], max: f32, d: f32) -> f32 {
     } else {
         (c[0] - c[1]) / d + 4.0
     };
-    h * 60.0
+    let deg = h * 60.0;
+    // rem_euclid can round up to exactly 6.0 in f32; keep the range [0, 360).
+    if deg >= 360.0 { 0.0 } else { deg }
 }
 
 #[cfg(test)]
@@ -172,5 +174,12 @@ mod tests {
             }
         }
         assert_eq!(rgb_to_hsv([0.0, 1.0, 0.0])[0], 120.0);
+    }
+
+    #[test]
+    fn hue_below_360_for_tiny_blue() {
+        let c = [1.0, 0.0, 1e-9];
+        assert!(rgb_to_hsv(c)[0] < 360.0, "hsv hue {}", rgb_to_hsv(c)[0]);
+        assert!(rgb_to_hsl(c)[0] < 360.0, "hsl hue {}", rgb_to_hsl(c)[0]);
     }
 }

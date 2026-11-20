@@ -6,6 +6,7 @@ Select photos in Photo Grid or Square Grid, then use:
 |---|---|
 | `Enter` | Open the active photo in Detail from Photo Grid or Square Grid |
 | `Cmd+Shift+D` (macOS) / `Ctrl+Shift+D` (Windows/Linux) | Select only the active photo |
+| ⌘⇧K / Ctrl+Shift+K | Edit Keywords: show the Keywords panel and open the keyword picked in its Keyword List in Edit Keyword Tag |
 | `0` | Clear the star rating |
 | `1`–`5` | Set the star rating |
 | `[` / `]` | Decrease / increase each selected photo's rating by one, within 0–5 |
@@ -16,9 +17,12 @@ Select photos in Photo Grid or Square Grid, then use:
 | `` ` `` (backtick) | Cycle the flag: unflagged → pick → reject → unflagged |
 | `Cmd`/`Ctrl` + `↑` / `↓` | Raise / lower flag status (reject < unflagged < pick; stops at either end) |
 | `Shift` + `0`–`9`, `P`, `X` or `U` | Apply the action and select the next photo |
+| ⌘⌥⇧K / Ctrl+Alt+Shift+K | Set Keyword Shortcut: type the keywords, with commas between them, that `Shift+K` adds |
+| `Shift+K` | Add the keyword shortcut's keywords to the selected photos, or remove them when every selected photo has them all |
 | `\` (backslash) | Show / hide the Filter Bar |
 | ⌘K / Ctrl+K | Add Keywords: show the Keywords panel with the cursor in its Add keyword box |
 | ⌘L / Ctrl+L | Enable Filters: switch the filter off and on |
+| ⌘⌥K / Ctrl+Alt+K | Enable Painting: paint the painter box's keyword, or stop painting |
 | ⌘⌥⇧C / Ctrl+Alt+Shift+C | Copy Metadata: copy the active photo's metadata |
 | ⌘⌥⇧V / Ctrl+Alt+Shift+V | Paste Metadata: paste the copied metadata on the selected photos |
 
@@ -29,7 +33,9 @@ the photo, its edits or the last edit Undo step, and it works in any view that h
 It can be reassigned or disabled in Help → Keyboard Shortcuts; text fields and dialogs keep the key.
 
 Purple and clearing a colour label are available in Photo → Set Color Label and the photo context
-menu. Purple has no default number key, matching Lightroom Classic. Rejection marks a photo for
+menu. Purple has no default number key, matching Lightroom Classic. Clear Color Label has none either,
+but it is a command of its own: give it a key in Help → Keyboard Shortcuts and the key clears the label of
+the selected photos, as the Photo → Set Color Label → None row does (which then shows the key). Rejection marks a photo for
 culling; it does not delete the original or remove it from the library.
 Setting a colour label shows the same brief bottom toast as a rating, using the colour or your
 custom label name. Clearing it shows a confirmation too, whether applied by a key, menu or swatch.
@@ -86,6 +92,15 @@ Survey and Reference, and leave text fields alone, so the search box still types
 commands (`view.thumbSizeUp`, `view.thumbSizeDown`, reachable from the control channel and MCP, which
 return `{"size"}`); the size is saved with the other interface settings.
 
+## Keyword painter
+
+`⌘⌥K` (`Ctrl+Alt+K` on Windows and Linux) is Photo ▸ Enable Painting (`tool.enablePainting`). It
+paints the keyword typed in the Keywords panel's painter box: LightCraft shows the grid, and a click on a
+photo there adds the keyword or takes it off. Pressed again while painting, the key stops painting, as `Esc` does.
+With the box empty, the key opens the Keywords panel and asks for a keyword to paint. The shortcut list
+names the key only; stopping on a second press and opening the panel are LightCraft's choice. The key
+can be reassigned in Help → Keyboard Shortcuts.
+
 ## Keyword sets
 
 `⌥1`–`⌥9` (`Alt+1`–`Alt+9` on Windows and Linux) add or remove the current keyword set's keywords on
@@ -97,7 +112,7 @@ past either end; wrapping around is LightCraft's choice. The same steps are the 
 Keyword Set commands (`keyword.nextSet`, `keyword.previousSet`), which return what `keyword.sets`
 returns, and both keys can be reassigned in Help → Keyboard Shortcuts.
 
-Public behavior references, checked 2026-10-08 (thumbnail size: 2026-10-13; keyword sets: 2026-10-24):
+Public behavior references, checked 2026-10-08 (thumbnail size: 2026-10-13; keyword painter and keyword sets: 2026-10-24):
 
 - [Lightroom Classic keyboard shortcuts](https://helpx.adobe.com/lightroom-classic/help/keyboard-shortcuts.html)
 - [Lightroom Classic flagging, labelling and rating](https://helpx.adobe.com/lightroom-classic/help/flag-label-rate-photos.html)
