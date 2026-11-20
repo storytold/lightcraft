@@ -982,7 +982,7 @@ impl FaceGpu {
         self.resident.load(Ordering::Relaxed)
     }
 
-    fn pipes(&self) -> &PipelineSet {
+    fn pipes(&self) -> &'static PipelineSet {
         match self.precision {
             ActivePrecision::Fp16 => self.dev.fp16.as_ref().unwrap_or(&self.dev.fp32),
             ActivePrecision::Fp32 => &self.dev.fp32,
