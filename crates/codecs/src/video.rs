@@ -182,7 +182,9 @@ impl<W: Write + Seek> Mp4Writer<W> {
             return Err(bad("bad size or frame rate"));
         }
         let timescale = u32::try_from(u64::from(fps) * TICKS).map_err(|_| bad("bad frame rate"))?;
-        let mut inner = craft_media::isobmff::Mp4Writer::new(w, WriterOptions::new(Brand::Mp4)).map_err(media_err)?;
+        let mut opts = WriterOptions::new(Brand::Mp4);
+        opts.compatible_brands.push(*b"av01");
+        let mut inner = craft_media::isobmff::Mp4Writer::new(w, opts).map_err(media_err)?;
         let mut cfg = TrackConfig::new(av1_sample_entry(Av1Config::default(), width, height), timescale);
         cfg.handler_name = Some("LightCraft video".into());
         let track = inner.add_track(cfg).map_err(media_err)?;
@@ -635,6 +637,9 @@ mod tests {
         let d = m.finish().unwrap().into_inner();
         let top = boxes(&d, 0..d.len());
         assert_eq!(top.iter().map(|(k, _)| *k).collect::<Vec<_>>(), vec![*b"ftyp", *b"free", *b"mdat", *b"moov"]);
+        let (ftyp_brands, ftyp_rest) = d[top[0].1.start + 8..top[0].1.end].as_chunks::<4>();
+        assert!(ftyp_rest.is_empty());
+        assert!(ftyp_brands.contains(b"av01"), "ftyp missing av01 compatible brand: {ftyp_brands:?}");
         assert_eq!(&d[top[2].1.clone()], &[0x32, 2, 1, 1, 0x32, 2, 2, 2, 0x32, 2, 3, 3, 0x32, 2, 4, 4]);
         let stbl = find(&d, 0..d.len(), &[b"moov", b"trak", b"mdia", b"minf", b"stbl"]);
         let kinds: Vec<_> = boxes(&d, stbl.clone()).into_iter().map(|(k, _)| k).collect();
@@ -726,6 +731,24 @@ mod tests {
             let id = d[e[0].1.clone()].iter().fold(0u32, |a, b| (a << 8) | u32::from(*b));
             assert!(seg.iter().any(|(i, r)| *i == id && r.start > seg_start + pos), "{id:x}");
         }
+    }
+
+    #[test]
+    fn webm_final_dependent_frame_writes_actual_reference_block_delta() {
+        use craft_media::matroska::element_ids::{BLOCK, BLOCK_DURATION, CLUSTER, REFERENCE_BLOCK, SEGMENT};
+        let mut m = WebmWriter::new(Cursor::new(Vec::new()), 64, 36, 30).unwrap();
+        m.set_config(av1_config(&[0x0a, 1, 0]));
+        m.add(&Sample { data: vec![0x32, 1], key: true, duration: 1 }).unwrap();
+        m.add(&Sample { data: vec![0x32, 2], key: true, duration: 1 }).unwrap();
+        m.add(&Sample { data: vec![0x32, 3], key: false, duration: 2 }).unwrap();
+        let d = m.finish().unwrap().into_inner();
+        let top = elements(&d, 0..d.len());
+        let seg = elements(&d, top.iter().find(|(i, _)| *i == SEGMENT).unwrap().1.clone());
+        let cluster = elements(&d, seg.iter().rfind(|(i, _)| *i == CLUSTER).unwrap().1.clone());
+        let group = elements(&d, cluster.last().unwrap().1.clone());
+        assert_eq!(group.iter().map(|(i, _)| *i).collect::<Vec<_>>(), vec![BLOCK, BLOCK_DURATION, REFERENCE_BLOCK]);
+        let ref_body = &d[group[2].1.clone()];
+        assert_eq!(ref_body, &[(-33i8) as u8], "expected -33ms delta to preceding 33ms frame");
     }
 
     #[test]
