@@ -104,14 +104,15 @@ pub enum Process {
     V8,
     /// V8, with the checked Bradford white-balance fallback (`Mat3::IDENTITY` when a source
     /// illuminant's Bradford blue cone response is `<= 0.0`, `craft-libs#587`).
-    V9,
+    /// `ProcessVersion(9)` is reserved for `HealMethod::Pinned` (`#4069`).
+    V10,
 }
 
 impl Process {
-    /// Every process, oldest first.
+    /// Every process, oldest first (`ProcessVersion(9)` is reserved for `#4069`).
     pub const ALL: [Process; 9] =
-        [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7, Process::V8, Process::V9];
-    pub const LATEST: Process = Process::V9;
+        [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7, Process::V8, Process::V10];
+    pub const LATEST: Process = Process::V10;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
@@ -123,7 +124,7 @@ impl Process {
             Process::V6 => ProcessVersion(6),
             Process::V7 => ProcessVersion(7),
             Process::V8 => ProcessVersion(8),
-            Process::V9 => ProcessVersion(9),
+            Process::V10 => ProcessVersion(10),
         }
     }
 }

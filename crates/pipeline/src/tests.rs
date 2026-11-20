@@ -776,15 +776,15 @@ fn custom_white_balance_redevelops_in_camera_space() {
 }
 
 #[test]
-fn saved_warm_green_wb_preserves_legacy_bradford_while_v9_uses_checked_fallback() {
+fn saved_warm_green_wb_preserves_legacy_bradford_while_v10_uses_checked_fallback() {
     use crate::local::wb_matrix_for;
     use lightcraft_color::REC2020;
     use lightcraft_color::cct::{temp_tint_to_xy, wb_matrix, wb_matrix_checked};
     use lightcraft_develop::{Process, ProcessVersion, WbMode};
 
     let info = SourceInfo { as_shot_temp: 5500.0, as_shot_tint: 0.0, ..Default::default() };
-    // Saved V8 edit in the reachable warm-green region (Bradford blue cone response <= 0.0)
-    // must reopen without upgrading its process version and must keep the legacy Bradford result.
+    // Saved V8 (and reserved V9) edits in the reachable warm-green region (Bradford blue cone
+    // response <= 0.0) must reopen without upgrading and must keep the legacy Bradford result.
     let saved_json = serde_json::json!({
         "process": 8,
         "wb": { "mode": "Custom", "temp": 2000.0, "tint": 30.0 }
@@ -794,15 +794,15 @@ fn saved_warm_green_wb_preserves_legacy_bradford_while_v9_uses_checked_fallback(
     assert_eq!(saved.process.process(), Process::V8);
     let legacy_m = wb_matrix_for(&info, &saved).unwrap();
 
-    // New V9 edit at the same warm-green WB uses the shared checked Mat3::IDENTITY fallback.
-    let mut v9 = DevelopSettings::default();
-    assert_eq!(v9.process.process(), Process::V9);
-    (v9.wb.mode, v9.wb.temp, v9.wb.tint) = (WbMode::Custom, 2000.0, 30.0);
-    let v9_m = wb_matrix_for(&info, &v9).unwrap();
+    // New V10 edit at the same warm-green WB uses the shared checked Mat3::IDENTITY fallback.
+    let mut v10 = DevelopSettings::default();
+    assert_eq!(v10.process.process(), Process::V10);
+    (v10.wb.mode, v10.wb.temp, v10.wb.tint) = (WbMode::Custom, 2000.0, 30.0);
+    let v10_m = wb_matrix_for(&info, &v10).unwrap();
 
-    assert_ne!(legacy_m, v9_m, "saved V8 edit must not silently adopt V9's checked fallback");
+    assert_ne!(legacy_m, v10_m, "saved V8 edit must not silently adopt V10's checked fallback");
 
-    // Verify exact correspondence to legacy wb_matrix (V8) vs checked wb_matrix_checked (V9).
+    // Verify exact correspondence to legacy wb_matrix (V8) vs checked wb_matrix_checked (V10).
     let expected_shot = wb_matrix(&REC2020, temp_tint_to_xy(5500.0, 0.0)).inverse().unwrap();
     let legacy_raw = wb_matrix(&REC2020, temp_tint_to_xy(2000.0, 30.0)).mul(&expected_shot);
     let legacy_g = legacy_raw.apply([1.0, 1.0, 1.0]);
@@ -810,11 +810,11 @@ fn saved_warm_green_wb_preserves_legacy_bradford_while_v9_uses_checked_fallback(
     let legacy_expected = legacy_raw.mul(&lightcraft_color::Mat3::diag(1.0 / legacy_y, 1.0 / legacy_y, 1.0 / legacy_y)).to_f32();
     assert_eq!(legacy_m, legacy_expected);
 
-    let v9_raw = wb_matrix_checked(&REC2020, temp_tint_to_xy(2000.0, 30.0)).mul(&expected_shot);
-    let v9_g = v9_raw.apply([1.0, 1.0, 1.0]);
-    let v9_y = v9_g[0] * 0.2627 + v9_g[1] * 0.6780 + v9_g[2] * 0.0593;
-    let v9_expected = v9_raw.mul(&lightcraft_color::Mat3::diag(1.0 / v9_y, 1.0 / v9_y, 1.0 / v9_y)).to_f32();
-    assert_eq!(v9_m, v9_expected);
+    let v10_raw = wb_matrix_checked(&REC2020, temp_tint_to_xy(2000.0, 30.0)).mul(&expected_shot);
+    let v10_g = v10_raw.apply([1.0, 1.0, 1.0]);
+    let v10_y = v10_g[0] * 0.2627 + v10_g[1] * 0.6780 + v10_g[2] * 0.0593;
+    let v10_expected = v10_raw.mul(&lightcraft_color::Mat3::diag(1.0 / v10_y, 1.0 / v10_y, 1.0 / v10_y)).to_f32();
+    assert_eq!(v10_m, v10_expected);
 }
 
 /// Every stored process number renders with a process this build knows: settings saved before

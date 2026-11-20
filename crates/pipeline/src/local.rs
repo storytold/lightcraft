@@ -37,7 +37,7 @@ pub fn wb_matrix_for(info: &SourceInfo, s: &DevelopSettings) -> Option<[[f32; 3]
     {
         return Some(m.to_f32());
     }
-    let checked = s.process.process() >= Process::V9;
+    let checked = s.process.process() >= Process::V10;
     let set = if checked { wb_matrix_checked(&REC2020, effective_white(info, s)) } else { wb_matrix(&REC2020, effective_white(info, s)) };
     let shot = if checked {
         wb_matrix_checked(&REC2020, temp_tint_to_xy(info.as_shot_temp, info.as_shot_tint))
@@ -380,7 +380,7 @@ pub fn base_detail_radius(px_per_long: f64) -> usize {
 pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
     match s.process.process() {
         Process::V1 => 0,
-        Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 | Process::V9 => {
+        Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 | Process::V10 => {
             base_detail_radius(px_per_long)
         }
     }
