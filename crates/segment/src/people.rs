@@ -408,6 +408,21 @@ impl FaceModel {
         };
         use rayon::prelude::*;
         let windows: Vec<(usize, usize)> = starts(h).into_iter().flat_map(|y| starts(w).into_iter().map(move |x| (x, y))).collect();
+        if far.accelerator().is_some() && windows.len() > 1 {
+            let mut all = Vec::new();
+            for chunk in windows.chunks(16) {
+                let inputs: Vec<Vec<f32>> = chunk.par_iter().map(|&(x, y)| mediapipe::window(rgb, w, h, (x, y, n), n)).collect();
+                let refs: Vec<&[f32]> = inputs.iter().map(Vec::as_slice).collect();
+                let outs = far.run_batch(&refs)?;
+                for (&(x, y), out) in chunk.iter().zip(&outs) {
+                    let (Some(reg), Some(cls)) = (out.first(), out.get(1)) else {
+                        return Err(Error::Model("BlazeFace gave no output".into()));
+                    };
+                    all.extend(mediapipe::decode_far(reg, cls, FAR_THRESHOLD).into_iter().map(|d| d.from_window(x as f32, y as f32, n as f32)));
+                }
+            }
+            return Ok(mediapipe::merge_windows(all, 0.3));
+        }
         // the windows are small: one each per thread does better than one at a time on all of them
         let found = windows
             .par_iter()

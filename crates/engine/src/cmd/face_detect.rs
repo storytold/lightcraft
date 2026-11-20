@@ -170,8 +170,7 @@ fn set_detection_cpu_only(s: &Session, cpu: bool) {
     #[cfg(all(feature = "sam", not(target_arch = "wasm32")))]
     {
         *DETECTION_OFFERED.lock().unwrap_or_else(PoisonError::into_inner) = 0;
-        if cpu
-            && s.segmenter.open_model_installed("face")
+        if s.segmenter.open_model_installed("face")
             && let Ok(dir) = s.segmenter.require_open_model("face", AiModel::FaceDetector)
             && let Ok(model) = crate::segment::face_model(&dir)
         {
@@ -193,6 +192,8 @@ pub(crate) struct GpuState {
     pub device: Option<String>,
     /// Which card that is (`second`, the second graphics card, or `editing`); `None` on the CPU.
     pub card: Option<&'static str>,
+    /// Active compute precision (`"fp16"` or `"fp32"`); `None` on the CPU.
+    pub precision: Option<&'static str>,
     /// Why it runs on the CPU.
     pub why: Option<String>,
 }
@@ -214,40 +215,68 @@ fn set_gpu_state(what: &'static str, st: GpuState) {
 
 /// The user chose the CPU for face models (Settings ▸ Faces).
 pub(crate) fn cpu_only(s: &Session) -> bool {
-    s.face_models_dir.as_deref().is_some_and(|d| super::face_models::read_settings(d).cpu_only)
+    s.face_models_dir.as_deref().is_some_and(|d| super::face_models::read_settings(d).is_cpu_only())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn configured_gpu(s: &Session) -> (String, lcc_gpu::faces::Precision, Option<std::path::PathBuf>) {
+    let st = s.face_models_dir.as_deref().map(super::face_models::read_settings).unwrap_or_default();
+    let device = st.effective_device();
+    let precision = match st.effective_precision() {
+        "fp16" => lcc_gpu::faces::Precision::Fp16,
+        "fp32" => lcc_gpu::faces::Precision::Fp32,
+        _ => lcc_gpu::faces::Precision::Auto,
+    };
+    let cache_dir = s.face_models_dir.as_deref().map(|d| d.join(".gpu-cache"));
+    (device, precision, cache_dir)
 }
 
 /// Check in the background whether the GPU runs a face model faster than the CPU and gives its results; the model
 /// runs on the CPU meanwhile, and stays there when the GPU is off, missing, wrong or slower, or the user chose the CPU.
-/// The check shows in the activity stack while it runs.
+/// In `auto` precision mode, tries FP16 first (on adapters supporting `SHADER_F16`) and automatically falls back to
+/// FP32 and then CPU if FP16 has accuracy drift or is slower. The check shows in the activity stack while it runs.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn offer_gpu(
     s: &Session,
     what: &'static str,
-    attach: impl FnOnce(Arc<dyn lcc_faces::net::Accelerator>) -> std::result::Result<(), String> + Send + 'static,
+    mut attach: impl FnMut(Arc<dyn lcc_faces::net::Accelerator>) -> std::result::Result<(), String> + Send + 'static,
 ) {
     if cpu_only(s) {
         set_gpu_state(what, GpuState { why: Some("the CPU is chosen in Settings".into()), ..GpuState::default() });
         return;
+    }
+    let (device_choice, prec, cache_dir) = configured_gpu(s);
+    if let Some(dir) = &cache_dir {
+        lcc_gpu::faces::set_cache_dir(dir.clone());
     }
     let task = s.activity.start("facesGpu", "Checking the GPU for faces", crate::activity::Cancel::No);
     task.detail(what);
     set_gpu_state(what, GpuState { checking: true, ..GpuState::default() });
     let spawned = std::thread::Builder::new().name(format!("faces-gpu-{what}")).spawn(move || {
         let _task = task;
-        let gpu = match lcc_gpu::faces::accelerator() {
+        let gpu = match lcc_gpu::faces::accelerator_for((device_choice != "auto").then_some(device_choice.as_str()), prec) {
             Ok(gpu) => gpu,
             Err(why) => {
                 log::info!("faces: {what} runs on the CPU ({why})");
                 return set_gpu_state(what, GpuState { why: Some(why), ..GpuState::default() });
             }
         };
-        let device = lcc_faces::net::Accelerator::device(&*gpu);
-        let card = gpu.card().id();
-        match attach(gpu) {
+        let (res, used_gpu) = match attach(gpu.clone()) {
+            Ok(()) => (Ok(()), gpu),
+            Err(why) if prec == lcc_gpu::faces::Precision::Auto && gpu.precision() == lcc_faces::net::Precision::Fp16 => {
+                let fp32 = gpu.as_fp32();
+                log::info!("faces: {what} FP16 check fell back ({why}); trying FP32");
+                (attach(fp32.clone()), fp32)
+            }
+            Err(why) => (Err(why), gpu),
+        };
+        match res {
             Ok(()) => {
-                log::info!("faces: {what} runs on {device} (the {card} card)");
-                set_gpu_state(what, GpuState { device: Some(device), card: Some(card), ..GpuState::default() });
+                let device = lcc_faces::net::Accelerator::device(&*used_gpu);
+                let card = used_gpu.card().id();
+                let precision = used_gpu.precision_name();
+                log::info!("faces: {what} runs on {device} ({precision}, the {card} card)");
+                set_gpu_state(what, GpuState { device: Some(device), card: Some(card), precision: Some(precision), ..GpuState::default() });
             }
             Err(why) => {
                 log::info!("faces: {what} stays on the CPU: {why}");
@@ -274,14 +303,14 @@ pub(crate) fn lost_card(st: &GpuState, attached: bool) -> Option<lcc_gpu::faces:
 }
 
 /// When the card model `what` ran on stopped working ([`lost_card`]), offer the model to the GPU again: it goes to the
-/// other card when that works ([`lcc_gpu::faces::accelerator`], checked against the CPU there as at first), else it
+/// other card when that works ([`lcc_gpu::faces::accelerator_for`], checked against the CPU there as at first), else it
 /// stays on the CPU and says why. Cheap to call every frame; each card is given up on once, so this ends.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn move_off_lost_card(
     s: &Session,
     what: &'static str,
     attached: bool,
-    attach: impl FnOnce(Arc<dyn lcc_faces::net::Accelerator>) -> std::result::Result<(), String> + Send + 'static,
+    attach: impl FnMut(Arc<dyn lcc_faces::net::Accelerator>) -> std::result::Result<(), String> + Send + 'static,
 ) -> bool {
     let Some(card) = gpu_state(what).and_then(|st| lost_card(&st, attached)) else { return false };
     log::info!("faces: the {} card stopped working; {what} tries the other card", card.id());
@@ -289,13 +318,75 @@ pub(crate) fn move_off_lost_card(
     true
 }
 
-/// `faces.gpu`: where the face models run, and the switch that keeps them on the CPU.
+/// `faces.gpu`: where the face models run, and the device/precision choices.
 fn gpu(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "faces.gpu";
-    if let Some(cpu) = p.get("cpuOnly") {
-        let cpu = cpu.as_bool().ok_or_else(|| bad(C, "`cpuOnly` is true or false"))?;
+    let cpu_param = match p.get("cpuOnly") {
+        None => None,
+        Some(v) => Some(v.as_bool().ok_or_else(|| bad(C, "`cpuOnly` is true or false"))?),
+    };
+    let dev_param = match p.get("device") {
+        None => None,
+        Some(v) => {
+            let raw = v.as_str().ok_or_else(|| bad(C, "`device` must be a string"))?.trim();
+            if raw.is_empty() || raw.eq_ignore_ascii_case("auto") {
+                Some("auto".to_string())
+            } else if raw.eq_ignore_ascii_case("cpu") {
+                Some("cpu".to_string())
+            } else {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let parsed = lcc_gpu::cards::AdapterKey::parse(raw).ok_or_else(|| bad(C, format!("unknown device `{raw}`")))?;
+                    let adapters = lcc_gpu::faces::available_devices();
+                    let entry = adapters
+                        .iter()
+                        .find(|a| a.key == parsed || a.key.same_model(&parsed))
+                        .ok_or_else(|| bad(C, format!("unknown graphics card `{raw}`")))?;
+                    if !entry.usable {
+                        let reason = entry.why_not.as_deref().unwrap_or("card is not usable");
+                        return Err(bad(C, format!("graphics card `{raw}` is not usable: {reason}")));
+                    }
+                    Some(entry.key.to_string())
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    return Err(bad(C, "GPU devices are not supported on this platform"));
+                }
+            }
+        }
+    };
+    let prec_param = match p.get("precision") {
+        None => None,
+        Some(v) => {
+            let raw = v.as_str().ok_or_else(|| bad(C, "`precision` must be a string"))?.trim();
+            if raw.is_empty() || raw.eq_ignore_ascii_case("auto") {
+                Some("auto".to_string())
+            } else if raw.eq_ignore_ascii_case("fp16") {
+                Some("fp16".to_string())
+            } else if raw.eq_ignore_ascii_case("fp32") {
+                Some("fp32".to_string())
+            } else {
+                return Err(bad(C, "`precision` is `auto`, `fp16`, or `fp32`"));
+            }
+        }
+    };
+
+    if let (Some(cpu), Some(dev)) = (cpu_param, dev_param.as_deref()) {
+        if cpu && dev != "cpu" {
+            return Err(bad(C, "cannot set both `cpuOnly: true` and a GPU `device`"));
+        }
+        if !cpu && dev == "cpu" {
+            return Err(bad(C, "cannot set both `cpuOnly: false` and `device: \"cpu\"`"));
+        }
+    }
+
+    let resolved_device = dev_param.or_else(|| cpu_param.map(|cpu| if cpu { "cpu".to_string() } else { "auto".to_string() }));
+    if resolved_device.is_some() || prec_param.is_some() {
         let dir = s.face_models_dir.clone().ok_or_else(|| bad(C, "this build has nowhere to keep face models (the desktop app does)"))?;
-        super::face_models::set_cpu_only(&dir, cpu)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        lcc_gpu::faces::set_cache_dir(dir.join(".gpu-cache"));
+        let saved = super::face_models::set_gpu_settings(&dir, resolved_device.as_deref(), prec_param.as_deref())?;
+        let cpu = saved.is_cpu_only();
         #[cfg(not(target_arch = "wasm32"))]
         let embedder = s.faces.embedder.as_ref().map(|(_, e)| e.clone());
         #[cfg(target_arch = "wasm32")]
@@ -311,9 +402,13 @@ fn gpu(s: &mut Session, p: &Value) -> Result<Value> {
             {
                 lcc_gpu::faces::reset();
                 if let Some(e) = embedder {
+                    e.net().detach();
                     offer_gpu(s, "recognition", move |gpu| e.accelerate(gpu, true).map_err(|e| e.to_string()));
                 } else {
                     set_gpu_state("recognition", GpuState::default());
+                }
+                if s.segmenter.open_model_installed("face") {
+                    let _ = detector(s);
                 }
             }
         }
@@ -363,7 +458,11 @@ pub(crate) fn recognition_gpu_state(s: &Session) -> GpuState {
     if let Some((_, e)) = &s.faces.embedder
         && let Some(a) = e.net().accelerator()
     {
-        return GpuState { device: Some(a.device()), ..GpuState::default() };
+        let precision = match a.precision() {
+            lcc_faces::net::Precision::Fp16 => "fp16",
+            lcc_faces::net::Precision::Fp32 => "fp32",
+        };
+        return GpuState { device: Some(a.device()), precision: Some(precision), ..GpuState::default() };
     }
     let dir = s.face_models_dir.as_deref();
     let has_embedder = dir.is_some_and(|d| super::face_models::read_settings(d).embedder.is_some());
@@ -372,8 +471,17 @@ pub(crate) fn recognition_gpu_state(s: &Session) -> GpuState {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        match lcc_gpu::faces::accelerator() {
-            Ok(gpu) => GpuState { device: Some(lcc_faces::net::Accelerator::device(&*gpu)), card: Some(gpu.card().id()), ..GpuState::default() },
+        let (device_choice, prec, cache_dir) = configured_gpu(s);
+        if let Some(d) = cache_dir {
+            lcc_gpu::faces::set_cache_dir(d);
+        }
+        match lcc_gpu::faces::accelerator_for((device_choice != "auto").then_some(device_choice.as_str()), prec) {
+            Ok(gpu) => GpuState {
+                device: Some(lcc_faces::net::Accelerator::device(&*gpu)),
+                card: Some(gpu.card().id()),
+                precision: Some(gpu.precision_name()),
+                ..GpuState::default()
+            },
             Err(why) => GpuState { why: Some(why), ..GpuState::default() },
         }
     }
@@ -385,8 +493,55 @@ pub(crate) fn recognition_gpu_state(s: &Session) -> GpuState {
 
 /// What `faces.gpu` and `faces.models.list` say about the GPU.
 pub(crate) fn gpu_json(s: &Session) -> Value {
+    let st = s.face_models_dir.as_deref().map(super::face_models::read_settings).unwrap_or_default();
+    let cpu_only = st.is_cpu_only();
+    let device_choice = st.effective_device();
+    let precision_choice = st.effective_precision();
+    #[cfg(not(target_arch = "wasm32"))]
+    let gpu_devices: Vec<Value> = {
+        let cards = lcc_gpu::faces::available_devices();
+        cards
+            .iter()
+            .map(|a| {
+                let mut name = a.name.clone();
+                if cards.iter().filter(|c| c.key.same_model(&a.key)).count() > 1 {
+                    name = format!("{name} #{}", a.key.index);
+                }
+                if a.drives_screen {
+                    name = format!("{name} (screen)");
+                }
+                json!({
+                    "id": a.key.to_string(),
+                    "name": name,
+                    "backend": a.backend,
+                    "kind": "gpu",
+                    "usable": a.usable,
+                    "dedicated": a.kind == lcc_gpu::cards::AdapterKind::Dedicated,
+                    "nvidia": a.key.vendor == 0x10de,
+                    "whyNot": a.why_not,
+                })
+            })
+            .collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let gpu_devices: Vec<Value> = Vec::new();
+    let available_devices: Vec<Value> = std::iter::once(json!({
+        "id": "auto",
+        "name": "Automatic",
+        "kind": "auto",
+    }))
+    .chain(std::iter::once(json!({
+        "id": "cpu",
+        "name": "CPU",
+        "kind": "cpu",
+    })))
+    .chain(gpu_devices)
+    .collect();
     json!({
-        "cpuOnly": cpu_only(s),
+        "cpuOnly": cpu_only,
+        "deviceChoice": device_choice,
+        "precisionChoice": precision_choice,
+        "availableDevices": available_devices,
         "detection": detection_gpu_state(s),
         "recognition": recognition_gpu_state(s),
     })
@@ -654,7 +809,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Face Models on the GPU",
             [],
             None,
-            "{cpuOnly?: bool} → {cpuOnly, detection, recognition}: where the face models run, each as {checking, device, why} (null until it is loaded). The GPU is used only after a background check shows it gives the CPU's results faster; `cpuOnly: true` keeps every face model on the CPU (Settings ▸ Faces), `false` checks the GPU again",
+            "{cpuOnly?: bool, device?: string, precision?: auto | fp16 | fp32} → {cpuOnly, deviceChoice, precisionChoice, availableDevices, detection, recognition}: where the face models run, each as {checking, device, precision, why}. The GPU is used only after a background check shows it gives the CPU's results faster; `device` picks `auto` (prefers dedicated NVIDIA GPUs), `cpu`, or an adapter key; `precision` picks `auto` (FP16 when supported & accurate, else FP32), `fp16`, or `fp32`; `cpuOnly: true` keeps every face model on the CPU",
             always,
             gpu
         ),
