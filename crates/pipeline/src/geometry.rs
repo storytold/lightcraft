@@ -371,6 +371,20 @@ impl Frame {
             .collect()
     }
 
+    /// Where [`Frame::sample`] into a `w × h` output reads each plane of an output pixel from, in pixels of
+    /// the `src_w × src_h` source. `None` when its reads are not single source points: a turned source, or
+    /// a prefiltered (downscaled) one.
+    pub fn source_map(&self, src_w: usize, src_h: usize, w: usize, h: usize) -> Option<SourceMap> {
+        if self.orient != Orientation::Normal {
+            return None;
+        }
+        let plan = self.sample_plan(src_w, src_h, w, h);
+        if plan.prefilter.is_some() {
+            return None;
+        }
+        Some(SourceMap { plan, warp: self.warp.clone() })
+    }
+
     /// The sampling of [`Frame::sample`] from the oriented, prefiltered source `base`.
     fn sample_base(&self, base: std::borrow::Cow<'_, Rgb32f>, plan: SamplePlan, w: usize, h: usize) -> Rgb32f {
         let affine = |xf: Affine| {
@@ -434,6 +448,37 @@ impl MaskMap {
             }
             None => self.to_norm.apply(p),
         }
+    }
+}
+
+/// Output pixel → the source position each plane is read from ([`Frame::source_map`]).
+#[derive(Clone, Debug)]
+pub struct SourceMap {
+    plan: SamplePlan,
+    warp: Option<Warp>,
+}
+
+impl SourceMap {
+    /// Where plane `ch` of output pixel `(x, y)` is read from, in source pixels (pixel centres at `.5`);
+    /// `None` where the output shows no photo.
+    pub fn at(&self, x: usize, y: usize, ch: usize) -> Option<Point> {
+        let centre = Point::new(x as f64 + 0.5, y as f64 + 0.5);
+        let (sx, sy) = (self.plan.sx, self.plan.sy);
+        match (&self.plan.mode, self.warp.as_ref()) {
+            (SampleMode::Copy, _) => Some(centre),
+            (SampleMode::Warp(o2t), Some(wp)) => {
+                let (c, g) = wp.frame(o2t, x, y)?;
+                let q = if ch != 1 && wp.per_channel() { wp.corrected_to_source(c, ch) } else { g };
+                Some(Point::new(q.x * sx, q.y * sy))
+            }
+            (SampleMode::Warp(o2t), None) => Some((Affine::scale(sx, sy) * *o2t).apply(centre)),
+            (SampleMode::Affine(xf), _) => Some(xf.apply(centre)),
+        }
+    }
+
+    /// Whether every plane of every pixel is read from the same pixel of the source.
+    pub fn is_identity(&self) -> bool {
+        matches!(self.plan.mode, SampleMode::Copy)
     }
 }
 

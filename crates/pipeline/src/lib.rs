@@ -653,8 +653,9 @@ pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
 
 /// The picture the AI Defringe model reads ([`lightcraft_denoise::defringe`], docs/ai-defringe.md): `s` rendered for
 /// `req` up to the Defringe stage (resampled, white balance, exposure, lateral chromatic aberration corrected), with
-/// the Defringe sliders left out.
-pub fn defringe_tap(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> Rgb32f {
+/// the Defringe sliders left out; and the frame it was sampled through, whose [`geometry::Frame::source_map`] says which
+/// source pixel each plane of each of its pixels came from.
+pub fn defringe_tap(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> (Rgb32f, geometry::Frame) {
     let effective = s.effective();
     let mut rendition = settings_for(&effective, req).into_owned();
     rendition.optics.defringe_purple_amount = 0.0;
@@ -665,7 +666,7 @@ pub fn defringe_tap(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &
     // `lin_cpu` up to the Defringe stage: retouching and red-eye come after it
     local_tone::apply(&mut img, info, &plan);
     local::white_balance(&mut img, info, &plan.settings);
-    img
+    (img, plan.frame)
 }
 
 /// The settings a render of `s` for `req` uses: the HDR edit for an [`OutputDepth::F32Hdr`]

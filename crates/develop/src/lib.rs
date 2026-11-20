@@ -39,7 +39,8 @@ impl DevelopSettings {
         serde_json::from_value(v.clone())
     }
 
-    /// [`Self::to_json`] with Remove Hot Pixels (`detail.nr_outliers`) stated even when off, for JSON that is copied,
+    /// [`Self::to_json`] with Remove Hot Pixels (`detail.nr_outliers`) and AI Defringe (`optics.ai_defringe`,
+    /// `optics.ai_defringe_on`) stated even at their defaults, for JSON that is copied,
     /// merged, scaled or compared key by key (copy / paste, presets, Auto Sync). The stored JSON leaves it out when
     /// off, so settings saved before it keep their hash; a merge needs the `false`, or copying Detail would not turn
     /// the box off and a preset applied at an amount would not find its base value.
@@ -47,6 +48,12 @@ impl DevelopSettings {
         let mut v = self.to_json();
         if let Some(detail) = v.get_mut("detail").and_then(Value::as_object_mut) {
             detail.insert("nr_outliers".into(), Value::Bool(self.detail.nr_outliers));
+        }
+        // AI Defringe's Amount and switch are left out at their defaults too: a paste from a photo without it must
+        // switch it off
+        if let Some(optics) = v.get_mut("optics").and_then(Value::as_object_mut) {
+            optics.insert("ai_defringe".into(), Value::from(self.optics.ai_defringe));
+            optics.insert("ai_defringe_on".into(), serde_json::json!(self.optics.ai_defringe_on));
         }
         v
     }
@@ -490,6 +497,16 @@ mod tests {
         assert_eq!((s.optics.ai_defringe, s.optics.ai_defringe_on), (0.0, None));
         s.optics.ai_defringe = 30.0;
         assert!(s.optics.ai_defringe_enabled());
+    }
+
+    #[test]
+    fn pasting_from_a_photo_without_ai_defringe_switches_it_off() {
+        let mut target = DevelopSettings::default();
+        target.optics.ai_defringe = 60.0;
+        target.optics.ai_defringe_on = Some(true);
+        let pasted = target.merged(&DevelopSettings::default().to_json_for_merge()).unwrap();
+        assert_eq!((pasted.optics.ai_defringe, pasted.optics.ai_defringe_on), (0.0, None));
+        assert!(!pasted.optics.ai_defringe_enabled());
     }
 
     #[test]

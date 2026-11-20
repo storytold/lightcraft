@@ -17,9 +17,11 @@ off. Builds without the model runtime (the web build, or a native build without 
 ## How it works
 
 For each photo with AI Defringe on, the model reads the picture at the Defringe stage: the full-size source developed
-with the default settings up to that point (white balance, exposure, lateral chromatic aberration removed; no
-geometry, so it lines up with the source pixel for pixel). Its correction is kept as a gain per channel for each pixel
-it changes, applied to the source picture before the develop pipeline. So:
+with the default settings up to that point (white balance, exposure, lateral chromatic aberration removed, and the
+camera's own lens corrections; no crop or rotation). Its correction is kept as a gain per channel for each pixel it
+changes, applied to the source picture before the develop pipeline. Lateral chromatic aberration correction reads each
+colour plane of a pixel from a slightly different place in the source, so each plane's gain is moved back to where it
+was read from (spread over the four source pixels around it). So:
 
 - The edit never makes the correction again. Moving any slider, Amount included, uses the one already made.
 - A render smaller than the source (the loupe, thumbnails) takes the mean gain over each of its pixels, so thin
@@ -53,7 +55,7 @@ The network only proposes a change; the host decides how much of it to keep. The
    green chroma.
 6. **No more colourful than its neighbourhood:** at most 1.2 × the highest chroma within 7 × 7 px.
 7. **Toward the surroundings.** Of each change, only the part that moves the pixel toward the mean colour of the
-   untouched pixels within 7 px is kept, at most up to it. Without this, a correction that stopped at grey could move
+   untouched pixels within 7 px is kept, at most up to it, and rules 4 and 5 are applied to it again. Without this, a correction that stopped at grey could move
    a purple fringe sideways into a brown-orange rim.
 8. **Exact elsewhere.** A pixel whose colour moves by 1e-5 or less keeps its exact value.
 
@@ -94,11 +96,13 @@ is not installed and the one already there stays.
 
 `aiDefringe.toggle {id?, enabled?}`, `aiDefringe.status {id?}`, `aiDefringe.pump`, `aiDefringe.make {id?}` (makes a
 correction now and waits, for scripts), `aiDefringe.retry {id?}`, `aiDefringe.clear`, and `aiDefringe.models.inspect
-{path}`, `.install {path, acknowledged: true}`, `.remove`. The develop control is `optics.aiDefringe` (with
+{path}`, `.install {path, model, acknowledged: true}` (`model` is the description `.inspect` gave, which the user
+accepted), `.remove`. The develop control is `optics.aiDefringe` (with
 `optics.ai_defringe_on` in the settings, as AI Denoise has `enhance.denoise_on`). The models folder is
-`<config>/defringe-models`, or `$LIGHTCRAFT_DEFRINGE_MODELS`. The model goes in an `installed` folder inside it, the
-only thing LightCraft writes or deletes there, so the models folder can be one that holds other files. During an install
-the previous model is kept as `.installed-previous` until the new one is in place.
+`<config>/defringe-models`, or `$LIGHTCRAFT_DEFRINGE_MODELS`. LightCraft writes and deletes only an `installed` folder
+inside it, so the models folder can be one that holds other files. That folder holds the model (`installed/model`) and,
+during an install, the new model being written (`installed/installing-<process id>`) and the previous one
+(`installed/previous`), kept until the new one is in place.
 
 ## Limits
 

@@ -30,7 +30,7 @@ use crate::Session;
 use crate::media::{SourceLevel, SourceRef};
 
 /// The composition and the correction's form; a change makes every correction again.
-const VERSION: &str = "ai-defringe-1";
+const VERSION: &str = "ai-defringe-2";
 /// The manifest that describes a defringe model, beside its ONNX file.
 pub const MANIFEST: &str = "defringe-model.json";
 /// What a model must say it does: [`lightcraft_denoise::defringe`]'s planes in, (Δa, Δb, gate) out.
@@ -116,15 +116,18 @@ pub fn models_dir() -> Option<PathBuf> {
         .or_else(|| crate::config::config_dir().map(|d| d.join("defringe-models")))
 }
 
-/// The folder inside the models folder that holds the installed model. LightCraft owns it and nothing else there:
-/// the models folder may be one the user keeps other files in.
-const CURRENT: &str = "installed";
-/// The previous installation while a new one replaces it, kept until the replacement is in place.
-const PREVIOUS: &str = ".installed-previous";
+/// The folder inside the models folder that LightCraft owns, and the only thing there it writes or deletes: the
+/// models folder may be one the user keeps other files in. It holds the installed model, and during an install the
+/// new one being written and the previous one, kept until the new one is in place.
+const OWN: &str = "installed";
+/// The installed model, inside [`OWN`].
+const CURRENT: &str = "model";
+/// The previous model while a new one replaces it, inside [`OWN`].
+const PREVIOUS: &str = "previous";
 
 /// The model installed in models folder `dir`: its manifest and file, if there is one.
 pub fn installed(dir: &Path) -> Option<(Manifest, PathBuf)> {
-    let cur = dir.join(CURRENT);
+    let cur = dir.join(OWN).join(CURRENT);
     let m = Manifest::parse(&std::fs::read_to_string(cur.join(MANIFEST)).ok()?).ok()?;
     let file = cur.join(&m.file);
     file.is_file().then_some((m, file))
@@ -204,13 +207,14 @@ pub fn install(onnx: &Path, dir: &Path, accepted: &Manifest) -> Result<Manifest,
     // the bytes read here are the ones checked, run and installed
     let bytes = read_model_file(onnx, &m)?;
     self_test(&bytes)?;
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let (cur, prev) = (dir.join(CURRENT), dir.join(PREVIOUS));
+    let own = dir.join(OWN);
+    std::fs::create_dir_all(&own).map_err(|e| e.to_string())?;
+    let (cur, prev) = (own.join(CURRENT), own.join(PREVIOUS));
     // a previous installation left behind by an install that could not put it back is restored first, never deleted
     if !cur.exists() && prev.exists() {
         std::fs::rename(&prev, &cur).map_err(|e| format!("couldn't restore the previous model from {}: {e}", prev.display()))?;
     }
-    let staging = dir.join(format!(".installing-{}", std::process::id()));
+    let staging = own.join(format!("installing-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
     let write = || -> std::io::Result<()> {
@@ -243,12 +247,12 @@ pub fn install(onnx: &Path, dir: &Path, accepted: &Manifest) -> Result<Manifest,
 /// Delete the model installed in models folder `dir` (only LightCraft's own folder in it; corrections already made
 /// stay until the cache is cleared).
 pub fn remove(dir: &Path) -> Result<bool, String> {
-    let cur = dir.join(CURRENT);
-    if !cur.exists() {
-        return Ok(false);
+    let own = dir.join(OWN);
+    let had = own.join(CURRENT).exists();
+    if own.exists() {
+        std::fs::remove_dir_all(&own).map_err(|e| e.to_string())?;
     }
-    std::fs::remove_dir_all(&cur).map_err(|e| e.to_string())?;
-    Ok(true)
+    Ok(had)
 }
 
 #[cfg(feature = "denoise")]
@@ -525,10 +529,11 @@ impl Recipe {
         let src = source.image.clone();
         let info = source.info_or(self.info.clone());
         let req = lightcraft_pipeline::RenderRequest { apply_crop: false, ..lightcraft_pipeline::RenderRequest::fit(src.width, src.height) };
-        let tap = lightcraft_pipeline::defringe_tap(&src, &info, &DevelopSettings::default(), &req);
-        if (tap.width, tap.height) != (src.width, src.height) {
+        let (tap, frame) = lightcraft_pipeline::defringe_tap(&src, &info, &DevelopSettings::default(), &req);
+        let map = frame.source_map(src.width, src.height, tap.width, tap.height);
+        let Some(map) = map.filter(|_| (tap.width, tap.height) == (src.width, src.height)) else {
             return Err("the Defringe stage's picture doesn't line up with the photo".into());
-        }
+        };
         let (w, h) = (tap.width, tap.height);
         let top = lightcraft_denoise::defringe::top(&tap.data);
         let rgb: Vec<[f32; 3]> = tap.data.iter().map(|p| p.map(|v| (v / top).max(0.0))).collect();
@@ -537,15 +542,11 @@ impl Recipe {
         let changed = self.model.correct(&rgb, &clip, w, h, progress, cancel).map_err(|e| e.to_string())?;
         // as a gain on the source picture: the Defringe stage is the source after per-channel gains (white balance,
         // exposure), so the ratio the model made carries over
-        let (mut index, mut gain) = (Vec::with_capacity(changed.len()), Vec::with_capacity(changed.len()));
-        for (i, p) in changed {
-            let Some(old) = rgb.get(i as usize) else { continue };
-            let g = [0, 1, 2].map(|c| if old[c] > 1e-4 { f16_bits((p[c] / old[c]).clamp(0.2, 5.0) - 1.0) } else { 0 });
-            if g != [0; 3] {
-                index.push(i);
-                gain.push(g);
-            }
-        }
+        let ratios = changed.into_iter().filter_map(|(i, p)| {
+            let old = rgb.get(i as usize)?;
+            Some((i, [0, 1, 2].map(|c| if old[c] > 1e-4 { (p[c] / old[c]).clamp(0.2, 5.0) - 1.0 } else { 0.0 })))
+        });
+        let (index, gain) = to_source(ratios, &map, w, h);
         let c = Correction { key: self.key, w, h, index, gain, memo: Mutex::new(None) };
         if let Some(path) = &self.path {
             c.write(path, &self.publish)?;
@@ -558,6 +559,63 @@ impl Recipe {
         let _ = (&self.source, &self.info, &self.model, &self.path, &self.publish);
         Err("this build of LightCraft can't run AI models".into())
     }
+}
+
+/// The gains (minus 1) the model made at Defringe-stage pixels, moved to the source pixels each plane of those
+/// pixels was read from (`map`): lateral chromatic aberration correction and lens corrections read the planes of
+/// a pixel from slightly different places, and the correction is applied to the source. Each plane's gain is
+/// spread over the four source pixels around where it was read, with bilinear weights, and each source pixel gets
+/// the weighted mean of what reached it. The unchanged pixels around the changed ones count too, with no gain, so
+/// a gain that is the same over an area stays the same and the edge of a corrected area doesn't jump to full gain.
+#[cfg_attr(not(feature = "denoise"), allow(dead_code))]
+fn to_source(
+    changed: impl Iterator<Item = (u32, [f32; 3])>,
+    map: &lightcraft_pipeline::geometry::SourceMap,
+    w: usize,
+    h: usize,
+) -> (Vec<u32>, Vec<[u16; 3]>) {
+    let changed: HashMap<u32, [f32; 3]> = changed.filter(|e| e.1 != [0.0; 3]).collect();
+    let mut out: Vec<(u32, [u16; 3])> = if map.is_identity() {
+        changed.into_iter().map(|(i, g)| (i, g.map(f16_bits))).collect()
+    } else {
+        // the changed pixels and the unchanged ones within 2 px of them
+        let mut around: Vec<u32> = Vec::with_capacity(changed.len() * 4);
+        for &i in changed.keys() {
+            let (x, y) = (i as usize % w, i as usize / w);
+            for ny in y.saturating_sub(2)..(y + 3).min(h) {
+                for nx in x.saturating_sub(2)..(x + 3).min(w) {
+                    around.push((ny * w + nx) as u32);
+                }
+            }
+        }
+        around.sort_unstable();
+        around.dedup();
+        // per source pixel and plane: the sum of weight × gain, and of weight
+        let mut sums: HashMap<u32, [[f32; 2]; 3]> = HashMap::new();
+        for i in around {
+            let g = changed.get(&i).copied().unwrap_or([0.0; 3]);
+            let (x, y) = (i as usize % w, i as usize / w);
+            for (c, &gc) in g.iter().enumerate() {
+                let Some(p) = map.at(x, y, c) else { continue };
+                let (fx, fy) = (p.x - 0.5, p.y - 0.5);
+                let (x0, y0) = (fx.floor(), fy.floor());
+                let (tx, ty) = ((fx - x0) as f32, (fy - y0) as f32);
+                for (dx, dy, wgt) in [(0, 0, (1.0 - tx) * (1.0 - ty)), (1, 0, tx * (1.0 - ty)), (0, 1, (1.0 - tx) * ty), (1, 1, tx * ty)] {
+                    let (sx, sy) = (x0 as i64 + dx, y0 as i64 + dy);
+                    if wgt <= 0.0 || sx < 0 || sy < 0 || sx >= w as i64 || sy >= h as i64 {
+                        continue;
+                    }
+                    let e = sums.entry((sy as usize * w + sx as usize) as u32).or_insert([[0.0; 2]; 3]);
+                    e[c][0] += gc * wgt;
+                    e[c][1] += wgt;
+                }
+            }
+        }
+        sums.into_iter().map(|(i, s)| (i, s.map(|[gw, wt]| f16_bits(if wt > 1e-6 { gw / wt } else { 0.0 })))).collect()
+    };
+    out.retain(|e| e.1 != [0; 3]);
+    out.sort_unstable_by_key(|e| e.0);
+    out.into_iter().unzip()
 }
 
 /// What a render does about AI Defringe.
@@ -593,6 +651,8 @@ struct Job {
     done: Arc<AtomicUsize>,
     total: Arc<AtomicUsize>,
     cancel: Arc<AtomicBool>,
+    /// Set when the pump cancelled it because it was no longer wanted (not the user, from Activity).
+    unwanted: AtomicBool,
     /// The cache's epoch when it started: a result from before a clear is dropped.
     epoch: u64,
     _task: crate::activity::TaskGuard,
@@ -805,6 +865,7 @@ impl Session {
                 p.develop.ai_defringe_amount() > 0.0 && self.aidefringe.installed.as_ref().is_some_and(|i| key(&p, &i.0.sha256) == job.key)
             });
             if !still {
+                job.unwanted.store(true, Ordering::Relaxed);
                 job.cancel.store(true, Ordering::Relaxed);
             }
             match job.rx.try_recv() {
@@ -826,8 +887,10 @@ impl Session {
                         Ok(Err(e)) if !job.cancel.load(Ordering::Relaxed) => {
                             self.aidefringe.failed.insert(job.key, e);
                         }
-                        // cancelled while still wanted: by the user, so not started again by itself
-                        Ok(Err(_)) if still => {
+                        // cancelled by the user (not by the pump because it was no longer wanted): not started again
+                        // by itself. One the pump stopped that is wanted again (switched off and on quickly) starts
+                        // again below.
+                        Ok(Err(_)) if still && !job.unwanted.load(Ordering::Relaxed) => {
                             self.aidefringe.cancelled.insert(job.key);
                         }
                         Ok(Err(_)) => {}
@@ -877,7 +940,7 @@ impl Session {
                 let _ = tx.send(made);
             })
             .ok();
-        self.aidefringe.job = Some(Job { photo, key, rx, done, total, cancel, epoch, _task: task });
+        self.aidefringe.job = Some(Job { photo, key, rx, done, total, cancel, unwanted: AtomicBool::new(false), epoch, _task: task });
     }
 
     /// Make photo `id`'s correction now, on this thread (for scripts and tests) → how many pixels it changes.

@@ -158,3 +158,14 @@ fn the_clip_mask_matches_a_plain_5_by_5_mean() {
         }
     }
 }
+
+#[test]
+fn a_change_toward_the_surroundings_stops_at_grey_too() {
+    // a red pixel pulled toward a blue-green surround: the step would end past grey
+    let a = [0.1f32, 0.0];
+    let d = not_past_grey(a, 0.1, [-0.00483 - 0.1, -0.02192]);
+    let new = [a[0] + d[0], a[1] + d[1]];
+    assert!(new[0] * a[0] + new[1] * a[1] >= -1e-7, "{new:?}");
+    // a change that doesn't reach grey is kept as it is
+    assert_eq!(not_past_grey(a, 0.1, [-0.05, 0.01]), [-0.05, 0.01]);
+}

@@ -123,3 +123,52 @@ fn the_memo_keeps_nothing_alive_and_never_mistakes_a_new_picture_for_an_old_one(
     let b = Arc::new(Rgb32f { width: 2, height: 1, data: vec![[0.25; 3]; 2] });
     assert_eq!(c.apply(&b, 1.0).data[0], [0.5, 0.25, 0.25]);
 }
+
+#[test]
+fn gains_go_back_to_where_lateral_ca_correction_read_each_plane_from() {
+    let (w, h) = (101, 101);
+    let mut frame = lightcraft_pipeline::geometry::Frame::new(w, h, &DevelopSettings::default(), false);
+    // red read 1 % further out from the centre (50.5, 50.5), blue 1 % further in
+    frame.add_lateral_ca([0.01, -0.01]);
+    let map = frame.source_map(w, h, w, h).unwrap();
+    assert!(!map.is_identity());
+    let (index, gain) = to_source([((50 * w + 90) as u32, [0.5f32, 0.25, 0.5])].into_iter(), &map, w, h);
+    let at = |x: usize, c: usize| index.iter().position(|&i| i as usize == 50 * w + x).map_or(0.0, |k| f16_value(gain[k][c]));
+    // red was read at x 90.9: 60 % from pixel 90, 40 % from 91; blue at 90.1: 40 % from 89, 60 % from 90
+    let near = |a: f32, b: f32| (a - b).abs() < 1e-2;
+    assert!(near(at(90, 0), 0.3) && near(at(91, 0), 0.2), "red {} {}", at(90, 0), at(91, 0));
+    assert!(near(at(89, 2), 0.2) && near(at(90, 2), 0.3), "blue {} {}", at(89, 2), at(90, 2));
+    assert!(near(at(90, 1), 0.25) && at(89, 1) == 0.0 && at(91, 1) == 0.0, "green stays put");
+    assert_eq!(at(92, 0) + at(88, 2), 0.0, "nothing further away");
+    // the same gain over an area stays the same inside it
+    let all = (20..80).flat_map(|y| (20..80).map(move |x| ((y * w + x) as u32, [0.5f32; 3])));
+    let (index, gain) = to_source(all, &map, w, h);
+    let k = index.iter().position(|&i| i as usize == 50 * w + 60).unwrap();
+    assert!(gain[k].iter().all(|&g| near(f16_value(g), 0.5)), "{:?}", gain[k].map(f16_value));
+}
+
+#[test]
+fn without_lens_corrections_the_gains_stay_where_they_were_made() {
+    let frame = lightcraft_pipeline::geometry::Frame::new(8, 4, &DevelopSettings::default(), false);
+    let map = frame.source_map(8, 4, 8, 4).unwrap();
+    assert!(map.is_identity());
+    let (index, gain) = to_source([(5u32, [0.5f32, 0.0, -0.25])].into_iter(), &map, 8, 4);
+    assert_eq!((index, gain), (vec![5], vec![[f16_bits(0.5), 0, f16_bits(-0.25)]]));
+}
+
+#[test]
+fn a_gain_goes_back_to_the_source_pixel_its_plane_was_read_from() {
+    // one bright red source pixel; sampled with lateral CA correction, it shows up elsewhere in the red plane
+    let (w, h) = (101, 101);
+    let mut src = Rgb32f { width: w, height: h, data: vec![[0.1; 3]; w * h] };
+    src.data[30 * w + 95][0] = 1.0;
+    let mut frame = lightcraft_pipeline::geometry::Frame::new(w, h, &DevelopSettings::default(), false);
+    frame.add_lateral_ca([0.03, 0.0]);
+    let tap = frame.sample(&src, w, h);
+    let shown = (0..w * h).max_by(|&a, &b| tap.data[a][0].total_cmp(&tap.data[b][0])).unwrap();
+    assert_ne!(shown, 30 * w + 95, "the test needs the red plane to move");
+    let map = frame.source_map(w, h, w, h).unwrap();
+    let (index, gain) = to_source([(shown as u32, [0.5, 0.0, 0.0])].into_iter(), &map, w, h);
+    let top = (0..index.len()).max_by(|&a, &b| f16_value(gain[a][0]).total_cmp(&f16_value(gain[b][0]))).unwrap();
+    assert_eq!(index[top] as usize, 30 * w + 95);
+}

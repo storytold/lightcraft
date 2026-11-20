@@ -142,6 +142,32 @@ fn the_switch_needs_a_model_and_the_correction_is_made_in_the_background() {
 }
 
 #[test]
+fn switching_off_and_quickly_on_again_does_not_count_as_cancelling() {
+    let mut x = setup("adf-offon");
+    let id = photo(&x.s);
+    install(&mut x);
+    x.s.execute("aiDefringe.toggle", &json!({"enabled": true})).unwrap();
+    x.s.execute("aiDefringe.pump", &json!({})).unwrap();
+    // off: the pump stops the job; on again before it has returned
+    x.s.execute("aiDefringe.toggle", &json!({"enabled": false})).unwrap();
+    x.s.execute("aiDefringe.pump", &json!({})).unwrap();
+    x.s.execute("aiDefringe.toggle", &json!({"enabled": true})).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        x.s.execute("aiDefringe.pump", &json!({})).unwrap();
+        match x.s.aidefringe_state(id) {
+            PhotoState::Ready { .. } => break,
+            PhotoState::Failed { error } => panic!("{error}"),
+            _ => {}
+        }
+        // taken for the user's cancel, it would wait for ever
+        assert!(std::time::Instant::now() < deadline, "the correction never came");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let _ = std::fs::remove_dir_all(&x.dir);
+}
+
+#[test]
 fn an_export_makes_the_correction_when_it_is_missing_and_never_comes_out_without_it() {
     let mut x = setup("adf-export");
     let id = photo(&x.s);
@@ -154,12 +180,17 @@ fn an_export_makes_the_correction_when_it_is_missing_and_never_comes_out_without
     let fixed = decode(&export_photo(&mut x.s, id, &o, 1).unwrap().bytes);
     assert_eq!((plain.width, plain.height), (fixed.width, fixed.height));
     let differs: Vec<usize> = (0..plain.data.len())
-        .filter(|&i| plain.data[i].iter().zip(&fixed.data[i]).any(|(a, b)| (a - b).abs() > 1e-3))
+        // more than one 8-bit step: a step of rounding may flip anywhere
+        .filter(|&i| plain.data[i].iter().zip(&fixed.data[i]).any(|(a, b)| (a - b).abs() > 1.5 / 255.0))
         .map(|i| i % plain.width)
         .collect();
     assert!(!differs.is_empty(), "the export has no correction");
     let edge = plain.width * 96 / 320;
-    assert!(differs.iter().all(|&x| x.abs_diff(edge) < 12), "pixels away from the stripe changed: {:?}", differs.iter().max());
+    assert!(
+        differs.iter().all(|&x| x.abs_diff(edge) < 12),
+        "pixels away from the stripe changed: {:?}",
+        differs.iter().filter(|&&x| x.abs_diff(edge) >= 12).take(20).collect::<Vec<_>>()
+    );
     assert_eq!(std::fs::read_dir(x.dir.join("library").join("ai-defringe")).unwrap().flatten().count(), 1);
     // without a model it fails rather than export without the correction
     x.s.execute("aiDefringe.models.remove", &json!({})).unwrap();
@@ -197,9 +228,20 @@ fn the_models_folder_keeps_the_users_own_files() {
     let models = x.dir.join("defringe-models");
     std::fs::create_dir_all(&models).unwrap();
     std::fs::write(models.join("mine.onnx"), b"the user's").unwrap();
+    // with the names an install used to use for its work beside its own folder
+    for name in [".installed-previous", &format!(".installing-{}", std::process::id())] {
+        std::fs::create_dir_all(models.join(name)).unwrap();
+        std::fs::write(models.join(name).join("keep"), b"the user's").unwrap();
+    }
     install(&mut x);
     install(&mut x);
     assert_eq!(std::fs::read(models.join("mine.onnx")).unwrap(), b"the user's", "installing twice");
+    for name in [".installed-previous", &format!(".installing-{}", std::process::id())] {
+        assert_eq!(std::fs::read(models.join(name).join("keep")).unwrap(), b"the user's", "{name}");
+    }
+    let mut names: Vec<String> = std::fs::read_dir(&models).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    assert_eq!(names, [".installed-previous".to_string(), format!(".installing-{}", std::process::id()), "installed".into(), "mine.onnx".into()]);
     x.s.execute("aiDefringe.models.remove", &json!({})).unwrap();
     assert_eq!(std::fs::read(models.join("mine.onnx")).unwrap(), b"the user's", "removing");
     assert_eq!(x.s.execute("aiDefringe.models.remove", &json!({})).unwrap()["removed"], false);
