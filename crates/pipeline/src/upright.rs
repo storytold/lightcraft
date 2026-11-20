@@ -579,6 +579,16 @@ pub(crate) fn analysis_key(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings)
 /// The image an analysis reads: the lens-corrected source (optics applied, no perspective or crop)
 /// at [`ANALYSIS_LONG`] px, as perceptual lightness normalized to its bright end.
 pub(crate) fn analysis_plane(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> Plane {
+    // Raw decoding keeps negative channels (noise near black through the camera matrix). Resampled as they are,
+    // they lower the luminance the segments are found in, so Upright would find a different correction than for
+    // the same photo decoded with its channels clipped at zero; it analyses that clipped source, as it always has.
+    let clipped;
+    let src = if src.data.iter().flatten().any(|v| *v < 0.0) {
+        clipped = src.map(|p| p.map(|v| v.max(0.0)));
+        &clipped
+    } else {
+        src
+    };
     let mut base = s.clone();
     base.geometry = Geometry::default();
     base.crop = Crop::default();
