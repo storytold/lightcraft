@@ -1520,7 +1520,7 @@ dependencies = [
 [[package]]
 name = "craft-zip"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3#23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3"
+source = "git+https://github.com/storytold/craft-libs?rev=5c496f6e962fcccd8ba91704994c4c06c2fc6a6f#5c496f6e962fcccd8ba91704994c4c06c2fc6a6f"
 dependencies = [
  "flate2",
  "thiserror 2.0.21",
@@ -4040,6 +4040,7 @@ dependencies = [
  "craft-plist",
  "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3)",
  "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f589ff485707007e814671229d0f4e77bc06968a)",
+ "craft-zip",
  "crc32fast",
  "fs4",
  "harfrust 0.13.3",
