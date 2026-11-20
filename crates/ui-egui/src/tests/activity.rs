@@ -110,6 +110,9 @@ fn count_text_by_unit() {
         cancellable: true,
         cancelling: false,
         age_ms: 600,
+        waiting: false,
+        place: 0,
+        lane: None,
     };
     assert_eq!(count_text(&t), "3 of 25");
     (t.done, t.total, t.unit) = (12 * 1_048_576, 340 * 1_048_576, Unit::Bytes);
@@ -172,8 +175,41 @@ fn quit_with_a_running_task_asks_and_quit_anyway_cancels() {
     assert!(g.is_cancelled() && h.quit_requested());
 }
 
+/// An import waiting in line for the library lane (issue #2779's files that waited for a library wait there now)
+/// makes quitting ask, though nothing runs that could be cancelled, and Quit Anyway empties the line.
+#[test]
+fn a_task_waiting_in_line_makes_quitting_ask_and_quit_anyway_empties_the_line() {
+    let mut h = demo();
+    // the lane is held by a task that can't be cancelled: only the waiting import is left to ask about
+    let _held = h.app.session.activity.start("import", "Importing", Cancel::No);
+    h.app.session.activity.enqueue("import", "Importing", waiting_import_request()).unwrap();
+    assert!(h.app.session.activity.running_cancellable().is_empty(), "nothing runs that quitting could cut short");
+    assert!(!crate::panels::notices::may_close(&mut h.app), "quitting asks about the waiting import");
+    assert!(matches!(h.app.quit_prompt, Some(crate::QuitPrompt::Tasks(_))), "{:?}", h.app.quit_prompt);
+    click(&mut h, "button:quitAnyway");
+    assert!(h.app.session.activity.waiting().is_empty(), "the line is emptied");
+    assert!(h.quit_requested());
+}
+
+/// What waits in line for the library lane was meant for the library open now: no switch while it waits.
+#[test]
+fn switching_libraries_is_refused_while_a_task_waits_in_line() {
+    let mut h = demo();
+    let _held = h.app.session.activity.start("import", "Importing", Cancel::No);
+    h.app.session.activity.enqueue("import", "Importing", waiting_import_request()).unwrap();
+    let r = h.app.run("app.openLibrary", serde_json::json!({"path": "/nowhere/else"}));
+    assert!(r.as_ref().is_err_and(|e| e.contains("waiting")), "{r:?}");
+}
+
+fn waiting_import_request() -> lightcraft_engine::activity::Request {
+    lightcraft_engine::activity::Request {
+        command: crate::import::IMPORT_REQUEST.into(),
+        params: serde_json::json!({"paths": ["/nowhere/a.png"], "params": {}, "auto": false}),
+    }
+}
+
 /// Files waiting for a running import or Synchronize Folder (issue #2779) make quitting ask, and
-/// Quit Anyway gives them up instead of asking about them again and again.
+/// Quit Anyway gives them up instead of asking about them again and again. They wait in line.
 #[test]
 fn quit_anyway_gives_up_files_waiting_to_be_imported() {
     let dir = std::env::temp_dir().join(format!("lightcraft-quit-waiting-{}", std::process::id()));
@@ -185,19 +221,21 @@ fn quit_anyway_gives_up_files_waiting_to_be_imported() {
         std::fs::write(dir.join(format!("{i}.png")), png).unwrap();
     }
     let mut h = demo();
-    // the file waits behind an import that is still running
+    // the file waits in line behind an import that is still running
     crate::import::start_paths(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
-    h.app.waiting_import.files = vec![dir.join("0.png").to_string_lossy().to_string()];
+    let queued = crate::import::start_paths(&mut h.app, vec![dir.join("0.png").to_string_lossy().to_string()]).unwrap();
+    assert!(queued["queued"].is_u64(), "{queued}");
     wait_visible(&mut h);
-    assert!(h.app.import.is_some() && !h.app.waiting_import.files.is_empty(), "still waiting");
+    let waiting = |h: &Headless| h.app.session.activity.lane_waiting(lightcraft_engine::activity::Lane::Library);
+    assert!(h.app.import.is_some() && waiting(&h), "still waiting");
     assert!(!crate::panels::notices::may_close(&mut h.app));
     assert!(matches!(h.app.quit_prompt, Some(crate::QuitPrompt::Tasks(_))), "{:?}", h.app.quit_prompt);
     h.step();
-    assert!(h.app.import.is_some() && !h.app.waiting_import.files.is_empty(), "still waiting at the click");
+    assert!(h.app.import.is_some() && waiting(&h), "still waiting at the click");
     click(&mut h, "button:quitAnyway");
     assert!(h.app.quit_prompt.is_none(), "not asked again: {:?}", h.app.quit_prompt);
     assert!(h.quit_requested());
-    assert!(h.app.waiting_import.files.is_empty());
+    assert!(!waiting(&h));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -590,4 +628,100 @@ fn immediate_library_commands_and_auto_sync_show_completion() {
     h.app.ui.toast = None;
     assert!(h.app.run("library.compact", json!({})).is_err());
     assert!(h.app.ui.toast.is_none());
+}
+
+/// Given a preview build running and another waiting in line behind it, then the stack shows both (the waiting one
+/// with ✕), and the waiting one starts by itself, in a frame, when the build ahead of it ends.
+#[test]
+fn a_task_waiting_in_line_has_a_row_and_starts_when_the_lane_frees() {
+    use lightcraft_engine::cmd::previews::PreviewBuild;
+    use std::sync::atomic::Ordering;
+
+    let mut h = demo();
+    let build = std::sync::Arc::new(PreviewBuild::default());
+    h.app.session.preview_build = Some(build.clone());
+    let running = h.app.session.activity.start("previews", "Building previews", Cancel::Yes);
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(1).map(|p| p.id.0).collect();
+    let queued = h.app.session.execute("library.buildPreviews", &json!({"ids": ids, "edge": 256, "queue": true})).unwrap();
+    let waiting = queued["queued"].as_u64().expect("it waits");
+    assert_eq!(h.app.session.activity.list().len(), 2);
+    wait_visible(&mut h);
+    assert!(has(&h, &format!("activity:row:{}", running.id())));
+    assert!(
+        has(&h, &format!("activity:row:{waiting}")) && has(&h, &format!("activity:cancel:{waiting}")) && rows(&h) == 2,
+        "a waiting task draws a row with ✕"
+    );
+    let info = h.app.session.activity.waiting().remove(0);
+    assert_eq!(crate::panels::activity::cross_name(&info), "Remove from Queue: Building previews");
+    let running_row = h.app.session.activity.list().into_iter().find(|t| !t.waiting).expect("the running build");
+    assert_eq!(crate::panels::activity::cross_name(&running_row), "Cancel");
+    // the lane frees with no command asked: the frame loop starts it
+    build.finished.store(true, Ordering::Release);
+    drop(running);
+    let t0 = std::time::Instant::now();
+    while h.app.session.activity.list().iter().any(|t| t.id == waiting && t.label == "Building previews") && t0.elapsed() < T {
+        h.step();
+        let started = h.app.session.preview_build.as_ref().is_some_and(|b| !std::sync::Arc::ptr_eq(b, &build));
+        if started {
+            break;
+        }
+    }
+    assert!(h.app.session.preview_build.as_ref().is_some_and(|b| !std::sync::Arc::ptr_eq(b, &build)), "the waiting build started");
+    assert!(h.step_until(T, |h| h.app.session.activity.list().is_empty()), "the started build ends");
+}
+
+/// Given a build that ended and a build waiting behind it, when a command starts the waiting one before the frame that
+/// announces the first, then the first one's end is still announced, and once.
+#[test]
+fn a_build_replaced_by_the_one_waiting_behind_it_is_still_announced() {
+    use lightcraft_engine::cmd::previews::PreviewBuild;
+    use std::sync::atomic::Ordering;
+
+    let mut h = demo();
+    let first = std::sync::Arc::new(PreviewBuild::default());
+    first.done.store(2, Ordering::Relaxed);
+    h.app.session.preview_build = Some(first.clone());
+    let row = h.app.session.activity.start("previews", "Building previews", Cancel::Yes);
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(1).map(|p| p.id.0).collect();
+    h.app.session.execute("library.buildPreviews", &json!({"ids": ids, "edge": 256, "queue": true})).unwrap();
+    first.finished.store(true, Ordering::Release);
+    drop(row);
+    // a command in the same frame, before the app looks at the finished build
+    h.app.session.execute("activity.list", &json!({})).unwrap();
+    assert!(h.app.session.preview_build.as_ref().is_some_and(|b| !std::sync::Arc::ptr_eq(b, &first)), "the waiting build replaced it");
+    h.step();
+    assert!(first.reported.load(Ordering::Relaxed), "its end was announced");
+    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.contains("Previews ready for 2 photos"), "{toast}");
+    assert!(h.app.session.take_unreported_builds().is_empty());
+    assert!(h.step_until(T, |h| h.app.session.activity.list().is_empty()), "the started build ends");
+}
+
+/// Given a build that ended and a build waiting behind it, when the frame starts the waiting one, then the same frame
+/// asks to be drawn again to see how it goes: nothing else repaints an idle window (the list is closed, or Full Screen
+/// Preview hides it).
+#[test]
+fn the_frame_that_starts_a_waiting_build_asks_for_the_next_one() {
+    use lightcraft_engine::cmd::previews::PreviewBuild;
+    use std::sync::atomic::Ordering;
+
+    let mut h = demo();
+    let first = std::sync::Arc::new(PreviewBuild::default());
+    h.app.session.preview_build = Some(first.clone());
+    let row = h.app.session.activity.start("previews", "Building previews", Cancel::Yes);
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(1).map(|p| p.id.0).collect();
+    h.app.session.execute("library.buildPreviews", &json!({"ids": ids, "edge": 256, "queue": true})).unwrap();
+    first.finished.store(true, Ordering::Release);
+    drop(row);
+    let ctx = egui::Context::default();
+    // (a few empty passes let the context's own first-frame requests go by)
+    for _ in 0..4 {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
+        out.textures_delta.clear();
+    }
+    assert!(!ctx.has_requested_repaint(), "an idle context asks for nothing");
+    h.app.tick_preview_builds(&ctx);
+    assert!(h.app.session.preview_build.as_ref().is_some_and(|b| !std::sync::Arc::ptr_eq(b, &first)), "the waiting build started");
+    assert!(ctx.has_requested_repaint(), "and the frame asked to look at it again");
+    assert!(h.step_until(T, |h| h.app.session.activity.list().is_empty()), "the started build ends");
 }

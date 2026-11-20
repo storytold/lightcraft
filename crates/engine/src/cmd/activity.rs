@@ -11,7 +11,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Background Tasks",
             [],
             None,
-            "{} → {tasks: [{id, kind, label, done, total, unit: count|bytes|percent, detail, cancellable, cancelling, ageMs}]} — the long-running tasks in flight (imports, exports, preview builds, downloads, the face scan…), oldest first; total 0 = not known yet",
+            "{} → {tasks: [{id, kind, label, done, total, unit: count|bytes|percent, detail, cancellable, cancelling, ageMs, waiting, place, lane}]} — the long-running tasks in flight (imports, exports, preview builds, downloads, the face scan…), oldest first, then those waiting in line for their lane (waiting: true, place 1 = next in its lane, lane: previews or library (imports and Synchronize Folder, which the app starts); they start by themselves when the tasks ahead end, keeping their id), in the order they were asked for; total 0 = not known yet",
             always,
             |s, _| Ok(json!({"tasks": s.activity.list()}))
         ),
@@ -20,7 +20,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Cancel Background Task",
             [],
             None,
-            "{id} | {all: true} → {cancelled: n} — ask a task (or every cancellable task) to stop; it stops at its next file or photo (a preview build also stops between a photo's own previews). An unknown id (it may have just finished) or a task that can't be cancelled is an error",
+            "{id} | {all: true} → {cancelled: n} — ask a task (or every cancellable task) to stop; it stops at its next file or photo (a preview build also stops between a photo's own previews). A task waiting in line is taken out of it and never runs; all also empties the line. An unknown id (it may have just finished) or a task that can't be cancelled is an error",
             always,
             |s, p| {
                 const C: &str = "activity.cancel";

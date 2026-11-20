@@ -115,7 +115,7 @@ fn busy(app: &LightcraftApp) -> Result<(), String> {
     if crate::lightroom_import::is_running(app) {
         return Err("a Lightroom catalog task is already running; wait for it to finish".into());
     }
-    if app.import.is_some() || app.scan.is_some() {
+    if app.import.is_some() || app.scan.is_some() || crate::import::library_busy(app) {
         return Err("an import is running; wait for it to finish before importing a Lightroom catalog".into());
     }
     Ok(())

@@ -1915,7 +1915,6 @@
   "Skipped: files that can't be read": "Ignorés : fichiers illisibles",
   "This folder isn't there: it was moved or renamed, or its disk isn't connected.": "Ce dossier est introuvable : il a été déplacé ou renommé, ou son disque n'est pas connecté.",
   "Relink photos whose file was renamed or moved": "Relier les photos dont le fichier a été renommé ou déplacé",
-  "A folder is already being synchronized": "Un dossier est déjà en cours de synchronisation",
   "Synchronizing…": "Synchronisation…",
   "Relinked": "Reliées",
   "Removed": "Retirées",
@@ -1925,8 +1924,6 @@
   "Stopped at the scan limit: there may be more photos": "Arrêt à la limite d'analyse : il peut y avoir d'autres photos",
   "Stopped by an error (see the log)": "Arrêté par une erreur (voir le journal)",
   "Not saved": "Non enregistré",
-  "A folder is being synchronized": "Un dossier est en cours de synchronisation",
-  "Wait for the import to finish": "Attendez la fin de l'importation",
   "Show less": "Afficher moins",
   "Quit while tasks are running?": "Quitter pendant que des tâches sont en cours ?",
   "Exporting contact sheet": "Exportation de la planche-contact",
@@ -3637,5 +3634,9 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Démarrez l'application avec --control 7980 (ou LIGHTCRAFT_CONTROL_PORT), puis lightcraft-cli mcp --connect y connecte un agent.",
   "Welcome": "Bienvenue",
   "Next": "Suivant",
-  "Get Started": "Commencer"
+  "Get Started": "Commencer",
+  "Queued: it starts when the task ahead of it ends": "En file : démarre à la fin de la tâche précédente",
+  "Another library was opened: nothing was done": "Une autre bibliothèque a été ouverte : rien n’a été fait",
+  "Photos of the folder changed while it was read: nothing was done": "Les photos du dossier ont changé pendant la lecture : rien n’a été fait",
+  "Starts next": "Démarre ensuite"
 }

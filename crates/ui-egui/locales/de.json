@@ -2080,7 +2080,6 @@
   "Skipped: files that can't be read": "Übersprungen: Dateien, die nicht gelesen werden können",
   "This folder isn't there: it was moved or renamed, or its disk isn't connected.": "Dieser Ordner ist nicht vorhanden: Er wurde verschoben oder umbenannt, oder sein Datenträger ist nicht verbunden.",
   "Relink photos whose file was renamed or moved": "Fotos neu verknüpfen, deren Datei umbenannt oder verschoben wurde",
-  "A folder is already being synchronized": "Es wird bereits ein Ordner synchronisiert",
   "Synchronizing…": "Wird synchronisiert…",
   "Relinked": "Neu verknüpft",
   "Removed": "Entfernt",
@@ -2090,8 +2089,6 @@
   "Stopped at the scan limit: there may be more photos": "Am Suchlimit angehalten: Es gibt möglicherweise weitere Fotos",
   "Stopped by an error (see the log)": "Durch einen Fehler angehalten (siehe Protokoll)",
   "Not saved": "Nicht gespeichert",
-  "A folder is being synchronized": "Ein Ordner wird gerade synchronisiert",
-  "Wait for the import to finish": "Warte, bis der Import abgeschlossen ist",
   "Appearance": "Erscheinungsbild",
   "Appearance Mode": "Erscheinungsmodus",
   "Sync with System": "Mit System synchronisieren",
@@ -3535,5 +3532,9 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Starten Sie die App mit --control 7980 (oder LIGHTCRAFT_CONTROL_PORT), dann verbindet lightcraft-cli mcp --connect einen Agenten mit ihr.",
   "Welcome": "Willkommen",
   "Next": "Weiter",
-  "Get Started": "Loslegen"
+  "Get Started": "Loslegen",
+  "Queued: it starts when the task ahead of it ends": "In der Warteschlange: startet, wenn die Aufgabe davor endet",
+  "Another library was opened: nothing was done": "Eine andere Bibliothek wurde geöffnet: es wurde nichts getan",
+  "Photos of the folder changed while it was read: nothing was done": "Fotos des Ordners haben sich beim Lesen geändert: es wurde nichts getan",
+  "Starts next": "Startet als Nächstes"
 }

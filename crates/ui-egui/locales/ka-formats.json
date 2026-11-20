@@ -328,5 +328,9 @@
   "View › Detail View ({keys}).": "ხედი › დეტალური ხედი ({keys}).",
   "File › Export… · File › Print… ({keys}).": "ფაილი › ექსპორტი… · ფაილი › დაბეჭდვა… ({keys}).",
   "{n} folder{} could not be read": "საქაღალდეები, რომლებიც ვერ წაიკითხა: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "გამოტოვებული ფაილები (მხარდაუჭერელი ფოტოს ტიპია): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "გამოტოვებული ფაილები (მხარდაუჭერელი ფოტოს ტიპია): {n}{:.0}",
+  "Queued: it starts after {n} more": "რიგშია: დაიწყება კიდევ {n}-ის შემდეგ",
+  "Left alone: {n} (synchronize again to review them)": "უცვლელი დარჩა: {n} (გადასახედად თავიდან დაასინქრონეთ)",
+  "Starts after {n} more": "დაიწყება კიდევ {n}-ის შემდეგ",
+  "Remove from Queue: {label}": "რიგიდან ამოღება: {label}"
 }

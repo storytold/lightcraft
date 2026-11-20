@@ -322,5 +322,9 @@
   "View › Detail View ({keys}).": "Xem › Chế độ xem chi tiết ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Tệp › Xuất… · Tệp › In… ({keys}).",
   "{n} folder{} could not be read": "Thư mục không đọc được: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Đã bỏ qua tệp (không phải loại ảnh được hỗ trợ): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Đã bỏ qua tệp (không phải loại ảnh được hỗ trợ): {n}{:.0}",
+  "Queued: it starts after {n} more": "Trong hàng đợi: bắt đầu sau {n} tác vụ nữa",
+  "Left alone: {n} (synchronize again to review them)": "Để nguyên: {n} (đồng bộ lại để xem xét)",
+  "Starts after {n} more": "Bắt đầu sau {n} tác vụ nữa",
+  "Remove from Queue: {label}": "Xóa khỏi hàng đợi: {label}"
 }

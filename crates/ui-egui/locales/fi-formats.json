@@ -322,5 +322,9 @@
   "View › Detail View ({keys}).": "Näytä › Tarkastelunäkymä ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Tiedosto › Vie… · Tiedosto › Tulosta… ({keys}).",
   "{n} folder{} could not be read": "Kansiot, joita ei voitu lukea: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Ohitetut tiedostot (ei tuettu valokuvatyyppi): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Ohitetut tiedostot (ei tuettu valokuvatyyppi): {n}{:.0}",
+  "Queued: it starts after {n} more": "Jonossa: alkaa {n} muun jälkeen",
+  "Left alone: {n} (synchronize again to review them)": "Jätetty ennalleen: {n} (synkronoi uudelleen tarkistaaksesi)",
+  "Starts after {n} more": "Alkaa {n} muun jälkeen",
+  "Remove from Queue: {label}": "Poista jonosta: {label}"
 }

@@ -11,6 +11,7 @@
 //! a row and ✕ in the activity stack (issue #345); the whole import is one undo step.
 
 use egui::{Color32, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
+use lightcraft_engine::activity::{Lane, Request};
 use lightcraft_engine::import::{
     ImportCandidate, ImportUprightMode, ImportWarning, ImportWarningCode, ScanInput, ScanOutput, ScanProgress, scan_with,
 };
@@ -40,14 +41,14 @@ pub use body::{DEFAULT_FOLDER_TEMPLATE, body, example_destination, source_summar
 pub(crate) use body::{DIALOG_SIZE, THUMB_SIZE_DEFAULT, note_dialog_bottom, thumb_size};
 #[cfg(test)]
 use body::{RECIPE_CONTROLS, note_recipe_value};
-pub(crate) use scan::StoppingScans;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) use scan::cards_seen;
 #[cfg(test)]
 pub(crate) use scan::{HELD_RESOLVES, ScanEnd, scan_by_hand, stall_scan, stall_scan_of};
-pub use scan::{ScanTask, browse, open, poll_scan, running};
+pub use scan::{IMPORT_REQUEST, ScanTask, browse, drop_blocked, open, poll_scan, running};
+pub(crate) use scan::{StoppingScans, library_busy};
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use scan::{auto_import_listed, cards_seen};
 pub(crate) use tags::{tag_field_width, tag_help, tag_toggle, unknown_tags_warning};
-pub use task::{ImportTask, start, start_paths, tick};
+pub use task::{ImportTask, start, start_paths, start_request, tick};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]

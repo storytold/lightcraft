@@ -131,10 +131,13 @@ pub fn may_close(app: &mut LightcraftApp) -> bool {
     // before the library is touched: a Cancel here keeps working with it
     let running = app.session.activity.running_cancellable();
     let mut names = running.iter().map(|t| crate::i18n::tr(&t.label)).collect::<Vec<_>>();
-    // an import handed its files this tick (files that waited for a library, #2779) is listed only
-    // from its first tick on, and files still waiting will be imported too
+    // tasks waiting in line (files that waited for a library, #2779, wait there too) would be given up
+    let waiting = app.session.activity.waiting();
+    names.extend(waiting.iter().map(|t| crate::i18n::tr(&t.label)));
+    // an import handed its files this tick is listed only from its first tick on, and files held back
+    // by a scan or a review will be imported too
     let unlisted = app.import.as_ref().is_some_and(|t| !t.listed()) || !app.waiting_import.files.is_empty();
-    if unlisted && !running.iter().any(|t| t.kind == "import") {
+    if unlisted && !running.iter().chain(&waiting).any(|t| t.kind == "import") {
         names.push(crate::i18n::tr("Importing"));
     }
     if !names.is_empty() {

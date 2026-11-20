@@ -417,6 +417,26 @@
 
 ## 2026-10-24
 
+### Imports and Synchronize Folder wait for each other
+- An import confirmed (or photos dropped on the window) while a Synchronize Folder runs, or a Synchronize Folder
+  confirmed while an import runs, now waits in line and starts by itself when the other ends, with a message that it
+  was queued. Before, it was refused ("Wait for the import to finish", "A folder is being synchronized").
+- Photos dropped on the window, or an import review confirmed, while another import runs also wait in line instead of
+  being refused with "An import is running"; a drop is still refused while a folder is being scanned for the review or
+  read for the Local view, or while a finished scan's review waits behind another dialog.
+- A task waiting in line shows in the activity stack at once: its name, "Starts next" or "Starts after N more", and ✕
+  to take it out of the line, so a mistaken one can be withdrawn. This holds for a waiting preview build too.
+- A waiting import checks for duplicates against the library as it is when its turn comes, so nothing is added twice.
+- Photos that waited for a library to open (from the command line, or after a library problem) while an import
+  runs now wait in the same line, with a row in the activity stack. Quitting asks about anything that waits in line and
+  Quit Anyway gives it up; opening another library is refused while an import or a Synchronize Folder waits.
+- A waiting Synchronize Folder looks at its folder again when its turn comes. It removes, relinks or reads sidecars of
+  only the photos its dialog showed: one that went missing, moved or got a sidecar update while it waited is left
+  alone, and the message at the end says how many ("Left alone: 1 (synchronize again to review them)").
+- Nothing waits across another library: a Synchronize Folder that is still scanning when another library opens does
+  nothing. It also does nothing, and says so, when a photo of its folder is changed in the library (a rating, an edit)
+  while it scans, because what it saw is no longer what is there.
+
 ### AI Denoise follows the photo's real noise
 - The built-in denoiser used to read a photo's fine texture as noise, so it always believed a photo was at least as noisy as
   about ISO 12800 and over-smoothed quiet photos while under-cleaning noisy ones. It now measures each colour channel
@@ -478,7 +498,6 @@
   names in `dc:subject` and the paths in `lr:hierarchicalSubject`, as Lightroom Classic writes them, and LightCraft
   reads them back as the same keywords. A sidecar written by an earlier version is put right the next time it is
   saved.
-
 
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new

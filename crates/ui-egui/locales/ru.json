@@ -1854,7 +1854,6 @@
   "Skipped: files that can't be read": "Пропущено: файлы, которые не удаётся прочитать",
   "This folder isn't there: it was moved or renamed, or its disk isn't connected.": "Этой папки нет: её переместили или переименовали, либо её диск не подключён.",
   "Relink photos whose file was renamed or moved": "Повторно связать фото, файл которых переименован или перемещён",
-  "A folder is already being synchronized": "Папка уже синхронизируется",
   "Synchronizing…": "Синхронизация…",
   "Imported": "Импортированные",
   "Relinked": "Связано повторно",
@@ -1865,8 +1864,6 @@
   "Stopped at the scan limit: there may be more photos": "Остановлено на пределе сканирования: возможно, есть другие фото",
   "Stopped by an error (see the log)": "Остановлено из-за ошибки (см. журнал)",
   "Not saved": "Не сохранено",
-  "A folder is being synchronized": "Папка синхронизируется",
-  "Wait for the import to finish": "Дождитесь завершения импорта",
   "Appearance": "Оформление",
   "Appearance Mode": "Режим оформления",
   "Sync with System": "Как в системе",
@@ -2660,5 +2657,9 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Запустите приложение с --control 7980 (или LIGHTCRAFT_CONTROL_PORT), и команда lightcraft-cli mcp --connect подключит к нему одного агента.",
   "Welcome": "Добро пожаловать",
   "Next": "Далее",
-  "Get Started": "Начать"
+  "Get Started": "Начать",
+  "Queued: it starts when the task ahead of it ends": "В очереди: начнётся, когда закончится задача перед ней",
+  "Another library was opened: nothing was done": "Открыта другая библиотека: ничего не сделано",
+  "Photos of the folder changed while it was read: nothing was done": "Фотографии в папке изменились во время чтения: ничего не сделано",
+  "Starts next": "Начнётся следующей"
 }

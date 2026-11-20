@@ -1928,7 +1928,6 @@
   "Skipped: files that can't be read": "スキップ: 読み込めないファイル",
   "This folder isn't there: it was moved or renamed, or its disk isn't connected.": "このフォルダが見つかりません。移動または名前の変更がされたか、ディスクが接続されていません。",
   "Relink photos whose file was renamed or moved": "ファイル名の変更や移動があった写真をリンクし直す",
-  "A folder is already being synchronized": "すでにフォルダを同期中です",
   "Synchronizing…": "同期中…",
   "Relinked": "リンクし直し",
   "Removed": "除去",
@@ -1938,8 +1937,6 @@
   "Stopped at the scan limit: there may be more photos": "スキャンの上限で停止しました。ほかにも写真がある可能性があります",
   "Stopped by an error (see the log)": "エラーで停止しました（ログを参照）",
   "Not saved": "保存されていません",
-  "A folder is being synchronized": "フォルダを同期中です",
-  "Wait for the import to finish": "読み込みが終わるまでお待ちください",
   "Appearance": "外観",
   "Appearance Mode": "外観モード",
   "Sync with System": "システムと同期",
@@ -2452,5 +2449,9 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "アプリを --control 7980 (または LIGHTCRAFT_CONTROL_PORT) で起動してから、lightcraft-cli mcp --connect でエージェントを接続できます。",
   "Welcome": "ようこそ",
   "Next": "次へ",
-  "Get Started": "始める"
+  "Get Started": "始める",
+  "Queued: it starts when the task ahead of it ends": "キューに追加: 前のタスクが終わると開始します",
+  "Another library was opened: nothing was done": "別のライブラリが開かれました: 何も行われていません",
+  "Photos of the folder changed while it was read: nothing was done": "読み取り中にフォルダ内の写真が変更されました: 何も行われていません",
+  "Starts next": "次に開始します"
 }

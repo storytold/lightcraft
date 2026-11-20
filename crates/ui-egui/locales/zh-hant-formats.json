@@ -326,5 +326,9 @@
   "{name} is installed and in use: face recognition is on": "{name} 已安裝並在使用中：臉部辨識已開啟",
   "Bring photos in with File › Import Photos… ({keys}).": "透過 檔案 › 匯入照片… ({keys}) 匯入照片。",
   "View › Detail View ({keys}).": "檢視 › 詳細檢視 ({keys})。",
-  "File › Export… · File › Print… ({keys}).": "檔案 › 匯出… · 檔案 › 列印… ({keys})。"
+  "File › Export… · File › Print… ({keys}).": "檔案 › 匯出… · 檔案 › 列印… ({keys})。",
+  "Queued: it starts after {n} more": "已加入佇列：再過 {n} 個後開始",
+  "Left alone: {n} (synchronize again to review them)": "未處理：{n}（再次同步以檢視）",
+  "Starts after {n} more": "再過 {n} 個後開始",
+  "Remove from Queue: {label}": "從佇列中移除：{label}"
 }
