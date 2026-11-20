@@ -402,7 +402,14 @@ mod hlg_tests {
         let pos = webp.windows(4).position(|w| w == b"EXIF").expect("EXIF chunk");
         let chunk_len = u32::from_le_bytes(webp[pos + 4..pos + 8].try_into().unwrap()) as usize;
         assert_eq!(chunk_len, exif.len());
-        let padded_end = pos + 8 + chunk_len + (chunk_len % 2);
+        assert_eq!(chunk_len % 2, 1);
+        assert_eq!(webp[pos + 8 + chunk_len], 0, "odd WebP EXIF chunk must be zero-padded");
+        let padded_end = pos + 8 + chunk_len + 1;
         assert!(padded_end <= webp.len());
+        assert_eq!(crate::sniff(&webp), Some(crate::Format::WebP));
+        let header = crate::read_header(&webp).unwrap();
+        assert_eq!((header.width, header.height, header.orientation), (1, 1, 1));
+        let decoded = crate::decode(&webp, crate::DecodeOptions::default()).unwrap();
+        assert_eq!(decoded.exif.as_deref(), Some(exif.as_slice()));
     }
 }
