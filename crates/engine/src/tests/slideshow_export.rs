@@ -2,6 +2,7 @@
 //! row, cancel and photos that can't be rendered.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use lightcraft_catalog::{Op, Photo, Source};
@@ -302,6 +303,38 @@ fn cancel_leaves_no_file_behind() {
         let left: Vec<_> = dir.files("").into_iter().chain(dir.files("seq")).filter(|f| f.ends_with(".part") || f.ends_with(".jpg")).collect();
         assert!(left.is_empty(), "{format}: {left:?}");
         assert!(s.activity.list().is_empty());
+    }
+}
+
+#[test]
+fn late_video_cancellation_preserves_the_destination() {
+    let (mut s, ids) = session(1);
+    let original = b"previous slideshow";
+    for container in ["mp4", "webm"] {
+        let dir = Scratch::new(&format!("cancel-finalization-{container}"));
+        let name = format!("show.{container}");
+        let path = dir.path(&name);
+        let staged = dir.path(&format!("{name}.part"));
+        std::fs::write(&path, original).unwrap();
+        let request = json!({"format": "video", "container": container, "path": path, "size": 64, "fps": 24, "ids": ids});
+        let prepared = crate::slideshow_export::prepare(&mut s, &request).unwrap();
+        let cancel = AtomicBool::new(false);
+
+        let result = prepared.run(
+            &|_, _, phase| {
+                // This notification precedes encoder and container finalization.
+                if phase == "AV1" {
+                    assert!(Path::new(&staged).is_file(), "{container}: expected a staged export");
+                    cancel.store(true, Ordering::Relaxed);
+                }
+            },
+            &cancel,
+        );
+
+        assert!(cancel.load(Ordering::Relaxed), "{container}: never reached finalization");
+        assert_eq!(std::fs::read(&path).unwrap(), original, "{container}: existing destination changed");
+        assert!(result.is_err_and(|error| error.contains("cancelled")), "{container}: expected cancellation");
+        assert_eq!(dir.files(""), vec![name], "{container}: staged export was left behind");
     }
 }
 
