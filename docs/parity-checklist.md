@@ -11,6 +11,11 @@ The rows are maintained by hand; the summary block is generated (`cargo xtask pa
 `cargo xtask parity` (part of `cargo xtask ci`) checks that every command id, control id and path
 cited here still exists. Formerly docs/parity.md.
 
+When a gap in [gaps.md](gaps.md) closes, update its entry and the numbers in [ROADMAP.md](../ROADMAP.md) and
+[target-app-parity.md](target-app-parity.md), and add a row to each doc's revision history. The header
+line keeps only `Last reviewed`, `Target` and the `Changes` link, never a `Last updated` date or a change note, which
+every PR would edit and conflict on. A row marked ✅ that is wrong or incomplete goes back to 🟡 with a note.
+
 - **Ids** come from the (local, gitignored) reference in `plan/lightroom/`: `LR-…` = feature catalog (03),
   `MENU-…` = menu items (04), `KEY-…` / `KEYC-…` = keyboard shortcuts (06, desktop / Classic), `LRC-…` = Classic
   extras (08). Ids are stable; never renumber.
