@@ -93,6 +93,9 @@ pub struct MergeTask {
     rx: Receiver<Result<MergeOutput, String>>,
     /// The final merge's row in the activity stack (previews have none).
     guard: Option<TaskGuard>,
+    /// The app's memory budget when it started ([`lightcraft_engine::memory::budget`]): the merge's
+    /// memory is what the caches leave, so a preview's forecast holds only while it stays.
+    budget: usize,
 }
 
 /// Merge state of the app.
@@ -121,6 +124,9 @@ pub struct MergeState {
     /// (`fitMemory`). Never saved with the options, and cleared by each new preview and each time
     /// the dialog opens, so it answers only the size it was shown.
     pub smaller_agreed: bool,
+    /// The app's memory budget the latest preview was made with ([`MergeTask::budget`]): a preview
+    /// made with another is redone, since its forecast of the merge's size no longer holds.
+    pub preview_budget: usize,
 }
 
 impl MergeState {
@@ -155,7 +161,8 @@ fn spawn(app: &LightcraftApp, options: &MergeDialog, ids: &[PhotoId], preview: b
     std::thread::Builder::new().name("photo-merge".into()).spawn(work).map_err(|e| e.to_string())?;
     #[cfg(target_arch = "wasm32")]
     work();
-    Ok(MergeTask { preview, job, options: options.clone(), ids: ids.to_vec(), progress, cancel, rx, guard: None })
+    let budget = lightcraft_engine::memory::budget();
+    Ok(MergeTask { preview, job, options: options.clone(), ids: ids.to_vec(), progress, cancel, rx, guard: None, budget })
 }
 
 /// The options of the last merge of kind `command` started (kept in the library preferences), or
@@ -194,8 +201,10 @@ pub fn confirm(app: &mut LightcraftApp, opts: &MergeDialog) -> Result<Value, Str
     if let Some(why) = holdup(app, opts) {
         return Err(why);
     }
-    let agreed = app.merge.smaller_agreed && smaller_notice(forecast(app, opts)).is_some();
-    start(app, opts, agreed)
+    // the floor the forecast was made at: under 40 MP only when that is what it said (and, when it
+    // said smaller than the photos' resolution, the user agreed: `holdup`)
+    let fit_memory = forecast(app, opts)["fitMemory"].as_bool() == Some(true);
+    start(app, opts, fit_memory)
 }
 
 /// Start the full-resolution merge without the dialog's notice (Merge with Last Settings, HDR for
@@ -272,7 +281,9 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     match &dialog_opts {
         Some(opts) => {
             let current = app.merge.preview_task.as_ref().map(|t| &t.options).or(app.merge.preview.as_ref().map(|p| &p.2));
-            let stale = current != Some(opts) && !last_failed_matches(app, opts);
+            // the memory budget changed since the preview (Settings, an agent): its forecast no longer holds
+            let budget_moved = app.merge.preview_task.is_none() && current == Some(opts) && !previewed(app, opts);
+            let stale = (current != Some(opts) || budget_moved) && !last_failed_matches(app, opts);
             if stale {
                 if let Some(t) = app.merge.preview_task.take() {
                     t.cancel.store(true, Ordering::Relaxed);
@@ -311,6 +322,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     let tex = ctx.load_texture("merge-preview", color.clone(), egui::TextureOptions::LINEAR);
                     app.merge.preview_pixels = Some(color);
                     app.merge.preview = Some((tex, [img.width, img.height], t.options, out.info));
+                    app.merge.preview_budget = t.budget;
                     // agreed to the size the last preview named, not this one's
                     app.merge.smaller_agreed = false;
                 }
@@ -399,9 +411,14 @@ fn added_message(what: &str, info: &Value) -> String {
 /// other options, or a size that can't be told; [`lightcraft_engine::merge::MergeJob::fit_memory`]).
 fn forecast<'a>(app: &'a LightcraftApp, opts: &MergeDialog) -> &'a Value {
     match &app.merge.preview {
-        Some((_, _, o, info)) if o == opts && opts.is_pano() => &info["forecast"],
+        Some((_, _, _, info)) if previewed(app, opts) && opts.is_pano() => &info["forecast"],
         _ => &Value::Null,
     }
+}
+
+/// The latest preview is of `opts`, made with the memory budget the app has now.
+fn previewed(app: &LightcraftApp, opts: &MergeDialog) -> bool {
+    app.merge.preview.as_ref().is_some_and(|p| &p.2 == opts) && app.merge.preview_budget == lightcraft_engine::memory::budget()
 }
 
 /// What the dialog says under the preview when the panorama won't fit memory at its full size
@@ -432,8 +449,7 @@ pub(crate) fn holdup(app: &LightcraftApp, opts: &MergeDialog) -> Option<String> 
     if !opts.is_pano() {
         return None;
     }
-    let previewed = app.merge.preview.as_ref().is_some_and(|p| &p.2 == opts);
-    if !previewed && !last_failed_matches(app, opts) {
+    if !previewed(app, opts) && !last_failed_matches(app, opts) {
         return Some(crate::i18n::tr("wait for the preview: it works out the size the panorama is made at").to_owned());
     }
     let f = forecast(app, opts);
@@ -546,6 +562,9 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
                     crate::i18n::tr_format!("{} photos · exposures {} EV", ev.len(), ev.join(" / "))
                 };
                 ui.label(egui::RichText::new(txt).color(t.text_dim));
+            }
+            if opts.is_pano() && !previewed(app, opts) && !last_failed_matches(app, opts) {
+                ui.label(egui::RichText::new(crate::i18n::tr("Merge waits for the preview, which works out the panorama's size")).color(t.text_dim));
             }
             if let Some(notice) = smaller_notice(forecast(app, opts)) {
                 ui.label(egui::RichText::new(notice).color(t.text));

@@ -89,6 +89,8 @@ USAGE:
         --deghost none|low|medium|high   --no-align   --bracket N (HDR panorama)
         --projection auto|spherical|cylindrical|perspective   --boundary-warp 0..100
         --auto-crop   --fill-edges   --no-auto-settings
+        --fit-memory   a panorama may be made under 40 MP (down to 1 MP) to fit memory; a preview's
+                       forecast says the size it would be made at
         --preview OUT.png   only render a ≤ 1024 px preview (nothing written next to the files)
   lightcraft-cli synth-merge hdr|panorama -o DIR
       Write synthetic merge inputs (procedural scene; bracketed DNGs or overlapping PNG views).
@@ -429,6 +431,9 @@ fn merge(args: &[String]) -> Result<(), String> {
             }
             "--fill-edges" => {
                 p.insert("fillEdges".into(), json!(true));
+            }
+            "--fit-memory" => {
+                p.insert("fitMemory".into(), json!(true));
             }
             "--no-auto-settings" => {
                 p.insert("autoSettings".into(), json!(false));

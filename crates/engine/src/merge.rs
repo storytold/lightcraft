@@ -363,7 +363,7 @@ impl MergeJob {
                 reaches_floor(&r, pano.max_megapixels, floor, &scale, memory)?;
                 let mut info = pano_info(&r, &self.sources, pano, &fit, &scale);
                 if self.preview.is_some() {
-                    info["forecast"] = forecast_json(&self.kind, &r, &frame_px, 1, &own_sizes(&planned, &real), memory);
+                    info["forecast"] = forecast_json(&self.kind, &r, &frame_px, 1, &planned, memory);
                 }
                 (
                     r.image,
@@ -415,7 +415,7 @@ impl MergeJob {
                 let mut info = pano_info(&r, &self.sources, pano, &fit, &scale);
                 info["bracket"] = json!(b);
                 if self.preview.is_some() {
-                    info["forecast"] = forecast_json(&self.kind, &r, &frame_px, b, &own_sizes(&planned, &real), memory);
+                    info["forecast"] = forecast_json(&self.kind, &r, &frame_px, b, &planned, memory);
                 }
                 (
                     r.image,
@@ -473,22 +473,17 @@ pub(crate) fn photo_areas(real: &[Option<PhotoSize>], frames: &[f64], group: usi
         .collect()
 }
 
-/// Each photo's size for a preview's [`forecast`]: its header's, read before its decode (`real`),
-/// else what the plan took for it (`planned`, empty when the merge ran unplanned).
-fn own_sizes(planned: &[PhotoSize], real: &std::sync::Mutex<Vec<Option<PhotoSize>>>) -> Vec<PhotoSize> {
-    let real = real.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    planned.iter().enumerate().map(|(i, p)| real.get(i).copied().flatten().unwrap_or(*p)).collect()
-}
-
 /// The pixels of each of `frames`.
 fn frame_pixels(frames: &[Frame]) -> Vec<f64> {
     frames.iter().map(|f| (f.width() * f.height()) as f64).collect()
 }
 
-/// A preview's `forecast`: what the full-size merge of its photos (`sizes`) is expected to make in
+/// A preview's `forecast`: what the full-size merge of its photos (`sizes`, as the plan took them:
+/// the full merge plans from the same, [`MergeJob::plan`]) is expected to make in
 /// `memory` ([`forecast`]), the panorama's own resolution taken from the preview's stitch (`r`, of
 /// frames of `frame_px` pixels, each made from `group` photos: an HDR panorama's bracket) scaled
-/// to the photos' pixels. `{"megapixels", "nativeMegapixels", "limit"}`, or `{"refused"}` when not
+/// to the photos' pixels. `{"megapixels", "nativeMegapixels", "limit", "fitMemory"}` (`fitMemory`:
+/// the merge must be run with it to make that), or `{"refused"}` when not
 /// even [`MIN_SMALLER_MEGAPIXELS`] fits; `null` when it can't be told (the photos' sizes or the
 /// computer's memory unknown: the merge then runs unplanned, or is never refused on a guess).
 fn forecast_json(kind: &MergeKind, r: &lightcraft_merge::PanoResult, frame_px: &[f64], group: usize, sizes: &[PhotoSize], memory: Memory) -> Value {
@@ -498,7 +493,7 @@ fn forecast_json(kind: &MergeKind, r: &lightcraft_merge::PanoResult, frame_px: &
     let real: Vec<Option<PhotoSize>> = sizes.iter().copied().map(Some).collect();
     let native = r.native_megapixels * shrunk(r, &photo_areas(&real, frame_px, group));
     match forecast(kind, sizes, memory.bytes, native) {
-        Ok(Some(f)) => json!({"megapixels": f.megapixels, "nativeMegapixels": f.native, "limit": f.limit}),
+        Ok(Some(f)) => json!({"megapixels": f.megapixels, "nativeMegapixels": f.native, "limit": f.limit, "fitMemory": f.fit_memory}),
         Ok(None) => Value::Null,
         Err(e) => json!({"refused": e}),
     }
@@ -549,11 +544,17 @@ fn reaches_floor(r: &lightcraft_merge::PanoResult, asked: f64, floor: f64, areas
     if !memory.known || !below_floor(canvas, shrunk(r, areas), floor) {
         return Ok(());
     }
-    Err(format!(
+    Err(under_floor(canvas, floor, asked))
+}
+
+/// The refusal of a panorama of `canvas` megapixels from photos decoded smaller, under its `floor`
+/// ([`reaches_floor`], and a preview's [`forecast`] of it).
+pub(crate) fn under_floor(canvas: f64, floor: f64, asked: f64) -> String {
+    format!(
         "not enough memory for this panorama: its photos had to be decoded smaller to fit the merge's memory budget, and the panorama of them has {canvas:.1} MP, under the {} MP it is made at the least; {}",
         round_megapixels(floor),
         pano_remedy(asked, floor, canvas)
-    ))
+    )
 }
 
 /// Whether a panorama of `canvas` megapixels, stitched from frames `shrink` times smaller than its

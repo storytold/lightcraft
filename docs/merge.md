@@ -23,13 +23,14 @@ All algorithms are our own implementations from published papers (cited in the m
   - `merge.hdr {ids?, align=true, deghost=none|low|medium|high, autoSettings=true, stack=false, preview=false, showOverlay=false, previewPath?}`
   - `merge.panorama {ids?, projection=auto|spherical|cylindrical|perspective, boundaryWarp=0..100, autoCrop=false, fillEdges=false, autoSettings=true, maxMegapixels=512 (also the most: a larger one, or 0 or less, is taken as 512; the output keeps the photos' own resolution up to it), fitMemory=false, preview, previewPath?}`.
     A preview (`preview: true`) answers with `forecast`, what the full merge makes: `{megapixels, nativeMegapixels,
-    limit}` (`limit: "memory"` when memory makes it smaller than the photos' resolution), `{refused}` when not even
-    1 MP fits, or `null` when it can't be told (the photos' sizes or the computer's memory unknown). `fitMemory: true`
-    agrees to a panorama made under its 40 MP floor to fit memory, down to 1 MP; without it such a merge is refused.
+    limit, fitMemory}` (`limit: "memory"` when memory makes it smaller than the photos' resolution; `fitMemory: true`
+    when the merge makes that only with `fitMemory`), `{refused}` when not even 1 MP fits, or `null` when it can't be
+    told (the photos' sizes or the computer's memory unknown). `fitMemory: true` agrees to a panorama made under its
+    40 MP floor to fit memory, down to 1 MP; without it such a merge is refused.
   - `merge.hdrPanorama {ids?, bracket=0 (from EXIF), …both sets of options}`
   - `merge.hdrBatch {ids?, align, deghost, autoSettings, stack}` → `{merged: [{id, path, …}], failed: [{photos, error}]}`
 - **CLI:** `lightcraft-cli merge hdr|panorama|hdr-panorama|hdr-batch [options] FILES…` (`hdr-batch` finds the brackets
-  among the files, e.g. a whole folder);
+  among the files, e.g. a whole folder; `--fit-memory` is `fitMemory: true`);
   `lightcraft-cli synth-merge hdr|panorama -o DIR` writes synthetic inputs (procedural scene).
 
 ## What it does
@@ -130,7 +131,8 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   merge whose memory can't hold the floor is refused with the memory it needs and the merge's budget (that share of the
   RAM: closing other apps doesn't raise it), and, when a smaller `maxMegapixels` would fit, the largest that does
   (issue #3708; until then the 40 MP floor was kept whatever the memory, and could run out of it). Unless the user
-  agreed to a smaller panorama before the merge started (the dialog's *Merge at the smaller size*, `fitMemory: true`):
+  agreed to a smaller panorama before the merge started (`fitMemory: true`, which the dialog passes when the preview's
+  forecast needs it and, for a panorama smaller than its photos' resolution, *Merge at the smaller size* is ticked):
   the floor is then 1 MP, as a preview's, and a merge whose memory can't hold even that is refused. A panorama is
   never made under 40 MP to fit memory unasked: the dialog asks, and Merge with Last Settings and the commands without
   `fitMemory` refuse. The preview's `forecast` takes the panorama's own resolution from the preview's stitch (scaled

@@ -919,9 +919,9 @@ fn a_panorama_forecast_says_when_memory_makes_it_smaller() {
     use crate::merge::forecast;
     let photos = photos_24mp(5);
     let f = forecast(&panorama(), &photos, 1e12, 100.0).unwrap().unwrap();
-    assert_eq!((f.megapixels, f.native, f.limit), (100.0, 100.0, None), "plenty of memory: the full size");
+    assert_eq!((f.megapixels, f.native, f.limit, f.fit_memory), (100.0, 100.0, None, false), "plenty of memory: the full size");
     let f = forecast(&panorama(), &photos, 2.0e9, 100.0).unwrap().unwrap();
-    assert_eq!(f.limit, Some("memory"), "{f:?}");
+    assert_eq!((f.limit, f.fit_memory), (Some("memory"), true), "under 40 MP: only with fitMemory: {f:?}");
     assert!(f.megapixels > 1.0 && f.megapixels < 40.0 && f.native == 100.0, "{f:?}");
     // the size it names is what the merge's fit makes of the frames the plan decodes
     let edge = crate::merge::plan_memory(&panorama(), &photos, 2.0e9, crate::merge::MIN_SMALLER_MEGAPIXELS).unwrap();
@@ -935,6 +935,22 @@ fn a_panorama_forecast_says_when_memory_makes_it_smaller() {
     let f = forecast(&asked, &photos, 1e12, 100.0).unwrap().unwrap();
     assert_eq!((f.megapixels, f.limit), (20.0, Some("asked")));
     assert_eq!(forecast(&hdr(), &photos, 1e12, 100.0), Ok(None));
+    // made smaller but no smaller than 40 MP: the merge makes it at its usual floor, so it isn't run
+    // with fitMemory (which would let a far smaller one through unasked)
+    let f = forecast(&panorama(), &photos, 4.0e9, 100.0).unwrap().unwrap();
+    assert!(f.limit == Some("memory") && f.megapixels >= 40.0 && !f.fit_memory, "{f:?}");
+    // three 12 MP photos overlapping into a 20 MP panorama, 2 GB: their 36 MP of pixels are the floor
+    // at 40 MP, which doesn't fit, but the panorama does at full size: fitMemory, nothing to agree to
+    let three = vec![crate::merge::PhotoSize::new(4000, 3000, 20_000_000).unwrap(); 3];
+    assert!(crate::merge::plan_memory(&panorama(), &three, 2.0e9, MIN_PANORAMA_MEGAPIXELS).is_err(), "refused at its usual floor");
+    let f = forecast(&panorama(), &three, 2.0e9, 20.0).unwrap().unwrap();
+    assert_eq!((f.megapixels, f.limit, f.fit_memory), (20.0, None, true), "{f:?}");
+    // forty overlapping 24 MP photos decoded smaller to fit 1.6 GB: their 25 MP panorama keeps
+    // ~0.94 MP of them, under its 1 MP floor, which the merge refuses once stitched: so does the
+    // forecast, rather than offer a size the merge then refuses
+    let many = vec![crate::merge::PhotoSize::new(6000, 4000, 24_000_000).unwrap(); 40];
+    let e = forecast(&panorama(), &many, 1.6e9, 25.0).unwrap_err();
+    assert!(e.contains("had to be decoded smaller") && e.contains("under the 1 MP"), "{e}");
 }
 
 /// Five ~1.9 MP panorama photos as PNG files, imported: their ids.
@@ -970,7 +986,7 @@ fn a_preview_forecasts_the_size_memory_makes_the_merge() {
     };
     let preview = run(true, known(room), false).unwrap();
     let f = &preview["forecast"];
-    assert_eq!(f["limit"], "memory", "{preview}");
+    assert_eq!((&f["limit"], &f["fitMemory"]), (&json!("memory"), &json!(true)), "{preview}");
     let (mp, native) = (f["megapixels"].as_f64().unwrap(), f["nativeMegapixels"].as_f64().unwrap());
     assert!(mp > 1.0 && mp < native, "{f}");
     let e = run(false, known(room), false).unwrap_err();
@@ -982,7 +998,7 @@ fn a_preview_forecasts_the_size_memory_makes_the_merge() {
     assert!(near(merged["nativeMegapixels"].as_f64().unwrap(), native), "of about the size forecast: {merged} {f}");
     // plenty of memory: the full size, nothing to agree to
     let f = run(true, known(1e12), false).unwrap()["forecast"].clone();
-    assert!(f["limit"].is_null() && f["megapixels"] == f["nativeMegapixels"], "{f}");
+    assert!(f["limit"].is_null() && f["megapixels"] == f["nativeMegapixels"] && f["fitMemory"] == false, "{f}");
     // a guessed memory: not told (a merge is never refused on a guess)
     assert!(run(true, crate::merge::Memory { bytes: 1e12, known: false }, false).unwrap()["forecast"].is_null());
     let _ = std::fs::remove_dir_all(&dir);

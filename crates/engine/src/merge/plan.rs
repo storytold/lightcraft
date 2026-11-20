@@ -371,19 +371,32 @@ pub(crate) struct Forecast {
     /// Why it is smaller than that, as the merge's result will say it (`memory`, `asked`, `size`;
     /// [`size_limit`]), when it is.
     pub(crate) limit: Option<&'static str>,
+    /// The merge makes it only when it may go under [`super::MIN_PANORAMA_MEGAPIXELS`]
+    /// (`fitMemory`, [`super::MergeJob::fit_memory`]): at that floor it would be refused.
+    pub(crate) fit_memory: bool,
 }
 
 /// What the full-size merge of a panorama (or HDR panorama) of photos of `sizes` makes in `room`
-/// bytes when it may be made smaller to fit, down to [`MIN_SMALLER_MEGAPIXELS`]: planned as
-/// [`plan_memory`] plans it and sized as [`fit_with_floor`] sizes it after the decode, its own
+/// bytes: at its usual floor ([`super::MIN_PANORAMA_MEGAPIXELS`]), or, when that is refused, at
+/// [`MIN_SMALLER_MEGAPIXELS`] (`fit_memory`: the merge must then be asked to go under it). Planned
+/// as [`plan_memory`] plans it and sized as [`fit_with_floor`] sizes it after the decode, its own
 /// resolution (`native`, megapixels: known only once its photos are stitched) taken from a
 /// preview's stitch. Before a merge starts, so the user is told when it comes out smaller than the
 /// photos' resolution for memory, and agrees to that or doesn't merge ([`super::MergeJob::fit_memory`]).
 /// An estimate: the overlap of full-size frames may differ a little from the preview's. `Ok(None)`
 /// for an HDR (it keeps its photos' resolution); refused as the merge would be.
 pub(crate) fn forecast(kind: &MergeKind, sizes: &[PhotoSize], room: f64, native: f64) -> Result<Option<Forecast>, String> {
+    // the floor is the photos' own pixels when they have under 40 MP, which their overlap can put
+    // above the panorama itself: such a merge is refused at that floor and fits at 1 MP
+    match forecast_at(kind, sizes, room, native, super::MIN_PANORAMA_MEGAPIXELS) {
+        Ok(f) => Ok(f),
+        Err(_) => forecast_at(kind, sizes, room, native, MIN_SMALLER_MEGAPIXELS).map(|f| f.map(|f| Forecast { fit_memory: true, ..f })),
+    }
+}
+
+/// [`forecast`] of a merge whose floor is of `least` ([`super::MergeJob::least`]).
+fn forecast_at(kind: &MergeKind, sizes: &[PhotoSize], room: f64, native: f64, least: f64) -> Result<Option<Forecast>, String> {
     let Some(pano) = pano_of(kind) else { return Ok(None) };
-    let least = MIN_SMALLER_MEGAPIXELS;
     let edge = plan_memory(kind, sizes, room, least)?;
     let photos = need(kind, sizes, None).1.unwrap_or(0.0);
     let stitched = need(kind, sizes, edge).1.unwrap_or(0.0);
@@ -392,9 +405,13 @@ pub(crate) fn forecast(kind: &MergeKind, sizes: &[PhotoSize], room: f64, native:
     // frames the plan made smaller make a panorama of their own resolution at the most, and that is
     // memory's doing too (as the merge's result says it)
     let own = if edge.is_some() && photos > 0.0 { native * (stitched / photos).min(1.0) } else { native };
+    // and a panorama of them under its floor is refused once stitched ([`super::reaches_floor`])
+    if stitched > 0.0 && super::below_floor(own, photos / stitched, floor) {
+        return Err(super::under_floor(own, floor, pano.max_megapixels));
+    }
     let megapixels = fit.max_megapixels.min(own);
     let fit_mp = if edge.is_some() { fit.max_megapixels.min(own) } else { fit.max_megapixels };
-    Ok(Some(Forecast { megapixels, native, limit: size_limit(pano.max_megapixels, fit_mp, native, megapixels) }))
+    Ok(Some(Forecast { megapixels, native, limit: size_limit(pano.max_megapixels, fit_mp, native, megapixels), fit_memory: false }))
 }
 
 /// "not enough memory for this `what`: `how` it needs about N MB, but the merge's budget is M MB

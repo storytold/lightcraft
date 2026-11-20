@@ -1221,3 +1221,23 @@ fn denoise_serve_runs_tiles_for_another_computer() {
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&models);
 }
+
+/// `merge panorama --fit-memory` agrees to a panorama made under 40 MP to fit memory (issue #4578),
+/// and a `--preview` answers with the `forecast` of the size the merge makes.
+#[test]
+fn merge_takes_fit_memory_and_a_preview_forecasts_the_size() {
+    let dir = tmp("merge-fit-memory");
+    let _ = std::fs::remove_dir_all(&dir);
+    let synth = Command::new(binary()).args(["synth-merge", "panorama", "-o"]).arg(&dir).output().unwrap();
+    assert!(synth.status.success(), "{}", String::from_utf8_lossy(&synth.stderr));
+    let mut views: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
+    views.sort();
+    let png = dir.join("preview.png");
+    let out = Command::new(binary()).args(["merge", "panorama", "--fit-memory", "--preview"]).arg(&png).args(&views).output().unwrap();
+    let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "{stderr}");
+    let r: Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| panic!("{e}: {stdout}"));
+    assert!(r.get("forecast").is_some(), "{r}");
+    assert!(png.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
