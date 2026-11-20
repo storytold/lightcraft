@@ -732,4 +732,4 @@ fn extreme_1d(src: &[f32], r: usize, max: bool, out: &mut [f32]) {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

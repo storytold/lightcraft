@@ -673,15 +673,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- vignette (display linear, post-crop)
     if (pu(F_VIG) != 0u) {
-        // the vignette belongs to the whole output frame, not to the window being drawn
-        let fw = pf(F_VIG_VIEW + 2u);
-        let fh = pf(F_VIG_VIEW + 3u);
+        // the vignette belongs to its frame (the whole output, or the crop), not to the pixels drawn
+        let fw = pf(F_VIG_SIZE);
+        let fh = pf(F_VIG_SIZE + 1u);
         let aspect = fw / fh;
         let amount = pf(F_VIG_AMOUNT);
         let mixa = pf(F_VIG_ASPECT_MIX);
         let power = pf(F_VIG_POWER);
-        let u = (pf(F_VIG_VIEW) + f32(x) + 0.5) / fw * 2.0 - 1.0;
-        let vv = (pf(F_VIG_VIEW + 1u) + f32(y) + 0.5) / fh * 2.0 - 1.0;
+        let px = f32(x) + 0.5;
+        let py = f32(y) + 0.5;
+        let u = (pf(F_VIG_AFF) * px + pf(F_VIG_AFF + 2u) * py + pf(F_VIG_AFF + 4u)) / fw * 2.0 - 1.0;
+        let vv = (pf(F_VIG_AFF + 1u) * px + pf(F_VIG_AFF + 3u) * py + pf(F_VIG_AFF + 5u)) / fh * 2.0 - 1.0;
         let sx = 1.0 + (aspect - 1.0) * mixa;
         let sy = 1.0 + (1.0 / aspect - 1.0) * mixa;
         let ax = abs(u * max(sx, 1.0) / max(sx, sy));

@@ -1420,6 +1420,94 @@ fn soft_proofs_match() {
     assert!(lightcraft_gpu::render(&src, &raw, &DevelopSettings::default(), &req, None).is_none(), "declined: the CPU renders it");
 }
 
+/// Issue #3484: the crop tool's uncropped view frames the post-crop vignette by the crop, on the
+/// GPU as on the CPU, whole and as a zoomed window, with flips.
+#[test]
+fn crop_tool_vignette_matches() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(2, 480, 320);
+    let mut s = DevelopSettings::default();
+    s.vignette.amount = -80.0;
+    s.vignette.midpoint = 20.0;
+    s.crop.geometry.rect = Rect { x0: 0.12, y0: 0.15, x1: 0.6, y1: 0.75 };
+    s.crop.geometry.angle = 5.0;
+    let info = SourceInfo::default();
+    let req = RenderRequest { apply_crop: false, ..RenderRequest::fit(480, 480) };
+    check("crop tool vignette", &src, &info, &s, &req);
+    let window = lightcraft_pipeline::PixelWindow { x: 100, y: 60, w: 240, h: 180 };
+    check("crop tool vignette, window", &src, &info, &s, &RenderRequest { window: Some(window), ..req });
+    s.crop.flip_h = true;
+    s.vignette.roundness = -40.0;
+    check("crop tool vignette, flip H", &src, &info, &s, &req);
+
+    // a crop below a pixel (0.25 × 0.75 px, around the centre of pixel (192, 128) of this 1:1 view):
+    // framed like the export, as a square, on both renderers; the vignette is there and on the crop:
+    // that pixel is darkened less than the far corner
+    s.crop.flip_h = false;
+    s.vignette.roundness = 0.0;
+    s.crop.geometry =
+        lightcraft_geom::CropGeometry { rect: Rect { x0: 192.4 / 480.0, y0: 128.2 / 320.0, x1: 192.65 / 480.0, y1: 128.95 / 320.0 }, angle: 0.0 };
+    s.vignette.feather = 100.0;
+    check("crop tool vignette, 0.25 x 0.75 px", &src, &info, &s, &req);
+    // (on a flat grey photo every difference is the vignette's)
+    let flat = Arc::new(Rgb32f { width: 480, height: 320, data: vec![[0.18; 3]; 480 * 320] });
+    check("crop tool vignette, 0.25 x 0.75 px, flat", &flat, &info, &s, &req);
+    let gpu_img = lightcraft_gpu::render(&flat, &info, &s, &req, None).expect("gpu render").image;
+    assert_eq!((gpu_img.width, gpu_img.height), (480, 320));
+    let unvignetted = render(&flat, &info, &DevelopSettings::default(), &req).image;
+    let darkened = |x: usize, y: usize| (0..3).map(|c| unvignetted.get(x, y)[c] as i64 - gpu_img.get(x, y)[c] as i64).sum::<i64>();
+    assert!(
+        darkened(192, 128) + 30 < darkened(477, 317),
+        "the 0.25 x 0.75 px crop's vignette isn't on the crop: {} vs {}",
+        darkened(192, 128),
+        darkened(477, 317)
+    );
+
+    // crops f32 can't frame (a size that rounds to 0, an edge that overflows, a power that
+    // overflows, a centre f32 can't place): both renderers show the whole-photo vignette, the one
+    // of a crop with nothing in it
+    s.vignette.feather = 50.0;
+    let mut empty = s.clone();
+    empty.crop.geometry = lightcraft_geom::CropGeometry { rect: Rect { x0: 0.3, y0: 0.3, x1: 0.3, y1: 0.3 }, angle: 0.0 };
+    for (name, at, side, roundness) in [
+        ("1e-50", 0.0, 1e-50, 0.0),
+        ("1e-39", 0.0, 1e-39, 0.0),
+        ("1e-22", 0.0, 1e-22, 0.0),
+        ("1e-6 at power 8", 0.0, 1e-6, -100.0),
+        ("1e-8 at 0.405", 0.405, 1e-8, 0.0),
+    ] {
+        s.crop.geometry = lightcraft_geom::CropGeometry { rect: Rect { x0: at, y0: at, x1: at + side, y1: at + side }, angle: 0.0 };
+        s.vignette.roundness = roundness;
+        empty.vignette.roundness = roundness;
+        check(&format!("crop tool vignette, {name}"), &flat, &info, &s, &req);
+        let shown = lightcraft_gpu::render(&flat, &info, &s, &req, None).expect("gpu render").image;
+        let fallback = lightcraft_gpu::render(&flat, &info, &empty, &req, None).expect("gpu render").image;
+        let (mean, max, _) = diff(&shown, &fallback);
+        assert!(mean < MEAN_LSB && max <= MAX_LSB, "{name}: the GPU doesn't show the whole-photo vignette: mean {mean:.4}, max {max}");
+        let cpu_fallback = render(&flat, &info, &empty, &req).image;
+        let (mid, corner) = (cpu_fallback.get(cpu_fallback.width / 2, cpu_fallback.height / 2)[1], cpu_fallback.get(2, 2)[1]);
+        assert!(mid as i32 - corner as i32 > 20, "{name}: no whole-photo vignette to fall back to");
+    }
+
+    // the dithering keeps the output's origin under the crop's vignette: a window inside the crop,
+    // where the vignette leaves the pixels as they are, has the GPU's whole render's pixels exactly
+    s.crop.geometry = lightcraft_geom::CropGeometry { rect: Rect { x0: 0.12, y0: 0.15, x1: 0.6, y1: 0.75 }, angle: 5.0 };
+    s.vignette.roundness = 0.0;
+    s.vignette.midpoint = 100.0;
+    let flat = Arc::new(Rgb32f { width: 480, height: 320, data: vec![[0.123456; 3]; 480 * 320] });
+    let full = lightcraft_gpu::render(&flat, &info, &s, &req, None).expect("gpu render").image;
+    assert!(full.get(2, 2)[1] + 20 < full.get(173, 144)[1], "the vignette darkens outside the crop");
+    let at = lightcraft_pipeline::PixelWindow { x: 157, y: 129, w: 32, h: 32 };
+    let part = lightcraft_gpu::render(&flat, &info, &s, &RenderRequest { window: Some(at), ..req }, None).expect("gpu render").image;
+    for y in 0..at.h {
+        for x in 0..at.w {
+            assert_eq!(part.get(x, y), full.get(at.x + x, at.y + y), "Bayer phase under the vignette at {x},{y}");
+        }
+    }
+}
+
 /// Spot removal on the device: Clone, Heal and Remove (automatic source, scored on the device),
 /// brushed strokes, overlapping spots (each reads what the earlier ones left), feather 0 and
 /// spots cut by the image edge.
@@ -1511,4 +1599,25 @@ fn device_histogram_is_exact() {
     let r = lightcraft_gpu::render(&src, &raw, &s, &req, None).expect("gpu render");
     assert_eq!((r.image.width, r.image.height), (500, 400));
     assert_eq!(r.histogram, lightcraft_raster::Histogram::of_srgb8(&r.image), "window");
+}
+
+#[test]
+fn dithering_window_keeps_the_full_output_phase_without_a_vignette() {
+    if !gpu() {
+        return;
+    }
+    let src = Arc::new(Rgb32f::filled(480, 320, [0.123456; 3]));
+    let info = SourceInfo::default();
+    let s = DevelopSettings::default();
+    let req = RenderRequest { apply_crop: false, ..RenderRequest::fit(480, 480) };
+    let at = lightcraft_pipeline::PixelWindow { x: 7, y: 12, w: 120, h: 80 };
+    let full = lightcraft_gpu::render(&src, &info, &s, &req, None).expect("gpu render").image;
+    let part = lightcraft_gpu::render(&src, &info, &s, &RenderRequest { window: Some(at), ..req }, None).expect("gpu render").image;
+    assert!(full.data.iter().any(|p| p[0] != full.data[0][0]), "the flat image must exercise Bayer quantization");
+    assert_eq!((part.width, part.height), (at.w, at.h));
+    for y in 0..at.h {
+        for x in 0..at.w {
+            assert_eq!(part.get(x, y), full.get(at.x + x, at.y + y), "GPU Bayer phase at {x},{y}");
+        }
+    }
 }

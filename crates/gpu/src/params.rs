@@ -68,7 +68,10 @@ const FIELDS: &[(&str, usize)] = &[
     ("VIG_POWER", 1),
     ("VIG_HL", 1),
     ("VIG_STYLE", 1),
-    // the window's offset in the whole output and the whole output's size (pixels)
+    // the vignette's frame (`FinishParams::vig_aff`): render pixel → frame pixel, and the frame's size
+    ("VIG_AFF", 6),
+    ("VIG_SIZE", 2),
+    // The full-output window origin used by dithering, never the vignette crop affine.
     ("VIG_VIEW", 4),
     ("GRAIN", 1),
     // 0 = value noise (processes V1 to V6: GRAIN_AMT, GRAIN_SC, GRAIN_ROUGH), 1 = crystal layers (V7)
@@ -312,6 +315,8 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         p.f("VIG_ASPECT_MIX", v.aspect_mix);
         p.f("VIG_POWER", v.power);
         p.f("VIG_HL", v.highlights);
+        p.fs("VIG_AFF", &fp.vig_aff);
+        p.fs("VIG_SIZE", &fp.vig_size);
         p.u(
             "VIG_STYLE",
             match v.style {
