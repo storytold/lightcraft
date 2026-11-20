@@ -74,6 +74,13 @@ impl Drop for Extracted {
     }
 }
 
+/// Whether `name` is a Lightroom catalog entry outside macOS resource forks.
+fn is_catalog_entry(name: &str) -> bool {
+    let normalized = name.replace('\\', "/");
+    let lower = normalized.to_lowercase();
+    lower.ends_with(".lrcat") && !lower.split('/').any(|p| p == "__macosx" || p.starts_with("._"))
+}
+
 /// Opens `path` as a bounded seekable ZIP archive without buffering payloads in memory.
 fn open_archive(path: &Path) -> Result<SeekableArchive<File>, String> {
     let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -82,7 +89,7 @@ fn open_archive(path: &Path) -> Result<SeekableArchive<File>, String> {
         SeekableLimits { max_entries: MAX_ENTRIES, max_metadata_bytes: MAX_DIRECTORY_BYTES + 65_535 + 128, max_total_bytes: MAX_CATALOG_BYTES },
     )
     .map_err(|e| e.to_string())?;
-    if archive.has_duplicate_names() {
+    if archive.has_duplicate_names_matching(is_catalog_entry) {
         return Err("this zip holds more than one Lightroom catalog (.lrcat); unzip it and import one".into());
     }
     Ok(archive)
@@ -94,14 +101,12 @@ fn catalog_entry(archive: &mut SeekableArchive<File>) -> Result<(usize, String, 
     let mut found: Option<(usize, String, u64)> = None;
     for index in 0..archive.len() {
         let Some(name) = archive.entry_name(index).map_err(|e| e.to_string())? else { continue };
-        let normalized = name.replace('\\', "/");
-        let lower = normalized.to_lowercase();
-        if lower.ends_with(".lrcat") && !lower.split('/').any(|p| p == "__macosx" || p.starts_with("._")) {
+        if is_catalog_entry(&name) {
             if found.is_some() {
                 return Err("this zip holds more than one Lightroom catalog (.lrcat); unzip it and import one".into());
             }
             let (size, _) = archive.entry_sizes(index).map_err(|e| e.to_string())?.ok_or_else(|| "damaged zip".to_string())?;
-            found = Some((index, normalized, size));
+            found = Some((index, name.replace('\\', "/"), size));
         }
     }
     found.ok_or_else(|| "this zip holds no Lightroom catalog (.lrcat)".into())
@@ -445,6 +450,31 @@ pub(crate) mod tests {
             extract(&dir.join("dup_eocd.zip"), &dir.join("out2"), &AtomicBool::new(false)).unwrap_err().contains("more than one Lightroom catalog")
         );
         assert!(!holds_catalog(&dir.join("absent.zip")));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Duplicate non-catalog filenames (e.g., two `README.txt` entries) alongside one `.lrcat`
+    /// succeed, while duplicate `.lrcat` entries or two different `.lrcat` entries still fail.
+    #[test]
+    fn duplicate_non_catalog_entries_succeed_while_duplicate_catalogs_fail() {
+        let dir = temp("dup-non-catalog");
+        let ok_zip = dir.join("ok.zip");
+        std::fs::write(&ok_zip, zip(&[("README.txt", b"first"), ("README.txt", b"second"), ("Cat.lrcat", b"catalog")], false, false)).unwrap();
+        assert!(holds_catalog(&ok_zip));
+        let extracted = extract(&ok_zip, &dir.join("out"), &AtomicBool::new(false)).unwrap();
+        assert_eq!(std::fs::read(&extracted.catalog).unwrap(), b"catalog");
+        drop(extracted);
+
+        for (name, files) in [
+            ("dup-cat.zip", vec![("Cat.lrcat", b"a".as_slice()), ("Cat.lrcat", b"b".as_slice()), ("README.txt", b"r".as_slice())]),
+            ("two-cats.zip", vec![("A.lrcat", b"a".as_slice()), ("B.lrcat", b"b".as_slice())]),
+        ] {
+            let bad_zip = dir.join(name);
+            std::fs::write(&bad_zip, zip(&files, false, false)).unwrap();
+            assert!(!holds_catalog(&bad_zip), "{name}");
+            let err = extract(&bad_zip, &dir.join("out"), &AtomicBool::new(false)).unwrap_err();
+            assert_eq!(err, "this zip holds more than one Lightroom catalog (.lrcat); unzip it and import one", "{name}");
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
