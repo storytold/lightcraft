@@ -10,10 +10,10 @@
 //! held to the process's cgroup limit on Linux, or to its job object's memory limit on Windows, for
 //! the engine's memory budget and `cargo xtask ci`.
 //!
-//! This is LightCraft's only crate allowed `unsafe`: three FFI calls, `malloc_zone_pressure_relief`
-//! (in `macos`), and `GlobalMemoryStatusEx` and `QueryInformationJobObject` (in `win32`, which only
-//! reads the numbers; [`limits`] decides what they mean). Its API is safe, and a call that fails
-//! releases nothing or reports "unknown".
+//! This is one of LightCraft's two crates allowed `unsafe` (the other is `wincolor`): three FFI
+//! calls, `malloc_zone_pressure_relief` (in `macos`), and `GlobalMemoryStatusEx` and
+//! `QueryInformationJobObject` (in `win32`, which only reads the numbers; [`limits`] decides what
+//! they mean). Its API is safe, and a call that fails releases nothing or reports "unknown".
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod limits;

@@ -21,7 +21,7 @@ lightcraft-develop = { workspace = true }
 lightcraft-scenes = { workspace = true }
 lightcraft-pipeline = { workspace = true }
 lightcraft-gpu = { workspace = true }
-# the memory the process may use (cgroup limits on Linux) for the budget
+# the memory the process may use (cgroup limits on Linux, job limits on Windows) for the budget
 lightcraft-sysmem = { workspace = true }
 lightcraft-catalog = { workspace = true }
 web-time = { workspace = true }
