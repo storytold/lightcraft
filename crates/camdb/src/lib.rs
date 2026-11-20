@@ -49,6 +49,7 @@ pub mod extract;
 use lcc_color::{Mat3, Xy};
 use lcc_raw::{ColorData, RawImage};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 /// Where an entry's numbers come from.
@@ -325,6 +326,9 @@ impl Entry {
         Ok(())
     }
 
+    /// Whether this entry is the one for an Exif make and model: the reference scan [`find_by_scan`] tests the index
+    /// against.
+    #[cfg(test)]
     fn matches(&self, make: Option<&str>, model: &str) -> bool {
         let row_brand = brand(&self.make);
         if make.map(brand).is_some_and(|b| !b.is_empty() && b != row_brand) {
@@ -386,7 +390,64 @@ fn spectral_entry(c: &lcc_raw::spectral::Camera) -> Entry {
 /// The best entry for a camera's Exif make and model, by provenance rank: the embedded entries and the spectral
 /// sensitivity table (its aliases included) together, so measured data beats the spectral matrices and they beat
 /// dcraw's table and estimates. On equal rank an embedded entry wins.
+///
+/// The embedded entries are found through an index built once ([`Index`]); [`find_by_scan`] is the plain scan it
+/// replaces, kept as the test oracle.
 pub fn find(make: Option<&str>, model: &str) -> Option<Entry> {
+    let make = make.map(brand).filter(|b| !b.is_empty());
+    let ix = index();
+    let brands: &[String] = match &make {
+        Some(b) => std::slice::from_ref(b),
+        None => &ix.brands,
+    };
+    let mut rows: Vec<usize> = brands.iter().filter_map(|b| ix.names.get(b)?.get(&key(b, model))).flatten().copied().collect();
+    rows.sort_unstable();
+    rows.dedup();
+    let own = rows.iter().filter_map(|&i| embedded().get(i)).min_by_key(|e| e.provenance.source.rank());
+    let spectral = || lcc_raw::spectral::find(make.as_deref(), model).map(spectral_entry);
+    match own {
+        Some(e) if e.provenance.source.rank() <= Source::SpectralSensitivities.rank() => Some(e.clone()),
+        Some(e) => spectral().or_else(|| Some(e.clone())),
+        None => spectral(),
+    }
+}
+
+/// Embedded entries by brand and normalised name ([`key`]) of their model or an alias, rows in file order: a lookup
+/// costs a hash probe per brand instead of normalising every entry's strings.
+struct Index {
+    /// Every entry's brand, for a lookup without a make.
+    brands: Vec<String>,
+    /// Positions in [`embedded`] of the entries that have this name under this brand, ascending.
+    names: HashMap<String, HashMap<String, Vec<usize>>>,
+}
+
+fn index() -> &'static Index {
+    static INDEX: OnceLock<Index> = OnceLock::new();
+    INDEX.get_or_init(|| {
+        let mut ix = Index { brands: Vec::new(), names: Default::default() };
+        for (i, e) in embedded().iter().enumerate() {
+            let b = brand(&e.make);
+            if !ix.brands.contains(&b) {
+                ix.brands.push(b.clone());
+            }
+            for m in std::iter::once(&e.model).chain(&e.aliases) {
+                let name = key(&b, m);
+                if name.is_empty() {
+                    continue;
+                }
+                let rows = ix.names.entry(b.clone()).or_default().entry(name).or_default();
+                if rows.last() != Some(&i) {
+                    rows.push(i);
+                }
+            }
+        }
+        ix
+    })
+}
+
+/// [`find`] as a plain scan, normalising every entry on every call: the reference the index must agree with.
+#[cfg(test)]
+fn find_by_scan(make: Option<&str>, model: &str) -> Option<Entry> {
     let own = embedded().iter().filter(|e| e.matches(make, model)).min_by_key(|e| e.provenance.source.rank());
     let spectral = || lcc_raw::spectral::find(make, model).map(spectral_entry);
     match own {
@@ -632,6 +693,40 @@ provenance = { source = "native-dng", detail = "Software: X1 1.0" }
         assert!(!has_matrices_camera("NIKON CORPORATION NIKON Z 99"));
         assert!(!has_matrices_camera(""));
         assert!(!has_matrices_camera("   "));
+    }
+
+    /// The index answers exactly what the plain scan does, entry for entry, for every embedded entry and alias under
+    /// its own make, brand, another make, no make, other casing and padding, and strings nothing knows.
+    #[test]
+    fn the_index_agrees_with_the_scan_on_every_input() {
+        let mut asks: Vec<(Option<String>, String)> = Vec::new();
+        for e in embedded() {
+            let brand_only = e.make.split_whitespace().next().unwrap_or_default().to_string();
+            for m in std::iter::once(&e.model).chain(&e.aliases) {
+                for make in
+                    [Some(e.make.clone()), Some(brand_only.clone()), Some(e.make.to_lowercase()), Some("OTHER".into()), Some(String::new()), None]
+                {
+                    for md in
+                        [m.clone(), m.to_lowercase(), format!("  {m}  "), format!("{brand_only} {m}"), format!("{m} DIGITAL"), format!("EOS {m}")]
+                    {
+                        asks.push((make.clone(), md));
+                    }
+                }
+            }
+        }
+        for md in ["", "   ", "EOS", "DIGITAL", "EOS DIGITAL", "Canon EOS 400D DIGITAL", "NIKON NIKON", "ＳＯＮＹ", "e\u{301}", "A\0B"] {
+            for make in [None, Some("Canon".to_string()), Some("NIKON CORPORATION".into()), Some("SONY".into()), Some(String::new())] {
+                asks.push((make, md.to_string()));
+            }
+        }
+        assert!(asks.len() > 1000);
+        let mut found = 0;
+        for (make, model) in &asks {
+            let (a, b) = (find(make.as_deref(), model), find_by_scan(make.as_deref(), model));
+            assert_eq!(a, b, "{make:?} {model:?}");
+            found += a.is_some() as usize;
+        }
+        assert!(found > 100 && found < asks.len(), "both outcomes are exercised ({found} of {})", asks.len());
     }
 
     /// Every listed camera is found again by its own Exif strings (and its aliases), under the right make, and
