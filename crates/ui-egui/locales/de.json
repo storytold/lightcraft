@@ -3563,7 +3563,8 @@
   "[Capture One catalog import](capture-one-catalog-import.md).": "[Capture-One-Katalogimport](capture-one-catalog-import.md).",
   "Capture One smart albums come in as LightCraft smart albums with the same rules. One that tests something": "Smart-Alben aus Capture One werden LightCraft-Smart-Alben mit denselben Regeln. Eines, das etwas prüft,",
   "LightCraft has no rule for, such as file size or flash mode, becomes an album with the photos it shows at the": "wofür LightCraft keine Regel hat, etwa Dateigröße oder Blitzmodus, wird ein Album mit den Fotos, die es zum",
-  "time of the import, and the import's result says so.": "Zeitpunkt des Imports zeigt, und das Importergebnis sagt das.",
+  "time of the import, and the import's result says so. One that tests something the import can't read, such as Live": "Zeitpunkt des Imports zeigt, und das Importergebnis sagt das. Eines, das etwas prüft, was der Import nicht lesen kann, etwa Live",
+  "Comments, is left out with a warning.": "Comments, wird mit einer Warnung ausgelassen.",
   "Capture One has this catalog open; changes it has not saved yet are not included": "Capture One hat diesen Katalog geöffnet; Änderungen, die dort noch nicht gesichert sind, fehlen",
   "a table of the catalog can't be read and was left out: {why}": "eine Tabelle des Katalogs kann nicht gelesen werden und wurde ausgelassen: {why}",
   "{n} keyword(s) are nested in a loop and were left out of the keyword list": "Stichwörter, die in einer Schleife verschachtelt sind, wurden nicht in die Stichwortliste übernommen: {n}",
@@ -3609,5 +3610,6 @@
   "Flash Compensation": "Blitzbelichtungskorrektur",
   "Camera Owner": "Kamerabesitzer",
   "Camera Serial Number": "Seriennummer der Kamera",
-  "Exposure Bias": "Belichtungskorrektur"
+  "Exposure Bias": "Belichtungskorrektur",
+  "Orientation of photos turned by hand": "Ausrichtung von Hand gedrehter Fotos"
 }

@@ -2474,5 +2474,6 @@
   "Flash Compensation": "Salaman valotuksen korjaus",
   "Camera Owner": "Kameran omistaja",
   "Camera Serial Number": "Kameran sarjanumero",
-  "Exposure Bias": "Valotuksen korjaus"
+  "Exposure Bias": "Valotuksen korjaus",
+  "Orientation of photos turned by hand": "Käsin käännettyjen kuvien suunta"
 }

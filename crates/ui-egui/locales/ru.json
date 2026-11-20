@@ -2724,5 +2724,6 @@
   "Flash Compensation": "Компенсация вспышки",
   "Camera Owner": "Владелец камеры",
   "Camera Serial Number": "Серийный номер камеры",
-  "Exposure Bias": "Экспокоррекция"
+  "Exposure Bias": "Экспокоррекция",
+  "Orientation of photos turned by hand": "Ориентация фото, повёрнутых вручную"
 }

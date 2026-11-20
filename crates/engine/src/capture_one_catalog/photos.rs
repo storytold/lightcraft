@@ -37,6 +37,8 @@ pub(super) struct Read {
     pub by_variant: HashMap<i64, usize>,
     /// `ZIMAGE.Z_PK` to the index of its first variant in `photos`.
     pub first_of_image: HashMap<i64, usize>,
+    /// The columns of `ZVARIANTMETADATA`, without the leading `Z`.
+    pub metadata_columns: std::collections::BTreeSet<String>,
 }
 
 /// What was left out, counted while reading and reported once each.
@@ -65,7 +67,8 @@ pub(super) fn read(db: &Db, database: &Path, warnings: &mut Vec<Notice>, active:
     let mut variants_of = variants_by_image(&variants, &image_rows, &mut notes);
     active()?;
 
-    let mut out = Read { photos: Vec::new(), trashed: 0, by_variant: HashMap::new(), first_of_image: HashMap::new() };
+    let metadata_columns = metadata.columns().map(|c| c.strip_prefix('Z').unwrap_or(c).to_string()).collect();
+    let mut out = Read { photos: Vec::new(), trashed: 0, by_variant: HashMap::new(), first_of_image: HashMap::new(), metadata_columns };
     for (at, (image_id, image)) in image_rows.into_iter().enumerate() {
         // a large catalog takes a while to build: a cancel stops it here too
         if at % CANCEL_EVERY == 0 {
@@ -130,19 +133,22 @@ pub(super) fn read_turns(db: &Db, photos: &mut [CatalogPhoto], warnings: &mut Ve
     let variants = db.table("ZVARIANT")?;
     let rotation_of: HashMap<i64, f64> =
         layers.rows().filter_map(|r| Some((r.id("Z_PK")?, r.real("ZROTATION").filter(|d| d.is_finite())?))).collect();
-    let turned_of: HashMap<i64, bool> = variants
+    // quarter turns, nearest; a straightened photo (a few degrees) isn't turned
+    let quarter = |rotation: Option<f64>| rotation.map_or(0.0, |degrees| (degrees / 90.0).round()).rem_euclid(2.0) == 1.0;
+    let turned_of: HashMap<i64, (bool, bool)> = variants
         .rows()
         .filter_map(|variant| {
-            let rotation = ["ZCOMBINEDSETTINGS", "ZADJUSTMENTLAYER", "ZDEFAULTLAYER"]
-                .into_iter()
-                .find_map(|layer| variant.id(layer).and_then(|id| rotation_of.get(&id).copied()));
-            // quarter turns, nearest; a straightened photo (a few degrees) isn't turned
-            let quarters = rotation.map_or(0.0, |degrees| (degrees / 90.0).round());
-            Some((variant.id("Z_PK")?, quarters.rem_euclid(2.0) == 1.0))
+            let rotation_in = |layer: &str| variant.id(layer).and_then(|id| rotation_of.get(&id).copied());
+            let shown = ["ZCOMBINEDSETTINGS", "ZADJUSTMENTLAYER", "ZDEFAULTLAYER"].into_iter().find_map(rotation_in);
+            // the default layer turns as the file says; another turn is the user's
+            let file = rotation_in("ZDEFAULTLAYER");
+            Some((variant.id("Z_PK")?, (quarter(shown), quarter(shown) != quarter(file))))
         })
         .collect();
     for photo in photos {
-        photo.turned = Some(photo.variant_id.and_then(|id| turned_of.get(&id).copied()).unwrap_or(false));
+        let (turned, by_hand) = photo.variant_id.and_then(|id| turned_of.get(&id).copied()).unwrap_or((false, false));
+        photo.turned = Some(turned);
+        photo.turned_by_hand = by_hand;
     }
     Ok(())
 }

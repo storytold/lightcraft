@@ -17,11 +17,15 @@ use super::notice::{self, Notice};
 use super::{CatalogPhoto, ColorTag};
 
 /// Longest rule read; Capture One's own are a few hundred bytes per condition.
-const MAX_RULE_BYTES: usize = 256 * 1024;
+pub(super) const MAX_RULE_BYTES: usize = 256 * 1024;
 /// Deepest nesting of groups (Capture One writes two levels).
 const MAX_DEPTH: usize = 16;
 /// Most elements one rule may hold.
 const MAX_NODES: usize = 20_000;
+
+/// The columns of the catalog's `ZVARIANTMETADATA`, without the leading `Z`
+/// ([`super::CaptureOneCatalog::metadata_columns`]).
+pub(super) type Columns = std::collections::BTreeSet<String>;
 
 /// A group of conditions: all of them, or any.
 #[derive(Clone, Debug, PartialEq)]
@@ -101,33 +105,36 @@ fn condition(el: &craft_xml::El) -> Result<Condition, Notice> {
 
 /// What `rule` becomes against the catalog's `photos`: LightCraft rules when every condition has a
 /// LightCraft field, else the photos it selects when every condition can be told from the catalog.
-pub(super) fn outcome(rule: &Group, photos: &[CatalogPhoto]) -> Outcome {
+pub(super) fn outcome(rule: &Group, photos: &[CatalogPhoto], columns: &Columns) -> Outcome {
     if !has_enabled(rule) {
         return Outcome::Skipped(Notice::new(notice::RULE_ALL_OFF));
     }
-    // Capture One's "is" on keywords tells upper and lower case apart; LightCraft's doesn't
-    let spellings: HashSet<&str> =
-        photos.iter().flat_map(|p| p.keywords.iter()).flat_map(|k| std::iter::once(k.as_str()).chain(k.split('|'))).collect();
+    let seen = Seen {
+        // Capture One's "is" on keywords tells upper and lower case apart; LightCraft's doesn't
+        spellings: photos.iter().flat_map(|p| p.keywords.iter()).flat_map(|k| std::iter::once(k.as_str()).chain(k.split('|'))).collect(),
+        // LightCraft shows a photo turned as its file says, not as the user turned it
+        turned_by_hand: photos.iter().any(|p| p.turned_by_hand),
+    };
     let mut missing = Vec::new();
-    let rules = to_rules(rule, &spellings, &mut missing);
+    let rules = to_rules(rule, &seen, &mut missing);
     if missing.is_empty() {
         return Outcome::Smart(rules);
     }
-    match select(rule, photos) {
+    match select(rule, photos, columns) {
         Some(selected) => Outcome::Selected(selected, missing),
         None => {
             let sample = photos.first().cloned().unwrap_or_default();
-            Outcome::Skipped(Notice::new(notice::RULE_NOT_READ).notices("fields", unknown(rule, &sample)))
+            Outcome::Skipped(Notice::new(notice::RULE_NOT_READ).notices("fields", unknown(rule, &sample, columns)))
         }
     }
 }
 
 /// The photos (indexes into `photos`) the rule selects; `None` when a condition tests something
 /// the catalog import doesn't read.
-pub(super) fn select(rule: &Group, photos: &[CatalogPhoto]) -> Option<Vec<usize>> {
+pub(super) fn select(rule: &Group, photos: &[CatalogPhoto], columns: &Columns) -> Option<Vec<usize>> {
     let mut selected = Vec::new();
     for (at, photo) in photos.iter().enumerate() {
-        if matches(rule, photo)? {
+        if matches(rule, photo, columns)? {
             selected.push(at);
         }
     }
@@ -143,15 +150,23 @@ fn has_enabled(group: &Group) -> bool {
 
 // ---- LightCraft rules
 
+/// What the catalog holds that decides whether a condition means the same in LightCraft.
+struct Seen<'a> {
+    /// Every keyword and level, as spelled.
+    spellings: HashSet<&'a str>,
+    /// A photo is shown turned by hand.
+    turned_by_hand: bool,
+}
+
 /// The rule as LightCraft rules; the names of the conditions that have no LightCraft field go to
 /// `missing` (the rules are then incomplete).
-fn to_rules(group: &Group, spellings: &HashSet<&str>, missing: &mut Vec<Notice>) -> RuleSet {
+fn to_rules(group: &Group, seen: &Seen<'_>, missing: &mut Vec<Notice>) -> RuleSet {
     let mut rules = Vec::new();
     for item in &group.items {
         match item {
             Item::Group(g) => {
                 if has_enabled(g) {
-                    let mut group = to_rules(g, spellings, missing);
+                    let mut group = to_rules(g, seen, missing);
                     // Capture One puts every condition in a group of its own
                     match (group.rules.len(), group.rules.pop()) {
                         (1, Some(rule)) => rules.push(rule),
@@ -164,10 +179,16 @@ fn to_rules(group: &Group, spellings: &HashSet<&str>, missing: &mut Vec<Notice>)
                 }
             }
             Item::Condition(c) if !c.enabled => {}
-            Item::Condition(c) => match to_rule(c, spellings) {
+            Item::Condition(c) => match to_rule(c, seen) {
                 Some(rule) => rules.push(rule),
                 None => {
-                    let name = if same_but_case(c, spellings) { Notice::new(notice::KEYWORDS_BY_CASE) } else { name(c) };
+                    let name = if same_but_case(c, &seen.spellings) {
+                        Notice::new(notice::KEYWORDS_BY_CASE)
+                    } else if turned_by_hand(c, seen) {
+                        Notice::new(notice::ORIENTATION_BY_HAND)
+                    } else {
+                        name(c)
+                    };
                     if !missing.contains(&name) {
                         missing.push(name);
                     }
@@ -187,11 +208,11 @@ fn not(rule: LcRule) -> LcRule {
     LcRule::Group { group: RuleSet { mode: Match::None, rules: vec![rule] } }
 }
 
-fn to_rule(c: &Condition, spellings: &HashSet<&str>) -> Option<LcRule> {
+fn to_rule(c: &Condition, seen: &Seen<'_>) -> Option<LcRule> {
     let key = KEYS.iter().find(|k| k.key == c.key)?;
     let lc = key.lightcraft?;
     let value = c.criterion.as_str();
-    if same_but_case(c, spellings) {
+    if same_but_case(c, &seen.spellings) || turned_by_hand(c, seen) {
         return None;
     }
     match key.kind {
@@ -218,6 +239,12 @@ fn to_rule(c: &Condition, spellings: &HashSet<&str>) -> Option<LcRule> {
         }
         Kind::Size | Kind::Stored | Kind::Unread => None,
     }
+}
+
+/// An orientation condition in a catalog with a photo turned by hand: LightCraft shows that photo
+/// as its file is, so its aspect rule would select differently.
+fn turned_by_hand(c: &Condition, seen: &Seen<'_>) -> bool {
+    seen.turned_by_hand && KEYS.iter().any(|k| k.key == c.key && k.kind == Kind::Aspect)
 }
 
 /// A keyword "is" / "is not" condition whose keyword the catalog also has in another case
@@ -269,8 +296,9 @@ fn text_rule(lc: &str, kind: Kind, operator: i64, value: &str) -> Option<LcRule>
     if matches!(op, "contains" | "notContains") && value.split_whitespace().nth(1).is_some() {
         return None;
     }
-    // "camera" is make and model together: only a part of it can be looked for
-    if lc == "camera" && !matches!(op, "contains" | "notContains") {
+    // LightCraft's "camera" is make and model together, Capture One tests one of them: "contains
+    // EOS" on the make finds nothing there, but a Canon EOS R5 here
+    if lc == "camera" {
         return None;
     }
     Some(field(lc, op, json!(value)))
@@ -337,17 +365,17 @@ pub(super) fn lightcraft_labels() -> Vec<&'static str> {
     out
 }
 
-fn unknown(group: &Group, photo: &CatalogPhoto) -> Vec<Notice> {
+fn unknown(group: &Group, photo: &CatalogPhoto, columns: &Columns) -> Vec<Notice> {
     let mut out = Vec::new();
-    collect_unknown(group, photo, &mut out);
+    collect_unknown(group, photo, columns, &mut out);
     out
 }
 
-fn collect_unknown(group: &Group, photo: &CatalogPhoto, out: &mut Vec<Notice>) {
+fn collect_unknown(group: &Group, photo: &CatalogPhoto, columns: &Columns, out: &mut Vec<Notice>) {
     for item in &group.items {
         match item {
-            Item::Group(g) => collect_unknown(g, photo, out),
-            Item::Condition(c) if c.enabled && matches_condition(c, photo).is_none() => {
+            Item::Group(g) => collect_unknown(g, photo, columns, out),
+            Item::Condition(c) if c.enabled && matches_condition(c, photo, columns).is_none() => {
                 let name = name(c);
                 if !out.contains(&name) {
                     out.push(name);
@@ -362,15 +390,15 @@ fn collect_unknown(group: &Group, photo: &CatalogPhoto, out: &mut Vec<Notice>) {
 
 /// Whether `photo` meets the rule; `None` when a condition tests something the catalog import
 /// doesn't read.
-pub(super) fn matches(group: &Group, photo: &CatalogPhoto) -> Option<bool> {
+pub(super) fn matches(group: &Group, photo: &CatalogPhoto, columns: &Columns) -> Option<bool> {
     let mut any = false;
     let mut all = true;
     for item in &group.items {
         let met = match item {
             Item::Group(g) if !has_enabled(g) => continue,
-            Item::Group(g) => matches(g, photo)?,
+            Item::Group(g) => matches(g, photo, columns)?,
             Item::Condition(c) if !c.enabled => continue,
-            Item::Condition(c) => matches_condition(c, photo)?,
+            Item::Condition(c) => matches_condition(c, photo, columns)?,
         };
         any |= met;
         all &= met;
@@ -378,12 +406,12 @@ pub(super) fn matches(group: &Group, photo: &CatalogPhoto) -> Option<bool> {
     Some(if group.all { all } else { any })
 }
 
-fn matches_condition(c: &Condition, photo: &CatalogPhoto) -> Option<bool> {
+fn matches_condition(c: &Condition, photo: &CatalogPhoto, columns: &Columns) -> Option<bool> {
     let key = KEYS.iter().find(|k| k.key == c.key);
     let kind = key.map_or(Kind::Stored, |k| k.kind);
     match kind {
         Kind::Text => text_matches(c.operator, &text_of(&c.key, photo), &c.criterion),
-        Kind::Stored => stored_matches(c, photo),
+        Kind::Stored => stored_matches(c, photo, columns),
         Kind::Unread => None,
         Kind::Keywords => keywords_match(c.operator, &photo.keywords, &c.criterion),
         Kind::Number => {
@@ -435,15 +463,13 @@ fn matches_condition(c: &Condition, photo: &CatalogPhoto) -> Option<bool> {
 
 /// A condition on a column the table of keys doesn't name: one of the image's camera and
 /// exposure columns, or another IPTC field, compared as numbers where both are, else as text.
-fn stored_matches(c: &Condition, photo: &CatalogPhoto) -> Option<bool> {
+fn stored_matches(c: &Condition, photo: &CatalogPhoto, columns: &Columns) -> Option<bool> {
     let (kind, column) = c.key.strip_prefix("IB_")?.split_once('_')?;
     let have = match photo.exif.get(column) {
         Some(value) => value.as_str(),
-        // only filled IPTC fields are kept, so only the metadata table's columns can be told
-        // apart from a column this reader doesn't know
-        None if kind == "S" && METADATA_GROUPS.iter().any(|g| column.starts_with(g)) => {
-            photo.iptc.other.get(column).map(String::as_str).unwrap_or("")
-        }
+        // only filled IPTC fields are kept with a photo: a column the catalog's metadata table
+        // has is empty where a photo lacks it, one it doesn't have can't be told
+        None if kind == "S" && columns.contains(column) => photo.iptc.other.get(column).map(String::as_str).unwrap_or(""),
         None => return None,
     };
     let numeric = (0..=5).contains(&c.operator);
@@ -482,6 +508,11 @@ fn text_matches(operator: i64, have: &str, want: &str) -> Option<bool> {
 }
 
 fn keywords_match(operator: i64, keywords: &[String], want: &str) -> Option<bool> {
+    // an operator Capture One doesn't use on keywords is unknown for every photo, not only for
+    // those that have keywords to compare
+    if !matches!(operator, 0 | 1 | 6 | 8 | 9 | 10 | 16 | 17) {
+        return None;
+    }
     let any = |op: i64| -> Option<bool> {
         let mut met = false;
         for keyword in keywords {
@@ -578,12 +609,18 @@ fn number_of(key: &str, photo: &CatalogPhoto) -> Option<f64> {
     match key {
         "IB_I_BASIC_RATING" => Some(f64::from(photo.rating)),
         "IB_I_ISO" => photo.iso.map(f64::from),
-        "IB_F_EXP_APERTURE" => photo.aperture.map(f64::from),
-        "IB_F_EXP_FOCALLENGTH" => photo.focal_mm.map(f64::from),
+        "IB_F_EXP_APERTURE" => photo.aperture.map(decimal),
+        "IB_F_EXP_FOCALLENGTH" => photo.focal_mm.map(decimal),
         "IB_F_EXP_SHUTTERSPEED" => photo.shutter_seconds,
-        "IB_S_EXP_EXPOSURECOMPENSATION" => photo.exposure_bias.map(f64::from),
+        "IB_S_EXP_EXPOSURECOMPENSATION" => photo.exposure_bias.map(decimal),
         _ => None,
     }
+}
+
+/// An `f32` as the `f64` of its shortest decimal form (5.6f32 → 5.6, not 5.599999904632568), so it
+/// equals the number typed in Capture One's dialog, as LightCraft's own rules compare it.
+fn decimal(value: f32) -> f64 {
+    value.to_string().parse().unwrap_or(f64::from(value))
 }
 
 // ---- the keys
@@ -634,6 +671,22 @@ const fn own(key: &'static str, kind: Kind, label: &'static str) -> Key {
 const STORED_LABELS: &[(&str, &str)] =
     &[("EXP_FLASHMODE", notice::FLASH_MODE), ("EXP_FLASHCOMPENSATION", notice::FLASH_COMPENSATION), ("CAMERA_OWNER", notice::CAMERA_OWNER)];
 
+/// The keywords the rule's switched-on "is" / "is not" conditions name, as spelled: Capture One
+/// tells case apart there, so the library must not hold them in another spelling either.
+pub(super) fn exact_keywords(group: &Group) -> Vec<String> {
+    let mut out = Vec::new();
+    for item in &group.items {
+        match item {
+            Item::Group(g) => out.extend(exact_keywords(g)),
+            Item::Condition(c) if c.enabled && c.key == "IB_S_CONTENT_KEYWORDS" && matches!(c.operator, 0 | 1 | 16 | 17) => {
+                out.push(c.criterion.trim().to_string());
+            }
+            Item::Condition(_) => {}
+        }
+    }
+    out
+}
+
 /// Whether a smart album's rule (as the catalog stores it) has a condition on orientation, which
 /// needs [`CatalogPhoto::turned`].
 pub(super) fn tests_orientation(rule: &str) -> bool {
@@ -645,9 +698,6 @@ pub(super) fn tests_orientation(rule: &str) -> bool {
     }
     rule.contains("orientation") && parse(rule).is_ok_and(|group| uses(&group))
 }
-
-/// The column groups of `ZVARIANTMETADATA`, whose text the catalog import keeps with each photo.
-const METADATA_GROUPS: &[&str] = &["CONTACT_", "CONTENT_", "IMAGE_", "STATUS_", "GETTY_"];
 
 /// Every key seen in Capture One's rule dialog that the import understands.
 const KEYS: &[Key] = &[

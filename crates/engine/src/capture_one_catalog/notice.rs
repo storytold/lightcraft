@@ -153,6 +153,7 @@ pub(crate) const RULE_NOT_READ: &str = "its rule tests {fields}, which the catal
 // ---- the fields of a smart album rule LightCraft has none for (the others go by LightCraft's names)
 pub(crate) const FIELD_KEY: &str = "“{key}”";
 pub(crate) const KEYWORDS_BY_CASE: &str = "Keywords told apart by upper and lower case";
+pub(crate) const ORIENTATION_BY_HAND: &str = "Orientation of photos turned by hand";
 pub(crate) const FILE_SIZE: &str = "File Size";
 pub(crate) const WIDTH: &str = "Width";
 pub(crate) const HEIGHT: &str = "Height";
@@ -204,6 +205,7 @@ pub const MESSAGES: &[&str] = &[
     RULE_NOT_READ,
     FIELD_KEY,
     KEYWORDS_BY_CASE,
+    ORIENTATION_BY_HAND,
     FILE_SIZE,
     WIDTH,
     HEIGHT,

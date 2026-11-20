@@ -2518,5 +2518,6 @@
   "Flash Compensation": "閃光補償",
   "Camera Owner": "相機擁有者",
   "Camera Serial Number": "相機序號",
-  "Exposure Bias": "曝光補償"
+  "Exposure Bias": "曝光補償",
+  "Orientation of photos turned by hand": "手動旋轉照片的方向"
 }

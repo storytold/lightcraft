@@ -1393,8 +1393,13 @@ fn told(outcome: smart::Outcome) -> String {
     }
 }
 
+/// The metadata table's columns of the test catalogs, and one more IPTC field.
+fn known() -> smart::Columns {
+    METADATA_COLUMNS.iter().chain(&["ZCONTACT_CITY"]).map(|c| c.trim_start_matches('Z').to_string()).collect()
+}
+
 fn smart_outcome(all: bool, conditions: &[(&str, i64, &str)], photos: &[CatalogPhoto]) -> smart::Outcome {
-    smart::outcome(&smart::parse(&rule(all, conditions)).unwrap(), photos)
+    smart::outcome(&smart::parse(&rule(all, conditions)).unwrap(), photos, &known())
 }
 
 fn lightcraft_rules(all: bool, conditions: &[(&str, i64, &str)]) -> serde_json::Value {
@@ -1447,7 +1452,7 @@ fn smart_album_rules_become_lightcraft_rules() {
     // a condition switched off is left out
     let mut off = rule(true, &[("IB_I_ISO", 0, "100"), ("IB_I_BASIC_RATING", 0, "1")]);
     off = off.replacen("Enabled=\"YES\"", "Enabled=\"NO\"", 1);
-    match smart::outcome(&smart::parse(&off).unwrap(), &[]) {
+    match smart::outcome(&smart::parse(&off).unwrap(), &[], &known()) {
         smart::Outcome::Smart(rules) => {
             assert_eq!(serde_json::to_value(rules).unwrap()["rules"], json!([{"field": "rating", "op": "is", "value": 1.0}]))
         }
@@ -1464,10 +1469,21 @@ fn a_smart_album_lightcraft_has_no_rule_for_holds_the_photos_it_selects() {
     assert_eq!(told(outcome), "[0]: File Size");
     // "is" on the camera's make alone has none either (LightCraft's camera is make and model)
     assert_eq!(told(smart_outcome(false, &[("IB_S_CAMERA_MAKE", 16, "other")], &photos)), "[2]: Camera");
+    // nor a part of it: LightCraft's camera is make and model together, so "contains" on one of
+    // them would find photos Capture One doesn't
+    let canon = [CatalogPhoto { camera_make: "Canon".into(), camera_model: "Canon EOS R5".into(), ..Default::default() }];
+    assert_eq!(told(smart_outcome(true, &[("IB_S_CAMERA_MAKE", 6, "EOS")], &canon)), "[]: Camera");
     // another IPTC field, as the catalog keeps it
     let mut contact = CatalogPhoto::default();
     contact.iptc.other.insert("CONTACT_CITY".into(), "Lakeside".into());
-    assert_eq!(told(smart_outcome(true, &[("IB_S_CONTACT_CITY", 9, "lake")], &[contact])), "[0]: “CONTACT_CITY”");
+    assert_eq!(told(smart_outcome(true, &[("IB_S_CONTACT_CITY", 9, "lake")], std::slice::from_ref(&contact))), "[0]: “CONTACT_CITY”");
+    // empty where a photo lacks it, but only for a field the catalog has: one it doesn't have
+    // can't be told from a field of another version
+    assert_eq!(told(smart_outcome(true, &[("IB_S_CONTACT_CITY", 17, "x")], &[CatalogPhoto::default()])), "[0]: “CONTACT_CITY”");
+    assert_eq!(
+        told(smart_outcome(true, &[("IB_S_CONTACT_NOT_THERE", 17, "x")], &[contact])),
+        "its rule tests “CONTACT_NOT_THERE”, which the catalog import can't read"
+    );
     // the image's other camera and exposure columns, as numbers where they are (a flash
     // compensation of -2 EV is written -512/256), else as text
     let mut flash = CatalogPhoto { annotated: true, ..Default::default() };
@@ -1493,7 +1509,7 @@ fn a_smart_album_lightcraft_has_no_rule_for_holds_the_photos_it_selects() {
         "its rule tests Live Comments, Camera Owner, which the catalog import can't read"
     );
     let off = rule(true, &[("IB_I_ISO", 0, "100")]).replace("Enabled=\"YES\"", "Enabled=\"NO\"");
-    assert_eq!(told(smart::outcome(&smart::parse(&off).unwrap(), &photos)), "its rule has no condition switched on");
+    assert_eq!(told(smart::outcome(&smart::parse(&off).unwrap(), &photos, &known())), "its rule has no condition switched on");
 }
 
 #[test]
@@ -1506,11 +1522,14 @@ fn smart_album_rules_select_as_capture_one_does() {
         width: 4000,
         height: 3000,
         iso: Some(400),
+        aperture: Some(5.6),
+        focal_mm: Some(10.3),
+        exposure_bias: Some(-0.67),
         gps: Some((47.0, 8.0)),
         turned: Some(false),
         ..Default::default()
     };
-    let selects = |key: &str, op: i64, value: &str| smart::matches(&smart::parse(&rule(true, &[(key, op, value)])).unwrap(), &photo);
+    let selects = |key: &str, op: i64, value: &str| smart::matches(&smart::parse(&rule(true, &[(key, op, value)])).unwrap(), &photo, &known());
     for (key, op, value, want) in [
         ("IB_I_BASIC_RATING", 3, "3", true),
         ("IB_I_BASIC_RATING", 5, "3", false),
@@ -1532,17 +1551,26 @@ fn smart_album_rules_select_as_capture_one_does() {
         ("isModified", 12, "1", false),
         ("IB_I_ISO", 4, "400", false),
         ("IB_F_EXP_APERTURE", 0, "8", false),
+        // as typed, not as a float holds it
+        ("IB_F_EXP_APERTURE", 0, "5.6", true),
+        ("IB_F_EXP_APERTURE", 2, "5.6", true),
+        ("IB_F_EXP_FOCALLENGTH", 3, "10.3", true),
+        ("IB_S_EXP_EXPOSURECOMPENSATION", 0, "-0.67", true),
     ] {
         assert_eq!(selects(key, op, value), Some(want), "{key} {op} {value}");
     }
-    // an operator this version doesn't know can't be evaluated
+    // an operator this version doesn't know can't be evaluated, whatever the photo holds
     assert_eq!(selects("IB_I_ISO", 7, "400"), None);
+    assert_eq!(selects("IB_S_CONTENT_KEYWORDS", 99, "x"), None);
+    let bare = CatalogPhoto { keywords: Vec::new(), ..photo.clone() };
+    let keyword_99 = smart::parse(&rule(true, &[("IB_S_CONTENT_KEYWORDS", 99, "x")])).unwrap();
+    assert_eq!(smart::matches(&keyword_99, &bare, &known()), None);
     // orientation as Capture One shows the photo: turned a quarter, a wide frame is tall
     let turned = CatalogPhoto { turned: Some(true), ..photo.clone() };
     let tall = smart::parse(&rule(true, &[("orientation", 0, "1")])).unwrap();
-    assert_eq!((smart::matches(&tall, &photo), smart::matches(&tall, &turned)), (Some(false), Some(true)));
+    assert_eq!((smart::matches(&tall, &photo, &known()), smart::matches(&tall, &turned, &known())), (Some(false), Some(true)));
     // and unknown when the catalog's rotations weren't read
-    assert_eq!(smart::matches(&tall, &CatalogPhoto { turned: None, ..photo }), None);
+    assert_eq!(smart::matches(&tall, &CatalogPhoto { turned: None, ..photo }, &known()), None);
 }
 
 #[test]
@@ -1561,20 +1589,63 @@ fn a_keyword_rule_that_depends_on_case_holds_the_photos_it_selects() {
 }
 
 #[test]
+fn an_orientation_rule_stays_a_rule_only_while_no_photo_is_turned_by_hand() {
+    let photo = |width: u32, height: u32, turned: bool, by_hand: bool| CatalogPhoto {
+        width,
+        height,
+        turned: Some(turned),
+        turned_by_hand: by_hand,
+        ..Default::default()
+    };
+    let tall = [("orientation", 0, "1")];
+    // turned by its file only: LightCraft turns it the same way
+    let as_filed = [photo(6000, 4000, true, false), photo(6000, 4000, false, false)];
+    assert_eq!(told(smart_outcome(true, &tall, &as_filed)), "smart");
+    // turned by hand in Capture One: LightCraft shows it as its file is
+    let by_hand = [photo(6000, 4000, true, true), photo(6000, 4000, false, false)];
+    assert_eq!(told(smart_outcome(true, &tall, &by_hand)), "[0]: Orientation of photos turned by hand");
+}
+
+#[test]
+fn a_smart_album_whose_photos_cant_be_told_is_not_passed_off_as_empty() {
+    let scratch = Scratch::new("unknown-selection");
+    let mut tables = sample(&scratch.0);
+    // a rule on orientation in a catalog without the layer table: the rule maps, its photos can't be told
+    table(&mut tables, "ZCOLLECTION").rows.push(smart_album(26, "Wide", 10, &rule(true, &[("orientation", 0, "0")])));
+    let data = convert::to_import(read(&scratch.catalog(&tables)).unwrap());
+    let wide = data.collections.iter().find(|c| c.get("name") == Some(&serde_json::json!("Wide"))).unwrap();
+    assert_eq!((wide.get("selectionUnknown"), wide.contains_key("smartRules")), (Some(&serde_json::json!(true)), true));
+    assert!(data.members.iter().all(|m| m.get("collection") != Some(&serde_json::json!(26))));
+}
+
+#[test]
 fn a_smart_album_on_orientation_reads_how_capture_one_turns_each_photo() {
     let scratch = Scratch::new("turned");
     let mut tables = sample(&scratch.0);
     // managed.RAF (6000 × 4000) shows turned in its first variant (combined layer 12), not in its
     // second (layers 20–22); a straightened few degrees don't turn a photo
     let layer = |pk: i64, rotation: f64| vec![("Z_PK", V::I(pk)), ("ZROTATION", V::R(rotation))];
-    tables.push(spec("ZVARIANTLAYER", &["Z_ENT", "Z_PK", "ZVARIANT", "ZROTATION"], vec![layer(10, 0.0), layer(12, 90.0), layer(22, 4.5)]));
+    // referenced.jpg's file is turned (its default layer, 30): Capture One and LightCraft agree
+    tables.push(spec(
+        "ZVARIANTLAYER",
+        &["Z_ENT", "Z_PK", "ZVARIANT", "ZROTATION"],
+        vec![layer(10, 0.0), layer(12, 90.0), layer(22, 4.5), layer(30, 90.0)],
+    ));
     // file size keeps it from being a smart album, so the import says which photos it selects
     let tall = rule(true, &[("orientation", 0, "1"), ("IB_S_FILE_SIZE", 2, "20000000")]);
     table(&mut tables, "ZCOLLECTION").rows.push(smart_album(26, "Tall", 10, &tall));
     let package = scratch.catalog(&tables);
     let catalog = read(&package).unwrap();
-    let turned: Vec<Option<bool>> = catalog.photos.iter().filter(|p| p.file_name == "managed.RAF").map(|p| p.turned).collect();
-    assert_eq!(turned, [Some(true), Some(false)]);
+    let turned: Vec<(&str, Option<bool>, bool)> = catalog.photos.iter().map(|p| (p.file_name.as_str(), p.turned, p.turned_by_hand)).collect();
+    assert_eq!(
+        turned,
+        [
+            ("managed.RAF", Some(true), true),
+            ("managed.RAF", Some(false), false),
+            ("referenced.jpg", Some(true), false),
+            ("elsewhere.ARW", Some(false), false)
+        ]
+    );
     let mut s = crate::Session::new().with_fs();
     s.execute("library.importLightroom", &serde_json::json!({ "path": package })).unwrap();
     assert_eq!(album(&s, "Tall").photos, [by_name(&s, "managed.RAF", false).id]);
@@ -1612,7 +1683,7 @@ fn a_smart_album_rule_that_cannot_be_read_is_an_error_not_a_panic() {
         ],
     );
     let parsed = smart::parse(&odd).unwrap();
-    assert!(matches!(smart::outcome(&parsed, &[CatalogPhoto::default()]), smart::Outcome::Skipped(_)));
+    assert!(matches!(smart::outcome(&parsed, &[CatalogPhoto::default()], &known()), smart::Outcome::Skipped(_)));
 }
 
 #[test]
@@ -1623,6 +1694,7 @@ fn smart_albums_come_in_as_smart_albums_plain_albums_or_warnings() {
     rows.push(smart_album(26, "Big files", 10, &rule(true, &[("IB_S_FILE_SIZE", 2, "20000000")])));
     rows.push(smart_album(27, "Commented", 11, &rule(true, &[("commentsKeys", 8, "x")])));
     rows.push(smart_album(28, "Broken", 12, "<MatchOperator"));
+    rows.push(smart_album(29, "Nature", 13, &rule(true, &[("IB_S_CONTENT_KEYWORDS", 0, "Nature")])));
     let package = scratch.catalog(&tables);
     let mut s = crate::Session::new().with_fs();
     let report = s.execute("library.importLightroom", &serde_json::json!({ "path": package })).unwrap();
@@ -1640,6 +1712,27 @@ fn smart_albums_come_in_as_smart_albums_plain_albums_or_warnings() {
     assert_eq!(big.message, notice::SMART_AS_ALBUM);
     assert_eq!(big.values["fields"], notice::Part::Messages(vec![Notice::new(notice::FILE_SIZE)]));
     assert!(warnings.iter().any(|w| w.starts_with("smart album “Broken”: not imported; its rule can't be read")), "{warnings:#?}");
+    // the albums left out have theirs, with the reason as a message of its own
+    let left_out = |name: &str| {
+        notices.iter().find(|n| n.message == notice::SMART_LEFT_OUT && n.values.get("name") == Some(&notice::Part::Text(name.into()))).and_then(|n| {
+            match n.values.get("why") {
+                Some(notice::Part::Message(why)) => Some(why.message.to_string()),
+                _ => None,
+            }
+        })
+    };
+    assert_eq!(left_out("Commented").as_deref(), Some(notice::RULE_NOT_READ));
+    assert_eq!(left_out("Broken").as_deref(), Some(notice::RULE_UNREADABLE));
+    // and their rules go to the recovery archive, in rows the library skips: parsed, or as written
+    let data = convert::to_import(read(&package).unwrap());
+    let kept = |name: &str| data.collections.iter().find(|c| c.get("name") == Some(&serde_json::json!(name))).cloned().unwrap_or_default();
+    let (commented, broken) = (kept("Commented"), kept("Broken"));
+    assert_eq!((commented.get("systemOnly"), broken.get("systemOnly")), (Some(&serde_json::json!(1)), Some(&serde_json::json!(1))));
+    assert_eq!(commented["captureOneRule"]["items"][0]["items"][0]["key"], "commentsKeys");
+    assert_eq!(broken.get("captureOneRuleText"), Some(&serde_json::json!("<MatchOperator")));
+    // a keyword "is" names its keyword as spelled, for the library to check its own against
+    assert_eq!(kept("Nature").get("exactKeywords"), Some(&serde_json::json!(["Nature"])));
+    assert!(album(&s, "Nature").is_smart());
     // the managed raw (23 MB) and its variant
     let big = album(&s, "Big files");
     assert!(big.smart.is_none());

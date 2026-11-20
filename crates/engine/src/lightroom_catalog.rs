@@ -1263,9 +1263,30 @@ fn stage_collections(
 /// The smart album rules a collection row brings (`smartRules`, a Capture One smart album's,
 /// in [`lightcraft_catalog::RuleSet`] terms); `None` when it has none, or rules the library
 /// refuses, which are named in a warning (the album then keeps the photos the row lists).
+/// A keyword of the library (or a level of one) that `collection`'s `exactKeywords` names in
+/// another spelling only.
+fn spelled_otherwise(s: &crate::Session, collection: &Row) -> Option<String> {
+    let exact: Vec<&str> = collection.get("exactKeywords")?.as_array()?.iter().filter_map(Value::as_str).collect();
+    let lower: Vec<String> = exact.iter().map(|k| k.to_lowercase()).collect();
+    s.catalog
+        .photos()
+        .flat_map(|photo| photo.meta.keywords.iter())
+        .flat_map(|keyword| std::iter::once(keyword.as_str()).chain(keyword.split('|')))
+        .map(str::trim)
+        .find(|name| !exact.contains(name) && lower.contains(&name.to_lowercase()))
+        .map(str::to_string)
+}
+
 fn smart_rules(s: &crate::Session, collection: &Row, program: &str, warnings: &mut Vec<String>) -> Option<Box<lightcraft_catalog::Filter>> {
     let rules = collection.get("smartRules")?;
-    let refused = |why: String| format!("smart album “{}”: {why}; imported with the photos its {program} rule selects now", text(collection, "name"));
+    let name = text(collection, "name");
+    let refused = |why: String| {
+        if collection.get("selectionUnknown").and_then(Value::as_bool) == Some(true) {
+            format!("smart album “{name}”: {why}; imported as an empty album, as the photos its {program} rule selects can't be told")
+        } else {
+            format!("smart album “{name}”: {why}; imported with the photos its {program} rule selects now")
+        }
+    };
     let rules: lightcraft_catalog::RuleSet = match serde_json::from_value(rules.clone()) {
         Ok(rules) => rules,
         Err(e) => {
@@ -1275,6 +1296,12 @@ fn smart_rules(s: &crate::Session, collection: &Row, program: &str, warnings: &m
     };
     if let Some(problem) = rules.check(&s.catalog).first() {
         warnings.push(refused(format!("its rules can't be used here ({problem})")));
+        return None;
+    }
+    // keywords the source program compares case by case (Capture One's "is"): LightCraft's rule
+    // doesn't, so a library holding one in another spelling would show other photos
+    if let Some(clash) = spelled_otherwise(s, collection) {
+        warnings.push(refused(format!("the library has the keyword “{clash}” in another spelling, which {program} tells apart")));
         return None;
     }
     Some(Box::new(lightcraft_catalog::Filter { rule_set: Some(rules), ..lightcraft_catalog::Filter::default() }))

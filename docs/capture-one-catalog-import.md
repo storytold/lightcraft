@@ -59,18 +59,25 @@ colour (Edit → Undo brings it back); importing the catalog again brings it bac
 
 **Smart albums.** A smart album whose every condition has a LightCraft smart album rule comes in as a smart album
 with those rules: rating, colour tag, keywords, any text, capture date (also its year or month), orientation,
-camera make or model ("contains"), lens, serial number, ISO, aperture, shutter speed, focal length, exposure
-compensation, has GPS, title, description, creator, copyright, location, city, state and country. Orange and pink
-are found by their keyword; "is not" on keywords and dates becomes a "none of" group. Conditions switched off in
-Capture One are left out. Where LightCraft has no rule for a condition (file size, pixel width or height, adjusted,
-annotated, flash mode, the camera owner, the IPTC fields LightCraft has no field for, …), the smart album comes in
-as a plain album holding the photos its rule selects in the catalog at the time of the import, and the import's
-result names it and the fields. Capture One's "is" on keywords tells upper and lower case apart and LightCraft's
-doesn't, so such a condition stays a rule only while the catalog has its keyword in one spelling. Orientation is
-taken as Capture One shows the photo, turned by the file's orientation or by hand. A rule that tests something the catalog import doesn't read (Live Comments), or
-that can't be read at all, leaves the smart album out, with a warning. Capture One's rule is kept with the album's
-record in the recovery archive. Text is compared ignoring case; "contains" with several words is matched as typed,
-so such a condition counts as one LightCraft has no rule for.
+lens, serial number, ISO, aperture, shutter speed, focal length, exposure compensation, has GPS, title,
+description, creator, copyright, location, city, state and country. Orange and pink are found by their keyword;
+"is not" on keywords and dates becomes a "none of" group. Conditions switched off in Capture One are left out.
+
+Where LightCraft has no rule that means the same (file size, pixel width or height, adjusted, annotated, flash
+mode, the camera owner, the camera's make or model, the IPTC fields LightCraft has no field for, …), the smart
+album comes in as a plain album holding the photos its rule selects in the catalog at the time of the import, and
+the import's result names it and the fields. The camera's make or model is one of these because LightCraft's camera
+is both together. Capture One's "is" on keywords tells upper and lower case apart and LightCraft's doesn't, so such
+a condition stays a rule only while the catalog and the library have its keyword in one spelling. Orientation is
+taken as Capture One shows the photo, turned by the file's orientation or by hand; LightCraft turns a photo only as
+its file says, so an orientation condition stays a rule only while no photo of the catalog was turned by hand.
+Aperture, focal length and exposure compensation are compared as typed (5.6 is 5.6). Text is compared ignoring
+case; "contains" with several words is matched as typed, so such a condition counts as one LightCraft has no rule
+for.
+
+A rule that tests something the catalog import doesn't read (Live Comments, a field this version of Capture One's
+catalog doesn't have), or that can't be read at all, leaves the smart album out, with a warning. Every smart
+album's rule, also one left out, is kept in the recovery archive: as read, or as written when it can't be read.
 
 **Other IPTC fields** (headline, ISO country code, job identifier, instructions, source, provider, categories,
 genre, scene, contact fields, description writer) have no field in LightCraft yet. They are kept with each photo's

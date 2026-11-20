@@ -4,8 +4,10 @@
 //! `<Name>.cocatalogdb`, next to `Originals/`, `Adjustments/` and `Cache/`. This module finds the
 //! database, checks that it has the tables and columns the reader needs, and reads its library
 //! data into [`CaptureOneCatalog`]: one [`CatalogPhoto`] per variant with its original's path,
-//! rating, colour tag, keywords and IPTC fields, and the user's albums, projects and groups.
-//! Develop settings, masks and smart album rules are not read.
+//! rating, colour tag, keywords and IPTC fields, and the user's albums, projects and groups. A
+//! smart album comes with its rule as Capture One stores it (`ZSMARTCRITERIA`, see [`smart`]),
+//! and each layer's rotation is read when a rule tests orientation. Develop settings and masks
+//! are not read.
 //!
 //! Clean room: the layout was learned from public descriptions of the format and from catalogs
 //! Capture One wrote, read as data. No Capture One code, resources or profiles were looked at.
@@ -74,6 +76,9 @@ pub struct CaptureOneCatalog {
     pub trashed: usize,
     /// What was left out or could not be read.
     pub warnings: Vec<Notice>,
+    /// The columns of the catalog's `ZVARIANTMETADATA`, without the leading `Z`: an IPTC field
+    /// a smart album tests is empty for a photo that lacks it only where the catalog has it.
+    pub metadata_columns: std::collections::BTreeSet<String>,
 }
 
 /// A keyword of the catalog's keyword list.
@@ -211,6 +216,9 @@ pub struct CatalogPhoto {
     /// from the file's orientation or the user's) is near 90° or 270°, so width and height trade
     /// places. `None` when it wasn't read: only a smart album rule on orientation needs it.
     pub turned: Option<bool>,
+    /// The turn Capture One shows isn't the file's own (the default layer's): the user turned
+    /// the variant, which LightCraft doesn't import. Read with [`CatalogPhoto::turned`].
+    pub turned_by_hand: bool,
     /// The image's other camera and exposure columns (`ZEXP_…`, `ZCAMERA_…`, `ZMULTISHOT_…`,
     /// `ZGPSALTITUDE`) by name without the leading `Z`, as text; empty when unset. Kept for the
     /// recovery archive and for smart album rules that test them.
@@ -382,6 +390,7 @@ pub fn read_with_cancel(path: &Path, cancel: &AtomicBool) -> Result<CaptureOneCa
         collections,
         keywords,
         trashed: read.trashed,
+        metadata_columns: read.metadata_columns,
         warnings,
     })
 }

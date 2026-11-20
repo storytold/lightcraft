@@ -2518,5 +2518,6 @@
   "Flash Compensation": "Compensación del flash",
   "Camera Owner": "Propietario de la cámara",
   "Camera Serial Number": "Número de serie de la cámara",
-  "Exposure Bias": "Compensación de exposición"
+  "Exposure Bias": "Compensación de exposición",
+  "Orientation of photos turned by hand": "Orientación de fotos giradas a mano"
 }

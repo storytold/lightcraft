@@ -11,7 +11,8 @@
   [Capture One catalog import](capture-one-catalog-import.md).
 - Capture One smart albums come in as LightCraft smart albums with the same rules. One that tests something
   LightCraft has no rule for, such as file size or flash mode, becomes an album with the photos it shows at the
-  time of the import, and the import's result says so.
+  time of the import, and the import's result says so. One that tests something the import can't read, such as Live
+  Comments, is left out with a warning.
 
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.

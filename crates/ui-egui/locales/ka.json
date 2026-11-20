@@ -3784,5 +3784,6 @@
   "Flash Compensation": "ციმციმის კომპენსაცია",
   "Camera Owner": "კამერის მფლობელი",
   "Camera Serial Number": "კამერის სერიული ნომერი",
-  "Exposure Bias": "ექსპოზიციის კომპენსაცია"
+  "Exposure Bias": "ექსპოზიციის კომპენსაცია",
+  "Orientation of photos turned by hand": "ხელით შემობრუნებული ფოტოების ორიენტაცია"
 }

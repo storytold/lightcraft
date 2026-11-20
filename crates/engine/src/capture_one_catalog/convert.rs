@@ -103,7 +103,7 @@ pub(crate) fn to_import(catalog: CaptureOneCatalog) -> CatalogImport {
         warnings.push(Notice::new(notice::MORE_NOT_OPENED).count("n", refused - MAX_NAMED));
     }
 
-    let (collections, members) = collections(&catalog.collections, &catalog.photos, &mut warnings);
+    let (collections, members) = collections(&catalog.collections, &catalog.photos, &catalog.metadata_columns, &mut warnings);
     CatalogImport {
         source: catalog.database,
         catalog_id: catalog.document_uuid.map(|id| format!("{PREFIX}{id}")),
@@ -286,6 +286,7 @@ fn iptc_packet(photo: &CatalogPhoto) -> String {
 fn collections(
     all: &[Collection],
     photos: &[CatalogPhoto],
+    columns: &smart::Columns,
     warnings: &mut Vec<Notice>,
 ) -> (Vec<BTreeMap<String, Value>>, Vec<BTreeMap<String, Value>>) {
     let row = |pairs: &[(&str, Value)]| pairs.iter().map(|(key, value)| ((*key).to_string(), value.clone())).collect::<BTreeMap<_, _>>();
@@ -313,19 +314,42 @@ fn collections(
                 album.insert("creationId".into(), json!("com.adobe.ag.library.group"));
             }
             CollectionKind::SmartAlbum => {
+                // a smart album left out still goes to the recovery archive, with its rule: as a
+                // row the library skips (`systemOnly`)
+                let mut left_out = |mut album: BTreeMap<String, Value>| {
+                    album.insert("systemOnly".into(), json!(1));
+                    album.insert("captureOneLeftOut".into(), json!(true));
+                    rows.push(album);
+                };
                 let rule = match smart::parse(&collection.rule) {
                     Ok(rule) => rule,
                     Err(why) => {
                         warn(Notice::new(notice::SMART_LEFT_OUT).text_value("name", name).notice("why", why));
+                        // as written, up to the length a rule is read at
+                        if collection.rule.len() <= smart::MAX_RULE_BYTES {
+                            album.insert("captureOneRuleText".into(), json!(collection.rule));
+                        }
+                        left_out(album);
                         continue;
                     }
                 };
                 album.insert("captureOneRule".into(), smart::archived(&rule));
-                match smart::outcome(&rule, photos) {
+                match smart::outcome(&rule, photos, columns) {
                     smart::Outcome::Smart(rules) => {
                         album.insert("smartRules".into(), json!(rules));
-                        // what it shows now, should the library refuse the rules
-                        photos_in = smart::select(&rule, photos).unwrap_or_default();
+                        let exact = smart::exact_keywords(&rule);
+                        if !exact.is_empty() {
+                            album.insert("exactKeywords".into(), json!(exact));
+                        }
+                        // what it shows now, should the library refuse the rules; when that can't
+                        // be told, the album says so rather than pass an empty one off as it
+                        match smart::select(&rule, photos, columns) {
+                            Some(selected) => photos_in = selected,
+                            None => {
+                                album.insert("selectionUnknown".into(), json!(true));
+                                photos_in = Vec::new();
+                            }
+                        }
                     }
                     smart::Outcome::Selected(selected, missing) => {
                         warn(Notice::new(notice::SMART_AS_ALBUM).text_value("name", name).count("n", selected.len()).notices("fields", missing));
@@ -333,6 +357,7 @@ fn collections(
                     }
                     smart::Outcome::Skipped(why) => {
                         warn(Notice::new(notice::SMART_LEFT_OUT).text_value("name", name).notice("why", why));
+                        left_out(album);
                         continue;
                     }
                 }

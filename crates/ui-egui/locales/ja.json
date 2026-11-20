@@ -2516,5 +2516,6 @@
   "Flash Compensation": "フラッシュ補正",
   "Camera Owner": "カメラの所有者",
   "Camera Serial Number": "カメラのシリアル番号",
-  "Exposure Bias": "露出補正"
+  "Exposure Bias": "露出補正",
+  "Orientation of photos turned by hand": "手動で回転した写真の向き"
 }
