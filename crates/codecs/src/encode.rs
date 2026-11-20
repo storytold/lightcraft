@@ -77,46 +77,21 @@ pub enum ChromaSubsampling {
     S420,
 }
 
-const XMP_NS: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
-
 /// The APP segments [`encode_jpeg`] writes for `meta` (marker byte, payload): JFIF density, EXIF,
 /// XMP and the ICC profile in chunks, in that order.
 pub(crate) fn jpeg_app_segments(meta: &EncodeMeta) -> Result<Vec<(u8, Vec<u8>)>> {
-    let mut segs: Vec<(u8, Vec<u8>)> = Vec::new();
-    let ppi = meta.ppi.filter(|p| *p > 0).map_or([0u8, 0, 1, 0, 1], |p| {
-        let [hi, lo] = p.to_be_bytes();
-        [1, hi, lo, hi, lo]
-    });
-    segs.push((0xE0, [&b"JFIF\0\x01\x02"[..], &ppi, &[0, 0]].concat()));
-    if let Some(exif) = meta.exif {
-        if exif.len() > 65_527 {
-            return Err(Error::Encode("EXIF larger than one APP1 segment (64 KiB)".into()));
-        }
-        segs.push((0xE1, [&b"Exif\0\0"[..], exif].concat()));
-    }
-    if let Some(xmp) = meta.xmp {
-        segs.push((0xE1, xmp_segment(xmp)?));
-    }
-    if let Some(icc) = meta.icc {
-        // ICC.1 Annex B.4: "ICC_PROFILE\0", 1-based chunk number, chunk count
-        let chunks: Vec<&[u8]> = icc.chunks(65_519).collect();
-        if chunks.len() > 255 {
-            return Err(Error::Encode("ICC profile too large for JPEG".into()));
-        }
-        for (i, c) in chunks.iter().enumerate() {
-            segs.push((0xE2, [&b"ICC_PROFILE\0"[..], &[i as u8 + 1, chunks.len() as u8], c].concat()));
-        }
-    }
-    Ok(segs)
+    craft_image_codecs::raw_metadata::jpeg_segments(craft_image_codecs::raw_metadata::JpegMetadata {
+        exif: meta.exif,
+        xmp: meta.xmp,
+        icc: meta.icc,
+        ppi: meta.ppi,
+    })
+    .map_err(|e| Error::Encode(e.to_string()))
 }
 
 /// An APP1 XMP payload (namespace + packet), refusing packets larger than one segment.
 pub(crate) fn xmp_segment(xmp: &str) -> Result<Vec<u8>> {
-    let seg = [XMP_NS, xmp.as_bytes()].concat();
-    if seg.len() > 65_533 {
-        return Err(Error::Encode("XMP larger than one APP1 segment (extended XMP not supported)".into()));
-    }
-    Ok(seg)
+    craft_image_codecs::raw_metadata::jpeg_xmp(xmp).map_err(|e| Error::Encode(e.to_string()))
 }
 
 /// Encode baseline JPEG (8-bit; alpha is dropped). `quality` 1..=100.
@@ -174,27 +149,9 @@ pub fn encode_png(img: &EncodeImage, meta: &EncodeMeta) -> Result<Vec<u8>> {
     let ic_opts = craft_image_codecs::EncodeOptions { png_compression: craft_image_codecs::PngCompression::Fast, ..Default::default() };
     let mut out = craft_image_codecs::encode(&ic_img, craft_image_codecs::Format::Png, &ic_opts).map_err(|e| Error::Encode(e.to_string()))?;
     if let Some(exif) = meta.exif {
-        replace_png_exif_chunk(&mut out, exif);
+        craft_image_codecs::raw_metadata::replace_png_exif(&mut out, exif).map_err(|e| Error::Encode(e.to_string()))?;
     }
     Ok(out)
-}
-
-/// Replace the `eXIf` chunk in an encoded PNG so caller-supplied EXIF (including non-1
-/// orientation tags) is preserved verbatim.
-fn replace_png_exif_chunk(png: &mut Vec<u8>, exif: &[u8]) {
-    let mut p = 8usize;
-    while let Some(len_bytes) = png.get(p..p + 4) {
-        let len = u32::from_be_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]]) as usize;
-        let end = p.saturating_add(12).saturating_add(len);
-        if end > png.len() {
-            break;
-        }
-        if png.get(p + 4..p + 8) == Some(b"eXIf") {
-            png.splice(p..end, png_chunk(*b"eXIf", exif));
-            return;
-        }
-        p = end;
-    }
 }
 
 /// TIFF compression.
@@ -251,34 +208,9 @@ pub fn encode_webp_lossless(img: &EncodeImage, meta: &EncodeMeta) -> Result<Vec<
     let ic_opts = craft_image_codecs::EncodeOptions { webp_lossless: true, ..Default::default() };
     let mut out = craft_image_codecs::encode(&ic_img, craft_image_codecs::Format::WebP, &ic_opts).map_err(|e| Error::Encode(e.to_string()))?;
     if let Some(exif) = meta.exif {
-        replace_webp_exif_chunk(&mut out, exif);
+        craft_image_codecs::raw_metadata::replace_webp_exif(&mut out, exif).map_err(|e| Error::Encode(e.to_string()))?;
     }
     Ok(out)
-}
-
-/// Replace the `EXIF` RIFF chunk payload in a WebP file so caller-supplied EXIF (including
-/// non-1 orientation tags) is preserved verbatim.
-fn replace_webp_exif_chunk(webp: &mut Vec<u8>, exif: &[u8]) {
-    let mut p = 12usize;
-    while let Some(h) = webp.get(p..p.saturating_add(8)) {
-        let size = u32::from_le_bytes([h[4], h[5], h[6], h[7]]) as usize;
-        let end = p.saturating_add(8).saturating_add(size);
-        let padded_end = end.saturating_add(size & 1);
-        if &h[0..4] == b"EXIF" && padded_end <= webp.len() {
-            let mut replacement = Vec::with_capacity(8 + exif.len() + (exif.len() & 1));
-            replacement.extend_from_slice(b"EXIF");
-            replacement.extend_from_slice(&(exif.len() as u32).to_le_bytes());
-            replacement.extend_from_slice(exif);
-            if exif.len() & 1 == 1 {
-                replacement.push(0);
-            }
-            webp.splice(p..padded_end, replacement);
-            let riff_size = (webp.len().saturating_sub(8)) as u32;
-            webp[4..8].copy_from_slice(&riff_size.to_le_bytes());
-            return;
-        }
-        p = padded_end;
-    }
 }
 
 /// Encode AVIF (sRGB, 4:4:4, 10-bit AV1) with `ravif` (rav1e). 8-bit samples are widened by the
@@ -408,22 +340,6 @@ pub fn encode_png_pq(width: u32, height: u32, rgb: &[f32], meta: &EncodeMeta) ->
     image.meta.dpi = meta.ppi.filter(|&ppi| ppi > 0).map(|ppi| (f32::from(ppi), f32::from(ppi)));
     let options = craft_image_codecs::EncodeOptions { png_compression: craft_image_codecs::PngCompression::Fast, ..Default::default() };
     craft_image_codecs::encode_png_pq(&image, &options).map_err(|e| Error::Encode(e.to_string()))
-}
-
-fn png_chunk(kind: [u8; 4], data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(12 + data.len());
-    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
-    out.extend_from_slice(&kind);
-    out.extend_from_slice(data);
-    let mut crc = 0xFFFF_FFFFu32;
-    for &b in &out[4..] {
-        crc ^= u32::from(b);
-        for _ in 0..8 {
-            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
-        }
-    }
-    out.extend_from_slice(&(!crc).to_be_bytes());
-    out
 }
 
 #[cfg(test)]
