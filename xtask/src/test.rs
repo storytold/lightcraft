@@ -336,6 +336,7 @@ pub fn run(raw: &[&str]) -> Result<(), String> {
     let mut summary = Vec::new();
     if let Some(nextest) = nextest {
         let mut c = super::cargo();
+        crate::ci::use_nextest_profile(&mut c);
         c.args(["nextest", "run"]).args(&nextest);
         if let Err(e) = super::run_tests(c, &format!("cargo nextest run {}", nextest.join(" ")), limit) {
             failed.push(("cargo nextest run".to_owned(), e));

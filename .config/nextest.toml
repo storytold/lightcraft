@@ -1,5 +1,8 @@
-[profile.default]
+# `cargo xtask ci` and `cargo xtask test` run nextest (LIGHTCRAFT_NEXTEST=1) with this profile, set
+# through NEXTEST_PROFILE unless you set it yourself. A plain `cargo nextest run` uses the default
+# profile and keeps nextest's own defaults (#3058).
+[profile.xtask]
 # A test still running after 30 minutes is killed (`cargo xtask` gives each test binary under
 # `cargo test` the same limit, LIGHTCRAFT_TEST_BINARY_TIMEOUT, #3060). That variable doesn't change
-# this one (`0` included): add a profile without terminate-after and pick it with NEXTEST_PROFILE.
+# this one (`0` included): NEXTEST_PROFILE=default runs without it.
 slow-timeout = { period = "60s", terminate-after = 30 }

@@ -117,14 +117,14 @@ pub fn test_binary_timeout() -> Result<Option<Duration>, String> {
 }
 
 /// What to say when the tests run under `cargo nextest run` and [`TEST_BINARY_TIMEOUT_ENV`] is
-/// set: nextest prints no `Running` lines for xtask's clock, so its own `slow-timeout`
-/// (`.config/nextest.toml`, 30 minutes per test) applies instead, whatever the variable says (`0`
-/// included). `None` when the variable isn't set.
+/// set: nextest prints no `Running` lines for xtask's clock, so the `slow-timeout` of xtask's nextest
+/// profile (`.config/nextest.toml`, 30 minutes per test) applies instead, whatever the variable says
+/// (`0` included). `None` when the variable isn't set.
 pub fn nextest_note(value: Option<&std::ffi::OsStr>) -> Option<String> {
     let value = value.filter(|v| !v.is_empty())?;
     Some(format!(
-        "note: {TEST_BINARY_TIMEOUT_ENV}={} doesn't apply under cargo nextest: .config/nextest.toml's slow-timeout ends a test \
-         after 30 minutes instead (a profile there without terminate-after, chosen with NEXTEST_PROFILE, runs without it)",
+        "note: {TEST_BINARY_TIMEOUT_ENV}={} doesn't apply under cargo nextest: the slow-timeout of .config/nextest.toml's \
+         xtask profile ends a test after 30 minutes instead (NEXTEST_PROFILE=default runs without it)",
         value.to_string_lossy()
     ))
 }

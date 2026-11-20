@@ -95,12 +95,34 @@ pub(crate) fn nextest() -> bool {
     })
 }
 
+/// The nextest profile xtask's nextest runs use: `.config/nextest.toml`'s `[profile.xtask]` holds
+/// the per-test time limit, so a plain `cargo nextest run` (the default profile) keeps nextest's own
+/// defaults (#3058, #3060).
+pub(crate) const NEXTEST_PROFILE: &str = "xtask";
+
+/// The `NEXTEST_PROFILE` a nextest run of xtask sets, given the caller's (`caller`): xtask's profile,
+/// unless the caller chose one.
+fn nextest_profile_to_set(caller: Option<&std::ffi::OsStr>) -> Option<&'static str> {
+    if caller.is_some_and(|v| !v.is_empty()) { None } else { Some(NEXTEST_PROFILE) }
+}
+
+/// Run `c`, a `cargo nextest run`, with xtask's nextest profile unless the caller chose one.
+pub(crate) fn use_nextest_profile(c: &mut Command) {
+    if let Some(profile) = nextest_profile_to_set(std::env::var_os("NEXTEST_PROFILE").as_deref()) {
+        c.env("NEXTEST_PROFILE", profile);
+    }
+}
+
 /// A test run of `args` (packages, features, targets, filters): `cargo nextest run`, or `cargo
 /// test`. The command and how to print it. `--no-fail-fast`: a failing test binary doesn't stop
 /// the others, so one CI run shows every failure, not just the first crate's.
 fn tests(args: &[&str]) -> (Command, String) {
     let mut c = cargo();
-    let tool = if nextest() { "nextest run" } else { "test" };
+    let nextest = nextest();
+    let tool = if nextest { "nextest run" } else { "test" };
+    if nextest {
+        use_nextest_profile(&mut c);
+    }
     c.args(tool.split(' ')).arg("--no-fail-fast").args(args);
     (c, format!("cargo {tool} --no-fail-fast {}", args.join(" ")))
 }
@@ -409,6 +431,40 @@ fn probe_gpu(backend: Option<&str>, limit: Option<std::time::Duration>) -> Resul
             Err(format!("{name}exited with {status}: {}", tail.into_iter().rev().collect::<Vec<_>>().join(" / ")))
         }
         Err(timed_out) => Err(format!("{name}{timed_out}")),
+    }
+}
+
+#[cfg(test)]
+mod nextest_profile_tests {
+    use super::{NEXTEST_PROFILE, nextest_profile_to_set};
+
+    #[test]
+    fn xtask_picks_its_nextest_profile_unless_the_caller_chose_one() {
+        assert_eq!(nextest_profile_to_set(None), Some(NEXTEST_PROFILE));
+        assert_eq!(nextest_profile_to_set(Some(std::ffi::OsStr::new(""))), Some(NEXTEST_PROFILE), "empty is unset");
+        assert_eq!(nextest_profile_to_set(Some(std::ffi::OsStr::new("default"))), None, "the caller's profile wins");
+    }
+
+    /// The per-test time limit lives in xtask's profile, not the default one, so a plain
+    /// `cargo nextest run` keeps nextest's defaults (FredApps on #3058).
+    #[test]
+    fn only_xtasks_nextest_profile_has_the_time_limit() {
+        let config = std::fs::read_to_string(super::root().join(".config/nextest.toml")).unwrap();
+        let mut table = "";
+        let mut limits = Vec::new();
+        for line in config.lines().map(|l| l.split('#').next().unwrap_or(l).trim()) {
+            if line.starts_with('[') {
+                table = line;
+            } else if line.starts_with("slow-timeout") || line.starts_with("test-threads") {
+                limits.push((table, line));
+            }
+        }
+        let xtask = format!("[profile.{NEXTEST_PROFILE}]");
+        assert!(!limits.is_empty(), "the time limit is in .config/nextest.toml");
+        for (table, line) in &limits {
+            assert_eq!(*table, xtask, "only xtask's profile sets `{line}`");
+        }
+        assert!(limits.iter().any(|(_, l)| l.contains("terminate-after = 30")), "{limits:?}");
     }
 }
 
