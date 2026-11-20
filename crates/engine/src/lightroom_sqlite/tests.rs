@@ -680,7 +680,7 @@ fn cross_app_parity_text_blob_null_overflow_and_ordering() {
     row1.extend(overflow_text.as_bytes());
     row1.extend([0x00, 0xff]);
 
-    let local = craft_sqlite::local_payload_len(512, row1.len(), true).unwrap();
+    let local = craft_sqlite::local_payload_len(512, row1.len() as u64, craft_sqlite::PayloadKind::TableLeaf).unwrap() as usize;
     let mut page3 = vec![0u8; 512];
     page3[0] = 0x0d;
     page3[3..5].copy_from_slice(&1u16.to_be_bytes());
@@ -743,9 +743,10 @@ fn cross_app_parity_text_blob_null_overflow_and_ordering() {
     // Cyclic overflow chain is rejected in both memory and file readers.
     let mut cyclic = main.clone();
     cyclic[4 * 512..4 * 512 + 4].copy_from_slice(&5u32.to_be_bytes());
+    let cyclic_local = craft_sqlite::local_payload_len(512, 1200, craft_sqlite::PayloadKind::TableLeaf).unwrap() as usize;
     let mut cyclic_cell = varint(1200);
     cyclic_cell.extend(varint(1));
-    cyclic_cell.extend(&row1[..local]);
+    cyclic_cell.extend(vec![b'x'; cyclic_local]);
     cyclic_cell.extend(5u32.to_be_bytes());
     let cc_off = 512 - cyclic_cell.len();
     cyclic[2 * 512 + cc_off..3 * 512].copy_from_slice(&cyclic_cell);

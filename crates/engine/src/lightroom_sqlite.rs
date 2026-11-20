@@ -350,7 +350,10 @@ impl Database {
         if usable < 8 {
             return Err("SQLite usable page size is too small".into());
         }
-        let local = craft_sqlite::local_payload_len(usable, payload_len, true).map_err(|_| "SQLite usable page size is too small")?;
+        let usable_u32 = u32::try_from(usable).map_err(|_| "SQLite usable page size is too small")?;
+        let local = craft_sqlite::local_payload_len(usable_u32, payload_len as u64, craft_sqlite::PayloadKind::TableLeaf)
+            .map(|len| len as usize)
+            .ok_or("SQLite usable page size is too small")?;
         let local_end = cell_at.checked_add(local).ok_or("SQLite cell payload overflow")?;
         if local_end > usable {
             return Err("truncated SQLite cell payload".into());

@@ -1430,7 +1430,7 @@ dependencies = [
 [[package]]
 name = "craft-sqlite"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=b01a1999ee6e58b6bb78129bcf10d8658e2a3959#b01a1999ee6e58b6bb78129bcf10d8658e2a3959"
+source = "git+https://github.com/storytold/craft-libs?rev=8b6e747a964392e486aa3c60581c9aed506a28af#8b6e747a964392e486aa3c60581c9aed506a28af"
 
 [[package]]
 name = "craft-tiff"
