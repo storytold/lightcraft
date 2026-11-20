@@ -163,7 +163,7 @@ fn gavg(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     partial[lid] = sum;
     reduce(lid);
     if (lid == 0u && ch < q(0)) {
-        dst[ch] = partial[0] / f32(plane);
+        dst[ch] = partial[0] / f32(max(plane, 1u));
     }
 }
 

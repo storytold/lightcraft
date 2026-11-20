@@ -523,20 +523,24 @@ fn make_auto_device(backends: wgpu::Backends) -> Result<Dev, String> {
     let instance = new_compute_instance(backends);
     let adapters = pollster::block_on(instance.enumerate_adapters(backends));
     let entries = crate::remember_adapters(&adapters);
-    if let Some(wanted) = crate::backend::wanted_adapter()
-        && let Some((idx, entry)) = entries.iter().enumerate().find(|(_, e)| e.usable && crate::backend::adapter_name_matches(&wanted, &e.name))
+    let wanted_hit = crate::backend::wanted_adapter().and_then(|wanted| {
+        entries
+            .iter()
+            .enumerate()
+            .find(|(_, e)| e.usable && crate::backend::adapter_name_matches(&wanted, &e.name))
+            .map(|(i, e)| (i, e.key.clone(), e.drives_screen))
+    });
+    let chosen = wanted_hit.or_else(|| {
+        entries
+            .iter()
+            .enumerate()
+            .filter(|(i, e)| e.usable && adapters.get(*i).is_some_and(|a| adapter_limits_ok(a).is_ok()))
+            .max_by_key(|(_, e)| auto_adapter_score(e))
+            .map(|(i, e)| (i, e.key.clone(), e.drives_screen))
+    });
+    if let Some((idx, key, drives_screen)) = chosen
         && let Some(adapter) = adapters.into_iter().nth(idx)
     {
-        let card = if entry.drives_screen { Card::Editing } else { Card::Second };
-        return build_dev(adapter, card, entry.key.clone());
-    }
-    let best = entries
-        .iter()
-        .enumerate()
-        .filter(|(i, e)| e.usable && adapters.get(*i).is_some_and(|a| adapter_limits_ok(a).is_ok()))
-        .max_by_key(|(_, e)| auto_adapter_score(e))
-        .map(|(i, e)| (i, e.key.clone(), e.drives_screen));
-    if let Some((idx, key, drives_screen)) = best && let Some(adapter) = adapters.into_iter().nth(idx) {
         let card = if drives_screen { Card::Editing } else { Card::Second };
         return build_dev(adapter, card, key);
     }
@@ -1448,7 +1452,12 @@ impl FaceGpu {
                 per_value(&k.maxpool, &[u(*h)?, u(*w)?, u(*kh)?, u(*kw)?, u(*sh)?, u(*sw)?, u(*oh)?, u(*ow)?])
             }
             Op::Resize { h, w, sh, sw, .. } => per_value(&k.resize, &[u(*h)?, u(*w)?, u(*sh)?, u(*sw)?]),
-            Op::GlobalAverage { plane, .. } => per_group(&k.gavg, &[u(*plane)?]),
+            Op::GlobalAverage { plane, .. } => {
+                if *plane == 0 {
+                    return Ok(None);
+                }
+                per_group(&k.gavg, &[u(*plane)?])
+            }
             Op::Gemv { k: kk, n: nn, trans_b, alpha } => per_group(&k.gemv, &[u(*kk)?, u(*nn)?, u32::from(*trans_b), alpha.to_bits()]),
         })
     }
@@ -1499,10 +1508,7 @@ impl FaceGpu {
         }
         if self.precision == ActivePrecision::Fp16 {
             let weights_overflow = prog.steps.iter().any(|s| {
-                let op_ov = match &s.op {
-                    Op::Conv(j) => f16_overflows(j.weights) || j.bias.is_some_and(f16_overflows),
-                    _ => false,
-                };
+                let op_ov = matches!(&s.op, Op::Conv(j) if f16_overflows(j.weights) || j.bias.is_some_and(f16_overflows));
                 let arg_ov = s.args.iter().any(|a| matches!(a, Arg::Const { data, .. } if f16_overflows(data)));
                 op_ov || arg_ov
             });
