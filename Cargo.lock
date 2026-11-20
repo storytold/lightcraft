@@ -1334,6 +1334,14 @@ dependencies = [
 [[package]]
 name = "craft-media"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=057b0e3e01aed74ecc5d18eb047ddd7328b46b1d#057b0e3e01aed74ecc5d18eb047ddd7328b46b1d"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-media"
+version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3#23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3"
 dependencies = [
  "thiserror 2.0.21",
@@ -1495,7 +1503,7 @@ name = "craft-video"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3#23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3"
 dependencies = [
- "craft-media",
+ "craft-media 0.1.0 (git+https://github.com/storytold/craft-libs?rev=23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3)",
  "rav1e",
  "rayon",
  "thiserror 2.0.21",
@@ -3960,6 +3968,7 @@ dependencies = [
  "craft-image-codecs",
  "craft-jpeg",
  "craft-jxl",
+ "craft-media 0.1.0 (git+https://github.com/storytold/craft-libs?rev=057b0e3e01aed74ecc5d18eb047ddd7328b46b1d)",
  "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3)",
  "craft-psd",
  "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3)",
