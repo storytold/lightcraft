@@ -24,7 +24,7 @@ fn edit_panel() -> Headless {
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("ui.set", json!({"view": "detail", "right": "edit"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     h
 }
 
@@ -68,14 +68,14 @@ fn drag(h: &mut Headless, fx: f32, dx: f32, shift: bool) {
     let p = json!({"id": "histogram", "fx": fx, "fy": 0.5, "dx": dx, "steps": 8, "shift": shift});
     let r = h.request("ui.dragWidget", p.clone(), T);
     assert_eq!(r["ok"], true, "{p}: {r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.dragWidget");
 }
 
 /// A double-click on the histogram at `fx` (the plot's own rows, `fy` 0.5).
 fn double_click(h: &mut Headless, fx: f32) {
     let r = h.request("ui.clickWidget", json!({"id": "histogram", "fx": fx, "fy": 0.5, "count": 2}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking histogram");
 }
 
 /// Hover the histogram at `fx` and let the frame settle.
@@ -183,7 +183,7 @@ fn a_drag_below_the_plot_leaves_the_tones_alone() {
     let p = json!({"id": "histogram", "fx": 0.5, "fy": 0.97, "dx": w * 0.2, "steps": 6});
     let r = h.request("ui.dragWidget", p.clone(), T);
     assert_eq!(r["ok"], true, "{p}: {r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.dragWidget");
     assert_eq!(values(&h), [0.0; 5], "no zone was dragged");
     assert_eq!(h.app.session.undo.len(), undo, "and nothing was recorded");
     assert!(h.app.session.interaction.is_none(), "no interaction was opened");
@@ -199,7 +199,7 @@ fn a_drag_starting_on_a_clipping_chevron_changes_no_develop_value() {
     let p = json!({"id": "histogram:shadows", "dx": 40.0, "steps": 8});
     let r = h.request("ui.dragWidget", p.clone(), T);
     assert_eq!(r["ok"], true, "{p}: {r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.dragWidget");
     assert_eq!(values(&h), [0.0; 5], "dragging from the shadow chevron moves no tone");
     assert_eq!(h.app.session.undo.len(), undo, "and leaves undo alone");
     assert!(h.app.session.interaction.is_none(), "no interaction was opened");
@@ -208,7 +208,7 @@ fn a_drag_starting_on_a_clipping_chevron_changes_no_develop_value() {
     let p = json!({"id": "histogram:highlights", "dx": -40.0, "steps": 8});
     let r = h.request("ui.dragWidget", p.clone(), T);
     assert_eq!(r["ok"], true, "{p}: {r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.dragWidget");
     assert_eq!(values(&h), [0.0; 5], "dragging from the highlight chevron moves no tone");
     assert_eq!(h.app.session.undo.len(), undo, "undo remains untouched");
     assert!(h.app.session.interaction.is_none(), "no interaction was opened");
@@ -288,7 +288,7 @@ fn a_drag_dispatches_live_and_commits_on_the_release() {
         pressed: false,
         modifiers: egui::Modifiers::NONE,
     });
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the injected input");
     assert!(h.app.session.interaction.is_none(), "the release commits the interaction");
     assert!(h.app.ui.dragging_control.is_none(), "and no control is left dragged");
     assert_eq!(h.app.session.undo.len() - before, 1, "the whole drag is one undo step");

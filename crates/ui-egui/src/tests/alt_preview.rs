@@ -22,7 +22,7 @@ fn detail() -> Headless {
         h.app.ui.toggle_section("light");
     }
     h.app.renderer.keep_pixels = true;
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after opening the Light section");
     h
 }
 
@@ -47,16 +47,16 @@ fn alt_during_a_blacks_drag_shows_shadow_clipping_until_released() {
     for i in 1..=8 {
         h.app.synthetic.push(Event::PointerMoved(from - egui::vec2(6.0 * i as f32, 0.0)));
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the drag on the Blacks slider");
     assert_eq!(h.app.ui.dragging_control.as_deref(), Some("light.blacks"));
     assert!(binary_share(&h) < 0.5, "no preview without Alt");
     // Alt pressed mid-drag: the shadow clipping view
     h.app.synthetic.push(Event::ModifiersChanged(Modifiers::ALT));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after pressing Alt mid-drag");
     assert!(binary_share(&h) > 0.99, "the clipping view: {}", binary_share(&h));
     // Alt released: the photo again, the drag still on
     h.app.synthetic.push(Event::ModifiersChanged(Modifiers::NONE));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after releasing Alt");
     assert!(binary_share(&h) < 0.5, "the photo is back");
     h.app.synthetic.push(Event::PointerButton {
         pos: from - egui::vec2(48.0, 0.0),
@@ -64,7 +64,7 @@ fn alt_during_a_blacks_drag_shows_shadow_clipping_until_released() {
         pressed: false,
         modifiers: Modifiers::NONE,
     });
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after releasing the drag");
     assert_eq!(h.app.ui.dragging_control, None);
     let after = h.app.session.develop_of(h.app.session.active().expect("photo")).expect("develop").light.blacks;
     assert!(after < before, "the drag itself still moved Blacks: {before} → {after}");
@@ -86,21 +86,21 @@ fn j_paints_clipped_highlights_red_and_clipped_shadows_blue() {
     let set = |h: &mut Headless, ev: f64| {
         let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": ev}}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after develop.set");
     };
     set(&mut h, 5.0);
     let (red, blue) = ([255, 0, 0], [0, 0, 255]);
     assert!(share_of(&h, red) < 0.1, "without J the blown photo is not painted red: {}", share_of(&h, red));
     let r = h.request("ui.key", json!({"key": "J"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.key");
     assert!(h.app.ui.show_clipping);
     assert!(share_of(&h, red) > 0.5, "blown highlights shown in red: {}", share_of(&h, red));
     set(&mut h, -5.0);
     // the demo photo's shadows don't reach black on Exposure alone: Blacks crushes them
     let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.blacks", "value": -100.0}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after develop.set");
     assert!(share_of(&h, blue) > 0.01, "crushed shadows shown in blue: {}", share_of(&h, blue));
     assert!(share_of(&h, red) < 0.01, "nothing blown at -5 EV: {}", share_of(&h, red));
 }

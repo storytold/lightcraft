@@ -391,7 +391,7 @@ mod tiff_lzw_note_tests {
         } else {
             panic!("no Export dialog");
         }
-        h.settle(T);
+        h.settled(T, "after setting the TIFF options");
     }
 
     fn note_rect(h: &Headless) -> Option<egui::Rect> {
@@ -409,10 +409,10 @@ mod tiff_lzw_note_tests {
         let services = Services { png: None, write_shared: Some(std::sync::Arc::new(|_: &str, _: &[u8]| Ok(()))), ..Default::default() };
         let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
         let mut h = Headless::new(app, [1600.0, 1000.0], 1.0);
-        h.settle(T);
+        h.settled(T, "the new demo session");
         let r = h.request("engine.execute", json!({"command": "dialog.export", "params": {}}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(T);
+        h.settled(T, "after dialog.export");
         for compression in [TiffCompression::Deflate, TiffCompression::None] {
             set(&mut h, compression, None);
             assert!(note_rect(&h).is_none(), "{compression:?} has no note");

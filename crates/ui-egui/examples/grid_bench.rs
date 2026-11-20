@@ -8,9 +8,12 @@
 //! files: thumbnails fail fast, so no decoding is timed), scrolls to the middle and then times
 //! frames in which nothing changes. Prints per-frame wall-clock (min / median / p95 of the whole
 //! app frame and of the grid panel alone), heap allocations per frame on the UI thread, and the
-//! grid's own counters (cells visited, layout / view / index rebuilds).
+//! grid's own counters (cells visited, layout / view / index rebuilds). A scenario that doesn't
+//! settle in time is still printed, marked INVALID (its frames would include the unfinished work),
+//! and the run then exits with status 1.
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
+use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use lightcraft_catalog::{Op, Photo, PhotoId, Source, Stack, StackId};
@@ -105,7 +108,19 @@ fn dist(mut v: Vec<f64>) -> Dist {
     Dist { min: at(0.0), med: at(0.5), p95: at(0.95) }
 }
 
-fn scenario(n: usize, view: ViewMode, local: bool, frames: usize) {
+/// Run frames until `h` settles. `false` (after saying what was still busy) when it timed out: the
+/// frames timed next would include that work.
+fn settle(h: &mut Headless) -> bool {
+    let limit = Duration::from_secs(120);
+    let settled = h.settle(limit);
+    if !settled {
+        eprintln!("did not settle within {limit:?}: {}", h.busy_description());
+    }
+    settled
+}
+
+/// Time one scenario and print its row. Returns whether its timings are valid (it settled).
+fn scenario(n: usize, view: ViewMode, local: bool, frames: usize) -> bool {
     let t0 = Instant::now();
     let session = library(n, local);
     let services = Services { png: None, ..Default::default() };
@@ -113,13 +128,13 @@ fn scenario(n: usize, view: ViewMode, local: bool, frames: usize) {
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     h.app.ui.view = view;
     h.app.ui.thumb_size = 160.0;
-    h.settle(Duration::from_secs(120));
+    let mut settled = settle(&mut h);
     // to the middle of the grid (and let the newly visible thumbnails fail / settle)
     if let Some(mid) = h.app.session.visible().get(n / 2).copied() {
         h.app.session.selection.active = Some(mid);
         h.app.session.selection.ids = vec![mid];
     }
-    h.settle(Duration::from_secs(120));
+    settled &= settle(&mut h);
     let setup = t0.elapsed();
     let stats0 = h.app.caches.grid_stats.clone();
     let mut frame_ms = Vec::with_capacity(frames);
@@ -137,7 +152,7 @@ fn scenario(n: usize, view: ViewMode, local: bool, frames: usize) {
     let g = dist(grid_ms);
     let name = format!("{n:>6} {:<7} {:<5}", if view == ViewMode::SquareGrid { "square" } else { "photo" }, if local { "local" } else { "all" });
     println!(
-        "{name} frame {:>7.2} / {:>7.2} / {:>7.2} ms  grid {:>7.2} / {:>7.2} / {:>7.2} ms  allocs/frame {:>7} ({:>9} B)  cells/frame {:>6}  rebuilds view {} layout {} stacks {}  (setup {:.1} s)",
+        "{name} frame {:>7.2} / {:>7.2} / {:>7.2} ms  grid {:>7.2} / {:>7.2} / {:>7.2} ms  allocs/frame {:>7} ({:>9} B)  cells/frame {:>6}  rebuilds view {} layout {} stacks {}  (setup {:.1} s){}",
         f.min,
         f.med,
         f.p95,
@@ -151,21 +166,32 @@ fn scenario(n: usize, view: ViewMode, local: bool, frames: usize) {
         st.layout_builds - stats0.layout_builds,
         st.stack_index_builds - stats0.stack_index_builds,
         setup.as_secs_f64(),
+        if settled { "" } else { "  INVALID: did not settle" },
     );
+    settled
 }
 
-fn main() {
+fn main() -> ExitCode {
     let sizes: Vec<usize> = std::env::var("SIZES")
         .ok()
         .map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect())
         .unwrap_or_else(|| vec![200, 10_000, 85_000]);
     let frames = std::env::var("FRAMES").ok().and_then(|s| s.parse().ok()).unwrap_or(60);
     println!("photos layout  source   frame min / median / p95        grid min / median / p95");
+    let mut invalid = 0;
     for &n in &sizes {
         for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid] {
             for local in [false, true] {
-                scenario(n, view, local, frames);
+                if !scenario(n, view, local, frames) {
+                    invalid += 1;
+                }
             }
         }
+    }
+    if invalid == 0 {
+        ExitCode::SUCCESS
+    } else {
+        eprintln!("{invalid} scenario(s) did not settle; their timings are invalid");
+        ExitCode::FAILURE
     }
 }

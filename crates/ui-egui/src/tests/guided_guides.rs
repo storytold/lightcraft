@@ -24,7 +24,7 @@ fn guided() -> Headless {
         let r = h.request(method, params, T);
         assert_eq!(r["ok"], true, "{r}");
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the request");
     h
 }
 
@@ -49,7 +49,7 @@ fn a_click_near_a_guide_selects_it() {
     let id = h.app.session.active().expect("a photo");
     let r = h.request("ui.click", json!({"x": guide_at(&h, 0).x, "y": guide_at(&h, 0).y}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.click");
     assert_eq!(h.app.ui.selected_guide, Some((id.0, 0)), "the clicked guide is selected");
     assert_eq!(guides_len(&h), 2, "selecting removes nothing");
 }
@@ -60,11 +60,11 @@ fn delete_removes_the_selected_guide() {
     let mut h = guided();
     let r = h.request("ui.click", json!({"x": guide_at(&h, 1).x, "y": guide_at(&h, 1).y}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.click");
     assert_eq!(h.app.ui.selected_guide.map(|(_, i)| i), Some(1));
     let r = h.request("ui.key", json!({"key": "Delete"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Delete");
     assert_eq!(guides_len(&h), 1, "one guide is gone");
     assert_eq!(h.app.ui.selected_guide, None, "and nothing is selected afterwards");
     // the survivor is the first guide: the second one's endpoints are gone
@@ -83,13 +83,13 @@ fn a_click_away_clears_the_selection() {
     let mut h = guided();
     let r = h.request("ui.click", json!({"x": guide_at(&h, 0).x, "y": guide_at(&h, 0).y}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.click");
     assert!(h.app.ui.selected_guide.is_some());
     let img = h.app.image_rect.expect("the photo on screen");
     // below both guides, far from them
     let r = h.request("ui.click", json!({"x": img.center().x, "y": img.top() + 0.95 * img.height()}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.click");
     assert_eq!(h.app.ui.selected_guide, None);
     assert_eq!(guides_len(&h), 2, "and removes nothing");
 }
@@ -101,7 +101,7 @@ fn delete_with_no_selection_removes_nothing() {
     let undo = h.app.session.undo.len();
     let r = h.request("ui.key", json!({"key": "Delete"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Delete");
     assert_eq!(guides_len(&h), 2, "no guide is removed");
     assert_eq!(h.app.session.undo.len(), undo, "no edit either");
     assert!(h.app.session.active().is_some(), "the photo is still active");
@@ -113,7 +113,7 @@ fn drawing_a_new_guide_clears_the_selection() {
     let mut h = guided();
     let r = h.request("ui.click", json!({"x": guide_at(&h, 0).x, "y": guide_at(&h, 0).y}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.click");
     assert!(h.app.ui.selected_guide.is_some());
     let img = h.app.image_rect.expect("the photo on screen");
     // a drag across the middle of the photo (clear of both guides) draws a third guide
@@ -123,7 +123,7 @@ fn drawing_a_new_guide_clears_the_selection() {
         T,
     );
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.drag");
     assert_eq!(guides_len(&h), 3, "the drawn guide is added");
     assert_eq!(h.app.ui.selected_guide, None, "and the click's selection is gone");
 }
@@ -149,7 +149,7 @@ fn dragging_a_guide_endpoint_moves_it() {
         T,
     );
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.pointer");
     assert_eq!(guides_len(&h), 2, "no guide is added");
     let d = h.app.session.catalog.photo(id).expect("the photo");
     let (a, b) = d.develop.geometry.guides[0];
@@ -171,7 +171,7 @@ fn clicking_an_endpoint_selects_it_without_changing_it() {
     let y = ((at.y - img.top()) / img.height()) as f64;
     let r = h.request("ui.pointer", json!({"events": [{"kind": "down", "x": x, "y": y}, {"kind": "up", "x": x, "y": y}]}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.pointer");
     assert_eq!(h.app.ui.selected_guide, Some((id.0, 1)), "the endpoint's guide is selected");
     assert_eq!(guides_len(&h), 2);
     let d = h.app.session.catalog.photo(id).expect("the photo");
@@ -199,7 +199,7 @@ fn a_new_guide_starts_at_the_press_point() {
         T,
     );
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.pointer");
     assert_eq!(guides_len(&h), 3, "the drawn guide is added");
     assert_eq!(h.app.ui.selected_guide, None, "drawing a new guide leaves nothing selected");
     let rect = guide_rect(&h, 2);
@@ -224,7 +224,7 @@ fn a_drag_whose_press_and_release_share_one_frame_still_draws() {
     h.events.push(egui::Event::PointerButton { pos: p1, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
     h.events.push(egui::Event::PointerMoved(p2));
     h.events.push(egui::Event::PointerButton { pos: p2, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the injected input");
     assert_eq!(guides_len(&h), 3, "the drag that shared one frame still draws its guide");
     assert_eq!(h.app.session.undo.len(), undo + 1, "one edit was written");
     let rect = guide_rect(&h, 2);
@@ -239,7 +239,7 @@ fn a_right_click_on_a_guide_selects_nothing() {
     let mut h = guided();
     let r = h.request("ui.click", json!({"x": guide_at(&h, 0).x, "y": guide_at(&h, 0).y, "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.click");
     assert_eq!(h.app.ui.selected_guide, None, "the right button selects nothing");
     assert_eq!(guides_len(&h), 2, "and draws nothing");
 }
@@ -251,7 +251,7 @@ fn a_press_on_the_navigator_draws_no_guide() {
     let mut h = guided();
     let r = h.request("engine.execute", json!({"command": "view.zoom100"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.zoom100");
     let nav = h.app.widgets.iter().rev().find(|(w, _)| *w == "canvas:navigator").map(|(_, r)| *r).expect("navigator shown when zoomed");
     let img = h.app.image_rect.expect("the photo on screen");
     let c = nav.center();
@@ -262,7 +262,7 @@ fn a_press_on_the_navigator_draws_no_guide() {
         T,
     );
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.pointer");
     assert_eq!(guides_len(&h), 2, "the press on the navigator drew no guide");
     assert_eq!(h.app.ui.selected_guide, None, "and selected nothing");
 }
@@ -280,13 +280,13 @@ fn a_press_on_a_menu_over_a_guide_selects_nothing() {
     // at the pointer (gap 0), so its frame covers the guide from 30px inside every edge
     let r = h.request("ui.click", json!({"x": line.x - 30.0, "y": line.y - 30.0, "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.click");
     assert!(h.view.ctx.any_popup_open(), "the context menu is open over the photo");
     let img = h.app.image_rect.expect("the photo on screen");
     let (lx, ly) = ((line.x - img.left()) / img.width(), (line.y - img.top()) / img.height());
     let r = h.request("ui.pointer", json!({"events": [{"kind": "down", "x": lx, "y": ly}, {"kind": "up", "x": lx, "y": ly}]}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.pointer");
     assert_eq!(h.app.ui.selected_guide, None, "the press under the menu selects nothing");
     assert!(h.app.gesture.is_none(), "and starts no gesture");
     assert_eq!(guides_len(&h), 2, "and draws nothing");
@@ -309,7 +309,7 @@ fn a_press_on_a_menu_over_an_endpoint_moves_nothing() {
     let end = guide_rect(&h, 0).left_top();
     let r = h.request("ui.click", json!({"x": end.x - 30.0, "y": end.y - 30.0, "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.click");
     assert!(h.view.ctx.any_popup_open(), "the context menu is open over the photo");
     let img = h.app.image_rect.expect("the photo on screen");
     let (ex, ey) = ((end.x - img.left()) / img.width(), (end.y - img.top()) / img.height());
@@ -319,7 +319,7 @@ fn a_press_on_a_menu_over_an_endpoint_moves_nothing() {
         T,
     );
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.pointer");
     assert_eq!(h.app.ui.selected_guide, None, "the endpoint's press under the menu selects nothing");
     assert!(h.app.gesture.is_none(), "and starts no gesture");
     assert_eq!(guides_len(&h), 2, "and draws nothing");
@@ -343,7 +343,7 @@ fn a_press_that_leaves_the_menu_in_one_frame_draws_nothing() {
     // right-click up-left of the endpoint: the menu opens with its top-left at the pointer
     let r = h.request("ui.click", json!({"x": end.x - 30.0, "y": end.y - 30.0, "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.click");
     assert!(h.view.ctx.any_popup_open(), "the context menu is open over the photo");
     // one batch: go down 1px inside the menu, then straight off it to bare photo, far below
     // both guides, and release there — the current pointer never sees the menu again
@@ -359,7 +359,7 @@ fn a_press_that_leaves_the_menu_in_one_frame_draws_nothing() {
         T,
     );
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.pointer");
     assert_eq!(guides_len(&h), 2, "the press that left the menu drew no guide");
     assert_eq!(h.app.ui.selected_guide, None, "and selected nothing");
     assert!(h.app.gesture.is_none(), "and leaves no gesture behind");

@@ -17,7 +17,7 @@ fn demo() -> Headless {
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     // let the first renders finish: a render still running when the test binary exits can crash in the
     // GPU driver's teardown (the preview pool doesn't join its workers)
-    h.settle(T);
+    h.settled(T, "the new session");
     h
 }
 
@@ -306,7 +306,7 @@ fn gated_import(tag: &str, n: usize, gate: Option<std::sync::Arc<std::sync::atom
         })
     }));
     let mut h = Headless::new(LightcraftApp::new(s, Services { png: None, ..Default::default() }), [1200.0, 800.0], 1.0);
-    h.settle(T);
+    h.settled(T, "the new session");
     (h, dir)
 }
 
@@ -385,7 +385,7 @@ fn bracket(tag: &str) -> (Headless, std::path::PathBuf) {
     session.execute("library.select", &json!({"ids": ids})).unwrap();
     let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
-    h.settle(T);
+    h.settled(T, "the new session");
     (h, dir)
 }
 
@@ -502,7 +502,7 @@ fn batch_merge_runs_each_set_in_turn() {
     // the merge ordering does not need the grid's nine thumbnails; one Detail render is enough
     let r = h.request("ui.set", json!({"view": "detail", "filmstrip": false}), T);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(h.settle(T), "the imported photos and the active preview settle");
+    h.settled(T, "the imported photos and the active preview settle");
     let r = crate::menus::run_ui_command(&mut h.app, "merge.hdrBatch", &json!({})).unwrap().unwrap();
     assert_eq!(r["sets"], 3);
     assert_eq!(h.app.merge.batch.len(), 2, "one running, two queued");

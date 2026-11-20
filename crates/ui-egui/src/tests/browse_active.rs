@@ -25,7 +25,7 @@ fn demo() -> Headless {
 fn exec(h: &mut Headless, command: &str, params: Value) -> Value {
     let r = h.request("engine.execute", json!({"command": command, "params": params}), T);
     assert_eq!(r["ok"], true, "{command} {params}: {r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after engine.execute");
     r
 }
 
@@ -49,7 +49,7 @@ fn active(h: &Headless) -> Option<PhotoId> {
 #[test]
 fn browsing_a_local_folder_makes_its_first_photo_active() {
     let mut h = demo();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the new demo session");
     let dir = folder("browse-active", 3);
     // a library photo is active: the folder doesn't show it
     let before = h.app.session.visible_cloned()[0];
@@ -62,7 +62,7 @@ fn browsing_a_local_folder_makes_its_first_photo_active() {
     // the grid marks it, and Detail opens on it
     assert!(h.app.widgets.iter().any(|(w, _)| *w == format!("thumb:{}", vis[0].0)));
     h.request("ui.set", json!({"view": "detail"}), T);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     assert_eq!(active(&h), Some(vis[0]));
 
     // the folder shows the current photo again: it stays active
@@ -80,7 +80,7 @@ fn browsing_a_local_folder_makes_its_first_photo_active() {
 #[test]
 fn choosing_an_album_keeps_or_picks_the_active_photo() {
     let mut h = demo();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the new demo session");
     let album = h.app.session.catalog.albums().find(|a| !a.folder && !a.is_smart() && a.photos.len() > 1).map(|a| (a.id, a.photos.clone()));
     let (album, photos) = album.expect("the demo library has an album");
     let outside = h.app.session.visible_cloned().into_iter().find(|p| !photos.contains(p)).expect("a photo outside the album");

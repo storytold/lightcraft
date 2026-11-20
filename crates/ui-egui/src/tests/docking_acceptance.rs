@@ -107,7 +107,7 @@ fn crop_canvas_double_click_reveals_edit_in_actual_custom_workspace() {
     }
     h.app.ui.view = crate::state::ViewMode::Detail;
     h.app.run("panel.crop", json!({})).unwrap();
-    assert!(h.settle(std::time::Duration::from_secs(120)), "the file-backed photo settles before pointer input");
+    h.settled(std::time::Duration::from_secs(120), "the file-backed photo settles before pointer input");
     let active = h.app.session.active().expect("the fixture photo is active");
     assert!(
         h.app.renderer.textures.get(&crate::render::Slot::Main).is_some_and(|tex| tex.photo == active && tex.size[0] > 0 && tex.size[1] > 0),

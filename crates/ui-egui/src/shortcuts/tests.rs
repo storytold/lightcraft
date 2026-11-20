@@ -194,7 +194,7 @@ fn classic_f8_hides_the_right_panel_and_brings_the_same_one_back() {
     let mut h = library();
     h.app.ui.view = crate::state::ViewMode::Detail;
     h.app.ui.right = RightPanel::Keywords;
-    h.settle(std::time::Duration::from_secs(10));
+    h.settled(std::time::Duration::from_secs(10), "after setting ui.right");
     let (filmstrip, left) = (h.app.ui.filmstrip, h.app.ui.left_panel);
     key(&mut h, "F8", false);
     assert_eq!(h.app.ui.right, RightPanel::None);
@@ -215,7 +215,7 @@ fn classic_f8_shows_a_minimized_tools_window_and_keeps_its_mode() {
     let mut h = library();
     h.app.ui.view = crate::state::ViewMode::Detail;
     h.app.ui.right = RightPanel::Edit;
-    h.settle(std::time::Duration::from_secs(10));
+    h.settled(std::time::Duration::from_secs(10), "after setting ui.right");
     h.app.run("ui.dock", json!({"operation": "float", "panel": "tools", "rect": [400, 100, 320, 500]})).unwrap();
     h.app.run("ui.dock", json!({"action": {"SetMinimized": {"panel": "tools", "minimized": true}}})).unwrap();
     h.app.ui.right = RightPanel::Crop;

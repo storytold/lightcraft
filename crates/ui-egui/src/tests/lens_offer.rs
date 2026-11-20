@@ -127,7 +127,7 @@ fn a_download_that_cannot_start_keeps_the_offer_open_and_says_why() {
 
     h.app.ui.settings.lens_database = Offer::Declined;
     h.app.ui.dialog = Some(refused.clone());
-    h.settle(std::time::Duration::from_secs(10));
+    h.settled(std::time::Duration::from_secs(10), "after setting ui.dialog");
     let r = h.request("ui.clickWidget", serde_json::json!({"id": "button:dialogOk"}), t);
     assert_eq!(r["ok"], true, "{r}");
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();

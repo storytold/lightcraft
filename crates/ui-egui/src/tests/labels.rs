@@ -27,7 +27,7 @@ fn app(view: ViewMode) -> Headless {
     // Parallel UI tests can leave a quiet spell before thumbnail jobs complete. Require the
     // fixture's real textures before comparing photo pixels, as well as settled layout.
     assert!(h.step_until(SETTLE, |h| h.app.renderer.thumb_textures() == 6), "all fixture thumbnails must be ready");
-    assert!(h.settle(SETTLE), "label fixture did not settle");
+    h.settled(SETTLE, "the label fixture");
     h
 }
 

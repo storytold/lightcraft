@@ -53,10 +53,11 @@ fn headless() -> Headless {
 }
 
 /// File → Import from Folder… for `dir`, and wait for the review to open.
+#[track_caller]
 fn open_review(h: &mut Headless, dir: &Scratch) {
     let r = h.request("engine.execute", json!({"command": "file.addFolder", "params": {"path": dir.0.to_string_lossy()}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after file.addFolder");
     assert!(h.step_until(T, |h| matches!(h.app.ui.dialog, Some(Dialog::Import { .. }))), "no import review: {:?}", h.app.ui.dialog);
 }
 
@@ -211,7 +212,7 @@ fn the_note_follows_the_counters_and_the_language() {
         (d.scan_limited, d.unreadable, d.unsupported) = (true, 1, 1);
     }
     assert_eq!(h.request("engine.execute", json!({"command": "app.language.german"}), T)["ok"], true);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after app.language.german");
     let german = "Am Suchlimit angehalten: Es gibt möglicherweise weitere Fotos · Ordner, die nicht gelesen werden konnten: 1 · Übersprungene Dateien (kein unterstützter Fototyp): 1";
     assert!(shows(&h, german), "{:?}", h.painted_text());
     assert_eq!(h.request("engine.execute", json!({"command": "app.language.english"}), T)["ok"], true);

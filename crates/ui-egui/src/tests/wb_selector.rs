@@ -23,22 +23,22 @@ fn wb_selector_button_in_compare_opens_detail_like_w() {
     let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.app.ui.right = crate::state::RightPanel::Edit;
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.right");
     // open the Color section, where the selector sits
     if !h.app.widgets.iter().any(|(w, _)| w == "icon:wbPicker") {
         h.request("ui.clickWidget", json!({"id": "section:color"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after clicking section:color");
     }
     assert_eq!(h.app.ui.view, ViewMode::Compare);
     let active = h.app.session.selection.active;
     let r = h.request("ui.clickWidget", json!({"id": "icon:wbPicker"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking icon:wbPicker");
     assert_eq!(h.app.ui.view, ViewMode::Detail, "the button leaves Compare like W");
     assert_eq!(h.app.ui.tool, "wbPicker");
     assert_eq!(h.app.session.selection.active, active, "on the photo that was active in Compare");
     let r = h.request("ui.clickWidget", json!({"id": "icon:wbPicker"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking icon:wbPicker");
     assert_eq!(h.app.ui.tool, "", "a second click disarms it");
 }

@@ -23,14 +23,14 @@ fn keywords_panel() -> Headless {
         let r = h.request(method, params, T);
         assert_eq!(r["ok"], true, "{r}");
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the request");
     h
 }
 
 fn ask(h: &mut Headless, method: &str, params: serde_json::Value) {
     let r = h.request(method, params.clone(), T);
     assert_eq!(r["ok"], true, "{method} {params}: {r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the request");
 }
 
 fn sets(h: &mut Headless) -> serde_json::Value {
@@ -67,7 +67,7 @@ fn editing_recent_keywords_saves_them_as_a_set() {
 fn editing_a_named_set_renames_it() {
     let mut h = keywords_panel();
     h.app.session.execute("keyword.saveSet", &json!({"name": "Weddings", "keywords": ["ceremony", "reception"]})).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the new keywords_panel session");
     open_editor(&mut h);
     let Some(crate::state::Dialog::KeywordSet { replaces, name, .. }) = h.app.ui.dialog.clone() else { panic!("{:?}", h.app.ui.dialog) };
     assert_eq!((replaces.as_deref(), name.as_str()), (Some("Weddings"), "Weddings"));
@@ -94,7 +94,7 @@ fn a_set_needs_a_name() {
 fn an_empty_slot_is_an_idle_button() {
     let mut h = keywords_panel();
     h.app.session.execute("keyword.saveSet", &json!({"name": "Weddings", "keywords": ["ceremony", "", "reception"]})).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the new keywords_panel session");
     assert!(h.app.widgets.iter().any(|(w, _)| w == "kwSetEmpty:2"), "slot 2 is shown empty");
 }
 
@@ -119,7 +119,7 @@ fn a_taken_name_says_so() {
     let mut h = keywords_panel();
     h.app.session.execute("keyword.saveSet", &json!({"name": "Travel", "keywords": ["harbour"]})).unwrap();
     h.app.session.execute("keyword.useSet", &json!({"name": "Recent Keywords"})).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the new keywords_panel session");
     open_editor(&mut h);
     ask(&mut h, "ui.text", json!({"text": "travel"}));
     ask(&mut h, "ui.clickWidget", json!({"id": "button:dialogOk"}));
@@ -136,7 +136,7 @@ fn a_taken_name_says_so() {
 fn a_set_deleted_meanwhile_is_saved_anew() {
     let mut h = keywords_panel();
     h.app.session.execute("keyword.saveSet", &json!({"name": "Weddings", "keywords": ["ceremony"]})).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the new keywords_panel session");
     open_editor(&mut h);
     h.app.session.execute("keyword.deleteSet", &json!({"name": "Weddings"})).unwrap();
     ask(&mut h, "ui.clickWidget", json!({"id": "button:dialogOk"}));
@@ -150,7 +150,7 @@ fn a_set_deleted_meanwhile_is_saved_anew() {
 fn save_as_a_new_set_keeps_the_original() {
     let mut h = keywords_panel();
     h.app.session.execute("keyword.saveSet", &json!({"name": "Weddings", "keywords": ["ceremony"]})).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the new keywords_panel session");
     open_editor(&mut h);
     ask(&mut h, "ui.text", json!({"text": "Ceremonies"}));
     ask(&mut h, "ui.clickWidget", json!({"id": "check:keywordSetAsNew"}));
@@ -168,7 +168,7 @@ fn alt_0_and_alt_shift_0_cycle_the_keyword_sets() {
     let mut h = keywords_panel();
     h.app.session.execute("keyword.saveSet", &json!({"name": "Weddings", "keywords": ["ceremony"]})).unwrap();
     h.app.session.execute("keyword.useSet", &json!({"name": "Recent Keywords"})).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the new keywords_panel session");
     ask(&mut h, "ui.key", json!({"key": "0", "alt": true}));
     assert_eq!(sets(&mut h)["current"], "Weddings", "⌥0: the next set");
     ask(&mut h, "ui.key", json!({"key": "1", "alt": true}));
