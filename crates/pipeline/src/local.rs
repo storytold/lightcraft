@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use lightcraft_raster::{Plane, Rgb32f, par_join};
 
-use crate::geometry::Frame;
-use crate::{Prepared, Quality, SourceInfo, for_rows, masks, timed};
+use crate::geometry::{Frame, ViewWindow};
+use crate::{Plan, Prepared, Quality, SourceInfo, for_rows, masks, timed};
 
 /// White balance (relative to the source's as-shot white) and exposure, in place.
 pub fn scene_linear_pre(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings) {
@@ -375,7 +375,9 @@ pub fn base_detail_radius(px_per_long: f64) -> usize {
 pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
     match s.process.process() {
         Process::V1 => 0,
-        Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 => base_detail_radius(px_per_long),
+        Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 | Process::V9 => {
+            base_detail_radius(px_per_long)
+        }
     }
 }
 
@@ -742,8 +744,11 @@ pub const CHROMA_SIGMA: f32 = 0.004;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PlaneSigmas {
     /// Edge-aware base for highlights/shadows ([`tone_base`]: fast guided filter, [`BASE_EPS`]; from
-    /// process V2 of a median at [`BASE_DETAIL`], from V8 of a detail-free plane).
+    /// process V2 of a median at [`BASE_DETAIL`], from V8 of a detail-free plane), or with
+    /// `base_gaussian` the Gaussian neighbourhood Lightroom's Highlights / Shadows read on Apple
+    /// ProRAW ([`crate::proraw::LR_CONTEXT_SIGMA`]).
     pub base: Option<f32>,
+    pub base_gaussian: bool,
     /// Median radius (px) of that base ([`tone_base_detail`]: 0 under V1).
     pub base_detail: usize,
     /// Clarity band (fast guided filter, [`CLARITY_EPS`]).
@@ -801,7 +806,16 @@ pub fn sharpen_gain(raw: f32) -> f32 {
     1.0 + (ratio - 1.0) * blend
 }
 
-pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, native_long: f64, q: Quality) -> PlaneSigmas {
+impl PlaneSigmas {
+    /// The [`BaseKey`] of the base plane of `s`: its σ, negated for the Gaussian kind.
+    pub fn base_key(&self, s: &DevelopSettings) -> Option<BaseKey> {
+        self.base.map(|sg| base_key(s, if self.base_gaussian { -sg } else { sg }, self.base_detail))
+    }
+}
+
+/// The planes `s` needs at `px_per_long` output px per unit of the source long edge. `lr_tone`:
+/// the tone sliders run as Lightroom applies them on Apple ProRAW ([`crate::proraw::active`]).
+pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, native_long: f64, q: Quality, lr_tone: bool) -> PlaneSigmas {
     let ppl = px_per_long as f32;
     // A hidden mask, or one with no components, does not change the picture. Its sliders must
     // not pick the tone base Clarity reads (#1214).
@@ -813,7 +827,11 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, native_long: f64, q: 
     // Edge-aware base at ~1.5% of the long edge (EV² epsilon: edges of > ~0.6 EV are preserved)
     // From V2 it is taken of the median at 0.15%: lines and texture finer than that are detail,
     // not tone (#632).
+    // On Apple ProRAW from V9, Lightroom's Gaussian neighbourhood instead.
     let base = tone_active.then(|| {
+        if lr_tone {
+            return (crate::proraw::LR_CONTEXT_SIGMA * ppl).max(1.0);
+        }
         let sigma = (0.015 * ppl).max(1.0);
         if q == Quality::Draft { sigma.min(24.0) } else { sigma }
     });
@@ -827,38 +845,35 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, native_long: f64, q: 
     .then(|| texture_sigma(px_per_long));
     let dark = (s.effects.dehaze != 0.0 || local_any(|a| a.dehaze)).then(|| (0.02 * ppl).max(1.0));
     let chroma = (local_any(|a| a.moire) || s.masks.iter().filter(live).any(|m| m.adjust.noise > 0.0)).then(|| (CHROMA_SIGMA * ppl).max(1.0));
-    let base_detail = if base.is_some() { tone_base_detail(s, px_per_long) } else { 0 };
+    let base_detail = if base.is_some() && !lr_tone { tone_base_detail(s, px_per_long) } else { 0 };
     // V1/V2 keep their texture-band sharpening; only V3 requests the pixel-scale plane.
     let sharpen_raw = sharpen_sigma_raw(s, px_per_long, native_long);
     let sharpen = (pixel_sharpen(s) && sharpen_gain(sharpen_raw) > 0.0 && (s.detail.sharpen_amount != 0.0 || local_any(|a| a.sharpness)))
         .then(|| sharpen_sigma(sharpen_raw));
-    PlaneSigmas { base, base_detail, clarity, texture, sharpen, dark, chroma }
+    PlaneSigmas { base, base_gaussian: lr_tone, base_detail, clarity, texture, sharpen, dark, chroma }
 }
 
 /// The spatial planes the per-pixel stage needs for `img` (white-balanced, before exposure),
 /// reusing whatever `planes` already holds for it. Missing planes are computed side by side (each
-/// one alone scales poorly: the guided filters work on small subsampled grids).
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn prepare(
-    img: Arc<Rgb32f>,
-    s: &DevelopSettings,
-    frame: &Frame,
-    px_per_long: f64,
-    native_long: f64,
-    q: Quality,
-    planes: &mut Planes,
-    mattes: Option<&masks::Mattes>,
-) -> Prepared {
+/// one alone scales poorly: the guided filters work on small subsampled grids). On Apple ProRAW a
+/// windowed render reads Highlights / Shadows' neighbourhood from the whole frame
+/// ([`Plan::frame_context`]).
+pub(crate) fn prepare(img: Arc<Rgb32f>, plan: &Plan<'_>, q: Quality, planes: &mut Planes) -> Prepared {
+    let (s, frame, px_per_long, mattes) = (&*plan.settings, &plan.frame, plan.px_per_long, plan.mattes.as_deref());
     let log_l = planes.log_l.get_or_insert_with(|| Arc::new(timed("log_l", || img.map(log_lum)))).clone();
+    let sigmas = plane_sigmas(s, px_per_long, plan.native_long as f64, q, plan.lr_tone);
+    let base_key = sigmas.base_key(s);
     let PlaneSigmas {
         base: base_sigma,
+        base_gaussian,
         base_detail,
         clarity: clarity_sigma,
         texture: texture_sigma,
         sharpen: sharpen_sigma_px,
         dark: dark_sigma,
         chroma: chroma_sigma,
-    } = plane_sigmas(s, px_per_long, native_long, q);
+    } = sigmas;
+    let whole = plan.frame_context.as_ref().zip(frame.view).filter(|_| base_gaussian);
 
     let Planes { base: sb, clarity: sc, texture: st, sharpen: ss, dark: sd, chroma: sch, .. } = planes;
     let chroma_blur = chroma_sigma.map(|sg| match sch {
@@ -871,7 +886,17 @@ pub(crate) fn prepare(
     });
     let l = &log_l;
     let (base, (clarity_blur, ((texture_blur, sharpen_blur), dark))) = par_join(
-        || base_sigma.map(|sg| plane_at(sb, base_key(s, sg, base_detail), || timed("base", || tone_base(l, sg, base_detail, base_keeps_gaps(s))))),
+        || {
+            base_sigma.zip(base_key).map(|(sg, key)| {
+                plane_at(sb, key, || {
+                    timed("base", || match whole {
+                        Some((ctx, view)) => context_window(ctx, view, img.width, img.height),
+                        None if base_gaussian => gaussian(l, sg),
+                        None => tone_base(l, sg, base_detail, base_keeps_gaps(s)),
+                    })
+                })
+            })
+        },
         || {
             par_join(
                 || clarity_sigma.map(|sg| plane_at(sc, sg.to_bits(), || timed("clarity", || guided_fast(l, sg, CLARITY_EPS)))),
@@ -919,6 +944,47 @@ pub(crate) fn frame_airlight(src: &Rgb32f, info: &SourceInfo, s: &DevelopSetting
     white_balance(&mut img, info, s);
     let sigma = (0.02 * frame.px_per_long(proxy_w)).max(1.0) as f32;
     airlight(&gaussian(&img.map(dark_of), sigma))
+}
+
+/// The whole output frame's neighbourhood for Lightroom's Highlights / Shadows on Apple ProRAW
+/// (log luminance blurred by [`crate::proraw::LR_CONTEXT_SIGMA`] of the long edge, as the base plane
+/// of a whole render), estimated on a small render of it (`proxy_w` × `proxy_h`): its σ spans far
+/// more than a zoomed window holds, so a windowed render reads it from here ([`context_window`]).
+pub(crate) fn frame_context(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, frame: &Frame, proxy_w: usize, proxy_h: usize) -> Plane {
+    let mut img = Rgb32f::clone(&frame_proxy(src, frame, proxy_w, proxy_h));
+    // (with the camera's local tone mapping, as the whole render's source has it)
+    crate::local_tone::apply_in(&mut img, info, s, frame);
+    white_balance(&mut img, info, s);
+    let sigma = (crate::proraw::LR_CONTEXT_SIGMA as f64 * frame.px_per_long(proxy_w)).max(1.0) as f32;
+    gaussian(&img.map(log_lum), sigma)
+}
+
+/// [`frame_context`] at the pixels of a `w` × `h` window at `view` of the whole output (bilinear,
+/// clamped to the frame).
+pub fn context_window(ctx: &Plane, view: ViewWindow, w: usize, h: usize) -> Plane {
+    let (cw, ch) = (ctx.width, ctx.height);
+    if cw == 0 || ch == 0 || ctx.data.len() < cw * ch {
+        return Plane { width: w, height: h, data: vec![0.0; w * h] };
+    }
+    let (kx, ky) = (cw as f64 / view.full_w.max(1.0), ch as f64 / view.full_h.max(1.0));
+    // proxy coordinate of a window pixel: its integer part and fraction
+    let at = |o: f64, i: usize, k: f64, n: usize| {
+        let f = ((o + i as f64 + 0.5) * k - 0.5).clamp(0.0, (n - 1) as f64);
+        let i0 = (f as usize).min(n - 1);
+        (i0, (i0 + 1).min(n - 1), (f - i0 as f64) as f32)
+    };
+    let cols: Vec<(usize, usize, f32)> = (0..w).map(|x| at(view.x, x, kx, cw)).collect();
+    let mut data = vec![0.0f32; w * h];
+    let px = |r: usize, c: usize| ctx.data.get(r * cw + c).copied().unwrap_or(0.0);
+    for_rows(&mut data, w, |y, row| {
+        let (y0, y1, ty) = at(view.y, y, ky, ch);
+        for (o, &(x0, x1, tx)) in row.iter_mut().zip(&cols) {
+            let top = px(y0, x0) + (px(y0, x1) - px(y0, x0)) * tx;
+            let bottom = px(y1, x0) + (px(y1, x1) - px(y1, x0)) * tx;
+            *o = top + (bottom - top) * ty;
+        }
+    });
+    Plane { width: w, height: h, data }
 }
 
 /// How many airlight proxies [`frame_proxy`] keeps (one per photo and frame being zoomed into; each ≤ 1.8 MB).
@@ -1283,17 +1349,17 @@ mod tests {
             adjust: lightcraft_develop::LocalAdjustments { highlights: 40.0, ..Default::default() },
             ..Default::default()
         });
-        assert!(plane_sigmas(&s, 2000.0, 2000.0, Quality::Full).base.is_none());
+        assert!(plane_sigmas(&s, 2000.0, 2000.0, Quality::Full, false).base.is_none());
         s.masks[0].visible = true;
         s.masks[0].components.clear();
-        assert!(plane_sigmas(&s, 2000.0, 2000.0, Quality::Full).base.is_none());
+        assert!(plane_sigmas(&s, 2000.0, 2000.0, Quality::Full, false).base.is_none());
         s.masks[0].components.push(MaskComponent {
             name: None,
             op: MaskOp::Add,
             invert: false,
             shape: MaskShape::Linear { start: Point::new(0.0, 0.0), end: Point::new(1.0, 0.0) },
         });
-        assert!(plane_sigmas(&s, 2000.0, 2000.0, Quality::Full).base.is_some());
+        assert!(plane_sigmas(&s, 2000.0, 2000.0, Quality::Full, false).base.is_some());
     }
 
     #[test]

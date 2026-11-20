@@ -866,6 +866,33 @@ fn dng_profile_look_is_applied() {
     assert!((mean(&dim) / mean(&before) - 0.5).abs() < 0.02, "{} vs {}", mean(&dim), mean(&before));
 }
 
+/// Process V9 takes Lightroom's tone chain for Apple ProRAW only: an Apple DNG with a profile
+/// curve carries it as `proraw` (besides the camera tone earlier processes use); any other
+/// camera's DNG, or an Apple one without the curve, has none and renders as before.
+#[test]
+fn only_apple_proraw_takes_lightrooms_tone() {
+    use lightcraft_develop::{DevelopSettings, Process};
+    use lightcraft_raw::profile::{ProfileLook, ToneCurve};
+    let mut raw = lightcraft_raw::decode(&crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+    raw.color.profile = ProfileLook { tone_curve: ToneCurve::from_tag(&[0.0, 0.0, 0.18, 0.3, 1.0, 1.0]), ..Default::default() };
+    let load = |raw: &lightcraft_raw::RawImage, make: &str| {
+        let mut raw = raw.clone();
+        raw.metadata.make = Some(make.into());
+        load_bytes(&lightcraft_raw::write_dng(&raw, &Default::default()).unwrap(), 64).unwrap().1
+    };
+    let at = |p: Process| DevelopSettings { process: p.version(), ..DevelopSettings::for_raw(5200.0, 4.0) };
+    let apple = load(&raw, " Apple ");
+    let tone = apple.proraw.as_deref().expect("an Apple DNG's profile curve feeds Lightroom's chain");
+    assert!((tone.apply(0.18) - 0.3).abs() < 0.01, "{}", tone.apply(0.18));
+    assert!(apple.camera_tone.is_some(), "earlier processes keep the camera curve");
+    assert!(lightcraft_pipeline::proraw::active(&at(Process::V9), &apple).is_some());
+    assert!(lightcraft_pipeline::proraw::active(&at(Process::V8), &apple).is_none());
+    let other = load(&raw, "Canon");
+    assert!(other.proraw.is_none() && other.camera_tone.is_some());
+    raw.color.profile = ProfileLook::default();
+    assert!(load(&raw, "Apple").proraw.is_none(), "no profile curve, no chain");
+}
+
 /// Corrections used while fitting a DNG's preview must not be baked into its editable source.
 /// The pipeline applies them once from SourceInfo, and a file-defined tone stays authoritative.
 #[test]

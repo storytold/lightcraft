@@ -204,13 +204,12 @@ impl ToneMap {
         let peak = if peak.is_finite() { peak.max(1.0) } else { 1.0 };
         let adjustment = Self::display(contrast, whites, blacks);
         let neutral = contrast == 0.0 && whites == 0.0 && blacks == 0.0;
-        let top = (2.9 - 1.6 * (whites as f32 / 100.0) + peak.log2() + 1.0).max(HDR_FROM_EV + 0.5);
         let lut = (0..LUT_N)
             .map(|i| {
                 let ev = LUT_MIN_EV + (LUT_MAX_EV - LUT_MIN_EV) * i as f32 / (LUT_N - 1) as f32;
                 let y = curve(GREY * 2f32.powf(ev));
                 let o = if neutral { y } else { adjustment.apply(y) };
-                if peak > 1.0 { (o + (peak - 1.0) * smooth(HDR_FROM_EV, top, ev)).clamp(0.0, peak) } else { o }
+                if peak > 1.0 { (o + camera_hdr_lift(whites, peak, ev)).clamp(0.0, peak) } else { o }
             })
             .collect();
         ToneMap { lut, chroma }
@@ -329,6 +328,12 @@ impl ToneMap {
         ToneMap { lut, chroma: NO_CHROMA }
     }
 
+    /// A map from its table (`LUT_N` entries over `LUT_MIN_EV..LUT_MAX_EV` around grey), without a
+    /// chroma curve: Apple ProRAW's tone on greys (`crate::proraw::ProRawMap::lut`).
+    pub(crate) fn from_lut(lut: Vec<f32>) -> ToneMap {
+        ToneMap { lut, chroma: NO_CHROMA }
+    }
+
     /// The table (`LUT_N` entries, see [`ToneMap::apply`]).
     pub fn lut(&self) -> &[f32] {
         &self.lut
@@ -365,6 +370,15 @@ impl ToneMap {
         let v = self.lut[i] + (self.lut[i + 1] - self.lut[i]) * t;
         if ev < LUT_MIN_EV { v * (y / (GREY * 2f32.powf(LUT_MIN_EV))) } else { v }
     }
+}
+
+/// How far an HDR render reaching `peak` (> 1) lifts a camera curve's display value above its SDR
+/// one at scene `ev` over grey ([`ToneMap::camera_hdr`]): 0 up to 1.5 EV, so midtones match the
+/// SDR render, then up to `peak − 1` along a smoothstep to one stop past the white point moved by
+/// Whites (`whites`, −100..100) and the headroom.
+pub fn camera_hdr_lift(whites: f64, peak: f32, ev: f32) -> f32 {
+    let top = (2.9 - 1.6 * (whites as f32 / 100.0) + peak.log2() + 1.0).max(HDR_FROM_EV + 0.5);
+    (peak - 1.0) * smooth(HDR_FROM_EV, top, ev)
 }
 
 fn smooth(e0: f32, e1: f32, x: f32) -> f32 {

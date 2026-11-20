@@ -48,6 +48,7 @@ mod nrc_joint_reference;
 pub mod optics;
 pub mod output;
 pub mod profiles;
+pub mod proraw;
 pub mod redeye;
 pub mod spots;
 pub mod straighten;
@@ -105,6 +106,9 @@ pub struct SourceInfo {
     /// The raw's own local tone mapping (DNG `ProfileGainTableMap`), rendered only when the
     /// photo's Profile option asks for it ([`local_tone`]).
     pub local_tone: Option<Arc<local_tone::LocalTone>>,
+    /// Apple ProRAW's profile tone curve and the file facts Lightroom's tone chain needs: the one
+    /// camera that chain was measured on, so the only source that takes it ([`proraw::active`]).
+    pub proraw: Option<Arc<proraw::ProRawTone>>,
     /// Long edge (px) of the original photo, when the source handed to the renderer is a smaller
     /// copy of it (the app's thumbnail and preview levels); `None`: the source is the original.
     /// Noise reduction sizes its radii in the original's pixels ([`Plan::detail_scale`]), so a
@@ -125,6 +129,7 @@ impl Default for SourceInfo {
             camera_tone: None,
             mattes: None,
             local_tone: None,
+            proraw: None,
             native_long: None,
         }
     }
@@ -470,10 +475,19 @@ pub struct Plan<'a> {
     pub lens_subject: Option<Arc<lens_blur::SubjectEstimate>>,
     /// The whole frame and its output size (a windowed render's [`Self::frame`] is part of it).
     pub full: (geometry::Frame, usize, usize),
+    /// Tone sliders as Lightroom applies them on Apple ProRAW ([`proraw::active`]).
+    pub lr_tone: bool,
+    /// The whole frame's neighbourhood for Lightroom's Highlights / Shadows on Apple ProRAW, at
+    /// reduced size, for a windowed render (whose pixels hold a small part of it; see
+    /// [`local::frame_context`]).
+    pub frame_context: Option<Plane>,
 }
 
 /// Long edge of the small render a windowed render estimates the whole frame's airlight from.
 const AIRLIGHT_PROXY_EDGE: usize = 384;
+/// Long edge of the small render a windowed render on Apple ProRAW reads Lightroom's Highlights /
+/// Shadows neighbourhood from ([`local::frame_context`]).
+const CONTEXT_PROXY_EDGE: usize = 512;
 
 /// Resolve `s` against `src` for `req` (see [`Plan`]).
 pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &RenderRequest) -> Plan<'a> {
@@ -500,16 +514,25 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     // (an original reported smaller than the source is the source)
     let native_long = info.native_long.unwrap_or(0).max(src_long).max(1);
     let detail_scale = local::detail_scale(px_per_long, native_long);
+    let lr_tone = proraw::active(s, info).is_some();
     let mut fixed_air = None;
+    let mut frame_context = None;
     let mut keep = None;
     let full = (frame.clone(), full_w, full_h);
     let (frame, w, h) = match req.window {
         Some(win) => {
             let win = win.clamped(full_w, full_h);
+            let proxy = |edge: usize| {
+                let k = (edge as f64 / full_w.max(full_h) as f64).min(1.0);
+                (((full_w as f64 * k).round() as usize).max(1), ((full_h as f64 * k).round() as usize).max(1))
+            };
             if s.section_enabled("effects") && (s.effects.dehaze != 0.0 || s.masks.iter().any(|m| m.adjust.dehaze != 0.0)) {
-                let k = (AIRLIGHT_PROXY_EDGE as f64 / full_w.max(full_h) as f64).min(1.0);
-                let (pw, ph) = (((full_w as f64 * k).round() as usize).max(1), ((full_h as f64 * k).round() as usize).max(1));
+                let (pw, ph) = proxy(AIRLIGHT_PROXY_EDGE);
                 fixed_air = Some(local::frame_airlight(src, info, s, &frame, pw, ph));
+            }
+            if lr_tone && local::plane_sigmas(s, px_per_long, native_long as f64, req.quality, true).base.is_some() {
+                let (pw, ph) = proxy(CONTEXT_PROXY_EDGE);
+                frame_context = Some(local::frame_context(src, info, s, &frame, pw, ph));
             }
             // (spots grow the rendered window of 8-bit renders, the lens blur that of every
             // render; a grown window is cut back to the request)
@@ -579,6 +602,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         mattes: info.mattes.clone(),
         lens_subject,
         full,
+        lr_tone,
+        frame_context,
     }
 }
 
@@ -617,6 +642,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
                 mattes: None,
                 lens_subject: None,
                 full: p.full.clone(),
+                frame_context: None,
                 ..*p
             };
             local_tone::apply(&mut img, info, &tile);
@@ -767,7 +793,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Some(p) if req.quality == Quality::Draft && p.pre_nr == plan.pre_nr_key => p.for_other_nr(),
         _ => local::Planes { key: lin_key, pre_nr: plan.pre_nr_key, ..Default::default() },
     };
-    let mut prep = local::prepare(lin.clone(), s, frame, px_per_long, plan.native_long as f64, req.quality, &mut planes, plan.mattes.as_deref());
+    let mut prep = local::prepare(lin.clone(), &plan, req.quality, &mut planes);
     if let Some(a) = plan.fixed_air {
         prep.air = a;
     }
@@ -951,6 +977,8 @@ mod tests_local;
 mod tests_mask_geometry;
 #[cfg(test)]
 mod tests_nr_scale;
+#[cfg(test)]
+mod tests_proraw;
 #[cfg(test)]
 mod tests_sharpen;
 #[cfg(test)]

@@ -256,7 +256,7 @@ fn local_sharpness_uses_the_sharpen_band() {
 fn enlarged_export_keeps_radius_steps_apart() {
     use crate::Quality;
     use crate::local::plane_sigmas;
-    let sigma = |r: f64| plane_sigmas(&sharp(100.0, r, 0.0, 0.0), 1024.0, 512.0, Quality::Full).sharpen.unwrap();
+    let sigma = |r: f64| plane_sigmas(&sharp(100.0, r, 0.0, 0.0), 1024.0, 512.0, Quality::Full, false).sharpen.unwrap();
     assert_eq!((sigma(2.0), sigma(3.0)), (4.0, 6.0));
     let src = scene(128);
     let enlarged = SourceInfo { native_long: Some(64), ..info() };
