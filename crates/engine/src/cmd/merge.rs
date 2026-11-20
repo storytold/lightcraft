@@ -22,7 +22,9 @@ fn run(s: &mut Session, id: &str, p: &Value) -> Result<Value> {
     let (kind, finish) = crate::merge::parse(id, p)?;
     let ids: Vec<PhotoId> = s.targets(p)?;
     if !bool_or(p, "preview", false) {
-        return s.merge_now(kind, finish, &ids);
+        // a panorama made smaller than 40 MP to fit memory only when asked (a preview's `forecast`
+        // says when it would be)
+        return s.merge_now(kind, finish, &ids, bool_or(p, "fitMemory", false));
     }
     let job = s.plan_merge(kind, finish, &ids, true)?;
     let out = job.run(&|_, _| true).map_err(|e| bad(id, e))?;
@@ -52,7 +54,7 @@ fn run_batch(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (mut merged, mut failed) = (Vec::new(), Vec::new());
     for set in sets {
-        match s.merge_now(kind.clone(), finish.clone(), &set) {
+        match s.merge_now(kind.clone(), finish.clone(), &set, false) {
             Ok(v) => merged.push(v),
             Err(e) => failed.push(json!({"photos": set.iter().map(|p| p.0).collect::<Vec<_>>(), "error": e.to_string()})),
         }
@@ -76,7 +78,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Panorama Merge",
             [],
             None,
-            "{ids?, projection=auto|spherical|cylindrical|perspective, boundaryWarp=0..100, autoCrop=false, fillEdges=false, autoSettings=true, stack=false, maxMegapixels=full size (≤ 512, held to memory), preview=false, previewPath?}",
+            "{ids?, projection=auto|spherical|cylindrical|perspective, boundaryWarp=0..100, autoCrop=false, fillEdges=false, autoSettings=true, stack=false, maxMegapixels=full size (≤ 512, held to memory), fitMemory=false (may be made under 40 MP, down to 1 MP, to fit memory; a preview's forecast says when), preview=false, previewPath?}",
             can_merge,
             |s, p| run(s, "merge.panorama", p)
         ),
@@ -85,7 +87,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "HDR Panorama Merge",
             [],
             None,
-            "{ids?, bracket=0 (auto from EXIF), align, deghost, projection, boundaryWarp, autoCrop, fillEdges, autoSettings, stack, preview, previewPath?}",
+            "{ids?, bracket=0 (auto from EXIF), align, deghost, projection, boundaryWarp, autoCrop, fillEdges, autoSettings, stack, maxMegapixels, fitMemory=false, preview, previewPath?}",
             can_merge,
             |s, p| run(s, "merge.hdrPanorama", p)
         ),

@@ -216,7 +216,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             p["background"] = json!(true);
             app.run("app.export", p)
         }
-        Dialog::Merge { opts } => crate::merge::start_final(app, opts),
+        Dialog::Merge { opts } => crate::merge::confirm(app, opts),
         Dialog::Import { opts } => crate::import::start(app, opts),
         Dialog::ConfirmDelete { .. } => app.run("photo.delete", json!({})),
         Dialog::MovePhotos { ids, folder, dont_ask, library, .. } => {

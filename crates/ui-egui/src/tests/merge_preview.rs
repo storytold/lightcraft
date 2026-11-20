@@ -72,3 +72,86 @@ fn a_click_on_the_merge_preview_zooms_in_and_a_drag_pans() {
     assert_eq!(h.app.merge.zoom, None, "a second click fits the preview again");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// A panorama whose full size won't fit memory is merged only once its dialog has said the size it
+/// will be made at and the user has agreed to it: Merge waits for the preview (which works out the
+/// size), then for "Merge at the smaller size" to be ticked, and the merge it starts may then be
+/// made under 40 MP to fit (`fitMemory`). A new preview asks again; a panorama that can't be made
+/// at all says why, and Merge stays off. With the memory for its full size, nothing is asked.
+#[test]
+fn a_panorama_made_smaller_for_memory_is_agreed_to_before_it_merges() {
+    let dir = std::env::temp_dir().join(format!("lc-merge-smaller-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut paths = Vec::new();
+    for (i, v) in lightcraft_merge::synth::pano_views(800, 600, 700.0, &[-30.0, 0.0, 30.0]).unwrap().into_iter().enumerate() {
+        let png =
+            lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&v.to_srgb8()), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        let p = dir.join(format!("P_{i}.png"));
+        std::fs::write(&p, png).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut session = lightcraft_engine::Session::new().with_fs();
+    let r = session.execute("library.import", &json!({"paths": paths})).unwrap();
+    let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
+    session.execute("library.select", &json!({"ids": ids})).unwrap();
+    let mut h = Headless::new(LightcraftApp::new(session, Services { png: None, ..Default::default() }), [1200.0, 800.0], 1.0);
+    h.settle(T);
+    crate::merge::open(&mut h.app, "merge.panorama").unwrap();
+    let opts = crate::merge::MergeDialog::for_command("merge.panorama");
+    assert!(crate::merge::holdup(&h.app, &opts).is_some(), "Merge waits for the preview's size");
+    assert!(h.step_until(T, |h| h.app.merge.preview.is_some() && h.app.merge.preview_task.is_none()), "the preview rendered");
+    h.settle(T);
+    // this computer has the memory for the panorama's full size: nothing to agree to
+    let forecast = h.app.merge.preview.as_ref().map(|p| p.3["forecast"].clone()).unwrap_or_default();
+    assert!(forecast["limit"].is_null(), "{forecast}");
+    assert_eq!(crate::merge::holdup(&h.app, &opts), None);
+    assert!(!h.app.widgets.iter().any(|(w, _)| w == "merge.fitMemory"), "no notice");
+
+    // the forecast of a computer with the memory for less
+    let smaller = json!({"megapixels": 2.4, "nativeMegapixels": 6.1, "limit": "memory"});
+    let set = |h: &mut Headless, f: serde_json::Value| {
+        if let Some(p) = h.app.merge.preview.as_mut() {
+            p.3["forecast"] = f;
+        }
+        h.settle(T);
+    };
+    set(&mut h, smaller.clone());
+    assert_eq!(
+        crate::merge::smaller_notice(&smaller).as_deref(),
+        Some("Not enough memory for the full size, 6.1 MP: the panorama will be made at about 2.4 MP")
+    );
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    assert!(r["error"].as_str().is_some_and(|e| e.contains("agree to its size first")), "not agreed: {r}");
+    assert!(h.app.merge.final_task.is_none() && h.app.ui.dialog.is_some(), "nothing merged, the dialog still open");
+    let r = h.request("ui.clickWidget", json!({"id": "merge.fitMemory"}), T);
+    assert!(r.get("error").is_none(), "{r}");
+    h.settle(T);
+    assert!(h.app.merge.smaller_agreed, "ticked");
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!(r["result"]["started"], true, "{r}");
+    assert!(h.app.merge.final_task.as_ref().is_some_and(|t| t.job.fit_memory), "made smaller to fit, as agreed");
+    if let Some(t) = &h.app.merge.final_task {
+        t.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    assert!(h.step_until(T, |h| h.app.merge.final_task.is_none()));
+
+    // without the dialog nobody agreed: Merge with Last Settings never makes it smaller than 40 MP
+    crate::merge::start_last(&mut h.app, "merge.panorama").unwrap();
+    assert!(h.app.merge.final_task.as_ref().is_some_and(|t| !t.job.fit_memory));
+    if let Some(t) = &h.app.merge.final_task {
+        t.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    assert!(h.step_until(T, |h| h.app.merge.final_task.is_none()));
+
+    // a panorama that can't be made: it says why, there is nothing to tick, and Merge stays off
+    crate::merge::open(&mut h.app, "merge.panorama").unwrap();
+    assert!(!h.app.merge.smaller_agreed, "agreed to the last dialog's size, not this one's");
+    assert!(h.step_until(T, |h| h.app.merge.preview.is_some() && h.app.merge.preview_task.is_none()));
+    set(&mut h, json!({"refused": "not enough memory for this panorama: …"}));
+    assert!(!h.app.widgets.iter().any(|(w, _)| w == "merge.fitMemory"), "nothing to agree to");
+    h.app.merge.smaller_agreed = true;
+    let held = crate::merge::holdup(&h.app, &opts).unwrap_or_default();
+    assert!(held.starts_with("This panorama can't be merged: not enough memory"), "{held}");
+    let _ = std::fs::remove_dir_all(dir);
+}

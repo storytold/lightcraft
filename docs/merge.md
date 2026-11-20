@@ -9,7 +9,11 @@ All algorithms are our own implementations from published papers (cited in the m
 - **App:** select the photos, then *Photo Merge ▸ HDR…* (`Ctrl+H`), *Panorama…* (`Ctrl+M`) or
   *HDR Panorama…* from the photo context menu (or the `dialog.merge*` commands). The dialog previews
   the merge at ≤ 1024 px and re-runs the preview when an option changes; as in Lightroom, a click on the preview
-  zooms in on that point (drag to pan, click again to fit), and it stays there while options change; *Merge* runs the full merge
+  zooms in on that point (drag to pan, click again to fit), and it stays there while options change. For a panorama
+  the preview also works out the size the full merge will be made at: when it won't fit the merge's memory at its full
+  size, the dialog says so under the preview ("Not enough memory for the full size, 120 MP: the panorama will be made
+  at about 31 MP"), and *Merge* works only once *Merge at the smaller size* is ticked; a panorama that can't be made
+  at all says why, and *Merge* stays off. *Merge* waits for a panorama's preview, which works out that size. *Merge* runs the full merge
   in the background (a row in the activity stack shows its progress, with ✕ to stop it). The result is written next to the first photo as
   `<name>-HDR.dng`, `-Pano.dng` or `-HDR-Pano.dng`, imported and selected. *Photo Merge ▸ HDR for Each Bracket Set*
   merges many brackets in one go with the last HDR options: one HDR per stack among the selected photos, then per
@@ -17,7 +21,11 @@ All algorithms are our own implementations from published papers (cited in the m
   one exposure is skipped), one after the other in the activity stack.
 - **Commands** (CLI, MCP, control channel):
   - `merge.hdr {ids?, align=true, deghost=none|low|medium|high, autoSettings=true, stack=false, preview=false, showOverlay=false, previewPath?}`
-  - `merge.panorama {ids?, projection=auto|spherical|cylindrical|perspective, boundaryWarp=0..100, autoCrop=false, fillEdges=false, autoSettings=true, maxMegapixels=512 (also the most: a larger one, or 0 or less, is taken as 512; the output keeps the photos' own resolution up to it), preview, previewPath?}`
+  - `merge.panorama {ids?, projection=auto|spherical|cylindrical|perspective, boundaryWarp=0..100, autoCrop=false, fillEdges=false, autoSettings=true, maxMegapixels=512 (also the most: a larger one, or 0 or less, is taken as 512; the output keeps the photos' own resolution up to it), fitMemory=false, preview, previewPath?}`.
+    A preview (`preview: true`) answers with `forecast`, what the full merge makes: `{megapixels, nativeMegapixels,
+    limit}` (`limit: "memory"` when memory makes it smaller than the photos' resolution), `{refused}` when not even
+    1 MP fits, or `null` when it can't be told (the photos' sizes or the computer's memory unknown). `fitMemory: true`
+    agrees to a panorama made under its 40 MP floor to fit memory, down to 1 MP; without it such a merge is refused.
   - `merge.hdrPanorama {ids?, bracket=0 (from EXIF), …both sets of options}`
   - `merge.hdrBatch {ids?, align, deghost, autoSettings, stack}` → `{merged: [{id, path, …}], failed: [{photos, error}]}`
 - **CLI:** `lightcraft-cli merge hdr|panorama|hdr-panorama|hdr-batch [options] FILES…` (`hdr-batch` finds the brackets
@@ -121,7 +129,13 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   the stitch keeps no smaller size limit), or the photos' own pixels when they have less, even under 0.1 MP (the stitch never scales photos up). A
   merge whose memory can't hold the floor is refused with the memory it needs and the merge's budget (that share of the
   RAM: closing other apps doesn't raise it), and, when a smaller `maxMegapixels` would fit, the largest that does
-  (issue #3708; until then the 40 MP floor was kept whatever the memory, and could run out of it).
+  (issue #3708; until then the 40 MP floor was kept whatever the memory, and could run out of it). Unless the user
+  agreed to a smaller panorama before the merge started (the dialog's *Merge at the smaller size*, `fitMemory: true`):
+  the floor is then 1 MP, as a preview's, and a merge whose memory can't hold even that is refused. A panorama is
+  never made under 40 MP to fit memory unasked: the dialog asks, and Merge with Last Settings and the commands without
+  `fitMemory` refuse. The preview's `forecast` takes the panorama's own resolution from the preview's stitch (scaled
+  to the photos' pixels) and plans the full merge as it will run, so the size it names is an estimate: the full-size
+  frames' overlap may differ a little from the preview's, and the result's `megapixels` is the size made.
 - Photos for a panorama that don't fit at full size are decoded smaller, but only while the stitch still reaches
   its floor (which follows the photos' own size, not the smaller frames'); a merge that would have to go below it is
   refused before any photo is decoded (only the header of a photo the catalog has no size for is read first). They keep at least twice the floor's pixels (a panorama is taken to keep half

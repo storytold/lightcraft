@@ -116,6 +116,11 @@ pub struct MergeState {
     pub ids: Vec<PhotoId>,
     /// HDR for Each Bracket Set: the sets still to merge after the running one.
     pub batch: std::collections::VecDeque<Vec<PhotoId>>,
+    /// The user agreed to the smaller panorama the latest preview's forecast names
+    /// ([`smaller_notice`]): the merge may then be made under 40 MP to fit memory
+    /// (`fitMemory`). Never saved with the options, and cleared by each new preview and each time
+    /// the dialog opens, so it answers only the size it was shown.
+    pub smaller_agreed: bool,
 }
 
 impl MergeState {
@@ -125,9 +130,10 @@ impl MergeState {
     }
 }
 
-fn spawn(app: &LightcraftApp, options: &MergeDialog, ids: &[PhotoId], preview: bool) -> Result<MergeTask, String> {
+fn spawn(app: &LightcraftApp, options: &MergeDialog, ids: &[PhotoId], preview: bool, fit_memory: bool) -> Result<MergeTask, String> {
     let (kind, finish) = lightcraft_engine::merge::parse(&options.command, &options.params()).map_err(|e| e.to_string())?;
-    let job = app.session.plan_merge(kind, finish, ids, preview).map_err(|e| e.to_string())?;
+    let mut job = app.session.plan_merge(kind, finish, ids, preview).map_err(|e| e.to_string())?;
+    job.fit_memory = fit_memory;
     let progress = Arc::new(Mutex::new((0.0, "Starting".to_string())));
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = channel();
@@ -173,6 +179,7 @@ pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
     app.merge.preview = None;
     app.merge.preview_pixels = None;
     app.merge.zoom = None;
+    app.merge.smaller_agreed = false;
     if let Some(t) = app.merge.preview_task.take() {
         t.cancel.store(true, Ordering::Relaxed);
     }
@@ -180,8 +187,24 @@ pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
     Ok(json!({"photos": app.merge.ids.len()}))
 }
 
-/// Start the full-resolution merge (the dialog's Merge button / `ui.dialog.confirm`).
+/// The dialog's Merge button / `ui.dialog.confirm`: the full-resolution merge, once the preview
+/// has said what size it makes ([`holdup`]), made smaller than 40 MP to fit memory when the user
+/// agreed to the size it named ([`MergeState::smaller_agreed`]).
+pub fn confirm(app: &mut LightcraftApp, opts: &MergeDialog) -> Result<Value, String> {
+    if let Some(why) = holdup(app, opts) {
+        return Err(why);
+    }
+    let agreed = app.merge.smaller_agreed && smaller_notice(forecast(app, opts)).is_some();
+    start(app, opts, agreed)
+}
+
+/// Start the full-resolution merge without the dialog's notice (Merge with Last Settings, HDR for
+/// Each Bracket Set): never made smaller than 40 MP to fit memory, which nobody agreed to.
 pub fn start_final(app: &mut LightcraftApp, opts: &MergeDialog) -> Result<Value, String> {
+    start(app, opts, false)
+}
+
+fn start(app: &mut LightcraftApp, opts: &MergeDialog, fit_memory: bool) -> Result<Value, String> {
     if app.merge.final_task.is_some() {
         return Err("a merge is already running".into());
     }
@@ -189,7 +212,7 @@ pub fn start_final(app: &mut LightcraftApp, opts: &MergeDialog) -> Result<Value,
         t.cancel.store(true, Ordering::Relaxed);
     }
     let ids = app.merge.ids.clone();
-    let mut task = spawn(app, opts, &ids, false)?;
+    let mut task = spawn(app, opts, &ids, false, fit_memory)?;
     let guard = app.session.activity.start("merge", "Merging", Cancel::Flag(task.cancel.clone()));
     guard.set_unit(Unit::Percent);
     guard.progress(0, 1000);
@@ -255,7 +278,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     t.cancel.store(true, Ordering::Relaxed);
                 }
                 let ids = app.merge.ids.clone();
-                match spawn(app, opts, &ids, true) {
+                match spawn(app, opts, &ids, true, false) {
                     Ok(t) => {
                         app.merge.error = None;
                         app.merge.preview_task = Some(t);
@@ -288,6 +311,8 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     let tex = ctx.load_texture("merge-preview", color.clone(), egui::TextureOptions::LINEAR);
                     app.merge.preview_pixels = Some(color);
                     app.merge.preview = Some((tex, [img.width, img.height], t.options, out.info));
+                    // agreed to the size the last preview named, not this one's
+                    app.merge.smaller_agreed = false;
                 }
             }
             Ok(Err(e)) => {
@@ -367,6 +392,57 @@ fn added_message(what: &str, info: &Value) -> String {
             full = full
         ),
         _ => crate::i18n::tr_format!("{what} merge added", what = what),
+    }
+}
+
+/// The latest preview's `forecast` of the full-size merge (`null` when none: an HDR, a preview of
+/// other options, or a size that can't be told; [`lightcraft_engine::merge::MergeJob::fit_memory`]).
+fn forecast<'a>(app: &'a LightcraftApp, opts: &MergeDialog) -> &'a Value {
+    match &app.merge.preview {
+        Some((_, _, o, info)) if o == opts && opts.is_pano() => &info["forecast"],
+        _ => &Value::Null,
+    }
+}
+
+/// What the dialog says under the preview when the panorama won't fit memory at its full size
+/// (`forecast`: [`forecast`]): the size it will be made at, which the user agrees to before Merge
+/// works ([`MergeState::smaller_agreed`]), or why it can't be made at all.
+pub(crate) fn smaller_notice(forecast: &Value) -> Option<String> {
+    if let Some(e) = forecast["refused"].as_str() {
+        return Some(crate::i18n::tr_format!("This panorama can't be merged: {e}", e = e));
+    }
+    // whole megapixels, as the merge's own message names them; tenths under 10 MP, where a whole
+    // one would hide much of the difference
+    let size = |k: &str| forecast[k].as_f64().map(|mp| if mp < 10.0 { format!("{mp:.1} MP") } else { format!("{mp:.0} MP") });
+    match (forecast["limit"].as_str(), size("megapixels"), size("nativeMegapixels")) {
+        (Some("memory"), Some(mp), Some(full)) => Some(crate::i18n::tr_format!(
+            "Not enough memory for the full size, {full}: the panorama will be made at about {mp}",
+            mp = mp,
+            full = full
+        )),
+        _ => None,
+    }
+}
+
+/// Why the dialog's Merge doesn't work yet (`None`: it does): a panorama's preview is still
+/// working out the size the merge makes, the merge can't be made, or it will be made smaller to
+/// fit memory and the user hasn't agreed to that. Without a preview (it failed) the merge runs
+/// as the command does, never made under 40 MP unasked.
+pub(crate) fn holdup(app: &LightcraftApp, opts: &MergeDialog) -> Option<String> {
+    if !opts.is_pano() {
+        return None;
+    }
+    let previewed = app.merge.preview.as_ref().is_some_and(|p| &p.2 == opts);
+    if !previewed && !last_failed_matches(app, opts) {
+        return Some(crate::i18n::tr("wait for the preview: it works out the size the panorama is made at").to_owned());
+    }
+    let f = forecast(app, opts);
+    match smaller_notice(f) {
+        Some(e) if f["refused"].is_string() => Some(e),
+        Some(_) if !app.merge.smaller_agreed => {
+            Some(crate::i18n::tr("the panorama will be made smaller to fit memory: agree to its size first").to_owned())
+        }
+        _ => None,
     }
 }
 
@@ -470,6 +546,13 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
                     crate::i18n::tr_format!("{} photos · exposures {} EV", ev.len(), ev.join(" / "))
                 };
                 ui.label(egui::RichText::new(txt).color(t.text_dim));
+            }
+            if let Some(notice) = smaller_notice(forecast(app, opts)) {
+                ui.label(egui::RichText::new(notice).color(t.text));
+                if forecast(app, opts)["refused"].is_null() {
+                    let r = ui.checkbox(&mut app.merge.smaller_agreed, crate::i18n::tr("Merge at the smaller size"));
+                    crate::widgets::register_response("merge.fitMemory", r.rect, &r);
+                }
             }
         });
         ui.add_space(12.0);

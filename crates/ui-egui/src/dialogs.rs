@@ -636,7 +636,8 @@ fn sam_ok_label(dlg: &Dialog, sam: &SamState) -> &'static str {
 }
 
 /// Whether the confirm button works: installing waits for the licence to be accepted (and Synchronize waits for the
-/// scan), a rename waits for its conflicts to be settled, smart-album rules that can't mean anything wait to be fixed.
+/// scan), a rename waits for its conflicts to be settled, smart-album rules that can't mean anything wait to be fixed,
+/// a panorama merge waits for its size ([`crate::merge::holdup`]).
 fn can_confirm(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> bool {
     let rename_blocked = match dlg {
         Dialog::RenamePerson { from, to, merge } => {
@@ -651,7 +652,9 @@ fn can_confirm(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> bool {
     );
     let bad_rules =
         matches!(dlg, Dialog::SmartRules { id, rules, .. } if !rules.check_for(&app.session.catalog, id.map(lightcraft_catalog::AlbumId)).is_empty());
-    !rename_blocked && (informational || (!waiting && !bad_rules))
+    // a panorama waits for its preview to say its size, and for the user to agree to a smaller one
+    let merge_held = matches!(dlg, Dialog::Merge { opts } if crate::merge::holdup(app, opts).is_some());
+    !rename_blocked && (informational || (!waiting && !bad_rules && !merge_held))
 }
 
 /// The row of buttons under a dialog: Cancel and the confirm; `close` and `confirm` are set when one is clicked.
@@ -715,11 +718,12 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
         // the import review stays open on an error (e.g. an unusable folder template), and so
         // does Export (e.g. no folder chosen) so the choices aren't lost, and Edit Capture Time
         // (a time that isn't a date, or a shift it refuses), and the lens database offer (a download that can't
-        // start: Download again or Not Now)
+        // start: Download again or Not Now), and Photo Merge (a panorama whose size the user is still to agree to)
         Err(e)
             if matches!(
                 dlg,
                 Dialog::Import { .. }
+                    | Dialog::Merge { .. }
                     | Dialog::Export { .. }
                     | Dialog::ContactSheet { .. }
                     | Dialog::SlideshowExport { .. }

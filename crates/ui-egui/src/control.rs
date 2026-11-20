@@ -442,11 +442,12 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                     (Ok(made), crate::state::Dialog::TextPrompt { .. }) => crate::dialogs::toast_created_folder(app, ctx, &d, made),
                     _ => {}
                 }
-                // the import review, the rule editor and the one-line prompts stay open on an error, as with their buttons
+                // the import review, Photo Merge, the rule editor and the one-line prompts stay open on an error, as with their buttons
                 if (r.is_err()
                     && matches!(
                         d,
                         crate::state::Dialog::Import { .. }
+                            | crate::state::Dialog::Merge { .. }
                             | crate::state::Dialog::SamModel { .. }
                             | crate::state::Dialog::SmartRules { .. }
                             | crate::state::Dialog::SaveEffect { .. }
