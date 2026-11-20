@@ -105,7 +105,11 @@ pub fn sniff(b: &[u8]) -> Option<Format> {
         return Some(Format::RawOther);
     }
     if b.len() >= 12 && &b[4..8] == b"ftyp" {
-        return sniff_bmff(b);
+        // A JPEG comment can put these bytes at this offset. Check the leading JPEG signature first.
+        return match craft_image_codecs::detect(b) {
+            Some(craft_image_codecs::Format::Jpeg | craft_image_codecs::Format::JpegLs) => Some(Format::Jpeg),
+            _ => sniff_bmff(b),
+        };
     }
     if b.starts_with(b"IIRO") || b.starts_with(b"IIRS") || b.starts_with(b"MMOR") || b.starts_with(b"IIU\0") {
         // Olympus ORF / Panasonic RW2: TIFF-structured with a private magic.
@@ -273,6 +277,34 @@ mod tests {
             assert_eq!(sniff(header), Some(Format::Tiff));
         }
         assert_eq!(sniff(&[0xff, 0xd8, 0xff, 0xf7, 0, 2]), Some(Format::Jpeg));
+    }
+
+    #[test]
+    fn jpeg_comments_do_not_override_the_format() {
+        use crate::encode::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+
+        let pixels = [32, 83, 170].repeat(12);
+        let image = EncodeImage::new(4, 3, 3, Samples::U8(&pixels));
+        let jpeg = encode_jpeg(&image, 85, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+        let header = crate::read_header(&jpeg).unwrap();
+        assert_eq!((header.format, header.width, header.height), (Format::Jpeg, 4, 3));
+        let expected = crate::decode(&jpeg, crate::DecodeOptions::default()).unwrap().to_srgb8();
+
+        for apparent_brand in [b"avif", b"test"] {
+            // The two-byte comment length and the start of its payload form the apparent ftyp.
+            let mut comment = vec![0; usize::from(u16::from_be_bytes(*b"ft")) - 2];
+            comment[..2].copy_from_slice(b"yp");
+            comment[2..6].copy_from_slice(apparent_brand);
+
+            let mut commented = jpeg[..2].to_vec();
+            commented.extend_from_slice(b"\xff\xfeft");
+            commented.extend_from_slice(&comment);
+            commented.extend_from_slice(&jpeg[2..]);
+
+            assert_eq!(sniff(&commented), Some(Format::Jpeg), "{apparent_brand:?}");
+            assert_eq!(crate::read_header(&commented).unwrap(), header);
+            assert_eq!(crate::decode(&commented, crate::DecodeOptions::default()).unwrap().to_srgb8().data, expected.data);
+        }
     }
 
     #[test]
