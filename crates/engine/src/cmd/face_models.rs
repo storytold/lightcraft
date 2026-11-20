@@ -126,15 +126,6 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     })
 }
 
-/// Keep the face models on the CPU (or let them use the GPU again).
-#[allow(dead_code)]
-pub(super) fn set_cpu_only(dir: &Path, on: bool) -> Result<()> {
-    let mut st = read_settings(dir);
-    st.cpu_only = on;
-    st.device = on.then(|| "cpu".to_string());
-    write_settings(dir, &st)
-}
-
 /// Persist the face GPU device and precision preferences (`settings.json`).
 pub(super) fn set_gpu_settings(dir: &Path, device: Option<&str>, precision: Option<&str>) -> Result<FaceSettings> {
     let mut st = read_settings(dir);

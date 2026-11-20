@@ -246,9 +246,7 @@ pub(crate) fn offer_gpu(
         return;
     }
     let (device_choice, prec, cache_dir) = configured_gpu(s);
-    if let Some(dir) = &cache_dir {
-        lcc_gpu::faces::set_cache_dir(dir.clone());
-    }
+    lcc_gpu::faces::set_cache_dir(cache_dir);
     let task = s.activity.start("facesGpu", "Checking the GPU for faces", crate::activity::Cancel::No);
     task.detail(what);
     set_gpu_state(what, GpuState { checking: true, ..GpuState::default() });
@@ -261,12 +259,12 @@ pub(crate) fn offer_gpu(
                 return set_gpu_state(what, GpuState { why: Some(why), ..GpuState::default() });
             }
         };
-        let (res, used_gpu) = match attach(gpu.clone()) {
+        let (res, used_gpu) = match attach(gpu.clone() as Arc<dyn lcc_faces::net::Accelerator>) {
             Ok(()) => (Ok(()), gpu),
-            Err(why) if prec == lcc_gpu::faces::Precision::Auto && gpu.precision() == lcc_faces::net::Precision::Fp16 => {
+            Err(why) if prec == lcc_gpu::faces::Precision::Auto && gpu.precision_name() == "fp16" => {
                 let fp32 = gpu.as_fp32();
                 log::info!("faces: {what} FP16 check fell back ({why}); trying FP32");
-                (attach(fp32.clone()), fp32)
+                (attach(fp32.clone() as Arc<dyn lcc_faces::net::Accelerator>), fp32)
             }
             Err(why) => (Err(why), gpu),
         };
@@ -384,7 +382,7 @@ fn gpu(s: &mut Session, p: &Value) -> Result<Value> {
     if resolved_device.is_some() || prec_param.is_some() {
         let dir = s.face_models_dir.clone().ok_or_else(|| bad(C, "this build has nowhere to keep face models (the desktop app does)"))?;
         #[cfg(not(target_arch = "wasm32"))]
-        lcc_gpu::faces::set_cache_dir(dir.join(".gpu-cache"));
+        lcc_gpu::faces::set_cache_dir(Some(dir.join(".gpu-cache")));
         let saved = super::face_models::set_gpu_settings(&dir, resolved_device.as_deref(), prec_param.as_deref())?;
         let cpu = saved.is_cpu_only();
         #[cfg(not(target_arch = "wasm32"))]
@@ -458,11 +456,7 @@ pub(crate) fn recognition_gpu_state(s: &Session) -> GpuState {
     if let Some((_, e)) = &s.faces.embedder
         && let Some(a) = e.net().accelerator()
     {
-        let precision = match a.precision() {
-            lcc_faces::net::Precision::Fp16 => "fp16",
-            lcc_faces::net::Precision::Fp32 => "fp32",
-        };
-        return GpuState { device: Some(a.device()), precision: Some(precision), ..GpuState::default() };
+        return GpuState { device: Some(a.device()), precision: Some(a.precision()), ..GpuState::default() };
     }
     let dir = s.face_models_dir.as_deref();
     let has_embedder = dir.is_some_and(|d| super::face_models::read_settings(d).embedder.is_some());
@@ -472,9 +466,7 @@ pub(crate) fn recognition_gpu_state(s: &Session) -> GpuState {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let (device_choice, prec, cache_dir) = configured_gpu(s);
-        if let Some(d) = cache_dir {
-            lcc_gpu::faces::set_cache_dir(d);
-        }
+        lcc_gpu::faces::set_cache_dir(cache_dir);
         match lcc_gpu::faces::accelerator_for((device_choice != "auto").then_some(device_choice.as_str()), prec) {
             Ok(gpu) => GpuState {
                 device: Some(lcc_faces::net::Accelerator::device(&*gpu)),

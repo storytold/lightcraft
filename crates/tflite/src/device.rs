@@ -541,7 +541,7 @@ impl Model {
         let cpu = self.run_cpu(&[probe]).map_err(|e| e.to_string())?;
         let acc = accelerator.clone();
         *self.device.accelerator.write().unwrap_or_else(PoisonError::into_inner) = Some(accelerator);
-        let eff_tol = if acc.precision() == lcc_faces::net::Precision::Fp16 { tolerance.max(1e-2) } else { tolerance };
+        let eff_tol = if acc.precision() == "fp16" { tolerance.max(1e-2) } else { tolerance };
         let verdict = (|| {
             // the first run uploads the weights and builds the kernels
             let dev = self.run_on_device(&[probe]).map_err(|e| e.to_string())?.and_then(|mut v| v.pop());

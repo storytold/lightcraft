@@ -183,14 +183,8 @@ fn plan_cache_path(dir: &Path, driver_sig: &str, precision: ActivePrecision, pro
     dir.join(format!("plan-{sig_hash:016x}-{program_fp:016x}-{}.bin", precision.id()))
 }
 
-fn read_cached_plan(driver_sig: &str, precision: ActivePrecision, program_fp: u64) -> Option<bool> {
-    if let Some(&faster) = plan_mem().lock().unwrap_or_else(PoisonError::into_inner).get(&(driver_sig.to_string(), precision.tag(), program_fp)) {
-        return Some(faster);
-    }
-    let dir = cache_dir()?;
-    let path = plan_cache_path(&dir, driver_sig, precision, program_fp);
-    let bytes = std::fs::read(&path).ok()?;
-    if bytes.len() < 4 + 1 + 1 + 1 + 8 + 8 + 8 + 2 + 8 || bytes.len() > 4096 || &bytes[..4] != PLAN_MAGIC || bytes[4] != PLAN_VERSION {
+fn parse_cached_plan(bytes: &[u8], driver_sig: &str, precision: ActivePrecision, program_fp: u64) -> Option<bool> {
+    if bytes.len() < 41 || bytes.len() > 4096 || bytes.get(..4)? != PLAN_MAGIC || *bytes.get(4)? != PLAN_VERSION {
         return None;
     }
     let (payload, tag_bytes) = bytes.split_at(bytes.len() - 8);
@@ -198,17 +192,44 @@ fn read_cached_plan(driver_sig: &str, precision: ActivePrecision, program_fp: u6
     if fnv1a64(payload) != expected {
         return None;
     }
-    let faster = payload[5] != 0;
-    let prec_tag = payload[6];
-    let fp = u64::from_le_bytes(payload[7..15].try_into().ok()?);
+    let faster_byte = *payload.get(5)?;
+    if faster_byte > 1 {
+        return None;
+    }
+    let prec_tag = *payload.get(6)?;
+    let fp = u64::from_le_bytes(payload.get(7..15)?.try_into().ok()?);
     if prec_tag != precision.tag() || fp != program_fp {
         return None;
     }
-    let sig_len = usize::from(u16::from_le_bytes(payload[31..33].try_into().ok()?));
-    let sig = std::str::from_utf8(payload.get(33..33 + sig_len)?).ok()?;
+    let fast_ms = f64::from_le_bytes(payload.get(15..23)?.try_into().ok()?);
+    let cpu_ms = f64::from_le_bytes(payload.get(23..31)?.try_into().ok()?);
+    if !fast_ms.is_finite() || !cpu_ms.is_finite() || fast_ms < 0.0 || cpu_ms < 0.0 {
+        return None;
+    }
+    let sig_len = usize::from(u16::from_le_bytes(payload.get(31..33)?.try_into().ok()?));
+    let end = 33usize.checked_add(sig_len)?;
+    if end != payload.len() {
+        return None;
+    }
+    let sig = std::str::from_utf8(payload.get(33..end)?).ok()?;
     if sig != driver_sig {
         return None;
     }
+    Some(faster_byte != 0)
+}
+
+fn read_cached_plan(driver_sig: &str, precision: ActivePrecision, program_fp: u64) -> Option<bool> {
+    if let Some(&faster) = plan_mem().lock().unwrap_or_else(PoisonError::into_inner).get(&(driver_sig.to_string(), precision.tag(), program_fp)) {
+        return Some(faster);
+    }
+    let dir = cache_dir()?;
+    let path = plan_cache_path(&dir, driver_sig, precision, program_fp);
+    let meta = std::fs::metadata(&path).ok()?;
+    if meta.len() > 4096 {
+        return None;
+    }
+    let bytes = std::fs::read(&path).ok()?;
+    let faster = parse_cached_plan(&bytes, driver_sig, precision, program_fp)?;
     plan_mem().lock().unwrap_or_else(PoisonError::into_inner).insert((driver_sig.to_string(), precision.tag(), program_fp), faster);
     Some(faster)
 }
@@ -255,9 +276,7 @@ pub fn reset() {
     }
     {
         let mut auto = AUTO_DEV.lock().unwrap_or_else(PoisonError::into_inner);
-        if matches!(&*auto, Some(Err(_)))
-            || matches!(&*auto, Some(Ok(d)) if d.broken.load(Ordering::Relaxed))
-        {
+        if matches!(&*auto, Some(Err(_))) || matches!(&*auto, Some(Ok(d)) if d.broken.load(Ordering::Relaxed)) {
             *auto = None;
         }
     }
@@ -517,9 +536,7 @@ fn make_auto_device(backends: wgpu::Backends) -> Result<Dev, String> {
         .filter(|(i, e)| e.usable && adapters.get(*i).is_some_and(|a| adapter_limits_ok(a).is_ok()))
         .max_by_key(|(_, e)| auto_adapter_score(e))
         .map(|(i, e)| (i, e.key.clone(), e.drives_screen));
-    if let Some((idx, key, drives_screen)) = best
-        && let Some(adapter) = adapters.into_iter().nth(idx)
-    {
+    if let Some((idx, key, drives_screen)) = best && let Some(adapter) = adapters.into_iter().nth(idx) {
         let card = if drives_screen { Card::Editing } else { Card::Second };
         return build_dev(adapter, card, key);
     }
@@ -531,10 +548,7 @@ fn make_named_device(backends: wgpu::Backends, key: AdapterKey) -> Result<Dev, S
     let instance = new_compute_instance(backends);
     let adapters = pollster::block_on(instance.enumerate_adapters(backends));
     let entries = crate::remember_adapters(&adapters);
-    let found = entries
-        .iter()
-        .position(|e| e.key == key)
-        .or_else(|| entries.iter().position(|e| e.key.same_model(&key)));
+    let found = entries.iter().position(|e| e.key == key).or_else(|| entries.iter().position(|e| e.key.same_model(&key)));
     let idx = found.ok_or_else(|| format!("graphics card `{}` is not available", key.name))?;
     if let Some(why) = entries.get(idx).and_then(|e| e.why_not.as_ref()) {
         return Err(format!("{} cannot run face models: {why}", key.name));
@@ -546,13 +560,7 @@ fn make_named_device(backends: wgpu::Backends, key: AdapterKey) -> Result<Dev, S
     build_dev(adapter, card, resolved_key)
 }
 
-fn build_pipeline_set(
-    device: &wgpu::Device,
-    pl: &wgpu::PipelineLayout,
-    conv_src: &str,
-    ops_src: &str,
-    suffix: &str,
-) -> PipelineSet {
+fn build_pipeline_set(device: &wgpu::Device, pl: &wgpu::PipelineLayout, conv_src: &str, ops_src: &str, suffix: &str) -> PipelineSet {
     let conv_label = format!("faces conv {suffix}");
     let ops_label = format!("faces ops {suffix}");
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -666,12 +674,7 @@ fn build_dev(adapter: wgpu::Adapter, card: Card, adapter_key: AdapterKey) -> Res
         mapped_at_creation: false,
     });
     let driver_sig = format!("{adapter_key}|{}|{:?}", info.driver_info, info.backend);
-    log::info!(
-        "gpu (faces, {which} card): {} ({:?}, f16={has_f16}, nvidia={})",
-        info.name,
-        info.backend,
-        info.vendor == VENDOR_NVIDIA
-    );
+    log::info!("gpu (faces, {which} card): {} ({:?}, f16={has_f16}, nvidia={})", info.name, info.backend, info.vendor == VENDOR_NVIDIA);
     Ok(Dev {
         device,
         queue,
@@ -807,13 +810,7 @@ pub fn accelerator_for(device: Option<&str>, precision: Precision) -> Result<Arc
 
 fn accelerator_with(dev: &'static Dev, requested: Precision) -> Result<Arc<FaceGpu>, String> {
     let precision = match requested {
-        Precision::Auto => {
-            if dev.fp16.is_some() {
-                ActivePrecision::Fp16
-            } else {
-                ActivePrecision::Fp32
-            }
-        }
+        Precision::Auto => if dev.fp16.is_some() { ActivePrecision::Fp16 } else { ActivePrecision::Fp32 },
         Precision::Fp16 => {
             if dev.fp16.is_none() {
                 return Err(format!("{} does not support WGSL shader-f16", dev.info.name));
@@ -1126,6 +1123,9 @@ impl FaceGpu {
         let elem = self.precision.elem_bytes();
         let groups = job.groups.max(1);
         let (m, cg) = (job.cout / groups, job.cin / groups);
+        if batch == 0 || m == 0 || cg == 0 || job.h == 0 || job.w == 0 || job.oh == 0 || job.ow == 0 || job.kh == 0 || job.kw == 0 {
+            return Ok(None);
+        }
         let plane_out = job.oh.checked_mul(job.ow).ok_or("a layer too large")?;
         let n = batch.checked_mul(plane_out).ok_or("a layer too large")?;
         let k = cg.checked_mul(job.kh).and_then(|v| v.checked_mul(job.kw)).ok_or("a layer too large")?;
@@ -1244,7 +1244,13 @@ impl FaceGpu {
     }
 
     /// Submit `enc`, which ends by copying `count` elements into `staging`, wait for it and read `staging` back as `f32`.
-    fn finish(&self, enc: wgpu::CommandEncoder, staging: &wgpu::Buffer, count: usize, scopes: [wgpu::ErrorScopeGuard; 2]) -> Result<Vec<f32>, String> {
+    fn finish(
+        &self,
+        enc: wgpu::CommandEncoder,
+        staging: &wgpu::Buffer,
+        count: usize,
+        scopes: [wgpu::ErrorScopeGuard; 2],
+    ) -> Result<Vec<f32>, String> {
         let d = self.dev;
         let index = d.queue.submit([enc.finish()]);
         let slice = staging.slice(..);
@@ -1364,6 +1370,9 @@ impl FaceGpu {
         let limit = d.limits.max_compute_workgroups_per_dimension as usize;
         let u = u32_of;
         let total_elems = batch.checked_mul(out_len_one).ok_or("a layer too large")?;
+        if total_elems == 0 {
+            return Ok(None);
+        }
         let n = u(total_elems)?;
         let per_value = |pipeline: &'static wgpu::ComputePipeline, rest: &[u32]| -> Option<Dispatch> {
             let groups = flat(total_elems.div_ceil(256), limit)?;
@@ -1739,6 +1748,53 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn plan_cache_rejects_hostile_bytes() {
+        let sig = "vulkan:10de:2783:NVIDIA RTX 4070#1|560.35|Vulkan";
+        let fp = 0xfeed_face_cafe_beef;
+        let build = |faster: u8, prec: u8, fprint: u64, fast_ms: f64, cpu_ms: f64, sig_len: u16, body: &[u8]| {
+            let mut buf = Vec::new();
+            buf.extend_from_slice(PLAN_MAGIC);
+            buf.push(PLAN_VERSION);
+            buf.push(faster);
+            buf.push(prec);
+            buf.extend_from_slice(&fprint.to_le_bytes());
+            buf.extend_from_slice(&fast_ms.to_le_bytes());
+            buf.extend_from_slice(&cpu_ms.to_le_bytes());
+            buf.extend_from_slice(&sig_len.to_le_bytes());
+            buf.extend_from_slice(body);
+            let sum = fnv1a64(&buf);
+            buf.extend_from_slice(&sum.to_le_bytes());
+            buf
+        };
+
+        let valid = build(1, ActivePrecision::Fp16.tag(), fp, 5.0, 20.0, sig.len() as u16, sig.as_bytes());
+        assert_eq!(parse_cached_plan(&valid, sig, ActivePrecision::Fp16, fp), Some(true));
+
+        // Truncations at every length and single-byte bit flips.
+        for n in 0..valid.len() {
+            assert_eq!(parse_cached_plan(&valid[..n], sig, ActivePrecision::Fp16, fp), None, "truncation at {n}");
+        }
+        for i in 0..valid.len() {
+            let mut flipped = valid.clone();
+            flipped[i] ^= 0x55;
+            assert_eq!(parse_cached_plan(&flipped, sig, ActivePrecision::Fp16, fp), None, "bit flip at {i}");
+        }
+
+        // Hostile payloads with valid FNV checksums.
+        assert_eq!(parse_cached_plan(&[], sig, ActivePrecision::Fp16, fp), None);
+        assert_eq!(parse_cached_plan(&vec![0u8; 4097], sig, ActivePrecision::Fp16, fp), None);
+        assert_eq!(parse_cached_plan(&build(2, 1, fp, 5.0, 20.0, sig.len() as u16, sig.as_bytes()), sig, ActivePrecision::Fp16, fp), None);
+        assert_eq!(parse_cached_plan(&build(1, 1, fp, f64::NAN, 20.0, sig.len() as u16, sig.as_bytes()), sig, ActivePrecision::Fp16, fp), None);
+        assert_eq!(parse_cached_plan(&build(1, 1, fp, -1.0, 20.0, sig.len() as u16, sig.as_bytes()), sig, ActivePrecision::Fp16, fp), None);
+        assert_eq!(parse_cached_plan(&build(1, 1, fp, 5.0, 20.0, u16::MAX, sig.as_bytes()), sig, ActivePrecision::Fp16, fp), None);
+        let mut padded = sig.as_bytes().to_vec();
+        padded.extend_from_slice(b"extra");
+        assert_eq!(parse_cached_plan(&build(1, 1, fp, 5.0, 20.0, sig.len() as u16, &padded), sig, ActivePrecision::Fp16, fp), None);
+        let bad_utf8 = [0xffu8; 4];
+        assert_eq!(parse_cached_plan(&build(1, 1, fp, 5.0, 20.0, 4, &bad_utf8), sig, ActivePrecision::Fp16, fp), None);
+    }
+
     /// A failure on one card stops face models there only.
     #[test]
     fn a_broken_card_keeps_its_first_reason_and_leaves_the_other() {
@@ -1937,8 +1993,10 @@ mod tests {
                 (0..8).map(|s| (0..n).map(|i| ((i + s * 977) as f32 * 0.0137).sin() * 0.9 + ((i / 3) % 7) as f32 * 0.02).collect()).collect();
             let refs: Vec<&[f32]> = inputs.iter().map(Vec::as_slice).collect();
             let cpu: Vec<_> = refs.iter().map(|x| model.run(&[x]).unwrap()).collect();
+            let acc = accelerator().unwrap();
+            let tol = if acc.precision() == "fp16" { 1e-2 } else { 1e-3 };
             let (on_device, steps) = model.device_steps();
-            model.accelerate(accelerator().unwrap(), refs[0], 1e-3, false).unwrap();
+            model.accelerate(acc, refs[0], tol, false).unwrap();
             let one = model.run(&[refs[1]]).unwrap();
             let batch = model.run_batch(&refs).unwrap();
             assert!(model.accelerator().is_some(), "{name}: the GPU was dropped");
@@ -1946,7 +2004,7 @@ mod tests {
                 for (x, y) in a.iter().zip(b) {
                     let scale = x.iter().fold(1e-6f32, |m, v| m.max(v.abs()));
                     let worst = x.iter().zip(y).fold(0f32, |m, (p, q)| m.max((p - q).abs()));
-                    assert!(worst <= 1e-3 * scale, "{name}: off by {} of {scale}", worst);
+                    assert!(worst <= tol * scale, "{name}: off by {} of {scale}", worst);
                 }
             };
             close(&cpu[1], &one);
@@ -1965,7 +2023,8 @@ mod tests {
             let one_ms = time(&mut || refs.iter().for_each(|x| drop(model.run(&[x]).unwrap())));
             let batch_ms = time(&mut || drop(model.run_batch(&refs).unwrap()));
             eprintln!(
-                "{name}: {on_device} of {steps} steps on the GPU; 8 runs: CPU {cpu_ms:.1} ms, GPU one by one {one_ms:.1} ms, GPU batched {batch_ms:.1} ms"
+                "{name}: {on_device} of {steps} steps on the GPU; 8 runs: CPU {cpu_ms:.1} ms, GPU one by one {one_ms:.1} ms, \
+                 GPU batched {batch_ms:.1} ms"
             );
         }
     }

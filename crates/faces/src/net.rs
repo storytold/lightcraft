@@ -177,7 +177,7 @@ impl Net {
         *self.accelerator.write().unwrap_or_else(PoisonError::into_inner) = Some(accelerator);
         // the first run also uploads the weights and builds the kernels: time a second one
         let fast = self.run(probe.clone()).map_err(|e| e.to_string());
-        let eff_tol = if acc.precision() == Precision::Fp16 { tolerance.max(1e-2) } else { tolerance };
+        let eff_tol = if acc.precision() == "fp16" { tolerance.max(1e-2) } else { tolerance };
         let mut verdict = match fast {
             Err(e) => Err(e),
             Ok(_) if self.accelerator().is_none() => Err("the device failed on the test input".into()),

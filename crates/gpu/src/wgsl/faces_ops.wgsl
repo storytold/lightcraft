@@ -173,10 +173,12 @@ fn gemv(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     let flat_o = wid.y * q(1) + wid.x;
     let k = q(2);
     let n = q(3);
-    let b_idx = flat_o / n;
-    let o = flat_o % n;
+    var b_idx = 0u;
+    var o = 0u;
     var sum = 0.0;
-    if (flat_o < q(0)) {
+    if (flat_o < q(0) && n > 0u) {
+        b_idx = flat_o / n;
+        o = flat_o % n;
         for (var j = lid; j < k; j = j + 256u) {
             let wi = select(j * n + o, o * k + j, q(4) == 1u);
             sum = sum + a[b_idx * k + j] * b[wi];
@@ -184,7 +186,7 @@ fn gemv(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     }
     partial[lid] = sum;
     reduce(lid);
-    if (lid == 0u && flat_o < q(0)) {
+    if (lid == 0u && flat_o < q(0) && n > 0u) {
         dst[flat_o] = bitcast<f32>(q(5)) * partial[0] + c[o];
     }
 }
