@@ -204,7 +204,7 @@
   "{:.1} MB": "{:.1} MB",
   "Running on the processor: {}.": "Vykdoma procesoriuje: {}.",
   "{} · {}. Kept in the library's “denoise” folder; the oldest ones that no photo uses go first when the limit is reached.": "{} · {}. Laikoma bibliotekos aplanke „denoise“; pasiekus ribą pirmiausia pašalinami seniausi failai, kurių nenaudoja nė viena nuotrauka.",
-  "Denoising {name}: {done} of {total} tiles{}": "Mažinamas „{name}“ triukšmas: {done} iš {total} blokų{0:.0}",
+  "Denoising {name}: {done} of {total} tiles{}": "Slopinamas „{name}“ triukšmas: {done} iš {total} blokų{}",
   "{size} GB": "{size} GB",
   "{} of {} from {host}": "{} iš {} iš {host}",
   "{} KB": "{} KB",
