@@ -9,5 +9,5 @@ description = "LightCraft offline reverse geocoding: GPS position to sublocation
 workspace = true
 
 [dependencies]
-miniz_oxide = { workspace = true }
+craft-zip = { workspace = true }
 serde = { workspace = true }
