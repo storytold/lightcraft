@@ -316,6 +316,35 @@ fn lenient_stage<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<
     })
 }
 
+/// Names in `dropped` each picture of `raw` (`icon`, `header`, or a header's `dark` / `light`)
+/// that is there but isn't an SVG document of at most [`MAX_HEADER_BYTES`], so `parse` kept none of it.
+fn dropped_pictures(raw: &Value, dropped: &mut Vec<String>) {
+    let why = "not an SVG document of at most {} KiB";
+    let why = why.replace("{}", &(MAX_HEADER_BYTES / 1024).to_string());
+    if raw.get("icon").is_some_and(|v| !v.is_null() && svg_document(Some(v)).is_none()) {
+        dropped.push(format!("icon: {why}"));
+    }
+    match raw.get("header") {
+        None | Some(Value::Null) => {}
+        Some(h @ Value::String(_)) => {
+            if svg_document(Some(h)).is_none() {
+                dropped.push(format!("header: {why}"));
+            }
+        }
+        Some(h) => {
+            let named = ["dark", "light"].into_iter().filter_map(|k| h.get(k).map(|v| (k, v))).collect::<Vec<_>>();
+            if named.is_empty() {
+                dropped.push("header: neither `dark` nor `light` given".to_string());
+            }
+            for (k, v) in named {
+                if svg_document(Some(v)).is_none() {
+                    dropped.push(format!("header.{k}: {why}"));
+                }
+            }
+        }
+    }
+}
+
 impl Manifest {
     /// Parses and validates manifest JSON.
     pub fn parse(bytes: &[u8]) -> Result<Manifest> {
@@ -330,6 +359,7 @@ impl Manifest {
         man.header = raw.get("header").and_then(Header::parse);
         man.icon = svg_document(raw.get("icon"));
         (man.about, man.dropped) = About::parse(&raw);
+        dropped_pictures(&raw, &mut man.dropped);
         man.sections = param_sections(raw.get("sections"), &man.params);
         man.shortcut = raw
             .get("shortcut")

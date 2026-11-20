@@ -24,8 +24,11 @@ in place of the one the Plug-in Manager draws from the id; the header (`"<svg…
 "<svg…>", "light": "<svg…>"}`) in place of the plug-in's name on its page in the Plug-in Manager,
 and above the title of its command dialogs. The same rules apply: at most 24 KiB each, within the
 manifest's 64 KiB, drawn as untrusted documents (their own shapes only), and a picture that isn't
-an SVG document is dropped. `plugin.list` shows `icon` and `header` as booleans, and
-`plugin.picture {id, picture?, theme?}` gives the SVG text, for plug-ins and pixel filters alike.
+an SVG document is dropped, and named in a plug-in's log and in `plugin.inspectFile`'s `dropped` (`icon: not an SVG
+document of at most 24 KiB`, `header.light: …`). `plugin.list` shows `icon` and `header` as booleans, and
+`plugin.picture {id, picture?, theme?}` gives the SVG text of an installed one, for plug-ins and pixel filters alike.
+`plugin.inspectFile` gives a file's pictures before it is installed, as `manifest.icon` (the SVG text or `null`) and
+`manifest.header` (`{dark, light}`, each the SVG text or `null`; `null` for none).
 The host feature `pictures` names them (a plug-in may require it; one that just looks better with
 them needn't, as an older host ignores them).
 

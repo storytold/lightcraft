@@ -755,3 +755,67 @@ fn the_update_commands_check_ask_and_install() {
     s.execute("plugin.uninstall", &json!({"id": "test.installs.updates.filter"})).unwrap();
     s.execute("plugin.uninstall", &json!({"id": id})).unwrap();
 }
+
+/// `plugin.inspectFile` gives a file's pictures as SVG text (not the booleans `plugin.list` shows),
+/// for a plug-in and a pixel filter alike; one the host can't use is `null` and named in `dropped`.
+#[test]
+fn inspecting_a_file_gives_its_pictures_and_names_the_dropped_ones() {
+    let _turn = turn();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 4'><circle cx='2' cy='2' r='2'/></svg>";
+    let light = svg.replace("circle", "ellipse rx='2' ry='1' ");
+    let huge = format!("<svg>{}</svg>", "a".repeat(lcc_plugins::MAX_PICTURE_BYTES));
+    let pictures = json!({"icon": svg, "header": {"dark": svg, "light": light}});
+    let broken = json!({"icon": huge, "header": {"dark": svg, "light": "png bytes"}});
+    let wasm = lcc_testkit::TempFile::new("lcc-engine-installs-pictures-filter", "filter.wasm");
+    let filter = |extra: &Value| {
+        let mut m = json!({"id": "test.installs.pictures", "name": "P", "version": "1", "kind": "filter", "params": {}});
+        m.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        std::fs::write(&wasm, crate::tests_plugin_filters::module(&m.to_string(), None)).unwrap();
+        Session::with_demo().execute("plugin.inspectFile", &json!({"path": wasm.path()})).unwrap()
+    };
+    let plugin = |extra: &Value| {
+        let mut m = json!({"id": "test.installs.pictures", "name": "P", "version": "1.0.0"});
+        m.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let file = module_file("pictures", &m);
+        Session::with_demo().execute("plugin.inspectFile", &json!({"path": file.path()})).unwrap()
+    };
+    let plugin_info = plugin(&pictures);
+    let filter_info = filter(&pictures);
+    for info in [&plugin_info, &filter_info] {
+        assert_eq!(info["manifest"]["icon"], svg, "{info}");
+        assert_eq!(info["manifest"]["header"], json!({"dark": svg, "light": light}), "{info}");
+        assert_eq!(info["dropped"], json!([]), "{info}");
+    }
+    let (plugin_none, filter_none) = (plugin(&json!({})), filter(&json!({})));
+    for info in [&plugin_none, &filter_none] {
+        assert_eq!(info["manifest"]["icon"], Value::Null, "{info}");
+        assert_eq!(info["manifest"]["header"], Value::Null, "{info}");
+    }
+    // a single picture is the dark one; `null` is "not given"; a header of no use is named
+    let (plugin_one, filter_one) = (plugin(&json!({"header": svg, "icon": null})), filter(&json!({"header": svg, "icon": null})));
+    for info in [&plugin_one, &filter_one] {
+        assert_eq!(info["manifest"]["header"], json!({"dark": svg, "light": null}), "{info}");
+        assert_eq!(info["manifest"]["icon"], Value::Null, "{info}");
+        assert_eq!(info["dropped"], json!([]), "{info}");
+    }
+    let (plugin_null, filter_null) = (plugin(&json!({"header": null})), filter(&json!({"header": null})));
+    for info in [&plugin_null, &filter_null] {
+        assert_eq!(info["manifest"]["header"], Value::Null, "{info}");
+        assert_eq!(info["dropped"], json!([]), "{info}");
+    }
+    for header in [json!({}), json!([svg]), json!({"light": 7})] {
+        let (plugin_odd, filter_odd) = (plugin(&json!({"header": header})), filter(&json!({"header": header})));
+        for info in [&plugin_odd, &filter_odd] {
+            assert_eq!(info["manifest"]["header"], Value::Null, "{header}: {info}");
+            assert_eq!(info["dropped"].as_array().map(Vec::len), Some(1), "{header}: {info}");
+        }
+    }
+    let (plugin_bad, filter_bad) = (plugin(&broken), filter(&broken));
+    for info in [&plugin_bad, &filter_bad] {
+        assert_eq!(info["manifest"]["icon"], Value::Null, "{info}");
+        assert_eq!(info["manifest"]["header"], json!({"dark": svg, "light": null}), "{info}");
+        let why = "not an SVG document of at most 24 KiB";
+        assert_eq!(info["dropped"], json!([format!("icon: {why}"), format!("header.light: {why}")]), "{info}");
+        assert_eq!(info["unknownFields"], json!([]), "{info}");
+    }
+}
