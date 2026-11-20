@@ -6,7 +6,8 @@ name: CI (Windows)
 #
 # Not the full `cargo xtask ci`: on a cold windows-latest runner that is well over an hour, and
 # its wasm, layers, assets and parity steps don't differ by platform. What does is the
-# `cfg(windows)` code (title bar theme, monitor profiles, file handling) and its tests.
+# `cfg(windows)` code (title bar theme, monitor profiles, file handling, memory sizing) and its
+# tests.
 on:
   push:
     branches: [main]
@@ -39,6 +40,7 @@ jobs:
         apps/lightcraft-cli/tests/it/cli.rs
         apps/lightcraft-cli/Cargo.toml
         crates/wincolor/*
+        crates/sysmem/*
         crates/ui-egui/src/theme.rs
         crates/ui-egui/src/panels/left/local.rs
         crates/ui-egui/src/menus/files.rs
@@ -55,6 +57,9 @@ jobs:
         crates/engine/src/tests/import.rs
         crates/engine/Cargo.toml
         crates/ui-egui/Cargo.toml
+        xtask/src/ci.rs
+        xtask/src/ci_report.rs
+        xtask/Cargo.toml
         Cargo.toml
         Cargo.lock
         rust-toolchain.toml
@@ -73,6 +78,6 @@ jobs:
       tools: ""
       timeout-minutes: 90
       windows-command: |
-        pkgs=(-p lightcraft-wincolor -p lightcraft-catalog -p lightcraft-engine -p lightcraft-ui-egui -p lightcraft -p lightcraft-cli)
+        pkgs=(-p lightcraft-wincolor -p lightcraft-sysmem -p lightcraft-catalog -p lightcraft-engine -p lightcraft-ui-egui -p lightcraft -p lightcraft-cli -p xtask)
         cargo clippy "${pkgs[@]}" --all-targets --keep-going -- -D warnings
         cargo test "${pkgs[@]}" --lib --bins --tests --no-fail-fast
