@@ -80,7 +80,7 @@ taken from the catalog again; photos edited in LightCraft keep their edits.
 
 Nothing is ever written to the catalog. Capture One keeps a rollback journal next to the database while it writes:
 a catalog with a journal that holds a transaction (or a write-ahead log) is refused until Capture One has closed it
-cleanly. A catalog Capture One merely has open (a `writelock` file in the package) is read, with a warning that
+cleanly, and so is one whose journal or log is there but can't be read. A catalog Capture One merely has open (a `writelock` file in the package) is read, with a warning that
 changes Capture One hasn't saved yet are not included. A database that changes while it is read is refused.
 
 The database is read with LightCraft's own read-only SQLite page reader. Every value is treated as untrusted: a

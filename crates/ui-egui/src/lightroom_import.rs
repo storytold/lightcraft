@@ -43,7 +43,8 @@ pub struct LightroomTask {
     phase: Phase,
     cancelled: bool,
     guard: TaskGuard,
-    /// The catalog is Capture One's (told by its file name): the task is worded for it.
+    /// The catalog is Capture One's (a package or folder holding its database, or the database
+    /// itself), as the engine tells it: the task is worded for it.
     capture_one: bool,
 }
 
@@ -57,7 +58,7 @@ impl LightroomTask {
         progress: LightroomProgress,
         rx: mpsc::Receiver<Message>,
     ) -> Self {
-        let capture_one = lightcraft_engine::capture_one_catalog::is_database_path(&path);
+        let capture_one = lightcraft_engine::capture_one_catalog::is_catalog(&path);
         let label = match (kind, capture_one) {
             (Kind::Inspect, false) => "Reading Lightroom catalog",
             (Kind::Import, false) => "Importing Lightroom catalog",
@@ -655,6 +656,25 @@ mod tests {
         let (cancel, progress) = (Arc::new(AtomicBool::new(false)), LightroomProgress::default());
         let task = LightroomTask::new(&h.app.session, Kind::Import, "fixture.lrcat".into(), cancel.clone(), progress.clone(), rx);
         (task, tx, cancel, progress)
+    }
+
+    #[test]
+    fn a_capture_one_package_or_folder_is_worded_for_capture_one() {
+        let h = demo();
+        let dir = std::env::temp_dir().join(format!("lightcraft-c1-task-{}", std::process::id()));
+        let package = dir.join("Shoot.cocatalog");
+        let backup = dir.join("2026-11-20 10.00.00");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::create_dir_all(&backup).unwrap();
+        std::fs::write(backup.join("Capture One.cocatalogdb"), b"").unwrap();
+        for (path, capture_one) in
+            [(package.clone(), true), (backup.clone(), true), (package.join("Shoot.cocatalogdb"), true), ("fixture.lrcat".into(), false)]
+        {
+            let (_, rx) = mpsc::channel();
+            let task = LightroomTask::new(&h.app.session, Kind::Import, path.clone(), Arc::default(), LightroomProgress::default(), rx);
+            assert_eq!(task.capture_one, capture_one, "{}", path.display());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn demo() -> crate::headless::Headless {

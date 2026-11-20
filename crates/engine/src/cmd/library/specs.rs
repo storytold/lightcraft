@@ -33,13 +33,14 @@ fn next_seed(prev: u64, now: &str) -> u64 {
 /// program ([`lightcraft_catalog::Meta::label_text`]) goes with it: the choice made here replaces
 /// it, in the same undo step, so undo brings both back.
 fn set_label(s: &mut crate::Session, p: &Value, label: Option<ColorLabel>) -> Result<Value> {
-    let kept: std::collections::HashMap<PhotoId, lightcraft_catalog::Meta> = s
-        .catalog
-        .photos()
-        .filter(|photo| !photo.meta.label_text.is_empty())
-        .map(|photo| (photo.id, lightcraft_catalog::Meta { label_text: String::new(), ..photo.meta.clone() }))
-        .collect();
     cull(s, p, |s| {
+        // only the photos being labelled, and of those only the ones with a kept colour
+        let kept: std::collections::HashMap<PhotoId, lightcraft_catalog::Meta> = s
+            .targets(p)?
+            .into_iter()
+            .filter_map(|id| s.catalog.photo(id).filter(|photo| !photo.meta.label_text.is_empty()))
+            .map(|photo| (photo.id, lightcraft_catalog::Meta { label_text: String::new(), ..photo.meta.clone() }))
+            .collect();
         for_targets(s, p, "Set Color Label", |id| {
             Some(match kept.get(&id) {
                 Some(meta) => Op::Batch { ops: vec![Op::SetLabel { id, label }, Op::SetMeta { id, meta: Box::new(meta.clone()) }] },
