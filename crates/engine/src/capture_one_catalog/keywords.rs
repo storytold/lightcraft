@@ -7,6 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::notice::{self, Notice};
 use super::tables::Db;
 use super::{Keyword, ReadError};
 
@@ -64,7 +65,7 @@ fn entry_path(entry: &str) -> Option<(Option<u64>, String)> {
 /// catalog's order (`ZLEFT`, a nested set), parents before children. Rows of another entity
 /// (`Synonym` is one) are not keywords; how Capture One stores synonyms has not been observed, so
 /// they are left out. A keyword whose parents loop is left out with a warning.
-pub(super) fn list(db: &Db, warnings: &mut Vec<String>) -> Result<Vec<Keyword>, ReadError> {
+pub(super) fn list(db: &Db, warnings: &mut Vec<Notice>) -> Result<Vec<Keyword>, ReadError> {
     let table = db.optional("ZKEYWORD", warnings)?;
     let entities = db.optional("ZENTITIES", warnings)?;
     let keyword_entity = entities.rows().find(|r| r.text("ZNAME") == "Keyword").and_then(|r| r.id("Z_ENT"));
@@ -103,7 +104,7 @@ pub(super) fn list(db: &Db, warnings: &mut Vec<String>) -> Result<Vec<Keyword>, 
         }
     }
     if looped > 0 {
-        warnings.push(format!("{looped} keyword(s) are nested in a loop and were left out of the keyword list"));
+        warnings.push(Notice::new(notice::KEYWORD_LOOPS).count("n", looped));
     }
     Ok(out)
 }

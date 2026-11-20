@@ -502,6 +502,27 @@ fn problem_line_in(language: Locale, problem: &lightcraft_catalog::rules::Proble
     format!("#{} {}", at.join("."), problem_text_in(language, problem))
 }
 
+/// A message of the Capture One import (one of its warnings, given as data) in the current
+/// language: the message and every value that is itself a message are translated; names, paths
+/// and counts are shown as they are.
+pub fn capture_one_notice(notice: &lightcraft_engine::capture_one_catalog::Notice) -> String {
+    capture_one_notice_in(language(), notice)
+}
+
+fn capture_one_notice_in(language: Locale, notice: &lightcraft_engine::capture_one_catalog::Notice) -> String {
+    use lightcraft_engine::capture_one_catalog::notice::{Part, fill};
+    // Japanese and Chinese lists take the ideographic comma
+    let comma = if matches!(language.script(), "Jpan" | "Hans" | "Hant") { "、" } else { ", " };
+    fill(tr_in(language, &notice.message), |name| {
+        Some(match notice.values.get(name)? {
+            Part::Count(n) => n.to_string(),
+            Part::Text(text) => text.clone(),
+            Part::Message(inner) => capture_one_notice_in(language, inner),
+            Part::Messages(list) => list.iter().map(|inner| capture_one_notice_in(language, inner)).collect::<Vec<_>>().join(comma),
+        })
+    })
+}
+
 /// What people read for smart-album choice `id` of `field` ("Gemeinfrei" for `publicDomain` in
 /// German); an id the field doesn't know, as written.
 pub fn choice_text<'a>(field: &str, id: &'a str) -> &'a str {

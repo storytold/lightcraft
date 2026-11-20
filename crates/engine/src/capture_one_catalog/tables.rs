@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use super::notice::{self, Notice};
 use super::{ReadError, VersionInfo};
 use crate::lightroom_sqlite::{Database, FileSource, LiveTable, Record, Value};
 
@@ -80,10 +81,10 @@ impl Db {
 
     /// [`Db::table`] for a table the import can do without: a table that can't be read is
     /// reported and read as empty.
-    pub(super) fn optional(&self, name: &str, warnings: &mut Vec<String>) -> Result<Table, ReadError> {
+    pub(super) fn optional(&self, name: &str, warnings: &mut Vec<Notice>) -> Result<Table, ReadError> {
         match self.table(name) {
             Err(ReadError::Invalid(why)) => {
-                warnings.push(format!("skipping Capture One table {why}"));
+                warnings.push(Notice::new(notice::TABLE_LEFT_OUT).text_value("why", why));
                 Ok(Table { columns: HashMap::new(), rows: Vec::new() })
             }
             other => other,

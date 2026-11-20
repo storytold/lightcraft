@@ -37,6 +37,7 @@ fn sample() -> CatalogImport {
         ],
         collection_content: Vec::new(),
         warnings: Vec::new(),
+        notices: Vec::new(),
         skipped: Vec::new(),
         keyword_list: Vec::new(),
     }

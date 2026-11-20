@@ -379,6 +379,7 @@ mod tests {
             members: Vec::new(),
             collection_content: Vec::new(),
             warnings: Vec::new(),
+            notices: Vec::new(),
             skipped: Vec::new(),
             keyword_list: Vec::new(),
         }
@@ -427,6 +428,7 @@ mod tests {
                 members: Vec::new(),
                 collection_content: Vec::new(),
                 warnings: Vec::new(),
+                notices: Vec::new(),
                 skipped: Vec::new(),
                 keyword_list: Vec::new(),
             },

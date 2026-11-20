@@ -43,9 +43,9 @@ fn resolved(stored: String, database: &Path, managed: bool) -> Located {
 /// The original `name` in the folder `location` names, resolved with the catalog's database as
 /// the document. `location` is `None` when the image's `ZPATHLOCATION` row is gone.
 pub(super) fn original(location: Option<Row<'_>>, name: &str, database: &Path) -> Located {
-    let Some(location) = location else { return refused(name.to_string(), "the catalog has no folder for it") };
+    let Some(location) = location else { return refused(name.to_string(), super::notice::NO_FOLDER) };
     if name.is_empty() || is_absolute_part(name) {
-        return refused(name.to_string(), "its file name is empty or an absolute path");
+        return refused(name.to_string(), super::notice::BAD_FILE_NAME);
     }
     let below = location.text("ZRELATIVEPATH");
     if location.flag("ZISRELATIVE") {
@@ -62,14 +62,14 @@ pub(super) fn original(location: Option<Row<'_>>, name: &str, database: &Path) -
         let path = under_root(&elsewhere.replace('\\', "/"), below, name, false);
         return Located { path, original: Original::NotHere, managed: false };
     }
-    refused(name.to_string(), "the catalog records no folder for it")
+    refused(name.to_string(), super::notice::NO_FOLDER_RECORDED)
 }
 
 /// A file in a folder recorded relative to the catalog. It is managed when the folder is inside
 /// the catalog's (no `..`), as `./Originals` is.
 fn in_catalog(below: &str, name: &str, database: &Path) -> Located {
     if is_absolute_part(below) {
-        return refused(name.to_string(), "its folder is an absolute path where one relative to the catalog is expected");
+        return refused(name.to_string(), super::notice::ABSOLUTE_FOLDER);
     }
     let mut parts = relative_parts(below);
     let managed = !parts.contains(&"..");

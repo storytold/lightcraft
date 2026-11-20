@@ -504,7 +504,7 @@ fn photos_come_with_their_originals_variants_and_metadata() {
     assert_eq!(catalog.document_uuid.as_deref(), Some("c1-document-test"));
     assert_eq!(catalog.trashed, 1);
     assert!(!catalog.in_use);
-    assert_eq!(catalog.warnings, Vec::<String>::new());
+    assert_eq!(texts(&catalog.warnings), Vec::<String>::new());
     let names: Vec<_> = catalog.photos.iter().map(|p| (p.file_name.as_str(), p.variant_id, p.variant_index)).collect();
     assert_eq!(names, [("managed.RAF", Some(1), 0), ("managed.RAF", Some(8), 1), ("referenced.jpg", Some(2), 0), ("elsewhere.ARW", Some(3), 0)]);
 
@@ -583,7 +583,7 @@ fn an_image_without_a_variant_is_still_a_photo_and_a_stray_variant_is_reported()
     let catalog = read(&scratch.catalog(&tables)).unwrap();
     let photos: Vec<_> = catalog.photos.iter().map(|p| (p.image_id, p.variant_id, p.rating)).collect();
     assert_eq!(photos, [(1, None, 0), (2, Some(2), 0), (3, None, 0)]);
-    assert_eq!(catalog.warnings, ["1 variant(s) belong to no image in the catalog and were left out"]);
+    assert_eq!(texts(&catalog.warnings), ["1 variant(s) belong to no image in the catalog and were left out"]);
     // an album still finds the image
     assert_eq!(catalog.collections.iter().find(|c| c.name == "First album").unwrap().photos, [0, 1]);
 }
@@ -599,7 +599,7 @@ fn a_reference_with_a_fraction_points_at_no_row() {
     let catalog = read(&scratch.catalog(&tables)).unwrap();
     let photos: Vec<_> = catalog.photos.iter().map(|p| (p.image_id, p.variant_id)).collect();
     assert_eq!(photos, [(1, None), (2, Some(2)), (3, None)]);
-    assert_eq!(catalog.warnings, ["1 variant(s) belong to no image in the catalog and were left out"]);
+    assert_eq!(texts(&catalog.warnings), ["1 variant(s) belong to no image in the catalog and were left out"]);
 }
 
 #[test]
@@ -705,7 +705,7 @@ fn a_catalog_capture_one_is_writing_is_refused_and_an_open_one_is_reported() {
     std::fs::write(package.join("writelock"), "someone\n0123").unwrap();
     let catalog = read(&package).unwrap();
     assert!(catalog.in_use);
-    assert_eq!(catalog.warnings, ["Capture One has this catalog open; changes it has not saved yet are not included"]);
+    assert_eq!(texts(&catalog.warnings), ["Capture One has this catalog open; changes it has not saved yet are not included"]);
 }
 
 #[test]
@@ -835,7 +835,7 @@ fn collections_nested_in_a_loop_or_under_a_missing_parent_are_handled() {
     let listed: Vec<_> = catalog.collections.iter().map(|c| (c.name.as_str(), c.parent)).collect();
     assert_eq!(listed, [("Orphan", None), ("Below the orphan's sibling", Some(15)), ("Lost group", None), ("Top", None), ("No parent", None)]);
     assert_eq!(
-        catalog.warnings,
+        texts(&catalog.warnings),
         [
             "2 collection(s) are inside a collection the catalog no longer has; they come in at the top level",
             "3 collection(s) are nested in a loop and were left out",
@@ -1003,7 +1003,7 @@ fn an_unknown_colour_tag_and_capture_ones_no_date_read_as_none() {
     let first = &catalog.photos[0];
     assert_eq!((first.captured.clone(), first.imported.clone(), first.exposure_bias, first.gps), (None, None, None, None));
     assert_eq!((first.color_tag, first.rating), (ColorTag::None, 5));
-    assert_eq!(catalog.warnings, ["1 photo(s) have a colour tag this version doesn't know; imported without one"]);
+    assert_eq!(texts(&catalog.warnings), ["1 photo(s) have a colour tag this version doesn't know; imported without one"]);
 }
 
 // ---- into the library
@@ -1163,7 +1163,7 @@ fn the_keyword_list_is_read_with_parents_first_and_without_loops_or_synonyms() {
     let list: Vec<_> = catalog.keywords.iter().map(|k| k.path.as_str()).collect();
     assert_eq!(list, ["a b"], "a `|` in a name is not a level; an empty name is no keyword");
     assert!(
-        catalog.warnings.iter().any(|w| w == "2 keyword(s) are nested in a loop and were left out of the keyword list"),
+        catalog.warnings.iter().any(|w| w.text() == "2 keyword(s) are nested in a loop and were left out of the keyword list"),
         "{:?}",
         catalog.warnings
     );
@@ -1323,6 +1323,21 @@ fn a_real_catalog_reads() {
 
 // ---- smart albums
 
+/// Warnings in English, to compare.
+fn texts(warnings: &[Notice]) -> Vec<String> {
+    warnings.iter().map(Notice::text).collect()
+}
+
+/// A smart album's outcome in words: the photos and the fields that kept it from being a smart
+/// album, or the reason it was left out.
+fn told(outcome: smart::Outcome) -> String {
+    match outcome {
+        smart::Outcome::Smart(_) => "smart".into(),
+        smart::Outcome::Selected(photos, fields) => format!("{photos:?}: {}", texts(&fields).join(", ")),
+        smart::Outcome::Skipped(why) => why.text(),
+    }
+}
+
 fn smart_outcome(all: bool, conditions: &[(&str, i64, &str)], photos: &[CatalogPhoto]) -> smart::Outcome {
     smart::outcome(&smart::parse(&rule(all, conditions)).unwrap(), photos)
 }
@@ -1391,16 +1406,13 @@ fn a_smart_album_lightcraft_has_no_rule_for_holds_the_photos_it_selects() {
     let photos = [photo(5, 30_000_000, "Maker"), photo(5, 1_000, "Maker"), photo(1, 40_000_000, "Other")];
     // file size has no LightCraft rule: the album keeps what the rule selects
     let outcome = smart_outcome(true, &[("IB_S_FILE_SIZE", 2, "20000000"), ("IB_I_BASIC_RATING", 0, "5")], &photos);
-    assert_eq!(outcome, smart::Outcome::Selected(vec![0], vec!["“FILE_SIZE”".into()]));
+    assert_eq!(told(outcome), "[0]: File Size");
     // "is" on the camera's make alone has none either (LightCraft's camera is make and model)
-    assert_eq!(smart_outcome(false, &[("IB_S_CAMERA_MAKE", 16, "other")], &photos), smart::Outcome::Selected(vec![2], vec!["“CAMERA_MAKE”".into()]));
+    assert_eq!(told(smart_outcome(false, &[("IB_S_CAMERA_MAKE", 16, "other")], &photos)), "[2]: Camera");
     // another IPTC field, as the catalog keeps it
     let mut contact = CatalogPhoto::default();
     contact.iptc.other.insert("CONTACT_CITY".into(), "Lakeside".into());
-    assert_eq!(
-        smart_outcome(true, &[("IB_S_CONTACT_CITY", 9, "lake")], &[contact]),
-        smart::Outcome::Selected(vec![0], vec!["“CONTACT_CITY”".into()])
-    );
+    assert_eq!(told(smart_outcome(true, &[("IB_S_CONTACT_CITY", 9, "lake")], &[contact])), "[0]: “CONTACT_CITY”");
     // the image's other camera and exposure columns, as numbers where they are (a flash
     // compensation of -2 EV is written -512/256), else as text
     let mut flash = CatalogPhoto { annotated: true, ..Default::default() };
@@ -1408,23 +1420,25 @@ fn a_smart_album_lightcraft_has_no_rule_for_holds_the_photos_it_selects() {
         ("EXP_FLASHCOMPENSATION".into(), "-512/256".into()),
         ("CAMERA_OWNER".into(), "Someone".into()),
         ("EXP_FLASHMODE".into(), "16".into()),
+        ("EXP_DRIVEMODE".into(), String::new()),
     ]);
     for (key, op, value, name) in [
-        ("IB_S_EXP_FLASHCOMPENSATION", 0, "-2", "EXP_FLASHCOMPENSATION"),
-        ("IB_S_CAMERA_OWNER", 9, "some", "CAMERA_OWNER"),
-        ("IB_I_EXP_FLASHMODE", 1, "48", "EXP_FLASHMODE"),
-        ("ANNOTATED", 12, "1", "ANNOTATED"),
+        ("IB_S_EXP_FLASHCOMPENSATION", 0, "-2", "Flash Compensation"),
+        ("IB_S_CAMERA_OWNER", 9, "some", "Camera Owner"),
+        ("IB_I_EXP_FLASHMODE", 1, "48", "Flash Mode"),
+        ("ANNOTATED", 12, "1", "Annotation"),
+        ("IB_S_EXP_DRIVEMODE", 0, "", "“EXP_DRIVEMODE”"),
     ] {
         let outcome = smart_outcome(true, &[(key, op, value)], std::slice::from_ref(&flash));
-        assert_eq!(outcome, smart::Outcome::Selected(vec![0], vec![format!("“{name}”")]), "{key}");
+        assert_eq!(told(outcome), format!("[0]: {name}"), "{key}");
     }
     // what the catalog import doesn't read is named
     assert_eq!(
-        smart_outcome(true, &[("commentsKeys", 8, "x"), ("IB_S_CAMERA_OWNER", 17, "x")], &photos),
-        smart::Outcome::Skipped("its rule tests “commentsKeys”, “CAMERA_OWNER”, which the catalog import can't read".into())
+        told(smart_outcome(true, &[("commentsKeys", 8, "x"), ("IB_S_CAMERA_OWNER", 17, "x")], &photos)),
+        "its rule tests Live Comments, Camera Owner, which the catalog import can't read"
     );
     let off = rule(true, &[("IB_I_ISO", 0, "100")]).replace("Enabled=\"YES\"", "Enabled=\"NO\"");
-    assert_eq!(smart::outcome(&smart::parse(&off).unwrap(), &photos), smart::Outcome::Skipped("its rule has no condition switched on".into()));
+    assert_eq!(told(smart::outcome(&smart::parse(&off).unwrap(), &photos)), "its rule has no condition switched on");
 }
 
 #[test]
@@ -1485,14 +1499,8 @@ fn a_keyword_rule_that_depends_on_case_holds_the_photos_it_selects() {
     assert!(matches!(outcome, smart::Outcome::Smart(_)), "{outcome:?}");
     // "nature" beside "Nature": Capture One finds only the spelling asked for, LightCraft both
     let both = [photo("Nature|Lake"), photo("nature"), photo("City")];
-    assert_eq!(
-        smart_outcome(true, &[("IB_S_CONTENT_KEYWORDS", 0, "nature")], &both),
-        smart::Outcome::Selected(vec![1], vec!["keywords told apart by upper and lower case".into()])
-    );
-    assert_eq!(
-        smart_outcome(true, &[("IB_S_CONTENT_KEYWORDS", 1, "Nature")], &both),
-        smart::Outcome::Selected(vec![1, 2], vec!["keywords told apart by upper and lower case".into()])
-    );
+    assert_eq!(told(smart_outcome(true, &[("IB_S_CONTENT_KEYWORDS", 0, "nature")], &both)), "[1]: Keywords told apart by upper and lower case");
+    assert_eq!(told(smart_outcome(true, &[("IB_S_CONTENT_KEYWORDS", 1, "Nature")], &both)), "[1, 2]: Keywords told apart by upper and lower case");
     // "contains" doesn't tell case apart in either
     assert!(matches!(smart_outcome(true, &[("IB_S_CONTENT_KEYWORDS", 6, "nature")], &both), smart::Outcome::Smart(_)));
 }
@@ -1565,11 +1573,17 @@ fn smart_albums_come_in_as_smart_albums_plain_albums_or_warnings() {
     let report = s.execute("library.importLightroom", &serde_json::json!({ "path": package })).unwrap();
     let warnings: Vec<&str> = report["warnings"].as_array().unwrap().iter().filter_map(|w| w.as_str()).collect();
     for expected in [
-        "smart album “Big files”: imported as an album with the 2 photo(s) its rule selects now; LightCraft has no smart album rule for “FILE_SIZE”",
-        "smart album “Commented”: not imported; its rule tests “commentsKeys”, which the catalog import can't read",
+        "smart album “Big files”: imported as an album with the 2 photo(s) its rule selects now; LightCraft has no smart album rule for File Size",
+        "smart album “Commented”: not imported; its rule tests Live Comments, which the catalog import can't read",
     ] {
         assert!(warnings.contains(&expected), "{warnings:#?}");
     }
+    // and as data, for the app to say in its own language: every warning the reader gave
+    let notices: Vec<Notice> = serde_json::from_value(report["notices"].clone()).unwrap();
+    assert!(notices.iter().all(|n| warnings.contains(&n.text().as_str())), "{notices:#?}");
+    let big = notices.iter().find(|n| n.values.get("name") == Some(&notice::Part::Text("Big files".into()))).unwrap();
+    assert_eq!(big.message, notice::SMART_AS_ALBUM);
+    assert_eq!(big.values["fields"], notice::Part::Messages(vec![Notice::new(notice::FILE_SIZE)]));
     assert!(warnings.iter().any(|w| w.starts_with("smart album “Broken”: not imported; its rule can't be read")), "{warnings:#?}");
     // the managed raw (23 MB) and its variant
     let big = album(&s, "Big files");

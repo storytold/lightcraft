@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, HashSet};
 use lightcraft_catalog::{Match, Rule as LcRule, RuleSet};
 use serde_json::{Value, json};
 
+use super::notice::{self, Notice};
 use super::{CatalogPhoto, ColorTag};
 
 /// Longest rule read; Capture One's own are a few hundred bytes per condition.
@@ -51,45 +52,45 @@ pub(super) enum Outcome {
     Smart(RuleSet),
     /// A plain album with the photos (indexes into the catalog's) the rule selects now, and the
     /// conditions that kept it from being a smart album.
-    Selected(Vec<usize>, Vec<String>),
+    Selected(Vec<usize>, Vec<Notice>),
     /// Neither; the reason.
-    Skipped(String),
+    Skipped(Notice),
 }
 
 /// Read a rule. An error says why it can't be.
-pub(super) fn parse(xml: &str) -> Result<Group, String> {
+pub(super) fn parse(xml: &str) -> Result<Group, Notice> {
     if xml.len() > MAX_RULE_BYTES {
-        return Err(format!("its rule is longer than {} KB", MAX_RULE_BYTES / 1024));
+        return Err(Notice::new(notice::RULE_TOO_LONG).count("kb", MAX_RULE_BYTES / 1024));
     }
     let limits = craft_xml::Limits { max_depth: MAX_DEPTH.saturating_mul(2), max_nodes: MAX_NODES, ..craft_xml::Limits::DEFAULT };
     let options = craft_xml::Options { strict: true, drop_blank_text: true, ..craft_xml::Options::default() }.with_limits(limits);
-    let root = options.parse(xml.as_bytes()).map_err(|e| format!("its rule can't be read ({e})"))?;
+    let root = options.parse(xml.as_bytes()).map_err(|e| Notice::new(notice::RULE_UNREADABLE).text_value("error", e.to_string()))?;
     group(&root, 0)
 }
 
-fn group(el: &craft_xml::El, depth: usize) -> Result<Group, String> {
+fn group(el: &craft_xml::El, depth: usize) -> Result<Group, Notice> {
     if el.local() != "MatchOperator" || depth > MAX_DEPTH {
-        return Err("its rule has a form this version doesn't know".into());
+        return Err(Notice::new(notice::RULE_FORM));
     }
     let all = match el.attr("Kind").map(str::trim) {
         Some(kind) if kind.eq_ignore_ascii_case("AND") => true,
         Some(kind) if kind.eq_ignore_ascii_case("OR") => false,
-        _ => return Err("its rule joins conditions in a way this version doesn't know".into()),
+        _ => return Err(Notice::new(notice::RULE_JOIN)),
     };
     let mut items = Vec::new();
     for child in el.elements() {
         match child.local() {
             "MatchOperator" => items.push(Item::Group(group(child, depth.saturating_add(1))?)),
             "Condition" => items.push(Item::Condition(condition(child)?)),
-            _ => return Err("its rule has a form this version doesn't know".into()),
+            _ => return Err(Notice::new(notice::RULE_FORM)),
         }
     }
     Ok(Group { all, items })
 }
 
-fn condition(el: &craft_xml::El) -> Result<Condition, String> {
+fn condition(el: &craft_xml::El) -> Result<Condition, Notice> {
     let text = |name: &str| el.child_text(name).map(|t| t.trim().to_string()).unwrap_or_default();
-    let operator = text("Operator").parse::<i64>().map_err(|_| "a condition of its rule has no operator".to_string())?;
+    let operator = text("Operator").parse::<i64>().map_err(|_| Notice::new(notice::RULE_NO_OPERATOR))?;
     Ok(Condition {
         enabled: !el.attr("Enabled").is_some_and(|e| e.trim().eq_ignore_ascii_case("NO")),
         key: text("Key"),
@@ -102,7 +103,7 @@ fn condition(el: &craft_xml::El) -> Result<Condition, String> {
 /// LightCraft field, else the photos it selects when every condition can be told from the catalog.
 pub(super) fn outcome(rule: &Group, photos: &[CatalogPhoto]) -> Outcome {
     if !has_enabled(rule) {
-        return Outcome::Skipped("its rule has no condition switched on".into());
+        return Outcome::Skipped(Notice::new(notice::RULE_ALL_OFF));
     }
     // Capture One's "is" on keywords tells upper and lower case apart; LightCraft's doesn't
     let spellings: HashSet<&str> =
@@ -116,7 +117,7 @@ pub(super) fn outcome(rule: &Group, photos: &[CatalogPhoto]) -> Outcome {
         Some(selected) => Outcome::Selected(selected, missing),
         None => {
             let sample = photos.first().cloned().unwrap_or_default();
-            Outcome::Skipped(format!("its rule tests {}, which the catalog import can't read", unknown(rule, &sample).join(", ")))
+            Outcome::Skipped(Notice::new(notice::RULE_NOT_READ).notices("fields", unknown(rule, &sample)))
         }
     }
 }
@@ -144,7 +145,7 @@ fn has_enabled(group: &Group) -> bool {
 
 /// The rule as LightCraft rules; the names of the conditions that have no LightCraft field go to
 /// `missing` (the rules are then incomplete).
-fn to_rules(group: &Group, spellings: &HashSet<&str>, missing: &mut Vec<String>) -> RuleSet {
+fn to_rules(group: &Group, spellings: &HashSet<&str>, missing: &mut Vec<Notice>) -> RuleSet {
     let mut rules = Vec::new();
     for item in &group.items {
         match item {
@@ -166,7 +167,7 @@ fn to_rules(group: &Group, spellings: &HashSet<&str>, missing: &mut Vec<String>)
             Item::Condition(c) => match to_rule(c, spellings) {
                 Some(rule) => rules.push(rule),
                 None => {
-                    let name = if same_but_case(c, spellings) { KEYWORDS_BY_CASE.to_string() } else { name(c) };
+                    let name = if same_but_case(c, spellings) { Notice::new(notice::KEYWORDS_BY_CASE) } else { name(c) };
                     if !missing.contains(&name) {
                         missing.push(name);
                     }
@@ -215,12 +216,9 @@ fn to_rule(c: &Condition, spellings: &HashSet<&str>) -> Option<LcRule> {
                 _ => None,
             }
         }
-        Kind::Size | Kind::Stored => None,
+        Kind::Size | Kind::Stored | Kind::Unread => None,
     }
 }
-
-/// How a keyword "is" condition that LightCraft would match differently is named.
-const KEYWORDS_BY_CASE: &str = "keywords told apart by upper and lower case";
 
 /// A keyword "is" / "is not" condition whose keyword the catalog also has in another case
 /// ("Nature" for "nature"): Capture One compares case by case, LightCraft doesn't, so the two would
@@ -316,21 +314,36 @@ fn label_rule(operator: i64, value: &str) -> Option<LcRule> {
     Some(field("label", if negated { "isNot" } else { "is" }, json!(label)))
 }
 
-/// How a condition is named in a warning: its field as Capture One's key says it.
-fn name(c: &Condition) -> String {
+/// How a condition is named in a warning: by its field's name, LightCraft's where it has the
+/// field, else as Capture One's key says it.
+fn name(c: &Condition) -> Notice {
+    let known = KEYS.iter().find(|k| k.key == c.key);
+    if let Some(label) = known.and_then(|k| k.label.or_else(|| k.lightcraft.and_then(lightcraft_catalog::rules::field_label))) {
+        return Notice::new(label);
+    }
     let key = c.key.trim_start_matches("IB_");
     let key = key.split_once('_').filter(|(kind, _)| matches!(*kind, "S" | "I" | "F")).map_or(key, |(_, rest)| rest);
-    let key = key.trim_start_matches('_');
-    if key.is_empty() { "an unnamed field".into() } else { format!("“{key}”") }
+    if let Some((_, label)) = STORED_LABELS.iter().find(|(column, _)| *column == key) {
+        return Notice::new(label);
+    }
+    Notice::new(notice::FIELD_KEY).text_value("key", key.trim_start_matches('_'))
 }
 
-fn unknown(group: &Group, photo: &CatalogPhoto) -> Vec<String> {
+/// The LightCraft field names a condition can be named by ([`name`]).
+pub(super) fn lightcraft_labels() -> Vec<&'static str> {
+    let mut out: Vec<&'static str> =
+        KEYS.iter().filter(|k| k.label.is_none()).filter_map(|k| k.lightcraft.and_then(lightcraft_catalog::rules::field_label)).collect();
+    out.dedup();
+    out
+}
+
+fn unknown(group: &Group, photo: &CatalogPhoto) -> Vec<Notice> {
     let mut out = Vec::new();
     collect_unknown(group, photo, &mut out);
     out
 }
 
-fn collect_unknown(group: &Group, photo: &CatalogPhoto, out: &mut Vec<String>) {
+fn collect_unknown(group: &Group, photo: &CatalogPhoto, out: &mut Vec<Notice>) {
     for item in &group.items {
         match item {
             Item::Group(g) => collect_unknown(g, photo, out),
@@ -371,6 +384,7 @@ fn matches_condition(c: &Condition, photo: &CatalogPhoto) -> Option<bool> {
     match kind {
         Kind::Text => text_matches(c.operator, &text_of(&c.key, photo), &c.criterion),
         Kind::Stored => stored_matches(c, photo),
+        Kind::Unread => None,
         Kind::Keywords => keywords_match(c.operator, &photo.keywords, &c.criterion),
         Kind::Number => {
             let want: f64 = c.criterion.parse().ok().filter(|n: &f64| n.is_finite())?;
@@ -587,6 +601,8 @@ enum Kind {
     Size,
     /// Not in the table: an IPTC text field the catalog keeps (`IB_S_<column>`), else unknown.
     Stored,
+    /// Known, but not read by the catalog import.
+    Unread,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -601,11 +617,22 @@ struct Key {
     /// The LightCraft rule field, when there is one.
     lightcraft: Option<&'static str>,
     kind: Kind,
+    /// How a warning names a field LightCraft has no rule for.
+    label: Option<&'static str>,
 }
 
 const fn key(key: &'static str, lightcraft: Option<&'static str>, kind: Kind) -> Key {
-    Key { key, lightcraft, kind }
+    Key { key, lightcraft, kind, label: None }
 }
+
+const fn own(key: &'static str, kind: Kind, label: &'static str) -> Key {
+    Key { key, lightcraft: None, kind, label: Some(label) }
+}
+
+/// Names for the image's columns a rule can test that have no LightCraft field, seen in Capture
+/// One's dialog; others go by their key.
+const STORED_LABELS: &[(&str, &str)] =
+    &[("EXP_FLASHMODE", notice::FLASH_MODE), ("EXP_FLASHCOMPENSATION", notice::FLASH_COMPENSATION), ("CAMERA_OWNER", notice::CAMERA_OWNER)];
 
 /// Whether a smart album's rule (as the catalog stores it) has a condition on orientation, which
 /// needs [`CatalogPhoto::turned`].
@@ -634,11 +661,11 @@ const KEYS: &[Key] = &[
     key("orientation", Some("aspect"), Kind::Aspect),
     key("isGeoTagged", Some("hasGps"), Kind::Bool),
     // nothing is edited right after the import: Capture One's adjustments decide
-    key("isModified", None, Kind::Bool),
-    key("ANNOTATED", None, Kind::Bool),
-    key("IB_S_FILE_SIZE", None, Kind::Size),
-    key("IB_I_WIDTH", None, Kind::Size),
-    key("IB_I_HEIGHT", None, Kind::Size),
+    own("isModified", Kind::Bool, notice::ADJUSTED_FIELD),
+    own("ANNOTATED", Kind::Bool, notice::ANNOTATION),
+    own("IB_S_FILE_SIZE", Kind::Size, notice::FILE_SIZE),
+    own("IB_I_WIDTH", Kind::Size, notice::WIDTH),
+    own("IB_I_HEIGHT", Kind::Size, notice::HEIGHT),
     key("IB_S_CAMERA_SERIAL", Some("cameraSerial"), Kind::Text),
     key("IB_S_CAMERA_LENS", Some("lens"), Kind::Text),
     key("IB_S_CAMERA_MAKE", Some("camera"), Kind::Text),
@@ -656,9 +683,11 @@ const KEYS: &[Key] = &[
     key("IB_S_IMAGE_CITY", Some("city"), Kind::Text),
     key("IB_S_IMAGE_STATE", Some("state"), Kind::Text),
     key("IB_S_IMAGE_COUNTRY", Some("country"), Kind::Text),
-    key("IB_S_CONTENT_HEADLINE", None, Kind::Text),
-    key("IB_S_STATUS_USAGETERMS", None, Kind::Text),
-    key("IB_S_IMAGE_ISOCOUNTRYCODE", None, Kind::Text),
+    own("IB_S_CONTENT_HEADLINE", Kind::Text, notice::HEADLINE),
+    own("IB_S_STATUS_USAGETERMS", Kind::Text, notice::USAGE_TERMS),
+    own("IB_S_IMAGE_ISOCOUNTRYCODE", Kind::Text, notice::ISO_COUNTRY_CODE),
+    // Live Comments: not in the catalog's tables the import reads
+    own("commentsKeys", Kind::Unread, notice::LIVE_COMMENTS),
 ];
 
 /// The rule's conditions as the recovery archive keeps them.

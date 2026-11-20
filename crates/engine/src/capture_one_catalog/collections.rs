@@ -8,6 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::notice::{self, Notice};
 use super::photos::Read;
 use super::tables::{Db, Row};
 use super::{Collection, CollectionKind, ReadError};
@@ -41,7 +42,7 @@ struct Tree<'a> {
     roles: HashMap<i64, Role>,
 }
 
-pub(super) fn read(db: &Db, photos: &Read, warnings: &mut Vec<String>) -> Result<Vec<Collection>, ReadError> {
+pub(super) fn read(db: &Db, photos: &Read, warnings: &mut Vec<Notice>) -> Result<Vec<Collection>, ReadError> {
     let table = db.optional("ZCOLLECTION", warnings)?;
     let entities = db.optional("ZENTITIES", warnings)?;
     let documents = db.optional("ZDOCUMENTCONTENT", warnings)?;
@@ -95,10 +96,10 @@ pub(super) fn read(db: &Db, photos: &Read, warnings: &mut Vec<String>) -> Result
         });
     }
     if orphans > 0 {
-        warnings.push(format!("{orphans} collection(s) are inside a collection the catalog no longer has; they come in at the top level"));
+        warnings.push(Notice::new(notice::COLLECTION_ORPHANS).count("n", orphans));
     }
     if loops > 0 {
-        warnings.push(format!("{loops} collection(s) are nested in a loop and were left out"));
+        warnings.push(Notice::new(notice::COLLECTION_LOOPS).count("n", loops));
     }
     members(db, photos, &mut out, warnings)?;
     Ok(out)
@@ -140,7 +141,7 @@ impl Tree<'_> {
 /// Fill the albums' photos: `ZIMAGEINCOLLECTION` lists an image (its first variant),
 /// `ZVARIANTINCOLLECTION` a further variant. Capture One repeats an album's photos on the
 /// project around it, so only albums take photos.
-fn members(db: &Db, photos: &Read, collections: &mut [Collection], warnings: &mut Vec<String>) -> Result<(), ReadError> {
+fn members(db: &Db, photos: &Read, collections: &mut [Collection], warnings: &mut Vec<Notice>) -> Result<(), ReadError> {
     let albums: HashMap<i64, usize> =
         collections.iter().enumerate().filter(|(_, c)| c.kind == CollectionKind::Album).map(|(at, c)| (c.id, at)).collect();
     if albums.is_empty() {

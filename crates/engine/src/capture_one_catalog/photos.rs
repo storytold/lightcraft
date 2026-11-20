@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
+use super::notice::{self, Notice};
 use super::tables::{Db, Row, Table};
 use super::{CatalogPhoto, ColorTag, Iptc, OriginalKind, ReadError, keywords, paths};
 
@@ -44,7 +45,7 @@ struct Notes {
     cut_keywords: usize,
 }
 
-pub(super) fn read(db: &Db, database: &Path, warnings: &mut Vec<String>, active: &dyn Fn() -> Result<(), ReadError>) -> Result<Read, ReadError> {
+pub(super) fn read(db: &Db, database: &Path, warnings: &mut Vec<Notice>, active: &dyn Fn() -> Result<(), ReadError>) -> Result<Read, ReadError> {
     let locations = db.table("ZPATHLOCATION")?;
     active()?;
     let images = db.table("ZIMAGE")?;
@@ -114,7 +115,7 @@ fn variants_by_image<'a>(variants: &'a Table, images: &[(i64, Row<'_>)], notes: 
 /// Fill each photo's [`CatalogPhoto::turned`] from the rotation of the layer Capture One shows (as
 /// for [`shown_metadata`]). A catalog without the table leaves it unknown; a variant without a
 /// rotation isn't turned.
-pub(super) fn read_turns(db: &Db, photos: &mut [CatalogPhoto], warnings: &mut Vec<String>) -> Result<(), ReadError> {
+pub(super) fn read_turns(db: &Db, photos: &mut [CatalogPhoto], warnings: &mut Vec<Notice>) -> Result<(), ReadError> {
     let layers = db.optional("ZVARIANTLAYER", warnings)?;
     if !layers.columns().any(|c| c == "ZROTATION") {
         return Ok(());
@@ -315,20 +316,20 @@ fn variant_metadata(photo: &mut CatalogPhoto, row: Row<'_>, table: &Table, notes
 }
 
 impl Notes {
-    fn report(&self, warnings: &mut Vec<String>) {
+    fn report(&self, warnings: &mut Vec<Notice>) {
         if self.stray_variants > 0 {
-            warnings.push(format!("{} variant(s) belong to no image in the catalog and were left out", self.stray_variants));
+            warnings.push(Notice::new(notice::STRAY_VARIANTS).count("n", self.stray_variants));
         }
         if self.unknown_tags > 0 {
-            warnings.push(format!("{} photo(s) have a colour tag this version doesn't know; imported without one", self.unknown_tags));
+            warnings.push(Notice::new(notice::UNKNOWN_TAGS).count("n", self.unknown_tags));
         }
         if self.cut_keywords > 0 {
-            warnings.push(format!(
-                "{} photo(s) have more than {} keywords, or keywords nested deeper than {} levels; those were left out",
-                self.cut_keywords,
-                keywords::MAX_KEYWORDS,
-                keywords::MAX_DEPTH
-            ));
+            warnings.push(
+                Notice::new(notice::KEYWORDS_CUT)
+                    .count("n", self.cut_keywords)
+                    .count("max", keywords::MAX_KEYWORDS)
+                    .count("depth", keywords::MAX_DEPTH),
+            );
         }
     }
 }

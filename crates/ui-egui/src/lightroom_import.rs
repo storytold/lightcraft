@@ -439,8 +439,12 @@ fn result_dialog(value: &Value, summary: &str, catalog: &lightcraft_catalog::Cat
         details.push(warning.to_string());
     }
     if let Some(warnings) = report["warnings"].as_array() {
+        // a Capture One catalog's warnings also come as data: those are said in the UI language
+        let notices: Vec<lightcraft_engine::capture_one_catalog::Notice> =
+            report.get("notices").and_then(|n| serde_json::from_value(n.clone()).ok()).unwrap_or_default();
+        let said: std::collections::HashMap<String, String> = notices.iter().map(|n| (n.text(), crate::i18n::capture_one_notice(n))).collect();
         // Results can contain one warning per image; keep the dialog bounded.
-        details.extend(warnings.iter().take(8).filter_map(Value::as_str).map(str::to_string));
+        details.extend(warnings.iter().take(8).filter_map(Value::as_str).map(|w| said.get(w).cloned().unwrap_or_else(|| w.to_string())));
         if warnings.len() > 8 {
             details.push(crate::i18n::tr_format!("{count} more warnings.", count = warnings.len() - 8));
         }
@@ -866,6 +870,22 @@ mod tests {
     }
 
     #[test]
+    fn capture_one_warnings_are_said_in_the_ui_language() {
+        let notice = json!({"message": "{n} image(s) in Capture One's trash were left out", "values": {"n": 3}});
+        // the reader's warning comes with its data; a warning of the shared import doesn't
+        let value = json!({"report": {"warnings": ["3 image(s) in Capture One's trash were left out", "other"], "notices": [notice]}});
+        let details = |language| {
+            crate::i18n::set_language(language);
+            let crate::state::Dialog::LightroomResult { details, .. } = result_dialog(&value, "done", &Default::default()) else {
+                panic!("not a Lightroom result")
+            };
+            details
+        };
+        assert_eq!(details(crate::i18n::Locale::De), ["Bilder im Papierkorb von Capture One wurden ausgelassen: 3", "other"]);
+        assert_eq!(details(crate::i18n::Locale::En), ["3 image(s) in Capture One's trash were left out", "other"]);
+    }
+
+    #[test]
     fn inspect_report_keeps_empty_catalog_shape() {
         let report = inspect_report(CatalogImport {
             source: "synthetic.lrcat".into(),
@@ -876,6 +896,7 @@ mod tests {
             members: Vec::new(),
             collection_content: Vec::new(),
             warnings: vec!["warning".into()],
+            notices: Vec::new(),
             skipped: Vec::new(),
             keyword_list: Vec::new(),
         });

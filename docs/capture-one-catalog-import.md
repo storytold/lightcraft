@@ -49,7 +49,8 @@ Capture One 21, and EIP packages.
 Left out, and said so in the import's result: images in Capture One's trash, smart albums whose rule can't be
 read (below), and adjustments. Capture One's own collections (All Images, Recent Imports, Recent Captures, Trash,
 the folder tree) are not albums: LightCraft has its own. Photos a project or group lists because they are in its
-albums are only in those albums.
+albums are only in those albums. The result window says all of this in the app's language; the command line and
+agents get the same warnings in English, and as data (`notices`) in the import's report.
 
 **Orange and pink.** Capture One has seven colour tags, LightCraft five labels. An orange or pink photo gets no
 label, but the colour isn't lost: its name stays with the photo, is written to its XMP (`xmp:Label`) while the

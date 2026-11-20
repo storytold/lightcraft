@@ -37,11 +37,13 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub use crate::lightroom_catalog::Original;
+pub use notice::Notice;
 
 mod collections;
 pub(crate) mod convert;
 mod keywords;
 mod locate;
+pub mod notice;
 mod paths;
 mod photos;
 mod smart;
@@ -70,8 +72,8 @@ pub struct CaptureOneCatalog {
     pub keywords: Vec<Keyword>,
     /// Images in Capture One's trash, which are not in [`CaptureOneCatalog::photos`].
     pub trashed: usize,
-    /// What was left out or could not be read, in English.
-    pub warnings: Vec<String>,
+    /// What was left out or could not be read.
+    pub warnings: Vec<Notice>,
 }
 
 /// A keyword of the catalog's keyword list.
@@ -357,7 +359,7 @@ pub fn read_with_cancel(path: &Path, cancel: &AtomicBool) -> Result<CaptureOneCa
     let keywords = keywords::list(&db, &mut warnings)?;
     db.ensure_unchanged()?;
     if found.in_use {
-        warnings.push("Capture One has this catalog open; changes it has not saved yet are not included".into());
+        warnings.push(Notice::new(notice::IN_USE));
     }
     Ok(CaptureOneCatalog {
         database: found.database.to_string_lossy().into_owned(),

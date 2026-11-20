@@ -19,6 +19,7 @@ use std::sync::atomic::AtomicBool;
 
 use serde_json::{Value, json};
 
+use super::notice::{self, Notice};
 use super::{CaptureOneCatalog, CatalogPhoto, Collection, CollectionKind, ColorTag, Original, OriginalKind, smart};
 use crate::lightroom_catalog::{CatalogImport, CatalogPhoto as ImportPhoto};
 
@@ -50,7 +51,7 @@ pub(crate) fn is_capture_one(data: &CatalogImport) -> bool {
 pub(crate) fn to_import(catalog: CaptureOneCatalog) -> CatalogImport {
     let mut warnings = catalog.warnings;
     if catalog.trashed > 0 {
-        warnings.push(format!("{} image(s) in Capture One's trash were left out", catalog.trashed));
+        warnings.push(Notice::new(notice::TRASHED).count("n", catalog.trashed));
     }
     let count = |test: fn(&CatalogPhoto) -> bool| catalog.photos.iter().filter(|p| test(p)).count();
     // the colours the library has no label for, each named with the keyword that finds it
@@ -61,19 +62,17 @@ pub(crate) fn to_import(catalog: CaptureOneCatalog) -> CatalogImport {
         .collect();
     let unlabelled = count(|p| kept_label(p.color_tag).is_some());
     if unlabelled > 0 {
-        let found = match kept.as_slice() {
-            [one] => format!("the keyword “{KEYWORD_PARENT}|{one}” finds them"),
-            names => {
-                format!("the keywords {} find them", names.iter().map(|name| format!("“{KEYWORD_PARENT}|{name}”")).collect::<Vec<_>>().join(" and "))
+        let keyword = |name: &str| format!("{KEYWORD_PARENT}|{name}");
+        warnings.push(match kept.as_slice() {
+            [first, second, ..] => {
+                Notice::new(notice::KEPT_COLOURS).count("n", unlabelled).text_value("first", keyword(first)).text_value("second", keyword(second))
             }
-        };
-        warnings.push(format!(
-            "{unlabelled} photo(s) have Capture One's orange or pink colour tag, which has no label here yet: the colour is kept with the photo, and {found}"
-        ));
+            names => Notice::new(notice::KEPT_COLOUR).count("n", unlabelled).text_value("keyword", keyword(names.first().copied().unwrap_or(""))),
+        });
     }
     let adjusted = count(|p| p.adjusted);
     if adjusted > 0 {
-        warnings.push(format!("{adjusted} photo(s) have Capture One adjustments; adjustments are not imported yet"));
+        warnings.push(Notice::new(notice::ADJUSTED).count("n", adjusted));
     }
 
     // an image's first variant is the master of its further ones
@@ -93,13 +92,15 @@ pub(crate) fn to_import(catalog: CaptureOneCatalog) -> CatalogImport {
         if let Original::Refused(why) = &photo.original {
             refused = refused.saturating_add(1);
             if refused <= MAX_NAMED {
-                warnings.push(format!("image {source_id}: {} is not opened: {why}; listed as missing and not added", photo.path));
+                let mut line = Notice::new(notice::NOT_OPENED).text_value("image", source_id.to_string()).text_value("path", photo.path.clone());
+                line.values.insert("why".into(), Notice::reason(why));
+                warnings.push(line);
             }
         }
         photos.push(import_photo(photo, source_id, master, &rows_of));
     }
     if refused > MAX_NAMED {
-        warnings.push(format!("{} more image(s) are not opened; listed as missing and not added", refused - MAX_NAMED));
+        warnings.push(Notice::new(notice::MORE_NOT_OPENED).count("n", refused - MAX_NAMED));
     }
 
     let (collections, members) = collections(&catalog.collections, &catalog.photos, &mut warnings);
@@ -111,7 +112,8 @@ pub(crate) fn to_import(catalog: CaptureOneCatalog) -> CatalogImport {
         collections,
         members,
         collection_content: Vec::new(),
-        warnings,
+        warnings: warnings.iter().map(Notice::text).collect(),
+        notices: warnings,
         skipped: Vec::new(),
         keyword_list: catalog
             .keywords
@@ -284,15 +286,15 @@ fn iptc_packet(photo: &CatalogPhoto) -> String {
 fn collections(
     all: &[Collection],
     photos: &[CatalogPhoto],
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<Notice>,
 ) -> (Vec<BTreeMap<String, Value>>, Vec<BTreeMap<String, Value>>) {
     let row = |pairs: &[(&str, Value)]| pairs.iter().map(|(key, value)| ((*key).to_string(), value.clone())).collect::<BTreeMap<_, _>>();
     let (mut rows, mut members) = (Vec::new(), Vec::new());
     let mut named = 0usize;
-    let mut warn = |text: String| {
+    let mut warn = |line: Notice| {
         named = named.saturating_add(1);
         if named <= MAX_NAMED {
-            warnings.push(text);
+            warnings.push(line);
         }
     };
     for collection in all {
@@ -314,7 +316,7 @@ fn collections(
                 let rule = match smart::parse(&collection.rule) {
                     Ok(rule) => rule,
                     Err(why) => {
-                        warn(format!("smart album “{name}”: not imported; {why}"));
+                        warn(Notice::new(notice::SMART_LEFT_OUT).text_value("name", name).notice("why", why));
                         continue;
                     }
                 };
@@ -326,15 +328,11 @@ fn collections(
                         photos_in = smart::select(&rule, photos).unwrap_or_default();
                     }
                     smart::Outcome::Selected(selected, missing) => {
-                        warn(format!(
-                            "smart album “{name}”: imported as an album with the {} photo(s) its rule selects now; LightCraft has no smart album rule for {}",
-                            selected.len(),
-                            missing.join(", ")
-                        ));
+                        warn(Notice::new(notice::SMART_AS_ALBUM).text_value("name", name).count("n", selected.len()).notices("fields", missing));
                         photos_in = selected;
                     }
                     smart::Outcome::Skipped(why) => {
-                        warn(format!("smart album “{name}”: not imported; {why}"));
+                        warn(Notice::new(notice::SMART_LEFT_OUT).text_value("name", name).notice("why", why));
                         continue;
                     }
                 }
@@ -344,7 +342,7 @@ fn collections(
         members.extend(photos_in.iter().map(|at| row(&[("collection", json!(collection.id)), ("image", json!(source_id(*at)))])));
     }
     if named > MAX_NAMED {
-        warnings.push(format!("{} more smart album(s) were not imported as smart albums", named - MAX_NAMED));
+        warnings.push(Notice::new(notice::MORE_SMART).count("n", named - MAX_NAMED));
     }
     (rows, members)
 }

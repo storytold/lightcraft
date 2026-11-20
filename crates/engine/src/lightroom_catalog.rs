@@ -200,6 +200,10 @@ pub struct CatalogImport {
     pub members: Vec<Row>,
     pub collection_content: Vec<Row>,
     pub warnings: Vec<String>,
+    /// The warnings a Capture One catalog's reader gave, as data, so each front end can say them
+    /// in its own language: each one's English is also in `warnings`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notices: Vec<crate::capture_one_catalog::Notice>,
     /// Catalog images left out because their records are incomplete; reported as data (not text)
     /// so each front end can say so in its own language.
     #[serde(default)]
@@ -642,6 +646,7 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
         members: optional_table("AgLibraryCollectionImage", &mut warnings)?,
         collection_content: optional_table("AgLibraryCollectionContent", &mut warnings)?,
         warnings,
+        notices: Vec::new(),
         skipped: Vec::new(),
         keyword_list: Vec::new(),
     };
@@ -1511,7 +1516,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
     }
     s.merge_undo(s.undo.len().saturating_sub(undo0), step);
     Ok(AppliedImport {
-        report: json!({"source":data.source,"photos":ids.len(),"imported":imported,"library":s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy()),"collections":album_count,"preservedExistingEdits":preserved,"inRecentlyDeleted":in_trash.len(),"missing":missing,"failed":files.failed,"warnings":warnings,"skipped":data.skipped,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
+        report: json!({"source":data.source,"photos":ids.len(),"imported":imported,"library":s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy()),"collections":album_count,"preservedExistingEdits":preserved,"inRecentlyDeleted":in_trash.len(),"missing":missing,"failed":files.failed,"warnings":warnings,"notices":data.notices,"skipped":data.skipped,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
         index: index.clone(),
     })
 }
