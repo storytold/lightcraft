@@ -77,7 +77,8 @@ impl Drop for Extracted {
 /// Opens `path` as a bounded seekable ZIP archive without buffering payloads in memory.
 fn open_archive(path: &Path) -> Result<SeekableArchive<File>, String> {
     let mut file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let records = craft_zip::directory_record_names(&mut file, MAX_DIRECTORY_BYTES, MAX_ENTRIES as usize).map_err(|e| e.to_string())?;
+    let records =
+        craft_zip::lenient::file::directory_record_names(&mut file, MAX_DIRECTORY_BYTES, MAX_ENTRIES as usize).map_err(|e| e.to_string())?;
     let mut lrcat_records = 0usize;
     for record in &records {
         let lower = record.name.replace('\\', "/").to_lowercase();
