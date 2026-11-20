@@ -61,6 +61,14 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 ## Closed recently (kept for calibration)
 
+- 2026-11-19: draft shared ORF adoption adds app import/render/offline-preview checks and preserves the withdrawal/provenance record in [orf-compression.md](orf-compression.md). Maintainer acceptance of craft-libs #2356 remains a prerequisite; no ranked gap, verification count or headline estimate is closed. Same-version records need manual Reload or an explicit full recheck.
+
+- 2026-11-19: smart previews retain their decoded raw interpretation across Reload, Relink and Undo. Catalog edits preserve old proxy files; legacy raw proxies need matching recorded facts, while ordinary JPEG proxies without facts keep working. Status validates pixels off the UI thread, and Local cleanup retains records with incompatible legacy files for recovery. No ranked gap or headline count changes.
+
+- 2026-11-19: Relink and Reload take media kind and format from the actual file probe, including raw-to-rendered changes; edits, offline smart-preview use and Undo/Redo are preserved. Old records with stale classification can be repaired by Reload. ORF labels follow the detected container after a rename; older wrong labels need Reload with the original available, since an offline record cannot reveal its container. Catalog format 14 records the reversible classification; older journals still load and upgrade. Convert and Copy as DNG record the verified output's own fingerprint, size and raw classification, clearing obsolete preview-only flags while preserving input metadata and edits; repeated Copy as DNG imports deduplicate. Existing behavior corrected; no ranked gap or headline estimate changes.
+
+- 2026-11-19: Reload refreshes same-file originals and copies together with one probe, keeps all selected metadata targets, and leaves independently relinked copies on their own file. Reload freshness follows the family and file; preview rechecks also cover copies whose parent uses another file or is already current. Edits, legacy shutter repair and one-step Undo are preserved. Existing feature hardened; no ranked gap or readiness estimate changes.
+
 - 2026-10-29: the import review has a remembered 80–320 pt thumbnail-size slider, density-aware previews and bounded visible retention (#2237, part of #2056). Small sources do not reconstruct the same preview job every frame. The pre-import loupe and keyboard culling remain open in #2056; no ranked gap or headline feature count closes.
 
 - 2026-10-22: saving XMP preserves foreign namespaces even when they use `lc:` or `xmp:` prefixes; importing them no longer interprets their properties as native settings or ratings. Parser, merge and save-command regressions cover the correction; no ranked gap or readiness estimate changes.
@@ -90,6 +98,10 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-19 | draft | Shared ORF adoption keeps format-level evidence in craft-libs #2356 and tests app import/render/fallback/proxy migration. Provenance acceptance and broader coverage remain open; counts unchanged. |
+| 2026-11-19 | correction | LR-CLOUD-SMARTPREVIEW: immutable raw interpretation identities, read-only legacy compatibility, retryable failed refreshes, and worker-validated status; old files remain available for Undo or recovery. Counts unchanged. |
+| 2026-11-19 | patch | Relink, Reload and generated DNGs keep actual source classification and file facts; ORF container labels survive filename changes, with older wrong labels repaired by online Reload; conversion preserves input metadata and edits, and repeated Copy as DNG imports deduplicate. Catalog format 14 records classification and reads earlier journals. No ranked gap or headline estimate changes. |
+| 2026-11-19 | patch | Reload and preview rechecks respect virtual copies’ actual source files, retain selected metadata targets and scope overlapping reads to the family and file; edits and legacy shutter repair are preserved. No ranked gap or headline number changes. |
 | 2026-11-01 | minor | Gap 13: Lightroom catalog backup zips import directly, and a backup of an imported catalog adds no collection twice (#2592); the gap stays open |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |

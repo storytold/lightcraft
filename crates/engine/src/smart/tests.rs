@@ -383,3 +383,235 @@ fn a_proxy_from_an_older_encode_is_stale() {
     assert!(!look_checked(&dir), "a look-only marker is not enough to skip the rebuild");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The original bytes stay the same when a decoder's interpretation changes.
+#[test]
+fn raw_proxy_names_distinguish_sensor_and_preview_pixels() {
+    use lightcraft_catalog::{PhotoId, Source};
+    for format in ["DNG", "NEF", "ORF"] {
+        let mut sensor = Photo::new(PhotoId(1), Source::File { path: "photo.raw".into() }, "photo.raw", format, 8, 8, "");
+        sensor.kind = lightcraft_catalog::MediaKind::Raw;
+        let mut preview = sensor.clone();
+        preview.preview_only = Some("old decoder".into());
+        assert_eq!(crate::media::content_key(&sensor), crate::media::content_key(&preview));
+        assert_ne!(file_name(&sensor), file_name(&preview), "{format}: the two interpretations must never overwrite each other");
+    }
+}
+
+#[test]
+fn legacy_raw_proxies_require_matching_recorded_interpretation() {
+    use lightcraft_catalog::{PhotoId, Source};
+    for expected in [false, true] {
+        for recorded in [None, Some(false), Some(true)] {
+            let dir = temp(&format!("raw-legacy-{expected}-{recorded:?}"));
+            let mut photo =
+                Photo::new(PhotoId(1), Source::File { path: dir.join("offline.dng").to_string_lossy().into() }, "offline.dng", "DNG", 8, 8, "");
+            photo.kind = lightcraft_catalog::MediaKind::Raw;
+            photo.preview_only = (!expected).then(|| "old decoder".into());
+            let hash = lightcraft_preview::Hasher128::new().str(&crate::media::content_key(&photo)).finish();
+            let old = dir.join(format!("{:032x}.lcsp", hash.0));
+            let info = recorded.map(|raw| SourceInfo { raw, ..Default::default() });
+            let bytes = encode(&Rgb32f::filled(8, 8, [0.2; 3]), info.as_ref()).unwrap();
+            std::fs::write(&old, &bytes).unwrap();
+            assert!(file_path(&dir, &photo).exists(), "retention still sees the legacy file");
+            let mut media = crate::media::MediaCache::default();
+            media.smart_dir = Some(dir.clone());
+            let source = media.source_ref(&photo, crate::media::SourceLevel::Preview).load_source();
+            assert_eq!(source.is_ok(), recorded == Some(expected), "expected={expected}, recorded={recorded:?}");
+            assert_eq!(std::fs::read(&old).unwrap(), bytes, "incompatible legacy data stays on disk");
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+}
+
+#[test]
+fn ordinary_jpeg_legacy_proxy_without_facts_remains_usable() {
+    use lightcraft_catalog::{PhotoId, Source};
+    let dir = temp("jpeg-legacy-no-facts");
+    let photo = Photo::new(PhotoId(1), Source::File { path: dir.join("offline.jpg").to_string_lossy().into() }, "offline.jpg", "JPEG", 8, 8, "");
+    let hash = lightcraft_preview::Hasher128::new().str(&crate::media::content_key(&photo)).finish();
+    let old = dir.join(format!("{:032x}.lcsp", hash.0));
+    let bytes = encode(&Rgb32f::filled(8, 8, [0.2; 3]), None).unwrap();
+    std::fs::write(&old, &bytes).unwrap();
+    assert_eq!(file_name(&photo), old.file_name().unwrap().to_string_lossy());
+    assert_eq!(file_path(&dir, &photo), old);
+    let mut media = crate::media::MediaCache::default();
+    media.smart_dir = Some(dir.clone());
+    let source = media.source_ref(&photo, crate::media::SourceLevel::Preview).load_source().unwrap();
+    assert!(source.from_proxy);
+    assert!(source.info.is_none());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn local_cleanup_retains_incompatible_legacy_proxy_records() {
+    use lightcraft_catalog::{MediaKind, Op, PhotoId, Source};
+    for age_based in [false, true] {
+        for sharded in [false, true] {
+            let dir = temp(&format!("local-retain-{age_based}-{sharded}"));
+            let mut s = crate::Session::new();
+            s.source = crate::LibrarySource::Missing;
+            s.clock = Box::new(|| "2030-01-01T00:00:00".into());
+            s.media.smart_dir = Some(dir.join("proxies"));
+            for id in [PhotoId(1), PhotoId(2)] {
+                let name = format!("missing-{}.orf", id.0);
+                let mut photo = Photo::new(id, Source::File { path: dir.join(&name).to_string_lossy().into() }, &name, "ORF", 8, 8, "");
+                photo.kind = MediaKind::Raw;
+                photo.local = true;
+                photo.set_local_baseline();
+                s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+            }
+            s.catalog.apply(Op::SetBrowsed { folder: dir.to_string_lossy().into(), at: Some("2000-01-01T00:00:00".into()) }).unwrap();
+            let photo = s.catalog.photo(PhotoId(1)).unwrap();
+            let hash = lightcraft_preview::Hasher128::new().str(&crate::media::content_key(photo)).finish();
+            let name = format!("{:032x}.lcsp", hash.0);
+            let proxies = s.media.smart_dir.as_ref().unwrap();
+            let legacy = if sharded { shard(proxies, &name) } else { proxies.join(&name) };
+            std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+            let bytes = encode(&Rgb32f::filled(8, 8, [0.2; 3]), None).unwrap();
+            std::fs::write(&legacy, &bytes).unwrap();
+            assert!(PreviewPath::new(proxies, photo).load_with_path().is_err(), "unknown raw facts are not usable");
+            assert!(s.selection.ids.is_empty() && s.selection.active.is_none() && s.undo.is_empty());
+            if age_based {
+                assert_eq!(s.forget_local(false, Some(30)).evict, vec![PhotoId(2)]);
+            } else {
+                assert_eq!(s.forget_gone_from(&dir.to_string_lossy(), false, &[]), 1);
+            }
+            assert!(s.catalog.photo(PhotoId(1)).is_some(), "the only remaining image keeps its Local record");
+            assert!(s.catalog.photo(PhotoId(2)).is_none(), "an otherwise identical unheld record is forgotten");
+            assert_eq!(std::fs::read(&legacy).unwrap(), bytes);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+}
+
+#[test]
+fn a_hostile_facts_length_cannot_establish_raw_compatibility() {
+    use lightcraft_catalog::{MediaKind, PhotoId, Source};
+    let dir = temp("facts-length");
+    let mut photo = Photo::new(PhotoId(1), Source::File { path: dir.join("missing.dng").to_string_lossy().into() }, "missing.dng", "DNG", 8, 8, "");
+    photo.kind = MediaKind::Raw;
+    let path = sharded_file_path(&dir, &photo);
+    let mut bytes = encode(&Rgb32f::filled(8, 8, [0.2; 3]), Some(&SourceInfo { raw: true, ..Default::default() })).unwrap();
+    let end = MAGIC.len() + bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
+    let header: serde_json::Value = serde_json::from_slice(&bytes[MAGIC.len()..end]).unwrap();
+    let tail = bytes.len() - header["tail"].as_u64().unwrap() as usize;
+    bytes[tail..tail + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    assert!(is_valid(&path), "the JPEG framing remains complete");
+    assert!(decode(&bytes).is_err());
+    assert!(PreviewPath::new(&dir, &photo).load_with_path().is_err());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn sensor_orf_legacy_files_are_retained_without_reusing_withdrawn_pixels() {
+    use lightcraft_catalog::{MediaKind, PhotoId, Source};
+    for sensor in [false, true] {
+        for flat in [false, true] {
+            let dir = temp(&format!("orf-legacy-writer-{sensor}-{flat}"));
+            let mut photo =
+                Photo::new(PhotoId(1), Source::File { path: dir.join("offline.orf").to_string_lossy().into() }, "offline.orf", "ORF", 8, 8, "");
+            photo.kind = MediaKind::Raw;
+            photo.preview_only = (!sensor).then(|| "old decoder".into());
+            let hash = lightcraft_preview::Hasher128::new().str(&crate::media::content_key(&photo)).finish();
+            let name = format!("{:032x}.lcsp", hash.0);
+            let legacy = if flat { dir.join(&name) } else { shard(&dir, &name) };
+            std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+            let info = SourceInfo { raw: sensor, ..Default::default() };
+            let bytes = encode(&Rgb32f::filled(8, 8, [0.2; 3]), Some(&info)).unwrap();
+            std::fs::write(&legacy, &bytes).unwrap();
+            assert!(PreviewPath::new(&dir, &photo).candidates().contains(&legacy), "retention inventories every old file");
+            assert_eq!(file_path(&dir, &photo), legacy);
+            let mut media = crate::media::MediaCache::default();
+            media.smart_dir = Some(dir.clone());
+            let source = media.source_ref(&photo, crate::media::SourceLevel::Preview).load_source();
+            assert_eq!(source.is_ok(), !sensor, "raw=true cannot prove which old ORF decoder wrote the pixels");
+            assert_eq!(media.smart_availability.exists(&dir, &photo), !sensor);
+            if let Err(error) = source {
+                assert!(error.contains("reconnect") && error.contains("Build Smart Previews"), "{error}");
+            }
+            assert_eq!(std::fs::read(&legacy).unwrap(), bytes);
+            let current = sharded_file_path(&dir, &photo);
+            std::fs::create_dir_all(current.parent().unwrap()).unwrap();
+            std::fs::write(&current, &bytes).unwrap();
+            let source = media.source_ref(&photo, crate::media::SourceLevel::Preview).load_source().unwrap();
+            assert_eq!(source.info.unwrap().raw, sensor, "this decoder's explicit identity remains usable offline");
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+}
+
+#[test]
+fn orf_render_identity_excludes_the_withdrawn_decoder_without_changing_content() {
+    use lightcraft_catalog::{MediaKind, PhotoId, Source};
+    let mut photo = Photo::new(PhotoId(1), Source::File { path: "sensor.orf".into() }, "sensor.orf", "ORF", 8, 8, "");
+    photo.kind = MediaKind::Raw;
+    let old = lightcraft_preview::Hasher128::new().str("orf-withdrawal-v1").u64(0).finish();
+    let old = ((old.0 as u64) ^ ((old.0 >> 64) as u64)) | 1;
+    assert_ne!(crate::media::decoder_key(&photo), old);
+    let content = crate::media::content_key(&photo);
+    let sensor = crate::media::decoder_key(&photo);
+    photo.preview_only = Some("previous decoder".into());
+    assert_ne!(crate::media::decoder_key(&photo), sensor);
+    assert_eq!(crate::media::content_key(&photo), content);
+}
+
+#[test]
+fn review_retention_only_orf_proxy_does_not_hide_a_reconnected_original() {
+    use lightcraft_catalog::{MediaKind, PhotoId, Source};
+    let dir = temp("orf-reconnected-retention");
+    let original = dir.join("original.orf");
+    std::fs::write(&original, b"reconnected original").unwrap();
+    let mut photo = Photo::new(PhotoId(1), Source::File { path: original.to_string_lossy().into() }, "original.orf", "ORF", 8, 8, "");
+    photo.kind = MediaKind::Raw;
+    let hash = lightcraft_preview::Hasher128::new().str(&crate::media::content_key(&photo)).finish();
+    let legacy = dir.join(format!("{:032x}.lcsp", hash.0));
+    let bytes = encode(&Rgb32f::filled(8, 8, [0.2; 3]), Some(&SourceInfo { raw: true, ..Default::default() })).unwrap();
+    std::fs::write(&legacy, &bytes).unwrap();
+    let mut media = crate::media::MediaCache::default();
+    media.smart_dir = Some(dir.clone());
+    let stale = original.to_string_lossy().to_string();
+    media.availability.set_probe(Arc::new(move |p| p != stale && std::path::Path::new(p).exists()));
+    media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::filled(8, 8, [0.4; 3]), SourceInfo { raw: true, ..Default::default() }))));
+    let source = media.source_ref(&photo, crate::media::SourceLevel::Preview).load_source().unwrap();
+    assert!(!source.from_proxy && source.info.unwrap().raw);
+    assert_eq!(std::fs::read(&legacy).unwrap(), bytes, "retention still preserves the old writer's file");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn followup_incompatible_dng_proxy_does_not_hide_a_reconnected_original() {
+    reconnected_dng_proxy(false);
+}
+
+#[test]
+fn followup_compatible_dng_proxy_keeps_the_offline_smart_route() {
+    reconnected_dng_proxy(true);
+}
+
+fn reconnected_dng_proxy(compatible: bool) {
+    use lightcraft_catalog::{MediaKind, PhotoId, Source};
+    let dir = temp(&format!("dng-reconnected-compatibility-{compatible}"));
+    let original = dir.join("original.dng");
+    std::fs::write(&original, b"reconnected original").unwrap();
+    let mut photo = Photo::new(PhotoId(1), Source::File { path: original.to_string_lossy().into() }, "original.dng", "DNG", 8, 8, "");
+    photo.kind = MediaKind::Raw;
+    let hash = lightcraft_preview::Hasher128::new().str(&crate::media::content_key(&photo)).finish();
+    let legacy = dir.join(format!("{:032x}.lcsp", hash.0));
+    let bytes = encode(&Rgb32f::filled(8, 8, [0.2; 3]), Some(&SourceInfo { raw: compatible, ..Default::default() })).unwrap();
+    std::fs::write(&legacy, &bytes).unwrap();
+    let mut media = crate::media::MediaCache::default();
+    media.smart_dir = Some(dir.clone());
+    let stale = original.to_string_lossy().to_string();
+    media.availability.set_probe(Arc::new(move |p| p != stale && std::path::Path::new(p).exists()));
+    media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::filled(8, 8, [0.4; 3]), SourceInfo { raw: true, ..Default::default() }))));
+    let route = media.source_ref(&photo, crate::media::SourceLevel::Preview);
+    assert_eq!(matches!(&route, crate::media::SourceRef::Smart { .. }), compatible);
+    let source = route.load_source().unwrap();
+    assert_eq!(source.from_proxy, compatible);
+    assert!(source.info.unwrap().raw);
+    assert_eq!(std::fs::read(&legacy).unwrap(), bytes, "routing does not discard retained data");
+    std::fs::remove_dir_all(dir).unwrap();
+}

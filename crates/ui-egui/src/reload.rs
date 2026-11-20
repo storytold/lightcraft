@@ -37,8 +37,11 @@ pub fn command(app: &mut LightcraftApp, p: &Value) -> Option<Result<Value, Strin
     }
     let count = items.len();
     // the photos shown from their embedded preview, to say afterwards whether they decode now
-    let preview_only: Vec<_> =
-        items.iter().filter(|i| app.session.catalog.photo(i.id).is_some_and(|ph| ph.preview_only.is_some())).map(|i| i.id).collect();
+    let preview_only: Vec<_> = items
+        .iter()
+        .flat_map(|i| i.metadata_targets.iter().copied())
+        .filter(|id| app.session.catalog.photo(*id).is_some_and(|ph| ph.preview_only.is_some()))
+        .collect();
     let library = app.session.library_generation();
     let probe = reload::file_probe(&app.session);
     let cancel = Arc::new(AtomicBool::new(false));

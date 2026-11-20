@@ -131,17 +131,17 @@ pub(super) fn embedded_thumb_key(k: Hash128) -> Hash128 {
     Hasher128::new().str("embedded-thumb").u64((k.0 >> 64) as u64).u64(k.0 as u64).finish()
 }
 
-/// ORF decoding changed when compressed sensor support was withdrawn. Keep its old renders
-/// out even before catalog rechecking finishes, and distinguish sensor from preview-only
-/// pixels after Reload. Other formats keep their existing keys. This is deliberately not
-/// part of `content_key`: smart previews and denoise products identify the original file.
-pub(super) fn decoder_key(p: &Photo) -> u64 {
+/// ORF sensor decoding now comes from the shared implementation. Exclude older renders even
+/// before catalog rechecking finishes, and distinguish sensor from preview-only pixels after
+/// Reload. Other formats keep their existing keys. This is deliberately not
+/// part of `content_key`: source-file and denoise identities stay stable across decoder changes.
+pub(crate) fn decoder_key(p: &Photo) -> u64 {
     if !p.format.eq_ignore_ascii_case("ORF") {
         return 0;
     }
     // Spread the status bit: this salt is XORed with frontend dimensions, so adjacent
     // integers could cancel a small resize occurring at the same time as a recheck.
-    let h = Hasher128::new().str("orf-withdrawal-v1").u64(u64::from(p.preview_only.is_some())).finish();
+    let h = Hasher128::new().str("orf-shared-sensor-v1").u64(u64::from(p.preview_only.is_some())).finish();
     ((h.0 as u64) ^ ((h.0 >> 64) as u64)) | 1
 }
 

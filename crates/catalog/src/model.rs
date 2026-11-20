@@ -389,6 +389,11 @@ pub fn preview_stamp(preview_only: &Option<String>) -> String {
     if preview_only.is_some() { APP_VERSION.to_string() } else { String::new() }
 }
 
+/// A fresh probe's stamp using the format it actually found, including supported ORFs.
+pub fn preview_stamp_for(format: &str, preview_only: &Option<String>) -> String {
+    if format.eq_ignore_ascii_case("orf") { APP_VERSION.to_string() } else { preview_stamp(preview_only) }
+}
+
 impl Photo {
     /// Keep the newest [`HISTORY_LIMIT`](crate::HISTORY_LIMIT) History steps; the cursor moves with
     /// its step, or to the oldest step kept when its own is dropped. Returns how many were dropped.
@@ -451,7 +456,7 @@ impl Photo {
     /// The stamp for a fresh probe. Supported ORFs keep it too, so the support-withdrawal
     /// recheck runs once, without repeatedly probing uncompressed ORFs on every library open.
     pub fn preview_stamp(&self, preview_only: &Option<String>) -> String {
-        if self.format.eq_ignore_ascii_case("orf") { APP_VERSION.to_string() } else { preview_stamp(preview_only) }
+        preview_stamp_for(&self.format, preview_only)
     }
     /// A preview-only photo or ORF whose support was checked by another app version (or before
     /// stamps existed), so this build should probe its file again (issues #662 and #3775).

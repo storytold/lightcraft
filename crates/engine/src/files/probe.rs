@@ -133,7 +133,14 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     let content_hash = Some(lightcraft_preview::hash_bytes(bytes).to_string());
     let m = lightcraft_meta::extract(bytes);
     let (meta, captured) = meta_of(&m);
-    if lightcraft_raw::probe(bytes).is_some() {
+    if let Some(detected) = lightcraft_raw::probe(bytes) {
+        // ORF decoder and legacy-preview identities must follow the container even after a rename.
+        let extension = ext_upper(name);
+        let format = if detected == lightcraft_raw::RawFormat::Orf || extension == "ORF" || extension.is_empty() {
+            format!("{detected:?}").to_ascii_uppercase()
+        } else {
+            extension
+        };
         let raw = match lightcraft_raw::probe_info(bytes).map_err(|e| preview_reason(bytes, e)) {
             Ok(r) => r,
             Err(Ok(why)) => {
@@ -142,7 +149,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
                 return Ok(ProbeInfo {
                     width: w,
                     height: h,
-                    format: ext_upper(name),
+                    format,
                     kind: MediaKind::Raw,
                     file_size: bytes.len() as u64,
                     captured,
@@ -176,7 +183,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
             embedded_lens,
             width: w,
             height: h,
-            format: ext_upper(name),
+            format,
             kind: MediaKind::Raw,
             file_size: bytes.len() as u64,
             captured,
@@ -215,7 +222,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     }
     let format = match ext_upper(name).as_str() {
         "JPG" | "JPEG" => "JPEG".to_string(),
-        "" => format!("{fmt:?}").to_uppercase(),
+        "" | "ORF" => format!("{fmt:?}").to_uppercase(),
         e => e.to_string(),
     };
     Ok(ProbeInfo {

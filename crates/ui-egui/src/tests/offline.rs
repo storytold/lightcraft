@@ -247,3 +247,32 @@ fn import_reads_files_off_the_ui_thread_and_can_be_cancelled() {
     assert_eq!(calls.on(ui_thread), 0, "files were never read on the UI thread");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn smart_preview_status_checks_files_off_the_ui_thread() {
+    let calls = Calls::default();
+    let nas = Nas::asleep();
+    let app = LightcraftApp::new(offline_library(&calls, &nas), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.step();
+    let ui = std::thread::current().id();
+    let reply = h.send("engine.execute", json!({"command": "photo.smartPreview", "params": {"id": 1}})).unwrap();
+    frames_while_asleep(&mut h, &nas, 5, "Smart Preview Status");
+    assert!(reply.try_recv().is_err(), "status waits for the original probe on its worker");
+    assert!(h.app.session.activity.list().iter().any(|row| row.label == "Smart Preview Status"));
+    assert_eq!(calls.on(ui), 0);
+    nas.wake();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let answer = loop {
+        h.step();
+        if let Ok(answer) = reply.try_recv() {
+            break answer;
+        }
+        assert!(Instant::now() < deadline, "the status query answered");
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["result"], json!({"smartPreview": false, "originalOnline": false}));
+    assert_eq!(calls.on(ui), 0);
+    assert!(h.app.tasks.is_empty());
+}

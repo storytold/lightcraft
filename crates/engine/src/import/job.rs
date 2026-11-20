@@ -87,6 +87,8 @@ pub(super) struct ReadyFile {
     pub(super) path: String,
     pub(super) stored: String,
     pub(super) info: ProbeInfo,
+    /// Copy as DNG's original input identity, only for this job's duplicate lookup.
+    pub(super) input_hash: Option<String>,
     pub(super) sidecar: Option<crate::sidecar::SidecarData>,
     pub(super) placed: Option<crate::import_move::Placed>,
 }
@@ -132,9 +134,9 @@ impl Prepared {
                 items.push(item);
                 continue;
             };
-            let ReadyFile { path, stored, info, sidecar, placed } = *ready;
+            let ReadyFile { path, stored, info, input_hash, sidecar, placed } = *ready;
             let existing_path = paths.get(&normalize_import_path(&stored)).copied().or_else(|| paths.get(&normalize_import_path(&path)).copied());
-            let existing_hash = info.content_hash.as_ref().and_then(|hash| hashes.get(hash).copied());
+            let existing_hash = info.content_hash.iter().chain(&input_hash).find_map(|hash| hashes.get(hash).copied());
             if let Some(existing) = existing_path.or(existing_hash) {
                 if let Some(placed) = &placed {
                     crate::import_move::rollback(placed);
@@ -147,14 +149,14 @@ impl Prepared {
                     file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured })),
                 });
             } else {
-                items.push(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed })));
+                items.push(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, input_hash, sidecar, placed })));
             }
         }
         self.items = items;
     }
 }
 
-fn normalize_import_path(path: &str) -> String {
+pub(super) fn normalize_import_path(path: &str) -> String {
     let path = path.replace('\\', "/");
     if cfg!(windows) { path.to_lowercase() } else { path }
 }
@@ -440,7 +442,7 @@ impl ImportJob {
                 self.by_hash.insert(h.clone(), None);
             }
             self.done.fetch_add(1, Relaxed);
-            plan.slots.push(Slot::Item(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed: None }))));
+            plan.slots.push(Slot::Item(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, input_hash: None, sidecar, placed: None }))));
         }
         self.run_plan(&mut plan, &mut out, cancel);
         out
@@ -460,10 +462,8 @@ impl ImportJob {
                     None => continue,
                 },
             };
-            if let PreparedItem::Ready(r) = &item
-                && let Some(h) = &r.info.content_hash
-            {
-                self.by_hash.insert(h.clone(), None);
+            if let PreparedItem::Ready(r) = &item {
+                self.by_hash.extend(r.info.content_hash.iter().chain(&r.input_hash).map(|h| (h.clone(), None)));
             }
             out.items.push(item);
         }

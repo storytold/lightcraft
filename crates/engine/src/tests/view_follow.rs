@@ -72,7 +72,7 @@ fn edit(s: &mut Session, dice: &mut Dice, ids: &mut Vec<PhotoId>, album: u64) {
         1 => {
             let name = format!("REN_{n:04}.jpg");
             let source = Source::File { path: format!("/pics/{}/{name}", n % 3) };
-            let _ = s.commit("Locate", Op::Relink { id: one, file_name: name, source, format: None });
+            let _ = s.commit("Locate", Op::Relink { id: one, file_name: name, source, format: None, kind: None });
             return;
         }
         2 if n.is_multiple_of(4) => {

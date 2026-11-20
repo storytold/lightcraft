@@ -98,6 +98,32 @@ fn notice_reload_button_rereads_the_file() {
     assert_eq!(app.session.undo.last().map(|u| u.label.as_str()), Some("Reload Changed Files"));
 }
 
+#[test]
+fn review_grouped_reload_reports_a_cleared_preview_only_copy() {
+    let dir = Dir(std::env::temp_dir().join(format!("lc-ui-reload-grouped-{}", std::process::id())));
+    let (mut app, id) = app_with_stale_photo(&dir.0);
+    let r = app.session.execute("photo.virtualCopy", &json!({"ids": [id.0]})).unwrap();
+    let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+    let p = app.session.catalog.photo(id).unwrap().clone();
+    app.session
+        .catalog
+        .apply(Op::SetContent {
+            id,
+            width: p.width,
+            height: p.height,
+            file_size: p.file_size,
+            content_hash: p.content_hash.clone(),
+            preview_only: None,
+            preview_checked: String::new(),
+        })
+        .unwrap();
+    let ctx = egui::Context::default();
+    assert_eq!(app.run("photo.reload", json!({"ids": [id.0, copy.0]})).unwrap()["count"], 1);
+    assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
+    assert!(app.session.catalog.photo(copy).unwrap().preview_only.is_none());
+    assert!(app.ui.toast.as_ref().is_some_and(|(t, _, _)| t == "This raw is now developed from its raw data"), "{:?}", app.ui.toast);
+}
+
 /// Reload from Disk on a selection returns at once and reads the files on a worker thread; `wait`
 /// runs it in place; a cancelled reload changes nothing it didn't read.
 #[test]

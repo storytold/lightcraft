@@ -17,28 +17,131 @@ use lightcraft_pipeline::masks::{MatteKind, Mattes};
 use lightcraft_pipeline::tone::CameraTone;
 use lightcraft_raster::{Image, Rgb32f, Rgba8};
 
+mod availability;
+pub use availability::Availability;
+
 const MAGIC: &[u8] = b"LCSP1\n";
 
-/// The proxy's file name for a photo (by its content, so copies share one).
-pub fn file_name(p: &Photo) -> String {
-    let h = lightcraft_preview::Hasher128::new().str(&crate::media::content_key(p)).finish();
-    format!("{:032x}.lcsp", h.0)
+/// Raw proxies retain their sensor/preview interpretation; rendered-image identities stay unchanged.
+fn raw_interpretation(p: &Photo) -> Option<bool> {
+    (p.kind == lightcraft_catalog::MediaKind::Raw).then(|| p.develops_raw())
 }
 
-/// The default sharded location of a proxy. A two-character hex prefix bounds each
-/// folder to about 1/256 of the library's smart previews.
+/// The proxy's file name by content and raw interpretation, so matching copies share one.
+pub fn file_name(p: &Photo) -> String {
+    let mut key = lightcraft_preview::Hasher128::new();
+    key.str(&crate::media::content_key(p));
+    if let Some(raw) = raw_interpretation(p) {
+        key.str("raw-proxy-v1").u64(u64::from(raw)).u64(crate::media::decoder_key(p));
+    }
+    format!("{:032x}.lcsp", key.finish().0)
+}
+
+/// The default sharded location of a proxy; the two-character prefix bounds each folder.
 pub fn sharded_file_path(dir: &Path, p: &Photo) -> PathBuf {
-    let name = file_name(p);
+    shard(dir, &file_name(p))
+}
+
+fn shard(dir: &Path, name: &str) -> PathBuf {
     match name.get(..2) {
-        Some(shard) => dir.join(shard).join(&name),
-        None => dir.join(&name),
+        Some(shard) => dir.join(shard).join(name),
+        None => dir.join(name),
     }
 }
 
-/// Read an existing proxy in either layout. New proxies use the sharded location; previews
-/// made by older releases still load and can be moved with smartPreviewsLocation.
+/// Immutable proxy candidates. Construction does no I/O; workers check stored interpretation.
+#[derive(Clone)]
+pub struct PreviewPath {
+    dir: PathBuf,
+    current: PathBuf,
+    previous: Option<PathBuf>,
+    raw: Option<bool>,
+    // A content-only sensor ORF cannot identify which withdrawn decoder wrote its pixels.
+    legacy_sensor_orf: bool,
+}
+
+impl PreviewPath {
+    pub(crate) fn new(dir: &Path, p: &Photo) -> Self {
+        let raw = raw_interpretation(p);
+        let previous = raw.map(|_| {
+            let h = lightcraft_preview::Hasher128::new().str(&crate::media::content_key(p)).finish();
+            shard(dir, &format!("{:032x}.lcsp", h.0))
+        });
+        let legacy_sensor_orf = raw == Some(true) && p.format.eq_ignore_ascii_case("ORF");
+        Self { dir: dir.to_path_buf(), current: sharded_file_path(dir, p), previous, raw, legacy_sensor_orf }
+    }
+
+    /// Current and content-only legacy identities, including files retained only for recovery.
+    pub(crate) fn candidates(&self) -> Vec<PathBuf> {
+        self.paths(true)
+    }
+
+    /// Raw facts do not identify an old ORF writer; only this decoder's sensor identity is trusted.
+    pub(crate) fn load_candidates(&self) -> Vec<PathBuf> {
+        self.paths(!self.legacy_sensor_orf)
+    }
+
+    fn paths(&self, legacy: bool) -> Vec<PathBuf> {
+        std::iter::once(&self.current)
+            .chain(self.previous.iter().filter(|_| legacy))
+            .flat_map(|path| std::iter::once(path.clone()).chain(path.file_name().map(|name| self.dir.join(name))))
+            .collect()
+    }
+
+    /// Rebuilds write only their captured interpretation; older identities remain read-only.
+    pub(crate) fn write_path(&self) -> &Path {
+        &self.current
+    }
+
+    pub(crate) fn expected_raw(&self) -> Option<bool> {
+        self.raw
+    }
+
+    /// Retention and repair need to find any remaining file, even when its pixels cannot be used.
+    pub(crate) fn resolve(&self) -> PathBuf {
+        self.candidates().into_iter().find(|path| path.exists()).unwrap_or_else(|| self.current.clone())
+    }
+
+    /// Existing but incompatible/damaged proxies must not make the opening refresh look complete.
+    pub(crate) fn needs_refresh(&self, look: bool) -> bool {
+        self.candidates().iter().any(|path| path.exists()) && self.load_with_path().map_or(true, |(path, _)| is_stale_for(&path, look))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn load(&self) -> Result<crate::media::DecodedSource, String> {
+        self.load_with_path().map(|(_, source)| source)
+    }
+
+    /// Framing alone cannot establish that the JPEG decodes or the facts match its consumer.
+    pub(crate) fn load_with_path(&self) -> Result<(PathBuf, crate::media::DecodedSource), String> {
+        let mut error = format!("{}: missing or incomplete smart preview", self.current.display());
+        for path in self.load_candidates() {
+            match load_compatible(&path, self.raw) {
+                Ok(source) => return Ok((path, source)),
+                Err(e) => error = e,
+            }
+        }
+        Err(format!("{error}; reconnect the original and use Build Smart Previews"))
+    }
+}
+
+fn load_compatible(path: &Path, expected: Option<bool>) -> Result<crate::media::DecodedSource, String> {
+    // Unknown legacy raw facts cannot prove either interpretation. Rendered images keep their old fallback.
+    if !is_valid(path) || expected.is_some_and(|raw| stored_raw(path) != Some(raw)) {
+        return Err(format!("{}: missing or incompatible smart preview", path.display()));
+    }
+    let source = load(path)?;
+    // Recheck the facts read with the pixels; the file may have changed since the cheap prefilter.
+    if expected.is_some_and(|raw| source.info.as_ref().is_none_or(|info| info.raw != raw)) {
+        return Err("smart preview has no compatible source facts".into());
+    }
+    Ok(source)
+}
+
+/// Locate any existing proxy for retention/repair, in either layout or identity.
+/// Use `PreviewPath` loading to check whether its pixels are compatible.
 pub fn file_path(dir: &Path, p: &Photo) -> PathBuf {
-    existing_file_path(dir, sharded_file_path(dir, p))
+    PreviewPath::new(dir, p).resolve()
 }
 
 /// Resolve a sharded path to an older flat file when present. Call only off the UI thread:
@@ -54,6 +157,52 @@ pub fn existing_file_path(dir: &Path, sharded: PathBuf) -> PathBuf {
 
 /// The most header [`is_valid`] reads (the JSON line before the JPEG).
 const HEADER_MAX: u64 = 4096;
+
+/// Bound JSON independently of matte planes without dropping supported DNG tables. At 24 JSON
+/// bytes per float, two 2^22-gain maps plus three 2^20-entry RGB profile tables need 408 MiB;
+/// 512 MiB leaves room for their structure and the other facts. Keep encode and reads in agreement.
+const FACTS_MAX: usize = 512 * 1024 * 1024;
+
+/// Total encoded proxy budget, including JPEG, facts and matte planes. Leave another 512 MiB
+/// beyond the supported facts budget for pixels and mattes; reject larger proxies explicitly
+/// rather than allocating from an untrusted file length. Encoding obeys the same limit.
+const FILE_MAX: usize = 1024 * 1024 * 1024;
+
+/// Prefilter the bounded interpretation without allocating camera tables or matte planes.
+/// Loading validates the complete facts with their actual pixels.
+fn stored_raw(path: &Path) -> Option<bool> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let file_len = f.metadata().ok()?.len();
+    if file_len > FILE_MAX as u64 {
+        return None;
+    }
+    let mut head = Vec::new();
+    (&mut f).take(HEADER_MAX).read_to_end(&mut head).ok()?;
+    let rest = head.strip_prefix(MAGIC)?;
+    let nl = rest.iter().position(|b| *b == b'\n')?;
+    let header: serde_json::Value = serde_json::from_slice(rest.get(..nl)?).ok()?;
+    let tail = header.get("tail")?.as_u64()?;
+    let start = file_len.checked_sub(tail)?;
+    if tail < 4 || start <= (MAGIC.len() + nl + 3) as u64 {
+        return None;
+    }
+    f.seek(SeekFrom::Start(start)).ok()?;
+    let mut n = [0; 4];
+    f.read_exact(&mut n).ok()?;
+    let n = u64::from(u32::from_le_bytes(n));
+    // File-derived lengths are hostile. Camera facts fit within this budget; the potentially
+    // much larger matte planes follow the JSON and are not needed for the raw flag.
+    if n > FACTS_MAX as u64 || n > tail - 4 {
+        return None;
+    }
+    #[derive(serde::Deserialize)]
+    struct Interpretation {
+        raw: bool,
+    }
+    let facts: Interpretation = serde_json::from_reader(std::io::BufReader::new(f.take(n))).ok()?;
+    Some(facts.raw)
+}
 
 /// The header field that records which version of the camera-look fit (`camera_preview::LOOK_VERSION`)
 /// wrote the proxy's pixels (colour matrix and profile are baked into them) and stored tone curve.
@@ -111,9 +260,26 @@ struct StoredMatte {
     len: usize,
 }
 
+/// Use the same shape and length checks for compatibility and decoding, without allocating
+/// matte planes just to inspect an offline proxy. Every tail byte must belong to a known matte.
+fn parse_facts(json: &[u8], plane_bytes: u64) -> Option<SmartFacts> {
+    if json.len() > FACTS_MAX {
+        return None;
+    }
+    let facts: SmartFacts = serde_json::from_slice(json).ok()?;
+    let mut total = 0_u64;
+    for m in &facts.mattes {
+        MatteKind::from_code(m.kind)?;
+        if m.w == 0 || m.h == 0 || m.w.checked_mul(m.h)? != m.len {
+            return None;
+        }
+        total = total.checked_add(m.len as u64)?;
+    }
+    (total == plane_bytes).then_some(facts)
+}
+
 /// The facts and mattes a proxy's tail holds: the length-prefixed JSON, then one byte plane per
-/// stored matte. `None` for an old proxy or a malformed tail; like a missing curve, the offline
-/// render then keeps its header facts.
+/// stored matte. `None` means the declared tail is malformed and must not be used.
 fn stored_facts(head: &serde_json::Value, bytes: &[u8]) -> Option<(SmartFacts, Mattes)> {
     let tail = usize::try_from(head.get("tail")?.as_u64()?).ok()?;
     if tail == 0 || tail > bytes.len() {
@@ -121,19 +287,14 @@ fn stored_facts(head: &serde_json::Value, bytes: &[u8]) -> Option<(SmartFacts, M
     }
     let t = bytes.get(bytes.len() - tail..)?;
     let n = u32::from_le_bytes(t.get(..4)?.try_into().ok()?) as usize;
-    let facts: SmartFacts = serde_json::from_slice(t.get(4..4 + n)?).ok()?;
+    let mut at = 4_usize.checked_add(n)?;
+    let facts = parse_facts(t.get(4..at)?, t.len().checked_sub(at)? as u64)?;
     let mut mattes = Mattes::default();
-    let mut at = 4 + n;
     for m in &facts.mattes {
         let kind = MatteKind::from_code(m.kind)?;
-        if m.w == 0 || m.h == 0 || m.w.checked_mul(m.h)? != m.len {
-            return None;
-        }
-        mattes.push(kind, Image { width: m.w, height: m.h, data: t.get(at..at.checked_add(m.len)?)?.to_vec() });
-        at += m.len;
-    }
-    if at != t.len() {
-        return None;
+        let end = at.checked_add(m.len)?;
+        mattes.push(kind, Image { width: m.w, height: m.h, data: t.get(at..end)?.to_vec() });
+        at = end;
     }
     Some((facts, mattes))
 }
@@ -200,17 +361,33 @@ pub fn encode(img: &Rgb32f, info: Option<&SourceInfo>) -> Result<Vec<u8>, String
             mattes: matte_list,
         };
         let facts = serde_json::to_vec(&facts).map_err(|e| e.to_string())?;
+        if facts.len() > FACTS_MAX {
+            return Err("smart preview facts too large".into());
+        }
         let n = u32::try_from(facts.len()).map_err(|_| "smart preview facts too large")?;
         tail.extend_from_slice(&n.to_le_bytes());
         tail.extend_from_slice(&facts);
         if let Some(m) = i.mattes.as_deref() {
             for (_, a) in m.iter() {
+                if tail.len().checked_add(a.data.len()).is_none_or(|n| n > FILE_MAX) {
+                    return Err("smart preview exceeds the file-size budget".into());
+                }
                 tail.extend_from_slice(&a.data);
             }
         }
         head["tail"] = serde_json::json!(tail.len());
     }
-    out.extend_from_slice(head.to_string().as_bytes());
+    let head = head.to_string();
+    let total = out
+        .len()
+        .checked_add(head.len())
+        .and_then(|n| n.checked_add(1))
+        .and_then(|n| n.checked_add(jpg.len()))
+        .and_then(|n| n.checked_add(tail.len()));
+    if total.is_none_or(|n| n > FILE_MAX) {
+        return Err("smart preview exceeds the file-size budget".into());
+    }
+    out.extend_from_slice(head.as_bytes());
     out.push(b'\n');
     out.extend_from_slice(&jpg);
     out.extend_from_slice(&tail);
@@ -218,24 +395,31 @@ pub fn encode(img: &Rgb32f, info: Option<&SourceInfo>) -> Result<Vec<u8>, String
 }
 
 /// Decode a smart preview back into a source image, its stored camera tone curve and the stored
-/// decoder facts (an invalid curve or tail is ignored, like a missing one).
+/// decoder facts. Older proxies without a tail remain supported; a declared malformed tail fails.
 pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>, Option<SourceInfo>), String> {
+    if bytes.len() > FILE_MAX {
+        return Err("smart preview exceeds the file-size budget".into());
+    }
     let rest = bytes.strip_prefix(MAGIC).ok_or("not a smart preview")?;
-    let nl = rest.iter().position(|b| *b == b'\n').ok_or("bad smart preview")?;
+    let nl = rest.iter().take(HEADER_MAX as usize - MAGIC.len()).position(|b| *b == b'\n').ok_or("bad smart preview")?;
     let head: serde_json::Value = serde_json::from_slice(&rest[..nl]).map_err(|e| e.to_string())?;
     let scale = head["scale"].as_f64().unwrap_or(1.0) as f32;
     let tone = head.get("tone").and_then(|t| serde_json::from_value::<CameraTone>(t.clone()).ok());
-    let tail = head.get("tail").and_then(serde_json::Value::as_u64).and_then(|t| usize::try_from(t).ok()).unwrap_or(0);
+    let tail = match head.get("tail") {
+        None => 0,
+        Some(t) => usize::try_from(t.as_u64().ok_or("bad smart preview tail")?).map_err(|_| "bad smart preview tail")?,
+    };
     let start = MAGIC.len() + nl + 1;
     let end = bytes.len().saturating_sub(tail);
     if end <= start {
         return Err("bad smart preview".into());
     }
+    let facts = if tail == 0 { None } else { Some(stored_facts(&head, bytes).ok_or("bad smart preview facts")?) };
     let d = lightcraft_codecs::decode(bytes.get(start..end).ok_or("bad smart preview")?, Default::default()).map_err(|e| e.to_string())?;
     // the decoder undoes the sRGB encoding; the values are the source's own primaries
     let mut img = d.image;
     img.data.iter_mut().for_each(|c| *c = c.map(|v| v * scale));
-    let info = stored_facts(&head, bytes).map(|(f, mattes)| SourceInfo {
+    let info = facts.map(|(f, mattes)| SourceInfo {
         raw: f.raw,
         as_shot_temp: f.as_shot_temp,
         as_shot_tint: f.as_shot_tint,
@@ -494,9 +678,21 @@ pub fn mark_look_checked(dir: &Path) -> Result<(), String> {
     lightcraft_catalog::safe_file::write_atomic(&path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// Load the proxy at `path`.
+/// Load a size-bounded proxy. Bound the actual read too, since a file can grow after metadata.
 pub fn load(path: &Path) -> Result<crate::media::DecodedSource, String> {
-    let b = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    use std::io::Read;
+    let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let len = file.metadata().map_err(|e| e.to_string())?.len();
+    if len > FILE_MAX as u64 {
+        return Err("smart preview exceeds the file-size budget".into());
+    }
+    let mut b = Vec::new();
+    let reserve = usize::try_from(len + 1).map_err(|_| "smart preview exceeds the file-size budget")?;
+    b.try_reserve_exact(reserve).map_err(|e| format!("smart preview cannot be allocated: {e}"))?;
+    file.take(len + 1).read_to_end(&mut b).map_err(|e| format!("{}: {e}", path.display()))?;
+    if b.len() as u64 != len {
+        return Err("smart preview changed while reading".into());
+    }
     decode(&b).map(|(image, camera_tone, info)| crate::media::DecodedSource {
         image: Arc::new(image),
         info,

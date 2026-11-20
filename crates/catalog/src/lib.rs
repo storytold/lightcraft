@@ -207,9 +207,12 @@ pub enum Op {
         id: PhotoId,
         file_name: String,
         source: Source,
-        /// The file's format when it changes too (Convert to DNG).
+        /// The file's format when it changes too (Convert to DNG or a fresh probe).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         format: Option<String>,
+        /// A fresh probe's media kind; omitted by older journals and path-only moves.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<MediaKind>,
     },
     /// What a photo's file is now (after it changed on disk: Reload).
     SetContent {
@@ -825,6 +828,7 @@ impl Catalog {
             Op::SetLabel { .. } => self.changes.now = Aspects::LABEL,
             Op::SetMeta { .. } => self.changes.now = Aspects::META,
             Op::SetCaptured { .. } => self.changes.now = Aspects::CAPTURED,
+            Op::Relink { kind: Some(_), .. } => self.changes.now = Aspects::ALL,
             Op::SetFile { .. } | Op::Relink { .. } => self.changes.now = Aspects::FILE,
             Op::SetAnalysis { .. } => self.changes.now = Aspects::ANALYSIS,
             Op::SetDevelop { .. } | Op::SetVersions { .. } | Op::SetHistory { .. } | Op::PushHistory { .. } | Op::SetHistoryCursor { .. } => {
@@ -1069,11 +1073,12 @@ impl Catalog {
                 let p = self.photo_mut(id)?;
                 Op::SetCaptured { id, captured: std::mem::replace(&mut p.captured, captured) }
             }
-            Op::Relink { id, file_name, source, format } => {
+            Op::Relink { id, file_name, source, format, kind } => {
                 let p = self.photo_mut(id)?;
                 let old_name = std::mem::replace(&mut p.file_name, file_name);
                 let old_format = format.map(|f| std::mem::replace(&mut p.format, f));
-                Op::Relink { id, file_name: old_name, source: std::mem::replace(&mut p.source, source), format: old_format }
+                let old_kind = kind.map(|k| std::mem::replace(&mut p.kind, k));
+                Op::Relink { id, file_name: old_name, source: std::mem::replace(&mut p.source, source), format: old_format, kind: old_kind }
             }
             Op::SetContent { id, width, height, file_size, content_hash, preview_only, preview_checked } => {
                 let p = self.photo_mut(id)?;
