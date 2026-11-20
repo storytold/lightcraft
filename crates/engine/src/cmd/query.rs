@@ -128,29 +128,8 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!(query "photo.allMetadata", "All Metadata", [], None, "{id?} → {exif: [{group, tag, name, value}], xmp: [{name, value}]} — every EXIF / TIFF / GPS tag of the file and its XMP properties", always, |s, p| {
             let id = photo_arg(s, p, "photo.allMetadata")?;
-            let ph = s.catalog.photo(id).ok_or_else(|| super::bad("photo.allMetadata", "no such photo"))?.clone();
-            let lightcraft_catalog::Source::File { path } = &ph.source else {
-                return Ok(json!({"exif": [], "xmp": [], "note": "a generated demo photo has no file"}));
-            };
-            let bytes = match &s.media.file_bytes {
-                Some(r) => r(path),
-                None => std::fs::read(path).map_err(|e| format!("{path}: {e}")),
-            }
-            .map_err(|e| super::bad("photo.allMetadata", e))?;
-            let exif: Vec<Value> = lightcraft_meta::file_tag_rows(&bytes)
-                .into_iter()
-                .map(|r| json!({"group": r.group, "tag": r.tag, "name": r.name, "value": r.value}))
-                .collect();
-            // Keep sidecar precedence; reuse the loaded bytes for embedded XMP.
-            let packet = match s.sidecar_lookup(ph.id).find(path) {
-                Some(sc) => std::fs::read_to_string(sc).ok(),
-                None => lightcraft_meta::embedded(&bytes).xmp,
-            };
-            let xmp: Vec<Value> = packet
-                .and_then(|x| lightcraft_meta::parse_xmp(&x).ok())
-                .map(|d| d.properties.into_iter().filter(|(k, _)| !k.starts_with("lc:")).map(|(k, v)| json!({"name": k, "value": v.join("; ")})).collect())
-                .unwrap_or_default();
-            Ok(json!({"exif": exif, "xmp": xmp}))
+            crate::metadata_read::Request::new(s, id).and_then(|request| request.read())
+                .map_err(|e| super::bad("photo.allMetadata", e))
         }),
         cmd!(query "albums.list", "List Albums", [], None, "{}", always, |s, _| {
             let all: Vec<Album> = s.catalog.albums().cloned().collect();

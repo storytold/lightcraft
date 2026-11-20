@@ -146,6 +146,9 @@ fn theme_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
 
 /// Handle UI commands; `None` means "not a UI command — send it to the engine".
 pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    if id == "view.combineAlbums" {
+        return Some(crate::album_combination::command(app, p));
+    }
     if matches!(id, "ui.dock" | "ui.dock.reset") {
         return Some(crate::docking::command(app, id == "ui.dock.reset", p));
     }
@@ -969,6 +972,10 @@ fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
         }
         "panel.info" => {
             panel(app, ctx, RightPanel::Info, "Info");
+            Ok(Value::Null)
+        }
+        "panel.metadata" => {
+            panel(app, ctx, RightPanel::Metadata, "Metadata");
             Ok(Value::Null)
         }
         "panel.keywords" => {

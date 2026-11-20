@@ -148,6 +148,15 @@ fn library_error(dir: &str, e: lightcraft_engine::EngineError) -> String {
 }
 
 fn main() -> ExitCode {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(lightcraft_engine::metadata_read::WORKER_ARG)) {
+        return match lightcraft_engine::metadata_read::worker_main() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     // `--features dhat-heap`: count allocations; the profile is written when `_heap` drops
     // (LIGHTCRAFT_DHAT_FILE, default dhat-heap.json).
     #[cfg(feature = "dhat-heap")]
