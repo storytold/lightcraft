@@ -256,15 +256,26 @@ fn probe(backends: Backends, compose_window: bool) -> Result<WgpuSetupExisting, 
         use winit::event_loop::EventLoop;
         use winit::window::Window;
 
-        let event_loop = match EventLoop::<()>::new() {
-            Ok(el) => el,
-            Err(_) => return Err("GL probe requires a display handle on Linux; XOpenDisplay failed".into()),
-        };
-        let owned_display = event_loop.owned_display_handle();
-        let window = match event_loop.create_window(Window::default_attributes().with_visible(false).with_title("LightCraft GL Probe")) {
-            Ok(w) => w,
-            Err(_) => return Err("GL probe requires a display handle on Linux; XOpenDisplay failed".into()),
-        };
+        let mut window: Option<Window> = None;
+        let mut owned_display = None;
+        let event_loop = EventLoop::<()>::new().map_err(|_| "GL probe requires a display handle on Linux; XOpenDisplay failed".to_string())?;
+        event_loop
+            .run(|event, elwt| {
+                if let winit::event::Event::Resumed = event {
+                    match elwt.create_window(Window::default_attributes().with_visible(false).with_title("LightCraft GL Probe")) {
+                        Ok(w) => {
+                            owned_display = Some(elwt.owned_display_handle());
+                            window = Some(w);
+                        }
+                        Err(_) => {}
+                    }
+                    elwt.exit();
+                }
+            })
+            .map_err(|_| "GL probe event loop failed".to_string())?;
+
+        let window = window.ok_or("GL probe failed to create window")?;
+        let owned_display = owned_display.ok_or("GL probe failed to get display handle")?;
 
         let descriptor = wgpu::InstanceDescriptor {
             backends,
@@ -298,8 +309,7 @@ fn probe(backends: Backends, compose_window: bool) -> Result<WgpuSetupExisting, 
         if !has_formats {
             return Err("GL probe surface has no presentable formats".into());
         }
-        // Leak the event loop and window to keep the display connection alive for the instance
-        Box::leak(Box::new(event_loop));
+        // Leak the window to keep the display connection alive for the instance
         Box::leak(Box::new(window));
         return Ok(WgpuSetupExisting { instance, adapter, device, queue });
     }
