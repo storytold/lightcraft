@@ -264,8 +264,9 @@ static RELEASE: OnceLock<fn()> = OnceLock::new();
 
 /// Install a hook that hands memory the allocator keeps after frees back to the system (first
 /// call wins). The macOS allocator keeps freed large blocks resident (reusable, but counted in
-/// the resident size) until the system runs short; the apps install
-/// `malloc_zone_pressure_relief` so the resident size follows what is actually held.
+/// the resident size) until the system runs short, and glibc keeps the free pages of each thread's
+/// arena; the apps install `lightcraft_sysmem::release_free_memory` (`malloc_zone_pressure_relief`,
+/// `malloc_trim`) so the resident size follows what is actually held.
 pub fn set_release_hook(f: fn()) {
     let _ = RELEASE.set(f);
 }
