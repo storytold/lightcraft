@@ -261,10 +261,7 @@ fn probe(backends: Backends, compose_window: bool) -> Result<WgpuSetupExisting, 
             Err(_) => return Err("GL probe requires a display handle on Linux; XOpenDisplay failed".into()),
         };
         let owned_display = event_loop.owned_display_handle();
-        let window = match winit::event_loop::ActiveEventLoop::create_window(
-            &event_loop,
-            Window::default_attributes().with_visible(false).with_title("LightCraft GL Probe"),
-        ) {
+        let window = match event_loop.create_window(Window::default_attributes().with_visible(false).with_title("LightCraft GL Probe")) {
             Ok(w) => w,
             Err(_) => return Err("GL probe requires a display handle on Linux; XOpenDisplay failed".into()),
         };
