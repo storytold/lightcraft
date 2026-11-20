@@ -821,6 +821,108 @@ fn stored_process_numbers_render_with_a_known_process() {
     }
 }
 
+/// Paint diverges from Color (and from Highlight) in both vignette directions: when darkening it
+/// lifts the black point and lowers corner contrast and saturation; when lightening it lifts
+/// channels below `1 - PAINT_LEVEL` and leaves the rest alone; amount 0 is a no-op.
+#[test]
+fn vignette_paint_style_differs_from_color() {
+    use lightcraft_develop::VignetteStyle;
+    // A 16x16 frame with a gradient, so the vignette actually covers it. Pixel (0, 0) is the
+    // corner furthest from the frame centre in the vignette's radial distance, hence the most
+    // strongly vignetted pixel; that is the one the assertions below read.
+    let src = Rgb32f::from_fn(16, 16, |x, _| {
+        let g = 0.5 + 0.4 * (x as f32 / 15.0);
+        [g, g * 0.5, g * 0.25]
+    });
+
+    let corner = |img: &lightcraft_raster::Rgba8| img.data[0];
+
+    let sat = |p: [u8; 4]| {
+        let (r, g, b) = (p[0] as f32, p[1] as f32, p[2] as f32);
+        let mx = r.max(g).max(b);
+        let mn = r.min(g).min(b);
+        if mx <= 0.0 { 0.0 } else { (mx - mn) / mx }
+    };
+    let contrast = |p: [u8; 4]| {
+        let (r, g, b) = (p[0] as f32, p[1] as f32, p[2] as f32);
+        r.max(g).max(b) - r.min(g).min(b)
+    };
+
+    for &amount in &[-60.0_f64, 60.0] {
+        let mut color = DevelopSettings::default();
+        color.vignette.amount = amount;
+        color.vignette.style = VignetteStyle::ColorPriority;
+        color.vignette.midpoint = 0.0;
+        color.vignette.highlights = 0.0;
+        let mut paint = color.clone();
+        paint.vignette.style = VignetteStyle::PaintOverlay;
+        let mut high = color.clone();
+        high.vignette.style = VignetteStyle::HighlightPriority;
+
+        let rc = render(&src, &SourceInfo::default(), &color, &RenderRequest::fit(16, 16));
+        let rp = render(&src, &SourceInfo::default(), &paint, &RenderRequest::fit(16, 16));
+        let rh = render(&src, &SourceInfo::default(), &high, &RenderRequest::fit(16, 16));
+
+        // (1) Paint is not the same as Color
+        let diff_paint_color = rc.image.data.iter().zip(&rp.image.data).filter(|(a, b)| a != b).count();
+        assert!(diff_paint_color > 0, "amount {amount}: Paint identical to Color ({diff_paint_color} differing pixels)");
+        // (2) Paint is not the same as HighlightPriority either
+        let diff_paint_high = rh.image.data.iter().zip(&rp.image.data).filter(|(a, b)| a != b).count();
+        assert!(diff_paint_high > 0, "amount {amount}: Paint identical to HighlightPriority ({diff_paint_high} differing pixels)");
+
+        let pc = corner(&rp.image);
+        let cc = corner(&rc.image);
+
+        // (5) every channel in range
+        for p in rp.image.data.iter().chain(rc.image.data.iter()).chain(rh.image.data.iter()) {
+            for &v in &p[..3] {
+                assert!((0..=255).contains(&v), "channel out of range: {v}");
+            }
+        }
+
+        if amount < 0.0 {
+            // (3) the black point is lifted: Paint's corner is lighter than Color's
+            let pc_sum = pc[0] as i32 + pc[1] as i32 + pc[2] as i32;
+            let cc_sum = cc[0] as i32 + cc[1] as i32 + cc[2] as i32;
+            assert!(pc_sum > cc_sum, "amount {amount}: Paint corner {pc:?} not lighter than Color {cc:?}");
+            // (4) contrast and saturation fall
+            assert!(sat(pc) < sat(cc), "amount {amount}: Paint saturation {} not < Color {}", sat(pc), sat(cc));
+            assert!(contrast(pc) < contrast(cc), "amount {amount}: Paint contrast {} not < Color {}", contrast(pc), contrast(cc));
+        }
+    }
+
+    // (6) amount = 0 is a no-op for Paint
+    let mut s = DevelopSettings::default();
+    s.vignette.amount = 0.0;
+    s.vignette.style = VignetteStyle::PaintOverlay;
+    s.vignette.midpoint = 0.0;
+    let src2 = Rgb32f::from_fn(16, 16, |x, _| [0.3 + 0.4 * (x as f32 / 15.0), 0.2, 0.1]);
+    let r_paint = render(&src2, &SourceInfo::default(), &s, &RenderRequest::fit(16, 16));
+    let mut s2 = s.clone();
+    s2.vignette.style = VignetteStyle::ColorPriority;
+    let r_color = render(&src2, &SourceInfo::default(), &s2, &RenderRequest::fit(16, 16));
+    assert_eq!(r_paint.image.data, r_color.image.data, "Paint at amount 0 differs from Color");
+
+    // (7) positive Paint lifts channels below 1 - PAINT_LEVEL and leaves the rest alone
+    let paint_corner = |src: &Rgb32f, amount: f64| {
+        let mut s = DevelopSettings::default();
+        s.vignette.amount = amount;
+        s.vignette.style = VignetteStyle::PaintOverlay;
+        s.vignette.midpoint = 0.0;
+        render(src, &SourceInfo::default(), &s, &RenderRequest::fit(16, 16)).image.data[0]
+    };
+    let dark = Rgb32f::from_fn(16, 16, |_, _| [0.05, 0.025, 0.0125]);
+    let dark0 = paint_corner(&dark, 0.0);
+    let dark60 = paint_corner(&dark, 60.0);
+    for c in 0..3 {
+        assert!(dark60[c] > dark0[c], "channel {c}: positive Paint did not lift the dark corner");
+    }
+    let bright = Rgb32f::from_fn(16, 16, |_, _| [0.98, 0.96, 0.99]);
+    let bright0 = paint_corner(&bright, 0.0);
+    let bright60 = paint_corner(&bright, 60.0);
+    assert_eq!(bright60, bright0, "positive Paint moved a channel above the paint level");
+}
+
 /// A crop a hair wide (or of no size, as a command or a sidecar can set) shown to fit made the
 /// tone, clarity and dehaze stages blur with sigmas of millions of pixels (infinite for no size):
 /// the box width's square overflowed (a panic in debug builds, a radius of billions of pixels and
