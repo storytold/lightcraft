@@ -104,15 +104,6 @@ bounded in time and size). Under nextest, `.config/nextest.toml`'s `slow-timeout
 after 30 minutes instead, whatever `LIGHTCRAFT_TEST_BINARY_TIMEOUT` says (xtask notes that when it is set). The wait for the CI slot gives up after `LIGHTCRAFT_CI_LOCK_WAIT` minutes
 (default 240, three full runs at the 80 minutes GitHub's gate allows one; `0` for no limit) with an error naming the run that holds it.
 
-Outside `ci`, `.cargo/config.toml`'s `[env]` limits plain `cargo test` to 4 tests at once per test
-binary (`RUST_TEST_THREADS = { value = "4", force = false }`, so a value already in the environment
-wins), and `.config/nextest.toml` sets `test-threads = 4` for `cargo nextest run`. `cargo xtask` runs
-under that config too, so `[env]` also sets a marker, `LIGHTCRAFT_TEST_THREADS_DEFAULT`, to the same
-value: a `RUST_TEST_THREADS` equal to it counts as unset (`caller_sets` in `xtask/src/main.rs`) and the
-caps replace it with the RAM-aware value, while any other value is the caller's and wins as-is. An
-explicit `RUST_TEST_THREADS=4` can't be told apart from the default, so `ci` and `xtask test` may
-lower it to their RAM-aware value (never raise it).
-
 `ci` also probes the machine: OS, CPUs, RAM, the GPU adapters of each backend (from the ignored
 `gpu_probe` test of `lightcraft-gpu`, run after the workspace tests so it reuses their build, each
 test binary it starts bounded by 5 minutes, and skipped once a test binary timed out; xtask
@@ -132,7 +123,6 @@ the `lightcraft-gpu` tests once per backend with a hardware adapter (`LIGHTCRAFT
 | 2026-11-03 | minor | Quality gates: a test run's output is forwarded outside the lock its clock is checked under, and not (but for a write under way) after the run ends; only a binary's first `running N tests` line restarts its clock; the slot wait never sleeps past its limit |
 | 2026-11-03 | minor | Quality gates: a timed-out test run's processes are signalled through pidfds on Linux (never a reused pid; without pidfds only xtask's own child is killed), and one that can't be killed is continued rather than left stopped |
 | 2026-10-26 | minor | Quality gates: each test binary's run (`LIGHTCRAFT_TEST_BINARY_TIMEOUT`) and the wait for the CI slot (`LIGHTCRAFT_CI_LOCK_WAIT`) have a time limit |
-| 2026-10-26 | minor | Quality gates: plain `cargo test` (and `cargo nextest run`) runs at most 4 tests at once; xtask tells that default from a caller's `RUST_TEST_THREADS` |
 | 2026-10-26 | minor | Quality gates: `cargo xtask test` runs the tests with `ci`'s caps and slot, and can keep going past a failing binary |
 | 2026-10-23 | minor | Quality gates: one integration-test binary per crate, doctests apart, nextest on request, one WASM check |
 | 2026-10-11 | minor | Quality gates: the CI machine probe, visible skips (`testkit`) and `target/ci/report.json` |

@@ -1,9 +1,8 @@
 //! `cargo xtask test [-p PKG]… [--keep-going] [--doc] [-- ARGS]`: the workspace tests, or some
 //! packages' tests, under the same caps as `ci` and in its machine-wide slot.
 //!
-//! Plain `cargo test --workspace` takes no CI slot and gets only `.cargo/config.toml`'s 4 test
-//! threads per binary (libtest's own default, one per CPU, ran the ui-egui tests alone out of memory
-//! on a 16-core machine, #3057, #3059), not `ci`'s RAM-aware caps. This runs them the
+//! Plain `cargo test --workspace` runs one test per CPU in every test binary and takes no CI slot:
+//! on a 16-core machine the ui-egui tests alone then run out of memory (#3057). This runs them the
 //! way `ci` does: build jobs by available RAM, at most 4 test threads, line-table debuginfo
 //! ([`super::use_ci_caps`]), one run per machine ([`ci_lock`]).
 //!
@@ -162,12 +161,11 @@ fn names<'a>(packages: impl Iterator<Item = &'a Package>) -> String {
 /// Run one test binary as `cargo test` would (from its package's directory, with its
 /// `CARGO_MANIFEST_DIR` and `CARGO_PKG_NAME`) under CI's caps ([`super::apply_ci_caps`]: where the
 /// caller doesn't set it, `RUST_TEST_THREADS` is the RAM-aware `min(build jobs by available RAM, 4)`
-/// of `ci`'s cargo runs; `.cargo/config.toml`'s default doesn't count, [`super::caller_sets`]), with
-/// `args`; skips the tests record go to `skip_log`. The one place `test` and `ci --quick` start a
-/// test binary and wait for it, for at most `limit` ([`deadline::run_test_binary`];
-/// [`deadline::test_binary_timeout`] gives it). The error says how it ended: its exit status, the
-/// signal that killed it, that it ran out of time (and which tests were still running), or why it
-/// didn't start.
+/// of `ci`'s cargo runs), with `args`; skips the tests record go to `skip_log`. The one place `test`
+/// and `ci --quick` start a test binary and wait for it, for at most `limit`
+/// ([`deadline::run_test_binary`]; [`deadline::test_binary_timeout`] gives it). The error says how
+/// it ended: its exit status, the signal that killed it, that it ran out of time (and which tests
+/// were still running), or why it didn't start.
 pub fn run_binary(root: &Path, binary: &Binary, args: &[&str], skip_log: Option<&Path>, limit: Option<Duration>) -> Result<(), String> {
     let dir = Path::new(&binary.manifest).parent().unwrap_or(root);
     let mut c = Command::new(&binary.exe);
