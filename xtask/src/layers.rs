@@ -38,6 +38,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("color", Class::Layer(0)),
     ("raster", Class::Layer(0)),
     ("sysmem", Class::Layer(0)),
+    ("coreml", Class::Layer(0)),
     ("wincolor", Class::Layer(0)),
     ("fetch", Class::Layer(0)),
     ("denoise-core", Class::Layer(1)),
