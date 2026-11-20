@@ -883,6 +883,64 @@ mod tests {
         for lut in &luts {
             assert_eq!(lut.v.len(), 1024);
         }
+        let param = crate::curve::ParametricCurve::new(&c).to_lut();
+        let master = MonotoneCurve::new(&[(0.0, 0.04), (0.5, 0.56), (1.0, 0.96)]).to_lut(1024);
+        let red = MonotoneCurve::new(&[(0.0, 0.0), (0.4, 0.46), (1.0, 1.0)]).to_lut(1024);
+        let blue = MonotoneCurve::new(&[(0.0, 0.0), (0.6, 0.54), (1.0, 1.0)]).to_lut(1024);
+        let x = 512.0 / 1023.0;
+        let base_mid = master.eval(param.eval(x));
+        assert!((luts[1].v[512] - base_mid).abs() < 1e-4, "green/master-only mismatch");
+        assert!((luts[0].v[512] - red.eval(base_mid)).abs() < 1e-3, "red composition mismatch");
+        assert!((luts[2].v[512] - blue.eval(base_mid)).abs() < 1e-3, "blue composition mismatch");
+        assert!((luts[0].v[512] - luts[1].v[512]).abs() > 0.01, "red must differ from master");
+        assert!((luts[2].v[512] - luts[1].v[512]).abs() > 0.01, "blue must differ from master");
+    }
+
+    #[test]
+    fn shared_tone_and_finish_match_pinned_legacy_values_at_neutral_highlights_and_channel_edges() {
+        let disp = ToneMap::display(0.0, 0.0, 0.0);
+        assert_eq!(disp.apply(0.0), 0.0);
+        assert!((disp.apply(0.18) - 0.18).abs() < 1e-4);
+        assert!((disp.apply(1.0) - 1.0).abs() < 1e-4);
+
+        let roll = ToneMap::rolloff_hdr(20.0, 30.0, -10.0, 1.0);
+        let (y_neutral, y_hi1, y_hi4) = (roll.apply(0.18), roll.apply(1.0), roll.apply(4.0));
+        assert!(y_neutral.is_finite() && y_hi1 > y_neutral && y_hi4 > y_hi1 && y_hi4 <= 1.0);
+
+        let lim = sharpen_limit(50.0);
+        assert!((lim - 0.03 * 50f32.sqrt()).abs() < 1e-6);
+        let st = sharpen_term(0.1, lim, 0.5);
+        assert!(st.is_finite() && st > 0.0);
+
+        let (mapped, t) = gamut_map_to([1.6, 0.05, 0.02], [0.2627, 0.6780, 0.0593], 1.0);
+        assert!(t < GAMUT_WARN && mapped.iter().all(|&c| (0.0..=1.0).contains(&c)));
+        assert!(mapped[0] > mapped[1] && mapped[1] >= mapped[2]);
+
+        // Pinned real render covering neutral (0.18), highlights (4.0), and channel edges.
+        let mut src = lightcraft_raster::Rgb32f::filled(8, 8, [0.18, 0.18, 0.18]);
+        for x in 0..8 {
+            src.data[x] = [4.0, 4.0, 4.0]; // row 0: highlight
+            src.data[8 + x] = [1.6, 0.05, 0.02]; // row 1: red edge
+            src.data[16 + x] = [0.01, 1.5, 0.02]; // row 2: green edge
+            src.data[24 + x] = [0.02, 0.05, 1.8]; // row 3: blue edge
+        }
+        let mut s = DevelopSettings::default();
+        s.light.highlights = -30.0;
+        s.light.shadows = 20.0;
+        s.curve.master = vec![Point::new(0.0, 0.04), Point::new(0.5, 0.56), Point::new(1.0, 0.96)];
+        s.curve.red = vec![Point::new(0.0, 0.0), Point::new(0.4, 0.46), Point::new(1.0, 1.0)];
+        s.curve.blue = vec![Point::new(0.0, 0.0), Point::new(0.6, 0.54), Point::new(1.0, 1.0)];
+        s.curve.refine_saturation = 25.0;
+        s.detail.sharpen_amount = 40.0;
+        s.vignette.amount = -20.0;
+        s.grain.amount = 15.0;
+        let out = crate::render(&std::sync::Arc::new(src), &SourceInfo::default(), &s, &crate::RenderRequest::fit(8, 8)).image;
+        let px = |row: usize, col: usize| out.data[row * 8 + col];
+        let (hi, r_edge, g_edge, b_edge, neutral) = (px(0, 4), px(1, 4), px(2, 4), px(3, 4), px(5, 4));
+        assert!(hi[0] > neutral[0] && hi[1] > neutral[1] && hi[2] > neutral[2]);
+        assert!(r_edge[0] > r_edge[1] && r_edge[0] > r_edge[2]);
+        assert!(g_edge[1] > g_edge[0] && g_edge[1] > g_edge[2]);
+        assert!(b_edge[2] > b_edge[0] && b_edge[2] > b_edge[1]);
     }
 
     #[test]
