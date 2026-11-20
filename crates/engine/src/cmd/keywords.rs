@@ -170,6 +170,7 @@ fn shortcut_keywords(s: &Session, p: &Value) -> Result<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for k in typed {
         let k = s.catalog.typed_keyword(&k);
+        s.catalog.check_keyword_name(&k).map_err(|e| bad("keyword.setShortcut", e.to_string()))?;
         if !k.is_empty() && !out.iter().any(|x| lightcraft_catalog::keywords::same(x, &k)) {
             out.push(k);
         }
@@ -280,6 +281,11 @@ pub fn specs() -> Vec<CommandSpec> {
                         None => current_keywords(s),
                     },
                 };
+                if p.get("keywords").is_some() {
+                    for k in &keywords {
+                        s.catalog.check_keyword_name(k).map_err(|e| bad("keyword.saveSet", e.to_string()))?;
+                    }
+                }
                 let set = KeywordSet { name: name.clone(), keywords };
                 match renames {
                     // rename: in its place, onto a name no other set has
@@ -444,7 +450,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Create Keyword",
             [],
             None,
-            "{name, parent?: keyword | null (default: the default parent; null = the top level), synonyms?, includeOnExport?, exportContaining?, exportSynonyms?, person?, addToSelected?: bool, ids?} → {keyword}",
+            "{name (a new level can't end in `*`), parent?: keyword | null (default: the default parent; null = the top level), synonyms?, includeOnExport?, exportContaining?, exportSynonyms?, person?, addToSelected?: bool, ids?} → {keyword}",
             always,
             |s, p| {
                 let name = str_param(p, "name").map(clean).filter(|n| !n.is_empty()).ok_or_else(|| bad("keyword.create", "missing `name`"))?;
@@ -474,7 +480,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Keyword",
             [],
             None,
-            "{keyword, name?: its new name (one level), synonyms?, includeOnExport?, exportContaining?, exportSynonyms?, person?} — what isn't given keeps its value",
+            "{keyword, name?: its new name (one level, not ending in `*`), synonyms?, includeOnExport?, exportContaining?, exportSynonyms?, person?} — what isn't given keeps its value",
             always,
             |s, p| {
                 let from = named_keyword(s, p, "keyword.edit")?;
@@ -507,7 +513,10 @@ pub fn specs() -> Vec<CommandSpec> {
                 // where it lands, as the catalog spells it: a parent that doesn't exist yet is made
                 let leaf = from.rsplit('|').next().unwrap_or(&from).to_string();
                 let to = match parent.as_deref().map(|k| s.catalog.keyword_path(k).unwrap_or_else(|| clean(k))).filter(|k| !k.is_empty()) {
-                    Some(parent) => format!("{parent}|{leaf}"),
+                    Some(parent) => {
+                        s.catalog.check_keyword_name(&parent).map_err(|e| bad("keyword.move", e.to_string()))?;
+                        format!("{parent}|{leaf}")
+                    }
                     None => leaf,
                 };
                 let op = s
@@ -609,6 +618,7 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let from = str_param(p, "from").ok_or_else(|| bad("keyword.rename", "missing `from`"))?.to_string();
                 let to = str_param(p, "to").ok_or_else(|| bad("keyword.rename", "missing `to`"))?.to_string();
+                s.catalog.check_keyword_name(&to).map_err(|e| bad("keyword.rename", e.to_string()))?;
                 let op = s.catalog.rename_keyword_ops(&from, &to).map_err(|e| bad("keyword.rename", e.to_string()))?;
                 let (f, t) = (clean(&from), clean(&to));
                 commit_keywords(s, "Rename Keyword", op, |k| Some(if is_under(k, &f) { reparent(k, &f, &t) } else { k.to_string() }))
@@ -638,6 +648,7 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let from = strs(p, "from");
                 let into = str_param(p, "into").ok_or_else(|| bad("keyword.merge", "missing `into`"))?.to_string();
+                s.catalog.check_keyword_name(&into).map_err(|e| bad("keyword.merge", e.to_string()))?;
                 let op = s.catalog.merge_keywords_ops(&from, &into).map_err(|e| bad("keyword.merge", e.to_string()))?;
                 let (from, into) = (from.iter().map(|f| clean(f)).collect::<Vec<_>>(), clean(&into));
                 commit_keywords(s, "Merge Keywords", op, |k| {

@@ -201,7 +201,7 @@ fn video_is_av1_in_mp4_with_fades_as_frames() {
     assert_eq!(r["samples"].as_u64(), Some(1 + 12 + 1), "held slides are one sample each, fades a frame each");
     assert_eq!((r["codec"].as_str(), r["audio"].as_bool(), r["container"].as_str()), (Some("av1"), Some(false), Some("mp4")));
     let d = std::fs::read(&path).unwrap();
-    let top: Vec<_> = boxes(&d, 0..d.len()).into_iter().map(|(k, _)| k).collect();
+    let top: Vec<_> = boxes(&d, 0..d.len()).into_iter().map(|(k, _)| k).filter(|k| k != b"free").collect();
     assert_eq!(top, vec![*b"ftyp", *b"mdat", *b"moov"]);
     let stbl = child(&d, 0..d.len(), &[b"moov", b"trak", b"mdia", b"minf", b"stbl"]);
     let be = |at: usize| u32::from_be_bytes(d[at..at + 4].try_into().unwrap());
