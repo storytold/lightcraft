@@ -346,3 +346,49 @@ fn unwritable_targets_and_long_videos_are_errors() {
     let e = s.execute("slideshow.export", &json!({"format": "video", "path": dir.path("long.mp4"), "ids": many})).unwrap_err();
     assert!(e.to_string().contains("limited to 120 min"), "{e}");
 }
+
+#[test]
+fn video_cancel_cleans_partial_mp4_and_webm_and_propagates_errors() {
+    let dir = Scratch::new("vid-cancel-err");
+    for (container, name) in [("mp4", "cancel.mp4"), ("webm", "cancel.webm")] {
+        let (mut s, ids) = session(12);
+        let path = dir.path(name);
+        let r = s.execute("slideshow.export", &json!({"format": "video", "container": container, "path": path, "size": 64, "ids": ids})).unwrap();
+        s.execute("activity.cancel", &json!({"id": r["taskId"]})).unwrap();
+        let status = wait_for(&s);
+        assert!(status["error"].as_str().is_some_and(|e| e.contains("cancelled")), "{container}: {status}");
+        assert!(status["cancelled"].as_bool().unwrap());
+        assert!(!Path::new(&path).is_file(), "{container}: no output");
+        assert!(dir.files("").iter().all(|f| !f.ends_with(".part")), "{container}: no partial files");
+        assert!(s.activity.list().is_empty());
+    }
+
+    let (mut s, ids) = session(2);
+    for (container, name) in [("mp4", "dir.mp4"), ("webm", "dir.webm")] {
+        std::fs::create_dir_all(dir.path(name)).unwrap();
+        let e = s
+            .execute(
+                "slideshow.export",
+                &json!({"format": "video", "container": container, "path": dir.path(name), "size": 64, "ids": ids, "wait": true}),
+            )
+            .unwrap_err();
+        assert!(!e.to_string().is_empty());
+        assert!(dir.files("").iter().all(|f| !f.ends_with(".part")));
+        assert!(s.activity.list().is_empty());
+    }
+
+    let bad_id = s.catalog.alloc_photo_id();
+    s.catalog
+        .apply(Op::AddPhoto {
+            photo: Box::new(Photo::new(bad_id, Source::File { path: dir.path("missing.jpg") }, "missing.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00")),
+        })
+        .unwrap();
+    let e = s
+        .execute(
+            "slideshow.export",
+            &json!({"format": "video", "container": "webm", "path": dir.path("none.webm"), "size": 64, "ids": [bad_id.0], "wait": true}),
+        )
+        .unwrap_err();
+    assert!(e.to_string().contains("no slide"), "{e}");
+    assert!(dir.files("").iter().all(|f| f != "none.webm" && !f.ends_with(".part")));
+}

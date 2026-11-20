@@ -175,6 +175,19 @@ pub struct Mp4Writer<W: Write + Seek> {
     config: Option<Vec<u8>>,
 }
 
+fn validate_sample(s: &Sample, first: bool) -> Result<()> {
+    if s.data.is_empty() {
+        return Err(bad("empty sample"));
+    }
+    if s.duration == 0 {
+        return Err(bad("a sample lasts at least one frame"));
+    }
+    if first && !s.key {
+        return Err(bad("the first sample must be a key frame"));
+    }
+    Ok(())
+}
+
 impl<W: Write + Seek> Mp4Writer<W> {
     pub fn new(w: W, width: u32, height: u32, fps: u32) -> Result<Self> {
         let (width, height) = (u16::try_from(width).map_err(|_| bad("too wide"))?, u16::try_from(height).map_err(|_| bad("too tall"))?);
@@ -198,12 +211,7 @@ impl<W: Write + Seek> Mp4Writer<W> {
 
     pub fn add(&mut self, s: &Sample) -> Result<()> {
         let _ = u32::try_from(s.data.len()).map_err(|_| bad("sample too large"))?;
-        if s.duration == 0 {
-            return Err(bad("a sample lasts at least one frame"));
-        }
-        if self.periods == 0 && !s.key {
-            return Err(bad("the first sample must be a key frame"));
-        }
+        validate_sample(s, self.periods == 0)?;
         let duration = s.duration.checked_mul(TICKS).and_then(|d| u32::try_from(d).ok()).ok_or_else(|| bad("video too long"))?;
         let sample = WriteSample { data: &s.data, duration, composition_offset: 0, is_sync: s.key };
         self.inner.write_sample(self.track, sample).map_err(media_err)?;
@@ -294,9 +302,7 @@ impl<W: Write + Seek> WebmWriter<W> {
     }
 
     pub fn add(&mut self, s: &Sample) -> Result<()> {
-        if s.duration == 0 {
-            return Err(bad("a sample lasts at least one frame"));
-        }
+        validate_sample(s, matches!(self.state, Some(WebmState::Pending { .. })))?;
         self.ensure_active(s.key)?;
         if let Some((p, start)) = self.pending.take() {
             let pts_ns = i64::try_from(self.ms(start).saturating_mul(1_000_000)).map_err(|_| bad("timestamp overflow"))?;
@@ -901,5 +907,163 @@ mod tests {
         assert_eq!(vw.periods(), 2);
         let bytes = vw.finish().unwrap().into_inner();
         assert!(bytes.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]));
+    }
+
+    #[test]
+    fn mp4_and_webm_shared_round_trip_preserves_timestamps_durations_and_samples() {
+        let input = samples();
+        let cfg = av1_config(&[0x0a, 1, 0]);
+
+        let mut mp4_writer = VideoWriter::new(Cursor::new(Vec::new()), Container::Mp4, 64, 36, 30).unwrap();
+        mp4_writer.set_config(cfg.clone());
+        for s in &input {
+            mp4_writer.add(s).unwrap();
+        }
+        let mp4_bytes = mp4_writer.finish().unwrap().into_inner();
+        let mp4 = craft_media::isobmff::open(mp4_bytes.as_slice()).unwrap();
+        assert!(mp4.compatible_brands.contains(&craft_media::isobmff::FourCc(*b"av01")));
+        assert_eq!((mp4.timescale, mp4.duration), (1000, 3000));
+        assert_eq!(mp4.tracks.len(), 1);
+        let track = &mp4.tracks[0];
+        assert_eq!(track.timescale, 30 * 512);
+        assert_eq!(track.samples.len(), input.len());
+        let mut expected_pts = 0i64;
+        for (i, s) in input.iter().enumerate() {
+            let demuxed = &track.samples[i];
+            assert_eq!(demuxed.pts, expected_pts, "mp4 sample {i} pts");
+            assert_eq!(u64::from(demuxed.duration), s.duration * TICKS, "mp4 sample {i} duration");
+            assert_eq!(demuxed.is_sync, s.key, "mp4 sample {i} key");
+            assert_eq!(mp4.read_sample(mp4_bytes.as_slice(), 0, i).unwrap(), s.data, "mp4 sample {i} data");
+            expected_pts += i64::from(demuxed.duration);
+        }
+
+        let mut webm_writer = VideoWriter::new(Cursor::new(Vec::new()), Container::WebM, 64, 36, 30).unwrap();
+        webm_writer.set_config(cfg);
+        for s in &input {
+            webm_writer.add(s).unwrap();
+        }
+        let webm_bytes = webm_writer.finish().unwrap().into_inner();
+        let mut demux = craft_media::matroska::Demuxer::from_slice(&webm_bytes).unwrap();
+        assert_eq!(demux.file().doc_type, "webm");
+        assert_eq!(demux.tracks()[0].codec_id, "V_AV1");
+        let mut packets = Vec::new();
+        while let Some(pkt) = demux.next_packet().unwrap() {
+            packets.push(pkt);
+        }
+        assert_eq!(packets.len(), input.len());
+        let expected_pts_ms = [0i64, 1000, 1033, 1066];
+        for (i, (pkt, s)) in packets.iter().zip(&input).enumerate() {
+            assert_eq!(pkt.data, s.data, "webm packet {i} data");
+            assert_eq!(pkt.keyframe, s.key, "webm packet {i} key");
+            assert_eq!(pkt.pts_ns, expected_pts_ms[i] * 1_000_000, "webm packet {i} pts_ns");
+        }
+        assert_eq!(packets.last().unwrap().duration_ns, (3000 - 1066) * 1_000_000);
+    }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn av1_encode_framing_and_shared_round_trip_match_pre_post_samples() {
+        let c = VideoConfig { width: 64, height: 48, fps: 24, quality: 60, speed: 10 };
+        let mut e = Av1Encoder::new(&c).unwrap();
+        let mut encoded = Vec::new();
+        for (i, periods) in [(0u8, 24u64), (80, 1), (160, 1), (240, 30)] {
+            let img = vec![[i, 255 - i, 128, 255]; 64 * 48];
+            encoded.extend(e.push(&img, periods, periods > 1).unwrap());
+        }
+        encoded.extend(e.finish().unwrap());
+        let cfg = e.config_record().unwrap();
+
+        for s in &encoded {
+            let mut framed = vec![0x12, 0x00];
+            framed.extend_from_slice(&s.data);
+            framed.extend_from_slice(&[0x7a, 0x01, 0x00]);
+            let (stripped, _) = to_sample_data(&framed).unwrap();
+            assert_eq!(stripped, s.data, "framing strips TD and padding without altering sample bytes");
+        }
+
+        for container in [Container::Mp4, Container::WebM] {
+            let mut w = VideoWriter::new(Cursor::new(Vec::new()), container, 64, 48, 24).unwrap();
+            w.set_config(cfg.clone());
+            for s in &encoded {
+                w.add(s).unwrap();
+            }
+            let bytes = w.finish().unwrap().into_inner();
+            match container {
+                Container::Mp4 => {
+                    let mp4 = craft_media::isobmff::open(bytes.as_slice()).unwrap();
+                    assert!(mp4.compatible_brands.contains(&craft_media::isobmff::FourCc(*b"av01")));
+                    assert_eq!(mp4.tracks[0].samples.len(), encoded.len());
+                    for (i, s) in encoded.iter().enumerate() {
+                        assert_eq!(mp4.read_sample(bytes.as_slice(), 0, i).unwrap(), s.data);
+                        assert_eq!(mp4.tracks[0].samples[i].is_sync, s.key);
+                        assert_eq!(u64::from(mp4.tracks[0].samples[i].duration), s.duration * TICKS);
+                    }
+                }
+                Container::WebM => {
+                    let mut demux = craft_media::matroska::Demuxer::from_slice(&bytes).unwrap();
+                    let mut packets = Vec::new();
+                    while let Some(pkt) = demux.next_packet().unwrap() {
+                        packets.push(pkt);
+                    }
+                    assert_eq!(packets.len(), encoded.len());
+                    for (pkt, s) in packets.iter().zip(&encoded) {
+                        assert_eq!(pkt.data, s.data);
+                        assert_eq!(pkt.keyframe, s.key);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn empty_invalid_packets_and_io_errors_are_rejected() {
+        struct FailAfter {
+            limit: usize,
+            written: usize,
+        }
+        impl Write for FailAfter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                if self.written + buf.len() > self.limit {
+                    return Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "disk full"));
+                }
+                self.written += buf.len();
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl Seek for FailAfter {
+            fn seek(&mut self, _pos: std::io::SeekFrom) -> std::io::Result<u64> {
+                Ok(self.written as u64)
+            }
+        }
+
+        let empty = Sample { data: vec![], key: true, duration: 1 };
+        let zero_dur = Sample { data: vec![0x32, 0], key: true, duration: 0 };
+        let non_key = Sample { data: vec![0x32, 0], key: false, duration: 1 };
+
+        let mut mp4 = Mp4Writer::new(Cursor::new(Vec::new()), 64, 36, 30).unwrap();
+        assert!(mp4.add(&empty).unwrap_err().to_string().contains("empty sample"));
+        assert!(mp4.add(&zero_dur).unwrap_err().to_string().contains("at least one frame"));
+        assert!(mp4.add(&non_key).unwrap_err().to_string().contains("key frame"));
+
+        let mut webm = WebmWriter::new(Cursor::new(Vec::new()), 64, 36, 30).unwrap();
+        webm.set_config(av1_config(&[0x0a, 1, 0]));
+        assert!(webm.add(&empty).unwrap_err().to_string().contains("empty sample"));
+        assert!(webm.add(&zero_dur).unwrap_err().to_string().contains("at least one frame"));
+        assert!(webm.add(&non_key).unwrap_err().to_string().contains("key frame"));
+
+        let (td_only, seq) = to_sample_data(&[0x12, 0, 0x7a, 1, 0]).unwrap();
+        assert!(td_only.is_empty() && seq.is_none());
+        assert!(mp4.add(&Sample { data: td_only, key: true, duration: 1 }).is_err());
+
+        let mut io_mp4 = Mp4Writer::new(FailAfter { limit: 40, written: 0 }, 64, 36, 30).unwrap();
+        io_mp4.set_config(av1_config(&[0x0a, 1, 0]));
+        assert!(io_mp4.add(&Sample { data: vec![0x32, 16; 18], key: true, duration: 1 }).unwrap_err().to_string().contains("disk full"));
+
+        let mut io_webm = WebmWriter::new(FailAfter { limit: 40, written: 0 }, 64, 36, 30).unwrap();
+        io_webm.set_config(av1_config(&[0x0a, 1, 0]));
+        assert!(io_webm.add(&Sample { data: vec![0x32, 2, 1, 1], key: true, duration: 1 }).unwrap_err().to_string().contains("disk full"));
     }
 }
