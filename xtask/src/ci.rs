@@ -95,12 +95,34 @@ pub(crate) fn nextest() -> bool {
     })
 }
 
+/// The nextest profile xtask's nextest runs use: `.config/nextest.toml`'s `[profile.xtask]` holds
+/// the per-test time limit, so a plain `cargo nextest run` (the default profile) keeps nextest's own
+/// defaults (#3058, #3060).
+pub(crate) const NEXTEST_PROFILE: &str = "xtask";
+
+/// The `NEXTEST_PROFILE` a nextest run of xtask sets, given the caller's (`caller`): xtask's profile,
+/// unless the caller chose one.
+fn nextest_profile_to_set(caller: Option<&std::ffi::OsStr>) -> Option<&'static str> {
+    if caller.is_some_and(|v| !v.is_empty()) { None } else { Some(NEXTEST_PROFILE) }
+}
+
+/// Run `c`, a `cargo nextest run`, with xtask's nextest profile unless the caller chose one.
+pub(crate) fn use_nextest_profile(c: &mut Command) {
+    if let Some(profile) = nextest_profile_to_set(std::env::var_os("NEXTEST_PROFILE").as_deref()) {
+        c.env("NEXTEST_PROFILE", profile);
+    }
+}
+
 /// A test run of `args` (packages, features, targets, filters): `cargo nextest run`, or `cargo
 /// test`. The command and how to print it. `--no-fail-fast`: a failing test binary doesn't stop
 /// the others, so one CI run shows every failure, not just the first crate's.
 fn tests(args: &[&str]) -> (Command, String) {
     let mut c = cargo();
-    let tool = if nextest() { "nextest run" } else { "test" };
+    let nextest = nextest();
+    let tool = if nextest { "nextest run" } else { "test" };
+    if nextest {
+        use_nextest_profile(&mut c);
+    }
     c.args(tool.split(' ')).arg("--no-fail-fast").args(args);
     (c, format!("cargo {tool} --no-fail-fast {}", args.join(" ")))
 }
@@ -413,6 +435,40 @@ fn probe_gpu(backend: Option<&str>, limit: Option<std::time::Duration>) -> Resul
 }
 
 #[cfg(test)]
+mod nextest_profile_tests {
+    use super::{NEXTEST_PROFILE, nextest_profile_to_set};
+
+    #[test]
+    fn xtask_picks_its_nextest_profile_unless_the_caller_chose_one() {
+        assert_eq!(nextest_profile_to_set(None), Some(NEXTEST_PROFILE));
+        assert_eq!(nextest_profile_to_set(Some(std::ffi::OsStr::new(""))), Some(NEXTEST_PROFILE), "empty is unset");
+        assert_eq!(nextest_profile_to_set(Some(std::ffi::OsStr::new("default"))), None, "the caller's profile wins");
+    }
+
+    /// The per-test time limit lives in xtask's profile, not the default one, so a plain
+    /// `cargo nextest run` keeps nextest's defaults (FredApps on #3058).
+    #[test]
+    fn only_xtasks_nextest_profile_has_the_time_limit() {
+        let config = std::fs::read_to_string(super::root().join(".config/nextest.toml")).unwrap();
+        let mut table = "";
+        let mut limits = Vec::new();
+        for line in config.lines().map(|l| l.split('#').next().unwrap_or(l).trim()) {
+            if line.starts_with('[') {
+                table = line;
+            } else if line.starts_with("slow-timeout") || line.starts_with("test-threads") {
+                limits.push((table, line));
+            }
+        }
+        let xtask = format!("[profile.{NEXTEST_PROFILE}]");
+        assert!(!limits.is_empty(), "the time limit is in .config/nextest.toml");
+        for (table, line) in &limits {
+            assert_eq!(*table, xtask, "only xtask's profile sets `{line}`");
+        }
+        assert!(limits.iter().any(|(_, l)| l.contains("terminate-after = 30")), "{limits:?}");
+    }
+}
+
+#[cfg(test)]
 mod ci_jobs_tests {
     use super::ci_jobs;
 
@@ -440,97 +496,5 @@ mod ci_jobs_tests {
         let set = crate::caps_to_set(caps, |key| key == "RUST_TEST_THREADS");
         assert_eq!(set.iter().map(|(k, _)| *k).collect::<Vec<_>>(), ["CARGO_PROFILE_DEV_DEBUG", "CARGO_BUILD_JOBS", "NEXTEST_TEST_THREADS"]);
         assert!(crate::caps_to_set(caps, |_| true).is_empty());
-    }
-
-    /// An environment of `vars` for [`crate::set_by_caller`].
-    fn env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<std::ffi::OsString> {
-        let vars: Vec<(String, String)> = vars.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect();
-        move |key| vars.iter().find(|(k, _)| k == key).map(|(_, v)| v.into())
-    }
-
-    #[test]
-    fn the_config_test_threads_default_is_not_a_callers_setting() {
-        use crate::set_by_caller;
-        const MARKER: &str = crate::TEST_THREADS_DEFAULT_MARKER;
-        let threads = "RUST_TEST_THREADS";
-        assert!(!set_by_caller(threads, env(&[])), "unset, outside cargo");
-        assert!(!set_by_caller(threads, env(&[(MARKER, "4")])), "unset (no RUST_TEST_THREADS at all)");
-        assert!(!set_by_caller(threads, env(&[(threads, "4"), (MARKER, "4")])), "the config default: ci sizes it by RAM");
-        assert!(set_by_caller(threads, env(&[(threads, "9"), (MARKER, "4")])), "RUST_TEST_THREADS=9 cargo xtask ci");
-        assert!(set_by_caller(threads, env(&[(threads, "2"), (MARKER, "4")])), "a lower explicit value wins too");
-        assert!(set_by_caller(threads, env(&[(threads, "4")])), "no marker: xtask run outside cargo, the value is the caller's");
-        assert!(set_by_caller(threads, env(&[(threads, "")])), "set, even if empty");
-        // the marker only speaks for RUST_TEST_THREADS
-        assert!(set_by_caller("NEXTEST_TEST_THREADS", env(&[("NEXTEST_TEST_THREADS", "4"), (MARKER, "4")])));
-        assert!(set_by_caller("CARGO_BUILD_JOBS", env(&[("CARGO_BUILD_JOBS", "4"), (MARKER, "4")])));
-        assert!(!set_by_caller("CARGO_BUILD_JOBS", env(&[(MARKER, "4")])));
-    }
-
-    /// The `RUST_TEST_THREADS` a capped run's test binaries get in environment `vars` when `ci`'s
-    /// RAM-aware value is `cap`: the cap where the caller didn't set it, else the environment's.
-    fn test_threads(vars: &[(&str, &str)], cap: &str) -> String {
-        let caps = [("RUST_TEST_THREADS", cap.to_owned())];
-        let get = env(vars);
-        let set = crate::caps_to_set(&caps, |key| crate::set_by_caller(key, &get));
-        match set.first() {
-            Some((_, value)) => (*value).to_owned(),
-            None => get("RUST_TEST_THREADS").unwrap().into_string().unwrap(),
-        }
-    }
-
-    #[test]
-    fn an_explicit_test_thread_count_wins_except_one_equal_to_the_config_default() {
-        const MARKER: &str = crate::TEST_THREADS_DEFAULT_MARKER;
-        let threads = "RUST_TEST_THREADS";
-        assert_eq!(test_threads(&[(threads, "9"), (MARKER, "4")], "2"), "9", "explicit 9 is kept");
-        assert_eq!(test_threads(&[(threads, "2"), (MARKER, "4")], "3"), "2", "explicit 2 is kept");
-        assert_eq!(test_threads(&[(threads, "4"), (MARKER, "4")], "2"), "2", "the config default yields to the RAM-aware cap");
-        // An explicit RUST_TEST_THREADS=4 looks the same as the config default (documented): it
-        // may be lowered, never raised.
-        assert_eq!(test_threads(&[(threads, "4"), (MARKER, "4")], "2"), "2", "explicit 4 under cargo is lowered like the default");
-        assert_eq!(test_threads(&[(threads, "4")], "2"), "4", "no marker (xtask run outside cargo): 4 is the caller's");
-        assert_eq!(test_threads(&[(MARKER, "4")], "3"), "3", "unset: the cap");
-    }
-
-    /// The quoted `value` of the `key = { value = "…", … }` line in `.cargo/config.toml`'s `[env]`.
-    fn config_env(config: &str, key: &str) -> Option<(String, String)> {
-        // only inside `[env]`: the same key in another table isn't an environment default
-        let mut in_env = false;
-        let line = config.lines().find(|l| {
-            if l.trim_start().starts_with('[') {
-                in_env = l.trim() == "[env]";
-                return false;
-            }
-            in_env && l.split('=').next().is_some_and(|k| k.trim() == key)
-        })?;
-        let value = line.split("value = \"").nth(1)?.split('"').next()?.to_owned();
-        // without a trailing comment, so a `# force = …` note can't stand in for the setting
-        Some((value, line.split('#').next().unwrap_or(line).to_owned()))
-    }
-
-    #[test]
-    fn config_env_reads_only_the_env_table() {
-        let k = "RUST_TEST_THREADS";
-        let line = |v: &str| format!("{k} = {{ value = \"{v}\", force = false }}");
-        assert_eq!(config_env(&format!("[env]\n{}\n", line("4")), k).map(|(v, _)| v).as_deref(), Some("4"));
-        assert_eq!(config_env(&format!("[build]\n{}\n[env]\n", line("4")), k), None, "another table's key");
-        assert_eq!(config_env(&format!("[env]\n[alias]\n{}\n", line("4")), k), None, "after [env] ends");
-        assert_eq!(config_env(&format!("{}\n[env]\nX = 1\n", line("4")), k), None, "before any table");
-        let commented = format!("[env]\n{k} = {{ value = \"4\", force = true }} # force = false\n");
-        assert!(!config_env(&commented, k).unwrap().1.contains("force = false"), "a comment isn't the setting");
-    }
-
-    #[test]
-    fn the_cargo_config_sets_the_test_threads_default_and_its_marker_to_one_value() {
-        let config = std::fs::read_to_string(super::root().join(".cargo/config.toml")).unwrap();
-        let (threads, line) = config_env(&config, "RUST_TEST_THREADS").expect("RUST_TEST_THREADS in [env]");
-        assert!(line.contains("force = false"), "an explicit RUST_TEST_THREADS must win: {line}");
-        let (marker, marker_line) = config_env(&config, crate::TEST_THREADS_DEFAULT_MARKER).expect("the marker in [env]");
-        // forced, so an inherited marker can't make a caller's equal value look like the default
-        assert!(marker_line.contains("force = true"), "cargo must overwrite an inherited marker: {marker_line}");
-        assert_eq!(threads, marker, "xtask tells the default apart by this marker");
-        let n: usize = threads.parse().unwrap();
-        assert!((1..=4).contains(&n), "{n}");
-        assert!(config.contains("[env]"));
     }
 }
