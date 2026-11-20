@@ -66,13 +66,13 @@ The key words MUST, MUST NOT, SHOULD, SHOULD NOT and MAY are used as in RFC 2119
 LightCraft is a clean-room, open-source, pure-Rust photo library and non-destructive raw developer, native on macOS, Windows and Linux, and on the web through WASM. Sibling projects: pdfcraft, photocraft, vectorcraft, filmcraft.
 
 ### Layout
-`geom`, `color`, `raster`, `tiff` (L0) -> `raw`, `codecs`, `meta`, `develop` (L1) -> `pipeline` -> `catalog` -> `engine` -> `ui-egui`, `mcp` (L5) -> apps `lightcraft` (desktop) and `lightcraft-cli` (render, commands, MCP). `scenes` generates demo photos, `testkit` holds test helpers, `xtask` holds the tooling. Nothing below L5 depends on egui, eframe, winit or rfd. Commands live in `crates/engine`; UI-only commands in `crates/ui-egui/src/menus.rs`. Export goes through `lightcraft_engine::export`. Text boxes use `TextField` (`crates/ui-egui/src/widgets/text_field.rs`).
+L0 `geom`, `color`, `raster`, `fetch`, `sysmem`, `wincolor` -> L1 `raw`, `codecs`, `meta`, `develop`, `denoise-core`, `denoise`, `film`, `inpaint`, `faces`, `geocode`, `slideshow`, `scenes` (demo photos) -> L2 `pipeline`, `lensdb` -> L3 `catalog`, `gpu`, `preview`, `merge`, `segment` -> L4 `engine` -> L5 `ui-egui`, `mcp` -> apps `lightcraft` (desktop), `lightcraft-cli` (render, commands, MCP) and `lightcraft-web`. `testkit` holds test helpers, `xtask` holds the tooling. Nothing below L5 depends on egui, eframe, winit or rfd. Commands live in `crates/engine`; UI-only commands in `crates/ui-egui/src/menus.rs`. Export goes through `lightcraft_engine::export`. Text boxes use `TextField` (`crates/ui-egui/src/widgets/text_field.rs`).
 
 ### Checks
 - `cargo xtask ci --quick` runs fmt, clippy and the tests of the packages your branch changed, plus layers, assets, parity and the wasm check when they apply. `cargo xtask ci` is the full run; `cargo xtask layers`, `assets`, `parity`, `roots` and `wasm` run one check.
-- CI has a Windows leg (`ci-windows.yml`), run for pull requests labelled `full-ci`.
+- CI has a Windows leg (`.github/workflows/ci-windows.yml`): it runs when a pull request touches Windows-only code, and on pull requests labelled `full-ci`.
 - Tests that cannot run here call `lightcraft_testkit::skip!(Gpu, "why")`; `cargo xtask ci` lists the skips.
-- The crash-input sweeps are in `crates/mcp/tests/e2e.rs` and `apps/lightcraft-cli/tests/`.
+- The crash-input sweeps are in `crates/mcp/tests/it/e2e.rs` and `apps/lightcraft-cli/tests/`.
 - `cargo xtask roots` checks the `#![deny(clippy::unwrap_used, ...)]` and `#![forbid(unsafe_code)]` crate-root attributes; crates use `[lints] workspace = true`.
 
 ### Paths and conventions
