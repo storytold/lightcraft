@@ -512,7 +512,9 @@ impl Journal {
                     report.stale += 1;
                 }
                 Some((seq, op)) if j.seq.checked_add(1) == Some(seq) => {
-                    if catalog.apply(op).is_err() {
+                    // (a batch that was only partly taken back when it was applied is logged as it was: replaying it is
+                    // not damage, see `Catalog::replay_op`)
+                    if catalog.replay_op(op).is_err() {
                         report.failed += 1;
                     } else {
                         report.replayed += 1;
