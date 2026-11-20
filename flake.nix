@@ -16,7 +16,7 @@
     # revision CI, the release workflow and the standalone packaging helpers use — bump all of them
     # together (`nix flake update craft-fonts`).
     craft-fonts = {
-      url = "github:storytold/craft-fonts/b076417b5880bd4154bd22f00695b1d28c6bea83";
+      url = "github:storytold/craft-fonts/c1db6d1a8ed772191241c3d185e2104be84d8691";
       flake = false;
     };
   };
