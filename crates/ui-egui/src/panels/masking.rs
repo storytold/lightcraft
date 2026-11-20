@@ -976,7 +976,7 @@ fn creation_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, in_popup: bool) {
             .map(|(_, label, _)| ui.painter().layout_no_wrap(crate::i18n::tr(label).to_string(), t.font(size), t.text).size().x)
             .fold(0.0_f32, f32::max)
     };
-    let (cols, _, _size) = tile_layout(ui.available_width(), widest);
+    let (cols, _, size) = tile_layout(ui.available_width(), widest);
     let cols = cols.min(3);
     let width = ((ui.available_width() - TILE_GAP * (cols - 1) as f32) / cols as f32).max(1.0);
     for row in quick.chunks(cols) {
@@ -991,7 +991,7 @@ fn creation_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, in_popup: bool) {
                 let icon_center = rect.center() - vec2(0.0, 12.0);
                 ui.painter().rect_filled(Rect::from_center_size(icon_center, vec2(38.0, 38.0)), 9.0, t.canvas);
                 paint(ui.painter(), Rect::from_center_size(icon_center, vec2(25.0, 25.0)), icon, t.accent.lerp_to_gamma(t.text, 0.5));
-                let text = one_line(ui.painter(), crate::i18n::tr(label), t.font(11.5), t.text_label, (width - 6.0).max(1.0));
+                let text = one_line(ui.painter(), crate::i18n::tr(label), t.font(size), t.text_label, (width - 2.0 * TILE_PAD).max(1.0));
                 let at = pos2(rect.center().x, rect.bottom() - 16.0) - text.size() / 2.0;
                 register(ui, format!("maskNewLabel:{kind}"), Rect::from_min_size(at, text.size()));
                 ui.painter().galley(at, text, t.text_label);

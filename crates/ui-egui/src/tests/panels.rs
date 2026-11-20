@@ -97,7 +97,8 @@ fn assert_inside_right_panel(h: &Headless, what: &str) {
         n += 1;
         assert!(r.left() >= panel.left() - 0.5 && r.right() <= panel.right() + 0.5, "{what}: {id} {r:?} sticks out of the panel {panel:?}");
     }
-    assert!(n > 10, "{what}: only {n} widgets in the panel");
+    // the panel keeps its list, overlay controls and sliders; the creation tiles sit in a popup
+    assert!(n > 5, "{what}: only {n} widgets in the panel");
 }
 
 #[test]
