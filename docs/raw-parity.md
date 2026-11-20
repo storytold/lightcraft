@@ -71,6 +71,15 @@ unsupported to preview-only in the counts; sensor-decoding readiness is unchange
   uncompressed remains preview-only (#671), as do Z 8 HE / HE* files. Own-matrix phone, drone
   and other DNGs can decode correctly while rendering darker than their camera JPEG (#1277).
   Verified means sensor data decoded, not colour parity.
+- **Decode baseline** ([raw/decode-baseline.tsv](raw/decode-baseline.tsv), #4577): every raw in the downloaded
+  corpus as `lightcraft_raw::decode` returns it (craft-raw and LightCraft's adapter together): sample hash,
+  levels, crops, white balance, Kelvin presets, opcodes, ISO and other metadata, plus digests of the bulky parts.
+  `crates/raw/tests/it/decode_baseline.rs` fails when a decode differs from it. Its header records `lightcraft-raw`'s
+  git dependencies in `Cargo.lock`, and a test that needs no corpus (so it runs in CI) fails when they change. So
+  a craft-libs pin bump regenerates the baseline
+  (`LIGHTCRAFT_WRITE_DECODE_BASELINE=1 cargo test -p lightcraft-raw --test it decode_baseline_matches_corpus`)
+  and explains every changed row in its pull request. The baseline pins LightCraft's own output; a row is not
+  evidence that the value is right.
 - **Usage weights** ([raw/usage-weights.tsv](raw/usage-weights.tsv)): maker buckets from 2025 market
   data (Nikkei production: Canon ~36%, Sony ~29%, Nikon ~14%, Fujifilm ~12% of mirrorless; BCN retail:
   Sony 29.9%, Canon 27.4%, Nikon 15.1%), adjusted for the DSLR installed base and for the makers named
