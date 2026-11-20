@@ -725,6 +725,19 @@ fn a_catalog_capture_one_is_writing_is_refused_and_an_open_one_is_reported() {
     std::fs::create_dir(&journal).unwrap();
     assert!(matches!(read(&package), Err(ReadError::WriteStateUnknown(_))), "{:?}", read(&package).err());
     std::fs::remove_dir(&journal).unwrap();
+    // a journal that is a FIFO is refused without waiting for a writer (the read runs on a
+    // thread, so a wait fails the test instead of hanging it)
+    #[cfg(unix)]
+    if std::process::Command::new("mkfifo").arg(&journal).status().is_ok_and(|s| s.success()) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let at = package.clone();
+        std::thread::spawn(move || tx.send(read(&at).err()));
+        let got = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("reading a catalog with a FIFO journal waited for a writer");
+        assert!(matches!(got, Some(ReadError::WriteStateUnknown(_))), "{got:?}");
+        std::fs::remove_file(&journal).unwrap();
+    } else {
+        eprintln!("FIFO journal case skipped: no mkfifo");
+    }
     // a log whose state can't be read either (a link to itself)
     #[cfg(unix)]
     {

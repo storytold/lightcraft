@@ -78,12 +78,15 @@ pub(super) fn beside(database: &Path, suffix: &str) -> PathBuf {
 /// Refuse a database with a rollback journal that holds a transaction, or with a write-ahead
 /// log: its pages may be mid-write, and only SQLite itself can roll that back.
 /// A journal or log that is there but can't be read is not taken as absent: it may hold a
-/// transaction.
+/// transaction. Nor is a journal that isn't a regular file (a FIFO would hold the open until a
+/// writer came, past every cancellation check), which is opened without waiting and not read.
 pub(super) fn refuse_while_written(database: &Path) -> Result<(), ReadError> {
     use std::io::ErrorKind;
     let unknown = |what: &str, e: std::io::Error| ReadError::WriteStateUnknown(format!("its {what} can't be read: {e}"));
     let mut start = [0u8; 8];
-    let hot = match std::fs::File::open(beside(database, "-journal")) {
+    let journal = crate::read_file::open_for_read(beside(database, "-journal"))
+        .and_then(|f| if f.metadata()?.is_file() { Ok(f) } else { Err(std::io::Error::new(ErrorKind::InvalidInput, "not a regular file")) });
+    let hot = match journal {
         Err(e) if e.kind() == ErrorKind::NotFound => false,
         Err(e) => return Err(unknown("journal", e)),
         Ok(mut journal) => match journal.read_exact(&mut start) {
