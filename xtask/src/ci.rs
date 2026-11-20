@@ -1,7 +1,9 @@
 use super::layers::cmd_layers;
 use super::raw_samples::RAW_SAMPLES;
 use super::wasm::{cmd_wasm, cmd_wasm_for};
-use super::{Command, Path, PathBuf, USAGE, assets, cargo, ci_lock, ci_quick, ci_report, metadata, parity, root, roots, run};
+use super::{
+    Command, PathBuf, USAGE, assets, cargo, ci_lock, ci_quick, ci_report, deadline, metadata, parity, root, roots, run, run_tests, test, use_ci_caps,
+};
 
 /// CI build jobs: one per 1.5 GB of RAM available when CI starts, at most one per CPU, 4 when it
 /// is unknown. With line-table debuginfo, 4 jobs measured about 3 GB of RAM in use and 2 jobs
@@ -63,7 +65,7 @@ pub(crate) fn total_ram_gb() -> Option<u64> {
 const TEST_TARGETS: [&str; 3] = ["--lib", "--bins", "--tests"];
 
 /// `args` followed by [`TEST_TARGETS`].
-fn with_test_targets<'a>(args: &[&'a str]) -> Vec<&'a str> {
+pub(crate) fn with_test_targets<'a>(args: &[&'a str]) -> Vec<&'a str> {
     args.iter().copied().chain(TEST_TARGETS).collect()
 }
 
@@ -72,7 +74,7 @@ fn with_test_targets<'a>(args: &[&'a str]) -> Vec<&'a str> {
 /// are cached per process: libtest runs a binary's tests in one process and generates each scene
 /// once, while nextest's process per test regenerates them (measured: the ui-egui tests take about
 /// 30 min under nextest, under 5 min under cargo test).
-fn nextest() -> bool {
+pub(crate) fn nextest() -> bool {
     static FOUND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *FOUND.get_or_init(|| {
         if std::env::var_os("LIGHTCRAFT_NEXTEST").is_none_or(|v| v != "1") {
@@ -86,9 +88,29 @@ fn nextest() -> bool {
             .is_ok_and(|s| s.success());
         if !found {
             eprintln!("note: LIGHTCRAFT_NEXTEST=1 but cargo-nextest is not installed, so the tests run under cargo test (cargo install cargo-nextest --locked)");
+        } else if let Some(note) = deadline::nextest_note(std::env::var_os(deadline::TEST_BINARY_TIMEOUT_ENV).as_deref()) {
+            eprintln!("{note}");
         }
         found
     })
+}
+
+/// The nextest profile xtask's nextest runs use: `.config/nextest.toml`'s `[profile.xtask]` holds
+/// the per-test time limit, so a plain `cargo nextest run` (the default profile) keeps nextest's own
+/// defaults (#3058, #3060).
+pub(crate) const NEXTEST_PROFILE: &str = "xtask";
+
+/// The `NEXTEST_PROFILE` a nextest run of xtask sets, given the caller's (`caller`): xtask's profile,
+/// unless the caller chose one.
+fn nextest_profile_to_set(caller: Option<&std::ffi::OsStr>) -> Option<&'static str> {
+    if caller.is_some_and(|v| !v.is_empty()) { None } else { Some(NEXTEST_PROFILE) }
+}
+
+/// Run `c`, a `cargo nextest run`, with xtask's nextest profile unless the caller chose one.
+pub(crate) fn use_nextest_profile(c: &mut Command) {
+    if let Some(profile) = nextest_profile_to_set(std::env::var_os("NEXTEST_PROFILE").as_deref()) {
+        c.env("NEXTEST_PROFILE", profile);
+    }
 }
 
 /// A test run of `args` (packages, features, targets, filters): `cargo nextest run`, or `cargo
@@ -96,7 +118,11 @@ fn nextest() -> bool {
 /// the others, so one CI run shows every failure, not just the first crate's.
 fn tests(args: &[&str]) -> (Command, String) {
     let mut c = cargo();
-    let tool = if nextest() { "nextest run" } else { "test" };
+    let nextest = nextest();
+    let tool = if nextest { "nextest run" } else { "test" };
+    if nextest {
+        use_nextest_profile(&mut c);
+    }
     c.args(tool.split(' ')).arg("--no-fail-fast").args(args);
     (c, format!("cargo {tool} --no-fail-fast {}", args.join(" ")))
 }
@@ -108,67 +134,17 @@ fn doctests() -> (Command, String) {
     (c, "cargo test --no-fail-fast --workspace --doc".to_owned())
 }
 
-/// `ci --quick`'s tests: build every workspace test target, then run only the test binaries of
-/// `packages`. Building with `-p` instead would resolve features per selection: different
-/// artifacts from `ci`'s workspace build, so it would recompile ~130 crates. Doc tests are left to
-/// the full `ci`.
-fn test_selected(root: &Path, packages: &std::collections::BTreeSet<String>, skip_log: &Path) -> Result<(), String> {
-    let manifests: std::collections::BTreeMap<String, String> = metadata()?["packages"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|p| Some((p["manifest_path"].as_str()?.to_owned(), p["name"].as_str()?.to_owned())))
-        .filter(|(_, name)| packages.contains(name))
-        .collect();
-    let what = "cargo test --workspace --no-run --lib --bins --tests";
-    eprintln!("$ {what} (then the test binaries of {})", packages.iter().map(String::as_str).collect::<Vec<_>>().join(", "));
-    let out = cargo()
-        .args(with_test_targets(&["test", "--workspace", "--no-run", "--message-format=json-render-diagnostics"]))
-        .stderr(std::process::Stdio::inherit())
-        .output()
-        .map_err(|e| format!("{what}: failed to spawn: {e}"))?;
-    if !out.status.success() {
-        return Err(format!("{what}: exited with {}", out.status));
-    }
-    let mut binaries = Vec::new();
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-        if msg["reason"] != "compiler-artifact" || msg["profile"]["test"] != true {
-            continue;
-        }
-        let (Some(exe), Some(manifest)) = (msg["executable"].as_str(), msg["manifest_path"].as_str()) else { continue };
-        if let Some(name) = manifests.get(manifest) {
-            binaries.push((name.clone(), manifest.to_owned(), exe.to_owned()));
-        }
-    }
-    if binaries.is_empty() {
-        println!("no test binaries in {}", packages.iter().map(String::as_str).collect::<Vec<_>>().join(", "));
-        return Ok(());
-    }
-    let mut failed = Vec::new();
-    for (name, manifest, exe) in &binaries {
-        let dir = Path::new(manifest).parent().unwrap_or(root);
-        let mut c = Command::new(exe);
-        c.current_dir(dir).env("CARGO_MANIFEST_DIR", dir).env("CARGO_PKG_NAME", name).env(ci_report::SKIP_LOG_ENV, skip_log);
-        if std::env::var_os("RUST_TEST_THREADS").is_none() {
-            // as the cargo runs of ci (`cargo()`): more threads make the frame-budget tests flaky
-            c.env("RUST_TEST_THREADS", std::thread::available_parallelism().map_or(4, |n| n.get()).min(4).to_string());
-        }
-        let file = Path::new(exe).file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
-        if run(c, &format!("{name}: {file}")).is_err() {
-            failed.push(format!("{name} ({file})"));
-        }
-    }
-    if failed.is_empty() { Ok(()) } else { Err(format!("tests failed in {}", failed.join(", "))) }
-}
-
 /// The test that prints the messages each language lacks (shown in English); it always passes.
 const TRANSLATION_GAPS_TEST: &str = "i18n::tests::translation_gaps_report";
 
 /// Print the translation gaps report into the log: [`TRANSLATION_GAPS_TEST`] of lightcraft-ui-egui,
 /// run from the test binary the test step built (found with `--no-run` and the step's own
 /// arguments, so nothing rebuilds). A report that can't run is a note, never a failed step.
-fn translation_gaps() {
+fn translation_gaps(limit: Option<std::time::Duration>) {
+    if deadline::any_timed_out() {
+        eprintln!("\nnote: the translation gaps report is skipped: a test binary timed out in this run");
+        return;
+    }
     eprintln!("\n=== ci: translation gaps ===");
     let mut c = cargo();
     c.args(["test", "--no-run", "--message-format=json"]).args(with_test_targets(&["--workspace"]));
@@ -188,7 +164,9 @@ fn translation_gaps() {
     let ran = binary.and_then(|binary| {
         let mut c = Command::new(&binary);
         c.args(["--exact", TRANSLATION_GAPS_TEST, "--nocapture", "--quiet"]);
-        run(c, &format!("{} --exact {TRANSLATION_GAPS_TEST} --nocapture --quiet", binary.display()))
+        let what = format!("{} --exact {TRANSLATION_GAPS_TEST} --nocapture --quiet", binary.display());
+        eprintln!("$ {what}");
+        deadline::run_test_binary(c, "lightcraft-ui-egui (translation gaps)", limit).map_err(|e| format!("{what}: {e}"))
     });
     if let Err(e) = ran {
         eprintln!("note: the translation gaps report did not run: {e}");
@@ -211,10 +189,13 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
     if base.is_some() && !quick {
         return Err("ci: --base only applies to --quick".into());
     }
+    // each test binary's time limit (deadline.rs); a bad value fails before the run waits for its slot
+    let limit = deadline::test_binary_timeout()?;
     let root = root();
     let command = std::iter::once("cargo xtask ci").chain(args.iter().copied()).collect::<Vec<_>>().join(" ");
     // held until ci returns: one run at a time per machine (ci_lock.rs)
-    let _slot = ci_lock::acquire(&root, &command)?;
+    let slot = ci_lock::acquire(&root, &command)?;
+    use_ci_caps(&slot);
     let plan = if quick {
         let (base, files) = ci_quick::changed_files(&root, base)?;
         let plan = ci_quick::plan(&files, &ci_quick::packages(&root, &metadata()?), base);
@@ -235,17 +216,21 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
     // target/ci/skips-<step>.jsonl: a file, so it works the same under nextest and cargo test
     let test = |(mut c, what): (Command, String), step: &str| {
         c.env(ci_report::SKIP_LOG_ENV, ci_report::skip_log(&root, step));
-        run(c, &what)
+        run_tests(c, &what, limit)
     };
     let gpu = std::cell::RefCell::new(serde_json::Value::Null);
     let hardware_runs = std::cell::RefCell::new(Vec::new());
     // What this machine offers the GPU tests, once, after the workspace tests (whose build the
     // probe reuses). Never fails the run: the report says what went wrong.
     let probe = || {
+        if gpu.borrow().is_null() && deadline::any_timed_out() {
+            eprintln!("\nnote: the GPU probe is skipped: a test binary timed out, and what hung it would hang the probe too");
+            *gpu.borrow_mut() = serde_json::json!({"error": "not probed: a test binary timed out in this run"});
+        }
         if gpu.borrow().is_null() {
             eprintln!("\n=== ci: GPU probe ===");
             let t = std::time::Instant::now();
-            let mut found = ci_report::gpu(probe_gpu, hardware);
+            let mut found = ci_report::gpu(|backend| probe_gpu(backend, limit), hardware);
             found["seconds"] = serde_json::json!(t.elapsed().as_secs_f64());
             *gpu.borrow_mut() = found;
         }
@@ -287,14 +272,15 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
                 c.args(["clippy", "-p", "lightcraft-codecs", "--features", "heif", "--all-targets", "--", "-D", "warnings"]);
                 run(c, "cargo clippy -p lightcraft-codecs --features heif --all-targets -- -D warnings")?;
                 test(tests(&with_test_targets(&["-p", "lightcraft-codecs", "--features", "lightcraft-codecs/heif"])), "heif")?;
-                // the engine's HEIC import test, with the decoder (the workspace run checks the error)
-                test(tests(&["-p", "lightcraft-engine", "--lib", "--features", "lightcraft-codecs/heif", "heic"]), "heif")
+                // the engine's HEIC import test, with the decoder (the workspace run checks the error);
+                // the filter after `--`, so a timeout's `--list` keeps to the tests it selects
+                test(tests(&["-p", "lightcraft-engine", "--lib", "--features", "lightcraft-codecs/heif", "--", "heic"]), "heif")
             }),
         ),
         (
             "test",
             Box::new(|| match &plan {
-                Some(p) if !p.workspace_wide => test_selected(&root, &p.packages, &ci_report::skip_log(&root, "test")),
+                Some(p) if !p.workspace_wide => test::selected(&root, &p.packages, &ci_report::skip_log(&root, "test"), limit),
                 _ => test(tests(&with_test_targets(&["--workspace"])), "test").and_then(|()| test(doctests(), "test")),
             }),
         ),
@@ -316,7 +302,7 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
                     let (mut c, what) = tests(&with_test_targets(&["-p", "lightcraft-gpu", "--features", "denoise"]));
                     c.env("LIGHTCRAFT_GPU_BACKEND", &backend).env(ci_report::SKIP_LOG_ENV, ci_report::skip_log(&root, &step));
                     let t = std::time::Instant::now();
-                    let ok = run(c, &format!("LIGHTCRAFT_GPU_BACKEND={backend} {what}")).is_ok();
+                    let ok = run_tests(c, &format!("LIGHTCRAFT_GPU_BACKEND={backend} {what}"), limit).is_ok();
                     hardware_runs.borrow_mut().push(serde_json::json!({
                         "backend": backend,
                         "adapter": adapter,
@@ -355,7 +341,7 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
         if *name == "test" && plan.is_none() {
             // right after the workspace tests, before parity and wasm build other feature sets
             probe();
-            translation_gaps();
+            translation_gaps(limit);
         }
         if let Err(e) = r {
             failure = Some((*name, e));
@@ -425,22 +411,61 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
 /// backend's adapters. `--workspace`, like the test step, so its build is reused (every crate's `it`
 /// binary starts; only lightcraft-gpu's has the test). Its stdout, or why
 /// it failed (a driver that crashes while it is enumerated, issue #136, ends up here, not in xtask).
-fn probe_gpu(backend: Option<&str>) -> Result<String, String> {
+/// Run the GPU probe test (on `backend`, or the pipeline's choice) and return its output. Each
+/// test binary it starts may run for [`deadline::probe_limit`] of the test binaries' `limit`: the
+/// probe initialises the GPU, which is what hangs when a display server stops answering. Not run
+/// once a test binary has timed out in this xtask run.
+fn probe_gpu(backend: Option<&str>, limit: Option<std::time::Duration>) -> Result<String, String> {
+    let name = format!("gpu_probe {}", backend.map(|b| format!("{b} ")).unwrap_or_default());
+    if deadline::any_timed_out() {
+        return Err(format!("{name}not run: a test binary timed out earlier in this run"));
+    }
     let mut c = cargo();
     c.args(["test", "-q", "--workspace", "--test", "it", "--", "--ignored", "--exact", "gpu_probe::gpu_probe", "--nocapture"]);
     c.env("LIGHTCRAFT_GPU_PROBE", backend.unwrap_or(""));
-    let out = c.output().map_err(|e| format!("gpu_probe: {e}"))?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        let tail: Vec<&str> = err.lines().rev().filter(|l| !l.trim().is_empty()).take(3).collect();
-        return Err(format!(
-            "gpu_probe {}exited with {}: {}",
-            backend.map(|b| format!("{b} ")).unwrap_or_default(),
-            out.status,
-            tail.into_iter().rev().collect::<Vec<_>>().join(" / ")
-        ));
+    let out = deadline::capture_cargo(&c, deadline::probe_limit(limit)).map_err(|e| format!("gpu_probe: {e}"))?;
+    match out.status {
+        Ok(status) if status.success() => Ok(out.stdout),
+        Ok(status) => {
+            let tail: Vec<&str> = out.stderr_tail.iter().map(String::as_str).filter(|l| !l.trim().is_empty()).rev().take(3).collect();
+            Err(format!("{name}exited with {status}: {}", tail.into_iter().rev().collect::<Vec<_>>().join(" / ")))
+        }
+        Err(timed_out) => Err(format!("{name}{timed_out}")),
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+#[cfg(test)]
+mod nextest_profile_tests {
+    use super::{NEXTEST_PROFILE, nextest_profile_to_set};
+
+    #[test]
+    fn xtask_picks_its_nextest_profile_unless_the_caller_chose_one() {
+        assert_eq!(nextest_profile_to_set(None), Some(NEXTEST_PROFILE));
+        assert_eq!(nextest_profile_to_set(Some(std::ffi::OsStr::new(""))), Some(NEXTEST_PROFILE), "empty is unset");
+        assert_eq!(nextest_profile_to_set(Some(std::ffi::OsStr::new("default"))), None, "the caller's profile wins");
+    }
+
+    /// The per-test time limit lives in xtask's profile, not the default one, so a plain
+    /// `cargo nextest run` keeps nextest's defaults (FredApps on #3058).
+    #[test]
+    fn only_xtasks_nextest_profile_has_the_time_limit() {
+        let config = std::fs::read_to_string(super::root().join(".config/nextest.toml")).unwrap();
+        let mut table = "";
+        let mut limits = Vec::new();
+        for line in config.lines().map(|l| l.split('#').next().unwrap_or(l).trim()) {
+            if line.starts_with('[') {
+                table = line;
+            } else if line.starts_with("slow-timeout") || line.starts_with("test-threads") {
+                limits.push((table, line));
+            }
+        }
+        let xtask = format!("[profile.{NEXTEST_PROFILE}]");
+        assert!(!limits.is_empty(), "the time limit is in .config/nextest.toml");
+        for (table, line) in &limits {
+            assert_eq!(*table, xtask, "only xtask's profile sets `{line}`");
+        }
+        assert!(limits.iter().any(|(_, l)| l.contains("terminate-after = 30")), "{limits:?}");
+    }
 }
 
 #[cfg(test)]
@@ -457,5 +482,19 @@ mod ci_jobs_tests {
         assert_eq!(ci_jobs(Some(500), 8), 1, "at least one");
         assert_eq!(ci_jobs(None, 32), 4, "unknown RAM keeps the old default");
         assert_eq!(ci_jobs(None, 2), 2);
+    }
+
+    #[test]
+    fn caps_cover_build_and_test_threads_and_yield_to_explicit_settings() {
+        let caps = crate::ci_caps();
+        let keys: Vec<&str> = caps.iter().map(|(k, _)| *k).collect();
+        assert_eq!(keys, ["CARGO_PROFILE_DEV_DEBUG", "CARGO_BUILD_JOBS", "RUST_TEST_THREADS", "NEXTEST_TEST_THREADS"]);
+        for (key, value) in caps.iter().filter(|(k, _)| k.ends_with("TEST_THREADS")) {
+            let n: usize = value.parse().unwrap();
+            assert!((1..=4).contains(&n), "{key}={value}");
+        }
+        let set = crate::caps_to_set(caps, |key| key == "RUST_TEST_THREADS");
+        assert_eq!(set.iter().map(|(k, _)| *k).collect::<Vec<_>>(), ["CARGO_PROFILE_DEV_DEBUG", "CARGO_BUILD_JOBS", "NEXTEST_TEST_THREADS"]);
+        assert!(crate::caps_to_set(caps, |_| true).is_empty());
     }
 }
