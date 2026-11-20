@@ -378,6 +378,27 @@ fn new_album_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// The Missing Photos count's check: how many it found, whether it runs, when it started and the catalog revision it
+/// counted (moved on while nothing it reads changes).
+#[derive(Clone, Default)]
+struct MissingJob {
+    n: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    at: f64,
+    rev: u64,
+    /// A catalog change arrived while a count was running: its recount is pending work
+    /// already, held until the recount stores its result.
+    owed: bool,
+}
+
+const MISSING_JOB: &str = "missing-count";
+
+/// Tests: the catalog revision the Missing Photos count is right at.
+#[cfg(test)]
+pub(crate) fn missing_counted_at(ctx: &egui::Context) -> Option<u64> {
+    ctx.data(|d| d.get_temp::<MissingJob>(egui::Id::unique(MISSING_JOB))).map(|j| j.rev)
+}
+
 /// How many library photos have no file (Local browse records are not checked; see
 /// `cmd::missing::checked_path`). Checking stats every file, which on a network share takes
 /// seconds, so it runs on a worker thread: the count shown is the last finished one, refreshed
@@ -389,34 +410,32 @@ fn new_album_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 /// A catalog change during a timed refresh is pending from the frame it is seen, although its
 /// recount starts only when the refresh ends.
 pub(super) fn missing_count(app: &mut LightcraftApp, ui: &mut egui::Ui) -> usize {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::AcqRel, Ordering::Relaxed};
-    #[derive(Clone, Default)]
-    struct Job {
-        n: std::sync::Arc<AtomicUsize>,
-        running: std::sync::Arc<AtomicBool>,
-        at: f64,
-        rev: u64,
-        /// A catalog change arrived while a count was running: its recount is pending work
-        /// already, held until the recount stores its result.
-        owed: bool,
-    }
-    let id = egui::Id::unique("missing-count");
+    use std::sync::atomic::Ordering::{AcqRel, Relaxed};
+    type Job = MissingJob;
+    let id = egui::Id::unique(MISSING_JOB);
     let now = ui.input(|i| i.time);
     let rev = app.session.catalog.revision;
     let mut job: Job = ui.data(|d| d.get_temp(id)).unwrap_or(Job { rev: u64::MAX, at: f64::MIN, ..Default::default() });
+    // (which files the library expects is no develop state: a slider drag doesn't check them all again)
+    let still = crate::still_right(&app.session.catalog, job.rev, crate::READS_NO_DEVELOP);
+    if still && job.rev != rev {
+        // kept: what it was counted at moves on, so the change record it asks stays short (as for the other caches)
+        job.rev = rev;
+        ui.data_mut(|d| d.insert_temp(id, job.clone()));
+    }
     let running = job.running.load(Relaxed);
-    if running && job.rev != rev && !job.owed {
+    if running && !still && !job.owed {
         // the recount waits for the running count (a timed refresh, not waited for), but settling
         // must wait for it from now on
         super::local::fs_running_counter(ui.ctx()).fetch_add(1, AcqRel);
         job.owed = true;
         ui.data_mut(|d| d.insert_temp(id, job.clone()));
     }
-    let fresh = now - job.at < 5.0 && job.rev == rev;
+    let fresh = now - job.at < 5.0 && still;
     if !fresh && !running {
         // the same scope as the Missing Photos view: library photos only, never Local browse records
         let paths = lightcraft_engine::cmd::missing::candidates(&app.session.catalog);
-        let pending = (job.rev != rev).then(|| super::local::fs_running_counter(ui.ctx()));
+        let pending = (!still).then(|| super::local::fs_running_counter(ui.ctx()));
         if let Some(p) = &pending
             && !job.owed
         {

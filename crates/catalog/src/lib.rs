@@ -28,6 +28,7 @@ mod log_writer;
 pub mod model;
 pub mod opened_folder;
 pub mod query;
+pub mod reads;
 pub mod rules;
 pub mod safe_file;
 pub mod stacks;
@@ -336,9 +337,16 @@ impl Aspects {
     pub const PRESENCE: Aspects = Aspects(1 << 8);
     /// Everything: the photo may count differently for any tally.
     pub const ALL: Aspects = Aspects(u16::MAX);
+    /// Everything but develop state: what a view reads that a slider tick leaves as it was ([`reads`]).
+    pub const ALL_BUT_DEVELOP: Aspects = Aspects::ALL.without(Aspects::DEVELOP);
 
     pub const fn with(self, other: Aspects) -> Aspects {
         Aspects(self.0 | other.0)
+    }
+
+    /// These, but none of `other`.
+    pub const fn without(self, other: Aspects) -> Aspects {
+        Aspects(self.0 & !other.0)
     }
 
     /// Whether any of `other` is among these.
