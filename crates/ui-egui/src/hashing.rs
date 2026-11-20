@@ -1,65 +1,80 @@
 //! Content hashes of photos that joined the library from Local (see `lightcraft_engine::hashing`):
 //! browsing a folder doesn't read whole files, so their hashes are worked out once they are added,
 //! on a worker thread, and recorded back here unless another library was opened meanwhile. A file
-//! that can't be read then (a share gone offline, a file changed since) is tried again later.
+//! that can't be read then (a share gone offline, a file changed since), or a result the session
+//! turns down, is tried again later.
 
-use std::collections::HashSet;
-use std::time::{Duration, Instant};
+use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use lightcraft_catalog::PhotoId;
+// (`std::time::Instant::now` panics on wasm32)
+use web_time::Instant;
 
 use crate::LightcraftApp;
 
 /// The activity stack's label while the files are read.
 pub const LABEL: &str = "Checking added photos";
 
-/// The first wait before photos whose file couldn't be read are tried again; it doubles after each
-/// round that fails, up to [`RETRY_MAX`].
+/// The first wait before a photo whose file couldn't be read is tried again; it doubles each time
+/// that photo fails again, up to [`RETRY_MAX`].
 const RETRY_FIRST: Duration = Duration::from_secs(30);
 const RETRY_MAX: Duration = Duration::from_secs(60 * 60);
 
-/// Added photos whose hash couldn't be worked out (their file unreadable or changed), waiting to be
-/// queued again. They don't hold up switching libraries: a file can stay offline for days.
+/// Added photos whose hash couldn't be worked out (their file unreadable or changed, or the result
+/// no longer applied), waiting to be queued again. They don't hold up switching libraries: a file
+/// can stay offline for days.
 #[derive(Debug, Default)]
 pub struct Retry {
-    ids: Vec<PhotoId>,
+    /// Each photo waiting and when it is queued again, in the order they first failed. A photo that
+    /// fails later doesn't move the others' times.
+    waiting: Vec<(PhotoId, Instant)>,
+    /// Each photo's wait after its next failure: it grows while the photo keeps failing.
+    waits: HashMap<PhotoId, Duration>,
     /// The library they belong to (photo ids are per library).
     library: u64,
-    /// When they are queued again.
-    at: Option<Instant>,
-    /// The wait after the next failed round.
-    wait: Duration,
 }
 
 impl Retry {
-    fn fail(&mut self, library: u64, ids: Vec<PhotoId>) {
+    /// `ids` failed at `now`: each waits its own time (one already waiting keeps its time).
+    fn fail(&mut self, library: u64, ids: Vec<PhotoId>, now: Instant) {
         if ids.is_empty() {
             return;
         }
         if self.library != library {
-            self.ids.clear();
-            self.library = library;
+            *self = Retry { library, ..Retry::default() };
         }
         // a set of those waiting: a long round of failures stays linear, not quadratic
-        let mut waiting: HashSet<PhotoId> = self.ids.iter().copied().collect();
-        self.ids.extend(ids.into_iter().filter(|&id| waiting.insert(id)));
-        let wait = if self.wait.is_zero() { RETRY_FIRST } else { self.wait };
-        let now = Instant::now();
-        self.at = Some(now.checked_add(wait).unwrap_or(now));
-        self.wait = wait.saturating_mul(2).min(RETRY_MAX);
+        let mut waiting: HashSet<PhotoId> = self.waiting.iter().map(|&(id, _)| id).collect();
+        for id in ids {
+            if !waiting.insert(id) {
+                continue;
+            }
+            let wait = self.waits.get(&id).copied().unwrap_or(RETRY_FIRST);
+            self.waiting.push((id, now.checked_add(wait).unwrap_or(now)));
+            self.waits.insert(id, wait.saturating_mul(2).min(RETRY_MAX));
+        }
     }
 
-    /// The photos due to be queued again in `library` (those of another library are dropped).
+    /// `id`'s hash was recorded: a later failure starts from the first wait again.
+    fn recorded(&mut self, id: PhotoId) {
+        self.waits.remove(&id);
+    }
+
+    /// The photos due to be queued again in `library` at `now` (those of another library are dropped).
     fn due(&mut self, library: u64, now: Instant) -> Vec<PhotoId> {
         if self.library != library {
             *self = Retry::default();
             return Vec::new();
         }
-        if self.at.is_none_or(|at| now < at) {
-            return Vec::new();
-        }
-        self.at = None;
-        std::mem::take(&mut self.ids)
+        let (due, waiting) = std::mem::take(&mut self.waiting).into_iter().partition(|&(_, at)| at <= now);
+        self.waiting = waiting;
+        due.into_iter().map(|(id, _)| id).collect::<Vec<_>>()
+    }
+
+    /// When the next photo is due.
+    fn next(&self) -> Option<Instant> {
+        self.waiting.iter().map(|&(_, at)| at).min()
     }
 }
 
@@ -71,7 +86,7 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
         app.session.queue_hash(again);
     }
     // nothing else may ask for a frame when the retry is due (an idle window draws none)
-    if let Some(at) = app.hash_retry.at {
+    if let Some(at) = app.hash_retry.next() {
         ctx.request_repaint_after(at.saturating_duration_since(Instant::now()));
     }
     if !app.session.hashes_queued() || app.tasks.is_running(LABEL) {
@@ -107,10 +122,19 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
         if app.session.library_generation() != library {
             return;
         }
+        let mut failed = failed;
         for d in results {
-            app.session.learn_content_hash(d);
+            let id = d.id;
+            // A result the session no longer takes (the photo was relinked meanwhile, say) is tried
+            // again, as the engine does where it hashes at once; one whose photo wants no hash any
+            // more (Local again, deleted) is dropped when it comes due.
+            if app.session.learn_content_hash(d) {
+                app.hash_retry.recorded(id);
+            } else {
+                failed.push(id);
+            }
         }
-        app.hash_retry.fail(library, failed);
+        app.hash_retry.fail(library, failed, Instant::now());
         // `tick` ran before this frame's results were applied: photos queued meanwhile wait for
         // the next frame, which nothing else may ask for.
         if app.session.hashes_queued() {
@@ -233,16 +257,16 @@ mod tests {
         assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
         assert!(app.session.catalog.photo(id).unwrap().content_hash.is_none());
         assert!(!app.session.hashes_queued(), "not queued again at once: the file would be read every frame");
-        assert_eq!(app.hash_retry.ids, vec![id]);
+        assert_eq!(app.hash_retry.waiting.iter().map(|w| w.0).collect::<Vec<_>>(), vec![id]);
         assert!(crate::dialogs::settings::can_switch_library(&app).is_ok(), "an offline file doesn't block switching");
         super::tick(&mut app, &ctx);
         assert!(!app.tasks.is_running(super::LABEL), "not before its wait");
         std::fs::write(&file, &bytes).unwrap();
-        app.hash_retry.at = Some(std::time::Instant::now());
+        app.hash_retry.waiting[0].1 = web_time::Instant::now();
         super::tick(&mut app, &ctx);
         assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
         assert_eq!(app.session.catalog.photo(id).unwrap().content_hash, lightcraft_engine::hashing::file_hash(&file.to_string_lossy()));
-        assert!(app.hash_retry.ids.is_empty());
+        assert!(app.hash_retry.waiting.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -269,28 +293,77 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Each failed round waits twice as long as the one before, up to an hour; photos of another
-    /// library are dropped.
+    /// Each time a photo fails again it waits twice as long as before, up to an hour; photos of
+    /// another library are dropped.
     #[test]
     fn retries_back_off_and_stay_in_their_library() {
         let mut r = super::Retry::default();
         let a = lightcraft_catalog::PhotoId(1);
-        r.fail(7, vec![a]);
-        assert_eq!(r.wait, super::RETRY_FIRST * 2);
-        r.fail(7, vec![a]);
-        assert_eq!(r.ids, vec![a], "once each");
-        assert_eq!(r.wait, super::RETRY_FIRST * 4);
+        let t0 = web_time::Instant::now();
+        r.fail(7, vec![a], t0);
+        assert_eq!(r.next(), Some(t0 + super::RETRY_FIRST));
+        r.fail(7, vec![a], t0);
+        assert_eq!(r.waiting.len(), 1, "once each");
+        assert_eq!(r.due(7, t0 + super::RETRY_FIRST), vec![a]);
+        r.fail(7, vec![a], t0);
+        assert_eq!(r.next(), Some(t0 + super::RETRY_FIRST * 2), "it failed again: a longer wait");
         for _ in 0..20 {
-            r.fail(7, vec![a]);
+            r.due(7, t0 + super::RETRY_MAX * 2);
+            r.fail(7, vec![a], t0);
         }
-        assert_eq!(r.wait, super::RETRY_MAX);
+        assert_eq!(r.next(), Some(t0 + super::RETRY_MAX));
+        r.recorded(a);
+        r.due(7, t0 + super::RETRY_MAX);
+        r.fail(7, vec![a], t0);
+        assert_eq!(r.next(), Some(t0 + super::RETRY_FIRST), "recorded meanwhile: from the first wait again");
         let b = lightcraft_catalog::PhotoId(2);
-        r.fail(7, vec![b, a, b]);
-        assert_eq!(r.ids, vec![a, b], "each once, in the order they first failed");
-        let later = std::time::Instant::now() + super::RETRY_MAX * 2;
-        assert!(r.due(7, std::time::Instant::now()).is_empty(), "not yet");
-        assert!(r.due(8, later).is_empty(), "another library's photos are dropped");
-        assert!(r.ids.is_empty());
+        r.fail(7, vec![b, a, b], t0);
+        assert_eq!(r.waiting.iter().map(|w| w.0).collect::<Vec<_>>(), vec![a, b], "each once, in the order they first failed");
+        assert!(r.due(7, t0).is_empty(), "not yet");
+        assert!(r.due(8, t0 + super::RETRY_MAX * 2).is_empty(), "another library's photos are dropped");
+        assert!(r.waiting.is_empty());
+    }
+
+    /// A photo that fails while another waits doesn't put the other's retry off: each keeps its
+    /// own time.
+    #[test]
+    fn a_new_failure_keeps_an_earlier_retry_on_time() {
+        let mut r = super::Retry::default();
+        let (a, b) = (lightcraft_catalog::PhotoId(1), lightcraft_catalog::PhotoId(2));
+        let t0 = web_time::Instant::now();
+        r.fail(7, vec![a], t0);
+        r.fail(7, vec![b], t0 + Duration::from_secs(20));
+        assert!(r.due(7, t0 + super::RETRY_FIRST - Duration::from_secs(1)).is_empty());
+        assert_eq!(r.due(7, t0 + super::RETRY_FIRST), vec![a], "still due at its own time");
+        assert_eq!(r.next(), Some(t0 + Duration::from_secs(20) + super::RETRY_FIRST));
+        assert_eq!(r.due(7, t0 + Duration::from_secs(20) + super::RETRY_FIRST), vec![b]);
+    }
+
+    /// A result the session turns down (the photo was relinked to a copy of its file while it was
+    /// read) is tried again, and the photo then gets its hash.
+    #[test]
+    fn a_result_the_session_turns_down_is_tried_again() {
+        let (mut app, id, file, dir) = added_unhashed_photo("rejected");
+        let ctx = egui::Context::default();
+        let hold = HOLD.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        super::tick(&mut app, &ctx);
+        let copy = dir.join("b.png");
+        std::fs::copy(&file, &copy).unwrap();
+        let path = copy.to_string_lossy().to_string();
+        app.session
+            .catalog
+            .apply(Op::Relink { id, file_name: "b.png".into(), source: lightcraft_catalog::Source::File { path: path.clone() }, format: None })
+            .unwrap();
+        drop(hold);
+        assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
+        assert!(app.session.catalog.photo(id).unwrap().content_hash.is_none(), "worked out for the other path");
+        assert_eq!(app.hash_retry.waiting.iter().map(|w| w.0).collect::<Vec<_>>(), vec![id], "tried again later");
+        app.hash_retry.waiting[0].1 = web_time::Instant::now();
+        super::tick(&mut app, &ctx);
+        assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
+        assert_eq!(app.session.catalog.photo(id).unwrap().content_hash, lightcraft_engine::hashing::file_hash(&path));
+        assert!(app.hash_retry.waiting.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A batch that finishes while more photos wait in the queue asks for another frame: the tick
@@ -300,7 +373,7 @@ mod tests {
         let (mut app, id, _file, dir) = added_unhashed_photo("repaint");
         super::tick(&mut app, &egui::Context::default());
         app.session.queue_hash([id]);
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         loop {
             // a fresh, settled context each time: only the batch's own result can ask it for a frame
             let ctx = egui::Context::default();
@@ -344,7 +417,7 @@ mod tests {
         super::tick(&mut app, &ctx);
         assert!(!ctx.has_requested_repaint(), "nothing waits: no frame asked for");
         let library = app.session.library_generation();
-        app.hash_retry.fail(library, vec![id]);
+        app.hash_retry.fail(library, vec![id], web_time::Instant::now());
         let ctx = settled();
         super::tick(&mut app, &ctx);
         assert!(!app.session.hashes_queued(), "not yet due");
