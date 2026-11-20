@@ -45,13 +45,18 @@ fn in_folder(folder: &Path) -> Result<Option<PathBuf>, ReadError> {
             return Ok(Some(named));
         }
     }
-    let Ok(entries) = std::fs::read_dir(folder) else { return Ok(None) };
+    let Ok(mut entries) = std::fs::read_dir(folder) else { return Ok(None) };
     let mut found: Vec<PathBuf> = entries
+        .by_ref()
         .take(MAX_ENTRIES)
         .filter_map(Result::ok)
         .map(|e| e.path())
         .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().to_lowercase().ends_with(".cocatalogdb")) && p.is_file())
         .collect();
+    // a database past the entries looked at would make the pick depend on the folder's order
+    if entries.next().is_some() {
+        return Err(ReadError::FolderTooLarge(folder.to_string_lossy().into_owned()));
+    }
     found.sort();
     if found.len() > 1 {
         return Err(ReadError::Ambiguous {
@@ -72,10 +77,26 @@ pub(super) fn beside(database: &Path, suffix: &str) -> PathBuf {
 
 /// Refuse a database with a rollback journal that holds a transaction, or with a write-ahead
 /// log: its pages may be mid-write, and only SQLite itself can roll that back.
+/// A journal or log that is there but can't be read is not taken as absent: it may hold a
+/// transaction.
 pub(super) fn refuse_while_written(database: &Path) -> Result<(), ReadError> {
-    let beside = |suffix: &str| beside(database, suffix);
+    use std::io::ErrorKind;
+    let unknown = |what: &str, e: std::io::Error| ReadError::WriteStateUnknown(format!("its {what} can't be read: {e}"));
     let mut start = [0u8; 8];
-    let hot = std::fs::File::open(beside("-journal")).is_ok_and(|mut f| f.read_exact(&mut start).is_ok() && start == JOURNAL_MAGIC);
-    let wal = std::fs::metadata(beside("-wal")).is_ok_and(|m| m.len() > 0);
+    let hot = match std::fs::File::open(beside(database, "-journal")) {
+        Err(e) if e.kind() == ErrorKind::NotFound => false,
+        Err(e) => return Err(unknown("journal", e)),
+        Ok(mut journal) => match journal.read_exact(&mut start) {
+            Ok(()) => start == JOURNAL_MAGIC,
+            // shorter than a header: an emptied journal, which holds no transaction
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => false,
+            Err(e) => return Err(unknown("journal", e)),
+        },
+    };
+    let wal = match std::fs::metadata(beside(database, "-wal")) {
+        Err(e) if e.kind() == ErrorKind::NotFound => false,
+        Err(e) => return Err(unknown("write-ahead log", e)),
+        Ok(m) => m.len() > 0,
+    };
     if hot || wal { Err(ReadError::Busy) } else { Ok(()) }
 }

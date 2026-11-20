@@ -274,6 +274,11 @@ pub enum ReadError {
     },
     /// A journal says Capture One is writing to the catalog or did not close it cleanly.
     Busy,
+    /// Whether Capture One is writing to the catalog can't be told: its journal or write-ahead
+    /// log is there but can't be read.
+    WriteStateUnknown(String),
+    /// The folder has too many entries to be sure which database is the catalog's.
+    FolderTooLarge(String),
     /// The database changed while it was read.
     Changed,
     /// The database lacks tables or columns the reader needs (`TABLE` or `TABLE.COLUMN`).
@@ -296,6 +301,10 @@ impl fmt::Display for ReadError {
             Self::Busy => f.write_str(
                 "Capture One is writing to this catalog, or did not close it cleanly; open and close the catalog in Capture One, then retry",
             ),
+            Self::WriteStateUnknown(why) => {
+                write!(f, "can't tell whether Capture One is writing to this catalog ({why}); close Capture One and retry")
+            }
+            Self::FolderTooLarge(folder) => write!(f, "{folder}: too many files to find the catalog database; choose the .cocatalogdb file itself"),
             Self::Changed => f.write_str("the catalog changed while it was read; close Capture One and retry"),
             Self::Unsupported { written_by, missing } => {
                 f.write_str("unsupported Capture One catalog")?;
@@ -357,14 +366,17 @@ pub fn read_with_cancel(path: &Path, cancel: &AtomicBool) -> Result<CaptureOneCa
         active()?;
     }
     let keywords = keywords::list(&db, &mut warnings)?;
+    // read before the last check, so they come from the same catalog as everything else
+    let document_uuid = db.document_uuid();
+    let versions = db.versions();
     db.ensure_unchanged()?;
     if found.in_use {
         warnings.push(Notice::new(notice::IN_USE));
     }
     Ok(CaptureOneCatalog {
         database: found.database.to_string_lossy().into_owned(),
-        document_uuid: db.document_uuid(),
-        versions: db.versions(),
+        document_uuid,
+        versions,
         in_use: found.in_use,
         photos: read.photos,
         collections,

@@ -114,7 +114,7 @@ fn database(tables: &[Spec]) -> Vec<u8> {
             table.columns.iter().map(|c| if *c == key { format!("{c} INTEGER PRIMARY KEY") } else { format!("{c} VARCHAR") }).collect();
         let sql = format!("CREATE TABLE {} ( {} )", table.name, columns.join(", "));
         schema.push((i as i64 + 1, vec![t("table"), t(table.name), t(table.name), V::I(i as i64 + 2), V::T(sql)]));
-        let rows: Vec<(i64, Vec<V>)> = table
+        let mut rows: Vec<(i64, Vec<V>)> = table
             .rows
             .iter()
             .enumerate()
@@ -128,6 +128,9 @@ fn database(tables: &[Spec]) -> Vec<u8> {
                 (rowid, table.columns.iter().map(|c| if *c == key { V::N } else { value(c) }).collect())
             })
             .collect();
+        // a table leaf lists its cells in row id order; tests that read in another order (a
+        // variant's index) give that column values apart from the row ids
+        rows.sort_by_key(|(rowid, _)| *rowid);
         leaf(&mut bytes[(i + 1) * PAGE..(i + 2) * PAGE], 0, &rows);
     }
     leaf(&mut bytes[..PAGE], 100, &schema);
@@ -672,6 +675,19 @@ fn a_package_a_backup_folder_and_the_database_itself_are_found() {
     let Err(ReadError::Ambiguous { databases, .. }) = read(&backup) else { panic!("two databases are ambiguous") };
     assert_eq!(databases, ["Capture One.cocatalogdb", "Other.cocatalogdb"]);
 
+    // a folder with more entries than are looked at: the database it holds can't be told apart
+    // from one further on
+    let crowded = scratch.0.join("Crowded");
+    std::fs::create_dir_all(&crowded).unwrap();
+    std::fs::copy(package.join("Test.cocatalogdb"), crowded.join("Capture One.cocatalogdb")).unwrap();
+    for n in 0..10_000 {
+        std::fs::write(crowded.join(format!("{n}.txt")), b"").unwrap();
+    }
+    assert!(matches!(read(&crowded), Err(ReadError::FolderTooLarge(_))));
+    // the database named after its folder is still found at once
+    std::fs::rename(crowded.join("Capture One.cocatalogdb"), crowded.join("Crowded.cocatalogdb")).unwrap();
+    assert_eq!(read(&crowded).unwrap().photos.len(), 4);
+
     // an empty package is this reader's to refuse; a folder without a database is not a catalog
     let empty = scratch.0.join("Empty.cocatalog");
     std::fs::create_dir_all(&empty).unwrap();
@@ -702,6 +718,22 @@ fn a_catalog_capture_one_is_writing_is_refused_and_an_open_one_is_reported() {
     assert_eq!(read(&package), Err(ReadError::Busy));
     std::fs::remove_file(package.join("Test.cocatalogdb-wal")).unwrap();
 
+    // a journal shorter than its header holds none either; one that can't be read may
+    std::fs::write(&journal, [0xd9, 0xd5, 0x05]).unwrap();
+    assert!(read(&package).is_ok());
+    std::fs::remove_file(&journal).unwrap();
+    std::fs::create_dir(&journal).unwrap();
+    assert!(matches!(read(&package), Err(ReadError::WriteStateUnknown(_))), "{:?}", read(&package).err());
+    std::fs::remove_dir(&journal).unwrap();
+    // a log whose state can't be read either (a link to itself)
+    #[cfg(unix)]
+    {
+        let wal = package.join("Test.cocatalogdb-wal");
+        std::os::unix::fs::symlink(&wal, &wal).unwrap();
+        assert!(matches!(read(&package), Err(ReadError::WriteStateUnknown(_))), "{:?}", read(&package).err());
+        std::fs::remove_file(&wal).unwrap();
+    }
+
     std::fs::write(package.join("writelock"), "someone\n0123").unwrap();
     let catalog = read(&package).unwrap();
     assert!(catalog.in_use);
@@ -717,6 +749,21 @@ fn a_write_capture_one_starts_while_the_file_is_taken_is_refused() {
     hot.resize(512, 0);
     let begin = || std::fs::write(package.join("Test.cocatalogdb-journal"), &hot).unwrap();
     assert!(matches!(tables::Db::open_observed(&database, &begin), Err(ReadError::Busy)));
+}
+
+#[test]
+fn a_cancel_after_the_tables_are_read_stops_the_photos_being_built() {
+    let scratch = Scratch::new("cancel-late");
+    let package = scratch.catalog(&sample(&scratch.0));
+    let database = package.join("Test.cocatalogdb");
+    let db = tables::Db::open(&database).unwrap();
+    // the four table reads go ahead; the cancel comes once they are done
+    let looks = std::cell::Cell::new(0);
+    let active = || {
+        looks.set(looks.get() + 1);
+        if looks.get() > 4 { Err(ReadError::Cancelled) } else { Ok(()) }
+    };
+    assert!(matches!(photos::read(&db, &database, &mut Vec::new(), &active), Err(ReadError::Cancelled)));
 }
 
 #[test]
@@ -935,7 +982,8 @@ fn times_are_calendar_times_within_four_digit_years() {
     };
     assert_eq!(captured(1_500_000_000.25).as_deref(), Some("2017-07-14T02:40:00"));
     // before 1970, and the last second an ISO date holds
-    assert_eq!(captured(-86_400.5).as_deref(), Some("1969-12-31T00:00:00"));
+    assert_eq!(captured(-86_400.5).as_deref(), Some("1969-12-30T23:59:59"));
+    assert_eq!(captured(-0.5).as_deref(), Some("1969-12-31T23:59:59"));
     assert_eq!(captured(253_402_300_799.0).as_deref(), Some("9999-12-31T23:59:59"));
     assert_eq!(captured(253_402_300_800.0), None);
     assert_eq!(captured(-62_135_596_799.0).as_deref(), Some("0001-01-01T00:00:01"));
@@ -1124,6 +1172,13 @@ fn orange_and_pink_are_kept_found_by_a_keyword_and_replaced_by_a_label_set_here(
     // a label set here replaces it, in one undo step
     s.execute("photo.label", &serde_json::json!({ "ids": [id.0], "label": "red" })).unwrap();
     assert_eq!((kept(&s, "referenced.jpg").0, kept(&s, "referenced.jpg").1.as_str()), (Some(ColorLabel::Red), ""));
+    // only the photo labelled: another photo's kept colour isn't in the step
+    assert_eq!(kept(&s, "elsewhere.ARW").1, "Pink");
+    assert!(
+        matches!(&s.undo.last().unwrap().op, lightcraft_catalog::Op::Batch { ops } if ops.len() == 1),
+        "{:?}",
+        s.undo.last().map(|step| &step.op)
+    );
     // (the keyword still names the colour; the label is the one set here)
     assert!(packet(&s).contains("<xmp:Label>Red</xmp:Label>") && !packet(&s).contains("<xmp:Label>Orange"), "{}", packet(&s));
     s.execute("edit.undo", &serde_json::json!({})).unwrap();

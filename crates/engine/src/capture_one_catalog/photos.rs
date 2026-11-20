@@ -7,6 +7,8 @@ use super::notice::{self, Notice};
 use super::tables::{Db, Row, Table};
 use super::{CatalogPhoto, ColorTag, Iptc, OriginalKind, ReadError, keywords, paths};
 
+/// How many images are built between two looks at the cancel flag.
+const CANCEL_EVERY: usize = 1_024;
 /// Capture One's "no date": 0001-01-01 as Unix seconds.
 const NO_DATE: f64 = -62_135_596_800.0;
 /// 9999-12-31T23:59:59 as Unix seconds: the last time an ISO date with a four-digit year holds.
@@ -61,9 +63,14 @@ pub(super) fn read(db: &Db, database: &Path, warnings: &mut Vec<Notice>, active:
     image_rows.sort_by_key(|(id, _)| *id);
     let mut notes = Notes::default();
     let mut variants_of = variants_by_image(&variants, &image_rows, &mut notes);
+    active()?;
 
     let mut out = Read { photos: Vec::new(), trashed: 0, by_variant: HashMap::new(), first_of_image: HashMap::new() };
-    for (image_id, image) in image_rows {
+    for (at, (image_id, image)) in image_rows.into_iter().enumerate() {
+        // a large catalog takes a while to build: a cancel stops it here too
+        if at % CANCEL_EVERY == 0 {
+            active()?;
+        }
         if image.flag("ZISTRASHED") {
             out.trashed = out.trashed.saturating_add(1);
             continue;
@@ -212,7 +219,8 @@ fn exif(image: Row<'_>) -> BTreeMap<String, String> {
 /// for Capture One's "no date", zero and times outside the years 0001 to 9999.
 fn time(seconds: Option<f64>, zone: &str) -> Option<String> {
     let seconds = seconds.filter(|s| *s > NO_DATE && *s != 0.0 && *s <= LAST_DATE)?;
-    Some(format!("{}{zone}", lightcraft_catalog::dates::civil(seconds.trunc() as i64)))
+    // down to the second it falls in, also before 1970 (-0.5 is 23:59:59 on the last day of 1969)
+    Some(format!("{}{zone}", lightcraft_catalog::dates::civil(seconds.floor() as i64)))
 }
 
 /// A value Capture One writes as a fraction (`-67/100`) or a plain number.
