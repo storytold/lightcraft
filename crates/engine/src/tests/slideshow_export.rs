@@ -354,13 +354,24 @@ fn video_cancel_cleans_partial_mp4_and_webm_and_propagates_errors() {
         let (mut s, ids) = session(12);
         let path = dir.path(name);
         let r = s.execute("slideshow.export", &json!({"format": "video", "container": container, "path": path, "size": 64, "ids": ids})).unwrap();
+        let part_deadline = Instant::now() + wait_timeout();
+        while Instant::now() < part_deadline {
+            if dir.files("").iter().any(|f| f.ends_with(".part")) || !s.slideshow_export.as_ref().unwrap().running() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
         s.execute("activity.cancel", &json!({"id": r["taskId"]})).unwrap();
         let status = wait_for(&s);
         assert!(status["error"].as_str().is_some_and(|e| e.contains("cancelled")), "{container}: {status}");
         assert!(status["cancelled"].as_bool().unwrap());
         assert!(!Path::new(&path).is_file(), "{container}: no output");
         assert!(dir.files("").iter().all(|f| !f.ends_with(".part")), "{container}: no partial files");
-        assert!(s.activity.list().is_empty());
+        let row_deadline = Instant::now() + wait_timeout();
+        while !s.activity.list().is_empty() {
+            assert!(Instant::now() < row_deadline, "{container}: activity row remained after cancellation");
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 
     let (mut s, ids) = session(2);

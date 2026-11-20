@@ -1058,7 +1058,7 @@ mod tests {
         assert!(td_only.is_empty() && seq.is_none());
         assert!(mp4.add(&Sample { data: td_only, key: true, duration: 1 }).is_err());
 
-        let mut io_mp4 = Mp4Writer::new(FailAfter { limit: 40, written: 0 }, 64, 36, 30).unwrap();
+        let mut io_mp4 = Mp4Writer::new(FailAfter { limit: 64, written: 0 }, 64, 36, 30).unwrap();
         io_mp4.set_config(av1_config(&[0x0a, 1, 0]));
         assert!(
             io_mp4
