@@ -216,16 +216,20 @@ fn browsing_leaves_hashes_queued_before_it() {
     assert!(s.catalog.photo(id).unwrap().content_hash.is_none());
 }
 
-/// A library that fails to open leaves the current one in place, with its queued hashes.
+/// A library that fails to open leaves the current one in place, with its queued hashes and its
+/// smart previews' folder (a hash job would otherwise look for the preview it moves in the other).
 #[test]
 fn a_library_that_fails_to_open_keeps_the_queue() {
     let (mut s, id, _) = browsed_without_hash("open-fails");
     s.hash_in_background = true;
     s.execute("photo.addToLibrary", &json!({"ids": [id.0]})).unwrap();
+    let smart = PathBuf::from("open-fails-smart");
+    s.media.smart_dir = Some(smart.clone());
     let bad = temp_dir("open-fails-lib");
     std::fs::write(bad.join(lightcraft_catalog::journal::SNAPSHOT), b"not a catalog").unwrap();
     assert!(s.open_library(&bad, false).is_err());
     assert!(s.hashes_queued());
+    assert_eq!(s.media.smart_dir, Some(smart), "the open library's smart previews folder");
     let _ = std::fs::remove_dir_all(bad);
 }
 
@@ -293,4 +297,36 @@ fn the_queue_keeps_its_order_and_each_photo_once() {
     assert_eq!(s.unhashed, [c, b]);
     assert!(s.catalog.photo(a).unwrap().content_hash.is_some());
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A photo deleted while its hash is queued drops out of the queue (a deleted photo wants no hash);
+/// undoing the delete or restoring it from Recently Deleted brings it back, and queues it again.
+#[test]
+fn restoring_a_photo_deleted_while_its_hash_was_queued_queues_it_again() {
+    let (mut s, id, file) = browsed_without_hash("restore");
+    s.hash_in_background = true;
+    s.execute("photo.addToLibrary", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.delete", &json!({"ids": [id.0]})).unwrap();
+    assert!(s.catalog.photo(id).unwrap().deleted);
+    assert!(s.take_hash_jobs().is_empty(), "a deleted photo wants no hash");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(!s.catalog.photo(id).unwrap().deleted);
+    assert!(s.hashes_queued(), "the undo brings it back into the library");
+    drop(s.take_hash_jobs());
+    // restored from Recently Deleted, rather than undone (both commands want a selection)
+    s.selection = crate::Selection { ids: vec![id], active: Some(id) };
+    s.execute("photo.delete", &json!({"ids": [id.0]})).unwrap();
+    s.selection = crate::Selection { ids: vec![id], active: Some(id) };
+    s.execute("photo.restore", &json!({"ids": [id.0]})).unwrap();
+    assert!(!s.catalog.photo(id).unwrap().deleted);
+    assert_eq!(s.take_hash_jobs().len(), 1, "the restore queues it again");
+    // restored by importing its file again
+    s.selection = crate::Selection { ids: vec![id], active: Some(id) };
+    s.execute("photo.delete", &json!({"ids": [id.0]})).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [file], "mode": "add", "onDeleted": "restore"})).unwrap();
+    assert_eq!(r["restored"], json!([id.0]), "{r}");
+    let jobs = s.take_hash_jobs();
+    assert_eq!(jobs.len(), 1, "the import's restore queues it again");
+    assert!(s.learn_content_hash(jobs[0].run().unwrap()));
+    assert_eq!(s.catalog.photo(id).unwrap().content_hash, crate::hashing::file_hash(&file));
 }
