@@ -30,6 +30,7 @@ pub mod opened_folder;
 pub mod query;
 pub mod rules;
 pub mod safe_file;
+pub mod shared;
 pub mod stacks;
 pub mod store;
 pub mod tally;
@@ -379,23 +380,46 @@ impl std::fmt::Debug for PlansMemo {
     }
 }
 
+/// What [`resolve_grids`] has made of each value with references so far: the value as read (held
+/// here so its address stays its own), what it resolved to and how many dangling references it
+/// held. Holders that shared a value before resolving share the result, whatever else is between
+/// them (a photo's settings and its last history step, with the earlier steps in between).
+type ResolvedGrids = std::collections::HashMap<*const DevelopSettings, (Arc<DevelopSettings>, Arc<DevelopSettings>, usize)>;
+
 /// Resolves the shared-grid references of one settings holder (see [`Photo::settings_holders`])
 /// against a snapshot's grid table: each referenced mask takes its
 /// grid's data and the reference is cleared. A reference past the table (a damaged snapshot)
 /// leaves the mask empty — it renders nothing, like any other damaged grid. Data present on the
 /// mask itself wins over a stray reference. Returns the dangling count added to `dangling`.
-fn resolve_grids(settings: &mut Arc<DevelopSettings>, grids: &[String], dangling: usize) -> usize {
-    let mut dangling = dangling;
+///
+/// Settings that refer to no grid (nearly all of them) are left alone, so a value shared by many
+/// holders stays shared: [`Arc::make_mut`] would copy it for each. A value with references is
+/// resolved once (`done`): every holder that held it takes the same result, which is handed to
+/// [`shared::settings`], so holders that are equal once resolved share one value too.
+fn resolve_grids(settings: &mut Arc<DevelopSettings>, grids: &[String], dangling: usize, done: &mut ResolvedGrids) -> usize {
+    let mut referenced = false;
+    settings.visit_seg_masks(&mut |m| referenced |= m.grid.is_some());
+    if !referenced {
+        return dangling;
+    }
+    if let Some((_, resolved, dangled)) = done.get(&Arc::as_ptr(settings)) {
+        *settings = resolved.clone();
+        return dangling + dangled;
+    }
+    let original = settings.clone();
+    let mut dangled = 0usize;
     Arc::make_mut(settings).visit_seg_masks_mut(&mut |m| {
         if let Some(i) = m.grid.take() {
             match (m.data.is_empty(), grids.get(i as usize)) {
                 (true, Some(data)) => m.data = data.clone(),
-                (true, None) => dangling += 1,
+                (true, None) => dangled += 1,
                 (false, _) => {}
             }
         }
     });
-    dangling
+    *settings = shared::settings(settings.clone());
+    done.insert(Arc::as_ptr(&original), (original, settings.clone(), dangled));
+    dangling + dangled
 }
 
 /// A short memory of what the latest ops changed, so that what is derived from the catalog (the grid's list) can
@@ -865,6 +889,7 @@ impl Catalog {
                 photo.trim_history();
                 let id = photo.id;
                 self.next_photo = self.next_photo.max(id.0.saturating_add(1));
+                shared::photo(&mut photo);
                 self.photos.insert(id, Arc::new(*photo));
                 Op::RemovePhoto { id }
             }
@@ -891,7 +916,7 @@ impl Catalog {
             }
             Op::SetDevelop { id, settings, label, edited } => {
                 let p = self.photo_mut(id)?;
-                let old = std::mem::replace(&mut p.develop, settings);
+                let old = std::mem::replace(&mut p.develop, shared::settings(settings));
                 let old_edit = std::mem::replace(&mut p.edited, edited);
                 Op::SetDevelop { id, settings: old, label, edited: old_edit }
             }
@@ -907,12 +932,15 @@ impl Catalog {
                 let p = self.photo_mut(id)?;
                 Op::SetLocal { id, local: std::mem::replace(&mut p.local, local) }
             }
-            Op::SetVersions { id, versions } => {
+            Op::SetVersions { id, mut versions } => {
                 let p = self.photo_mut(id)?;
+                shared::Anchor::new(p.develop.clone()).versions(&mut versions);
                 Op::SetVersions { id, versions: std::mem::replace(&mut p.versions, versions) }
             }
-            Op::SetHistory { id, history } => {
+            Op::SetHistory { id, mut history } => {
                 let p = self.photo_mut(id)?;
+                let own = shared::Anchor::new(p.develop.clone());
+                history.iter_mut().for_each(|s| own.step(s));
                 let old = std::mem::replace(&mut p.history, history);
                 let old_cursor = p.history_cursor;
                 p.trim_history();
@@ -922,8 +950,9 @@ impl Catalog {
                     Op::Batch { ops: vec![Op::SetHistory { id, history: old }, Op::SetHistoryCursor { id, cursor: old_cursor }] }
                 }
             }
-            Op::PushHistory { id, step } => {
+            Op::PushHistory { id, mut step } => {
                 let p = self.photo_mut(id)?;
+                shared::Anchor::new(p.develop.clone()).step(&mut step);
                 let old = p.history.clone();
                 let old_cursor = p.history_cursor.take();
                 // a new edit made from an earlier step drops the steps after it
@@ -1237,10 +1266,11 @@ impl Catalog {
         // an empty table, which is always dangling, so the table being empty does not skip it.
         let grids = std::mem::take(&mut self.grids);
         let mut dangling = 0usize;
+        let mut done = ResolvedGrids::new();
         for p in self.photos.values_mut() {
             let photo = Arc::make_mut(p);
             for settings in photo.settings_holders_mut() {
-                dangling = resolve_grids(settings, &grids, dangling);
+                dangling = resolve_grids(settings, &grids, dangling, &mut done);
             }
         }
         if dangling > 0 {
@@ -1561,6 +1591,8 @@ mod tests_repair;
 mod tests_rule_order;
 #[cfg(test)]
 mod tests_scale;
+#[cfg(test)]
+mod tests_shared;
 #[cfg(test)]
 mod tests_tally;
 #[cfg(test)]
