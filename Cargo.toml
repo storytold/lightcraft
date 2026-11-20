@@ -35,6 +35,7 @@ craft-window = { git = "https://github.com/storytold/craft-libs", rev = "23acc70
 craft-gainmap = { git = "https://github.com/storytold/craft-libs", rev = "23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3" }
 # PSD/PSB: the header, colour mode data and image resources (craft-libs#885).
 craft-psd = { git = "https://github.com/storytold/craft-libs", rev = "010702ee9b030844c852939095b1da0d0656a890" }
+craft-sqlite = { git = "https://github.com/storytold/craft-libs", rev = "057b0e3e01aed74ecc5d18eb047ddd7328b46b1d" }
 craft-zip = { git = "https://github.com/storytold/craft-libs", rev = "0c6b195efebe7a53d84cd4220e5387f03cbdbf42" }
 jpeg-encoder = { version = "0.7", default-features = false, features = ["std"] }
 # internal
