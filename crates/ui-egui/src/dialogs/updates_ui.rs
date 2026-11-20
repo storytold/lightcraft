@@ -185,6 +185,32 @@ mod tests {
         }
     }
 
+    /// Offers `release` and returns once its prompt is open. The updater reads the installed
+    /// files for an offer on a thread of its own. That thread sends its answer and then asks the
+    /// first context the updater was ticked with for a repaint, so the tick after that repaint
+    /// reads the answer and opens the prompt. `updater` must not have been ticked before, or the
+    /// repaint goes to another context. The test fails when the launcher manages this copy or
+    /// when the answered offer opens no prompt.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn offer_and_wait(updater: &mut Updater, release: craft_update::Release) {
+        let ctx = egui::Context::default();
+        let (answered, wait) = std::sync::mpsc::channel();
+        ctx.set_repaint_observer(move |info| {
+            if info.delay.is_zero() {
+                let _ = answered.send(());
+            }
+        });
+        // Keeps `ctx` for the offer's thread.
+        updater.tick(&ctx);
+        updater.offer(release);
+        assert!(updater.managed().is_none(), "the launcher manages this copy, so it ignored the offer");
+        if !updater.prompt_open() {
+            wait.recv().unwrap();
+            updater.tick(&ctx);
+        }
+        assert!(updater.prompt_open(), "the answered offer opened no prompt");
+    }
+
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn startup_prompt_shows_and_closes() {
@@ -197,7 +223,10 @@ mod tests {
             html_url: "https://github.com/storytold/lightcraft/releases/tag/v99.0.0".into(),
             ..Default::default()
         };
-        app.updates_rt.updater.offer(release);
+        // A missing pins file means stable releases, whatever the launcher on this machine chose.
+        let no_pins = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("no-launcher-pins.json");
+        app.updates_rt.updater = Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_pins_path(no_pins);
+        offer_and_wait(&mut app.updates_rt.updater, release);
 
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             show(&mut app, ui.ctx());

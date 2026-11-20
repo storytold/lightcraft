@@ -46,7 +46,7 @@ CRW, MRW, X3F) are detected so the engine can route them to `lightcraft-raw`; `d
 
 | Format | Decode | Encode | Notes |
 |---|---|---|---|
-| JPEG | yes (zune-jpeg; jpeg-decoder for DCT scaling, CMYK/YCCK, 12-bit, non-interleaved scans) | yes (jpeg-encoder, baseline, 4:4:4/4:2:2/4:2:0) | EXIF (APP1), XMP (APP1, ≤ 64 KiB), ICC (APP2; only complete, consistently counted, uniquely numbered chunk sequences are assembled; malformed profiles use the existing unsupported-profile fallback), Adobe APP14, MPF previews |
+| JPEG | yes (zune-jpeg; jpeg-decoder for DCT scaling, CMYK/YCCK, 12-bit, non-interleaved scans) | yes (shared `craft-jpeg`, optimized baseline, 4:4:4/4:2:2/4:2:0) | EXIF (APP1), XMP (APP1, ≤ 64 KiB), ICC (APP2; only complete, consistently counted, uniquely numbered chunk sequences are assembled; malformed profiles use the existing unsupported-profile fallback), Adobe APP14, MPF previews |
 | PNG | yes, 1–16-bit, palette, tRNS, interlaced | 8/16-bit, gray/GA/RGB/RGBA | iCCP, eXIf, iTXt XMP; sRGB/cICP/cHRM/gAMA honoured when no ICC |
 | TIFF | 8/16-bit int (32/64-bit int kept to 16 bits), 16/32/64-bit float, gray/RGB/CMYK/palette, alpha (assoc./unassoc.), planar, LZW/Deflate/PackBits/JPEG | 8/16-bit, 32-bit float; none/LZW/Deflate/PackBits | ICC (34675), XMP (700), Orientation; first IFD only; EXIF not written (use `craft-tiff`) |
 | WebP | lossy + lossless, alpha, first frame of animations | lossless only | ICCP/EXIF/XMP chunks |
@@ -85,7 +85,8 @@ All pure Rust, verified with `cargo info` / `cargo tree`:
 |---|---|---|
 | zune-jpeg, zune-core | MIT OR Apache-2.0 OR Zlib | JPEG decode |
 | jpeg-decoder | MIT OR Apache-2.0 | scaled / CMYK JPEG decode |
-| jpeg-encoder | (MIT OR Apache-2.0) AND IJG | JPEG encode (IJG: permissive, attribution in docs) |
+| craft-jpeg | MIT OR Apache-2.0 | baseline JPEG encode (shared craft-libs) |
+| jpeg-encoder | (MIT OR Apache-2.0) AND IJG | 0.6 still ships inside `craft-image-codecs` (IJG: permissive, attribution in docs); 0.7 only in tests and the JPEG benchmark (reference CMYK fixture, prior 4:2:2 output) |
 | png | MIT OR Apache-2.0 | PNG |
 | tiff | MIT | TIFF |
 | image-webp | MIT OR Apache-2.0 | WebP |
@@ -113,8 +114,8 @@ Run `cargo test --release -p lightcraft-codecs --test it bench:: -- --ignored --
 
 ## Gaps / limitations
 
-- **AVIF decode**: no permissively licensed, pure-Rust AV1 decoder exists today (dav1d is C;
-  rav1d-safe is AGPL). Files are sniffed and rejected with `Error::Unsupported`.
+- **AVIF decode** uses the shared pure-Rust AV1 decoder on native builds with the `avif` feature.
+  Animated AVIF, depth and gain-map auxiliary images, and progressive/layered images are unsupported.
 - **HEIC** needs the `heif` feature (off by default: HEVC patents are the distributor's call);
   without it, `Error::Unsupported` says the build has no HEIC support. 4:2:2 and 4:4:4 HEIF
   (Canon/Sony HIF) is refused: heic-rs 0.1.1 loses sync on those bitstreams.
