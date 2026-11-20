@@ -1438,6 +1438,7 @@ fn smart_album_rules_select_as_capture_one_does() {
         height: 3000,
         iso: Some(400),
         gps: Some((47.0, 8.0)),
+        turned: Some(false),
         ..Default::default()
     };
     let selects = |key: &str, op: i64, value: &str| smart::matches(&smart::parse(&rule(true, &[(key, op, value)])).unwrap(), &photo);
@@ -1446,9 +1447,12 @@ fn smart_album_rules_select_as_capture_one_does() {
         ("IB_I_BASIC_RATING", 5, "3", false),
         ("IB_S_BASIC_URGENCY", 0, "2", true),
         ("IB_S_BASIC_URGENCY", 1, "2", false),
-        // a keyword or any level of it
-        ("IB_S_CONTENT_KEYWORDS", 0, "lake", true),
-        ("IB_S_CONTENT_KEYWORDS", 1, "places", false),
+        // a keyword or any level of it; "is" in the same case, as Capture One compares
+        ("IB_S_CONTENT_KEYWORDS", 0, "Lake", true),
+        ("IB_S_CONTENT_KEYWORDS", 0, "lake", false),
+        ("IB_S_CONTENT_KEYWORDS", 1, "Places", false),
+        ("IB_S_CONTENT_KEYWORDS", 1, "places", true),
+        ("IB_S_CONTENT_KEYWORDS", 6, "lake", true),
         ("IB_S_CONTENT_KEYWORDS", 10, "ke", true),
         ("IB_S_EXP_DATE", 0, "2021-06-15", true),
         ("IB_S_EXP_DATE", 14, "2021-06-15", false),
@@ -1464,6 +1468,58 @@ fn smart_album_rules_select_as_capture_one_does() {
     }
     // an operator this version doesn't know can't be evaluated
     assert_eq!(selects("IB_I_ISO", 7, "400"), None);
+    // orientation as Capture One shows the photo: turned a quarter, a wide frame is tall
+    let turned = CatalogPhoto { turned: Some(true), ..photo.clone() };
+    let tall = smart::parse(&rule(true, &[("orientation", 0, "1")])).unwrap();
+    assert_eq!((smart::matches(&tall, &photo), smart::matches(&tall, &turned)), (Some(false), Some(true)));
+    // and unknown when the catalog's rotations weren't read
+    assert_eq!(smart::matches(&tall, &CatalogPhoto { turned: None, ..photo }), None);
+}
+
+#[test]
+fn a_keyword_rule_that_depends_on_case_holds_the_photos_it_selects() {
+    let photo = |keyword: &str| CatalogPhoto { keywords: vec![keyword.into()], ..Default::default() };
+    // only one spelling in the catalog: LightCraft's "is" selects the same photos
+    let one = [photo("Nature|Lake"), photo("City")];
+    let outcome = smart_outcome(true, &[("IB_S_CONTENT_KEYWORDS", 0, "Nature")], &one);
+    assert!(matches!(outcome, smart::Outcome::Smart(_)), "{outcome:?}");
+    // "nature" beside "Nature": Capture One finds only the spelling asked for, LightCraft both
+    let both = [photo("Nature|Lake"), photo("nature"), photo("City")];
+    assert_eq!(
+        smart_outcome(true, &[("IB_S_CONTENT_KEYWORDS", 0, "nature")], &both),
+        smart::Outcome::Selected(vec![1], vec!["keywords told apart by upper and lower case".into()])
+    );
+    assert_eq!(
+        smart_outcome(true, &[("IB_S_CONTENT_KEYWORDS", 1, "Nature")], &both),
+        smart::Outcome::Selected(vec![1, 2], vec!["keywords told apart by upper and lower case".into()])
+    );
+    // "contains" doesn't tell case apart in either
+    assert!(matches!(smart_outcome(true, &[("IB_S_CONTENT_KEYWORDS", 6, "nature")], &both), smart::Outcome::Smart(_)));
+}
+
+#[test]
+fn a_smart_album_on_orientation_reads_how_capture_one_turns_each_photo() {
+    let scratch = Scratch::new("turned");
+    let mut tables = sample(&scratch.0);
+    // managed.RAF (6000 × 4000) shows turned in its first variant (combined layer 12), not in its
+    // second (layers 20–22); a straightened few degrees don't turn a photo
+    let layer = |pk: i64, rotation: f64| vec![("Z_PK", V::I(pk)), ("ZROTATION", V::R(rotation))];
+    tables.push(spec("ZVARIANTLAYER", &["Z_ENT", "Z_PK", "ZVARIANT", "ZROTATION"], vec![layer(10, 0.0), layer(12, 90.0), layer(22, 4.5)]));
+    // file size keeps it from being a smart album, so the import says which photos it selects
+    let tall = rule(true, &[("orientation", 0, "1"), ("IB_S_FILE_SIZE", 2, "20000000")]);
+    table(&mut tables, "ZCOLLECTION").rows.push(smart_album(26, "Tall", 10, &tall));
+    let package = scratch.catalog(&tables);
+    let catalog = read(&package).unwrap();
+    let turned: Vec<Option<bool>> = catalog.photos.iter().filter(|p| p.file_name == "managed.RAF").map(|p| p.turned).collect();
+    assert_eq!(turned, [Some(true), Some(false)]);
+    let mut s = crate::Session::new().with_fs();
+    s.execute("library.importLightroom", &serde_json::json!({ "path": package })).unwrap();
+    assert_eq!(album(&s, "Tall").photos, [by_name(&s, "managed.RAF", false).id]);
+    // without a rule on orientation the layers aren't read
+    let mut plain = sample(&scratch.0);
+    plain.push(spec("ZVARIANTLAYER", &["Z_ENT", "Z_PK", "ZVARIANT", "ZROTATION"], vec![layer(12, 90.0)]));
+    let other = Scratch::new("unturned");
+    assert!(read(&other.catalog(&plain)).unwrap().photos.iter().all(|p| p.turned.is_none()));
 }
 
 #[test]

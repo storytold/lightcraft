@@ -8,7 +8,7 @@
 //! albums made in Capture One 16.3 and compared with its rule dialog: keys and operators not seen
 //! there are not guessed, and a rule that uses one is named in a warning.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use lightcraft_catalog::{Match, Rule as LcRule, RuleSet};
 use serde_json::{Value, json};
@@ -104,8 +104,11 @@ pub(super) fn outcome(rule: &Group, photos: &[CatalogPhoto]) -> Outcome {
     if !has_enabled(rule) {
         return Outcome::Skipped("its rule has no condition switched on".into());
     }
+    // Capture One's "is" on keywords tells upper and lower case apart; LightCraft's doesn't
+    let spellings: HashSet<&str> =
+        photos.iter().flat_map(|p| p.keywords.iter()).flat_map(|k| std::iter::once(k.as_str()).chain(k.split('|'))).collect();
     let mut missing = Vec::new();
-    let rules = to_rules(rule, &mut missing);
+    let rules = to_rules(rule, &spellings, &mut missing);
     if missing.is_empty() {
         return Outcome::Smart(rules);
     }
@@ -141,13 +144,13 @@ fn has_enabled(group: &Group) -> bool {
 
 /// The rule as LightCraft rules; the names of the conditions that have no LightCraft field go to
 /// `missing` (the rules are then incomplete).
-fn to_rules(group: &Group, missing: &mut Vec<String>) -> RuleSet {
+fn to_rules(group: &Group, spellings: &HashSet<&str>, missing: &mut Vec<String>) -> RuleSet {
     let mut rules = Vec::new();
     for item in &group.items {
         match item {
             Item::Group(g) => {
                 if has_enabled(g) {
-                    let mut group = to_rules(g, missing);
+                    let mut group = to_rules(g, spellings, missing);
                     // Capture One puts every condition in a group of its own
                     match (group.rules.len(), group.rules.pop()) {
                         (1, Some(rule)) => rules.push(rule),
@@ -160,10 +163,10 @@ fn to_rules(group: &Group, missing: &mut Vec<String>) -> RuleSet {
                 }
             }
             Item::Condition(c) if !c.enabled => {}
-            Item::Condition(c) => match to_rule(c) {
+            Item::Condition(c) => match to_rule(c, spellings) {
                 Some(rule) => rules.push(rule),
                 None => {
-                    let name = name(c);
+                    let name = if same_but_case(c, spellings) { KEYWORDS_BY_CASE.to_string() } else { name(c) };
                     if !missing.contains(&name) {
                         missing.push(name);
                     }
@@ -183,10 +186,13 @@ fn not(rule: LcRule) -> LcRule {
     LcRule::Group { group: RuleSet { mode: Match::None, rules: vec![rule] } }
 }
 
-fn to_rule(c: &Condition) -> Option<LcRule> {
+fn to_rule(c: &Condition, spellings: &HashSet<&str>) -> Option<LcRule> {
     let key = KEYS.iter().find(|k| k.key == c.key)?;
     let lc = key.lightcraft?;
     let value = c.criterion.as_str();
+    if same_but_case(c, spellings) {
+        return None;
+    }
     match key.kind {
         Kind::Text | Kind::Keywords => text_rule(lc, key.kind, c.operator, value),
         Kind::Number => {
@@ -211,6 +217,19 @@ fn to_rule(c: &Condition) -> Option<LcRule> {
         }
         Kind::Size | Kind::Stored => None,
     }
+}
+
+/// How a keyword "is" condition that LightCraft would match differently is named.
+const KEYWORDS_BY_CASE: &str = "keywords told apart by upper and lower case";
+
+/// A keyword "is" / "is not" condition whose keyword the catalog also has in another case
+/// ("Nature" for "nature"): Capture One compares case by case, LightCraft doesn't, so the two would
+/// select different photos.
+fn same_but_case(c: &Condition, spellings: &HashSet<&str>) -> bool {
+    let want = c.criterion.trim();
+    c.key == "IB_S_CONTENT_KEYWORDS"
+        && matches!(c.operator, 0 | 1 | 16 | 17)
+        && spellings.iter().any(|have| have.trim() != want && have.trim().to_lowercase() == want.to_lowercase())
 }
 
 fn number_op(operator: i64) -> Option<&'static str> {
@@ -384,7 +403,9 @@ fn matches_condition(c: &Condition, photo: &CatalogPhoto) -> Option<bool> {
             }
         }
         Kind::Aspect => {
-            let have = match photo.width.cmp(&photo.height) {
+            // as Capture One shows the photo: turned by the file's orientation or the user
+            let (width, height) = if photo.turned? { (photo.height, photo.width) } else { (photo.width, photo.height) };
+            let have = match width.cmp(&height) {
                 std::cmp::Ordering::Greater => "0",
                 std::cmp::Ordering::Less => "1",
                 std::cmp::Ordering::Equal => "2",
@@ -457,8 +478,12 @@ fn keywords_match(operator: i64, keywords: &[String], want: &str) -> Option<bool
         }
         Some(met)
     };
+    // "is" tells upper and lower case apart (Capture One's own dialog finds "Nature" with
+    // "Nature" but not with "nature"); "contains" doesn't
+    let exact = || keywords.iter().any(|keyword| std::iter::once(keyword.as_str()).chain(keyword.split('|')).any(|name| name.trim() == want.trim()));
     match operator {
-        1 | 17 => any(16).map(|met| !met),
+        0 | 16 => Some(exact()),
+        1 | 17 => Some(!exact()),
         8 => any(6).map(|met| !met),
         _ => any(operator),
     }
@@ -580,6 +605,18 @@ struct Key {
 
 const fn key(key: &'static str, lightcraft: Option<&'static str>, kind: Kind) -> Key {
     Key { key, lightcraft, kind }
+}
+
+/// Whether a smart album's rule (as the catalog stores it) has a condition on orientation, which
+/// needs [`CatalogPhoto::turned`].
+pub(super) fn tests_orientation(rule: &str) -> bool {
+    fn uses(group: &Group) -> bool {
+        group.items.iter().any(|item| match item {
+            Item::Group(g) => uses(g),
+            Item::Condition(c) => c.enabled && KEYS.iter().any(|k| k.key == c.key && k.kind == Kind::Aspect),
+        })
+    }
+    rule.contains("orientation") && parse(rule).is_ok_and(|group| uses(&group))
 }
 
 /// The column groups of `ZVARIANTMETADATA`, whose text the catalog import keeps with each photo.

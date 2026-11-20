@@ -111,6 +111,34 @@ fn variants_by_image<'a>(variants: &'a Table, images: &[(i64, Row<'_>)], notes: 
     by_image
 }
 
+/// Fill each photo's [`CatalogPhoto::turned`] from the rotation of the layer Capture One shows (as
+/// for [`shown_metadata`]). A catalog without the table leaves it unknown; a variant without a
+/// rotation isn't turned.
+pub(super) fn read_turns(db: &Db, photos: &mut [CatalogPhoto], warnings: &mut Vec<String>) -> Result<(), ReadError> {
+    let layers = db.optional("ZVARIANTLAYER", warnings)?;
+    if !layers.columns().any(|c| c == "ZROTATION") {
+        return Ok(());
+    }
+    let variants = db.table("ZVARIANT")?;
+    let rotation_of: HashMap<i64, f64> =
+        layers.rows().filter_map(|r| Some((r.id("Z_PK")?, r.real("ZROTATION").filter(|d| d.is_finite())?))).collect();
+    let turned_of: HashMap<i64, bool> = variants
+        .rows()
+        .filter_map(|variant| {
+            let rotation = ["ZCOMBINEDSETTINGS", "ZADJUSTMENTLAYER", "ZDEFAULTLAYER"]
+                .into_iter()
+                .find_map(|layer| variant.id(layer).and_then(|id| rotation_of.get(&id).copied()));
+            // quarter turns, nearest; a straightened photo (a few degrees) isn't turned
+            let quarters = rotation.map_or(0.0, |degrees| (degrees / 90.0).round());
+            Some((variant.id("Z_PK")?, quarters.rem_euclid(2.0) == 1.0))
+        })
+        .collect();
+    for photo in photos {
+        photo.turned = Some(photo.variant_id.and_then(|id| turned_of.get(&id).copied()).unwrap_or(false));
+    }
+    Ok(())
+}
+
 /// The metadata Capture One shows for a variant: the combined layer's, else the adjustment
 /// layer's, else the default layer's.
 fn shown_metadata<'a>(variant: Row<'_>, metadata_of: &HashMap<i64, Row<'a>>) -> Option<Row<'a>> {

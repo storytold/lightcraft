@@ -64,7 +64,9 @@ are found by their keyword; "is not" on keywords and dates becomes a "none of" g
 Capture One are left out. Where LightCraft has no rule for a condition (file size, pixel width or height, adjusted,
 annotated, flash mode, the camera owner, the IPTC fields LightCraft has no field for, …), the smart album comes in
 as a plain album holding the photos its rule selects in the catalog at the time of the import, and the import's
-result names it and the fields. A rule that tests something the catalog import doesn't read (Live Comments), or
+result names it and the fields. Capture One's "is" on keywords tells upper and lower case apart and LightCraft's
+doesn't, so such a condition stays a rule only while the catalog has its keyword in one spelling. Orientation is
+taken as Capture One shows the photo, turned by the file's orientation or by hand. A rule that tests something the catalog import doesn't read (Live Comments), or
 that can't be read at all, leaves the smart album out, with a warning. Capture One's rule is kept with the album's
 record in the recovery archive. Text is compared ignoring case; "contains" with several words is matched as typed,
 so such a condition counts as one LightCraft has no rule for.

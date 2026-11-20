@@ -205,6 +205,10 @@ pub struct CatalogPhoto {
     pub adjusted: bool,
     /// The variant has an annotation (`ZVARIANT.ZANNOTATION`, not read).
     pub annotated: bool,
+    /// Capture One shows the variant turned a quarter: its rotation (`ZVARIANTLAYER.ZROTATION`,
+    /// from the file's orientation or the user's) is near 90° or 270°, so width and height trade
+    /// places. `None` when it wasn't read: only a smart album rule on orientation needs it.
+    pub turned: Option<bool>,
     /// The image's other camera and exposure columns (`ZEXP_…`, `ZCAMERA_…`, `ZMULTISHOT_…`,
     /// `ZGPSALTITUDE`) by name without the leading `Z`, as text; empty when unset. Kept for the
     /// recovery archive and for smart album rules that test them.
@@ -341,10 +345,15 @@ pub fn read_with_cancel(path: &Path, cancel: &AtomicBool) -> Result<CaptureOneCa
 
     let mut warnings = Vec::new();
     active()?;
-    let read = photos::read(&db, &found.database, &mut warnings, &active)?;
+    let mut read = photos::read(&db, &found.database, &mut warnings, &active)?;
     active()?;
     let collections = collections::read(&db, &read, &mut warnings)?;
     active()?;
+    // the layers are the catalog's largest table: read only for a rule that needs them
+    if collections.iter().any(|c| smart::tests_orientation(&c.rule)) {
+        photos::read_turns(&db, &mut read.photos, &mut warnings)?;
+        active()?;
+    }
     let keywords = keywords::list(&db, &mut warnings)?;
     db.ensure_unchanged()?;
     if found.in_use {
