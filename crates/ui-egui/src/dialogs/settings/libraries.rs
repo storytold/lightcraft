@@ -6,7 +6,7 @@ use super::{LightcraftApp, Value, json};
 /// remaining batches would be committed into the new library (issue #1509). So is a switch while
 /// Move Folder To… waits for its destination: the move runs when the dialog closes, and in another
 /// library it would move the folder on disk with nothing to relink, leaving this library's photos
-/// missing (issue #3140).
+/// missing (issue #3140). Also while added photos' content hashes are queued or being worked out.
 pub(crate) fn can_switch_library(app: &LightcraftApp) -> Result<(), String> {
     if crate::lightroom_import::is_running(app) {
         return Err("wait for Lightroom catalog import to finish before switching libraries".into());
@@ -20,6 +20,12 @@ pub(crate) fn can_switch_library(app: &LightcraftApp) -> Result<(), String> {
     // they were meant for the library open now (issue #2779)
     if !app.waiting_import.files.is_empty() {
         return Err("wait for the photos waiting to be imported before switching libraries".into());
+    }
+    // added photos' hashes (queued or being worked out) are only recorded into the library they
+    // were queued in, and the queue isn't rebuilt when it is opened again (photos whose file
+    // couldn't be read, waiting to be tried again, don't count: a file can stay offline for days)
+    if app.session.hashes_queued() || app.tasks.is_running(crate::hashing::LABEL) {
+        return Err("wait for checking added photos to finish before switching libraries".into());
     }
     Ok(())
 }
