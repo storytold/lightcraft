@@ -139,10 +139,10 @@ pub fn choose(files: &Files, compose_window: bool) -> Chosen {
                 // which passes the offscreen probe but fails to create a window surface
                 // with presentable formats.
                 #[cfg(target_os = "linux")]
-                if b.contains(Backends::GL) {
-                    if let Ok(el) = winit::event_loop::EventLoop::<()>::new() {
-                        n.instance_descriptor.display = Some(Box::new(el.owned_display_handle()) as Box<dyn wgpu::wgt::WgpuHasDisplayHandle>);
-                    }
+                if b.contains(Backends::GL)
+                    && let Ok(el) = winit::event_loop::EventLoop::<()>::new()
+                {
+                    n.instance_descriptor.display = Some(Box::new(el.owned_display_handle()) as Box<dyn wgpu::wgt::WgpuHasDisplayHandle>);
                 }
             }
             eframe::Renderer::Wgpu
@@ -240,10 +240,10 @@ fn probe_instance_descriptor(backends: Backends, compose_window: bool) -> wgpu::
         display: None,
     };
     #[cfg(target_os = "linux")]
-    if backends.contains(Backends::GL) {
-        if let Ok(el) = winit::event_loop::EventLoop::<()>::new() {
-            desc.display = Some(Box::new(el.owned_display_handle()) as Box<dyn wgpu::wgt::WgpuHasDisplayHandle>);
-        }
+    if backends.contains(Backends::GL)
+        && let Ok(el) = winit::event_loop::EventLoop::<()>::new()
+    {
+        desc.display = Some(Box::new(el.owned_display_handle()) as Box<dyn wgpu::wgt::WgpuHasDisplayHandle>);
     }
     desc
 }
