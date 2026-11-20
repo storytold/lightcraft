@@ -473,6 +473,44 @@ mod tests {
             let mut valid_resources_broken_tail = recovery_image(version, 0, &recovery_metadata());
             valid_resources_broken_tail.truncate(valid_resources_broken_tail.len() - 9);
             assert_public_open_error(&valid_resources_broken_tail);
+
+            // Huge declared dimensions with damaged resources must fail on pixel limit before allocating.
+            let mut huge = recovery_image(version, 0, b"JUNK");
+            huge[14..18].copy_from_slice(&1_000_000u32.to_be_bytes());
+            huge[18..22].copy_from_slice(&1_000_000u32.to_be_bytes());
+            assert!(matches!(crate::decode(&huge, DecodeOptions::default()), Err(Error::TooLarge(1_000_000, 1_000_000))));
+        }
+    }
+
+    #[test]
+    fn public_psd_and_psb_recover_odd_final_pad_and_truncated_resource() {
+        let odd_xmp = "<x:xmpmeta/> ";
+        let mut unpadded_odd = recovery_metadata_with_xmp(odd_xmp);
+        assert_eq!(unpadded_odd.pop(), Some(0));
+
+        let mut truncated_resource = recovery_metadata();
+        // Resource id 1039 with declared length 4, truncated to 2 bytes inside the section.
+        truncated_resource.extend_from_slice(b"8BIM");
+        truncated_resource.extend_from_slice(&1039u16.to_be_bytes());
+        truncated_resource.extend_from_slice(&[0, 0]);
+        truncated_resource.extend_from_slice(&4u32.to_be_bytes());
+        truncated_resource.extend_from_slice(&[1, 2]);
+
+        for (version, compression) in [(1, 0), (2, 1)] {
+            let control = recovery_image(version, compression, &[]);
+            let expected = crate::decode(&control, DecodeOptions::default()).unwrap();
+            let expected_header = crate::read_header(&control).unwrap();
+
+            for damaged_resources in [unpadded_odd.as_slice(), truncated_resource.as_slice()] {
+                let damaged = recovery_image(version, compression, damaged_resources);
+                let recovered = crate::decode(&damaged, DecodeOptions::default()).unwrap();
+                assert_recovery_pixels(&recovered, &expected);
+                assert!(recovered.icc.is_none());
+                assert!(recovered.exif.is_none());
+                assert!(recovered.xmp.is_none());
+                assert_eq!(recovered.orientation, 1);
+                assert_eq!(crate::read_header(&damaged).unwrap(), expected_header);
+            }
         }
     }
 
@@ -546,10 +584,14 @@ mod tests {
     }
 
     fn recovery_metadata() -> Vec<u8> {
+        recovery_metadata_with_xmp("<x:xmpmeta/>")
+    }
+
+    fn recovery_metadata_with_xmp(xmp: &str) -> Vec<u8> {
         let mut resources = Vec::new();
         let icc = crate::icc::write_named(crate::NamedSpace::AdobeRgb);
         let exif = recovery_exif();
-        for (id, payload) in [(1039u16, icc.as_slice()), (1058, exif.as_slice()), (1060, b"<x:xmpmeta/>".as_slice())] {
+        for (id, payload) in [(1039u16, icc.as_slice()), (1058, exif.as_slice()), (1060, xmp.as_bytes())] {
             resources.extend_from_slice(b"8BIM");
             resources.extend_from_slice(&id.to_be_bytes());
             resources.extend_from_slice(&[0, 0]);
