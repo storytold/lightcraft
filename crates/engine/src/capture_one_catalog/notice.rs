@@ -124,7 +124,23 @@ pub(crate) const COLLECTION_LOOPS: &str = "{n} collection(s) are nested in a loo
 pub(crate) const TRASHED: &str = "{n} image(s) in Capture One's trash were left out";
 pub(crate) const KEPT_COLOUR: &str = "{n} photo(s) have Capture One's orange or pink colour tag, which has no label here yet: the colour is kept with the photo, and the keyword “{keyword}” finds them";
 pub(crate) const KEPT_COLOURS: &str = "{n} photo(s) have Capture One's orange or pink colour tag, which has no label here yet: the colour is kept with the photo, and the keywords “{first}” and “{second}” find them";
-pub(crate) const ADJUSTED: &str = "{n} photo(s) have Capture One adjustments; adjustments are not imported yet";
+pub(crate) const ADJUSTED: &str =
+    "{n} photo(s) have Capture One adjustments other than crop, rotation, flip and lens corrections; those are not imported yet";
+// ---- crop, rotation, perspective and lens settings
+pub(crate) const GEOMETRY_LEFT_OUT: &str = "{n} photo(s) use {setting} in Capture One, which isn't imported";
+pub(crate) const NO_LENS_PROFILE: &str =
+    "{n} photo(s) were lens-corrected in Capture One but have no lens profile in LightCraft yet; the correction applies once LightCraft finds one";
+pub(crate) const PERSPECTIVE: &str = "perspective correction";
+pub(crate) const CROP_OUTSIDE: &str = "a crop reaching past the photo";
+pub(crate) const GENERIC_DISTORTION: &str = "distortion correction with the generic lens profile";
+pub(crate) const PROFILE_BY_HAND: &str = "a lens profile chosen by hand";
+pub(crate) const DISTORTED_AREAS: &str = "distorted areas shown";
+pub(crate) const SHARPNESS_FALLOFF: &str = "sharpness falloff";
+pub(crate) const DIFFRACTION: &str = "diffraction correction";
+pub(crate) const LIGHT_FALLOFF: &str = "light falloff";
+pub(crate) const PURPLE_FRINGING: &str = "purple fringing";
+pub(crate) const LENS_MOVEMENT: &str = "shift lens movement";
+pub(crate) const LCC: &str = "an LCC (lens cast calibration)";
 pub(crate) const NOT_OPENED: &str = "image {image}: {path} is not opened: {why}; listed as missing and not added";
 pub(crate) const MORE_NOT_OPENED: &str = "{n} more image(s) are not opened; listed as missing and not added";
 // ---- why an original is not opened
@@ -182,6 +198,19 @@ pub const MESSAGES: &[&str] = &[
     KEPT_COLOUR,
     KEPT_COLOURS,
     ADJUSTED,
+    GEOMETRY_LEFT_OUT,
+    NO_LENS_PROFILE,
+    PERSPECTIVE,
+    CROP_OUTSIDE,
+    GENERIC_DISTORTION,
+    PROFILE_BY_HAND,
+    DISTORTED_AREAS,
+    SHARPNESS_FALLOFF,
+    DIFFRACTION,
+    LIGHT_FALLOFF,
+    PURPLE_FRINGING,
+    LENS_MOVEMENT,
+    LCC,
     NOT_OPENED,
     MORE_NOT_OPENED,
     NO_FOLDER,

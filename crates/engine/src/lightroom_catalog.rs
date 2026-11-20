@@ -1336,6 +1336,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
     let mut imported = files.imported.len();
     let mut promoted = HashSet::new();
     let mut unmapped = BTreeMap::new();
+    let mut no_lens_profile = 0usize;
     let mut preserved = 0;
     // Library photos in Recently Deleted that a catalog photo matched: they stay there (only an
     // import of the files themselves brings a photo back, see `OnDeleted`), and the report says so.
@@ -1503,6 +1504,9 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
                 Err(e) => warnings.push(format!("image {} settings: {e}", src.source_id)),
             }
         }
+        if !keep_develop && capture_one_develop(&mut p, &src.image, &now) {
+            no_lens_profile += 1;
+        }
         if keep_develop {
             (p.develop, p.edited) = previous_develop;
         }
@@ -1543,6 +1547,11 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         }
         by_path.entry(key(&src.path)).or_insert(photo_id);
     }
+    if no_lens_profile > 0 {
+        let notice = crate::capture_one_catalog::Notice::new(crate::capture_one_catalog::notice::NO_LENS_PROFILE).count("n", no_lens_profile);
+        warnings.push(notice.text());
+        data.notices.push(notice);
+    }
     let album_count = stage_collections(s, &data, index, &ids, &mut ops, &mut warnings)?;
     ops.extend(keyword_list_op(s, &data));
     let step = if crate::capture_one_catalog::convert::is_capture_one(&data) { "Import Capture One Catalog" } else { "Import Lightroom Catalog" };
@@ -1554,6 +1563,23 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         report: json!({"source":data.source,"photos":ids.len(),"imported":imported,"library":s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy()),"collections":album_count,"preservedExistingEdits":preserved,"inRecentlyDeleted":in_trash.len(),"missing":missing,"failed":files.failed,"warnings":warnings,"notices":data.notices,"skipped":data.skipped,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
         index: index.clone(),
     })
+}
+
+/// A Capture One variant is edited on its own, not on top of its master's edits or an earlier
+/// import's: it starts from the import's defaults, and its reader's develop settings (crop,
+/// rotation, lens corrections, in LightCraft's terms: `developPartial`) apply on them. Whether
+/// they switch on a lens correction the photo has no profile for yet: it applies once LightCraft
+/// finds one, which it doesn't switch on by itself for an edited photo.
+fn capture_one_develop(p: &mut Photo, row: &Row, now: &str) -> bool {
+    if !row.contains_key("captureOne") {
+        return false;
+    }
+    p.develop = Arc::new(p.import_defaults());
+    p.edited = None;
+    let Some(partial) = row.get("developPartial").filter(|v| v.as_object().is_some_and(|o| !o.is_empty())) else { return false };
+    p.develop = Arc::new(lightcraft_develop::apply_partial(&p.develop, partial, 1.0));
+    p.edited = Some(now.to_string());
+    partial.pointer("/optics/lens_profile") == Some(&Value::Bool(true)) && p.embedded_lens.is_none()
 }
 
 /// What a catalog's reader may add to a photo's row besides Lightroom's columns (Capture One's

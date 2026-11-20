@@ -688,18 +688,6 @@ pub(super) fn exact_keywords(group: &Group) -> Vec<String> {
     out
 }
 
-/// Whether a smart album's rule (as the catalog stores it) has a condition on orientation, which
-/// needs [`CatalogPhoto::turned`].
-pub(super) fn tests_orientation(rule: &str) -> bool {
-    fn uses(group: &Group) -> bool {
-        group.items.iter().any(|item| match item {
-            Item::Group(g) => uses(g),
-            Item::Condition(c) => c.enabled && KEYS.iter().any(|k| k.key == c.key && k.kind == Kind::Aspect),
-        })
-    }
-    rule.contains("orientation") && parse(rule).is_ok_and(|group| uses(&group))
-}
-
 /// Every key seen in Capture One's rule dialog that the import understands.
 const KEYS: &[Key] = &[
     key("_textSearch", Some("text"), Kind::Text),

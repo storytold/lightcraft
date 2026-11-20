@@ -2,8 +2,8 @@
 
 File → Import Capture One Catalog… brings a Capture One catalog's library into LightCraft: its photos and their
 variants, ratings, colour tags, keywords, IPTC fields and the albums, projects and groups they are organised in.
-Develop settings (adjustments, crops, masks) are not imported yet. Capture One is not required, and the catalog is
-only read (issue #4250).
+Crops, turns, flips and lens corrections come in too (issue #4596); other develop settings (exposure, colour,
+masks) are not imported yet. Capture One is not required, and the catalog is only read (issue #4250).
 
 Capture One is a trademark of Capture One A/S. LightCraft is not affiliated with Capture One; the name is used only
 to say which files can be imported.
@@ -47,7 +47,7 @@ Capture One 21, and EIP packages.
 | Smart albums | smart albums with the same rules; else albums with the photos the rule selects (see below) |
 
 Left out, and said so in the import's result: images in Capture One's trash, smart albums whose rule can't be
-read (below), and adjustments. Capture One's own collections (All Images, Recent Imports, Recent Captures, Trash,
+read (below), and adjustments other than crop, rotation, flip and lens corrections (below). Capture One's own collections (All Images, Recent Imports, Recent Captures, Trash,
 the folder tree) are not albums: LightCraft has its own. Photos a project or group lists because they are in its
 albums are only in those albums. The result window says all of this in the app's language; the command line and
 agents get the same warnings in English, and as data (`notices`) in the import's report.
@@ -88,6 +88,36 @@ record in the import's recovery archive in the library (`Interop/`), like a Ligh
 Photographic Experts Group", model "Jpeg File"), and for a lens it can't name a description such as "-- mm f/--".
 These are not taken as a camera or a lens. GPS, which Capture One writes as text in degrees and minutes with the
 hemisphere, is read as decimal degrees.
+
+## Crop, rotation, flip and lens corrections
+
+Only what the user changed in Capture One comes in; what Capture One does by itself stands for what LightCraft does
+by itself. Each variant comes in on its own, not as a copy of its master's edits.
+
+| Capture One | LightCraft |
+|---|---|
+| Rotation (`ZROTATION`, degrees, clockwise, including the file's orientation) | the quarter turns beyond the file's own as the photo's rotation (Rotate Left / Right), the rest as the crop's straighten angle |
+| Flip (`ZFLIP`: 1 left ↔ right, 2 top ↔ bottom, after the rotation) | Flip Horizontal / Vertical |
+| Crop (`ZCROP`: centre on the stored image, size as shown) | the crop, on the same part of the photo; the ratio's name as the locked aspect |
+| A straightened photo without a crop of its own | the largest rectangle of the photo's shape inside it, as Capture One shows it |
+| Lens profile and distortion amount | Enable Profile Corrections with LightCraft's own profile (from the file or the lens database), and the amount when it isn't 100; the generic profile switches it off |
+| Chromatic aberration switched on or off | Remove Chromatic Aberration |
+
+A photo that brings any of these changes gets its lens correction as Capture One showed it: the crop was drawn on
+the corrected photo, and LightCraft switches a correction on by itself later only for a photo that is still as
+imported. A profile LightCraft doesn't have yet (no lens database, an offline original) applies once it finds one;
+the import says how many photos wait for one. Capture One's working area after a lens correction that hides the
+empty edges is smaller than the photo; LightCraft's correction fills its frame, as a Fujifilm camera's does, so the
+crop is taken relative to that area. With another lens database profile the crop can sit a few pixels off.
+
+Left out, and named in the import's result with the number of photos: perspective (keystone) correction, a crop
+reaching past the photo (it is kept on the photo), distortion correction with the generic profile, a lens profile
+chosen by hand (LightCraft takes the lens from the file), distorted areas shown, sharpness falloff, diffraction
+correction, light falloff, purple fringing, shift lens movement and LCC.
+
+Checked against Capture One's own TIFF exports of a test catalog made for this: every turn, flip, straighten and
+crop above, also on a portrait phone photo and on Fujifilm raws Capture One corrects, shows the same part of the
+photo (correlation 0.97 to 1.0 between the exports).
 
 ## Where the catalog goes
 

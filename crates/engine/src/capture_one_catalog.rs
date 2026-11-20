@@ -43,6 +43,7 @@ pub use notice::Notice;
 
 mod collections;
 pub(crate) mod convert;
+pub mod geometry;
 mod keywords;
 mod locate;
 pub mod notice;
@@ -214,11 +215,14 @@ pub struct CatalogPhoto {
     pub annotated: bool,
     /// Capture One shows the variant turned a quarter: its rotation (`ZVARIANTLAYER.ZROTATION`,
     /// from the file's orientation or the user's) is near 90° or 270°, so width and height trade
-    /// places. `None` when it wasn't read: only a smart album rule on orientation needs it.
+    /// places. `None` when the catalog doesn't say (no layer table).
     pub turned: Option<bool>,
     /// The turn Capture One shows isn't the file's own (the default layer's): the user turned
-    /// the variant, which LightCraft doesn't import. Read with [`CatalogPhoto::turned`].
+    /// the variant. Read with [`CatalogPhoto::turned`].
     pub turned_by_hand: bool,
+    /// The variant's crop, rotation, flip, perspective and lens settings; `None` when the catalog
+    /// doesn't say.
+    pub geometry: Option<geometry::Geometry>,
     /// The image's other camera and exposure columns (`ZEXP_…`, `ZCAMERA_…`, `ZMULTISHOT_…`,
     /// `ZGPSALTITUDE`) by name without the leading `Z`, as text; empty when unset. Kept for the
     /// recovery archive and for smart album rules that test them.
@@ -368,11 +372,8 @@ pub fn read_with_cancel(path: &Path, cancel: &AtomicBool) -> Result<CaptureOneCa
     active()?;
     let collections = collections::read(&db, &read, &mut warnings)?;
     active()?;
-    // the layers are the catalog's largest table: read only for a rule that needs them
-    if collections.iter().any(|c| smart::tests_orientation(&c.rule)) {
-        photos::read_turns(&db, &mut read.photos, &mut warnings)?;
-        active()?;
-    }
+    geometry::read(&db, &mut read.photos, &mut warnings)?;
+    active()?;
     let keywords = keywords::list(&db, &mut warnings)?;
     // read before the last check, so they come from the same catalog as everything else
     let document_uuid = db.document_uuid();

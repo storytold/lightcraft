@@ -8,8 +8,9 @@
 //! collection set, and IPTC fields travel as an XMP packet.
 //!
 //! A smart album keeps its rule where LightCraft has a rule for every condition, else it holds
-//! the photos its rule selects (see [`super::smart`]). Not carried yet, and said so in the
-//! import's warnings: adjustments. The orange and pink colour tags have no label in the library: the colour is kept with the photo
+//! the photos its rule selects (see [`super::smart`]). Crop, rotation, flip and lens corrections
+//! travel as develop settings to merge (`developPartial`, see [`super::geometry`]). Not carried
+//! yet, and said so in the import's warnings: other adjustments. The orange and pink colour tags have no label in the library: the colour is kept with the photo
 //! (`Meta::label_text`) and a keyword finds it. Each photo's row keeps what was read under
 //! `captureOne`, so the import's recovery archive has it.
 
@@ -20,7 +21,7 @@ use std::sync::atomic::AtomicBool;
 use serde_json::{Value, json};
 
 use super::notice::{self, Notice};
-use super::{CaptureOneCatalog, CatalogPhoto, Collection, CollectionKind, ColorTag, Original, OriginalKind, smart};
+use super::{CaptureOneCatalog, CatalogPhoto, Collection, CollectionKind, ColorTag, Original, OriginalKind, geometry, smart};
 use crate::lightroom_catalog::{CatalogImport, CatalogPhoto as ImportPhoto};
 
 /// Most warnings that name a single photo or album; the rest are counted.
@@ -70,9 +71,21 @@ pub(crate) fn to_import(catalog: CaptureOneCatalog) -> CatalogImport {
             names => Notice::new(notice::KEPT_COLOUR).count("n", unlabelled).text_value("keyword", keyword(names.first().copied().unwrap_or(""))),
         });
     }
-    let adjusted = count(|p| p.adjusted);
+    // adjustments beyond the geometry this import carries (all of them where it wasn't read)
+    let adjusted = count(|p| p.adjusted && p.geometry.as_ref().is_none_or(|g| g.other_adjustments));
     if adjusted > 0 {
         warnings.push(Notice::new(notice::ADJUSTED).count("n", adjusted));
+    }
+    let developed: Vec<Option<geometry::Develop>> = catalog.photos.iter().map(geometry::develop).collect();
+    let mut left_out: Vec<(&'static str, usize)> = Vec::new();
+    for message in developed.iter().flatten().flat_map(|d| d.left_out.iter()) {
+        match left_out.iter_mut().find(|(m, _)| m == message) {
+            Some((_, n)) => *n = n.saturating_add(1),
+            None => left_out.push((message, 1)),
+        }
+    }
+    for (message, n) in left_out {
+        warnings.push(Notice::new(notice::GEOMETRY_LEFT_OUT).count("n", n).notice("setting", Notice::new(message)));
     }
 
     // an image's first variant is the master of its further ones
@@ -97,7 +110,11 @@ pub(crate) fn to_import(catalog: CaptureOneCatalog) -> CatalogImport {
                 warnings.push(line);
             }
         }
-        photos.push(import_photo(photo, source_id, master, &rows_of));
+        let mut row = import_photo(photo, source_id, master, &rows_of);
+        if let Some(develop) = developed.get(at).and_then(Option::as_ref).filter(|d| !d.partial.is_empty()) {
+            row.image.insert("developPartial".into(), Value::Object(develop.partial.clone()));
+        }
+        photos.push(row);
     }
     if refused > MAX_NAMED {
         warnings.push(Notice::new(notice::MORE_NOT_OPENED).count("n", refused - MAX_NAMED));

@@ -122,37 +122,6 @@ fn variants_by_image<'a>(variants: &'a Table, images: &[(i64, Row<'_>)], notes: 
     by_image
 }
 
-/// Fill each photo's [`CatalogPhoto::turned`] from the rotation of the layer Capture One shows (as
-/// for [`shown_metadata`]). A catalog without the table leaves it unknown; a variant without a
-/// rotation isn't turned.
-pub(super) fn read_turns(db: &Db, photos: &mut [CatalogPhoto], warnings: &mut Vec<Notice>) -> Result<(), ReadError> {
-    let layers = db.optional("ZVARIANTLAYER", warnings)?;
-    if !layers.columns().any(|c| c == "ZROTATION") {
-        return Ok(());
-    }
-    let variants = db.table("ZVARIANT")?;
-    let rotation_of: HashMap<i64, f64> =
-        layers.rows().filter_map(|r| Some((r.id("Z_PK")?, r.real("ZROTATION").filter(|d| d.is_finite())?))).collect();
-    // quarter turns, nearest; a straightened photo (a few degrees) isn't turned
-    let quarter = |rotation: Option<f64>| rotation.map_or(0.0, |degrees| (degrees / 90.0).round()).rem_euclid(2.0) == 1.0;
-    let turned_of: HashMap<i64, (bool, bool)> = variants
-        .rows()
-        .filter_map(|variant| {
-            let rotation_in = |layer: &str| variant.id(layer).and_then(|id| rotation_of.get(&id).copied());
-            let shown = ["ZCOMBINEDSETTINGS", "ZADJUSTMENTLAYER", "ZDEFAULTLAYER"].into_iter().find_map(rotation_in);
-            // the default layer turns as the file says; another turn is the user's
-            let file = rotation_in("ZDEFAULTLAYER");
-            Some((variant.id("Z_PK")?, (quarter(shown), quarter(shown) != quarter(file))))
-        })
-        .collect();
-    for photo in photos {
-        let (turned, by_hand) = photo.variant_id.and_then(|id| turned_of.get(&id).copied()).unwrap_or((false, false));
-        photo.turned = Some(turned);
-        photo.turned_by_hand = by_hand;
-    }
-    Ok(())
-}
-
 /// The metadata Capture One shows for a variant: the combined layer's, else the adjustment
 /// layer's, else the default layer's.
 fn shown_metadata<'a>(variant: Row<'_>, metadata_of: &HashMap<i64, Row<'a>>) -> Option<Row<'a>> {

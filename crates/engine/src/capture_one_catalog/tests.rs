@@ -1111,7 +1111,7 @@ fn a_catalog_becomes_photos_virtual_copies_and_albums_in_one_undo_step() {
         [
             "1 image(s) in Capture One's trash were left out",
             "2 photo(s) have Capture One's orange or pink colour tag, which has no label here yet: the colour is kept with the photo, and the keywords “Capture One|Orange” and “Capture One|Pink” find them",
-            "4 photo(s) have Capture One adjustments; adjustments are not imported yet",
+            "4 photo(s) have Capture One adjustments other than crop, rotation, flip and lens corrections; those are not imported yet",
         ]
     );
 
@@ -1671,11 +1671,11 @@ fn a_smart_album_on_orientation_reads_how_capture_one_turns_each_photo() {
     let mut s = crate::Session::new().with_fs();
     s.execute("library.importLightroom", &serde_json::json!({ "path": package })).unwrap();
     assert_eq!(album(&s, "Tall").photos, [by_name(&s, "managed.RAF", false).id]);
-    // without a rule on orientation the layers aren't read
+    // the layers are read without a rule on orientation too (the import carries the turn)
     let mut plain = sample(&scratch.0);
     plain.push(spec("ZVARIANTLAYER", &["Z_ENT", "Z_PK", "ZVARIANT", "ZROTATION"], vec![layer(12, 90.0)]));
     let other = Scratch::new("unturned");
-    assert!(read(&other.catalog(&plain)).unwrap().photos.iter().all(|p| p.turned.is_none()));
+    assert_eq!(read(&other.catalog(&plain)).unwrap().photos[0].turned, Some(true));
 }
 
 #[test]
@@ -1774,4 +1774,246 @@ fn smart_albums_come_in_as_smart_albums_plain_albums_or_warnings() {
     assert_eq!(big.photos, [by_name(&s, "managed.RAF", false).id, by_name(&s, "managed.RAF", true).id]);
     assert!(album(&s, "Five stars").is_smart());
     assert!(s.catalog.albums().all(|a| a.name != "Commented" && a.name != "Broken"));
+}
+
+// ---- crop, rotation, flip and lens corrections (issue #4596)
+
+fn layer(rotation: f64, flip: i64, crop: Option<[f64; 4]>) -> geometry::Layer {
+    geometry::Layer { rotation: Some(rotation), flip: Some(flip), crop, ..Default::default() }
+}
+
+fn developed(photo: &CatalogPhoto) -> lightcraft_develop::DevelopSettings {
+    let partial = geometry::develop(photo).map(|d| d.partial).unwrap_or_default();
+    lightcraft_develop::apply_partial(&lightcraft_develop::DevelopSettings::default(), &serde_json::Value::Object(partial), 1.0)
+}
+
+/// A crop comes in on the part of the photo Capture One shows, and the right way round: checked
+/// through LightCraft's own render frame (not this import's arithmetic) for every orientation a
+/// file can have, a quarter turn or a straighten by hand on top, and each flip.
+#[test]
+fn a_crop_lands_where_capture_one_shows_it_for_every_turn_and_flip() {
+    use lightcraft_geom::{Orientation, Point};
+    let (w, h) = (6000.0_f64, 4000.0_f64);
+    let [cx, cy, cw, ch] = [3300.0, 2100.0, 1600.0, 1100.0];
+    for file in (0..8u8).map(|i| Orientation::from_parts(i >= 4, i % 4)) {
+        let (mirror, turns) = file.to_parts();
+        // the file's orientation as Capture One's default layer says it: a turn, then a flip as shown
+        let (file_rotation, file_flip) = if mirror { (-90.0 * f64::from(turns), 1) } else { (90.0 * f64::from(turns), 0) };
+        for by_hand in [0.0, 90.0, 180.0, 270.0, 7.5, 78.0] {
+            for flip in [0, 1, 2] {
+                let theta = file_rotation + by_hand;
+                let geometry = geometry::Geometry {
+                    default: layer(file_rotation, file_flip, None),
+                    adjusted: layer(theta, flip, Some([cx, cy, cw, ch])),
+                    ..Default::default()
+                };
+                let photo = CatalogPhoto { width: 6000, height: 4000, geometry: Some(geometry), ..Default::default() };
+                let s = developed(&photo);
+                let case = format!("file {file:?}, {by_hand}° by hand, flip {flip}");
+                // LightCraft's source is the file as its orientation shows it
+                let (sw, sh) = if file.swaps_axes() { (h, w) } else { (w, h) };
+                let frame = lightcraft_pipeline::geometry::Frame::new(sw as usize, sh as usize, &s, true);
+                let (fw, fh) = frame.native_size();
+                assert!((fw - cw).abs() < 0.5 && (fh - ch).abs() < 0.5, "{case}: {fw} × {fh}");
+                let out_to_oriented = frame.out_to_oriented(cw as usize, ch as usize);
+                // a point shown `d` from the crop's centre is, on the stored image, the centre
+                // plus `d` flipped back and turned back by the rotation
+                let (sin, cos) = theta.to_radians().sin_cos();
+                for (dx, dy) in [(0.0, 0.0), (300.0, 0.0), (0.0, 200.0), (-500.0, 400.0)] {
+                    let (fx, fy) = match flip {
+                        1 => (-dx, dy),
+                        2 => (dx, -dy),
+                        _ => (dx, dy),
+                    };
+                    let stored = (cx + fx * cos + fy * sin, cy - fx * sin + fy * cos);
+                    let (ex, ey) = file.map(stored.0, stored.1, w, h);
+                    let (ex, ey) = s.orientation.map(ex, ey, sw, sh);
+                    let got = out_to_oriented.apply(Point::new(cw / 2.0 + dx, ch / 2.0 + dy));
+                    assert!((got.x - ex).abs() < 0.5 && (got.y - ey).abs() < 0.5, "{case}, shown at {dx}, {dy}: {got:?}, want {ex}, {ey}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_turn_the_file_makes_stays_the_files_and_a_straightened_photo_keeps_its_shape() {
+    // a portrait phone photo (default 90) turned 5° more: no turn of LightCraft's own, a straighten
+    let photo = |adjusted: geometry::Layer| CatalogPhoto {
+        width: 4032,
+        height: 3024,
+        geometry: Some(geometry::Geometry { default: layer(90.0, 0, None), adjusted, ..Default::default() }),
+        ..Default::default()
+    };
+    let s = developed(&photo(layer(95.0, 0, None)));
+    assert_eq!(s.orientation, lightcraft_geom::Orientation::Normal);
+    assert!((s.crop.geometry.angle - 5.0).abs() < 1e-9, "{:?}", s.crop.geometry);
+    // without a crop of its own, the largest rectangle of the photo's shape inside it
+    let r = s.crop.geometry.rect;
+    assert!(r.width() < 1.0 && (r.width() - r.height()).abs() < 1e-9, "{r:?}");
+    assert!(s.crop.geometry.is_within_image(3024.0, 4032.0), "{r:?}");
+    // the file's own turn alone carries nothing
+    assert!(geometry::develop(&photo(layer(90.0, 0, None))).is_none());
+    // a catalog that doesn't say carries nothing either
+    assert!(geometry::develop(&CatalogPhoto::default()).is_none());
+}
+
+#[test]
+fn lens_corrections_are_set_as_capture_one_showed_them_once_a_photo_brings_other_changes() {
+    let fuji = "11A2A154-7520-4521-B80C-9725186C57C2".to_string();
+    let lens = |profile: &str, distortion: f64| geometry::Lens {
+        profile: Some(profile.to_string()),
+        distortion: Some(distortion),
+        chromatic_aberration: Some(true),
+        ..Default::default()
+    };
+    let photo = |default: geometry::Layer, adjusted: geometry::Layer| CatalogPhoto {
+        width: 6000,
+        height: 4000,
+        geometry: Some(geometry::Geometry { default, adjusted, canvas: Some((5729.7, 3819.8)), other_adjustments: false }),
+        ..Default::default()
+    };
+    let corrected = geometry::Layer { lens: lens(&fuji, 100.0), ..layer(0.0, 0, None) };
+    let crop = Some([3000.0, 2000.0, 3000.0, 2000.0]);
+    // Capture One's own correction and a crop: the correction is switched on, at its amount
+    let s = developed(&photo(corrected.clone(), geometry::Layer { crop, ..Default::default() }));
+    assert!(s.optics.lens_profile && (s.optics.profile_distortion - 100.0).abs() < 1e-9);
+    // the crop is taken on the working area the correction leaves (LightCraft's fills its frame)
+    assert!((s.crop.geometry.rect.width() - 3000.0 / 5729.7).abs() < 1e-6, "{:?}", s.crop.geometry.rect);
+    // no other change: LightCraft's own lens defaults stand
+    assert!(geometry::develop(&photo(corrected.clone(), geometry::Layer::default())).is_none());
+    // the generic profile corrects nothing: switched off, and its distortion named as left out
+    let generic = geometry::Layer {
+        lens: geometry::Lens { chromatic_aberration: Some(false), ..lens(geometry::GENERIC_PROFILE, 50.0) },
+        clipping: Some(1),
+        ..Default::default()
+    };
+    let d = geometry::develop(&photo(geometry::Layer { clipping: Some(2), ..corrected.clone() }, generic)).unwrap();
+    assert_eq!(d.partial["optics"], serde_json::json!({"lens_profile": false, "remove_ca": false}));
+    assert_eq!(d.left_out, [notice::GENERIC_DISTORTION, notice::DISTORTED_AREAS]);
+    // a lesser amount, and settings LightCraft has none for
+    let softer = geometry::Layer {
+        lens: geometry::Lens { sharpness_falloff: Some(40.0), diffraction: Some(true), movement: Some(true), lcc: Some(true), ..lens(&fuji, 60.0) },
+        ..Default::default()
+    };
+    let d = geometry::develop(&photo(corrected, softer)).unwrap();
+    assert_eq!(d.partial["optics"], serde_json::json!({"lens_profile": true, "profile_distortion": 60.0}));
+    assert_eq!(d.left_out, [notice::SHARPNESS_FALLOFF, notice::DIFFRACTION, notice::LENS_MOVEMENT, notice::LCC]);
+}
+
+#[test]
+fn hostile_geometry_values_carry_nothing_wrong() {
+    let photo = |adjusted: geometry::Layer, width: u32| CatalogPhoto {
+        width,
+        height: 4000,
+        geometry: Some(geometry::Geometry { default: layer(0.0, 0, None), adjusted, ..Default::default() }),
+        ..Default::default()
+    };
+    for crop in [[f64::MAX, -f64::MAX, f64::MAX, f64::MAX], [3000.0, 2000.0, -5.0, 100.0], [1e9, 1e9, 1e9, 1e9]] {
+        for width in [6000, 0] {
+            let s = developed(&photo(layer(0.0, 7, Some(crop)), width));
+            let r = s.crop.geometry.rect;
+            assert!([r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "{crop:?}: {r:?}");
+            assert!(!s.crop.flip_h && !s.crop.flip_v);
+        }
+    }
+    // a rotation no photo has is read as none
+    let scratch = Scratch::new("hostile-geometry");
+    let mut tables = sample(&scratch.0);
+    let row = |pk: i64, rotation: V, crop: &str| vec![("Z_ENT", V::I(17)), ("Z_PK", V::I(pk)), ("ZROTATION", rotation), ("ZCROP", t(crop))];
+    tables.push(spec(
+        "ZVARIANTLAYER",
+        &["Z_ENT", "Z_PK", "ZROTATION", "ZCROP"],
+        vec![row(11, V::R(1e300), "1;2;3"), row(21, V::T("NaN".into()), "a;b;c;d"), row(31, V::R(-4e3), ";;;")],
+    ));
+    let catalog = read(&scratch.catalog(&tables)).unwrap();
+    for p in &catalog.photos {
+        let g = p.geometry.as_ref().unwrap();
+        assert_eq!((g.adjusted.rotation, g.adjusted.crop), (None, None), "{}", p.file_name);
+    }
+    let data = convert::to_import(catalog);
+    assert!(data.photos.iter().all(|p| !p.image.contains_key("developPartial")));
+}
+
+/// Through the whole import: a variant's crop and turn, a further variant that is no copy of
+/// its master's edits, an offline raw corrected by Capture One, and what is left out.
+#[test]
+fn a_catalog_brings_its_crops_turns_and_lens_corrections() {
+    let scratch = Scratch::new("geometry");
+    let mut tables = sample(&scratch.0);
+    const FUJI: &str = "11A2A154-7520-4521-B80C-9725186C57C2";
+    let columns = [
+        "Z_ENT",
+        "Z_PK",
+        "ZVARIANT",
+        "ZROTATION",
+        "ZFLIP",
+        "ZCROP",
+        "ZCROPASPECTRATIONAME",
+        "ZLENSIDGUID",
+        "ZLENSDISTORTION",
+        "ZLENSRADIALBLUR",
+        "ZGAMMA",
+    ];
+    let default = |pk: i64, variant: i64| {
+        vec![
+            ("Z_ENT", V::I(18)),
+            ("Z_PK", V::I(pk)),
+            ("ZVARIANT", V::I(variant)),
+            ("ZROTATION", V::R(0.0)),
+            ("ZFLIP", V::I(0)),
+            ("ZLENSIDGUID", t(FUJI)),
+            ("ZLENSDISTORTION", t("0,0;10,1|100.0|1|100|-1")),
+        ]
+    };
+    let adjusted = |pk: i64, variant: i64, more: Vec<(&'static str, V)>| {
+        let mut row = vec![("Z_ENT", V::I(17)), ("Z_PK", V::I(pk)), ("ZVARIANT", V::I(variant))];
+        row.extend(more);
+        row
+    };
+    tables.push(spec(
+        "ZVARIANTLAYER",
+        &columns,
+        vec![
+            // managed.RAF's first variant: turned right, cropped to a tall 2:3 in its top half
+            default(10, 1),
+            adjusted(11, 1, vec![("ZROTATION", V::R(90.0)), ("ZCROP", t("3000;1000;1200;1800")), ("ZCROPASPECTRATIONAME", t("2x3"))]),
+            // its second variant: only a sharpness falloff, which LightCraft has none for
+            default(20, 8),
+            adjusted(21, 8, vec![("ZLENSRADIALBLUR", t("1,1|1,1|40.0|1"))]),
+            // the offline raw: cropped and flipped, and an exposure change this import doesn't carry
+            default(40, 3),
+            adjusted(41, 3, vec![("ZFLIP", V::I(1)), ("ZCROP", t("2000;1500;2000;1000")), ("ZGAMMA", V::R(1.2))]),
+        ],
+    ));
+    let images = table(&mut tables, "ZIMAGE");
+    for row in &mut images.rows {
+        if row.iter().any(|(c, v)| *c == "ZIMAGEFILENAME" && matches!(v, V::T(n) if n == "elsewhere.ARW")) {
+            row.extend([("ZWIDTH", V::I(6000)), ("ZHEIGHT", V::I(4000))]);
+        }
+    }
+    let mut s = crate::Session::new().with_fs();
+    let report = s.execute("library.importLightroom", &serde_json::json!({ "path": scratch.catalog(&tables) })).unwrap();
+    let warnings: Vec<&str> = report["warnings"].as_array().unwrap().iter().filter_map(|w| w.as_str()).collect();
+
+    let turned = by_name(&s, "managed.RAF", false);
+    assert_eq!(turned.develop.orientation, lightcraft_geom::Orientation::Rotate90);
+    let r = turned.develop.crop.geometry.rect;
+    // shown 4000 wide, 6000 tall: the crop's centre (3000, 1000) turns to (3000, 3000)
+    assert!((r.x0 - 2400.0 / 4000.0).abs() < 1e-9 && (r.y0 - 2100.0 / 6000.0).abs() < 1e-9, "{r:?}");
+    assert_eq!(turned.develop.crop.aspect, Some((2, 3)));
+    assert!(turned.develop.optics.lens_profile, "Capture One corrected it, so a later profile applies");
+    // the further variant is not cropped or turned like its master
+    let copy = by_name(&s, "managed.RAF", true);
+    assert_eq!(copy.develop.orientation, lightcraft_geom::Orientation::Normal);
+    assert!(copy.develop.crop.geometry.is_identity(), "{:?}", copy.develop.crop);
+    let offline = by_name(&s, "elsewhere.ARW", false);
+    assert!(offline.develop.crop.flip_h && !offline.develop.crop.geometry.is_identity());
+    for expected in [
+        "1 photo(s) have Capture One adjustments other than crop, rotation, flip and lens corrections; those are not imported yet",
+        "1 photo(s) use sharpness falloff in Capture One, which isn't imported",
+        "2 photo(s) were lens-corrected in Capture One but have no lens profile in LightCraft yet; the correction applies once LightCraft finds one",
+    ] {
+        assert!(warnings.contains(&expected), "{warnings:#?}");
+    }
 }

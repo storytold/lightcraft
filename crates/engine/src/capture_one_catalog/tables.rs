@@ -183,6 +183,15 @@ impl<'a> Row<'a> {
         self.columns.keys().map(String::as_str)
     }
 
+    /// Whether the column holds a value: not NULL, and not empty text.
+    pub(super) fn is_set(&self, column: &str) -> bool {
+        match self.value(column) {
+            None | Some(Value::Null) => false,
+            Some(Value::Text(s)) => !s.trim().is_empty(),
+            Some(_) => true,
+        }
+    }
+
     pub(super) fn flag(&self, column: &str) -> bool {
         self.int(column).is_some_and(|n| n != 0)
     }
