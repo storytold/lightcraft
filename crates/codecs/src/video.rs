@@ -876,8 +876,12 @@ mod tests {
 
         let mut mp4_too_long = Mp4Writer::new(Cursor::new(Vec::new()), 64, 36, 30).unwrap();
         mp4_too_long.set_config(av1_config(&[0x0a, 1, 0]));
-        mp4_too_long.add(&Sample { data: vec![0x32, 1], key: true, duration: MAX_PERIODS }).unwrap();
-        mp4_too_long.add(&Sample { data: vec![0x32, 2], key: true, duration: 1 }).unwrap();
+        assert!(
+            mp4_too_long.add(&Sample { data: vec![0x32, 1], key: true, duration: MAX_PERIODS }).unwrap_err().to_string().contains("video too long")
+        );
+        let half = MAX_PERIODS / 2 + 1;
+        mp4_too_long.add(&Sample { data: vec![0x32, 1], key: true, duration: half }).unwrap();
+        mp4_too_long.add(&Sample { data: vec![0x32, 2], key: true, duration: half }).unwrap();
         assert!(mp4_too_long.finish().unwrap_err().to_string().contains("video too long"));
 
         assert!(WebmWriter::new(Cursor::new(Vec::new()), 64, 36, 30).unwrap().finish().unwrap_err().to_string().contains("no frames"));
