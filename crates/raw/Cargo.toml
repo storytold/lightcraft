@@ -11,7 +11,6 @@ workspace = true
 [dependencies]
 craft-tiff = { workspace = true }
 craft-raw = { workspace = true }
-craft-raw-tiff = { workspace = true }
 lightcraft-meta = { workspace = true }
 lightcraft-raster = { workspace = true }
 lightcraft-color = { workspace = true }
