@@ -10,15 +10,15 @@
 //! else under [`std::env::temp_dir`]; a folder left by a crash (`lc-lrbackup-*`, older than a day)
 //! is removed by the next extraction there.
 //!
-//! Written from the ZIP application note (PKWARE APPNOTE.TXT 6.3: end of central directory,
-//! ZIP64 end record and locator, central directory headers, local headers, the ZIP64 extra field
-//! 0x0001) and RFC 1951 (deflate, inflated by `miniz_oxide`); no third-party zip code was used.
-//! Every size and offset comes from the file and is checked before use.
+//! ZIP/ZIP64 parsing, metadata bounds, size-cap enforcement, and CRC-32 verification are handled
+//! by [`craft_zip::SeekableArchive`].
 
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+
+use craft_zip::{SeekableArchive, SeekableLimits};
 
 /// The largest catalog a backup may unpack to: the SQLite reader's cap on a database file.
 pub const MAX_CATALOG_BYTES: u64 = 16 << 30;
@@ -74,135 +74,39 @@ impl Drop for Extracted {
     }
 }
 
-/// One file in the zip's central directory.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Entry {
-    name: String,
-    method: u16,
-    crc: u32,
-    compressed: u64,
-    size: u64,
-    local: u64,
+/// Opens `path` as a bounded seekable ZIP archive without buffering payloads in memory.
+fn open_archive(path: &Path) -> Result<SeekableArchive<File>, String> {
+    let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    SeekableArchive::open(
+        file,
+        SeekableLimits { max_entries: MAX_ENTRIES, max_metadata_bytes: MAX_DIRECTORY_BYTES + 65_535 + 128, max_total_bytes: MAX_CATALOG_BYTES },
+    )
+    .map_err(|e| e.to_string())
 }
 
-/// The little-endian `u16` at `at` in `b`, or `None` past its end.
-fn u16_at(b: &[u8], at: usize) -> Option<u16> {
-    let s = b.get(at..at.checked_add(2)?)?;
-    Some(u16::from_le_bytes([s[0], s[1]]))
-}
-
-/// The little-endian `u32` at `at` in `b`, or `None` past its end.
-fn u32_at(b: &[u8], at: usize) -> Option<u32> {
-    let s = b.get(at..at.checked_add(4)?)?;
-    Some(u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
-}
-
-/// The little-endian `u64` at `at` in `b`, or `None` past its end.
-fn u64_at(b: &[u8], at: usize) -> Option<u64> {
-    let s = b.get(at..at.checked_add(8)?)?;
-    let mut a = [0u8; 8];
-    a.copy_from_slice(s);
-    Some(u64::from_le_bytes(a))
-}
-
-/// `len` bytes of `f` from offset `at`; a length that doesn't fit memory or a short read is an error.
-fn read_at(f: &mut File, at: u64, len: u64) -> Result<Vec<u8>, String> {
-    let len = usize::try_from(len).map_err(|_| "zip record too large".to_string())?;
-    f.seek(SeekFrom::Start(at)).map_err(|e| e.to_string())?;
-    let mut buf = vec![0u8; len];
-    f.read_exact(&mut buf).map_err(|e| format!("truncated zip: {e}"))?;
-    Ok(buf)
-}
-
-/// The central directory's entries (offset and count from the end record, or its ZIP64 record).
-fn entries(f: &mut File) -> Result<Vec<Entry>, String> {
-    let len = f.metadata().map_err(|e| e.to_string())?.len();
-    // end of central directory: 22 bytes plus a comment of up to 64 KiB
-    let tail_len = len.min(22 + 65_535);
-    let tail_at = len - tail_len;
-    let tail = read_at(f, tail_at, tail_len)?;
-    let eocd = (0..tail.len().saturating_sub(21)).rev().find(|&i| tail.get(i..).is_some_and(|b| b.starts_with(b"PK\x05\x06")));
-    let Some(eocd) = eocd else { return Err("not a zip file (no end of central directory)".into()) };
-    let bad = || "damaged zip (end of central directory)".to_string();
-    let mut count = u64::from(u16_at(&tail, eocd + 10).ok_or_else(bad)?);
-    let mut dir_len = u64::from(u32_at(&tail, eocd + 12).ok_or_else(bad)?);
-    let mut dir_at = u64::from(u32_at(&tail, eocd + 16).ok_or_else(bad)?);
-    // ZIP64: a locator just before the end record points at the ZIP64 end record
-    if (count == 0xFFFF || dir_len == 0xFFFF_FFFF || dir_at == 0xFFFF_FFFF)
-        && let Some(loc) = eocd.checked_sub(20)
-        && tail.get(loc..).is_some_and(|b| b.starts_with(b"PK\x06\x07"))
-    {
-        let rec_at = u64_at(&tail, loc + 8).ok_or_else(bad)?;
-        let rec = read_at(f, rec_at, 56)?;
-        if !rec.starts_with(b"PK\x06\x06") {
-            return Err("damaged zip (ZIP64 end record)".into());
-        }
-        count = u64_at(&rec, 32).ok_or_else(bad)?;
-        dir_len = u64_at(&rec, 40).ok_or_else(bad)?;
-        dir_at = u64_at(&rec, 48).ok_or_else(bad)?;
-    }
-    if count > MAX_ENTRIES || dir_len > MAX_DIRECTORY_BYTES || dir_at.checked_add(dir_len).is_none_or(|end| end > len) {
-        return Err("damaged zip (central directory out of range)".into());
-    }
-    let dir = read_at(f, dir_at, dir_len)?;
-    let mut out = Vec::new();
-    let mut at = 0usize;
-    let bad = || "damaged zip (central directory)".to_string();
-    for _ in 0..count {
-        if !dir.get(at..).is_some_and(|b| b.starts_with(b"PK\x01\x02")) {
-            return Err(bad());
-        }
-        let method = u16_at(&dir, at + 10).ok_or_else(bad)?;
-        let crc = u32_at(&dir, at + 16).ok_or_else(bad)?;
-        let mut compressed = u64::from(u32_at(&dir, at + 20).ok_or_else(bad)?);
-        let mut size = u64::from(u32_at(&dir, at + 24).ok_or_else(bad)?);
-        let name_len = usize::from(u16_at(&dir, at + 28).ok_or_else(bad)?);
-        let extra_len = usize::from(u16_at(&dir, at + 30).ok_or_else(bad)?);
-        let comment_len = usize::from(u16_at(&dir, at + 32).ok_or_else(bad)?);
-        let mut local = u64::from(u32_at(&dir, at + 42).ok_or_else(bad)?);
-        let name_at = at + 46;
-        let name_end = name_at.checked_add(name_len).ok_or_else(bad)?;
-        let name = String::from_utf8_lossy(dir.get(name_at..name_end).ok_or_else(bad)?).replace('\\', "/");
-        let extra = dir.get(name_end..name_end.checked_add(extra_len).ok_or_else(bad)?).ok_or_else(bad)?;
-        // ZIP64 extra field: the 64-bit values, in this order, of those set to 0xFFFFFFFF
-        let mut e = 0usize;
-        while e + 4 <= extra.len() {
-            let (id, len) = (u16_at(extra, e).ok_or_else(bad)?, usize::from(u16_at(extra, e + 2).ok_or_else(bad)?));
-            let body = extra.get(e + 4..e + 4 + len).ok_or_else(bad)?;
-            if id == 0x0001 {
-                let mut v = 0usize;
-                for field in [&mut size, &mut compressed, &mut local] {
-                    if *field == 0xFFFF_FFFF {
-                        *field = u64_at(body, v).ok_or_else(bad)?;
-                        v += 8;
-                    }
-                }
+/// The backup's catalog entry: `(index, normalized_name, declared_size)` for the one `*.lrcat`
+/// file in the zip, outside macOS resource forks.
+fn catalog_entry(archive: &mut SeekableArchive<File>) -> Result<(usize, String, u64), String> {
+    let mut found: Option<(usize, String, u64)> = None;
+    for index in 0..archive.len() {
+        let Some(name) = archive.entry_name(index).map_err(|e| e.to_string())? else { continue };
+        let normalized = name.replace('\\', "/");
+        let lower = normalized.to_lowercase();
+        if lower.ends_with(".lrcat") && !lower.split('/').any(|p| p == "__macosx" || p.starts_with("._")) {
+            if found.is_some() {
+                return Err("this zip holds more than one Lightroom catalog (.lrcat); unzip it and import one".into());
             }
-            e += 4 + len;
+            let (size, _) = archive.entry_sizes(index).map_err(|e| e.to_string())?.ok_or_else(|| "damaged zip".to_string())?;
+            found = Some((index, normalized, size));
         }
-        at = name_end.checked_add(extra_len).and_then(|x| x.checked_add(comment_len)).ok_or_else(bad)?;
-        out.push(Entry { name, method, crc, compressed, size, local });
     }
-    Ok(out)
-}
-
-/// The backup's catalog entry: the one `*.lrcat` file in the zip, outside macOS resource forks.
-fn catalog_entry(entries: &[Entry]) -> Result<&Entry, String> {
-    let mut found = entries.iter().filter(|e| {
-        let lower = e.name.to_lowercase();
-        lower.ends_with(".lrcat") && !lower.split('/').any(|p| p == "__macosx" || p.starts_with("._"))
-    });
-    match (found.next(), found.next()) {
-        (Some(e), None) => Ok(e),
-        (None, _) => Err("this zip holds no Lightroom catalog (.lrcat)".into()),
-        (Some(_), Some(_)) => Err("this zip holds more than one Lightroom catalog (.lrcat); unzip it and import one".into()),
-    }
+    found.ok_or_else(|| "this zip holds no Lightroom catalog (.lrcat)".into())
 }
 
 /// Whether the zip at `path` holds exactly one Lightroom catalog, by its central directory only
 /// (nothing is unpacked). Any read error means no.
 pub fn holds_catalog(path: &Path) -> bool {
-    File::open(path).ok().and_then(|mut f| entries(&mut f).ok()).is_some_and(|all| catalog_entry(&all).is_ok())
+    open_archive(path).ok().is_some_and(|mut archive| catalog_entry(&mut archive).is_ok())
 }
 
 /// Remove `lc-lrbackup-*` folders in `root` left by an earlier run that ended without cleaning up.
@@ -239,14 +143,19 @@ fn check_space(root: &Path, needed: u64, available: Option<u64>) -> Result<(), S
 /// Unpack the catalog of the backup `zip` into a new private folder under `root`, checking its
 /// size and CRC-32. Stops with an error when `cancel` is set; the folder is removed then too.
 pub fn extract(zip: &Path, root: &Path, cancel: &AtomicBool) -> Result<Extracted, String> {
-    let mut f = File::open(zip).map_err(|e| format!("{}: {e}", zip.display()))?;
-    let all = entries(&mut f)?;
-    let entry = catalog_entry(&all)?.clone();
-    if entry.size > MAX_CATALOG_BYTES {
-        return Err(format!("the catalog in this backup unpacks to {} GB, more than LightCraft reads", entry.size >> 30));
+    extract_inner(zip, root, cancel, || {})
+}
+
+/// Core extraction loop; `on_chunk` runs after each written chunk (a no-op in production, used
+/// in tests to trigger mid-stream cancellation deterministically).
+fn extract_inner(zip: &Path, root: &Path, cancel: &AtomicBool, mut on_chunk: impl FnMut()) -> Result<Extracted, String> {
+    let mut archive = open_archive(zip)?;
+    let (index, entry_name, entry_size) = catalog_entry(&mut archive)?;
+    if entry_size > MAX_CATALOG_BYTES {
+        return Err(format!("the catalog in this backup unpacks to {} GB, more than LightCraft reads", entry_size >> 30));
     }
     std::fs::create_dir_all(root).map_err(|e| format!("{}: {e}", root.display()))?;
-    check_space(root, entry.size, crate::disk_space::read(root).map(|space| space.available))?;
+    check_space(root, entry_size, crate::disk_space::read(root).map(|space| space.available))?;
     sweep(root);
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     let dir = root.join(format!("{PREFIX}{}-{stamp}", std::process::id()));
@@ -263,82 +172,27 @@ pub fn extract(zip: &Path, root: &Path, cancel: &AtomicBool) -> Result<Extracted
     // a fixed name, not the zip's: an entry named `NUL.lrcat` or `a:b.lrcat` would be a device or an
     // alternate data stream on Windows. The guard exists before the first byte is written: every
     // early return below cleans up.
-    let out = Extracted { catalog: dir.join("catalog.lrcat"), dir, entry: entry.name.clone() };
-    let local = read_at(&mut f, entry.local, 30)?;
-    if !local.starts_with(b"PK\x03\x04") {
-        return Err("damaged zip (local header)".into());
-    }
-    let bad = || "damaged zip (local header)".to_string();
-    let skip = u64::from(u16_at(&local, 26).ok_or_else(bad)?) + u64::from(u16_at(&local, 28).ok_or_else(bad)?);
-    let data_at = entry.local.checked_add(30 + skip).ok_or_else(bad)?;
-    f.seek(SeekFrom::Start(data_at)).map_err(|e| e.to_string())?;
-    let mut input = f.take(entry.compressed);
+    let out = Extracted { catalog: dir.join("catalog.lrcat"), dir, entry: entry_name };
+    let mut reader = archive
+        .open_entry_index(index, MAX_CATALOG_BYTES)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "damaged zip (missing catalog entry)".to_string())?;
     // created new: a file or a link already in its place is an error, never written through
     let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&out.catalog).map_err(|e| format!("{}: {e}", out.catalog.display()))?;
     let mut writer = std::io::BufWriter::with_capacity(CHUNK, file);
-    let mut crc = crc32fast::Hasher::new();
-    let mut written = 0u64;
-    let mut write = |bytes: &[u8], written: &mut u64| -> Result<(), String> {
-        *written = written.saturating_add(bytes.len() as u64);
-        if *written > entry.size {
-            return Err("damaged zip (the catalog is longer than the zip says)".into());
-        }
-        crc.update(bytes);
-        writer.write_all(bytes).map_err(|e| format!("writing {}: {e}", out.catalog.display()))
-    };
     let mut buf = vec![0u8; CHUNK];
-    match entry.method {
-        0 => loop {
-            if cancel.load(Ordering::Relaxed) {
-                return Err("cancelled".into());
-            }
-            let n = input.read(&mut buf).map_err(|e| e.to_string())?;
-            if n == 0 {
-                break;
-            }
-            write(buf.get(..n).unwrap_or_default(), &mut written)?;
-        },
-        8 => {
-            use miniz_oxide::inflate::stream::{InflateState, inflate};
-            use miniz_oxide::{DataFormat, MZFlush, MZStatus};
-            let mut state = InflateState::new_boxed(DataFormat::Raw);
-            let mut out_buf = vec![0u8; CHUNK];
-            let (mut start, mut end) = (0usize, 0usize);
-            loop {
-                if cancel.load(Ordering::Relaxed) {
-                    return Err("cancelled".into());
-                }
-                if start == end {
-                    end = input.read(&mut buf).map_err(|e| e.to_string())?;
-                    start = 0;
-                }
-                let flush = if end == 0 { MZFlush::Finish } else { MZFlush::None };
-                let r = inflate(&mut state, buf.get(start..end).unwrap_or_default(), &mut out_buf, flush);
-                start = start.saturating_add(r.bytes_consumed).min(end);
-                write(out_buf.get(..r.bytes_written).unwrap_or_default(), &mut written)?;
-                match r.status {
-                    Ok(MZStatus::StreamEnd) => break,
-                    Ok(_) => {}
-                    // no progress with all input given: the stream is cut short
-                    Err(miniz_oxide::MZError::Buf) if end == 0 && r.bytes_written == 0 => return Err("damaged zip (the catalog is cut short)".into()),
-                    Err(miniz_oxide::MZError::Buf) => {}
-                    Err(e) => return Err(format!("damaged zip (deflate: {e:?})")),
-                }
-                if r.bytes_consumed == 0 && r.bytes_written == 0 && start < end {
-                    return Err("damaged zip (the catalog's data does not inflate)".into());
-                }
-            }
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".into());
         }
-        m => return Err(format!("this zip uses compression method {m}, which LightCraft does not read; unzip it and import the .lrcat")),
+        let n = reader.read(&mut buf).map_err(|e| format!("reading {}: {e}", zip.display()))?;
+        if n == 0 {
+            break;
+        }
+        writer.write_all(buf.get(..n).unwrap_or_default()).map_err(|e| format!("writing {}: {e}", out.catalog.display()))?;
+        on_chunk();
     }
     writer.flush().map_err(|e| format!("writing {}: {e}", out.catalog.display()))?;
-    drop(writer);
-    if written != entry.size {
-        return Err("damaged zip (the catalog is shorter than the zip says)".into());
-    }
-    if crc.finalize() != entry.crc {
-        return Err("damaged zip (the catalog's checksum does not match)".into());
-    }
     Ok(out)
 }
 
@@ -493,6 +347,33 @@ pub(crate) mod tests {
         std::fs::write(dir.join("x.zip"), &good).unwrap();
         assert!(extract(&dir.join("x.zip"), &root, &AtomicBool::new(true)).is_err(), "cancel stops");
         assert!(leftovers(&root).is_empty(), "cancel cleans up");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Setting the cancel flag mid-stream stops extraction cleanly and removes the partial temp folder.
+    #[test]
+    fn mid_stream_cancellation_stops_extraction_and_cleans_up() {
+        let dir = temp("cancel-mid-stream");
+        let root = dir.join("tmp");
+        let path = dir.join("Cat.zip");
+        // Larger than two CHUNK reads so the loop must iterate multiple times.
+        let catalog = vec![0x5Au8; CHUNK * 2 + 123];
+        std::fs::write(&path, zip(&[("Cat.lrcat", &catalog)], false, false)).unwrap();
+
+        let cancel = AtomicBool::new(false);
+        let mut chunks = 0usize;
+        let err = extract_inner(&path, &root, &cancel, || {
+            chunks += 1;
+            if chunks == 1 {
+                assert_eq!(leftovers(&root).len(), 1, "temp folder must exist while extracting");
+                cancel.store(true, Ordering::Relaxed);
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, "cancelled");
+        assert_eq!(chunks, 1, "extraction must stop before reading remaining chunks");
+        assert!(leftovers(&root).is_empty(), "mid-stream cancel must clean up temp files");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

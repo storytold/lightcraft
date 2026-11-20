@@ -146,7 +146,16 @@ pub(crate) fn color(c: craft_raw::ColorData) -> ColorData {
         baseline_exposure: c.baseline_exposure,
         baseline_sharpness: c.baseline_sharpness,
         profile: c.profile,
-        kelvin_presets: c.kelvin_presets.and_then(|k| crate::kelvin_presets::KelvinPresets::new(k.points().iter().copied())),
+        kelvin_presets: c.kelvin_presets.and_then(|k| kelvin_presets(&k)),
+    }
+}
+
+/// `craft-raw`'s presets as LightCraft's Kelvin scale. A file that records only its neutral multipliers for
+/// Illuminant A and D65 (Fujifilm RAF) comes with no points: the points between them are worked out here.
+fn kelvin_presets(k: &craft_raw::kelvin::KelvinPresets) -> Option<crate::kelvin_presets::KelvinPresets> {
+    match k.neutral_pair() {
+        Some([a, d65]) => crate::kelvin_presets::KelvinPresets::from_neutral_pair(a, d65),
+        None => crate::kelvin_presets::KelvinPresets::new(k.points().iter().copied()),
     }
 }
 
@@ -231,4 +240,30 @@ fn rgb_preview(bytes: &[u8]) -> Option<(&[u8], usize, usize)> {
             (ok && px.len() >= w.checked_mul(h)?.checked_mul(3)?).then_some((px, w, h))
         })
         .max_by_key(|(_, w, h)| w * h)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Illuminant A and D65 neutral multipliers of a Fujifilm GFX 100 RAF (its 0xf00c record), green = 1.
+    const A: [f32; 3] = [1.1125828, 1.0, 2.7880795];
+    const D65: [f32; 3] = [1.9437087, 1.0, 1.6357616];
+
+    #[test]
+    fn a_neutral_pair_keeps_its_kelvin_scale() {
+        let pair = craft_raw::kelvin::KelvinPresets::from_neutral_pair(A, D65);
+        assert!(pair.as_ref().is_some_and(|k| k.points().is_empty()), "craft-raw keeps a pair without points");
+        let c = color(craft_raw::ColorData { kelvin_presets: pair, ..Default::default() });
+        assert_eq!(c.kelvin_presets, crate::kelvin_presets::KelvinPresets::from_neutral_pair(A, D65));
+        assert!(c.kelvin_presets.is_some());
+    }
+
+    #[test]
+    fn listed_presets_keep_their_points() {
+        let points = [(2500.0, [1.0, 1.0, 3.0]), (5000.0, [1.6, 1.0, 2.0]), (7500.0, [2.0, 1.0, 1.5])];
+        let c = color(craft_raw::ColorData { kelvin_presets: craft_raw::kelvin::KelvinPresets::new(points), ..Default::default() });
+        assert_eq!(c.kelvin_presets, crate::kelvin_presets::KelvinPresets::new(points));
+        assert!(c.kelvin_presets.is_some());
+    }
 }
