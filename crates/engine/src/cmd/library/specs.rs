@@ -663,10 +663,13 @@ pub fn specs() -> Vec<CommandSpec> {
             select_after_deletion(s, &before);
             Ok(json!({"changed": n}))
         }),
-        cmd!("photo.restore", "Restore", ["Photo"], None, "{ids?}", has_selection, |s, p| for_targets(s, p, "Restore", |id| Some(Op::SetDeleted {
-            id,
-            deleted: false
-        }))),
+        cmd!("photo.restore", "Restore", ["Photo"], None, "{ids?}", has_selection, |s, p| {
+            let targets = s.targets(p)?;
+            let r = for_targets(s, p, "Restore", |id| Some(Op::SetDeleted { id, deleted: false }))?;
+            // a hash queued for a photo was dropped while it was deleted
+            s.hash_joined(targets);
+            Ok(r)
+        }),
         cmd!(
             "library.emptyRecentlyDeleted",
             "Empty Recently Deleted",

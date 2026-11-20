@@ -587,7 +587,6 @@ impl Session {
                 log::error!("library: {e} (every change is in its snapshot)");
             }
         }
-        self.media.smart_dir = on_disk.then(|| crate::smart::dir(&dir));
         // Photo ids belong to one library; denoise work must not carry into the next.
         self.denoise.library_changed();
         self.media.denoise.clear();
@@ -595,6 +594,8 @@ impl Session {
         #[cfg(not(target_arch = "wasm32"))]
         self.faces.library_changed();
         let (mut journal, mut catalog, report) = Journal::open(catalog)?;
+        // only now: a library that fails to open leaves the open one with its own smart previews
+        self.media.smart_dir = on_disk.then(|| crate::smart::dir(&dir));
         // A loaded catalog counts revisions from 0, like every other one. Caches (sidebar counts,
         // keyword tree, the grid's list…) are keyed on the revision, so give each library loaded
         // in this process its own range: otherwise an empty library opened after one that was

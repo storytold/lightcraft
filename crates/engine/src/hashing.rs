@@ -4,7 +4,7 @@
 //! leaves their content hash unset (see `files::light_probe`): it needs every byte, and a folder on
 //! a network share holds thousands of raws. A Local photo is found again by its path. Once one
 //! joins the library (Add to My Photos, or an import of its file), it is queued here
-//! ([`Session::queue_hash`]; an undo or redo that brings it back queues it again) and its hash is worked out: on a worker thread in the app
+//! ([`Session::queue_hash`]; an undo, redo or restore that brings it back queues it again) and its hash is worked out: on a worker thread in the app
 //! ([`Session::take_hash_jobs`], [`HashJob::run`], [`Session::learn_content_hash`]), or at once
 //! where nothing runs in the background (CLI, MCP: [`Session::hash_queued_now`]). Duplicates of it
 //! are then recognised on import again.
@@ -127,13 +127,15 @@ fn move_smart_preview(old: &std::path::Path, new: &std::path::Path) {
     }
 }
 
-/// Photos `op` brings into the library (`SetLocal` to false, in batches too).
+/// Photos `op` brings into the library, in batches too: `SetLocal` to false (Add to My Photos),
+/// and `SetDeleted` to false (restored from Recently Deleted: a hash queued for it was dropped
+/// while it was deleted).
 pub(crate) fn joined_library(op: &Op) -> Vec<PhotoId> {
     let mut ids = Vec::new();
     let mut pending = vec![op];
     while let Some(op) = pending.pop() {
         match op {
-            Op::SetLocal { id, local: false } => ids.push(*id),
+            Op::SetLocal { id, local: false } | Op::SetDeleted { id, deleted: false } => ids.push(*id),
             Op::Batch { ops } => pending.extend(ops),
             _ => {}
         }
