@@ -27,7 +27,8 @@ use std::path::{Path, PathBuf};
 /// Where the cgroup file systems are mounted conventionally (used when mountinfo can't be read).
 pub const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 
-/// Path components followed below a mount at most (the kernel nests far less in practice).
+/// Cgroup levels read below a mount at most, the deepest ones: the process's own cgroup and its
+/// nearest parents (the kernel nests far less in practice).
 const MAX_DEPTH: usize = 64;
 
 /// A limit this large is no limit: cgroup v1 reports "unlimited" as a page-rounded `i64::MAX`
@@ -239,9 +240,9 @@ pub fn cgroup_memory_at(fs_root: &Path, mountinfo: Option<&str>, own: &str) -> C
 
 /// The directories whose memory files bind this process: for the cgroup v2 entry (`0::/path`)
 /// and a v1 entry with the `memory` controller (`N:cpuset,memory:/path`), the cgroup's directory
-/// and each parent up to the mount point, deepest first, in every mount of that hierarchy that
-/// shows the cgroup ([`views`]). A cgroup seen through two mounts (a bind mount of a subtree beside
-/// the whole hierarchy) is listed once.
+/// and each parent up to the mount point (the nearest [`MAX_DEPTH`] of them), deepest first, in
+/// every mount of that hierarchy that shows the cgroup ([`views`]). A cgroup seen through two
+/// mounts (a bind mount of a subtree beside the whole hierarchy) is listed once.
 fn cgroup_dirs(fs_root: &Path, mountinfo: Option<&str>, own: &str) -> Vec<CgroupDir> {
     let mounts = match mountinfo {
         Some(info) => cgroup_mounts(info),
@@ -270,12 +271,17 @@ fn cgroup_dirs(fs_root: &Path, mountinfo: Option<&str>, own: &str) -> Vec<Cgroup
             };
             let mut base = fs_root.to_path_buf();
             base.extend(point);
+            if !view.above.is_empty() {
+                base.push(&view.above);
+            }
             for (up, dir) in ancestors(&base, &view.rel).into_iter().enumerate() {
-                // the cgroup this directory shows: the mount's root, then `rel` less `up` levels
+                // the cgroup this directory shows: the mount's root, `above`, then `rel` less `up`
+                // levels
                 let cgroup = match &view.root {
                     Some(root) => {
-                        let rel = view.rel.iter().take(view.rel.len().saturating_sub(up));
-                        let parts: Vec<&str> = root.iter().map(String::as_str).chain(rel.map(String::as_str)).collect();
+                        let above = view.above.split('/').filter(|p| !p.is_empty());
+                        let rel = view.rel.iter().take(view.rel.len().saturating_sub(up)).map(String::as_str);
+                        let parts: Vec<&str> = root.iter().map(String::as_str).chain(above).chain(rel).collect();
                         format!("/{}", parts.join("/"))
                     }
                     // a root that isn't a plain path: known only by where it is mounted
@@ -295,7 +301,10 @@ struct View<'m> {
     mount: &'m CgroupMount,
     /// The cgroup at the mount point (the mount's root), when it is a plain path.
     root: Option<Vec<String>>,
-    /// `path` below the mount's root (at most [`MAX_DEPTH`] components).
+    /// The levels of `path` below the mount's root that are above the deepest [`MAX_DEPTH`],
+    /// joined with `/` (empty when `path` is no deeper): their directories aren't read.
+    above: String,
+    /// The rest of `path` below the mount's root: its deepest [`MAX_DEPTH`] components at most.
     rel: Vec<String>,
 }
 
@@ -316,14 +325,16 @@ fn views<'m>(mounts: &'m [CgroupMount], v1: bool, path: &str) -> Vec<View<'m>> {
             continue;
         };
         if own.starts_with(&root) {
-            let rel = own.get(root.len()..).unwrap_or_default().iter().take(MAX_DEPTH).map(|p| (*p).to_owned()).collect();
-            out.push(View { mount, root: Some(owned(&root)), rel });
+            // past the bound, the deepest levels: the process's own cgroup is the likeliest limited
+            let below = own.get(root.len()..).unwrap_or_default();
+            let (above, rel) = below.split_at_checked(below.len().saturating_sub(MAX_DEPTH)).unwrap_or((&[], below));
+            out.push(View { mount, root: Some(owned(&root)), above: above.join("/"), rel: owned(rel) });
         }
     }
     if out.is_empty()
         && let Some(mount) = fallback
     {
-        out.push(View { mount, root: plain_components(&mount.root).map(|r| owned(&r)), rel: Vec::new() });
+        out.push(View { mount, root: plain_components(&mount.root).map(|r| owned(&r)), above: String::new(), rel: Vec::new() });
     }
     out
 }
@@ -639,7 +650,26 @@ mod tests {
         assert_eq!(ancestors(Path::new("/r"), &rel("/a//b/")), vec![PathBuf::from("/r/a/b"), PathBuf::from("/r/a"), PathBuf::from("/r")]);
         let deep = "/x".repeat(10_000);
         assert_eq!(ancestors(Path::new("/r"), &rel(&deep)).len(), MAX_DEPTH + 1);
-        assert_eq!(cgroup_dirs(Path::new("/"), None, &format!("0::{deep}")).len(), MAX_DEPTH + 1);
+        let dirs = cgroup_dirs(Path::new("/"), None, &format!("0::{deep}"));
+        assert_eq!(dirs.len(), MAX_DEPTH + 1);
+        // the deepest levels, the process's own cgroup first, not the top ones
+        let own = PathBuf::from(format!("{CGROUP_ROOT}{deep}"));
+        assert!(dirs.first().is_some_and(|d| d.path == own), "the process's own cgroup is read first");
+        let top = PathBuf::from(format!("{CGROUP_ROOT}{}", "/x".repeat(10_000 - MAX_DEPTH)));
+        assert!(dirs.last().is_some_and(|d| d.path == top), "the walk stops {MAX_DEPTH} levels up");
+    }
+
+    /// A cgroup nested deeper than the walk's bound is read at its own level, where a limit is
+    /// likeliest, instead of only the levels nearest the mount (#3072).
+    #[test]
+    fn a_cgroup_deeper_than_the_bound_is_read_at_its_own_level() {
+        let s = Scratch::new("v2-deeper-than-bound");
+        let path = "d/".repeat(MAX_DEPTH + 1);
+        s.write("memory.max", "max");
+        s.write(&format!("{path}memory.max"), &(2 * GIB).to_string());
+        s.write(&format!("{path}memory.current"), &GIB.to_string());
+        let got = cgroup_memory_at(&s.0, None, &format!("0::/{}\n", path.trim_end_matches('/')));
+        assert_eq!(got, CgroupMemory { limit: Some(2 * GIB), headroom: Some(GIB) });
     }
 
     /// A mountinfo line for a cgroup mount: `root` shown at `point`.
