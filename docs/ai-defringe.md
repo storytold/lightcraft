@@ -55,7 +55,7 @@ The network only proposes a change; the host decides how much of it to keep. The
    green chroma.
 6. **No more colourful than its neighbourhood:** at most 1.2 × the highest chroma within 7 × 7 px.
 7. **Toward the surroundings.** Of each change, only the part that moves the pixel toward the mean colour of the
-   untouched pixels within 7 px is kept, at most up to it, and rules 4 and 5 are applied to it again. Without this, a correction that stopped at grey could move
+   untouched pixels within 7 px is kept, at most up to it, and rules 4 to 6 are applied to it again. Without this, a correction that stopped at grey could move
    a purple fringe sideways into a brown-orange rim.
 8. **Exact elsewhere.** A pixel whose colour moves by 1e-5 or less keeps its exact value.
 

@@ -13,7 +13,7 @@
 //! photo's correction missing makes it itself, on its own thread, so it never comes out without the correction it
 //! was asked for.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
@@ -578,21 +578,21 @@ fn to_source(
     let mut out: Vec<(u32, [u16; 3])> = if map.is_identity() {
         changed.into_iter().map(|(i, g)| (i, g.map(f16_bits))).collect()
     } else {
-        // the changed pixels and the unchanged ones within 2 px of them
-        let mut around: Vec<u32> = Vec::with_capacity(changed.len() * 4);
-        for &i in changed.keys() {
+        // the changed pixels and the unchanged ones within 2 px of them, each visited once, in a fixed order so
+        // the sums come out the same every time
+        let mut keys: Vec<u32> = changed.keys().copied().collect();
+        keys.sort_unstable();
+        let mut seen: HashSet<u32> = HashSet::with_capacity(changed.len());
+        let around = keys.into_iter().flat_map(|i| {
             let (x, y) = (i as usize % w, i as usize / w);
-            for ny in y.saturating_sub(2)..(y + 3).min(h) {
-                for nx in x.saturating_sub(2)..(x + 3).min(w) {
-                    around.push((ny * w + nx) as u32);
-                }
-            }
-        }
-        around.sort_unstable();
-        around.dedup();
+            (y.saturating_sub(2)..(y + 3).min(h)).flat_map(move |ny| (x.saturating_sub(2)..(x + 3).min(w)).map(move |nx| (ny * w + nx) as u32))
+        });
         // per source pixel and plane: the sum of weight × gain, and of weight
         let mut sums: HashMap<u32, [[f32; 2]; 3]> = HashMap::new();
         for i in around {
+            if !seen.insert(i) {
+                continue;
+            }
             let g = changed.get(&i).copied().unwrap_or([0.0; 3]);
             let (x, y) = (i as usize % w, i as usize / w);
             for (c, &gc) in g.iter().enumerate() {
@@ -670,7 +670,7 @@ pub struct State {
     /// Corrections that failed, by key, and why (not tried again until asked).
     failed: HashMap<u64, String>,
     /// Corrections the user cancelled, by key (not started again until asked: Try Again, or switching it on).
-    cancelled: std::collections::HashSet<u64>,
+    cancelled: HashSet<u64>,
     /// The cache's epoch, bumped (under this lock) when it is cleared ([`Publish`]).
     epoch: Arc<Mutex<u64>>,
     /// Corrections in memory, most recently used last.

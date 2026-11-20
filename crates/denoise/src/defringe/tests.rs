@@ -169,3 +169,17 @@ fn a_change_toward_the_surroundings_stops_at_grey_too() {
     // a change that doesn't reach grey is kept as it is
     assert_eq!(not_past_grey(a, 0.1, [-0.05, 0.01]), [-0.05, 0.01]);
 }
+
+#[test]
+fn a_change_toward_the_surroundings_is_no_more_colourful_than_the_neighbourhood() {
+    // a faint orange pixel pulled toward a strongly orange mean from beyond its own 7 × 7 neighbourhood
+    let a = [0.02f32, 0.02];
+    let n = pulled(a, [0.18, 0.18], 0.05);
+    let c = (n[0] * n[0] + n[1] * n[1]).sqrt();
+    assert!(c <= 0.05 * 1.2 + 1e-6, "{n:?} has chroma {c}");
+    // the direction is kept
+    assert!((n[0] - n[1]).abs() < 1e-6, "{n:?}");
+    // a pull that stays within the limit is kept as it is
+    let n = pulled(a, [0.01, 0.01], 0.05);
+    assert!((n[0] - 0.03).abs() < 1e-6 && (n[1] - 0.03).abs() < 1e-6, "{n:?}");
+}

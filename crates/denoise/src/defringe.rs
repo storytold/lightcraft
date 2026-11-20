@@ -267,15 +267,7 @@ fn band(rgb: &[[f32; 3]], w: usize, h: usize, (r0, r1, e0, e1): (usize, usize, u
                 let bg = if den[i] / n as f32 > 1e-3 { [num_a[i] / den[i], num_b[i] / den[i]] } else { [0.0, 0.0] };
                 let (d, to) = ([nab[0] - a[0], nab[1] - a[1]], [bg[0] - a[0], bg[1] - a[1]]);
                 let t = ((d[0] * to[0] + d[1] * to[1]) / (to[0] * to[0] + to[1] * to[1]).max(1e-8)).clamp(0.0, 1.0);
-                // nor take it past grey, or make it green when it wasn't
-                let ca = (a[0] * a[0] + a[1] * a[1] + 1e-12).sqrt();
-                let d = not_past_grey(a, ca, [t * to[0], t * to[1]]);
-                nab = [a[0] + d[0], a[1] + d[1]];
-                let cn = (nab[0] * nab[0] + nab[1] * nab[1] + 1e-12).sqrt();
-                if green(nab, cn) && !green(a, ca) {
-                    let s = (0.01 / cn).min(1.0);
-                    nab = [nab[0] * s, nab[1] * s];
-                }
+                nab = pulled(a, [t * to[0], t * to[1]], c_hi[(y + e0 - l0) * w + x]);
             }
             if dist(a, nab) <= MOVED {
                 return None;
@@ -285,6 +277,22 @@ fn band(rgb: &[[f32; 3]], w: usize, h: usize, (r0, r1, e0, e1): (usize, usize, u
         })
         .collect();
     changed.extend(out.into_iter().flatten());
+}
+
+/// Colour `a` moved by `d` toward the surroundings, with rules 4 to 6 applied again: not past grey, not green unless
+/// it was, and no more colourful than 1.2 × `c_hi`, the highest chroma within 7 × 7 px.
+fn pulled(a: [f32; 2], d: [f32; 2], c_hi: f32) -> [f32; 2] {
+    let ca = (a[0] * a[0] + a[1] * a[1] + 1e-12).sqrt();
+    let d = not_past_grey(a, ca, d);
+    let mut n = [a[0] + d[0], a[1] + d[1]];
+    let cn = (n[0] * n[0] + n[1] * n[1] + 1e-12).sqrt();
+    if green(n, cn) && !green(a, ca) {
+        let s = (0.01 / cn).min(1.0);
+        n = [n[0] * s, n[1] * s];
+    }
+    let cn = (n[0] * n[0] + n[1] * n[1] + 1e-12).sqrt();
+    let s = (c_hi * 1.2 / cn).min(1.0);
+    [n[0] * s, n[1] * s]
 }
 
 /// Change `d` of colour `ab` (chroma `c`), shortened so that it goes to grey but not past it: the colour may
