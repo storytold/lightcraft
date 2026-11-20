@@ -4271,7 +4271,7 @@
   "time is copied as it is) is no longer shifted into a clean-looking wrong time: Edit Capture Time leaves the photo as": "laikas, kuris nukopijuojamas toks, koks yra), jis nebepaverčiamas tvarkingai atrodančiu, bet neteisingu laiku. Komanda „Redaguoti fotografavimo laiką“ nuotraukos",
   "time is typed, and picking a day replaces one). Typing still works, and \"2026-10-01 10:00\" (a space for the": "įvedamas tekstu, o pasirinkus dieną laikas pakeičiamas). Datas vis tiek galima įvesti ranka, pavyzdžiui, „2026-10-01 10:00“ (tarp datos ir laiko naudojamas tarpas).",
   "Time zone": "Laiko juosta",
-  "Tint": "Atspalvio poslinkis",
+  "Tint": "Atspalvis",
   "Tip: select the subject precisely with an Object mask (Masking, M), then choose that mask here.": "Patarimas: tiksliai pažymėkite objektą naudodami kaukę „Objektas“ (Kaukės, M), tada pasirinkite šią kaukę čia.",
   "Title": "Pavadinimas",
   "Title bar": "Pavadinimo juosta",
