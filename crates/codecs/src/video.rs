@@ -1060,7 +1060,13 @@ mod tests {
 
         let mut io_mp4 = Mp4Writer::new(FailAfter { limit: 40, written: 0 }, 64, 36, 30).unwrap();
         io_mp4.set_config(av1_config(&[0x0a, 1, 0]));
-        assert!(io_mp4.add(&Sample { data: vec![0x32, 16; 18], key: true, duration: 1 }).unwrap_err().to_string().contains("disk full"));
+        assert!(
+            io_mp4
+                .add(&Sample { data: [0x32, 16].into_iter().chain(std::iter::repeat_n(0, 16)).collect(), key: true, duration: 1 })
+                .unwrap_err()
+                .to_string()
+                .contains("disk full")
+        );
 
         let mut io_webm = WebmWriter::new(FailAfter { limit: 40, written: 0 }, 64, 36, 30).unwrap();
         io_webm.set_config(av1_config(&[0x0a, 1, 0]));
