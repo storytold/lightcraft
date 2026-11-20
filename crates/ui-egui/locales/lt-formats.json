@@ -137,7 +137,7 @@
   "the {n} selected photos": "{n} pasirinktos nuotraukos",
   "the {} photos in view": "{} matomos nuotraukos",
   "these {count} photos": "šios nuotraukos ({count})",
-  "{count} smart preview{} · {:.1} MB": "Išmaniųjų peržiūrų: {count}{0:.0} · {:.1} MB",
+  "{count} smart preview{} · {:.1} MB": "Išmaniųjų peržiūrų: {count}{} · {:.1} MB",
   "{f} folders (and their subfolders)": "{f} aplankai (ir jų poaplankiai)",
   "{label} Grading": "{label} tonavimas",
   "{label} {d:+} on every selected photo": "{label} {d:+} kiekvienoje pasirinktoje nuotraukoje",
