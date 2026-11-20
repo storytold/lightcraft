@@ -236,6 +236,7 @@
   "Added “{keyword}” to {n} photo{}": "“{keyword}” ditambahkan ke {n} foto{:.0}",
   "Add Keyword “{keywords}”": "Tambahkan kata kunci “{keywords}”",
   "On {have} of {of} selected photos": "Pada {have} dari {of} foto yang dipilih",
+  "A keyword name can't end with an asterisk: “{name}”": "Nama kata kunci tidak boleh diakhiri tanda bintang: “{name}”",
   "Remove “{name}”": "Hapus “{name}”",
   "There is a keyword set “{name}” already": "Set kata kunci “{name}” sudah ada",
   "Added {n} keyword{}": "{n} kata kunci ditambahkan{:.0}",

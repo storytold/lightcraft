@@ -1,12 +1,11 @@
-//! Video: AV1 encoding of RGBA frames (`rav1e`, native targets with the `avif` feature) and two
-//! small muxers of our own, written from the public specifications only:
+//! Video: AV1 encoding of RGBA frames (`craft-video`, native targets with the `avif` feature)
+//! and MP4 / WebM muxing over `craft-media`:
 //!
-//! - **MP4** (ISO/IEC 14496-12 ISO base media file format + the AOM "AV1 Codec ISO Media File
-//!   Format Binding"): `ftyp`, one `mdat` (64-bit size, patched at the end) holding the samples,
-//!   then `moov` with one video track whose sample entry is `av01` + `av1C` + `colr` (`nclx`).
-//! - **WebM** (Matroska / EBML as restricted by WebM, codec mapping `V_AV1`): EBML header,
-//!   Segment (size patched at the end) with SeekHead, Info, Tracks, Clusters of SimpleBlocks (the
-//!   last frame a BlockGroup with its duration) and Cues.
+//! - **MP4** (`craft_media::isobmff::mux::Mp4Writer`): `ftyp`, `mdat` holding the samples, then
+//!   `moov` with one video track whose sample entry is `av01` + `av1C` + `colr` (`nclx`) + `pasp`.
+//! - **WebM** (`craft_media::matroska::mux::MkvWriter`, codec mapping `V_AV1`): EBML header, Segment
+//!   with SeekHead, Info, Tracks, Clusters of SimpleBlocks (the last frame a BlockGroup with its
+//!   duration) and Cues.
 //!
 //! Frames may last several frame periods: a picture held on screen is one sample with a long
 //! duration (variable frame rate), so a still slide costs one encoded frame however long it
@@ -15,7 +14,10 @@
 //! Samples are AV1 temporal units without temporal delimiter OBUs (both bindings ask for that);
 //! the configuration record carries the sequence header OBU. No audio track.
 
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Seek, Write};
+
+use craft_media::isobmff::{Av1Config, Brand, ColorInfo, SampleEntry, TrackConfig, WriteSample, WriterOptions};
+use craft_media::matroska::{MkvWriter, MuxOptions, TrackKind, TrackSpec};
 
 use crate::{Error, Result};
 
@@ -55,12 +57,12 @@ pub struct Sample {
 /// The longest video the muxers write, in frame periods (keeps every timestamp in range).
 pub const MAX_PERIODS: u64 = 60 * 60 * 24 * 120;
 
-fn io(e: std::io::Error) -> Error {
-    Error::Encode(format!("video: {e}"))
-}
-
 fn bad(msg: impl Into<String>) -> Error {
     Error::Encode(format!("video: {}", msg.into()))
+}
+
+fn media_err(e: impl std::fmt::Display) -> Error {
+    bad(e.to_string())
 }
 
 // ---------------------------------------------------------------- AV1 OBUs
@@ -136,92 +138,57 @@ pub fn to_sample_data(tu: &[u8]) -> Result<(Vec<u8>, Option<Vec<u8>>)> {
 /// The `av1C` configuration record (AV1-ISOBMFF §2.3) for 8-bit 4:2:0 main profile, followed by
 /// `seq_header` (the sequence header OBU, may be empty). Matroska's `CodecPrivate` is the same.
 pub fn av1_config(seq_header: &[u8]) -> Vec<u8> {
-    // marker 1, version 1 | profile 0, level 31 (unconstrained) | tier 0, 8-bit, not mono,
-    // subsampling x and y, chroma position 0 | no initial presentation delay
-    let mut v = vec![0x81, 31, 0b0000_1100, 0];
-    v.extend_from_slice(seq_header);
-    v
+    Av1Config {
+        seq_profile: 0,
+        seq_level_idx_0: 31,
+        chroma_subsampling_x: true,
+        chroma_subsampling_y: true,
+        config_obus: seq_header.to_vec(),
+        ..Default::default()
+    }
+    .to_bytes()
 }
 
 // ---------------------------------------------------------------- MP4
 
-fn mp4_box(kind: &[u8; 4], body: &[u8]) -> Result<Vec<u8>> {
-    let size = u32::try_from(body.len().checked_add(8).ok_or_else(|| bad("box too large"))?).map_err(|_| bad("box too large"))?;
-    let mut v = Vec::with_capacity(body.len() + 8);
-    v.extend_from_slice(&size.to_be_bytes());
-    v.extend_from_slice(kind);
-    v.extend_from_slice(body);
-    Ok(v)
-}
+/// Track ticks per frame period (ffmpeg's habit: 512 per frame).
+const TICKS: u64 = 512;
 
-fn full_box(kind: &[u8; 4], version: u8, flags: u32, body: &[u8]) -> Result<Vec<u8>> {
-    let mut b = Vec::with_capacity(body.len() + 4);
-    b.push(version);
-    b.extend_from_slice(&flags.to_be_bytes()[1..]);
-    b.extend_from_slice(body);
-    mp4_box(kind, &b)
-}
-
-/// The unity transformation matrix of `mvhd` / `tkhd`.
-fn matrix() -> Vec<u8> {
-    let mut m = Vec::with_capacity(36);
-    for v in [0x0001_0000u32, 0, 0, 0, 0x0001_0000, 0, 0, 0, 0x4000_0000] {
-        m.extend_from_slice(&v.to_be_bytes());
+fn av1_sample_entry(cfg: Av1Config, width: u16, height: u16) -> SampleEntry {
+    let mut entry = SampleEntry::av1(cfg, width, height);
+    if let Some(v) = entry.video.as_mut() {
+        v.compressor_name = "AOM Coding".into();
+        v.color = Some(ColorInfo::Nclx { primaries: 1, transfer: 1, matrix: 1, full_range: false });
+        v.pixel_aspect = Some((1, 1));
     }
-    m
+    entry
 }
 
 /// An MP4 writer: [`Mp4Writer::add`] streams each sample into `mdat`; [`Mp4Writer::finish`]
 /// patches its size and appends `moov`.
 pub struct Mp4Writer<W: Write + Seek> {
-    w: W,
+    inner: craft_media::isobmff::Mp4Writer<W>,
+    track: usize,
     width: u16,
     height: u16,
-    fps: u32,
-    /// Where `mdat`'s 64-bit size is, and where its data starts.
-    mdat_size_at: u64,
-    data_start: u64,
-    written: u64,
-    sizes: Vec<u32>,
-    durations: Vec<u64>,
-    keys: Vec<u32>,
+    periods: u64,
     config: Option<Vec<u8>>,
 }
 
-/// Track ticks per frame period (ffmpeg's habit: 512 per frame).
-const TICKS: u64 = 512;
-
 impl<W: Write + Seek> Mp4Writer<W> {
-    pub fn new(mut w: W, width: u32, height: u32, fps: u32) -> Result<Self> {
+    pub fn new(w: W, width: u32, height: u32, fps: u32) -> Result<Self> {
         let (width, height) = (u16::try_from(width).map_err(|_| bad("too wide"))?, u16::try_from(height).map_err(|_| bad("too tall"))?);
         if width == 0 || height == 0 || !(1..=240).contains(&fps) {
             return Err(bad("bad size or frame rate"));
         }
-        let mut ftyp = Vec::new();
-        ftyp.extend_from_slice(b"isom");
-        ftyp.extend_from_slice(&0x200u32.to_be_bytes());
-        for brand in [b"isom", b"iso6", b"av01", b"mp41"] {
-            ftyp.extend_from_slice(brand);
-        }
-        w.write_all(&mp4_box(b"ftyp", &ftyp)?).map_err(io)?;
-        let start = w.stream_position().map_err(io)?;
-        // size 1 = a 64-bit size follows (patched in finish)
-        w.write_all(&1u32.to_be_bytes()).map_err(io)?;
-        w.write_all(b"mdat").map_err(io)?;
-        w.write_all(&0u64.to_be_bytes()).map_err(io)?;
-        Ok(Mp4Writer {
-            w,
-            width,
-            height,
-            fps,
-            mdat_size_at: start + 8,
-            data_start: start + 16,
-            written: 0,
-            sizes: Vec::new(),
-            durations: Vec::new(),
-            keys: Vec::new(),
-            config: None,
-        })
+        let timescale = u32::try_from(u64::from(fps) * TICKS).map_err(|_| bad("bad frame rate"))?;
+        let mut opts = WriterOptions::new(Brand::Mp4);
+        opts.compatible_brands.push(*b"av01");
+        let mut inner = craft_media::isobmff::Mp4Writer::new(w, opts).map_err(media_err)?;
+        let mut cfg = TrackConfig::new(av1_sample_entry(Av1Config::default(), width, height), timescale);
+        cfg.handler_name = Some("LightCraft video".into());
+        let track = inner.add_track(cfg).map_err(media_err)?;
+        Ok(Mp4Writer { inner, track, width, height, periods: 0, config: None })
     }
 
     /// The `av1C` record ([`av1_config`]); needed before [`Self::finish`].
@@ -230,415 +197,113 @@ impl<W: Write + Seek> Mp4Writer<W> {
     }
 
     pub fn add(&mut self, s: &Sample) -> Result<()> {
-        let size = u32::try_from(s.data.len()).map_err(|_| bad("sample too large"))?;
+        let _ = u32::try_from(s.data.len()).map_err(|_| bad("sample too large"))?;
         if s.duration == 0 {
             return Err(bad("a sample lasts at least one frame"));
         }
-        if self.sizes.is_empty() && !s.key {
+        if self.periods == 0 && !s.key {
             return Err(bad("the first sample must be a key frame"));
         }
-        self.w.write_all(&s.data).map_err(io)?;
-        self.written = self.written.saturating_add(u64::from(size));
-        self.sizes.push(size);
-        self.durations.push(s.duration);
-        if s.key {
-            let n = u32::try_from(self.sizes.len()).map_err(|_| bad("too many samples"))?;
-            self.keys.push(n);
-        }
+        let duration = s.duration.checked_mul(TICKS).and_then(|d| u32::try_from(d).ok()).ok_or_else(|| bad("video too long"))?;
+        let sample = WriteSample { data: &s.data, duration, composition_offset: 0, is_sync: s.key };
+        self.inner.write_sample(self.track, sample).map_err(media_err)?;
+        self.periods = self.periods.saturating_add(s.duration);
         Ok(())
     }
 
     /// Frame periods written so far.
     pub fn periods(&self) -> u64 {
-        self.durations.iter().sum()
+        self.periods
     }
 
     pub fn finish(mut self) -> Result<W> {
-        if self.sizes.is_empty() {
+        if self.periods == 0 {
             return Err(bad("no frames"));
         }
         let config = self.config.take().ok_or_else(|| bad("no AV1 configuration"))?;
-        let periods = self.periods();
-        if periods > MAX_PERIODS {
+        if self.periods > MAX_PERIODS {
             return Err(bad("video too long"));
         }
-        let end = self.w.stream_position().map_err(io)?;
-        self.w.seek(SeekFrom::Start(self.mdat_size_at)).map_err(io)?;
-        self.w.write_all(&(end - (self.mdat_size_at - 8)).to_be_bytes()).map_err(io)?;
-        self.w.seek(SeekFrom::Start(end)).map_err(io)?;
-        let moov = self.moov(&config, periods)?;
-        self.w.write_all(&moov).map_err(io)?;
-        self.w.flush().map_err(io)?;
-        Ok(self.w)
-    }
-
-    fn moov(&self, config: &[u8], periods: u64) -> Result<Vec<u8>> {
-        let n = u32::try_from(self.sizes.len()).map_err(|_| bad("too many samples"))?;
-        let timescale = u32::try_from(u64::from(self.fps) * TICKS).map_err(|_| bad("bad frame rate"))?;
-        let ticks = periods.checked_mul(TICKS).ok_or_else(|| bad("video too long"))?;
-        // the movie's own timescale: milliseconds
-        let movie_ms = periods.saturating_mul(1000) / u64::from(self.fps);
-        let u32_of = |v: u64| u32::try_from(v).map_err(|_| bad("video too long"));
-        let (track_ticks, movie_ms) = (u32_of(ticks)?, u32_of(movie_ms)?);
-
-        let mut mvhd = Vec::new();
-        mvhd.extend_from_slice(&[0; 8]); // creation, modification
-        mvhd.extend_from_slice(&1000u32.to_be_bytes());
-        mvhd.extend_from_slice(&movie_ms.to_be_bytes());
-        mvhd.extend_from_slice(&0x0001_0000u32.to_be_bytes()); // rate 1.0
-        mvhd.extend_from_slice(&0x0100u16.to_be_bytes()); // volume 1.0
-        mvhd.extend_from_slice(&[0; 10]);
-        mvhd.extend_from_slice(&matrix());
-        mvhd.extend_from_slice(&[0; 24]); // pre_defined
-        mvhd.extend_from_slice(&2u32.to_be_bytes()); // next track id
-
-        let mut tkhd = Vec::new();
-        tkhd.extend_from_slice(&[0; 8]);
-        tkhd.extend_from_slice(&1u32.to_be_bytes()); // track id
-        tkhd.extend_from_slice(&[0; 4]);
-        tkhd.extend_from_slice(&movie_ms.to_be_bytes());
-        tkhd.extend_from_slice(&[0; 8]);
-        tkhd.extend_from_slice(&[0; 2]); // layer
-        tkhd.extend_from_slice(&[0; 2]); // alternate group
-        tkhd.extend_from_slice(&[0; 2]); // volume (video: 0)
-        tkhd.extend_from_slice(&[0; 2]);
-        tkhd.extend_from_slice(&matrix());
-        tkhd.extend_from_slice(&(u32::from(self.width) << 16).to_be_bytes());
-        tkhd.extend_from_slice(&(u32::from(self.height) << 16).to_be_bytes());
-
-        let mut mdhd = Vec::new();
-        mdhd.extend_from_slice(&[0; 8]);
-        mdhd.extend_from_slice(&timescale.to_be_bytes());
-        mdhd.extend_from_slice(&track_ticks.to_be_bytes());
-        mdhd.extend_from_slice(&0x55c4u16.to_be_bytes()); // language "und"
-        mdhd.extend_from_slice(&[0; 2]);
-
-        let mut hdlr = Vec::new();
-        hdlr.extend_from_slice(&[0; 4]);
-        hdlr.extend_from_slice(b"vide");
-        hdlr.extend_from_slice(&[0; 12]);
-        hdlr.extend_from_slice(b"LightCraft video\0");
-
-        let mut vmhd = Vec::new();
-        vmhd.extend_from_slice(&[0; 8]); // graphics mode, opcolor
-        let url = full_box(b"url ", 0, 1, &[])?;
-        let mut dref = 1u32.to_be_bytes().to_vec();
-        dref.extend_from_slice(&url);
-        let dinf = mp4_box(b"dinf", &full_box(b"dref", 0, 0, &dref)?)?;
-
-        // av01 visual sample entry
-        let mut av01 = Vec::new();
-        av01.extend_from_slice(&[0; 6]);
-        av01.extend_from_slice(&1u16.to_be_bytes()); // data reference index
-        av01.extend_from_slice(&[0; 16]); // pre_defined, reserved
-        av01.extend_from_slice(&self.width.to_be_bytes());
-        av01.extend_from_slice(&self.height.to_be_bytes());
-        av01.extend_from_slice(&0x0048_0000u32.to_be_bytes()); // 72 dpi
-        av01.extend_from_slice(&0x0048_0000u32.to_be_bytes());
-        av01.extend_from_slice(&[0; 4]);
-        av01.extend_from_slice(&1u16.to_be_bytes()); // frame count
-        let mut name = [0u8; 32];
-        let label = b"AOM Coding";
-        name[0] = label.len() as u8;
-        name[1..=label.len()].copy_from_slice(label);
-        av01.extend_from_slice(&name);
-        av01.extend_from_slice(&0x0018u16.to_be_bytes()); // depth
-        av01.extend_from_slice(&(-1i16).to_be_bytes());
-        av01.extend_from_slice(&mp4_box(b"av1C", config)?);
-        // BT.709 primaries, transfer and matrix, limited range
-        let mut colr = b"nclx".to_vec();
-        colr.extend_from_slice(&[0, 1, 0, 1, 0, 1, 0]);
-        av01.extend_from_slice(&mp4_box(b"colr", &colr)?);
-        let mut pasp = 1u32.to_be_bytes().to_vec();
-        pasp.extend_from_slice(&1u32.to_be_bytes());
-        av01.extend_from_slice(&mp4_box(b"pasp", &pasp)?);
-        let mut stsd = 1u32.to_be_bytes().to_vec();
-        stsd.extend_from_slice(&mp4_box(b"av01", &av01)?);
-
-        // decoding times: runs of equal durations
-        let mut runs: Vec<(u32, u64)> = Vec::new();
-        for d in &self.durations {
-            match runs.last_mut() {
-                Some((count, delta)) if *delta == *d => *count += 1,
-                _ => runs.push((1, *d)),
-            }
-        }
-        let mut stts = u32::try_from(runs.len()).map_err(|_| bad("too many samples"))?.to_be_bytes().to_vec();
-        for (count, delta) in runs {
-            stts.extend_from_slice(&count.to_be_bytes());
-            stts.extend_from_slice(&u32_of(delta.saturating_mul(TICKS))?.to_be_bytes());
-        }
-        let mut stsc = 1u32.to_be_bytes().to_vec();
-        for v in [1u32, n, 1] {
-            stsc.extend_from_slice(&v.to_be_bytes());
-        }
-        let mut stsz = 0u32.to_be_bytes().to_vec();
-        stsz.extend_from_slice(&n.to_be_bytes());
-        for s in &self.sizes {
-            stsz.extend_from_slice(&s.to_be_bytes());
-        }
-        // one chunk holding every sample, at the start of mdat's data
-        let chunk_offset = match u32::try_from(self.data_start) {
-            Ok(o) => full_box(b"stco", 0, 0, &[1u32.to_be_bytes(), o.to_be_bytes()].concat())?,
-            Err(_) => {
-                let mut b = 1u32.to_be_bytes().to_vec();
-                b.extend_from_slice(&self.data_start.to_be_bytes());
-                full_box(b"co64", 0, 0, &b)?
-            }
-        };
-        let mut stbl = Vec::new();
-        stbl.extend_from_slice(&full_box(b"stsd", 0, 0, &stsd)?);
-        stbl.extend_from_slice(&full_box(b"stts", 0, 0, &stts)?);
-        if self.keys.len() < self.sizes.len() {
-            let mut stss = u32::try_from(self.keys.len()).map_err(|_| bad("too many samples"))?.to_be_bytes().to_vec();
-            for k in &self.keys {
-                stss.extend_from_slice(&k.to_be_bytes());
-            }
-            stbl.extend_from_slice(&full_box(b"stss", 0, 0, &stss)?);
-        }
-        stbl.extend_from_slice(&full_box(b"stsc", 0, 0, &stsc)?);
-        stbl.extend_from_slice(&full_box(b"stsz", 0, 0, &stsz)?);
-        stbl.extend_from_slice(&chunk_offset);
-
-        let mut minf = full_box(b"vmhd", 0, 1, &vmhd)?;
-        minf.extend_from_slice(&dinf);
-        minf.extend_from_slice(&mp4_box(b"stbl", &stbl)?);
-        let mut mdia = full_box(b"mdhd", 0, 0, &mdhd)?;
-        mdia.extend_from_slice(&full_box(b"hdlr", 0, 0, &hdlr)?);
-        mdia.extend_from_slice(&mp4_box(b"minf", &minf)?);
-        let mut trak = full_box(b"tkhd", 0, 3, &tkhd)?;
-        trak.extend_from_slice(&mp4_box(b"mdia", &mdia)?);
-        let mut moov = full_box(b"mvhd", 0, 0, &mvhd)?;
-        moov.extend_from_slice(&mp4_box(b"trak", &trak)?);
-        mp4_box(b"moov", &moov)
+        let av1c = Av1Config::parse(&config).map_err(media_err)?;
+        self.inner.set_sample_entry(self.track, av1_sample_entry(av1c, self.width, self.height)).map_err(media_err)?;
+        self.inner.finish().map_err(media_err)
     }
 }
 
 // ---------------------------------------------------------------- WebM
 
-/// An EBML element id with its length marker, as written (e.g. `0x1A45DFA3`).
-fn ebml_id(id: u32) -> Vec<u8> {
-    let b = id.to_be_bytes();
-    let skip = b.iter().take_while(|x| **x == 0).count().min(3);
-    b[skip..].to_vec()
+enum WebmState<W: Write + Seek> {
+    Pending { w: W, config: Option<Vec<u8>> },
+    Active(Box<MkvWriter<W>>),
 }
-
-/// An EBML size, in the fewest bytes (all-ones values are reserved for "unknown").
-fn ebml_size(n: u64) -> Vec<u8> {
-    for len in 1..=8u32 {
-        if n < (1u64 << (7 * len)) - 1 {
-            let mut v = Vec::with_capacity(len as usize);
-            let marked = n | (1u64 << (7 * len));
-            let bytes = marked.to_be_bytes();
-            v.extend_from_slice(&bytes[(8 - len as usize)..]);
-            return v;
-        }
-    }
-    vec![0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe]
-}
-
-/// An 8-byte EBML size (patchable in place).
-fn ebml_size8(n: u64) -> [u8; 8] {
-    let mut b = (n & 0x00ff_ffff_ffff_ffff).to_be_bytes();
-    b[0] = 0x01;
-    b
-}
-
-fn el(id: u32, body: &[u8]) -> Vec<u8> {
-    let mut v = ebml_id(id);
-    v.extend_from_slice(&ebml_size(body.len() as u64));
-    v.extend_from_slice(body);
-    v
-}
-
-fn el_uint(id: u32, n: u64) -> Vec<u8> {
-    let b = n.to_be_bytes();
-    let skip = b.iter().take_while(|x| **x == 0).count().min(7);
-    el(id, &b[skip..])
-}
-
-fn el_float(id: u32, f: f64) -> Vec<u8> {
-    el(id, &f.to_be_bytes())
-}
-
-const EBML: u32 = 0x1A45_DFA3;
-const SEGMENT: u32 = 0x1853_8067;
-const SEEK_HEAD: u32 = 0x114D_9B74;
-const SEEK: u32 = 0x4DBB;
-const SEEK_ID: u32 = 0x53AB;
-const SEEK_POSITION: u32 = 0x53AC;
-const VOID: u32 = 0xEC;
-const INFO: u32 = 0x1549_A966;
-const TIMESTAMP_SCALE: u32 = 0x2A_D7B1;
-const DURATION: u32 = 0x4489;
-const TRACKS: u32 = 0x1654_AE6B;
-const TRACK_ENTRY: u32 = 0xAE;
-const CLUSTER: u32 = 0x1F43_B675;
-const TIMESTAMP: u32 = 0xE7;
-const SIMPLE_BLOCK: u32 = 0xA3;
-const BLOCK_GROUP: u32 = 0xA0;
-const BLOCK: u32 = 0xA1;
-const BLOCK_DURATION: u32 = 0x9B;
-const REFERENCE_BLOCK: u32 = 0xFB;
-const CUES: u32 = 0x1C53_BB6B;
-
-/// Room kept after the Segment header for the SeekHead written at the end.
-const SEEK_ROOM: usize = 96;
 
 /// A WebM writer (see the module docs). Timestamps are in milliseconds.
 pub struct WebmWriter<W: Write + Seek> {
-    w: W,
+    state: Option<WebmState<W>>,
     width: u32,
     height: u32,
     fps: u32,
-    segment_size_at: u64,
-    segment_start: u64,
-    duration_at: u64,
-    info_at: u64,
-    tracks_at: Option<u64>,
-    config: Option<Vec<u8>>,
     /// Frame periods before the pending sample.
     periods: u64,
     /// The sample not written yet (the last one becomes a BlockGroup with its duration).
     pending: Option<(Sample, u64)>,
-    cluster: Vec<u8>,
-    cluster_ts: u64,
-    last_block_ts: u64,
-    cues: Vec<(u64, u64)>,
 }
 
 impl<W: Write + Seek> WebmWriter<W> {
-    pub fn new(mut w: W, width: u32, height: u32, fps: u32) -> Result<Self> {
+    pub fn new(w: W, width: u32, height: u32, fps: u32) -> Result<Self> {
         if width == 0 || height == 0 || width > 65_535 || height > 65_535 || !(1..=240).contains(&fps) {
             return Err(bad("bad size or frame rate"));
         }
-        let mut header = Vec::new();
-        header.extend_from_slice(&el_uint(0x4286, 1)); // EBMLVersion
-        header.extend_from_slice(&el_uint(0x42F7, 1)); // EBMLReadVersion
-        header.extend_from_slice(&el_uint(0x42F2, 4)); // EBMLMaxIDLength
-        header.extend_from_slice(&el_uint(0x42F3, 8)); // EBMLMaxSizeLength
-        header.extend_from_slice(&el(0x4282, b"webm")); // DocType
-        header.extend_from_slice(&el_uint(0x4287, 4)); // DocTypeVersion
-        header.extend_from_slice(&el_uint(0x4285, 2)); // DocTypeReadVersion
-        w.write_all(&el(EBML, &header)).map_err(io)?;
-        w.write_all(&ebml_id(SEGMENT)).map_err(io)?;
-        let segment_size_at = w.stream_position().map_err(io)?;
-        w.write_all(&ebml_size8(0)).map_err(io)?;
-        let segment_start = w.stream_position().map_err(io)?;
-        // a Void the SeekHead replaces at the end
-        w.write_all(&el(VOID, &[0; SEEK_ROOM - 2])).map_err(io)?;
-        let info_at = w.stream_position().map_err(io)? - segment_start;
-        let mut info = el_uint(TIMESTAMP_SCALE, 1_000_000);
-        let duration_offset = info.len() + 3; // after Duration's id (2 bytes) and size (1 byte)
-        info.extend_from_slice(&el_float(DURATION, 0.0));
-        info.extend_from_slice(&el(0x4D80, b"LightCraft")); // MuxingApp
-        info.extend_from_slice(&el(0x5741, b"LightCraft")); // WritingApp
-        let info_el = el(INFO, &info);
-        let duration_at = segment_start + info_at + (info_el.len() - info.len()) as u64 + duration_offset as u64;
-        w.write_all(&info_el).map_err(io)?;
-        Ok(WebmWriter {
-            w,
-            width,
-            height,
-            fps,
-            segment_size_at,
-            segment_start,
-            duration_at,
-            info_at,
-            tracks_at: None,
-            config: None,
-            periods: 0,
-            pending: None,
-            cluster: Vec::new(),
-            cluster_ts: 0,
-            last_block_ts: 0,
-            cues: Vec::new(),
-        })
+        Ok(WebmWriter { state: Some(WebmState::Pending { w, config: None }), width, height, fps, periods: 0, pending: None })
     }
 
     /// The `CodecPrivate` (the `av1C` record, [`av1_config`]); needed before the first sample.
     pub fn set_config(&mut self, config: Vec<u8>) {
-        self.config = Some(config);
+        if let Some(WebmState::Pending { config: slot, .. }) = &mut self.state {
+            *slot = Some(config);
+        }
     }
 
     fn ms(&self, periods: u64) -> u64 {
         periods.saturating_mul(1000) / u64::from(self.fps)
     }
 
-    fn write_tracks(&mut self) -> Result<()> {
-        let config = self.config.clone().ok_or_else(|| bad("no AV1 configuration"))?;
-        let mut video = el_uint(0xB0, u64::from(self.width)); // PixelWidth
-        video.extend_from_slice(&el_uint(0xBA, u64::from(self.height))); // PixelHeight
-        let mut entry = el_uint(0xD7, 1); // TrackNumber
-        entry.extend_from_slice(&el_uint(0x73C5, 1)); // TrackUID
-        entry.extend_from_slice(&el_uint(0x83, 1)); // TrackType video
-        entry.extend_from_slice(&el_uint(0x9C, 0)); // FlagLacing
-        entry.extend_from_slice(&el(0x86, b"V_AV1")); // CodecID
-        entry.extend_from_slice(&el(0x63A2, &config)); // CodecPrivate
-        entry.extend_from_slice(&el_uint(0x23E383, 1_000_000_000 / u64::from(self.fps))); // DefaultDuration (ns)
-        entry.extend_from_slice(&el(0xE0, &video));
-        let at = self.w.stream_position().map_err(io)? - self.segment_start;
-        self.w.write_all(&el(TRACKS, &el(TRACK_ENTRY, &entry))).map_err(io)?;
-        self.tracks_at = Some(at);
-        Ok(())
-    }
-
-    fn flush_cluster(&mut self) -> Result<()> {
-        if self.cluster.is_empty() {
-            return Ok(());
+    fn ensure_active(&mut self, first_key: bool) -> Result<&mut MkvWriter<W>> {
+        if matches!(self.state, Some(WebmState::Pending { .. })) {
+            if !first_key {
+                return Err(bad("the first sample must be a key frame"));
+            }
+            if matches!(self.state, Some(WebmState::Pending { config: None, .. })) {
+                return Err(bad("no AV1 configuration"));
+            }
+            let Some(WebmState::Pending { w, config: Some(config) }) = self.state.take() else {
+                return Err(bad("writer already finished"));
+            };
+            let mut spec = TrackSpec::new(TrackKind::Video, "V_AV1");
+            spec.codec_private = config;
+            spec.default_duration_ns = Some(1_000_000_000 / u64::from(self.fps));
+            spec.video_size = Some((self.width, self.height));
+            let opts = MuxOptions { doc_type: "webm".into(), cluster_duration_ns: 0, writing_app: "LightCraft".into(), ..Default::default() };
+            let mkv = MkvWriter::new(w, vec![spec], opts).map_err(media_err)?;
+            self.state = Some(WebmState::Active(Box::new(mkv)));
         }
-        let mut body = el_uint(TIMESTAMP, self.cluster_ts);
-        body.extend_from_slice(&self.cluster);
-        let at = self.w.stream_position().map_err(io)? - self.segment_start;
-        self.w.write_all(&el(CLUSTER, &body)).map_err(io)?;
-        self.cues.push((self.cluster_ts, at));
-        self.cluster.clear();
-        Ok(())
-    }
-
-    /// The block header: track 1, timestamp relative to the cluster, flags.
-    fn block(&self, data: &[u8], ts: u64, flags: u8) -> Result<Vec<u8>> {
-        let rel = i16::try_from(ts.saturating_sub(self.cluster_ts)).map_err(|_| bad("block timestamp out of range"))?;
-        let mut b = Vec::with_capacity(data.len() + 4);
-        b.push(0x81);
-        b.extend_from_slice(&rel.to_be_bytes());
-        b.push(flags);
-        b.extend_from_slice(data);
-        Ok(b)
-    }
-
-    /// Start a new cluster at a key frame or before the relative timestamp could overflow.
-    fn place(&mut self, key: bool, ts: u64) -> Result<()> {
-        if !self.cluster.is_empty() && (key || ts.saturating_sub(self.cluster_ts) > 30_000) {
-            self.flush_cluster()?;
+        match self.state.as_mut() {
+            Some(WebmState::Active(mkv)) => Ok(mkv),
+            _ => Err(bad("writer already finished")),
         }
-        if self.cluster.is_empty() {
-            self.cluster_ts = ts;
-        }
-        Ok(())
-    }
-
-    fn write_simple(&mut self, s: &Sample, ts: u64) -> Result<()> {
-        self.place(s.key, ts)?;
-        let b = self.block(&s.data, ts, if s.key { 0x80 } else { 0 })?;
-        self.cluster.extend_from_slice(&el(SIMPLE_BLOCK, &b));
-        self.last_block_ts = ts;
-        Ok(())
     }
 
     pub fn add(&mut self, s: &Sample) -> Result<()> {
         if s.duration == 0 {
             return Err(bad("a sample lasts at least one frame"));
         }
-        if self.tracks_at.is_none() {
-            if !s.key {
-                return Err(bad("the first sample must be a key frame"));
-            }
-            self.write_tracks()?;
-        }
+        self.ensure_active(s.key)?;
         if let Some((p, start)) = self.pending.take() {
-            let ts = self.ms(start);
-            self.write_simple(&p, ts)?;
+            let pts_ns = i64::try_from(self.ms(start).saturating_mul(1_000_000)).map_err(|_| bad("timestamp overflow"))?;
+            let Some(WebmState::Active(mkv)) = self.state.as_mut() else {
+                return Err(bad("writer already finished"));
+            };
+            mkv.write_frame(0, pts_ns, p.key, &p.data, None).map_err(media_err)?;
         }
         let start = self.periods;
         self.periods = self.periods.saturating_add(s.duration);
@@ -655,61 +320,16 @@ impl<W: Write + Seek> WebmWriter<W> {
 
     pub fn finish(mut self) -> Result<W> {
         let (last, start) = self.pending.take().ok_or_else(|| bad("no frames"))?;
-        let ts = self.ms(start);
-        self.place(last.key, ts)?;
-        let mut group = el(BLOCK, &self.block(&last.data, ts, 0)?);
-        group.extend_from_slice(&el_uint(BLOCK_DURATION, self.ms(self.periods).saturating_sub(ts).max(1)));
-        if !last.key {
-            // the previous block, as a (negative) offset from this one
-            let back = i64::try_from(ts.saturating_sub(self.last_block_ts)).unwrap_or(i64::MAX).max(1);
-            el_int_into(&mut group, REFERENCE_BLOCK, -back);
-        }
-        self.cluster.extend_from_slice(&el(BLOCK_GROUP, &group));
-        self.flush_cluster()?;
-        // cues: one per cluster (each starts with a key frame or carries on from one)
-        let cues_at = self.w.stream_position().map_err(io)? - self.segment_start;
-        let mut cues = Vec::new();
-        for (t, pos) in &self.cues {
-            let mut positions = el_uint(0xF7, 1); // CueTrack
-            positions.extend_from_slice(&el_uint(0xF1, *pos)); // CueClusterPosition
-            let mut point = el_uint(0xB3, *t); // CueTime
-            point.extend_from_slice(&el(0xB7, &positions)); // CueTrackPositions
-            cues.extend_from_slice(&el(0xBB, &point)); // CuePoint
-        }
-        self.w.write_all(&el(CUES, &cues)).map_err(io)?;
-        let end = self.w.stream_position().map_err(io)?;
-        // SeekHead in the room kept for it, the rest stays a Void
-        let tracks_at = self.tracks_at.ok_or_else(|| bad("no tracks"))?;
-        let mut seeks = Vec::new();
-        for (id, at) in [(INFO, self.info_at), (TRACKS, tracks_at), (CUES, cues_at)] {
-            let mut seek = el(SEEK_ID, &ebml_id(id));
-            seek.extend_from_slice(&el(SEEK_POSITION, &at.to_be_bytes()));
-            seeks.extend_from_slice(&el(SEEK, &seek));
-        }
-        let head = el(SEEK_HEAD, &seeks);
-        let rest = SEEK_ROOM.checked_sub(head.len()).filter(|r| *r >= 2).ok_or_else(|| bad("seek head too large"))?;
-        let mut room = head;
-        room.extend_from_slice(&el(VOID, &vec![0; rest - 2]));
-        self.w.seek(SeekFrom::Start(self.segment_start)).map_err(io)?;
-        self.w.write_all(&room).map_err(io)?;
-        self.w.seek(SeekFrom::Start(self.duration_at)).map_err(io)?;
-        self.w.write_all(&(self.ms(self.periods) as f64).to_be_bytes()).map_err(io)?;
-        self.w.seek(SeekFrom::Start(self.segment_size_at)).map_err(io)?;
-        self.w.write_all(&ebml_size8(end - self.segment_start)).map_err(io)?;
-        self.w.seek(SeekFrom::Start(end)).map_err(io)?;
-        self.w.flush().map_err(io)?;
-        Ok(self.w)
+        let pts_ms = self.ms(start);
+        let pts_ns = i64::try_from(pts_ms.saturating_mul(1_000_000)).map_err(|_| bad("timestamp overflow"))?;
+        let dur_ms = self.ms(self.periods).saturating_sub(pts_ms).max(1);
+        let dur_ns = dur_ms.saturating_mul(1_000_000);
+        let Some(WebmState::Active(mut mkv)) = self.state.take() else {
+            return Err(bad("no tracks"));
+        };
+        mkv.write_frame(0, pts_ns, last.key, &last.data, Some(dur_ns)).map_err(media_err)?;
+        mkv.finish().map_err(media_err)
     }
-}
-
-fn el_int_into(out: &mut Vec<u8>, id: u32, v: i64) {
-    let b = v.to_be_bytes();
-    // the fewest bytes that keep the sign
-    let mut skip = 0;
-    while skip < 7 && ((b[skip] == 0 && b[skip + 1] & 0x80 == 0) || (b[skip] == 0xff && b[skip + 1] & 0x80 != 0)) {
-        skip += 1;
-    }
-    out.extend_from_slice(&el(id, &b[skip..]));
 }
 
 // ---------------------------------------------------------------- either container
@@ -831,13 +451,15 @@ pub fn quantizer(quality: u8) -> usize {
 /// the samples as they come out (in order: no frame reordering).
 pub struct Av1Encoder {
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
-    ctx: rav1e::Context<u8>,
-    /// Each frame sent so far: its duration (by input frame number).
-    #[cfg_attr(not(all(feature = "avif", not(target_arch = "wasm32"))), allow(dead_code))]
+    enc: craft_video::av1::LargeEncoder,
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
     durations: Vec<u64>,
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    returned: usize,
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    failed: bool,
     width: usize,
     height: usize,
-    seq_header: Option<Vec<u8>>,
 }
 
 impl Av1Encoder {
@@ -848,30 +470,12 @@ impl Av1Encoder {
         }
         #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
         {
-            use rav1e::prelude::*;
-            let mut ec = EncoderConfig::with_speed_preset(c.speed.clamp(1, 10));
-            ec.width = w;
-            ec.height = h;
-            ec.time_base = Rational::new(1, u64::from(c.fps));
-            ec.bit_depth = 8;
-            ec.chroma_sampling = ChromaSampling::Cs420;
-            ec.pixel_range = PixelRange::Limited;
-            ec.color_description = Some(ColorDescription {
-                color_primaries: ColorPrimaries::BT709,
-                transfer_characteristics: TransferCharacteristics::BT709,
-                matrix_coefficients: MatrixCoefficients::BT709,
-            });
-            // in order, one shown frame per packet: samples map 1:1 to the frames sent
-            ec.low_latency = true;
-            let q = quantizer(c.quality);
-            ec.quantizer = q;
-            ec.min_quantizer = q.min(255) as u8;
-            ec.min_key_frame_interval = 1;
-            ec.max_key_frame_interval = 120;
-            // tiles are what rav1e encodes in parallel (16 measured best for 1080p on 32 threads)
-            ec.tiles = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(2, 16);
-            let ctx: Context<u8> = Config::new().with_encoder_config(ec).new_context().map_err(|e| bad(format!("AV1: {e}")))?;
-            Ok(Av1Encoder { ctx, durations: Vec::new(), width: w, height: h, seq_header: None })
+            use craft_video::av1::{EncoderConfig, RateControl};
+            let mut ec = EncoderConfig::new(w as u32, h as u32, c.fps, 1);
+            ec.rate = RateControl::ConstantQ(quantizer(c.quality) as u8);
+            ec.keyint = 120;
+            let enc = craft_video::av1::LargeEncoder::with_exact_quantizer(&ec, c.speed).map_err(|e| bad(format!("AV1: {e}")))?;
+            Ok(Av1Encoder { enc, durations: Vec::new(), returned: 0, failed: false, width: w, height: h })
         }
         #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
         {
@@ -885,10 +489,16 @@ impl Av1Encoder {
         (self.width, self.height)
     }
 
-    /// The configuration record for the container ([`av1_config`]), once the first sample (with
-    /// the sequence header) has come out.
+    /// The configuration record for the container (`av1C`), once the first sample has come out.
     pub fn config_record(&self) -> Option<Vec<u8>> {
-        self.seq_header.as_ref().map(|s| av1_config(s))
+        #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+        {
+            self.enc.av1c()
+        }
+        #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
+        {
+            None
+        }
     }
 
     /// Encode `rgba` (`width × height` of [`Self::size`]) shown for `periods` frame periods;
@@ -898,17 +508,19 @@ impl Av1Encoder {
         let (y, u, v) = yuv420(rgba, self.width, self.height)?;
         #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
         {
-            let mut frame = self.ctx.new_frame();
-            for (plane, (data, w)) in frame.planes.iter_mut().zip([(&y, self.width), (&u, self.width / 2), (&v, self.width / 2)]) {
-                plane.copy_from_raw_u8(data, w, 1);
+            if self.failed {
+                return Err(bad("AV1 encoder failed earlier"));
             }
-            let params = rav1e::prelude::FrameParameters {
-                frame_type_override: if key { rav1e::prelude::FrameTypeOverride::Key } else { rav1e::prelude::FrameTypeOverride::No },
-                ..Default::default()
-            };
-            self.ctx.send_frame((frame, params)).map_err(|e| bad(format!("AV1: {e}")))?;
+            let y16: Vec<u16> = y.into_iter().map(u16::from).collect();
+            let u16_: Vec<u16> = u.into_iter().map(u16::from).collect();
+            let v16: Vec<u16> = v.into_iter().map(u16::from).collect();
+            let frame = craft_video::av1::Frame { y: &y16, u: &u16_, v: &v16, y_stride: self.width, uv_stride: self.width / 2 };
             self.durations.push(periods.max(1));
-            self.drain()
+            let packets = self.enc.push(&frame, key).map_err(|e| {
+                self.failed = true;
+                bad(format!("AV1: {e}"))
+            })?;
+            self.samples(packets)
         }
         #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
         {
@@ -921,33 +533,38 @@ impl Av1Encoder {
     pub fn finish(&mut self) -> Result<Vec<Sample>> {
         #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
         {
-            self.ctx.flush();
-            self.drain()
+            if self.failed {
+                return Err(bad("AV1 encoder failed earlier"));
+            }
+            let packets = self.enc.finish().map_err(|e| {
+                self.failed = true;
+                bad(format!("AV1: {e}"))
+            })?;
+            let samples = self.samples(packets)?;
+            if self.returned != self.durations.len() {
+                self.failed = true;
+                return Err(bad("AV1 encoder did not return every input frame"));
+            }
+            Ok(samples)
         }
         #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
         Err(bad("AV1 video encoding is not available in this build"))
     }
 
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
-    fn drain(&mut self) -> Result<Vec<Sample>> {
-        use rav1e::prelude::*;
-        let mut out = Vec::new();
-        loop {
-            match self.ctx.receive_packet() {
-                Ok(p) => {
-                    let (data, seq) = to_sample_data(&p.data)?;
-                    if self.seq_header.is_none() {
-                        self.seq_header = seq;
-                    }
-                    let duration = usize::try_from(p.input_frameno).ok().and_then(|i| self.durations.get(i)).copied().unwrap_or(1);
-                    out.push(Sample { data, key: p.frame_type == FrameType::KEY, duration });
-                }
-                Err(EncoderStatus::Encoded) => {}
-                Err(EncoderStatus::NeedMoreData | EncoderStatus::LimitReached) => break,
-                Err(e) => return Err(bad(format!("AV1: {e}"))),
-            }
+    fn samples(&mut self, packets: Vec<craft_video::av1::BufferedPacket>) -> Result<Vec<Sample>> {
+        let mut samples = Vec::with_capacity(packets.len());
+        for packet in packets {
+            let index = usize::try_from(packet.input_frame_number).ok();
+            let duration = index.filter(|&i| i == self.returned).and_then(|i| self.durations.get(i)).copied();
+            let Some(duration) = duration else {
+                self.failed = true;
+                return Err(bad("AV1 encoder returned an unknown or out-of-order frame"));
+            };
+            self.returned += 1;
+            samples.push(Sample { data: packet.packet.data, key: packet.packet.keyframe, duration });
         }
-        Ok(out)
+        Ok(samples)
     }
 }
 
@@ -1019,8 +636,11 @@ mod tests {
         m.set_config(av1_config(&[0x0a, 1, 0]));
         let d = m.finish().unwrap().into_inner();
         let top = boxes(&d, 0..d.len());
-        assert_eq!(top.iter().map(|(k, _)| *k).collect::<Vec<_>>(), vec![*b"ftyp", *b"mdat", *b"moov"]);
-        assert_eq!(&d[top[1].1.clone()], &[0x32, 2, 1, 1, 0x32, 2, 2, 2, 0x32, 2, 3, 3, 0x32, 2, 4, 4]);
+        assert_eq!(top.iter().map(|(k, _)| *k).collect::<Vec<_>>(), vec![*b"ftyp", *b"free", *b"mdat", *b"moov"]);
+        let (ftyp_brands, ftyp_rest) = d[top[0].1.start + 8..top[0].1.end].as_chunks::<4>();
+        assert!(ftyp_rest.is_empty());
+        assert!(ftyp_brands.contains(b"av01"), "ftyp missing av01 compatible brand: {ftyp_brands:?}");
+        assert_eq!(&d[top[2].1.clone()], &[0x32, 2, 1, 1, 0x32, 2, 2, 2, 0x32, 2, 3, 3, 0x32, 2, 4, 4]);
         let stbl = find(&d, 0..d.len(), &[b"moov", b"trak", b"mdia", b"minf", b"stbl"]);
         let kinds: Vec<_> = boxes(&d, stbl.clone()).into_iter().map(|(k, _)| k).collect();
         assert_eq!(kinds, vec![*b"stsd", *b"stts", *b"stss", *b"stsc", *b"stsz", *b"stco"]);
@@ -1034,7 +654,7 @@ mod tests {
         let stss = find(&d, stbl.clone(), &[b"stss"]);
         assert_eq!((be(stss.start + 4), be(stss.start + 8), be(stss.start + 12)), (2, 1, 4));
         let stco = find(&d, stbl.clone(), &[b"stco"]);
-        assert_eq!(be(stco.start + 8) as usize, top[1].1.start, "chunk offset = mdat data");
+        assert_eq!(be(stco.start + 8) as usize, top[2].1.start, "chunk offset = mdat data");
         let stsd = find(&d, stbl, &[b"stsd"]);
         let av01 = boxes(&d, stsd.start + 8..stsd.end);
         assert_eq!(av01[0].0, *b"av01");
@@ -1075,6 +695,9 @@ mod tests {
 
     #[test]
     fn webm_element_tree_blocks_and_duration() {
+        use craft_media::matroska::element_ids::{
+            BLOCK, BLOCK_DURATION, CLUSTER, CUES, DURATION, EBML, INFO, SEEK_HEAD, SEGMENT, SIMPLE_BLOCK, TIMESTAMP, TRACKS, VOID,
+        };
         let mut m = WebmWriter::new(Cursor::new(Vec::new()), 64, 36, 30).unwrap();
         assert!(m.add(&Sample { data: vec![0x32, 0], key: true, duration: 1 }).is_err(), "configuration first");
         let mut m = WebmWriter::new(Cursor::new(Vec::new()), 64, 36, 30).unwrap();
@@ -1108,11 +731,24 @@ mod tests {
             let id = d[e[0].1.clone()].iter().fold(0u32, |a, b| (a << 8) | u32::from(*b));
             assert!(seg.iter().any(|(i, r)| *i == id && r.start > seg_start + pos), "{id:x}");
         }
-        let mut neg = Vec::new();
-        el_int_into(&mut neg, REFERENCE_BLOCK, -33);
-        assert_eq!(neg, vec![0xfb, 0x81, 0xdf]);
-        assert_eq!(ebml_size(126), vec![0xfe]);
-        assert_eq!(ebml_size(127), vec![0x40, 0x7f]);
+    }
+
+    #[test]
+    fn webm_final_dependent_frame_writes_actual_reference_block_delta() {
+        use craft_media::matroska::element_ids::{BLOCK, BLOCK_DURATION, CLUSTER, REFERENCE_BLOCK, SEGMENT};
+        let mut m = WebmWriter::new(Cursor::new(Vec::new()), 64, 36, 30).unwrap();
+        m.set_config(av1_config(&[0x0a, 1, 0]));
+        m.add(&Sample { data: vec![0x32, 1], key: true, duration: 1 }).unwrap();
+        m.add(&Sample { data: vec![0x32, 2], key: true, duration: 1 }).unwrap();
+        m.add(&Sample { data: vec![0x32, 3], key: false, duration: 2 }).unwrap();
+        let d = m.finish().unwrap().into_inner();
+        let top = elements(&d, 0..d.len());
+        let seg = elements(&d, top.iter().find(|(i, _)| *i == SEGMENT).unwrap().1.clone());
+        let cluster = elements(&d, seg.iter().rfind(|(i, _)| *i == CLUSTER).unwrap().1.clone());
+        let group = elements(&d, cluster.last().unwrap().1.clone());
+        assert_eq!(group.iter().map(|(i, _)| *i).collect::<Vec<_>>(), vec![BLOCK, BLOCK_DURATION, REFERENCE_BLOCK]);
+        let ref_body = &d[group[2].1.clone()];
+        assert_eq!(ref_body, &[(-33i8) as u8], "expected -33ms delta to preceding 33ms frame");
     }
 
     #[test]
@@ -1141,7 +777,8 @@ mod tests {
         out.extend(e.finish().unwrap());
         assert_eq!(out.len(), 4, "one sample per frame sent");
         assert!(out[0].key);
-        assert_eq!(out.iter().map(|s| s.duration).sum::<u64>(), 56);
+        assert!(out[3].key, "requested key frame");
+        assert_eq!(out.iter().map(|s| s.duration).collect::<Vec<_>>(), [24, 1, 1, 30]);
         for s in &out {
             assert!(obus(&s.data).unwrap().iter().all(|(k, _)| *k != OBU_TEMPORAL_DELIMITER));
         }
@@ -1153,6 +790,116 @@ mod tests {
             m.add(s).unwrap();
         }
         let d = m.finish().unwrap().into_inner();
-        assert_eq!(boxes(&d, 0..d.len()).len(), 3);
+        assert_eq!(boxes(&d, 0..d.len()).iter().map(|(k, _)| *k).collect::<Vec<_>>(), vec![*b"ftyp", *b"free", *b"mdat", *b"moov"]);
+    }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn av1_buffers_a_large_frame_and_preserves_its_duration() {
+        let c = VideoConfig { width: 4112, height: 16, fps: 30, quality: 60, speed: 10 };
+        let mut encoder = Av1Encoder::new(&c).unwrap();
+        let mut samples = encoder.push(&vec![[80, 120, 180, 255]; 4112 * 16], 7, true).unwrap();
+        samples.extend(encoder.finish().unwrap());
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].duration, 7);
+        assert!(samples[0].key);
+        assert!(encoder.config_record().is_some());
+    }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn av1_preserves_frame_sizes_above_the_old_area_limit() {
+        for (width, height) in [(5120, 2160), (4096, 4096)] {
+            let cfg = VideoConfig { width, height, fps: 30, quality: 60, speed: 10 };
+            let mut encoder = Av1Encoder::new(&cfg).unwrap();
+            let mut samples = encoder.push(&vec![[80, 120, 180, 255]; width as usize * height as usize], 7, true).unwrap();
+            samples.extend(encoder.finish().unwrap());
+            assert_eq!(samples.len(), 1, "{width}x{height}");
+            assert!(!samples[0].data.is_empty());
+            assert_eq!(samples[0].duration, 7);
+            assert!(samples[0].key);
+            assert!(encoder.config_record().is_some());
+        }
+    }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn av1_quality_100_preserves_the_exact_zero_quantizer() {
+        assert_eq!(quantizer(100), 0);
+        let image: Vec<[u8; 4]> = (0..64 * 48).map(|i| [(i * 13) as u8, (i * 41) as u8, (i * 73) as u8, 255]).collect();
+        let cfg = VideoConfig { width: 64, height: 48, fps: 24, quality: 100, speed: 10 };
+        let mut actual = Av1Encoder::new(&cfg).unwrap();
+        let mut samples = actual.push(&image, 7, true).unwrap();
+        samples.extend(actual.finish().unwrap());
+
+        let (y, u, v) = yuv420(&image, 64, 48).unwrap();
+        let y: Vec<u16> = y.into_iter().map(u16::from).collect();
+        let u: Vec<u16> = u.into_iter().map(u16::from).collect();
+        let v: Vec<u16> = v.into_iter().map(u16::from).collect();
+        let frame = craft_video::av1::Frame { y: &y, u: &u, v: &v, y_stride: 64, uv_stride: 32 };
+        let mut ec = craft_video::av1::EncoderConfig::new(64, 48, 24, 1);
+        ec.rate = craft_video::av1::RateControl::ConstantQ(0);
+        ec.keyint = 120;
+        let mut exact = craft_video::av1::LargeEncoder::with_exact_quantizer(&ec, 10).unwrap();
+        let mut expected = exact.push(&frame, true).unwrap();
+        expected.extend(exact.finish().unwrap());
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].data, expected[0].packet.data);
+        assert_eq!(samples[0].duration, 7);
+        assert!(samples[0].key);
+    }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn av1_speed_affects_normal_sized_frames() {
+        let image: Vec<[u8; 4]> = (0..64 * 48).map(|i| [(i * 13) as u8, (i * 41) as u8, (i * 73) as u8, 255]).collect();
+        let encode = |speed| {
+            let c = VideoConfig { width: 64, height: 48, fps: 24, quality: 60, speed };
+            let mut encoder = Av1Encoder::new(&c).unwrap();
+            let mut samples = encoder.push(&image, 1, true).unwrap();
+            samples.extend(encoder.finish().unwrap());
+            samples.remove(0).data
+        };
+        assert_ne!(encode(1), encode(10), "AV1 speed must reach the shared encoder");
+    }
+
+    #[test]
+    fn mp4_and_webm_writer_error_and_limit_parity() {
+        let mut mp4_no_cfg = Mp4Writer::new(Cursor::new(Vec::new()), 64, 36, 30).unwrap();
+        mp4_no_cfg.add(&Sample { data: vec![0x32, 1], key: true, duration: 1 }).unwrap();
+        assert!(mp4_no_cfg.finish().unwrap_err().to_string().contains("no AV1 configuration"));
+
+        let mut mp4_bad_cfg = Mp4Writer::new(Cursor::new(Vec::new()), 64, 36, 30).unwrap();
+        mp4_bad_cfg.add(&Sample { data: vec![0x32, 1], key: true, duration: 1 }).unwrap();
+        mp4_bad_cfg.set_config(vec![0]);
+        assert!(mp4_bad_cfg.finish().is_err());
+
+        let mut mp4_too_long = Mp4Writer::new(Cursor::new(Vec::new()), 64, 36, 30).unwrap();
+        mp4_too_long.set_config(av1_config(&[0x0a, 1, 0]));
+        assert!(
+            mp4_too_long.add(&Sample { data: vec![0x32, 1], key: true, duration: MAX_PERIODS }).unwrap_err().to_string().contains("video too long")
+        );
+        let half = MAX_PERIODS / 2 + 1;
+        mp4_too_long.add(&Sample { data: vec![0x32, 1], key: true, duration: half }).unwrap();
+        mp4_too_long.add(&Sample { data: vec![0x32, 2], key: true, duration: half }).unwrap();
+        assert!(mp4_too_long.finish().unwrap_err().to_string().contains("video too long"));
+
+        assert!(WebmWriter::new(Cursor::new(Vec::new()), 64, 36, 30).unwrap().finish().unwrap_err().to_string().contains("no frames"));
+        let mut webm_too_long = WebmWriter::new(Cursor::new(Vec::new()), 64, 36, 30).unwrap();
+        webm_too_long.set_config(av1_config(&[0x0a, 1, 0]));
+        assert!(
+            webm_too_long
+                .add(&Sample { data: vec![0x32, 1], key: true, duration: MAX_PERIODS + 1 })
+                .unwrap_err()
+                .to_string()
+                .contains("video too long")
+        );
+
+        let mut vw = VideoWriter::new(Cursor::new(Vec::new()), Container::WebM, 64, 36, 30).unwrap();
+        vw.set_config(av1_config(&[0x0a, 1, 0]));
+        vw.add(&Sample { data: vec![0x32, 1], key: true, duration: 2 }).unwrap();
+        assert_eq!(vw.periods(), 2);
+        let bytes = vw.finish().unwrap().into_inner();
+        assert!(bytes.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]));
     }
 }

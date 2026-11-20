@@ -572,27 +572,11 @@ fn decode_record(payload: &[u8], ncols: usize, encoding: TextEncoding) -> Result
 }
 
 fn serial_value(payload: &[u8], body: &mut usize, serial: u64, encoding: TextEncoding) -> Result<(Value, usize), String> {
-    let (kind, len) = match serial {
-        0 => (0, 0),
-        1 => (1, 1),
-        2 => (2, 2),
-        3 => (3, 3),
-        4 => (4, 4),
-        5 => (5, 6),
-        6 => (6, 8),
-        7 => (7, 8),
-        8 => (8, 0),
-        9 => (9, 0),
-        10 | 11 => return Err("reserved SQLite serial type".into()),
-        n if n >= 12 => {
-            let len = usize_from_u64((n - if n % 2 == 0 { 12 } else { 13 }) / 2, "SQLite field length")?;
-            (if n % 2 == 0 { 12 } else { 13 }, len)
-        }
-        _ => return Err("invalid SQLite serial type".into()),
-    };
+    let len_u64 = craft_sqlite::serial_type_len(serial).map_err(|_| "reserved SQLite serial type")?;
+    let len = usize_from_u64(len_u64, "SQLite field length")?;
     let end = body.checked_add(len).ok_or("SQLite record body offset overflow")?;
     let bytes = payload.get(*body..end).ok_or("SQLite record body is truncated")?;
-    let value = match kind {
+    let value = match serial {
         0 => Value::Null,
         1 => Value::Integer(i64::from(i8::from_be_bytes([*bytes.first().ok_or("truncated integer")?]))),
         2 => Value::Integer(i64::from(i16::from_be_bytes(bytes.try_into().map_err(|_| "truncated integer")?))),
@@ -620,9 +604,9 @@ fn serial_value(payload: &[u8], body: &mut usize, serial: u64, encoding: TextEnc
         }
         8 => Value::Integer(0),
         9 => Value::Integer(1),
-        12 => Value::Blob(bytes.to_vec()),
-        13 => Value::Text(decode_text(bytes, encoding)?),
-        _ => return Err("invalid SQLite field type".into()),
+        10 | 11 => return Err("reserved SQLite serial type".into()),
+        n if n % 2 == 0 => Value::Blob(bytes.to_vec()),
+        _ => Value::Text(decode_text(bytes, encoding)?),
     };
     *body = end;
     Ok((value, len))
@@ -924,20 +908,10 @@ fn sqlite_page_size(value: u16) -> Result<usize, String> {
 }
 
 fn read_varint(bytes: &[u8], at: &mut usize) -> Result<u64, String> {
-    let mut value = 0u64;
-    for i in 0..9 {
-        let byte = *bytes.get(*at).ok_or("truncated SQLite varint")?;
-        *at = (*at).checked_add(1).ok_or("SQLite varint offset overflow")?;
-        if i == 8 {
-            value = (value << 8) | u64::from(byte);
-            return Ok(value);
-        }
-        value = (value << 7) | u64::from(byte & 0x7f);
-        if byte & 0x80 == 0 {
-            return Ok(value);
-        }
-    }
-    Err("invalid SQLite varint".into())
+    let rest = bytes.get(*at..).ok_or("truncated SQLite varint")?;
+    let (value, len) = craft_sqlite::read_varint(rest).map_err(|_| "truncated SQLite varint")?;
+    *at = (*at).checked_add(len).ok_or("SQLite varint offset overflow")?;
+    Ok(value)
 }
 
 fn usize_from_u64(value: u64, label: &str) -> Result<usize, String> {
