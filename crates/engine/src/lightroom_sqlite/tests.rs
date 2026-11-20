@@ -410,3 +410,132 @@ fn malformed_varint_and_wal_cycle_fail_cleanly() {
     };
     assert!(db.payload(&page, 0, 600).is_err());
 }
+
+#[test]
+fn record_values_decode_all_serial_types_and_reject_reserved() {
+    let mut header = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 16, 17];
+    let header_len = 1 + header.len();
+    let mut payload = varint(header_len as u64);
+    payload.append(&mut header);
+    payload.push((-5i8).to_be_bytes()[0]);
+    payload.extend((-300i16).to_be_bytes());
+    payload.extend([0xff, 0xff, 0xfe]); // 24-bit -2
+    payload.extend((-100_000i32).to_be_bytes());
+    payload.extend([0xff, 0xff, 0xff, 0xff, 0xff, 0xfe]); // 48-bit -2
+    payload.extend(i64::MIN.to_be_bytes());
+    payload.extend(3.5f64.to_be_bytes());
+    payload.extend([0xaa, 0xbb]);
+    payload.extend(b"hi");
+
+    let values = decode_record(&payload, 13, TextEncoding::Utf8).unwrap();
+    assert_eq!(
+        values,
+        vec![
+            Value::Null,
+            Value::Integer(-5),
+            Value::Integer(-300),
+            Value::Integer(-2),
+            Value::Integer(-100_000),
+            Value::Integer(-2),
+            Value::Integer(i64::MIN),
+            Value::Real(3.5),
+            Value::Integer(0),
+            Value::Integer(1),
+            Value::Blob(vec![0xaa, 0xbb]),
+            Value::Text("hi".into()),
+            Value::Null,
+        ]
+    );
+
+    assert_eq!(decode_record(&[2, 10], 1, TextEncoding::Utf8).unwrap_err(), "reserved SQLite serial type");
+    assert_eq!(decode_record(&[2, 11], 1, TextEncoding::Utf8).unwrap_err(), "reserved SQLite serial type");
+
+    let mut nan_payload = vec![2, 7];
+    nan_payload.extend(f64::NAN.to_be_bytes());
+    assert_eq!(decode_record(&nan_payload, 1, TextEncoding::Utf8).unwrap_err(), "non-finite SQLite real value");
+}
+
+#[test]
+fn committed_wal_overrides_page_one_schema_and_page_count() {
+    let make_page1 = |schema_format: u32, page_count: u32| {
+        let mut page = vec![0u8; 512];
+        page[..16].copy_from_slice(b"SQLite format 3\0");
+        page[16..18].copy_from_slice(&512u16.to_be_bytes());
+        page[18] = 2;
+        page[19] = 2;
+        page[21] = 64;
+        page[22] = 32;
+        page[23] = 32;
+        page[28..32].copy_from_slice(&page_count.to_be_bytes());
+        page[44..48].copy_from_slice(&schema_format.to_be_bytes());
+        page[56..60].copy_from_slice(&1u32.to_be_bytes());
+        page[100] = 0x0d;
+        page[105..107].copy_from_slice(&512u16.to_be_bytes());
+        page
+    };
+
+    let main = make_page1(0, 1);
+    let mut wal_page1 = make_page1(4, 2);
+    let schema = schema_record("t", 2, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)");
+    leaf(&mut wal_page1, 100, 1, &schema);
+
+    let mut wal_page2 = vec![0u8; 512];
+    leaf(&mut wal_page2, 0, 42, &[3, 0, 17, b'o', b'k']);
+
+    let mut wal = vec![0u8; 32 + 2 * (24 + 512)];
+    wal[..4].copy_from_slice(&0x377f0683u32.to_be_bytes());
+    wal[4..8].copy_from_slice(&3_007_000u32.to_be_bytes());
+    wal[8..12].copy_from_slice(&512u32.to_be_bytes());
+    wal[16..20].copy_from_slice(&11u32.to_be_bytes());
+    wal[20..24].copy_from_slice(&22u32.to_be_bytes());
+
+    // Frame 1: page 2 (uncommitted)
+    let f1 = 32;
+    wal[f1..f1 + 4].copy_from_slice(&2u32.to_be_bytes());
+    wal[f1 + 8..f1 + 12].copy_from_slice(&11u32.to_be_bytes());
+    wal[f1 + 12..f1 + 16].copy_from_slice(&22u32.to_be_bytes());
+    wal[f1 + 24..f1 + 24 + 512].copy_from_slice(&wal_page2);
+
+    // Frame 2: page 1 (commit with page_count = 2)
+    let f2 = 32 + 24 + 512;
+    wal[f2..f2 + 4].copy_from_slice(&1u32.to_be_bytes());
+    wal[f2 + 4..f2 + 8].copy_from_slice(&2u32.to_be_bytes());
+    wal[f2 + 8..f2 + 12].copy_from_slice(&11u32.to_be_bytes());
+    wal[f2 + 12..f2 + 16].copy_from_slice(&22u32.to_be_bytes());
+    wal[f2 + 24..f2 + 24 + 512].copy_from_slice(&wal_page1);
+
+    let db = Database::open_with_wal(main.clone(), &wal).unwrap();
+    let tables = db.live_tables().unwrap();
+    assert_eq!(tables.len(), 1);
+    assert_eq!(tables[0].name, "t");
+    let rows = db.read_table(2, 2).unwrap();
+    assert_eq!(rows, vec![Record { values: vec![Value::Integer(42), Value::Text("ok".into())] }]);
+
+    // Salt mismatch in WAL frame is rejected.
+    wal[f1 + 8..f1 + 12].copy_from_slice(&99u32.to_be_bytes());
+    assert_eq!(Database::open_with_wal(main, &wal).err().as_deref(), Some("invalid WAL frame page or salt"));
+}
+
+#[test]
+fn reader_enforces_column_page_and_cycle_limits() {
+    let mut main = vec![0u8; 512];
+    main[100] = 0x05;
+    main[103..105].copy_from_slice(&0u16.to_be_bytes());
+    main[108..112].copy_from_slice(&1u32.to_be_bytes()); // self-cycle
+    let db = Database {
+        file: None,
+        main,
+        overlay: HashMap::new(),
+        page_size: 512,
+        reserved: 0,
+        encoding: TextEncoding::Utf8,
+        page_count: 1,
+        tables: Vec::new(),
+        rowid_aliases: HashMap::new(),
+    };
+    assert_eq!(db.read_table(0, 1).unwrap_err(), "table root page is outside database");
+    assert_eq!(db.read_table(2, 1).unwrap_err(), "table root page is outside database");
+    assert_eq!(db.read_table(1, MAX_COLUMNS + 1).unwrap_err(), "table has too many columns");
+    assert_eq!(db.read_table(1, 1).unwrap_err(), "SQLite B-tree contains a cycle or shared page");
+    assert_eq!(decode_record(&[3, 8, 9], 1, TextEncoding::Utf8).unwrap_err(), "SQLite record has more columns than table schema");
+}
