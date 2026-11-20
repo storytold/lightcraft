@@ -671,15 +671,36 @@ fn decode_baseline_matches_lockfile() {
     );
 }
 
+/// `lightcraft-raw`'s own git dependencies with the revision the workspace pins each at, as `(package, rev)`:
+/// what `decode_baseline_matches_lockfile` must at least gate on, read from the manifests rather than the lockfile.
+fn pinned_git_dependencies() -> Vec<(String, String)> {
+    let mut section = "";
+    let mut normal = BTreeSet::new();
+    for line in PACKAGE_MANIFEST.lines().map(str::trim) {
+        if line.starts_with('[') {
+            section = line;
+        } else if section == "[dependencies]" && !line.starts_with('#') {
+            normal.extend(line.split_once('=').map(|(key, _)| key.trim().split('.').next().unwrap_or_default().to_owned()));
+        }
+    }
+    let quoted = |line: &str, key: &str| line.split(&format!("{key} = \"")).nth(1).and_then(|rest| rest.split('"').next()).map(str::to_owned);
+    WORKSPACE_MANIFEST
+        .lines()
+        .filter_map(|line| {
+            let key = line.split_once(" = ")?.0.trim();
+            let rev = quoted(line, "rev").filter(|_| normal.contains(key) && line.contains("git = "))?;
+            Some((quoted(line, "package").unwrap_or_else(|| key.to_owned()), rev))
+        })
+        .collect()
+}
+
 #[test]
-fn lock_lines_include_the_pinned_craft_raw_and_its_tiff() {
-    let pin = |key: &str| -> String {
-        let line = WORKSPACE_MANIFEST.lines().find(|line| line.starts_with(&format!("{key} = "))).unwrap_or_else(|| panic!("no {key} in Cargo.toml"));
-        line.split("rev = \"").nth(1).and_then(|rest| rest.split('"').next()).unwrap_or_else(|| panic!("{key}: no rev")).to_owned()
-    };
+fn lock_lines_include_every_pinned_git_dependency() {
+    let pins = pinned_git_dependencies();
+    assert!(pins.iter().any(|(package, _)| package == "craft-raw"), "craft-raw not found among {pins:?}");
     let lines = current_lock_lines();
-    for (key, package) in [("craft-raw", "craft-raw"), ("craft-raw-tiff", "craft-tiff")] {
-        let expected = format!("# lock\t{package}\t{}", pin(key));
+    for (package, rev) in pins {
+        let expected = format!("# lock\t{package}\t{rev}");
         assert!(lines.contains(&expected), "{expected:?} missing from {lines:?}");
     }
 }
