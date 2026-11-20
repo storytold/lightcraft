@@ -53,8 +53,9 @@ fn draw_curve_histogram(p: &egui::Painter, r: Rect, h: &lightcraft_raster::Histo
     p.add(mesh);
 }
 
-/// Segments the graph's curve line is drawn with.
-pub(crate) const CURVE_SAMPLES: i32 = 96;
+/// Segments the graph's curve line is drawn with: a point curve can swing past its points and
+/// cross the graph in a few pixels, which fewer segments would draw as a coarse polygon.
+pub(crate) const CURVE_SAMPLES: i32 = 256;
 
 /// Close a graph drag's `develop` interaction, as one undo step.
 ///
@@ -268,14 +269,15 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
         if v.len() < 2 { vec![Point::new(0.0, 0.0), Point::new(1.0, 1.0)] } else { v }
     };
     let pts = pts_of(d);
-    let curve = lightcraft_color::spline::MonotoneCurve::new(&pts.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>());
+    let curve = lightcraft_color::spline::PointCurve::new(&pts.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>());
     let color = match ch.as_str() {
         "red" => hex("#dd3333"),
         "green" => hex("#33bb55"),
         "blue" => hex("#3377ee"),
         _ => Color32::from_gray(225),
     };
-    let line: Vec<Pos2> = (0..=96).map(|i| to_screen(i as f64 / 96.0, curve.eval(i as f64 / 96.0).clamp(0.0, 1.0))).collect();
+    let line: Vec<Pos2> =
+        (0..=CURVE_SAMPLES).map(|i| to_screen(i as f64 / CURVE_SAMPLES as f64, curve.eval(i as f64 / CURVE_SAMPLES as f64))).collect();
     p.add(egui::Shape::line(line, Stroke::new(2.0, color)));
     // interaction: drag a point (both axes, between its neighbours; ⌥ = fine), drag empty space to add and
     // drag a new point, click empty space to add, double-click a point to delete it

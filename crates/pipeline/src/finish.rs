@@ -1,7 +1,7 @@
 //! The per-pixel stage: everything after the spatial planes are ready, in one parallel pass.
 
 use lightcraft_color::luminance_2020;
-use lightcraft_color::spline::{Lut1, MonotoneCurve};
+use lightcraft_color::spline::{Lut1, PointCurve};
 use lightcraft_color::transfer::linear_to_srgb;
 use lightcraft_develop::{DevelopSettings, LocalAdjustments, Process, ToneCurve, VignetteStyle};
 use lightcraft_geom::Point;
@@ -66,13 +66,13 @@ fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     let mut base = crate::curve::ParametricCurve::new(c).to_lut();
     let to_pts = |p: &[Point]| p.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>();
     if master {
-        base = MonotoneCurve::new(&to_pts(&c.master)).to_lut(N).compose(&base);
+        base = PointCurve::new(&to_pts(&c.master)).to_lut(N).compose(&base);
     }
     let per = [&c.red, &c.green, &c.blue];
     Some(std::array::from_fn(|i| {
         if chans.get(i).copied().unwrap_or(false) {
             let pts = per.get(i).map(|&p| to_pts(p)).unwrap_or_default();
-            MonotoneCurve::new(&pts).to_lut(N).compose(&base)
+            PointCurve::new(&pts).to_lut(N).compose(&base)
         } else {
             base.clone()
         }
