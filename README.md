@@ -417,7 +417,7 @@ config tests everything. GitHub runs the full `cargo xtask ci` on every pull req
 (`.github/workflows/ci.yml`). Only one `ci` runs at a time per machine: a second one, from another
 worktree say, waits for the first and names it, since several at once take longer in total than in
 turn. `LIGHTCRAFT_CI_SLOTS=2` allows two; `LIGHTCRAFT_CI_LOCK=off` skips the lock. The wait
-gives up after `LIGHTCRAFT_CI_LOCK_WAIT` minutes (default 120; `0` waits as long as it takes) and
+gives up after `LIGHTCRAFT_CI_LOCK_WAIT` minutes (default 240; `0` waits as long as it takes) and
 names the run holding the slot. The build isn't timed (a first build can rightly take long), but the
 test binaries are: each may run for `LIGHTCRAFT_TEST_BINARY_TIMEOUT` minutes (default 30, timed from
 cargo's `Running` line for it; `0` for no limit). The GPU probe's test binaries get 5 minutes each, or

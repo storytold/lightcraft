@@ -65,7 +65,7 @@ commands:
                   break: clippy, the changed packages' tests, and heif / parity / wasm when they apply.
                   One ci runs at a time per machine; others wait (LIGHTCRAFT_CI_SLOTS=N for N at once,
                   LIGHTCRAFT_CI_LOCK=off to skip the lock) for up to LIGHTCRAFT_CI_LOCK_WAIT minutes
-                  (default 120; 0: no limit). Each test binary may run LIGHTCRAFT_TEST_BINARY_TIMEOUT
+                  (default 240; 0: no limit). Each test binary may run LIGHTCRAFT_TEST_BINARY_TIMEOUT
                   minutes (default 30; 0: no limit); one that runs longer is killed with the processes
                   it started and reported with the tests still running
   test [-p PKG]... [--keep-going] [--doc] [-- ARGS]

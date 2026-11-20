@@ -11,9 +11,12 @@
 //! - `LIGHTCRAFT_CI_LOCK=<dir>`: keep the lock files there instead.
 //! - `LIGHTCRAFT_CI_LOCK_WAIT=MIN`: give up after waiting MIN minutes for a slot (default
 //!   [`DEFAULT_WAIT_MIN`]; `0` or `off` waits as long as it takes), with an error naming the run
-//!   that holds it (#3060). A full `ci` takes about 15 minutes on a 16-core machine, and a hung test
-//!   binary can't hold a slot past its own limit any more ([`crate::deadline`]), so two hours is
-//!   several runs ahead in the queue; a wait longer than that means something is stuck.
+//!   that holds it (#3060). A full `ci` takes about 15 minutes on an idle 16-core machine, but far
+//!   longer on a shared, busy one: GitHub's gate allows a run 80 minutes before it stops it as hung
+//!   (#3794). Four hours is three such runs ahead in the queue, so two or three full runs queued on
+//!   a shared machine don't run the wait out with nothing wrong. A hung test binary can't hold a
+//!   slot past its own limit ([`crate::deadline`]), so a wait longer than that means something is
+//!   stuck.
 
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::Write;
@@ -25,7 +28,7 @@ const POLL: Duration = Duration::from_secs(2);
 /// How long to wait for a slot, in minutes.
 pub const WAIT_ENV: &str = "LIGHTCRAFT_CI_LOCK_WAIT";
 /// The default of [`WAIT_ENV`].
-pub const DEFAULT_WAIT_MIN: u64 = 120;
+pub const DEFAULT_WAIT_MIN: u64 = 240;
 
 /// A held CI slot; dropping it releases the slot.
 pub struct Held {
@@ -246,6 +249,14 @@ mod tests {
         assert!(
             gave_up(Duration::from_secs(7200), &[]).contains("gave up after waiting 120 min for a CI slot, held by: a run that didn't record itself")
         );
+    }
+
+    #[test]
+    fn the_default_wait_outlasts_three_full_runs_at_the_gates_limit() {
+        // GitHub's gate stops a hung full run at 80 minutes (#3794); three queued ahead must fit
+        let e = gave_up(Duration::from_secs(DEFAULT_WAIT_MIN * 60), &["pid 1 in /w: cargo xtask ci".to_owned()]);
+        assert!(e.contains("gave up after waiting 240 min"), "{e}");
+        assert!(e.contains("LIGHTCRAFT_CI_LOCK_WAIT=<minutes> waits longer (0 for as long as it takes)"), "says how to wait longer: {e}");
     }
 
     #[test]
