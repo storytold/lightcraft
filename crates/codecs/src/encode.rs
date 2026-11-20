@@ -381,4 +381,28 @@ mod hlg_tests {
         assert!(encode_avif_hdr(4, 4, &[0.5; 10], 80, 10, &m, HdrTransfer::Hlg).is_err());
         assert!(encode_avif_hdr(0, 4, &[], 80, 10, &m, HdrTransfer::Hlg).is_err());
     }
+
+    #[test]
+    fn jpeg_app_segments_order_and_webp_riff_padding_parity() {
+        let exif = b"II*\0\x08\0\0\0\0\0\0\0\0\0\x01"; // 15 bytes (odd)
+        let meta = EncodeMeta { ppi: Some(300), exif: Some(exif), xmp: Some("<x/>"), icc: Some(b"icc") };
+        let segs = jpeg_app_segments(&meta).unwrap();
+        let markers: Vec<u8> = segs.iter().map(|(m, _)| *m).collect();
+        assert_eq!(markers, vec![0xE0, 0xE1, 0xE1, 0xE2]);
+        assert!(segs[0].1.starts_with(b"JFIF\0"));
+        assert!(segs[1].1.starts_with(b"Exif\0\0II*"));
+        assert!(segs[2].1.starts_with(b"http://ns.adobe.com/xap/1.0/\0<x/>"));
+        assert!(segs[3].1.starts_with(b"ICC_PROFILE\0"));
+
+        let px = [10u8, 20, 30, 255];
+        let img = EncodeImage::new(1, 1, 4, Samples::U8(&px));
+        let webp = encode_webp_lossless(&img, &EncodeMeta { exif: Some(exif), ..Default::default() }).unwrap();
+        assert_eq!(&webp[..4], b"RIFF");
+        assert_eq!(u32::from_le_bytes(webp[4..8].try_into().unwrap()) as usize + 8, webp.len());
+        let pos = webp.windows(4).position(|w| w == b"EXIF").expect("EXIF chunk");
+        let chunk_len = u32::from_le_bytes(webp[pos + 4..pos + 8].try_into().unwrap()) as usize;
+        assert_eq!(chunk_len, exif.len());
+        let padded_end = pos + 8 + chunk_len + (chunk_len % 2);
+        assert!(padded_end <= webp.len());
+    }
 }
