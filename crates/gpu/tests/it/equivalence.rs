@@ -77,6 +77,27 @@ fn v3_luminance_cutoff_chroma_4() {
 }
 
 #[test]
+fn warm_green_wb_zero_crossing_gpu_matches_cpu_on_v9() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(2, 160, 120);
+    let info = SourceInfo { as_shot_temp: 5500.0, as_shot_tint: 0.0, ..Default::default() };
+    let req = RenderRequest::fit(160, 120);
+    // Test across the Bradford blue-cone s[2] <= 0.0 zero crossing on Process::V9:
+    // (2000 K, 0) has s[2] > 0; (2000 K, 30) and (3000 K, 100) have s[2] <= 0.
+    for (temp, tint) in [(2000.0, 0.0), (2000.0, 30.0), (3000.0, 100.0)] {
+        let mut s = DevelopSettings::default();
+        assert_eq!(s.process.process(), Process::V9);
+        (s.wb.mode, s.wb.temp, s.wb.tint) = (WbMode::Custom, temp, tint);
+        let cpu = render(&src, &info, &s, &req).image;
+        let gpu = lightcraft_gpu::try_render(&src, &info, &s, &req, None).expect("GPU render without CPU fallback").image;
+        let (mean, max, _) = diff(&cpu, &gpu);
+        assert!(mean < MEAN_LSB && max <= MAX_LSB, "{temp} K tint {tint}: mean {mean:.3}, max {max}");
+    }
+}
+
+#[test]
 fn camera_tone_and_relative_wb() {
     if !gpu() {
         return;

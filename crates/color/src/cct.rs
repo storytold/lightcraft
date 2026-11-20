@@ -117,6 +117,20 @@ pub fn wb_matrix(space: &RgbSpace, src: Xy) -> Mat3 {
     space.from_xyz().mul(&adapt).mul(&space.to_xyz())
 }
 
+/// Checked Bradford white-balance matrix from `craft_color_transform::cct::wb_matrix`:
+/// returns `Mat3::IDENTITY` adaptation when the source illuminant's Bradford blue cone response
+/// is `<= 0.0` (warm, strongly green illuminants).
+pub fn wb_matrix_checked(space: &RgbSpace, src: Xy) -> Mat3 {
+    let shared_space = craft_color_transform::space::RgbSpace {
+        r: craft_color_transform::Xy::new(space.r.x, space.r.y),
+        g: craft_color_transform::Xy::new(space.g.x, space.g.y),
+        b: craft_color_transform::Xy::new(space.b.x, space.b.y),
+        white: craft_color_transform::Xy::new(space.white.x, space.white.y),
+    };
+    let m = craft_color_transform::cct::wb_matrix(&shared_space, craft_color_transform::Xy::new(src.x, src.y));
+    Mat3(m.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
