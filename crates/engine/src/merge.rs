@@ -271,10 +271,11 @@ fn pano_info(r: &lightcraft_merge::PanoResult, sources: &[(PhotoId, String)], as
 const PANO_TILE_BYTES: f64 = 36.0;
 const PANO_BLEND_BYTES: f64 = 68.0;
 
-/// What a merge may use of the computer's memory: three quarters of it (the rest is the system's
-/// and the other apps'), less the app's own memory budget (its caches).
+/// What a merge may use of the computer's memory ([`crate::memory::total_ram`]: a cgroup's or
+/// Windows job's memory limit when smaller): three quarters of it (the rest is the system's and the other apps'), less
+/// the app's own memory budget (its caches).
 fn merge_memory(ram: Option<usize>) -> f64 {
-    // a computer whose memory we can't read (Windows) is taken to have 8 GB
+    // a computer whose memory we can't read is taken to have 8 GB
     let ram = ram.unwrap_or(8 << 30) as f64;
     (ram * 0.75 - crate::memory::budget() as f64).max(0.0)
 }
