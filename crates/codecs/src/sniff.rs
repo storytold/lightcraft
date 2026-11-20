@@ -321,4 +321,89 @@ mod tests {
         raw[38..42].copy_from_slice(b"TEST");
         assert_eq!(sniff(&raw), Some(Format::Tiff));
     }
+
+    fn ftyp_box(size: Option<u32>, major: &[u8; 4], compatible: &[&[u8; 4]]) -> Vec<u8> {
+        let box_len = size.unwrap_or((16 + compatible.len() * 4) as u32);
+        let mut b = Vec::with_capacity(16 + compatible.len() * 4);
+        b.extend_from_slice(&box_len.to_be_bytes());
+        b.extend_from_slice(b"ftyp");
+        b.extend_from_slice(major);
+        b.extend_from_slice(&0_u32.to_be_bytes());
+        for brand in compatible {
+            b.extend_from_slice(*brand);
+        }
+        b
+    }
+
+    #[test]
+    fn bmff_probe_precedence_cr3_jxl_avif_heif() {
+        // CR3 (`crx `) wins over JXL, AVIF, and HEIF regardless of brand position.
+        assert_eq!(sniff(&ftyp_box(None, b"crx ", &[b"jxl ", b"avif", b"heic", b"mif1"])), Some(Format::RawOther));
+        assert_eq!(sniff(&ftyp_box(None, b"mif1", &[b"heic", b"avif", b"jxl ", b"crx "])), Some(Format::RawOther));
+        assert_eq!(sniff(&ftyp_box(None, b"avif", &[b"crx "])), Some(Format::RawOther));
+
+        // JXL (`jxl `) wins over AVIF and HEIF regardless of brand position.
+        assert_eq!(sniff(&ftyp_box(None, b"jxl ", &[b"avif", b"avis", b"heic", b"mif1"])), Some(Format::Jxl));
+        assert_eq!(sniff(&ftyp_box(None, b"avif", &[b"jxl "])), Some(Format::Jxl));
+        assert_eq!(sniff(&ftyp_box(None, b"mif1", &[b"jxl "])), Some(Format::Jxl));
+
+        // AVIF (`avif` / `avis`) wins over all HEIF brands regardless of brand position.
+        let heif_brands: [&[u8; 4]; 10] = [b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs", b"mif1", b"msf1"];
+        for heif in heif_brands {
+            assert_eq!(sniff(&ftyp_box(None, b"avif", &[heif])), Some(Format::Avif));
+            assert_eq!(sniff(&ftyp_box(None, b"avis", &[heif])), Some(Format::Avif));
+            assert_eq!(sniff(&ftyp_box(None, heif, &[b"avif"])), Some(Format::Avif));
+            assert_eq!(sniff(&ftyp_box(None, heif, &[b"avis"])), Some(Format::Avif));
+
+            // Without higher-precedence brands, every HEIF brand sniffs as Heif (major or compatible).
+            assert_eq!(sniff(&ftyp_box(None, heif, &[b"miaf"])), Some(Format::Heif));
+            assert_eq!(sniff(&ftyp_box(None, b"isom", &[heif])), Some(Format::Heif));
+        }
+
+        // Unrecognised BMFF brands return None rather than falling through.
+        assert_eq!(sniff(&ftyp_box(None, b"isom", &[b"iso2", b"mp41"])), None);
+    }
+
+    #[test]
+    fn bmff_ftyp_box_bounds_and_truncation() {
+        // Box size stops compatible-brand scanning at the ftyp boundary.
+        let bounded = ftyp_box(Some(16), b"heic", &[b"crx ", b"avif"]);
+        assert_eq!(sniff(&bounded), Some(Format::Heif));
+
+        // Box sizes smaller than 12 clamp to 12: major brand is still read, trailing bytes are not.
+        for small in [0_u32, 8, 11] {
+            let clamped = ftyp_box(Some(small), b"avif", &[b"crx "]);
+            assert_eq!(sniff(&clamped), Some(Format::Avif));
+        }
+
+        // Declared box size larger than the buffer still scans available compatible brands.
+        let truncated_with_compat = ftyp_box(Some(64), b"mif1", &[b"avif"]);
+        assert_eq!(sniff(&truncated_with_compat), Some(Format::Avif));
+
+        // Truncated before the 12-byte ftyp major brand returns None.
+        let too_short = ftyp_box(None, b"heic", &[]);
+        assert_eq!(sniff(&too_short[..11]), None);
+    }
+
+    #[test]
+    fn jxl_and_detector_fallback_sniffing() {
+        // JXL ISO-BMFF signature box (`JXL ` box, not `ftyp`) falls through to shared detector.
+        let mut jxl_container = b"\x00\x00\x00\x0CJXL \r\n\x87\n".to_vec();
+        assert_eq!(sniff(&jxl_container), Some(Format::Jxl));
+        jxl_container.extend_from_slice(&ftyp_box(None, b"jxl ", &[b"jxl "]));
+        assert_eq!(sniff(&jxl_container), Some(Format::Jxl));
+
+        // Bare JXL codestream and standalone `ftypjxl ` box both sniff as Jxl.
+        assert_eq!(sniff(&[0xFF, 0x0A, 0x00, 0x00]), Some(Format::Jxl));
+        assert_eq!(sniff(&ftyp_box(None, b"jxl ", &[])), Some(Format::Jxl));
+
+        // Shared detector fallback for standard raster containers and non-raw TIFF.
+        assert_eq!(sniff(b"\xFF\xD8\xFF\xE0\0\x10JFIF"), Some(Format::Jpeg));
+        assert_eq!(sniff(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"), Some(Format::Png));
+        assert_eq!(sniff(b"GIF87a\x01\0\x01\0\0\0\0"), Some(Format::Gif));
+        assert_eq!(sniff(b"RIFF\x10\0\0\0WEBPVP8 "), Some(Format::WebP));
+        assert_eq!(sniff(b"II*\0\x08\0\0\0\0\0"), Some(Format::Tiff));
+        assert_eq!(sniff(b"MM\0*\0\0\0\x08\0\0"), Some(Format::Tiff));
+        assert_eq!(sniff(b"unknown-header"), None);
+    }
 }
