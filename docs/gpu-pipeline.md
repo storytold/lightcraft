@@ -67,7 +67,7 @@ Overrides (read once at launch):
 - `LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1`: accept a software adapter (llvmpipe / lavapipe, WARP), which is
   otherwise refused because the CPU pipeline is faster. For running the GPU tests on a machine
   without a GPU (below); the app never sets it.
-- `LIGHTCRAFT_GPU_INIT_TIMEOUT=<seconds>` (whole seconds, 1–3600; default 30): how long creating a
+- `LIGHTCRAFT_GPU_INIT_TIMEOUT=<seconds>` (whole seconds, 1–3600; default 120): how long creating a
   compute device (rendering, AI Denoise, faces) and compiling its kernels may take. See *Device
   creation time limit* below.
 
@@ -100,13 +100,14 @@ connection and never answers (a crash-looping WSLg compositor, a stale `WAYLAND_
 calls never returned, and every render waiting for the device, and every test that creates one, hung
 for good. wgpu's native calls are synchronous, so each compute device (rendering, denoise, faces) is
 now created on a thread of its own (`lc-gpu-device`, `crates/gpu/src/init.rs`), and the caller waits
-at most `LIGHTCRAFT_GPU_INIT_TIMEOUT` seconds (default 30: a first run that compiles every kernel with
-FXC takes seconds). Rendering and faces compile their kernels on that thread, so the limit covers
-them, and building the rendering kernels on the window's device (`adopt_window_device`) runs there
+at most `LIGHTCRAFT_GPU_INIT_TIMEOUT` seconds (default 120: normally well under a second, a few
+seconds on a first run that compiles every kernel with FXC, and a slow driver compiler can take much
+longer; the app waits off the UI thread). Rendering and faces compile their kernels on that thread,
+so the limit covers them, and building the rendering kernels on the window's device (`adopt_window_device`) runs there
 too; denoise compiles a model's kernels later (`nn::runner`), under the denoise card setup's own
 30 s limit (`set_up_card`, `crates/engine/src/denoise/gpu.rs`), which this setting does not change.
 Past the limit that device is unavailable for the process, with the reason
-`GPU device creation did not finish in 30 s (LIGHTCRAFT_GPU_INIT_TIMEOUT): …` reported like any other
+`GPU device creation did not finish in 120 s (LIGHTCRAFT_GPU_INIT_TIMEOUT): …` reported like any other
 creation failure (`perf.gpuReason`, the no-GPU notice, the log), and the blocked thread is left
 behind. That thread, not the caller, holds what must last as long as the driver work does: its share
 of the GPU work in flight, so a quit meanwhile finds the GPU busy (`gpu::wait_idle` returns `false` at

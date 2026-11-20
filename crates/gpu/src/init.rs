@@ -30,9 +30,13 @@ use crate::exit::Gate;
 
 /// The environment variable that changes [`DEFAULT_LIMIT`] (whole seconds).
 pub(crate) const LIMIT_ENV: &str = "LIGHTCRAFT_GPU_INIT_TIMEOUT";
-/// How long device creation may take by default. Normally well under a second, but a first run
-/// that compiles every kernel with a slow driver compiler (DX12's FXC) takes seconds: generous.
-pub(crate) const DEFAULT_LIMIT: Duration = Duration::from_secs(30);
+/// How long device creation may take by default. Normally well under a second (about 0.35 s in a
+/// test, #3057), and about 2.5 s on a GTX 1070 with DX12 including the kernel compiles, but a first
+/// run that compiles every kernel with a slow driver compiler (DX12's FXC, Dozen on an AMD iGPU)
+/// can take far longer, and a limit that passes leaves the GPU unused for the whole run. The app
+/// creates the device off the UI thread (`warm_up`, the window device's adoption thread), so a
+/// longer limit holds up renders, not the window: generous.
+pub(crate) const DEFAULT_LIMIT: Duration = Duration::from_secs(120);
 /// The longest limit [`LIMIT_ENV`] can ask for (an hour).
 const MAX_LIMIT_SECS: u64 = 3600;
 
@@ -532,7 +536,8 @@ mod tests {
         assert_eq!(parse_limit(None), Some(DEFAULT_LIMIT));
         assert_eq!(parse_limit(Some("  ")), Some(DEFAULT_LIMIT));
         assert_eq!(parse_limit(Some("5")), Some(Duration::from_secs(5)));
-        assert_eq!(parse_limit(Some(" 120 ")), Some(Duration::from_secs(120)));
+        // (not the default's own value, so a parse that fell back to the default would fail)
+        assert_eq!(parse_limit(Some(" 45 ")), Some(Duration::from_secs(45)));
         assert_eq!(parse_limit(Some("999999")), Some(Duration::from_secs(MAX_LIMIT_SECS)));
         assert_eq!(parse_limit(Some("99999999999999999999999")), Some(Duration::from_secs(MAX_LIMIT_SECS)));
         for bad in ["0", "-3", "1.5", "abc", "NaN", "inf", "30s"] {
