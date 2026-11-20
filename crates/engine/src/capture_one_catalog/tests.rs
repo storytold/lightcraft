@@ -2017,3 +2017,63 @@ fn a_catalog_brings_its_crops_turns_and_lens_corrections() {
         assert!(warnings.contains(&expected), "{warnings:#?}");
     }
 }
+
+/// A keystone tilt becomes LightCraft's Vertical / Horizontal Transform widening the same edge of
+/// the photo as shown, with the crop Capture One shows inside the corrected photo; what was not
+/// measured (skew, aspect, a tilt with a crop of its own) is named instead of guessed.
+#[test]
+fn a_keystone_tilt_widens_the_same_edge_and_keeps_the_crop_on_the_photo() {
+    use lightcraft_geom::Point;
+    let keystone = |tilt_x: f64, tilt_y: f64, skew: f64| geometry::Keystone {
+        tilt_x: Some(tilt_x),
+        tilt_y: Some(tilt_y),
+        skew: Some(skew),
+        aspect: Some(0.0),
+        amount: Some(100.0),
+        focal: Some(1.0),
+    };
+    let photo = |file_rotation: f64, keystone: geometry::Keystone, crop: Option<[f64; 4]>| CatalogPhoto {
+        width: 6000,
+        height: 4000,
+        geometry: Some(geometry::Geometry {
+            default: layer(file_rotation, 0, None),
+            adjusted: geometry::Layer { keystone, crop, ..Default::default() },
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    // how wide the corrected photo's top and bottom (or left and right) edges are, as shown
+    let edges = |s: &lightcraft_develop::DevelopSettings, (w, h): (f64, f64)| {
+        let warp = lightcraft_pipeline::transform::manual(&s.geometry);
+        let half = w.max(h) / 2.0;
+        let at = |x: f64, y: f64| warp.apply(Point::new(x * w / 2.0 / half, y * h / 2.0 / half));
+        let length = |a: Point, b: Point| (a.x - b.x).hypot(a.y - b.y);
+        let (tl, tr, br, bl) = (at(-1.0, -1.0), at(1.0, -1.0), at(1.0, 1.0), at(-1.0, 1.0));
+        (length(tl, tr), length(bl, br), length(tl, bl), length(tr, br))
+    };
+    // Capture One's TILTY > 0 widens the stored image's top edge, TILTX > 0 its left edge
+    let s = developed(&photo(0.0, keystone(0.0, 50.0, 0.0), None));
+    let (top, bottom, _, _) = edges(&s, (6000.0, 4000.0));
+    assert!(top > bottom * 1.05, "{top} {bottom}: {:?}", s.geometry);
+    let s = developed(&photo(0.0, keystone(40.0, 0.0, 0.0), None));
+    let (_, _, left, right) = edges(&s, (6000.0, 4000.0));
+    assert!(left > right * 1.05, "{left} {right}: {:?}", s.geometry);
+    // a photo its file turns right: the stored top is the right edge as shown
+    let turned = developed(&photo(90.0, keystone(0.0, 50.0, 0.0), None));
+    let (_, _, left, right) = edges(&turned, (4000.0, 6000.0));
+    assert!(right > left * 1.05, "{left} {right}: {:?}", turned.geometry);
+    // the crop is inside the corrected photo: LightCraft's frame doesn't shrink it any further
+    for (s, (w, h)) in [(&s, (6000, 4000)), (&turned, (4000, 6000))] {
+        let frame = lightcraft_pipeline::geometry::Frame::new(w, h, s, true);
+        let (want, got) = (s.crop.geometry.rect, frame.crop.rect);
+        assert!((want.width() - got.width()).abs() < 1e-3 && (want.x0 - got.x0).abs() < 1e-3, "{want:?} became {got:?}");
+        assert!(want.width() < 1.0, "{want:?}");
+    }
+    // not measured yet: a skew, and a tilt with a crop of its own
+    let skewed = geometry::develop(&photo(0.0, keystone(0.0, 30.0, 20.0), None)).unwrap();
+    assert_eq!(skewed.left_out, [notice::PERSPECTIVE]);
+    assert!(!skewed.partial.contains_key("geometry"));
+    let cropped = geometry::develop(&photo(0.0, keystone(0.0, 30.0, 0.0), Some([3000.0, 2000.0, 2000.0, 1000.0]))).unwrap();
+    assert_eq!(cropped.left_out, [notice::TILT_WITH_CROP]);
+    assert!(!cropped.partial.contains_key("geometry"));
+}

@@ -102,6 +102,7 @@ by itself. Each variant comes in on its own, not as a copy of its master's edits
 | A straightened photo without a crop of its own | the largest rectangle of the photo's shape inside it, as Capture One shows it |
 | Lens profile and distortion amount | Enable Profile Corrections with LightCraft's own profile (from the file or the lens database), and the amount when it isn't 100; the generic profile switches it off |
 | Chromatic aberration switched on or off | Remove Chromatic Aberration |
+| Keystone tilts (`TILTX`, `TILTY`), without a crop of the user's own | Transform's Vertical and Horizontal, widening the same edge as strongly, with Scale and a crop that show the part of the photo Capture One shows |
 
 A photo that brings any of these changes gets its lens correction as Capture One showed it: the crop was drawn on
 the corrected photo, and LightCraft switches a correction on by itself later only for a photo that is still as
@@ -110,14 +111,20 @@ the import says how many photos wait for one. Capture One's working area after a
 empty edges is smaller than the photo; LightCraft's correction fills its frame, as a Fujifilm camera's does, so the
 crop is taken relative to that area. With another lens database profile the crop can sit a few pixels off.
 
-Left out, and named in the import's result with the number of photos: perspective (keystone) correction, a crop
-reaching past the photo (it is kept on the photo), distortion correction with the generic profile, a lens profile
+Capture One's keystone tilt turns a virtual camera about an axis of the stored image (focal length: the keystone's
+focal value times the image diagonal; the tangent of the angle: the slider value / 100 times that focal value), and
+shows the largest rectangle of the photo's shape centred on the corrected photo's bounding box. LightCraft's
+Transform turns its camera with a fixed focal length, so the import sets the angle that makes the edges converge as
+much; the result is within a few per cent of Capture One's in size.
+
+Left out, and named in the import's result with the number of photos: a keystone skew or aspect change, a keystone
+tilt together with a crop of the user's own (both not measured yet), a crop reaching past the photo (it is kept on the photo), distortion correction with the generic profile, a lens profile
 chosen by hand (LightCraft takes the lens from the file), distorted areas shown, sharpness falloff, diffraction
 correction, light falloff, purple fringing, shift lens movement and LCC.
 
 Checked against Capture One's own TIFF exports of a test catalog made for this: every turn, flip, straighten and
 crop above, also on a portrait phone photo and on Fujifilm raws Capture One corrects, shows the same part of the
-photo (correlation 0.97 to 1.0 between the exports).
+photo (correlation 0.97 to 1.0 between the exports); keystone tilts 0.95 to 0.96.
 
 ## Where the catalog goes
 

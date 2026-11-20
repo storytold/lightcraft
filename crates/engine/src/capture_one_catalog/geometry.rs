@@ -19,6 +19,10 @@
 //!   `curve|amount|…`, `ZLENSRADIALBLUR` (sharpness falloff) `…|…|amount|…`. Capture One's
 //!   curves are its own data and are not used. [`GENERIC_PROFILE`] is the profile "Generic".
 //!
+//! - A keystone tilt (`ZGEOMETRYKEYSTONETILTX` / `TILTY`) turns a virtual camera (see [`tilt`]);
+//!   without a crop of the user's own, Capture One shows the largest rectangle of the photo's
+//!   shape centred on the corrected photo's bounding box (the working area, `ZCANVASSIZE`).
+//!
 //! Only the user's changes are carried over: Capture One's own values stand for what LightCraft
 //! does by itself. A lens correction is the exception once a photo brings other changes: it is
 //! set as Capture One showed it, so the crop is taken on the photo it was drawn on, and a profile
@@ -402,6 +406,16 @@ pub(super) fn develop(photo: &CatalogPhoto) -> Option<Develop> {
         _ => (ow, oh),
     };
     let own_crop = shown.crop.filter(|c| c[2] > 0.0 && c[3] > 0.0).filter(|_| w > 0.0 && h > 0.0);
+    let tilt = shown.keystone.is_set().then(|| tilt(&shown.keystone, quarters(turns), ow.max(oh), ow.hypot(oh))).flatten();
+    // a skew or an aspect change, or a crop of its own on top: not measured yet, so not carried
+    if shown.keystone.is_set() {
+        match tilt {
+            None => left_out(notice::PERSPECTIVE),
+            Some(_) if own_crop.is_some() => left_out(notice::TILT_WITH_CROP),
+            Some(_) => {}
+        }
+    }
+    let tilt = tilt.filter(|_| own_crop.is_none());
     let (sin, cos) = theta.to_radians().sin_cos();
     let rect = match own_crop {
         Some([cx, cy, cw, ch]) => {
@@ -418,6 +432,10 @@ pub(super) fn develop(photo: &CatalogPhoto) -> Option<Develop> {
         }
         None => None,
     };
+    // after a tilt, the largest rectangle of the photo's shape the corrected photo fills: it sits
+    // towards the widened edge, as Capture One shows it
+    let fitted = tilt.and_then(|(vertical, horizontal)| largest_inside(vertical, horizontal, straighten, ow, oh));
+    let rect = fitted.map(|(r, _)| r).or(rect);
     let rect = rect.map(|r| {
         // Capture One can let a crop reach past the photo; LightCraft keeps it on the photo
         let outside = r[0] < -NONE || r[1] < -NONE || r[2] > 1.0 + NONE || r[3] > 1.0 + NONE;
@@ -428,13 +446,8 @@ pub(super) fn develop(photo: &CatalogPhoto) -> Option<Develop> {
     });
     let cropped = changed(&adj.crop, &def.crop) || straighten.abs() > NONE;
 
-    let perspective = shown.keystone.is_set();
-    if perspective {
-        left_out(notice::PERSPECTIVE);
-    }
-
     let mut p = Map::new();
-    if turned_or_flipped || cropped {
+    if turned_or_flipped || cropped || tilt.is_some() {
         p.insert("orientation".into(), json!(user));
         let mut crop = Map::new();
         crop.insert("flip_h".into(), json!(flip == 1));
@@ -446,6 +459,12 @@ pub(super) fn develop(photo: &CatalogPhoto) -> Option<Develop> {
             crop.insert("geometry".into(), json!({"rect": {"x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}, "angle": 0.0}));
         }
         p.insert("crop".into(), Value::Object(crop));
+    }
+    if let Some((vertical, horizontal)) = tilt {
+        // Capture One shows the largest rectangle the corrected photo fills (the crop above);
+        // Scale keeps it inside LightCraft's frame, and Constrain Crop any corner from going empty
+        let scale = fitted.map_or(100.0, |(_, s)| 100.0 * s);
+        p.insert("geometry".into(), json!({"vertical": vertical, "horizontal": horizontal, "scale": scale, "constrain_crop": true}));
     }
 
     // lens corrections
@@ -496,6 +515,128 @@ pub(super) fn develop(photo: &CatalogPhoto) -> Option<Develop> {
     }
     out.partial = p;
     (!out.partial.is_empty() || !out.left_out.is_empty()).then_some(out)
+}
+
+/// Capture One's keystone tilts as LightCraft's Vertical and Horizontal Transform values, for a
+/// photo turned by `turn` (the quarter turns as shown) with long edge `long` and diagonal
+/// `diagonal` (pixels, as shown); `None` when the keystone holds more than tilts.
+///
+/// Measured on exports (see the module): a tilt turns a virtual camera about an axis of the stored
+/// image, with a focal length of `focal` (the keystone's) times the diagonal, by an angle whose
+/// tangent is the value / 100 × `focal`; `TILTY` > 0 widens the top edge, `TILTX` > 0 the left one.
+/// The convergence that makes (the tangent over the focal length) doesn't depend on `focal`, so
+/// LightCraft's camera turn (focal length 1.5 half long edges, ±100 = ±0.5 rad) is set to make the
+/// same.
+fn tilt(k: &Keystone, turn: Turn, long: f64, diagonal: f64) -> Option<(f64, f64)> {
+    let off = |v: Option<f64>| v.is_none_or(|v| v.abs() <= NONE);
+    if !off(k.skew) || !off(k.aspect) || long <= 0.0 || diagonal <= 0.0 {
+        return None;
+    }
+    let amount = k.amount.unwrap_or(100.0) / 100.0;
+    // how strongly each edge converges, along the stored image's axes: > 0 narrows the right
+    // (x) or bottom (y) edge
+    let along = |v: Option<f64>| v.unwrap_or(0.0) * amount / 100.0;
+    let (x, y) = (along(k.tilt_x), along(k.tilt_y));
+    // the same along the axes of the photo as shown
+    let (sx, sy) = (f64::from(turn[0][0]) * x + f64::from(turn[0][1]) * y, f64::from(turn[1][0]) * x + f64::from(turn[1][1]) * y);
+    // LightCraft: Vertical − widens the top, Horizontal − the left side
+    let slider = |c: f64| -200.0 * (c * 0.75 * long / diagonal).atan();
+    let (vertical, horizontal) = (slider(sy), slider(sx));
+    (vertical.is_finite() && horizontal.is_finite()).then(|| (vertical.clamp(-100.0, 100.0), horizontal.clamp(-100.0, 100.0)))
+}
+
+/// The largest rectangle of the photo's own shape inside an `ow × oh` photo after LightCraft's
+/// Vertical and Horizontal Transform and a straighten by `angle` degrees: `[x0, y0, x1, y1]`
+/// normalized to the crop's rotated frame, and the Scale (1 = 100) that keeps it inside the frame
+/// (the corrected photo can reach past it). `None` when the photo leaves no room.
+fn largest_inside(vertical: f64, horizontal: f64, angle: f64, ow: f64, oh: f64) -> Option<([f64; 4], f64)> {
+    let (cx, cy, hw, hh) = inscribed(vertical, horizontal, angle, ow, oh)?;
+    let reach = ((cx.abs() + hw) / (ow / 2.0)).max((cy.abs() + hh) / (oh / 2.0));
+    let scale = if reach.is_finite() && reach > 1.0 { (1.0 / reach).max(0.1) } else { 1.0 };
+    let (cx, cy, hw, hh) = (cx * scale, cy * scale, hw * scale, hh * scale);
+    Some(([0.5 + (cx - hw) / ow, 0.5 + (cy - hh) / oh, 0.5 + (cx + hw) / ow, 0.5 + (cy + hh) / oh], scale))
+}
+
+/// The centre and half sizes (pixels, about the frame's centre) of [`largest_inside`]'s rectangle
+/// before any Scale.
+fn inscribed(vertical: f64, horizontal: f64, angle: f64, ow: f64, oh: f64) -> Option<(f64, f64, f64, f64)> {
+    if ow <= 0.0 || oh <= 0.0 {
+        return None;
+    }
+    let half = ow.max(oh) / 2.0;
+    let warp = lightcraft_pipeline::transform::manual(&lightcraft_develop::Geometry { vertical, horizontal, ..Default::default() });
+    let (sin, cos) = angle.to_radians().sin_cos();
+    let quad = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].map(|(x, y): (f64, f64)| {
+        let p = warp.apply(lightcraft_geom::Point::new(x * ow / 2.0 / half, y * oh / 2.0 / half));
+        let (x, y) = (p.x * half, p.y * half);
+        (x * cos - y * sin, x * sin + y * cos)
+    });
+    let area: f64 = (0..4).map(|i| quad[i].0 * quad[(i + 1) % 4].1 - quad[(i + 1) % 4].0 * quad[i].1).sum();
+    if !area.is_finite() || area.abs() <= NONE {
+        return None;
+    }
+    let sign = area.signum();
+    // where the rectangle's centre may be for a rectangle `k` times the photo's size: inside every
+    // edge with every corner
+    let centres = |k: f64| {
+        let (hw, hh) = (k * ow / 2.0, k * oh / 2.0);
+        let mut region = vec![(-10.0 * ow, -10.0 * oh), (10.0 * ow, -10.0 * oh), (10.0 * ow, 10.0 * oh), (-10.0 * ow, 10.0 * oh)];
+        for i in 0..4 {
+            let (p0, p1) = (quad[i], quad[(i + 1) % 4]);
+            let e = (p1.0 - p0.0, p1.1 - p0.1);
+            for (cx, cy) in [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)] {
+                // sign · cross(e, c + corner − p0) ≥ 0, linear in the centre c
+                let a = (-sign * e.1, sign * e.0);
+                let b = -sign * (e.0 * (cy - p0.1) - e.1 * (cx - p0.0));
+                region = clip(&region, a, b);
+                if region.is_empty() {
+                    return None;
+                }
+            }
+        }
+        let n = region.len() as f64;
+        Some((region.iter().map(|p| p.0).sum::<f64>() / n, region.iter().map(|p| p.1).sum::<f64>() / n))
+    };
+    // centred on the working area (the corrected photo's bounding box), as Capture One does
+    let (x0, x1) = quad.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
+    let (y0, y1) = quad.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+    let centre = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    let fits = |k: f64| {
+        centres(k).is_some_and(|_| {
+            let (hw, hh) = (k * ow / 2.0, k * oh / 2.0);
+            (0..4).all(|i| {
+                let (p0, p1) = (quad[i], quad[(i + 1) % 4]);
+                let e = (p1.0 - p0.0, p1.1 - p0.1);
+                [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
+                    .iter()
+                    .all(|(dx, dy)| sign * (e.0 * (centre.1 + dy - p0.1) - e.1 * (centre.0 + dx - p0.0)) >= -NONE)
+            })
+        })
+    };
+    let (mut lo, mut hi) = (0.0, 1.5);
+    for _ in 0..48 {
+        let mid = (lo + hi) / 2.0;
+        if fits(mid) { lo = mid } else { hi = mid }
+    }
+    (lo > 0.01).then_some((centre.0, centre.1, lo * ow / 2.0, lo * oh / 2.0))
+}
+
+/// `polygon` cut to the half-plane `a · p ≥ b`.
+fn clip(polygon: &[(f64, f64)], a: (f64, f64), b: f64) -> Vec<(f64, f64)> {
+    let inside = |p: (f64, f64)| a.0 * p.0 + a.1 * p.1 - b;
+    let mut out = Vec::with_capacity(polygon.len() + 1);
+    for (i, &p) in polygon.iter().enumerate() {
+        let q = polygon[(i + 1) % polygon.len()];
+        let (dp, dq) = (inside(p), inside(q));
+        if dp >= 0.0 {
+            out.push(p);
+        }
+        if (dp >= 0.0) != (dq >= 0.0) {
+            let t = dp / (dp - dq);
+            out.push((p.0 + t * (q.0 - p.0), p.1 + t * (q.1 - p.1)));
+        }
+    }
+    out
 }
 
 /// A crop ratio's name as LightCraft's locked aspect, in the crop's own orientation; `None` for
