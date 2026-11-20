@@ -877,10 +877,6 @@ fn be_u16(bytes: &[u8], at: usize) -> Result<u16, String> {
     bytes.get(at..end).and_then(|s| <[u8; 2]>::try_from(s).ok()).map(u16::from_be_bytes).ok_or("truncated SQLite integer".into())
 }
 
-fn be_u16_at(bytes: &[u8], at: usize) -> Result<u16, String> {
-    be_u16(bytes, at)
-}
-
 fn be_u32(bytes: &[u8], at: usize) -> Result<u32, String> {
     let end = at.checked_add(4).ok_or("SQLite integer offset overflow")?;
     bytes.get(at..end).and_then(|s| <[u8; 4]>::try_from(s).ok()).map(u32::from_be_bytes).ok_or("truncated SQLite integer".into())
