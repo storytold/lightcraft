@@ -22,21 +22,21 @@ fn opening_another_library_drops_the_old_librarys_cached_panels() {
     assert!(!session.catalog.is_empty());
 
     let mut app = LightcraftApp::new(session, Services::default());
-    let (cat, caches) = (&app.session.catalog, &mut app.caches);
-    assert!(caches.counts(cat).total > 0);
-    assert!(!caches.keyword_tree(cat).is_empty());
-    assert!(!caches.date_groups(cat).is_empty());
+    let (cat, caches, library) = (&app.session.catalog, &mut app.caches, app.session.library_generation());
+    assert!(caches.counts(cat, library).total > 0);
+    assert!(!caches.keyword_tree(cat, library).is_empty());
+    assert!(!caches.date_groups(cat, library).is_empty());
 
     // the grid's own list is cached too
     assert!(!app.session.visible().is_empty());
 
     app.run("app.openLibrary", json!({"path": b.to_string_lossy()})).unwrap();
     assert!(app.session.catalog.is_empty(), "library B is empty");
-    let (cat, caches) = (&app.session.catalog, &mut app.caches);
-    assert_eq!(caches.counts(cat).total, 0, "All Photos count");
-    assert_eq!(caches.counts(cat).picks, 0);
-    assert!(caches.keyword_tree(cat).is_empty(), "keywords");
-    assert!(caches.date_groups(cat).is_empty(), "By Date");
+    let (cat, caches, library) = (&app.session.catalog, &mut app.caches, app.session.library_generation());
+    assert_eq!(caches.counts(cat, library).total, 0, "All Photos count");
+    assert_eq!(caches.counts(cat, library).picks, 0);
+    assert!(caches.keyword_tree(cat, library).is_empty(), "keywords");
+    assert!(caches.date_groups(cat, library).is_empty(), "By Date");
     assert!(app.session.visible().is_empty(), "grid");
 
     let _ = std::fs::remove_dir_all(&dir);

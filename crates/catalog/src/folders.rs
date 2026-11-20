@@ -182,6 +182,15 @@ pub fn folder_label(path: &str) -> String {
     if names.is_empty() { path.to_string() } else { names.iter().skip(names.len().saturating_sub(2)).copied().collect::<Vec<_>>().join("/") }
 }
 
+/// The folder a photo's file is in, as its path spells it (`None` for a photo that is no file).
+/// A photo straight in the root has an empty folder part: the root itself.
+pub(crate) fn photo_folder(p: &crate::Photo) -> Option<&str> {
+    match &p.source {
+        Source::File { path } => path.rfind(['/', '\\']).and_then(|i| path.get(..i.max(1))),
+        _ => None,
+    }
+}
+
 impl Catalog {
     /// What the library keeps about folder `path`, however it is spelled.
     pub fn folder_record(&self, path: &str) -> Option<&FolderRecord> {
@@ -254,14 +263,16 @@ impl Catalog {
         // never depends on hash order)
         let mut dirs: BTreeMap<&str, usize> = BTreeMap::new();
         for p in self.photos().filter(|p| p.in_library()) {
-            if let Source::File { path } = &p.source
-                && let Some(i) = path.rfind(['/', '\\'])
-                // a photo straight in the root has an empty folder part: the root itself
-                && let Some(dir) = path.get(..i.max(1))
-            {
+            if let Some(dir) = photo_folder(p) {
                 *dirs.entry(dir).or_default() += 1;
             }
         }
+        self.folder_tree_of(dirs)
+    }
+
+    /// [`Catalog::folder_tree`] from the photos counted per containing folder, as spelled, in
+    /// order of spelling ([`photo_folder`]).
+    pub(crate) fn folder_tree_of<'a>(&self, dirs: impl IntoIterator<Item = (&'a str, usize)>) -> Vec<FolderNode> {
         let mut levels: HashMap<String, Level> = HashMap::new();
         let mut roots: Vec<String> = Vec::new();
         for (dir, n) in dirs {

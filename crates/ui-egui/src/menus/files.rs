@@ -83,11 +83,15 @@ fn photo_folder(app: &LightcraftApp, id: Option<lightcraft_catalog::PhotoId>) ->
 }
 
 /// Whether Show in Folders has a row to show for photo `id` (the active one when `None`): its
-/// folder must be a row of the tree, which stops `MAX_DEPTH` levels down. With no fresh tree to
-/// look in, the folder alone decides, and the command still checks.
+/// folder must be a row of the tree, which stops `MAX_DEPTH` levels down. Not while the library is
+/// being counted again after a change too large to follow, or for the first time (the tree it has is from before the
+/// change, or none, so a folder the change made has no row in it yet). With no fresh tree to look in, the
+/// folder alone decides, and the command still checks.
 pub fn show_in_folders_enabled(app: &LightcraftApp, id: Option<lightcraft_catalog::PhotoId>) -> bool {
     let Some(dir) = photo_folder(app, id) else { return false };
-    app.caches.folder_tree_if_fresh(&app.session.catalog).is_none_or(|tree| crate::panels::left::folder_row_of(&tree, &dir).is_some())
+    let library = app.session.library_generation();
+    !app.caches.library.lags(library)
+        && app.caches.folder_tree_if_fresh(&app.session.catalog, library).is_none_or(|tree| crate::panels::left::folder_row_of(&tree, &dir).is_some())
 }
 
 /// Photo ▸ Show in Folders (Lightroom's Go to Folder in Library): show the folder of photo `id`
@@ -96,9 +100,19 @@ pub fn show_in_folders_enabled(app: &LightcraftApp, id: Option<lightcraft_catalo
 /// section and the folders above it open, and it scrolls there (`reveal_folder`).
 pub(super) fn show_in_folders(app: &mut LightcraftApp, id: Option<lightcraft_catalog::PhotoId>) -> Result<Value, String> {
     let dir = photo_folder(app, id).ok_or("this photo is not in a folder of the library")?;
-    let tree = app.caches.folder_tree(&app.session.catalog);
+    let library = app.session.library_generation();
+    let tree = app.caches.folder_tree(&app.session.catalog, library);
     // the row's own spelling (forward slashes): what its click hands `library.source`, and its id
-    let path = crate::panels::left::folder_row_of(&tree, &dir).map(|n| n.path.clone()).ok_or("this photo's folder is not in Folders")?;
+    let Some(row) = crate::panels::left::folder_row_of(&tree, &dir) else {
+        // (asking for the folders is what starts a library's first count when the sidebar is hidden)
+        return Err(if app.caches.library.lags(library) {
+            "the library's folders are still being counted: try again in a moment"
+        } else {
+            "this photo's folder is not in Folders"
+        }
+        .into());
+    };
+    let path = row.path.clone();
     app.run("library.source", json!({"kind": "libraryFolder", "path": path}))?;
     app.ui.left_panel = true;
     app.ui.reveal_folder = Some(path.clone());
