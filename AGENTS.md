@@ -183,11 +183,11 @@ of it.
 - **Run tests through xtask:** `cargo xtask test [-p PKG]… [-- FILTER]` (`--keep-going` runs every test binary and
   names each that fails, instead of stopping at the first) or `cargo xtask ci --quick`. Both take the machine's CI slot
   and `ci`'s RAM-aware caps: build jobs and test threads sized by the memory available, at most 4 tests at once in
-  each binary unless you set `RUST_TEST_THREADS` (a value other than 4 wins). README → Quick start describes them
+  each binary unless you set `RUST_TEST_THREADS` (a value you set wins). README → Quick start describes them
   and the settings that change them. Plain `cargo test -p PKG` on a small crate is fine while you iterate.
 - **Never run plain `cargo test --workspace`**, with or without `--no-fail-fast`. It takes no CI slot, so it runs on
-  top of every other agent's tests, and gets none of `ci`'s caps (`.cargo/config.toml` only limits it to 4 tests at
-  once in each binary).
+  top of every other agent's tests, and gets none of `ci`'s caps (libtest runs one test per CPU core in every
+  binary).
 - **When `ci` fails on a test your change doesn't touch,** rerun only that package's tests: `cargo xtask test -p PKG`
   (`-- --exact TEST_PATH` narrows it to the one test; a bare `-- NAME` runs every test whose path contains it). If
   it fails without your change too, say so in the PR and link its issue, or file one; if it passes on a rerun, it's
