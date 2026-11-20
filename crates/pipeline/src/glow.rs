@@ -49,20 +49,98 @@ pub struct Field {
 /// itself, or any image of it at least as large as [`grid_size`] (a reduced render of the frame).
 /// `None` when Glow is off or `img`/`px_per_long` is unusable.
 pub fn field(img: &Rgb32f, s: &DevelopSettings, full: (usize, usize), px_per_long: f64) -> Option<Field> {
-    if !active(s) || img.width == 0 || img.height == 0 || full.0 == 0 || full.1 == 0 || !px_per_long.is_finite() || px_per_long <= 0.0 {
+    if img.width == 0 || img.height == 0 || !usable(s, full, px_per_long) {
         return None;
     }
+    let (threshold, exposure, diffusion) = extraction_settings(s);
+    let (w, h) = grid_size(full.0, full.1);
+    let seed = extract_seed(img, w, h, threshold, exposure, diffusion);
+    Some(field_from_seed(seed, s, full, px_per_long))
+}
+
+fn usable(s: &DevelopSettings, full: (usize, usize), px_per_long: f64) -> bool {
+    active(s) && full.0 > 0 && full.1 > 0 && px_per_long.is_finite() && px_per_long > 0.0
+}
+
+/// The knee, exposure gain and Diffusion flag that decide which radiance seeds the light.
+fn extraction_settings(s: &DevelopSettings) -> (f32, f32, bool) {
+    let g = &s.effects.glow;
+    let range = bounded(g.range, 0.0, 100.0, 50.0) / 100.0;
+    (0.88 - 0.78 * range, bounded(s.light.exposure, -5.0, 5.0, 0.0).exp2(), g.style == GlowStyle::Diffusion)
+}
+
+/// The seed of a frame's light accumulated tile by tile at full resolution, so a window of a large
+/// frame thresholds the same pixels, averaged per grid cell, as a render of the whole frame does
+/// (an isolated 1-2 px lamp survives; a reduced copy of the frame would smear it below the knee).
+pub struct Extraction {
+    full: (usize, usize),
+    sum: Rgb32f,
+    count: Vec<f32>,
+    threshold: f32,
+    exposure: f32,
+    diffusion: bool,
+}
+
+impl Extraction {
+    /// `None` when Glow is off.
+    pub fn new(s: &DevelopSettings, full: (usize, usize)) -> Option<Self> {
+        if !active(s) || full.0 == 0 || full.1 == 0 {
+            return None;
+        }
+        let (gw, gh) = grid_size(full.0, full.1);
+        let (threshold, exposure, diffusion) = extraction_settings(s);
+        Some(Self { full, sum: Rgb32f::new(gw, gh), count: vec![0.0; gw * gh], threshold, exposure, diffusion })
+    }
+
+    /// Add `tile`, the pixels of the frame from `origin` on (output resolution).
+    pub fn add_tile(&mut self, tile: &Rgb32f, origin: (usize, usize)) {
+        let (gw, gh) = (self.sum.width, self.sum.height);
+        let (fw, fh) = self.full;
+        for ty in 0..tile.height {
+            let y = origin.1 + ty;
+            if y >= fh {
+                break;
+            }
+            // the grid row whose pixel range (as [`extract_seed`] cuts it) holds this row
+            let cy = (((y + 1) * gh).saturating_sub(1) / fh).min(gh - 1);
+            for tx in 0..tile.width {
+                let x = origin.0 + tx;
+                if x >= fw {
+                    break;
+                }
+                let cx = (((x + 1) * gw).saturating_sub(1) / fw).min(gw - 1);
+                let i = cy * gw + cx;
+                let v = weighted(tile.get(tx, ty), self.threshold, self.exposure, self.diffusion);
+                for c in 0..3 {
+                    self.sum.data[i][c] += v[c];
+                }
+                self.count[i] += 1.0;
+            }
+        }
+    }
+
+    /// The light field once every tile of the frame was added. `None` when `px_per_long` is unusable.
+    pub fn finish(self, s: &DevelopSettings, px_per_long: f64) -> Option<Field> {
+        if !usable(s, self.full, px_per_long) {
+            return None;
+        }
+        let mut seed = self.sum;
+        for (p, n) in seed.data.iter_mut().zip(&self.count) {
+            let n = n.max(1.0);
+            *p = p.map(|v| v / n);
+        }
+        Some(field_from_seed(seed, s, self.full, px_per_long))
+    }
+}
+
+fn field_from_seed(mut seed: Rgb32f, s: &DevelopSettings, full: (usize, usize), px_per_long: f64) -> Field {
     let g = &s.effects.glow;
     let amount = bounded(g.amount, 0.0, 100.0, 0.0) / 100.0;
-    let range = bounded(g.range, 0.0, 100.0, 50.0) / 100.0;
     let spread = bounded(g.spread, 0.0, 100.0, 50.0) / 100.0;
     let warmth = bounded(g.warmth, -100.0, 100.0, 0.0) / 100.0;
     let softness = bounded(g.softness, 0.0, 100.0, 50.0) / 100.0;
     let angle = bounded(g.direction, -180.0, 180.0, 0.0).to_radians();
-    let exposure = bounded(s.light.exposure, -5.0, 5.0, 0.0).exp2();
     let scale = grid_scale(full.0, full.1);
-    let (w, h) = grid_size(full.0, full.1);
-    let mut seed = extract_seed(img, w, h, 0.88 - 0.78 * range, exposure, g.style == GlowStyle::Diffusion);
     if g.style == GlowStyle::Halation {
         // Film-like halation is warm even around blue lamps, rather than a channelwise tint.
         for p in &mut seed.data {
@@ -86,7 +164,7 @@ pub fn field(img: &Rgb32f, s: &DevelopSettings, full: (usize, usize), px_per_lon
     } else {
         [1.0 + 0.35 * warmth, 1.0, 1.0 - 0.35 * warmth]
     };
-    Some(Field { seed, light, amount, tint, halation: g.style == GlowStyle::Halation })
+    Field { seed, light, amount, tint, halation: g.style == GlowStyle::Halation }
 }
 
 impl Field {
@@ -103,6 +181,22 @@ pub fn apply(img: &mut Rgb32f, s: &DevelopSettings, px_per_long: f64) {
     }
 }
 
+/// A pixel's contribution to the seed: its radiance times how far it crosses the extraction knee.
+fn weighted(p: [f32; 3], threshold: f32, exposure: f32, diffusion: bool) -> [f32; 3] {
+    let p = p.map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 });
+    // Rec.2020 luminance, the pipeline's scene-linear working space.
+    let l = p[0] * 0.2627 + p[1] * 0.6780 + p[2] * 0.0593;
+    // A luminance-only cutoff rejects saturated blue/red lamps that look bright.
+    // A modest peak-channel contribution preserves those emitters, while the
+    // perceptual knee leaves dark background pixels out at ordinary Range values.
+    let peak = p[0].max(p[1]).max(p[2]);
+    let brightness = ((0.65 * l + 0.35 * peak) * exposure).sqrt();
+    let t = ((brightness - (threshold - 0.08)) / 0.16).clamp(0.0, 1.0);
+    let mask = t * t * (3.0 - 2.0 * t);
+    let weight = if diffusion { 0.25 + 0.75 * mask } else { mask };
+    p.map(|v| v * weight)
+}
+
 fn extract_seed(img: &Rgb32f, w: usize, h: usize, threshold: f32, exposure: f32, diffusion: bool) -> Rgb32f {
     let mut seed = Rgb32f::new(w, h);
     // Area-average the extracted radiance, rather than thresholding an already reduced image:
@@ -114,19 +208,9 @@ fn extract_seed(img: &Rgb32f, w: usize, h: usize, threshold: f32, exposure: f32,
             let mut sum = [0.0; 3];
             for yy in y0..y1 {
                 for xx in x0..x1 {
-                    let p = img.get(xx, yy).map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 });
-                    // Rec.2020 luminance, the pipeline's scene-linear working space.
-                    let l = p[0] * 0.2627 + p[1] * 0.6780 + p[2] * 0.0593;
-                    // A luminance-only cutoff rejects saturated blue/red lamps that look bright.
-                    // A modest peak-channel contribution preserves those emitters, while the
-                    // perceptual knee leaves dark background pixels out at ordinary Range values.
-                    let peak = p[0].max(p[1]).max(p[2]);
-                    let brightness = ((0.65 * l + 0.35 * peak) * exposure).sqrt();
-                    let t = ((brightness - (threshold - 0.08)) / 0.16).clamp(0.0, 1.0);
-                    let mask = t * t * (3.0 - 2.0 * t);
-                    let weight = if diffusion { 0.25 + 0.75 * mask } else { mask };
+                    let v = weighted(img.get(xx, yy), threshold, exposure, diffusion);
                     for c in 0..3 {
-                        sum[c] += p[c] * weight;
+                        sum[c] += v[c];
                     }
                 }
             }
@@ -464,6 +548,37 @@ mod integration_tests {
         assert!(matches!(d.samples, DeepSamples::U16(_)));
         s.effects.glow.amount = 0.0;
         assert_eq!(before.image, render_cached(&src, &info, &s, &req, &cache).image);
+    }
+
+    /// An isolated 2 px highlight of a large frame keeps its halo in a window: the light field is
+    /// extracted from full-resolution radiance, not from a reduced copy that smears the lamp below
+    /// the extraction knee.
+    #[test]
+    fn an_isolated_tiny_highlight_keeps_its_halo_in_a_window_of_a_large_frame() {
+        let (w, h) = (2000, 1400);
+        assert!(w * h > EXACT_WINDOW_PIXELS);
+        let (lx, ly) = (700, 500);
+        let src = Arc::new(Rgb32f::from_fn(w, h, |x, y| if x.abs_diff(lx) < 2 && y.abs_diff(ly) < 2 { [40.0, 36.0, 30.0] } else { [0.02; 3] }));
+        let info = SourceInfo::default();
+        let mut s = DevelopSettings::default();
+        s.effects.glow.amount = 100.0;
+        s.effects.glow.spread = 100.0;
+        s.effects.glow.range = 0.0;
+        let req = RenderRequest::fit(w, h);
+        let full = render(&src, &info, &s, &req).image;
+        let win = PixelWindow { x: 560, y: 380, w: 300, h: 260 };
+        let mut wr = req;
+        wr.window = Some(win);
+        let part = render(&src, &info, &s, &wr).image;
+        let crop = full.crop(win.x, win.y, win.w, win.h);
+        let max_diff = part.data.iter().zip(&crop.data).flat_map(|(a, b)| (0..3).map(move |c| (a[c] as i32 - b[c] as i32).abs())).max().unwrap_or(0);
+        let bare = {
+            let mut off = s.clone();
+            off.effects.glow.amount = 0.0;
+            render(&src, &info, &off, &wr).image
+        };
+        assert_ne!(part.data, bare.data, "the lamp must light its surroundings in the window at all");
+        assert!(max_diff <= 3, "window and full render differ by {max_diff} levels");
     }
 
     /// The cached light field depends on the photo's native size (its noise reduction runs at that

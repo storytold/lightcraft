@@ -632,9 +632,12 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
 
 /// How many Glow light fields [`glow_field`] keeps (one per photo and view being zoomed into).
 const GLOW_FIELDS_KEPT: usize = 2;
+/// Edge of the tiles a Glow light field is extracted from, and how many are in memory at once.
+const GLOW_TILE: usize = 1024;
+const GLOW_TILE_BATCH: usize = 4;
 
 /// The light field of the whole frame behind a windowed render of `p` ([`Plan::glow_key`]), computed
-/// from a render of the whole frame at Glow's grid size through the stages before Glow, and kept for
+/// from the frame's full-resolution pixels through the stages before Glow, and kept for
 /// the next window of the same view: panning or zooming reuses it. `None` when `p` renders the whole
 /// frame (Glow then scatters its own pixels, [`glow::apply`]).
 pub fn glow_field(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<Arc<glow::Field>> {
@@ -648,31 +651,40 @@ pub fn glow_field(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<Arc<g
     }
     let s = &*p.settings;
     let (full, fw, fh) = &p.full;
-    let (gw, gh) = glow::grid_size(*fw, *fh);
-    let px_per_long = full.px_per_long(gw);
-    let detail_scale = local::detail_scale(px_per_long, p.native_long);
-    let proxy = Plan {
-        settings: Cow::Borrowed(s),
-        frame: full.clone(),
-        w: gw,
-        h: gh,
-        px_per_long,
-        detail_scale,
-        eyes: redeye::resolve(src, &s.red_eye, s.orientation, full, gw, gh, px_per_long),
-        fixed_air: None,
-        keep: None,
-        mattes: p.mattes.clone(),
-        lens_subject: p.lens_subject.clone(),
-        full: p.full.clone(),
-        origin: (0, 0),
-        glow_key: None,
-        ..*p
-    };
-    let mut img = Rgb32f::clone(&local::frame_proxy(src, full, gw, gh));
-    lin_cpu(&mut img, info, &proxy);
-    local::denoise(&mut img, s, detail_scale, None);
-    lens_blur::apply_with(&mut img, s, full, px_per_long, proxy.mattes.as_deref(), proxy.lens_subject.as_deref());
-    let field = Arc::new(glow::field(&img, s, (*fw, *fh), p.px_per_long)?);
+    // The seed is thresholded on full-resolution radiance, tile by tile, so an isolated 1-2 px lamp
+    // lights its surroundings in a window as it does in a render of the whole frame. Noise
+    // reduction, lens blur and the scattering itself are not part of the seed (the scattering
+    // runs on the low-resolution grid), and each tile is cut a few batches at a time to bound memory.
+    let mut extraction = glow::Extraction::new(s, (*fw, *fh))?;
+    let mut tiles = Vec::new();
+    for y in (0..*fh).step_by(GLOW_TILE) {
+        for x in (0..*fw).step_by(GLOW_TILE) {
+            tiles.push(PixelWindow { x, y, w: GLOW_TILE.min(*fw - x), h: GLOW_TILE.min(*fh - y) });
+        }
+    }
+    for batch in tiles.chunks(GLOW_TILE_BATCH) {
+        let sampled = full.sample_windows(src, *fw, *fh, batch);
+        for (t, mut img) in batch.iter().zip(sampled) {
+            let tile = Plan {
+                settings: Cow::Borrowed(s),
+                frame: if (t.w, t.h) == (*fw, *fh) { full.clone() } else { full.window(*fw, *fh, *t) },
+                w: t.w,
+                h: t.h,
+                eyes: Vec::new(),
+                fixed_air: None,
+                keep: None,
+                mattes: None,
+                lens_subject: None,
+                full: p.full.clone(),
+                origin: (t.x, t.y),
+                glow_key: None,
+                ..*p
+            };
+            lin_cpu(&mut img, info, &tile);
+            extraction.add_tile(&img, (t.x, t.y));
+        }
+    }
+    let field = Arc::new(extraction.finish(s, p.px_per_long)?);
     let mut c = lock();
     c.push((source, key, field.clone()));
     if c.len() > GLOW_FIELDS_KEPT {

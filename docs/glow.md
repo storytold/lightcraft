@@ -42,11 +42,14 @@ stamps or edge replication. Scattering reads zero radiance outside the frame.
 A peak-aware perceptual highlight knee retains saturated emitters. CPU and GPU renderers share the same CPU scattering operator. The
 GPU path performs a readback/upload when Glow is enabled. Zoom-window renders of frames up to 2.5 MP
 render the whole frame and crop it (exact). A window of a larger frame adds the light field of the
-whole frame instead: the field is computed once, on Glow's grid of at most 768 px per edge, from a
-reduced whole-frame render through the stages before Glow, and is reused by every window of the view
-(`pipeline::glow_field`). All windows share one field, so tiles never seam; measured against the same crop of
-the full render the 8-bit difference is at most 2 levels (Amount 80, Spread 100, bright lamps on a 2.8 MP frame),
-because the reduced render is not bit-identical to the full-resolution pixels. Whole-frame renders are unchanged.
+whole frame instead: the field is computed once for the view and reused by every window
+(`pipeline::glow_field`). Its seed is thresholded on the frame's full-resolution radiance, read in 1024 px
+tiles through the stages before Glow (white balance, tone, defringe, spot removal; noise reduction and lens
+blur are left out) and averaged into Glow's grid of at most 768 px per edge, so an isolated 1-2 px lamp keeps
+its halo as in a whole-frame render. The first window of a large frame therefore reads all of its pixels
+once; later windows reuse the cached field. All windows share one field, so tiles never seam; measured against
+the same crop of the full render the 8-bit difference is at most 3 levels (bright lamps and a 2 px lamp on a
+2.8 MP frame). Whole-frame renders are unchanged.
 
 Limitations: global effect only; no local-mask Glow, no Adobe `crs:Glow*` interoperability, and no
 measured Lightroom equivalence or interactive-performance guarantee. Large previews may take
