@@ -560,7 +560,7 @@ fn committed_wal_multi_commit_growth_and_shrink_parity() {
     };
 
     let main = make_page1(0, 1);
-    let mut wal_page1 = make_page1(4, 2);
+    let mut wal_page1 = make_page1(4, 3);
     let schema = schema_record("t", 2, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)");
     leaf(&mut wal_page1, 100, 1, &schema);
 
@@ -568,6 +568,9 @@ fn committed_wal_multi_commit_growth_and_shrink_parity() {
     leaf(&mut stale_page2, 0, 1, &[3, 0, 23, b's', b't', b'a', b'l', b'e']);
     let mut fresh_page2 = vec![0u8; 512];
     leaf(&mut fresh_page2, 0, 2, &[3, 0, 23, b'f', b'r', b'e', b's', b'h']);
+
+    let mut grown_page3 = vec![0u8; 512];
+    leaf(&mut grown_page3, 0, 3, &[2, 1, 3]);
 
     let frame = |page_id: u32, commit: u32, page_bytes: &[u8]| {
         let mut out = vec![0u8; 24 + 512];
@@ -586,8 +589,9 @@ fn committed_wal_multi_commit_growth_and_shrink_parity() {
     wal[16..20].copy_from_slice(&11u32.to_be_bytes());
     wal[20..24].copy_from_slice(&22u32.to_be_bytes());
     wal.extend(frame(2, 0, &stale_page2));
-    wal.extend(frame(1, 2, &wal_page1));
-    wal.extend(frame(2, 2, &fresh_page2));
+    wal.extend(frame(3, 0, &grown_page3));
+    wal.extend(frame(1, 3, &wal_page1));
+    wal.extend(frame(2, 3, &fresh_page2));
 
     let scratch = Scratch::new(&main);
     let mem_db = Database::open_with_wal(main.clone(), &wal).unwrap();
@@ -596,7 +600,22 @@ fn committed_wal_multi_commit_growth_and_shrink_parity() {
     assert_eq!(mem_db.read_table(2, 2).unwrap(), file_db.read_table(2, 2).unwrap());
     assert_eq!(mem_db.read_table(2, 2).unwrap(), vec![Record { values: vec![Value::Integer(2), Value::Text("fresh".into())] }]);
 
-    // A later commit that shrinks the visible page count hides pages beyond the new boundary.
+    let grown_rows = vec![Record { values: vec![Value::Integer(3)] }];
+    assert_eq!(mem_db.read_table(3, 1).unwrap(), grown_rows);
+    assert_eq!(file_db.read_table(3, 1).unwrap(), grown_rows);
+
+    // Append a shrink commit to the very same WAL: page 3 is still present as an old frame.
+    let mut shrunk_page1 = make_page1(4, 2);
+    leaf(&mut shrunk_page1, 100, 1, &schema);
+    wal.extend(frame(1, 2, &shrunk_page1));
+    let mem_shrunk = Database::open_with_wal(main, &wal).unwrap();
+    let file_shrunk = Database::open_file_with_wal(FileSource::open(&scratch.0).unwrap(), &wal).unwrap();
+    assert_eq!(mem_shrunk.read_table(2, 2).unwrap(), mem_db.read_table(2, 2).unwrap());
+    assert_eq!(file_shrunk.read_table(2, 2).unwrap(), file_db.read_table(2, 2).unwrap());
+    assert_eq!(mem_shrunk.read_table(3, 1).unwrap_err(), "table root page is outside database");
+    assert_eq!(file_shrunk.read_table(3, 1).unwrap_err(), "table root page is outside database");
+
+    // Also check shrink against a main file that physically contains the page beyond the boundary.
     let mut three_page_main = make_page1(4, 3);
     three_page_main.resize(3 * 512, 0);
     leaf(&mut three_page_main[..512], 100, 1, &schema);
