@@ -812,7 +812,8 @@ pub fn accelerator_for(device: Option<&str>, precision: Precision) -> Result<Arc
 
 fn accelerator_with(dev: &'static Dev, requested: Precision) -> Result<Arc<FaceGpu>, String> {
     let precision = match requested {
-        Precision::Auto => if dev.fp16.is_some() { ActivePrecision::Fp16 } else { ActivePrecision::Fp32 },
+        Precision::Auto if dev.fp16.is_some() => ActivePrecision::Fp16,
+        Precision::Auto => ActivePrecision::Fp32,
         Precision::Fp16 => {
             if dev.fp16.is_none() {
                 return Err(format!("{} does not support WGSL shader-f16", dev.info.name));
