@@ -1332,6 +1332,7 @@ fn hebrew_switches_formats_dates_and_reads_every_count() {
         });
     }
     app.run("app.language.english", serde_json::json!({})).unwrap();
+    assert_eq!(app.ui.language, Locale::En);
     let _ = painted_text(&ctx, &mut app, Locale::En);
     assert_eq!(craft_ui::direction::HasDirection::direction(&ctx), craft_ui::direction::Direction::Ltr);
     set_language(Locale::En);
