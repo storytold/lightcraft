@@ -57,6 +57,7 @@
   "Import photos with File → Import Photos…, or drop them here": "Importujte fotografie přes Soubor → Importovat fotografie… nebo je přetáhněte sem",
   "This row covers more than one disk: drop on a folder inside it": "Tento řádek zahrnuje více disků: přetáhněte položky na některou ze složek v něm",
   "Local photos aren't in the library yet: Add to My Photos first, then move them": "Místní fotografie zatím nejsou v knihovně: nejprve použijte Přidat do mých fotografií a pak je přesuňte",
+  "Demo photos have no file on disk, so they can't be moved": "Ukázkové fotografie nemají soubor na disku, proto je nelze přesunout",
   "Add to My Photos First": "Nejprve přidat do mých fotografií",
   "Add to Selected Photos": "Přidat k vybraným fotografiím",
   "Add to Target Album": "Přidat do cílového alba",
@@ -2500,5 +2501,13 @@
   "Welcome": "Vítejte",
   "Next": "Další",
   "Get Started": "Začít",
-  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie"
+  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie",
+  "Can't add to an album folder": "Nelze přidat do složky alb",
+  "An album folder holds albums, not photos: drop on an album inside it": "Složka alb obsahuje alba, ne fotografie: pusťte je na album uvnitř",
+  "Can't add to a smart album": "Nelze přidat do inteligentního alba",
+  "A smart album's rules choose its photos: change them with Edit Smart Album…": "O fotografiích inteligentního alba rozhodují jeho pravidla: změníte je přes Upravit inteligentní album…",
+  "Add keywords in the Keyword List": "Klíčová slova přidávejte v Seznamu klíčových slov",
+  "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "Klíčové slovo fotografiím přidáte v Seznamu klíčových slov (Okno → Klíčová slova, K): pusťte je tam na klíčové slovo",
+  "Already on these photos": "Už je mají",
+  "Can't go inside itself": "Nemůže jít samo do sebe"
 }

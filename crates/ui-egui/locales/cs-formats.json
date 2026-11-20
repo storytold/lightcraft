@@ -302,10 +302,10 @@
   "Color space: Rec. 2020 {curve} (HDR AVIF)": "Barevný prostor: Rec. 2020 {curve} (HDR AVIF)",
   "{n} selected photo{} · {pages} page{}": "Vybrané fotografie: {n} · stránek: {pages}{:.0}{:.0}",
   "Already in “{}”": "Již v „{}“",
-  "Move {n} photo{} to “{}”": "Přesunout do „{1}“ fotografie: {n}{0:.0}",
-  "Move {n} photo{} to “{}”?": "Přesunout do „{1}“ fotografie: {n}{0:.0}?",
+  "Move {n} file{} to “{}”": "Přesunout do „{1}“ soubory: {n}{0:.0}",
+  "Move {n} file{} to “{}”?": "Přesunout do „{1}“ soubory: {n}{0:.0}?",
   "Listing folders — folders: {folders}, files: {files}": "Procházení složek – složky: {folders}, soubory: {files}",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Do „{1}“ přesunuto fotografií: {n}{0:.0}. Úpravy → Zpět je vrátí.",
+  "Moved {n} file{} to “{}”. Edit → Undo moves them back.": "Do „{1}“ přesunuto souborů: {n}{0:.0}. Úpravy → Zpět je vrátí.",
   "Drop to review {n} item{} for import": "Pusťte pro kontrolu před importem (položek: {n}){:.0}",
   "Drop to import {n} item{}": "Pusťte pro import (položek: {n}){:.0}",
   "Drop to import {n} preset{}": "Pusťte pro import přednastavení: {n}{:.0}",
@@ -325,5 +325,8 @@
   "View › Detail View ({keys}).": "Zobrazení › Zobrazení detailu ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Soubor › Exportovat… · Soubor › Tisk… ({keys}).",
   "{n} folder{} could not be read": "Složky, které se nepodařilo přečíst: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Přeskočené soubory (nejde o podporovaný typ fotografie): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Přeskočené soubory (nejde o podporovaný typ fotografie): {n}{:.0}",
+  "Add {n} photo{} to “{}”": "Přidat do „{1}“ fotografie: {n}{0:.0}",
+  "{n} already there": "již tam je: {n}",
+  "Add “{keyword}” to {n} photo{}": "Přidat „{keyword}“ k fotografiím: {n}{:.0}"
 }

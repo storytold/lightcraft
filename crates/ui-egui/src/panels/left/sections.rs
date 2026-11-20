@@ -123,13 +123,7 @@ pub(crate) fn section_drop_before(placed: &[PlacedSection], y: f32) -> Option<Si
 /// sidebar moves it there (`view.sidebarMoveSection`), releasing elsewhere or Esc leaves it.
 pub(super) fn section_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, placed: &[PlacedSection]) {
     let Some(dragged) = app.ui.dragging_section else { return };
-    let (released, pos, esc) = ui.input(|i| (i.pointer.primary_released(), i.pointer.latest_pos(), i.key_pressed(egui::Key::Escape)));
-    if esc {
-        // the drag's Esc, not also a dialog's or a view's
-        crate::widgets::take_escape(ui.ctx());
-        app.ui.dragging_section = None;
-        return;
-    }
+    let (released, pos) = ui.input(|i| (i.pointer.primary_released(), i.pointer.latest_pos()));
     let view = ui.clip_rect();
     let Some(pos) = pos.filter(|p| view.contains(*p)) else {
         if released {

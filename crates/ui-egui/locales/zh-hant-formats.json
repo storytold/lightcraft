@@ -58,10 +58,10 @@
   "LightCraft could not open its window: {e}\n\nThe log file has the details: {path}": "LightCraft 無法開啟視窗：{e}\n\n詳細資訊請見記錄檔：{path}",
   "Matches: {}": "符合條件：{}",
   "Merging… {stage} {:.0}%": "正在合併… {stage} {:.0}%",
-  "Move {n} photo{} to “{}”": "將 {n} 張照片移到「{1}」{0:.0}",
-  "Move {n} photo{} to “{}”?": "將 {n} 張照片移到「{1}」？{0:.0}",
+  "Move {n} file{} to “{}”": "將 {n} 個檔案移到「{1}」{0:.0}",
+  "Move {n} file{} to “{}”?": "將 {n} 個檔案移到「{1}」？{0:.0}",
   "Move {what} to Recently Deleted?": "要將{what}移至「最近刪除」嗎？",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "已將 {n} 張照片移到「{1}」{0:.0}。編輯 → 復原 可移回。",
+  "Moved {n} file{} to “{}”. Edit → Undo moves them back.": "已將 {n} 個檔案移到「{1}」{0:.0}。編輯 → 復原 可移回。",
   "Named ({named_n})": "已命名（{named_n}）",
   "Paste into {n} photo{} — only settings that were copied are pasted": "貼上至 {n} 張照片{:.0} — 只貼上已複製的設定",
   "Preset: {name}": "預設集：{name}",
@@ -326,5 +326,8 @@
   "{name} is installed and in use: face recognition is on": "{name} 已安裝並在使用中：臉部辨識已開啟",
   "Bring photos in with File › Import Photos… ({keys}).": "透過 檔案 › 匯入照片… ({keys}) 匯入照片。",
   "View › Detail View ({keys}).": "檢視 › 詳細檢視 ({keys})。",
-  "File › Export… · File › Print… ({keys}).": "檔案 › 匯出… · 檔案 › 列印… ({keys})。"
+  "File › Export… · File › Print… ({keys}).": "檔案 › 匯出… · 檔案 › 列印… ({keys})。",
+  "Add {n} photo{} to “{}”": "將 {n} 張照片加入「{1}」{0:.0}",
+  "{n} already there": "{n} 張已在其中",
+  "Add “{keyword}” to {n} photo{}": "將「{keyword}」加入 {n} 張照片{:.0}"
 }

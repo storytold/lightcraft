@@ -305,10 +305,10 @@
   "{n} selected photos · {pages} pages": "მონიშნული ფოტო: {n} · გვერდი: {pages}",
   "{n} selected photo{} · {pages} page{}": "არჩეული ფოტო: {n} · გვერდი: {pages}{:.0}{:.0}",
   "Already in “{}”": "უკვე „{}“-შია",
-  "Move {n} photo{} to “{}”": "ფოტოს გადატანა „{1}“-ში: {n}{0:.0}",
-  "Move {n} photo{} to “{}”?": "გადავიდეს „{1}“-ში ფოტო: {n}{0:.0}?",
+  "Move {n} file{} to “{}”": "ფაილის გადატანა „{1}“-ში: {n}{0:.0}",
+  "Move {n} file{} to “{}”?": "გადავიდეს „{1}“-ში ფაილი: {n}{0:.0}?",
   "Listing folders — folders: {folders}, files: {files}": "საქაღალდეების ჩამოთვლა — საქაღალდეები: {folders}, ფაილები: {files}",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "„{1}“-ში გადავიდა ფოტო: {n}{0:.0}. რედაქტირება → დაბრუნება მათ უკან აბრუნებს.",
+  "Moved {n} file{} to “{}”. Edit → Undo moves them back.": "„{1}“-ში გადავიდა ფაილი: {n}{0:.0}. რედაქტირება → დაბრუნება მათ უკან აბრუნებს.",
   "Drop to review {n} item{} for import": "ჩააგდეთ იმპორტამდე გადასახედად (ელემენტები: {n}){:.0}",
   "Drop to import {n} item{}": "ჩააგდეთ იმპორტისთვის (ელემენტები: {n}){:.0}",
   "Drop to import {n} preset{}": "ჩააგდეთ პრესეტების იმპორტისთვის: {n}{:.0}",
@@ -328,5 +328,8 @@
   "View › Detail View ({keys}).": "ხედი › დეტალური ხედი ({keys}).",
   "File › Export… · File › Print… ({keys}).": "ფაილი › ექსპორტი… · ფაილი › დაბეჭდვა… ({keys}).",
   "{n} folder{} could not be read": "საქაღალდეები, რომლებიც ვერ წაიკითხა: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "გამოტოვებული ფაილები (მხარდაუჭერელი ფოტოს ტიპია): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "გამოტოვებული ფაილები (მხარდაუჭერელი ფოტოს ტიპია): {n}{:.0}",
+  "Add {n} photo{} to “{}”": "დაამატეთ ფოტო „{1}“-ში: {n}{0:.0}",
+  "{n} already there": "{n} უკვე არის",
+  "Add “{keyword}” to {n} photo{}": "დაამატეთ „{keyword}“ ფოტოებს: {n}{:.0}"
 }
