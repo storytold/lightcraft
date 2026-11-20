@@ -51,6 +51,93 @@ fn denoise_mix_is_reserved_before_the_source_enters_the_cache() {
     assert_eq!(source.bytes(), reserved, "changing Amount replaces the reserved mix");
 }
 
+fn camera_color_with_spare_tables() -> lightcraft_pipeline::CameraColor {
+    let table = || lightcraft_raw::profile::HsvTable {
+        hue_divisions: 1,
+        sat_divisions: 2,
+        val_divisions: 1,
+        data: {
+            let mut data = Vec::with_capacity(128);
+            data.extend([[0.0, 1.0, 1.0]; 2]);
+            data
+        },
+        srgb_value: false,
+    };
+    let mut tags = lightcraft_raw::ColorData::default();
+    tags.profile.hue_sat_map = [Some(table()), Some(table())];
+    tags.profile.look_table = Some(table());
+    lightcraft_pipeline::CameraColor { tags, developed_for: lightcraft_color::D65 }
+}
+
+#[test]
+fn retained_camera_color_counts_spare_table_capacity() {
+    let mut color = camera_color_with_spare_tables();
+    let mut points = Vec::with_capacity(64);
+    points.extend([[0.0, 0.0], [1.0, 1.0]]);
+    color.tags.profile.tone_curve = Some(lightcraft_raw::profile::ToneCurve { points });
+    color.tags.kelvin_presets =
+        lightcraft_raw::kelvin_presets::KelvinPresets::new([(2500.0, [1.0, 1.0, 3.0]), (4500.0, [2.0, 1.0, 2.0]), (6500.0, [3.0, 1.0, 1.0])]);
+    assert!(color.tags.kelvin_presets.is_some());
+    let mut source = DecodedSource::new(Arc::new(Rgb32f::new(8, 8)), Some(SourceInfo::default()));
+    let before = source.bytes();
+    source.info.as_mut().unwrap().camera_color = Some(Arc::new(color));
+    let retained = 3 * 128 * std::mem::size_of::<[f32; 3]>()
+        + 64 * std::mem::size_of::<[f32; 2]>()
+        + 3 * std::mem::size_of::<(f32, [f32; 3])>()
+        + std::mem::size_of::<lightcraft_pipeline::CameraColor>();
+    assert!(source.bytes() >= before + retained, "retained capacity must count even when only two entries are used");
+}
+
+#[test]
+fn retained_camera_color_and_local_tone_count_gain_capacity() {
+    use lightcraft_raw::gaintable::{GainTableMap, SourcePlacement};
+    let map = || {
+        let mut gains = Vec::with_capacity(128);
+        gains.extend([1.0; 2]);
+        GainTableMap {
+            points_v: 1,
+            points_h: 1,
+            points_n: 2,
+            spacing_v: 1.0,
+            spacing_h: 1.0,
+            origin_v: 0.0,
+            origin_h: 0.0,
+            weights: [0.0, 0.0, 0.0, 1.0, 0.0],
+            gamma: 1.0,
+            gains,
+        }
+    };
+    let mut color = lightcraft_pipeline::CameraColor { tags: lightcraft_raw::ColorData::default(), developed_for: lightcraft_color::D65 };
+    color.tags.profile.gain_table_map = Some(map());
+    let mut source = DecodedSource::new(Arc::new(Rgb32f::new(8, 8)), Some(SourceInfo::default()));
+    let before = source.bytes();
+    let info = source.info.as_mut().unwrap();
+    info.camera_color = Some(Arc::new(color));
+    info.local_tone = Some(Arc::new(lightcraft_pipeline::local_tone::LocalTone {
+        map: map(),
+        placement: SourcePlacement { rect: [0.0, 0.0, 1.0, 1.0], orientation: lightcraft_geom::Orientation::Normal },
+    }));
+    let retained = 2 * 128 * std::mem::size_of::<f32>() + std::mem::size_of::<lightcraft_pipeline::CameraColor>();
+    assert_eq!(source.bytes(), before + retained, "both retained gain maps include spare capacity");
+}
+
+#[test]
+fn retained_camera_color_evicts_the_oldest_thumbnail_source() {
+    let color = Arc::new(camera_color_with_spare_tables());
+    let source = || {
+        let info = SourceInfo { camera_color: Some(color.clone()), ..Default::default() };
+        DecodedSource::new(Arc::new(Rgb32f::new(1, 1)), Some(info))
+    };
+    let mut cache = MediaCache::default();
+    cache.set_budget(8 << 10);
+    cache.insert_source(PhotoId(1), SourceLevel::Thumb, source());
+    assert!(cache.has_source(PhotoId(1), SourceLevel::Thumb), "one camera model fits");
+    cache.insert_source(PhotoId(2), SourceLevel::Thumb, source());
+    assert!(!cache.has_source(PhotoId(1), SourceLevel::Thumb), "shared models are charged to each source conservatively");
+    assert!(cache.has_source(PhotoId(2), SourceLevel::Thumb), "the newest source fits after eviction");
+    assert!(cache.held() <= cache.budget());
+}
+
 #[test]
 fn hidden_grading_wheels_render_neutral_without_touching_the_photo() {
     let mut s = crate::Session::with_demo();
