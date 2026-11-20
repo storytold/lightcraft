@@ -878,8 +878,14 @@ impl Catalog {
     /// appear together with `current` on other photos, then the most used ones. Most frequent
     /// first, at most `n`, never one of `current`.
     pub fn keyword_suggestions(&self, current: &[String], prefix: &str, n: usize) -> Vec<String> {
+        self.keyword_suggestions_among(self.keywords(), current, prefix, n)
+    }
+
+    /// [`Self::keyword_suggestions`] from the photos' keywords and their counts as
+    /// [`Self::keywords`] gives them, for a caller that asks more than once of the same library.
+    pub fn keyword_suggestions_among(&self, keywords: Vec<(String, usize)>, current: &[String], prefix: &str, n: usize) -> Vec<String> {
         // the photos' keywords with their counts, and those only the list has (none)
-        let mut all = self.keywords();
+        let mut all = keywords;
         for l in self.keyword_list.values() {
             if !all.iter().any(|(k, _)| same(k, &l.path)) {
                 all.push((l.path.clone(), 0));
