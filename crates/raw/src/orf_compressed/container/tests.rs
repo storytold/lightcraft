@@ -1,5 +1,5 @@
 use super::*;
-use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter};
+use craft_raw_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter};
 
 /// Exif `CFAPattern` of an RGGB sensor.
 const RGGB: &[u8] = &[0, 2, 0, 2, 0, 1, 1, 2];

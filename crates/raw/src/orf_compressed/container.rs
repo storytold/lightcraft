@@ -14,9 +14,9 @@
 use craft_raw::{
     BlackLevel, Camera, Cfa, ColorData, LevelSource, LevelSources, OpcodeLists, Orientation, RawData, RawFormat, RawImage, RawNotices, Rect,
 };
-use craft_tiff::image::chunk_bytes;
-use craft_tiff::makernote::{self, MakerNote};
-use craft_tiff::{Ifd, Tiff, Value, tags as t};
+use craft_raw_tiff::image::chunk_bytes;
+use craft_raw_tiff::makernote::{self, MakerNote};
+use craft_raw_tiff::{Ifd, Tiff, Value, tags as t};
 
 use super::{OrfCompressionConfig, decompress_stream, verify_stream_header};
 use crate::{MAX_SAMPLES, Mode, RawError, Result};
@@ -159,8 +159,8 @@ fn sub_ifd(bytes: &[u8], mn: &MakerNote, tag: u16) -> Option<Ifd> {
         Value::Undefined(_) | Value::Byte(_) => e.offset,
         _ => mn.base.checked_add(mn.ifd.u64(tag)?)?,
     };
-    let opts = craft_tiff::ParseOptions { max_ifds: 4, max_depth: 1, follow_children: false, ..Default::default() };
-    craft_tiff::parse_ifd_at(bytes, at, mn.order, mn.base, false, &opts).ok().map(|(i, _)| i)
+    let opts = craft_raw_tiff::ParseOptions { max_ifds: 4, max_depth: 1, follow_children: false, ..Default::default() };
+    craft_raw_tiff::parse_ifd_at(bytes, at, mn.order, mn.base, false, &opts).ok().map(|(i, _)| i)
 }
 
 /// A 2×2 Bayer cell anchored at the sensor origin; colour indices 0 = R, 1 = G, 2 = B.

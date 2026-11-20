@@ -14,8 +14,8 @@ mod container;
 pub(crate) use container::decode;
 
 use crate::{RawError, Result};
-use craft_tiff::Ifd;
-use craft_tiff::makernote::MakerNote;
+use craft_raw_tiff::Ifd;
+use craft_raw_tiff::makernote::MakerNote;
 
 /// Olympus MakerNote tag specifying valid sensor bit depth.
 const MAKERNOTE_VALID_BITS_TAG: u16 = 0x102c;
@@ -525,7 +525,7 @@ mod tests {
     /// tag takes the default.
     #[test]
     fn present_but_invalid_parameters_reject_the_configuration() {
-        use craft_tiff::{Entry, Value};
+        use craft_raw_tiff::{Entry, Value};
         let ifd = |extra: Option<(u16, Value)>| {
             let mut entries = vec![Entry { tag: 0x0653, value: Value::Short(vec![4]), offset: 0 }];
             entries.extend(extra.map(|(tag, value)| Entry { tag, value, offset: 0 }));
