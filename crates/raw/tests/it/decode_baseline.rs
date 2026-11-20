@@ -452,8 +452,11 @@ fn differences(baseline: &BTreeMap<String, Vec<String>>, decoded: &BTreeMap<Stri
             out.push(format!("{name}: in the corpus but not in the baseline"));
             continue;
         };
+        // A file that starts or stops decoding: the status says it, the other columns would only repeat it.
+        let decodes = |row: &[String]| row.get(2).is_some_and(|status| status == "ok");
+        let status_only = decodes(expected) != decodes(row);
         for ((column, want), got) in COLUMNS.iter().zip(expected).zip(row) {
-            if want != got {
+            if want != got && (!status_only || *column == "status") {
                 out.push(format!("{name}: {column}: baseline {want}, decoded {got}"));
             }
         }
@@ -564,4 +567,35 @@ fn floats_keep_seven_significant_digits() {
     assert_ne!(num(0.0155793), num(0.0155794));
     assert_eq!(num(f64::from(0.1f32)), "0.1");
     assert_eq!(num(-0.0), "-0");
+}
+
+#[test]
+fn differences_name_the_file_and_column_and_collapse_a_status_change() {
+    let ok = |name: &str, iso: &str| -> Vec<String> {
+        COLUMNS
+            .iter()
+            .map(|column| match *column {
+                "file" => name.to_owned(),
+                "status" => "ok".to_owned(),
+                "iso" => iso.to_owned(),
+                _ => "v".to_owned(),
+            })
+            .collect()
+    };
+    let failed = |name: &str| -> Vec<String> {
+        let mut row = vec![name.to_owned(), "v".to_owned(), "error: corrupt".to_owned()];
+        row.resize(COLUMNS.len(), "-".to_owned());
+        row
+    };
+    let baseline = BTreeMap::from([("a".to_owned(), ok("a", "160")), ("b".to_owned(), ok("b", "100")), ("c".to_owned(), ok("c", "100"))]);
+    let decoded = BTreeMap::from([
+        ("a".to_owned(), ok("a", "-")),
+        ("b".to_owned(), failed("b")),
+        ("c".to_owned(), ok("c", "100")),
+        ("d".to_owned(), ok("d", "100")),
+    ]);
+    assert_eq!(
+        differences(&baseline, &decoded),
+        ["a: iso: baseline 160, decoded -", "b: status: baseline ok, decoded error: corrupt", "d: in the corpus but not in the baseline"]
+    );
 }
