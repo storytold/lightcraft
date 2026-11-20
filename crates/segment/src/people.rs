@@ -415,9 +415,7 @@ impl FaceModel {
                 let refs: Vec<&[f32]> = inputs.iter().map(Vec::as_slice).collect();
                 let outs = far.run_batch(&refs)?;
                 for (&(x, y), out) in chunk.iter().zip(&outs) {
-                    let (Some(reg), Some(cls)) = (out.first(), out.get(1)) else {
-                        return Err(Error::Model("BlazeFace gave no output".into()));
-                    };
+                    let (Some(reg), Some(cls)) = (out.first(), out.get(1)) else { return Err(Error::Model("BlazeFace gave no output".into())) };
                     all.extend(mediapipe::decode_far(reg, cls, FAR_THRESHOLD).into_iter().map(|d| d.from_window(x as f32, y as f32, n as f32)));
                 }
             }

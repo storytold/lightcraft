@@ -531,9 +531,7 @@ impl Model {
         require_faster: bool,
     ) -> std::result::Result<(), String> {
         self.detach();
-        let Some(plan) = self.plan() else {
-            return Err("the model has no form the GPU runs".into());
-        };
+        let Some(plan) = self.plan() else { return Err("the model has no form the GPU runs".into()) };
         if plan.convs == 0 {
             return Err("the model has no form the GPU runs".into());
         }

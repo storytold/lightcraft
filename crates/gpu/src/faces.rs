@@ -394,9 +394,7 @@ fn dev() -> Result<&'static Dev, String> {
 }
 
 fn dev_for(choice: Option<&str>) -> Result<&'static Dev, String> {
-    let Some(key_str) = choice.map(str::trim).filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("auto")) else {
-        return dev();
-    };
+    let Some(key_str) = choice.map(str::trim).filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("auto")) else { return dev() };
     if key_str.eq_ignore_ascii_case("cpu") {
         return Err("the CPU is chosen in Settings".into());
     }
@@ -1571,8 +1569,7 @@ impl FaceGpu {
                     }
                     op => {
                         let arg = |i: usize| args.get(i).cloned().unwrap_or_else(|| d.dummy.clone());
-                        self.op_dispatch_batched(op, &prog.lens, &step.args, batch, len_one, [arg(0), arg(1), arg(2)], &out)?
-                            .map(|x| vec![x])
+                        self.op_dispatch_batched(op, &prog.lens, &step.args, batch, len_one, [arg(0), arg(1), arg(2)], &out)?.map(|x| vec![x])
                     }
                 };
                 let Some(dispatches) = dispatches else {
