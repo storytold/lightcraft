@@ -121,7 +121,7 @@ pub fn wb_matrix(space: &RgbSpace, src: Xy) -> Mat3 {
 /// returns `Mat3::IDENTITY` adaptation when the source illuminant's Bradford blue cone response
 /// is `<= 0.0` (warm, strongly green illuminants).
 pub fn wb_matrix_checked(space: &RgbSpace, src: Xy) -> Mat3 {
-    let shared_space = craft_color_transform::space::RgbSpace {
+    let shared_space = craft_color_transform::RgbSpace {
         r: craft_color_transform::Xy::new(space.r.x, space.r.y),
         g: craft_color_transform::Xy::new(space.g.x, space.g.y),
         b: craft_color_transform::Xy::new(space.b.x, space.b.y),
