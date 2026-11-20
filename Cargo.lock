@@ -4116,7 +4116,7 @@ dependencies = [
 name = "lightcraft-geocode"
 version = "0.21.1"
 dependencies = [
- "miniz_oxide 0.9.1",
+ "craft-zip",
  "serde",
 ]
 
