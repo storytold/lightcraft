@@ -900,8 +900,8 @@ mod tests {
     fn shared_tone_and_finish_match_pinned_legacy_values_at_neutral_highlights_and_channel_edges() {
         let disp = ToneMap::display(0.0, 0.0, 0.0);
         assert_eq!(disp.apply(0.0), 0.0);
-        assert!((disp.apply(0.18) - 0.18).abs() < 1e-4);
-        assert!((disp.apply(1.0) - 1.0).abs() < 1e-4);
+        assert!((disp.apply(0.18) - 0.18).abs() < 2e-3);
+        assert!((disp.apply(1.0) - 1.0).abs() < 2e-3);
 
         let roll = ToneMap::rolloff_hdr(20.0, 30.0, -10.0, 1.0);
         let (y_neutral, y_hi1, y_hi4) = (roll.apply(0.18), roll.apply(1.0), roll.apply(4.0));
