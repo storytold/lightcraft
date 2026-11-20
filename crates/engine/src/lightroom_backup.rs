@@ -76,24 +76,16 @@ impl Drop for Extracted {
 
 /// Opens `path` as a bounded seekable ZIP archive without buffering payloads in memory.
 fn open_archive(path: &Path) -> Result<SeekableArchive<File>, String> {
-    let mut file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let records =
-        craft_zip::lenient::file::directory_record_names(&mut file, MAX_DIRECTORY_BYTES, MAX_ENTRIES as usize).map_err(|e| e.to_string())?;
-    let mut lrcat_records = 0usize;
-    for record in &records {
-        let lower = String::from_utf8_lossy(&record.name).replace('\\', "/").to_lowercase();
-        if lower.ends_with(".lrcat") && !lower.split('/').any(|p| p == "__macosx" || p.starts_with("._")) {
-            lrcat_records += 1;
-            if lrcat_records > 1 {
-                return Err("this zip holds more than one Lightroom catalog (.lrcat); unzip it and import one".into());
-            }
-        }
-    }
-    SeekableArchive::open(
+    let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let archive = SeekableArchive::open(
         file,
         SeekableLimits { max_entries: MAX_ENTRIES, max_metadata_bytes: MAX_DIRECTORY_BYTES + 65_535 + 128, max_total_bytes: MAX_CATALOG_BYTES },
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    if archive.has_duplicate_names() {
+        return Err("this zip holds more than one Lightroom catalog (.lrcat); unzip it and import one".into());
+    }
+    Ok(archive)
 }
 
 /// The backup's catalog entry: `(index, normalized_name, declared_size)` for the one `*.lrcat`
@@ -435,11 +427,13 @@ pub(crate) mod tests {
     #[test]
     fn only_a_zip_with_one_catalog_holds_one() {
         let dir = temp("holds");
-        let cases: [(&str, Vec<u8>, bool); 5] = [
+        let fake_eocd = [b'P', b'K', 5, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let cases: [(&str, Vec<u8>, bool); 6] = [
             ("one.zip", zip(&[("Cat.lrcat", b"x"), ("Cat.lrcat-data/CURRENT", b"y")], true, false), true),
             ("none.zip", zip(&[("photo.jpg", b"x")], false, false), false),
             ("two.zip", zip(&[("A.lrcat", b"a"), ("B.lrcat", b"b")], false, false), false),
             ("dup.zip", zip(&[("Cat.lrcat", b"a"), ("Cat.lrcat", b"b")], false, false), false),
+            ("dup_eocd.zip", zip(&[("Cat.lrcat", &fake_eocd), ("Cat.lrcat", b"b")], false, false), false),
             ("junk.zip", b"PK".to_vec(), false),
         ];
         for (name, bytes, want) in cases {
@@ -447,6 +441,9 @@ pub(crate) mod tests {
             assert_eq!(holds_catalog(&dir.join(name)), want, "{name}");
         }
         assert!(extract(&dir.join("dup.zip"), &dir.join("out"), &AtomicBool::new(false)).unwrap_err().contains("more than one Lightroom catalog"));
+        assert!(
+            extract(&dir.join("dup_eocd.zip"), &dir.join("out2"), &AtomicBool::new(false)).unwrap_err().contains("more than one Lightroom catalog")
+        );
         assert!(!holds_catalog(&dir.join("absent.zip")));
         std::fs::remove_dir_all(&dir).unwrap();
     }

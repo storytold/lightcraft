@@ -1523,7 +1523,6 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=4b4d5f7a9d126ff20d7c4a453726e43dc15c13cd#4b4d5f7a9d126ff20d7c4a453726e43dc15c13cd"
 dependencies = [
  "flate2",
- "miniz_oxide 0.8.9",
  "thiserror 2.0.21",
  "zip 9.1.3",
 ]
