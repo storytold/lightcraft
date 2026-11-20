@@ -24,6 +24,10 @@ pub fn command(app: &mut LightcraftApp, p: &Value) -> Option<Result<Value, Strin
     if p.get("wait").and_then(Value::as_bool) == Some(true) {
         return None;
     }
+    let metadata_only = match reload::metadata_only(p) {
+        Ok(value) => value,
+        Err(e) => return Some(Err(e.to_string())),
+    };
     let items = match reload::plan(&mut app.session, p) {
         Ok(items) => items,
         // named as `Session::execute` names a shared parameter check's refusal
@@ -40,7 +44,7 @@ pub fn command(app: &mut LightcraftApp, p: &Value) -> Option<Result<Value, Strin
     let preview_only: Vec<_> =
         items.iter().filter(|i| app.session.catalog.photo(i.id).is_some_and(|ph| ph.preview_only.is_some())).map(|i| i.id).collect();
     let library = app.session.library_generation();
-    let probe = reload::file_probe(&app.session);
+    let probe = reload::file_probe_for(&app.session, metadata_only);
     let cancel = Arc::new(AtomicBool::new(false));
     let flag = cancel.clone();
     let stopped = cancel.clone();
@@ -48,10 +52,28 @@ pub fn command(app: &mut LightcraftApp, p: &Value) -> Option<Result<Value, Strin
         let total = items.len() as u64;
         task.progress(0, total);
         let results = reload::probe(probe.as_ref(), &items, &flag, &|done| task.progress(done as u64, total));
-        (items, results)
+        let unreadable = results.iter().filter(|result| result.is_err()).count();
+        (items, results, unreadable)
     };
-    let done = move |app: &mut LightcraftApp, ctx: &egui::Context, (items, results)| {
+    let done = move |app: &mut LightcraftApp, ctx: &egui::Context, (items, results, unreadable)| {
         if app.session.library_generation() != library {
+            return;
+        }
+        if metadata_only {
+            match app.session.execute_fn("photo.reload", |s| reload::apply_metadata(s, items, results).map(|ids| reload::to_json(&ids))) {
+                Ok(value) => {
+                    let updated = value["reloaded"].as_array().map_or(0, Vec::len);
+                    app.toast(
+                        ctx,
+                        crate::i18n::tr_format!(
+                            "Metadata updated for {updated} photos; {unreadable} could not be read",
+                            updated = updated,
+                            unreadable = unreadable
+                        ),
+                    );
+                }
+                Err(e) => app.toast_error(ctx, e.to_string()),
+            }
             return;
         }
         // as the command: one undo step, the durable save and the automatic XMP sidecar write

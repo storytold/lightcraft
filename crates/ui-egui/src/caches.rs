@@ -11,8 +11,9 @@ pub struct LibraryCounts {
 /// The values the filter bar's pickers offer.
 #[derive(Clone, Debug, Default)]
 pub struct FilterValues {
-    pub cameras: Vec<String>,
-    pub lenses: Vec<String>,
+    pub dates: Vec<lightcraft_catalog::DateGroup>,
+    pub cameras: Vec<(String, usize)>,
+    pub lenses: Vec<(String, usize)>,
     pub keywords: Vec<String>,
 }
 
@@ -204,27 +205,43 @@ impl Caches {
         self.date_groups = Some((cat.revision, g.clone()));
         g
     }
-    /// Cameras, lenses and keywords in the library (filter bar pickers).
-    pub fn filter_values(&mut self, cat: &lightcraft_catalog::Catalog) -> std::sync::Arc<FilterValues> {
-        match &self.filter_values {
-            Some((r, v)) if *r == cat.revision => v.clone(),
-            _ => {
-                let distinct = |mut v: Vec<String>| {
-                    v.retain(|s| !s.trim().is_empty());
-                    v.sort_by_key(|s| s.to_lowercase());
-                    v.dedup();
-                    v
-                };
-                let lib = || cat.photos().filter(|p| p.in_library());
-                let v = std::sync::Arc::new(FilterValues {
-                    cameras: distinct(lib().map(|p| p.meta.camera.clone()).collect()),
-                    lenses: distinct(lib().map(|p| p.meta.lens.clone()).collect()),
-                    keywords: cat.keywords().into_iter().map(|(k, _)| k).collect(),
-                });
-                self.filter_values = Some((cat.revision, v.clone()));
-                v
-            }
+    /// Each column retains its own alternatives while honoring the source and other filters.
+    pub fn filter_values(&mut self, session: &lightcraft_engine::Session) -> std::sync::Arc<FilterValues> {
+        let (scope, gone) = session.filter_bar_scope();
+        let key = (session.catalog.revision, format!("{:?}|{scope:?}|{gone}", session.source));
+        if let Some((cached, values)) = &self.filter_values
+            && *cached == key
+        {
+            return values.clone();
         }
+        let tally = |filter: &lightcraft_catalog::Filter, field: fn(&lightcraft_catalog::Photo) -> &str| {
+            let mut counts = std::collections::BTreeMap::new();
+            for p in session.filter_bar_photos(filter) {
+                let value = field(p);
+                if !value.trim().is_empty() {
+                    *counts.entry(value.to_owned()).or_insert(0) += 1;
+                }
+            }
+            let mut counts: Vec<_> = counts.into_iter().collect();
+            counts.sort_by_cached_key(|(value, _)| value.to_lowercase());
+            counts
+        };
+        let dates = lightcraft_catalog::Catalog::group_capture_dates(
+            session
+                .filter_bar_photos(&lightcraft_catalog::Filter { date: None, date_from: None, date_to: None, ..scope.clone() })
+                .filter_map(|p| p.captured.as_deref()),
+        );
+        let cameras = tally(&lightcraft_catalog::Filter { camera: None, ..scope.clone() }, |p| &p.meta.camera);
+        let lenses = tally(&lightcraft_catalog::Filter { lens: None, ..scope.clone() }, |p| &p.meta.lens);
+        let keywords = session
+            .filter_bar_photos(&lightcraft_catalog::Filter { keyword: None, ..scope })
+            .flat_map(|p| p.meta.keywords.iter().cloned())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let values = std::sync::Arc::new(FilterValues { dates, cameras, lenses, keywords });
+        self.filter_values = Some((key, values.clone()));
+        values
     }
     /// What the Add keyword box offers for `typed` (see [`panels::keywording::offers`]). Kept apart
     /// from [`Self::suggestions`]: both are asked for on every frame of typing, and each looks

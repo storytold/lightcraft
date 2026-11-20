@@ -93,7 +93,8 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, current: &str, a
     }
 }
 
-pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn show(app: &mut LightcraftApp, parent: &mut egui::Ui) {
+    let ui = &mut *parent;
     let t = Tokens::get(ui.ctx());
     // one row when there is room, else the metadata pickers and actions go to a second row
     let two_rows = ui.available_width() < WIDE;
@@ -240,21 +241,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             .collect(),
     );
 
-    // metadata pickers
     let ui: &mut egui::Ui = if two_rows { &mut row2 } else { &mut row1 };
-    let values = app.caches.filter_values(&app.session.catalog);
-    let (cameras, lenses, keywords) = (values.cameras.clone(), values.lenses.clone(), values.keywords.clone());
-    for (id, key, all_label, current, values) in [
-        ("camera", "camera", "Camera", f.camera.clone(), cameras),
-        ("lens", "lens", "Lens", f.lens.clone(), lenses),
-        ("keyword", "keyword", "Keyword", f.keyword.clone(), keywords),
-    ] {
-        let mut items = vec![(format!("Any {}", all_label.to_lowercase()), json!({key: Value::Null}), current.is_none())];
-        items.extend(values.into_iter().map(|v| (v.clone(), json!({key: v.clone()}), current.as_deref() == Some(v.as_str()))));
-        let shown = current.clone().unwrap_or_else(|| all_label.to_string());
-        let shown = if shown.chars().count() > 22 { format!("{}…", shown.chars().take(21).collect::<String>()) } else { shown };
-        picker(app, ui, id, &shown, current.is_some(), items);
-    }
+    let values = app.caches.filter_values(&app.session);
+    let mut keywords = vec![("Any keyword".to_string(), json!({"keyword": null}), f.keyword.is_none())];
+    keywords.extend(values.keywords.iter().map(|v| (v.clone(), json!({"keyword": v}), f.keyword.as_deref() == Some(v))));
+    picker(app, ui, "keyword", f.keyword.as_deref().unwrap_or("Keyword"), f.keyword.is_some(), keywords);
 
     // save / clear
     ui.add_space(14.0);
@@ -294,4 +285,83 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             crate::panels::dialogs::prompt(app, "Save Filter Preset", "Preset name", "", "filter.savePreset", json!({}), "name");
         }
     });
+    metadata_columns(app, parent, &f, &values);
+}
+
+fn metadata_columns(app: &mut LightcraftApp, ui: &mut egui::Ui, f: &lightcraft_catalog::Filter, values: &crate::FilterValues) {
+    let mut patch = None;
+    ui.columns(3, |columns| {
+        for (column, (title, key)) in columns.iter_mut().zip([("Capture Date", "date"), ("Camera", "camera"), ("Lens", "lens")]) {
+            column.label(egui::RichText::new(crate::i18n::tr(title)).strong());
+            column.separator();
+            egui::ScrollArea::vertical().id_salt(("filter-metadata", key)).max_height(116.0).auto_shrink([false, false]).show(column, |ui| {
+                if key == "date" {
+                    let all = f.date.is_none() && f.date_from.is_none() && f.date_to.is_none();
+                    if choice(ui, "filter:date:all", crate::i18n::tr("All Dates"), None, all).clicked() {
+                        patch = Some(json!({"date": null, "dateFrom": null, "dateTo": null}));
+                    }
+                    for group in &values.dates {
+                        date_tree(ui, &group.year, group.count, f.date.as_deref(), &mut patch, |ui, patch| {
+                            for (month, count) in &group.months {
+                                date_tree(ui, month, *count, f.date.as_deref(), patch, |ui, patch| {
+                                    let first = group.days.partition_point(|(day, _)| day.as_str() > month.as_str() && !day.starts_with(month));
+                                    for (day, count) in group.days.iter().skip(first).take_while(|(day, _)| day.starts_with(month)) {
+                                        date_choice(ui, day, *count, f.date.as_deref(), patch);
+                                    }
+                                });
+                            }
+                        });
+                    }
+                } else {
+                    let (entries, selected, all) = if key == "camera" {
+                        (&values.cameras, f.camera.as_deref(), "Any camera")
+                    } else {
+                        (&values.lenses, f.lens.as_deref(), "Any lens")
+                    };
+                    if choice(ui, &format!("filter:{key}:all"), crate::i18n::tr(all), None, selected.is_none()).clicked() {
+                        patch = Some(json!({key: null}));
+                    }
+                    for (value, count) in entries {
+                        if choice(ui, &format!("filter:{key}:value:{value}"), value, Some(*count), selected == Some(value)).clicked() {
+                            patch = Some(json!({key: value}));
+                        }
+                    }
+                    if entries.is_empty() {
+                        caption(ui, "No recorded values");
+                    }
+                }
+            });
+        }
+    });
+    if let Some(patch) = patch {
+        filter(app, patch);
+    }
+}
+
+fn choice(ui: &mut egui::Ui, id: &str, label: &str, count: Option<usize>, selected: bool) -> egui::Response {
+    let text = count.map_or_else(|| label.to_owned(), |count| format!("{label} ({count})"));
+    let r = ui.add(egui::Button::selectable(selected, text).truncate());
+    register(ui, id, r.rect);
+    r
+}
+
+fn date_choice(ui: &mut egui::Ui, key: &str, count: usize, selected: Option<&str>, patch: &mut Option<Value>) {
+    if choice(ui, &format!("filter:date:{key}"), &crate::i18n::date_group_label(key, true), Some(count), selected == Some(key)).clicked() {
+        *patch = Some(json!({"date": key, "dateFrom": null, "dateTo": null}));
+    }
+}
+
+fn date_tree(
+    ui: &mut egui::Ui,
+    key: &str,
+    count: usize,
+    selected: Option<&str>,
+    patch: &mut Option<Value>,
+    children: impl FnOnce(&mut egui::Ui, &mut Option<Value>),
+) {
+    let id = ui.make_persistent_id(("filter-date", key));
+    let (toggle, _, _) = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, selected.is_some_and(|s| s.starts_with(key)))
+        .show_header(ui, |ui| date_choice(ui, key, count, selected, patch))
+        .body(|ui| children(ui, patch));
+    register(ui, format!("filter:date:expand:{key}"), toggle.rect);
 }

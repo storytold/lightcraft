@@ -49,10 +49,28 @@ pub fn plan(s: &mut Session, p: &Value) -> Result<Vec<Item>> {
         .collect())
 }
 
+/// Whether to fill missing shooting metadata only, without refreshing file or develop state.
+pub fn metadata_only(p: &Value) -> Result<bool> {
+    match p.get("metadataOnly") {
+        None => Ok(false),
+        Some(value) => value.as_bool().ok_or_else(|| crate::cmd::bad("photo.reload", "metadataOnly must be a boolean")),
+    }
+}
+
 /// The session's file probe, to [`probe`] with on a worker thread (`None` in a session without file
 /// access, where a reload reads nothing but the file name, as the command does).
 pub fn file_probe(s: &Session) -> Option<FileProbe> {
     s.media.file_probe.clone()
+}
+
+/// Use the lighter metadata reader for desktop files. Other hosts keep their own backing store.
+pub fn file_probe_for(s: &Session, metadata_only: bool) -> Option<FileProbe> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if metadata_only && s.library.is_some() && s.media.file_probe.is_some() {
+        return Some(crate::files::fs_metadata_probe());
+    }
+    let _ = metadata_only;
+    file_probe(s)
 }
 
 /// Read each listed photo's file as Reload does, several at once. Doesn't touch the session.
@@ -106,6 +124,29 @@ pub fn apply(s: &mut Session, items: Vec<Item>, results: Vec<std::result::Result
         s.commit("Reload Changed Files", Op::Batch { ops })?;
     }
     Ok(reloaded)
+}
+
+/// Fill missing shooting metadata only. Recheck the path and merge against the current photo so
+/// a file relink or metadata edit made during the scan is respected.
+pub fn apply_metadata(s: &mut Session, items: Vec<Item>, results: Vec<std::result::Result<ProbeInfo, String>>) -> Result<Vec<PhotoId>> {
+    let mut ops = Vec::new();
+    let mut changed = Vec::new();
+    for (item, info) in items.into_iter().zip(results) {
+        let (Ok(info), Some(photo)) = (info, s.catalog.photo(item.id)) else { continue };
+        if !matches!(&photo.source, Source::File { path } if *path == item.path) {
+            continue;
+        }
+        let photo_ops = crate::cmd::convert::fill_missing_meta(item.id, photo, &info);
+        if !photo_ops.is_empty() {
+            changed.push(item.id);
+            ops.extend(photo_ops);
+        }
+    }
+    if !ops.is_empty() {
+        s.skip_auto_write = true;
+        s.commit("Fill Missing Shooting Metadata", Op::Batch { ops })?;
+    }
+    Ok(changed)
 }
 
 /// `{reloaded: [ids]}`.
