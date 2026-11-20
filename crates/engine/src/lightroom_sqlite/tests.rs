@@ -539,3 +539,91 @@ fn reader_enforces_column_page_and_cycle_limits() {
     assert_eq!(db.read_table(1, 1).unwrap_err(), "SQLite B-tree contains a cycle or shared page");
     assert_eq!(decode_record(&[3, 8, 9], 1, TextEncoding::Utf8).unwrap_err(), "SQLite record has more columns than table schema");
 }
+
+#[test]
+fn committed_wal_multi_commit_growth_and_shrink_parity() {
+    let make_page1 = |schema_format: u32, page_count: u32| {
+        let mut page = vec![0u8; 512];
+        page[..16].copy_from_slice(b"SQLite format 3\0");
+        page[16..18].copy_from_slice(&512u16.to_be_bytes());
+        page[18] = 2;
+        page[19] = 2;
+        page[21] = 64;
+        page[22] = 32;
+        page[23] = 32;
+        page[28..32].copy_from_slice(&page_count.to_be_bytes());
+        page[44..48].copy_from_slice(&schema_format.to_be_bytes());
+        page[56..60].copy_from_slice(&1u32.to_be_bytes());
+        page[100] = 0x0d;
+        page[105..107].copy_from_slice(&512u16.to_be_bytes());
+        page
+    };
+
+    let main = make_page1(0, 1);
+    let mut wal_page1 = make_page1(4, 3);
+    let schema = schema_record("t", 2, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)");
+    leaf(&mut wal_page1, 100, 1, &schema);
+
+    let mut stale_page2 = vec![0u8; 512];
+    leaf(&mut stale_page2, 0, 1, &[3, 0, 23, b's', b't', b'a', b'l', b'e']);
+    let mut fresh_page2 = vec![0u8; 512];
+    leaf(&mut fresh_page2, 0, 2, &[3, 0, 23, b'f', b'r', b'e', b's', b'h']);
+
+    let mut grown_page3 = vec![0u8; 512];
+    leaf(&mut grown_page3, 0, 3, &[2, 1, 3]);
+
+    let frame = |page_id: u32, commit: u32, page_bytes: &[u8]| {
+        let mut out = vec![0u8; 24 + 512];
+        out[..4].copy_from_slice(&page_id.to_be_bytes());
+        out[4..8].copy_from_slice(&commit.to_be_bytes());
+        out[8..12].copy_from_slice(&11u32.to_be_bytes());
+        out[12..16].copy_from_slice(&22u32.to_be_bytes());
+        out[24..].copy_from_slice(page_bytes);
+        out
+    };
+
+    let mut wal = vec![0u8; 32];
+    wal[..4].copy_from_slice(&0x377f0683u32.to_be_bytes());
+    wal[4..8].copy_from_slice(&3_007_000u32.to_be_bytes());
+    wal[8..12].copy_from_slice(&512u32.to_be_bytes());
+    wal[16..20].copy_from_slice(&11u32.to_be_bytes());
+    wal[20..24].copy_from_slice(&22u32.to_be_bytes());
+    wal.extend(frame(2, 0, &stale_page2));
+    wal.extend(frame(3, 0, &grown_page3));
+    wal.extend(frame(1, 3, &wal_page1));
+    wal.extend(frame(2, 3, &fresh_page2));
+
+    let scratch = Scratch::new(&main);
+    let mem_db = Database::open_with_wal(main.clone(), &wal).unwrap();
+    let file_db = Database::open_file_with_wal(FileSource::open(&scratch.0).unwrap(), &wal).unwrap();
+    assert_eq!(mem_db.live_tables().unwrap(), file_db.live_tables().unwrap());
+    assert_eq!(mem_db.read_table(2, 2).unwrap(), file_db.read_table(2, 2).unwrap());
+    assert_eq!(mem_db.read_table(2, 2).unwrap(), vec![Record { values: vec![Value::Integer(2), Value::Text("fresh".into())] }]);
+
+    let grown_rows = vec![Record { values: vec![Value::Integer(3)] }];
+    assert_eq!(mem_db.read_table(3, 1).unwrap(), grown_rows);
+    assert_eq!(file_db.read_table(3, 1).unwrap(), grown_rows);
+
+    // Append a shrink commit to the very same WAL: page 3 is still present as an old frame.
+    let mut shrunk_page1 = make_page1(4, 2);
+    leaf(&mut shrunk_page1, 100, 1, &schema);
+    wal.extend(frame(1, 2, &shrunk_page1));
+    let mem_shrunk = Database::open_with_wal(main, &wal).unwrap();
+    let file_shrunk = Database::open_file_with_wal(FileSource::open(&scratch.0).unwrap(), &wal).unwrap();
+    assert_eq!(mem_shrunk.read_table(2, 2).unwrap(), mem_db.read_table(2, 2).unwrap());
+    assert_eq!(file_shrunk.read_table(2, 2).unwrap(), file_db.read_table(2, 2).unwrap());
+    assert_eq!(mem_shrunk.read_table(3, 1).unwrap_err(), "table root page is outside database");
+    assert_eq!(file_shrunk.read_table(3, 1).unwrap_err(), "table root page is outside database");
+
+    // Also check shrink against a main file that physically contains the page beyond the boundary.
+    let mut three_page_main = make_page1(4, 3);
+    three_page_main.resize(3 * 512, 0);
+    leaf(&mut three_page_main[..512], 100, 1, &schema);
+    let mut shrink_wal = wal[..32].to_vec();
+    shrink_wal.extend(frame(2, 2, &fresh_page2));
+    let shrink_scratch = Scratch::new(&three_page_main);
+    let mem_shrunk = Database::open_with_wal(three_page_main, &shrink_wal).unwrap();
+    let file_shrunk = Database::open_file_with_wal(FileSource::open(&shrink_scratch.0).unwrap(), &shrink_wal).unwrap();
+    assert_eq!(mem_shrunk.read_table(3, 1).unwrap_err(), "table root page is outside database");
+    assert_eq!(file_shrunk.read_table(3, 1).unwrap_err(), "table root page is outside database");
+}
