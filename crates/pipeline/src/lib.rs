@@ -528,19 +528,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
             // (spots grow the rendered window of 8-bit renders, the lens blur that of every
             // render; a grown window is cut back to the request)
             let work = if req.depth == OutputDepth::U8 { spots::window_for_reads(s, &frame, full_w, full_h, px_per_long, win) } else { win };
-            let mut work = lens_blur::window_for_reads(s, full_w, full_h, px_per_long, work);
-            if local::joint_colour_nr(s)
-                && let Some(params) = local::nrc_params(s, detail_scale)
-            {
-                // The joint diffusion reads a chain of neighbours across its scales. Keep
-                // those reads outside the requested zoom window, just as spot reads are, at every depth.
-                let halo = params.passes.last().map_or(0, |p| (6.0 * p.sigma).ceil() as usize).saturating_add(4);
-                let x = work.x.saturating_sub(halo);
-                let y = work.y.saturating_sub(halo);
-                let right = work.x.saturating_add(work.w).saturating_add(halo).min(full_w);
-                let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
-                work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
-            }
+            let mut work = reads_after_lin(s, full_w, full_h, px_per_long, detail_scale, work);
             // Glow scatters across the frame, so a zoom window must not change its highlight
             // extraction or clip its light trails. A small frame renders whole before cropping
             // (exact); a large one adds the light field of a whole-frame proxy ([`glow_field`]).
@@ -636,6 +624,25 @@ const GLOW_FIELDS_KEPT: usize = 2;
 const GLOW_TILE: usize = 1024;
 const GLOW_TILE_BATCH: usize = 4;
 
+/// `work` (a window of the `full_w × full_h` output) grown by what noise reduction and lens blur read
+/// around it, so those stages see the same neighbours in a window as in a render of the whole frame.
+fn reads_after_lin(s: &DevelopSettings, full_w: usize, full_h: usize, px_per_long: f64, detail_scale: f32, work: PixelWindow) -> PixelWindow {
+    let mut work = lens_blur::window_for_reads(s, full_w, full_h, px_per_long, work);
+    if local::joint_colour_nr(s)
+        && let Some(params) = local::nrc_params(s, detail_scale)
+    {
+        // The joint diffusion reads a chain of neighbours across its scales. Keep
+        // those reads outside the requested zoom window, just as spot reads are, at every depth.
+        let halo = params.passes.last().map_or(0, |p| (6.0 * p.sigma).ceil() as usize).saturating_add(4);
+        let x = work.x.saturating_sub(halo);
+        let y = work.y.saturating_sub(halo);
+        let right = work.x.saturating_add(work.w).saturating_add(halo).min(full_w);
+        let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
+        work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
+    }
+    work
+}
+
 /// The light field of the whole frame behind a windowed render of `p` ([`Plan::glow_key`]), computed
 /// from the frame's full-resolution pixels through the stages before Glow, and kept for
 /// the next window of the same view: panning or zooming reuses it. `None` when `p` renders the whole
@@ -652,36 +659,45 @@ pub fn glow_field(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<Arc<g
     let s = &*p.settings;
     let (full, fw, fh) = &p.full;
     // The seed is thresholded on full-resolution radiance, tile by tile, so an isolated 1-2 px lamp
-    // lights its surroundings in a window as it does in a render of the whole frame. Noise
-    // reduction, lens blur and the scattering itself are not part of the seed (the scattering
-    // runs on the low-resolution grid), and each tile is cut a few batches at a time to bound memory.
+    // lights its surroundings in a window as it does in a render of the whole frame. Each tile goes
+    // through every stage before Glow (the whole frame's red-eye corrections, noise reduction with
+    // the whole frame's colour-noise model, lens blur) on a copy grown by what those stages read,
+    // and only its own pixels are extracted, so every pixel counts once. Tiles are cut a few
+    // batches at a time to bound memory; the scattering itself runs on the low-resolution grid.
     let mut extraction = glow::Extraction::new(s, (*fw, *fh))?;
+    let eyes = redeye::resolve(src, &s.red_eye, s.orientation, full, *fw, *fh, p.px_per_long);
+    let noise = colour_noise(src, info, p);
     let mut tiles = Vec::new();
     for y in (0..*fh).step_by(GLOW_TILE) {
         for x in (0..*fw).step_by(GLOW_TILE) {
-            tiles.push(PixelWindow { x, y, w: GLOW_TILE.min(*fw - x), h: GLOW_TILE.min(*fh - y) });
+            let t = PixelWindow { x, y, w: GLOW_TILE.min(*fw - x), h: GLOW_TILE.min(*fh - y) };
+            tiles.push((t, reads_after_lin(s, *fw, *fh, p.px_per_long, p.detail_scale, t)));
         }
     }
     for batch in tiles.chunks(GLOW_TILE_BATCH) {
-        let sampled = full.sample_windows(src, *fw, *fh, batch);
-        for (t, mut img) in batch.iter().zip(sampled) {
+        let grown: Vec<PixelWindow> = batch.iter().map(|(_, g)| *g).collect();
+        let sampled = full.sample_windows(src, *fw, *fh, &grown);
+        for ((t, g), mut img) in batch.iter().zip(sampled) {
             let tile = Plan {
                 settings: Cow::Borrowed(s),
-                frame: if (t.w, t.h) == (*fw, *fh) { full.clone() } else { full.window(*fw, *fh, *t) },
-                w: t.w,
-                h: t.h,
-                eyes: Vec::new(),
+                frame: if (g.w, g.h) == (*fw, *fh) { full.clone() } else { full.window(*fw, *fh, *g) },
+                w: g.w,
+                h: g.h,
+                eyes: eyes.iter().map(|e| redeye::shifted(e, g.x as f32, g.y as f32)).collect(),
                 fixed_air: None,
                 keep: None,
-                mattes: None,
-                lens_subject: None,
+                mattes: p.mattes.clone(),
+                lens_subject: p.lens_subject.clone(),
                 full: p.full.clone(),
-                origin: (t.x, t.y),
+                origin: (g.x, g.y),
                 glow_key: None,
                 ..*p
             };
             lin_cpu(&mut img, info, &tile);
-            extraction.add_tile(&img, (t.x, t.y));
+            local::denoise(&mut img, s, p.detail_scale, noise.as_ref());
+            lens_blur::apply_with(&mut img, s, &tile.frame, p.px_per_long, tile.mattes.as_deref(), tile.lens_subject.as_deref());
+            let own = if (g.x, g.y, g.w, g.h) == (t.x, t.y, t.w, t.h) { img } else { img.crop(t.x - g.x, t.y - g.y, t.w, t.h) };
+            extraction.add_tile(&own, (t.x, t.y));
         }
     }
     let field = Arc::new(extraction.finish(s, p.px_per_long)?);

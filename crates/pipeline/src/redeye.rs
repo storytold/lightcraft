@@ -155,6 +155,11 @@ pub fn resolve(src: &Rgb32f, eyes: &[RedEye], orientation: Orientation, frame: &
         .collect()
 }
 
+/// `e` for an image whose top-left pixel is `(dx, dy)` of the image it was resolved for.
+pub fn shifted(e: &EyeK, dx: f32, dy: f32) -> EyeK {
+    EyeK { cx: e.cx - dx, cy: e.cy - dy, catchlight: e.catchlight.map(|(x, y, r)| (x - dx, y - dy, r)), ..*e }
+}
+
 /// One pixel (pixel centre `(x, y)` in output pixels) through every eye.
 #[inline]
 pub fn eye_pixel(c: [f32; 3], x: f32, y: f32, eyes: &[EyeK]) -> [f32; 3] {

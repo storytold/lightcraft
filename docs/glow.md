@@ -44,9 +44,11 @@ GPU path performs a readback/upload when Glow is enabled. Zoom-window renders of
 render the whole frame and crop it (exact). A window of a larger frame adds the light field of the
 whole frame instead: the field is computed once for the view and reused by every window
 (`pipeline::glow_field`). Its seed is thresholded on the frame's full-resolution radiance, read in 1024 px
-tiles through the stages before Glow (white balance, tone, defringe, spot removal; noise reduction and lens
-blur are left out) and averaged into Glow's grid of at most 768 px per edge, so an isolated 1-2 px lamp keeps
-its halo as in a whole-frame render. The first window of a large frame therefore reads all of its pixels
+tiles through every stage before Glow (white balance, tone, defringe, spot removal, the whole frame's red-eye
+corrections, noise reduction with the whole frame's colour-noise model, lens blur). Each tile is processed on a
+copy grown by what noise reduction and lens blur read, then only its own pixels are averaged into Glow's grid of
+at most 768 px per edge, so every pixel counts once and an isolated 1-2 px lamp keeps its halo as in a
+whole-frame render. The first window of a large frame therefore reads all of its pixels
 once; later windows reuse the cached field. All windows share one field, so tiles never seam; measured against
 the same crop of the full render the 8-bit difference is at most 3 levels (bright lamps and a 2 px lamp on a
 2.8 MP frame). Whole-frame renders are unchanged.

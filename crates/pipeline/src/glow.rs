@@ -581,6 +581,76 @@ mod integration_tests {
         assert!(max_diff <= 3, "window and full render differ by {max_diff} levels");
     }
 
+    /// A corrected red pupil seeds no light in a window of a large frame either: the light field
+    /// takes the whole frame's red-eye corrections, also for eyes outside the window.
+    #[test]
+    fn a_corrected_red_eye_seeds_no_light_in_a_window_of_a_large_frame() {
+        let (w, h) = (2000, 1400);
+        assert!(w * h > EXACT_WINDOW_PIXELS);
+        let (cx, cy, pr) = (900.0_f32, 700.0_f32, 12.0_f32);
+        let src = Arc::new(Rgb32f::from_fn(w, h, |x, y| {
+            let d = ((x as f32 + 0.5 - cx).powi(2) + (y as f32 + 0.5 - cy).powi(2)).sqrt();
+            if d < pr {
+                [30.0, 0.2, 0.2]
+            } else if d < pr * 2.0 {
+                [0.12, 0.1, 0.08]
+            } else if d < 60.0 {
+                [0.45, 0.3, 0.22]
+            } else {
+                [0.02; 3]
+            }
+        }));
+        let info = SourceInfo::default();
+        let mut s = DevelopSettings::default();
+        s.effects.glow.amount = 100.0;
+        s.effects.glow.spread = 100.0;
+        s.effects.glow.range = 0.0;
+        s.red_eye.push(lightcraft_develop::RedEye {
+            center: lightcraft_geom::Point::new(0.45, 0.5),
+            rx: 0.02,
+            ry: 0.02,
+            darken: 100.0,
+            ..Default::default()
+        });
+        let req = RenderRequest::fit(w, h);
+        let full = render(&src, &info, &s, &req).image;
+        // a window beside the eye, which the eye's halo would reach
+        let win = PixelWindow { x: 960, y: 600, w: 300, h: 200 };
+        let mut wr = req;
+        wr.window = Some(win);
+        let part = render(&src, &info, &s, &wr).image;
+        let crop = full.crop(win.x, win.y, win.w, win.h);
+        let max_diff = part.data.iter().zip(&crop.data).flat_map(|(a, b)| (0..3).map(move |c| (a[c] as i32 - b[c] as i32).abs())).max().unwrap_or(0);
+        assert!(max_diff <= 3, "window and full render differ by {max_diff} levels");
+    }
+
+    /// Noise reduction runs before Glow in a window's light field too: a fine pattern that noise
+    /// reduction smooths below the extraction knee seeds no light in either render.
+    #[test]
+    fn noise_reduction_runs_before_the_light_field_of_a_window() {
+        let (w, h) = (2000, 1400);
+        assert!(w * h > EXACT_WINDOW_PIXELS);
+        let src = Arc::new(Rgb32f::from_fn(w, h, |x, y| {
+            let patch = (600..800).contains(&x) && (400..600).contains(&y);
+            if patch && (x + y) % 2 == 0 { [0.9; 3] } else { [0.02; 3] }
+        }));
+        let info = SourceInfo::default();
+        let mut s = DevelopSettings::default();
+        s.effects.glow.amount = 100.0;
+        s.effects.glow.spread = 100.0;
+        s.effects.glow.range = 0.0;
+        s.detail.nr_luminance = 100.0;
+        let req = RenderRequest::fit(w, h);
+        let full = render(&src, &info, &s, &req).image;
+        let win = PixelWindow { x: 820, y: 400, w: 300, h: 200 };
+        let mut wr = req;
+        wr.window = Some(win);
+        let part = render(&src, &info, &s, &wr).image;
+        let crop = full.crop(win.x, win.y, win.w, win.h);
+        let max_diff = part.data.iter().zip(&crop.data).flat_map(|(a, b)| (0..3).map(move |c| (a[c] as i32 - b[c] as i32).abs())).max().unwrap_or(0);
+        assert!(max_diff <= 3, "window and full render differ by {max_diff} levels");
+    }
+
     /// The cached light field depends on the photo's native size (its noise reduction runs at that
     /// scale), so two plans of the same pixels with different native sizes never share one.
     #[test]
