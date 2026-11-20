@@ -183,9 +183,9 @@ pub struct Present {
     pub chroma: bool,
 }
 
-/// The `finish` kernel's parameter block and auxiliary table (tone LUT | chroma curve | sRGB LUT | curve LUTs |
-/// mask terms | light operator tables) for `fp` with `masks` (their local adjustments' terms). The crystal
-/// grain's tables go after `aux` in the kernel's buffer ([`crate::render`] copies them there).
+/// The `finish` kernel's parameter block and auxiliary table (tone LUT | chroma table | its saturation nodes |
+/// sRGB LUT | curve LUTs | mask terms | light operator tables) for `fp` with `masks` (their local adjustments'
+/// terms). The crystal grain's tables go after `aux` in the kernel's buffer ([`crate::render`] copies them there).
 ///
 /// `deep`: the kernel writes float samples, as the pipeline's `finish_deep` does.
 ///
@@ -194,6 +194,7 @@ pub struct Present {
 pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present, deep: bool) -> (Vec<u32>, Vec<f32>) {
     let mut aux: Vec<f32> = fp.tone.lut().to_vec();
     aux.extend_from_slice(fp.tone.chroma_lut());
+    aux.extend_from_slice(&lightcraft_pipeline::tone::CHROMA_SATS);
     let srgb_off = aux.len();
     aux.extend_from_slice(&srgb_lut()[..]);
     let curve_off = aux.len();
