@@ -204,3 +204,29 @@ fn a_rollback_that_cant_be_written_changes_nothing() {
         assert_eq!(values(&mut m), json!({"a": "old"}), "and then goes through");
     }
 }
+
+/// The old module is written but `plugins.json` can't be saved: the failure is reported, never
+/// swallowed, and the module that runs is the one the folder holds.
+#[cfg(unix)]
+#[test]
+fn a_rollback_whose_grant_cant_be_saved_says_so() {
+    let dir = folder("save-fails");
+    let mut m = Manager::open(&dir).unwrap();
+    let catalog = Permissions { catalog: true, ..Default::default() };
+    m.install_bytes_by_user(&version("1.0.0", &["a"], json!({"catalog": true})), Some(catalog), false).unwrap();
+    m.install_bytes(&version("1.1.0", &["a"], json!({"catalog": true})), None, false).unwrap();
+    // a folder where plugins.json goes: the atomic rename over it fails, the module's own write doesn't
+    let state = dir.join("plugins.json");
+    let saved = std::fs::read(&state).unwrap();
+    std::fs::remove_file(&state).unwrap();
+    std::fs::create_dir(&state).unwrap();
+    let r = m.rollback(ID).map(|_| ());
+    std::fs::remove_dir(&state).unwrap();
+    std::fs::write(&state, saved).unwrap();
+    let Err(Error::Io(e)) = r else { panic!("the failed save is reported: {r:?}") };
+    assert!(e.contains("plugins.json"), "and names the file: {e}");
+    let on_disk = std::fs::read(dir.join(format!("{ID}.wasm"))).unwrap();
+    assert_eq!(on_disk, version("1.0.0", &["a"], json!({"catalog": true})), "the old module was written");
+    assert_eq!(m.get(ID).unwrap().plugin.manifest().version, "1.0.0", "the plug-in runs what the folder holds");
+    assert!(m.get(ID).unwrap().effective().catalog, "with the grant it had");
+}

@@ -51,11 +51,6 @@ fn has_widget(h: &mut Headless, id: &str) -> bool {
     w["result"].as_array().into_iter().flatten().any(|x| x["id"] == id)
 }
 
-fn widgets(h: &mut Headless) -> Vec<String> {
-    let w = h.request("ui.widgets", json!({}), T);
-    w["result"].as_array().into_iter().flatten().filter_map(|x| x["id"].as_str().map(str::to_string)).collect()
-}
-
 fn painted(h: &Headless, text: &str) -> bool {
     h.painted_text().iter().any(|t| t.contains(text))
 }
@@ -102,6 +97,38 @@ fn module_file(dir: &Path, id: &str, request: &str) -> String {
     path.display().to_string()
 }
 
+/// A plug-in `id` asking for `catalog` whose command `go` has a prepare step that makes a catalog
+/// call and answers with the reply, written to `dir/<id>.wasm`. Refused, the reply is an error; let
+/// through, it is a catalog answer that is no prepare answer, which the host logs and shows.
+fn prepare_module_file(dir: &Path, id: &str) -> String {
+    let manifest = json!({"id": id, "name": "Preparer", "version": "1.0.0", "permissions": {"catalog": true},
+        "commands": [{"id": "go", "label": "Go", "prepare": true}]})
+    .to_string();
+    let esc = |s: &str| s.replace('"', "\\\"");
+    let request = r#"{"method":"catalog.stats","params":{}}"#;
+    let src = format!(
+        r#"(module
+  (import "host" "call" (func $call (param i32 i32) (result i32)))
+  (import "host" "response" (func $response (param i32)))
+  (memory (export "memory") 2)
+  (data (i32.const 16) "{m}") (data (i32.const 8192) "{r}")
+  (func (export "lcc_abi_version") (result i32) (i32.const 1))
+  (func (export "lcc_manifest") (result i64) (i64.or (i64.shl (i64.const {ml}) (i64.const 32)) (i64.const 16)))
+  (func (export "lcc_alloc") (param i32) (result i32) (i32.const 65536))
+  (func (export "lcc_handle") (param i32 i32) (result i64) (local $n i32)
+    (local.set $n (call $call (i32.const 8192) (i32.const {rl})))
+    (call $response (i32.const 16384))
+    (i64.or (i64.shl (i64.extend_i32_u (local.get $n)) (i64.const 32)) (i64.const 16384))))"#,
+        m = esc(&manifest),
+        r = esc(request),
+        ml = manifest.len(),
+        rl = request.len()
+    );
+    let path = dir.join(format!("{id}.wasm"));
+    std::fs::write(&path, wat::parse_str(&src).unwrap()).unwrap();
+    path.display().to_string()
+}
+
 /// AC-4: the install dialog lists what the plug-in may ask for, with nothing to tick, and a fresh
 /// install has nothing granted.
 #[test]
@@ -111,6 +138,7 @@ fn the_install_dialog_only_lists_the_permissions() {
     let id = "test.perm.install";
     let path = module_file(&dir, id, r#"{"method":"catalog.stats","params":{}}"#);
     let mut h = app();
+    h.view.ctx.enable_accesskit();
     exec(&mut h, "plugins.install", json!({"path": path}));
     assert!(has_widget(&mut h, "button:pluginInstall"), "the dialog opened");
     assert!(
@@ -118,7 +146,18 @@ fn the_install_dialog_only_lists_the_permissions() {
         "{:?}",
         h.painted_text()
     );
-    let ticks: Vec<String> = widgets(&mut h).into_iter().filter(|w| w.contains("ermission") || w.contains("checkbox")).collect();
+    // the old dialog ticked each permission; plain egui checkboxes carry no widget id, so look at
+    // what a screen reader sees
+    assert!(!painted(&h, "Tick the ones you allow"), "the old prompt is gone: {:?}", h.painted_text());
+    let update = h.view.access.as_ref().expect("the access tree is on");
+    // (the app has checkboxes of its own, "Auto Sync" among them: only a permission's matters)
+    let ticks: Vec<_> = update
+        .nodes
+        .iter()
+        .filter(|(_, n)| n.role() == egui::accesskit::Role::CheckBox)
+        .filter_map(|(_, n)| n.label())
+        .filter(|l| l.contains("Read the catalog") || l.contains("Write photo metadata"))
+        .collect();
     assert!(ticks.is_empty(), "nothing to tick: {ticks:?}");
     assert!(h.click_as_user("button:pluginInstall"), "Install on screen");
     assert_eq!(state(&mut h, id, "catalog")["state"], "never", "a fresh install has nothing granted");
@@ -194,6 +233,38 @@ fn a_command_asks_for_what_it_needs_and_remembers_a_no() {
     exec(&mut h, "plugins.manager", json!({"open": false}));
     run(&mut h);
     assert!(!has_widget(&mut h, "button:pluginAskAllow"), "a denied permission isn't asked again");
+    exec(&mut h, "plugin.uninstall", json!({"id": id}));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A prepare step the user started (a command with `prepare`) leaves the same prompt; an agent's
+/// Allow does nothing, the user's grants it and starts the command again, which now gets through.
+#[test]
+fn a_prepare_step_asks_and_allow_starts_the_command_again() {
+    let _turn = turn();
+    let dir = folder("prepare");
+    let id = "test.perm.prepare";
+    let path = prepare_module_file(&dir, id);
+    let mut h = app();
+    exec(&mut h, "plugin.install", json!({"path": path}));
+    let _ = h.request("engine.execute", json!({"command": "plugins.runItem", "params": {"plugin": id, "command": "go"}}), T);
+    h.settle(T);
+    assert!(has_widget(&mut h, "button:pluginAskAllow"), "the prepare step left a prompt");
+    assert!(painted(&h, "Preparer asks to: Read the catalog"), "it names the plug-in and the permission: {:?}", h.painted_text());
+    let log = |h: &mut Headless| -> Vec<String> {
+        exec(h, "plugin.log", json!({"id": id})).as_array().unwrap().iter().filter_map(|l| l.as_str().map(str::to_string)).collect()
+    };
+    assert!(log(&mut h).last().is_some_and(|l| l.contains("permission `catalog` not granted")), "the prepare step was refused: {:?}", log(&mut h));
+    agent_click(&mut h, "button:pluginAskAllow");
+    assert!(has_widget(&mut h, "button:pluginAskAllow"), "an agent's Allow leaves the prompt up");
+    assert_eq!(state(&mut h, id, "catalog")["state"], "never");
+    assert!(h.click_as_user("button:pluginAskAllow"));
+    assert!(!has_widget(&mut h, "button:pluginAskAllow"), "answered, and not asked again");
+    assert_eq!(state(&mut h, id, "catalog")["state"], "allowed");
+    // Allow started the command again: its prepare step ran with the permission and got as far as an answer
+    let after = log(&mut h);
+    let granted = after.iter().position(|l| l == "allowed catalog").expect("the grant is logged");
+    assert!(after[granted..].iter().any(|l| l.contains("the answer must be")), "the prepare step ran again: {after:?}");
     exec(&mut h, "plugin.uninstall", json!({"id": id}));
     let _ = std::fs::remove_dir_all(&dir);
 }
