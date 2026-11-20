@@ -871,12 +871,14 @@ mod tests {
 
     #[test]
     fn curve_luts_keep_1024_entries_when_composing_master_and_channel_curves() {
-        let mut c = ToneCurve::default();
-        c.highlights = -25.0;
-        c.shadows = 20.0;
-        c.master = vec![Point::new(0.0, 0.04), Point::new(0.5, 0.56), Point::new(1.0, 0.96)];
-        c.red = vec![Point::new(0.0, 0.0), Point::new(0.4, 0.46), Point::new(1.0, 1.0)];
-        c.blue = vec![Point::new(0.0, 0.0), Point::new(0.6, 0.54), Point::new(1.0, 1.0)];
+        let c = ToneCurve {
+            highlights: -25.0,
+            shadows: 20.0,
+            master: vec![Point::new(0.0, 0.04), Point::new(0.5, 0.56), Point::new(1.0, 0.96)],
+            red: vec![Point::new(0.0, 0.0), Point::new(0.4, 0.46), Point::new(1.0, 1.0)],
+            blue: vec![Point::new(0.0, 0.0), Point::new(0.6, 0.54), Point::new(1.0, 1.0)],
+            ..ToneCurve::default()
+        };
         let luts = curve_luts(&c).expect("active curves");
         for lut in &luts {
             assert_eq!(lut.v.len(), 1024);
