@@ -188,8 +188,13 @@ pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
     let (kind, finish) = lightcraft_engine::merge::parse(command, &json!({})).map_err(|e| e.to_string())?;
     let ids = app.session.selected();
     let jobs = app.session.plan_merges(kind, finish, &ids, false).map_err(|e| e.to_string())?;
-    if jobs.len() == 1 {
+    if jobs.len() == 1 && app.session.plan_merge(kind.clone(), finish.clone(), &ids, false).is_ok() {
         app.merge.ids = ids;
+        app.merge.explicit_group = false;
+        app.merge.batch.clear();
+    } else if jobs.len() == 1 {
+        app.merge.ids = jobs[0].sources.iter().map(|(p, _)| *p).collect();
+        app.merge.batch.clear();
         app.merge.explicit_group = false;
     } else {
         app.merge.ids = jobs[0].sources.iter().map(|(p, _)| *p).collect();
@@ -243,8 +248,13 @@ pub fn start_last(app: &mut LightcraftApp, command: &str) -> Result<Value, Strin
     let (kind, finish) = lightcraft_engine::merge::parse(command, &json!({})).map_err(|e| e.to_string())?;
     let ids = app.session.selected();
     let jobs = app.session.plan_merges(kind, finish, &ids, false).map_err(|e| e.to_string())?;
-    if jobs.len() == 1 {
+    if jobs.len() == 1 && app.session.plan_merge(kind.clone(), finish.clone(), &ids, false).is_ok() {
         app.merge.ids = ids;
+        app.merge.explicit_group = false;
+        app.merge.batch.clear();
+    } else if jobs.len() == 1 {
+        app.merge.ids = jobs[0].sources.iter().map(|(p, _)| *p).collect();
+        app.merge.batch.clear();
         app.merge.explicit_group = false;
     } else {
         app.merge.ids = jobs[0].sources.iter().map(|(p, _)| *p).collect();

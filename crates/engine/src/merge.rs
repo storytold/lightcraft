@@ -555,13 +555,23 @@ impl Session {
     }
 
     fn merge_sources(&self, group: &[PhotoId], seen: &mut std::collections::HashSet<PhotoId>) -> Result<Vec<(PhotoId, String)>> {
+        let mut fresh = Vec::new();
+        let mut local_seen = std::collections::HashSet::new();
+        for id in group {
+            if !seen.contains(id) && local_seen.insert(*id) {
+                fresh.push(*id);
+            }
+        }
         let mut sources = Vec::new();
-        for id in group.iter().filter(|id| seen.insert(**id)) {
+        for id in &fresh {
             let p = self.catalog.photo(*id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(*id))?;
             match &p.source {
                 Source::File { path } => sources.push((*id, path.clone())),
                 Source::Demo { .. } => return Err(EngineError::Other(format!("{} is a demo photo; Photo Merge needs photo files", p.file_name))),
             }
+        }
+        for id in fresh {
+            seen.insert(id);
         }
         Ok(sources)
     }

@@ -1503,7 +1503,8 @@ fn context_menu_stack_and_edits(app: &mut LightcraftApp, ui: &mut egui::Ui, id: 
     crate::widgets::menu_button(ui, crate::i18n::tr("Photo Merge"), |ui| {
         let selected = app.session.selected();
         for (id, label) in [("dialog.mergeHdr", "HDR…"), ("dialog.mergePanorama", "Panorama…"), ("dialog.mergeHdrPanorama", "HDR Panorama…")] {
-            let enabled = lightcraft_engine::merge::parse(id, &json!({}))
+            let enabled = crate::merge::merge_command_of(id)
+                .and_then(|command| lightcraft_engine::merge::parse(&command, &json!({})).ok())
                 .map(|(kind, finish)| app.session.plan_merges(kind, finish, &selected, false).is_ok())
                 .unwrap_or(false);
             if ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label))).clicked() {
