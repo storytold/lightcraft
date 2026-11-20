@@ -945,6 +945,13 @@ fn a_panorama_forecast_says_when_memory_makes_it_smaller() {
     assert!(crate::merge::plan_memory(&panorama(), &three, 2.0e9, MIN_PANORAMA_MEGAPIXELS).is_err(), "refused at its usual floor");
     let f = forecast(&panorama(), &three, 2.0e9, 20.0).unwrap().unwrap();
     assert_eq!((f.megapixels, f.limit, f.fit_memory), (20.0, None, true), "{f:?}");
+    // an HDR panorama: planned bracket by bracket, as its merge is
+    let six = photos_24mp(6);
+    let f = forecast(&hdr_panorama(3), &six, 1e12, 40.0).unwrap().unwrap();
+    assert_eq!((f.megapixels, f.limit), (40.0, None), "{f:?}");
+    let f = forecast(&hdr_panorama(3), &six, 2.6e9, 40.0).unwrap().unwrap();
+    assert!(f.limit == Some("memory") && f.megapixels < 40.0, "{f:?}");
+    assert!(forecast(&hdr_panorama(3), &six, 0.3e9, 40.0).is_err());
     // forty overlapping 24 MP photos decoded smaller to fit 1.6 GB: their 25 MP panorama keeps
     // ~0.94 MP of them, under its 1 MP floor, which the merge refuses once stitched: so does the
     // forecast, rather than offer a size the merge then refuses

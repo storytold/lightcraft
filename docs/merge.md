@@ -13,7 +13,10 @@ All algorithms are our own implementations from published papers (cited in the m
   the preview also works out the size the full merge will be made at: when it won't fit the merge's memory at its full
   size, the dialog says so under the preview ("Not enough memory for the full size, 120 MP: the panorama will be made
   at about 31 MP"), and *Merge* works only once *Merge at the smaller size* is ticked; a panorama that can't be made
-  at all says why, and *Merge* stays off. *Merge* waits for a panorama's preview, which works out that size. *Merge* runs the full merge
+  at all says why, and *Merge* stays off. *Merge* waits for a panorama's preview, which works out that size. When it
+  can't be worked out (the preview failed, the photos' sizes are unknown, or the computer's memory can't be read:
+  Windows, for now) nothing is said, and the merge runs as it did before: smaller to fit memory if need be, never
+  under 40 MP, the toast afterwards saying so. *Merge* runs the full merge
   in the background (a row in the activity stack shows its progress, with ✕ to stop it). The result is written next to the first photo as
   `<name>-HDR.dng`, `-Pano.dng` or `-HDR-Pano.dng`, imported and selected. *Photo Merge ▸ HDR for Each Bracket Set*
   merges many brackets in one go with the last HDR options: one HDR per stack among the selected photos, then per

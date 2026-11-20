@@ -1239,5 +1239,35 @@ fn merge_takes_fit_memory_and_a_preview_forecasts_the_size() {
     let r: Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| panic!("{e}: {stdout}"));
     assert!(r.get("forecast").is_some(), "{r}");
     assert!(png.exists());
+    #[cfg(target_os = "linux")]
+    merge_in_little_memory(&views, &png);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The same photos with a merge budget of ~120 MB (the caches given the rest of three quarters of
+/// the RAM, `LIGHTCRAFT_MEMORY_MB`): the preview forecasts a panorama smaller than its photos'
+/// resolution, which the merge then refuses, unless `--fit-memory` agrees to it: then it is made
+/// at about the size forecast, and says memory held it.
+#[cfg(target_os = "linux")]
+fn merge_in_little_memory(views: &[std::path::PathBuf], png: &std::path::Path) {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").unwrap();
+    let kb: f64 = meminfo.lines().find(|l| l.starts_with("MemTotal:")).and_then(|l| l.split_whitespace().nth(1)).unwrap().parse().unwrap();
+    let mb = ((kb * 1024.0 * 0.75 - 120e6) / (1u64 << 20) as f64).floor();
+    let merge = |flags: &[&str]| {
+        let out =
+            Command::new(binary()).env("LIGHTCRAFT_MEMORY_MB", format!("{mb}")).args(["merge", "panorama"]).args(flags).args(views).output().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        (out.status.success(), serde_json::from_str::<Value>(stdout.trim()).unwrap_or(Value::Null), String::from_utf8_lossy(&out.stderr).to_string())
+    };
+    let (ok, preview, err) = merge(&["--preview", png.to_str().unwrap()]);
+    assert!(ok, "{err}");
+    let f = &preview["forecast"];
+    assert_eq!((&f["limit"], &f["fitMemory"]), (&json!("memory"), &json!(true)), "{preview}");
+    let (ok, _, err) = merge(&[]);
+    assert!(!ok && err.contains("not enough memory for this panorama"), "not agreed: refused: {err}");
+    let (ok, merged, err) = merge(&["--fit-memory"]);
+    assert!(ok, "{err}");
+    assert_eq!(merged["limit"], "memory", "{merged}");
+    let (mp, forecast) = (merged["megapixels"].as_f64().unwrap(), f["megapixels"].as_f64().unwrap());
+    assert!((mp / forecast - 1.0).abs() < 0.1, "made at about the size forecast: {merged} {f}");
 }

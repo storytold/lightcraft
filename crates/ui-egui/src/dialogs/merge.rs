@@ -127,6 +127,9 @@ pub struct MergeState {
     /// The app's memory budget the latest preview was made with ([`MergeTask::budget`]): a preview
     /// made with another is redone, since its forecast of the merge's size no longer holds.
     pub preview_budget: usize,
+    /// The photos the latest preview merged ([`MergeTask::ids`]): its forecast is of them, not of
+    /// photos the dialog merges now (HDR for Each Bracket Set moves on to its next set meanwhile).
+    pub preview_ids: Vec<PhotoId>,
 }
 
 impl MergeState {
@@ -281,9 +284,10 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     match &dialog_opts {
         Some(opts) => {
             let current = app.merge.preview_task.as_ref().map(|t| &t.options).or(app.merge.preview.as_ref().map(|p| &p.2));
-            // the memory budget changed since the preview (Settings, an agent): its forecast no longer holds
-            let budget_moved = app.merge.preview_task.is_none() && current == Some(opts) && !previewed(app, opts);
-            let stale = (current != Some(opts) || budget_moved) && !last_failed_matches(app, opts);
+            // the memory budget or the photos changed since the preview (Settings, an agent, a batch
+            // moving on): its forecast no longer holds
+            let outdated = app.merge.preview_task.is_none() && current == Some(opts) && !previewed(app, opts);
+            let stale = (current != Some(opts) || outdated) && !last_failed_matches(app, opts);
             if stale {
                 if let Some(t) = app.merge.preview_task.take() {
                     t.cancel.store(true, Ordering::Relaxed);
@@ -323,6 +327,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     app.merge.preview_pixels = Some(color);
                     app.merge.preview = Some((tex, [img.width, img.height], t.options, out.info));
                     app.merge.preview_budget = t.budget;
+                    app.merge.preview_ids = t.ids;
                     // agreed to the size the last preview named, not this one's
                     app.merge.smaller_agreed = false;
                 }
@@ -416,9 +421,12 @@ fn forecast<'a>(app: &'a LightcraftApp, opts: &MergeDialog) -> &'a Value {
     }
 }
 
-/// The latest preview is of `opts`, made with the memory budget the app has now.
+/// The latest preview is of `opts` and the photos the dialog merges, made with the memory budget
+/// the app has now.
 fn previewed(app: &LightcraftApp, opts: &MergeDialog) -> bool {
-    app.merge.preview.as_ref().is_some_and(|p| &p.2 == opts) && app.merge.preview_budget == lightcraft_engine::memory::budget()
+    app.merge.preview.as_ref().is_some_and(|p| &p.2 == opts)
+        && app.merge.preview_ids == app.merge.ids
+        && app.merge.preview_budget == lightcraft_engine::memory::budget()
 }
 
 /// What the dialog says under the preview when the panorama won't fit memory at its full size
