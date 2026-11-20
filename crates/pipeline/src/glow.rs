@@ -466,6 +466,24 @@ mod integration_tests {
         assert_eq!(before.image, render_cached(&src, &info, &s, &req, &cache).image);
     }
 
+    /// The cached light field depends on the photo's native size (its noise reduction runs at that
+    /// scale), so two plans of the same pixels with different native sizes never share one.
+    #[test]
+    fn the_light_field_key_follows_the_native_size() {
+        let (w, h) = (2000, 1400);
+        let src = Arc::new(Rgb32f::from_fn(w, h, |x, _| [0.02 + 0.00002 * x as f32; 3]));
+        let mut s = DevelopSettings::default();
+        s.effects.glow.amount = 80.0;
+        let mut req = RenderRequest::fit(w, h);
+        req.window = Some(PixelWindow { x: 560, y: 380, w: 300, h: 260 });
+        let key = |native: usize| {
+            let info = SourceInfo { native_long: Some(native), ..SourceInfo::default() };
+            crate::plan(&src, &info, &s, &req).glow_key
+        };
+        assert!(key(2000).is_some());
+        assert_ne!(key(2000), key(6000));
+    }
+
     /// A window of a frame too large to render whole takes its light from a whole-frame field that
     /// every window of the view shares, and matches the same crop of the full render closely.
     #[test]

@@ -254,7 +254,7 @@ impl LightcraftApp {
             // Show the region while constructing a mask or adding a component.
             // Selecting an existing mask above keeps the photo clear for local adjustments.
             self.ui.mask_overlay = true;
-            self.ui.mask_workspace_request = Some(true);
+            self.ui.mask_workspace_request = Some((self.session.active(), true));
         }
         if r.is_ok() {
             // These commands finish synchronously, so their completion would otherwise

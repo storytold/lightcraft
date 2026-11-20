@@ -105,7 +105,8 @@ pub struct UiState {
     pub mask_overlay_all: bool,
     /// A mask command requests its workspace on the next panel pass; never persisted.
     #[serde(skip)]
-    pub mask_workspace_request: Option<bool>,
+    /// A pending switch to Selection (`true`) after creating a mask, with the photo it was made on.
+    pub mask_workspace_request: Option<(Option<lightcraft_catalog::PhotoId>, bool)>,
     /// The overlay (on, mode) to go back to when Show Luminance Map is turned off.
     #[serde(skip)]
     pub luminance_map_restore: Option<(bool, String)>,

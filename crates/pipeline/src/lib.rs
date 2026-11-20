@@ -596,6 +596,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
             format!("{:?}", (&s.spots, &s.red_eye, &s.optics)),
             local_tone::enabled(info, s),
             src_long,
+            // the field's noise reduction runs at the detail scale of the photo's native size
+            native_long,
             lens_blur::key(s),
             [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
             local::joint_colour_nr(s),

@@ -95,7 +95,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if d.masks.is_empty() {
         egui::Frame::NONE.inner_margin(egui::Margin::symmetric(18, 4)).show(ui, |ui| {
             ui.label(egui::RichText::new(crate::i18n::tr("Create New Mask")).font(t.semibold(13.0)).color(t.text));
-            creation_menu(app, ui);
+            creation_menu(app, ui, false);
         });
         return;
     }
@@ -110,7 +110,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 register(ui, "button:maskCreate", create.rect);
                 egui::Popup::menu(&create).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
                     ui.set_width(280.0);
-                    creation_menu(app, ui);
+                    creation_menu(app, ui, true);
                 });
             });
         });
@@ -211,6 +211,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         // a new mask's Describe field sits under the list (the Create popup has closed by then)
         describe_field(app, ui, true);
+        ai_progress(app, ui);
         ui.add_space(8.0);
         overlay_toolbar(app, ui);
     });
@@ -965,7 +966,7 @@ fn create_mask(app: &mut LightcraftApp, ui: &mut egui::Ui, kind: &str) {
     egui::Popup::close_all(ui.ctx());
 }
 
-fn creation_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+fn creation_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, in_popup: bool) {
     let t = Tokens::get(ui.ctx());
     ui.add_space(6.0);
     let quick = [("subject", "Subject", Icon::Subject), ("sky", "Sky", Icon::Sky), ("background", "Background", Icon::BackgroundMask)];
@@ -1038,6 +1039,15 @@ fn creation_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.add_space(8.0);
     mask_creation_row(ui, "people", "People", Icon::Subject, false);
     describe_field(app, ui, true);
+    if !in_popup {
+        ai_progress(app, ui);
+    }
+}
+
+/// Analysis and model-download progress of the AI masks. It is drawn outside the Create popup
+/// (which closes when a mask starts), so it stays visible while the work runs.
+fn ai_progress(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
     let seg = &app.session.segmenter;
     let status = if seg.analyzing() {
         Some("Analyzing the photo for AI masks…")
@@ -1186,11 +1196,17 @@ fn paint_mask_thumbnail(ui: &egui::Ui, rect: Rect, shape: Option<&MaskShape>) {
 
 /// Loaded photos start in Adjustments; creating a region or choosing a drawing tool reveals Selection.
 /// Canvas pins retain their workspace, while mask cards explicitly return to Adjustments.
+/// A pending switch to Selection applies only to the photo that created the mask; one left over
+/// from another photo (the panel was closed when the photo changed) is dropped.
+fn request_for_photo(request: Option<(Option<PhotoId>, bool)>, photo: Option<PhotoId>) -> Option<bool> {
+    request.filter(|(made_on, _)| *made_on == photo).map(|(_, selection)| selection)
+}
+
 fn sync_editor_target(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let target = (app.session.active(), app.session.active_mask);
     let previous = ui.data(|data| data.get_temp::<(Option<PhotoId>, Option<u32>)>(egui::Id::unique("mask-editor-target")));
     let drawing = matches!(app.ui.tool.as_str(), "brush" | "linear" | "radial" | "object" | "colorRange");
-    if let Some(selection) = app.ui.mask_workspace_request.take() {
+    if let Some(selection) = request_for_photo(app.ui.mask_workspace_request.take(), target.0) {
         set_selection_mode(app, ui, selection);
     } else if previous.is_none() || previous.is_some_and(|previous| previous.0 != target.0) || (drawing && !selection_mode(ui.ctx())) {
         set_selection_mode(app, ui, drawing);
@@ -1211,6 +1227,14 @@ mod tests {
         assert!(segmenter_working(true, false, false, false));
         assert!(segmenter_working(false, true, false, false));
         assert!(!segmenter_working(false, false, false, false));
+    }
+
+    #[test]
+    fn a_selection_request_is_kept_for_its_own_photo_only() {
+        let (a, b) = (Some(PhotoId(1)), Some(PhotoId(2)));
+        assert_eq!(request_for_photo(Some((a, true)), a), Some(true));
+        assert_eq!(request_for_photo(Some((a, true)), b), None);
+        assert_eq!(request_for_photo(None, a), None);
     }
 
     #[test]
