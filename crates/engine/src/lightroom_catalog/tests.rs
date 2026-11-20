@@ -1775,3 +1775,28 @@ fn a_keyword_rule_compared_case_by_case_is_refused_when_the_library_spells_it_ot
     let lightroom = row(json!({"name": "Nature", "smartRules": rules}));
     assert!(smart_rules(&s, &lightroom, "Lightroom", &mut warnings).is_some());
 }
+
+/// "is Nature" and "is nature" together select nothing in Capture One, but LightCraft would take
+/// a photo with either spelling for both: such a rule is refused even when no photo has the word,
+/// and a library spelling is held against each rule keyword, not against the rule's set.
+#[test]
+fn a_keyword_rule_naming_one_keyword_in_two_spellings_is_refused() {
+    let mut s = crate::Session::new();
+    let rules =
+        json!({"all": true, "rules": [{"field": "keywords", "op": "is", "value": "Nature"}, {"field": "keywords", "op": "is", "value": "nature"}]});
+    let album = row(json!({"name": "Both", "smartRules": rules, "exactKeywords": ["Nature", "nature"]}));
+    let mut warnings = Vec::new();
+    assert!(smart_rules(&s, &album, "Capture One", &mut warnings).is_none());
+    library_photo(&mut s, "/a/one.ARW", |p| p.meta.keywords = vec!["nature".into()]);
+    assert!(smart_rules(&s, &album, "Capture One", &mut warnings).is_none());
+    assert_eq!(warnings.len(), 2, "{warnings:?}");
+    assert!(
+        warnings
+            .iter()
+            .all(|w| w.starts_with("smart album “Both”: its rule names the keyword “Nature” also as “nature”, which Capture One tells apart")),
+        "{warnings:?}"
+    );
+    // one spelling twice is no clash
+    let twice = row(json!({"name": "Twice", "smartRules": rules, "exactKeywords": ["nature", "nature"]}));
+    assert!(smart_rules(&s, &twice, "Capture One", &mut warnings).is_some());
+}

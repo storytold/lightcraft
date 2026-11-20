@@ -112,8 +112,9 @@ pub(super) fn outcome(rule: &Group, photos: &[CatalogPhoto], columns: &Columns) 
     let seen = Seen {
         // Capture One's "is" on keywords tells upper and lower case apart; LightCraft's doesn't
         spellings: photos.iter().flat_map(|p| p.keywords.iter()).flat_map(|k| std::iter::once(k.as_str()).chain(k.split('|'))).collect(),
-        // LightCraft shows a photo turned as its file says, not as the user turned it
-        turned_by_hand: photos.iter().any(|p| p.turned_by_hand),
+        // LightCraft shows a photo turned as its file says, not as the user turned it; and when
+        // the catalog doesn't say how a photo is turned, an aspect rule can't be told to match
+        turned_by_hand: photos.iter().any(|p| p.turned_by_hand || p.turned.is_none()),
     };
     let mut missing = Vec::new();
     let rules = to_rules(rule, &seen, &mut missing);
@@ -154,7 +155,7 @@ fn has_enabled(group: &Group) -> bool {
 struct Seen<'a> {
     /// Every keyword and level, as spelled.
     spellings: HashSet<&'a str>,
-    /// A photo is shown turned by hand.
+    /// A photo is shown turned by hand, or how it is turned wasn't read.
     turned_by_hand: bool,
 }
 

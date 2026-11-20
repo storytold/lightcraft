@@ -70,7 +70,8 @@ the import's result names it and the fields. The camera's make or model is one o
 is both together. Capture One's "is" on keywords tells upper and lower case apart and LightCraft's doesn't, so such
 a condition stays a rule only while the catalog and the library have its keyword in one spelling. Orientation is
 taken as Capture One shows the photo, turned by the file's orientation or by hand; LightCraft turns a photo only as
-its file says, so an orientation condition stays a rule only while no photo of the catalog was turned by hand.
+its file says, so an orientation condition stays a rule only while no photo of the catalog was turned by hand. A
+catalog that doesn't say how its photos are turned leaves a smart album on orientation out, with a warning.
 Aperture, focal length and exposure compensation are compared as typed (5.6 is 5.6). Text is compared ignoring
 case; "contains" with several words is matched as typed, so such a condition counts as one LightCraft has no rule
 for.

@@ -1263,18 +1263,26 @@ fn stage_collections(
 /// The smart album rules a collection row brings (`smartRules`, a Capture One smart album's,
 /// in [`lightcraft_catalog::RuleSet`] terms); `None` when it has none, or rules the library
 /// refuses, which are named in a warning (the album then keeps the photos the row lists).
-/// A keyword of the library (or a level of one) that `collection`'s `exactKeywords` names in
-/// another spelling only.
-fn spelled_otherwise(s: &crate::Session, collection: &Row) -> Option<String> {
-    let exact: Vec<&str> = collection.get("exactKeywords")?.as_array()?.iter().filter_map(Value::as_str).collect();
-    let lower: Vec<String> = exact.iter().map(|k| k.to_lowercase()).collect();
+/// Why `collection`'s `exactKeywords` (keywords its source program compares case by case) can't
+/// become a LightCraft rule, which doesn't: the rule names one keyword in two spellings, or the
+/// library holds a keyword (or a level of one) that a rule keyword names in another spelling.
+fn spelled_otherwise(s: &crate::Session, collection: &Row, program: &str) -> Option<String> {
+    let exact: Vec<(&str, String)> =
+        collection.get("exactKeywords")?.as_array()?.iter().filter_map(Value::as_str).map(|k| (k, k.to_lowercase())).collect();
+    let other_spelling = |name: &str| {
+        let lower = name.to_lowercase();
+        exact.iter().find(|(k, l)| *k != name && *l == lower).map(|(k, _)| *k)
+    };
+    if let Some((a, b)) = exact.iter().find_map(|(k, _)| other_spelling(k).map(|other| (*k, other))) {
+        return Some(format!("its rule names the keyword “{a}” also as “{b}”, which {program} tells apart"));
+    }
     s.catalog
         .photos()
         .flat_map(|photo| photo.meta.keywords.iter())
         .flat_map(|keyword| std::iter::once(keyword.as_str()).chain(keyword.split('|')))
         .map(str::trim)
-        .find(|name| !exact.contains(name) && lower.contains(&name.to_lowercase()))
-        .map(str::to_string)
+        .find(|name| other_spelling(name).is_some())
+        .map(|name| format!("the library has the keyword “{name}” in another spelling, which {program} tells apart"))
 }
 
 fn smart_rules(s: &crate::Session, collection: &Row, program: &str, warnings: &mut Vec<String>) -> Option<Box<lightcraft_catalog::Filter>> {
@@ -1300,8 +1308,8 @@ fn smart_rules(s: &crate::Session, collection: &Row, program: &str, warnings: &m
     }
     // keywords the source program compares case by case (Capture One's "is"): LightCraft's rule
     // doesn't, so a library holding one in another spelling would show other photos
-    if let Some(clash) = spelled_otherwise(s, collection) {
-        warnings.push(refused(format!("the library has the keyword “{clash}” in another spelling, which {program} tells apart")));
+    if let Some(why) = spelled_otherwise(s, collection, program) {
+        warnings.push(refused(why));
         return None;
     }
     Some(Box::new(lightcraft_catalog::Filter { rule_set: Some(rules), ..lightcraft_catalog::Filter::default() }))

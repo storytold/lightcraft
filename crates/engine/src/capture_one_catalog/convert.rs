@@ -325,10 +325,10 @@ fn collections(
                     Ok(rule) => rule,
                     Err(why) => {
                         warn(Notice::new(notice::SMART_LEFT_OUT).text_value("name", name).notice("why", why));
-                        // as written, up to the length a rule is read at
-                        if collection.rule.len() <= smart::MAX_RULE_BYTES {
-                            album.insert("captureOneRuleText".into(), json!(collection.rule));
-                        }
+                        // as written, also one too long to be parsed: the catalog reader already
+                        // bounds a value (64 MiB), and the recovery archive has a size limit of
+                        // its own, which it warns about
+                        album.insert("captureOneRuleText".into(), json!(collection.rule));
                         left_out(album);
                         continue;
                     }

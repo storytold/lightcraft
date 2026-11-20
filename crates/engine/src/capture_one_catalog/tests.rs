@@ -1623,12 +1623,21 @@ fn an_orientation_rule_stays_a_rule_only_while_no_photo_is_turned_by_hand() {
 fn a_smart_album_whose_photos_cant_be_told_is_not_passed_off_as_empty() {
     let scratch = Scratch::new("unknown-selection");
     let mut tables = sample(&scratch.0);
-    // a rule on orientation in a catalog without the layer table: the rule maps, its photos can't be told
+    // a rule on orientation in a catalog without the layer table: how its photos are turned isn't
+    // known, so neither a live aspect rule nor the photos it selects can be told to match Capture
+    // One's; the album is left out with a warning, its rule kept for the recovery archive
     table(&mut tables, "ZCOLLECTION").rows.push(smart_album(26, "Wide", 10, &rule(true, &[("orientation", 0, "0")])));
     let data = convert::to_import(read(&scratch.catalog(&tables)).unwrap());
     let wide = data.collections.iter().find(|c| c.get("name") == Some(&serde_json::json!("Wide"))).unwrap();
-    assert_eq!((wide.get("selectionUnknown"), wide.contains_key("smartRules")), (Some(&serde_json::json!(true)), true));
+    assert!(!wide.contains_key("smartRules"), "{wide:?}");
+    assert_eq!((wide.get("systemOnly"), wide.get("captureOneLeftOut")), (Some(&serde_json::json!(1)), Some(&serde_json::json!(true))));
+    assert!(wide.contains_key("captureOneRule"), "{wide:?}");
     assert!(data.members.iter().all(|m| m.get("collection") != Some(&serde_json::json!(26))));
+    assert!(
+        data.warnings.iter().any(|w| w == "smart album “Wide”: not imported; its rule tests Aspect Ratio, which the catalog import can't read"),
+        "{:#?}",
+        data.warnings
+    );
 }
 
 #[test]
@@ -1737,12 +1746,25 @@ fn smart_albums_come_in_as_smart_albums_plain_albums_or_warnings() {
     assert_eq!(left_out("Commented").as_deref(), Some(notice::RULE_NOT_READ));
     assert_eq!(left_out("Broken").as_deref(), Some(notice::RULE_UNREADABLE));
     // and their rules go to the recovery archive, in rows the library skips: parsed, or as written
-    let data = convert::to_import(read(&package).unwrap());
+    // (a rule too long to be parsed doesn't fit the test catalog's page: it joins the read catalog)
+    let mut catalog = read(&package).unwrap();
+    let long = format!("<MatchOperator Kind=\"AND\">{}</MatchOperator>", " ".repeat(smart::MAX_RULE_BYTES));
+    let template = catalog.collections.iter().find(|c| c.name == "Broken").cloned().unwrap();
+    catalog.collections.push(Collection { id: 30, uuid: "long".into(), name: "Long".into(), rule: long.clone(), ..template });
+    let data = convert::to_import(catalog);
     let kept = |name: &str| data.collections.iter().find(|c| c.get("name") == Some(&serde_json::json!(name))).cloned().unwrap_or_default();
     let (commented, broken) = (kept("Commented"), kept("Broken"));
     assert_eq!((commented.get("systemOnly"), broken.get("systemOnly")), (Some(&serde_json::json!(1)), Some(&serde_json::json!(1))));
     assert_eq!(commented["captureOneRule"]["items"][0]["items"][0]["key"], "commentsKeys");
     assert_eq!(broken.get("captureOneRuleText"), Some(&serde_json::json!("<MatchOperator")));
+    // also a rule too long to be parsed
+    assert!(
+        data.notices.iter().any(|n| n.message == notice::SMART_LEFT_OUT
+            && n.values.get("why") == Some(&notice::Part::Message(Notice::new(notice::RULE_TOO_LONG).count("kb", smart::MAX_RULE_BYTES / 1024)))),
+        "{:#?}",
+        data.notices
+    );
+    assert_eq!(kept("Long").get("captureOneRuleText"), Some(&serde_json::json!(long)));
     // a keyword "is" names its keyword as spelled, for the library to check its own against
     assert_eq!(kept("Nature").get("exactKeywords"), Some(&serde_json::json!(["Nature"])));
     assert!(album(&s, "Nature").is_smart());
