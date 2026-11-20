@@ -207,7 +207,7 @@ impl Net {
                     }
                     if fast_time >= cpu_time {
                         Err(format!(
-                            "the device is not faster for this model ({fast_ms:.0} ms against {cpu_ms:.0} ms on the CPU for {BENCH_BATCH} faces)",
+                            "the device is not faster for this model ({fast_ms:.0} ms against {cpu_ms:.0} ms on the CPU for {BENCH_BATCH} faces)"
                         ))
                     } else {
                         Ok(())

@@ -563,7 +563,7 @@ impl Model {
                 acc.record_plan(prog_fp, dev_time < cpu_time, dev_ms, cpu_ms);
                 if dev_time >= cpu_time {
                     return Err(format!(
-                        "the GPU is not faster for this model ({dev_ms:.0} ms against {cpu_ms:.0} ms on the CPU for {BENCH_BATCH} runs)",
+                        "the GPU is not faster for this model ({dev_ms:.0} ms against {cpu_ms:.0} ms on the CPU for {BENCH_BATCH} runs)"
                     ));
                 }
                 log::info!("tflite: {BENCH_BATCH} runs take {dev_ms:.1} ms on the GPU, {cpu_ms:.1} ms on the CPU");
