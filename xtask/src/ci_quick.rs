@@ -41,6 +41,9 @@ const EMBEDDED: &[(&str, &[&str])] = &[
     ("docs/whats-new.md", &["lightcraft-ui-egui"]),
     ("packaging/linux/flatpak/", &["lightcraft-ui-egui"]),
     ("docs/raw/coverage-sweep.tsv", &["lightcraft-raw"]),
+    ("docs/raw/decode-baseline.tsv", &["lightcraft-raw"]),
+    // also workspace-wide; `crates/raw/tests/it/decode_baseline.rs` compiles it in
+    ("Cargo.lock", &["lightcraft-raw"]),
     ("docs/raf-corpus.sha256", &["lightcraft-raw"]),
     ("xtask/src/raw_samples.rs", &["lightcraft-raw"]),
     ("crates/ui-egui/src/menus.rs", &["xtask"]),
