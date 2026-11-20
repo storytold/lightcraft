@@ -76,7 +76,18 @@ impl Drop for Extracted {
 
 /// Opens `path` as a bounded seekable ZIP archive without buffering payloads in memory.
 fn open_archive(path: &Path) -> Result<SeekableArchive<File>, String> {
-    let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let records = craft_zip::directory_record_names(&mut file, MAX_DIRECTORY_BYTES, MAX_ENTRIES as usize).map_err(|e| e.to_string())?;
+    let mut lrcat_records = 0usize;
+    for record in &records {
+        let lower = record.name.replace('\\', "/").to_lowercase();
+        if lower.ends_with(".lrcat") && !lower.split('/').any(|p| p == "__macosx" || p.starts_with("._")) {
+            lrcat_records += 1;
+            if lrcat_records > 1 {
+                return Err("this zip holds more than one Lightroom catalog (.lrcat); unzip it and import one".into());
+            }
+        }
+    }
     SeekableArchive::open(
         file,
         SeekableLimits { max_entries: MAX_ENTRIES, max_metadata_bytes: MAX_DIRECTORY_BYTES + 65_535 + 128, max_total_bytes: MAX_CATALOG_BYTES },
@@ -423,16 +434,18 @@ pub(crate) mod tests {
     #[test]
     fn only_a_zip_with_one_catalog_holds_one() {
         let dir = temp("holds");
-        let cases: [(&str, Vec<u8>, bool); 4] = [
+        let cases: [(&str, Vec<u8>, bool); 5] = [
             ("one.zip", zip(&[("Cat.lrcat", b"x"), ("Cat.lrcat-data/CURRENT", b"y")], true, false), true),
             ("none.zip", zip(&[("photo.jpg", b"x")], false, false), false),
             ("two.zip", zip(&[("A.lrcat", b"a"), ("B.lrcat", b"b")], false, false), false),
+            ("dup.zip", zip(&[("Cat.lrcat", b"a"), ("Cat.lrcat", b"b")], false, false), false),
             ("junk.zip", b"PK".to_vec(), false),
         ];
         for (name, bytes, want) in cases {
             std::fs::write(dir.join(name), bytes).unwrap();
             assert_eq!(holds_catalog(&dir.join(name)), want, "{name}");
         }
+        assert!(extract(&dir.join("dup.zip"), &dir.join("out"), &AtomicBool::new(false)).unwrap_err().contains("more than one Lightroom catalog"));
         assert!(!holds_catalog(&dir.join("absent.zip")));
         std::fs::remove_dir_all(&dir).unwrap();
     }
