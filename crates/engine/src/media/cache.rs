@@ -1,6 +1,8 @@
 use super::settings_hash::SettingsHashes;
 use super::source::{DecodedSource, DenoiseSpec, PairLoader, RENDERED_MEM_BYTES, SourceLevel, SourceRef, THUMB_SOURCE_BYTES};
-use super::{Arc, DcpProfile, DevelopSettings, HashMap, Hasher128, Lru, MediaCache, Photo, PhotoId, PreviewCache, Rgb32f, Source, SourceInfo};
+use super::{
+    Arc, DcpProfile, DevelopSettings, Hash128, HashMap, Hasher128, Lru, MediaCache, Photo, PhotoId, PreviewCache, Rgb32f, Source, SourceInfo,
+};
 use lightcraft_preview::WriteGate;
 
 /// The photos that have a cached denoised picture for the denoise model in use. Only memory: nothing here touches the
@@ -53,6 +55,8 @@ impl Default for MediaCache {
     fn default() -> Self {
         let budget = crate::memory::cache_share(crate::memory::budget());
         MediaCache {
+            full_frame_loader: None,
+            canvas_sizes: Default::default(),
             settings_hashes: SettingsHashes::default(),
             thumbs: Lru::new(THUMB_SOURCE_BYTES.min(budget)),
             previews: Vec::new(),
@@ -325,9 +329,34 @@ impl MediaCache {
         self.source_ref_for(p, level, cached, wanted)
     }
 
+    /// Whether photo `p`'s file decodes to its whole picture, past its default crop ("Show Full Image" on, and the
+    /// host has a loader for it).
+    pub fn shows_full_frame(&self, p: &Photo) -> bool {
+        p.develop.crop.full_frame && self.full_frame_loader.is_some()
+    }
+
+    /// What a decoded source of photo `p` must have been made from to be kept ([`crate::Session::accept`]): the
+    /// decode [`super::quick::source_identity`] names and, with "Show Full Image" on, the whole-picture decode. A job
+    /// planned before the file changed or the option was toggled finishes with another key, and its source is dropped
+    /// instead of undoing the change.
+    pub fn source_key(&self, p: &Photo) -> Hash128 {
+        let identity = super::quick::source_identity(p);
+        if !self.shows_full_frame(p) {
+            return identity;
+        }
+        Hasher128::new().update(&identity.0.to_le_bytes()).str("full-frame").finish()
+    }
+
     /// [`Self::source_ref_with`] developed with camera profile `wanted` (none: the file's own colour).
     fn source_ref_for(&mut self, p: &Photo, level: SourceLevel, cached: bool, wanted: Option<(String, Arc<DcpProfile>)>) -> SourceRef {
         let mut r = self.source_ref_plain(p, level, cached, wanted);
+        if self.shows_full_frame(p)
+            && let (SourceRef::File { loader, .. }, Some(full)) = (&mut r, &self.full_frame_loader)
+        {
+            // the whole picture, past the default crop (no denoised twin: that is made for the default crop)
+            *loader = Some(full.clone());
+            return r;
+        }
         if let (SourceRef::File { denoise, .. }, Some((spec, loader))) = (&mut r, self.denoise.get(p.id)) {
             *denoise = Some((spec.clone(), loader.clone()));
         }
