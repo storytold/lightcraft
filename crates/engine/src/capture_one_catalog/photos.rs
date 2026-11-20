@@ -215,7 +215,7 @@ fn time(seconds: Option<f64>, zone: &str) -> Option<String> {
     Some(format!("{}{zone}", lightcraft_catalog::dates::civil(seconds.trunc() as i64)))
 }
 
-/// A value Capture One writes as a fraction (`-33/100`) or a plain number.
+/// A value Capture One writes as a fraction (`-67/100`) or a plain number.
 fn fraction(text: &str) -> Option<f32> {
     let text = text.trim();
     let value = match text.split_once('/') {

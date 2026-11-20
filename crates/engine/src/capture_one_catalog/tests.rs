@@ -341,16 +341,16 @@ fn sample(photos: &Path) -> Vec<Spec> {
         ("ZWIDTH", V::I(6000)),
         ("ZHEIGHT", V::I(4000)),
         ("ZFILE_SIZE", V::I(23_000_000)),
-        ("ZEXP_DATE", V::R(1_601_230_617.0)),
-        ("ZIMPORTDATE", V::R(1_604_310_308.92)),
-        ("ZCAMERA_MAKE", t("FUJIFILM")),
-        ("ZCAMERA_MODEL", t("X-T2")),
-        ("ZCAMERA_LENS", t("XF18-55mm ")),
-        ("ZISO", V::I(200)),
-        ("ZEXP_APERTURE", V::R(8.0)),
+        ("ZEXP_DATE", V::R(1_623_752_130.0)),
+        ("ZIMPORTDATE", V::R(1_640_995_206.5)),
+        ("ZCAMERA_MAKE", t("ACME")),
+        ("ZCAMERA_MODEL", t("Model 7")),
+        ("ZCAMERA_LENS", t("Zoom 24-70mm ")),
+        ("ZISO", V::I(640)),
+        ("ZEXP_APERTURE", V::R(5.6)),
         ("ZEXP_SHUTTERSPEED", V::R(0.004)),
-        ("ZEXP_FOCALLENGTH", V::R(18.0)),
-        ("ZEXP_EXPOSURECOMPENSATION", t("-33/100")),
+        ("ZEXP_FOCALLENGTH", V::R(35.0)),
+        ("ZEXP_EXPOSURECOMPENSATION", t("-67/100")),
         ("ZGPSLATITUDE", t("52.5")),
         ("ZGPSLONGITUDE", t("13.4")),
     ]);
@@ -374,7 +374,7 @@ fn sample(photos: &Path) -> Vec<Spec> {
         ("ZCONTACT_CREATOR", t("A creator")),
         ("ZSTATUS_COPYRIGHTNOTICE", t("A notice          ")),
         ("ZIMAGE_CITY", t("A city")),
-        ("ZIMAGE_DATECREATED", t("20200927")),
+        ("ZIMAGE_DATECREATED", t("20210615")),
     ]);
     let mut folder = collection(40, FOLDER, "", -1, 5);
     folder.push(("ZFOLDERLOCATION", V::I(1)));
@@ -513,11 +513,11 @@ fn photos_come_with_their_originals_variants_and_metadata() {
     assert_eq!((first.original.clone(), first.managed), (Original::Local, true));
     assert_eq!((first.kind, first.width, first.height, first.file_size), (OriginalKind::Raw, 6000, 4000, 23_000_000));
     // the camera's clock, and the moment of the import
-    assert_eq!(first.captured.as_deref(), Some("2020-09-27T18:16:57"));
-    assert_eq!(first.imported.as_deref(), Some("2020-11-02T09:45:08Z"));
-    assert_eq!((first.camera_make.as_str(), first.camera_model.as_str(), first.lens.as_str()), ("FUJIFILM", "X-T2", "XF18-55mm"));
-    assert_eq!((first.iso, first.aperture, first.shutter_seconds, first.focal_mm), (Some(200), Some(8.0), Some(0.004), Some(18.0)));
-    assert_eq!(first.exposure_bias, Some(-0.33));
+    assert_eq!(first.captured.as_deref(), Some("2021-06-15T10:15:30"));
+    assert_eq!(first.imported.as_deref(), Some("2022-01-01T00:00:06Z"));
+    assert_eq!((first.camera_make.as_str(), first.camera_model.as_str(), first.lens.as_str()), ("ACME", "Model 7", "Zoom 24-70mm"));
+    assert_eq!((first.iso, first.aperture, first.shutter_seconds, first.focal_mm), (Some(640), Some(5.6), Some(0.004), Some(35.0)));
+    assert_eq!(first.exposure_bias, Some(-0.67));
     assert_eq!(first.gps, Some((52.5, 13.4)));
     assert_eq!((first.image_uuid.as_str(), first.variant_uuid.as_str(), first.adjusted), ("IMAGE-1", "VARIANT-1", true));
     // the combined layer's metadata, not the default layer's
@@ -528,7 +528,7 @@ fn photos_come_with_their_originals_variants_and_metadata() {
         (first.iptc.headline.as_str(), first.iptc.description.as_str(), first.iptc.creator.as_str()),
         ("A headline", "A description", "A creator")
     );
-    assert_eq!(first.iptc.other.get("IMAGE_DATECREATED").map(String::as_str), Some("20200927"));
+    assert_eq!(first.iptc.other.get("IMAGE_DATECREATED").map(String::as_str), Some("20210615"));
 
     let copy = &catalog.photos[1];
     assert_eq!((copy.rating, copy.color_tag, copy.keywords.clone()), (1, ColorTag::None, vec!["Nature|Animals".to_string()]));
@@ -933,7 +933,7 @@ fn times_are_calendar_times_within_four_digit_years() {
         image.push(("ZEXP_DATE", V::R(seconds)));
         read(&scratch.catalog(&tables)).unwrap().photos[0].captured.clone()
     };
-    assert_eq!(captured(1_429_943_263.93).as_deref(), Some("2015-04-25T06:27:43"));
+    assert_eq!(captured(1_500_000_000.25).as_deref(), Some("2017-07-14T02:40:00"));
     // before 1970, and the last second an ISO date holds
     assert_eq!(captured(-86_400.5).as_deref(), Some("1969-12-31T00:00:00"));
     assert_eq!(captured(253_402_300_799.0).as_deref(), Some("9999-12-31T23:59:59"));
@@ -1058,7 +1058,7 @@ fn a_catalog_becomes_photos_virtual_copies_and_albums_in_one_undo_step() {
     let master = by_name(&s, "managed.RAF", false);
     assert_eq!((master.rating, master.label, master.kind), (4, Some(ColorLabel::Yellow), MediaKind::Raw));
     assert_eq!(master.meta.keywords, ["Culture|Buildings"]);
-    assert_eq!(master.captured.as_deref(), Some("2020-09-27T18:16:57"));
+    assert_eq!(master.captured.as_deref(), Some("2021-06-15T10:15:30"));
     let m = &master.meta;
     assert_eq!(
         (m.title.as_str(), m.caption.as_str(), m.creator.as_str(), m.copyright.as_str(), m.city.as_str()),
@@ -1192,11 +1192,11 @@ fn the_keyword_list_joins_the_library_and_offline_originals_keep_their_camera() 
     // the managed raw is not in the test's catalog folder: the catalog's camera and exposure stay
     let raw = by_name(&s, "managed.RAF", false);
     let m = &raw.meta;
-    assert_eq!((m.camera.as_str(), m.make.as_str(), m.lens.as_str()), ("FUJIFILM X-T2", "FUJIFILM", "XF18-55mm"));
-    assert_eq!((m.iso, m.aperture, m.focal_mm, m.exposure_bias, m.gps), (Some(200), Some(8.0), Some(18.0), Some(-0.33), Some((52.5, 13.4))));
+    assert_eq!((m.camera.as_str(), m.make.as_str(), m.lens.as_str()), ("ACME Model 7", "ACME", "Zoom 24-70mm"));
+    assert_eq!((m.iso, m.aperture, m.focal_mm, m.exposure_bias, m.gps), (Some(640), Some(5.6), Some(35.0), Some(-0.67), Some((52.5, 13.4))));
     assert_eq!(m.shutter, lightcraft_meta::format_exposure_time(0.004).unwrap());
     // its virtual copy has them too
-    assert_eq!(by_name(&s, "managed.RAF", true).meta.camera, "FUJIFILM X-T2");
+    assert_eq!(by_name(&s, "managed.RAF", true).meta.camera, "ACME Model 7");
 }
 
 #[test]
