@@ -187,7 +187,7 @@ pub fn last_options(app: &LightcraftApp, command: &str) -> MergeDialog {
 pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
     let (kind, finish) = lightcraft_engine::merge::parse(command, &json!({})).map_err(|e| e.to_string())?;
     let ids = app.session.selected();
-    let jobs = app.session.plan_merges(kind, finish, &ids, false).map_err(|e| e.to_string())?;
+    let jobs = app.session.plan_merges(kind.clone(), finish.clone(), &ids, false).map_err(|e| e.to_string())?;
     if jobs.len() == 1 && app.session.plan_merge(kind.clone(), finish.clone(), &ids, false).is_ok() {
         app.merge.ids = ids;
         app.merge.explicit_group = false;
@@ -247,7 +247,7 @@ fn start_final_planned(app: &mut LightcraftApp, opts: &MergeDialog, explicit_gro
 pub fn start_last(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
     let (kind, finish) = lightcraft_engine::merge::parse(command, &json!({})).map_err(|e| e.to_string())?;
     let ids = app.session.selected();
-    let jobs = app.session.plan_merges(kind, finish, &ids, false).map_err(|e| e.to_string())?;
+    let jobs = app.session.plan_merges(kind.clone(), finish.clone(), &ids, false).map_err(|e| e.to_string())?;
     if jobs.len() == 1 && app.session.plan_merge(kind.clone(), finish.clone(), &ids, false).is_ok() {
         app.merge.ids = ids;
         app.merge.explicit_group = false;
