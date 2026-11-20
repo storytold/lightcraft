@@ -81,7 +81,7 @@ fn open_archive(path: &Path) -> Result<SeekableArchive<File>, String> {
         craft_zip::lenient::file::directory_record_names(&mut file, MAX_DIRECTORY_BYTES, MAX_ENTRIES as usize).map_err(|e| e.to_string())?;
     let mut lrcat_records = 0usize;
     for record in &records {
-        let lower = record.name.replace('\\', "/").to_lowercase();
+        let lower = String::from_utf8_lossy(&record.name).replace('\\', "/").to_lowercase();
         if lower.ends_with(".lrcat") && !lower.split('/').any(|p| p == "__macosx" || p.starts_with("._")) {
             lrcat_records += 1;
             if lrcat_records > 1 {
