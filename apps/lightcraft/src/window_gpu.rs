@@ -257,22 +257,33 @@ fn probe(backends: Backends, compose_window: bool) -> Result<WgpuSetupExisting, 
         use winit::window::Window;
 
         let mut window: Option<Window> = None;
-        let mut owned_display = None;
-        let event_loop = EventLoop::<()>::new().map_err(|_| "GL probe requires a display handle on Linux; XOpenDisplay failed".to_string())?;
-        event_loop
-            .run(|event, elwt| {
-                if let winit::event::Event::Resumed = event {
-                    match elwt.create_window(Window::default_attributes().with_visible(false).with_title("LightCraft GL Probe")) {
-                        Ok(w) => {
-                            owned_display = Some(elwt.owned_display_handle());
-                            window = Some(w);
-                        }
-                        Err(_) => {}
-                    }
-                    elwt.exit();
+        let mut owned_display: Option<winit::event_loop::OwnedDisplayHandle> = None;
+        let mut event_loop = EventLoop::<()>::new().map_err(|_| "GL probe requires a display handle on Linux; XOpenDisplay failed".to_string())?;
+        #[derive(Default)]
+        struct GlProbeApp {
+            window: Option<Window>,
+            owned_display: Option<winit::event_loop::OwnedDisplayHandle>,
+        }
+        impl winit::application::ApplicationHandler for GlProbeApp {
+            fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+                if let Ok(w) = event_loop.create_window(Window::default_attributes().with_visible(false).with_title("LightCraft GL Probe")) {
+                    self.owned_display = Some(event_loop.owned_display_handle());
+                    self.window = Some(w);
                 }
-            })
-            .map_err(|_| "GL probe event loop failed".to_string())?;
+                event_loop.exit();
+            }
+            fn window_event(
+                &mut self,
+                _event_loop: &winit::event_loop::ActiveEventLoop,
+                _window_id: winit::window::WindowId,
+                _event: winit::event::WindowEvent,
+            ) {
+            }
+        }
+        let mut app = GlProbeApp::default();
+        event_loop.run_app(&mut app).map_err(|_| "GL probe event loop failed".to_string())?;
+        window = app.window;
+        owned_display = app.owned_display;
 
         let window = window.ok_or("GL probe failed to create window")?;
         let owned_display = owned_display.ok_or("GL probe failed to get display handle")?;
