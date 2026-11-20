@@ -80,7 +80,6 @@ LightCraft is a clean-room, open-source, pure-Rust photo library and non-destruc
 - Attribution file: `assets/ATTRIBUTION.md`; `cargo xtask assets` checks it. Brand files in `docs/brand/` are trademarks under `docs/brand/LICENSE-brand.txt`.
 - Fonts come from storytold/craft-fonts through `CRAFT_FONTS_DIR`; Inter in `assets/fonts/` is the one font kept here. Releases set `CRAFT_FONTS_REQUIRED=1`.
 - Test corpora: `cargo xtask corpus --download` into the gitignored `corpus/`; shared PSDs are in storytold/photocraft-corpus.
-- Commit subjects start with a task id, for example `M2.3: local Laplacian highlights/shadows`.
 - Contributor credits: `docs/contributors.md`.
 
 ### Running the app
