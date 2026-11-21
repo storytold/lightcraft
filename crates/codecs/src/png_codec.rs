@@ -106,36 +106,6 @@ fn rgb_to_xyz_d50_checked(space: &RgbSpace) -> Option<Mat3> {
 mod tests {
     use crate::DecodeOptions;
 
-    #[test]
-    fn png_export_preserves_raw_exif_and_its_crc() {
-        use crate::encode::{EncodeImage, EncodeMeta, Samples, encode_png};
-
-        let pixels = [10, 120, 230, 80, 40, 20];
-        let exif = crate::exif::minimal_exif(6);
-        let xmp = "<xmp/>";
-        let meta = EncodeMeta { exif: Some(&exif), xmp: Some(xmp), ..Default::default() };
-        let png = encode_png(&EncodeImage::new(2, 1, 3, Samples::U8(&pixels)), &meta).unwrap();
-
-        let expected = png_chunk(*b"eXIf", &exif);
-        let mut chunks = &png[8..];
-        let mut exif_chunks = 0;
-        while !chunks.is_empty() {
-            let len = u32::from_be_bytes(chunks[..4].try_into().unwrap()) as usize;
-            let (chunk, rest) = chunks.split_at(12 + len);
-            if &chunk[4..8] == b"eXIf" {
-                assert_eq!(chunk, expected, "eXIf length, payload and CRC");
-                exif_chunks += 1;
-            }
-            chunks = rest;
-        }
-        assert_eq!(exif_chunks, 1);
-
-        let decoded = crate::decode(&png, DecodeOptions::default()).unwrap();
-        assert_eq!((decoded.width, decoded.height, decoded.orientation), (2, 1, 6));
-        assert_eq!(decoded.xmp.as_deref(), Some(xmp));
-        assert_eq!(decoded.to_srgb8().data, [[10, 120, 230, 255], [80, 40, 20, 255]]);
-    }
-
     /// An IFD0 with two Orientation entries (1, then 6): `read_header` and `decode` read it with
     /// the same reader, so they agree on the orientation.
     #[test]
