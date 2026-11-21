@@ -328,8 +328,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     // Header probes inspect stored rows. Judge masked columns before rearranging the full
     // image too, so the probe and full decoder use exactly the same prefix.
     let stored_active_w = match &data {
-        // High Efficiency frames are judged unmasked: their probe reads no samples (see `compressed`)
-        RawData::U16(_) if he_black.is_some() => w,
+        // A High Efficiency header probe reads no samples (see `compressed`), so it cannot judge masked
+        // columns; the full decode still trims them.
+        RawData::U16(_) if he_black.is_some() && mode == Mode::Header => w,
         RawData::U16(samples) => trailing_masked_columns(samples, w, bits),
         _ => w,
     };
@@ -603,7 +604,7 @@ fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>,
             .ok_or_else(|| RawError::Corrupt("Nikon High Efficiency NEF: strip outside the file".into()))?;
         // The wavelet codestream only decodes whole (its top rows are the last precincts and every level spans the
         // full height), so the header probe reads just the codestream headers and no samples (issue #1304).
-        // `decode` therefore never trims masked columns from an HE frame, keeping probe and decode equal.
+        // The probe therefore cannot see masked columns; the full decode still trims them.
         let (w, h, bits) = (info.width as usize, info.height as usize, info.bits() as u32);
         if mode == Mode::Header {
             return Ok((RawData::U16(Vec::new()), Some(nefhe::probe(src, w, h, bits)?)));
