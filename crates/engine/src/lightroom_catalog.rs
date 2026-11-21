@@ -394,9 +394,9 @@ fn committed_wal_len(main: &[u8], wal: &[u8]) -> Result<usize, String> {
     if !matches!(magic, 0x377f0682 | 0x377f0683) || be_word(header, 4)? != 3_007_000 {
         return Err("invalid WAL header".into());
     }
-    let size = main.get(16..18).and_then(|s| <[u8; 2]>::try_from(s).ok()).map(u16::from_be_bytes).ok_or("truncated SQLite header")?;
-    let size = if size == 1 { 65536 } else { u32::from(size) };
-    if !(512..=65536).contains(&size) || !size.is_power_of_two() || be_word(header, 8)? != size {
+    let raw_size = main.get(16..18).and_then(|s| <[u8; 2]>::try_from(s).ok()).map(u16::from_be_bytes).ok_or("truncated SQLite header")?;
+    let size = craft_sqlite::page_size_from_raw(raw_size).map_err(|_| "WAL page size mismatch")?;
+    if be_word(header, 8)? != size {
         return Err("WAL page size mismatch".into());
     }
     let big = magic == 0x377f0683;

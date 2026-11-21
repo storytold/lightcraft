@@ -105,7 +105,11 @@ pub fn sniff(b: &[u8]) -> Option<Format> {
         return Some(Format::RawOther);
     }
     if b.len() >= 12 && &b[4..8] == b"ftyp" {
-        return sniff_bmff(b);
+        // A JPEG comment can put these bytes at this offset. Check the leading JPEG signature first.
+        return match craft_image_codecs::detect(b) {
+            Some(craft_image_codecs::Format::Jpeg | craft_image_codecs::Format::JpegLs) => Some(Format::Jpeg),
+            _ => sniff_bmff(b),
+        };
     }
     if b.starts_with(b"IIRO") || b.starts_with(b"IIRS") || b.starts_with(b"MMOR") || b.starts_with(b"IIU\0") {
         // Olympus ORF / Panasonic RW2: TIFF-structured with a private magic.
@@ -276,6 +280,34 @@ mod tests {
     }
 
     #[test]
+    fn jpeg_comments_do_not_override_the_format() {
+        use crate::encode::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+
+        let pixels = [32, 83, 170].repeat(12);
+        let image = EncodeImage::new(4, 3, 3, Samples::U8(&pixels));
+        let jpeg = encode_jpeg(&image, 85, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+        let header = crate::read_header(&jpeg).unwrap();
+        assert_eq!((header.format, header.width, header.height), (Format::Jpeg, 4, 3));
+        let expected = crate::decode(&jpeg, crate::DecodeOptions::default()).unwrap().to_srgb8();
+
+        for apparent_brand in [b"avif", b"test"] {
+            // The two-byte comment length and the start of its payload form the apparent ftyp.
+            let mut comment = vec![0; usize::from(u16::from_be_bytes(*b"ft")) - 2];
+            comment[..2].copy_from_slice(b"yp");
+            comment[2..6].copy_from_slice(apparent_brand);
+
+            let mut commented = jpeg[..2].to_vec();
+            commented.extend_from_slice(b"\xff\xfeft");
+            commented.extend_from_slice(&comment);
+            commented.extend_from_slice(&jpeg[2..]);
+
+            assert_eq!(sniff(&commented), Some(Format::Jpeg), "{apparent_brand:?}");
+            assert_eq!(crate::read_header(&commented).unwrap(), header);
+            assert_eq!(crate::decode(&commented, crate::DecodeOptions::default()).unwrap().to_srgb8().data, expected.data);
+        }
+    }
+
+    #[test]
     fn dng_detected() {
         // II*, IFD at 8 with a single DNGVersion entry.
         let mut b = b"II*\0\x08\0\0\0".to_vec();
@@ -405,5 +437,37 @@ mod tests {
         assert_eq!(sniff(b"II*\0\x08\0\0\0\0\0"), Some(Format::Tiff));
         assert_eq!(sniff(b"MM\0*\0\0\0\x08\0\0"), Some(Format::Tiff));
         assert_eq!(sniff(b"unknown-header"), None);
+    }
+
+    #[test]
+    fn short_inputs_and_psd_raw_precedence() {
+        for len in 0..4 {
+            assert_eq!(sniff(&[0xFF, 0xD8, 0xFF][..len]), None);
+        }
+        assert_eq!(sniff(b"8BPS"), None);
+        assert_eq!(sniff(b"8BPS\0"), None);
+        assert_eq!(sniff(b"8BPS\0\x00"), None);
+        assert_eq!(sniff(b"8BPS\0\x03"), None);
+        assert_eq!(sniff(b"8BPS\0\x01"), Some(Format::Psd));
+        assert_eq!(sniff(b"8BPS\0\x02"), Some(Format::Psd));
+
+        assert_eq!(sniff(b"II\0\0\0\0HEAPCCD"), None);
+        assert_eq!(sniff(b"II\0\0\0\0HEAPCCDR"), Some(Format::RawOther));
+        for raw_magic in [b"FUJIFILMCCD-RAW".as_slice(), b"\0MRM", b"FOVb"] {
+            assert_eq!(sniff(raw_magic), Some(Format::RawOther));
+        }
+        for raw_tiff in [b"IIRO".as_slice(), b"IIRS", b"MMOR", b"IIU\0"] {
+            assert_eq!(sniff(raw_tiff), Some(Format::RawTiffLike));
+        }
+        for tiff_magic in [b"II*\0".as_slice(), b"MM\0*"] {
+            assert_eq!(sniff(tiff_magic), Some(Format::Tiff));
+        }
+
+        // Compound headers: PSD, RAW, and JPEG/JPEG-LS signatures take precedence over `ftyp` at offset 4.
+        assert_eq!(sniff(b"8BPS\0\x01ftypavif"), Some(Format::Psd));
+        assert_eq!(sniff(b"\0MRMftypavif"), Some(Format::RawOther));
+        assert_eq!(sniff(b"FOVbftypheic"), Some(Format::RawOther));
+        assert_eq!(sniff(b"\xFF\xD8\xFF\xF7ftypcrx "), Some(Format::Jpeg));
+        assert_eq!(sniff(b"\xFF\xD8\xFF\xE0ftypjxl "), Some(Format::Jpeg));
     }
 }
