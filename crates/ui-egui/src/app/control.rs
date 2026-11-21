@@ -18,6 +18,7 @@ impl LightcraftApp {
                 control::Outcome::Done(v) => {
                     let _ = reply.send(v);
                 }
+                control::Outcome::Later => {}
                 control::Outcome::Screenshot { target, headless } => {
                     if let Err(error) = self.admit_shot(ctx, target, headless, reply.clone()) {
                         let _ = reply.send(serde_json::json!({"ok": false, "error": error}));
@@ -53,6 +54,8 @@ impl LightcraftApp {
         if self.pending_gestures.len() >= MAX_PENDING_GESTURES {
             return Err(format!("{}: {MAX_PENDING_GESTURES} control gestures are already pending", method));
         }
+        // refused at once, without waiting for a layout or taking a pending slot
+        crate::control::check_gesture_numbers(&method, &params)?;
         let now = self.tick_now_ms();
         self.pending_gestures.push(PendingGesture {
             method,

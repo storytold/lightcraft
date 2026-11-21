@@ -9,6 +9,7 @@ description = "LightCraft develop settings: the non-destructive edit model, cont
 workspace = true
 
 [dependencies]
+craft-mime = { workspace = true }
 lightcraft-geom = { workspace = true }
 lightcraft-color = { workspace = true }
 serde = { workspace = true }

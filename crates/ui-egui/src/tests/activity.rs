@@ -172,6 +172,35 @@ fn quit_with_a_running_task_asks_and_quit_anyway_cancels() {
     assert!(g.is_cancelled() && h.quit_requested());
 }
 
+/// Files waiting for a running import or Synchronize Folder (issue #2779) make quitting ask, and
+/// Quit Anyway gives them up instead of asking about them again and again.
+#[test]
+fn quit_anyway_gives_up_files_waiting_to_be_imported() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-quit-waiting-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for i in 0..1000u32 {
+        let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[(i % 251) as u8, (i / 251) as u8, 9, 255]; 64] };
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(dir.join(format!("{i}.png")), png).unwrap();
+    }
+    let mut h = demo();
+    // the file waits behind an import that is still running
+    crate::import::start_paths(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
+    h.app.waiting_import.files = vec![dir.join("0.png").to_string_lossy().to_string()];
+    wait_visible(&mut h);
+    assert!(h.app.import.is_some() && !h.app.waiting_import.files.is_empty(), "still waiting");
+    assert!(!crate::panels::notices::may_close(&mut h.app));
+    assert!(matches!(h.app.quit_prompt, Some(crate::QuitPrompt::Tasks(_))), "{:?}", h.app.quit_prompt);
+    h.step();
+    assert!(h.app.import.is_some() && !h.app.waiting_import.files.is_empty(), "still waiting at the click");
+    click(&mut h, "button:quitAnyway");
+    assert!(h.app.quit_prompt.is_none(), "not asked again: {:?}", h.app.quit_prompt);
+    assert!(h.quit_requested());
+    assert!(h.app.waiting_import.files.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn quit_cancel_keeps_the_task_running() {
     let mut h = demo();
@@ -414,6 +443,34 @@ fn merge_dialog_remembers_the_last_settings_per_kind() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Issue #2708: a preview that failed (a photo's file missing) is tried again when the dialog opens again; it used to
+/// show neither a preview nor an error until an option changed.
+#[test]
+fn merge_dialog_retries_a_failed_preview_when_it_opens_again() {
+    let (mut h, dir) = bracket("merge-retry");
+    let (file, away) = (dir.join("IMG_1.dng"), dir.join("IMG_1.away"));
+    std::fs::rename(&file, &away).unwrap();
+    crate::merge::open(&mut h.app, "merge.panorama").unwrap();
+    h.step();
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.merge.preview_task.is_none()));
+    assert!(h.app.merge.error.is_some(), "the preview failed");
+    h.app.ui.dialog = None;
+    h.step();
+    // the file is back (a drive reconnected); the same photos and options again
+    std::fs::rename(&away, &file).unwrap();
+    crate::merge::open(&mut h.app, "merge.panorama").unwrap();
+    h.step();
+    assert!(
+        h.app.merge.preview.is_some() || h.app.merge.preview_task.is_some() || h.app.merge.error.is_some(),
+        "the dialog shows a preview, one being made, or why not"
+    );
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.merge.preview_task.is_none()));
+    assert!(h.app.merge.preview.is_some(), "{:?}", h.app.merge.error);
+    h.app.ui.dialog = None;
+    h.step();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// HDR for Each Bracket Set runs the merges one after the other, each with its activity row; cancelling one stops the
 /// rest.
 #[test]
@@ -452,7 +509,7 @@ fn batch_merge_runs_each_set_in_turn() {
     let rows = h.app.session.activity.list();
     assert_eq!((rows.len(), rows.first().map(|r| r.kind)), (1, Some("merge")));
     // the first merge finishes and the second starts by itself
-    assert!(h.step_until(T, |h| h.app.merge.batch.len() == 1 && h.app.merge.final_task.is_some()));
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.merge.batch.len() == 1 && h.app.merge.final_task.is_some()));
     assert_eq!(h.app.session.catalog.len(), 10);
     // cancelling the second drops the third
     let rows = h.app.session.activity.list();

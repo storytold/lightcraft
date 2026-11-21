@@ -1,6 +1,6 @@
 # LightCraft in Georgian
 
-Choose **Edit → Language → ქართული** or **Settings → General → Language**. The choice applies at once
+Choose **Settings → General → Language → ქართული**. The choice applies at once
 and is saved for the next launch (`language: "ka"` in `ui.json`); the control command is
 `app.language.georgian`. `LIGHTCRAFT_LANGUAGE` selects it for headless runs and accepts `ka`, `ka-GE`
 and `ka_GE.UTF-8`; the saved value is always `ka`. LightCraft does not follow the system language,
@@ -64,7 +64,7 @@ Please follow this table and the shared ArtCraft Georgian glossary when you add 
 
 ## Maintenance and checks
 
-Fixed texts: `crates/ui-egui/locales/ka.json` (2,719 entries). Messages with values:
+Fixed texts: `crates/ui-egui/locales/ka.json` (3,616 entries). Messages with values:
 `crates/ui-egui/locales/ka-formats.json` (249 entries). The English keys stay unchanged; Rust checks
 the placeholders at build time. Strings not yet in the plain catalog show in English.
 

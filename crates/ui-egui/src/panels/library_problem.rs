@@ -28,6 +28,10 @@ use crate::widgets::register;
 /// windows and their dim.
 const DIM_ID: &str = "library-problem-dim";
 const ERROR_WINDOW_ID: &str = "library-problem";
+/// What the error window says about the library's safety and the way on (drawn as it is, not translated).
+const EXPLANATION: &str = "Your photos and edits in it are untouched. You can try again (e.g. after closing another program that has it open \
+                            or reconnecting its drive), open a different library or create a new one, or continue without a library — \
+                            then nothing you do is saved.";
 const CHOOSER_WINDOW_ID: &str = "library-chooser";
 
 /// The named `Foreground` layer used by the dim and the two blocking library windows.
@@ -274,7 +278,9 @@ pub const ALT_SECONDS: f64 = 2.0;
 pub enum Launch {
     /// Open this library folder (`None`: there is nowhere to keep one; the problem window says
     /// so). `alt_asks`: holding Alt/Option as the window appears offers the recent libraries.
-    Open { dir: Option<PathBuf>, alt_asks: bool },
+    /// `remembered`: `dir` is the library last opened (Settings), not the default location, so a
+    /// missing one is reported instead of created anew (issue #3239).
+    Open { dir: Option<PathBuf>, alt_asks: bool, remembered: bool },
     /// Open nothing yet: the window lists the recent libraries ([`LibraryProblem::choose`]).
     Ask,
 }
@@ -284,16 +290,18 @@ pub enum Launch {
 /// `settings` is `None` without a settings file; `memory` (`--memory`) never asks.
 pub fn launch_plan(memory: bool, flag: Option<PathBuf>, env: Option<PathBuf>, settings: Option<&AppSettings>, default: Option<PathBuf>) -> Launch {
     if memory {
-        return Launch::Open { dir: None, alt_asks: false };
+        return Launch::Open { dir: None, alt_asks: false, remembered: false };
     }
     if let Some(dir) = flag.or(env) {
-        return Launch::Open { dir: Some(dir), alt_asks: false };
+        return Launch::Open { dir: Some(dir), alt_asks: false, remembered: false };
     }
     if settings.is_some_and(|s| s.at_launch == LaunchLibrary::Ask) {
         return Launch::Ask;
     }
     let last = settings.map(|s| s.library_path.clone()).filter(|p| !p.is_empty()).map(PathBuf::from);
-    Launch::Open { dir: last.or(default), alt_asks: true }
+    // the default location is made when it's missing (first launch); a remembered library isn't
+    let remembered = last.as_ref().is_some_and(|l| default.as_ref() != Some(l));
+    Launch::Open { dir: last.or(default), alt_asks: true, remembered }
 }
 
 /// One library in the launch window's list.
@@ -327,6 +335,16 @@ pub struct Chooser {
     pub over: Option<u64>,
 }
 
+/// Files that waited for a library (the command line, drops on the launch list) and found another
+/// import or a Synchronize Folder running when one opened: kept, and imported once it ends instead
+/// of being lost (issue #2779).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WaitingImport {
+    pub files: Vec<String>,
+    /// The toast already said why they wait.
+    told: bool,
+}
+
 /// A library that failed to open (set by the host at launch).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LibraryProblem {
@@ -341,6 +359,11 @@ pub struct LibraryProblem {
     /// Try Again reopens `path` as a library folder (`false` in the browser, whose storage isn't
     /// a folder: reloading the page tries again).
     pub can_retry: bool,
+    /// Try Again opens `path` only once it holds a library again, and never makes one there: set
+    /// for the library remembered in Settings that was missing at launch, whose folder can be
+    /// the empty mount point of a share that isn't connected yet (issue #3239). Choose Another
+    /// Library… still creates one where asked.
+    pub existing_only: bool,
     /// The window lists the recent libraries to choose from instead (issue #1290); `error` then
     /// says why the last one tried didn't open.
     pub chooser: Option<Chooser>,
@@ -710,6 +733,37 @@ fn unavailable(path: &str) -> Option<Unavailable> {
     None
 }
 
+/// Why the library at `dir` that has to exist already (a remembered one, issue #3239) can't be
+/// opened (`None`: it's there): the folder is there without a catalog, or the folder itself is
+/// missing. A folder that can't be looked into (no permission, a share that timed out) says so
+/// instead: the library may well be there.
+pub fn missing_library_reason(dir: &Path) -> Option<String> {
+    match lightcraft_engine::library::library_state(dir) {
+        Ok(true) => None,
+        Ok(false) if dir.exists() => Some(crate::i18n::tr("There is no LightCraft library in this folder any more.").to_string()),
+        Ok(false) => {
+            Some(crate::i18n::tr("The library isn't there: it was moved or renamed, or its drive or network share isn't connected.").to_string())
+        }
+        Err(e) => Some(format!("{} {e}", crate::i18n::tr("This folder can't be read:"))),
+    }
+}
+
+/// Try Again: reopen the problem's library. One that must exist already (`existing_only`) is
+/// opened only once its folder holds a library again (a share remounted): until then the window
+/// stays with the reason, and nothing is created there (issue #3239).
+fn retry(app: &mut LightcraftApp, problem: LibraryProblem) {
+    if problem.existing_only
+        && let Some(why) = missing_library_reason(Path::new(&problem.path))
+    {
+        if let Some(p) = app.library_problem.as_mut() {
+            p.error = why;
+            p.dismissed = false;
+        }
+        return;
+    }
+    open(app, Some(problem.path));
+}
+
 /// What the user chose.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Choice {
@@ -783,12 +837,7 @@ fn open(app: &mut LightcraftApp, path: Option<String>) {
         Ok(serde_json::Value::Null) => {} // folder dialog cancelled
         Ok(_) => {
             let files = app.library_problem.take().map(|p| p.pending_import).unwrap_or_default();
-            // in the background, like files dropped on the window (issue #374)
-            if !files.is_empty()
-                && let Err(e) = crate::import::start_paths(app, files)
-            {
-                log::warn!("import: {e}");
-            }
+            app.waiting_import.files.extend(files);
         }
         Err(e) => {
             // a failed switch reopens the library that was open behind the launch list
@@ -807,11 +856,36 @@ fn open(app: &mut LightcraftApp, path: Option<String>) {
                     }
                 }
                 if let Some(path) = path {
+                    // another library failed: Try Again may make that one, as it always could
+                    if p.path != path {
+                        p.existing_only = false;
+                    }
                     p.path = path;
                 }
                 p.error = e;
                 p.dismissed = false;
             }
+        }
+    }
+}
+
+/// Import the files that waited for a library, in the background like files dropped on the window
+/// (issue #374). While another import or a Synchronize Folder runs they keep waiting, and a toast
+/// says why once (issue #2779). Called from the background logic, so they go in as soon as that
+/// ends even while the window is hidden.
+pub(crate) fn import_waiting(app: &mut LightcraftApp, ctx: &egui::Context) {
+    if app.waiting_import.files.is_empty() {
+        return;
+    }
+    let files = std::mem::take(&mut app.waiting_import.files);
+    match crate::import::start_paths(app, files.clone()) {
+        Ok(_) => app.waiting_import = WaitingImport::default(),
+        Err(e) => {
+            if !app.waiting_import.told {
+                app.toast(ctx, format!("{e}. {}", crate::i18n::tr("The photos are imported once it ends")));
+            }
+            app.waiting_import = WaitingImport { files, told: true };
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
     }
 }
@@ -827,11 +901,7 @@ pub fn logic(app: &mut LightcraftApp, ctx: &egui::Context) {
         // files from the command line go into the library opened another way (New Library…,
         // File ▸ Open Library…), as through the window's own buttons
         let files = app.library_problem.take().map(|p| p.pending_import).unwrap_or_default();
-        if !files.is_empty()
-            && let Err(e) = crate::import::start_paths(app, files)
-        {
-            log::warn!("import: {e}");
-        }
+        app.waiting_import.files.extend(files);
     }
     let batch_in_flight = app.synthetic_in_flight;
     alt_at_launch(app, ctx);
@@ -1016,6 +1086,12 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     dim(ctx);
     let mut choice = None;
     let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::symmetric(18, 14));
+    // what the window says, in one piece, for a screen reader: the labels below are separate nodes
+    let description = if problem.path.is_empty() {
+        format!("{} {} {EXPLANATION}", crate::i18n::tr("LightCraft couldn't find where to keep your library."), problem.error)
+    } else {
+        format!("{} {}. {} {EXPLANATION}", crate::i18n::tr("LightCraft couldn't open the library at"), problem.path, problem.error)
+    };
     let shown = egui::Window::new(crate::i18n::tr("Your library couldn't be opened"))
         .id(egui::Id::unique(ERROR_WINDOW_ID))
         .order(egui::Order::Foreground)
@@ -1035,14 +1111,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                 ui.label(RichText::new(&problem.path).font(t.semibold(12.5)).color(t.text));
             }
             ui.add(egui::Label::new(RichText::new(&problem.error).color(t.caution)).wrap());
-            ui.label(
-                RichText::new(
-                    "Your photos and edits in it are untouched. You can try again (e.g. after closing another program that has it open \
-                     or reconnecting its drive), open a different library or create a new one, or continue without a library — \
-                     then nothing you do is saved.",
-                )
-                .color(t.text_dim),
-            );
+            ui.label(RichText::new(EXPLANATION).color(t.text_dim));
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 let mut button = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool, c: Choice| {
@@ -1059,6 +1128,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             });
         });
     if let Some(w) = &shown {
+        crate::widgets::announce_dialog(ctx, &w.response, crate::widgets::Modal::Alert);
+        crate::widgets::describe_dialog(ctx, &w.response, &description);
         // A press on the dim raises its area; keep this window (and its own buttons) above it.
         ctx.move_to_top(w.response.layer_id);
     }
@@ -1073,7 +1144,7 @@ fn act(app: &mut LightcraftApp, choice: Choice) {
     let Some(problem) = app.library_problem.clone() else { return };
     let chosen = problem.chooser.as_ref().and_then(|c| c.selected.and_then(|i| c.libraries.get(i)).map(|l| (l.clone(), c.over)));
     match choice {
-        Choice::Retry => open(app, Some(problem.path)),
+        Choice::Retry => retry(app, problem),
         Choice::Choose => open(app, None),
         Choice::Open => {
             let Some((library, over)) = chosen.filter(|(l, _)| l.unavailable.is_none()) else { return };
@@ -1111,12 +1182,7 @@ fn act(app: &mut LightcraftApp, choice: Choice) {
                 p.dismissed = true;
             }
             let files = app.library_problem.as_mut().map(|p| std::mem::take(&mut p.pending_import)).unwrap_or_default();
-            // in the background, like files dropped on the window (issue #374)
-            if !files.is_empty()
-                && let Err(e) = crate::import::start_paths(app, files)
-            {
-                log::warn!("import: {e}");
-            }
+            app.waiting_import.files.extend(files);
         }
         Choice::Quit => app.ui.quit = true,
     }
@@ -1186,6 +1252,7 @@ fn show_chooser(app: &mut LightcraftApp, ctx: &egui::Context, problem: &LibraryP
             });
         });
     if let Some(w) = &shown {
+        crate::widgets::announce_dialog(ctx, &w.response, crate::widgets::Modal::Dialog);
         // A press on the dim raises its area; keep the launch list above it.
         ctx.move_to_top(w.response.layer_id);
     }

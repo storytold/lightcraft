@@ -195,6 +195,33 @@ fn id_counters_are_moved_past_the_ids_in_use() {
     assert!(c.apply(Op::AddPhoto { photo: Box::new(p) }).is_err(), "the id is taken: refused, not overwritten");
 }
 
+/// History was bounded only where an edit adds a step, so a snapshot holding more steps kept
+/// every one in memory on each load (#2579). The newest are kept and the cursor stays on its step.
+#[test]
+fn history_beyond_the_limit_is_trimmed_on_load() {
+    let (mut c, ids) = sound();
+    let extra = HISTORY_LIMIT * 5;
+    let step = HistoryStep { label: "s0".into(), settings: std::sync::Arc::new(lightcraft_develop::DevelopSettings::default()) };
+    c.apply(Op::PushHistory { id: ids[0], step }).unwrap();
+    c.apply(Op::SetHistoryCursor { id: ids[0], cursor: Some(extra - 3) }).unwrap();
+    let (loaded, report) = load_edited(&c, |v| {
+        let history = &mut v["photos"][ids[0].0.to_string()]["history"];
+        let one = history[0].clone();
+        *history = (0..extra)
+            .map(|i| {
+                let mut s = one.clone();
+                s["label"] = format!("s{i}").into();
+                s
+            })
+            .collect();
+    });
+    let p = loaded.photo(ids[0]).unwrap();
+    assert_eq!(p.history.len(), HISTORY_LIMIT);
+    assert_eq!(p.history[0].label, format!("s{}", extra - HISTORY_LIMIT));
+    assert_eq!(p.history_index().map(|i| p.history[i].label.clone()), Some(format!("s{}", extra - 3)));
+    assert_eq!(report.repaired.len(), 1, "{:?}", report.repaired);
+}
+
 /// A sound catalog loads unchanged.
 #[test]
 fn a_sound_snapshot_needs_no_repair() {
@@ -217,4 +244,28 @@ fn an_album_filed_under_another_id_gets_its_own() {
     let a = c.album(inner).unwrap();
     assert_eq!((a.id, a.parent), (inner, Some(folder)));
     assert_eq!(c.album_children(Some(folder)).iter().map(|a| a.id).collect::<Vec<_>>(), vec![inner]);
+}
+
+/// What was worked out from the albums (whether rules may be tested cheapest first) is worked out
+/// again when a repair changes the albums.
+#[test]
+fn a_repair_forgets_what_was_worked_out_from_the_albums() {
+    let (mut c, _) = sound();
+    let smart = c.alloc_album_id();
+    c.apply(Op::AddAlbum { album: Album { smart: Some(Box::default()), ..album(smart.0, None, false, vec![]) } }).unwrap();
+    assert!(!c.keeps_written_order(), "worked out, and remembered");
+    // damaged outside `apply`: the smart album tests itself, and an album is filed under another id
+    let rules: Filter =
+        serde_json::from_value(serde_json::json!({"ruleSet": {"match": "all", "rules": [{"field": "album", "op": "is", "value": smart.0}]}}))
+            .unwrap();
+    if let Some(a) = c.albums.get_mut(&smart) {
+        a.smart = Some(Box::new(rules));
+    }
+    let inner = c.albums().find(|a| !a.folder && a.smart.is_none()).unwrap().id;
+    if let Some(mut a) = c.albums.remove(&inner) {
+        a.id = AlbumId(900);
+        c.albums.insert(inner, a);
+    }
+    assert!(!c.repair().is_empty());
+    assert!(c.keeps_written_order(), "the loop the repair left is seen");
 }
