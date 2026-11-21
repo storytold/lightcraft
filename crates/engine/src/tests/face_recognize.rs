@@ -401,6 +401,11 @@ fn faces_person_lists_a_persons_faces_and_looks_for_more_only_while_recognition_
     let more = r["more"].as_array().unwrap();
     assert_eq!((more.len(), more[0]["photo"].clone(), more[0]["index"].clone()), (1, json!(b.0), json!(0)), "{r}");
     assert!(more[0]["score"].as_f64().unwrap() > 0.9);
+    let partial = s.execute("faces.person", &json!({"name": "Ann", "budgetMs": 4, "moreOnly": true})).unwrap();
+    assert_eq!(partial["more"], r["more"]);
+    assert_eq!(partial["complete"], true);
+    assert_eq!(partial["matching"]["done"], partial["matching"]["total"]);
+    assert!(partial.get("confirmed").is_none());
     // confirming it moves it from one list to the other (and is one undo step)
     s.execute("faces.setName", &json!({"id": b.0, "index": 0, "name": "Ann"})).unwrap();
     let r = s.execute("faces.person", &json!({"name": "Ann"})).unwrap();

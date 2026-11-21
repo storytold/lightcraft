@@ -46,6 +46,8 @@ pub(crate) fn region_key(r: &Rect) -> [i32; 4] {
 
 #[derive(Default)]
 pub(crate) struct Index {
+    /// Changes even when replacing an existing embedding leaves the entry count unchanged.
+    pub generation: u64,
     /// `<model id>@<sha256>` of the model the embeddings belong to.
     pub tag: String,
     pub dim: usize,
@@ -92,6 +94,7 @@ impl Index {
     /// Drop every face of `photo` (its file was replaced, so they were made from other pixels): they are embedded
     /// again, and the cache file is rewritten without them at the next save.
     pub fn forget_photo(&mut self, photo: u64) {
+        self.generation = self.generation.wrapping_add(1);
         let before = self.entries.len();
         self.entries.retain(|k, _| k.0 != photo);
         self.unsaved.retain(|(k, _)| k.0 != photo);
@@ -106,6 +109,7 @@ impl Index {
 
     /// Remember a face's embedding and the box to show it by.
     pub fn insert_with_view(&mut self, photo: u64, rect: &Rect, embedding: Vec<f32>, view: &Rect) {
+        self.generation = self.generation.wrapping_add(1);
         let entry: Entry = (embedding.into(), region_key(view));
         let key = (photo, region_key(rect));
         self.entries.insert(key, entry.clone());
@@ -120,6 +124,7 @@ impl Index {
     /// Start over for `tag` (`dim` numbers per face), loading what the cache file at `path` holds for it. What the
     /// previous model's index had not written yet is written first, so switching models loses nothing.
     pub fn reset(&mut self, tag: &str, dim: usize, path: Option<PathBuf>) {
+        self.generation = self.generation.wrapping_add(1);
         let _ = self.save();
         self.tag = tag.to_string();
         self.dim = dim;
@@ -557,6 +562,7 @@ mod tests {
 /// What the recognition commands keep between calls: the loaded model and the embeddings made with it.
 #[derive(Default)]
 pub(crate) struct FacesState {
+    pub suggestions: Option<crate::person_suggestions::Suggestions>,
     /// `<model id>@<sha256>` and the loaded model.
     pub embedder: Option<(String, Arc<lightcraft_faces::runtime::Embedder>)>,
     pub index: Index,
@@ -590,6 +596,7 @@ impl FacesState {
     /// Another library is being opened: what was learned about the old one is saved, and nothing of it is kept (photo
     /// ids are only unique within a library). The loaded model stays; the index is reloaded for the new library.
     pub fn library_changed(&mut self) {
+        self.suggestions = None;
         self.index.reset("", 0, None);
         self.scanned.reset(None);
         self.scan_failed.clear();

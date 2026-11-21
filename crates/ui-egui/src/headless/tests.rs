@@ -1018,7 +1018,7 @@ fn person_more_confirms_all_above_with_one_undo_step() {
     let page = crate::panels::person::PersonPage {
         name: "Jane Doe".into(),
         total: 1,
-        confirmed: vec![crate::panels::person::Face { photo: ids[0].0, index: 0, rect: region(None).rect, score: 0.0 }],
+        confirmed: vec![crate::panels::person::Face { photo: ids[0].0, index: 0, rect: region(None).rect, score: 0.0 }].into(),
         more: ids[1..6]
             .iter()
             .zip([0.95, 0.80, 0.80, 0.80, 0.60])
@@ -1026,9 +1026,11 @@ fn person_more_confirms_all_above_with_one_undo_step() {
             .collect(),
         ready: true,
         pending: 0,
+        ..Default::default()
     };
     let set_page = |h: &mut Headless| {
-        h.app.caches.person_page = Some(("Jane Doe".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, 0.0, Arc::new(page.clone())));
+        h.app.caches.person_page =
+            Some(("Jane Doe".into(), h.app.session.catalog.revision, h.app.session.face_index_generation(), 0.0, Arc::new(page.clone())));
         h.step();
     };
     h.app.ui.dismissed_faces.insert((ids[4].0, 0));

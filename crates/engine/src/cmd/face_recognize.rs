@@ -232,6 +232,8 @@ struct Similar {
     ready: bool,
     /// Photos the background scan has still to do.
     pending: usize,
+    complete: bool,
+    matching: (usize, usize),
 }
 
 fn rect_json(r: &lightcraft_geom::Rect) -> Value {
@@ -248,6 +250,15 @@ fn person(s: &mut Session, p: &Value) -> Result<Value> {
     let name = p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad(C, "missing `name`"))?;
     let key = name.to_lowercase();
     let limit = p.get("more").and_then(Value::as_u64).map_or(120, |n| usize::try_from(n).unwrap_or(120)).min(1000);
+    let budget = p.get("budgetMs").and_then(Value::as_u64).map(|ms| std::time::Duration::from_millis(ms.clamp(1, 20)));
+    // The UI already holds the confirmed list. Polling the matcher must not rebuild thousands
+    // of JSON objects and parse them again on every animation frame.
+    if p["moreOnly"] == true {
+        let similar = imp::similar(s, &key, limit, budget);
+        return Ok(
+            json!({"more": similar.items, "ready": similar.ready, "pendingPhotos": similar.pending, "complete": similar.complete, "matching": {"done": similar.matching.0, "total": similar.matching.1}}),
+        );
+    }
     let (mut shown, mut total, mut confirmed) = (name.to_string(), 0usize, Vec::new());
     for ph in s.catalog.photos().filter(|ph| ph.in_library()) {
         for (index, r) in ph.meta.regions.iter().enumerate() {
@@ -263,9 +274,13 @@ fn person(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
-    let similar = if total > 0 { imp::similar(s, &key, limit) } else { Similar { items: Vec::new(), ready: false, pending: 0 } };
+    let similar = if total > 0 {
+        imp::similar(s, &key, limit, budget)
+    } else {
+        Similar { items: Vec::new(), ready: false, pending: 0, complete: true, matching: (0, 0) }
+    };
     Ok(
-        json!({"name": shown, "total": total, "confirmed": confirmed, "more": similar.items, "ready": similar.ready, "pendingPhotos": similar.pending}),
+        json!({"name": shown, "total": total, "confirmed": confirmed, "more": similar.items, "ready": similar.ready, "pendingPhotos": similar.pending, "complete": similar.complete, "matching": {"done": similar.matching.0, "total": similar.matching.1}}),
     )
 }
 
@@ -280,7 +295,6 @@ mod imp {
     use lightcraft_faces::runtime::Embedder;
     use lightcraft_geom::Rect;
     use lightcraft_meta::{Region, RegionKind};
-    use rayon::prelude::*;
     use serde_json::{Value, json};
 
     use super::super::bad;
@@ -710,50 +724,58 @@ mod imp {
     /// is scored like a suggestion (the mean of its two closest faces of theirs) and kept above four fifths of the
     /// model's suggestion bar, since a person looks at these before anything is named. Only faces already embedded can be
     /// found; `ready` says whether recognition is running at all.
-    pub fn similar(s: &mut Session, key: &str, limit: usize) -> Similar {
-        let none = Similar { items: Vec::new(), ready: false, pending: 0 };
+    pub fn similar(s: &mut Session, key: &str, limit: usize, budget: Option<Duration>) -> Similar {
+        let none = Similar { items: Vec::new(), ready: false, pending: 0, complete: true, matching: (0, 0) };
         let Some(dir) = s.face_models_dir.clone() else { return none };
         if !enabled_cached(s, &dir) {
             return none;
         }
         let Ok(embedder) = current_with(s, "faces.person", false) else { return none };
         let pending = s.faces.queue.len() + s.faces.in_flight.len();
-        let (mut gallery, mut candidates): (Vec<Arc<[f32]>>, Vec<(u64, usize, Rect, Arc<[f32]>)>) = (Vec::new(), Vec::new());
-        for ph in s.catalog.photos().filter(|ph| ph.in_library()) {
-            for (index, r) in ph.meta.regions.iter().enumerate().filter(|(_, r)| r.kind == RegionKind::Face) {
-                let Some(e) = s.faces.index.get(ph.id.0, &r.rect) else { continue };
-                match r.name.as_deref() {
-                    Some(n) if n.trim().to_lowercase() == key => gallery.push(e.clone()),
-                    Some(_) => {}
-                    None => candidates.push((ph.id.0, index, r.rect, e.clone())),
+        let stamp = (s.catalog.revision, s.faces.index.generation);
+        if s.faces.suggestions.as_ref().is_none_or(|job| job.name != key || job.tag != s.faces.index.tag) {
+            s.faces.suggestions = Some(crate::person_suggestions::Suggestions::new(key.to_string(), s.faces.index.tag.clone()));
+        }
+        if s.faces.suggestions.as_ref().is_some_and(|job| job.refresh_needed(stamp, budget.is_none())) {
+            let (mut gallery, mut candidates) = (Vec::new(), Vec::new());
+            for ph in s.catalog.photos().filter(|ph| ph.in_library()) {
+                for (index, r) in ph.meta.regions.iter().enumerate().filter(|(_, r)| r.kind == RegionKind::Face) {
+                    let Some(e) = s.faces.index.get(ph.id.0, &r.rect) else { continue };
+                    let is_person = r.name.as_deref().is_some_and(|n| n.trim().to_lowercase() == key);
+                    if r.name.is_some() && !is_person {
+                        continue;
+                    }
+                    let face = crate::person_suggestions::Face {
+                        key: (ph.id.0, index),
+                        rect: r.rect,
+                        view: s.faces.index.view(ph.id.0, &r.rect).unwrap_or(r.rect),
+                        embedding: e.clone(),
+                    };
+                    if is_person {
+                        gallery.push(face);
+                    } else {
+                        candidates.push(face);
+                    }
+                }
+            }
+            if let Some(job) = &mut s.faces.suggestions {
+                if budget.is_some() {
+                    job.refresh_incremental(gallery, candidates, stamp);
+                } else {
+                    job.refresh(gallery, candidates, stamp);
                 }
             }
         }
-        let ready = Similar { items: Vec::new(), ready: true, pending };
-        if gallery.is_empty() {
-            return ready;
-        }
+        let Some(job) = &mut s.faces.suggestions else { return none };
+        job.step(budget);
         let bar = embedder.manifest().thresholds.match_cosine.unwrap_or(DEFAULT_THRESHOLD) * 0.8;
-        let refs: Vec<&[f32]> = gallery.iter().map(|e| &e[..]).collect();
-        // every unnamed face against every face of theirs: some 400 million comparisons for a person with 4 000 faces
-        // in a library of 90 000, so on every core (minutes on one)
-        let mut scored: Vec<(f32, u64, usize, Rect)> = candidates
-            .into_par_iter()
-            .filter_map(|(photo, index, rect, e)| {
-                let score = matching::person_score(&e, &refs, matching::TOP_FACES)?;
-                (score >= bar).then_some((score, photo, index, rect))
-            })
-            .collect();
-        scored.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
-        scored.truncate(limit);
-        let items = scored
+        let items = job.results(bar, limit)
             .into_iter()
-            .map(|(score, photo, index, rect)| {
-                let view = s.face_view(PhotoId(photo), rect);
-                json!({"photo": photo, "index": index, "rect": super::rect_json(&rect), "view": super::rect_json(&view), "score": score})
+            .map(|(face, score)| {
+                json!({"photo": face.key.0, "index": face.key.1, "rect": super::rect_json(&face.rect), "view": super::rect_json(&face.view), "score": score})
             })
             .collect();
-        Similar { items, ..ready }
+        Similar { items, ready: true, pending, complete: job.current_complete(), matching: job.progress() }
     }
 
     /// Most faces put in order of likeness (the order is a pass over every pair of them).
@@ -1085,13 +1107,13 @@ mod imp {
             put(&mut s, b, 0.1, unit(&[(0, 0.95), (1, 0.05)])); // looks just like Ann
             put(&mut s, b, 0.5, unit(&[(1, 1.0)])); // looks like Bob, not Ann
             put(&mut s, c, 0.3, unit(&[(0, 0.8), (1, 0.6)])); // somewhat like Ann
-            let r = similar(&mut s, "ann", 10);
+            let r = similar(&mut s, "ann", 10, None);
             assert!(r.ready);
             let found: Vec<(u64, u64)> = r.items.iter().map(|i| (i["photo"].as_u64().unwrap(), i["index"].as_u64().unwrap())).collect();
             assert_eq!(found, vec![(b.0, 0), (c.0, 0)], "best first; the face that looks like Bob is left out");
             assert!(r.items[0]["score"].as_f64().unwrap() > r.items[1]["score"].as_f64().unwrap());
-            assert_eq!(similar(&mut s, "ann", 1).items.len(), 1, "capped");
-            assert!(similar(&mut s, "nobody", 10).items.is_empty());
+            assert_eq!(similar(&mut s, "ann", 1, None).items.len(), 1, "capped");
+            assert!(similar(&mut s, "nobody", 10, None).items.is_empty());
             let _ = std::fs::remove_dir_all(&d);
         }
     }
@@ -1120,8 +1142,8 @@ mod imp {
         Ok(serde_json::json!({"active": false}))
     }
 
-    pub fn similar(_: &mut Session, _: &str, _: usize) -> super::Similar {
-        super::Similar { items: Vec::new(), ready: false, pending: 0 }
+    pub fn similar(_: &mut Session, _: &str, _: usize, _: Option<std::time::Duration>) -> super::Similar {
+        super::Similar { items: Vec::new(), ready: false, pending: 0, complete: true, matching: (0, 0) }
     }
 
     pub fn arrange_unnamed(_: &mut Session, _: &mut Vec<(u64, usize, lightcraft_geom::Rect)>, _: usize) -> super::Arranged {
@@ -1190,7 +1212,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Faces of a Person",
             [],
             None,
-            "{name, more?: 120} → {name, total, confirmed: [{photo, index, rect}], more: [{photo, index, rect, score}], ready, pendingPhotos} — the faces named `name` across the library, and the unnamed faces that look most like them (best first, already embedded ones only, once recognition is on); confirm one with `faces.setName`",
+            "{name, more?: 120, budgetMs?: 1..20, moreOnly?: false} → {name, total, confirmed: [{photo, index, rect, view}], more: [{photo, index, rect, view, score}], ready, pendingPhotos, complete, matching: {done, total}} — the faces named `name` across the library, and the unnamed faces that look most like them (best first, already embedded ones only, once recognition is on). With budgetMs, poll until complete; fully scored suggestions appear during matching, with checked-face progress. New scan arrivals wait for the active pass to finish. moreOnly omits name, total and confirmed for lightweight continuation queries. Without budgetMs, waits for all matches. Confirm with `faces.setName` or `faces.nameFaces`",
             super::always,
             person
         ),
