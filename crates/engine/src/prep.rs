@@ -19,6 +19,12 @@
 //! with previews skipped, one row in the activity stack that can be cancelled. It starts once the
 //! user is culling (a few photos stepped through in the loupe), never just because a library was
 //! opened (note 36: opening an old library to look at two photos must not start rebuilding).
+//!
+//! A build that was started and did not run to its end (the view changed under it, another build
+//! took its place, previews were switched off, the app quit) is owed to the library: it is taken
+//! up again for the view then shown, from the grid as well and after a restart, once that view has
+//! stayed the same for a moment ([`PrepState::unfinished`], [`SETTLE_AFTER`]; #3947). What is left
+//! to build is never stored: each build asks, photo by photo, whether its previews are on disk.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -204,6 +210,11 @@ impl Mode {
 pub const STEPS_BEFORE_BUILD: usize = 3;
 /// How long a view whose build couldn't start waits before trying again.
 pub const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
+/// How long the view must have stayed the same before an unfinished build is taken up again for
+/// it ([`PrepState::unfinished`]): photos arriving in batches (an import) or a few sorts tried one
+/// after the other start one build, not one each (a start makes every photo's render jobs on the
+/// calling thread).
+pub const SETTLE_AFTER: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// The background preparation's state in a session.
 #[derive(Default)]
@@ -212,8 +223,35 @@ pub struct PrepState {
     pub app: PrepSettings,
     /// This library's own (`None`: it uses the app-wide ones).
     pub library: Option<PrepSettings>,
-    /// The background build this preparation started.
+    /// A build of this library's previews was started and has not run to its end: it is owed, and
+    /// [`Session::prep_tick`] takes it up again for the view shown, without the user stepping
+    /// through photos first ([`STEPS_BEFORE_BUILD`] guards only a library with nothing owed) and
+    /// with no photo in the loupe. Kept in the library's `prefs.json` (`prepUnfinished`), so it
+    /// holds across a restart.
+    ///
+    /// - Set, and saved, when a build starts.
+    /// - Cleared, and saved, when a build this preparation started ran to its end (its queue ran
+    ///   empty; a photo that failed counts as built), and when the user stopped it from its row:
+    ///   they said no.
+    /// - Left set by everything else that ends a build: the view changing, a build that was asked
+    ///   for taking its place, previews switched off, the app quitting.
+    ///
+    /// It says "ask again", not what is left: the build that follows skips every photo whose
+    /// previews are on disk. A view with nothing to build (no marked photo) leaves it as it is.
+    pub unfinished: bool,
+    /// Before when an unfinished build is not taken up again: [`SETTLE_AFTER`] after the view shown
+    /// last changed (`None`: no change seen yet). The first build of a library with nothing owed
+    /// doesn't wait for it (the steps in the loupe are its guard).
+    pub not_before: Option<web_time::Instant>,
+    /// Another wait than [`SETTLE_AFTER`] (tests: none, or one that never ends by itself).
+    pub settle: Option<std::time::Duration>,
+    /// The view (its signature) last seen while a build could start: a different one starts the wait.
+    seen: Option<u64>,
+    /// The background build this preparation started, and the library it was started in
+    /// ([`Session::library_generation`]): a build left over from another library says nothing
+    /// about this one's [`PrepState::unfinished`].
     build: Option<Arc<PreviewBuild>>,
+    build_library: u64,
     /// The view (its signature) whose build was started, or that the user stopped.
     started_for: Option<u64>,
     declined_for: Option<u64>,
@@ -236,9 +274,36 @@ impl std::fmt::Debug for PrepState {
 }
 
 impl PrepState {
+    /// Forget the view state a library that was open before left behind, when a library
+    /// opens: the view guards (`started_for`, `declined_for`, and the view last seen), the
+    /// settle and retry waits, and the step count were earned in that library's views, and a
+    /// view signature is only its photos' ids and their count, so another library's view can
+    /// carry the same one — what the old library started, declined, or was still counting
+    /// would block or hurry this one's preparation (CodeRabbit on #4093). What a library
+    /// opens with is kept: the settings (`app`, and `library`, which the caller has just read
+    /// from this library), what it is owed (`unfinished`, likewise), the settle wait a test
+    /// asks for (`settle`), and the build being followed (`build`, in its library,
+    /// `build_library`): a build left over from the library before says nothing about this
+    /// one, and is told apart by the library it was started in.
+    pub(crate) fn opened_library(&mut self) {
+        self.seen = None;
+        self.started_for = None;
+        self.declined_for = None;
+        self.not_before = None;
+        self.retry_at = None;
+        self.steps_in = None;
+        self.last_at = None;
+        self.steps = 0;
+    }
+
     /// The settings in use.
     pub fn settings(&self) -> PrepSettings {
         self.library.unwrap_or(self.app)
+    }
+
+    /// The wait after a view change ([`SETTLE_AFTER`]; this crate's tests: none unless they set one).
+    fn settle(&self) -> std::time::Duration {
+        self.settle.unwrap_or(if cfg!(test) { std::time::Duration::ZERO } else { SETTLE_AFTER })
     }
 }
 
@@ -335,15 +400,19 @@ pub fn marked(s: &Session, id: PhotoId) -> bool {
 }
 
 impl Session {
-    /// How long until a view whose build couldn't start tries again ([`RETRY_AFTER`]), while one
-    /// waits: the app asks for a frame then, so the retry doesn't wait for the next input
-    /// (CodeRabbit on #3077/#3080). `None` once the time has come.
+    /// How long until the background preparation has something to do with nothing else happening,
+    /// while it waits for a time: a view whose build couldn't start trying again ([`RETRY_AFTER`]),
+    /// or an unfinished build taken up again once the view has been still ([`SETTLE_AFTER`]). The
+    /// app asks for a frame then, so neither waits for the next input (CodeRabbit on #3077/#3080).
+    /// `None` once the time has come.
     pub fn prep_retry_in(&self) -> Option<std::time::Duration> {
         // (a deadline that has passed asks for nothing: the pass at it tried again, or the view
         // can't be tried now and a frame at once on every pass would keep an idle window drawing:
         // CodeRabbit on #3077 / #3080)
-        let wait = self.prep.retry_at.map(|(_, at)| at.saturating_duration_since(web_time::Instant::now()))?;
-        (!wait.is_zero()).then_some(wait)
+        let now = web_time::Instant::now();
+        let retry = self.prep.retry_at.map(|(_, at)| at);
+        let settled = self.prep.not_before.filter(|_| self.prep.unfinished);
+        retry.into_iter().chain(settled).map(|at| at.saturating_duration_since(now)).filter(|wait| !wait.is_zero()).min()
     }
 
     /// The background preparation settings in use (this library's own, else the app-wide ones).
@@ -353,61 +422,51 @@ impl Session {
 
     /// Advance the background preparation (cheap; call every frame). `mode`: what the user is doing;
     /// `at`: the photo in the loupe (`None` in the grid), `backward`: stepping back.
+    ///
+    /// A build starts for the view shown when previews are wanted in `mode`, no preview build is
+    /// running, this view's build wasn't started already or stopped by the user, and:
+    /// - nothing is owed ([`PrepState::unfinished`] clear): the user has stepped through
+    ///   [`STEPS_BEFORE_BUILD`] photos of this view in the loupe. From the grid (`at` = `None`)
+    ///   nothing starts: opening a library is not a reason to build (note 36);
+    /// - a build is owed: the view has been the same for [`SETTLE_AFTER`]. `at` may be `None`: the
+    ///   build then goes from the active photo, else from the view's first.
+    ///
+    /// A running build is stopped when the view shown is no longer the one it was started for, when
+    /// the library it was started in is no longer the one open, or when previews are switched off;
+    /// none of these counts as the user stopping it.
     pub fn prep_tick(&mut self, mode: Mode, at: Option<PhotoId>, backward: bool) {
         let settings = self.prep.settings();
         let want = settings.mode(mode);
         // the whole view's build follows its own row (Culling, or Library also while editing): its
         // switch and its "which photos"; the Editing row's scope is for the photos kept ready ahead
         let wanted = want.previews && want.scope != Scope::OnScreen;
-        // the running build: re-aimed at the user, stopped when switched off
-        if let Some(b) = self.prep.build.clone() {
-            if b.running() {
-                if !wanted {
-                    b.cancel.store(true, Ordering::Relaxed);
-                } else if self.prep.started_for.is_some_and(|sig| sig != signature(&self.visible_cloned(), self, want.scope)) {
-                    // another view (a folder, a filter, another library): this build's photos are
-                    // not the ones shown; stopped, and the view now shown is prepared in its place
-                    // (not counted as stopped by the user)
-                    b.cancel.store(true, Ordering::Relaxed);
-                    self.prep.started_for = None;
-                } else if let Some(id) = at {
-                    b.focus_on(id, backward);
-                }
-                return;
-            }
-            self.prep.build = None;
-            let mine = self.preview_build.as_ref().is_some_and(|p| Arc::ptr_eq(p, &b));
-            if b.cancel.load(Ordering::Relaxed) {
-                if mine && wanted {
-                    // stopped from its row: not again for this view
-                    self.prep.declined_for = self.prep.started_for;
-                } else {
-                    // replaced by a build that was asked for, or switched off: may start again later
-                    self.prep.started_for = None;
-                }
-            }
-        }
-        if !wanted {
+        if self.prep_follow_build(wanted, want.scope, at, backward) || !wanted {
             return;
         }
-        let Some(at) = at else { return };
+        // an owed build needs no steps and no photo in the loupe; with nothing owed the grid starts
+        // nothing (and the view's photos are not even listed)
+        let owed = self.prep.unfinished;
+        if at.is_none() && !owed {
+            return;
+        }
         let ids = self.visible_cloned();
         let sig = signature(&ids, self, want.scope);
-        if self.prep.steps_in != Some(sig) {
-            self.prep.steps_in = Some(sig);
-            self.prep.steps = 0;
-            self.prep.last_at = None;
+        let now = web_time::Instant::now();
+        if self.prep.seen != Some(sig) {
+            // another view than the one last seen: an owed build waits until it has been still
+            self.prep.seen = Some(sig);
+            self.prep.not_before = now.checked_add(self.prep.settle());
         }
-        if self.prep.last_at != Some(at) {
-            self.prep.last_at = Some(at);
-            self.prep.steps = self.prep.steps.saturating_add(1);
+        if let Some(at) = at {
+            self.prep_count_step(sig, at);
         }
+        let ready = if owed { self.prep.not_before.is_none_or(|at| now >= at) } else { self.prep.steps >= STEPS_BEFORE_BUILD };
         let busy = self.preview_build.as_ref().is_some_and(|b| b.running());
         if busy
-            || self.prep.steps < STEPS_BEFORE_BUILD
+            || !ready
             || self.prep.started_for == Some(sig)
             || self.prep.declined_for == Some(sig)
-            || self.prep.retry_at.is_some_and(|(view, at)| view == sig && web_time::Instant::now() < at)
+            || self.prep.retry_at.is_some_and(|(view, at)| view == sig && now < at)
             || self.library.as_ref().is_none_or(|l| !l.on_disk)
         {
             return;
@@ -417,10 +476,101 @@ impl Session {
             _ => ids.into_iter().map(|id| id.0).collect(),
         };
         self.prep.started_for = Some(sig);
-        if ids.is_empty() {
-            return;
+        // (nothing to build in this view: nothing starts, and what is owed stays owed)
+        let Some(first) = ids.first().copied() else { return };
+        // from the photo in the loupe; in the grid from the active photo, else the view's first
+        let from = at.or_else(|| self.active()).map_or(first, |id| id.0);
+        self.prep_start(sig, ids, from, backward);
+    }
+
+    /// The build this preparation started, followed: re-aimed at the user while it runs, stopped
+    /// when it is no longer wanted, its view is no longer shown, or its library is no longer the
+    /// one open, and, once it is over, what its end means for the view and for
+    /// [`PrepState::unfinished`]. `true`: it is still running (nothing else starts).
+    fn prep_follow_build(&mut self, wanted: bool, scope: Scope, at: Option<PhotoId>, backward: bool) -> bool {
+        let Some(b) = self.prep.build.clone() else { return false };
+        if b.running() {
+            if self.prep.build_library != self.library_generation {
+                // a build left over from the library before: its photos are another library's,
+                // whatever view of this one is shown, and `opened_library` forgot `started_for`,
+                // so the view-change stop below cannot tell it apart; stopped, and the library
+                // now open is prepared in its place (not counted as stopped by the user)
+                b.cancel.store(true, Ordering::Relaxed);
+            } else if b.cancel.load(Ordering::Relaxed) {
+                // already stopped (by the user, from its row): keep `started_for`, so that
+                // the stop is still read as the user's once the build is over
+            } else if !wanted {
+                // switched off: stopped by the preparation itself, as for another view below, so
+                // `started_for` goes too. Left set, the stop would read as the user's once the
+                // build is over and previews are on again, and this view would not be prepared
+                // again in this session (#3947)
+                b.cancel.store(true, Ordering::Relaxed);
+                self.prep.started_for = None;
+            } else if self.prep.started_for.is_some_and(|sig| sig != signature(&self.visible_cloned(), self, scope)) {
+                // another view (a folder, a filter, another library): this build's photos are
+                // not the ones shown; stopped, and the view now shown is prepared in its place
+                // (not counted as stopped by the user)
+                b.cancel.store(true, Ordering::Relaxed);
+                self.prep.started_for = None;
+            } else if let Some(id) = at {
+                b.focus_on(id, backward);
+            }
+            return true;
         }
-        let p = json!({"ids": ids, "background": true, "from": at.0, "backward": backward});
+        self.prep.build = None;
+        let mine = self.preview_build.as_ref().is_some_and(|p| Arc::ptr_eq(p, &b));
+        // (a build left over from a library closed since says nothing about the one open now)
+        let here = self.prep.build_library == self.library_generation;
+        if b.cancel.load(Ordering::Relaxed) {
+            if mine && (wanted || self.prep.started_for.is_some()) {
+                // stopped from its row: not again for this view, and nothing is owed any more (a
+                // stop the preparation made itself cleared `started_for`, and leaves the build
+                // owed). `started_for` still set says the same when the build ended while
+                // previews were off: the stop was the user's, kept while the build ran, and
+                // switching previews back on does not take the build up again
+                if here && self.prep.started_for.is_some() {
+                    self.set_prep_unfinished(false);
+                }
+                self.prep.declined_for = self.prep.started_for;
+            } else {
+                // replaced by a build that was asked for, or switched off: may start again later
+                self.prep.started_for = None;
+            }
+        } else if here {
+            // ran to its end: nothing is owed
+            self.set_prep_unfinished(false);
+        }
+        false
+    }
+
+    /// One more photo seen in the loupe in the view `sig` (the count starts again in another view).
+    fn prep_count_step(&mut self, sig: u64, at: PhotoId) {
+        if self.prep.steps_in != Some(sig) {
+            self.prep.steps_in = Some(sig);
+            self.prep.steps = 0;
+            self.prep.last_at = None;
+        }
+        if self.prep.last_at != Some(at) {
+            self.prep.last_at = Some(at);
+            self.prep.steps = self.prep.steps.saturating_add(1);
+        }
+    }
+
+    /// Note that a build is owed to this library, or no longer ([`PrepState::unfinished`]), and
+    /// save it with the library's preferences when it changed. A save that fails is not an error
+    /// here: the session goes on by what it noted, and the file is at worst one build behind (a
+    /// restart takes up a build that finds everything built, or takes none up).
+    fn set_prep_unfinished(&mut self, unfinished: bool) {
+        if self.prep.unfinished != unfinished {
+            self.prep.unfinished = unfinished;
+            let _ = self.save_prefs();
+        }
+    }
+
+    /// Start the background build of `ids` (the view `sig`) from photo `from`. Once started, the
+    /// build is owed to the library until it has run to its end ([`PrepState::unfinished`]).
+    fn prep_start(&mut self, sig: u64, ids: Vec<u64>, from: u64, backward: bool) {
+        let p = json!({"ids": ids, "background": true, "from": from, "backward": backward});
         // (tests: a start made to fail, as a build thread that can't be spawned fails)
         #[cfg(test)]
         let fail = self.prep.fail_starts.checked_sub(1).map(|left| self.prep.fail_starts = left).is_some();
@@ -434,7 +584,9 @@ impl Session {
         match started {
             Ok(_) => {
                 self.prep.build = self.preview_build.clone();
+                self.prep.build_library = self.library_generation;
                 self.prep.retry_at = None;
+                self.set_prep_unfinished(true);
             }
             Err(e) => {
                 // not started: this view tries again after a while (not on every tick)

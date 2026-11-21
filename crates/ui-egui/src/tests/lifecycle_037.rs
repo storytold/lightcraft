@@ -2354,6 +2354,40 @@ fn background_preparation_advances_while_the_window_is_hidden() {
     let _ = ctx.run_logic(&visible, |ctx| app.logic(ctx));
     assert_eq!(app.prep_ticks, 3, "a shown pass advances it once");
 }
+
+/// #3947: a background build that didn't run to its end (the library's `prefs.json` says so) is
+/// taken up again in the grid, with no photo opened in the loupe: it could only start there, after
+/// three photos stepped through, so a library left mid-build was never finished.
+#[test]
+fn an_unfinished_background_build_is_taken_up_again_in_the_grid() {
+    let files = SyntheticLibrary::with_photos("prep-resume-grid", 3);
+    let mut app = files.on_disk_app();
+    app.ui.view = crate::state::ViewMode::PhotoGrid;
+    assert!(!app.ui.fullscreen && app.ui.view != crate::state::ViewMode::Detail, "the grid is showing");
+    let ctx = egui::Context::default();
+    let hidden = viewport_raw(egui::vec2(800.0, 600.0), false);
+    for _ in 0..3 {
+        let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    }
+    assert!(app.session.preview_build.is_none(), "nothing unfinished: the grid starts nothing");
+    // (as read from prefs.json when the library opened; no wait for the view to be still)
+    app.session.prep.unfinished = true;
+    app.session.prep.settle = Some(Duration::ZERO);
+    for _ in 0..5 {
+        let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    }
+    let build = app.session.preview_build.clone().expect("the unfinished build is taken up again");
+    assert!(build.background);
+    assert_eq!(build.total, 3, "the photos in view");
+    // its workers stop before their library is removed under them
+    build.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    let until = std::time::Instant::now() + Duration::from_secs(30);
+    while build.running() && std::time::Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!build.running(), "a cancelled build stops");
+    drop(app);
+}
 /// CodeRabbit on #3077/#3080: a background build that couldn't start asks for a frame at its retry
 /// time, so the retry happens with no input and no other timed frame.
 #[test]
