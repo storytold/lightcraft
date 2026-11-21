@@ -163,7 +163,11 @@ fn generate_registry() -> Result<(), String> {
             return Err(at("an empty decision list"));
         }
         let mut content = 0;
+        let mut used = std::collections::BTreeSet::new();
         for d in decisions {
+            if !used.insert(d) {
+                return Err(at(&format!("the repeated decision {d:?}")));
+            }
             match d {
                 "mapped" => {
                     mapped.push((name, note));
@@ -206,7 +210,9 @@ fn emit(src: &mut String, const_name: &str, doc: &str, prefix: &str, rows: &[(&s
     src.push_str(&format!("pub const {const_name}: &[&str] = &[\n"));
     for (name, note) in rows {
         if let Some(n) = note {
-            src.push_str(&format!("    // {n}\n"));
+            for line in n.lines() {
+                src.push_str(&format!("    // {line}\n"));
+            }
         }
         src.push_str(&format!("    \"{prefix}{name}\",\n"));
     }

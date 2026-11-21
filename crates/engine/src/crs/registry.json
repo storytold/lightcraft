@@ -55,7 +55,7 @@
                    {
                        "name":  "AutoWhiteVersion",
                        "decision":  "bookkeeping",
-                       "note":  "none of it changes this photo\u0027s rendering"
+                       "note":  "how the file was written, which auto-defaults apply, and where the preview cache goes: none of it changes this photo\u0027s rendering"
                    },
                    {
                        "name":  "Blacks2012",
@@ -119,12 +119,12 @@
                    {
                        "name":  "ClipboardAspectRatio",
                        "decision":  "bookkeeping",
-                       "note":  "none of it changes this photo\u0027s rendering"
+                       "note":  "how the file was written, which auto-defaults apply, and where the preview cache goes: none of it changes this photo\u0027s rendering"
                    },
                    {
                        "name":  "ClipboardOrientation",
                        "decision":  "bookkeeping",
-                       "note":  "none of it changes this photo\u0027s rendering"
+                       "note":  "how the file was written, which auto-defaults apply, and where the preview cache goes: none of it changes this photo\u0027s rendering"
                    },
                    {
                        "name":  "Cluster",
@@ -217,7 +217,7 @@
                    {
                        "name":  "Converter",
                        "decision":  "bookkeeping",
-                       "note":  "none of it changes this photo\u0027s rendering"
+                       "note":  "how the file was written, which auto-defaults apply, and where the preview cache goes: none of it changes this photo\u0027s rendering"
                    },
                    {
                        "name":  "ConvertToGrayscale",
@@ -291,22 +291,22 @@
                    {
                        "name":  "DefaultAutoGray",
                        "decision":  "bookkeeping",
-                       "note":  "none of it changes this photo\u0027s rendering"
+                       "note":  "how the file was written, which auto-defaults apply, and where the preview cache goes: none of it changes this photo\u0027s rendering"
                    },
                    {
                        "name":  "DefaultAutoTone",
                        "decision":  "bookkeeping",
-                       "note":  "none of it changes this photo\u0027s rendering"
+                       "note":  "how the file was written, which auto-defaults apply, and where the preview cache goes: none of it changes this photo\u0027s rendering"
                    },
                    {
                        "name":  "DefaultsSpecificToISO",
                        "decision":  "bookkeeping",
-                       "note":  "none of it changes this photo\u0027s rendering"
+                       "note":  "how the file was written, which auto-defaults apply, and where the preview cache goes: none of it changes this photo\u0027s rendering"
                    },
                    {
                        "name":  "DefaultsSpecificToSerial",
                        "decision":  "bookkeeping",
-                       "note":  "none of it changes this photo\u0027s rendering"
+                       "note":  "how the file was written, which auto-defaults apply, and where the preview cache goes: none of it changes this photo\u0027s rendering"
                    },
                    {
                        "name":  "Defringe",
@@ -366,7 +366,7 @@
                    {
                        "name":  "DNGIgnoreSidecars",
                        "decision":  "bookkeeping",
-                       "note":  "none of it changes this photo\u0027s rendering"
+                       "note":  "how the file was written, which auto-defaults apply, and where the preview cache goes: none of it changes this photo\u0027s rendering"
                    },
                    {
                        "name":  "Exposure",
@@ -551,7 +551,7 @@
                    {
                        "name":  "JPEGHandling",
                        "decision":  "bookkeeping",
-                       "note":  "none of it changes this photo\u0027s rendering"
+                       "note":  "how the file was written, which auto-defaults apply, and where the preview cache goes: none of it changes this photo\u0027s rendering"
                    },
                    {
                        "name":  "LensBlur",
@@ -566,7 +566,7 @@
                    {
                        "name":  "LensProfileChromaticAberrationScale",
                        "decision":  "reported",
-                       "note":  "an empty set), reported as an unmapped strength anywhere else"
+                       "note":  "written beside something that already carries the value: quiet at its default (100 % or an empty set), reported as an unmapped strength anywhere else"
                    },
                    {
                        "name":  "LensProfileDigest",
@@ -576,7 +576,7 @@
                    {
                        "name":  "LensProfileDistortionScale",
                        "decision":  "reported",
-                       "note":  "an empty set), reported as an unmapped strength anywhere else"
+                       "note":  "written beside something that already carries the value: quiet at its default (100 % or an empty set), reported as an unmapped strength anywhere else"
                    },
                    {
                        "name":  "LensProfileEnable",
@@ -646,7 +646,7 @@
                    {
                        "name":  "LensProfileVignettingScale",
                        "decision":  "reported",
-                       "note":  "an empty set), reported as an unmapped strength anywhere else"
+                       "note":  "written beside something that already carries the value: quiet at its default (100 % or an empty set), reported as an unmapped strength anywhere else"
                    },
                    {
                        "name":  "Look",
@@ -730,17 +730,17 @@
                    {
                        "name":  "NegativeCacheLargePreviewSize",
                        "decision":  "bookkeeping",
-                       "note":  "none of it changes this photo\u0027s rendering"
+                       "note":  "how the file was written, which auto-defaults apply, and where the preview cache goes: none of it changes this photo\u0027s rendering"
                    },
                    {
                        "name":  "NegativeCacheMaximumSize",
                        "decision":  "bookkeeping",
-                       "note":  "none of it changes this photo\u0027s rendering"
+                       "note":  "how the file was written, which auto-defaults apply, and where the preview cache goes: none of it changes this photo\u0027s rendering"
                    },
                    {
                        "name":  "NegativeCachePath",
                        "decision":  "bookkeeping",
-                       "note":  "none of it changes this photo\u0027s rendering"
+                       "note":  "how the file was written, which auto-defaults apply, and where the preview cache goes: none of it changes this photo\u0027s rendering"
                    },
                    {
                        "name":  "OverrideLookVignette",
@@ -830,7 +830,7 @@
                    {
                        "name":  "PointColors",
                        "decision":  "reported",
-                       "note":  "an empty set), reported as an unmapped strength anywhere else"
+                       "note":  "written beside something that already carries the value: quiet at its default (100 % or an empty set), reported as an unmapped strength anywhere else"
                    },
                    {
                        "name":  "PostCropVignetteAmount",
@@ -1104,7 +1104,7 @@
                    {
                        "name":  "TIFFHandling",
                        "decision":  "bookkeeping",
-                       "note":  "none of it changes this photo\u0027s rendering"
+                       "note":  "how the file was written, which auto-defaults apply, and where the preview cache goes: none of it changes this photo\u0027s rendering"
                    },
                    {
                        "name":  "Tint",
@@ -1305,7 +1305,7 @@
                    {
                        "name":  "What",
                        "decision":  "bookkeeping",
-                       "note":  "none of it changes this photo\u0027s rendering"
+                       "note":  "how the file was written, which auto-defaults apply, and where the preview cache goes: none of it changes this photo\u0027s rendering"
                    },
                    {
                        "name":  "WhiteBalance",
