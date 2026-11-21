@@ -70,6 +70,7 @@ impl Default for MediaCache {
             availability: Default::default(),
             scenes: Vec::new(),
             rendered: Arc::new(PreviewCache::memory(rendered_budget(budget))),
+            proxy_refreshes: Default::default(),
             denoise: DenoiseIndex::default(),
             camera_profiles: HashMap::new(),
         }
@@ -109,6 +110,8 @@ impl MediaCache {
 
     /// Forget every decoded source (photo ids changed meaning, e.g. another library was opened).
     pub fn clear_sources(&mut self) {
+        // A worker from the previous library must not invalidate this library's photo ids.
+        self.proxy_refreshes = Default::default();
         self.settings_hashes = SettingsHashes::default();
         self.thumbs = Lru::new(THUMB_SOURCE_BYTES.min(self.budget));
         self.previews.clear();
@@ -197,6 +200,7 @@ impl MediaCache {
     }
 
     pub(super) fn get_source(&mut self, id: PhotoId, level: SourceLevel) -> Option<DecodedSource> {
+        self.evict_stale_proxies(id);
         match level {
             SourceLevel::Thumb => self.thumbs.get(&id).cloned(),
             SourceLevel::Preview => self.previews.iter_mut().find(|e| e.0 == id).map(|e| {
@@ -214,13 +218,14 @@ impl MediaCache {
     /// (with a smart preview's stored camera tone curve). Only sources developed with `profile` (the photo's imported
     /// camera profile tag, [`Self::camera_profile_of`], or none) count: one made with another profile has its facts.
     pub(super) fn source_facts(&self, id: PhotoId, header: SourceInfo, profile: Option<&str>) -> SourceInfo {
+        let refreshes = self.proxy_refreshes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let cached = || {
             self.thumbs
                 .peek(&id)
                 .into_iter()
                 .chain(self.previews.iter().filter(|e| e.0 == id).map(|e| &e.1))
                 .chain(self.full.iter().filter(|e| e.0 == id).map(|e| &e.1))
-                .filter(|s| s.camera_profile.as_deref() == profile)
+                .filter(|s| s.camera_profile.as_deref() == profile && s.proxy_is_current(&refreshes))
         };
         match cached().find(|s| s.info.is_some()).or_else(|| cached().next()) {
             Some(s) => s.info_or(header),
@@ -239,6 +244,11 @@ impl MediaCache {
     }
 
     pub(crate) fn insert_source(&mut self, id: PhotoId, level: SourceLevel, img: DecodedSource) {
+        self.evict_stale_proxies(id);
+        // A render started before refresh can finish afterwards. Do not cache its old proxy again.
+        if !img.proxy_is_current(&self.proxy_refreshes.lock().unwrap_or_else(std::sync::PoisonError::into_inner)) {
+            return;
+        }
         let tick = lightcraft_preview::next_tick();
         match level {
             SourceLevel::Thumb => {
@@ -263,6 +273,16 @@ impl MediaCache {
         self.enforce_budget();
     }
 
+    /// Evict only this photo's proxy decodes made before its latest successful replacement.
+    fn evict_stale_proxies(&mut self, id: PhotoId) {
+        let refreshes = self.proxy_refreshes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.thumbs.peek(&id).is_some_and(|s| !s.proxy_is_current(&refreshes)) {
+            self.thumbs.remove(&id);
+        }
+        self.previews.retain(|e| e.0 != id || e.1.proxy_is_current(&refreshes));
+        self.full.retain(|e| e.0 != id || e.1.proxy_is_current(&refreshes));
+    }
+
     /// Forget a photo's decoded sources (e.g. after its file changed).
     pub fn forget(&mut self, id: PhotoId) {
         self.thumbs.remove(&id);
@@ -277,10 +297,11 @@ impl MediaCache {
 
     /// Whether the decoded source of `id` at `level` is held.
     pub fn has_source(&self, id: PhotoId, level: SourceLevel) -> bool {
+        let refreshes = self.proxy_refreshes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match level {
-            SourceLevel::Thumb => self.thumbs.contains(&id),
-            SourceLevel::Preview => self.previews.iter().any(|e| e.0 == id),
-            SourceLevel::Full => self.full.iter().any(|e| e.0 == id),
+            SourceLevel::Thumb => self.thumbs.peek(&id).is_some_and(|s| s.proxy_is_current(&refreshes)),
+            SourceLevel::Preview => self.previews.iter().any(|e| e.0 == id && e.1.proxy_is_current(&refreshes)),
+            SourceLevel::Full => self.full.iter().any(|e| e.0 == id && e.1.proxy_is_current(&refreshes)),
         }
     }
 
@@ -314,10 +335,10 @@ impl MediaCache {
     }
 
     /// [`Self::source_ref`] without the photo's imported camera profile (keeping its denoised picture): a smart
-    /// preview keeps the file's own colour, and a cached source developed with the profile doesn't stand in for it.
+    /// preview keeps the file's own colour. Read the original rather than a cached proxy when rebuilding it.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn source_ref_without_profile(&mut self, p: &Photo, level: SourceLevel) -> SourceRef {
-        self.source_ref_for(p, level, true, None)
+        self.source_ref_for(p, level, false, None)
     }
 
     fn source_ref_with(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {
