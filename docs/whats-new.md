@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Captions from a Lightroom catalog
+- A Lightroom catalog import brings across every photo's caption. It read captions only from the XMP Lightroom
+  caches inside the catalog, which often doesn't have them, so most photos arrived without the caption Lightroom
+  showed. It now reads Lightroom's own IPTC table too (issue #4043).
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

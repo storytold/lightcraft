@@ -405,6 +405,7 @@ mod tests {
                     history: Vec::new(),
                     snapshots: Vec::new(),
                     original: lightroom_catalog::Original::Local,
+                    caption: String::new(),
                 }],
                 collections: Vec::new(),
                 members: Vec::new(),
@@ -545,6 +546,7 @@ mod tests {
                     )])],
                     snapshots: Vec::new(),
                     original: lightroom_catalog::Original::Local,
+                    caption: String::new(),
                 }
             })
             .collect();

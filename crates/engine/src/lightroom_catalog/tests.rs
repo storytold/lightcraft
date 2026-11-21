@@ -15,6 +15,7 @@ fn sample() -> CatalogImport {
         history: vec![row(json!({"text":"s = { Exposure2012 = 0.5 }"}))],
         snapshots: Vec::new(),
         original: Original::Local,
+        caption: String::new(),
     };
     let mut copy = photo.clone();
     copy.source_id = 2;
@@ -1433,6 +1434,43 @@ fn photo_tables(root: (&str, &str)) -> Vec<(&'static str, &'static str, Vec<SqlV
             vec![N, T("fixture-image".into()), I(1), T("ARW".into()), I(20), I(10), I(5), I(1)],
         ),
     ]
+}
+
+/// Issue #4043: Lightroom keeps an image's caption in its `AgLibraryIPTC` table, and the XMP packet it caches for
+/// the image may not restate it. The import takes the caption from the table, over the packet's; an empty one, another
+/// image's row or no table leaves the caption the packet gives.
+#[test]
+fn a_catalog_caption_comes_from_lightrooms_iptc_table() {
+    use SqlValue::{Integer as I, Null as N, Text as T};
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-iptc-caption-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let packet = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:description><rdf:Alt><rdf:li xml:lang="x-default">From the packet</rdf:li></rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+    let import_with = |iptc: Option<Vec<SqlValue>>, cached: bool| {
+        let path = dir.join("captions.lrcat");
+        let mut tables = photo_tables((dir.to_str().unwrap(), ""));
+        if cached {
+            tables.push(("Adobe_AdditionalMetadata", "id_local INTEGER PRIMARY KEY, image, xmp", vec![N, I(1), T(packet.into())]));
+        }
+        if let Some(row) = iptc {
+            tables.push(("AgLibraryIPTC", "id_local INTEGER PRIMARY KEY, caption, copyright, image", row));
+        }
+        std::fs::write(&path, native_catalog(&tables)).unwrap();
+        let mut s = crate::Session::new();
+        let imported = s.execute("library.importLightroom", &json!({"path": path})).unwrap();
+        let id = PhotoId(imported["mapping"]["1"].as_u64().unwrap());
+        s.catalog.photo(id).unwrap().meta.caption.clone()
+    };
+    let import = |iptc| import_with(iptc, false);
+    assert_eq!(import(Some(vec![N, T("Harbour at dawn".into()), N, I(1)])), "Harbour at dawn");
+    assert_eq!(import(Some(vec![N, T("  ".into()), N, I(1)])), "", "a blank caption isn't one");
+    assert_eq!(import(Some(vec![N, T("Another image's".into()), N, I(2)])), "", "only the image's own row");
+    assert_eq!(import(None), "", "a catalog without the table imports as before");
+    let cached = |iptc| import_with(iptc, true);
+    assert_eq!(cached(None), "From the packet", "the packet's caption imports as before");
+    assert_eq!(cached(Some(vec![N, T("Harbour at dawn".into()), N, I(1)])), "Harbour at dawn", "the table's caption wins");
+    assert_eq!(cached(Some(vec![N, T("  ".into()), N, I(1)])), "From the packet", "a blank caption keeps the packet's");
+    assert_eq!(cached(Some(vec![N, T("Another image's".into()), N, I(2)])), "From the packet", "another image's row keeps it");
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
