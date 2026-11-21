@@ -438,4 +438,36 @@ mod tests {
         assert_eq!(sniff(b"MM\0*\0\0\0\x08\0\0"), Some(Format::Tiff));
         assert_eq!(sniff(b"unknown-header"), None);
     }
+
+    #[test]
+    fn short_inputs_and_psd_raw_precedence() {
+        for len in 0..4 {
+            assert_eq!(sniff(&[0xFF, 0xD8, 0xFF][..len]), None);
+        }
+        assert_eq!(sniff(b"8BPS"), None);
+        assert_eq!(sniff(b"8BPS\0"), None);
+        assert_eq!(sniff(b"8BPS\0\x00"), None);
+        assert_eq!(sniff(b"8BPS\0\x03"), None);
+        assert_eq!(sniff(b"8BPS\0\x01"), Some(Format::Psd));
+        assert_eq!(sniff(b"8BPS\0\x02"), Some(Format::Psd));
+
+        assert_eq!(sniff(b"II\0\0\0\0HEAPCCD"), None);
+        assert_eq!(sniff(b"II\0\0\0\0HEAPCCDR"), Some(Format::RawOther));
+        for raw_magic in [b"FUJIFILMCCD-RAW".as_slice(), b"\0MRM", b"FOVb"] {
+            assert_eq!(sniff(raw_magic), Some(Format::RawOther));
+        }
+        for raw_tiff in [b"IIRO".as_slice(), b"IIRS", b"MMOR", b"IIU\0"] {
+            assert_eq!(sniff(raw_tiff), Some(Format::RawTiffLike));
+        }
+        for tiff_magic in [b"II*\0".as_slice(), b"MM\0*"] {
+            assert_eq!(sniff(tiff_magic), Some(Format::Tiff));
+        }
+
+        // Compound headers: PSD, RAW, and JPEG/JPEG-LS signatures take precedence over `ftyp` at offset 4.
+        assert_eq!(sniff(b"8BPS\0\x01ftypavif"), Some(Format::Psd));
+        assert_eq!(sniff(b"\0MRMftypavif"), Some(Format::RawOther));
+        assert_eq!(sniff(b"FOVbftypheic"), Some(Format::RawOther));
+        assert_eq!(sniff(b"\xFF\xD8\xFF\xF7ftypcrx "), Some(Format::Jpeg));
+        assert_eq!(sniff(b"\xFF\xD8\xFF\xE0ftypjxl "), Some(Format::Jpeg));
+    }
 }
