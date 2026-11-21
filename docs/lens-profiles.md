@@ -91,10 +91,24 @@ calibration crop factor are not applied. An explicit crop factor of 1 still mean
 On exact lookup-score ties, both named and built-in fixed-lens matching prefer a known calibration crop; a higher
 match score still wins even when its crop is unknown.
 
+## Choosing a profile by hand
+
+When the file names no lens, or names it in a way the database doesn't recognise (an old or adapted lens), choose the
+profile yourself: with **Enable Lens Corrections** ticked, Optics ▸ **Lens Profile** lists the database's lenses for the
+camera's mount (every lens when the database doesn't know the camera); type part of a name to narrow the list, and
+click the lens (issue #1049). `lens.profiles` lists the same names and `photo.chooseLensProfile {ids?, lens}` applies
+one to the selected raws.
+
+The profile is read for each photo's own focal length and aperture (a photo that records no focal length can take a
+prime, not a zoom), and the photo's **Lens** field takes the profile's name, so the Optics panel ("Profile: … (chosen)"),
+the Lens column and the Lens filter say which lens it is. A chosen profile is kept when the file is read again (Reload
+from Disk) or the database is looked up again, and it is used even over the file's own correction. Choosing is one undo
+step. It isn't written to XMP yet.
+
 ## Limits
 
 - Only raws: rendered images (JPEG, HEIF, TIFF) are often already corrected in camera.
 - The focus distance is not read from maker notes yet: vignetting uses the farthest calibrated distance.
-- No manual make / model picker and no choice between sources (in the file, lens database, an own calibration)
-  yet; matching is automatic, the file's own correction wins.
+- A profile can be chosen by hand (above), but there is no picker for the camera or for an own calibration yet;
+  otherwise matching is automatic and the file's own correction wins.
 - Not yet validated against real photos and another renderer; the tests use synthetic profiles and grids.

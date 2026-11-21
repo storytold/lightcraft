@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Choose a lens profile by hand
+- When LightCraft finds no lens profile for a raw (the file names no lens, or names it in a way the lens database
+  doesn't know), pick it yourself: Optics ▸ Lens Profile lists the lenses for your camera's mount, and typing narrows
+  the list. The photo's Lens field takes the profile's name, and the choice stays when the file is read again
+  (issue #1049).
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

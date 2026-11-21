@@ -294,7 +294,8 @@ fn legacy_shutter_text(t: f64) -> Option<String> {
 /// what import gave it, the lens correction is turned on as import would; an edited photo keeps
 /// its settings.
 pub(crate) fn lens_ops(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Vec<Op> {
-    if info.embedded_lens == ph.embedded_lens {
+    // a profile the user chose stays whatever the file says (issue #1049)
+    if info.embedded_lens == ph.embedded_lens || ph.embedded_lens.is_some_and(|l| l.source == lightcraft_develop::LensSource::Chosen) {
         return Vec::new();
     }
     let mut ops = vec![Op::SetEmbeddedLens { id, lens: info.embedded_lens.map(Box::new) }];

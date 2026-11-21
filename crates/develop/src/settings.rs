@@ -749,11 +749,19 @@ pub enum LensSource {
     File,
     /// A profile from a lensfun-format lens database, matched by the lens named in the file.
     Database,
+    /// A lens database profile the user chose for the photo (issue #1049): kept when the file is read again or the
+    /// database is looked up again, and preferred to the file's own correction.
+    Chosen,
 }
 
 impl LensSource {
     pub fn is_file(&self) -> bool {
         *self == LensSource::File
+    }
+
+    /// A profile the catalog holds for the photo (looked up in or chosen from a lens database), not the file's own.
+    pub fn from_database(&self) -> bool {
+        matches!(self, LensSource::Database | LensSource::Chosen)
     }
 }
 
