@@ -181,6 +181,9 @@ as path authorization. Non-ASCII spellings remain distinct rather than broadenin
 Unicode case folding. An explicitly unchecked UNC root cannot be imported through its
 catalog-relative fallback, even when Windows treats its spelling as an alias of a selected share.
 No folder picker is needed. Long lists render only visible rows; scrolling preserves selections.
+With the keyboard, Tab reaches the source checkboxes. Up/Down moves between available sources,
+including offscreen rows; Home/End reaches the first/last available source. Space toggles the
+focused source. Tab leaves the list for the remaining dialog controls, and Escape cancels.
 Select the sources to import, then confirm the import. All discovered sources start unchecked;
 unchecked network sources are not imported, including the catalog's own share. The catalog,
 LightCraft library and original photos stay at their existing locations.
@@ -196,6 +199,11 @@ extracts it again after confirmation. Relative sources refer to the original cat
 not the temporary folder. The network review also appears with **Always merge** or an in-memory library;
 that preference still skips the destination question for catalogs without network sources. Cancel
 grants nothing. Selections apply only to this import and are not remembered on the next one.
+
+The list identifies the permission boundary (server and share), not a photo inventory. It does
+not show photo counts: those require reading and joining the catalog's image, file and folder
+records, which is deferred until after source review. A count from root-folder records alone
+would be misleading, especially with virtual copies or missing originals.
 
 The same explicit option is available to `file.importLightroom`, `library.importLightroom` and
 `library.inspectLightroom`: `networkShares: ["\\\\nas\\photos"]` in JSON. At most 32 UNC folder paths

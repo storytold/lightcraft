@@ -1303,7 +1303,7 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         // ---- import
         cmd!(query "library.lightroomNetworkSources", "Review Lightroom Network Sources", [], None,
-        "{path: .lrcat or Lightroom backup .zip} → {networkSources: [UNC share]}; reads catalog root folders only, without contacting photo sources",
+        "{path: .lrcat or Lightroom backup .zip} → {networkSources: [UNC share]}; reads catalog root folders only, without contacting photo sources. Discovery grants no access. Pass up to 32 selected folders as networkShares to inspection/import; [] refuses all network sources, including the catalog's own share. Selections apply only to that operation and are not saved.",
         always, |s, p| {
             let path = str_param(p, "path").ok_or_else(|| bad("library.lightroomNetworkSources", "missing path"))?;
             let temp = crate::lightroom_catalog::backup_temp_root(s);
@@ -1312,7 +1312,7 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"networkSources": shares}))
         }),
         cmd!(query "library.inspectLightroom", "Inspect Lightroom Catalog", [], None,
-        "{path: .lrcat or Lightroom backup .zip, networkShares?: [UNC folder]} → {photos, collections, missing, warnings}; read-only, no Lightroom required",
+        "{path: .lrcat or Lightroom backup .zip, networkShares?: [UNC folder]} → {photos, collections, missing, warnings}; read-only, no Lightroom required. Select at most 32 network folders; selections apply only to this operation and are not saved. An explicit [] overrides the catalog's implicit share grant and refuses all network sources, including its own share.",
         always, |s, p| {
             let path = str_param(p,"path").ok_or_else(|| bad("library.inspectLightroom","missing path"))?;
             let shares = crate::doc_path::NetworkShares::from_params(p).map_err(|e| bad("library.inspectLightroom", e))?;
@@ -1327,7 +1327,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import Lightroom Catalog",
             [],
             None,
-            "{path: .lrcat, or a Lightroom catalog backup .zip (unpacked to a temporary folder in the library, removed after reading; the zip is not changed), updateExisting?: false, networkShares?: [UNC folder]}; direct import of paths, ratings, flags, metadata, keywords, collections, virtual copies & mapped edits. Archives source settings/history first. Existing edited photos are preserved unless updateExisting=true; source catalog is read-only.",
+            "{path: .lrcat, or a Lightroom catalog backup .zip (unpacked to a temporary folder in the library, removed after reading; the zip is not changed), updateExisting?: false, networkShares?: [UNC folder]}; direct import of paths, ratings, flags, metadata, keywords, collections, virtual copies & mapped edits. Archives source settings/history first. Existing edited photos are preserved unless updateExisting=true; source catalog is read-only. Select at most 32 network folders; selections apply only to this import and are not saved. An explicit [] overrides the catalog's implicit share grant and refuses all network sources, including its own share.",
             always,
             |s, p| {
                 let path = str_param(p, "path").ok_or_else(|| bad("library.importLightroom", "missing path"))?;

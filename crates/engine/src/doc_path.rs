@@ -28,14 +28,23 @@ impl NetworkShares {
     /// using craft-docpath's normalisation and comparison, never a string-prefix comparison.
     pub fn new(paths: Vec<String>) -> Result<Self, String> {
         if paths.len() > MAX_NETWORK_SHARES {
-            return Err("networkShares: at most 32 network shares may be selected".into());
+            return Err("Select at most 32 network folders for this operation.".into());
         }
-        for path in &paths {
+        for (index, path) in paths.iter().enumerate() {
             if path.len() > 32_768
                 || craft_docpath::classify(path) != craft_docpath::PathKind::Network
                 || craft_docpath::resolve(path, Some(Path::new(path))).is_err()
             {
-                return Err("networkShares: choose a UNC network folder such as \\\\server\\share\\Photos".into());
+                // A command can supply very long or control-character-filled values. Identify
+                // the entry without turning its error into unbounded or misleading UI text.
+                let mut preview: String = path.chars().take(120).flat_map(char::escape_debug).collect();
+                if path.chars().count() > 120 {
+                    preview.push('…');
+                }
+                return Err(format!(
+                    "Network folder {} ({preview}) is not a valid network folder. Choose a folder such as \\\\server\\share\\Photos.",
+                    index + 1
+                ));
             }
         }
         Ok(Self { paths, explicit: true })
@@ -46,15 +55,18 @@ impl NetworkShares {
         match params.get("networkShares") {
             None | Some(serde_json::Value::Null) => Ok(Self::default()),
             Some(serde_json::Value::Array(values)) if values.len() > MAX_NETWORK_SHARES => {
-                Err("networkShares: at most 32 network shares may be selected".into())
+                Err("Select at most 32 network folders for this operation.".into())
             }
             Some(serde_json::Value::Array(values)) => Self::new(
                 values
                     .iter()
-                    .map(|v| v.as_str().map(str::to_string).ok_or_else(|| "networkShares must be an array of UNC folder paths".to_string()))
+                    .enumerate()
+                    .map(|(index, v)| {
+                        v.as_str().map(str::to_string).ok_or_else(|| format!("Network folder {} must be a folder path written as text.", index + 1))
+                    })
                     .collect::<Result<_, _>>()?,
             ),
-            Some(_) => Err("networkShares must be an array of UNC folder paths".into()),
+            Some(_) => Err("Provide a list of network folders, or an empty list to refuse all network sources.".into()),
         }
     }
 

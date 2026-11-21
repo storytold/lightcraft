@@ -342,27 +342,8 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, dialog: &mut Dialog) {
         if network_sources.len() > lightcraft_engine::doc_path::MAX_NETWORK_SHARES {
             ui.label(tr("Select up to 32 network sources for this import."));
         }
-        let row_height = ui.spacing().interact_size.y;
-        egui::ScrollArea::vertical().id_salt("lightroom-network-sources").max_height(140.0).show_rows(
-            ui,
-            row_height,
-            network_sources.len(),
-            |ui, rows| {
-                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                for (i, source) in network_sources.iter().enumerate().take(rows.end).skip(rows.start) {
-                    let mut selected = network_shares.iter().any(|s| s.eq_ignore_ascii_case(source));
-                    let enabled = selected || network_shares.len() < lightcraft_engine::doc_path::MAX_NETWORK_SHARES;
-                    let response = ui.add_enabled(enabled, egui::Checkbox::new(&mut selected, source)).on_hover_text(source);
-                    crate::widgets::register(ui, format!("check:lightroomNetworkSource-{i}"), response.rect);
-                    if response.changed() {
-                        network_shares.retain(|s| !s.eq_ignore_ascii_case(source));
-                        if selected {
-                            network_shares.push(source.clone());
-                        }
-                    }
-                }
-            },
-        );
+        ui.add(egui::Label::new(tr("Use Up/Down or Home/End to reach sources; Space selects a source.")).wrap());
+        network_source_list(ui, catalog, network_sources, network_shares);
     }
     ui.add_space(4.0);
     // (it only speaks of merging: unticked and greyed out while a new library is chosen)
@@ -373,6 +354,65 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, dialog: &mut Dialog) {
         *dont_ask = ticked;
     }
     ui.label(egui::RichText::new(tr("To be asked again: Settings → General → When importing a Lightroom catalog.")).size(11.0).color(t.text_dim));
+}
+
+/// Keep keyboard focus attached to a source when virtualization replaces the visible rows.
+fn network_source_list(ui: &mut egui::Ui, catalog: &str, sources: &[String], shares: &mut Vec<String>) {
+    let focus_key = ui.make_persistent_id(("lightroom-source-focus", catalog));
+    let previous = ui.ctx().data(|d| d.get_temp::<(usize, egui::Id)>(focus_key));
+    let enabled = |index: usize| {
+        shares.len() < lightcraft_engine::doc_path::MAX_NETWORK_SHARES || shares.iter().any(|s| s.eq_ignore_ascii_case(&sources[index]))
+    };
+    let mut navigated = false;
+    let target = previous.filter(|(index, id)| *index < sources.len() && ui.memory(|m| m.has_focus(*id))).and_then(|(index, _)| {
+        ui.input_mut(|input| {
+            let key = [egui::Key::Home, egui::Key::End, egui::Key::ArrowDown, egui::Key::ArrowUp]
+                .into_iter()
+                .find(|key| input.consume_key(egui::Modifiers::NONE, *key));
+            navigated = key.is_some();
+            match key {
+                Some(egui::Key::Home) => (0..sources.len()).find(|i| enabled(*i)),
+                Some(egui::Key::End) => (0..sources.len()).rev().find(|i| enabled(*i)),
+                Some(egui::Key::ArrowDown) => (index + 1..sources.len()).find(|i| enabled(*i)),
+                Some(egui::Key::ArrowUp) => (0..index).rev().find(|i| enabled(*i)),
+                _ => None,
+            }
+        })
+    });
+    if navigated {
+        // The first arrow after Tab can already have scheduled egui's spatial focus move.
+        ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+    }
+    let row_height = ui.spacing().interact_size.y;
+    let mut scroll = egui::ScrollArea::vertical().id_salt("lightroom-network-sources").max_height(140.0);
+    if let Some(index) = target {
+        scroll = scroll.vertical_scroll_offset(index as f32 * (row_height + ui.spacing().item_spacing.y));
+    }
+    scroll.show_rows(ui, row_height, sources.len(), |ui, rows| {
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        for (i, source) in sources.iter().enumerate().take(rows.end).skip(rows.start) {
+            // Row position is not identity: a focused checkbox must never become another share.
+            ui.push_id(("lightroom-source", source), |ui| {
+                let mut selected = shares.iter().any(|s| s.eq_ignore_ascii_case(source));
+                let enabled = selected || shares.len() < lightcraft_engine::doc_path::MAX_NETWORK_SHARES;
+                let response = ui.add_enabled(enabled, egui::Checkbox::new(&mut selected, source)).on_hover_text(source);
+                crate::widgets::register(ui, format!("check:lightroomNetworkSource-{i}"), response.rect);
+                if target == Some(i) {
+                    response.request_focus();
+                }
+                if response.has_focus() {
+                    ui.memory_mut(|m| m.set_focus_lock_filter(response.id, egui::EventFilter { vertical_arrows: true, ..Default::default() }));
+                    ui.ctx().data_mut(|d| d.insert_temp(focus_key, (i, response.id)));
+                }
+                if response.changed() {
+                    shares.retain(|s| !s.eq_ignore_ascii_case(source));
+                    if selected {
+                        shares.push(source.clone());
+                    }
+                }
+            });
+        }
+    });
 }
 
 #[cfg(test)]

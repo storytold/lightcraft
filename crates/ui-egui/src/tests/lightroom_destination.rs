@@ -304,7 +304,7 @@ fn network_share_params_survive_the_dialog_and_are_checked_before_creating_a_lib
     begin(&mut h, json!({"path": f.lrcat(), "networkShares": [r"\\nas\photos"]}));
     assert!(matches!(&h.app.ui.dialog, Some(Dialog::LightroomDestination { network_shares, .. }) if network_shares == &[r"\\nas\photos"]));
     let error = h.app.run("file.importLightroom", json!({"path": f.lrcat(), "into": "new", "name": "Invalid", "networkShares": true})).unwrap_err();
-    assert!(error.contains("networkShares"), "{error}");
+    assert!(error.contains("network folders"), "{error}");
     assert!(!f.root.join("Invalid").exists());
     assert_eq!(open_dir(&h), Some(f.lib.clone()));
 }

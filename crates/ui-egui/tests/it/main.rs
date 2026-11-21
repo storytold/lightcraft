@@ -6,6 +6,7 @@ mod dialog_role;
 mod docking_workflows;
 mod grid_names;
 mod landmarks;
+mod lightroom_network_accessibility;
 mod local_places;
 mod photo_name;
 mod sidebar_names;

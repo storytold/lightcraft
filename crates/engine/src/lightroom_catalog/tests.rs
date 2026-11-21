@@ -1736,7 +1736,7 @@ fn invalid_network_share_options_fail_before_reading_or_changing_the_library() {
     let before = session.catalog.to_snapshot();
     for command in ["library.inspectLightroom", "library.importLightroom"] {
         let error = session.execute(command, &json!({"path":"missing.lrcat", "networkShares":true})).unwrap_err();
-        assert!(error.to_string().contains("networkShares"), "{error}");
+        assert!(error.to_string().contains("network folders"), "{error}");
     }
     assert_eq!(session.catalog.to_snapshot(), before);
 }
