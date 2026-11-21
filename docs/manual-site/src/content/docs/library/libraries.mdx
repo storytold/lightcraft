@@ -15,7 +15,7 @@ import Shot from '../../../components/Shot.astro';
 - **File ▸ Libraries ▸ New Library…** (name, then location), **Open Library…**, **Open Recent Library** (last eight; missing ones greyed).
 - **Settings ▸ General ▸ At launch**: reopen the last library or ask which. **Choose Library…** shows the chooser.
 - **Back Up Library…** and **Restore Library from Backup…**. **Test Library Integrity** and **Optimise** are in the same menu.
-- **Edit ▸ Library Settings…**: backup schedule (never, every exit, daily, weekly, monthly) and folder, integrity test, standard preview size, discard 1:1 previews.
+- **Edit ▸ Library Settings…**: backup schedule (never, every exit, daily, weekly, monthly) and folder, integrity test, standard preview size, discard 1:1 previews. If the library's settings file (`catalog-settings.json`) is damaged, it is kept as `catalog-settings.json.corrupt-<time>`, a new library's settings (backups on) are used, and a notice says so when the library opens.
 - **Export as Library…**: selected or all photos, with or without originals and previews.
 - **Import from Another Library…**: merge it back, with a change preview.
 - Older catalogs are upgraded in place after a verified copy in `backups/`; a failure leaves the old version intact. The upgrade runs after the window appears, behind a small **Upgrading your catalog** (a v3 catalog) or **Opening your catalog** window with a progress bar; the bar moves by the bytes of the safety copy, which on a large catalog takes a little while after an update.

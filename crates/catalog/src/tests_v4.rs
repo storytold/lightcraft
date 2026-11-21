@@ -493,6 +493,34 @@ fn catalog_folder_new_open_recent() {
 }
 
 #[test]
+fn damaged_catalog_settings_are_set_aside_and_reported() {
+    let s = Scratch::new("settings-aside");
+    let file = s.path().join(library::SETTINGS_FILE);
+    for bytes in [&b"{not json"[..], b"\xff\xfe\x00", b"7", b"{\"keepBackups\": -1}", &[b'['; 10_000][..], b""] {
+        std::fs::write(&file, bytes).unwrap();
+        let (cs, problem) = CatalogSettings::load_checked(s.path());
+        let problem = problem.expect("a damaged file is reported");
+        assert!(problem.contains("damaged"), "{problem}");
+        assert!(cs.keep_backups > 0 && cs.test_integrity, "new-library defaults: backups on");
+        assert!(!file.exists(), "moved aside, so a later save can't overwrite it");
+        // reported once: the next load sees no file
+        assert!(CatalogSettings::load_checked(s.path()).1.is_none());
+    }
+    let kept: Vec<Vec<u8>> = std::fs::read_dir(s.path())
+        .unwrap()
+        .map(|e| e.unwrap())
+        .filter(|e| e.file_name().to_string_lossy().starts_with("catalog-settings.json.corrupt-"))
+        .map(|e| std::fs::read(e.path()).unwrap())
+        .collect();
+    assert_eq!(kept.len(), 6, "every damaged copy kept under its own name");
+    assert!(kept.iter().any(|b| b == b"{not json"));
+    // a good file is read as it is, with no problem
+    CatalogSettings { keep_backups: 3, ..CatalogSettings::default() }.save(s.path()).unwrap();
+    let (cs, problem) = CatalogSettings::load_checked(s.path());
+    assert_eq!((cs.keep_backups, problem), (3, None));
+}
+
+#[test]
 fn backup_integrity_optimise() {
     let s = Scratch::new("bk");
     let (mut j, mut c, _) = open(s.path());

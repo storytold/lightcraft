@@ -335,6 +335,21 @@ pub fn backup_hint(dir: &Path) -> String {
 }
 
 /// Seconds since the Unix epoch (0 if the clock is before it).
+/// Renames the damaged `file` to `<name>.corrupt-<unix time>` (a free name: `-2`, `-3`, … when
+/// that is taken) next to it; the new path.
+fn set_aside(file: &Path) -> std::io::Result<PathBuf> {
+    let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let base = format!("{name}.corrupt-{}", now_secs());
+    for n in 1..100u32 {
+        let candidate = file.with_file_name(if n == 1 { base.clone() } else { format!("{base}-{n}") });
+        if !candidate.exists() {
+            std::fs::rename(file, &candidate)?;
+            return Ok(candidate);
+        }
+    }
+    Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "too many damaged copies already kept"))
+}
+
 pub fn now_secs() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
@@ -502,13 +517,46 @@ pub struct CatalogSettings {
 }
 
 impl CatalogSettings {
+    /// The settings in `dir` ([`CatalogSettings::load_checked`], the problem only logged).
     pub fn load(dir: &Path) -> CatalogSettings {
-        let mut s: CatalogSettings = std::fs::read(dir.join(SETTINGS_FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-        if s.keep_backups == 0 && !dir.join(SETTINGS_FILE).exists() {
-            s.keep_backups = 10;
-            s.test_integrity = true;
+        let (s, problem) = CatalogSettings::load_checked(dir);
+        if let Some(p) = problem {
+            log::warn!("catalog settings: {p}");
         }
         s
+    }
+
+    /// The settings a new library starts with: backups kept (10) and tested.
+    pub fn new_library() -> CatalogSettings {
+        CatalogSettings { keep_backups: 10, test_integrity: true, ..CatalogSettings::default() }
+    }
+
+    /// The settings in `dir`, and what was wrong with its file, to tell the user. A missing file
+    /// gives [`CatalogSettings::new_library`] and no problem. A file that doesn't parse is moved
+    /// aside to `catalog-settings.json.corrupt-<unix time>` (so nothing that saves the settings
+    /// later can overwrite it, and the next load doesn't report it again) and the new-library
+    /// defaults are used; so are they when the file can't be read (it is left where it is).
+    pub fn load_checked(dir: &Path) -> (CatalogSettings, Option<String>) {
+        let file = dir.join(SETTINGS_FILE);
+        let bytes = match std::fs::read(&file) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (CatalogSettings::new_library(), None),
+            Err(e) => {
+                return (CatalogSettings::new_library(), Some(format!("{SETTINGS_FILE} couldn't be read ({e}); the defaults are used for now")));
+            }
+        };
+        let err = match serde_json::from_slice::<CatalogSettings>(&bytes) {
+            Ok(s) => return (s, None),
+            Err(e) => e,
+        };
+        let problem = match set_aside(&file) {
+            Ok(kept) => format!(
+                "{SETTINGS_FILE} is damaged ({err}). It was kept as {}, and the settings of a new library (backups on) are used",
+                kept.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+            ),
+            Err(w) => format!("{SETTINGS_FILE} is damaged ({err}) and couldn't be set aside ({w}); the settings of a new library are used"),
+        };
+        (CatalogSettings::new_library(), Some(problem))
     }
     pub fn save(&self, dir: &Path) -> Result<()> {
         let body = serde_json::to_vec_pretty(self).map_err(|e| CatalogError::Io(e.to_string()))?;
