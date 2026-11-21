@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Scripted imports say what they skipped
+- `library.import` now reports what its folder walk left out, `skipped: {unreadable, unsupported}`, as
+  `library.importPreview` already did, so a script or MCP client can tell a skipped file from a missing one (#4319).
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

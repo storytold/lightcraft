@@ -1,5 +1,5 @@
 use super::commit::{How, Plan, Slot, Transfer, commit_prepared, name_family, run_transfers, system_clock};
-use super::files::{Seen, expand, probe_all, reusable_probes, sidecars_of};
+use super::files::{Seen, expand_report, probe_all, reusable_probes, sidecars_of};
 use super::types::{FileFacts, ImportCandidate, ImportMode, ImportOptions, ImportReport, Kept, OnDeleted};
 use super::{HashMap, MediaKind, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
@@ -62,6 +62,8 @@ pub struct ImportJob {
 #[derive(Debug, Default)]
 pub struct Prepared {
     pub scanned: usize,
+    /// What [`ImportJob::prepare`]'s folder walk left out.
+    pub skipped: super::types::Skipped,
     pub(super) items: Vec<PreparedItem>,
 }
 
@@ -211,16 +213,23 @@ impl ImportJob {
     /// with the names and outcomes of one after another. Nothing in the catalog changes. Stops
     /// before the next file once `cancel` is set.
     pub fn prepare(&mut self, paths: &[String], cancel: &std::sync::atomic::AtomicBool) -> Prepared {
-        let files = self.expand(paths);
-        self.prepare_files(files, cancel)
+        let found = self.expand_report(paths);
+        let mut prepared = self.prepare_files(found.files, cancel);
+        prepared.skipped = super::types::Skipped { unreadable: found.unreadable, unsupported: found.unsupported };
+        prepared
     }
 
     /// Expand `paths` (folders recursively, the library's own folder skipped) into the files an
     /// import would handle; counted in [`ImportJob::total`].
     pub fn expand(&self, paths: &[String]) -> Vec<String> {
-        let files = expand(paths, self.lib_dir.as_deref());
-        self.total.fetch_add(files.len(), std::sync::atomic::Ordering::Relaxed);
-        files
+        self.expand_report(paths).files
+    }
+
+    /// [`ImportJob::expand`], with what the folder walk left out.
+    fn expand_report(&self, paths: &[String]) -> super::Expansion {
+        let found = expand_report(paths, self.lib_dir.as_deref(), crate::walk::Limits::default());
+        self.total.fetch_add(found.files.len(), std::sync::atomic::Ordering::Relaxed);
+        found
     }
 
     /// When the import started ([`Session::clock`]), for [`commit_prepared`].
@@ -256,7 +265,7 @@ impl ImportJob {
         let library = self.look_up_library();
         let opts = self.opts.clone();
         let mode = self.mode;
-        let mut out = Prepared { scanned: files.len(), items: Vec::new() };
+        let mut out = Prepared { scanned: files.len(), ..Default::default() };
         let mut todo = Vec::new();
         for f in files {
             match self.by_path.get(f.as_str()).copied() {
