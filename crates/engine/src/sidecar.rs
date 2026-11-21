@@ -1,43 +1,39 @@
-//! XMP sidecars: `<stem>.xmp` (default) or `<file>.xmp` next to the original.
+//! Sidecar handling: XMP packets embedded in files or written as sidecar files.
 //!
-//! **Write** ([`Session::save_sidecar`], `photo.saveMetadataToFile`, or automatically after every
-//! change when [`XmpPrefs::auto_write`] is on): rating, colour label, title, caption, copyright,
-//! creator, keywords, capture time and GPS in the standard namespaces, plus our complete develop
-//! settings (`lc:settings`, JSON), the pick/reject flag (`lc:flag`) and location (`lc:location`).
-//! A sidecar is written only beside an original that is an existing file at an absolute path;
-//! otherwise the save fails.
+//! This module deals with reading, writing and merging XMP metadata for photos. It handles both
+//! our own `lc:` namespace and the interoperable `crs:` namespace used by Adobe Camera Raw /
+//! Lightroom and other raw developers.
 //!
-//! An existing sidecar is never replaced wholesale (issue #92): LightCraft's properties
-//! ([`OWNED`], [`OWNED_IF_STATED`]) are merged into it ([`lightcraft_meta::merge_xmp`]) and
-//! everything else — another editor's `crs:` develop settings, `xmpMM` history, unknown
-//! namespaces — is kept byte for byte. A sidecar that can't be read as XMP is first copied to
-//! `<name>.xmp.bak-<time>` (never overwritten), then replaced. Writes are atomic (temp file,
-//! fsync, rename).
+//! A sidecar is named after its original ([`sidecar_path`], [`find_sidecar`]) under the library's
+//! naming. With stem naming `IMG_0001.CR3` and `IMG_0001.JPG` map to the same `IMG_0001.xmp`: it
+//! belongs to one of them (a raw first, else the first by file name, [`StemOwners`]) and the
+//! others read and write `<file>.xmp`; an import ranks the files it is adding the same way
+//! ([`ImportStems`], issue #1905). Reading prefers a sidecar over XMP embedded in the file
+//! ([`read_packet`]), and writing needs the original to be an existing file at an absolute path
+//! ([`Session::save_sidecar`]).
 //!
-//! **Shared names** (Stem naming): `IMG_0001.CR3` and `IMG_0001.JPG` would share `IMG_0001.xmp`.
-//! When two catalogued files map to one stem sidecar, it belongs to one of them (a raw first, then
-//! the first by file name — [`Session::sidecar_naming`]); the others use `<file>.xmp`
-//! (`IMG_0001.JPG.xmp`) for writing and reading, so neither overwrites the other. An import ranks
-//! the files it is adding against the library the same way ([`ImportStems`]): a JPEG or a TIFF
-//! arriving beside its raw's `IMG_0001.xmp` reads its own `<file>.xmp`, never the raw's packet
-//! (issue #1905).
+//! Writing never replaces a sidecar wholesale: an existing packet is merged into, so every
+//! property LightCraft does not own is kept byte for byte (issue #92). A file that cannot be read
+//! as XMP is copied to `<name>.bak-<stamp>` before it is replaced; one that can be read but not
+//! merged fails the save and is left as it is. The result is written atomically (a temp file,
+//! synced, renamed over the sidecar).
 //!
-//! **Read** (on import, and `photo.readMetadataFromFile`): the sidecar wins for metadata, except
-//! the capture time: a time embedded in the file wins, and the sidecar's (`exif:DateTimeOriginal`,
-//! else `photoshop:DateCreated`, else `xmp:CreateDate`) fills in only when the file has none; develop
-//! settings are restored from `lc:settings` when present, else mapped from interoperable `crs:`
-//! fields ([`crate::crs`]). For raw/DNG files without a sidecar the file's embedded XMP is used.
-//! Manual reads also accept the first complete standard XMP APP1 in a bounded JPEG header (see `read_jpeg_xmp`).
+//! With [`XmpPrefs::write_crs`] on, a save also writes our edit into the packet's `crs:` fields
+//! (issue #934): global fields as attributes of the `rdf:Description` that declares the CRS
+//! namespace, local corrections as attributes of the matching `crs:` correction, each updated in
+//! place where it exists and only when it differs from the packet's previous `lc:settings`.
+//! Fields LightCraft does not state keep the other application's value.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use lightcraft_catalog::{ColorLabel, Flag, MediaKind, Op, Photo, PhotoId, Source};
-use lightcraft_develop::DevelopSettings;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use lightcraft_catalog::{ColorLabel, Flag, MediaKind, Op, Photo, PhotoId, Source};
+use lightcraft_develop::DevelopSettings;
 
 use crate::{EngineError, Result, Session};
 
@@ -59,6 +55,10 @@ pub struct XmpPrefs {
     /// Write the sidecar after every change to a photo's metadata or develop settings.
     pub auto_write: bool,
     pub naming: SidecarNaming,
+    /// Write `crs:` develop fields back into the sidecar so other applications see the edits.
+    /// Off by default to avoid overwriting another application's values on unrelated saves.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub write_crs: bool,
 }
 
 /// The sidecar path for an original, by naming convention.
@@ -761,6 +761,1205 @@ fn backup(path: &Path, stamp: &str) -> std::io::Result<PathBuf> {
     Err(std::io::Error::other("no free backup name"))
 }
 
+/// Escape text for an XMP attribute value. The values written here are numbers, so
+/// this is a safeguard rather than a feature.
+fn escape_attr(v: &str) -> String {
+    v.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
+}
+
+/// Index of the `>` closing the tag that starts at `start`, respecting quoted
+/// attribute values (a `>` inside quotes does not end the tag), or `None` when
+/// the tag is not closed.
+fn tag_end(data: &str, start: usize) -> Option<usize> {
+    let bytes = data.as_bytes();
+    let mut quote: Option<u8> = None;
+    let mut i = start;
+    while i < data.len() {
+        let b = *bytes.get(i)?;
+        match quote {
+            Some(q) if b == q => quote = None,
+            None if b == b'"' || b == b'\'' => quote = Some(b),
+            None if b == b'>' => return Some(i),
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Whether the tag ending at `end` (index of `>`) is self-closing: the last
+/// non-whitespace byte before `>` is `/`.
+fn is_self_closing(data: &str, end: usize) -> bool {
+    data.get(..end).is_some_and(|s| s.trim_end().ends_with('/'))
+}
+
+/// The `crs:` namespace URI (Adobe Camera Raw Settings). Fields are matched by this URI,
+/// never by the literal `crs:` prefix: a packet may bind it under any prefix (`acr:` …).
+const CRS_NS: &str = "http://ns.adobe.com/camera-raw-settings/1.0/";
+
+/// The attributes of the tag starting at `start` (the `<`) and ending at `end` (the `>`):
+/// each entry is the attribute name span and the value span (quotes excluded) when present.
+fn tag_attrs(data: &str, start: usize, end: usize) -> Vec<((usize, usize), Option<(usize, usize)>)> {
+    let mut out = Vec::new();
+    let bytes = data.as_bytes();
+    let mut i = start + 1; // skip `<`
+    // skip the tag name
+    while i < end && matches!(bytes.get(i), Some(b) if !b.is_ascii_whitespace() && *b != b'=' && *b != b'/') {
+        i += 1;
+    }
+    while i < end {
+        while i < end && matches!(bytes.get(i), Some(b) if b.is_ascii_whitespace() || *b == b'/') {
+            i += 1;
+        }
+        if i >= end {
+            break;
+        }
+        let name_start = i;
+        while i < end && matches!(bytes.get(i), Some(b) if !b.is_ascii_whitespace() && *b != b'=' && *b != b'/') {
+            i += 1;
+        }
+        let name = (name_start, i);
+        let mut eq = i;
+        while eq < end && matches!(bytes.get(eq), Some(b) if b.is_ascii_whitespace()) {
+            eq += 1;
+        }
+        let value = if eq < end && bytes.get(eq) == Some(&b'=') {
+            i = eq + 1;
+            while i < end && matches!(bytes.get(i), Some(b) if b.is_ascii_whitespace()) {
+                i += 1;
+            }
+            let quote = bytes.get(i).copied();
+            match quote {
+                Some(b'"') | Some(b'\'') => {
+                    i += 1; // skip opening quote
+                    let vstart = i;
+                    while i < end && bytes.get(i).copied() != quote {
+                        i += 1;
+                    }
+                    let ve = i; // index of the closing quote (or `end`)
+                    if i < end {
+                        i += 1; // skip closing quote
+                    }
+                    Some((vstart, ve))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        out.push((name, value));
+    }
+    out
+}
+
+/// The `xmlns` bindings in scope at the tag at `start..=end` (prefix → URI; the empty prefix is
+/// a default `xmlns="..."` declaration): the bindings of still-open ancestor elements, then the
+/// tag's own. An inner declaration shadows an outer one for the same prefix, so each prefix
+/// resolves to exactly one effective in-scope URI.
+fn ns_bindings(data: &str, start: usize, end: usize) -> Vec<(String, String)> {
+    let mut out = outer_bindings(data, start);
+    for (prefix, uri) in own_bindings(data, start, end) {
+        if let Some(p) = out.iter().rposition(|(e, _)| e.as_str() == prefix.as_str()) {
+            out.remove(p);
+        }
+        out.push((prefix, uri));
+    }
+    out
+}
+
+/// The `xmlns` declarations of the elements still open at `at`, in document order: a start tag's
+/// declarations are added when it opens and removed when its matching end tag is passed, so
+/// declarations from closed elements do not leak into later scope. End tags, comments, CDATA
+/// sections and processing instructions are passed over; self-closing tags bind only within
+/// themselves.
+fn outer_bindings(data: &str, at: usize) -> Vec<(String, String)> {
+    // One frame per still-open element: the bindings it declared, each paired with the binding
+    // that was in effect for the same prefix when it opened (`None` when the prefix was
+    // undeclared), so closing the element restores the previous binding.
+    let mut stack: Vec<Vec<(String, String, Option<(String, String)>)>> = Vec::new();
+    let mut effective: Vec<(String, String)> = Vec::new();
+    let mut i = 0;
+    while i < at {
+        let Some(rel) = data.get(i..at).and_then(|s| s.find('<')) else { break };
+        let s = i + rel;
+        let rest = data.get(s..).unwrap_or_default();
+        // A comment's or CDATA section's `>` does not close a tag: skip them whole before
+        // tag_end, so a `>` inside them does not end the namespace scan early and drop a
+        // later ancestor's xmlns declaration.
+        if rest.starts_with("<!--") {
+            if let Some(rel) = data[i..].find("-->") {
+                i += rel + 3;
+            } else {
+                break;
+            }
+            continue;
+        }
+        if rest.starts_with("<![CDATA[") {
+            if let Some(rel) = data[i..].find("]]>") {
+                i += rel + 3;
+            } else {
+                break;
+            }
+            continue;
+        }
+        // A processing instruction ends at `?>`, not at the first `>`: its text may contain
+        // `>` (for example `<?p > <fake ...> ?>`), and tag_end would stop there and scan the
+        // PI's inner text as ancestor tags.
+        if rest.starts_with("<?") {
+            if let Some(rel) = data[s..at].find("?>") {
+                i = s + rel + 2;
+            } else {
+                break;
+            }
+            continue;
+        }
+        let Some(end) = tag_end(data, s).filter(|end| *end < at) else { break };
+        i = end + 1;
+        if rest.starts_with("</") {
+            if let Some(frame) = stack.pop() {
+                for (prefix, _, previous) in frame.into_iter().rev() {
+                    if let Some(p) = effective.iter().rposition(|(e, _)| e.as_str() == prefix.as_str()) {
+                        effective.remove(p);
+                    }
+                    if let Some((p, uri)) = previous {
+                        effective.push((p, uri));
+                    }
+                }
+            }
+            continue;
+        }
+        if rest.starts_with("<!") {
+            // tag_end already moved i past the closing '>'; advancing again
+            // would skip the following tag and its xmlns declarations.
+            continue;
+        }
+        // A self-closing tag's declarations apply only inside the tag itself, so they do not
+        // persist past its `>`.
+        if is_self_closing(data, end) {
+            continue;
+        }
+        let bindings = own_bindings(data, s, end);
+        let mut frame = Vec::with_capacity(bindings.len());
+        for (prefix, uri) in bindings {
+            let previous = effective.iter().rposition(|(e, _)| e.as_str() == prefix.as_str()).map(|p| effective.remove(p));
+            effective.push((prefix.clone(), uri.clone()));
+            frame.push((prefix, uri, previous));
+        }
+        stack.push(frame);
+    }
+    effective
+}
+
+/// The `xmlns` bindings the tag at `start..=end` declares itself (prefix → URI; the empty prefix
+/// is a default `xmlns="..."` declaration).
+fn own_bindings(data: &str, start: usize, end: usize) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for ((ns, ne), value) in tag_attrs(data, start, end) {
+        let name = data.get(ns..ne).unwrap_or_default();
+        let (is_decl, prefix) = if let Some(p) = name.strip_prefix("xmlns:") {
+            (true, p.to_string())
+        } else if name == "xmlns" {
+            (true, String::new())
+        } else {
+            (false, String::new())
+        };
+        if is_decl && let Some((vs, ve)) = value {
+            out.push((prefix, data.get(vs..ve).unwrap_or_default().to_string()));
+        }
+    }
+    out
+}
+
+/// Value range of attribute `prefix:name` (any `prefix` bound to the CRS namespace) on the
+/// `rdf:Description` tag at `start..end`, handling single or double quotes and whitespace
+/// around `=`. Outer `None`: attribute absent. `Some(None)`: present but malformed, so no
+/// duplicate is inserted alongside it. The update keeps whatever prefix the packet uses.
+fn attr_value_range(data: &str, start: usize, end: usize, name: &str) -> Option<Option<(usize, usize)>> {
+    let bindings = ns_bindings(data, start, end);
+    let is_crs = |prefix: &str| bindings.iter().any(|(p, uri)| p == prefix && uri == CRS_NS);
+    for ((ns, ne), value) in tag_attrs(data, start, end) {
+        let attr_name = data.get(ns..ne).unwrap_or_default();
+        let (prefix, local) = attr_name.split_once(':').unwrap_or(("", attr_name));
+        if is_crs(prefix) && local == name {
+            return Some(value);
+        }
+    }
+    None
+}
+
+/// Collect all direct-child `rdf:Description` elements of `rdf:RDF` (or all
+/// top-level descriptions if no `rdf:RDF`). Returns a vector of `(tag_start, tag_end)`
+/// where `tag_end` is the index of `>`. Nested descriptions are skipped.
+#[allow(clippy::cognitive_complexity)]
+fn global_descriptions(data: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let first_desc = || data.find("<rdf:Description").and_then(|s| tag_end(data, s).map(|e| (s, e)));
+    let Some(rdf) = data.find("<rdf:RDF") else {
+        if let Some(d) = first_desc() {
+            out.push(d);
+        }
+        return out;
+    };
+    let Some(rdf_end) = tag_end(data, rdf) else {
+        if let Some(d) = first_desc() {
+            out.push(d);
+        }
+        return out;
+    };
+    let bytes = data.as_bytes();
+    let mut i = rdf_end;
+    while i < data.len() {
+        while i < data.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= data.len() {
+            break;
+        }
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let rest = data.get(i..).unwrap_or_default();
+        if rest.starts_with("</rdf:RDF>") {
+            break;
+        }
+        if rest.starts_with("<?") || rest.starts_with("<!") {
+            if rest.starts_with("<!--") {
+                if let Some(rel) = data[i..].find("-->") {
+                    i += rel + 3;
+                } else {
+                    break;
+                }
+            } else if rest.starts_with("<![CDATA[") {
+                if let Some(rel) = data[i..].find("]]>") {
+                    i += rel + 3;
+                } else {
+                    break;
+                }
+            } else if rest.starts_with("<?") {
+                // A processing instruction ends at `?>`, not at the first `>`: its text may
+                // contain `>` (for example `<?p > <fake ...> ?>`), and stopping at `>` would
+                // scan the PI's inner text as ancestor tags.
+                if let Some(rel) = data[i..].find("?>") {
+                    i += rel + 2;
+                } else {
+                    break;
+                }
+            } else {
+                if let Some(stripped) = rest.strip_prefix("<!") {
+                    if let Some(rel) = stripped.find('>') {
+                        i += 2 + rel + 1;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+            continue;
+        }
+        if rest.starts_with("<rdf:Description") {
+            if let Some(e) = tag_end(data, i) {
+                out.push((i, e));
+                // A self-closing description has no children and no close tag, so it
+                // cannot consume following siblings: move past it and keep scanning.
+                if is_self_closing(data, e) {
+                    i = e + 1;
+                    continue;
+                }
+                // Skip past this description's whole element so siblings are still considered.
+                let mut depth = 0usize;
+                let mut k = e + 1;
+                while k < data.len() {
+                    let Some(rel) = data[k..].find('<') else {
+                        k = data.len();
+                        break;
+                    };
+                    let s2 = k + rel;
+                    let rest2 = data.get(s2..).unwrap_or_default();
+                    if rest2.starts_with("</rdf:Description>") {
+                        if depth == 0 {
+                            k = s2 + "</rdf:Description>".len();
+                            break;
+                        }
+                        depth = depth.saturating_sub(1);
+                        k = s2 + "</rdf:Description>".len();
+                        continue;
+                    }
+                    if rest2.starts_with("<rdf:Description") {
+                        if let Some(e2) = tag_end(data, s2) {
+                            if !is_self_closing(data, e2) {
+                                depth += 1;
+                            }
+                            k = e2 + 1;
+                        } else {
+                            break;
+                        }
+                        continue;
+                    }
+                    if rest2.starts_with("<?") || rest2.starts_with("<!") {
+                        if rest2.starts_with("<!--") {
+                            if let Some(rel2) = data[s2..].find("-->") {
+                                k = s2 + rel2 + 3;
+                            } else {
+                                k = data.len();
+                                break;
+                            }
+                        } else if rest2.starts_with("<![CDATA[") {
+                            if let Some(rel2) = data[s2..].find("]]>") {
+                                k = s2 + rel2 + 3;
+                            } else {
+                                k = data.len();
+                                break;
+                            }
+                        } else if let Some(stripped) = rest2.strip_prefix("<?") {
+                            if let Some(rel2) = stripped.find("?>") {
+                                k = s2 + 2 + rel2 + 2;
+                            } else {
+                                k = data.len();
+                                break;
+                            }
+                        } else if let Some(rel2) = rest2[2..].find('>') {
+                            k = s2 + 2 + rel2 + 1;
+                        } else {
+                            k = data.len();
+                            break;
+                        }
+                        continue;
+                    }
+                    k = s2 + 1;
+                }
+                i = k;
+                continue;
+            }
+            break;
+        }
+        // Any other element opens first: descriptions after it are nested inside it.
+        break;
+    }
+    if out.is_empty()
+        && let Some(d) = first_desc()
+    {
+        out.push(d);
+    }
+    out
+}
+
+/// The start-tag range of the preferred global `rdf:Description` for inserting new
+/// `crs:` attributes: the first direct-child `rdf:Description` that declares the CRS
+/// namespace, or the first direct-child description if none declares it. Falls back to
+/// the first `rdf:Description` in the document when there is no `rdf:RDF`.
+/// Returns `(tag_start, tag_end)` where `end` is the index of `>`.
+fn global_description(data: &str) -> Option<(usize, usize)> {
+    let descs = global_descriptions(data);
+    for (start, end) in &descs {
+        if is_crs_description(data, *start, *end) {
+            return Some((*start, *end));
+        }
+    }
+    descs.first().copied()
+}
+
+fn is_crs_description(data: &str, start: usize, end: usize) -> bool {
+    ns_bindings(data, start, end).iter().any(|(_, uri)| uri == CRS_NS)
+}
+
+/// Update an existing `crs:name` field in place and report whether one was found: as an
+/// attribute of any direct-child `rdf:Description` of `rdf:RDF`, or as an element
+/// `<prefix:name>value</prefix:name>` inside it where `prefix` is bound to the CRS
+/// namespace. Returns `true` for a malformed occurrence too, so a duplicate is not inserted
+/// alongside it. Only direct-child descriptions are written: a matching attribute or
+/// element on a nested structured-property description is left alone, and a match under a
+/// non-`crs:` prefix is updated in place under that prefix rather than duplicated.
+fn update_existing_crs(data: &mut String, name: &str, value: &str) -> bool {
+    let descs = global_descriptions(data);
+    for (gstart, gend) in descs {
+        // Attribute form on this global description.
+        if let Some(found) = attr_value_range(data, gstart, gend, name) {
+            if let Some((vs, ve)) = found {
+                data.replace_range(vs..ve, &escape_attr(value));
+            }
+            return true;
+        }
+        // Element form inside this global description.
+        let content_start = gend + 1;
+        // Find the matching close of this description, not the first nested one.
+        let mut close_depth = 0usize;
+        let mut search_to = data.len();
+        let mut i = content_start;
+        while i < data.len() {
+            let Some(rel) = data[i..].find('<') else {
+                break;
+            };
+            let s = i + rel;
+            let rest = data.get(s..).unwrap_or_default();
+            if rest.starts_with("</rdf:Description>") {
+                if close_depth == 0 {
+                    search_to = s;
+                    break;
+                }
+                close_depth = close_depth.saturating_sub(1);
+                i = s + "</rdf:Description>".len();
+                continue;
+            }
+            if rest.starts_with("<rdf:Description") {
+                if let Some(e) = tag_end(data, s) {
+                    if !is_self_closing(data, e) {
+                        close_depth += 1;
+                    }
+                    i = e + 1;
+                } else {
+                    break;
+                }
+                continue;
+            }
+            if rest.starts_with("<?") {
+                if let Some(rel) = data[s..].find("?>") {
+                    i = s + rel + 2;
+                } else {
+                    break;
+                }
+                continue;
+            }
+            if rest.starts_with("<!--") {
+                if let Some(rel) = data[s..].find("-->") {
+                    i = s + rel + 3;
+                } else {
+                    break;
+                }
+                continue;
+            }
+            if rest.starts_with("<![CDATA[") {
+                if let Some(rel) = data[s..].find("]]>") {
+                    i = s + rel + 3;
+                } else {
+                    break;
+                }
+                continue;
+            }
+            if let Some(stripped) = rest.strip_prefix("<!") {
+                if let Some(rel) = stripped.find('>') {
+                    i = s + 2 + rel + 1;
+                } else {
+                    break;
+                }
+                continue;
+            }
+            i = s + 1;
+        }
+        let mut from = content_start;
+        let mut depth = 0usize;
+        while let Some(rel) = data[from..search_to].find('<') {
+            let s = from + rel;
+            let rest = data.get(s..search_to).unwrap_or_default();
+            if rest.starts_with("</") {
+                depth = depth.saturating_sub(1);
+                from = s + 2;
+                continue;
+            }
+            if rest.starts_with("<?") {
+                // A processing instruction ends at `?>`, not at the first `>`: its text may
+                // contain `>` (for example `<?p > <fake ...> ?>`), and stopping at `>` would
+                // scan the PI's inner text as tags.
+                if let Some(rel2) = data[s..search_to].find("?>") {
+                    from = s + rel2 + 2;
+                } else {
+                    break;
+                }
+                continue;
+            }
+            if let Some(stripped) = rest.strip_prefix("<!") {
+                if let Some(rel2) = stripped.find('>') {
+                    from = s + 2 + rel2 + 1;
+                } else {
+                    break;
+                }
+                continue;
+            }
+            let Some(b) = rest.as_bytes().get(1) else {
+                from = s + 1;
+                continue;
+            };
+            if !b.is_ascii_alphabetic() {
+                from = s + 1;
+                continue;
+            }
+            let mut k = s + 1;
+            while k < search_to {
+                let b = data.as_bytes()[k];
+                if b.is_ascii_whitespace() || b == b'>' || b == b'/' || b == b'=' {
+                    break;
+                }
+                k += 1;
+            }
+            let tag_name = data.get(s + 1..k).unwrap_or_default();
+            let (prefix, local) = tag_name.split_once(':').unwrap_or(("", tag_name));
+            if depth == 0 && local == name {
+                let Some(end) = tag_end(data, s) else { return true };
+                let bindings = ns_bindings(data, s, end);
+                if bindings.iter().any(|(p, uri)| p == prefix && uri == CRS_NS) {
+                    let escaped = escape_attr(value);
+                    if is_self_closing(data, end) {
+                        let mut slash = end;
+                        while slash > s + 1 && data.as_bytes()[slash - 1].is_ascii_whitespace() {
+                            slash -= 1;
+                        }
+                        if slash > s + 1 && data.as_bytes()[slash - 1] == b'/' {
+                            slash -= 1;
+                        }
+                        let attrs = data.get(s + 1 + tag_name.len()..slash).unwrap_or_default().trim_end();
+                        data.replace_range(s..end + 1, &format!("<{tag_name}{attrs}>{escaped}</{tag_name}>"));
+                        return true;
+                    }
+                    let close = format!("</{tag_name}>");
+                    let Some(rel) = data[end + 1..].find(&close) else { return true };
+                    data.replace_range(end + 1..end + 1 + rel, &escaped);
+                    return true;
+                }
+            }
+            let Some(end) = tag_end(data, s) else { return true };
+            if !is_self_closing(data, end) {
+                depth += 1;
+            }
+            from = end + 1;
+        }
+    }
+    false
+}
+
+/// Update the `crs:` attributes carried by the packet's descriptions in place, adding any
+/// that are missing. Only a `rdf:Description` that declares the `crs` namespace or already
+/// carries `crs:` attributes is used; if none exists, one is created with the namespace
+/// declared. Attribute form keeps each field to a single occurrence (an element
+/// would appear twice, as opening and closing tag), so the other application reads our edit
+/// in the same attribute it wrote its own. Everything else in the packet is kept byte for
+/// byte (issue #934).
+fn update_crs_attributes(data: &mut String, crs: &[(&'static str, String)]) {
+    for (name, value) in crs {
+        if !update_existing_crs(data, name, value) {
+            insert_crs_attribute(data, name, value);
+        }
+    }
+}
+
+/// Insert `crs:name="value"` into the `rdf:Description` that declares the `crs`
+/// namespace or already carries `crs:` attributes, creating such a block when
+/// none exists. It never inserts into an unrelated first block, where the
+/// `crs:` prefix may be unbound.
+fn insert_crs_attribute(data: &mut String, name: &str, value: &str) {
+    let Some((pos, end)) = global_description(data) else { return };
+    // Determine an effective CRS prefix on this description: prefer one already bound
+    // to CRS_NS, otherwise use a fresh prefix that doesn't conflict.
+    let bindings = ns_bindings(data, pos, end);
+    let prefix = bindings.iter().find(|(_, uri)| *uri == CRS_NS).map(|(p, _)| p.as_str()).unwrap_or("crs");
+    let attr = format!(" {prefix}:{name}=\"{}\"", escape_attr(value));
+    // For a self-closing tag the `/` must immediately precede `>`, so the new
+    // attribute goes before the `/`, not before the `>`. Scan back from `>` over
+    // whitespace to find the `/`; a slash inside a quoted attribute value (such as
+    // the `xmlns:crs` URL ending in `1.0/`) must not be mistaken for it.
+    let insert_at = if is_self_closing(data, end) {
+        let mut i = end;
+        while i > pos && data.as_bytes()[i - 1].is_ascii_whitespace() {
+            i -= 1;
+        }
+        i - 1
+    } else {
+        end
+    };
+    // Bind the CRS prefix on the block when it doesn't already bind it, so the
+    // inserted attribute stays valid.
+    if !bindings.iter().any(|(p, uri)| p == prefix && *uri == CRS_NS) {
+        data.insert_str(insert_at, &format!(" xmlns:{prefix}=\"{CRS_NS}\""));
+    }
+    data.insert_str(insert_at, &attr);
+}
+
+/// The prefix under which the CRS namespace is bound in `data` (the first `xmlns`
+/// declaration binding it), or `crs` when none is declared. Corrections inherit the packet's
+/// binding, so this is the prefix to write mask fields under.
+fn crs_prefix(data: &str) -> String {
+    if let Some(s) = data.find("<rdf:Description")
+        && let Some(end) = tag_end(data, s)
+    {
+        for (p, uri) in ns_bindings(data, s, end) {
+            if uri == CRS_NS {
+                return p;
+            }
+        }
+    }
+    "crs".to_string()
+}
+
+/// Read a numeric attribute from a tag, if present and valid.
+fn attr_f64(data: &str, start: usize, end: usize, name: &str) -> Option<f64> {
+    let found = attr_value_range(data, start, end, name)?;
+    let (vs, ve) = found?;
+    data.get(vs..ve)?.trim().parse::<f64>().ok().filter(|v| v.is_finite())
+}
+
+/// The nested mask-component descriptions inside a correction tag, in document order.
+fn mask_component_descriptions(data: &str, _corr_start: usize, corr_end: usize) -> Vec<(usize, usize)> {
+    let content_start = corr_end + 1;
+    let mut close = data.len();
+    let mut depth = 0usize;
+    let mut i = content_start;
+    while i < data.len() {
+        let Some(rel) = data[i..].find('<') else {
+            break;
+        };
+        let s = i + rel;
+        let rest = data.get(s..).unwrap_or_default();
+        if rest.starts_with("</rdf:Description>") {
+            if depth == 0 {
+                close = s;
+                break;
+            }
+            depth = depth.saturating_sub(1);
+            i = s + "</rdf:Description>".len();
+            continue;
+        }
+        if rest.starts_with("<rdf:Description") {
+            if let Some(e) = tag_end(data, s) {
+                if !is_self_closing(data, e) {
+                    depth += 1;
+                }
+                i = e + 1;
+            } else {
+                break;
+            }
+            continue;
+        }
+        i = s + 1;
+    }
+    let mut out = Vec::new();
+    let mut i = content_start;
+    while i < close {
+        let Some(rel) = data[i..close].find('<') else {
+            break;
+        };
+        let s = i + rel;
+        let rest = data.get(s..close).unwrap_or_default();
+        if rest.starts_with("<rdf:Description") {
+            if let Some(e) = tag_end(data, s) {
+                out.push((s, e));
+                i = e + 1;
+                continue;
+            }
+            break;
+        }
+        if rest.starts_with("<rdf:li") {
+            // A mask component can be stored directly on rdf:li (self-closing,
+            // e.g. <rdf:li crs:What="Mask/CircularGradient" .../>).
+            // A non-self-closing li wraps a nested rdf:Description, which is
+            // collected on its own above.
+            if let Some(e) = tag_end(data, s) {
+                if is_self_closing(data, e) {
+                    out.push((s, e));
+                } else {
+                    // Non-self-closing <rdf:li>: find its closing tag and
+                    // collect the nested rdf:Description inside it.
+                    let mut li_depth = 1;
+                    let mut k = e + 1;
+                    while k < close && li_depth > 0 {
+                        let Some(rel2) = data[k..close].find('<') else { break };
+                        let s2 = k + rel2;
+                        let rest2 = data.get(s2..close).unwrap_or_default();
+                        if rest2.starts_with("</rdf:li>") {
+                            li_depth -= 1;
+                            if li_depth == 0 {
+                                break;
+                            }
+                            k = s2 + "</rdf:li>".len();
+                            continue;
+                        }
+                        if rest2.starts_with("<rdf:Description") {
+                            if let Some(e2) = tag_end(data, s2) {
+                                if !is_self_closing(data, e2) {
+                                    li_depth += 1;
+                                }
+                                k = e2 + 1;
+                                continue;
+                            }
+                            break;
+                        }
+                        if rest2.starts_with("<rdf:li") {
+                            if let Some(e2) = tag_end(data, s2) {
+                                if !is_self_closing(data, e2) {
+                                    li_depth += 1;
+                                }
+                                k = e2 + 1;
+                                continue;
+                            }
+                            break;
+                        }
+                        k = s2 + 1;
+                    }
+                }
+                i = e + 1;
+                continue;
+            }
+        }
+        i = s + 1;
+    }
+    out
+}
+
+/// Extract the Mask.id from a correction tag, if present.
+/// Returns the id from the crs:MaskId attribute on the correction tag itself, or None.
+fn correction_mask_id(data: &str, corr_start: usize, corr_end: usize) -> Option<u32> {
+    if let Some(found) = attr_value_range(data, corr_start, corr_end, "MaskId")
+        && let Some((vs, ve)) = found
+        && let Ok(id) = data.get(vs..ve)?.trim().parse::<u32>()
+    {
+        return Some(id);
+    }
+    None
+}
+
+/// Whether the tag at `start..end` is a `crs:` correction: it carries `What="Correction"`
+/// (or, as a fallback, a `CorrectionAmount` attribute) under the CRS namespace prefix. The
+/// prefix is resolved from the tag's `xmlns:` declarations, so corrections bound under another
+/// prefix are recognised too.
+fn is_correction(data: &str, start: usize, end: usize) -> bool {
+    let bindings = ns_bindings(data, start, end);
+    let is_crs = |attr_prefix: &str| bindings.iter().any(|(p, uri)| p == attr_prefix && uri == CRS_NS);
+    for ((ns, ne), value) in tag_attrs(data, start, end) {
+        let attr_name = data.get(ns..ne).unwrap_or_default();
+        let (attr_prefix, local) = attr_name.split_once(':').unwrap_or(("", attr_name));
+        if !is_crs(attr_prefix) || (local != "What" && local != "CorrectionAmount") {
+            continue;
+        }
+        let Some((vs, ve)) = value else { continue };
+        let val = data.get(vs..ve).unwrap_or_default();
+        if (local == "What" && val == "Correction") || (local == "CorrectionAmount" && !val.is_empty()) {
+            return true;
+        }
+    }
+    false
+}
+
+/// The start-tag ranges of the `crs:` corrections in `data`, in document order. Corrections
+/// are matched anywhere under `rdf:RDF` (they are normally nested inside
+/// `crs:MaskGroupBasedCorrections` > `rdf:Seq` > `rdf:li`), not only as direct children of
+/// `rdf:RDF`. Corrections are matched to the photo's masks by Mask.id, so their identity,
+/// count and order are preserved.
+fn correction_descriptions(data: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let Some(rdf) = data.find("<rdf:RDF") else { return out };
+    let Some(rdf_end) = tag_end(data, rdf) else { return out };
+    let bytes = data.as_bytes();
+    let mut i = rdf_end;
+    let mut depth: usize = 0;
+    while i < data.len() {
+        while i < data.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= data.len() {
+            break;
+        }
+        if data.get(i..).is_some_and(|r| r.starts_with("</rdf:RDF>")) {
+            break;
+        }
+        let rest = data.get(i..).unwrap_or_default();
+        if rest.starts_with("<!--") {
+            if let Some(rel) = data[i..].find("-->") {
+                i += rel + 3;
+            } else {
+                break;
+            }
+            continue;
+        }
+        if rest.starts_with("<![CDATA[") {
+            if let Some(rel) = data[i..].find("]]>") {
+                i += rel + 3;
+            } else {
+                break;
+            }
+            continue;
+        }
+        if rest.starts_with("<?") {
+            if let Some(rel) = data[i..].find("?>") {
+                i += rel + 2;
+            } else {
+                break;
+            }
+            continue;
+        }
+        if rest.starts_with("<!") {
+            if let Some(rel) = data[i + 2..].find('>') {
+                i += 2 + rel + 1;
+            } else {
+                break;
+            }
+            continue;
+        }
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let rest = data.get(i..).unwrap_or_default();
+        if let Some(closing) = rest.strip_prefix("</") {
+            depth = depth.saturating_sub(1);
+            if let Some(rel) = closing.find('>') {
+                i += 2 + rel + 1;
+            } else {
+                break;
+            }
+            continue;
+        }
+        let Some(b) = rest.as_bytes().get(1) else {
+            i += 1;
+            continue;
+        };
+        if !b.is_ascii_alphabetic() {
+            i += 1;
+            continue;
+        }
+        let Some(end) = tag_end(data, i) else { break };
+        if rest.starts_with("<rdf:Description") && is_correction(data, i, end) {
+            out.push((i, end));
+        }
+        if !is_self_closing(data, end) {
+            depth += 1;
+        } else if rest.starts_with("<rdf:Description") {
+            // self-closing rdf:Description: depth unchanged
+        }
+        i = end + 1;
+    }
+    out
+}
+
+/// Update `prefix:name` on the tag at `start..end`, inserting it when absent. The packet's
+/// own prefix is kept; nothing is inserted when the attribute is already malformed. Existing
+/// fields are matched by namespace URI, so a `crs:` field bound under another prefix (such as
+/// `acr:`) is updated in place under that prefix rather than duplicated.
+fn put_attr_on_tag(data: &mut String, start: usize, end: usize, prefix: &str, name: &str, value: &str) -> bool {
+    let bindings = ns_bindings(data, start, end);
+    let is_crs = |attr_prefix: &str| bindings.iter().any(|(p, uri)| p == attr_prefix && *uri == CRS_NS);
+    // Find an effective CRS prefix on this tag (one bound to CRS_NS), preferring the
+    // passed prefix if it's bound to CRS_NS here.
+    let effective_prefix = bindings.iter().find(|(_, uri)| *uri == CRS_NS).map(|(p, _)| p.as_str()).unwrap_or(prefix);
+    for ((ns, ne), value_range) in tag_attrs(data, start, end) {
+        let attr_name = data.get(ns..ne).unwrap_or_default();
+        let (attr_prefix, local) = attr_name.split_once(':').unwrap_or(("", attr_name));
+        if is_crs(attr_prefix) && local == name {
+            if let Some((vs, ve)) = value_range {
+                data.replace_range(vs..ve, &escape_attr(value));
+            }
+            return true;
+        }
+    }
+    let insert_at = if is_self_closing(data, end) {
+        let mut i = end;
+        while i > start && data.as_bytes()[i - 1].is_ascii_whitespace() {
+            i -= 1;
+        }
+        i - 1
+    } else {
+        end
+    };
+    data.insert_str(insert_at, &format!(" {effective_prefix}:{name}=\"{}\"", escape_attr(value)));
+    true
+}
+
+/// Write back local-correction changes to the existing `crs:` corrections in `data`.
+/// Corrections are matched to the photo's masks by Mask.id and updated in place
+/// (`CorrectionAmount` and the `crs:Local*` sliders); their identity, count and order are
+/// preserved: no correction is added, removed or reordered. Only fields that differ from
+/// `previous` are written, so a foreign correction we did not edit is left alone.
+fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &DevelopSettings, prefix: &str, aspect: f64) {
+    let masks = &settings.masks;
+    let prev_masks = &previous.masks;
+    if masks.is_empty() || prev_masks.is_empty() {
+        return;
+    }
+    let corrections = correction_descriptions(data);
+    if corrections.is_empty() {
+        return;
+    }
+
+    // Match each correction to a mask by Mask.id, falling back to document order for
+    // corrections without one.
+    let mask_ids = match_corrections_to_masks(data, &corrections, masks);
+
+    // Process corrections in reverse document order so that lengthening a
+    // correction doesn't move the offsets of corrections we haven't processed yet.
+    for (corr_idx, &(tag_start, mut corr_end)) in corrections.iter().enumerate().rev() {
+        let Some(mask_id) = mask_ids[corr_idx] else {
+            continue;
+        };
+        let Some(cur_mask) = masks.iter().find(|m| m.id == mask_id) else {
+            continue;
+        };
+        let Some(prev_mask) = prev_masks.iter().find(|m| m.id == mask_id) else {
+            continue;
+        };
+
+        corr_end = write_correction_slider_fields(data, tag_start, corr_end, prefix, cur_mask, prev_mask);
+        write_correction_components(data, tag_start, corr_end, prefix, aspect, cur_mask, prev_mask);
+    }
+}
+
+/// Match each `crs:` correction to a mask by Mask.id, falling back to document order for
+/// corrections without one. Returns, for each correction index, the mask id it writes to
+/// (`None` when there is no matching mask).
+fn match_corrections_to_masks(data: &str, corrections: &[(usize, usize)], masks: &[lightcraft_develop::Mask]) -> Vec<Option<u32>> {
+    // Build a map from MaskId to correction index (in document order).
+    // Corrections without a MaskId are matched by document order to masks
+    // that don't have a MaskId correction pointing to them.
+    let mut mask_id_to_corr_idx: HashMap<u32, usize> = HashMap::new();
+    let mut corr_idx_without_mask_id: Vec<usize> = Vec::new();
+    let mut mask_ids: Vec<Option<u32>> = vec![None; corrections.len()];
+    for (idx, &(tag_start, corr_end)) in corrections.iter().enumerate() {
+        if let Some(mask_id) = correction_mask_id(data, tag_start, corr_end) {
+            mask_id_to_corr_idx.insert(mask_id, idx);
+            mask_ids[idx] = Some(mask_id);
+        } else {
+            corr_idx_without_mask_id.push(idx);
+        }
+    }
+
+    // Determine which masks have a MaskId correction pointing to them.
+    let mut mask_has_correction = vec![false; masks.len()];
+    for (mask_idx, mask) in masks.iter().enumerate() {
+        if mask_id_to_corr_idx.contains_key(&mask.id) {
+            mask_has_correction[mask_idx] = true;
+        }
+    }
+
+    // For corrections without MaskId, match them to masks without a correction
+    // by document order (correction index order matches mask index order).
+    let mut mask_id_for_corr_idx: HashMap<usize, u32> = HashMap::new();
+    let mut mask_idx_iter = masks.iter().enumerate().filter(|(i, _)| !mask_has_correction[*i]).map(|(i, _)| i);
+    for corr_idx in corr_idx_without_mask_id {
+        if let Some(mask_idx) = mask_idx_iter.next() {
+            mask_id_for_corr_idx.insert(corr_idx, masks[mask_idx].id);
+            mask_ids[corr_idx] = Some(masks[mask_idx].id);
+        }
+    }
+    mask_ids
+}
+
+/// Write the simple `crs:` slider attributes of one correction that differ from the
+/// previous settings, in place, and return the tag's new end (the tag may have grown).
+fn write_correction_slider_fields(
+    data: &mut String,
+    tag_start: usize,
+    corr_end: usize,
+    prefix: &str,
+    cur_mask: &lightcraft_develop::Mask,
+    prev_mask: &lightcraft_develop::Mask,
+) -> usize {
+    // Practical epsilon for develop settings comparison (f64::EPSILON is too strict).
+    const EPS: f64 = 1e-6;
+    let a = &cur_mask.adjust;
+    let b = &prev_mask.adjust;
+    let mut corr_end = corr_end;
+    let fields = [
+        ("CorrectionAmount", a.amount / 100.0, b.amount / 100.0),
+        ("LocalExposure2012", a.exposure * 4.0, b.exposure * 4.0),
+        ("LocalContrast2012", a.contrast * 100.0, b.contrast * 100.0),
+        ("LocalHighlights2012", a.highlights * 100.0, b.highlights * 100.0),
+        ("LocalShadows2012", a.shadows * 100.0, b.shadows * 100.0),
+        ("LocalWhites2012", a.whites * 100.0, b.whites * 100.0),
+        ("LocalBlacks2012", a.blacks * 100.0, b.blacks * 100.0),
+        ("LocalTexture", a.texture * 100.0, b.texture * 100.0),
+        ("LocalClarity2012", a.clarity * 100.0, b.clarity * 100.0),
+        ("LocalDehaze", a.dehaze * 100.0, b.dehaze * 100.0),
+        ("LocalTemperature", a.temp * 100.0, b.temp * 100.0),
+        ("LocalTint", a.tint * 100.0, b.tint * 100.0),
+        ("LocalSaturation", a.saturation * 100.0, b.saturation * 100.0),
+        ("LocalSharpness", a.sharpness * 100.0, b.sharpness * 100.0),
+        ("LocalLuminanceNoise", a.noise * 100.0, b.noise * 100.0),
+        ("LocalMoire", a.moire * 100.0, b.moire * 100.0),
+        ("LocalDefringe", a.defringe * 100.0, b.defringe * 100.0),
+        ("LocalToningSaturation", a.color_sat * 100.0, b.color_sat * 100.0),
+        ("LocalToningHue", a.color_hue, b.color_hue),
+    ];
+    for (name, current, previous_value) in fields {
+        if (current - previous_value).abs() >= EPS {
+            put_attr_on_tag(data, tag_start, corr_end, prefix, name, &current.to_string());
+            corr_end = tag_end(data, tag_start).unwrap_or(corr_end);
+        }
+    }
+    corr_end
+}
+
+/// Write the mask-component attributes of one correction that differ from the previous
+/// settings, in place. Components are processed in document order; the accumulated length
+/// delta shifts the offsets of later components.
+fn write_correction_components(
+    data: &mut String,
+    tag_start: usize,
+    corr_end: usize,
+    prefix: &str,
+    aspect: f64,
+    cur_mask: &lightcraft_develop::Mask,
+    prev_mask: &lightcraft_develop::Mask,
+) {
+    let comp_tags = mask_component_descriptions(data, tag_start, corr_end);
+    let cur_comps =
+        serde_json::to_value(cur_mask).ok().and_then(|v| v.get("components").cloned()).and_then(|v| v.as_array().cloned()).unwrap_or_default();
+    let prev_comps =
+        serde_json::to_value(prev_mask).ok().and_then(|v| v.get("components").cloned()).and_then(|v| v.as_array().cloned()).unwrap_or_default();
+    let ncomp = cur_comps.len().min(prev_comps.len()).min(comp_tags.len());
+    if ncomp == 0 {
+        return;
+    }
+
+    // Process components in forward order. Earlier components come before later ones
+    // in the document, so length changes to earlier components shift later ones.
+    // We track the accumulated delta and apply it to subsequent components.
+    let mut length_delta: i64 = 0;
+    for j in 0..ncomp {
+        let cur = &cur_comps[j];
+        let prev = &prev_comps[j];
+        let cur_kind = cur.get("shape").and_then(|s| s.get("kind")).and_then(Value::as_str).unwrap_or("");
+        let prev_kind = prev.get("shape").and_then(|s| s.get("kind")).and_then(Value::as_str).unwrap_or("");
+        if cur_kind.is_empty() || cur_kind != prev_kind {
+            continue;
+        }
+        let len_before = data.len();
+        let (mut cstart, mut cend) = comp_tags[j];
+        cstart = (cstart as i64 + length_delta) as usize;
+        cend = (cend as i64 + length_delta) as usize;
+        let cur_comp_invert = cur.get("invert").and_then(Value::as_bool).unwrap_or(false);
+        let prev_comp_invert = prev.get("invert").and_then(Value::as_bool).unwrap_or(false);
+        let invert_changed = cur_comp_invert != prev_comp_invert;
+
+        cend = match cur_kind {
+            "radial" => write_radial_fields(data, cstart, cend, prefix, cur, prev, aspect),
+            "linear" => write_linear_fields(data, cstart, cend, prefix, cur, prev),
+            "luminanceRange" => write_luminance_range_fields(data, cstart, cend, prefix, cur, prev),
+            _ => cend,
+        };
+
+        // Write MaskInverted for all component kinds if it changed
+        if invert_changed {
+            put_attr_on_tag(data, cstart, cend, prefix, "MaskInverted", if cur_comp_invert { "true" } else { "false" });
+        }
+        length_delta += data.len() as i64 - len_before as i64;
+    }
+}
+
+/// Write the radial-gradient component fields that differ from the previous settings,
+/// in place, and return the component tag's new end.
+fn write_radial_fields(data: &mut String, cstart: usize, cend: usize, prefix: &str, cur: &Value, prev: &Value, aspect: f64) -> usize {
+    const EPS: f64 = 1e-6;
+    let cur_cx = cur["shape"]["center"]["x"].as_f64().unwrap_or(0.5);
+    let cur_cy = cur["shape"]["center"]["y"].as_f64().unwrap_or(0.5);
+    let cur_rx = cur["shape"]["rx"].as_f64().unwrap_or(0.1);
+    let cur_ry = cur["shape"]["ry"].as_f64().unwrap_or(0.1);
+    let cur_angle = cur["shape"]["angle"].as_f64().unwrap_or(0.0);
+    let cur_feather = cur["shape"]["feather"].as_f64().unwrap_or(50.0);
+    let cur_shape_invert = cur["shape"].get("invert").and_then(Value::as_bool).unwrap_or(false);
+    let prev_cx = prev["shape"]["center"]["x"].as_f64().unwrap_or(0.5);
+    let prev_cy = prev["shape"]["center"]["y"].as_f64().unwrap_or(0.5);
+    let prev_rx = prev["shape"]["rx"].as_f64().unwrap_or(0.1);
+    let prev_ry = prev["shape"]["ry"].as_f64().unwrap_or(0.1);
+    let prev_angle = prev["shape"]["angle"].as_f64().unwrap_or(0.0);
+    let prev_feather = prev["shape"]["feather"].as_f64().unwrap_or(50.0);
+    let prev_shape_invert = prev["shape"].get("invert").and_then(Value::as_bool).unwrap_or(false);
+    let scale = |a: f64| if a >= 1.0 { (1.0, 1.0 / a) } else { (a, 1.0) };
+    let (sx, sy) = scale(aspect);
+    let cur_left = (cur_cx - cur_rx / sx).clamp(0.0, 1.0);
+    let cur_right = (cur_cx + cur_rx / sx).clamp(0.0, 1.0);
+    let cur_top = (cur_cy - cur_ry / sy).clamp(0.0, 1.0);
+    let cur_bottom = (cur_cy + cur_ry / sy).clamp(0.0, 1.0);
+    let prev_left = (prev_cx - prev_rx / sx).clamp(0.0, 1.0);
+    let prev_right = (prev_cx + prev_rx / sx).clamp(0.0, 1.0);
+    let prev_top = (prev_cy - prev_ry / sy).clamp(0.0, 1.0);
+    let prev_bottom = (prev_cy + prev_ry / sy).clamp(0.0, 1.0);
+    let version = attr_f64(data, cstart, cend, "Version").unwrap_or(0.0);
+    let versionless = version < 2.0;
+    let to_feather = |f: f64| if versionless { (f * 2.0).clamp(0.0, 100.0) } else { f.clamp(0.0, 100.0) };
+    let mut cend = cend;
+    let pairs = [
+        ("Left", cur_left, prev_left),
+        ("Right", cur_right, prev_right),
+        ("Top", cur_top, prev_top),
+        ("Bottom", cur_bottom, prev_bottom),
+        ("Angle", cur_angle, prev_angle),
+        ("Feather", to_feather(cur_feather), to_feather(prev_feather)),
+    ];
+    for (name, cur_v, prev_v) in pairs {
+        if (cur_v - prev_v).abs() >= EPS {
+            put_attr_on_tag(data, cstart, cend, prefix, name, &cur_v.to_string());
+            cend = tag_end(data, cstart).unwrap_or(cend);
+        }
+    }
+    if cur_shape_invert != prev_shape_invert {
+        put_attr_on_tag(data, cstart, cend, prefix, "Flipped", if cur_shape_invert { "true" } else { "false" });
+        cend = tag_end(data, cstart).unwrap_or(cend);
+    }
+    cend
+}
+
+/// Write the linear-gradient component fields that differ from the previous settings,
+/// in place, and return the component tag's new end.
+fn write_linear_fields(data: &mut String, cstart: usize, cend: usize, prefix: &str, cur: &Value, prev: &Value) -> usize {
+    const EPS: f64 = 1e-6;
+    let cur_start_x = cur["shape"]["start"]["x"].as_f64().unwrap_or(0.5);
+    let cur_start_y = cur["shape"]["start"]["y"].as_f64().unwrap_or(0.0);
+    let cur_end_x = cur["shape"]["end"]["x"].as_f64().unwrap_or(0.5);
+    let cur_end_y = cur["shape"]["end"]["y"].as_f64().unwrap_or(1.0);
+    let prev_start_x = prev["shape"]["start"]["x"].as_f64().unwrap_or(0.5);
+    let prev_start_y = prev["shape"]["start"]["y"].as_f64().unwrap_or(0.0);
+    let prev_end_x = prev["shape"]["end"]["x"].as_f64().unwrap_or(0.5);
+    let prev_end_y = prev["shape"]["end"]["y"].as_f64().unwrap_or(1.0);
+    let mut cend = cend;
+    let pairs = [
+        ("FullX", cur_start_x, prev_start_x),
+        ("FullY", cur_start_y, prev_start_y),
+        ("ZeroX", cur_end_x, prev_end_x),
+        ("ZeroY", cur_end_y, prev_end_y),
+    ];
+    for (name, cur_v, prev_v) in pairs {
+        if (cur_v - prev_v).abs() >= EPS {
+            put_attr_on_tag(data, cstart, cend, prefix, name, &cur_v.to_string());
+            cend = tag_end(data, cstart).unwrap_or(cend);
+        }
+    }
+    cend
+}
+
+/// Write the luminance-range component fields that differ from the previous settings,
+/// in place, and return the component tag's new end.
+fn write_luminance_range_fields(data: &mut String, cstart: usize, cend: usize, prefix: &str, cur: &Value, prev: &Value) -> usize {
+    const EPS: f64 = 1e-6;
+    let cur_lo = cur["shape"]["lo"].as_f64().unwrap_or(0.0);
+    let cur_hi = cur["shape"]["hi"].as_f64().unwrap_or(1.0);
+    let cur_lo_f = cur["shape"]["lo_feather"].as_f64().unwrap_or(0.0);
+    let cur_hi_f = cur["shape"]["hi_feather"].as_f64().unwrap_or(0.0);
+    let prev_lo = prev["shape"]["lo"].as_f64().unwrap_or(0.0);
+    let prev_hi = prev["shape"]["hi"].as_f64().unwrap_or(1.0);
+    let prev_lo_f = prev["shape"]["lo_feather"].as_f64().unwrap_or(0.0);
+    let prev_hi_f = prev["shape"]["hi_feather"].as_f64().unwrap_or(0.0);
+    let inv = |r: f64| {
+        let y = r.clamp(0.0, 1.0) * 12.0 - 8.0;
+        2.0_f64.powf(y).powf(1.0 / 2.2).clamp(1e-4, 1.0)
+    };
+    let cur_open = cur_hi >= 1.0 - EPS;
+    let prev_open = prev_hi >= 1.0 - EPS;
+    let cur_a = (cur_lo - cur_lo_f).clamp(0.0, 1.0);
+    let cur_b = cur_lo.clamp(0.0, 1.0);
+    let cur_c = if cur_open { 1.0 } else { cur_hi.clamp(0.0, 1.0) };
+    let cur_d = if cur_open { 1.0 } else { (cur_hi + cur_hi_f).clamp(0.0, 1.0) };
+    let prev_a = (prev_lo - prev_lo_f).clamp(0.0, 1.0);
+    let prev_b = prev_lo.clamp(0.0, 1.0);
+    let prev_c = if prev_open { 1.0 } else { prev_hi.clamp(0.0, 1.0) };
+    let prev_d = if prev_open { 1.0 } else { (prev_hi + prev_hi_f).clamp(0.0, 1.0) };
+    let cur_vals = [inv(cur_a), inv(cur_b), inv(cur_c), inv(cur_d)];
+    let prev_vals = [inv(prev_a), inv(prev_b), inv(prev_c), inv(prev_d)];
+    if cur_vals.iter().zip(prev_vals.iter()).any(|(x, y)| (x - y).abs() >= EPS) {
+        let s = cur_vals.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
+        put_attr_on_tag(data, cstart, cend, prefix, "LumRange", &s);
+        // Refresh cend after writing LumRange in case the tag length changed
+        return tag_end(data, cstart).unwrap_or(cend);
+    }
+    cend
+}
+
 /// What [`Session::save_sidecar`] did.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SidecarSaved {
@@ -772,40 +1971,52 @@ pub struct SidecarSaved {
 }
 
 /// The new contents for the sidecar at `path`: `fresh` merged into the existing file, if any.
-/// Returns (contents, merged, backup).
-fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>)> {
+/// Returns (contents, merged, backup, previous_develop_settings).
+fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>, Option<DevelopSettings>)> {
     let bytes = match crate::read_file::read_regular(path, SIDECAR_READ_MAX) {
         Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((fresh, false, None)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((fresh, false, None, None)),
         // can't see what is there: never overwrite it blindly
         Err(e) => return Err(e),
     };
     if bytes.iter().all(u8::is_ascii_whitespace) {
-        return Ok((fresh, false, None));
+        return Ok((fresh, false, None, None));
     }
-    let rules = lightcraft_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
-    let why = match std::str::from_utf8(&bytes) {
-        Ok(old) => match lightcraft_meta::merge_xmp(old, &fresh, rules) {
-            Ok(merged) => return Ok((merged, true, None)),
-            // a readable sidecar whose merge fails (e.g. the merged packet exceeds the XMP limits), or one
-            // that is valid but over the parser's complexity limits: fail the save and keep the file
-            // as it is, rather than replace metadata that could be read
-            // (text with no `rdf:RDF` element parses as empty metadata but holds nothing to keep: it is replaced
-            // after a backup, as any sidecar that is not XMP)
-            Err(why)
-                if why == lightcraft_meta::XmpError::TooComplex
-                    || (lightcraft_meta::parse_xmp(old.strip_prefix('\u{feff}').unwrap_or(old)).is_ok()
-                        && !matches!(&why, lightcraft_meta::XmpError::Xml(m) if m.contains("no rdf:RDF element"))) =>
-            {
-                return Err(std::io::Error::other(format!("the sidecar is readable but could not be merged ({why}); it was left unchanged")));
-            }
-            Err(why) => why.to_string(),
-        },
-        Err(why) => why.to_string(),
+    let old_xmp = match std::str::from_utf8(&bytes) {
+        Ok(s) => s,
+        Err(_) => {
+            let b = backup(path, stamp)?;
+            log::warn!("{}: not readable as UTF-8; kept a copy as {} before replacing it", path.display(), b.display());
+            return Ok((fresh, false, Some(b), None));
+        }
     };
-    let b = backup(path, stamp)?;
-    log::warn!("{}: not readable as XMP ({why}); kept a copy as {} before replacing it", path.display(), b.display());
-    Ok((fresh, false, Some(b)))
+    // Extract previous lc:settings from the old sidecar before merging
+    let previous_develop = lightcraft_meta::parse_xmp(old_xmp)
+        .ok()
+        .and_then(|d| d.lc_settings)
+        .and_then(|j| serde_json::from_str::<Value>(&j).ok())
+        .and_then(|v| DevelopSettings::from_untrusted_json(&v).ok());
+    let rules = lightcraft_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
+    match lightcraft_meta::merge_xmp(old_xmp, &fresh, rules) {
+        Ok(merged) => Ok((merged, true, None, previous_develop)),
+        // a readable sidecar whose merge fails (e.g. the merged packet exceeds the XMP limits), or one
+        // that is valid but over the parser's complexity limits: fail the save and keep the file
+        // as it is, rather than replace metadata that could be read
+        // (text with no `rdf:RDF` element parses as empty metadata but holds nothing to keep: it is replaced
+        // after a backup, as any sidecar that is not XMP)
+        Err(why)
+            if why == lightcraft_meta::XmpError::TooComplex
+                || (lightcraft_meta::parse_xmp(old_xmp.strip_prefix('\u{feff}').unwrap_or(old_xmp)).is_ok()
+                    && !matches!(&why, lightcraft_meta::XmpError::Xml(m) if m.contains("no rdf:RDF element"))) =>
+        {
+            Err(std::io::Error::other(format!("the sidecar is readable but could not be merged ({why}); it was left unchanged")))
+        }
+        Err(why) => {
+            let b = backup(path, stamp)?;
+            log::warn!("{}: not readable as XMP ({why}); kept a copy as {} before replacing it", path.display(), b.display());
+            Ok((fresh, false, Some(b), None))
+        }
+    }
 }
 
 /// Key of the stem sidecar a file maps to (case-insensitive).
@@ -1168,7 +2379,42 @@ impl Session {
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
-        let (data, merged, backup) = sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)()).map_err(err)?;
+        let (mut data, merged, backup, previous_develop) = sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)()).map_err(err)?;
+        // Write the develop settings other applications understand as `crs:` fields back into
+        // their existing block, updating it in place so the next read from that application
+        // sees our edit instead of preferring our `lc:settings` over its stale `crs:` values
+        // (issue #934). Fields we don't state are left as the other application wrote them.
+        if self.xmp.write_crs {
+            // A fresh sidecar (no existing file) is LightCraft's own packet: compare against the
+            // defaults so its `crs:` fields are written. An existing sidecar with an `lc:settings`
+            // baseline: compare against it. An existing sidecar without a baseline: there is
+            // nothing to differ from, so write nothing and never overwrite a foreign value
+            // (issue #934).
+            let default = DevelopSettings::default();
+            let baseline = match (merged, &previous_develop) {
+                (false, _) => Some(&default),
+                (true, Some(p)) => Some(p),
+                (true, None) => None,
+            };
+            let crs = crate::crs::crs_settings(&p.develop, baseline);
+            if !crs.is_empty() {
+                // Write the develop settings other applications understand as `crs:` attributes back
+                // into the packet, updating them in place so the edit reaches the other application
+                // instead of being shadowed by our `lc:settings` (issue #934). Attribute form keeps
+                // each field to a single occurrence; element form would appear twice (opening and
+                // closing tag). Fields we don't state are left as the other application wrote them.
+                update_crs_attributes(&mut data, &crs);
+            }
+            // Write back local-correction (mask) changes to the existing `crs:` corrections in
+            // the packet, matched to our masks by order and updated in place
+            // (`CorrectionAmount` and the `crs:Local*` sliders). Corrections keep their identity,
+            // count and order; only fields that differ from the previous settings are written,
+            // so a foreign correction we did not edit is left alone.
+            let previous = previous_develop.as_ref().unwrap_or(&default);
+            let prefix = crs_prefix(&data);
+            let aspect = if p.width > 0 && p.height > 0 { p.width as f64 / p.height as f64 } else { crate::crs_masks::DEFAULT_ASPECT };
+            write_corrections(&mut data, &p.develop, previous, &prefix, aspect);
+        }
         write_atomic(&path, data.as_bytes()).map_err(err)?;
         self.note_sidecar_write(&path, data.as_bytes());
         Ok(SidecarSaved { path, merged, backup })
@@ -1497,10 +2743,14 @@ mod tests {
                     section.push(0);
                 }
             }
-            // a valid header: one RGB pixel, 8 bits
+            // the 26-byte header: one RGB, 8-bit pixel
             let mut p = b"8BPS\0\x01".to_vec();
-            p.resize(12, 0);
-            p.extend_from_slice(&[0, 3, 0, 0, 0, 1, 0, 0, 0, 1, 0, 8, 0, 3]);
+            p.extend_from_slice(&[0; 6]);
+            p.extend_from_slice(&3u16.to_be_bytes());
+            p.extend_from_slice(&1u32.to_be_bytes());
+            p.extend_from_slice(&1u32.to_be_bytes());
+            p.extend_from_slice(&8u16.to_be_bytes());
+            p.extend_from_slice(&3u16.to_be_bytes());
             p.extend_from_slice(&(colour as u32).to_be_bytes());
             p.resize(p.len() + colour, 0);
             p.extend_from_slice(&(section.len() as u32).to_be_bytes());
@@ -1640,7 +2890,7 @@ mod tests {
         let path = dir.join("a.xmp");
         std::fs::write(&path, "not xml at all").unwrap();
         let fresh = lightcraft_meta::write_xmp_lc(&lightcraft_meta::Metadata { rating: Some(3), ..Default::default() }, &[("settings", "{}")]);
-        let (data, merged, backup) = super::sidecar_contents(&path, fresh.clone(), "t").unwrap();
+        let (data, merged, backup, _) = super::sidecar_contents(&path, fresh.clone(), "t").unwrap();
         assert!(!merged && data == fresh);
         assert!(backup.is_some_and(|b| std::fs::read_to_string(b).unwrap() == "not xml at all"));
         std::fs::remove_dir_all(dir).unwrap();
@@ -1677,6 +2927,22 @@ mod tests {
         };
         let sc = super::parse_sidecar(&lightcraft_meta::write_xmp(&m, None), crate::crs::Target::Rendered).unwrap();
         assert_eq!(sc.keywords, Some(vec!["Places|Lisbon".to_string()]));
+    }
+
+    /// `crs_settings` returns only fields that differ from the previous settings.
+    #[test]
+    fn crs_settings_only_changed_fields() {
+        use lightcraft_develop::DevelopSettings;
+        let mut current = DevelopSettings::default();
+        current.light.exposure = 0.5;
+        current.light.contrast = 10.0;
+        let mut previous = DevelopSettings::default();
+        previous.light.exposure = 0.0;
+        previous.light.contrast = 10.0; // unchanged
+        let crs = crate::crs::crs_settings(&current, Some(&previous));
+        assert_eq!(crs.len(), 1);
+        assert_eq!(crs[0].0, "Exposure2012");
+        assert_eq!(crs[0].1, "0.5");
     }
 
     /// Issue #2556: a sidecar's `lc:settings` colour-range mask keeps at most `MAX_COLOR_RANGE_SAMPLES` samples.
@@ -1779,8 +3045,589 @@ mod tests {
         );
         assert_eq!(v, vec![PhotoId(1), PhotoId(3)]);
     }
-}
 
+    /// A packet that binds the CRS namespace once, on its global `rdf:Description`, leaves its
+    /// nested correction and its element-form field unbound. Both are found through the
+    /// description's binding, and the element is filled in rather than shadowed by a new
+    /// attribute of the same name.
+    #[test]
+    fn crs_write_finds_fields_the_global_description_binds() {
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+            <crs:MaskGroupBasedCorrections>
+              <rdf:Seq><rdf:li><rdf:Description crs:What="Correction" crs:CorrectionAmount="1" crs:MaskId="1"/></rdf:li></rdf:Seq>
+            </crs:MaskGroupBasedCorrections>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+
+        assert_eq!(correction_descriptions(&data).len(), 1, "a correction is found through the description's binding:\n{data}");
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains("<crs:Exposure2012>0.9</crs:Exposure2012>"), "the element is updated in place:\n{data}");
+        assert!(!data.contains("crs:Exposure2012=\""), "no second property is added:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
+
+    /// [`write_corrections`] updates each correction on its own tag, matched to its mask by
+    /// Mask.id: the corrections are visited from the last back, so the attributes added to the
+    /// first one do not move the second one's offsets.
+    #[test]
+    fn crs_write_updates_every_correction_on_its_own_tag() {
+        use lightcraft_develop::{DevelopSettings, Mask};
+
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+            <crs:MaskGroupBasedCorrections>
+              <rdf:Seq>
+                <rdf:li><rdf:Description crs:What="Correction" crs:CorrectionAmount="1" crs:LocalExposure2012="0" crs:MaskId="1"/></rdf:li>
+                <rdf:li><rdf:Description crs:What="Correction" crs:CorrectionAmount="1" crs:LocalExposure2012="0" crs:LocalContrast2012="0" crs:MaskId="2"/></rdf:li>
+              </rdf:Seq>
+            </crs:MaskGroupBasedCorrections>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+
+        let previous =
+            DevelopSettings { masks: vec![Mask { id: 1, ..Default::default() }, Mask { id: 2, ..Default::default() }], ..Default::default() };
+        let mut current = previous.clone();
+        current.masks[0].adjust.exposure = 0.5;
+        current.masks[0].adjust.contrast = 0.5;
+        current.masks[1].adjust.exposure = -0.25;
+
+        let prefix = crs_prefix(&data);
+        write_corrections(&mut data, &current, &previous, &prefix, 1.5);
+
+        let corrections = correction_descriptions(&data);
+        assert_eq!(corrections.len(), 2, "no correction is added or lost:\n{data}");
+        let (first, second) = (corrections[0], corrections[1]);
+        assert_eq!(attr_f64(&data, first.0, first.1, "LocalExposure2012"), Some(2.0), "{data}");
+        assert_eq!(attr_f64(&data, first.0, first.1, "LocalContrast2012"), Some(50.0), "{data}");
+        assert_eq!(attr_f64(&data, second.0, second.1, "LocalExposure2012"), Some(-1.0), "{data}");
+        assert_eq!(attr_f64(&data, second.0, second.1, "LocalContrast2012"), Some(0.0), "the field it did not change is left alone:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
+
+    /// A `crs:` field on a sibling `rdf:Description` must be found by `crs:` write-back even
+    /// when the CRS namespace is declared on the parent `<rdf:RDF>`. `global_description`
+    /// must search all direct-child descriptions for the field before choosing an insertion
+    /// target, otherwise the field is duplicated onto the first description and the stale
+    /// value on the sibling remains unchanged.
+    #[test]
+    fn crs_write_finds_field_in_sibling_description_with_crs_on_rdf() {
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <dc:title>Some title</dc:title>
+          </rdf:Description>
+          <rdf:Description rdf:about="" crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the field on the sibling description is updated:\n{data}");
+        assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated onto the first description:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
+
+    /// A self-closing `crs:` element that carries its own `xmlns:crs` binding keeps
+    /// that attribute when the field is rewritten as a value element. Write-back
+    /// reconstructs self-closing elements without their start-tag attributes, which
+    /// can leave the `crs:` prefix unbound when the `rdf:Description` does not
+    /// declare it.
+    #[test]
+    fn crs_write_preserves_self_closing_element_attributes() {
+        // A foreign sidecar whose `crs:Exposure2012` is a self-closing element carrying
+        // the `xmlns:crs` declaration on the element itself; the `rdf:Description` does
+        // not declare the prefix, so the element's attribute is the only binding.
+        const FOREIGN: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:lc="http://ns.lightcraft.app/lc/1.0/"
+            xmp:CreatorTool="Other App" lc:settings="{}">
+            <crs:Exposure2012 xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"/>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#;
+
+        let dir = std::env::temp_dir().join(format!("lightcraft-crs-self-closing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let original = dir.join("IMG_1.jpg");
+        std::fs::write(&original, b"original").unwrap();
+        let sidecar = dir.join("IMG_1.xmp");
+        std::fs::write(&sidecar, FOREIGN).unwrap();
+
+        let mut develop = DevelopSettings::default();
+        develop.light.exposure = 0.9;
+        let mut photo =
+            Photo::new(PhotoId(1), Source::File { path: original.to_string_lossy().into_owned() }, "IMG_1.jpg", "JPEG", 4, 3, "2026-01-01T00:00:00");
+        photo.develop = std::sync::Arc::new(develop);
+        let mut s = Session::new();
+        s.xmp.write_crs = true;
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        s.save_sidecar(PhotoId(1)).unwrap();
+
+        let text = std::fs::read_to_string(&sidecar).unwrap();
+        assert!(
+            text.contains(r#"<crs:Exposure2012 xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">0.9</crs:Exposure2012>"#),
+            "self-closing crs: element keeps its xmlns attribute when rewritten:\n{text}"
+        );
+        assert_eq!(text.matches("<crs:Exposure2012").count(), 1, "updated in place, not duplicated:\n{text}");
+        assert!(text.contains(r#"xmp:CreatorTool="Other App""#), "the rest of the packet is kept:\n{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A descendant element that rebinds `crs` away from the CRS namespace shadows the
+    /// ancestor's binding: `crs:` attributes on it are not CRS attributes, even though an
+    /// ancestor still declares `xmlns:crs="CRS_NS"`. `ns_bindings` must resolve each prefix
+    /// to its effective in-scope binding, not match any declaration from an outer scope.
+    #[test]
+    fn ns_bindings_respects_prefix_shadowing() {
+        let data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+            <crs:MaskGroupBasedCorrections>
+              <rdf:Seq><rdf:li><rdf:Description xmlns:crs="urn:other" xmlns:acr="http://ns.adobe.com/camera-raw-settings/1.0/"
+                crs:Exposure2012="7" acr:Exposure2012="0.5" crs:What="Correction"/></rdf:li></rdf:Seq>
+            </crs:MaskGroupBasedCorrections>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#;
+        let first = data.find("<rdf:Description").expect("outer description");
+        let first_end = tag_end(data, first).expect("outer description closes");
+        let second = data[first_end..].find("<rdf:Description").map(|o| first_end + o).expect("inner description");
+        let second_end = tag_end(data, second).expect("inner description closes");
+
+        let bindings = ns_bindings(data, second, second_end);
+        // The innermost declaration wins: crs is bound to urn:other on this element.
+        assert_eq!(
+            bindings.iter().rev().find(|(p, _)| p == "crs"),
+            Some(&("crs".to_string(), "urn:other".to_string())),
+            "crs must resolve to the in-scope urn:other binding, not the ancestor's CRS_NS\n{data}"
+        );
+        // The shadowed ancestor CRS_NS binding must not be matched as in-scope for crs,
+        // otherwise is_crs would treat crs:Exposure2012="7" as a CRS field.
+        assert!(
+            !bindings.iter().any(|(p, uri)| p == "crs" && uri == CRS_NS),
+            "crs must not resolve to CRS_NS through the shadowed outer binding\n{data}"
+        );
+        // acr is bound to CRS_NS on this element and is the real CRS prefix here.
+        assert!(bindings.iter().any(|(p, uri)| p == "acr" && uri == CRS_NS), "acr must be bound to CRS_NS on this element\n{data}");
+    }
+
+    /// Comments and CDATA sections are skipped whole when resolving in-scope namespace bindings:
+    /// a `>` or an `xmlns` declaration inside them must not leak into the scope of a later
+    /// element, or a later `crs:` prefix could appear to bind to the wrong URI.
+    #[test]
+    fn ns_bindings_skips_comments_and_cdata() {
+        let data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+            <!-- > some text <fake xmlns:crs="urn:other"> -->
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#;
+        let first = data.find("<rdf:Description").expect("outer description");
+        let first_end = tag_end(data, first).expect("outer description closes");
+        let inner = data[first_end..].find("<crs:Exposure2012").map(|o| first_end + o).expect("inner element");
+        let inner_end = tag_end(data, inner).expect("inner element closes");
+
+        let bindings = ns_bindings(data, inner, inner_end);
+        assert!(
+            bindings.iter().any(|(p, uri)| p == "crs" && uri == CRS_NS),
+            "crs must resolve to the ancestor's CRS_NS binding, not a comment's declaration\n{data}"
+        );
+        assert!(!bindings.iter().any(|(p, uri)| p == "crs" && uri == "urn:other"), "crs must not resolve to urn:other from a comment\n{data}");
+    }
+
+    /// A CDATA section before an ancestor that rebinds `crs` must be skipped whole:
+    /// its `>` and any `xmlns` declaration inside must not leak into the scope.
+    #[test]
+    fn ns_bindings_skips_cdata_before_ancestor() {
+        let data = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+          xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <![CDATA[ > some text <fake xmlns:crs="urn:other"> ]]>
+          <rdf:Description xmlns:crs="urn:other">
+            <crs:Exposure2012/>
+          </rdf:Description>
+        </rdf:RDF>"#;
+        let start = data.find("<crs:Exposure2012").expect("target element");
+        let end = tag_end(data, start).expect("target element closes");
+        let bindings = ns_bindings(data, start, end);
+        assert_eq!(
+            bindings.iter().rev().find(|(p, _)| p == "crs"),
+            Some(&("crs".to_string(), "urn:other".to_string())),
+            "crs must resolve to the ancestor's urn:other binding, not the RDF's CRS_NS\n{data}"
+        );
+    }
+
+    /// A `crs:` field on a sibling `rdf:Description` must be found by `crs:` write-back even
+    /// when the first description is a non-CRS one with child elements. `global_description`
+    /// must keep looking past sibling descriptions instead of stopping at the first
+    /// description's first child element, otherwise the field is duplicated onto the wrong
+    /// description.
+    #[test]
+    fn crs_write_finds_field_in_sibling_description() {
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <dc:title>Some title</dc:title>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the field on the sibling description is updated:\n{data}");
+        assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated onto the first description:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
+
+    /// A direct-child `rdf:Description` that contains a self-closing nested
+    /// `<rdf:Description/>` must not consume the following sibling description: the depth
+    /// counter returns to zero after the self-closing one, so a `crs:` field on the sibling
+    /// is updated in place once instead of being duplicated.
+    #[test]
+    fn crs_write_updates_sibling_after_self_closing_nested_description() {
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <dc:title>Some title</dc:title>
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the sibling field is updated in place:\n{data}");
+        assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
+
+    /// A nested self-closing `rdf:Description` must not make CRS write-back skip a
+    /// following sibling description that carries a `crs:` field in element form: the
+    /// sibling's field is updated in place rather than duplicated.
+    #[test]
+    fn crs_write_updates_sibling_after_nested_self_closing_description() {
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <dc:title>Some title</dc:title>
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains("<crs:Exposure2012>0.9</crs:Exposure2012>"), "the sibling field is updated in place:\n{data}");
+        assert!(!data.contains("crs:Exposure2012=\""), "no attribute duplicate is added:\n{data}");
+        assert_eq!(data.matches("<crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
+
+    /// Regression: a nested self-closing `rdf:Description` must not make CRS write-back
+    /// skip or duplicate a CRS field on a following sibling description. Covers the
+    /// attribute and element forms, with the CRS namespace declared on the sibling and
+    /// on the enclosing `rdf:RDF`.
+    #[test]
+    fn crs_write_regression_nested_self_closing_description_sibling_crs_field() {
+        for data in [
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#,
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#,
+        ] {
+            let mut data = data.to_string();
+            update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+            assert!(data.contains(r#"crs:Exposure2012="0.9""#), "attribute form not updated:\n{data}");
+            assert_eq!(data.matches("crs:Exposure2012").count(), 1, "attribute form duplicated:\n{data}");
+            assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "attribute form does not parse:\n{data}");
+        }
+
+        for data in [
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#,
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#,
+        ] {
+            let mut data = data.to_string();
+            update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+            assert!(data.contains("<crs:Exposure2012>0.9</crs:Exposure2012>"), "element form not updated:\n{data}");
+            assert!(!data.contains("crs:Exposure2012=\""), "element form gained an attribute duplicate:\n{data}");
+            assert_eq!(data.matches("<crs:Exposure2012").count(), 1, "element form duplicated:\n{data}");
+            assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "element form does not parse:\n{data}");
+        }
+    }
+
+    /// Regression: a nested self-closing `rdf:Description` must not make CRS write-back
+    /// skip or duplicate a `crs:` field on a following sibling description. The sibling
+    /// field is updated in place exactly once, and the nested description is unchanged.
+    #[test]
+    fn crs_write_regression_nested_self_closing_description_sibling_field_stays_unchanged() {
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+        let nested = r#"<rdf:Description rdf:about="nested"/>"#;
+        assert_eq!(data.matches(nested).count(), 1, "precondition: one nested description:\n{data}");
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+
+        assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the sibling field is updated in place:\n{data}");
+        assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert_eq!(data.matches(nested).count(), 1, "the nested description is unchanged:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
+
+    /// Regression: a self-closing `rdf:Description` nested in a direct-child
+    /// description must not make `global_descriptions` skip the following sibling
+    /// description that carries a `crs:` field. The sibling is found and updated
+    /// in place, with no duplicate CRS field.
+    #[test]
+    fn global_descriptions_finds_sibling_after_nested_self_closing_description() {
+        let data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#;
+
+        let descs = global_descriptions(data);
+        assert_eq!(descs.len(), 2, "the nested self-closing description does not consume the sibling:\n{data}");
+        let (start, end) = descs[1];
+        assert!(data[start..=end].contains(r#"crs:Exposure2012="0.5""#), "the sibling description is found:\n{data}");
+
+        let mut updated = data.to_string();
+        update_crs_attributes(&mut updated, &[("Exposure2012", "0.9".to_string())]);
+        assert!(updated.contains(r#"crs:Exposure2012="0.9""#), "the sibling field is updated in place:\n{updated}");
+        assert_eq!(updated.matches("crs:Exposure2012").count(), 1, "the field is not duplicated:\n{updated}");
+        assert!(lightcraft_meta::parse_xmp(&updated).is_ok(), "the packet still parses:\n{updated}");
+    }
+
+    /// Regression: a self-closing description nested directly in `rdf:RDF` must not
+    /// make CRS write-back skip or duplicate a `crs:` field on a following sibling
+    /// description. The sibling field is updated in place exactly once.
+    #[test]
+    fn crs_write_updates_sibling_after_top_level_self_closing_description() {
+        for data in [
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="nested"/>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#,
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <rdf:Description rdf:about="nested"/>
+          <rdf:Description rdf:about="" crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#,
+        ] {
+            let mut data = data.to_string();
+            let nested = r#"<rdf:Description rdf:about="nested"/>"#;
+            assert_eq!(data.matches(nested).count(), 1, "precondition: one self-closing description:\n{data}");
+
+            update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+
+            assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the sibling field is updated in place:\n{data}");
+            assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+            assert_eq!(data.matches(nested).count(), 1, "the self-closing description is unchanged:\n{data}");
+            assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+        }
+
+        for data in [
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="nested"/>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#,
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <rdf:Description rdf:about="nested"/>
+          <rdf:Description rdf:about="">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#,
+        ] {
+            let mut data = data.to_string();
+            let nested = r#"<rdf:Description rdf:about="nested"/>"#;
+            assert_eq!(data.matches(nested).count(), 1, "precondition: one self-closing description:\n{data}");
+
+            update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+
+            assert!(data.contains("<crs:Exposure2012>0.9</crs:Exposure2012>"), "the sibling field is updated in place:\n{data}");
+            assert!(!data.contains("crs:Exposure2012=\""), "no attribute duplicate is added:\n{data}");
+            assert_eq!(data.matches("<crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+            assert_eq!(data.matches(nested).count(), 1, "the self-closing description is unchanged:\n{data}");
+            assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+        }
+    }
+    /// Regression: a self-closing `rdf:Description` nested in a direct-child
+    /// description must not make CRS write-back skip or duplicate a `crs:` field
+    /// on a following sibling description. The sibling field is updated in place
+    /// exactly once, in both attribute and element form.
+    #[test]
+    fn crs_write_regression_nested_self_closing_description_sibling_crs_field_sidecar() {
+        {
+            let data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#;
+            let mut data = data.to_string();
+            update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+            assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the sibling field is updated in place:\n{data}");
+            assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+            assert_eq!(data.matches(r#"<rdf:Description rdf:about="nested"/>"#).count(), 1, "the nested description is unchanged:\n{data}");
+            assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+        }
+
+        {
+            let data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#;
+            let mut data = data.to_string();
+            update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+            assert!(data.contains("<crs:Exposure2012>0.9</crs:Exposure2012>"), "the sibling field is updated in place:\n{data}");
+            assert!(!data.contains("crs:Exposure2012=\""), "no attribute duplicate is added:\n{data}");
+            assert_eq!(data.matches("<crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+            assert_eq!(data.matches(r#"<rdf:Description rdf:about="nested"/>"#).count(), 1, "the nested description is unchanged:\n{data}");
+            assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+        }
+    }
+    /// Regression requested by review: an outer description containing a
+    /// self-closing nested description must not make `global_descriptions` or
+    /// CRS write-back skip the following sibling description. The sibling's
+    /// CRS field is found and updated in place, with no duplicate and no
+    /// change to the nested description.
+    #[test]
+    fn nested_self_closing_description_does_not_hide_sibling_crs_field_requested() {
+        let nested = r#"<rdf:Description rdf:about="nested"/>"#;
+
+        // Attribute form, with the CRS namespace declared on the sibling.
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+        assert_eq!(data.matches(nested).count(), 1, "precondition: one nested description:\n{data}");
+
+        let descs = global_descriptions(&data);
+        assert_eq!(descs.len(), 2, "the nested self-closing description does not consume the sibling:\n{data}");
+        let (start, end) = descs[1];
+        assert!(data[start..=end].contains(r#"crs:Exposure2012="0.5""#), "the sibling description is found:\n{data}");
+
+        assert!(update_existing_crs(&mut data, "Exposure2012", "0.9"));
+        assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the sibling field is updated in place:\n{data}");
+        assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert_eq!(data.matches(nested).count(), 1, "the nested description is unchanged:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+
+        // Element form, with the CRS namespace declared on rdf:RDF.
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+        assert_eq!(data.matches(nested).count(), 1, "precondition: one nested description:\n{data}");
+
+        let descs = global_descriptions(&data);
+        assert_eq!(descs.len(), 2, "the nested self-closing description does not consume the sibling:\n{data}");
+
+        assert!(update_existing_crs(&mut data, "Exposure2012", "0.9"));
+        assert!(data.contains("<crs:Exposure2012>0.9</crs:Exposure2012>"), "the sibling field is updated in place:\n{data}");
+        assert!(!data.contains("crs:Exposure2012=\""), "no attribute duplicate is added:\n{data}");
+        assert_eq!(data.matches("<crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert_eq!(data.matches(nested).count(), 1, "the nested description is unchanged:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
+
+    /// Regression: a nested self-closing `rdf:Description` followed by a sibling
+    /// description carrying a `crs:` field must not be skipped or duplicated by
+    /// CRS write-back. The sibling's field is updated in place exactly once, in
+    /// both attribute and element form, and the nested description is unchanged.
+    #[test]
+    fn nested_self_closing_description_does_not_hide_sibling_crs_field() {
+        // Attribute form: the CRS namespace is declared on the sibling.
+        {
+            let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#
+                .to_string();
+            let nested = r#"<rdf:Description rdf:about="nested"/>"#;
+            assert_eq!(data.matches(nested).count(), 1, "precondition: one nested description:\n{data}");
+
+            update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+
+            assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the sibling field is updated in place:\n{data}");
+            assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+            assert_eq!(data.matches(nested).count(), 1, "the nested description is unchanged:\n{data}");
+            assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+        }
+
+        // Element form: the CRS namespace is declared on rdf:RDF.
+        {
+            let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#
+                .to_string();
+            let nested = r#"<rdf:Description rdf:about="nested"/>"#;
+            assert_eq!(data.matches(nested).count(), 1, "precondition: one nested description:\n{data}");
+
+            update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+
+            assert!(data.contains("<crs:Exposure2012>0.9</crs:Exposure2012>"), "the sibling field is updated in place:\n{data}");
+            assert!(!data.contains(r#"crs:Exposure2012=""#), "no attribute duplicate is added:\n{data}");
+            assert_eq!(data.matches("<crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+            assert_eq!(data.matches(nested).count(), 1, "the nested description is unchanged:\n{data}");
+            assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+        }
+    }
+}
 #[cfg(test)]
 #[path = "sidecar/tests_repair_saves.rs"]
 mod tests_repair_saves;
@@ -1997,19 +3844,495 @@ mod jpeg_header_tests {
 
     #[test]
     fn handles_short_reads_without_bypassing_span_limit() {
+        // A reader that returns short reads (one byte at a time) must still
+        // respect the span: read_jpeg_xmp reads at most header_span bytes in
+        // total and never reads past it, no matter how many read calls it takes.
         let expected = packet(2);
-        let bytes = jpeg(&expected);
-        let end = bytes.len();
-        let mut exact = CountedReader::new(bytes.clone());
-        exact.chunk = 1;
-        assert_eq!(read_jpeg_xmp(&mut exact, end as u64, JPEG_XMP_HEADER_STEPS), Some(expected));
-        assert_eq!(exact.bytes_read, end);
-        for (span, read) in [(0, 0), (1, 1), (end - 1, 6)] {
+        let mut bytes = vec![0xff, 0xd8];
+        bytes.extend(xmp_segment(&expected));
+        let end = bytes.len() as u64;
+
+        let mut reader = CountedReader::new(bytes.clone());
+        reader.chunk = 1;
+        assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), Some(expected));
+        assert_eq!(reader.cursor.position(), end);
+        assert_eq!(reader.bytes_read as u64, end, "every byte of the packet is read, one at a time");
+
+        // A span too small for the packet is rejected without reading past it.
+        for span in [0, 1, 2, end - 1] {
             let mut reader = CountedReader::new(bytes.clone());
             reader.chunk = 1;
-            assert_eq!(read_jpeg_xmp(&mut reader, span as u64, JPEG_XMP_HEADER_STEPS), None);
-            assert_eq!(reader.bytes_read, read);
-            assert!(reader.cursor.position() <= span as u64);
+            assert_eq!(read_jpeg_xmp(&mut reader, span, JPEG_XMP_HEADER_STEPS), None, "span {span}");
+            assert!(reader.bytes_read as u64 <= span, "span {span}: read {} bytes", reader.bytes_read);
+            assert!(reader.cursor.position() <= span, "span {span}: at {}", reader.cursor.position());
         }
+    }
+}
+
+#[cfg(test)]
+mod ns_bindings_comment_before_ancestor_tests {
+    use super::{ns_bindings, tag_end};
+
+    /// A comment whose text contains no `>` stands before an ancestor that rebinds `crs`.
+    /// `outer_bindings` calls `tag_end` before recognising the comment, so `tag_end` takes the
+    /// `>` of the comment's own `-->`, the scan stops there, and the ancestor's binding is
+    /// dropped: `crs` resolves to the outer `CRS_NS` instead of the ancestor's `urn:other`.
+    #[test]
+    fn ns_bindings_skips_comment_before_ancestor_declaration() {
+        let data = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+          xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <!-- comment -->
+          <rdf:Description xmlns:crs="urn:other">
+            <crs:Exposure2012/>
+          </rdf:Description>
+        </rdf:RDF>"#;
+        let start = data.find("<crs:Exposure2012").expect("target element");
+        let end = tag_end(data, start).expect("target element closes");
+        let bindings = ns_bindings(data, start, end);
+        assert_eq!(
+            bindings.iter().rev().find(|(p, _)| p == "crs"),
+            Some(&("crs".to_string(), "urn:other".to_string())),
+            "crs must resolve to the ancestor's urn:other binding, not the RDF's CRS_NS\n{data}"
+        );
+    }
+
+    /// A processing instruction stands before an ancestor that rebinds `crs`.
+    /// `outer_bindings` calls `tag_end` on the PI, which sets `i = end + 1` past the `>`,
+    /// then the `<? / <!` handler advances `i` by `2 + rel + 1` again, skipping the
+    /// following tag and its xmlns declaration. `crs` then resolves to the outer `CRS_NS`
+    /// instead of the ancestor's `urn:other`.
+    #[test]
+    fn ns_bindings_skips_processing_instruction_before_ancestor() {
+        let data = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+          xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <?xml version="1.0"?>
+          <rdf:Description xmlns:crs="urn:other">
+            <crs:Exposure2012/>
+          </rdf:Description>
+        </rdf:RDF>"#;
+        let start = data.find("<crs:Exposure2012").expect("target element");
+        let end = tag_end(data, start).expect("target element closes");
+        let bindings = ns_bindings(data, start, end);
+        assert_eq!(
+            bindings.iter().rev().find(|(p, _)| p == "crs"),
+            Some(&("crs".to_string(), "urn:other".to_string())),
+            "crs must resolve to the ancestor's urn:other binding, not the RDF's CRS_NS\n{data}"
+        );
+    }
+
+    /// A processing instruction whose text contains a `>` before its `?>` terminator is
+    /// skipped whole: `tag_end` stops at the first unquoted `>` inside the PI, so without
+    /// the fix the PI-internal `<fake xmlns:crs="urn:fake">` is scanned as an ancestor and
+    /// its binding shadows the real one.
+    #[test]
+    fn ns_bindings_skips_processing_instruction_through_question_mark() {
+        let data = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+          xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <rdf:Description xmlns:crs="urn:other">
+            <?p > <fake xmlns:crs="urn:fake"> ?>
+            <crs:Exposure2012/>
+          </rdf:Description>
+        </rdf:RDF>"#;
+        let start = data.find("<crs:Exposure2012").expect("target element");
+        let end = tag_end(data, start).expect("target element closes");
+        let bindings = ns_bindings(data, start, end);
+        assert_eq!(
+            bindings.iter().rev().find(|(p, _)| p == "crs"),
+            Some(&("crs".to_string(), "urn:other".to_string())),
+            "crs must resolve to the ancestor's urn:other binding, not a declaration inside the processing instruction\n{data}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod sidecar_nested_self_closing_sibling_crs_regression {
+    use super::*;
+
+    /// Regression: a self-closing `rdf:Description` nested in a direct-child
+    /// description must not make `global_descriptions` (and therefore CRS
+    /// write-back) skip the following sibling description that carries a `crs:`
+    /// field. The sibling is found and updated in place, with no duplicate CRS
+    /// field and no change to the nested description.
+    #[test]
+    fn nested_self_closing_description_does_not_hide_sibling_crs_field() {
+        let nested = r#"<rdf:Description rdf:about="nested"/>"#;
+
+        // Attribute form, with the CRS namespace declared on the sibling.
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+        assert_eq!(data.matches(nested).count(), 1, "precondition: one nested description:\n{data}");
+
+        let descs = global_descriptions(&data);
+        assert_eq!(descs.len(), 2, "the nested self-closing description does not consume the sibling:\n{data}");
+        let (start, end) = descs[1];
+        assert!(data[start..=end].contains(r#"crs:Exposure2012="0.5""#), "the sibling description is found:\n{data}");
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the sibling field is updated in place:\n{data}");
+        assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert_eq!(data.matches(nested).count(), 1, "the nested description is unchanged:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+
+        // Element form, with the CRS namespace declared on rdf:RDF.
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+        assert_eq!(data.matches(nested).count(), 1, "precondition: one nested description:\n{data}");
+
+        let descs = global_descriptions(&data);
+        assert_eq!(descs.len(), 2, "the nested self-closing description does not consume the sibling:\n{data}");
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains("<crs:Exposure2012>0.9</crs:Exposure2012>"), "the sibling field is updated in place:\n{data}");
+        assert!(!data.contains("crs:Exposure2012=\""), "no attribute duplicate is added:\n{data}");
+        assert_eq!(data.matches("<crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert_eq!(data.matches(nested).count(), 1, "the nested description is unchanged:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
+
+    /// Focused regression for the review request: a self-closing description
+    /// nested in a non-self-closing description must not make CRS write-back
+    /// skip the following sibling description that carries a `crs:` field.
+    #[test]
+    fn nested_self_closing_description_does_not_skip_sibling_crs_field() {
+        let nested = r#"<rdf:Description rdf:about="nested"/>"#;
+
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+        assert_eq!(data.matches(nested).count(), 1, "precondition: one nested description:\n{data}");
+
+        let descs = global_descriptions(&data);
+        assert_eq!(descs.len(), 2, "the nested self-closing description does not consume the sibling:\n{data}");
+        let (start, end) = descs[1];
+        assert!(data[start..=end].contains(r#"crs:Exposure2012="0.5""#), "the sibling description is found:\n{data}");
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the sibling field is updated in place:\n{data}");
+        assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert_eq!(data.matches(nested).count(), 1, "the nested description is unchanged:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
+
+    /// Regression requested by review: a self-closing description nested in a
+    /// direct-child description must not make `global_descriptions` or CRS
+    /// write-back skip the following sibling description. The sibling's CRS
+    /// field is updated in place, with no duplicate and no change to the
+    /// nested description.
+    #[test]
+    fn nested_self_closing_description_does_not_hide_sibling_crs_field_regression() {
+        let nested = r#"<rdf:Description rdf:about="nested"/>"#;
+
+        // Attribute form, with the CRS namespace declared on rdf:RDF.
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+        assert_eq!(data.matches(nested).count(), 1, "precondition: one nested description:\n{data}");
+
+        let descs = global_descriptions(&data);
+        assert_eq!(descs.len(), 2, "the nested self-closing description does not consume the sibling:\n{data}");
+        let (start, end) = descs[1];
+        assert!(data[start..=end].contains(r#"crs:Exposure2012="0.5""#), "the sibling description is found:\n{data}");
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the sibling field is updated in place:\n{data}");
+        assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert_eq!(data.matches(nested).count(), 1, "the nested description is unchanged:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+
+        // Element form, with the CRS namespace declared on the sibling.
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+        assert_eq!(data.matches(nested).count(), 1, "precondition: one nested description:\n{data}");
+
+        let descs = global_descriptions(&data);
+        assert_eq!(descs.len(), 2, "the nested self-closing description does not consume the sibling:\n{data}");
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains("<crs:Exposure2012>0.9</crs:Exposure2012>"), "the sibling field is updated in place:\n{data}");
+        assert!(!data.contains("crs:Exposure2012=\""), "no attribute duplicate is added:\n{data}");
+        assert_eq!(data.matches("<crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert_eq!(data.matches(nested).count(), 1, "the nested description is unchanged:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
+}
+
+#[cfg(test)]
+mod sidecar_review_4056_regression {
+    use super::*;
+
+    #[test]
+    fn self_closing_nested_description_does_not_hide_sibling_crs_field() {
+        let nested = r#"<rdf:Description rdf:about="nested"/>"#;
+
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+        assert_eq!(data.matches(nested).count(), 1, "precondition: one nested description:\n{data}");
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the sibling field is updated in place:\n{data}");
+        assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert_eq!(data.matches(nested).count(), 1, "the nested description is unchanged:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
+}
+
+#[cfg(test)]
+mod sidecar_nested_self_closing_sibling_crs_regression_added {
+    use super::*;
+
+    /// Regression requested by review: a self-closing `rdf:Description` nested in
+    /// a direct-child description must not make CRS write-back skip or duplicate a
+    /// `crs:` field on the following sibling description. The sibling is found and
+    /// updated in place exactly once, in both attribute and element form.
+    #[test]
+    fn nested_self_closing_description_does_not_hide_sibling_crs_field() {
+        let nested = r#"<rdf:Description rdf:about="nested"/>"#;
+
+        // Attribute form: the CRS namespace is declared on the sibling.
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+        assert_eq!(data.matches(nested).count(), 1, "precondition: one nested description:\n{data}");
+
+        let descs = global_descriptions(&data);
+        assert_eq!(descs.len(), 2, "the nested self-closing description does not consume the sibling:\n{data}");
+        let (start, end) = descs[1];
+        assert!(data[start..=end].contains(r#"crs:Exposure2012="0.5""#), "the sibling description is found:\n{data}");
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the sibling field is updated in place:\n{data}");
+        assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert_eq!(data.matches(nested).count(), 1, "the nested description is unchanged:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+
+        // Element form: the CRS namespace is declared on rdf:RDF.
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+        assert_eq!(data.matches(nested).count(), 1, "precondition: one nested description:\n{data}");
+
+        let descs = global_descriptions(&data);
+        assert_eq!(descs.len(), 2, "the nested self-closing description does not consume the sibling:\n{data}");
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains("<crs:Exposure2012>0.9</crs:Exposure2012>"), "the sibling field is updated in place:\n{data}");
+        assert!(!data.contains("crs:Exposure2012=\""), "no attribute duplicate is added:\n{data}");
+        assert_eq!(data.matches("<crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert_eq!(data.matches(nested).count(), 1, "the nested description is unchanged:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
+}
+
+#[cfg(test)]
+mod sidecar_review_4056_requested_regression {
+    use super::*;
+
+    /// Regression requested by review: a self-closing `rdf:Description` nested in
+    /// a direct-child description must not make CRS write-back skip a following
+    /// sibling description that carries a `crs:` field.
+    #[test]
+    fn nested_self_closing_description_does_not_hide_sibling_crs_field() {
+        let nested = r#"<rdf:Description rdf:about="nested"/>"#;
+
+        // Attribute form, with the CRS namespace declared on the sibling.
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+        assert_eq!(data.matches(nested).count(), 1, "precondition: one nested description:\n{data}");
+
+        let descs = global_descriptions(&data);
+        assert_eq!(descs.len(), 2, "the nested self-closing description does not consume the sibling:\n{data}");
+        let (start, end) = descs[1];
+        assert!(data[start..=end].contains(r#"crs:Exposure2012="0.5""#), "the sibling description is found:\n{data}");
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the sibling field is updated in place:\n{data}");
+        assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert_eq!(data.matches(nested).count(), 1, "the nested description is unchanged:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+
+        // Element form, with the CRS namespace declared on rdf:RDF.
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+        assert_eq!(data.matches(nested).count(), 1, "precondition: one nested description:\n{data}");
+
+        let descs = global_descriptions(&data);
+        assert_eq!(descs.len(), 2, "the nested self-closing description does not consume the sibling:\n{data}");
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains("<crs:Exposure2012>0.9</crs:Exposure2012>"), "the sibling field is updated in place:\n{data}");
+        assert!(!data.contains("crs:Exposure2012=\""), "no attribute duplicate is added:\n{data}");
+        assert_eq!(data.matches("<crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert_eq!(data.matches(nested).count(), 1, "the nested description is unchanged:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
+}
+
+#[cfg(test)]
+mod sidecar_issue_4056_later_sibling_regression {
+    use super::*;
+
+    #[test]
+    fn nested_self_closing_description_does_not_hide_later_sibling_crs_field() {
+        let nested = r#"<rdf:Description rdf:about="nested"/>"#;
+
+        // Attribute form: the CRS namespace is declared on the sibling.
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+        assert_eq!(data.matches(nested).count(), 1, "precondition: one nested description:\n{data}");
+
+        let descs = global_descriptions(&data);
+        assert_eq!(descs.len(), 2, "the nested self-closing description does not consume the sibling:\n{data}");
+        let (start, end) = descs[1];
+        assert!(data[start..=end].contains(r#"crs:Exposure2012="0.5""#), "the sibling description is found:\n{data}");
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the sibling field is updated in place:\n{data}");
+        assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert_eq!(data.matches(nested).count(), 1, "the nested description is unchanged:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+
+        // Element form: the CRS namespace is declared on rdf:RDF.
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+        assert_eq!(data.matches(nested).count(), 1, "precondition: one nested description:\n{data}");
+
+        let descs = global_descriptions(&data);
+        assert_eq!(descs.len(), 2, "the nested self-closing description does not consume the sibling:\n{data}");
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains("<crs:Exposure2012>0.9</crs:Exposure2012>"), "the sibling field is updated in place:\n{data}");
+        assert!(!data.contains("crs:Exposure2012=\""), "no attribute duplicate is added:\n{data}");
+        assert_eq!(data.matches("<crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert_eq!(data.matches(nested).count(), 1, "the nested description is unchanged:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
+}
+
+#[cfg(test)]
+mod sidecar_self_closing_nested_sibling_crs_regression {
+    use super::*;
+
+    /// Regression: a self-closing `rdf:Description` nested in a direct-child
+    /// description must not make CRS write-back skip or duplicate a `crs:`
+    /// field on the following sibling description.
+    #[test]
+    fn a_self_closing_nested_description_does_not_hide_a_sibling_crs_field() {
+        let nested = r#"<rdf:Description rdf:about="nested"/>"#;
+
+        // Attribute form, with the CRS namespace declared on the sibling.
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+        assert_eq!(data.matches(nested).count(), 1, "precondition: one nested description:\n{data}");
+
+        let descs = global_descriptions(&data);
+        assert_eq!(descs.len(), 2, "the nested self-closing description does not consume the sibling:\n{data}");
+        let (start, end) = descs[1];
+        assert!(data[start..=end].contains(r#"crs:Exposure2012="0.5""#), "the sibling description is found:\n{data}");
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the sibling field is updated in place:\n{data}");
+        assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert_eq!(data.matches(nested).count(), 1, "the nested description is unchanged:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+
+        // Element form, with the CRS namespace declared on rdf:RDF.
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+        assert_eq!(data.matches(nested).count(), 1, "precondition: one nested description:\n{data}");
+
+        let descs = global_descriptions(&data);
+        assert_eq!(descs.len(), 2, "the nested self-closing description does not consume the sibling:\n{data}");
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains("<crs:Exposure2012>0.9</crs:Exposure2012>"), "the sibling field is updated in place:\n{data}");
+        assert!(!data.contains("crs:Exposure2012=\""), "no attribute duplicate is added:\n{data}");
+        assert_eq!(data.matches("<crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert_eq!(data.matches(nested).count(), 1, "the nested description is unchanged:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
     }
 }
