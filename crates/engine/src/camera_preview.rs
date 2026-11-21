@@ -28,7 +28,7 @@ mod tone;
 pub(crate) use colour::{PROFILE_PROXY, dng_colour, dng_tone_eligible};
 #[cfg(test)]
 use colour::{PROXY, starting_colour_with};
-pub(crate) use colour::{file_local_look, starting_colour, starting_colour_tags, with_starting_colour};
+pub(crate) use colour::{correspondence_correction, file_local_look, starting_colour, starting_colour_tags, with_starting_colour};
 pub(crate) use hue_sat::HueSat;
 #[cfg(test)]
 use hue_sat::{MIN_LUMINANCE_KEPT, NO_LUMINANCE_KEPT, fit_hue_sat, hue_saturation, restore_weight};
@@ -86,7 +86,8 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// the warped candidate's alignment leaves out the pixels outside the sensor instead of reading them as black.
 /// 14: bundled camera profiles also match the Nikon model spellings that differ in case, spacing or the Z8 alias,
 /// so previews made without the profile are rebuilt.
-pub const LOOK_VERSION: u32 = 14;
+/// 15: geometry-gated external lens and camera framing for JPEG calibration correspondences.
+pub const LOOK_VERSION: u32 = 15;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
