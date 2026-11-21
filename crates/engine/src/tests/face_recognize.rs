@@ -579,9 +579,9 @@ fn face_scan_row_follows_pending_photos() {
         last = s.execute("faces.pump", &json!({})).unwrap();
         let rows = faces_rows(&s);
         if last["pendingPhotos"].as_u64().unwrap_or(0) > 0 {
-            // while photos are left: one row, not cancellable, its whole the most photos left at once
+            // while photos are left: one row, with a stop, its whole the most photos left at once
             assert_eq!(rows.len(), 1, "{last}");
-            assert_eq!((rows[0].label.as_str(), rows[0].cancellable), ("Finding faces", false));
+            assert_eq!((rows[0].label.as_str(), rows[0].cancellable), ("Finding faces", true));
             assert_eq!(rows[0].total, last["peak"].as_u64().unwrap(), "{last}");
             assert_eq!(rows[0].done, rows[0].total - last["pendingPhotos"].as_u64().unwrap());
             shown = true;
@@ -595,6 +595,93 @@ fn face_scan_row_follows_pending_photos() {
     assert_eq!((last["pendingPhotos"].clone(), last["peak"].clone()), (json!(0), json!(0)), "{last}");
     assert!(faces_rows(&s).is_empty(), "the row goes when the scan is done");
     let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn the_face_scan_row_has_a_stop_that_leaves_the_library_as_it_was() {
+    let d = temp("stop");
+    let (mut s, _) = fresh_library(&d, 64);
+    let (a, b, _) = import_three_photos(&mut s, &d);
+    set_regions(&mut s, a, vec![region(0.1, None), region(0.5, None)]);
+    set_regions(&mut s, b, vec![region(0.3, None)]);
+    let rows = |s: &Session| s.activity.list().into_iter().filter(|t| t.kind == "faces").collect::<Vec<_>>();
+    // paused: the photos are lined up but nothing starts, so the row is there and nothing is in flight
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while rows(&s).is_empty() && std::time::Instant::now() < deadline {
+        s.execute("faces.pump", &json!({"pace": "pause"})).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let row = rows(&s);
+    assert_eq!(row.len(), 1, "the scan shows a row while photos wait");
+    assert!(row[0].cancellable, "the row has a stop");
+    let r = s.execute("activity.cancel", &json!({"id": row[0].id})).expect("the scan accepts a stop");
+    assert_eq!(r["cancelled"], 1);
+    // the next pump takes the stop: nothing is left in line, and the row goes
+    let r = s.execute("faces.pump", &json!({"pace": "pause"})).unwrap();
+    assert_eq!(r["pendingPhotos"], 0, "{r}");
+    assert!(rows(&s).is_empty(), "the row ends with the stop");
+    // a running pace does not take the scan up again on its own, and nothing was half-written
+    for _ in 0..20 {
+        let r = s.execute("faces.pump", &json!({})).unwrap();
+        assert_eq!((r["pendingPhotos"].clone(), r["indexedFaces"].clone()), (json!(0), json!(0)), "{r}");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(rows(&s).is_empty(), "a stopped scan stays stopped");
+    assert_eq!(s.faces.scanned.len(), 0);
+    // switching recognition off and on again is how the scan is asked for again
+    s.execute("faces.enable", &json!({"enabled": false})).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline && s.execute("faces.pump", &json!({})).unwrap()["active"] == true {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    s.execute("faces.enable", &json!({"enabled": true})).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while std::time::Instant::now() < deadline && s.faces.index.len() < 3 {
+        s.execute("faces.pump", &json!({})).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(s.faces.index.len(), 3, "the scan runs again once recognition is switched back on");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn switching_recognition_off_and_on_between_two_pumps_still_asks_for_the_scan_again() {
+    let d = temp("stop-quick");
+    let (mut s, _) = fresh_library(&d, 64);
+    let (a, _, _) = import_three_photos(&mut s, &d);
+    set_regions(&mut s, a, vec![region(0.1, None)]);
+    let row = |s: &Session| s.activity.list().into_iter().find(|t| t.kind == "faces");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while row(&s).is_none() && std::time::Instant::now() < deadline {
+        s.execute("faces.pump", &json!({"pace": "pause"})).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    s.activity.cancel(row(&s).expect("the scan shows a row").id).unwrap();
+    s.execute("faces.pump", &json!({"pace": "pause"})).unwrap();
+    // off and on again with no pump between: the scan is asked for again all the same
+    s.execute("faces.enable", &json!({"enabled": false})).unwrap();
+    s.execute("faces.enable", &json!({"enabled": true})).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while std::time::Instant::now() < deadline && s.faces.index.len() < 1 {
+        s.execute("faces.pump", &json!({})).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(s.faces.index.len(), 1);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_stopped_scans_row_does_not_stop_the_next_librarys_scan() {
+    let mut s = Session::new();
+    let row = s.activity.start("faces", "Finding faces", crate::activity::Cancel::Yes);
+    row.progress(1, 3);
+    s.faces.task = Some(row);
+    s.faces.peak = 3;
+    let id = s.activity.list()[0].id;
+    s.activity.cancel(id).unwrap();
+    s.faces.library_changed();
+    assert!(s.faces.task.is_none() && s.faces.peak == 0 && !s.faces.stopped, "the stopped row went with the old library");
+    assert!(s.activity.list().is_empty());
 }
 
 fn face_names(s: &Session, id: PhotoId) -> Vec<Option<String>> {
