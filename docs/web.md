@@ -54,13 +54,17 @@ gzip size (5.25 MB). `wasm-opt -Oz`, when installed, shrinks it further.
 
 **Fonts.** The browser has no system fonts to fall back on, so CJK text comes from
 [craft-fonts](https://github.com/storytold/craft-fonts), the optional `CRAFT_FONTS_DIR` build
-input (`CRAFT_FONTS_DIR=../craft-fonts cargo xtask web`; release builds always set it). On wasm32
-`crates/engine/build.rs` embeds BIZ UDPGothic Regular (UI and watermark fallback) and Noto Sans
-Thai Regular (~214 KiB, for Thai file and folder names in every UI language). The web
-bundle also ships Noto Sans CJK SC Regular as `lightcraft_zh_hans.otf` and loads it before the UI
-starts. Keeping the 16 MB Chinese face separate leaves the module under Cloudflare's 25 MiB
-per-file limit (the older Japanese-only module measured 21.8 MB). Without `CRAFT_FONTS_DIR`, the
-web build still works, but Chinese and Japanese text lack glyphs.
+input (`CRAFT_FONTS_DIR=../craft-fonts CRAFT_FONTS_REQUIRED=1 cargo xtask web`; release builds
+always set both, and without `CRAFT_FONTS_REQUIRED` a face missing from the manifest is only a
+warning). On wasm32 `crates/engine/build.rs` embeds BIZ UDPGothic Regular (UI and watermark
+fallback), Noto Sans Thai Regular (~214 KiB) and Noto Sans Hebrew Regular (~65 KiB), for Thai and
+Hebrew file and folder names in every UI language (a Hebrew name's words stay in logical order,
+see [localization-parity](localization-parity.md)), and Noto Sans Georgian Regular for the
+Georgian interface. The web bundle also ships Noto Sans CJK SC Regular as `lightcraft_zh_hans.otf`
+and loads it before the UI starts. Keeping the 16 MB Chinese face separate leaves the module under
+Cloudflare's 25 MiB per-file limit (the older Japanese-only module measured 21.8 MB). Without
+`CRAFT_FONTS_DIR`, the web build still works, but Chinese, Japanese, Thai, Georgian and Hebrew
+text lack glyphs.
 
 ## Deploying: headers
 
@@ -209,7 +213,7 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
 - **Preset files** (import/export `.json`) aren't wired to browser pickers yet.
 - **Control channel / MCP.** These are desktop-only, because they need a TCP socket.
 - **AVIF export** is untested in the browser; it's the one encoder that may not be wasm-safe.
-- **JPEG XL export** is native only: the encoder (`jixel`) starts threads of its own, which wasm32 has not got; the
+- **JPEG XL export** is native only: the shared `craft-jxl` encoder is not available on wasm32; the
   web build reports "not available in this build". JPEG XL import works.
 
 ## Measuring

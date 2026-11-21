@@ -291,6 +291,65 @@ fn ghash(i: i32, j: i32, seed: u32) -> f32 {
     return f32(v & 0xffffu) / 32768.0 - 1.0;
 }
 
+// Crystal grain (process V4): `lightcraft_pipeline::crystal` (keep in step with it). The tori's
+// summed-area tables follow the other tables in `aux` (offsets F_GRAIN_SAT).
+fn cg_bilinear(o: u32, t: u32, x: f32, y: f32) -> f32 {
+    let s = t + 1u;
+    let i = min(u32(max(x, 0.0)), t - 1u);
+    let j = min(u32(max(y, 0.0)), t - 1u);
+    let fx = x - f32(i);
+    let fy = y - f32(j);
+    let b = o + j * s + i;
+    let a = aux[b] + (aux[b + 1u] - aux[b]) * fx;
+    let c = aux[b + s] + (aux[b + s + 1u] - aux[b + s]) * fx;
+    return a + (c - a) * fy;
+}
+
+fn cg_integral(o: u32, t: u32, x: f32, y: f32) -> f32 {
+    let tf = f32(t);
+    let wx = x >= tf;
+    let wy = y >= tf;
+    let rx = select(x, x - tf, wx);
+    let ry = select(y, y - tf, wy);
+    var v = cg_bilinear(o, t, rx, ry);
+    if (wx) {
+        v += cg_bilinear(o, t, tf, ry);
+    }
+    if (wy) {
+        v += cg_bilinear(o, t, rx, tf);
+    }
+    if (wx && wy) {
+        v += cg_bilinear(o, t, tf, tf);
+    }
+    return v;
+}
+
+fn cg_box(o: u32, t: u32, x0_: f32, y0_: f32, w: f32) -> f32 {
+    let tf = f32(t);
+    let x0 = x0_ - floor(x0_ / tf) * tf;
+    let y0 = y0_ - floor(y0_ / tf) * tf;
+    return cg_integral(o, t, x0 + w, y0 + w) - cg_integral(o, t, x0, y0 + w) - cg_integral(o, t, x0 + w, y0) + cg_integral(o, t, x0, y0);
+}
+
+fn cg_lift(v: f32) -> f32 {
+    let c = clamp(v, 0.0, 1.0);
+    return select((c + 0.055) / 2.4, c, c <= 0.04045);
+}
+
+fn cg_srgb_to_linear(v: f32) -> f32 {
+    return select(pow((v + 0.055) / 1.055, 2.4), v / 12.92, v <= 0.04045);
+}
+
+fn crystal_grain(e: vec3<f32>, gx: f32, gy: f32) -> vec3<f32> {
+    let w = pf(F_GRAIN_FOOT);
+    let x0 = gx * CRYSTAL_TPL - 0.5 * w;
+    let y0 = gy * CRYSTAL_TPL - 0.5 * w;
+    let g = (cg_box(pu(F_GRAIN_SAT), CRYSTAL_T0, x0, y0, w) + cg_box(pu(F_GRAIN_SAT + 1u), CRYSTAL_T1, x0, y0, w)) / (w * w);
+    let lum = clamp(0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z, 0.0, 1.0);
+    let k = pf(F_GRAIN_K) * g * (1.0 - cg_srgb_to_linear(lum));
+    return e + k * vec3<f32>(cg_lift(e.x), cg_lift(e.y), cg_lift(e.z));
+}
+
 fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
     let x0 = floor(x);
     let y0 = floor(y);
@@ -694,17 +753,21 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let py = f32(y) + 0.5;
         let gx = pf(F_GRAIN_AFF) * px + pf(F_GRAIN_AFF + 2u) * py + pf(F_GRAIN_AFF + 4u);
         let gy = pf(F_GRAIN_AFF + 1u) * px + pf(F_GRAIN_AFF + 3u) * py + pf(F_GRAIN_AFF + 5u);
-        let sc = pf(F_GRAIN_SC);
-        let rough = pf(F_GRAIN_ROUGH);
-        let seed = pu(F_GRAIN_SEED);
-        var g = grain_noise(gx * sc, gy * sc, seed);
-        g = g * (1.0 - rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, seed ^ 0x55u) * rough * 0.7;
-        var lum = 0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z;
-        if (hdr) {
-            lum = clamp(lum, 0.0, 1.0);
+        if (pu(F_GRAIN_MODEL) == 1u) {
+            e = crystal_grain(e, gx, gy);
+        } else {
+            let sc = pf(F_GRAIN_SC);
+            let rough = pf(F_GRAIN_ROUGH);
+            let seed = pu(F_GRAIN_SEED);
+            var g = grain_noise(gx * sc, gy * sc, seed);
+            g = g * (1.0 - rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, seed ^ 0x55u) * rough * 0.7;
+            var lum = 0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z;
+            if (hdr) {
+                lum = clamp(lum, 0.0, 1.0);
+            }
+            let k = pf(F_GRAIN_AMT) * g * (0.35 + 2.6 * lum * (1.0 - lum));
+            e = e + k;
         }
-        let k = pf(F_GRAIN_AMT) * g * (0.35 + 2.6 * lum * (1.0 - lum));
-        e = e + k;
     }
     if (pu(F_LUT) != 0u) {
         let lc = clamp(e, vec3<f32>(0.0), vec3<f32>(1.0));

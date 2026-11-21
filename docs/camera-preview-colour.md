@@ -48,7 +48,7 @@ Sony uncompressed files that declare 12-bit samples but store 16-bit words use t
 bright pixels made dark ILCA-99M2 frames subtract black 128 instead of 512 and
 normalize against white 4095 instead of 16383, producing a purple cast. Header and
 full decodes now agree independently of scene brightness. Packed 12-bit data keep
-their existing scale. Look version 13, render cache version 72 and denoise algorithm
+their existing scale. Look version 28, render cache version 8,589,934,603 and denoise algorithm
 2 refresh cached results; the original RAW is not modified.
 
 
