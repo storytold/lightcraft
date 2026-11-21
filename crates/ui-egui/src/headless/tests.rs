@@ -1361,10 +1361,10 @@ fn profile_browser_previews_on_hover_and_applies_on_click() {
     h.request("ui.move", json!({"x": 5, "y": 500}), t);
     h.step();
     assert!(h.app.hover_preview.is_none());
-    // click applies (one history step); the star toggles the favourite
+    // click applies (one history step, under an Import step on a photo's first edit); the star toggles the favourite
     h.request("ui.clickWidget", json!({"id": "profileCell:lc.vivid"}), t);
     assert_eq!(photo(&h).develop.profile.id, "lc.vivid");
-    assert_eq!(photo(&h).history.len(), before.history.len() + 1);
+    assert_eq!(photo(&h).history.len(), before.history.len() + if before.history.is_empty() { 2 } else { 1 });
     h.request("ui.clickWidget", json!({"id": "profileStar:lc.portrait"}), t);
     assert_eq!(h.app.session.profile_favorites, ["lc.portrait"]);
     assert_eq!(photo(&h).develop.profile.id, "lc.vivid", "the star doesn't apply");
