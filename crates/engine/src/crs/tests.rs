@@ -369,3 +369,71 @@ fn disabled_lens_profile_switch_keeps_embedded_corrections() {
     let on = props(&preset_packet("", "").replace(r#"crs:LensProfileEnable="0""#, r#"crs:LensProfileEnable="1""#));
     assert!(apply_partial(&DevelopSettings::default(), &to_partial(&on, Target::Any), 1.0).optics.lens_profile);
 }
+
+/// [`mapped_paths`] names every develop setting [`to_partial`] writes, and each one it names is a
+/// develop setting a packet can write: a mapping added without its path would leave that setting at
+/// a stale value where a packet is the whole of a photo's settings (a Lightroom catalog's develop
+/// text), and a path named but never written would be reset to its default with nothing to restore it.
+#[test]
+fn mapped_paths_name_every_setting_the_mapping_writes() {
+    let value = |k: &str| -> Vec<String> {
+        match k {
+            _ if k.contains("ToneCurve") => vec!["0, 0".into(), "128, 140".into(), "255, 255".into()],
+            "crs:HasCrop" | "crs:HDREditMode" | "crs:ConvertToGrayscale" | "crs:LensProfileEnable" | "crs:AutoLateralCA" => vec!["True".into()],
+            "crs:WhiteBalance" => vec!["Custom".into()],
+            "crs:CropLeft" | "crs:CropTop" => vec!["0.1".into()],
+            "crs:CropRight" | "crs:CropBottom" => vec!["0.9".into()],
+            "crs:Temperature" | "crs:AsShotTemperature" => vec!["5000".into()],
+            "crs:PostCropVignetteStyle" | "crs:PerspectiveUpright" => vec!["1".into()],
+            _ => vec!["10".into()],
+        }
+    };
+    // every field the mapping reads, each with a value it takes: run it again with what it read
+    // until it reads nothing new, so fields read only beside another (Tint beside Temperature, the
+    // red, green and blue curves beside the master) are found too
+    let mut keys = std::collections::BTreeSet::new();
+    loop {
+        let props: Props = keys.iter().map(|k: &String| (k.clone(), value(k))).collect();
+        READ.with(|r| *r.borrow_mut() = Some(Default::default()));
+        to_partial(&props, Target::Any);
+        let read = READ.with(|r| r.borrow_mut().take()).unwrap_or_default();
+        let before = keys.len();
+        keys.extend(read);
+        if keys.len() == before {
+            break;
+        }
+    }
+    assert!(keys.len() > 100, "{keys:?}");
+    assert!(keys.contains("crs:Tint") && keys.contains("crs:ToneCurvePV2012Red"), "{keys:?}");
+    let full: Props = keys.iter().map(|k| (k.clone(), value(k))).collect();
+    // (without the 2012 fields, the older process versions' are read)
+    let old: Props = full.iter().filter(|(k, _)| !k.ends_with("2012")).map(|(k, v)| (k.clone(), v.clone())).collect();
+    let paths = mapped_paths();
+    // the paths a value of `v` sits at: a named path (an object of its own, like crop.geometry) or a leaf
+    fn written(v: &Value, at: &str, paths: &std::collections::BTreeSet<String>, out: &mut Vec<String>) {
+        match v {
+            _ if paths.contains(at) => out.push(at.to_string()),
+            Value::Object(m) => m.iter().for_each(|(k, v)| written(v, &if at.is_empty() { k.clone() } else { format!("{at}.{k}") }, paths, out)),
+            _ => out.push(at.to_string()),
+        }
+    }
+    let (mut seen, mut merged) = (std::collections::BTreeSet::new(), Vec::new());
+    for props in [&full, &old] {
+        for target in [Target::Any, Target::Rendered, Target::RawAbsolute, Target::RawRelative] {
+            let partial = to_partial(props, target);
+            let mut at = Vec::new();
+            written(&partial, "", paths, &mut at);
+            let unnamed: Vec<_> = at.iter().filter(|p| !paths.contains(*p)).collect();
+            assert!(unnamed.is_empty(), "{target:?}: written but not in mapped_paths: {unnamed:?}");
+            seen.extend(at);
+            merged.push(DevelopSettings::default().merged(&partial).unwrap().to_json());
+        }
+    }
+    // each named path is written by some packet, and is a develop setting (it is in the settings a
+    // packet writing it makes: settings at their default can leave a section out, like `hdr`)
+    for p in paths {
+        assert!(seen.contains(p), "{p} is in mapped_paths but no packet writes it");
+        let pointer = format!("/{}", p.replace('.', "/"));
+        assert!(merged.iter().any(|m| m.pointer(&pointer).is_some()), "{p} is not a develop setting");
+    }
+}
