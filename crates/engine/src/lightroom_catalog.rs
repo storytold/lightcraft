@@ -472,6 +472,12 @@ pub(crate) struct ImportIndex {
     pub(crate) collections: BTreeMap<String, u64>,
 }
 
+/// Largest import index read or written (`Interop/lightroom-index.json`). It grows with the catalog, about 45 bytes
+/// a photo plus its albums; 16 MiB was reached near 370,000 photos and a re-import then duplicated virtual copies and
+/// albums (issue #1312). This bound is over twenty times what the largest catalog the reader accepts needs, and the file's own length
+/// is checked before reading, so a hostile index still can't make the import allocate without bound.
+pub(crate) const MAX_INDEX_BYTES: u64 = 1 << 30;
+
 pub(crate) fn load_index(path: Option<&Path>) -> crate::Result<ImportIndex> {
     match path {
         Some(path) => {
@@ -480,14 +486,17 @@ pub(crate) fn load_index(path: Option<&Path>) -> crate::Result<ImportIndex> {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ImportIndex::default()),
                 Err(e) => return Err(error(e.to_string())),
             };
-            if file.metadata().map_err(|e| error(e.to_string()))?.len() > 16 * 1024 * 1024 {
-                return Err(error("Lightroom import index exceeds 16 MiB"));
+            let too_big = || error("Lightroom import index exceeds 1 GiB");
+            let len = file.metadata().map_err(|e| error(e.to_string()))?.len();
+            if len > MAX_INDEX_BYTES {
+                return Err(too_big());
             }
             let mut bytes = Vec::new();
+            bytes.try_reserve_exact(usize::try_from(len).map_err(|_| too_big())?).map_err(|_| too_big())?;
             use std::io::Read;
-            file.take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes).map_err(|e| error(e.to_string()))?;
-            if bytes.len() > 16 * 1024 * 1024 {
-                return Err(error("Lightroom import index exceeds 16 MiB"));
+            file.take(MAX_INDEX_BYTES + 1).read_to_end(&mut bytes).map_err(|e| error(e.to_string()))?;
+            if bytes.len() as u64 > MAX_INDEX_BYTES {
+                return Err(too_big());
             }
             serde_json::from_slice(&bytes).map_err(|e| error(format!("invalid Lightroom import index: {e}")))
         }
@@ -3695,6 +3704,48 @@ pub(crate) mod tests {
         assert_eq!(s.catalog.albums().count(), 2);
         assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some("2024-01-16T12:34:56"));
         s.close_library().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// An import index past the old 16 MiB limit is read and written again, so a re-import of a large catalog still
+    /// finds every photo, copy and album it made before and adds none twice (issue #1312).
+    #[test]
+    fn reimport_with_an_index_past_sixteen_mib_adds_nothing_twice() {
+        let dir = std::env::temp_dir().join(format!("app-lrcat-big-index-{}", std::process::id()));
+        let mut s = crate::Session::new();
+        s.open_library(&dir, false).unwrap();
+        let data = sample();
+        let first = apply(&mut s, data.clone(), false).unwrap();
+        let index_path = dir.join("Interop/lightroom-index.json");
+        let mut index: ImportIndex = serde_json::from_slice(&std::fs::read(&index_path).unwrap()).unwrap();
+        let (photos, albums) = (s.catalog.len(), s.catalog.albums().count());
+        // entries a catalog of ~400,000 photos would leave (other sources, so they map nothing here)
+        for n in 0..400_000u64 {
+            index.photos.insert(format!("lr:/elsewhere/archive.lrcat:{n:012}"), 1_000_000 + n);
+        }
+        let padded = serde_json::to_vec(&index).unwrap();
+        assert!(padded.len() > 16 * 1024 * 1024, "{} bytes", padded.len());
+        std::fs::write(&index_path, padded).unwrap();
+        let second = apply(&mut s, data, true).unwrap();
+        assert_eq!(first["mapping"], second["mapping"]);
+        assert_eq!(second["imported"], 0, "nothing is added twice");
+        assert_eq!((s.catalog.len(), s.catalog.albums().count()), (photos, albums));
+        let kept = load_index(Some(&index_path)).unwrap();
+        assert!(kept.photos.len() > 400_000, "the large index was written back whole");
+        s.close_library().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A hostile index (not JSON, or the wrong shape) is an error naming it, never a panic.
+    #[test]
+    fn a_hostile_import_index_is_an_error() {
+        let dir = std::env::temp_dir().join(format!("app-lrcat-bad-index-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("lightroom-index.json");
+        for bytes in [&b"\xff\xfe{"[..], b"[1,2,3]", b"{\"photos\":{\"a\":-1}}", b""] {
+            std::fs::write(&path, bytes).unwrap();
+            assert!(load_index(Some(&path)).is_err(), "{bytes:?}");
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 

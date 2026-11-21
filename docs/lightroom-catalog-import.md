@@ -111,7 +111,7 @@ without them, with a warning, and skipped only when still too big. At most eight
 untouched. When an archive is saved but cleanup afterwards fails (a temporary file or an old archive that
 can't be removed), the report still names the archive and a separate warning names what was left
 behind; the folder is synced once the archive is saved.
-`Interop/lightroom-index.json` records imported identities. Source catalogs and originals are
+`Interop/lightroom-index.json` records imported identities (read and written up to 1 GiB, about 45 bytes a photo, so a re-import of a large catalog finds what it made before). Source catalogs and originals are
 never overwritten.
 
 Native import reads MAIN database pages on demand; no whole-file size cutoff or MAIN-file read
