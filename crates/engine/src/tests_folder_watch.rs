@@ -62,8 +62,11 @@ fn a_poll_rescans_only_changed_folders_asks_by_default_and_notices_new_and_gone_
     // the first poll records the listings: nothing is reported
     let r = s.execute("folder.poll", &json!({})).unwrap();
     assert_eq!(r["changed"].as_array().unwrap().len(), 0, "{r}");
-    // only the folders holding photos are listed, never those above them
-    assert_eq!(r["listed"], 2, "{r}");
+    // the folders holding photos and the one they branch out of are listed, never those above it
+    assert_eq!(r["listed"], 3, "{r}");
+    let watched = crate::folder_watch::watched_dirs(&s.catalog);
+    let tmp = std::env::temp_dir().to_string_lossy().replace('\\', "/");
+    assert!(watched.iter().all(|w| w.path.len() > tmp.trim_end_matches('/').len()), "{watched:?}");
     // nothing changed: nothing scanned
     let r = s.execute("folder.poll", &json!({})).unwrap();
     assert!(r["changed"].as_array().unwrap().is_empty(), "{r}");
@@ -94,10 +97,11 @@ fn a_poll_rescans_only_changed_folders_asks_by_default_and_notices_new_and_gone_
     s.execute("folder.poll", &json!({})).unwrap();
     assert_eq!(crate::folder_watch::new_in(&s, &dir.path("trip")), Some(1));
 
-    // a folder that went away is not reported as changed
+    // a folder that went away is not reported as changed (only the folder holding it, whose
+    // subfolders changed)
     std::fs::remove_dir_all(dir.path("other")).unwrap();
     let r = s.execute("folder.poll", &json!({})).unwrap();
-    assert!(r["changed"].as_array().unwrap().is_empty(), "{r}");
+    assert!(r["changed"].as_array().unwrap().iter().all(|c| !c.as_str().unwrap().ends_with("other")), "{r}");
     assert_eq!(r["offline"], 1, "{r}");
 }
 
@@ -122,4 +126,34 @@ fn watch_preferences_are_checked_and_with_add_new_files_are_imported_at_once() {
     assert_eq!(r["imported"], 1, "{r}");
     assert_eq!(s.catalog.len(), 3);
     assert_eq!(new_total(&mut s), 0);
+}
+
+/// Issue #1302: a photo tree imported from its root (`Photos/2025/…`, `Photos/2026/…`), where
+/// another app files new photos into new dated folders. Folders that hold only folders are
+/// watched for new subfolders, so the poll finds them without a Synchronize Folder.
+#[test]
+fn a_new_dated_folder_in_a_tree_of_folders_is_found() {
+    let dir = Scratch::new("tree");
+    write_png(&dir.path("Photos/2025/12-24/a.png"), 1);
+    write_png(&dir.path("Photos/2026/11-19/b.png"), 2);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [dir.path("Photos")]})).unwrap();
+    assert_eq!(s.catalog.len(), 2);
+    s.execute("folder.poll", &json!({})).unwrap();
+    // files appearing beside the dated folders don't make a folder of folders change
+    std::fs::write(dir.path("Photos/2026/.DS_Store"), b"x").unwrap();
+    let r = s.execute("folder.poll", &json!({})).unwrap();
+    assert!(r["changed"].as_array().unwrap().is_empty(), "{r}");
+    // a new day folder is
+    write_png(&dir.path("Photos/2026/11-20/c.png"), 3);
+    let r = s.execute("folder.poll", &json!({})).unwrap();
+    let changed: Vec<&str> = r["changed"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+    assert!(changed.len() == 1 && changed[0].ends_with("2026"), "{r}");
+    assert_eq!(crate::folder_watch::new_in(&s, &dir.path("Photos/2026")), Some(1), "{r}");
+    // and a new year folder too; with new files: add, the scan of the tree adds both waiting photos
+    s.execute("folder.watchPreferences", &json!({"newFiles": "add"})).unwrap();
+    write_png(&dir.path("Photos/2027/01-01/d.png"), 4);
+    let r = s.execute("folder.poll", &json!({})).unwrap();
+    assert_eq!(r["imported"], 2, "{r}");
+    assert_eq!(s.catalog.len(), 4);
 }

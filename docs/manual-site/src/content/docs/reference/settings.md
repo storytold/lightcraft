@@ -63,7 +63,9 @@ sidebar:
 - **Sidecar names**: how sidecars are named beside the raw.
 
 ### Folder polling and drag and drop
-- **Check folders for new photos** every so often; new photos are offered ("N new") or added at once.
+- **Check folders for new photos** every so often; new photos are offered ("N new") or added at once. New folders
+  count too: in a tree of dated folders, a new day or year folder is found, as long as it is inside the folder your
+  library's photos branch out of.
 - **Import dropped photos without review**: off, a drop opens the import review first.
 - **Show the import review when a camera or card is connected**.
 

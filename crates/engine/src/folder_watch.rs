@@ -13,6 +13,12 @@
 //! ([`crate::Session::folder_new`]) for the Folders panel's "N new" badge, until the person adds
 //! them (Synchronize Folder).
 //!
+//! A folder that holds no photo itself but whose subfolders do (`Photos/2026` above
+//! `Photos/2026/11-20`) is listed too, from the folder the library's photos branch out of
+//! downwards ([`WatchKind::Parent`]): only its subfolders' names count there, so a new day folder
+//! that another app (a sync tool, a camera app) creates beside the old ones is noticed (issue
+//! #1302), while files that come and go in it are not.
+//!
 //! The first poll of a library (no stamps yet) only records the stamps: its folders were just
 //! imported or were already looked at. Stamps are kept in the library (`folder-stamps.json`), so
 //! a poll on open notices what changed while the app was closed. A folder that isn't there (a
@@ -127,6 +133,12 @@ fn fnv(h: &mut u64, bytes: &[u8]) {
 
 /// The stamp of folder `dir`; `None` when it can't be listed (not there, offline, no access).
 pub fn stamp(dir: &str) -> Option<Stamp> {
+    stamp_of(dir, WatchKind::Photos)
+}
+
+/// The stamp of folder `dir` as watched as `kind`: for a [`WatchKind::Parent`], its subfolders'
+/// names only (and no modification time, which files coming and going change too).
+pub fn stamp_of(dir: &str, kind: WatchKind) -> Option<Stamp> {
     if cfg!(target_arch = "wasm32") {
         return None;
     }
@@ -135,7 +147,19 @@ pub fn stamp(dir: &str) -> Option<Stamp> {
     let mut names: Vec<(String, bool)> = Vec::new();
     for e in rd.take(MAX_ENTRIES).flatten() {
         let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        if kind == WatchKind::Parent && !is_dir {
+            continue;
+        }
         names.push((e.file_name().to_string_lossy().into_owned(), is_dir));
+    }
+    if kind == WatchKind::Parent {
+        names.sort();
+        let mut h = 0xcbf2_9ce4_8422_2325_u64;
+        for (n, _) in &names {
+            fnv(&mut h, n.as_bytes());
+            fnv(&mut h, b"/\0");
+        }
+        return Some(Stamp { mtime: None, entries: h, count: names.len() as u64 });
     }
     names.sort();
     let mut h = 0xcbf2_9ce4_8422_2325_u64;
@@ -151,25 +175,47 @@ pub fn stamp(dir: &str) -> Option<Stamp> {
     Some(Stamp { mtime, entries: h, count: names.len() as u64 })
 }
 
-/// The folders a poll lists: every folder the library holds photos in directly, not the disks
-/// themselves. A folder above them (a home folder, a share's root) is not listed: anything that
-/// changes there would mean scanning everything inside it. So a new folder inside a library
-/// folder is noticed (its parent's listing changes), but a new folder beside them is not: that
-/// one is imported.
-pub fn watched_dirs(cat: &Catalog) -> Vec<String> {
-    fn walk(nodes: &[FolderNode], out: &mut Vec<String>, depth: usize) {
+/// How a folder is watched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WatchKind {
+    /// It holds photos: any change to its listing counts.
+    Photos,
+    /// It holds none itself, only folders that do: a subfolder added or gone counts.
+    Parent,
+}
+
+/// A folder a poll lists.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WatchedDir {
+    pub path: String,
+    pub kind: WatchKind,
+}
+
+/// The folders a poll lists: every folder the library holds photos in directly, and the folders
+/// between them and the folder they branch out of (the deepest folder above all of a branch's
+/// library folders; [`WatchKind::Parent`]). Not the disks themselves, the startup disk, folders
+/// holding disks, nor anything above where the library's folders branch out (a home folder above
+/// a single `Pictures/…` tree): anything that changes there would mean scanning everything inside
+/// it. So a new folder inside or beside the library's folders is noticed (its parent's listing
+/// changes), but one in an unrelated place is not: that one is imported.
+pub fn watched_dirs(cat: &Catalog) -> Vec<WatchedDir> {
+    fn walk(nodes: &[FolderNode], out: &mut Vec<WatchedDir>, depth: usize, inside: bool) {
         if depth > 64 {
             return;
         }
         for n in nodes {
-            if n.own > 0 && n.selectable && !n.volume && !lcc_catalog::folders::is_startup_disk(&n.path) {
-                out.push(n.path.clone());
+            let eligible = n.selectable && !n.volume && !lcc_catalog::folders::is_startup_disk(&n.path);
+            // the photos branch out here (or are here): from here down the folders are watched
+            let inside = inside || (eligible && (n.own > 0 || n.children.len() != 1));
+            if eligible && inside && n.count > 0 {
+                let kind = if n.own > 0 { WatchKind::Photos } else { WatchKind::Parent };
+                out.push(WatchedDir { path: n.path.clone(), kind });
             }
-            walk(&n.children, out, depth + 1);
+            walk(&n.children, out, depth + 1, inside);
         }
     }
     let mut out = Vec::new();
-    walk(&cat.folder_tree(), &mut out, 0);
+    walk(&cat.folder_tree(), &mut out, 0, false);
     out
 }
 
@@ -189,14 +235,15 @@ pub struct Polled {
 /// Stamp each of `dirs` and compare with `prev` (reads only the folders' listings). A folder
 /// with no previous stamp is recorded, not reported. Stops when `cancel` is set (the stamps
 /// not taken yet stay as they were).
-pub fn poll_dirs(dirs: &[String], prev: &Stamps, cancel: &AtomicBool) -> Polled {
-    poll_with(dirs, prev, cancel, stamp)
+pub fn poll_dirs(dirs: &[WatchedDir], prev: &Stamps, cancel: &AtomicBool) -> Polled {
+    poll_with(dirs, prev, cancel, |d| stamp_of(&d.path, d.kind))
 }
 
 /// [`poll_dirs`] with the stamping supplied (tests).
-pub fn poll_with(dirs: &[String], prev: &Stamps, cancel: &AtomicBool, mut stamp: impl FnMut(&str) -> Option<Stamp>) -> Polled {
+pub fn poll_with(dirs: &[WatchedDir], prev: &Stamps, cancel: &AtomicBool, mut stamp: impl FnMut(&WatchedDir) -> Option<Stamp>) -> Polled {
     let mut out = Polled { stamps: Stamps::new(), ..Default::default() };
-    for d in dirs {
+    for w in dirs {
+        let d = &w.path;
         let old = prev.get(d).copied();
         if cancel.load(Ordering::Relaxed) {
             if let Some(o) = old {
@@ -204,7 +251,7 @@ pub fn poll_with(dirs: &[String], prev: &Stamps, cancel: &AtomicBool, mut stamp:
             }
             continue;
         }
-        match stamp(d) {
+        match stamp(w) {
             Some(s) => {
                 out.listed += 1;
                 if old.is_some_and(|o| o != s) {
@@ -335,12 +382,12 @@ mod tests {
 
     #[test]
     fn only_changed_listings_are_reported() {
-        let dirs: Vec<String> = ["/a", "/b", "/c", "/d"].iter().map(|s| s.to_string()).collect();
+        let dirs: Vec<WatchedDir> = ["/a", "/b", "/c", "/d"].iter().map(|s| WatchedDir { path: s.to_string(), kind: WatchKind::Photos }).collect();
         let mut prev = Stamps::new();
         prev.insert("/a".into(), st(1).unwrap());
         prev.insert("/b".into(), st(2).unwrap());
         prev.insert("/c".into(), st(3).unwrap());
-        let now = |d: &str| match d {
+        let now = |d: &WatchedDir| match d.path.as_str() {
             "/a" => st(1),
             "/b" => st(20),
             "/c" => None,
@@ -379,6 +426,13 @@ mod tests {
         assert_ne!(a.entries, b.entries);
         assert_eq!(b.count, 1);
         assert!(stamp(&dir.join("gone").to_string_lossy()).is_none());
+        // as a parent: only subfolders count
+        let p = stamp_of(&d, WatchKind::Parent).unwrap();
+        std::fs::write(dir.join("y.jpg"), b"y").unwrap();
+        assert_eq!(stamp_of(&d, WatchKind::Parent).unwrap(), p);
+        std::fs::create_dir_all(dir.join("day2")).unwrap();
+        assert_ne!(stamp_of(&d, WatchKind::Parent).unwrap(), p);
+        assert!(stamp_of(&dir.join("gone").to_string_lossy(), WatchKind::Parent).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
