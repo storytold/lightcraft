@@ -53,12 +53,12 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         .filter(|(b, sc)| show_all || sc.is_some() || app.recording_shortcut.as_deref() == Some(b.id))
         .filter(|(b, sc)| {
             needle.is_empty()
-                || crate::i18n::tr(b.label).to_lowercase().contains(&needle)
+                || crate::i18n::command_label(b.id, b.label).to_lowercase().contains(&needle)
                 || b.id.to_lowercase().contains(&needle)
                 || sc.as_deref().is_some_and(|sc| sc.to_lowercase().contains(&needle) || menu_text(sc, mac).to_lowercase().contains(&needle))
         })
         .collect();
-    rows.sort_by_cached_key(|(b, _)| crate::i18n::tr(b.label).to_lowercase());
+    rows.sort_by_cached_key(|(b, _)| crate::i18n::command_label(b.id, b.label).to_lowercase());
 
     // a fixed height, so the dialog doesn't jump around while the search narrows the list
     // (shorter on a short window, so the dialog fits it)
@@ -88,7 +88,7 @@ fn menu_text(sc: &str, mac: bool) -> String {
 fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, b: &Bindable, sc: Option<&str>, mac: bool) {
     // a declared key that yields to another command's saved key counts as changed: ↺ takes it back
     let changed = app.ui.settings.keymap.contains_key(b.id) || (sc.is_none() && b.default.is_some());
-    let mut name = RichText::new(crate::i18n::tr(b.label)).color(t.text);
+    let mut name = RichText::new(crate::i18n::command_label(b.id, b.label)).color(t.text);
     if changed {
         name = name.strong();
     }
@@ -202,7 +202,7 @@ fn apply(app: &mut LightcraftApp, ctx: &egui::Context, params: serde_json::Value
                 .into_iter()
                 .flatten()
                 .filter_map(|v| v.as_str())
-                .map(|id| shortcuts::find_bindable(id).map_or(id, |b| crate::i18n::tr(b.label)).to_string())
+                .map(|id| shortcuts::find_bindable(id).map_or(id, |b| crate::i18n::command_label(b.id, b.label)).to_string())
                 .collect();
             if !lost.is_empty() {
                 app.toast_for(ctx, crate::i18n::tr_format!("Removed from {}", lost.join(", ")), 3.0);
