@@ -144,7 +144,7 @@ impl Prepared {
                     existing: Some(existing),
                     reason: if existing_path.is_some() { "path" } else { "content" },
                     hash: info.content_hash,
-                    file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured })),
+                    file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured, orientation: info.orientation })),
                 });
             } else {
                 items.push(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed })));
@@ -371,7 +371,7 @@ impl ImportJob {
                     existing,
                     reason: "content",
                     hash: Some(hash),
-                    file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured })),
+                    file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured, orientation: info.orientation })),
                 }));
                 continue;
             }
