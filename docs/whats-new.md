@@ -96,6 +96,14 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+### Sorting a big library by file name is faster
+- Photos are put in file name order by comparing their names letter by letter in lower case, and every comparison went
+  through the Unicode lower-casing tables, even for a plain camera name such as `IMG_1234.CR3`. Names made of ASCII
+  characters are now compared byte by byte, and only the part of a name from its first other character on goes through
+  the tables. The order is the same for every name. In a library of 1.66 million photos, sorting every photo by file
+  name took about 3.8 s and now takes about 0.9 s (a view's sort of its own photos: 3.9 s and 1.6 s); a sort by capture
+  date, which reaches the names only for photos that tie, goes from 0.83 s to 0.76 s.
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens

@@ -929,6 +929,120 @@ fn cmp_name_ignores_case_without_allocating() {
     assert_eq!(cmp_name("a", "ab"), Less);
 }
 
+/// What `cmp_name` was before it compared ASCII names byte by byte: every character of both names lower-cased by the
+/// Unicode tables, then compared. The reference the fast path must agree with on every name.
+fn cmp_name_folded(a: &str, b: &str) -> std::cmp::Ordering {
+    a.chars().flat_map(char::to_lowercase).cmp(b.chars().flat_map(char::to_lowercase))
+}
+
+/// Characters that tell the fast path from the tables: ASCII letters, digits and punctuation; letters whose cases share
+/// a leading byte (Ä ä, É é); one that lower-cases to two characters (İ), to ASCII (the Kelvin sign) or to another
+/// letter that has its own upper case (ẞ → ß, the Angstrom sign); a titlecase digraph; the three sigmas; a wide
+/// character, one of four bytes, and NUL.
+const NAME_CHARS: &[char] = &[
+    'a', 'A', 'b', 'k', 'K', 'i', 'I', 'z', '0', '9', '_', '.', ' ', 'Ä', 'ä', 'É', 'é', 'ß', 'ẞ', 'İ', 'ı', '\u{212A}', '\u{212B}', 'å', 'ǅ', 'ǆ',
+    'Σ', 'σ', 'ς', '日', '😀', '\0',
+];
+
+/// Every pair of names of up to two characters, from [`NAME_CHARS`]: the fast path orders them as the tables do.
+#[test]
+fn cmp_name_orders_every_short_name_as_lower_cased_characters_do() {
+    let mut names = vec![String::new()];
+    for &c in NAME_CHARS {
+        names.push(c.to_string());
+        names.extend(NAME_CHARS.iter().map(|d| format!("{c}{d}")));
+    }
+    for a in &names {
+        for b in &names {
+            assert_eq!(crate::query::cmp_name(a, b), cmp_name_folded(a, b), "{a:?} against {b:?}");
+        }
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(4000))]
+    /// Two spellings of one run of [`NAME_CHARS`] (each character in its lower or upper case) with an ending of their own
+    /// each, so that the names tie for a while and differ after: at the end, at an ASCII letter, or at a character the
+    /// tables must fold.
+    #[test]
+    fn cmp_name_orders_names_as_lower_cased_characters_do(
+        base in proptest::collection::vec(proptest::sample::select(NAME_CHARS), 0..8),
+        flips in proptest::collection::vec(proptest::bool::ANY, 16),
+        tail_a in proptest::collection::vec(proptest::sample::select(NAME_CHARS), 0..3),
+        tail_b in proptest::collection::vec(proptest::sample::select(NAME_CHARS), 0..3),
+    ) {
+        let spell = |flips: &[bool], tail: &[char]| {
+            let mut s = String::new();
+            for (c, upper) in base.iter().zip(flips) {
+                if *upper { s.extend(c.to_uppercase()) } else { s.push(*c) }
+            }
+            s.extend(tail);
+            s
+        };
+        let (a, b) = (spell(&flips[..8], &tail_a), spell(&flips[8..], &tail_b));
+        proptest::prop_assert_eq!(crate::query::cmp_name(&a, &b), cmp_name_folded(&a, &b), "{:?} against {:?}", a, b);
+    }
+}
+
+/// How many of the comparisons `f` makes were handed to the Unicode tables.
+fn folded_by(f: impl FnOnce()) -> usize {
+    let count = || crate::query::CASE_FOLDED.with(std::cell::Cell::get);
+    let before = count();
+    f();
+    count() - before
+}
+
+/// A big library's sort compares file names at most of its comparisons (a burst, an import batch tie on their
+/// dates), and there the names are ASCII: walking `char::to_lowercase` for each of them is what such a sort spent most
+/// of its time on. ASCII names must not reach the tables; a name with another letter still does, from that letter on.
+#[test]
+fn ascii_names_are_compared_without_the_unicode_tables() {
+    use crate::query::cmp_name;
+    for (a, b) in [
+        ("IMG_0001.CR3", "img_0002.cr3"),
+        ("IMG_0001.CR3", "IMG_0001.cr3"),
+        ("IMG_0001", "IMG_00010"),
+        ("DSC_9.ARW", "DSC_10.ARW"),
+        ("", ""),
+        ("", "a"),
+    ] {
+        assert_eq!(folded_by(|| _ = cmp_name(a, b)), 0, "{a:?} against {b:?}");
+    }
+    for (a, b) in [("Ärger.jpg", "ärger.jpg"), ("IMG_Ä.jpg", "img_ä.jpg"), ("IMG_1", "IMG_É"), ("IMG_Ä", "IMG_A")] {
+        assert_eq!(folded_by(|| _ = cmp_name(a, b)), 1, "{a:?} against {b:?}");
+    }
+}
+
+/// The sort itself: photos of one second and one import batch (names in any case, ids against the names) are put in
+/// file name order, for the date and import date keys and the name key, up and down, with no name folded.
+#[test]
+fn sorting_a_batch_of_ascii_names_folds_none() {
+    let mut c = Catalog::new();
+    let names: Vec<String> = (0..60).map(|n| format!("{}{:04}.{}", ["IMG_", "img_", "DSC_"][n % 3], 97 * n % 60, ["CR3", "cr3"][n % 2])).collect();
+    let mut by_name = Vec::new();
+    for (n, name) in names.iter().enumerate() {
+        let id = PhotoId(1000 - n as u64);
+        let mut p = Photo::new(id, Source::Demo { scene: 1 }, name, "RAW", 6000, 4000, "2026-09-30T10:00:00");
+        p.captured = Some("2026-10-01T12:00:00".into());
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        by_name.push((name.to_lowercase(), id));
+    }
+    by_name.sort();
+    let by_name: Vec<PhotoId> = by_name.into_iter().map(|(_, id)| id).collect();
+    for key in [SortKey::CaptureDate, SortKey::ImportDate, SortKey::FileName] {
+        for ascending in [true, false] {
+            let sort = Sort { key, ascending, ..Default::default() };
+            let mut got = Vec::new();
+            assert_eq!(folded_by(|| got = c.query(&Filter::default(), &sort)), 0, "{key:?} {ascending}");
+            let mut want = by_name.clone();
+            if !ascending {
+                want.reverse();
+            }
+            assert_eq!(got, want, "{key:?} {ascending}");
+        }
+    }
+}
+
 /// Search Photos finds named people in free text, and a quoted value keeps a name of several words
 /// together: `person:"Jane Doe"` (issue #1449). Malformed quotes narrow the result or change nothing.
 #[test]
