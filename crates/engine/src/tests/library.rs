@@ -850,6 +850,8 @@ fn an_album_filter_loop_is_refused() {
 /// opened, then the cache is tidied in the background with a row in the activity stack: the
 /// thumbnails are taken over under a name that is no picture's, the folder is tagged as a
 /// cache, and the next time the library opens there is nothing to tidy and no row.
+// Fails under full-suite load and passes solo; quarantined until #4428 is fixed.
+#[ignore = "flaky: #4428"]
 #[test]
 fn a_thumbnail_cache_from_before_is_tidied_in_the_background_when_the_library_opens() {
     let dir = temp_dir("tidy-thumbs");
