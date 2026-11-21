@@ -9,10 +9,14 @@
 //!    disk and compared byte for byte with the original. A name that is taken gets -1, -2…
 //!    Anything that fails is undone ([`rollback`]): the partial destination is removed and the
 //!    source stays as it was.
-//! 2. Only after the catalog records pointing at the destinations were committed and saved
-//!    does [`finish`] remove each source — after checking once more that its destination is
-//!    still there with the same size. A source that can't be removed (a read-only card, a
-//!    locked file) stays and is reported; the photo is then imported from the copy.
+//! 2. Only after the catalog records pointing at the destinations were committed and saved do the
+//!    destination folders' entries go to disk ([`sync_folders`] — once per folder for the batch, so
+//!    a batch into one folder flushes it once) and then [`finish`] remove each source —
+//!    after checking once more that its destination is still there with the same bytes. A file's own
+//!    sync does not cover the folder entry naming it, so a crash between removing an original and
+//!    that entry reaching disk would keep the deletion and lose the photo (issue #1501). A source
+//!    whose folder could not be flushed, or that can't be removed (a read-only card, a locked file),
+//!    stays and is reported; the photo is then imported from the copy.
 //!
 //! A `IMG_1.xmp` sidecar is shared by `IMG_1.CR3` and `IMG_1.JPG`: it is copied along with each,
 //! and removed from the source only once no photo with that name is left beside it.
@@ -20,6 +24,7 @@
 //! (Not `std::fs::rename`: it would remove the source before the catalog knows the new place,
 //! and on Unix it silently replaces an existing destination.)
 
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -56,6 +61,13 @@ pub(crate) enum Fault {
     Corrupt,
     /// Removing the source fails (as on a read-only card).
     FailRemove,
+    /// Syncing the destination's folder to disk fails.
+    FailDirSync,
+    /// Syncing fails for the folder whose path ends like this, and for no other (a mixed batch).
+    FailDirSyncIn(&'static str),
+    /// Syncing a folder is refused, as on a platform or file system without one (Windows needs a
+    /// flush the standard library cannot ask for): nothing is flushed, and nothing failed.
+    RefuseDirSync,
     /// Each copy takes a little longer and notes the thread it ran on ([`copy_threads`]), to see
     /// an import's copies run side by side.
     Slow,
@@ -147,7 +159,7 @@ pub(crate) fn sidecars_of(src: &Path) -> Vec<(PathBuf, bool)> {
 /// Put `src` into `dir` as `name` (-1, -2… when taken) with its sidecars, leaving the source
 /// untouched. On failure nothing is left at the destination.
 pub(crate) fn place(src: &Path, dir: &Path, name: &str) -> Result<Placed, String> {
-    fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    create_dir_durable(dir).map_err(|e| format!("could not make {} durable ({e}): the original is kept", dir.display()))?;
     let (stem, ext) = match name.rsplit_once('.') {
         Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
         _ => (name.to_string(), String::new()),
@@ -228,6 +240,10 @@ pub(crate) fn rollback(p: &Placed) {
 /// Remove a placed photo's source (its catalog record is committed and saved): only when the
 /// destination is still there with the same bytes. Then its sidecars, unless another photo still
 /// uses a shared one. `Err` = the source was kept (why); `Ok` lists sidecars kept (path, why).
+///
+/// The destination's folder must already be on disk — [`sync_folders`] puts it there, once per
+/// folder for a whole batch (issue #1501). This does not sync it, so each committed batch
+/// flushes a destination folder once rather than once per photo.
 pub(crate) fn finish(p: &Placed) -> Result<Vec<(String, String)>, String> {
     // compare the bytes now: either file may have changed since the copy was verified
     let same = match (fs::metadata(&p.src), fs::metadata(&p.dst)) {
@@ -269,6 +285,124 @@ pub(crate) fn sibling_photo(sidecar: &Path) -> Option<String> {
         let ok = f.file_stem().is_some_and(|s| s.to_string_lossy() == stem) && crate::import::is_supported(&f);
         ok.then(|| f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())
     })
+}
+
+/// The folder `path` is named in (the current one for a bare file name).
+pub(crate) fn folder_of(path: &Path) -> &Path {
+    path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."))
+}
+
+/// Flush the destination directory before removing an original. Unsupported directory flushing is
+/// a compatibility exception (including our std-only non-Unix path), not a durability guarantee;
+/// log it rather than claim success. Permission, path and real I/O errors keep the original. Both
+/// new-folder creation and the final batch barrier use this policy (issue #1501).
+pub(crate) fn sync_dir(dir: &Path) -> io::Result<()> {
+    use lightcraft_catalog::safe_file::{FolderSync, sync_dir_checked};
+    if injected(Fault::RefuseDirSync) {
+        no_folder_flush(dir, &io::Error::new(io::ErrorKind::Unsupported, "folder sync refused (injected)"))?;
+    } else {
+        match sync_dir_checked(dir)? {
+            FolderSync::Durable => {}
+            FolderSync::NoFolderSync(why) => no_folder_flush(dir, &why)?,
+        }
+    }
+    // (the tests' injected failure comes after the real flush, so a test that counts flushes counts
+    // the flush the file system really made)
+    if dir_sync_fails(dir) {
+        return Err(io::Error::other("folder sync failed (injected)"));
+    }
+    Ok(())
+}
+
+/// Does the calling thread's injected fault fail the folder sync for `dir`?
+fn dir_sync_fails(dir: &Path) -> bool {
+    #[cfg(test)]
+    {
+        match FAULT.with(std::cell::Cell::get) {
+            Fault::FailDirSync => true,
+            Fault::FailDirSyncIn(tag) => dir.to_string_lossy().ends_with(tag),
+            _ => false,
+        }
+    }
+    #[cfg(not(test))]
+    {
+        let _ = dir;
+        false
+    }
+}
+
+thread_local! {
+    /// The folders whose missing flush has already been reported on this thread (a batch runs on
+    /// one): a bulk move into a share that refuses them says so once per folder, not once per photo.
+    /// Capped, because a session that has said it for a great many folders has said enough.
+    static TOLD_NO_FOLDER_FLUSH: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// There is no way to flush a folder here: nothing failed, nothing more can be done, and the caller
+/// goes on — saying so in the log rather than passing it off as a flush that worked. Once per folder
+/// per thread, so a 1000-photo Move is one line and not a thousand.
+fn no_folder_flush(dir: &Path, why: &io::Error) -> io::Result<()> {
+    let first = TOLD_NO_FOLDER_FLUSH.with(|told| {
+        let Ok(mut told) = told.try_borrow_mut() else { return false };
+        if told.iter().any(|d| d == dir) || told.len() >= 256 {
+            return false;
+        }
+        told.push(dir.to_path_buf());
+        true
+    });
+    if first {
+        log::debug!(
+            "import: {}: no way to flush a folder's entries on this file system ({why}): the new name is as durable as it makes it",
+            dir.display()
+        );
+    }
+    Ok(())
+}
+
+/// Flush every distinct destination folder before the removal loop. Path components coalesce
+/// trailing separators and `./`; canonicalization also coalesces symlink aliases. Resolve each
+/// distinct spelling once, and open the canonical key that is used for deduplication.
+///
+/// Return failures under the original spelling, so every affected photo is kept even if a later
+/// lookup fails or a symlink changes. Resolution failures also fail closed. This is not a defense
+/// against arbitrary concurrent path replacement; `finish` still rechecks the copy's bytes.
+pub(crate) fn sync_folders(placed: &[Placed]) -> BTreeMap<PathBuf, String> {
+    let spellings: std::collections::BTreeSet<&Path> = placed.iter().map(|p| folder_of(&p.dst)).collect();
+    let mut synced: BTreeMap<PathBuf, Result<(), String>> = BTreeMap::new();
+    let mut failed = BTreeMap::new();
+    for dir in spellings {
+        let outcome = match fs::canonicalize(dir) {
+            Ok(key) => synced.entry(key).or_insert_with_key(|key| sync_dir(key).map_err(|e| e.to_string())).clone(),
+            Err(e) => Err(format!("could not resolve the destination folder: {e}")),
+        };
+        if let Err(why) = outcome {
+            failed.insert(dir.to_path_buf(), why);
+        }
+    }
+    failed
+}
+
+/// [`fs::create_dir_all`], with every folder it creates made durable: each new folder's entry is in its parent, so
+/// the parent is synced too.
+fn create_dir_durable(dir: &Path) -> io::Result<()> {
+    let mut missing: Vec<&Path> = Vec::new();
+    let mut at = Some(dir);
+    while let Some(d) = at.filter(|d| !d.as_os_str().is_empty() && !d.exists()) {
+        missing.push(d);
+        at = d.parent();
+    }
+    fs::create_dir_all(dir)?;
+    for d in &missing {
+        // (a relative top folder's parent is the current one)
+        if let Err(e) = sync_dir(folder_of(d)) {
+            // nothing is left at the destination on failure: the folders made here go again, deepest first
+            for d in &missing {
+                let _ = fs::remove_dir(d);
+            }
+            return Err(e);
+        }
+    }
+    Ok(())
 }
 
 /// `dst` = `src` without touching `src`: a hard link, else a verified copy. Never overwrites

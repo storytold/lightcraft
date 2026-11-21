@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Safer Move imports
+- Import ▸ Move now flushes each destination folder once per committed batch before removing originals
+  (issue #1501). A real directory-sync failure keeps and reports the originals; if a new folder cannot
+  be prepared, nothing is imported from that file. Unsupported directory flushing retains the previous
+  behavior, without claiming durability. This includes the std-only Windows path: the copy's contents
+  are flushed, but this change does not add a native directory flush. Cross-volume file moves also
+  flush their destination folder before source removal, individually rather than in batches.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
