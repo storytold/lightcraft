@@ -551,3 +551,33 @@ fn old_auto_import_settings_still_watch() {
     let off: lcc_engine::import::ImportDefaults = serde_json::from_str(r#"{"autoFolder":"/x","autoPaused":true}"#).expect("loads");
     assert!(off.auto_active_folder().is_none() && off.auto_folder.is_some());
 }
+
+/// A scan whose files arrive while another import holds `app.import` releases them for the next scan
+/// instead of leaving them tried until a Synchronize Folder (#1302).
+#[test]
+fn auto_import_scan_beaten_by_another_import_leaves_its_files_for_the_next_scan() {
+    let dir = Scratch::new("auto-beaten");
+    let mut h = app(&dir);
+    let path = dir.path("watch/new.png");
+    h.app.session.auto_import_tried.insert(path.clone(), 1);
+    h.app.import = Some(crate::import::ImportTask::new(vec![], json!({"mode": "add"}), 0, false));
+    crate::import::auto_import_take(&mut h.app, &json!({"import": {"paths": [path.clone()], "mode": "add"}}));
+    assert!(!h.app.session.auto_import_tried.contains_key(&path), "the file can be tried again");
+    assert!(!h.app.import.as_ref().unwrap().auto, "the other import is kept");
+}
+
+/// A cancelled Auto Import leaves the files it never read to the next scans.
+#[test]
+fn cancelled_auto_import_leaves_its_unread_files_for_the_next_scan() {
+    let dir = Scratch::new("auto-cancel");
+    let mut h = app(&dir);
+    let unread = dir.path("watch/never-read.png");
+    h.app.session.auto_import_tried.insert(unread.clone(), 1);
+    h.app.import = Some(crate::import::ImportTask::new(vec![unread.clone()], json!({"mode": "add"}), 0, false).auto());
+    let ctx = h.view.ctx.clone();
+    crate::import::tick(&mut h.app, &ctx);
+    let id = h.app.import.as_ref().and_then(|t| t.guard.as_ref()).map(|g| g.id()).expect("the import started");
+    h.app.session.activity.cancel(id).unwrap();
+    assert!(h.step_until(T, |h| h.app.import.is_none()), "the import ends");
+    assert!(!h.app.session.auto_import_tried.contains_key(&unread), "the file can be tried again");
+}

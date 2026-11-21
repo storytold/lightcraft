@@ -431,7 +431,7 @@ pub struct ImportTask {
     /// Cancel was pressed: no further files are started; batches already readied are added.
     pub cancelled: bool,
     /// Auto Import (the watched folder): the selection stays as it is, a short toast when done.
-    auto: bool,
+    pub(crate) auto: bool,
     /// Android's watched camera roll: like `auto`, and the toast says where the photos came from.
     camera_roll: bool,
     /// Auto Import: the files it was handed (tried again later when the import can't start).
@@ -445,7 +445,7 @@ pub struct ImportTask {
     moved_on: bool,
     run: Option<ImportRun>,
     /// The import's row in the activity stack (its ✕ and `activity.cancel` set the run's cancel flag).
-    guard: Option<lcc_engine::activity::TaskGuard>,
+    pub(crate) guard: Option<lcc_engine::activity::TaskGuard>,
     /// The Import tab's: once the photos are in, their previews are built unattended
     /// (`none` | `standard` | `full`: `library.finishImport`).
     pub finish_previews: Option<String>,
@@ -1310,6 +1310,10 @@ fn commit_batch(app: &mut LccApp, task: &mut ImportTask, prepared: lcc_engine::i
 /// The import is done (or cancelled): one undo step, show and select the first photo (unless the
 /// user chose another meanwhile), say what happened.
 fn finish(app: &mut LccApp, ctx: &egui::Context, task: ImportTask) {
+    // a cancelled Auto Import: the files it never read are tried again by the next scans (#1302)
+    if task.auto && task.cancelled {
+        app.session.auto_import_retry(&task.auto_paths);
+    }
     let steps = app.session.undo.len().saturating_sub(task.undo0);
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     let label = if task.imported == 0 && task.restored > 0 {
@@ -2538,6 +2542,23 @@ pub(crate) fn preset_stack_section(app: &mut LccApp, ui: &mut egui::Ui, d: &mut 
             help(ui, "Each raw keeps its camera body's profile, whatever profile a preset names.");
         }
     }
+}
+
+/// Start the Auto Import a `library.autoImportScan` result `r` asks for, or, when another import
+/// took `app.import` meanwhile, release the files the scan marked as tried so the next scan offers
+/// them again rather than dropping them until a Synchronize Folder (#1302).
+pub(crate) fn auto_import_take(app: &mut LccApp, r: &Value) {
+    let Some(mut params) = r.get("import").cloned() else { return };
+    let paths: Vec<String> = params["paths"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
+    if app.import.is_some() {
+        app.session.auto_import_retry(&paths);
+        return;
+    }
+    if let Some(o) = params.as_object_mut() {
+        o.remove("paths");
+    }
+    let undo0 = app.session.undo.len();
+    app.import = Some(ImportTask::new(paths, params, undo0, false).auto());
 }
 
 #[cfg(test)]
