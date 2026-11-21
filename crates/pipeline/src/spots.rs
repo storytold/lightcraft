@@ -297,7 +297,7 @@ pub struct SpotLayout {
     /// The stroke's points.
     pub pts: Vec<(f32, f32)>,
     /// Where the patch is read from, relative to the target; `None`: chosen automatically
-    /// ([`auto_source`] around the first point, on the image as the earlier spots left it).
+    /// ([`auto_source`] around the first point, on the pre-spot snapshot).
     pub offset: Option<(f32, f32)>,
     /// The box the spot works in: left, top, width, height (inside the image, never empty).
     pub bx: usize,
@@ -353,7 +353,8 @@ pub fn layout(spot: &Spot, frame: &Frame, w: usize, h: usize, ppl: f64) -> Optio
     if bx1 <= bx0 || by1 <= by0 {
         return None;
     }
-    let feather = (spot.feather / 100.0).clamp(0.0, 1.0) as f32;
+    let feather = if spot.feather.is_finite() { (spot.feather / 100.0).clamp(0.0, 1.0) } else { 0.0 } as f32;
+    let opacity = if spot.opacity.is_finite() { (spot.opacity / 100.0).clamp(0.0, 1.0) } else { 0.0 };
     Some(SpotLayout {
         r,
         pts,
@@ -363,7 +364,7 @@ pub fn layout(spot: &Spot, frame: &Frame, w: usize, h: usize, ppl: f64) -> Optio
         bw: bx1 - bx0,
         bh: by1 - by0,
         inner: r * (1.0 - feather * 0.8),
-        opacity: (spot.opacity / 100.0).clamp(0.0, 1.0) as f32,
+        opacity: opacity as f32,
         heal: matches!(spot.mode, SpotMode::Remove | SpotMode::Heal),
         fill,
     })
@@ -385,13 +386,25 @@ fn fill_box(src: &mut [[f32; 3]], tgt: &[[f32; 3]], alpha: &[f32], bw: usize, bh
 
 /// Apply all spots to `img` (output resolution). `ppl` = output pixels per long-edge unit.
 pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
+    // Nothing to do without spots: skip the full-image snapshot so a spotless render
+    // pays no allocation or copy.
+    if spots.is_empty() {
+        return;
+    }
     let (w, h) = (img.width, img.height);
+    // Every spot reads its source patch and target tone from the image as it was before
+    // any spot was applied (`original`), so a spot never copies pixels another spot
+    // already wrote and its source does not depend on spot order. Each spot's correction
+    // is blended against the current output pixel, so overlapping spots preserve earlier
+    // corrections instead of resetting the pixel to the original. Writes still accumulate
+    // in `img`.
+    let original = img.clone();
     for spot in spots {
         let Some(SpotLayout { r, pts, offset, bx: bx0, by: by0, bw, bh, inner, opacity, heal, fill }) = layout(spot, frame, w, h, ppl) else {
             continue;
         };
         let Some(&first) = pts.first() else { continue };
-        let offset = offset.unwrap_or_else(|| auto_source(img, first, r));
+        let offset = offset.unwrap_or_else(|| auto_source(&original, first, r));
         // alpha of the stroke and source patch in the box
         let mut alpha = vec![0.0f32; bw * bh];
         let mut src = vec![[0.0f32; 3]; bw * bh];
@@ -401,8 +414,8 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
                 let (px, py) = ((bx0 + x) as f32 + 0.5, (by0 + y) as f32 + 0.5);
                 let d = pts.iter().map(|p| ((px - p.0).powi(2) + (py - p.1).powi(2)).sqrt()).fold(f32::MAX, f32::min);
                 alpha[y * bw + x] = (1.0 - smooth(inner, r, d)) * opacity;
-                src[y * bw + x] = img.sample_bilinear(px + offset.0, py + offset.1);
-                tgt[y * bw + x] = img.get(bx0 + x, by0 + y);
+                src[y * bw + x] = original.sample_bilinear(px + offset.0, py + offset.1);
+                tgt[y * bw + x] = original.get(bx0 + x, by0 + y);
             }
         }
         if fill {
@@ -448,7 +461,7 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
                     let d = l.data[i];
                     v = [v[0] + d[0], v[1] + d[1], v[2] + d[2]];
                 }
-                let t = tgt[i];
+                let t = img.get(bx0 + x, by0 + y);
                 img.set(bx0 + x, by0 + y, [t[0] + (v[0] - t[0]) * a, t[1] + (v[1] - t[1]) * a, t[2] + (v[2] - t[2]) * a].map(|c| c.max(0.0)));
             }
         }
@@ -611,6 +624,79 @@ mod tests {
         assert!(img.get(5, 50)[0] < 0.2);
     }
 
+    #[test]
+    fn spots_do_not_read_each_others_output() {
+        // spot 1 copies bright columns onto the left side; spot 2's source patch
+        // overlaps the pixels spot 1 wrote. Each spot must read from the original
+        // image, so the result must not depend on spot order.
+        let mut base = Rgb32f::from_fn(100, 100, |_, _| [0.1; 3]);
+        for x in 68..72 {
+            for y in 0..100 {
+                base.set(x, y, [0.9; 3]);
+            }
+        }
+        let frame = Frame::new(100, 100, &DevelopSettings::default(), true);
+        let ppl = frame.px_per_long(100);
+        let spot1 = Spot {
+            mode: SpotMode::Clone,
+            points: vec![Point::new(0.30, 0.50)],
+            size: 4.0 / 100.0,
+            feather: 0.0,
+            opacity: 100.0,
+            source_offset: Some(Point::new(0.40, 0.0)),
+        };
+        let spot2 = Spot {
+            mode: SpotMode::Clone,
+            points: vec![Point::new(0.60, 0.50)],
+            size: 4.0 / 100.0,
+            feather: 0.0,
+            opacity: 100.0,
+            source_offset: Some(Point::new(-0.30, 0.0)),
+        };
+        let mut first = base.clone();
+        apply(&mut first, &[spot1.clone(), spot2.clone()], &frame, ppl);
+        let mut second = base.clone();
+        apply(&mut second, &[spot2.clone(), spot1.clone()], &frame, ppl);
+        assert!(first.get(30, 50)[0] > 0.5, "spot 1 copied the bright columns");
+        assert_eq!(first.data, second.data, "spot 2 read spot 1's output when spot 1 ran first");
+    }
+
+    #[test]
+    fn auto_source_reads_the_pre_spot_snapshot() {
+        // spot 1 copies bright columns onto the left side; spot 2's auto source
+        // must choose from the original image, not from pixels spot 1 wrote, so
+        // the result must not depend on spot order.
+        let mut base = Rgb32f::from_fn(100, 100, |_, _| [0.1; 3]);
+        for x in 68..72 {
+            for y in 0..100 {
+                base.set(x, y, [0.9; 3]);
+            }
+        }
+        let frame = Frame::new(100, 100, &DevelopSettings::default(), true);
+        let ppl = frame.px_per_long(100);
+        let spot1 = Spot {
+            mode: SpotMode::Clone,
+            points: vec![Point::new(0.30, 0.50)],
+            size: 4.0 / 100.0,
+            feather: 0.0,
+            opacity: 100.0,
+            source_offset: Some(Point::new(0.40, 0.0)),
+        };
+        let spot2 = Spot {
+            mode: SpotMode::Remove,
+            points: vec![Point::new(0.60, 0.50)],
+            size: 4.0 / 100.0,
+            feather: 0.0,
+            opacity: 100.0,
+            source_offset: None,
+        };
+        let mut first = base.clone();
+        apply(&mut first, &[spot1.clone(), spot2.clone()], &frame, ppl);
+        let mut second = base.clone();
+        apply(&mut second, &[spot2.clone(), spot1.clone()], &frame, ppl);
+        assert_eq!(first.data, second.data, "auto source read spot 1's output when spot 1 ran first");
+    }
+
     fn with_spots(spots: Vec<Spot>) -> DevelopSettings {
         DevelopSettings { spots, ..Default::default() }
     }
@@ -700,5 +786,110 @@ mod tests {
         // a spot that doesn't touch the window is no business of it, however far it reads
         let elsewhere = with_spots(vec![spot_at(0.9, 0.9, 0.01, Some(Point::new(-0.8, 0.0)))]);
         assert_eq!(window_for_reads_checked(&elsewhere, &frame, 40_000, 30_000, ppl, win), Some(win));
+    }
+
+    #[test]
+    fn overlapping_spots_preserve_earlier_correction() {
+        // Two overlapping clone spots at the same target: the first paints it
+        // bright, the second paints it half-dark. Blending against the pre-spot
+        // snapshot resets the pixel to the original (the last spot wins); blending
+        // against the current output preserves the earlier correction.
+        let mut img = Rgb32f::from_fn(100, 100, |_, _| [0.1; 3]);
+        for y in 60..62 {
+            for x in 60..62 {
+                img.set(x, y, [0.9; 3]);
+            }
+        }
+        let frame = Frame::new(100, 100, &DevelopSettings::default(), true);
+        let ppl = frame.px_per_long(100);
+        let spot1 = Spot {
+            mode: SpotMode::Clone,
+            points: vec![Point::new(0.5, 0.5)],
+            size: 10.0 / 100.0,
+            feather: 0.0,
+            opacity: 100.0,
+            source_offset: Some(Point::new(0.1, 0.1)),
+        };
+        let spot2 = Spot {
+            mode: SpotMode::Clone,
+            points: vec![Point::new(0.5, 0.5)],
+            size: 10.0 / 100.0,
+            feather: 0.0,
+            opacity: 50.0,
+            source_offset: Some(Point::new(0.0, 0.0)),
+        };
+        apply(&mut img, &[spot1, spot2], &frame, ppl);
+        let c = img.get(50, 50);
+        assert!(c[0] > 0.4, "second spot should blend against the current output, preserving the first correction: {c:?}");
+    }
+
+    #[test]
+    fn overlapping_spot_reads_source_from_snapshot_not_prior_output() {
+        // Spot 1 copies bright columns onto the left quarter. Spot 2's source patch
+        // overlaps the pixels spot 1 wrote. Spot 2 must read from the pre-spot
+        // snapshot, so its source is the original dark pixels, not spot 1's output.
+        let base = Rgb32f::from_fn(100, 100, |x, _| if x < 50 { [0.1; 3] } else { [0.9; 3] });
+        let frame = Frame::new(100, 100, &DevelopSettings::default(), true);
+        let ppl = frame.px_per_long(100);
+        let spot1 = Spot {
+            mode: SpotMode::Clone,
+            points: vec![Point::new(0.30, 0.50)],
+            size: 10.0 / 100.0,
+            feather: 0.0,
+            opacity: 100.0,
+            source_offset: Some(Point::new(0.30, 0.0)),
+        };
+        let spot2 = Spot {
+            mode: SpotMode::Clone,
+            points: vec![Point::new(0.40, 0.50)],
+            size: 10.0 / 100.0,
+            feather: 0.0,
+            opacity: 100.0,
+            source_offset: Some(Point::new(-0.10, 0.0)),
+        };
+        let mut img = base.clone();
+        apply(&mut img, &[spot1.clone(), spot2.clone()], &frame, ppl);
+        // Spot 2's target covers x in [30, 50]. Its source reads from x in [20, 40]
+        // (offset -10). Those pixels were overwritten by spot 1 with bright values,
+        // but spot 2 must read from the snapshot, so they are dark (original x < 50).
+        let c = img.get(35, 50);
+        assert!(c[0] < 0.5, "spot 2 read spot 1's output instead of the snapshot: {c:?}");
+    }
+
+    #[test]
+    fn overlapping_spots_with_auto_source_are_order_independent() {
+        // Spot 1 copies bright columns onto the left side. Spot 2 is a Remove spot
+        // whose automatic source must be chosen from the pre-spot snapshot, so its
+        // result (and the preserved earlier correction) must not depend on order.
+        let mut base = Rgb32f::from_fn(100, 100, |_, _| [0.1; 3]);
+        for x in 68..72 {
+            for y in 0..100 {
+                base.set(x, y, [0.9; 3]);
+            }
+        }
+        let frame = Frame::new(100, 100, &DevelopSettings::default(), true);
+        let ppl = frame.px_per_long(100);
+        let spot1 = Spot {
+            mode: SpotMode::Clone,
+            points: vec![Point::new(0.30, 0.50)],
+            size: 4.0 / 100.0,
+            feather: 0.0,
+            opacity: 100.0,
+            source_offset: Some(Point::new(0.40, 0.0)),
+        };
+        let spot2 = Spot {
+            mode: SpotMode::Remove,
+            points: vec![Point::new(0.60, 0.50)],
+            size: 4.0 / 100.0,
+            feather: 0.0,
+            opacity: 100.0,
+            source_offset: None,
+        };
+        let mut first = base.clone();
+        apply(&mut first, &[spot1.clone(), spot2.clone()], &frame, ppl);
+        let mut second = base.clone();
+        apply(&mut second, &[spot2.clone(), spot1.clone()], &frame, ppl);
+        assert_eq!(first.data, second.data, "overlapping spots with auto source depended on order");
+        assert!(first.get(30, 50)[0] > 0.5, "earlier clone correction was lost: {:?}", first.get(30, 50));
     }
 }
