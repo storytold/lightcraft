@@ -42,7 +42,9 @@ remains available in the raw property map, and does not prevent the next valid c
 
 When foreign `crs:` settings are only partly transferable, `library.import` includes per-photo `warnings` in its
 report. Warnings identify unsupported profile names, saved Upright geometry that will be recalculated, and other
-unmapped adjustments; they do not change the source packet or become catalog edits.
+unmapped adjustments; they do not change the source packet or become catalog edits. The toast at the end of the
+import groups warnings that say the same thing about different photos into one counted line, caps the list with a
+“+N more” line, and disappears when pressed, so a large import cannot cover the viewer (#3050).
 
 Manual rereading and undo leave the JPEG original unchanged. Manual rereading also leaves sidecar files unchanged,
 even with automatic XMP writing on. With automatic XMP writing off (the default), undo/redo leave sidecars unchanged;

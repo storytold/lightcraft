@@ -86,7 +86,26 @@ pub fn resizable_side(ui: &mut egui::Ui, side: SidePanel, add: impl FnOnce(&mut 
     Some(w.round().clamp(limits.min, max))
 }
 
-/// The HUD toast at the bottom centre of the canvas.
+/// The toast's geometry: how its text wraps within the canvas, its padding, and how far from
+/// the canvas edge it sits (from the top in a slideshow, clear of the playback controls).
+const TOAST_WRAP_MARGIN: f32 = 80.0;
+const TOAST_WRAP_MIN: f32 = 200.0;
+const TOAST_WRAP_MAX: f32 = 720.0;
+const TOAST_PAD_X: f32 = 40.0;
+const TOAST_PAD_Y: f32 = 22.0;
+const TOAST_MIN_HEIGHT: f32 = 40.0;
+const TOAST_EDGE_OFFSET: f32 = 60.0;
+/// The toast's text size, background opacity, corner radius, the fade-out ramp before it
+/// expires, and how soon the next frame is asked for while it is shown.
+const TOAST_FONT: f32 = 14.0;
+const TOAST_BACKGROUND_ALPHA: u8 = 200;
+const TOAST_CORNER: f32 = 6.0;
+const TOAST_FADE_SECONDS: f64 = 0.25;
+const TOAST_REPAINT_MS: u64 = 30;
+
+/// The HUD toast at the bottom centre of the canvas. A press on it dismisses it (its rectangle
+/// is registered as `toast` for automation); the press itself passes through to whatever the
+/// canvas holds underneath, as it always has (#3050).
 pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
     let now = app.tick_now();
     let Some((text, until, label)) = app.ui.toast.clone() else { return };
@@ -95,21 +114,51 @@ pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     let Some(canvas) = app.canvas_rect else { return };
-    let t = Tokens::get(ctx);
-    let fade = ((until - now) / 0.25).clamp(0.0, 1.0) as f32;
-    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("toast")));
-    // long messages (a save warning, the web build's notices) wrap within the canvas
-    let wrap = (canvas.width() - 80.0).clamp(200.0, 720.0);
-    let (background, foreground) = label.map(crate::theme::label_toast_colors).unwrap_or((egui::Color32::from_black_alpha(200), t.text));
-    let foreground = foreground.gamma_multiply(fade);
-    let galley = painter.layout(text, t.font(14.0), foreground, wrap);
-    let size = vec2(galley.size().x + 40.0, (galley.size().y + 22.0).max(40.0));
     // a slideshow's playback controls sit at the bottom: the toast goes to the top there, clear of them
-    let y = if app.ui.slideshow.is_some() { canvas.top() + 60.0 } else { canvas.bottom() - 60.0 };
-    let r = Rect::from_center_size(pos2(canvas.center().x, y), size);
-    painter.rect_filled(r, 6.0, background.gamma_multiply(fade));
-    painter.galley(r.center() - galley.size() / 2.0, galley, foreground);
-    ctx.request_repaint_after(std::time::Duration::from_millis(30));
+    let y = if app.ui.slideshow.is_some() { canvas.top() + TOAST_EDGE_OFFSET } else { canvas.bottom() - TOAST_EDGE_OFFSET };
+    let fade = ((until - now) / TOAST_FADE_SECONDS).clamp(0.0, 1.0) as f32;
+    let (galley, rect, background, foreground) = toast_layout(ctx, text, label, fade, canvas, y);
+    toast_paint(ctx, &galley, rect, background, foreground);
+    crate::widgets::register_geometry(ctx, "toast", rect);
+    // A press inside the rectangle dismisses the toast. The event is not consumed: the press
+    // still reaches what is under it (a dialog control may share the rectangle), so nothing the
+    // input does changes — only the toast disappears (#3050).
+    let pressed_on_toast =
+        ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary) && i.pointer.latest_pos().is_some_and(|p| rect.contains(p)));
+    if pressed_on_toast {
+        app.ui.toast = None;
+        return;
+    }
+    ctx.request_repaint_after(std::time::Duration::from_millis(TOAST_REPAINT_MS));
+}
+
+/// The toast's text wrapped and faded for this frame, and the rectangle it fills on `canvas`,
+/// centred at `y`: the galley to paint, the rectangle, and the colours behind and in it.
+fn toast_layout(
+    ctx: &egui::Context,
+    text: String,
+    label: Option<lightcraft_catalog::ColorLabel>,
+    fade: f32,
+    canvas: Rect,
+    y: f32,
+) -> (std::sync::Arc<egui::epaint::Galley>, Rect, egui::Color32, egui::Color32) {
+    let t = Tokens::get(ctx);
+    // long messages (a save warning, the web build's notices) wrap within the canvas
+    let wrap = (canvas.width() - TOAST_WRAP_MARGIN).clamp(TOAST_WRAP_MIN, TOAST_WRAP_MAX);
+    let (background, foreground) =
+        label.map(crate::theme::label_toast_colors).unwrap_or((egui::Color32::from_black_alpha(TOAST_BACKGROUND_ALPHA), t.text));
+    let foreground = foreground.gamma_multiply(fade);
+    let background = background.gamma_multiply(fade);
+    let galley = ctx.fonts_mut(|f| f.layout(text, t.font(TOAST_FONT), foreground, wrap));
+    let size = vec2(galley.size().x + TOAST_PAD_X, (galley.size().y + TOAST_PAD_Y).max(TOAST_MIN_HEIGHT));
+    (galley, Rect::from_center_size(pos2(canvas.center().x, y), size), background, foreground)
+}
+
+/// The toast's laid-out text painted at `rect` on the Foreground layer.
+fn toast_paint(ctx: &egui::Context, galley: &std::sync::Arc<egui::epaint::Galley>, rect: Rect, background: egui::Color32, foreground: egui::Color32) {
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("toast")));
+    painter.rect_filled(rect, TOAST_CORNER, background);
+    painter.galley(rect.center() - galley.size() / 2.0, galley.clone(), foreground);
 }
 
 /// Paint a centred, dimmed message (empty states).
