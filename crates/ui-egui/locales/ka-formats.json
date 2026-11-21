@@ -99,6 +99,7 @@
   "Lightroom geometry for {path} was not preserved; saved Upright transform is unsupported.": "{path}-ისთვის Lightroom-ის გეომეტრია არ შენარჩუნდა; Upright-ის შენახული გარდაქმნა არ არის მხარდაჭერილი.",
   "Lightroom geometry for {path} was not preserved; saved transform is ignored because Upright is Off.": "{path}-ისთვის Lightroom-ის გეომეტრია არ შენარჩუნდა; შენახული გარდაქმნა იგნორირებულია, რადგან Upright გამორთულია.",
   "Lightroom geometry was not preserved for {path}; {mode} will be recalculated.": "{path}-ისთვის Lightroom-ის გეომეტრია არ შენარჩუნდა; {mode} ხელახლა გამოითვლება.",
+  "Lightroom import cancelled · {imported} photos added": "Lightroom-ის იმპორტი გაუქმდა · დაემატა ფოტო: {imported}",
   "Lightroom import complete: {imported} photos added": "Lightroom-იდან იმპორტი დასრულდა: დაემატა ფოტო: {imported}",
   "Lightroom import complete: {imported} photos added, {failed} failed": "Lightroom-იდან იმპორტი დასრულდა: დაემატა ფოტო: {imported}, ვერ მოხერხდა: {failed}",
   "Lightroom import complete: {imported} photos added; index warning: {warning}": "Lightroom-იდან იმპორტი დასრულდა: დაემატა ფოტო: {imported}; ინდექსის გაფრთხილება: {warning}",

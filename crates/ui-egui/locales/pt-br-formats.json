@@ -51,6 +51,7 @@
   "Imported {n} preset{}, {f} file{} not readable": "{n} predefinição(ões) importada(s){:.0}, {f} arquivo(s) não legível(is){:.0}",
   "Imported {} photo{}": "{0} foto{1} importada{1}",
   "Lightroom catalog inspected: {photos} photos, {collections} collections, {missing} missing": "Catálogo do Lightroom inspecionado: {photos} fotos, {collections} coleções, {missing} ausentes",
+  "Lightroom import cancelled · {imported} photos added": "Importação do Lightroom cancelada · {imported} fotos adicionadas",
   "Lightroom import complete: {imported} photos added": "Importação do Lightroom concluída: {imported} fotos adicionadas",
   "Lightroom import complete: {imported} photos added, {failed} failed": "Importação do Lightroom concluída: {imported} fotos adicionadas, {failed} com falha",
   "Lightroom import complete: {imported} photos added; index warning: {warning}": "Importação do Lightroom concluída: {imported} fotos adicionadas; aviso do índice: {warning}",
