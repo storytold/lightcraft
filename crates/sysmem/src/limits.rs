@@ -3,12 +3,13 @@
 //! Inside a container, a Flatpak, a systemd scope or service with `MemoryMax`, or a CI runner with
 //! a memory limit, the process may get far less than the machine has, and is killed when it goes
 //! over. On Linux, [`effective_total`] and [`available`] read `/proc/meminfo` and the memory
-//! controller of every cgroup from this process's up to the top of its mount (a limit set on an
-//! ancestor binds too): cgroup v2 `memory.max` / `memory.current`, and v1 `memory.limit_in_bytes` /
-//! `memory.usage_in_bytes` on hosts that still mount it. Usage counts the cgroup's page cache, so
-//! its inactive file pages (`memory.stat`), which the kernel reclaims before it kills anything,
-//! count as room, as `MemAvailable` counts reclaimable cache. Elsewhere they return `None`: callers
-//! keep their platform's own way of asking.
+//! controller of this process's cgroup and up to 64 ancestor levels towards the top of its mount
+//! (a limit set on a closer ancestor binds too, while a tighter limit farther up in an unusually
+//! deep hierarchy is not read): cgroup v2 `memory.max` / `memory.current`, and v1
+//! `memory.limit_in_bytes` / `memory.usage_in_bytes` on hosts that still mount it. Usage counts
+//! the cgroup's page cache, so its inactive file pages (`memory.stat`), which the kernel reclaims
+//! before it kills anything, count as room, as `MemAvailable` counts reclaimable cache. Elsewhere
+//! they return `None`: callers keep their platform's own way of asking.
 //!
 //! Where the cgroups are comes from `/proc/self/mountinfo`: the `cgroup2` mount, and the v1
 //! `cgroup` mount whose super options list `memory` (alone or co-mounted, e.g. `cpuset,memory`).
@@ -27,8 +28,10 @@ use std::path::{Path, PathBuf};
 /// Where the cgroup file systems are mounted conventionally (used when mountinfo can't be read).
 pub const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 
-/// Cgroup levels read below a mount at most, the deepest ones: the process's own cgroup and its
-/// nearest parents (the kernel nests far less in practice).
+/// Ancestor levels walked above the process's own cgroup at most, per mount (so at most
+/// `MAX_DEPTH + 1` directories: the process's own cgroup and its nearest 64 ancestors, stopping at
+/// the mount point if closer). A tighter limit farther up in an unusually deep hierarchy is not
+/// read (the kernel nests far less in practice).
 const MAX_DEPTH: usize = 64;
 
 /// A limit this large is no limit: cgroup v1 reports "unlimited" as a page-rounded `i64::MAX`
@@ -42,7 +45,9 @@ const READ_CAP: u64 = 16 << 20;
 /// The memory controller's view of this process's cgroups.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CgroupMemory {
-    /// The tightest limit (bytes) on this process's cgroup or any ancestor; `None` without one.
+    /// The tightest limit (bytes) on this process's cgroup or its nearest 64 ancestors (up to the
+    /// mount point; a tighter limit farther up in an unusually deep hierarchy is not read); `None`
+    /// without one.
     pub limit: Option<u64>,
     /// Bytes the process can still be charged before it reaches a limit: the smallest
     /// `limit − (usage − inactive file cache)` over the limited cgroups (saturating at 0), with a
@@ -238,11 +243,12 @@ pub fn cgroup_memory_at(fs_root: &Path, mountinfo: Option<&str>, own: &str) -> C
     memory_of(&cgroup_dirs(fs_root, mountinfo, own), true)
 }
 
-/// The directories whose memory files bind this process: for the cgroup v2 entry (`0::/path`)
-/// and a v1 entry with the `memory` controller (`N:cpuset,memory:/path`), the cgroup's directory
-/// and each parent up to the mount point (the nearest [`MAX_DEPTH`] of them), deepest first, in
-/// every mount of that hierarchy that shows the cgroup ([`views`]). A cgroup seen through two
-/// mounts (a bind mount of a subtree beside the whole hierarchy) is listed once.
+/// The directories whose memory files are read for this process: for the cgroup v2 entry
+/// (`0::/path`) and a v1 entry with the `memory` controller (`N:cpuset,memory:/path`), the
+/// cgroup's directory and up to [`MAX_DEPTH`] ancestor levels towards the mount point (any
+/// ancestor farther up is not read), deepest first, in every mount of that hierarchy that shows
+/// the cgroup ([`views`]). A cgroup seen through two mounts (a bind mount of a subtree beside the
+/// whole hierarchy) is listed once.
 fn cgroup_dirs(fs_root: &Path, mountinfo: Option<&str>, own: &str) -> Vec<CgroupDir> {
     let mounts = match mountinfo {
         Some(info) => cgroup_mounts(info),
