@@ -255,7 +255,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     "{} of 4 guides — drag along lines that should be vertical or horizontal.",
                     d.geometry.guides.len()
                 ))
-                .size(11.0)
+                .font(Tokens::get(ui.ctx()).caption())
                 .color(Tokens::get(ui.ctx()).text_dim),
             );
         }
