@@ -6,13 +6,14 @@ use super::*;
 #[test]
 fn languages_switch_persist_and_keep_user_values() {
     use crate::control::{ControlRequest, Outcome};
-    let languages: [(Locale, &str, &[&str], &str); 8] = [
+    let languages: [(Locale, &str, &[&str], &str); 9] = [
         (Locale::Cs, "czech", &["cs", "cs-CZ", "cs_CZ.UTF-8", "cs-Latn-CZ"], "áčďéěíňóřšťúůýžÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ„“"),
         (Locale::Id, "indonesian", &["id", "id-ID", "id_ID.UTF-8", "id-Latn-ID"], ""),
         (Locale::Sv, "swedish", &["sv", "sv-SE", "sv_SE.UTF-8", "sv-FI"], "åäöÅÄÖé”’"),
         (Locale::Uk, "ukrainian", &["uk", "uk-UA", "uk_UA.UTF-8", "uk-Cyrl-UA"], ""),
         (Locale::Ka, "georgian", &["ka", "ka-GE", "ka_GE.UTF-8"], ""),
         (Locale::It, "italian", &["it", "it-IT", "it_IT.UTF-8", "it-Latn-IT", "it-CH"], ""),
+        (Locale::Lt, "lithuanian", &["lt", "lt-LT", "lt_LT.UTF-8"], "ąčęėįšųūžĄČĘĖĮŠŲŪŽ„“"),
         (Locale::Fi, "finnish", &["fi", "fi-FI", "fi_FI.UTF-8", "fi-Latn-FI"], ""),
         (Locale::Vi, "vietnamese", &["vi", "vi-VN", "vi_VN", "vi_VN.UTF-8"], ""),
     ];
@@ -390,6 +391,7 @@ fn language_commands_cover_every_language() {
         ("app.language.finnish", Locale::Fi),
         ("app.language.indonesian", Locale::Id),
         ("app.language.vietnamese", Locale::Vi),
+        ("app.language.lithuanian", Locale::Lt),
     ];
     // One command per language, and every command in the UI command tables.
     assert_eq!(commands.len(), Locale::ALL.len());

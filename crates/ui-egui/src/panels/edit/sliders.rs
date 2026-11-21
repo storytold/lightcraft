@@ -230,7 +230,7 @@ fn hdr_settings(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
         let mut v = app.ui.hdr_visualize;
         let r = ui.checkbox(&mut v, "Visualize HDR");
         register(ui, "check:hdrVisualize", r.rect);
-        if r.on_hover_text("Grey below SDR white; yellow, orange, red, magenta up to 1, 2, 3 and over 3 stops above it").changed() {
+        if r.on_hover_text(crate::i18n::tr("Grey below SDR white; yellow, orange, red, magenta up to 1, 2, 3 and over 3 stops above it")).changed() {
             app.ui.hdr_visualize = v;
         }
     });

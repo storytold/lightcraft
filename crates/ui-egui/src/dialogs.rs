@@ -2049,7 +2049,7 @@ fn about_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut 
                 crate::theme::font_credits(app.chinese_font.is_some())
             ));
             ui.add_space(10.0);
-            let r = crate::button::Button::new("Join the ArtCraft Discord")
+            let r = crate::button::Button::new(crate::i18n::tr("Join the ArtCraft Discord"))
                 .primary()
                 .large()
                 .min_width(260.0)
