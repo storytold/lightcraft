@@ -1360,6 +1360,42 @@ fn watermark_params_are_validated() {
     assert!(WATERMARK_IMAGE_WIDTH_RANGE.0 <= 0.02 && WATERMARK_IMAGE_WIDTH_RANGE.1 >= 1.0);
 }
 
+#[test]
+fn an_exact_original_export_cannot_write_to_its_own_sidecar() {
+    let options = ExportOptions { format: ExportFormat::Original, ..Default::default() };
+    let guard = crate::originals::OriginalGuard::default();
+    let export_to = |path: &str| {
+        let to = Destination { exact: Some(path.into()), ..Default::default() };
+        let original = Exported {
+            file_name: "source.jpg".into(),
+            bytes: b"photo".to_vec(),
+            width: 1,
+            height: 1,
+            sidecars: vec![("xmp", b"edits".to_vec())],
+            gpu_fallback: None,
+        };
+        let mut writes = Vec::new();
+        let result = {
+            let mut write = |path: &str, _: &[u8]| {
+                writes.push(path.to_owned());
+                Ok(())
+            };
+            let mut placer = Placer::new(&options, &to, &mut write, &|_| false, true);
+            placer.single = true;
+            placer.place(lightcraft_catalog::PhotoId(1), "source.jpg".into(), None, &guard, Ok(original))
+        };
+        (result, writes)
+    };
+    for path in ["copy.xmp", "copy.XMP"] {
+        let (result, writes) = export_to(path);
+        assert!(result.unwrap_err().contains("the output file and its sidecar"));
+        assert!(writes.is_empty(), "{writes:?}");
+    }
+    let (result, writes) = export_to("copy.jpg");
+    result.unwrap();
+    assert_eq!(writes, ["copy.jpg", "copy.xmp"]);
+}
+
 /// A batch with `lanes` photos in flight into a fake folder `out` (nothing exists there):
 /// results, writes (path, bytes) and progress calls; `progress` returns false at `cancel_at`.
 #[allow(clippy::type_complexity)]
