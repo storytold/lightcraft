@@ -3,8 +3,8 @@
 //! The automatic preview cache budget grows with the library and has no ceiling
 //! ([`crate::media::default_disk_cache_bytes`]): a large library can fill its drive. Rather than cap
 //! it, the session looks at the drive's free space when the library opens and, at most every
-//! [`CHECK_EVERY`] while the app runs (thumbnails and previews fill the cache); when it is under [`LOW_FREE_PERCENT`] of the drive or
-//! under [`LOW_FREE_BYTES`], it hands out one [`LowDiskAlert`] ([`crate::Session::take_disk_space_alert`])
+//! [`CHECK_EVERY`] while the app runs (thumbnails and previews fill the cache); when it has under
+//! [`LOW_FREE_BYTES`] free, it hands out one [`LowDiskAlert`] ([`crate::Session::take_disk_space_alert`])
 //! that the UI shows with a way to Settings ▸ Performance, where the cache can be given a limit. It is
 //! not repeated until the next library open or app run. Reading the free space can fail (a network
 //! share that doesn't say, the web build): then there is no alert, only a log line.
@@ -13,9 +13,8 @@
 
 use std::path::Path;
 
-/// The drive is low when less than this share of it (percent) is free…
-pub const LOW_FREE_PERCENT: u64 = 10;
-/// …or when less than this is free (20 GB), whichever comes first.
+/// The drive is low when less than this is free (20 GB). Not a share of the drive: 10 % of a 1 TB
+/// drive is 100 GB, years of previews, and a notice then only alarms (#4013: 76 GB free of 926 GB).
 pub const LOW_FREE_BYTES: u64 = 20 << 30;
 /// While a library is open, the free space is read at most this often (statvfs on the cache's
 /// drive: cheap, but not something for every frame or every write).
@@ -43,11 +42,9 @@ pub struct DiskSpace {
 }
 
 impl DiskSpace {
-    /// Under [`LOW_FREE_PERCENT`] of the drive free, or under [`LOW_FREE_BYTES`]. A drive that
-    /// reports no size isn't judged by its share.
+    /// Under [`LOW_FREE_BYTES`] free, whatever the drive's size.
     pub fn is_low(&self) -> bool {
-        let under_share = self.total > 0 && u128::from(self.available) * 100 < u128::from(self.total) * u128::from(LOW_FREE_PERCENT);
-        under_share || self.available < LOW_FREE_BYTES
+        self.available < LOW_FREE_BYTES
     }
 }
 
@@ -325,14 +322,14 @@ mod tests {
     }
 
     #[test]
-    fn under_ten_percent_free_raises_the_alert() {
+    fn a_small_share_of_a_large_drive_free_raises_no_alert() {
         let mut s = Session::new();
-        // 300 GB is far above 20 GB, but only 7.5 % of a 4 TB drive
-        let space = DiskSpace { available: 300 * GB, total: 4000 * GB };
-        assert!(s.note_disk_space(space));
-        let alert = s.take_disk_space_alert().expect("the alert is handed out");
-        assert_eq!(alert.space, space);
-        assert!(s.disk_space_alert_raised());
+        // #4013: 76 GB free of 926 GB (8 %) warned that the drive was almost full; so did 300 GB of 4 TB
+        for space in [DiskSpace { available: 76 * GB, total: 926 * GB }, DiskSpace { available: 300 * GB, total: 4000 * GB }] {
+            assert!(!s.note_disk_space(space), "{space:?}");
+        }
+        assert!(s.take_disk_space_alert().is_none());
+        assert!(!s.disk_space_alert_raised());
     }
 
     #[test]
