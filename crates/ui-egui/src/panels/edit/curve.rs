@@ -56,6 +56,23 @@ fn draw_curve_histogram(p: &egui::Painter, r: Rect, h: &lightcraft_raster::Histo
 /// Segments the graph's curve line is drawn with.
 pub(crate) const CURVE_SAMPLES: i32 = 96;
 
+/// The closest two points of a point curve may be in x (a fraction of the graph's width). A drag
+/// stops there, and no point is added closer than that to one already on the graph: the curve would
+/// fall off a cliff between the two.
+const POINT_GAP: f64 = 0.01;
+
+/// `pts` with a point added at (`x`, `y`), and where it went; `None` when a point is already within
+/// [`POINT_GAP`] of `x` (a click level with a point, above or below it).
+fn with_point(pts: &[Point], x: f64, y: f64) -> Option<(usize, Vec<Point>)> {
+    if pts.iter().any(|p| (p.x - x).abs() < POINT_GAP) {
+        return None;
+    }
+    let i = pts.iter().position(|p| p.x > x).unwrap_or(pts.len());
+    let mut v = pts.to_vec();
+    v.insert(i, Point::new(x, y));
+    Some((i, v))
+}
+
 /// Close a graph drag's `develop` interaction, as one undo step.
 ///
 /// It is closed when the drag ends *or* the pointer comes up without egui reporting `drag_stopped`
@@ -323,58 +340,37 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
         && let Some(q) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
     {
         // pick the point under the press, not where the pointer is once the drag threshold passed
-        let _ = app.run("develop.beginInteraction", json!({"label": "Tone Curve"}));
-        match nearest(q) {
-            Some((i, dist)) if dist < 10.0 => dragging = Some(i),
-            _ => {
-                let (x, y) = from_screen(q);
-                let mut v = pts.clone();
-                let i = v.iter().position(|p| p.x > x).unwrap_or(v.len());
-                v.insert(i, Point::new(x, y));
-                dragging = Some(i);
-                new_pts = Some(v);
-            }
+        let (x, y) = from_screen(q);
+        let grabbed = match nearest(q) {
+            Some((i, dist)) if dist < 10.0 => Some((i, None)),
+            _ => with_point(&pts, x, y).map(|(i, v)| (i, Some(v))),
+        };
+        // a press that grabs nothing and may add nothing starts no interaction (it would never be closed)
+        if let Some((i, added)) = grabbed {
+            let _ = app.run("develop.beginInteraction", json!({"label": "Tone Curve"}));
+            dragging = Some(i);
+            new_pts = added;
         }
     } else if resp.dragged()
         && let (Some(i), Some(q)) = (dragging, resp.interact_pointer_pos())
     {
-        let mut v = pts.clone();
         // ⌥-drag = fine adjustment, as in Lightroom: the point moves a tenth of the pointer's
         // motion (relative to where it is, so pressing ⌥ mid-drag doesn't make it jump)
         let fine = ui.input(|i| i.modifiers.alt);
-        let (mut x, y) = match v.get(i) {
+        let (x, y) = match pts.get(i) {
             Some(cur) if fine => {
                 let dd = ui.input(|i| i.pointer.delta());
                 ((cur.x + (dd.x / r.width()) as f64 * 0.1).clamp(0.0, 1.0), (cur.y - (dd.y / r.height()) as f64 * 0.1).clamp(0.0, 1.0))
             }
             _ => from_screen(q),
         };
-        if i < v.len() {
-            let lo = if i == 0 { 0.0 } else { v[i - 1].x + 0.01 };
-            let hi = if i + 1 >= v.len() { 1.0 } else { v[i + 1].x - 0.01 };
-            if i == 0 {
-                x = x.min(hi);
-            } else if i + 1 == v.len() {
-                x = x.max(lo);
-            } else if lo <= hi {
-                x = x.clamp(lo, hi);
-            } else {
-                // neighbours closer than the 0.02 spacing (two clicks side by side, or points
-                // from a file) leave no room: the point stays midway (`clamp` would panic: min above max)
-                x = (v[i - 1].x + v[i + 1].x) / 2.0;
-            }
-            v[i] = Point::new(x, y);
-            new_pts = Some(v);
-        }
+        new_pts = with_moved(&pts, i, x, y);
     } else if resp.clicked()
         && let Some(q) = resp.interact_pointer_pos()
         && nearest(q).is_none_or(|(_, dist)| dist >= 10.0)
     {
         let (x, y) = from_screen(q);
-        let mut v = pts.clone();
-        let i = v.iter().position(|p| p.x > x).unwrap_or(v.len());
-        v.insert(i, Point::new(x, y));
-        new_pts = Some(v);
+        new_pts = with_point(&pts, x, y).map(|(_, v)| v);
     }
     if let Some(v) = new_pts {
         let arr: Vec<[f64; 2]> = v.iter().map(|p| [p.x, p.y]).collect();
@@ -458,6 +454,31 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
             });
         });
     });
+}
+
+/// `pts` with point `i` moved to (`x`, `y`), kept [`POINT_GAP`] clear of its neighbours; `None`
+/// when there is no point `i`.
+fn with_moved(pts: &[Point], i: usize, mut x: f64, y: f64) -> Option<Vec<Point>> {
+    let n = pts.len();
+    if i >= n {
+        return None;
+    }
+    let lo = if i == 0 { 0.0 } else { pts[i - 1].x + POINT_GAP };
+    let hi = if i + 1 >= n { 1.0 } else { pts[i + 1].x - POINT_GAP };
+    if i == 0 {
+        x = x.min(hi);
+    } else if i + 1 == n {
+        x = x.max(lo);
+    } else if lo <= hi {
+        x = x.clamp(lo, hi);
+    } else {
+        // neighbours closer than twice the gap (points
+        // from a file) leave no room: the point stays midway (`clamp` would panic: min above max)
+        x = (pts[i - 1].x + pts[i + 1].x) / 2.0;
+    }
+    let mut v = pts.to_vec();
+    v[i] = Point::new(x, y);
+    Some(v)
 }
 
 /// Right-click menu of the curve graph.
