@@ -4736,7 +4736,7 @@ mod cull_dialog_tests {
         h.app.run("dialog.qualityScan", json!({})).unwrap();
         h.step();
         h.step();
-        let (_, accepted, _, ..) = quality_settings(&h);
+        let (_, accepted, ..) = quality_settings(&h);
         assert_eq!(accepted, 40.0, "the next opening starts from what was confirmed");
         // the frames pump the scan the dialog started: it finishes (the demo photos are small) or
         // is stopped here, so nothing is left running when the test ends
