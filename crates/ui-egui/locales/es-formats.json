@@ -327,5 +327,14 @@
   "{name} is installed and in use: face recognition is on": "{name} está instalado y en uso: el reconocimiento facial está activado",
   "Bring photos in with File › Import Photos… ({keys}).": "Importa fotos con Archivo › Importar fotos… ({keys}).",
   "View › Detail View ({keys}).": "Vista › Vista de detalle ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Archivo › Exportar… · Archivo › Imprimir… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Archivo › Exportar… · Archivo › Imprimir… ({keys}).",
+  "Can't read this folder: {}": "No se puede leer esta carpeta: {}",
+  "Creates {} stacks from {} of {scope}": "Crea {} pilas a partir de {} de {scope}",
+  "LightCraft can correct distortion and vignetting for many lenses using the open lens database (lensfun, about {size} MB).": "LightCraft puede corregir la distorsión y el viñeteado de muchos objetivos con la base de datos abierta de objetivos (lensfun, unos {size} MB).",
+  "The drive with this library's previews is almost full: {free} free of {total}. The preview cache takes {cache} and grows as the library does. To keep it smaller, set a size limit in Settings → Performance.": "La unidad con las vistas previas de esta biblioteca está casi llena: {free} libres de {total}. La caché de vistas previas ocupa {cache} y crece con la biblioteca. Para que sea más pequeña, define un límite de tamaño en Ajustes → Rendimiento.",
+  "The lens database is not installed (about {size} MB).": "La base de datos de objetivos no está instalada (unos {size} MB).",
+  "{n} photos in view · {slides} slides · {time}": "{n} fotos en la vista · {slides} diapositivas · {time}",
+  "{n} selected photos · {pages} pages": "{n} fotos seleccionadas · {pages} páginas",
+  "{title}: {line}": "{title}: {line}",
+  "{} of {} (no catalog has this)": "{} de {} (ningún catálogo lo tiene)"
 }
