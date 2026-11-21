@@ -105,7 +105,7 @@ fn load_bytes_now(
         };
         // single outlier photosites, replaced in the mosaic before anything is developed from it (#1345)
         if with.outliers {
-            let t = std::time::Instant::now();
+            let t = web_time::Instant::now();
             let n = raw.suppress_hot_pixels_with(super::hot_pixel_limit());
             if lightcraft_pipeline::profiling() {
                 eprintln!("[profile] raw outliers: {n} photosites replaced in {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
