@@ -451,6 +451,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                             | crate::state::Dialog::SmartRules { .. }
                             | crate::state::Dialog::SaveEffect { .. }
                             | crate::state::Dialog::CaptureTime { .. }
+                            | crate::state::Dialog::BuildSmartPreviews { .. }
                             | crate::state::Dialog::LensDatabase { .. }
                             | crate::state::Dialog::TextPrompt { .. }
                     ))

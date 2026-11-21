@@ -157,8 +157,12 @@ fn the_created_folder_toast_comes_through_the_catalog() {
     let path = dir.join("Selects");
     let parent = lightcraft_catalog::folders::folder_label(&dir.to_string_lossy());
     // the catalog's own value (formats have no `Locale` accessor); a language without one shows the English wording
-    let catalog: std::collections::BTreeMap<String, String> = serde_json::from_str(include_str!("../../locales/de-formats.json")).unwrap();
-    let own = catalog.get(CREATED).filter(|text| !text.is_empty()).map_or(CREATED, String::as_str);
+    let catalog: std::collections::BTreeMap<String, serde_json::Value> = serde_json::from_str(include_str!("../../locales/de-formats.json")).unwrap();
+    let own = catalog
+        .get(CREATED)
+        .map(|text| text.as_str().expect("the folder creation format is a string"))
+        .filter(|text| !text.is_empty())
+        .unwrap_or(CREATED);
     let want = own.replace("{name}", "Selects").replace("{parent}", &parent);
     crate::i18n::set_language(crate::i18n::Locale::De);
     let text = crate::panels::left::created_text(&path.to_string_lossy(), &dir.to_string_lossy());
