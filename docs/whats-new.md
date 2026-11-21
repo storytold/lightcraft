@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Face suggestions match the same person more often
+- Each face is now read both as it is and mirrored, and the two are averaged before it is compared with the faces you
+  have named. On the LFW benchmark with AuraFace, about 1 in 6 of a person's photos that used to miss the match bar now
+  reach it, and more for small faces in group photos, with no more strangers matched (issue #1920). Recognising a face takes about
+  twice as long, and the faces already scanned are scanned once more, in the background.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

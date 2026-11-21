@@ -248,7 +248,7 @@ pub(crate) fn process(p: Prepared, embedder: &Embedder) -> Done {
             None
         };
         let crops: Vec<&[u8]> = faces.iter().filter_map(|(_, c, _)| c.as_deref()).collect();
-        let mut embedded = embedder.embed_batch(&crops).into_iter();
+        let mut embedded = embedder.embed_faces(&crops).into_iter();
         let results: Vec<(Rect, Option<Vec<f32>>, Rect)> =
             faces.into_iter().map(|(rect, crop, view)| (rect, crop.and_then(|_| embedded.next().and_then(Result::ok)), view)).collect();
         (results, new_faces)
