@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Build and package LightCraft for FreeBSD:
 #
-#   $DIST/lightcraft-<version>-freebsd-x86_64.tar.gz   a /usr/local-style tree:
-#       lightcraft-<version>-freebsd-x86_64/{bin, share/applications, share/icons, share/mime,
+#   $DIST/lightcraft-<version>-freebsd-<arch>.tar.gz   (arch: x86_64 or aarch64) a /usr/local-style tree:
+#       lightcraft-<version>-freebsd-<arch>/{bin, share/applications, share/icons, share/mime,
 #       share/metainfo, share/doc/lightcraft}
 #
 # Install by copying the tree's contents into /usr/local:
-#   tar -xzf lightcraft-<version>-freebsd-x86_64.tar.gz --strip-components 1 -C /usr/local
+#   tar -xzf lightcraft-<version>-freebsd-<arch>.tar.gz --strip-components 1 -C /usr/local
 #
 # Usage: packaging/freebsd/package.sh [--skip-build] [--dry-run]
 #   --dry-run   stage the tree from stub binaries and list it, without building (works on any OS)
@@ -29,13 +29,22 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# A cross build (CI runs aarch64 in an x86_64 VM) takes its arch from the target, not the VM's uname.
 # FreeBSD's uname says amd64; release file names use x86_64 like the Linux and Windows ones.
-MACHINE="$(uname -m)"
-case "$MACHINE" in
-  amd64 | x86_64) ARCH=x86_64 ;;
-  arm64 | aarch64) ARCH=aarch64 ;;
-  *) echo "unsupported architecture $MACHINE" >&2; exit 2 ;;
-esac
+if [[ -n "${CARGO_BUILD_TARGET:-}" ]]; then
+  case "$CARGO_BUILD_TARGET" in
+    aarch64-unknown-freebsd) ARCH=aarch64 ;;
+    x86_64-unknown-freebsd) ARCH=x86_64 ;;
+    *) echo "unsupported FreeBSD target $CARGO_BUILD_TARGET" >&2; exit 2 ;;
+  esac
+else
+  MACHINE="$(uname -m)"
+  case "$MACHINE" in
+    amd64 | x86_64) ARCH=x86_64 ;;
+    arm64 | aarch64) ARCH=aarch64 ;;
+    *) echo "unsupported architecture $MACHINE" >&2; exit 2 ;;
+  esac
+fi
 if [[ "$DRY_RUN" = 0 ]] && [[ "$(uname -s)" != FreeBSD ]]; then
   echo "error: build on FreeBSD (or pass --dry-run to check the tree layout)" >&2
   exit 2
@@ -47,14 +56,15 @@ echo "==> LightCraft $VERSION for FreeBSD $ARCH"
 # The release VM has 12 GB; full parallelism on the biggest crates runs it out of memory.
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
 if [[ "$SKIP_BUILD" = 0 ]]; then
-  (cd "$ROOT" && cargo build --release --locked -p lightcraft -p lightcraft-cli --features lightcraft/heif,lightcraft-cli/heif)
+  (cd "$ROOT" && cargo build --release --locked -p lightcraft -p lightcraft-cli --features lightcraft/heif,lightcraft-cli/heif \
+    ${CARGO_BUILD_TARGET:+--target "$CARGO_BUILD_TARGET"})
 fi
 WORK="$CARGO_TARGET_DIR/freebsd-package"
 STAGE="$WORK/$BASENAME"
 rm -rf "$WORK"
 mkdir -p "$WORK"
 
-BIN="$CARGO_TARGET_DIR/release"
+BIN="$CARGO_TARGET_DIR/${CARGO_BUILD_TARGET:+$CARGO_BUILD_TARGET/}release"
 OUT_DIR="$DIST"
 if [[ "$DRY_RUN" = 1 ]]; then
   # Stub binaries, and the tarball stays in the work dir so dist/ only ever holds real builds.
@@ -92,7 +102,12 @@ mkdir -p "$OUT_DIR"
 tar -C "$WORK" -czf "$OUT_DIR/$BASENAME.tar.gz" "$BASENAME"
 echo "wrote $OUT_DIR/$BASENAME.tar.gz"
 
-"$STAGE/bin/lightcraft-cli" --version
+# A cross-built binary (e.g. aarch64 on the x86_64 VM) cannot run on the build host.
+if [[ -z "${CARGO_BUILD_TARGET:-}" ]]; then
+  "$STAGE/bin/lightcraft-cli" --version
+else
+  echo "skipping --version: $CARGO_BUILD_TARGET binaries do not run on this host"
+fi
 if [[ "$DRY_RUN" = 1 ]]; then
   echo "==> dry run: tarball contents"
   tar -tzvf "$OUT_DIR/$BASENAME.tar.gz"

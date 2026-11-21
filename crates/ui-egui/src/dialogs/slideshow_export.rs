@@ -5,8 +5,8 @@
 
 use serde_json::{Value, json};
 
+use super::Tokens;
 use super::frame::{choices, field};
-use super::*;
 use crate::LightcraftApp;
 use crate::pick::{PickKind, PickRequest, Picked};
 
@@ -79,35 +79,13 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
 pub(super) fn slideshow_export_body(app: &mut LightcraftApp, ui: &mut egui::Ui, settings: &mut lightcraft_engine::slideshow_export::ExportSettings) {
     use lightcraft_engine::slideshow_export::{ExportSettings, Format};
     let t = Tokens::get(ui.ctx());
-    let photos = app.session.visible_cloned().len();
-    let slide = app.session.slideshow.slide_duration;
-    let (intro, ending) = app.session.slide_titles.durations(slide);
-    let titles = usize::from(intro.is_some()) + usize::from(ending.is_some());
-    let seconds = photos as f64 * slide + intro.unwrap_or(0.0) + ending.unwrap_or(0.0);
-    let summary = crate::i18n::tr_format!(
-        "{n} photos in view · {slides} slides · {time}",
-        n = photos,
-        slides = photos + titles,
-        time = format!("{}:{:02}", (seconds / 60.0).floor() as u64, (seconds % 60.0).round() as u64)
-    );
-    ui.label(egui::RichText::new(summary).color(t.text_dim));
+    ui.label(egui::RichText::new(slideshow_summary(app)).color(t.text_dim));
     let before = settings.format;
     choices(ui, "Format", "slideshowExportFormat", &[(Format::Pdf, "PDF"), (Format::Jpeg, "JPEG"), (Format::Video, "Video")], &mut settings.format);
     if settings.format != before {
         *settings = ExportSettings { full_screen: settings.full_screen, ..ExportSettings::for_format(settings.format) };
     }
-    match settings.format {
-        Format::Video => {
-            choices(ui, "Size", "slideshowExportSize", &[(720, "720p"), (1080, "1080p")], &mut settings.size);
-            choices(ui, "Frame rate", "slideshowExportFps", &[(24, "24 fps"), (30, "30 fps")], &mut settings.fps);
-            let mut webm = settings.container == "webm";
-            choices(ui, "Container", "slideshowExportContainer", &[(false, "MP4"), (true, "WebM")], &mut webm);
-            settings.container = if webm { "webm".into() } else { "mp4".into() };
-        }
-        _ => {
-            choices(ui, "Size", "slideshowExportSize", &[(1024, "1024 px"), (1920, "1920 px"), (3840, "3840 px")], &mut settings.size);
-        }
-    }
+    slideshow_size_rows(ui, settings);
     field(ui, "Quality", |ui| {
         let r = ui.add(egui::Slider::new(&mut settings.quality, 1..=100));
         crate::widgets::register(ui, "slider:slideshowExportQuality", r.rect);
@@ -128,15 +106,58 @@ pub(super) fn slideshow_export_body(app: &mut LightcraftApp, ui: &mut egui::Ui, 
     );
 }
 
+/// How many photos are in view, how many slides they make with the intro and ending screens, and how long it plays.
+fn slideshow_counts(app: &mut LightcraftApp) -> (usize, usize, f64) {
+    let photos = app.session.visible_cloned().len();
+    let slide = app.session.slideshow.slide_duration;
+    let (intro, ending) = app.session.slide_titles.durations(slide);
+    let titles = usize::from(intro.is_some()) + usize::from(ending.is_some());
+    (photos, photos + titles, photos as f64 * slide + intro.unwrap_or(0.0) + ending.unwrap_or(0.0))
+}
+
+/// "N photos in view · M slides · m:ss".
+fn slideshow_summary(app: &mut LightcraftApp) -> String {
+    let (photos, slides, seconds) = slideshow_counts(app);
+    let time = format!("{}:{:02}", (seconds / 60.0).floor() as u64, (seconds % 60.0).round() as u64);
+    crate::i18n::tr_format!(
+        "{n} photo{} in view · {slides} slide{} · {time}",
+        crate::i18n::plural_s(photos),
+        crate::i18n::plural_s(slides),
+        n = photos,
+        slides = slides,
+        time = time
+    )
+}
+
+/// The size choices of the chosen format, and a video's frame rate and container.
+fn slideshow_size_rows(ui: &mut egui::Ui, settings: &mut lightcraft_engine::slideshow_export::ExportSettings) {
+    use lightcraft_engine::slideshow_export::Format;
+    match settings.format {
+        Format::Video => {
+            choices(ui, "Size", "slideshowExportSize", &[(720, "720p"), (1080, "1080p")], &mut settings.size);
+            choices(ui, "Frame rate", "slideshowExportFps", &[(24, "24 fps"), (30, "30 fps")], &mut settings.fps);
+            let mut webm = settings.container == "webm";
+            choices(ui, "Container", "slideshowExportContainer", &[(false, "MP4"), (true, "WebM")], &mut webm);
+            settings.container = if webm { "webm".into() } else { "mp4".into() };
+        }
+        _ => {
+            choices(ui, "Size", "slideshowExportSize", &[(1024, "1024 px"), (1920, "1920 px"), (3840, "3840 px")], &mut settings.size);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state::Dialog;
+    use crate::tests_fixtures::SyntheticLibrary;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
-    /// The app with a picker that answers `answer` and remembers what it was asked.
-    fn app_answering(answer: String) -> (LightcraftApp, Arc<Mutex<Vec<PickRequest>>>) {
+    /// The app, with two real file-backed photos and a picker that answers `answer` and remembers
+    /// what it was asked. Keep the returned fixture alive until the app is dropped.
+    fn app_answering(tag: &str, answer: String) -> (SyntheticLibrary, LightcraftApp, Arc<Mutex<Vec<PickRequest>>>) {
+        let files = SyntheticLibrary::with_photos(tag, 2);
         let asked = Arc::new(Mutex::new(Vec::<PickRequest>::new()));
         let requests = asked.clone();
         let services = crate::Services {
@@ -148,9 +169,10 @@ mod tests {
             })),
             ..Default::default()
         };
-        let mut s = lightcraft_engine::Session::with_demo();
-        s.execute("slideshow.playback", &json!({"slideDuration": 1, "fadeDuration": 0.5})).unwrap();
-        (LightcraftApp::new(s, services), asked)
+        let mut app = files.app();
+        app.services = services;
+        app.session.execute("slideshow.playback", &json!({"slideDuration": 1, "fadeDuration": 0.5})).unwrap();
+        (files, app, asked)
     }
 
     fn run_dialog(h: &mut crate::headless::Headless) -> Value {
@@ -164,7 +186,11 @@ mod tests {
             if h.app.slideshow_export_reported && h.app.session.slideshow_export.is_some() {
                 break;
             }
-            assert!(Instant::now() < deadline, "export did not finish");
+            assert!(
+                Instant::now() < deadline,
+                "export did not finish: {}",
+                h.app.session.slideshow_export.as_ref().map_or_else(|| "no export run".into(), |r| r.json().to_string())
+            );
             std::thread::sleep(Duration::from_millis(5));
         }
         let run = h.app.session.slideshow_export.clone().unwrap();
@@ -179,7 +205,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lc-ui-ssexp-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("Show.pdf").to_string_lossy().to_string();
-        let (mut app, asked) = app_answering(path.clone());
+        let (_files, mut app, asked) = app_answering("ssexp", path.clone());
         assert!(crate::menus::ui_enabled(&app, "dialog.slideshowExport"));
         app.run("dialog.slideshowExport", json!({"format": "pdf"})).unwrap();
         let Some(Dialog::SlideshowExport { settings }) = app.ui.dialog.as_mut() else { panic!("no slideshow export dialog") };
@@ -202,7 +228,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lc-ui-ssexp-v-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("Show.mp4").to_string_lossy().to_string();
-        let (mut app, asked) = app_answering(path.clone());
+        let (_files, mut app, asked) = app_answering("ssexp-v", path.clone());
         app.run("dialog.slideshowExport", json!({"format": "video"})).unwrap();
         let Some(Dialog::SlideshowExport { settings }) = app.ui.dialog.as_mut() else { panic!("no dialog") };
         assert_eq!((settings.size, settings.fps, settings.container.as_str()), (720, 30, "mp4"));
@@ -215,7 +241,7 @@ mod tests {
         assert!(r["sawRow"].as_bool().unwrap(), "the export showed in the activity stack");
         assert!(std::path::Path::new(&path).is_file());
         // JPEG: a save dialog names the folder (no file type)
-        let (mut app, asked) = app_answering(dir.join("Frames").to_string_lossy().to_string());
+        let (_files_jpeg, mut app, asked) = app_answering("ssexp-jpeg", dir.join("Frames").to_string_lossy().to_string());
         app.run("app.slideshowExport", json!({"format": "jpeg", "size": 64})).unwrap();
         assert!(asked.lock().unwrap()[0].filter.is_none());
         let _ = std::fs::remove_dir_all(&dir);

@@ -96,10 +96,23 @@ fn inactive_same_mode_commands_reveal_without_closing_or_editing() {
 
 #[test]
 fn crop_canvas_double_click_reveals_edit_in_actual_custom_workspace() {
-    let mut h = app();
+    // This exercises Canvas input and dock routing, not native-resolution rendering.
+    // Keep the real file alive until after the headless renderer is dropped.
+    let photo_files = crate::tests_fixtures::SyntheticLibrary::new("dock-crop-double-click");
+    let mut fixture_app = photo_files.app();
+    fixture_app.ui.left_panel = true;
+    let mut h = Headless::new(fixture_app, [1400.0, 1000.0], 1.0);
+    for _ in 0..5 {
+        h.step();
+    }
     h.app.ui.view = crate::state::ViewMode::Detail;
     h.app.run("panel.crop", json!({})).unwrap();
-    assert!(h.settle(std::time::Duration::from_secs(120)), "the demo photo settles before pointer input");
+    assert!(h.settle(std::time::Duration::from_secs(120)), "the file-backed photo settles before pointer input");
+    let active = h.app.session.active().expect("the fixture photo is active");
+    assert!(
+        h.app.renderer.textures.get(&crate::render::Slot::Main).is_some_and(|tex| tex.photo == active && tex.size[0] > 0 && tex.size[1] > 0),
+        "the actual detail render is present before Canvas input"
+    );
     h.app.ui.presets = true;
     h.step();
     dock(&mut h, json!({"operation":"move","panel":"tools","target":"presets","zone":"center"}));

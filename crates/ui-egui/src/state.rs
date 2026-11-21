@@ -8,9 +8,9 @@ mod view;
 
 pub use dialog::{Dialog, NameEdit, SyncCounts, default_preset_groups};
 pub use settings::{
-    AppSettings, AppearanceMode, DarkTheme, EditFile, EditFormat, EditSpace, GridBadges, KeywordChips, LOUPE_EDGE_CEILING, LOUPE_EDGE_STEP,
-    LaunchLibrary, LightTheme, LightroomImport, MIN_TEXTURE_SIDE, PHOTOCRAFT, PREVIEW_LIMITS, RECENT_LIBRARIES, STANDARD_PREVIEW_EDGE, StartupView,
-    WINDOW_FRAME_CEILING,
+    AppSettings, AppearanceMode, DarkTheme, EditFile, EditFormat, EditSpace, GridBadges, HOT_PIXEL_LIMIT_DEFAULT, HOT_PIXEL_LIMITS, KeywordChips,
+    LOUPE_EDGE_CEILING, LOUPE_EDGE_STEP, LaunchLibrary, LightTheme, LightroomImport, MIN_TEXTURE_SIDE, PHOTOCRAFT, PREVIEW_LIMITS, RECENT_LIBRARIES,
+    STANDARD_PREVIEW_EDGE, StartupView, WINDOW_FRAME_CEILING,
 };
 pub use view::{
     BRIEF_INFO_SECS, BeforeAfter, BriefInfo, CLICK_ZOOMS, CropOverlay, FOCUS_KEYWORDS_PASSES, InfoOverlay, KeywordingView, LEFT_WIDTH, LayoutImage,
@@ -70,6 +70,8 @@ pub struct UiState {
     pub zoom_anim: bool,
     pub before_after: BeforeAfter,
     pub thumb_size: f32,
+    /// Import review thumbnail size in points, independent of the library grid.
+    pub import_thumb_size: f32,
     /// Open Edit sections by id.
     pub open_sections: Vec<String>,
     /// Open flyouts (curve, mixer, grading…).
@@ -166,6 +168,10 @@ pub struct UiState {
     /// scanning).
     #[serde(skip)]
     pub auto_import_at: f64,
+    /// The watched folder that couldn't be listed and why, as the last listing found it: logged once when it
+    /// starts and once when the folder can be read again, and shown in Settings ▸ Import.
+    #[serde(skip)]
+    pub auto_import_error: Option<(String, String)>,
     /// When the automatic XMP writes that failed were last tried again (monotonic app time), and how
     /// many were waiting then.
     #[serde(skip)]
@@ -179,6 +185,10 @@ pub struct UiState {
     /// The develop control whose slider is being dragged (geometry sliders show a grid).
     #[serde(skip)]
     pub dragging_control: Option<String>,
+    /// Alt (Option on macOS) is held this frame: a dragged Edit slider shows its temporary
+    /// preview ([`lightcraft_pipeline::Overlay::for_control`]).
+    #[serde(skip)]
+    pub alt_held: bool,
     pub search: String,
     /// Focus the search field on the next frame (Edit → Find…).
     #[serde(skip)]
@@ -236,7 +246,8 @@ pub struct UiState {
     /// the photo that applies to: not an edit, and forgotten on moving to another photo or quitting.
     #[serde(skip)]
     pub grading_hidden: Option<(lightcraft_catalog::PhotoId, [bool; 3])>,
-    /// Active on-canvas tool: "", "brush", "linear", "radial", "wbPicker", "straighten", "remove".
+    /// Active on-canvas tool: "", "brush", "linear", "radial", "wbPicker", "straighten", "remove",
+    /// "lensBlurFocus" / "lensBlurBlur" (Lens Blur Brush Refinement, in the Edit panel).
     pub tool: String,
     /// Guided Upright: the selected guide (photo id + index) while the tool is open. A Delete /
     /// Backspace on it removes that guide alone; a click away or leaving the tool clears it.
@@ -250,6 +261,9 @@ pub struct UiState {
     pub brush_auto_mask: bool,
     /// Brush Pen Pressure: a pen's pressure scales each dab's size and flow (a mouse paints at full pressure).
     pub brush_pressure: bool,
+    /// Lens Blur Brush Refinement: how far a stroke refines the focus, 1..100 (size, feather,
+    /// flow, Auto Mask and pressure are the brush's above).
+    pub lens_blur_brush_amount: f32,
     /// Remove tool brush: size (fraction of the long edge), feather and opacity (0..100).
     pub remove_size: f32,
     pub remove_feather: f32,
@@ -287,6 +301,9 @@ pub struct UiState {
     /// The keyword painter: clicking a photo in the grid toggles this keyword on it.
     #[serde(skip)]
     pub keyword_painter: Option<String>,
+    /// The text of the Keywords panel's painter box: the keyword Enable Painting paints.
+    #[serde(skip)]
+    pub keyword_painter_text: String,
     /// What the Keywording box shows (Lightroom Classic's Keyword Tags views).
     pub keywording_view: KeywordingView,
     /// The Keywording box, grouped: every keyword of this selection (its hash) is shown, however
@@ -345,16 +362,33 @@ pub struct UiState {
     /// (`crate::recheck`).
     #[serde(skip)]
     pub rechecked_library: Option<u64>,
+    /// The first-run lens database download was considered this run (`crate::lens_db`).
+    #[serde(skip)]
+    pub lens_download_checked: bool,
+    /// The library, lens database generation and database replacement count whose raws were last looked up for a
+    /// lens profile (`crate::lens_db::lookup_key`).
+    #[serde(skip)]
+    pub lens_refreshed: Option<(u64, u64, u64)>,
+    /// Photos to look up for a lens profile on the next frame (Enable Lens Corrections ticked without one).
+    #[serde(skip)]
+    pub lens_lookup_ids: Vec<lightcraft_catalog::PhotoId>,
     #[serde(skip)]
     pub status: String,
     #[serde(skip)]
     pub dialog: Option<Dialog>,
+    /// The last app version whose startup dialog was shown; `None` = the dialog was never
+    /// presented (never run, pre-feature settings, or a file saved before it was shown — that is
+    /// why `None` serializes, as `null`, instead of being omitted: a settings file from this
+    /// version without a seen version must not read as a pre-feature file).
+    #[serde(default)]
+    pub seen_version: Option<String>,
     /// The Print dialog's page, selection and drag.
     #[serde(skip)]
     pub print: crate::print_view::PrintUi,
 }
 
 impl Default for UiState {
+    /// Initialize the library and import review sizes as independent app preferences.
     fn default() -> Self {
         UiState {
             window: None,
@@ -380,6 +414,7 @@ impl Default for UiState {
             zoom_anim: false,
             before_after: BeforeAfter::Off,
             thumb_size: 220.0,
+            import_thumb_size: crate::import::THUMB_SIZE_DEFAULT,
             open_sections: vec!["light".into()],
             open_flyouts: vec![],
             single_panel: false,
@@ -418,9 +453,11 @@ impl Default for UiState {
             unnamed_focus: false,
             hidden_locations: Vec::new(),
             dragging_control: None,
+            alt_held: false,
             external_edits: Vec::new(),
             was_focused: true,
             auto_import_at: 0.0,
+            auto_import_error: None,
             sidecar_retry_at: 0.0,
             sidecars_waiting: 0,
             known_cards: None,
@@ -451,6 +488,7 @@ impl Default for UiState {
             brush_erase: false,
             brush_auto_mask: false,
             brush_pressure: true,
+            lens_blur_brush_amount: 100.0,
             remove_size: 0.02,
             remove_feather: 50.0,
             remove_opacity: 100.0,
@@ -467,6 +505,7 @@ impl Default for UiState {
             slideshow: None,
             second_window: false,
             keyword_painter: None,
+            keyword_painter_text: String::new(),
             keywording_view: KeywordingView::default(),
             keyword_chips_all: None,
             folded_sections: Vec::new(),
@@ -490,6 +529,10 @@ impl Default for UiState {
             #[cfg(test)]
             find_missing_test_delay: None,
             rechecked_library: None,
+            seen_version: None,
+            lens_download_checked: false,
+            lens_refreshed: None,
+            lens_lookup_ids: Vec::new(),
             status: String::new(),
             dialog: None,
             print: Default::default(),
@@ -569,6 +612,7 @@ impl UiState {
     /// Clamp values restored from disk.
     pub fn sanitized(mut self) -> Self {
         self.thumb_size = self.thumb_size.clamp(THUMB_SIZE_MIN, THUMB_SIZE_MAX);
+        self.import_thumb_size = crate::import::thumb_size(self.import_thumb_size);
         self.left_width = LEFT_WIDTH.clamp(self.left_width);
         self.right_width = RIGHT_WIDTH.clamp(self.right_width);
         self.brush_size = self.brush_size.clamp(0.002, 0.5);
@@ -584,6 +628,16 @@ impl UiState {
             StartupView::Detail => self.view = ViewMode::Detail,
         }
         self
+    }
+
+    /// Record that the startup dialog for the running version has been presented.
+    ///
+    /// Record-on-show semantics: `seen_version` is set when the dialog is laid out in a UI pass
+    /// (`dialogs::show`), not when the logic tick picks it — a host that quits before a visible
+    /// frame does not burn the tour — and a crash while the dialog is up does not re-trigger it
+    /// on every subsequent launch.
+    pub fn record_startup_dialog_seen(&mut self) {
+        self.seen_version = Some(env!("CARGO_PKG_VERSION").to_string());
     }
 }
 

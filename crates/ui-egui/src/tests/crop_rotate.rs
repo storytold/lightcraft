@@ -6,6 +6,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::headless::Headless;
+use crate::tests_fixtures::SyntheticLibrary;
 use crate::{LightcraftApp, Services};
 
 const T: Duration = Duration::from_secs(20);
@@ -13,12 +14,26 @@ const SETTLE: Duration = Duration::from_secs(120);
 
 fn crop_tool() -> Headless {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    crop_view(app, false)
+}
+
+/// The crop tool on `app`, asserting the setup settle: a pixel comparison must not run on a view
+/// whose first render never finished.
+fn crop_tool_with(app: LightcraftApp) -> Headless {
+    crop_view(app, true)
+}
+
+fn crop_view(app: LightcraftApp, assert_settle: bool) -> Headless {
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     for (method, params) in [("ui.set", json!({"view": "detail"})), ("engine.execute", json!({"command": "panel.crop"}))] {
         let r = h.request(method, params, T);
         assert_eq!(r["ok"], true, "{r}");
     }
-    h.settle(SETTLE);
+    if assert_settle {
+        assert!(h.settle(SETTLE), "the crop view settles before the snapshot");
+    } else {
+        h.settle(SETTLE);
+    }
     h
 }
 
@@ -385,11 +400,13 @@ fn the_angle_field_writes_the_angle_like_the_readout() {
 /// box once rotated: dimmed wedges inside it, doubly dark ones outside, growing with the angle.)
 #[test]
 fn rotating_the_crop_dims_nothing_inside_the_box() {
-    let mut h = crop_tool();
+    // a real file-backed photo: the regression is a screen-space overlay, not native-resolution detail
+    let files = SyntheticLibrary::new("crop-dimming");
+    let mut h = crop_tool_with(files.app());
     let plain = h.paint();
     let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "crop.angle", "value": -45.0}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    assert!(h.settle(SETTLE), "the rotated crop view settles before the snapshot");
     assert_eq!(angle(&h), -45.0);
     let rotated = h.paint();
     let img = h.app.image_rect.expect("the photo on screen");

@@ -47,6 +47,15 @@ pub struct Tokens {
     /// A thumbnail's place while its picture is still being made: static, apart from the grid, the
     /// cells and the canvas in every theme.
     pub skeleton: Color32,
+    /// The ring round the active photo (outer line, 3 pt): 3:1 or more against the grid and the
+    /// square grid's cells. The photo itself is parted from it by [`Tokens::ring_inner`].
+    pub ring_active: Color32,
+    /// The thin line (1 pt) between the active photo and its ring: the ring's opposite, so the ring
+    /// reads on a photo of any brightness.
+    pub ring_inner: Color32,
+    /// The ring round the other selected photos (1.5 pt, against the active one's 3 pt): 3:1 or
+    /// more against the grid.
+    pub ring_selected: Color32,
     pub divider: Color32,
     pub inset: Color32,
     pub field: Color32,
@@ -129,6 +138,9 @@ impl Default for Tokens {
             cell: Color32::from_rgb(0x1c, 0x1c, 0x1c),
             cell_selected: Color32::from_rgb(0x2d, 0x2d, 0x2d),
             skeleton: Color32::from_rgb(0x25, 0x25, 0x25),
+            ring_active: Color32::from_rgb(0xff, 0xff, 0xff),
+            ring_inner: Color32::from_rgb(0x00, 0x00, 0x00),
+            ring_selected: Color32::from_rgb(0xc0, 0xc0, 0xc0),
             divider: Color32::from_rgb(0x1c, 0x1c, 0x1c),
             inset: Color32::from_rgb(0x23, 0x23, 0x23),
             field: Color32::from_rgb(0x22, 0x22, 0x22),
@@ -189,6 +201,9 @@ impl Tokens {
                 ..base
             },
             ThemeKind::Silver => Tokens {
+                ring_active: rgb(0x141414),
+                ring_inner: rgb(0xffffff),
+                ring_selected: rgb(0x4a4a4a),
                 chrome: rgb(0xe6e6e6),
                 canvas: rgb(0xcfcfcf),
                 grid_bg: rgb(0xd9d9d9),
@@ -220,6 +235,9 @@ impl Tokens {
                 ..base
             },
             ThemeKind::Paper => Tokens {
+                ring_active: rgb(0x141414),
+                ring_inner: rgb(0xffffff),
+                ring_selected: rgb(0x4a4a4a),
                 chrome: rgb(0xfafafa),
                 canvas: rgb(0xececec),
                 grid_bg: rgb(0xf2f2f2),
@@ -394,6 +412,25 @@ pub fn current(ctx: &egui::Context) -> Option<ThemeKind> {
     ctx.data(|d| d.get_temp::<ThemeKind>(theme_id()))
 }
 
+/// Windows only: tell the window its theme again, the first time it has focus. A first theme that
+/// reaches a focused window as it comes up changes the title's colour but not the caption's, so
+/// with LightCraft dark on a light system the title is white on a light caption (it looks blank),
+/// and light on dark is dark on dark, until focus next moves (#3381). The same command repaints
+/// the caption once the window is up. A window that opens without focus shows the right colours
+/// from the start.
+pub fn refresh_window_on_first_focus(ctx: &egui::Context) {
+    let done = egui::Id::unique("lightcraft-window-theme-refreshed");
+    if !cfg!(target_os = "windows") || !ctx.input(|i| i.focused) || ctx.data(|d| d.get_temp::<bool>(done)).is_some() {
+        return;
+    }
+    ctx.data_mut(|d| d.insert_temp(done, true));
+    let theme = match ctx.theme() {
+        egui::Theme::Dark => egui::SystemTheme::Dark,
+        egui::Theme::Light => egui::SystemTheme::Light,
+    };
+    ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(theme));
+}
+
 /// Style `ctx` with the default theme.
 pub fn apply(ctx: &egui::Context) {
     apply_kind(ctx, ThemeKind::default());
@@ -458,7 +495,80 @@ pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::button::contrast;
     use crate::i18n::{Locale, set_language};
+
+    /// The selection ring is a mark on the grid: 3:1 or more against what it is drawn over, in
+    /// every theme. The active photo's ring reads on the grid and on a selected or unselected
+    /// square-grid cell; the other selected photos' ring on the grid.
+    #[test]
+    fn selection_rings_stand_out_from_the_grid_in_every_theme() {
+        for kind in ThemeKind::ALL {
+            let t = Tokens::for_kind(kind);
+            for (what, surface) in [("grid", t.grid_bg), ("cell", t.cell), ("selected cell", t.cell_selected)] {
+                assert!(contrast(t.ring_active, surface) >= 3.0, "{kind:?}: active ring on the {what}: {:.2}", contrast(t.ring_active, surface));
+            }
+            // the selected ring also sits on a selected cell (square grid, filmstrip), label-tinted or not
+            let mut selected_cells = vec![("grid", t.grid_bg), ("selected cell", t.cell_selected)];
+            for label in lightcraft_catalog::ColorLabel::ALL {
+                selected_cells.push(("labelled selected cell", label_background(t.cell_selected, Some(label), true)));
+            }
+            for (what, surface) in selected_cells {
+                assert!(
+                    contrast(t.ring_selected, surface) >= 3.0,
+                    "{kind:?}: selected ring on the {what}: {:.2}",
+                    contrast(t.ring_selected, surface)
+                );
+            }
+            // the thin inner line of the active ring is the ring's opposite: it parts the ring from the photo's edge
+            assert!(contrast(t.ring_inner, t.ring_active) >= 3.0, "{kind:?}: inner line against the active ring");
+        }
+    }
+
+    /// The `SetTheme(Light)` commands one frame of `ctx` sends the window, with or without
+    /// [`refresh_window_on_first_focus`] in it.
+    #[cfg(target_os = "windows")]
+    fn light_theme_commands(ctx: &egui::Context, focused: bool, refresh: bool) -> usize {
+        let raw = egui::RawInput { focused, ..Default::default() };
+        let mut out = ctx.run_ui(raw, |ui| {
+            if refresh {
+                refresh_window_on_first_focus(ui.ctx());
+            }
+        });
+        out.textures_delta.clear();
+        let commands = out.viewport_output.remove(&egui::ViewportId::ROOT).map(|v| v.commands).unwrap_or_default();
+        commands.iter().filter(|c| matches!(c, egui::ViewportCommand::SetTheme(egui::SystemTheme::Light))).count()
+    }
+
+    /// #3381: egui sends the theme with the first frame, and the window hears it once more the
+    /// first time it has focus, not on every later focus.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn the_window_hears_its_theme_again_the_first_time_it_has_focus() {
+        let ctx = egui::Context::default();
+        apply_kind(&ctx, ThemeKind::Silver);
+        let sent = |focused: bool| light_theme_commands(&ctx, focused, true);
+        assert_eq!(sent(false), 1, "egui's own, with the first frame");
+        assert_eq!(sent(false), 0, "no focus yet");
+        assert_eq!(sent(true), 1, "the first frame with focus");
+        assert_eq!(sent(true), 0, "still focused");
+        assert_eq!(sent(false), 0, "focus lost");
+        assert_eq!(sent(true), 0, "focus back: Windows repaints this by itself");
+    }
+
+    /// #3381: a window that has focus from its very first frame hears the theme once more in that
+    /// frame, on top of egui's own command. (In the app the first frame never gets here: `ui`
+    /// returns before the fonts are ready, so egui's command always goes a frame earlier.)
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_window_focused_from_its_first_frame_hears_its_theme_again_in_that_frame() {
+        let first_frame = |refresh: bool| {
+            let ctx = egui::Context::default();
+            apply_kind(&ctx, ThemeKind::Silver);
+            light_theme_commands(&ctx, true, refresh)
+        };
+        assert_eq!(first_frame(true), first_frame(false) + 1);
+    }
 
     /// Every theme scrolls 100 points a wheel notch, and a zoom notch stays egui's stock ~1.22x
     /// (`exp(40 / 200)`) instead of growing with the longer scroll.
@@ -477,20 +587,35 @@ mod tests {
     /// Exercise the Thai characters of the reported folder name through every egui family.
     #[test]
     fn thai_folder_name_has_glyphs_in_every_ui_family() {
+        folder_name_has_glyphs_in_every_ui_family("Thai", "Studio34 ถ่ายภาพงานแต่งงาน");
+    }
+
+    /// #1915: Hebrew folder names drew as boxes. The release input carries Noto Sans Hebrew, and
+    /// every egui family reaches it (letters, final forms, maqaf, geresh and gershayim, niqqud).
+    /// No ₪ here: Inter and Hack draw it before the Hebrew face, and Hack also holds monospace's
+    /// replacement glyph, where `has_glyph` answers false (the engine test checks ₪ in the face).
+    #[test]
+    fn hebrew_folder_name_has_glyphs_in_every_ui_family() {
+        folder_name_has_glyphs_in_every_ui_family("Hebr", "תמונות טנזניה 2024 ךםןףץ ־ ׳ ״ שָׁלוֹם");
+    }
+
+    /// The craft-fonts face for `script` is in every UI family and draws the non-ASCII
+    /// characters of `name` in each of them.
+    fn folder_name_has_glyphs_in_every_ui_family(script: &str, name: &str) {
         if lightcraft_engine::CRAFT_FONTS.is_empty() {
             lightcraft_testkit::skip!(Fonts, "built without CRAFT_FONTS_DIR: no craft-fonts to check");
             return;
         }
-        let thai = lightcraft_engine::CRAFT_FONTS.iter().find(|f| f.covers("Thai")).expect("font input includes Thai");
+        let face = lightcraft_engine::CRAFT_FONTS.iter().find(|f| f.covers(script)).unwrap_or_else(|| panic!("font input includes {script}"));
         set_language(Locale::En);
         let definitions = font_definitions(lightcraft_engine::CRAFT_FONTS);
-        let name = craft_font_name(thai);
-        assert!(definitions.font_data.contains_key(&name));
+        let face_name = craft_font_name(face);
+        assert!(definitions.font_data.contains_key(&face_name));
         // (The strong family has the face's heavier twin instead when it is a variable font.)
-        let strong = format!("{name} strong");
+        let strong = format!("{face_name} strong");
         for family in [FontFamily::Proportional, FontFamily::Name(FONT_SEMIBOLD.into()), FontFamily::Monospace] {
             let names = definitions.families.get(&family).expect("UI font family");
-            assert!(names.contains(&name) || (family == semibold_family() && names.contains(&strong)), "{family:?} falls back on {name}");
+            assert!(names.contains(&face_name) || (family == semibold_family() && names.contains(&strong)), "{family:?} falls back on {face_name}");
         }
         let ctx = egui::Context::default();
         ctx.set_fonts(definitions);
@@ -499,10 +624,10 @@ mod tests {
         ctx.fonts_mut(|fonts| {
             for family in [FontFamily::Proportional, FontFamily::Name(FONT_SEMIBOLD.into()), FontFamily::Monospace] {
                 let id = FontId::new(13.0, family);
-                // Check the Thai portion; egui 0.36's has_glyph reports false for characters
+                // Check the non-ASCII portion; egui 0.36's has_glyph reports false for characters
                 // in the replacement glyph's own face (including normal monospace Latin).
-                for ch in "Studio34 ถ่ายภาพงานแต่งงาน".chars().filter(|ch| !ch.is_ascii()) {
-                    assert!(fonts.has_glyph(&id, ch), "{id:?} has {ch}");
+                for ch in name.chars().filter(|ch| !ch.is_ascii()) {
+                    assert!(fonts.has_glyph(&id, ch), "{id:?} has {ch} (U+{:04X})", ch as u32);
                 }
             }
         });

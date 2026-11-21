@@ -59,7 +59,7 @@ fn shift_preview_says_the_photos_capture_time_cant_be_read() {
 
     let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    // Inspect the notification before settling advances the simulated clock past its lifetime.
     assert!(h.app.ui.dialog.is_none(), "OK closes the dialog");
     let toast = toast(&h);
     assert!(toast.contains("can't be read"), "OK says the photo was left as it was: {toast:?}");
@@ -92,7 +92,7 @@ fn set_mode_refuses_moving_others_by_an_unreadable_time_and_repairs_it_alone() {
     open_set(&mut h, &[bad, other]);
     let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    // The click is consumed by request; unrelated rendering must not expire its notification.
     let toast = toast(&h);
     assert!(toast.contains("can't be read"), "OK says why nothing changed: {toast:?}");
     assert!(matches!(h.app.ui.dialog, Some(Dialog::CaptureTime { .. })), "the dialog stays open after the refusal");
@@ -116,7 +116,8 @@ fn set_mode_refuses_moving_others_by_an_unreadable_time_and_repairs_it_alone() {
 /// button and from the control channel alike; they used to close it without a word.
 #[test]
 fn errors_are_shown_and_the_dialog_stays_open() {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let files = crate::tests_fixtures::SyntheticLibrary::new("capture-time-errors");
+    let app = files.app();
     let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
     let id = h.app.session.visible_cloned()[0];
     set_captured(&mut h, id, "9999-12-31T12:00:00");
@@ -125,9 +126,10 @@ fn errors_are_shown_and_the_dialog_stays_open() {
         Some(Dialog::CaptureTime { time, .. }) => *time = "yesterday".into(),
         other => panic!("Edit Capture Time is not open: {other:?}"),
     }
-    h.settle(SETTLE);
+    assert!(h.settle(SETTLE), "capture-time dialog renders settled");
     assert_eq!(h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T)["ok"], true);
-    h.settle(SETTLE);
+    // The request consumes the click. Inspect its short-lived notification before waiting
+    // for unrelated rendering: settling advances the simulated clock and can expire the toast.
     assert!(toast(&h).contains("not a date"), "OK says the typed time isn't a date: {:?}", toast(&h));
     assert!(matches!(&h.app.ui.dialog, Some(Dialog::CaptureTime { time, .. }) if time == "yesterday"), "the dialog stays open with what was typed");
 
@@ -139,7 +141,7 @@ fn errors_are_shown_and_the_dialog_stays_open() {
         }
         other => panic!("Edit Capture Time is not open: {other:?}"),
     }
-    h.settle(SETTLE);
+    assert!(h.settle(SETTLE), "capture-time dialog renders settled");
     let r = h.request("ui.dialog.confirm", json!({}), T);
     assert_ne!(r["ok"], true, "the shift is refused: {r}");
     assert!(r.to_string().contains("9999"), "{r}");

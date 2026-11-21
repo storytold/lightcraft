@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    ControlResponse, LightcraftApp, MAX_PENDING_SHOTS, MAX_SHOT_BYTES, MAX_SHOT_TOTAL_BYTES, PendingShot, SCREENSHOT_FALLBACK_MS,
+    SCREENSHOT_SETTLE_MS, SHOT_FORCE_BUSY_MS, SHOT_SETTLE_FRAMES, SHOT_SETTLE_MS, Sender, ShotGeometry, headless,
+};
 use crate::control;
 
 impl LightcraftApp {
@@ -131,6 +134,25 @@ impl LightcraftApp {
         Ok(())
     }
 
+    /// Finish a rendered headless capture, growing its reservation before writing if needed.
+    /// Every path replies once and releases the request's reserved bytes.
+    pub(crate) fn finish_headless_shot(&mut self, shot: &mut PendingShot, img: &egui::ColorImage) {
+        let bytes = img.size[0].checked_mul(img.size[1]).and_then(|p| p.checked_mul(std::mem::size_of::<egui::Color32>()));
+        let result = match bytes {
+            Some(bytes) if bytes > shot.reserved => self.grow_shot_reservation(shot.reserved, bytes).map(|()| {
+                shot.reserved = bytes;
+            }),
+            Some(_) => Ok(()),
+            None => Err("ui.screenshot: the rendered image has invalid dimensions".to_owned()),
+        };
+        let reply = match result {
+            Ok(()) => control::save_screenshot(self, img, shot.target.as_ref()),
+            Err(error) => serde_json::json!({"ok": false, "error": error}),
+        };
+        let _ = shot.reply.send(reply);
+        self.release_shot_bytes(shot.reserved);
+    }
+
     /// Advance pending screenshots: wait (≥ 3 completed UI frames, ≥ 120 ms) until no renders are
     /// in flight — or until the forced-capture instant, so sustained rendering cannot turn a
     /// request into a timeout — then capture through the compositor's one-shot callback, or
@@ -183,31 +205,7 @@ impl LightcraftApp {
                 let img = if shadow_ticked { None } else { self.headless_screenshot(ctx, true) };
                 shadow_ticked = true;
                 if let Some(img) = img {
-                    let bytes = img.size[0].checked_mul(img.size[1]).and_then(|p| p.checked_mul(std::mem::size_of::<egui::Color32>()));
-                    match bytes {
-                        Some(bytes) if bytes > shot.reserved => {
-                            // A stale/undersized reservation is not a user error: grow it to the
-                            // actual image and encode it when the per-image and aggregate caps allow.
-                            if let Err(error) = self.grow_shot_reservation(shot.reserved, bytes) {
-                                let _ = shot.reply.send(serde_json::json!({"ok": false, "error": error}));
-                                self.release_shot_bytes(shot.reserved);
-                                continue;
-                            }
-                            shot.reserved = bytes;
-                        }
-                        Some(_) => {}
-                        None => {
-                            let reply = serde_json::json!({
-                                "ok": false,
-                                "error": "ui.screenshot: the rendered image has invalid dimensions",
-                            });
-                            let _ = shot.reply.send(reply);
-                            self.release_shot_bytes(shot.reserved);
-                            continue;
-                        }
-                    }
-                    let _ = shot.reply.send(control::save_screenshot(self, &img, shot.target.as_ref()));
-                    self.release_shot_bytes(shot.reserved);
+                    self.finish_headless_shot(&mut shot, &img);
                     continue;
                 }
                 keep.push(shot);

@@ -54,6 +54,59 @@ fn creating_a_keyword_with_attributes_and_the_selection() {
     assert!(s.execute("keyword.info", &json!({"keyword": "lisbon"})).is_err(), "no such keyword");
 }
 
+/// Every command that names a keyword refuses a new name ending in `*` at any level, and changes
+/// nothing; a name with `*` inside is allowed. A keyword the library has from a file keeps its name
+/// and can still be given to photos.
+#[test]
+fn commands_refuse_a_new_keyword_name_ending_in_an_asterisk() {
+    let mut s = Session::with_demo();
+    let ids: Vec<u64> = s.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    s.execute("library.select", &json!({"ids": ids})).unwrap();
+    s.execute("keyword.create", &json!({"name": "Lagoon", "parent": null})).unwrap();
+    s.execute("keyword.saveSet", &json!({"name": "Mine", "keywords": ["Lagoon"]})).unwrap();
+    for name in ["travel*", "places|rome*"] {
+        // a metadata preset in prefs that holds the name
+        s.metadata_presets = vec![crate::cmd::metadata::MetadataPreset { name: "Old".into(), fields: json!({"keywords": [name]}) }];
+        let before = s.catalog.to_snapshot();
+        let sets = s.keyword_sets.clone();
+        let presets = s.metadata_presets.clone();
+        for (command, params) in [
+            ("keyword.create", json!({"name": name, "parent": null})),
+            ("keyword.edit", json!({"keyword": "Lagoon", "name": name.rsplit('|').next()})),
+            ("keyword.rename", json!({"from": "Lagoon", "to": name})),
+            ("keyword.merge", json!({"from": ["Lagoon"], "into": name})),
+            ("keyword.move", json!({"keyword": "Lagoon", "parent": name})),
+            ("photo.setMeta", json!({"addKeywords": [name]})),
+            ("photo.setMeta", json!({"keywords": ["Lagoon", name]})),
+            ("keyword.setShortcut", json!({"keywords": [name]})),
+            ("keyword.saveSet", json!({"name": "Mine", "keywords": [name]})),
+            ("library.import", json!({"paths": ["missing.jpg"], "keywords": [name]})),
+            ("metadata.savePreset", json!({"name": "Trip", "fields": {"keywords": ["Lagoon", name]}})),
+            ("library.import", json!({"paths": ["missing.jpg"], "metadataPreset": "Old"})),
+        ] {
+            let err = s.execute(command, &params).unwrap_err().to_string();
+            assert!(err.contains("can't end in “*”"), "{command} {params}: {err}");
+        }
+        // the import defaults' metadata preset
+        s.import_defaults.metadata_preset = Some("Old".into());
+        let err = s.execute("library.import", &json!({"paths": ["missing.jpg"]})).unwrap_err().to_string();
+        assert!(err.contains("can't end in “*”"), "import defaults: {err}");
+        s.import_defaults.metadata_preset = None;
+        assert!(s.catalog.to_snapshot() == before && s.keyword_sets == sets && s.metadata_presets == presets, "{name}: nothing changed");
+    }
+    s.execute("photo.setMeta", &json!({"addKeywords": ["a*b"]})).unwrap();
+    assert!(ids.iter().all(|id| keywords_of(&s, *id).contains(&"a*b".to_string())));
+    // a keyword read from a file (here put on the photo as a sidecar read puts it)
+    let id = lightcraft_catalog::PhotoId(ids[0]);
+    let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+    meta.keywords.push("travel*".into());
+    s.commit("Read Metadata", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [ids[1]], "addKeywords": ["TRAVEL*"]})).unwrap();
+    assert!(keywords_of(&s, ids[1]).contains(&"TRAVEL*".to_string()), "{:?}", keywords_of(&s, ids[1]));
+    s.execute("keyword.edit", &json!({"keyword": "travel*", "synonyms": ["trip"]})).unwrap();
+    assert!(keywords_of(&s, ids[0]).contains(&"travel*".to_string()), "its name is kept");
+}
+
 /// "Put new keywords inside this keyword": new keywords go inside the default parent unless the
 /// command says otherwise (`parent: null` = the top level). It belongs to its keyword in the
 /// library: it follows a rename, goes with a delete, and undo and redo bring it back with them.
@@ -182,6 +235,128 @@ fn a_set_keyword_toggles_whatever_its_case() {
     s.execute("keyword.saveSet", &json!({"name": "Clinic", "keywords": ["ärzte"]})).unwrap();
     s.execute("keyword.toggleFromSet", &json!({"index": 1, "ids": ids})).unwrap();
     assert!(ids.iter().all(|id| keywords_of(&s, *id).is_empty()), "taken off both");
+}
+
+/// The keyword shortcut (Set Keyword Shortcut, ⌘⌥⇧K) holds the keywords typed with commas
+/// between them, each once whatever its case and spelled as the library spells it; ⇧K adds them to
+/// the target photos unless every one has them all, and then takes them off. With no keyword
+/// shortcut set, ⇧K leaves the photos' keywords as they were.
+#[test]
+fn the_keyword_shortcut_adds_and_removes_its_keywords() {
+    let mut s = Session::with_demo();
+    let ids: Vec<u64> = s.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    s.execute("photo.setMeta", &json!({"ids": [ids[0]], "keywords": ["beach"]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [ids[1]], "keywords": []})).unwrap();
+    let r = s.execute("keyword.setShortcut", &json!({"keywords": " Beach , sunset,, BEACH"})).unwrap();
+    assert_eq!(r["keywords"], json!(["beach", "sunset"]));
+    assert_eq!(s.execute("keyword.shortcut", &json!({})).unwrap()["keywords"], json!(["beach", "sunset"]));
+    let r = s.execute("keyword.toggleShortcut", &json!({"ids": ids})).unwrap();
+    assert_eq!(r["added"], true, "{r}");
+    assert_eq!(keywords_of(&s, ids[0]), ["beach", "sunset"], "a keyword it has isn't added again");
+    assert_eq!(keywords_of(&s, ids[1]), ["beach", "sunset"]);
+    let r = s.execute("keyword.toggleShortcut", &json!({"ids": ids})).unwrap();
+    assert_eq!(r["added"], false, "{r}");
+    assert!(ids.iter().all(|id| keywords_of(&s, *id).is_empty()), "every photo had both: taken off");
+    // both photos have one of the two keywords: both keywords are added to both photos
+    s.execute("photo.setMeta", &json!({"ids": ids, "keywords": ["sunset"]})).unwrap();
+    assert_eq!(s.execute("keyword.toggleShortcut", &json!({"ids": ids})).unwrap()["added"], true);
+    assert!(ids.iter().all(|id| keywords_of(&s, *id).len() == 2));
+    // with nothing typed the keyword shortcut is cleared, and ⇧K leaves the photos' keywords as they were
+    assert_eq!(s.execute("keyword.setShortcut", &json!({"keywords": " , "})).unwrap()["keywords"], json!([]));
+    let r = s.execute("keyword.toggleShortcut", &json!({"ids": ids})).unwrap();
+    assert_eq!(r["changed"], 0, "{r}");
+    assert!(ids.iter().all(|id| keywords_of(&s, *id).len() == 2));
+}
+
+/// A keyword with a comma in its name stays one keyword when Set Keyword Shortcut… is confirmed
+/// with the text it showed; other text is split at its commas.
+#[test]
+fn the_keyword_shortcut_keeps_a_name_with_a_comma() {
+    let mut s = Session::with_demo();
+    s.execute("keyword.create", &json!({"name": "Paris, France"})).unwrap();
+    s.execute("keyword.create", &json!({"name": "Trips"})).unwrap();
+    s.execute("keyword.setShortcut", &json!({"keywords": ["Paris, France", "Trips"]})).unwrap();
+    let r = s.execute("keyword.setShortcut", &json!({"keywords": "Paris, France, Trips"})).unwrap();
+    assert_eq!(r["keywords"], json!(["Paris, France", "Trips"]), "the text it showed, confirmed as it was");
+    let r = s.execute("keyword.setShortcut", &json!({"keywords": "Paris, France"})).unwrap();
+    assert_eq!(r["keywords"], json!(["France", "Paris"]), "changed text is split at its commas");
+}
+
+/// A `keywords` value that is neither text nor a list of text is an error, and the keyword
+/// shortcut keeps its keywords.
+#[test]
+fn the_keyword_shortcut_refuses_keywords_that_are_not_text() {
+    let mut s = Session::with_demo();
+    s.execute("keyword.setShortcut", &json!({"keywords": ["beach", "sunset"]})).unwrap();
+    for keywords in [json!(7), json!(["beach", 7]), json!({"name": "beach"})] {
+        let e = s.execute("keyword.setShortcut", &json!({"keywords": keywords})).unwrap_err().to_string();
+        assert!(e.contains("`keywords` must be a string or an array of strings"), "{keywords}: {e}");
+        assert_eq!(s.execute("keyword.shortcut", &json!({})).unwrap()["keywords"], json!(["beach", "sunset"]), "{keywords}");
+    }
+    // parameters that are not an object are an error too, not a request to clear it
+    for params in [json!(7), json!("beach"), json!(["beach"])] {
+        let e = s.execute("keyword.setShortcut", &params).unwrap_err().to_string();
+        assert!(e.contains("parameters must be an object"), "{params}: {e}");
+        assert_eq!(s.execute("keyword.shortcut", &json!({})).unwrap()["keywords"], json!(["beach", "sunset"]), "{params}");
+    }
+}
+
+/// ⇧K with an `ids` or `id` that is not photo ids is an error, with or without a keyword shortcut set.
+#[test]
+fn the_keyword_shortcut_refuses_targets_that_are_not_photo_ids() {
+    let mut s = Session::with_demo();
+    let id = s.visible_cloned()[0].0;
+    s.execute("library.select", &json!({"ids": [id]})).unwrap();
+    for shortcut in [json!([]), json!(["beach"])] {
+        s.execute("keyword.setShortcut", &json!({"keywords": shortcut})).unwrap();
+        for params in [json!({"ids": "x"}), json!({"ids": ["x"]}), json!({"id": "x"})] {
+            let e = s.execute("keyword.toggleShortcut", &params).unwrap_err().to_string();
+            assert!(e.contains("must be photo ids"), "{shortcut} {params}: {e}");
+        }
+    }
+}
+
+/// The keyword shortcut follows its keywords when they are moved, renamed or merged, and loses one
+/// that is deleted; setting it is one undo step, and undo brings a deleted one back.
+#[test]
+fn the_keyword_shortcut_follows_its_keywords() {
+    let mut s = Session::with_demo();
+    for name in ["Weddings", "Events", "Trips"] {
+        s.execute("keyword.create", &json!({"name": name})).unwrap();
+    }
+    let undo = s.undo.len();
+    s.execute("keyword.setShortcut", &json!({"keywords": ["Weddings", "Trips"]})).unwrap();
+    assert_eq!(s.undo.len(), undo + 1, "one undo step");
+    let shortcut = |s: &mut Session| s.execute("keyword.shortcut", &json!({})).unwrap()["keywords"].clone();
+    s.execute("keyword.move", &json!({"keyword": "Weddings", "parent": "Events"})).unwrap();
+    assert_eq!(shortcut(&mut s), json!(["Events|Weddings", "Trips"]), "moved");
+    s.execute("keyword.edit", &json!({"keyword": "Events|Weddings", "name": "Marriages"})).unwrap();
+    assert_eq!(shortcut(&mut s), json!(["Events|Marriages", "Trips"]), "renamed");
+    s.execute("keyword.merge", &json!({"from": ["Trips"], "into": "Events|Marriages"})).unwrap();
+    assert_eq!(shortcut(&mut s), json!(["Events|Marriages"]), "merged, and kept once");
+    s.execute("keyword.delete", &json!({"keyword": "Events"})).unwrap();
+    assert_eq!(shortcut(&mut s), json!([]), "deleted with the keyword it was inside");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(shortcut(&mut s), json!(["Events|Marriages"]), "undo brings it back");
+}
+
+/// A new name in the keyword shortcut goes inside the default parent, as the Keywording box puts
+/// it; a keyword the library has stays where it is. The keyword shortcut is kept with the library.
+#[test]
+fn the_keyword_shortcut_is_kept_with_the_library() {
+    let dir = temp_dir("keyword-shortcut");
+    let mut s = Session::new();
+    s.open_library(&dir, true).unwrap();
+    s.execute("keyword.create", &json!({"name": "Travel"})).unwrap();
+    s.execute("keyword.create", &json!({"name": "Events"})).unwrap();
+    s.execute("keyword.setDefaultParent", &json!({"keyword": "events"})).unwrap();
+    let r = s.execute("keyword.setShortcut", &json!({"keywords": ["Travel", "Birthdays"]})).unwrap();
+    assert_eq!(r["keywords"], json!(["Events|Birthdays", "Travel"]));
+    drop(s);
+    let mut s = Session::new();
+    s.open_library(&dir, false).unwrap();
+    assert_eq!(s.execute("keyword.shortcut", &json!({})).unwrap()["keywords"], json!(["Events|Birthdays", "Travel"]));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 fn set_named(s: &mut Session, name: &str) -> serde_json::Value {

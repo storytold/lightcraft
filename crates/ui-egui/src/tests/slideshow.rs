@@ -2,14 +2,18 @@
 //! prepared ahead off the UI thread, transitions only between ready slides, keys and controls.
 //! Simulated time: every headless frame is 1/60 s, so nothing here sleeps.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Duration;
 
 use lightcraft_catalog::PhotoId;
 use lightcraft_engine::slideshow::Item;
 use serde_json::json;
 
-use crate::headless::Headless;
+use crate::headless::{Headless, RenderGate};
 use crate::render::Slot;
+use crate::tests_fixtures::SyntheticLibrary;
+use crate::tests_render_fixtures::{HEIGHT, RenderFixture, WIDTH};
 use crate::{LightcraftApp, Services};
 
 const T: Duration = Duration::from_secs(20);
@@ -25,6 +29,31 @@ fn grid_sized(size: [f32; 2]) -> Headless {
     let mut h = Headless::new(app, size, 1.0);
     h.step();
     h
+}
+
+/// The slideshow's 1000×700 window over `count` real 6000×4000 file-backed photos. Used only by
+/// `next_slides_are_prepared_before_they_are_due`, where the 24 MP decode/render is the point:
+/// destructure the tuple immediately with the fixture binding first, so the renderer drops first.
+fn fixture_grid(count: usize, open: Rc<Cell<bool>>) -> (RenderFixture, Headless) {
+    let fixture = RenderFixture::new("slideshow", count);
+    assert_eq!(fixture.paths().len(), count);
+    for (index, path) in fixture.paths().iter().enumerate() {
+        assert!(std::path::Path::new(path).is_file(), "the fixture photo exists");
+        assert!(!fixture.paths()[..index].contains(path), "each fixture photo has its own path");
+    }
+    let services = Services { png: None, ..Default::default() };
+    let app = LightcraftApp::new(fixture.session(), services);
+    let mut h = Headless::new(app, [1000.0, 700.0], 1.0);
+    // Control native grid work before its first frame too: asynchronous setup must not
+    // consume the wall-clock budget before the slideshow scheduling assertions begin.
+    assert!(open.get(), "the native grid setup gate starts open");
+    h.app.renderer.set_offload(Box::new(RenderGate::new(open)));
+    assert!(h.settle(super::ui_settle_timeout()), "the grid renders settle before controlling slide renders");
+    assert_eq!(h.app.session.catalog.len(), count, "the slideshow fixture photos");
+    let id = h.app.session.active().expect("a photo is open");
+    let photo = h.app.session.catalog.photo(id).expect("it is in the catalog");
+    assert_eq!((photo.width, photo.height), (WIDTH, HEIGHT), "the slideshow fixture is a real 24 MP photo");
+    (fixture, h)
 }
 
 fn run(h: &mut Headless, command: &str, params: serde_json::Value) -> serde_json::Value {
@@ -61,12 +90,24 @@ fn slides_held(h: &Headless) -> usize {
 
 #[test]
 fn slideshow_advances_pauses_and_ends() {
-    let mut h = grid();
+    // This tests the automatic playback clock and controls; native 24 MP rendering
+    // is exercised separately by next_slides_are_prepared_before_they_are_due.
+    let library = SyntheticLibrary::with_photos("slideshow-automatic-controls", 3);
+    let mut h = Headless::new(library.app(), [1000.0, 700.0], 1.0);
+    assert!(h.settle(SETTLE), "the automatic playback fixture settles");
     let first = h.app.session.visible_cloned()[0];
-    run(&mut h, "view.slideshow", json!({"interval": 0.5, "fadeDuration": 0}));
+    // The fixture selects its first imported photo; newest-first view order differs.
+    // Establish the same first-in-view starting selection as the original demo test.
+    run(&mut h, "library.select", json!({"ids": [first.0]}));
+    assert_eq!(h.app.session.active(), Some(first), "the first visible photo is selected before playback");
+    run(&mut h, "view.slideshow", json!({"interval": 0.5, "fadeDuration": 0, "manual": false}));
+    assert!(!play(&h).settings().manual, "playback advances automatically");
     assert!(h.app.ui.fullscreen && h.app.ui.slideshow.is_some());
     assert_eq!(h.app.session.active(), Some(first), "starts at the first photo in view");
     assert!(h.step_until(SETTLE, |h| h.app.session.active() != Some(first)), "the next photo comes up and is selected");
+    let advanced = photo_up(&h);
+    assert_eq!(h.app.session.active(), Some(advanced), "selection follows automatic playback");
+    assert!(has_slide(&h, advanced), "automatic playback shows a rendered next photo");
     // Space pauses: nothing moves
     let r = h.request("ui.key", json!({"key": "space"}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -98,33 +139,54 @@ fn turning_off_the_full_screen_preview_frees_the_slides() {
 
 #[test]
 fn next_slides_are_prepared_before_they_are_due() {
-    let mut h = grid();
-    // a long slide: anything rendered for the next ones is rendered ahead of time
-    run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 1, "preparePreviews": true, "seed": 7}));
+    let open = Rc::new(Cell::new(true));
+    let (fx, mut h) = fixture_grid(8, open.clone());
+    // Grid setup is complete. Hold photo slide jobs until their ahead requests are
+    // observable; opening the gate runs the actual native decode/render synchronously.
+    open.set(false);
+    let reply = run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 1, "preparePreviews": true, "seed": 7}));
+    assert_eq!(reply["settings"]["preparePreviews"], true);
+    assert_eq!(reply["settings"]["slideDuration"], 60.0);
     let ahead = play(&h).upcoming(crate::panels::slideshow::AHEAD);
-    assert_eq!(ahead.len(), 2);
+    assert_eq!(ahead.len(), crate::panels::slideshow::AHEAD);
     let start = h.time();
-    // the slide up and the next two; their renders can finish in any order
+    // The current photo and next two are queued before any slide render completes.
     let current = photo_up(&h);
+    for item in std::iter::once(Item::Photo(current)).chain(ahead.iter().copied()) {
+        assert!(h.app.renderer.is_pending(Slot::Slide(item)), "requested before it is due: {item:?}");
+        assert!(!has_slide(&h, item), "not rendered before the gate opens: {item:?}");
+    }
+    assert!(play(&h).remaining(h.time()) > 59.0, "the first slide is not due before rendering");
+    // The gate executes the actual decode/render work synchronously when polled.
+    open.set(true);
     assert!(
         h.step_until(SETTLE, |h| has_slide(h, current) && ahead.iter().all(|id| has_slide(h, *id))),
         "the slide up and the next two slides are rendered"
     );
     assert!(h.time() - start < 60.0, "before the first is due");
     assert_eq!(photo_up(&h), current, "still on the first slide");
-    h.settle(SETTLE);
+    assert!(play(&h).remaining(h.time()) > 59.0, "renders are accepted before the first slide is due");
+    assert!(h.settle(SETTLE), "enabled-prefetch renders settle");
+    drop(h);
+    drop(fx);
 
     // off: only the slide up is rendered until the next one is due
-    let mut h = grid();
-    run(&mut h, "view.slideshow", json!({"interval": 60, "preparePreviews": false}));
+    let open = Rc::new(Cell::new(true));
+    let (_fx2, mut h) = fixture_grid(8, open.clone());
+    open.set(false);
+    let reply = run(&mut h, "view.slideshow", json!({"interval": 60, "preparePreviews": false}));
+    assert_eq!(reply["settings"]["preparePreviews"], false);
     let next = play(&h).upcoming(1)[0];
     let current = photo_up(&h);
-    assert!(h.step_until(SETTLE, |h| has_slide(h, current)));
     for _ in 0..30 {
         h.step();
     }
+    assert!(h.app.renderer.is_pending(Slot::Slide(Item::Photo(current))), "the current slide is requested");
     assert!(!has_slide(&h, next) && !h.app.renderer.is_pending(Slot::Slide(next)), "not prepared");
-    h.settle(SETTLE);
+    open.set(true);
+    assert!(h.step_until(SETTLE, |h| has_slide(h, current)), "the current slide renders once allowed");
+    assert!(!has_slide(&h, next) && !h.app.renderer.is_pending(Slot::Slide(next)), "still not prepared");
+    assert!(h.settle(SETTLE), "disabled-prefetch renders settle");
 }
 
 #[test]
@@ -179,7 +241,7 @@ fn a_manual_slideshow_waits_for_the_arrow_keys() {
     assert_eq!(r["settings"]["manual"], true, "{r}");
     // once the first two slides are rendered, and far longer than the slide duration: the first
     // photo stays up
-    assert!(h.step_until(SETTLE, |h| has_slide(h, photos[0]) && has_slide(h, photos[1])), "the slides are rendered");
+    assert!(h.step_until(super::ui_settle_timeout(), |h| has_slide(h, photos[0]) && has_slide(h, photos[1])), "the slides are rendered");
     for _ in 0..120 {
         h.step();
     }
@@ -201,10 +263,40 @@ fn a_manual_slideshow_waits_for_the_arrow_keys() {
     // the Settings checkbox turns it on
     run(&mut h, "view.slideshowOptions", json!({}));
     h.step();
-    reveal(&mut h, "check:settings.slideshowManual");
+    let target = reveal(&mut h, "check:settings.slideshowManual");
+    let diagnose = |phase: &str, h: &Headless| {
+        let id = "check:settings.slideshowManual";
+        let rect = latest_widget_rect(h, id);
+        let hit = crate::control::widget_hit(&h.app, id);
+        let visible = rect.is_some_and(|r| crate::control::widget_target_visible(&h.view.ctx, hit, r.center()));
+        eprintln!(
+            "manual-checkbox {phase}: manual={} time={} frames={} target={target:?} rect={rect:?} room={:?} hit={hit:?} visible={visible} input={:?} dialog={:?} notices={:?} quit_prompt={} notice_barrier={} library_problem={} library_barrier={} in_flight={} pending={:?} toast={:?}",
+            h.app.session.slideshow.manual,
+            h.time(),
+            h.frames(),
+            latest_widget_rect(h, "settings:pageRoom"),
+            h.view.ctx.input(|i| (i.is_scrolling(), i.modifiers, i.keys_down.clone(), i.pointer.any_down())),
+            h.app.ui.dialog,
+            h.app.notices,
+            h.app.quit_prompt.is_some(),
+            crate::panels::notices::blocks_input(&h.app),
+            h.app.library_problem.is_some(),
+            crate::panels::library_problem::blocks_file_drops(&h.app),
+            h.app.renderer.in_flight(),
+            h.app.renderer.pending_slots(),
+            h.app.ui.toast,
+        );
+    };
+    diagnose("before-click", &h);
+    assert!(!h.app.session.slideshow.manual, "the checkbox starts unchecked before the real click");
+    let journal_before = h.app.session.journal.len();
     let r = h.request("ui.clickWidget", json!({"id": "check:settings.slideshowManual"}), T);
+    diagnose("after-request", &h);
+    eprintln!("manual-checkbox reply={r} journal_since_click={:?}", h.app.session.journal.get(journal_before..));
     assert_eq!(r["ok"], true, "{r}");
     h.step();
+    diagnose("after-existing-step", &h);
+    eprintln!("manual-checkbox journal_after_existing_step={:?}", h.app.session.journal.get(journal_before..));
     assert!(h.app.session.slideshow.manual, "the checkbox goes through slideshow.playback");
     h.settle(SETTLE);
 }
@@ -308,6 +400,29 @@ fn playback_settings_drive_the_slideshow_and_bad_ones_are_refused() {
     h.settle(SETTLE);
 }
 
+/// The slide preview's render lands on a frame nobody can name (a worker thread); the page under it must
+/// not move when it does, or a click made in that frame lands beside the control aimed at (the gate went
+/// red on it: `playback_settings_…` clicks "Random order" and the checkbox never changed).
+#[test]
+fn the_settings_page_does_not_move_when_the_slide_preview_finishes_rendering() {
+    let mut h = grid();
+    let open = std::rc::Rc::new(std::cell::Cell::new(false));
+    h.app.renderer.set_offload(Box::new(crate::headless::RenderGate::new(open.clone())));
+    run(&mut h, "view.slideshowOptions", json!({}));
+    // (the held render keeps the app "busy", so settle() would wait out its timeout: a second of frames instead)
+    for _ in 0..60 {
+        h.step();
+    }
+    let rect = |h: &Headless, w: &str| h.app.widgets.iter().find(|(id, _)| id == w).map(|(_, r)| *r).unwrap_or_else(|| panic!("{w} is on screen"));
+    let (room, check) = (rect(&h, "settings:pageRoom"), rect(&h, "check:settings.slideshowRandom"));
+    assert!(!h.app.renderer.textures.contains_key(&Slot::SlidePreview), "the render is held back");
+    open.set(true);
+    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.contains_key(&Slot::SlidePreview)), "the render lands");
+    h.settle(Duration::from_secs(5));
+    assert_eq!(rect(&h, "settings:pageRoom"), room, "the page's room is the same before and after the render");
+    assert_eq!(rect(&h, "check:settings.slideshowRandom"), check, "a control stays where it was drawn");
+}
+
 #[test]
 fn a_click_on_a_control_scrolled_out_of_the_settings_page_is_refused() {
     // A compact window leaves the lower controls of the Slideshow settings page outside the
@@ -342,7 +457,7 @@ fn a_photo_deleted_while_it_plays_does_not_stall_the_slideshow() {
     run(&mut h, "photo.delete", json!({"ids": [next.0]}));
     run(&mut h, "photo.deletePermanently", json!({"ids": [next.0]}));
     assert!(h.app.session.catalog.photo(next).is_none());
-    assert!(h.step_until(SETTLE, |h| h.app.ui.slideshow.as_ref().is_some_and(|r| r.play.position().0 >= 3)), "it plays on");
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.ui.slideshow.as_ref().is_some_and(|r| r.play.position().0 >= 3)), "it plays on");
     assert!(photos.len() > 3);
     h.settle(SETTLE);
 }
@@ -440,7 +555,9 @@ fn a_composed_slide_shows_during_playback() {
     let mut h = grid();
     let r = run(&mut h, "slideshow.layout", json!({"margins": 0.1, "backdropColor": "#ff0000"}));
     assert_eq!(r["marginTop"], 0.1);
-    run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 0}));
+    // This checks composed pixels and explicit navigation. Rendering can take enough
+    // headless frames to pass any automatic interval before the next slide is ready.
+    run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 0, "manual": true}));
     let current = photo_up(&h);
     assert!(h.step_until(SETTLE, |h| has_slide(h, current)), "the slide is composed and ready");
     h.step();
@@ -457,8 +574,10 @@ fn a_composed_slide_shows_during_playback() {
     // the next slide is composed too, and stepping shows it
     let next = play(&h).upcoming(1)[0];
     assert!(h.step_until(SETTLE, |h| has_slide(h, next)));
+    assert_eq!(photo_up(&h), current, "rendering ahead keeps the inspected slide up");
     run(&mut h, "slideshow.next", json!({}));
     h.step();
+    assert_eq!(play(&h).current(), next, "navigation shows the prepared slide");
     assert_eq!(painted(&h.paint(), 5, 5), [255, 0, 0]);
     h.settle(SETTLE);
 }
@@ -467,10 +586,13 @@ fn a_composed_slide_shows_during_playback() {
 fn the_default_layout_plays_the_photo_as_before() {
     let mut h = grid();
     assert!(h.app.session.slide_layout.is_plain());
-    run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 0}));
+    // Inspect one photo's aspect and backdrop without automatic playback advancing
+    // the simulated clock past it while the asynchronous renderer catches up.
+    run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 0, "manual": true}));
     let current = photo_up(&h);
     assert!(h.step_until(SETTLE, |h| has_slide(h, current)));
     h.step();
+    assert_eq!(photo_up(&h), current, "the inspected photo stays up while rendering");
     // the photo's own render (its aspect, not the screen's), fitted on black, as before
     let tex = h.app.renderer.textures.get(&Slot::Slide(current.into())).unwrap();
     let aspect = h.app.session.slide_photo_aspect(current).unwrap();
@@ -508,7 +630,7 @@ fn settings_shows_the_slide_layout_and_a_live_preview() {
         assert!(has(&h, w), "{w}");
     }
     // the preview is the composed slide, rendered off the UI thread
-    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
     // a checkbox goes through slideshow.layout, and its controls appear (scrolled into view)
     reveal(&mut h, "check:settings.slideshowShadow");
     let r = h.request("ui.clickWidget", json!({"id": "check:settings.slideshowShadow"}), T);
@@ -519,7 +641,7 @@ fn settings_shows_the_slide_layout_and_a_live_preview() {
     // a changed layout renders the preview again (once it has settled)
     let before = h.app.renderer.textures.get(&Slot::SlidePreview).map(|t| t.key);
     run(&mut h, "slideshow.layout", json!({"margins": 0.2, "backdropColor": "#00ff00"}));
-    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).map(|t| t.key) != before));
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.renderer.textures.get(&Slot::SlidePreview).map(|t| t.key) != before));
     h.step();
     // (the preview is pinned above the page: in view already)
     reveal(&mut h, "slideshow:preview");
@@ -772,20 +894,8 @@ fn settings_shows_the_titles_and_the_preview_shows_a_title_screen() {
     h.settle(SETTLE);
 }
 
-/// Settings ▸ Slideshow ▸ Templates: built-ins listed, hover previews on the selected photo
-/// without changing anything, a click applies, and the user's own templates are saved, updated,
-/// renamed and deleted from the browser.
-#[test]
-fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
+fn tpl_hover_previews_without_changes(h: &mut Headless) -> lightcraft_engine::slide_template::SlideLook {
     use lightcraft_engine::slide_template::SlideLook;
-    let mut h = grid();
-    let dir = std::env::temp_dir().join(format!("lc-ui-sstpl-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    h.app.session.slide_templates_dir = Some(dir.clone());
-    let first = h.app.session.visible_cloned()[0];
-    run(&mut h, "library.select", json!({"ids": [first.0]}));
-    run(&mut h, "view.slideshowOptions", json!({}));
-    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
     let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
     let rect = |h: &Headless, w: &str| h.app.widgets.iter().find(|(id, _)| id == w).map(|(_, r)| *r).unwrap();
     for w in [
@@ -797,7 +907,7 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
         "field:slideshowTemplateName",
         "button:slideshowTemplateSave",
     ] {
-        assert!(has(&h, w), "{w}");
+        assert!(has(h, w), "{w}");
     }
     // hover: the preview shows Gallery Wall (its light grey wall in the margin), nothing changes
     let before = SlideLook::of(&h.app.session);
@@ -816,42 +926,55 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     assert!(h.step_until(SETTLE, grey), "the hovered template on the selected photo");
     assert_eq!(SlideLook::of(&h.app.session), before, "hovering changes nothing");
     assert!(h.app.session.slide_templates_previous.is_none());
+    before
+}
+
+fn tpl_click_applies_and_saves_own(h: &mut Headless, dir: &std::path::Path) {
+    let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
     // a click applies it
-    reveal(&mut h, "template:builtin:gallery-wall");
+    reveal(h, "template:builtin:gallery-wall");
     let r = h.request("ui.clickWidget", json!({"id": "template:builtin:gallery-wall"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert!(h.app.session.slide_overlays.rating_stars.enabled && h.app.session.slide_layout.stroke_border);
-    assert!(has(&h, "template:previous"), "Previous settings appear");
+    assert!(has(h, "template:previous"), "Previous settings appear");
     // save as a template of our own
-    reveal(&mut h, "field:slideshowTemplateName");
+    reveal(h, "field:slideshowTemplateName");
     let r = h.request("ui.clickWidget", json!({"id": "field:slideshowTemplateName"}), T);
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("ui.text", json!({"text": "Holiday / 2026"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    reveal(&mut h, "button:slideshowTemplateSave");
+    reveal(h, "button:slideshowTemplateSave");
     let r = h.request("ui.clickWidget", json!({"id": "button:slideshowTemplateSave"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert!(dir.join("Holiday _ 2026.json").exists(), "the separator never makes a folder");
     h.step();
-    assert!(has(&h, "template:user:Holiday _ 2026"));
+    assert!(has(h, "template:user:Holiday _ 2026"));
+}
+
+fn tpl_update_from_menu(h: &mut Headless) {
+    let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
     // update it from its menu with changed settings
-    run(&mut h, "slideshow.layout", json!({"backdropColor": "#123456"}));
-    reveal(&mut h, "template:user:Holiday _ 2026");
+    run(h, "slideshow.layout", json!({"backdropColor": "#123456"}));
+    reveal(h, "template:user:Holiday _ 2026");
     let r = h.request("ui.clickWidget", json!({"id": "template:user:Holiday _ 2026", "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     for w in ["button:slideshowTemplateUpdate", "button:slideshowTemplateRename", "button:slideshowTemplateExport", "button:slideshowTemplateDelete"]
     {
-        assert!(has(&h, w), "{w}");
+        assert!(has(h, w), "{w}");
     }
     let r = h.request("ui.clickWidget", json!({"id": "button:slideshowTemplateUpdate"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert_eq!(h.app.session.slide_template("user:Holiday _ 2026").unwrap().look.layout.backdrop_color, [0x12, 0x34, 0x56]);
+}
+
+fn tpl_rename_in_place(h: &mut Headless) {
+    let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
     // rename it in place
-    reveal(&mut h, "template:user:Holiday _ 2026");
+    reveal(h, "template:user:Holiday _ 2026");
     let r = h.request("ui.clickWidget", json!({"id": "template:user:Holiday _ 2026", "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -859,7 +982,7 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     h.step();
-    assert!(has(&h, "field:slideshowTemplateRename"));
+    assert!(has(h, "field:slideshowTemplateRename"));
     let r = h.request("ui.key", json!({"key": "a", "cmd": true}), T);
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("ui.text", json!({"text": "Summer"}), T);
@@ -868,9 +991,13 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     h.step();
-    assert!(has(&h, "template:user:Summer"), "{:?}", h.app.session.slide_templates().templates.iter().map(|t| t.id.clone()).collect::<Vec<_>>());
+    assert!(has(h, "template:user:Summer"), "{:?}", h.app.session.slide_templates().templates.iter().map(|t| t.id.clone()).collect::<Vec<_>>());
+}
+
+fn tpl_delete_then_back_to_previous(h: &mut Headless, dir: &std::path::Path, before: &lightcraft_engine::slide_template::SlideLook) {
+    use lightcraft_engine::slide_template::SlideLook;
     // delete it (after confirming)
-    reveal(&mut h, "template:user:Summer");
+    reveal(h, "template:user:Summer");
     let r = h.request("ui.clickWidget", json!({"id": "template:user:Summer", "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -884,11 +1011,32 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     h.step();
     assert!(!dir.join("Summer.json").exists());
     // back to the settings before Gallery Wall
-    reveal(&mut h, "template:previous");
+    reveal(h, "template:previous");
     let r = h.request("ui.clickWidget", json!({"id": "template:previous"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert_eq!(SlideLook::of(&h.app.session).overlays, before.overlays);
+    h.settle(SETTLE);
+}
+
+/// Settings ▸ Slideshow ▸ Templates: built-ins listed, hover previews on the selected photo
+/// without changing anything, a click applies, and the user's own templates are saved, updated,
+/// renamed and deleted from the browser.
+#[test]
+fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
+    let mut h = grid();
+    let dir = std::env::temp_dir().join(format!("lc-ui-sstpl-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    h.app.session.slide_templates_dir = Some(dir.clone());
+    let first = h.app.session.visible_cloned()[0];
+    run(&mut h, "library.select", json!({"ids": [first.0]}));
+    run(&mut h, "view.slideshowOptions", json!({}));
+    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
+    let before = tpl_hover_previews_without_changes(&mut h);
+    tpl_click_applies_and_saves_own(&mut h, &dir);
+    tpl_update_from_menu(&mut h);
+    tpl_rename_in_place(&mut h);
+    tpl_delete_then_back_to_previous(&mut h, &dir, &before);
     h.settle(SETTLE);
     let _ = std::fs::remove_dir_all(dir);
 }

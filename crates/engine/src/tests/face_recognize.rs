@@ -18,16 +18,71 @@ pub(crate) fn temp(name: &str) -> PathBuf {
     d
 }
 
+/// Seed CPU-only settings before installing models in a fresh test folder. These tests cover catalog and
+/// model logic; GPU kernels have separate tests. Calling the settings mutation command here would also
+/// detach the process-wide detector accelerator, interfering with other tests in the same process.
+fn keep_on_cpu(s: &mut Session) {
+    let dir = s.face_models_dir.as_ref().unwrap();
+    let settings = dir.join("settings.json");
+    assert!(!settings.exists(), "only seed a fresh fixture's settings");
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(settings, br#"{"cpuOnly":true}"#).unwrap();
+    let r = s.execute("faces.gpu", &json!({})).unwrap();
+    assert_eq!(r["cpuOnly"], true, "the test session must run face models on the CPU: {r}");
+}
+
 /// A demo session with a tiny model installed and chosen.
 pub(crate) fn setup(d: &std::path::Path, dim: u64) -> (Session, String) {
     let mut s = Session::with_demo();
     s.face_models_dir = Some(d.join("models"));
+    keep_on_cpu(&mut s);
     let model = d.join(format!("tiny{dim}.onnx"));
     std::fs::write(&model, lightcraft_faces::synthetic::tiny_embedder_model(dim)).unwrap();
     let r = s.execute("faces.models.install", &json!({"path": model.to_string_lossy(), "acknowledged": true})).unwrap();
     let id = r["installed"]["id"].as_str().unwrap().to_string();
     s.execute("faces.models.select", &json!({"id": id})).unwrap();
     (s, id)
+}
+
+/// A fresh empty library with the tiny model installed and chosen. The tests below only need a decodable
+/// picture (and enough pixels for an optional real detector), not the demo's 12 procedural 24 MP scenes:
+/// each demo photo costs a full develop render before the 112 px model input.
+fn fresh_library(d: &std::path::Path, dim: u64) -> (Session, PathBuf) {
+    let lib = d.join("lib");
+    let mut s = Session::new().with_fs();
+    s.face_models_dir = Some(d.join("models"));
+    keep_on_cpu(&mut s);
+    s.open_library(&lib, false).unwrap();
+    let model = d.join(format!("tiny{dim}.onnx"));
+    std::fs::write(&model, lightcraft_faces::synthetic::tiny_embedder_model(dim)).unwrap();
+    s.execute("faces.models.install", &json!({"path": model.to_string_lossy(), "acknowledged": true})).unwrap();
+    (s, lib)
+}
+
+/// A real, distinct 1024×768 PNG (seed picks its colours).
+fn write_photo(path: &std::path::Path, seed: u8) {
+    let (w, h) = (1024usize, 768usize);
+    let data: Vec<[u8; 4]> = (0..w * h)
+        .map(|i| [((i % w * 3 + seed as usize * 17) % 256) as u8, ((i / w * 5 + seed as usize * 29) % 256) as u8, seed.wrapping_mul(41), 255])
+        .collect();
+    let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
+    let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+}
+
+/// Import three distinct real file-backed photos: two for faces and one with none for the optional detector.
+fn import_three_photos(s: &mut Session, d: &std::path::Path) -> (PhotoId, PhotoId, PhotoId) {
+    let mut paths = Vec::new();
+    for (i, name) in ["ann.png", "bea.png", "empty.png"].iter().enumerate() {
+        let path = d.join("photos").join(name);
+        write_photo(&path, i as u8 + 1);
+        paths.push(path.to_string_lossy().into_owned());
+    }
+    let r = s.execute("library.import", &json!({"paths": paths})).unwrap();
+    let ids: Vec<PhotoId> = r["imported"].as_array().unwrap().iter().map(|v| PhotoId(v.as_u64().unwrap())).collect();
+    assert_eq!(ids.len(), 3, "three real photos imported: {r}");
+    (ids[0], ids[1], ids[2])
 }
 
 /// Installs the real YuNet from `LC_YUNET_MODEL=<the .onnx file>` (what Settings > Faces downloads; nothing is
@@ -61,35 +116,52 @@ pub(crate) fn two_photos(s: &Session) -> (PhotoId, PhotoId) {
 #[test]
 fn indexing_embeds_each_face_once_and_reports_progress() {
     let d = temp("index");
-    let (mut s, _) = setup(&d, 64);
-    let (a, b) = two_photos(&s);
+    let (mut s, _) = fresh_library(&d, 64);
+    let (a, b, c) = import_three_photos(&mut s, &d);
     set_regions(&mut s, a, vec![region(0.1, Some("Ann")), region(0.5, None)]);
     set_regions(&mut s, b, vec![region(0.3, None)]);
     // only a report
     let r = s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
     assert_eq!((r["embedded"].clone(), r["photosDone"].clone(), r["pendingPhotos"].clone()), (json!(0), json!(0), json!(2)), "{r}");
-    // a generous budget does it all, the named photo first
-    let r = s.execute("faces.index", &json!({"budgetMs": 60_000})).unwrap();
-    assert_eq!((r["embedded"].clone(), r["pendingPhotos"].clone(), r["indexedFaces"].clone()), (json!(3), json!(0), json!(3)), "{r}");
+    // `faces.index` stops between whole photos once the budget is spent, so follow its documented contract:
+    // call again until `pendingPhotos` is 0. Two photos need at most two productive calls; the named photo is
+    // first in the queue, and every face is embedded exactly once.
+    let mut embedded = 0u64;
+    for call in 0..2 {
+        let r = s.execute("faces.index", &json!({"budgetMs": 60_000})).unwrap();
+        embedded += r["embedded"].as_u64().unwrap();
+        if call == 0 {
+            assert!(s.faces.index.contains(a.0, &region(0.1, Some("Ann")).rect), "the named photo is done first: {r}");
+            assert!(s.faces.index.contains(a.0, &region(0.5, None).rect), "both of its faces are embedded: {r}");
+        }
+        if r["pendingPhotos"] == 0 {
+            break;
+        }
+    }
+    let r = s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    assert_eq!((r["pendingPhotos"].clone(), r["indexedFaces"].clone()), (json!(0), json!(3)), "{r}");
+    assert_eq!(embedded, 3, "each of the three faces was embedded exactly once across calls");
     // nothing is embedded twice
     let r = s.execute("faces.index", &json!({"budgetMs": 60_000})).unwrap();
     assert_eq!((r["embedded"].clone(), r["photosDone"].clone()), (json!(0), json!(0)));
     // a small budget still makes progress (at least one photo per call), and `ids` go first
-    let c = s.catalog.photos().map(|p| p.id).find(|id| *id != a && *id != b).unwrap();
     set_regions(&mut s, c, vec![region(0.2, None)]);
     set_regions(&mut s, b, vec![region(0.3, None), region(0.6, None)]);
     let r = s.execute("faces.index", &json!({"budgetMs": 1, "ids": [c.0]})).unwrap();
     assert_eq!(r["photosDone"], 1, "{r}");
     assert_eq!(r["pendingPhotos"], 1, "{r}");
     assert!(s.faces.index.contains(c.0, &region(0.2, None).rect), "the photo asked for first was done first");
+    // keep the imported files until the session that references them is gone
+    drop(s);
     let _ = std::fs::remove_dir_all(&d);
 }
 
 #[test]
 fn suggestions_come_from_the_named_faces_and_are_never_applied() {
     let d = temp("suggest");
-    let (mut s, _) = setup(&d, 64);
-    let (a, b) = two_photos(&s);
+    // Gallery and candidate semantics need real embeddings, not full 24 MP demo renders.
+    let (mut s, _) = fresh_library(&d, 64);
+    let (a, b, _) = import_three_photos(&mut s, &d);
     set_regions(&mut s, a, vec![region(0.1, Some("Ann"))]);
     set_regions(&mut s, b, vec![region(0.1, None), region(0.5, Some("Pet?")), region(0.7, None)]);
     // thresholds that accept anything: Ann is the only person with a named face except "Pet?"
@@ -173,6 +245,7 @@ fn embeddings_are_cached_beside_the_library_and_reset_for_another_model() {
     };
     let mut s = Session::new().with_fs();
     s.face_models_dir = Some(models.clone());
+    keep_on_cpu(&mut s);
     s.open_library(&lib, true).unwrap();
     let (a, _) = two_photos(&s);
     set_regions(&mut s, a, vec![region(0.1, Some("Ann")), region(0.5, None)]);
@@ -214,8 +287,9 @@ fn without_a_chosen_model_recognition_says_so() {
 #[test]
 fn the_background_pump_indexes_by_itself_once_recognition_is_on() {
     let d = temp("pump");
-    let (mut s, _) = setup(&d, 64);
-    let (a, b) = two_photos(&s);
+    // Exercise real background embedding without unrelated full 24 MP demo renders.
+    let (mut s, _) = fresh_library(&d, 64);
+    let (a, b, _) = import_three_photos(&mut s, &d);
     set_regions(&mut s, a, vec![region(0.1, Some("Ann")), region(0.5, None)]);
     set_regions(&mut s, b, vec![region(0.3, None)]);
     // installing the model switched recognition on; switched off, the pump does nothing, and says so
@@ -251,31 +325,33 @@ fn the_background_pump_indexes_by_itself_once_recognition_is_on() {
 #[test]
 fn the_background_pump_saves_what_it_embeds_for_the_next_launch() {
     let d = temp("pumpsave");
-    let (lib, models) = (d.join("lib"), d.join("models"));
-    let mut s = Session::new().with_fs();
-    s.face_models_dir = Some(models);
-    s.open_library(&lib, true).unwrap();
-    let model = d.join("tiny64.onnx");
-    std::fs::write(&model, lightcraft_faces::synthetic::tiny_embedder_model(64)).unwrap();
-    // installing switches recognition on: nothing else is asked for
-    s.execute("faces.models.install", &json!({"path": model.to_string_lossy(), "acknowledged": true})).unwrap();
+    // Installing the tiny model switches recognition on: nothing else is asked for.
+    let (mut s, lib) = fresh_library(&d, 64);
     // without the detector (not bundled) photos without faces are left unsearched
     let searching = install_yunet(&mut s);
-    let (a, b) = two_photos(&s);
+    let (a, b, c) = import_three_photos(&mut s, &d);
     set_regions(&mut s, a, vec![region(0.1, Some("Ann")), region(0.5, None)]);
     set_regions(&mut s, b, vec![region(0.3, None)]);
+    assert!(s.catalog.photo(c).unwrap().meta.regions.is_empty(), "the third photo has no face to find");
     let photos = s.catalog.photos().count();
-    let searched_photos = if searching { photos - 2 } else { 0 };
+    assert_eq!(photos, 3, "a fresh library holds only the three imported photos");
+    // only the one photo without a face region is searched when the optional detector is installed
+    let searched_photos = usize::from(searching);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
-    let mut last = json!(null);
+    let (mut last, mut embedded) = (json!(null), 0u64);
     while std::time::Instant::now() < deadline {
         last = s.execute("faces.pump", &json!({})).unwrap();
+        embedded += last["embedded"].as_u64().unwrap_or(0);
         if last["pendingPhotos"] == 0 && s.faces.index.len() == 3 && s.faces.scanned.len() == searched_photos {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     assert_eq!((s.faces.index.len(), s.faces.scanned.len()), (3, searched_photos), "{last}");
+    assert_eq!(embedded, 3, "the background worker embedded each face exactly once: {last}");
+    // once everything is done another pump starts no work and reports no new embedding
+    let idle = s.execute("faces.pump", &json!({})).unwrap();
+    assert_eq!((idle["embedded"].clone(), idle["inFlight"].clone(), idle["pendingPhotos"].clone()), (json!(0), json!(0), json!(0)), "{idle}");
     let (tag, path) = (s.faces.index.tag.clone(), s.faces.index.path.clone().unwrap());
     assert!(path.file_name().unwrap().to_string_lossy().starts_with("face-embeddings-custom-"), "one cache file per model: {}", path.display());
     // the first batch is written at once; whatever is left is written when the session ends, so a launch never redoes
@@ -491,12 +567,9 @@ fn every_scanned_face_is_shown_by_the_same_kind_of_box() {
 #[test]
 fn face_scan_row_follows_pending_photos() {
     let d = temp("activity");
-    let (mut s, _) = setup(&d, 64);
-    // the last two demo photos, not the first two the other scan tests use: two sessions scanning the same demo scene
-    // at once can deadlock (issue #630), and this test is about the row, not that
-    let mut ids = s.catalog.photos().map(|p| p.id).collect::<Vec<_>>();
-    ids.sort();
-    let (a, b) = (ids[ids.len() - 2], ids[ids.len() - 1]);
+    // The activity row needs real background embedding, not full 24 MP demo renders.
+    let (mut s, _) = fresh_library(&d, 64);
+    let (a, b, _) = import_three_photos(&mut s, &d);
     set_regions(&mut s, a, vec![region(0.1, None), region(0.5, None)]);
     set_regions(&mut s, b, vec![region(0.3, None)]);
     let faces_rows = |s: &Session| s.activity.list().into_iter().filter(|t| t.kind == "faces").collect::<Vec<_>>();

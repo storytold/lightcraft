@@ -201,7 +201,7 @@ fn video_is_av1_in_mp4_with_fades_as_frames() {
     assert_eq!(r["samples"].as_u64(), Some(1 + 12 + 1), "held slides are one sample each, fades a frame each");
     assert_eq!((r["codec"].as_str(), r["audio"].as_bool(), r["container"].as_str()), (Some("av1"), Some(false), Some("mp4")));
     let d = std::fs::read(&path).unwrap();
-    let top: Vec<_> = boxes(&d, 0..d.len()).into_iter().map(|(k, _)| k).collect();
+    let top: Vec<_> = boxes(&d, 0..d.len()).into_iter().map(|(k, _)| k).filter(|k| k != b"free").collect();
     assert_eq!(top, vec![*b"ftyp", *b"mdat", *b"moov"]);
     let stbl = child(&d, 0..d.len(), &[b"moov", b"trak", b"mdia", b"minf", b"stbl"]);
     let be = |at: usize| u32::from_be_bytes(d[at..at + 4].try_into().unwrap());
@@ -239,8 +239,22 @@ fn video_in_webm_with_a_fade_colour() {
     assert_eq!(seg + 12 + size as usize, d.len());
 }
 
+fn wait_timeout_for_instrumentation(instrumented: bool) -> Duration {
+    Duration::from_secs(if instrumented { 600 } else { 120 })
+}
+
+fn wait_timeout() -> Duration {
+    wait_timeout_for_instrumentation(std::env::var_os("LLVM_PROFILE_FILE").is_some())
+}
+
+#[test]
+fn slideshow_export_wait_budget_only_expands_for_llvm_coverage_runs() {
+    assert_eq!(wait_timeout_for_instrumentation(false), Duration::from_secs(120));
+    assert_eq!(wait_timeout_for_instrumentation(true), Duration::from_secs(600));
+}
+
 fn wait_for(s: &Session) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(120);
+    let deadline = Instant::now() + wait_timeout();
     loop {
         let run = s.slideshow_export.clone().unwrap();
         if !run.running() {

@@ -13,16 +13,20 @@ fn meta(exif: &Option<Vec<u8>>) -> EncodeMeta<'_> {
     EncodeMeta { exif: exif.as_deref(), xmp: Some("<x/>"), ..Default::default() }
 }
 
-/// A TIFF with an Orientation tag (`encode_tiff` writes none), via the `tiff` crate's encoder.
+/// A TIFF with an Orientation tag (`encode_tiff` writes none), via `craft-tiff`.
 fn tiff_oriented(img: &Rgba8, orientation: u16) -> Vec<u8> {
-    use tiff::encoder::{TiffEncoder, colortype};
     let rgb: Vec<u8> = img.data.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
-    let mut cur = std::io::Cursor::new(Vec::new());
-    let mut enc = TiffEncoder::new(&mut cur).unwrap();
-    let mut im = enc.new_image::<colortype::RGB8>(img.width as u32, img.height as u32).unwrap();
-    im.encoder().write_tag(tiff::tags::Tag::Orientation, orientation).unwrap();
-    im.write_data(&rgb).unwrap();
-    cur.into_inner()
+    let mut ifd = craft_tiff::IfdBuilder::new()
+        .with(craft_tiff::tags::IMAGE_WIDTH, craft_tiff::Value::Long(vec![img.width as u32]))
+        .with(craft_tiff::tags::IMAGE_LENGTH, craft_tiff::Value::Long(vec![img.height as u32]))
+        .with(craft_tiff::tags::BITS_PER_SAMPLE, craft_tiff::Value::Short(vec![8, 8, 8]))
+        .with(craft_tiff::tags::COMPRESSION, craft_tiff::Value::Short(vec![1]))
+        .with(craft_tiff::tags::PHOTOMETRIC, craft_tiff::Value::Short(vec![2]))
+        .with(craft_tiff::tags::SAMPLES_PER_PIXEL, craft_tiff::Value::Short(vec![3]))
+        .with(craft_tiff::tags::PLANAR_CONFIGURATION, craft_tiff::Value::Short(vec![1]))
+        .with(craft_tiff::tags::ORIENTATION, craft_tiff::Value::Short(vec![orientation]));
+    ifd.set_image(craft_tiff::ImageData::Strips { rows_per_strip: img.height as u32, strips: vec![rgb] });
+    craft_tiff::TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&[ifd]).unwrap()
 }
 
 /// A minimal 8-bit RGB PSD (raw or PackBits-literal merged data) with an EXIF resource.
@@ -99,8 +103,8 @@ fn fixtures(w: usize, h: usize) -> Vec<(String, Vec<u8>)> {
     }
     out.push(("tiff lzw".into(), encode_tiff(&e, TiffCompression::Lzw, &EncodeMeta::default()).unwrap()));
     out.push(("tiff packbits".into(), encode_tiff(&e, TiffCompression::PackBits, &EncodeMeta::default()).unwrap()));
-    let mut bmp = Vec::new();
-    image::codecs::bmp::BmpEncoder::new(&mut bmp).encode(&rgb, w as u32, h as u32, image::ExtendedColorType::Rgb8).unwrap();
+    let bmp_img = craft_image_codecs::Image::from_u8(w as u32, h as u32, craft_image_codecs::ChannelLayout::Rgb, rgb).unwrap();
+    let bmp = craft_image_codecs::encode(&bmp_img, craft_image_codecs::Format::Bmp, &craft_image_codecs::EncodeOptions::default()).unwrap();
     out.push(("bmp".into(), bmp));
     out
 }
@@ -122,6 +126,31 @@ fn header_matches_decode() {
     }
     let o = |name: &str| fixtures(16, 8).into_iter().find(|f| f.0 == name).map(|f| read_header(&f.1).unwrap().orientation).unwrap();
     assert_eq!((o("jpeg 420 o6"), o("png rgba o8"), o("webp o6"), o("psd o8"), o("tiff o6"), o("jpeg 444 o0")), (6, 8, 6, 8, 6, 1));
+}
+
+/// The header probe's colour/compression policy is unchanged by the Clippy repair (#4264).
+/// These are header-only fixtures, not compressed image streams for the decoder.
+#[test]
+fn tiff_header_colour_and_compression_policy() {
+    for photometric in [0, 1, 2, 3, 4, 5, 6, 8, u16::MAX] {
+        for compression in [1, 4, 5, 6, 7, 8, 32773, 32946, u16::MAX] {
+            let mut ifd = craft_tiff::IfdBuilder::new()
+                .with(craft_tiff::tags::IMAGE_WIDTH, craft_tiff::Value::Long(vec![1]))
+                .with(craft_tiff::tags::IMAGE_LENGTH, craft_tiff::Value::Long(vec![1]))
+                .with(craft_tiff::tags::BITS_PER_SAMPLE, craft_tiff::Value::Short(vec![8, 8, 8]))
+                .with(craft_tiff::tags::SAMPLES_PER_PIXEL, craft_tiff::Value::Short(vec![3]))
+                .with(craft_tiff::tags::COMPRESSION, craft_tiff::Value::Short(vec![compression]))
+                .with(craft_tiff::tags::PHOTOMETRIC, craft_tiff::Value::Short(vec![photometric]));
+            ifd.set_image(craft_tiff::ImageData::Strips { rows_per_strip: 1, strips: vec![vec![0; 3]] });
+            let bytes = craft_tiff::TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&[ifd]).unwrap();
+            let accepted = match photometric {
+                0 | 1 | 2 | 3 | 5 => [1, 4, 5, 7, 8, 32773, 32946].contains(&compression),
+                6 => compression == 7, // YCbCr is supported only with JPEG compression.
+                _ => false,
+            };
+            assert_eq!(read_header(&bytes).is_ok(), accepted, "photometric={photometric}, compression={compression}");
+        }
+    }
 }
 
 /// Whenever the decode the probe used to run accepts a file (here: every cut of every fixture),
@@ -158,6 +187,76 @@ fn truncation_details() {
     let png = get("png rgba o6");
     assert!(read_header(&png[..png.len() - 2]).is_ok(), "a damaged IEND is ignored, as by a decode");
     assert!(read_header(&png[..png.len() - 12]).is_err(), "nothing after the image data: truncated");
+}
+
+/// A Samsung SEF trailer as the end of `image`: one `Panorama_Shot_Info` data block, then the
+/// `SEFH` directory with one entry (type 0x08E0) whose offset counts back from `SEFH` by `back`,
+/// the directory's length and `SEFT`.
+fn with_sef_trailer(image: &[u8], back: u32, magic: &[u8; 4]) -> Vec<u8> {
+    // marker-like bytes: both decoders refuse them as a second frame header after the scan
+    sef_file(image, back, magic, 0x08E0, &[0xFF, 0xC0, 0, 0x11, 0xFF, 0xDA, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], None)
+}
+
+/// [`with_sef_trailer`] with the entry's type, the block's data after its name, and the length
+/// the entry gives (`None`: the block's own).
+fn sef_file(image: &[u8], back: u32, magic: &[u8; 4], kind: u16, data: &[u8], len: Option<u32>) -> Vec<u8> {
+    let mut b = image.to_vec();
+    let mut block = vec![0, 0, 0xE0, 0x08];
+    block.extend_from_slice(&18u32.to_le_bytes());
+    block.extend_from_slice(b"Panorama_Shot_Info");
+    block.extend_from_slice(data);
+    b.extend_from_slice(&block);
+    let mut dir = magic.to_vec();
+    dir.extend_from_slice(&106u32.to_le_bytes());
+    dir.extend_from_slice(&1u32.to_le_bytes());
+    dir.extend_from_slice(&[0, 0]);
+    dir.extend_from_slice(&kind.to_le_bytes());
+    dir.extend_from_slice(&back.to_le_bytes());
+    dir.extend_from_slice(&len.unwrap_or(block.len() as u32).to_le_bytes());
+    let len = dir.len() as u32;
+    b.extend_from_slice(&dir);
+    b.extend_from_slice(&len.to_le_bytes());
+    b.extend_from_slice(b"SEFT");
+    b
+}
+
+/// Issue #3350: a Samsung panorama has no EOI; its scan data runs into the SEF trailer. It reads
+/// and decodes (both decoders: zune-jpeg in full, jpeg-decoder DCT-scaled) as the image before the
+/// trailer, and a file cut short with no trailer, or with a broken one, is still truncated.
+#[test]
+fn samsung_sef_trailer_without_eoi() {
+    let jpeg = fixtures(160, 96).into_iter().find(|x| x.0 == "jpeg 420 o6").map(|x| x.1).unwrap();
+    let scan = &jpeg[..jpeg.len() - 2];
+    let block = 4 + 4 + 18 + 18;
+    let pano = with_sef_trailer(scan, block, b"SEFH");
+    let header = read_header(&pano).unwrap();
+    assert_eq!((header.width, header.height, header.orientation), (160, 96, 6));
+    let full = decode(&pano, DecodeOptions::default()).unwrap();
+    assert_eq!((full.source_width, full.source_height), (160, 96));
+    let reference = decode(&jpeg, DecodeOptions::default()).unwrap();
+    assert_eq!(full.image.data, reference.image.data, "the same pixels as the file with its EOI");
+    let small = decode(&pano, DecodeOptions::fit(32, 32)).unwrap();
+    assert_eq!((small.source_width, small.source_height), (160, 96));
+    // the fast display decode too, scaled (where the trailer after the scan used to fail it)
+    let (fit, _) = lightcraft_codecs::decode_jpeg_srgb8_fit(&pano, 32, 32).unwrap().unwrap();
+    let (fit_ref, _) = lightcraft_codecs::decode_jpeg_srgb8_fit(&jpeg, 32, 32).unwrap().unwrap();
+    assert_eq!((fit.width, fit.height, &fit.data), (fit_ref.width, fit_ref.height, &fit_ref.data));
+    // an FF D9 inside the SEF data is not the image's end
+    let eoi_in_data = sef_file(scan, block, b"SEFH", 0x08E0, &[0xFF, 0xC0, 0, 0x11, 0xFF, 0xD9, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], None);
+    assert_eq!(read_header(&eoi_in_data).unwrap().width, 160);
+    let small = decode(&eoi_in_data, DecodeOptions::fit(32, 32)).unwrap();
+    assert_eq!((small.source_width, small.source_height), (160, 96));
+    // still truncated: no trailer, offsets outside the file or past `SEFH`, no `SEFH`, an empty
+    // entry, an entry whose type isn't its block's, a cut before the first scan
+    assert!(read_header(scan).is_err());
+    assert!(read_header(&with_sef_trailer(scan, u32::MAX, b"SEFH")).is_err());
+    assert!(read_header(&with_sef_trailer(scan, block - 1, b"SEFH")).is_err());
+    assert!(read_header(&with_sef_trailer(scan, block, b"SEFX")).is_err());
+    assert!(read_header(&sef_file(scan, 0, b"SEFH", 0x08E0, &[], Some(0))).is_err());
+    assert!(read_header(&sef_file(scan, block, b"SEFH", 0x0A01, &[0; 18], None)).is_err());
+    let cut_in_headers = with_sef_trailer(&jpeg[..40], block, b"SEFH");
+    assert!(read_header(&cut_in_headers).is_err());
+    assert!(decode(&cut_in_headers, DecodeOptions::fit(32, 32)).is_err());
 }
 
 /// eXIf after the image data counts, as it does for a decode (which reads the whole file).

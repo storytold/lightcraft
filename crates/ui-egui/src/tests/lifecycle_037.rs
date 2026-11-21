@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use crate::headless::Headless;
 use crate::render::{Slot, Tex};
+use crate::tests_fixtures::SyntheticLibrary;
 use crate::{ControlResponse, LightcraftApp, MAX_PENDING_SHOTS, MAX_SHOT_BYTES, PendingShot, Services, ShotGeometry};
 use lightcraft_engine::slideshow::Item;
 
@@ -120,9 +121,20 @@ fn resizable_side_stores_panel_state_under_the_parent_salted_key() {
     let ctx = egui::Context::default();
     let raw = raw(egui::vec2(1000.0, 700.0));
     frame(&ctx, raw, |ui| {
-        crate::panels::resizable_side(ui, true, "side-test", egui::Frame::NONE, 260.0, crate::state::LEFT_WIDTH, 300.0, |ui| {
-            ui.label("side");
-        });
+        crate::panels::resizable_side(
+            ui,
+            crate::panels::SidePanel {
+                left: true,
+                id: "side-test",
+                frame: egui::Frame::NONE,
+                width: 260.0,
+                limits: crate::state::LEFT_WIDTH,
+                reserve: 300.0,
+            },
+            |ui| {
+                ui.label("side");
+            },
+        );
     });
     let modern = ctx.viewport_id().root_ui_id().with("side-test");
     assert!(
@@ -300,6 +312,42 @@ fn a_capture_completed_after_a_catalog_edit_is_still_written() {
     assert!(path.exists());
     assert_eq!(app.shot_bytes, 0);
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn headless_capture_finishes_once_and_releases_only_its_reservation() {
+    for case in ["success", "overflow", "image-cap", "aggregate-cap"] {
+        let (mut app, seen) = app_with_screenshot_files();
+        let ctx = egui::Context::default();
+        let path = temp_png(&format!("headless-finish-{case}"));
+        let (tx, rx) = reply_channel();
+        app.last_shot_geometry = Some(geometry(100.0, 100.0));
+        let target = app.session.pin_write_target(&path.to_string_lossy()).expect("pin path");
+        app.admit_shot(&ctx, Some(target), true, tx).expect("admit");
+        let mut shot = app.pending_screenshots.pop().expect("pending shot");
+        let mut image = egui::ColorImage::filled([200, 200], egui::Color32::WHITE);
+        let other_reservations = if case == "aggregate-cap" { crate::MAX_SHOT_TOTAL_BYTES - shot.reserved } else { 0 };
+        app.shot_bytes += other_reservations;
+        if case == "overflow" {
+            image.size = [usize::MAX, 2];
+        } else if case == "image-cap" {
+            image.size = [MAX_SHOT_BYTES, 1];
+        }
+        app.finish_headless_shot(&mut shot, &image);
+        let reply = rx.try_recv().expect("one reply");
+        assert_eq!(reply["ok"], case == "success", "{case}: {reply}");
+        match case {
+            "overflow" => assert_eq!(reply["error"], "ui.screenshot: the rendered image has invalid dimensions"),
+            "image-cap" => assert!(reply["error"].as_str().expect("error message").contains("per-image limit")),
+            "aggregate-cap" => assert!(reply["error"].as_str().expect("error message").contains("bytes reserved is over")),
+            _ => {}
+        }
+        assert!(rx.try_recv().is_err(), "no duplicate reply");
+        assert_eq!(app.shot_bytes, other_reservations, "{case}");
+        assert_eq!(path.exists(), case == "success", "{case}");
+        assert_eq!(seen.lock().unwrap().is_some(), case == "success", "{case}");
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 #[test]
@@ -516,7 +564,7 @@ fn one_synthetic_batch_until_a_completed_pass_and_drops_wait_for_the_ui_phase() 
 
 #[test]
 fn first_headless_frame_runs_logic_and_uses_its_simulated_clock() {
-    let mut h = Headless::new(app(), [800.0, 600.0], 1.0);
+    let mut h = Headless::new(self::app(), [800.0, 600.0], 1.0);
     assert_eq!(h.time(), 0.0);
     h.step();
     assert!(h.app.styled, "the first frame at t=0 runs logic and installs fonts");
@@ -559,9 +607,10 @@ fn hidden_slideshow_pauses_and_keeps_its_remaining_time() {
     // Every slide is "ready": without the hidden gate, 10 hidden seconds would advance the show.
     for id in app.session.visible_cloned() {
         let tex = ctx.load_texture(format!("slide-{}", id.0), egui::ColorImage::filled([2, 2], egui::Color32::WHITE), Default::default());
-        app.renderer
-            .textures
-            .insert(Slot::Slide(Item::Photo(id)), Tex { key: 0, photo: id, tex, size: [2, 2], histogram: None, ms: 0.0, quick: None, pixels: None });
+        app.renderer.textures.insert(
+            Slot::Slide(Item::Photo(id)),
+            Tex { look: None, key: 0, photo: id, tex, native: None, size: [2, 2], histogram: None, ms: 0.0, quick: None, pixels: None },
+        );
     }
     let first = app.ui.slideshow.as_ref().unwrap().play.current();
     let selection = app.session.active();
@@ -854,6 +903,48 @@ fn ui_scroll_carries_validated_unit_phase_and_source() {
     assert!(app.synthetic.is_empty());
 }
 
+/// A coordinate or delta too large for an `f32` became an infinite or NaN pointer position or
+/// scroll delta: egui panicked on the NaN in debug builds ("Comparing NaN vectors"), and a release
+/// build handed it to every widget. Such a gesture is refused and queues nothing.
+#[test]
+fn gestures_refuse_numbers_that_are_not_screen_positions() {
+    let (mut app, ctx) = (app(), egui::Context::default());
+    app.widgets.push(("finite:test".into(), egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(20.0, 20.0))));
+    app.image_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 100.0)));
+    let refused = [
+        ("ui.click", serde_json::json!({"x": 1e308})),
+        ("ui.click", serde_json::json!({"y": -1e308})),
+        ("ui.move", serde_json::json!({"x": 1e300, "y": 1.0})),
+        ("ui.drag", serde_json::json!({"x": 1.0, "toY": 1e308})),
+        ("ui.dragWidget", serde_json::json!({"id": "finite:test", "dx": -1e308})),
+        ("ui.scroll", serde_json::json!({"dy": 1e308})),
+        ("ui.pointer", serde_json::json!({"events": [{"kind": "down", "x": 0.5}, {"kind": "move", "x": 1e308}]})),
+    ];
+    for (method, p) in refused {
+        let e = crate::control::gesture_events(&mut app, &ctx, method, &p).err().unwrap_or_else(|| panic!("{method} {p} was accepted"));
+        assert!(e.starts_with(method) && e.contains("between"), "{e}");
+        assert!(app.synthetic.is_empty(), "{method} {p} queued events");
+    }
+    // ordinary values still work, and count / steps are still clamped rather than refused
+    crate::control::gesture_events(&mut app, &ctx, "ui.click", &serde_json::json!({"x": 10.0, "y": -5.0, "count": u64::MAX})).unwrap();
+    crate::control::gesture_events(&mut app, &ctx, "ui.drag", &serde_json::json!({"x": 1.0, "toX": 999_999.0, "steps": 1e12})).unwrap();
+    assert!(!app.synthetic.is_empty());
+
+    // refused when the request is admitted: no pending slot, no wait for a layout
+    let (tx, rx) = reply_channel();
+    let e = app.admit_gesture(&ctx, "ui.click".into(), serde_json::json!({"x": 1e308}), tx).expect_err("refused at admission");
+    assert!(e.contains("between"), "{e}");
+    assert!(app.pending_gestures.is_empty());
+    drop(rx);
+
+    // through the whole control channel, as an agent sends it: an error, not a panic
+    let mut h = Headless::new(self::app(), [800.0, 600.0], 1.0);
+    h.step();
+    let r = h.request("ui.click", serde_json::json!({"x": 1e308}), Duration::from_secs(5));
+    assert_eq!(r["ok"], false, "{r}");
+    h.step();
+}
+
 #[test]
 fn synthetic_pointer_requests_bound_clicks_and_drag_steps() {
     let (mut app, ctx) = (app(), egui::Context::default());
@@ -990,13 +1081,14 @@ fn a_maximum_step_drag_is_delivered_past_the_five_second_stall_limit() {
 
 #[test]
 fn a_click_on_a_control_under_a_nonmodal_overlay_is_refused_without_activating_the_overlay() {
-    let mut h = Headless::new(app(), [1400.0, 900.0], 1.0);
+    let files = SyntheticLibrary::new("control-under-overlay");
+    let mut h = Headless::new(files.app(), [1400.0, 900.0], 1.0);
     let photo = h.app.session.visible_cloned()[0];
     let t = Duration::from_secs(20);
     assert_eq!(h.request("engine.execute", serde_json::json!({"command": "library.select", "params": {"ids": [photo.0]}}), t)["ok"], true);
     assert_eq!(h.request("ui.set", serde_json::json!({"view": "detail", "right": "edit"}), t)["ok"], true);
     h.app.ui.open_sections = vec!["light".to_string()];
-    assert!(h.settle(Duration::from_secs(60)), "the edit panel settles");
+    assert!(h.settle(Duration::from_secs(60)), "the edit panel settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let id = "slider:light.exposure";
     assert!(h.app.widgets.iter().any(|(widget, _)| widget == id), "{id} is on screen");
     let before = h.app.session.develop_of(photo).expect("its develop settings").light.exposure;
@@ -1028,12 +1120,13 @@ fn a_click_on_a_control_under_a_nonmodal_overlay_is_refused_without_activating_t
 /// interactive centre). This is the positive control the hover-only probe lacked.
 #[test]
 fn an_unobstructed_click_on_a_subrect_reaches_the_widget() {
-    let mut h = Headless::new(app(), [1400.0, 900.0], 1.0);
+    let files = SyntheticLibrary::new("unobstructed-subrect");
+    let mut h = Headless::new(files.app(), [1400.0, 900.0], 1.0);
     let photo = h.app.session.visible_cloned()[0];
     let t = Duration::from_secs(20);
     assert_eq!(h.request("engine.execute", serde_json::json!({"command": "library.select", "params": {"ids": [photo.0]}}), t)["ok"], true);
     assert_eq!(h.request("ui.set", serde_json::json!({"view": "detail", "right": "edit"}), t)["ok"], true);
-    assert!(h.settle(Duration::from_secs(60)), "the detail view settles");
+    assert!(h.settle(Duration::from_secs(60)), "the detail view settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let id = "star:bottom:2";
     assert!(h.app.widgets.iter().any(|(widget, _)| widget == id), "{id} is on screen");
     assert!(h.app.widget_hits.iter().any(|(widget, _)| widget == id), "{id} has a probe");
@@ -1047,11 +1140,12 @@ fn an_unobstructed_click_on_a_subrect_reaches_the_widget() {
 /// must not turn the release into an overlay click; the pointer is released away from the target.
 #[test]
 fn an_overlay_that_appears_after_the_press_cancels_the_release() {
-    let mut h = Headless::new(app(), [1000.0, 760.0], 1.0);
+    let files = SyntheticLibrary::new("overlay-after-press");
+    let mut h = Headless::new(files.app(), [1000.0, 760.0], 1.0);
     h.step();
     let t = Duration::from_secs(20);
     assert_eq!(h.request("ui.key", serde_json::json!({"key": ",", "cmd": true}), t)["ok"], true);
-    assert!(h.settle(Duration::from_secs(60)), "the Settings dialog settles");
+    assert!(h.settle(Duration::from_secs(60)), "the Settings dialog settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let id = "check:settings.confirmDelete";
     let target = h.app.widgets.iter().rev().find(|(widget, _)| widget == id).map(|(_, rect)| *rect).expect("the checkbox is on screen");
     let before = h.app.ui.settings.confirm_delete;
@@ -1096,13 +1190,14 @@ fn an_overlay_that_appears_after_the_press_cancels_the_release() {
 /// cleanup moved 8 px to suppress the click, which could start a drag and change a slider/curve.
 #[test]
 fn canceling_a_pressed_slider_releases_it_without_dragging_it() {
-    let mut h = Headless::new(app(), [1400.0, 900.0], 1.0);
+    let files = SyntheticLibrary::new("canceled-pressed-slider");
+    let mut h = Headless::new(files.app(), [1400.0, 900.0], 1.0);
     let photo = h.app.session.visible_cloned()[0];
     let t = Duration::from_secs(20);
     assert_eq!(h.request("engine.execute", serde_json::json!({"command": "library.select", "params": {"ids": [photo.0]}}), t)["ok"], true);
     assert_eq!(h.request("ui.set", serde_json::json!({"view": "detail", "right": "edit"}), t)["ok"], true);
     h.app.ui.open_sections = vec!["light".to_string()];
-    assert!(h.settle(Duration::from_secs(60)), "the edit panel settles");
+    assert!(h.settle(Duration::from_secs(60)), "the edit panel settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let id = "slider:light.exposure";
     let target = h.app.widgets.iter().rev().find(|(widget, _)| widget == id).map(|(_, rect)| *rect).expect("the slider is on screen");
     let before = h.app.session.develop_of(photo).expect("its develop settings").light.exposure;
@@ -1136,11 +1231,12 @@ fn canceling_a_pressed_slider_releases_it_without_dragging_it() {
 /// makes the target invisible too: the release is refused rather than clicking through it.
 #[test]
 fn a_nonprompt_overlay_that_appears_after_the_press_cancels_the_release() {
-    let mut h = Headless::new(app(), [1000.0, 760.0], 1.0);
+    let files = SyntheticLibrary::new("nonprompt-overlay-after-press");
+    let mut h = Headless::new(files.app(), [1000.0, 760.0], 1.0);
     h.step();
     let t = Duration::from_secs(20);
     assert_eq!(h.request("ui.key", serde_json::json!({"key": ",", "cmd": true}), t)["ok"], true);
-    assert!(h.settle(Duration::from_secs(60)), "the Settings dialog settles");
+    assert!(h.settle(Duration::from_secs(60)), "the Settings dialog settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let id = "check:settings.confirmDelete";
     let target = h.app.widgets.iter().rev().find(|(widget, _)| widget == id).map(|(_, rect)| *rect).expect("the checkbox is on screen");
     let before = h.app.ui.settings.confirm_delete;
@@ -1184,11 +1280,12 @@ fn a_nonprompt_overlay_that_appears_after_the_press_cancels_the_release() {
 /// `ui.clickWidget` counterpart of the press/release cancellation above.
 #[test]
 fn a_library_problem_overlay_blocks_a_control_click_in_settings() {
-    let mut h = Headless::new(app(), [1000.0, 760.0], 1.0);
+    let files = SyntheticLibrary::new("library-overlay-settings-click");
+    let mut h = Headless::new(files.app(), [1000.0, 760.0], 1.0);
     let t = Duration::from_secs(20);
     h.step();
     assert!(h.app.run("app.settings", serde_json::json!({})).is_ok(), "Settings opens");
-    assert!(h.settle(Duration::from_secs(60)), "Settings settles");
+    assert!(h.settle(Duration::from_secs(60)), "Settings settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let id = "check:settings.confirmDelete";
     let before = h.app.ui.settings.confirm_delete;
     h.app.library_problem = Some(crate::panels::library_problem::LibraryProblem::new("/no/such/library", "test error"));
@@ -1476,10 +1573,15 @@ fn a_prompt_created_after_raw_input_hook_shields_a_held_background_press() {
 /// success after the prompt filters it.
 #[test]
 fn a_synthetic_press_already_delivered_is_canceled_by_a_prompt_created_after_raw_input_hook() {
-    let mut h = Headless::new(app(), [1200.0, 900.0], 1.0);
+    let files = SyntheticLibrary::new("press-after-raw-hook");
+    let mut h = Headless::new(files.app(), [1200.0, 900.0], 1.0);
     h.step();
     assert!(h.app.run("app.settings", serde_json::json!({})).is_ok(), "Settings opens");
-    assert!(h.settle(Duration::from_secs(60)), "the Settings dialog settles before its target rect is captured");
+    assert!(
+        h.settle(Duration::from_secs(60)),
+        "the Settings dialog settles before its target rect is captured (pending slots: {:?})",
+        h.app.renderer.pending_slots()
+    );
     let id = "check:settings.confirmDelete";
     let target = h.app.widgets.iter().rev().find(|(widget, _)| widget == id).map(|(_, rect)| *rect).expect("the checkbox is on screen");
     let before = h.app.ui.settings.confirm_delete;
@@ -1512,13 +1614,14 @@ fn a_synthetic_press_already_delivered_is_canceled_by_a_prompt_created_after_raw
 /// stay unchanged.
 #[test]
 fn raw_background_gestures_at_a_settled_prompt_do_not_reach_the_covered_view() {
-    let mut h = Headless::new(app(), [1400.0, 900.0], 1.0);
+    let files = SyntheticLibrary::new("raw-gestures-settled-prompt");
+    let mut h = Headless::new(files.app(), [1400.0, 900.0], 1.0);
     let photo = h.app.session.visible_cloned()[0];
     let t = Duration::from_secs(20);
     assert_eq!(h.request("engine.execute", serde_json::json!({"command": "library.select", "params": {"ids": [photo.0]}}), t)["ok"], true);
     assert_eq!(h.request("ui.set", serde_json::json!({"view": "detail", "right": "edit"}), t)["ok"], true);
     assert!(h.app.run("app.settings", serde_json::json!({})).is_ok(), "Settings opens");
-    assert!(h.settle(Duration::from_secs(60)), "the detail view and Settings settle");
+    assert!(h.settle(Duration::from_secs(60)), "the detail view and Settings settle (pending slots: {:?})", h.app.renderer.pending_slots());
     let image = h.app.image_rect.expect("the detail image is on screen");
     let at = image.min + egui::vec2(12.0, 12.0);
     let before = h.app.ui.settings.confirm_delete;
@@ -1579,13 +1682,14 @@ fn a_prompt_keeps_key_releases_and_clears_held_keys() {
 /// moves/release are discarded, the pointer is released without a click, and the slider is intact.
 #[test]
 fn a_prompt_aborts_an_in_progress_synthetic_drag() {
-    let mut h = Headless::new(app(), [1400.0, 900.0], 1.0);
+    let files = SyntheticLibrary::new("prompt-aborts-drag");
+    let mut h = Headless::new(files.app(), [1400.0, 900.0], 1.0);
     let photo = h.app.session.visible_cloned()[0];
     let t = Duration::from_secs(20);
     assert_eq!(h.request("engine.execute", serde_json::json!({"command": "library.select", "params": {"ids": [photo.0]}}), t)["ok"], true);
     assert_eq!(h.request("ui.set", serde_json::json!({"view": "detail", "right": "edit"}), t)["ok"], true);
     h.app.ui.open_sections = vec!["light".to_string()];
-    assert!(h.settle(Duration::from_secs(60)), "the edit panel settles");
+    assert!(h.settle(Duration::from_secs(60)), "the edit panel settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let id = "slider:light.exposure";
     let before = h.app.session.develop_of(photo).expect("its develop settings").light.exposure;
     let (tx, rx) = reply_channel();
@@ -1736,12 +1840,13 @@ fn a_settings_notice_blocks_background_input_and_its_ok_button_works() {
 
 #[test]
 fn clipping_changed_between_the_move_and_press_is_seen_in_the_latest_registry() {
-    let mut h = Headless::new(app(), [1400.0, 900.0], 1.0);
+    let files = SyntheticLibrary::new("clipping-changed");
+    let mut h = Headless::new(files.app(), [1400.0, 900.0], 1.0);
     let photo = h.app.session.visible_cloned()[0];
     let t = Duration::from_secs(20);
     assert_eq!(h.request("engine.execute", serde_json::json!({"command": "library.select", "params": {"ids": [photo.0]}}), t)["ok"], true);
     assert_eq!(h.request("ui.set", serde_json::json!({"view": "detail", "right": "edit"}), t)["ok"], true);
-    assert!(h.settle(Duration::from_secs(60)), "the detail view settles");
+    assert!(h.settle(Duration::from_secs(60)), "the detail view settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let id = "star:bottom:2";
     let (tx, rx) = reply_channel();
     h.app.admit_gesture(&h.view.ctx.clone(), "ui.clickWidget".into(), serde_json::json!({"id": id}), tx).expect("the click is admitted");
@@ -1811,12 +1916,13 @@ fn queued_pointer_cleanup_requests_a_repaint_without_a_synthetic_event() {
 
 #[test]
 fn a_moved_widget_cancels_before_its_first_event_and_leaves_a_later_gesture_queued() {
-    let mut h = Headless::new(app(), [1000.0, 760.0], 1.0);
+    let files = SyntheticLibrary::new("moved-widget-queued");
+    let mut h = Headless::new(files.app(), [1000.0, 760.0], 1.0);
     h.step();
     let t = Duration::from_secs(20);
     let r = h.request("ui.key", serde_json::json!({"key": ",", "cmd": true}), t);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(h.settle(Duration::from_secs(60)), "the Settings dialog settles");
+    assert!(h.settle(Duration::from_secs(60)), "the Settings dialog settles (pending slots: {:?})", h.app.renderer.pending_slots());
     assert!(h.app.widgets.iter().any(|(id, _)| id == "check:settings.confirmDelete"));
     assert!(h.app.widgets.iter().any(|(id, _)| id == "button:settingsStartup-2"));
 
@@ -1862,12 +1968,13 @@ fn a_moved_widget_cancels_before_its_first_event_and_leaves_a_later_gesture_queu
 
 #[test]
 fn a_click_whose_target_vanishes_after_the_press_fails_and_releases_the_pointer() {
-    let mut h = Headless::new(app(), [1000.0, 760.0], 1.0);
+    let files = SyntheticLibrary::new("target-vanishes");
+    let mut h = Headless::new(files.app(), [1000.0, 760.0], 1.0);
     h.step();
     let t = Duration::from_secs(20);
     let r = h.request("ui.key", serde_json::json!({"key": ",", "cmd": true}), t);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(h.settle(Duration::from_secs(60)), "the Settings dialog settles");
+    assert!(h.settle(Duration::from_secs(60)), "the Settings dialog settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let before = h.app.ui.settings.confirm_delete;
 
     let (tx, rx) = reply_channel();
@@ -1922,6 +2029,9 @@ fn a_discarded_layout_does_not_publish_its_widget_registry() {
 fn a_gesture_replies_only_after_the_completed_pass_consumed_its_event() {
     let ctx = egui::Context::default();
     let mut app = app();
+    // a headless host never gains the first-run tour: its modal would sit over the passes this
+    // test drives (screenshot tests elsewhere in this file need the host not headless)
+    app.headless_host = true;
     frame(&ctx, raw(egui::vec2(1000.0, 700.0)), |ui| app.logic(ui.ctx()));
     app.logic(&ctx);
     assert!(app.fonts_ready);
@@ -1950,6 +2060,10 @@ fn a_gesture_replies_only_after_the_completed_pass_consumed_its_event() {
 fn a_delivered_gesture_may_change_the_state_it_acted_on() {
     let ctx = egui::Context::default();
     let mut app = app();
+    // a headless host never gains the first-run tour: its modal would take the dialog this
+    // delivered gesture opens (screenshot tests elsewhere in this file need the host not
+    // headless, so the flag is scoped to this test)
+    app.headless_host = true;
     frame(&ctx, raw(egui::vec2(1000.0, 700.0)), |ui| app.logic(ui.ctx()));
     app.logic(&ctx);
     assert!(app.fonts_ready);
@@ -2053,11 +2167,12 @@ fn disclosure_rows_publish_expanded_not_toggled() {
 /// widget was clipped before delivery is refused, as is one under the non-modal library window.
 #[test]
 fn hover_widget_refuses_clipped_and_covered_targets() {
-    let mut h = Headless::new(app(), [1200.0, 900.0], 1.0);
+    let files = SyntheticLibrary::new("hover-refuses-clipped");
+    let mut h = Headless::new(files.app(), [1200.0, 900.0], 1.0);
     let t = Duration::from_secs(20);
     h.step();
     assert!(h.app.run("app.settings", serde_json::json!({})).is_ok(), "Settings opens");
-    assert!(h.settle(Duration::from_secs(60)), "Settings settles");
+    assert!(h.settle(Duration::from_secs(60)), "Settings settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let id = "check:settings.confirmDelete";
     assert!(h.app.widget_hits.iter().any(|(widget, _)| widget == id), "{id} has a probe");
 
@@ -2223,4 +2338,44 @@ fn synthetic_modifier_ownership_follows_host_changes_across_frames() {
     assert_eq!(input.events, vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
     assert_eq!(app.synthetic_mods, egui::Modifiers::NONE);
     assert!(!app.synthetic_mods_release);
+}
+
+/// Background preparation is advanced on every logic pass, the hidden ones too (CodeRabbit on
+/// #3077): a minimised window keeps preparing the view's previews, and a shown frame ticks it once.
+#[test]
+fn background_preparation_advances_while_the_window_is_hidden() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+    let hidden = viewport_raw(egui::vec2(800.0, 600.0), false);
+    let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    assert_eq!(app.prep_ticks, 2, "each hidden pass advances it");
+    let visible = viewport_raw(egui::vec2(800.0, 600.0), true);
+    let _ = ctx.run_logic(&visible, |ctx| app.logic(ctx));
+    assert_eq!(app.prep_ticks, 3, "a shown pass advances it once");
+}
+/// CodeRabbit on #3077/#3080: a background build that couldn't start asks for a frame at its retry
+/// time, so the retry happens with no input and no other timed frame.
+#[test]
+fn a_build_waiting_to_retry_asks_for_a_frame_at_its_time() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+    let delays = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = delays.clone();
+    ctx.set_request_repaint_callback(move |info| seen.lock().unwrap().push(info.delay));
+    let wait = std::time::Duration::from_secs(7);
+    let hidden = viewport_raw(egui::vec2(800.0, 600.0), false);
+    // (the first passes ask for frames at once, which would hide a later request)
+    for _ in 0..3 {
+        let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    }
+    delays.lock().unwrap().clear();
+    app.session.prep.retry_at = Some((0, std::time::Instant::now() + wait));
+    let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    let got = delays.lock().unwrap().clone();
+    assert!(got.iter().any(|d| *d > std::time::Duration::from_secs(6) && *d <= wait), "a frame at the retry time: {got:?}");
+    app.session.prep.retry_at = None;
+    delays.lock().unwrap().clear();
+    let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    assert!(!delays.lock().unwrap().iter().any(|d| *d > std::time::Duration::from_secs(6) && *d <= wait), "none without a retry waiting");
 }

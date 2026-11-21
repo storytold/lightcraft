@@ -12,9 +12,10 @@ const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
 
 fn app() -> Headless {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    // Profile import needs no photos. Avoid unrelated demo renders while testing its notice.
+    let app = LightcraftApp::new(lightcraft_engine::Session::new(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
-    h.settle(SETTLE);
+    assert!(h.settle(SETTLE), "the empty library settles before importing profiles");
     h
 }
 
@@ -27,9 +28,9 @@ fn temp_dir(tag: &str) -> std::path::PathBuf {
 
 fn import(h: &mut Headless, paths: &[&std::path::Path]) -> serde_json::Value {
     let paths: Vec<String> = paths.iter().map(|p| p.to_string_lossy().to_string()).collect();
-    let r = h.request("engine.execute", json!({"command": "file.importPresets", "params": {"paths": paths}}), T);
-    h.settle(SETTLE);
-    r
+    // Import and its toast complete synchronously before the control reply. Settling
+    // unrelated rendering afterwards advances simulated time and can expire the notice.
+    h.request("engine.execute", json!({"command": "file.importPresets", "params": {"paths": paths}}), T)
 }
 
 fn toast(h: &Headless) -> String {
