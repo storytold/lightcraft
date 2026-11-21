@@ -153,6 +153,7 @@ impl<'a> Placer<'a> {
         let file = path.clone().unwrap_or_else(|_| name.clone());
         let write = &mut *self.write;
         let written = path.and_then(|path| {
+            e.check_sidecar_destination(std::path::Path::new(&path))?;
             let files = group(&path);
             // never over an original, whatever the conflict policy or the exact path said
             for f in &files {
