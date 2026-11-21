@@ -123,6 +123,23 @@ fn resolution_independence_of_local_contrast() {
 }
 
 #[test]
+fn paint_overlay_vignette_lifts_a_corner_toward_white() {
+    use lightcraft_develop::VignetteStyle;
+    let src = Rgb32f::filled(48, 48, [0.18, 0.18, 0.18]);
+    let mut paint = DevelopSettings::default();
+    paint.vignette.amount = 100.0;
+    paint.vignette.midpoint = 0.0;
+    paint.vignette.feather = 10.0;
+    paint.vignette.style = VignetteStyle::PaintOverlay;
+    let mut color = paint.clone();
+    color.vignette.style = VignetteStyle::ColorPriority;
+    let paint_img = render(&src, &SourceInfo::default(), &paint, &RenderRequest::fit(48, 48)).image;
+    let color_img = render(&src, &SourceInfo::default(), &color, &RenderRequest::fit(48, 48)).image;
+    let corner = |img: &lightcraft_raster::Rgba8| img.data[0][0];
+    assert!(corner(&paint_img) > corner(&color_img) + 8, "paint {} color {}", corner(&paint_img), corner(&color_img));
+}
+
+#[test]
 fn crop_and_straighten_output_size() {
     let mut s = DevelopSettings::default();
     s.crop.geometry = lightcraft_geom::crop_fit_angle(240.0, 160.0, 8.0, Some(1.0));
