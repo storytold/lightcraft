@@ -1284,6 +1284,8 @@ fn convert_to_dng_is_verified_and_atomic() {
         })
         .unwrap();
     s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+    let copy_id = PhotoId(s.execute("photo.virtualCopy", &json!({})).unwrap()["ids"][0].as_u64().unwrap());
+    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
     let names = || {
         let mut v: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
         v.sort();
@@ -1305,6 +1307,10 @@ fn convert_to_dng_is_verified_and_atomic() {
     assert_eq!(std::fs::read(&raw).unwrap(), bytes, "the raw is untouched");
     let back = lightcraft_raw::decode(&std::fs::read(&out).unwrap()).unwrap();
     assert_eq!(back.data, lightcraft_raw::decode(&bytes).unwrap().data);
+    let converted_size = std::fs::metadata(&out).unwrap().len();
+    assert_eq!(s.catalog.photo(id).unwrap().file_size, converted_size);
+    assert_eq!(s.catalog.photo(copy_id).unwrap().file_size, converted_size, "virtual copies share the converted file");
+    assert_eq!(s.catalog.photo(copy_id).unwrap().source, lightcraft_catalog::Source::File { path: out.clone() });
     assert_eq!(s.catalog.photo(id).unwrap().source, lightcraft_catalog::Source::File { path: out });
     assert_eq!(names(), ["shot-2.dng", "shot.dng"], "no temp file left");
     let _ = std::fs::remove_dir_all(&dir);
