@@ -151,6 +151,11 @@ fn generate_registry() -> Result<(), String> {
         if !seen.insert(name) {
             return Err(at("duplicate name"));
         }
+        // the reference for "an Adobe field" is the shape every crs: property has: an ASCII
+        // identifier starting with a capital (a second catalog would just duplicate this file)
+        if !name.starts_with(|c: char| c.is_ascii_uppercase()) || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return Err(at(&format!("{name:?} is not an Adobe crs field name (an ASCII identifier starting with a capital)")));
+        }
         let note = row.get("note").and_then(|n| n.as_str());
         let decisions = match row.get("decision") {
             Some(serde_json::Value::String(d)) => vec![d.as_str()],
