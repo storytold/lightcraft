@@ -1177,6 +1177,13 @@ impl Session {
         self.shelved_filter.is_some()
     }
 
+    /// The flag filter shows picks and unflagged photos but no rejects (View ▸ Hide Rejected
+    /// Photos, `library.hideRejected`).
+    pub fn rejects_hidden(&self) -> bool {
+        use lightcraft_catalog::Flag;
+        self.filter.flags_shown().as_deref() == Some(&[Flag::Pick, Flag::None])
+    }
+
     /// Photos shown in the grid/filmstrip for the current source, filter and sort.
     pub fn visible(&mut self) -> &[PhotoId] {
         let mut key =
