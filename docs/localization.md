@@ -84,6 +84,13 @@ tr_format!("Added {n} photo{} to “{}”", if n == 1 { "" } else { "s" }, album
   `tr_format!` call whose message is in no catalog formats the English source (the macro's last
   arm). A new message builds with no catalog entry.
 
+Messages made below the UI come as data where they are shown to people. The Capture One catalog
+import gives its warnings as `capture_one_catalog::Notice`: an English message with `{name}`
+placeholders (one of `capture_one_catalog::notice::MESSAGES`) and the values that fill them, some of
+them messages too (a reason, a field's name). `i18n::capture_one_notice` looks each up with `tr`
+and fills it; names, paths and counts are shown as they are. A test fails when a catalog lacks one
+of those messages, so a new one is added to every catalog in the same change.
+
 ## Testing and looking at it
 
 ```sh

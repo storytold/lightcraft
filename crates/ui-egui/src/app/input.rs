@@ -94,7 +94,8 @@ impl LightcraftApp {
         // no library open yet (the launch list, a library that failed to open): they wait for one
         let Some(photos) = panels::library_problem::hold_dropped(self, ctx, drop.photos) else { return };
         if self.lightroom.is_some() {
-            self.toast(ctx, crate::i18n::tr("Finish Lightroom catalog import before adding photos"));
+            let message = crate::lightroom_import::finish_first(self);
+            self.toast(ctx, message);
             return;
         }
         if import::running(self) {

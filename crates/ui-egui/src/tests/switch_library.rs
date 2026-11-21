@@ -64,6 +64,7 @@ fn switching_libraries_dismisses_the_previous_lightroom_result() {
         library: Some(dir.join("first").to_string_lossy().into_owned()),
         details: Vec::new(),
         first: Some(1),
+        capture_one: false,
     };
     app.ui.dialog = Some(result());
     app.lightroom_result = Some(result());

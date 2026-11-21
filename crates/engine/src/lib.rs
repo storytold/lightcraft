@@ -21,6 +21,7 @@ pub mod apple_photos;
 pub mod availability;
 pub(crate) mod camera_preview;
 pub mod camera_profiles;
+pub mod capture_one_catalog;
 pub mod cmd;
 pub mod config;
 pub mod contact_sheet;

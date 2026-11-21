@@ -260,6 +260,11 @@ empty) and `button:dialogCancel`. With `"alwaysMerge"` (`ui.set {"settings": {"l
 or Settings ▸ General `button:settingsLightroomImport-0|1`), or in a session in memory, it imports into the open
 library without asking.
 
+`file.importCaptureOne {path?, into?, name?, location?}` (File ▸ Import Capture One Catalog…, issue #4250) works the
+same for a Capture One catalog: `path` is its `.cocatalog` folder or a `.cocatalogdb`, a folder is taken for its
+database before anything else happens, and the new library's default name is the database's file name without
+`.cocatalogdb`. See [Capture One catalog import](capture-one-catalog-import.md).
+
 ## External controllers
 
 External apps can use this channel to send commands and poll the running desktop app for feedback
