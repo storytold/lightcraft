@@ -302,8 +302,10 @@ pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) 
     prepared.normal.revalidate_add(s);
     let options = ImportOptions { mode: ImportMode::Add, on_deleted: crate::import::OnDeleted::Skip, ..ImportOptions::default() };
     let now = prepared.now.clone();
+    let before = s.before_step();
     let files = crate::import::commit_prepared(s, &options, &now, prepared.normal)?;
-    let applied = lightroom_catalog::apply_prepared(
+    let file_step = s.committed_step(before);
+    let applied = match lightroom_catalog::apply_prepared(
         s,
         prepared.data,
         lightroom_catalog::ApplyPrepared {
@@ -314,7 +316,20 @@ pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) 
             missing_sources: &prepared.missing_sources,
             undo0,
         },
-    )?;
+    ) {
+        Ok(applied) => applied,
+        // The file step has made the catalog's originals records, and photos browsed in Local the library's. A catalog
+        // the import then can't apply (a capture time that isn't a full date, collections it can't match safely, an
+        // album id it can't give) must not leave them so, without the catalog's ratings, flags, edits or collections,
+        // while it reports only the error: take that step back. It is records only: Add moves and copies no file.
+        Err(e) => {
+            let Some(step) = file_step else { return Err(e) };
+            return Err(match s.take_back(step) {
+                Ok(()) => e,
+                Err(back) => crate::EngineError::Other(format!("{e}; the photos it added could not be taken back: {back}")),
+            });
+        }
+    };
     let path = prepared.token.library_dir().map(|dir| dir.join("Interop/lightroom-index.json"));
     let bytes = if path.is_some() { Some(serde_json::to_vec(&applied.index).map_err(|e| error(e.to_string()))?) } else { None };
     Ok(LightroomCompletion { report: applied.report, finalization: LightroomArchiveFinalization { path, bytes } })
@@ -572,6 +587,89 @@ mod tests {
         );
         assert_eq!(session.catalog.len(), 5_000);
         std::fs::remove_dir_all(archive_dir).unwrap();
+    }
+
+    fn album_step(s: &mut crate::Session, name: &str) -> lightcraft_catalog::AlbumId {
+        let id = s.catalog.alloc_album_id();
+        s.commit(name, lightcraft_catalog::Op::AddAlbum { album: lightcraft_catalog::Album::new(id, name) }).unwrap();
+        id
+    }
+
+    fn undo_labels(s: &crate::Session) -> Vec<String> {
+        s.undo.iter().map(|e| e.label.clone()).collect()
+    }
+
+    /// The take-back a failed import uses reverses its own step and nothing older: a step committed, merged or undone
+    /// after it means the top of the undo stack may be someone else's, and it refuses.
+    #[test]
+    fn a_take_back_refuses_once_its_step_is_no_longer_the_last() {
+        type Change = fn(&mut crate::Session);
+        let changes: [(&str, Change); 3] = [
+            ("committed", |s| {
+                album_step(s, "later");
+            }),
+            ("merged", |s| s.merge_undo(2, "merged")),
+            ("undone", |s| {
+                s.undo_step().unwrap();
+            }),
+        ];
+        for (what, change) in changes {
+            let mut s = crate::Session::new();
+            album_step(&mut s, "mine");
+            let before = s.before_step();
+            album_step(&mut s, "import");
+            let step = s.committed_step(before).unwrap();
+            change(&mut s);
+            let (albums, undo) = (s.catalog.albums().count(), undo_labels(&s));
+            let e = s.take_back(step).unwrap_err();
+            assert!(e.to_string().contains("no longer the last one"), "{what}: {e}");
+            assert_eq!((s.catalog.albums().count(), undo_labels(&s)), (albums, undo), "{what}: nothing was taken back");
+        }
+        // no step, or two, since: nothing to take back
+        let mut s = crate::Session::new();
+        let before = s.before_step();
+        assert!(s.committed_step(before).is_none());
+        album_step(&mut s, "one");
+        album_step(&mut s, "two");
+        assert!(s.committed_step(before).is_none());
+    }
+
+    /// The step leaves the queue for the library's log when it hasn't been written, so neither it nor its reversal
+    /// reaches the disk; once written, its reversal is logged after it, as an undo's is.
+    #[test]
+    fn a_take_back_drops_an_unwritten_step_and_logs_the_reversal_of_a_written_one() {
+        for written in [false, true] {
+            let mut s = crate::Session::new();
+            album_step(&mut s, "mine");
+            let before = s.before_step();
+            let id = album_step(&mut s, "import");
+            let step = s.committed_step(before).unwrap();
+            let log = if written { s.drain_log() } else { Vec::new() };
+            s.take_back(step).unwrap();
+            assert!(s.catalog.album(id).is_none());
+            assert_eq!(undo_labels(&s), ["mine"], "written: {written}");
+            assert!(s.redo.is_empty(), "nothing to redo");
+            let queued = s.drain_log();
+            if written {
+                assert_eq!(log.len(), 2);
+                assert!(matches!(queued.as_slice(), [lightcraft_catalog::Op::RemoveAlbum { id: removed }] if *removed == id), "{queued:?}");
+            } else {
+                assert!(matches!(queued.as_slice(), [lightcraft_catalog::Op::AddAlbum { album }] if album.name == "mine"), "{queued:?}");
+            }
+        }
+    }
+
+    /// A step whose reversal the catalog refuses stays on the undo stack, and the error says why.
+    #[test]
+    fn a_step_that_cannot_be_taken_back_stays_on_the_undo_stack() {
+        let mut s = crate::Session::new();
+        let before = s.before_step();
+        let id = album_step(&mut s, "import");
+        let step = s.committed_step(before).unwrap();
+        // the album goes behind the step's back: its reversal (removing it) has nothing to remove
+        s.apply_system(lightcraft_catalog::Op::RemoveAlbum { id }).unwrap();
+        assert!(s.take_back(step).is_err());
+        assert_eq!(undo_labels(&s), ["import"]);
     }
 
     #[test]
