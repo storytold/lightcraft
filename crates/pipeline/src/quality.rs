@@ -73,7 +73,7 @@ impl QualityFactors {
     #[must_use]
     pub fn measure(img: &Rgb32f, weights: QualityWeights, jpeg: bool) -> QualityFactors {
         let w = weights.sane();
-        let sharpness = crate::cull::sharpness(img).clamp(0.0, 100.0);
+        let sharpness = sharpness_score(img);
         let noise = noise_score(img);
         let exposure = exposure_score(img);
         let compression = jpeg.then(|| compression_score(img));
@@ -113,13 +113,10 @@ const NOISE_REFERENCE: f32 = 0.0035;
 /// real detail to mistake for grain. Grain is what a 3 × 3 smoothing takes away; the blocks with
 /// the smallest spread pick where that is measured, so an edge-heavy photo (a brick wall) doesn't
 /// read as noisy.
-fn noise_score(img: &Rgb32f) -> f32 {
-    let (l, w, h) = luma(img);
-    if w < 4 || h < 4 {
-        return 100.0;
-    }
-    // the 3 × 3 mean (clamped at the borders)
-    let mut smooth = vec![0f32; l.len()];
+/// The 3 × 3 mean of `l` (`w` × `h`), clamped at the borders: the grain and JPEG blocks a real
+/// measure should not count as detail. Length matches `l`, zero where `l` is short.
+fn smooth3(l: &[f32], w: usize, h: usize) -> Vec<f32> {
+    let mut out = vec![0f32; l.len()];
     for y in 0..h {
         for x in 0..w {
             let mut acc = 0.0f32;
@@ -132,11 +129,33 @@ fn noise_score(img: &Rgb32f) -> f32 {
                     }
                 }
             }
-            if let Some(slot) = smooth.get_mut(y * w + x) {
+            if let Some(slot) = out.get_mut(y * w + x) {
                 *slot = if n > 0 { acc / n as f32 } else { 0.0 };
             }
         }
     }
+    out
+}
+
+/// Sharpness 0..100: assisted culling's own focus measure ([`crate::cull::sharpness`]), taken on the
+/// 3 × 3 smoothed luminance. Grain is exactly what that smoothing removes, so a noisy photo is not
+/// read as a detailed one (a soft photo's noise otherwise scores as its sharpest detail).
+fn sharpness_score(img: &Rgb32f) -> f32 {
+    let (l, w, h) = luma(img);
+    let l = smooth3(&l, w, h);
+    crate::cull::sharpness_luma(&l, w, h).clamp(0.0, 100.0)
+}
+
+/// Noise 0..100 (100: grain-free): the grain in the flattest half of the photo, where there is no
+/// real detail to mistake for grain. Grain is what a 3 × 3 smoothing takes away; the blocks with
+/// the smallest spread pick where that is measured, so an edge-heavy photo (a brick wall) doesn't
+/// read as noisy.
+fn noise_score(img: &Rgb32f) -> f32 {
+    let (l, w, h) = luma(img);
+    if w < 4 || h < 4 {
+        return 100.0;
+    }
+    let smooth = smooth3(&l, w, h);
     // per block: the mean grain and the block's own spread (its detail)
     const B: usize = 16;
     let mut blocks: Vec<(f32, f32)> = Vec::new();
@@ -165,17 +184,16 @@ fn noise_score(img: &Rgb32f) -> f32 {
     if blocks.is_empty() {
         return 100.0;
     }
-    let k = blocks.len() / 2;
-    let mid = blocks.select_nth_unstable_by(k, |a, b| a.1.total_cmp(&b.1)).1.1;
-    let mut grain = 0.0f32;
-    let mut n = 0u32;
-    for (g, spread) in &blocks {
-        if *spread <= mid {
-            grain += *g;
-            n += 1;
-        }
-    }
-    let grain = if n > 0 { grain / n as f32 } else { return 100.0 };
+    // the flattest half, picked by rank: many blocks share a spread (a wall of windows, a sky),
+    // and comparing them to the median value would take every one of them in — including the
+    // detailed ones that tie with it
+    blocks.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
+    let half = blocks.len() / 2;
+    let grain = if half > 0 {
+        blocks[..half].iter().map(|(g, _)| *g).sum::<f32>() / half as f32
+    } else {
+        return 100.0;
+    };
     (100.0 * (1.0 - (grain / NOISE_REFERENCE).clamp(0.0, 1.0))).clamp(0.0, 100.0)
 }
 
@@ -253,7 +271,7 @@ fn compression_score(img: &Rgb32f) -> f32 {
 mod tests {
     use super::*;
 
-    fn image(w: usize, h: usize, f: impl Fn(usize, usize) -> f32) -> Rgb32f {
+    fn image(w: usize, h: usize, mut f: impl FnMut(usize, usize) -> f32) -> Rgb32f {
         let mut img = Rgb32f { width: w, height: h, data: vec![[0f32; 3]; w * h] };
         for y in 0..h {
             for x in 0..w {
@@ -358,6 +376,30 @@ mod tests {
                 assert!(v.is_finite(), "{q:?}");
             }
         }
+    }
+
+    /// Grain is not detail: a noisy photo and a photograph of crisp edges must not both read as
+    /// sharp. Sharpness is measured on the 3 × 3 smoothed luminance, which is what the grain
+    /// smoothing removes, so noise alone can't be mistaken for the sharpest detail.
+    #[test]
+    fn grain_is_not_read_as_sharpness() {
+        let mut n = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move || {
+            n ^= n << 13;
+            n ^= n >> 7;
+            n ^= n << 17;
+            (n >> 40) as f32 / (1u64 << 24) as f32
+        };
+        let noisy = image(128, 128, |_, _| (0.18 + (next() - 0.5) * 0.5).clamp(0.0, 1.0));
+        let edges = image(128, 128, |x, y| if (x / 8 + y / 8) % 2 == 0 { 0.9 } else { 0.05 });
+        let flat = image(128, 128, |_, _| 0.18);
+        let (q_noisy, q_edges, q_flat) = (sharpness_score(&noisy), sharpness_score(&edges), sharpness_score(&flat));
+        assert!(q_flat < 1.0, "flat {q_flat}");
+        assert!(q_edges > q_noisy, "crisp edges {q_edges} must beat grain {q_noisy}");
+        assert!(q_noisy < 95.0, "grain alone reads {q_noisy}, not as sharp as a detailed photo");
+        // and a noisy photo's noise score is what says it is noisy
+        assert!(noise_score(&noisy) < 20.0, "grain {}", noise_score(&noisy));
+        assert!(noise_score(&flat) > 95.0, "clean {}", noise_score(&flat));
     }
 
     /// A re-weighting gives the score measuring with those weights gives.

@@ -39,6 +39,13 @@ pub(crate) fn luma(img: &Rgb32f) -> (Vec<f32>, usize, usize) {
 /// 16 × 16-pixel blocks, so a sharp subject on a soft background still reads as sharp.
 pub fn sharpness(img: &Rgb32f) -> f32 {
     let (l, w, h) = luma(img);
+    sharpness_luma(&l, w, h)
+}
+
+/// The focus measure on a luminance copy already made ([`luma`], `w` × `h`), so the Image Quality
+/// Scanner can measure its grain-smoothed luminance with the cull's own measure rather than a
+/// second copy of it.
+pub(crate) fn sharpness_luma(l: &[f32], w: usize, h: usize) -> f32 {
     let b = 16;
     let mut blocks = Vec::new();
     for by in (1..h.saturating_sub(1)).step_by(b) {
