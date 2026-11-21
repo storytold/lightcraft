@@ -10,7 +10,7 @@ use lightcraft_pipeline::finish::{FinishParams, FinishParamsInput, MASK_TERMS, m
 use lightcraft_pipeline::geometry::SampleMode;
 use lightcraft_pipeline::local::plane_at;
 use lightcraft_pipeline::nrc_joint::JointNoise;
-use lightcraft_pipeline::{Plan, RenderRequest, Rendered, SourceInfo, local};
+use lightcraft_pipeline::{Plan, RenderRequest, Rendered, SourceInfo, local, nrl};
 use lightcraft_raster::resample::Filter;
 use lightcraft_raster::{Histogram, Plane, Rgb32f, Rgba8};
 
@@ -36,6 +36,8 @@ struct Entry {
     lin: Option<(u64, Arc<Buf>)>,
     /// The joint colour NR's noise model of the whole frame, keyed by `Plan::noise_key`.
     colour_noise: Option<(u64, JointNoise)>,
+    /// The wavelet luminance NR's statistics of the whole frame, keyed by `Plan::stats_key`.
+    lum_stats: Option<(u64, nrl::Stats)>,
     planes: Planes,
 }
 
@@ -713,6 +715,10 @@ pub fn render(
         Some(crate::Fault::Limit(bytes)) => Some(crate::ctx::LimitOverride::new(bytes)),
         _ => None,
     };
+    let _budget = BandBudget::new(match fault {
+        Some(crate::Fault::BandBudget(bytes)) => Some(bytes as usize),
+        _ => None,
+    });
     if !gpu.fits(n * 3) {
         fail(
             FailKind::Limit,
@@ -752,13 +758,18 @@ pub fn render(
 
     // 2. white balance, defringe, spots, noise reduction
     let mut colour_noise = cached.as_ref().and_then(|e| e.colour_noise).filter(|(k, _)| *k == plan.noise_key);
+    let mut lum_stats = cached.as_ref().and_then(|e| e.lum_stats.clone()).filter(|(k, _)| *k == plan.stats_key);
     let lin = match cached.as_ref().and_then(|e| e.lin.clone()).filter(|(k, _)| *k == plan.lin_key) {
         Some((_, b)) => b,
         None => {
             if colour_noise.is_none() {
                 colour_noise = lightcraft_pipeline::colour_noise(src, info, &plan).map(|n| (plan.noise_key, n));
             }
-            Arc::new(linear(&mut cx, &sampled, info, &plan, &mut host, colour_noise.as_ref().map(|c| &c.1)))
+            if lum_stats.is_none() {
+                lum_stats = lightcraft_pipeline::lum_stats(src, info, &plan).map(|n| (plan.stats_key, n));
+            }
+            let noise = Noise { colour: colour_noise.as_ref().map(|c| &c.1), lum: lum_stats.as_ref().map(|c| &c.1) };
+            Arc::new(linear(&mut cx, &sampled, info, &plan, &mut host, noise))
         }
     };
     lap("wb/nr", &mut t, &mut cx);
@@ -775,7 +786,7 @@ pub fn render(
     }
     lap("planes", &mut t, &mut cx);
     if let Some(c) = stages {
-        c.put(Entry { src: src.clone(), geo: plan.geo, sampled, lin: Some((plan.lin_key, lin.clone())), colour_noise, planes });
+        c.put(Entry { src: src.clone(), geo: plan.geo, sampled, lin: Some((plan.lin_key, lin.clone())), colour_noise, lum_stats, planes });
     }
 
     // 4. masks
@@ -1021,8 +1032,17 @@ fn unwritten(data: &[[u8; 4]]) -> usize {
     data.chunks(4096).filter(|c| c.iter().fold(255u8, |a, p| a & p[3]) != 255).map(|c| c.iter().filter(|p| p[3] != 255).count()).sum()
 }
 
-/// The white-balanced, retouched, denoised image (`colour_noise`: see `denoise`).
-fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, host: &mut Host, colour_noise: Option<&JointNoise>) -> Buf {
+/// The whole frame's noise measurements a noise reduction filters with (see [`denoise`]).
+#[derive(Clone, Copy)]
+struct Noise<'a> {
+    /// The joint colour NR's noise model (`lightcraft_pipeline::colour_noise`); `None`: measured on the image.
+    colour: Option<&'a JointNoise>,
+    /// The wavelet luminance NR's statistics (`lightcraft_pipeline::lum_stats`).
+    lum: Option<&'a nrl::Stats>,
+}
+
+/// The white-balanced, retouched, denoised image (`noise`: see [`denoise`]).
+fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, host: &mut Host, noise: Noise<'_>) -> Buf {
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
     let s = &*plan.settings;
@@ -1054,7 +1074,7 @@ fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, ho
             eyed
         }
     };
-    let img = denoise(cx, img, plan, colour_noise);
+    let img = denoise(cx, img, plan, noise);
     if !lightcraft_pipeline::lens_blur::renders(s) {
         return img;
     }
@@ -1154,14 +1174,26 @@ fn histogram(cx: &mut Cx<'_>, out: &Buf, w: usize, region: (usize, usize, usize,
     Histogram { r: part(0), g: part(1), b: part(2), luma: part(3), total: v.get(4 * Histogram::BINS).copied().unwrap_or(0), hdr: None }
 }
 
-/// Noise reduction (`local::denoise`). `colour_noise`: the whole frame's noise model for the joint colour
-/// NR (`lightcraft_pipeline::colour_noise`); `None`: measured on `img`.
-fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>, colour_noise: Option<&JointNoise>) -> Buf {
+/// Noise reduction (`local::denoise`): the colour NR and the luminance NR that goes with the process.
+fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>, noise: Noise<'_>) -> Buf {
+    let img = denoise_colour(cx, img, plan, noise.colour);
+    if !local::wavelet_luminance_nr(&plan.settings, plan.detail_scale) {
+        return img;
+    }
+    let p = local::wavelet_params(&plan.settings, plan.detail_scale);
+    luminance_nr(cx, &img, plan.w, plan.h, &p, noise.lum)
+}
+
+/// `local::denoise` up to the wavelet luminance NR (that one is [`luminance_nr`]): the guided luminance
+/// filter before process V9, then the colour NR. `colour_noise`: the whole frame's noise model for the
+/// joint colour NR (`lightcraft_pipeline::colour_noise`); `None`: measured on `img`.
+fn denoise_colour(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>, colour_noise: Option<&JointNoise>) -> Buf {
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
     let (lum, col) = local::nr_params(&plan.settings, plan.detail_scale);
     let mut img = img;
-    if let Some(nr) = lum {
+    // the wavelet luminance NR runs after the colour NR ([`denoise`])
+    if let Some(nr) = lum.filter(|_| !local::wavelet_luminance_nr(&plan.settings, plan.detail_scale)) {
         let l = cx.gpu.buffer(n);
         map(cx, "log_lum_k", n, &[], [Some(&img), None, None], &l);
         let f = guided(cx, &l, w, h, nr.sigma, nr.eps);
@@ -1180,7 +1212,7 @@ fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>, colour_noise: Option<&Joi
         let mut host = cx.read_rgb(&img, w, h);
         let mut d = (*plan.settings).clone();
         d.detail.nr_luminance = 0.0;
-        local::denoise(&mut host, &d, plan.detail_scale, colour_noise);
+        local::denoise(&mut host, &d, plan.detail_scale, colour_noise, None);
         return cx.gpu.upload(rgb_words(&host));
     }
     if let Some(nr) = col {
@@ -1232,6 +1264,176 @@ impl Drop for InFlight {
 fn band_budget_from(free: u64, pooled: u64, renders: usize) -> usize {
     let reserve = VRAM_RESERVE.saturating_mul(renders.max(1) as u64);
     free.saturating_add(pooled).saturating_sub(reserve) as usize
+}
+
+/// The device memory a noise reduction may plan its bands with (`what` names it in the profile):
+/// [`band_budget_from`] the memory free right now (where the driver can be asked, `crate::vram`); else
+/// a fixed 2 GB. `NRV2_GPU_BAND_MB` overrides it. Comes with the [`BANDS`] lock: the caller holds it
+/// until its bands are done, so no other render plans from the same free memory meanwhile.
+fn band_budget(cx: &Cx<'_>, what: &str) -> (usize, std::sync::MutexGuard<'static, ()>) {
+    // asked before the lock: the first question for a device waits for the driver
+    let free = crate::vram::free_bytes(&cx.gpu.info);
+    let lock = BANDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let injected = BAND_BUDGET.with(std::cell::Cell::get);
+    let fixed = injected.or_else(|| std::env::var("NRV2_GPU_BAND_MB").ok().and_then(|v| v.parse::<usize>().ok()).map(|mb| mb << 20));
+    let renders = RENDERS.load(std::sync::atomic::Ordering::Relaxed);
+    let measured = free.map(|free| band_budget_from(free, crate::ctx::memory().pooled, renders));
+    let budget = fixed.or(measured).unwrap_or(2048 << 20);
+    if profiling() {
+        let source = if injected.is_some() {
+            "Fault::BandBudget"
+        } else if fixed.is_some() {
+            "NRV2_GPU_BAND_MB"
+        } else if measured.is_some() {
+            "free device memory"
+        } else {
+            "fixed default"
+        };
+        eprintln!("  gpu {what} budget: {} MB ({source}, {renders} render(s) on the device)", budget >> 20);
+    }
+    (budget, lock)
+}
+
+thread_local! {
+    /// This render's band budget from [`crate::Fault::BandBudget`] (tests).
+    static BAND_BUDGET: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Sets [`BAND_BUDGET`] for one render, and clears it again when dropped.
+struct BandBudget;
+
+impl BandBudget {
+    fn new(bytes: Option<usize>) -> Self {
+        BAND_BUDGET.with(|b| b.set(bytes));
+        BandBudget
+    }
+}
+
+impl Drop for BandBudget {
+    fn drop(&mut self) {
+        BAND_BUDGET.with(|b| b.set(None));
+    }
+}
+
+/// Rows per band (without halo) when each pixel of a band needs `per_pixel` bytes and the whole output
+/// `out_bytes`: `Some(h)` when the whole image fits, `None` when not even one band with its halo does.
+fn band_rows(cx: &Cx<'_>, budget: usize, w: usize, h: usize, per_pixel: usize, out_bytes: usize, halo: usize) -> Option<usize> {
+    // no band may exceed the device's largest buffer either (3 values per pixel are the largest)
+    let limit_rows = (cx.gpu.limit() as usize / (12 * w)).max(1);
+    let rows = (budget.saturating_sub(out_bytes) / (per_pixel * w)).min(limit_rows);
+    if rows >= h {
+        Some(h)
+    } else if rows > 2 * halo {
+        Some(rows - 2 * halo)
+    } else {
+        None
+    }
+}
+
+/// `nrl::smooth` of a plane: the B3 kernel with holes `2^j`, mirrored at the borders.
+fn nrl_smooth(cx: &mut Cx<'_>, src: &Buf, w: usize, h: usize, j: usize) -> Buf {
+    let p = [w as u32, h as u32, 1u32 << j];
+    let tmp = cx.gpu.buffer(w * h);
+    cx.run("nrl_smooth_h", &p, &[Some(src), None, None, Some(&tmp)], groups2(w, h, [16, 16]));
+    let out = cx.gpu.buffer(w * h);
+    cx.run("nrl_smooth_v", &p, &[Some(&tmp), None, None, Some(&out)], groups2(w, h, [16, 16]));
+    out
+}
+
+/// The wavelet luminance noise reduction (`lightcraft_pipeline::nrl::denoise`) of `img` with the whole
+/// frame's `stats` (measured on the CPU, `lightcraft_pipeline::lum_stats`). The same steps as the CPU:
+/// Y and its à trous levels, each level's detail formed in place of the finer approximation and shrunk
+/// into the change of Y, which is then added to R, G and B. Large images go in horizontal bands whose
+/// halo covers the filter's reach (`nrl::halo`, as for a window), so their kept rows are the whole image's.
+fn luminance_nr(cx: &mut Cx<'_>, img: &Buf, w: usize, h: usize, p: &nrl::Params, stats: Option<&nrl::Stats>) -> Buf {
+    let n = w * h;
+    let Some(stats) = stats.filter(|_| w >= 8 && h >= 8 && p.amount > 0.0) else {
+        // too small for the filter, or no statistics: the CPU measures them on the image itself
+        let mut host = cx.read_rgb(img, w, h);
+        nrl::denoise(&mut host, p, stats);
+        return cx.gpu.upload(rgb_words(&host));
+    };
+    let started = profiling().then(std::time::Instant::now);
+    // A band holds its input rows (3 values per pixel), Y's change, var, two levels and the coarse
+    // energy's three buffers (7) and its output (3); the whole output is held besides.
+    let halo = nrl::halo();
+    let (budget, _bands) = band_budget(cx, "luminance");
+    let out = match band_rows(cx, budget, w, h, 52, 12 * n, halo) {
+        Some(core) if core >= h => luminance_band(cx, img, w, h, p, stats),
+        Some(core) => {
+            if profiling() {
+                eprintln!("  gpu luminance bands: {} of {core} rows (halo {halo})", h.div_ceil(core));
+            }
+            let out = cx.gpu.buffer(3 * n);
+            let mut y0 = 0;
+            while y0 < h {
+                let y1 = (y0 + core).min(h);
+                let (b0, b1) = (y0.saturating_sub(halo), (y1 + halo).min(h));
+                let input = cx.slice(img, 3 * b0 * w, 3 * (b1 - b0) * w);
+                let band = luminance_band(cx, &input, w, b1 - b0, p, stats);
+                drop(input);
+                let kept = cx.slice(&band, 3 * (y0 - b0) * w, 3 * (y1 - y0) * w);
+                drop(band);
+                cx.copy_into(&kept, &out, 3 * y0 * w);
+                drop(kept);
+                // wait, so the band's buffers are free before the next (see `color_nr_joint`)
+                cx.sync();
+                y0 = y1;
+            }
+            out
+        }
+        None => {
+            // not even one band fits: this step on the CPU
+            let mut host = cx.read_rgb(img, w, h);
+            nrl::denoise(&mut host, p, Some(stats));
+            cx.gpu.upload(rgb_words(&host))
+        }
+    };
+    if let Some(t) = started {
+        cx.sync();
+        eprintln!("  gpu nr luminance (wavelet): {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+    }
+    out
+}
+
+/// [`luminance_nr`] of one band (or the whole image) `img` of `w × h`.
+fn luminance_band(cx: &mut Cx<'_>, img: &Buf, w: usize, h: usize, p: &nrl::Params, stats: &nrl::Stats) -> Buf {
+    let n = w * h;
+    let change = cx.zeroed(n);
+    let y = cx.gpu.buffer(n);
+    map(cx, "nrl_y", n, &[], [Some(img), None, None], &y);
+    let c1 = nrl_smooth(cx, &y, w, h, 0);
+    let c2 = nrl_smooth(cx, &c1, w, h, 1);
+    let var = cx.gpu.buffer(n);
+    let m = &stats.noise.model;
+    map(cx, "nrl_var", n, &[m.alpha[0].to_bits(), m.beta[0].to_bits(), stats.noise.ymax[0].to_bits()], [Some(&c2), None, None], &var);
+    let mut cur = y;
+    let mut ahead = [Some(c1), Some(c2)];
+    for (j, gain) in stats.gains.iter().enumerate() {
+        let next = match ahead.get_mut(j).and_then(Option::take) {
+            Some(b) => b,
+            None => nrl_smooth(cx, &cur, w, h, j),
+        };
+        map(cx, "nrl_detail", n, &[], [Some(&next), None, None], &cur);
+        let t = nrl::threshold(p, j);
+        let k = t * t * gain;
+        if j < nrl::ROBUST_LEVELS {
+            let q = [w as u32, h as u32, 1u32 << j, k.to_bits(), nrl::DIRECTIONAL_MEAN_SQUARE.to_bits()];
+            cx.run("nrl_fine", &q, &[Some(&cur), Some(&var), None, Some(&change)], groups2(w, h, [16, 16]));
+        } else {
+            let sq = cx.gpu.buffer(n);
+            map(cx, "nrl_sq", n, &[], [Some(&cur), None, None], &sq);
+            let e = gaussian(cx, &sq, w, h, 1, nrl::energy_sigma(j));
+            drop(sq);
+            map(cx, "nrl_coarse", n, &[k.to_bits()], [Some(&cur), Some(&var), Some(&e)], &change);
+        }
+        cur = next;
+    }
+    drop((cur, var));
+    // allocated last, with the levels gone
+    let out = cx.gpu.buffer(n * 3);
+    map(cx, "nrl_apply", n, &[], [Some(img), Some(&change), None], &out);
+    out
 }
 
 /// The joint colour noise reduction (`lightcraft_pipeline::nrc_joint`) on the GPU, the same steps as the
@@ -1297,42 +1499,10 @@ fn color_nr_joint(
     let halo = plan.iter().map(|d| 2 * d.0).sum::<usize>() + plan.last().map_or(0, |d| d.0) + 10;
     // Memory: the whole output (3 values per pixel) is held besides the input; a band then holds about
     // 12 values per pixel (guide 3, two chroma buffers 2 + 2, paths 2, weights 2; up to 12 while the
-    // speck brake and the guide run). The budget for both together is `band_budget_from` the device memory
-    // free right now (where the driver can be asked, `crate::vram`); else a fixed 2 GB. One band plan at a
-    // time (`BANDS`), held until the bands are done. PROTOTYPE: `NRV2_GPU_BAND_MB` overrides it.
-    // (free memory asked before the lock: the first question for a device waits for the driver)
-    let free = crate::vram::free_bytes(&cx.gpu.info);
-    let _bands = BANDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let fixed = std::env::var("NRV2_GPU_BAND_MB").ok().and_then(|v| v.parse::<usize>().ok()).map(|mb| mb << 20);
-    let renders = RENDERS.load(std::sync::atomic::Ordering::Relaxed);
-    let measured = free.map(|free| band_budget_from(free, crate::ctx::memory().pooled, renders));
-    let budget = fixed.or(measured).unwrap_or(2048 << 20);
-    if profiling() {
-        eprintln!(
-            "  gpu joint budget: {} MB ({}, {renders} render(s) on the device)",
-            budget >> 20,
-            if fixed.is_some() {
-                "NRV2_GPU_BAND_MB"
-            } else if measured.is_some() {
-                "free device memory"
-            } else {
-                "fixed default"
-            }
-        );
-    }
-    let out_bytes = 12 * n;
-    let per_row = 48 * w;
-    // no band may exceed the device's largest buffer either (3 values per pixel are the largest)
-    let limit_rows = (cx.gpu.limit() as usize / (12 * w)).max(1);
-    let rows = (budget.saturating_sub(out_bytes) / per_row).min(limit_rows);
-    let core = if rows >= h {
-        h
-    } else if rows > 2 * halo {
-        rows - 2 * halo
-    } else {
-        // not even one band with its halo fits: this stage runs on the CPU (the rest of the render stays here)
-        return None;
-    };
+    // speck brake and the guide run). One band plan at a time, held until the bands are done.
+    let (budget, _bands) = band_budget(cx, "joint");
+    // not even one band with its halo fits: this stage runs on the CPU (the rest of the render stays here)
+    let core = band_rows(cx, budget, w, h, 48, 12 * n, halo)?;
     let out = cx.gpu.buffer(3 * n);
     let mut y0 = 0;
     while y0 < h {

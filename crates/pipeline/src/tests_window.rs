@@ -199,6 +199,21 @@ fn noise_reduction_does_not_depend_on_the_window() {
     }
 }
 
+// Given luminance noise reduction on a frame larger than its statistics tiles, a zoomed window is
+// filtered like the same pixels of the whole render
+#[test]
+fn luminance_nr_at_depth_matches_the_whole_render() {
+    let mut s = DevelopSettings::default();
+    controls::set(&mut s, "detail.nrLuminance", 80.0);
+    let src = noisy_scene();
+    let (fw, fh) = (2400, 1600);
+    let f = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(fw, fh)).image;
+    let win = PixelWindow { x: 1100, y: 500, w: 512, h: 384 };
+    let w = render(&src, &SourceInfo::default(), &s, &RenderRequest { window: Some(win), ..RenderRequest::fit(fw, fh) }).image;
+    let (max, mean) = compare(&f, &w, win);
+    assert!(max <= 3 && mean <= 0.15, "max {max} (≤ 3), mean {mean:.3} (≤ 0.15)");
+}
+
 // Given a mask with Refine Edges, the refinement width follows the whole frame's size
 #[test]
 fn mask_edge_refinement_does_not_depend_on_the_window() {
@@ -507,25 +522,28 @@ fn joint_colour_nr_measures_the_noise_of_the_whole_frame() {
     }
 }
 
-// Given a 16-bit or float render of a window with the joint colour NR, then its edges are the whole
-// render's too: the window is grown by the filter's reach and cut back
+// Given a 16-bit or float render of a window with the joint colour NR (and the wavelet luminance NR),
+// then its edges are the whole render's too: the window is grown by the filters' reach and cut back
 #[test]
-fn a_deep_window_with_colour_noise_reduction_matches_the_whole_render() {
+fn a_deep_window_with_noise_reduction_matches_the_whole_render() {
     use crate::OutputDepth;
     let (w, h, win) = (768, 128, PixelWindow { x: 600, y: 32, w: 96, h: 64 });
     let src = crate::tests::colour_noise_scene(w, h, w * 2 / 3);
-    let mut s = DevelopSettings::default();
-    s.detail.nr_color = 25.0;
-    s.detail.nr_color_smoothness = 0.0;
-    for depth in [OutputDepth::U16, OutputDepth::F32Linear] {
-        let req = RenderRequest { depth, ..RenderRequest::fit(w, h) };
-        let deep = |req: &RenderRequest| render(&src, &SourceInfo::default(), &s, req).deep.map(|d| d.to_rgba8());
-        let (Some(f), Some(part)) = (deep(&req), deep(&RenderRequest { window: Some(win), ..req })) else {
-            panic!("{depth:?}: no deep image");
-        };
-        assert_eq!((part.width, part.height), (win.w, win.h), "{depth:?}: the window's own size");
-        let (max, mean) = compare_inset(&f, &part, win, 0);
-        assert!(max <= 1 && mean <= 0.01, "{depth:?}: max {max}, mean {mean:.3}");
+    for lum in [0.0, 30.0] {
+        let mut s = DevelopSettings::default();
+        s.detail.nr_color = 25.0;
+        s.detail.nr_color_smoothness = 0.0;
+        s.detail.nr_luminance = lum;
+        for depth in [OutputDepth::U16, OutputDepth::F32Linear] {
+            let req = RenderRequest { depth, ..RenderRequest::fit(w, h) };
+            let deep = |req: &RenderRequest| render(&src, &SourceInfo::default(), &s, req).deep.map(|d| d.to_rgba8());
+            let (Some(f), Some(part)) = (deep(&req), deep(&RenderRequest { window: Some(win), ..req })) else {
+                panic!("{depth:?}: no deep image");
+            };
+            assert_eq!((part.width, part.height), (win.w, win.h), "{depth:?}: the window's own size");
+            let (max, mean) = compare_inset(&f, &part, win, 0);
+            assert!(max <= 1 && mean <= 0.01, "{depth:?} lum {lum}: max {max}, mean {mean:.3}");
+        }
     }
 }
 

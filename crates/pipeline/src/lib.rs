@@ -45,6 +45,7 @@ pub mod masks;
 pub mod nrc_joint;
 #[cfg(test)]
 mod nrc_joint_reference;
+pub mod nrl;
 pub mod optics;
 pub mod output;
 pub mod profiles;
@@ -421,6 +422,8 @@ struct CacheEntry {
     lin: Option<(u64, Arc<Rgb32f>)>,
     /// The joint colour NR's noise model of the whole frame ([`colour_noise`]), keyed by [`Plan::noise_key`].
     colour_noise: Option<(u64, nrc_joint::JointNoise)>,
+    /// The wavelet luminance NR's statistics of the whole frame ([`lum_stats`]), keyed by [`Plan::stats_key`].
+    lum_stats: Option<(u64, nrl::Stats)>,
     planes: local::Planes,
 }
 
@@ -456,6 +459,9 @@ pub struct Plan<'a> {
     /// Key of the whole frame's noise model for the joint colour NR ([`colour_noise`]): what it is
     /// measured after (everything before the colour NR), not the colour NR's own settings.
     pub noise_key: u64,
+    /// Key of the whole frame's statistics for the wavelet luminance NR ([`lum_stats`]): what they
+    /// are measured on (everything before noise reduction) and the scale.
+    pub stats_key: u64,
     /// Red eye / pet eye corrections with their detected pupils, in output pixels.
     pub eyes: Vec<redeye::EyeK>,
     /// The whole frame's dehaze airlight, for a windowed render (which can't see the whole frame).
@@ -515,12 +521,15 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
             // render; a grown window is cut back to the request)
             let work = if req.depth == OutputDepth::U8 { spots::window_for_reads(s, &frame, full_w, full_h, px_per_long, win) } else { win };
             let mut work = lens_blur::window_for_reads(s, full_w, full_h, px_per_long, work);
-            if local::joint_colour_nr(s)
-                && let Some(params) = local::nrc_params(s, detail_scale)
-            {
-                // The joint diffusion reads a chain of neighbours across its scales. Keep
-                // those reads outside the requested zoom window, just as spot reads are, at every depth.
-                let halo = params.passes.last().map_or(0, |p| (6.0 * p.sigma).ceil() as usize).saturating_add(4);
+            // The joint diffusion reads a chain of neighbours across its scales, the wavelet
+            // luminance NR its coarsest level. Keep those reads outside the requested zoom window,
+            // just as spot reads are, at every depth.
+            let joint = local::nrc_params(s, detail_scale)
+                .filter(|_| local::joint_colour_nr(s))
+                .map_or(0, |params| params.passes.last().map_or(0, |p| (6.0 * p.sigma).ceil() as usize).saturating_add(4));
+            let wavelet = if local::wavelet_luminance_nr(s, detail_scale) { nrl::halo() } else { 0 };
+            let halo = joint.max(wavelet);
+            if halo > 0 {
                 let x = work.x.saturating_sub(halo);
                 let y = work.y.saturating_sub(halo);
                 let right = work.x.saturating_add(work.w).saturating_add(halo).min(full_w);
@@ -553,13 +562,15 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     ));
     let lin_key = hash_of((
         pre_nr_key,
-        [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
+        [d.nr_luminance, d.nr_detail, d.nr_contrast, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         detail_scale.to_bits(),
-        // the process picks the colour filter (Update to Current Process, undo)
-        local::joint_colour_nr(s),
+        // the process picks the colour and luminance filters (Update to Current Process, undo)
+        (local::joint_colour_nr(s), local::wavelet_luminance(s)),
     ));
     let lens_subject = lens_blur::subject_estimate(src, s, info.mattes.as_deref()).map(Arc::new);
-    let noise_key = hash_of((pre_nr_key, [d.nr_luminance, d.nr_detail].map(f64::to_bits), detail_scale.to_bits()));
+    let noise_key = hash_of((pre_nr_key, [d.nr_luminance, d.nr_detail].map(f64::to_bits), detail_scale.to_bits(), local::wavelet_luminance(s)));
+    // the wavelet luminance NR's statistics are measured before any noise reduction
+    let stats_key = hash_of((pre_nr_key, detail_scale.to_bits()));
     Plan {
         settings,
         frame,
@@ -573,6 +584,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         lin_key,
         pre_nr_key,
         noise_key,
+        stats_key,
         eyes,
         fixed_air,
         keep,
@@ -598,7 +610,8 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
         return None;
     }
     let t = profiling().then(std::time::Instant::now);
-    let (lum, _) = local::nr_params(s, p.detail_scale);
+    // the guided luminance filter runs before the colour NR, the wavelet one after it
+    let lum = local::nr_params(s, p.detail_scale).0.filter(|_| !local::wavelet_luminance_nr(s, p.detail_scale));
     // the source oriented and prefiltered once for all tiles
     let sampled = full.sample_windows(src, *fw, *fh, &windows);
     let tiles: Vec<Rgb32f> = windows
@@ -630,6 +643,50 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
         eprintln!("    nr colour noise model ({} tiles): {:.0} ms", tiles.len(), t.elapsed().as_secs_f64() * 1e3);
     }
     Some(noise)
+}
+
+/// The wavelet luminance NR's statistics of the whole frame, measured on fixed tiles of it
+/// ([`nrc_joint::tiles`]) so that every window of it is filtered alike, and the GPU filters as the CPU
+/// does. The tiles are resampled, tone-mapped and white-balanced like the frame, before any noise
+/// reduction; the retouching and defringing are left out. `None` when the wavelet luminance NR is off.
+pub fn lum_stats(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrl::Stats> {
+    let s = &*p.settings;
+    if !local::wavelet_luminance_nr(s, p.detail_scale) {
+        return None;
+    }
+    let t = profiling().then(std::time::Instant::now);
+    let (full, fw, fh) = &p.full;
+    let windows = nrc_joint::tiles(*fw, *fh);
+    // the source oriented and prefiltered once for all tiles
+    let sampled = full.sample_windows(src, *fw, *fh, &windows);
+    let tiles: Vec<Rgb32f> = windows
+        .into_iter()
+        .zip(sampled)
+        .map(|(t, mut img)| {
+            let frame = if (t.w, t.h) == (*fw, *fh) { full.clone() } else { full.window(*fw, *fh, t) };
+            let tile = Plan {
+                settings: Cow::Borrowed(s),
+                frame,
+                w: t.w,
+                h: t.h,
+                eyes: Vec::new(),
+                fixed_air: None,
+                keep: None,
+                mattes: None,
+                lens_subject: None,
+                full: p.full.clone(),
+                ..*p
+            };
+            local_tone::apply(&mut img, info, &tile);
+            local::white_balance(&mut img, info, s);
+            img
+        })
+        .collect();
+    let stats = nrl::stats(&tiles);
+    if let Some(t) = t {
+        eprintln!("    nr luminance statistics ({} tiles): {:.0} ms", tiles.len(), t.elapsed().as_secs_f64() * 1e3);
+    }
+    Some(stats)
 }
 
 /// Whether the scene-linear stage needs work only the CPU does (defringe, spot removal).
@@ -743,6 +800,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     lap("sample", &mut t);
 
     let mut colour_noise = cached.as_ref().and_then(|e| e.colour_noise).filter(|(k, _)| *k == plan.noise_key);
+    let mut lum_stats = cached.as_ref().and_then(|e| e.lum_stats.clone()).filter(|(k, _)| *k == plan.stats_key);
     let lin = match cached.as_ref().and_then(|e| e.lin.clone()).filter(|(k, _)| *k == lin_key) {
         Some((_, img)) => img,
         None => {
@@ -752,7 +810,10 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
             if colour_noise.is_none() {
                 colour_noise = self::colour_noise(src_img, info, &plan).map(|n| (plan.noise_key, n));
             }
-            local::denoise(&mut img, s, detail_scale, colour_noise.as_ref().map(|c| &c.1));
+            if lum_stats.is_none() {
+                lum_stats = self::lum_stats(src_img, info, &plan).map(|n| (plan.stats_key, n));
+            }
+            local::denoise(&mut img, s, detail_scale, colour_noise.as_ref().map(|c| &c.1), lum_stats.as_ref().map(|c| &c.1));
             lens_blur::apply_with(&mut img, s, frame, px_per_long, plan.mattes.as_deref(), plan.lens_subject.as_deref());
             Arc::new(img)
         }
@@ -773,7 +834,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     }
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
-        c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), colour_noise, planes });
+        c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), colour_noise, lum_stats, planes });
     }
     if req.depth != OutputDepth::U8 {
         let deep = finish::finish_deep(&prep, s, frame, info, req);

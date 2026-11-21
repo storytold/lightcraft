@@ -375,7 +375,9 @@ pub fn base_detail_radius(px_per_long: f64) -> usize {
 pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
     match s.process.process() {
         Process::V1 => 0,
-        Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 => base_detail_radius(px_per_long),
+        Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 | Process::V9 => {
+            base_detail_radius(px_per_long)
+        }
     }
 }
 
@@ -516,19 +518,58 @@ pub fn nr_params(s: &DevelopSettings, scale: f32) -> (Option<NrLum>, Option<NrCo
 }
 
 /// Noise reduction at output resolution: luminance via an edge-aware self-guided filter on
-/// log-luminance, colour by blurring chromaticity (rgb / Y) and re-applying the original luminance.
-/// `scale`: output pixels per pixel of the original ([`nr_params`]). `colour_noise`: the whole
-/// frame's noise model for the joint colour NR ([`crate::colour_noise`]; `None`: measured on `img`).
-pub fn denoise(img: &mut Rgb32f, s: &DevelopSettings, scale: f32, colour_noise: Option<&crate::nrc_joint::JointNoise>) {
+/// log-luminance (before process V9) or the wavelet filter of linear Y after the colour NR (from V9,
+/// [`wavelet_luminance_nr`]), colour by blurring chromaticity (rgb / Y) and re-applying the original
+/// luminance, or with the joint method. `scale`: output pixels per pixel of the original
+/// ([`nr_params`]). `colour_noise`: the whole frame's noise model for the joint colour NR
+/// ([`crate::colour_noise`]; `None`: measured on `img`). `lum_stats`: the wavelet luminance NR's
+/// statistics of the whole frame ([`crate::lum_stats`]; `None`: measured on `img`).
+pub fn denoise(
+    img: &mut Rgb32f,
+    s: &DevelopSettings,
+    scale: f32,
+    colour_noise: Option<&crate::nrc_joint::JointNoise>,
+    lum_stats: Option<&crate::nrl::Stats>,
+) {
     let (lum, col) = nr_params(s, scale);
+    let wavelet = wavelet_luminance_nr(s, scale);
+    // the guided filter of log luminance runs before the colour NR; the wavelet one after it
+    let lum = lum.filter(|_| !wavelet);
     if col.is_some() && joint_colour_nr(s) {
         apply_nr(img, lum, None);
         if let Some(p) = nrc_params(s, scale) {
             crate::nrc_joint::denoise(img, &p, (s.detail.nr_color_detail / 100.0) as f32, (s.detail.nr_color / 100.0) as f32, colour_noise);
         }
-        return;
+    } else {
+        apply_nr(img, lum, col);
     }
-    apply_nr(img, lum, col);
+    if wavelet {
+        crate::nrl::denoise(img, &wavelet_params(s, scale), lum_stats);
+    }
+}
+
+/// Whether `s` gets the wavelet luminance noise reduction (`nrl`, process V9 on), else the guided
+/// filter of log luminance.
+pub fn wavelet_luminance(s: &DevelopSettings) -> bool {
+    s.process.process() >= lightcraft_develop::Process::V9
+}
+
+/// Whether the luminance NR of `s` runs, at `scale`, as the wavelet filter after the colour NR
+/// rather than as the guided filter before it. Off where the guided filter would fade out too
+/// ([`nr_params`]), so a thumbnail is filtered by neither.
+pub fn wavelet_luminance_nr(s: &DevelopSettings, scale: f32) -> bool {
+    wavelet_luminance(s) && nr_params(s, scale).0.is_some()
+}
+
+/// The wavelet luminance NR's parameters of `s` at `scale` ([`crate::Plan::detail_scale`]).
+pub fn wavelet_params(s: &DevelopSettings, scale: f32) -> crate::nrl::Params {
+    let d = &s.detail;
+    crate::nrl::Params {
+        amount: (d.nr_luminance / 100.0) as f32,
+        detail: (d.nr_detail / 100.0) as f32,
+        contrast: (d.nr_contrast / 100.0) as f32,
+        scale,
+    }
 }
 
 /// Noise reduction with explicit parameters (see [`denoise`]).
@@ -986,7 +1027,7 @@ mod tests {
             let mut s = DevelopSettings { process: p.version(), ..Default::default() };
             s.detail.nr_color = 50.0;
             let mut o = img.clone();
-            denoise(&mut o, &s, 1.0, None);
+            denoise(&mut o, &s, 1.0, None, None);
             o
         };
         let (v1, v2, v5, v6) = (run(Process::V1), run(Process::V2), run(Process::V5), run(Process::V6));
@@ -999,6 +1040,36 @@ mod tests {
         let p = nrc_params(&s, 1.0).expect("Color 50 has parameters");
         crate::nrc_joint::denoise(&mut joint, &p, (s.detail.nr_color_detail / 100.0) as f32, 0.5, None);
         assert!(joint.data == v6.data, "V6 is the joint method");
+    }
+
+    /// Edits up to V8 keep the guided filter of log luminance; V9 gets the wavelet filter of `nrl`,
+    /// after the colour NR.
+    #[test]
+    fn luminance_nr_follows_the_process() {
+        use lightcraft_develop::{DevelopSettings, Process};
+        let (w, h) = (96usize, 64usize);
+        let img = Rgb32f::from_fn(w, h, |x, y| {
+            let mut v = (x as u32).wrapping_mul(0x9e37_79b9) ^ (y as u32).wrapping_mul(0x85eb_ca6b) | 1;
+            v ^= v << 13;
+            v ^= v >> 17;
+            v ^= v << 5;
+            let n = (v as f32 / u32::MAX as f32 - 0.5) * 0.02;
+            let base = if x < w / 2 { 0.05 } else { 0.12 };
+            [base + n; 3]
+        });
+        let run = |p: Process| {
+            let mut s = DevelopSettings { process: p.version(), ..Default::default() };
+            s.detail.nr_luminance = 50.0;
+            let mut o = img.clone();
+            denoise(&mut o, &s, 1.0, None, None);
+            o
+        };
+        let (v7, v8, v9) = (run(Process::V7), run(Process::V8), run(Process::V9));
+        assert!(v7.data == v8.data, "V7 and V8 share the guided luminance filter");
+        assert!(v8.data != v9.data, "V9 takes the wavelet luminance NR");
+        let mut wavelet = img.clone();
+        crate::nrl::denoise(&mut wavelet, &crate::nrl::Params { amount: 0.5, detail: 0.5, contrast: 0.0, scale: 1.0 }, None);
+        assert!(wavelet.data == v9.data, "V9 is the wavelet filter");
     }
 
     /// Float mean of a flat, noisy dark patch over three noise realisations; linear modes assert drift bounds.
@@ -1038,7 +1109,7 @@ mod tests {
                     let mut s = DevelopSettings::default();
                     s.detail.nr_color = nr;
                     let mut a = img.clone();
-                    denoise(&mut a, &s, 1.0, None);
+                    denoise(&mut a, &s, 1.0, None, None);
                     let m = mean(&a);
                     let clipped0 = mean(&img.map(|p| p.map(|v| v.max(0.0))));
                     let sd = |im: &Rgb32f, mm: [f64; 3]| {
@@ -1122,7 +1193,7 @@ mod tests {
             let mut s = DevelopSettings::default();
             s.detail.nr_color = nr;
             let mut o = img.clone();
-            denoise(&mut o, &s, 1.0, None);
+            denoise(&mut o, &s, 1.0, None, None);
             let px = |x: usize, y: usize| o.data[y * w + x];
             // edge: chroma error 1..8 px either side, relative to the step between the two colours
             let step = dist(chroma(red), chroma(green));
@@ -1499,7 +1570,7 @@ mod nr_tests {
         let (v0, m0) = var(&img);
         let mut s = DevelopSettings::default();
         s.detail.nr_luminance = 80.0;
-        denoise(&mut img, &s, 1.0, None);
+        denoise(&mut img, &s, 1.0, None, None);
         let (v1, m1) = var(&img);
         assert!(v1 < v0 * 0.5, "{v0} -> {v1}");
         assert!((m1 - m0).abs() < 0.01);

@@ -302,8 +302,10 @@ fn drafts_keep_wide_planes_across_a_noise_reduction_change_and_full_renders_do_n
         s.detail.nr_color = v / 2.0;
         let a = render_cached(&src, &info, &s, &draft, &cache).image;
         let d = max_diff(&a, &render(&src, &info, &s, &draft).image);
-        // close to the exact draft (a few levels at edges, where clarity is strong)
-        assert!(d <= 8, "nr {v}: {d}");
+        // close to the exact draft (a few levels at edges, where clarity is strong; the wavelet
+        // luminance NR of process V9 changes the image more than the guided filter, so the stand-in
+        // planes of the image before it are further off: 14 levels measured at Luminance 45)
+        assert!(d <= 16, "nr {v}: {d}");
         // a full-quality render after the drafts is exact (it never takes the stand-in planes)
         assert_eq!(render_cached(&src, &info, &s, &full, &cache).image, render(&src, &info, &s, &full).image, "nr {v}");
     }
@@ -848,24 +850,34 @@ fn sliver_crops_render_quickly_with_wide_stages_on() {
 // Given a cached render with one process, a change to a process with another colour filter (Update
 // to Current Process, undo) renders like a fresh render, not the cached denoised image
 #[test]
-fn a_process_change_does_not_reuse_the_other_colour_filter() {
+fn a_process_change_does_not_reuse_the_other_noise_filters() {
     use crate::{StageCache, render_cached};
     use lightcraft_develop::Process;
     use std::sync::Arc;
-    let src = Arc::new(colour_noise_scene(128, 96, 128));
+    // chroma noise, and brightness noise for the luminance filter
+    let mut src = colour_noise_scene(128, 96, 128);
+    for (i, p) in src.data.iter_mut().enumerate() {
+        let n = ((i as u32).wrapping_mul(0x9e37_79b9) >> 24) as f32 / 255.0 - 0.5;
+        *p = p.map(|c| c * (1.0 + 0.3 * n));
+    }
+    let src = Arc::new(src);
     let info = SourceInfo::default();
     let req = RenderRequest::fit(128, 96);
-    let cache = StageCache::default();
-    let mut old = DevelopSettings::default();
-    old.detail.nr_color = 25.0;
-    old.detail.nr_color_smoothness = 0.0;
-    old.process = Process::V2.version();
-    let current = DevelopSettings { process: Process::LATEST.version(), ..old.clone() };
-    let first = render_cached(&src, &info, &old, &req, &cache).image;
-    let fresh = render(&src, &info, &current, &req).image;
-    assert!(max_diff(&first, &fresh) > 0, "the two colour filters differ on this scene");
-    assert_eq!(render_cached(&src, &info, &current, &req, &cache).image, fresh, "process update");
-    assert_eq!(render_cached(&src, &info, &old, &req, &cache).image, first, "undo");
+    // the colour filter (V2 → latest) and the luminance filter (V8 → latest)
+    for (from, lum) in [(Process::V2, 0.0), (Process::V8, 30.0)] {
+        let cache = StageCache::default();
+        let mut old = DevelopSettings::default();
+        old.detail.nr_color = 25.0;
+        old.detail.nr_color_smoothness = 0.0;
+        old.detail.nr_luminance = lum;
+        old.process = from.version();
+        let current = DevelopSettings { process: Process::LATEST.version(), ..old.clone() };
+        let first = render_cached(&src, &info, &old, &req, &cache).image;
+        let fresh = render(&src, &info, &current, &req).image;
+        assert!(max_diff(&first, &fresh) > 0, "{from:?}: the filters differ on this scene");
+        assert_eq!(render_cached(&src, &info, &current, &req, &cache).image, fresh, "{from:?}: process update");
+        assert_eq!(render_cached(&src, &info, &old, &req, &cache).image, first, "{from:?}: undo");
+    }
 }
 
 /// Flat grey with chroma noise: `quiet` columns on the left with little noise, the rest with much.

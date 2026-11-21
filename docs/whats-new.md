@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Luminance noise reduction (process V9)
+- Luminance noise reduction now removes the grain in shadows, where it is strongest, and no longer flattens bright
+  areas or darkens the shadows (issue #1129). Thin lines and fine texture are kept, Detail keeps more fine grain and
+  **Contrast now works**: it keeps coarse structure. New photos (and Reset) get it; photos you already edited keep
+  their look until Photo ▸ Update to Current Process. A zoomed view is smoothed like the same part of the whole
+  photo and the export. See [the method](nr-luminance-wavelet.md).
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
