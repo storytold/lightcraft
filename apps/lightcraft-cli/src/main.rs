@@ -385,8 +385,14 @@ fn mcp(args: &[String]) -> Result<(), String> {
             };
             if !files.is_empty() {
                 let paths = expand_paths(&files);
-                let r = h.session.execute("library.import", &json!({"paths": paths})).map_err(|e| e.to_string())?;
-                eprintln!("lightcraft-cli mcp: imported {} photo(s)", r["imported"].as_array().map_or(0, Vec::len));
+                // A folder with no photos yet still serves (photos come later through `import`);
+                // `library.import` refuses an empty list, which would end the server before it starts.
+                if paths.is_empty() {
+                    eprintln!("lightcraft-cli mcp: no photos found in {}; nothing imported", files.join(", "));
+                } else {
+                    let r = h.session.execute("library.import", &json!({"paths": paths})).map_err(|e| e.to_string())?;
+                    eprintln!("lightcraft-cli mcp: imported {} photo(s)", r["imported"].as_array().map_or(0, Vec::len));
+                }
             }
             Box::new(h)
         }
