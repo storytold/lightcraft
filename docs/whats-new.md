@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### No more flat grey in some unedited raws
+- A raw whose camera JPEG is darker toward the frame's edges than in its middle could open posterised, before any
+  edit: a white sheet filling the frame came out as a flat grey with contour bands, a dark ring around the subject and
+  pale colours turned into orange blobs. On those frames the starting look learned the JPEG's darker edges as a tone
+  curve that held over a stop of the scene at one grey. Such a curve is no longer used, and those frames start the way
+  other photos whose camera JPEG can't be followed do: a partial look when it fits, else the camera's measured colour,
+  or a neutral starting colour for a camera without one. The ILCE-7M3 frames that showed it now render smooth, though
+  darker and cooler than their camera JPEG. Thumbnails and smart previews of affected raws are redrawn.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

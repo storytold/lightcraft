@@ -240,11 +240,26 @@ fn median(values: &mut [f64]) -> Option<f64> {
     values.get(values.len() / 2).copied()
 }
 
+/// Widest scene range, in stops between its first and last knot, that the isotonic pooling of
+/// [`fit_tone_conditional`] may hold at one output level. Pooling evens out bins whose JPEG medians fall
+/// as the scene gets brighter. Over a few knots that is noise, but over a wide range it is the camera JPEG
+/// rendering one part of the frame darker than another for the same scene luminance (vignetting, local
+/// tone), which no tone curve can follow. In an ILCE-7M3 burst of a white sheet under tungsten light
+/// (FE 55 mm F1.8 at f/1.8, DRO on), the JPEG, relative to the raw, is about 1.4 EV darker at the
+/// frame's long edges than in its middle, and the sheet is brightest in the raw just there. The JPEG's median then
+/// fell from 0.41 to 0.30 as the scene rose from 0.21 to 0.41. Pooling held knots 12-31 (1.2 stops) at
+/// one level and knots 3-8 (0.6 stops) at another, and the render posterised the sheet into a flat
+/// grey (10 green levels left in a 500 px patch). The quantile look of the same frames missed
+/// [`MIN_IMPROVEMENT`](super::pairs::MIN_IMPROVEMENT) by 0.04. Such a curve is refused. On the public
+/// samples the widest pooled block of an accepted fallback look is 0.14 stops (a G7 X Mark III CR3).
+const MAX_POOLED_STOPS: f32 = 0.5;
+
 /// The earlier tone fit, kept as the fallback of [`ToneFit`]: the JPEG's median per equal-population
 /// bin of scene luminance, then pooled-adjacent-violators isotonic regression. It follows the
 /// per-pixel pairs closely when the two images are registered, which is why it can clear the
 /// acceptance gates where [`fit_tone`] just misses them, but on lens-corrected JPEGs of busy scenes
-/// the pooling leaves flat steps (issue #475).
+/// the pooling leaves flat steps (issue #475). `None` when a pooled block spans more than
+/// [`MAX_POOLED_STOPS`] of the scene.
 pub(super) fn fit_tone_conditional(mut pairs: Vec<(f64, f64)>) -> Option<CameraTone> {
     if pairs.len() < 128 || !pairs.iter().all(|(x, y)| x.is_finite() && *x > 0.0 && y.is_finite()) {
         return None;
@@ -273,6 +288,18 @@ pub(super) fn fit_tone_conditional(mut pairs: Vec<(f64, f64)>) -> Option<CameraT
             blocks.truncate(blocks.len() - 2);
             blocks.push(((a * an as f32 + b * bn as f32) / (an + bn) as f32, an + bn));
         }
+    }
+    let mut first = 0;
+    for &(_, n) in &blocks {
+        let last = first + n - 1;
+        let stops = (knots.get(last)?[0] / knots.get(first)?[0]).log2();
+        if stops > MAX_POOLED_STOPS {
+            if lightcraft_pipeline::profiling() {
+                eprintln!("[profile] camera tone: conditional medians pooled over knots {first}-{last} ({stops:.2} stops), refused");
+            }
+            return None;
+        }
+        first += n;
     }
     let mut i = 0;
     for (y, n) in blocks {
