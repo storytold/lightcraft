@@ -603,8 +603,20 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     } else {
                         ui.label(crate::i18n::tr("These photos are only in memory. Open a catalog on disk and import again to save them."));
                     }
-                    for detail in details.iter() {
-                        ui.add(egui::Label::new(detail).wrap().selectable(true));
+                    if !details.is_empty() {
+                        ui.add_space(8.0);
+                        // every warning, scrolled and copyable (#1309)
+                        egui::ScrollArea::vertical().id_salt("lightroom_result_details").max_height(320.0).show(ui, |ui| {
+                            for detail in details.iter() {
+                                ui.add(egui::Label::new(detail).wrap().selectable(true));
+                            }
+                        });
+                        if ui.button(crate::i18n::tr("Copy")).clicked() {
+                            let mut text = vec![summary.clone()];
+                            text.extend(library.iter().cloned());
+                            text.extend(details.iter().cloned());
+                            ui.ctx().copy_text(text.join("\n"));
+                        }
                     }
                 }
                 Dialog::DngValidation { summary, damaged, unverifiable } => {
