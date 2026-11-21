@@ -163,6 +163,8 @@ pub struct DecodedSource {
     /// These pixels came from the photo's smart preview (an offline original), not from its file.
     /// A refresh must never rebuild a proxy from itself: that would stamp its older look as current.
     pub from_proxy: bool,
+    /// Process-wide tick before reading the proxy, so a concurrent replacement invalidates the decode.
+    pub proxy_loaded_at: u64,
     /// Developed from a smaller copy of the raw image that the file keeps ([`ReducedLoader`]), not from the image
     /// itself: good for a thumbnail, never for an export.
     pub reduced: bool,
@@ -170,7 +172,17 @@ pub struct DecodedSource {
 
 impl DecodedSource {
     pub fn new(image: Arc<Rgb32f>, info: Option<SourceInfo>) -> Self {
-        DecodedSource { image, info, camera_tone: None, denoised: None, camera_profile: None, outliers: false, from_proxy: false, reduced: false }
+        DecodedSource {
+            image,
+            info,
+            camera_tone: None,
+            denoised: None,
+            camera_profile: None,
+            outliers: false,
+            from_proxy: false,
+            proxy_loaded_at: 0,
+            reduced: false,
+        }
     }
 
     /// Whether this source can stand for one decoded with `outliers`: a raw decode must match it; anything without a
@@ -340,6 +352,7 @@ impl SourceRef {
                                     camera_profile: made_with.clone(),
                                     outliers: *outliers,
                                     from_proxy: false,
+                                    proxy_loaded_at: 0,
                                     reduced: false,
                                 })
                             })

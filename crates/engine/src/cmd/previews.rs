@@ -644,6 +644,7 @@ fn smart_run(
     custom: bool,
     action: SmartAction,
     rendered: &lightcraft_preview::PreviewCache,
+    proxy_refreshes: &crate::media::ProxyRefreshes,
     jobs: Vec<SmartJob>,
     state: Option<(&PreviewBuild, &TaskGuard)>,
 ) -> std::result::Result<SmartCounts, String> {
@@ -745,6 +746,7 @@ fn smart_run(
                         n.built += 1;
                         if stale {
                             n.refreshed += 1;
+                            proxy_refreshes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(id, lightcraft_preview::next_tick());
                         } else if damaged {
                             n.repaired += 1;
                             if let Some((st, _)) = state {
@@ -815,6 +817,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     let custom = s.smart_previews_dir.is_some();
     let action = if discard { SmartAction::Discard } else { SmartAction::Build };
     let rendered = s.media.rendered.clone();
+    let proxy_refreshes = s.media.proxy_refreshes.clone();
     if background {
         let what = if discard { "discarding smart previews" } else { "smart previews" };
         let state = Arc::new(PreviewBuild { total: jobs.len(), what, ..Default::default() });
@@ -822,7 +825,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
         let task = task_for(s, &state);
         let st = state.clone();
         let work = move || {
-            if let Err(e) = smart_run(&dir, custom, action, &rendered, jobs, Some((&st, &task))) {
+            if let Err(e) = smart_run(&dir, custom, action, &rendered, &proxy_refreshes, jobs, Some((&st, &task))) {
                 log::warn!("{C}: {e}");
                 *st.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(e);
             }
@@ -849,7 +852,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
         }
         return Ok(state.json());
     }
-    let r = smart_run(&dir, custom, action, &rendered, jobs, None).map_err(|e| bad(C, e))?;
+    let r = smart_run(&dir, custom, action, &rendered, &proxy_refreshes, jobs, None).map_err(|e| bad(C, e))?;
     Ok(
         json!({"built": r.built, "repaired": r.repaired, "refreshed": r.refreshed, "staleKept": r.stale_kept, "removed": r.removed, "failed": r.failed}),
     )
@@ -876,17 +879,23 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
         .map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(s.media.origin_ref(&p.source, max_edge)), preview_fitted_look(p)))
         .collect();
     let rendered = s.media.rendered.clone();
+    let proxy_refreshes = s.media.proxy_refreshes.clone();
     std::thread::Builder::new()
         .name("lc-smart-look".into())
-        .spawn(move || refresh_stale(&dir, jobs, &rendered))
+        .spawn(move || refresh_stale(&dir, jobs, &rendered, &proxy_refreshes))
         .map_err(|e| log::warn!("smart previews: could not start the look refresh: {e}"))
         .ok()
 }
 
 /// The body of [`refresh_stale_smart_previews`]: rebuild the stale proxies among `jobs`.
 #[cfg(not(target_arch = "wasm32"))]
-fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>, rendered: &lightcraft_preview::PreviewCache) {
-    match smart_run(dir, true, SmartAction::Refresh, rendered, jobs, None) {
+fn refresh_stale(
+    dir: &std::path::Path,
+    jobs: Vec<SmartJob>,
+    rendered: &lightcraft_preview::PreviewCache,
+    proxy_refreshes: &crate::media::ProxyRefreshes,
+) {
+    match smart_run(dir, true, SmartAction::Refresh, rendered, proxy_refreshes, jobs, None) {
         Ok(n) => {
             log::info!("smart previews: {} refreshed to the current camera look, {} kept (original offline)", n.refreshed, n.stale_kept);
             if n.stale_kept != 0 || !n.failed.is_empty() {

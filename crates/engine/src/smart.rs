@@ -505,6 +505,7 @@ pub fn mark_look_checked(dir: &Path) -> Result<(), String> {
 
 /// Load the proxy at `path`.
 pub fn load(path: &Path) -> Result<crate::media::DecodedSource, String> {
+    let proxy_loaded_at = lightcraft_preview::next_tick();
     let b = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     decode(&b).map(|(image, camera_tone, info)| crate::media::DecodedSource {
         image: Arc::new(image),
@@ -514,6 +515,7 @@ pub fn load(path: &Path) -> Result<crate::media::DecodedSource, String> {
         camera_profile: None,
         outliers: false,
         from_proxy: true,
+        proxy_loaded_at,
         reduced: false,
     })
 }
