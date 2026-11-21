@@ -9,7 +9,7 @@ compare is clean; opening it takes one click.
 - **PR:** [#1314](https://github.com/{upstream}/pull/1314) — **open** since the body was first
   drafted (the App turned out to have access after all), mergeable, based directly on `main` `8ed8c2a0e`
 - **Commit:** `e4392a81c`, plus `f6485157b` (rustfmt on the scanner's own files, from the real gate's output)
-- **Compare:** `ahead` by 1, `behind` by 0, 62 files — `merge_base` is upstream's tip, so it needs
+- **Compare:** `ahead` by 3, `behind` by 0, 80 files (+3542/−22) — `merge_base` is upstream's tip, so it needs
   no rebase
 - **Open it:** <https://github.com/{upstream}/compare/main...1234destiny1234:arena/211076b9-upstream-1313?expand=1>
   (paste the title and body below)
@@ -72,9 +72,11 @@ blobs are on a hosts that does not resolve here), so each gate was reproduced lo
   used them), `text_button`, `register`, `picker`, `Session::{library_folder,browse,folder_subfolders}`.
   On the next run clippy is past fmt, so its report is the next thing to read.
 
-One defect this found and still **to fix**: the four toast strings in `crates/ui-egui/src/quality_scan.rs`
-are absent from every `-formats.json`, so they render in English in all 17 languages
-(`tr_format!` has a fallback arm, so this is not a compile error, but it is wrong).
+One defect this found is **fixed** in `e09055897`: the four toast strings in
+`crates/ui-egui/src/quality_scan.rs` were in no `-formats.json`, so they rendered in English in all 17
+languages (`tr_format!`'s fallback arm made that silent, not a compile error). They are now translated
+in every language, and each was checked to be a valid `format!` string with exactly the call site's
+placeholders — which matters because `build.rs` pastes the translation straight into `format!`.
 
 ---
 
