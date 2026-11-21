@@ -774,6 +774,7 @@ pub(crate) fn skips_the_real_render(embedded_is_final: bool, from_embedded: bool
 /// Rendered thumbnails replacing embedded previews: after everything on screen.
 pub const BACKGROUND_THUMB_PRIORITY: u32 = 3;
 
+/// Render a single photo or video thumbnail cell in the library grid.
 fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool, onscreen: bool, ppp: f32) {
     let t = Tokens::get(ui.ctx());
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return };
@@ -781,6 +782,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     register(ui, format!("thumb:{}", id.0), r);
     let state = app.session.selection.state_of(id);
     let selected = state != lightcraft_engine::SelectionState::NotSelected;
+    let video = is_clip(&photo);
     let spoken = cell_description(app, &photo);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &spoken));
     let p = ui.painter();
@@ -791,9 +793,10 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     } else {
         r
     };
-    let photo_rect = paint_cell_thumbnail(app, p, &t, id, img_rect, ThumbFlags { square, state, onscreen, ppp });
+    let photo_rect = paint_cell_thumbnail(app, p, &t, id, img_rect, ThumbFlags { square, state, onscreen, ppp, video });
     // labels and badges
-    paint_cell_caption(app, p, &t, &photo, r, square);
+    paint_cell_caption(app, ui, p, &t, &photo, id, r, square);
+    paint_video_badges(app, ui, p, &t, &photo, id, img_rect, photo_rect, square);
     paint_cell_badges(app, p, &t, &photo, photo_rect, BadgeFlags { square, selected, hovered: resp.hovered() });
     if let Some(name) = &photo.copy_name {
         paint_copy_tag(p, &t, name, img_rect, square);
@@ -809,6 +812,16 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
 
 pub(crate) fn cell_description(app: &LightcraftApp, photo: &lightcraft_catalog::Photo) -> String {
     let mut spoken = photo.file_name.clone();
+    if is_clip(photo) {
+        spoken.push_str(&format!(", {}", crate::i18n::tr("Video")));
+        if let Some(d) = photo.duration {
+            let text = crate::widgets::format_duration(d);
+            if !text.is_empty() {
+                spoken.push(' ');
+                spoken.push_str(&text);
+            }
+        }
+    }
     if photo.rating > 0 {
         spoken.push_str(&crate::i18n::tr_format!(", {} star{}", photo.rating, if photo.rating == 1 { "" } else { "s" }));
     }
@@ -823,8 +836,14 @@ pub(crate) fn cell_description(app: &LightcraftApp, photo: &lightcraft_catalog::
     spoken
 }
 
+/// A catalogued clip: it has no decoded frame yet (playback and trim come in a later update), so its
+/// cell is a placeholder tile with the container and running time, never a failed image.
+fn is_clip(photo: &lightcraft_catalog::Photo) -> bool {
+    photo.is_video()
+}
+
 fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, id: PhotoId, img_rect: Rect, flags: ThumbFlags) -> Rect {
-    let ThumbFlags { square, state, onscreen, ppp } = flags;
+    let ThumbFlags { square, state, onscreen, ppp, video } = flags;
     let size = thumb_px(img_rect.width().max(img_rect.height()), ppp);
     request_thumb(app, id, size, if onscreen { 10 } else { 5 });
     if let Some(tex) = app.renderer.thumb(id) {
@@ -836,10 +855,16 @@ fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, 
         fit
     } else {
         let ph = img_rect.shrink(if square { 20.0 } else { 0.0 });
-        p.rect_filled(ph, 0.0, t.skeleton);
+        p.rect_filled(ph, 0.0, if video { Color32::from_gray(30) } else { t.skeleton });
+        if video {
+            // A catalogued clip: a clean dark tile with its video icon (the thumbnail render is
+            // not an image a decoder can read, so it must not read as a broken photo).
+            let side = ph.width().min(ph.height()).clamp(10.0, 34.0);
+            paint(p, Rect::from_center_size(ph.center(), vec2(side, side)), Icon::Video, t.text_dim);
+        }
         // not drawn yet (or unreadable): the selection is still visible
         selection_ring(p, t, ph, state);
-        if app.renderer.failure(Slot::Thumb(id)).is_some() {
+        if !video && app.renderer.failure(Slot::Thumb(id)).is_some() {
             // unreadable / missing file
             p.text(ph.center(), Align2::CENTER_CENTER, "!", t.semibold(18.0), t.text);
         }
@@ -847,7 +872,17 @@ fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, 
     }
 }
 
-fn paint_cell_caption(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, photo: &lightcraft_catalog::Photo, r: Rect, square: bool) {
+#[allow(clippy::too_many_arguments)]
+fn paint_cell_caption(
+    app: &LightcraftApp,
+    ui: &egui::Ui,
+    p: &egui::Painter,
+    t: &Tokens,
+    photo: &lightcraft_catalog::Photo,
+    id: PhotoId,
+    r: Rect,
+    square: bool,
+) {
     if square && app.ui.show_filenames {
         let m = &photo.meta;
         let name = match app.ui.grid_info.as_str() {
@@ -874,6 +909,37 @@ fn paint_cell_caption(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, photo:
         let br = Rect::from_min_size(pos2(r.right() - g.size().x - 14.0, r.top() + 5.0), g.size() + vec2(8.0, 3.0));
         p.rect_filled(br, 2.0, Color32::from_gray(26));
         p.galley(br.min + vec2(4.0, 1.5), g, t.text_label);
+        if is_clip(photo) {
+            // the same automation id the justified grid's video badge carries
+            register(ui, format!("badge:videoFormat:{}", id.0), br);
+        }
+    }
+}
+
+/// A clip's container (where the square grid's filename line doesn't carry it already) and its
+/// running time, which is what tells one clip from another at a glance.
+#[allow(clippy::too_many_arguments)]
+fn paint_video_badges(
+    app: &LightcraftApp,
+    ui: &egui::Ui,
+    p: &egui::Painter,
+    t: &Tokens,
+    photo: &lightcraft_catalog::Photo,
+    id: PhotoId,
+    img_rect: Rect,
+    photo_rect: Rect,
+    square: bool,
+) {
+    if !is_clip(photo) {
+        return;
+    }
+    // the running time first: in a short cell it is the pill that stays. It hangs above the
+    // photo's own badge bar (the placeholder's in the square grid), never the cell's margin.
+    let duration = photo.duration.and_then(|d| video_duration_badge(ui, p, t, id, d, img_rect, photo_rect));
+    if !(square && app.ui.show_filenames) && !photo.format.is_empty() {
+        // a virtual copy's tag holds the top right corner: the container sits just below it
+        let below = if photo.copy_name.is_some() { COPY_TAG_HEIGHT + 4.0 } else { 0.0 };
+        video_format_badge(ui, p, t, id, &photo.format, img_rect, below, duration);
     }
 }
 
@@ -921,11 +987,14 @@ fn paint_cell_badges(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, photo: 
     }
 }
 
+/// The height of [`paint_copy_tag`]'s tag, below its 5–6 point inset from the top.
+const COPY_TAG_HEIGHT: f32 = 20.0;
+
 fn paint_copy_tag(p: &egui::Painter, t: &Tokens, name: &str, img_rect: Rect, square: bool) {
     // virtual copy: a folded-corner tag at the top right
     let g = p.layout_no_wrap(name.to_string(), t.semibold(10.5), Color32::WHITE);
     let tr = if square { img_rect.right_top() + vec2(-6.0, 6.0) } else { img_rect.right_top() + vec2(-5.0, 5.0) };
-    let br = Rect::from_min_max(pos2(tr.x - g.size().x - 26.0, tr.y), pos2(tr.x, tr.y + 20.0));
+    let br = Rect::from_min_max(pos2(tr.x - g.size().x - 26.0, tr.y), pos2(tr.x, tr.y + COPY_TAG_HEIGHT));
     p.rect_filled(br, 10.0, Color32::from_black_alpha(165));
     let c = pos2(br.left() + 13.0, br.center().y);
     let s = 5.0;
@@ -993,12 +1062,58 @@ struct ThumbFlags {
     state: lightcraft_engine::SelectionState,
     onscreen: bool,
     ppp: f32,
+    /// A catalogued clip: its tile is a placeholder with the video icon, never a broken image.
+    video: bool,
 }
 
 struct BadgeFlags {
     square: bool,
     selected: bool,
     hovered: bool,
+}
+
+/// A clip's container (`MP4`, `MOV`) in a dark pill at the thumbnail's top right, `below` points
+/// lower when something else holds the corner.
+#[allow(clippy::too_many_arguments)]
+fn video_format_badge(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId, format: &str, img_rect: Rect, below: f32, clear_of: Option<Rect>) {
+    let g = p.layout_no_wrap(format.to_uppercase(), t.semibold(9.0), Color32::WHITE);
+    let br = Rect::from_min_size(pos2(img_rect.right() - g.size().x - 14.0, img_rect.top() + 6.0 + below), g.size() + vec2(8.0, 3.0));
+    // A pill that doesn't fit the cell would spill over its neighbours: skip it instead.
+    // nor cover the running-time pill (short square cells bring the two together)
+    if br.left() < img_rect.left() + 4.0 || br.bottom() > img_rect.bottom() - 4.0 || clear_of.is_some_and(|r| r.expand(2.0).intersects(br)) {
+        return;
+    }
+    p.rect_filled(br, 3.0, Color32::from_black_alpha(170));
+    p.galley(br.min + vec2(4.0, 1.5), g, Color32::WHITE);
+    register(ui, format!("badge:videoFormat:{}", id.0), br);
+}
+
+/// A clip's running time (video icon + `MM:SS`) in a dark pill at the thumbnail's lower edge,
+/// above the rating bar so neither hides the other. Its rect, when drawn.
+fn video_duration_badge(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId, seconds: f64, img_rect: Rect, photo_rect: Rect) -> Option<Rect> {
+    let text = crate::widgets::format_duration(seconds);
+    if text.is_empty() {
+        return None;
+    }
+    let g = p.layout_no_wrap(text, t.semibold(10.0), Color32::WHITE);
+    let w = g.size().x + 26.0;
+    // A pill wider than the cell's margins would spill over its neighbours, and in a cell under
+    // 48 points it would sit on the badge bar: skip it instead.
+    if w > img_rect.width() - 10.0 || img_rect.height() < 48.0 {
+        return None;
+    }
+    let x = (img_rect.right() - 6.0 - w).max(img_rect.left() + 4.0);
+    // Hang above the photo's own badge bar (the placeholder's in the square grid), not the cell's
+    // lower margin. A placeholder too short for the pill keeps the old position: it has no room
+    // above its bar.
+    let base = if photo_rect.height() >= 48.0 { photo_rect.bottom() } else { img_rect.bottom() };
+    let y = (base - 24.0 - 20.0).max(img_rect.top() + 4.0);
+    let br = Rect::from_min_size(pos2(x, y), vec2(w, 17.0));
+    p.rect_filled(br, 8.5, Color32::from_black_alpha(175));
+    paint(p, Rect::from_center_size(pos2(br.left() + 11.0, br.center().y), vec2(12.0, 12.0)), Icon::Video, Color32::WHITE);
+    p.galley(pos2(br.left() + 19.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
+    register(ui, format!("badge:videoDuration:{}", id.0), br);
+    Some(br)
 }
 
 /// The header of a library view (All Photos, an album, a library folder…): the source's title and

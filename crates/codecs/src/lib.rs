@@ -260,7 +260,7 @@ pub fn decode_unguarded(bytes: &[u8], format: Format, opts: &DecodeOptions) -> R
         Format::Jxl => unsupported(),
         Format::Heif => heif::decode(bytes, &opts),
         Format::Avif => avif_decode::decode(bytes, &opts),
-        Format::RawTiffLike | Format::RawOther => unsupported(),
+        Format::RawTiffLike | Format::RawOther | Format::Mp4 | Format::Mov => unsupported(),
     }
 }
 

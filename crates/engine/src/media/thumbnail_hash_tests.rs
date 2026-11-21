@@ -208,6 +208,7 @@ fn source_from_before_content_reload_is_not_accepted() {
             content_hash: Some("replacement".into()),
             preview_only: None,
             preview_checked: String::new(),
+            duration: None,
         })
         .unwrap();
     s.media.forget(PhotoId(1));

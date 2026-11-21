@@ -1,6 +1,7 @@
 use super::ExportOptions;
 use super::place::Placer;
-use super::prepare::{Destination, Exported, PreparedExport};
+use super::prepare::{Destination, PreparedExport};
+use super::{OriginalCheck, OriginalCopier, Ran};
 
 /// Run prepared exports in order: pick each one's path, and hand the bytes (and sidecars) to
 /// `write`. `exists` tells whether a path is taken. The conflict policy applies to a file and its
@@ -23,8 +24,44 @@ pub fn run_batch(
     stop_on_error: bool,
     progress: &mut dyn FnMut(usize, &str) -> bool,
 ) -> Result<Vec<serde_json::Value>, String> {
+    run_batch_with_copy(items, o, to, write, exists, stop_on_error, progress, None)
+}
+
+/// [`run_batch`] with a host capable of copying Original videos without buffering their bytes.
+#[allow(clippy::too_many_arguments)]
+pub fn run_batch_with_copy<'a>(
+    items: Vec<PreparedExport>,
+    o: &'a ExportOptions,
+    to: &'a Destination,
+    write: &'a mut dyn FnMut(&str, &[u8]) -> Result<(), String>,
+    exists: &'a dyn Fn(&str) -> bool,
+    stop_on_error: bool,
+    progress: &mut dyn FnMut(usize, &str) -> bool,
+    copy: Option<&'a mut OriginalCopier<'a>>,
+) -> Result<Vec<serde_json::Value>, String> {
+    run_batch_with_copy_and_check(items, o, to, write, exists, stop_on_error, progress, copy, None)
+}
+
+/// [`run_batch_with_copy`] with a host preflight run before an Original's sidecars are written:
+/// the browser uses it to refuse a clip that is not loaded (or has a location) before it starts a
+/// download.
+#[allow(clippy::too_many_arguments)]
+pub fn run_batch_with_copy_and_check<'a>(
+    items: Vec<PreparedExport>,
+    o: &'a ExportOptions,
+    to: &'a Destination,
+    write: &'a mut dyn FnMut(&str, &[u8]) -> Result<(), String>,
+    exists: &'a dyn Fn(&str) -> bool,
+    stop_on_error: bool,
+    progress: &mut dyn FnMut(usize, &str) -> bool,
+    copy: Option<&'a mut OriginalCopier<'a>>,
+    check: Option<&'a OriginalCheck<'a>>,
+) -> Result<Vec<serde_json::Value>, String> {
     let lanes = export_parallelism(items.len());
-    run_batch_with(items, &mut Placer::new(o, to, write, exists, stop_on_error), progress, lanes)
+    let mut placer = Placer::new(o, to, write, exists, stop_on_error);
+    placer.copy = copy;
+    placer.check = check;
+    run_batch_with(items, &mut placer, progress, lanes)
 }
 
 /// How many photos of a batch of `n` render side by side. Each render already spreads its rows
@@ -52,7 +89,7 @@ pub(super) fn run_batch_with(
                 break;
             }
             let (photo, name, guard, source_dir) = (item.photo, item.file_name.clone(), item.guard.clone(), item.source_dir.clone());
-            placer.place(photo, name, source_dir.as_deref(), &guard, run_gated(item))?;
+            placer.place(photo, name, source_dir.as_deref(), &guard, run_gated(item, placer.copy.is_some()))?;
         }
         return Ok(std::mem::take(&mut placer.out));
     }
@@ -60,6 +97,7 @@ pub(super) fn run_batch_with(
     let queue = Queue {
         lane: std::sync::Mutex::new(Lane { items: items.into_iter().map(Some).collect(), next: 0, placed: 0, stop: false, done: Default::default() }),
         cv: std::sync::Condvar::new(),
+        streaming: placer.copy.is_some(),
         ahead: lanes,
     };
     std::thread::scope(|sc| {
@@ -99,10 +137,10 @@ impl Drop for StopOnDrop<'_> {
 
 /// Run one photo's export holding its working memory from [`crate::memory::export_gate`]; a panic
 /// becomes that photo's error, not the batch's end.
-fn run_gated(item: PreparedExport) -> Result<Exported, String> {
+fn run_gated(item: PreparedExport, streaming: bool) -> Result<Ran, String> {
     let _held = crate::memory::export_gate().acquire(item.weight);
     let what = format!("exporting {}", item.file_name);
-    crate::guard::catch(&what, || item.run()).and_then(|r| r)
+    crate::guard::catch(&what, || item.run_with_copy(streaming)).and_then(|r| r)
 }
 
 /// The photos of a batch shared by its lanes: each lane takes the next one, at most
@@ -111,6 +149,7 @@ fn run_gated(item: PreparedExport) -> Result<Exported, String> {
 struct Queue {
     lane: std::sync::Mutex<Lane>,
     cv: std::sync::Condvar,
+    streaming: bool,
     ahead: usize,
 }
 
@@ -121,7 +160,7 @@ struct Lane {
     /// Photos handed to the placer so far.
     placed: usize,
     stop: bool,
-    done: std::collections::HashMap<usize, Result<Exported, String>>,
+    done: std::collections::HashMap<usize, Result<Ran, String>>,
 }
 
 impl Lane {
@@ -138,11 +177,13 @@ impl Queue {
         self.lane.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Waits until a lane frees a slot or the batch stops.
     fn wait<'a>(&self, g: std::sync::MutexGuard<'a, Lane>) -> std::sync::MutexGuard<'a, Lane> {
         self.cv.wait(g).unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn finish(&self, i: usize, r: Result<Exported, String>) {
+    /// Record photo `i`'s result and wake the placer waiting on it.
+    fn finish(&self, i: usize, r: Result<Ran, String>) {
         self.lock().done.insert(i, r);
         self.cv.notify_all();
     }
@@ -164,12 +205,12 @@ impl Queue {
                 l = self.wait(l);
             };
             drop(l);
-            self.finish(i, run_gated(item));
+            self.finish(i, run_gated(item, self.streaming));
         }
     }
 
     /// Photo `i`'s result, waiting for it; run here when no lane has started it yet.
-    fn result(&self, i: usize) -> Result<Exported, String> {
+    fn result(&self, i: usize) -> Result<Ran, String> {
         let mut l = self.lock();
         loop {
             if let Some(r) = l.done.remove(&i) {
@@ -183,7 +224,7 @@ impl Queue {
                     return Err("export: photo missing from the batch".into());
                 };
                 drop(l);
-                self.finish(i, run_gated(item));
+                self.finish(i, run_gated(item, self.streaming));
                 l = self.lock();
                 continue;
             }

@@ -251,12 +251,19 @@ fn camera_card(ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
             ("Aperture", m.aperture.map(|f| format!("f / {f:.1}").replace(".0", ""))),
             ("ISO", m.iso.map(|i| i.to_string())),
         ];
-        if rows.iter().any(|r| r.1.is_some()) {
+        let duration = p.duration.map(crate::widgets::format_duration).filter(|d| !d.is_empty());
+        if rows.iter().any(|r| r.1.is_some()) || duration.is_some() {
             ui.add_space(6.0);
             egui::Grid::new("info-capture").num_columns(2).spacing([24.0, 3.0]).show(ui, |ui| {
                 for (k, v) in rows {
                     ui.label(dim(crate::i18n::tr(k)));
                     ui.label(dim(&v.unwrap_or_else(|| "—".into())));
+                    ui.end_row();
+                }
+                if let Some(d) = &duration {
+                    ui.label(dim(crate::i18n::tr("Duration")));
+                    let r = ui.label(dim(d));
+                    register(ui, "info:duration", r.rect);
                     ui.end_row();
                 }
             });

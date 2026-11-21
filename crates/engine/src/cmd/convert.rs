@@ -211,7 +211,8 @@ pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalo
         && info.file_size == ph.file_size
         && (info.width, info.height) == (ph.width, ph.height)
         && info.preview_only == ph.preview_only
-        && preview_checked == ph.preview_checked;
+        && preview_checked == ph.preview_checked
+        && info.duration == ph.duration;
     (!same).then_some(Op::SetContent {
         id,
         width: info.width,
@@ -220,6 +221,7 @@ pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalo
         content_hash: info.content_hash,
         preview_only: info.preview_only,
         preview_checked,
+        duration: info.duration,
     })
 }
 

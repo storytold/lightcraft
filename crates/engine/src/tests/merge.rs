@@ -250,3 +250,21 @@ fn a_photo_named_twice_is_merged_once() {
     assert_eq!(job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), vec![a, b]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A clip in a merge's selection is refused before any file is read: the reader would load the
+/// whole clip only for the decoder to refuse it (and preview merges read several at once).
+#[test]
+fn a_video_is_refused_by_photo_merge_before_it_is_read() {
+    use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
+    let mut s = Session::new();
+    for (id, name, kind) in [(1u64, "clip.mp4", MediaKind::Video), (2, "IMG_1.dng", MediaKind::Raw)] {
+        let mut p = Photo::new(PhotoId(id), Source::File { path: format!("/merge-video-test/{name}") }, name, "MP4", 640, 360, "2026-05-04T10:00:00");
+        p.kind = kind;
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    s.media.file_bytes = Some(std::sync::Arc::new(|path: &str| Err(format!("{path}: read whole"))));
+    for cmd in ["merge.hdr", "merge.panorama", "merge.hdrPanorama"] {
+        let e = s.execute(cmd, &json!({"ids": [2, 1], "preview": true})).unwrap_err().to_string();
+        assert!(e.contains("clip.mp4 is a video"), "{cmd}: {e}");
+    }
+}

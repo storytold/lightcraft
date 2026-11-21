@@ -18,6 +18,8 @@ pub const EXTENSIONS: &[&str] = &[
     // failed with the reason ("HEIC/HEIF support isn't included in this build").
     "heic", "heif", // AVIF decoding is available in native builds with the codecs' `avif` feature.
     "avif", "iiq", "crw", "mrw", "x3f", "kdc", "mos", "erf", "3fr", "fff", "mef",
+    // Video containers: catalogued and probed; playback comes in a later update.
+    "mp4", "mov", "m4v",
 ];
 
 pub fn is_supported(path: &Path) -> bool {

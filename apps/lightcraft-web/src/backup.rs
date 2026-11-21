@@ -107,7 +107,12 @@ pub struct ZipWriter {
 impl ZipWriter {
     /// The local header for `name` holding `data` (emit it, then `data`).
     pub fn entry(&mut self, name: &str, data: &[u8]) -> Result<Vec<u8>, String> {
-        let size = u32::try_from(data.len()).map_err(|_| format!("{name}: larger than 4 GB"))?;
+        self.entry_with_crc(name, data.len() as u64, crc32fast::hash(data))
+    }
+
+    /// A header for browser-managed content whose checksum was computed in bounded chunks.
+    pub fn entry_with_crc(&mut self, name: &str, size: u64, crc: u32) -> Result<Vec<u8>, String> {
+        let size = u32::try_from(size).map_err(|_| format!("{name}: larger than 4 GB"))?;
         let name_len = u16::try_from(name.len()).map_err(|_| format!("{name}: name too long"))?;
         if self.entries.len() >= usize::from(u16::MAX) {
             return Err("too many files for one backup".into());
@@ -117,7 +122,6 @@ impl ZipWriter {
             return Err("the library is too large for one backup file (4 GB)".into());
         }
         let offset = u32::try_from(self.offset).map_err(|_| "backup too large".to_string())?;
-        let crc = crc32fast::hash(data);
         let mut h = Vec::with_capacity(header_len as usize);
         u32le(&mut h, LOCAL_SIG);
         u16le(&mut h, 20); // version needed
@@ -264,10 +268,15 @@ pub fn data_offset(entry: &ZipEntry, local: &[u8]) -> Result<u64, String> {
 
 /// Check an entry's bytes.
 pub fn verify(entry: &ZipEntry, data: &[u8]) -> Result<(), String> {
+    verify_checksum(entry, data.len() as u64, crc32fast::hash(data))
+}
+
+/// Check a streamed entry without materialising all its bytes.
+pub fn verify_checksum(entry: &ZipEntry, size: u64, crc: u32) -> Result<(), String> {
     if entry.method != 0 {
         return Err(format!("{}: compressed entries are not supported (not a LightCraft backup?)", entry.name));
     }
-    if data.len() as u64 != entry.size || crc32fast::hash(data) != entry.crc {
+    if size != entry.size || crc != entry.crc {
         return Err(format!("{}: damaged (checksum mismatch)", entry.name));
     }
     Ok(())
@@ -288,9 +297,71 @@ pub fn restored_dir_name(now_ms: f64) -> String {
     format!("library-restored-{}", now_ms.max(0.0) as u64)
 }
 
+/// The parts of a backup being assembled, in file order: a part is bytes made here or a payload
+/// the browser streams from storage (`P`), so an original is never copied into memory whole.
+pub struct BackupParts<P> {
+    pub parts: Vec<P>,
+    pub bytes: u64,
+}
+
+impl<P> BackupParts<P> {
+    pub fn new() -> Self {
+        Self { parts: Vec::new(), bytes: 0 }
+    }
+
+    /// One original: its local header (`bytes` turns it into a part), then its `payload` of
+    /// `size` bytes whose CRC-32 is `crc`.
+    pub fn push_original(
+        &mut self,
+        zip: &mut ZipWriter,
+        entry: &str,
+        payload: P,
+        size: u64,
+        crc: u32,
+        bytes: impl Fn(&[u8]) -> P,
+    ) -> Result<(), String> {
+        let header = zip.entry_with_crc(entry, size, crc)?;
+        self.parts.push(bytes(&header));
+        self.parts.push(payload);
+        self.bytes = self.bytes.saturating_add(header.len() as u64).saturating_add(size);
+        Ok(())
+    }
+}
+
+impl<P> Default for BackupParts<P> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each original's payload follows its header in the backup, and reads back whole.
+    #[test]
+    fn a_backup_carries_each_originals_payload() {
+        let originals: [(&str, &[u8]); 2] = [("clip.mp4", b"first original payload"), ("IMG 2.jpg", &[9, 8, 7, 6, 5])];
+        let mut zip = ZipWriter::default();
+        let mut parts = BackupParts::<Vec<u8>>::new();
+        for (name, data) in originals {
+            let entry = original_entry(&crate::store::content_hash(data), name);
+            parts.push_original(&mut zip, &entry, data.to_vec(), data.len() as u64, crc32fast::hash(data), <[u8]>::to_vec).unwrap();
+        }
+        let tail = zip.finish().unwrap();
+        let mut file: Vec<u8> = parts.parts.concat();
+        assert_eq!(file.len() as u64, parts.bytes);
+        file.extend(tail);
+        let (off, size) = find_central(&file[file.len() - tail_len(file.len() as u64) as usize..]).unwrap();
+        let entries = parse_central(&file[off as usize..(off + size) as usize]).unwrap();
+        assert_eq!(entries.len(), 2);
+        for (e, (_, data)) in entries.iter().zip(originals) {
+            let start = data_offset(e, &file[e.header as usize..e.header as usize + 30]).unwrap() as usize;
+            let got = &file[start..start + e.size as usize];
+            assert_eq!(got, data);
+            verify_original(e, &crate::store::content_hash(data), got).unwrap();
+        }
+    }
 
     fn build(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut w = ZipWriter::default();
@@ -301,6 +372,26 @@ mod tests {
         }
         out.extend(w.finish().unwrap());
         out
+    }
+
+    #[test]
+    fn streamed_entries_match_buffered_headers_and_validate_checksums() {
+        let data = b"streamed original";
+        let mut crc = crc32fast::Hasher::new();
+        for chunk in data.chunks(3) {
+            crc.update(chunk);
+        }
+        let checksum = crc.finalize();
+        let mut buffered = ZipWriter::default();
+        let mut streamed = ZipWriter::default();
+        assert_eq!(streamed.entry_with_crc("original.mp4", data.len() as u64, checksum).unwrap(), buffered.entry("original.mp4", data).unwrap());
+        assert_eq!(streamed.finish().unwrap(), buffered.finish().unwrap());
+        let entry = ZipEntry { name: "original.mp4".into(), crc: checksum, size: data.len() as u64, header: 0, method: 0 };
+        verify_checksum(&entry, data.len() as u64, checksum).unwrap();
+        assert!(verify_checksum(&entry, data.len() as u64 + 1, checksum).is_err());
+        assert!(verify_checksum(&entry, data.len() as u64, checksum ^ 1).is_err());
+        assert!(verify_checksum(&ZipEntry { method: 8, ..entry }, data.len() as u64, checksum).is_err());
+        assert!(ZipWriter::default().entry_with_crc("too-large.mp4", MAX_BYTES + 1, 0).is_err());
     }
 
     #[test]

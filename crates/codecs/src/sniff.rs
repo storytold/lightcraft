@@ -21,6 +21,10 @@ pub enum Format {
     Bmp,
     /// Photoshop PSD / PSB (merged composite).
     Psd,
+    /// MP4 video container.
+    Mp4,
+    /// QuickTime video container (.mov).
+    Mov,
     /// TIFF-structured camera raw (DNG, CR2, NEF, ARW, PEF, ORF, RW2, SRW, 3FR, IIQ, ERF, …):
     /// route to `lightcraft-raw`.
     RawTiffLike,
@@ -42,11 +46,14 @@ impl Format {
             Format::Gif => "gif",
             Format::Bmp => "bmp",
             Format::Psd => "psd",
+            Format::Mp4 => "mp4",
+            Format::Mov => "mov",
             Format::RawTiffLike => "dng",
             Format::RawOther => "raw",
         }
     }
 
+    /// Standard MIME type for this image or video container format.
     pub fn mime(self) -> &'static str {
         match self {
             Format::Jpeg => "image/jpeg",
@@ -59,6 +66,8 @@ impl Format {
             Format::Gif => "image/gif",
             Format::Bmp => "image/bmp",
             Format::Psd => "image/vnd.adobe.photoshop",
+            Format::Mp4 => "video/mp4",
+            Format::Mov => "video/quicktime",
             Format::RawTiffLike | Format::RawOther => "image/x-raw",
         }
     }
@@ -79,6 +88,7 @@ impl Format {
             #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
             Format::Avif => Some("AVIF decoding is not included in this build"),
             Format::RawTiffLike | Format::RawOther => Some("camera raw: decode with lightcraft-raw"),
+            Format::Mp4 | Format::Mov => Some("video container: playback in a later update"),
             _ => None,
         }
     }
@@ -86,6 +96,11 @@ impl Format {
     /// Camera raw formats (decode with `lightcraft-raw`).
     pub fn is_raw(self) -> bool {
         matches!(self, Format::RawTiffLike | Format::RawOther)
+    }
+
+    /// Whether this is a video container format.
+    pub fn is_video(self) -> bool {
+        matches!(self, Format::Mp4 | Format::Mov)
     }
 }
 
@@ -103,6 +118,9 @@ pub fn sniff(b: &[u8]) -> Option<Format> {
     }
     if b.len() >= 14 && &b[0..2] == b"II" && &b[6..14] == b"HEAPCCDR" {
         return Some(Format::RawOther);
+    }
+    if b.len() >= 8 && (&b[4..8] == b"moov" || &b[4..8] == b"wide") {
+        return Some(Format::Mov);
     }
     if b.len() >= 12 && &b[4..8] == b"ftyp" {
         // A JPEG comment can put these bytes at this offset. Check the leading JPEG signature first.
@@ -132,6 +150,7 @@ pub fn sniff(b: &[u8]) -> Option<Format> {
     }
 }
 
+/// Detect ISO Base Media File Format container (MP4, MOV, HEIF, CR3, AVIF) by checking the ftyp box.
 fn sniff_bmff(b: &[u8]) -> Option<Format> {
     let size = u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize;
     let end = size.clamp(12, b.len().min(4096));
@@ -153,6 +172,20 @@ fn sniff_bmff(b: &[u8]) -> Option<Format> {
     }
     if [&b"heic"[..], b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs", b"mif1", b"msf1"].iter().any(|x| has(x)) {
         return Some(Format::Heif);
+    }
+    if has(b"qt  ") {
+        return Some(Format::Mov);
+    }
+    // Audio-only brands are not video, even when they carry an `isom` compatible brand (an
+    // `.m4a` book or song): they must keep failing as unrecognized, not be catalogued as MP4.
+    if has(b"M4A ") || has(b"M4B ") || has(b"M4P ") {
+        return None;
+    }
+    if [&b"isom"[..], b"iso2", b"iso4", b"iso5", b"iso6", b"mp41", b"mp42", b"dash", b"avc1", b"M4V ", b"mp71", b"XAVC", b"xavc"]
+        .iter()
+        .any(|x| has(x))
+    {
+        return Some(Format::Mp4);
     }
     None
 }
@@ -215,6 +248,7 @@ fn tiff_is_raw(b: &[u8]) -> bool {
 mod tests {
     use super::*;
 
+    /// Test sniffing signatures for supported image and video formats.
     #[test]
     fn bmp_routing_retains_supported_dib_and_truncation_rules() {
         let mut b = [0_u8; 26];
@@ -261,6 +295,13 @@ mod tests {
         assert_eq!(sniff(b"\0\0\0\x1cftypavif\0\0\0\0avifmif1miaf"), Some(Format::Avif));
         assert_eq!(sniff(b"\0\0\0\x18ftypheic\0\0\0\0mif1heic"), Some(Format::Heif));
         assert_eq!(sniff(b"\0\0\0\x18ftypcrx \0\0\0\x01crx isom"), Some(Format::RawOther));
+        assert_eq!(sniff(b"\0\0\0\x18ftypmp42\0\0\0\0mp41isom"), Some(Format::Mp4));
+        assert_eq!(sniff(b"\0\0\0\x14ftypM4A \0\0\0\0"), None);
+        assert_eq!(sniff(b"\0\0\0\x1cftypM4A \0\0\0\0M4A mp42isom"), None, "audio with an isom compatible brand is not video");
+        assert_eq!(sniff(b"\0\0\0\x14ftypxxxx\0\0\0\0"), None);
+        assert_eq!(sniff(b"\0\0\0\x14ftypqt  \0\0\0\0"), Some(Format::Mov));
+        assert_eq!(sniff(b"\0\0\0\x08moov\0\0\0\0"), Some(Format::Mov));
+        assert_eq!(sniff(b"\0\0\0\x08wide\0\0\0\0"), Some(Format::Mov));
         assert_eq!(sniff(&[0xFF, 0x0A, 0xFA, 0x7F]), Some(Format::Jxl));
         assert_eq!(sniff(b"8BPS\0\x01\0\0\0\0\0\0"), Some(Format::Psd));
         assert_eq!(sniff(b"FUJIFILMCCD-RAW 0201"), Some(Format::RawOther));
@@ -392,8 +433,11 @@ mod tests {
             assert_eq!(sniff(&ftyp_box(None, b"isom", &[heif])), Some(Format::Heif));
         }
 
+        // MP4 brands sniff as Mp4 (`isom`/`iso2`/`mp41`) rather than falling through.
+        assert_eq!(sniff(&ftyp_box(None, b"isom", &[b"iso2", b"mp41"])), Some(Format::Mp4));
+
         // Unrecognised BMFF brands return None rather than falling through.
-        assert_eq!(sniff(&ftyp_box(None, b"isom", &[b"iso2", b"mp41"])), None);
+        assert_eq!(sniff(&ftyp_box(None, b"zzzz", &[b"yyyy"])), None);
     }
 
     #[test]

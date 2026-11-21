@@ -411,6 +411,10 @@ impl Session {
         let mut seen = std::collections::HashSet::new();
         for id in ids.iter().filter(|id| seen.insert(**id)) {
             let p = self.catalog.photo(*id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(*id))?;
+            // before any read: a clip would be read whole only for the decoder to refuse it
+            if p.is_video() {
+                return Err(EngineError::Other(format!("{} is a video; Photo Merge needs photo files", p.file_name)));
+            }
             match &p.source {
                 Source::File { path } => sources.push((*id, path.clone())),
                 Source::Demo { .. } => return Err(EngineError::Other(format!("{} is a demo photo; Photo Merge needs photo files", p.file_name))),

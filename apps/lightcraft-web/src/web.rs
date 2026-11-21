@@ -3,6 +3,7 @@
 //! into downloads.
 
 use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -18,9 +19,9 @@ use crate::backend::Backend;
 use crate::backup::{ACTIVE_LIBRARY, DEFAULT_LIBRARY_DIR, valid_library_dir};
 use crate::bench::Bench;
 use crate::files::{Files, FlushOp, LIBRARY_FILES};
-use crate::host::{Incoming, Outgoing};
+use crate::host::{Bridge, Incoming, OpenBytes, Outgoing};
 use crate::safety::{self, notice};
-use crate::store::{Originals, content_hash, download_name, storage_key};
+use crate::store::{Originals, check_original_size, content_hash, download_name, storage_key};
 use crate::wire::ThumbIndex;
 use crate::workers::{THUMB_INDEX, Workers};
 
@@ -107,25 +108,224 @@ impl Options {
 }
 
 /// Store a picked/dropped file (bytes into browser storage, then queue its import).
-async fn store_file(originals: Originals, backend: Option<Backend>, name: String, bytes: Vec<u8>, ctx: egui::Context) {
-    let hash = content_hash(&bytes);
-    if let Some(b) = &backend
-        && let Err(e) = b.write(&storage_key(&hash), &bytes).await
-    {
-        // a photo whose bytes aren't stored would be gone after a reload: don't add it
-        notice(format!("{name} was not added: browser storage refused it ({e}). Free up space or back up and clear old photos."));
+async fn store_file(originals: Originals, backend: Option<Backend>, name: String, blob: Option<&web_sys::Blob>, bytes: Vec<u8>, ctx: egui::Context) {
+    if let Err(e) = check_original_size(bytes.len() as f64) {
+        notice(format!("{name} was not added: {e}"));
         return;
     }
-    originals.added(&name, &hash, Arc::from(bytes));
+    let hash = content_hash(&bytes);
+    if let Some(b) = &backend {
+        let stored = match blob {
+            Some(blob) => bounded(b.write_original_blob(&storage_key(&hash), blob), bytes.len() as f64).await,
+            None => b.write(&storage_key(&hash), &bytes).await,
+        };
+        if let Err(e) = stored {
+            // a photo whose bytes aren't stored would be gone after a reload: don't add it
+            notice(format!("{name} was not added: browser storage refused it ({e}). Free up space or back up and clear old photos."));
+            return;
+        }
+    }
+    if let Err(e) = originals.added(&name, &hash, Arc::new(bytes)) {
+        notice(format!("{name} was not added: {e}"));
+    }
     ctx.request_repaint();
 }
 
 /// Read a browser `File` into storage.
 async fn read_file(originals: Originals, backend: Option<Backend>, file: web_sys::File, ctx: egui::Context) {
-    match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
-        Ok(buf) => store_file(originals, backend, file.name(), js_sys::Uint8Array::new(&buf).to_vec(), ctx).await,
-        Err(e) => log::warn!("reading {}: {e:?}", file.name()),
+    // As natively: the compatible brands (HEIF, audio) follow the major one in `ftyp`.
+    let head = match blob_range(&file, 0, file.size().min(4096.0) as u64).await {
+        Ok(head) => head,
+        Err(e) => {
+            notice(format!("{} was not added: {e}", file.name()));
+            return;
+        }
+    };
+    let format = lightcraft_codecs::sniff(&head);
+    if format.as_ref().is_some_and(|f| f.is_video()) || (format.is_none() && lightcraft_engine::files::looks_like_video_container(&head)) {
+        if let Err(e) = store_video(&originals, backend.as_ref(), &file.name(), &file).await {
+            notice(format!("{} was not added: {e}", file.name()));
+        }
+        ctx.request_repaint();
+        return;
     }
+    if let Err(e) = check_original_size(file.size()) {
+        notice(format!("{} was not added: {e}", file.name()));
+        return;
+    }
+    let read = async { wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await.map_err(|e| format!("can't read the file ({e:?})")) };
+    match bounded(read, file.size()).await {
+        Ok(buf) => match crate::store::copy_browser_bytes(&js_sys::Uint8Array::new(&buf)) {
+            Ok(bytes) => store_file(originals, backend, file.name(), Some(&*file), bytes, ctx).await,
+            Err(e) => notice(format!("{} was not added: {e}", file.name())),
+        },
+        Err(e) => notice(format!("{} was not added: {e}", file.name())),
+    }
+}
+
+/// How long one original may take to load from browser storage before it counts as failed: a read
+/// that never settles must not hold every load queued after it.
+const ORIGINAL_LOAD_TIMEOUT_MS: i32 = 60_000;
+
+/// Resolves after `ms` (never without a window, where nothing loads either).
+async fn sleep_ms(ms: i32) {
+    let promise = js_sys::Promise::new(&mut |resolve, _| {
+        if let Some(w) = window() {
+            let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
+        }
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+}
+
+/// `work` bounded by [`ORIGINAL_LOAD_TIMEOUT_MS`] plus one second per 10 MB of `bytes` (a large
+/// clip takes a while to write): one browser promise that never settles must not hold the import
+/// queue, or the loads after it, forever. On timeout the browser promise is dropped, not cancelled:
+/// a write that finishes late can still leave an original in storage although the caller was told
+/// the work was refused.
+async fn bounded<T>(work: impl std::future::Future<Output = Result<T, String>>, bytes: f64) -> Result<T, String> {
+    let extra = if bytes.is_finite() && bytes > 0.0 { (bytes / 10_000.0).min(f64::from(i32::MAX / 2)) as i32 } else { 0 };
+    let ms = ORIGINAL_LOAD_TIMEOUT_MS.saturating_add(extra);
+    crate::store::within(work, sleep_ms(ms)).await.unwrap_or_else(|| Err(format!("the browser did not answer within {} s", ms / 1000)))
+}
+
+/// The error of a storage load that [`ORIGINAL_LOAD_TIMEOUT_MS`] cut short.
+fn timed_out<T>() -> Result<T, String> {
+    Err(format!("reading browser storage took longer than {} s; select the photo again to retry", ORIGINAL_LOAD_TIMEOUT_MS / 1000))
+}
+
+struct BlobOriginal {
+    blob: web_sys::Blob,
+    location_check: Result<(), String>,
+}
+
+/// Each read is bounded; offsets stay in u64/f64 so clips larger than WASM's address space work.
+async fn blob_range(blob: &web_sys::Blob, start: u64, length: u64) -> Result<Vec<u8>, String> {
+    if length > 64 << 20 {
+        return Err("video metadata exceeds the 64 MiB scan budget".into());
+    }
+    let end = start.checked_add(length).ok_or("video offset overflow")?;
+    let slice = blob.slice_with_f64_and_f64(start as f64, end as f64).map_err(|e| format!("reading original: {e:?}"))?;
+    let read = async { wasm_bindgen_futures::JsFuture::from(slice.array_buffer()).await.map_err(|e| format!("reading original: {e:?}")) };
+    let buf = bounded(read, length as f64).await?;
+    let bytes = crate::store::copy_browser_bytes(&js_sys::Uint8Array::new(&buf))?;
+    if bytes.len() as u64 != length {
+        return Err("original changed or was truncated while reading".into());
+    }
+    Ok(bytes)
+}
+
+async fn video_blob_metadata(blob: &web_sys::Blob, include_fragments: bool) -> Result<Vec<u8>, String> {
+    let size = blob.size();
+    if !size.is_finite() || size < 0.0 || size.fract() != 0.0 || size > 9_007_199_254_740_991.0 {
+        return Err("invalid video file size".into());
+    }
+    let size = size as u64;
+    let (mut at, mut out, mut saw_moov) = (0u64, Vec::new(), false);
+    for _ in 0..lightcraft_engine::files::MAX_VIDEO_TOP_LEVEL_BOXES {
+        if at == size {
+            return Ok(out);
+        }
+        let head = blob_range(blob, at, size.saturating_sub(at).min(32)).await?;
+        if lightcraft_engine::files::is_video_trailer(head.get(..head.len().min(16)).unwrap_or(&head), at, size, saw_moov, include_fragments) {
+            return Ok(out);
+        }
+        let (kind, len) = lightcraft_engine::files::video_box_info(&head, at, size)?;
+        saw_moov |= &kind == b"moov";
+        let header_len = lightcraft_engine::files::video_box_header_len(&head);
+        let extended_type = if &kind == b"uuid" && len >= header_len + 16 { head.get(header_len as usize..header_len as usize + 16) } else { None };
+        // The location check cannot read an unrecognized vendor `uuid` box; refusing beats
+        // copying a clip that may carry a place we cannot see or remove.
+        if include_fragments && &kind == b"uuid" && !lightcraft_engine::files::is_video_metadata_box(&kind, extended_type) {
+            return Err("an unrecognized uuid box may hold a location; export without Remove Location only to share the unchanged clip".into());
+        }
+        if lightcraft_engine::files::is_video_metadata_box(&kind, extended_type) || (include_fragments && &kind == b"moof") {
+            let new_len = (out.len() as u64).checked_add(len).ok_or("video metadata length overflow")?;
+            if new_len > 64 << 20 {
+                return Err("video metadata exceeds the 64 MiB scan budget".into());
+            }
+            out.try_reserve_exact(len as usize).map_err(|e| format!("video metadata allocation: {e}"))?;
+            let end = at.checked_add(len).ok_or("video offset overflow")?;
+            let slice = blob.slice_with_f64_and_f64(at as f64, end as f64).map_err(|e| format!("reading metadata: {e:?}"))?;
+            let read = async { wasm_bindgen_futures::JsFuture::from(slice.array_buffer()).await.map_err(|e| format!("reading metadata: {e:?}")) };
+            let buffer = bounded(read, len as f64).await?;
+            let bytes = js_sys::Uint8Array::new(&buffer);
+            if u64::from(bytes.length()) != len {
+                return Err("original changed or was truncated while reading metadata".into());
+            }
+            let start = out.len();
+            out.resize(new_len as usize, 0);
+            let target = out.get_mut(start..).ok_or("video metadata offset overflow")?;
+            bytes.copy_to(target);
+        }
+        at = at.checked_add(len).ok_or("video offset overflow")?;
+    }
+    if at == size { Ok(out) } else { Err("video metadata scan exceeded its box budget".into()) }
+}
+
+async fn store_video(originals: &Originals, backend: Option<&Backend>, name: &str, blob: &web_sys::Blob) -> Result<(), String> {
+    // Import only needs the movie header; fragmented metadata matters for the location check.
+    let metadata = video_blob_metadata(blob, false).await?;
+    let mut probe = lightcraft_engine::files::probe_bytes(name, &metadata)?;
+    if probe.kind != lightcraft_engine::catalog::MediaKind::Video {
+        return Err("no readable video track in this container".into());
+    }
+    let size = blob.size() as u64;
+    let mut hash = lightcraft_preview::Hasher128::new();
+    let mut at = 0;
+    while at < size {
+        let length = (size - at).min(1 << 20);
+        hash.update(&blob_range(blob, at, length).await?);
+        at += length;
+    }
+    let hash = hash.finish().to_string();
+    if let Some(b) = backend {
+        bounded(b.write_original_blob(&storage_key(&hash), blob), blob.size()).await?;
+    }
+    probe.content_hash = Some(hash.clone());
+    probe.file_size = size;
+    // The copier trusts this result, so it must see fragment metadata too (as a reload does).
+    let location_check = match video_blob_metadata(blob, true).await {
+        Ok(full) => lightcraft_meta::verify_video_location_absent(&full),
+        Err(e) => Err(format!("cannot verify video location: {e}")),
+    };
+    VIDEO_BLOBS.with(|b| b.borrow_mut().insert(hash.clone(), BlobOriginal { blob: blob.clone(), location_check }));
+    originals.added_video(name, &hash, probe);
+    Ok(())
+}
+
+struct PendingImport {
+    originals: Originals,
+    backend: Option<Backend>,
+    file: web_sys::File,
+    ctx: egui::Context,
+    guard: lightcraft_engine::activity::TaskGuard,
+}
+
+thread_local! {
+    static VIDEO_BLOBS: RefCell<HashMap<String, BlobOriginal>> = RefCell::new(HashMap::new());
+    static IMPORT_QUEUE: RefCell<VecDeque<PendingImport>> = const { RefCell::new(VecDeque::new()) };
+    static READING_FILES: Cell<bool> = const { Cell::new(false) };
+    static LOADING_ORIGINALS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Read one original at a time, so a multi-file drop cannot allocate every clip concurrently.
+fn queue_file(originals: Originals, backend: Option<Backend>, file: web_sys::File, ctx: egui::Context) {
+    let guard = originals.import_activity(&file.name());
+    IMPORT_QUEUE.with(|q| q.borrow_mut().push_back(PendingImport { originals, backend, file, ctx, guard }));
+    if READING_FILES.with(|reading| reading.replace(true)) {
+        return;
+    }
+    wasm_bindgen_futures::spawn_local(async {
+        loop {
+            let next = IMPORT_QUEUE.with(|q| q.borrow_mut().pop_front());
+            let Some(PendingImport { originals, backend, file, ctx, guard }) = next else {
+                READING_FILES.with(|reading| reading.set(false));
+                break;
+            };
+            read_file(originals, backend, file, ctx).await;
+            drop(guard);
+        }
+    });
 }
 
 /// Show the browser's open dialog; picked files are imported asynchronously.
@@ -140,7 +340,7 @@ fn open_picker(originals: Originals, backend: Option<Backend>, ctx: egui::Contex
         if let Some(files) = inp.files() {
             for i in 0..files.length() {
                 if let Some(f) = files.get(i) {
-                    wasm_bindgen_futures::spawn_local(read_file(originals.clone(), backend.clone(), f, ctx.clone()));
+                    queue_file(originals.clone(), backend.clone(), f, ctx.clone());
                 }
             }
         }
@@ -158,6 +358,12 @@ fn download(path: &str, bytes: &[u8]) -> Result<(), String> {
     let name = download_name(path);
     opts.set_type(crate::store::mime_for(name));
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&arr, &opts).map_err(e)?;
+    download_blob(path, &blob)
+}
+
+fn download_blob(path: &str, blob: &web_sys::Blob) -> Result<(), String> {
+    let e = |e: JsValue| format!("download failed: {e:?}");
+    let name = download_name(path);
     let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(e)?;
     let doc = window().and_then(|w| w.document()).ok_or("no document")?;
     let a: web_sys::HtmlAnchorElement = doc.create_element("a").map_err(e)?.unchecked_into();
@@ -171,7 +377,7 @@ fn download(path: &str, bytes: &[u8]) -> Result<(), String> {
     if let Some(w) = window() {
         let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(revoke.unchecked_ref(), 5000);
     }
-    log::info!("exported {name} ({} bytes)", bytes.len());
+    log::info!("exported {name} ({} bytes)", blob.size());
     Ok(())
 }
 
@@ -274,7 +480,9 @@ fn services(
             } else {
                 "Backing up the library… (the download starts when it's ready)"
             });
+            let guard = session.activity.start("backup", "Backing up library", lightcraft_engine::activity::Cancel::No);
             wasm_bindgen_futures::spawn_local(async move {
+                let _guard = guard;
                 match safety::backup(files, b, names, deliver).await {
                     Ok((n, bytes)) => notice(format!(
                         "Library backed up: {n} original{} ({:.1} MB). Keep the file somewhere safe.",
@@ -286,11 +494,11 @@ fn services(
             });
             Ok(json!({"started": true}))
         })),
-        restore_library: Some(Box::new(move |_session: &mut Session| {
+        restore_library: Some(Box::new(move |session: &mut Session| {
             let Some(b) = restore_backend.clone() else { return Err("nothing is stored in this browser session (?store=memory)".into()) };
             let frozen = frozen.clone();
             // once the backup is in place, stop saving the old library (the page reloads)
-            safety::pick_and_restore(b, move || frozen.set(true));
+            safety::pick_and_restore(b, session.activity.clone(), move || frozen.set(true));
             Ok(json!({"started": true}))
         })),
         pick_files: Some(Box::new(move || {
@@ -314,11 +522,36 @@ fn services(
         pick_print_templates: None,
         save_print_template: None,
         write: Some(write),
+        original_copy: Some(Box::new(|source, destination, remove_location| {
+            let hash = crate::store::hash_of_path(source).ok_or("invalid browser original path")?;
+            VIDEO_BLOBS.with(|b| {
+                let b = b.borrow();
+                let original = b.get(hash).ok_or("the original video is still loading from browser storage; retry shortly")?;
+                if remove_location {
+                    original.location_check.clone()?;
+                }
+                download_blob(destination, &original.blob)?;
+                Ok(original.blob.size() as u64)
+            })
+        })),
+        // checked before any sidecar download starts: undo of a download is not possible
+        original_check: Some(Box::new(|source, remove_location| {
+            let hash = crate::store::hash_of_path(source).ok_or("invalid browser original path")?;
+            VIDEO_BLOBS.with(|b| {
+                let b = b.borrow();
+                let original = b.get(hash).ok_or("the original video is still loading from browser storage; retry shortly")?;
+                if remove_location {
+                    original.location_check.clone()?;
+                }
+                Ok(())
+            })
+        })),
         // the browser download path has no meaningful create-new file write; the control channel
         // (and therefore screenshot paths) is not available on the web
         write_new: None,
         // downloads happen on the main thread: exports run in the foreground on the web
         write_shared: None,
+        original_copy_shared: None,
         png: Some(Box::new(|img: &lightcraft_raster::Rgba8| {
             lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
         })),
@@ -539,9 +772,9 @@ impl WebApp {
     /// load the stored UI state, start render workers and the optional benchmark.
     fn new(cc: &eframe::CreationContext<'_>, boot: Boot, chinese_font: Vec<u8>) -> Self {
         let Boot { opts, backend, files, index, lib_dir, bridge, load_error } = boot;
-        let originals = Originals::default();
         let t = perf_now();
         let mut session = Session::new();
+        let mut originals = Originals::new(session.activity.clone());
         originals.install(&mut session);
         let stores = LibraryStores {
             dir: format!("browser:{}/{lib_dir}", backend.as_ref().map_or("memory", |b| b.kind())).into(),
@@ -569,6 +802,7 @@ impl WebApp {
                 // never a silent demo session (issue #100): an empty one, and the window says why
                 log::error!("opening the library failed: {e}");
                 session = Session::new();
+                originals = Originals::new(session.activity.clone());
                 originals.install(&mut session);
                 problem = Some(lightcraft_ui_egui::panels::library_problem::LibraryProblem {
                     can_retry: false,
@@ -664,7 +898,25 @@ impl WebApp {
         for m in bridge.take_incoming() {
             match m {
                 Incoming::Open { name, bytes } => {
-                    wasm_bindgen_futures::spawn_local(store_file(self.originals.clone(), self.backend.clone(), name, bytes, ctx.clone()));
+                    let (originals, backend, ctx) = (self.originals.clone(), self.backend.clone(), ctx.clone());
+                    wasm_bindgen_futures::spawn_local(async move {
+                        match bytes {
+                            // A clip already arrived as the page's Blob: its Original copier reads
+                            // it in ranges, and the image path would never register one. Hand it
+                            // to the same one-at-a-time queue the picker and drops use, so hosted
+                            // imports cannot pile their metadata scans up in memory.
+                            OpenBytes::Blob(blob) => {
+                                let parts = js_sys::Array::new();
+                                parts.push(&blob);
+                                match web_sys::File::new_with_blob_sequence(&parts, &name) {
+                                    Ok(file) => queue_file(originals, backend, file, ctx.clone()),
+                                    Err(e) => notice(format!("{name} was not added: {e:?}")),
+                                }
+                            }
+                            OpenBytes::Bytes(bytes) => store_file(originals, backend, name, None, bytes, ctx.clone()).await,
+                        }
+                        ctx.request_repaint();
+                    });
                 }
                 Incoming::Refused(error) => {
                     if !bridge.post(&Outgoing::Failed(error)) {
@@ -672,18 +924,11 @@ impl WebApp {
                     }
                 }
                 Incoming::Cmd { id, params } => {
-                    let r = match crate::automation::params(&params) {
-                        Err(e) => Err(format!("{id}: {e}")),
-                        Ok(_) if id == "web.stats" => Ok(self.web_stats()),
-                        Ok(params) => self.app.run(&id, params),
-                    };
-                    let response = match r {
-                        Ok(v) => Outgoing::Response { ok: true, value: v.to_string() },
-                        Err(e) => Outgoing::Response { ok: false, value: e },
-                    };
-                    if !bridge.post(&response) {
-                        log::warn!("lightcraft: the answer to {id} could not reach the page");
-                    }
+                    // Run it through the same queue as `lightcraft.command(...)`: an Original
+                    // export waits for its videos to load and keeps its place behind the
+                    // commands that could change the library, with one response per command.
+                    PENDING_COMMANDS.with(|q| q.borrow_mut().push_back((id.clone(), params, host_reply(&bridge, &id))));
+                    ctx.request_repaint();
                 }
             }
         }
@@ -711,14 +956,12 @@ impl WebApp {
             return;
         }
         for f in drained.dropped {
-            let (originals, backend, ctx) = (self.originals.clone(), self.backend.clone(), ctx.clone());
-            wasm_bindgen_futures::spawn_local(async move {
+            if let Some(file) = egui::DroppedFile::web_file(f.as_ref()) {
+                queue_file(self.originals.clone(), self.backend.clone(), file.clone(), ctx.clone());
+            } else {
                 let name = egui::DroppedFile::path(f.as_ref()).to_string_lossy().to_string();
-                match egui::DroppedFile::bytes_async(f.as_ref()).await {
-                    Ok(bytes) => store_file(originals, backend, name, bytes, ctx).await,
-                    Err(e) => notice(lightcraft_ui_egui::i18n::dropped_file_unreadable(&name, &e.to_string())),
-                }
-            });
+                notice(lightcraft_ui_egui::i18n::dropped_file_unreadable(&name, "can't inspect the file size; use Import Photos instead"));
+            }
         }
         let Some(paths) = drained.pending else { return };
         if !paths.is_empty() {
@@ -736,24 +979,86 @@ impl WebApp {
                     self.app.toast(ctx, lightcraft_ui_egui::i18n::dropped_import_failed(&e));
                 }
             }
+            self.originals.finish_import();
         }
     }
 
     /// Load originals the main thread asked for (and the active photo's, ahead of time).
     fn load_originals(&mut self, ctx: &egui::Context) {
-        if let Some(id) = self.app.session.selection.active
-            && let Some(Source::File { path }) = self.app.session.catalog.photo(id).map(|p| &p.source)
-            && !self.originals.contains(path)
-        {
-            self.originals.prefetch(path);
+        self.originals.sync_selection(&self.app.session.selection.ids, self.app.session.selection.active);
+        for id in self.app.session.selection.ids.iter().chain(self.app.session.selection.active.iter()) {
+            if let Some(Source::File { path }) = self.app.session.catalog.photo(*id).map(|p| &p.source)
+                && !self.originals.contains(path)
+                && !self.originals.has_failed(path)
+                && !VIDEO_BLOBS.with(|b| crate::store::hash_of_path(path).is_some_and(|h| b.borrow().contains_key(h)))
+            {
+                self.originals.prefetch(path);
+            }
         }
         let Some(b) = &self.backend else { return };
-        for hash in self.originals.take_wanted() {
-            let (b, originals, ctx) = (b.clone(), self.originals.clone(), ctx.clone());
-            wasm_bindgen_futures::spawn_local(async move {
-                match b.read(&storage_key(&hash)).await {
+        if LOADING_ORIGINALS.with(Cell::get) {
+            return;
+        }
+        let wanted = self.originals.take_wanted();
+        if wanted.is_empty() {
+            return;
+        }
+        // hash → file name of every stored video (the name picks the probe's format)
+        let video_names: HashMap<String, String> = self
+            .app
+            .session
+            .catalog
+            .photos()
+            .filter(|p| p.is_video())
+            .filter_map(|p| {
+                let Source::File { path } = &p.source else { return None };
+                crate::store::hash_of_path(path).map(|h| (h.to_string(), p.file_name.clone()))
+            })
+            .collect();
+        let (b, originals, ctx) = (b.clone(), self.originals.clone(), ctx.clone());
+        let guard = self.app.session.activity.start("load", "Loading originals", lightcraft_engine::activity::Cancel::No);
+        LOADING_ORIGINALS.with(|loading| loading.set(true));
+        wasm_bindgen_futures::spawn_local(async move {
+            let _guard = guard;
+            for hash in wanted {
+                if let Some(name) = video_names.get(&hash) {
+                    let load = async {
+                        let blob = b.read_original_blob(&storage_key(&hash)).await?.ok_or("original is missing from browser storage")?;
+                        let location_check = match video_blob_metadata(&blob, true).await {
+                            Ok(metadata) => {
+                                // the probe Reload from Disk reads: the byte cache never holds the clip
+                                match lightcraft_engine::files::probe_bytes(name, &metadata) {
+                                    Ok(mut probe) => {
+                                        probe.content_hash = Some(hash.clone());
+                                        probe.file_size = blob.size() as u64;
+                                        originals.video_loaded(&hash, probe);
+                                    }
+                                    Err(e) => log::warn!("probing stored video {hash}: {e}"),
+                                }
+                                lightcraft_meta::verify_video_location_absent(&metadata)
+                            }
+                            Err(e) => Err(format!("cannot verify video location: {e}")),
+                        };
+                        VIDEO_BLOBS.with(|b| b.borrow_mut().insert(hash.clone(), BlobOriginal { blob, location_check }));
+                        Ok::<(), String>(())
+                    };
+                    let result = crate::store::within(load, sleep_ms(ORIGINAL_LOAD_TIMEOUT_MS)).await.unwrap_or_else(timed_out);
+                    match result {
+                        Ok(()) => originals.load_finished(&hash),
+                        Err(e) => {
+                            originals.load_failed(&hash);
+                            notice(format!("Original video was not loaded: {e}"));
+                        }
+                    }
+                    ctx.request_repaint();
+                    continue;
+                }
+                match crate::store::within(b.read(&storage_key(&hash)), sleep_ms(ORIGINAL_LOAD_TIMEOUT_MS)).await.unwrap_or_else(timed_out) {
                     Ok(Some(bytes)) => {
-                        originals.insert(&hash, Arc::from(bytes));
+                        if let Err(e) = originals.insert(&hash, Arc::new(bytes)) {
+                            originals.load_failed(&hash);
+                            notice(format!("Original was not loaded: {e}"));
+                        }
                         ctx.request_repaint();
                     }
                     Ok(None) => {
@@ -763,10 +1068,12 @@ impl WebApp {
                     Err(e) => {
                         log::warn!("loading original {hash}: {e}");
                         originals.load_failed(&hash);
+                        notice(format!("Original was not loaded: {e}"));
                     }
                 }
-            });
-        }
+            }
+            LOADING_ORIGINALS.with(|loading| loading.set(false));
+        });
     }
 
     /// Save view state, UI prefs and the thumbnail index now and then; flush dirty files.
@@ -811,10 +1118,31 @@ impl WebApp {
 
 type Reply = (js_sys::Function, js_sys::Function);
 
+/// A `command()` reply for a host message: it posts the result as `lightcraft:response`, so the
+/// hosted path shares [`run_inbox`](WebApp::run_inbox)'s waiting and ordering.
+fn host_reply(bridge: &Bridge, id: &str) -> Reply {
+    let reply = |ok: bool| {
+        let bridge = bridge.clone();
+        let id = id.to_string();
+        let f = Closure::<dyn FnMut(JsValue)>::new(move |v: JsValue| {
+            let value = v.as_string().unwrap_or_default();
+            if !bridge.post(&Outgoing::Response { ok, value }) {
+                log::warn!("lightcraft: the answer to {id} could not reach the page");
+            }
+        });
+        f.into_js_value().unchecked_into::<js_sys::Function>()
+    };
+    (reply(true), reply(false))
+}
+
 thread_local! {
     /// Commands from JavaScript ([`command`]), run on the next frame.
     static INBOX: std::cell::RefCell<Vec<(String, String, Reply)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// Commands waiting for their videos to load from browser storage (an export's Originals).
+    static PENDING_COMMANDS: std::cell::RefCell<VecDeque<(String, String, Reply)>> = const { std::cell::RefCell::new(VecDeque::new()) };
     static CTX: std::cell::RefCell<Option<egui::Context>> = const { std::cell::RefCell::new(None) };
+    /// When the Original export at the head of [`PENDING_COMMANDS`] started waiting for its videos.
+    static EXPORT_WAITING_SINCE: Cell<Option<f64>> = const { Cell::new(None) };
 }
 
 /// Run a command by id from JavaScript (automation, tests): `await command("library.info", "{}")`
@@ -847,19 +1175,147 @@ impl WebApp {
         })
     }
 
-    fn run_inbox(&mut self) {
-        let inbox = INBOX.with(|q| std::mem::take(&mut *q.borrow_mut()));
-        for (id, params, (resolve, reject)) in inbox {
-            let r = match crate::automation::params(&params) {
-                Err(e) => Err(format!("{id}: {e}")),
-                Ok(_) if id == "web.stats" => Ok(self.web_stats()),
-                Ok(params) => self.app.run(&id, params),
+    /// Prefetch the originals of every video a synchronous export will copy, and say whether they are
+    /// all in [`VIDEO_BLOBS`]. An explicit `ids` list is not the selection, so `load_originals`
+    /// would otherwise not prefetch those clips; retrying the command next frame lets that load
+    /// finish, while a failed load is left to the export's own error.
+    fn export_videos_loaded(&self, p: &serde_json::Value) -> bool {
+        use lightcraft_engine::catalog::PhotoId;
+        let ids: Vec<PhotoId> = match p.get("ids") {
+            Some(serde_json::Value::Array(ids)) => ids.iter().filter_map(|id| id.as_u64().map(PhotoId)).collect(),
+            Some(_) => return true,
+            None => self.app.session.selection.ids.iter().copied().chain(self.app.session.selection.active).collect(),
+        };
+        let mut ready = true;
+        for id in ids {
+            let Some(photo) = self.app.session.catalog.photo(id) else { continue };
+            let Source::File { path } = &photo.source else { continue };
+            if !photo.is_video() {
+                continue;
+            }
+            let Some(hash) = crate::store::hash_of_path(path) else { continue };
+            if VIDEO_BLOBS.with(|b| b.borrow().contains_key(hash)) || self.originals.has_failed(path) {
+                continue;
+            }
+            self.originals.prefetch(path);
+            ready = false;
+        }
+        ready
+    }
+
+    /// The IDs `export_active` would pick now: selected visible photos in grid order, then the
+    /// selected ones off screen; the active photo when nothing is selected. An empty list means
+    /// the export itself will report that there is nothing to export.
+    fn export_target_ids(&mut self) -> Vec<u64> {
+        if !self.app.session.selection.ids.is_empty() {
+            let selected: std::collections::HashSet<_> = self.app.session.selection.ids.iter().copied().collect();
+            let mut ids: Vec<_> = self.app.session.visible().iter().copied().filter(|id| selected.contains(id)).collect();
+            let shown: std::collections::HashSet<_> = ids.iter().copied().collect();
+            ids.extend(self.app.session.selection.ids.iter().copied().filter(|id| !shown.contains(id)));
+            ids.into_iter().map(|id| id.0).collect()
+        } else {
+            self.app.session.active().into_iter().map(|id| id.0).collect()
+        }
+    }
+
+    /// The settings an export command will use, for deciding whether it copies Originals.
+    fn resolved_export_params(&self, id: &str, p: &serde_json::Value) -> Option<serde_json::Value> {
+        use lightcraft_engine::export::ExportOptions;
+        match id {
+            "app.export" => self.app.session.export_params(p).ok(),
+            "app.exportPrevious" => self.app.session.last_export.as_ref().map(ExportOptions::known_keys_only),
+            _ => None,
+        }
+    }
+
+    /// The directory an export would write to now: the previous export's, when it names one, else
+    /// the default. A waiting export freezes this so a later export cannot move its destination.
+    fn effective_export_dir(&self) -> String {
+        self.app
+            .session
+            .last_export
+            .as_ref()
+            .and_then(|l| l.get("dir"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(lightcraft_ui_egui::control::default_export_dir)
+    }
+
+    fn run_inbox(&mut self, ctx: &egui::Context) {
+        use lightcraft_engine::export::{ExportFormat, ExportOptions};
+        let mut queue = PENDING_COMMANDS.with(|q| std::mem::take(&mut *q.borrow_mut()));
+        queue.extend(INBOX.with(|q| std::mem::take(&mut *q.borrow_mut())));
+        let mut retry = VecDeque::new();
+        // Exports whose Originals are loading keep their order between themselves and with the
+        // commands that could change what they copy (`photo.deletePermanently` after the export
+        // must not remove a clip before it is copied), but a query such as `web.stats` must not
+        // wait for a storage read to settle. The wait is bounded by `EXPORT_WAIT_MS`.
+        let mut export_waiting = false;
+        let now = lightcraft_ui_egui::monotonic_ms();
+        for (mut id, mut params, (resolve, reject)) in queue {
+            let parsed = crate::automation::params(&params);
+            let mut p = match parsed {
+                Ok(p) => p,
+                Err(e) => {
+                    let _ = reject.call1(&JsValue::NULL, &format!("{id}: {e}").into());
+                    continue;
+                }
             };
+            let is_export = matches!(id.as_str(), "app.export" | "app.exportPrevious");
+            if export_waiting && !is_export && crate::automation::waits_behind_export(&id) {
+                retry.push_back((id, params, (resolve, reject)));
+                continue;
+            }
+            if is_export {
+                // Freeze the targets now: the selection may change while a load finishes.
+                let resolved = self.resolved_export_params(&id, &p);
+                let has_ids =
+                    p.get("ids").is_some_and(|v| !v.is_null()) || resolved.as_ref().is_some_and(|r| r.get("ids").is_some_and(|v| !v.is_null()));
+                if !has_ids && p.is_object() {
+                    p["ids"] = json!(self.export_target_ids());
+                    params = p.to_string();
+                }
+                // A rendered export reads no Original: only a copy can be waiting for storage.
+                let copies_original =
+                    resolved.as_ref().is_some_and(|r| ExportOptions::export_format(r, ExportFormat::default()) == ExportFormat::Original);
+                let must_wait = export_waiting || (copies_original && !self.export_videos_loaded(&p));
+                // Freeze the settings too: a preset, the previous export or `last_export.dir` may
+                // change during the wait.
+                if must_wait && let Some(r) = &resolved {
+                    id = "app.export".into();
+                    let destination = self.effective_export_dir();
+                    p = crate::automation::frozen_export(r, &p, Some(&destination));
+                    params = p.to_string();
+                }
+                if export_waiting {
+                    retry.push_back((id, params, (resolve, reject)));
+                    continue;
+                }
+                if must_wait {
+                    let since = EXPORT_WAITING_SINCE.with(|w| {
+                        let since = w.get().unwrap_or(now);
+                        w.set(Some(since));
+                        since
+                    });
+                    if now - since < crate::automation::EXPORT_WAIT_MS {
+                        retry.push_back((id, params, (resolve, reject)));
+                        export_waiting = true;
+                        ctx.request_repaint();
+                        continue;
+                    }
+                    // waited long enough: the export runs and reports the clip still loading
+                }
+                EXPORT_WAITING_SINCE.with(|w| w.set(None));
+            }
+            let r = if id == "web.stats" { Ok(self.web_stats()) } else { self.app.run(&id, p) };
             let _ = match r {
                 Ok(v) => resolve.call1(&JsValue::NULL, &v.to_string().into()),
                 Err(e) => reject.call1(&JsValue::NULL, &e.into()),
             };
         }
+        PENDING_COMMANDS.with(|q| *q.borrow_mut() = retry);
     }
 }
 
@@ -871,7 +1327,7 @@ impl eframe::App for WebApp {
             let now = self.app.tick_now();
             self.app.ui.toast = Some((text, now + NOTICE_SECS, None));
         }
-        self.run_inbox();
+        self.run_inbox(ctx);
         self.run_host(ctx);
         self.load_originals(ctx);
         if let Some(w) = &self.workers {

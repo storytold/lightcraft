@@ -26,6 +26,7 @@ impl crate::Session {
         Some(job)
     }
 
+    /// Build a source-backed render job for an image, or return `None` for videos and photos without source.
     fn build_job(
         &mut self,
         id: PhotoId,
@@ -35,6 +36,13 @@ impl crate::Session {
         apply_crop: bool,
         thumb_bucket: Option<usize>,
     ) -> Option<RenderJob> {
+        // A catalogued video has no frame decoder yet (playback, trim and frame capture come in a
+        // later update): there is nothing to render, and asking would read a multi-gigabyte file
+        // to fail. The UI draws its own video placeholder and card instead (the grid's badges and
+        // the loupe's video card).
+        if self.catalog.photo(id)?.is_video() {
+            return None;
+        }
         let p = self.catalog.photo(id)?.clone();
         let settings = if before { Arc::new(self.before_settings(&p)) } else { p.develop.clone() };
         let level = SourceLevel::for_size(if thumb_bucket.is_some() {
@@ -179,6 +187,9 @@ impl crate::Session {
     /// hash, so a variant renders once; `key` is derived from the same hash, so a frontend can
     /// keep one texture per variant.
     pub fn variant_job(&mut self, id: PhotoId, settings: &DevelopSettings, edge: usize) -> Option<RenderJob> {
+        if self.catalog.photo(id)?.is_video() {
+            return None;
+        }
         let mut p = (**self.catalog.photo(id)?).clone();
         let edge = edge.clamp(16, SourceLevel::Thumb.max_edge());
         let level = SourceLevel::Thumb;
@@ -219,6 +230,9 @@ impl crate::Session {
     /// library's thumbnail cache on disk) like [`Self::variant_job`], and `key` likewise follows
     /// the content: a later launch shows the tile without reading the original.
     pub fn face_job(&mut self, id: PhotoId, face: lightcraft_geom::Rect, edge: usize) -> Option<RenderJob> {
+        if self.catalog.photo(id)?.is_video() {
+            return None;
+        }
         let p = self.catalog.photo(id)?.clone();
         // `face` is on the upright (EXIF-oriented) photo; the crop below is in the frame after the
         // user's Rotate Left/Right, so carry the box (and the photo's size) over to it.
@@ -537,6 +551,9 @@ impl crate::Session {
 
     /// Synchronous render (CLI, MCP, tests).
     pub fn render_now(&mut self, id: PhotoId, max_w: usize, max_h: usize) -> Result<Rendered, String> {
+        if self.catalog.photo(id).ok_or("no such photo")?.is_video() {
+            return Err("a video has no frame to render".into());
+        }
         lightcraft_pipeline::check_output_size(max_w, max_h)?;
         let job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
         let r = job.run();
@@ -615,7 +632,11 @@ impl crate::Session {
 
     /// The source proxy for pixel-statistics commands (auto tone/WB), loading synchronously.
     pub fn source_now(&mut self, id: PhotoId, level: SourceLevel) -> Result<Arc<Rgb32f>, String> {
-        let p = self.catalog.photo(id).ok_or("no such photo")?.clone();
+        let p = self.catalog.photo(id).ok_or("no such photo")?;
+        if p.is_video() {
+            return Err("a video has no frame to sample".into());
+        }
+        let p = p.clone();
         let r = self.media.source_ref(&p, level).load_source()?;
         let image = r.image.clone();
         if let Some(info) = &r.info {
@@ -632,10 +653,18 @@ impl crate::Session {
     /// held decoded until this returns).
     pub(crate) fn sources_now(&mut self, ids: &[PhotoId], level: SourceLevel) -> Vec<(PhotoId, Result<(Arc<Rgb32f>, SourceInfo), String>)> {
         use rayon::prelude::*;
-        let refs: Vec<(PhotoId, Option<SourceRef>)> =
-            ids.iter().map(|&id| (id, self.catalog.photo(id).cloned().map(|p| self.media.source_ref(&p, level)))).collect();
+        let refs: Vec<(PhotoId, Result<SourceRef, String>)> = ids
+            .iter()
+            .map(|&id| {
+                let Some(p) = self.catalog.photo(id) else { return (id, Err("no such photo".to_string())) };
+                if p.is_video() {
+                    return (id, Err("a video has no frame to sample".into()));
+                }
+                (id, Ok(self.media.source_ref(p, level)))
+            })
+            .collect();
         let loaded: Vec<(PhotoId, Result<super::source::DecodedSource, String>)> =
-            refs.into_par_iter().map(|(id, r)| (id, r.ok_or_else(|| "no such photo".to_string()).and_then(|r| r.load_source()))).collect();
+            refs.into_par_iter().map(|(id, r)| (id, r.and_then(|r| r.load_source()))).collect();
         loaded
             .into_iter()
             .map(|(id, r)| {
