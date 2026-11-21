@@ -414,6 +414,18 @@ fn constants() -> String {
         let rows: Vec<String> = m.iter().map(|r| format!("vec3<f32>({:?}, {:?}, {:?})", r[0], r[1], r[2])).collect();
         s += &format!("const {name} = array<vec3<f32>, 3>({});\n", rows.join(", "));
     }
+    {
+        use lightcraft_pipeline::hs_range as hr;
+        s += &format!(
+            "const HS_H_AMP: f32 = {:?};\nconst HS_H_SPAN: f32 = {:?};\nconst HS_H_POW: f32 = {:?};\nconst HS_H_REACH: f32 = {:?};\nconst HS_H_AMP_MIN: f32 = {:?};\nconst HS_H_AMP_MAX: f32 = {:?};\n",
+            hr::H_AMP,
+            hr::H_SPAN,
+            hr::H_POW,
+            hr::H_REACH,
+            hr::H_AMP_RANGE.0,
+            hr::H_AMP_RANGE.1
+        );
+    }
     s += &format!(
         "const TONE_MIN_EV: f32 = {LUT_MIN_EV:?};\nconst TONE_MAX_EV: f32 = {LUT_MAX_EV:?};\nconst TONE_N: u32 = {LUT_N}u;\nconst CHROMA_N: u32 = {CHROMA_N}u;\n"
     );
