@@ -143,7 +143,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.navigator", "Navigator", None, "View"),
     ("panel.edit", "Edit Panel", Some("E"), "Window"),
     ("panel.profiles", "Profile Browser", None, "Window"),
-    ("panel.crop", "Crop & Rotate", Some("C"), "Window"),
+    ("panel.crop", "Crop & Geometry", Some("C"), "Window"),
     ("panel.remove", "Remove", Some("H"), "Window"),
     ("panel.masking", "Masking", Some("M"), "Window"),
     ("panel.redeye", "Red Eye", None, "Window"),

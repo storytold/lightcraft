@@ -36,7 +36,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 }
                 for (id, icon, panel, tip) in [
                     ("edit", Icon::Sliders, RightPanel::Edit, "Edit (E)"),
-                    ("crop", Icon::Crop, RightPanel::Crop, "Crop & Rotate (C)"),
+                    ("crop", Icon::Crop, RightPanel::Crop, "Crop & Geometry (C)"),
                     ("remove", Icon::Eraser, RightPanel::Remove, "Remove (H)"),
                     ("masking", Icon::Mask, RightPanel::Masking, "Masking (M)"),
                     ("redeye", Icon::Eye, RightPanel::RedEye, "Red Eye"),
