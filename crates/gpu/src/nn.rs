@@ -255,6 +255,7 @@ fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>)
         let reads: Vec<usize> = match op {
             Op::Conv(c) => std::iter::once(c.src).chain(c.src2).collect(),
             Op::ConvT2(c) => vec![c.src],
+            Op::Add { src, src2 } => vec![*src, *src2],
             Op::MaxPool2 { src } | Op::DepthToSpace2 { src } => vec![*src],
         };
         for t in reads {
@@ -448,6 +449,7 @@ fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>)
             }
             // run as part of the 1 × 1 convolution before it
             Op::DepthToSpace2 { .. } => {}
+            Op::Add { .. } => return unsupported("an elementwise add is not supported on the GPU"),
         }
         // buffers whose last reader was this layer are free for the next layer's result
         for t in 0..=i {
