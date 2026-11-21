@@ -208,6 +208,9 @@ pub enum ImportWarningCode {
     UprightGeometry,
     /// One or more other XMP develop fields have no LightCraft mapping.
     UnmappedXmp,
+    /// Non-rendering XMP bookkeeping (a digest of state LightCraft does not reuse) was skipped:
+    /// unlike an adjustment it cannot make the photo differ from Lightroom (#3050).
+    SkippedXmpMetadata,
 }
 
 /// The saved Lightroom Upright mode associated with a foreign geometry transform.

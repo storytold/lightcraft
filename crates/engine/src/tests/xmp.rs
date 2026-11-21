@@ -491,6 +491,73 @@ fn foreign_profile_and_upright_import_diagnostics_are_actionable() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// Unmapped XMP splits into adjustments that may make the photo differ and non-rendering
+/// bookkeeping that cannot: each kind is its own report warning with its own code (#3050).
+#[test]
+fn digests_report_as_skipped_metadata_next_to_real_adjustments() {
+    let src = temp_dir("xmp-metadata-split");
+    let both = src.join("both.png");
+    write_png(&both, 6);
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+      <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+        crs:Exposure2012="0.50" crs:ColorVariance="-50" crs:AutoToneDigest="0123456789ABCDEF0123456789ABCDEF"/>
+    </rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(src.join("both.xmp"), xmp).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [both.to_string_lossy()]})).unwrap();
+    let warnings = r["warnings"].as_array().unwrap();
+    let adjustment = warnings.iter().find(|w| w["code"] == "unmappedXmp").unwrap_or_else(|| panic!("{r}"));
+    assert_eq!(adjustment["fields"], json!(["ColorVariance"]), "{r}");
+    let metadata = warnings.iter().find(|w| w["code"] == "skippedXmpMetadata").unwrap_or_else(|| panic!("{r}"));
+    assert_eq!(metadata["fields"], json!(["AutoToneDigest"]), "{r}");
+    assert_eq!(warnings.len(), 2, "each kind is one warning: {r}");
+
+    // A packet with only bookkeeping never claims an adjustment was dropped.
+    let quiet = src.join("quiet.png");
+    write_png(&quiet, 7);
+    std::fs::write(
+        src.join("quiet.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+      <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+        crs:Exposure2012="0.50" crs:AutoToneDigest="FEDCBA9876543210FEDCBA9876543210"
+        crs:AutoToneDigestNoSat="0123456789ABCDEF0123456789ABCDEF"/>
+    </rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    let r2 = s.execute("library.import", &json!({"paths": [quiet.to_string_lossy()]})).unwrap();
+    let warnings2 = r2["warnings"].as_array().unwrap();
+    assert!(warnings2.iter().all(|w| w["code"] != "unmappedXmp"), "{r2}");
+    assert!(warnings2.iter().any(|w| w["code"] == "skippedXmpMetadata"), "{r2}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A dropped spot stays an adjustment even when its component happens to be named like a
+/// digest: the rendered photo changes (#3050).
+#[test]
+fn a_dropped_spot_stays_an_adjustment_even_named_like_a_digest() {
+    let src = temp_dir("xmp-spot-digest");
+    let photo = src.join("spot.png");
+    write_png(&photo, 6);
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+      <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="0.50"
+        crs:AutoToneDigest="0123456789ABCDEF0123456789ABCDEF">
+       <crs:RetouchAreas><rdf:Seq>
+        <rdf:li><rdf:Description crs:SpotType="heal">
+         <crs:Masks><rdf:Seq><rdf:li crs:What="Mask/FutureDigest" crs:Top="0.48" crs:Left="0.49" crs:Bottom="0.52" crs:Right="0.51"/></rdf:Seq></crs:Masks>
+        </rdf:Description></rdf:li>
+       </rdf:Seq></crs:RetouchAreas>
+      </rdf:Description></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(src.join("spot.xmp"), xmp).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [photo.to_string_lossy()]})).unwrap();
+    let warnings = r["warnings"].as_array().unwrap();
+    let adjustment = warnings.iter().find(|w| w["code"] == "unmappedXmp").unwrap_or_else(|| panic!("{r}"));
+    assert!(adjustment["fields"].as_array().unwrap().iter().any(|f| f == "Spot: FutureDigest"), "{r}");
+    let metadata = warnings.iter().find(|w| w["code"] == "skippedXmpMetadata").unwrap_or_else(|| panic!("{r}"));
+    assert_eq!(metadata["fields"], json!(["AutoToneDigest"]), "{r}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 const MWG_REGIONS: &str = r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
