@@ -682,7 +682,7 @@ fn import_targets(report: &Value) -> Result<Vec<Value>, String> {
 
 fn take_value<'a>(args: &'a [String], i: &mut usize, flag: &str) -> Result<&'a str, String> {
     *i += 1;
-    args.get(*i).map(String::as_str).ok_or_else(|| format!("{flag} needs a value"))
+    args.get(*i).map(String::as_str).filter(|value| !value.starts_with("--") && *value != "-o").ok_or_else(|| format!("{flag} needs a value"))
 }
 
 /// The port an `--connect` address names, for the recovery hint. The whole address when it has
