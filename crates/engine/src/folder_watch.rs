@@ -198,11 +198,16 @@ pub struct WatchedDir {
 }
 
 /// A parent folder is watched only while at least half of its visible subfolders hold library
-/// photos: a new folder in a home folder or a share's root (above two photo trees) would otherwise
-/// mean scanning, and with new files added, importing everything inside it.
+/// photos, and never when it is a whole disk or share, or the user's home folder (however few
+/// folders those hold): a new folder there would otherwise mean scanning, and with new files
+/// added, importing everything inside it.
 fn too_broad(w: &WatchedDir) -> bool {
     if w.kind != WatchKind::Parent || cfg!(target_arch = "wasm32") {
         return false;
+    }
+    let home = std::env::var("HOME").ok().filter(|h| !h.is_empty()).or_else(|| std::env::var("USERPROFILE").ok());
+    if broad_place(&w.path, home.as_deref()) {
+        return true;
     }
     let Ok(rd) = std::fs::read_dir(&w.path) else { return false };
     let on_disk = rd
@@ -211,6 +216,20 @@ fn too_broad(w: &WatchedDir) -> bool {
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()) && !e.file_name().to_string_lossy().starts_with('.'))
         .count();
     on_disk > w.folders.saturating_mul(2)
+}
+
+/// Whether `path` is a whole disk or share, or `home` (compared ignoring slash direction, a
+/// trailing slash and, on Windows, case).
+pub(crate) fn broad_place(path: &str, home: Option<&str>) -> bool {
+    if lcc_catalog::folders::is_disk_root(path) {
+        return true;
+    }
+    let norm = |p: &str| {
+        let p = p.replace('\\', "/");
+        let p = p.trim_end_matches('/').to_string();
+        if cfg!(windows) { p.to_lowercase() } else { p }
+    };
+    home.is_some_and(|h| !norm(h).is_empty() && norm(h) == norm(path))
 }
 
 /// The folders a poll lists: every folder the library holds photos in directly, and the folders

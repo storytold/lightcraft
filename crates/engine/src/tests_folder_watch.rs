@@ -64,9 +64,13 @@ fn a_poll_rescans_only_changed_folders_asks_by_default_and_notices_new_and_gone_
     assert_eq!(r["changed"].as_array().unwrap().len(), 0, "{r}");
     // the folders holding photos and the one they branch out of are listed, never those above it
     assert_eq!(r["listed"], 3, "{r}");
+    // the scratch folder (where the photos branch out) and its photo folders, nothing above it (the
+    // temp folder, the home folder)
     let watched = crate::folder_watch::watched_dirs(&s.catalog);
-    let tmp = std::env::temp_dir().to_string_lossy().replace('\\', "/");
-    assert!(watched.iter().all(|w| w.path.len() > tmp.trim_end_matches('/').len()), "{watched:?}");
+    let norm = |p: &str| p.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let root = norm(&dir.path(""));
+    assert!(watched.iter().any(|w| norm(&w.path) == root), "{watched:?}");
+    assert!(watched.iter().all(|w| norm(&w.path) == root || norm(&w.path).starts_with(&format!("{root}/"))), "{watched:?}");
     // nothing changed: nothing scanned
     let r = s.execute("folder.poll", &json!({})).unwrap();
     assert!(r["changed"].as_array().unwrap().is_empty(), "{r}");
@@ -180,4 +184,17 @@ fn a_broad_folder_above_two_photo_trees_is_not_watched() {
     let r = s.execute("folder.poll", &json!({})).unwrap();
     assert!(r["changed"].as_array().unwrap().iter().all(|c| !c.as_str().unwrap().ends_with("home")), "{r}");
     assert_eq!(s.catalog.len(), 2, "nothing outside the library's folders is imported: {r}");
+}
+
+/// A home folder or a whole disk/share is never watched as a parent, even with photo trees in most
+/// of its few folders (the ratio rule alone would let it through).
+#[test]
+fn a_home_folder_or_disk_root_is_never_a_watched_parent() {
+    use crate::folder_watch::broad_place;
+    assert!(broad_place("/Users/me", Some("/Users/me/")));
+    assert!(broad_place("C:/Users/me", Some(r"C:\Users\me")));
+    assert!(broad_place("/", None));
+    assert!(!broad_place("/Users/me/Pictures", Some("/Users/me")));
+    assert!(!broad_place("/Users/me", Some("")));
+    assert!(!broad_place("/Users/me", None));
 }

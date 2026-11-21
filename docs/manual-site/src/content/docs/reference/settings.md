@@ -65,7 +65,7 @@ sidebar:
 ### Folder polling and drag and drop
 - **Check folders for new photos** every so often; new photos are offered ("N new") or added at once. New folders
   count too: in a tree of dated folders, a new day or year folder is found, as long as it is inside the folder your
-  library's photos branch out of and that folder holds mostly your photo folders (a home folder, full of other folders, is not).
+  library's photos branch out of and that folder holds mostly your photo folders (your home folder and a whole disk or share never are).
 - **Import dropped photos without review**: off, a drop opens the import review first.
 - **Show the import review when a camera or card is connected**.
 
