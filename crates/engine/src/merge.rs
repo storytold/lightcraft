@@ -421,7 +421,7 @@ impl Session {
         }
         let read: ByteReader = match &self.media.file_bytes {
             Some(r) => r.clone(),
-            None => Arc::new(|path: &str| std::fs::read(path).map_err(|e| format!("{path}: {e}"))),
+            None => Arc::new(|path: &str| crate::doc_path::read_original(path).map_err(|e| format!("{path}: {e}"))),
         };
         Ok(MergeJob { kind, finish, sources, preview: preview.then_some(PREVIEW_EDGE), read })
     }

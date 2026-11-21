@@ -8,6 +8,53 @@
 use super::*;
 use crate::walk::EntryKind::{File, Folder, Other};
 
+/// A changing source cannot make sync consume more than the limit plus one rejection byte.
+#[test]
+fn bounded_sidecar_read_stops_after_one_excess_byte() {
+    use std::io::Read;
+    let total = MAX_SIDECAR_BYTES * 4;
+    let mut source = std::io::repeat(b' ').take(total);
+    let error = read_sidecar_text(&mut source, 0).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert_eq!(total - source.limit(), MAX_SIDECAR_BYTES + 1);
+}
+
+/// The limit is inclusive and measured in bytes; UTF-8 decoding keeps its usual error behavior.
+#[test]
+fn bounded_sidecar_read_accepts_the_limit_and_valid_utf8() {
+    use std::io::Read;
+    assert_eq!(read_sidecar_text(std::io::repeat(b' ').take(MAX_SIDECAR_BYTES), MAX_SIDECAR_BYTES).unwrap().len() as u64, MAX_SIDECAR_BYTES);
+    assert_eq!(read_sidecar_text("é".as_bytes(), 2).unwrap(), "é");
+    assert_eq!(read_sidecar_text(&b""[..], 0).unwrap(), "");
+    assert_eq!(read_sidecar_text(&[0xff][..], 1).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+}
+
+/// A size already known to exceed the cap must cost no content reads or sidecar buffer.
+#[test]
+fn bounded_sidecar_read_rejects_known_oversize_without_reading() {
+    use std::io::Read;
+    let total = MAX_SIDECAR_BYTES + 1;
+    let mut source = std::io::repeat(b' ').take(total);
+    assert_eq!(read_sidecar_text(&mut source, total).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+    assert_eq!(source.limit(), total);
+}
+
+/// A file that grows after the handle's metadata was checked is still bounded during the read.
+#[test]
+fn bounded_sidecar_read_refuses_growth_after_metadata() {
+    use std::io::Seek;
+    let path = std::env::temp_dir().join(format!("lc-growing-sidecar-{}.xmp", std::process::id()));
+    let writer = std::fs::File::create(&path).unwrap();
+    writer.set_len(4).unwrap();
+    let mut reader = crate::doc_path::open_original(&path).unwrap();
+    assert_eq!(reader.metadata().unwrap().len(), 4);
+    writer.set_len(MAX_SIDECAR_BYTES + 1024).unwrap();
+    assert_eq!(read_sidecar_text(&mut reader, 4).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+    assert_eq!(reader.stream_position().unwrap(), MAX_SIDECAR_BYTES + 1);
+    drop(reader);
+    drop(writer);
+    std::fs::remove_file(path).unwrap();
+}
 /// The lookup of a photo that owns its stem sidecar, as every photo in these listings does.
 fn owner(naming: SidecarNaming) -> SidecarLookup {
     SidecarLookup { naming, owns_stem: true }
