@@ -589,3 +589,115 @@ fn the_four_regions_tile_the_graph() {
         prev = r;
     }
 }
+
+/// A hand on the graph, one frame at a time (60 per simulated second): where the tests below lift a
+/// rocking finger, `ui.drag` would only ever move the pointer at an even pace.
+struct Hand<'a> {
+    h: &'a mut Headless,
+    at: [f32; 2],
+}
+
+impl<'a> Hand<'a> {
+    fn press(h: &'a mut Headless, at: [f32; 2]) -> Self {
+        h.events.extend([egui::Event::PointerMoved(egui::pos2(at[0], at[1])), button(at, true)]);
+        h.step();
+        Self { h, at }
+    }
+
+    /// `frames` frames moving by `dy` points in all.
+    fn slide(&mut self, dy: f32, frames: usize) -> &mut Self {
+        for _ in 0..frames {
+            self.at[1] += dy / frames as f32;
+            self.h.events.push(egui::Event::PointerMoved(egui::pos2(self.at[0], self.at[1])));
+            self.h.step();
+        }
+        self
+    }
+
+    /// `frames` frames with the finger resting.
+    fn rest(&mut self, frames: usize) -> &mut Self {
+        for _ in 0..frames {
+            self.h.step();
+        }
+        self
+    }
+
+    fn lift(&mut self) {
+        self.h.events.push(button(self.at, false));
+        self.h.step();
+        self.h.step();
+    }
+}
+
+fn button(at: [f32; 2], pressed: bool) -> egui::Event {
+    egui::Event::PointerButton { pos: egui::pos2(at[0], at[1]), button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE }
+}
+
+/// A rocking finger that lifts springs back, and its contact point slides up for a few frames before
+/// the click ends (#4228): the parametric drag ends on the amount the hand rested at, as one undo step.
+#[test]
+fn lifting_the_finger_after_a_rest_keeps_the_rested_amount() {
+    let mut h = curve_open("parametric");
+    exec(&mut h, "develop.set", json!({"control": "curve.lights", "value": 60}));
+    h.step();
+    let before = develop(&h).curve;
+    let undo_before = h.app.session.undo.len();
+    let r = curve_graph_rect(&mut h);
+    let mut hand = Hand::press(&mut h, on_curve(r, &before, 0.625));
+    hand.slide(30.0, 10).rest(12);
+    let rested = develop(hand.h).curve.lights;
+    assert!(rested < 60.0, "the drag pulled Lights down: {rested}");
+    // the lift: 20 pt back up in four frames (67 ms), as measured on a trackpad
+    hand.slide(-20.0, 4);
+    assert!(develop(hand.h).curve.lights > rested, "the jerk itself still shows while the click is held");
+    hand.lift();
+    let after = develop(&h).curve;
+    assert_eq!(after.lights, rested, "the release keeps what the hand rested at, not the jerk");
+    assert_eq!(h.app.session.undo.len(), undo_before + 1, "one undo step for the gesture");
+    exec(&mut h, "edit.undo", json!({}));
+    assert_eq!(develop(&h).curve, before, "undo takes the whole gesture back");
+}
+
+/// The same for a point of the point curve, which follows the pointer's position, not its motion.
+#[test]
+fn lifting_the_finger_after_a_rest_leaves_the_point_where_it_rested() {
+    let mut h = curve_open("master");
+    exec(&mut h, "develop.curve", json!({"channel": "master", "points": [[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]]}));
+    h.step();
+    let undo_before = h.app.session.undo.len();
+    let r = curve_graph_rect(&mut h);
+    let mut hand = Hand::press(&mut h, [r[0] + 0.5 * r[2], r[1] + 0.5 * r[3]]);
+    hand.slide(30.0, 10).rest(12);
+    let rested = pts(&develop(hand.h).curve.master);
+    assert!(rested[1].1 < 0.45, "the drag pulled the point down: {rested:?}");
+    hand.slide(-20.0, 4);
+    assert!(pts(&develop(hand.h).curve.master)[1].1 > rested[1].1, "the jerk itself still moves the point while the click is held");
+    hand.lift();
+    assert_eq!(pts(&develop(&h).curve.master), rested, "the point stays where the hand rested");
+    assert_eq!(h.app.session.undo.len(), undo_before + 1, "one undo step for the gesture");
+}
+
+/// A drag that keeps moving until the click ends is the hand's own motion: it ends where the pointer
+/// was, even when it rested on the way.
+#[test]
+fn a_drag_that_moves_up_to_the_release_ends_where_the_pointer_was() {
+    let mut h = curve_open("parametric");
+    exec(&mut h, "develop.set", json!({"control": "curve.lights", "value": 60}));
+    h.step();
+    let r = curve_graph_rect(&mut h);
+    let c = develop(&h).curve;
+    let mut hand = Hand::press(&mut h, on_curve(r, &c, 0.625));
+    // without a rest; then a rest followed by a pull too long to be a lifting finger
+    hand.slide(40.0, 6);
+    let moving = develop(hand.h).curve.lights;
+    hand.lift();
+    assert_eq!(develop(&h).curve.lights, moving, "a drag without a rest ends on its last frame");
+    let c = develop(&h).curve;
+    let mut hand = Hand::press(&mut h, on_curve(r, &c, 0.625));
+    let pull = crate::widgets::release_settle::JERK_DISTANCE + 40.0;
+    assert!(pull < 0.5 * r[3], "the pull stays on the graph: {pull} of {}", r[3]);
+    hand.slide(-10.0, 4).rest(12).slide(-pull, 6);
+    let pulled = develop(hand.h).curve.lights;
+    hand.lift();
+    assert_eq!(develop(&h).curve.lights, pulled, "a quick pull after a pause is kept");
+}
