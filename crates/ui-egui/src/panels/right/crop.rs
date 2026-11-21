@@ -44,12 +44,13 @@ fn custom_aspect(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let (mut w, mut h): (String, String) = ui.data_mut(|d| d.get_temp(key)).unwrap_or_else(|| ("3".into(), "2".into()));
     let mut apply = false;
     ui.horizontal(|ui| {
+        // the numbers sit in the middle of their fields, which the row makes as tall as Apply
         ui.label(crate::i18n::tr("Custom"));
-        let a = ui.add(egui::TextEdit::singleline(&mut w).desired_width(34.0));
+        let a = ui.add(egui::TextEdit::singleline(&mut w).desired_width(34.0).align(egui::Align2::CENTER_CENTER));
         crate::widgets::screen_reader_name(ui.ctx(), a.id, crate::i18n::tr("Width"));
         register(ui, "field:cropCustomW", a.rect);
         ui.label("×");
-        let b = ui.add(egui::TextEdit::singleline(&mut h).desired_width(34.0));
+        let b = ui.add(egui::TextEdit::singleline(&mut h).desired_width(34.0).align(egui::Align2::CENTER_CENTER));
         crate::widgets::screen_reader_name(ui.ctx(), b.id, crate::i18n::tr("Height"));
         register(ui, "field:cropCustomH", b.rect);
         let go = text_button(ui, "cropCustomApply", "Apply", false);
@@ -82,10 +83,15 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let t = Tokens::get(ui.ctx());
             let r = crate::widgets::dropdown(ui, "cropAspect", crate::i18n::tr(&cur), t.font(12.5), t.text);
 
-            egui::Popup::menu(&r).show(|ui| {
+            // closes on a click outside, a preset or Apply, not on every click: a click in a
+            // Custom field closed the menu before a ratio could be typed
+            egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
                 for (label, a) in ASPECT_PRESETS {
-                    if ui.button(crate::i18n::tr(label)).clicked() {
+                    let b = ui.button(crate::i18n::tr(label));
+                    register(ui, format!("cropAspect:{a}"), b.rect);
+                    if b.clicked() {
                         let _ = app.run("crop.aspect", json!({"aspect": a}));
+                        ui.close();
                     }
                 }
                 ui.separator();
