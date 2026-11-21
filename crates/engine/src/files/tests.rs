@@ -1890,7 +1890,7 @@ fn decode_failures_of_recognised_raws_may_fall_back_to_the_preview() {
     assert_eq!(preview_reason(b"x", RawError::Unsupported("x".into())), Ok("x".to_string()));
     assert!(preview_reason(b"x", RawError::Corrupt("bad strip".into())).is_ok_and(|w| w.contains("bad strip")));
     assert!(preview_reason(b"x", RawError::Limit("too big")).is_ok());
-    assert!(preview_reason(b"x", RawError::Tiff(craft_tiff::TiffError::MissingTag(256))).is_ok());
+    assert!(preview_reason(b"x", RawError::Tiff(craft_raw_tiff::TiffError::MissingTag(256))).is_ok());
     assert!(preview_reason(b"x", RawError::NotRaw).is_err());
     assert!(preview_reason(cr3, RawError::Corrupt("bad".into())).is_ok_and(|w| w.starts_with("CR3 ")));
 }
