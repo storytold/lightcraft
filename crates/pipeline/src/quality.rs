@@ -168,6 +168,11 @@ fn noise_score(img: &Rgb32f) -> f32 {
             for y in by..(by + B).min(h - 1) {
                 for x in bx..(bx + B).min(w - 1) {
                     let (Some(v), Some(s)) = (l.get(y * w + x), smooth.get(y * w + x)) else { continue };
+                    // (a non-finite sample has no grain to measure: counting it would poison the
+                    // block's mean rather than describe the photo)
+                    if !v.is_finite() || !s.is_finite() {
+                        continue;
+                    }
                     grain += (v - s).abs();
                     sum += v;
                     sum2 += v * v;
@@ -202,9 +207,9 @@ fn noise_score(img: &Rgb32f) -> f32 {
 /// crushed photo reads worse than a mid-toned one.
 fn exposure_score(img: &Rgb32f) -> f32 {
     let (l, _, _) = luma(img);
-    let n = l.len().max(1) as f32;
     let mut clipped = 0u32;
     let mut sum = 0f32;
+    let mut n = 0u32;
     for v in &l {
         if !v.is_finite() {
             continue;
@@ -213,7 +218,11 @@ fn exposure_score(img: &Rgb32f) -> f32 {
             clipped += 1;
         }
         sum += *v;
+        n += 1;
     }
+    // (the shares are of the samples that carried a tone, not of the whole buffer: a photo with
+    // unusable pixels is measured on the ones it has, rather than read as underexposed)
+    let n = n.max(1) as f32;
     let clean = 1.0 - clipped as f32 / n;
     let mean = (sum / n).clamp(0.0, 1.0);
     let balance = 1.0 - ((mean - 0.42).abs() / 0.42).clamp(0.0, 1.0);
@@ -361,20 +370,37 @@ mod tests {
         assert!(q.score.is_some_and(|s| s.is_finite()), "hostile weights give a finite score");
     }
 
-    /// Hostile buffers — empty, one-pixel, and one shorter than its size claims — measure without a
-    /// division by zero or an index past the data.
+    /// Hostile buffers — empty, one-pixel, one shorter than its size claims, and one carrying NaN
+    /// and infinite samples — measure without a division by zero, an index past the data, or a
+    /// factor that is not a number.
     #[test]
     fn empty_and_tiny_images_measure_cleanly() {
+        let poisoned = image(64, 64, |x, y| {
+            match (x / 8, y / 8) {
+                (0, 0) => f32::NAN,
+                (1, 0) => f32::INFINITY,
+                (2, 0) => f32::NEG_INFINITY,
+                (3, 0) => f32::MAX,
+                _ => 0.5,
+            }
+        });
+        // (a buffer that is entirely unusable, too: no finite sample to measure at all)
+        let all_nan = Rgb32f { width: 64, height: 64, data: vec![[f32::NAN; 3]; 64 * 64] };
         for img in [
             Rgb32f { width: 0, height: 0, data: Vec::new() },
             Rgb32f { width: 1, height: 1, data: vec![[0.5; 3]] },
             Rgb32f { width: 64, height: 64, data: vec![[0.5; 3]; 7] },
+            poisoned,
+            all_nan,
         ] {
             let q = QualityFactors::measure(&img, QualityWeights::default(), true);
             assert!(q.score.is_some_and(|s| s.is_finite()), "{q:?}");
-            for v in [q.sharpness, q.noise, q.exposure] {
-                assert!(v.is_finite(), "{q:?}");
-            }
+            // every factor is a number, not just the combined score: a NaN factor would be stored
+            // on the photo and read back by the filters
+            assert!(q.sharpness.is_finite(), "sharpness {q:?}");
+            assert!(q.noise.is_finite(), "noise {q:?}");
+            assert!(q.exposure.is_finite(), "exposure {q:?}");
+            assert!(q.compression.is_some_and(f32::is_finite), "compression {q:?}");
         }
     }
 

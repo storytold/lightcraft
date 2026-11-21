@@ -29,7 +29,10 @@ pub(crate) fn luma(img: &Rgb32f) -> (Vec<f32>, usize, usize) {
                 }
             }
             let l = acc / ((y1 - y0) * (x1 - x0)).max(1) as f32;
-            *v = lcc_color::transfer::linear_to_srgb(l.clamp(0.0, 1.0));
+            // (a NaN or infinite sample — a hostile or damaged source — has no tone to measure:
+            // `clamp` would pass it straight through, so it is dropped rather than carried into
+            // every factor that reads this luminance)
+            *v = if l.is_finite() { lcc_color::transfer::linear_to_srgb(l.clamp(0.0, 1.0)) } else { 0.0 };
         }
     }
     (out, ow, oh)
