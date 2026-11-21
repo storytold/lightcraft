@@ -565,14 +565,10 @@ fn make_named_device(backends: wgpu::Backends, key: AdapterKey) -> Result<Dev, S
 fn build_pipeline_set(device: &wgpu::Device, pl: &wgpu::PipelineLayout, conv_src: &str, ops_src: &str, suffix: &str) -> PipelineSet {
     let conv_label = format!("faces conv {suffix}");
     let ops_label = format!("faces ops {suffix}");
-    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some(&conv_label),
-        source: wgpu::ShaderSource::Wgsl(conv_src.into()),
-    });
-    let ops_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some(&ops_label),
-        source: wgpu::ShaderSource::Wgsl(ops_src.into()),
-    });
+    let module =
+        device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(&conv_label), source: wgpu::ShaderSource::Wgsl(conv_src.into()) });
+    let ops_module =
+        device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(&ops_label), source: wgpu::ShaderSource::Wgsl(ops_src.into()) });
     let pipe_in = |module: &wgpu::ShaderModule, entry: &str| {
         let name = format!("{entry}_{suffix}");
         device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -667,8 +663,8 @@ fn build_dev(adapter: wgpu::Adapter, card: Card, adapter_key: AdapterKey) -> Res
     });
     let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
     let fp32 = build_pipeline_set(&device, &pl, include_str!("wgsl/faces_conv.wgsl"), include_str!("wgsl/faces_ops.wgsl"), "fp32");
-    let fp16 = has_f16
-        .then(|| build_pipeline_set(&device, &pl, include_str!("wgsl/faces_conv_f16.wgsl"), include_str!("wgsl/faces_ops_f16.wgsl"), "fp16"));
+    let fp16 =
+        has_f16.then(|| build_pipeline_set(&device, &pl, include_str!("wgsl/faces_conv_f16.wgsl"), include_str!("wgsl/faces_ops_f16.wgsl"), "fp16"));
     let dummy = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("faces unused"),
         size: 16,
@@ -1312,8 +1308,7 @@ impl FaceGpu {
         if bytes > self.largest_binding() || job.input.len() as u64 * elem > self.largest_binding() {
             return Ok(None);
         }
-        if self.precision == ActivePrecision::Fp16
-            && (f16_overflows(job.weights) || job.bias.is_some_and(f16_overflows) || f16_overflows(job.input))
+        if self.precision == ActivePrecision::Fp16 && (f16_overflows(job.weights) || job.bias.is_some_and(f16_overflows) || f16_overflows(job.input))
         {
             return Err("convolution values exceed FP16 range".into());
         }
