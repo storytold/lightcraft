@@ -3617,3 +3617,56 @@ fn a_broken_link_before_dotdot_is_an_error() {
     assert_eq!(crate::import::browse_spelling(&link.join("..")).unwrap(), dir);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn write_small_jpeg(path: &Path, seed: u8) {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let px: Vec<u8> = (0..48 * 32).flat_map(|i| [(i % 251) as u8, seed, 40]).collect();
+    let bytes = encode_jpeg(&EncodeImage::new(48, 32, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+}
+
+/// With Stack Raw + JPEG Pairs on (`library.groupRawJpeg`), an import stacks each raw it adds with the JPEG
+/// beside it, the raw on top, as part of its own undo step; off, it stacks nothing.
+#[test]
+fn an_import_stacks_raw_and_jpeg_pairs_when_asked_to() {
+    let src = temp_dir("raw-jpeg-stack");
+    write_raw(&src.join("IMG_1.NEF"));
+    write_small_jpeg(&src.join("IMG_1.JPG"), 1);
+    write_small_jpeg(&src.join("IMG_2.JPG"), 2);
+    let named = |s: &Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).map(|p| p.id).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!((ids(&r, "imported"), ids(&r, "failed")), (3, 0), "{r}");
+    assert_eq!(s.catalog.stacks().count(), 0, "off: an import stacks nothing");
+
+    let mut s = Session::new().with_fs();
+    s.execute("library.groupRawJpeg", &json!({"on": true})).unwrap();
+    let undo = s.undo.len();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!((ids(&r, "imported"), ids(&r, "failed")), (3, 0), "{r}");
+    let stacks: Vec<_> = s.catalog.stacks().map(|st| (st.photos.clone(), st.collapsed)).collect();
+    assert_eq!(stacks, vec![(vec![named(&s, "IMG_1.NEF"), named(&s, "IMG_1.JPG")], true)]);
+    assert_eq!(s.visible_cloned().len(), 2, "the pair shows once, beside the lone JPEG");
+    assert_eq!(s.undo.len(), undo + 1, "one undo step for the import and its stacks");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// Browsing a Local folder with Stack Raw + JPEG Pairs on stacks the folder's pairs too.
+#[test]
+fn browsing_a_local_folder_stacks_its_raw_and_jpeg_pairs_when_asked_to() {
+    let src = temp_dir("raw-jpeg-browse");
+    write_raw(&src.join("IMG_1.NEF"));
+    write_small_jpeg(&src.join("IMG_1.JPG"), 1);
+    write_small_jpeg(&src.join("IMG_2.JPG"), 2);
+    let mut s = Session::new().with_fs();
+    s.execute("library.groupRawJpeg", &json!({"on": true})).unwrap();
+    s.execute("library.browse", &json!({"path": src.to_string_lossy()})).unwrap();
+    let named = |s: &Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).map(|p| p.id).unwrap();
+    let stacks: Vec<_> = s.catalog.stacks().map(|st| st.photos.clone()).collect();
+    assert_eq!(stacks, vec![vec![named(&s, "IMG_1.NEF"), named(&s, "IMG_1.JPG")]]);
+    assert!(s.catalog.photos().all(|p| p.local), "still Local records");
+    assert_eq!(s.visible_cloned().len(), 2, "the pair shows once, beside the lone JPEG");
+    let _ = std::fs::remove_dir_all(&src);
+}

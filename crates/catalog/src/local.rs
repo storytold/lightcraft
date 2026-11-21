@@ -11,7 +11,8 @@
 //!   with the current time and nothing in it is forgotten this time;
 //! - it is **untouched** ([`Photo::untouched_local`]): nothing about it changed since it was
 //!   browsed — see below;
-//! - nothing refers to it: no album holds it or shows it as cover, no stack holds it, no virtual
+//! - nothing refers to it: no album holds it or shows it as cover, no stack holds it (but the stack of a raw and
+//!   the JPEG beside it, which Stack Raw + JPEG Pairs makes of every such pair: it goes with them), no virtual
 //!   copy was made of it; and the caller (the engine) says it isn't in use (visible, selected,
 //!   in the undo history, has a smart preview…).
 //!
@@ -150,6 +151,9 @@ pub struct ForgetPlan {
     pub local: usize,
     /// Records to forget.
     pub evict: Vec<PhotoId>,
+    /// What takes them out of the raw + JPEG stacks they are in, ahead of their removal.
+    #[serde(skip)]
+    pub unstack: Vec<Op>,
     /// Kept: their folder was browsed within the period (or has no time yet).
     pub kept_recent: usize,
     /// Kept: changed by the user since they were browsed.
@@ -169,6 +173,7 @@ impl ForgetPlan {
     /// The ops that carry the plan out (empty when there is nothing to do).
     pub fn ops(&self) -> Vec<Op> {
         let mut ops: Vec<Op> = self.stamp.iter().map(|f| Op::SetBrowsed { folder: f.clone(), at: Some(self.now.clone()) }).collect();
+        ops.extend(self.unstack.iter().cloned());
         ops.extend(self.evict.chunks(BATCH).map(|c| Op::Batch { ops: c.iter().map(|id| Op::RemovePhoto { id: *id }).collect() }));
         ops.extend(self.unstamp.iter().map(|f| Op::SetBrowsed { folder: f.clone(), at: None }));
         ops
@@ -263,6 +268,7 @@ impl Catalog {
                 remaining.insert(folder);
             }
         }
+        plan.unstack = self.forget_from_stacks_ops(&plan.evict.iter().copied().collect());
         plan.stamp = stamp.into_iter().collect();
         plan.unstamp = self.browsed.keys().filter(|f| !remaining.contains(*f)).cloned().collect();
         plan
@@ -278,14 +284,32 @@ impl Catalog {
         ids.iter().copied().filter(|id| untouched.contains(id)).collect()
     }
 
-    /// Photos an album (as a member or its cover), a stack or a virtual copy refers to.
+    /// Ops that take `gone` out of the stacks they are in (a stack left with one photo is dissolved): a record
+    /// that is forgotten leaves no stack pointing at it.
+    pub fn forget_from_stacks_ops(&self, gone: &HashSet<PhotoId>) -> Vec<Op> {
+        if gone.is_empty() {
+            return Vec::new();
+        }
+        self.stacks
+            .values()
+            .filter(|s| s.photos.iter().any(|p| gone.contains(p)))
+            .map(|s| {
+                let rest: Vec<PhotoId> = s.photos.iter().copied().filter(|p| !gone.contains(p)).collect();
+                if rest.len() < 2 { Op::RemoveStack { id: s.id } } else { Op::SetStack { id: s.id, photos: rest, collapsed: s.collapsed } }
+            })
+            .collect()
+    }
+
+    /// Photos an album (as a member or its cover), a stack or a virtual copy refers to. Not the stack of a raw
+    /// and the JPEG beside it ([`Catalog::raw_jpeg_pair_ops`]): the files' names make that one, nobody chose it,
+    /// so it keeps no record.
     fn referenced(&self) -> HashSet<PhotoId> {
         let mut referenced: HashSet<PhotoId> = HashSet::new();
         for a in self.albums.values() {
             referenced.extend(a.photos.iter().copied());
             referenced.extend(a.cover);
         }
-        for s in self.stacks.values() {
+        for s in self.stacks.values().filter(|s| !self.is_raw_jpeg_stack(s)) {
             referenced.extend(s.photos.iter().copied());
         }
         referenced.extend(self.photos.values().filter_map(|p| p.copy_of));
