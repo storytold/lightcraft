@@ -18,6 +18,11 @@ type Row = BTreeMap<String, Value>;
 const COMMAND: &str = "library.importLightroom";
 /// Largest catalog database or WAL read into memory (4 GiB). The whole file is held in RAM, so the cap stays finite.
 const MAX_FILE: u64 = 1 << 32;
+/// The longest XMP packet kept for one image (what a compressed one may expand to). The bound is per
+/// image, never a running total, so the size of a catalog alone cannot drop a packet.
+const MAX_XMP_PACKET: usize = 16 << 20;
+/// Keyword paths kept for the photos of one catalog, all together (a million photos at ~1 KB of paths each still fit).
+const MAX_KEYWORD_BYTES: usize = 1 << 30;
 
 fn error(why: impl Into<String>) -> crate::EngineError {
     crate::EngineError::BadParams { cmd: COMMAND.into(), msg: why.into() }
@@ -98,6 +103,13 @@ impl Reader {
     }
 
     fn xmp_table(&self) -> Result<(Vec<Row>, Vec<String>), String> {
+        self.xmp_table_within(MAX_XMP_PACKET)
+    }
+
+    /// The `Adobe_AdditionalMetadata` rows. A packet past `max_packet` decoded bytes is left off
+    /// its row and named in the warnings; the bound is per image, so the size of the catalog alone
+    /// never drops a packet.
+    fn xmp_table_within(&self, max_packet: usize) -> Result<(Vec<Row>, Vec<String>), String> {
         let Some(t) = self.tables.iter().find(|t| t.name == "Adobe_AdditionalMetadata") else { return Ok((Vec::new(), Vec::new())) };
         let columns = t.column_names.as_ref().ok_or_else(|| "cannot read Adobe_AdditionalMetadata columns".to_string())?;
         let rows = self.db.read_table(t.rootpage, columns.len()).map_err(|e| format!("Adobe_AdditionalMetadata: {e:?}"))?;
@@ -124,14 +136,28 @@ impl Reader {
                     SqlValue::Null => Some(Value::Null),
                     SqlValue::Integer(n) => Some(json!(n)),
                     SqlValue::Real(n) => Some(json!(n)),
+                    SqlValue::Text(s) if column == "xmp" && s.len() > max_packet => {
+                        warnings.push(format!("image {image}: the XMP packet exceeds {} MiB; it is left out", max_packet >> 20));
+                        None
+                    }
                     SqlValue::Text(s) => Some(json!(s)),
-                    SqlValue::Blob(bytes) if column == "xmp" => match decode_xmp_bytes(&bytes) {
-                        Ok(packet) => Some(Value::String(packet)),
-                        Err(error) => {
-                            warnings.push(format!("image {image}: {error}"));
-                            None
+                    SqlValue::Blob(bytes) if column == "xmp" => {
+                        // the declared size (the decode checks it) against what is left, before inflating
+                        let declared = bytes.get(..4).and_then(|s| <[u8; 4]>::try_from(s).ok()).map_or(0, |s| u32::from_be_bytes(s) as usize);
+                        let over = |n: usize| n > max_packet;
+                        let decoded = if over(declared) { Ok(None) } else { decode_xmp_bytes(&bytes).map(Some) };
+                        match decoded {
+                            Ok(Some(packet)) if !over(packet.len()) => Some(Value::String(packet)),
+                            Ok(_) => {
+                                warnings.push(format!("image {image}: the XMP packet exceeds {} MiB; it is left out", max_packet >> 20));
+                                None
+                            }
+                            Err(error) => {
+                                warnings.push(format!("image {image}: {error}"));
+                                None
+                            }
                         }
-                    },
+                    }
                     SqlValue::Blob(_) => None,
                 };
                 if let Some(value) = value {
@@ -561,25 +587,42 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
     let metadata: HashMap<_, _> = metadata_rows.into_iter().map(|r| (number(&r, "image"), r)).collect();
     let keyword_rows: HashMap<_, _> = optional_table("AgLibraryKeyword", &mut warnings)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
     let mut keywords: HashMap<i64, Vec<String>> = HashMap::new();
+    // each keyword's path is resolved once, however many photos carry it
+    let mut paths: HashMap<i64, Option<String>> = HashMap::new();
+    let mut keyword_bytes = 0usize;
     for r in optional_table("AgLibraryKeywordImage", &mut warnings)? {
         ensure_read_active(cancel)?;
-        let mut parts = Vec::new();
-        let mut at = number(&r, "tag");
-        let mut seen = HashSet::new();
-        while at != 0 {
-            if parts.len() >= 64 || !seen.insert(at) {
-                return Err("cyclic or overly deep keyword hierarchy".into());
+        let tag = number(&r, "tag");
+        let path = match paths.get(&tag) {
+            Some(p) => p.clone(),
+            None => {
+                let mut parts = Vec::new();
+                let mut at = tag;
+                let mut seen = HashSet::new();
+                while at != 0 {
+                    // every ancestor visited counts towards the depth, named or not
+                    if seen.len() >= 64 || !seen.insert(at) {
+                        return Err("cyclic or overly deep keyword hierarchy".into());
+                    }
+                    let Some(k) = keyword_rows.get(&at) else { break };
+                    let name = text(k, "name");
+                    if !name.is_empty() {
+                        parts.push(name.to_string());
+                    }
+                    at = number(k, "parent");
+                }
+                parts.reverse();
+                let p = (!parts.is_empty()).then(|| parts.join("|"));
+                paths.insert(tag, p.clone());
+                p
             }
-            let Some(k) = keyword_rows.get(&at) else { break };
-            let name = text(k, "name");
-            if !name.is_empty() {
-                parts.push(name.to_string());
+        };
+        if let Some(p) = path {
+            keyword_bytes = keyword_bytes.saturating_add(p.len());
+            if keyword_bytes > MAX_KEYWORD_BYTES {
+                return Err("the catalog's keyword assignments together exceed 1 GiB".into());
             }
-            at = number(k, "parent");
-        }
-        parts.reverse();
-        if !parts.is_empty() {
-            keywords.entry(number(&r, "image")).or_default().push(parts.join("|"));
+            keywords.entry(number(&r, "image")).or_default().push(p);
         }
     }
     let group = |rows: Vec<Row>| {
