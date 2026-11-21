@@ -45,6 +45,7 @@ heif = ["dep:craft-heif"]
 avif = ["dep:craft-video", "dep:craft-image-codecs", "craft-image-codecs/avif-decode"]
 
 [dev-dependencies]
+serde_json = { workspace = true }
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
 # JPEG parity tests and the benchmark use the prior/reference encoder only in development.
