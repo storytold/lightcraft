@@ -26,7 +26,8 @@ pub struct Camera {
     pub make: &'static str,
     pub model: &'static str,
     /// DNG `CalibrationIlluminant` codes of the two matrices: Standard Illuminant A (17) and D65 (21) for the spectral
-    /// table, A and D50 (23) for a chart-measured camera.
+    /// table, A and D50 (23) for a camera fitted to our own chart captures. The approximate D750 row of the chart table
+    /// keeps the D850's A and D65, because its matrices are the D850's, used as they are.
     pub illuminant: [u16; 2],
     /// XYZ → camera under the two illuminants (`ColorMatrix1/2`).
     pub color_matrix: [Mat3; 2],
@@ -189,6 +190,61 @@ mod tests {
     }
 
     #[test]
+    fn d750_finds_approximate_colour_matrices() {
+        // without a row, D750 raws fall back to the muted neutral camera-RGB approximation;
+        // the row is approximate (the D850's matrices), see chart_table.rs
+        let found = find(Some("NIKON CORPORATION"), "NIKON D750");
+        assert_eq!(found.map(|c| (c.make, c.model)), Some(("NIKON CORPORATION", "D750")));
+        assert_eq!(find_camera("NIKON CORPORATION NIKON D750"), found);
+        assert_eq!(find(None, "NIKON D750"), found);
+        if let Some(cam) = found {
+            for m in cam.color_matrix.iter().chain(&cam.forward_matrix) {
+                assert!(m.0.iter().flatten().all(|v| v.is_finite() && v.abs() < 4.0) && m.inverse().is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn d750_chart_row_is_the_d850_spectral_row() {
+        // The D750 entry in chart_table.rs is an explicit approximate alias of the D850's
+        // spectral rows: the same matrices, with the D850's true A (17) and D65 (21), not
+        // relabelled to chart-measured A (17) and D50 (23). This pins the copy: it fails if
+        // the row is dropped, drifts from the D850's matrices, or is relabelled. It says
+        // nothing about D750 colour; see clean-room/crw/10-chart-calibration.md.
+        let d750 = chart::CAMERAS.iter().find(|c| c.model == "D750").expect("chart_table.rs has a D750 row");
+        let d850 = table::CAMERAS.iter().find(|c| c.model == "D850").expect("spectral_table.rs has a D850 row");
+        assert_eq!(d750.illuminant, d850.illuminant, "D750 chart entry uses the D850 spectral illuminants A and D65");
+        assert_eq!(d750.color_matrix, d850.color_matrix, "D750 chart entry copies the D850 colour matrices");
+        assert_eq!(d750.forward_matrix, d850.forward_matrix, "D750 chart entry copies the D850 forward matrices");
+    }
+
+    #[test]
+    fn d750_approximate_profile_replaces_the_neutral_fallback() {
+        // The approximate D750 profile (the D850's matrices) is used in place of the
+        // neutral camera-RGB fallback: it carries real colour matrices, so its camera
+        // transform is a non-fallback colour model and its output differs from the
+        // fallback's. Differing is all that is checked: there is no D750 capture or
+        // reference render here, so this does not show the matrices are closer to a D750
+        // than the fallback (clean-room/crw/10-chart-calibration.md).
+        let cam = find(Some("NIKON CORPORATION"), "NIKON D750").unwrap();
+        let mut color = ColorData::default();
+        assert!(cam.fill(&mut color));
+        let wb = lightcraft_color::D65;
+        let t = crate::color::camera_transform_of(&color, wb);
+        assert!(!t.matrix_is_fallback, "D750 profile should not be the neutral fallback");
+        let fallback = crate::color::camera_transform_of(&ColorData::default(), wb);
+        assert!(fallback.matrix_is_fallback, "default colour data is the neutral fallback");
+        assert_ne!(t.matrix, fallback.matrix, "D750 colour output must differ from the neutral fallback");
+        // a non-neutral primary must not map identically to the fallback (saturation)
+        let red = [1.0, 0.2, 0.1];
+        let out = t.matrix.apply(red);
+        let fb = fallback.matrix.apply(red);
+        assert!(
+            (out[0] - fb[0]).abs() > 1e-6 || (out[1] - fb[1]).abs() > 1e-6 || (out[2] - fb[2]).abs() > 1e-6,
+            "D750 colour pipeline output should differ from the neutral fallback: {out:?} vs {fb:?}"
+        );
+    }
+    #[test]
     fn other_cameras_and_other_makes_find_nothing() {
         assert_eq!(find(Some("Canon"), "Canon EOS 7D"), None);
         assert_eq!(find(Some("SONY"), "ILCE-7M2"), None);
@@ -256,7 +312,7 @@ mod tests {
 
     #[test]
     fn every_row_is_a_usable_dng_profile() {
-        assert_eq!(cameras().count(), 53);
+        assert_eq!(cameras().count(), 54);
         for c in cameras() {
             assert_eq!(find(Some(c.make), c.model), Some(c), "{} {}", c.make, c.model);
             for m in c.color_matrix.iter().chain(&c.forward_matrix) {

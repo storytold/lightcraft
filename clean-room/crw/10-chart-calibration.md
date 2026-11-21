@@ -95,3 +95,24 @@ pair (spectral rows: A and D65).
   ~150 K for the sun).
 - The D60's look is still the per-file JPEG fit and the pooled profile; these matrices give the
   white-balance scale and the fallback colour only.
+
+## Nikon D750 (approximate, not fitted or validated)
+
+The D750 row in `crates/raw/src/chart_table.rs` has no captures of its own, so it is not a chart
+calibration: none of the measurement, fit or check steps above was run on a D750. Its matrices are
+the D850's rows from `spectral_table.rs`, copied as they are, including the D850's true A (17) and
+D65 (21) rather than this file's D50 (23). The row is an explicit approximate alias: a D750 raw
+whose camera-JPEG fit fails starts from the D850's colour instead of the neutral camera-RGB
+fallback.
+
+- No D750 ColorChecker capture, fit or reference render exists, so nothing here shows these
+  matrices are closer to a D750 than the neutral fallback, or to Lightroom's D750 colour.
+  "Differs from the fallback" is all that is checked, and a difference is not an improvement.
+- The checks that do run: `spectral::tests::d750_finds_approximate_colour_matrices` (the Exif
+  names, joined make/model string and bare model reach the row; every matrix is finite and
+  invertible), `d750_approximate_profile_replaces_the_neutral_fallback` (the row is used in place
+  of the fallback and its transform differs from the fallback's) and
+  `d750_chart_row_is_the_d850_spectral_row` (the row is byte-identical to the D850's matrices and
+  illuminants). None of them measures D750 colour.
+- Real D750 ColorChecker captures, fitted and checked like the D60 rows above, would replace the
+  row; only then could it be compared with the neutral fallback.
