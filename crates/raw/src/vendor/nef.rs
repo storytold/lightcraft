@@ -282,6 +282,17 @@ pub(crate) fn trailing_masked_columns(d: &[u16], w: usize, bits: u32) -> usize {
     aw & !1
 }
 
+/// Width left after trimming trailing masked columns from the stored samples. A High Efficiency
+/// header probe carries no samples (issue #1304), so it keeps the stored width `w`; every full
+/// decode, High Efficiency included, trims.
+fn stored_active_width(data: &RawData, high_efficiency: bool, mode: Mode, w: usize, bits: u32) -> usize {
+    match data {
+        RawData::U16(_) if high_efficiency && mode == Mode::Header => w,
+        RawData::U16(samples) => trailing_masked_columns(samples, w, bits),
+        _ => w,
+    }
+}
+
 /// The three measured field-stored originals use the binary maker-note version 0.2.0.0,
 /// compression 1 and a single tight 12-bit strip. Restrict the scene heuristic to this
 /// legacy dialect: brightness transitions in unrelated ordinary rasters can pass it.
@@ -326,14 +337,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         (uncompressed(bytes, &info, tiff.order, mn.as_ref(), rows)?, None)
     };
     // Header probes inspect stored rows. Judge masked columns before rearranging the full
-    // image too, so the probe and full decoder use exactly the same prefix.
-    let stored_active_w = match &data {
-        // A High Efficiency header probe reads no samples (see `compressed`), so it cannot judge masked
-        // columns; the full decode still trims them.
-        RawData::U16(_) if he_black.is_some() && mode == Mode::Header => w,
-        RawData::U16(samples) => trailing_masked_columns(samples, w, bits),
-        _ => w,
-    };
+    // image too, so the probe and full decoder use the same prefix. Exception: a High Efficiency
+    // header probe reads no samples, so it reports the stored width while the full decode trims any
+    // trailing masked columns; for such a frame the probe can be wider than the decoded image.
+    let stored_active_w = stored_active_width(&data, he_black.is_some(), mode, w, bits);
     let model = ifd0.string(t::MODEL).unwrap_or_default();
     // Some CCD Coolpix bodies write two interlaced fields one after the other.
     // Only the measured legacy maker-note dialect and tightly packed layout enter the scene test.
@@ -1602,6 +1609,19 @@ mod tests {
             let bytes = nef_in(ByteOrder::Big, 34713, 14, vec![short], 70, 12, 12, None);
             assert!(crate::probe_info(&bytes).is_err());
         }
+    }
+
+    /// A full High Efficiency decode trims trailing masked columns; only the sample-less header probe keeps the
+    /// stored width (regression for the HE probe change in #1304).
+    #[test]
+    fn high_efficiency_full_decode_trims_masked_columns_and_the_probe_does_not() {
+        let (w, rows) = (256usize, 8usize);
+        let d: Vec<u16> = (0..w * rows).map(|i| if i % w >= w - 10 { 0 } else { 4000 }).collect();
+        let data = RawData::U16(d);
+        assert_eq!(stored_active_width(&data, true, Mode::Full, w, 14), w - 10);
+        assert_eq!(stored_active_width(&data, false, Mode::Full, w, 14), w - 10);
+        assert_eq!(stored_active_width(&data, false, Mode::Header, w, 14), w - 10);
+        assert_eq!(stored_active_width(&RawData::U16(Vec::new()), true, Mode::Header, w, 14), w);
     }
 
     #[test]
