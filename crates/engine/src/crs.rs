@@ -115,6 +115,16 @@ pub fn has_adjustments(props: &Props) -> bool {
     props.keys().any(|k| k.starts_with("crs:") && !NON_ADJUSTMENT.contains(&k.split('/').next().unwrap_or(k)))
 }
 
+/// An unmapped `crs:` field that cannot change how the photo renders: a digest of state
+/// LightCraft does not reuse rather than an adjustment (#3050). Lightroom writes several
+/// variants beside each other (`AutoToneDigestNoSat`, `InputDigestVersion`), so any field named
+/// around a digest counts: a checksum carries no rendering data. Warnings split these out, so
+/// skipped bookkeeping never reads like an adjustment that may make the photo differ. A dropped
+/// mask or spot changes the render whatever its component is called, so its label never counts.
+pub fn non_rendering(name: &str) -> bool {
+    !name.starts_with("Mask:") && !name.starts_with("Spot:") && name.contains("Digest")
+}
+
 thread_local! {
     /// Keys read by [`to_partial`] while [`to_partial_report`] runs.
     static READ: std::cell::RefCell<Option<std::collections::BTreeSet<String>>> = const { std::cell::RefCell::new(None) };

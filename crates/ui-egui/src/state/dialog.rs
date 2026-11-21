@@ -33,6 +33,11 @@ pub enum Dialog {
         details: Vec<String>,
         first: Option<u64>,
     },
+    /// The full report behind an import's warning toast: the same groups, each openable to
+    /// every photo's line. Pressing the toast opens it; closing it clears the toast (#3050).
+    ImportWarnings {
+        warnings: Vec<lightcraft_engine::import::ImportWarning>,
+    },
     /// File ▸ Print…: the Print module. Its state is the session's (`print.*`); the page on show
     /// and the selected cell are [`UiState::print`].
     Print,
