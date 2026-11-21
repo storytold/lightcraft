@@ -50,7 +50,8 @@ use pairs::{
 pub(crate) use proxy::LensGeometry;
 #[cfg(test)]
 use proxy::{
-    Cr3Framing, MIN_PREVIEW_FRACTION, alignment, estimate_cr3_framing, into_lens_geometry, proxies, reference_at, sensor_proxy, structure_agrees,
+    Cr3Framing, MIN_PREVIEW_FRACTION, align_profile_geometry, alignment, estimate_cr3_framing, into_lens_geometry, proxies, reference_at,
+    resample_correspondence, sensor_proxy, structure_agrees,
 };
 pub(crate) use proxy::{fit_profile, lens_geometry, profile_pairs};
 #[cfg(test)]
@@ -86,7 +87,8 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// the warped candidate's alignment leaves out the pixels outside the sensor instead of reading them as black.
 /// 14: bundled camera profiles also match the Nikon model spellings that differ in case, spacing or the Z8 alias,
 /// so previews made without the profile are rebuilt.
-pub const LOOK_VERSION: u32 = 14;
+/// 15: geometry-gated CR3 lens profiles for JPEG correspondences, preserving the framing fallback.
+pub const LOOK_VERSION: u32 = 15;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
