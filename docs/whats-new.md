@@ -136,6 +136,11 @@
 
 ## 2026-10-30
 
+### ↑ and ↓ keep the Survey together
+- In Survey (N) and Compare (C), ↑ and ↓ now step through the photos on screen, as → and ← do. Before, they ran the
+  grid's Photo Below and Photo Above, which selected a single photo, so the survey shrank to that one photo
+  (issue #3640).
+
 ### Lightroom catalogs with a print inside a collection import their collections
 - Lightroom Classic can keep a saved print, book, slideshow or web gallery inside a plain collection, but a
   LightCraft album sits only inside a folder. Importing such a catalog stopped at the end with "parent must be an
