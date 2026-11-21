@@ -110,8 +110,12 @@ fn damaged_catalog_settings_are_set_aside_and_the_user_told() {
     if let Err(e) = s.open_library(&lib, false) {
         panic!("{e}");
     }
-    let w = s.take_library_warnings();
-    assert!(w.iter().any(|w| w.contains("catalog-settings.json") && w.contains("damaged")), "{w:?}");
+    let w = s.take_notices();
+    assert!(
+        w.iter().any(|n| matches!(n, crate::notice::Notice::SettingsSetAside { file, kept } if file == "catalog-settings.json" && kept.starts_with("catalog-settings.json.corrupt-"))),
+        "{w:?}"
+    );
+    assert!(s.take_notices().is_empty(), "told once");
     assert!(!file.exists() || lcc_catalog::library::CatalogSettings::load_checked(&lib).1.is_none());
     let kept = std::fs::read_dir(&lib).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with("catalog-settings.json.corrupt-"));
     assert!(kept, "the damaged file is kept aside");

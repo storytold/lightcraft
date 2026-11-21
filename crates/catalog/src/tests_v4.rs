@@ -493,6 +493,53 @@ fn catalog_folder_new_open_recent() {
 }
 
 #[test]
+fn a_damaged_or_unreadable_recent_list_is_never_overwritten() {
+    let s = Scratch::new("recent-damaged");
+    let file = RecentCatalogs::file_in(s.path());
+    std::fs::write(&file, b"{\"paths\": [").unwrap();
+    let (r, problem) = RecentCatalogs::load_checked(&file);
+    assert_eq!(r, RecentCatalogs::default());
+    let Some(library::SettingsProblem::SetAside { kept }) = problem else { panic!("{problem:?}") };
+    assert_eq!(std::fs::read(s.path().join(&kept)).unwrap(), b"{\"paths\": [", "the damaged list is kept aside");
+    // the new list goes where the damaged one was
+    RecentCatalogs { paths: vec![s.path().join("lib")], ..Default::default() }.save(&file).unwrap();
+    assert_eq!(RecentCatalogs::load(&file).paths.len(), 1);
+    // a list that can't be read (here: a folder in its place) is left alone and never written over
+    let blocked = s.path().join("blocked").join("recent-catalogs.json");
+    std::fs::create_dir_all(&blocked).unwrap();
+    let (r, problem) = RecentCatalogs::load_checked(&blocked);
+    assert_eq!(r, RecentCatalogs::default());
+    assert!(matches!(problem, Some(library::SettingsProblem::Unreadable { .. })), "{problem:?}");
+    assert!(RecentCatalogs::default().save(&blocked).is_err());
+    assert!(blocked.is_dir());
+}
+
+#[test]
+fn catalog_settings_that_cant_be_read_are_never_overwritten() {
+    let s = Scratch::new("settings-unreadable");
+    let file = s.path().join(library::SETTINGS_FILE);
+    // unreadable: a folder where the file should be
+    std::fs::create_dir_all(&file).unwrap();
+    let (cs, problem) = CatalogSettings::load_checked(s.path());
+    assert!(cs.keep_backups > 0);
+    assert!(matches!(problem, Some(library::SettingsProblem::Unreadable { .. })), "{problem:?}");
+    let err = CatalogSettings::new_library().save(s.path()).unwrap_err().to_string();
+    assert!(err.contains("isn't overwritten"), "{err}");
+    assert!(file.is_dir());
+    std::fs::remove_dir(&file).unwrap();
+    // damaged: a plain load changes nothing on disk, and saving over it is refused until the
+    // library is opened (which moves it aside and says so)
+    std::fs::write(&file, b"{\"keepBackups\": \"lots\"").unwrap();
+    assert!(CatalogSettings::load(s.path()).keep_backups > 0);
+    assert_eq!(std::fs::read(&file).unwrap(), b"{\"keepBackups\": \"lots\"");
+    assert!(CatalogSettings { keep_backups: 1, ..Default::default() }.save(s.path()).is_err());
+    assert_eq!(std::fs::read(&file).unwrap(), b"{\"keepBackups\": \"lots\"");
+    assert!(matches!(CatalogSettings::load_checked(s.path()).1, Some(library::SettingsProblem::SetAside { .. })));
+    CatalogSettings { keep_backups: 1, ..Default::default() }.save(s.path()).unwrap();
+    assert_eq!(CatalogSettings::load(s.path()).keep_backups, 1);
+}
+
+#[test]
 fn damaged_catalog_settings_are_set_aside_and_reported() {
     let s = Scratch::new("settings-aside");
     let file = s.path().join(library::SETTINGS_FILE);
@@ -500,7 +547,7 @@ fn damaged_catalog_settings_are_set_aside_and_reported() {
         std::fs::write(&file, bytes).unwrap();
         let (cs, problem) = CatalogSettings::load_checked(s.path());
         let problem = problem.expect("a damaged file is reported");
-        assert!(problem.contains("damaged"), "{problem}");
+        assert!(matches!(problem, library::SettingsProblem::SetAside { .. }), "{problem:?}");
         assert!(cs.keep_backups > 0 && cs.test_integrity, "new-library defaults: backups on");
         assert!(!file.exists(), "moved aside, so a later save can't overwrite it");
         // reported once: the next load sees no file

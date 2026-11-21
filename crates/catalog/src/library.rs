@@ -334,7 +334,51 @@ pub fn backup_hint(dir: &Path) -> String {
     }
 }
 
-/// Seconds since the Unix epoch (0 if the clock is before it).
+/// What was wrong with a settings file, to tell the user (the host words it).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SettingsProblem {
+    /// It didn't parse and was moved aside to the file named `kept`; the defaults stand in.
+    SetAside { kept: String },
+    /// It couldn't be read, or didn't parse and couldn't be moved aside (`reason`): the defaults
+    /// stand in for now, and the file is never overwritten while it is there.
+    Unreadable { reason: String },
+}
+
+/// A JSON settings file: `Ok(None)` when there is none, `Err` with the reason when it is there but
+/// can't be read or doesn't parse (nothing is changed on disk).
+fn read_settings<T: serde::de::DeserializeOwned>(file: &Path) -> std::result::Result<Option<T>, (bool, String)> {
+    let bytes = match std::fs::read(file) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err((false, e.to_string())),
+    };
+    serde_json::from_slice(&bytes).map(Some).map_err(|e| (true, e.to_string()))
+}
+
+/// Loads a settings file, moving it aside when it doesn't parse ([`set_aside`]).
+fn load_settings<T: serde::de::DeserializeOwned>(file: &Path) -> (Option<T>, Option<SettingsProblem>) {
+    match read_settings(file) {
+        Ok(v) => (v, None),
+        Err((false, reason)) => (None, Some(SettingsProblem::Unreadable { reason })),
+        Err((true, err)) => match set_aside(file) {
+            Ok(kept) => {
+                (None, Some(SettingsProblem::SetAside { kept: kept.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default() }))
+            }
+            Err(w) => (None, Some(SettingsProblem::Unreadable { reason: format!("{err}; couldn't be moved aside: {w}") })),
+        },
+    }
+}
+
+/// Writes a settings file, unless one is there that can't be read or doesn't parse: that is the
+/// user's, not to be replaced by defaults that only stood in for it.
+fn save_settings(file: &Path, body: &[u8]) -> Result<()> {
+    if let Err((_, why)) = read_settings::<serde_json::Value>(file) {
+        let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        return Err(CatalogError::Io(format!("{name} couldn't be read ({why}), so it isn't overwritten; repair or remove it, then try again")));
+    }
+    crate::safe_file::write_atomic(file, body).map_err(ioe)
+}
+
 /// Renames the damaged `file` to `<name>.corrupt-<unix time>` (a free name: `-2`, `-3`, … when
 /// that is taken) next to it; the new path.
 fn set_aside(file: &Path) -> std::io::Result<PathBuf> {
@@ -350,6 +394,7 @@ fn set_aside(file: &Path) -> std::io::Result<PathBuf> {
     Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "too many damaged copies already kept"))
 }
 
+/// Seconds since the Unix epoch (0 if the clock is before it).
 pub fn now_secs() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
@@ -428,16 +473,28 @@ impl RecentCatalogs {
     pub fn file_in(settings: &Path) -> PathBuf {
         settings.join("recent-catalogs.json")
     }
-    /// The list in `file` (empty if missing or unreadable: never an error).
+    /// The list in `file` (empty if missing or unusable: never an error; the problem is logged).
     pub fn load(file: &Path) -> RecentCatalogs {
-        std::fs::read(file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+        let (r, problem) = RecentCatalogs::load_checked(file);
+        if let Some(p) = problem {
+            log::warn!("recent catalogs: {p:?}");
+        }
+        r
     }
+    /// The list in `file`, and what was wrong with it: one that doesn't parse is moved aside to
+    /// `recent-catalogs.json.corrupt-<unix time>`; one that can't be read is left alone (and
+    /// [`RecentCatalogs::save`] then refuses to overwrite it).
+    pub fn load_checked(file: &Path) -> (RecentCatalogs, Option<SettingsProblem>) {
+        let (r, problem) = load_settings(file);
+        (r.unwrap_or_default(), problem)
+    }
+    /// Writes the list; refused while `file` is there but can't be read or doesn't parse.
     pub fn save(&self, file: &Path) -> Result<()> {
         if let Some(parent) = file.parent() {
             std::fs::create_dir_all(parent).map_err(ioe)?;
         }
         let body = serde_json::to_vec_pretty(self).map_err(|e| CatalogError::Io(e.to_string()))?;
-        crate::safe_file::write_atomic(file, &body).map_err(ioe)
+        save_settings(file, &body)
     }
     /// Move `path` (an entry point) to the top.
     pub fn touch(&mut self, path: &Path) {
@@ -517,13 +574,18 @@ pub struct CatalogSettings {
 }
 
 impl CatalogSettings {
-    /// The settings in `dir` ([`CatalogSettings::load_checked`], the problem only logged).
+    /// The settings in `dir`; [`CatalogSettings::new_library`] when there are none or the file
+    /// can't be used (logged). Changes nothing on disk: opening the library
+    /// ([`CatalogSettings::load_checked`]) is what moves a damaged file aside and tells the user,
+    /// and [`CatalogSettings::save`] never overwrites a file it couldn't read.
     pub fn load(dir: &Path) -> CatalogSettings {
-        let (s, problem) = CatalogSettings::load_checked(dir);
-        if let Some(p) = problem {
-            log::warn!("catalog settings: {p}");
+        match read_settings(&dir.join(SETTINGS_FILE)) {
+            Ok(s) => s.unwrap_or_else(CatalogSettings::new_library),
+            Err((_, why)) => {
+                log::warn!("catalog settings: {SETTINGS_FILE} can't be used ({why}); the defaults stand in");
+                CatalogSettings::new_library()
+            }
         }
-        s
     }
 
     /// The settings a new library starts with: backups kept (10) and tested.
@@ -533,34 +595,18 @@ impl CatalogSettings {
 
     /// The settings in `dir`, and what was wrong with its file, to tell the user. A missing file
     /// gives [`CatalogSettings::new_library`] and no problem. A file that doesn't parse is moved
-    /// aside to `catalog-settings.json.corrupt-<unix time>` (so nothing that saves the settings
-    /// later can overwrite it, and the next load doesn't report it again) and the new-library
-    /// defaults are used; so are they when the file can't be read (it is left where it is).
-    pub fn load_checked(dir: &Path) -> (CatalogSettings, Option<String>) {
-        let file = dir.join(SETTINGS_FILE);
-        let bytes = match std::fs::read(&file) {
-            Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (CatalogSettings::new_library(), None),
-            Err(e) => {
-                return (CatalogSettings::new_library(), Some(format!("{SETTINGS_FILE} couldn't be read ({e}); the defaults are used for now")));
-            }
-        };
-        let err = match serde_json::from_slice::<CatalogSettings>(&bytes) {
-            Ok(s) => return (s, None),
-            Err(e) => e,
-        };
-        let problem = match set_aside(&file) {
-            Ok(kept) => format!(
-                "{SETTINGS_FILE} is damaged ({err}). It was kept as {}, and the settings of a new library (backups on) are used",
-                kept.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
-            ),
-            Err(w) => format!("{SETTINGS_FILE} is damaged ({err}) and couldn't be set aside ({w}); the settings of a new library are used"),
-        };
-        (CatalogSettings::new_library(), Some(problem))
+    /// aside to `catalog-settings.json.corrupt-<unix time>` (so the next load doesn't report it
+    /// again) and the new-library defaults are used; so are they when the file can't be read: it
+    /// is left where it is, and [`CatalogSettings::save`] refuses to overwrite it.
+    pub fn load_checked(dir: &Path) -> (CatalogSettings, Option<SettingsProblem>) {
+        let (s, problem) = load_settings(&dir.join(SETTINGS_FILE));
+        (s.unwrap_or_else(CatalogSettings::new_library), problem)
     }
+    /// Writes the settings; refused while the file is there but can't be read or doesn't parse
+    /// (the defaults that stood in for it never replace the user's settings).
     pub fn save(&self, dir: &Path) -> Result<()> {
         let body = serde_json::to_vec_pretty(self).map_err(|e| CatalogError::Io(e.to_string()))?;
-        crate::safe_file::write_atomic(&dir.join(SETTINGS_FILE), &body).map_err(ioe)
+        save_settings(&dir.join(SETTINGS_FILE), &body)
     }
     /// A backup is due on exit at `now`.
     pub fn backup_due(&self, now: i64) -> bool {
