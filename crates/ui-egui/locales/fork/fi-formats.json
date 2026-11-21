@@ -224,6 +224,7 @@
   "{a} on map · {b} untagged": "Kartalla: {a} · ilman sijaintia: {b}",
   "{card} (screen)": "{card} (näyttö)",
   "{count} modules in the plug-ins folder weren't loaded: it holds more than it can load.": "Laajennuskansion moduuleja jäi lataamatta ({count}): siinä on enemmän kuin voidaan ladata.",
+  "{count} more failures.": "{count} muuta virhettä.",
   "{done} downloaded": "Ladattu {done}",
   "{done} of {total} ({percent} %)": "{done} / {total} ({percent} %)",
   "{done} of {total} photos": "{done}/{total} kuvaa",

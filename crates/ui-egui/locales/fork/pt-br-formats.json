@@ -202,6 +202,7 @@
   "{a} on map · {b} untagged": "{a} no mapa · {b} sem local",
   "{card} (screen)": "{card} (tela)",
   "{count} modules in the plug-ins folder weren't loaded: it holds more than it can load.": "{count} módulos da pasta de plug-ins não foram carregados: ela tem mais do que é possível carregar.",
+  "{count} more failures.": "Mais {count} falhas.",
   "{done} downloaded": "{done} baixados",
   "{done} of {total} ({percent} %)": "{done} de {total} ({percent} %)",
   "{done} of {total} photos": "{done} de {total} fotos",

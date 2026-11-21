@@ -376,11 +376,11 @@ fn show_result(app: &mut LccApp) {
     }
 }
 
-/// The lasting result window for an inspect or import: counts, failures, missing originals, the
-/// skipped images (one line, in the UI language) and at most eight warnings.
 /// Most warnings or failures the result window lists; the rest are counted (the full report stays in the command result).
 const MAX_LINES: usize = 10_000;
 
+/// The lasting result window for an inspect or import: counts, failures, missing originals, the
+/// skipped images (one line, in the UI language) and the warnings (all but a pathological report's).
 fn result_dialog(value: &Value, summary: &str, capture_one: bool) -> crate::state::Dialog {
     let report = value.get("report").unwrap_or(value);
     let mut details = Vec::new();
@@ -395,6 +395,9 @@ fn result_dialog(value: &Value, summary: &str, capture_one: bool) -> crate::stat
         details.extend(
             failures.iter().take(MAX_LINES).map(|failure| format!("{}: {}", failure[0].as_str().unwrap_or(""), failure[1].as_str().unwrap_or(""))),
         );
+        if failures.len() > MAX_LINES {
+            details.push(crate::i18n::tr_format!("{count} more failures.", count = failures.len() - MAX_LINES));
+        }
     }
     let missing = report["missing"].as_array().map_or(0, Vec::len);
     if missing > 0 {
@@ -833,6 +836,13 @@ mod tests {
             panic!("not a Lightroom result")
         };
         assert_eq!(details.len(), MAX_LINES + 1);
+        // capped failures are counted too, not silently dropped
+        let huge: Vec<_> = (0..MAX_LINES + 3).map(|i| json!([format!("f{i}.nef"), "unreadable"])).collect();
+        let crate::state::Dialog::LightroomResult { details, .. } = result_dialog(&json!({"report": {"failed": huge}}), "done", false) else {
+            panic!("not a Lightroom result")
+        };
+        assert!(!details.iter().any(|d| d.starts_with(&format!("f{MAX_LINES}.nef"))));
+        assert!(details.last().is_some_and(|d| d.contains('3')), "{:?}", details.last());
     }
 
     #[test]

@@ -257,6 +257,7 @@
   "{a} on map · {b} untagged": "{a} trên bản đồ · {b} chưa có tọa độ",
   "{card} (screen)": "{card} (màn hình)",
   "{count} modules in the plug-ins folder weren't loaded: it holds more than it can load.": "{count} mô-đun trong thư mục plugin không được tải: thư mục chứa nhiều hơn mức có thể tải.",
+  "{count} more failures.": "Còn {count} lỗi khác.",
   "{count} more warnings.": "Còn {count} cảnh báo khác.",
   "{done} downloaded": "Đã tải {done}",
   "{done} of {total} ({percent} %)": "{done} / {total} ({percent} %)",
