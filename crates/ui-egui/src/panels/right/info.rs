@@ -170,18 +170,10 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     }
                 }
             });
-            if text_button(ui, "fillLocation", crate::i18n::tr("Fill Location"), false)
-                .on_hover_text(format!(
-                    "{}\n{}",
-                    crate::i18n::tr("Fill empty City, State and Country from GPS (offline GeoNames place names)"),
-                    crate::i18n::tr("The place names list towns of 15,000 people or more: in a smaller one, City gets the nearest larger town.")
-                ))
-                .clicked()
-                && let Err(e) = app.run("metadata.reverseGeocode", json!({}))
-            {
-                app.toast_error(ui.ctx(), e);
-            }
         }
+        // Fill Location works on every selected photo with GPS, not only the active one (#2329)
+        let any_gps = lightcraft_engine::cmd::geocode::has_usable_gps(&app.session, &app.session.selected());
+        super::super::locations::controls(app, ui, any_gps);
         if let Some(a) = p.analysis {
             let mut line = crate::i18n::tr_format!("Focus {:.0}", a.sharpness);
             if a.clipped > 0.02 {
@@ -215,7 +207,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         ui.add_space(10.0);
         if text_button(ui, "allMetadata", crate::i18n::tr("All Metadata…"), false)
-            .on_hover_text(crate::i18n::tr("Every EXIF, GPS and XMP field in the file"))
+            .on_hover_text(crate::i18n::tr("EXIF, GPS, XMP and saved catalog metadata"))
             .clicked()
         {
             let _ = app.run("dialog.allMetadata", json!({}));

@@ -86,6 +86,8 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 - 2026-10-07: RW2 every format (#215), faces recognition in pure Rust (#174).
 - 2026-10-05: compressed NEF (#86). The older history is in [ROADMAP.md](../ROADMAP.md#progress-log).
 
+Offline Fill view fills missing City, State and Country in the current folder/filter/subfolder scope, with cancellation and one Undo step. Saved catalog values are visible in All Metadata; nearest populated place is approximate. No ranked gap is closed.
+
 ## Revision history
 
 | Date | Change | Summary |

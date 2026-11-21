@@ -100,6 +100,7 @@ impl LightcraftApp {
         self.slideshow_tick(ctx, now);
         panels::denoise::pump_background(self, ctx, now);
         panels::faces::pump_background(self, ctx, now);
+        panels::locations::pump(self, ctx, now);
         focus_scan::pump(self, ctx, now);
         // auto import: list the watched folder every few seconds (on a worker thread: it may be on
         // a network share), then import what's new like any import (also on a worker thread)
