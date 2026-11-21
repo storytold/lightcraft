@@ -514,12 +514,13 @@ struct Step {
     params: Value,
 }
 
-/// Parse `CMD [key=value | {json}]… CMD …` into steps. A token without `=` that doesn't start
-/// with `{` begins a new command; values are JSON when they parse, else strings.
+/// Parse `CMD [key=value | {json}]… CMD …` into steps. A token whose first non-whitespace
+/// character is `{` is a JSON object. Otherwise a token without `=` begins a new command;
+/// shorthand values are JSON when they parse, else strings.
 fn parse_steps(tokens: &[String]) -> Result<Vec<Step>, String> {
     let mut steps: Vec<Step> = Vec::new();
     for t in tokens {
-        if t.starts_with('{') {
+        if t.trim_start().starts_with('{') {
             let v: Value = serde_json::from_str(t).map_err(|e| format!("bad JSON params `{t}`: {e}"))?;
             let step = steps.last_mut().ok_or_else(|| format!("params `{t}` before any command"))?;
             match (step.params.as_object_mut(), v) {
@@ -1139,6 +1140,14 @@ mod raw_files_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn inline_json_with_leading_whitespace_stays_with_its_command() {
+        let steps = super::parse_steps(&["catalog.query".into(), " \t {\"query\":\"a=b\"}".into()]).unwrap();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].id, "catalog.query");
+        assert_eq!(steps[0].params, super::json!({"query": "a=b"}));
+    }
+
     /// `render` and `merge` read the lens database the desktop app downloaded, as the desktop does (the same raw
     /// gets the same profile everywhere), but never fetch it.
     #[test]
