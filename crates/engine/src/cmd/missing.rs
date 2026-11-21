@@ -405,7 +405,8 @@ fn name_key(path: &str) -> String {
 ///    name and size. Several such files are ambiguous: the photo is skipped and reported in
 ///    `ambiguous`, never guessed (two cameras' `IMG_0001.CR3` of one size are different photos).
 ///
-/// Files already owned or matched are shared only within an original and its virtual copies.
+/// Files already owned or matched are shared only within an original and its virtual copies,
+/// and only when the content hash or the original's located file confirms the match.
 /// Originals are matched before hashless copies, which prefer their original's located file over
 /// a name-only match. The file must be in the searched folder and its known size must agree.
 pub fn plan_find_missing(candidates: &[FindCandidate], folder: &str) -> std::result::Result<FindPlan, String> {
@@ -523,6 +524,9 @@ pub fn plan_find_missing_within(candidates: &[FindCandidate], folder: &str, with
         // 3. same name and size only (no hash, or the file was edited in place): one candidate
         //    is taken, several are ambiguous and skipped rather than guessed
         if hit.is_none() {
+            // Family ownership allows sharing, but does not prove identity: a sibling may
+            // have been deliberately relinked to another image with the same name and size.
+            let named: Vec<_> = named.into_iter().filter(|f| !owners.0.contains_key(f.as_str())).collect();
             match named.as_slice() {
                 [one] => hit = Some(((*one).clone(), MatchBy::Name)),
                 [] => {}
@@ -578,7 +582,8 @@ fn commit_find(s: &mut Session, mut plan: FindPlan) -> Result<Value> {
             || (p.id != master
                 && (s.catalog.photo(master).and_then(|original| checked_path(original)) == Some(f.to.as_str())
                     || accepted_originals.get(&master) == Some(&f.to)));
-        if !owners.available(&f.to, master) || !original_still_matches {
+        // The worker's match can disappear before its result reaches the session.
+        if !Path::new(&f.to).is_file() || !owners.available(&f.to, master) || !original_still_matches {
             missing = missing.saturating_add(1);
             continue;
         }

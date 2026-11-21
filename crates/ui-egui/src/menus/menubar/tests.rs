@@ -859,6 +859,13 @@ fn find_missing_within_follows_a_hashless_copys_original_outside_the_old_folder(
     use lightcraft_catalog::{Op, Photo, Source};
     let dir = std::env::temp_dir().join(format!("lc-ui-missing-copy-scope-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(dir.clone());
     let old = dir.join("old");
     let moved = dir.join("moved");
     std::fs::create_dir_all(&old).unwrap();
@@ -907,7 +914,6 @@ fn find_missing_within_follows_a_hashless_copys_original_outside_the_old_folder(
     assert_eq!(r["found"].as_array().map(Vec::len), Some(0), "{r}");
     assert_eq!(r["missing"], 1, "{r}");
     assert_eq!(app.session.catalog.photo(copy).unwrap(), &copy_before);
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// The interface language is chosen in Settings ▸ General (one choice per language), so Edit has no

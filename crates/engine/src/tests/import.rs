@@ -446,10 +446,20 @@ fn browsing_breaks_ties_by_name_in_the_views_direction() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Remove generated relink fixtures even when an assertion fails.
+struct RelinkFixture(PathBuf);
+
+impl Drop for RelinkFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// Photos a.png, b.png, c.png imported from `old`, then: a renamed into `moved`; b renamed, with
 /// an impostor (same name and size, other bytes) under its old name; c gone, with two impostors.
-fn renamed_and_ambiguous_scene(tag: &str) -> (std::path::PathBuf, Session) {
+fn renamed_and_ambiguous_scene(tag: &str) -> (std::path::PathBuf, Session, RelinkFixture) {
     let dir = temp_dir(tag);
+    let cleanup = RelinkFixture(dir.clone());
     std::fs::create_dir_all(dir.join("old")).unwrap();
     std::fs::create_dir_all(dir.join("moved/real")).unwrap();
     for (n, seed) in [("a.png", 1), ("b.png", 2), ("c.png", 3)] {
@@ -469,14 +479,14 @@ fn renamed_and_ambiguous_scene(tag: &str) -> (std::path::PathBuf, Session) {
     impostor(&dir.join("old/c.png"), &dir.join("moved/c.png"));
     impostor(&dir.join("old/c.png"), &dir.join("moved/real/c.png"));
     std::fs::remove_file(dir.join("old/c.png")).unwrap();
-    (dir, s)
+    (dir, s, cleanup)
 }
 
 /// Issue #105: Find Missing finds renamed files by content, prefers the content match over a
 /// same-name same-size impostor, and skips (reports) photos it can't tell apart.
 #[test]
 fn find_missing_matches_renamed_files_by_content() {
-    let (dir, mut s) = renamed_and_ambiguous_scene("missing-content");
+    let (dir, mut s, _cleanup) = renamed_and_ambiguous_scene("missing-content");
     let r = s.execute("library.findMissing", &json!({"folder": dir.join("moved").to_string_lossy()})).unwrap();
     let found = r["found"].as_array().unwrap();
     assert_eq!(found.len(), 2, "{r}");
@@ -491,14 +501,13 @@ fn find_missing_matches_renamed_files_by_content() {
     );
     assert_eq!(r["missing"], 1);
     assert_eq!(r["ambiguous"][0]["candidates"].as_array().map(Vec::len), Some(2), "{r}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Issue #2853: copies share the original's file, but keep their own edits and metadata.
 #[test]
 fn find_missing_relinks_virtual_copies_in_one_undo_step() {
     use crate::cmd::missing::{find_candidates, plan_find_missing};
-    let (dir, mut s) = renamed_and_ambiguous_scene("missing-copies");
+    let (dir, mut s, _cleanup) = renamed_and_ambiguous_scene("missing-copies");
     let original = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
     let mut ids = vec![original];
     for _ in 0..2 {
@@ -532,14 +541,13 @@ fn find_missing_relinks_virtual_copies_in_one_undo_step() {
     assert_eq!(s.catalog.photo(b_id).unwrap(), &b_before, "b.png is restored by the same undo step");
     s.execute("edit.redo", &json!({})).unwrap();
     assert_eq!(s.execute("library.missing", &json!({})).unwrap().as_array().unwrap().len(), 1);
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// A located sibling may share its file; unrelated ownership blocks both new and stale plans.
 #[test]
 fn find_missing_virtual_copies_can_use_a_relinked_sibling_but_not_an_unrelated_photo() {
     use crate::cmd::missing::{find_candidates, plan_find_missing};
-    let (dir, mut s) = renamed_and_ambiguous_scene("missing-copies-in-use");
+    let (dir, mut s, _cleanup) = renamed_and_ambiguous_scene("missing-copies-in-use");
     let original = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
     let unrelated = s.catalog.photos().find(|p| p.file_name == "c.png").unwrap().id;
     let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
@@ -559,14 +567,13 @@ fn find_missing_virtual_copies_can_use_a_relinked_sibling_but_not_an_unrelated_p
     assert_eq!(r["missing"], 1, "the original stays missing; the unrelated photo was located: {r}");
     let fresh = plan_find_missing(&find_candidates(&s.catalog), &dir.join("moved").to_string_lossy()).unwrap();
     assert!(!fresh.found.iter().any(|f| f.id == original), "{fresh:?}");
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// A later search can locate a hashless copy through its already-renamed original.
 #[test]
 fn find_missing_virtual_copies_can_use_their_already_located_original_without_hashes() {
     use crate::cmd::missing::{find_candidates, plan_find_missing};
-    let (dir, mut s) = renamed_and_ambiguous_scene("missing-copies-original");
+    let (dir, mut s, _cleanup) = renamed_and_ambiguous_scene("missing-copies-original");
     let original = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
     let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
     let copy = PhotoId(r["ids"][0].as_u64().unwrap());
@@ -584,7 +591,6 @@ fn find_missing_virtual_copies_can_use_their_already_located_original_without_ha
     assert_eq!(r["found"].as_array().unwrap().len(), 2, "{r}");
     assert_eq!(s.catalog.photo(copy).unwrap().source, s.catalog.photo(original).unwrap().source);
     assert_eq!(r["missing"], 1);
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// A renamed file whose size is unknown (0) but whose content hash is known is still found by
@@ -627,7 +633,7 @@ fn find_missing_matches_renamed_file_by_content_without_size() {
 #[test]
 fn find_missing_planned_on_a_worker_matches_the_command() {
     use crate::cmd::missing::{find_candidates, plan_find_missing};
-    let (dir, mut s) = renamed_and_ambiguous_scene("missing-worker");
+    let (dir, mut s, _cleanup) = renamed_and_ambiguous_scene("missing-worker");
     let folder = dir.join("moved").to_string_lossy().to_string();
     let candidates = find_candidates(&s.catalog);
     let f = folder.clone();
@@ -640,7 +646,6 @@ fn find_missing_planned_on_a_worker_matches_the_command() {
     assert_eq!(applied, direct);
     assert_eq!(direct["found"].as_array().map(Vec::len), Some(2), "{direct}");
     assert_eq!(direct["ambiguous"].as_array().map(Vec::len), Some(1), "{direct}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Issue #104: a plan made on a worker is re-checked when it is applied: a photo relinked
@@ -648,7 +653,7 @@ fn find_missing_planned_on_a_worker_matches_the_command() {
 #[test]
 fn find_missing_plan_is_rechecked_when_applied() {
     use crate::cmd::missing::{find_candidates, plan_find_missing};
-    let (dir, mut s) = renamed_and_ambiguous_scene("missing-recheck");
+    let (dir, mut s, _cleanup) = renamed_and_ambiguous_scene("missing-recheck");
     let plan = plan_find_missing(&find_candidates(&s.catalog), &dir.join("moved").to_string_lossy()).unwrap();
     let to = |name: &str| plan.found.iter().find(|f| f.from.ends_with(name)).unwrap().clone();
     let (a, b) = (to("a.png"), to("b.png"));
@@ -667,7 +672,6 @@ fn find_missing_plan_is_rechecked_when_applied() {
     };
     assert_eq!(path_of(a.id), dir.join("a-elsewhere.png").to_string_lossy());
     assert_eq!(path_of(b.id), b.from);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A library made on Windows names its originals with Windows paths; opened on macOS or Linux
@@ -3716,7 +3720,7 @@ fn a_broken_link_before_dotdot_is_an_error() {
 fn find_missing_hashless_copy_follows_renamed_original_in_either_order() {
     use crate::cmd::missing::{FindPlan, find_candidates, plan_find_missing};
     for (reverse, unknown_size) in [(false, false), (true, false), (false, true), (true, true)] {
-        let (dir, mut s) = renamed_and_ambiguous_scene(if reverse { "hashless-copy-first" } else { "hashless-original-first" });
+        let (dir, mut s, _cleanup) = renamed_and_ambiguous_scene(if reverse { "hashless-copy-first" } else { "hashless-original-first" });
         let original = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
         let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
         let copy = PhotoId(r["ids"][0].as_u64().unwrap());
@@ -3754,7 +3758,6 @@ fn find_missing_hashless_copy_follows_renamed_original_in_either_order() {
         assert_eq!(r["found"].as_array().unwrap().len(), 3);
         assert_eq!(r["missing"], 1);
         assert_eq!(s.catalog.photo(copy).unwrap().source, s.catalog.photo(original).unwrap().source);
-        let _ = std::fs::remove_dir_all(dir);
     }
 }
 
@@ -3762,7 +3765,7 @@ fn find_missing_hashless_copy_follows_renamed_original_in_either_order() {
 #[test]
 fn find_missing_hashless_copy_rechecks_its_originals_destination() {
     use crate::cmd::missing::{find_candidates, plan_find_missing};
-    let (dir, mut s) = renamed_and_ambiguous_scene("hashless-copy-guards");
+    let (dir, mut s, _cleanup) = renamed_and_ambiguous_scene("hashless-copy-guards");
     let original = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
     let unrelated = s.catalog.photos().find(|p| p.file_name == "c.png").unwrap().id;
     let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
@@ -3803,5 +3806,78 @@ fn find_missing_hashless_copy_rechecks_its_originals_destination() {
     s.execute("photo.relink", &json!({"id": unrelated.0, "path": target})).unwrap();
     let r = s.execute("library.findMissing", &plan.to_json()).unwrap();
     assert!(!r["found"].as_array().unwrap().iter().any(|f| f["id"] == copy.0), "{r}");
-    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Name and size alone cannot identify a sibling's independently relinked image.
+#[test]
+fn find_missing_does_not_guess_a_hashless_copys_sibling_by_name() {
+    use crate::cmd::missing::{MatchBy, find_candidates, plan_find_missing};
+    let (dir, mut s, _cleanup) = renamed_and_ambiguous_scene("hashless-sibling-name");
+    let original = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
+    let mut copies = Vec::new();
+    for _ in 0..2 {
+        let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
+        copies.push(PhotoId(r["ids"][0].as_u64().unwrap()));
+    }
+    let outside = dir.join("original.png");
+    std::fs::rename(dir.join("moved/Trip-001.png"), &outside).unwrap();
+    s.execute("photo.relink", &json!({"id": original.0, "path": outside})).unwrap();
+    let target = dir.join("moved/a.png");
+    let bytes = std::fs::read(&outside).unwrap();
+    let mut impostor = bytes.clone();
+    let at = impostor.len() - 20;
+    impostor[at] ^= 0xff;
+    std::fs::write(&target, impostor).unwrap();
+    s.execute("photo.relink", &json!({"id": copies[0].0, "path": target})).unwrap();
+    let mut candidates = find_candidates(&s.catalog);
+    candidates.iter_mut().find(|c| c.id == copies[1]).unwrap().hash = None;
+    let folder = dir.join("moved");
+    let plan = plan_find_missing(&candidates, &folder.to_string_lossy()).unwrap();
+    assert!(!plan.found.iter().any(|f| f.id == copies[1]), "a sibling's name and size are not identity: {plan:?}");
+    // A matching hash still permits sharing the sibling's file.
+    std::fs::write(&target, &bytes).unwrap();
+    let plan = plan_find_missing(&find_candidates(&s.catalog), &folder.to_string_lossy()).unwrap();
+    assert!(plan.found.iter().any(|f| f.id == copies[1] && f.by == MatchBy::Name), "{plan:?}");
+}
+
+/// A worker result is no longer a match if its destination vanished or became a directory.
+#[test]
+fn find_missing_rejects_a_destination_that_is_no_longer_a_file() {
+    use crate::cmd::missing::{MatchBy, find_candidates, plan_find_missing};
+    for by in [MatchBy::Name, MatchBy::Content, MatchBy::Original] {
+        for directory in [false, true] {
+            let (dir, mut s, _cleanup) = renamed_and_ambiguous_scene("missing-destination-gone");
+            let original = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
+            let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
+            let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+            let mut target = dir.join("moved/Trip-001.png");
+            if by == MatchBy::Name {
+                let named = dir.join("moved/a.png");
+                std::fs::rename(&target, &named).unwrap();
+                target = named;
+            }
+            if by == MatchBy::Original {
+                s.execute("photo.relink", &json!({"id": original.0, "path": target})).unwrap();
+            }
+            let mut candidates = find_candidates(&s.catalog);
+            if by == MatchBy::Original {
+                candidates.iter_mut().find(|c| c.id == copy).unwrap().hash = None;
+            }
+            let mut plan = plan_find_missing(&candidates, &dir.join("moved").to_string_lossy()).unwrap();
+            plan.found.retain(|f| f.id == copy);
+            plan.missing = 0;
+            plan.ambiguous.clear();
+            assert_eq!(plan.found.len(), 1, "{plan:?}");
+            assert_eq!(plan.found[0].by, by);
+            let before = s.catalog.photo(copy).unwrap().clone();
+            std::fs::remove_file(&target).unwrap();
+            if directory {
+                std::fs::create_dir(&target).unwrap();
+            }
+            let r = s.execute("library.findMissing", &plan.to_json()).unwrap();
+            assert_eq!(r["found"].as_array().map(Vec::len), Some(0), "{by:?}, directory={directory}: {r}");
+            assert_eq!(r["missing"], 1, "{r}");
+            assert_eq!(s.catalog.photo(copy).unwrap(), &before);
+        }
+    }
 }
