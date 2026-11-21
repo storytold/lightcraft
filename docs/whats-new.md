@@ -7,12 +7,16 @@
   virtual copies, star ratings, colour tags, keywords and the whole keyword list, IPTC fields, camera data, and the
   albums, projects and groups they are in. The catalog is only read, and Capture One isn't needed. Orange and pink,
   which LightCraft has no labels for, are kept with the photo and found by the keywords “Capture One|Orange” and
-  “Capture One|Pink”. Adjustments and Capture One sessions don't come over yet. See
+  “Capture One|Pink”. Exposure, colour and other adjustments, and Capture One sessions, don't come over yet. See
   [Capture One catalog import](capture-one-catalog-import.md).
 - Capture One smart albums come in as LightCraft smart albums with the same rules. One that tests something
   LightCraft has no rule for, such as file size or flash mode, becomes an album with the photos it shows at the
   time of the import, and the import's result says so. One that tests something the import can't read, such as Live
   Comments, is left out with a warning.
+- Capture One crops, rotations, flips and straightening come in, and so do keystone corrections, as LightCraft's
+  Transform settings fitted to what Capture One shows. A lens correction comes in with LightCraft's own profile for
+  the lens; a photo whose profile LightCraft doesn't have yet gets it once LightCraft finds one. What the import
+  can't carry over yet, such as a keystone skew or light falloff, is named in its result.
 
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
