@@ -582,7 +582,7 @@ visible menu bar yet: the menu model is only exposed through the control channel
 | MENU-PHOTO-MOVETOCLOUD | Move/copy to cloud | OOS | 🚫 | | |
 | MENU-WINDOW-MINIMIZE | Minimize / zoom | P1 | ✅ | `apps/lightcraft/src/native_menu.rs` | the system's Minimize (⌘M) and Zoom items at the top of Window |
 | MENU-WINDOW-PANELS | Panel switches | P0 | ✅ | `cmd:panel.edit`, `cmd:panel.crop`, `cmd:panel.remove`, `cmd:panel.masking`, `cmd:panel.presets`, `cmd:panel.versions` | |
-| MENU-WINDOW-BRINGFRONT | Bring all to front | P2 | ✅ | `apps/lightcraft/src/native_menu.rs` | the system's item at the end of Window |
+| MENU-WINDOW-BRINGFRONT | Bring all to front | P2 | ✅ | `apps/lightcraft/src/native_menu.rs` | the system's item at the end of Window; below it AppKit lists the open windows (the main window, and the second one while it is open) |
 | MENU-HELP-HELP | Help | P2 | ✅ | `cmd:app.help` | opens the documentation |
 | MENU-HELP-TUTORIALS | Tutorials | OOS | 🚫 | | |
 | MENU-HELP-WHATSNEW | What's new | P2 | ✅ | `cmd:app.whatsNew` | |
@@ -1064,3 +1064,4 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-20 | patch | LR-EXP-DIALOG: the four built-in export presets are translated in all 17 catalogs (translations pending native-speaker review); Instagram Story / Reel states that it applies no crop to 9:16; status unchanged (✅) |
 | 2026-10-31 | patch | LRC-LIB-VISUALSEARCH: Find Similar Photos reads the photos on a worker thread under an activity row with ✕ instead of on the UI thread, where a large library left the window not responding (#3468). A stopped search leaves the view as it was and keeps what it read; a control request gets the same `{photos}` when the search ends. |
 | 2026-10-27 | patch | LR-BEHAV-LOCALE: the Edit menu loses its Language submenu (18 rows); Settings ▸ General ▸ Language, which already lists every language, is the one place to choose; the `app.language.*` commands stay for agents; status counts unchanged |
+| 2026-10-27 | patch | MENU-WINDOW-BRINGFRONT: on macOS the native Window menu is registered with the application only once the menu bar is installed (muda ignores the call before), so AppKit lists the open windows in it; before, it ended at Bring All to Front; status unchanged (✅) |
