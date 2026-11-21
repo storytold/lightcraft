@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Remove Location checks all of an Original's embedded XMP
+- An Original copy with “Remove Location Info” on is now also refused when its embedded XMP names a place the
+  catalog doesn't show: an IPTC Extension Location Shown or Location Created (a city, coordinates…), or GPS in any
+  packet. Photoshop files (PSD/PSB) get the same check as other formats. An XMP packet too large to read in full is
+  refused too, because it can't be shown to be free of location. Empty place fields still export.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
