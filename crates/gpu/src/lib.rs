@@ -516,6 +516,24 @@ pub fn handles(depth: lightcraft_pipeline::OutputDepth, device_proof: bool, over
         && overlay != lightcraft_pipeline::Overlay::HdrRange
 }
 
+/// Whether the GPU draws everything in `s` that its render would draw: false when the visible masks carry more
+/// Point Color samples of their own than the kernel's table holds (`params::MAX_MASK_POINTS`), which the CPU renders
+/// instead. [`try_render`] refuses such settings ([`Fallback::NotTried`]) and the loupe sizes its slider-drag drafts by
+/// it together with [`handles`], so the two can't drift apart.
+pub fn draws(s: &DevelopSettings) -> bool {
+    // (a black & white photo has no Point Color, in masks either)
+    let samples: usize = if lightcraft_pipeline::is_bw(s) {
+        0
+    } else {
+        s.masks
+            .iter()
+            .filter(|m| m.visible && !m.components.is_empty() && m.section_enabled("pointColor"))
+            .map(|m| m.point_colors.iter().take(lightcraft_develop::MAX_POINT_COLORS).filter(|p| !p.is_neutral()).count())
+            .sum()
+    };
+    samples <= params::MAX_MASK_POINTS
+}
+
 /// [`render`], reporting why this render made no GPU image: [`Fallback::NotTried`] when the GPU
 /// was not used (callers can ask [`unavailable_reason`]), [`Fallback::Failed`] with the reason
 /// when the GPU render failed and the CPU must render it. The reason belongs to this call, unlike
@@ -645,6 +663,10 @@ fn run(
             return Err(Fallback::NotTried);
         }
         let s = &*lightcraft_pipeline::settings_for(s, req);
+        // more mask Point Color samples than the kernel's table holds: the CPU renders the photo
+        if !draws(s) {
+            return Err(Fallback::NotTried);
+        }
         // content-aware Fill spots (`spots::fill_box`) have no GPU kernel: the CPU renders the photo
         if s.spots.iter().any(|sp| sp.mode == lightcraft_develop::SpotMode::Fill) {
             return Err(Fallback::NotTried);

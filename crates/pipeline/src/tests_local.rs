@@ -107,3 +107,140 @@ fn local_defringe_desaturates_purple_edges_only() {
     let flat = |img: &Rgba8| sat(at(img, 70));
     assert!((flat(&on) - flat(&plain)).abs() <= 2.0, "flat purple kept: {} vs {}", flat(&on), flat(&plain));
 }
+
+/// Largest per-channel difference between two renders over columns `x0..x1`.
+fn max_diff(a: &Rgba8, b: &Rgba8, x0: usize, x1: usize) -> u8 {
+    (0..H)
+        .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+        .flat_map(|(x, y)| (0..3).map(move |c| a.data[y * W + x][c].abs_diff(b.data[y * W + x][c])))
+        .max()
+        .unwrap_or(0)
+}
+
+#[test]
+fn local_grain_adds_grain_only_inside_the_mask() {
+    use lightcraft_develop::Process;
+    let src = Rgb32f::from_fn(W, H, |_, _| [0.18; 3]);
+    // the crystal grain (the default process) and the frozen value-noise grain
+    for process in [Process::V7, Process::V6] {
+        let mut s = left_mask(LocalAdjustments { grain: 100.0, ..Default::default() });
+        s.process = process.version();
+        let img = shot(&src, &s);
+        let (inside, outside) = (spread(&img, 10, 90, luma), spread(&img, 150, 230, luma));
+        assert!(inside > 1.0, "{process:?}: grain inside the mask: {inside}");
+        let plain = spread(&shot(&src, &DevelopSettings::default()), 150, 230, luma);
+        assert_eq!(outside, plain, "{process:?}: outside the mask nothing changes");
+        assert!(inside > 3.0 * plain.max(0.1), "{process:?}: {inside} vs {plain}");
+        // half the amount, half the strength (both models are linear in it)
+        let mut half = left_mask(LocalAdjustments { grain: 50.0, ..Default::default() });
+        half.process = process.version();
+        let ratio = spread(&shot(&src, &half), 10, 90, luma) / inside;
+        assert!((ratio - 0.5).abs() < 0.08, "{process:?}: grain 50 vs 100: {ratio}");
+    }
+}
+
+#[test]
+fn local_grain_zero_renders_as_before_and_adds_to_the_global_grain() {
+    let src = Rgb32f::from_fn(W, H, |x, y| [0.18 * (1.0 + 0.1 * noise(x, y, 3)); 3]);
+    let flat_src = Rgb32f::from_fn(W, H, |_, _| [0.18; 3]);
+    for on in [false, true] {
+        let global = |mut s: DevelopSettings| {
+            s.grain.amount = if on { 40.0 } else { 0.0 };
+            s
+        };
+        // a mask without grain leaves the global grain (on or off) byte-identical
+        let plain = shot(&src, &global(DevelopSettings::default()));
+        let masked = shot(&src, &global(left_mask(LocalAdjustments::default())));
+        assert_eq!(plain.data, masked.data, "global grain {on}");
+    }
+    // with local grain: the global grain is unchanged outside the mask, stronger inside
+    let mut flat = DevelopSettings::default();
+    flat.grain.amount = 40.0;
+    let mut s = left_mask(LocalAdjustments { grain: 60.0, ..Default::default() });
+    s.grain.amount = 40.0;
+    let (plain, local) = (shot(&src, &flat), shot(&src, &s));
+    let (flat_plain, flat_local) = (shot(&flat_src, &flat), shot(&flat_src, &s));
+    assert!(max_diff(&plain, &local, 150, 230) <= 1, "outside the mask the global grain stays");
+    let (inside_plain, inside_local) = (spread(&flat_plain, 10, 90, luma), spread(&flat_local, 10, 90, luma));
+    assert!(inside_local > 1.8 * inside_plain, "inside the mask the grain adds up: {inside_local} vs {inside_plain}");
+    // the Effects eye does not switch a mask's own grain off
+    let mut eye = left_mask(LocalAdjustments { grain: 100.0, ..Default::default() });
+    eye.disabled_sections.push("effects".into());
+    let flat = Rgb32f::from_fn(W, H, |_, _| [0.18; 3]);
+    assert!(spread(&shot(&flat, &eye), 10, 90, luma) > 1.0);
+}
+
+#[test]
+fn a_mask_section_with_its_eye_off_renders_neutral_and_comes_back() {
+    let src = Rgb32f::from_fn(W, H, |_, _| [0.18; 3]);
+    let plain = shot(&src, &DevelopSettings::default());
+    let mut s = left_mask(LocalAdjustments { exposure: 1.0, ..Default::default() });
+    let lit = shot(&src, &s);
+    assert!(luma(lit.data[60 * W + 20]) > luma(plain.data[60 * W + 20]) + 10.0, "exposure +1 brightens the masked half");
+    s.masks[0].set_section_enabled("tone", false);
+    let off = shot(&src, &s);
+    assert_eq!(off.data, plain.data, "tone off = exposure 0");
+    s.masks[0].set_section_enabled("tone", true);
+    assert_eq!(shot(&src, &s).data, lit.data, "eye back on restores it");
+}
+
+/// A Point Color sample of the colour a rendered pixel shows (OkLCh, as the picker takes it), moving its hue.
+fn sample_of(px: [u8; 4], hue_shift: f64) -> lightcraft_develop::PointColor {
+    use lightcraft_color::perceptual::{lab_to_lch, oklab_from_2020};
+    use lightcraft_color::transfer::srgb_to_linear;
+    let rgb = [px[0], px[1], px[2]].map(|v| srgb_to_linear(v as f32 / 255.0));
+    let [l, c, h] = lab_to_lch(oklab_from_2020(lightcraft_color::SRGB.to_space(&lightcraft_color::REC2020).apply_f32(rgb)));
+    lightcraft_develop::PointColor { lum: l as f64, chroma: c as f64, hue: (h as f64).to_degrees(), hue_shift, range: 70.0, ..Default::default() }
+}
+
+/// An orange top half and a blue bottom half.
+fn two_colours() -> Rgb32f {
+    Rgb32f::from_fn(W, H, |_, y| if y < H / 2 { [0.30, 0.16, 0.05] } else { [0.04, 0.10, 0.40] })
+}
+
+#[test]
+fn a_mask_point_color_moves_only_the_matching_colour_inside_the_mask() {
+    let src = two_colours();
+    let plain = shot(&src, &DevelopSettings::default());
+    let (orange, blue) = (30 * W + 20, 90 * W + 20);
+    let mut s = left_mask(LocalAdjustments::default());
+    // no sample, or one that shifts nothing: byte-identical to a photo without the mask
+    assert_eq!(shot(&src, &s).data, plain.data);
+    s.masks[0].point_colors.push(sample_of(plain.data[orange], 0.0));
+    assert_eq!(shot(&src, &s).data, plain.data, "a neutral sample renders as none");
+    s.masks[0].point_colors[0] = sample_of(plain.data[orange], 80.0);
+    let moved = shot(&src, &s);
+    let d = |a: [u8; 4], b: [u8; 4]| (0..3).map(|k| a[k].abs_diff(b[k]) as u32).sum::<u32>();
+    assert!(d(moved.data[orange], plain.data[orange]) > 30, "the sampled colour moves inside the mask");
+    assert_eq!(moved.data[blue], plain.data[blue], "another colour inside the mask stays");
+    assert_eq!(max_diff(&plain, &moved, 150, 230), 0, "outside the mask nothing changes");
+    // a hidden mask applies nothing
+    s.masks[0].visible = false;
+    assert_eq!(shot(&src, &s).data, plain.data);
+}
+
+#[test]
+fn a_mask_point_color_follows_the_mask_amount_and_its_eye() {
+    let src = two_colours();
+    let plain = shot(&src, &DevelopSettings::default());
+    let at = 30 * W + 20;
+    let mut s = left_mask(LocalAdjustments::default());
+    // lightness is the cleanest to compare: it is linear in the sample's shift
+    let mut sample = sample_of(plain.data[at], 0.0);
+    sample.lum_shift = 100.0;
+    s.masks[0].point_colors.push(sample);
+    let (base, full) = (luma(plain.data[at]), luma(shot(&src, &s).data[at]));
+    assert!(full > base + 15.0, "{full} vs {base}");
+    s.masks[0].adjust.amount = 50.0;
+    let half = luma(shot(&src, &s).data[at]);
+    assert!(half > base + 0.3 * (full - base) && half < base + 0.7 * (full - base), "half the amount lands between: {half} ({base}..{full})");
+    s.masks[0].adjust.amount = 200.0;
+    assert!(luma(shot(&src, &s).data[at]) > full + 5.0, "an amount above 100 goes further");
+    // the eye: off = as if none, on again restores it
+    s.masks[0].adjust.amount = 100.0;
+    let on = shot(&src, &s);
+    s.masks[0].set_section_enabled("pointColor", false);
+    assert_eq!(shot(&src, &s).data, plain.data);
+    s.masks[0].set_section_enabled("pointColor", true);
+    assert_eq!(shot(&src, &s).data, on.data);
+}

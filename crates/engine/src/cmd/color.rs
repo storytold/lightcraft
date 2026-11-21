@@ -63,8 +63,38 @@ pub(crate) fn after_mixer_neutral(d: &mut DevelopSettings) {
     d.treatment = Treatment::Color;
     d.grading = Default::default();
     d.vignette.amount = 0.0;
-    d.grain.amount = 0.0;
+    no_grain(d);
     d.curve = Default::default();
+}
+
+/// What a mask's Point Color sees: the photo as it is when that stage runs (after the colour tools and the masks'
+/// sliders), so everything after it is neutralized (vignette, tone curves, grain) and so are
+/// the Point Color of mask `mask` and of the masks after it (they apply in mask order: the earlier ones' correction
+/// is part of what this sample sees, its own would chase itself). A black & white photo is sampled in colour, as the
+/// photo's own picker does (and a B&W profile is swapped for the colour one).
+pub(crate) fn before_mask_point_color(d: &mut DevelopSettings, mask: u32) {
+    d.vignette.amount = 0.0;
+    no_grain(d);
+    d.curve = Default::default();
+    d.treatment = Treatment::Color;
+    if d.profile.id == "lc.mono" || d.profile.id.starts_with("lc.bw.") {
+        d.profile.id = "lc.color".into();
+    }
+    let mut own_or_later = false;
+    for m in &mut d.masks {
+        own_or_later |= m.id == mask;
+        if own_or_later {
+            m.point_colors.clear();
+        }
+    }
+}
+
+/// No grain, global or in a mask: the samplers must not measure noise.
+fn no_grain(d: &mut DevelopSettings) {
+    d.grain.amount = 0.0;
+    for m in &mut d.masks {
+        m.adjust.grain = 0.0;
+    }
 }
 
 /// The targeted adjustment tool: the controls (and their new values) a vertical drag of `delta`
@@ -87,7 +117,7 @@ fn targeted(s: &mut Session, p: &Value) -> Result<Value> {
             // the encoded value the tone curve sees there (curves and grain neutralized)
             let e = probe(s, c, x, y, |d| {
                 d.curve = ToneCurve { refine_saturation: d.curve.refine_saturation, ..Default::default() };
-                d.grain.amount = 0.0;
+                no_grain(d);
             })?;
             let channel = p.get("channel").and_then(Value::as_str).unwrap_or("parametric");
             label = "Tone Curve";
@@ -206,4 +236,41 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(Value::Null)
         }),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use lightcraft_develop::{DevelopSettings, LocalAdjustments, Mask};
+
+    #[test]
+    fn the_samplers_see_no_grain_in_masks_either() {
+        let mut d = DevelopSettings::default();
+        d.grain.amount = 40.0;
+        d.masks.push(Mask { adjust: LocalAdjustments { grain: 60.0, exposure: 0.5, ..Default::default() }, ..Default::default() });
+        super::after_mixer_neutral(&mut d);
+        assert_eq!((d.grain.amount, d.masks[0].adjust.grain), (0.0, 0.0));
+        assert_eq!(d.masks[0].adjust.exposure, 0.5, "only the grain");
+    }
+
+    #[test]
+    fn a_mask_point_color_sample_sees_the_photo_before_its_own_stage() {
+        let mut d = DevelopSettings::default();
+        d.color.saturation = 30.0;
+        d.vignette.amount = -50.0;
+        d.treatment = lightcraft_develop::Treatment::Bw;
+        d.profile.id = "lc.mono".into();
+        let mask = |id| Mask {
+            id,
+            adjust: LocalAdjustments { exposure: 0.5, ..Default::default() },
+            point_colors: vec![Default::default()],
+            ..Default::default()
+        };
+        d.masks = vec![mask(1), mask(2), mask(3)];
+        super::before_mask_point_color(&mut d, 2);
+        assert_eq!((d.color.saturation, d.vignette.amount), (30.0, 0.0), "the colour tools stay, what follows goes");
+        assert_eq!((d.treatment, d.profile.id.as_str()), (lightcraft_develop::Treatment::Color, "lc.color"), "sampled in colour");
+        let held: Vec<usize> = d.masks.iter().map(|m| m.point_colors.len()).collect();
+        assert_eq!(held, [1, 0, 0], "the earlier mask's samples stay, this one's and later ones' go");
+        assert_eq!(d.masks[1].adjust.exposure, 0.5);
+    }
 }

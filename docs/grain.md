@@ -34,6 +34,16 @@ any other implementation.
   linear light does, through the concave encoding) nor greys blown highlights, and it keeps hue.
 - **Colour:** monochrome, as in Lightroom Classic.
 
+## Grain inside a mask
+
+A mask's Grain slider (`mask.adjust` `grain`, 0..100; XMP `crs:LocalGrain`) adds to the global Amount: a pixel's
+amount is `clamp(global + Σ αᵢ·grainᵢ, 0, 1)` over the masks covering it (α = the mask's alpha with its Amount). Size,
+Roughness and the seed are the global ones, and both models are linear in Amount, so the render builds the grain once
+at Amount 100 and scales it per pixel (`FinishParams::grain_local`; the GPU kernel does the same). The Edit panel's
+Effects eye switches off the global Grain only, so a mask's grain stays; the mask's own Effects eye
+(`mask.sectionEnabled` `effects`) switches off that mask's grain (`Mask::effective`). Without local grain the render is
+unchanged.
+
 ## Resolution independence
 
 The emulsion is drawn in frame coordinates at twice the resolution of a 6000 px export (a tile pixel

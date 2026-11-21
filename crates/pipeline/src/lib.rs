@@ -886,7 +886,8 @@ pub fn before_settings(s: &DevelopSettings) -> DevelopSettings {
     b
 }
 
-pub(crate) fn is_bw(s: &DevelopSettings) -> bool {
+/// Whether the photo renders in black & white (treatment, or one of the B&W profiles): it has no Point Color.
+pub fn is_bw(s: &DevelopSettings) -> bool {
     s.treatment == Treatment::Bw || s.profile.id == "lc.mono" || s.profile.id.starts_with("lc.bw.")
 }
 

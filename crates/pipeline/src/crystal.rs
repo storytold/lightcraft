@@ -1037,11 +1037,17 @@ impl CrystalGrain {
     /// for a rotated frame's pixel stands in for its rotated footprint (`docs/grain.md`).
     #[inline]
     pub fn apply(&self, e: [f32; 3], gx: f32, gy: f32) -> [f32; 3] {
+        self.apply_scaled(e, gx, gy, 1.0)
+    }
+
+    /// [`Self::apply`] with the strength `k` times `scale` (local grain: the grain is built at Amount 100).
+    #[inline]
+    pub fn apply_scaled(&self, e: [f32; 3], gx: f32, gy: f32, scale: f32) -> [f32; 3] {
         if !(gx.is_finite() && gy.is_finite()) {
             return e;
         }
         let tpl = TILE_PER_LONG as f32;
-        self.apply_field(e, self.tile.field(gx * tpl, gy * tpl, self.foot))
+        self.apply_field_scaled(e, self.tile.field(gx * tpl, gy * tpl, self.foot), scale)
     }
 
     /// The grain field of a row of `out.len()` pixels whose first centre is at (`gx`, `gy`) and
@@ -1068,8 +1074,14 @@ impl CrystalGrain {
     /// Display-encoded colour `e` with grain field value `g` (see [`CrystalTile::field`]).
     #[inline]
     pub fn apply_field(&self, e: [f32; 3], g: f32) -> [f32; 3] {
+        self.apply_field_scaled(e, g, 1.0)
+    }
+
+    /// [`Self::apply_field`] with the strength `k` times `scale`.
+    #[inline]
+    pub fn apply_field_scaled(&self, e: [f32; 3], g: f32, scale: f32) -> [f32; 3] {
         let lum = (0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2]).clamp(0.0, 1.0);
-        let k = self.k * g * (1.0 - srgb_to_linear(lum));
+        let k = self.k * scale * g * (1.0 - srgb_to_linear(lum));
         if !k.is_finite() {
             return e;
         }

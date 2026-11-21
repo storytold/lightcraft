@@ -33,6 +33,7 @@ pub(crate) use grading::{WheelGrab, WheelLock, WheelMods, wheel_pick};
 pub(crate) use histogram::histogram;
 use histogram::soft_proofing;
 use lens_blur::lens_blur;
+pub(crate) use mixer::mask_point_color;
 use mixer::{mixer, point_color};
 use sliders::{REL_TEMP, REL_TINT, hdr_row, header_buttons, k_to_rel, profile_menu, quick_develop, rel_to_k, reset_tip, section};
 pub use sliders::{apply_slider_out, sub_title};
@@ -288,8 +289,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             control(app, ui, d, c, enabled);
         }
         sub_title(ui, crate::i18n::tr("Grain"));
+        // Size and Roughness also shape the grain a mask adds
+        let grainy = d.grain.amount != 0.0 || d.masks.iter().any(|m| m.visible && !m.components.is_empty() && m.adjust.grain > 0.0);
         for c in ["grain.amount", "grain.size", "grain.roughness"] {
-            control(app, ui, d, c, c == "grain.amount" || d.grain.amount != 0.0);
+            control(app, ui, d, c, c == "grain.amount" || grainy);
         }
         ui.add_space(8.0);
     });

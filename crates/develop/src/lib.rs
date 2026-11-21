@@ -134,7 +134,7 @@ impl DevelopSettings {
     /// Calibration the pipeline switches off where it applies them. Borrowed when every section is on.
     pub fn effective(&self) -> std::borrow::Cow<'_, DevelopSettings> {
         let off = |section: &str| !self.section_enabled(section);
-        if !(off("light") || off("color") || off("detail")) {
+        if !(off("light") || off("color") || off("detail") || self.masks.iter().any(|m| !m.disabled_sections.is_empty())) {
             return std::borrow::Cow::Borrowed(self);
         }
         let mut d = self.clone();
@@ -150,6 +150,12 @@ impl DevelopSettings {
         }
         if off("detail") {
             d.reset_section(Section::Detail);
+        }
+        // a mask's own section eyes (its stored values stay in `self`)
+        for m in &mut d.masks {
+            if !m.disabled_sections.is_empty() {
+                *m = m.effective().into_owned();
+            }
         }
         std::borrow::Cow::Owned(d)
     }
@@ -406,6 +412,67 @@ mod tests {
         let mut bad = v.clone();
         bad["masks"][0]["components"][0]["shape"]["samples"] = json!([[0.1, 0.2]]);
         assert!(DevelopSettings::from_json(&bad).is_err());
+    }
+
+    /// A mask's section eyes (Lightroom Classic): off = neutral in the effective copy only, never serialised when all are on.
+    #[test]
+    fn mask_sections_are_neutral_when_off_and_keep_their_values() {
+        let mut s = DevelopSettings::default();
+        let adjust = LocalAdjustments {
+            exposure: 1.0,
+            temp: 20.0,
+            color_sat: 50.0,
+            clarity: 30.0,
+            grain: 40.0,
+            sharpness: 10.0,
+            amount: 80.0,
+            ..Default::default()
+        };
+        s.masks.push(Mask { id: 1, adjust, ..Default::default() });
+        s.masks.push(Mask { id: 2, adjust, ..Default::default() });
+        // all eyes on: no key in the JSON, borrowed copy, older JSON loads
+        let v = s.to_json();
+        assert!(v["masks"][0].get("disabled_sections").is_none(), "{}", v["masks"][0]);
+        assert!(matches!(s.effective(), std::borrow::Cow::Borrowed(_)));
+        assert_eq!(DevelopSettings::from_json(&v).unwrap(), s);
+        let on_hash = s.hash64();
+        // tone off on mask 1 only
+        s.masks[0].set_section_enabled("tone", false);
+        assert_ne!(s.hash64(), on_hash, "the eye is part of the cache key");
+        let e = s.effective();
+        assert_eq!(e.masks[0].adjust.exposure, 0.0);
+        assert_eq!(e.masks[1].adjust.exposure, 1.0);
+        let rest = LocalAdjustments { exposure: 0.0, ..adjust };
+        assert_eq!(e.masks[0].adjust, rest, "only the tone fields change");
+        assert_eq!(s.masks[0].adjust.exposure, 1.0, "the stored value stays");
+        assert_eq!(DevelopSettings::from_json(&s.to_json()).unwrap(), s);
+        // each section reaches its own fields; amount belongs to none
+        for (section, f) in [
+            ("color", (|a: &LocalAdjustments| (a.temp, a.color_sat)) as fn(&LocalAdjustments) -> (f64, f64)),
+            ("effects", |a| (a.clarity, a.grain)),
+            ("detail", |a| (a.sharpness, 0.0)),
+        ] {
+            let mut m = Mask { adjust, ..Default::default() };
+            m.set_section_enabled(section, false);
+            assert_eq!(f(&m.effective().adjust), (0.0, 0.0), "{section}");
+            assert_eq!(m.effective().adjust.amount, 80.0);
+            assert_eq!(m.effective().adjust.exposure, 1.0, "{section} leaves tone");
+        }
+        // pointColor clears the mask's own samples, no slider
+        let mut m = Mask { adjust, ..Default::default() };
+        m.point_colors.push(PointColor { hue_shift: 40.0, ..Default::default() });
+        m.set_section_enabled("pointColor", false);
+        assert_eq!(m.effective().adjust, adjust);
+        assert!(m.effective().point_colors.is_empty());
+        assert_eq!(m.point_colors.len(), 1, "the stored samples stay");
+        // back on: same JSON and hash as before
+        s.masks[0].set_section_enabled("tone", true);
+        assert_eq!(s.hash64(), on_hash);
+        assert!(matches!(s.effective(), std::borrow::Cow::Borrowed(_)));
+        // the global section eyes still combine with a mask's
+        s.masks[0].set_section_enabled("tone", false);
+        s.set_section_enabled("detail", false);
+        assert_eq!(s.effective().masks[0].adjust.exposure, 0.0);
     }
 
     #[test]
