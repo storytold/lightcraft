@@ -1965,6 +1965,9 @@ pub struct UiState {
     /// (`crate::recheck`).
     #[serde(skip)]
     pub rechecked_library: Option<u64>,
+    /// Originals still to be read in the background (`crate::read_originals`).
+    #[serde(skip)]
+    pub originals: crate::read_originals::OriginalsState,
     #[serde(skip)]
     pub status: String,
     #[serde(skip)]
@@ -2882,6 +2885,7 @@ impl Default for UiState {
             #[cfg(test)]
             find_missing_test_delay: None,
             rechecked_library: None,
+            originals: Default::default(),
             status: String::new(),
             dialog: None,
             settings_section: None,

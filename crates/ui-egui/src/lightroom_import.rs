@@ -443,7 +443,10 @@ fn start_inspect(app: &mut LccApp, path: PathBuf, ctx: &egui::Context) -> Result
 #[cfg(not(target_arch = "wasm32"))]
 fn start_import(app: &mut LccApp, path: PathBuf, update_existing: bool, ctx: &egui::Context) -> Result<Value, String> {
     busy(app)?;
-    let job = lcc_engine::lightroom_job::LightroomJob::new(&mut app.session, path.clone(), update_existing).map_err(|e| e.to_string())?;
+    // the catalog's photos are committed first and their originals read afterwards in the background (issue #1303)
+    let job = lcc_engine::lightroom_job::LightroomJob::new(&mut app.session, path.clone(), update_existing)
+        .map_err(|e| e.to_string())?
+        .read_originals_later(true);
     let cancel = Arc::new(AtomicBool::new(false));
     let progress = job.progress();
     let (tx, rx) = mpsc::channel();
@@ -550,6 +553,9 @@ pub fn tick(app: &mut LccApp, ctx: &egui::Context) {
                 Ok(completion.report)
             });
             let report = report.unwrap_or(Value::Null);
+            if report.get("originalsToRead").and_then(Value::as_u64).is_some_and(|n| n > 0) {
+                crate::read_originals::wake(app);
+            }
             task.enter(Phase::Finalizing);
             let (tx, rx) = mpsc::channel();
             let commit_error = committed.as_ref().err().map(ToString::to_string);

@@ -26,6 +26,12 @@ reverses it. From the command line:
 
 Photos you already edited in <app> keep their edits; `updateExisting=true` replaces them with Lightroom's.
 
+The photos appear as soon as the catalog is read: <app> doesn't wait for the original files. It reads them
+afterwards in the background (**Reading originals** on the activity stack, which you can stop), filling in the
+content hash, file size, lens data and other facts only the file has. Your ratings, keywords and edits are there from
+the start. If you stop it, quit, or a drive is unplugged, the rest is read the next time the library opens. From the
+command line, add `readOriginalsLater=true` to the import and run `library.readOriginals` afterwards.
+
 ## What comes across
 
 | Lightroom | In <app> |
