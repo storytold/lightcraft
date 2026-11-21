@@ -477,6 +477,14 @@ fn explorer_select_quotes_the_path() {
 }
 
 #[test]
+fn control_token_takes_a_value_and_never_swallows_the_next_option() {
+    assert_eq!(launch::control_token_value(Some(" abc ".into())), Ok(Some("abc".to_string())));
+    assert_eq!(launch::control_token_value(Some("  ".into())), Ok(None), "empty after trimming is no token");
+    assert!(launch::control_token_value(None).is_err(), "missing value");
+    assert!(launch::control_token_value(Some("--library".into())).unwrap_err().contains("--control-token needs a value"));
+}
+
+#[test]
 fn a_control_port_that_is_not_a_number_is_ignored() {
     assert_eq!(control_port_from("--control", Some("7980".into())), Some(7980));
     assert_eq!(control_port_from("--control", Some(" 18001 ".into())), Some(18001));

@@ -23,24 +23,94 @@ pub const MAX_LINE: usize = 4 * 1024 * 1024;
 /// Connections served at once; further ones get an error line and are closed.
 pub const MAX_CONNECTIONS: usize = 16;
 
-pub fn start(port: u16, ctx: egui::Context) -> Receiver<ControlRequest> {
+/// Bind the control port on loopback. Bind first, then write the token file ([`prepare_token`]):
+/// a port that is already taken by another run must not have that run's token file replaced.
+pub fn bind(port: u16) -> std::io::Result<TcpListener> {
+    TcpListener::bind(("127.0.0.1", port))
+}
+
+/// Serve the control channel on `listener` (from [`bind`]). `token`: when `Some`, the first line of
+/// every connection must be `{"method":"auth","params":{"token":"…"}}` or the connection is closed.
+/// See [`token_file`] / [`random_token`] for how the app and `lightcraft-cli` share it.
+pub fn start(listener: TcpListener, ctx: egui::Context, token: Option<String>) -> Receiver<ControlRequest> {
     let (tx, rx) = channel::<ControlRequest>();
-    let listener = match TcpListener::bind(("127.0.0.1", port)) {
-        Ok(l) => l,
-        Err(e) => {
-            log::error!("control server failed to bind 127.0.0.1:{port}: {e}");
-            return rx;
-        }
-    };
-    log::info!("control server listening on 127.0.0.1:{port}");
-    std::thread::spawn(move || accept_loop(listener, tx, ctx));
+    let token: Option<Arc<str>> = token.map(Arc::from);
+    let auth = if token.is_some() { "token required" } else { "NO AUTHENTICATION" };
+    match listener.local_addr() {
+        Ok(addr) => log::info!("control server listening on {addr} ({auth})"),
+        Err(_) => log::info!("control server listening on 127.0.0.1 ({auth})"),
+    }
+    std::thread::spawn(move || accept_loop(listener, tx, ctx, token));
     rx
 }
 
-fn accept_loop(listener: TcpListener, tx: Sender<ControlRequest>, ctx: egui::Context) {
+/// A token given by `--control-token` / `LIGHTCRAFT_CONTROL_TOKEN`, trimmed; empty after trimming is
+/// absent. `lightcraft-cli` trims what it reads the same way, so the two sides compare equal.
+pub fn clean_token(token: Option<String>) -> Option<String> {
+    token.map(|t| t.trim().to_string()).filter(|t| !t.is_empty())
+}
+
+/// Bind `port`, then decide the token and write it to `token_path`, then serve: the order matters, so
+/// that a port already held by another run leaves that run's token file alone (the error is returned
+/// before anything is touched). `main.rs` passes [`token_file`]`(port)`; tests pass a temp path.
+/// `ephemeral` is `--memory` (see [`prepare_token`]).
+pub fn start_control(
+    port: u16,
+    explicit: Option<String>,
+    no_auth: bool,
+    ephemeral: bool,
+    token_path: Option<std::path::PathBuf>,
+    ctx: egui::Context,
+) -> std::io::Result<Receiver<ControlRequest>> {
+    let listener = bind(port)?;
+    let token = prepare_token(token_path.as_deref(), explicit, no_auth, ephemeral);
+    Ok(start(listener, ctx, token))
+}
+
+/// The token the control channel will require (`None`: authentication is off, and the token file of
+/// an earlier run at `token_path` is removed). Without `explicit` a random one is generated. It is
+/// also written to `token_path` for `lightcraft-cli`; call this only after [`bind`] succeeded.
+///
+/// `ephemeral` (a `--memory` session, which saves nothing): no file is written or removed. A
+/// generated token is logged once instead, because that is the only way a client can learn it.
+pub fn prepare_token(token_path: Option<&std::path::Path>, explicit: Option<String>, no_auth: bool, ephemeral: bool) -> Option<String> {
+    if no_auth {
+        log::warn!("control channel started WITHOUT authentication (LIGHTCRAFT_CONTROL_NO_AUTH)");
+        if !ephemeral && let Some(path) = token_path {
+            remove_file_if_present(path);
+        }
+        return None;
+    }
+    let generated = explicit.is_none();
+    let token = explicit.unwrap_or_else(random_token);
+    if ephemeral && generated {
+        log::warn!(
+            "control token for this --memory session: {token} (--memory saves nothing, so no token file is written; \
+             give it to lightcraft-cli in LIGHTCRAFT_CONTROL_TOKEN, or start with --control-token)"
+        );
+        return Some(token);
+    }
+    let written = token_path
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no home directory"))
+        .and_then(|path| write_token_at(path, &token).map(|()| path));
+    match written {
+        Ok(path) => log::info!("control token written to {} (lightcraft-cli reads it from there)", path.display()),
+        Err(e) if generated => log::warn!(
+            "could not write the control token file: {e}. This app generated its own token, so no client can learn it: \
+             restart the app with --control-token (or LIGHTCRAFT_CONTROL_TOKEN) set to the same value for the app and for lightcraft-cli"
+        ),
+        Err(e) => log::warn!(
+            "could not write the control token file: {e}. Give lightcraft-cli the same value, in LIGHTCRAFT_CONTROL_TOKEN, as the one this app was started with"
+        ),
+    }
+    Some(token)
+}
+
+/// Accept connections until the listener fails, serving each on its own thread.
+fn accept_loop(listener: TcpListener, tx: Sender<ControlRequest>, ctx: egui::Context, token: Option<Arc<str>>) {
     let open = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming().flatten() {
-        let _ = spawn_connection(stream, tx.clone(), ctx.clone(), Arc::clone(&open), IDLE_TIMEOUT);
+        let _ = spawn_connection(stream, tx.clone(), ctx.clone(), Arc::clone(&open), IDLE_TIMEOUT, token.clone());
     }
 }
 
@@ -51,6 +121,7 @@ fn spawn_connection(
     ctx: egui::Context,
     open: Arc<AtomicUsize>,
     idle_timeout: Duration,
+    token: Option<Arc<str>>,
 ) -> Option<std::thread::JoinHandle<()>> {
     if open.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
         open.fetch_sub(1, Ordering::SeqCst);
@@ -58,9 +129,76 @@ fn spawn_connection(
         return None;
     }
     Some(std::thread::spawn(move || {
-        serve(stream, &tx, &ctx, idle_timeout);
+        serve(stream, &tx, &ctx, idle_timeout, token.as_deref());
         open.fetch_sub(1, Ordering::SeqCst);
     }))
+}
+
+/// Where the app writes a generated token and where `lightcraft-cli` looks for it:
+/// `<home>/.lightcraft/control-<port>.token` (user-readable only on Unix).
+pub fn token_file(port: u16) -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    Some(std::path::PathBuf::from(home).join(".lightcraft").join(format!("control-{port}.token")))
+}
+
+/// Delete `path` if it exists (an earlier run's token file); other errors are logged, not fatal.
+fn remove_file_if_present(path: &std::path::Path) {
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => log::warn!("could not remove the stale control token file {}: {e}", path.display()),
+    }
+}
+
+/// 128 bits from the standard library's randomly keyed hasher (its keys come from the OS
+/// CSPRNG). Good enough for a per-session loopback secret; swap in `getrandom` if the
+/// workspace already depends on it.
+pub fn random_token() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let mut out = String::with_capacity(32);
+    for i in 0u64..2 {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u64(i ^ std::process::id() as u64);
+        h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+        out.push_str(&format!("{:016x}", h.finish()));
+    }
+    out
+}
+
+/// Write `token` to `path` (creating its folder), readable by the owner only on Unix, whether or not
+/// the file already existed.
+fn write_token_at(path: &std::path::Path, token: &str) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path)?;
+    // `mode` above applies only when the file is created: restrict one that already existed too.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    f.write_all(token.as_bytes())
+}
+
+/// Compare without leaking where the strings differ.
+fn token_matches(expected: &str, given: &str) -> bool {
+    let (a, b) = (expected.as_bytes(), given.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 /// Five minutes allows pauses between automation commands without retaining abandoned slots forever.
@@ -82,12 +220,12 @@ pub const HIDDEN_WINDOW_ERROR: &str = "the app drew no frame for 5 s, so the req
 /// while a client is connected (a link in the browser, Show in Explorer, an external editor) kept a
 /// copy of the connection: closing it then reached the client only when that program exited, as a
 /// reset instead of a clean close.
-fn serve(stream: TcpStream, tx: &Sender<ControlRequest>, ctx: &egui::Context, idle_timeout: Duration) {
+fn serve(stream: TcpStream, tx: &Sender<ControlRequest>, ctx: &egui::Context, idle_timeout: Duration, token: Option<&str>) {
     if let Err(e) = stream.set_read_timeout(Some(idle_timeout)) {
         log::warn!("control connection closed: could not set idle read timeout: {e}");
         return;
     }
-    serve_stream(stream, |method, params| {
+    serve_stream(stream, token, |method, params| {
         let (req, rrx) = ControlRequest::new(method, params);
         let state = Arc::clone(&req.state);
         tx.send(req).ok()?;
@@ -100,8 +238,8 @@ fn serve(stream: TcpStream, tx: &Sender<ControlRequest>, ctx: &egui::Context, id
 const DRAIN_TIME: Duration = Duration::from_secs(1);
 
 /// [`serve_lines`] on a socket, then close it so the peer reads every reply.
-fn serve_stream(stream: TcpStream, handle: impl FnMut(String, Value) -> Option<Value>) {
-    serve_lines(&stream, &stream, handle);
+fn serve_stream(stream: TcpStream, token: Option<&str>, handle: impl FnMut(String, Value) -> Option<Value>) {
+    serve_lines(&stream, &stream, token, handle);
     close_gracefully(&stream);
 }
 
@@ -258,10 +396,36 @@ fn read_bounded_line(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usize) -
 
 /// Serve requests from `read`, answering on `out`, until the peer closes, sends something that is
 /// not a request, or `handle` returns `None` (app gone). `handle` gets `(method, params)` and
-/// returns the reply object (the request's `id` is added here).
-fn serve_lines<R: Read, W: Write>(read: R, mut out: W, mut handle: impl FnMut(String, Value) -> Option<Value>) {
+/// returns the reply object (the request's `id` is added here). With `token`, the first line must
+/// be an `auth` request carrying it; anything else gets one error reply and the connection closes,
+/// before any command can run.
+fn serve_lines<R: Read, W: Write>(read: R, mut out: W, token: Option<&str>, mut handle: impl FnMut(String, Value) -> Option<Value>) {
     let mut reader = BufReader::new(read);
     let mut buf = Vec::new();
+    if let Some(expected) = token {
+        let outcome = match read_bounded_line(&mut reader, &mut buf, MAX_LINE) {
+            Ok(false) => return,
+            Err(Closing::Idle) => return,
+            Err(Closing::Error(e)) => Err(e),
+            Ok(true) => match parse_line(&buf) {
+                Line::Request { id, method, params } if method == "auth" => {
+                    let given = params.get("token").and_then(Value::as_str).unwrap_or("");
+                    if token_matches(expected, given) { Ok(id) } else { Err("control token rejected; closing the connection".to_string()) }
+                }
+                _ => Err("this control channel requires {\"method\":\"auth\",\"params\":{\"token\":…}} as the first line; closing the connection"
+                    .to_string()),
+            },
+        };
+        match outcome {
+            Ok(id) => {
+                let _ = writeln!(out, "{}", json!({"id": id, "ok": true, "result": "authenticated"})).and_then(|()| out.flush());
+            }
+            Err(reject) => {
+                let _ = writeln!(out, "{}", json!({"ok": false, "error": reject})).and_then(|()| out.flush());
+                return;
+            }
+        }
+    }
     loop {
         let closing = match read_bounded_line(&mut reader, &mut buf, MAX_LINE) {
             Ok(false) => return,
@@ -311,7 +475,7 @@ mod tests {
             stream.set_nodelay(true).unwrap();
             before(&mut client);
             let (tx, requests) = channel();
-            let worker = spawn_connection(stream, tx, egui::Context::default(), Arc::clone(open), idle).unwrap();
+            let worker = spawn_connection(stream, tx, egui::Context::default(), Arc::clone(open), idle, None).unwrap();
             Self { client: BufReader::new(client), requests, worker: Some(worker) }
         }
 
@@ -442,15 +606,144 @@ mod tests {
         worker.join().unwrap();
     }
 
+    /// [`serve_lines`] on `input` without a token: the replies and the methods that ran.
     fn run(input: &[u8]) -> (Vec<Value>, Vec<String>) {
         let mut out = Vec::new();
         let mut calls = Vec::new();
-        serve_lines(input, &mut out, |m, _p| {
+        serve_lines(input, &mut out, None, |m, _p| {
             calls.push(m);
             Some(json!({"ok": true, "result": null}))
         });
         let replies = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).collect();
         (replies, calls)
+    }
+
+    /// [`serve_lines`] on `input` with `token` required: the replies and the methods that ran.
+    fn run_with_token(token: &str, input: &[u8]) -> (Vec<Value>, Vec<String>) {
+        let mut out = Vec::new();
+        let mut calls = Vec::new();
+        serve_lines(input, &mut out, Some(token), |m, _p| {
+            calls.push(m);
+            Some(json!({"ok": true, "result": null}))
+        });
+        let replies = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).collect();
+        (replies, calls)
+    }
+
+    #[test]
+    fn a_token_from_the_command_line_or_environment_is_trimmed_and_may_be_absent() {
+        assert_eq!(
+            clean_token(Some(
+                "  abc
+"
+                .into()
+            ))
+            .as_deref(),
+            Some("abc")
+        );
+        assert_eq!(clean_token(Some(" 	 ".into())), None);
+        assert_eq!(clean_token(Some(String::new())), None);
+        assert_eq!(clean_token(None), None);
+    }
+
+    #[test]
+    fn the_token_file_is_replaced_and_owner_only_even_when_it_already_existed() {
+        let dir = std::env::temp_dir().join(format!("lc-token-at-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let file = dir.join("nested").join("control-1.token");
+        write_token_at(&file, "first-and-longer").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // a file left by something else, readable by everyone
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        write_token_at(&file, "second").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "second");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A fresh folder for a token file; the caller removes it.
+    fn temp_token_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("lc-token-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_memory_session_generates_a_token_but_writes_no_file() {
+        let dir = temp_token_dir("memory");
+        let path = dir.join("control-1.token");
+        let token = prepare_token(Some(&path), None, false, true).expect("a token is generated");
+        assert_eq!(token.len(), 32);
+        assert!(!path.exists(), "--memory writes no token file");
+        // with authentication off nothing is removed either: nothing of ours is on disk
+        std::fs::write(&path, "someone else's").unwrap();
+        assert_eq!(prepare_token(Some(&path), None, true, true), None);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "someone else's");
+        // a normal run writes the token, and without authentication removes the file again
+        let token = prepare_token(Some(&path), None, false, false).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), token);
+        assert_eq!(prepare_token(Some(&path), None, true, false), None);
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_taken_port_is_reported_before_any_token_is_written() {
+        let held = bind(0).unwrap();
+        let port = held.local_addr().unwrap().port();
+        assert!(bind(port).is_err(), "the second bind fails");
+        // the startup sequence main.rs runs: another run's token file must survive a failed bind
+        let dir = temp_token_dir("taken");
+        let path = dir.join(format!("control-{port}.token"));
+        std::fs::write(&path, "sentinel").unwrap();
+        let result = std::panic::catch_unwind(|| {
+            for (explicit, no_auth, memory) in [(None, false, false), (Some("t".to_string()), false, false), (None, true, false), (None, false, true)]
+            {
+                let err = start_control(port, explicit, no_auth, memory, Some(path.clone()), egui::Context::default());
+                assert!(err.is_err(), "the port is held");
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), "sentinel", "no_auth={no_auth} memory={memory}");
+            }
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(result.is_ok(), "a failed bind touched the token file");
+    }
+
+    #[test]
+    fn a_stale_token_file_is_removed_and_a_missing_one_is_fine() {
+        let dir = std::env::temp_dir().join(format!("lc-token-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("control-1.token");
+        std::fs::write(&file, "old").unwrap();
+        remove_file_if_present(&file);
+        assert!(!file.exists());
+        remove_file_if_present(&file);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn token_gate_runs_nothing_until_authenticated() {
+        // no auth line at all
+        let (r, calls) = run_with_token("s3cret", b"{\"id\":1,\"method\":\"engine.execute\"}\n");
+        assert!(calls.is_empty(), "{calls:?}");
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0]["ok"], false);
+        // wrong token
+        let (r, calls) = run_with_token("s3cret", b"{\"id\":0,\"method\":\"auth\",\"params\":{\"token\":\"nope\"}}\n{\"method\":\"a\"}\n");
+        assert!(calls.is_empty());
+        assert_eq!(r[0]["ok"], false);
+        // right token: the auth reply, then commands run as before
+        let (r, calls) = run_with_token("s3cret", b"{\"id\":0,\"method\":\"auth\",\"params\":{\"token\":\"s3cret\"}}\n{\"id\":1,\"method\":\"a\"}\n");
+        assert_eq!(calls, ["a"]);
+        assert_eq!(r[0], json!({"id": 0, "ok": true, "result": "authenticated"}));
+        assert_eq!(r[1]["id"], 1);
     }
 
     #[test]
@@ -506,7 +799,7 @@ mod tests {
         let endless = std::io::repeat(b'x');
         let mut out = Vec::new();
         let mut ran = false;
-        serve_lines(endless, &mut out, |_, _| {
+        serve_lines(endless, &mut out, None, |_, _| {
             ran = true;
             None
         });
@@ -536,7 +829,7 @@ mod tests {
         let (tx, _rx) = channel::<ControlRequest>();
         let server = std::thread::spawn(move || {
             let (s, _) = listener.accept().unwrap();
-            serve(s, &tx, &egui::Context::default(), IDLE_TIMEOUT);
+            serve(s, &tx, &egui::Context::default(), IDLE_TIMEOUT, None);
         });
         let mut c = TcpStream::connect(addr).unwrap();
         c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
@@ -564,7 +857,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
             let (s, _) = listener.accept().unwrap();
-            serve_stream(s, |_, _| Some(json!({"ok": true})));
+            serve_stream(s, None, |_, _| Some(json!({"ok": true})));
         });
         let mut c = TcpStream::connect(addr).unwrap();
         c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
