@@ -112,9 +112,9 @@ fn weight(p: &Value, key: &str, default: f32) -> Result<f32> {
 /// own data was never JPEG encoded (its embedded preview was, but the raw data is what is
 /// scored); a preview-only raw is scored on the camera's JPEG, so it is.
 pub fn jpeg_encoded(photo: &Photo) -> bool {
-    let jpeg =
-        matches!(photo.kind, lcc_catalog::MediaKind::Image) && ["jpg", "jpeg", "jpe", "jfif"].iter().any(|e| photo.format.eq_ignore_ascii_case(e));
-    jpeg || photo.preview_only.is_some()
+    photo.preview_only.is_some()
+        || (matches!(photo.kind, lcc_catalog::MediaKind::Image)
+            && ["jpg", "jpeg", "jpe", "jfif"].iter().any(|e| photo.format.eq_ignore_ascii_case(e)))
 }
 
 /// Score one decoded source: the factors, their combined score, and the verdict the two cutoffs
@@ -158,11 +158,11 @@ pub fn flag_after(photo: &Photo, previous: Option<QualityScan>, scan: &QualitySc
 fn targets(s: &mut Session, p: &Value) -> Result<Vec<PhotoId>> {
     let explicit_ids = p.get("ids").is_some_and(|v| !v.is_null());
     let scope = match p.get("scope").and_then(Value::as_str) {
-        Some(scope) => scope.to_string(),
-        None if explicit_ids => "selected".to_string(),
-        None => "view".to_string(),
+        Some(scope) => scope,
+        None if explicit_ids => "selected",
+        None => "view",
     };
-    let mut ids: Vec<PhotoId> = match scope.as_str() {
+    let mut ids: Vec<PhotoId> = match scope {
         "selected" => {
             if explicit_ids {
                 s.targets(p)?
