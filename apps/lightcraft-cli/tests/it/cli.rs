@@ -405,6 +405,40 @@ fn commands_subcommand_lists_registry() {
     assert!(String::from_utf8_lossy(&o.stdout).contains("light.exposure"));
 }
 
+/// Unsupported listing arguments fail before any catalog output, even alongside `--json`.
+#[test]
+fn listing_subcommands_reject_unexpected_arguments() {
+    for subcommand in ["commands", "controls"] {
+        for args in
+            [vec!["--jsno"], vec!["extra"], vec!["--json", "--jsno"], vec!["--jsno", "--json"], vec!["--json", "extra"], vec!["extra", "--json"]]
+        {
+            let o = Command::new(binary()).arg(subcommand).args(&args).output().unwrap();
+            assert!(!o.status.success(), "{subcommand} {args:?} unexpectedly succeeded");
+            assert!(o.stdout.is_empty(), "{subcommand} {args:?} printed a listing");
+            let error = String::from_utf8_lossy(&o.stderr);
+            let unexpected = args.iter().find(|arg| **arg != "--json").unwrap();
+            assert!(error.contains(subcommand) && error.contains(unexpected) && error.contains("--json"), "{error}");
+        }
+    }
+}
+
+/// Listing's documented text/JSON forms keep working; repeating `--json` remains accepted.
+#[test]
+fn listing_subcommands_keep_supported_output_modes() {
+    for subcommand in ["commands", "controls"] {
+        let expected_id = if subcommand == "commands" { "develop.set" } else { "light.exposure" };
+        for args in [vec![], vec!["--json"], vec!["--json", "--json"]] {
+            let o = Command::new(binary()).arg(subcommand).args(&args).output().unwrap();
+            assert!(o.status.success(), "{subcommand} {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+            assert!(String::from_utf8_lossy(&o.stdout).contains(expected_id));
+            if !args.is_empty() {
+                let listing: Value = serde_json::from_slice(&o.stdout).unwrap();
+                assert!(!listing.as_array().unwrap().is_empty());
+            }
+        }
+    }
+}
+
 #[test]
 fn commands_subcommand_lists_commands_sorted_by_id() {
     let o = Command::new(binary()).args(["commands", "--json"]).output().unwrap();
