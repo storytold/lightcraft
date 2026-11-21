@@ -285,6 +285,28 @@ fn saving_keeps_keywords_only_an_unsynced_sidecar_had() {
     assert!(!back.keywords.iter().any(|k| k == "harbour"), "{:?}", back.keywords);
 }
 
+/// Issue #1310, automatic XMP writes: the first write of a sidecar the library was never in step
+/// with keeps the keywords only the sidecar had, as Save Metadata to File does.
+#[test]
+fn auto_write_keeps_keywords_only_an_unsynced_sidecar_had() {
+    let (_lib, _src, mut s) = library("xmp-auto-keep-keywords", 1);
+    let id = ids(&s)[0];
+    let orig = crate::sidecar::file_path(s.catalog.photo(id).unwrap()).unwrap().to_string();
+    let side = crate::sidecar::sidecar_path(&orig, s.sidecar_naming(id));
+    let md = lcc_meta::Metadata { keywords: vec!["harbour".into()], hierarchical_keywords: vec!["harbour".into()], ..Default::default() };
+    std::fs::write(&side, lcc_meta::write_xmp(&md, None)).unwrap();
+    assert_eq!(s.xmp_status(id), XmpStatus::Unknown);
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "keywords": ["new"]})).unwrap();
+    s.settle_sidecar_writes().unwrap();
+    let back = lcc_meta::parse_xmp(&std::fs::read_to_string(&side).unwrap()).unwrap().metadata;
+    let kws = lcc_catalog::keywords::from_file(&back.keywords, &back.hierarchical_keywords);
+    for k in ["new", "harbour"] {
+        assert!(kws.iter().any(|x| x == k), "{k} kept: {kws:?}");
+    }
+    assert_eq!(s.xmp_status(id), XmpStatus::InSync);
+}
+
 #[test]
 fn hostile_sidecars_add_no_keywords_and_never_panic() {
     let p = lcc_catalog::Photo::new(PhotoId(1), lcc_catalog::Source::Demo { scene: 0 }, "a.jpg", "JPEG", 10, 10, "2026-01-01T00:00:00");
