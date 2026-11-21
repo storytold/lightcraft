@@ -183,7 +183,11 @@ impl Reader {
             self.db.for_each_row_with_cancel(t.rootpage, columns.len(), cancel, &mut sink)
         };
         let stats = walked.map_err(|e| format!("{name}: {e}"))?;
-        let notes = stats.notes(name);
+        let mut notes = stats.notes(name);
+        if required && stats.skipped > 0 {
+            // a required table's lost record is a photo, folder or file that can't come in: say so plainly
+            notes.push(format!("Lightroom table {name} is required: the photos its unreadable records describe may be missing from the import"));
+        }
         if !notes.is_empty() {
             self.notes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).extend(notes);
         }
@@ -980,10 +984,7 @@ fn read_lightroom(path: &Path, reader: Reader, source_guard: SourceGuard, cancel
         members,
         collection_content: optional_table("AgLibraryCollectionContent", &mut warnings)?,
         stacks: optional_table("AgLibraryFolderStackImage", &mut warnings)?,
-        warnings: {
-            warnings.extend(reader.take_notes());
-            warnings
-        },
+        warnings,
         skipped: Vec::new(),
     };
     // An image row whose file, folder or root record is gone (Lightroom leaves such rows behind, and its integrity
@@ -1070,6 +1071,8 @@ fn read_lightroom(path: &Path, reader: Reader, source_guard: SourceGuard, cancel
     refuse_non_media(&mut out);
     ensure_read_active(cancel)?;
     source_guard.verify()?;
+    // collected after the last table read, so every table's left-out records reach the warnings
+    out.warnings.extend(reader.take_notes());
     Ok(out)
 }
 
@@ -5622,6 +5625,89 @@ pub(crate) mod tests {
         assert_eq!(s.catalog.photo(plain).unwrap().develop.light.exposure, 1.5, "Lightroom's settings apply");
         // (this test's imports keep no index, so the virtual copy comes in again as a new photo)
         assert_eq!(r["preservedExistingEdits"], 1, "only the master, imported with settings, keeps them: {r}");
+    }
+
+    /// Two photos (`id_local` 0 and 2) in a one-row-per-table catalog, plus `extra` tables.
+    fn two_photo_tables(extra: Vec<(&'static str, &'static str, Vec<Vec<SqlValue>>)>) -> Vec<(&'static str, &'static str, Vec<Vec<SqlValue>>)> {
+        use SqlValue::{Integer as I, Text as T};
+        let mut tables = one_row(photo_tables(("/catalog/", "")));
+        tables[2].2.push(vec![I(2), I(1), T("two.ARW".into())]);
+        tables[3].2 = vec![
+            vec![I(0), T("zero".into()), I(1), T("ARW".into()), I(20), I(10), I(1), I(0)],
+            vec![I(2), T("two".into()), I(2), T("ARW".into()), I(20), I(10), I(2), I(0)],
+        ];
+        tables.extend(extra);
+        tables
+    }
+
+    /// Gives cell `cell` of table `table`'s leaf page (as [`native_catalog_rows`] lays them out) a reserved serial
+    /// type, so that one record can't be read.
+    fn damage_record(bytes: &mut [u8], table: usize, cell: usize) {
+        let page = (table + 1) * 2048;
+        let at = page + 8 + cell * 2;
+        let mut pos = page + usize::from(u16::from_be_bytes([bytes[at], bytes[at + 1]]));
+        for _ in 0..3 {
+            // payload length, rowid, header length
+            while bytes[pos] & 0x80 != 0 {
+                pos += 1;
+            }
+            pos += 1;
+        }
+        bytes[pos] = 10;
+    }
+
+    /// A damaged record in a required table (`Adobe_images`) leaves out that photo, not the import, and always says
+    /// so: the note is collected after the last table read, and names the table as required.
+    #[test]
+    fn a_bad_record_in_a_required_table_is_warned() {
+        let dir = std::env::temp_dir().join(format!("lrcat-required-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bad.lrcat");
+        let tables = two_photo_tables(Vec::new());
+        assert_eq!(tables[3].0, "Adobe_images");
+        let mut bytes = native_catalog_rows(&tables, None);
+        damage_record(&mut bytes, 3, 1);
+        std::fs::write(&path, bytes).unwrap();
+        let catalog = read(&path).unwrap();
+        let ids: Vec<_> = catalog.photos.iter().map(|p| p.source_id).collect();
+        assert_eq!(ids, [0], "the readable photo imports");
+        let w = &catalog.warnings;
+        assert!(w.iter().any(|n| n.contains("Adobe_images") && n.contains("1 record") && n.contains("left out")), "{w:?}");
+        assert!(w.iter().any(|n| n.contains("Adobe_images") && n.contains("required") && n.contains("may be missing")), "{w:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Keyword assignments are streamed, never kept as rows: each photo still gets every keyword assigned to it, with
+    /// its hierarchy, and none of another photo's.
+    #[test]
+    fn streamed_keyword_assignments_reach_their_photos() {
+        use SqlValue::{Integer as I, Null as N, Text as T};
+        let dir = std::env::temp_dir().join(format!("lrcat-streamed-keywords-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("keywords.lrcat");
+        let tables = two_photo_tables(vec![
+            (
+                "AgLibraryKeyword",
+                "id_local INTEGER PRIMARY KEY, name, parent",
+                vec![vec![N, T("Travel".into()), N], vec![N, T("Goa".into()), I(1)], vec![N, T("Beach".into()), N], vec![N, T("Night".into()), N]],
+            ),
+            (
+                "AgLibraryKeywordImage",
+                "id_local INTEGER PRIMARY KEY, image, tag",
+                vec![vec![N, I(0), I(2)], vec![N, I(2), I(3)], vec![N, I(0), I(4)], vec![N, I(2), I(2)]],
+            ),
+        ]);
+        std::fs::write(&path, native_catalog_rows(&tables, None)).unwrap();
+        let catalog = read(&path).unwrap();
+        let keywords = |id: i64| {
+            let mut k = catalog.photos.iter().find(|p| p.source_id == id).unwrap().keywords.clone();
+            k.sort();
+            k
+        };
+        assert_eq!(keywords(0), ["Night", "Travel|Goa"]);
+        assert_eq!(keywords(2), ["Beach", "Travel|Goa"]);
+        assert!(catalog.warnings.is_empty(), "{:?}", catalog.warnings);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A side-table row whose `image` is missing, NULL, text or not a whole number names no photo. It used to read as

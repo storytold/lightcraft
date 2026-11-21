@@ -179,7 +179,7 @@ impl LightroomArchiveFinalization {
     pub fn finish(self) -> crate::Result<()> {
         let (Some(path), Some(bytes)) = (self.path, self.bytes) else { return Ok(()) };
         if bytes.len() as u64 > MAX_INDEX_BYTES {
-            return Err(error("Lightroom import index exceeds 1 GiB"));
+            return Err(error(format!("Lightroom import index exceeds {} MiB", MAX_INDEX_BYTES >> 20)));
         }
         let failed = |e: &dyn std::fmt::Display| crate::EngineError::Other(format!("could not write the import index {}: {e}", path.display()));
         // the archive refuses a linked folder; now that its failure no longer stops the import, the
