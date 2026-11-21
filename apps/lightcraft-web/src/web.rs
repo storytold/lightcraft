@@ -247,6 +247,7 @@ fn services(
     Services {
         local_places: None,
         picker: None,
+        dialog_errors: None,
         pick_display_profile: None,
         screen_profile: None,
         backup_library: Some(Box::new(move |session: &mut Session| {
