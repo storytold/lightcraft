@@ -53,6 +53,25 @@ pub enum Item {
     },
 }
 
+impl Item {
+    /// The latest stamp in this item when it is more than [`crate::clock::MAX_SKEW_MS`] past
+    /// `now_ms`: such an item is refused whole, so a device whose clock runs in the far future
+    /// can't make its writes win over every later one (see [`Stamp::ahead_of`]).
+    pub fn ahead_of(&self, now_ms: u64) -> Option<Stamp> {
+        let stamps: Vec<Stamp> = match self {
+            Item::Group(g) => g.devices.values().map(|d| d.s).collect(),
+            Item::Coll(c) => {
+                let mut v = vec![c.meta.s, c.grant.s, c.deleted.s];
+                v.extend(c.takes.values().map(|t| t.s));
+                v
+            }
+            Item::Member { on, .. } => vec![on.s],
+            Item::Photo { fields, .. } => fields.values().map(|f| f.s).collect(),
+        };
+        stamps.into_iter().filter(|s| s.ahead_of(now_ms)).max()
+    }
+}
+
 /// What is known of one field of a photo's record: a fingerprint of its value and when it was written.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FieldState {

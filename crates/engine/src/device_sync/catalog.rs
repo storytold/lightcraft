@@ -409,7 +409,15 @@ pub(super) fn apply(s: &mut Session, lib: &mut Lib, peer: &lcc_peer::Peer, batch
         let room = lcc_sync::proto::MAX_SHARED.saturating_sub(lib.share_in.len());
         lib.share_in.extend(batch.accounts.iter().filter(|a| a.sane()).take(room).cloned());
     }
+    let now = now_ms();
     for item in batch.items.iter().take(MAX_ITEMS * 2) {
+        // a write stamped past this device's clock (plus the allowed skew) would beat every later
+        // edit here: refused, naming the device
+        if let Some(st) = item.ahead_of(now) {
+            let mins = st.t.saturating_sub(now) / 60_000;
+            log::warn!("sync: a change from {} is stamped {mins} minutes in the future and was refused: set its clock to the right time", peer.name);
+            continue;
+        }
         if let Item::Group(g) = item {
             let asked = lib.replica.invited.contains(from) || lib.replica.group.as_ref().is_some_and(|mine| mine.devices.contains_key(from));
             if asked {

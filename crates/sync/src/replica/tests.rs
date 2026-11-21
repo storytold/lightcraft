@@ -387,3 +387,21 @@ fn immich_albums_are_collections_every_device_shares_but_members_come_from_the_s
     assert!(!a.r.immich_collection(&"x".repeat(500), "u1", None, "x", None, now));
     assert!(!a.r.immich_collection("immich:x", "u\u{0}", None, "x", None, now));
 }
+
+#[test]
+fn items_stamped_in_the_far_future_are_named_for_refusal() {
+    let now = 1_000_000_000u64;
+    let at = |t: u64| Lww::new(json!(1), Stamp { t, c: 0, d: 9 });
+    let photo = |t: u64| Item::Photo {
+        key: "k".into(),
+        info: Value::Null,
+        fields: [("rating".to_string(), at(now)), ("flag".to_string(), at(t))].into_iter().collect(),
+        here: Depth::default(),
+    };
+    let day = now + 24 * 3600 * 1000;
+    assert_eq!(photo(day).ahead_of(now).map(|s| s.t), Some(day));
+    assert_eq!(photo(now + 1000).ahead_of(now), None);
+    let member = Item::Member { coll: "c".into(), key: "k".into(), on: Lww::new(true, Stamp { t: u64::MAX, c: u32::MAX, d: 0 }) };
+    assert!(member.ahead_of(now).is_some());
+    assert!(member.ahead_of(u64::MAX).is_none());
+}
