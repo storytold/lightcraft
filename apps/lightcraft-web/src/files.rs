@@ -190,6 +190,10 @@ impl Store for FilesStore {
         self.0.truncate(name, len as usize);
         Ok(())
     }
+    /// The browser always runs the newest build, and its storage is small.
+    fn keeps_replaced_formats(&self) -> bool {
+        false
+    }
     fn describe(&self) -> String {
         "browser storage".into()
     }
