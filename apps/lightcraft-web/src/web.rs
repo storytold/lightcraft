@@ -314,8 +314,8 @@ fn services(
         pick_print_templates: None,
         save_print_template: None,
         write: Some(write),
-        // the browser download path has no meaningful create-new file write; the control channel
-        // (and therefore screenshot paths) is not available on the web
+        // the browser download path has no meaningful create-new file write, so `ui.screenshot`
+        // (through `lightcraft.request`) can't write to a path on the web
         write_new: None,
         // downloads happen on the main thread: exports run in the foreground on the web
         write_shared: None,
@@ -595,6 +595,13 @@ impl WebApp {
         let frozen = Rc::new(Cell::new(read_failed));
         let services = services(originals.clone(), backend.clone(), files.clone(), frozen.clone(), cc.egui_ctx.clone(), bridge.clone());
         let mut app = LightcraftApp::new(session, services).with_chinese_font(chinese_font);
+        // The page's control channel (`window.lightcraft.request`, crate::api).
+        let (control_tx, control_rx) = std::sync::mpsc::channel();
+        crate::api::connect(control_tx, cc.egui_ctx.clone());
+        app = app.with_control(control_rx);
+        // `with_control` keeps CPU copies of photo textures for the desktop's headless screenshots;
+        // in a browser they would only cost memory (every thumbnail), so the page keeps none.
+        app.renderer.keep_pixels = false;
         let ui_written = files.get("ui.json").unwrap_or_default();
         // an arrangement from an older docking version starts again from the default
         let mut saved = serde_json::from_slice::<serde_json::Value>(&ui_written).unwrap_or_default();
@@ -966,6 +973,11 @@ pub fn start(chinese_font: Vec<u8>) {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
     safety::install_panic_hook();
     install_browser_language();
+    // `lightcraft.request` and the other control functions (crate::api) are there from the start:
+    // until the app runs, they reject with "LightCraft is not running yet".
+    if let Err(e) = crate::api::install() {
+        log::error!("lightcraft: couldn't add the control functions to window.lightcraft: {e:?}");
+    }
     log::info!("lightcraft: wasm instantiated at {:.0} ms", perf_now());
     if chinese_font.is_empty() {
         log::warn!("lightcraft: no Simplified Chinese font supplied; Chinese-only glyphs will show as boxes");

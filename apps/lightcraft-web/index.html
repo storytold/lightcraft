@@ -37,6 +37,7 @@
       globalThis.lightcraftModule = module;
       await init({ module_or_path: module });
       // automation: `await lightcraft.command("library.info", "{}")` → JSON text
+      // start() adds the control functions: `await lightcraft.request("ui.inspect", {})` → its result
       globalThis.lightcraft = { command };
       start(font);
     })().catch((e) => {

@@ -34,6 +34,8 @@ pub mod store;
 pub mod wire;
 
 #[cfg(target_arch = "wasm32")]
+mod api;
+#[cfg(target_arch = "wasm32")]
 mod backend;
 #[cfg(target_arch = "wasm32")]
 mod safety;

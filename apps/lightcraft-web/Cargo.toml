@@ -28,6 +28,10 @@ eframe = { workspace = true, features = ["default_fonts", "glow"] }
 egui = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
+# The page command API (storytold/craft-libs#413): the functions behind window.lightcraft.request.
+# Pinned to the head of storytold/craft-libs#656 (params that are not a JSON object reject), which
+# carries craft-libs main's craft-web-api; repin to the main commit once #656 merges.
+craft-web-api = { git = "https://github.com/storytold/craft-libs", rev = "420f0255822dc21b34333e31f0e297b55d01cf0a", version = "0.1.0" }
 js-sys = { workspace = true }
 web-sys = { workspace = true, features = [
     "Blob",
