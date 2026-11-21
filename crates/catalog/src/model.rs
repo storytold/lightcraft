@@ -217,6 +217,13 @@ pub struct Meta {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub copyright_url: String,
     pub creator: String,
+    /// A colour label another program gave the photo that the library has no label for, by the
+    /// name programs write to `xmp:Label` (`Orange`, `Pink`): Capture One has seven colours, the
+    /// library five. Kept so the colour isn't lost; it is not shown or filtered on. Written to
+    /// XMP while the photo has no label of its own, and dropped when a label is set here. Left
+    /// out of the catalog JSON when empty; catalog format 14 (an older build would drop it).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub label_text: String,
     pub keywords: Vec<String>,
     /// Face/pet/focus regions read from XMP (MWG-RS), on the upright (EXIF-oriented) photo.
     /// Removing or resizing one edits the catalog only; LightCraft never writes regions to XMP.

@@ -204,6 +204,19 @@ pub struct CatalogImport {
     /// so each front end can say so in its own language.
     #[serde(default)]
     pub skipped: Vec<SkippedImage>,
+    /// The catalog's own keyword list, where its reader gives one (Capture One's): every keyword
+    /// it has, also those no photo carries, added to the library's keyword list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keyword_list: Vec<CatalogKeyword>,
+}
+
+/// A keyword of a catalog's keyword list.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CatalogKeyword {
+    /// `parent|child`.
+    pub path: String,
+    /// Written into exported files.
+    pub include_on_export: bool,
 }
 
 /// A catalog image that was not imported, and why.
@@ -493,6 +506,14 @@ pub fn read_source(
     total.store(14, Ordering::Relaxed);
     done.store(0, Ordering::Relaxed);
     ensure_read_active(cancel)?;
+    // a Capture One catalog (its folder or its .cocatalogdb) comes in through the same import
+    if crate::capture_one_catalog::is_catalog(path) {
+        // the read plus the validation stage
+        total.store(2, Ordering::Relaxed);
+        let data = crate::capture_one_catalog::convert::read_for_import(path, cancel)?;
+        done.fetch_add(1, Ordering::Relaxed);
+        return Ok(data);
+    }
     if crate::lightroom_backup::is_backup(path) {
         let root = temp_root.map_or_else(std::env::temp_dir, Path::to_path_buf);
         let extracted = crate::lightroom_backup::extract(path, &root, cancel)?;
@@ -622,6 +643,7 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
         collection_content: optional_table("AgLibraryCollectionContent", &mut warnings)?,
         warnings,
         skipped: Vec::new(),
+        keyword_list: Vec::new(),
     };
     // images whose file, folder or root record is gone, or whose path is empty (Lightroom leaves
     // these behind and ignores them); they and their virtual copies are skipped and reported
@@ -1066,6 +1088,7 @@ fn stage_collections(
     warnings: &mut Vec<String>,
 ) -> crate::Result<usize> {
     let rows = first_of_each_collection(data, warnings);
+    let program = crate::capture_one_catalog::convert::program(data);
     let mut albums = HashMap::new();
     // Two collections never share an album. An index that names one album for two gives the second a new one; the
     // counter saturates, so a damaged one hands out an id that's taken, and that stops the import instead.
@@ -1085,9 +1108,9 @@ fn stage_collections(
         if data.catalog_id.is_none()
             && [Some(&path_key), original_key.as_ref()].into_iter().flatten().any(|k| index.collection_owners.contains_key(k))
         {
-            return Err(error(
-                "the Lightroom catalog has no stable identity and its path was previously associated with a catalog; cannot safely match collections",
-            ));
+            return Err(error(format!(
+                "the {program} catalog has no stable identity and its path was previously associated with a catalog; cannot safely match collections"
+            )));
         }
         // a key recorded for another catalog (by its id) is not this one, whatever its path
         let mine = |k: &String| match (data.catalog_id.as_ref(), index.collection_owners.get(k)) {
@@ -1195,7 +1218,7 @@ fn stage_collections(
             {
                 album.parent = None;
                 warnings.push(format!(
-                    "{}: its collection set could not be created first; imported at the top level (Lightroom collection {})",
+                    "{}: its collection set could not be created first; imported at the top level ({program} collection {})",
                     album.name,
                     number(collection, "id_local")
                 ));
@@ -1208,7 +1231,7 @@ fn stage_collections(
                         Some(a) if text(r, "creationId").contains("group") => {
                             format!("its collection set “{}” is the album “{}” in this library, which isn't a folder", text(r, "name"), a.name)
                         }
-                        _ => format!("Lightroom keeps it inside “{}”, which isn't a collection set", text(r, "name")),
+                        _ => format!("{program} keeps it inside “{}”, which isn't a collection set", text(r, "name")),
                     },
                 };
                 // the set's name in this library: the user may have renamed it since an earlier import
@@ -1218,7 +1241,7 @@ fn stage_collections(
                     (None, None) => "at the top level".to_string(),
                 };
                 // the Lightroom id tells apart collections that share a name (#2165)
-                warnings.push(format!("{}: {why}; imported {to} (Lightroom collection {})", album.name, number(collection, "id_local")));
+                warnings.push(format!("{}: {why}; imported {to} ({program} collection {})", album.name, number(collection, "id_local")));
             }
             if album.folder {
                 added_folders.insert(id);
@@ -1397,6 +1420,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         if !src.keywords.is_empty() {
             p.meta.keywords = src.keywords.clone();
         }
+        reader_extras(&mut p, &src.image);
         if !src.settings.is_empty() && !keep_develop {
             match mapped_settings(
                 &src.settings,
@@ -1448,7 +1472,8 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
                 Op::SetMeta { id: p.id, meta: Box::new(p.meta.clone()) },
                 Op::SetCaptured { id: p.id, captured: p.captured.clone() },
             ]);
-            ops.push(Op::SetDevelop { id: p.id, settings: p.develop.clone(), label: "Lightroom catalog".into(), edited: p.edited.clone() });
+            let label = format!("{} catalog", crate::capture_one_catalog::convert::program(&data));
+            ops.push(Op::SetDevelop { id: p.id, settings: p.develop.clone(), label, edited: p.edited.clone() });
         } else {
             imported += 1;
             ops.push(Op::AddPhoto { photo: Box::new(p) });
@@ -1456,14 +1481,78 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         by_path.entry(key(&src.path)).or_insert(photo_id);
     }
     let album_count = stage_collections(s, &data, index, &ids, &mut ops, &mut warnings)?;
+    ops.extend(keyword_list_op(s, &data));
+    let step = if crate::capture_one_catalog::convert::is_capture_one(&data) { "Import Capture One Catalog" } else { "Import Lightroom Catalog" };
     if !ops.is_empty() {
-        s.commit("Import Lightroom Catalog", Op::Batch { ops })?;
+        s.commit(step, Op::Batch { ops })?;
     }
-    s.merge_undo(s.undo.len().saturating_sub(undo0), "Import Lightroom Catalog");
+    s.merge_undo(s.undo.len().saturating_sub(undo0), step);
     Ok(AppliedImport {
         report: json!({"source":data.source,"photos":ids.len(),"imported":imported,"library":s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy()),"collections":album_count,"preservedExistingEdits":preserved,"inRecentlyDeleted":in_trash.len(),"missing":missing,"failed":files.failed,"warnings":warnings,"skipped":data.skipped,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
         index: index.clone(),
     })
+}
+
+/// What a catalog's reader may add to a photo's row besides Lightroom's columns (Capture One's
+/// does): `labelText`, a colour the library has no label for, kept with the photo instead of
+/// lost; `camera`, see [`fill_camera`].
+fn reader_extras(p: &mut Photo, row: &Row) {
+    if let Some(kept) = row.get("labelText").and_then(Value::as_str) {
+        p.meta.label_text = if p.label.is_none() { kept.trim().to_string() } else { String::new() };
+    }
+    if let Some(camera) = row.get("camera") {
+        fill_camera(&mut p.meta, camera);
+    }
+}
+
+/// The catalog's keyword list as one operation: keywords the library doesn't have are added, with
+/// whether they are exported; those it has keep what the library says about them. `None` when
+/// the catalog's reader gives no list (Lightroom's).
+fn keyword_list_op(s: &crate::Session, data: &CatalogImport) -> Option<Op> {
+    if data.keyword_list.is_empty() {
+        return None;
+    }
+    let entries: Vec<_> = data
+        .keyword_list
+        .iter()
+        .map(|k| (k.path.clone(), lightcraft_catalog::keywords::KeywordInfo { include_on_export: k.include_on_export, ..Default::default() }))
+        .collect();
+    Some(s.catalog.import_keywords_ops(&entries).0)
+}
+
+/// Fill what `meta` leaves empty from a catalog row's `camera` block (`make`, `model`, `serial`,
+/// `lens`, `iso`, `aperture`, `exposureTime` in seconds, `focalLength`, `exposureBias`,
+/// `gps: [lat, lon]`): a file that is there says it first, an offline original keeps the
+/// catalog's. Values that aren't plausible are left out.
+pub(crate) fn fill_camera(meta: &mut lightcraft_catalog::Meta, camera: &Value) {
+    let text = |k: &str| camera.get(k).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
+    let number = |k: &str| camera.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
+    let fill = |field: &mut String, value: Option<String>| {
+        if field.trim().is_empty()
+            && let Some(value) = value
+        {
+            *field = value;
+        }
+    };
+    let (make, model) = (text("make"), text("model"));
+    let named = [make.clone(), model].into_iter().flatten().collect::<Vec<_>>().join(" ");
+    fill(&mut meta.camera, (!named.is_empty()).then_some(named));
+    fill(&mut meta.make, make);
+    fill(&mut meta.serial_number, text("serial"));
+    fill(&mut meta.lens, text("lens"));
+    if meta.shutter.trim().is_empty()
+        && let Some((seconds, text)) = number("exposureTime").filter(|t| *t > 0.0).and_then(|t| Some((t, lightcraft_meta::format_exposure_time(t)?)))
+    {
+        // the exact time beside its text, as a file's own (`Meta::shutter_seconds`)
+        meta.shutter = text;
+        meta.exposure_time = Some(seconds);
+    }
+    meta.iso = meta.iso.or_else(|| number("iso").filter(|v| *v > 0.0 && *v <= f64::from(u32::MAX)).map(|v| v as u32));
+    meta.aperture = meta.aperture.or_else(|| number("aperture").filter(|v| *v > 0.0 && *v < 1000.0).map(|v| v as f32));
+    meta.focal_mm = meta.focal_mm.or_else(|| number("focalLength").filter(|v| *v > 0.0 && *v < 100_000.0).map(|v| v as f32));
+    meta.exposure_bias = meta.exposure_bias.or_else(|| number("exposureBias").filter(|v| v.abs() <= 100.0).map(|v| v as f32));
+    let gps = camera.get("gps").and_then(Value::as_array).and_then(|a| Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?)));
+    meta.gps = meta.gps.or_else(|| gps.filter(|(lat, lon)| (-90.0..=90.0).contains(lat) && (-180.0..=180.0).contains(lon)));
 }
 
 /// The collection set a Lightroom collection's album goes into (`None`: the top level), and whether that isn't its

@@ -441,6 +441,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::RenameAlbum { .. } => "Rename Album",
         Dialog::Rename { .. } => "Rename Photos",
         Dialog::Import { .. } => "Import Photos",
+        Dialog::LightroomResult { capture_one: true, .. } => "Capture One Catalog Import",
         Dialog::LightroomResult { .. } => "Lightroom Catalog Import",
         Dialog::LabelNames { .. } => "Edit Color Label Names",
         Dialog::CaptureTime { .. } => "Edit Capture Time",
@@ -476,6 +477,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::ConfirmDelete { .. } => "Delete Photos",
         Dialog::MovePhotos { .. } => "Move Photos",
         Dialog::LightroomCatalog { .. } => "Lightroom Classic Catalog",
+        Dialog::LightroomDestination { catalog, .. } if crate::lightroom_destination::is_capture_one(catalog) => "Import Capture One Catalog",
         Dialog::LightroomDestination { .. } => "Import Lightroom Catalog",
         Dialog::LensDatabase { .. } => "Lens Profiles",
         Dialog::SaveEffect { .. } => "New Effect Preset",
@@ -924,13 +926,17 @@ fn whats_new_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
 
 /// The body of the LightroomResult dialog.
 fn lightroom_result_body(ui: &mut egui::Ui, dlg: &mut Dialog) {
-    let Dialog::LightroomResult { summary, library, details, .. } = dlg else { return };
+    let Dialog::LightroomResult { summary, library, details, capture_one, .. } = dlg else { return };
     ui.label(summary.as_str());
     ui.add_space(8.0);
     if let Some(library) = library {
         ui.label(crate::i18n::tr("Destination library"));
         ui.add(egui::Label::new(library.as_str()).wrap().selectable(true));
-        ui.label(crate::i18n::tr("Lightroom catalogs import into the open library; no separate catalog folder is created."));
+        ui.label(crate::i18n::tr(if *capture_one {
+            "Capture One catalogs import into the open library; no separate catalog folder is created."
+        } else {
+            "Lightroom catalogs import into the open library; no separate catalog folder is created."
+        }));
     } else {
         ui.label(crate::i18n::tr("These photos are only in memory. Open a library on disk and import the catalog again to save them."));
     }
