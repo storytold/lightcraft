@@ -905,6 +905,8 @@ fn shared_meta_marks_mixed_fields_and_edits_keep_them() {
     assert_eq!((one["fields"]["title"].clone(), one["fields"]["copyright"].clone()), (json!("One"), json!("© You")));
     assert_eq!(s.execute("photo.sharedMeta", &json!({"ids": [ids[1]]})).unwrap()["fields"]["title"], json!("Two"));
     for hostile in [json!({"ids": [u64::MAX]}), json!({"ids": "x"}), json!({"ids": [-1, 1.5, null]})] {
-        let _ = s.execute("photo.sharedMeta", &hostile);
+        if let Ok(r) = s.execute("photo.sharedMeta", &hostile) {
+            assert_eq!(r["count"], json!(0), "no real photo in {hostile}: {r}");
+        }
     }
 }
