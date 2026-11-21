@@ -1,18 +1,19 @@
-// Convolution for the face networks (lcc-faces), planar (NCHW) float32, batch 1, any stride, padding and grouping.
+// Convolution for the face networks (lcc-faces), planar (NCHW) float32, batched [B, C, H, W], any stride, padding and grouping.
 //
 // `tiled` is an implicit matrix product per group: rows are the group's output channels (M), columns its output
-// pixels (N), and K runs over input channel x kernel tap. The input is gathered (im2col) straight into workgroup
-// memory, so the lowered matrix is never made. 256 threads make a 64 x 64 block, 4 x 4 values each.
+// pixels across the batch (N = batch * oh * ow), and K runs over input channel x kernel tap. The input is gathered
+// (im2col) straight into workgroup memory, so the lowered matrix is never made. 256 threads make a 64 x 64 block,
+// 4 x 4 values each, sharing weight tiles across the entire batch.
 // `direct` gives one output value per thread, for depthwise convolutions (one output channel per group), where a
 // 64-row tile would be almost all waste.
 //
-//   out[co][p] = bias[co] + sum_k W[co][k] * X[k][p]     X[k][p] = input[g*cg + k/taps][oy*sh + ky - pt][ox*sw + kx - pl]
+//   out[b][co][p] = bias[co] + sum_k W[co][k] * X[b][k][p]
 
 struct P {
-    m: u32,      // output channels per group
-    n: u32,      // output pixels (oh * ow)
-    k: u32,      // cg * kh * kw
-    cg: u32,     // input channels per group
+    m: u32,         // output channels per group
+    n: u32,         // batch * plane_out
+    k: u32,         // cg * kh * kw
+    cg: u32,        // input channels per group
     h: u32,
     w: u32,
     ow: u32,
@@ -22,11 +23,15 @@ struct P {
     sw: u32,
     pt: u32,
     pl: u32,
-    bias: u32,   // 1 when there is a bias
-    total: u32,  // cout * n
-    row: u32,    // workgroups along x, for `direct` and `reduce` (so a large layer can use y too)
-    splits: u32, // K is cut into this many slices (z = group * splits + slice), summed by `reduce`
-    kchunk: u32, // K values per slice, a multiple of BK
+    bias: u32,      // 1 when there is a bias
+    total: u32,     // batch * cout * plane_out
+    row: u32,       // workgroups along x, for `direct` and `reduce` (so a large layer can use y too)
+    splits: u32,    // K is cut into this many slices (z = group * splits + slice), summed by `reduce`
+    kchunk: u32,    // K values per slice, a multiple of BK
+    plane_out: u32, // oh * ow
+    cout: u32,      // m * groups
+    cin: u32,       // cg * groups
+    batch: u32,     // number of inputs in this batch
     _a: u32,
     _b: u32,
 }
@@ -45,17 +50,19 @@ var<workgroup> As: array<f32, 1024>; // [BK][BM]
 var<workgroup> Bs: array<f32, 1024>; // [BK][BN]
 
 fn gather(g: u32, k: u32, pix: u32) -> f32 {
+    let b_idx = pix / p.plane_out;
+    let lpix = pix % p.plane_out;
     let taps = p.kh * p.kw;
     let ci = g * p.cg + k / taps;
     let tap = k % taps;
-    let oy = pix / p.ow;
-    let ox = pix % p.ow;
+    let oy = lpix / p.ow;
+    let ox = lpix % p.ow;
     let iy = i32(oy * p.sh + tap / p.kw) - i32(p.pt);
     let ix = i32(ox * p.sw + tap % p.kw) - i32(p.pl);
     if (iy < 0 || ix < 0 || iy >= i32(p.h) || ix >= i32(p.w)) {
         return 0.0;
     }
-    return src[(ci * p.h + u32(iy)) * p.w + u32(ix)];
+    return src[((b_idx * p.cin + ci) * p.h + u32(iy)) * p.w + u32(ix)];
 }
 
 @compute @workgroup_size(256)
@@ -86,7 +93,7 @@ fn tiled(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) 
                 a = wgt[(g * p.m + m) * p.k + ka];
             }
             As[(e % BK) * BM + mm] = a;
-            // input: neighbouring threads read neighbouring pixels
+            // input: neighbouring threads read neighbouring pixels (and batch elements)
             let kk = e / BN;
             let k = k0 + kk;
             let pix = n0 + e % BN;
@@ -122,13 +129,15 @@ fn tiled(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) 
         if (p.bias != 0u && p.splits == 1u) {
             b0 = bias[co];
         }
-        // with slices, each writes a partial sum of its own: [slice][cout][n]
-        let base = slice * p.total + co * p.n;
+        // with slices, each writes a partial sum of its own: [slice][batch][cout][plane_out]
+        let slice_base = slice * p.total;
         for (var j = 0u; j < 4u; j++) {
             // columns tx, tx + 16, tx + 32, tx + 48: neighbouring threads write neighbouring pixels
             let pix = n0 + tx + 16u * j;
             if (pix < p.n) {
-                dst[base + pix] = acc[i][j] + b0;
+                let b_idx = pix / p.plane_out;
+                let lpix = pix % p.plane_out;
+                dst[slice_base + (b_idx * p.cout + co) * p.plane_out + lpix] = acc[i][j] + b0;
             }
         }
     }
@@ -140,9 +149,13 @@ fn direct(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index)
     if (at >= p.total) {
         return;
     }
-    let co = at / p.n;
-    let pix = at % p.n;
+    let batch_plane = p.cout * p.plane_out;
+    let b_idx = at / batch_plane;
+    let rem = at % batch_plane;
+    let co = rem / p.plane_out;
+    let lpix = rem % p.plane_out;
     let g = co / p.m;
+    let pix = b_idx * p.plane_out + lpix;
     var v = 0.0;
     if (p.bias != 0u) {
         v = bias[co];
@@ -153,7 +166,7 @@ fn direct(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index)
     dst[at] = v;
 }
 
-// The sum of the K slices' partial results, plus the bias. `src` holds [splits][cout][n].
+// The sum of the K slices' partial results, plus the bias. `src` holds [splits][batch][cout][plane_out].
 @compute @workgroup_size(256)
 fn reduce(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) tid: u32) {
     let at = (wg.y * p.row + wg.x) * 256u + tid;
@@ -162,7 +175,8 @@ fn reduce(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index)
     }
     var v = 0.0;
     if (p.bias != 0u) {
-        v = bias[at / p.n];
+        let co = (at / p.plane_out) % p.cout;
+        v = bias[co];
     }
     for (var s = 0u; s < p.splits; s++) {
         v += src[s * p.total + at];

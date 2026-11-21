@@ -4991,6 +4991,7 @@ name = "lcc-gpu"
 version = "26.47.2"
 dependencies = [
  "bytemuck",
+ "half",
  "lcc-brand",
  "lcc-color",
  "lcc-denoise",
