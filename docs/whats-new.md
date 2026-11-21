@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### The crop shows its size in pixels
+- The Crop panel shows the size the crop leaves, in pixels (as a full-size export makes it, such as 2160 × 2700 px),
+  and dragging a crop handle shows it beside the pointer as it changes, so you can keep a minimum resolution while
+  you crop (issue #4106).
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

@@ -499,3 +499,40 @@ fn auto_straighten_says_when_it_finds_nothing() {
     assert_eq!(angle(&h), 0.0);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// The size the crop gives, in pixels, as the export at full size would make it (issue #4106).
+fn size_of(h: &Headless) -> String {
+    let id = h.app.session.active().expect("a photo");
+    let p = h.app.session.catalog.photo(id).expect("the photo");
+    let (w, ht) = lightcraft_pipeline::native_output_size(p.width as usize, p.height as usize, &p.develop);
+    format!("{} × {} px", w.round() as u64, ht.round() as u64)
+}
+
+/// The crop's size in pixels shows in the Crop panel, and next to the pointer while a handle is dragged,
+/// and follows the drag (issue #4106: see the resolution a crop leaves while making it).
+#[test]
+fn the_crop_shows_its_size_in_pixels_as_it_is_dragged() {
+    let mut h = crop_tool();
+    let full = size_of(&h);
+    let shown = |h: &Headless, text: &str| h.painted_text().iter().any(|t| t == text);
+    assert!(has(&h, "cropSize") && shown(&h, &full), "the panel shows the uncropped size {full}: {:?}", h.painted_text());
+    assert!(!has(&h, "cropSizeReadout"), "no readout by the pointer before a drag");
+    // drag the right edge's handle a quarter of the way in, and hold it there
+    let r = h.request(
+        "ui.pointer",
+        json!({"events": [{"kind": "down", "x": 1.0, "y": 0.5}, {"kind": "drag", "x": 0.9, "y": 0.5}, {"kind": "drag", "x": 0.75, "y": 0.5}]}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let cropped = size_of(&h);
+    assert_ne!(cropped, full, "the drag cropped the photo");
+    assert!(has(&h, "cropSizeReadout"), "the size shows by the pointer while resizing");
+    assert!(shown(&h, &cropped), "and reads the crop's new size {cropped}: {:?}", h.painted_text());
+    assert!(!shown(&h, &full), "the old size is gone from the panel too");
+    let r = h.request("ui.pointer", json!({"events": [{"kind": "up", "x": 0.75, "y": 0.5}]}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(!has(&h, "cropSizeReadout"), "the readout goes once released");
+    assert!(shown(&h, &size_of(&h)), "the panel keeps the size");
+}

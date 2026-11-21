@@ -96,6 +96,14 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 let _ = app.run("crop.aspect", json!({"aspect": "toggle"}));
             }
         });
+        // the size the crop gives at full resolution, kept up to date while it is dragged (issue #4106)
+        if let Some(size) = crate::panels::detail::crop_size_text(app, id) {
+            ui.horizontal(|ui| {
+                ui.label(crate::i18n::tr("Size"));
+                let r = ui.label(egui::RichText::new(size).color(Tokens::get(ui.ctx()).text_dim));
+                register(ui, "cropSize", r.rect);
+            });
+        }
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
             if text_button(ui, "cropRotateLeft", crate::i18n::tr("Rotate Left"), false).clicked() {
