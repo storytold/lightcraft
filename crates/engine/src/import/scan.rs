@@ -320,11 +320,12 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
     let by_path = library_files(&input.library, &files);
     let todo: Vec<String> = files.iter().filter(|f| !by_path.contains_key(Path::new(f))).cloned().collect();
     progress.total.store(todo.len(), Relaxed);
-    // probes from a preceding `scan` are reused when the file is unchanged (same size); a file that
-    // can't be looked at counts as unchanged (✕ set while they are checked: no more round trips to the
-    // disk; what is not reached counts as not probed, like the files after it)
+    // probes from a preceding `scan` are reused when the file is unchanged (same size and
+    // modification time, `Seen::unchanged_since`); a file that can't be looked at counts as unchanged
+    // (✕ set while they are checked: no more round trips to the disk; what is not reached counts as
+    // not probed, like the files after it)
     let cached = reusable_probes(&todo, &mut input.cache, &progress.cancel, |seen, info| match seen {
-        Seen::At { len, .. } => len == info.file_size,
+        Seen::At { .. } => seen.unchanged_since(info),
         Seen::Gone => true,
         Seen::Unchecked => false,
     });

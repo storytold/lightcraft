@@ -380,6 +380,11 @@ pub struct ProbeInfo {
     /// capture date of a file whose metadata has none, as Lightroom does (exports saved without
     /// metadata would otherwise all land under "Unknown Date").
     pub file_modified: Option<String>,
+    /// When the file was read for this probe, in whole seconds since 1970 (this computer's clock),
+    /// as the native probe records it next to `file_modified`. A file written again in the second
+    /// it was read keeps its modification time, so a probe is reused only for a file last written
+    /// before that second (an import after a scan).
+    pub read_at: Option<i64>,
     pub meta: lightcraft_catalog::Meta,
     pub as_shot_wb: Option<(f64, f64)>,
     /// Hash of the file's bytes (hex), for duplicate detection. When it is a 32-digit

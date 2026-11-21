@@ -964,6 +964,24 @@ fn dng_embedded_crs_settings_are_read_on_import() {
     s2.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
     assert_eq!(s2.catalog.photos().next().unwrap().develop.light.contrast, -10.0);
     let _ = std::fs::remove_dir_all(&src);
+
+    // A sidecar that can't be read keeps precedence too, as on Read Metadata from File
+    // (`sidecar::read_packet`): the DNG imports as one without settings, not with its embedded ones.
+    let other = temp_dir("dng-unreadable-sidecar");
+    std::fs::write(other.join("synth.dng"), synthetic_dng(x)).unwrap();
+    std::fs::write(other.join("synth.xmp"), [0xff, 0xfe, 0xfd]).unwrap();
+    std::fs::write(other.join("plain.dng"), synthetic_dng_with(None, lightcraft_meta::Metadata::default())).unwrap();
+    let mut s3 = Session::new().with_fs();
+    let r = s3.execute("library.import", &json!({"paths": [other.to_string_lossy()]})).unwrap();
+    assert_eq!(r["imported"].as_array().unwrap().len(), 2, "{r}");
+    let by_name = |name: &str| s3.catalog.photos().find(|p| p.file_name == name).unwrap().clone();
+    let (unreadable, plain) = (by_name("synth.dng"), by_name("plain.dng"));
+    assert_eq!(
+        (unreadable.develop.wb.temp, unreadable.develop.light.contrast, unreadable.develop.effects.dehaze, unreadable.rating),
+        (plain.develop.wb.temp, plain.develop.light.contrast, plain.develop.effects.dehaze, plain.rating),
+        "the embedded settings don't apply behind a sidecar that can't be read"
+    );
+    let _ = std::fs::remove_dir_all(&other);
 }
 
 fn jpeg_xmp_packet(rating: i8, title: &str) -> String {
@@ -977,6 +995,102 @@ fn write_jpeg_xmp(path: &Path, packet: &str) -> Vec<u8> {
     assert_eq!(lightcraft_meta::embedded(&bytes).xmp.as_deref(), Some(packet), "the procedural JPEG carries the requested packet");
     std::fs::write(path, &bytes).unwrap();
     bytes
+}
+
+/// A JPEG's develop settings embedded as `crs:` XMP (#2993), packet `extra` attributes added.
+fn jpeg_develop_packet(extra: &str) -> String {
+    format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+      <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+        xmp:Rating="3" crs:HasSettings="True" crs:Contrast2012="+30" crs:Dehaze="+12" {extra}/>
+      </rdf:RDF></x:xmpmeta>"#
+    )
+}
+
+/// #2993: a JPEG carrying its develop settings in embedded XMP, with no sidecar, imports with
+/// them, as Read Metadata from File reads them; settings marked as already applied to the pixels
+/// (an exported file) are not applied again, and a sidecar still wins over the embedded packet, even
+/// one that can't be read.
+#[test]
+fn embedded_jpeg_develop_settings_apply_on_import() {
+    let src = temp_dir("jpeg-xmp-import-develop");
+    write_jpeg_xmp(&src.join("edited.jpg"), &jpeg_develop_packet(""));
+    write_jpeg_xmp(&src.join("rendered.jpg"), &jpeg_develop_packet(r#"crs:AlreadyApplied="True""#));
+    // Distinct bytes, so the import doesn't skip it as a copy of `edited.jpg`.
+    write_jpeg_xmp(&src.join("both.jpg"), &jpeg_develop_packet(r#"xmp:Label="Red""#));
+    std::fs::write(src.join("both.xmp"), jpeg_develop_packet("").replace(r#"crs:Contrast2012="+30""#, r#"crs:Contrast2012="-20""#)).unwrap();
+    write_jpeg_xmp(&src.join("unreadable.jpg"), &jpeg_develop_packet(r#"xmp:Label="Blue""#));
+    std::fs::write(src.join("unreadable.xmp"), [0xff, 0xfe, 0xfd]).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(r["imported"].as_array().unwrap().len(), 4, "{r}");
+    let by_name = |name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().clone();
+
+    let edited = by_name("edited.jpg");
+    assert_eq!(edited.kind, lightcraft_catalog::MediaKind::Image);
+    assert_eq!((edited.develop.light.contrast, edited.develop.effects.dehaze), (30.0, 12.0), "the embedded settings apply");
+    assert_eq!(edited.rating, 3);
+
+    let rendered = by_name("rendered.jpg");
+    assert_eq!((rendered.develop.light.contrast, rendered.develop.effects.dehaze), (0.0, 0.0), "already in the pixels");
+    assert_eq!(rendered.rating, 3, "its metadata still reads");
+
+    assert_eq!(by_name("both.jpg").develop.light.contrast, -20.0, "the sidecar wins over the embedded packet");
+    let unreadable = by_name("unreadable.jpg");
+    assert_eq!(
+        (unreadable.develop.light.contrast, unreadable.rating),
+        (0.0, 0),
+        "a sidecar that can't be read still wins: nothing embedded applies, as on a manual reread"
+    );
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// #2993: a JPEG whose embedded develop settings are rewritten at the same length between a scan
+/// (the import dialog listing its folder) and the import comes in with the settings it has now:
+/// the scan's probe is used again only for a file as it was, size and modification time.
+#[test]
+fn embedded_jpeg_settings_rewritten_after_a_scan_import_as_they_are_now() {
+    let src = temp_dir("jpeg-xmp-scan-rewrite");
+    let path = src.join("edited.jpg");
+    write_jpeg_xmp(&path, &jpeg_develop_packet(""));
+    let mut s = Session::new().with_fs();
+    let found = crate::import::scan(&mut s, &[src.to_string_lossy().to_string()]);
+    assert!(found.iter().any(|c| c.name == "edited.jpg" && c.error.is_none()), "{found:?}");
+    let size = std::fs::metadata(&path).unwrap().len();
+    write_jpeg_xmp(&path, &jpeg_develop_packet("").replace(r#"crs:Contrast2012="+30""#, r#"crs:Contrast2012="-30""#));
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), size, "rewritten at the same size");
+    // saved a few seconds later, as an editor saving it would
+    let later = std::fs::metadata(&path).unwrap().modified().unwrap() + std::time::Duration::from_secs(5);
+    std::fs::File::options().write(true).open(&path).unwrap().set_modified(later).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(r["imported"].as_array().unwrap().len(), 1, "{r}");
+    let photo = s.catalog.photos().find(|p| p.file_name == "edited.jpg").unwrap().clone();
+    assert_eq!(photo.develop.light.contrast, -30.0, "the settings the file has now, not the scan's");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn embedded_jpeg_settings_rewritten_in_the_second_the_scan_read_them_import_as_they_are_now() {
+    let src = temp_dir("jpeg-xmp-scan-same-second");
+    let path = src.join("edited.jpg");
+    write_jpeg_xmp(&path, &jpeg_develop_packet(""));
+    // The scan reads the file in the second it was written, and the rewrite below lands in that
+    // same second at the same size, so the file's time and size are as the scan saw them. Its time
+    // is set a minute ahead so the scan and the rewrite share it whatever second the test runs in.
+    let stamp = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+    std::fs::File::options().write(true).open(&path).unwrap().set_modified(stamp).unwrap();
+    let mut s = Session::new().with_fs();
+    let found = crate::import::scan(&mut s, &[src.to_string_lossy().to_string()]);
+    assert!(found.iter().any(|c| c.name == "edited.jpg" && c.error.is_none()), "{found:?}");
+    let size = std::fs::metadata(&path).unwrap().len();
+    write_jpeg_xmp(&path, &jpeg_develop_packet("").replace(r#"crs:Contrast2012="+30""#, r#"crs:Contrast2012="-30""#));
+    std::fs::File::options().write(true).open(&path).unwrap().set_modified(stamp).unwrap();
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), size, "rewritten at the same size");
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(r["imported"].as_array().unwrap().len(), 1, "{r}");
+    let photo = s.catalog.photos().find(|p| p.file_name == "edited.jpg").unwrap().clone();
+    assert_eq!(photo.develop.light.contrast, -30.0, "the settings the file has now, not the scan's");
+    let _ = std::fs::remove_dir_all(&src);
 }
 
 #[test]
