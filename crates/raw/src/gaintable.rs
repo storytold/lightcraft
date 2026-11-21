@@ -4,7 +4,8 @@
 //! We read and write the tag (a DNG export keeps it) but don't render it by default: Lightroom
 //! Classic renders Apple ProRAW without the map (see [`crate::profile`]), and so do we. The photo's
 //! "camera local tone mapping" option renders it ([`GainTableMap::gain`], applied by the pipeline),
-//! as the camera itself does.
+//! as the camera itself does, and as Lightroom does with its "Apple ProRaw" look (an edit imported
+//! with it turns the option on).
 //!
 //! Applying it (DNG 1.7.1, `ProfileGainTableMap` → "Description"):
 //!

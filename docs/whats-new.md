@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Apple ProRAW edits from Lightroom keep their brightness
+- Apple ProRAW photos edited in Lightroom with the "Apple ProRaw" look (Lightroom's choice for these files) now come
+  over with Profile ▸ Camera local tone mapping on, as Lightroom renders them: imported from a Lightroom Classic
+  catalog, an XMP sidecar or a preset. Before, they opened much darker, with closed shadows and midtones. Photos
+  imported earlier pick it up when imported again, or by turning the option on.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
