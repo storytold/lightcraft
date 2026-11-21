@@ -4,7 +4,7 @@
 //! the same crop as `crop.straighten` (the rotate handle, the Straighten slider, the Angle field)
 //! and `crop.set {angle}`.
 
-use lightcraft_geom::{CropGeometry, Rect};
+use lightcraft_geom::{CropGeometry, Rect, crop_fit_angle};
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -66,6 +66,90 @@ fn a_crop_that_still_fits_is_kept() {
         let g = geometry(&s);
         assert_eq!(g.rect, Rect::new(0.3, 0.3, 0.7, 0.7), "no needless shrink at {angle}°");
         assert_eq!(g.angle, angle);
+    }
+}
+
+#[test]
+fn a_rotate_drag_keeps_the_crop_it_started_from() {
+    // issue #1794: `from` is the crop the drag began with, so every step measures against the
+    // drawn crop. Without it a centred crop comes back as the whole photo.
+    let mut s = Session::with_demo();
+    let (w, h) = dims(&s);
+    let drawn = Rect::new(0.1, 0.1, 0.9, 0.9);
+    s.execute("crop.set", &json!({"rect": [drawn.x0, drawn.y0, drawn.x1, drawn.y1]})).unwrap();
+    let from = json!({"rect": [drawn.x0, drawn.y0, drawn.x1, drawn.y1], "angle": 0.0});
+    for angle in [10.0, 20.0, 30.0, 20.0, 10.0, 0.0] {
+        s.execute("crop.straighten", &json!({"angle": angle, "from": from})).unwrap();
+        assert!(geometry(&s).is_within_image(w, h), "{angle}°");
+    }
+    let got = geometry(&s).rect_px(w, h);
+    let want = drawn.scale(w, h);
+    assert!((got.width() - want.width()).abs() < 1e-6, "the drawn crop must come home whole: {} -> {}", want.width(), got.width());
+
+    // a malformed `from` is ignored, not trusted: a bare rect (the shape before the press angle
+    // came with it), a rect without its angle, a rect of the wrong length, a non-numeric angle
+    for bad in [
+        json!([0.1, 0.1, 0.9, 0.9]),
+        json!({"rect": [0.9, 0.9, 0.1, 0.1], "angle": 0.0}),
+        json!({"rect": [0.1, 0.1], "angle": 0.0}),
+        json!({"rect": [0.1, 0.1, 0.9], "angle": 0.0}),
+        json!({"rect": [0.1, 0.1, 0.9, 0.9]}),
+        json!({"rect": [0.1, 0.1, 0.9, 0.9], "angle": "x"}),
+    ] {
+        s.execute("crop.straighten", &json!({"angle": 0.0, "from": bad})).unwrap();
+    }
+}
+
+#[test]
+fn a_locked_aspect_survives_rotating() {
+    // The aspect lock is set once, then every angle step measures the drawn crop: the ratio has to
+    // come out of `with_angle_from` unchanged, or a locked 4:5 crop drifts as the user rotates.
+    let mut s = Session::with_demo();
+    let (w, h) = dims(&s);
+    for lock in ["4x5", "1x1", "current"] {
+        s.execute("crop.reset", &json!({})).unwrap();
+        s.execute("crop.set", &json!({"rect": [0.2, 0.2, 0.8, 0.8]})).unwrap();
+        s.execute("crop.aspect", &json!({"aspect": lock})).unwrap();
+        let drawn = geometry(&s).rect;
+        let drawn_angle = geometry(&s).angle;
+        let want = drawn.scale(w, h).width() / drawn.scale(w, h).height();
+        for angle in [10.0, 25.0, -25.0, 0.0] {
+            s.execute("crop.straighten", &json!({"angle": angle, "from": {"rect": [drawn.x0, drawn.y0, drawn.x1, drawn.y1], "angle": drawn_angle}}))
+                .unwrap();
+            let g = geometry(&s);
+            let px = g.rect.scale(w, h);
+            assert!((px.width() / px.height() - want).abs() < 1e-9, "{lock} at {angle}°: aspect {:.9}, want {want:.9}", px.width() / px.height());
+            assert!(g.is_within_image(w, h), "{lock} at {angle}°");
+        }
+        // and the crop is whole again at 0°, not left shrunk
+        let back = geometry(&s).rect.scale(w, h);
+        assert!((back.width() - drawn.scale(w, h).width()).abs() < 1e-6, "{lock} came home at {} not {}", back.width(), drawn.scale(w, h).width());
+    }
+}
+
+#[test]
+fn a_rotate_drag_started_turned_measures_against_that_angle() {
+    // The engine has to pass the angle the crop was drawn at, not the angle it has reached. Reach the
+    // largest crop at 30°, then drive the angle home: the answer is the largest crop of its aspect at
+    // each step. With the running angle instead, the crop is called "not the largest" from the second
+    // step and stays at the 30° size, which is exactly the bug (PR #1876 review).
+    //
+    // Every other test in this file presses at 0°, where the two angles agree, so dropping the press
+    // angle at the `crop.straighten` call site leaves them all green. This one is the test with teeth.
+    let mut s = Session::with_demo();
+    let (w, h) = dims(&s);
+    s.execute("crop.reset", &json!({})).unwrap();
+    s.execute("crop.straighten", &json!({"angle": 30.0})).unwrap();
+    let drawn = geometry(&s);
+    assert_eq!(drawn.angle, 30.0);
+    assert!(close(drawn, crop_fit_angle(w, h, 30.0, None)), "30° left the largest crop of its aspect: {drawn:?}");
+    let from = json!({"rect": [drawn.rect.x0, drawn.rect.y0, drawn.rect.x1, drawn.rect.y1], "angle": drawn.angle});
+    for angle in [20.0, 10.0, 0.0] {
+        s.execute("crop.straighten", &json!({"angle": angle, "from": from})).unwrap();
+        let got = geometry(&s);
+        let want = crop_fit_angle(w, h, angle, None);
+        assert!(close(got, want), "at {angle}°: {got:?} vs {want:?}");
+        assert!(got.is_within_image(w, h), "at {angle}°: {got:?}");
     }
 }
 
@@ -132,6 +216,20 @@ fn turning_a_crop_dragged_in_from_a_corner_keeps_that_crop() {
     s.execute("crop.straighten", &json!({"angle": 0.25})).unwrap();
     let r = geometry(&s).rect_px(w, h);
     assert!(r.width() > 0.97 * made.width(), "0.25° keeps nearly all of it: {r:?} from {made:?}");
+}
+
+/// `from` is the crop a drag started from, not a way around the smallest crop `crop.set` enforces
+/// (PR #1876 review). A hostile or buggy caller must not persist a sliver through it.
+#[test]
+fn a_from_rect_below_the_smallest_crop_is_rejected() {
+    let mut s = Session::with_demo();
+    let before = geometry(&s);
+    let err = s.execute("crop.straighten", &json!({"angle": 5.0, "from": {"rect": [0.5, 0.5, 0.505, 0.505], "angle": 0.0}})).unwrap_err();
+    assert!(err.to_string().contains("smallest crop"), "{err}");
+    assert!(close(geometry(&s), before), "a rejected drag changes nothing");
+
+    let r = geometry(&s).rect;
+    s.execute("crop.straighten", &json!({"angle": 5.0, "from": {"rect": [r.x0, r.y0, r.x1, r.y1], "angle": 0.0}})).unwrap();
 }
 
 #[test]
