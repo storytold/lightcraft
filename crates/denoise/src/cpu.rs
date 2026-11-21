@@ -67,14 +67,16 @@ pub struct NetRunner {
 
 impl NetRunner {
     pub fn new(net: &Net, tile: usize) -> Result<Self> {
-        if tile == 0
-            || tile > MAX_TILE
-            || !net.fits_tile(tile)
-            || net.in_channels != 4
-            || net.out_channels() != 3
-            || net.shape(0).is_none_or(|s| s.channels != net.in_channels)
-        {
+        if net.in_channels != 4 || net.out_channels() != 3 {
             return Err(bad("the tile or Bayer-to-RGB contract does not fit the network"));
+        }
+        Self::for_tiles(net, tile)
+    }
+
+    /// A runner for any channel counts (the caller checks the network's contract), on `tile × tile` inputs.
+    pub fn for_tiles(net: &Net, tile: usize) -> Result<Self> {
+        if tile == 0 || tile > MAX_TILE || !net.fits_tile(tile) || net.shape(0).is_none_or(|s| s.channels != net.in_channels) {
+            return Err(bad("the tile does not fit the network"));
         }
         let mut last = vec![0; net.ops().len() + 1];
         for (i, op) in net.ops().iter().enumerate() {

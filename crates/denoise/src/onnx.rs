@@ -34,7 +34,8 @@ pub fn read(path: &Path) -> Result<Net, NetError> {
     read_bytes(&bytes)
 }
 
-fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
+/// Read a model from its bytes.
+pub fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
     let graph = onnx_proto::decode(bytes)?;
 
     let initialisers: HashMap<&str, &TensorProto> = graph.initializer.iter().map(|t| (t.name.as_str(), t)).collect();

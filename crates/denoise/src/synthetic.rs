@@ -232,3 +232,23 @@ pub fn smoothing_onnx() -> Vec<u8> {
     len_field(8, &ops, &mut model);
     model
 }
+
+/// A defringe-shaped network as ONNX bytes: `[1, 20, 128, 128]` → `[1, 3, 256, 256]`, giving the same `(Δa, Δb,
+/// gate)` everywhere (a 1 × 1 convolution with no weights and these biases, then depth-to-space).
+pub fn defringe_onnx(out: [f32; 3]) -> Vec<u8> {
+    let mut graph = Vec::new();
+    len_field(1, &node("Conv", &["data", "weights", "bias"], "planes", &[("kernel_shape", A::Ints(&[1, 1]))]), &mut graph);
+    len_field(1, &node("DepthToSpace", &["planes"], "delta_gate", &[("blocksize", A::Int(2)), ("mode", A::Str("CRD"))]), &mut graph);
+    len_field(5, &tensor("weights", &[12, 20, 1, 1], &[0.0; 12 * 20]), &mut graph);
+    let bias: Vec<f32> = (0..12).map(|i| out[i / 4]).collect();
+    len_field(5, &tensor("bias", &[12], &bias), &mut graph);
+    len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(20), Ok(128), Ok(128)]), &mut graph);
+    len_field(12, &value_info_bytes("delta_gate", 1, &[Ok(1), Ok(3), Ok(256), Ok(256)]), &mut graph);
+    let mut model = Vec::new();
+    varint_field(1, 8, &mut model);
+    len_field(7, &graph, &mut model);
+    let mut ops = Vec::new();
+    varint_field(2, 13, &mut ops);
+    len_field(8, &ops, &mut model);
+    model
+}

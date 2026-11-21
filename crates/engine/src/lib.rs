@@ -16,6 +16,7 @@
 extern crate lightcraft_denoise_core as lightcraft_denoise;
 
 pub mod activity;
+pub mod aidefringe;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod apple_photos;
 pub mod availability;
@@ -287,6 +288,8 @@ pub struct Session {
     pub(crate) unsaved_sidecars: std::collections::BTreeSet<PhotoId>,
     /// AI denoise: the model in use, the photos that have their picture and the work in progress.
     pub(crate) denoise: denoise::State,
+    /// AI Defringe: the installed model, the corrections in memory and the one being made.
+    pub(crate) aidefringe: aidefringe::State,
     /// Where the host keeps face models (one folder each); `None` where there is no file system (the web).
     pub face_models_dir: Option<std::path::PathBuf>,
     /// Face model downloads started this session (the staged files wait in `<face_models_dir>/.downloads`).
@@ -496,6 +499,7 @@ impl Session {
             reload_tickets: Default::default(),
             unsaved_sidecars: Default::default(),
             denoise: Default::default(),
+            aidefringe: Default::default(),
             face_models_dir: None,
             face_downloads: Default::default(),
             lensfun: Default::default(),
@@ -1033,6 +1037,14 @@ impl Session {
         if let Some(o) = delta.as_object_mut() {
             for k in ["spots", "red_eye", "version", "process"] {
                 o.remove(k);
+            }
+            // AI Defringe is per photo, like AI Denoise's switch: its switch and Amount stay with the photo they were set on
+            if let Some(optics) = o.get_mut("optics").and_then(Value::as_object_mut) {
+                optics.remove("ai_defringe");
+                optics.remove("ai_defringe_on");
+                if optics.is_empty() {
+                    o.remove("optics");
+                }
             }
             if o.is_empty() {
                 return Vec::new();

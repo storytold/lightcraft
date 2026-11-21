@@ -697,6 +697,18 @@ pub struct Optics {
     /// automatic estimate when `remove_ca` is on.
     pub ca_red: f64,
     pub ca_blue: f64,
+    /// AI Defringe's Amount, 0..100 (docs/ai-defringe.md).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub ai_defringe: f64,
+    /// Whether AI Defringe is on (`None`: on when its Amount is above 0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_defringe_on: Option<bool>,
+}
+
+impl Optics {
+    pub fn ai_defringe_enabled(&self) -> bool {
+        self.ai_defringe_on.unwrap_or(self.ai_defringe > 0.0)
+    }
 }
 
 impl Default for Optics {
@@ -717,6 +729,8 @@ impl Default for Optics {
             vignetting_midpoint: 50.0,
             ca_red: 0.0,
             ca_blue: 0.0,
+            ai_defringe: 0.0,
+            ai_defringe_on: None,
         }
     }
 }
