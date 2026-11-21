@@ -345,6 +345,96 @@ fn radial_body_contains(shape: &MaskShape, at: Point, map: &CanvasMap) -> bool {
 /// Colour Range eyedropper: a click samples the colour under it for the selected mask's
 /// colour range, at normalized frame coordinates (crop, rotation and zoom aware);
 /// ⇧-click adds a sample (up to 5).
+/// How much one wheel notch scales the brush or a radial gradient (up is larger).
+const WHEEL_STEP: f64 = 1.1;
+
+/// The scroll wheel in the Masking panel (`right`) resizes, as in Lightroom: with the Brush tool, the
+/// brush; with no tool, the selected mask's radial gradient under the pointer (both radii, one
+/// undo step a notch, as a wheel step on a slider). Anywhere else the wheel zooms: then this
+/// returns `false` and leaves the wheel's events. A trackpad's scroll (no notches) still pans.
+pub(super) fn mask_wheel(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    resp: &egui::Response,
+    right: crate::state::RightPanel,
+    frame: &lightcraft_pipeline::geometry::Frame,
+    img: Rect,
+    d: &DevelopSettings,
+) -> bool {
+    if right != crate::state::RightPanel::Masking {
+        return false;
+    }
+    let notches = ui.input(|i| super::geometry::wheel_notches(&i.events));
+    let Some(q) = resp.hover_pos().filter(|_| notches != 0.0 && resp.hovered()) else { return wheel_tail(ui) };
+    if app.ui.tool == "brush" {
+        app.ui.brush_size = (app.ui.brush_size * WHEEL_STEP.powf(f64::from(notches)) as f32).clamp(0.002, 0.5);
+    } else if matches!(app.gesture, Some(Gesture::MaskHandle { .. })) {
+        // a drag of a mask is running: the wheel neither resizes it (the drag's next frame would
+        // undo that and its undo step would split) nor zooms
+    } else if !wheel_radial(app, q, notches, frame, img, d) {
+        return false;
+    }
+    // taken: the photo doesn't zoom as well, nor pan with egui's smoothed tail of these notches
+    ui.data_mut(|m| m.insert_temp(wheel_tail_id(), true));
+    ui.input_mut(|i| {
+        i.events.retain(|e| !matches!(e, egui::Event::MouseWheel { .. }));
+        i.smooth_scroll_delta = egui::Vec2::ZERO;
+    });
+    true
+}
+
+fn wheel_tail_id() -> egui::Id {
+    egui::Id::unique("mask-wheel-tail")
+}
+
+/// After [`mask_wheel`] took some notches, egui keeps feeding their smoothed delta for a few
+/// frames: take it too, until it runs out or a trackpad (point units) scrolls again.
+fn wheel_tail(ui: &mut egui::Ui) -> bool {
+    if !ui.data(|m| m.get_temp::<bool>(wheel_tail_id())).unwrap_or(false) {
+        return false;
+    }
+    let (smooth, trackpad) = ui
+        .input(|i| (i.smooth_scroll_delta, i.events.iter().any(|e| matches!(e, egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, .. }))));
+    if smooth == egui::Vec2::ZERO || trackpad {
+        ui.data_mut(|m| m.remove_temp::<bool>(wheel_tail_id()));
+        return false;
+    }
+    ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
+    true
+}
+
+/// `notches` over screen point `q`: the selected mask's radial gradient there scaled by
+/// [`WHEEL_STEP`] a notch, each notch its own undo step. `false` when there is none there.
+fn wheel_radial(
+    app: &mut LightcraftApp,
+    q: Pos2,
+    notches: f32,
+    frame: &lightcraft_pipeline::geometry::Frame,
+    img: Rect,
+    d: &DevelopSettings,
+) -> bool {
+    let Some(m) = d.masks.iter().find(|m| Some(m.id) == app.session.active_mask).filter(|_| app.ui.tool.is_empty()) else { return false };
+    let map = CanvasMap::new(frame, img).for_mask(m.on_photo);
+    let at = map.norm(q);
+    let Some(ci) = m.components.iter().position(|c| radial_body_contains(&c.shape, at, &map)) else { return false };
+    let mid = m.id;
+    // (a fast wheel can send several notches in one frame; a smooth one, parts of one)
+    let mut left = f64::from(notches).clamp(-100.0, 100.0);
+    while left != 0.0 {
+        let step = left.clamp(-1.0, 1.0);
+        left -= step;
+        let k = WHEEL_STEP.powf(step);
+        let _ = app.run("develop.beginInteraction", json!({"label": "Edit Mask"}));
+        // (read after it begins: an old mask is on the photo from then on, in its coordinates)
+        if let Some(MaskShape::Radial { center, rx, ry, angle, feather, invert }) = current_shape(app, mid, ci) {
+            let shape = MaskShape::Radial { center, rx: (rx * k).clamp(0.01, 2.0), ry: (ry * k).clamp(0.01, 2.0), angle, feather, invert };
+            let _ = app.run("mask.update", json!({"id": mid, "component": ci, "shape": shape}));
+        }
+        let _ = app.run("develop.endInteraction", json!({}));
+    }
+    true
+}
+
 pub(super) fn color_range_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, map: &CanvasMap) {
     if resp.clicked()
         && let Some(q) = resp.interact_pointer_pos()
