@@ -1918,6 +1918,102 @@ fn show_in_folders_reveals_the_photo_asked_for_and_follows_to_its_folder() {
     assert!(crate::menus::show_in_folders_enabled(&h.app, Some(c)));
 }
 
+fn id_at(h: &Headless, path: &str) -> lightcraft_catalog::PhotoId {
+    h.app.session.catalog.photos().find(|p| matches!(&p.source, lightcraft_catalog::Source::File { path: f } if f == path)).unwrap().id
+}
+
+/// The photo right-clicked within a multi-selection becomes the active one in its folder, and the
+/// rest of the selection the folder shows stays selected (#3455).
+#[test]
+fn show_in_folders_makes_the_photo_right_clicked_the_active_one() {
+    let mut h = folders_app(&["/pics/trip/a.jpg", "/pics/trip/b.jpg", "/pics/home/c.jpg"]);
+    let (a, b, c) = (id_at(&h, "/pics/trip/a.jpg"), id_at(&h, "/pics/trip/b.jpg"), id_at(&h, "/pics/home/c.jpg"));
+    h.app.run("library.select", json!({"ids": [a.0, b.0, c.0], "active": a.0})).unwrap();
+    h.step();
+    h.app.run("app.showInFolders", json!({"id": b.0})).unwrap();
+    h.step();
+    assert_eq!(h.app.session.library_folder.as_deref(), Some("/pics/trip"));
+    assert_eq!(h.app.session.active(), Some(b), "the photo right-clicked, not the one active before");
+    let mut sel = h.app.session.selection.ids.clone();
+    sel.sort();
+    assert_eq!(sel, vec![a, b], "the selected photos of this folder stay selected");
+}
+
+/// A photo the filter bar leaves out of its folder isn't made active without a cell: Show in
+/// Folders says so and keeps the filter.
+#[test]
+fn show_in_folders_says_when_the_filter_hides_the_photo() {
+    let mut h = folders_app(&["/pics/trip/a.jpg", "/pics/trip/b.jpg"]);
+    let (a, b) = (id_at(&h, "/pics/trip/a.jpg"), id_at(&h, "/pics/trip/b.jpg"));
+    h.app.run("library.select", json!({"ids": [a.0], "active": a.0})).unwrap();
+    h.app.run("photo.rate", json!({"rating": 3, "ids": [a.0]})).unwrap();
+    h.app.run("library.filter", json!({"rating": 3})).unwrap();
+    h.step();
+    let e = h.app.run("app.showInFolders", json!({"id": b.0})).unwrap_err();
+    assert!(e.contains("filter"), "{e}");
+    assert_ne!(h.app.session.active(), Some(b), "no active photo without a cell");
+    assert_eq!(h.app.session.filter.rating, 3, "the filter stays");
+}
+
+/// A photo under the top of a collapsed stack has no cell until the stack opens: Show in Folders
+/// opens it, and the photo is shown and active (#3457).
+#[test]
+fn show_in_folders_opens_the_collapsed_stack_a_photo_is_hidden_in() {
+    let mut h = folders_app(&["/pics/trip/a.jpg", "/pics/trip/b.jpg", "/pics/home/c.jpg"]);
+    let (a, b) = (id_at(&h, "/pics/trip/a.jpg"), id_at(&h, "/pics/trip/b.jpg"));
+    h.app.run("library.select", json!({"ids": [a.0, b.0], "active": a.0})).unwrap();
+    h.app.run("stack.group", json!({"ids": [a.0, b.0], "top": a.0, "collapsed": true})).unwrap();
+    h.step();
+    assert!(h.app.session.catalog.stack_of(b).is_some_and(|st| st.collapsed));
+    h.app.run("app.showInFolders", json!({"id": b.0})).unwrap();
+    h.step();
+    h.step();
+    assert!(h.app.session.catalog.stack_of(b).is_some_and(|st| !st.collapsed), "its stack opened");
+    assert_eq!(h.app.session.active(), Some(b));
+    assert!(h.app.session.visible().contains(&b), "the photo is in the grid");
+}
+
+/// With the photo's folder already shown and the grid scrolled away from it, Show in Folders brings
+/// the grid back to the photo (#3456).
+#[test]
+fn show_in_folders_scrolls_the_grid_back_to_the_photo() {
+    let paths: Vec<String> = (0..300).map(|i| format!("/pics/trip/{i:03}.jpg")).collect();
+    let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+    let mut h = folders_app_sized(&refs, [1000.0, 600.0]);
+    activate(&mut h, "/pics/trip/000.jpg");
+    h.app.run("app.showInFolders", json!({})).unwrap();
+    h.settle(SETTLE);
+    let top = h.app.grid_scroll.unwrap_or_default();
+    // scroll far away from the active photo, with the wheel over the grid
+    let grid = widget(&h, "grid:scroll");
+    let r = h.request("ui.move", json!({"x": grid.center().x, "y": grid.center().y}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let dy = if top > 5000.0 { 2000.0 } else { -2000.0 };
+    for _ in 0..10 {
+        let r = h.request("ui.scroll", json!({"dy": dy}), T);
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    // as when the menu is used: the pointer leaves the grid and the scroll's glide has ended
+    let r = h.request("ui.move", json!({"x": 20.0, "y": 300.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    for _ in 0..60 {
+        h.step();
+    }
+    let away = h.app.grid_scroll.unwrap_or_default();
+    assert!((away - top).abs() > 2000.0, "scrolled away: {top} → {away}");
+    h.app.run("app.showInFolders", json!({})).unwrap();
+    // (the grid glides there)
+    for _ in 0..300 {
+        h.step();
+        if h.app.grid_scroll.is_some_and(|y| (y - top).abs() < 300.0) {
+            break;
+        }
+    }
+    let back = h.app.grid_scroll.unwrap_or_default();
+    assert!((back - top).abs() < 300.0, "back at the photo: {top} → {away} → {back}");
+}
+
 /// A folder deeper than the tree goes has no row: the entry is disabled rather than failing.
 #[test]
 fn show_in_folders_is_disabled_for_a_folder_below_the_trees_depth() {

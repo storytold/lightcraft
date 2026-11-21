@@ -93,15 +93,36 @@ pub fn show_in_folders_enabled(app: &LightcraftApp, id: Option<lightcraft_catalo
 /// Photo ▸ Show in Folders (Lightroom's Go to Folder in Library): show the folder of photo `id`
 /// (the active one when `None`; the grid's menu passes the photo right-clicked) as a click on its
 /// row in the sidebar's Folders section does, and bring the row into view: the sidebar, the
-/// section and the folders above it open, and it scrolls there (`reveal_folder`).
-pub(super) fn show_in_folders(app: &mut LightcraftApp, id: Option<lightcraft_catalog::PhotoId>) -> Result<Value, String> {
+/// section and the folders above it open, and it scrolls there (`reveal_folder`). The photo is the
+/// active one there and the grid and filmstrip come back to it, also when its folder was already
+/// shown; a collapsed stack it is hidden under opens (#3455, #3456, #3457).
+pub(super) fn show_in_folders(app: &mut LightcraftApp, ctx: &egui::Context, id: Option<lightcraft_catalog::PhotoId>) -> Result<Value, String> {
     let dir = photo_folder(app, id).ok_or("this photo is not in a folder of the library")?;
     let tree = app.caches.folder_tree(&app.session.catalog);
     // the row's own spelling (forward slashes): what its click hands `library.source`, and its id
     let path = crate::panels::left::folder_row_of(&tree, &dir).map(|n| n.path.clone()).ok_or("this photo's folder is not in Folders")?;
+    let photo = id.or(app.session.selection.active);
+    let selected = app.session.selection.ids.clone();
     app.run("library.source", json!({"kind": "libraryFolder", "path": path}))?;
     app.ui.left_panel = true;
     app.ui.reveal_folder = Some(path.clone());
+    if let Some(photo) = photo {
+        let hidden = app.session.catalog.stack_of(photo).is_some_and(|st| st.collapsed && st.photos.first() != Some(&photo));
+        if hidden {
+            app.run("stack.toggle", json!({"ids": [photo.0], "collapsed": false}))?;
+        }
+        let shown: std::collections::HashSet<_> = app.session.visible_cloned().into_iter().collect();
+        // the folder is shown, but the filter bar's other rules leave the photo out: it isn't made
+        // an active photo without a cell, and the filter is the person's to change
+        if !shown.contains(&photo) {
+            return Err("the filter hides this photo in its folder".into());
+        }
+        // the photos of the selection this folder shows stay selected, with this one active
+        let mut ids: Vec<u64> = selected.iter().filter(|p| **p != photo && shown.contains(p)).map(|p| p.0).collect();
+        ids.push(photo.0);
+        app.run("library.select", json!({"ids": ids, "active": photo.0}))?;
+        crate::panels::grid::follow_active_again(ctx);
+    }
     Ok(json!({"path": path}))
 }
 
