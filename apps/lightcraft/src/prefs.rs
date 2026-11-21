@@ -22,10 +22,14 @@ pub(crate) fn config_dir() -> Option<std::path::PathBuf> {
 }
 
 /// The window at the size it was last used at, zoomed if it was (`window`), or at the usual size
-/// when nothing is remembered. A zoomed window is given the size it goes back to. Where it
-/// opens is the system's to say.
+/// when nothing is remembered, where it was left if that is known (issue #2967). A zoomed window is
+/// given the size and place it goes back to.
 pub(crate) fn as_remembered(builder: egui::ViewportBuilder, window: Option<lightcraft_ui_egui::window_place::WindowPlace>) -> egui::ViewportBuilder {
     let builder = builder.with_inner_size(window.map_or(lightcraft_ui_egui::window_place::DEFAULT_SIZE, |w| w.size));
+    let builder = match window.and_then(|w| w.position) {
+        Some(at) => builder.with_position(at),
+        None => builder,
+    };
     // (only ever asked to zoom: asked not to, macOS un-zooms a window whose size fills the screen
     // to a size of its own choosing)
     if window.is_some_and(|w| w.zoomed) { builder.with_maximized(true) } else { builder }
