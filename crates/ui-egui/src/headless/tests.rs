@@ -4444,7 +4444,8 @@ fn settings_dialog_by_keyboard_and_clicks() {
         assert_eq!(budget(), 1024 << 20, "applied through app.memoryBudget");
         h.request("ui.clickWidget", json!({"id": "button:settingsMemory-0"}), t);
         h.step();
-        let automatic = (default_budget() >> 20) << 20;
+        // automatic sends `mb: 0`: the engine's own default, not rounded to a whole MB (#3072)
+        let automatic = default_budget();
         assert_eq!(h.app.session.media.budget(), cache_share(automatic), "back to automatic");
         assert_eq!(budget(), automatic, "back to automatic");
     }
