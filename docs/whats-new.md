@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### The mouse's Back and Forward buttons go to the previous and next photo
+- The side buttons of a mouse now do what ← and → do: Forward shows the next photo and Back the previous one, in
+  Loupe and Develop as in the grids and slideshows. Before, LightCraft ignored them. Like the arrow keys, they do
+  nothing while a dialog or a text field has the keyboard. Pressed over a slider or another control, they only
+  change the photo: the control under the pointer is left as it was.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

@@ -125,7 +125,32 @@ impl LightcraftApp {
     /// The hook also runs before a hidden logic-only tick, so it injects at most one batch and
     /// keeps that batch in flight until a completed UI pass consumed it. It never injects while
     /// the fonts are not installed (the pass would draw nothing and the events would be lost).
+    ///
+    /// Last, the mouse's Back / Forward buttons are taken out of the input, the host's and the
+    /// injected ones alike ([`Self::take_nav_buttons`]).
     pub fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.inject_raw_input(ctx, raw);
+        self.take_nav_buttons(raw);
+    }
+
+    /// Take the mouse's Back / Forward button events (`Extra1` / `Extra2`) out of `raw` and keep
+    /// their presses for the next UI pass's shortcuts (issue #3303). egui treats any pressed
+    /// button as the start of a click or drag: left in, Back pressed over a slider would set it
+    /// to the pointer, on the photo navigation is about to switch to.
+    fn take_nav_buttons(&mut self, raw: &mut egui::RawInput) {
+        raw.events.retain(|event| match event {
+            egui::Event::PointerButton { button: button @ (egui::PointerButton::Extra1 | egui::PointerButton::Extra2), pressed, .. } => {
+                if *pressed {
+                    self.nav_buttons.push(*button);
+                }
+                false
+            }
+            _ => true,
+        });
+    }
+
+    /// What [`Self::raw_input_hook`] does before it takes out the mouse's Back / Forward buttons.
+    fn inject_raw_input(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         let file = |p: &String| (!p.is_empty()).then(|| std::path::PathBuf::from(p));
         if !self.drop_pending.is_empty() {
             raw.dropped_files = std::mem::take(&mut self.drop_pending)

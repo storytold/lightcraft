@@ -474,6 +474,13 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
             }
         }
         fixed_photo_keys(i, &native, &taken, grid_navigation, &mut fire);
+        // the mouse's Back / Forward buttons: the previous / next photo, as ← / → (issue #3303)
+        // (`raw_input_hook` keeps their presses out of egui, so no widget under the pointer sees them);
+        // one step per press, in the order pressed, however many arrived in one frame; none while the
+        // primary button is held (a slider or handle drag would go on with the next photo)
+        for button in app.nav_buttons.iter().filter(|_| !i.pointer.primary_down()) {
+            fire.push(if *button == egui::PointerButton::Extra1 { "library.previous" } else { "library.next" }.to_string());
+        }
         h_press = matches(i, Modifiers::NONE, Key::H) && !native("H") && !taken.contains(&(Modifiers::NONE, Key::H));
     });
     (fire, aliased, h_press)
