@@ -87,7 +87,12 @@ fn the_first_frame_opens_the_tour_for_a_window_host_only() {
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx()));
         out.textures_delta.clear();
     };
-    let fresh = || LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let fresh = || {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+        // Dialog selection needs no GPU; a short-lived fixture must not leave device warm-up running (#620).
+        app.ui.settings.gpu = false;
+        app
+    };
 
     let mut window = fresh();
     logic(&mut window);
