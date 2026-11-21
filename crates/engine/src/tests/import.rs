@@ -2577,40 +2577,51 @@ fn smart_preview_refresh_invalidates_decoded_proxy_sources() {
         let mut case = SmartLookCase::new("ARW", if opening { "decoded-opening" } else { "decoded-build" });
         assert_current_smart_look_is_not_rebuilt(&mut case);
         let _ = keep_offline_previews(&mut case);
+        let copy = case.session.execute("photo.virtualCopy", &json!({"ids": [case.id.0]})).unwrap();
+        let copy_id = lightcraft_catalog::PhotoId(copy["ids"][0].as_u64().unwrap());
+        assert_eq!(crate::smart::sharded_file_path(&case.dir, case.session.catalog.photo(copy_id).unwrap()), case.file);
+        let ids = [case.id, copy_id];
         let old = crate::smart::load(&case.file).unwrap();
         let other = crate::smart::load(&case.png_file).unwrap();
         let other_id = case.session.catalog.photos().find(|p| p.file_name == "b.png").unwrap().id;
-        case.session.media.set_full_capacity(2);
-        case.session.media.preview_capacity = 2;
+        case.session.media.set_full_capacity(3);
+        case.session.media.preview_capacity = 3;
         let levels = [SourceLevel::Thumb, SourceLevel::Preview, SourceLevel::Full];
         for level in levels {
-            case.session.media.insert_source(case.id, level, old.clone());
+            for id in ids {
+                case.session.media.insert_source(id, level, old.clone());
+            }
             case.session.media.insert_source(other_id, level, other.clone());
         }
         std::fs::rename(case.src.with_extension("offline"), &case.src).unwrap();
         if opening {
             crate::cmd::previews::refresh_stale_smart_previews(&mut case.session).unwrap().join().unwrap();
         } else {
-            let r = case.session.execute("library.smartPreviews", &json!({})).unwrap();
+            let r = case.session.execute("library.smartPreviews", &json!({"ids": [case.id.0, copy_id.0, other_id.0]})).unwrap();
             assert_eq!(r["refreshed"], 1, "{r}");
         }
-        let photo = case.session.catalog.photo(case.id).unwrap().clone();
         let unrelated = case.session.catalog.photo(other_id).unwrap().clone();
-        for level in levels {
-            let current = case.session.media.source_ref(&photo, level).load_source().unwrap();
-            assert!(!current.from_proxy, "refresh must evict old decoded proxy pixels");
-            assert_eq!(current.info_or(Default::default()).camera_tone, Some(case.new));
-            let kept = case.session.media.source_ref(&unrelated, level).load_source().unwrap();
-            assert!(Arc::ptr_eq(&kept.image, &other.image), "unrelated proxy sources must stay cached");
-            case.session.media.insert_source(case.id, level, old.clone());
-            assert!(!case.session.media.has_source(case.id, level), "a late old decode must not refill the cache");
+        for id in ids {
+            let photo = case.session.catalog.photo(id).unwrap().clone();
+            for level in levels {
+                let current = case.session.media.source_ref(&photo, level).load_source().unwrap();
+                assert!(!current.from_proxy, "refresh must evict old decoded proxy pixels");
+                assert_eq!(current.info_or(Default::default()).camera_tone, Some(case.new));
+                let kept = case.session.media.source_ref(&unrelated, level).load_source().unwrap();
+                assert!(Arc::ptr_eq(&kept.image, &other.image), "unrelated proxy sources must stay cached");
+                case.session.media.insert_source(id, level, old.clone());
+                assert!(!case.session.media.has_source(id, level), "a late old decode must not refill the cache");
+            }
         }
         let fresh = crate::smart::load(&case.file).unwrap();
-        for level in levels {
-            case.session.media.insert_source(case.id, level, fresh.clone());
-            case.session.media.insert_source(case.id, level, old.clone());
-            let cached = case.session.media.source_ref(&photo, level).load_source().unwrap();
-            assert!(Arc::ptr_eq(&cached.image, &fresh.image), "a late old decode must preserve newer cached proxy pixels");
+        for id in ids {
+            let photo = case.session.catalog.photo(id).unwrap().clone();
+            for level in levels {
+                case.session.media.insert_source(id, level, fresh.clone());
+                case.session.media.insert_source(id, level, old.clone());
+                let cached = case.session.media.source_ref(&photo, level).load_source().unwrap();
+                assert!(Arc::ptr_eq(&cached.image, &fresh.image), "a late old decode must preserve newer cached proxy pixels");
+            }
         }
     }
 }

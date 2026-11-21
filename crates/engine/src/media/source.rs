@@ -165,6 +165,8 @@ pub struct DecodedSource {
     pub from_proxy: bool,
     /// Process-wide tick before reading the proxy, so a concurrent replacement invalidates the decode.
     pub proxy_loaded_at: u64,
+    /// Proxy file read for these pixels. Virtual copies share this identity.
+    pub proxy_path: Option<std::path::PathBuf>,
     /// Developed from a smaller copy of the raw image that the file keeps ([`ReducedLoader`]), not from the image
     /// itself: good for a thumbnail, never for an export.
     pub reduced: bool,
@@ -181,8 +183,14 @@ impl DecodedSource {
             outliers: false,
             from_proxy: false,
             proxy_loaded_at: 0,
+            proxy_path: None,
             reduced: false,
         }
+    }
+
+    /// Whether these pixels are still current after replacements of their shared proxy file.
+    pub(crate) fn proxy_is_current(&self, refreshes: &std::collections::HashMap<std::path::PathBuf, u64>) -> bool {
+        !self.from_proxy || self.proxy_path.as_ref().and_then(|path| refreshes.get(path)).is_none_or(|tick| self.proxy_loaded_at >= *tick)
     }
 
     /// Whether this source can stand for one decoded with `outliers`: a raw decode must match it; anything without a
@@ -353,6 +361,7 @@ impl SourceRef {
                                     outliers: *outliers,
                                     from_proxy: false,
                                     proxy_loaded_at: 0,
+                                    proxy_path: None,
                                     reduced: false,
                                 })
                             })

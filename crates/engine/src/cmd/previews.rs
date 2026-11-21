@@ -746,7 +746,10 @@ fn smart_run(
                         n.built += 1;
                         if stale {
                             n.refreshed += 1;
-                            proxy_refreshes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(id, lightcraft_preview::next_tick());
+                            proxy_refreshes
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .insert(path.clone(), lightcraft_preview::next_tick());
                         } else if damaged {
                             n.repaired += 1;
                             if let Some((st, _)) = state {

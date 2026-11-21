@@ -516,6 +516,7 @@ pub fn load(path: &Path) -> Result<crate::media::DecodedSource, String> {
         outliers: false,
         from_proxy: true,
         proxy_loaded_at,
+        proxy_path: Some(path.to_owned()),
         reduced: false,
     })
 }

@@ -218,13 +218,14 @@ impl MediaCache {
     /// (with a smart preview's stored camera tone curve). Only sources developed with `profile` (the photo's imported
     /// camera profile tag, [`Self::camera_profile_of`], or none) count: one made with another profile has its facts.
     pub(super) fn source_facts(&self, id: PhotoId, header: SourceInfo, profile: Option<&str>) -> SourceInfo {
+        let refreshes = self.proxy_refreshes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let cached = || {
             self.thumbs
                 .peek(&id)
                 .into_iter()
                 .chain(self.previews.iter().filter(|e| e.0 == id).map(|e| &e.1))
                 .chain(self.full.iter().filter(|e| e.0 == id).map(|e| &e.1))
-                .filter(|s| s.camera_profile.as_deref() == profile && self.proxy_is_current(id, s))
+                .filter(|s| s.camera_profile.as_deref() == profile && s.proxy_is_current(&refreshes))
         };
         match cached().find(|s| s.info.is_some()).or_else(|| cached().next()) {
             Some(s) => s.info_or(header),
@@ -243,9 +244,9 @@ impl MediaCache {
     }
 
     pub(crate) fn insert_source(&mut self, id: PhotoId, level: SourceLevel, img: DecodedSource) {
-        let refreshed_at = self.evict_stale_proxies(id);
+        self.evict_stale_proxies(id);
         // A render started before refresh can finish afterwards. Do not cache its old proxy again.
-        if img.from_proxy && refreshed_at.is_some_and(|tick| img.proxy_loaded_at < tick) {
+        if !img.proxy_is_current(&self.proxy_refreshes.lock().unwrap_or_else(std::sync::PoisonError::into_inner)) {
             return;
         }
         let tick = lightcraft_preview::next_tick();
@@ -273,26 +274,13 @@ impl MediaCache {
     }
 
     /// Evict only this photo's proxy decodes made before its latest successful replacement.
-    fn evict_stale_proxies(&mut self, id: PhotoId) -> Option<u64> {
-        let tick = self.proxy_refreshes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&id).copied()?;
-        let stale = |s: &DecodedSource| s.from_proxy && s.proxy_loaded_at < tick;
-        if self.thumbs.peek(&id).is_some_and(stale) {
+    fn evict_stale_proxies(&mut self, id: PhotoId) {
+        let refreshes = self.proxy_refreshes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.thumbs.peek(&id).is_some_and(|s| !s.proxy_is_current(&refreshes)) {
             self.thumbs.remove(&id);
         }
-        self.previews.retain(|e| e.0 != id || !stale(&e.1));
-        self.full.retain(|e| e.0 != id || !stale(&e.1));
-        Some(tick)
-    }
-
-    /// Read-only cache queries must not expose a proxy invalidated by a background worker.
-    fn proxy_is_current(&self, id: PhotoId, source: &DecodedSource) -> bool {
-        !source.from_proxy
-            || self
-                .proxy_refreshes
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .get(&id)
-                .is_none_or(|tick| source.proxy_loaded_at >= *tick)
+        self.previews.retain(|e| e.0 != id || e.1.proxy_is_current(&refreshes));
+        self.full.retain(|e| e.0 != id || e.1.proxy_is_current(&refreshes));
     }
 
     /// Forget a photo's decoded sources (e.g. after its file changed).
@@ -309,10 +297,11 @@ impl MediaCache {
 
     /// Whether the decoded source of `id` at `level` is held.
     pub fn has_source(&self, id: PhotoId, level: SourceLevel) -> bool {
+        let refreshes = self.proxy_refreshes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match level {
-            SourceLevel::Thumb => self.thumbs.peek(&id).is_some_and(|s| self.proxy_is_current(id, s)),
-            SourceLevel::Preview => self.previews.iter().any(|e| e.0 == id && self.proxy_is_current(id, &e.1)),
-            SourceLevel::Full => self.full.iter().any(|e| e.0 == id && self.proxy_is_current(id, &e.1)),
+            SourceLevel::Thumb => self.thumbs.peek(&id).is_some_and(|s| s.proxy_is_current(&refreshes)),
+            SourceLevel::Preview => self.previews.iter().any(|e| e.0 == id && e.1.proxy_is_current(&refreshes)),
+            SourceLevel::Full => self.full.iter().any(|e| e.0 == id && e.1.proxy_is_current(&refreshes)),
         }
     }
 

@@ -48,8 +48,8 @@ pub use source::{
     face_edge, thumb_bucket,
 };
 
-/// Latest successful proxy replacement per photo, shared with preview workers.
-pub(crate) type ProxyRefreshes = Arc<std::sync::Mutex<HashMap<PhotoId, u64>>>;
+/// Latest successful replacement per proxy file, shared by every virtual copy and preview worker.
+pub(crate) type ProxyRefreshes = Arc<std::sync::Mutex<HashMap<std::path::PathBuf, u64>>>;
 
 pub struct MediaCache {
     settings_hashes: SettingsHashes,
