@@ -9,6 +9,14 @@ use craft_update::dialog::{CheckResultDialog, CheckResultResponse};
 #[cfg(not(target_arch = "wasm32"))]
 use craft_update::updater::{Action, Status, Updater};
 
+/// craft-update's words in the interface language. Its English text is the catalog key, as for
+/// [`crate::i18n::tr`]; the `{app}`-style placeholders are filled after the lookup, so a
+/// translation may put them anywhere in its sentence.
+#[cfg(not(target_arch = "wasm32"))]
+fn translate(text: &str, args: &[(&str, &str)]) -> String {
+    craft_update::translate::fill(crate::i18n::tr(text), args)
+}
+
 pub(crate) struct Runtime {
     #[cfg(not(target_arch = "wasm32"))]
     updater: Updater,
@@ -31,7 +39,7 @@ impl Default for Runtime {
     fn default() -> Self {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
-            updater: Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")),
+            updater: Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_translator(translate),
             #[cfg(not(target_arch = "wasm32"))]
             startup_check: false,
             #[cfg(not(target_arch = "wasm32"))]
@@ -128,7 +136,7 @@ pub(crate) fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         // A found update opens the startup prompt and leaves the status idle, which ends the result dialog.
         let rt = &mut app.updates_rt;
         if result_window_shows(rt.updater.status(), rt.updater.prompt_open()) {
-            let dialog = CheckResultDialog::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION"));
+            let dialog = CheckResultDialog::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_translator(translate);
             match dialog.show(ctx, rt.updater.status()) {
                 CheckResultResponse::None => {}
                 // Closing the dialog dismisses the outcome it showed.
@@ -211,22 +219,30 @@ mod tests {
         assert!(updater.prompt_open(), "the answered offer opened no prompt");
     }
 
-    #[test]
     #[cfg(not(target_arch = "wasm32"))]
-    fn startup_prompt_shows_and_closes() {
-        let mut app = LightcraftApp::new(Session::new(), Default::default());
-        let ctx = egui::Context::default();
-        let release = craft_update::Release {
+    fn release_99() -> craft_update::Release {
+        craft_update::Release {
             tag: "v99.0.0".into(),
             version: craft_update::parse_version("99.0.0"),
             name: "LightCraft 99.0.0".into(),
             html_url: "https://github.com/storytold/lightcraft/releases/tag/v99.0.0".into(),
             ..Default::default()
-        };
-        // A missing pins file means stable releases, whatever the launcher on this machine chose.
-        let no_pins = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("no-launcher-pins.json");
-        app.updates_rt.updater = Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_pins_path(no_pins);
-        offer_and_wait(&mut app.updates_rt.updater, release);
+        }
+    }
+
+    /// A missing pins file means stable releases, whatever the launcher on this machine chose.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn no_pins() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("no-launcher-pins.json")
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn startup_prompt_shows_and_closes() {
+        let mut app = LightcraftApp::new(Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        app.updates_rt.updater = Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_pins_path(no_pins());
+        offer_and_wait(&mut app.updates_rt.updater, release_99());
 
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             show(&mut app, ui.ctx());
@@ -253,5 +269,44 @@ mod tests {
             assert!(!result_window_shows(status, true), "{status:?} over the prompt");
         }
         assert!(!result_window_shows(&Status::Idle, false));
+    }
+
+    /// The text [`show`] paints once its card has been sized (egui hides an area's first frame).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn painted(app: &mut LightcraftApp, view: &mut crate::headless::HeadlessView) -> String {
+        for _ in 0..2 {
+            view.run(egui::RawInput::default(), |ui| show(app, ui.ctx()));
+        }
+        view.painted_text().join("\n")
+    }
+
+    /// craft-update keeps its words in English; the startup prompt and the result dialog get
+    /// them from the catalog, with the app name and version filled in after the lookup.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn the_update_dialogs_are_in_the_ui_language() {
+        crate::i18n::set_language(crate::i18n::Locale::De);
+        assert_eq!(
+            translate("{app} updated to {version}.", &[("app", "LightCraft"), ("version", "0.2.0")]),
+            "LightCraft wurde auf 0.2.0 aktualisiert."
+        );
+
+        let mut app = LightcraftApp::new(Session::new(), Default::default());
+        let mut view = crate::headless::HeadlessView::new();
+        // The runtime's own updater, so the test sees the translator `Runtime::default` passes.
+        app.updates_rt.updater = Runtime::default().updater.with_pins_path(no_pins());
+        offer_and_wait(&mut app.updates_rt.updater, release_99());
+        let prompt = painted(&mut app, &mut view);
+        assert!(prompt.contains("SPÄTER"), "{prompt}");
+
+        // A requested check, its source standing in for the network and a missing pins file for
+        // the launcher's (a version pinned there would end the check at once). `show` never
+        // ticks the updater, so the dialog stays on "Checking".
+        let source: craft_update::updater::CheckSource = std::sync::Arc::new(|| Ok(None));
+        app.updates_rt.updater = Runtime::default().updater.with_source(source).with_pins_path(no_pins());
+        app.updates_rt.updater.check_now(&view.ctx);
+        let result = painted(&mut app, &mut view);
+        crate::i18n::set_language(crate::i18n::Locale::En);
+        assert!(result.contains("Suche nach Updates…"), "{result}");
     }
 }
