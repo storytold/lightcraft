@@ -16,8 +16,10 @@
 //! A folder that holds no photo itself but whose subfolders do (`Photos/2026` above
 //! `Photos/2026/11-20`) is listed too, from the folder the library's photos branch out of
 //! downwards ([`WatchKind::Parent`]): only its subfolders' names count there, so a new day folder
-//! that another app (a sync tool, a camera app) creates beside the old ones is noticed (issue
-//! #1302), while files that come and go in it are not.
+//! that another app (a sync tool, a camera app) creates beside the old ones is noticed, while files
+//! and hidden folders that come and go in it, and subfolders that go away, are not. A folder whose
+//! visible subfolders are mostly not the library's (a home folder above two photo trees) is not
+//! watched at all: a change there would mean scanning everything inside it.
 //!
 //! The first poll of a library (no stamps yet) only records the stamps: its folders were just
 //! imported or were already looked at. Stamps are kept in the library (`folder-stamps.json`), so
@@ -147,7 +149,8 @@ pub fn stamp_of(dir: &str, kind: WatchKind) -> Option<Stamp> {
     let mut names: Vec<(String, bool)> = Vec::new();
     for e in rd.take(MAX_ENTRIES).flatten() {
         let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        if kind == WatchKind::Parent && !is_dir {
+        // a parent: its visible subfolders only (apps' hidden folders come and go)
+        if kind == WatchKind::Parent && (!is_dir || e.file_name().to_string_lossy().starts_with('.')) {
             continue;
         }
         names.push((e.file_name().to_string_lossy().into_owned(), is_dir));
@@ -189,13 +192,33 @@ pub enum WatchKind {
 pub struct WatchedDir {
     pub path: String,
     pub kind: WatchKind,
+    /// How many of its subfolders hold library photos (for a [`WatchKind::Parent`]: one whose
+    /// folders are mostly not the library's, a home folder, is too broad to watch).
+    pub folders: usize,
+}
+
+/// A parent folder is watched only while at least half of its visible subfolders hold library
+/// photos: a new folder in a home folder or a share's root (above two photo trees) would otherwise
+/// mean scanning, and with new files added, importing everything inside it.
+fn too_broad(w: &WatchedDir) -> bool {
+    if w.kind != WatchKind::Parent || cfg!(target_arch = "wasm32") {
+        return false;
+    }
+    let Ok(rd) = std::fs::read_dir(&w.path) else { return false };
+    let on_disk = rd
+        .take(MAX_ENTRIES)
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()) && !e.file_name().to_string_lossy().starts_with('.'))
+        .count();
+    on_disk > w.folders.saturating_mul(2)
 }
 
 /// The folders a poll lists: every folder the library holds photos in directly, and the folders
 /// between them and the folder they branch out of (the deepest folder above all of a branch's
 /// library folders; [`WatchKind::Parent`]). Not the disks themselves, the startup disk, folders
 /// holding disks, nor anything above where the library's folders branch out (a home folder above
-/// a single `Pictures/…` tree): anything that changes there would mean scanning everything inside
+/// a single `Pictures/…` tree); [`poll_dirs`] also skips a parent whose subfolders are mostly not
+/// the library's (a home folder above two trees): anything that changes there would mean scanning everything inside
 /// it. So a new folder inside or beside the library's folders is noticed (its parent's listing
 /// changes), but one in an unrelated place is not: that one is imported.
 pub fn watched_dirs(cat: &Catalog) -> Vec<WatchedDir> {
@@ -209,7 +232,7 @@ pub fn watched_dirs(cat: &Catalog) -> Vec<WatchedDir> {
             let inside = inside || (eligible && (n.own > 0 || n.children.len() != 1));
             if eligible && inside && n.count > 0 {
                 let kind = if n.own > 0 { WatchKind::Photos } else { WatchKind::Parent };
-                out.push(WatchedDir { path: n.path.clone(), kind });
+                out.push(WatchedDir { path: n.path.clone(), kind, folders: n.children.len() });
             }
             walk(&n.children, out, depth + 1, inside);
         }
@@ -236,7 +259,8 @@ pub struct Polled {
 /// with no previous stamp is recorded, not reported. Stops when `cancel` is set (the stamps
 /// not taken yet stay as they were).
 pub fn poll_dirs(dirs: &[WatchedDir], prev: &Stamps, cancel: &AtomicBool) -> Polled {
-    poll_with(dirs, prev, cancel, |d| stamp_of(&d.path, d.kind))
+    let dirs: Vec<WatchedDir> = dirs.iter().filter(|d| !too_broad(d)).cloned().collect();
+    poll_with(&dirs, prev, cancel, |d| stamp_of(&d.path, d.kind))
 }
 
 /// [`poll_dirs`] with the stamping supplied (tests).
@@ -254,7 +278,9 @@ pub fn poll_with(dirs: &[WatchedDir], prev: &Stamps, cancel: &AtomicBool, mut st
         match stamp(w) {
             Some(s) => {
                 out.listed += 1;
-                if old.is_some_and(|o| o != s) {
+                // a parent that only lost subfolders: nothing new to find (a gone folder is
+                // offline, not a reason to rescan the folders beside it)
+                if old.is_some_and(|o| o != s && !(w.kind == WatchKind::Parent && s.count < o.count)) {
                     out.changed.push(d.clone());
                 }
                 out.stamps.insert(d.clone(), s);
@@ -382,7 +408,8 @@ mod tests {
 
     #[test]
     fn only_changed_listings_are_reported() {
-        let dirs: Vec<WatchedDir> = ["/a", "/b", "/c", "/d"].iter().map(|s| WatchedDir { path: s.to_string(), kind: WatchKind::Photos }).collect();
+        let dirs: Vec<WatchedDir> =
+            ["/a", "/b", "/c", "/d"].iter().map(|s| WatchedDir { path: s.to_string(), kind: WatchKind::Photos, folders: 0 }).collect();
         let mut prev = Stamps::new();
         prev.insert("/a".into(), st(1).unwrap());
         prev.insert("/b".into(), st(2).unwrap());

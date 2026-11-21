@@ -97,11 +97,10 @@ fn a_poll_rescans_only_changed_folders_asks_by_default_and_notices_new_and_gone_
     s.execute("folder.poll", &json!({})).unwrap();
     assert_eq!(crate::folder_watch::new_in(&s, &dir.path("trip")), Some(1));
 
-    // a folder that went away is not reported as changed (only the folder holding it, whose
-    // subfolders changed)
+    // a folder that went away is not reported as changed, nor is the folder that held it
     std::fs::remove_dir_all(dir.path("other")).unwrap();
     let r = s.execute("folder.poll", &json!({})).unwrap();
-    assert!(r["changed"].as_array().unwrap().iter().all(|c| !c.as_str().unwrap().ends_with("other")), "{r}");
+    assert!(r["changed"].as_array().unwrap().is_empty(), "{r}");
     assert_eq!(r["offline"], 1, "{r}");
 }
 
@@ -128,7 +127,7 @@ fn watch_preferences_are_checked_and_with_add_new_files_are_imported_at_once() {
     assert_eq!(new_total(&mut s), 0);
 }
 
-/// Issue #1302: a photo tree imported from its root (`Photos/2025/…`, `Photos/2026/…`), where
+/// A photo tree imported from its root (`Photos/2025/…`, `Photos/2026/…`), where
 /// another app files new photos into new dated folders. Folders that hold only folders are
 /// watched for new subfolders, so the poll finds them without a Synchronize Folder.
 #[test]
@@ -156,4 +155,29 @@ fn a_new_dated_folder_in_a_tree_of_folders_is_found() {
     let r = s.execute("folder.poll", &json!({})).unwrap();
     assert_eq!(r["imported"], 2, "{r}");
     assert_eq!(s.catalog.len(), 4);
+}
+
+/// Two photo trees under one broad folder (a home folder holding `Pictures/x` and `Desktop/y` among
+/// many folders that aren't the library's): the broad folder isn't watched, so a new folder there
+/// (an app's) doesn't scan, or with new files added import, everything inside it.
+#[test]
+fn a_broad_folder_above_two_photo_trees_is_not_watched() {
+    let dir = Scratch::new("broad");
+    write_png(&dir.path("home/Pictures/x/a.png"), 1);
+    write_png(&dir.path("home/Desktop/y/b.png"), 2);
+    for other in ["Documents", "Downloads", "Music", "Videos", "AppData"] {
+        std::fs::create_dir_all(dir.path(&format!("home/{other}"))).unwrap();
+    }
+    // a photo in a folder that isn't the library's: it must not be imported by a poll
+    write_png(&dir.path("home/Downloads/stray.png"), 3);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [dir.path("home/Pictures/x"), dir.path("home/Desktop/y")]})).unwrap();
+    assert_eq!(s.catalog.len(), 2);
+    s.execute("folder.watchPreferences", &json!({"newFiles": "add"})).unwrap();
+    s.execute("folder.poll", &json!({})).unwrap();
+    std::fs::create_dir_all(dir.path("home/.cache-app")).unwrap();
+    std::fs::create_dir_all(dir.path("home/NewApp")).unwrap();
+    let r = s.execute("folder.poll", &json!({})).unwrap();
+    assert!(r["changed"].as_array().unwrap().iter().all(|c| !c.as_str().unwrap().ends_with("home")), "{r}");
+    assert_eq!(s.catalog.len(), 2, "nothing outside the library's folders is imported: {r}");
 }
