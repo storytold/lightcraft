@@ -170,6 +170,46 @@ pub fn hardware_backends(gpu: &Value) -> Vec<(String, String)> {
     out
 }
 
+/// Why the pipeline has no device on a backend, from `gpu_probe` run with
+/// `LIGHTCRAFT_GPU_BACKEND` set to it (`Gpu::new` may refuse a hardware adapter, issue #4451):
+/// `Ok(None)` when it has one, `Err` when the probe can't tell.
+pub fn pipeline_refusal(probe: Result<String, String>) -> Result<Option<String>, String> {
+    let v = probe.and_then(|s| first_json(&s))?;
+    match v["pipeline"]["available"].as_bool() {
+        Some(true) => Ok(None),
+        Some(false) => Ok(Some(v["pipeline"]["reason"].as_str().unwrap_or("no reason given").to_owned())),
+        None => Err(format!("gpu_probe: no `pipeline.available` in {v}")),
+    }
+}
+
+/// One `--hardware` GPU run, for the report's `hardware` list. The status is the test run's;
+/// `refusal` ([`pipeline_refusal`]) goes in `pipeline`, because then the tests that use the
+/// pipeline's device skipped and an `ok` covers only those that make their own. Returns the
+/// entry and whether the run failed.
+pub fn hardware_run(backend: &str, adapter: &str, refusal: Option<String>, run_tests: impl FnOnce() -> bool) -> (Value, bool) {
+    let t = std::time::Instant::now();
+    let ok = run_tests();
+    let mut entry = json!({
+        "backend": backend,
+        "adapter": adapter,
+        "status": if ok { "ok" } else { "fail" },
+        "seconds": t.elapsed().as_secs_f64(),
+    });
+    if let Some(why) = refusal {
+        entry["pipeline"] = json!(why);
+    }
+    (entry, !ok)
+}
+
+/// A hardware run's status, with why the pipeline can't use the adapter it picks, when it can't.
+fn hardware_status(h: &Value) -> String {
+    let status = h["status"].as_str().unwrap_or("?");
+    match h["pipeline"].as_str() {
+        Some(why) => format!("{status} (the pipeline can't use the adapter it picks: {why})"),
+        None => status.to_owned(),
+    }
+}
+
 /// One test that skipped, possibly in several steps.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Skip {
@@ -410,13 +450,8 @@ pub fn summary_text(report: &Value) -> String {
     }
     let _ = writeln!(s, "Data: {}", data_line(report));
     for h in report["hardware"].as_array().into_iter().flatten() {
-        let _ = writeln!(
-            s,
-            "GPU tests on {} ({}): {}",
-            h["backend"].as_str().unwrap_or("?"),
-            h["adapter"].as_str().unwrap_or("?"),
-            h["status"].as_str().unwrap_or("?")
-        );
+        let _ =
+            writeln!(s, "GPU tests on {} ({}): {}", h["backend"].as_str().unwrap_or("?"), h["adapter"].as_str().unwrap_or("?"), hardware_status(h));
     }
     let skips = skips_from(report);
     if skips.is_empty() {
@@ -472,7 +507,7 @@ pub fn summary_md(report: &Value) -> String {
     for h in report["hardware"].as_array().into_iter().flatten() {
         let time = h["seconds"].as_f64().map(seconds).unwrap_or_default();
         let name = format!("GPU tests on {} ({})", h["backend"].as_str().unwrap_or("?"), h["adapter"].as_str().unwrap_or("?"));
-        let _ = writeln!(s, "| {} | {} | {time} |", cell(&name), h["status"].as_str().unwrap_or("?"));
+        let _ = writeln!(s, "| {} | {} | {time} |", cell(&name), cell(&hardware_status(h)));
     }
     let skips = skips_from(report);
     if skips.is_empty() {
@@ -614,6 +649,45 @@ mod tests {
         assert!(md.contains("| test | ok | 2m 05s |"), "{md}");
         assert!(md.contains("| gpu | 1 | no GPU \\| adapter | `memory::memory` |"), "{md}");
         assert!(md.contains("1 tests skipped (gpu 1)"), "{md}");
+    }
+
+    #[test]
+    fn a_hardware_run_says_when_the_pipeline_refused_the_adapter() {
+        // issue #4451: Gpu::new refuses the adapter, the pipeline's tests skip, the run passes
+        let why = "PowerVR B-Series BXM-4-64 MC1 has too few storage buffers per shader stage (8 < 10)";
+        let probe = format!(r#"gpu_probe: {{"pipeline":{{"available":false,"adapter":null,"reason":"{why}","backends":["vulkan"]}}}}"#);
+        let refusal = pipeline_refusal(Ok(format!("test gpu_probe ... \n{probe}\nok\n")));
+        assert_eq!(refusal, Ok(Some(why.to_owned())));
+        let ran = std::cell::Cell::new(false);
+        let (entry, failed) = hardware_run("vulkan", "PowerVR B-Series BXM-4-64 MC1", refusal.unwrap(), || {
+            ran.set(true);
+            true
+        });
+        assert!(ran.get(), "the tests still run: denoise and faces make their own devices");
+        assert_eq!((entry["status"].as_str(), entry["pipeline"].as_str(), failed), (Some("ok"), Some(why), false), "{entry}");
+        let report = json!({"hardware": [entry]});
+        let shown = format!("ok (the pipeline can't use the adapter it picks: {why})");
+        let text = summary_text(&report);
+        assert!(text.contains(&format!("GPU tests on vulkan (PowerVR B-Series BXM-4-64 MC1): {shown}")), "{text}");
+        let md = summary_md(&report);
+        assert!(md.contains(&format!("| {shown} |")), "{md}");
+
+        // kernels that fail to build: the pipeline refuses too, and the tests that assert on it fail
+        let (entry, failed) = hardware_run("vulkan", "Intel(R) Arc", Some("Intel(R) Arc: kernels failed to build (x)".into()), || false);
+        assert_eq!((entry["status"].as_str(), failed), (Some("fail"), true), "{entry}");
+
+        // an accepted adapter: as before, no `pipeline` field
+        let accepted = r#"gpu_probe: {"pipeline":{"available":true,"adapter":"Intel(R) Arc","reason":null}}"#;
+        assert_eq!(pipeline_refusal(Ok(accepted.to_owned())), Ok(None));
+        let (entry, failed) = hardware_run("vulkan", "Intel(R) Arc", None, || true);
+        assert_eq!((entry["status"].as_str(), entry.get("pipeline"), failed), (Some("ok"), None, false), "{entry}");
+        assert!(summary_text(&json!({"hardware": [entry]})).contains("GPU tests on vulkan (Intel(R) Arc): ok\n"));
+
+        // a probe that can't tell: an error to print, and the entry stays as before
+        assert_eq!(pipeline_refusal(Err("gpu_probe exited with 101".into())), Err("gpu_probe exited with 101".into()));
+        assert!(pipeline_refusal(Ok("no probe line".into())).is_err());
+        assert!(pipeline_refusal(Ok(r#"gpu_probe: {"pipeline":{"available":"no"}}"#.into())).is_err());
+        assert_eq!(pipeline_refusal(Ok(r#"gpu_probe: {"pipeline":{"available":false}}"#.into())), Ok(Some("no reason given".into())));
     }
 
     #[test]
