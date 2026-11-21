@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Brush Density
+- The brush has a Density slider beside Size, Feather and Flow, as in Lightroom: the most a stroke covers, however
+  many times you paint over it (issue #4005). Effect presets carry it with the other brush settings.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

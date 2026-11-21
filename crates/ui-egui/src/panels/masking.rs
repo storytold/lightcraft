@@ -928,6 +928,7 @@ fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
     }
 }
 
+/// The brush's Add / Erase, Auto Mask, Pen Pressure and its Size, Feather, Flow and Density sliders.
 fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 0 }).show(ui, |ui| {
@@ -957,17 +958,20 @@ fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             app.ui.brush_pressure = pressure;
         }
     });
-    for (id, label, min, max, get) in [
-        ("ui.brushSize", "Size", 1.0, 100.0, (app.ui.brush_size * 400.0) as f64),
-        ("ui.brushFeather", "Feather", 0.0, 100.0, app.ui.brush_feather as f64),
-        ("ui.brushFlow", "Flow", 1.0, 100.0, app.ui.brush_flow as f64),
+    // (double-click resets a slider to `default`: Density to full, the others to their minimum)
+    for (id, label, min, max, default, get) in [
+        ("ui.brushSize", "Size", 1.0, 100.0, 1.0, (app.ui.brush_size * 400.0) as f64),
+        ("ui.brushFeather", "Feather", 0.0, 100.0, 0.0, app.ui.brush_feather as f64),
+        ("ui.brushFlow", "Flow", 1.0, 100.0, 1.0, app.ui.brush_flow as f64),
+        ("ui.brushDensity", "Density", 1.0, 100.0, 100.0, app.ui.brush_density as f64),
     ] {
-        let s = ControlSpec { id, label, section: Section::Light, min, max, default: min, step: 1.0, decimals: 0, track: Track::Plain };
+        let s = ControlSpec { id, label, section: Section::Light, min, max, default, step: 1.0, decimals: 0, track: Track::Plain };
         let out = slider(ui, &s, get, true, None);
         if let Some(v) = out.value {
             match id {
                 "ui.brushSize" => app.ui.brush_size = (v / 400.0) as f32,
                 "ui.brushFeather" => app.ui.brush_feather = v as f32,
+                "ui.brushDensity" => app.ui.brush_density = v as f32,
                 _ => app.ui.brush_flow = v as f32,
             }
         }
