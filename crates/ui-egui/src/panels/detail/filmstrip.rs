@@ -1,7 +1,7 @@
 use super::{Align2, Color32, LightcraftApp, PhotoId, Pos2, Rect, Sense, Slot, Stroke, StrokeKind, Tokens, json, pos2, register, vec2};
 
 /// Size of the Navigator mini map (points).
-const NAV_W: f32 = 180.0;
+pub(super) const NAV_W: f32 = 180.0;
 
 /// The Navigator: while zoomed in, a mini map of the photo at the canvas' bottom right with the
 /// visible region outlined; click or drag on it to pan. Returns the area it covers.

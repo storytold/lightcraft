@@ -24,7 +24,7 @@ fn hdr_on(max_ev: f64) -> DevelopSettings {
 
 fn deep(src: &Rgb32f, s: &DevelopSettings, depth: OutputDepth) -> Vec<f32> {
     let req = RenderRequest { depth, ..RenderRequest::fit(240, 240) };
-    match render(src, &raw(), s, &req).deep.map(|d| d.samples) {
+    match render(src, &raw(), s, &req).unwrap().deep.map(|d| d.samples) {
         Some(DeepSamples::F32(v)) => v,
         other => panic!("expected float samples, got {other:?}"),
     }
@@ -73,7 +73,7 @@ fn hdr_keeps_the_camera_tone_curve_in_the_midtones() {
     let src = sunset();
     let render_at = |s: &DevelopSettings, depth| {
         let req = RenderRequest { depth, ..RenderRequest::fit(240, 240) };
-        match render(&src, &info, s, &req).deep.map(|d| d.samples) {
+        match render(&src, &info, s, &req).unwrap().deep.map(|d| d.samples) {
             Some(DeepSamples::F32(v)) => v,
             other => panic!("expected float samples, got {other:?}"),
         }
@@ -105,15 +105,15 @@ fn sdr_renders_of_an_hdr_edit_use_the_sdr_rendition() {
     let src = sunset();
     let req = RenderRequest::fit(240, 240);
     // neutral offsets: identical to the edit with HDR off
-    let plain = render(&src, &raw(), &DevelopSettings::default(), &req);
-    let on = render(&src, &raw(), &hdr_on(3.0), &req);
+    let plain = render(&src, &raw(), &DevelopSettings::default(), &req).unwrap();
+    let on = render(&src, &raw(), &hdr_on(3.0), &req).unwrap();
     assert_eq!(plain.image.data, on.image.data);
     // offsets apply to every SDR render
     let mut s = hdr_on(3.0);
     s.hdr.sdr_brightness = 50.0;
     s.hdr.sdr_highlights = -40.0;
-    let brighter = render(&src, &raw(), &s, &req);
-    let expect = render(&src, &raw(), &s.sdr_rendition(), &req);
+    let brighter = render(&src, &raw(), &s, &req).unwrap();
+    let expect = render(&src, &raw(), &s.sdr_rendition(), &req).unwrap();
     assert_eq!(brighter.image.data, expect.image.data);
     assert_ne!(brighter.image.data, plain.image.data);
     let r = s.sdr_rendition();
@@ -127,14 +127,14 @@ fn visualize_hdr_paints_only_what_rises_above_white() {
     let src = sunset();
     let req = RenderRequest { overlay: Overlay::HdrRange, ..RenderRequest::fit(240, 240) };
     let banded = |p: &[u8; 4]| HDR_BANDS.iter().any(|b| (0..3).all(|k| (p[k] as i32 - b[k] as i32).abs() < 70) && p[0] > p[2] + 40);
-    let on = render(&src, &raw(), &hdr_on(3.0), &req);
+    let on = render(&src, &raw(), &hdr_on(3.0), &req).unwrap();
     let n = on.image.data.iter().filter(|p| banded(p)).count();
     assert!(n > 0 && n < on.image.data.len() / 3, "{n} banded pixels");
     // the rest is grey
     assert!(on.image.data.iter().filter(|p| !banded(p)).all(|p| p[0] == p[1] && p[1] == p[2]));
     // HDR off: the overlay draws nothing
-    let off = render(&src, &raw(), &DevelopSettings::default(), &req);
-    let plain = render(&src, &raw(), &DevelopSettings::default(), &RenderRequest::fit(240, 240));
+    let off = render(&src, &raw(), &DevelopSettings::default(), &req).unwrap();
+    let plain = render(&src, &raw(), &DevelopSettings::default(), &RenderRequest::fit(240, 240)).unwrap();
     assert_eq!(off.image.data, plain.image.data);
 }
 
@@ -168,5 +168,5 @@ fn hdr_histogram_shows_the_range_above_sdr_white_on_a_fixed_scale() {
     s.hdr.max_ev = f64::NAN;
     assert_eq!(crate::hdr_histogram(&src, &raw(), &s, &req).unwrap().hdr.unwrap().stops, bins.stops);
     // the SDR rendition's own histogram has nothing above white
-    assert!(render(&src, &raw(), &hdr_on(3.0), &req).histogram.hdr.is_none());
+    assert!(render(&src, &raw(), &hdr_on(3.0), &req).unwrap().histogram.hdr.is_none());
 }

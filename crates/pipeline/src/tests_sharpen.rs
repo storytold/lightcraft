@@ -11,7 +11,7 @@ fn info() -> SourceInfo {
 }
 
 fn render_at(src: &Rgb32f, s: &DevelopSettings, w: usize) -> Rgba8 {
-    render(src, &info(), s, &RenderRequest::fit(w, w)).image
+    render(src, &info(), s, &RenderRequest::fit(w, w)).unwrap().image
 }
 
 /// RMS difference of the green channel.
@@ -177,10 +177,10 @@ fn reduced_source_uses_the_original_pixel_radius() {
     let reduced = p.frame.sample(&original, p.w, p.h);
     let mut off = s.clone();
     off.detail.sharpen_amount = 0.0;
-    let from_original = render(&original, &info(), &s, &req).image;
-    let from_reduced = render(&reduced, &told, &s, &req).image;
-    let unknown = render(&reduced, &info(), &s, &req).image;
-    let resampling = rms(&render(&original, &info(), &off, &req).image, &render(&reduced, &told, &off, &req).image);
+    let from_original = render(&original, &info(), &s, &req).unwrap().image;
+    let from_reduced = render(&reduced, &told, &s, &req).unwrap().image;
+    let unknown = render(&reduced, &info(), &s, &req).unwrap().image;
+    let resampling = rms(&render(&original, &info(), &off, &req).unwrap().image, &render(&reduced, &told, &off, &req).unwrap().image);
     let (a, b) = (rms(&from_original, &from_reduced), rms(&from_original, &unknown));
     assert!(a < resampling + 0.5, "original-size radius: {a}, resampling {resampling}");
     assert!(b > a + 0.3, "copy-size radius: {b}, original-size radius: {a}");
@@ -197,11 +197,11 @@ fn old_processes_keep_their_sharpening_and_cache_switches_are_exact() {
     for process in [Process::V1, Process::V2, Process::V3, Process::V2, Process::V3] {
         let mut s = sharp(80.0, 0.6, 0.0, 30.0);
         s.process = process.version();
-        let plain = render(&src, &info(), &s, &req).image;
-        assert_eq!(render_cached(&src, &info(), &s, &req, &cache).image, plain);
+        let plain = render(&src, &info(), &s, &req).unwrap().image;
+        assert_eq!(render_cached(&src, &info(), &s, &req, &cache).unwrap().image, plain);
         s.detail.sharpen_radius = 3.0;
         s.detail.sharpen_detail = 100.0;
-        let changed = render(&src, &info(), &s, &req).image;
+        let changed = render(&src, &info(), &s, &req).unwrap().image;
         if process < Process::V3 {
             assert_eq!(changed, plain, "{process:?}");
         } else {
@@ -209,7 +209,11 @@ fn old_processes_keep_their_sharpening_and_cache_switches_are_exact() {
         }
         for nr in [60.0, 20.0] {
             s.detail.nr_luminance = nr;
-            assert_eq!(render_cached(&src, &info(), &s, &req, &cache).image, render(&src, &info(), &s, &req).image, "{process:?}, NR {nr}");
+            assert_eq!(
+                render_cached(&src, &info(), &s, &req, &cache).unwrap().image,
+                render(&src, &info(), &s, &req).unwrap().image,
+                "{process:?}, NR {nr}"
+            );
         }
     }
 }
@@ -260,7 +264,7 @@ fn enlarged_export_keeps_radius_steps_apart() {
     assert_eq!((sigma(2.0), sigma(3.0)), (4.0, 6.0));
     let src = scene(128);
     let enlarged = SourceInfo { native_long: Some(64), ..info() };
-    let at = |r: f64| render(&src, &enlarged, &sharp(100.0, r, 0.0, 0.0), &RenderRequest::fit(128, 128)).image;
+    let at = |r: f64| render(&src, &enlarged, &sharp(100.0, r, 0.0, 0.0), &RenderRequest::fit(128, 128)).unwrap().image;
     let d = rms(&at(2.0), &at(3.0));
     assert!(d > 0.1, "Radius 2 and 3 render alike at 2x: {d}");
 }

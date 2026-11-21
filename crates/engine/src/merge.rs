@@ -322,7 +322,7 @@ fn render_preview(
         s.crop.geometry.rect = lightcraft_geom::Rect::from_xywh(c[0], c[1], c[2], c[3]);
     }
     let req = RenderRequest { quality: Quality::Full, apply_crop: false, ..RenderRequest::fit(edge, edge) };
-    let mut img = lightcraft_pipeline::render(&src, &info, &s, &req).image;
+    let mut img = lightcraft_pipeline::render(&src, &info, &s, &req)?.image;
     if let Some(g) = ghost {
         let (w, h) = (img.width, img.height);
         for y in 0..h {
