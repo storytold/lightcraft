@@ -2,6 +2,7 @@
 name = "lightcraft-denoise-core"
 version.workspace = true
 edition.workspace = true
+repository.workspace = true
 license.workspace = true
 description = "LightCraft denoise model metadata, Bayer tiling and cache formats (L1; no inference backend)"
 

@@ -2,6 +2,7 @@
 name = "lightcraft"
 version.workspace = true
 edition.workspace = true
+repository.workspace = true
 license.workspace = true
 publish = false
 default-run = "lightcraft"

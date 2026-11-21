@@ -2,6 +2,7 @@
 name = "lightcraft-catalog"
 version.workspace = true
 edition.workspace = true
+repository.workspace = true
 license.workspace = true
 description = "LightCraft library: photos, albums, ratings/flags, search/filter/sort, op-log persistence (L3)"
 

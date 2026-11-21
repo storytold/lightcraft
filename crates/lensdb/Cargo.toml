@@ -2,6 +2,7 @@
 name = "lightcraft-lensdb"
 version.workspace = true
 edition.workspace = true
+repository.workspace = true
 license.workspace = true
 description = "Lens correction profiles: distortion, TCA and vignetting models, lensfun-format database loader (L2)"
 

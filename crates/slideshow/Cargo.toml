@@ -2,6 +2,7 @@
 name = "lightcraft-slideshow"
 version.workspace = true
 edition.workspace = true
+repository.workspace = true
 license.workspace = true
 description = "LightCraft slideshow slides: layout, options and backdrop settings and the CPU slide composer (L1)"
 

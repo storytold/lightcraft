@@ -2,6 +2,7 @@
 name = "lightcraft-codecs"
 version.workspace = true
 edition.workspace = true
+repository.workspace = true
 license.workspace = true
 description = "LightCraft standard image codecs: sniffing, decode to linear light, ICC, encoders (L1)"
 

@@ -2,6 +2,7 @@
 name = "lightcraft-cli"
 version.workspace = true
 edition.workspace = true
+repository.workspace = true
 license.workspace = true
 publish = false
 description = "LightCraft command-line tool: headless render, command listing and the MCP server"
