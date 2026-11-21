@@ -27,13 +27,14 @@ pub(super) fn library_files(library: &lightcraft_catalog::Catalog, files: &[Stri
         if let Source::File { path } = &p.source
             && found.contains(Path::new(path))
         {
+            let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(p.file_size);
             let c = ImportCandidate {
                 path: path.clone(),
                 format: p.format.clone(),
                 kind: p.kind,
                 width: p.width,
                 height: p.height,
-                file_size: p.file_size,
+                file_size,
                 captured: p.captured.clone(),
                 duplicate: Some("path".into()),
                 existing: Some(p.id.0),

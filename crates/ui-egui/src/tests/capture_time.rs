@@ -14,7 +14,7 @@ const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(60);
 
 fn set_captured(h: &mut Headless, id: lightcraft_catalog::PhotoId, t: &str) {
-    h.app.session.catalog.apply(lightcraft_catalog::Op::SetCaptured { id, captured: Some(t.into()) }).unwrap();
+    h.app.session.catalog.apply(lightcraft_catalog::Op::SetCaptured { id, captured: Some(t.into()), manual: false }).unwrap();
 }
 
 fn painted(h: &Headless, part: &str) -> bool {
