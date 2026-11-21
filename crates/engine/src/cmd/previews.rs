@@ -971,12 +971,27 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Background Preparation",
             [],
             None,
-            "{settings?: partial {culling?, library?, develop?}, library?: bool (this library's own settings; else the app-wide ones), reset?: bool (this library goes back to the app-wide settings)} → as prefs.backgroundPrep",
+            "{settings?: partial {culling?, library?, develop?} (unknown fields rejected), library?: bool (this library's own settings; else the app-wide ones), reset?: bool (requires an open library and cannot be combined with settings)} → as prefs.backgroundPrep",
             always,
             |s, p| {
                 const C: &str = "prefs.setBackgroundPrep";
-                let library = p.get("library").and_then(Value::as_bool).unwrap_or(false);
-                if p.get("reset").and_then(Value::as_bool).unwrap_or(false) {
+                let library = match p.get("library") {
+                    Some(Value::Bool(value)) => *value,
+                    Some(_) => return Err(bad(C, "library must be a boolean")),
+                    None => false,
+                };
+                let reset = match p.get("reset") {
+                    Some(Value::Bool(value)) => *value,
+                    Some(_) => return Err(bad(C, "reset must be a boolean")),
+                    None => false,
+                };
+                if reset {
+                    if p.get("settings").is_some() {
+                        return Err(bad(C, "settings cannot be combined with reset"));
+                    }
+                    if s.library.is_none() {
+                        return Err(bad(C, "no library is open"));
+                    }
                     s.clear_library_prep()?;
                     return Ok(s.prep_json());
                 }

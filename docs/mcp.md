@@ -158,6 +158,8 @@ Generated `cmd_*` tools and nested command params remain free-form: the registry
 parameter docs, not machine-readable schemas. Existing command validation (including strict
 export options) is preserved. Escaped tool panics return `isError: true`, and the session keeps
 serving; backend panics during resource reads or tool listing return an internal error.
+`prefs.setBackgroundPrep` rejects unknown setting names and rejects `settings` when `reset` is true.
+Reset requires an open library.
 The headless backend owns its session directly, without a session mutex.
 
 `lightcraft://document` and `lightcraft://commands` contain JSON matching `doc_inspect` and
