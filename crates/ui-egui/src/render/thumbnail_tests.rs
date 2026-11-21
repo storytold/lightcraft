@@ -328,6 +328,8 @@ fn larger_texture_for_another_key_does_not_count_as_current() {
         histogram: None,
         ms: 0.0,
         quick: None,
+        full_res: false,
+        first_pixel: None,
         pixels: None,
         native: None,
     };
@@ -468,12 +470,28 @@ fn request(app: &mut crate::LightcraftApp) {
     crate::panels::grid::request_thumb(app, PhotoId(1), 256, 10);
 }
 
-/// Draws GPU-resident renders under one fixed id, and reads them back from the test's device.
+/// What a [`TestScreen`] was asked to show: (the id to update, the sampling).
 #[cfg(not(target_arch = "wasm32"))]
-struct TestScreen(lightcraft_engine::gpu::wgpu::Device, lightcraft_engine::gpu::wgpu::Queue, std::sync::Arc<std::sync::Mutex<Vec<egui::TextureId>>>);
+type Shown = std::sync::Arc<std::sync::Mutex<Vec<(Option<egui::TextureId>, egui::TextureOptions)>>>;
+
+/// Draws GPU-resident renders under one fixed id, and reads them back from the test's device;
+/// records the ids it frees and each `show` call.
+#[cfg(not(target_arch = "wasm32"))]
+struct TestScreen(
+    lightcraft_engine::gpu::wgpu::Device,
+    lightcraft_engine::gpu::wgpu::Queue,
+    std::sync::Arc<std::sync::Mutex<Vec<egui::TextureId>>>,
+    Shown,
+);
 #[cfg(not(target_arch = "wasm32"))]
 impl ScreenTextures for TestScreen {
-    fn show(&mut self, _: &lightcraft_engine::media::ScreenFrame, _: Option<egui::TextureId>) -> Option<egui::TextureId> {
+    fn show(
+        &mut self,
+        _: &lightcraft_engine::media::ScreenFrame,
+        id: Option<egui::TextureId>,
+        options: egui::TextureOptions,
+    ) -> Option<egui::TextureId> {
+        self.3.lock().unwrap().push((id, options));
         Some(egui::TextureId::User(7))
     }
     fn free(&mut self, id: egui::TextureId) {
@@ -494,6 +512,7 @@ impl ScreenTextures for TestScreen {
 #[allow(clippy::type_complexity)]
 fn gpu_drawn_fixture(
     freed: std::sync::Arc<std::sync::Mutex<Vec<egui::TextureId>>>,
+    shown: Shown,
 ) -> Option<(crate::LightcraftApp, std::rc::Rc<std::cell::RefCell<Work>>, egui::Context, lightcraft_engine::media::ScreenFrame)> {
     use lightcraft_engine::gpu::wgpu;
     let device = (|| {
@@ -524,7 +543,7 @@ fn gpu_drawn_fixture(
         wgpu::Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 },
     );
     let (mut app, work, ctx) = fixture();
-    app.renderer.set_screen_textures(Box::new(TestScreen(device, queue, freed)));
+    app.renderer.set_screen_textures(Box::new(TestScreen(device, queue, freed, shown)));
     Some((app, work, ctx, lightcraft_engine::media::ScreenFrame { texture, width: w, height: h }))
 }
 
@@ -534,7 +553,7 @@ fn gpu_drawn_fixture(
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_headless_screenshot_reads_back_a_view_drawn_from_the_gpu() {
-    let Some((mut app, work, ctx, frame)) = gpu_drawn_fixture(Default::default()) else {
+    let Some((mut app, work, ctx, frame)) = gpu_drawn_fixture(Default::default(), Default::default()) else {
         lightcraft_testkit::skip!(Gpu, "no GPU adapter");
         return;
     };
@@ -562,7 +581,7 @@ fn a_headless_screenshot_reads_back_a_view_drawn_from_the_gpu() {
 #[test]
 fn releasing_a_slot_frees_its_gpu_texture() {
     let freed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let Some((mut app, work, ctx, frame)) = gpu_drawn_fixture(freed.clone()) else {
+    let Some((mut app, work, ctx, frame)) = gpu_drawn_fixture(freed.clone(), Default::default()) else {
         lightcraft_testkit::skip!(Gpu, "no GPU adapter");
         return;
     };
@@ -577,6 +596,49 @@ fn releasing_a_slot_frees_its_gpu_texture() {
     app.renderer.release(Slot::Main);
     assert_eq!(*freed.lock().unwrap(), vec![egui::TextureId::User(7)], "the window's texture is freed");
     assert!(app.renderer.natives.is_empty() && app.renderer.native_frames.is_empty());
+}
+
+/// #2643 on the GPU path (the desktop default since #1065): a native-resolution render that stays
+/// on the GPU reaches the host with nearest magnification past 100 %, and the same texture is
+/// registered again with the linear sampler when the zoom goes back to Fit, without a new render.
+/// Before, the host got no sampling choice and drew every GPU-resident view linear.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_gpu_drawn_native_render_reaches_the_host_with_nearest_magnification() {
+    let shown: Shown = Default::default();
+    let Some((mut app, work, ctx, frame)) = gpu_drawn_fixture(Default::default(), shown.clone()) else {
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+        return;
+    };
+    let (w, h) = (frame.width, frame.height);
+    app.renderer.set_texture_zoom(Slot::Main, crate::state::Zoom::Percent(400.0));
+    let mut job = app.session.render_job(PhotoId(1), w, w, false, true).unwrap().draft();
+    let source = lightcraft_engine::media::DecodedSource::new(Arc::new(lightcraft_raster::Rgb32f::new(w, h)), None);
+    job.source = lightcraft_engine::media::SourceRef::Loaded(Box::new(source));
+    job.level = lightcraft_engine::SourceLevel::Full;
+    job.info = Default::default();
+    app.renderer.request(Slot::Main, job, 100);
+    let (slot, job) = take_job(&work);
+    let mut result = job.run();
+    // as the GPU path hands it back: the histogram and an empty image, the pixels in `frame`
+    result.rendered.as_mut().unwrap().image = lightcraft_raster::Rgba8 { width: 0, height: 0, data: Vec::new() };
+    result.frame = Some(frame);
+    finish(&mut app, &work, &ctx, slot, result);
+    let t = app.renderer.textures.get(&Slot::Main).unwrap();
+    assert_eq!(t.id(), egui::TextureId::User(7), "drawn from the GPU");
+    assert!(t.full_res, "a native-resolution render, sized by its frame");
+    let nearest = egui::TextureOptions { magnification: egui::TextureFilter::Nearest, ..egui::TextureOptions::LINEAR };
+    assert_eq!(*shown.lock().unwrap(), vec![(None, nearest)], "registered with nearest magnification");
+    app.renderer.set_texture_zoom(Slot::Main, crate::state::Zoom::Fit);
+    assert_eq!(shown.lock().unwrap().last(), Some(&(Some(egui::TextureId::User(7)), egui::TextureOptions::LINEAR)), "Fit: linear again");
+    // another zoom that stays linear registers nothing new
+    app.renderer.set_texture_zoom(Slot::Main, crate::state::Zoom::Percent(50.0));
+    assert_eq!(shown.lock().unwrap().len(), 2);
+    let cpu = app.renderer.cpu_textures();
+    assert_eq!(cpu[&egui::TextureId::User(7)].magnification, egui::TextureFilter::Linear);
+    app.renderer.set_texture_zoom(Slot::Main, crate::state::Zoom::Percent(200.0));
+    assert_eq!(shown.lock().unwrap().last(), Some(&(Some(egui::TextureId::User(7)), nearest)), "past 100 % again: nearest");
+    assert_eq!(app.renderer.cpu_textures()[&egui::TextureId::User(7)].magnification, egui::TextureFilter::Nearest);
 }
 
 fn relink_destination() -> std::path::PathBuf {
@@ -1944,4 +2006,194 @@ fn stepping_fast_drops_the_queued_before_render() {
     for slot in [Slot::Main, Slot::Before, Slot::Region, Slot::RegionBefore] {
         assert!(!app.renderer.is_pending(slot), "{slot:?} still queued");
     }
+}
+
+#[test]
+fn fractional_native_crops_use_nearest_only_at_the_native_render_size() {
+    let (mut app, _, _) = fixture();
+    for (w, h, native) in [(125, 100, (101, 81)), (100, 125, (81, 101))] {
+        let mut settings = lightcraft_develop::DevelopSettings::default();
+        settings.crop.geometry.rect = lightcraft_geom::Rect::new(0.0, 0.0, 0.8049, 0.8049);
+        let frame = lightcraft_pipeline::geometry::Frame::new(w, h, &settings, true);
+        let (nw, nh) = frame.native_size();
+        assert!((nw.min(nh) - 80.49).abs() < 1e-9);
+        assert!((nw.max(nh) - 100.6125).abs() < 1e-9);
+        for edge in [100, 101, 102] {
+            let dims = if w > h { (edge, (edge as f32 / 1.25).round() as usize) } else { ((edge as f32 / 1.25).round() as usize, edge) };
+            assert_eq!(frame.fit(dims.0, dims.1), dims);
+            for window in [None, Some(lightcraft_pipeline::PixelWindow { x: 2, y: 3, w: 10, h: 9 })] {
+                let mut job = app.session.render_job(PhotoId(1), dims.0, dims.1, false, true).unwrap();
+                job.source = lightcraft_engine::media::SourceRef::Loaded(Box::new(lightcraft_engine::media::DecodedSource::new(
+                    Arc::new(lightcraft_raster::Rgb32f::new(w, h)),
+                    Some(Default::default()),
+                )));
+                job.settings = Arc::new(settings.clone());
+                job.level = lightcraft_engine::SourceLevel::Full;
+                job.info = lightcraft_pipeline::SourceInfo { native_long: Some(w.max(h)), ..Default::default() };
+                job.request.window = window;
+                let sampling = PhotoSampling::new(&job);
+                let result = job.run();
+                let image = &result.rendered.as_ref().unwrap().image;
+                let expected = window.map_or(dims, |win| (win.w, win.h));
+                assert_eq!((image.width, image.height), expected);
+                assert_eq!(sampling.full_res(&result), dims == native, "source {w}x{h}, request {dims:?}, window {window:?}");
+            }
+        }
+    }
+}
+
+// Stand-ins and reduced renders stay smooth, even when replacing native pixels in the same slot.
+#[test]
+fn only_native_photo_pixels_use_nearest_magnification() {
+    let (mut app, work, ctx) = fixture();
+    for level in [lightcraft_engine::SourceLevel::Thumb, lightcraft_engine::SourceLevel::Preview, lightcraft_engine::SourceLevel::Full] {
+        for native_long in [None, Some(8), Some(16)] {
+            for slot in
+                [Slot::Main, Slot::Before, Slot::Region, Slot::RegionBefore, Slot::Hover, Slot::Compare(0), Slot::CompareRegion(0), Slot::Second]
+            {
+                for (edge, window, display_fit, proxy, quick, nearest) in [
+                    (8, None, None, false, None, true),
+                    (4, None, None, false, None, false),
+                    (8, Some(lightcraft_pipeline::PixelWindow { x: 2, y: 2, w: 3, h: 3 }), None, false, None, true),
+                    (4, Some(lightcraft_pipeline::PixelWindow { x: 0, y: 0, w: 3, h: 3 }), None, false, None, false),
+                    (8, None, Some((4, 4)), false, None, false),
+                    (8, None, None, true, None, false),
+                    (8, None, None, false, Some(QuickSource::Cached), false),
+                ] {
+                    let mut job = app.session.render_job(PhotoId(1), edge, edge, false, true).unwrap();
+                    // Decoder facts must retain the catalog's original size, including when a cached
+                    // source was reduced before this job requested an otherwise 1:1 render.
+                    let mut source =
+                        lightcraft_engine::media::DecodedSource::new(Arc::new(lightcraft_raster::Rgb32f::new(8, 8)), Some(Default::default()));
+                    source.from_proxy = proxy;
+                    job.source = lightcraft_engine::media::SourceRef::Loaded(Box::new(source));
+                    job.level = level;
+                    job.info = lightcraft_pipeline::SourceInfo { native_long, ..Default::default() };
+                    job.request.window = window;
+                    job.display_fit = display_fit;
+                    job.key = lightcraft_preview::next_tick();
+                    app.renderer.set_texture_zoom(slot, crate::state::Zoom::Percent(200.0));
+                    app.renderer.request(slot, job, 100);
+                    let (_, job) = take_job(&work);
+                    let mut result = job.run();
+                    result.quick = quick;
+                    finish(&mut app, &work, &ctx, slot, result);
+                    let t = &app.renderer.textures[&slot];
+                    let nearest = nearest && native_long != Some(16) && (level == lightcraft_engine::SourceLevel::Full || native_long == Some(8));
+                    assert_eq!(
+                        t.full_res, nearest,
+                        "{slot:?}, {level:?}, native {native_long:?}, edge {edge}, window {window:?}, display fit {display_fit:?}, proxy {proxy}, quick {quick:?}"
+                    );
+                    let mut delta = ctx.tex_manager().write().take_delta();
+                    let options = delta.set.get(&t.tex.id()).and_then(|updates| updates.last()).unwrap().options;
+                    delta.clear();
+                    assert_eq!(options.magnification, if nearest { egui::TextureFilter::Nearest } else { egui::TextureFilter::Linear });
+                    assert_eq!(options.minification, egui::TextureFilter::Linear);
+                    let cpu = app.renderer.cpu_textures();
+                    assert_eq!(cpu[&t.tex.id()].magnification, options.magnification);
+                }
+            }
+        }
+    }
+}
+
+/// A small original can fill its Thumb cache entry without reduction, but a scaled grid or
+/// filmstrip still needs smooth magnification. Check texture creation and same-slot updates,
+/// including the CPU mirrors used by the software painter.
+#[test]
+fn thumbnail_slots_stay_linear_for_native_small_originals() {
+    for slot in [Slot::Thumb(PhotoId(1)), Slot::ThumbQuick(PhotoId(1)), Slot::Preview, Slot::Variant(1), Slot::Import(0), Slot::SlidePreview] {
+        let (mut app, work, ctx) = fixture();
+        for _ in 0..2 {
+            let mut job = app.session.render_job(PhotoId(1), 512, 512, false, true).unwrap();
+            job.source = lightcraft_engine::media::SourceRef::Loaded(Box::new(lightcraft_engine::media::DecodedSource::new(
+                Arc::new(lightcraft_raster::Rgb32f::new(512, 512)),
+                Some(Default::default()),
+            )));
+            job.level = lightcraft_engine::SourceLevel::Thumb;
+            job.info = lightcraft_pipeline::SourceInfo { native_long: Some(512), ..Default::default() };
+            job.key = lightcraft_preview::next_tick();
+            app.renderer.request(slot, job, 100);
+            let (_, job) = take_job(&work);
+            finish(&mut app, &work, &ctx, slot, job.run());
+            let t = &app.renderer.textures[&slot];
+            assert!(t.full_res, "the 512px original really is native in {slot:?}");
+            let mut delta = ctx.tex_manager().write().take_delta();
+            let options = delta.set.get(&t.tex.id()).and_then(|updates| updates.last()).unwrap().options;
+            delta.clear();
+            assert_eq!(options, egui::TextureOptions::LINEAR, "GPU thumbnail {slot:?}");
+            let cpu = app.renderer.cpu_textures();
+            assert_eq!(cpu[&t.tex.id()].magnification, egui::TextureFilter::Linear, "CPU thumbnail {slot:?}");
+            assert_eq!(cpu[&t.tex.id()].minification, egui::TextureFilter::Linear);
+        }
+    }
+}
+
+#[test]
+fn native_small_main_stays_linear_in_fit() {
+    let (mut app, work, ctx) = fixture();
+    let mut job = app.session.render_job(PhotoId(1), 512, 512, false, true).unwrap();
+    job.source = lightcraft_engine::media::SourceRef::Loaded(Box::new(lightcraft_engine::media::DecodedSource::new(
+        Arc::new(lightcraft_raster::Rgb32f::new(512, 512)),
+        Some(Default::default()),
+    )));
+    job.level = lightcraft_engine::SourceLevel::Full;
+    job.info = lightcraft_pipeline::SourceInfo { native_long: Some(512), ..Default::default() };
+    app.renderer.request(Slot::Main, job, 100);
+    let (_, job) = take_job(&work);
+    finish(&mut app, &work, &ctx, Slot::Main, job.run());
+    let t = &app.renderer.textures[&Slot::Main];
+    assert!(t.full_res);
+    let mut delta = ctx.tex_manager().write().take_delta();
+    let options = delta.set[&t.tex.id()].last().unwrap().options;
+    delta.clear();
+    assert_eq!(options, egui::TextureOptions::LINEAR, "native small Main in Fit");
+    let id = t.tex.id();
+    let key = t.key;
+    let pixels = t.pixels.clone().unwrap();
+    assert_eq!(app.renderer.cpu_textures()[&id].magnification, egui::TextureFilter::Linear);
+    // No render finishes during these switches: exercise the retained SizeHold texture.
+    for (zoom, filter, changed) in [
+        (crate::state::Zoom::Percent(200.0), egui::TextureFilter::Nearest, true),
+        (crate::state::Zoom::Percent(400.0), egui::TextureFilter::Nearest, false),
+        (crate::state::Zoom::Fit, egui::TextureFilter::Linear, true),
+        (crate::state::Zoom::Fill, egui::TextureFilter::Linear, false),
+        (crate::state::Zoom::Percent(100.0), egui::TextureFilter::Linear, false),
+        (crate::state::Zoom::Percent(200.0), egui::TextureFilter::Nearest, true),
+        (crate::state::Zoom::Percent(50.0), egui::TextureFilter::Linear, true),
+    ] {
+        app.renderer.set_texture_zoom(Slot::Main, zoom);
+        let t = &app.renderer.textures[&Slot::Main];
+        assert_eq!(t.tex.id(), id);
+        assert_eq!(t.tex.size(), [512, 512]);
+        assert_eq!(t.key, key);
+        assert!(Arc::ptr_eq(t.pixels.as_ref().unwrap(), &pixels));
+        let mut delta = ctx.tex_manager().write().take_delta();
+        if changed {
+            let updates = &delta.set[&id];
+            assert_eq!(updates.len(), 1);
+            let update = &updates[0];
+            assert_eq!(update.pos, Some([0, 0]));
+            assert_eq!(update.image.size(), [1, 1], "never re-upload the whole texture");
+            assert_eq!(update.options.magnification, filter);
+            assert_eq!(update.options.minification, egui::TextureFilter::Linear);
+            let egui::ImageData::Color(image) = &update.image;
+            assert_eq!(image.pixels, vec![pixels.pixels[0]], "rewrite the same texel");
+        } else {
+            assert!(delta.set.is_empty(), "unchanged filtering must not upload anything");
+        }
+        delta.clear();
+        let cpu = app.renderer.cpu_textures();
+        assert!(app.renderer.main_for_fit(PhotoId(1), [256.0, 256.0]).is_some(), "minifying Main is safe in either zoom mode");
+        assert_eq!(app.renderer.main_for_fit(PhotoId(1), [768.0, 768.0]).is_some(), filter == egui::TextureFilter::Linear);
+        assert!(app.renderer.main_for_fit(PhotoId(2), [256.0, 256.0]).is_none());
+        assert_eq!(cpu[&id].magnification, filter);
+        assert_eq!(cpu[&id].minification, egui::TextureFilter::Linear);
+    }
+    // The normal GPU path does not retain the full CPU image.
+    app.renderer.textures.get_mut(&Slot::Main).unwrap().pixels = None;
+    app.renderer.set_texture_zoom(Slot::Main, crate::state::Zoom::Percent(200.0));
+    let mut delta = ctx.tex_manager().write().take_delta();
+    assert_eq!(delta.set[&id].last().unwrap().options.magnification, egui::TextureFilter::Nearest);
+    delta.clear();
 }
