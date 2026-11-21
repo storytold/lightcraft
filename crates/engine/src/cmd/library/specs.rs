@@ -685,16 +685,25 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"deleted": ids.len()}))
             }
         ),
-        cmd!("photo.deletePermanently", "Delete Permanently", ["Photo"], None, "{ids?}", has_selection, |s, p| {
-            let before = s.visible_cloned();
-            let t = s.targets(p)?;
-            // before the inverse ops are taken, so undo brings the photo back with its edit
-            s.end_interaction()?;
-            let op = s.catalog.delete_photos_permanently_ops(&t);
-            s.commit("Delete Permanently", op)?;
-            select_after_deletion(s, &before);
-            Ok(json!({"deleted": t.len()}))
-        }),
+        // named `ids` need no selection (the Delete key's question, confirmed after the selection
+        // changed); an id the library doesn't have fails the whole step
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!("photo.deletePermanently", "Delete Permanently", ["Photo"], None, "{ids?}", has_selection, |s, p| {
+                let before = s.visible_cloned();
+                let t = s.targets(p)?;
+                // `ids: []` deletes nothing and adds no undo step
+                if t.is_empty() {
+                    return Ok(json!({"deleted": 0}));
+                }
+                // before the inverse ops are taken, so undo brings the photo back with its edit
+                s.end_interaction()?;
+                let op = s.catalog.delete_photos_permanently_ops(&t);
+                s.commit("Delete Permanently", op)?;
+                select_after_deletion(s, &before);
+                Ok(json!({"deleted": t.len()}))
+            })
+        },
         // ---- metadata
         cmd!(
             "photo.setMeta",
