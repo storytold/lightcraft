@@ -2881,3 +2881,31 @@ fn the_histogram_clipping_buttons_stay_clear_of_the_hovered_scroll_bar() {
     // and the shadow one keeps the same inset from its edge
     assert!(((low.left() - hist.left()) - (hist.right() - high.right())).abs() < 0.5, "{low:?} {high:?} in {hist:?}");
 }
+
+/// Settings ▸ Faces ▸ Matching: Ignore a person's odd faces is off until ticked, and the box sets it both ways.
+#[test]
+fn ignoring_a_persons_odd_faces_is_off_until_ticked() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid"}));
+    let dir = std::env::temp_dir().join(format!("lc-ui-faces-odd-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let models = dir.join("models");
+    std::fs::create_dir_all(&models).unwrap();
+    std::fs::write(models.join("settings.json"), br#"{"cpuOnly":true}"#).unwrap();
+    h.app.session.face_models_dir = Some(models);
+    let r = h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "faces"}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    h.request("ui.widgets", json!({}), T);
+    h.step();
+    let on = |h: &mut Headless| h.app.session.execute("faces.matching", &json!({})).unwrap()["skipOdd"] == true;
+    assert!(!on(&mut h), "off by default");
+    for want in [true, false] {
+        // the list the tab shows is read again after the change
+        let r = h.request("ui.clickWidget", json!({"id": "check:settings.facesSkipOdd"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+        assert_eq!(on(&mut h), want);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
