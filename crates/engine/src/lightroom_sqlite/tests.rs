@@ -627,3 +627,138 @@ fn committed_wal_multi_commit_growth_and_shrink_parity() {
     assert_eq!(mem_shrunk.read_table(3, 1).unwrap_err(), "table root page is outside database");
     assert_eq!(file_shrunk.read_table(3, 1).unwrap_err(), "table root page is outside database");
 }
+
+#[test]
+fn cross_app_parity_text_blob_null_overflow_and_ordering() {
+    let mut page1 = vec![0u8; 512];
+    page1[..16].copy_from_slice(b"SQLite format 3\0");
+    page1[16..18].copy_from_slice(&512u16.to_be_bytes());
+    page1[18] = 2;
+    page1[19] = 2;
+    page1[21] = 64;
+    page1[22] = 32;
+    page1[23] = 32;
+    page1[28..32].copy_from_slice(&5u32.to_be_bytes());
+    page1[44..48].copy_from_slice(&4u32.to_be_bytes());
+    page1[56..60].copy_from_slice(&1u32.to_be_bytes());
+    let schema = schema_record(
+        "samples",
+        2,
+        "CREATE TABLE samples(id INTEGER PRIMARY KEY, n INTEGER, r REAL, missing, label TEXT, overflow TEXT, binary BLOB)",
+    );
+    leaf(&mut page1, 100, 1, &schema);
+
+    // Page 2: interior table page pointing to leaf page 3 (rowid <= 1) and right leaf page 4.
+    let mut page2 = vec![0u8; 512];
+    page2[0] = 0x05;
+    page2[3..5].copy_from_slice(&1u16.to_be_bytes());
+    page2[8..12].copy_from_slice(&4u32.to_be_bytes());
+    let mut interior_cell = 3u32.to_be_bytes().to_vec();
+    interior_cell.extend(varint(1));
+    let icell_off = 512 - interior_cell.len();
+    page2[icell_off..].copy_from_slice(&interior_cell);
+    page2[5..7].copy_from_slice(&u16::try_from(icell_off).unwrap().to_be_bytes());
+    page2[12..14].copy_from_slice(&u16::try_from(icell_off).unwrap().to_be_bytes());
+
+    // Row 1 on page 3 with 600-byte overflow text spanning into page 5.
+    let overflow_text = "x".repeat(600);
+    let mut row1 = Vec::new();
+    let mut hdr1 = vec![0u8, 3, 7, 0, 23, 0, 16]; // placeholder header len
+    let text_serial = u64::try_from(overflow_text.len() * 2 + 13).unwrap();
+    let mut hdr1_body = vec![0u8, 3, 7, 0];
+    hdr1_body.extend(varint(u64::try_from("Päris".len() * 2 + 13).unwrap()));
+    hdr1_body.extend(varint(text_serial));
+    hdr1_body.push(16); // 2-byte blob
+    let hlen1 = varint(u64::try_from(hdr1_body.len() + 1).unwrap());
+    hdr1.clear();
+    hdr1.extend(hlen1);
+    hdr1.extend(hdr1_body);
+    row1.extend(&hdr1);
+    row1.extend(&(-8_388_607i32).to_be_bytes()[1..4]); // 3-byte signed int
+    row1.extend(1.25f64.to_be_bytes());
+    row1.extend("Päris".as_bytes());
+    row1.extend(overflow_text.as_bytes());
+    row1.extend([0x00, 0xff]);
+
+    let local = craft_sqlite::local_payload_len(512, row1.len() as u64, craft_sqlite::PayloadKind::TableLeaf).unwrap() as usize;
+    let mut page3 = vec![0u8; 512];
+    page3[0] = 0x0d;
+    page3[3..5].copy_from_slice(&1u16.to_be_bytes());
+    let mut cell1 = varint(u64::try_from(row1.len()).unwrap());
+    cell1.extend(varint(1));
+    cell1.extend(&row1[..local]);
+    cell1.extend(5u32.to_be_bytes()); // overflow page 5
+    let c1_off = 512 - cell1.len();
+    page3[c1_off..].copy_from_slice(&cell1);
+    page3[5..7].copy_from_slice(&u16::try_from(c1_off).unwrap().to_be_bytes());
+    page3[8..10].copy_from_slice(&u16::try_from(c1_off).unwrap().to_be_bytes());
+
+    let mut page5 = vec![0u8; 512];
+    let rem = row1.len() - local;
+    page5[4..4 + rem].copy_from_slice(&row1[local..]);
+
+    // Row 2 on page 4: NULLs, 0, 1, empty blob.
+    let mut page4 = vec![0u8; 512];
+    leaf(&mut page4, 0, 2, &[8, 0, 8, 9, 0, 13, 13, 12]);
+
+    let mut main = Vec::with_capacity(5 * 512);
+    main.extend(page1);
+    main.extend(page2);
+    main.extend(page3);
+    main.extend(page4);
+    main.extend(page5);
+
+    let scratch = Scratch::new(&main);
+    let mem_db = Database::open_with_wal(main.clone(), &[]).unwrap();
+    let file_db = Database::open_file_with_wal(FileSource::open(&scratch.0).unwrap(), &[]).unwrap();
+    assert_eq!(mem_db.read_table(2, 7).unwrap(), file_db.read_table(2, 7).unwrap());
+    assert_eq!(
+        mem_db.read_table(2, 7).unwrap(),
+        vec![
+            Record {
+                values: vec![
+                    Value::Integer(1),
+                    Value::Integer(-8_388_607),
+                    Value::Real(1.25),
+                    Value::Null,
+                    Value::Text("Päris".into()),
+                    Value::Text(overflow_text),
+                    Value::Blob(vec![0x00, 0xff]),
+                ],
+            },
+            Record {
+                values: vec![
+                    Value::Integer(2),
+                    Value::Integer(0),
+                    Value::Integer(1),
+                    Value::Null,
+                    Value::Text(String::new()),
+                    Value::Text(String::new()),
+                    Value::Blob(Vec::new()),
+                ],
+            },
+        ]
+    );
+
+    // Cyclic overflow chain is rejected in both memory and file readers.
+    let mut cyclic = main.clone();
+    cyclic[4 * 512..4 * 512 + 4].copy_from_slice(&5u32.to_be_bytes());
+    let cyclic_local = craft_sqlite::local_payload_len(512, 1200, craft_sqlite::PayloadKind::TableLeaf).unwrap() as usize;
+    let mut cyclic_cell = varint(1200);
+    cyclic_cell.extend(varint(1));
+    cyclic_cell.extend(vec![b'x'; cyclic_local]);
+    cyclic_cell.extend(5u32.to_be_bytes());
+    let cc_off = 512 - cyclic_cell.len();
+    cyclic[2 * 512 + cc_off..3 * 512].copy_from_slice(&cyclic_cell);
+    cyclic[2 * 512 + 5..2 * 512 + 7].copy_from_slice(&u16::try_from(cc_off).unwrap().to_be_bytes());
+    cyclic[2 * 512 + 8..2 * 512 + 10].copy_from_slice(&u16::try_from(cc_off).unwrap().to_be_bytes());
+    let cyclic_scratch = Scratch::new(&cyclic);
+    let cyclic_mem = Database::open_with_wal(cyclic, &[]).unwrap();
+    let cyclic_file = Database::open_file_with_wal(FileSource::open(&cyclic_scratch.0).unwrap(), &[]).unwrap();
+    assert_eq!(cyclic_mem.read_table(2, 7).unwrap_err(), "invalid or cyclic SQLite overflow chain");
+    assert_eq!(cyclic_file.read_table(2, 7).unwrap_err(), "invalid or cyclic SQLite overflow chain");
+
+    // Truncation and corruption errors match across both readers.
+    assert_eq!(Database::open_with_wal(main[..50].to_vec(), &[]).err().as_deref(), Some("truncated SQLite header"));
+    assert_eq!(Database::open_with_wal(main[..600].to_vec(), &[]).err().as_deref(), Some("SQLite image is not a whole number of pages"));
+}

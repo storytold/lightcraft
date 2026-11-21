@@ -281,27 +281,22 @@ impl Database {
         }
         let page = self.page(page_id)?;
         let usable = self.page_size.checked_sub(self.reserved).ok_or("invalid usable page size")?;
-        let base = if page_id == 1 { 100 } else { 0 };
         let content = page.get(..usable).ok_or("truncated usable SQLite page")?;
-        let kind = *content.get(base).ok_or("truncated B-tree header")?;
-        let cells = usize::from(be_u16_at(content, base + 3)?);
+        let hdr = craft_sqlite::parse_btree_page_header(content, page_id == 1).map_err(|err| match err {
+            craft_sqlite::Error::UnsupportedBtreePageType(other) => format!("unsupported SQLite B-tree page type 0x{other:02x}"),
+            _ => "truncated B-tree header".into(),
+        })?;
+        if matches!(hdr.kind, 0x02 | 0x0a) {
+            return Err("SQLite index B-trees are unsupported".into());
+        }
+        let cells = hdr.cells;
         if cells > MAX_CELLS || state.out.len().saturating_add(cells) > MAX_ROWS.saturating_add(MAX_CELLS) {
             return Err("SQLite B-tree contains too many cells".into());
         }
-        match kind {
+        match hdr.kind {
             0x0d => {
-                let ptr_start = base.checked_add(8).ok_or("B-tree header overflow")?;
-                let ptr_bytes = cells.checked_mul(2).ok_or("B-tree pointer-array overflow")?;
-                let ptr_end = ptr_start.checked_add(ptr_bytes).ok_or("B-tree pointer-array overflow")?;
-                if ptr_end > usable {
-                    return Err("truncated B-tree pointer array".into());
-                }
                 for i in 0..cells {
-                    let p = ptr_start.checked_add(i.checked_mul(2).ok_or("cell offset overflow")?).ok_or("cell offset overflow")?;
-                    let cell = usize::from(be_u16_at(content, p)?);
-                    if cell < ptr_end || cell >= usable {
-                        return Err("invalid B-tree cell pointer".into());
-                    }
+                    let cell = craft_sqlite::btree_cell_offset(content, &hdr, i).map_err(|_| "invalid B-tree cell pointer")?;
                     let mut at = cell;
                     let payload_len = usize_from_u64(read_varint(content, &mut at)?, "payload length")?;
                     if payload_len > MAX_PAYLOAD {
@@ -330,18 +325,8 @@ impl Database {
                 Ok(())
             }
             0x05 => {
-                let ptr_start = base.checked_add(12).ok_or("B-tree header overflow")?;
-                let ptr_bytes = cells.checked_mul(2).ok_or("B-tree pointer-array overflow")?;
-                let ptr_end = ptr_start.checked_add(ptr_bytes).ok_or("B-tree pointer-array overflow")?;
-                if ptr_end > usable {
-                    return Err("truncated interior B-tree pointer array".into());
-                }
                 for i in 0..cells {
-                    let p = ptr_start.checked_add(i.checked_mul(2).ok_or("cell offset overflow")?).ok_or("cell offset overflow")?;
-                    let cell = usize::from(be_u16_at(content, p)?);
-                    if cell < ptr_end || cell >= usable {
-                        return Err("invalid interior B-tree cell pointer".into());
-                    }
+                    let cell = craft_sqlite::btree_cell_offset(content, &hdr, i).map_err(|_| "invalid interior B-tree cell pointer")?;
                     let child = be_u32_at(content, cell)?;
                     if child == 0 {
                         return Err("interior B-tree cell has null child".into());
@@ -350,14 +335,13 @@ impl Database {
                     let _ = read_varint(content, &mut key_at)?;
                     self.visit_table(child, ncols, alias, depth + 1, state)?;
                 }
-                let right = be_u32_at(content, base + 8)?;
+                let right = be_u32_at(content, hdr.header_offset + 8)?;
                 if right == 0 {
                     return Err("interior B-tree has null right child".into());
                 }
                 self.visit_table(right, ncols, alias, depth + 1, state)
             }
-            0x02 | 0x0a => Err("SQLite index B-trees are unsupported".into()),
-            other => Err(format!("unsupported SQLite B-tree page type 0x{other:02x}")),
+            _ => Err(format!("unsupported SQLite B-tree page type 0x{:02x}", hdr.kind)),
         }
     }
 
@@ -366,21 +350,10 @@ impl Database {
         if usable < 8 {
             return Err("SQLite usable page size is too small".into());
         }
-        let max_local = usable.checked_sub(35).ok_or("SQLite usable page size is too small")?;
-        let min_local = usable
-            .checked_sub(12)
-            .ok_or("SQLite usable page size is too small")?
-            .saturating_mul(32)
-            .checked_div(255)
-            .ok_or("SQLite local payload calculation failed")?
-            .saturating_sub(23);
-        let local = if payload_len <= max_local {
-            payload_len
-        } else {
-            let span = usable.checked_sub(4).ok_or("SQLite usable page size is too small")?;
-            let candidate = min_local.saturating_add(payload_len.checked_sub(min_local).ok_or("SQLite payload length is too small")? % span);
-            if candidate > max_local { min_local } else { candidate }
-        };
+        let usable_u32 = u32::try_from(usable).map_err(|_| "SQLite usable page size is too small")?;
+        let local = craft_sqlite::local_payload_len(usable_u32, payload_len as u64, craft_sqlite::PayloadKind::TableLeaf)
+            .map(|len| len as usize)
+            .ok_or("SQLite usable page size is too small")?;
         let local_end = cell_at.checked_add(local).ok_or("SQLite cell payload overflow")?;
         if local_end > usable {
             return Err("truncated SQLite cell payload".into());
@@ -483,11 +456,14 @@ fn validate_header_fields(header: &[u8], page_size: usize) -> Result<usize, Stri
     {
         return Err("invalid SQLite payload fractions".into());
     }
-    let reserved = usize::from(*header.get(20).ok_or("truncated SQLite header")?);
-    let usable = page_size.checked_sub(reserved).ok_or("invalid SQLite reserved-byte count")?;
-    if usable < 480 {
-        return Err("SQLite usable page size is below 480 bytes".into());
-    }
+    let reserved = *header.get(20).ok_or("truncated SQLite header")?;
+    let page_size_u32 = u32::try_from(page_size).map_err(|_| "invalid SQLite reserved-byte count")?;
+    let usable = craft_sqlite::usable_page_size(page_size_u32, reserved).map_err(|err| match err {
+        craft_sqlite::Error::UsablePageSizeTooSmall(_) => "SQLite usable page size is below 480 bytes",
+        _ => "invalid SQLite reserved-byte count",
+    })?;
+    let _ = usable;
+    let reserved = usize::from(reserved);
     // 0 = no schema yet (file format §1.3.10): a catalog whose tables are all still in its WAL
     // has that in the main file, and the WAL's own page 1 is checked again with the overlay
     let schema_format = be_u32(header, 44)?;
@@ -578,23 +554,7 @@ fn serial_value(payload: &[u8], body: &mut usize, serial: u64, encoding: TextEnc
     let bytes = payload.get(*body..end).ok_or("SQLite record body is truncated")?;
     let value = match serial {
         0 => Value::Null,
-        1 => Value::Integer(i64::from(i8::from_be_bytes([*bytes.first().ok_or("truncated integer")?]))),
-        2 => Value::Integer(i64::from(i16::from_be_bytes(bytes.try_into().map_err(|_| "truncated integer")?))),
-        3 => {
-            let first = *bytes.first().ok_or("truncated integer")?;
-            let second = *bytes.get(1).ok_or("truncated integer")?;
-            let third = *bytes.get(2).ok_or("truncated integer")?;
-            let n = (u32::from(first) << 16) | (u32::from(second) << 8) | u32::from(third);
-            let signed = if n & 0x80_0000 != 0 { n | 0xff00_0000 } else { n };
-            Value::Integer(i64::from(i32::from_be_bytes(signed.to_be_bytes())))
-        }
-        4 => Value::Integer(i64::from(i32::from_be_bytes(bytes.try_into().map_err(|_| "truncated integer")?))),
-        5 => {
-            let n = bytes.iter().fold(0u64, |acc, b| (acc << 8) | u64::from(*b));
-            let signed = if n & (1 << 47) != 0 { n | 0xffff_0000_0000_0000 } else { n };
-            Value::Integer(i64::from_be_bytes(signed.to_be_bytes()))
-        }
-        6 => Value::Integer(i64::from_be_bytes(bytes.try_into().map_err(|_| "truncated integer")?)),
+        1..=6 => Value::Integer(craft_sqlite::decode_signed_be_int(bytes).map_err(|_| "truncated integer")?),
         7 => {
             let n = f64::from_be_bytes(bytes.try_into().map_err(|_| "truncated real")?);
             if !n.is_finite() {
@@ -900,11 +860,8 @@ fn tokenize_sql(sql: &str) -> Result<Vec<Token>, String> {
 }
 
 fn sqlite_page_size(value: u16) -> Result<usize, String> {
-    let size = if value == 1 { 65_536 } else { usize::from(value) };
-    if !(512..=65_536).contains(&size) || !size.is_power_of_two() {
-        return Err("invalid SQLite page size".into());
-    }
-    Ok(size)
+    let size = craft_sqlite::page_size_from_raw(value).map_err(|_| "invalid SQLite page size")?;
+    usize::try_from(size).map_err(|_| "invalid SQLite page size".into())
 }
 
 fn read_varint(bytes: &[u8], at: &mut usize) -> Result<u64, String> {
@@ -921,10 +878,6 @@ fn usize_from_u64(value: u64, label: &str) -> Result<usize, String> {
 fn be_u16(bytes: &[u8], at: usize) -> Result<u16, String> {
     let end = at.checked_add(2).ok_or("SQLite integer offset overflow")?;
     bytes.get(at..end).and_then(|s| <[u8; 2]>::try_from(s).ok()).map(u16::from_be_bytes).ok_or("truncated SQLite integer".into())
-}
-
-fn be_u16_at(bytes: &[u8], at: usize) -> Result<u16, String> {
-    be_u16(bytes, at)
 }
 
 fn be_u32(bytes: &[u8], at: usize) -> Result<u32, String> {
