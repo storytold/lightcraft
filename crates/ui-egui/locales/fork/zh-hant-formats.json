@@ -1,7 +1,9 @@
 {
+  " ({n} could not be read)": "（{n} 張無法讀取）",
   " · {queued} waiting": " · {queued} 張等待中",
   "+ Create “{new}”": "+ 建立「{new}」",
   ", ": "、",
+  ": {accepted} accepted, {pending} to review, {rejected} rejected": "：{accepted} 張接受，{pending} 張待審，{rejected} 張排除",
   "A pixel-shift merge of this series already exists ({name})": "此系列的像素位移合成已存在 ({name})",
   "A profile “{name}” is already there.": "描述檔「{name}」已存在。",
   "A waiting export could not start: {e}": "等待中的匯出無法開始：{e}",
@@ -83,6 +85,8 @@
   "Healed {n} mark{} from the infrared pass": "已依紅外線通道修復痕跡：{n}{:.0}",
   "Ignored {} face": "已忽略 {} 張人臉",
   "Ignored {} faces": "已忽略 {} 張人臉",
+  "Image Quality Scan stopped: {n} photos scanned": "影像品質掃描已停止：已掃描 {n} 張照片",
+  "Image Quality Scan: {n} photos scanned": "影像品質掃描：已掃描 {n} 張照片",
   "Immich albums: {n}, {kept} kept on this device": "Immich 相簿：{n} 個，本裝置保留 {kept} 個",
   "Import {n} Selected": "匯入 {n} 張選取的照片",
   "Import {n} into {library}": "將 {n} 張匯入 {library}",

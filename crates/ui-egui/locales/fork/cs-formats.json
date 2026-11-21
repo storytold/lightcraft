@@ -1,6 +1,8 @@
 {
+  " ({n} could not be read)": " ({n} nelze načíst)",
   "+ Create “{new}”": "+ Vytvořit „{new}“",
   ", ": ", ",
+  ": {accepted} accepted, {pending} to review, {rejected} rejected": ": {accepted} přijato, {pending} k prohlédnutí, {rejected} odmítnuto",
   "A pixel-shift merge of this series already exists ({name})": "Sloučení Pixel Shift této série již existuje ({name})",
   "A profile “{name}” is already there.": "Profil „{name}“ už existuje.",
   "A waiting export could not start: {e}": "Čekající export se nepodařilo spustit: {e}",
@@ -88,6 +90,8 @@
   "Healed {n} mark{} from the infrared pass": "Vyretušované stopy z infračerveného průchodu: {n}{:.0}",
   "Ignored {} face": "Ignorován {} obličej",
   "Ignored {} faces": "Ignorováno obličejů: {}",
+  "Image Quality Scan stopped: {n} photos scanned": "Skenování kvality obrazu zastaveno: naskenováno {n} fotografií",
+  "Image Quality Scan: {n} photos scanned": "Skenování kvality obrazu: naskenováno {n} fotografií",
   "Immich albums: {n}, {kept} kept on this device": "Alba Immich: {n}, {kept} ponecháno na tomto zařízení",
   "Import {n} Selected": "Importovat vybrané ({n})",
   "Import {n} into {library}": "Importovat {n} do {library}",

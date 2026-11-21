@@ -1,6 +1,8 @@
 {
+  " ({n} could not be read)": " ({n} tidak dapat dibaca)",
   "+ Create “{new}”": "+ Buat “{new}”",
   ", ": ", ",
+  ": {accepted} accepted, {pending} to review, {rejected} rejected": ": {accepted} diterima, {pending} untuk ditinjau, {rejected} ditolak",
   "A pixel-shift merge of this series already exists ({name})": "Penggabungan Pixel Shift untuk seri ini sudah ada ({name})",
   "A profile “{name}” is already there.": "Profil “{name}” sudah ada.",
   "A waiting export could not start: {e}": "Ekspor yang menunggu tidak dapat dimulai: {e}",
@@ -89,6 +91,8 @@
   "Healed {n} mark{} from the infrared pass": "Tanda yang diperbaiki dari lintasan inframerah: {n}{:.0}",
   "Ignored {} face": "{} wajah diabaikan",
   "Ignored {} faces": "{} wajah diabaikan",
+  "Image Quality Scan stopped: {n} photos scanned": "Pemindaian kualitas gambar dihentikan: {n} foto dipindai",
+  "Image Quality Scan: {n} photos scanned": "Pemindaian kualitas gambar: {n} foto dipindai",
   "Immich albums: {n}, {kept} kept on this device": "Album Immich: {n}, {kept} disimpan di perangkat ini",
   "Import {n} Selected": "Impor {n} yang Dipilih",
   "Import {n} into {library}": "Impor {n} ke {library}",

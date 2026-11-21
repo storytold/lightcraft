@@ -1,7 +1,9 @@
 {
+  " ({n} could not be read)": " (не читается: {n})",
   " · {queued} waiting": " · в очереди: {queued}",
   "+ Create “{new}”": "+ Создать «{new}»",
   ", ": ", ",
+  ": {accepted} accepted, {pending} to review, {rejected} rejected": ": принято {accepted}, на проверку {pending}, отклонено {rejected}",
   "A pixel-shift merge of this series already exists ({name})": "Объединение Pixel Shift этой серии уже существует ({name})",
   "A profile “{name}” is already there.": "Профиль «{name}» уже существует.",
   "A waiting export could not start: {e}": "Не удалось начать ожидающий экспорт: {e}",
@@ -83,6 +85,8 @@
   "Healed {n} mark{} from the infrared pass": "Исправлено следов по инфракрасному проходу: {n}{:.0}",
   "Ignored {} face": "Проигнорировано лиц: {}",
   "Ignored {} faces": "Проигнорировано лиц: {}",
+  "Image Quality Scan stopped: {n} photos scanned": "Сканирование качества изображения остановлено: отсканировано фото: {n}",
+  "Image Quality Scan: {n} photos scanned": "Сканирование качества изображения: отсканировано фото: {n}",
   "Immich albums: {n}, {kept} kept on this device": "Альбомы Immich: {n}, на этом устройстве {kept}",
   "Import {n} Selected": "Импортировать выбранные ({n})",
   "Import {n} into {library}": "Импортировать {n} в {library}",

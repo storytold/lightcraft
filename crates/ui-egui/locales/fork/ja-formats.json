@@ -1,7 +1,9 @@
 {
+  " ({n} could not be read)": "（{n} 枚を読み込めません）",
   " · {queued} waiting": " · 待機中 {queued}",
   "+ Create “{new}”": "+「{new}」を作成",
   ", ": "、",
+  ": {accepted} accepted, {pending} to review, {rejected} rejected": "：採用 {accepted} 枚、要確認 {pending} 枚、不採用 {rejected} 枚",
   "A pixel-shift merge of this series already exists ({name})": "このシリーズのピクセルシフト合成はすでにあります ({name})",
   "A profile “{name}” is already there.": "プロファイル「{name}」は既に存在します。",
   "A waiting export could not start: {e}": "待機中の書き出しを開始できませんでした: {e}",
@@ -83,6 +85,8 @@
   "Healed {n} mark{} from the infrared pass": "赤外線パスから修復した跡: {n}{:.0}",
   "Ignored {} face": "{} 件の顔を無視しました",
   "Ignored {} faces": "{} 件の顔を無視しました",
+  "Image Quality Scan stopped: {n} photos scanned": "画像品質スキャンを停止しました：{n} 枚をスキャンしました",
+  "Image Quality Scan: {n} photos scanned": "画像品質スキャン：{n} 枚をスキャンしました",
   "Immich albums: {n}, {kept} kept on this device": "Immich アルバム：{n}、このデバイスに {kept}",
   "Import {n} Selected": "選択した {n} 枚を読み込み",
   "Import {n} into {library}": "{n} 枚を {library} に読み込み",
