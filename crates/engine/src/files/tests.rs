@@ -469,8 +469,16 @@ fn undated_files_take_the_file_date() {
     let path = dir.join("export.jpg");
     std::fs::write(&path, &jpeg).unwrap();
     let path = path.to_string_lossy().to_string();
+    // The case reported in issue #2284: a JPEG that went through a messenger keeps no capture
+    // date, only a modification time, here 2026-10-18 20:15:11 in UTC-5. Pinning it also dates
+    // the file in the other half of the year from "now", so a zone with summer time is read at
+    // the right instant and not at today's offset.
+    let shot = lightcraft_meta::DateTime::parse_iso("2026-10-19T01:15:11Z").unwrap().unix_seconds();
+    let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(u64::try_from(shot).unwrap());
+    std::fs::File::options().write(true).open(&path).unwrap().set_modified(when).unwrap();
     let mtime = std::fs::metadata(&path).unwrap().modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-    let want = crate::import::civil(mtime as i64);
+    assert_eq!(mtime as i64, shot, "the file date is the one the test set");
+    let want = crate::import::local_civil(mtime as i64);
     let (_, probe) = fs_hooks();
     let info = probe(&path).unwrap();
     assert_eq!(info.captured, None, "the file itself has no date");
