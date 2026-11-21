@@ -36,18 +36,30 @@ use crate::{EngineError, LibrarySource, Result, Selection, Session};
 /// Library directory name inside the user's Pictures folder.
 pub const DEFAULT_NAME: &str = "LightCraft Library";
 
+/// Whether `name` is one of a library folder's own files (`catalog.snap`, `catalog.log`, `catalog.lock`,
+/// `presets.json`, `view.json`, `prefs.json`), in any letter case.
+pub fn is_own_file(name: &str) -> bool {
+    [
+        lightcraft_catalog::journal::SNAPSHOT,
+        lightcraft_catalog::journal::LOG,
+        lightcraft_catalog::lock::LOCK,
+        "presets.json",
+        "view.json",
+        "prefs.json",
+    ]
+    .iter()
+    .any(|own| name.eq_ignore_ascii_case(own))
+}
+
 /// The library folder `path` names. A library is a folder; naming one of its own files
-/// (`catalog.snap`, `catalog.log`, `catalog.lock`) means the folder that holds it. Any other
+/// ([`is_own_file`]) means the folder that holds it. Any other
 /// existing file is an error that says so, instead of the OS's "File exists" from creating the
 /// folder.
 pub fn resolve_dir(path: &Path) -> Result<PathBuf> {
     if !path.is_file() {
         return Ok(path.to_path_buf());
     }
-    let own = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|n| [lightcraft_catalog::journal::SNAPSHOT, lightcraft_catalog::journal::LOG, lightcraft_catalog::lock::LOCK].contains(&n));
+    let own = path.file_name().and_then(|n| n.to_str()).is_some_and(is_own_file);
     if !own {
         return Err(EngineError::Other(format!("{} is a file; a library is a folder", path.display())));
     }
@@ -57,9 +69,30 @@ pub fn resolve_dir(path: &Path) -> Result<PathBuf> {
     })
 }
 
+/// Whether `path` names one of a library's settings files (`presets.json`, `view.json`,
+/// `prefs.json`), in any letter case. Such a path only names a library when the folder that
+/// holds it already is one.
+fn is_settings_file(path: &Path) -> bool {
+    path.is_file()
+        && path.file_name().and_then(|n| n.to_str()).is_some_and(|name| {
+            let name = name.to_ascii_lowercase();
+            name == "presets.json" || name == "view.json" || name == "prefs.json"
+        })
+}
+
 /// Whether `dir` already holds a library (its catalog files).
 pub fn is_library(dir: &Path) -> bool {
     dir.join(lightcraft_catalog::journal::SNAPSHOT).is_file() || dir.join(lightcraft_catalog::journal::LOG).is_file()
+}
+
+/// Whether `path` names one of a library's catalog files (`catalog.snap`, `catalog.log`, `catalog.lock`),
+/// in any letter case. Such a path only names a library when the folder that holds it already is one.
+fn is_catalog_file(path: &Path) -> bool {
+    path.is_file()
+        && path.file_name().and_then(|n| n.to_str()).is_some_and(|name| {
+            let name = name.to_ascii_lowercase();
+            name == lightcraft_catalog::journal::SNAPSHOT || name == lightcraft_catalog::journal::LOG || name == lightcraft_catalog::lock::LOCK
+        })
 }
 
 /// [`is_library`] that tells "no library there" from "can't tell": `Ok(false)` only when the
@@ -476,11 +509,20 @@ impl Session {
     /// Nothing is created; a library folder that exists gets its lock taken and released again.
     /// Opening can still fail afterwards (a damaged catalog, a disk going away).
     pub fn check_library(&self, dir: impl AsRef<Path>) -> Result<PathBuf> {
-        let dir = dir.as_ref().to_path_buf();
-        if let Some(place) = crate::lightroom_folder::lightroom_catalog_at(&dir) {
-            return Err(EngineError::LightroomCatalog { path: dir, catalog: place.catalog });
+        let input = dir.as_ref().to_path_buf();
+        if let Some(place) = crate::lightroom_folder::lightroom_catalog_at(&input) {
+            return Err(EngineError::LightroomCatalog { path: input.clone(), catalog: place.catalog });
         }
-        let dir = resolve_dir(&dir)?;
+        let dir = resolve_dir(&input)?;
+        if let Some(place) = crate::lightroom_folder::lightroom_catalog_at(&dir) {
+            return Err(EngineError::LightroomCatalog { path: dir.clone(), catalog: place.catalog });
+        }
+        if is_settings_file(&input) && !is_library(&dir) {
+            return Err(EngineError::Other(format!("{} is not a LightCraft library", dir.display())));
+        }
+        if is_catalog_file(&input) && !is_library(&dir) {
+            return Err(EngineError::Other(format!("{} is not a LightCraft library", dir.display())));
+        }
         if !dir.exists() {
             return Ok(dir);
         }
@@ -514,9 +556,19 @@ impl Session {
     /// created ([`crate::lightroom_folder`]); a LightCraft library always opens, whatever else
     /// its folder holds.
     pub fn open_library(&mut self, dir: impl AsRef<Path>, seed_demo: bool) -> Result<&LoadReport> {
-        let dir = dir.as_ref().to_path_buf();
+        let input = dir.as_ref().to_path_buf();
+        if let Some(place) = crate::lightroom_folder::lightroom_catalog_at(&input) {
+            return Err(EngineError::LightroomCatalog { path: input.clone(), catalog: place.catalog });
+        }
+        let dir = resolve_dir(&input)?;
         if let Some(place) = crate::lightroom_folder::lightroom_catalog_at(&dir) {
-            return Err(EngineError::LightroomCatalog { path: dir, catalog: place.catalog });
+            return Err(EngineError::LightroomCatalog { path: dir.clone(), catalog: place.catalog });
+        }
+        if is_settings_file(&input) && !is_library(&dir) {
+            return Err(EngineError::Other(format!("{} is not a LightCraft library", dir.display())));
+        }
+        if is_catalog_file(&input) && !is_library(&dir) {
+            return Err(EngineError::Other(format!("{} is not a LightCraft library", dir.display())));
         }
         let dir = resolve_dir(&dir)?;
         let catalog = FsStore::open(&dir).map_err(|e| EngineError::Other(format!("can't open library {}: {e}", dir.display())))?;
@@ -1108,6 +1160,44 @@ mod resolve_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A library's settings files (`presets.json`, `view.json`, `prefs.json`) name the folder that
+    /// holds them, like its catalog files do.
+    #[test]
+    fn a_library_settings_file_opens_its_folder() {
+        let dir = std::env::temp_dir().join(format!("lc-resolve-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["presets.json", "view.json", "prefs.json", "PREFS.JSON"] {
+            let file = dir.join(name);
+            std::fs::write(&file, b"{}").unwrap();
+            assert_eq!(resolve_dir(&file).ok(), Some(dir.clone()), "{name}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Opening a library session with a settings file path (`presets.json`, `view.json`, `prefs.json`)
+    /// opens the library folder that holds them, the same as opening its catalog files do.
+    #[test]
+    fn opening_a_library_via_a_settings_file_opens_the_library_folder() {
+        let dir = std::env::temp_dir().join(format!("lc-open-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Session::new().with_fs();
+        s.open_library(&dir, false).unwrap();
+        s.close_library().unwrap();
+        drop(s);
+        assert!(is_library(&dir));
+        for name in ["presets.json", "view.json", "prefs.json", "PREFS.JSON"] {
+            std::fs::write(dir.join(name), b"{}").unwrap();
+            let mut s = Session::new().with_fs();
+            s.open_library(dir.join(name), false).unwrap();
+            assert_eq!(s.library.as_ref().map(|l| l.dir.clone()), Some(dir.clone()), "{name}");
+            s.close_library().unwrap();
+            drop(s);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A host that ends the process without destructors releases the lock by hand: the owner note
     /// goes and another opener is let in, while the session keeps its library.
     #[test]
@@ -1153,6 +1243,19 @@ mod resolve_tests {
         assert!(matches!(s.check_library(dir.join("Cat.lrcat")), Err(EngineError::LightroomCatalog { .. })));
         assert!(s.library.as_ref().is_some_and(|l| l.dir == a));
         drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_standalone_settings_file_is_not_opened_as_a_library() {
+        let dir = std::env::temp_dir().join(format!("lc-standalone-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("prefs.json");
+        std::fs::write(&file, b"{}").unwrap();
+        let mut s = Session::new().with_fs();
+        let res = s.open_library(&file, false);
+        assert!(res.is_err(), "a standalone settings file must not be adopted as a library: {res:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
