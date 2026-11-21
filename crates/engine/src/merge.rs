@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use lightcraft_catalog::{PhotoId, Source};
 use lightcraft_develop::DevelopSettings;
-use lightcraft_merge::pano::MAX_MEGAPIXELS;
+use lightcraft_merge::pano::{MAX_MEGAPIXELS, MIN_MEGAPIXELS};
 use lightcraft_merge::{Deghost, Frame, HdrOptions, PanoOptions, Projection};
 use lightcraft_pipeline::{Quality, RenderRequest, SourceInfo};
 use lightcraft_raster::{Rgb32f, Rgba8};
@@ -152,7 +152,7 @@ impl MergeJob {
             MergeKind::Panorama { pano } => {
                 let frames = self.load(true, progress, (0.0, 0.25))?;
                 let p = sub(0.25, 0.9);
-                let fit = fit_in_memory(pano, pixels(&frames), crate::memory::total_ram());
+                let fit = fit_in_memory(pano, pixels(&frames), merge_memory(crate::memory::total_ram()))?;
                 let r = lightcraft_merge::stitch(frames, &fit, &p).map_err(err)?;
                 let info = pano_info(&r, &self.sources, pano, &fit);
                 (
@@ -197,7 +197,7 @@ impl MergeJob {
                     merged.push(f);
                 }
                 let p = sub(0.6, 0.9);
-                let fit = fit_in_memory(pano, pixels(&merged), crate::memory::total_ram());
+                let fit = fit_in_memory(pano, pixels(&merged), merge_memory(crate::memory::total_ram()))?;
                 let r = lightcraft_merge::stitch(merged, &fit, &p).map_err(err)?;
                 let mut info = pano_info(&r, &self.sources, pano, &fit);
                 info["bracket"] = json!(b);
@@ -242,14 +242,7 @@ impl MergeJob {
 fn pano_info(r: &lightcraft_merge::PanoResult, sources: &[(PhotoId, String)], asked: &PanoOptions, fit: &PanoOptions) -> Value {
     let megapixels = (r.image.width * r.image.height) as f64 / 1e6;
     let native = r.native_megapixels;
-    let why = if fit.max_megapixels < asked.max_megapixels && fit.max_megapixels < native {
-        "memory"
-    } else if asked.max_megapixels < MAX_MEGAPIXELS && asked.max_megapixels < native {
-        "asked"
-    } else {
-        "size"
-    };
-    let limit = (megapixels < native * 0.98).then_some(why);
+    let limit = size_limit(asked.max_megapixels, fit.max_megapixels, native, megapixels);
     json!({
         "projection": r.projection,
         "used": r.used.iter().filter_map(|&i| sources.get(i).map(|s| s.0.0)).collect::<Vec<_>>(),
@@ -261,6 +254,19 @@ fn pano_info(r: &lightcraft_merge::PanoResult, sources: &[(PhotoId, String)], as
         "nativeMegapixels": native,
         "limit": limit,
     })
+}
+
+/// Why a panorama of `megapixels` came out smaller than its photos' resolution (`native`), if it
+/// did: `memory` when [`fit_in_memory`] held it below the size `asked` for, `asked`, or `size`.
+pub(crate) fn size_limit(asked: f64, fit: f64, native: f64, megapixels: f64) -> Option<&'static str> {
+    let why = if fit < asked && fit < native {
+        "memory"
+    } else if asked < MAX_MEGAPIXELS && asked < native {
+        "asked"
+    } else {
+        "size"
+    };
+    (megapixels < native * 0.98).then_some(why)
 }
 
 /// Peak memory of a panorama per pixel of its output (bytes), measured as the peak resident size
@@ -279,14 +285,71 @@ fn merge_memory(ram: Option<usize>) -> f64 {
     (ram * 0.75 - crate::memory::budget() as f64).max(0.0)
 }
 
-/// `pano` with its size held to what fits in memory beside its photos (`frame_px` pixels, 12
-/// bytes each, loaded already): a panorama of five 51 MP photos may have up to 166 MP on a 16 GB
-/// computer, 355 MP on 32 GB. Never below 40 megapixels, the size every panorama had before it
-/// followed the photos' resolution, and never above what was asked.
-pub(crate) fn fit_in_memory(pano: &PanoOptions, frame_px: f64, ram: Option<usize>) -> PanoOptions {
-    let room = merge_memory(ram);
+/// `pano` with its size held to what fits in `room` bytes (the merge's memory, [`merge_memory`])
+/// beside its photos (`frame_px` pixels, 12 bytes each, loaded already): a panorama of five 51 MP
+/// photos may have up to 166 MP on a 16 GB computer, 355 MP on 32 GB. Never below its floor
+/// ([`panorama_floor`]): a merge whose memory can't hold that is refused, naming the memory it
+/// needs and has (issue #3708: the floor used to be kept whatever the memory, and a 40 MP stitch
+/// peaks near 2.7 GB, more than a small computer or a memory limit allows; a refusal is preferred
+/// to a panorama quietly far below it). Between the floor and the full size the result says
+/// `limit: "memory"`. Never above what was asked.
+pub(crate) fn fit_in_memory(pano: &PanoOptions, frame_px: f64, room: f64) -> std::result::Result<PanoOptions, String> {
     let fits = ((room - frame_px * 12.0) / PANO_TILE_BYTES).min(room / PANO_BLEND_BYTES) / 1e6;
-    PanoOptions { max_megapixels: pano.max_megapixels.min(fits.max(MIN_FITTED_MEGAPIXELS)), ..pano.clone() }
+    let floor = panorama_floor(pano.max_megapixels, frame_px);
+    // a NaN `fits` (a NaN `room`) is refused too
+    if fits.is_nan() || fits < floor {
+        let need = (frame_px * 12.0 + floor * 1e6 * PANO_TILE_BYTES).max(floor * 1e6 * PANO_BLEND_BYTES);
+        let mb = |b: f64| b / (1u64 << 20) as f64;
+        return Err(format!(
+            "not enough memory for this panorama: at {} MP, the smallest it is made, it needs about {:.0} MB, its photos included, {}; {}",
+            round_megapixels(floor),
+            mb(need).ceil(),
+            merge_budget(mb(room.max(0.0)).floor()),
+            pano_remedy(pano.max_megapixels, floor, fits)
+        ));
+    }
+    Ok(PanoOptions { max_megapixels: pano.max_megapixels.min(fits), ..pano.clone() })
+}
+
+/// How a refusal names the merge's memory (`mb`, [`merge_memory`]): a budget, not the memory free
+/// now, so closing other apps doesn't raise it.
+fn merge_budget(mb: f64) -> String {
+    format!("but the merge's budget is {mb:.0} MB (three quarters of this computer's memory, less the app's caches)")
+}
+
+/// What a panorama refused for its `floor` can change: fewer or smaller photos, and, when the floor
+/// is 40 MP or the size `asked` for (not the photos' own pixels) and a smaller size `fits`
+/// (megapixels), a `maxMegapixels` up to that (a command option: the desktop's Merge dialog has no
+/// size control).
+fn pano_remedy(asked: f64, floor: f64, fits: f64) -> String {
+    let cap = MIN_PANORAMA_MEGAPIXELS.min(asked).max(MIN_MEGAPIXELS);
+    let fits = (fits * 10.0).floor() / 10.0;
+    if floor >= cap && fits >= MIN_MEGAPIXELS && fits < floor {
+        format!("merge fewer or smaller photos, or set maxMegapixels to {fits} or less (command line or MCP)")
+    } else {
+        "merge fewer or smaller photos".to_owned()
+    }
+}
+
+/// The smallest a panorama is made to fit its memory (megapixels): [`MIN_PANORAMA_MEGAPIXELS`],
+/// or less when less was `asked` for (`min` ignores a NaN one; never under the 0.1 MP cap the
+/// stitch keeps at the least, [`MIN_MEGAPIXELS`]), or when its photos (`frame_px` pixels,
+/// standing for the panorama's own resolution, known only once they are stitched) have less,
+/// even under 0.1 MP: the stitch never scales photos up, so a floor above them couldn't be made.
+pub(crate) fn panorama_floor(asked: f64, frame_px: f64) -> f64 {
+    MIN_PANORAMA_MEGAPIXELS.min(asked).max(MIN_MEGAPIXELS).min(frame_px / 1e6)
+}
+
+/// `mp` megapixels as the refusal names them: to 0.1 MP, or two significant digits below 0.1 MP
+/// (a floor of tiny photos), so `0.05` isn't named as 0.1 MP.
+fn round_megapixels(mp: f64) -> f64 {
+    if !(mp > 0.0 && mp < 0.1) {
+        return (mp * 10.0).round() / 10.0;
+    }
+    // mp > 0, so the exponent is finite; held to 12 digits for a subnormal one
+    let digits = (1.0 - mp.log10().floor()).min(12.0) as i32;
+    let k = 10f64.powi(digits);
+    (mp * k).round() / k
 }
 
 /// The pixels of `frames`.
@@ -294,8 +357,10 @@ fn pixels(frames: &[Frame]) -> f64 {
     frames.iter().map(|f| (f.width() * f.height()) as f64).sum()
 }
 
-/// The smallest size [`fit_in_memory`] holds a panorama to (megapixels).
-pub(crate) const MIN_FITTED_MEGAPIXELS: f64 = 40.0;
+/// The smallest panorama [`fit_in_memory`] plans (megapixels): the size every panorama had before
+/// it followed its photos' resolution. A merge whose memory can't hold it (or the smaller
+/// [`panorama_floor`]) is refused rather than made smaller.
+pub(crate) const MIN_PANORAMA_MEGAPIXELS: f64 = 40.0;
 
 /// Bracket size from EXIF: the smallest period of the exposure sequence (≥ 2).
 pub fn detect_bracket(frames: &[Frame]) -> Option<usize> {
@@ -382,13 +447,21 @@ pub fn parse(id: &str, p: &Value) -> Result<(MergeKind, MergeFinish)> {
     let hdr = HdrOptions { align: p.get("align").and_then(Value::as_bool).unwrap_or(true), deghost };
     let projection: Projection =
         serde_json::from_value(p.get("projection").cloned().unwrap_or(json!("auto"))).map_err(|e| bad(format!("projection: {e}")))?;
+    // the stitch raises a cap below 0.1 MP to 0.1 MP, so a smaller one couldn't be kept: refused, not exceeded
+    let max_megapixels = match p.get("maxMegapixels").and_then(Value::as_f64) {
+        Some(v) if v > 0.0 && v < MIN_MEGAPIXELS => {
+            return Err(bad(format!("maxMegapixels: {v} is below {MIN_MEGAPIXELS} MP, the smallest size limit the stitch keeps")));
+        }
+        Some(v) if v > 0.0 => v.min(MAX_MEGAPIXELS),
+        _ => MAX_MEGAPIXELS,
+    };
     let pano = PanoOptions {
         projection,
         boundary_warp: p.get("boundaryWarp").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 100.0),
         auto_crop: p.get("autoCrop").and_then(Value::as_bool).unwrap_or(false),
         fill_edges: p.get("fillEdges").and_then(Value::as_bool).unwrap_or(false),
         // the photos' own resolution unless asked (held to what fits in memory when it runs)
-        max_megapixels: p.get("maxMegapixels").and_then(Value::as_f64).filter(|v| *v > 0.0).unwrap_or(MAX_MEGAPIXELS).min(MAX_MEGAPIXELS),
+        max_megapixels,
     };
     let kind = match id {
         "merge.hdr" => MergeKind::Hdr { hdr },
@@ -471,5 +544,34 @@ impl Session {
         let job = self.plan_merge(kind, finish, ids, false)?;
         let out = job.run(&|_, _| true).map_err(EngineError::Other)?;
         self.finish_merge(&job, out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// A computer whose memory we can't read is taken to have 8 GB.
+    #[test]
+    fn unknown_memory_is_taken_as_8_gb() {
+        assert_eq!(super::merge_memory(None), super::merge_memory(Some(8 << 30)));
+    }
+
+    /// A cap below 0.1 MP, the smallest the stitch keeps, is refused, not exceeded (#3708).
+    #[test]
+    fn a_max_megapixels_below_the_stitch_minimum_is_refused() {
+        use super::{MergeKind, parse};
+        use serde_json::json;
+        let cap = |p: serde_json::Value| match parse("merge.panorama", &p).map(|(kind, _)| kind) {
+            Ok(MergeKind::Panorama { pano }) => Ok(pano.max_megapixels),
+            Ok(_) => Err("not a panorama".to_owned()),
+            Err(e) => Err(e.to_string()),
+        };
+        let refused = cap(json!({"maxMegapixels": 0.05})).unwrap_err();
+        assert!(refused.contains("maxMegapixels") && refused.contains("0.1 MP"), "{refused}");
+        assert_eq!(cap(json!({"maxMegapixels": 0.1})), Ok(0.1));
+        assert_eq!(cap(json!({"maxMegapixels": 24.0})), Ok(24.0));
+        let max = lightcraft_merge::pano::MAX_MEGAPIXELS;
+        assert_eq!(cap(json!({})), Ok(max), "missing: the default");
+        assert_eq!(cap(json!({"maxMegapixels": 0})), Ok(max), "0: the default, as before");
+        assert_eq!(cap(json!({"maxMegapixels": 1e9})), Ok(max), "held to the maximum");
     }
 }
