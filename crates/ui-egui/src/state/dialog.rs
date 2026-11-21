@@ -195,6 +195,13 @@ pub enum Dialog {
     SystemInfo {
         rows: Vec<(String, String)>,
     },
+    /// Help ▸ Report a Bug… (#1015): the choices, and the logs found when it opened.
+    ReportBug {
+        opts: crate::bug_report::ReportOptions,
+        /// The System Info rows when it opened: what the preview shows is what the report holds.
+        rows: Vec<(String, String)>,
+        logs: Vec<crate::bug_report::LogInfo>,
+    },
     /// Every metadata field of a photo's file (`photo.allMetadata`), filtered by `search`.
     AllMetadata {
         title: String,
