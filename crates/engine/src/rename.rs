@@ -38,9 +38,9 @@ mod plan;
 mod sidecar;
 mod tokens;
 
-pub(crate) use fs::{MoveFs, RealFs};
 #[cfg(test)]
-use fs::{folded_path, same_contents};
+use fs::{LIST_FOLDER_AT, ListedSources, folded_path, same_contents};
+pub(crate) use fs::{MoveFs, RealFs};
 pub(crate) use moves::move_all;
 #[cfg(test)]
 pub(crate) use moves::move_file_with;
@@ -70,6 +70,10 @@ pub struct RenamePlan {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub to_path: Option<String>,
 }
+
+#[cfg(test)]
+#[path = "rename/tests_listed_sources.rs"]
+mod tests_listed_sources;
 
 #[cfg(test)]
 pub(crate) mod tests;

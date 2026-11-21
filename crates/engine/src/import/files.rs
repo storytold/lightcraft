@@ -114,14 +114,42 @@ pub fn expand_report(paths: &[String], skip: Option<&Path>, limits: crate::walk:
 
 /// ([`expand_report`], handing the listing of every folder that is walked to `note`, as
 /// [`expand_noting`] does.)
-fn expand_report_noting(paths: &[String], skip: Option<&Path>, limits: crate::walk::Limits, mut note: Option<crate::walk::NoteFolder>) -> Expansion {
+fn expand_report_noting(paths: &[String], skip: Option<&Path>, limits: crate::walk::Limits, note: Option<crate::walk::NoteFolder>) -> Expansion {
+    expand_report_knowing(paths, skip, limits, note, false, &|_| false)
+}
+
+/// [`expand_noting`], taking the paths `known_file` says are files as files without asking the
+/// disk (a review hands over thousands of them, and telling a file from a folder is a round trip
+/// each on a network share). With `timed`, each folder's modification time goes to `note` too
+/// ([`crate::walk::files_in_noting_timed`]).
+pub(super) fn expand_knowing(
+    paths: &[String],
+    skip: Option<&Path>,
+    limits: crate::walk::Limits,
+    note: Option<crate::walk::NoteFolder>,
+    timed: bool,
+    known_file: &dyn Fn(&Path) -> bool,
+) -> (Vec<String>, bool) {
+    let e = expand_report_knowing(paths, skip, limits, note, timed, known_file);
+    (e.files, e.truncated)
+}
+
+/// [`expand_knowing`] keeping the walks' diagnostics ([`Expansion`]).
+pub(super) fn expand_report_knowing(
+    paths: &[String],
+    skip: Option<&Path>,
+    limits: crate::walk::Limits,
+    mut note: Option<crate::walk::NoteFolder>,
+    timed: bool,
+    known_file: &dyn Fn(&Path) -> bool,
+) -> Expansion {
     let mut out = Expansion::default();
     for p in paths {
         let p = Path::new(p);
         if skip.is_some_and(|s| p == s) {
             continue;
         }
-        if p.is_dir() {
+        if !known_file(p) && p.is_dir() {
             // XMP sidecars are read with their photos, not skipped: they are left out of the count
             let mut sidecars = 0usize;
             let keep = |f: &Path| {
@@ -132,6 +160,7 @@ fn expand_report_noting(paths: &[String], skip: Option<&Path>, limits: crate::wa
                 keep
             };
             let w = match note.as_mut() {
+                Some(note) if timed => crate::walk::files_in_noting_timed(p, skip, limits, keep, &mut **note),
                 Some(note) => crate::walk::files_in_noting(p, skip, limits, keep, &mut **note),
                 None => crate::walk::files_in(p, skip, limits, keep),
             };

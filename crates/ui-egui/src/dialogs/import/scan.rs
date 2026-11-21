@@ -239,12 +239,15 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
         let candidates =
             queue.iter().cloned().map(|path| lightcraft_engine::import::ImportCandidate { path, ..Default::default() }).chain(known).collect();
         // the probes of earlier scans go back to the session with the result, for the import that follows
+        // (a browse imports nothing from a review, so no folder listing goes with it)
+        let listed = lightcraft_engine::import::ListedFolders::default();
         let _ = tx.send(ScanEnd::Done(lightcraft_engine::import::ScanOutput {
             candidates,
             probes: input.take_probes(),
             truncated: false,
             unreadable: 0,
             unsupported: 0,
+            listed,
         }));
     };
     #[cfg(not(target_arch = "wasm32"))]
@@ -393,6 +396,7 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
     d.album = task.album.filter(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(*id)).is_some_and(|a| !a.folder && !a.is_smart()));
     d.sources = task.sources;
     d.library = Some(app.session.library_generation());
+    app.review_pending_listed = Some(out.listed);
     app.review_pending = Some(crate::state::Dialog::Import { opts: Box::new(d) });
     show_pending_review(app, ctx);
 }
@@ -408,10 +412,12 @@ fn show_pending_review(app: &mut LightcraftApp, ctx: &egui::Context) {
         && !opts.in_library(app)
     {
         app.review_pending = None;
+        app.review_pending_listed = None;
         return;
     }
     if app.ui.dialog.is_none() {
         app.ui.dialog = app.review_pending.take();
+        app.review_listed = app.review_pending_listed.take();
     } else {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }

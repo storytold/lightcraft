@@ -1,6 +1,6 @@
-use super::files::{Seen, expand, expand_report, is_supported, probe_all, reusable_probes};
+use super::files::{Seen, expand, expand_report_knowing, is_supported, probe_all, reusable_probes};
 use super::types::ImportCandidate;
-use super::{HashMap, Path, PathBuf, PhotoId, ProbeInfo, Session, Source};
+use super::{HashMap, ListedFolders, Path, PathBuf, PhotoId, ProbeInfo, Session, Source};
 
 /// What a [`scan`] needs from the session, so it can run on another thread (a folder on a network
 /// share can take minutes to read).
@@ -12,6 +12,8 @@ pub struct ScanInput {
     /// ([`library_hashes`]), on the scan's thread.
     library: std::sync::Arc<lightcraft_catalog::Catalog>,
     cache: HashMap<String, ProbeInfo>,
+    /// The folders the scan listed, for the import that follows.
+    listed: ListedFolders,
 }
 
 /// The library's photos of `files`: path → (photo, its summary as a candidate that is there
@@ -83,6 +85,8 @@ pub struct ScanOutput {
     pub unreadable: usize,
     /// Files inside the folders that are not a supported photo type (XMP sidecars not counted).
     pub unsupported: usize,
+    /// The folders the scan listed (kept with the probes, for the import that follows).
+    pub listed: ListedFolders,
 }
 
 impl ScanInput {
@@ -91,7 +95,13 @@ impl ScanInput {
         // (no table of the library here: this is the session's thread, and the library may hold
         // millions of photos. The scan looks up what it finds)
         let library = std::sync::Arc::new(s.catalog.clone());
-        let input = ScanInput { probe: s.media.file_probe.clone(), skip, library, cache: std::mem::take(&mut s.import_probes) };
+        let input = ScanInput {
+            probe: s.media.file_probe.clone(),
+            skip,
+            library,
+            cache: std::mem::take(&mut s.import_probes),
+            listed: ListedFolders::default(),
+        };
         (input, paths.to_vec())
     }
 
@@ -303,8 +313,21 @@ pub fn scan_report(s: &mut Session, paths: &[String]) -> ScanOutput {
 
 /// [`scan`] without the session, so it can run on a worker thread. Stops early (returning what it
 /// has) when `progress.cancel` is set.
-pub fn scan_with(input: ScanInput, paths: &[String], progress: &ScanProgress) -> ScanOutput {
-    let expansion = expand_report(paths, input.skip.as_deref(), crate::walk::Limits::default());
+pub fn scan_with(mut input: ScanInput, paths: &[String], progress: &ScanProgress) -> ScanOutput {
+    let listed = &mut input.listed;
+    let expansion = expand_report_knowing(
+        paths,
+        input.skip.as_deref(),
+        crate::walk::Limits::default(),
+        // (always `true`: nothing here stops the walk. `progress.cancel` is read only once it is over, in
+        // `scan_files`, which stops the probing and returns what it has)
+        Some(&mut |dir, names, complete, modified| {
+            listed.note(dir, names, complete, modified);
+            true
+        }),
+        true,
+        &|_| false,
+    );
     let mut out = scan_files(input, expansion.files, progress);
     out.truncated = expansion.truncated;
     out.unreadable = expansion.unreadable;
@@ -314,7 +337,7 @@ pub fn scan_with(input: ScanInput, paths: &[String], progress: &ScanProgress) ->
 
 /// [`scan_with`] for files that were found already (`paths` expanded, [`expand`]). The walks'
 /// diagnostics ([`ScanOutput::truncated`] and friends) are left empty: who expanded the paths has
-/// them ([`expand_report`]).
+/// them ([`expand_report`](super::files::expand_report)).
 pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &ScanProgress) -> ScanOutput {
     use std::sync::atomic::Ordering::Relaxed;
     let by_path = library_files(&input.library, &files);
@@ -376,5 +399,5 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
         out.push(c);
     }
     // (the walks' diagnostics are [`scan_with`]'s: these files were found already)
-    ScanOutput { candidates: out, probes: kept, truncated: false, unreadable: 0, unsupported: 0 }
+    ScanOutput { candidates: out, probes: kept, truncated: false, unreadable: 0, unsupported: 0, listed: input.listed }
 }
