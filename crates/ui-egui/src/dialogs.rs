@@ -475,6 +475,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::Settings { .. } => "Settings",
         Dialog::ConfirmDelete { .. } => "Delete Photos",
         Dialog::MovePhotos { .. } => "Move Photos",
+        Dialog::BuildSmartPreviews { .. } => "Build Lossless Smart Previews",
         Dialog::LightroomCatalog { .. } => "Lightroom Classic Catalog",
         Dialog::LightroomDestination { .. } => "Import Lightroom Catalog",
         Dialog::LensDatabase { .. } => "Lens Profiles",
@@ -596,6 +597,8 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         Dialog::PasteSettings { .. } => "Paste",
         Dialog::TextPrompt { command, .. } => prompt_verb(command),
         Dialog::MovePhotos { .. } => "Move",
+        Dialog::BuildSmartPreviews { .. } if crate::smart_previews::exceeds_free_space(dlg) => "Build Anyway",
+        Dialog::BuildSmartPreviews { .. } => "Build",
         // (not "Merge": that is photo merging, HDR / panorama, in some languages)
         Dialog::MoveKeyword { .. } | Dialog::MergeKeywords { .. } => "Merge Keywords",
         Dialog::KeywordSet { .. } => "Save",
@@ -647,7 +650,10 @@ fn can_confirm(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> bool {
     };
     let waiting = matches!(
         dlg,
-        Dialog::DenoiseModel { accepted: false, .. } | Dialog::FaceModel { accepted: false, .. } | Dialog::SynchronizeFolder { counts: None, .. }
+        Dialog::DenoiseModel { accepted: false, .. }
+            | Dialog::FaceModel { accepted: false, .. }
+            | Dialog::SynchronizeFolder { counts: None, .. }
+            | Dialog::BuildSmartPreviews { checking: true, .. }
     );
     let bad_rules =
         matches!(dlg, Dialog::SmartRules { id, rules, .. } if !rules.check_for(&app.session.catalog, id.map(lightcraft_catalog::AlbumId)).is_empty());
@@ -731,6 +737,7 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
                     | Dialog::KeywordSet { .. }
                     | Dialog::SynchronizeFolder { .. }
                     | Dialog::SaveEffect { .. }
+                    | Dialog::BuildSmartPreviews { .. }
                     | Dialog::CaptureTime { .. }
                     | Dialog::LensDatabase { .. }
             ) =>
@@ -2148,6 +2155,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
             ui.label(egui::RichText::new(crate::i18n::tr("They can be restored from Recently Deleted until it is emptied.")).color(t.text_dim));
         }
         Dialog::MovePhotos { .. } => move_photos_body(ui, t, dlg),
+        Dialog::BuildSmartPreviews { .. } => crate::smart_previews::body(ui, dlg),
         d @ Dialog::SynchronizeFolder { .. } => crate::sync::body(app, ui, d),
         Dialog::LightroomCatalog { .. } => lightroom_catalog_body(app, ui, t, dlg),
         d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::body(app, ui, d),

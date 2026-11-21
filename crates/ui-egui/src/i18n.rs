@@ -569,6 +569,32 @@ pub fn rules_label(rules: &lightcraft_catalog::RuleSet, catalog: &lightcraft_cat
     if language() == Locale::En { rules.describe_with(catalog) } else { describe(rules, catalog, 0) }
 }
 
+/// Cardinal plural forms for whole photo and file counts in the shipped languages.
+pub(crate) fn integer_plural_form(locale: Locale, count: u64) -> &'static str {
+    match locale {
+        Locale::Ja | Locale::ZhHans | Locale::ZhHant => "other",
+        Locale::Ru | Locale::Uk => match (count % 10, count % 100) {
+            (1, n) if n != 11 => "one",
+            (2..=4, n) if !(12..=14).contains(&n) => "few",
+            _ => "many",
+        },
+        Locale::Fr | Locale::PtBr if count <= 1 => "one",
+        Locale::Fr | Locale::PtBr | Locale::Es if count != 0 && count.is_multiple_of(1_000_000) => "many",
+        Locale::Pl => match (count % 10, count % 100) {
+            _ if count == 1 => "one",
+            (2..=4, n) if !(12..=14).contains(&n) => "few",
+            _ => "many",
+        },
+        Locale::Cs => match count {
+            1 => "one",
+            2..=4 => "few",
+            _ => "other",
+        },
+        _ if count == 1 => "one",
+        _ => "other",
+    }
+}
+
 #[cfg(test)]
 mod gaps;
 

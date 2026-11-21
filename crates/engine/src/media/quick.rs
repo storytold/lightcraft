@@ -1,6 +1,6 @@
 use super::render::{RenderJob, RenderResult};
 use super::source::{PreviewLoader, SourceLevel};
-use super::{Arc, Deserialize, Hash128, Hasher128, Histogram, Photo, PhotoId, PreviewCache, Rendered, Rgba8, Serialize, Source, SourceInfo};
+use super::{Arc, Deserialize, Hash128, Hasher128, Histogram, Photo, PhotoId, PreviewCache, Rendered, Rgba8, Serialize, Source, SourceInfo, Weak};
 
 /// Where a [`QuickJob`]'s stand-in image came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +48,8 @@ impl QuickJob {
     pub fn run(self) -> RenderResult {
         let (request_id, photo, key) = (self.request_id, self.photo, self.key);
         crate::guard::catch("the render", || self.run_unguarded()).unwrap_or_else(|e| RenderResult {
+            cache_generation: u64::MAX,
+            cache_owner: Weak::new(),
             request_id,
             source_key: None,
             photo,
@@ -66,6 +68,8 @@ impl QuickJob {
         let (photo, key) = (self.photo, self.key);
         let request_id = self.request_id;
         let done = |rendered: Result<Rendered, String>, quick| RenderResult {
+            cache_generation: u64::MAX,
+            cache_owner: Weak::new(),
             request_id,
             source_key: None,
             photo,
