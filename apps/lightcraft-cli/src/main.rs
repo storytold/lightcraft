@@ -108,7 +108,8 @@ USAGE:
   lightcraft-cli controls [--json]   list every develop control id with its range
   lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
       Fit a colour profile per camera model from raw files and their embedded camera JPEGs
-      (Sony ARW, Nikon NEF, Fujifilm RAF, Canon CRW): up to N files spread over the folders (default 300; 0 = all), pooled per
+      (Sony ARW, Nikon NEF/NRW, Canon CR2/CR3/CRW, Fujifilm RAF, Panasonic RW2/RWL, Olympus ORF,
+      Pentax PEF, Samsung SRW, Minolta MRW, Epson ERF): up to N files spread over the folders (default 300; 0 = all), pooled per
       model, written as <model>.json to DIR (default: the profiles folder LightCraft reads,
       <config>/camera-profiles, or $LIGHTCRAFT_CAMERA_PROFILES). Raws of a profiled model then
       take their colour from the profile and only their tone from their own JPEG.
@@ -212,7 +213,9 @@ fn main() -> ExitCode {
 /// folders exponentially often before its depth limit cut it off (CWE-400).
 fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>) {
     let is_raw = |p: &Path| {
-        p.extension().and_then(|e| e.to_str()).is_some_and(|e| ["arw", "nef", "nrw", "raf", "crw"].iter().any(|x| e.eq_ignore_ascii_case(x)))
+        p.extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| lightcraft_engine::camera_profiles::CALIBRATION_EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)))
     };
     if path.is_file() {
         if is_raw(path) {
@@ -1133,6 +1136,28 @@ mod raw_files_tests {
         raw_files(&dir, &mut files);
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "walk took {:?}", started.elapsed());
         assert_eq!(files, vec![a.join("one.NEF")]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Every format whose camera JPEG the profile fit reads is collected, not only the five the
+    /// command was first written for: a folder of Panasonic RW2s used to find nothing (#4061).
+    #[test]
+    fn formats_the_profile_fit_reads_are_collected() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-cli-raw-formats-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["a.RW2", "b.cr3", "c.ORF", "d.arw", "e.jpg", "f.rwl"] {
+            std::fs::write(dir.join(name), b"").unwrap();
+        }
+        let mut files = Vec::new();
+        raw_files(&dir, &mut files);
+        files.sort();
+        let names: Vec<_> = files.iter().filter_map(|p| p.file_name().and_then(|n| n.to_str())).collect();
+        assert_eq!(
+            names,
+            ["a.RW2", "b.cr3", "c.ORF", "d.arw", "f.rwl"],
+            "RW2, CR3, ORF and the Leica RWL variant carry usable camera JPEGs; a JPEG is not a calibration input"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
