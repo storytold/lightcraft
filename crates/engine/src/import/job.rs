@@ -1,6 +1,6 @@
 use super::commit::{How, Plan, Slot, Transfer, commit_prepared, name_family, run_transfers, system_clock};
 use super::files::{Seen, expand, probe_all, reusable_probes, sidecars_of};
-use super::types::{FileFacts, ImportCandidate, ImportMode, ImportOptions, ImportReport, Kept, OnDeleted};
+use super::types::{FileFacts, ImportCandidate, ImportMode, ImportOptions, ImportReport, Kept, OnDeleted, SameContent};
 use super::{HashMap, MediaKind, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
 /// Import files/folders. See the module docs.
@@ -144,7 +144,7 @@ impl Prepared {
                     existing: Some(existing),
                     reason: if existing_path.is_some() { "path" } else { "content" },
                     hash: info.content_hash,
-                    file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured })),
+                    file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured, orientation: info.orientation, sidecar })),
                 });
             } else {
                 items.push(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed })));
@@ -299,11 +299,15 @@ impl ImportJob {
         // names asked of the disk, which on a network share made a folder of thousands of photos wait
         // a round trip per name, one name after another.
         let asked: Vec<&str> = todo.iter().zip(&probed).filter(|(_, p)| p.is_ok()).map(|(f, _)| f.as_str()).collect();
-        // (a file whose content the library has is skipped below as a duplicate: it asks the disk nothing)
+        // What the job makes of a file decides what is read of it: a file it makes a record of is
+        // read in full, its XMP sidecar included; a duplicate by content it skips (`SameContent`)
+        // asks the disk nothing here (#2954), and has its sidecar read below only for the capture
+        // time its file lacks.
+        let skips_duplicates = !opts.local && opts.same_content == SameContent::Skip;
         let known: std::collections::HashSet<&str> = todo
             .iter()
             .zip(&probed)
-            .filter(|(_, p)| !opts.local && p.as_ref().is_ok_and(|i| i.content_hash.as_ref().is_some_and(|h| self.by_hash.contains_key(h))))
+            .filter(|(_, p)| skips_duplicates && p.as_ref().is_ok_and(|i| i.content_hash.as_ref().is_some_and(|h| self.by_hash.contains_key(h))))
             .map(|(f, _)| f.as_str())
             .collect();
         let mut found =
@@ -338,13 +342,14 @@ impl ImportJob {
                     break;
                 }
             }
-            // same bytes as a library photo: skipped below, once its capture time is known
+            // same bytes as a library photo: a duplicate below, once its capture time is known (and,
+            // when the job makes a record of it, once it is read as any such file is)
             let duplicate_of =
                 info.content_hash.as_ref().filter(|_| !opts.local).and_then(|h| self.by_hash.get(h).map(|existing| (h.clone(), *existing)));
             // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
-            // and names the copy when the file itself has none (a duplicate needs only that time)
+            // and names the copy when the file itself has none (a skipped duplicate needs only that time)
             let raw = info.kind == MediaKind::Raw;
-            let packet = if duplicate_of.is_some() && info.captured.is_some() {
+            let packet = if duplicate_of.is_some() && skips_duplicates && info.captured.is_some() {
                 None
             } else {
                 found_sidecar.and_then(|f| std::fs::read_to_string(f).ok()).or_else(|| info.xmp.clone().filter(|_| raw))
@@ -371,7 +376,7 @@ impl ImportJob {
                     existing,
                     reason: "content",
                     hash: Some(hash),
-                    file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured })),
+                    file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured, orientation: info.orientation, sidecar })),
                 }));
                 continue;
             }

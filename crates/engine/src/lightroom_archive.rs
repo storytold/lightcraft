@@ -527,6 +527,8 @@ mod tests {
             collection_content: Vec::new(),
             warnings: Vec::new(),
             skipped: Vec::new(),
+            images: 0,
+            not_supported: Default::default(),
         }
     }
 
@@ -553,6 +555,8 @@ mod tests {
             collection_content: vec![BTreeMap::from([("rule".into(), serde_json::json!("rating > 3"))])],
             warnings: vec!["one warning".into()],
             skipped: Vec::new(),
+            images: 1,
+            not_supported: Default::default(),
         }
     }
 
