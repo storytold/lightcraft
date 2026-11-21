@@ -417,6 +417,62 @@ fn create_folder(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"path": path}))
 }
 
+/// File names that stop a move, each once (case aside, as file systems compare them), for its
+/// message: a library-wide move can clash on thousands, and the message names the first few of
+/// them, whichever way they clash.
+#[derive(Default)]
+struct Clashes {
+    /// Each name as first seen, and whether `folder` already has it (else two or more of the
+    /// photos would take it there).
+    names: Vec<(String, bool)>,
+    index: std::collections::HashMap<String, usize>,
+}
+
+impl Clashes {
+    /// How many names the whole message lists before it counts the rest.
+    const LISTED: usize = 5;
+
+    fn add(&mut self, name: &str, in_folder: bool) {
+        match self.index.get(&name.to_lowercase()) {
+            // Already in the folder wins: that's the name to rename, whatever else shares it.
+            Some(&i) => self.names[i].1 |= in_folder,
+            None => {
+                self.index.insert(name.to_lowercase(), self.names.len());
+                self.names.push((name.to_string(), in_folder));
+            }
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.names.len()
+    }
+
+    /// Why the move was refused: the names already in `folder`, then those the photos share,
+    /// [`Self::LISTED`] names in all, then how many more there are.
+    fn reason(&self, folder: &str) -> String {
+        let mut room = Self::LISTED;
+        let mut first = |in_folder: bool| {
+            let names: Vec<&str> = self.names.iter().filter(|n| n.1 == in_folder).map(|n| n.0.as_str()).take(room).collect();
+            room -= names.len();
+            names
+        };
+        let (taken, shared) = (first(true), first(false));
+        let mut why = Vec::new();
+        if !taken.is_empty() {
+            why.push(format!("{} already in {folder}", taken.join(", ")));
+        }
+        if !shared.is_empty() {
+            why.push(format!("{} would be moved there by more than one photo", shared.join(", ")));
+        }
+        match self.len() - taken.len() - shared.len() {
+            0 => {}
+            1 => why.push("1 more name clashes".into()),
+            more => why.push(format!("{more} more names clash")),
+        }
+        why.join("; ")
+    }
+}
+
 /// `photo.moveToFolder`: move the photos' files (with their sidecars) into `folder` and relink
 /// them, as one undo step. Virtual copies follow their master's file. Never overwrites: a name
 /// already taken in `folder` refuses the whole move.
@@ -434,7 +490,8 @@ fn move_to_folder(s: &mut Session, p: &Value) -> Result<Value> {
     let mut plans: Vec<crate::rename::RenamePlan> = Vec::new();
     let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut moving: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    let mut clashes: Vec<String> = Vec::new();
+    // Names already in `folder`, and names two or more of the photos would take there, each once.
+    let mut clashes = Clashes::default();
     for id in ids {
         let ph = s.catalog.photo(id).ok_or_else(|| bad(C, format!("no photo {}", id.0)))?;
         if ph.local {
@@ -456,19 +513,21 @@ fn move_to_folder(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let to = dir.join(file);
         let to_s = to.to_string_lossy().to_string();
-        if to.exists() || !taken.insert(to_s.to_lowercase()) {
-            clashes.push(file.to_string_lossy().to_string());
+        let file = file.to_string_lossy();
+        if to.exists() {
+            clashes.add(&file, true);
+            continue;
+        }
+        if !taken.insert(to_s.to_lowercase()) {
+            clashes.add(&file, false);
             continue;
         }
         let name = ph.file_name.clone();
         plans.push(crate::rename::RenamePlan { id: id.0, from: name.clone(), to: name, from_path: Some(path.clone()), to_path: Some(to_s) });
     }
-    if !clashes.is_empty() {
+    if clashes.len() > 0 {
         let s_ = if clashes.len() == 1 { "" } else { "s" };
-        return Err(bad(
-            C,
-            format!("{} already in {folder}: nothing was moved. Rename the photo{s_} first or choose another folder", clashes.join(", ")),
-        ));
+        return Err(bad(C, format!("{}: nothing was moved. Rename the photo{s_} first or choose another folder", clashes.reason(folder))));
     }
     let n = plans.len();
     if n == 0 {
@@ -752,5 +811,19 @@ mod tests {
         std::os::unix::fs::symlink(home.join("Pictures"), &shortcut).expect("link");
         assert!(refuse_protected_place_in("folder.rename", &shortcut.to_string_lossy(), Some(&home)).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A name the folder has, and the same name in another case that two photos share (as a
+    /// case-sensitive file system sees them): one name, listed once, as already in the folder.
+    #[test]
+    fn a_name_in_two_cases_is_one_clash() {
+        let mut c = super::Clashes::default();
+        c.add("A.jpg", true);
+        c.add("a.jpg", false);
+        c.add("a.jpg", false);
+        c.add("b.jpg", false);
+        c.add("B.JPG", true);
+        assert_eq!(c.len(), 2);
+        assert_eq!(c.reason("out"), "A.jpg, b.jpg already in out");
     }
 }
