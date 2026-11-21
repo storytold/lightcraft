@@ -24,8 +24,9 @@ const MAX_SIDE: usize = 1 << 17;
 const MAX_PIXELS: usize = crate::run::MAX_PIXELS;
 /// Rows per strip: about a megapixel of three planes at 24 MP widths.
 const STRIP_ROWS: usize = 128;
-/// Bumped when the meaning of a product changes (included in keys by the caller).
-pub const ALGORITHM: u32 = 1;
+/// Bumped when the meaning of a product changes (included in keys by the caller). 5: the LinRec2020 path keeps the
+/// negative camera values its inverse transform produces, where 4 clipped them at zero.
+pub const ALGORITHM: u32 = 5;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProductError {

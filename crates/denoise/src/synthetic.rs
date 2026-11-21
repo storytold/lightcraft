@@ -117,24 +117,31 @@ impl Builder {
 
     /// `Conv` (+ `LeakyRelu` when `leaky`); gives the name of the tensor that results.
     fn conv(&mut self, src: &str, cin: u64, cout: u64, k: u64, leaky: bool) -> String {
-        let (w, b, out) = (self.name("w"), self.name("b"), self.name("conv"));
+        let out = self.name("conv");
+        self.conv_as(src, cin, cout, k, leaky, &out)
+    }
+
+    /// `Conv` with explicit output node name; returns the resulting tensor name.
+    fn conv_as(&mut self, src: &str, cin: u64, cout: u64, k: u64, leaky: bool, out_name: &str) -> String {
+        let (w, b) = (self.name("w"), self.name("b"));
         let w = self.weights(&w, &[cout, cin, k, k], (cin * k * k) as usize);
         let b = self.bias(&b, cout);
         let pad = (k as i64 - 1) / 2;
         self.nodes.push(node(
             "Conv",
             &[src, &w, &b],
-            &out,
+            out_name,
             &[("kernel_shape", A::Ints(&[k as i64, k as i64])), ("pads", A::Ints(&[pad; 4])), ("strides", A::Ints(&[1, 1])), ("group", A::Int(1))],
         ));
         if !leaky {
-            return out;
+            return out_name.to_string();
         }
         let act = self.name("act");
-        self.nodes.push(node("LeakyRelu", &[&out], &act, &[("alpha", A::Float(0.2))]));
+        self.nodes.push(node("LeakyRelu", &[out_name], &act, &[("alpha", A::Float(0.2))]));
         act
     }
 
+    /// `MaxPool` 2×2 with stride 2.
     fn pool(&mut self, src: &str) -> String {
         let out = self.name("pool");
         self.nodes.push(node(
@@ -146,6 +153,7 @@ impl Builder {
         out
     }
 
+    /// `ConvTranspose` 2×2 with stride 2.
     fn up(&mut self, src: &str, cin: u64, cout: u64) -> String {
         let (w, b, out) = (self.name("uw"), self.name("ub"), self.name("up"));
         let w = self.weights(&w, &[cin, cout, 2, 2], (cin * 4) as usize);
@@ -159,6 +167,7 @@ impl Builder {
         out
     }
 
+    /// `Concat` along channel axis 1.
     fn concat(&mut self, a: &str, b: &str) -> String {
         let out = self.name("cat");
         self.nodes.push(node("Concat", &[a, b], &out, &[("axis", A::Int(1))]));
@@ -224,6 +233,78 @@ pub fn smoothing_onnx() -> Vec<u8> {
     len_field(5, &tensor("weights", &[12, 4, 3, 3], &[1.0 / 36.0; 12 * 4 * 3 * 3]), &mut graph);
     len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(4), Ok(64), Ok(64)]), &mut graph);
     len_field(12, &value_info_bytes("rgb", 1, &[Ok(1), Ok(3), Ok(128), Ok(128)]), &mut graph);
+    let mut model = Vec::new();
+    varint_field(1, 8, &mut model);
+    len_field(7, &graph, &mut model);
+    let mut ops = Vec::new();
+    varint_field(2, 13, &mut ops);
+    len_field(8, &ops, &mut model);
+    model
+}
+
+/// A linear-RGB denoiser U-Net as ONNX bytes: `[1, 3, tile, tile]` → `[1, 3, tile, tile]`, with `depth` poolings
+/// (so `tile` must be a multiple of `2^depth`) and `ch` channels on the first level.
+/// The output is a 1 × 1 convolution directly to 3 channels without DepthToSpace.
+pub fn unet_linear_rgb_onnx(tile: u64, ch: u64, depth: usize, seed: u64) -> Vec<u8> {
+    let mut b = Builder { nodes: Vec::new(), inits: Vec::new(), rng: Rng(seed | 1), n: 0 };
+    let mut skips: Vec<(String, u64)> = Vec::new();
+    let (mut cur, mut c_in, mut c) = ("data".to_string(), 3u64, ch);
+    for level in 0..=depth {
+        let x = b.conv(&cur, c_in, c, 3, true);
+        let x = b.conv(&x, c, c, 3, true);
+        if level < depth {
+            skips.push((x.clone(), c));
+            cur = b.pool(&x);
+            c_in = c;
+            c *= 2;
+        } else {
+            cur = x;
+        }
+    }
+    for (skip, sc) in skips.into_iter().rev() {
+        let up = b.up(&cur, c, sc);
+        let joined = b.concat(&up, &skip);
+        let x = b.conv(&joined, 2 * sc, sc, 3, true);
+        cur = b.conv(&x, sc, sc, 3, true);
+        c = sc;
+    }
+    let _ = b.conv_as(&cur, c, 3, 1, false, "rgb");
+
+    let mut graph = Vec::new();
+    for n in &b.nodes {
+        len_field(1, n, &mut graph);
+    }
+    for t in &b.inits {
+        len_field(5, t, &mut graph);
+    }
+    len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(3), Ok(tile), Ok(tile)]), &mut graph);
+    len_field(12, &value_info_bytes("rgb", 1, &[Ok(1), Ok(3), Ok(tile), Ok(tile)]), &mut graph);
+    let mut ops = Vec::new();
+    len_field(1, b"", &mut ops);
+    varint_field(2, 13, &mut ops);
+    let mut model = Vec::new();
+    varint_field(1, 8, &mut model);
+    len_field(7, &graph, &mut model);
+    len_field(8, &ops, &mut model);
+    model
+}
+
+/// A tiny smoothing network for linear RGB: 3 input channels to 3 output channels (3x3 convolution).
+pub fn smoothing_linear_rgb_onnx() -> Vec<u8> {
+    let mut graph = Vec::new();
+    len_field(
+        1,
+        &node(
+            "Conv",
+            &["data", "weights"],
+            "rgb",
+            &[("kernel_shape", A::Ints(&[3, 3])), ("pads", A::Ints(&[1, 1, 1, 1])), ("strides", A::Ints(&[1, 1])), ("group", A::Int(1))],
+        ),
+        &mut graph,
+    );
+    len_field(5, &tensor("weights", &[3, 3, 3, 3], &[1.0 / 27.0; 3 * 3 * 3 * 3]), &mut graph);
+    len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(3), Ok(64), Ok(64)]), &mut graph);
+    len_field(12, &value_info_bytes("rgb", 1, &[Ok(1), Ok(3), Ok(64), Ok(64)]), &mut graph);
     let mut model = Vec::new();
     varint_field(1, 8, &mut model);
     len_field(7, &graph, &mut model);

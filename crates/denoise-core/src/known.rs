@@ -8,7 +8,7 @@ use crate::licence::{Commercial, Licence};
 
 use crate::manifest::DenoiserManifest;
 #[cfg(any(feature = "rawnind-model", test))]
-use crate::manifest::{Domain, Gain};
+use crate::manifest::{Domain, Gain, LinearSpace};
 
 /// A known model, and how to get it.
 pub struct Known {
@@ -43,6 +43,7 @@ fn rawnind_bayer() -> Known {
                      published on Wikimedia Commons and by the University of Louvain). Paper: arXiv 2501.08924."
             .into(),
         domain: Domain::BayerToRgb,
+        space: LinearSpace::CameraRgb,
         tile: 512,
         overlap: 64,
         gain: Gain::MatchMean { nominal: 1.0e6, max_deviation: 0.05 },
@@ -50,18 +51,59 @@ fn rawnind_bayer() -> Known {
     let download = Download {
         id: manifest.id.clone(),
         url: "https://github.com/darktable-org/darktable-ai/releases/download/release-5.6.0/rawdenoise-nind.dtmodel".into(),
-        file_name: "rawdenoise-nind.dtmodel".into(),
+        // the archive holds both RawNIND models: each stages under its own name so two downloads cannot collide
+        file_name: "rawdenoise-nind-bayer.dtmodel".into(),
         size_bytes: 57_700_134,
         sha256: "d71b5f1e727c85a359e6f74dca9e2016c9d8fc3e2f7ac3e9b347d80ceca969af".into(),
     };
     Known { manifest, download: Some(download), entry: Some("model_bayer.onnx") }
 }
 
+/// RawNIND's UtNet2 for linear RGB / Fujifilm X-Trans sensors, as published for darktable (`rawdenoise-nind.dtmodel`).
+/// Its weights are GPL-3.0; the training pictures are CC BY 4.0 and CC0.
+#[cfg(any(feature = "rawnind-model", test))]
+fn rawnind_linear() -> Known {
+    let manifest = DenoiserManifest {
+        id: "rawnind-linear".into(),
+        name: "RawNIND UtNet2 (Linear)".into(),
+        version: "1.0".into(),
+        licence: Licence {
+            name: "GPL-3.0".into(),
+            commercial: Commercial::Yes,
+            url: Some("https://www.gnu.org/licenses/gpl-3.0.html".into()),
+            notice: "The weights are published under the GNU General Public License v3. LightCraft does not include them: they \
+                     are downloaded to your computer at your request and used by it only. If you pass the model file on, the \
+                     GPL applies to that copy. Commercial use is subject to the GPL terms, including applicable source, licence and notice obligations on redistribution."
+                .into(),
+        },
+        source: Some("https://github.com/darktable-org/darktable-ai/tree/master/models/rawdenoise-nind".into()),
+        sha256: Some("df957efadcc152c007d5d3b0917bdff9e41c0d4a0efe56584ef30b36393cd181".into()),
+        size_bytes: Some(31_053_823),
+        provenance: "Trained on RawNIND, real photographs of the same scenes taken noisy and clean (images CC BY 4.0 and CC0, \
+                     published on Wikimedia Commons and by the University of Louvain). Paper: arXiv 2501.08924."
+            .into(),
+        domain: Domain::LinearRgb,
+        space: LinearSpace::LinRec2020,
+        tile: 512,
+        overlap: 64,
+        gain: Gain::MatchMean { nominal: -3.184e9, max_deviation: 0.15 },
+    };
+    let download = Download {
+        id: manifest.id.clone(),
+        url: "https://github.com/darktable-org/darktable-ai/releases/download/release-5.6.0/rawdenoise-nind.dtmodel".into(),
+        // the archive holds both RawNIND models: each stages under its own name so two downloads cannot collide
+        file_name: "rawdenoise-nind-linear.dtmodel".into(),
+        size_bytes: 57_700_134,
+        sha256: "d71b5f1e727c85a359e6f74dca9e2016c9d8fc3e2f7ac3e9b347d80ceca969af".into(),
+    };
+    Known { manifest, download: Some(download), entry: Some("model_linear.onnx") }
+}
+
 /// Every model LightCraft knows.
 pub fn all() -> Vec<Known> {
     #[cfg(feature = "rawnind-model")]
     {
-        vec![rawnind_bayer()]
+        vec![rawnind_bayer(), rawnind_linear()]
     }
     #[cfg(not(feature = "rawnind-model"))]
     {
@@ -79,6 +121,15 @@ pub fn by_sha256(sha256: &str) -> Option<DenoiserManifest> {
     all().into_iter().map(|k| k.manifest).find(|m| m.sha256.as_deref() == Some(sha256))
 }
 
+/// The model whose download archive has this SHA-256. One archive can hold more than one model (darktable publishes a
+/// Bayer and a linear RawNIND in the same file), so `expected` — the model a download was started for — decides; without
+/// it, or when it names another archive, the first match is taken.
+pub fn by_download_sha256(sha256: &str, expected: Option<&str>) -> Option<Known> {
+    let matching: Vec<Known> = all().into_iter().filter(|k| k.download.as_ref().is_some_and(|d| d.sha256 == sha256)).collect();
+    let chosen = expected.and_then(|id| matching.iter().position(|k| k.manifest.id == id)).or_else(|| (!matching.is_empty()).then_some(0));
+    chosen.and_then(|i| matching.into_iter().nth(i))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,6 +140,7 @@ mod tests {
         let all = all();
         assert_eq!(all.is_empty(), !cfg!(feature = "rawnind-model"));
         validate(&rawnind_bayer().manifest).unwrap();
+        validate(&rawnind_linear().manifest).unwrap();
         for (i, k) in all.iter().enumerate() {
             validate(&k.manifest).unwrap();
             assert!(all.iter().skip(i + 1).all(|o| o.manifest.id != k.manifest.id), "unique ids");
@@ -105,11 +157,45 @@ mod tests {
             }
         }
         assert_eq!(find("rawnind-bayer").is_some(), cfg!(feature = "rawnind-model"));
+        assert_eq!(find("rawnind-linear").is_some(), cfg!(feature = "rawnind-model"));
         assert!(find("nothing").is_none());
         assert_eq!(
             by_sha256("da27509dab6a2915da67e988acd86cf71f9d5bbc8d1aa0ed32933578a887b901").map(|m| m.id),
             if cfg!(feature = "rawnind-model") { Some("rawnind-bayer".into()) } else { None }
         );
+        assert_eq!(
+            by_sha256("df957efadcc152c007d5d3b0917bdff9e41c0d4a0efe56584ef30b36393cd181").map(|m| m.id),
+            if cfg!(feature = "rawnind-model") { Some("rawnind-linear".into()) } else { None }
+        );
+    }
+
+    /// Darktable publishes both RawNIND models in one archive: a download is identified by the model it was started for,
+    /// so the two must also stage under different names for that to be possible side by side.
+    #[test]
+    fn one_archive_stages_under_a_name_per_model() {
+        let (Some(bayer), Some(linear)) = (rawnind_bayer().download, rawnind_linear().download) else {
+            return;
+        };
+        assert_eq!(bayer.sha256, linear.sha256, "the same archive");
+        assert_ne!(bayer.file_name, linear.file_name, "two downloads of one archive would collide in the staging folder");
+    }
+
+    /// The archive's hash alone cannot say which of its models the user asked for; the id the download was started for does.
+    #[test]
+    fn an_archive_is_identified_by_the_model_it_was_started_for() {
+        if !cfg!(feature = "rawnind-model") {
+            return;
+        }
+        let archive = "d71b5f1e727c85a359e6f74dca9e2016c9d8fc3e2f7ac3e9b347d80ceca969af";
+        assert_eq!(
+            by_download_sha256(archive, Some("rawnind-linear")).map(|k| (k.manifest.id, k.entry)),
+            Some(("rawnind-linear".into(), Some("model_linear.onnx")))
+        );
+        assert_eq!(by_download_sha256(archive, Some("rawnind-bayer")).map(|k| k.entry), Some(Some("model_bayer.onnx")));
+        // no id (a file the user picked), or one that names another archive: the first model it holds
+        assert_eq!(by_download_sha256(archive, None).map(|k| k.manifest.id).as_deref(), Some("rawnind-bayer"));
+        assert_eq!(by_download_sha256(archive, Some("nothing")).map(|k| k.manifest.id).as_deref(), Some("rawnind-bayer"));
+        assert!(by_download_sha256("00", None).is_none());
     }
 }
 

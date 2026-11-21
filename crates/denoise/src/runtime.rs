@@ -7,7 +7,7 @@ use web_time::Instant;
 
 use serde::Serialize;
 
-use crate::manifest::{DenoiserManifest, Gain};
+use crate::manifest::{DenoiserManifest, Domain, Gain};
 use crate::run::{Error, TileRunner};
 
 /// What `self_test` found.
@@ -63,7 +63,8 @@ impl TileRunner for CpuRunner {
 fn self_test(runner: &dyn TileRunner, manifest: &DenoiserManifest, load_ms: f64) -> SelfTest {
     let t = manifest.tile as usize;
     let mut checks: Vec<(String, bool)> = Vec::new();
-    let (input, base) = test_tile(t);
+    let is_linear_rgb = manifest.domain == Domain::LinearRgb;
+    let (input, base) = if is_linear_rgb { test_tile_linear_rgb(t) } else { test_tile(t) };
     let (mut times, mut scale) = (Vec::new(), 0.0f64);
     let mut run = || {
         let started = Instant::now();
@@ -79,17 +80,48 @@ fn self_test(runner: &dyn TileRunner, manifest: &DenoiserManifest, load_ms: f64)
                 "gives the same answer for the same tile".into(),
                 a.iter().zip(b).all(|(x, y)| (x - y).abs() <= 1e-4 * x.abs().max(y.abs()).max(1e-9)),
             ));
-            let side = 2 * t;
+            let side = if is_linear_rgb { t } else { 2 * t };
             let mean_in = base.iter().map(|&v| f64::from(v)).sum::<f64>() / base.len().max(1) as f64;
             let mean_out = a.iter().map(|&v| f64::from(v)).sum::<f64>() / a.len().max(1) as f64;
-            scale = if mean_in > 0.0 { mean_out / mean_in } else { 0.0 };
+            scale = if mean_in.abs() > 0.0 { mean_out / mean_in } else { 0.0 };
             if let Gain::MatchMean { nominal, max_deviation } = manifest.gain {
                 let ratio = scale / f64::from(nominal);
                 let tolerance = f64::from(max_deviation).max(0.05) * 4.0;
                 checks.push((format!("its scale is the {nominal:.3e} the description says (found {scale:.3e})"), (ratio - 1.0).abs() <= tolerance));
             }
-            // noise left after bringing the answer back to the input's scale, against the noise that went in
-            let g = if scale > 0.0 { 1.0 / scale } else { 1.0 };
+            // The noise left after bringing the answer back to the input's scale, against the noise that went in. The
+            // photo path's own rule is followed, or the diagnostic would judge a picture the engine never makes: each
+            // colour plane's gain measured on its own for a linear picture (one pooled reciprocal would leave a model
+            // whose planes drift apart looking as if it kept the noise), clamped to the window the manifest gives, and no
+            // scale taken out at all for a model that says its answer is already on the input's.
+            let g = if is_linear_rgb {
+                let cells = t * t;
+                let mut per = [1.0f64; 3];
+                if let Gain::MatchMean { nominal: declared, max_deviation } = manifest.gain {
+                    // the same window the photo path clamps to, ordered by the sign of the scale, so a model whose
+                    // scale is negative is judged instead of panicking on a window whose bounds are the wrong way round
+                    let (lo, hi) = crate::manifest::gain_window(declared, max_deviation);
+                    let (lo, hi) = (f64::from(lo), f64::from(hi));
+                    let nominal = f64::from(declared);
+                    for (c, gc) in per.iter_mut().enumerate() {
+                        let measured = if mean_in.abs() > 0.0 {
+                            a.get(c * cells..(c + 1) * cells).map(|plane| {
+                                let mean = plane.iter().map(|&v| f64::from(v)).sum::<f64>() / cells as f64;
+                                (mean / mean_in).clamp(lo, hi)
+                            })
+                        } else {
+                            None
+                        };
+                        let gain = measured.filter(|g| g.abs() > 0.0).unwrap_or(nominal);
+                        if gain.abs() > 0.0 {
+                            *gc = 1.0 / gain;
+                        }
+                    }
+                }
+                per
+            } else {
+                [if scale.abs() > 0.0 { 1.0 / scale } else { 1.0 }; 3]
+            };
             let (mut noise_in, mut noise_out, mut n_in, mut n_out) = (0.0f64, 0.0f64, 0usize, 0usize);
             for (i, (&v, &s)) in input.iter().zip(base.iter().cycle()).enumerate() {
                 // centre of each plane only: edges are the model's guess
@@ -102,8 +134,9 @@ fn self_test(runner: &dyn TileRunner, manifest: &DenoiserManifest, load_ms: f64)
             for c in 0..3 {
                 for y in side / 4..3 * side / 4 {
                     for x in side / 4..3 * side / 4 {
-                        if let (Some(&o), Some(&s)) = (a.get(c * side * side + y * side + x), base.get((y / 2) * t + x / 2)) {
-                            noise_out += (f64::from(o) * g - f64::from(s)).powi(2);
+                        let sample_idx = if is_linear_rgb { y * t + x } else { (y / 2) * t + x / 2 };
+                        if let (Some(&o), Some(&s)) = (a.get(c * side * side + y * side + x), base.get(sample_idx)) {
+                            noise_out += (f64::from(o) * g[c] - f64::from(s)).powi(2);
                             n_out += 1;
                         }
                     }
@@ -119,7 +152,7 @@ fn self_test(runner: &dyn TileRunner, manifest: &DenoiserManifest, load_ms: f64)
         ok: !checks.is_empty() && checks.iter().all(|(_, ok)| *ok),
         load_ms,
         tile_ms: times.get(times.len() / 2).copied().unwrap_or(0.0),
-        tile_megapixels: (2 * t * 2 * t) as f64 / 1e6,
+        tile_megapixels: ((if is_linear_rgb { t * t } else { 2 * t * 2 * t }) as f64) / 1e6,
         scale,
         checks,
     }
@@ -142,6 +175,29 @@ pub fn test_tile(t: usize) -> (Vec<f32>, Vec<f32>) {
     let input = (0..4 * t * t)
         .map(|i| {
             // sum of four uniforms: close to Gaussian, deviation 0.0577 × 2 before scaling
+            let n = next() + next() + next() + next() - 2.0;
+            base.get(i % (t * t)).copied().unwrap_or(0.0) + 0.05 * n
+        })
+        .collect();
+    (input, base)
+}
+
+/// A deterministic test tile for linear RGB: three planes of a smooth gradient with noise on top, and the gradient
+/// alone for one plane (`tile × tile`).
+pub fn test_tile_linear_rgb(t: usize) -> (Vec<f32>, Vec<f32>) {
+    if t == 0 || t > 2048 {
+        return (Vec::new(), Vec::new());
+    }
+    let mut seed = 0x2545_f491u32;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        (seed >> 8) as f32 / (1u32 << 24) as f32
+    };
+    let base: Vec<f32> = (0..t * t).map(|i| 0.12 + 0.3 * (((i % t) + (i / t)) as f32 / (2 * t) as f32)).collect();
+    let input = (0..3 * t * t)
+        .map(|i| {
             let n = next() + next() + next() + next() - 2.0;
             base.get(i % (t * t)).copied().unwrap_or(0.0) + 0.05 * n
         })
@@ -179,11 +235,40 @@ pub fn check_tile(t: usize) -> Vec<f32> {
         .collect()
 }
 
+/// A tile for checking that two runners of one linear-RGB model agree (`3` planes of `tile × tile`).
+pub fn check_tile_linear_rgb(t: usize) -> Vec<f32> {
+    if t == 0 || t > 2048 {
+        return Vec::new();
+    }
+    let mut seed = 0x9e37_79b9u32;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        (seed >> 8) as f32 / (1u32 << 24) as f32
+    };
+    let (edge, span) = ((t / 8).max(1), (2 * t).saturating_sub(2).max(1) as f32);
+    (0..3 * t * t)
+        .map(|i| {
+            let (x, y) = ((i % (t * t)) % t, (i % (t * t)) / t);
+            let n = next() + next() + next() + next() - 2.0;
+            if x < edge && y < edge {
+                0.0
+            } else if x + edge >= t && y + edge >= t {
+                1.0
+            } else {
+                ((x + y) as f32 / span + 0.05 * n).clamp(0.0, 1.0)
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::licence::Licence;
-    use crate::manifest::Domain;
+    use crate::manifest::{Domain, Gain, LinearSpace};
+    use crate::synthetic;
     use crate::synthetic_proto::{len_field, value_info_bytes};
 
     fn varint(mut v: u64, out: &mut Vec<u8>) {
@@ -282,6 +367,7 @@ mod tests {
             size_bytes: None,
             provenance: String::new(),
             domain: Domain::BayerToRgb,
+            space: LinearSpace::CameraRgb,
             tile,
             overlap: 16,
             gain: Gain::MatchMean { nominal, max_deviation: 0.05 },
@@ -307,6 +393,85 @@ mod tests {
             assert!((out[c * 128 * 128 + (2 * y + 1) * 128 + 2 * x] - 1000.0 * input[plane * 64 * 64 + y * 64 + x]).abs() < 1e-2);
         }
         let _ = std::fs::remove_file(p);
+    }
+
+    /// Verifies that a linear RGB model loads into CpuRunner, executes tiles, and passes runtime self-test checks.
+    #[test]
+    fn linear_rgb_model_loads_runs_and_passes_self_test() {
+        let mut m = manifest(64, 1.0);
+        m.domain = Domain::LinearRgb;
+        let p = temp_model("ok-linear", &synthetic::smoothing_linear_rgb_onnx());
+        let r = CpuRunner::load(&p, &m).unwrap();
+        let input: Vec<f32> = (0..3 * 64 * 64).map(|i| (i % 97) as f32 / 97.0).collect();
+        let out = r.run(&input).unwrap();
+        assert_eq!(out.len(), 3 * 64 * 64);
+
+        let t = r.self_test();
+        assert!(t.ok, "self test passed: {t:?}");
+        assert_eq!(t.tile_megapixels, (64 * 64) as f64 / 1e6);
+        let _ = std::fs::remove_file(p);
+    }
+
+    /// The diagnostic matches each linear-RGB plane on its own, as the photo path does: a model whose planes have
+    /// different scales passes when each plane is brought back correctly, instead of failing on a pooled scale — and a
+    /// model that says its answer is already on the input's scale is taken at its word, as the photo path does.
+    #[test]
+    fn the_self_test_reads_each_plane_scale_on_its_own() {
+        struct Planes;
+        impl TileRunner for Planes {
+            fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error> {
+                // the three planes averaged (so the noise goes down), then each written out on a scale of its own
+                let cell = (input.len() / 3).max(1);
+                let t = cell.isqrt();
+                let plane = t * t;
+                let scale = [1.0f32, 2.0, 2.0];
+                let mut out = vec![0.0f32; 3 * plane];
+                for i in 0..plane {
+                    let mean = (input[i] + input[plane + i] + input[2 * plane + i]) / 3.0;
+                    for c in 0..3 {
+                        out[c * plane + i] = mean * scale[c];
+                    }
+                }
+                Ok(out)
+            }
+        }
+        let mut m = manifest(64, 1.0);
+        m.domain = Domain::LinearRgb;
+        // the window the photo path would clamp these gains to holds all three of them (1 against 2 against 2)
+        m.gain = Gain::MatchMean { nominal: 2.0, max_deviation: 0.5 };
+        let t = self_test(&Planes, &m, 0.0);
+        assert!(t.ok, "each plane's own scale is taken out: {t:?}");
+        // a model that declares no scale of its own is not rescaled here either: the photo keeps what it gives
+        m.gain = Gain::None;
+        assert!(!self_test(&Planes, &m, 0.0).ok, "a model that says its scale is the input's is judged on the answer it gives");
+    }
+
+    /// The X-Trans model's scale is negative (−3.184e9), so a window written as `nominal × (1 ∓ deviation)` comes out
+    /// with its low bound above its high bound, and clamping to it panics. The window is ordered by sign instead, as the
+    /// photo path does, so a negative-scale model's self-test runs and passes.
+    #[test]
+    fn the_self_test_handles_a_model_whose_scale_is_negative() {
+        struct Negative;
+        impl TileRunner for Negative {
+            fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error> {
+                // the planes averaged (so the noise goes down), then written out on a scale of −2
+                let plane = (input.len() / 3).max(1);
+                let mut out = vec![0.0f32; 3 * plane];
+                for i in 0..plane {
+                    let mean = (input[i] + input[plane + i] + input[2 * plane + i]) / 3.0;
+                    for c in 0..3 {
+                        out[c * plane + i] = mean * -2.0;
+                    }
+                }
+                Ok(out)
+            }
+        }
+        let mut m = manifest(64, -2.0);
+        m.domain = Domain::LinearRgb;
+        m.gain = Gain::MatchMean { nominal: -2.0, max_deviation: 0.15 };
+        let t = self_test(&Negative, &m, 0.0);
+        assert!(t.ok, "a negative scale is measured and taken out like a positive one: {t:?}");
+        assert!((t.scale / -2.0 - 1.0).abs() < 0.01, "the scale it reports is the model's own: {t:?}");
     }
 
     #[test]
@@ -418,6 +583,7 @@ mod cpu_tests {
             size_bytes: None,
             provenance: "synthetic test".into(),
             domain: crate::manifest::Domain::BayerToRgb,
+            space: crate::manifest::LinearSpace::CameraRgb,
             tile: 64,
             overlap: 16,
             gain: Gain::None,

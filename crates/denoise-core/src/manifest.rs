@@ -21,6 +21,48 @@ pub enum Domain {
     /// `[R, G1, G2, B]` of its 2 × 2 cells, forced to RGGB; gives camera RGB at the mosaic's resolution, so
     /// the picture is denoised and demosaiced in one step and must not be demosaiced again.
     BayerToRgb,
+    /// Demosaiced linear RGB packed as three planes `[R, G, B]` (NCHW), in the colour space [`DenoiserManifest::space`]
+    /// selects: linear camera RGB by default, or linear Rec. 2020 with the as-shot white balance and the camera matrix
+    /// applied. The answer must come back in the same space; the engine converts it to linear camera RGB for the
+    /// pipeline, so the product is always camera RGB. Sensor-agnostic (works for X-Trans, Bayer, Foveon, linear DNG,
+    /// HDR merges).
+    LinearRgb,
+}
+
+impl Domain {
+    /// The name the manifest's JSON uses.
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::BayerToRgb => "bayerToRgb",
+            Self::LinearRgb => "linearRgb",
+        }
+    }
+}
+
+/// The color space expected by a [`Domain::LinearRgb`] model.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LinearSpace {
+    /// Demosaiced linear Camera RGB in the camera's native sensor gamut (not white balanced, no camera matrix).
+    #[default]
+    CameraRgb,
+    /// Demosaiced linear Rec. 2020 with the camera's as-shot white balance and color matrix applied.
+    /// Inverted back to linear Camera RGB after denoising to preserve downstream non-destructive pipeline controls.
+    LinRec2020,
+}
+
+impl LinearSpace {
+    pub const fn is_default(&self) -> bool {
+        matches!(self, Self::CameraRgb)
+    }
+
+    /// The name the manifest's JSON uses.
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::CameraRgb => "cameraRgb",
+            Self::LinRec2020 => "linRec2020",
+        }
+    }
 }
 
 /// How the model's output scale is brought back to the input's.
@@ -34,6 +76,19 @@ pub enum Gain {
     /// dark to measure, or whose measured scale is further than `maxDeviation` (a fraction, 0.05 = 5 %) from
     /// `nominal`, is scaled as if it were within that limit.
     MatchMean { nominal: f32, max_deviation: f32 },
+}
+
+/// The window a tile's measured scale is clamped to for a `MatchMean` gain: `nominal` within `max_deviation` on either
+/// side, smaller bound first.
+///
+/// The bounds are ordered by the sign of `nominal`, so a linear-RGB model with a negative scale (the X-Trans model's is
+/// −3.184e9) gets a window that a clamp accepts. Written as `nominal × (1 ∓ deviation)`, such a model's low bound comes
+/// out above its high bound and clamping to it panics; validation lets a linear-RGB model be negative
+/// ([`validate`]), so the ordering belongs here rather than at one call site. `max_deviation` is validated to be
+/// non-negative and both to be finite, so the only other caller-side duty is not to pass an unvalidated gain.
+pub fn gain_window(nominal: f32, max_deviation: f32) -> (f32, f32) {
+    let (a, b) = (nominal * (1.0 - max_deviation), nominal * (1.0 + max_deviation));
+    if a <= b { (a, b) } else { (b, a) }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -57,6 +112,9 @@ pub struct DenoiserManifest {
     #[serde(default)]
     pub provenance: String,
     pub domain: Domain,
+    /// The color space expected for linear RGB models.
+    #[serde(default, skip_serializing_if = "LinearSpace::is_default")]
+    pub space: LinearSpace,
     /// Side of the square the model runs on, in packed cells (the file's fixed input size).
     pub tile: u32,
     /// Cells neighbouring tiles share; the picture is blended across them.
@@ -127,9 +185,17 @@ pub fn validate(m: &DenoiserManifest) -> Result<(), ManifestError> {
     if !m.overlap.is_multiple_of(2) || m.overlap < 16 || m.overlap.saturating_mul(2) >= m.tile {
         return bad("overlap", "must be even, at least 16 and less than half the tile");
     }
+    if m.domain != Domain::LinearRgb && m.space != LinearSpace::CameraRgb {
+        return bad("space", "only linearRgb models can specify a color space other than cameraRgb");
+    }
     if let Gain::MatchMean { nominal, max_deviation } = m.gain {
-        if !(nominal.is_finite() && (1e-6..=1e12).contains(&nominal)) {
-            return bad("gain.nominal", "must be between 0.000001 and 1000000000000");
+        let valid_nominal = if m.domain == Domain::LinearRgb {
+            nominal.is_finite() && (1e-6..=1e12).contains(&nominal.abs())
+        } else {
+            nominal.is_finite() && (1e-6..=1e12).contains(&nominal)
+        };
+        if !valid_nominal {
+            return bad("gain.nominal", "must be between 0.000001 and 1000000000000 (negative values only allowed for linearRgb)");
         }
         if !(max_deviation.is_finite() && (0.0..=0.5).contains(&max_deviation)) {
             return bad("gain.maxDeviation", "must be between 0 and 0.5");
@@ -164,6 +230,7 @@ mod tests {
             size_bytes: Some(31_000_000),
             provenance: "trained on real raw noise pairs".into(),
             domain: Domain::BayerToRgb,
+            space: LinearSpace::CameraRgb,
             tile: 512,
             overlap: 64,
             gain: Gain::MatchMean { nominal: 1.0e6, max_deviation: 0.05 },
@@ -174,6 +241,34 @@ mod tests {
     fn a_good_manifest_round_trips() {
         let m = sample();
         let json = serde_json::to_vec(&m).unwrap();
+        assert_eq!(parse(&json).unwrap(), m);
+    }
+
+    /// The window is ordered by the sign of the scale: a linear-RGB model's negative scale must not produce a low
+    /// bound above its high bound, which would make every clamp to it panic.
+    #[test]
+    fn the_gain_window_is_ordered_by_the_sign_of_the_scale() {
+        let (lo, hi) = gain_window(1.0e6, 0.05);
+        assert!((lo - 950_000.0).abs() < 10.0 && (hi - 1_050_000.0).abs() < 10.0, "a positive scale: {lo}, {hi}");
+        // rawnind-linear's own numbers: −3.184e9 ± 15 %
+        let (lo, hi) = gain_window(-3.184e9, 0.15);
+        assert!(lo < hi, "a negative scale gets a window the right way round: {lo} < {hi}");
+        assert!((lo + 3.184e9 * 1.15).abs() / 3.184e9 < 1e-6);
+        assert!((hi + 3.184e9 * 0.85).abs() / 3.184e9 < 1e-6);
+        // zero deviation is a window of one value either way
+        assert_eq!(gain_window(-2.0, 0.0), (-2.0, -2.0));
+    }
+
+    /// A manifest specifying Domain::LinearRgb and LinearSpace::LinRec2020 serializes and round-trips cleanly.
+    #[test]
+    fn linear_rgb_manifest_round_trips() {
+        let mut m = sample();
+        m.id = "linear-denoiser".into();
+        m.domain = Domain::LinearRgb;
+        m.space = LinearSpace::LinRec2020;
+        let json = serde_json::to_vec(&m).unwrap();
+        assert!(String::from_utf8_lossy(&json).contains("\"domain\":\"linearRgb\""));
+        assert!(String::from_utf8_lossy(&json).contains("\"space\":\"linRec2020\""));
         assert_eq!(parse(&json).unwrap(), m);
     }
 
@@ -190,6 +285,7 @@ mod tests {
             ("tile", Box::new(|m| m.tile = 4096)),
             ("overlap", Box::new(|m| m.overlap = 300)),
             ("overlap", Box::new(|m| m.overlap = 63)),
+            ("space", Box::new(|m| m.space = LinearSpace::LinRec2020)),
             ("gain.maxDeviation", Box::new(|m| m.gain = Gain::MatchMean { nominal: 1.0, max_deviation: f32::NAN })),
             ("gain.maxDeviation", Box::new(|m| m.gain = Gain::MatchMean { nominal: 1.0, max_deviation: 2.0 })),
             ("gain.nominal", Box::new(|m| m.gain = Gain::MatchMean { nominal: 0.0, max_deviation: 0.1 })),
