@@ -389,3 +389,50 @@ fn show_original_does_not_light_the_before_after_button() {
     assert_eq!(h.request("ui.clickWidget", json!({"id": "icon:beforeAfter"}), T)["ok"], true);
     assert_eq!(h.app.ui.before_after, BeforeAfter::Off, "a second click closes it");
 }
+
+/// #2248: until the Before render of a photo arrives, its preview and thumbnail (which show the
+/// current, edited settings) don't stand in for it, so switching photos with Before on no longer
+/// flashes the edits first. They still stand in for the After view, and for Before when the photo's
+/// settings are its before settings (nothing to tell apart).
+#[test]
+fn an_edited_photo_shows_no_edited_stand_in_for_before() {
+    use crate::panels::detail::stand_in_shows;
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let id = app.session.visible_cloned()[0];
+    app.session.execute("library.select", &json!({"ids": [id.0], "active": id.0})).unwrap();
+    app.session.execute("beforeAfter.setBefore", &json!({"source": "current"})).unwrap();
+    assert!(stand_in_shows(&app, id, Slot::Before), "settings = before settings: the stand-in looks the same");
+    app.session.execute("develop.set", &json!({"control": "light.exposure", "value": 1.5})).unwrap();
+    assert!(!stand_in_shows(&app, id, Slot::Before), "edited: the stand-in would show the edits");
+    assert!(stand_in_shows(&app, id, Slot::Main), "the After view still uses the stand-in");
+    assert!(stand_in_shows(&app, id, Slot::Preview));
+}
+
+/// With no stand-in for an edited photo's Before view (#2248), the view says why it is empty while
+/// its render is on its way, as the After view does, instead of a blank frame.
+#[test]
+fn an_empty_before_view_says_it_is_rendering() {
+    use std::{cell::Cell, rc::Rc};
+    let says = |h: &Headless| {
+        h.view.shapes.iter().any(|c| matches!(&c.shape, egui::epaint::Shape::Text(t) if t.galley.text() == crate::i18n::tr("Rendering…")))
+    };
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+    h.app.ui.settings.loupe_messages = true;
+    let id = h.app.session.visible_cloned()[2];
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0], "active": id.0}}), T);
+    h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 1.5}}), T);
+    h.settle(SETTLE);
+    // the Before render is held back: nothing of its own to draw, and no stand-in for an edited photo
+    let open = Rc::new(Cell::new(false));
+    h.app.renderer.set_offload(Box::new(RenderGate::new(open.clone())));
+    h.app.ui.view = ViewMode::Detail;
+    h.app.ui.before_after = BeforeAfter::Original;
+    for _ in 0..5 {
+        h.step();
+    }
+    assert!(h.app.renderer.textures.get(&Slot::Before).is_none_or(|t| t.photo != id), "no Before render of the photo yet");
+    assert!(says(&h), "the empty Before view says it is rendering");
+    open.set(true);
+    assert!(h.step_until(SETTLE, |h| !says(h)), "gone once the render lands");
+}
