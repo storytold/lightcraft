@@ -73,6 +73,11 @@ fn japanese_photo_and_postcard_papers() {
         ("四切", "4cut"),
         ("名刺", "business-card"),
         ("A4", "a 4"),
+        ("Ａ４", "a4"),
+        ("２Ｌ判", "2l"),
+        ("６切", "6cut"),
+        ("４ × ６", "4x6"),
+        ("（ｋｇ判）", "kg"),
         ("4 × 6", "4x6"),
     ] {
         assert_eq!(paper_size(a), paper_size(b), "{a} vs {b}");
