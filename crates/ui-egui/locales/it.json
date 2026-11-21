@@ -2621,5 +2621,7 @@
   "Welcome": "Benvenuto",
   "Next": "Avanti",
   "Get Started": "Inizia",
-  "Stopped at the scan limit: there may be more photos": "Fermati al limite di scansione: potrebbero esserci altre foto"
+  "Stopped at the scan limit: there may be more photos": "Fermati al limite di scansione: potrebbero esserci altre foto",
+  "Show this curve's effect": "Mostra l'effetto di questa curva",
+  "Hide this curve's effect": "Nascondi l'effetto di questa curva"
 }

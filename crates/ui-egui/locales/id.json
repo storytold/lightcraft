@@ -2428,5 +2428,7 @@
   "Top bar": "Bilah atas",
   "Tool strip": "Bilah alat",
   "Bottom bar": "Bilah bawah",
-  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto"
+  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto",
+  "Show this curve's effect": "Tampilkan efek kurva ini",
+  "Hide this curve's effect": "Sembunyikan efek kurva ini"
 }

@@ -172,6 +172,33 @@ impl RenderJob {
         self
     }
 
+    /// Render with some Tone Curve channels (parametric, point, red, green, blue) switched off for
+    /// viewing (the curve's eye in the Edit panel): the parametric curve's four regions at 0 (its
+    /// splits kept), a point curve flat. As [`Self::with_hidden_grading`], the photo's settings are
+    /// untouched; the result gets its own key and is never cached as the photo's preview or thumbnail.
+    pub fn with_hidden_curves(mut self, hidden: [bool; 5]) -> Self {
+        if !hidden.iter().any(|h| *h) {
+            return self;
+        }
+        let mut s = (*self.settings).clone();
+        let c = &mut s.curve;
+        if hidden[0] {
+            (c.highlights, c.lights, c.darks, c.shadows) = (0.0, 0.0, 0.0, 0.0);
+        }
+        for (off, points) in hidden.into_iter().skip(1).zip([&mut c.master, &mut c.red, &mut c.green, &mut c.blue]) {
+            if off {
+                points.clear();
+            }
+        }
+        let bits = hidden.iter().enumerate().fold(0u64, |b, (i, h)| b | ((*h as u64) << i));
+        self.key ^= s.hash64() ^ self.settings.hash64() ^ bits.wrapping_mul(0x9e6c_63d0_676a_9a99);
+        self.settings = Arc::new(s);
+        self.cache = None;
+        self.view_cache = None;
+        self.preview_cut = None;
+        self
+    }
+
     /// Reuse `stages` across this view's renders.
     pub fn with_stages(mut self, stages: Arc<StageCache>) -> Self {
         self.stages = Some(stages);

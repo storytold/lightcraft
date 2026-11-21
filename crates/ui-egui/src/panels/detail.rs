@@ -156,6 +156,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     };
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return };
     brief_info(app, ui.ctx(), id);
+    app.ui.forget_hidden_except(id);
     let d = (*photo.develop).clone();
     // the full-screen preview shows the photo only: no tool overlays
     let right = if fullscreen { RightPanel::None } else { app.ui.right };
@@ -951,6 +952,7 @@ fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: 
         let job = if interacting { job } else { job.with_display_fit(fit_px[0], fit_px[1]) };
         let job = job.with_overlay(overlay).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
         let job = job.with_hidden_grading(app.ui.grading_hidden_for(id));
+        let job = job.with_hidden_curves(app.ui.curve_hidden_for(id));
         app.renderer.request(Slot::Main, job, 100);
         // the photo on screen comes first: background preparation waits while it is being made
         // (only then: this runs every loupe frame, and a render already shown asks for nothing)

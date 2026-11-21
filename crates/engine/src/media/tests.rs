@@ -69,6 +69,30 @@ fn hidden_grading_wheels_render_neutral_without_touching_the_photo() {
 }
 
 #[test]
+fn hidden_curve_channels_render_neutral_without_touching_the_photo() {
+    let mut s = crate::Session::with_demo();
+    let id = s.active().unwrap();
+    s.execute("develop.set", &serde_json::json!({"values": {"curve.highlights": 40, "curve.shadows": -30, "curve.splitMid": 60}})).unwrap();
+    s.execute("develop.curve", &serde_json::json!({"channel": "red", "points": [[0.0, 0.0], [0.5, 0.7], [1.0, 1.0]]})).unwrap();
+    s.execute("develop.curve", &serde_json::json!({"channel": "blue", "points": [[0.0, 0.0], [0.5, 0.3], [1.0, 1.0]]})).unwrap();
+    let job = s.loupe_job(id, 64, 64, true).unwrap();
+    let same = job.clone().with_hidden_curves([false; 5]);
+    assert_eq!(same.key, job.key, "nothing hidden: the job is unchanged");
+    assert!(same.view_cache.is_some());
+    let hidden = job.clone().with_hidden_curves([true, false, true, false, false]);
+    let c = &hidden.settings.curve;
+    assert_eq!((c.highlights, c.shadows), (0.0, 0.0), "the parametric regions are off");
+    assert_eq!(c.split_mid, 60.0, "its splits are kept");
+    assert!(c.red.is_empty(), "the red point curve is flat");
+    assert_eq!(c.blue.len(), 3, "a channel not hidden keeps its curve");
+    assert_ne!(hidden.key, job.key, "hidden channels get their own result key");
+    assert_ne!(hidden.key, job.clone().with_hidden_curves([true, false, false, false, false]).key, "each set of channels its own");
+    assert!(hidden.view_cache.is_none() && hidden.cache.is_none(), "never cached as the photo's preview");
+    let photo = s.catalog.photo(id).unwrap();
+    assert_eq!((photo.develop.curve.highlights, photo.develop.curve.red.len()), (40.0, 3), "the edit is untouched");
+}
+
+#[test]
 fn decoder_info_survives_render_jobs_cache_and_eviction() {
     let tone = lightcraft_pipeline::tone::CameraTone::new(std::array::from_fn(|i| {
         let x = 0.01 * (i + 1) as f32;
