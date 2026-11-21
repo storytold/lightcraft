@@ -78,7 +78,11 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
             } else {
                 std::process::Command::new("xdg-open").arg(url).status()
             };
-            status.map(|_| ()).map_err(|e| e.to_string())
+            // a browser command that ran but failed is a failure too (as for reveal below), so the
+            // caller can say so; rundll32's status doesn't tell
+            status
+                .map_err(|e| e.to_string())
+                .and_then(|s| if s.success() || cfg!(target_os = "windows") { Ok(()) } else { Err(format!("opening the link failed: {s}")) })
         })),
         reveal: Some(Box::new(|path: &str| {
             let status = if cfg!(target_os = "macos") {
