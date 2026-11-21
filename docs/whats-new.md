@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Remove is content-aware
+- The Remove tool now rebuilds what is under the brush from its surroundings, as Lightroom's Remove does, instead of
+  healing it from a source it picked by itself. Heal and Clone still copy from a source you can move.
+- Photos you already edited keep their look: Remove spots made before this update are now Heal spots, with the source
+  they had, because that is how they rendered. Remove spots you make from now on are content-aware. A library opened
+  with this version can't be opened by older versions of LightCraft any more.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
