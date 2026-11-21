@@ -490,9 +490,11 @@ mod hlg_tests {
         let header = crate::read_header(&png).unwrap();
         assert_eq!((header.format, header.width, header.height, header.orientation), (crate::Format::Png, 2, 1, 6));
         let decoded = crate::decode(&png, crate::DecodeOptions::default()).unwrap();
+        assert_eq!((decoded.width, decoded.height), (2, 1));
         assert_eq!(decoded.orientation, 6);
         assert_eq!(decoded.exif.as_deref(), Some(exif.as_slice()));
         assert_eq!(decoded.xmp.as_deref(), Some(xmp));
+        assert_eq!(decoded.to_srgb8().data, [[10, 120, 230, 255], [80, 40, 20, 255]]);
     }
 
     #[test]
