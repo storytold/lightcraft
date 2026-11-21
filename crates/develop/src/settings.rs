@@ -690,6 +690,11 @@ pub struct Optics {
     pub defringe_green_amount: f64,
     pub defringe_green_hue_lo: f64,
     pub defringe_green_hue_hi: f64,
+    /// Defringe pulls a fringe's colour toward the colours on the two sides of its edge instead of greying it, and
+    /// leaves colour that one side shares (a blue sign, a magenta-lit wall). Off: the hue-range desaturation, as
+    /// before. (Not a Lightroom setting: not written to XMP.)
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub defringe_protect: bool,
     pub distortion: f64,
     pub vignetting: f64,
     pub vignetting_midpoint: f64,
@@ -712,6 +717,7 @@ impl Default for Optics {
             defringe_green_amount: 0.0,
             defringe_green_hue_lo: 40.0,
             defringe_green_hue_hi: 60.0,
+            defringe_protect: false,
             distortion: 0.0,
             vignetting: 0.0,
             vignetting_midpoint: 50.0,

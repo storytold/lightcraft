@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Auto Defringe, and Defringe that protects colours
+- Optics ▸ Defringe has an Auto button (`develop.autoDefringe`). It turns on Remove Chromatic Aberration for the
+  red/cyan and blue/yellow edges, then finds the purple fringes and halos along high-contrast edges next to
+  highlights and sets Defringe for them, in one undo step. A fringe is colour that stands out beyond both sides of
+  its edge and is only a line along it: a blue sign, a magenta-lit wall or a violet evening sky is left alone.
+  Green is left to you (foliage looks like green fringes everywhere).
+- Defringe's new Protect Colours (which Auto turns on) turns a fringe into the colours beside it instead of grey,
+  and leaves colour one side of an edge shares. Edits made before keep the old Defringe.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

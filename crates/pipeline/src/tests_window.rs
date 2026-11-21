@@ -567,3 +567,37 @@ fn diagnostic_overlays_in_a_window_match_the_full_render() {
     hdr.light.exposure = 1.5;
     check_overlay("hdr range", &hdr, Overlay::HdrRange, MID, 1, 0.1);
 }
+
+/// Protect Colours reads the colours on both sides of an edge, `2 × radius` away: a window that starts on a fringe
+/// renders it as the whole render does (its working window grows by that reach), with no margin asked for.
+#[test]
+fn defringe_protect_colours_window_matches_the_full_render() {
+    // a bright square on dark grey with a violet rim outside it
+    let src = Rgb32f::from_fn(400, 400, |x, y| {
+        let inside = (150..250).contains(&x) && (150..250).contains(&y);
+        let rim = (149..251).contains(&x) && (149..251).contains(&y);
+        if inside {
+            [0.9; 3]
+        } else if rim {
+            [0.12, 0.02, 0.22]
+        } else {
+            [0.05, 0.04, 0.03]
+        }
+    });
+    let mut s = DevelopSettings::default();
+    s.optics.defringe_purple_amount = 20.0;
+    (s.optics.defringe_purple_hue_lo, s.optics.defringe_purple_hue_hi) = (0.0, 100.0);
+    s.optics.defringe_protect = true;
+    // rendered at 4 × the source, so the fringe's reach is wider than the rim
+    let fit = RenderRequest::fit(1600, 1600);
+    let whole = render(&src, &SourceInfo::default(), &s, &fit).image;
+    let mut plain = s.clone();
+    plain.optics.defringe_purple_amount = 0.0;
+    let before = render(&src, &SourceInfo::default(), &plain, &fit).image;
+    assert_ne!(whole.get(597, 760), before.get(597, 760), "Protect Colours changes the rim");
+    // the window's left edge on the rim's left side
+    let win = PixelWindow { x: 596, y: 700, w: 120, h: 120 };
+    let part = render(&src, &SourceInfo::default(), &s, &RenderRequest { window: Some(win), ..fit }).image;
+    let (max, _) = compare_inset(&whole, &part, win, 0);
+    assert!(max <= 2, "the window differs from the whole render by {max}");
+}

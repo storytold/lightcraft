@@ -774,6 +774,42 @@ pub fn specs() -> Vec<CommandSpec> {
             })?;
             Ok(json!({"temp": t, "tint": tint}))
         }),
+        cmd!(
+            "develop.autoDefringe",
+            "Auto Defringe",
+            [],
+            None,
+            "{} — turn on Remove Chromatic Aberration (red/cyan, blue/yellow edges), then measure the purple fringes and halos along bright, high-contrast edges of the active photo and set the purple Defringe sliders, with Protect Colours, to take them out (one undo step); colour a side of its edge shares is not a fringe, the green sliders are left as they are (foliage looks like green fringes) → {found: purple fringes found, removeCa: whether this turned Remove Chromatic Aberration on, purpleAmount?, purpleHueLo?, purpleHueHi?}",
+            has_active,
+            |s, _p| {
+                const C: &str = "develop.autoDefringe";
+                let id = active(s, C)?;
+                // fringes are a few pixels wide: measured on the preview, not a thumbnail
+                let src = s.source_now(id, SourceLevel::Preview).map_err(|e| bad(C, e))?;
+                let info = s.source_info(id);
+                let d = s.develop_of(id).unwrap_or_default();
+                let req = lightcraft_pipeline::RenderRequest::fit(2048, 2048);
+                let found = lightcraft_pipeline::auto_defringe(&src, &info, &d, &req);
+                let ca = !d.optics.remove_ca;
+                if found.is_none() && !ca {
+                    return Ok(json!({"found": false, "removeCa": false}));
+                }
+                edit(s, C, "Auto Defringe", |d| {
+                    d.optics.remove_ca = true;
+                    if let Some(f) = found {
+                        f.apply(d);
+                    }
+                    Ok(())
+                })?;
+                let mut out = json!({"found": found.is_some(), "removeCa": ca});
+                if let Some(f) = found {
+                    out["purpleAmount"] = json!(f.purple_amount);
+                    out["purpleHueLo"] = json!(f.purple_hue_lo);
+                    out["purpleHueHi"] = json!(f.purple_hue_hi);
+                }
+                Ok(out)
+            }
+        ),
         cmd!("develop.treatment", "Black & White", ["Photo"], Some("V"), "{bw?: bool} (toggles when omitted)", has_active, |s, p| {
             edit(s, "develop.treatment", "Treatment", |d| {
                 let bw = p.get("bw").and_then(Value::as_bool).unwrap_or(d.treatment != Treatment::Bw);

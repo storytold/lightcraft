@@ -31,6 +31,7 @@ mod crop_rotate;
 mod crop_tool;
 mod curve;
 mod date_picker;
+mod defringe;
 mod dialog_copy;
 mod dialog_fit;
 mod dialog_primary;

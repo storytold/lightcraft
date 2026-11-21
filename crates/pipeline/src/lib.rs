@@ -527,6 +527,16 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
                 let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
                 work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
             }
+            // Defringe reads lightness `radius` around each pixel, and Protect Colours the colours `2 × radius` away
+            // on both sides of an edge, through a 3 × 3 mean: keep those reads inside the rendered window too
+            if let Some(dp) = optics::defringe_params(s, px_per_long / optics::DEFRINGE_REF_LONG) {
+                let halo = if s.optics.defringe_protect { 3 * dp.radius + 2 } else { dp.radius };
+                let x = work.x.saturating_sub(halo);
+                let y = work.y.saturating_sub(halo);
+                let right = work.x.saturating_add(work.w).saturating_add(halo).min(full_w);
+                let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
+                work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
+            }
             if work != win {
                 keep = Some(PixelWindow { x: win.x - work.x, y: win.y - work.y, ..win });
             }
@@ -811,6 +821,23 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         lap("visualize hdr", &mut t);
     }
     Rendered { image, histogram, deep: None }
+}
+
+/// Auto Defringe of `s` for a render fitting `req`: the Defringe sliders that take out the photo's purple and green
+/// fringes ([`optics::estimate_defringe`]), measured on the image Defringe itself works on (resampled, local tone,
+/// white balance, lateral chromatic aberration corrected; the current Defringe left out), or `None` when it has none.
+pub fn auto_defringe(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> Option<optics::DefringeSliders> {
+    let effective = s.effective();
+    let mut rendition = settings_for(&effective, req).into_owned();
+    rendition.optics.defringe_purple_amount = 0.0;
+    rendition.optics.defringe_green_amount = 0.0;
+    // lateral chromatic aberration (red/cyan, blue/yellow edges) is Remove Chromatic Aberration's: corrected first,
+    // as Auto Defringe turns it on, so its edges aren't taken for purple or green fringes
+    rendition.optics.remove_ca = true;
+    let plan = plan(src, info, &rendition, req);
+    let mut img = plan.frame.sample(src, plan.w, plan.h);
+    lin_cpu(&mut img, info, &plan);
+    optics::estimate_defringe(&img, plan.px_per_long / optics::DEFRINGE_REF_LONG)
 }
 
 /// The colour a colour-range mask would sample at normalized image point `p` (OkLab of the
