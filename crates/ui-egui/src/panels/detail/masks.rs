@@ -186,7 +186,7 @@ pub(super) fn region_overlay(
         let (text, text_color, fill_alpha, invitation) = match (&r.name, hint.and_then(|h| h.suggestion.as_ref())) {
             (Some(n), _) => (n.clone(), Color32::from_gray(225), 235, false),
             (None, Some((n, _))) if is_face => (format!("{n}?"), Color32::from_gray(185), 200, false),
-            (None, None) if is_face && live.is_none() => ("Add name".to_string(), Color32::from_gray(150), 190, true),
+            (None, None) if is_face && live.is_none() => (crate::i18n::tr("Add name").to_string(), Color32::from_gray(150), 190, true),
             _ => continue,
         };
         // the name in a dark label with a caret, centred above the box (below it when there is no room)

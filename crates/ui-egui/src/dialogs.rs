@@ -1478,7 +1478,7 @@ fn export_format_rows(ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOptions) {
         } else {
             "The original files, unchanged, each with an XMP sidecar holding its edits."
         };
-        ui.label(egui::RichText::new(note).color(t.text_dim));
+        ui.label(egui::RichText::new(crate::i18n::tr(note)).color(t.text_dim));
     }
     if opts.format != before {
         // each format starts at its own default depth (TIFF 16-bit, others 8-bit)

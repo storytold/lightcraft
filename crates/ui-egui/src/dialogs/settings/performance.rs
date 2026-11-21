@@ -299,18 +299,23 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         match r {
             Ok(v) => {
                 let failed = v["failed"].as_array().map_or(0, Vec::len);
-                let msg = match (existing, v["handled"].as_u64().unwrap_or(0)) {
-                    (_, 0) => "Smart previews folder changed".to_string(),
-                    ("move", n) => format!("Smart previews folder changed; moved {n}"),
-                    ("discard", n) => format!("Smart previews folder changed; deleted {n}"),
-                    _ => "Smart previews folder changed".to_string(),
-                };
+                let msg = smart_previews_moved(existing, v["handled"].as_u64().unwrap_or(0));
                 app.toast(ui.ctx(), if failed > 0 { crate::i18n::tr_format!("{msg} ({failed} failed)", failed = failed, msg = msg) } else { msg });
             }
             Err(e) => app.toast(ui.ctx(), e),
         }
     }
     hint(ui, t, crate::i18n::tr("Keep it on a drive with room: smart previews are about 1 MB per photo. The thumbnail cache stays in the library."));
+}
+
+/// The toast after the smart previews folder changed, in the UI language: how many previews were
+/// moved or deleted (`existing` is the choice Existing previews made).
+fn smart_previews_moved(existing: &str, handled: u64) -> String {
+    match (existing, handled) {
+        ("move", n) if n > 0 => crate::i18n::tr_format!("Smart previews folder changed; moved {n}", n = n),
+        ("discard", n) if n > 0 => crate::i18n::tr_format!("Smart previews folder changed; deleted {n}", n = n),
+        _ => crate::i18n::tr("Smart previews folder changed").to_string(),
+    }
 }
 
 /// The cache size limit saved in the settings, as an option of its own when the list doesn't offer
@@ -331,5 +336,20 @@ mod tests {
         assert_eq!(super::custom_cache_option(51_200), None, "offered");
         assert_eq!(super::custom_cache_option(10_240), Some((10_240, "10 GB".to_string())));
         assert_eq!(super::custom_cache_option(3000), Some((3000, "3000 MB".to_string())));
+    }
+
+    #[test]
+    fn the_smart_previews_toast_is_in_the_ui_language() {
+        use crate::i18n::{Locale, set_language};
+        set_language(Locale::De);
+        let moved = super::smart_previews_moved("move", 3);
+        let deleted = super::smart_previews_moved("discard", 2);
+        let none = super::smart_previews_moved("move", 0);
+        set_language(Locale::En);
+        assert_eq!(moved, "Ordner für Smart-Vorschauen geändert; 3 verschoben");
+        assert_eq!(deleted, "Ordner für Smart-Vorschauen geändert; 2 gelöscht");
+        assert_eq!(none, "Ordner für Smart-Vorschauen geändert");
+        assert_eq!(super::smart_previews_moved("move", 3), "Smart previews folder changed; moved 3");
+        assert_eq!(super::smart_previews_moved("leave", 5), "Smart previews folder changed");
     }
 }
