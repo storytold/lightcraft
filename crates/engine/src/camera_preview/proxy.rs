@@ -92,7 +92,7 @@ pub(super) fn proxies(
     min_fraction: f64,
     lens: Option<&LensGeometry>,
     embedded: Option<&lightcraft_develop::EmbeddedLens>,
-) -> Option<(Rgb32f, Rgb32f, Vec<bool>)> {
+) -> Option<(Rgb32f, Rgb32f, Vec<bool>, Option<lightcraft_codecs::NamedSpace>)> {
     let edge = (2 * size).max(384) as u32;
     let decoded = crate::files::decode_raw_preview(
         bytes,
@@ -105,6 +105,10 @@ pub(super) fn proxies(
     {
         return None;
     }
+    let jpeg_space = match decoded.space.origin {
+        lightcraft_codecs::SpaceOrigin::Container | lightcraft_codecs::SpaceOrigin::IccMatrixTrc => decoded.space.named,
+        _ => None,
+    };
     let mut reference = decoded.to_working();
     if crop.width == 0 || crop.height == 0 || reference.width == 0 || reference.height == 0 {
         return None;
@@ -163,7 +167,7 @@ pub(super) fn proxies(
     if raw.format != RawFormat::Cr3 {
         sensor.map_in_place(to_working);
     }
-    Some((sensor, reference, clipped))
+    Some((sensor, reference, clipped, jpeg_space))
 }
 
 /// The camera JPEG at exactly the sensor proxy's size, so the two pair pixel for pixel. Fitting it
@@ -322,7 +326,7 @@ pub(crate) fn profile_pairs(raw: &RawImage, bytes: &[u8], lens: Option<&LensGeom
         return None;
     }
     let transform = lightcraft_raw::color::camera_transform(raw, lightcraft_raw::color::as_shot_white_xy(raw));
-    let (sensor, reference, clipped) = proxies(raw, bytes, &transform, PROFILE_PROXY, 0.0, lens, None)?;
+    let (sensor, reference, clipped, _) = proxies(raw, bytes, &transform, PROFILE_PROXY, 0.0, lens, None)?;
     let to_camera = transform.matrix.inverse()?;
     // clipped sensor pixels don't record the scene's colour (see `fit_look`)
     let sensor = without_clipped(&sensor, &clipped).unwrap_or(sensor);
