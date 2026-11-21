@@ -638,7 +638,7 @@ fn legacy_relative_white_balance_renders_as_before_on_a_kelvin_raw() {
             if temp > 10000.0 && !blue_end {
                 continue;
             }
-            let mut s = DevelopSettings::default();
+            let mut s = DevelopSettings { process: lightcraft_develop::Process::V8.version(), ..DevelopSettings::default() };
             (s.wb.mode, s.wb.temp, s.wb.tint) = (WbMode::Custom, temp, tint);
             assert_eq!(s.wb.scale, WbScale::Legacy);
             let old = wb_matrix_for(&old_info, &s);
@@ -773,6 +773,63 @@ fn custom_white_balance_redevelops_in_camera_space() {
     // the as-shot white needs nothing
     s.wb.mode = WbMode::AsShot;
     assert!(wb_matrix_for(&info, &s).is_none());
+}
+
+#[test]
+fn saved_warm_green_wb_preserves_legacy_bradford_while_v10_uses_checked_fallback() {
+    use crate::local::wb_matrix_for;
+    use lightcraft_color::REC2020;
+    use lightcraft_color::cct::{temp_tint_to_xy, wb_matrix, wb_matrix_checked};
+    use lightcraft_develop::{Process, ProcessVersion, WbMode};
+
+    let info = SourceInfo { as_shot_temp: 5500.0, as_shot_tint: 0.0, ..Default::default() };
+    // Saved V8 (and reserved V9) edits in the reachable warm-green region (Bradford blue cone
+    // response <= 0.0) must reopen without upgrading and must keep the legacy Bradford result.
+    for (proc_num, expected_proc) in [(8, Process::V8), (9, Process::V8)] {
+        let saved_json = serde_json::json!({
+            "process": proc_num,
+            "wb": { "mode": "custom", "temp": 2000.0, "tint": 30.0 }
+        });
+        let saved = DevelopSettings::from_json(&saved_json).unwrap();
+        assert_eq!(saved.process, ProcessVersion(proc_num));
+        assert_eq!(saved.process.process(), expected_proc);
+        assert_eq!(saved.to_json()["process"], serde_json::json!(proc_num));
+        let legacy_m = wb_matrix_for(&info, &saved).unwrap();
+
+        // New V10 edit at the same warm-green WB uses the shared checked Mat3::IDENTITY fallback.
+        let mut v10 = DevelopSettings::default();
+        assert_eq!(v10.process.process(), Process::V10);
+        (v10.wb.mode, v10.wb.temp, v10.wb.tint) = (WbMode::Custom, 2000.0, 30.0);
+        let v10_reopened = DevelopSettings::from_json(&v10.to_json()).unwrap();
+        assert_eq!(v10_reopened.process, ProcessVersion(10));
+        let v10_m = wb_matrix_for(&info, &v10_reopened).unwrap();
+
+        assert_ne!(legacy_m, v10_m, "saved V{proc_num} edit must not silently adopt V10's checked fallback");
+    }
+
+    let saved = DevelopSettings::from_json(&serde_json::json!({
+        "process": 8,
+        "wb": { "mode": "custom", "temp": 2000.0, "tint": 30.0 }
+    }))
+    .unwrap();
+    let legacy_m = wb_matrix_for(&info, &saved).unwrap();
+    let mut v10 = DevelopSettings::default();
+    (v10.wb.mode, v10.wb.temp, v10.wb.tint) = (WbMode::Custom, 2000.0, 30.0);
+    let v10_m = wb_matrix_for(&info, &v10).unwrap();
+
+    // Verify exact correspondence to legacy wb_matrix (V8) vs checked wb_matrix_checked (V10).
+    let expected_shot = wb_matrix(&REC2020, temp_tint_to_xy(5500.0, 0.0)).inverse().unwrap();
+    let legacy_raw = wb_matrix(&REC2020, temp_tint_to_xy(2000.0, 30.0)).mul(&expected_shot);
+    let legacy_g = legacy_raw.apply([1.0, 1.0, 1.0]);
+    let legacy_y = legacy_g[0] * 0.2627 + legacy_g[1] * 0.6780 + legacy_g[2] * 0.0593;
+    let legacy_expected = legacy_raw.mul(&lightcraft_color::Mat3::diag(1.0 / legacy_y, 1.0 / legacy_y, 1.0 / legacy_y)).to_f32();
+    assert_eq!(legacy_m, legacy_expected);
+
+    let v10_raw = wb_matrix_checked(&REC2020, temp_tint_to_xy(2000.0, 30.0)).mul(&expected_shot);
+    let v10_g = v10_raw.apply([1.0, 1.0, 1.0]);
+    let v10_y = v10_g[0] * 0.2627 + v10_g[1] * 0.6780 + v10_g[2] * 0.0593;
+    let v10_expected = v10_raw.mul(&lightcraft_color::Mat3::diag(1.0 / v10_y, 1.0 / v10_y, 1.0 / v10_y)).to_f32();
+    assert_eq!(v10_m, v10_expected);
 }
 
 /// Every stored process number renders with a process this build knows: settings saved before
