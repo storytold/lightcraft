@@ -326,9 +326,17 @@ impl LightcraftApp {
         if self.shown_library == Some(generation) {
             return;
         }
-        // (the first library shown takes the place of none: nothing was searching another one)
+        // The first library shown replaces none; later switches invalidate both face review
+        // state and any similar-photo search belonging to the previous library.
         if self.shown_library.is_some() {
             crate::find_similar::library_changed(self);
+            self.ui.ignored_faces = None;
+            self.ui.person_selection = Default::default();
+            self.ui.dismissed_faces.clear();
+            self.ui.unnamed_selected.clear();
+            self.ui.unnamed_anchor = None;
+            self.caches.unnamed = None;
+            self.caches.person_page = None;
         }
         self.shown_library = Some(generation);
         if let Some(l) = self.session.library.as_ref().filter(|l| l.on_disk) {

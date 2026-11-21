@@ -599,6 +599,19 @@ fn obj(args: &Value, keys: &[&str]) -> Value {
 
 /// Run one tool.
 pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
+    // Never attach details left by a previous tool call to this tool's own validation error.
+    let _ = b.take_error_details();
+    let mut result = call_tool_inner(b, name, args);
+    if result.is_error
+        && let Some(details) = b.take_error_details()
+    {
+        result.structured = Some(json!({"error": result.content.first().and_then(|v| v["text"].as_str()), "errorDetails": details}));
+    }
+    result
+}
+
+/// Dispatch a tool; the outer wrapper attaches the backend's optional error details.
+fn call_tool_inner(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
     let args = if args.is_null() { &json!({}) } else { args };
     if !args.is_object() {
         return ToolResult::error("tool arguments must be an object");
@@ -652,7 +665,11 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
                     }
                     Err(e) => {
                         failed += 1;
-                        results.push(json!({"ok": false, "error": e}));
+                        let mut result = json!({"ok": false, "error": e});
+                        if let Some(details) = b.take_error_details() {
+                            result["errorDetails"] = details;
+                        }
+                        results.push(result);
                         if stop {
                             break;
                         }

@@ -26,7 +26,7 @@ mod xmp;
 pub use craft_metadata::DateTime;
 pub use craft_metadata::cr3;
 pub use craft_metadata::{Embedded, jpeg_segments, png_chunks, webp_chunks};
-pub use craft_metadata::{Flash, Gps, RegionKind};
+pub use craft_metadata::{Flash, Gps};
 pub use craft_metadata::{GpxError, Match, TrackPoint, Tracklog, parse_gpx};
 pub use craft_metadata::{TagRow, tag_rows};
 
@@ -89,6 +89,20 @@ pub struct Region {
     /// `mwg-rs:Name` (e.g. the person's name).
     pub name: Option<String>,
     pub description: Option<String>,
+}
+
+/// `mwg-rs:Type`, plus the catalog-only ignore state. Keep this local so shared metadata
+/// interchange cannot turn an ignored face back into an ordinary face.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RegionKind {
+    Face,
+    /// Explicitly ignored in the catalog; kept to prevent redetection and allow restoration.
+    IgnoredFace,
+    Pet,
+    Focus,
+    BarCode,
+    /// `mwg-rs:Type` was missing, empty, or a value we don't recognise.
+    Other(String),
 }
 
 /// Everything LightCraft shows or searches about a photo. All fields are optional; unknown = `None`/empty.

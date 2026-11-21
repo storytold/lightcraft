@@ -12,6 +12,7 @@ pub mod empty_library;
 pub mod filterbar;
 pub mod grid;
 pub mod histogram;
+pub mod ignored_faces;
 pub mod keyword_list;
 pub mod keywording;
 pub mod layout_overlay;

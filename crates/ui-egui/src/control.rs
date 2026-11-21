@@ -351,9 +351,18 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                 ctx.request_repaint();
                 return started;
             }
-            let r = app.run(id, params);
+            let r = app.run_typed(id, params);
             ctx.request_repaint();
-            wrap(r)
+            match r {
+                Ok(v) => ok(v),
+                Err(e) => {
+                    let mut reply = failure(&e);
+                    if let lightcraft_engine::ErrorKind::FaceRequest(details) = e.kind {
+                        reply["errorDetails"] = json!(details);
+                    }
+                    Outcome::Done(reply)
+                }
+            }
         }
         "engine.commands" => ok(all_commands(app)),
         "ui.menu.list" => ok(serde_json::to_value(crate::menus::menu_entries(app)).unwrap_or_default()),
