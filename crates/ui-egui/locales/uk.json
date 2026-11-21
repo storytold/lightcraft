@@ -2453,5 +2453,10 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Запустіть програму з --control 7980 (або LIGHTCRAFT_CONTROL_PORT), і lightcraft-cli mcp --connect під'єднає до неї одного агента.",
   "Welcome": "Ласкаво просимо",
   "Next": "Далі",
-  "Get Started": "Почати"
+  "Get Started": "Почати",
+  "Reduce Motion": "Зменшити рух",
+  "Reduce motion": "Зменшити рух",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Вимикає анімацію масштабування та індикаторів роботи. Плавні згасання залишаються. Доки ви не зміните це тут, діє системне налаштування «Зменшити рух».",
+  "Use the system setting": "Використовувати налаштування системи",
+  "Turns off zoom and spinner animations. Fades stay.": "Вимикає анімацію масштабування та індикаторів роботи. Плавні згасання залишаються."
 }

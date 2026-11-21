@@ -417,6 +417,16 @@
 
 ## 2026-10-24
 
+### Reduce motion
+- **Settings ▸ Interface ▸ Reduce motion** (`view.reduceMotion` for scripts and agents) turns off the animations
+  that move or turn: a click on the photo or Z zooms at once instead of easing in, the interface's own small easing
+  stops, every spinner (a busy button's too) becomes a still dot, and every sweeping progress bar becomes a still
+  segment, and scrolling to a photo (the grid and the filmstrip following the active photo) jumps instead of
+  gliding. Fades that tell you something changed (toasts, the slideshow's crossfade and its control bar) stay. On macOS
+  it follows System Settings ▸ Accessibility ▸ Display ▸ Reduce motion until you change it in Settings; **Use the
+  system setting** beside the tick box hands the choice back. On Windows, Linux and the web version it is manual for
+  now (off by default). Pinch and scroll zoom were never animated.
+
 ### AI Denoise follows the photo's real noise
 - The built-in denoiser used to read a photo's fine texture as noise, so it always believed a photo was at least as noisy as
   about ISO 12800 and over-smoothed quiet photos while under-cleaning noisy ones. It now measures each colour channel

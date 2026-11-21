@@ -2455,5 +2455,10 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "アプリを --control 7980 (または LIGHTCRAFT_CONTROL_PORT) で起動してから、lightcraft-cli mcp --connect でエージェントを接続できます。",
   "Welcome": "ようこそ",
   "Next": "次へ",
-  "Get Started": "始める"
+  "Get Started": "始める",
+  "Reduce Motion": "動きを減らす",
+  "Reduce motion": "動きを減らす",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "ズームとスピナーのアニメーションをオフにします。フェードはそのまま残ります。ここで変更するまで、システムの「視差効果を減らす」設定に従います。",
+  "Use the system setting": "システム設定に従う",
+  "Turns off zoom and spinner animations. Fades stay.": "ズームとスピナーのアニメーションをオフにします。フェードはそのまま残ります。"
 }
