@@ -1892,12 +1892,12 @@ fn develop_group_lists_are_validated_and_limit_what_is_carried() {
     ];
     refused(&mut s, "develop.sync", json!({}), &sync_bad);
 
-    // Paste: only the chosen groups, and of those only what was copied (`detail` was not)
+    // Paste: only the chosen groups, also one the copy left out (`detail`; upstream #3148)
     s.execute("develop.paste", &json!({"ids": [b.0], "groups": ["light", "detail"]})).unwrap();
     let d = (*s.develop_of(b).unwrap()).clone();
     assert_eq!(d.light.exposure, 1.0);
     assert_eq!(d.color.vibrance, before.color.vibrance, "`color` was not asked for");
-    assert_ne!(d.detail.sharpen_amount, 90.0, "`detail` was not copied");
+    assert_eq!(d.detail.sharpen_amount, 90.0, "`detail` was asked for");
     // `b` back to its defaults, selected alone; returns its vibrance there
     let reset_b = |s: &mut Session| {
         s.execute("library.select", &json!({"ids": [b.0]})).unwrap();
@@ -1906,12 +1906,13 @@ fn develop_group_lists_are_validated_and_limit_what_is_carried() {
         assert_eq!(d.light.exposure, 0.0);
         d.color.vibrance
     };
-    // no groups, or null: everything copied
+    // no groups, or null: what was copied, and nothing the copy left out
     for params in [json!({"ids": [b.0]}), json!({"ids": [b.0], "groups": null})] {
         reset_b(&mut s);
         s.execute("develop.paste", &params).unwrap();
         let d = s.develop_of(b).unwrap();
         assert_eq!((d.light.exposure, d.color.vibrance), (1.0, 30.0), "paste {params}");
+        assert_eq!(d.detail.sharpen_amount, before.detail.sharpen_amount, "paste {params}: `detail` was not copied");
     }
     // Paste from Previous (`a`, left for `b`) with a valid group
     reset_b(&mut s);
@@ -2366,4 +2367,151 @@ fn masks_get_automatic_names_until_renamed() {
         assert!(names.iter().any(|n| n == "Warmth"), "the given name is kept: {names:?}");
         assert!(names.iter().any(|n| n.starts_with("Glow")), "the automatic one is named after the preset: {names:?}");
     }
+}
+
+// ---- upstream #3148 (issue #3056): Paste Selected Settings pastes groups the copy left out; a pasted crop is
+// refitted to the target's shape as Sync and Auto Sync refit it (`sync_same::synced_crop`)
+
+/// Two demo photos of the same shape and one of the other (landscape / portrait).
+fn photos_by_shape(s: &mut Session) -> (lcc_catalog::PhotoId, lcc_catalog::PhotoId, lcc_catalog::PhotoId) {
+    let vis = s.visible_cloned();
+    let portrait = |id: &lcc_catalog::PhotoId| s.catalog.photo(*id).is_some_and(|p| p.height > p.width);
+    let land: Vec<_> = vis.iter().copied().filter(|id| !portrait(id)).take(2).collect();
+    let tall = vis.iter().copied().find(portrait).expect("the demo library has a portrait photo");
+    (land[0], land[1], tall)
+}
+
+/// The crop of `id` in pixels of its oriented frame.
+fn crop_px(s: &Session, id: lcc_catalog::PhotoId) -> lcc_geom::Rect {
+    let p = s.catalog.photo(id).unwrap();
+    let (w, h) = if p.develop.orientation.swaps_axes() { (p.height, p.width) } else { (p.width, p.height) };
+    p.develop.crop.geometry.rect_px(w as f64, h as f64)
+}
+
+/// Copy leaves crop and Remove out by default, as Lightroom does, so a plain paste doesn't carry
+/// them; ticking them in Paste Selected Settings pastes them onto every target, in one undo step.
+#[test]
+fn paste_selected_settings_pastes_crop_and_remove_left_out_of_the_copy() {
+    let mut s = demo();
+    let (a, b, c) = photos_by_shape(&mut s);
+    let c2 = s.visible_cloned().into_iter().find(|id| ![a, b, c].contains(id) && s.catalog.photo(*id).is_some_and(|p| p.width > p.height)).unwrap();
+    s.execute("library.select", &json!({"ids": [a.0]})).unwrap();
+    s.execute("crop.set", &json!({"rect": [0.1, 0.2, 0.7, 0.8]})).unwrap();
+    s.execute("spot.add", &json!({"points": [[0.4, 0.5]], "size": 0.05, "mode": "heal"})).unwrap();
+    s.execute("develop.set", &json!({"values": {"light.exposure": 0.5}})).unwrap();
+    let src = (*s.develop_of(a).unwrap()).clone();
+    assert!(!src.spots.is_empty());
+    s.execute("develop.copy", &json!({})).unwrap();
+
+    s.execute("develop.paste", &json!({"ids": [b.0]})).unwrap();
+    let d = s.develop_of(b).unwrap();
+    assert_eq!(d.light.exposure, 0.5);
+    assert!(d.crop.geometry.is_identity() && d.spots.is_empty(), "a plain paste carries no crop or Remove: {:?}", d.crop);
+
+    let before: Vec<_> = [b, c2].iter().map(|id| (*s.develop_of(*id).unwrap()).clone()).collect();
+    let r = s.execute("develop.paste", &json!({"ids": [b.0, c2.0], "groups": ["crop", "spots"]})).unwrap();
+    assert_eq!(r["changed"], 2);
+    for id in [b, c2] {
+        let d = s.develop_of(id).unwrap();
+        assert_eq!(d.crop.geometry, src.crop.geometry, "same shape: the same crop");
+        assert_eq!(d.spots.len(), src.spots.len());
+    }
+    s.execute("edit.undo", &json!({})).unwrap();
+    for (id, was) in [b, c2].iter().zip(&before) {
+        assert_eq!(*s.develop_of(*id).unwrap(), *was, "one undo step takes back the whole paste");
+    }
+}
+
+/// A crop pasted (or synced) onto a photo of another shape keeps its aspect ratio instead of its
+/// normalized rectangle (which would stretch it).
+#[test]
+fn pasted_crop_keeps_its_aspect_on_a_photo_of_another_shape() {
+    let mut s = demo();
+    let (a, _, tall) = photos_by_shape(&mut s);
+    s.execute("library.select", &json!({"ids": [a.0]})).unwrap();
+    s.execute("crop.set", &json!({"rect": [0.3, 0.2, 0.3 + 0.6 * 4.0 / 6.0, 0.8]})).unwrap();
+    let src = crop_px(&s, a);
+    assert!((src.aspect() - 1.0).abs() < 1e-3, "{src:?}");
+    s.execute("develop.copy", &json!({})).unwrap();
+    s.execute("develop.paste", &json!({"ids": [tall.0], "groups": ["crop"]})).unwrap();
+    let r = crop_px(&s, tall);
+    assert!((r.aspect() - 1.0).abs() < 1e-3, "the square stays square on the portrait photo: {r:?}");
+    let d = s.develop_of(tall).unwrap();
+    let (w, h) = (s.catalog.photo(tall).unwrap().width as f64, s.catalog.photo(tall).unwrap().height as f64);
+    assert!(d.crop.geometry.is_within_image(w, h));
+
+    // Sync Settings with the crop does the same
+    s.execute("develop.reset", &json!({"ids": [tall.0]})).unwrap();
+    s.execute("library.select", &json!({"ids": [a.0, tall.0], "active": a.0})).unwrap();
+    s.execute("develop.sync", &json!({"groups": ["crop"]})).unwrap();
+    let synced = crop_px(&s, tall);
+    assert!((synced.aspect() - 1.0).abs() < 1e-3, "sync: {synced:?}");
+    assert_eq!(synced, r, "Paste and Sync refit a crop the same way");
+}
+
+/// An "Original" lock pasted onto a photo of another shape takes that photo's own shape (and becomes its
+/// Original lock).
+#[test]
+fn pasted_original_lock_takes_the_targets_shape() {
+    let mut s = demo();
+    let (a, _, tall) = photos_by_shape(&mut s);
+    s.execute("library.select", &json!({"ids": [a.0]})).unwrap();
+    s.execute("crop.aspect", &json!({"aspect": "original"})).unwrap();
+    let p = s.catalog.photo(a).unwrap();
+    assert_eq!(s.develop_of(a).unwrap().crop.aspect, Some(lcc_develop::Crop::original_aspect(p.width as f64, p.height as f64)));
+    s.execute("develop.copy", &json!({})).unwrap();
+    s.execute("develop.paste", &json!({"ids": [tall.0], "groups": ["crop"]})).unwrap();
+    let d = s.develop_of(tall).unwrap();
+    let p = s.catalog.photo(tall).unwrap();
+    assert_eq!(d.crop.aspect, Some(lcc_develop::Crop::original_aspect(p.width as f64, p.height as f64)));
+    assert!(d.crop.geometry.is_identity(), "Original: the whole portrait: {:?}", d.crop);
+}
+
+/// The Crop group carries the orientation: the target's shape is the one it has after the paste.
+#[test]
+fn pasted_crop_refits_to_the_orientation_it_carries() {
+    let mut s = demo();
+    let (a, b, _) = photos_by_shape(&mut s);
+    s.execute("library.select", &json!({"ids": [a.0]})).unwrap();
+    s.execute("photo.rotateRight", &json!({"ids": [a.0]})).unwrap();
+    s.execute("crop.set", &json!({"rect": [0.2, 0.1, 0.8, 0.5]})).unwrap();
+    let src = s.develop_of(a).unwrap();
+    assert!(src.orientation.swaps_axes());
+    s.execute("develop.copy", &json!({})).unwrap();
+    s.execute("develop.paste", &json!({"ids": [b.0], "groups": ["crop"]})).unwrap();
+    let d = s.develop_of(b).unwrap();
+    assert_eq!(d.orientation, src.orientation);
+    assert_eq!(d.crop, src.crop, "same shape once turned: the crop as it is");
+}
+
+/// Paste Settings from Previous refits a crop as Paste does.
+#[test]
+fn paste_from_previous_refits_the_crop() {
+    let mut s = demo();
+    let (a, _, tall) = photos_by_shape(&mut s);
+    s.execute("library.select", &json!({"ids": [a.0]})).unwrap();
+    s.execute("crop.set", &json!({"rect": [0.3, 0.2, 0.3 + 0.6 * 4.0 / 6.0, 0.8]})).unwrap();
+    s.execute("library.select", &json!({"ids": [tall.0]})).unwrap();
+    s.execute("develop.pastePrevious", &json!({"groups": ["crop"]})).unwrap();
+    let r = crop_px(&s, tall);
+    assert!((r.aspect() - 1.0).abs() < 1e-3, "the square stays square: {r:?}");
+}
+
+/// Auto Sync carries a crop as Sync Settings (and Paste) does: one refit.
+#[test]
+fn auto_sync_refits_a_crop_like_sync() {
+    let crop_of_tall = |auto: bool| {
+        let mut s = demo();
+        let (a, _, tall) = photos_by_shape(&mut s);
+        s.execute("library.select", &json!({"ids": [a.0, tall.0], "active": a.0})).unwrap();
+        if auto {
+            s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+        }
+        s.execute("crop.set", &json!({"rect": [0.3, 0.2, 0.7, 0.8]})).unwrap();
+        if !auto {
+            s.execute("develop.sync", &json!({"groups": ["crop"]})).unwrap();
+        }
+        s.develop_of(tall).unwrap().crop
+    };
+    assert_eq!(crop_of_tall(true), crop_of_tall(false));
 }

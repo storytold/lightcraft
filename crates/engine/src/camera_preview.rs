@@ -58,7 +58,8 @@ use lcc_raw::{
 /// 23-27: skipped (used by forks' builds that carried this change early).
 /// 28: the fit's sensor proxy gets only the share of a lens's vignetting correction its camera JPEG shows
 /// ([`vignetting_shown`]; Canon EOS 6D frames had rendered 5-11 L* under their camera JPEGs).
-pub const LOOK_VERSION: u32 = 28;
+/// 29: the bundled Panasonic DMC-GM5 profile (upstream #4064).
+pub const LOOK_VERSION: u32 = 29;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {

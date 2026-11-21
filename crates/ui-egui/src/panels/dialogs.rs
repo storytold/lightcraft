@@ -295,6 +295,8 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
         Dialog::SlideshowExport { .. } => "Export Slideshow",
         Dialog::Print => "Print",
         Dialog::Merge { opts } => opts.title(),
+        Dialog::PixelShiftOffer { .. } => "Pixel Shift Merge",
+        Dialog::ConfirmDeleteSources { .. } => "Delete Merge Sources",
         Dialog::Enhance { .. } => "Enhance Preview",
         Dialog::Settings { .. } => "Settings",
         Dialog::ConfirmDelete { .. } => "Delete Photos",
@@ -1075,11 +1077,11 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                 Dialog::PasteSettings { groups } => {
                     let n = app.session.selected().len();
                     crate::dialog_frame::note(ui,
-                        egui::RichText::new(crate::i18n::tr_format!("Paste into {n} photo{}. Only settings that were copied are pasted", if n == 1 { "" } else { "s" }, n = n))
+                        egui::RichText::new(crate::i18n::tr_format!("Paste into {n} photo{}", if n == 1 { "" } else { "s" }, n = n))
                             .color(t.text_dim),
                     );
-                    let copied = app.session.dialogs.copy.clone();
-                    let _ = group_checklist(ui, "pasteGroup", groups, Some(&copied));
+                    // any setting of the copied photo, also one the copy left out (upstream #3148)
+                    let _ = group_checklist(ui, "pasteGroup", groups, None);
                 }
                 Dialog::SlideshowExport { settings } => slideshow_export_body(app, ui, settings),
                 Dialog::CropOverlays { picked } => crop_overlays_body(ui, picked),
@@ -1149,6 +1151,14 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     export_body(app, ui, ExportForm { opts, full_size, resize, preset_name, limit_kb, dir }, window_id, settings_height)
                 }
                 Dialog::Merge { opts } => crate::merge::body(app, ui, opts),
+                Dialog::PixelShiftOffer { .. } => {
+                    ui.label(crate::i18n::tr("This selection is a complete pixel-shift series. Merge as Pixel Shift instead?"));
+                }
+                Dialog::ConfirmDeleteSources { count, .. } => {
+                    let what = if *count == 1 { crate::i18n::tr("this photo").to_string() } else { crate::i18n::tr_format!("these {count} photos", count = count) };
+                    ui.label(crate::i18n::tr_format!("Move {what} to Recently Deleted?", what = what));
+                    crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr("They can be restored from Recently Deleted until it is emptied.")).color(t.text_dim));
+                }
                 Dialog::Enhance { opts } => crate::enhance_ui::body(app, ui, opts),
                 Dialog::Import { opts } => crate::import::body(app, ui, opts),
                 Dialog::Settings { tab } => crate::panels::settings::body(app, ui, tab, 0.0),
@@ -1608,6 +1618,21 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                         close = true;
                     }
                 }
+                if let Dialog::PixelShiftOffer { command } = &dlg {
+                    let mode = crate::i18n::tr(match command.as_str() {
+                        "merge.panorama" => "Panorama",
+                        "merge.hdrPanorama" => "HDR panorama",
+                        "merge.focusStack" => "Focus stack",
+                        _ => "HDR",
+                    });
+                    let label = crate::i18n::tr_format!("Continue with {mode}", mode = mode);
+                    if crate::button::Button::new(&label).widget("button:dialogContinueMerge").show(ui).clicked() {
+                        let r = crate::merge::answer_offer(app, command, crate::merge::OfferChoice::Continue);
+                        let _ = crate::merge::reported(app, r);
+                        // (the dialog it opens takes this one's place)
+                        return;
+                    }
+                }
                 let add_label;
                 let ok = match &dlg {
                     Dialog::Import { opts } => {
@@ -1626,6 +1651,8 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     Dialog::SlideshowExport { .. } => "Export…",
                     Dialog::Print => "Print to PDF…",
                     Dialog::Merge { .. } => "Merge",
+                    Dialog::PixelShiftOffer { .. } => "Pixel Shift",
+                    Dialog::ConfirmDeleteSources { .. } => "Delete",
                     Dialog::Enhance { .. } => "Enhance",
                     Dialog::DenoiseModel { info, .. } if info["download"].is_string() => "Accept & Download",
                     Dialog::DenoiseModel { .. } => "Install",
@@ -2418,7 +2445,12 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
         Dialog::Export { opts, full_size, resize, limit_kb, dir, preset_name } => {
             start_export(app, opts, *full_size, resize, *limit_kb, dir, preset_name)
         }
-        Dialog::Merge { opts } => crate::merge::start_final(app, opts),
+        Dialog::Merge { opts } => {
+            let r = crate::merge::start_final(app, opts);
+            crate::merge::reported(app, r)
+        }
+        Dialog::PixelShiftOffer { command } => crate::merge::answer_offer(app, command, crate::merge::OfferChoice::PixelShift),
+        Dialog::ConfirmDeleteSources { id, .. } => crate::merge::delete_sources(app, *id),
         Dialog::Enhance { opts } => crate::enhance_ui::confirm(app, opts),
         Dialog::Import { opts } => crate::import::start(app, opts),
         Dialog::ConfirmDelete { .. } => app.run("photo.delete", json!({})),
@@ -4358,6 +4390,7 @@ pub enum ConfirmStyle {
 pub fn confirm_style(dlg: &Dialog) -> ConfirmStyle {
     match dlg {
         Dialog::ConfirmDelete { .. }
+        | Dialog::ConfirmDeleteSources { .. }
         | Dialog::ConfirmPurge { .. }
         | Dialog::DeleteKeyword { .. }
         | Dialog::DeleteEffects { .. }

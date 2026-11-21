@@ -523,6 +523,15 @@ fn filter_downgrade(f: &lcc_filters::Filter) -> Option<lcc_plugins::Error> {
     crate::filter_plugins::is_older(new, old).then(|| lcc_plugins::Error::Downgrade { installed: old.clone(), new: new.clone() })
 }
 
+/// A manifest's pictures as `inspectFile` gives them (the SVG text, unlike the booleans of
+/// `plugin.list`), so the install dialog can show them before anything is installed.
+fn set_pictures(manifest: &mut Value, icon: Option<&str>, header: Option<(Option<&str>, Option<&str>)>) {
+    if let Some(o) = manifest.as_object_mut() {
+        o.insert("icon".into(), json!(icon));
+        o.insert("header".into(), json!(header.map(|(dark, light)| json!({"dark": dark, "light": light}))));
+    }
+}
+
 fn inspect_file(_: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "plugin.inspectFile";
     let path = str_param(p, "path").ok_or_else(|| bad(C, "missing `path`"))?;
@@ -537,8 +546,11 @@ fn inspect_file(_: &mut Session, p: &Value) -> Result<Value> {
         let conflict = with_manager(|m| Ok(plugin_has_id(m, f.id())))?;
         let downgrade = filter_downgrade(&f).is_some();
         let unknown = crate::filter_plugins::unknown_fields(&f);
+        let mut manifest = crate::filter_plugins::info(&f);
+        let m = f.manifest();
+        set_pictures(&mut manifest, m.icon.as_deref(), m.header.as_ref().map(|h| (h.dark.as_deref(), h.light.as_deref())));
         return Ok(json!({
-            "manifest": crate::filter_plugins::info(&f), "installed": installed, "downgrade": downgrade, "conflict": conflict,
+            "manifest": manifest, "installed": installed, "downgrade": downgrade, "conflict": conflict,
             "unknownFields": unknown, "dropped": f.manifest().dropped,
         }));
     }
@@ -551,6 +563,8 @@ fn inspect_file(_: &mut Session, p: &Value) -> Result<Value> {
     if let Some(o) = manifest.as_object_mut() {
         o.insert("about".into(), plugin_manifest.about.info());
     }
+    let header = plugin_manifest.header.as_ref().map(|h| (h.dark.as_deref(), h.light.as_deref()));
+    set_pictures(&mut manifest, plugin_manifest.icon.as_deref(), header);
     // an update: what is granted now, so the dialog can show what the new version adds; and what
     // would stop the install, so the dialog can say so before the user approves anything
     with_manager(|m| {

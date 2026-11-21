@@ -437,6 +437,35 @@ pub(crate) fn valid_id(id: &str) -> bool {
 /// error): never reported as unknown.
 const LENIENT: &[&str] = &["icon", "header", "homepage", "repository", "changelog", "license", "updateUrl"];
 
+/// Names in `dropped` each picture of `raw` (`icon`, `header`, or a header's `dark` / `light`)
+/// that is there but isn't an SVG document of at most [`MAX_PICTURE_BYTES`], so `parse` kept none of it.
+fn dropped_pictures(raw: &Value, dropped: &mut Vec<String>) {
+    let why = "not an SVG document of at most {} KiB";
+    let why = why.replace("{}", &(MAX_PICTURE_BYTES / 1024).to_string());
+    if raw.get("icon").is_some_and(|v| !v.is_null() && svg_document(Some(v)).is_none()) {
+        dropped.push(format!("icon: {why}"));
+    }
+    match raw.get("header") {
+        None | Some(Value::Null) => {}
+        Some(h @ Value::String(_)) => {
+            if svg_document(Some(h)).is_none() {
+                dropped.push(format!("header: {why}"));
+            }
+        }
+        Some(h) => {
+            let named = ["dark", "light"].into_iter().filter_map(|k| h.get(k).map(|v| (k, v))).collect::<Vec<_>>();
+            if named.is_empty() {
+                dropped.push("header: neither `dark` nor `light` given".to_string());
+            }
+            for (k, v) in named {
+                if svg_document(Some(v)).is_none() {
+                    dropped.push(format!("header.{k}: {why}"));
+                }
+            }
+        }
+    }
+}
+
 impl Manifest {
     /// Parses and validates a manifest.
     pub fn parse(bytes: &[u8]) -> Result<Manifest> {
@@ -450,6 +479,7 @@ impl Manifest {
         m.icon = svg_document(raw.get("icon"));
         m.header = raw.get("header").and_then(Header::parse);
         (m.about, m.dropped) = About::parse(&raw);
+        dropped_pictures(&raw, &mut m.dropped);
         m.update_url = crate::about::link_field(&raw, "updateUrl", &mut m.dropped);
         m.validate()?;
         m.unknown_fields = ignored_fields(&raw, LENIENT, |v| serde_json::from_value::<Manifest>(v.clone()).ok());

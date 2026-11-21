@@ -62,3 +62,7 @@ The same encoder as the dialog:
 <cli> run --library ~/Pictures/Lib library.import paths='["/media/card/DCIM"]' mode=copy \
     app.export dir=/tmp/out preset="<export preset name>"
 ```
+
+`library.import`'s result includes `skipped: {unreadable, unsupported}`: folders its walk could not read and files in
+the folders that are not a supported photo type (XMP sidecars not counted), as `library.importPreview` reports them.
+A file named on its own is always tried, so it shows under `failed`, never under `skipped`.

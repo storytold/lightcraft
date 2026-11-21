@@ -220,6 +220,9 @@ pub struct SidecarData {
     /// [`merge_into`] puts boxes drawn on the photo as stored where the upright photo has them (#2674).
     pub regions_drawn_on: Option<(f64, f64)>,
     pub orientation: Option<lcc_meta::Orientation>,
+    /// How to turn the regions when the photo's pixels were turned after they were drawn (no quarter turn stated, a
+    /// frame of the other shape): [`lcc_meta::XmpData::regions_turn`].
+    pub regions_turn: Option<lcc_meta::Orientation>,
     /// The packet's `tiff:Orientation` when it carries another editor's develop settings (`crs:`): how that editor
     /// turns the stored pixels upright, the file's own orientation and the user's rotation together. The import
     /// turns the photo by what it adds to the file's orientation ([`SidecarData::turn_from`]).
@@ -296,6 +299,7 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
         // photo's are kept.
         regions: d.values.contains_key("mwg-rs:Regions").then(|| m.regions.clone()),
         regions_drawn_on: d.regions_drawn_on(),
+        regions_turn: d.regions_drawn_on().map(|_| d.regions_turn()),
         // (only what the regions need: a packet that says nothing else still says nothing)
         orientation: d.regions_drawn_on().and(m.orientation),
         captured: m.capture_time.map(|d| d.to_iso()),
@@ -486,9 +490,18 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
     if let Some(r) = &sc.regions {
         m.regions = r.clone();
         // (the photo's size is the upright one)
-        if let (Some(drawn_on), Some(o)) = (sc.regions_drawn_on, sc.orientation) {
-            let stored = if o.swaps_axes() { (p.height, p.width) } else { (p.width, p.height) };
-            lcc_meta::upright_regions(&mut m.regions, drawn_on, o, stored);
+        if let Some(drawn_on) = sc.regions_drawn_on {
+            match sc.orientation {
+                Some(o) if o.swaps_axes() => {
+                    lcc_meta::upright_regions(&mut m.regions, drawn_on, o, (p.height, p.width));
+                }
+                // no quarter turn: the pixels are as shown, and boxes drawn on a frame of the other shape were drawn
+                // before the pixels themselves were turned
+                _ => {
+                    let turn = sc.regions_turn.unwrap_or(lcc_meta::Orientation::Rotate90);
+                    lcc_meta::regions_onto_turned_pixels(&mut m.regions, drawn_on, (p.width, p.height), turn);
+                }
+            }
         }
     }
     // a clip's trim and poster, when the photo is a probed clip and the values fit it (bad ones are ignored)

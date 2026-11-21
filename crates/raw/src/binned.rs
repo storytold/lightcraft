@@ -139,9 +139,13 @@ impl RawImage {
 
     /// Three samples per pixel and no mosaic, from the merged pixel-shift decoder (a NEFX): binned by plain block
     /// means. A LinearRaw DNG keeps its own path (it has reduced copies of its own and has always been developed
-    /// whole), so only this format is taken.
+    /// whole), so only this format is taken, and the app's own pixel-shift merges (a DNG of 16-bit samples on the
+    /// camera's scale, recognised by its provenance block, [`crate::merge_provenance`]).
     fn merged_rgb(&self) -> bool {
-        self.format == crate::RawFormat::Nef && self.cpp == 3 && self.cfa.is_none()
+        let merged_dng = self.format == crate::RawFormat::Dng
+            && matches!(self.data, RawData::U16(_))
+            && self.metadata.software.as_deref() == Some(crate::merge_provenance::software().as_str());
+        (self.format == crate::RawFormat::Nef || merged_dng) && self.cpp == 3 && self.cfa.is_none()
     }
 
     /// [`Self::bin`] for [`Self::merged_rgb`] data: every channel of an output pixel is the mean of the block's samples

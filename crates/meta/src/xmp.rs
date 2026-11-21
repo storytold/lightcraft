@@ -108,6 +108,26 @@ impl XmpData {
         let turned = regions.field("mwg-rs:RegionList").is_some_and(|l| l.items().iter().any(|r| r.field("mwg-rs:Rotation").is_some()));
         if turned { None } else { applied_to(regions) }
     }
+
+    /// Which way to turn the regions of a photo whose pixels were turned a quarter turn after they were drawn
+    /// ([`crate::regions_onto_turned_pixels`]). Apple's face regions say how each face leans on the frame they were
+    /// drawn on (`apple-fi:AngleInfoRoll`, degrees): about 270 is a photo shot upright on a phone held the usual way
+    /// (Exif orientation 6), about 90 one held the other way (8). Without that, the usual way.
+    pub fn regions_turn(&self) -> crate::Orientation {
+        let rolls = self.values.get("mwg-rs:Regions").and_then(|r| r.field("mwg-rs:RegionList")).map_or(&[][..], XmpValue::items);
+        let roll = rolls.iter().find_map(|r| {
+            let XmpValue::Struct(ext) = r.field("mwg-rs:Extensions")? else { return None };
+            ext.iter()
+                .find(|(k, _)| k.ends_with(":AngleInfoRoll"))
+                .and_then(|(_, v)| v.text())
+                .and_then(|t| t.trim().parse::<f64>().ok())
+                .filter(|r| r.is_finite())
+        });
+        match roll.map(|r| r.rem_euclid(360.0)) {
+            Some(r) if (45.0..135.0).contains(&r) => crate::Orientation::Rotate270,
+            _ => crate::Orientation::Rotate90,
+        }
+    }
 }
 
 /// A structured XMP value.
@@ -1642,6 +1662,32 @@ mod tests {
 
     /// The size a packet's boxes were drawn on is its `AppliedToDimensions`, unless a box says how the photo was turned
     /// (Lightroom's `mwg-rs:Rotation`: those are upright already) or there is no size to go by.
+    /// Upstream #4378: `AngleInfoRoll` is input, so any text in it picks a turn without panicking: near 90 is
+    /// Rotate270, anything else (near 270, NaN, junk, none) the usual Rotate90.
+    #[test]
+    fn regions_turn_reads_any_roll_without_panicking() {
+        let packet = |roll: &str| {
+            format!(
+                r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                <rdf:Description rdf:about="" xmlns:mwg-rs="http://www.metadataworkinggroup.com/schemas/regions/"
+                    xmlns:apple-fi="http://ns.apple.com/faceinfo/1.0/">
+                  <mwg-rs:Regions rdf:parseType="Resource"><mwg-rs:RegionList><rdf:Seq><rdf:li><rdf:Description mwg-rs:Type="Face">
+                    <mwg-rs:Extensions apple-fi:AngleInfoRoll="{roll}"/>
+                  </rdf:Description></rdf:li></rdf:Seq></mwg-rs:RegionList></mwg-rs:Regions>
+                </rdf:Description></rdf:RDF>"#
+            )
+        };
+        let turn = |roll: &str| parse_xmp(&packet(roll)).map(|d| d.regions_turn());
+        assert_eq!(turn("88").unwrap(), crate::Orientation::Rotate270);
+        assert_eq!(turn("-270").unwrap(), crate::Orientation::Rotate270);
+        for roll in ["261", "NaN", "inf", "", "junk", "0"] {
+            assert_eq!(turn(roll).unwrap(), crate::Orientation::Rotate90, "{roll}");
+        }
+        for roll in ["-1e308", "1e308", "1e400"] {
+            assert!(turn(roll).is_ok(), "{roll}: some turn, no panic");
+        }
+    }
+
     #[test]
     fn regions_drawn_on_is_the_applied_to_size_unless_a_box_says_how_it_was_turned() {
         let packet = |dims: &str, rotation: &str| {

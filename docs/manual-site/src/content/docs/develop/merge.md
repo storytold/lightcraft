@@ -12,4 +12,5 @@ sidebar:
 - **HDR Panorama**: brackets grouped by EXIF, merged one set at a time.
 - **Focus Stack**: photos focused at different distances become one sharp DNG (partial).
 - **HDR for Each Bracket Set** merges many brackets in one go. **Merge with last settings** skips the dialog.
-- Runs in the background: a row in the activity stack with a stop button. The merged DNG is imported and selected.
+- Runs in the background: a row in the activity stack with a stop button. The merged DNG is imported and selected; started while viewing an album, it is added to that album too (not to a smart album).
+- **Pixel Shift** (Nikon Z 8, 16-shot series): select all the frames of one series and choose **Photo ▸ Photo Merge ▸ Pixel Shift**. The frames are merged on the raw mosaics into one image with full colour at twice the resolution, written next to frame 01 as `<name>-PixelShift.dng` and stacked on its frames. A selection that is not one complete series is refused with the reason (shown on the window), and so is a series whose result file already exists. Choosing another merge kind on a complete series asks whether to merge it as Pixel Shift instead. **Photo ▸ Photo Merge ▸ Delete Merge Sources** moves the merged photo's frames other than frame 01 to Recently Deleted. There is no registration: a series shot on an unsteady tripod shows it as softness at fine detail.
