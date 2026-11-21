@@ -789,7 +789,7 @@ fn grip_gestures(
             if Some(mask) != active {
                 let _ = app.run("mask.select", json!({"id": mask}));
             }
-            let _ = app.run("develop.beginInteraction", json!({"label": "Edit Mask"}));
+            let _ = app.run("develop.beginInteraction", json!({"label": crate::region::SHARP_DRAG}));
             // (read after it begins: an old mask is on the photo from then on, in its coordinates)
             if let Some(original_shape) = current_shape(app, mask, comp)
                 .or_else(|| d.masks.iter().find(|m| m.id == mask).and_then(|m| m.components.get(comp)).map(|c| c.shape.clone()))
@@ -852,7 +852,7 @@ fn mask_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
         if app.session.active_mask != Some(mid) {
             let _ = app.run("mask.select", json!({"id": mid}));
         }
-        let _ = app.run("develop.beginInteraction", json!({"label": "Edit Mask"}));
+        let _ = app.run("develop.beginInteraction", json!({"label": crate::region::SHARP_DRAG}));
         // (read after it begins: an old mask is on the photo from then on, in its coordinates)
         let (shape, map) = match (current_shape(app, mid, ci), current_on_photo(app, mid)) {
             (Some(s), Some(on)) => (s, map.for_mask(on)),
