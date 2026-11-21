@@ -122,6 +122,71 @@ fn light_ops(d: vec3<f32>) -> vec3<f32> {
     return mul3(PRO_TO_2020, p);
 }
 
+// A table of process V9's curve stage (`Lut1::eval`) at offset `o` in `aux`.
+fn stage_lut(o: u32, x: f32) -> f32 {
+    let f = clamp(x, 0.0, 1.0) * f32(CURVE_N - 1u);
+    let i = min(u32(f), CURVE_N - 2u);
+    let t = f - f32(i);
+    return aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * t;
+}
+
+// `CurveStage::apply`: the base table on the largest and smallest channel of sRGB-encoded linear ProPhoto, the
+// middle one keeping its place between them in linear light, then the red, green and blue curves per channel.
+fn curve_stage(d: vec3<f32>) -> vec3<f32> {
+    let p = mul3(PRO_FROM_2020, d);
+    var pc = clamp(p, vec3<f32>(0.0), vec3<f32>(1.0));
+    var e = vec3<f32>(srgb_exact(pc.x), srgb_exact(pc.y), srgb_exact(pc.z));
+    var hi = 0u;
+    var lo = 0u;
+    for (var k = 1u; k < 3u; k++) {
+        if (e[k] > e[hi]) {
+            hi = k;
+        }
+        if (e[k] < e[lo]) {
+            lo = k;
+        }
+    }
+    let off = pu(F_STAGE_OFF);
+    let base = off + 3u * CURVE_N;
+    let la = srgb_linear(stage_lut(base, e[hi]));
+    let lb = srgb_linear(stage_lut(base, e[lo]));
+    let pa = pc[hi];
+    let pb = pc[lo];
+    var curved = vec3<f32>(0.0);
+    for (var k = 0u; k < 3u; k++) {
+        var t = 1.0;
+        if (pa > pb) {
+            t = (pc[k] - pb) / (pa - pb);
+        }
+        curved[k] = stage_lut(off + k * CURVE_N, srgb_exact(clamp(lb + (la - lb) * t, 0.0, 1.0)));
+    }
+    var q = vec3<f32>(0.0);
+    for (var k = 0u; k < 3u; k++) {
+        q[k] = srgb_linear(clamp(curved[k], 0.0, 1.0));
+    }
+    let rs = pf(F_STAGE_REFINE);
+    if (rs < 1.0) {
+        // the saturation back towards the input's, at the curves' luminance
+        let rr = refine_saturation(e, curved, rs);
+        var r = vec3<f32>(0.0);
+        for (var k = 0u; k < 3u; k++) {
+            r[k] = srgb_linear(clamp(rr[k], 0.0, 1.0));
+        }
+        let yq = dot(q, PRO_Y);
+        let yr = dot(r, PRO_Y);
+        q = r;
+        if (yr > 1e-6) {
+            q = r * (yq / yr);
+        }
+    }
+    for (var k = 0u; k < 3u; k++) {
+        if (p[k] > 1.0) {
+            q[k] += p[k] - 1.0;
+        }
+    }
+    return mul3(PRO_TO_2020, q);
+}
+
 fn band_weights(h: f32) -> array<f32, 8> {
     var w: array<f32, 8>;
     for (var i = 0u; i < 8u; i++) {
@@ -662,6 +727,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // --- process V4: calibrated Contrast, Blacks
     if (pu(F_LIGHT_OPS) != 0u) {
         d = light_ops(d);
+    }
+
+    // --- process V9: Whites and the tone curves
+    if (pu(F_STAGE) != 0u) {
+        d = curve_stage(d);
     }
 
     // --- colour
