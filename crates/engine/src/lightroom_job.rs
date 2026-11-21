@@ -30,10 +30,15 @@ fn cancelled() -> crate::EngineError {
     crate::EngineError::Cancelled(error("Lightroom import cancelled").to_string())
 }
 
+/// [`cancelled`] for a Capture One catalog, which is not this command's own kind of failure.
+fn cancelled_for(capture_one: bool) -> crate::EngineError {
+    if capture_one { crate::EngineError::Cancelled("Capture One import cancelled".into()) } else { cancelled() }
+}
+
 fn stage_archive(archive_dir: Option<&Path>, data: &mut CatalogImport) -> crate::Result<Option<PathBuf>> {
     let archive_path = archive_dir.map(|dir| crate::lightroom_archive::store_best_effort(dir, data).map_err(error)).transpose()?.flatten();
     if archive_dir.is_some() && archive_path.is_none() {
-        data.warnings.push("Lightroom source archive exceeded 32 MiB; archive skipped".into());
+        data.warnings.push(format!("{} source archive exceeded 32 MiB; archive skipped", crate::capture_one_catalog::convert::program(data)));
     }
     Ok(archive_path)
 }
@@ -237,8 +242,10 @@ impl LightroomJob {
 
     /// Read/probe/stage all source data off the owner thread.
     pub fn prepare(&mut self, cancel: &AtomicBool) -> crate::Result<PreparedLightroom> {
+        // (a Capture One catalog fails and is cancelled in its own words)
+        let capture_one = crate::capture_one_catalog::is_catalog(&self.path);
         if cancel.load(Ordering::Relaxed) {
-            return Err(cancelled());
+            return Err(cancelled_for(capture_one));
         }
         // (reading stops with a message when `cancel` is set: the flag says it was cancelled)
         let mut data = lightroom_catalog::read_source(
@@ -248,12 +255,16 @@ impl LightroomJob {
             &self.progress.catalog_total,
             &self.progress.catalog_done,
         )
-        .map_err(|e| if cancel.load(Ordering::Relaxed) { cancelled() } else { error(e) })?;
+        .map_err(|e| match (cancel.load(Ordering::Relaxed), capture_one) {
+            (true, _) => cancelled_for(capture_one),
+            (false, true) => crate::EngineError::Other(e),
+            (false, false) => error(e),
+        })?;
         lightroom_catalog::validate_for_job(&data).map_err(error)?;
         if cancel.load(Ordering::Relaxed) {
-            return Err(cancelled());
+            return Err(cancelled_for(capture_one));
         }
-        let (paths, missing_sources) = original_paths(&data, cancel)?;
+        let (paths, missing_sources) = original_paths(&data, cancel).map_err(|e| if capture_one { cancelled_for(true) } else { e })?;
         // Catalog entries name files, never folders. Missing originals already have enough
         // catalog metadata for placeholders; probing them again only adds failed I/O and errors.
         // Complete the catalog step before the separate read/add photo progress starts.
@@ -263,7 +274,7 @@ impl LightroomJob {
         let normal = self.import.prepare_files(paths, cancel);
         if cancel.load(Ordering::Relaxed) {
             normal.rollback();
-            return Err(cancelled());
+            return Err(cancelled_for(capture_one));
         }
         let archive_path = stage_archive(self.archive_dir.as_deref(), &mut data)?;
         let index_path = self.archive_dir.as_ref().map(|dir| dir.join("lightroom-index.json"));
@@ -284,13 +295,18 @@ impl LightroomJob {
 
 /// Apply prepared data on the owner thread.  No source, archive or index filesystem work occurs.
 pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) -> crate::Result<LightroomCompletion> {
+    let capture_one = crate::capture_one_catalog::convert::is_capture_one(&prepared.data);
     if prepared.cancelled {
         prepared.normal.rollback();
-        return Err(cancelled());
+        return Err(cancelled_for(capture_one));
     }
     if !prepared.token.matches(s) {
         prepared.normal.rollback();
-        return Err(error("Lightroom import belongs to a different open library"));
+        return Err(if capture_one {
+            crate::EngineError::Other("Capture One import belongs to a different open library".into())
+        } else {
+            error("Lightroom import belongs to a different open library")
+        });
     }
     // A command-scoped Lightroom import must never rewrite source XMP sidecars.  Direct depth-0
     // callers do not set this transient flag, so they cannot affect a later command.
@@ -363,7 +379,9 @@ mod tests {
             members: Vec::new(),
             collection_content: Vec::new(),
             warnings: Vec::new(),
+            notices: Vec::new(),
             skipped: Vec::new(),
+            keyword_list: Vec::new(),
         }
     }
 
@@ -410,7 +428,9 @@ mod tests {
                 members: Vec::new(),
                 collection_content: Vec::new(),
                 warnings: Vec::new(),
+                notices: Vec::new(),
                 skipped: Vec::new(),
+                keyword_list: Vec::new(),
             },
             normal: Prepared::default(),
             index: ImportIndex::default(),

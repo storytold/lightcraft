@@ -37,7 +37,9 @@ fn sample() -> CatalogImport {
         ],
         collection_content: Vec::new(),
         warnings: Vec::new(),
+        notices: Vec::new(),
         skipped: Vec::new(),
+        keyword_list: Vec::new(),
     }
 }
 /// A crafted `.lrcat` that names a program as a photo's original gets no record for it, so
@@ -1771,4 +1773,70 @@ fn oversized_optional_table_warns_and_is_skipped() {
     let rows = reader.optional_table("optional_history", &mut warnings).unwrap();
     assert!(rows.is_empty());
     assert!(warnings.iter().any(|warning| warning.contains("optional_history")));
+}
+
+#[test]
+fn smart_rules_the_library_refuses_say_what_the_album_holds_instead() {
+    let s = crate::Session::new();
+    // a rule on an album the library doesn't have doesn't check
+    let rules = json!({"rules": [{"field": "album", "op": "is", "value": 999_999}]});
+    let mut warnings = Vec::new();
+    let selected = row(json!({"name": "Picked", "smartRules": rules}));
+    assert!(smart_rules(&s, &selected, "Capture One", &mut warnings).is_none());
+    let unknown = row(json!({"name": "Unknown", "smartRules": rules, "selectionUnknown": true}));
+    assert!(smart_rules(&s, &unknown, "Capture One", &mut warnings).is_none());
+    assert!(
+        warnings[0].starts_with("smart album “Picked”: its rules can't be used here")
+            && warnings[0].ends_with("imported with the photos its Capture One rule selects now"),
+        "{warnings:?}"
+    );
+    assert!(warnings[1].ends_with("imported as an empty album, as the photos its Capture One rule selects can't be told"), "{warnings:?}");
+}
+
+#[test]
+fn a_keyword_rule_compared_case_by_case_is_refused_when_the_library_spells_it_otherwise() {
+    let mut s = crate::Session::new();
+    let rules = json!({"rules": [{"field": "keywords", "op": "is", "value": "Nature"}]});
+    let album = row(json!({"name": "Nature", "smartRules": rules, "exactKeywords": ["Nature"]}));
+    let mut warnings = Vec::new();
+    // the same spelling, or none at all: the rule stays
+    library_photo(&mut s, "/a/one.ARW", |p| p.meta.keywords = vec!["Nature|Lake".into()]);
+    assert!(smart_rules(&s, &album, "Capture One", &mut warnings).is_some());
+    // "nature" would be found by LightCraft's rule, not by Capture One's
+    library_photo(&mut s, "/a/two.ARW", |p| p.meta.keywords = vec!["Places|nature".into()]);
+    assert!(smart_rules(&s, &album, "Capture One", &mut warnings).is_none());
+    assert_eq!(
+        warnings,
+        [
+            "smart album “Nature”: the library has the keyword “nature” in another spelling, which Capture One tells apart; imported with the photos its Capture One rule selects now"
+        ]
+    );
+    // a rule without exact keywords (Lightroom's) isn't checked
+    let lightroom = row(json!({"name": "Nature", "smartRules": rules}));
+    assert!(smart_rules(&s, &lightroom, "Lightroom", &mut warnings).is_some());
+}
+
+/// "is Nature" and "is nature" together select nothing in Capture One, but LightCraft would take
+/// a photo with either spelling for both: such a rule is refused even when no photo has the word,
+/// and a library spelling is held against each rule keyword, not against the rule's set.
+#[test]
+fn a_keyword_rule_naming_one_keyword_in_two_spellings_is_refused() {
+    let mut s = crate::Session::new();
+    let rules =
+        json!({"all": true, "rules": [{"field": "keywords", "op": "is", "value": "Nature"}, {"field": "keywords", "op": "is", "value": "nature"}]});
+    let album = row(json!({"name": "Both", "smartRules": rules, "exactKeywords": ["Nature", "nature"]}));
+    let mut warnings = Vec::new();
+    assert!(smart_rules(&s, &album, "Capture One", &mut warnings).is_none());
+    library_photo(&mut s, "/a/one.ARW", |p| p.meta.keywords = vec!["nature".into()]);
+    assert!(smart_rules(&s, &album, "Capture One", &mut warnings).is_none());
+    assert_eq!(warnings.len(), 2, "{warnings:?}");
+    assert!(
+        warnings
+            .iter()
+            .all(|w| w.starts_with("smart album “Both”: its rule names the keyword “Nature” also as “nature”, which Capture One tells apart")),
+        "{warnings:?}"
+    );
+    // one spelling twice is no clash
+    let twice = row(json!({"name": "Twice", "smartRules": rules, "exactKeywords": ["nature", "nature"]}));
+    assert!(smart_rules(&s, &twice, "Capture One", &mut warnings).is_some());
 }

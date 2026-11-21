@@ -475,6 +475,34 @@ fn choice_values_read_as_words_in_every_language() {
 /// A rule's problem reads as the field's name and the issue, in the editor's language, joined by
 /// a full-width colon in Japanese and Chinese; the sidebar's list puts the rule's position first.
 #[test]
+fn capture_one_import_messages_read_in_every_language() {
+    use lightcraft_engine::capture_one_catalog::notice::{MESSAGES, Notice, Part, smart_field_labels};
+    // every message, and every field name a smart album's warning can use, in every catalog
+    for language in Locale::ALL.iter().filter(|l| **l != Locale::En) {
+        for message in MESSAGES.iter().chain(smart_field_labels().iter()) {
+            assert!(language.catalog().contains_key(*message), "{language:?} lacks {message:?}");
+        }
+    }
+    let notice: Notice = serde_json::from_value(serde_json::json!({
+        "message": "smart album “{name}”: imported as an album with the {n} photo(s) its rule selects now; LightCraft has no smart album rule for {fields}",
+        "values": {"name": "{n} Trip", "n": 2, "fields": [{"message": "File Size"}, {"message": "“{key}”", "values": {"key": "OWNER"}}]}
+    }))
+    .unwrap();
+    assert_eq!(capture_one_notice_in(Locale::En, &notice), notice.text());
+    assert_eq!(
+        capture_one_notice_in(Locale::De, &notice),
+        "Smart-Album „{n} Trip“: als Album importiert, mit den Fotos, die seine Regel jetzt auswählt (2); LightCraft hat keine Smart-Album-Regel für Dateigröße, „OWNER“"
+    );
+    assert!(capture_one_notice_in(Locale::Ja, &notice).contains("、「OWNER」"), "{}", capture_one_notice_in(Locale::Ja, &notice));
+    // a reason that isn't one of the messages is shown as written
+    let raw = Notice {
+        message: "a table of the catalog can't be read and was left out: {why}".into(),
+        values: [("why".into(), Part::Text("x: y".into()))].into(),
+    };
+    assert_eq!(capture_one_notice_in(Locale::De, &raw), "eine Tabelle des Katalogs kann nicht gelesen werden und wurde ausgelassen: x: y");
+}
+
+#[test]
 fn problems_read_in_every_language() {
     use lightcraft_catalog::rules::Issue;
     let cat = lightcraft_catalog::Catalog::new();
