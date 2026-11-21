@@ -500,6 +500,10 @@ fn folder_templates_stay_inside_the_destination() {
     assert_eq!(expand_folder("{camera}/{title}/{date:%Y}", &p, 1), vec!["-..-etc-x", "unknown", "2026"]);
     p.meta.camera = "C:\\Windows".into();
     assert_eq!(expand_folder("{camera}", &p, 1), vec!["C--Windows"]);
+    p.meta.title = ".\u{00a0}.St. John's.\u{2003}.".into();
+    assert_eq!(expand_folder("{title}", &p, 1), vec!["St. John's"]);
+    p.meta.title = " . . . ".into();
+    assert_eq!(expand_folder("{title}", &p, 1), vec!["unknown"]);
     // missing metadata → `unknown`; missing capture time → the import time
     p.meta.camera.clear();
     p.captured = None;
