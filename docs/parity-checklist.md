@@ -41,7 +41,7 @@ every PR would edit and conflict on. A row marked ✅ that is wrong or incomplet
 | H. Crop & rotate (CROP) | 10 | 1 | 0 | 1 | 8/8 (100%) | 2/3 (67%) |
 | I. Remove / healing (REM) | 8 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
 | J. Red eye (EYE) | 2 | 0 | 0 | 0 | — | 1/1 (100%) |
-| K. Masking (MASK) | 15 | 5 | 5 | 0 | 7/8 (88%) | 7/7 (100%) |
+| K. Masking (MASK) | 14 | 7 | 4 | 0 | 7/8 (88%) | 6/7 (86%) |
 | L. Presets (PRE) | 6 | 0 | 1 | 1 | 2/2 (100%) | 2/2 (100%) |
 | M. Versions & history (VER) | 5 | 0 | 0 | 0 | 1/1 (100%) | 3/3 (100%) |
 | N. Copy / paste / sync (SYNC) | 5 | 0 | 0 | 0 | 3/3 (100%) | 1/1 (100%) |
@@ -58,9 +58,9 @@ every PR would edit and conflict on. A row marked ✅ that is wrong or incomplet
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 26 | 21 | 8 | — | 24/27 (89%) |
-| **Total** | 419 | 71 | 56 | 35 | 193/203 (95%) | 147/163 (90%) |
+| **Total** | 418 | 73 | 55 | 35 | 193/203 (95%) | 146/163 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 546 in-scope rows — P0 97.5% of 203 · P1 94.2% of 163 · P2 57.0% of 179.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 546 in-scope rows — P0 97.5% of 203 · P1 93.9% of 163 · P2 57.3% of 179.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -318,8 +318,8 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-MASK-OVERLAY | Mask overlay | P0 | ✅ | `cmd:view.maskOverlay`, `cmd:view.maskOverlayMode`, `cmd:view.maskOverlayColor`, `crates/pipeline/src/visualize.rs` | rendered alpha of the selected mask (CPU + GPU): colour, colour on B&W, image on black/white, white on black; ⇧O cycles while masking; successful local adjustments (including Amount) hide the overlay until O / the eye shows it again or a mask is created, picked, duplicated or added to (issue #1800); shape/edge edits retain it; zoomed in, the overlay is rendered on the same sharp window as the plain view (zoom and pan unchanged; `crates/ui-egui/src/tests/preview_limit.rs`, `crates/pipeline/src/tests_window.rs`); no auto-show on hover |
 | LR-MASK-OVERLAYALL | Show all mask overlays | P1 | ✅ | `cmd:view.maskOverlayAll`, `crates/ui-egui/src/panels/masking.rs`, `crates/pipeline/src/visualize.rs` | one diagnostic tint over every visible mask at once (CPU + GPU): the masks still stack their adjustments as before — this only paints each mask's region together, so you can see all masked areas at a glance (⌘⇧O / Ctrl+Shift+O) |
 | LR-MASK-PINS | Pins | P1 | ✅ | `cmd:view.maskPins`, `cmd:view.toolOverlay`, `crates/ui-egui/src/panels/detail.rs`, `crates/ui-egui/src/tests/tool_overlay.rs`, `crates/ui-egui/src/tests/masking.rs` | a pin per radial/linear/brush component: click selects its mask, drag moves it; Object (at its first click) and Describe (on what it found) components have pins too: click selects, drag changes nothing (issue #3049); Show Pins on follows the Tool Overlay mode (Auto: while the pointer is over the photo, hidden while brushing; Always; Selected: the selected mask's; Never; ⇧H cycles, #224); no pins for range components or Subject, Sky, Background, People and Landscape |
-| LR-MASK-UPDATE | Recompute AI masks | P2 | ⬜ | | |
-| LR-MASK-SYNC | Copy masks to other photos | P1 | ✅ | `cmd:develop.copy` (`groups`) | |
+| LR-MASK-UPDATE | Recompute AI masks | P2 | 🟡 | `cmd:develop.paste`, `cmd:develop.pastePrevious`, `crates/engine/src/segment/paste.rs` | pasted Object/Describe components recomputed per destination with SAM 3, in the background with cancellable Activity progress; adjustments and manual components preserved, one undo step; no standalone Update AI Masks action yet |
+| LR-MASK-SYNC | Copy masks to other photos | P1 | 🟡 | `cmd:develop.copy` (`groups`), `cmd:develop.paste`, `cmd:develop.pastePrevious` | Paste recomputes Object/Describe shapes and discards source detail patches; copied normalized object clicks may need refinement if the subject moved. Sync Settings, Auto Sync and presets still transfer cached AI shapes |
 | LR-MASK-ADAPTIVE | Adaptive presets | P2 | ⬜ | | |
 
 ## L. Presets (PRE)
@@ -351,7 +351,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 |---|---|---|---|---|---|
 | LR-SYNC-COPY | Copy edit settings | P0 | ✅ | `cmd:develop.copy` | |
 | LR-SYNC-CHOOSE | Choose settings to copy | P0 | ✅ | `cmd:dialog.copySettings` | groups are coarser than per-slider |
-| LR-SYNC-PASTE | Paste to selection | P0 | ✅ | `cmd:develop.paste` | no separate "paste selected" (choose at copy time instead) |
+| LR-SYNC-PASTE | Paste to selection | P0 | ✅ | `cmd:develop.paste`, `cmd:dialog.pasteSettings` | choose copied groups at paste time; included Object/Describe masks recomputed per destination with SAM 3, asynchronously in the app; successive clicks queue captured targets/settings in order, with independent Activity cancellation and one undo step per click; cancellation removes the operation on the next poll without waiting for a worker reply; failures/cancel leave that whole paste unapplied |
 | LR-SYNC-SYNCBTN | Sync active → selected | P1 | ✅ | `cmd:develop.sync` | |
 | LR-SYNC-PREVIOUS | Paste from previous / auto sync [Classic] | P2 | ✅ | `cmd:develop.pastePrevious`, `cmd:develop.autoSync` | ⌥⌘V pastes the previously active photo's settings (copy groups); Auto Sync (⌥⇧⌘A) |
 
@@ -529,7 +529,7 @@ visible menu bar yet: the menu model is only exposed through the control channel
 | MENU-EDIT-REDO | Redo | P0 | ✅ | `cmd:edit.redo` | |
 | MENU-EDIT-COPYPASTE | Copy / paste (edit settings) | P0 | ✅ | `cmd:develop.copy`, `cmd:develop.paste` | |
 | MENU-EDIT-CHOOSECOPY | Choose Edit Settings to Copy… | P0 | ✅ | `cmd:dialog.copySettings` | Return copies, Esc cancels |
-| MENU-EDIT-PASTESELECTED | Paste Selected Settings | P0 | ✅ | `cmd:dialog.pasteSettings`, `cmd:develop.paste` (`groups`) | checklist prefilled with the copied groups; only copied groups can be pasted; Return pastes, Esc cancels; Paste Settings from Previous (⌥⌘V) follows it |
+| MENU-EDIT-PASTESELECTED | Paste Selected Settings | P0 | ✅ | `cmd:dialog.pasteSettings`, `cmd:develop.paste` (`groups`) | checklist prefilled with the copied groups; only copied groups can be pasted; immediate refusal shows the error and retains choices for retry; Return pastes, Esc cancels; Paste Settings from Previous (⌥⌘V) follows it |
 | MENU-EDIT-SELECTALL | Select All | P0 | ✅ | `cmd:library.selectAll` | |
 | MENU-EDIT-SELECTNONE | Select None | P0 | ✅ | `cmd:library.selectNone` | Select Only Active Photo (⇧⌘D) follows it |
 | MENU-EDIT-SELECTBY | Select by flag / rating | P1 | ✅ | `cmd:library.selectBy` | Edit → Select by: picks, rejects, unflagged, ★…★★★★★ and higher, unrated, colour labels; `add` extends the selection |
@@ -807,6 +807,9 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-15 | patch | LR-SYNC-PASTE: cancelling an active AI-mask paste releases its Activity row without waiting for an unanswered worker; later pastes are preserved. Overlap refusal applies only to pastes requiring AI recomputation; statuses unchanged (#4279 review) |
+| 2026-11-15 | patch | LR-SYNC-PASTE: successive AI-mask pastes queue captured targets/settings in order with separate cancellation/undo. MENU-EDIT-PASTESELECTED: errors retain chosen groups. All paste entry points share refusal feedback and no longer announce success on pending/no-change responses; statuses unchanged |
+| 2026-11-14 | minor | LR-MASK-UPDATE ⬜ → 🟡: Paste and Paste from Previous recompute Object/Describe components on each destination, preserving adjustments/manual components, with cancellable Activity progress and atomic one-step undo. LR-MASK-SYNC ✅ → 🟡: Sync/Auto Sync/presets still copy cached AI shapes; no net checklist score change |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-05 | patch | LRC-LIB-CATALOG-LOCK: a library is written only to the folder it was opened from (on Unix, where the system gives a folder an identity, it is checked before every write of the catalog, settings, lock note and thumbnails; a share mounted over it, or a replaced folder, is refused and nothing is written; a folder that holds this session's lock note counts as the opened one, so a drive mounted again keeps saving; on Windows only that the path is still a folder is checked, so a replaced folder or a share mounted at the same path is not caught), a Move import removes its originals only once the catalog log is on disk, and dropping the lock removes only the owner note it wrote itself (#3240); status unchanged |
 | 2026-11-05 | minor | LR-EDIT-LENSBLUR: ⬜ → 🟡 (Lens Blur section: Apply, Blur Amount, Boost, focus on the subject or a mask; no depth map yet); LR-MASK-SLIDERS: a Lens Blur block in every mask (selection or outside, Amount, Boost, Transition); KEY-SECTIONS: ⌘6 opens Lens Blur |

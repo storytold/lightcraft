@@ -73,7 +73,7 @@ impl Unit {
 pub struct TaskInfo {
     pub id: u64,
     /// A stable id: `import`, `export`, `scan`, `previews`, `smartPreviews`, `lightroom`, `merge`, `download`,
-    /// `faces`, `denoise`, `findMissing`, `applePhotos`, `cache`, `focus`.
+    /// `faces`, `denoise`, `findMissing`, `applePhotos`, `cache`, `focus`, `segment`.
     pub kind: &'static str,
     /// English; the frontend translates it.
     pub label: String,
@@ -92,7 +92,7 @@ pub struct TaskInfo {
 struct Entry {
     id: u64,
     kind: &'static str,
-    label: String,
+    label: Mutex<String>,
     started: web_time::Instant,
     done: AtomicU64,
     total: AtomicU64,
@@ -155,7 +155,7 @@ impl Entry {
         TaskInfo {
             id: self.id,
             kind: self.kind,
-            label: self.label.clone(),
+            label: lock(&self.label).clone(),
             done: self.done.load(Ordering::Relaxed),
             total: self.total.load(Ordering::Relaxed),
             unit: Unit::from_u8(self.unit.load(Ordering::Relaxed)),
@@ -180,7 +180,7 @@ impl Activity {
         let entry = Arc::new(Entry {
             id,
             kind,
-            label: capped(label),
+            label: Mutex::new(capped(label)),
             started: web_time::Instant::now(),
             done: AtomicU64::new(0),
             total: AtomicU64::new(0),
@@ -204,7 +204,7 @@ impl Activity {
     pub fn cancel(&self, id: u64) -> Result<(), String> {
         let tasks = lock(&self.inner.tasks);
         let entry = tasks.iter().find(|e| e.id == id).ok_or_else(|| format!("no task {id}"))?;
-        if entry.try_cancel() { Ok(()) } else { Err(format!("{} can't be cancelled", entry.label)) }
+        if entry.try_cancel() { Ok(()) } else { Err(format!("{} can't be cancelled", lock(&entry.label))) }
     }
 
     /// Ask every cancellable task to stop; returns how many were asked.
@@ -228,6 +228,11 @@ pub struct TaskGuard {
 impl TaskGuard {
     pub fn id(&self) -> u64 {
         self.entry.id
+    }
+
+    /// Change the English label without replacing the row or its cancellation flag.
+    pub fn label(&self, text: &str) {
+        *lock(&self.entry.label) = capped(text);
     }
 
     /// `done` of `total` (`total` 0 = not known yet). `done` is kept at most `total`.
@@ -316,6 +321,20 @@ mod tests {
         assert_eq!(a.list().len(), 1);
         drop(g);
         assert!(a.list().is_empty());
+    }
+
+    #[test]
+    fn a_label_change_keeps_the_row_and_accepted_cancellation() {
+        let a = Activity::default();
+        let g = a.start("segment", "Queued AI mask paste", Cancel::Yes);
+        let id = g.id();
+        a.cancel(id).unwrap();
+        g.label("Recomputing AI masks");
+        assert_eq!(a.list()[0].id, id);
+        assert_eq!(a.list()[0].label, "Recomputing AI masks");
+        assert!(g.is_cancelled());
+        g.label(&"ą".repeat(MAX_TEXT + 10));
+        assert_eq!(a.list()[0].label.chars().count(), MAX_TEXT);
     }
 
     #[test]
