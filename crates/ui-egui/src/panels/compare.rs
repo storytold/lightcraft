@@ -188,9 +188,8 @@ pub fn target_active(app: &LightcraftApp, params: &mut Value) {
 }
 
 fn area_and_filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui) -> Rect {
-    let t = Tokens::get(ui.ctx());
     let full = ui.max_rect();
-    let film_h = if app.ui.filmstrip { t.film_h } else { 0.0 };
+    let film_h = if app.ui.filmstrip { crate::state::film_height(app.ui.film_height, full.height()) } else { 0.0 };
     let canvas = Rect::from_min_max(full.min, pos2(full.right(), full.bottom() - film_h));
     app.canvas_rect = Some(canvas);
     if app.ui.filmstrip {

@@ -335,6 +335,21 @@ impl LightsOut {
 /// Click-zoom ratios offered (percent): 1:1, 2:1, 3:1, 4:1, 8:1.
 pub const CLICK_ZOOMS: [u32; 5] = [100, 200, 300, 400, 800];
 
+/// The filmstrip's height (points): what it always was, the smallest it goes (issue #4110).
+pub const FILM_HEIGHT_MIN: f32 = 142.0;
+/// The tallest the filmstrip can be dragged (points); a short window caps it lower ([`film_height`]).
+pub const FILM_HEIGHT_MAX: f32 = 360.0;
+
+/// The filmstrip's height for a stored `want` in a view `full_h` points tall: between
+/// [`FILM_HEIGHT_MIN`] and [`FILM_HEIGHT_MAX`], and at most 40 % of the view, so the photo keeps most
+/// of a short window (never below the minimum: that is the strip as it always was). A stored value that
+/// is not a number gives the minimum.
+pub fn film_height(want: f32, full_h: f32) -> f32 {
+    let want = if want.is_finite() { want } else { FILM_HEIGHT_MIN };
+    let cap = if full_h.is_finite() { (full_h * 0.4).max(FILM_HEIGHT_MIN) } else { FILM_HEIGHT_MAX };
+    want.clamp(FILM_HEIGHT_MIN, FILM_HEIGHT_MAX.min(cap))
+}
+
 /// Grid thumbnail size (points): the bottom-bar slider's range, and the `=` / `-` keys' step
 /// (`view.thumbSizeUp` / `view.thumbSizeDown`), about a thirteenth of the range.
 pub const THUMB_SIZE_MIN: f32 = 90.0;

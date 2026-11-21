@@ -88,7 +88,6 @@ pub struct Tokens {
     pub strip_w: f32,
     pub slider_row_h: f32,
     pub section_h: f32,
-    pub film_h: f32,
 }
 
 /// An interface theme. Each belongs to the dark or the light family.
@@ -170,7 +169,6 @@ impl Default for Tokens {
             strip_w: 48.0,
             slider_row_h: 45.0,
             section_h: 57.0,
-            film_h: 142.0,
         }
     }
 }

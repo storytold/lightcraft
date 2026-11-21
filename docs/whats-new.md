@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### A taller filmstrip
+- Drag the filmstrip's top edge up to make it taller, with bigger thumbnails and easier-to-read stars, as in
+  Lightroom; double-click the edge for the usual height. LightCraft remembers the height (issue #4110).
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
