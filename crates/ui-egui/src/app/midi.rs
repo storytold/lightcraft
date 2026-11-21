@@ -21,9 +21,9 @@ impl LightcraftApp {
             self.midi_rx = Some(rx);
             for action in actions {
                 match action {
-                    Action::Command(id) => {
+                    Action::Command { command, params } => {
                         self.end_midi_interaction();
-                        let _ = self.run(&id, serde_json::json!({}));
+                        let _ = self.run(&command, params);
                     }
                     Action::Set { control, value } => {
                         let params = serde_json::json!({ "control": control, "value": value });

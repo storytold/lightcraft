@@ -1,6 +1,6 @@
 # MIDI controller input
 
-> **Last updated:** 2026-10-17 · **Change:** major (first version: configurable TOML map, `midi.reload`, example for the M-VAVE SMC-Mixer)
+> **Last reviewed:** 2026-11-21 · **Changes:** [revision history](#revision-history)
 
 A MIDI control surface can drive Develop sliders, run commands and step through photos. Windows and macOS
 only for now (Linux's ALSA backend is a C library, which the pure-Rust rule rules out; web has no input).
@@ -50,7 +50,8 @@ Each binding has a **source** and one **target**. The first binding that matches
 | `nudge` | A develop control id. **Relative**: each tick moves it by `step` (default 1), through `develop.adjust`. Goes with `control_change`. |
 | `encoding` | With `nudge`: how the knob writes direction. `"sign_magnitude"` (default; 1–63 clockwise, 65–127 counter-clockwise by value − 64, as the SMC-Mixer and Mackie surfaces do), `"twos_complement"` (127 = −1) or `"offset"` (64 = no move, above clockwise). |
 | `step` | With `nudge`: the amount per tick, in the control's units (Kelvin for `wb.temp`). |
-| `run` | A command id, run with no parameters (a command that needs some, like `develop.set`, is rejected when the map loads). Goes with `note`, or `control_change` for a pedal or button that sends CC (runs on a non-zero value). |
+| `run` | A command id. Goes with `note`, or `control_change` for a pedal or button that sends CC (runs on a non-zero value). Without `params` it runs with none, and a command that needs some (like `develop.set`) is rejected when the map loads. |
+| `params` | With `run`: the command's parameters as a TOML table, e.g. `{ rating = 3 }` for `photo.rate` or `{ control = "light.exposure", value = 0 }` for `develop.set`. They are passed as they are and checked when the command runs. `params = {}` runs a command whose parameters are all optional (`develop.copy`). |
 
 Control ids are the Develop sliders (`crates/develop/src/controls.rs`); command ids are the ones in
 [control-protocol.md](control-protocol.md). Unknown ids, out-of-range numbers, unknown keys and targets that
@@ -80,6 +81,34 @@ Code: parse + map in `crates/engine/src/midi.rs` (`Map::from_toml`, `Map::action
 port thread in `apps/lightcraft/src/midi.rs`, dispatch in `LightcraftApp::drain_midi` and the `midi.reload`
 UI command (`crates/ui-egui/src/lib.rs`, `menus.rs`), tests in `tests_midi.rs`.
 
+## Example: Loupedeck+
+
+[`midi/loupedeck-plus.toml`](midi/loupedeck-plus.toml). Quit the Loupedeck software first: while it runs it holds
+the device. The knobs are relative in two's complement; the eight scroller wheels have four banks that the
+device switches itself with its Hue, Sat, Lum and Clr/BW keys.
+
+| Control | Message | Does |
+|---|---|---|
+| Knobs | CC 33–48, relative | Exposure, Blacks, Whites, Saturation, Vibrance, Temp, Tint, Highlights, Shadows, Clarity, Contrast as labelled; D1 `effects.dehaze`, D2 `effects.texture`, Control Dial `crop.angle` |
+| Knob clicks | notes 33–48 | reset that slider (`develop.set` to 0; not Temp) |
+| Scrollers, bank Hue / Sat / Lum | CC 1–8 / 9–16 / 17–24 | Color Mixer hue / saturation / luminance, red … magenta |
+| Scrollers, bank Clr/BW | CC 25–32 | B&W mix, red … magenta |
+| Undo, Redo | notes 95, 96 | `edit.undo`, `edit.redo` |
+| Copy, Paste | notes 92, 93 | `develop.copy`, `develop.paste` |
+| The five colour keys | notes 66–70 | 1–5 stars (`photo.rate`) |
+| P1, P2 | notes 80, 81 | `photo.pick`, `photo.reject` |
+| P3–P7, P8 | notes 82–86, 87 | colour labels red, yellow, green, blue, purple; clear label |
+| ◀ ▶ | notes 78, 79 | `library.previous`, `library.next` |
+| ▲ ▼ | notes 76, 77 | `photo.increaseRating`, `photo.decreaseRating` |
+| Custom Mode, */Col | notes 117, 65 | `develop.auto`, `develop.treatment` |
+
 ## Not done yet
 Reloading when the file changes, an editing UI, MIDI learn, pickup mode, other value ranges (`min` / `max`,
 invert), several maps per device, LED feedback (the SMC-Mixer takes Note On on its second output port), Linux.
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-11-21 | minor | `params` for `run` bindings (a button can run `photo.rate` with `rating = 3`, or reset a slider with `develop.set`); example map for the Loupedeck+ |
+| 2026-10-17 | major | First version: configurable TOML map, `midi.reload`, example for the M-VAVE SMC-Mixer |

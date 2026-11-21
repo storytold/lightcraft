@@ -33,8 +33,8 @@ pub enum Action {
     Set { control: String, value: f64 },
     /// Move a develop control by this much.
     Nudge { control: String, delta: f64 },
-    /// Run a command with no parameters.
-    Command(String),
+    /// Run a command with these parameters (`{}` unless the binding gives `params`).
+    Command { command: String, params: serde_json::Value },
 }
 
 /// Parse one raw MIDI message; `None` for anything the map has no use for or that is malformed.
@@ -109,7 +109,7 @@ enum Source {
 enum Target {
     Set(String),
     Nudge { control: String, step: f64, encoding: Encoding },
-    Run(String),
+    Run { command: String, params: serde_json::Value },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -140,7 +140,7 @@ impl Binding {
                 Target::Nudge { control, step, encoding } => {
                     Some(Action::Nudge { control: control.clone(), delta: f64::from(encoding.ticks(value)?) * step })
                 }
-                Target::Run(command) => (value > 0).then(|| Action::Command(command.clone())),
+                Target::Run { command, params } => (value > 0).then(|| Action::Command { command: command.clone(), params: params.clone() }),
             },
             (Source::PitchBend, Message::PitchBend { channel, value }) if on_channel(channel) => match &self.target {
                 // the SMC-Mixer's faders send 7-bit steps in the top of the 14 bits
@@ -148,7 +148,7 @@ impl Binding {
                 _ => None,
             },
             (Source::Note(n), Message::NoteOn { channel, note }) if n == note && on_channel(channel) => match &self.target {
-                Target::Run(command) => Some(Action::Command(command.clone())),
+                Target::Run { command, params } => Some(Action::Command { command: command.clone(), params: params.clone() }),
                 _ => None,
             },
             _ => None,
@@ -191,6 +191,7 @@ struct Raw {
     run: Option<String>,
     step: Option<f64>,
     encoding: Option<Encoding>,
+    params: Option<toml::Table>,
 }
 
 /// Whether a command can be run with an empty object: its parameter description (`{}`, `{ids?}`,
@@ -226,6 +227,9 @@ impl Raw {
             Kind::Note => Source::Note(number),
         };
         let control = |id: &str| controls::find(id).map(|_| id.to_string()).ok_or_else(|| format!("{id} is not a develop control"));
+        if self.params.is_some() && self.run.is_none() {
+            return Err("params goes with run".into());
+        }
         let target = match (self.set, self.nudge, self.run) {
             (Some(id), None, None) if self.on != Kind::Note => Target::Set(control(&id)?),
             (None, Some(id), None) if self.on == Kind::ControlChange => {
@@ -239,11 +243,15 @@ impl Raw {
                 let Some(spec) = crate::cmd::find_command(&id) else {
                     return Err(format!("{id} is not a command"));
                 };
-                // a message carries no parameters: the command is run with `{}`
-                if !runs_without_params(spec.params) {
-                    return Err(format!("{id} needs parameters ({}), which a MIDI message cannot give", spec.params));
-                }
-                Target::Run(id)
+                // a message carries no parameters, so they come from the map or the command runs with `{}`
+                let params = match self.params {
+                    Some(table) => serde_json::to_value(table).map_err(|e| format!("params: {e}"))?,
+                    None if runs_without_params(spec.params) => serde_json::json!({}),
+                    None => {
+                        return Err(format!("{id} needs parameters ({}): give them with `params`", spec.params));
+                    }
+                };
+                Target::Run { command: id, params }
             }
             (None, None, None) => return Err("needs one of set, nudge or run".into()),
             _ => {
@@ -334,7 +342,7 @@ mod tests {
         Some(Action::Nudge { control: control.into(), delta })
     }
     fn run(command: &str) -> Option<Action> {
-        Some(Action::Command(command.into()))
+        Some(Action::Command { command: command.into(), params: serde_json::json!({}) })
     }
 
     #[test]
@@ -347,6 +355,17 @@ mod tests {
         assert_eq!(parse(&[]), None);
         assert_eq!(parse(&[0xB0, 16]), None);
         assert_eq!(parse(&[0xB0, 200, 1]), None); // not a data byte
+    }
+
+    #[test]
+    fn the_loupedeck_plus_example_is_valid() {
+        let map = Map::from_toml(include_str!("../../../docs/midi/loupedeck-plus.toml")).unwrap();
+        assert_eq!(map.action(cc(33, 127)), nudge("light.exposure", -0.05));
+        assert_eq!(map.action(cc(9, 1)), nudge("mixer.red.sat", 1.0));
+        assert_eq!(
+            map.action(Message::NoteOn { channel: 0, note: 68 }),
+            Some(Action::Command { command: "photo.rate".into(), params: serde_json::json!({ "rating": 3 }) })
+        );
     }
 
     #[test]
@@ -423,6 +442,13 @@ run = \"{run}\"
         assert!(bind("photo.rotateLeft").is_ok()); // {ids?}
         let err = bind("develop.set").unwrap_err();
         assert!(err.contains("needs parameters"), "{err}");
+        let rate = Map::from_toml(r#"bindings = [{ on = "note", number = 1, run = "photo.rate", params = { rating = 3 } }]"#).unwrap();
+        assert_eq!(
+            rate.action(Message::NoteOn { channel: 0, note: 1 }),
+            Some(Action::Command { command: "photo.rate".into(), params: serde_json::json!({ "rating": 3 }) })
+        );
+        let err = Map::from_toml(r#"bindings = [{ on = "note", number = 1, nudge = "light.exposure", params = { a = 1 } }]"#).unwrap_err();
+        assert!(err.contains("params goes with run"), "{err}");
         assert!(runs_without_params("{}"));
         assert!(runs_without_params("{ids?, advance?: bool}"));
         assert!(runs_without_params("{} → {total}"));
