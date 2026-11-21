@@ -19,3 +19,9 @@ lightcraft-scenes = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 rayon = { workspace = true }
+
+[dev-dependencies]
+dhat = { workspace = true }
+half = { version = "2.7.1", default-features = false }
+lightcraft-develop = { workspace = true }
+lightcraft-pipeline = { workspace = true }
