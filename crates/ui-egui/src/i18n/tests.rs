@@ -6,7 +6,7 @@ use super::*;
 #[test]
 fn languages_switch_persist_and_keep_user_values() {
     use crate::control::{ControlRequest, Outcome};
-    let languages: [(Locale, &str, &[&str], &str); 8] = [
+    let languages: [(Locale, &str, &[&str], &str); 9] = [
         (Locale::Cs, "czech", &["cs", "cs-CZ", "cs_CZ.UTF-8", "cs-Latn-CZ"], "áčďéěíňóřšťúůýžÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ„“"),
         (Locale::Id, "indonesian", &["id", "id-ID", "id_ID.UTF-8", "id-Latn-ID"], ""),
         (Locale::Sv, "swedish", &["sv", "sv-SE", "sv_SE.UTF-8", "sv-FI"], "åäöÅÄÖé”’"),
@@ -15,6 +15,7 @@ fn languages_switch_persist_and_keep_user_values() {
         (Locale::It, "italian", &["it", "it-IT", "it_IT.UTF-8", "it-Latn-IT", "it-CH"], ""),
         (Locale::Fi, "finnish", &["fi", "fi-FI", "fi_FI.UTF-8", "fi-Latn-FI"], ""),
         (Locale::Vi, "vietnamese", &["vi", "vi-VN", "vi_VN", "vi_VN.UTF-8"], ""),
+        (Locale::Tr, "turkish", &["tr", "tr-TR", "tr_TR", "tr_TR.UTF-8"], "çğıöşüÇĞİÖŞÜ"),
     ];
     for (locale, command, tags, letters) in languages {
         let command = format!("app.language.{command}");
@@ -244,7 +245,7 @@ fn assert_format_specs(language: &Locale) {
     let text = tr_format!("{count} smart preview{} · {:.1} MB", "s", 12.345, count = 3);
     assert!(text.contains("12.3") && !text.contains("12.34"), "{language:?}: {text}");
     let merging = tr_format!("Merging… {stage} {:.0}%", 42.4, stage = "Aligning");
-    assert!(merging.contains("42%"), "{language:?}: {merging}");
+    assert!(merging.contains("42%") || merging.contains("%42"), "{language:?}: {merging}");
     let delta = tr_format!("{label} {d:+} on every selected photo", label = "Exposure", d = 5);
     assert!(delta.contains("+5"), "{language:?}: {delta}");
     let reading = tr_format!("Reading photos… {} of {}", 3, 10);
@@ -390,6 +391,7 @@ fn language_commands_cover_every_language() {
         ("app.language.finnish", Locale::Fi),
         ("app.language.indonesian", Locale::Id),
         ("app.language.vietnamese", Locale::Vi),
+        ("app.language.turkish", Locale::Tr),
     ];
     // One command per language, and every command in the UI command tables.
     assert_eq!(commands.len(), Locale::ALL.len());
