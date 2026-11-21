@@ -1979,6 +1979,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"changed": n}))
             }
         ),
+        cmd!(query "photo.sharedMeta", "Shared Info", [], None, "{ids?} → {count, fields: {key: value | null}, mixed: [key]}: photo.setMeta's fields across the photos (default the selection); a field whose values differ is null and listed in `mixed`, so an edit can set only the fields the user changed", has_selection, shared_meta),
         // ---- albums
         cmd!(
             "album.create",
@@ -3120,6 +3121,64 @@ fn flush_gps_number(token: &mut String, components: &mut Vec<f64>, explicit_sign
     components.push(value);
     token.clear();
     Some(())
+}
+
+/// photo.setMeta's fields of one photo as JSON values, keyed as photo.setMeta takes them.
+fn meta_fields(m: &lcc_catalog::Meta) -> Vec<(&'static str, Value)> {
+    let mut out: Vec<(&'static str, Value)> = [
+        ("title", &m.title),
+        ("headline", &m.headline),
+        ("caption", &m.caption),
+        ("descriptionWriter", &m.description_writer),
+        ("category", &m.category),
+        ("copyright", &m.copyright),
+        ("usageTerms", &m.usage_terms),
+        ("copyrightUrl", &m.copyright_url),
+        ("creator", &m.creator),
+        ("location", &m.location),
+        ("city", &m.city),
+        ("state", &m.state),
+        ("country", &m.country),
+        ("countryCode", &m.country_code),
+        ("altText", &m.alt_text),
+        ("extendedDescription", &m.extended_description),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k, json!(v)))
+    .collect();
+    for k in lcc_meta::CreatorContact::KEYS {
+        out.push((k, json!(m.contact.get(k).cloned().unwrap_or_default())));
+    }
+    out.push(("copyrightStatus", json!(m.copyright_status.id())));
+    out.push(("gps", m.gps.map_or(Value::Null, |(la, lo)| json!([la, lo]))));
+    out.push(("keywords", json!(m.keywords)));
+    out.push(("supplementalCategories", json!(m.supplemental_categories)));
+    out.push(("subjectCode", json!(m.subject_code)));
+    out
+}
+
+/// `photo.sharedMeta`: each field's value when every target photo has the same one, else null and listed as mixed.
+fn shared_meta(s: &mut Session, p: &Value) -> Result<Value> {
+    let targets = s.targets(p)?;
+    let mut shared: Vec<(&'static str, Option<Value>)> = Vec::new();
+    let mut count = 0usize;
+    for id in targets {
+        let Some(ph) = s.catalog.photo(id) else { continue };
+        let fields = meta_fields(&ph.meta);
+        if count == 0 {
+            shared = fields.into_iter().map(|(k, v)| (k, Some(v))).collect();
+        } else {
+            for ((_, have), (_, v)) in shared.iter_mut().zip(fields) {
+                if have.as_ref().is_some_and(|h| *h != v) {
+                    *have = None;
+                }
+            }
+        }
+        count += 1;
+    }
+    let mixed: Vec<&str> = shared.iter().filter(|(_, v)| v.is_none()).map(|(k, _)| *k).collect();
+    let fields: serde_json::Map<String, Value> = shared.into_iter().map(|(k, v)| (k.to_string(), v.unwrap_or(Value::Null))).collect();
+    Ok(json!({"count": count, "fields": fields, "mixed": mixed}))
 }
 
 #[cfg(test)]

@@ -880,3 +880,29 @@ fn shifting_a_capture_time_without_seconds_keeps_its_zone() {
     assert_eq!(lcc_catalog::dates::shift_iso(&got, 0).as_deref(), Some(got.as_str()), "the stored time reads back");
 }
 
+/// Gap 38: across a selection, photo.sharedMeta shows each field's shared value or marks it mixed, and an edit of
+/// one field leaves the other (mixed) fields of every photo as they were; hostile `ids` never panic.
+#[test]
+fn shared_meta_marks_mixed_fields_and_edits_keep_them() {
+    let mut s = Session::new();
+    s.open_library(temp_dir("shared-meta").join("lib"), true).unwrap();
+    let ids: Vec<u64> = s.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    s.execute("photo.setMeta", &json!({"ids": ids, "copyright": "© Me", "keywords": ["a"]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [ids[0]], "title": "One"})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [ids[1]], "title": "Two"})).unwrap();
+    let r = s.execute("photo.sharedMeta", &json!({"ids": ids})).unwrap();
+    assert_eq!(r["count"], json!(2));
+    assert_eq!(r["fields"]["copyright"], json!("© Me"));
+    assert_eq!(r["fields"]["keywords"], json!(["a"]));
+    assert_eq!(r["fields"]["title"], serde_json::Value::Null);
+    let mixed: Vec<&str> = r["mixed"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+    assert!(mixed.contains(&"title") && !mixed.contains(&"copyright"), "{r}");
+    // editing the shared field leaves each photo's own title
+    s.execute("photo.setMeta", &json!({"ids": ids, "copyright": "© You"})).unwrap();
+    let one = s.execute("photo.sharedMeta", &json!({"ids": [ids[0]]})).unwrap();
+    assert_eq!((one["fields"]["title"].clone(), one["fields"]["copyright"].clone()), (json!("One"), json!("© You")));
+    assert_eq!(s.execute("photo.sharedMeta", &json!({"ids": [ids[1]]})).unwrap()["fields"]["title"], json!("Two"));
+    for hostile in [json!({"ids": [u64::MAX]}), json!({"ids": "x"}), json!({"ids": [-1, 1.5, null]})] {
+        let _ = s.execute("photo.sharedMeta", &hostile);
+    }
+}
