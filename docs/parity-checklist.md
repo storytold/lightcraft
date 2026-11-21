@@ -54,13 +54,13 @@ every PR would edit and conflict on. A row marked ✅ that is wrong or incomplet
 | U. Map & location (MAP) | 0 | 1 | 1 | 0 | — | 0/1 (0%) |
 | V. Preferences (PREF) | 6 | 2 | 2 | 2 | 1/1 (100%) | 4/5 (80%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
-| X. Cross-cutting behaviours (BEHAV) | 23 | 6 | 1 | 1 | 8/8 (100%) | 7/10 (70%) |
+| X. Cross-cutting behaviours (BEHAV) | 22 | 7 | 1 | 1 | 7/8 (88%) | 7/10 (70%) |
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 26 | 21 | 8 | — | 24/27 (89%) |
-| **Total** | 419 | 71 | 56 | 35 | 193/203 (95%) | 147/163 (90%) |
+| **Total** | 418 | 72 | 56 | 35 | 192/203 (95%) | 147/163 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 546 in-scope rows — P0 97.5% of 203 · P1 94.2% of 163 · P2 57.0% of 179.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 546 in-scope rows — P0 97.3% of 203 · P1 94.2% of 163 · P2 57.0% of 179.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -464,7 +464,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 |---|---|---|---|---|---|
 | LR-BEHAV-AUTOSAVE | Instant autosave | P0 | ✅ | `crates/catalog/src/journal.rs`, `crates/engine/src/library.rs` | every change fsynced before the command returns; a failed write fails the command ("saved in memory but not written to disk"), keeps the change queued and retries; top-bar warning until saved; a write that fails part-way is cut back to the last whole record so the retry never reads back as damage (logs from older builds with such a fragment load in full); quitting saves queued changes in the closing snapshot even when the log can't be appended to; versioned catalog format (`journal::VERSION`): older libraries are upgraded on open, a library from a newer LightCraft is refused untouched ("written by a newer version"); a damaged or hand-edited snapshot that still reads is made consistent on open (`Catalog::repair`: records filed under another id, stacks of missing, repeated or too few photos, folders inside themselves, id counters behind the ids in use) instead of panicking or hanging later |
 | LR-BEHAV-UNDO | Global undo | P0 | ✅ | `cmd:edit.undo`, `crates/engine/src/tests.rs` (`rating_flag_undo_redo`), `crates/engine/src/tests/filesystem_history.rs` | covers ratings, albums, deletes, edits; partial file/XMP moves keep unfinished repairs across retries and discarded history; merged renames move directly to their final catalog path |
-| LR-BEHAV-MULTISELECT | Multi-selection | P0 | ✅ | `cmd:library.select` (`replace`/`add`/`toggle`/`range`), `cmd:library.selectAll`, `crates/engine/src/tests/ids_params.rs` (`library_select_replace_drops_repeated_ids`) | `replace` keeps each photo once, in the order first given, so a drag of the selection carries it once |
+| LR-BEHAV-MULTISELECT | Multi-selection | P0 | 🟡 | `cmd:library.select` (`replace`/`add`/`toggle`/`range`), `cmd:library.selectAll`, `crates/engine/src/tests/ids_params.rs` (`library_select_replace_drops_repeated_ids`), `crates/engine/src/tests/batch_sidebar.rs` | several albums, folders of albums, keywords or library folders chosen in the sidebar are deleted, moved or labeled as one undo step: `album.delete` and `album.move` take `ids`, `keyword.delete` and `keyword.move` take `keywords`, `library.removeFolder` and `folder.label` take `paths`; each checks everything first and names what it refuses (engine only, no sidebar caller yet); `replace` keeps each photo once, in the order first given, so a drag of the selection carries it once |
 | LR-BEHAV-BATCH | Batch apply to selection | P0 | ✅ | `cmd:photo.rate`, `cmd:develop.paste`, `cmd:preset.apply`, `cmd:app.export` | |
 | LR-BEHAV-PREVIEW-HOVER | Hover previews | P1 | ✅ | `crates/ui-egui/src/panels/presets.rs`, `crates/ui-egui/src/panels/profiles.rs`, `crates/ui-egui/src/panels/right.rs` (`versions`), `crates/ui-egui/src/panels/detail.rs` | presets, profile menu, profile browser and versions preview in the loupe |
 | LR-BEHAV-PROGRESSIVE | Progressive rendering | P0 | ✅ | `crates/engine/src/media.rs`, `crates/preview/src/lib.rs` | |
@@ -1064,3 +1064,4 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-20 | patch | LR-EXP-DIALOG: the four built-in export presets are translated in all 17 catalogs (translations pending native-speaker review); Instagram Story / Reel states that it applies no crop to 9:16; status unchanged (✅) |
 | 2026-10-31 | patch | LRC-LIB-VISUALSEARCH: Find Similar Photos reads the photos on a worker thread under an activity row with ✕ instead of on the UI thread, where a large library left the window not responding (#3468). A stopped search leaves the view as it was and keeps what it read; a control request gets the same `{photos}` when the search ends. |
 | 2026-10-27 | patch | LR-BEHAV-LOCALE: the Edit menu loses its Language submenu (18 rows); Settings ▸ General ▸ Language, which already lists every language, is the one place to choose; the `app.language.*` commands stay for agents; status counts unchanged |
+| 2026-10-23 | patch | LR-BEHAV-MULTISELECT: `album.delete` and `album.move` take `ids`, `keyword.delete` and `keyword.move` take `keywords`, `library.removeFolder` and `folder.label` take `paths`, each as one undo step that checks everything before it changes anything (engine only; the sidebar's Cmd/Shift-click rows are the caller to come); downgraded ✅ → 🟡 until they exist |
