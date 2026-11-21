@@ -174,16 +174,18 @@ pub(super) fn read(db: &Db, photos: &mut [CatalogPhoto], warnings: &mut Vec<Noti
     let variants = db.table("ZVARIANT")?;
     let layer_of: HashMap<i64, Row<'_>> = layers.rows().filter_map(|r| Some((r.id("Z_PK")?, r))).collect();
     const OWN: [&str; 3] = ["ZDEFAULTLAYER", "ZADJUSTMENTLAYER", "ZCOMBINEDSETTINGS"];
-    let own: HashMap<i64, Vec<i64>> = variants.rows().filter_map(|v| Some((v.id("Z_PK")?, OWN.iter().filter_map(|c| v.id(c)).collect()))).collect();
+    let own: HashMap<i64, [Option<i64>; 3]> = variants.rows().filter_map(|v| Some((v.id("Z_PK")?, OWN.map(|c| v.id(c))))).collect();
     // a local adjustment or a style is a layer of its own that names the variant
     let more_layers: std::collections::HashSet<i64> = layers
         .rows()
         .filter_map(|r| {
             let variant = r.id("ZVARIANT")?;
             let pk = r.id("Z_PK")?;
-            own.get(&variant).is_some_and(|layers| !layers.contains(&pk)).then_some(variant)
+            own.get(&variant).is_some_and(|layers| !layers.contains(&Some(pk))).then_some(variant)
         })
         .collect();
+    // the columns that hold an adjustment this import doesn't read, found once for the table
+    let unread: Vec<&str> = layers.columns().filter(|c| !KNOWN.contains(c)).collect();
     let mut of_variant: HashMap<i64, (Geometry, Option<f64>)> = HashMap::new();
     for variant in variants.rows() {
         let Some(id) = variant.id("Z_PK") else { continue };
@@ -196,7 +198,7 @@ pub(super) fn read(db: &Db, photos: &mut [CatalogPhoto], warnings: &mut Vec<Noti
             row("ZCOMBINEDSETTINGS").and_then(|r| r.real("ZROTATION")).filter(|d| d.abs() <= MAX_ROTATION).or(adjusted.rotation).or(default.rotation);
         let geometry = Geometry {
             canvas: pair(variant.text("ZCANVASSIZE")),
-            other_adjustments: more_layers.contains(&id) || adjusted_row.is_some_and(|r| r.names().any(|c| !KNOWN.contains(&c) && r.is_set(c))),
+            other_adjustments: more_layers.contains(&id) || adjusted_row.is_some_and(|r| unread.iter().any(|c| r.is_set(c))),
             default,
             adjusted,
         };
@@ -361,6 +363,11 @@ fn orientation_matrix(o: Orientation) -> Turn {
     mul(quarters(i64::from(turns)), if mirror { MIRROR } else { IDENTITY })
 }
 
+/// `(x, y)` turned by `turn`.
+fn apply(turn: Turn, x: f64, y: f64) -> (f64, f64) {
+    (f64::from(turn[0][0]) * x + f64::from(turn[0][1]) * y, f64::from(turn[1][0]) * x + f64::from(turn[1][1]) * y)
+}
+
 fn orientation_of(m: Turn) -> Orientation {
     (0..8u8).map(|i| Orientation::from_parts(i >= 4, i % 4)).find(|o| orientation_matrix(*o) == m).unwrap_or_default()
 }
@@ -382,6 +389,7 @@ pub(super) fn develop(photo: &CatalogPhoto) -> Option<Develop> {
     let turns = (theta / 90.0).round();
     let straighten = theta - turns * 90.0;
     let turns = turns as i64;
+    let (abs_sin, abs_cos) = (straighten.to_radians().sin().abs(), straighten.to_radians().cos().abs());
     let file_turn = def.rotation.map_or(0, |d| (d / 90.0).round() as i64);
     let file = mul(flip_matrix(def.flip), quarters(file_turn));
     let user = orientation_of(mul(quarters(turns), inverse(file)));
@@ -400,8 +408,7 @@ pub(super) fn develop(photo: &CatalogPhoto) -> Option<Develop> {
     };
     let (ow, oh) = match g.canvas {
         Some((cw, ch)) if corrected && !shown.keystone.is_set() && shown.clipping != Some(1) => {
-            let (s, c) = (straighten.to_radians().sin().abs(), straighten.to_radians().cos().abs());
-            let (fx, fy) = (cw / (ow * c + oh * s), ch / (ow * s + oh * c));
+            let (fx, fy) = (cw / (ow * abs_cos + oh * abs_sin), ch / (ow * abs_sin + oh * abs_cos));
             let fill = |f: f64| if f.is_finite() && f > 0.5 && f <= 1.0 { f } else { 1.0 };
             (ow * fill(fx), oh * fill(fy))
         }
@@ -431,8 +438,7 @@ pub(super) fn develop(photo: &CatalogPhoto) -> Option<Develop> {
         // a straightened photo without a crop of its own shows the largest rectangle of its
         // shape that the turned photo fills
         None if straighten.abs() > NONE && ow > 0.0 && oh > 0.0 => {
-            let (s, c) = (straighten.to_radians().sin().abs(), straighten.to_radians().cos().abs());
-            let k = (ow / (ow * c + oh * s)).min(oh / (ow * s + oh * c));
+            let k = (ow / (ow * abs_cos + oh * abs_sin)).min(oh / (ow * abs_sin + oh * abs_cos));
             Some([0.5 - k / 2.0, 0.5 - k / 2.0, 0.5 + k / 2.0, 0.5 + k / 2.0])
         }
         None => None,
@@ -453,8 +459,7 @@ pub(super) fn develop(photo: &CatalogPhoto) -> Option<Develop> {
         }
         // within the bounding box of the photo turned by the straighten, which holds every crop
         // that stays on it (as `CropGeometry::bounded` keeps one)
-        let (s, c) = (straighten.to_radians().sin().abs(), straighten.to_radians().cos().abs());
-        let (bx, by) = ((ow * c + oh * s) / ow / 2.0, (ow * s + oh * c) / oh / 2.0);
+        let (bx, by) = ((ow * abs_cos + oh * abs_sin) / ow / 2.0, (ow * abs_sin + oh * abs_cos) / oh / 2.0);
         [r[0].clamp(0.5 - bx, 0.5 + bx), r[1].clamp(0.5 - by, 0.5 + by), r[2].clamp(0.5 - bx, 0.5 + bx), r[3].clamp(0.5 - by, 0.5 + by)]
     });
     let cropped = changed(&adj.crop, &def.crop) || straighten.abs() > NONE;
@@ -490,7 +495,16 @@ pub(super) fn develop(photo: &CatalogPhoto) -> Option<Develop> {
         );
     }
 
-    // lens corrections
+    lens(&shown, def, adj, corrected, &mut p, &mut left_out);
+    out.partial = p;
+    (!out.partial.is_empty() || !out.left_out.is_empty()).then_some(out)
+}
+
+/// The lens corrections Capture One `shown` (over `def`, with the user's `adj`) into `p`, and what
+/// has no LightCraft counterpart into `left_out`. A photo that brings other changes in `p` gets its
+/// correction as Capture One showed it (`corrected`): its crop was drawn on that photo, and
+/// LightCraft switches a correction on by itself later only for a photo still as imported.
+fn lens(shown: &Layer, def: &Layer, adj: &Layer, corrected: bool, p: &mut Map<String, Value>, left_out: &mut impl FnMut(&'static str)) {
     let (l, dl, al) = (&shown.lens, &def.lens, &adj.lens);
     let generic = l.profile.as_deref() == Some(GENERIC_PROFILE);
     let amount = l.distortion.unwrap_or(0.0);
@@ -503,41 +517,27 @@ pub(super) fn develop(photo: &CatalogPhoto) -> Option<Develop> {
         }
         p.insert("optics".into(), Value::Object(optics));
     }
-    if changed(&al.chromatic_aberration, &dl.chromatic_aberration) {
-        let optics = p.entry("optics").or_insert_with(|| Value::Object(Map::new()));
-        if let Value::Object(o) = optics {
-            o.insert("remove_ca".into(), json!(l.chromatic_aberration == Some(true)));
+    if changed(&al.chromatic_aberration, &dl.chromatic_aberration)
+        && let Value::Object(o) = p.entry("optics").or_insert_with(|| Value::Object(Map::new()))
+    {
+        o.insert("remove_ca".into(), json!(l.chromatic_aberration == Some(true)));
+    }
+    let rules: [(bool, &'static str); 9] = [
+        (generic && amount > NONE && changed_number(al.distortion, dl.distortion), notice::GENERIC_DISTORTION),
+        (changed(&al.profile, &dl.profile) && !generic, notice::PROFILE_BY_HAND),
+        (changed(&adj.clipping, &def.clipping) && shown.clipping == Some(1), notice::DISTORTED_AREAS),
+        (l.sharpness_falloff.is_some_and(|v| v.abs() > NONE), notice::SHARPNESS_FALLOFF),
+        (l.diffraction == Some(true), notice::DIFFRACTION),
+        (changed_number(al.light_falloff, dl.light_falloff) && l.light_falloff.is_some_and(|v| v.abs() > NONE), notice::LIGHT_FALLOFF),
+        (changed_number(al.purple_fringing, dl.purple_fringing) && l.purple_fringing.is_some_and(|v| v.abs() > NONE), notice::PURPLE_FRINGING),
+        (l.movement == Some(true), notice::LENS_MOVEMENT),
+        (l.lcc == Some(true), notice::LCC),
+    ];
+    for (applies, message) in rules {
+        if applies {
+            left_out(message);
         }
     }
-    if generic && amount > NONE && changed_number(al.distortion, dl.distortion) {
-        left_out(notice::GENERIC_DISTORTION);
-    }
-    if changed(&al.profile, &dl.profile) && !generic {
-        left_out(notice::PROFILE_BY_HAND);
-    }
-    if changed(&adj.clipping, &def.clipping) && shown.clipping == Some(1) {
-        left_out(notice::DISTORTED_AREAS);
-    }
-    if l.sharpness_falloff.is_some_and(|v| v.abs() > NONE) {
-        left_out(notice::SHARPNESS_FALLOFF);
-    }
-    if l.diffraction == Some(true) {
-        left_out(notice::DIFFRACTION);
-    }
-    if changed_number(al.light_falloff, dl.light_falloff) && l.light_falloff.is_some_and(|v| v.abs() > NONE) {
-        left_out(notice::LIGHT_FALLOFF);
-    }
-    if changed_number(al.purple_fringing, dl.purple_fringing) && l.purple_fringing.is_some_and(|v| v.abs() > NONE) {
-        left_out(notice::PURPLE_FRINGING);
-    }
-    if l.movement == Some(true) {
-        left_out(notice::LENS_MOVEMENT);
-    }
-    if l.lcc == Some(true) {
-        left_out(notice::LCC);
-    }
-    out.partial = p;
-    (!out.partial.is_empty() || !out.left_out.is_empty()).then_some(out)
 }
 
 /// LightCraft's Transform values for a Capture One keystone.
@@ -607,26 +607,14 @@ fn keystone(k: &Keystone, turn: Turn, w: f64, h: f64, crop: Option<[f64; 4]>) ->
             if !(pz > NONE && px.is_finite() && py.is_finite()) {
                 return None;
             }
-            let turned =
-                |x: f64, y: f64| (f64::from(turn[0][0]) * x + f64::from(turn[0][1]) * y, f64::from(turn[1][0]) * x + f64::from(turn[1][1]) * y);
-            let (sx, sy) = turned(px, py);
-            let (lx, ly) = turned(x, y);
+            let (sx, sy) = apply(turn, px, py);
+            let (lx, ly) = apply(turn, x, y);
             pairs.push(((lx / half, ly / half), (sx * wx, sy * wy)));
         }
     }
     // LightCraft's Transform that brings the grid where Capture One shows it, up to a scale and
     // a shift (the crop takes care of those): least squares, settled one slider at a time
-    let misfit = |t: Transform| -> f64 {
-        let warp = lightcraft_pipeline::transform::manual(&t.geometry());
-        let got: Vec<((f64, f64), (f64, f64))> = pairs
-            .iter()
-            .map(|((x, y), c)| {
-                let p = warp.apply(lightcraft_geom::Point::new(*x, *y));
-                ((p.x, p.y), *c)
-            })
-            .collect();
-        similarity_misfit(&got)
-    };
+    let misfit = |t: Transform| similarity_misfit(&warped(&pairs, t));
     let mut t = Transform { vertical: 0.0, horizontal: 0.0, rotate: 0.0, aspect: 0.0 };
     let mut best = misfit(t);
     let mut step = 16.0;
@@ -661,22 +649,14 @@ fn keystone(k: &Keystone, turn: Turn, w: f64, h: f64, crop: Option<[f64; 4]>) ->
     // its size is in pixels as Capture One shows them, with the camera turn's homography scaled to
     // keep its last entry 1 (by cos ax · cos ay). Through the scale and shift fitted above it lands
     // in LightCraft's frame: `[cx, cy, half width, half height]`, pixels about the frame's centre.
-    let warp = lightcraft_pipeline::transform::manual(&t.geometry());
-    let fitted: Vec<((f64, f64), (f64, f64))> = pairs
-        .iter()
-        .map(|((x, y), c)| {
-            let p = warp.apply(lightcraft_geom::Point::new(*x, *y));
-            ((p.x, p.y), *c)
-        })
-        .collect();
     let crop = match crop {
         Some([x, y, cw, ch]) => {
-            let (scale, (lx, ly), (mx, my)) = similarity(&fitted)?;
+            let (scale, (lx, ly), (mx, my)) = similarity(&warped(&pairs, t))?;
             let (px, py, pz) = project(x - w / 2.0, y - h / 2.0);
             if !(pz > NONE && px.is_finite() && py.is_finite()) {
                 return None;
             }
-            let (sx, sy) = (f64::from(turn[0][0]) * px + f64::from(turn[0][1]) * py, f64::from(turn[1][0]) * px + f64::from(turn[1][1]) * py);
+            let (sx, sy) = apply(turn, px, py);
             let r33 = cx * cy;
             let centre = (lx + (sx * wx - mx) / scale, ly + (sy * wy - my) / scale);
             let size = (cw / r33 / scale / 2.0, ch / r33 / scale / 2.0);
@@ -686,6 +666,18 @@ fn keystone(k: &Keystone, turn: Turn, w: f64, h: f64, crop: Option<[f64; 4]>) ->
         None => None,
     };
     Some((t, crop))
+}
+
+/// `pairs` (a point before LightCraft's Transform, its target) with each point through `t`.
+fn warped(pairs: &[((f64, f64), (f64, f64))], t: Transform) -> Vec<((f64, f64), (f64, f64))> {
+    let warp = lightcraft_pipeline::transform::manual(&t.geometry());
+    pairs
+        .iter()
+        .map(|((x, y), target)| {
+            let p = warp.apply(lightcraft_geom::Point::new(*x, *y));
+            ((p.x, p.y), *target)
+        })
+        .collect()
 }
 
 /// The scale and shift that best map each point of `pairs` (point, target) onto its target:
@@ -726,26 +718,11 @@ fn lightcraft_quad(g: &lightcraft_develop::Geometry, angle: f64, ow: f64, oh: f6
 }
 
 /// The largest rectangle of the photo's own shape inside an `ow × oh` photo after LightCraft's
-/// Transform and a straighten by `angle` degrees: `[x0, y0, x1, y1]`
-/// normalized to the crop's rotated frame, and the Scale (1 = 100) that keeps it inside the frame
-/// (the corrected photo can reach past it). `None` when the photo leaves no room.
+/// Transform and a straighten by `angle` degrees, centred on the corrected photo's bounding box
+/// (the working area), as Capture One shows it: `[x0, y0, x1, y1]` normalized to the crop's
+/// rotated frame, and the Scale (1 = 100) that keeps it inside the frame (the corrected photo can
+/// reach past it). `None` when the photo leaves no room.
 fn largest_inside(transform: Transform, angle: f64, ow: f64, oh: f64) -> Option<([f64; 4], f64)> {
-    let (cx, cy, hw, hh) = inscribed(transform, angle, ow, oh)?;
-    Some(within_frame([cx, cy, hw, hh], ow, oh))
-}
-
-/// A crop `[cx, cy, half width, half height]` (pixels about the centre of an `ow × oh` frame) as a
-/// normalized rect, and the Scale (1 = 100) that brings it inside the frame when it reaches past.
-fn within_frame([cx, cy, hw, hh]: [f64; 4], ow: f64, oh: f64) -> ([f64; 4], f64) {
-    let reach = ((cx.abs() + hw) / (ow / 2.0)).max((cy.abs() + hh) / (oh / 2.0));
-    let scale = if reach.is_finite() && reach > 1.0 { (1.0 / reach).max(0.1) } else { 1.0 };
-    let (cx, cy, hw, hh) = (cx * scale, cy * scale, hw * scale, hh * scale);
-    ([0.5 + (cx - hw) / ow, 0.5 + (cy - hh) / oh, 0.5 + (cx + hw) / ow, 0.5 + (cy + hh) / oh], scale)
-}
-
-/// The centre and half sizes (pixels, about the frame's centre) of [`largest_inside`]'s rectangle
-/// before any Scale.
-fn inscribed(transform: Transform, angle: f64, ow: f64, oh: f64) -> Option<(f64, f64, f64, f64)> {
     if ow <= 0.0 || oh <= 0.0 {
         return None;
     }
@@ -755,41 +732,16 @@ fn inscribed(transform: Transform, angle: f64, ow: f64, oh: f64) -> Option<(f64,
         return None;
     }
     let sign = area.signum();
-    // where the rectangle's centre may be for a rectangle `k` times the photo's size: inside every
-    // edge with every corner
-    let centres = |k: f64| {
-        let (hw, hh) = (k * ow / 2.0, k * oh / 2.0);
-        let mut region = vec![(-10.0 * ow, -10.0 * oh), (10.0 * ow, -10.0 * oh), (10.0 * ow, 10.0 * oh), (-10.0 * ow, 10.0 * oh)];
-        for i in 0..4 {
-            let (p0, p1) = (quad[i], quad[(i + 1) % 4]);
-            let e = (p1.0 - p0.0, p1.1 - p0.1);
-            for (cx, cy) in [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)] {
-                // sign · cross(e, c + corner − p0) ≥ 0, linear in the centre c
-                let a = (-sign * e.1, sign * e.0);
-                let b = -sign * (e.0 * (cy - p0.1) - e.1 * (cx - p0.0));
-                region = clip(&region, a, b);
-                if region.is_empty() {
-                    return None;
-                }
-            }
-        }
-        let n = region.len() as f64;
-        Some((region.iter().map(|p| p.0).sum::<f64>() / n, region.iter().map(|p| p.1).sum::<f64>() / n))
-    };
-    // centred on the working area (the corrected photo's bounding box), as Capture One does
     let (x0, x1) = quad.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
     let (y0, y1) = quad.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
-    let centre = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    // every corner of a rectangle `k` times the photo's size on the inner side of every edge
     let fits = |k: f64| {
-        centres(k).is_some_and(|_| {
-            let (hw, hh) = (k * ow / 2.0, k * oh / 2.0);
-            (0..4).all(|i| {
-                let (p0, p1) = (quad[i], quad[(i + 1) % 4]);
-                let e = (p1.0 - p0.0, p1.1 - p0.1);
-                [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
-                    .iter()
-                    .all(|(dx, dy)| sign * (e.0 * (centre.1 + dy - p0.1) - e.1 * (centre.0 + dx - p0.0)) >= -NONE)
-            })
+        let (hw, hh) = (k * ow / 2.0, k * oh / 2.0);
+        (0..4).all(|i| {
+            let (p0, p1) = (quad[i], quad[(i + 1) % 4]);
+            let e = (p1.0 - p0.0, p1.1 - p0.1);
+            [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)].iter().all(|(dx, dy)| sign * (e.0 * (cy + dy - p0.1) - e.1 * (cx + dx - p0.0)) >= -NONE)
         })
     };
     let (mut lo, mut hi) = (0.0, 1.5);
@@ -797,25 +749,16 @@ fn inscribed(transform: Transform, angle: f64, ow: f64, oh: f64) -> Option<(f64,
         let mid = (lo + hi) / 2.0;
         if fits(mid) { lo = mid } else { hi = mid }
     }
-    (lo > 0.01).then_some((centre.0, centre.1, lo * ow / 2.0, lo * oh / 2.0))
+    (lo > 0.01).then(|| within_frame([cx, cy, lo * ow / 2.0, lo * oh / 2.0], ow, oh))
 }
 
-/// `polygon` cut to the half-plane `a · p ≥ b`.
-fn clip(polygon: &[(f64, f64)], a: (f64, f64), b: f64) -> Vec<(f64, f64)> {
-    let inside = |p: (f64, f64)| a.0 * p.0 + a.1 * p.1 - b;
-    let mut out = Vec::with_capacity(polygon.len() + 1);
-    for (i, &p) in polygon.iter().enumerate() {
-        let q = polygon[(i + 1) % polygon.len()];
-        let (dp, dq) = (inside(p), inside(q));
-        if dp >= 0.0 {
-            out.push(p);
-        }
-        if (dp >= 0.0) != (dq >= 0.0) {
-            let t = dp / (dp - dq);
-            out.push((p.0 + t * (q.0 - p.0), p.1 + t * (q.1 - p.1)));
-        }
-    }
-    out
+/// A crop `[cx, cy, half width, half height]` (pixels about the centre of an `ow × oh` frame) as a
+/// normalized rect, and the Scale (1 = 100) that brings it inside the frame when it reaches past.
+fn within_frame([cx, cy, hw, hh]: [f64; 4], ow: f64, oh: f64) -> ([f64; 4], f64) {
+    let reach = ((cx.abs() + hw) / (ow / 2.0)).max((cy.abs() + hh) / (oh / 2.0));
+    let scale = if reach.is_finite() && reach > 1.0 { (1.0 / reach).max(0.1) } else { 1.0 };
+    let (cx, cy, hw, hh) = (cx * scale, cy * scale, hw * scale, hh * scale);
+    ([0.5 + (cx - hw) / ow, 0.5 + (cy - hh) / oh, 0.5 + (cx + hw) / ow, 0.5 + (cy + hh) / oh], scale)
 }
 
 /// A crop ratio's name as LightCraft's locked aspect, in the crop's own orientation; `None` for

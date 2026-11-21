@@ -1860,7 +1860,7 @@ fn a_turn_the_file_makes_stays_the_files_and_a_straightened_photo_keeps_its_shap
 
 #[test]
 fn lens_corrections_are_set_as_capture_one_showed_them_once_a_photo_brings_other_changes() {
-    let fuji = "11A2A154-7520-4521-B80C-9725186C57C2".to_string();
+    let profile = "0000AAAA-1111-4222-8333-444455556666".to_string();
     let lens = |profile: &str, distortion: f64| geometry::Lens {
         profile: Some(profile.to_string()),
         distortion: Some(distortion),
@@ -1870,16 +1870,16 @@ fn lens_corrections_are_set_as_capture_one_showed_them_once_a_photo_brings_other
     let photo = |default: geometry::Layer, adjusted: geometry::Layer| CatalogPhoto {
         width: 6000,
         height: 4000,
-        geometry: Some(geometry::Geometry { default, adjusted, canvas: Some((5729.7, 3819.8)), other_adjustments: false }),
+        geometry: Some(geometry::Geometry { default, adjusted, canvas: Some((5700.0, 3800.0)), other_adjustments: false }),
         ..Default::default()
     };
-    let corrected = geometry::Layer { lens: lens(&fuji, 100.0), ..layer(0.0, 0, None) };
+    let corrected = geometry::Layer { lens: lens(&profile, 100.0), ..layer(0.0, 0, None) };
     let crop = Some([3000.0, 2000.0, 3000.0, 2000.0]);
     // Capture One's own correction and a crop: the correction is switched on, at its amount
     let s = developed(&photo(corrected.clone(), geometry::Layer { crop, ..Default::default() }));
     assert!(s.optics.lens_profile && (s.optics.profile_distortion - 100.0).abs() < 1e-9);
     // the crop is taken on the working area the correction leaves (LightCraft's fills its frame)
-    assert!((s.crop.geometry.rect.width() - 3000.0 / 5729.7).abs() < 1e-6, "{:?}", s.crop.geometry.rect);
+    assert!((s.crop.geometry.rect.width() - 3000.0 / 5700.0).abs() < 1e-6, "{:?}", s.crop.geometry.rect);
     // no other change: LightCraft's own lens defaults stand
     assert!(geometry::develop(&photo(corrected.clone(), geometry::Layer::default())).is_none());
     // the generic profile corrects nothing: switched off, and its distortion named as left out
@@ -1893,7 +1893,13 @@ fn lens_corrections_are_set_as_capture_one_showed_them_once_a_photo_brings_other
     assert_eq!(d.left_out, [notice::GENERIC_DISTORTION, notice::DISTORTED_AREAS]);
     // a lesser amount, and settings LightCraft has none for
     let softer = geometry::Layer {
-        lens: geometry::Lens { sharpness_falloff: Some(40.0), diffraction: Some(true), movement: Some(true), lcc: Some(true), ..lens(&fuji, 60.0) },
+        lens: geometry::Lens {
+            sharpness_falloff: Some(40.0),
+            diffraction: Some(true),
+            movement: Some(true),
+            lcc: Some(true),
+            ..lens(&profile, 60.0)
+        },
         ..Default::default()
     };
     let d = geometry::develop(&photo(corrected, softer)).unwrap();
@@ -1941,7 +1947,7 @@ fn hostile_geometry_values_carry_nothing_wrong() {
 fn a_catalog_brings_its_crops_turns_and_lens_corrections() {
     let scratch = Scratch::new("geometry");
     let mut tables = sample(&scratch.0);
-    const FUJI: &str = "11A2A154-7520-4521-B80C-9725186C57C2";
+    const PROFILE: &str = "0000AAAA-1111-4222-8333-444455556666";
     let columns = [
         "Z_ENT",
         "Z_PK",
@@ -1962,7 +1968,7 @@ fn a_catalog_brings_its_crops_turns_and_lens_corrections() {
             ("ZVARIANT", V::I(variant)),
             ("ZROTATION", V::R(0.0)),
             ("ZFLIP", V::I(0)),
-            ("ZLENSIDGUID", t(FUJI)),
+            ("ZLENSIDGUID", t(PROFILE)),
             ("ZLENSDISTORTION", t("0,0;10,1|100.0|1|100|-1")),
         ]
     };
@@ -2088,7 +2094,7 @@ fn a_crop_on_a_tilted_photo_shows_what_capture_one_shows() {
     use lightcraft_geom::Point;
     let (w, h) = (6000.0_f64, 4000.0_f64);
     for (tilt_x, tilt_y, crop) in [
-        (0.0, 30.0, [3912.3, 1321.1, 3410.0, 2273.3]),
+        (0.0, 30.0, [3900.0, 1300.0, 3400.0, 2260.0]),
         (-35.0, 0.0, [2500.0, 2600.0, 2400.0, 1600.0]),
         (0.0, -55.0, [3000.0, 2900.0, 3000.0, 2000.0]),
     ] {
