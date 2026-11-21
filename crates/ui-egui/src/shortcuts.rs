@@ -505,10 +505,19 @@ fn fixed_photo_keys(i: &egui::InputState, native: &dyn Fn(&str) -> bool, taken: 
             fire.push(id.to_string());
         }
     }
-    // Shift+← / Shift+→: the previous / next photo of the view joins the selection
-    for (key, step) in [(Key::ArrowLeft, -1i64), (Key::ArrowRight, 1)] {
-        if matches(i, Modifiers::SHIFT, key) && !taken.contains(&(Modifiers::SHIFT, key)) {
-            fire.push(format!("grid:extend:{step}"));
+    // Shift+arrows and Ctrl+Shift+arrows (as in the Windows file manager, where Ctrl keeps a scattered
+    // selection; here Shift already adds to the selection, so both do the same): ← / → add the previous /
+    // next photo of the view, ↑ / ↓ every photo up to the cell above / below the active one
+    for mods in [Modifiers::SHIFT, Modifiers::COMMAND | Modifiers::SHIFT] {
+        for (key, id) in [
+            (Key::ArrowLeft, "grid:extend:-1"),
+            (Key::ArrowRight, "grid:extend:1"),
+            (Key::ArrowUp, "grid:extend:up"),
+            (Key::ArrowDown, "grid:extend:down"),
+        ] {
+            if matches(i, mods, key) && !taken.contains(&(mods, key)) {
+                fire.push(id.to_string());
+            }
         }
     }
 }
@@ -643,6 +652,8 @@ fn fire_grid_key(app: &mut LightcraftApp, f: &str) -> bool {
         if let Some(id) = edge {
             let _ = app.run("library.select", json!({"ids": [id.0], "active": id.0}));
         }
+    } else if f == "grid:extend:up" || f == "grid:extend:down" {
+        extend_selection_rows(app, f == "grid:extend:down");
     } else if let Some(step) = f.strip_prefix("grid:extend:") {
         extend_selection(app, step.parse::<i64>().unwrap_or(0));
     } else if compare::culling(app) && (f == "library.next" || f == "library.previous") {
@@ -668,6 +679,30 @@ fn extend_selection(app: &mut LightcraftApp, step: i64) {
         .and_then(|pos| vis.get(pos));
     if let Some(id) = neighbour {
         let _ = app.run("library.select", json!({"ids": [id.0], "mode": "add"}));
+    }
+}
+
+/// Shift+↑ / Shift+↓ in a grid: every photo from the active one to the cell one row up / down joins the
+/// selection. At the first / last row the key does nothing.
+fn extend_selection_rows(app: &mut LightcraftApp, down: bool) {
+    let reach = crate::panels::grid::row_distance(app, down).and_then(|d| usize::try_from(d).ok()).unwrap_or(0);
+    let vis = app.session.visible_cloned();
+    let run: Vec<u64> = app
+        .session
+        .active()
+        .and_then(|active| vis.iter().position(|p| *p == active))
+        .and_then(|pos| {
+            if down {
+                let end = pos.checked_add(reach)?;
+                Some(vis.get(pos.checked_add(1)?..=end)?.iter().map(|p| p.0).collect())
+            } else {
+                Some(vis.get(pos.checked_sub(reach)?..pos)?.iter().rev().map(|p| p.0).collect())
+            }
+        })
+        .filter(|_| reach > 0)
+        .unwrap_or_default();
+    if !run.is_empty() {
+        let _ = app.run("library.select", json!({"ids": run, "mode": "add"}));
     }
 }
 
