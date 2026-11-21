@@ -104,6 +104,35 @@ const NON_ADJUSTMENT: &[&str] = &[
     "crs:LensProfileSetup",
     // a crop tool option (keep the crop inside the photo), not the crop itself
     "crs:CropConstrainToUnitSquare",
+    // how the file was written, which auto-defaults apply, and where the preview cache goes:
+    // none of it changes this photo's rendering
+    "crs:ClipboardAspectRatio",
+    "crs:ClipboardOrientation",
+    "crs:Converter",
+    "crs:DNGIgnoreSidecars",
+    "crs:JPEGHandling",
+    "crs:TIFFHandling",
+    "crs:DefaultAutoGray",
+    "crs:DefaultAutoTone",
+    "crs:DefaultsSpecificToISO",
+    "crs:DefaultsSpecificToSerial",
+    "crs:AutoWhiteVersion",
+    "crs:What",
+    "crs:NegativeCacheLargePreviewSize",
+    "crs:NegativeCacheMaximumSize",
+    "crs:NegativeCachePath",
+    // how Lightroom matched the profile it names; only `LensProfileEnable` carries over
+    "crs:LensProfileMatchKeyCameraModelName",
+    "crs:LensProfileMatchKeyExifMake",
+    "crs:LensProfileMatchKeyExifModel",
+    "crs:LensProfileMatchKeyIsRaw",
+    "crs:LensProfileMatchKeyLensID",
+    "crs:LensProfileMatchKeyLensInfo",
+    "crs:LensProfileMatchKeyLensName",
+    "crs:LensProfileMatchKeySensorFormatFactor",
+    // the crop's unit labels; its edges are normalized, so the units change nothing
+    "crs:CropUnit",
+    "crs:CropUnits",
 ];
 
 /// True if the packet carries any `crs:` adjustment (not just bookkeeping fields).
@@ -449,6 +478,10 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
         Some(true) => {
             let e = |k: &str, d: f64| num(props, &format!("crs:Crop{k}")).unwrap_or(d).clamp(0.0, 1.0);
             let (l, t, r, b) = (e("Left", 0.0), e("Top", 0.0), e("Right", 1.0), e("Bottom", 1.0));
+            // other tools write the cropped result's output dimensions beside the crop; the
+            // edges carry the rect, so these are consumed with it and their values ignored
+            note("crs:CropHeight");
+            note("crs:CropWidth");
             if r > l && b > t {
                 put(
                     o,
@@ -502,9 +535,14 @@ pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values
             || k.starts_with("ToneCurveName")
             || k == "AutoTone"
             || k == "AutoGrayscaleMix"
+            // the auto adjustments' result already lives in the tonal fields beside them
+            || matches!(k, "AutoBrightness" | "AutoContrast" | "AutoExposure" | "AutoShadows")
             || (k == "PointColors" && value_is(k, &empty_points))
-            // the lens profile's strength, written at its default (100 %) next to every profile
-            || (matches!(k, "LensProfileDistortionScale" | "LensProfileVignettingScale") && value_is(k, &|v| v.iter().all(|s| s.trim() == "100")))
+            // the lens profile's strengths, written at their default (100 %) next to every
+            // profile; Lightroom writes no CA scale at all in a real sidecar set, so its
+            // default comes from the same strength family
+            || (matches!(k, "LensProfileDistortionScale" | "LensProfileVignettingScale" | "LensProfileChromaticAberrationScale")
+                && value_is(k, &|v| v.iter().all(|s| s.trim() == "100")))
     };
     let mut unmapped: Vec<String> = props
         .keys()
@@ -550,6 +588,9 @@ pub fn preset_from_xmp(xmp: &str, fallback_name: &str) -> Option<Preset> {
     let id = format!("user.xmp.{}", uuid.unwrap_or_else(|| crate::presets::slug(&format!("{group}-{name}"))));
     Some(Preset { id, name, group, settings, favorite: false, builtin: false })
 }
+
+/// Adobe's `crs:` namespace and our import decision for every field of it.
+pub mod registry;
 
 #[cfg(test)]
 mod tests;
