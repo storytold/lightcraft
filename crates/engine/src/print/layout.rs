@@ -632,7 +632,7 @@ impl Layout {
                 return Err(format!("duplicate cell id {}", c.id));
             }
             if c.page >= self.pages {
-                return Err(format!("cell {} is on page {} but the layout has {} pages", c.id, c.page + 1, self.pages));
+                return Err(format!("cell {} is on page {} but the layout has {} pages", c.id, u64::from(c.page) + 1, self.pages));
             }
             self.check_rect(&c.rect, area)?;
         }
@@ -962,3 +962,23 @@ impl Layout {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod page_overflow_tests {
+    use super::{Layout, Style};
+
+    #[test]
+    fn oversized_cell_pages_are_errors_without_changing_the_layout() {
+        let mut source = Layout { style: Style::PicturePackage, ..Default::default() };
+        let id = source.add_cell(2.0, 2.0).unwrap();
+        source.validate().unwrap();
+        for (page, shown) in [(1, "2"), (u32::MAX, "4294967296")] {
+            let mut value = serde_json::to_value(&source).unwrap();
+            value["cells"][0]["page"] = serde_json::json!(page);
+            let mut imported: Layout = serde_json::from_value(value).unwrap();
+            let before = imported.clone();
+            assert_eq!(imported.validate().unwrap_err(), format!("cell {id} is on page {shown} but the layout has 1 pages"));
+            assert_eq!(imported, before, "a rejected page changed the layout");
+        }
+    }
+}
