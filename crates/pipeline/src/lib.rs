@@ -32,6 +32,7 @@ pub mod curve;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
+pub mod glow;
 pub mod lens_blur;
 pub mod light_v3;
 // generated (`light_v3_params.rs`), kept in its own compact layout
@@ -470,6 +471,11 @@ pub struct Plan<'a> {
     pub lens_subject: Option<Arc<lens_blur::SubjectEstimate>>,
     /// The whole frame and its output size (a windowed render's [`Self::frame`] is part of it).
     pub full: (geometry::Frame, usize, usize),
+    /// Top-left of the rendered window in the whole output (zero for a whole-frame render).
+    pub origin: (usize, usize),
+    /// Set when Glow must take its light field from a whole-frame proxy ([`glow_field`]) because
+    /// only a window of a large frame is rendered; the key of everything that field depends on.
+    pub glow_key: Option<u64>,
 }
 
 /// Long edge of the small render a windowed render estimates the whole frame's airlight from.
@@ -484,9 +490,15 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     visualize::adjust_settings(req.overlay, &mut settings);
     // a window must not choose a spot's source from the pixels it happens to hold: fix them
     // from a fixed-size render of the whole frame first
-    if req.window.is_some() && settings.spots.iter().any(|sp| sp.source_offset.is_none()) {
-        let picked: Vec<Option<lightcraft_geom::Point>> =
-            settings.spots.iter().map(|sp| sp.source_offset.or_else(|| spots::pick_source(src, info, &settings, sp, None))).collect();
+    let needs_source = |sp: &lightcraft_develop::Spot| {
+        matches!(sp.mode, lightcraft_develop::SpotMode::Heal | lightcraft_develop::SpotMode::Clone) && sp.source_offset.is_none()
+    };
+    if req.window.is_some() && settings.spots.iter().any(needs_source) {
+        let picked: Vec<Option<lightcraft_geom::Point>> = settings
+            .spots
+            .iter()
+            .map(|sp| if needs_source(sp) { spots::pick_source(src, info, &settings, sp, None) } else { sp.source_offset })
+            .collect();
         for (sp, o) in settings.to_mut().spots.iter_mut().zip(picked) {
             sp.source_offset = o;
         }
@@ -502,6 +514,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let detail_scale = local::detail_scale(px_per_long, native_long);
     let mut fixed_air = None;
     let mut keep = None;
+    let mut origin = (0, 0);
+    let mut glow_proxy = false;
     let full = (frame.clone(), full_w, full_h);
     let (frame, w, h) = match req.window {
         Some(win) => {
@@ -514,19 +528,18 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
             // (spots grow the rendered window of 8-bit renders, the lens blur that of every
             // render; a grown window is cut back to the request)
             let work = if req.depth == OutputDepth::U8 { spots::window_for_reads(s, &frame, full_w, full_h, px_per_long, win) } else { win };
-            let mut work = lens_blur::window_for_reads(s, full_w, full_h, px_per_long, work);
-            if local::joint_colour_nr(s)
-                && let Some(params) = local::nrc_params(s, detail_scale)
-            {
-                // The joint diffusion reads a chain of neighbours across its scales. Keep
-                // those reads outside the requested zoom window, just as spot reads are, at every depth.
-                let halo = params.passes.last().map_or(0, |p| (6.0 * p.sigma).ceil() as usize).saturating_add(4);
-                let x = work.x.saturating_sub(halo);
-                let y = work.y.saturating_sub(halo);
-                let right = work.x.saturating_add(work.w).saturating_add(halo).min(full_w);
-                let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
-                work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
+            let mut work = reads_after_lin(s, full_w, full_h, px_per_long, detail_scale, work);
+            // Glow scatters across the frame, so a zoom window must not change its highlight
+            // extraction or clip its light trails. A small frame renders whole before cropping
+            // (exact); a large one adds the light field of a whole-frame proxy ([`glow_field`]).
+            if glow::active(s) {
+                if full_w.saturating_mul(full_h) <= glow::EXACT_WINDOW_PIXELS {
+                    work = PixelWindow { x: 0, y: 0, w: full_w, h: full_h };
+                } else {
+                    glow_proxy = (work.w, work.h) != (full_w, full_h);
+                }
             }
+            origin = (work.x, work.y);
             if work != win {
                 keep = Some(PixelWindow { x: win.x - work.x, y: win.y - work.y, ..win });
             }
@@ -538,7 +551,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let (wb_t, wb_tint) = local::effective_wb(info, s);
     let eyes = redeye::resolve(src, &s.red_eye, s.orientation, &frame, w, h, px_per_long);
     let d = &s.detail;
-    let pre_nr_key = hash_of((
+    let pre_nr_base = hash_of((
         geo,
         [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
         format!("{:?}", s.spots),
@@ -551,6 +564,9 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         // and the lens blur (after noise reduction, but a draft must not reuse planes without it)
         lens_blur::key(s),
     ));
+    // Glow runs after noise reduction, so only the plane-reuse key tracks it; the colour-noise
+    // estimate is keyed from the Glow-independent base.
+    let pre_nr_key = hash_of((pre_nr_base, glow::key(s)));
     let lin_key = hash_of((
         pre_nr_key,
         [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
@@ -558,8 +574,26 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         // the process picks the colour filter (Update to Current Process, undo)
         local::joint_colour_nr(s),
     ));
+    // Window-independent key of the light field a proxy supplies: the frame, the stages before Glow
+    // (all of them, whole-frame) and Glow's own settings.
+    let glow_key = glow_proxy.then(|| {
+        hash_of((
+            format!("{:?}", full.0),
+            (full.1, full.2),
+            [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
+            format!("{:?}", (&s.spots, &s.red_eye, &s.optics)),
+            local_tone::enabled(info, s),
+            src_long,
+            // the field's noise reduction runs at the detail scale of the photo's native size
+            native_long,
+            lens_blur::key(s),
+            [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
+            local::joint_colour_nr(s),
+            glow::key(s),
+        ))
+    });
     let lens_subject = lens_blur::subject_estimate(src, s, info.mattes.as_deref()).map(Arc::new);
-    let noise_key = hash_of((pre_nr_key, [d.nr_luminance, d.nr_detail].map(f64::to_bits), detail_scale.to_bits()));
+    let noise_key = hash_of((pre_nr_base, [d.nr_luminance, d.nr_detail].map(f64::to_bits), detail_scale.to_bits()));
     Plan {
         settings,
         frame,
@@ -579,6 +613,108 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         mattes: info.mattes.clone(),
         lens_subject,
         full,
+        origin,
+        glow_key,
+    }
+}
+
+/// How many Glow light fields [`glow_field`] keeps (one per photo and view being zoomed into).
+const GLOW_FIELDS_KEPT: usize = 2;
+/// Edge of the tiles a Glow light field is extracted from, and how many are in memory at once.
+const GLOW_TILE: usize = 1024;
+const GLOW_TILE_BATCH: usize = 4;
+
+/// `work` (a window of the `full_w × full_h` output) grown by what noise reduction and lens blur read
+/// around it, so those stages see the same neighbours in a window as in a render of the whole frame.
+fn reads_after_lin(s: &DevelopSettings, full_w: usize, full_h: usize, px_per_long: f64, detail_scale: f32, work: PixelWindow) -> PixelWindow {
+    let mut work = lens_blur::window_for_reads(s, full_w, full_h, px_per_long, work);
+    if local::joint_colour_nr(s)
+        && let Some(params) = local::nrc_params(s, detail_scale)
+    {
+        // The joint diffusion reads a chain of neighbours across its scales. Keep
+        // those reads outside the requested zoom window, just as spot reads are, at every depth.
+        let halo = params.passes.last().map_or(0, |p| (6.0 * p.sigma).ceil() as usize).saturating_add(4);
+        let x = work.x.saturating_sub(halo);
+        let y = work.y.saturating_sub(halo);
+        let right = work.x.saturating_add(work.w).saturating_add(halo).min(full_w);
+        let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
+        work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
+    }
+    work
+}
+
+/// The light field of the whole frame behind a windowed render of `p` ([`Plan::glow_key`]), computed
+/// from the frame's full-resolution pixels through the stages before Glow, and kept for
+/// the next window of the same view: panning or zooming reuses it. `None` when `p` renders the whole
+/// frame (Glow then scatters its own pixels, [`glow::apply`]).
+pub fn glow_field(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<Arc<glow::Field>> {
+    type Entry = (u64, u64, Arc<glow::Field>);
+    static CACHE: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
+    let key = p.glow_key?;
+    let source = optics::fingerprint(src);
+    let lock = || CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(e) = lock().iter().find(|e| e.0 == source && e.1 == key) {
+        return Some(e.2.clone());
+    }
+    let s = &*p.settings;
+    let (full, fw, fh) = &p.full;
+    // The seed is thresholded on full-resolution radiance, tile by tile, so an isolated 1-2 px lamp
+    // lights its surroundings in a window as it does in a render of the whole frame. Each tile goes
+    // through every stage before Glow (the whole frame's red-eye corrections, noise reduction with
+    // the whole frame's colour-noise model, lens blur) on a copy grown by what those stages read,
+    // and only its own pixels are extracted, so every pixel counts once. Tiles are cut a few
+    // batches at a time to bound memory; the scattering itself runs on the low-resolution grid.
+    let mut extraction = glow::Extraction::new(s, (*fw, *fh))?;
+    let eyes = redeye::resolve(src, &s.red_eye, s.orientation, full, *fw, *fh, p.px_per_long);
+    let noise = colour_noise(src, info, p);
+    let mut tiles = Vec::new();
+    for y in (0..*fh).step_by(GLOW_TILE) {
+        for x in (0..*fw).step_by(GLOW_TILE) {
+            let t = PixelWindow { x, y, w: GLOW_TILE.min(*fw - x), h: GLOW_TILE.min(*fh - y) };
+            tiles.push((t, reads_after_lin(s, *fw, *fh, p.px_per_long, p.detail_scale, t)));
+        }
+    }
+    for batch in tiles.chunks(GLOW_TILE_BATCH) {
+        let grown: Vec<PixelWindow> = batch.iter().map(|(_, g)| *g).collect();
+        let sampled = full.sample_windows(src, *fw, *fh, &grown);
+        for ((t, g), mut img) in batch.iter().zip(sampled) {
+            let tile = Plan {
+                settings: Cow::Borrowed(s),
+                frame: if (g.w, g.h) == (*fw, *fh) { full.clone() } else { full.window(*fw, *fh, *g) },
+                w: g.w,
+                h: g.h,
+                eyes: eyes.iter().map(|e| redeye::shifted(e, g.x as f32, g.y as f32)).collect(),
+                fixed_air: None,
+                keep: None,
+                mattes: p.mattes.clone(),
+                lens_subject: p.lens_subject.clone(),
+                full: p.full.clone(),
+                origin: (g.x, g.y),
+                glow_key: None,
+                ..*p
+            };
+            lin_cpu(&mut img, info, &tile);
+            local::denoise(&mut img, s, p.detail_scale, noise.as_ref());
+            lens_blur::apply_with(&mut img, s, &tile.frame, p.px_per_long, tile.mattes.as_deref(), tile.lens_subject.as_deref());
+            let own = if (g.x, g.y, g.w, g.h) == (t.x, t.y, t.w, t.h) { img } else { img.crop(t.x - g.x, t.y - g.y, t.w, t.h) };
+            extraction.add_tile(&own, (t.x, t.y));
+        }
+    }
+    let field = Arc::new(extraction.finish(s, p.px_per_long)?);
+    let mut c = lock();
+    c.push((source, key, field.clone()));
+    if c.len() > GLOW_FIELDS_KEPT {
+        c.remove(0);
+    }
+    Some(field)
+}
+
+/// Glow on the scene-linear image `img` of `p`'s render: scattered from its own pixels for a
+/// whole-frame render, from the whole frame's light field for a window of a large frame.
+pub fn apply_glow(img: &mut Rgb32f, src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
+    match glow_field(src, info, p) {
+        Some(f) => f.add_to(img, p.origin, (p.full.1, p.full.2)),
+        None => glow::apply(img, &p.settings, p.px_per_long),
     }
 }
 
@@ -617,6 +753,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
                 mattes: None,
                 lens_subject: None,
                 full: p.full.clone(),
+                glow_key: None,
                 ..*p
             };
             local_tone::apply(&mut img, info, &tile);
@@ -754,6 +891,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
             }
             local::denoise(&mut img, s, detail_scale, colour_noise.as_ref().map(|c| &c.1));
             lens_blur::apply_with(&mut img, s, frame, px_per_long, plan.mattes.as_deref(), plan.lens_subject.as_deref());
+            apply_glow(&mut img, src_img, info, &plan);
             Arc::new(img)
         }
     };
@@ -931,6 +1069,22 @@ fn plan_preserves_matching_box_size() {
     let preview = Rgb32f::from_fn(120, 100, |_, _| [0.5; 3]);
     let p = plan(&preview, &info, &s, &req);
     assert_eq!((p.w, p.h), (192, 160));
+}
+
+/// Glow runs after noise reduction: a Glow-only edit must keep the colour-noise cache key
+/// (so the whole-frame estimate is not recomputed) yet still change the plane-reuse key.
+#[cfg(test)]
+#[test]
+fn glow_edit_keeps_noise_key() {
+    let src = Rgb32f::from_fn(64, 48, |_, _| [0.5; 3]);
+    let info = SourceInfo::default();
+    let req = RenderRequest::fit(64, 48);
+    let base = DevelopSettings::default();
+    let mut glowing = base.clone();
+    glowing.effects.glow.amount = 60.0;
+    let (a, b) = (plan(&src, &info, &base, &req), plan(&src, &info, &glowing, &req));
+    assert_eq!(a.noise_key, b.noise_key);
+    assert_ne!(a.pre_nr_key, b.pre_nr_key);
 }
 
 #[cfg(test)]

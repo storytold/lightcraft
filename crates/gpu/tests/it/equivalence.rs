@@ -1467,10 +1467,24 @@ fn spots_match() {
     };
     let sets: Vec<(&str, Vec<Spot>)> = vec![
         ("clone", vec![spot(SpotMode::Clone, &[(0.3, 0.4)], 0.04, 40.0, Some((0.15, 0.05)))]),
+        ("distant source clamps to image edge", vec![spot(SpotMode::Clone, &[(0.3, 0.4)], 0.04, 40.0, Some((1e7, -1e7)))]),
         ("heal", vec![spot(SpotMode::Heal, &[(0.6, 0.5)], 0.05, 60.0, Some((-0.12, 0.1)))]),
+        ("one percent heal opacity", vec![Spot { opacity: 1.0, ..spot(SpotMode::Heal, &[(0.6, 0.5)], 0.05, 60.0, Some((-0.12, 0.1))) }]),
         ("remove (auto source)", vec![spot(SpotMode::Remove, &[(0.5, 0.45)], 0.03, 50.0, None)]),
         ("remove near the edge (auto)", vec![spot(SpotMode::Remove, &[(0.04, 0.5)], 0.03, 50.0, None)]),
+        ("content-aware fill", vec![spot(SpotMode::Fill, &[(0.4, 0.5), (0.48, 0.55)], 0.03, 50.0, None)]),
         ("brushed heal stroke", vec![spot(SpotMode::Heal, &[(0.2, 0.7), (0.3, 0.72), (0.4, 0.69)], 0.02, 30.0, Some((0.0, -0.15)))]),
+        ("sparse clone path", vec![spot(SpotMode::Clone, &[(0.2, 0.6), (0.8, 0.6)], 0.025, 40.0, Some((0.0, -0.2)))]),
+        ("duplicate path events", vec![spot(SpotMode::Heal, &[(0.2, 0.7), (0.2, 0.7), (0.7, 0.7)], 0.025, 50.0, Some((0.0, -0.2)))]),
+        (
+            "consecutive reconstruction batch",
+            vec![
+                spot(SpotMode::Remove, &[(0.4, 0.5), (0.45, 0.53)], 0.03, 50.0, None),
+                spot(SpotMode::Fill, &[(0.44, 0.53), (0.48, 0.57)], 0.03, 50.0, None),
+                spot(SpotMode::Heal, &[(0.55, 0.5)], 0.03, 50.0, Some((0.1, 0.0))),
+                spot(SpotMode::Remove, &[(0.6, 0.6)], 0.03, 50.0, None),
+            ],
+        ),
         ("feather 0, half opacity", vec![Spot { opacity: 50.0, ..spot(SpotMode::Clone, &[(0.7, 0.3)], 0.04, 0.0, Some((-0.2, 0.0))) }]),
         ("cut by the edge", vec![spot(SpotMode::Heal, &[(0.99, 0.02)], 0.05, 50.0, Some((-0.2, 0.2)))]),
         (
@@ -1537,4 +1551,25 @@ fn device_histogram_is_exact() {
     let r = lightcraft_gpu::render(&src, &raw, &s, &req, None).expect("gpu render");
     assert_eq!((r.image.width, r.image.height), (500, 400));
     assert_eq!(r.histogram, lightcraft_raster::Histogram::of_srgb8(&r.image), "window");
+}
+
+#[test]
+fn glow_styles_match_cpu() {
+    if !gpu() {
+        return;
+    }
+    use lightcraft_develop::GlowStyle;
+    let src = Arc::new(Rgb32f::from_fn(192, 128, |x, y| if (80..100).contains(&x) && (50..70).contains(&y) { [3.0, 2.0, 1.0] } else { [0.02; 3] }));
+    let info = SourceInfo::default();
+    for style in [GlowStyle::Bloom, GlowStyle::Diffusion, GlowStyle::Halation, GlowStyle::Motion, GlowStyle::Streak] {
+        let mut s = DevelopSettings::default();
+        s.effects.glow.style = style;
+        s.effects.glow.amount = 70.0;
+        s.effects.glow.spread = 80.0;
+        let req = RenderRequest::fit(192, 128);
+        let cpu = render(&src, &info, &s, &req).image;
+        let gpu = lightcraft_gpu::try_render(&src, &info, &s, &req, None).expect("Glow must render through the GPU path").image;
+        let (mean, max, _) = diff(&cpu, &gpu);
+        assert!(mean < MEAN_LSB && max <= MAX_LSB, "{style:?}: mean {mean}, max {max}");
+    }
 }

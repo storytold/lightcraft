@@ -1,4 +1,5 @@
 use super::{LightcraftApp, PhotoId, Tokens, divider, header, json, padded, register, slider, text_button};
+use crate::icons::Icon;
 
 /// The aspect presets of the Crop panel: (menu label, `crop.aspect` value).
 const ASPECT_PRESETS: [(&str, &str); 10] = [
@@ -76,8 +77,8 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let (w, h) = (p.width.max(1) as f64, p.height.max(1) as f64);
             if d.orientation.swaps_axes() { h / w } else { w / h }
         });
-        ui.horizontal(|ui| {
-            ui.label(crate::i18n::tr("Aspect Ratio"));
+        ui.label(egui::RichText::new(crate::i18n::tr("Aspect Ratio")).color(Tokens::get(ui.ctx()).text_dim).size(12.0));
+        ui.horizontal_wrapped(|ui| {
             let cur = aspect_label(app.crop_tool_aspect(), original);
             let t = Tokens::get(ui.ctx());
             let r = crate::widgets::dropdown(ui, "cropAspect", crate::i18n::tr(&cur), t.font(12.5), t.text);
@@ -92,32 +93,8 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 custom_aspect(app, ui);
             });
             let locked = app.crop_tool_aspect().is_some();
-            if text_button(ui, "cropLock", if locked { "Locked" } else { "Lock" }, locked).clicked() {
+            if crop_icon(ui, "cropLock", if locked { Icon::Lock } else { Icon::Unlock }, if locked { "Locked" } else { "Lock" }, locked).clicked() {
                 let _ = app.run("crop.aspect", json!({"aspect": "toggle"}));
-            }
-        });
-        ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
-            if text_button(ui, "cropRotateLeft", crate::i18n::tr("Rotate Left"), false).clicked() {
-                let _ = app.run("photo.rotateLeft", json!({}));
-            }
-            if text_button(ui, "cropRotateRight", crate::i18n::tr("Rotate Right"), false).clicked() {
-                let _ = app.run("photo.rotateRight", json!({}));
-            }
-        });
-        ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
-            if text_button(ui, "cropFlipH", crate::i18n::tr("Flip H"), d.crop.flip_h).clicked() {
-                let _ = app.run("photo.flipHorizontal", json!({}));
-            }
-            if text_button(ui, "cropFlipV", crate::i18n::tr("Flip V"), d.crop.flip_v).clicked() {
-                let _ = app.run("photo.flipVertical", json!({}));
-            }
-            if text_button(ui, "cropSwapAspect", crate::i18n::tr("Swap Aspect (X)"), false).clicked() {
-                let _ = app.run("crop.rotateAspect", json!({}));
-            }
-            if text_button(ui, "cropReset", crate::i18n::tr("Reset"), false).clicked() {
-                let _ = app.run("crop.reset", json!({}));
             }
         });
     });
@@ -196,17 +173,43 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 (O::Spiral, "Spiral", "spiral"),
                 (O::None, "None", "none"),
             ];
-            let items: Vec<(&str, &str)> = opts.iter().map(|(_, l, k)| (*l, *k)).collect();
-            let active = opts.iter().position(|(o, _, _)| *o == app.ui.crop_overlay);
-            if let Some(i) = crate::widgets::segmented(ui, "cropOverlay", &items, active, 4) {
-                app.ui.crop_overlay = opts[i].0;
-            }
+            let current = opts.iter().find(|(o, _, _)| *o == app.ui.crop_overlay).map_or("None", |(_, label, _)| *label);
+            let t = Tokens::get(ui.ctx());
+            let response = crate::widgets::dropdown(ui, "cropOverlay", crate::i18n::tr(current), t.font(12.5), t.text);
+            egui::Popup::menu(&response).show(|ui| {
+                for (overlay, label, key) in opts {
+                    let response = ui.selectable_label(app.ui.crop_overlay == overlay, crate::i18n::tr(label));
+                    register(ui, format!("button:cropOverlay-{key}"), response.rect);
+                    if response.clicked() {
+                        app.ui.crop_overlay = overlay;
+                        ui.close();
+                    }
+                }
+            });
             if matches!(app.ui.crop_overlay, O::Triangle | O::Spiral)
                 && text_button(ui, "cropOverlayOrient", crate::i18n::tr("Flip Overlay (⇧O)"), false).clicked()
             {
                 let _ = app.run("view.cropOverlayOrientation", json!({}));
             }
         }
+    });
+    divider(ui);
+    header(ui, "Rotate & Flip");
+    padded(ui, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            for (id, icon, label, command, active) in [
+                ("cropRotateLeft", Icon::Rotate, "Rotate Left", "photo.rotateLeft", false),
+                ("cropRotateRight", Icon::RotateRight, "Rotate Right", "photo.rotateRight", false),
+                ("cropFlipH", Icon::Flip, "Flip H", "photo.flipHorizontal", d.crop.flip_h),
+                ("cropFlipV", Icon::FlipVertical, "Flip V", "photo.flipVertical", d.crop.flip_v),
+                ("cropSwapAspect", Icon::BeforeAfter, "Swap Aspect (X)", "crop.rotateAspect", false),
+                ("cropReset", Icon::Rotate, "Reset", "crop.reset", false),
+            ] {
+                if crop_icon(ui, id, icon, label, active).clicked() {
+                    let _ = app.run(command, json!({}));
+                }
+            }
+        });
     });
     divider(ui);
     header(ui, "Geometry");
@@ -222,13 +225,20 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 ("Vertical", Upright::Vertical, "vertical"),
                 ("Full", Upright::Full, "full"),
             ];
-            let items: Vec<(&str, &str)> = modes.iter().map(|(l, _, k)| (*l, *k)).collect();
-            let active = modes.iter().position(|(_, m, _)| *m == d.geometry.upright);
-            if let Some(i) = crate::widgets::segmented(ui, "upright", &items, active, 3) {
-                let (_, mode, key) = modes[i];
-                let _ = app.run("geometry.upright", json!({"mode": key}));
-                app.ui.tool = if mode == Upright::Guided { "guidedUpright".into() } else { String::new() };
-            }
+            let t = Tokens::get(ui.ctx());
+            let current = modes.iter().find(|(_, mode, _)| *mode == d.geometry.upright).map_or("Off", |(label, _, _)| *label);
+            let response = crate::widgets::dropdown(ui, "upright", crate::i18n::tr(current), t.font(12.5), t.text);
+            egui::Popup::menu(&response).show(|ui| {
+                for (label, mode, key) in modes {
+                    let response = ui.selectable_label(mode == d.geometry.upright, crate::i18n::tr(label));
+                    register(ui, format!("button:upright-{key}"), response.rect);
+                    if response.clicked() {
+                        let _ = app.run("geometry.upright", json!({"mode": key}));
+                        app.ui.tool = if mode == Upright::Guided { "guidedUpright".into() } else { String::new() };
+                        ui.close();
+                    }
+                }
+            });
         }
         let guided = d.geometry.upright == lightcraft_develop::Upright::Guided;
         ui.horizontal_wrapped(|ui| {
@@ -259,140 +269,240 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 .color(Tokens::get(ui.ctx()).text_dim),
             );
         }
+    });
+    egui::Frame::NONE.fill(Tokens::get(ui.ctx()).inset).corner_radius(8.0).outer_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
+        header(ui, "Transform");
+        for spec in lightcraft_develop::controls::in_section(lightcraft_develop::Section::Geometry).filter(|c| c.id != "crop.angle") {
+            let v = lightcraft_develop::controls::get(&d, spec.id).unwrap_or(spec.default);
+            let out = slider(ui, spec, v, true, None);
+            crate::panels::edit::apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": spec.id, "value": v})));
+        }
+    });
+    padded(ui, |ui| {
         ui.add_space(4.0);
         let mut c = d.geometry.constrain_crop;
         if ui.checkbox(&mut c, crate::i18n::tr("Constrain Crop")).changed() {
             let _ = app.run("develop.merge", json!({"settings": {"geometry": {"constrain_crop": c}}, "label": "Constrain Crop"}));
         }
     });
-    for spec in lightcraft_develop::controls::in_section(lightcraft_develop::Section::Geometry).filter(|c| c.id != "crop.angle") {
-        let v = lightcraft_develop::controls::get(&d, spec.id).unwrap_or(spec.default);
-        let out = slider(ui, spec, v, true, None);
-        crate::panels::edit::apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": spec.id, "value": v})));
+}
+
+const REMOVE_MODES: [(&str, &str, Icon); 3] = [("remove", "Remove", Icon::Eraser), ("heal", "Heal", Icon::Heal), ("clone", "Clone", Icon::Clone)];
+
+fn remove_label(tool: &str) -> &'static str {
+    match tool {
+        "heal" => "Heal",
+        "clone" => "Clone",
+        "fill" => "Content-Aware",
+        _ => "Remove Tool",
     }
 }
 
-pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
-    let d = app.session.develop_of(id).unwrap_or_default();
-    header(ui, "Remove");
-    padded(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            for (label, tool) in [("Remove", "remove"), ("Content-Aware", "fill"), ("Heal", "heal"), ("Clone", "clone")] {
-                if text_button(ui, &format!("removeMode-{tool}"), label, app.ui.tool == tool).clicked() {
-                    app.ui.tool = tool.into();
-                }
-            }
-        });
-        ui.add_space(8.0);
-        ui.label(crate::i18n::tr_format!("{} spot(s) on this photo", d.spots.len()));
-        ui.add_space(4.0);
-        if text_button(ui, "findDust", crate::i18n::tr("Find Dust Spots"), false)
-            .on_hover_text(crate::i18n::tr("Heal the small, soft dark spots sensor dust leaves on smooth areas"))
-            .clicked()
-        {
-            match app.run("spot.findDust", json!({})) {
-                Ok(r) => {
-                    let n = r["added"].as_u64().unwrap_or(0);
-                    app.toast(
-                        ui.ctx(),
-                        if n == 0 {
-                            crate::i18n::tr("No dust spots found").to_string()
-                        } else {
-                            crate::i18n::tr_format!("Healed {n} dust spot{}", if n == 1 { "" } else { "s" }, n = n)
-                        },
-                    );
-                }
-                Err(e) => app.toast(ui.ctx(), e),
-            }
-        }
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new(crate::i18n::tr("Paint over a distraction on the photo to remove it.")).color(Tokens::get(ui.ctx()).text_dim));
-    });
-    // brush settings; with a spot selected they edit that spot too
-    let sel = app.session.active_spot.and_then(|i| d.spots.get(i).map(|sp| (i, sp.clone())));
-    if let Some((i, sp)) = &sel {
-        (app.ui.remove_size, app.ui.remove_feather, app.ui.remove_opacity) = (sp.size as f32, sp.feather as f32, sp.opacity as f32);
-        divider(ui);
-        let mode = match sp.mode {
-            lightcraft_develop::SpotMode::Heal => "Heal",
-            lightcraft_develop::SpotMode::Clone => "Clone",
-            lightcraft_develop::SpotMode::Remove => "Remove",
-            lightcraft_develop::SpotMode::Fill => "Content-Aware",
-        };
-        crate::panels::edit::sub_title(ui, &crate::i18n::tr_format!("{mode} spot {} of {}", i + 1, d.spots.len(), mode = crate::i18n::tr(mode)));
-    }
-    let plain = |id: &'static str, label: &'static str, min: f64, max: f64, default: f64| lightcraft_develop::ControlSpec {
+fn remove_slider(app: &mut LightcraftApp, ui: &mut egui::Ui, key: &str, selected: bool, card: bool) {
+    use lightcraft_develop::{ControlSpec, Section, Track};
+    let (id, label, max, default, value, scale) = match key {
+        "size" => ("ui.removeSize", "Size", 250.0, 20.0, app.ui.remove_size as f64 * 1000.0, 1000.0),
+        "feather" => ("ui.removeFeather", "Feather", 100.0, 50.0, app.ui.remove_feather as f64, 1.0),
+        _ => (if card { "ui.selectedSpotOpacity" } else { "ui.removeOpacity" }, "Opacity", 100.0, 100.0, app.ui.remove_opacity as f64, 1.0),
+    };
+    let spec = ControlSpec {
         id,
         label,
-        section: lightcraft_develop::Section::Detail,
-        min,
+        section: Section::Detail,
+        min: if key == "size" { 1.0 } else { 0.0 },
         max,
         default,
         step: 1.0,
         decimals: 0,
-        track: lightcraft_develop::Track::Plain,
+        track: Track::Plain,
     };
-    let sliders = [
-        (plain("ui.removeSize", "Size", 1.0, 250.0, 20.0), "size", (app.ui.remove_size * 1000.0) as f64),
-        (plain("ui.removeFeather", "Feather", 0.0, 100.0, 50.0), "feather", app.ui.remove_feather as f64),
-        (plain("ui.removeOpacity", "Opacity", 0.0, 100.0, 100.0), "opacity", app.ui.remove_opacity as f64),
-    ];
-    for (spec, key, v) in sliders {
-        let out = slider(ui, &spec, v, true, None);
-        let scale = if key == "size" { 1000.0 } else { 1.0 };
-        if let Some(v) = out.value {
-            match key {
-                "size" => app.ui.remove_size = (v / scale) as f32,
-                "feather" => app.ui.remove_feather = v as f32,
-                _ => app.ui.remove_opacity = v as f32,
-            }
-        }
-        if sel.is_some() {
-            crate::panels::edit::apply_slider_out(app, &spec, out, |app, v| app.run("spot.update", json!({key: v / scale})));
+    let out = slider(ui, &spec, value, true, None);
+    if let Some(value) = out.value {
+        match key {
+            "size" => app.ui.remove_size = (value / scale) as f32,
+            "feather" => app.ui.remove_feather = value as f32,
+            _ => app.ui.remove_opacity = value as f32,
         }
     }
-    if sel.is_some() {
-        padded(ui, |ui| {
-            ui.horizontal(|ui| {
-                if text_button(ui, "spotRefresh", crate::i18n::tr("Refresh Source (/)"), false).clicked() {
-                    let _ = app.run("spot.refreshSource", json!({}));
-                }
-                if text_button(ui, "spotDelete", crate::i18n::tr("Delete (⌫)"), false).clicked() {
-                    let _ = app.run("spot.delete", json!({}));
-                }
+    if selected {
+        crate::panels::edit::apply_slider_out(app, &spec, out, |app, value| app.run("spot.update", json!({key: value / scale})));
+    }
+}
+
+pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+    use egui::{Frame, Margin, RichText, Stroke, vec2};
+    let t = Tokens::get(ui.ctx());
+    let d = app.session.develop_of(id).unwrap_or_default();
+    let selected = app.session.active_spot.and_then(|i| d.spots.get(i).map(|spot| (i, spot.clone())));
+    if let Some((_, spot)) = &selected {
+        (app.ui.remove_size, app.ui.remove_feather, app.ui.remove_opacity) = (spot.size as f32, spot.feather as f32, spot.opacity as f32);
+    }
+    Frame::NONE.inner_margin(Margin { left: 22, right: 20, top: 20, bottom: 16 }).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(crate::i18n::tr("Remove Tool")).font(t.semibold(15.0)).color(t.text));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let reset = crop_icon(ui, "removeReset", Icon::Rotate, "Delete all spots", false);
+                egui::Popup::menu(&reset).show(|ui| {
+                    let confirm = ui.add_enabled(!d.spots.is_empty(), egui::Button::new(crate::i18n::tr("Delete all spots")));
+                    register(ui, "button:removeResetConfirm", confirm.rect);
+                    if confirm.clicked() {
+                        let _ = app.run("spot.clear", json!({}));
+                        ui.close();
+                    }
+                });
             });
         });
-    }
-    // Visualize Spots (A): a black/white high-pass view that makes dust and specks stand out
-    padded(ui, |ui| {
-        let mut v = app.ui.visualize_spots;
-        if ui.checkbox(&mut v, crate::i18n::tr("Visualize Spots (A)")).changed() {
-            app.ui.visualize_spots = v;
-        }
-    });
-    let spec = lightcraft_develop::ControlSpec {
-        id: "ui.spotsThreshold",
-        label: "Threshold",
-        section: lightcraft_develop::Section::Detail,
-        min: 0.0,
-        max: 100.0,
-        default: 50.0,
-        step: 1.0,
-        decimals: 0,
-        track: lightcraft_develop::Track::Plain,
-    };
-    let out = slider(ui, &spec, app.ui.spots_threshold as f64, app.ui.visualize_spots, None);
-    if let Some(v) = out.value {
-        app.ui.spots_threshold = v as f32;
-    }
-    padded(ui, |ui| {
-        tool_overlay_options(app, ui);
-        ui.add_space(4.0);
-        if !d.spots.is_empty() && text_button(ui, "removeClear", crate::i18n::tr("Delete all spots"), false).clicked() {
-            for i in (0..d.spots.len()).rev() {
-                let _ = app.run("spot.delete", json!({"index": i}));
+        ui.add_space(12.0);
+        divider(ui);
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            for (tool, label, icon) in REMOVE_MODES {
+                let active = app.ui.tool == tool || (tool == "remove" && app.ui.tool == "fill");
+                let response =
+                    crate::widgets::icon_button(ui, &format!("removeMode-{tool}"), icon, vec2(38.0, 38.0), active, true, crate::i18n::tr(label));
+                register(ui, format!("button:removeMode-{tool}"), response.rect);
+                if response.clicked() {
+                    app.ui.tool = tool.into();
+                }
             }
+        });
+        ui.add_space(14.0);
+        ui.label(RichText::new(crate::i18n::tr(remove_label(&app.ui.tool))).font(t.semibold(13.0)).color(t.text));
+        ui.add_space(5.0);
+        let help = match app.ui.tool.as_str() {
+            "heal" => "Blend a distraction with the surrounding texture.",
+            "clone" => "Copy texture from another area of the photo.",
+            _ => "Paint over a distraction on the photo to remove it.",
+        };
+        ui.add(egui::Label::new(RichText::new(crate::i18n::tr(help)).font(t.font(12.0)).color(t.text_dim)).wrap());
+        ui.add_space(14.0);
+        remove_slider(app, ui, "size", selected.is_some(), false);
+        ui.add_space(8.0);
+        remove_slider(app, ui, "opacity", selected.is_some(), false);
+        ui.add_space(16.0);
+        if let Some((index, spot)) = &selected {
+            Frame::new().fill(t.canvas).stroke(Stroke::new(1.0, t.field_border.gamma_multiply(0.45))).corner_radius(9).inner_margin(14).show(
+                ui,
+                |ui| {
+                    ui.set_min_width((ui.available_width() - 1.0).max(1.0));
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(crate::i18n::tr("Selected")).font(t.semibold(12.0)).color(t.text));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if crop_icon(ui, "spotDelete", Icon::Trash, "Delete (⌫)", false).clicked() {
+                                let _ = app.run("spot.delete", json!({}));
+                            }
+                            if matches!(spot.mode, lightcraft_develop::SpotMode::Heal | lightcraft_develop::SpotMode::Clone)
+                                && crop_icon(ui, "spotRefresh", Icon::Rotate, "Refresh Source (/)", false).clicked()
+                            {
+                                let _ = app.run("spot.refreshSource", json!({}));
+                            }
+                        });
+                    });
+                    divider(ui);
+                    ui.add_space(8.0);
+                    let mode = match spot.mode {
+                        lightcraft_develop::SpotMode::Remove => "remove",
+                        lightcraft_develop::SpotMode::Fill => "fill",
+                        lightcraft_develop::SpotMode::Heal => "heal",
+                        lightcraft_develop::SpotMode::Clone => "clone",
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(crate::i18n::tr("Type")).color(t.text_dim));
+                        let response = crate::widgets::dropdown(ui, "selectedSpotMode", crate::i18n::tr(remove_label(mode)), t.font(12.0), t.text);
+                        egui::Popup::menu(&response).show(|ui| {
+                            for tool in ["remove", "heal", "clone", "fill"] {
+                                let response = ui.selectable_label(tool == mode, crate::i18n::tr(remove_label(tool)));
+                                register(ui, format!("spotMode:{tool}"), response.rect);
+                                if response.clicked() {
+                                    let _ = app.run("spot.update", json!({"mode": tool}));
+                                    ui.close();
+                                }
+                            }
+                        });
+                    });
+                    ui.add_space(8.0);
+                    remove_slider(app, ui, "opacity", true, true);
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(format!("{} / {}", index + 1, d.spots.len())).font(t.font(10.5)).color(t.text_dim));
+                },
+            );
+            ui.add_space(18.0);
         }
+        divider(ui);
+        ui.add_space(12.0);
+        let mut hover = app.ui.tool_overlay == crate::state::ToolOverlay::Auto;
+        let response = ui.checkbox(&mut hover, crate::i18n::tr("Show overlay on hover"));
+        register(ui, "check:removeOverlayHover", response.rect);
+        if response.changed() {
+            let mode = if hover { "auto" } else { "never" };
+            let _ = app.run("view.toolOverlay", json!({"mode": mode}));
+        }
+        ui.add_space(12.0);
+        let advanced = egui::CollapsingHeader::new(crate::i18n::tr("More options")).id_salt("remove-advanced").show(ui, |ui| {
+            ui.add_space(8.0);
+            remove_slider(app, ui, "feather", selected.is_some(), false);
+            ui.add_space(8.0);
+            if text_button(ui, "findDust", crate::i18n::tr("Find Dust Spots"), false).clicked() {
+                match app.run("spot.findDust", json!({})) {
+                    Ok(result) => {
+                        let count = result["added"].as_u64().unwrap_or(0);
+                        let message = if count == 0 {
+                            crate::i18n::tr("No dust spots found").to_string()
+                        } else {
+                            format!("{} : {count}", crate::i18n::tr("Corrections added"))
+                        };
+                        app.toast(ui.ctx(), message);
+                    }
+                    Err(error) => app.toast(ui.ctx(), error),
+                }
+            }
+            ui.add_space(8.0);
+            if text_button(ui, "findBlemishes", crate::i18n::tr("Find Blemishes"), false)
+                .on_hover_text(crate::i18n::tr("Requires the face detector in Settings > Faces"))
+                .clicked()
+            {
+                match app.run_typed("spot.findBlemishes", json!({})) {
+                    Ok(result) => {
+                        let count = result["added"].as_u64().unwrap_or(0);
+                        app.toast(
+                            ui.ctx(),
+                            if count == 0 {
+                                crate::i18n::tr("No blemishes found").to_string()
+                            } else {
+                                format!("{} : {count}", crate::i18n::tr("Corrections added"))
+                            },
+                        );
+                    }
+                    Err(error) if error.kind == lightcraft_engine::ErrorKind::ModelMissing(lightcraft_engine::AiModel::FaceDetector) => {
+                        let _ = app.run("app.settings", json!({"tab":"faces"}));
+                    }
+                    Err(error) => app.toast_error(ui.ctx(), error.message),
+                }
+            }
+            ui.add_space(8.0);
+            ui.checkbox(&mut app.ui.visualize_spots, crate::i18n::tr("Visualize Spots (A)"));
+            let spec = lightcraft_develop::ControlSpec {
+                id: "ui.spotsThreshold",
+                label: "Threshold",
+                section: lightcraft_develop::Section::Detail,
+                min: 0.0,
+                max: 100.0,
+                default: 50.0,
+                step: 1.0,
+                decimals: 0,
+                track: lightcraft_develop::Track::Plain,
+            };
+            let out = slider(ui, &spec, app.ui.spots_threshold as f64, app.ui.visualize_spots, None);
+            if let Some(value) = out.value {
+                app.ui.spots_threshold = value as f32;
+            }
+            tool_overlay_options(app, ui);
+            if !d.spots.is_empty() && text_button(ui, "removeClear", crate::i18n::tr("Delete all spots"), false).clicked() {
+                let _ = app.run("spot.clear", json!({}));
+            }
+        });
+        register(ui, "section:removeAdvanced", advanced.header_response.rect);
     });
 }
 
@@ -404,17 +514,24 @@ pub(crate) fn tool_overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Tool Overlay")).color(t.text_dim));
         let current = app.ui.tool_overlay;
-        let r = crate::widgets::dropdown(ui, "toolOverlay", crate::i18n::tr(current.label()), t.font(12.5), t.text_label)
-            .on_hover_text(crate::i18n::tr("When pins show on the photo (Shift+H cycles)"));
-        egui::Popup::menu(&r).show(|ui| {
+        let choices = |ui: &mut egui::Ui| {
             for m in ToolOverlay::ALL {
                 let item = ui.selectable_label(m == current, crate::i18n::tr(m.label()));
                 register(ui, format!("toolOverlay:{}", m.name()), item.rect);
                 if item.clicked() {
                     let _ = app.run("view.toolOverlay", json!({"mode": m.name()}));
+                    ui.close();
                 }
             }
-        });
+        };
+        if egui::containers::menu::is_in_menu(ui) {
+            let response = crate::widgets::menu_button(ui, crate::i18n::tr(current.label()), choices);
+            register(ui, "dropdown:toolOverlay", response.response.rect);
+        } else {
+            let response = crate::widgets::dropdown(ui, "toolOverlay", crate::i18n::tr(current.label()), t.font(12.5), t.text_label)
+                .on_hover_text(crate::i18n::tr("When pins show on the photo (Shift+H cycles)"));
+            egui::Popup::menu(&response).show(choices);
+        }
     });
 }
 
@@ -480,4 +597,11 @@ pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         });
     });
+}
+
+/// Compact tool action with the same command and automation target as its text counterpart.
+fn crop_icon(ui: &mut egui::Ui, id: &str, icon: Icon, label: &str, active: bool) -> egui::Response {
+    let response = crate::widgets::icon_button(ui, id, icon, egui::vec2(34.0, 32.0), active, true, crate::i18n::tr(label));
+    register(ui, format!("button:{id}"), response.rect);
+    response
 }

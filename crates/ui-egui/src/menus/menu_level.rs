@@ -92,6 +92,10 @@ pub fn level(ui: &mut Ui, depth: usize, bar_bottom: Option<f32>, rows: impl FnOn
     // its wide (hovered) state its background hides the last character (issue #691).
     // 0.37's `ScrollAreaState.offset` is private: a scroll requested after layout is applied as
     // the next frame's start offset instead of writing the state directly.
+    // Menu rows get their own comfortable density without enlarging editing controls.
+    ui.spacing_mut().button_padding = vec2(10.0, 6.0);
+    ui.spacing_mut().interact_size.y = 28.0;
+    ui.spacing_mut().item_spacing.y = 3.0;
     let scroll_to = ctx.data_mut(|d| d.remove_temp::<f32>(key.with("scroll-to")));
     let mut area = egui::ScrollArea::vertical()
         .id_salt(("menu-level", depth))

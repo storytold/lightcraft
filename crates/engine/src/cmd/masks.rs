@@ -934,7 +934,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 };
                 let id = s.active().ok_or_else(|| bad("spot.add", "no active photo"))?;
                 let mut dd = (*s.develop_of(id).unwrap_or_default()).clone();
-                if spot.source_offset.is_none() && spot.mode != SpotMode::Fill {
+                if spot.source_offset.is_none() && matches!(spot.mode, SpotMode::Heal | SpotMode::Clone) {
                     // resolve the automatic source now: it gets a pin and stays put at every size
                     spot.source_offset = pick_source(s, id, &dd, &spot, None);
                 }
@@ -968,21 +968,34 @@ pub fn specs() -> Vec<CommandSpec> {
                     Some(m) => Some(serde_json::from_value(m.clone()).map_err(|e| bad(c, e.to_string()))?),
                     None => None,
                 };
+                let source = if matches!(mode, Some(SpotMode::Heal | SpotMode::Clone)) {
+                    let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                    let settings = s.develop_of(id).unwrap_or_default();
+                    let mut spot = settings.spots[i].clone();
+                    spot.mode = mode.unwrap_or(spot.mode);
+                    // pick the source for the geometry the edit will produce, not the old one
+                    apply_target_geometry(&mut spot, p);
+                    if spot.source_offset.is_none() && p.get("source").is_none() && p.get("moveSource").is_none() {
+                        pick_source(s, id, &settings, &spot, None)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 spots_edit(s, c, "Edit Spot", |spots| {
                     let sp = &mut spots[i];
-                    if let Some(d) = point(p, "move") {
-                        sp.points.iter_mut().for_each(|q| *q = Point::new(q.x + d.x, q.y + d.y));
-                        // the source moves along (its offset is relative to the target)
+                    if let Some(source) = source {
+                        sp.source_offset = Some(source);
                     }
+                    // the source moves along with the target (its offset is relative to it)
+                    apply_target_geometry(sp, p);
                     if let Some(o) = point(p, "source") {
                         sp.source_offset = Some(o);
                     }
                     if let Some(d) = point(p, "moveSource") {
                         let o = sp.source_offset.unwrap_or(Point::new(0.0, 0.0));
                         sp.source_offset = Some(Point::new(o.x + d.x, o.y + d.y));
-                    }
-                    if let Some(v) = p.get("size").and_then(Value::as_f64) {
-                        sp.size = v.clamp(SPOT_SIZE.0, SPOT_SIZE.1);
                     }
                     if let Some(v) = p.get("feather").and_then(Value::as_f64) {
                         sp.feather = v.clamp(0.0, 100.0);
@@ -1011,6 +1024,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
                 let dd = (*s.develop_of(id).unwrap_or_default()).clone();
                 let spot = dd.spots[i].clone();
+                if !matches!(spot.mode, SpotMode::Heal | SpotMode::Clone) {
+                    return Err(bad(c, "automatic reconstruction has no manual source; choose Heal or Clone"));
+                }
                 let next = pick_source(s, id, &dd, &spot, spot.source_offset).ok_or_else(|| bad(c, "no other source fits in the photo"))?;
                 spots_edit(s, c, "Refresh Source", |spots| {
                     spots[i].source_offset = Some(next);
@@ -1019,6 +1035,20 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"index": i, "source": [next.x, next.y]}))
             }
         ),
+        cmd!("spot.clear", "Delete all spots", [], None, "{} — clear retouches in one undo step", has_active, |s, _| {
+            s.active().ok_or_else(|| bad("spot.clear", "no active photo"))?;
+            // an open interaction commits as its own step, so the clear records one of its own
+            s.end_interaction()?;
+            let count = spots_len(s);
+            if count > 0 {
+                spots_edit(s, "spot.clear", "Delete all spots", |spots| {
+                    spots.clear();
+                    Ok(())
+                })?;
+            }
+            s.active_spot = None;
+            Ok(json!({"removed": count}))
+        }),
         cmd!("spot.delete", "Delete Spot", [], None, "{index? (the selected spot)}", has_active, |s, p| {
             let c = "spot.delete";
             let i = spot_index(s, p, c)?;
@@ -1126,6 +1156,17 @@ fn spots_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Spo
 }
 
 /// An automatic source for `spot` on photo `id` (a small proxy of the photo, framed by `d`).
+/// The `move` and `size` of a `spot.update`: used both to choose a Heal / Clone source for the
+/// geometry the edit produces and to commit that geometry, so the two never differ.
+fn apply_target_geometry(spot: &mut Spot, p: &Value) {
+    if let Some(d) = point(p, "move") {
+        spot.points.iter_mut().for_each(|q| *q = Point::new(q.x + d.x, q.y + d.y));
+    }
+    if let Some(v) = p.get("size").and_then(Value::as_f64) {
+        spot.size = v.clamp(SPOT_SIZE.0, SPOT_SIZE.1);
+    }
+}
+
 fn pick_source(s: &mut Session, id: crate::PhotoId, d: &lightcraft_develop::DevelopSettings, spot: &Spot, avoid: Option<Point>) -> Option<Point> {
     let src = s.source_now(id, crate::media::SourceLevel::Thumb).ok()?;
     let info = s.source_info(id);

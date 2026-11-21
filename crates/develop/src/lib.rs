@@ -40,11 +40,15 @@ impl DevelopSettings {
     }
 
     /// [`Self::to_json`] with Remove Hot Pixels (`detail.nr_outliers`) stated even when off, for JSON that is copied,
-    /// merged, scaled or compared key by key (copy / paste, presets, Auto Sync). The stored JSON leaves it out when
+    /// merged, scaled or compared key by key (copy / paste, presets, Auto Sync). Glow defaults are also stated here.
+    /// The stored JSON leaves it out when
     /// off, so settings saved before it keep their hash; a merge needs the `false`, or copying Detail would not turn
     /// the box off and a preset applied at an amount would not find its base value.
     pub fn to_json_for_merge(&self) -> Value {
         let mut v = self.to_json();
+        if let Some(effects) = v.get_mut("effects").and_then(Value::as_object_mut) {
+            effects.insert("glow".into(), serde_json::to_value(self.effects.glow).unwrap_or(Value::Null));
+        }
         if let Some(detail) = v.get_mut("detail").and_then(Value::as_object_mut) {
             detail.insert("nr_outliers".into(), Value::Bool(self.detail.nr_outliers));
         }
@@ -110,6 +114,15 @@ impl DevelopSettings {
         for b in s.as_bytes() {
             h ^= *b as u64;
             h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        // Old local builds cached the fixed-tap Glow under the settings-only hash.
+        // Salt only rendered Glow edits so those previews are refreshed after the
+        // continuous scattering change, without invalidating unrelated photo previews.
+        if self.effects.glow.amount.is_finite() && self.effects.glow.amount > 0.0 && self.section_enabled("effects") {
+            for b in b"\0lightcraft-glow-v2" {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x0100_0000_01b3);
+            }
         }
         h
     }
@@ -196,6 +209,7 @@ impl DevelopSettings {
             Section::Profile => {
                 self.profile = Profile::default();
             }
+            Section::Effects => self.effects.glow = Glow::default(),
             _ => {}
         }
     }
@@ -531,5 +545,43 @@ mod tests {
         let next = s.next_mask_id();
         assert!(!s.masks.iter().any(|m| m.id == next), "{next}");
         assert_eq!(next, 2);
+    }
+}
+
+#[cfg(test)]
+mod glow_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn rendered_glow_refreshes_old_previews_without_invalidating_other_photos() {
+        // The legacy preview key was FNV-1a over the serialized settings alone.
+        let legacy = |s: &DevelopSettings| {
+            serde_json::to_vec(s).unwrap().into_iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
+        };
+        let mut s = DevelopSettings::default();
+        assert_eq!(s.hash64(), legacy(&s));
+        s.effects.glow.amount = 23.0;
+        assert_ne!(s.hash64(), legacy(&s), "old Glow previews must be rebuilt with the corrected kernel");
+        s.set_section_enabled("effects", false);
+        assert_eq!(s.hash64(), legacy(&s), "disabled Glow retains its previous cache identity");
+    }
+
+    #[test]
+    fn glow_survives_roundtrip_copy_and_reset() {
+        let s = DevelopSettings::default().merged(&json!({"effects":{"glow":{"style":"streak","amount":70,"spread":85,"direction":45}}})).unwrap();
+        assert_eq!(DevelopSettings::from_json(&s.to_json()).unwrap(), s);
+        let patch = extract_groups(&s, &[SettingsGroup::Effects]);
+        let copied = DevelopSettings::default().merged(&patch).unwrap();
+        assert_eq!(copied.effects.glow, s.effects.glow);
+        let mut reset = s.clone();
+        reset.reset_section(Section::Effects);
+        assert_eq!(reset.effects.glow, Glow::default());
+        let clamped = s.merged(&json!({"effects":{"glow":{"amount":999,"direction":999,"range":-30}}})).unwrap();
+        assert_eq!(clamped.effects.glow.amount, 100.0);
+        assert_eq!(clamped.effects.glow.direction, 180.0);
+        assert_eq!(clamped.effects.glow.range, 0.0);
+        assert!(DevelopSettings::default().to_json().pointer("/effects/glow").is_none());
+        let old = DevelopSettings::from_json(&json!({"effects":{"clarity":10}})).unwrap();
+        assert_eq!(old.effects.glow, Glow::default());
     }
 }

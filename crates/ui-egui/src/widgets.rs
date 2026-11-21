@@ -29,6 +29,11 @@ pub fn name_combo(response: &egui::Response, label: &str) {
 /// grew 2 points when hovered, and the longest name of a list sized to it wrapped (#2354).
 fn list_style(style: &mut egui::Style) {
     style.visuals.widgets.inactive.bg_stroke = Stroke::NONE;
+    style.visuals.widgets.hovered.bg_stroke = Stroke::NONE;
+    style.visuals.widgets.active.bg_stroke = Stroke::NONE;
+    style.spacing.button_padding = vec2(10.0, 6.0);
+    style.spacing.item_spacing.y = 3.0;
+    style.spacing.interact_size.y = 28.0;
 }
 
 /// A native button with a vector arrow beside its text; egui reserves the icon's space.
@@ -411,7 +416,7 @@ fn update_wheel_arming(ui: &mut Ui, id: egui::Id, resp: &egui::Response, row: Re
 }
 
 /// The radius of a slider's hollow ring thumb.
-const THUMB_RING: f32 = 7.0;
+const THUMB_RING: f32 = 5.0;
 
 /// A Lightroom slider row (label + value above a track with a hollow ring thumb).
 /// Double-click the label or thumb to reset (hovering either says so). Shift-drag = fine adjustment.
@@ -425,7 +430,7 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let pad_l = 24.0;
     let pad_r = 22.0;
     let label_rect = Rect::from_min_size(pos2(row.left() + pad_l, row.top() + 4.0), vec2(w - pad_l - pad_r, 18.0));
-    let track_rect = Rect::from_min_max(pos2(row.left() + pad_l, row.top() + 22.0), pos2(row.right() - pad_r, row.top() + 40.0));
+    let track_rect = Rect::from_min_max(pos2(row.left() + pad_l, row.top() + 20.0), pos2(row.right() - pad_r, row.top() + t.slider_row_h - 3.0));
     let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
     let id = ui.scope_id().with(spec.id);
     let g = SliderLayout { spec, value, enabled, id, track_rect, value_rect };
@@ -505,7 +510,7 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
         t.thumb
     };
     p.circle_filled(pos2(tx, track_rect.center().y), ring, t.chrome);
-    p.circle_stroke(pos2(tx, track_rect.center().y), ring, Stroke::new(2.0, ring_c));
+    p.circle_stroke(pos2(tx, track_rect.center().y), ring, Stroke::new(1.5, ring_c));
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
@@ -853,12 +858,12 @@ pub fn section_header(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: O
     let title = crate::i18n::tr(title);
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
-    let (r, resp) = ui.allocate_exact_size(vec2(w, 52.0), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(w, t.section_h), Sense::click());
     announce_disclosure(&resp, true, open, title);
     register(ui, format!("section:{id}"), r);
     let p = ui.painter();
     if ui.rect_contains_pointer(r) {
-        p.rect_filled(r, 0.0, t.chrome.gamma_multiply(1.06));
+        p.rect_filled(r.shrink2(vec2(8.0, 3.0)), 7.0, t.hover.gamma_multiply(0.8));
     }
     let chev = Rect::from_center_size(pos2(r.left() + 30.0, r.center().y), vec2(16.0, 16.0));
     paint(p, chev, if open { Icon::ChevronDown } else { Icon::ChevronRight }, t.text_label);
@@ -929,14 +934,14 @@ pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, label));
     register(ui, format!("button:{id}"), r);
     let fill = if active {
-        t.pressed
+        t.button.lerp_to_gamma(t.accent, 0.32)
     } else if resp.hovered() {
         t.hover
     } else {
         t.button
     };
     let p = ui.painter();
-    p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
+    p.rect(r, CornerRadius::same(6), fill, Stroke::new(1.0, if active { t.accent } else { t.field_border }), StrokeKind::Inside);
     p.galley(r.center() - galley.size() / 2.0, galley, t.text);
     resp
 }
@@ -957,9 +962,11 @@ pub fn text_button_size(ui: &Ui, label: &str) -> f32 {
 /// addressable as `button:{id}-{key}` (keys parallel to labels). Returns the clicked index.
 pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<usize>, per_row: usize) -> Option<usize> {
     let t = Tokens::get(ui.ctx());
-    let per_row = per_row.max(1);
     let gap = 4.0;
     let w = ui.available_width();
+    let widest = items.iter().map(|(label, _)| text_button_size(ui, label)).fold(24.0_f32, f32::max);
+    let fitting = ((w + gap) / (widest + gap)).floor().max(1.0) as usize;
+    let per_row = per_row.max(1).min(fitting);
     let seg_w = ((w - gap * (per_row as f32 - 1.0)) / per_row as f32).max(24.0);
     let mut clicked = None;
     for (row_i, row) in items.chunks(per_row).enumerate() {
@@ -979,8 +986,8 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
                     t.button
                 };
                 let p = ui.painter();
-                p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
-                p.text(r.center(), Align2::CENTER_CENTER, label, t.semibold(11.5), t.text);
+                p.rect(r, CornerRadius::same(6), fill, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
+                p.with_clip_rect(r.shrink(2.0)).text(r.center(), Align2::CENTER_CENTER, label, t.font(11.5), t.text);
                 if resp.clicked() {
                     clicked = Some(i);
                 }

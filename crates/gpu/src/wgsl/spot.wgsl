@@ -21,8 +21,10 @@ fn px_at(x: i32, y: i32) -> vec3<f32> {
 
 // `Rgb32f::sample_bilinear` (pixel centres at +0.5).
 fn bilinear(x: f32, y: f32) -> vec3<f32> {
-    let fx = x - 0.5;
-    let fy = y - 0.5;
+    // Clamp before conversion to i32. A finite but very distant manual source can
+    // exceed the integer range; outside the image, bilinear sampling repeats the edge.
+    let fx = clamp(x - 0.5, -1.0, f32(pu(0u)));
+    let fy = clamp(y - 0.5, -1.0, f32(pu(1u)));
     let x0 = floor(fx);
     let y0 = floor(fy);
     let tx = fx - x0;
@@ -61,9 +63,18 @@ fn spot_prep(@builtin(global_invocation_id) gid: vec3<u32>) {
     let py = f32(gy) + 0.5;
     var d = f32_max();
     for (var k = 0u; k < pu(6u); k++) {
-        let ex = px - pts[2u * k];
-        let ey = py - pts[2u * k + 1u];
-        d = min(d, sqrt(ex * ex + ey * ey));
+        let a = vec2<f32>(pts[2u * k], pts[2u * k + 1u]);
+        let q = vec2<f32>(px, py);
+        var nearest = a;
+        if (k + 1u < pu(6u)) {
+            let b = vec2<f32>(pts[2u * (k + 1u)], pts[2u * (k + 1u) + 1u]);
+            let delta = b - a;
+            let length_squared = dot(delta, delta);
+            if (length_squared > 0.0) {
+                nearest = a + delta * clamp(dot(q - a, delta) / length_squared, 0.0, 1.0);
+            }
+        }
+        d = min(d, length(q - nearest));
     }
     let alpha = (1.0 - spot_smooth(pf(8u), pf(7u), d)) * pf(9u);
     al[i] = alpha;
@@ -73,7 +84,7 @@ fn spot_prep(@builtin(global_invocation_id) gid: vec3<u32>) {
     sp[3u * i + 2u] = s.z;
     let gi = gy * pu(0u) + gx;
     let t = vec3<f32>(img[3u * gi], img[3u * gi + 1u], img[3u * gi + 2u]);
-    let outside = select(0.0, 1.0, alpha < 0.02);
+    let outside = select(0.0, 1.0, alpha < pf(9u) * 0.02);
     let m = (t - s) * outside;
     df[3u * i] = m.x;
     df[3u * i + 1u] = m.y;

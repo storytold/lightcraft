@@ -487,6 +487,7 @@ fn a_region_job_is_refused_when_a_spot_reads_beyond_what_fits() {
     let mut d = (*s.develop_of(id).unwrap()).clone();
     d.spots.push(lightcraft_develop::Spot {
         points: vec![lightcraft_geom::Point::new(0.2, 0.5)],
+        mode: lightcraft_develop::SpotMode::Heal,
         size: 0.01,
         source_offset: Some(lightcraft_geom::Point::new(0.6, 0.0)),
         ..Default::default()

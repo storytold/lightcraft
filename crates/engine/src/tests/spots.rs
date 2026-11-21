@@ -28,8 +28,8 @@ fn spots(s: &Session) -> Vec<lightcraft_develop::Spot> {
 #[test]
 fn spots_select_move_edit_refresh_and_delete() {
     let mut s = Session::with_demo();
-    // a remove spot gets a resolved source (a pin to show) and is selected
-    let r = s.execute("spot.add", &json!({"points": [[0.4, 0.5]], "size": 0.02})).unwrap();
+    // a heal spot gets a resolved source (a pin to show) and is selected
+    let r = s.execute("spot.add", &json!({"mode":"heal", "points": [[0.4, 0.5]], "size": 0.02})).unwrap();
     assert_eq!(r["index"], 0);
     assert_eq!(s.active_spot, Some(0));
     let src0 = spots(&s)[0].source_offset.expect("automatic source resolved");
@@ -81,6 +81,57 @@ fn a_content_aware_spot_has_no_source() {
     assert_eq!((sp.mode, sp.source_offset), (lightcraft_develop::SpotMode::Fill, None));
     assert_eq!(serde_json::to_value(sp).unwrap()["mode"], "fill");
     assert!(s.execute("spot.update", &json!({"mode": "nonsense"})).is_err());
+}
+
+#[test]
+fn automatic_remove_has_no_manual_source_and_switching_to_heal_resolves_one() {
+    let mut s = Session::with_demo();
+    s.execute("spot.add", &json!({"points":[[0.4,0.5]],"size":0.03})).unwrap();
+    assert!(spots(&s)[0].source_offset.is_none());
+    let before = spots(&s).to_vec();
+    assert!(s.execute("spot.refreshSource", &json!({})).is_err());
+    assert_eq!(spots(&s), before);
+    s.execute("spot.update", &json!({"mode":"heal"})).unwrap();
+    assert!(spots(&s)[0].source_offset.is_some());
+}
+
+#[test]
+fn clearing_all_spots_is_one_undo_step_and_empty_clear_is_a_noop() {
+    let mut s = Session::with_demo();
+    for x in [0.3, 0.6] {
+        s.execute("spot.add", &json!({"points":[[x,0.5]]})).unwrap();
+    }
+    let original = spots(&s).to_vec();
+    let photo = s.active().unwrap();
+    let history = s.catalog.photo(photo).unwrap().history.len();
+    assert_eq!(s.execute("spot.clear", &json!({})).unwrap()["removed"], 2);
+    assert!(spots(&s).is_empty());
+    assert_eq!(s.active_spot, None);
+    assert_eq!(s.catalog.photo(photo).unwrap().history.len(), history + 1);
+    s.execute("spot.clear", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(photo).unwrap().history.len(), history + 1);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(spots(&s), original);
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert!(spots(&s).is_empty());
+}
+
+#[test]
+fn clearing_spots_commits_an_open_interaction_as_its_own_step() {
+    let mut s = Session::with_demo();
+    s.execute("spot.add", &json!({"points":[[0.3,0.5]]})).unwrap();
+    let photo = s.active().unwrap();
+    let history = s.catalog.photo(photo).unwrap().history.len();
+    // an edit still open (a drag in progress) when Clear All runs
+    s.begin_interaction("Edit Spot").unwrap();
+    s.execute("spot.update", &json!({"index": 0, "opacity": 40})).unwrap();
+    s.execute("spot.clear", &json!({})).unwrap();
+    assert!(spots(&s).is_empty());
+    // the open edit and the clear are two steps: one undo brings the edited spot back
+    assert_eq!(s.catalog.photo(photo).unwrap().history.len(), history + 2);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(spots(&s).len(), 1);
+    assert_eq!(spots(&s)[0].opacity, 40.0);
 }
 
 fn target_session() -> Session {

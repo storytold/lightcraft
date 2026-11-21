@@ -853,6 +853,26 @@ fn edit_menu_places_the_select_and_paste_rows_with_their_kin() {
     assert!(!after.iter().any(|n| matches!(n, MenuNode::Item { .. })), "no row follows Settings… but a submenu: {after:?}");
 }
 
+#[test]
+fn workspace_design_view_menu_groups_keep_shortcuts_and_commands() {
+    let a = app();
+    let view = menu_bar(&a).into_iter().find(|(title, _)| title == "View").unwrap().1;
+    for (title, command) in
+        [("Panels", "view.histogram"), ("Zoom", "view.zoom100"), ("Overlays", "view.clipping"), ("Filters", "library.clearFilter")]
+    {
+        let children = view
+            .iter()
+            .find_map(|node| match node {
+                MenuNode::Submenu { label, children } if label == title => Some(children),
+                _ => None,
+            })
+            .unwrap();
+        assert!(find(children, command).is_some(), "{command} stays reachable under {title}");
+    }
+    assert!(matches!(find(&view, "view.zoomIn"), Some(MenuNode::Item { shortcut: Some(_), .. })), "grouping must preserve keyboard shortcuts");
+    assert!(view.len() < 35, "View must fit a practical menu rather than dozens of flat rows: {}", view.len());
+}
+
 /// The interface language is chosen in Settings ▸ General (one choice per language), so Edit has no
 /// Language submenu of 18 rows. The commands stay: agents and tests still switch language by id.
 #[test]

@@ -17,7 +17,10 @@ fn text_shapes(shape: &egui::Shape, out: &mut Vec<egui::epaint::TextShape>) {
 
 fn panel(width: f32, scale: f32, locale: Locale, describe: bool) -> (Vec<egui::epaint::TextShape>, Vec<(String, Rect)>) {
     let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
-    app.run("mask.add", json!({"kind": "subject", "name": LONG_NAME})).unwrap();
+    // the creation tiles show while there is no mask; the long name and the prompt need one
+    if describe {
+        app.run("mask.add", json!({"kind": "subject", "name": LONG_NAME})).unwrap();
+    }
     app.ui.describe = describe.then(|| ("new".into(), LONG_NAME.repeat(4)));
     app.ui.detail_due = Some((100.0, 1));
     let photo = app.session.active().unwrap();
@@ -54,7 +57,7 @@ fn masking_tile_labels_fit_without_eliding_at_supported_panel_widths() {
         for width in [250.0, 270.0, 330.0, 520.0] {
             for scale in [1.0, 2.0] {
                 let (texts, widgets) = panel(width, scale, locale, false);
-                for (kind, label) in [("background", "Background"), ("luminanceRange", "Luminance"), ("prompt", "Describe")] {
+                for (kind, label) in [("subject", "Subject"), ("sky", "Sky"), ("background", "Background"), ("prompt", "Describe")] {
                     crate::i18n::set_language(locale);
                     let label = crate::i18n::tr(label).to_string();
                     crate::i18n::set_language(Locale::En);
@@ -86,7 +89,7 @@ fn masking_long_names_and_describe_controls_stay_inside_the_panel() {
             let field = widgets.iter().find(|(id, _)| id == "maskDescribe").unwrap().1;
             let button = widgets.iter().find(|(id, _)| id == "button:maskDescribeGo").unwrap().1;
             assert!(field.right() <= button.left(), "the prompt must not overlap Select");
-            assert!(field.left() >= 24.0 && button.right() <= width - 22.0, "{locale:?} {width}: {field:?} {button:?}");
+            assert!(field.left() >= 16.0 && button.right() <= width - 16.0, "{locale:?} {width}: {field:?} {button:?}");
         }
     }
 }

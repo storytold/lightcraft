@@ -94,6 +94,7 @@ fn tab_reaches_the_crop_handles() {
 #[test]
 fn spots_are_added_and_moved_by_keyboard() {
     let mut h = detail("panel.remove");
+    assert_eq!(h.request("ui.set", json!({"tool":"heal"}), T)["ok"], true);
     assert!(develop(&h).spots.is_empty());
     focus(&mut h, "spot:new");
     key(&mut h, "right", true);

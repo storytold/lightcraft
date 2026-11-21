@@ -254,6 +254,12 @@ controls! {
     "vignette.roundness" => vignette.roundness, "Roundness", Vignette, -100, 100, 0, 1, 0, Centered;
     "vignette.feather" => vignette.feather, "Feather", Vignette, 0, 100, 50, 1, 0, Plain;
     "vignette.highlights" => vignette.highlights, "Highlights", Vignette, 0, 100, 0, 1, 0, Plain;
+    "effects.glow.amount" => effects.glow.amount, "Glow", Effects, 0, 100, 0, 1, 0, Plain;
+    "effects.glow.range" => effects.glow.range, "Range", Effects, 0, 100, 50, 1, 0, Plain;
+    "effects.glow.spread" => effects.glow.spread, "Spread", Effects, 0, 100, 50, 1, 0, Plain;
+    "effects.glow.warmth" => effects.glow.warmth, "Warmth", Effects, -100, 100, 0, 1, 0, Temp;
+    "effects.glow.direction" => effects.glow.direction, "Direction", Effects, -180, 180, 0, 1, 0, Centered;
+    "effects.glow.softness" => effects.glow.softness, "Softness", Effects, 0, 100, 50, 1, 0, Plain;
     "grain.amount" => grain.amount, "Grain", Grain, 0, 100, 0, 1, 0, Plain;
     "grain.size" => grain.size, "Size", Grain, 0, 100, 25, 1, 0, Plain;
     "grain.roughness" => grain.roughness, "Roughness", Grain, 0, 100, 50, 1, 0, Plain;
