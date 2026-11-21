@@ -705,46 +705,75 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             Ok(first.unwrap_or_default())
         }),
-        cmd!(
-            "develop.wb",
-            "White Balance",
-            [],
-            None,
-            "{mode: asShot|auto|daylight|cloudy|shade|tungsten|fluorescent|flash|custom, temp?, tint?}",
-            has_active,
-            |s, p| {
-                let mode: WbMode =
-                    serde_json::from_value(p.get("mode").cloned().unwrap_or(json!("custom"))).map_err(|e| bad("develop.wb", e.to_string()))?;
-                let id = active(s, "develop.wb")?;
-                let info = s.source_info(id);
-                let (mut t, mut tint) = match mode {
-                    WbMode::AsShot => (info.as_shot_temp, info.as_shot_tint),
-                    WbMode::Auto => {
-                        let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad("develop.wb", e))?;
-                        lightcraft_pipeline::auto::auto_wb(&src, &info)
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "develop.wb",
+                "White Balance",
+                [],
+                None,
+                "{mode: asShot|auto|daylight|cloudy|shade|tungsten|fluorescent|flash|custom, temp?, tint?, id?|ids?}: the named photos (`id` or `ids`, each must exist) each get their own white balance in one undo step, without Auto Sync and with the selection unchanged; else the active photo → {temp, tint} (of the first photo)",
+                has_active,
+                |s, p| {
+                    const C: &str = "develop.wb";
+                    let mode: WbMode =
+                        serde_json::from_value(p.get("mode").cloned().unwrap_or(json!("custom"))).map_err(|e| bad(C, e.to_string()))?;
+                    // the temperature and tint `mode` (and `temp`/`tint`) give photo `id`
+                    let resolve = |s: &mut Session, id: PhotoId| -> Result<(lightcraft_pipeline::SourceInfo, f64, f64)> {
+                        let info = s.source_info(id);
+                        let (t, tint) = match mode {
+                            WbMode::AsShot => (info.as_shot_temp, info.as_shot_tint),
+                            WbMode::Auto => {
+                                let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad(C, e))?;
+                                lightcraft_pipeline::auto::auto_wb(&src, &info)
+                            }
+                            m => m
+                                .preset()
+                                .map(|(t, ti)| {
+                                    // presets are Kelvin on raws with that scale, relative to daylight (6500 K = as shot) elsewhere
+                                    if info.raw && !info.relative_wb { (t, ti) } else { (6500.0 * t / 5500.0, ti) }
+                                })
+                                .unwrap_or((info.as_shot_temp, info.as_shot_tint)),
+                        };
+                        Ok((info, f64_or(p, "temp", t), f64_or(p, "tint", tint)))
+                    };
+                    // The resolved temperature/tint is stored, so rendering never depends on the mode; the
+                    // mode is kept for the UI's WB dropdown.
+                    let apply = |d: &mut DevelopSettings, info: &lightcraft_pipeline::SourceInfo, t: f64, tint: f64| {
+                        lightcraft_pipeline::local::normalize_wb(d, info);
+                        d.wb.mode = mode;
+                        d.wb.temp = t.clamp(2000.0, 50000.0);
+                        d.wb.tint = tint.clamp(-150.0, 150.0);
+                    };
+                    if let Some(ids) = named_photos(s, p, C)? {
+                        // each named photo alone: no Auto Sync to the selection, which stays as it is; a
+                        // pending slider edit is committed first, as its own undo step
+                        s.end_interaction()?;
+                        let mut first = None;
+                        let mut ops = Vec::new();
+                        for id in ids {
+                            let (info, t, tint) = resolve(s, id)?;
+                            first.get_or_insert((t, tint));
+                            let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
+                            apply(&mut d, &info, t, tint);
+                            ops.extend(s.develop_op(id, d, "White Balance"));
+                        }
+                        if !ops.is_empty() {
+                            s.commit("White Balance", Op::Batch { ops })?;
+                        }
+                        let (t, tint) = first.unwrap_or_default();
+                        return Ok(json!({"temp": t, "tint": tint}));
                     }
-                    m => m
-                        .preset()
-                        .map(|(t, ti)| {
-                            // presets are Kelvin on raws with that scale, relative to daylight (6500 K = as shot) elsewhere
-                            if info.raw && !info.relative_wb { (t, ti) } else { (6500.0 * t / 5500.0, ti) }
-                        })
-                        .unwrap_or((info.as_shot_temp, info.as_shot_tint)),
-                };
-                t = f64_or(p, "temp", t);
-                tint = f64_or(p, "tint", tint);
-                // The resolved temperature/tint is stored, so rendering never depends on the mode; the
-                // mode is kept for the UI's WB dropdown.
-                edit(s, "develop.wb", "White Balance", |d| {
-                    lightcraft_pipeline::local::normalize_wb(d, &info);
-                    d.wb.mode = mode;
-                    d.wb.temp = t.clamp(2000.0, 50000.0);
-                    d.wb.tint = tint.clamp(-150.0, 150.0);
-                    Ok(())
-                })?;
-                Ok(json!({"temp": t, "tint": tint}))
-            }
-        ),
+                    let id = active(s, C)?;
+                    let (info, t, tint) = resolve(s, id)?;
+                    edit(s, C, "White Balance", |d| {
+                        apply(d, &info, t, tint);
+                        Ok(())
+                    })?;
+                    Ok(json!({"temp": t, "tint": tint}))
+                }
+            )
+        },
         cmd!("develop.wbPick", "White Balance Selector", [], Some("W"), "{x, y} normalized image coords of a neutral point", has_active, |s, p| {
             let (x, y) = (f64_req(p, "x", "develop.wbPick")?, f64_req(p, "y", "develop.wbPick")?);
             let id = active(s, "develop.wbPick")?;
