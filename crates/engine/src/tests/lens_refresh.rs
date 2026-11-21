@@ -289,3 +289,31 @@ fn the_downloaded_database_is_selected_and_read_only_when_whole() {
     lens_profiles::use_dir(before);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A raw catalogued before LightCraft could read its camera's in-file lens correction renders with the correction its
+/// decode reads, so the decode records it in the catalog: the Optics panel names the file's correction and enables
+/// Profile Distortion / Vignetting (issue #3764). Bookkeeping, not an undo step. A decode without a file correction
+/// leaves a database profile alone.
+#[test]
+fn a_decode_records_the_files_own_lens_correction() {
+    let file_lens = EmbeddedLens { source: LensSource::File, ..lens(-0.02) };
+    let mut s = Session::new();
+    for p in [raw(1, "FE 70-300mm F4.5-5.6 G OSS", false), raw(2, "50mm F1.8", false)] {
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    s.catalog.apply(Op::SetEmbeddedLens { id: PhotoId(2), lens: Some(Box::new(lens(-0.05))) }).unwrap();
+    let decoded = file_lens;
+    s.media.file_loader = Some(Arc::new(move |path: &str, _| {
+        let lens = path.ends_with("1.cr3").then_some(decoded);
+        Ok((lightcraft_raster::Rgb32f::new(8, 8), lightcraft_pipeline::SourceInfo { raw: true, lens, ..Default::default() }))
+    }));
+    for id in [1, 2] {
+        let r = s.thumb_job(PhotoId(id), 256).unwrap().run();
+        assert!(r.loaded.is_some());
+        s.accept(&r);
+    }
+    assert_eq!(lens_of(&s, PhotoId(1)), Some(file_lens), "the file's correction the render uses is recorded");
+    assert_eq!(crate::cmd::lens_refresh::no_profile_reason(s.catalog.photo(PhotoId(1)).unwrap()), None);
+    assert_eq!(lens_of(&s, PhotoId(2)), Some(lens(-0.05)), "a database profile stays");
+    assert!(s.undo.is_empty(), "bookkeeping, not an undo step");
+}
