@@ -1,0 +1,1322 @@
+{
+    "source":  "Adobe crs: fields classified for LightCraft; translated from crs::registry and NON_ADJUSTMENT, originally the exiftool XMP-crs table (https://exiftool.org/TagNames/XMP.html#crs) reconciled with exiftool\u0027s XMP.pm",
+    "fields":  [
+                   {
+                       "name":  "AlreadyApplied",
+                       "decision":  "bookkeeping"
+                   },
+                   {
+                       "name":  "AsShotTemperature",
+                       "decision":  "bookkeeping",
+                       "note":  "the file\u0027s as-shot white, recorded next to the edit (ours comes from the file itself)"
+                   },
+                   {
+                       "name":  "AsShotTint",
+                       "decision":  "bookkeeping",
+                       "note":  "the file\u0027s as-shot white, recorded next to the edit (ours comes from the file itself)"
+                   },
+                   {
+                       "name":  "AutoBrightness",
+                       "decision":  "quiet"
+                   },
+                   {
+                       "name":  "AutoContrast",
+                       "decision":  "quiet"
+                   },
+                   {
+                       "name":  "AutoExposure",
+                       "decision":  "quiet"
+                   },
+                   {
+                       "name":  "AutoGrayscaleMix",
+                       "decision":  "quiet"
+                   },
+                   {
+                       "name":  "AutoLateralCA",
+                       "decision":  "mapped",
+                       "note":  "optics"
+                   },
+                   {
+                       "name":  "AutoShadows",
+                       "decision":  "quiet"
+                   },
+                   {
+                       "name":  "AutoTone",
+                       "decision":  "quiet"
+                   },
+                   {
+                       "name":  "AutoToneDigest",
+                       "decision":  "metadata"
+                   },
+                   {
+                       "name":  "AutoToneDigestNoSat",
+                       "decision":  "metadata"
+                   },
+                   {
+                       "name":  "AutoWhiteVersion",
+                       "decision":  "bookkeeping",
+                       "note":  "none of it changes this photo\u0027s rendering"
+                   },
+                   {
+                       "name":  "Blacks2012",
+                       "decision":  "mapped",
+                       "note":  "light"
+                   },
+                   {
+                       "name":  "BlueHue",
+                       "decision":  "mapped",
+                       "note":  "calibration"
+                   },
+                   {
+                       "name":  "BlueSaturation",
+                       "decision":  "mapped",
+                       "note":  "calibration"
+                   },
+                   {
+                       "name":  "Brightness",
+                       "decision":  "mapped",
+                       "note":  "process version 2010 names, applied only when the packet has no 2012 names"
+                   },
+                   {
+                       "name":  "CameraModelRestriction",
+                       "decision":  "bookkeeping"
+                   },
+                   {
+                       "name":  "CameraProfile",
+                       "decision":  "reported",
+                       "note":  "the profile name carries no rendering data of its own"
+                   },
+                   {
+                       "name":  "CameraProfileDigest",
+                       "decision":  "bookkeeping",
+                       "note":  "which Lightroom version may read the edit, and checksums of the profiles it names"
+                   },
+                   {
+                       "name":  "ChromaticAberrationB",
+                       "decision":  "reported",
+                       "note":  "a real setting or container LightCraft does not apply: the import reports it unmapped"
+                   },
+                   {
+                       "name":  "ChromaticAberrationR",
+                       "decision":  "reported",
+                       "note":  "a real setting or container LightCraft does not apply: the import reports it unmapped"
+                   },
+                   {
+                       "name":  "CircularGradientBasedCorrections",
+                       "decision":  "mapped",
+                       "note":  "local corrections and spots, read from the packet\u0027s structures"
+                   },
+                   {
+                       "name":  "Clarity",
+                       "decision":  "mapped",
+                       "note":  "process version 2010 names, applied only when the packet has no 2012 names"
+                   },
+                   {
+                       "name":  "Clarity2012",
+                       "decision":  "mapped",
+                       "note":  "colour and effects"
+                   },
+                   {
+                       "name":  "ClipboardAspectRatio",
+                       "decision":  "bookkeeping",
+                       "note":  "none of it changes this photo\u0027s rendering"
+                   },
+                   {
+                       "name":  "ClipboardOrientation",
+                       "decision":  "bookkeeping",
+                       "note":  "none of it changes this photo\u0027s rendering"
+                   },
+                   {
+                       "name":  "Cluster",
+                       "decision":  "bookkeeping",
+                       "note":  "preset/library bookkeeping and tool options that don\u0027t change the rendering"
+                   },
+                   {
+                       "name":  "ColorGradeBlending",
+                       "decision":  "mapped",
+                       "note":  "colour grading"
+                   },
+                   {
+                       "name":  "ColorGradeGlobalHue",
+                       "decision":  "mapped",
+                       "note":  "colour grading"
+                   },
+                   {
+                       "name":  "ColorGradeGlobalLum",
+                       "decision":  "mapped",
+                       "note":  "colour grading"
+                   },
+                   {
+                       "name":  "ColorGradeGlobalSat",
+                       "decision":  "mapped",
+                       "note":  "colour grading"
+                   },
+                   {
+                       "name":  "ColorGradeHighlightLum",
+                       "decision":  "mapped",
+                       "note":  "colour grading"
+                   },
+                   {
+                       "name":  "ColorGradeMidtoneHue",
+                       "decision":  "mapped",
+                       "note":  "colour grading"
+                   },
+                   {
+                       "name":  "ColorGradeMidtoneLum",
+                       "decision":  "mapped",
+                       "note":  "colour grading"
+                   },
+                   {
+                       "name":  "ColorGradeMidtoneSat",
+                       "decision":  "mapped",
+                       "note":  "colour grading"
+                   },
+                   {
+                       "name":  "ColorGradeShadowLum",
+                       "decision":  "mapped",
+                       "note":  "colour grading"
+                   },
+                   {
+                       "name":  "ColorNoiseReduction",
+                       "decision":  "mapped",
+                       "note":  "detail"
+                   },
+                   {
+                       "name":  "ColorNoiseReductionDetail",
+                       "decision":  "mapped",
+                       "note":  "detail"
+                   },
+                   {
+                       "name":  "ColorNoiseReductionSmoothness",
+                       "decision":  "mapped",
+                       "note":  "detail"
+                   },
+                   {
+                       "name":  "ColorVariance",
+                       "decision":  "metadata"
+                   },
+                   {
+                       "name":  "CompatibleVersion",
+                       "decision":  "bookkeeping",
+                       "note":  "which Lightroom version may read the edit, and checksums of the profiles it names"
+                   },
+                   {
+                       "name":  "ContactInfo",
+                       "decision":  "bookkeeping"
+                   },
+                   {
+                       "name":  "Contrast",
+                       "decision":  "mapped",
+                       "note":  "process version 2010 names, applied only when the packet has no 2012 names"
+                   },
+                   {
+                       "name":  "Contrast2012",
+                       "decision":  "mapped",
+                       "note":  "light"
+                   },
+                   {
+                       "name":  "Converter",
+                       "decision":  "bookkeeping",
+                       "note":  "none of it changes this photo\u0027s rendering"
+                   },
+                   {
+                       "name":  "ConvertToGrayscale",
+                       "decision":  "mapped",
+                       "note":  "black \u0026 white"
+                   },
+                   {
+                       "name":  "Copyright",
+                       "decision":  "bookkeeping"
+                   },
+                   {
+                       "name":  "CropAngle",
+                       "decision":  "mapped",
+                       "note":  "geometry and crop"
+                   },
+                   {
+                       "name":  "CropBottom",
+                       "decision":  "mapped",
+                       "note":  "geometry and crop"
+                   },
+                   {
+                       "name":  "CropConstrainToUnitSquare",
+                       "decision":  "bookkeeping",
+                       "note":  "a crop tool option (keep the crop inside the photo), not the crop itself"
+                   },
+                   {
+                       "name":  "CropConstrainToWarp",
+                       "decision":  "bookkeeping",
+                       "note":  "preset/library bookkeeping and tool options that don\u0027t change the rendering"
+                   },
+                   {
+                       "name":  "CropHeight",
+                       "decision":  "mapped",
+                       "note":  "geometry and crop"
+                   },
+                   {
+                       "name":  "CropLeft",
+                       "decision":  "mapped",
+                       "note":  "geometry and crop"
+                   },
+                   {
+                       "name":  "CropRight",
+                       "decision":  "mapped",
+                       "note":  "geometry and crop"
+                   },
+                   {
+                       "name":  "CropTop",
+                       "decision":  "mapped",
+                       "note":  "geometry and crop"
+                   },
+                   {
+                       "name":  "CropUnit",
+                       "decision":  "bookkeeping",
+                       "note":  "the crop\u0027s unit labels; its edges are normalized, so the units change nothing"
+                   },
+                   {
+                       "name":  "CropUnits",
+                       "decision":  "bookkeeping",
+                       "note":  "the crop\u0027s unit labels; its edges are normalized, so the units change nothing"
+                   },
+                   {
+                       "name":  "CropWidth",
+                       "decision":  "mapped",
+                       "note":  "geometry and crop"
+                   },
+                   {
+                       "name":  "CurveRefineSaturation",
+                       "decision":  "mapped",
+                       "note":  "tone curve"
+                   },
+                   {
+                       "name":  "DefaultAutoGray",
+                       "decision":  "bookkeeping",
+                       "note":  "none of it changes this photo\u0027s rendering"
+                   },
+                   {
+                       "name":  "DefaultAutoTone",
+                       "decision":  "bookkeeping",
+                       "note":  "none of it changes this photo\u0027s rendering"
+                   },
+                   {
+                       "name":  "DefaultsSpecificToISO",
+                       "decision":  "bookkeeping",
+                       "note":  "none of it changes this photo\u0027s rendering"
+                   },
+                   {
+                       "name":  "DefaultsSpecificToSerial",
+                       "decision":  "bookkeeping",
+                       "note":  "none of it changes this photo\u0027s rendering"
+                   },
+                   {
+                       "name":  "Defringe",
+                       "decision":  "reported",
+                       "note":  "a real setting or container LightCraft does not apply: the import reports it unmapped"
+                   },
+                   {
+                       "name":  "DefringeGreenAmount",
+                       "decision":  "mapped",
+                       "note":  "optics"
+                   },
+                   {
+                       "name":  "DefringeGreenHueHi",
+                       "decision":  "mapped",
+                       "note":  "optics"
+                   },
+                   {
+                       "name":  "DefringeGreenHueLo",
+                       "decision":  "mapped",
+                       "note":  "optics"
+                   },
+                   {
+                       "name":  "DefringePurpleAmount",
+                       "decision":  "mapped",
+                       "note":  "optics"
+                   },
+                   {
+                       "name":  "DefringePurpleHueHi",
+                       "decision":  "mapped",
+                       "note":  "optics"
+                   },
+                   {
+                       "name":  "DefringePurpleHueLo",
+                       "decision":  "mapped",
+                       "note":  "optics"
+                   },
+                   {
+                       "name":  "Dehaze",
+                       "decision":  "mapped",
+                       "note":  "colour and effects"
+                   },
+                   {
+                       "name":  "DepthBasedCorrections",
+                       "decision":  "reported",
+                       "note":  "a real setting or container LightCraft does not apply: the import reports it unmapped"
+                   },
+                   {
+                       "name":  "DepthMapInfo",
+                       "decision":  "reported",
+                       "note":  "a real setting or container LightCraft does not apply: the import reports it unmapped"
+                   },
+                   {
+                       "name":  "Description",
+                       "decision":  "bookkeeping",
+                       "note":  "preset/library bookkeeping and tool options that don\u0027t change the rendering"
+                   },
+                   {
+                       "name":  "DNGIgnoreSidecars",
+                       "decision":  "bookkeeping",
+                       "note":  "none of it changes this photo\u0027s rendering"
+                   },
+                   {
+                       "name":  "Exposure",
+                       "decision":  "mapped",
+                       "note":  "process version 2010 names, applied only when the packet has no 2012 names"
+                   },
+                   {
+                       "name":  "Exposure2012",
+                       "decision":  "mapped",
+                       "note":  "light"
+                   },
+                   {
+                       "name":  "FillLight",
+                       "decision":  "mapped",
+                       "note":  "process version 2010 names, applied only when the packet has no 2012 names"
+                   },
+                   {
+                       "name":  "GradientBasedCorrections",
+                       "decision":  "mapped",
+                       "note":  "local corrections and spots, read from the packet\u0027s structures"
+                   },
+                   {
+                       "name":  "GrainAmount",
+                       "decision":  "mapped",
+                       "note":  "vignette and grain"
+                   },
+                   {
+                       "name":  "GrainFrequency",
+                       "decision":  "mapped",
+                       "note":  "vignette and grain"
+                   },
+                   {
+                       "name":  "GrainSeed",
+                       "decision":  "metadata"
+                   },
+                   {
+                       "name":  "GrainSize",
+                       "decision":  "mapped",
+                       "note":  "vignette and grain"
+                   },
+                   {
+                       "name":  "GrayMixerAqua",
+                       "decision":  "mapped",
+                       "note":  "black \u0026 white"
+                   },
+                   {
+                       "name":  "GrayMixerBlue",
+                       "decision":  "mapped",
+                       "note":  "black \u0026 white"
+                   },
+                   {
+                       "name":  "GrayMixerGreen",
+                       "decision":  "mapped",
+                       "note":  "black \u0026 white"
+                   },
+                   {
+                       "name":  "GrayMixerMagenta",
+                       "decision":  "mapped",
+                       "note":  "black \u0026 white"
+                   },
+                   {
+                       "name":  "GrayMixerOrange",
+                       "decision":  "mapped",
+                       "note":  "black \u0026 white"
+                   },
+                   {
+                       "name":  "GrayMixerPurple",
+                       "decision":  "mapped",
+                       "note":  "black \u0026 white"
+                   },
+                   {
+                       "name":  "GrayMixerRed",
+                       "decision":  "mapped",
+                       "note":  "black \u0026 white"
+                   },
+                   {
+                       "name":  "GrayMixerYellow",
+                       "decision":  "mapped",
+                       "note":  "black \u0026 white"
+                   },
+                   {
+                       "name":  "GreenHue",
+                       "decision":  "mapped",
+                       "note":  "calibration"
+                   },
+                   {
+                       "name":  "GreenSaturation",
+                       "decision":  "mapped",
+                       "note":  "calibration"
+                   },
+                   {
+                       "name":  "Group",
+                       "decision":  "bookkeeping"
+                   },
+                   {
+                       "name":  "HasCrop",
+                       "decision":  [
+                                        "bookkeeping",
+                                        "mapped"
+                                    ],
+                       "note":  "geometry and crop"
+                   },
+                   {
+                       "name":  "HasSettings",
+                       "decision":  "bookkeeping"
+                   },
+                   {
+                       "name":  "HDREditMode",
+                       "decision":  "mapped",
+                       "note":  "light"
+                   },
+                   {
+                       "name":  "HDRMaxValue",
+                       "decision":  "reported",
+                       "note":  "a real setting or container LightCraft does not apply: the import reports it unmapped"
+                   },
+                   {
+                       "name":  "Highlight2012",
+                       "decision":  "reported",
+                       "note":  "an ACR field LightCraft does not map"
+                   },
+                   {
+                       "name":  "HighlightRecovery",
+                       "decision":  "mapped",
+                       "note":  "process version 2010 names, applied only when the packet has no 2012 names"
+                   },
+                   {
+                       "name":  "Highlights2012",
+                       "decision":  "mapped",
+                       "note":  "light"
+                   },
+                   {
+                       "name":  "HueAdjustmentAqua",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "HueAdjustmentBlue",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "HueAdjustmentGreen",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "HueAdjustmentMagenta",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "HueAdjustmentOrange",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "HueAdjustmentPurple",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "HueAdjustmentRed",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "HueAdjustmentYellow",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "IncrementalTemperature",
+                       "decision":  "mapped",
+                       "note":  "white balance"
+                   },
+                   {
+                       "name":  "IncrementalTint",
+                       "decision":  "mapped",
+                       "note":  "white balance"
+                   },
+                   {
+                       "name":  "JPEGHandling",
+                       "decision":  "bookkeeping",
+                       "note":  "none of it changes this photo\u0027s rendering"
+                   },
+                   {
+                       "name":  "LensBlur",
+                       "decision":  "reported",
+                       "note":  "features LightCraft does not implement, documented as not mapped"
+                   },
+                   {
+                       "name":  "LensManualDistortionAmount",
+                       "decision":  "mapped",
+                       "note":  "optics"
+                   },
+                   {
+                       "name":  "LensProfileChromaticAberrationScale",
+                       "decision":  "reported",
+                       "note":  "an empty set), reported as an unmapped strength anywhere else"
+                   },
+                   {
+                       "name":  "LensProfileDigest",
+                       "decision":  "bookkeeping",
+                       "note":  "which Lightroom version may read the edit, and checksums of the profiles it names"
+                   },
+                   {
+                       "name":  "LensProfileDistortionScale",
+                       "decision":  "reported",
+                       "note":  "an empty set), reported as an unmapped strength anywhere else"
+                   },
+                   {
+                       "name":  "LensProfileEnable",
+                       "decision":  "mapped",
+                       "note":  "optics"
+                   },
+                   {
+                       "name":  "LensProfileFilename",
+                       "decision":  "bookkeeping",
+                       "note":  "the lens profile Lightroom picked: ours is the file\u0027s own, only `LensProfileEnable` carries over"
+                   },
+                   {
+                       "name":  "LensProfileIsEmbedded",
+                       "decision":  "bookkeeping",
+                       "note":  "the lens profile Lightroom picked: ours is the file\u0027s own, only `LensProfileEnable` carries over"
+                   },
+                   {
+                       "name":  "LensProfileMatchKeyCameraModelName",
+                       "decision":  "bookkeeping",
+                       "note":  "how Lightroom matched the profile it names; only `LensProfileEnable` carries over"
+                   },
+                   {
+                       "name":  "LensProfileMatchKeyExifMake",
+                       "decision":  "bookkeeping",
+                       "note":  "how Lightroom matched the profile it names; only `LensProfileEnable` carries over"
+                   },
+                   {
+                       "name":  "LensProfileMatchKeyExifModel",
+                       "decision":  "bookkeeping",
+                       "note":  "how Lightroom matched the profile it names; only `LensProfileEnable` carries over"
+                   },
+                   {
+                       "name":  "LensProfileMatchKeyIsRaw",
+                       "decision":  "bookkeeping",
+                       "note":  "how Lightroom matched the profile it names; only `LensProfileEnable` carries over"
+                   },
+                   {
+                       "name":  "LensProfileMatchKeyLensID",
+                       "decision":  "bookkeeping",
+                       "note":  "how Lightroom matched the profile it names; only `LensProfileEnable` carries over"
+                   },
+                   {
+                       "name":  "LensProfileMatchKeyLensInfo",
+                       "decision":  "bookkeeping",
+                       "note":  "how Lightroom matched the profile it names; only `LensProfileEnable` carries over"
+                   },
+                   {
+                       "name":  "LensProfileMatchKeyLensName",
+                       "decision":  "bookkeeping",
+                       "note":  "how Lightroom matched the profile it names; only `LensProfileEnable` carries over"
+                   },
+                   {
+                       "name":  "LensProfileMatchKeySensorFormatFactor",
+                       "decision":  "bookkeeping",
+                       "note":  "how Lightroom matched the profile it names; only `LensProfileEnable` carries over"
+                   },
+                   {
+                       "name":  "LensProfileName",
+                       "decision":  "bookkeeping",
+                       "note":  "the lens profile Lightroom picked: ours is the file\u0027s own, only `LensProfileEnable` carries over"
+                   },
+                   {
+                       "name":  "LensProfileSetup",
+                       "decision":  "bookkeeping",
+                       "note":  "the lens profile Lightroom picked: ours is the file\u0027s own, only `LensProfileEnable` carries over"
+                   },
+                   {
+                       "name":  "LensProfileVignettingScale",
+                       "decision":  "reported",
+                       "note":  "an empty set), reported as an unmapped strength anywhere else"
+                   },
+                   {
+                       "name":  "Look",
+                       "decision":  "reported",
+                       "note":  "a look resolves only through an imported profile (presets keep it, #1001)"
+                   },
+                   {
+                       "name":  "LookName",
+                       "decision":  "reported",
+                       "note":  "a look\u0027s name resolves no further than the look itself"
+                   },
+                   {
+                       "name":  "LuminanceAdjustmentAqua",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "LuminanceAdjustmentBlue",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "LuminanceAdjustmentGreen",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "LuminanceAdjustmentMagenta",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "LuminanceAdjustmentOrange",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "LuminanceAdjustmentPurple",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "LuminanceAdjustmentRed",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "LuminanceAdjustmentYellow",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "LuminanceNoiseReductionContrast",
+                       "decision":  "mapped",
+                       "note":  "detail"
+                   },
+                   {
+                       "name":  "LuminanceNoiseReductionDetail",
+                       "decision":  "mapped",
+                       "note":  "detail"
+                   },
+                   {
+                       "name":  "LuminanceSmoothing",
+                       "decision":  "mapped",
+                       "note":  "detail"
+                   },
+                   {
+                       "name":  "MaskGroupBasedCorrections",
+                       "decision":  "mapped",
+                       "note":  "local corrections and spots, read from the packet\u0027s structures"
+                   },
+                   {
+                       "name":  "MoireFilter",
+                       "decision":  "reported",
+                       "note":  "a real setting or container LightCraft does not apply: the import reports it unmapped"
+                   },
+                   {
+                       "name":  "Name",
+                       "decision":  "bookkeeping"
+                   },
+                   {
+                       "name":  "NegativeCacheLargePreviewSize",
+                       "decision":  "bookkeeping",
+                       "note":  "none of it changes this photo\u0027s rendering"
+                   },
+                   {
+                       "name":  "NegativeCacheMaximumSize",
+                       "decision":  "bookkeeping",
+                       "note":  "none of it changes this photo\u0027s rendering"
+                   },
+                   {
+                       "name":  "NegativeCachePath",
+                       "decision":  "bookkeeping",
+                       "note":  "none of it changes this photo\u0027s rendering"
+                   },
+                   {
+                       "name":  "OverrideLookVignette",
+                       "decision":  "bookkeeping",
+                       "note":  "preset/library bookkeeping and tool options that don\u0027t change the rendering"
+                   },
+                   {
+                       "name":  "PaintBasedCorrections",
+                       "decision":  "mapped",
+                       "note":  "local corrections and spots, read from the packet\u0027s structures"
+                   },
+                   {
+                       "name":  "ParametricDarks",
+                       "decision":  "mapped",
+                       "note":  "tone curve"
+                   },
+                   {
+                       "name":  "ParametricHighlights",
+                       "decision":  "mapped",
+                       "note":  "tone curve"
+                   },
+                   {
+                       "name":  "ParametricHighlightSplit",
+                       "decision":  "mapped",
+                       "note":  "tone curve"
+                   },
+                   {
+                       "name":  "ParametricLights",
+                       "decision":  "mapped",
+                       "note":  "tone curve"
+                   },
+                   {
+                       "name":  "ParametricMidtoneSplit",
+                       "decision":  "mapped",
+                       "note":  "tone curve"
+                   },
+                   {
+                       "name":  "ParametricShadows",
+                       "decision":  "mapped",
+                       "note":  "tone curve"
+                   },
+                   {
+                       "name":  "ParametricShadowSplit",
+                       "decision":  "mapped",
+                       "note":  "tone curve"
+                   },
+                   {
+                       "name":  "PerspectiveAspect",
+                       "decision":  "mapped",
+                       "note":  "geometry and crop"
+                   },
+                   {
+                       "name":  "PerspectiveHorizontal",
+                       "decision":  "mapped",
+                       "note":  "geometry and crop"
+                   },
+                   {
+                       "name":  "PerspectiveRotate",
+                       "decision":  "mapped",
+                       "note":  "geometry and crop"
+                   },
+                   {
+                       "name":  "PerspectiveScale",
+                       "decision":  "mapped",
+                       "note":  "geometry and crop"
+                   },
+                   {
+                       "name":  "PerspectiveUpright",
+                       "decision":  "mapped",
+                       "note":  "geometry and crop"
+                   },
+                   {
+                       "name":  "PerspectiveVertical",
+                       "decision":  "mapped",
+                       "note":  "geometry and crop"
+                   },
+                   {
+                       "name":  "PerspectiveX",
+                       "decision":  "mapped",
+                       "note":  "geometry and crop"
+                   },
+                   {
+                       "name":  "PerspectiveY",
+                       "decision":  "mapped",
+                       "note":  "geometry and crop"
+                   },
+                   {
+                       "name":  "PointColors",
+                       "decision":  "reported",
+                       "note":  "an empty set), reported as an unmapped strength anywhere else"
+                   },
+                   {
+                       "name":  "PostCropVignetteAmount",
+                       "decision":  "mapped",
+                       "note":  "vignette and grain"
+                   },
+                   {
+                       "name":  "PostCropVignetteFeather",
+                       "decision":  "mapped",
+                       "note":  "vignette and grain"
+                   },
+                   {
+                       "name":  "PostCropVignetteHighlightContrast",
+                       "decision":  "mapped",
+                       "note":  "vignette and grain"
+                   },
+                   {
+                       "name":  "PostCropVignetteMidpoint",
+                       "decision":  "mapped",
+                       "note":  "vignette and grain"
+                   },
+                   {
+                       "name":  "PostCropVignetteRoundness",
+                       "decision":  "mapped",
+                       "note":  "vignette and grain"
+                   },
+                   {
+                       "name":  "PostCropVignetteStyle",
+                       "decision":  "mapped",
+                       "note":  "vignette and grain"
+                   },
+                   {
+                       "name":  "PresetType",
+                       "decision":  "bookkeeping"
+                   },
+                   {
+                       "name":  "ProcessVersion",
+                       "decision":  "bookkeeping"
+                   },
+                   {
+                       "name":  "RangeMaskMapInfo",
+                       "decision":  "reported",
+                       "note":  "a real setting or container LightCraft does not apply: the import reports it unmapped"
+                   },
+                   {
+                       "name":  "RawFileName",
+                       "decision":  "bookkeeping"
+                   },
+                   {
+                       "name":  "RedEyeInfo",
+                       "decision":  "reported",
+                       "note":  "features LightCraft does not implement, documented as not mapped"
+                   },
+                   {
+                       "name":  "RedHue",
+                       "decision":  "mapped",
+                       "note":  "calibration"
+                   },
+                   {
+                       "name":  "RedSaturation",
+                       "decision":  "mapped",
+                       "note":  "calibration"
+                   },
+                   {
+                       "name":  "RequiresRGBTables",
+                       "decision":  "bookkeeping",
+                       "note":  "preset/library bookkeeping and tool options that don\u0027t change the rendering"
+                   },
+                   {
+                       "name":  "RetouchAreas",
+                       "decision":  "mapped",
+                       "note":  "local corrections and spots, read from the packet\u0027s structures"
+                   },
+                   {
+                       "name":  "RetouchInfo",
+                       "decision":  "mapped",
+                       "note":  "local corrections and spots, read from the packet\u0027s structures"
+                   },
+                   {
+                       "name":  "Saturation",
+                       "decision":  "mapped",
+                       "note":  "colour and effects"
+                   },
+                   {
+                       "name":  "SaturationAdjustmentAqua",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "SaturationAdjustmentBlue",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "SaturationAdjustmentGreen",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "SaturationAdjustmentMagenta",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "SaturationAdjustmentOrange",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "SaturationAdjustmentPurple",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "SaturationAdjustmentRed",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "SaturationAdjustmentYellow",
+                       "decision":  "mapped",
+                       "note":  "HSL mixer, all eight bands"
+                   },
+                   {
+                       "name":  "SDRBlend",
+                       "decision":  "reported",
+                       "note":  "a real setting or container LightCraft does not apply: the import reports it unmapped"
+                   },
+                   {
+                       "name":  "SDRBrightness",
+                       "decision":  "reported",
+                       "note":  "a real setting or container LightCraft does not apply: the import reports it unmapped"
+                   },
+                   {
+                       "name":  "SDRContrast",
+                       "decision":  "reported",
+                       "note":  "a real setting or container LightCraft does not apply: the import reports it unmapped"
+                   },
+                   {
+                       "name":  "SDRHighlights",
+                       "decision":  "reported",
+                       "note":  "a real setting or container LightCraft does not apply: the import reports it unmapped"
+                   },
+                   {
+                       "name":  "SDRShadows",
+                       "decision":  "reported",
+                       "note":  "a real setting or container LightCraft does not apply: the import reports it unmapped"
+                   },
+                   {
+                       "name":  "SDRWhites",
+                       "decision":  "reported",
+                       "note":  "a real setting or container LightCraft does not apply: the import reports it unmapped"
+                   },
+                   {
+                       "name":  "Shadows",
+                       "decision":  "mapped",
+                       "note":  "process version 2010 names, applied only when the packet has no 2012 names"
+                   },
+                   {
+                       "name":  "Shadows2012",
+                       "decision":  "mapped",
+                       "note":  "light"
+                   },
+                   {
+                       "name":  "ShadowTint",
+                       "decision":  "mapped",
+                       "note":  "calibration"
+                   },
+                   {
+                       "name":  "SharpenDetail",
+                       "decision":  "mapped",
+                       "note":  "detail"
+                   },
+                   {
+                       "name":  "SharpenEdgeMasking",
+                       "decision":  "mapped",
+                       "note":  "detail"
+                   },
+                   {
+                       "name":  "SharpenRadius",
+                       "decision":  "mapped",
+                       "note":  "detail"
+                   },
+                   {
+                       "name":  "Sharpness",
+                       "decision":  "mapped",
+                       "note":  "detail"
+                   },
+                   {
+                       "name":  "ShortName",
+                       "decision":  "bookkeeping"
+                   },
+                   {
+                       "name":  "Smoothness",
+                       "decision":  "reported",
+                       "note":  "a real setting or container LightCraft does not apply: the import reports it unmapped"
+                   },
+                   {
+                       "name":  "SortName",
+                       "decision":  "bookkeeping",
+                       "note":  "preset/library bookkeeping and tool options that don\u0027t change the rendering"
+                   },
+                   {
+                       "name":  "SplitToningBalance",
+                       "decision":  "mapped",
+                       "note":  "colour grading"
+                   },
+                   {
+                       "name":  "SplitToningHighlightHue",
+                       "decision":  "mapped",
+                       "note":  "colour grading"
+                   },
+                   {
+                       "name":  "SplitToningHighlightSaturation",
+                       "decision":  "mapped",
+                       "note":  "colour grading"
+                   },
+                   {
+                       "name":  "SplitToningShadowHue",
+                       "decision":  "mapped",
+                       "note":  "colour grading"
+                   },
+                   {
+                       "name":  "SplitToningShadowSaturation",
+                       "decision":  "mapped",
+                       "note":  "colour grading"
+                   },
+                   {
+                       "name":  "SupportsAmount",
+                       "decision":  "bookkeeping"
+                   },
+                   {
+                       "name":  "SupportsAmount2",
+                       "decision":  "bookkeeping",
+                       "note":  "preset/library bookkeeping and tool options that don\u0027t change the rendering"
+                   },
+                   {
+                       "name":  "SupportsColor",
+                       "decision":  "bookkeeping"
+                   },
+                   {
+                       "name":  "SupportsHighDynamicRange",
+                       "decision":  "bookkeeping"
+                   },
+                   {
+                       "name":  "SupportsMonochrome",
+                       "decision":  "bookkeeping"
+                   },
+                   {
+                       "name":  "SupportsNormalDynamicRange",
+                       "decision":  "bookkeeping"
+                   },
+                   {
+                       "name":  "SupportsOutputReferred",
+                       "decision":  "bookkeeping"
+                   },
+                   {
+                       "name":  "SupportsSceneReferred",
+                       "decision":  "bookkeeping"
+                   },
+                   {
+                       "name":  "Temperature",
+                       "decision":  "mapped",
+                       "note":  "white balance"
+                   },
+                   {
+                       "name":  "Texture",
+                       "decision":  "mapped",
+                       "note":  "colour and effects"
+                   },
+                   {
+                       "name":  "TIFFHandling",
+                       "decision":  "bookkeeping",
+                       "note":  "none of it changes this photo\u0027s rendering"
+                   },
+                   {
+                       "name":  "Tint",
+                       "decision":  "mapped",
+                       "note":  "white balance"
+                   },
+                   {
+                       "name":  "ToggleStyleAmount",
+                       "decision":  "reported",
+                       "note":  "the process-version 2010 channel curves: only the 2012 set is read"
+                   },
+                   {
+                       "name":  "ToggleStyleDigest",
+                       "decision":  "reported",
+                       "note":  "the process-version 2010 channel curves: only the 2012 set is read"
+                   },
+                   {
+                       "name":  "ToneCurve",
+                       "decision":  "mapped",
+                       "note":  "the older single curve, read when the packet has no 2012 master"
+                   },
+                   {
+                       "name":  "ToneCurveBlue",
+                       "decision":  "reported",
+                       "note":  "the process-version 2010 channel curves: only the 2012 set is read"
+                   },
+                   {
+                       "name":  "ToneCurveGreen",
+                       "decision":  "reported",
+                       "note":  "the process-version 2010 channel curves: only the 2012 set is read"
+                   },
+                   {
+                       "name":  "ToneCurveName",
+                       "decision":  "quiet"
+                   },
+                   {
+                       "name":  "ToneCurveName2012",
+                       "decision":  "quiet"
+                   },
+                   {
+                       "name":  "ToneCurvePV2012",
+                       "decision":  "mapped",
+                       "note":  "the older single curve, read when the packet has no 2012 master"
+                   },
+                   {
+                       "name":  "ToneCurvePV2012Blue",
+                       "decision":  "mapped",
+                       "note":  "the older single curve, read when the packet has no 2012 master"
+                   },
+                   {
+                       "name":  "ToneCurvePV2012Green",
+                       "decision":  "mapped",
+                       "note":  "the older single curve, read when the packet has no 2012 master"
+                   },
+                   {
+                       "name":  "ToneCurvePV2012Red",
+                       "decision":  "mapped",
+                       "note":  "the older single curve, read when the packet has no 2012 master"
+                   },
+                   {
+                       "name":  "ToneCurveRed",
+                       "decision":  "reported",
+                       "note":  "the process-version 2010 channel curves: only the 2012 set is read"
+                   },
+                   {
+                       "name":  "ToneMapStrength",
+                       "decision":  "reported",
+                       "note":  "the process-version 2010 channel curves: only the 2012 set is read"
+                   },
+                   {
+                       "name":  "UprightCenterMode",
+                       "decision":  "reported",
+                       "note":  "saved Lightroom geometry: the mode is recalculated, the matrices are reported"
+                   },
+                   {
+                       "name":  "UprightCenterNormX",
+                       "decision":  "reported",
+                       "note":  "saved Lightroom geometry: the mode is recalculated, the matrices are reported"
+                   },
+                   {
+                       "name":  "UprightCenterNormY",
+                       "decision":  "reported",
+                       "note":  "saved Lightroom geometry: the mode is recalculated, the matrices are reported"
+                   },
+                   {
+                       "name":  "UprightDependentDigest",
+                       "decision":  "reported",
+                       "note":  "saved Lightroom geometry: the mode is recalculated, the matrices are reported"
+                   },
+                   {
+                       "name":  "UprightFocalLength35mm",
+                       "decision":  "reported",
+                       "note":  "saved Lightroom geometry: the mode is recalculated, the matrices are reported"
+                   },
+                   {
+                       "name":  "UprightFocalMode",
+                       "decision":  "reported",
+                       "note":  "saved Lightroom geometry: the mode is recalculated, the matrices are reported"
+                   },
+                   {
+                       "name":  "UprightFourSegments_0",
+                       "decision":  "reported",
+                       "note":  "saved Lightroom geometry: the mode is recalculated, the matrices are reported"
+                   },
+                   {
+                       "name":  "UprightFourSegments_1",
+                       "decision":  "reported",
+                       "note":  "saved Lightroom geometry: the mode is recalculated, the matrices are reported"
+                   },
+                   {
+                       "name":  "UprightFourSegments_2",
+                       "decision":  "reported",
+                       "note":  "saved Lightroom geometry: the mode is recalculated, the matrices are reported"
+                   },
+                   {
+                       "name":  "UprightFourSegments_3",
+                       "decision":  "reported",
+                       "note":  "saved Lightroom geometry: the mode is recalculated, the matrices are reported"
+                   },
+                   {
+                       "name":  "UprightFourSegmentsCount",
+                       "decision":  "reported",
+                       "note":  "saved Lightroom geometry: the mode is recalculated, the matrices are reported"
+                   },
+                   {
+                       "name":  "UprightGuidedDependentDigest",
+                       "decision":  "reported",
+                       "note":  "saved Lightroom geometry: the mode is recalculated, the matrices are reported"
+                   },
+                   {
+                       "name":  "UprightPreview",
+                       "decision":  "reported",
+                       "note":  "saved Lightroom geometry: the mode is recalculated, the matrices are reported"
+                   },
+                   {
+                       "name":  "UprightTransform_0",
+                       "decision":  "reported",
+                       "note":  "saved Lightroom geometry: the mode is recalculated, the matrices are reported"
+                   },
+                   {
+                       "name":  "UprightTransform_1",
+                       "decision":  "reported",
+                       "note":  "saved Lightroom geometry: the mode is recalculated, the matrices are reported"
+                   },
+                   {
+                       "name":  "UprightTransform_2",
+                       "decision":  "reported",
+                       "note":  "saved Lightroom geometry: the mode is recalculated, the matrices are reported"
+                   },
+                   {
+                       "name":  "UprightTransform_3",
+                       "decision":  "reported",
+                       "note":  "saved Lightroom geometry: the mode is recalculated, the matrices are reported"
+                   },
+                   {
+                       "name":  "UprightTransform_4",
+                       "decision":  "reported",
+                       "note":  "saved Lightroom geometry: the mode is recalculated, the matrices are reported"
+                   },
+                   {
+                       "name":  "UprightTransform_5",
+                       "decision":  "reported",
+                       "note":  "saved Lightroom geometry: the mode is recalculated, the matrices are reported"
+                   },
+                   {
+                       "name":  "UprightTransformCount",
+                       "decision":  "reported",
+                       "note":  "saved Lightroom geometry: the mode is recalculated, the matrices are reported"
+                   },
+                   {
+                       "name":  "UprightVersion",
+                       "decision":  "reported",
+                       "note":  "saved Lightroom geometry: the mode is recalculated, the matrices are reported"
+                   },
+                   {
+                       "name":  "UUID",
+                       "decision":  "bookkeeping"
+                   },
+                   {
+                       "name":  "Version",
+                       "decision":  "bookkeeping"
+                   },
+                   {
+                       "name":  "Vibrance",
+                       "decision":  "mapped",
+                       "note":  "colour and effects"
+                   },
+                   {
+                       "name":  "VignetteAmount",
+                       "decision":  "mapped",
+                       "note":  "optics"
+                   },
+                   {
+                       "name":  "VignetteMidpoint",
+                       "decision":  "mapped",
+                       "note":  "optics"
+                   },
+                   {
+                       "name":  "What",
+                       "decision":  "bookkeeping",
+                       "note":  "none of it changes this photo\u0027s rendering"
+                   },
+                   {
+                       "name":  "WhiteBalance",
+                       "decision":  "mapped",
+                       "note":  "white balance"
+                   },
+                   {
+                       "name":  "Whites2012",
+                       "decision":  "mapped",
+                       "note":  "light"
+                   }
+               ],
+    "revised":  "2026-10-28"
+}

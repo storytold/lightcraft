@@ -59,81 +59,9 @@ impl Target {
 /// Band names as they appear in `crs:` field names, in our mixer order.
 const CRS_BANDS: [&str; 8] = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
 
-/// `crs:` fields that describe the packet rather than an adjustment.
-const NON_ADJUSTMENT: &[&str] = &[
-    "crs:Version",
-    "crs:ProcessVersion",
-    "crs:Name",
-    "crs:ShortName",
-    "crs:Group",
-    "crs:UUID",
-    "crs:PresetType",
-    "crs:SupportsAmount",
-    "crs:SupportsColor",
-    "crs:SupportsMonochrome",
-    "crs:SupportsHighDynamicRange",
-    "crs:SupportsNormalDynamicRange",
-    "crs:SupportsSceneReferred",
-    "crs:SupportsOutputReferred",
-    "crs:CameraModelRestriction",
-    "crs:Copyright",
-    "crs:ContactInfo",
-    "crs:HasSettings",
-    "crs:AlreadyApplied",
-    "crs:RawFileName",
-    "crs:HasCrop",
-    // preset/library bookkeeping and tool options that don't change the rendering
-    "crs:Cluster",
-    "crs:SupportsAmount2",
-    "crs:RequiresRGBTables",
-    "crs:SortName",
-    "crs:Description",
-    "crs:CropConstrainToWarp",
-    "crs:OverrideLookVignette",
-    // the file's as-shot white, recorded next to the edit (ours comes from the file itself)
-    "crs:AsShotTemperature",
-    "crs:AsShotTint",
-    // which Lightroom version may read the edit, and checksums of the profiles it names
-    "crs:CompatibleVersion",
-    "crs:CameraProfileDigest",
-    "crs:LensProfileDigest",
-    // the lens profile Lightroom picked: ours is the file's own, only `LensProfileEnable` carries over
-    "crs:LensProfileName",
-    "crs:LensProfileFilename",
-    "crs:LensProfileIsEmbedded",
-    "crs:LensProfileSetup",
-    // a crop tool option (keep the crop inside the photo), not the crop itself
-    "crs:CropConstrainToUnitSquare",
-    // how the file was written, which auto-defaults apply, and where the preview cache goes:
-    // none of it changes this photo's rendering
-    "crs:ClipboardAspectRatio",
-    "crs:ClipboardOrientation",
-    "crs:Converter",
-    "crs:DNGIgnoreSidecars",
-    "crs:JPEGHandling",
-    "crs:TIFFHandling",
-    "crs:DefaultAutoGray",
-    "crs:DefaultAutoTone",
-    "crs:DefaultsSpecificToISO",
-    "crs:DefaultsSpecificToSerial",
-    "crs:AutoWhiteVersion",
-    "crs:What",
-    "crs:NegativeCacheLargePreviewSize",
-    "crs:NegativeCacheMaximumSize",
-    "crs:NegativeCachePath",
-    // how Lightroom matched the profile it names; only `LensProfileEnable` carries over
-    "crs:LensProfileMatchKeyCameraModelName",
-    "crs:LensProfileMatchKeyExifMake",
-    "crs:LensProfileMatchKeyExifModel",
-    "crs:LensProfileMatchKeyIsRaw",
-    "crs:LensProfileMatchKeyLensID",
-    "crs:LensProfileMatchKeyLensInfo",
-    "crs:LensProfileMatchKeyLensName",
-    "crs:LensProfileMatchKeySensorFormatFactor",
-    // the crop's unit labels; its edges are normalized, so the units change nothing
-    "crs:CropUnit",
-    "crs:CropUnits",
-];
+/// `crs:` fields that describe the packet rather than an adjustment: the bookkeeping rows of
+/// `registry.json`, generated with the rest of the classification (#4435).
+use registry::NON_ADJUSTMENT;
 
 /// True if the packet carries any `crs:` adjustment (not just bookkeeping fields).
 pub fn has_adjustments(props: &Props) -> bool {
@@ -533,10 +461,7 @@ pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values
     let quiet = |k: &str| {
         k.starts_with("Enable")
             || k.starts_with("ToneCurveName")
-            || k == "AutoTone"
-            || k == "AutoGrayscaleMix"
-            // the auto adjustments' result already lives in the tonal fields beside them
-            || matches!(k, "AutoBrightness" | "AutoContrast" | "AutoExposure" | "AutoShadows")
+            || registry::QUIET_NAMES.contains(&k)
             || (k == "PointColors" && value_is(k, &empty_points))
             // the lens profile's strengths, written at their default (100 %) next to every
             // profile; Lightroom writes no CA scale at all in a real sidecar set, so its

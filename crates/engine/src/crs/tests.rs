@@ -1,4 +1,4 @@
-use super::registry::{ADOBE_CRS_FIELDS, MAPPED_CRS_FIELDS, METADATA_SKIPPED_CRS_FIELDS, REPORTED_CRS_FIELDS};
+use super::registry::{ADOBE_CRS_FIELDS, MAPPED_CRS_FIELDS, METADATA_SKIPPED_CRS_FIELDS, QUIET_NAMES, REPORTED_CRS_FIELDS};
 use super::*;
 use lightcraft_develop::{DevelopSettings, Upright, VignetteStyle, WbMode, apply_partial};
 
@@ -42,9 +42,7 @@ fn props(x: &str) -> Props {
 /// panel switches and names that change nothing by themselves. The value-conditional fields
 /// report away from their default and live in the reported list with a note.
 fn quietly_ignored(f: &str) -> bool {
-    f.starts_with("Enable")
-        || f.starts_with("ToneCurveName")
-        || matches!(f, "AutoBrightness" | "AutoContrast" | "AutoExposure" | "AutoShadows" | "AutoTone" | "AutoGrayscaleMix")
+    f.starts_with("Enable") || f.starts_with("ToneCurveName") || QUIET_NAMES.contains(&f)
 }
 
 /// Every Adobe field must have a decision: read, skipped as metadata, ignored as packet

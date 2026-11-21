@@ -12,8 +12,12 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
+    println!("cargo::rerun-if-changed=src/crs/registry.json");
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_DIR");
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_REQUIRED");
+    if let Err(e) = generate_registry() {
+        println!("cargo::error={e}");
+    }
     let required = std::env::var_os("CRAFT_FONTS_REQUIRED").is_some();
     let mut src = String::from("pub static CRAFT_FONTS: &[CraftFont] = &[\n");
     let mut embedded = 0;
@@ -118,4 +122,93 @@ fn craft_fonts(dir: &Path, required: bool) -> Result<String, String> {
         return Err("required Simplified Chinese UI face Noto Sans CJK SC Regular (Hans) is missing from fonts/manifest.txt".into());
     }
     Ok(out)
+}
+const ADOBE_DOC: &str = "/// Every top-level property of Adobe's `crs:` namespace: the public exiftool XMP-crs\n/// table (revised 2026-10-28) reconciled with exiftool's own `XMP.pm` table, plus the fields\n/// Lightroom packets carry that table still lacks and the fields `docs/xmp-interop.md` names.\n/// Struct sub-fields and their flat compound names are not separate properties and are not\n/// listed (generated from registry.json).";
+const MAPPED_DOC: &str = "/// Fields the mapping reads: the `docs/xmp-interop.md` table, the local-correction\n/// containers, and the process-version 2010 names (claimed on every packet, applied only\n/// when the packet carries no 2012 field names) (generated from registry.json).";
+const METADATA_DOC: &str = "/// Non-rendering metadata: skipped instead of reported - the auto-tone digests (#4338)\n/// and the analysis and seed fields (#4434) (generated from registry.json).";
+const REPORTED_DOC: &str =
+    "/// Fields reported with a documented reason: the import says so instead of applying them\n/// (#4435, generated from registry.json).";
+const NA_DOC: &str = "/// `crs:` fields that describe the packet rather than an adjustment (generated from\n/// registry.json).";
+const QUIET_DOC: &str = "/// Names the report leaves out whatever their value: panel switches and names that change\n/// nothing by themselves (generated from registry.json); the value-conditional fields are\n/// reported away from their default and live in the reported list instead.";
+
+/// Parse `src/crs/registry.json` and write the `crs::registry` constants to `OUT_DIR`. A bad row
+/// fails the build naming the field and the reason.
+fn generate_registry() -> Result<(), String> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/crs/registry.json");
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let doc: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("registry.json: {e}"))?;
+    let rows = doc.get("fields").and_then(|f| f.as_array()).ok_or("registry.json: fields is not an array")?;
+    let mut adobe: Vec<(&str, Option<&str>)> = Vec::new();
+    let mut mapped: Vec<(&str, Option<&str>)> = Vec::new();
+    let mut metadata: Vec<(&str, Option<&str>)> = Vec::new();
+    let mut reported: Vec<(&str, Option<&str>)> = Vec::new();
+    let mut bookkeeping: Vec<(&str, Option<&str>)> = Vec::new();
+    let mut quiet: Vec<(&str, Option<&str>)> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for (i, row) in rows.iter().enumerate() {
+        let at = |e: &str| format!("registry.json row {}: {e}", i + 1);
+        let name = row.get("name").and_then(|n| n.as_str()).filter(|n| !n.is_empty()).ok_or_else(|| at("missing name"))?;
+        if !seen.insert(name) {
+            return Err(at("duplicate name"));
+        }
+        let note = row.get("note").and_then(|n| n.as_str());
+        let decisions = match row.get("decision") {
+            Some(serde_json::Value::String(d)) => vec![d.as_str()],
+            Some(serde_json::Value::Array(ds)) => {
+                ds.iter().map(|d| d.as_str().ok_or_else(|| at("a decision is not a string"))).collect::<Result<Vec<_>, _>>()?
+            }
+            _ => return Err(at("missing decision")),
+        };
+        if decisions.is_empty() {
+            return Err(at("an empty decision list"));
+        }
+        let mut content = 0;
+        for d in decisions {
+            match d {
+                "mapped" => {
+                    mapped.push((name, note));
+                    content += 1;
+                }
+                "metadata" => {
+                    metadata.push((name, note));
+                    content += 1;
+                }
+                "reported" => {
+                    reported.push((name, note));
+                    content += 1;
+                }
+                "bookkeeping" => bookkeeping.push((name, note)),
+                "quiet" => quiet.push((name, note)),
+                other => return Err(at(&format!("unknown decision {other:?}"))),
+            }
+        }
+        if content > 1 {
+            return Err(at("more than one content decision"));
+        }
+        adobe.push((name, None));
+    }
+    let mut src = String::new();
+    emit(&mut src, "ADOBE_CRS_FIELDS", ADOBE_DOC, "", &adobe);
+    emit(&mut src, "MAPPED_CRS_FIELDS", MAPPED_DOC, "", &mapped);
+    emit(&mut src, "METADATA_SKIPPED_CRS_FIELDS", METADATA_DOC, "", &metadata);
+    emit(&mut src, "REPORTED_CRS_FIELDS", REPORTED_DOC, "", &reported);
+    emit(&mut src, "NON_ADJUSTMENT", NA_DOC, "crs:", &bookkeeping);
+    emit(&mut src, "QUIET_NAMES", QUIET_DOC, "", &quiet);
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default()).join("crs_registry.rs");
+    std::fs::write(&out, src).map_err(|e| format!("writing {}: {e}", out.display()))
+}
+
+/// One `pub const ... = ["name", ...]` list per classification, a field's note kept as the
+/// comment above it.
+fn emit(src: &mut String, const_name: &str, doc: &str, prefix: &str, rows: &[(&str, Option<&str>)]) {
+    src.push_str(doc);
+    src.push('\n');
+    src.push_str(&format!("pub const {const_name}: &[&str] = &[\n"));
+    for (name, note) in rows {
+        if let Some(n) = note {
+            src.push_str(&format!("    // {n}\n"));
+        }
+        src.push_str(&format!("    \"{prefix}{name}\",\n"));
+    }
+    src.push_str("];\n\n");
 }
