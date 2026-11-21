@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Brush Flow as in Lightroom (process V9)
+- Flow now builds up the way it does in Lightroom: one stroke at Flow 25 covers a little under half, at Flow 50 about
+  three quarters, where it used to cover 90 % and more, and a slow stroke covers the same as a fast one (issue #4045).
+  New photos (and Reset) get it; photos you already edited keep their brushes until Photo ▸ Update to Current Process.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

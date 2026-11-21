@@ -456,6 +456,72 @@ fn holding_the_brush_still_adds_no_coverage() {
     assert_eq!(brush_dabs(&paused, &f, w, h).dabs, brush_dabs(&smooth, &f, w, h).dabs);
 }
 
+/// A straight Feather 0 stroke of radius 20 px along row 50 of a 400 × 100 frame on `process`.
+fn straight_stroke(process: lightcraft_develop::Process, flow: f64, points: Vec<Point>) -> Plane {
+    let (w, h) = (400, 100);
+    let d = DevelopSettings { process: process.version(), ..Default::default() };
+    let f = Frame::new(w, h, &d, true);
+    let s = BrushStroke { points, size: 0.05, feather: 0.0, flow, ..Default::default() };
+    shape_alpha(&MaskShape::Brush { strokes: vec![s] }, &f, w, h, &Rgb32f::new(w, h), &Plane::new(w, h), 0.0, None)
+}
+
+/// Process V9: Flow is the coverage a stroke adds per brush radius it travels, as Lightroom
+/// Classic's strokes measure on a grey card (Feather 0, straight strokes, #4045): a point the brush
+/// passes over for a length `L` is covered by `1 − (1 − flow)^(L / r)`, so the centre of a stroke
+/// (L = 2 r) by 41 % at Flow 25, 76 % at 50 and fully at 100 (Lightroom), and a point 0.6 radii off
+/// the centre line less. Process V8 adds the flow per dab, r/4 apart: 90 % at Flow 25.
+#[test]
+fn flow_is_coverage_per_radius_travelled_as_in_lightroom() {
+    use lightcraft_develop::Process;
+    let line = vec![Point::new(0.1, 0.5), Point::new(0.9, 0.5)];
+    for (flow, lightroom) in [(25.0, 0.41), (50.0, 0.76), (100.0, 1.0)] {
+        let a = straight_stroke(Process::V9, flow, line.clone());
+        let keep = 1.0 - flow as f32 / 100.0;
+        let centre = a.get(200, 50);
+        assert!((centre - (1.0 - keep.powi(2))).abs() < 0.03, "Flow {flow}: centre {centre}");
+        assert!((centre - lightroom).abs() < 0.05, "Flow {flow}: Lightroom covers {lightroom}, here {centre}");
+        // pixel row 62 is 12.5 px = 0.625 r off the line, under the brush for 2·√(1 − 0.625²) radii
+        let chord = 2.0 * (1.0 - 0.625f32 * 0.625).sqrt();
+        let off = a.get(200, 62);
+        assert!((off - (1.0 - keep.powf(chord))).abs() < 0.05, "Flow {flow}: 0.6 r off the line {off}");
+        assert!(off <= centre + 1e-6);
+    }
+    let old = straight_stroke(Process::V8, 25.0, line).get(200, 50);
+    assert!(old > 0.85, "V8 keeps the flow per dab: {old}");
+}
+
+/// Process V9: a stroke covers the same however densely its samples lie (a slow drag samples
+/// every pixel, a fast one far apart); before V9 a slow stroke laid more dabs and built up more.
+#[test]
+fn flow_does_not_depend_on_how_fast_the_stroke_was_painted() {
+    use lightcraft_develop::Process;
+    let fast = vec![Point::new(0.1, 0.5), Point::new(0.9, 0.5)];
+    // one sample per output pixel
+    let slow: Vec<Point> = (40..=360).map(|x| Point::new(x as f64 / 400.0, 0.5)).collect();
+    let (f, s) = (straight_stroke(Process::V9, 25.0, fast.clone()).get(200, 50), straight_stroke(Process::V9, 25.0, slow.clone()).get(200, 50));
+    assert!((f - s).abs() < 0.02, "fast {f} vs slow {s}");
+    let (f8, s8) = (straight_stroke(Process::V8, 25.0, fast).get(200, 50), straight_stroke(Process::V8, 25.0, slow).get(200, 50));
+    assert!(s8 > f8, "before V9 a slow stroke builds up more: {f8} vs {s8}");
+}
+
+/// A click (one dab) paints its flow on every process; Flow 100 paints fully.
+#[test]
+fn a_click_paints_its_flow() {
+    use lightcraft_develop::Process;
+    for p in [Process::V8, Process::V9] {
+        let a = straight_stroke(p, 40.0, vec![Point::new(0.5, 0.5)]);
+        assert!((a.get(200, 50) - 0.4).abs() < 1e-4, "{p:?}: {}", a.get(200, 50));
+    }
+    assert_eq!(travel_flow(1.0, 0.25, 1.0), 1.0);
+    assert_eq!(travel_flow(0.0, 1.0, 1.0), 0.0);
+    assert_eq!(travel_flow(f32::NAN, 1.0, 1.0), 0.0);
+    assert!((travel_flow(0.25, 1.0, 1.0) - 0.25).abs() < 1e-6, "one radius adds the flow");
+    assert!((travel_flow(0.25, 0.0, 0.0) - 0.25).abs() < 1e-6, "a degenerate radius counts one radius");
+    assert!((travel_flow(0.25, f64::INFINITY, 1.0) - 0.25).abs() < 1e-6);
+    assert!(travel_flow(0.25, 1e12, 1.0) > 0.999 && travel_flow(0.25, 1e12, 1.0) <= 1.0);
+    assert!(travel_flow(0.25, -5.0, 1.0) == 0.0, "no distance adds nothing");
+}
+
 /// Flow builds up by passes: going back over an area in the same stroke adds coverage.
 #[test]
 fn a_second_pass_builds_up_with_low_flow() {
