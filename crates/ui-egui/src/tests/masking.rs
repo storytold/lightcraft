@@ -1836,6 +1836,67 @@ fn adding_radial_component_disarms_color_range_picker() {
     assert!(rx > 0.22, "dragging a radial handle resizes the component: {rx}");
 }
 
+/// A gradient subtracted from (or intersected with) a brush mask while the brush is still armed
+/// must be draggable: the brush took every press on the photo, so its handles were dead and each
+/// drag painted a stroke instead.
+#[test]
+fn adding_a_gradient_to_a_brush_mask_disarms_the_brush() {
+    for op in ["subtract", "intersect"] {
+        let mut h = detail("panel.masking");
+        exec(&mut h, "tool.brush", json!({"new": true}));
+        assert_eq!(h.app.ui.tool, "brush", "the brush is armed");
+        let strokes = |h: &Headless| match &develop(h).masks[0].components[0].shape {
+            MaskShape::Brush { strokes } => strokes.len(),
+            other => panic!("brush, got {other:?}"),
+        };
+
+        exec(&mut h, "mask.addComponent", json!({"kind": "radial", "op": op, "center": [0.5, 0.5], "rx": 0.22, "ry": 0.22}));
+        assert!(h.app.ui.tool.is_empty(), "{op}: adding a radial component disarms the brush");
+
+        let rect = h.app.widgets.iter().find(|(id, _)| id == "maskHandle:1:1:1").unwrap().1;
+        let image = h.app.image_rect.unwrap();
+        let q = rect.center();
+        let (x, y) = ((q.x - image.left()) / image.width(), (q.y - image.top()) / image.height());
+        pointer(&mut h, json!([{"kind": "down", "x": x, "y": y}, {"kind": "drag", "x": x + 0.05, "y": y}, {"kind": "up", "x": x + 0.05, "y": y}]));
+        let MaskShape::Radial { rx, .. } = develop(&h).masks[0].components[1].shape else { panic!("radial") };
+        assert!(rx > 0.22, "{op}: dragging a radial handle resizes the component: {rx}");
+        assert_eq!(strokes(&h), 0, "{op}: the drag painted no brush stroke");
+    }
+
+    // a brush component of the brush's own kind keeps it armed
+    let mut h = detail("panel.masking");
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    exec(&mut h, "mask.addComponent", json!({"kind": "brush", "op": "subtract"}));
+    assert_eq!(h.app.ui.tool, "brush", "Subtract > Brush keeps the brush armed");
+
+    // an omitted kind is a brush, as in the engine: the brush stays armed for painting
+    let mut h = detail("panel.masking");
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    exec(&mut h, "mask.addComponent", json!({"op": "subtract"}));
+    assert_eq!(h.app.ui.tool, "brush", "an omitted kind is a brush component and keeps the brush armed");
+    assert!(matches!(develop(&h).masks[0].components[1].shape, MaskShape::Brush { .. }), "the engine adds a brush component when kind is omitted");
+}
+
+/// The Object tool takes every click on the photo and ignores drags, so a gradient added while it
+/// is armed must disarm it: its handles were drawn but a drag on one did nothing.
+#[test]
+fn adding_a_gradient_while_the_object_tool_is_armed_disarms_it() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.3, 0.5], "rx": 0.1, "ry": 0.1}));
+    h.app.ui.tool = "object".into();
+
+    exec(&mut h, "mask.addComponent", json!({"kind": "radial", "op": "subtract", "center": [0.5, 0.5], "rx": 0.22, "ry": 0.22}));
+    assert!(h.app.ui.tool.is_empty(), "adding a radial component disarms the object tool");
+
+    let rect = h.app.widgets.iter().find(|(id, _)| id == "maskHandle:1:1:1").unwrap().1;
+    let image = h.app.image_rect.unwrap();
+    let q = rect.center();
+    let (x, y) = ((q.x - image.left()) / image.width(), (q.y - image.top()) / image.height());
+    pointer(&mut h, json!([{"kind": "down", "x": x, "y": y}, {"kind": "drag", "x": x + 0.05, "y": y}, {"kind": "up", "x": x + 0.05, "y": y}]));
+    let MaskShape::Radial { rx, .. } = develop(&h).masks[0].components[1].shape else { panic!("radial") };
+    assert!(rx > 0.22, "dragging a radial handle resizes the component: {rx}");
+}
+
 /// Regression: the Colour Range "Pick" button armed the eyedropper, but with the Masking panel
 /// open the loupe's clicks went to the mask overlay, so no sample was ever taken.
 #[test]
