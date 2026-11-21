@@ -99,8 +99,8 @@ fn saved_keymap_remapping_unbinding_and_reassignment_win() {
     let mut app = app().unwrap();
     app.ui.view = ViewMode::PhotoGrid;
     let ctx = egui::Context::default();
-    super::assign(&mut app.ui.settings.keymap, "brush.larger", Some("F2")).unwrap();
-    super::assign(&mut app.ui.settings.keymap, "brush.smaller", None).unwrap();
+    super::assign(app.ui.settings.profile(), &mut app.ui.settings.keymap, "brush.larger", Some("F2")).unwrap();
+    super::assign(app.ui.settings.profile(), &mut app.ui.settings.keymap, "brush.smaller", None).unwrap();
     let brush = app.ui.brush_size;
     frame(&mut app, &ctx, Some(Key::CloseBracket), None);
     frame(&mut app, &ctx, Some(Key::OpenBracket), None);
@@ -108,13 +108,13 @@ fn saved_keymap_remapping_unbinding_and_reassignment_win() {
     assert_eq!(app.ui.brush_size, brush);
     frame(&mut app, &ctx, Some(Key::F2), None);
     assert!(app.ui.brush_size > brush, "remapped brush command keeps its meaning");
-    super::reset(&mut app.ui.settings.keymap, "brush.smaller").unwrap();
-    super::assign(&mut app.ui.settings.keymap, "photo.pick", Some("[")).unwrap();
+    super::reset(app.ui.settings.profile(), &mut app.ui.settings.keymap, "brush.smaller").unwrap();
+    super::assign(app.ui.settings.profile(), &mut app.ui.settings.keymap, "photo.pick", Some("[")).unwrap();
     frame(&mut app, &ctx, Some(Key::OpenBracket), None);
     assert_eq!(app.session.catalog.photo(PhotoId(2)).unwrap().flag, Flag::Pick);
     assert_eq!(ratings(&app).unwrap(), [0, 2, 5]);
     // Also honor an existing saved override that did not explicitly disable the default.
-    super::reset(&mut app.ui.settings.keymap, "brush.larger").unwrap();
+    super::reset(app.ui.settings.profile(), &mut app.ui.settings.keymap, "brush.larger").unwrap();
     app.ui.settings.keymap.insert("photo.reject".into(), "]".into());
     frame(&mut app, &ctx, Some(Key::CloseBracket), None);
     assert_eq!(app.session.catalog.photo(PhotoId(2)).unwrap().flag, Flag::Reject);
@@ -155,7 +155,7 @@ fn relative_rating_keys_use_auto_advance_and_compare_active_target() {
     app.ui.auto_advance = false;
     app.ui.view = ViewMode::Compare;
     app.session.execute("library.select", &json!({"ids": [1, 2], "active": 2})).unwrap();
-    super::assign(&mut app.ui.settings.keymap, "photo.increaseRating", Some("F3")).unwrap();
+    super::assign(app.ui.settings.profile(), &mut app.ui.settings.keymap, "photo.increaseRating", Some("F3")).unwrap();
     frame(&mut app, &ctx, Some(Key::F3), None);
     assert_eq!(ratings(&app).unwrap(), [1, 3, 5]);
     assert_eq!(app.session.active(), Some(PhotoId(2)));

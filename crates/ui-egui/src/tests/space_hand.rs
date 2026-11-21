@@ -111,7 +111,7 @@ fn toggle_zoom_given_space_in_the_keymap_takes_the_hand_and_toggles_once() {
     // with Space as Toggle Zoom's own shortcut the Space alias yields to it: the binding gets the
     // same hand over a tool and the same once-per-press
     let mut h = detail(None);
-    crate::shortcuts::assign(&mut h.app.ui.settings.keymap, "view.zoomToggle", Some("Space")).unwrap();
+    crate::shortcuts::assign(h.app.ui.settings.profile(), &mut h.app.ui.settings.keymap, "view.zoomToggle", Some("Space")).unwrap();
     space(&mut h, "down");
     assert_eq!(h.app.ui.zoom, Zoom::Percent(100.0));
     for _ in 0..3 {

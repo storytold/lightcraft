@@ -161,7 +161,7 @@ fn shift_h_and_the_command_cycle_the_tool_overlay() {
     h.request("ui.key", json!({"key": "h"}), T);
     assert_eq!(h.app.ui.right, RightPanel::Remove);
     assert_eq!(h.app.ui.tool_overlay, ToolOverlay::Selected);
-    assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "view.toolOverlay"), Some("Shift+H"));
+    assert_eq!(crate::shortcuts::shortcut_of(h.app.ui.settings.profile(), &h.app.ui.settings.keymap, "view.toolOverlay"), Some("Shift+H"));
 }
 
 /// View ▸ Tool Overlay lists the modes (the current one checked) and the cycle item with its key;

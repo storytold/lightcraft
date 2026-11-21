@@ -16,13 +16,13 @@ fn find<'a>(nodes: &'a [MenuNode], id: &str) -> Option<&'a MenuNode> {
 #[test]
 fn grid_menu_shortcut_hints_preserve_direct_bindings_and_clicks() {
     let mut a = app();
-    crate::shortcuts::assign(&mut a.ui.settings.keymap, "view.photoGrid", Some("Cmd+Shift+1")).unwrap();
+    crate::shortcuts::assign(a.ui.settings.profile(), &mut a.ui.settings.keymap, "view.photoGrid", Some("Cmd+Shift+1")).unwrap();
     let bar = menu_bar(&a);
     let nodes = &bar.iter().find(|(title, _)| title == "View").unwrap().1;
     assert!(matches!(find(nodes, "view.photoGrid"), Some(MenuNode::Item { shortcut: Some(sc), .. }) if sc == "Cmd+Shift+1"));
     assert!(matches!(find(nodes, "view.squareGrid"), Some(MenuNode::Item { shortcut: Some(sc), .. }) if sc == "G"));
     // A hint never assigns the cycle key to another command.
-    assert_eq!(crate::shortcuts::shortcut_of(&a.ui.settings.keymap, "view.squareGrid"), None);
+    assert_eq!(crate::shortcuts::shortcut_of(a.ui.settings.profile(), &a.ui.settings.keymap, "view.squareGrid"), None);
     run_item(&mut a, "view.photoGrid", Value::Null).unwrap();
     assert_eq!(a.ui.view, ViewMode::PhotoGrid);
     run_item(&mut a, "view.photoGrid", Value::Null).unwrap();
@@ -39,19 +39,28 @@ fn grid_menu_shortcut_hints_preserve_direct_bindings_and_clicks() {
 fn grid_menu_shortcut_hints_keep_native_toggle_dispatch() {
     let mut keymap = crate::shortcuts::Keymap::new();
     for id in ["view.photoGrid", "view.squareGrid"] {
-        let (label, accelerator) = native_item_presentation(&keymap, id, &Value::Null, "Photo Grid", Some("G"));
+        let (label, accelerator) =
+            native_item_presentation(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, id, &Value::Null, "Photo Grid", Some("G"));
         assert_eq!(label, "Photo Grid");
         assert_eq!(accelerator, Some("G"));
         assert!(!native_menu_delivers(accelerator.unwrap()));
         for (key, text) in [("Cmd+Shift+G", "⇧⌘G"), ("Ctrl+G", "⌃G"), ("F3", "F3")] {
-            crate::shortcuts::assign(&mut keymap, "view.gridToggle", Some(key)).unwrap();
-            let (label, accelerator) = native_item_presentation(&keymap, id, &Value::Null, "Photo Grid", Some(key));
+            crate::shortcuts::assign(crate::keymap_profiles::KeyProfile::Lightroom, &mut keymap, "view.gridToggle", Some(key)).unwrap();
+            let (label, accelerator) =
+                native_item_presentation(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, id, &Value::Null, "Photo Grid", Some(key));
             assert_eq!(label, format!("Photo Grid ({text})"));
             assert_eq!(accelerator, None, "egui keeps {key}");
         }
     }
-    crate::shortcuts::assign(&mut keymap, "view.photoGrid", Some("Cmd+Shift+1")).unwrap();
-    let (label, accelerator) = native_item_presentation(&keymap, "view.photoGrid", &Value::Null, "Photo Grid", Some("Cmd+Shift+1"));
+    crate::shortcuts::assign(crate::keymap_profiles::KeyProfile::Lightroom, &mut keymap, "view.photoGrid", Some("Cmd+Shift+1")).unwrap();
+    let (label, accelerator) = native_item_presentation(
+        crate::keymap_profiles::KeyProfile::Lightroom,
+        &keymap,
+        "view.photoGrid",
+        &Value::Null,
+        "Photo Grid",
+        Some("Cmd+Shift+1"),
+    );
     assert_eq!(label, "Photo Grid");
     assert_eq!(accelerator, Some("Cmd+Shift+1"), "the row's own shortcut is a real accelerator");
 }
@@ -74,7 +83,7 @@ fn grid_menu_shortcut_hints_preserve_control_keyboard_dispatch() {
     assert_eq!(h.app.ui.view, ViewMode::SquareGrid);
     press(&mut h, json!({"key": "G"}));
     assert_eq!(h.app.ui.view, ViewMode::PhotoGrid);
-    crate::shortcuts::assign(&mut h.app.ui.settings.keymap, "view.gridToggle", Some("Cmd+Shift+G")).unwrap();
+    crate::shortcuts::assign(h.app.ui.settings.profile(), &mut h.app.ui.settings.keymap, "view.gridToggle", Some("Cmd+Shift+G")).unwrap();
     press(&mut h, json!({"key": "G"}));
     assert_eq!(h.app.ui.view, ViewMode::PhotoGrid);
     press(&mut h, json!({"key": "G", "cmd": true, "shift": true}));
@@ -93,15 +102,19 @@ fn grid_menu_shortcut_hints_preserve_control_keyboard_dispatch() {
 #[test]
 fn grid_menu_shortcut_hints_invalidate_native_ownership_cache() {
     let mut a = app();
-    crate::shortcuts::assign(&mut a.ui.settings.keymap, "view.gridToggle", None).unwrap();
-    crate::shortcuts::assign(&mut a.ui.settings.keymap, "view.photoGrid", Some("Cmd+Shift+G")).unwrap();
-    crate::shortcuts::assign(&mut a.ui.settings.keymap, "view.squareGrid", Some("Cmd+Shift+2")).unwrap();
+    crate::shortcuts::assign(a.ui.settings.profile(), &mut a.ui.settings.keymap, "view.gridToggle", None).unwrap();
+    crate::shortcuts::assign(a.ui.settings.profile(), &mut a.ui.settings.keymap, "view.photoGrid", Some("Cmd+Shift+G")).unwrap();
+    crate::shortcuts::assign(a.ui.settings.profile(), &mut a.ui.settings.keymap, "view.squareGrid", Some("Cmd+Shift+2")).unwrap();
     let before = menu_bar(&a);
-    let direct = native_menu_structure(&before, &a.ui.settings.keymap);
-    crate::shortcuts::assign(&mut a.ui.settings.keymap, "view.gridToggle", Some("Cmd+Shift+G")).unwrap();
+    let direct = native_menu_structure(&before, a.ui.settings.profile(), &a.ui.settings.keymap);
+    crate::shortcuts::assign(a.ui.settings.profile(), &mut a.ui.settings.keymap, "view.gridToggle", Some("Cmd+Shift+G")).unwrap();
     let after = menu_bar(&a);
     assert_eq!(before, after, "visible hint text does not expose the ownership change");
-    assert_ne!(direct, native_menu_structure(&after, &a.ui.settings.keymap), "rebuild removes the stale direct-grid accelerator");
+    assert_ne!(
+        direct,
+        native_menu_structure(&after, a.ui.settings.profile(), &a.ui.settings.keymap),
+        "rebuild removes the stale direct-grid accelerator"
+    );
 }
 
 /// #2500: grid view rows show the separate cycle command's current shortcut.
@@ -119,11 +132,11 @@ fn grid_menu_shortcut_hints_follow_the_cycle_key() {
     for id in ["view.photoGrid", "view.squareGrid"] {
         assert_eq!(hint(&a, id).as_deref(), Some("G"), "{id}");
     }
-    crate::shortcuts::assign(&mut a.ui.settings.keymap, "view.gridToggle", Some("Cmd+Shift+G")).unwrap();
+    crate::shortcuts::assign(a.ui.settings.profile(), &mut a.ui.settings.keymap, "view.gridToggle", Some("Cmd+Shift+G")).unwrap();
     for id in ["view.photoGrid", "view.squareGrid"] {
         assert_eq!(hint(&a, id).as_deref(), Some("Cmd+Shift+G"), "{id}");
     }
-    crate::shortcuts::assign(&mut a.ui.settings.keymap, "view.gridToggle", None).unwrap();
+    crate::shortcuts::assign(a.ui.settings.profile(), &mut a.ui.settings.keymap, "view.gridToggle", None).unwrap();
     for id in ["view.photoGrid", "view.squareGrid"] {
         assert_eq!(hint(&a, id), None, "{id}");
     }

@@ -39,7 +39,7 @@ fn press(app: &mut LightcraftApp, ctx: &egui::Context) {
 
 #[test]
 fn the_key_is_cmd_l() {
-    assert_eq!(super::shortcut_of(&Default::default(), "library.toggleFilters"), Some("Cmd+L"));
+    assert_eq!(super::shortcut_of(crate::keymap_profiles::KeyProfile::Lightroom, &Default::default(), "library.toggleFilters"), Some("Cmd+L"));
 }
 
 #[test]

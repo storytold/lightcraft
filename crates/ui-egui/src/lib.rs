@@ -30,6 +30,7 @@ mod frame_rate;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
+pub mod keymap_profiles;
 pub mod lens_db;
 pub mod lightroom_import;
 pub mod links;
