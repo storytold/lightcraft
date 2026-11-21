@@ -321,13 +321,15 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         Mode::Header => h.min(MASK_ROWS),
     };
     let (mut data, he_black) = if info.compression == t::compression::NIKON {
-        compressed(bytes, &info, mn.as_ref(), rows)?
+        compressed(bytes, &info, mn.as_ref(), rows, mode)?
     } else {
         (uncompressed(bytes, &info, tiff.order, mn.as_ref(), rows)?, None)
     };
     // Header probes inspect stored rows. Judge masked columns before rearranging the full
     // image too, so the probe and full decoder use exactly the same prefix.
     let stored_active_w = match &data {
+        // High Efficiency frames are judged unmasked: their probe reads no samples (see `compressed`)
+        RawData::U16(_) if he_black.is_some() => w,
         RawData::U16(samples) => trailing_masked_columns(samples, w, bits),
         _ => w,
     };
@@ -582,7 +584,7 @@ fn unpack_packed(src: &[u8], w: usize, h: usize, bits: u32, layout: PackedLayout
 
 /// Nikon Huffman-compressed strip (see [`super::nefc`]); the decode table is maker note `0x0096`. Decodes the first
 /// `rows` rows of the `info.height`. Without a table the strip may be packed uncompressed data (see [`PackedLayout`]).
-fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>, rows: usize) -> Result<(RawData, Option<u16>)> {
+fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>, rows: usize, mode: Mode) -> Result<(RawData, Option<u16>)> {
     let starts_with = |magic: &[u8]| {
         let start = info.chunks(bytes.len() as u64).first().and_then(|c| usize::try_from(c.offset).ok());
         start.and_then(|o| bytes.get(o..o.checked_add(magic.len())?)) == Some(magic)
@@ -599,9 +601,14 @@ fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>,
             .zip(end.and_then(|v| usize::try_from(v).ok()))
             .and_then(|(a, b)| bytes.get(a..b))
             .ok_or_else(|| RawError::Corrupt("Nikon High Efficiency NEF: strip outside the file".into()))?;
-        // (the wavelet codestream decodes whole: the header probe keeps its first `rows` rows)
-        let (mut samples, black) = nefhe::decode(src, info.width as usize, info.height as usize, info.bits() as u32)?;
-        samples.truncate((info.width as usize).saturating_mul(rows));
+        // The wavelet codestream only decodes whole (its top rows are the last precincts and every level spans the
+        // full height), so the header probe reads just the codestream headers and no samples (issue #1304).
+        // `decode` therefore never trims masked columns from an HE frame, keeping probe and decode equal.
+        let (w, h, bits) = (info.width as usize, info.height as usize, info.bits() as u32);
+        if mode == Mode::Header {
+            return Ok((RawData::U16(Vec::new()), Some(nefhe::probe(src, w, h, bits)?)));
+        }
+        let (samples, black) = nefhe::decode(src, w, h, bits)?;
         return Ok((RawData::U16(samples), Some(black)));
     }
     let Some(table) = mn.and_then(|m| Some((m.ifd.bytes(LINEARIZATION_TABLE)?, m.order))) else {
@@ -1566,6 +1573,36 @@ mod tests {
             assert_eq!(crate::probe_info(&bytes).unwrap(), image.info());
         }
     }
+
+    /// The header probe of an HE NEF reads only the codestream headers (#1304): it still reports the frame and the
+    /// encoded black level, and accepts a strip whose entropy-coded body is garbage, which a full decode rejects.
+    #[test]
+    fn high_efficiency_header_probe_skips_the_codestream_body() {
+        let strip = nefhe::tests::fixture(70, 12);
+        let good = nef_in(ByteOrder::Big, 34713, 14, vec![strip.clone()], 70, 12, 12, None);
+        let header = decode(&good, Mode::Header).unwrap();
+        let full = decode(&good, Mode::Full).unwrap();
+        assert_eq!((header.active_area, header.crop, header.black.values.clone()), (full.active_area, full.crop, full.black.values.clone()));
+        assert!(matches!(header.data, RawData::U16(ref s) if s.is_empty()));
+        // keep the headers and the end marker, scramble everything in between
+        let mut scrambled = strip.clone();
+        let body_start = scrambled.len() * 7 / 8;
+        let body_end = scrambled.len() - 2;
+        for (i, b) in scrambled[body_start..body_end].iter_mut().enumerate() {
+            *b = (i as u8).wrapping_mul(37) ^ 0xa5;
+        }
+        let bad = nef_in(ByteOrder::Big, 34713, 14, vec![scrambled], 70, 12, 12, None);
+        assert!(decode(&bad, Mode::Header).is_ok(), "{:?} len {}", decode(&bad, Mode::Header).err(), strip.len());
+        assert!(crate::decode(&bad).is_err());
+        // hostile headers still fail cleanly in the probe
+        for cut in [0, 1, 2, 5, 20, 40] {
+            let mut short = strip.clone();
+            short.truncate(cut);
+            let bytes = nef_in(ByteOrder::Big, 34713, 14, vec![short], 70, 12, 12, None);
+            assert!(crate::probe_info(&bytes).is_err());
+        }
+    }
+
     #[test]
     fn mild_neutral_horizon_outside_legacy_dialect_is_not_interleaved() {
         let (w, h) = (160usize, 256usize);
