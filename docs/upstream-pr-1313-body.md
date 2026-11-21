@@ -1,17 +1,17 @@
 # Upstream PR: Image Quality Scanner (issue #1313)
 
 **Status: prepared and verified, but not opened.** The GitHub App this session authenticates with
-is installed only on `1234destiny1234/lightcraft-classic`, so it cannot create a pull request on
-`emmertex/chromaforge` (`403 Resource not accessible by integration`). The branch is pushed and the
+is installed only on `1234destiny1234/<fork>`, so it cannot create a pull request on
+`{upstream}` (`403 Resource not accessible by integration`). The branch is pushed and the
 compare is clean; opening it takes one click.
 
-- **Branch:** `arena/211076b9-upstream-1313` in `1234destiny1234/lightcraft-classic`
-- **PR:** [#1314](https://github.com/emmertex/chromaforge/pull/1314) — **open** since the body was first
+- **Branch:** `arena/211076b9-upstream-1313` in `1234destiny1234/<fork>`
+- **PR:** [#1314](https://github.com/{upstream}/pull/1314) — **open** since the body was first
   drafted (the App turned out to have access after all), mergeable, based directly on `main` `8ed8c2a0e`
 - **Commit:** `e4392a81c`, plus `f6485157b` (rustfmt on the scanner's own files, from the real gate's output)
 - **Compare:** `ahead` by 1, `behind` by 0, 62 files — `merge_base` is upstream's tip, so it needs
   no rebase
-- **Open it:** <https://github.com/emmertex/chromaforge/compare/main...1234destiny1234:arena/211076b9-upstream-1313?expand=1>
+- **Open it:** <https://github.com/{upstream}/compare/main...1234destiny1234:arena/211076b9-upstream-1313?expand=1>
   (paste the title and body below)
 
 Suggested title:
