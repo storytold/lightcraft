@@ -671,6 +671,11 @@ pub struct Session {
     /// Auto import: files seen in the watched folder and their size then (a file is imported once
     /// its size held between two scans).
     pub auto_import_seen: std::collections::HashMap<String, u64>,
+    /// Auto import: files handed to an import and their size then. Such a file is not tried again
+    /// while its size stays the same (a non-photo isn't retried every scan), but one that changes
+    /// (a partial copy that went on growing, issue #1302) or is released by
+    /// [`Session::auto_import_retry`] is.
+    pub auto_import_tried: std::collections::HashMap<String, u64>,
     /// Keyword sets (⌥1–⌥9 apply the current set's keywords), the one in use (`None` = Recent
     /// Keywords) and the recently added keywords, newest first.
     pub keyword_sets: Vec<cmd::keywords::KeywordSet>,
@@ -795,6 +800,24 @@ impl Session {
             subfolders: self.import_defaults.auto_options.subfolders,
             skip: self.library.as_ref().map(|l| l.dir.clone()),
         })
+    }
+
+    /// Auto Import handed `paths` to an import that never ran them (it failed to start or was
+    /// cancelled): those the library still doesn't have are tried again by the next scans.
+    pub fn auto_import_retry(&mut self, paths: &[String]) {
+        let known: std::collections::HashSet<&str> = self
+            .catalog
+            .photos()
+            .filter_map(|p| match &p.source {
+                lcc_catalog::Source::File { path } => Some(path.as_str()),
+                _ => None,
+            })
+            .collect();
+        let missing: Vec<&String> = paths.iter().filter(|p| !known.contains(p.as_str())).collect();
+        for p in missing {
+            self.auto_import_tried.remove(p);
+            self.auto_import_seen.remove(p);
+        }
     }
 
     pub fn library_generation(&self) -> u64 {
@@ -969,6 +992,7 @@ impl Session {
             lut_profiles: Vec::new(),
             target_album: None,
             auto_import_seen: Default::default(),
+            auto_import_tried: Default::default(),
             keyword_sets: Vec::new(),
             keyword_set: None,
             recent_keywords: Vec::new(),

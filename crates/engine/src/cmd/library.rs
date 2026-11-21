@@ -2605,18 +2605,23 @@ pub fn specs() -> Vec<CommandSpec> {
                     if known.contains(&ps) {
                         continue;
                     }
-                    // each file is tried once (a non-photo isn't retried every scan)
-                    if s.auto_import_seen.get(&ps) == Some(&u64::MAX) {
+                    // each file is tried once at a size (a non-photo isn't retried every scan); one
+                    // whose size changed since (a partial copy that went on, #1302) is tried again
+                    if s.auto_import_tried.get(&ps) == Some(&size) {
                         continue;
                     }
                     let seen = s.auto_import_seen.insert(ps.clone(), size);
                     if size > 0 && seen == Some(size) {
-                        fresh.push(ps);
+                        fresh.push((ps, size));
                     }
                 }
                 if fresh.is_empty() {
                     return Ok(json!({"imported": [], "folder": folder}));
                 }
+                for (f, size) in &fresh {
+                    s.auto_import_tried.insert(f.clone(), *size);
+                }
+                let fresh: Vec<String> = fresh.into_iter().map(|(f, _)| f).collect();
                 let mode = if s.import_defaults.auto_copy { "copy" } else { "add" };
                 // a photo deleted from the library doesn't come back on its own because its file
                 // is still in the watched folder (a copy's source is not a known path)
@@ -2642,17 +2647,22 @@ pub fn specs() -> Vec<CommandSpec> {
                         None => params["albumName"] = json!(a),
                     }
                 }
-                for f in &fresh {
-                    s.auto_import_seen.insert(f.clone(), u64::MAX);
-                }
                 if p.get("start").and_then(Value::as_bool) == Some(false) {
                     // the caller imports them (the app: on a worker thread)
                     return Ok(json!({"imported": [], "folder": folder, "import": params}));
                 }
                 let sel = s.selection.clone();
-                let r = s.execute("library.import", &params)?;
+                let r = s.execute("library.import", &params);
                 // arriving photos don't take over the selection
                 s.selection = sel;
+                // an import that failed as a whole: its files are tried again by the next scans
+                let r = match r {
+                    Ok(r) => r,
+                    Err(e) => {
+                        s.auto_import_retry(&fresh);
+                        return Err(e);
+                    }
+                };
                 let mut result = json!({"imported": r["imported"], "folder": folder});
                 if let Some(warnings) = r.get("warnings") {
                     result["warnings"] = warnings.clone();

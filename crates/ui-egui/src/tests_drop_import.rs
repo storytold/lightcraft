@@ -436,6 +436,42 @@ fn auto_import_waits_for_an_import_that_starts_during_its_listing() {
     h.app.session.import_defaults.auto_folder = None;
 }
 
+/// Issue #1302: a photo still being copied in when Auto Import tried it (a stalled copy whose size held
+/// between two listings) failed to read; once the copy finishes the photo arrives on its own, without a
+/// Synchronize Folder.
+#[test]
+fn auto_import_tries_again_a_photo_whose_copy_was_partial_when_tried() {
+    let dir = Scratch::new("auto-partial");
+    let mut h = app(&dir);
+    let full = {
+        write_png(&dir.path("full.png"), 4);
+        std::fs::read(dir.path("full.png")).unwrap()
+    };
+    std::fs::create_dir_all(dir.path("watch")).unwrap();
+    std::fs::write(dir.path("watch/w.png"), &full[..full.len() / 2]).unwrap();
+    h.app.session.import_defaults.auto_folder = Some(dir.path("watch"));
+    let tried = |h: &Headless| h.app.session.auto_import_tried.keys().any(|k| k.ends_with("w.png"));
+    assert!(h.step_until(T, |h| tried(h) && h.app.import.is_none()), "the partial file is tried");
+    assert_eq!(photos(&h), 0, "and can't be read");
+    std::fs::write(dir.path("watch/w.png"), &full).unwrap();
+    assert!(h.step_until(T, |h| photos(h) == 1), "the finished copy arrives: {}", photos(&h));
+    h.app.session.import_defaults.auto_folder = None;
+}
+
+/// An Auto Import that can't start (here: a preset deleted between the scan and the import) leaves its
+/// files to the next scans instead of marking them as tried.
+#[test]
+fn auto_import_that_cannot_start_leaves_its_files_for_the_next_scan() {
+    let dir = Scratch::new("auto-nostart");
+    let mut h = app(&dir);
+    let path = dir.path("trip/a.png");
+    h.app.session.auto_import_tried.insert(path.clone(), std::fs::metadata(&path).unwrap().len());
+    h.app.import = Some(crate::import::ImportTask::new(vec![path.clone()], json!({"mode": "add", "preset": "gone"}), 0, false).auto());
+    crate::import::tick(&mut h.app, &h.view.ctx.clone());
+    assert!(h.app.import.is_none(), "the import didn't start");
+    assert!(!h.app.session.auto_import_tried.contains_key(&path), "the file can be tried again");
+}
+
 /// The same with a Local folder browse: a browse that finishes replaces `app.import`, so Auto Import
 /// doesn't start one beside it.
 #[test]

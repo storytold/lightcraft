@@ -434,6 +434,8 @@ pub struct ImportTask {
     auto: bool,
     /// Android's watched camera roll: like `auto`, and the toast says where the photos came from.
     camera_roll: bool,
+    /// Auto Import: the files it was handed (tried again later when the import can't start).
+    auto_paths: Vec<String>,
     /// Auto Import: the selection to keep.
     keep_selection: Option<lcc_engine::Selection>,
     /// The selection and source as the import last left them: a change between frames is the
@@ -1199,6 +1201,9 @@ pub fn tick(app: &mut LccApp, ctx: &egui::Context) {
     if task.run.is_none() {
         let mut p = task.params.clone();
         p["paths"] = json!(task.queue);
+        if task.auto {
+            task.auto_paths = task.queue.clone();
+        }
         let started = lcc_engine::cmd::library::import_params(&app.session, &p)
             .and_then(|req| Ok((lcc_engine::import::ImportJob::new(&mut app.session, req.opts)?, req.album, req.album_name)))
             .map_err(|e| e.to_string())
@@ -1217,6 +1222,10 @@ pub fn tick(app: &mut LccApp, ctx: &egui::Context) {
             }
             Err(e) => {
                 log::warn!("import: {e}");
+                // Auto Import's files weren't read: the next scans try them again (#1302)
+                if task.auto {
+                    app.session.auto_import_retry(&task.auto_paths);
+                }
                 app.toast(ctx, crate::i18n::tr_format!("Import failed: {e}", e = e));
                 return;
             }

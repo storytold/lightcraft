@@ -144,3 +144,36 @@ fn settings_written_before_these_options_load_with_everything_off() {
     assert_eq!(back, on);
     assert!(serde_json::to_value(&old).unwrap().get("autoOptions").is_none());
 }
+
+/// Issue #1302: a file tried while it was partial (a non-photo now) is skipped while its size holds,
+/// and tried again once it changes; one released by `auto_import_retry` is tried again too.
+#[test]
+fn a_tried_file_is_tried_again_when_its_size_changes_or_it_is_released() {
+    let dir = tmp("retry");
+    put(&dir, "w.jpg");
+    let mut s = watching(&dir);
+    let scan = |s: &mut Session| s.execute("library.autoImportScan", &json!({"start": false})).unwrap().get("import").cloned();
+    assert!(scan(&mut s).is_none(), "first listing: the size is noted");
+    assert!(scan(&mut s).is_some(), "size held: handed to an import");
+    assert!(scan(&mut s).is_none(), "not again at the same size");
+    assert!(scan(&mut s).is_none());
+    std::fs::write(dir.join("w.jpg"), b"more data now").unwrap();
+    assert!(scan(&mut s).is_none(), "grew: waits for the size to hold");
+    assert!(scan(&mut s).is_some(), "and is tried again");
+    let path = dir.join("w.jpg").to_string_lossy().to_string();
+    s.auto_import_retry(std::slice::from_ref(&path));
+    assert!(scan(&mut s).is_none());
+    assert!(scan(&mut s).is_some(), "released: tried again");
+}
+
+/// A hostile listing (negative / huge sizes, non-strings, missing fields) is skipped, not a panic.
+#[test]
+fn hostile_listing_entries_are_skipped() {
+    let dir = tmp("hostile");
+    let mut s = watching(&dir);
+    let listing = json!([[1, 2], ["a.jpg"], ["b.jpg", -4], ["c.jpg", u64::MAX], null, "x", [null, 3]]);
+    for _ in 0..3 {
+        let r = s.execute("library.autoImportScan", &json!({"listing": listing, "start": false})).unwrap();
+        assert!(r.get("import").is_none_or(|i| i["paths"].as_array().is_some_and(|p| p.iter().all(|p| p == "c.jpg"))), "{r}");
+    }
+}
