@@ -28,6 +28,7 @@ pub fn white_balance(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings) {
 /// neutral and saturated colours move as the camera's matrices say); other sources are adapted
 /// with Bradford, luminance-preserving.
 pub fn wb_matrix_for(info: &SourceInfo, s: &DevelopSettings) -> Option<[[f32; 3]; 3]> {
+    let info = &*wb_source(info, s);
     let (t, tint) = effective_wb(info, s);
     if (t - info.as_shot_temp).abs() < 1e-6 && (tint - info.as_shot_tint).abs() < 1e-6 {
         return None;
@@ -69,12 +70,31 @@ fn wb_gain(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings, gain: f32) 
 /// Kelvin scale, see [`legacy_to_kelvin`]).
 pub fn effective_wb(info: &SourceInfo, s: &DevelopSettings) -> (f64, f64) {
     use lightcraft_develop::WbMode;
+    let info = &*wb_source(info, s);
     match s.wb.mode {
         WbMode::AsShot => (info.as_shot_temp, info.as_shot_tint),
         _ if legacy_wb(info, s) => legacy_to_kelvin(s.wb.temp, s.wb.tint, (info.as_shot_temp, info.as_shot_tint)),
         m if info.raw && !info.relative_wb => m.preset().unwrap_or((s.wb.temp, s.wb.tint)),
         _ => (s.wb.temp, s.wb.tint),
     }
+}
+
+/// The source a white balance is read against: a converted film scan is a positive whose colours the conversion
+/// made, so its white balance is on the relative scale around a neutral (6500 K / 0 = as converted), like a
+/// rendered file's, whatever the scanner or camera's own white was.
+pub fn wb_source<'a>(info: &'a SourceInfo, s: &DevelopSettings) -> std::borrow::Cow<'a, SourceInfo> {
+    if !s.negative_active() {
+        return std::borrow::Cow::Borrowed(info);
+    }
+    std::borrow::Cow::Owned(SourceInfo {
+        raw: false,
+        relative_wb: true,
+        legacy_relative_wb: false,
+        as_shot_temp: 6500.0,
+        as_shot_tint: 0.0,
+        camera_color: None,
+        ..info.clone()
+    })
 }
 
 /// The source white the render adapts from the as-shot white to: [`effective_wb`] as a chromaticity, except that a
@@ -914,8 +934,20 @@ pub(crate) fn prepare(
 
 /// The airlight of the whole output frame, estimated on a small render of it (`proxy_w` px wide):
 /// a windowed render must dehaze with the frame's airlight, not that of the pixels it holds.
-pub(crate) fn frame_airlight(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, frame: &Frame, proxy_w: usize, proxy_h: usize) -> f32 {
+pub(crate) fn frame_airlight(
+    src: &Rgb32f,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    film: Option<&crate::negative::Film>,
+    frame: &Frame,
+    proxy_w: usize,
+    proxy_h: usize,
+) -> f32 {
     let mut img = Rgb32f::clone(&frame_proxy(src, frame, proxy_w, proxy_h));
+    // a converted film scan's dehaze works on its positive, as the render's own does
+    if let Some(film) = film {
+        crate::negative::apply(&mut img, film);
+    }
     white_balance(&mut img, info, s);
     let sigma = (0.02 * frame.px_per_long(proxy_w)).max(1.0) as f32;
     airlight(&gaussian(&img.map(dark_of), sigma))
@@ -1258,16 +1290,16 @@ mod tests {
         let frame = crate::frame_for(&hazy, &info, &s, true);
         let kept = frame_proxy(&hazy, &frame, 48, 32);
         assert!(Arc::ptr_eq(&kept, &frame_proxy(&hazy, &frame, 48, 32)), "the second ask is served from the cache");
-        assert_eq!(frame_airlight(&hazy, &info, &s, &frame, 48, 32).to_bits(), fresh(&hazy, &frame).to_bits());
-        assert_eq!(frame_airlight(&hazy, &info, &s, &frame, 48, 32).to_bits(), fresh(&hazy, &frame).to_bits());
+        assert_eq!(frame_airlight(&hazy, &info, &s, None, &frame, 48, 32).to_bits(), fresh(&hazy, &frame).to_bits());
+        assert_eq!(frame_airlight(&hazy, &info, &s, None, &frame, 48, 32).to_bits(), fresh(&hazy, &frame).to_bits());
         // another source of the same size
         assert_ne!(fresh(&other, &frame), fresh(&hazy, &frame));
-        assert_eq!(frame_airlight(&other, &info, &s, &frame, 48, 32).to_bits(), fresh(&other, &frame).to_bits());
+        assert_eq!(frame_airlight(&other, &info, &s, None, &frame, 48, 32).to_bits(), fresh(&other, &frame).to_bits());
         // the same source, cropped to its darker half
         let mut cropped = frame.clone();
         cropped.crop.rect.x1 = 0.5;
         assert_ne!(fresh(&hazy, &cropped), fresh(&hazy, &frame));
-        assert_eq!(frame_airlight(&hazy, &info, &s, &cropped, 48, 32).to_bits(), fresh(&hazy, &cropped).to_bits());
+        assert_eq!(frame_airlight(&hazy, &info, &s, None, &cropped, 48, 32).to_bits(), fresh(&hazy, &cropped).to_bits());
     }
 
     #[test]

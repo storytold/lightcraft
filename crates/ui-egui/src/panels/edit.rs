@@ -23,6 +23,7 @@ mod hdr_flow;
 mod histogram;
 mod lens_blur;
 mod mixer;
+mod negative;
 mod sliders;
 
 use curve::curve_editor;
@@ -42,9 +43,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
     // a raw shown from its embedded JPEG (preview only) gets the rendered-file white balance scale
-    let raw = app.session.catalog.photo(id).is_some_and(|p| p.develops_raw() && !p.relative_wb());
+    // (a converted film scan too: its white balance is relative to the positive)
+    let raw = app.session.catalog.photo(id).is_some_and(|p| p.develops_raw() && !p.relative_wb()) && !d.negative_active();
     let mut d = d;
-    if d.wb.mode == WbMode::AsShot && app.session.catalog.photo(id).is_some_and(|p| p.relative_wb()) {
+    // (a converted film scan too: As Shot is its positive's neutral, as the render reads it)
+    if d.wb.mode == WbMode::AsShot && (d.negative_active() || app.session.catalog.photo(id).is_some_and(|p| p.relative_wb())) {
         let wb = &mut std::sync::Arc::make_mut(&mut d).wb;
         wb.temp = 6500.0;
         wb.tint = 0.0;
@@ -108,6 +111,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         });
     }
     divider(ui);
+    // a converted film scan: the conversion comes first, everything below works on the positive (other photos have
+    // the section last, so their panel keeps its layout)
+    if d.negative.converts() {
+        negative::negative(app, ui, &d);
+    }
     // profile row
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 14, bottom: 14 }).show(ui, |ui| {
         ui.horizontal(|ui| {
@@ -391,6 +399,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         ui.add_space(8.0);
     });
+    if !d.negative.converts() {
+        negative::negative(app, ui, &d);
+    }
     ui.add_space(40.0);
     // A pending numeric edit commits on blur before the explicit Reset takes precedence.
     if reset_clicked {

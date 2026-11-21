@@ -16,7 +16,8 @@ impl Session {
     /// The settings the "before" side of photo `p` renders with.
     pub fn before_settings(&self, p: &Photo) -> DevelopSettings {
         let base = self.before.get(&p.id).map(|b| (**b).clone()).unwrap_or_else(|| p.import_defaults());
-        DevelopSettings { crop: p.develop.crop, orientation: p.develop.orientation, ..base }
+        // a converted film scan stays converted: Before compares edits, not the negative with the positive
+        DevelopSettings { crop: p.develop.crop, orientation: p.develop.orientation, negative: p.develop.negative, ..base }
     }
 }
 
@@ -61,7 +62,10 @@ fn before_to_after(s: &mut Session, swap: bool) -> Result<Value> {
     let id = active(s, c)?;
     let photo = s.catalog.photo(id).ok_or_else(|| bad(c, "no photo"))?;
     let after = photo.develop.clone();
-    let before = s.before.get(&id).map(|b| (**b).clone()).unwrap_or_else(|| photo.import_defaults());
+    let mut before = s.before.get(&id).map(|b| (**b).clone()).unwrap_or_else(|| photo.import_defaults());
+    // the film conversion stays, as the Before side shows it (`Session::before_settings`): the After side must not turn
+    // back into the negative
+    before.negative = photo.develop.negative;
     s.set_develop(id, before, if swap { "Swap Before and After" } else { "Copy Before to After" })?;
     if swap {
         s.before.insert(id, after);

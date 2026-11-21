@@ -192,7 +192,14 @@ impl Session {
             }
             _ => &current,
         };
-        Some(preset.apply_on(&current, original, amount))
+        let out = preset.apply_on(&current, original, amount);
+        // a preset that converts a scan not converted yet resets the edits made on the negative first, as a click
+        // does (`preset.apply`); the source facts are read only then, not for every row on every frame
+        if !current.negative.converts() && out.negative.converts() {
+            let original = photo.import_look.is_some().then(|| photo.import_defaults()).filter(|_| (amount - 1.0).abs() >= 1e-9);
+            return Some(crate::cmd::develop::apply_preset_for_photo(&current, original.as_ref(), preset, amount, &self.source_info(id)));
+        }
+        Some(out)
     }
 
     /// Add imported presets. Identical presets (same name, group and settings) already present are
@@ -260,6 +267,126 @@ fn p(group: &str, id: &str, name: &str, settings: serde_json::Value) -> Preset {
 
 pub fn builtin() -> Vec<Preset> {
     vec![
+        // Film Conversion (docs/negative-conversion.md): conversion options only — never a film base or density
+        // range, so applying one keeps each frame's own measured numbers
+        p(
+            "Film Conversion",
+            "neg-standard",
+            "Color Negative · Standard",
+            json!({"treatment": "color", "negative": {"film": "colorNegative", "tone": "standard", "color_model": "warm"}}),
+        ),
+        p(
+            "Film Conversion",
+            "neg-neutral",
+            "Color Negative · Neutral",
+            json!({"treatment": "color", "negative": {"film": "colorNegative", "tone": "standard", "color_model": "neutral"}}),
+        ),
+        p(
+            "Film Conversion",
+            "neg-soft",
+            "Color Negative · Soft",
+            json!({"treatment": "color", "negative": {"film": "colorNegative", "tone": "soft", "color_model": "warm", "brightness": 8.0, "white_point": -10.0, "saturation": -8.0}}),
+        ),
+        p(
+            "Film Conversion",
+            "neg-vivid",
+            "Color Negative · Vivid",
+            json!({"treatment": "color", "negative": {"film": "colorNegative", "tone": "hard", "color_model": "warm", "saturation": 20.0, "black_point": 10.0}}),
+        ),
+        p(
+            "Film Conversion",
+            "neg-cool",
+            "Color Negative · Cool Lab",
+            json!({"treatment": "color", "negative": {"film": "colorNegative", "tone": "standard", "color_model": "cool", "highlight_temp": -10.0}}),
+        ),
+        p(
+            "Film Conversion",
+            "neg-flat",
+            "Color Negative · Flat (for grading)",
+            json!({"treatment": "color", "negative": {"film": "colorNegative", "tone": "linear", "color_model": "none", "white_point": -15.0, "black_point": -15.0}}),
+        ),
+        p("Film Conversion", "neg-bw", "B&W Negative · Standard", json!({"treatment": "bw", "negative": {"film": "bwNegative", "tone": "standard"}})),
+        p(
+            "Film Conversion",
+            "neg-bw-hard",
+            "B&W Negative · High Contrast",
+            json!({"treatment": "bw", "negative": {"film": "bwNegative", "tone": "hard", "black_point": 15.0, "white_point": 10.0}}),
+        ),
+        p(
+            "Film Conversion",
+            "slide-standard",
+            "Slide · Standard",
+            json!({"treatment": "color", "negative": {"film": "slide", "tone": "standard", "color_model": "neutral"}}),
+        ),
+        // Film Stocks: our own looks for kinds of film (no maker's data, curves or profiles; named by kind and
+        // character, not by trademark), each with a grain to match; like the conversion presets they carry options
+        // only, never a frame's base or range
+        p(
+            "Film Stocks",
+            "stock-portrait-160",
+            "Portrait 160 · natural skin, soft",
+            json!({"treatment": "color", "negative": {"film": "colorNegative", "tone": "soft", "color_model": "warm", "saturation": -12.0, "contrast": -10.0, "highlight_temp": 6.0, "shadow_tint": -3.0}, "grain": {"amount": 12.0, "size": 20.0, "roughness": 40.0}}),
+        ),
+        p(
+            "Film Stocks",
+            "stock-portrait-400",
+            "Portrait 400 · warm, forgiving",
+            json!({"treatment": "color", "negative": {"film": "colorNegative", "tone": "soft", "color_model": "warm", "saturation": -5.0, "brightness": 5.0, "highlight_temp": 10.0, "shadow_temp": -4.0}, "grain": {"amount": 18.0, "size": 25.0, "roughness": 45.0}}),
+        ),
+        p(
+            "Film Stocks",
+            "stock-landscape-100",
+            "Landscape 100 · vivid, fine grain",
+            json!({"treatment": "color", "negative": {"film": "colorNegative", "tone": "hard", "color_model": "warm", "saturation": 22.0, "contrast": 10.0, "black_point": 6.0}, "grain": {"amount": 8.0, "size": 15.0, "roughness": 35.0}}),
+        ),
+        p(
+            "Film Stocks",
+            "stock-everyday-200",
+            "Everyday 200 · warm, punchy",
+            json!({"treatment": "color", "negative": {"film": "colorNegative", "tone": "standard", "color_model": "warm", "saturation": 10.0, "temp": 12.0, "tint": 4.0, "highlight_temp": 8.0}, "grain": {"amount": 18.0, "size": 25.0, "roughness": 50.0}}),
+        ),
+        p(
+            "Film Stocks",
+            "stock-everyday-400",
+            "Everyday 400 · bold, a little green",
+            json!({"treatment": "color", "negative": {"film": "colorNegative", "tone": "standard", "color_model": "warm", "saturation": 12.0, "tint": -6.0, "contrast": 8.0}, "grain": {"amount": 24.0, "size": 30.0, "roughness": 55.0}}),
+        ),
+        p(
+            "Film Stocks",
+            "stock-pro-400",
+            "Pro 400 · cool pastel greens",
+            json!({"treatment": "color", "negative": {"film": "colorNegative", "tone": "soft", "color_model": "cool", "saturation": -8.0, "tint": -8.0, "brightness": 8.0, "highlight_temp": -6.0, "shadow_tint": -6.0}, "grain": {"amount": 16.0, "size": 25.0, "roughness": 45.0}}),
+        ),
+        p(
+            "Film Stocks",
+            "stock-cine-800t",
+            "Cine 800T · tungsten, teal shadows",
+            json!({"treatment": "color", "negative": {"film": "colorNegative", "tone": "standard", "color_model": "cool", "saturation": 6.0, "temp": -18.0, "shadow_temp": -14.0, "shadow_tint": -6.0, "highlight_temp": 12.0}, "grain": {"amount": 26.0, "size": 35.0, "roughness": 55.0}}),
+        ),
+        p(
+            "Film Stocks",
+            "stock-bw-100",
+            "B&W 100 · fine grain",
+            json!({"treatment": "bw", "negative": {"film": "bwNegative", "tone": "standard", "contrast": 5.0}, "grain": {"amount": 10.0, "size": 15.0, "roughness": 40.0}}),
+        ),
+        p(
+            "Film Stocks",
+            "stock-bw-400",
+            "B&W 400 · classic",
+            json!({"treatment": "bw", "negative": {"film": "bwNegative", "tone": "hard", "contrast": 10.0, "black_point": 8.0}, "grain": {"amount": 22.0, "size": 30.0, "roughness": 60.0}}),
+        ),
+        p(
+            "Film Stocks",
+            "stock-bw-3200",
+            "B&W 3200 · pushed, gritty",
+            json!({"treatment": "bw", "negative": {"film": "bwNegative", "tone": "hard", "contrast": 30.0, "black_point": 15.0, "white_point": 10.0}, "grain": {"amount": 45.0, "size": 50.0, "roughness": 75.0}}),
+        ),
+        p(
+            "Film Stocks",
+            "stock-slide-100",
+            "Slide 100 · saturated, deep blacks",
+            json!({"treatment": "color", "negative": {"film": "slide", "tone": "hard", "color_model": "neutral", "saturation": 18.0, "black_point": 10.0}, "grain": {"amount": 6.0, "size": 15.0, "roughness": 35.0}}),
+        ),
         p(
             "Color",
             "warm-glow",
@@ -745,6 +872,23 @@ mod tests {
         assert!(id.starts_with("user."));
         assert!(s.presets.iter().find(|p| p.id == builtin.id).unwrap().builtin, "built-in untouched");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Hovering a Film Conversion preset over a scan not converted yet shows what a click commits: the edits made on
+    /// the negative reset, as `preset.apply` (and `negative.convert`) do.
+    #[test]
+    fn the_hover_preview_of_a_converting_preset_resets_the_negative_edits_as_a_click_does() {
+        let mut s = Session::with_demo();
+        let id = s.active().unwrap();
+        s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.8})).unwrap();
+        let preset = builtin().into_iter().find(|p| p.id == "lc.neg-standard").unwrap();
+        let hovered = s.preset_applied(id, &preset, 1.0).unwrap();
+        assert!(hovered.negative.converts());
+        assert_eq!(hovered.light.exposure, 0.0, "set on the negative: reset in the preview");
+        s.execute("preset.apply", &json!({"id": preset.id})).unwrap();
+        let clicked = s.develop_of(id).unwrap();
+        assert_eq!(clicked.light.exposure, hovered.light.exposure, "the preview is what the click committed");
+        assert_eq!(clicked.negative.film, hovered.negative.film);
     }
 
     #[test]

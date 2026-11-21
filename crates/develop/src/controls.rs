@@ -28,6 +28,7 @@ pub enum Section {
     Calibration,
     PointColor,
     RedEye,
+    Negative,
     LensBlur,
 }
 
@@ -50,6 +51,7 @@ impl Section {
             Section::Calibration => "Calibration",
             Section::PointColor => "Point Color",
             Section::RedEye => "Red Eye",
+            Section::Negative => "Negative",
             Section::LensBlur => "Lens Blur",
         }
     }
@@ -174,6 +176,19 @@ macro_rules! controls {
 use Track::*;
 
 controls! {
+    "negative.contrast" => negative.contrast, "Contrast", Negative, -100, 100, 0, 1, 0, Centered;
+    "negative.brightness" => negative.brightness, "Brightness", Negative, -100, 100, 0, 1, 0, Centered;
+    "negative.whitePoint" => negative.white_point, "White Point", Negative, -100, 100, 0, 1, 0, Centered;
+    "negative.blackPoint" => negative.black_point, "Black Point", Negative, -100, 100, 0, 1, 0, Centered;
+    "negative.temp" => negative.temp, "Temp", Negative, -100, 100, 0, 1, 0, Gradient { from: "#4a7ad8", to: "#d8b84a" };
+    "negative.tint" => negative.tint, "Tint", Negative, -100, 100, 0, 1, 0, Gradient { from: "#4ab84a", to: "#c84ac0" };
+    "negative.saturation" => negative.saturation, "Saturation", Negative, -100, 100, 0, 1, 0, Gradient { from: "#7a7a7a", to: "#e04a3a" };
+    "negative.balance" => negative.balance, "Auto Balance", Negative, 0, 100, 100, 1, 0, Plain;
+    "negative.shadowTemp" => negative.shadow_temp, "Shadow Temp", Negative, -100, 100, 0, 1, 0, Gradient { from: "#4a7ad8", to: "#d8b84a" };
+    "negative.shadowTint" => negative.shadow_tint, "Shadow Tint", Negative, -100, 100, 0, 1, 0, Gradient { from: "#4ab84a", to: "#c84ac0" };
+    "negative.highlightTemp" => negative.highlight_temp, "Highlight Temp", Negative, -100, 100, 0, 1, 0, Gradient { from: "#4a7ad8", to: "#d8b84a" };
+    "negative.highlightTint" => negative.highlight_tint, "Highlight Tint", Negative, -100, 100, 0, 1, 0, Gradient { from: "#4ab84a", to: "#c84ac0" };
+    "negative.border" => negative.border, "Analysis Border", Negative, 0, 25, 5, 0.5, 1, Plain;
     "profile.amount" => profile.amount, "Amount", Profile, 0, 200, 100, 1, 0, Plain;
     "wb.temp" => wb.temp, "Temp", Color, 2000, 50000, 6500, 50, 0, Temp;
     "wb.tint" => wb.tint, "Tint", Color, -150, 150, 0, 1, 0, Tint;
