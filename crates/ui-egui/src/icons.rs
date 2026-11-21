@@ -102,6 +102,8 @@ pub enum Icon {
     GradeHighlights,
     /// Appearance Mode ▸ Auto (follow the system): a monitor on its stand.
     Monitor,
+    /// Second display: a monitor on its stand with a vector-drawn numeral 2.
+    SecondWindow,
     /// Appearance Mode ▸ Light: a sun (a disc with eight rays).
     Sun,
     /// Appearance Mode ▸ Dark: a crescent moon.
@@ -213,6 +215,12 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.rect(2.5, 3.5, 17.5, 13.5, 1.5);
             pen.line(&[(10.0, 13.5), (10.0, 16.5)]);
             pen.line(&[(6.5, 16.5), (13.5, 16.5)]);
+        }
+        SecondWindow => {
+            pen.rect(1.5, 2.0, 18.5, 15.0, 1.5);
+            pen.line(&[(10.0, 15.0), (10.0, 18.0)]);
+            pen.line(&[(6.0, 18.0), (14.0, 18.0)]);
+            pen.line(&[(7.5, 6.5), (8.5, 5.0), (11.5, 5.0), (12.5, 6.5), (12.5, 8.0), (7.5, 12.0), (12.5, 12.0)]);
         }
         Sun => {
             pen.circle(10.0, 10.0, 3.2);
