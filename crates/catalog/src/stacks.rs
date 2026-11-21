@@ -294,8 +294,14 @@ pub fn iso_seconds(s: &str) -> Option<i64> {
     if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
         return None;
     }
-    let (hh, mm, ss) =
-        if s.len() >= 16 { (num(11, 13)?, num(14, 16)?, if s.get(16..17) == Some(":") { num(17, 19).unwrap_or(0) } else { 0 }) } else { (0, 0, 0) };
+    // A string longer than the bare date must carry a full `HH:MM`; a truncated time is not a date.
+    let (hh, mm, ss) = if s.len() >= 16 {
+        (num(11, 13)?, num(14, 16)?, if s.get(16..17) == Some(":") { num(17, 19).unwrap_or(0) } else { 0 })
+    } else if s.len() > 10 {
+        return None;
+    } else {
+        (0, 0, 0)
+    };
     if hh >= 24 || mm >= 60 || ss >= 60 {
         return None;
     }
