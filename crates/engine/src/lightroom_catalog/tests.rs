@@ -1090,9 +1090,8 @@ fn wal_checksums_cover_commits_without_materializing_historical_databases() {
     }
 }
 
-/// Issue #2592: a catalog in Lightroom's backup layout (`Backups/<date>/<name>.zip`), with one
-/// collection and the catalog's own id.
-fn backup_fixture(root: &Path, catalog_id: &str) -> (PathBuf, PathBuf) {
+/// A synthetic catalog with one photo, one collection and the catalog's own id.
+fn backup_catalog(catalog_id: &str) -> Vec<u8> {
     use SqlValue::{Integer as I, Null as N, Text as T};
     let mut tables: Vec<(&str, &str, Vec<Vec<SqlValue>>)> = one_row(photo_tables(("/catalog/", "")));
     tables.push((
@@ -1106,7 +1105,12 @@ fn backup_fixture(root: &Path, catalog_id: &str) -> (PathBuf, PathBuf) {
         "id_local INTEGER PRIMARY KEY, id_global, name, type, value",
         vec![vec![N, T("v1".into()), T("Adobe_storeProviderID".into()), N, T(catalog_id.into())]],
     ));
-    let bytes = native_catalog_rows(&tables, None);
+    native_catalog_rows(&tables, None)
+}
+
+/// Issue #2592: a catalog in Lightroom's backup layout (`Backups/<date>/<name>.zip`).
+fn backup_fixture(root: &Path, catalog_id: &str) -> (PathBuf, PathBuf) {
+    let bytes = backup_catalog(catalog_id);
     let folder = root.join("Lightroom");
     let dated = folder.join("Backups").join("2023-11-07 0900");
     std::fs::create_dir_all(&dated).unwrap();
@@ -1149,6 +1153,42 @@ fn a_backup_zip_imports_like_its_catalog_and_leaves_no_temporary_files() {
     assert!(!interop.iter().any(|n| n.starts_with("lc-lrbackup-")), "the unpacked catalog is removed: {interop:?}");
     assert_eq!(std::fs::read(&zip).unwrap(), zip_before, "the backup is only read");
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_dated_backup_folder_recovers_its_unambiguous_zip64_catalog() {
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("lightcraft-lrbackup-zip64-{}-{stamp}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let dated = root.join("Lightroom").join("Backups").join("2023-11-07 0900");
+    std::fs::create_dir_all(&dated).unwrap();
+
+    let catalog = backup_catalog("968AF29B-EEE2-481E-8AF9-55DD82965F49");
+    let valid = crate::lightroom_backup::tests::zip(&[("Cat.lrcat", &catalog), ("Cat.lrcat-data/CURRENT", b"MANIFEST-000005\n")], true, true);
+    let ambiguous = crate::lightroom_backup::tests::zip(&[("Cat.lrcat", &catalog), ("Cat.lrcat", &catalog)], true, true);
+    let zip = dated.join("Cat.zip");
+    // If discovery accepts duplicate catalogs, the earlier file name wins.
+    std::fs::write(dated.join("00-ambiguous.zip"), ambiguous).unwrap();
+    std::fs::write(&zip, &valid).unwrap();
+
+    let mut s = crate::Session::new();
+    let Err(crate::EngineError::LightroomCatalog { path, catalog: Some(discovered) }) = s.open_library(&dated, false) else {
+        panic!("opening a backup folder should offer its catalog");
+    };
+    assert_eq!(path, dated);
+    assert_eq!(discovered, zip);
+    assert!(s.library.is_none());
+
+    let lib = root.join("Library");
+    s.open_library(&lib, false).unwrap();
+    let report = import(&mut s, &discovered, false).unwrap();
+    assert_eq!((report["photos"].as_u64(), report["collections"].as_u64()), (Some(1), Some(1)));
+    assert_eq!(report["source"], json!(zip.to_string_lossy()));
+    let clean = std::fs::read_dir(lib.join("Interop")).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().starts_with("lc-lrbackup-"));
+    assert!(clean, "the extracted catalog should be removed");
+    assert_eq!(std::fs::read(&zip).unwrap(), valid);
+    drop(s);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 /// Issue #2606: the backup of an imported catalog matches its collections by the catalog id.

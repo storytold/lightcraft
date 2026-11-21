@@ -110,21 +110,6 @@ pub fn sniff(b: &[u8]) -> Option<Format> {
     if b.len() < 4 {
         return None;
     }
-    if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        return Some(Format::Jpeg);
-    }
-    if b.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return Some(Format::Png);
-    }
-    if b.starts_with(b"GIF87a") || b.starts_with(b"GIF89a") {
-        return Some(Format::Gif);
-    }
-    if b.len() >= 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP" {
-        return Some(Format::WebP);
-    }
-    if b.starts_with(&[0xFF, 0x0A]) || b.starts_with(&[0, 0, 0, 0x0C, b'J', b'X', b'L', b' ', 0x0D, 0x0A, 0x87, 0x0A]) {
-        return Some(Format::Jxl);
-    }
     if b.starts_with(b"8BPS") && b.len() >= 6 && matches!(u16::from_be_bytes([b[4], b[5]]), 1 | 2) {
         return Some(Format::Psd);
     }
@@ -138,7 +123,11 @@ pub fn sniff(b: &[u8]) -> Option<Format> {
         return Some(Format::Mov);
     }
     if b.len() >= 12 && &b[4..8] == b"ftyp" {
-        return sniff_bmff(b);
+        // A JPEG comment can put these bytes at this offset. Check the leading JPEG signature first.
+        return match craft_image_codecs::detect(b) {
+            Some(craft_image_codecs::Format::Jpeg | craft_image_codecs::Format::JpegLs) => Some(Format::Jpeg),
+            _ => sniff_bmff(b),
+        };
     }
     if b.starts_with(b"IIRO") || b.starts_with(b"IIRS") || b.starts_with(b"MMOR") || b.starts_with(b"IIU\0") {
         // Olympus ORF / Panasonic RW2: TIFF-structured with a private magic.
@@ -147,13 +136,18 @@ pub fn sniff(b: &[u8]) -> Option<Format> {
     if b.starts_with(b"II*\0") || b.starts_with(b"MM\0*") {
         return Some(if craft_image_codecs::legacy_tiff_raw_hint(b) { Format::RawTiffLike } else { Format::Tiff });
     }
-    if b.starts_with(b"II+\0") || b.starts_with(b"MM\0+") {
-        return Some(Format::Tiff);
-    }
     if craft_image_codecs::bmp_probe::is_supported_header(b) {
         return Some(Format::Bmp);
     }
-    None
+    match craft_image_codecs::detect(b) {
+        Some(craft_image_codecs::Format::Jpeg | craft_image_codecs::Format::JpegLs) => Some(Format::Jpeg),
+        Some(craft_image_codecs::Format::Png) => Some(Format::Png),
+        Some(craft_image_codecs::Format::Gif) => Some(Format::Gif),
+        Some(craft_image_codecs::Format::WebP) => Some(Format::WebP),
+        Some(craft_image_codecs::Format::Jxl) => Some(Format::Jxl),
+        Some(craft_image_codecs::Format::Tiff) => Some(Format::Tiff),
+        _ => None,
+    }
 }
 
 /// Detect ISO Base Media File Format container (MP4, MOV, HEIF, CR3, AVIF) by checking the ftyp box.
@@ -319,6 +313,42 @@ mod tests {
     }
 
     #[test]
+    fn shared_detection_keeps_bigtiff_and_jpeg_ls_routing() {
+        for header in [b"II+\0".as_slice(), b"MM\0+".as_slice()] {
+            assert_eq!(sniff(header), Some(Format::Tiff));
+        }
+        assert_eq!(sniff(&[0xff, 0xd8, 0xff, 0xf7, 0, 2]), Some(Format::Jpeg));
+    }
+
+    #[test]
+    fn jpeg_comments_do_not_override_the_format() {
+        use crate::encode::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+
+        let pixels = [32, 83, 170].repeat(12);
+        let image = EncodeImage::new(4, 3, 3, Samples::U8(&pixels));
+        let jpeg = encode_jpeg(&image, 85, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+        let header = crate::read_header(&jpeg).unwrap();
+        assert_eq!((header.format, header.width, header.height), (Format::Jpeg, 4, 3));
+        let expected = crate::decode(&jpeg, crate::DecodeOptions::default()).unwrap().to_srgb8();
+
+        for apparent_brand in [b"avif", b"test"] {
+            // The two-byte comment length and the start of its payload form the apparent ftyp.
+            let mut comment = vec![0; usize::from(u16::from_be_bytes(*b"ft")) - 2];
+            comment[..2].copy_from_slice(b"yp");
+            comment[2..6].copy_from_slice(apparent_brand);
+
+            let mut commented = jpeg[..2].to_vec();
+            commented.extend_from_slice(b"\xff\xfeft");
+            commented.extend_from_slice(&comment);
+            commented.extend_from_slice(&jpeg[2..]);
+
+            assert_eq!(sniff(&commented), Some(Format::Jpeg), "{apparent_brand:?}");
+            assert_eq!(crate::read_header(&commented).unwrap(), header);
+            assert_eq!(crate::decode(&commented, crate::DecodeOptions::default()).unwrap().to_srgb8().data, expected.data);
+        }
+    }
+
+    #[test]
     fn dng_detected() {
         // II*, IFD at 8 with a single DNGVersion entry.
         let mut b = b"II*\0\x08\0\0\0".to_vec();
@@ -363,5 +393,125 @@ mod tests {
         assert_eq!(sniff(&raw[..38]), Some(Format::Tiff));
         raw[38..42].copy_from_slice(b"TEST");
         assert_eq!(sniff(&raw), Some(Format::Tiff));
+    }
+
+    fn ftyp_box(size: Option<u32>, major: &[u8; 4], compatible: &[&[u8; 4]]) -> Vec<u8> {
+        let box_len = size.unwrap_or((16 + compatible.len() * 4) as u32);
+        let mut b = Vec::with_capacity(16 + compatible.len() * 4);
+        b.extend_from_slice(&box_len.to_be_bytes());
+        b.extend_from_slice(b"ftyp");
+        b.extend_from_slice(major);
+        b.extend_from_slice(&0_u32.to_be_bytes());
+        for brand in compatible {
+            b.extend_from_slice(*brand);
+        }
+        b
+    }
+
+    #[test]
+    fn bmff_probe_precedence_cr3_jxl_avif_heif() {
+        // CR3 (`crx `) wins over JXL, AVIF, and HEIF regardless of brand position.
+        assert_eq!(sniff(&ftyp_box(None, b"crx ", &[b"jxl ", b"avif", b"heic", b"mif1"])), Some(Format::RawOther));
+        assert_eq!(sniff(&ftyp_box(None, b"mif1", &[b"heic", b"avif", b"jxl ", b"crx "])), Some(Format::RawOther));
+        assert_eq!(sniff(&ftyp_box(None, b"avif", &[b"crx "])), Some(Format::RawOther));
+
+        // JXL (`jxl `) wins over AVIF and HEIF regardless of brand position.
+        assert_eq!(sniff(&ftyp_box(None, b"jxl ", &[b"avif", b"avis", b"heic", b"mif1"])), Some(Format::Jxl));
+        assert_eq!(sniff(&ftyp_box(None, b"avif", &[b"jxl "])), Some(Format::Jxl));
+        assert_eq!(sniff(&ftyp_box(None, b"mif1", &[b"jxl "])), Some(Format::Jxl));
+
+        // AVIF (`avif` / `avis`) wins over all HEIF brands regardless of brand position.
+        let heif_brands: [&[u8; 4]; 10] = [b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs", b"mif1", b"msf1"];
+        for heif in heif_brands {
+            assert_eq!(sniff(&ftyp_box(None, b"avif", &[heif])), Some(Format::Avif));
+            assert_eq!(sniff(&ftyp_box(None, b"avis", &[heif])), Some(Format::Avif));
+            assert_eq!(sniff(&ftyp_box(None, heif, &[b"avif"])), Some(Format::Avif));
+            assert_eq!(sniff(&ftyp_box(None, heif, &[b"avis"])), Some(Format::Avif));
+
+            // Without higher-precedence brands, every HEIF brand sniffs as Heif (major or compatible).
+            assert_eq!(sniff(&ftyp_box(None, heif, &[b"miaf"])), Some(Format::Heif));
+            assert_eq!(sniff(&ftyp_box(None, b"isom", &[heif])), Some(Format::Heif));
+        }
+
+        // MP4 brands sniff as Mp4 (`isom`/`iso2`/`mp41`) rather than falling through.
+        assert_eq!(sniff(&ftyp_box(None, b"isom", &[b"iso2", b"mp41"])), Some(Format::Mp4));
+
+        // Unrecognised BMFF brands return None rather than falling through.
+        assert_eq!(sniff(&ftyp_box(None, b"zzzz", &[b"yyyy"])), None);
+    }
+
+    #[test]
+    fn bmff_ftyp_box_bounds_and_truncation() {
+        // Box size stops compatible-brand scanning at the ftyp boundary.
+        let bounded = ftyp_box(Some(16), b"heic", &[b"crx ", b"avif"]);
+        assert_eq!(sniff(&bounded), Some(Format::Heif));
+
+        // Box sizes smaller than 12 clamp to 12: major brand is still read, trailing bytes are not.
+        for small in [0_u32, 8, 11] {
+            let clamped = ftyp_box(Some(small), b"avif", &[b"crx "]);
+            assert_eq!(sniff(&clamped), Some(Format::Avif));
+        }
+
+        // Declared box size larger than the buffer still scans available compatible brands.
+        let truncated_with_compat = ftyp_box(Some(64), b"mif1", &[b"avif"]);
+        assert_eq!(sniff(&truncated_with_compat), Some(Format::Avif));
+
+        // Truncated before the 12-byte ftyp major brand returns None.
+        let too_short = ftyp_box(None, b"heic", &[]);
+        assert_eq!(sniff(&too_short[..11]), None);
+    }
+
+    #[test]
+    fn jxl_and_detector_fallback_sniffing() {
+        // JXL ISO-BMFF signature box (`JXL ` box, not `ftyp`) falls through to shared detector.
+        let mut jxl_container = b"\x00\x00\x00\x0CJXL \r\n\x87\n".to_vec();
+        assert_eq!(sniff(&jxl_container), Some(Format::Jxl));
+        jxl_container.extend_from_slice(&ftyp_box(None, b"jxl ", &[b"jxl "]));
+        assert_eq!(sniff(&jxl_container), Some(Format::Jxl));
+
+        // Bare JXL codestream and standalone `ftypjxl ` box both sniff as Jxl.
+        assert_eq!(sniff(&[0xFF, 0x0A, 0x00, 0x00]), Some(Format::Jxl));
+        assert_eq!(sniff(&ftyp_box(None, b"jxl ", &[])), Some(Format::Jxl));
+
+        // Shared detector fallback for standard raster containers and non-raw TIFF.
+        assert_eq!(sniff(b"\xFF\xD8\xFF\xE0\0\x10JFIF"), Some(Format::Jpeg));
+        assert_eq!(sniff(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"), Some(Format::Png));
+        assert_eq!(sniff(b"GIF87a\x01\0\x01\0\0\0\0"), Some(Format::Gif));
+        assert_eq!(sniff(b"RIFF\x10\0\0\0WEBPVP8 "), Some(Format::WebP));
+        assert_eq!(sniff(b"II*\0\x08\0\0\0\0\0"), Some(Format::Tiff));
+        assert_eq!(sniff(b"MM\0*\0\0\0\x08\0\0"), Some(Format::Tiff));
+        assert_eq!(sniff(b"unknown-header"), None);
+    }
+
+    #[test]
+    fn short_inputs_and_psd_raw_precedence() {
+        for len in 0..4 {
+            assert_eq!(sniff(&[0xFF, 0xD8, 0xFF][..len]), None);
+        }
+        assert_eq!(sniff(b"8BPS"), None);
+        assert_eq!(sniff(b"8BPS\0"), None);
+        assert_eq!(sniff(b"8BPS\0\x00"), None);
+        assert_eq!(sniff(b"8BPS\0\x03"), None);
+        assert_eq!(sniff(b"8BPS\0\x01"), Some(Format::Psd));
+        assert_eq!(sniff(b"8BPS\0\x02"), Some(Format::Psd));
+
+        assert_eq!(sniff(b"II\0\0\0\0HEAPCCD"), None);
+        assert_eq!(sniff(b"II\0\0\0\0HEAPCCDR"), Some(Format::RawOther));
+        for raw_magic in [b"FUJIFILMCCD-RAW".as_slice(), b"\0MRM", b"FOVb"] {
+            assert_eq!(sniff(raw_magic), Some(Format::RawOther));
+        }
+        for raw_tiff in [b"IIRO".as_slice(), b"IIRS", b"MMOR", b"IIU\0"] {
+            assert_eq!(sniff(raw_tiff), Some(Format::RawTiffLike));
+        }
+        for tiff_magic in [b"II*\0".as_slice(), b"MM\0*"] {
+            assert_eq!(sniff(tiff_magic), Some(Format::Tiff));
+        }
+
+        // Compound headers: PSD, RAW, and JPEG/JPEG-LS signatures take precedence over `ftyp` at offset 4.
+        assert_eq!(sniff(b"8BPS\0\x01ftypavif"), Some(Format::Psd));
+        assert_eq!(sniff(b"\0MRMftypavif"), Some(Format::RawOther));
+        assert_eq!(sniff(b"FOVbftypheic"), Some(Format::RawOther));
+        assert_eq!(sniff(b"\xFF\xD8\xFF\xF7ftypcrx "), Some(Format::Jpeg));
+        assert_eq!(sniff(b"\xFF\xD8\xFF\xE0ftypjxl "), Some(Format::Jpeg));
     }
 }
