@@ -189,6 +189,21 @@ fn suggestions_come_from_the_named_faces_and_are_never_applied() {
     for p in [json!({"threshold": "x"}), json!({"margin": null}), json!({"budgetMs": 0}), json!({"ids": []}), json!({"ids": [999999]})] {
         assert!(s.execute("faces.suggest", &p).is_ok(), "{p}");
     }
+    // how many faces a match is based on: the count asked for, else the one chosen in Settings (also for null)
+    for (asked, used) in [(json!(1), 1), (json!(8), 8), (json!(null), 2)] {
+        let r = s.execute("faces.suggest", &json!({"ids": [b.0], "topFaces": asked, "budgetMs": 0})).unwrap();
+        assert_eq!(r["topFaces"], used, "{asked}: {r}");
+    }
+    assert_eq!(s.execute("faces.evaluate", &json!({"topFaces": 4})).unwrap()["topFaces"], 4);
+    s.execute("faces.matching", &json!({"topFaces": 3})).unwrap();
+    assert_eq!(s.execute("faces.suggest", &json!({"ids": [b.0], "budgetMs": 0})).unwrap()["topFaces"], 3);
+    assert_eq!(s.execute("faces.evaluate", &json!({"topFaces": null})).unwrap()["topFaces"], 3);
+    // and refused, as `faces.matching` refuses it, when it is no count from 1 to 8
+    for bad in [json!(0), json!(9), json!(-1), json!(2.5), json!("3")] {
+        for cmd in ["faces.suggest", "faces.evaluate"] {
+            assert!(s.execute(cmd, &json!({"ids": [b.0], "topFaces": bad})).is_err(), "{cmd} {bad}");
+        }
+    }
     let _ = std::fs::remove_dir_all(&d);
 }
 

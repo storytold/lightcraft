@@ -8,8 +8,13 @@
 
 use std::cmp::Ordering;
 
-/// How many of a person's best matching faces are averaged into their score.
+/// How many of a person's best matching faces are averaged into their score, unless the user chose otherwise
+/// (Settings ▸ Faces). More faces make a stranger who happens to match two odd photos of someone (blurred, in
+/// profile) less likely to be suggested as them. A person with fewer faces than the count is scored on the ones they
+/// have, so their score does not change.
 pub const TOP_FACES: usize = 2;
+/// The most faces a score may be based on.
+pub const MAX_TOP_FACES: usize = 8;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ranked {
@@ -53,6 +58,13 @@ fn dot(a: &[f32], b: &[f32]) -> f32 {
 /// Rank the people in `gallery` (a name and one face's embedding per entry; a person appears once per face),
 /// best first. Names are compared case-insensitively and shown as first seen.
 pub fn rank(query: &[f32], gallery: &[(&str, &[f32])]) -> Vec<Ranked> {
+    rank_top(query, gallery, TOP_FACES)
+}
+
+/// [`rank`], with each person's score the mean of their `top` best matching faces (1 to [`MAX_TOP_FACES`]; a person
+/// with fewer faces is scored on those they have).
+pub fn rank_top(query: &[f32], gallery: &[(&str, &[f32])], top: usize) -> Vec<Ranked> {
+    let top = top.clamp(1, MAX_TOP_FACES);
     let mut people: Vec<(String, String, Vec<f32>)> = Vec::new(); // (key, shown name, similarities)
     let mut at: std::collections::HashMap<String, usize> = std::collections::HashMap::new(); // key -> index in `people`
     for (name, emb) in gallery {
@@ -69,9 +81,15 @@ pub fn rank(query: &[f32], gallery: &[(&str, &[f32])]) -> Vec<Ranked> {
     let mut out: Vec<Ranked> = people
         .into_iter()
         .map(|(_, name, mut sims)| {
-            sims.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
-            let top = sims.get(..sims.len().min(TOP_FACES)).unwrap_or(&[]);
-            Ranked { name, score: top.iter().sum::<f32>() / top.len().max(1) as f32, faces: sims.len() }
+            // only the best `top` count, so they are picked out rather than every similarity sorted: a person may
+            // have thousands of faces (similarities are finite, `cosine` sees to it). Those few are then summed best
+            // first, as `person_score` sums them, so both give the very same score
+            if sims.len() > top {
+                sims.select_nth_unstable_by(top - 1, |a, b| b.total_cmp(a));
+                sims.truncate(top);
+            }
+            sims.sort_unstable_by(|a, b| b.total_cmp(a));
+            Ranked { name, score: sims.iter().sum::<f32>() / sims.len().max(1) as f32, faces: sims.len() }
         })
         .collect();
     out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal).then_with(|| a.name.cmp(&b.name)));
@@ -139,6 +157,34 @@ mod tests {
     }
 
     #[test]
+    fn more_faces_in_a_score_keep_two_odd_photos_from_carrying_a_stranger() {
+        // Eve matches two odd photos of Ann very well, but none of her usual ones; Bob looks like Eve on all of his
+        let (odd1, odd2, usual) = (unit(&[1.0, 0.05, 0.0]), unit(&[1.0, 0.0, 0.05]), unit(&[0.0, 0.0, 1.0]));
+        let (b1, b2, b3) = (unit(&[0.8, 0.6, 0.0]), unit(&[0.8, 0.0, 0.6]), unit(&[0.8, 0.3, 0.3]));
+        let gallery: Vec<(&str, &[f32])> =
+            vec![("Ann", &odd1), ("Ann", &odd2), ("Ann", &usual), ("Ann", &usual), ("Bob", &b1), ("Bob", &b2), ("Bob", &b3)];
+        let eve = unit(&[1.0, 0.0, 0.0]);
+        assert_eq!(rank(&eve, &gallery)[0].name, "Ann", "two faces: the odd photos carry Ann");
+        let four = rank_top(&eve, &gallery, 4);
+        assert_eq!(four[0].name, "Bob", "{four:?}");
+        assert!(four.iter().find(|r| r.name == "Ann").is_some_and(|r| r.score < 0.6), "{four:?}");
+        // the More faces path scores with person_score: the same mean, and a count above two counts too
+        let ann: Vec<&[f32]> = vec![&odd1, &odd2, &usual, &usual];
+        let ann4 = person_score(&eve, &ann, 4).unwrap();
+        assert!((ann4 - four.iter().find(|r| r.name == "Ann").unwrap().score).abs() < 1e-6, "{ann4} against {four:?}");
+        assert!(ann4 < person_score(&eve, &ann, 2).unwrap() - 0.4, "{ann4}");
+        // out-of-range counts are clamped, never a panic or an empty score
+        assert_eq!(rank_top(&eve, &gallery, 0), rank_top(&eve, &gallery, 1));
+        assert_eq!(rank_top(&eve, &gallery, 1000), rank_top(&eve, &gallery, MAX_TOP_FACES));
+        // a person with fewer faces than asked is scored on the ones they have
+        let one: Vec<(&str, &[f32])> = vec![("Cy", &odd1)];
+        assert!(rank_top(&eve, &one, 4)[0].score > 0.99);
+        // and the count says how many faces the score is based on
+        assert_eq!(rank_top(&eve, &gallery, 1).iter().find(|r| r.name == "Ann").map(|r| r.faces), Some(1));
+        assert_eq!(rank_top(&eve, &one, 4)[0].faces, 1);
+    }
+
+    #[test]
     fn a_persons_score_is_the_one_ranking_gives_them() {
         // pseudo-random unit vectors, the same on every run
         let mut seed = 0x2545_f491_4f6c_dd1du64;
@@ -157,6 +203,22 @@ mod tests {
             let ranked = rank(&q, &named);
             let score = person_score(&q, &refs, TOP_FACES).unwrap();
             assert!((score - ranked[0].score).abs() < 1e-6, "{score} against {}", ranked[0].score);
+        }
+        // and for any count the very same score, not merely a close one, so a threshold decides alike either way
+        for top in 1..=MAX_TOP_FACES {
+            for _ in 0..20 {
+                let q = face();
+                assert_eq!(person_score(&q, &refs, top), Some(rank_top(&q, &named, top)[0].score), "{top}");
+            }
+        }
+        // a person with fewer faces than asked is scored on every one of them, in both
+        for n in 2..MAX_TOP_FACES {
+            let q = face();
+            let mut sims: Vec<f32> = refs[..n].iter().filter_map(|e| cosine(&q, e)).collect();
+            sims.sort_unstable_by(|a, b| b.total_cmp(a));
+            let mean = sims.iter().sum::<f32>() / n as f32;
+            assert_eq!(rank_top(&q, &named[..n], MAX_TOP_FACES)[0].score, mean, "{n}");
+            assert_eq!(person_score(&q, &refs[..n], MAX_TOP_FACES), Some(mean), "{n}");
         }
         // fewer faces than asked, bad embeddings skipped, nothing to compare, and any count
         let q = face();
