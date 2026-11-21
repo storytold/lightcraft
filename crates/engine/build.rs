@@ -214,7 +214,9 @@ fn emit(src: &mut String, const_name: &str, doc: &str, prefix: &str, rows: &[(&s
                 src.push_str(&format!("    // {line}\n"));
             }
         }
-        src.push_str(&format!("    \"{prefix}{name}\",\n"));
+        // Debug-escaped: a hand-edited name with a quote or newline stays a valid literal
+        let full = format!("{prefix}{name}");
+        src.push_str(&format!("    {full:?},\n"));
     }
     src.push_str("];\n\n");
 }
