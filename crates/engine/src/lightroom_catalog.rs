@@ -26,6 +26,20 @@ fn error(why: impl Into<String>) -> crate::EngineError {
 fn text<'a>(r: &'a Row, k: &str) -> &'a str {
     r.get(k).and_then(Value::as_str).unwrap_or("")
 }
+/// The record a row's `k` column names: its value as a whole number, or `None` when that is missing, NULL, text, a
+/// fraction or out of `i64` range. [`number`] reads a missing, NULL or text value as 0, naming the record whose `id_local` is 0, and
+/// truncates a fraction (1.5 names record 1).
+fn id_of(r: &Row, k: &str) -> Option<i64> {
+    let n = r.get(k)?.as_number()?;
+    let f = n.as_f64()?;
+    // An integer goes through f64 as [`number`] takes the `id_local` of the record it names, so both get the same key
+    // past 2^53 too.
+    if n.is_i64() {
+        return Some(f as i64);
+    }
+    // (2^63 is the first value past i64::MAX; a cast would saturate onto a real id)
+    (f.fract() == 0.0 && f >= i64::MIN as f64 && f < 9_223_372_036_854_775_808.0).then_some(f as i64)
+}
 fn number(r: &Row, k: &str) -> i64 {
     r.get(k).and_then(Value::as_f64).filter(|n| n.is_finite()).unwrap_or(0.0) as i64
 }
@@ -1042,7 +1056,7 @@ fn first_of_each_collection<'a>(data: &'a CatalogImport, warnings: &mut Vec<Stri
             continue;
         };
         if *kept != collection {
-            let photos = if data.members.iter().any(|m| number(m, "collection") == id) {
+            let photos = if data.members.iter().any(|m| id_of(m, "collection") == Some(id)) {
                 format!("; the photos listed under that id go to “{}”", text(kept, "name"))
             } else {
                 String::new()
@@ -1130,8 +1144,16 @@ fn stage_collections(
     let parents: HashMap<_, _> = rows.iter().map(|r| (number(r, "id_local"), number(r, "parent"))).collect();
     let collections: HashMap<_, _> = rows.iter().map(|r| (number(r, "id_local"), *r)).collect();
     let mut grouped_members: HashMap<i64, Vec<&Row>> = HashMap::new();
+    // read strictly: a NULL, text or fractional `collection` names no collection, not collection 0 (or 1 for 1.5)
     for member in &data.members {
-        grouped_members.entry(number(member, "collection")).or_default().push(member);
+        if let Some(collection) = id_of(member, "collection") {
+            grouped_members.entry(collection).or_default().push(member);
+        }
+    }
+    match data.members.iter().filter(|m| id_of(m, "collection").is_none()).count() {
+        0 => {}
+        1 => warnings.push("AgLibraryCollectionImage: 1 record added to no album; its collection is not a collection id".into()),
+        n => warnings.push(format!("AgLibraryCollectionImage: {n} records added to no album; their collection is not a collection id")),
     }
     for members in grouped_members.values_mut() {
         members.sort_by(|a, b| text(a, "positionInCollection").cmp(text(b, "positionInCollection")));
