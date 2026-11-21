@@ -73,6 +73,7 @@ mod library_problem;
 mod lifecycle_037;
 mod lightroom_destination;
 mod lights_out;
+mod loupe_background;
 mod mask_effects;
 mod masking;
 mod masking_layout;

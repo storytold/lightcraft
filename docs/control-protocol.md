@@ -169,6 +169,12 @@ Auto → Light → Dark → Auto, like the top bar's `icon:appearance` button) a
 Both reply `{mode, darkTheme, lightTheme}`; the same values are `settings.appearanceMode`,
 `settings.darkTheme` and `settings.lightTheme` in `ui.set`. Auto follows the system (on Linux the
 XDG desktop portal, watched for changes rather than polled) and is dark when the system says nothing.
+The colour around the photo in the Detail view (View ▸ Loupe Background, also on a right-click around
+the photo) is `view.loupeBackground {color?: "theme" | "black" | "darkGray" | "mediumGray" |
+"lightGray" | "white"}`. Theme (the default) keeps the theme's canvas colour; Medium Gray is L\* 50
+(`#777777`), White is `#FFFFFF`. Full Screen Preview uses the same colour (black for Theme). No
+`color` reads the value; a value that is not one of these is refused and changes nothing. It replies
+`{color}`; the choice is kept with the app settings (`loupeBackground`).
 Mask brushing uses the UI command `tool.brush` through `engine.execute`. With `{}` it activates
 painting on the current mask. `{"new": true}` creates a separate brush mask; `{"op": "add"}` or
 `{"op": "subtract"}` appends a brush component to the selected mask. Creating either starts in
