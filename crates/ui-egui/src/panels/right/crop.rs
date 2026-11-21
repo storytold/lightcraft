@@ -1,23 +1,12 @@
 use super::{LightcraftApp, PhotoId, Tokens, divider, header, json, padded, register, slider, text_button};
-
-/// The aspect presets of the Crop panel: (menu label, `crop.aspect` value).
-const ASPECT_PRESETS: [(&str, &str); 10] = [
-    ("Free", "free"),
-    ("Original", "original"),
-    ("1 × 1", "1x1"),
-    ("4 × 5 / 8 × 10", "4x5"),
-    ("8.5 × 11", "8.5x11"),
-    ("5 × 7", "5x7"),
-    ("2 × 3 / 4 × 6", "2x3"),
-    ("4 × 3", "4x3"),
-    ("16 × 9", "16x9"),
-    ("16 × 10", "16x10"),
-];
+use crate::text_field::{Ending, TextField};
+use lightcraft_engine::cmd::crop_aspects::{BUILTIN_ASPECTS, CustomAspect};
 
 /// What the aspect button says for the stored lock (`aspect` = width × 100, height × 100):
-/// a preset's name when the ratio matches one in either orientation, "Original" for the photo's own
-/// shape, otherwise the ratio as `1.37 : 1`.
-pub(super) fn aspect_label(aspect: Option<(u32, u32)>, original: Option<f64>) -> String {
+/// "Original" for the photo's own shape, else the name of a ratio the user saved, else a built-in
+/// ratio's name, when the ratio matches one in either orientation; otherwise the ratio as
+/// `1.37 : 1`.
+pub(crate) fn aspect_label(aspect: Option<(u32, u32)>, original: Option<f64>, custom: &[CustomAspect]) -> String {
     let Some((w, h)) = aspect else { return "Free".into() };
     if w == 0 || h == 0 {
         return "Free".into();
@@ -27,7 +16,17 @@ pub(super) fn aspect_label(aspect: Option<(u32, u32)>, original: Option<f64>) ->
     if original.is_some_and(is) {
         return "Original".into();
     }
-    for (label, key) in ASPECT_PRESETS {
+    // the lock is the rounded pair (`crop.aspect` stores hundredths): a saved ratio that rounds to it, in either
+    // orientation, before one that is only close
+    let hundredths = |v: f64| (v * 100.0).round();
+    let exact = custom.iter().find(|a| {
+        let (x, y) = (hundredths(a.aspect[0]), hundredths(a.aspect[1]));
+        (x, y) == (f64::from(w), f64::from(h)) || (x, y) == (f64::from(h), f64::from(w))
+    });
+    if let Some(a) = exact.or_else(|| custom.iter().find(|a| is(a.aspect[0] / a.aspect[1]))) {
+        return a.name.clone();
+    }
+    for (label, key) in BUILTIN_ASPECTS {
         if let Some((x, y)) = key.split_once('x')
             && let (Ok(x), Ok(y)) = (x.parse::<f64>(), y.parse::<f64>())
             && is(x / y)
@@ -38,34 +37,147 @@ pub(super) fn aspect_label(aspect: Option<(u32, u32)>, original: Option<f64>) ->
     format!("{:.2} : 1", r.max(1.0 / r))
 }
 
-/// "Custom" row of the aspect menu: two number fields and an Apply button (`crop.aspect` `[w, h]`).
+/// "Custom" rows of the aspect menu: width × height with Apply (`crop.aspect` `[w, h]`), and a
+/// name with Save, which keeps the ratio in the menu (`crop.saveAspect`) and applies it.
 fn custom_aspect(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let key = egui::Id::unique("crop-custom-aspect");
-    let (mut w, mut h): (String, String) = ui.data_mut(|d| d.get_temp(key)).unwrap_or_else(|| ("3".into(), "2".into()));
-    let mut apply = false;
+    let (mut w, mut h, mut name): (String, String, String) =
+        ui.data_mut(|d| d.get_temp(key)).unwrap_or_else(|| ("3".into(), "2".into(), String::new()));
+    let (mut apply, mut save) = (false, false);
     ui.horizontal(|ui| {
         ui.label(crate::i18n::tr("Custom"));
-        let a = ui.add(egui::TextEdit::singleline(&mut w).desired_width(34.0));
-        crate::widgets::screen_reader_name(ui.ctx(), a.id, crate::i18n::tr("Width"));
-        register(ui, "field:cropCustomW", a.rect);
+        let a = TextField::singleline("field:cropCustomW", &mut w).label(crate::i18n::tr("Width")).width(34.0).select_on_focus(true).show(ui);
         ui.label("×");
-        let b = ui.add(egui::TextEdit::singleline(&mut h).desired_width(34.0));
-        crate::widgets::screen_reader_name(ui.ctx(), b.id, crate::i18n::tr("Height"));
-        register(ui, "field:cropCustomH", b.rect);
+        let b = TextField::singleline("field:cropCustomH", &mut h).label(crate::i18n::tr("Height")).width(34.0).select_on_focus(true).show(ui);
         let go = text_button(ui, "cropCustomApply", "Apply", false);
-        apply = go.clicked() || ((a.lost_focus() || b.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+        apply = go.clicked() || a.ending == Some(Ending::Return) || b.ending == Some(Ending::Return);
     });
-    if apply {
-        // Accept `3`, `2.5` and `3,5`; anything else (zero, negative, text, huge) is ignored.
-        let num = |t: &str| t.trim().replace(',', ".").parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0 && *v <= 1000.0);
-        if let (Some(x), Some(y)) = (num(&w), num(&h))
-            && (1.0 / lightcraft_geom::MAX_RATIO..=lightcraft_geom::MAX_RATIO).contains(&(x / y))
-        {
-            let _ = app.run("crop.aspect", json!({"aspect": [x, y]}));
-            ui.close();
-        }
+    ui.horizontal(|ui| {
+        let n = TextField::singleline("field:cropCustomName", &mut name).hint(crate::i18n::tr("Name")).width(118.0).show(ui);
+        let go = text_button(ui, "cropCustomSave", "Save", false);
+        save = go.clicked() || n.ending == Some(Ending::Return);
+    });
+    // Accept `3`, `2.5` and `3,5`. A ratio `crop.aspect` can't take (zero, negative, text, too
+    // wide, too small) or a Save the engine refuses says why and leaves the menu open.
+    let save = save && !name.trim().is_empty();
+    if !(save || apply) {
+        ui.data_mut(|d| d.insert_temp(key, (w, h, name)));
+        return;
     }
-    ui.data_mut(|d| d.insert_temp(key, (w, h)));
+    let num = |t: &str| t.trim().replace(',', ".").parse::<f64>().ok();
+    let done = match (num(&w), num(&h)) {
+        (Some(x), Some(y)) if lightcraft_engine::cmd::crop_aspects::valid_ratio(x, y) => {
+            let saved = if save { app.run("crop.saveAspect", json!({"name": name.trim(), "aspect": [x, y]})) } else { Ok(json!(null)) };
+            match saved.and_then(|_| app.run("crop.aspect", json!({"aspect": [x, y]}))) {
+                Ok(_) => true,
+                Err(e) => {
+                    app.toast_error(ui.ctx(), e);
+                    false
+                }
+            }
+        }
+        _ => {
+            app.toast_error(ui.ctx(), crate::i18n::tr("The aspect needs two positive numbers with a ratio between 1:20 and 20:1"));
+            false
+        }
+    };
+    if done {
+        if save {
+            name.clear();
+        }
+        ui.close();
+    }
+    ui.data_mut(|d| d.insert_temp(key, (w, h, name)));
+}
+
+/// The aspect menu is in its Edit List mode (egui temp data, a `bool`).
+const ASPECT_EDITING: &str = "crop-aspect-edit";
+
+/// The aspect menu: the built-in ratios the user didn't hide, the saved ones, the Custom rows,
+/// and Edit List, which turns the list into one to reorder, delete and hide in (the menu stays
+/// open for it).
+fn aspect_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let editing_id = egui::Id::unique(ASPECT_EDITING);
+    let editing = ui.data(|d| d.get_temp::<bool>(editing_id)).unwrap_or(false);
+    if editing {
+        // room for a name beside its ↑ ↓ Delete buttons
+        ui.set_min_width(260.0);
+    }
+    // many saved ratios scroll rather than run off the window; Custom and Edit List stay below them
+    let max = (ui.ctx().content_rect().bottom() - ui.max_rect().top() - 160.0).max(120.0);
+    egui::ScrollArea::vertical().max_height(max).auto_shrink([true, true]).show(ui, |ui| {
+        for (label, key) in BUILTIN_ASPECTS {
+            let hidden = app.session.crop_aspects.is_hidden(key);
+            if editing {
+                if matches!(key, "free" | "original") {
+                    // always in the menu: shown ticked, and not to be unticked
+                    ui.add_enabled(false, egui::Checkbox::new(&mut true, crate::i18n::tr(label)));
+                    continue;
+                }
+                let mut shown = !hidden;
+                let r = ui.checkbox(&mut shown, crate::i18n::tr(label));
+                register(ui, format!("check:cropAspectShow:{key}"), r.rect);
+                if r.changed()
+                    && let Err(e) = app.run("crop.hideAspect", json!({"aspect": key, "hidden": !shown}))
+                {
+                    app.toast_error(ui.ctx(), e);
+                }
+            } else if !hidden {
+                let r = ui.button(crate::i18n::tr(label));
+                register(ui, format!("cropAspectPreset:{key}"), r.rect);
+                if r.clicked() {
+                    let _ = app.run("crop.aspect", json!({"aspect": key}));
+                    ui.close();
+                }
+            }
+        }
+        let custom = app.session.crop_aspects.custom.clone();
+        if !custom.is_empty() {
+            ui.separator();
+        }
+        let last = custom.len().saturating_sub(1);
+        for (i, a) in custom.iter().enumerate() {
+            if editing {
+                ui.horizontal(|ui| {
+                    ui.label(&a.name);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if text_button(ui, &format!("cropAspectDelete-{i}"), "Delete", false).clicked()
+                            && let Err(e) = app.run("crop.deleteAspect", json!({"name": a.name}))
+                        {
+                            app.toast_error(ui.ctx(), e);
+                        }
+                        if i < last
+                            && text_button(ui, &format!("cropAspectDown-{i}"), "↓", false).clicked()
+                            && let Err(e) = app.run("crop.moveAspect", json!({"name": a.name, "to": i + 1}))
+                        {
+                            app.toast_error(ui.ctx(), e);
+                        }
+                        if i > 0
+                            && text_button(ui, &format!("cropAspectUp-{i}"), "↑", false).clicked()
+                            && let Err(e) = app.run("crop.moveAspect", json!({"name": a.name, "to": i - 1}))
+                        {
+                            app.toast_error(ui.ctx(), e);
+                        }
+                    });
+                });
+            } else {
+                let r = ui.button(&a.name);
+                register(ui, format!("cropAspectSaved:{i}"), r.rect);
+                if r.clicked() {
+                    let _ = app.run("crop.aspect", json!({"aspect": a.aspect}));
+                    ui.close();
+                }
+            }
+        }
+    });
+    ui.separator();
+    if !editing {
+        custom_aspect(app, ui);
+        ui.separator();
+    }
+    if text_button(ui, "cropAspectEdit", if editing { "Done" } else { "Edit List" }, editing).clicked() {
+        ui.data_mut(|d| d.insert_temp(editing_id, !editing));
+    }
 }
 
 pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
@@ -78,19 +190,19 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         });
         ui.horizontal(|ui| {
             ui.label(crate::i18n::tr("Aspect Ratio"));
-            let cur = aspect_label(app.crop_tool_aspect(), original);
+            let cur = aspect_label(app.crop_tool_aspect(), original, &app.session.crop_aspects.custom);
             let t = Tokens::get(ui.ctx());
-            let r = crate::widgets::dropdown(ui, "cropAspect", crate::i18n::tr(&cur), t.font(12.5), t.text);
+            // a saved ratio's name is the user's own words: not looked up for a translation
+            let saved = app.session.crop_aspects.custom.iter().any(|a| a.name == cur);
+            let text = if saved { cur.as_str() } else { crate::i18n::tr(&cur) };
+            let r = crate::widgets::dropdown(ui, "cropAspect", text, t.font(12.5), t.text);
 
-            egui::Popup::menu(&r).show(|ui| {
-                for (label, a) in ASPECT_PRESETS {
-                    if ui.button(crate::i18n::tr(label)).clicked() {
-                        let _ = app.run("crop.aspect", json!({"aspect": a}));
-                    }
-                }
-                ui.separator();
-                custom_aspect(app, ui);
-            });
+            if r.clicked() {
+                // the menu opens as a list to pick from, not in the middle of an edit
+                ui.data_mut(|d| d.insert_temp(egui::Id::unique(ASPECT_EDITING), false));
+            }
+            // picking a ratio closes it; editing the list or typing in its fields does not
+            egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| aspect_menu(app, ui));
             let locked = app.crop_tool_aspect().is_some();
             if text_button(ui, "cropLock", if locked { "Locked" } else { "Lock" }, locked).clicked() {
                 let _ = app.run("crop.aspect", json!({"aspect": "toggle"}));

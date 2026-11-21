@@ -17,7 +17,7 @@ mod info;
 mod keywords;
 
 #[cfg(test)]
-use crop::aspect_label;
+pub(crate) use crop::aspect_label;
 pub(crate) use crop::tool_overlay_options;
 use crop::{crop, red_eye, remove};
 #[cfg(test)]

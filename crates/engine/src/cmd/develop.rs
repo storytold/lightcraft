@@ -187,7 +187,7 @@ fn numbers(v: Option<&Value>) -> Option<Vec<f64>> {
 
 /// A width × height lock stored as hundredths. Rejects non-finite, non-positive and
 /// extreme (beyond 20:1) shapes, which would give an empty or unusable crop.
-fn aspect_tuple(c: &str, x: f64, y: f64) -> Result<(u32, u32)> {
+pub(crate) fn aspect_tuple(c: &str, x: f64, y: f64) -> Result<(u32, u32)> {
     let ratio = x / y;
     if !(x.is_finite()
         && y.is_finite()
@@ -202,6 +202,10 @@ fn aspect_tuple(c: &str, x: f64, y: f64) -> Result<(u32, u32)> {
     let (a, b) = (to(x), to(y));
     if a < 1.0 || b < 1.0 || a > f64::from(u32::MAX) || b > f64::from(u32::MAX) {
         return Err(bad(c, "aspect numbers are out of range"));
+    }
+    // what is stored is the rounded pair: `[1, 0.044]` is 22.7:1 once it is `(100, 4)`
+    if !(1.0 / lightcraft_geom::MAX_RATIO..=lightcraft_geom::MAX_RATIO).contains(&(a / b)) {
+        return Err(bad(c, "aspect needs two positive numbers with a ratio between 1:20 and 20:1"));
     }
     Ok((a as u32, b as u32))
 }
