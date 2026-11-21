@@ -198,13 +198,13 @@ fn welcome_body(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, page: &mut u
     });
 }
 
-/// The import review and Settings keep window ids of their own, so the size each is given
-/// doesn't carry over to the other dialogs.
+/// Import review, Print, Settings, and What's New keep their own window sizes.
 fn window_id(dialog: &Dialog) -> egui::Id {
     egui::Id::unique(match dialog {
         Dialog::Import { .. } => "lightcraft-import-dialog",
         Dialog::Print => "lightcraft-print-dialog",
         Dialog::Settings { .. } => "lightcraft-settings-dialog",
+        Dialog::WhatsNew => "lightcraft-whats-new-dialog",
         _ => "lightcraft-dialog",
     })
 }
@@ -287,6 +287,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     let mut body_h = None;
     // before the window: drawing it closes a dropdown the click lands outside of
     let popup_was_open = egui::Popup::is_any_open(ctx);
+    let notes_width = matches!(dlg, Dialog::WhatsNew).then(|| (screen.width() - 2.0 * DIALOG_SCREEN_MARGIN).clamp(1.0, 680.0));
     let shown = egui::Window::new(crate::i18n::tr(&title))
         .id(window_id)
         .collapsible(false)
@@ -295,7 +296,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         .resize(|r| if import { r.default_height(crate::import::DIALOG_SIZE[1]) } else { r })
         .frame(frame)
         .anchor(if settings { egui::Align2::CENTER_TOP } else { egui::Align2::CENTER_CENTER }, [0.0, if settings { top } else { 0.0 }])
-        .min_width(widest)
+        .min_width(notes_width.unwrap_or(widest))
+        .max_width(notes_width.unwrap_or(f32::INFINITY))
         .default_width(match dlg {
             Dialog::Import { .. } => crate::import::DIALOG_SIZE[0],
             Dialog::SmartRules { .. } => 680.0,
@@ -307,7 +309,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             Dialog::Welcome { .. } => 460.0,
             Dialog::LensDatabase { .. } => 440.0,
             Dialog::ManageEffects { .. } => 560.0,
-            _ => 380.0,
+            _ => notes_width.unwrap_or(380.0),
         })
         .show(ctx, |ui| {
             // Disabled, not skipped: the dialog keeps its layout and state, but a raw event in the
