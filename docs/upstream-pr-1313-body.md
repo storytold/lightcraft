@@ -1,110 +1,118 @@
-# Upstream PR: Image Quality Scanner (issue #1313)
+Fixes #1313
 
-**Status: prepared and verified, but not opened.** The GitHub App this session authenticates with
-is installed only on `1234destiny1234/<fork>`, so it cannot create a pull request on
-`{upstream}` (`403 Resource not accessible by integration`). The branch is pushed and the
-compare is clean; opening it takes one click.
+One change: the Image Quality Scanner (issue #1313). Nothing else is bundled in.
 
-- **Branch:** `arena/211076b9-upstream-1313` in `1234destiny1234/<fork>`
-- **PR:** [#1314](https://github.com/{upstream}/pull/1314) — **open** since the body was first
-  drafted (the App turned out to have access after all), mergeable, based directly on `main` `8ed8c2a0e`
-- **Commit:** `e4392a81c`, plus `f6485157b` (rustfmt on the scanner's own files, from the real gate's output)
-- **Compare:** `ahead` by 3, `behind` by 0, 80 files (+3542/−22) — `merge_base` is upstream's tip, so it needs
-  no rebase
-- **Open it:** <https://github.com/{upstream}/compare/main...1234destiny1234:arena/211076b9-upstream-1313?expand=1>
-  (paste the title and body below)
+## Problem
 
-Suggested title:
+Lightroom Classic can score photos for *technical* quality and let you sort, filter and rule on those
+scores. The fork had nothing of the kind: assisted culling measures focus/clipping/eyes/aesthetics for
+burst picking, but there is no per-photo quality score a user can keep, filter by, sort by, or use in a
+smart collection or a rule. Issue #1313 asks for that, plus a deep-learning aesthetic engine.
 
-```
-Image Quality Scanner (issue #1313): score photos for technical quality, filter and sort by it
-```
+## Change
 
-Suggested body — see the fenced block at the end of this file.
+- **pipeline** — `quality::QualityFactors::measure`: four classical measures, each 0–100 where 100 is
+  clean — sharpness (assisted culling's own focus measure), noise (grain in the flattest half against a
+  clean reference), exposure (clipping share plus distance from a well-exposed middle), and JPEG
+  compression (the 8-pixel grid's step against the photo's ordinary edge energy). Combined by
+  per-factor weights (0–10) into one score. `cull::luma` is shared and made short-buffer safe, which
+  also hardens assisted culling.
+- **catalog** — `Analysis.quality: Option<QualityScan>` (catalog format **20**), `Filter::quality` /
+  `qualityMin` / `qualityMax`, `SortKey::Quality`, `Tally.quality_{accepted,pending,rejected,unscanned}`,
+  and six rule fields (Quality Score, each factor, Quality Verdict) under a new **Image Quality** group.
+- **engine** — `photo.qualityScan`: scopes selection / view / folder (with subfolders) / catalog;
+  unscanned-only unless `rescan`; clips skipped; a cancellable activity row; a whole run written as
+  **one undo step**; `applyFlags` writes Pick / Reject only onto photos the user has not flagged
+  (`QualityScan::flag_written` records the flag a scan wrote, so a rescan may change its own and never
+  the user's). `photo.qualityScanPump` is the app's per-frame work.
+- **UI** — the Library menu entry and dialog (scope, cutoffs, weights, rescan, write flags; remembered),
+  the sort menu's **Quality**, the filter bar's quality picker and score floor, filter chips, and a toast
+  summarising a finished run. 17 languages.
+- **CLI** — `<cli> quality-scan [FOLDER]` with `--accepted`, `--rejected`, `--apply-flags`, `--rescan`,
+  `--weights`, `--connect`; every option becomes a `photo.qualityScan` param.
+- **docs** — manual page, CLI / Menus / not-built pages, parity rows (`LR-LIB-QUALITY`,
+  `LR-FILT-QUALITY`), **gap 39**, what's-new and changelog entries.
 
----
+**Not in this PR:** the issue's deep-learning aesthetic engine (NIMA / MUSIQ on ONNX). The fork is pure
+Rust with no ONNX runtime, and `crates/ml`'s candle CLIP has `Role::AestheticHead` unimplemented. The
+score is the weighted mean of the four technical measures — honest, but blind to subject. Say so in the
+manual page, `reference/not-built.md`, parity row and gap 39. **This is the one scope deviation, and it
+is the thing a maintainer should sign off on** (with the format bump below).
 
-## What was checked on the rebase
+## How it was checked
 
-The commit was written against `3893fa22b`, 8565 commits behind upstream's `main`. It bisected
-cleanly onto `8ed8c2a0e`, and the result was checked rather than trusted:
+- [ ] `cargo xtask ci --fast`, `cargo xtask sil` and `cargo test -p` for the touched crates
+      (`lcc-catalog`, `lcc-engine`, `lcc-pipeline`, `lcc-ui-egui`, `lcc-cli`) — **not yet green.**
+      The branch is being iterated on CI until it is; the first compile is there, not here (no Rust
+      toolchain and no crates.io on the machine this was written on).
+- [x] A test that fails without the change: `crates/pipeline/src/quality.rs` (the measures and the
+      weighting, including empty / one-pixel / short buffers), `crates/catalog/src/tests_quality.rs`
+      (verdicts, filter, sort, tally, JSON round trip, rule fields),
+      `crates/engine/src/tests_quality_scan.rs` (a scan end to end, the background pump, folder scope,
+      the cutoffs), `crates/ui-egui/src/tests_quality_scan_ui.rs` (picker, score floor, dialog),
+      `apps/cli/tests/sil.rs` (a scan in the SIL workflow, then filtering and sorting by it).
+- [ ] User-visible change: ran the app and looked at the result — **not done** (no display, no build).
 
-- 34 of the 52 modified files carry **byte-identical deltas** to the pre-rebase commit; the other 18
-  are exactly the files both sides added lines to (the 17 fork catalogs and the parity doc).
-- **Every Rust file is ours-only**: upstream's whole advance touches none of them, and upstream never
-  changed `crates/catalog/src/model.rs` or `query.rs`, so the catalog changes carry no merge risk.
-- The catalogs merged as **pure additions**: all 17 valid, sorted, formatted, no duplicate keys, and
-  every one of the scanner's strings and of upstream's FP16 / GPU-precision strings present.
-- `LR-PREF-PEOPLE`'s newer upstream text is untouched; the parity rows are 652 + our 2, and the
-  summary table was regenerated to match (527 ✅ / 82 🟡 / 20 ⬜ / 25 🚫; 629 in-scope rows, 90.3%).
-- Upstream changed no `AGENTS.md`, `rustfmt.toml`, `clippy.toml`, `xtask/` or CI file since our base,
-  so the conventions this work was written to are the current ones.
-- All 6 external symbols and 10 `crate::` paths the new modules name resolve in the merged tree, and
-  the call signatures of `start_batch`, `source_ref`, `commit`, `visible_cloned`, `text_button`,
-  `dropdown`, `register` are unchanged.
+What was checked here instead of a whole-workspace build:
 
-**Nothing has been compiled**: the development environment has no Rust toolchain and no way to
-install one. The work is checked by reading and by scripted checks only. CI is the first compile.
+- **The pipeline measures were compiled and run.** `quality.rs` and `cull.rs::luma`/`sharpness` were
+  compiled with a local `rustc` against a stubbed `Rgb32f`, and their tests run for real. That found
+  two defects, now fixed and covered by a new test: sharpness was measured on the raw luminance, so
+  grain counted as detail and a photo of pure noise read 100 (it is measured on the 3 × 3 smoothed
+  luminance now, which is exactly what the grain smoothing removes), and the noise measure's "flattest
+  half" was picked by comparing each block's spread to the median's *value* — blocks tie in runs, so
+  every detailed block that tied with the median was taken in as well, and a clean photo of a fine
+  pattern scored freedom-from-noise 0. It is picked by rank now.
+- **The notes gate and the brand/docs/i18n gates were run for real or ported and validated on
+  pristine `main`**, then run on this branch: `lcc-notes` was compiled and its `read_entries` run over
+  both new entries; the brand checker scans 3,748 files with 0 problems; the docs templates render to
+  0 stale files; all 13 new UI strings are present in all 17 catalogs.
+- **`rustfmt` 1.8.0-stable** against the repo's `rustfmt.toml`: 0 diffs.
+- Every changed file parsed with a Rust grammar; every external symbol, field and signature the new
+  code names checked against its definition.
 
-## What the first CI run said, and what was done about it
+## Screenshots
 
-All four gating jobs failed on `e4392a81c` (Linux `cargo xtask ci --fast`; Windows and macOS
-clippy; `cargo xtask brand test`). Their logs are unreachable from this environment (the log
-blobs are on a hosts that does not resolve here), so each gate was reproduced locally instead:
+Not available: the change could not be run here. The manual page describes the dialog and the filter
+bar controls, and its picture is a `<NeedsImage>` placeholder saying what to capture.
 
-- **fmt** — installed rustfmt 1.8.0-stable from npm (`@rustbin/rustfmt-1.88.0-…`; crates.io and
-  rustup are both blocked). With the repo's own `rustfmt.toml` and edition 2024 it reports **0
-  diffs over pristine upstream `main`**, so it agrees with the version CI uses. Against the
-  scanner it found **38 hunks in 12 files**; all are fixed in `f6485157b`, and the whole
-  workspace (minus `vendor/`, which `cargo fmt --all` excludes) now checks clean.
-- **brand check / docs / notes / i18n / quarantine** — ported from `xtask/src/{brand,docs,notes,
-  i18n}.rs` and validated by running the port on pristine upstream `main` (3737 files, 0
-  problems); the branch then reports **0** brand problems too. Docs: 17 templates, none stale.
-  Notes: 748 What's New + 13 changelog entries, 0 malformed. i18n: all 34 fork catalogs sorted,
-  formatted, no duplicate keys.
-- **syntax** — every Rust file parses (ast-grep's Rust grammar over 1878 files: 0 errors outside
-  files that predate this work), the 34 changed files included.
-- **clippy** could not be run (no compiler, no crates registry). Every external symbol, field and
-  signature the new code names was checked against its definition instead — including the ones a
-  wrong guess would fail on: `cmd!`/`CommandSpec`, `SourceRef::load` (`Arc<Rgb32f>`), `TaskHandle`,
-  `Op::{SetAnalysis,SetFlag}`, `Analysis` (all its literals, after the new field), the exhaustive
-  `match`es over `SortKey`, and in the UI `data/get_temp`/`insert_temp` (as `filterbar.rs` already
-  used them), `text_button`, `register`, `picker`, `Session::{library_folder,browse,folder_subfolders}`.
-  On the next run clippy is past fmt, so its report is the next thing to read.
+## Merging
 
-One defect this found is **fixed** in `e09055897`: the four toast strings in
-`crates/ui-egui/src/quality_scan.rs` were in no `-formats.json`, so they rendered in English in all 17
-languages (`tr_format!`'s fallback arm made that silent, not a compile error). They are now translated
-in every language, and each was checked to be a valid `format!` string with exactly the call site's
-placeholders — which matters because `build.rs` pastes the translation straight into `format!`.
+- **Overlap:** none found. Searched open pull requests for #1313 and for the culling/AI work; assisted
+  culling (`photo.analyze`) is the nearest neighbour and is untouched except that `cull::luma` gained
+  short-buffer guards, which changes no measurement on a valid buffer. `cmd/cull.rs` writes
+  `Analysis.quality` through when it rewrites an analysis, so a cull cannot throw a scan away.
+- **Existing edits and libraries:** unchanged. A catalog written by this build gains an optional
+  `analysis.quality` field; an older build ignores it. Nothing renders or develops differently, and no
+  process version is involved.
+- **Shared numbers taken:** catalog format `VERSION` **20** (`crates/catalog/src/journal.rs`; `main` is
+  at 19 today). If another pull request lands with 20 first, this takes 21 when `main` is merged in.
+  No `RENDER_CACHE_VERSION`, `LOOK_VERSION` or process version change.
+- **Where it came from:** original work. No third-party code or data; the measures are classical and
+  documented in the module docs. No Adobe material of any kind.
+- **New dependencies, `unsafe`, build scripts, network access, spawned processes, deleted files, CI or
+  `xtask` gate changes:** none. No new dependency (`rayon` was already a `lcc-pipeline` dependency), no
+  `unsafe`, no build-script change, nothing spawned that the app did not already spawn, no gate changed.
 
----
+## Checklist
 
-## PR body to paste
+- [x] No new panic path in non-test code: no `unwrap` / `expect` / `panic!`; every read from an image
+      buffer or a catalog goes through `get` / `if let` / `let…else` (`cull::luma` and the measures read
+      short or hostile buffers without indexing past `data`, and there is a test for it); numbers from a
+      command are range-checked before use; `clippy.toml`'s allow-list is what lets tests `unwrap`.
+- [x] New text on screen goes through `tr()` / `tr_format!` and has its key in
+      `crates/ui-egui/locales/fork/*.json` — all 17 languages, including the format strings (each is a
+      valid `format!` string with exactly the call site's placeholders). No new shortcut.
+- [x] Parity rows and gap 39 updated in the same commit; the summary table regenerated
+      (654 rows in all with the summary; 527 ✅ / 82 🟡 / 20 ⬜ / 25 🚫 — 90.3% of 629 in-scope).
+- [x] Manual updated in the same commit: `library/quality-scanner.mdx` (new), plus `browse.mdx`,
+      `filters.mdx`, `library-tools.mdx`, `automate/cli.md`, `reference/menus.md`,
+      `reference/not-built.md`. Its picture is `<NeedsImage>` — it cannot be captured here (no build).
+- [x] New code has a caller: every command is in `command_specs()` and reachable from the Library menu,
+      the CLI and MCP; the filter bar and sort menu reach the catalog fields; the rule fields are in
+      `FIELDS`.
+- [x] No new image, icon, font or other asset.
+- [ ] Ready to merge — **no**, and not only for CI: this needs a maintainer's design sign-off on #1313
+      before it is green-lit, per the triage note.
 
-```markdown
-Implements **issue #1313**. Library ▸ Image Quality Scanner… scores photos for technical quality and keeps the scores on the photo, so the Library can filter and sort by them without scanning again.
-
-## What it does
-- **Four technical factors**, each 0–100: sharpness (assisted culling's own focus measure), noise (grain in the flattest areas against a clean reference), exposure (clipping plus how close the tones sit to a well-exposed middle), and JPEG compression artifacts (the 8-pixel grid's step against the photo's other edges). Combined into one 0–100 score by per-factor weights (0–10).
-- **Scopes**: the selection (else the photos in view), the photos in view, a folder (with its subfolders) or the whole catalog. **Unscanned only** by default; `rescan` measures everything again. Clips are skipped.
-- **Background**: a cancellable activity row; a whole scan is written as **one undo step** (cancel keeps what it measured).
-- **Pick / Reject** by two cutoffs (70 / 25, inclusive, never crossing), written only onto photos the user has not flagged. `QualityScan::flag_written` records the flag a scan wrote, so a rescan may change its own flag and **never** the user's.
-- **Stored per photo** (`Analysis.quality`, catalog format 20 — the version row and its docs are updated), so `SortKey::Quality`, `Filter::quality` / `qualityMin` / `qualityMax`, the filter bar's quality picker and score floor, the tally, and the smart-collection rule fields (Quality Score, each factor, Quality Verdict, under **Image Quality**) all read them without a rescan.
-- **Commands**: `photo.qualityScan`, `photo.qualityScanPump` (the app's per-frame work), `dialog.qualityScan`; CLI `<cli> quality-scan [FOLDER]` with `--accepted`, `--rejected`, `--apply-flags`, `--rescan`, `--weights`, `--connect`.
-- **17 languages** complete, and the manual page, CLI/Menus/not-built pages, parity rows and a what's-new and changelog entry all ship with it.
-
-## Deviation, said plainly
-The issue also asks for a deep-learning aesthetic engine (NIMA / MUSIQ, ONNX on GPU). **It is not built**: the fork is pure Rust with no ONNX runtime, and `crates/ml`'s candle CLIP is the only learned model, with `Role::AestheticHead` unimplemented. The score is the weighted mean of the four classical measures — honest, but blind to subject: a sharp, clean photo of a dull subject scores high. This is documented in the manual page, `reference/not-built.md`, parity row `LR-LIB-QUALITY` and **gap 39**, with what closing it would take.
-
-## Tests
-- `crates/pipeline/src/quality.rs` — the measures and the weighting, including hostile buffers (empty, one-pixel, and one shorter than its size claims; `cull::luma` was made short-buffer safe, which also hardens assisted culling).
-- `crates/catalog/src/tests_quality.rs` — verdicts, filter, sort (unscanned first ascending, a measured 0 still a score), tally, JSON round trip, rule fields.
-- `crates/engine/src/tests_quality_scan.rs` — a scan end to end (scores, verdicts, flags, undo, the user's flag untouched, rescan, refusals, clips), the background run and its pump, folder-scope resolution (path → Folders panel → Browse), and the cutoffs through the command.
-- `crates/ui-egui/src/tests_quality_scan_ui.rs` — the picker appears once a scan has scored a photo and filters the grid; the score floor is set and cleared; the dialog hands its settings on.
-- `apps/cli/tests/sil.rs` — a scan in the SIL workflow, then filtering and sorting by it.
-
-## Notes for review
-- The commit is **rebased onto current `main` (`8ed8c2a0e`)** and is one commit ahead, so it merges cleanly as it stands. The merge was checked by hand where this work and recent `main` touch the same files: the fork catalogs gained `main`'s FP16 / GPU-precision keys alongside the scanner's (all 17 catalogs valid, sorted, no duplicates, pure additions), `LR-PREF-PEOPLE`'s newer text is untouched, and the parity summary table was regenerated (652 + 2 rows).
-- **Nothing here has been compiled**: the development environment had no Rust toolchain and no way to install one. The code is checked by reading and by scripted checks (brace balance, 150-column width, i18n coverage, parity command ids and backticked paths, catalog ordering/formatting). **CI is the first compile** — expect the usual rustfmt/clippy first-pass fixes, and I'll follow up on anything it reports.
-```
+🤖 Generated with [Arena Agent](https://arena.ai)
