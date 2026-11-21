@@ -65,6 +65,20 @@ shows the destination library, the number of records added, missing originals an
 readable in the same result window. If another dialog is open, the result waits until that dialog closes. The result
 is also available through `library.importLightroom {"status":true}` during that session.
 
+**Photos first, originals afterwards (issue #1303).** The desktop import commits the catalog's photos as soon as the
+catalog is read, without opening their original files: ratings, flags, labels, keywords, collections, capture
+times, pixel sizes and mapped edits all come from the catalog, so the library is browsable within minutes even when
+the originals are on slow or external drives. Each photo starts "original not yet read" (it has no content hash).
+The app then reads the originals in the background, 500 at a time, as one **Reading originals** row on the activity
+stack that can be stopped; each batch is saved as soon as it is read, filling in only what needs the file (content
+hash, file size and dimensions, empty camera fields, embedded lens corrections, as-shot white balance), as Reload
+from Disk would. Ratings, keywords, develop settings and history are kept, and none of it is an undo step. A stopped,
+interrupted or crashed run resumes the next time the library opens; a file that can't be read (an offline drive) is
+tried again then. Scripts get the same with `library.importLightroom {"readOriginalsLater": true}` followed by
+`library.readOriginals {limit?}` → `{checked, updated, unreadable, remaining}`; without `readOriginalsLater`, the
+engine command still reads every original before it commits. Because originals aren't read before the commit,
+two catalog entries whose files have identical bytes are no longer matched by content during the import.
+
 Original files are referenced in place. Ratings, picks/rejects, color labels, XMP metadata,
 hierarchical keywords, regular collections/collection sets, smart collections, saved prints, folder stacks,
 virtual copies and mapped develop settings are imported. An image's caption is taken from Lightroom's own IPTC table (`AgLibraryIPTC`) when it has one
