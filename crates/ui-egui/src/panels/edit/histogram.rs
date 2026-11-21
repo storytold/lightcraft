@@ -1,10 +1,9 @@
 use super::hdr_flow::{LayoutFlow, hdr_histogram_key, sdr_histogram_key};
-#[cfg(test)]
-use super::sliders::reset_tip;
 use super::{
     Align2, Color32, Histogram, Icon, LightcraftApp, PhotoId, Rect, RichText, RightPanel, Sense, Slot, Stroke, Tokens, divider, json, paint, pos2,
     register, vec2,
 };
+use crate::menu_item::MenuItem;
 
 // ------------------------------------------------------------------------------ histogram
 
@@ -235,14 +234,14 @@ pub(super) fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
             let mut pick = false;
             let combo = crate::widgets::combo_box("proof-space").width(170.0).selected_text(shown).show_ui(ui, |ui| {
                 for s in OutputSpace::ALL {
-                    if ui.selectable_label(device.is_none() && cur == s, s.label()).clicked() {
+                    if MenuItem::new(s.label()).selected(device.is_none() && cur == s).show(ui).clicked() {
                         let _ = app.run("view.softProof", json!({"space": s}));
                     }
                 }
                 if let Some(n) = &device {
-                    let _ = ui.selectable_label(true, n);
+                    let _ = MenuItem::new(n).selected(true).inert().show(ui);
                 }
-                if app.services.pick_display_profile.is_some() && ui.selectable_label(false, crate::i18n::tr("Other…")).clicked() {
+                if app.services.pick_display_profile.is_some() && MenuItem::picker(crate::i18n::tr("Other…")).show(ui).clicked() {
                     pick = true;
                 }
             });
@@ -296,6 +295,7 @@ fn clip_button_colors(t: &Tokens, active: bool, hovered: bool, clipped: bool) ->
 
 #[cfg(test)]
 mod tests {
+    use super::super::sliders::reset_tip;
     use super::*;
 
     /// The two clipping chevrons were a fixed dark-grey tile (`from_gray(60)`) with a dimmed mark: on

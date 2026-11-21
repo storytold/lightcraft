@@ -14,10 +14,11 @@ use lightcraft_engine::slide_template::{PREVIOUS, SlideLook, Template};
 use serde_json::json;
 
 use crate::LightcraftApp;
+use crate::menu_item::MenuItem;
 use crate::panels::settings::{heading, hint};
 use crate::text_field::TextField;
 use crate::theme::Tokens;
-use crate::widgets::{register, register_response};
+use crate::widgets::register_response;
 
 /// The user templates list is at most this tall (it scrolls past it).
 const USER_LIST_H: f32 = 180.0;
@@ -150,8 +151,7 @@ fn template_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, tpl: &Te
 
 /// A menu entry registered as `button:{id}`.
 fn item(ui: &mut egui::Ui, id: &str, label: &str, enabled: bool) -> bool {
-    let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)));
-    register(ui, format!("button:{id}"), r.rect);
+    let r = MenuItem::new(crate::i18n::tr(label)).enabled(enabled).widget(format!("button:{id}")).show(ui);
     r.clicked()
 }
 
