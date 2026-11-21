@@ -20,6 +20,11 @@ log = { workspace = true }
 chrono = { workspace = true }
 web-time = { workspace = true }
 
+[features]
+# `safe_file::without_hard_links`: test-only fault injection, turned on by the `[dev-dependencies]`
+# of the crates whose tests use it, so a shipped binary can't call it.
+fault-injection = []
+
 [target.'cfg(windows)'.dependencies]
 winapi-util = { workspace = true }
 
