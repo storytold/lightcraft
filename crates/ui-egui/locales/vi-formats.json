@@ -99,6 +99,7 @@
   "Import warnings ({n}):\n{warnings}": "Cảnh báo khi nhập ({n}):\n{warnings}",
   "Imported {e} mask effect{} (Masking ▸ Effect)": "Imported {e} mask effect{} (Masking → Effect)",
   "Imported {name}": "Imported {name}",
+  "Moved {name} to {folder}": "Đã chuyển {name} vào {folder}",
   "Imported {n} point curve preset{}": "Đã nhập {n} thiết lập sẵn đường cong điểm{:.0}",
   "Imported {n} preset{}": "Đã nhập {n} thiết lập sẵn{:.0}",
   "Imported {n} preset{}, {f} file{} not readable": "Đã nhập {n} thiết lập sẵn{:.0}, {f} tệp{:.0} không đọc được",

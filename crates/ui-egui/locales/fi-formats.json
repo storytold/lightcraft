@@ -99,6 +99,7 @@
   "Import warnings ({n}):\n{warnings}": "Tuontivaroitukset ({n}):\n{warnings}",
   "Imported {e} mask effect{} (Masking ▸ Effect)": "Tuotuja maskitehosteita: {e}{:.0} (Maskaus → Tehoste)",
   "Imported {name}": "{name} tuotu",
+  "Moved {name} to {folder}": "{name} siirretty kansioon {folder}",
   "Imported {n} point curve preset{}": "Tuotuja pistekäyrän esiasetuksia: {n}{:.0}",
   "Imported {n} preset{}": "Tuotuja esiasetuksia: {n}{:.0}",
   "Imported {n} preset{}, {f} file{} not readable": "Tuotuja esiasetuksia: {n}{:.0}, ei luettavissa olevia tiedostoja: {f}{:.0}",
