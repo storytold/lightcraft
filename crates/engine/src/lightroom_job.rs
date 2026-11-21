@@ -207,8 +207,10 @@ pub struct LightroomJob {
 impl LightroomJob {
     /// Snapshot session state only.  This constructor performs no filesystem work.
     pub fn new(s: &mut crate::Session, path: PathBuf, update_existing: bool) -> crate::Result<Self> {
-        // a photo deleted here stays deleted: the catalog's record is matched, not restored
-        let opts = ImportOptions { mode: ImportMode::Add, on_deleted: crate::import::OnDeleted::Skip, ..ImportOptions::default() };
+        // a photo deleted here stays deleted: the catalog's record is matched, not restored; a
+        // duplicate by content becomes a record of its own, so its file and sidecar are read (#2589)
+        let opts =
+            ImportOptions { mode: ImportMode::Add, on_deleted: crate::import::OnDeleted::Skip, read_duplicates: true, ..ImportOptions::default() };
         let import = ImportJob::new(s, opts)?;
         let archive_dir = s.library.as_ref().filter(|library| library.on_disk).map(|library| library.dir.join("Interop"));
         let progress = LightroomProgress {
