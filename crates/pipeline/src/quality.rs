@@ -376,12 +376,16 @@ mod tests {
     #[test]
     fn empty_and_tiny_images_measure_cleanly() {
         let poisoned = image(64, 64, |x, y| {
-            match (x / 8, y / 8) {
-                (0, 0) => f32::NAN,
-                (1, 0) => f32::INFINITY,
-                (2, 0) => f32::NEG_INFINITY,
-                (3, 0) => f32::MAX,
-                _ => 0.5,
+            if x < 8 && y < 8 {
+                f32::NAN
+            } else if x < 16 && y < 8 {
+                f32::INFINITY
+            } else if x < 24 && y < 8 {
+                f32::NEG_INFINITY
+            } else if x < 32 && y < 8 {
+                f32::MAX
+            } else {
+                0.5
             }
         });
         // (a buffer that is entirely unusable, too: no finite sample to measure at all)
