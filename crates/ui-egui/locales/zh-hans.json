@@ -1225,6 +1225,7 @@
   "Rendering": "正在渲染",
   "Rendering…": "正在渲染…",
   "Reset": "重置",
+  "Delete Control Point": "删除控制点",
   "Reset All Curves": "重置所有曲线",
   "Reset Before to Import State": "将修改前重置为导入时的状态",
   "Reset Control": "重置控件",

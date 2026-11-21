@@ -96,6 +96,12 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+### Delete Control Point on the point curve
+- Right-clicking a point on a point curve now offers Delete Control Point, as in Lightroom Classic's Tone Curve
+  panel; before, the menu only had the two resets and a point could be removed only by double-clicking it. It works on
+  the RGB, red, green and blue curves, takes the point out as one undo step, and is not offered over empty graph or the
+  two end points.
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens
