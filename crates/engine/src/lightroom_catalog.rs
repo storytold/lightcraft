@@ -33,6 +33,36 @@ fn number(r: &Row, k: &str) -> i64 {
 pub(crate) fn number_for_job(r: &Row, k: &str) -> i64 {
     number(r, k)
 }
+/// The photo a side-table row (develop settings, XMP, keywords, history, snapshots, collection members) belongs to:
+/// its `image` as a whole number, or `None` when that is missing, NULL, text or a fraction. [`number`] would read
+/// those as 0, giving the row to a photo whose `id_local` is 0, and 2.5 as 2, giving it to photo 2.
+fn image_of(r: &Row) -> Option<i64> {
+    let n = r.get("image")?.as_number()?;
+    let f = n.as_f64()?;
+    // An integer goes through f64 as [`number`] takes a photo's `id_local`, so a row and its photo get the same key
+    // past 2^53 too (read exactly, the row would miss its rounded photo and be lost without a warning).
+    if n.is_i64() {
+        return Some(f as i64);
+    }
+    // (2^63 is the first value past i64::MAX; a cast would saturate onto a real id)
+    (f.fract() == 0.0 && f >= i64::MIN as f64 && f < 9_223_372_036_854_775_808.0).then_some(f as i64)
+}
+/// `rows` of `table` with the photo each belongs to ([`image_of`]). Rows that name no photo are left out, with one
+/// warning for the table.
+fn by_image(table: &str, rows: Vec<Row>, warnings: &mut Vec<String>) -> Vec<(i64, Row)> {
+    let total = rows.len();
+    let keyed: Vec<_> = rows.into_iter().filter_map(|r| Some((image_of(&r)?, r))).collect();
+    warn_unkeyed(table, total - keyed.len(), "skipped", warnings);
+    keyed
+}
+/// One warning for the `count` rows of `table` whose `image` names no photo; `outcome` says what became of them.
+fn warn_unkeyed(table: &str, count: usize, outcome: &str, warnings: &mut Vec<String>) {
+    match count {
+        0 => {}
+        1 => warnings.push(format!("{table}: 1 record {outcome}; its image is not a photo id")),
+        n => warnings.push(format!("{table}: {n} records {outcome}; their image is not a photo id")),
+    }
+}
 fn key(path: &str) -> String {
     let p = path.replace('\\', "/");
     if cfg!(windows) { p.to_lowercase() } else { p }
@@ -107,18 +137,8 @@ impl Reader {
         let mut warnings = Vec::new();
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
-            let image = row
-                .values
-                .iter()
-                .zip(columns)
-                .find_map(|(value, column)| {
-                    (column == "image").then_some(match value {
-                        SqlValue::Integer(n) => *n,
-                        _ => 0,
-                    })
-                })
-                .unwrap_or(0);
             let mut mapped = Row::new();
+            let mut errors = Vec::new();
             for (column, value) in columns.iter().zip(row.values) {
                 let value = match value {
                     SqlValue::Null => Some(Value::Null),
@@ -128,7 +148,7 @@ impl Reader {
                     SqlValue::Blob(bytes) if column == "xmp" => match decode_xmp_bytes(&bytes) {
                         Ok(packet) => Some(Value::String(packet)),
                         Err(error) => {
-                            warnings.push(format!("image {image}: {error}"));
+                            errors.push(error);
                             None
                         }
                     },
@@ -138,6 +158,9 @@ impl Reader {
                     mapped.insert(column.clone(), value);
                 }
             }
+            // a row that names no photo is skipped with the table's warning; its error is not one of photo 0's
+            let label = image_of(&mapped).map_or_else(|| "Adobe_AdditionalMetadata".to_string(), |image| format!("image {image}"));
+            warnings.extend(errors.into_iter().map(|error| format!("{label}: {error}")));
             out.push(mapped);
         }
         Ok((out, warnings))
@@ -544,9 +567,10 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
     let roots: HashMap<_, _> = table("AgLibraryRootFolder", true)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
     let folders: HashMap<_, _> = table("AgLibraryFolder", true)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
     let files: HashMap<_, _> = table("AgLibraryFile", true)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
-    let develops: HashMap<_, _> = optional_table("Adobe_imageDevelopSettings", &mut warnings)?
+    let develop_rows = optional_table("Adobe_imageDevelopSettings", &mut warnings)?;
+    let develops: HashMap<_, _> = by_image("Adobe_imageDevelopSettings", develop_rows, &mut warnings)
         .into_iter()
-        .map(|r| (number(&r, "image"), text(&r, "text").to_string()))
+        .map(|(image, r)| (image, text(&r, "text").to_string()))
         .collect();
     ensure_read_active(cancel)?;
     let (metadata_rows, metadata_warnings) = match reader.xmp_table() {
@@ -558,10 +582,11 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
     };
     warnings.extend(metadata_warnings);
     done.fetch_add(1, Ordering::Relaxed);
-    let metadata: HashMap<_, _> = metadata_rows.into_iter().map(|r| (number(&r, "image"), r)).collect();
+    let metadata: HashMap<_, _> = by_image("Adobe_AdditionalMetadata", metadata_rows, &mut warnings).into_iter().collect();
     let keyword_rows: HashMap<_, _> = optional_table("AgLibraryKeyword", &mut warnings)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
     let mut keywords: HashMap<i64, Vec<String>> = HashMap::new();
-    for r in optional_table("AgLibraryKeywordImage", &mut warnings)? {
+    let keyword_images = optional_table("AgLibraryKeywordImage", &mut warnings)?;
+    for (image, r) in by_image("AgLibraryKeywordImage", keyword_images, &mut warnings) {
         ensure_read_active(cancel)?;
         let mut parts = Vec::new();
         let mut at = number(&r, "tag");
@@ -579,13 +604,13 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
         }
         parts.reverse();
         if !parts.is_empty() {
-            keywords.entry(number(&r, "image")).or_default().push(parts.join("|"));
+            keywords.entry(image).or_default().push(parts.join("|"));
         }
     }
-    let group = |rows: Vec<Row>| {
+    let group = |rows: Vec<(i64, Row)>| {
         let mut out: HashMap<i64, Vec<Row>> = HashMap::new();
-        for r in rows {
-            out.entry(number(&r, "image")).or_default().push(r);
+        for (image, r) in rows {
+            out.entry(image).or_default().push(r);
         }
         out
     };
@@ -610,15 +635,22 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
         }
         root_paths.insert(id, resolved);
     }
-    let mut history = group(optional_table("Adobe_libraryImageDevelopHistoryStep", &mut warnings)?);
-    let mut snapshots = group(optional_table("Adobe_libraryImageDevelopSnapshot", &mut warnings)?);
+    let history_rows = optional_table("Adobe_libraryImageDevelopHistoryStep", &mut warnings)?;
+    let mut history = group(by_image("Adobe_libraryImageDevelopHistoryStep", history_rows, &mut warnings));
+    let snapshot_rows = optional_table("Adobe_libraryImageDevelopSnapshot", &mut warnings)?;
+    let mut snapshots = group(by_image("Adobe_libraryImageDevelopSnapshot", snapshot_rows, &mut warnings));
+    let collections = optional_table("AgLibraryCollection", &mut warnings)?;
+    // members stay as read (the archive keeps them); the ones that name no photo join no album
+    let members = optional_table("AgLibraryCollectionImage", &mut warnings)?;
+    let unkeyed = members.iter().filter(|m| image_of(m).is_none()).count();
+    warn_unkeyed("AgLibraryCollectionImage", unkeyed, "added to no album", &mut warnings);
     let mut out = CatalogImport {
         source: source.to_string_lossy().into(),
         catalog_id: reader.catalog_id(),
         catalog_path: (document != source).then(|| document.to_string_lossy().into()),
         photos: Vec::new(),
-        collections: optional_table("AgLibraryCollection", &mut warnings)?,
-        members: optional_table("AgLibraryCollectionImage", &mut warnings)?,
+        collections,
+        members,
         collection_content: optional_table("AgLibraryCollectionContent", &mut warnings)?,
         warnings,
         skipped: Vec::new(),
@@ -1164,12 +1196,8 @@ fn stage_collections(
             warnings.push(format!("{}: smart rules preserved in archive; imported current membership", album.name));
         }
         if !album.folder {
-            album.photos = grouped_members
-                .get(&number(collection, "id_local"))
-                .into_iter()
-                .flatten()
-                .filter_map(|r| ids.get(&number(r, "image")).copied())
-                .collect();
+            album.photos =
+                grouped_members.get(&number(collection, "id_local")).into_iter().flatten().filter_map(|r| ids.get(&image_of(r)?).copied()).collect();
         }
         if s.catalog.album(id).is_some() {
             // Reimport preserves the user's album name/hierarchy, merges only new membership.
