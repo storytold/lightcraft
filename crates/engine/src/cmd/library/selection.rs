@@ -79,6 +79,33 @@ pub(super) fn mark_deleted(s: &mut Session, ids: &[PhotoId], label: &str) -> Res
 /// Apply one op per target as a single undo step.
 pub(super) fn for_targets(s: &mut Session, p: &Value, label: &str, f: impl Fn(PhotoId) -> Option<Op>) -> Result<Value> {
     let targets = s.targets(p)?;
+    apply_each(s, &targets, label, f)
+}
+
+/// Targets of rating, flag and label commands: [`Session::targets`], where a selected photo of a
+/// collapsed stack stands for the whole stack (issue #2232). Explicit `ids` / `id` are kept as given.
+fn mark_targets(s: &Session, p: &Value) -> Result<Vec<PhotoId>> {
+    let targets = s.targets(p)?;
+    let explicit = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
+    if explicit("ids") || explicit("id") {
+        return Ok(targets);
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<PhotoId> = Vec::with_capacity(targets.len());
+    for id in targets {
+        let members = s.catalog.stack_of(id).filter(|st| st.collapsed).map_or_else(|| vec![id], |st| st.photos.clone());
+        out.extend(members.into_iter().filter(|m| seen.insert(*m)));
+    }
+    Ok(out)
+}
+
+/// [`for_targets`] on [`mark_targets`].
+pub(super) fn for_marks(s: &mut Session, p: &Value, label: &str, f: impl Fn(PhotoId) -> Option<Op>) -> Result<Value> {
+    let targets = mark_targets(s, p)?;
+    apply_each(s, &targets, label, f)
+}
+
+fn apply_each(s: &mut Session, targets: &[PhotoId], label: &str, f: impl Fn(PhotoId) -> Option<Op>) -> Result<Value> {
     let ops: Vec<Op> = targets.iter().filter_map(|id| f(*id)).collect();
     let n = ops.len();
     if n > 0 {
@@ -90,7 +117,7 @@ pub(super) fn for_targets(s: &mut Session, p: &Value, label: &str, f: impl Fn(Ph
 /// Adjust each target's own rating; unchanged bounds do not create an undo step.
 pub(super) fn change_rating(s: &mut Session, p: &Value, delta: i8, label: &str) -> Result<Value> {
     let mut ops = Vec::new();
-    for id in s.targets(p)? {
+    for id in mark_targets(s, p)? {
         let old = s.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?.rating;
         let rating = (i16::from(old) + i16::from(delta)).clamp(0, 5) as u8;
         if rating != old {
@@ -108,7 +135,7 @@ pub(super) fn change_rating(s: &mut Session, p: &Value, delta: i8, label: &str) 
 /// raising/lowering clamps on reject < unflagged < pick. Unchanged photos make no history step.
 pub(super) fn change_flag(s: &mut Session, p: &Value, label: &str, step: impl Fn(Flag) -> Flag) -> Result<Value> {
     let mut ops = Vec::new();
-    for id in s.targets(p)? {
+    for id in mark_targets(s, p)? {
         let old = s.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?.flag;
         let flag = step(old);
         if flag != old {
