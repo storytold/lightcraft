@@ -1,7 +1,7 @@
 //! Reading an `.onnx` file into a [`Net`] with bounded, pure-Rust protobuf decoding.
 //!
 //! Only what the denoise U-Nets are made of is understood: `Conv` (3 × 3 "same" or 1 × 1, stride 1, no groups, no
-//! dilation) optionally followed by `LeakyRelu`, `ConvTranspose` (2 × 2, stride 2) likewise, `MaxPool` (2 × 2, stride 2),
+//! dilation) optionally followed by `LeakyRelu`, `Relu` or `Sigmoid`, `ConvTranspose` (2 × 2, stride 2) likewise, `MaxPool` (2 × 2, stride 2),
 //! a two-input `Concat` on the channels that feeds a convolution, and a final `DepthToSpace` (2, `CRD`). Any other
 //! operator or attribute is [`NetError::Unsupported`], which is reported to the user by both runners.
 
@@ -11,7 +11,7 @@ use std::path::Path;
 use crate::onnx_proto::{self, AttributeProto, NodeProto, TensorProto, ValueInfoProto};
 use std::io::Read;
 
-use crate::net::{Conv, ConvT2, MAX_WEIGHTS, Net, NetError, Op, TensorId};
+use crate::net::{Activation, Conv, ConvT2, MAX_WEIGHTS, Net, NetError, Op, TensorId};
 
 fn unsupported<T>(why: impl Into<String>) -> Result<T, NetError> {
     Err(NetError::Unsupported(why.into()))
@@ -87,27 +87,34 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
         let lookup = |name: &str| -> Result<TensorId, NetError> {
             ids.get(name).copied().ok_or_else(|| NetError::Invalid(format!("`{}` reads `{name}`, which nothing makes", node.op_type)))
         };
-        // a LeakyRelu straight after this layer, which nothing else reads, is part of it
-        let mut fuse_leaky = |out: &str| -> Result<(Option<f32>, String), NetError> {
+        // a LeakyRelu, Relu (slope 0) or Sigmoid straight after this layer, which nothing else reads, is part of it
+        let mut fuse_activation = |out: &str| -> Result<(Activation, String), NetError> {
             if let Some(next) = nodes.get(i)
-                && next.op_type == "LeakyRelu"
+                && matches!(next.op_type.as_str(), "LeakyRelu" | "Relu" | "Sigmoid")
                 && next.input.first().map(String::as_str) == Some(out)
                 && readers.get(out).copied() == Some(1)
             {
-                if next.input.len() != 1 || next.output.len() != 1 || next.attribute.iter().any(|a| a.name != "alpha") {
-                    return invalid("malformed LeakyRelu");
+                if next.input.len() != 1 || next.output.len() != 1 {
+                    return invalid(format!("malformed {}", next.op_type));
                 }
-                // only an omitted alpha gets the ONNX default; one that is not a single float must not read as 0
-                let alpha = match next.attribute.as_slice() {
-                    [] => 0.01,
-                    [AttributeProto { f: Some(f), kind: 0 | 1, .. }] => *f,
-                    _ => return invalid("LeakyRelu alpha is not a single float"),
+                let activation = match next.op_type.as_str() {
+                    "Relu" if next.attribute.is_empty() => Activation::Leaky(0.0),
+                    "Sigmoid" if next.attribute.is_empty() => Activation::Sigmoid,
+                    "LeakyRelu" if next.attribute.iter().all(|a| a.name == "alpha") => {
+                        // only an omitted alpha gets the ONNX default; one that is not a single float must not read as 0
+                        match next.attribute.as_slice() {
+                            [] => Activation::Leaky(0.01),
+                            [AttributeProto { f: Some(f), kind: 0 | 1, .. }] => Activation::Leaky(*f),
+                            _ => return invalid("LeakyRelu alpha is not a single float"),
+                        }
+                    }
+                    _ => return invalid(format!("malformed {}", next.op_type)),
                 };
                 i += 1;
-                let name = next.output.first().cloned().ok_or_else(|| NetError::Invalid("LeakyRelu without an output".into()))?;
-                return Ok((Some(alpha), name));
+                let name = next.output.first().cloned().ok_or_else(|| NetError::Invalid("an activation without an output".into()))?;
+                return Ok((activation, name));
             }
-            Ok((None, out.to_string()))
+            Ok((Activation::None, out.to_string()))
         };
         match node.op_type.as_str() {
             "Concat" => {
@@ -147,9 +154,9 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                     None => (lookup(src_name)?, None),
                 };
                 let out = node.output.first().ok_or_else(|| NetError::Invalid("Conv without an output".into()))?;
-                let (leaky, out_name) = fuse_leaky(out)?;
+                let (activation, out_name) = fuse_activation(out)?;
                 ids.insert(out_name, this);
-                ops.push(Op::Conv(Conv { src, src2, cin, cout, k: kh, weight: w.1, bias: b, leaky }));
+                ops.push(Op::Conv(Conv { src, src2, cin, cout, k: kh, weight: w.1, bias: b, activation }));
             }
             "ConvTranspose" => {
                 let (w, b) = weights_of(node, &initialisers, &mut weights_total)?;
@@ -172,9 +179,9 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                 }
                 let src = lookup(node.input.first().map_or("", String::as_str))?;
                 let out = node.output.first().ok_or_else(|| NetError::Invalid("ConvTranspose without an output".into()))?;
-                let (leaky, out_name) = fuse_leaky(out)?;
+                let (activation, out_name) = fuse_activation(out)?;
                 ids.insert(out_name, this);
-                ops.push(Op::ConvT2(ConvT2 { src, cin, cout, weight: w.1, bias: b, leaky }));
+                ops.push(Op::ConvT2(ConvT2 { src, cin, cout, weight: w.1, bias: b, activation }));
             }
             "MaxPool" => {
                 if ints_or(node, "kernel_shape", &[]) != [2, 2]
@@ -315,13 +322,53 @@ mod tests {
         assert!(matches!(net.ops().last(), Some(crate::net::Op::DepthToSpace2 { .. })));
         assert!(net.ops().iter().any(|o| matches!(o, crate::net::Op::Conv(c) if c.src2.is_some())), "the joins became two-source convolutions");
         assert!(
-            net.ops().iter().all(|o| !matches!(o, crate::net::Op::Conv(c) if c.leaky.is_none() && c.k == 3)),
+            net.ops().iter().all(|o| !matches!(o, crate::net::Op::Conv(c) if c.activation == crate::net::Activation::None && c.k == 3)),
             "every 3 × 3 convolution has its activation"
         );
         assert_eq!((net.in_channels, net.out_channels(), net.depth()), (4, 3, 2));
         assert!(net.fits_tile(tile) && !net.fits_tile(30));
 
         let _ = std::fs::remove_file(p);
+    }
+
+    #[test]
+    fn an_rgb_u_net_with_relu_and_a_final_sigmoid_is_read_with_its_layers_fused() {
+        use crate::net::Activation;
+        let (tile, depth) = (16usize, 2usize);
+        let p = temp_model("rgb-unet", &crate::synthetic::unet_rgb_onnx(tile as u64, 4, depth, 5));
+        let net = read(&p).unwrap();
+        let _ = std::fs::remove_file(p);
+        // no operator of its own for a Relu or the Sigmoid: per level two convolutions, a pool but on the last,
+        // and going up a transposed convolution and two convolutions, then the 1 × 1 convolution to the colours
+        assert_eq!(net.ops().len(), 2 * (depth + 1) + depth + depth * 3 + 1);
+        assert_eq!((net.in_channels, net.out_channels(), net.depth()), (3, 3, 2));
+        assert!(net.fits_tile_at(tile, 0) && !net.fits_tile(tile));
+        assert_eq!(net.out_side(tile), Some(tile));
+        match net.ops().last() {
+            Some(Op::Conv(c)) => assert_eq!((c.k, c.activation), (1, Activation::Sigmoid)),
+            other => panic!("{other:?}"),
+        }
+        assert!(
+            net.ops()
+                .iter()
+                .filter(|o| matches!(o, Op::Conv(c) if c.k == 3))
+                .all(|o| matches!(o, Op::Conv(c) if c.activation == Activation::Leaky(0.0)))
+        );
+    }
+
+    #[test]
+    fn a_relu_or_sigmoid_that_does_not_follow_a_convolution_is_unsupported() {
+        let good = crate::synthetic::unet_rgb_onnx(4, 4, 1, 5);
+        assert!(read_bytes(&good).is_ok());
+        // rename the first fused `Relu` to `Tanh` (same length): the activation is no longer one that can be fused
+        let at = good.windows(4).position(|w| w == b"Relu").unwrap();
+        let mut bad = good.clone();
+        bad[at..at + 4].copy_from_slice(b"Tanh");
+        assert!(matches!(read_bytes(&bad), Err(NetError::Unsupported(_))));
+        // and to another operator it is unsupported too
+        let mut bad = good.clone();
+        bad[at..at + 4].copy_from_slice(b"Gelu");
+        assert!(matches!(read_bytes(&bad), Err(NetError::Unsupported(_))));
     }
 
     #[test]
