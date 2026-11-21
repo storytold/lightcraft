@@ -71,6 +71,19 @@ unsupported to preview-only in the counts; sensor-decoding readiness is unchange
   uncompressed remains preview-only (#671), as do Z 8 HE / HE* files. Own-matrix phone, drone
   and other DNGs can decode correctly while rendering darker than their camera JPEG (#1277).
   Verified means sensor data decoded, not colour parity.
+- **Decode baseline** ([raw/decode-baseline.tsv](raw/decode-baseline.tsv), #4577): every pinned corpus raw
+  (`RAW_SAMPLES` and the D750 set) as `lightcraft_raw::decode` returns it, craft-raw and LightCraft's adapter
+  together: sample hash, levels, crops, white balance, Kelvin presets and the as-shot temperature they give, opcodes,
+  ISO and other metadata, plus digests of the bulky parts and of the whole image. `crates/raw/tests/it/decode_baseline.rs`
+  fails when a decode differs from it. Its header records the git packages `Cargo.lock` reaches from `lightcraft-raw`
+  (dev-only dependencies left out). Tests that need no corpus, so they run in CI, fail when those revisions change
+  or the file no longer lists exactly the pinned files. So a craft-libs pin bump, or a change to the corpus
+  manifest, regenerates the baseline
+  (`LIGHTCRAFT_WRITE_DECODE_BASELINE=1 cargo test -p lightcraft-raw --test it decode_baseline_matches_corpus`)
+  and explains every changed row in its pull request;
+  `git diff --word-diff-regex='[^[:space:]]+' docs/raw/decode-baseline.tsv` shows the changed cells. The baseline
+  pins LightCraft's own output; a row is not evidence that the value is right. A LightCraft-only decode change
+  doesn't trip CI, only the corpus test.
 - **Usage weights** ([raw/usage-weights.tsv](raw/usage-weights.tsv)): maker buckets from 2025 market
   data (Nikkei production: Canon ~36%, Sony ~29%, Nikon ~14%, Fujifilm ~12% of mirrorless; BCN retail:
   Sony 29.9%, Canon 27.4%, Nikon 15.1%), adjusted for the DSLR installed base and for the makers named
@@ -294,6 +307,7 @@ Beyond decoding:
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-20 | patch | Decode baseline for the pinned corpus (`raw/decode-baseline.tsv`, #4577), checked against `Cargo.lock` in CI, so a craft-libs pin bump shows its decode changes; counts unchanged |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |
 | 2026-10-26 | patch | Bundled camera profile count 5 → 9 (Nikon Z 6II, Z 8 and D5300, ILCE-7RM5); counts only |
