@@ -136,6 +136,15 @@
 
 ## 2026-10-30
 
+### The pointer stays visible in the Flatpak on GNOME Wayland
+- In the Flatpak on a Wayland desktop without the cursor-shape protocol (GNOME 46, for one), the mouse pointer could
+  vanish for good after Crop & Rotate or a brush hid it: the sandbox couldn't see any cursor theme. The Flatpak now
+  points at the host's cursor themes, as VectorCraft's does (issue #1657). Where the host's default theme is a
+  symlink the sandbox can't follow (Ubuntu's `/etc/alternatives`), name a theme once:
+  `flatpak override --user --env=XCURSOR_THEME=Adwaita ai.storyteller.lightcraft`, with in place of `Adwaita` any
+  cursor theme installed in `/usr/share/icons` or `~/.local/share/icons` (a theme in `~/.icons` also needs
+  `flatpak override --user --filesystem=~/.icons:ro ai.storyteller.lightcraft`).
+
 ### Lightroom catalogs with a print inside a collection import their collections
 - Lightroom Classic can keep a saved print, book, slideshow or web gallery inside a plain collection, but a
   LightCraft album sits only inside a folder. Importing such a catalog stopped at the end with "parent must be an
