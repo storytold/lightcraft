@@ -122,21 +122,48 @@ fn finds_lenses_by_exif_model_with_or_without_the_maker() {
     assert!(db.find_lens(None, "", cam).is_none());
 }
 
+/// The zoom (at least 1) that makes the model of `lens` at `focal` fill the `w × h` frame, `n` px to one lensfun
+/// radius: the smallest for which no border point of the zoomed frame reads past the image's edge, by bisection.
+fn model_fill_zoom(lens: &Profile, focal: f64, w: f64, h: f64, n: f64) -> f64 {
+    let reads_past = |z: f64| {
+        (0..=400).any(|i| {
+            let t = i as f64 / 400.0;
+            [(t * w / 2.0, h / 2.0), (w / 2.0, t * h / 2.0)].iter().any(|&(x, y)| {
+                let r = x.hypot(y) / n / z;
+                let k = lens.distortion_ratio(focal, r) / z;
+                x * k > w / 2.0 + 1e-9 || y * k > h / 2.0 + 1e-9
+            })
+        })
+    };
+    if !reads_past(1.0) {
+        return 1.0;
+    }
+    let (mut lo, mut hi) = (1.0, 2.0);
+    for _ in 0..60 {
+        let z = (lo + hi) / 2.0;
+        if reads_past(z) { lo = z } else { hi = z }
+    }
+    hi
+}
+
 #[test]
 fn distortion_matches_the_model_within_half_a_pixel_on_a_grid() {
     let db = db();
     let lens = &db.lenses[0];
     let (w, h) = (6000.0, 4000.0);
-    for focal in [24.0, 40.0, 70.0] {
+    // 24 and 40 mm read inside the frame (left as they are), 70 mm stretches the corners (zoomed in to fill the frame)
+    for (focal, zoomed) in [(24.0, false), (40.0, false), (70.0, true)] {
         let wp = lens.correction(&shot(focal)).unwrap().warp.unwrap();
         // lensfun normalisation: r = 1 at half the shorter side (full frame, 3:2)
         let n = h / 2.0;
+        let z = model_fill_zoom(lens, focal, w, h, n);
+        assert_eq!(z > 1.0, zoomed, "{focal} mm: zoom {z}");
         let mut worst: f64 = 0.0;
         for gy in 0..=20 {
             for gx in 0..=30 {
                 let (x, y) = (gx as f64 * w / 30.0, gy as f64 * h / 20.0);
                 let (sx, sy) = dng_source(&wp, 1, x, y, w, h);
-                let (dx, dy) = ((x - w / 2.0) / n, (y - h / 2.0) / n);
+                let (dx, dy) = ((x - w / 2.0) / n / z, (y - h / 2.0) / n / z);
                 let r = dx.hypot(dy);
                 let k = lens.distortion_ratio(focal, r);
                 let (ex, ey) = (w / 2.0 + dx * k * n, h / 2.0 + dy * k * n);
@@ -144,6 +171,66 @@ fn distortion_matches_the_model_within_half_a_pixel_on_a_grid() {
             }
         }
         assert!(worst < 0.5, "{focal} mm: {worst} px");
+    }
+}
+
+/// A made-up profile shaped like the one in issue #3547 (not lensfun data): PTLens coefficients that keep the
+/// short-edge midpoint in place and read about 3 % past the corner of a 3:2 frame.
+const STRETCH: &str = r#"<lensdatabase><lens><maker>Stretchco</maker><model>Stretchco 70mm</model><cropfactor>1.5</cropfactor>
+<calibration><distortion model="ptlens" focal="70" a="0.005" b="0.003" c="0.003"/></calibration></lens></lensdatabase>"#;
+
+#[test]
+fn a_stretching_profile_is_zoomed_in_to_fill_the_frame() {
+    let db = LensDb::parse(STRETCH).unwrap();
+    let lens = &db.lenses[0];
+    // landscape and portrait-shaped frames
+    for (w, h) in [(6000.0, 4000.0), (4000.0, 6000.0)] {
+        let shot = Shot { focal: 70.0, aperture: None, distance: None, crop_factor: Some(1.5), width: w, height: h };
+        let wp = lens.correction(&shot).unwrap().warp.unwrap();
+        // how far past the image's edge (px; negative: inside) the border of the corrected frame reads, at most
+        let mut past = f64::NEG_INFINITY;
+        for i in 0..=400 {
+            let t = i as f64 / 400.0;
+            for (x, y) in [(t * w, 0.0), (t * w, h), (0.0, t * h), (w, t * h)] {
+                for ch in 0..3 {
+                    let (sx, sy) = dng_source(&wp, ch, x, y, w, h);
+                    past = past.max((-sx).max(sx - w).max(-sy).max(sy - h));
+                }
+            }
+        }
+        assert!(past <= 0.01, "{w}×{h}: the border reads {past} px past the image's edge");
+        assert!(past > -0.5, "{w}×{h}: zoomed in {} px too far", -past);
+    }
+}
+
+/// The fill zoom keeps each colour plane's TCA: red and blue read where the model puts them for the zoomed frame
+/// (made-up linear TCA on the [`STRETCH`] distortion), not where green reads.
+#[test]
+fn the_fill_zoom_keeps_red_and_blue_on_their_tca() {
+    let xml = STRETCH.replace("</calibration>", r#"<tca model="linear" focal="70" kr="1.001" kb="0.999"/></calibration>"#);
+    let db = LensDb::parse(&xml).unwrap();
+    let lens = &db.lenses[0];
+    let (w, h) = (6000.0, 4000.0);
+    let shot = Shot { focal: 70.0, aperture: None, distance: None, crop_factor: Some(1.5), width: w, height: h };
+    let wp = lens.correction(&shot).unwrap().warp.unwrap();
+    // the calibration's own crop factor and aspect: r = 1 at half the shorter side
+    let n = h / 2.0;
+    let z = model_fill_zoom(lens, 70.0, w, h, n);
+    assert!(z > 1.01, "zoom {z}");
+    for ch in 0..3 {
+        let mut worst: f64 = 0.0;
+        for gy in 0..=20 {
+            for gx in 0..=30 {
+                let (x, y) = (gx as f64 * w / 30.0, gy as f64 * h / 20.0);
+                let (sx, sy) = dng_source(&wp, ch, x, y, w, h);
+                let (dx, dy) = ((x - w / 2.0) / n / z, (y - h / 2.0) / n / z);
+                let r = dx.hypot(dy);
+                let d = lens.distortion_ratio(70.0, r);
+                let k = d * lens.tca_ratio(70.0, ch, r * d);
+                worst = worst.max((sx - (w / 2.0 + dx * k * n)).hypot(sy - (h / 2.0 + dy * k * n)));
+            }
+        }
+        assert!(worst < 0.5, "plane {ch}: {worst} px from the model");
     }
 }
 

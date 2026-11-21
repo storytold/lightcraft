@@ -82,6 +82,15 @@ corrections: **Enable Profile Corrections** and its Distortion / Vignetting amou
 stage (one resample), orientation handling and DNG export. A conversion whose radial error exceeds 0.001 of the
 half diagonal, or that would fold the image, is not applied.
 
+A distortion that stretches the frame past its edges (pincushion, or a wave that turns outward toward the corners)
+is zoomed in until the corrected photo fills the frame again, as the cameras' own corrections are, instead of
+leaving an empty border for the crop to cut off (#3547). The zoom is the frame-filling zoom of the Sony in-file
+correction, zoom in only (`lightcraft_geom::fill_zoom_in`), found for the green plane: red and blue keep their TCA
+scale to it, and vignetting is unchanged. A distortion whose frame already reads inside the photo (barrel) is not zoomed, and the
+Distortion amount scales the zoom with the rest of the warp. A photo keeps the profile stored when it was looked up:
+one looked up before this change keeps its border until Reload from Disk (or `library.refreshLensProfiles` with
+`all: true`) looks it up again.
+
 Normalisation follows lensfun's documentation: distortion and TCA radii are 1 at half the shorter side of the
 calibration frame (its `cropfactor` and `aspect-ratio`), vignetting radii 1 at its corner; the optical centre is
 the image centre (lensfun's `<center>` offsets are not read). Missing or invalid crop factors remain unknown;
