@@ -50,6 +50,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("lensdb", Class::Layer(2)),
     ("inpaint", Class::Layer(1)),
     ("faces", Class::Layer(1)),
+    ("ocr", Class::Layer(1)),
     ("geocode", Class::Layer(1)),
     ("scenes", Class::Layer(1)),
     ("slideshow", Class::Layer(1)),
