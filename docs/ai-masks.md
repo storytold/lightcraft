@@ -61,6 +61,59 @@ The result is stored with the mask: the model's 288 × 288 mask logits over the 
 need the model, so masks survive moving the library to a machine without it, and the web build
 renders them. Editing the photo's look later does not recompute a mask (click again to update).
 
+### Pasting settings with masks
+
+When **Masking** is included in copied settings, **Paste Edit Settings**, **Paste Selected
+Settings** and **Paste Settings from Previous** recompute every Object and Describe component
+on each destination photo, using its pasted look. Local adjustments, component names,
+Add/Subtract/Intersect, inversion, Edge and manual components are preserved. The source photo's
+segmentation and detail patches are not reused. Object masks reuse their normalized include/exclude
+points; check the result if the subject moved far from those points. An Object without include
+points must be selected on the source photo before copying.
+
+The app stays responsive and shows **Recomputing AI masks** in Activity. You can move to another
+photo and paste again before the first paste finishes: each click captures its destination
+photos and copied settings, then runs in order. Waiting operations show **Queued AI mask paste**
+and the first destination's filename in their own cancellable Activity rows. Each click's
+settings are applied together as one undo step only after all its selections succeed; separate
+clicks remain separate undo steps. Cancelling or failing one operation does not discard later ones.
+
+At most 64 operations and 10,000 AI selections can be pending across all pastes. A new paste
+requiring AI-mask recomputation is refused as a whole if any destination already has a pending
+AI-mask paste; wait for that paste to finish, or cancel it in Activity before trying that photo
+again. Pastes excluding Masking still apply immediately; if they change a pending destination,
+that older AI-mask paste is discarded.
+
+Cancel, a missing or damaged model, a destination edited while waiting or computing, or an edit
+interaction still open on any destination when computation finishes leaves the entire paste
+unapplied. Finish or cancel the interaction, then paste again; interactions on unrelated photos
+do not block the paste.
+A description with no match produces an empty selection. SAM 3 must already be installed
+(or a remote worker configured); nothing downloads automatically.
+
+Immediate refusals are shown as errors from every paste entry point. Paste Selected Settings
+keeps the chosen groups open on refusal so they can be corrected and retried. A queued paste
+shows progress in Activity, not a premature “Settings pasted” message; that message is only
+shown when a synchronous paste has actually changed settings.
+
+Subject, Sky and Background already evaluate on each photo during rendering; their current
+heuristic/model limitations are unchanged. Sync Settings, Auto Sync and presets are not covered
+by this paste-specific recomputation yet.
+
+Control/MCP: `develop.paste` and `develop.pastePrevious` return `{pending: true, changed: 0,
+targets, queued, task}` in the desktop app when inference is pending. `queued` distinguishes a
+waiting operation from one started immediately; `task` is its stable Activity id.
+`activity.list` reports progress (`kind: "segment"`); `activity.cancel` discards the operation
+and removes its row on the next poll, even if the worker has not replied. Inference already
+submitted to the shared worker may finish in the background, but its result is ignored; later
+pastes keep their place and may still wait for that worker. Waiting-mode clients complete the
+computation before returning `{changed}`.
+
+**Copy Mask** and **Paste Mask** (a mask's right-click menu, or the Photo menu; `mask.copy`,
+`mask.paste`) move one mask instead of all of them. Paste Mask adds the mask, with its effect,
+beside each selected photo's own masks. Its Object and Describe components are recomputed on each
+photo as above; the photo's own masks keep their selections. Manual masks paste at once.
+
 ## Remote Metal inference
 
 Native builds with `sam` can keep the editor, RAW files, library, and exports local while

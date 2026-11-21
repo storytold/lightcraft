@@ -1,4 +1,6 @@
 {
+  "Queued AI mask paste": "Vložení AI masek ve frontě",
+  "Recomputing AI masks": "Přepočítávání masek AI",
   "  (library default)": "  (výchozí nastavení knihovny)",
   " (inverted)": " (invertováno)",
   " · best of its burst": " · nejlepší ze série",
@@ -2503,5 +2505,8 @@
   "Welcome": "Vítejte",
   "Next": "Další",
   "Get Started": "Začít",
-  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie"
+  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie",
+  "Copy Mask": "Kopírovat masku",
+  "Paste Mask": "Vložit masku",
+  "Mask copied": "Maska zkopírována"
 }

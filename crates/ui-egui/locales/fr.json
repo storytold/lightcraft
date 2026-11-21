@@ -1,4 +1,6 @@
 {
+  "Queued AI mask paste": "Collage des masques IA en attente",
+  "Recomputing AI masks": "Recalcul des masques IA",
   "  (library default)": "  (valeur par défaut de la bibliothèque)",
   " (inverted)": " (inversée)",
   " · best of its burst": " · la meilleure de sa rafale",
@@ -3640,5 +3642,8 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Démarrez l'application avec --control 7980 (ou LIGHTCRAFT_CONTROL_PORT), puis lightcraft-cli mcp --connect y connecte un agent.",
   "Welcome": "Bienvenue",
   "Next": "Suivant",
-  "Get Started": "Commencer"
+  "Get Started": "Commencer",
+  "Copy Mask": "Copier le masque",
+  "Paste Mask": "Coller le masque",
+  "Mask copied": "Masque copié"
 }

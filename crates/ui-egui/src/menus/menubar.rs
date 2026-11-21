@@ -831,10 +831,17 @@ fn node(app: &LightcraftApp, e: &MenuEntry) -> MenuNode {
     let shortcut = if e.id == "panel.presets" && crate::shortcuts::library_grid(app) { None } else { e.shortcut.as_deref() };
     // in an album the Delete key removes from the album (issue #1805): the menu says so
     let delete_key = crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "photo.delete");
+    // in Masking ⌘C / ⌘V copy and paste the mask: the keys move to Copy Mask / Paste Mask
+    let mask_keys = crate::shortcuts::mask_takes_keys(app);
+    let settings_key = |id: &str| crate::shortcuts::shortcut_of(&app.ui.settings.keymap, id);
     let shortcut = match e.id.as_str() {
         "view.photoGrid" | "view.squareGrid" => shortcut.or_else(|| crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "view.gridToggle")),
         "album.removePhotos" => delete_key,
         "photo.delete" if matches!(app.session.source, lightcraft_engine::LibrarySource::Album(_)) => None,
+        // (its own binding when the settings command has none)
+        "mask.copy" if mask_keys.contains(&"develop.copy") => settings_key("develop.copy").or(shortcut),
+        "mask.paste" if mask_keys.contains(&"develop.paste") => settings_key("develop.paste").or(shortcut),
+        id if mask_keys.contains(&id) => None,
         _ => shortcut,
     };
     item(&e.id, Value::Null, live_label(app, &e.id, &e.label), shortcut, e.enabled, checked(app, &e.id))

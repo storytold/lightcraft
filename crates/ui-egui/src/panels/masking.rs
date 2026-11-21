@@ -480,6 +480,7 @@ fn menu_label(source: &str) -> &str {
 
 /// The right-click menu of a mask in the Masks list.
 fn mask_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: u32, name: &str, visible: bool, index: usize, count: usize) {
+    let can_paste = app.session.mask_clipboard.is_some();
     let mut run = |ui: &mut egui::Ui, label: &str, enabled: bool, cmd: &str, p: serde_json::Value| {
         if ui.add_enabled(enabled, egui::Button::new(menu_label(label))).clicked() {
             let _ = app.run(cmd, p);
@@ -488,6 +489,9 @@ fn mask_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: u32, name: &str, vi
     };
     run(ui, "Duplicate Mask", true, "mask.duplicate", json!({"id": id}));
     run(ui, "Duplicate and Invert Mask", true, "mask.duplicate", json!({"id": id, "invert": true}));
+    // to other photos: Paste Mask adds it to the selected photos (their AI selections recomputed)
+    run(ui, "Copy Mask", true, "mask.copy", json!({"id": id}));
+    run(ui, "Paste Mask", can_paste, "mask.paste", json!({}));
     run(ui, "Invert Mask", true, "mask.invert", json!({"id": id}));
     run(ui, if visible { "Hide Mask" } else { "Show Mask" }, true, "mask.visible", json!({"id": id}));
     ui.separator();

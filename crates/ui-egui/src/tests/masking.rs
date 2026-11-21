@@ -2309,3 +2309,64 @@ fn a_masks_lens_blur_block_picks_the_side_and_switches_off() {
     assert!(!h.app.ui.section_folded("maskLensBlur"));
     h.settle(SETTLE);
 }
+
+#[test]
+fn cmd_c_and_cmd_v_copy_and_paste_the_selected_mask_while_masking() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.4, 0.5], "rx": 0.2, "ry": 0.1}));
+    let r = h.request("ui.key", json!({"key": "C", "cmd": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(h.app.session.mask_clipboard.is_some(), "⌘C copied the mask");
+    assert!(h.app.session.clipboard.is_none(), "not the settings");
+    // another photo, still masking: ⌘V adds the mask beside its own
+    let source = h.app.session.active().unwrap();
+    let other = h.app.session.visible_cloned().into_iter().find(|p| *p != source).unwrap();
+    exec(&mut h, "library.select", json!({"ids": [other.0], "active": other.0}));
+    h.step();
+    let before = develop(&h).masks.len();
+    let r = h.request("ui.key", json!({"key": "V", "cmd": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let d = develop(&h);
+    assert_eq!(d.masks.len(), before + 1, "⌘V pasted the mask");
+    assert!(matches!(d.masks.last().unwrap().components[0].shape, MaskShape::Radial { .. }));
+    // outside Masking, ⌘C copies the settings again
+    exec(&mut h, "panel.edit", json!({}));
+    h.step();
+    let r = h.request("ui.key", json!({"key": "C", "cmd": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(h.app.session.clipboard.is_some(), "⌘C in Edit copies the settings");
+}
+
+#[test]
+fn in_masking_the_menus_put_cmd_c_and_cmd_v_on_copy_and_paste_mask() {
+    use crate::menus::menubar::{MenuNode, menu_bar};
+    fn key_of(nodes: &[MenuNode], want: &str) -> Option<Option<String>> {
+        nodes.iter().find_map(|n| match n {
+            MenuNode::Item { id, shortcut, .. } if id == want => Some(shortcut.clone()),
+            MenuNode::Submenu { children, .. } => key_of(children, want),
+            _ => None,
+        })
+    }
+    let keys = |h: &Headless| {
+        let bar: Vec<MenuNode> = menu_bar(&h.app).into_iter().flat_map(|(_, v)| v).collect();
+        ["develop.copy", "mask.copy", "develop.paste", "mask.paste"].map(|id| key_of(&bar, id).flatten())
+    };
+    let mut h = detail("panel.masking");
+    let (c, v) = (Some("Cmd+C".to_string()), Some("Cmd+V".to_string()));
+    assert_eq!(keys(&h), [c.clone(), None, v.clone(), None], "no mask: the settings keep ⌘C / ⌘V");
+    exec(&mut h, "mask.add", json!({"kind": "radial"}));
+    assert_eq!(keys(&h), [None, c.clone(), v.clone(), None], "a mask selected: ⌘C copies it");
+    exec(&mut h, "mask.copy", json!({}));
+    assert_eq!(keys(&h), [None, c.clone(), None, v.clone()], "a mask copied: ⌘V pastes it");
+    // with Paste Settings unbound, Paste Mask keeps a key of its own
+    crate::shortcuts::assign(&mut h.app.ui.settings.keymap, "develop.paste", None).unwrap();
+    crate::shortcuts::assign(&mut h.app.ui.settings.keymap, "mask.paste", Some("Cmd+Shift+M")).unwrap();
+    assert_eq!(keys(&h)[3], Some("Cmd+Shift+M".to_string()), "its own binding when the settings have none");
+    crate::shortcuts::reset(&mut h.app.ui.settings.keymap, "develop.paste").unwrap();
+    crate::shortcuts::reset(&mut h.app.ui.settings.keymap, "mask.paste").unwrap();
+    exec(&mut h, "panel.edit", json!({}));
+    assert_eq!(keys(&h), [c, None, v, None], "outside Masking the settings have them again");
+}
