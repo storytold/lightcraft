@@ -796,7 +796,8 @@ fn render(args: &[String]) -> Result<(), String> {
     }
     if p.get("format").is_none() {
         let ext = Path::new(&output).extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
-        ExportFormat::parse(&ext).ok_or_else(|| format!("{output}: unknown extension (use .jpg .png .tif .webp .avif .dng or --opt format=…)"))?;
+        ExportFormat::parse(&ext)
+            .ok_or_else(|| format!("{output}: unknown extension (use .jpg .png .tif .webp .avif .jxl .psd .dng or --opt format=…)"))?;
         // given before validating, so `bitDepth` is checked against the format written (issue #1952)
         p["format"] = json!(ext);
     }
