@@ -1,7 +1,7 @@
 //! Scene-linear preparation: white balance + exposure, and the spatial planes the per-pixel stage
 //! needs (edge-aware base layer for highlights/shadows, clarity/texture bands, dehaze veil).
 
-use lightcraft_color::cct::{temp_tint_to_xy, wb_matrix, xy_to_temp_tint};
+use lightcraft_color::cct::{adaptable_white, temp_tint_to_xy, wb_matrix, xy_to_temp_tint};
 use lightcraft_color::{REC2020, luminance_2020};
 use lightcraft_develop::{DevelopSettings, Process};
 use lightcraft_raster::blur::{gauss_taps, gaussian, gaussian_taps};
@@ -38,7 +38,7 @@ pub fn wb_matrix_for(info: &SourceInfo, s: &DevelopSettings) -> Option<[[f32; 3]
         return Some(m.to_f32());
     }
     let set = wb_matrix(&REC2020, effective_white(info, s));
-    let shot = wb_matrix(&REC2020, temp_tint_to_xy(info.as_shot_temp, info.as_shot_tint));
+    let shot = wb_matrix(&REC2020, adaptable_white(info.as_shot_temp, info.as_shot_tint));
     let m = set.mul(&shot.inverse().unwrap_or(lightcraft_color::Mat3::IDENTITY));
     // Normalize so neutral luminance is preserved (WB shouldn't change exposure).
     let g = m.apply([1.0, 1.0, 1.0]);
@@ -88,7 +88,7 @@ fn effective_white(info: &SourceInfo, s: &DevelopSettings) -> lightcraft_color::
         return xy;
     }
     let (t, tint) = effective_wb(info, s);
-    temp_tint_to_xy(t, tint)
+    adaptable_white(t, tint)
 }
 
 /// Whether `s` holds a white balance written on the relative scale for a source that is edited in Kelvin today.
@@ -110,7 +110,7 @@ pub fn legacy_white(temp: f64, tint: f64, as_shot: (f64, f64)) -> Option<lightcr
     if !(temp.is_finite() && tint.is_finite() && as_shot.0.is_finite() && as_shot.1.is_finite()) {
         return None;
     }
-    let cones = |t: f64, tint: f64| BRADFORD.apply(temp_tint_to_xy(t, tint).to_xyz());
+    let cones = |t: f64, tint: f64| BRADFORD.apply(adaptable_white(t, tint).to_xyz());
     let (old, reference, shot) = (cones(temp, tint), cones(6500.0, 0.0), cones(as_shot.0, as_shot.1));
     let inverse = BRADFORD.inverse()?;
     let mut new = [0.0; 3];
@@ -173,7 +173,7 @@ pub fn kelvin_to_legacy(temp: f64, tint: f64, as_shot: (f64, f64)) -> Option<(f6
         // the source's own white: the relative scale's as-shot reference, exactly
         return Some((6500.0, 0.0));
     }
-    let cones = |t: f64, tint: f64| BRADFORD.apply(temp_tint_to_xy(t, tint).to_xyz());
+    let cones = |t: f64, tint: f64| BRADFORD.apply(adaptable_white(t, tint).to_xyz());
     let (target, reference, shot) = (cones(temp, tint), cones(6500.0, 0.0), cones(as_shot.0, as_shot.1));
     let inverse = BRADFORD.inverse()?;
     let mut old = [0.0; 3];
@@ -1350,6 +1350,12 @@ mod tests {
                     if !(1050.0..=49_000.0).contains(&kt) {
                         continue;
                     }
+                    // past the adaptation's floor the relative white itself is held (`cct::adaptable_white`: a
+                    // strongly green warm white), and so is a Kelvin white past it, so neither is expected to come back
+                    let held = |t: f64, tint: f64| adaptable_white(t, tint) != temp_tint_to_xy(t, tint);
+                    if held(lt, ltint) || held(kt, ktint) {
+                        continue;
+                    }
                     let back = kelvin_to_legacy(kt, ktint, as_shot).unwrap();
                     let (x1, y1) = xy_to_uv(temp_tint_to_xy(lt, ltint));
                     let (x2, y2) = xy_to_uv(temp_tint_to_xy(back.0, back.1));
@@ -1369,7 +1375,8 @@ mod tests {
                     let Some((lt, ltint)) = kelvin_to_legacy(kt, ktint, as_shot) else { continue };
                     // outside the slider's reach the relative scale has no value for this white: the forward
                     // conversion would clamp, so the round trip is not expected to close there
-                    if !(2000.0..=13550.0).contains(&lt) || ltint.abs() > 150.0 {
+                    // (nor where the Kelvin white is held at the adaptation's floor, `cct::adaptable_white`)
+                    if !(2000.0..=13550.0).contains(&lt) || ltint.abs() > 150.0 || adaptable_white(kt, ktint) != temp_tint_to_xy(kt, ktint) {
                         continue;
                     }
                     let (kt2, ktint2) = legacy_to_kelvin(lt, ltint, as_shot);

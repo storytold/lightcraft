@@ -618,12 +618,41 @@ fn tint_negative_is_green_and_positive_is_magenta() {
     }
 }
 
+/// A raw edited in Kelvin without a colour model of its own (presets, PR #2527) is adapted with Bradford: a
+/// strongly green warm white (2000 K at tint +34..+42, tint +150 at 3300..4000 K) once put a cone response of the
+/// source white through zero, and the gains jumped and flipped sign between neighbouring slider values. They now
+/// change smoothly and stay positive across the slider's whole tint range at both ends of those sweeps.
+#[test]
+fn kelvin_white_balance_has_no_pole_for_green_warm_whites() {
+    use crate::local::wb_matrix_for;
+    use lightcraft_develop::{WbMode, WbScale};
+    let info = SourceInfo { raw: true, as_shot_temp: 5200.0, as_shot_tint: 5.0, ..Default::default() };
+    let gains = |temp: f64, tint: f64| {
+        let mut s = DevelopSettings::default();
+        (s.wb.mode, s.wb.temp, s.wb.tint, s.wb.scale) = (WbMode::Custom, temp, tint, WbScale::Kelvin);
+        let m = wb_matrix_for(&info, &s).unwrap();
+        m.map(|r| (r[0] + r[1] + r[2]) as f64)
+    };
+    let mut steps = Vec::new();
+    steps.extend((0..=300).map(|i| (2000.0, i as f64 * 0.5)));
+    steps.extend((0..=140).map(|i| (3300.0 + i as f64 * 5.0, 150.0)));
+    for w in steps.windows(2) {
+        let (a, b) = (gains(w[0].0, w[0].1), gains(w[1].0, w[1].1));
+        assert!(b.iter().all(|v| v.is_finite() && *v > 0.0), "{:?}: {b:?}", w[1]);
+        if w[0].0 == 2000.0 && w[1].0 != 2000.0 {
+            continue;
+        }
+        assert!((0..3).all(|c| (b[c] / a[c]).ln().abs() < 0.05), "{:?} -> {:?}: {a:?} -> {b:?}", w[0], w[1]);
+    }
+}
+
 /// Settings written on the relative scale (6500 K / 0 = as shot, no `WbScale`) for a raw whose camera matrices now
 /// give it a Kelvin scale render exactly as they did: the same white-balance matrix, and the same pixels, as the
 /// relative render; the Kelvin / tint they convert to renders the same again (issue #730, the class of bug of #510).
 #[test]
 fn legacy_relative_white_balance_renders_as_before_on_a_kelvin_raw() {
     use crate::local::{effective_wb, legacy_to_kelvin, wb_matrix_for};
+    use lightcraft_color::cct::{adaptable_white, temp_tint_to_xy};
     use lightcraft_develop::{WbMode, WbScale};
     let old_info = SourceInfo { raw: true, relative_wb: true, as_shot_temp: 6500.0, as_shot_tint: 0.0, ..Default::default() };
     let src = Rgb32f::filled(16, 16, [0.3, 0.18, 0.09]);
@@ -656,14 +685,17 @@ fn legacy_relative_white_balance_renders_as_before_on_a_kelvin_raw() {
             assert_eq!(effective_wb(&new_info, &s), (kt, ktint));
             let mut k = s.clone();
             (k.wb.temp, k.wb.tint, k.wb.scale) = (kt, ktint, WbScale::Kelvin);
-            assert!(near(old, wb_matrix_for(&new_info, &k), 3e-4), "as shot {as_t}/{as_tint}, {temp}/{tint} → {kt}/{ktint}");
+            // (except where that Kelvin white is past the adaptation's floor, `cct::adaptable_white`, and held: the
+            // relative white composed with a warmer as-shot white can be greener there than the floor allows)
+            let held = adaptable_white(kt, ktint) != temp_tint_to_xy(kt, ktint);
+            assert!(held || near(old, wb_matrix_for(&new_info, &k), 3e-4), "as shot {as_t}/{as_tint}, {temp}/{tint} → {kt}/{ktint}");
             // and the rendered pixels agree
             let a = render(&src, &old_info, &s, &RenderRequest::fit(16, 16)).image;
             let b = render(&src, &new_info, &s, &RenderRequest::fit(16, 16)).image;
             let c = render(&src, &new_info, &k, &RenderRequest::fit(16, 16)).image;
             for (x, (y, z)) in a.data.iter().zip(b.data.iter().zip(&c.data)) {
                 assert_eq!(x, y, "as shot {as_t}/{as_tint}, {temp}/{tint}");
-                assert!(x.iter().zip(z).all(|(p, q)| p.abs_diff(*q) <= 1), "{x:?} {z:?}");
+                assert!(held || x.iter().zip(z).all(|(p, q)| p.abs_diff(*q) <= 1), "{x:?} {z:?}");
             }
         }
         // as shot on the relative scale is as shot on the Kelvin scale, exactly

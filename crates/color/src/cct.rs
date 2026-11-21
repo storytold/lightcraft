@@ -6,7 +6,7 @@
 //! A positive correction neutralises a green illuminant above the locus, so its source white uses
 //! `Duv = tint / TINT_SCALE`. Bradford adaptation removes that source cast.
 
-use crate::{Mat3, RgbSpace, Xy, bradford};
+use crate::{BRADFORD, Mat3, RgbSpace, Xy, bradford};
 
 /// Tint units per unit of Duv.
 pub const TINT_SCALE: f64 = 3000.0;
@@ -74,6 +74,40 @@ pub fn temp_tint_to_xy(t: f64, tint: f64) -> Xy {
     let (nu, nv) = locus_normal(t);
     let duv = tint / TINT_SCALE;
     uv_to_xy(u + nu * duv, v + nv * duv)
+}
+
+/// Lowest Bradford cone response, relative to D65's, of a white the picture is adapted from
+/// ([`adaptable_white`]): the gain on that cone stays within 20 times D65's.
+const MIN_CONE: f64 = 0.05;
+
+/// The smallest of `p`'s Bradford cone responses relative to D65's (luminance 1 each).
+fn min_cone(p: Xy) -> f64 {
+    let (c, d) = (BRADFORD.apply(p.to_xyz()), BRADFORD.apply(crate::D65.to_xyz()));
+    (0..3).map(|i| c[i] / d[i]).fold(f64::INFINITY, f64::min)
+}
+
+/// [`temp_tint_to_xy`] as a white to adapt from: the tint is limited where a cone response of the white
+/// would fall below [`MIN_CONE`] (or below the locus white's own, for a temperature whose locus white is
+/// already lower). Bradford divides by the source white's cone responses, so a white with one near zero
+/// (a strongly green warm white: at 2000 K from about tint +28, at 3700 K from +135) gives gains that
+/// grow without bound and flip sign, and the picture jumps as the slider crosses it. The limit is
+/// continuous in both temperature and tint; whites short of it are unchanged.
+pub fn adaptable_white(t: f64, tint: f64) -> Xy {
+    let white = temp_tint_to_xy(t, tint);
+    if !(t.is_finite() && tint.is_finite()) {
+        return white;
+    }
+    let floor = MIN_CONE.min(min_cone(temp_tint_to_xy(t, 0.0)));
+    if min_cone(white) >= floor {
+        return white;
+    }
+    // the largest share of the tint that keeps every cone at the floor
+    let (mut lo, mut hi) = (0.0, 1.0);
+    for _ in 0..48 {
+        let mid = 0.5 * (lo + hi);
+        if min_cone(temp_tint_to_xy(t, tint * mid)) >= floor { lo = mid } else { hi = mid }
+    }
+    temp_tint_to_xy(t, tint * lo)
 }
 
 /// Inverse of [`temp_tint_to_xy`]: nearest locus temperature (searched in mired space) and tint.
@@ -156,6 +190,37 @@ mod tests {
     fn daylight_has_a_positive_tint() {
         let (_, tint) = xy_to_temp_tint(crate::D65);
         assert!((5.0..15.0).contains(&tint), "{tint}");
+    }
+
+    /// A strongly green warm white (2000 K past tint +28, 3700 K past +135 on the raw slider's range) has a
+    /// Bradford cone response near zero: the white to adapt from is held at the floor there, so the
+    /// adaptation's gains change smoothly through it instead of passing a pole (PR #2527).
+    #[test]
+    fn adaptable_white_keeps_the_adaptation_finite_and_continuous() {
+        let src = crate::REC2020;
+        let gains = |t: f64, tint: f64| wb_matrix(&src, adaptable_white(t, tint)).apply([1.0, 1.0, 1.0]);
+        let sweeps: [(f64, f64, f64, f64); 2] = [(2000.0, 2000.0, 0.0, 150.0), (3300.0, 4500.0, 150.0, 150.0)];
+        for (t0, t1, k0, k1) in sweeps {
+            let mut prev: Option<[f64; 3]> = None;
+            for i in 0..=300 {
+                let f = i as f64 / 300.0;
+                let g = gains(t0 + f * (t1 - t0), k0 + f * (k1 - k0));
+                assert!(g.iter().all(|v| v.is_finite() && *v > 0.0 && *v < 25.0), "{t0}..{t1} {k0}..{k1} at {f}: {g:?}");
+                if let Some(p) = prev {
+                    for c in 0..3 {
+                        assert!((g[c] / p[c]).ln().abs() < 0.05, "{t0}..{t1} {k0}..{k1} at {f}: {p:?} -> {g:?}");
+                    }
+                }
+                prev = Some(g);
+            }
+        }
+        // short of the floor nothing changes, the locus included
+        for (t, tint) in [(2000.0, 0.0), (2000.0, -150.0), (3700.0, 100.0), (6500.0, 150.0), (50000.0, -150.0)] {
+            assert_eq!(adaptable_white(t, tint), temp_tint_to_xy(t, tint), "{t} {tint}");
+        }
+        // past it the tint is held: 2000 K reads the same at +34 and +42
+        let (a, b) = (adaptable_white(2000.0, 34.0), adaptable_white(2000.0, 42.0));
+        assert!((a.x - b.x).hypot(a.y - b.y) < 1e-6, "{a:?} {b:?}");
     }
 
     #[test]
