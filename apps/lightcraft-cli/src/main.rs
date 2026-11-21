@@ -804,6 +804,7 @@ fn render(args: &[String]) -> Result<(), String> {
     // Add to Apple Photos: refused before anything is written when it can't be done
     let after = s.after_export(&o)?;
     let e = export_photo(&mut s, lightcraft_engine::catalog::PhotoId(id), &o, 1)?;
+    e.check_sidecar_destination(Path::new(&output))?;
     // never over the input (or its sidecar), however it is spelled: `render IMG.jpg -o IMG.jpg`
     let sidecars: Vec<(String, &Vec<u8>)> =
         e.sidecars.iter().map(|(ext, bytes)| (Path::new(&output).with_extension(ext).to_string_lossy().to_string(), bytes)).collect();
