@@ -102,6 +102,38 @@ fn a_rejected_model_file_says_why_in_settings() {
 use super::*;
 use std::sync::Arc;
 
+#[test]
+fn denoise_manifest_help_copies_a_valid_example() {
+    let mut h = demo([1400.0, 900.0]);
+    let t = Duration::from_secs(10);
+    assert_eq!(h.request("engine.execute", json!({"command": "app.language.russian"}), t)["ok"], true);
+    let dir = std::env::temp_dir().join(format!("lc-manifest-help-{}", std::process::id()));
+    h.app.session.set_denoise_models_dir(Some(dir));
+    h.app.ui.dialog = Some(crate::state::Dialog::Settings { tab: "denoise".into() });
+    h.settle(SETTLE);
+    let r = h.request("ui.clickWidget", json!({"id": "denoise:manifestHelp"}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.painted_text().iter().any(|s| s.contains("Сохраните denoise-model.json")));
+    h.request("ui.scroll", json!({"dy": -500.0}), t);
+    h.settle(SETTLE);
+    let r = h.request("ui.clickWidget", json!({"id": "denoise:copyManifestExample"}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let manifest = lightcraft_denoise::manifest::parse(h.view.clipboard.as_bytes()).unwrap();
+    assert_eq!(manifest.id, "my-bayer-model");
+    if let Ok(path) = std::env::var("LIGHTCRAFT_MANIFEST_HELP_SNAPSHOT") {
+        let img = h.snapshot(SETTLE);
+        let img = lightcraft_raster::Rgba8 {
+            width: img.size[0],
+            height: img.size[1],
+            data: img.pixels.iter().map(|pixel| pixel.to_srgba_unmultiplied()).collect(),
+        };
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(path, png).unwrap();
+    }
+}
+
 /// The pretend host has a clipboard, as a desktop does: text the UI copies lands in it, and a
 /// cut, copy or paste request (from a context menu) comes back as that event on the next frame.
 #[test]
