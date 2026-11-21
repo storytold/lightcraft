@@ -4282,6 +4282,7 @@ dependencies = [
  "lightcraft-raster",
  "lightcraft-raw",
  "lightcraft-scenes",
+ "log",
  "rayon",
  "serde",
  "thiserror 2.0.21",

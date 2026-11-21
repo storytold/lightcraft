@@ -410,6 +410,29 @@ fn final_merge_shows_a_row_and_cancels() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Merging other photos while the dialog is open ("with Last Settings", or the next set of an HDR batch) drops the
+/// dialog's preview of the photos it had: the preview is kept while its options match, and the dialog went on
+/// describing the old photos (their count and omitted files) for the new ones.
+#[test]
+fn merging_other_photos_drops_the_dialogs_preview() {
+    let (mut h, dir) = bracket("merge-ids");
+    let all = h.app.session.selected();
+    crate::merge::open(&mut h.app, "merge.hdr").unwrap();
+    assert!(h.step_until(T, |h| h.app.merge.preview.is_some()), "the dialog previews the three photos");
+    let ev = |h: &Headless| h.app.merge.preview.as_ref().and_then(|p| p.3["ev"].as_array().map(Vec::len));
+    assert_eq!(ev(&h), Some(3));
+    h.app.session.execute("library.select", &json!({"ids": &all[..2]})).unwrap();
+    crate::merge::start_last(&mut h.app, "merge.hdr").unwrap();
+    assert_eq!(h.app.merge.ids, all[..2].to_vec());
+    assert!(h.app.merge.preview.is_none() && h.app.merge.preview_pixels.is_none(), "no preview of the three photos left");
+    let rows = h.app.session.activity.list();
+    let merging = rows.iter().find(|r| r.kind == "merge").map(|r| r.id).unwrap();
+    h.app.session.activity.cancel(merging).unwrap();
+    assert!(h.step_until(T, |h| h.app.merge.final_task.is_none() && h.app.merge.preview.is_some()));
+    assert_eq!(ev(&h), Some(2), "the dialog previews the photos it now merges");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// The merge dialog opens with the options of the last merge of its kind (per kind), and "with Last
 /// Settings" uses them; a kind never merged opens with the defaults.
 #[test]

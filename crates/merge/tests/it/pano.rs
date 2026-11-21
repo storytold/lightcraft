@@ -258,6 +258,32 @@ fn a_stitch_of_more_than_the_frame_cap_is_refused_up_front() {
     assert!(err.to_string().contains("refused"), "the frame cap errors, it does not begin the quadratic match: {err}");
 }
 
+#[test]
+fn moving_texture_registration_remains_conservative() {
+    let e = env();
+    let rs: Vec<M3> = [-22.0, 0.0, 21.0].into_iter().map(|yaw| rot(yaw, 0.0, 0.0)).collect();
+    let clean: Vec<Frame> = rs.iter().map(|r| shoot(&e, r, 800.0, 800, 600, 1.0)).collect();
+    let (cameras, _, rms) = lightcraft_merge::pano::register(&clean, &no_progress).unwrap();
+    assert_eq!(cameras.iter().flatten().count(), 3);
+    eprintln!("three clean frames: used=3, rms={rms:.4}");
+    let mut moving = clean;
+    for (i, frame) in moving.iter_mut().enumerate() {
+        // An original textured band changes independently between exposures. Keep the
+        // surrounding scene fixed to the known cameras. This is not a waterfall model.
+        let mut rng = lightcraft_merge::ransac::Rng::new(1765 + i as u64);
+        let cells: Vec<f32> = (0..80 * 36).map(|_| rng.unit() as f32).collect();
+        for y in 120..480 {
+            for x in 0..800 {
+                let v = cells[(y - 120) / 10 * 80 + x / 10] * 0.7 + 0.1;
+                frame.image.set(x, y, [v; 3]);
+            }
+        }
+    }
+    let result = lightcraft_merge::pano::register(&moving, &no_progress);
+    eprintln!("three moving-texture frames: {result:?}");
+    assert!(matches!(result, Err(lightcraft_merge::MergeError::NoOverlap(_))));
+}
+
 /// Issue #1455: a panorama came out at 40 MP whatever its photos' resolution. It now keeps their
 /// own resolution unless a size is asked for (up to Lightroom's 512 MP); a size scales it down,
 /// and a NaN one (from an agent) is no size at all, not a 0.1 MP thumbnail.

@@ -58,37 +58,83 @@ pub struct PairMatch {
     pub levels: Vec<u8>,
 }
 
+/// Why a pair did or did not pass registration verification. This is not a scene diagnosis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PairStatus {
+    InsufficientMatches,
+    NoModel,
+    Rejected,
+    Accepted,
+}
+
+/// Verification measurements at the working resolution (long edge at most 1000 pixels).
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PairDiagnostic {
+    pub i: usize,
+    pub j: usize,
+    pub matches: usize,
+    /// Unknown when RANSAC could not return a model with at least 12 inliers.
+    pub inliers: Option<usize>,
+    pub status: PairStatus,
+}
+
 /// Match every pair of images. `feats[k]` are in work coordinates scaled by `scales[k]`.
 pub fn match_pairs(feats: &[Features], scales: &[f64]) -> Vec<PairMatch> {
+    match_pairs_with_diagnostics(feats, scales).0
+}
+
+/// As [`match_pairs`], retaining rejected pairs as well as accepted ones, in input-pair order.
+pub fn match_pairs_with_diagnostics(feats: &[Features], scales: &[f64]) -> (Vec<PairMatch>, Vec<PairDiagnostic>) {
     let n = feats.len();
-    // the pairs are generated lazily: materialising all n(n−1)/2 up front is quadratic memory, including
-    // when every comparison comes up empty (no usable features)
-    let mut out: Vec<PairMatch> = (0..n)
+    // Generate input pairs lazily, without a second quadratic vector of pair indices.
+    let mut results: Vec<(Option<PairMatch>, PairDiagnostic)> = (0..n)
         .into_par_iter()
         .flat_map_iter(|i| ((i + 1)..n).map(move |j| (i, j)))
-        .filter_map(|(i, j)| {
+        .map(|(i, j)| {
             let m = features::match_features(&feats[i], &feats[j], 0.8);
+            let mut diagnostic = PairDiagnostic { i, j, matches: m.len(), inliers: None, status: PairStatus::InsufficientMatches };
             if m.len() < 12 {
-                return None;
+                return (None, diagnostic);
             }
             let a: Vec<Point> = m.iter().map(|(p, _)| Point::new(feats[i].points[*p].x as f64, feats[i].points[*p].y as f64)).collect();
             let b: Vec<Point> = m.iter().map(|(_, q)| Point::new(feats[j].points[*q].x as f64, feats[j].points[*q].y as f64)).collect();
-            let fit = ransac::ransac(Model::Homography, &a, &b, 3.0, 12, (i * 1000 + j) as u64)?;
-            // Brown & Lowe's probabilistic verification
+            let Some(fit) = ransac::ransac(Model::Homography, &a, &b, 3.0, 12, (i * 1000 + j) as u64) else {
+                diagnostic.status = PairStatus::NoModel;
+                return (None, diagnostic);
+            };
+            diagnostic.inliers = Some(fit.inliers.len());
+            // Brown & Lowe's probabilistic verification. Issue #1765 demonstrates false
+            // negatives here, but lowering only the slope also admits coherent wrong matches.
             if (fit.inliers.len() as f64) <= 8.0 + 0.3 * m.len() as f64 {
-                return None;
+                diagnostic.status = PairStatus::Rejected;
+                return (None, diagnostic);
             }
+            diagnostic.status = PairStatus::Accepted;
             let (si, sj) = (scales[i], scales[j]);
             let pts = fit.inliers.iter().map(|&k| (Point::new(a[k].x / si, a[k].y / si), Point::new(b[k].x / sj, b[k].y / sj))).collect();
             let levels = fit.inliers.iter().map(|&k| feats[i].points[m[k].0].level.max(feats[j].points[m[k].1].level)).collect();
             // conjugate to full resolution: H_full = S_j⁻¹ · H · S_i
             let s_i = Homography([si, 0.0, 0.0, 0.0, si, 0.0, 0.0, 0.0, 1.0]);
             let s_j_inv = Homography([1.0 / sj, 0.0, 0.0, 0.0, 1.0 / sj, 0.0, 0.0, 0.0, 1.0]);
-            Some(PairMatch { i, j, h: s_j_inv.mul(&fit.h).mul(&s_i), pts, levels })
+            (Some(PairMatch { i, j, h: s_j_inv.mul(&fit.h).mul(&s_i), pts, levels }), diagnostic)
         })
         .collect();
-    out.sort_by_key(|p| (p.i, p.j));
-    out
+    results.sort_by_key(|(_, d)| (d.i, d.j));
+    let (mut out, mut diagnostics) = (Vec::new(), Vec::with_capacity(results.len()));
+    for (pair, diagnostic) in results {
+        log::debug!(
+            "panorama pair {}-{}: matches={}, inliers={:?}, status={:?}",
+            diagnostic.i,
+            diagnostic.j,
+            diagnostic.matches,
+            diagnostic.inliers,
+            diagnostic.status
+        );
+        out.extend(pair);
+        diagnostics.push(diagnostic);
+    }
+    (out, diagnostics)
 }
 
 /// The largest connected component of the match graph (sorted image indices).

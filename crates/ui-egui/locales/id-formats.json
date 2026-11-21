@@ -1,4 +1,5 @@
 {
+  "{used} of {total} photos included": "{used} dari {total} foto disertakan",
   " · {skipped} skipped (file exists)": " · {skipped} dilewati (file sudah ada)",
   " · {} duplicate{} skipped": " · {} duplikat dilewati{:.0}",
   " · {} failed: {}": " · {} gagal: {}",

@@ -154,7 +154,7 @@ impl MergeJob {
                 let p = sub(0.25, 0.9);
                 let fit = fit_in_memory(pano, pixels(&frames), crate::memory::total_ram());
                 let r = lightcraft_merge::stitch(frames, &fit, &p).map_err(err)?;
-                let info = pano_info(&r, &self.sources, pano, &fit);
+                let info = pano_info(&r, &self.sources, 1, pano, &fit);
                 (
                     r.image,
                     r.color,
@@ -199,7 +199,7 @@ impl MergeJob {
                 let p = sub(0.6, 0.9);
                 let fit = fit_in_memory(pano, pixels(&merged), crate::memory::total_ram());
                 let r = lightcraft_merge::stitch(merged, &fit, &p).map_err(err)?;
-                let mut info = pano_info(&r, &self.sources, pano, &fit);
+                let mut info = pano_info(&r, &self.sources, b, pano, &fit);
                 info["bracket"] = json!(b);
                 (
                     r.image,
@@ -239,7 +239,7 @@ impl MergeJob {
 /// `asked` is what the command asked for, `fit` what ran (held to memory): when the panorama came
 /// out smaller than the photos' own resolution, `limit` says why (`memory`, `size`: Lightroom's
 /// 512 MP / 65,000 px, or `asked`).
-fn pano_info(r: &lightcraft_merge::PanoResult, sources: &[(PhotoId, String)], asked: &PanoOptions, fit: &PanoOptions) -> Value {
+fn pano_info(r: &lightcraft_merge::PanoResult, sources: &[(PhotoId, String)], bracket: usize, asked: &PanoOptions, fit: &PanoOptions) -> Value {
     let megapixels = (r.image.width * r.image.height) as f64 / 1e6;
     let native = r.native_megapixels;
     let why = if fit.max_megapixels < asked.max_megapixels && fit.max_megapixels < native {
@@ -250,9 +250,9 @@ fn pano_info(r: &lightcraft_merge::PanoResult, sources: &[(PhotoId, String)], as
         "size"
     };
     let limit = (megapixels < native * 0.98).then_some(why);
-    json!({
+    let mut info = pano_source_info(&r.used, &r.pairs, sources, bracket);
+    let geometry = json!({
         "projection": r.projection,
-        "used": r.used.iter().filter_map(|&i| sources.get(i).map(|s| s.0.0)).collect::<Vec<_>>(),
         "fov": [r.fov.0, r.fov.1],
         "rmsPx": r.rms,
         "gains": r.gains,
@@ -260,7 +260,41 @@ fn pano_info(r: &lightcraft_merge::PanoResult, sources: &[(PhotoId, String)], as
         "megapixels": megapixels,
         "nativeMegapixels": native,
         "limit": limit,
-    })
+    });
+    if let (Some(info), Some(geometry)) = (info.as_object_mut(), geometry.as_object()) {
+        info.extend(geometry.clone());
+    }
+    info
+}
+
+/// Stitch indices refer to frames (HDR brackets), while callers need individual source IDs.
+/// Keep source order and report only the observed outcome, not an inferred scene cause.
+fn pano_source_info(
+    used_frames: &[usize],
+    pairs: &[lightcraft_merge::pano::camera::PairDiagnostic],
+    sources: &[(PhotoId, String)],
+    bracket: usize,
+) -> Value {
+    let bracket = bracket.max(1);
+    let mut used = Vec::new();
+    let mut omitted = Vec::new();
+    for (i, (id, path)) in sources.iter().enumerate() {
+        if used_frames.contains(&(i / bracket)) {
+            used.push(id.0);
+        } else {
+            omitted.push(json!({"id": id.0, "path": path, "reason": "notRegistered"}));
+        }
+    }
+    let ids = |i: usize| sources.chunks(bracket).nth(i).unwrap_or_default().iter().map(|s| s.0.0).collect::<Vec<_>>();
+    let pairs: Vec<Value> = pairs
+        .iter()
+        .map(|p| {
+            json!({
+                "a": ids(p.i), "b": ids(p.j), "matches": p.matches, "inliers": p.inliers, "status": p.status,
+            })
+        })
+        .collect();
+    json!({"used": used, "omitted": omitted, "pairs": pairs})
 }
 
 /// Peak memory of a panorama per pixel of its output (bytes), measured as the peak resident size
@@ -471,5 +505,24 @@ impl Session {
         let job = self.plan_merge(kind, finish, ids, false)?;
         let out = job.run(&|_, _| true).map_err(EngineError::Other)?;
         self.finish_merge(&job, out)
+    }
+}
+
+#[cfg(test)]
+mod inclusion_tests {
+    use super::*;
+
+    #[test]
+    fn source_ids_keep_their_order_across_nonconsecutive_brackets() {
+        let sources = [71, 9, 401, 3, 6, 12].map(|id| (PhotoId(id), format!("{id}.png")));
+        let info = pano_source_info(&[2, 0], &[], &sources, 2);
+        assert_eq!(info["used"], json!([71, 9, 6, 12]));
+        assert_eq!(
+            info["omitted"],
+            json!([
+                {"id": 401, "path": "401.png", "reason": "notRegistered"},
+                {"id": 3, "path": "3.png", "reason": "notRegistered"},
+            ])
+        );
     }
 }

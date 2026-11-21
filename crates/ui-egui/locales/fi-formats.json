@@ -1,4 +1,5 @@
 {
+  "{used} of {total} photos included": "{used} / {total} kuvaa mukana",
   " ({unsure} with several look-alike files: use Locate)": " ({unsure} usealla samannäköisellä tiedostolla: käytä Paikanna)",
   " ({} in Recently Deleted)": " ({} Äskettäin poistetuissa)",
   " in {g} group{}": " · ryhmiä: {g}{:.0}",
