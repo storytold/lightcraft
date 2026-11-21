@@ -408,6 +408,18 @@ impl AppSettings {
     pub fn standard_preview_edge(&self) -> u32 {
         if self.preview_limit == 0 { STANDARD_PREVIEW_EDGE } else { self.preview_limit }
     }
+
+    /// The long edge standard previews are built at, by Build Standard-Sized Previews and by the
+    /// background preparation alike: a chosen limit as is; on Automatic the standard size, or the
+    /// loupe's size on this screen (`loupe_edge`, 0: no loupe drawn yet) when that is bigger. The
+    /// same in every session, so a build skips the previews an earlier one made (#3947).
+    pub fn standard_build_edge(&self, loupe_edge: usize) -> u32 {
+        if self.preview_limit != 0 {
+            return self.preview_limit;
+        }
+        let loupe = u32::try_from(loupe_edge.min(8192)).unwrap_or(8192);
+        STANDARD_PREVIEW_EDGE.max(loupe)
+    }
 }
 
 /// How the Keywording box lays out the selection's keywords.

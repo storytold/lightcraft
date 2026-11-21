@@ -291,6 +291,30 @@ fn the_background_preparation_starts_when_culling_and_can_be_stopped() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// #3947: the background build makes standard previews at the size the frontend's Build
+/// Standard-Sized Previews asks for, so that build skips them instead of rendering every one again.
+#[test]
+fn the_background_build_makes_previews_at_the_frontends_standard_size() {
+    let (mut s, root, ids) = library("prep-edge", 3);
+    s.prep.edge = 300;
+    let mode = crate::prep::Mode::Library;
+    for id in &ids {
+        s.prep_tick(mode, Some(*id), false);
+    }
+    let b = s.preview_build.clone().expect("culling: the view is prepared");
+    assert!(b.background);
+    assert!(wait_finished(&b), "built");
+    assert_eq!(b.failed.load(Ordering::Relaxed), 0);
+    for id in &ids {
+        let p = s.catalog.photo(*id).unwrap().clone();
+        let (w, h) = s.media.rendered.disk().expect("a disk cache").dims(s.view_key(&p, true)).expect("on disk");
+        assert_eq!(w.max(h), 300, "built at the frontend's standard size");
+    }
+    let r = s.execute("library.buildPreviews", &json!({"ids": ids_json(&ids), "edge": 300, "wait": true})).unwrap();
+    assert_eq!(r["skipped"], 3, "the build asked for skips what the background made {r}");
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// While editing, the whole view's build follows the Library row (its switch and "which photos");
 /// the Editing row's scope is only for the photos kept ready ahead.
 #[test]
