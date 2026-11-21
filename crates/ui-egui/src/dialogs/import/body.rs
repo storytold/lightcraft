@@ -601,20 +601,31 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
     name.wrap.max_rows = 1;
     let name = p.layout_job(name);
     p.galley(pos2(rect.left() + 2.0, img.bottom() + 2.0), name, color);
-    let tip = format!(
-        "{}\n{} × {} · {} · {:.1} MB{}",
+    let resp = resp.on_hover_text(candidate_tip(&c));
+    if resp.clicked() && ok {
+        let shift = ui.input(|input| input.modifiers.shift);
+        d.click(i, shift);
+    }
+}
+
+/// A cell's tooltip: path, size, format and capture time, after, for an unreadable file, the error
+/// the scan hit (issue #3342), so "Unreadable" says why. The error comes first, without the path a
+/// scan error starts with: a tooltip doesn't scroll, so what a deep path pushes past the window's
+/// edge is lost.
+pub(super) fn candidate_tip(c: &super::ImportCandidate) -> String {
+    let reason = |e: &'_ str| e.strip_prefix(c.path.as_str()).and_then(|r| r.strip_prefix(':')).map(str::to_owned).unwrap_or_else(|| e.to_owned());
+    let error = c.error.as_deref().map(reason);
+    let error = error.as_deref().map(str::trim).filter(|e| !e.is_empty());
+    format!(
+        "{}{}\n{} × {} · {} · {:.1} MB{}",
+        error.map(|e| format!("{e}\n")).unwrap_or_default(),
         c.path,
         c.width,
         c.height,
         c.format,
         c.file_size as f64 / 1e6,
         c.captured.as_deref().map(|d| format!("\n{}", d.replace('T', " "))).unwrap_or_default()
-    );
-    let resp = resp.on_hover_text(tip);
-    if resp.clicked() && ok {
-        let shift = ui.input(|input| input.modifiers.shift);
-        d.click(i, shift);
-    }
+    )
 }
 
 /// Where a cell's badge goes: top right, or under the checkbox when the text is too wide to sit
