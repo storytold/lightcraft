@@ -619,7 +619,7 @@ fn sidecar_has_news(labels: &Catalog, p: &Photo, naming: SidecarLookup, listing:
         return false;
     }
     let Ok(text) = std::fs::read_to_string(&file) else { return false };
-    let Ok(sc) = crate::sidecar::parse_sidecar(&text, crate::crs::Target::for_photo(p)) else { return false };
+    let Ok(sc) = crate::sidecar::parse_sidecar_with_as_shot(&text, crate::crs::Target::for_photo(p), p.as_shot_physical) else { return false };
     let sc = sc.with_file_orientation(path).resolve_label(labels);
     let mut q = p.clone();
     crate::sidecar::merge_into(&mut q, &sc, "");

@@ -170,7 +170,11 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
             std::mem::swap(&mut w, &mut h);
         }
         let scale = WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
-        let as_shot_wb = Some(scale.as_shot(lightcraft_raw::color::as_shot_white_xy_of(&raw)));
+        let own_white = lightcraft_raw::color::as_shot_white_xy_of(&raw);
+        let as_shot_wb = Some(scale.as_shot(own_white));
+        // a white the file does not name is D65 synthesized by the reader: no anchor from it,
+        // so a sidecar without a reference keeps As Shot and is reported (#4432)
+        let as_shot_physical = lightcraft_raw::color::names_as_shot_white(&raw.color, raw.wb_multipliers).then(|| scale.as_shot_physical(own_white));
         let embedded_lens = crate::lens_profiles::for_raw(&raw, || m.clone());
         return Ok(ProbeInfo {
             embedded_lens,
@@ -183,6 +187,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
             file_modified: None,
             meta,
             as_shot_wb,
+            as_shot_physical,
             content_hash,
             xmp: lightcraft_meta::embedded(bytes).xmp,
             orientation: Some(raw.orientation),
@@ -228,6 +233,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         file_modified: None,
         meta,
         as_shot_wb: None,
+        as_shot_physical: None,
         content_hash,
         embedded_lens: None,
         xmp: None,

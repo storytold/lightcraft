@@ -350,7 +350,7 @@ impl ImportJob {
                 found_sidecar.and_then(|f| std::fs::read_to_string(f).ok()).or_else(|| info.xmp.clone().filter(|_| raw))
             };
             let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);
-            let sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
+            let sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar_with_as_shot(&x, target, info.as_shot_physical) {
                 Ok(sc) => Some(sc),
                 Err(e) => {
                     log::warn!("import {path}: XMP: {e}");
@@ -487,6 +487,7 @@ impl Session {
         p.kind = c.kind;
         if let Some(info) = self.import_probes.get(&c.path) {
             p.as_shot_wb = info.as_shot_wb;
+            p.as_shot_physical = info.as_shot_physical;
             p.embedded_lens = info.embedded_lens;
             p.preview_only = info.preview_only.clone();
         }

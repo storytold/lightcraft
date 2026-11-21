@@ -139,6 +139,13 @@ pub fn as_shot_white_of(c: &ColorData, wb_multipliers: Option<[f32; 3]>) -> Xy {
     as_shot_white(c, wb_multipliers)
 }
 
+/// Whether the file itself names an as-shot white (the same sources and validity rules as
+/// [`as_shot_white_xy`]): without one that function synthesizes D65, which must not pass for a
+/// white the file recorded (#4432).
+pub fn names_as_shot_white(c: &ColorData, wb_multipliers: Option<[f32; 3]>) -> bool {
+    c.as_shot_white_xy.is_some() || c.as_shot_neutral.is_some() || wb_multipliers.is_some_and(|m| m.iter().all(|v| *v > 0.0 && v.is_finite()))
+}
+
 fn as_shot_white(c: &ColorData, wb_multipliers: Option<[f32; 3]>) -> Xy {
     if let Some(xy) = c.as_shot_white_xy {
         return xy;
@@ -268,6 +275,17 @@ mod tests {
 
     fn color_single(m: Mat3, ill: u16) -> ColorData {
         ColorData { illuminant: [ill, 0], color_matrix: [Some(m), None], ..Default::default() }
+    }
+
+    /// A file that names no white must not pass D65 off as its as-shot white (#4432).
+    #[test]
+    fn names_as_shot_white_needs_a_source_in_the_file() {
+        let none = ColorData::default();
+        assert!(!names_as_shot_white(&none, None));
+        assert!(!names_as_shot_white(&none, Some([-1.0, 1.0, 1.0])), "invalid multipliers are no white");
+        assert!(names_as_shot_white(&none, Some([2.2, 1.0, 1.6])));
+        let named = ColorData { as_shot_white_xy: Some(D65), ..Default::default() };
+        assert!(names_as_shot_white(&named, None));
     }
 
     fn raw_with(color: ColorData) -> RawImage {

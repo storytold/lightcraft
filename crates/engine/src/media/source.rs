@@ -382,6 +382,10 @@ pub struct ProbeInfo {
     pub file_modified: Option<String>,
     pub meta: lightcraft_catalog::Meta,
     pub as_shot_wb: Option<(f64, f64)>,
+    /// The physical white the file recorded (Kelvin, tint): on a relative scale `as_shot_wb` is
+    /// that scale's 6500 / 0 reference, and this is what a Lightroom custom white balance shifts
+    /// from (#4432).
+    pub as_shot_physical: Option<(f64, f64)>,
     /// Hash of the file's bytes (hex), for duplicate detection. When it is a 32-digit
     /// [`lightcraft_preview::hash_bytes`] of the whole file (as the native probe computes it),
     /// Import → Copy verifies each copy against it instead of reading the source again.

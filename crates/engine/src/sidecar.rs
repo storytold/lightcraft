@@ -186,6 +186,12 @@ pub enum DevelopPatch {
 /// ([`crate::crs::Target`]: absolute Kelvin for raws with a measured illuminant, a shift from the
 /// as-shot white for everything developed relative to it).
 pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Result<SidecarData, String> {
+    parse_sidecar_with_as_shot(xmp, target, None)
+}
+
+/// [`parse_sidecar`] with the photo's own as-shot white as the white-balance anchor when the
+/// packet carries no `AsShotTemperature` of its own (#4432).
+pub fn parse_sidecar_with_as_shot(xmp: &str, target: crate::crs::Target, as_shot: Option<(f64, f64)>) -> std::result::Result<SidecarData, String> {
     let d = lightcraft_meta::parse_xmp(xmp).map_err(|e| e.to_string())?;
     let m = &d.metadata;
     let lc = |k: &str| d.properties.get(&format!("lc:{k}")).and_then(|v| v.first()).cloned();
@@ -237,7 +243,8 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
     out.develop = match full {
         Some(s) => Some(DevelopPatch::Full(Box::new(s))),
         None if crate::crs::has_adjustments(&d.properties) => {
-            let (partial, unmapped) = crate::crs::to_partial_report(&d.properties, Some(&d.values), target, crate::crs_masks::DEFAULT_ASPECT);
+            let (partial, unmapped) =
+                crate::crs::to_partial_report_with_as_shot(&d.properties, Some(&d.values), target, crate::crs_masks::DEFAULT_ASPECT, as_shot);
             // Lightroom's default profiles are named by nearly every sidecar; our own starting look stands
             // in for them, so only another profile is worth a warning
             let profile = crate::crs::camera_profile_name(&d.properties)
@@ -1184,7 +1191,8 @@ impl Session {
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let Some(orig) = file_path(p) else { return Ok(None) };
         let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_lookup(id)) else { return Ok(None) };
-        let sc = parse_sidecar(&packet, crate::crs::Target::for_photo(p)).map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?;
+        let sc = parse_sidecar_with_as_shot(&packet, crate::crs::Target::for_photo(p), p.as_shot_physical)
+            .map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?;
         let sc = sc.with_file_orientation(orig);
         let mut warnings = sc.warnings.clone();
         for warning in &mut warnings {
@@ -1677,6 +1685,17 @@ mod tests {
         };
         let sc = super::parse_sidecar(&lightcraft_meta::write_xmp(&m, None), crate::crs::Target::Rendered).unwrap();
         assert_eq!(sc.keywords, Some(vec!["Places|Lisbon".to_string()]));
+    }
+
+    /// A custom white balance in a packet without an as-shot reference takes the photo's own
+    /// as-shot white as its anchor instead of staying As Shot (#4432).
+    #[test]
+    fn a_custom_wb_without_a_packet_anchor_comes_from_the_photo() {
+        let x = r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+                 crs:WhiteBalance="Custom" crs:Temperature="3578" crs:Tint="-5"/>"#;
+        let sc = super::parse_sidecar_with_as_shot(x, crate::crs::Target::RawRelative, Some((3650.0, -2.0))).unwrap();
+        let Some(DevelopPatch::Partial(p)) = sc.develop else { panic!("expected a partial patch") };
+        assert_eq!(p["wb"]["mode"], "custom");
     }
 
     /// Issue #2556: a sidecar's `lc:settings` colour-range mask keeps at most `MAX_COLOR_RANGE_SAMPLES` samples.
