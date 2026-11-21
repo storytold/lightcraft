@@ -278,7 +278,8 @@ pub struct QualityScanRun {
 impl QualityScanRun {
     /// The run's state, as `photo.qualityScanPump` and `status` answer while it runs.
     fn progress(&self) -> Value {
-        let inflight = self.inflight.as_ref().map_or(0, |(_, done, total)| (total - done) as u64);
+        // (`done` never passes `total`: one result per frame, counted as it arrives)
+        let inflight = self.inflight.as_ref().map_or(0, |(_, done, total)| total.saturating_sub(*done) as u64);
         json!({
             "active": true,
             "done": false,
