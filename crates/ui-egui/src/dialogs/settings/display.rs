@@ -86,10 +86,11 @@ pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Toke
         choices(
             ui,
             "settingsGridBadges",
-            &[(GridBadges::Auto, "When rated or hovered"), (GridBadges::Always, "Always"), (GridBadges::Never, "Never")],
+            &[(GridBadges::Auto, "Stars on hover"), (GridBadges::Always, "Always"), (GridBadges::Never, "Never")],
             &mut app.ui.settings.grid_badges,
         );
     });
+    hint(ui, t, "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.");
     check(ui, "settings.showFilenames", &mut app.ui.show_filenames, "Square Grid: show file names and formats");
     heading(ui, t, crate::i18n::tr("Keywords"));
     row(ui, t, crate::i18n::tr("Keywords of the selection"), |ui| {

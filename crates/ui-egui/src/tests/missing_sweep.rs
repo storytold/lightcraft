@@ -17,11 +17,14 @@ const T: Duration = Duration::from_secs(60);
 const PHOTOS: u64 = 40;
 
 /// Photos `IMG_0000` … on a share; the first ten are gone. The existence check waits for `open`
-/// (a share that answers slowly), at most `guard`, and counts its calls, and those made on the UI thread.
+/// (a share that answers slowly), at most `guard`, and counts its calls, those made on the UI thread,
+/// and those of the missing check's own walk: a failed thumbnail's badge asks about its file too
+/// (`Availability`'s worker thread), which is a question of the moment, not a walk of the share.
 struct Share {
     open: Arc<AtomicBool>,
     on_ui: Arc<AtomicUsize>,
     calls: Arc<AtomicUsize>,
+    walks: Arc<AtomicUsize>,
 }
 
 fn app_on_a_slow_share(guard: Duration) -> (Headless, Share) {
@@ -31,14 +34,23 @@ fn app_on_a_slow_share(guard: Duration) -> (Headless, Share) {
         let p = Photo::new(PhotoId(i + 1), Source::File { path }, &format!("IMG_{i:04}.jpg"), "JPEG", 60, 40, "2026-01-01T00:00:00");
         app.session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
-    let share = Share { open: Arc::new(AtomicBool::new(false)), on_ui: Arc::new(AtomicUsize::new(0)), calls: Arc::new(AtomicUsize::new(0)) };
-    let (ui, open, on_ui, calls) = (std::thread::current().id(), share.open.clone(), share.on_ui.clone(), share.calls.clone());
+    let share = Share {
+        open: Arc::new(AtomicBool::new(false)),
+        on_ui: Arc::new(AtomicUsize::new(0)),
+        calls: Arc::new(AtomicUsize::new(0)),
+        walks: Arc::new(AtomicUsize::new(0)),
+    };
+    let (ui, open, on_ui, calls, walks) =
+        (std::thread::current().id(), share.open.clone(), share.on_ui.clone(), share.calls.clone(), share.walks.clone());
     let deadline = Instant::now() + guard;
     app.session.media.availability.set_probe(Arc::new(move |f| {
-        calls.fetch_add(1, Ordering::SeqCst);
-        if std::thread::current().id() == ui {
+        let thread = std::thread::current();
+        if thread.id() == ui {
             on_ui.fetch_add(1, Ordering::SeqCst);
+        } else if thread.name() != Some("lc-availability") {
+            walks.fetch_add(1, Ordering::SeqCst);
         }
+        calls.fetch_add(1, Ordering::SeqCst);
         // (a hang guard: the check goes on after it, so a regression fails the test instead of hanging it)
         while !open.load(Ordering::SeqCst) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(1));
@@ -143,17 +155,17 @@ fn an_answer_nobody_waited_for_is_given_to_the_next_request() {
     drop(gave_up);
     share.open.store(true, Ordering::SeqCst);
     assert!(h.step_until(T, |h| h.app.tasks.is_empty()), "the check ends without a caller");
-    assert_eq!(share.calls.load(Ordering::SeqCst), PHOTOS as usize);
+    assert_eq!(share.walks.load(Ordering::SeqCst), PHOTOS as usize);
 
     let again = ask(&mut h);
     let reply = answer(&mut h, &again);
     assert_eq!(reply["ok"], true, "{reply}");
     assert_eq!(reply["result"].as_array().map(Vec::len), Some(10), "{reply}");
-    assert_eq!(share.calls.load(Ordering::SeqCst), PHOTOS as usize, "no second walk of the share");
+    assert_eq!(share.walks.load(Ordering::SeqCst), PHOTOS as usize, "no second walk of the share");
     // given once: the next request checks again
     let third = ask(&mut h);
     assert_eq!(answer(&mut h, &third)["ok"], true);
-    assert_eq!(share.calls.load(Ordering::SeqCst), 2 * PHOTOS as usize);
+    assert_eq!(share.walks.load(Ordering::SeqCst), 2 * PHOTOS as usize);
 }
 
 /// A check that panics is a failure told to the caller, not a request left waiting for its timeout.

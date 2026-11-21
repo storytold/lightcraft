@@ -209,7 +209,6 @@
   "{n} similar photo{} · View ▸ Clear Filters to see all": "{n} 張相似照片{:.0} · 選擇「檢視 → 清除篩選條件」可查看全部",
   "Moved; {} photo(s) relinked": "已移動；已重新連結 {} 張照片",
   "{} label (click more labels to show any of them)": "{}標籤（點擊更多標籤可顯示符合其中任一標籤的照片）",
-  ", {} star{}": "，{} 顆星{:.0}",
   ", {} label": "，{}標籤",
   "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.": "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.",
   "{:.1} MB": "{:.1} MB",
@@ -327,5 +326,6 @@
   "{name} is installed and in use: face recognition is on": "{name} 已安裝並在使用中：臉部辨識已開啟",
   "Bring photos in with File › Import Photos… ({keys}).": "透過 檔案 › 匯入照片… ({keys}) 匯入照片。",
   "View › Detail View ({keys}).": "檢視 › 詳細檢視 ({keys})。",
-  "File › Export… · File › Print… ({keys}).": "檔案 › 匯出… · 檔案 › 列印… ({keys})。"
+  "File › Export… · File › Print… ({keys}).": "檔案 › 匯出… · 檔案 › 列印… ({keys})。",
+  ", rating {} of 5": "，評分：{}/5"
 }

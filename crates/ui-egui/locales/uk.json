@@ -1537,7 +1537,8 @@
   "Watched folder": "Відстежувана тека",
   "Watermark": "Водяний знак",
   "What's New": "Що нового",
-  "When rated or hovered": "Після оцінювання або наведення",
+  "Stars on hover": "Зірки при наведенні",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Зірки при наведенні: прапорці й кольорові мітки видно завжди; зірки та позначка редагування з’являються, поки фото під курсором або вибране.",
   "White Balance": "Баланс білого",
   "White Balance Selector": "Вибір балансу білого",
   "White Balance Selector (W)": "Вибір балансу білого (W)",
@@ -2453,5 +2454,10 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Запустіть програму з --control 7980 (або LIGHTCRAFT_CONTROL_PORT), і lightcraft-cli mcp --connect під'єднає до неї одного агента.",
   "Welcome": "Ласкаво просимо",
   "Next": "Далі",
-  "Get Started": "Почати"
+  "Get Started": "Почати",
+  "Stack — click to expand (S)": "Стос — клацніть, щоб розгорнути (S)",
+  "Stack — click to collapse (S)": "Стос — клацніть, щоб згорнути (S)",
+  "Virtual copy": "Віртуальна копія",
+  "Right-click ▸ Locate Missing File… to find it again.": "Клацніть правою кнопкою → Знайти відсутній файл…, щоб знайти його знову.",
+  "Right-click ▸ Reload from Disk to try again.": "Клацніть правою кнопкою → Перезавантажити з диска, щоб спробувати ще раз."
 }
