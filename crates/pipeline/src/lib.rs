@@ -800,7 +800,8 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     let mut image = image;
     let mask = overlay_alpha(req.overlay, &plan, &prep);
     let masks = overlay_alphas_all(req.overlay, &plan, &prep);
-    visualize::apply(&mut image, req.overlay, &plan, mask.as_ref(), masks.as_deref());
+    let refs: Option<Vec<&Plane>> = masks.as_ref().map(|m| m.iter().map(|c| c.as_ref()).collect());
+    visualize::apply_borrowed(&mut image, req.overlay, &plan, mask.as_ref(), refs.as_deref());
     let mut image = if plan.keep.is_some() { cut(&image) } else { image };
     if req.overlay == Overlay::HdrRange && edit.hdr.enabled {
         // the HDR rendition of the same request says how far above SDR white each pixel goes
@@ -861,18 +862,33 @@ fn overlay_alpha(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Plane> 
 }
 
 /// The alpha planes an `Overlay::AllMasks` shows: one per visible mask that has components,
-/// reusing the render's own evaluation where available (a fresh evaluation otherwise).
-fn overlay_alphas_all(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Vec<Plane>> {
+/// borrowing the render's own evaluation where available (a fresh evaluation otherwise), so no plane is copied twice.
+fn overlay_alphas_all<'a>(o: Overlay, plan: &Plan<'_>, prep: &'a Prepared) -> Option<Vec<std::borrow::Cow<'a, Plane>>> {
     if !matches!(o, Overlay::AllMasks { .. }) {
         return None;
     }
     let ev = plan.settings.light.exposure as f32;
     let mut out = Vec::new();
-    for m in plan.settings.masks.iter().filter(|m| m.visible && !m.components.is_empty()) {
+    // the same first `max_masks` the render evaluates, so an over-cap document shows the same masks on every backend
+    let shown = plan.settings.masks.iter().filter(|m| m.visible && !m.components.is_empty()).take(masks::max_masks(
+        &plan.frame,
+        prep.img.width,
+        prep.img.height,
+    ));
+    for m in shown {
         if let Some(e) = prep.masks.iter().find(|e| e.id == m.id) {
-            out.push(e.alpha.clone());
+            out.push(std::borrow::Cow::Borrowed(&e.alpha));
         } else {
-            out.push(masks::evaluate_one(m, &plan.frame, plan.w, plan.h, &prep.img, &prep.log_l, ev, plan.mattes.as_deref()));
+            out.push(std::borrow::Cow::Owned(masks::evaluate_one(
+                m,
+                &plan.frame,
+                plan.w,
+                plan.h,
+                &prep.img,
+                &prep.log_l,
+                ev,
+                plan.mattes.as_deref(),
+            )));
         }
     }
     Some(out)

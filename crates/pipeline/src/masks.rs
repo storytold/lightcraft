@@ -144,12 +144,32 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Most bytes of alpha planes a render keeps at once, and the fewest masks it always keeps: every evaluated mask
+/// retains a full-size `f32` plane, so a sidecar listing thousands of masks must not multiply the output size.
+// u64: 8 GiB does not fit a 32-bit usize
+const MAX_ALPHA_BYTES: u64 = 8 << 30;
+const MIN_MASKS: usize = 16;
+
+fn cap_for(w: usize, h: usize) -> usize {
+    let plane = (w as u64).saturating_mul(h as u64).saturating_mul(4).max(1);
+    usize::try_from(MAX_ALPHA_BYTES / plane).unwrap_or(usize::MAX).max(MIN_MASKS)
+}
+
+/// How many masks of a `w` × `h` render of `frame` are evaluated (the first ones, in order). The cap is defined on the
+/// frame's full output size, so a preview or window applies the same masks as the export; the alpha-plane byte bound is
+/// then enforced separately on the window actually rendered (never tighter than the full frame's, as a window is no larger).
+pub fn max_masks(frame: &Frame, w: usize, h: usize) -> usize {
+    let full = frame.view.map_or(cap_for(w, h), |v| cap_for(v.full_w as usize, v.full_h as usize));
+    full.min(cap_for(w, h))
+}
+
 /// The visible masks with components, evaluated in order (`mattes`: the source's, see [`Mattes`]).
 #[allow(clippy::too_many_arguments)]
 pub fn evaluate(masks: &[Mask], frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32, mattes: Option<&Mattes>) -> Vec<Evaluated> {
     masks
         .iter()
         .filter(|m| m.visible && !m.components.is_empty())
+        .take(max_masks(frame, w, h))
         .map(|m| Evaluated { id: m.id, alpha: evaluate_one(m, frame, w, h, img, log_l, ev, mattes), adjust: m.adjust })
         .collect()
 }
