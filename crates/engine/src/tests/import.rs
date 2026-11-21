@@ -1010,6 +1010,97 @@ fn copy_with_a_folder_template() {
     }
 }
 
+/// Auto import lists the watched folder's visible files: a dot name or (on Windows and macOS) the
+/// hidden attribute leaves a file out, as Local and import do (#3045), from the metadata it reads
+/// anyway.
+#[test]
+fn auto_import_lists_no_hidden_files() {
+    let dir = temp_dir("watch-hidden");
+    // shown.jpg's size is its own, so a link listed with the link's size (the length of the path it
+    // holds) rather than the file's shows
+    std::fs::write(dir.join("shown.jpg"), b"shown").unwrap();
+    for name in [".dot.jpg", "hidden.jpg"] {
+        std::fs::write(dir.join(name), b"x").unwrap();
+    }
+    std::fs::create_dir_all(dir.join("folder")).unwrap();
+    #[cfg(windows)]
+    assert!(std::process::Command::new("attrib").arg("+h").arg(dir.join("hidden.jpg")).status().unwrap().success());
+    #[cfg(target_os = "macos")]
+    assert!(std::process::Command::new("chflags").arg("hidden").arg(dir.join("hidden.jpg")).status().unwrap().success());
+    // a link to a file is listed as that file, with its size; a link to a folder is not a file; an entry whose
+    // metadata can't be read (a dangling link) is left out without failing the listing
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        symlink(dir.join("shown.jpg"), dir.join("link.jpg")).unwrap();
+        symlink(dir.join("folder"), dir.join("folder-link")).unwrap();
+        symlink(dir.join("missing.jpg"), dir.join("dangling.jpg")).unwrap();
+    }
+    let mut listed = crate::cmd::library::list_auto_import_folder(&dir.to_string_lossy()).unwrap();
+    listed.sort();
+    let entry = |name: &str, size: u64| (dir.join(name).to_string_lossy().to_string(), size);
+    let mut expected = vec![entry("shown.jpg", 5)];
+    if !cfg!(any(windows, target_os = "macos")) {
+        expected.push(entry("hidden.jpg", 1));
+    }
+    if cfg!(unix) {
+        expected.push(entry("link.jpg", 5));
+    }
+    expected.sort();
+    assert_eq!(listed, expected);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Auto import judges a link by its own hidden attribute, as a folder walk does, not its target's
+/// (which `fs::metadata` reads through the link): a hidden link to a visible photo is left out, a
+/// visible link to a hidden photo is listed (with its target's size). Only Windows and macOS have
+/// the attribute; on Windows, making the links needs a privilege or Developer Mode.
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn auto_import_judges_a_link_by_its_own_hidden_attribute() {
+    let dir = temp_dir("watch-hidden-links");
+    std::fs::write(dir.join("shown.jpg"), b"shown").unwrap();
+    std::fs::write(dir.join("hidden.jpg"), b"hidden!").unwrap();
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(dir.join("shown.jpg"), dir.join("hidden-link.jpg"))
+        .and_then(|()| std::os::windows::fs::symlink_file(dir.join("hidden.jpg"), dir.join("shown-link.jpg")));
+    #[cfg(target_os = "macos")]
+    let made = std::os::unix::fs::symlink(dir.join("shown.jpg"), dir.join("hidden-link.jpg"))
+        .and_then(|()| std::os::unix::fs::symlink(dir.join("hidden.jpg"), dir.join("shown-link.jpg")));
+    if let Err(e) = made {
+        let _ = std::fs::remove_dir_all(&dir);
+        lightcraft_testkit::skip!(System, "can't make a file link here: {e}");
+        return;
+    }
+    // the hidden attribute on the link itself, not its target (`/L`, `-h`), and on hidden.jpg
+    #[cfg(windows)]
+    let hide = |path: &std::path::Path, link: bool| {
+        let mut c = std::process::Command::new("attrib");
+        c.arg("+h");
+        if link {
+            c.arg("/L");
+        }
+        assert!(c.arg(path).status().unwrap().success());
+    };
+    #[cfg(target_os = "macos")]
+    let hide = |path: &std::path::Path, link: bool| {
+        let mut c = std::process::Command::new("chflags");
+        if link {
+            c.arg("-h");
+        }
+        assert!(c.arg("hidden").arg(path).status().unwrap().success());
+    };
+    hide(&dir.join("hidden-link.jpg"), true);
+    hide(&dir.join("hidden.jpg"), false);
+    assert!(crate::walk::is_hidden_path(&dir.join("hidden-link.jpg")), "the link itself is hidden");
+    assert!(!crate::walk::is_hidden_path(&dir.join("shown.jpg")), "its target isn't");
+    let mut listed = crate::cmd::library::list_auto_import_folder(&dir.to_string_lossy()).unwrap();
+    listed.sort();
+    let entry = |name: &str, size: u64| (dir.join(name).to_string_lossy().to_string(), size);
+    assert_eq!(listed, vec![entry("shown-link.jpg", 7), entry("shown.jpg", 5)]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Auto import: files in the watched folder are added once their size held between two scans,
 /// into the named album; non-photos are tried once; the selection stays put.
 #[test]
