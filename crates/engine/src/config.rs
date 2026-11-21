@@ -166,6 +166,14 @@ impl Session {
         self
     }
 
+    /// Let the host offer, at its start, to update photos imported before LightCraft recorded what their files carry
+    /// ([`crate::cmd::file_facts`]). Nothing is read without the user's yes; hosts without a person to ask don't
+    /// set it.
+    pub fn with_file_facts_offer(mut self) -> Self {
+        self.file_facts_offer = true;
+        self
+    }
+
     /// Keep denoise models in the shared default folder ([`default_denoise_models_dir`]).
     pub fn with_default_denoise_models(mut self) -> Self {
         self.set_denoise_models_dir(default_denoise_models_dir());
