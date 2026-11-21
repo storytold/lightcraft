@@ -266,15 +266,15 @@ differ by a median of 0.14.
 
 | Look | Held-out charts, mean | Validation photos (489), median / 95th percentile | Sealed test photos (292), median / 95th percentile | Public raws (3), median | Starting look, validation photos, median |
 |---|---:|---:|---:|---:|---:|
-| Standard (PROVIA) | 0.45 | 0.60 / 1.05 | 0.62 / 1.13 | 0.62 | 2.41 |
-| Vivid (Velvia) | 0.43 | 0.55 / 1.04 | 0.59 / 1.31 | 0.49 | 3.98 |
-| Soft (ASTIA) | 0.48 | 0.58 / 1.06 | 0.60 / 1.55 | 0.63 | 2.83 |
-| Portrait Hi (PRO Neg. Hi) | 0.42 | 0.56 / 1.09 | 0.59 / 1.10 | 0.59 | 3.36 |
-| Portrait (PRO Neg. Std) | 0.43 | 0.60 / 1.20 | 0.60 / 1.71 | 0.60 | 3.07 |
-| Muted (Classic Chrome) | 0.40 | 0.52 / 0.93 | 0.56 / 1.14 | 0.60 | 3.23 |
-| Cinema (ETERNA) | 0.44 | 0.62 / 1.29 | 0.64 / 1.46 | 0.68 | 3.49 |
-| Negative (Classic Neg.) | 0.43 | 0.52 / 0.92 | 0.52 / 1.04 | 0.60 | 5.56 |
-| Bleach Bypass (ETERNA Bleach Bypass) | 0.44 | 0.54 / 0.94 | 0.56 / 0.96 | 0.54 | 6.50 |
+| Standard (PROVIA) | 0.45 | 0.60 / 1.05 | 0.61 / 1.16 | 0.63 | 2.10 |
+| Vivid (Velvia) | 0.43 | 0.54 / 1.02 | 0.58 / 1.30 | 0.49 | 3.63 |
+| Soft (ASTIA) | 0.48 | 0.58 / 1.06 | 0.60 / 1.54 | 0.65 | 2.70 |
+| Portrait Hi (PRO Neg. Hi) | 0.42 | 0.55 / 1.08 | 0.59 / 1.04 | 0.59 | 2.96 |
+| Portrait (PRO Neg. Std) | 0.43 | 0.58 / 1.16 | 0.60 / 1.73 | 0.62 | 2.85 |
+| Muted (Classic Chrome) | 0.40 | 0.51 / 0.90 | 0.55 / 1.13 | 0.60 | 3.01 |
+| Cinema (ETERNA) | 0.44 | 0.62 / 1.30 | 0.64 / 1.49 | 0.70 | 3.38 |
+| Negative (Classic Neg.) | 0.43 | 0.51 / 0.90 | 0.53 / 1.10 | 0.62 | 5.42 |
+| Bleach Bypass (ETERNA Bleach Bypass) | 0.44 | 0.55 / 0.94 | 0.57 / 0.96 | 0.56 | 6.53 |
 
 The held-out charts are six charts the fit never saw, with other colours and layouts, including charts of only dark
 and only bright colours. The photos are the contributor's own X-T4 raws with enough flat area, chosen by script from
@@ -283,14 +283,14 @@ split into a validation set and a test set before any look was measured on them,
 this form was final. Only these aggregate figures are shared. Photo and public-raw figures
 are this implementation: `lightcraft-cli` exporting each raw through each look in Adobe RGB at a 1,200-pixel long edge,
 with the embedded lens corrections on, clipped into sRGB as the camera clips (the camera's own sRGB JPEG is the
-reference). They sit a median of 0.14 from the lookup applied straight to camera RGB read from the sensor and
-framed through the camera's own lens correction, on every lens (XF16-55, XF70-300 and a 13 mm lens, 0.13 to 0.16). On 96 to 100 % of the photos where the camera's
+reference). They sit a median of 0.15 from the lookup applied straight to camera RGB read from the sensor and
+framed through the camera's own lens correction, on every lens (XF16-55, XF70-300 and a 13 mm lens, 0.14 to 0.19). On 96 to 100 % of the photos where the camera's
 two looks differ by at least 0.4, each look is nearer the camera's render of it than of its nearest other look.
 Exported into sRGB directly, LightCraft maps colours outside sRGB in by desaturating them, where the camera clips them;
-on the public raws that costs Velvia most (median 0.49 → 1.97) and the muted looks least (Classic Neg.
-0.60 → 0.61).
+on the public raws that costs Velvia most (median 0.49 → 1.96) and leaves ETERNA (0.70) and Bleach Bypass (0.56)
+unchanged.
 
-Against the limits (PROVIA and PRO Neg. Std 0.61, ASTIA 0.64, PRO Neg. Hi and Classic Chrome 0.72, ETERNA 0.85, the rest 1.0): every look passes on the validation photos, and every 95th percentile in both sets is within 2.0. On the sealed test photos PROVIA is 0.01 over (0.62). On the public raws two of the three are over for PROVIA (0.62 and 0.64), and one for PRO Neg. Std (0.63). The lookup alone, without LightCraft's pipeline, passes on both photo sets (medians 0.45 to 0.54).
+Against the limits (PROVIA and PRO Neg. Std 0.61, ASTIA 0.64, PRO Neg. Hi and Classic Chrome 0.72, ETERNA 0.85, the rest 1.0): every look passes on both photo sets, and every 95th percentile in both sets is within 2.0. On the public raws PROVIA, ASTIA and PRO Neg. Std are each over on two of the three (PROVIA 0.63 and 0.66, ASTIA 0.65 and 0.65, PRO Neg. Std 0.62 and 0.64). The lookup alone, without LightCraft's pipeline, passes on both photo sets (medians 0.45 to 0.54).
 
 **Limits.** The X-T4 only: other bodies sharing its sensor may render alike but are not measured. The monochrome film
 simulations, Grain, Color Chrome Effect, Color Chrome FX Blue and the camera's highlight, shadow, colour and sharpness
