@@ -26,6 +26,15 @@ pub fn write_exif(meta: &Metadata) -> Vec<u8> {
     craft_metadata::write_exif(&to_craft(meta))
 }
 
+/// Exif `CustomRendered` (tag 0xA401 in the Exif IFD), which the shared Exif reader does not keep.
+pub(crate) fn custom_rendered(bytes: &[u8]) -> Option<u16> {
+    let tiff = Tiff::parse(strip_exif_header(bytes)).ok()?;
+    tiff.ifds.first()?.exif.as_ref()?.u16(CUSTOM_RENDERED)
+}
+
+/// `CustomRendered`'s tag number in the Exif IFD.
+const CUSTOM_RENDERED: u16 = 0xA401;
+
 pub(crate) fn ifd0_orientation(bytes: &[u8]) -> Option<Orientation> {
     craft_metadata::ifd0_orientation_compat(bytes).map(crate::convert::orientation_from_craft)
 }
