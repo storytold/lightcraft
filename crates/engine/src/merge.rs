@@ -113,8 +113,12 @@ impl MergeJob {
         let one = |(_, path): &(PhotoId, String)| {
             let bytes = (self.read)(path)?;
             // a raw without colour matrices of its own starts from the colour it has when opened alone (#965)
-            let f = lightcraft_merge::load_frame_with(&bytes, self.preview, orient, &crate::camera_preview::starting_colour_tags)
-                .map_err(|e| format!("{path}: {e}"));
+            // starting_colour_tags fits once and builds complete tags: the fitted matrix is folded into
+            // the transform, and the hue/saturation map and tone curve are kept.
+            let f = lightcraft_merge::load_frame_with(&bytes, self.preview, orient, &|raw, bytes| {
+                crate::camera_preview::starting_colour_tags(raw, bytes)
+            })
+            .map_err(|e| format!("{path}: {e}"));
             let k = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             progress(span.0 + (span.1 - span.0) * k as f32 / n as f32, "Reading photos");
             f
