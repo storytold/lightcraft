@@ -362,6 +362,7 @@ impl LightcraftApp {
         }
         ctx.input_mut(|input| input.pointer = egui::PointerState::default());
         ctx.stop_dragging();
+        self.native_file_drag_press = false;
         if self.synthetic_mods != egui::Modifiers::NONE {
             // The cleanup removes only the app's synthetic modifiers, never a real host change.
             // A host `ModifiersChanged` in this same raw batch is already authoritative and was

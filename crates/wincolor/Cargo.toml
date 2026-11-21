@@ -19,6 +19,19 @@ windows-sys = { version = "0.61", features = [
     "Win32_Devices_Display",
 ] }
 
+windows = { version = "0.62.2", features = [
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_SystemServices",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+windows-core = "0.62.2"
+
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }

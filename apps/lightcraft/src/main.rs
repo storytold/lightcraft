@@ -181,6 +181,13 @@ impl eframe::App for App {
             self.0.renderer.set_screen_textures(Box::new(t));
         }
         self.0.ui(ui);
+        #[cfg(windows)]
+        if let Some(files) = self.0.take_native_file_drag()
+            && let Err(error) = lightcraft_wincolor::drag_original_files(&files)
+        {
+            log::warn!("native file drag failed: {error}");
+            self.0.toast_error(ui.ctx(), lightcraft_ui_egui::i18n::tr("Could not start dragging the original files."));
+        }
     }
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // (a size the window was just given is remembered too)
@@ -364,6 +371,8 @@ fn main() -> eframe::Result {
                 // HDR display: SDR unless the surface, platform and display all allow HDR
                 hdr_display::report(cc.wgpu_render_state.as_ref().map(|r| r.target_format));
                 let mut app = LightcraftApp::new(session, services(cc, app_log_file.as_deref()));
+                #[cfg(windows)]
+                app.enable_native_file_drag();
                 app.set_startup_update_check(true);
                 if let Some(ui) = prefs {
                     app.ui = ui;

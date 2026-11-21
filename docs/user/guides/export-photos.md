@@ -30,6 +30,12 @@ If you did not choose a folder, the window stays open and shows an error, so you
 - To keep a set of choices, type a name next to **Save preset** and click **Save**. Pick it again later with **Preset** at the top of the window.
 - **File** > **Export with Previous** repeats your last export. It tells you to use **Export…** first if you have not exported yet.
 
+## Hand original files to another app on Windows
+
+Hold **Ctrl** and drag a thumbnail with the primary mouse button to an app that accepts files. Dragging a selected thumbnail offers all selected originals; dragging an unselected thumbnail offers only that original. Press **Esc** to cancel. A missing original prevents the whole drag.
+
+The drop offers a copy, never a move. It offers the original files as they are on disk, without rendered edits or sidecars. Use **Export…** to include your edits. Ctrl-click and Shift-click still select photos, and dragging without Ctrl still works inside LightCraft.
+
 ## Contact sheet
 
 To make a PDF of thumbnails, select photos and choose **File** > **Contact Sheet PDF…**.

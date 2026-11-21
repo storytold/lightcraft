@@ -4474,6 +4474,8 @@ name = "lightcraft-wincolor"
 version = "0.21.1"
 dependencies = [
  "lightcraft-testkit",
+ "windows",
+ "windows-core",
  "windows-sys 0.61.2",
 ]
 

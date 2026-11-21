@@ -23,6 +23,12 @@
 
 use std::path::PathBuf;
 
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod file_drag;
+#[cfg(windows)]
+pub use file_drag::drag_original_files;
+
 /// What Windows says about colour on the monitor showing a window.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MonitorColor {

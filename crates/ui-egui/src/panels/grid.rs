@@ -982,7 +982,7 @@ fn cell_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
         let _ = app.run("view.detail", json!({}));
     }
     // only the primary button drags, so a right-button drag leaves the selection alone
-    if resp.drag_started_by(egui::PointerButton::Primary) {
+    if resp.drag_started_by(egui::PointerButton::Primary) && !app.begin_native_file_drag(ui.ctx(), id) {
         begin_photo_drag(app, id);
     }
     crate::widgets::context_menu(resp, |ui| context_menu(app, ui, id));
