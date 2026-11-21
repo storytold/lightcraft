@@ -161,6 +161,44 @@ pub(in super::super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui,
     }
     heading(ui, t, crate::i18n::tr("General"));
     check(ui, "viewOptions.loupeMessages", &mut app.ui.settings.loupe_messages, "Show message when loading or rendering photos");
+    focus_peaking_options(app, ui, t);
+}
+
+/// Focus peaking colours offered in View Options.
+pub(crate) const PEAKING_COLORS: [[u8; 3]; 5] =
+    [lightcraft_engine::pipeline::visualize::PEAKING_COLOR, [40, 220, 70], [40, 120, 255], [255, 220, 0], [255, 255, 255]];
+
+/// View Options' Focus Peaking rows: show it, its colour and its sensitivity (`view.focusPeaking`).
+fn focus_peaking_options(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    heading(ui, t, crate::i18n::tr("Focus Peaking"));
+    let mut on = app.ui.focus_peaking;
+    if check(ui, "viewOptions.focusPeaking", &mut on, "Show Focus Peaking") {
+        let _ = app.run("view.focusPeaking", json!({"on": on}));
+    }
+    row(ui, t, crate::i18n::tr("Color"), |ui| {
+        for c in PEAKING_COLORS {
+            let (r, resp) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+            let hex = format!("{:02x}{:02x}{:02x}", c[0], c[1], c[2]);
+            crate::widgets::announce(&resp, format!("{} #{hex}", crate::i18n::tr("Focus peaking color")));
+            register(ui, format!("viewOptions.peakingColor:{hex}"), r);
+            ui.painter().rect_filled(r.shrink(3.0), 3.0, egui::Color32::from_rgb(c[0], c[1], c[2]));
+            if app.ui.peaking_color == c {
+                ui.painter().rect_stroke(r, 3.0, egui::Stroke::new(1.5, t.text), egui::StrokeKind::Inside);
+            }
+            if resp.clicked() {
+                let _ = app.run("view.focusPeaking", json!({"color": c}));
+            }
+        }
+    });
+    row(ui, t, crate::i18n::tr("Sensitivity"), |ui| {
+        let mut s = app.ui.peaking_sensitivity;
+        let r = ui.add(egui::Slider::new(&mut s, 0.0..=100.0).step_by(1.0));
+        register(ui, "slider:viewOptions.peakingSensitivity", r.rect);
+        if r.changed() {
+            let _ = app.run("view.focusPeaking", json!({"sensitivity": s}));
+        }
+    });
+    hint(ui, t, crate::i18n::tr("Paints the sharp edges of the photo in Detail and Survey. Higher sensitivity marks softer edges too."));
 }
 
 // ----------------------------------------------------------------------------------- Slideshow

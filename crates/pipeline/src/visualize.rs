@@ -14,6 +14,9 @@
 //!   (white or black, with the clipped channels shown), greyscale (Sharpening Amount), the fine
 //!   detail band sharpening works on (Radius / Detail) and the sharpening mask (Masking). The
 //!   sharpening views read the render's own detail planes ([`sharpen_plane`]).
+//! - **Focus peaking** (Detail and Survey views): the photo with the pixels on sharp edges painted in
+//!   one colour, from a Sobel gradient of the displayed image's luminance and a fixed threshold
+//!   ([`peaking_threshold`]), so a zoom window marks the same pixels as the whole frame.
 
 use std::borrow::Cow;
 
@@ -60,7 +63,16 @@ pub enum Overlay {
     /// Clipping warnings (J): the photo with every pixel that has a channel at 255 painted
     /// [`CLIP_HIGH`] and every other pixel with a channel at 0 painted [`CLIP_LOW`].
     ClipWarnings,
+    /// Focus peaking: the photo with every pixel on a sharp edge (its luminance gradient above
+    /// [`peaking_threshold`] for `sensitivity`, 0..100, higher marks more) painted `color`; with
+    /// `clip`, the clipping warnings ([`Overlay::ClipWarnings`]) are drawn under it.
+    FocusPeaking { color: [u8; 3], sensitivity: u8, clip: bool },
 }
+
+/// [`Overlay::FocusPeaking`]'s default colour.
+pub const PEAKING_COLOR: [u8; 3] = [255, 40, 40];
+/// [`Overlay::FocusPeaking`]'s default sensitivity.
+pub const PEAKING_SENSITIVITY: u8 = 50;
 
 /// [`Overlay::ClipWarnings`] colour of clipped highlights.
 pub const CLIP_HIGH: [u8; 3] = [255, 0, 0];
@@ -131,6 +143,21 @@ fn pack_mask(id: u16, view: MaskView, color: [u8; 3], opacity: u8) -> u64 {
     id as u64 | view.index() << 16 | rgb << 20 | (opacity.min(100) as u64) << 44
 }
 
+/// [`Overlay::FocusPeaking`]'s fields in 32 bits: colour 24, sensitivity 7, clip 1.
+fn pack_peaking(color: [u8; 3], sensitivity: u8, clip: bool) -> u64 {
+    let rgb = (color[0] as u64) << 16 | (color[1] as u64) << 8 | color[2] as u64;
+    rgb | (sensitivity.min(100) as u64) << 24 | (clip as u64) << 31
+}
+
+fn unpack_peaking(v: u64) -> Overlay {
+    let rgb = v & 0xff_ffff;
+    Overlay::FocusPeaking {
+        color: [(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8],
+        sensitivity: ((v >> 24) & 0x7f).min(100) as u8,
+        clip: (v >> 31) & 1 == 1,
+    }
+}
+
 fn unpack_mask(v: u64) -> Overlay {
     let rgb = (v >> 20) & 0xff_ffff;
     Overlay::Mask {
@@ -157,6 +184,7 @@ impl Overlay {
             Overlay::SharpenDetail => (9, 0.0),
             Overlay::SharpenMask => (10, 0.0),
             Overlay::ClipWarnings => (11, 0.0),
+            Overlay::FocusPeaking { color, sensitivity, clip } => (12, pack_peaking(color, sensitivity, clip) as f64),
         }
     }
 
@@ -181,6 +209,7 @@ impl Overlay {
             9 => Overlay::SharpenDetail,
             10 => Overlay::SharpenMask,
             11 => Overlay::ClipWarnings,
+            12 if v.is_finite() && v >= 0.0 && v <= u32::MAX as f64 => unpack_peaking(v as u64),
             _ => Overlay::None,
         }
     }
@@ -200,6 +229,7 @@ impl Overlay {
             Overlay::SharpenDetail => 0x5003,
             Overlay::SharpenMask => 0x5004,
             Overlay::ClipWarnings => 0x5005,
+            Overlay::FocusPeaking { color, sensitivity, clip } => 6 << 60 | pack_peaking(color, sensitivity, clip),
         }
     }
 
@@ -219,7 +249,7 @@ impl Overlay {
     /// The clipping previews, which test the sRGB values the histogram counts (a render for a
     /// display profile draws them in sRGB, then converts).
     pub fn is_clipping(self) -> bool {
-        matches!(self, Overlay::ClipShadows | Overlay::ClipHighlights | Overlay::ClipWarnings)
+        matches!(self, Overlay::ClipShadows | Overlay::ClipHighlights | Overlay::ClipWarnings | Overlay::FocusPeaking { clip: true, .. })
     }
 
     /// Whether the overlay draws from the render's detail planes ([`sharpen_plane`]).
@@ -325,6 +355,7 @@ pub fn apply(img: &mut Rgba8, o: Overlay, plan: &Plan<'_>, plane: Option<&Plane>
         Overlay::ClipShadows => clipping(img, false),
         Overlay::ClipHighlights => clipping(img, true),
         Overlay::ClipWarnings => clip_warnings(img),
+        Overlay::FocusPeaking { color, sensitivity, clip } => focus_peaking(img, color, sensitivity, clip),
         Overlay::Grayscale => grayscale(img),
         Overlay::SharpenDetail | Overlay::SharpenMask => {
             if let Some(p) = plane.filter(|a| (a.width, a.height) == (img.width, img.height)) {
@@ -383,15 +414,59 @@ pub fn clip_warnings(img: &mut Rgba8) {
     let w = img.width;
     for_rows(&mut img.data, w, |_, row| {
         for px in row.iter_mut() {
-            let c = &px[..3];
-            let paint = if c.contains(&255) {
-                CLIP_HIGH
-            } else if c.contains(&0) {
-                CLIP_LOW
+            if let Some(paint) = clip_paint(px) {
+                *px = [paint[0], paint[1], paint[2], 255];
+            }
+        }
+    });
+}
+
+fn clip_paint(px: &[u8; 4]) -> Option<[u8; 3]> {
+    let c = &px[..3];
+    if c.contains(&255) {
+        Some(CLIP_HIGH)
+    } else if c.contains(&0) {
+        Some(CLIP_LOW)
+    } else {
+        None
+    }
+}
+
+/// The Sobel gradient magnitude (of encoded luminance, 0..1) above which [`Overlay::FocusPeaking`]
+/// marks a pixel, for sensitivity `s` (0..100): 1.0 at 0 (a hard step of a quarter of the range),
+/// 0.05 at 100 (faint texture).
+pub fn peaking_threshold(s: u8) -> f32 {
+    0.05_f32.powf(s.min(100) as f32 / 100.0)
+}
+
+/// [`Overlay::FocusPeaking`]: the pixels whose luminance gradient (a 3 × 3 Sobel, the image's edge
+/// repeated outward) passes [`peaking_threshold`] painted `color`; with `clip`, the clipping
+/// warnings first. The gradient is taken on the photo itself, never on the warnings' colours.
+pub fn focus_peaking(img: &mut Rgba8, color: [u8; 3], sensitivity: u8, clip: bool) {
+    let (w, h) = (img.width, img.height);
+    if w == 0 || h == 0 || img.data.len() != w * h {
+        return;
+    }
+    let luma: Vec<f32> = img.data.iter().map(|p| (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0).collect();
+    let thr = peaking_threshold(sensitivity);
+    let thr2 = thr * thr;
+    let at = |x: usize, y: usize| luma[y * w + x];
+    for_rows(&mut img.data, w, |y, row| {
+        let (ya, yb) = (y.saturating_sub(1), (y + 1).min(h - 1));
+        for (x, px) in row.iter_mut().enumerate() {
+            let (xa, xb) = (x.saturating_sub(1), (x + 1).min(w - 1));
+            let gx = (at(xb, ya) + 2.0 * at(xb, y) + at(xb, yb)) - (at(xa, ya) + 2.0 * at(xa, y) + at(xa, yb));
+            let gy = (at(xa, yb) + 2.0 * at(x, yb) + at(xb, yb)) - (at(xa, ya) + 2.0 * at(x, ya) + at(xb, ya));
+            let paint = if gx * gx + gy * gy > thr2 {
+                Some(color)
+            } else if clip {
+                clip_paint(px)
             } else {
-                continue;
+                None
             };
-            *px = [paint[0], paint[1], paint[2], 255];
+            if let Some(c) = paint {
+                *px = [c[0], c[1], c[2], 255];
+            }
         }
     });
 }
@@ -757,6 +832,139 @@ mod tests {
         }
         assert!(Overlay::ClipShadows.per_pixel() && !Overlay::SharpenDetail.per_pixel());
         assert!(Overlay::ClipWarnings.is_clipping() && Overlay::ClipWarnings.per_pixel());
+    }
+
+    fn peaked(img: &Rgba8, color: [u8; 3]) -> Vec<bool> {
+        img.data.iter().map(|p| [p[0], p[1], p[2]] == color).collect()
+    }
+
+    #[test]
+    fn focus_peaking_marks_checkerboard_edges_and_leaves_flat_areas() {
+        let (w, h, cell) = (64, 48, 8);
+        let data = (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                let v = if x < 32 { if (x / cell + y / cell) % 2 == 0 { 40 } else { 200 } } else { 120 };
+                [v, v, v, 255]
+            })
+            .collect();
+        let src = Rgba8 { width: w, height: h, data };
+        let green = [0, 255, 0];
+        let mut img = src.clone();
+        focus_peaking(&mut img, green, PEAKING_SENSITIVITY, false);
+        let m = peaked(&img, green);
+        for y in 0..h {
+            for x in 0..32 {
+                let edge = x % cell == 0 || x % cell == cell - 1 || y % cell == 0 || y % cell == cell - 1;
+                let inner_edge =
+                    (x % cell == 0 && x > 0) || (x % cell == cell - 1 && x < 31) || (y % cell == 0 && y > 0) || (y % cell == cell - 1 && y < h - 1);
+                if inner_edge {
+                    assert!(m[y * w + x], "checker edge at {x},{y} is marked");
+                }
+                if !edge {
+                    assert!(!m[y * w + x], "inside a checker cell at {x},{y} stays the photo");
+                    assert_eq!(img.data[y * w + x], src.data[y * w + x]);
+                }
+            }
+            for x in 34..w {
+                assert!(!m[y * w + x], "flat grey at {x},{y} is not marked");
+                assert_eq!(img.data[y * w + x], src.data[y * w + x]);
+            }
+        }
+    }
+
+    #[test]
+    fn focus_peaking_threshold_follows_sensitivity() {
+        assert!(peaking_threshold(0) > peaking_threshold(50) && peaking_threshold(50) > peaking_threshold(100));
+        assert_eq!(peaking_threshold(200), peaking_threshold(100));
+        // a soft ramp of one encoded level per pixel, then a steeper one of four levels per pixel
+        let w = 64;
+        let row: Vec<[u8; 4]> = (0..w)
+            .map(|x| {
+                let v = if x < 32 { 60 + x as u8 } else { 92 + 4 * (x as u8 - 32) };
+                [v, v, v, 255]
+            })
+            .collect();
+        let src = Rgba8 { width: w, height: 3, data: [row.clone(), row.clone(), row].concat() };
+        let marks = |s: u8| {
+            let mut img = src.clone();
+            focus_peaking(&mut img, [255, 0, 255], s, false);
+            peaked(&img, [255, 0, 255])
+        };
+        let count = |m: &[bool], xs: std::ops::Range<usize>| xs.filter(|x| m[w + x]).count();
+        // gradient magnitude: 8/255 ≈ 0.031 on the soft ramp, 32/255 ≈ 0.125 on the steep one
+        let low = marks(0);
+        assert_eq!(count(&low, 0..w), 0, "insensitive: neither ramp");
+        let mid = marks(PEAKING_SENSITIVITY);
+        assert_eq!(count(&mid, 2..30) + count(&mid, 34..62), 0, "default: gradients under {} stay", peaking_threshold(PEAKING_SENSITIVITY));
+        let high = marks(100);
+        assert_eq!(count(&high, 2..30), 0, "the soft ramp stays even at 100");
+        assert_eq!(count(&high, 34..62), 28, "the steep ramp is marked at 100");
+        assert!(peaking_threshold(100) < 32.0 / 255.0 && peaking_threshold(100) > 8.0 / 255.0);
+    }
+
+    #[test]
+    fn focus_peaking_handles_tiny_and_mismatched_images() {
+        for (w, h) in [(0, 0), (1, 1), (1, 5), (5, 1), (2, 2)] {
+            let mut img = Rgba8 { width: w, height: h, data: vec![[255, 0, 0, 255]; w * h] };
+            focus_peaking(&mut img, [0, 255, 0], 100, true);
+            assert!(img.data.iter().all(|p| *p == [255, 0, 0, 255]), "{w}x{h}: flat, so no peaking; red is clipped red");
+        }
+        let mut short = Rgba8 { width: 4, height: 4, data: vec![[10, 10, 10, 255]; 3] };
+        focus_peaking(&mut short, [0, 255, 0], 100, false);
+        assert_eq!(short.data, vec![[10, 10, 10, 255]; 3]);
+    }
+
+    #[test]
+    fn focus_peaking_draws_over_the_clipping_warnings() {
+        let data = vec![[255, 255, 255, 255], [255, 255, 255, 255], [0, 0, 0, 255], [0, 0, 0, 255], [128, 128, 128, 255], [128, 128, 128, 255]];
+        let src = Rgba8 { width: 6, height: 1, data };
+        let green = [0, 255, 0];
+        let mut with_clip = src.clone();
+        focus_peaking(&mut with_clip, green, 50, true);
+        let rgb: Vec<[u8; 3]> = with_clip.data.iter().map(|p| [p[0], p[1], p[2]]).collect();
+        assert_eq!(rgb, [CLIP_HIGH, green, green, green, green, [128, 128, 128]]);
+        let mut plain = src.clone();
+        focus_peaking(&mut plain, green, 50, false);
+        assert_eq!(plain.data[0], src.data[0], "without clip the white stays white");
+    }
+
+    #[test]
+    fn focus_peaking_parts_and_keys() {
+        let all = [
+            Overlay::FocusPeaking { color: PEAKING_COLOR, sensitivity: PEAKING_SENSITIVITY, clip: false },
+            Overlay::FocusPeaking { color: PEAKING_COLOR, sensitivity: PEAKING_SENSITIVITY, clip: true },
+            Overlay::FocusPeaking { color: [0, 255, 0], sensitivity: 0, clip: false },
+            Overlay::FocusPeaking { color: [255, 255, 255], sensitivity: 100, clip: true },
+        ];
+        for o in all {
+            let (k, v) = o.to_parts();
+            assert_eq!(Overlay::from_parts(k, v), o);
+            assert_eq!(all.iter().filter(|p| p.key() == o.key()).count(), 1);
+            assert!(!o.per_pixel(), "peaking reads its neighbours");
+        }
+        assert!(all[1].is_clipping() && !all[0].is_clipping());
+        assert_eq!(Overlay::from_parts(12, f64::NAN), Overlay::None);
+        assert_eq!(Overlay::from_parts(12, -1.0), Overlay::None);
+        assert_eq!(Overlay::from_parts(12, 1e300), Overlay::None);
+        let Overlay::FocusPeaking { sensitivity, .. } = Overlay::from_parts(12, (127u64 << 24) as f64) else { panic!("peaking") };
+        assert_eq!(sensitivity, 100, "an out-of-range sensitivity is capped");
+    }
+
+    #[test]
+    fn focus_peaking_renders_through_the_pipeline() {
+        let src = Rgb32f::from_fn(120, 80, |x, y| if x < 60 { if (x / 10 + y / 10) % 2 == 0 { [0.05; 3] } else { [0.6; 3] } } else { [0.2; 3] });
+        let info = SourceInfo::default();
+        let s = DevelopSettings::default();
+        let color = [0, 255, 0];
+        let o = Overlay::FocusPeaking { color, sensitivity: PEAKING_SENSITIVITY, clip: false };
+        let plain = render(&src, &info, &s, &RenderRequest::fit(120, 80)).image;
+        let peak = render(&src, &info, &s, &RenderRequest { overlay: o, ..RenderRequest::fit(120, 80) }).image;
+        let m = peaked(&peak, color);
+        assert!(peaked(&plain, color).iter().all(|p| !p));
+        assert!(m[15 * 120 + 10] && m[15 * 120 + 9], "the checker's edge is marked");
+        assert!(!m[15 * 120 + 5] && !m[40 * 120 + 90], "a checker cell and the flat half are not");
+        assert_eq!(peak.data[40 * 120 + 90], plain.data[40 * 120 + 90]);
     }
 
     #[test]

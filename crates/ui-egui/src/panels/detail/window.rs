@@ -4,11 +4,12 @@ use super::{Color32, LightcraftApp, PhotoId, Rect, Slot, pos2, vec2};
 /// overlays are evaluated from the same mask alpha as the full render; Point Color range and Visualize
 /// HDR act pixel by pixel (the HDR rendition is rendered for the same window); Visualize Spots' high
 /// pass reads about 3σ = 1.8 % of the long edge, inside the window's margin
-/// ([`crate::region::margin_for`]: 4.5 %). Each is tested equal to the whole-frame render's pixels.
+/// ([`crate::region::margin_for`]: 4.5 %); focus peaking reads one pixel around each. Each is tested
+/// equal to the whole-frame render's pixels.
 pub(crate) fn overlay_supports_window(overlay: lightcraft_pipeline::Overlay) -> bool {
     use lightcraft_pipeline::Overlay as O;
     match overlay {
-        O::None | O::Mask { .. } | O::AllMasks { .. } | O::PointColorRange(_) | O::HdrRange | O::Spots(_) => true,
+        O::None | O::Mask { .. } | O::AllMasks { .. } | O::PointColorRange(_) | O::HdrRange | O::Spots(_) | O::FocusPeaking { .. } => true,
         // clipping and greyscale previews act pixel by pixel on the finished image
         o if o.per_pixel() => true,
         _ => false,

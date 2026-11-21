@@ -79,6 +79,11 @@ pub struct UiState {
     /// Solo Mode (`view.soloSections`): opening one Edit section closes the others.
     pub single_panel: bool,
     pub show_clipping: bool,
+    /// Focus peaking (`view.focusPeaking`): the sharp edges of the photo painted over it in Detail
+    /// and Survey, in `peaking_color`; a higher `peaking_sensitivity` (0..100) marks softer edges.
+    pub focus_peaking: bool,
+    pub peaking_color: [u8; 3],
+    pub peaking_sensitivity: f32,
     pub histogram: bool,
     /// Soft proofing (S in the loupe): render as `proof` would hold the photo.
     pub soft_proof: bool,
@@ -419,6 +424,9 @@ impl Default for UiState {
             open_flyouts: vec![],
             single_panel: false,
             show_clipping: false,
+            focus_peaking: false,
+            peaking_color: lightcraft_engine::pipeline::visualize::PEAKING_COLOR,
+            peaking_sensitivity: lightcraft_engine::pipeline::visualize::PEAKING_SENSITIVITY as f32,
             histogram: true,
             soft_proof: false,
             proof: lightcraft_engine::pipeline::Proof { dest_warning: false, ..Default::default() },
@@ -616,6 +624,11 @@ impl UiState {
         self.left_width = LEFT_WIDTH.clamp(self.left_width);
         self.right_width = RIGHT_WIDTH.clamp(self.right_width);
         self.brush_size = self.brush_size.clamp(0.002, 0.5);
+        self.peaking_sensitivity = if self.peaking_sensitivity.is_finite() {
+            self.peaking_sensitivity.clamp(0.0, 100.0)
+        } else {
+            lightcraft_engine::pipeline::visualize::PEAKING_SENSITIVITY as f32
+        };
         self.sidebar.adopt_collapsed(&std::mem::take(&mut self.collapsed_sidebar));
         self.dialog = None;
         self.fullscreen = false;
