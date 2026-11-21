@@ -2693,7 +2693,7 @@
   "{n} photo(s) have Capture One adjustments other than crop, rotation, flip and lens corrections; those are not imported yet": "Фото с настройками Capture One, кроме кадрирования, поворота, отражения и коррекции объектива: {n}; они пока не импортируются",
   "{n} photo(s) use {setting} in Capture One, which isn't imported": "{setting} в Capture One: {n} фото; не импортируется",
   "{n} photo(s) were lens-corrected in Capture One but have no lens profile in LightCraft yet; the correction applies once LightCraft finds one": "Фото с коррекцией объектива в Capture One, но пока без профиля объектива в LightCraft: {n}; коррекция применится, как только LightCraft его найдёт",
-  "a perspective skew or aspect change": "Скос или изменение пропорций перспективы",
+  "a perspective skew": "Скос перспективы",
   "a perspective tilt together with a crop": "Наклон перспективы вместе с кадрированием",
   "a crop reaching past the photo": "Кадр за краем фото",
   "distortion correction with the generic lens profile": "Коррекция дисторсии с общим профилем объектива",

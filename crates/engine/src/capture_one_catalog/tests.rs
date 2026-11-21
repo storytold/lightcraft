@@ -2077,3 +2077,70 @@ fn a_keystone_tilt_widens_the_same_edge_and_keeps_the_crop_on_the_photo() {
     assert_eq!(cropped.left_out, [notice::TILT_WITH_CROP]);
     assert!(!cropped.partial.contains_key("geometry"));
 }
+
+/// Capture One's keystone, rebuilt here from what the exports showed: a camera turn with a focal
+/// length of `focal` times the diagonal, then the shape as shown wider by 1 + aspect / 100.
+fn capture_one_keystone(tilt_x: f64, tilt_y: f64, aspect: f64, (w, h): (f64, f64), x: f64, y: f64) -> (f64, f64) {
+    let f = w.hypot(h);
+    let (ax, ay) = ((tilt_x / 100.0).atan(), (tilt_y / 100.0).atan());
+    let (px, py) = (x / f, y / f);
+    let (qx, qy, qz) = (px, ay.cos() * py - ay.sin(), ay.sin() * py + ay.cos());
+    let (rx, ry, rz) = (ax.cos() * qx - ax.sin() * qz, qy, ax.sin() * qx + ax.cos() * qz);
+    let widen = 1.0 + aspect.abs() / 100.0;
+    let (wx, wy) = if aspect >= 0.0 { (1.0, 1.0 / widen) } else { (1.0 / widen, 1.0) };
+    (f * rx / rz * wx, f * ry / rz * wy)
+}
+
+/// LightCraft's Transform brings the photo where Capture One's keystone shows it, up to a scale
+/// and a shift: checked on points across the photo against the model rebuilt above.
+#[test]
+fn a_keystone_with_an_aspect_change_lands_where_capture_one_shows_it() {
+    let (w, h) = (6000.0_f64, 4000.0_f64);
+    for (tilt_x, tilt_y, aspect) in [(0.0, -55.0, 0.0), (-35.0, 0.0, 0.0), (25.0, 20.0, 0.0), (0.0, 0.0, 25.0), (0.0, 30.0, -20.0)] {
+        let photo = CatalogPhoto {
+            width: 6000,
+            height: 4000,
+            geometry: Some(geometry::Geometry {
+                default: layer(0.0, 0, None),
+                adjusted: geometry::Layer {
+                    keystone: geometry::Keystone {
+                        tilt_x: Some(tilt_x),
+                        tilt_y: Some(tilt_y),
+                        aspect: Some(aspect),
+                        focal: Some(1.0),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let s = developed(&photo);
+        let warp = lightcraft_pipeline::transform::manual(&s.geometry);
+        let half = w.max(h) / 2.0;
+        let mut pairs = Vec::new();
+        for i in 0..5 {
+            for j in 0..5 {
+                let (x, y) = ((f64::from(i) / 4.0 - 0.5) * w, (f64::from(j) / 4.0 - 0.5) * h);
+                let p = warp.apply(lightcraft_geom::Point::new(x / half, y / half));
+                pairs.push(((p.x * half, p.y * half), capture_one_keystone(tilt_x, tilt_y, aspect, (w, h), x, y)));
+            }
+        }
+        // the best scale and shift from LightCraft's points onto Capture One's
+        let n = pairs.len() as f64;
+        let mean = |f: fn(&((f64, f64), (f64, f64))) -> f64| pairs.iter().map(f).sum::<f64>() / n;
+        let (lx, ly, cx, cy) = (mean(|p| p.0.0), mean(|p| p.0.1), mean(|p| p.1.0), mean(|p| p.1.1));
+        let cross: f64 = pairs.iter().map(|((x, y), (u, v))| (x - lx) * (u - cx) + (y - ly) * (v - cy)).sum();
+        let spread: f64 = pairs.iter().map(|((x, y), _)| (x - lx).powi(2) + (y - ly).powi(2)).sum();
+        let scale = cross / spread;
+        let worst = pairs.iter().map(|((x, y), (u, v))| (scale * (x - lx) + cx - u).hypot(scale * (y - ly) + cy - v)).fold(0.0, f64::max);
+        // within 1 % of the photo's width everywhere; a strong tilt in both directions at once
+        // within 1.5 % (LightCraft's camera has another focal length, which no slider makes up)
+        let allowed = if tilt_x != 0.0 && tilt_y != 0.0 { 0.015 } else { 0.01 };
+        assert!(worst < allowed * w, "{tilt_x}/{tilt_y}/{aspect}: {worst} px off, {:?}", s.geometry);
+        // and the crop needs no shrinking in LightCraft's frame
+        let frame = lightcraft_pipeline::geometry::Frame::new(6000, 4000, &s, true);
+        assert!((frame.crop.rect.width() - s.crop.geometry.rect.width()).abs() < 1e-3, "{:?} vs {:?}", frame.crop.rect, s.crop.geometry.rect);
+    }
+}

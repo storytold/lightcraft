@@ -3753,7 +3753,7 @@
   "{n} photo(s) have Capture One adjustments other than crop, rotation, flip and lens corrections; those are not imported yet": "ფოტოები Capture One-ის კორექციებით, გარდა ამოჭრის, შემობრუნების, ასახვისა და ობიექტივის კორექციისა: {n}; ისინი ჯერ არ იმპორტირდება",
   "{n} photo(s) use {setting} in Capture One, which isn't imported": "{setting} Capture One-ში: {n} ფოტო; არ იმპორტირდება",
   "{n} photo(s) were lens-corrected in Capture One but have no lens profile in LightCraft yet; the correction applies once LightCraft finds one": "ფოტოები, რომლებსაც Capture One-ში ობიექტივის კორექცია აქვს, მაგრამ LightCraft-ში ჯერ ობიექტივის პროფილი არ აქვთ: {n}; კორექცია გამოიყენება, როგორც კი LightCraft პროფილს იპოვის",
-  "a perspective skew or aspect change": "პერსპექტივის დახრა ან პროპორციის შეცვლა",
+  "a perspective skew": "პერსპექტივის დახრა",
   "a perspective tilt together with a crop": "პერსპექტივის გადახრა ამოჭრასთან ერთად",
   "a crop reaching past the photo": "ფოტოს კიდეს მიღმა ამოჭრა",
   "distortion correction with the generic lens profile": "დისტორსიის კორექცია ზოგადი ობიექტივის პროფილით",
