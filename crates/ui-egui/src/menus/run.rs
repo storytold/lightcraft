@@ -375,6 +375,69 @@ fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             app.ui.view = ViewMode::People;
             Ok(json!({"people": app.session.catalog.people().len()}))
         }
+        "view.map" | "panel.map" => {
+            app.ui.view = ViewMode::Map;
+            Ok(json!({"view": "map"}))
+        }
+        "view.toggleMapFilter" | "map.filterBar" => {
+            app.ui.map.show_filter_bar = !app.ui.map.show_filter_bar;
+            Ok(json!({"show": app.ui.map.show_filter_bar}))
+        }
+        // Lock Markers (map.toggleLock / map.lock: older names); {on?}, without it toggles
+        "map.lockMarkers"
+        | "map.toggleLock"
+        | "map.lock"
+        | "map.locationFilter"
+        | "map.showPins"
+        | "map.showLocations"
+        | "map.settings"
+        | "map.location.show"
+        | "map.location.select"
+        | "map.location.new"
+        | "map.loadTrackLog"
+        // the session's command, then the map's part (fit a new track, drop a load it replaced)
+        | "map.trackLog"
+        | "map.trackLog.autoTag"
+        | "map.trackLog.setOffset"
+        | "map.trackLog.fit"
+        | "map.fit"
+        | "map.setView"
+        | "map.zoomIn"
+        | "map.zoomOut" => crate::panels::map::command(app, id, p).unwrap_or_else(|| Err(format!("unknown map command {id}"))),
+        "map.navigator" => {
+            app.ui.map.navigator_open = !app.ui.map.navigator_open;
+            Ok(json!({"open": app.ui.map.navigator_open}))
+        }
+        "map.legend" => {
+            app.ui.map.legend_open = !app.ui.map.legend_open;
+            Ok(json!({"open": app.ui.map.legend_open}))
+        }
+        // the view, the pins drawn last frame (with how many of their photos are selected), a drop
+        "map.state" => Ok(crate::panels::map::state(app)),
+        "photo.showInMap" => {
+            let target_id = p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId).or(app.session.selection.active);
+            if let Some(id) = target_id {
+                let _ = app.run("library.select", json!({"ids": [id.0]}));
+                app.ui.view = ViewMode::Map;
+                if let Some(ph) = app.session.catalog.photo(id) {
+                    if let Some(pos) = lightcraft_engine::map::from_gps(ph.meta.gps) {
+                        app.ui.map.center_lat = pos.lat.clamp(-lightcraft_engine::map::MAX_LATITUDE, lightcraft_engine::map::MAX_LATITUDE);
+                        app.ui.map.center_lon = pos.lon;
+                        app.ui.map.zoom = 15.0;
+                        app.ui.map.active_pin_photo = Some(id);
+                        // the view is set: the first showing doesn't fit every photo over it
+                        app.ui.map.fitted = true;
+                    } else {
+                        // no pin to show: don't leave the previous photo's pin active
+                        app.ui.map.active_pin_photo = None;
+                        app.toast(ctx, crate::i18n::tr("Photo has no GPS coordinates"));
+                    }
+                }
+            } else {
+                app.ui.view = ViewMode::Map;
+            }
+            Ok(json!({"view": "map"}))
+        }
         "view.person" => {
             // {name}: one person's page in the People view: their faces, and the faces that look like them
             let Some(name) = p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()) else {

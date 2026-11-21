@@ -1,5 +1,5 @@
 //! Where LightCraft keeps per-user data on this machine: the config folder (app settings, camera
-//! profiles, face and denoise models).
+//! profiles, face and denoise models) and the cache folder (map tiles, [`cache_dir`]).
 //!
 //! [`config_dir`] picks it, in order:
 //! 1. `$LIGHTCRAFT_CONFIG_DIR`, when set (tests, agents, custom setups).
@@ -62,6 +62,41 @@ fn config_dir_with(platform: Platform, env: impl Fn(&str) -> Option<OsString>, p
             env("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| env("HOME").map(|h| PathBuf::from(h).join(".config"))).map(|c| c.join("lightcraft"))
         }
     }
+}
+
+/// LightCraft's per-user cache folder, for data that can be fetched or rebuilt again (map tiles):
+/// `~/Library/Caches/LightCraft` on macOS, `%LOCALAPPDATA%\LightCraft\Cache` on Windows,
+/// `$XDG_CACHE_HOME/lightcraft` (else `~/.cache/lightcraft`) elsewhere. In portable mode it is
+/// `<exe dir>/LightCraftData/Cache`, so tiles stay on the portable medium too.
+pub fn cache_dir() -> Option<PathBuf> {
+    let platform = if cfg!(target_os = "macos") {
+        Platform::Mac
+    } else if cfg!(windows) {
+        Platform::Windows
+    } else {
+        Platform::Other
+    };
+    cache_dir_with(platform, |name| std::env::var_os(name), portable_dir)
+}
+
+fn cache_dir_with(platform: Platform, env: impl Fn(&str) -> Option<OsString>, portable: impl FnOnce() -> Option<PathBuf>) -> Option<PathBuf> {
+    if let Some(dir) = portable() {
+        return Some(dir.join("Cache"));
+    }
+    let set = |name: &str| env(name).filter(|v| !v.is_empty());
+    match platform {
+        Platform::Mac => set("HOME").map(|h| PathBuf::from(h).join("Library/Caches/LightCraft")),
+        Platform::Windows => set("LOCALAPPDATA").map(|a| PathBuf::from(a).join("LightCraft").join("Cache")),
+        Platform::Other => {
+            set("XDG_CACHE_HOME").map(PathBuf::from).or_else(|| set("HOME").map(|h| PathBuf::from(h).join(".cache"))).map(|c| c.join("lightcraft"))
+        }
+    }
+}
+
+/// Where map tiles are cached: a nonempty `$LIGHTCRAFT_MAP_CACHE` if set, else `<cache>/maptiles`
+/// (one folder per tile source inside; see docs/map.md).
+pub fn default_map_cache_dir() -> Option<PathBuf> {
+    std::env::var_os("LIGHTCRAFT_MAP_CACHE").filter(|v| !v.is_empty()).map(PathBuf::from).or_else(|| cache_dir().map(|d| d.join("maptiles")))
 }
 
 /// This process's portable data folder, if a marker sits beside its executable and the folder can be
@@ -166,6 +201,17 @@ impl Session {
         self
     }
 
+    /// Fetch map tiles from the network and cache them in the shared default folder
+    /// ([`default_map_cache_dir`]), and keep the user's map API key in the config folder
+    /// (`map-keys.json`). Without this a session never fetches tiles and keeps no key (tests).
+    pub fn with_default_map_cache(mut self) -> Self {
+        self.map.cache_root = default_map_cache_dir();
+        self.map.online = true;
+        self.map.load_esri_key(config_dir().map(|d| d.join(crate::map::KEY_FILE)));
+        self.map.reset_service();
+        self
+    }
+
     /// Keep denoise models in the shared default folder ([`default_denoise_models_dir`]).
     pub fn with_default_denoise_models(mut self) -> Self {
         self.set_denoise_models_dir(default_denoise_models_dir());
@@ -227,6 +273,30 @@ mod config_tests {
         let why = portable_dir_in(&exe).unwrap_err();
         assert!(why.contains("portable.txt") && why.contains(PORTABLE_DATA_DIR), "{why}");
         let _ = std::fs::remove_dir_all(&exe);
+    }
+
+    /// Map tiles go to the platform's cache folder, never the settings folder, and to the portable
+    /// folder in portable mode.
+    #[test]
+    fn the_cache_folder_follows_the_platform_and_portable_mode() {
+        let env = |name: &str| match name {
+            "HOME" => Some(OsString::from("/home/u")),
+            "LOCALAPPDATA" => Some(OsString::from("/local")),
+            "XDG_CACHE_HOME" => Some(OsString::from("")),
+            _ => None,
+        };
+        assert_eq!(cache_dir_with(Platform::Mac, env, || None), Some(PathBuf::from("/home/u/Library/Caches/LightCraft")));
+        assert_eq!(cache_dir_with(Platform::Windows, env, || None), Some(PathBuf::from("/local").join("LightCraft").join("Cache")));
+        assert_eq!(
+            cache_dir_with(Platform::Other, env, || None),
+            Some(PathBuf::from("/home/u/.cache").join("lightcraft")),
+            "an empty XDG_CACHE_HOME is unset"
+        );
+        assert_eq!(
+            cache_dir_with(Platform::Other, env, || Some(PathBuf::from("/usb/LightCraftData"))),
+            Some(PathBuf::from("/usb/LightCraftData/Cache"))
+        );
+        assert_eq!(cache_dir_with(Platform::Windows, |_| None, || None), None);
     }
 
     #[test]

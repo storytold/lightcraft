@@ -37,6 +37,8 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
         "dialog.slideshowExport" | "app.slideshowExport" => {
             !cfg!(target_arch = "wasm32") && !app.session.slideshow_export.as_ref().is_some_and(|r| r.running())
         }
+        "photo.showInMap" => app.session.active().is_some(),
+        "panel.map" | "map.navigator" | "map.filterBar" | "map.legend" | "map.lock" => true,
         s if s.starts_with("panel.") || s.starts_with("tool.") || s.starts_with("section.") => app.session.active().is_some() || s == "panel.close",
         "app.export" | "dialog.export" | "dialog.createPreset" | "dialog.rename" | "dialog.captureTime" | "dialog.copySettings" => {
             app.session.active().is_some()

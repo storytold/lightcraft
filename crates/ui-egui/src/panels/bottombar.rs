@@ -17,6 +17,7 @@ const VIEW_MODES: &[(&str, Icon, ViewMode, &str)] = &[
     ("compare", Icon::Compare, ViewMode::Compare, "Compare (Shift+C)"),
     ("survey", Icon::Survey, ViewMode::Survey, "Survey (N)"),
     ("people", Icon::Subject, ViewMode::People, "People"),
+    ("map", Icon::MapPin, ViewMode::Map, "Map (Ctrl+Alt+3)"),
 ];
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
@@ -193,6 +194,12 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
     }
     if app.ui.view == ViewMode::Survey {
         // no zoom or thumbnail size in Survey
+    } else if app.ui.view == ViewMode::Map {
+        // the map has its own zoom; the grid's thumbnail size means nothing here, the filmstrip
+        // under the map (to drag photos onto it) does
+        if icon_button(&mut child, "filmstrip", Icon::Filmstrip, vec2(30.0, 30.0), app.ui.filmstrip, true, "Filmstrip (/)").clicked() {
+            let _ = app.run("view.filmstrip", json!({}));
+        }
     } else if matches!(app.ui.view, ViewMode::Detail | ViewMode::Compare) {
         if icon_button(&mut child, "beforeAfter", Icon::BeforeAfter, vec2(30.0, 30.0), app.ui.before_after.is_layout(), true, "Before/After (Y)")
             .clicked()

@@ -1,5 +1,5 @@
-//! The Settings dialog (⌘,): General, Import, Performance, Display, Interface, Slideshow, Faces,
-//! AI Denoise.
+//! The Settings dialog (⌘,): General, Import, Performance, Display, Interface, Slideshow, Map,
+//! Faces, AI Denoise.
 //!
 //! Changes apply immediately (no OK/Cancel). Where they are stored:
 //! - **app settings** ([`crate::state::AppSettings`]: startup view, delete confirmation, GPU,
@@ -25,6 +25,7 @@ mod display;
 mod general;
 mod import;
 mod libraries;
+mod map;
 mod performance;
 mod slideshow;
 mod widgets;
@@ -36,6 +37,7 @@ use general::general_tab;
 use import::import_tab;
 pub(crate) use libraries::{can_switch_library, free_name};
 pub use libraries::{forget_library, library_name, new_library, open_library, open_library_name, recent_libraries, remember_library};
+use map::map_tab;
 use performance::performance_tab;
 use slideshow::slideshow_tab;
 pub(crate) use widgets::{check, choices, heading, hint, row};
@@ -53,6 +55,7 @@ pub const TABS: &[(&str, &str)] = &[
     ("display", "Display"),
     ("interface", "Interface"),
     ("slideshow", "Slideshow"),
+    ("map", "Map"),
     ("faces", "Faces"),
     ("denoise", "AI Denoise"),
 ];
@@ -71,6 +74,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &str) {
         "display" => display_tab(app, ui, &t),
         "interface" => interface_tab(app, ui, &t),
         "slideshow" => slideshow_tab(app, ui, &t, true),
+        "map" => map_tab(app, ui, &t),
         "faces" => crate::panels::faces::settings_tab(app, ui, &t),
         "denoise" => crate::panels::denoise::settings_tab(app, ui, &t),
         _ => general_tab(app, ui, &t),

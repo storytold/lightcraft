@@ -326,5 +326,20 @@
   "View › Detail View ({keys}).": "Widok › Widok szczegółów ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Plik › Eksportuj… · Plik › Drukuj… ({keys}).",
   "{n} folder{} could not be read": "Nie udało się odczytać folderów: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Pominięte pliki (nieobsługiwany typ zdjęcia): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Pominięte pliki (nieobsługiwany typ zdjęcia): {n}{:.0}",
+  "Set the location of {n} photos": "Ustaw lokalizację {n} zdjęć",
+  "{n} photos without GPS": "Zdjęcia bez GPS: {n}",
+  "Location {n}": "Lokalizacja {n}",
+  "In private location “{name}”": "W prywatnej lokalizacji „{name}”",
+  "within {d} of {lat}, {lon}": "w promieniu {d} od {lat}, {lon}",
+  "All Tracks ({n})": "Wszystkie ślady ({n})",
+  "Auto-Tag {n} Selected Photos": "Oznacz zaznaczone zdjęcia ({n})",
+  "Loading tracklog {name}": "Wczytywanie śladu {name}",
+  "Set Time Zone Offset… (UTC{o})": "Ustaw przesunięcie strefy czasowej… (UTC{o})",
+  "Tagged {n} photos from the tracklog": "Oznaczono zdjęcia ze śladu: {n}",
+  "Track {n}": "Ślad {n}",
+  "camera time, UTC{o}": "czas aparatu, UTC{o}",
+  "{m} of them fall within the track's time range": "{m} z nich mieści się w zakresie czasu śladu",
+  "{n} more tracks": "jeszcze śladów: {n}",
+  "{size} MB, {n} tiles": "{size} MB, kafelków: {n}"
 }

@@ -280,11 +280,7 @@ fn template_name(p: &Value, id: &str) -> Result<String> {
 /// Save the preferences after a change to the templates; if that fails, the templates go back to
 /// `before`, so the list matches what is saved and a retry does the same thing.
 fn save_templates(s: &mut Session, before: Vec<PrintTemplate>) -> Result<()> {
-    if let Err(e) = s.save_prefs() {
-        s.print_templates = before;
-        return Err(e);
-    }
-    Ok(())
+    s.save_prefs_or_undo(|s| s.print_templates = before)
 }
 
 fn template_save(s: &mut Session, p: &Value) -> Result<Value> {

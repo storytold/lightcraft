@@ -155,12 +155,39 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         {
             app.toast(ui.ctx(), e);
         }
+        // the fields' width (the map below keeps to it)
+        let width = r.response.rect.width();
+        // the map of the shown (active) photo's place, also while the selected photos' places
+        // differ; a click on it opens the Map view there
+        let gps = app.session.catalog.photo(id).and_then(|ph| ph.meta.gps);
+        if let Some(pos) = lightcraft_engine::map::from_gps(gps) {
+            // inside a private saved location: no map (and so no tiles of the place fetched) until asked
+            // (the approval is for this photo in this location: in another one it asks again)
+            let private = app.session.map.locations.private_at(gps).map(|l| (l.id, l.name.clone()));
+            ui.add_space(6.0);
+            match private {
+                Some((location, name)) if !app.ui.map.private_shown.contains(&(id.0, location)) => {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            egui::RichText::new(crate::i18n::tr_format!("In private location “{name}”", name = name)).size(11.0).color(t.text_dim),
+                        );
+                        if text_button(ui, "showPrivateMap", crate::i18n::tr("Show Map"), false).clicked() {
+                            app.ui.map.private_shown.push((id.0, location));
+                        }
+                    });
+                }
+                _ => crate::panels::map::mini_map(app, ui, id, pos, width),
+            }
+            ui.add_space(4.0);
+        }
         // (one photo's place: not shown while the selected photos' places differ)
         if let Some((la, lo)) = m.gps.filter(|_| !gps_mixed) {
             let pretty = format!("{:.5}° {}, {:.5}° {}", la.abs(), if la >= 0.0 { "N" } else { "S" }, lo.abs(), if lo >= 0.0 { "E" } else { "W" });
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(pretty).size(11.0).color(t.text_dim));
-                if text_button(ui, "showOnMap", crate::i18n::tr("Show on Map"), false)
+            ui.add(egui::Label::new(egui::RichText::new(pretty).size(11.0).color(t.text_dim)).truncate());
+            // the place's buttons, wrapping in a narrow panel
+            ui.horizontal_wrapped(|ui| {
+                // the button keeps its old widget id (`showOnMap`)
+                if text_button(ui, "showOnMap", crate::i18n::tr("Open in Browser"), false)
                     .on_hover_text(crate::i18n::tr("Open the place in OpenStreetMap"))
                     .clicked()
                 {
@@ -169,18 +196,19 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                         app.toast(ui.ctx(), e);
                     }
                 }
+                if text_button(ui, "fillLocation", crate::i18n::tr("Fill Location"), false)
+                    .on_hover_text(format!(
+                        "{}
+{}",
+                        crate::i18n::tr("Fill empty City, State and Country from GPS (offline GeoNames place names)"),
+                        crate::i18n::tr("The place names list towns of 15,000 people or more: in a smaller one, City gets the nearest larger town.")
+                    ))
+                    .clicked()
+                    && let Err(e) = app.run("metadata.reverseGeocode", json!({}))
+                {
+                    app.toast_error(ui.ctx(), e);
+                }
             });
-            if text_button(ui, "fillLocation", crate::i18n::tr("Fill Location"), false)
-                .on_hover_text(format!(
-                    "{}\n{}",
-                    crate::i18n::tr("Fill empty City, State and Country from GPS (offline GeoNames place names)"),
-                    crate::i18n::tr("The place names list towns of 15,000 people or more: in a smaller one, City gets the nearest larger town.")
-                ))
-                .clicked()
-                && let Err(e) = app.run("metadata.reverseGeocode", json!({}))
-            {
-                app.toast_error(ui.ctx(), e);
-            }
         }
         if let Some(a) = p.analysis {
             let mut line = crate::i18n::tr_format!("Focus {:.0}", a.sharpness);

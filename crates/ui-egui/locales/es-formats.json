@@ -327,5 +327,20 @@
   "{name} is installed and in use: face recognition is on": "{name} está instalado y en uso: el reconocimiento facial está activado",
   "Bring photos in with File › Import Photos… ({keys}).": "Importa fotos con Archivo › Importar fotos… ({keys}).",
   "View › Detail View ({keys}).": "Vista › Vista de detalle ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Archivo › Exportar… · Archivo › Imprimir… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Archivo › Exportar… · Archivo › Imprimir… ({keys}).",
+  "Set the location of {n} photos": "Establecer la ubicación de {n} fotos",
+  "{n} photos without GPS": "{n} fotos sin GPS",
+  "Location {n}": "Ubicación {n}",
+  "In private location “{name}”": "En la ubicación privada «{name}»",
+  "within {d} of {lat}, {lon}": "a menos de {d} de {lat}, {lon}",
+  "All Tracks ({n})": "Todas las rutas ({n})",
+  "Auto-Tag {n} Selected Photos": "Etiquetar {n} fotos seleccionadas",
+  "Loading tracklog {name}": "Cargando el registro de ruta {name}",
+  "Set Time Zone Offset… (UTC{o})": "Establecer desfase horario… (UTC{o})",
+  "Tagged {n} photos from the tracklog": "{n} fotos etiquetadas con el registro de ruta",
+  "Track {n}": "Ruta {n}",
+  "camera time, UTC{o}": "hora de la cámara, UTC{o}",
+  "{m} of them fall within the track's time range": "{m} de ellas caen dentro del intervalo de la ruta",
+  "{n} more tracks": "{n} rutas más",
+  "{size} MB, {n} tiles": "{size} MB, {n} teselas"
 }

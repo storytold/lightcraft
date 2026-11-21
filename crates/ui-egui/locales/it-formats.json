@@ -326,5 +326,20 @@
   "View › Detail View ({keys}).": "Visualizza › Vista dettaglio ({keys}).",
   "File › Export… · File › Print… ({keys}).": "File › Esporta… · File › Stampa… ({keys}).",
   "{n} folder{} could not be read": "Cartelle non leggibili: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "File saltati (non è un tipo di foto supportato): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "File saltati (non è un tipo di foto supportato): {n}{:.0}",
+  "Set the location of {n} photos": "Imposta la posizione di {n} foto",
+  "{n} photos without GPS": "{n} foto senza GPS",
+  "Location {n}": "Posizione {n}",
+  "In private location “{name}”": "Nella posizione privata «{name}»",
+  "within {d} of {lat}, {lon}": "entro {d} da {lat}, {lon}",
+  "All Tracks ({n})": "Tutti i tracciati ({n})",
+  "Auto-Tag {n} Selected Photos": "Posiziona {n} foto selezionate",
+  "Loading tracklog {name}": "Caricamento del tracciato {name}",
+  "Set Time Zone Offset… (UTC{o})": "Imposta scostamento di fuso orario… (UTC{o})",
+  "Tagged {n} photos from the tracklog": "{n} foto posizionate dal tracciato",
+  "Track {n}": "Tracciato {n}",
+  "camera time, UTC{o}": "ora della fotocamera, UTC{o}",
+  "{m} of them fall within the track's time range": "{m} di esse rientrano nell'intervallo del tracciato",
+  "{n} more tracks": "altri {n} tracciati",
+  "{size} MB, {n} tiles": "{size} MB, {n} tessere"
 }

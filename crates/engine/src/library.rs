@@ -138,6 +138,10 @@ pub struct Library {
     /// Why the last write of presets.json failed; `None` once it is written. While set, the preset
     /// changes exist only in memory and count as unsaved ([`Session::unsaved`], issue #2266).
     presets_error: Option<String>,
+    /// Why the last write of prefs.json failed; `None` once one lands. While set, what it holds
+    /// (such as which photos' GPS is LightCraft's) exists only in memory: retried by
+    /// [`Session::persist`], and counted as unsaved ([`Session::unsaved`]).
+    prefs_error: Option<String>,
     /// Records the catalog log's own thread holds because writing them failed (it retries them),
     /// and why; refreshed by every persist and every frame ([`Session::persist_if_dirty`]). While
     /// set they count as unsaved ([`Session::unsaved`]), so quitting asks first.
@@ -278,6 +282,19 @@ fn lenient_prep<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<O
     Ok(serde_json::from_value(value).ok())
 }
 
+/// [`PrefsFile`]'s `mapSource`, or `None` (OpenStreetMap) when it isn't a tile source, with a log line.
+fn lenient_tile_source<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<crate::map::TileSource>, D::Error> {
+    use serde::Deserialize;
+    let value = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(value.and_then(|value| match serde_json::from_value::<crate::map::TileSource>(value) {
+        Ok(source) => Some(source),
+        Err(e) => {
+            log::warn!("prefs.json mapSource: {e}; using OpenStreetMap");
+            None
+        }
+    }))
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct PrefsFile {
@@ -335,6 +352,21 @@ struct PrefsFile {
     slide_titles: crate::slide_title::TitleSettings,
     /// A view holds the photos it shows until it is refreshed (`library.holdView`).
     hold_view: bool,
+    /// Saved map locations of older builds (`{id, name, lat, lon, radius, isPrivate}`): read once
+    /// into `locations.json`, and written back here only until that file is confirmed. Read
+    /// leniently (one bad entry costs only itself).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    saved_locations: Vec<serde_json::Value>,
+    /// The map's tile source (missing = OpenStreetMap; re-checked when read). A damaged one is
+    /// dropped on its own, never taking the other preferences with it.
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "lenient_tile_source")]
+    map_source: Option<crate::map::TileSource>,
+    /// Photos whose position was set or cleared in LightCraft ([`Session::gps_edited`]), so a
+    /// position cleared before the library closed still leaves the sidecar when it is written after
+    /// a reopen (with automatic XMP writing off, that can be much later). Read leniently: an entry
+    /// that isn't a photo id is skipped, never taking the other preferences with it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    gps_owned: Vec<serde_json::Value>,
 }
 
 fn presets_json(s: &Session) -> String {
@@ -405,6 +437,34 @@ struct SettingsLoad {
 }
 
 impl SettingsLoad {
+    /// Keep a copy of `name` as `<name>.corrupt-<unix time>` before it is written again without
+    /// some of its content (`why`), with a warning; when the copy can't be made the file isn't
+    /// overwritten this session. (From PR #906.)
+    fn set_aside(&mut self, store: &mut dyn Store, name: &'static str, why: &str) {
+        let bytes = match store.read(name) {
+            Ok(Some(b)) => b,
+            // gone since it was read: nothing left to lose
+            Ok(None) => return,
+            // no copy can be made, so the file must not be written with less in it
+            Err(e) => {
+                log::error!("library: {name}: {why}, and it couldn't be read again: {e}");
+                self.blocked.push(name);
+                self.warnings.push(format!("{name}: {why}, and it couldn't be set aside ({e}). LightCraft won't overwrite the file."));
+                return;
+            }
+        };
+        let secs = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let keep = format!("{name}.corrupt-{secs}");
+        log::error!("library: {name}: {why}");
+        match store.write_atomic(&keep, &bytes) {
+            Ok(()) => self.warnings.push(format!("{name}: {why}. The file was kept as {keep}.")),
+            Err(w) => {
+                self.blocked.push(name);
+                self.warnings.push(format!("{name}: {why}, and it couldn't be set aside ({w}). LightCraft won't overwrite the file."));
+            }
+        }
+    }
+
     fn read<T: serde::de::DeserializeOwned>(&mut self, store: &mut dyn Store, name: &'static str) -> Option<T> {
         let bytes = match store.read(name) {
             Ok(b) => b?,
@@ -438,6 +498,95 @@ impl SettingsLoad {
 }
 
 impl Session {
+    /// The library's saved locations: `locations.json` (hostile input, checked entry by entry; a
+    /// damaged file or bad entries are set aside as `locations.json.corrupt-<time>` with a warning).
+    /// A library of an older build keeps them in `prefs.json` (`legacy`): when `locations.json`
+    /// doesn't exist they are written there first, read back to confirm, and only then left out of
+    /// `prefs.json` (by its next save). Until confirmed they stay in `prefs.json`.
+    fn load_locations(&mut self, files: &mut dyn Store, settings: &mut SettingsLoad, legacy: Vec<serde_json::Value>) {
+        use crate::locations::{FILE, LocationsFile, SavedLocations};
+        let revision = self.map.locations.revision();
+        let exists = matches!(files.read(FILE), Ok(Some(_)) | Err(_));
+        self.legacy_locations = Vec::new();
+        self.legacy_in_locations = false;
+        if exists {
+            let read = settings.read::<LocationsFile>(files, FILE);
+            // a damaged (or unreadable) locations.json confirms nothing: an older prefs.json copy stays
+            if read.is_none() {
+                self.legacy_locations = legacy;
+            }
+            let file = read.unwrap_or_default();
+            let (locations, dropped) = SavedLocations::load(file, revision);
+            if dropped > 0 {
+                settings.set_aside(files, FILE, &format!("{dropped} saved location(s) in it aren't valid and were left out"));
+                // the copy is safe: write the good ones back, so the next open doesn't set it aside again
+                if !settings.blocked.contains(&FILE)
+                    && let Err(e) = files.write_atomic(FILE, &locations.to_file())
+                {
+                    log::error!("library: {FILE}: {e}");
+                }
+            }
+            self.map.locations.replace(locations);
+            return;
+        }
+        if legacy.is_empty() {
+            self.map.locations.replace(SavedLocations::default());
+            return;
+        }
+        // an older build's: take them over (`isPrivate` → `private`, new numeric ids)
+        let entries: Vec<serde_json::Value> = legacy
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let mut e = v.clone();
+                if let Some(o) = e.as_object_mut() {
+                    o.insert("id".into(), serde_json::json!(i as u64 + 1));
+                    if let Some(p) = o.remove("isPrivate") {
+                        o.insert("private".into(), p);
+                    }
+                }
+                e
+            })
+            .collect();
+        let (locations, dropped) = SavedLocations::load(LocationsFile { version: 1, locations: entries }, revision);
+        if dropped > 0 {
+            settings.warnings.push(format!("{dropped} saved location(s) in prefs.json aren't valid and were left out of {FILE}"));
+        }
+        let bytes = locations.to_file();
+        let confirmed = files.write_atomic(FILE, &bytes).is_ok()
+            && matches!(files.read(FILE), Ok(Some(back)) if serde_json::from_slice::<LocationsFile>(&back).is_ok_and(|f| f.locations.len() == locations.len()));
+        if !confirmed {
+            log::error!("library: the saved locations couldn't be moved to {FILE}; they stay in prefs.json");
+            self.legacy_locations = legacy;
+            // they are in the active list: its next write confirms them
+            self.legacy_in_locations = true;
+        }
+        self.map.locations.replace(locations);
+    }
+
+    /// Save the saved locations (`locations.json`, atomically; no-op for in-memory sessions).
+    /// Once it is written with the older `prefs.json` copy's entries in it, that copy is no longer
+    /// kept; when they aren't in it (`locations.json` was damaged), the copy stays.
+    pub fn save_locations(&mut self) -> Result<()> {
+        let v = self.map.locations.to_file();
+        let Some(lib) = self.library.as_mut() else { return Ok(()) };
+        if lib.blocked.contains(&crate::locations::FILE) {
+            return Err(EngineError::Other(format!(
+                "{0} couldn't be read when the library opened, so it isn't overwritten; reopen the library to save locations",
+                crate::locations::FILE
+            )));
+        }
+        lib.files.write_atomic(crate::locations::FILE, &v).map_err(|e| EngineError::Other(format!("saved locations: {e}")))?;
+        if self.legacy_in_locations && !self.legacy_locations.is_empty() {
+            self.legacy_locations.clear();
+            self.legacy_in_locations = false;
+            if let Err(e) = self.save_prefs() {
+                log::warn!("prefs.json: {e}");
+            }
+        }
+        Ok(())
+    }
+
     /// Take over what the thumbnail cache wrote under its name of before (`.jpg` files, which
     /// photo galleries took for the person's photos: issues #610, #1066), once for a cache
     /// folder that was not made or tidied by this build yet. On a thread of its own, with a row
@@ -610,6 +759,8 @@ impl Session {
         }
         self.undo.clear();
         self.redo.clear();
+        // photo ids are per library: positions set in the last one say nothing about this one's
+        self.gps_edited.clear();
         self.interaction = None;
         self.pending_log.clear();
         self.selection = Selection::default();
@@ -652,6 +803,18 @@ impl Session {
         self.slide_titles = prefs.slide_titles.sanitized();
         self.forget_local_days = prefs.forget_local_days.unwrap_or(lightcraft_catalog::DEFAULT_FORGET_DAYS);
         self.hold_view = prefs.hold_view;
+        self.load_locations(files.as_mut(), &mut settings, prefs.saved_locations);
+        // (only ids of this library's photos: the file may be older than the catalog)
+        self.gps_edited = prefs
+            .gps_owned
+            .iter()
+            .filter_map(serde_json::Value::as_u64)
+            .map(lightcraft_catalog::PhotoId)
+            .filter(|id| self.catalog.photo(*id).is_some())
+            .collect();
+        if let Some(notice) = self.map.load_source(prefs.map_source) {
+            settings.warnings.push(notice);
+        }
         self.refresh_view();
         self.smart_previews_dir = prefs.smart_previews_dir.filter(|_| on_disk).map(PathBuf::from);
         if let Some(d) = &self.smart_previews_dir {
@@ -721,6 +884,7 @@ impl Session {
             last_error: None,
             unsaved_error: None,
             presets_error: None,
+            prefs_error: None,
             log_held: None,
             retry_at: None,
             forgot_local: None,
@@ -790,6 +954,15 @@ impl Session {
             log::error!("library: compaction: {e}");
             lib.last_error = Some(format!("compaction: {e}"));
         }
+        // a prefs.json write that failed (GPS ownership, a preference): retried until it lands
+        if self.library.as_ref().is_some_and(|l| l.prefs_error.is_some())
+            && let Err(e) = self.save_prefs()
+        {
+            log::error!("library: {e}");
+            if let Some(lib) = self.library.as_mut() {
+                lib.retry_at = Some(web_time::Instant::now() + RETRY_BACKOFF);
+            }
+        }
         let due = self.library.as_ref().is_some_and(|l| l.presets_saved.differs(self) && !l.blocked.contains(&"presets.json"));
         if !due {
             return Ok(());
@@ -820,7 +993,7 @@ impl Session {
     /// changed outside [`Session::execute`]).
     pub fn persist_if_dirty(&mut self) {
         let backing_off = self.library.as_ref().and_then(|l| l.retry_at).is_some_and(|t| web_time::Instant::now() < t);
-        let presets_unsaved = self.library.as_ref().is_some_and(|l| l.presets_error.is_some());
+        let presets_unsaved = self.library.as_ref().is_some_and(|l| l.presets_error.is_some() || l.prefs_error.is_some());
         // records the log's thread can't write: a snapshot (a fresh file holding everything) is due
         let log_held = self.library.as_ref().is_some_and(|l| l.log_held.is_some());
         if self.library.is_some() && (!self.pending_log.is_empty() || presets_unsaved || log_held) && !backing_off {
@@ -856,22 +1029,25 @@ impl Session {
     }
 
     /// Changes applied in memory but not yet written to disk because saving failed: the number of
-    /// queued ops (plus one for presets.json) and why (`None` when everything is saved, or no library
+    /// queued ops (plus one each for presets.json and prefs.json) and why (`None` when everything is saved, or no library
     /// is open). Retried by every command and by [`Session::persist_if_dirty`].
     pub fn unsaved(&self) -> Option<(usize, &str)> {
         let lib = self.library.as_ref()?;
         let ops = lib.unsaved_error.as_deref().filter(|_| !self.pending_log.is_empty());
         let presets = lib.presets_error.as_deref();
+        let prefs = lib.prefs_error.as_deref();
         let held = lib.log_held.as_ref().map(|(n, why)| (*n, why.as_str()));
-        let n = ops.map_or(0, |_| self.pending_log.len()) + held.map_or(0, |(n, _)| n) + usize::from(presets.is_some());
-        ops.or(held.map(|(_, why)| why)).or(presets).map(|why| (n, why))
+        let n =
+            ops.map_or(0, |_| self.pending_log.len()) + held.map_or(0, |(n, _)| n) + usize::from(presets.is_some()) + usize::from(prefs.is_some());
+        ops.or(held.map(|(_, why)| why)).or(presets).or(prefs).map(|why| (n, why))
     }
 
     /// Flush everything and write a snapshot (on quit). Ends an open interaction first.
     ///
     /// The snapshot is written even when appending the queued ops fails: it is a fresh file
     /// holding everything in memory, so it saves those ops too (the log handle may be the only
-    /// thing that's broken). Fails only if nothing could be saved; the ops then stay queued.
+    /// thing that's broken). Fails if nothing could be saved (the ops then stay queued), or if
+    /// prefs.json still can't be written.
     pub fn close_library(&mut self) -> Result<()> {
         if self.library.is_none() {
             return Ok(());
@@ -880,6 +1056,11 @@ impl Session {
         let persisted = self.persist();
         self.save_view();
         let unlogged = if persisted.is_err() { self.pending_log.len() as u64 } else { 0 };
+        // a prefs.json write still failing is tried once more (persist stops before it when the
+        // log can't be appended)
+        if self.library.as_ref().is_some_and(|l| l.prefs_error.is_some()) {
+            let _ = self.save_prefs();
+        }
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
         let before = lib.journal.seq();
         let snapshot = lib.journal.snapshot_with_unlogged(&self.catalog, unlogged);
@@ -899,6 +1080,10 @@ impl Session {
             (Err(EngineError::NotSaved(e)), Err(s)) if lib.journal.seq() == before => Err(EngineError::NotSaved(format!("{e}; snapshot: {s}"))),
             (_, Err(s)) => Err(s.into()),
         };
+        // what prefs.json holds and couldn't write (such as which photos' GPS is LightCraft's) is
+        // lost once another library opens: an error, so a switch keeps this library open and a
+        // quit asks first
+        let result = result.and_then(|()| lib.prefs_error.clone().map_or(Ok(()), |e| Err(EngineError::NotSaved(e))));
         if result.is_ok() {
             self.library_identity = std::sync::Arc::new(());
         }
@@ -944,6 +1129,34 @@ impl Session {
         }
     }
 
+    /// After a command added photos to [`Session::gps_edited`] (`before` = its size then): save
+    /// the preferences that keep it across a reopen (also when an earlier save failed, though the
+    /// set didn't grow now). A failure is logged, not the command's: the position is set, the set
+    /// stays for this session, and [`Session::persist`] retries the write.
+    pub(crate) fn gps_owned_grew(&mut self, before: usize) {
+        let pending = self.library.as_ref().is_some_and(|l| l.prefs_error.is_some());
+        if (self.gps_edited.len() != before || pending)
+            && let Err(e) = self.save_prefs()
+        {
+            log::warn!("library: the photos' GPS ownership wasn't saved: {e}");
+        }
+    }
+
+    /// Save the library preferences after a change that `undo` takes back if the write fails. The
+    /// change then never happened, so the failed write isn't left pending as unsaved
+    /// ([`Session::unsaved`]) unless an earlier one already was.
+    pub(crate) fn save_prefs_or_undo(&mut self, undo: impl FnOnce(&mut Self)) -> Result<()> {
+        let pending = self.library.as_ref().and_then(|l| l.prefs_error.clone());
+        let saved = self.save_prefs();
+        if saved.is_err() {
+            undo(self);
+            if let Some(lib) = self.library.as_mut() {
+                lib.prefs_error = pending;
+            }
+        }
+        saved
+    }
+
     /// Save the library preferences (no-op for in-memory sessions).
     pub fn save_prefs(&mut self) -> Result<()> {
         let v = serde_json::to_vec_pretty(&PrefsFile {
@@ -973,6 +1186,13 @@ impl Session {
             slide_overlays: self.slide_overlays.clone(),
             slide_titles: self.slide_titles.clone(),
             hold_view: self.hold_view,
+            saved_locations: self.legacy_locations.clone(),
+            map_source: Some(self.map.source().clone()),
+            gps_owned: {
+                let mut ids: Vec<u64> = self.gps_edited.iter().filter(|id| self.catalog.photo(**id).is_some()).map(|id| id.0).collect();
+                ids.sort_unstable();
+                ids.into_iter().map(serde_json::Value::from).collect()
+            },
         })
         .unwrap_or_default();
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
@@ -981,7 +1201,10 @@ impl Session {
                 "prefs: prefs.json couldn't be read when the library opened, so it isn't overwritten; reopen the library to save preferences".into(),
             ));
         }
-        lib.files.write_atomic("prefs.json", &v).map_err(|e| EngineError::Other(format!("prefs: {e}")))
+        // a failed write stays pending (retried by persist) until one lands
+        let written = lib.files.write_atomic("prefs.json", &v).map_err(|e| format!("prefs: {e}"));
+        lib.prefs_error = written.as_ref().err().cloned();
+        written.map_err(EngineError::Other)
     }
 
     /// Warnings about the open library not handed out yet: its settings files, and a lock that

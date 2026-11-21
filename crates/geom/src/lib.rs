@@ -7,11 +7,13 @@
 
 mod crop;
 mod crop_drag;
+pub mod geo;
 mod homography;
 mod real;
 
 pub use crop::{CropGeometry, crop_fit_angle, max_inscribed_scale};
 pub use crop_drag::{CropHandle, MAX_RATIO, MIN_CROP_FRACTION, drag_crop};
+pub use geo::{EARTH_RADIUS_METERS, GeoBounds, GeoPoint, LatLon, MAX_WEB_MERCATOR_LAT, TileCoord};
 pub use homography::Homography;
 pub use real::{Interval, Real};
 

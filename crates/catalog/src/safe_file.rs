@@ -108,8 +108,9 @@ pub fn sync_dir(dir: &Path) {
     }
 }
 
-/// A new, empty temp file next to `path` (hidden, unique in this process and folder).
-fn create_temp(path: &Path) -> io::Result<(PathBuf, File)> {
+/// A new, empty temp file next to `path` (hidden, unique in this process and folder). When
+/// `private`, it is created readable by its owner only (`0600` on Unix) before any byte is written.
+fn create_temp(path: &Path, private: bool) -> io::Result<(PathBuf, File)> {
     static N: AtomicU64 = AtomicU64::new(0);
     if path.file_name().is_none() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{} is not a file path", path.display())));
@@ -117,7 +118,16 @@ fn create_temp(path: &Path) -> io::Result<(PathBuf, File)> {
     let dir = parent_of(path);
     for _ in 0..1000 {
         let tmp = dir.join(format!(".lightcraft-{}-{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
-        match OpenOptions::new().write(true).create_new(true).open(&tmp) {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if private {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        #[cfg(not(unix))]
+        let _ = private;
+        match options.open(&tmp) {
             Ok(f) => return Ok((tmp, f)),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
@@ -128,8 +138,8 @@ fn create_temp(path: &Path) -> io::Result<(PathBuf, File)> {
 
 /// Write a temp file next to `path` with what `fill` writes, synced to disk when `sync`. On
 /// failure the temp file is removed. Returns its path and length.
-fn write_temp(path: &Path, sync: bool, fill: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>) -> io::Result<(PathBuf, u64)> {
-    let (tmp, file) = create_temp(path)?;
+fn write_temp(path: &Path, sync: bool, private: bool, fill: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>) -> io::Result<(PathBuf, u64)> {
+    let (tmp, file) = create_temp(path, private)?;
     let r = (|| {
         let limit = FAIL_AFTER.with(Cell::get);
         let mut w = Limited { inner: io::BufWriter::with_capacity(1 << 20, file), n: 0, limit };
@@ -160,19 +170,26 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
 /// [`write_atomic`] with streamed content: `fill` writes it (an error aborts and leaves the old
 /// file). Returns the length written.
 pub fn write_atomic_with(path: &Path, fill: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>) -> io::Result<u64> {
-    replace_with(path, true, fill)
+    replace_with(path, true, false, fill)
+}
+
+/// [`write_atomic`] for a secret (an API key): the temp file is created readable by its owner only
+/// (`0600` on Unix) before any byte is written, so the content is never readable by other users,
+/// not even while it is written. Elsewhere the folder's permissions apply.
+pub fn write_atomic_private(path: &Path, data: &[u8]) -> io::Result<()> {
+    replace_with(path, true, true, &mut |w| w.write_all(data)).map(|_| ())
 }
 
 /// Replace (or create) `path` with `data` atomically but **without syncing** it to disk — only for
 /// outputs that can always be recreated (exports, renders, screenshots); see the module docs.
 /// Anything that can't be made again goes through [`write_atomic`].
 pub fn write_atomic_nosync(path: &Path, data: &[u8]) -> io::Result<()> {
-    replace_with(path, false, &mut |w| w.write_all(data)).map(|_| ())
+    replace_with(path, false, false, &mut |w| w.write_all(data)).map(|_| ())
 }
 
 /// Temp file (synced when `sync`) renamed over `path`, then the folder synced when `sync`.
-fn replace_with(path: &Path, sync: bool, fill: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>) -> io::Result<u64> {
-    let (tmp, n) = write_temp(path, sync, fill)?;
+fn replace_with(path: &Path, sync: bool, private: bool, fill: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>) -> io::Result<u64> {
+    let (tmp, n) = write_temp(path, sync, private, fill)?;
     if let Err(e) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
         return Err(e);
@@ -197,7 +214,7 @@ pub fn write_new_unique(candidates: &mut dyn Iterator<Item = PathBuf>, data: &[u
     let Some(first) = candidates.peek().cloned() else {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "no file name to write"));
     };
-    let (tmp, _) = write_temp(&first, true, &mut |w| w.write_all(data))?;
+    let (tmp, _) = write_temp(&first, true, false, &mut |w| w.write_all(data))?;
     let r = (|| {
         // Kept (issue #134 point 4): these files replace raws (Convert / Copy as DNG) or become
         // library photos (merges). On a local disk the read usually comes from the cache, but on a
@@ -352,6 +369,27 @@ mod tests {
         let mut v: Vec<String> = fs::read_dir(dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
         v.sort();
         v
+    }
+
+    #[test]
+    fn a_private_file_is_owner_only_from_its_creation() {
+        let d = temp("private");
+        let p = d.join("keys.json");
+        fs::write(&p, b"old").unwrap();
+        write_atomic_private(&p, b"secret").unwrap();
+        assert_eq!(fs::read(&p).unwrap(), b"secret");
+        assert_eq!(names(&d), vec!["keys.json".to_string()], "no temp file left");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // the temp file was created 0600 and renamed: the mode is the one it was created with
+            assert_eq!(fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+            let (tmp, f) = create_temp(&p, true).unwrap();
+            assert_eq!(f.metadata().unwrap().permissions().mode() & 0o777, 0o600, "owner-only before a byte is written");
+            drop(f);
+            fs::remove_file(tmp).unwrap();
+        }
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

@@ -327,5 +327,20 @@
   "{name} is installed and in use: face recognition is on": "{name} установлено й використовується: розпізнавання облич увімкнено",
   "Bring photos in with File › Import Photos… ({keys}).": "Фотографії імпортуйте через Файл › Імпортувати фото… ({keys}).",
   "View › Detail View ({keys}).": "Вигляд › Детальне подання ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Файл › Експортувати… · Файл › Друк… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Файл › Експортувати… · Файл › Друк… ({keys}).",
+  "Set the location of {n} photos": "Задати місце {n} фото",
+  "{n} photos without GPS": "Фото без GPS: {n}",
+  "Location {n}": "Місце {n}",
+  "In private location “{name}”": "У приватному місці «{name}»",
+  "within {d} of {lat}, {lon}": "у межах {d} від {lat}, {lon}",
+  "All Tracks ({n})": "Усі треки ({n})",
+  "Auto-Tag {n} Selected Photos": "Прив'язати вибрані фото ({n})",
+  "Loading tracklog {name}": "Завантаження треку {name}",
+  "Set Time Zone Offset… (UTC{o})": "Задати зсув часового поясу… (UTC{o})",
+  "Tagged {n} photos from the tracklog": "За треком прив'язано фото: {n}",
+  "Track {n}": "Трек {n}",
+  "camera time, UTC{o}": "час камери, UTC{o}",
+  "{m} of them fall within the track's time range": "{m} з них потрапляють у час треку",
+  "{n} more tracks": "ще треків: {n}",
+  "{size} MB, {n} tiles": "{size} МБ, тайлів: {n}"
 }
