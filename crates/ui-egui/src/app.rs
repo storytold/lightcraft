@@ -27,6 +27,7 @@ impl LightcraftApp {
         // AI mask requests run on the model's worker; frames apply their results (never wait)
         session.segmenter.background = true;
         Self {
+            applied_interface_size: None,
             session,
             ui: UiState::default(),
             services,
@@ -647,6 +648,17 @@ impl LightcraftApp {
     /// `i.time`, events, keys or dropped files.
     pub fn logic(&mut self, ctx: &egui::Context) {
         self.sync_prep_settings();
+        let percent = self.ui.settings.interface_size;
+        let native = ctx.native_pixels_per_point().filter(|s| s.is_finite() && *s > 0.0).unwrap_or(1.0);
+        let zoom = if percent == 0 { 1.0 } else { f32::from(percent.clamp(50, 300)) / (100.0 * native) };
+        if self.applied_interface_size != Some((percent, native)) {
+            // Auto keeps the host's transient zoom (including headless/control views). Only an
+            // explicit preference, or returning from one to Auto, changes that zoom here.
+            if percent != 0 || self.applied_interface_size.is_some_and(|(previous, _)| previous != 0) {
+                ctx.set_zoom_factor(zoom);
+            }
+            self.applied_interface_size = Some((percent, native));
+        }
         i18n::set_language(self.ui.language);
         // The fork's AccessKit root language and bidi runs follow the locale; presentation only.
         // Compare against the cached string: `Context::language()` allocates on every call, and

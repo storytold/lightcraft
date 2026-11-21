@@ -182,6 +182,9 @@ establish OS keyboard delivery or cross-platform acceptance.
 | 2026-10-24 | minor | KEYC-METADATA: ⌘⌥K / Ctrl+Alt+K (Photo ▸ Enable Painting) paints the painter box's keyword, stops painting when pressed again, and with the box empty opens the Keywords panel |
 | 2026-10-24 | minor | KEYC-METADATA: ⌘⇧K / Ctrl+Shift+K (Edit Keywords) opens the keyword picked in the Keyword List in Edit Keyword Tag |
 | 2026-10-25 | minor | KEYC-METADATA: ⌘⌥⇧K / Ctrl+Alt+Shift+K (Set Keyword Shortcut) and ⇧K add and remove the keyword shortcut's keywords; the Keyword List marks them with a + |
+| 2026-10-27 | trivial | Validate `ui.set` interface-size input atomically with the same integer range as `app.interfaceSize`; estimates unchanged |
+| 2026-10-26 | trivial | Restored nonzero interface sizes are normalized to 50-300 percent before the next save; Auto remains zero. Scores and estimates unchanged. |
+| 2026-10-26 | trivial | Settings › Interface: a persistent interface size, Auto or 50–300% (`app.interfaceSize`) |
 | 2026-10-24 | patch | KEYC-METADATA: ⌘⌥⇧C / ⌘⌥⇧V (Ctrl+Alt+Shift+C / V on Windows and Linux) copy and paste metadata |
 | 2026-10-24 | minor | KEYC-METADATA: ⌥0 / ⌥⇧0 (Alt+0 / Alt+Shift+0) go to the next / previous keyword set, Recent Keywords first, wrapping around at either end |
 | 2026-10-24 | minor | KEYC-METADATA: ⌘K / Ctrl+K (Add Keywords) shows the Keywords panel with the cursor in its Add keyword box |
