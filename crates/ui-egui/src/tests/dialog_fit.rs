@@ -125,6 +125,20 @@ fn long_dialogs_fit_a_short_window() {
     }
 }
 
+#[test]
+fn whats_new_width_follows_viewport() {
+    let mut h = demo([1366.0, 768.0]);
+    open(&mut h, "app.whatsNew");
+    assert_fits(&h, "wide What's New");
+    let wide = rect(&h, "dialog:window").width();
+
+    h.size.x = 520.0;
+    h.settle(T);
+    assert_fits(&h, "narrow What's New");
+    let narrow = rect(&h, "dialog:window").width();
+    assert!(wide > narrow, "wide: {wide}, narrow: {narrow}");
+}
+
 // Scenario: a list that scrolls on its own (the shortcuts) gets shorter instead of scrolling inside a scrolling dialog
 #[test]
 fn a_dialog_list_shrinks_to_fit_a_short_window() {
