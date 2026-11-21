@@ -87,6 +87,8 @@
   "{label} Grading": "{label} 颜色分级",
   "{label} {d:+} on every selected photo": "每张选中照片的 {label} {d:+}",
   "{label}, {n} photos": "{label}，{n} 张照片",
+  "{name} found nothing to select on {n} of {total} photos": "{name}：{total} 张照片中有 {n} 张没有可选择的内容",
+  "Found nothing to select on {n} of {total} photos": "{total} 张照片中有 {n} 张没有可选择的内容",
   "{matching} of {t} photos": "{t} 张照片中的 {matching} 张",
   "{matching} photos": "{matching} 张照片",
   "{mode} spot {} of {}": "{mode}：第 {0} 个污点，共 {1} 个",

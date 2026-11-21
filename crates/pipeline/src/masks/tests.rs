@@ -630,6 +630,37 @@ fn people_and_subject_use_person_mattes() {
     assert_eq!(eval(&lips), shape_alpha(&lips, &f, w, h, &img, &l, 0.0, None));
 }
 
+/// Issue #4356: a People part a matte selects (teeth, skin, hair, glasses) selects nothing on a photo that doesn't
+/// carry that matte, with other mattes or with none, so a Whiten Teeth preset leaves such a photo alone instead of
+/// whitening the whole-subject estimate. A part no matte covers (lips), the whole person, and Subject keep the
+/// estimate; with the matte, the part is the matte.
+#[test]
+fn a_people_part_without_its_matte_selects_nothing() {
+    let (w, h) = (200, 100);
+    let img = Rgb32f::from_fn(w, h, |x, y| if (x / 8 + y / 8) % 2 == 0 { [0.6; 3] } else { [0.1; 3] });
+    let l = img.map(crate::local::log_lum);
+    let f = frame(w, h);
+    let mut skin_only = Mattes::default();
+    skin_only.push(MatteKind::Skin, left_matte(w, h, 0.25));
+    let part = |name: &str| MaskShape::People { person: 0, parts: vec![name.into()] };
+    let eval = |shape: &MaskShape, m: Option<&Mattes>| shape_alpha(shape, &f, w, h, &img, &l, 0.0, m);
+    for mattes in [None, Some(&skin_only)] {
+        let teeth = eval(&part("Teeth"), mattes);
+        assert!(teeth.data.iter().all(|v| *v == 0.0), "no teeth matte: nothing");
+        assert!(needs_missing_matte(&part("Teeth"), mattes));
+    }
+    assert!(eval(&part("Face Skin"), Some(&skin_only)).get(10, 50) > 0.99);
+    assert!(!needs_missing_matte(&part("Face Skin"), Some(&skin_only)));
+    // unchanged: the estimate for what no matte covers, the whole person and Subject
+    for shape in [part("Lips"), MaskShape::People { person: 0, parts: Vec::new() }, part("Entire Person"), MaskShape::Subject] {
+        assert!(!needs_missing_matte(&shape, None), "{shape:?}");
+        assert!(eval(&shape, None).data.iter().any(|v| *v > 0.1), "{shape:?}");
+    }
+    // a part with a matte beside one without keeps the estimate, as before
+    let mixed = MaskShape::People { person: 0, parts: vec!["Teeth".into(), "Lips".into()] };
+    assert!(!needs_missing_matte(&mixed, None));
+}
+
 /// A thousand two-point strokes, each a sweep far past the photo that lays most of a stroke's
 /// own budget: the mask shares one budget across its strokes, so it renders in moments rather
 /// than building and visiting most of a billion dabs.
