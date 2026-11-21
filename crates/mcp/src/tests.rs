@@ -197,6 +197,29 @@ fn export_tool_forwards_its_advertised_options() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// JPEG XL options reach the export command in both selection and explicit-photo calls.
+#[test]
+fn export_tool_forwards_jpeg_xl_options() {
+    for (lossless, effort, progressive) in [(true, "fast", true), (false, "normal", false)] {
+        for id in [None, Some(17)] {
+            let params = json!({"path": "out.jxl", "format": "jxl", "jxlLossless": lossless, "jxlEffort": effort, "jxlProgressive": progressive});
+            let mut args = params.clone();
+            if let Some(id) = id {
+                args["id"] = json!(id);
+            }
+            let mut b = Recorder(vec![]);
+            let result = call_tool(&mut b, "export", &args);
+            assert!(!result.is_error, "{result:?}");
+            let mut calls = vec![];
+            if let Some(id) = id {
+                calls.push(("engine.execute".to_string(), json!({"command": "library.select", "params": {"ids": [id], "active": id}})));
+            }
+            calls.push(("engine.execute".to_string(), json!({"command": "app.export", "params": params})));
+            assert_eq!(b.0, calls, "{args}");
+        }
+    }
+}
+
 /// Issue #236: `app.export {addToPhotos, photosAlbum}` through the headless backend (the MCP
 /// `export` tool, `lightcraft-cli run`): the files written go to Photos and the result says how
 /// it went; where Photos isn't (not macOS), it is refused before anything is written. A fake
