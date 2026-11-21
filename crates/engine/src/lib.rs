@@ -87,6 +87,7 @@ pub mod smart;
 pub mod sync;
 mod sync_same;
 pub mod text;
+pub mod threads;
 mod view;
 pub mod walk;
 

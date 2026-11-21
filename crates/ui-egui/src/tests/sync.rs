@@ -276,6 +276,48 @@ fn a_scan_gone_stale_in_the_dialog_is_made_again_in_the_background() {
     assert_eq!(in_library(&h), vec!["a.png", "c.png"], "c came in, the missing b went");
 }
 
+/// The synchronize's thread can't start (the system is out of threads): the scan it was handed is
+/// made again in the background, keeping the choices, so the dialog's counts can be used once it
+/// is back, and Synchronize then works (#3071).
+#[test]
+fn a_synchronize_whose_worker_cannot_start_scans_again_keeping_the_choices() {
+    let dir = Scratch::new("refused");
+    let mut h = changed_folder(&dir);
+    open_and_scan(&mut h, &dir.path("trip"));
+    tick_remove_missing(&mut h);
+    crate::tasks::refused::next(1);
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(r.to_string().contains("could not start"), "{r}");
+    assert!(h.app.sync_run.is_none());
+    assert_eq!(in_library(&h), vec!["a.png", "b.png"]);
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { .. })), "{:?}", h.app.ui.dialog);
+    // (the refused start used up the scan; a small folder's new one can end within the request's frames)
+    assert!(h.app.sync.is_some() || h.app.session.folder_changes.is_some(), "scanning again");
+    let rescanned = h.step_until(T, |h| matches!(&h.app.ui.dialog, Some(Dialog::SynchronizeFolder { counts: Some(_), .. })));
+    assert!(rescanned, "and scans again");
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { remove_missing: true, .. })), "keeping what was ticked");
+    assert!(h.app.session.folder_changes.is_some(), "with a scan to hand over");
+    synchronize(&mut h);
+    assert_eq!(in_library(&h), vec!["a.png", "c.png"], "c came in, the missing b went");
+}
+
+/// The scan's thread can't start: Synchronize Folder is an error that opens no dialog and keeps the
+/// import probe cache the scan took, so the next scan doesn't probe unchanged files again (#3071).
+#[test]
+fn a_synchronize_scan_whose_worker_cannot_start_keeps_the_probe_cache() {
+    let dir = Scratch::new("scan-refused");
+    let mut h = changed_folder(&dir);
+    let kept = dir.path("trip/a.png");
+    h.app.session.import_probes.insert(kept.clone(), lightcraft_engine::media::ProbeInfo::default());
+    crate::tasks::refused::next(1);
+    let r = crate::sync::open(&mut h.app, &dir.path("trip"), "trip", false);
+    assert!(r.as_ref().is_err_and(|e| e.contains("could not start")), "{r:?}");
+    assert!(h.app.sync.is_none());
+    assert!(h.app.ui.dialog.is_none(), "{:?}", h.app.ui.dialog);
+    assert!(h.app.session.import_probes.contains_key(&kept), "the cache went back to the session");
+}
+
 #[test]
 fn a_stopped_synchronize_says_it_was_stopped_and_stays_at_most_one_step() {
     let dir = Scratch::new("stop");

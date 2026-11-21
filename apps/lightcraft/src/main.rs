@@ -234,6 +234,9 @@ fn main() -> eframe::Result {
     if let Some(logger) = logger {
         logging::record_panics(logger);
     }
+    // before anything uses rayon, so its threads show as `lc-rayon-N` in a thread dump (#3071)
+    // (a failure is reported once the log file is open, below, before anything uses rayon)
+    let pool = lightcraft_engine::threads::name_global_pool();
     alloc_release::install();
     let mut control_port = control_port_from("LIGHTCRAFT_CONTROL_PORT", std::env::var("LIGHTCRAFT_CONTROL_PORT").ok().filter(|v| !v.is_empty()));
     let mut files = Vec::new();
@@ -278,6 +281,12 @@ fn main() -> eframe::Result {
             },
             None => logger.no_file(),
         }
+    }
+    // A pool that can't start its threads leaves rayon unusable (every later use panics): stop
+    // here, with the start-up error message, before any rayon work runs.
+    if let Err(e) = pool {
+        startup_failed(&e.to_string(), log_file.as_deref());
+        std::process::exit(1);
     }
     // what the arguments name, resolved now: an empty or relative argument never becomes a drive
     // root, and a whole drive or home folder is not walked (issue #374)

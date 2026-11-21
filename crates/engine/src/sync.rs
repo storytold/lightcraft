@@ -199,6 +199,12 @@ impl SyncInput {
         let labels = scan.library();
         Ok(SyncInput { folder: path.to_string(), scan, ids, naming: s.xmp.naming, labels })
     }
+
+    /// The probes of earlier scans this input took from the session ([`SyncInput::new`]), to hand back
+    /// when the scan never ran (its worker thread couldn't start), as [`ScanInput::take_probes`] does.
+    pub fn take_probes(&mut self) -> HashMap<String, ProbeInfo> {
+        self.scan.take_probes()
+    }
 }
 
 /// Find what changed in the folder (see the module docs). Reads the disk, never the session.

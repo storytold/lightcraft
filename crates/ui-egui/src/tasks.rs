@@ -96,6 +96,45 @@ fn start<T: Send + 'static>(
     Ok(())
 }
 
+/// Start `job` on a worker thread called `name` (`lc-…`: a thread dump tells it from the others);
+/// in the browser build, which has no threads, run it at once. `Err` when the thread can't start
+/// (the system is out of threads or memory): `job` is dropped unrun, so a caller starts its
+/// worker before it changes any state the worker's result would go with.
+pub(crate) fn worker(name: &str, job: impl FnOnce() + Send + 'static) -> Result<(), String> {
+    #[cfg(test)]
+    if refused::take() {
+        return Err("could not start: refused by the test".into());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::thread::Builder::new().name(name.into()).spawn(job).map(drop).map_err(|e| format!("could not start: {e}"))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = name;
+        job();
+        Ok(())
+    }
+}
+
+/// [`worker`] for a job that works on `input`, which it gets once its thread runs. When the thread
+/// can't start, `input` comes back with the error (`None` only if the job somehow ran), so what it
+/// took from the session (a scan's probe cache) can go back.
+#[allow(clippy::type_complexity)]
+pub(crate) fn worker_with<T: Send + 'static>(name: &str, input: T, job: impl FnOnce(T) + Send + 'static) -> Result<(), (String, Option<T>)> {
+    use std::sync::{Arc, Mutex, PoisonError};
+    let slot = Arc::new(Mutex::new(Some(input)));
+    let theirs = Arc::clone(&slot);
+    let started = worker(name, move || {
+        let input = theirs.lock().unwrap_or_else(PoisonError::into_inner).take();
+        if let Some(input) = input {
+            job(input);
+        }
+    });
+    // (a job that didn't start was dropped unrun: `input` is still in the slot)
+    started.map_err(|e| (e, slot.lock().unwrap_or_else(PoisonError::into_inner).take()))
+}
+
 /// Apply finished tasks (called every frame).
 pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     app.tasks.repaint = Some(ctx.clone());
@@ -166,5 +205,28 @@ pub fn wait_for(app: &mut LightcraftApp, ctx: &egui::Context, label: &str, timeo
         let _ = timeout;
         poll(app, ctx);
         !app.tasks.is_running(label)
+    }
+}
+
+/// Tests make [`worker`] fail as when the system can't start a thread.
+#[cfg(test)]
+pub(crate) mod refused {
+    use std::cell::Cell;
+
+    thread_local! {
+        static NEXT: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// The next `n` workers started from this thread fail to start.
+    pub(crate) fn next(n: usize) {
+        NEXT.with(|c| c.set(n));
+    }
+
+    pub(super) fn take() -> bool {
+        NEXT.with(|c| {
+            let n = c.get();
+            c.set(n.saturating_sub(1));
+            n > 0
+        })
     }
 }
