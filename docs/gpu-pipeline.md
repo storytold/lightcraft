@@ -139,8 +139,16 @@ pipeline inside wgpu error scopes, so a driver that cannot compile egui's shader
 incorrect. (0x80070057)" in `egui_pipeline`) is logged and skipped instead of killing the app; no pop-up
 unless that renderer was forced (#1624). The renderer
 that worked is remembered in the settings folder (`window-renderer`); a start that dies before the window is up
-leaves `window-init.marker`, and the next start (relaunched automatically, at most 4 times) tries that
-renderer last. `LIGHTCRAFT_GPU_BACKEND=dx12 | vulkan | gl | glow` (or `WGPU_BACKEND`) forces one; DX12 stays
+leaves the renderer's name in `window-init.marker` (emptied once the window is up), and the next start
+(relaunched automatically, at most 4 times) tries that renderer last. Where the file system supports locks, the
+starting copy holds an
+operating-system lock on the marker until its window is up, so a second copy started on the same settings folder
+while the first is still starting leaves the first's marker alone and does not read it as a failed start (no
+"could not start with its … renderer last time" notice, and Windows does not remember a weaker renderer because
+of it). That second copy writes no marker while the first holds it, so if its own start dies it is not relaunched.
+A crash or kill releases the lock, so a marker with no live owner (also one an older version left) still counts as
+a failed start; a copy that hangs inside the driver without dying keeps the lock until it is ended.
+`LIGHTCRAFT_GPU_BACKEND=dx12 | vulkan | gl | glow` (or `WGPU_BACKEND`) forces one; DX12 stays
 first because a broken Vulkan driver can crash the process uncatchably (#136). Compute keeps its own
 device and falls back to the CPU as before.
 
