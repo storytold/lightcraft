@@ -85,7 +85,8 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   not patch synthesis.
 - *Create Stack*: the result goes on top of a collapsed stack of its sources (`Catalog::stack_with_ops`); its
   caption also lists them.
-- Panorama output is limited to `maxMegapixels` (default 40) — blending memory is ~25 bytes/pixel.
+- Final panoramas target the photos' native resolution, with scaling limits of 512 megapixels and a
+  65,000-pixel longest edge. Available memory and a smaller `maxMegapixels` can reduce the output resolution further.
 - HDR memory: every frame is held as 32-bit float RGB (~0.86 GB per 67 MP frame at the peak, plus ~1.2 GB); full-size
   photos are decoded one at a time. Measured on 67 MP raws: 3 frames 3.8 GB, 4 frames 4.7 GB, 5 frames 5.5 GB (was
   4.8 / 6.3 GB for 3 / 4). Half-float frames would halve the per-frame share.
