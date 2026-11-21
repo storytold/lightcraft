@@ -43,13 +43,15 @@ License (https://github.com/facebookresearch/sam3/blob/main/LICENSE), a separate
 licence. See docs/ai-masks.md.
 
 AI denoise weights are not part of LightCraft and are never distributed with it.
-The default build offers user-supplied models only. The optional rawnind-model
-feature offers a separately downloaded RawNIND UtNet2 Bayer checkpoint under
-GPL-3.0 (https://www.gnu.org/licenses/gpl-3.0.html), after the user accepts its terms.
-Commercial use is subject to those terms, including applicable source, licence and
-notice obligations on redistribution. Enabling that offer in releases remains a
-maintainer decision. The ONNX reader and CPU/GPU executor are our Rust implementation;
-no darktable, RawSpeed, LibRaw or other GPL decoder/runtime code is included.
+Besides user-supplied models, the desktop app and the CLI offer (their default
+rawnind-model feature) a separately downloaded RawNIND UtNet2 Bayer checkpoint
+("RawNIND" by Benoit Brummer), after the user accepts its terms. Its author
+dual-licenses the weights under GPL-3.0 and CC BY 4.0
+(https://github.com/trougnouf/rawnind_jddc); LightCraft uses them under CC BY 4.0
+(https://creativecommons.org/licenses/by/4.0/), which allows any use, commercial use
+included, with credit to the author. The ONNX reader and CPU/GPU executor are our Rust
+implementation; no darktable, RawSpeed, LibRaw or other GPL decoder/runtime code is
+included.
 
 Builds made with craft-fonts (the optional CRAFT_FONTS_DIR build input; all official releases)
 also embed the default fonts listed in
