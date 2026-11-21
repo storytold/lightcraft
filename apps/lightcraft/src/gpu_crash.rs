@@ -18,7 +18,9 @@ pub(crate) fn window_files(in_memory: bool) -> window_gpu::Files {
 }
 
 /// Written while the GPU compute device is created, removed once that returned
-/// (`lightcraft_gpu::backend::set_init_marker`). Not with `LIGHTCRAFT_NO_PREFS` (tests, scripts).
+/// (`lightcraft_gpu::backend::set_init_marker`); still there after a quit while a creation that
+/// passed its time limit was stuck in the driver (#3068). Not with `LIGHTCRAFT_NO_PREFS` (tests,
+/// scripts).
 fn gpu_marker_path() -> Option<std::path::PathBuf> {
     if std::env::var_os("LIGHTCRAFT_NO_PREFS").is_some() {
         return None;
