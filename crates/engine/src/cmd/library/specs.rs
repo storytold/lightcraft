@@ -728,6 +728,14 @@ pub fn specs() -> Vec<CommandSpec> {
                     ),
                     None => None,
                 };
+                // the keywords given that the library refuses as new names, each checked once
+                let refused: Vec<(String, String)> = strs("keywords")
+                    .into_iter()
+                    .flatten()
+                    .chain(strs("addKeywords").unwrap_or_default())
+                    .map(|k| lightcraft_catalog::keywords::clean(&k))
+                    .filter_map(|k| s.catalog.check_keyword_name(&k).err().map(|e| (k, e.to_string())))
+                    .collect();
                 let mut ops = Vec::new();
                 for id in targets {
                     let Some(ph) = s.catalog.photo(id) else { continue };
@@ -757,7 +765,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         }
                     }
                     // keywords are stored cleaned (`a | b ` is `a|b`), each once whatever its case
-                    use lightcraft_catalog::keywords::clean;
+                    use lightcraft_catalog::keywords::{clean, same};
                     // (a set of the lower-cased keywords keeps this linear however many are supplied)
                     let mut seen: std::collections::HashSet<String> = m.keywords.iter().map(|x| x.to_lowercase()).collect();
                     let add = |m: &mut lightcraft_catalog::Meta, seen: &mut std::collections::HashSet<String>, k: &str| {
@@ -766,6 +774,10 @@ pub fn specs() -> Vec<CommandSpec> {
                             m.keywords.push(k);
                         }
                     };
+                    // a keyword the photo or the library doesn't have yet can't end in `*`
+                    if let Some((_, e)) = refused.iter().find(|(k, _)| !m.keywords.iter().any(|x| same(&clean(x), k))) {
+                        return Err(bad("photo.setMeta", e.clone()));
+                    }
                     if let Some(k) = strs("keywords") {
                         m.keywords.clear();
                         seen.clear();

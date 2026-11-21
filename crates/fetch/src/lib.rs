@@ -29,6 +29,7 @@ use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
+use craft_http_url::parse_content_range;
 use http::{HttpError, Limits, Url};
 
 /// One file of the model.
@@ -242,6 +243,7 @@ fn validate_files(files: &[FileSpec<'_>]) -> Result<u64, DownloadError> {
     if files.len() > 256 {
         return Err(DownloadError::Invalid("too many files".into()));
     }
+    // (names that differ only in case are one file on a case-insensitive file system)
     let mut seen = std::collections::HashSet::new();
     let mut total = 0u64;
     for f in files {
@@ -259,7 +261,7 @@ fn validate_files(files: &[FileSpec<'_>]) -> Result<u64, DownloadError> {
             || f.name.starts_with('.')
             || f.name.contains(['/', '\\', ':'])
             || f.name.chars().any(char::is_control)
-            || !seen.insert(f.name)
+            || !seen.insert(f.name.to_lowercase())
         {
             return Err(DownloadError::Invalid("a filename must be a unique, ordinary filename".into()));
         }
@@ -459,31 +461,6 @@ fn http_fail(e: HttpError) -> Fail {
         HttpError::Stalled | HttpError::Io(_) | HttpError::Protocol(_) => Fail::Retry(e.to_string()),
         HttpError::BadUrl(_) | HttpError::Connect(_) | HttpError::Tls(_) => Fail::NextMirror(e.to_string()),
     }
-}
-
-/// `bytes a-b/total` → (a, total) (`*` total → None).
-fn parse_content_range(v: &str) -> Option<(u64, Option<u64>)> {
-    let v = v.trim().strip_prefix("bytes")?.trim();
-    let (range, total) = v.split_once('/')?;
-    let (a, b) = range.split_once('-')?;
-    let (a, b) = (digits(a)?, digits(b)?);
-    if b < a {
-        return None;
-    }
-    let total = match total.trim() {
-        "*" => None,
-        t => Some(digits(t)?),
-    };
-    Some((a, total))
-}
-
-/// A non-empty run of ASCII digits as a `u64` (no sign, unlike `str::parse`).
-fn digits(s: &str) -> Option<u64> {
-    let s = s.trim();
-    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    s.parse().ok()
 }
 
 #[cfg(test)]
