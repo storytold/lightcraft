@@ -496,6 +496,7 @@ mod tests {
         let token = LightroomLibraryToken::capture(&session);
         assert!(token.matches(&session));
         session.library_identity = Arc::new(());
+        session.sync_frames = Default::default();
         assert!(!token.matches(&session));
     }
 

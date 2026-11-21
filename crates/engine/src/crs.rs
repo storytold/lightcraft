@@ -12,7 +12,8 @@
 
 use std::collections::BTreeMap;
 
-use lightcraft_develop::{MIXER_BANDS, Preset};
+use lightcraft_develop::{MIXER_BANDS, Preset, Upright};
+use lightcraft_geom::{Affine, Homography, Orientation, Point, Rect};
 use serde_json::{Map, Value, json};
 
 /// Properties keyed `prefix:name` (as produced by [`lightcraft_meta::parse_xmp`]).
@@ -433,15 +434,11 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     n(o, "PerspectiveX", "geometry.offset_x");
     n(o, "PerspectiveY", "geometry.offset_y");
     if let Some(u) = num(props, "crs:PerspectiveUpright") {
-        let mode = match u as i64 {
-            1 => "auto",
-            2 => "level",
-            3 => "vertical",
-            4 => "full",
-            5 => "guided",
-            _ => "off",
-        };
-        put(o, "geometry.upright", json!(mode));
+        put(o, "geometry.upright", json!(upright_mode(u).unwrap_or(Upright::Off)));
+        // a stated mode never keeps a transform solved for another one: it is solved again for this
+        // photo, unless the photo's frame is known and Lightroom's own saved matrix is placed
+        // ([`saved_upright`], [`crate::sidecar::SidecarData::set_frame`])
+        put(o, "geometry.upright_transform", Value::Null);
     }
 
     // ---- Crop (normalized edges of the unrotated image + straighten angle)
@@ -457,7 +454,13 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
                 );
             }
         }
-        Some(false) => put(o, "crop.geometry", json!({"rect": {"x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}, "angle": 0.0})),
+        Some(false) => {
+            // "no crop": the edges Lightroom keeps writing beside it are read, not lost adjustments
+            for k in ["Left", "Top", "Right", "Bottom", "Angle"] {
+                note(&format!("crs:Crop{k}"));
+            }
+            put(o, "crop.geometry", json!({"rect": {"x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}, "angle": 0.0}))
+        }
         None => {}
     }
     out
@@ -497,8 +500,11 @@ pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values
     // Point Color slots that are all empty (-1)
     let value_is = |k: &str, f: &dyn Fn(&[String]) -> bool| props.get(&format!("crs:{k}")).is_some_and(|v| f(v));
     let empty_points = |v: &[String]| v.iter().all(|s| s.split(',').all(|n| n.trim().parse::<f64>().is_ok_and(|x| x == -1.0) || n.trim().is_empty()));
+    // Upright's analysis record (version, saved matrices, centre, focal length, guides): placed or
+    // reported by the photo import's `uprightGeometry` diagnostic, never an adjustment of its own
     let quiet = |k: &str| {
         k.starts_with("Enable")
+            || k.starts_with("Upright")
             || k.starts_with("ToneCurveName")
             || k == "AutoTone"
             || k == "AutoGrayscaleMix"
@@ -525,14 +531,221 @@ pub fn camera_profile_name(props: &Props) -> Option<&str> {
     first(props, "crs:CameraProfile")
 }
 
-/// Whether an XMP packet contains a saved Lightroom Upright matrix. Lightroom's matrix uses a
-/// coordinate convention that LightCraft does not currently import.
+/// Whether an XMP packet contains a saved Lightroom Upright matrix (usable or not: see
+/// [`saved_upright`]).
 pub fn has_saved_upright_transform(props: &Props) -> bool {
     props.keys().any(|key| {
         key.strip_prefix("crs:").is_some_and(|name| {
             name.starts_with("UprightTransform_") && props.get(key).is_some_and(|values| values.iter().any(|v| !v.trim().is_empty()))
         })
     })
+}
+
+/// The Upright mode a `crs:PerspectiveUpright` value names: 0 Off, 1 Auto, 2 Full, 3 Level,
+/// 4 Vertical, 5 Guided (issue #205: the matrix saved for each value has that mode's shape, and
+/// ExifTool names the values the same way). `None` for anything else.
+pub fn upright_mode(value: f64) -> Option<Upright> {
+    if value.fract() != 0.0 {
+        return None;
+    }
+    Some(match value as i64 {
+        0 => Upright::Off,
+        1 => Upright::Auto,
+        2 => Upright::Full,
+        3 => Upright::Level,
+        4 => Upright::Vertical,
+        5 => Upright::Guided,
+        _ => return None,
+    })
+}
+
+/// The Upright mode a packet selects (`crs:PerspectiveUpright`), if it names one.
+pub fn selected_upright(props: &Props) -> Option<Upright> {
+    num(props, "crs:PerspectiveUpright").and_then(upright_mode)
+}
+
+/// Whether a packet has Guided Upright guides (`crs:UprightFourSegments_<n>`, or a positive
+/// `crs:UprightFourSegmentsCount`). LightCraft doesn't read them.
+pub fn has_upright_guides(props: &Props) -> bool {
+    let stated = |values: &Vec<String>| values.iter().any(|v| !v.trim().is_empty());
+    props.iter().any(|(key, values)| {
+        key.strip_prefix("crs:UprightFourSegments_").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())) && stated(values)
+    }) || num(props, "crs:UprightFourSegmentsCount").is_some_and(|n| n > 0.0)
+}
+
+/// The Upright geometry an import loses unless Lightroom's saved matrix is kept, by the mode the
+/// packet selects: saved matrices for any mode but Off (an unreadable mode value is `Unknown`), and
+/// Guided Upright's guides. `None`: nothing would be lost (Upright Off, or no Upright record).
+pub fn upright_at_risk(props: &Props) -> Option<crate::import::ImportUprightMode> {
+    use crate::import::ImportUprightMode as M;
+    let (matrices, guides) = (has_saved_upright_transform(props), has_upright_guides(props));
+    let stated = props.get("crs:PerspectiveUpright").is_some_and(|v| v.iter().any(|s| !s.trim().is_empty()));
+    match selected_upright(props) {
+        Some(Upright::Off) => None,
+        None if !stated => None,
+        None => (matrices || guides).then_some(M::Unknown),
+        Some(Upright::Guided) => (matrices || guides).then_some(M::Guided),
+        Some(Upright::Auto) => matrices.then_some(M::Auto),
+        Some(Upright::Full) => matrices.then_some(M::Full),
+        Some(Upright::Level) => matrices.then_some(M::Level),
+        Some(Upright::Vertical) => matrices.then_some(M::Vertical),
+    }
+}
+
+/// The `crs:UprightVersion` whose saved matrices were measured against Lightroom's exports (the
+/// only one seen, in packets written by Camera Raw 15.0 to 17.2: Lightroom Classic 12 to 14 and
+/// the Lightroom desktop app). Matrices of any other version are not read: their convention is
+/// unknown.
+pub const UPRIGHT_VERSION: u64 = 151_388_160;
+
+/// Lightroom's saved Upright correction for the selected mode (`crs:UprightTransform_<value>`,
+/// where value is `crs:PerspectiveUpright`).
+///
+/// The convention was measured, not assumed (issue #205; three Upright Auto exports of public raws,
+/// one of them portrait and one cropped, matched to 0.5 px): a forward homography (uncorrected →
+/// corrected, column vectors, `p' = M·p`) in coordinates normalized to the *stored* image (x / width,
+/// y / height, origin top left, y down, before the EXIF orientation), applied before the crop, with
+/// Lightroom's scale to fill the frame already in it. Guided Upright's slot holds no result (its
+/// correction is solved from the guides when drawn), so Guided is never read from here.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SavedUpright {
+    pub mode: Upright,
+    /// Row-major, scaled so the last element is 1.
+    pub matrix: [f64; 9],
+}
+
+/// Largest magnitude accepted for an element of a saved matrix (normalized coordinates: a real
+/// correction is of order 1).
+const UPRIGHT_MAX_ELEMENT: f64 = 100.0;
+
+/// The packet's saved Upright correction for its selected mode, when LightCraft can apply it: a
+/// mode with an automatic result (Auto, Full, Level, Vertical), [`UPRIGHT_VERSION`], a
+/// `crs:UprightTransformCount` that includes the mode's slot, and nine finite numbers that make a
+/// sensible correction (no point of the photo at or beyond the horizon, no mirror, no collapse).
+pub fn saved_upright(props: &Props) -> Option<SavedUpright> {
+    // the slot is the mode's `crs:PerspectiveUpright` value; Off and Guided have no automatic result
+    let mode = selected_upright(props)?;
+    let slot = match mode {
+        Upright::Auto => 1,
+        Upright::Full => 2,
+        Upright::Level => 3,
+        Upright::Vertical => 4,
+        Upright::Off | Upright::Guided => return None,
+    };
+    if first(props, "crs:UprightVersion")?.parse::<u64>().ok()? != UPRIGHT_VERSION {
+        return None;
+    }
+    let count = first(props, "crs:UprightTransformCount")?.parse::<usize>().ok()?;
+    if count <= slot {
+        return None;
+    }
+    let matrix = parse_upright_matrix(first(props, &format!("crs:UprightTransform_{slot}"))?)?;
+    Some(SavedUpright { mode, matrix })
+}
+
+/// Nine comma-separated numbers as a usable saved Upright matrix (see [`saved_upright`]).
+fn parse_upright_matrix(text: &str) -> Option<[f64; 9]> {
+    let mut m = [0.0; 9];
+    let mut parts = text.split(',');
+    for v in &mut m {
+        *v = parts.next()?.trim().parse::<f64>().ok().filter(|x| x.is_finite())?;
+    }
+    if parts.next().is_some() || m[8].abs() < 1e-9 {
+        return None;
+    }
+    let last = m[8];
+    for v in &mut m {
+        *v /= last;
+    }
+    if m.iter().any(|v| !v.is_finite() || v.abs() > UPRIGHT_MAX_ELEMENT) {
+        return None;
+    }
+    // every point of the photo stays in front of the horizon (w is affine: its corners bound it)
+    let w = |x: f64, y: f64| m[6] * x + m[7] * y + m[8];
+    if [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)].iter().any(|&(x, y)| w(x, y) < 1e-3) {
+        return None;
+    }
+    // with w > 0 there, the sign of the determinant is the sign of the local area: no mirror, no collapse
+    let det = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) + m[2] * (m[3] * m[7] - m[4] * m[6]);
+    (det.is_finite() && det > 1e-6).then_some(m)
+}
+
+/// Normalized stored coordinates → normalized oriented coordinates, as a homography.
+fn orientation_homography(orientation: Orientation) -> Homography {
+    let at = |x: f64, y: f64| {
+        let (u, v) = orientation.map(x, y, 1.0, 1.0);
+        Point::new(u, v)
+    };
+    let (o, ex, ey) = (at(0.0, 0.0), at(1.0, 0.0), at(0.0, 1.0));
+    Homography([ex.x - o.x, ey.x - o.x, o.x, ex.y - o.y, ey.y - o.y, o.y, 0.0, 0.0, 1.0])
+}
+
+/// Centred oriented coordinates (`(p − centre) / (long edge / 2)`) → normalized oriented
+/// coordinates, for an oriented image of `ow × oh`.
+fn centred_to_normalized(ow: f64, oh: f64) -> Homography {
+    let l = ow.max(oh) / 2.0;
+    Homography([l / ow, 0.0, 0.5, 0.0, l / oh, 0.5, 0.0, 0.0, 1.0])
+}
+
+/// A saved Upright correction in LightCraft's frame: the homography of
+/// `Geometry::upright_transform` (lens-corrected → transformed, centred coordinates of the oriented
+/// image). `orientation` turns the stored image, `stored_w × stored_h` (any unit; only the aspect
+/// matters), into LightCraft's oriented image. `None` for a frame without a finite, positive size.
+pub fn upright_in_frame(saved: &SavedUpright, orientation: Orientation, stored_w: f64, stored_h: f64) -> Option<Homography> {
+    let a = centred_to_stored(orientation, stored_w, stored_h)?;
+    normalized(a.inverse()?.mul(&Homography(saved.matrix)).mul(&a))
+}
+
+/// Centred coordinates of the oriented image → normalized coordinates of the stored image.
+fn centred_to_stored(orientation: Orientation, stored_w: f64, stored_h: f64) -> Option<Homography> {
+    if !(stored_w.is_finite() && stored_h.is_finite() && stored_w > 0.0 && stored_h > 0.0) {
+        return None;
+    }
+    let (ow, oh) = if orientation.swaps_axes() { (stored_h, stored_w) } else { (stored_w, stored_h) };
+    Some(orientation_homography(orientation).inverse()?.mul(&centred_to_normalized(ow, oh)))
+}
+
+/// `h` scaled so its last element is 1, when that leaves it finite.
+fn normalized(h: Homography) -> Option<Homography> {
+    let last = h.0[8];
+    let h = Homography(h.0.map(|v| v / last));
+    h.0.iter().all(|v| v.is_finite()).then_some(h)
+}
+
+/// Put a placed Upright correction ([`upright_in_frame`]) into a partial settings object.
+pub fn put_upright_transform(partial: &mut Value, h: Homography) {
+    put(partial, "geometry.upright_transform", json!(h));
+}
+
+/// Lightroom's crop in LightCraft's frame (Lightroom catalogs and, given the photo's frame, XMP
+/// sidecars: [`crate::sidecar::SidecarData::set_frame`]). `crs` gives the crop's top-left (`CropLeft`, `CropTop`)
+/// and bottom-right (`CropRight`, `CropBottom`) corners on the stored image (before orientation and
+/// straightening), normalized to its size, plus a straighten angle that turns the other way to
+/// LightCraft's. LightCraft's crop is a rectangle in the oriented image rotated by `angle` about its
+/// centre, normalized to the oriented image's size, so the corners go through the orientation and
+/// then the rotation; `stored_aspect` (width / height of the stored image) matters once the
+/// rectangle turns. On a real catalog this reproduced the frame aspect of all 223 straightened crops
+/// in Lightroom's exports within 1%.
+pub fn crop_in_frame(partial: &mut Value, orientation: Orientation, stored_aspect: f64) {
+    let Some(geometry) = partial.pointer_mut("/crop/geometry").and_then(Value::as_object_mut) else { return };
+    let edge = |k: &str| geometry.get("rect").and_then(|r| r.get(k)).and_then(Value::as_f64);
+    let (Some(x0), Some(y0), Some(x1), Some(y1)) = (edge("x0"), edge("y0"), edge("x1"), edge("y1")) else { return };
+    let lightroom_angle = geometry.get("angle").and_then(Value::as_f64).unwrap_or(0.0);
+    if orientation == Orientation::Normal && lightroom_angle == 0.0 {
+        return;
+    }
+    let w = if stored_aspect.is_finite() && stored_aspect > 0.0 { stored_aspect } else { 1.0 };
+    let (ow, oh) = if orientation.swaps_axes() { (1.0, w) } else { (w, 1.0) };
+    // a mirror turns the straighten the other way too
+    let angle = if orientation.to_parts().0 { lightroom_angle } else { -lightroom_angle };
+    let to_rotated = Affine::rotate_about(angle.to_radians(), Point::new(ow / 2.0, oh / 2.0));
+    let corner = |x: f64, y: f64| {
+        let (u, v) = orientation.map(x * w, y, w, 1.0);
+        to_rotated.apply(Point::new(u, v))
+    };
+    let r = Rect::from_points(corner(x0, y0), corner(x1, y1));
+    geometry.insert("rect".into(), json!({"x0": r.x0 / ow, "y0": r.y0 / oh, "x1": r.x1 / ow, "y1": r.y1 / oh}));
+    geometry.insert("angle".into(), json!(angle));
 }
 
 /// Read an XMP preset (`crs:` fields + `crs:Name` / `crs:Group`) into one of our presets.

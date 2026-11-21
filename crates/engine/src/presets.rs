@@ -180,19 +180,9 @@ impl Session {
     /// settings the preset does not name keep the photo's values (issue #2159). The `preset.apply`
     /// command and the UI's hover previews share this, so hovering shows exactly what a click commits.
     pub fn preset_applied(&self, id: PhotoId, preset: &Preset, amount: f64) -> Option<DevelopSettings> {
-        let current = self.develop_of(id)?;
-        let photo = self.catalog.photo(id)?;
-        // The original is read only below 100 %: the panel asks for every visible row at 100 % on
-        // every frame, and then neither the import state nor a copy of the photo's settings is built.
-        let look;
-        let original: &DevelopSettings = match &photo.import_look {
-            Some(_) if (amount - 1.0).abs() >= 1e-9 => {
-                look = photo.import_defaults();
-                &look
-            }
-            _ => &current,
-        };
-        Some(preset.apply_on(&current, original, amount))
+        // the same composition Apply stores: the white balance scale and the Upright correction
+        // settled too ([`Session::preset_look`])
+        self.preset_look(id, preset, amount)
     }
 
     /// Add imported presets. Identical presets (same name, group and settings) already present are
