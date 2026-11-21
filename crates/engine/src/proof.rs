@@ -16,7 +16,6 @@ pub struct ProofProfile {
 
 /// Load the profile at `path` for proofing with `intent`, simulating paper and ink or not.
 pub fn load(path: &str, intent: ProofIntent, paper_ink: bool) -> Result<ProofProfile, String> {
-    let path = path.trim();
     let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
     if meta.len() > MAX_PROFILE_BYTES as u64 {
         return Err(format!("{path}: too large for an ICC profile"));
@@ -44,6 +43,17 @@ pub fn from_bytes(bytes: &[u8], intent: ProofIntent, paper_ink: bool, fallback_n
 mod tests {
     use super::*;
     use lightcraft_codecs::space::NamedSpace;
+
+    #[test]
+    fn loads_an_icc_path_with_trailing_whitespace() {
+        let profile = lightcraft_codecs::icc::write_named(NamedSpace::DisplayP3);
+        let path = std::env::temp_dir().join(format!("lc-proof-{}.icc\u{00a0}", std::process::id()));
+        std::fs::write(&path, &profile).unwrap();
+        let result = load(path.to_str().unwrap(), ProofIntent::Perceptual, false);
+        std::fs::remove_file(&path).unwrap();
+        let expected = from_bytes(&profile, ProofIntent::Perceptual, false, "x").unwrap();
+        assert_eq!(result.unwrap().id, expected.id);
+    }
 
     #[test]
     fn profiles_register_by_content_and_options() {
