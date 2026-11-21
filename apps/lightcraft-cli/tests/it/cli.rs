@@ -387,6 +387,15 @@ fn render_export_options() {
     assert_eq!(std::fs::read(&out).unwrap(), std::fs::read(&input).unwrap());
     let xmp = std::fs::read_to_string(out.with_extension("xmp")).unwrap();
     assert!(xmp.contains("exposure"), "{xmp}");
+    let blocked = tmp("o-collision.xmp");
+    std::fs::write(&blocked, b"existing export").unwrap();
+    let result = Command::new(binary())
+        .args(["render", input.to_str().unwrap(), "-o", blocked.to_str().unwrap(), "--set", "light.exposure=1", "--opt", "format=original"])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("the output file and its sidecar"));
+    assert_eq!(std::fs::read(&blocked).unwrap().as_slice(), b"existing export");
     // unknown extension fails with a hint
     let o = Command::new(binary()).args(["render", input.to_str().unwrap(), "-o", tmp("x.bmp").to_str().unwrap()]).output().unwrap();
     assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("unknown extension"));
