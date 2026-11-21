@@ -344,10 +344,7 @@ impl Session {
         };
         loop {
             // 1. take in the batch measuring now
-            let mut batch = match run.inflight.take() {
-                Some((rx, done, total)) => Some((rx, done, total)),
-                None => None,
-            };
+            let mut batch = run.inflight.take();
             let mut finished = false;
             if let Some((rx, done, total)) = batch.as_mut() {
                 let mut disconnected = false;
@@ -372,14 +369,14 @@ impl Session {
                 // every result is in, or the sender is gone (a lane panicked: what arrived counts)
                 finished = *done >= *total || disconnected;
             }
-            if let Some((rx, done, total)) = batch.take() {
-                if !finished {
-                    run.inflight = Some((rx, done, total));
-                    run.task.progress(run.measured, run.total);
-                    let progress = run.progress();
-                    self.quality_scan = Some(run);
-                    return progress;
-                }
+            if let Some((rx, done, total)) = batch.take()
+                && !finished
+            {
+                run.inflight = Some((rx, done, total));
+                run.task.progress(run.measured, run.total);
+                let progress = run.progress();
+                self.quality_scan = Some(run);
+                return progress;
             }
             // 2. cancelled, or nothing left: write what was measured and end
             if run.cancel.load(Ordering::Relaxed) {
