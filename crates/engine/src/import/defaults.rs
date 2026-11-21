@@ -8,9 +8,13 @@ pub fn import_defaults(p: &Photo) -> lightcraft_develop::DevelopSettings {
 }
 
 /// Does the photo still look as the camera rendered it (its embedded camera preview is then a
-/// fair stand-in)? Not when a default preset changed it on import.
+/// fair stand-in)? Not when a default preset changed it on import. Remove Hot Pixels doesn't count:
+/// raws imported since the box exists start with it on, older ones with it off (#4255), and the
+/// camera's JPEG is the picture as imported either way.
 pub fn has_import_look(p: &Photo) -> bool {
-    *p.develop == p.camera_defaults()
+    let mut defaults = p.camera_defaults();
+    defaults.detail.nr_outliers = p.develop.detail.nr_outliers;
+    *p.develop == defaults
 }
 
 /// User defaults applied on import (Settings → Import; saved in the library's `prefs.json`).
