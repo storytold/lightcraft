@@ -465,3 +465,17 @@ Original src/avx2/fdct.rs opening notice
  * Based on the x86 SIMD extension for IJG JPEG library
  * Copyright (C) 1999-2006, MIYASAKA Masaru.
  */
+
+Reflection removal (crates/reflections)
+-------------------------------------
+The DSRNet network architecture in crates/reflections/src/net.rs is a modified
+Rust implementation of mingcv/DSRNet, "Single Image Reflection Separation via
+Component Synergy" (ICCV 2023), https://github.com/mingcv/DSRNet,
+revision 7953e4045f89dd0b76d63bd3ac3eb4946f5cabc6, licensed Apache-2.0.
+Modifications: safe Rust/Candle inference, efficient shifted-product depthwise
+convolutions, bounded input and weights, omission of the training-only LRM
+residue branch, CPU and Metal execution. The existing root LICENSE-APACHE
+contains the required license. This derived crate is Apache-2.0 only.
+VGG19 convolutional features follow torchvision's BSD-3-Clause implementation;
+only user-downloaded tensor weights are used. No Python source, pretrained
+weights, datasets or Adobe assets are redistributed in the application.

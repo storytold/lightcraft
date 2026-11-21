@@ -39,6 +39,7 @@ mod missing_sweep;
 pub mod panels;
 pub mod pick;
 pub mod recheck;
+pub mod reflections;
 pub mod region;
 pub mod reload;
 pub mod render;
@@ -328,6 +329,10 @@ pub struct LightcraftApp {
     pub(crate) survey_motion: panels::compare::survey::SurveyMotion,
     /// Photo Merge dialog previews and background merges.
     pub merge: merge::MergeState,
+    pub reflection_quality: u32,
+    pub reflection_model: String,
+    pub reflection_open: bool,
+    pub reflection_photo: Option<lightcraft_catalog::PhotoId>,
     /// An import in progress (the import review dialog's batches).
     pub import: Option<import::ImportTask>,
     /// A folder scan in progress (feeds the import review).
