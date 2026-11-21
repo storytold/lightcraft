@@ -5,6 +5,399 @@ use serde_json::json;
 
 use crate::Session;
 
+#[test]
+fn hdr_merge_rejects_over_budget_dimensions_before_reading_sources() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let mut s = Session::new();
+    let mut ids = Vec::new();
+    for i in 0..32 {
+        let id = s.catalog.alloc_photo_id();
+        let path = format!("synthetic-{i}.dng");
+        let photo = lightcraft_catalog::Photo::new(
+            id,
+            lightcraft_catalog::Source::File { path: path.clone() },
+            &path,
+            "DNG",
+            65_535,
+            65_535,
+            "2026-10-16T00:00:00Z",
+        );
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        ids.push(id.0);
+    }
+
+    let reads = std::sync::Arc::new(AtomicUsize::new(0));
+    let count = reads.clone();
+    s.media.file_bytes = Some(std::sync::Arc::new(move |_| {
+        count.fetch_add(1, Ordering::Relaxed);
+        Err("source reader should not be called".into())
+    }));
+
+    let error = s.execute("merge.hdr", &json!({"ids": ids})).unwrap_err().to_string();
+    assert!(error.to_lowercase().contains("memory budget"), "{error}");
+    assert_eq!(reads.load(Ordering::Relaxed), 0, "Photo Merge read source bytes before rejecting its memory estimate");
+}
+
+/// A pre-source-dimensions snapshot stores only the tiny default crop of this DNG.
+fn legacy_cropped_raw_catalog() -> (Session, Vec<lightcraft_catalog::PhotoId>, Vec<u8>) {
+    let source = lightcraft_merge::synth::bracket_dngs(512, 384, &[0.0]).unwrap().remove(0);
+    let mut raw = lightcraft_raw::decode(&source).unwrap();
+    raw.crop = lightcraft_raw::Rect::new(0, 0, 16, 12);
+    let bytes = lightcraft_raw::write_dng(&raw, &Default::default()).unwrap();
+    let probe = crate::files::probe_bytes("cropped.dng", &bytes).unwrap();
+    assert_eq!((probe.width, probe.height), (16, 12));
+    assert_eq!((probe.source_width, probe.source_height), (512, 384));
+
+    let mut s = Session::new();
+    let mut ids = Vec::new();
+    for i in 0..4 {
+        let id = s.catalog.alloc_photo_id();
+        let path = format!("legacy-raw-{i}.dng");
+        let mut photo = lightcraft_catalog::Photo::new(
+            id,
+            lightcraft_catalog::Source::File { path: path.clone() },
+            &path,
+            "DNG",
+            probe.width,
+            probe.height,
+            "2026-10-18T00:00:00Z",
+        );
+        photo.kind = lightcraft_catalog::MediaKind::Raw;
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        ids.push(id);
+    }
+    let mut legacy: serde_json::Value = serde_json::from_str(&s.catalog.to_snapshot()).unwrap();
+    for photo in legacy["photos"].as_object_mut().unwrap().values_mut() {
+        let fields = photo.as_object_mut().unwrap();
+        fields.remove("source_width");
+        fields.remove("source_height");
+    }
+    s.catalog = lightcraft_catalog::Catalog::from_snapshot(&legacy.to_string()).unwrap();
+    for id in &ids {
+        let photo = s.catalog.photo(*id).unwrap();
+        assert_eq!((photo.source_width, photo.source_height), (0, 0));
+    }
+    (s, ids, bytes)
+}
+
+#[test]
+fn legacy_cropped_raw_catalog_probes_uncropped_dimensions_before_planning() {
+    use crate::merge::{MergeFinish, MergeKind, estimate_merge_working_bytes_with_source_dimensions};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    let (mut s, ids, bytes) = legacy_cropped_raw_catalog();
+    let reads = Arc::new(AtomicUsize::new(0));
+    let count = reads.clone();
+    s.media.file_bytes = Some(Arc::new(move |_| {
+        count.fetch_add(1, Ordering::Relaxed);
+        Ok(bytes.clone())
+    }));
+    // Planning must not use a decoder or a cached/provided probe that could be stale.
+    s.media.file_probe = Some(Arc::new(|_| panic!("planning must probe original bytes")));
+    s.media.file_loader = Some(Arc::new(|_, _, _| panic!("planning must not decode pixels")));
+    for kind in [
+        MergeKind::Hdr { hdr: Default::default() },
+        MergeKind::Panorama { pano: Default::default() },
+        MergeKind::HdrPanorama { hdr: Default::default(), pano: Default::default(), bracket: 2 },
+    ] {
+        for preview in [false, true] {
+            let edge = preview.then_some(1024);
+            let expected = estimate_merge_working_bytes_with_source_dimensions(&kind, &[((16, 12), (512, 384)); 4], edge, usize::MAX).unwrap();
+            let underestimated = estimate_merge_working_bytes_with_source_dimensions(&kind, &[((16, 12), (16, 16)); 4], edge, expected - 1).unwrap();
+            assert!(underestimated < expected - 1, "fixture must distinguish cropped and sensor bounds");
+            let error = s
+                .plan_merge_with_budget(kind.clone(), MergeFinish::default(), &ids, preview, expected - 1)
+                .err()
+                .expect("sensor memory must exceed budget");
+            assert!(error.to_string().contains("memory budget"), "{error}");
+            let job = s.plan_merge_with_budget(kind.clone(), MergeFinish::default(), &ids, preview, usize::MAX).unwrap();
+            assert_eq!(job.sources.len(), 4);
+        }
+    }
+    assert_eq!(reads.load(Ordering::Relaxed), 48, "each plan probes the four originals sequentially");
+}
+
+#[test]
+fn legacy_cropped_raw_catalog_fails_safely_when_original_cannot_be_probed() {
+    use crate::merge::{MergeFinish, MergeKind};
+    use std::sync::Arc;
+
+    let (mut s, ids, _) = legacy_cropped_raw_catalog();
+    s.media.file_bytes = Some(Arc::new(|_| Err("original unavailable".into())));
+    let error = s.plan_merge(MergeKind::Hdr { hdr: Default::default() }, MergeFinish::default(), &ids, true).err().unwrap();
+    assert!(error.to_string().contains("original unavailable"), "{error}");
+    s.media.file_bytes = Some(Arc::new(|_| Ok(b"invalid RAW headers".to_vec())));
+    assert!(s.plan_merge(MergeKind::Hdr { hdr: Default::default() }, MergeFinish::default(), &ids, false).is_err());
+}
+
+#[test]
+fn hdr_batch_checks_each_bracket_set_before_reading_its_sources() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let mut s = Session::new();
+    let mut ids = Vec::new();
+    for (i, (width, height)) in [(65_535, 65_535), (65_535, 65_535), (320, 240), (320, 240)].into_iter().enumerate() {
+        let id = s.catalog.alloc_photo_id();
+        let path = format!("bracket-{i}.dng");
+        let photo = lightcraft_catalog::Photo::new(
+            id,
+            lightcraft_catalog::Source::File { path: path.clone() },
+            &path,
+            "DNG",
+            width,
+            height,
+            "2026-10-16T00:00:00Z",
+        );
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        ids.push(id);
+    }
+    for pair in [(&ids[0], &ids[1]), (&ids[2], &ids[3])] {
+        let op = s.catalog.group_ops(*pair.0, std::slice::from_ref(pair.1), true).unwrap();
+        s.catalog.apply(op).unwrap();
+    }
+
+    let reads = std::sync::Arc::new(AtomicUsize::new(0));
+    let count = reads.clone();
+    s.media.file_bytes = Some(std::sync::Arc::new(move |_| {
+        count.fetch_add(1, Ordering::Relaxed);
+        Err("synthetic source has no bytes".into())
+    }));
+
+    let result = s.execute("merge.hdrBatch", &json!({"ids": ids.iter().map(|id| id.0).collect::<Vec<_>>()})).unwrap();
+    let failed = result["failed"].as_array().unwrap();
+    assert_eq!(failed.len(), 2, "{result}");
+    assert!(failed[0]["error"].as_str().unwrap().contains("memory budget"), "{result}");
+    assert!(failed[1]["error"].as_str().unwrap().contains("synthetic source has no bytes"), "{result}");
+    assert_eq!(reads.load(Ordering::Relaxed), 1, "the oversized bracket was read, or the small bracket read more than once");
+}
+
+#[test]
+fn merge_memory_fallback_is_representable_on_32_bit_targets() {
+    use crate::merge::{merge_memory_bytes, unknown_ram_fallback};
+
+    let simulated_32_bit_max = u32::MAX as usize;
+    let fallback = unknown_ram_fallback(simulated_32_bit_max);
+    assert_eq!(fallback, simulated_32_bit_max, "8 GiB must clamp to the largest representable 32-bit byte count");
+    assert!(merge_memory_bytes(Some(fallback), 0) > 0);
+    assert!(merge_memory_bytes(None, 0) > 0, "the native unknown-RAM fallback must stay nonzero");
+}
+
+#[test]
+fn raw_merge_estimate_uses_uncropped_decoder_dimensions() {
+    use crate::merge::{MergeKind, estimate_merge_working_bytes_with_source_dimensions};
+
+    let source = lightcraft_merge::synth::bracket_dngs(512, 384, &[0.0]).unwrap().remove(0);
+    let mut raw = lightcraft_raw::decode(&source).unwrap();
+    raw.crop = lightcraft_raw::Rect::new(0, 0, 16, 12);
+    let bytes = lightcraft_raw::write_dng(&raw, &Default::default()).unwrap();
+    let probe = crate::files::probe_bytes("cropped.dng", &bytes).unwrap();
+    assert_eq!((probe.width, probe.height), (16, 12));
+    assert_eq!((probe.source_width, probe.source_height), (512, 384));
+
+    let decoded = lightcraft_raw::decode(&bytes).unwrap();
+    let bytes_per_sample = match &decoded.data {
+        lightcraft_raw::RawData::U16(_) => std::mem::size_of::<u16>(),
+        lightcraft_raw::RawData::F32(_) => std::mem::size_of::<f32>(),
+    };
+    let raw_sample_bytes = decoded.data.len().checked_mul(bytes_per_sample).unwrap();
+    let estimated = estimate_merge_working_bytes_with_source_dimensions(
+        &MergeKind::Hdr { hdr: Default::default() },
+        &[((probe.width, probe.height), (probe.source_width, probe.source_height)); 2],
+        None,
+        usize::MAX,
+    )
+    .unwrap();
+    assert!(
+        estimated >= raw_sample_bytes,
+        "the decoder estimate {estimated} must include at least one raw input's {raw_sample_bytes} sensor samples"
+    );
+}
+
+#[test]
+fn panorama_memory_estimate_allows_projected_canvas_larger_than_source_area() {
+    use crate::merge::{MergeKind, estimate_merge_working_bytes_with_budget};
+    use lightcraft_merge::{Frame, PanoOptions, Projection};
+
+    let frames: Vec<Frame> = lightcraft_merge::synth::pano_views(480, 360, 420.0, &[-35.0, 0.0, 35.0])
+        .unwrap()
+        .into_iter()
+        .map(|image| Frame::from_linear_rec2020(image, None))
+        .collect();
+    let source_pixels: usize = frames.iter().map(|frame| frame.width() * frame.height()).sum();
+    let options = PanoOptions { projection: Projection::Perspective, max_megapixels: 4.0, ..Default::default() };
+    let stitched = lightcraft_merge::stitch(frames, &options, &|_, _| true).unwrap();
+    let output_pixels = stitched.image.width.checked_mul(stitched.image.height).unwrap();
+    assert!(output_pixels > source_pixels, "fixture must reproduce output larger than source area");
+
+    let bounded_frames: Vec<Frame> = lightcraft_merge::synth::pano_views(480, 360, 420.0, &[-35.0, 0.0, 35.0])
+        .unwrap()
+        .into_iter()
+        .map(|image| Frame::from_linear_rec2020(image, None))
+        .collect();
+    let bounded = lightcraft_merge::pano::stitch_with_output_pixel_limit(bounded_frames, &options, source_pixels, &|_, _| true).unwrap();
+    let bounded_pixels = bounded.image.width.checked_mul(bounded.image.height).unwrap();
+    assert!(bounded_pixels <= source_pixels, "bounded canvas uses {bounded_pixels} pixels above its {source_pixels}-pixel limit");
+    assert!(bounded_pixels < output_pixels, "the native canvas should be scaled down to fit the pixel limit");
+
+    let estimated = estimate_merge_working_bytes_with_budget(&MergeKind::Panorama { pano: options }, &[(480, 360); 3], None, usize::MAX).unwrap();
+    assert!(
+        estimated >= output_pixels.checked_mul(68).unwrap(),
+        "estimated panorama working set {estimated} must cover at least the output blend buffer for {output_pixels} pixels"
+    );
+}
+
+#[test]
+fn panorama_memory_estimate_uses_measured_workspace_bounds() {
+    use crate::merge::{MergeKind, estimate_merge_working_bytes_with_budget};
+    use lightcraft_merge::{PanoOptions, Projection};
+
+    let frames = 16usize;
+    let side = 1_000u32;
+    let frame_pixels = usize::try_from(side).unwrap() * usize::try_from(side).unwrap() * frames;
+    let input_bytes = frame_pixels * std::mem::size_of::<[f32; 3]>();
+    let output_pixels = 4_000_000usize;
+    let pano = PanoOptions { projection: Projection::Cylindrical, max_megapixels: 4.0, ..Default::default() };
+    let estimated = estimate_merge_working_bytes_with_budget(&MergeKind::Panorama { pano }, &[(side, side); 16], None, usize::MAX).unwrap();
+    let measured_tile_working_set = input_bytes + output_pixels * 36;
+    let measured_blend_working_set = output_pixels * 68;
+    assert_eq!(estimated, measured_tile_working_set.max(measured_blend_working_set));
+}
+
+#[test]
+fn panorama_output_limit_uses_measured_workspace_and_all_input_pixels() {
+    use crate::merge::panorama_output_pixel_limit;
+
+    let available = 2_000_000_000usize;
+    let one_input_pixels = 10_000_000usize;
+    let many_input_pixels = 160_000_000usize;
+    let output_limit = |frame_pixels| {
+        let input_bytes = frame_pixels * std::mem::size_of::<[f32; 3]>();
+        (available.saturating_sub(input_bytes) / 36).min(available / 68)
+    };
+    let one_frame = panorama_output_pixel_limit(available, one_input_pixels).unwrap();
+    let many_frames = panorama_output_pixel_limit(available, many_input_pixels).unwrap();
+    assert_eq!(one_frame, output_limit(one_input_pixels));
+    assert_eq!(many_frames, output_limit(many_input_pixels));
+    assert!(many_frames < one_frame, "more resident input pixels should reduce the output limit: {many_frames} vs {one_frame}");
+}
+
+#[test]
+fn panorama_preview_reserves_memory_for_the_preview_cache() {
+    use crate::merge::{MergeKind, estimate_merge_working_bytes_with_budget};
+    use lightcraft_merge::{PanoOptions, Projection};
+
+    let available = 3usize << 29; // 1.5 GiB, representable on 32-bit targets.
+    let kind = MergeKind::Panorama { pano: PanoOptions { projection: Projection::Cylindrical, max_megapixels: 512.0, ..Default::default() } };
+    let estimated = estimate_merge_working_bytes_with_budget(&kind, &[(100, 100); 3], Some(1024), available).unwrap();
+    assert!(estimated <= available, "preview estimate {estimated} exceeds its {available}-byte budget after the cache reserve");
+}
+
+#[test]
+fn small_panorama_preview_does_not_require_a_40mp_workspace() {
+    use crate::merge::{MergeKind, estimate_merge_working_bytes_with_source_dimensions};
+    use lightcraft_merge::{PanoOptions, Projection};
+
+    let available = 3usize << 29; // 1.5 GiB
+    let kind = MergeKind::Panorama { pano: PanoOptions { projection: Projection::Cylindrical, ..Default::default() } };
+    let dimensions = [((4_000, 3_000), (4_000, 3_000)); 2];
+    let estimated = estimate_merge_working_bytes_with_source_dimensions(&kind, &dimensions, Some(1024), available).unwrap();
+    assert!(estimated <= available, "small preview estimate {estimated} exceeds its {available}-byte budget");
+}
+
+#[test]
+fn replaced_merge_sources_are_checked_before_decoding() {
+    use crate::merge::{MergeFinish, MergeKind};
+    use std::sync::Arc;
+
+    let small = lightcraft_merge::synth::bracket_dngs(64, 48, &[0.0]).unwrap().remove(0);
+    let large = lightcraft_merge::synth::bracket_dngs(512, 384, &[0.0]).unwrap().remove(0);
+    let dimensions = crate::files::probe_bytes("small.dng", &small).unwrap();
+    let mut session = Session::new();
+    let mut ids = Vec::new();
+    for index in 0..2 {
+        let id = session.catalog.alloc_photo_id();
+        let path = format!("source-{index}.dng");
+        let mut photo = lightcraft_catalog::Photo::new(
+            id,
+            lightcraft_catalog::Source::File { path: path.clone() },
+            &path,
+            "DNG",
+            dimensions.width,
+            dimensions.height,
+            "2026-11-16T00:00:00Z",
+        );
+        photo.kind = lightcraft_catalog::MediaKind::Raw;
+        photo.source_width = dimensions.source_width;
+        photo.source_height = dimensions.source_height;
+        session.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        ids.push(id);
+    }
+
+    let mut job =
+        session.plan_merge_with_budget(MergeKind::Hdr { hdr: Default::default() }, MergeFinish::default(), &ids, false, usize::MAX).unwrap();
+    let replacement = Arc::new(large);
+    job.read = Arc::new(move |_| Ok(replacement.as_ref().clone()));
+
+    let error = match job.run(&|_, _| true) {
+        Ok(_) => panic!("a source larger than the admitted dimensions must not be decoded"),
+        Err(error) => error,
+    };
+    assert!(error.contains("exceeds the admitted"), "{error}");
+}
+
+#[test]
+fn replaced_merge_raw_crop_is_checked_before_decoding() {
+    use crate::merge::{MergeFinish, MergeKind};
+    use std::sync::Arc;
+
+    let sensor = lightcraft_merge::synth::bracket_dngs(512, 384, &[0.0]).unwrap().remove(0);
+    let mut small_raw = lightcraft_raw::decode(&sensor).unwrap();
+    small_raw.crop = lightcraft_raw::Rect::new(0, 0, 16, 12);
+    let small = lightcraft_raw::write_dng(&small_raw, &Default::default()).unwrap();
+    let mut larger_raw = small_raw.clone();
+    larger_raw.crop = lightcraft_raw::Rect::new(0, 0, 128, 96);
+    let larger = lightcraft_raw::write_dng(&larger_raw, &Default::default()).unwrap();
+    let small_probe = crate::files::probe_bytes("small-crop.dng", &small).unwrap();
+    let larger_probe = crate::files::probe_bytes("larger-crop.dng", &larger).unwrap();
+    assert_eq!((small_probe.source_width, small_probe.source_height), (larger_probe.source_width, larger_probe.source_height));
+    assert!(larger_probe.width as u64 * u64::from(larger_probe.height) > u64::from(small_probe.width) * u64::from(small_probe.height));
+
+    let mut session = Session::new();
+    let mut ids = Vec::new();
+    for index in 0..2 {
+        let id = session.catalog.alloc_photo_id();
+        let path = format!("source-{index}.dng");
+        let mut photo = lightcraft_catalog::Photo::new(
+            id,
+            lightcraft_catalog::Source::File { path: path.clone() },
+            &path,
+            "DNG",
+            small_probe.width,
+            small_probe.height,
+            "2026-11-16T00:00:00Z",
+        );
+        photo.kind = lightcraft_catalog::MediaKind::Raw;
+        photo.source_width = small_probe.source_width;
+        photo.source_height = small_probe.source_height;
+        session.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        ids.push(id);
+    }
+    let mut job =
+        session.plan_merge_with_budget(MergeKind::Hdr { hdr: Default::default() }, MergeFinish::default(), &ids, false, usize::MAX).unwrap();
+    let replacement = Arc::new(larger);
+    job.read = Arc::new(move |_| Ok(replacement.as_ref().clone()));
+
+    let error = match job.run(&|_, _| true) {
+        Ok(_) => panic!("a changed RAW crop must be refused before frame allocation"),
+        Err(error) => error,
+    };
+    assert!(error.contains("frame dimensions changed after Photo Merge was planned"), "{error}");
+}
+
 fn temp_dir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("lc-merge-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
@@ -249,4 +642,32 @@ fn a_photo_named_twice_is_merged_once() {
     let job = s.plan_merge(kind, finish, &[a, b, a, b, a].map(lightcraft_catalog::PhotoId), true).unwrap();
     assert_eq!(job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), vec![a, b]);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn merge_memory_estimate_is_checked_and_uses_a_controlled_budget() {
+    use crate::merge::{MergeKind, check_merge_memory_budget, estimate_merge_working_bytes, merge_memory_bytes};
+
+    let kind = MergeKind::Hdr { hdr: Default::default() };
+    let small = estimate_merge_working_bytes(&kind, &[(100, 100), (100, 100)], None).unwrap();
+    let larger = estimate_merge_working_bytes(&kind, &[(200, 100), (200, 100)], None).unwrap();
+    assert!(larger > small, "larger inputs must estimate more working memory: {small} → {larger}");
+
+    let required = estimate_merge_working_bytes(&kind, &[(5_000, 5_000), (5_000, 5_000)], None).unwrap();
+    let error = check_merge_memory_budget(required, 256 << 20).unwrap_err();
+    assert!(error.contains("merge memory budget") && error.contains("lower-resolution"), "{error}");
+    assert_eq!(merge_memory_bytes(Some(800 << 20), 100 << 20), 500 << 20, "75% of RAM less the cache budget");
+
+    let kinds = [
+        kind.clone(),
+        MergeKind::Panorama { pano: Default::default() },
+        MergeKind::HdrPanorama { hdr: Default::default(), pano: Default::default(), bracket: 3 },
+    ];
+    for kind in kinds {
+        let needed = estimate_merge_working_bytes(&kind, &[(5_000, 5_000), (5_000, 5_000), (5_000, 5_000), (5_000, 5_000)], None).unwrap();
+        assert!(check_merge_memory_budget(needed, 256 << 20).is_err(), "{kind:?} bypassed the controlled budget");
+    }
+
+    assert!(estimate_merge_working_bytes(&kind, &[(0, 100), (100, 100)], None).is_err(), "zero dimensions must be refused");
+    assert!(estimate_merge_working_bytes(&kind, &[(u32::MAX, u32::MAX), (1, 1)], None).is_err(), "overflow must be refused");
 }

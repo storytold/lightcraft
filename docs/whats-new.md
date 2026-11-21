@@ -1122,9 +1122,9 @@
 ### Full-resolution panoramas
 - Panorama and HDR Panorama merges keep the resolution of their photos instead of stopping at 40 megapixels
   (issue #1455), up to 512 MP and 65,000 pixels on the long edge, as in Lightroom. When the full size needs more
-  memory than the computer has, the panorama is made as large as fits (five 51 MP photos: up to 166 MP with
-  16 GB, 355 MP with 32 GB) and the message says so. The merge also frees each photo's pixels once they are
-  projected, so it needs less memory than before at any size (an 81 MP stitch: 4.4 GB instead of 6.2 GB).
+  memory than the computer has, the panorama is made as large as fits (five 51 MP photos: up to 166 MP with 16 GB,
+  355 MP with 32 GB) and the message says so. The merge also frees each photo's pixels once they are projected, so it
+  needs less memory than before at any size (an 81 MP stitch: 4.4 GB instead of 6.2 GB).
 
 ### Nikon D600, D610 and D5000
 - Raws from the Nikon D600, D610 and D5000 no longer show a bright line down the right edge (issue #1627). Their
