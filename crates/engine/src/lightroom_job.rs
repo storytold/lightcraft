@@ -371,8 +371,13 @@ pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) 
         },
     )?;
     let mut report = applied.report;
-    let stand_ins: Vec<_> =
-        prepared.stand_ins.into_iter().filter_map(|(image, stand_in)| applied.ids.get(&image).map(|id| (*id, stand_in))).collect();
+    // (a photo that kept its LightCraft edit is not shown as Lightroom rendered it)
+    let stand_ins: Vec<_> = prepared
+        .stand_ins
+        .into_iter()
+        .filter(|(image, _)| !applied.preserved.contains(image))
+        .filter_map(|(image, stand_in)| applied.ids.get(&image).map(|id| (*id, stand_in)))
+        .collect();
     let previews = PreviewSeed::plan(s, stand_ins);
     if let Some(o) = report.as_object_mut() {
         o.insert("cloudOnly".into(), serde_json::json!(prepared.cloud_only.len()));

@@ -269,6 +269,9 @@ pub(crate) struct AppliedImport {
     pub(crate) index: ImportIndex,
     /// Each catalog image (`Adobe_images.id_local`) and the library photo it became or matched.
     pub(crate) ids: HashMap<i64, PhotoId>,
+    /// The catalog images whose library photo kept its LightCraft edit (`update_existing` off): Lightroom's
+    /// rendering of them is not the edit the photo has.
+    pub(crate) preserved: HashSet<i64>,
 }
 
 fn identity(data: &CatalogImport, photo: &CatalogPhoto) -> String {
@@ -1264,7 +1267,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
     let mut imported = files.imported.len();
     let mut promoted = HashSet::new();
     let mut unmapped = BTreeMap::new();
-    let mut preserved = 0;
+    let mut preserved = HashSet::new();
     // Library photos in Recently Deleted that a catalog photo matched: they stay there (only an
     // import of the files themselves brings a photo back, see `OnDeleted`), and the report says so.
     let mut in_trash = HashSet::new();
@@ -1382,7 +1385,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         let keep_develop = existing_id.is_some() && p.edited.is_some() && !update_existing;
         let previous_develop = (p.develop.clone(), p.edited.clone());
         if keep_develop {
-            preserved += 1;
+            preserved.insert(src.source_id);
         }
         let orientation = lightroom_orientation(text(&src.image, "orientation")).unwrap_or_default();
         let stored_aspect = number(&src.image, "fileWidth") as f64 / number(&src.image, "fileHeight") as f64;
@@ -1475,9 +1478,10 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
     }
     s.merge_undo(s.undo.len().saturating_sub(undo0), "Import Lightroom Catalog");
     Ok(AppliedImport {
-        report: json!({"source":data.source,"photos":ids.len(),"imported":imported,"library":s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy()),"collections":album_count,"preservedExistingEdits":preserved,"inRecentlyDeleted":in_trash.len(),"missing":missing,"failed":files.failed,"warnings":warnings,"skipped":data.skipped,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
+        report: json!({"source":data.source,"photos":ids.len(),"imported":imported,"library":s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy()),"collections":album_count,"preservedExistingEdits":preserved.len(),"inRecentlyDeleted":in_trash.len(),"missing":missing,"failed":files.failed,"warnings":warnings,"skipped":data.skipped,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
         index: index.clone(),
         ids,
+        preserved,
     })
 }
 

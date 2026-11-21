@@ -187,7 +187,10 @@ image's orientation (`ImageCacheEntry.orientation`) and in the colour space `Pyr
 names (`AdobeRGB` or `sRGB`). The largest size on disk is decoded to sRGB, turned upright and kept
 under every grid thumbnail size's cache key, after the import, on a worker of its own ("Using
 Lightroom previews" in the activity stack; the report's `lightroomPreviews`). A thumbnail LightCraft
-rendered itself is never replaced, and an edit renders the photo afresh. The loupe is not seeded: the
+rendered itself is never replaced, and an edit renders the photo afresh. A photo that keeps its
+LightCraft edit on a re-import (Update existing off) gets no Lightroom preview, which shows Lightroom's
+edit, not the one it has. The report's `lightroomPreviewsUsed` counts only photos whose thumbnails
+the disk cache stored. The loupe is not seeded: the
 standard previews (mostly 1024 px) are smaller than it draws. A store that is missing, unreadable or
 laid out otherwise gives no thumbnails and changes nothing else.
 

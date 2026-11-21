@@ -6,11 +6,28 @@ use std::sync::atomic::AtomicUsize;
 const UUID: &str = "0014C12B-C71A-4A0F-BB56-C937D0A60F0B";
 const DIGEST: &str = "782559885e84487d43e82d4a4b65d5c1";
 
-fn temp_dir(name: &str) -> PathBuf {
+/// A test's folder, removed when it is dropped, after a failed assertion as well.
+struct TempDir(PathBuf);
+
+impl std::ops::Deref for TempDir {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp_dir(name: &str) -> TempDir {
     let dir = std::env::temp_dir().join(format!("lightcraft-lr-previews-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    dir
+    TempDir(dir)
 }
 
 /// An 8 × 4 JPEG, its left half red and its right half blue.
@@ -62,7 +79,6 @@ fn the_store_is_found_beside_a_catalog_only() {
     let made = store(&dir, "My Catalog", &[], &[]);
     assert_eq!(store_of(&catalog), Some(made));
     assert_eq!(store_of(&dir.join("My Catalog.zip")), None, "a backup has no store beside it");
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -81,7 +97,6 @@ fn reads_the_largest_preview_on_disk_and_never_a_name_that_leaves_the_store() {
     assert!(one.adobe_rgb);
     assert_eq!(one.orientation, Orientation::Rotate90);
     assert!(read(&s, &HashSet::new(), &AtomicBool::new(false)).unwrap().is_empty(), "nothing wanted, nothing read");
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -93,7 +108,6 @@ fn a_broken_store_is_an_error_not_a_panic() {
     assert!(read(&s, &[1].into_iter().collect(), &AtomicBool::new(false)).is_err());
     std::fs::write(s.join("previews.db"), native_catalog(&[("Other", "a", vec![SqlValue::Integer(1)])])).unwrap();
     assert!(read(&s, &[1].into_iter().collect(), &AtomicBool::new(false)).is_err(), "no ImageCacheEntry table");
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -107,11 +121,10 @@ fn a_stand_in_decodes_upright() {
     let top = image.data[image.width + 1];
     let bottom = image.data[image.width * 6 + 1];
     assert!(top[0] > top[2] && bottom[2] > bottom[0], "top {top:?}, bottom {bottom:?}");
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// A catalog whose one photo has `test.ARW` as its original, beside a store with its preview.
-fn catalog_with_preview(name: &str, original: bool) -> (PathBuf, PathBuf) {
+fn catalog_with_preview(name: &str, original: bool) -> (TempDir, PathBuf) {
     let dir = temp_dir(name);
     std::fs::create_dir_all(dir.join("Photos")).unwrap();
     if original {
@@ -137,7 +150,7 @@ fn counting_probe(s: &mut crate::Session) -> Arc<AtomicUsize> {
 /// record and its grid thumbnails from Lightroom's preview, and it is not reported missing.
 #[test]
 fn an_online_only_original_is_not_read_and_shows_lightroom_preview() {
-    let (dir, source) = catalog_with_preview("online-only", true);
+    let (_dir, source) = catalog_with_preview("online-only", true);
     let mut s = crate::Session::new();
     let probed = counting_probe(&mut s);
     let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source, false).unwrap().with_placeholder_check(|_| true);
@@ -158,13 +171,12 @@ fn an_online_only_original_is_not_read_and_shows_lightroom_preview() {
     }
     let view = s.view_key(s.catalog.photo(id).unwrap(), true);
     assert!(s.media.rendered.get(view).is_none(), "the loupe renders the original: a 1024 px preview is too small for it");
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// A thumbnail LightCraft rendered itself is never replaced by Lightroom's.
 #[test]
 fn a_seed_never_replaces_a_render() {
-    let (dir, source) = catalog_with_preview("keeps-render", true);
+    let (_dir, source) = catalog_with_preview("keeps-render", true);
     let mut s = crate::Session::new();
     counting_probe(&mut s);
     let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source, false).unwrap().with_placeholder_check(|_| true);
@@ -176,27 +188,71 @@ fn a_seed_never_replaces_a_render() {
     cache.put(key, own.clone());
     completion.previews.unwrap().run(&AtomicBool::new(false), None);
     assert_eq!(cache.get(key).unwrap().data, own.data);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// A missing original (an unplugged drive) gets Lightroom's preview as well (#2613); an original
 /// that is here and downloaded is read as before, and needs none.
 #[test]
 fn a_missing_original_gets_the_preview_and_a_local_one_is_read() {
-    let (dir, source) = catalog_with_preview("missing", false);
+    let (_missing, source) = catalog_with_preview("missing", false);
     let mut s = crate::Session::new();
     counting_probe(&mut s);
     let r = crate::lightroom_catalog::import(&mut s, &source, false).unwrap();
     assert_eq!(r["missing"].as_array().map(Vec::len), Some(1), "{r}");
     assert_eq!((r["lightroomPreviews"].as_u64(), r["lightroomPreviewsUsed"].as_u64()), (Some(1), Some(1)), "{r}");
-    std::fs::remove_dir_all(dir).unwrap();
 
-    let (dir, source) = catalog_with_preview("local", true);
+    let (_local, source) = catalog_with_preview("local", true);
     let mut s = crate::Session::new();
     let probed = counting_probe(&mut s);
     let r = crate::lightroom_catalog::import(&mut s, &source, false).unwrap();
     assert_eq!(probed.load(Ordering::Relaxed), 1, "{r}");
     assert_eq!((r["cloudOnly"].as_u64(), r["lightroomPreviews"].as_u64()), (Some(0), Some(0)), "{r}");
     assert!(r.get("lightroomPreviewsUsed").is_none(), "{r}");
-    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A photo that kept its LightCraft edit on a re-import (Update existing off) is not shown as Lightroom
+/// rendered it: its thumbnails are of the edit it has (CodeRabbit on #4552). With Update existing on,
+/// it takes Lightroom's edit, and Lightroom's preview with it.
+#[test]
+fn a_photo_that_kept_its_edit_gets_no_preview() {
+    let (_dir, source) = catalog_with_preview("kept-edit", true);
+    let mut s = crate::Session::new();
+    counting_probe(&mut s);
+    let import = |s: &mut crate::Session, update_existing| {
+        let mut job = crate::lightroom_job::LightroomJob::new(s, source.clone(), update_existing).unwrap().with_placeholder_check(|_| true);
+        let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
+        crate::lightroom_job::commit_prepared(s, prepared).unwrap()
+    };
+    let first = import(&mut s, false);
+    let id = PhotoId(first.report["mapping"]["1"].as_u64().unwrap());
+    let mut settings = lightcraft_develop::DevelopSettings::default();
+    settings.light.exposure = 0.75;
+    s.set_develop(id, settings, "Personal edit").unwrap();
+
+    let again = import(&mut s, false);
+    let r = &again.report;
+    assert_eq!(r["preservedExistingEdits"], 1, "{r}");
+    assert_eq!(r["lightroomPreviews"], 0, "{r}");
+    assert!(again.previews.is_none());
+
+    let updated = import(&mut s, true);
+    assert_eq!(updated.report["lightroomPreviews"], 1, "{}", updated.report);
+}
+
+/// A thumbnail the disk cache can't write is kept in memory for this session only, so its photo is
+/// not counted as seeded (CodeRabbit on #4552).
+#[test]
+fn a_thumbnail_the_disk_cannot_keep_is_not_counted_as_seeded() {
+    let (dir, source) = catalog_with_preview("unwritable", true);
+    let mut s = crate::Session::new();
+    counting_probe(&mut s);
+    let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source, false).unwrap().with_placeholder_check(|_| true);
+    let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
+    let mut seed = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap().previews.unwrap();
+    // a file where the cache folder goes: every write fails
+    let blocked = dir.join("blocked");
+    std::fs::write(&blocked, b"not a folder").unwrap();
+    seed.cache = Arc::new(PreviewCache::with_disk(1 << 20, &blocked, 1 << 20));
+    seed.generation = seed.cache.generation();
+    assert_eq!(seed.run(&AtomicBool::new(false), None), SeedReport { seeded: 0, failed: 1 });
 }

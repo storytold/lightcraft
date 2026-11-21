@@ -178,7 +178,9 @@ pub struct PreviewSeed {
 /// What [`PreviewSeed::run`] did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SeedReport {
+    /// Photos whose thumbnails were stored on disk, where they last.
     pub seeded: usize,
+    /// Photos whose preview could not be decoded, or whose thumbnails the disk cache could not write.
     pub failed: usize,
 }
 
@@ -246,14 +248,23 @@ impl PreviewSeed {
                     continue;
                 }
             };
+            let mut written = true;
             for (size, key) in wanted {
                 let thumb = if image.width.max(image.height) > size { crate::media::fit_for_display(&image, size, size) } else { image.clone() };
-                if !self.cache.put_at(self.generation, key, Arc::new(thumb)) && self.cache.generation() != self.generation {
-                    // the preview cache was discarded meanwhile: it stays discarded
-                    return report;
+                if !self.cache.put_at(self.generation, key, Arc::new(thumb)) {
+                    if self.cache.generation() != self.generation {
+                        // the preview cache was discarded meanwhile: it stays discarded
+                        return report;
+                    }
+                    written = false;
                 }
             }
-            report.seeded += 1;
+            // (a thumbnail the disk cache could not write shows for this session only: the photo isn't seeded)
+            if written {
+                report.seeded += 1;
+            } else {
+                report.failed += 1;
+            }
             crate::memory::release();
         }
         if let Some(task) = task {

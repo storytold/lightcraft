@@ -85,13 +85,20 @@ mod tests {
 
     #[test]
     fn an_ordinary_file_or_a_folder_is_not_a_placeholder() {
+        struct Removed(std::path::PathBuf);
+        impl Drop for Removed {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
         let dir = std::env::temp_dir().join(format!("lightcraft-cloud-files-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        // (removed when the test ends, after a failed assertion as well)
+        let _removed = Removed(dir.clone());
         let file = dir.join("photo.jpg");
         std::fs::write(&file, b"bytes").unwrap();
         assert!(!path_is_placeholder(&file));
         assert!(!path_is_placeholder(&dir));
         assert!(!path_is_placeholder(&dir.join("not-there.jpg")));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }
