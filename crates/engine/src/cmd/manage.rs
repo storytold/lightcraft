@@ -156,14 +156,15 @@ fn auto_tag_tracklog(s: &mut crate::Session, p: &Value) -> Result<Value> {
             no_time += 1;
             continue;
         };
-        // UTC seconds: the recorded zone wins, else the caller's offset
-        let utc = match dt.offset_minutes {
-            Some(_) => dt.unix_seconds(),
-            None => {
-                if offset.is_none() {
-                    assumed_utc += 1;
-                }
-                dt.unix_seconds() - offset.unwrap_or(0) * 60
+        // UTC seconds: the caller's camera time zone wins (it is what the user set because the camera's clock or
+        // its recorded zone is wrong, #1276; `map.trackOffset` measures it against the wall clock), else the
+        // recorded zone, else UTC
+        let utc = match (offset, dt.offset_minutes) {
+            (Some(o), _) => wall_clock_utc(&dt, o).ok_or_else(|| bad(C, "the photo's capture time can't be placed in that time zone"))?,
+            (None, Some(_)) => dt.unix_seconds(),
+            (None, None) => {
+                assumed_utc += 1;
+                dt.unix_seconds()
             }
         } as f64
             + dt.millis as f64 / 1000.0;
@@ -198,6 +199,19 @@ fn auto_tag_tracklog(s: &mut crate::Session, p: &Value) -> Result<Value> {
         "end": iso(end),
         "photos": photos,
     }))
+}
+
+/// UTC seconds of a capture time read as the camera's wall clock in a zone `minutes` east of UTC, ignoring any zone
+/// the photo recorded; `None` when the zone or the date is out of chrono's range.
+fn wall_clock_utc(dt: &lcc_meta::DateTime, minutes: i64) -> Option<i64> {
+    use chrono::TimeZone;
+    let zone = chrono::FixedOffset::east_opt(i32::try_from(minutes.checked_mul(60)?).ok()?)?;
+    let wall = chrono::NaiveDate::from_ymd_opt(i32::from(dt.year), u32::from(dt.month), u32::from(dt.day))?.and_hms_opt(
+        u32::from(dt.hour),
+        u32::from(dt.minute),
+        u32::from(dt.second),
+    )?;
+    zone.from_local_datetime(&wall).single().map(|t| t.timestamp())
 }
 
 /// The capture time the original file's own Exif states (`DateTimeOriginal` with its `OffsetTimeOriginal` and

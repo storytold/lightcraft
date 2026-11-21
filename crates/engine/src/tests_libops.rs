@@ -622,6 +622,42 @@ fn tracklog_auto_tag() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #1276: the camera time zone the user sets moves the match along the track even when the photo recorded a
+/// (wrong) zone of its own, and extreme zones or dates are errors or misses, never a panic.
+#[test]
+fn tracklog_camera_zone_overrides_recorded_zone() {
+    use lcc_catalog::{Op, PhotoId};
+    const GPX: &str = r#"<gpx version="1.1" creator="test" xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg>
+  <trkpt lat="46.0000" lon="7.0000"><time>2026-05-01T10:00:00Z</time></trkpt>
+  <trkpt lat="46.0020" lon="7.0040"><time>2026-05-01T10:02:00Z</time></trkpt>
+</trkseg></trk></gpx>"#;
+    let dir = temp_dir("tracklog-zone");
+    let mut s = Session::new();
+    s.open_library(dir.join("lib"), true).unwrap();
+    let id = s.visible_cloned()[0].0;
+    // the camera's clock read 12:01 local (+02:00) but the file says UTC
+    s.commit("t", Op::SetCaptured { id: PhotoId(id), captured: Some("2026-05-01T12:01:00+00:00".into()) }).unwrap();
+    let run = |s: &mut Session, offset: serde_json::Value| {
+        s.execute("photo.autoTagTracklog", &json!({"gpx": GPX, "ids": [id], "offset": offset, "replace": true, "dryRun": true}))
+    };
+    assert_eq!(run(&mut s, json!(null)).unwrap()["tagged"].as_u64(), Some(0), "recorded zone alone: outside the track");
+    let r = run(&mut s, json!("+02:00")).unwrap();
+    assert_eq!(r["tagged"].as_u64(), Some(1), "{r}");
+    assert_eq!(r["photos"][0]["gps"], json!([46.001, 7.002]));
+    let r = run(&mut s, json!("+01:00")).unwrap();
+    assert_eq!(r["tagged"].as_u64(), Some(0), "a different zone moves the match: {r}");
+    for hostile in [json!("+99:99"), json!(1e300), json!(-19)] {
+        assert!(run(&mut s, hostile).is_err());
+    }
+    for edge in ["0001-01-01T00:00:00", "9999-12-31T23:59:59"] {
+        s.commit("t", Op::SetCaptured { id: PhotoId(id), captured: Some(edge.into()) }).unwrap();
+        for o in ["+18:00", "-18:00"] {
+            let _ = run(&mut s, json!(o));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn tracklog_auto_tag_decodes_character_references_and_undoes_once() {
     use lcc_catalog::Op;
@@ -843,3 +879,4 @@ fn shifting_a_capture_time_without_seconds_keeps_its_zone() {
     let got = got.unwrap();
     assert_eq!(lcc_catalog::dates::shift_iso(&got, 0).as_deref(), Some(got.as_str()), "the stored time reads back");
 }
+
