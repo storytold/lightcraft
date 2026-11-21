@@ -19,6 +19,7 @@ pub mod flow;
 pub mod frame;
 pub mod hdr;
 pub mod linalg;
+pub mod metrics;
 pub mod output;
 pub mod pano;
 pub mod ransac;
