@@ -12,28 +12,15 @@ use serde_json::{Value, json};
 use super::{CommandSpec, always, bad, cmd, str_param};
 use crate::{Result, Session};
 
-/// The file Missing Photos checks for `p`, if it is in scope: a library photo (not in Recently
-/// Deleted, not a Local-only record seen while browsing a folder) whose original is a file.
-///
-/// Local browse records are out of scope on purpose: browsing can leave tens of thousands of
-/// them in the catalog, they never show in library views (Missing Photos included), and a
-/// folder that is gone is simply not browsed again. The sidebar count, the Missing Photos view,
-/// `library.missing` and Find Missing Photos all use this one rule.
-pub fn checked_path(p: &Photo) -> Option<&str> {
-    match &p.source {
-        Source::File { path } if p.in_library() => Some(path),
-        _ => None,
-    }
-}
-
-/// Every in-scope photo's file ([`checked_path`]), without touching the disk.
+/// Every in-scope photo's file ([`Photo::library_file`]: the rule the sidebar count, the Missing
+/// Photos view, `library.missing` and Find Missing Photos all use), without touching the disk.
 pub fn candidates(cat: &Catalog) -> Vec<String> {
-    cat.photos().filter_map(|p| checked_path(p).map(str::to_string)).collect()
+    cat.photos().filter_map(|p| p.library_file().map(str::to_string)).collect()
 }
 
 /// [`missing`] with the existence check supplied (tests count the file-system calls).
 pub fn missing_with(cat: &Catalog, mut exists: impl FnMut(&str) -> bool) -> Vec<(PhotoId, String)> {
-    cat.photos().filter_map(|p| checked_path(p).filter(|f| !exists(f)).map(|f| (p.id, f.to_string()))).collect()
+    cat.photos().filter_map(|p| p.library_file().filter(|f| !exists(f)).map(|f| (p.id, f.to_string()))).collect()
 }
 
 /// Library photos whose original file can't be found: (id, path).
@@ -45,11 +32,11 @@ pub fn missing(s: &Session) -> Vec<(PhotoId, String)> {
     missing_with(&s.catalog, |f| exists(f))
 }
 
-/// Every in-scope photo with its file ([`checked_path`]), without touching the disk: what a
+/// Every in-scope photo with its file ([`Photo::library_file`]), without touching the disk: what a
 /// sweep ([`sweep`]) goes through, so a caller can take the list on its own thread and check
 /// the files on another.
 pub fn checked(cat: &Catalog) -> Vec<(PhotoId, String)> {
-    cat.photos().filter_map(|p| checked_path(p).map(|f| (p.id, f.to_string()))).collect()
+    cat.photos().filter_map(|p| p.library_file().map(|f| (p.id, f.to_string()))).collect()
 }
 
 fn fingerprint_of<'a>(entries: impl Iterator<Item = (PhotoId, &'a str)>) -> u64 {
@@ -66,7 +53,7 @@ fn fingerprint_of<'a>(entries: impl Iterator<Item = (PhotoId, &'a str)>) -> u64 
 /// files on another thread compares it with [`fingerprint_of_checked`] to know whether the photos
 /// changed meanwhile.
 pub fn fingerprint(cat: &Catalog) -> u64 {
-    fingerprint_of(cat.photos().filter_map(|p| checked_path(p).map(|f| (p.id, f))))
+    fingerprint_of(cat.photos().filter_map(|p| p.library_file().map(|f| (p.id, f))))
 }
 
 /// [`fingerprint`] of the list [`checked`] gave.
@@ -78,7 +65,7 @@ pub fn fingerprint_of_checked(files: &[(PhotoId, String)]) -> u64 {
 /// photos still in scope that still point at the file that was not found. A photo removed, moved to
 /// Recently Deleted or relinked since is not reported as missing; one added since was not checked.
 pub fn still_missing(cat: &Catalog, gone: Vec<(PhotoId, String)>) -> Vec<(PhotoId, String)> {
-    gone.into_iter().filter(|(id, file)| cat.photo(*id).and_then(|p| checked_path(p)) == Some(file.as_str())).collect()
+    gone.into_iter().filter(|(id, file)| cat.photo(*id).and_then(|p| p.library_file()) == Some(file.as_str())).collect()
 }
 
 /// How many files [`sweep`] checks between two reports of its progress.
@@ -118,7 +105,7 @@ pub fn missing_json(gone: Vec<(PhotoId, String)>) -> Value {
 /// the photos its query already narrowed to). In the app `avail` answers from its cache (files
 /// not checked yet count as present until the background check finds them gone).
 pub fn is_missing(cat: &Catalog, avail: &crate::availability::Availability, id: PhotoId) -> bool {
-    !cfg!(target_arch = "wasm32") && cat.photo(id).and_then(|p| checked_path(p)).is_some_and(|f| avail.is_offline(f))
+    !cfg!(target_arch = "wasm32") && cat.photo(id).and_then(|p| p.library_file()).is_some_and(|f| avail.is_offline(f))
 }
 
 pub(crate) fn relink_op(id: PhotoId, path: &str) -> Op {
@@ -240,7 +227,7 @@ mod tests {
     }
 }
 
-/// An in-scope photo ([`checked_path`]) as Find Missing Photos sees it: its file, the size and
+/// An in-scope photo ([`Photo::library_file`]) as Find Missing Photos sees it: its file, the size and
 /// content hash the library knows (0 / `None` = unknown).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FindCandidate {
@@ -256,7 +243,7 @@ pub struct FindCandidate {
 pub fn find_candidates(cat: &Catalog) -> Vec<FindCandidate> {
     cat.photos()
         .filter_map(|p| {
-            checked_path(p).map(|f| FindCandidate { id: p.id, path: f.to_string(), size: p.file_size, hash: stored_hash(p).map(str::to_string) })
+            p.library_file().map(|f| FindCandidate { id: p.id, path: f.to_string(), size: p.file_size, hash: stored_hash(p).map(str::to_string) })
         })
         .collect()
 }
@@ -455,7 +442,7 @@ pub fn plan_find_missing(candidates: &[FindCandidate], folder: &str) -> std::res
 /// used (that photo stays missing). `missing` is the plan's count, corrected for what changed
 /// among the photos the plan names.
 fn commit_find(s: &mut Session, plan: FindPlan) -> Result<Value> {
-    let still_at = |cat: &Catalog, id: PhotoId, from: &str| cat.photo(id).and_then(|p| checked_path(p)) == Some(from);
+    let still_at = |cat: &Catalog, id: PhotoId, from: &str| cat.photo(id).and_then(|p| p.library_file()) == Some(from);
     let mut in_use: HashSet<String> = candidates(&s.catalog).into_iter().collect();
     let mut found = Vec::new();
     let mut missing = plan.missing;

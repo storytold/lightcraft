@@ -46,7 +46,7 @@ pub fn missing(cat: &Catalog, db: &lightcraft_lensdb::LensDb, ids: Option<&[Phot
                 Some(_) => again && from_database(p),
             }
         })
-        .filter_map(|p| crate::cmd::missing::checked_path(p).map(|path| Missing { id: p.id, path: path.to_string() }))
+        .filter_map(|p| p.library_file().map(|path| Missing { id: p.id, path: path.to_string() }))
         .filter(|m| seen.insert(m.id))
         .collect()
 }
@@ -75,7 +75,7 @@ pub fn apply(s: &mut Session, results: Vec<(Missing, std::result::Result<ProbeIn
     for (item, info) in results {
         let Ok(info) = info else { continue };
         // the photo moved or left the library while its file was read: the result is stale, for its copies too
-        if s.catalog.photo(item.id).and_then(|p| crate::cmd::missing::checked_path(p)) != Some(item.path.as_str()) {
+        if s.catalog.photo(item.id).and_then(|p| p.library_file()) != Some(item.path.as_str()) {
             continue;
         }
         let family = std::iter::once(item.id).chain(copies.get(&item.id).into_iter().flatten().copied());
