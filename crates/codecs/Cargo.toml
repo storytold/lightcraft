@@ -14,11 +14,14 @@ lightcraft-color = { workspace = true }
 lightcraft-raster = { workspace = true }
 craft-gainmap = { workspace = true }
 craft-cms = { workspace = true }
+craft-jpeg = { workspace = true }
 craft-image-codecs = { workspace = true }
+craft-media = { workspace = true }
+craft-metadata = { workspace = true }
 craft-tiff = { workspace = true }
 craft-gif = { workspace = true }
 craft-psd = { workspace = true }
-craft-heif = { workspace = true, optional = true }
+craft-heif = { workspace = true, optional = true, features = ["decode"] }
 serde = { workspace = true }
 bytemuck = { workspace = true }
 thiserror = { workspace = true }
@@ -26,27 +29,26 @@ rayon = { workspace = true, optional = true }
 craft-jxl = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ravif = { workspace = true, optional = true }
-rav1e = { workspace = true, optional = true }
-avif-serialize = { workspace = true, optional = true }
+craft-video = { workspace = true, optional = true }
+craft-image-codecs = { workspace = true, optional = true, features = ["avif", "threads"] }
 
 [features]
 default = ["parallel", "jxl", "avif"]
-parallel = ["dep:rayon", "lightcraft-raster/parallel"]
+parallel = ["dep:rayon", "lightcraft-raster/parallel", "craft-jpeg/parallel"]
 ## JPEG XL decoding and encoding via the shared craft-jxl codec.
 jxl = ["dep:craft-jxl"]
 # HEIC/HEIF decode via the optional craft-heif crate (heic-rs, pure Rust). Off by default so
 # distributors choose it at build time (HEVC patents are a distributor's call, same policy as
 # PhotoCraft); `cargo xtask ci` clippies and tests it (`--features heif`), releases don't ship it yet.
 heif = ["dep:craft-heif"]
-## AVIF encoding via ravif/rav1e (pure Rust, BSD). Native targets only; a no-op on wasm32.
-avif = ["dep:ravif", "dep:rav1e", "dep:avif-serialize"]
+## AVIF/AV1 encoding via craft-image-codecs / craft-video (pure Rust), plus the shared AVIF decoder. Native targets only; a no-op on wasm32.
+avif = ["dep:craft-video", "dep:craft-image-codecs", "craft-image-codecs/avif-decode"]
 
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
-# JPEG XL tests read encoded samples without our colour conversion
-jxl-oxide = { workspace = true }
+# JPEG parity tests and the benchmark use the prior/reference encoder only in development.
+jpeg-encoder = { workspace = true }
 proptest = { workspace = true }
 # Lossless synthetic HEIC files for the `heif` feature's tests.
 craft-heif = { workspace = true, features = ["testdata"] }
