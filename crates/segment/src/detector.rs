@@ -7,12 +7,14 @@
 //! Team and Meta Platforms, Inc.; translated to Rust on candle and restructured. See NOTICE.
 
 use candle_core::{D, Device, IndexOp, Module, Tensor};
-use candle_nn::{Conv2d, Conv2dConfig, GroupNorm, LayerNorm, Linear, VarBuilder};
+use candle_nn::{Conv2d, Conv2dConfig, LayerNorm, Linear, VarBuilder};
 
 use crate::clip::TextEncoder;
 use crate::neck::{FPN, Neck};
-use crate::nn::{Attention, DecoderMlp, Mlp, TORCH_LN_EPS, cxcywh_to_xyxy, inverse_sigmoid, linear, ln, padding_bias, sine_grid, to_vec};
-use crate::{Error, Prediction, Result};
+use crate::nn::{
+    Attention, DecoderMlp, GroupNormRelu, Mlp, TORCH_LN_EPS, cxcywh_to_xyxy, inverse_sigmoid, linear, ln, padding_bias, sine_grid, to_vec,
+};
+use crate::{Error, Prediction, Result, cpu};
 
 const HIDDEN: usize = FPN;
 const HEADS: usize = 8;
@@ -92,7 +94,7 @@ pub struct Detector {
     prompt_attn: Attention,
     prompt_ln: LayerNorm,
     pixel_convs: Vec<Conv2d>,
-    pixel_norms: Vec<GroupNorm>,
+    pixel_norms: Vec<GroupNormRelu>,
     instance_proj: Conv2d,
     semantic_proj: Conv2d,
     mask_embedder: Vec<Linear>,
@@ -157,7 +159,7 @@ impl Detector {
             prompt_attn: Attention::new(HIDDEN, HIDDEN, HEADS, m.pp("prompt_cross_attn"))?,
             prompt_ln: ln(HIDDEN, TORCH_LN_EPS, m.pp("prompt_cross_attn_norm"))?,
             pixel_convs: (0..3).map(|i| Ok(candle_nn::conv2d(HIDDEN, HIDDEN, 3, conv3, p.pp(format!("conv_layers.{i}")))?)).collect::<Result<_>>()?,
-            pixel_norms: (0..3).map(|i| Ok(candle_nn::group_norm(8, HIDDEN, 1e-5, p.pp(format!("norms.{i}")))?)).collect::<Result<_>>()?,
+            pixel_norms: (0..3).map(|i| GroupNormRelu::new(8, HIDDEN, 1e-5, p.pp(format!("norms.{i}")))).collect::<Result<_>>()?,
             instance_proj: candle_nn::conv2d(HIDDEN, HIDDEN, 1, Conv2dConfig::default(), m.pp("instance_projection"))?,
             semantic_proj: candle_nn::conv2d(HIDDEN, 1, 1, Conv2dConfig::default(), m.pp("semantic_projection"))?,
             mask_embedder: (0..3).map(|i| linear(HIDDEN, HIDDEN, m.pp(format!("mask_embedder.layers.{i}")))).collect::<Result<_>>()?,
@@ -188,6 +190,9 @@ impl Detector {
         let dx = log_scale(coords.broadcast_sub(&pick(0, 2)?)?)?;
         let ey = self.rpb_y.forward(&dy)?; // [200, side, heads]
         let ex = self.rpb_x.forward(&dx)?;
+        if self.device.is_cpu() {
+            return cpu::box_bias(&ey, &ex);
+        }
         let m = ey.unsqueeze(2)?.broadcast_add(&ex.unsqueeze(1)?)?; // [200, side, side, heads]
         let m = m.reshape((QUERIES, side * side, HEADS))?.permute((2, 0, 1))?; // [heads, 200, side²]
         let m = m.pad_with_zeros(1, 1, 0)?; // the presence token attends everywhere
@@ -222,7 +227,7 @@ impl Detector {
             let h = l.ln2.forward(&x)?;
             x = (&x + l.cross_attn.forward(&h, &text, &text, Some(&text_bias))?)?;
             let h = l.ln3.forward(&x)?;
-            x = (&x + l.mlp.forward(&h)?)?;
+            x = l.mlp.forward_add(&h, &x)?;
         }
         let memory = x;
 
@@ -241,7 +246,7 @@ impl Detector {
             h = l.text_ln.forward(&(&h + l.text_attn.forward(&q, &text, &text, Some(&text_bias))?)?)?;
             let q = (&h + &qpos)?;
             h = l.vision_ln.forward(&(&h + l.vision_attn.forward(&q, &key_pos, &memory, Some(&bias))?)?)?;
-            h = l.mlp_ln.forward(&(&h + l.mlp.forward(&h)?)?)?;
+            h = l.mlp_ln.forward(&l.mlp.forward_add(&h, &h)?)?;
             let qh = self.out_ln.forward(&h.narrow(1, 1, QUERIES)?)?;
             boxes = candle_nn::ops::sigmoid(&(self.box_head.forward(&qh)? + inverse_sigmoid(&boxes)?)?)?;
             let p = self.presence_head.forward(&self.presence_ln.forward(&h.narrow(1, 0, 1)?)?)?;
@@ -270,7 +275,7 @@ impl Detector {
             let (Some(conv), Some(norm)) = (self.pixel_convs.get(i), self.pixel_norms.get(i)) else {
                 return Err(Error::Model("pixel decoder".into()));
             };
-            prev = norm.forward(&conv.forward(&prev)?)?.relu()?;
+            prev = norm.forward(&conv.forward(&prev)?)?;
         }
         let inst = self.instance_proj.forward(&prev)?; // [1, 256, 288, 288]
         let semantic = to_vec(&self.semantic_proj.forward(&prev)?)?;
