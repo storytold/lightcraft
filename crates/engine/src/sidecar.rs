@@ -165,6 +165,9 @@ pub struct SidecarData {
     /// [`merge_into`] puts boxes drawn on the photo as stored where the upright photo has them (#2674).
     pub regions_drawn_on: Option<(f64, f64)>,
     pub orientation: Option<lightcraft_meta::Orientation>,
+    /// How to turn the regions when the photo's pixels were turned after they were drawn (no quarter turn stated, a
+    /// frame of the other shape): [`lightcraft_meta::XmpData::regions_turn`].
+    pub regions_turn: Option<lightcraft_meta::Orientation>,
     /// Capture time (ISO 8601) from `exif:DateTimeOriginal`, `photoshop:DateCreated` or
     /// `xmp:CreateDate` (first found). Used only when the file itself has no capture time.
     pub captured: Option<String>,
@@ -214,6 +217,7 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
         regions_drawn_on: d.regions_drawn_on(),
         // (only what the regions need: a packet that says nothing else still says nothing)
         orientation: d.regions_drawn_on().and(m.orientation),
+        regions_turn: d.regions_drawn_on().map(|_| d.regions_turn()),
         captured: m.capture_time.map(|d| d.to_iso()),
         ..Default::default()
     };
@@ -345,9 +349,18 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
     if let Some(r) = &sc.regions {
         m.regions = r.clone();
         // (the photo's size is the upright one)
-        if let (Some(drawn_on), Some(o)) = (sc.regions_drawn_on, sc.orientation) {
-            let stored = if o.swaps_axes() { (p.height, p.width) } else { (p.width, p.height) };
-            lightcraft_meta::upright_regions(&mut m.regions, drawn_on, o, stored);
+        if let Some(drawn_on) = sc.regions_drawn_on {
+            match sc.orientation {
+                Some(o) if o.swaps_axes() => {
+                    lightcraft_meta::upright_regions(&mut m.regions, drawn_on, o, (p.height, p.width));
+                }
+                // no quarter turn: the pixels are as shown, and boxes drawn on a frame of the other shape were drawn
+                // before the pixels themselves were turned
+                _ => {
+                    let turn = sc.regions_turn.unwrap_or(lightcraft_meta::Orientation::Rotate90);
+                    lightcraft_meta::regions_onto_turned_pixels(&mut m.regions, drawn_on, (p.width, p.height), turn);
+                }
+            }
         }
     }
     let develop = match &sc.develop {
