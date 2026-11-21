@@ -122,6 +122,9 @@ pub struct AppSettings {
     #[serde(deserialize_with = "lenient")]
     pub at_launch: LaunchLibrary,
     pub startup_view: StartupView,
+    /// Look for a newer release once the window is up (Settings ▸ General ▸ Startup; the
+    /// `--no-update-check` flag turns it off for that run). The web build never checks.
+    pub check_for_updates_at_start: bool,
     /// Ask before moving photos to Recently Deleted. Saved under a new key: earlier versions saved
     /// `confirmDelete: false` by default (#1239).
     #[serde(rename = "askBeforeDelete")]
@@ -229,6 +232,7 @@ impl Default for AppSettings {
             recent_opened: Default::default(),
             at_launch: LaunchLibrary::Last,
             startup_view: StartupView::Last,
+            check_for_updates_at_start: true,
             confirm_delete: true,
             ask_before_move: true,
             close_dialogs_outside: false,
@@ -492,5 +496,19 @@ mod loupe_info_tests {
         assert_eq!(saved["loupeMessages"], false);
         let read: AppSettings = serde_json::from_value(saved).unwrap();
         assert!(!read.loupe_messages);
+    }
+
+    /// The update check at start is on until it is turned off, and is saved with the app's
+    /// settings (`--no-update-check` overrides it for one run, in `main`).
+    #[test]
+    fn the_update_check_at_start_is_saved_with_the_settings() {
+        assert!(AppSettings::default().check_for_updates_at_start);
+        let old: AppSettings = serde_json::from_value(serde_json::json!({"filmNames": false})).unwrap();
+        assert!(old.check_for_updates_at_start, "a settings file from before the choice existed keeps the check");
+        let settings = AppSettings { check_for_updates_at_start: false, ..AppSettings::default() };
+        let saved = serde_json::to_value(&settings).unwrap();
+        assert_eq!(saved["checkForUpdatesAtStart"], false);
+        let read: AppSettings = serde_json::from_value(saved).unwrap();
+        assert!(!read.check_for_updates_at_start);
     }
 }
