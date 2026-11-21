@@ -248,6 +248,8 @@ pub struct UiState {
     pub grading_hidden: Option<(lightcraft_catalog::PhotoId, [bool; 3])>,
     /// Active on-canvas tool: "", "brush", "linear", "radial", "wbPicker", "straighten", "remove",
     /// "lensBlurFocus" / "lensBlurBlur" (Lens Blur Brush Refinement, in the Edit panel).
+    /// "linear" / "radial": picked, the next drag on the photo draws one ("linear:subtract", …: as
+    /// a component of the selected mask).
     pub tool: String,
     /// Guided Upright: the selected guide (photo id + index) while the tool is open. A Delete /
     /// Backspace on it removes that guide alone; a click away or leaving the tool clears it.
