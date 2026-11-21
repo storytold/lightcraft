@@ -6,7 +6,7 @@ use super::{
 };
 use std::borrow::Cow;
 
-/// Unsharp mask on an 8-bit image (separable box-blur approximation of a small Gaussian).
+/// Output sharpening of an 8-bit image: an unsharp mask on its luma ([`unsharp`]).
 pub fn output_sharpen(img: &mut Rgba8, target: SharpenFor, amount: SharpenAmount) {
     if !sharpens(img.width, img.height, target) {
         return;
@@ -37,7 +37,8 @@ pub fn output_sharpen_deep(img: &mut DeepImage, target: SharpenFor, amount: Shar
             }
         }
         DeepSamples::F32(v) => {
-            let src: Vec<[f32; 3]> = v.as_chunks::<3>().0.iter().map(|c| [c[0], c[1], c[2]]).collect();
+            // A NaN or infinite sample would poison its neighbours' blur and local range; treat it as black.
+            let src: Vec<[f32; 3]> = v.as_chunks::<3>().0.iter().map(|c| [c[0], c[1], c[2]].map(|x| if x.is_finite() { x } else { 0.0 })).collect();
             if let Some(out) = unsharp(w, h, &src, target, amount) {
                 for (d, s) in v.iter_mut().zip(out.as_flattened()) {
                     *d = s.max(0.0);
@@ -52,47 +53,72 @@ fn sharpens(w: usize, h: usize, target: SharpenFor) -> bool {
     target != SharpenFor::None && w >= 3 && h >= 3
 }
 
-/// The sharpened values of `src` (`w × h`), or `None` when nothing is to be done.
+/// How far a sharpened pixel may pass the darkest and lightest of its 3×3 neighbours, as a share
+/// of their difference: enough for crisp edges, too little for the light and dark rims (halos)
+/// a plain unsharp mask draws along strong edges.
+const SHARPEN_OVERSHOOT: f32 = 0.1;
+
+/// The sharpened values of `src` (`w × h`), or `None` when nothing is to be done: an unsharp mask
+/// at the output's own pixel scale (a Gaussian of radius `sigma` output pixels), on luma only (no
+/// colour fringes), with its overshoot past the local range limited ([`SHARPEN_OVERSHOOT`]). Print
+/// media blur more than a screen and get a wider, stronger mask. The values may be on any scale.
 fn unsharp(w: usize, h: usize, src: &[[f32; 3]], target: SharpenFor, amount: SharpenAmount) -> Option<Vec<[f32; 3]>> {
-    let (radius, base) = match target {
+    let (sigma, base) = match target {
         SharpenFor::None => return None,
-        SharpenFor::Screen => (1usize, 0.35f32),
-        SharpenFor::Matte => (2, 0.6),
-        SharpenFor::Glossy => (1, 0.5),
+        SharpenFor::Screen => (0.7f32, 0.65f32),
+        SharpenFor::Glossy => (0.8, 0.85),
+        SharpenFor::Matte => (1.0, 1.05),
     };
     let k = base
         * match amount {
-            SharpenAmount::Low => 0.6,
+            SharpenAmount::Low => 0.5,
             SharpenAmount::Standard => 1.0,
-            SharpenAmount::High => 1.5,
+            SharpenAmount::High => 1.6,
         };
     if w < 3 || h < 3 {
         return None;
     }
-    let r = radius as isize;
-    let box_pass = |inp: &[[f32; 3]], horizontal: bool| -> Vec<[f32; 3]> {
-        let mut out = vec![[0.0; 3]; inp.len()];
-        // rows in parallel: each output pixel is computed on its own, so the bits don't depend on the split
-        lightcraft_raster::par_rows(&mut out, w, |y, row| {
-            for (x, o) in row.iter_mut().enumerate() {
-                let mut acc = [0.0f32; 3];
-                for d in -r..=r {
-                    let (sx, sy) = if horizontal {
-                        ((x as isize + d).clamp(0, w as isize - 1) as usize, y)
-                    } else {
-                        (x, (y as isize + d).clamp(0, h as isize - 1) as usize)
-                    };
-                    let p = inp[sy * w + sx];
-                    acc = [acc[0] + p[0], acc[1] + p[1], acc[2] + p[2]];
-                }
-                let n = (2 * r + 1) as f32;
-                *o = acc.map(|v| v / n);
-            }
-        });
-        out
-    };
-    let blur = box_pass(&box_pass(src, true), false);
-    Some(src.iter().zip(&blur).map(|(s, b)| std::array::from_fn(|c| s[c] + (s[c] - b[c]) * k)).collect())
+    let luma: Vec<f32> = src.iter().map(|p| 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]).collect();
+    let r = (3.0 * sigma).ceil() as isize;
+    let taps: Vec<f32> = (-r..=r).map(|d| (-((d * d) as f32) / (2.0 * sigma * sigma)).exp()).collect();
+    let norm: f32 = taps.iter().sum();
+    let taps: Vec<f32> = taps.iter().map(|t| t / norm).collect();
+    let gauss = |acc: f32, d: isize, v: f32| acc + v * taps[(d + r) as usize];
+    let blur = separable(&separable(&luma, w, h, r, true, 0.0, gauss), w, h, r, false, 0.0, gauss);
+    let lo = |acc: f32, _: isize, v: f32| acc.min(v);
+    let hi = |acc: f32, _: isize, v: f32| acc.max(v);
+    let lo = separable(&separable(&luma, w, h, 1, true, f32::INFINITY, lo), w, h, 1, false, f32::INFINITY, lo);
+    let hi = separable(&separable(&luma, w, h, 1, true, f32::NEG_INFINITY, hi), w, h, 1, false, f32::NEG_INFINITY, hi);
+    Some(
+        src.iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let (y, margin) = (luma[i], (hi[i] - lo[i]) * SHARPEN_OVERSHOOT);
+                // max/min rather than clamp: never panics, even on bounds a non-finite input left inverted or NaN.
+                let sharp = (y + (y - blur[i]) * k).max(lo[i] - margin).min(hi[i] + margin);
+                p.map(|v| v + sharp - y)
+            })
+            .collect(),
+    )
+}
+
+/// One pass of a separable filter over a `w × h` plane: each value folds (`f(acc, offset, value)`,
+/// from `init`) its neighbours up to `reach` away along a row (`horizontal`) or a column, edges repeated.
+fn separable(inp: &[f32], w: usize, h: usize, reach: isize, horizontal: bool, init: f32, f: impl Fn(f32, isize, f32) -> f32 + Sync) -> Vec<f32> {
+    let mut out = vec![0.0; inp.len()];
+    lightcraft_raster::par_rows(&mut out, w, |y, row| {
+        for (x, o) in row.iter_mut().enumerate() {
+            *o = (-reach..=reach).fold(init, |acc, d| {
+                let i = if horizontal {
+                    y * w + (x as isize + d).clamp(0, w as isize - 1) as usize
+                } else {
+                    (y as isize + d).clamp(0, h as isize - 1) as usize * w + x
+                };
+                f(acc, d, inp[i])
+            });
+        }
+    });
+    out
 }
 
 /// Encode a rendered display-referred image according to `o` (its pixels must already be in
