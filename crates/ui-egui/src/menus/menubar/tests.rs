@@ -372,6 +372,58 @@ fn select_by_submenu_and_text_prompt() {
     assert_eq!(app.session.catalog.photo(id).unwrap().versions[0].name, "Final");
 }
 
+/// #3311: Select by offers each rating on its own beside "and higher", and an exact row selects
+/// only the photos in view with that rating.
+#[test]
+fn select_by_offers_exact_ratings() {
+    let mut app = app();
+    let ids = app.session.visible().to_vec();
+    for (i, id) in ids.iter().enumerate() {
+        app.session.execute("library.select", &json!({"ids": [id]})).unwrap();
+        app.session.execute("photo.rate", &json!({"rating": i % 6})).unwrap();
+    }
+    let bar = menu_bar(&app);
+    let edit = &bar.iter().find(|(t, _)| t == "Edit").unwrap().1;
+    let Some(MenuNode::Submenu { children, .. }) = edit.iter().find(|n| matches!(n, MenuNode::Submenu { label, .. } if label == "Select by")) else {
+        panic!("no Select by submenu")
+    };
+    let exact = |r: u8| {
+        children.iter().find_map(|n| match n {
+            MenuNode::Item { id, params, .. } if id == "library.selectBy" && *params == json!({"rating": r, "ratingOp": "eq"}) => {
+                Some(params.clone())
+            }
+            _ => None,
+        })
+    };
+    for r in 1..=5 {
+        assert!(exact(r).is_some(), "no row for exactly {r} stars");
+    }
+    let visible = app.session.visible().to_vec();
+    let want: Vec<_> = visible.iter().copied().filter(|&p| app.session.catalog.photo(p).unwrap().rating == 3).collect();
+    assert!(!want.is_empty() && want.len() < visible.len(), "the demo holds photos rated 3 and others");
+    run_item(&mut app, "library.selectBy", exact(3).unwrap()).unwrap();
+    assert_eq!(app.session.selection.ids, want);
+}
+
+/// #3311: the exact-rating rows are translated like "and higher" ones, not left in English.
+#[test]
+fn select_by_exact_rating_rows_are_translated() {
+    fn label_of(nodes: &[MenuNode], want: &serde_json::Value) -> Option<String> {
+        nodes.iter().find_map(|n| match n {
+            MenuNode::Item { id, params, label, .. } if id == "library.selectBy" && params == want => Some(label.clone()),
+            MenuNode::Submenu { children, .. } => label_of(children, want),
+            _ => None,
+        })
+    }
+    let app = app();
+    crate::i18n::set_language(crate::i18n::Locale::De);
+    let bar = menu_bar(&app);
+    crate::i18n::set_language(crate::i18n::Locale::En);
+    let edit = &bar.iter().find(|(t, _)| t == "Edit").unwrap().1;
+    assert_eq!(label_of(edit, &json!({"rating": 3, "ratingOp": "eq"})).as_deref(), Some("nur ★★★"));
+    assert_eq!(label_of(edit, &json!({"rating": 3})).as_deref(), Some("★★★ und höher"));
+}
+
 #[test]
 fn help_opens_the_docs_and_merge_last_needs_photos() {
     let mut app = app();
