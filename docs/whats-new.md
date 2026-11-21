@@ -286,6 +286,12 @@
 
 ## 2026-10-27
 
+### The desktop app starts in the system's language
+- On macOS, Windows and Linux, a library with no saved settings now opens in the first of the system's preferred
+  languages that LightCraft has a catalog for (Russian for `ru-SK`, German for `de-AT`), as the web build follows the
+  browser's languages. Before, it opened in English unless `LIGHTCRAFT_LANGUAGE` was set. A language chosen in
+  Settings ▸ General ▸ Language is kept as before.
+
 ### The Edit menu loses its Language submenu
 - Choose the interface language in Settings ▸ General ▸ Language, which already lists every language. Edit no longer carries 18 more rows for it, on any platform.
 

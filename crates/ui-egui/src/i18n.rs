@@ -94,8 +94,9 @@ macro_rules! language_table {
                 }
                 let mut parts = lower.split('-');
                 let language = parts.next()?;
-                // `zh-Hans-CN`, `zh-CN` and `zh` all name the same base language.
-                let script = parts.next().and_then(|part| match part {
+                // `zh-Hans-CN`, `zh-CN` and `zh` all name the same base language. Only Chinese
+                // picks a script by region: `en-HK` is English, not Traditional Chinese.
+                let script = parts.next().filter(|_| language == "zh").and_then(|part| match part {
                     "hans" | "cn" | "sg" => Some("Hans"),
                     "hant" | "tw" | "hk" | "mo" => Some("Hant"),
                     _ => None,
@@ -193,23 +194,30 @@ thread_local! {
     static DEFAULT_LANGUAGE: std::cell::Cell<Option<Locale>> = const { std::cell::Cell::new(None) };
 }
 
-/// Install the language the "Auto" setting resolves to when nothing is stored. The browser host
-/// calls this once at startup with the browser's own languages ([`locale_from_tags`]); the
-/// desktop host doesn't: there Auto keeps following the environment. Must run before the UI state
-/// is first constructed.
+/// Install the language the "Auto" setting resolves to when nothing is stored. Each host calls
+/// this once at startup through [`locale_from_tags`]: the browser host with the browser's own
+/// languages, the desktop host with the operating system's preferred languages. Must run before
+/// the UI state is first constructed.
 pub fn set_default_language(language: Locale) {
     DEFAULT_LANGUAGE.with(|slot| slot.set(Some(language)));
 }
 
-/// The first of `tags` (BCP-47, most preferred first, as `navigator.languages` lists them) that
-/// names a shipped language; None when none does.
+/// The first of `tags` (BCP-47, most preferred first, as `navigator.languages` and the system's
+/// language list give them) that names a shipped language; None when none does. The POSIX `C`
+/// locale (`LC_ALL=C`, `POSIX`, `C.UTF-8`) asks for English, so it wins over the tags after it.
 pub fn locale_from_tags(tags: &[String]) -> Option<Locale> {
-    tags.iter().find_map(|tag| Locale::parse_tag(tag))
+    tags.iter().find_map(|tag| if is_posix_c(tag) { Some(Locale::En) } else { Locale::parse_tag(tag) })
+}
+
+/// `C`, `POSIX` and their encoding forms (`C.UTF-8`): the untranslated messages, which are English.
+fn is_posix_c(tag: &str) -> bool {
+    let base = tag.split(['.', '@']).next().unwrap_or(tag);
+    base.eq_ignore_ascii_case("C") || base.eq_ignore_ascii_case("POSIX")
 }
 
 /// The UI language "Auto" resolves to: the environment's (`LIGHTCRAFT_LANGUAGE=zh-hans`, for
-/// headless runs), or the host-installed default ([`set_default_language`], the browser's languages
-/// on the web), else English.
+/// headless runs), or the host-installed default ([`set_default_language`]: the system's languages
+/// on the desktop, the browser's on the web), else English.
 pub fn default_language() -> Locale {
     std::env::var("LIGHTCRAFT_LANGUAGE")
         .ok()
