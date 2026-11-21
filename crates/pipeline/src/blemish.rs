@@ -40,10 +40,34 @@ pub const MIN_FACE_PX: f64 = 160.0;
 pub const MAX_CANDIDATES_PER_FACE: usize = 12;
 /// Most blemishes kept per face, strongest first.
 pub const MAX_PER_FACE: usize = 6;
+/// A Skin matte at least this sure is skin.
+const SKIN_SURE: f32 = 0.5;
+/// A Glasses matte above this keeps blemishes away: its frames and the reflections on its lenses are not skin.
+const GLASSES_ANY: f32 = 0.2;
 
-/// Pixels of `img` inside the box that are skin: an ellipse over the face, gated by skin colour,
-/// with the eyes, brows, nostrils and mouth cut out around the landmarks.
-fn skin_mask(img: &Rgba8, f: &FaceBox, x0: usize, y0: usize, cw: usize, ch: usize) -> Vec<bool> {
+/// What the photo's own segmentation mattes say about the analysed image (each `None` when the photo carries no
+/// such matte), at the image's size: Apple's skin and glasses mattes, from an iPhone Portrait HEIC or a ProRAW DNG.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Mattes {
+    /// Skin coverage 0..1: where it is sure, it says what is skin instead of the colour gate, for every skin tone
+    /// and light.
+    pub skin: Option<Plane>,
+    /// Glasses coverage 0..1: nothing there is a blemish.
+    pub glasses: Option<Plane>,
+}
+
+impl Mattes {
+    /// The matte value at pixel `(x, y)` of a plane that matches the image, if it does.
+    fn at(p: Option<&Plane>, w: usize, h: usize, x: usize, y: usize) -> Option<f32> {
+        let p = p?;
+        (p.width == w && p.height == h).then(|| p.data.get(y * w + x).copied().filter(|v| v.is_finite()).unwrap_or(0.0))
+    }
+}
+
+/// Pixels of `img` inside the box that are skin: an ellipse over the face, gated by skin colour (or, where the
+/// photo carries one, by its skin matte), with the eyes, brows, nostrils and mouth cut out around the landmarks
+/// and the glasses matte's frames and lenses left out.
+fn skin_mask(img: &Rgba8, f: &FaceBox, x0: usize, y0: usize, cw: usize, ch: usize, mattes: &Mattes) -> Vec<bool> {
     let (w, h) = (img.width as f64, img.height as f64);
     let (fx, fy, fw, fh) = (f.x0 * w, f.y0 * h, (f.x1 - f.x0) * w, (f.y1 - f.y0) * h);
     let (cx, cy) = (fx + fw / 2.0, fy + fh * 0.55);
@@ -72,12 +96,22 @@ fn skin_mask(img: &Rgba8, f: &FaceBox, x0: usize, y0: usize, cw: usize, ch: usiz
             if ((px - nose.0) / (fw * 0.20)).powi(2) + ((py - nose.1 - fw * 0.02) / (fw * 0.16)).powi(2) <= 1.0 {
                 continue;
             }
-            let Some(p) = img.data.get((y0 + yy) * img.width + x0 + xx) else { continue };
-            let (r, g, b) = (f64::from(p[0]), f64::from(p[1]), f64::from(p[2]));
-            let cr = 128.0 + 0.5 * r - 0.4187 * g - 0.0813 * b;
-            let cb = 128.0 - 0.1687 * r - 0.3313 * g + 0.5 * b;
+            let (ix, iy) = (x0 + xx, y0 + yy);
+            if Mattes::at(mattes.glasses.as_ref(), img.width, img.height, ix, iy).is_some_and(|g| g > GLASSES_ANY) {
+                continue;
+            }
+            let Some(p) = img.data.get(iy * img.width + ix) else { continue };
+            let skin = match Mattes::at(mattes.skin.as_ref(), img.width, img.height, ix, iy) {
+                Some(s) => s >= SKIN_SURE,
+                None => {
+                    let (r, g, b) = (f64::from(p[0]), f64::from(p[1]), f64::from(p[2]));
+                    let cr = 128.0 + 0.5 * r - 0.4187 * g - 0.0813 * b;
+                    let cb = 128.0 - 0.1687 * r - 0.3313 * g + 0.5 * b;
+                    (133.0..180.0).contains(&cr) && (77.0..130.0).contains(&cb)
+                }
+            };
             if let Some(o) = out.get_mut(yy * cw + xx) {
-                *o = (133.0..180.0).contains(&cr) && (77.0..130.0).contains(&cb);
+                *o = skin;
             }
         }
     }
@@ -88,6 +122,13 @@ fn skin_mask(img: &Rgba8, f: &FaceBox, x0: usize, y0: usize, cw: usize, ch: usiz
 /// spots). Faces narrower than [`MIN_FACE_PX`] get none; a face with more than
 /// [`MAX_CANDIDATES_PER_FACE`] candidates gets none; at most [`MAX_PER_FACE`] per face.
 pub fn detect(img: &Rgba8, faces: &[FaceBox], sensitivity: f32) -> Vec<Blemish> {
+    detect_with(img, faces, sensitivity, &Mattes::default())
+}
+
+/// [`detect`] guided by the photo's own skin and glasses mattes, when it carries them (issue #4355): a blemish is
+/// only found on what the skin matte says is skin, and never under the glasses. A matte whose size doesn't match
+/// the image is ignored.
+pub fn detect_with(img: &Rgba8, faces: &[FaceBox], sensitivity: f32, mattes: &Mattes) -> Vec<Blemish> {
     let (w, h) = (img.width, img.height);
     if w < 32 || h < 32 {
         return Vec::new();
@@ -111,7 +152,7 @@ pub fn detect(img: &Rgba8, faces: &[FaceBox], sensitivity: f32) -> Vec<Blemish> 
         if cw < 16 || ch < 16 {
             continue;
         }
-        let skin = skin_mask(img, f, x0, y0, cw, ch);
+        let skin = skin_mask(img, f, x0, y0, cw, ch, mattes);
         let px = |xx: usize, yy: usize| img.data.get((y0 + yy) * w + x0 + xx).copied().unwrap_or([0; 4]);
         let lum = Plane::from_fn(cw, ch, |xx, yy| {
             let p = px(xx, yy);
@@ -284,5 +325,61 @@ mod tests {
         let inverted = FaceBox { x0: 0.9, y0: 0.9, x1: 0.1, y1: 0.1, landmarks: [(0.5, 0.5); 5] };
         assert!(detect(&img, &[weird, inverted], 100.0).is_empty());
         assert!(detect(&Rgba8::new(0, 0), &[inverted], 50.0).is_empty());
+    }
+
+    /// A matte over the whole `w × h` image: `v` where `inside(x, y)`, else 0.
+    fn matte(w: usize, h: usize, v: f32, inside: impl Fn(usize, usize) -> bool) -> Plane {
+        Plane::from_fn(w, h, |x, y| if inside(x, y) { v } else { 0.0 })
+    }
+
+    /// Issue #4355: with the photo's skin matte, a spot counts only where the matte says skin. Here the matte
+    /// covers the left half of the face only, so of a spot on each cheek only the left one is found.
+    #[test]
+    fn the_skin_matte_says_what_is_skin() {
+        let (w, h) = (800, 600);
+        let (img, face) = scene(w, h, 300.0, &[(-0.28, 0.08), (0.3, 0.12)]);
+        assert_eq!(detect(&img, &[face], 50.0).len(), 2, "both without a matte");
+        let left_half = Mattes { skin: Some(matte(w, h, 1.0, |x, _| x < w / 2)), glasses: None };
+        let found = detect_with(&img, &[face], 50.0, &left_half);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].x < 0.5);
+    }
+
+    /// Skin the colour gate doesn't recognise (here a deep skin tone outside its Cr / Cb range) is found through the
+    /// skin matte.
+    #[test]
+    fn the_skin_matte_covers_every_skin_tone() {
+        let (w, h) = (800, 600);
+        let (mut img, face) = scene(w, h, 300.0, &[(-0.28, 0.08)]);
+        // repaint the skin a deep brown the colour gate rejects (Cr about 132, below its 133), the spot darker still
+        for p in img.data.iter_mut() {
+            *p = match *p {
+                [222, 180, 160, 255] => [70, 62, 58, 255],
+                [150, 90, 85, 255] => [36, 30, 28, 255],
+                other => other,
+            };
+        }
+        assert!(detect(&img, &[face], 50.0).is_empty(), "the colour gate alone misses it");
+        let all = Mattes { skin: Some(matte(w, h, 1.0, |_, _| true)), glasses: None };
+        assert_eq!(detect_with(&img, &[face], 50.0, &all).len(), 1);
+    }
+
+    /// Nothing under the glasses matte is a blemish (its frames and lens reflections), even on skin.
+    #[test]
+    fn nothing_under_the_glasses_is_a_blemish() {
+        let (w, h) = (800, 600);
+        let (img, face) = scene(w, h, 300.0, &[(-0.28, 0.08), (0.3, 0.12)]);
+        let right_lens = Mattes { skin: None, glasses: Some(matte(w, h, 0.9, |x, _| x > w / 2)) };
+        let found = detect_with(&img, &[face], 50.0, &right_lens);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].x < 0.5);
+    }
+
+    /// A matte that doesn't match the image's size is ignored rather than read at the wrong places.
+    #[test]
+    fn a_matte_of_another_size_is_ignored() {
+        let (img, face) = scene(800, 600, 300.0, &[(-0.28, 0.08), (0.3, 0.12)]);
+        let wrong = Mattes { skin: Some(matte(400, 300, 0.0, |_, _| true)), glasses: Some(matte(10, 10, 1.0, |_, _| true)) };
+        assert_eq!(detect_with(&img, &[face], 50.0, &wrong), detect(&img, &[face], 50.0));
     }
 }

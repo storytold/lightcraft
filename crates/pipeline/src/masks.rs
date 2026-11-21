@@ -95,6 +95,18 @@ impl Mattes {
 
     /// Whether a mask of the photo's Subject comes from these mattes (a person, or a person's
     /// parts) rather than from the saliency heuristic.
+    /// Whether there is a matte of `kind`.
+    pub fn has(&self, kind: MatteKind) -> bool {
+        self.mattes.iter().any(|(k, _)| *k == kind)
+    }
+
+    /// The mattes of `kind` (combined with max) at the output resolution of `frame`, sampled like the image; `None`
+    /// when there is none.
+    pub fn plane(&self, kind: MatteKind, frame: &Frame, w: usize, h: usize) -> Option<Plane> {
+        let of = self.of(&[kind]);
+        (!of.is_empty()).then(|| matte_alpha(&of, frame, w, h))
+    }
+
     pub fn selects_subject(&self) -> bool {
         !self.for_shape(&MaskShape::Subject).is_empty()
     }
