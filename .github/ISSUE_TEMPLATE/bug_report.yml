@@ -1,0 +1,57 @@
+name: Bug report
+description: Report incorrect behavior, a crash, or a RAW decoding problem.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search [existing issues](https://github.com/storytold/lightcraft/issues?q=is%3Aissue) first. If the same problem is reported, add reproduction details there.
+        Issues are public. Remove secrets, personal paths, and private photo metadata from logs, screenshots, and samples.
+  - type: input
+    id: version
+    attributes:
+      label: LightCraft version
+      description: Copy the version from the About dialog, or give the commit hash for a source build.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Operating system and hardware
+      description: Include the OS version and CPU architecture. For the web app, also include the browser and version.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Actual and expected behavior
+      description: Describe what happened and what you expected. Include the exact error message if there is one.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Give the shortest sequence that shows the problem. Say whether it happens every time.
+      placeholder: |
+        1. Open or import ...
+        2. Select ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: camera
+    attributes:
+      label: Camera, lens, and file format (if relevant)
+      description: For RAW problems, include the camera model, RAW mode or compression, and whether the camera JPEG looks correct.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshots or a small sample (optional)
+      description: Share only material you can make public. Prefer a generated or CC0 sample; remove private metadata. Do not attach Adobe assets or profiles.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs (optional)
+      description: Paste only the relevant, redacted excerpt. Do not include credentials or private file paths.
+      render: text

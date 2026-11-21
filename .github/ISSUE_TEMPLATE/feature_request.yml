@@ -1,0 +1,33 @@
+name: Feature request
+description: Describe a missing photo workflow or an improvement to an existing one.
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search [existing issues](https://github.com/storytold/lightcraft/issues?q=is%3Aissue) first. Use a reaction to support an existing request, or add details about your workflow there.
+        Issues are public; keep private photo metadata, file paths, and credentials out of examples.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What workflow is missing or difficult?
+      description: Describe the task you are trying to complete and who would benefit.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Desired behavior
+      description: Explain what LightCraft should do, with a concrete example if possible.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or workarounds (optional)
+      description: Describe what you use today and why it does not meet your needs.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context (optional)
+      description: Include relevant OS, camera, or file-format details. Share only material you can make public; do not attach Adobe assets or profiles.
