@@ -39,7 +39,11 @@ fn ids(s: &mut Session) -> Vec<String> {
 
 /// A look different from the defaults in every section.
 fn custom(s: &mut Session) {
-    run(s, "slideshow.playback", json!({"slideDuration": 7.5, "fadeDuration": 0.5, "fadeColor": "#102030", "randomOrder": true, "repeat": false}));
+    run(
+        s,
+        "slideshow.playback",
+        json!({"slideDuration": 7.5, "fadeDuration": 0.5, "fadeColor": "#102030", "randomOrder": true, "repeat": false, "panAndZoom": true, "panAndZoomAmount": 0.8}),
+    );
     run(
         s,
         "slideshow.layout",

@@ -59,6 +59,7 @@ impl QuickJob {
             quick: None,
             display: None,
             frame: None,
+            slide_photo: None,
         })
     }
 
@@ -77,6 +78,7 @@ impl QuickJob {
             quick,
             display: None,
             frame: None,
+            slide_photo: None,
         };
         let rendered = |image: Rgba8| {
             let histogram = Histogram::of_srgb8(&image);
