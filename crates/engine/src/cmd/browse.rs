@@ -522,11 +522,17 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
     if !src.is_dir() {
         return Err(format!("{from} is not a folder"));
     }
-    // compared as the folders are on disk (a differently spelled or linked path to the library
-    // names the same folder), with the spelling as a fallback where that can't be told
+    // `a/../b` names a folder without spelling it, which the checks below and the relink can't see
+    if src.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err(format!("{from}: give the folder's path without '..'"));
+    }
+    // the library folder itself (and its parents), and its own top-level folders (`Originals`, `thumbs`), stay
+    // where the library expects them; folders below those (an import's date folders) can be renamed. Compared as
+    // the folders are on disk (a differently spelled or linked path to the library names the same folder), with
+    // the spelling as a fallback where that can't be told
     let same_folder = |l: &Path| {
         let (lib, chosen) = (l.canonicalize().unwrap_or_else(|_| l.to_path_buf()), src.canonicalize().unwrap_or_else(|_| src.to_path_buf()));
-        lib.starts_with(&chosen) || chosen.starts_with(&lib) || l.starts_with(src) || src.starts_with(l)
+        lib.starts_with(&chosen) || chosen.parent() == Some(lib.as_path()) || l.starts_with(src) || src.parent() == Some(l)
     };
     if s.library.as_ref().is_some_and(|l| same_folder(&l.dir)) {
         return Err("the library's own folders can't be moved here".into());
