@@ -824,7 +824,13 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
         }
         "press_key" => ToolResult::from(b.call("ui.key", obj(args, &["key", "cmd", "shift", "alt", "ctrl"]))),
         "type_text" => ToolResult::from(b.call("ui.text", obj(args, &["text"]))),
-        "clipboard" => ToolResult::from(b.call("ui.clipboard", obj(args, &["action", "text"]))),
+        "clipboard" => {
+            // obj drops null values: validate before omission could turn an invalid value into native paste.
+            if s("action") == Some("paste") && args.get("text").is_some_and(|v| !v.is_string()) {
+                return ToolResult::error("ui.clipboard: `text` must be a string");
+            }
+            ToolResult::from(b.call("ui.clipboard", obj(args, &["action", "text"])))
+        }
         "pointer_gesture" => ToolResult::from(b.call("ui.pointer", obj(args, &["events", "alt", "shift", "cmd"]))),
         other => ToolResult::error(format!("unknown tool `{other}` (see tools/list)")),
     }

@@ -797,9 +797,10 @@ pub(crate) fn gesture_events(app: &mut LightcraftApp, ctx: &egui::Context, metho
             match s("action") {
                 Some("cut") => app.synthetic.push(egui::Event::Cut),
                 Some("copy") => app.synthetic.push(egui::Event::Copy),
-                Some("paste") => match s("text") {
-                    Some(text) => app.synthetic.push(egui::Event::Paste(text.to_string())),
+                Some("paste") => match p.get("text") {
+                    Some(Value::String(text)) => app.synthetic.push(egui::Event::Paste(text.clone())),
                     None => ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste),
+                    Some(_) => return Err("ui.clipboard: `text` must be a string".into()),
                 },
                 _ => return Err("ui.clipboard: `action` is cut, copy or paste".into()),
             }
@@ -910,4 +911,52 @@ fn preview_cache_json(app: &crate::LightcraftApp) -> serde_json::Value {
         "diskBudget": disk.map(|d| d.budget()),
         "loupeEdge": app.session.loupe_edge,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::headless::HeadlessView;
+
+    #[test]
+    fn clipboard_paste_distinguishes_invalid_text_from_omitted_text() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        let mut view = HeadlessView::new();
+        let mut text = String::new();
+        let size = egui::vec2(320.0, 160.0);
+        view.run(HeadlessView::raw_input(size, 1.0, 0.0, vec![]), |ui| {
+            ui.text_edit_singleline(&mut text).request_focus();
+        });
+        let mut time = 0.0;
+        let mut paste = |params: Value| {
+            time += 1.0 / 60.0;
+            app.synthetic = vec![egui::Event::Text("pending".into())];
+            let mut result = None;
+            let commands = view.run(HeadlessView::raw_input(size, 1.0, time, vec![]), |ui| {
+                ui.text_edit_singleline(&mut text).request_focus();
+                assert!(ui.ctx().text_edit_focused(), "the paste target must be a focused text field");
+                // A discarded layout pass must not resolve the same gesture twice.
+                if result.is_none() {
+                    result = Some(gesture_events(&mut app, ui.ctx(), "ui.clipboard", &params).map(|_| ()));
+                }
+            });
+            (result.expect("clipboard gesture resolved"), commands, app.synthetic.clone())
+        };
+        for invalid in [Value::Null, json!(42), json!(true), json!([]), json!({})] {
+            let (result, commands, queued) = paste(json!({"action": "paste", "text": invalid}));
+            assert_eq!(result, Err("ui.clipboard: `text` must be a string".into()), "{invalid}");
+            assert_eq!(queued, vec![egui::Event::Text("pending".into())], "{invalid}");
+            assert!(!commands.iter().any(|c| matches!(c, egui::ViewportCommand::RequestPaste)), "{invalid}");
+        }
+        for explicit in ["", "supplied text"] {
+            let (result, commands, queued) = paste(json!({"action": "paste", "text": explicit}));
+            assert_eq!(result, Ok(()));
+            assert_eq!(queued, vec![egui::Event::Text("pending".into()), egui::Event::Paste(explicit.into())]);
+            assert!(!commands.iter().any(|c| matches!(c, egui::ViewportCommand::RequestPaste)));
+        }
+        let (result, commands, queued) = paste(json!({"action": "paste"}));
+        assert_eq!(result, Ok(()));
+        assert_eq!(queued, vec![egui::Event::Text("pending".into())]);
+        assert!(commands.iter().any(|c| matches!(c, egui::ViewportCommand::RequestPaste)));
+    }
 }
