@@ -83,14 +83,6 @@ fn id_of(r: &Row, k: &str) -> Option<i64> {
     // (2^63 is the first value past i64::MAX; a cast would saturate onto a real id)
     (f.fract() == 0.0 && f >= i64::MIN as f64 && f < 9_223_372_036_854_775_808.0).then_some(f as i64)
 }
-/// `rows` of `table` with the photo each belongs to ([`image_of`]). Rows that name no photo are left out, with one
-/// warning for the table.
-fn by_image(table: &str, rows: Vec<Row>, warnings: &mut Vec<String>) -> Vec<(i64, Row)> {
-    let total = rows.len();
-    let keyed: Vec<_> = rows.into_iter().filter_map(|r| Some((image_of(&r)?, r))).collect();
-    warn_unkeyed(table, total - keyed.len(), "skipped", warnings);
-    keyed
-}
 /// One warning for the `count` rows of `table` whose `image` names no photo; `outcome` says what became of them.
 fn warn_unkeyed(table: &str, count: usize, outcome: &str, warnings: &mut Vec<String>) {
     match count {
@@ -112,6 +104,8 @@ fn source_path(p: &Photo) -> Option<&str> {
 
 pub(crate) struct Reader {
     db: Database,
+    /// What table walks left out record by record (see [`crate::lightroom_sqlite::WalkStats`]), for the warnings.
+    notes: std::sync::Mutex<Vec<String>>,
 }
 /// The longest XMP packet kept for one image (what a compressed one may expand to). The bound is per
 /// image, never a running total, so the size of a catalog alone cannot drop a packet (upstream #3674).
@@ -138,6 +132,15 @@ fn compressed_settings(name: &str) -> Option<(&'static str, &'static str, &'stat
 }
 
 impl Reader {
+    pub(crate) fn new(db: Database) -> Self {
+        Self { db, notes: std::sync::Mutex::new(Vec::new()) }
+    }
+
+    /// The notes table walks have left so far, taken (each is reported once).
+    pub(crate) fn take_notes(&self) -> Vec<String> {
+        std::mem::take(&mut *self.notes.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+    }
+
     /// Stream `name`'s rows to `f`, one at a time: the table is never collected whole, so a catalog's large develop,
     /// history and metadata tables cost only what `f` keeps, and its pages are read from the file one at a time. A
     /// missing table yields no rows unless `required`. `Blob` columns never become JSON; they reach `f` separately,
@@ -179,7 +182,12 @@ impl Reader {
         } else {
             self.db.for_each_row_with_cancel(t.rootpage, columns.len(), cancel, &mut sink)
         };
-        walked.map_err(|e| format!("{name}: {e}"))
+        let stats = walked.map_err(|e| format!("{name}: {e}"))?;
+        let notes = stats.notes(name);
+        if !notes.is_empty() {
+            self.notes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).extend(notes);
+        }
+        Ok(())
     }
 
     pub(crate) fn table(&self, name: &str, required: bool, cancel: &AtomicBool) -> Result<Vec<Row>, String> {
@@ -817,7 +825,7 @@ pub(crate) fn open_catalog(path: &Path, cancel: &AtomicBool) -> Result<(Reader, 
             hook(path);
         }
     }
-    Ok((Reader { db }, source_guard))
+    Ok((Reader::new(db), source_guard))
 }
 
 fn read_lightroom(path: &Path, reader: Reader, source_guard: SourceGuard, cancel: &AtomicBool, done: &AtomicUsize) -> Result<CatalogImport, String> {
@@ -865,10 +873,30 @@ fn read_lightroom(path: &Path, reader: Reader, source_guard: SourceGuard, cancel
     // each keyword's path is resolved once, however many photos carry it
     let mut paths: HashMap<i64, Option<String>> = HashMap::new();
     let mut keyword_bytes = 0usize;
-    let keyword_images = optional_table("AgLibraryKeywordImage", &mut warnings)?;
-    for (image, r) in by_image("AgLibraryKeywordImage", keyword_images, &mut warnings) {
+    // Keyword assignments are streamed into (image, tag) pairs, 16 bytes each, never kept as rows: a working
+    // archive holds millions of them, past any whole-table cap (issue #1312).
+    let mut keyword_images: Vec<(i64, i64)> = Vec::new();
+    let mut unkeyed_keywords = 0usize;
+    ensure_read_active(cancel)?;
+    let streamed = reader.each_row("AgLibraryKeywordImage", false, false, cancel, |r, _| {
+        match image_of(&r) {
+            Some(image) => {
+                keyword_images.try_reserve(1).map_err(|_| "AgLibraryKeywordImage: unable to reserve keyword assignments".to_string())?;
+                keyword_images.push((image, number(&r, "tag")));
+            }
+            None => unkeyed_keywords += 1,
+        }
+        Ok(())
+    });
+    done.fetch_add(1, Ordering::Relaxed);
+    if let Err(error) = streamed {
+        keyword_images.clear();
+        unkeyed_keywords = 0;
+        reader.skip_optional("AgLibraryKeywordImage", error, &mut warnings, cancel)?;
+    }
+    warn_unkeyed("AgLibraryKeywordImage", unkeyed_keywords, "skipped", &mut warnings);
+    for (image, tag) in keyword_images {
         ensure_read_active(cancel)?;
-        let tag = number(&r, "tag");
         let path = match paths.get(&tag) {
             Some(p) => p.clone(),
             None => {
@@ -943,7 +971,10 @@ fn read_lightroom(path: &Path, reader: Reader, source_guard: SourceGuard, cancel
         members,
         collection_content: optional_table("AgLibraryCollectionContent", &mut warnings)?,
         stacks: optional_table("AgLibraryFolderStackImage", &mut warnings)?,
-        warnings,
+        warnings: {
+            warnings.extend(reader.take_notes());
+            warnings
+        },
         skipped: Vec::new(),
     };
     // An image row whose file, folder or root record is gone (Lightroom leaves such rows behind, and its integrity
@@ -2391,7 +2422,7 @@ pub(crate) mod tests {
         let dir = fixture::dir(tag);
         let catalog = dir.join("test.lrcat");
         fixture::write(&catalog, &[Table { name: "Adobe_libraryImageDevelopHistoryStep", columns: fixture::HISTORY_COLUMNS, rows: steps }]);
-        let reader = Reader { db: Database::open_with_wal(std::fs::read(&catalog).unwrap(), &[]).unwrap() };
+        let reader = Reader::new(Database::open_with_wal(std::fs::read(&catalog).unwrap(), &[]).unwrap());
         let _ = std::fs::remove_dir_all(dir);
         let mut warnings = Vec::new();
         let grouped = reader.grouped_within("Adobe_libraryImageDevelopHistoryStep", 1 << 20, &mut warnings, &AtomicBool::new(false)).unwrap();
@@ -4792,7 +4823,7 @@ pub(crate) mod tests {
             vec![N, I(3), T("<x:xmpmeta>padding</x:xmpmeta>".into())],
         ];
         let bytes = native_catalog_rows(&[("Adobe_AdditionalMetadata", "id_local INTEGER PRIMARY KEY, image, xmp", rows)], None);
-        let reader = Reader { db: Database::open_with_wal(bytes, &[]).unwrap() };
+        let reader = Reader::new(Database::open_with_wal(bytes, &[]).unwrap());
         let cancel = AtomicBool::new(false);
         let (rows, warnings) = reader.xmp_table_within(&cancel, 12).unwrap();
         assert_eq!(rows.len(), 3);
@@ -4858,7 +4889,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn oversized_optional_table_warns_and_is_skipped() {
+    /// One oversized record is left out and noted; the table itself still reads (issue #1311).
+    fn an_oversized_record_is_noted_and_its_table_still_reads() {
         let mut main = vec![0u8; 2 * 512];
         main[..16].copy_from_slice(b"SQLite format 3\0");
         main[16..18].copy_from_slice(&512u16.to_be_bytes());
@@ -4889,12 +4921,14 @@ pub(crate) mod tests {
         page[8..10].copy_from_slice(&u16::try_from(start).unwrap_or(0).to_be_bytes());
         page[5..7].copy_from_slice(&u16::try_from(start).unwrap_or(0).to_be_bytes());
         let db = Database::open_with_wal(main, &[]).unwrap();
-        let reader = Reader { db };
+        let reader = Reader::new(db);
         let mut warnings = Vec::new();
         let cancel = AtomicBool::new(false);
         let rows = reader.optional_table("optional_history", &mut warnings, &cancel).unwrap();
         assert!(rows.is_empty());
-        assert!(warnings.iter().any(|warning| warning.contains("optional_history")));
+        assert!(warnings.is_empty(), "the table is not skipped: {warnings:?}");
+        let notes = reader.take_notes();
+        assert!(notes.iter().any(|n| n.contains("optional_history") && n.contains("1 record") && n.contains("too large")), "{notes:?}");
     }
 
     /// A Lightroom catalog's Apple ProRAW edit keeps the look's parameters as a nested table
