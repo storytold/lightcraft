@@ -329,12 +329,12 @@ mod bridge {
                 Transport::Parent { parent, origin } => {
                     let parent = parent.clone();
                     let origin = origin.clone();
-                    let incoming = self.incoming.clone();
+                    let bridge = self.clone();
                     let on_message = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
                         if event.origin() != origin || !event.source().is_some_and(|s| js_sys::Object::is(&s, &parent)) {
                             return;
                         }
-                        deliver(&incoming, &ctx, &event.data(), None);
+                        deliver(&bridge, &ctx, &event.data(), None);
                     });
                     if web_sys::window().is_some_and(|w| w.add_event_listener_with_callback("message", on_message.as_ref().unchecked_ref()).is_ok()) {
                         // the listener lives as long as the page
@@ -344,14 +344,14 @@ mod bridge {
                 Transport::Page { canvas } => {
                     // non-bubbling events: the page dispatches on the canvas, the canvas listens
                     for kind in ["lightcraft:open", "lightcraft:cmd"] {
-                        let incoming = self.incoming.clone();
+                        let bridge = self.clone();
                         let ctx = ctx.clone();
                         let event_type = kind.to_string();
                         // `Fn`, not `FnMut`: a page event is dispatched synchronously, and a host
                         // that answers one event with another would re-enter an `FnMut` listener.
                         let on_custom = Closure::<dyn Fn(web_sys::Event)>::new(move |event: web_sys::Event| {
                             let Some(custom) = event.dyn_ref::<web_sys::CustomEvent>() else { return };
-                            deliver(&incoming, &ctx, &custom.detail(), Some(event_type.as_str()));
+                            deliver(&bridge, &ctx, &custom.detail(), Some(event_type.as_str()));
                         });
                         if canvas.add_event_listener_with_callback(kind, on_custom.as_ref().unchecked_ref()).is_ok() {
                             // the listener lives as long as the page
@@ -365,6 +365,11 @@ mod bridge {
         /// What the parent sent since the last frame, oldest first.
         pub fn take_incoming(&self) -> Vec<Incoming> {
             std::mem::take(&mut *self.incoming.borrow_mut())
+        }
+
+        /// A provider replacement must not move queued photo/command work to another library.
+        pub fn has_incoming(&self) -> bool {
+            !self.incoming.borrow().is_empty()
         }
 
         /// Post a message; false if it couldn't be sent.
@@ -413,23 +418,33 @@ mod bridge {
     /// A message from the host (the `data` of a window message, or the `detail` of a page-mode
     /// `CustomEvent`), read with the same field code both transports share, and pushed for the
     /// next frame.
-    fn deliver(incoming: &Rc<RefCell<Vec<Incoming>>>, ctx: &egui::Context, data: &JsValue, event_type: Option<&str>) {
+    fn deliver(bridge: &Bridge, ctx: &egui::Context, data: &JsValue, event_type: Option<&str>) {
+        let kind = super::incoming_kind(event_type, string(data, "type"));
+        if crate::web::library_switching() {
+            let error = "A library is being replaced; retry after it has opened".to_string();
+            let response = match kind.as_deref() {
+                Some("lightcraft:open") => Some(Outgoing::Failed(error)),
+                Some("lightcraft:cmd") if string(data, "id").is_some_and(|id| !id.trim().is_empty()) => {
+                    Some(Outgoing::Response { ok: false, value: error })
+                }
+                _ => None,
+            };
+            if let Some(response) = response
+                && !bridge.post(&response)
+            {
+                log::warn!("lightcraft: provider replacement refusal could not reach the embedding page");
+            }
+            return;
+        }
         // moved, not cloned: an accepted photo can be hundreds of MB
         let (bytes, oversize) = match bytes(data) {
             Some(Ok(b)) => (Some(b), None),
             Some(Err(len)) => (None, Some(len)),
             None => (None, None),
         };
-        let raw = Raw {
-            kind: super::incoming_kind(event_type, string(data, "type")),
-            name: string(data, "name"),
-            bytes,
-            id: string(data, "id"),
-            params: string(data, "params"),
-            oversize,
-        };
+        let raw = Raw { kind, name: string(data, "name"), bytes, id: string(data, "id"), params: string(data, "params"), oversize };
         if let Some(m) = Incoming::parse(raw) {
-            incoming.borrow_mut().push(m);
+            bridge.incoming.borrow_mut().push(m);
             ctx.request_repaint();
         }
     }

@@ -8,6 +8,8 @@ use lightcraft_develop::{ControlSpec, Track};
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
 
+pub(crate) mod library_input;
+
 /// Standard dropdown chevrons, including settings, import/export and rule editors.
 pub fn combo_box(id: impl egui::AsIdSalt) -> craft_ui::ComboBox<'static> {
     craft_ui::ComboBox::from_id_salt(id)
@@ -480,6 +482,7 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
         side_scroll_edit(ui, &g, pointer_in_row, &mut out);
         wheel_edit(ui, &g, wheel_armed, pointer_in_row, &mut out);
     }
+    library_input::track_draft(ui.ctx(), g.typing_id(), typing.is_some());
     let v = out.value.unwrap_or(value);
     // paint
     let hovered = resp.hovered() || resp.dragged();

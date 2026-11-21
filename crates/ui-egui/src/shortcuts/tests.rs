@@ -700,3 +700,166 @@ mod issue1771 {
         assert_eq!(h.app.session.selection.ids.len(), 3);
     }
 }
+
+fn press_shortcut(app: &mut LightcraftApp, ctx: &egui::Context, key: Key, modifiers: Modifiers) -> Vec<String> {
+    let mut fired = Vec::new();
+    ctx.run_ui(
+        egui::RawInput {
+            events: vec![egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers }],
+            ..Default::default()
+        },
+        |ui| {
+            fired = super::pressed_commands(app, ui.ctx()).0;
+            super::handle(app, ui.ctx());
+        },
+    )
+    .textures_delta
+    .clear();
+    ctx.run_ui(
+        egui::RawInput {
+            events: vec![egui::Event::Key { key, physical_key: Some(key), pressed: false, repeat: false, modifiers: Modifiers::NONE }],
+            ..Default::default()
+        },
+        |ui| super::handle(app, ui.ctx()),
+    )
+    .textures_delta
+    .clear();
+    fired
+}
+
+#[test]
+fn provider_save_shortcuts_follow_menu_availability_without_stealing_local_commands() {
+    let ctx = egui::Context::default();
+    let local_backups = std::rc::Rc::new(std::cell::Cell::new(0));
+    let observed = local_backups.clone();
+    let services = crate::Services {
+        backup_library: Some(Box::new(move |_| {
+            observed.set(observed.get() + 1);
+            Ok(json!({"local":true}))
+        })),
+        ..Default::default()
+    };
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), services);
+    let save_as = Modifiers { shift: true, ..Modifiers::COMMAND };
+    for (modifiers, engine) in [(Modifiers::COMMAND, "photo.saveMetadataToFile"), (save_as, "version.create")] {
+        assert_eq!(press_shortcut(&mut app, &ctx, Key::S, modifiers), vec![engine], "no provider keeps the engine default");
+    }
+    let host = crate::file_providers::Host::default();
+    host.set_session("0123456789abcdef0123456789abcdef".into()).unwrap();
+    app.file_provider = Some(host.clone());
+    assert_eq!(press_shortcut(&mut app, &ctx, Key::S, Modifiers::COMMAND), vec!["photo.saveMetadataToFile"]);
+    host.connect("test".into(), "Test storage".into(), "account".into()).unwrap();
+    host.set_enabled(false).unwrap();
+    for (modifiers, engine) in [(Modifiers::COMMAND, "photo.saveMetadataToFile"), (save_as, "version.create")] {
+        assert_eq!(press_shortcut(&mut app, &ctx, Key::S, modifiers), vec![engine], "paused providers restore engine shortcuts");
+        assert!(host.take_events().is_empty());
+    }
+    host.set_enabled(true).unwrap();
+    for (modifiers, id, expected_save_as) in [(Modifiers::COMMAND, "file.saveLibrary", false), (save_as, "file.saveLibraryAs", true)] {
+        assert_eq!(press_shortcut(&mut app, &ctx, Key::S, modifiers), vec![id]);
+        let events = host.take_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].metadata["type"], "saveDialog");
+        assert_eq!(events[0].metadata["saveAs"], expected_save_as);
+        host.resolve_dialog(events[0].metadata["requestId"].as_str().unwrap(), "cancel", "").unwrap();
+    }
+    super::assign(&mut app.ui.settings.keymap, "file.saveLibrary", Some("F8")).unwrap();
+    super::assign(&mut app.ui.settings.keymap, "file.backupLibrary", Some("F10")).unwrap();
+    host.set_enabled(false).unwrap();
+    assert!(press_shortcut(&mut app, &ctx, Key::F8, Modifiers::NONE).is_empty(), "custom provider bindings use the same availability");
+    assert!(host.take_events().is_empty());
+    assert_eq!(press_shortcut(&mut app, &ctx, Key::F10, Modifiers::NONE), vec!["file.backupLibrary"]);
+    assert_eq!(local_backups.get(), 1, "the ordinary local backup still dispatches");
+    let filmstrip = app.ui.filmstrip;
+    assert_eq!(press_shortcut(&mut app, &ctx, Key::Slash, Modifiers::NONE), vec!["view.filmstrip"]);
+    assert_eq!(app.ui.filmstrip, !filmstrip, "unrelated default shortcuts still run");
+    host.set_enabled(true).unwrap();
+    assert_eq!(
+        press_shortcut(&mut app, &ctx, Key::S, Modifiers::COMMAND),
+        vec!["photo.saveMetadataToFile"],
+        "a custom provider key frees the engine default"
+    );
+    assert_eq!(press_shortcut(&mut app, &ctx, Key::F8, Modifiers::NONE), vec!["file.saveLibrary"]);
+    let events = host.take_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].metadata["type"], "saveDialog");
+    host.resolve_dialog(events[0].metadata["requestId"].as_str().unwrap(), "cancel", "").unwrap();
+    assert!(!host.busy());
+}
+
+#[test]
+fn provider_save_defaults_preserve_engine_bindings_and_live_menu_ownership() {
+    let host = crate::file_providers::Host::default();
+    host.set_session("0123456789abcdef0123456789abcdef".into()).unwrap();
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+    app.file_provider = Some(host.clone());
+    for (provider, engine, shortcut) in
+        [("file.saveLibrary", "photo.saveMetadataToFile", "Cmd+S"), ("file.saveLibraryAs", "version.create", "Cmd+Shift+S")]
+    {
+        assert_eq!(super::find_bindable(engine).unwrap().default, Some(shortcut));
+        assert_eq!(super::find_bindable(provider).unwrap().default, Some(shortcut));
+    }
+    host.connect("test".into(), "Test storage".into(), "account".into()).unwrap();
+    for enabled in [true, false] {
+        host.set_enabled(enabled).unwrap();
+        let entries = crate::menus::menu_entries(&app);
+        for (provider, engine, shortcut) in
+            [("file.saveLibrary", "photo.saveMetadataToFile", "Cmd+S"), ("file.saveLibraryAs", "version.create", "Cmd+Shift+S")]
+        {
+            assert_eq!(entries.iter().find(|entry| entry.id == engine).unwrap().shortcut.as_deref(), (!enabled).then_some(shortcut));
+            assert_eq!(entries.iter().find(|entry| entry.id == provider).and_then(|entry| entry.shortcut.as_deref()), enabled.then_some(shortcut));
+        }
+    }
+}
+
+fn cancel_shortcut_save(host: &crate::file_providers::Host) {
+    let events = host.take_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].metadata["type"], "saveDialog");
+    host.resolve_dialog(events[0].metadata["requestId"].as_str().unwrap(), "cancel", "").unwrap();
+    assert!(!host.busy());
+}
+
+#[test]
+fn provider_save_shortcuts_preserve_custom_engine_keys_and_explicit_removals() {
+    let ctx = egui::Context::default();
+    let host = crate::file_providers::Host::default();
+    host.set_session("0123456789abcdef0123456789abcdef".into()).unwrap();
+    host.connect("test".into(), "Test storage".into(), "account".into()).unwrap();
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+    app.file_provider = Some(host.clone());
+    assert!(super::reset(&mut app.ui.settings.keymap, "file.saveLibrary").unwrap().is_empty());
+    assert!(super::reset(&mut app.ui.settings.keymap, "file.saveLibraryAs").unwrap().is_empty());
+    assert_eq!(super::shortcut_of(&app.ui.settings.keymap, "photo.saveMetadataToFile"), Some("Cmd+S"));
+    assert_eq!(super::shortcut_of(&app.ui.settings.keymap, "version.create"), Some("Cmd+Shift+S"));
+    super::assign(&mut app.ui.settings.keymap, "version.create", Some("F9")).unwrap();
+    assert_eq!(press_shortcut(&mut app, &ctx, Key::F9, Modifiers::NONE), vec!["version.create"]);
+    let save_as = Modifiers { shift: true, ..Modifiers::COMMAND };
+    assert_eq!(press_shortcut(&mut app, &ctx, Key::S, save_as), vec!["file.saveLibraryAs"]);
+    cancel_shortcut_save(&host);
+    host.set_enabled(false).unwrap();
+    assert!(press_shortcut(&mut app, &ctx, Key::S, save_as).is_empty(), "a remapped engine key is not restored over the user's choice");
+    assert_eq!(press_shortcut(&mut app, &ctx, Key::F9, Modifiers::NONE), vec!["version.create"]);
+    super::assign(&mut app.ui.settings.keymap, "photo.saveMetadataToFile", None).unwrap();
+    assert!(press_shortcut(&mut app, &ctx, Key::S, Modifiers::COMMAND).is_empty(), "an explicitly removed engine key stays removed");
+    host.set_enabled(true).unwrap();
+    assert_eq!(press_shortcut(&mut app, &ctx, Key::S, Modifiers::COMMAND), vec!["file.saveLibrary"]);
+    cancel_shortcut_save(&host);
+    assert!(super::assign(&mut app.ui.settings.keymap, "file.saveLibraryAs", Some("F9")).unwrap().is_empty());
+    assert_eq!(press_shortcut(&mut app, &ctx, Key::F9, Modifiers::NONE), vec!["file.saveLibraryAs"]);
+    cancel_shortcut_save(&host);
+    host.set_enabled(false).unwrap();
+    assert_eq!(press_shortcut(&mut app, &ctx, Key::F9, Modifiers::NONE), vec!["version.create"], "shared custom keys still have one live owner");
+}
+
+#[test]
+fn provider_absence_keeps_version_shortcut_dispatching_the_engine_command() {
+    let mut h = library();
+    let id = h.app.session.active().unwrap();
+    let before = h.app.session.catalog.photo(id).unwrap().versions.len();
+    let ctx = egui::Context::default();
+    let save_as = Modifiers { shift: true, ..Modifiers::COMMAND };
+    assert_eq!(press_shortcut(&mut h.app, &ctx, Key::S, save_as), vec!["version.create"]);
+    assert_eq!(h.app.session.catalog.photo(id).unwrap().versions.len(), before + 1);
+    assert!(h.app.file_provider.is_none());
+}

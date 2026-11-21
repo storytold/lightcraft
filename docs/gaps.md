@@ -11,6 +11,16 @@ and [ROADMAP.md](../ROADMAP.md) if they move.
 Hours are Opus 5.5 agent wall-clock hours (see [target-app-parity.md](target-app-parity.md#how-hours-are-calibrated)).
 `B` marks a gap that blocks **beta**.
 
+## Optional host storage (not a Lightroom parity gap)
+
+The optional [web library-provider bridge](web-file-providers.md) opens and captures native library
+ZIP backups after explicit host registration. It is off by default and bounded to 80 MiB per
+transfer. Its activity rows track local capture and open work; remote authentication, authorization,
+durable writes, conflicts and logout policy remain the host's responsibility. The current merged
+candidate still needs validation. This capability closes no ranked gap, adds no cloud-sync parity,
+and changes no readiness estimate. Maintainers still need to agree on its page-script trust boundary
+and its relationship to the shared storage proposals.
+
 ## Ranked
 
 | # | Gap | Evidence | User impact | Hours | Doc |
@@ -90,6 +100,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | minor | Describe optional host library backups and their remaining host/direction limits; no ranked Lightroom gap closes |
 | 2026-11-01 | minor | Gap 13: Lightroom catalog backup zips import directly, and a backup of an imported catalog adds no collection twice (#2592); the gap stays open |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |
