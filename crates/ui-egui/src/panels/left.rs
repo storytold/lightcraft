@@ -54,11 +54,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // the open library's name under the title, so nobody edits in the wrong one (issue #902)
         let library = crate::panels::settings::open_library_name(app);
         let title_y = if library.is_some() { hr.center().y - 7.0 } else { hr.center().y };
-        ui.painter().text(pos2(hr.left() + 18.0, title_y), Align2::LEFT_CENTER, crate::i18n::tr("My Photos"), t.semibold(15.0), t.text);
+        let title_x = craft_ui::direction::start_x(ui, hr) + craft_ui::direction::forward(ui) * 18.0;
+        let title_align = craft_ui::direction::align2(ui, Align2::LEFT_CENTER);
+        ui.painter().text(pos2(title_x, title_y), title_align, crate::i18n::tr("My Photos"), t.semibold(15.0), t.text);
         if let Some(name) = library {
             ui.painter().with_clip_rect(hr.shrink2(vec2(18.0, 0.0))).text(
-                pos2(hr.left() + 18.0, hr.center().y + 10.0),
-                Align2::LEFT_CENTER,
+                pos2(title_x, hr.center().y + 10.0),
+                title_align,
                 name,
                 t.font(11.0),
                 t.text_dim,

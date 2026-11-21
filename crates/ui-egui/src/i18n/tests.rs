@@ -390,6 +390,7 @@ fn language_commands_cover_every_language() {
         ("app.language.finnish", Locale::Fi),
         ("app.language.indonesian", Locale::Id),
         ("app.language.vietnamese", Locale::Vi),
+        ("app.language.hebrew", Locale::He),
     ];
     // One command per language, and every command in the UI command tables.
     assert_eq!(commands.len(), Locale::ALL.len());
@@ -1288,6 +1289,52 @@ fn polish_switches_formats_dates_and_reads_every_count() {
     let text = painted_text(&ctx, &mut app, Locale::Pl);
     assert!(text.contains("Plik") && text.contains("Ekspozycja"), "{text}");
     assert_polish_glyphs(&ctx);
+    set_language(Locale::En);
+}
+
+#[test]
+fn hebrew_switches_formats_dates_and_reads_every_count() {
+    let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+    app.run("app.language.hebrew", serde_json::json!({})).unwrap();
+    assert_eq!(app.ui.language, Locale::He);
+    assert_eq!(Locale::He.name(), "עברית");
+    assert_eq!(Locale::He.script(), "Hebr");
+    assert_eq!(craft_ui::direction::Setting::Language.direction(Locale::He.code()), craft_ui::direction::Direction::Rtl);
+    assert_eq!(tr("File"), "קובץ");
+    assert_eq!(tr("Exposure"), "חשיפה");
+    assert_eq!(date_group_label("2026-09-20", false), "יום ראשון, 20.09.2026");
+    assert_eq!(date_group_label("2026-09-20", true), "יום ראשון, 20");
+    assert_eq!(date_group_label("2026-09", false), "09/2026");
+    assert_eq!(date_group_label("2026", false), "2026");
+    assert_eq!(display_time("2026-09-20T16:04:05"), "יום ראשון, 20.09.2026 16:04:05");
+    for n in [0, 1, 2, 5, 22] {
+        let s = if n == 1 { "" } else { "s" };
+        assert_eq!(tr_format!("Imported {} photo{}", n, s), format!("יובאו תמונות: {n}"));
+        assert_eq!(tr_format!("{n} preset{}", s, n = n), format!("{n} הגדרות קבועות"));
+    }
+    let name = String::from("Color 1234.56 {title} 日本語");
+    assert_eq!(tr_format!("Added {n} photo{} to “{}”", "s", name, n = 22), format!("נוספו 22 תמונות אל ״{name}״"));
+    for tag in ["he", "he-IL", "he_IL.UTF-8", "iw", "iw-IL"] {
+        assert_eq!(Locale::parse_tag(tag), Some(Locale::He), "{tag}");
+    }
+    let ctx = egui::Context::default();
+    let text = painted_text(&ctx, &mut app, Locale::He);
+    assert!(text.contains("קובץ") && text.contains("חשיפה"), "{text}");
+    assert_eq!(craft_ui::direction::HasDirection::direction(&ctx), craft_ui::direction::Direction::Rtl);
+    if lightcraft_engine::CRAFT_FONTS.iter().any(|font| font.serves("Hebr")) {
+        ctx.fonts_mut(|fonts| {
+            for family in [egui::FontFamily::Proportional, egui::FontFamily::Name(crate::theme::FONT_SEMIBOLD.into())] {
+                let font = egui::FontId::new(13.0, family);
+                for ch in "אבגדהוזחטיכלמנסעפצקרשתךםןףץ״׳".chars() {
+                    assert!(fonts.has_glyph(&font, ch), "missing Hebrew glyph {ch}");
+                }
+            }
+        });
+    }
+    app.run("app.language.english", serde_json::json!({})).unwrap();
+    assert_eq!(app.ui.language, Locale::En);
+    let _ = painted_text(&ctx, &mut app, Locale::En);
+    assert_eq!(craft_ui::direction::HasDirection::direction(&ctx), craft_ui::direction::Direction::Ltr);
     set_language(Locale::En);
 }
 

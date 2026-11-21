@@ -93,7 +93,10 @@ macro_rules! language_table {
                     return Some(*exact);
                 }
                 let mut parts = lower.split('-');
-                let language = parts.next()?;
+                let language = match parts.next()? {
+                    "iw" => "he",
+                    other => other,
+                };
                 // `zh-Hans-CN`, `zh-CN` and `zh` all name the same base language.
                 let script = parts.next().and_then(|part| match part {
                     "hans" | "cn" | "sg" => Some("Hans"),
@@ -137,6 +140,7 @@ language_table! {
     Fi, "fi", "Suomi", "Latn", include_str!("../locales/fi.json");
     Id, "id", "Bahasa Indonesia", "Latn", include_str!("../locales/id.json");
     Vi, "vi", "Tiếng Việt", "Latn", include_str!("../locales/vi.json");
+    He, "he", "עברית", "Hebr", include_str!("../locales/he.json");
 }
 
 impl Locale {
