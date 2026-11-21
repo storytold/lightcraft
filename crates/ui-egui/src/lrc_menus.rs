@@ -163,6 +163,7 @@ const LIBRARY: &[&str] = &[
     "library.findSimilar",
     "---",
     "dialog.cull",
+    "dialog.qualityScan",
     "---",
     "library.toggleFilters=Enable Filters",
     "@Filter by Preset",

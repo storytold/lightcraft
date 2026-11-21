@@ -120,6 +120,16 @@ pub struct Filter {
     /// reference, or a withdrawn one).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vignetting_reference: Option<String>,
+    /// The Image Quality Scanner's verdict (issue #1313): `accepted`, `pending`, `rejected`, or
+    /// `unscanned` for the photos no scan has scored. `None` = no constraint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<String>,
+    /// The quality score's floor (`qualityMin`) and ceiling (`qualityMax`), inclusive, 0..100: the
+    /// filter bar's slider. A photo no scan has scored matches neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_min: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_max: Option<f32>,
     /// A folder on disk: its files only (browsed ones too); `subfolders` includes everything below.
     pub folder: Option<String>,
     pub subfolders: bool,
@@ -152,6 +162,9 @@ pub enum SortKey {
     /// Custom Order: the order set by hand in a regular album ([`Catalog::album_photo_order`]).
     /// Anywhere else (no album, a smart album) it sorts by capture date.
     Custom,
+    /// The Image Quality Scanner's score (issue #1313): photos it has not scored go first in
+    /// ascending order (and last descending), as they carry no number to sort by.
+    Quality,
 }
 
 impl SortKey {
@@ -189,6 +202,17 @@ impl Sort {
             SortKey::Rating => a.rating.cmp(&b.rating),
             SortKey::FileSize => a.file_size.cmp(&b.file_size),
             SortKey::Random => shuffle_rank(self.seed, a.id).cmp(&shuffle_rank(self.seed, b.id)),
+            SortKey::Quality => {
+                let qa = a.analysis.and_then(|x| x.quality).map(|q| q.score);
+                let qb = b.analysis.and_then(|x| x.quality).map(|q| q.score);
+                match (qa, qb) {
+                    (Some(x), Some(y)) => x.total_cmp(&y),
+                    (None, None) => std::cmp::Ordering::Equal,
+                    // unscanned photos have no place among scores: first when ascending
+                    (None, Some(_)) => std::cmp::Ordering::Less,
+                    (Some(_), None) => std::cmp::Ordering::Greater,
+                }
+            }
         }
         .then_with(|| if self.key.ties_by_name() { cmp_name(&a.file_name, &b.file_name) } else { std::cmp::Ordering::Equal })
         .then(a.id.cmp(&b.id));
@@ -456,6 +480,17 @@ fn sort_photos<'a>(v: Vec<&'a Photo>, sort: &Sort) -> Vec<PhotoId> {
         SortKey::Rating => (none, none, |p, _| u64::from(p.rating)),
         SortKey::FileSize => (none, none, |p, _| p.file_size),
         SortKey::Random => (none, none, |p, seed| shuffle_rank(seed, p.id)),
+        // Unscanned photos rank below every score (first ascending, last descending), as
+        // `Sort::order` puts them; the score is kept to a thousandth (the stored score's
+        // precision) and one higher, so a measured 0 stays above "no score at all".
+        SortKey::Quality => (
+            none,
+            none,
+            |p, _| match p.analysis.and_then(|a| a.quality) {
+                Some(q) if q.score.is_finite() => (q.score.clamp(0.0, 100.0) * 1_000.0).round() as u64 + 1,
+                _ => 0,
+            },
+        ),
         SortKey::FileName => {
             let mut keyed: Vec<(String, u64)> = v.into_iter().map(|p| (p.file_name.to_lowercase(), p.id.0)).collect();
             keyed.sort_unstable_by(|a, b| {
@@ -855,6 +890,12 @@ pub struct Tally {
     /// Photos per colour label, in [`ColorLabel::ALL`] order.
     pub labels: [usize; 5],
     pub unlabeled: usize,
+    /// The Image Quality Scanner's verdicts (issue #1313): accepted, pending and rejected photos,
+    /// and how many no scan has scored.
+    pub quality_accepted: usize,
+    pub quality_pending: usize,
+    pub quality_rejected: usize,
+    pub quality_unscanned: usize,
 }
 
 impl Tally {
@@ -1011,6 +1052,18 @@ impl Filter {
                 other => format!("vignetting reference {other}"),
             });
         }
+        if let Some(q) = &self.quality {
+            v.push(match q.as_str() {
+                "unscanned" => "not quality scanned".to_string(),
+                other => format!("quality {other}"),
+            });
+        }
+        match (self.quality_min, self.quality_max) {
+            (Some(a), Some(b)) => v.push(format!("quality score {a:.0}–{b:.0}")),
+            (Some(a), None) => v.push(format!("quality score at least {a:.0}")),
+            (None, Some(b)) => v.push(format!("quality score at most {b:.0}")),
+            (None, None) => {}
+        }
         if !self.text.trim().is_empty() {
             v.push(format!("“{}”", self.text.trim()));
         }
@@ -1128,6 +1181,22 @@ impl Filter {
             && !vignetting_reference_is(cat, p.id, want)
         {
             return false;
+        }
+        if let Some(want) = &self.quality {
+            let scan = p.analysis.and_then(|a| a.quality);
+            let ok = match want.as_str() {
+                "unscanned" => scan.is_none(),
+                other => scan.is_some_and(|q| q.verdict.as_str() == other),
+            };
+            if !ok {
+                return false;
+            }
+        }
+        if self.quality_min.is_some() || self.quality_max.is_some() {
+            let Some(score) = p.analysis.and_then(|a| a.quality).map(|q| q.score) else { return false };
+            if self.quality_min.is_some_and(|min| score < min) || self.quality_max.is_some_and(|max| score > max) {
+                return false;
+            }
         }
         if let Some(want) = &self.merged {
             match merged_kind(&p.file_name) {
@@ -1295,8 +1364,25 @@ impl Catalog {
                 }
                 None => t.unlabeled += 1,
             }
+            match p.analysis.and_then(|a| a.quality).map(|q| q.verdict) {
+                Some(crate::QualityVerdict::Accepted) => t.quality_accepted += 1,
+                Some(crate::QualityVerdict::Rejected) => t.quality_rejected += 1,
+                Some(crate::QualityVerdict::Pending) => t.quality_pending += 1,
+                None => t.quality_unscanned += 1,
+            }
         }
         t
+    }
+
+    /// How many photos the Image Quality Scanner has scored (issue #1313).
+    pub fn quality_scanned(&self) -> usize {
+        self.photos().filter(|p| p.analysis.is_some_and(|a| a.quality.is_some())).count()
+    }
+
+    /// Whether any photo carries a quality score (issue #1313): what the filter bar asks each time
+    /// the catalog changes, and stops at the first one.
+    pub fn any_quality_scanned(&self) -> bool {
+        self.photos().any(|p| p.analysis.is_some_and(|a| a.quality.is_some()))
     }
 
     /// How many photos match `filter`: [`Catalog::query`]'s length without its sorting.

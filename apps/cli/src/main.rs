@@ -31,6 +31,7 @@ mod calibrate_chart;
 mod calibrate_lightroom;
 mod catalog_migrate;
 mod compare;
+mod quality_scan;
 mod run_action;
 mod sync_folder;
 mod vignetting_calibration;
@@ -198,6 +199,21 @@ USAGE:
       camera wrote itself. DNGs written by Adobe software or by {app}'s own export are refused.
   {cli} camdb show MAKE MODEL
       Print the camera database entry a camera's raws use, with its provenance.
+  {cli} quality-scan [OPTIONS] [FOLDER]
+      Score the library's photos for technical quality (sharpness, noise, exposure, JPEG
+      artifacts), store each score on the photo and map it to Pick / Reject flags. Options:
+        --demo            the procedural demo library
+        --library DIR     the library to scan
+        --import PATH     headless: import a file or folder first (repeatable)
+        --connect [ADDR]  scan in the running app instead (`{bin} --control 7980`)
+        --scope S         selection | view | folder | catalog (default: the whole catalog)
+        --accepted N      the score at or above which a photo is a pick (default 70)
+        --rejected N      the score at or below which a photo is a reject (default 25)
+        --apply-flags     write the flags the scores ask for (photos you flagged are left alone)
+        --rescan          measure photos that carry a score already
+        --weights a,b,c,d blur, noise, exposure, compression weights (default 1,1,1,1)
+      Prints the summary as one JSON line ({measured, skipped, accepted, pending, rejected,
+      flagged, failed, photos}). `run photo.qualityScan …` does the same from a script.
   {cli} bench-cull FOLDER [--files K] [--n N] [--copy M] [--work DIR] [--json FILE]
       Time what culling a shoot costs on its own files: reading the folder (browse), the first
       screen of grid thumbnails, camera previews at loupe sizes and full size, a loupe render,
@@ -319,6 +335,7 @@ fn main() -> ExitCode {
         Some("render") => render(&args[1..]),
         Some("snapshot") => snapshot(&args[1..]),
         Some("bench-cull") => bench_cull::run(&args[1..]),
+        Some("quality-scan") => quality_scan::to_run_args(&args[1..]).and_then(|a| run(&a)),
         Some("commands") => commands(&args[1..]),
         Some("merge") => merge(&args[1..]),
         Some("synth-merge") => synth_merge(&args[1..]),

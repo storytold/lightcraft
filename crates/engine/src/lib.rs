@@ -113,6 +113,7 @@ pub mod phash;
 pub mod phash_store;
 pub mod placement;
 pub mod prep;
+pub mod quality_scan;
 pub mod preset_import;
 pub mod preset_luminar;
 pub mod preset_xmp;
@@ -694,6 +695,10 @@ pub struct Session {
     /// Background tasks in flight (imports, exports, preview builds…), for the activity stack and
     /// `activity.list` / `activity.cancel`.
     pub activity: activity::Activity,
+    /// The Image Quality Scanner's run in flight, when one is (issue #1313): its scores are
+    /// written as one undo step when it ends, and the frame it ends on answers with its summary
+    /// (`photo.qualityScanPump`).
+    pub quality_scan: Option<quality_scan::QualityScanRun>,
     /// Video playback, trim and poster (M14.4/M14.6): the decoder backend and the player.
     pub video: video::VideoState,
     /// Upright analysed on each photo an automatic mode reaches without its own correction ([`upright_jobs`]).
@@ -979,6 +984,7 @@ impl Session {
             folder_stamps: Default::default(),
             folder_new: Default::default(),
             activity: Default::default(),
+            quality_scan: None,
             video: Default::default(),
             genfill: Default::default(),
             upright_jobs: Default::default(),
@@ -2945,6 +2951,8 @@ mod tests_print;
 mod tests_process;
 #[cfg(test)]
 mod tests_profile_manager;
+#[cfg(test)]
+mod tests_quality_scan;
 #[cfg(test)]
 mod tests_recheck;
 #[cfg(test)]

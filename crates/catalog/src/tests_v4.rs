@@ -605,6 +605,7 @@ fn large_sorts_match_the_plain_sort() {
         SortKey::FileSize,
         SortKey::Random,
         SortKey::Custom,
+        SortKey::Quality,
     ] {
         for ascending in [true, false] {
             let sort = Sort { key, ascending, seed: 7, ..Default::default() };
@@ -619,6 +620,9 @@ fn large_sorts_match_the_plain_sort() {
                     SortKey::Rating => a.rating.cmp(&b.rating),
                     SortKey::FileSize => a.file_size.cmp(&b.file_size),
                     SortKey::Random => query::mix64(query::mix64(7) ^ a.id.0).cmp(&query::mix64(query::mix64(7) ^ b.id.0)),
+                    // no photo in this fixture was quality scanned: every score is absent and the
+                    // key ties, as the query's own key does
+                    SortKey::Quality => std::cmp::Ordering::Equal,
                 }
                 // ties: by file name (not the name sort, nor the shuffle), then id
                 .then_with(|| match key {

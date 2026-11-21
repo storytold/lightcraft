@@ -51,6 +51,7 @@ mod nrc_joint_reference;
 pub mod optics;
 pub mod output;
 pub mod plugin_filters;
+pub mod quality;
 pub mod profiles;
 pub mod redeye;
 pub mod retouch;

@@ -7,9 +7,13 @@ use lcc_raster::Rgb32f;
 /// Long edge the measurements run at.
 const EDGE: usize = 512;
 
-/// Display-ish luminance (sRGB-encoded) of `img` resampled to fit `EDGE` (box filter).
-fn luma(img: &Rgb32f) -> (Vec<f32>, usize, usize) {
-    let (w, h) = (img.width.max(1), img.height.max(1));
+/// Display-ish luminance (sRGB-encoded) of `img` resampled to fit `EDGE` (box filter). Also the
+/// Image Quality Scanner's starting point (`crate::quality`), so a scan and a cull of one photo
+/// measure the same luminance.
+pub(crate) fn luma(img: &Rgb32f) -> (Vec<f32>, usize, usize) {
+    // a buffer shorter than its size claims (a hostile or damaged source) reads only what it has:
+    // the scan and the cull never index past `data`
+    let (w, h) = (img.width.max(1).min(img.data.len().max(1)), img.height.max(1));
     let s = (EDGE as f64 / w.max(h) as f64).min(1.0);
     let (ow, oh) = (((w as f64 * s).round() as usize).max(8), ((h as f64 * s).round() as usize).max(8));
     let mut out = vec![0f32; ow * oh];
@@ -20,11 +24,11 @@ fn luma(img: &Rgb32f) -> (Vec<f32>, usize, usize) {
             let mut acc = 0.0f32;
             for yy in y0..y1 {
                 for xx in x0..x1 {
-                    let c = img.data[yy * w + xx];
+                    let Some(c) = img.data.get(yy * w + xx) else { continue };
                     acc += 0.2627 * c[0] + 0.678 * c[1] + 0.0593 * c[2];
                 }
             }
-            let l = acc / ((y1 - y0) * (x1 - x0)) as f32;
+            let l = acc / ((y1 - y0) * (x1 - x0)).max(1) as f32;
             *v = lcc_color::transfer::linear_to_srgb(l.clamp(0.0, 1.0));
         }
     }

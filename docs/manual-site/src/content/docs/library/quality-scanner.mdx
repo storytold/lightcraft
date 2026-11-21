@@ -1,0 +1,74 @@
+---
+title: Image Quality Scanner
+description: Score photos for sharpness, noise, exposure and JPEG artifacts, and flag them by score.
+sidebar:
+  order: 17
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+---
+
+- **Library ▸ Image Quality Scanner…** measures photos for four technical factors and combines them into one 0–100 score, kept on the photo.
+- **Sorting, the filter bar, smart collections and rules** read that score without measuring anything again.
+- **Technical, not aesthetic**: a sharp, clean, well-exposed photo of a dull subject scores high. Aesthetic judgement is Assisted Culling's **Aesthetic** and **Suggested Stars**.
+- **One undo step** takes a whole scan back (its scores and the flags it wrote); stopping a running scan keeps what it measured.
+- Clips are skipped: a poster frame is not the clip's quality.
+
+## What it measures
+
+| Factor | What it is | 100 means |
+| --- | --- | --- |
+| **Blur (sharpness)** | Detail energy in the photo's sharpest areas, at thumbnail size — the measure **Assisted Culling** shows as Focus | crisp |
+| **Noise** | The grain in the photo's flattest areas, against what a clean photo carries | grain-free |
+| **Exposure** | How much of the frame isn't clipped, and how close its tones sit to a well-exposed middle | nothing blown or crushed, mid-tones where they belong |
+| **Compression artifacts** | The step across JPEG's 8-pixel block edges against the photo's other edges | no visible blocks |
+
+- **Compression artifacts** are measured on JPEG sources only: a raw's data was never JPEG encoded, and a preview-only raw is measured on the camera JPEG it keeps. A factor that isn't measured shows as absent, not as 0.
+- **The score** is the factors' weighted mean; a weight of 0 leaves a factor out of it (it is still measured and shown), and every weight at 0 is refused — there would be nothing to score.
+
+## Scanning
+
+- **Scope**: the selected photos (else the photos in view), the folder shown (the Folders panel's or Browse's; its subfolders too when the view shows them), or the whole catalog — the library's photos, the ones a score can stay on.
+- **Unscanned only** is the default: a scan measures photos no scan has scored. **Scan photos that have a score already (rescan all)** measures every photo in scope again and overwrites its score.
+- **Pick Flags**: **Accepted at or above** and **Rejected at or below** are the two cutoffs (70 and 25 to start) and can't cross.
+- **Basic Factors**: each factor's weight, 0 to 10.
+- **In the background**: the Activity stack shows how far the scan is and can stop it.
+
+## Pick Flags
+
+| Score | Verdict | Flag (with *Write the flags…* on) |
+| --- | --- | --- |
+| at or above **Accepted** | accepted | **Pick** |
+| below **Accepted**, above **Rejected** | to review | unchanged (an unflagged photo stays unflagged) |
+| at or below **Rejected** | rejected | **Reject** |
+
+- **Write the flags onto photos you have not flagged** decides whether the verdicts become flags; with it off a scan only scores, and the verdict is there to filter and sort on.
+- **Your flag wins**: a photo you flagged yourself is never re-flagged by a scan. A flag a scan wrote is the scan's own, so rescanning may change it.
+
+## Sorting and filtering
+
+- **Sort**: the bottom bar's and **View ▸ Sort**'s **Quality** orders the grid by score; photos no scan scored come first ascending (last descending).
+- **Filter bar**: a **Quality** picker — accepted, to review, rejected, not scanned — and a **Quality score at least** floor (its × clears it). Both appear once a scan has scored something.
+- **Smart collections and rules**: the **Image Quality** group has **Quality Score**, **Sharpness**, **Noise**, **Exposure**, **Compression** and **Quality Verdict**.
+
+## From a script
+
+```sh
+<cli> quality-scan --library ~/Pictures/MyLibrary --accepted 75 --rejected 20 --apply-flags
+<cli> quality-scan --connect --scope selection --rescan
+<cli> run --library ~/Pictures/MyLibrary photo.qualityScan '{"scope": "catalog", "wait": true}'
+```
+
+- **`photo.qualityScan`** takes `scope` (`selected`, `view`, `folder` with `path`, or `catalog`), `ids`, `accepted`, `rejected`, `applyFlags`, `rescan`, `weights`, `wait`, `cancel` and `status`.
+- **`photo.qualityScanPump`** takes a finished background scan in and writes it; the MCP server reaches the same commands. See [Commands](../../automate/commands/) and [Command line](../../automate/cli/).
+
+<Aside type="note" title="Modern layout">
+  **☰ ▸ Library ▸ Image Quality Scanner…**.
+</Aside>
+
+## See also
+
+- [Ratings, flags, labels](../ratings/) — the flags a scan writes
+- [Filters](../filters/) — the filter bar the quality picker appears in
+- [Browsing the library](../browse/) — Assisted Culling (focus, bursts, eyes, aesthetic)

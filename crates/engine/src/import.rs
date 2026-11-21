@@ -1060,7 +1060,8 @@ pub fn browse_order(files: &mut [String], sort: &lcc_catalog::Sort) {
                 files.reverse();
             }
         }
-        SortKey::Rating | SortKey::Random | SortKey::Custom => {}
+        // Quality: the files being browsed have no score yet (that is what a scan gives them)
+        SortKey::Rating | SortKey::Random | SortKey::Custom | SortKey::Quality => {}
     }
 }
 

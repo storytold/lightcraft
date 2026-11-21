@@ -463,6 +463,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.frameRate", "Frame Rate", None, "Help>Debug"),
     ("app.whatsNew", "What's New", None, "Help"),
     ("dialog.cull", "Assisted Culling…", None, "Library"),
+    ("dialog.qualityScan", "Image Quality Scanner…", None, "Library"),
     ("app.help", "{app} Help", Some("F1"), "Help"),
     ("app.feedback", "Send Feedback…", None, "Help"),
     ("app.website", "{app} Website", None, "Help"),
@@ -2623,6 +2624,18 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             edit_in(app, &ctx, p, photocraft)
         }
         "photo.openOriginalInExternal" => open_original_in(app, &ctx, p),
+        "dialog.qualityScan" => {
+            let s = app.ui.quality_scan_settings.clone().unwrap_or_default();
+            app.ui.dialog = Some(Dialog::QualityScanner {
+                scope: s.scope,
+                accepted: s.accepted,
+                rejected: s.rejected,
+                apply_flags: s.apply_flags,
+                rescan: s.rescan,
+                weights: s.weights,
+            });
+            Ok(Value::Null)
+        }
         "dialog.cull" => {
             let (burst_gap, similarity) = app.ui.cull_burst.unwrap_or((10.0, 0.93));
             app.ui.dialog = Some(Dialog::Cull {

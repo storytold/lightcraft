@@ -548,6 +548,91 @@ pub struct Analysis {
     /// never applies it over a rating the user set). Absent until a run suggested one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggested: Option<u8>,
+    /// The Image Quality Scanner's verdict on the photo (issue #1313): the factors it measured and
+    /// the score it made of them, and the Pick Flag that score asked for. `None` until a scan
+    /// scored the photo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<QualityScan>,
+}
+
+/// What the Image Quality Scanner measured on a photo, and what it asked its flag to be (issue
+/// #1313; catalog format 20). The factors are 0..100 where 100 is clean; `None` where a factor
+/// wasn't measured (compression on a raw photo).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct QualityScan {
+    /// Sharpness (blur's inverse), 0..100 (assisted culling's focus measure).
+    pub sharpness: f32,
+    /// Freedom from noise, 0..100.
+    pub noise: f32,
+    /// Exposure, 0..100.
+    pub exposure: f32,
+    /// Freedom from JPEG blockiness, 0..100; absent for a raw.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compression: Option<f32>,
+    /// The combined 0..100 score the thresholds read. Always there (a scan with every factor
+    /// switched off is refused, so a stored scan has a score).
+    pub score: f32,
+    /// What the score asked the Pick Flag to be when it was scored (the engine writes the flag
+    /// with this); kept so the Library can filter and sort by it without a run.
+    pub verdict: QualityVerdict,
+    /// The flag a scan wrote onto the photo, when it did: the engine's record of its own flag, so
+    /// a later scan may change it while a flag the user set is never touched. Absent when the scan
+    /// wrote none (it wasn't asked to, the photo was already flagged, or the verdict asked for no
+    /// flag).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flag_written: Option<Flag>,
+}
+
+/// What a photo's quality score asked of its Pick Flag: picked at or above the accepted cutoff,
+/// rejected at or below the rejected one, left alone between them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QualityVerdict {
+    /// Between the thresholds: the photo keeps its own flag (an unflagged photo stays Unflagged).
+    #[default]
+    Pending,
+    /// At or above the accepted threshold: a Pick.
+    Accepted,
+    /// At or below the rejected threshold: a Reject.
+    Rejected,
+}
+
+impl QualityVerdict {
+    /// The verdict's name as commands and the Library use it: `accepted`, `pending`, `rejected`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            QualityVerdict::Accepted => "accepted",
+            QualityVerdict::Rejected => "rejected",
+            QualityVerdict::Pending => "pending",
+        }
+    }
+
+    /// The verdict of a score against the two cutoffs (each 0..100), as the scan reads them: at or
+    /// above `accepted` is Accepted, at or below `rejected` is Rejected (the rejected cutoff
+    /// winning a tie only when the two cross, which the scan refuses to store), else Pending.
+    pub fn of(score: f32, accepted: f32, rejected: f32) -> QualityVerdict {
+        if !score.is_finite() {
+            return QualityVerdict::Pending;
+        }
+        if score <= rejected {
+            QualityVerdict::Rejected
+        } else if score >= accepted {
+            QualityVerdict::Accepted
+        } else {
+            QualityVerdict::Pending
+        }
+    }
+
+    /// The Pick Flag a scan writes for this verdict: what the photo had (a Pick for Accepted, a
+    /// Reject for Rejected), or none at all for Pending (`None`: write the photo's own).
+    pub fn flag(self) -> Option<Flag> {
+        match self {
+            QualityVerdict::Accepted => Some(Flag::Pick),
+            QualityVerdict::Rejected => Some(Flag::Reject),
+            QualityVerdict::Pending => None,
+        }
+    }
 }
 
 /// Raw formats whose files carry vendor white-balance multipliers but no colour matrices: their starting
