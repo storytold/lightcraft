@@ -142,7 +142,7 @@ fn auto_tag_tracklog(s: &mut crate::Session, p: &Value) -> Result<Value> {
         return Err(bad(C, "maxGap must be ≥ 0 seconds"));
     }
     let replace = bool_or(p, "replace", false);
-    let (mut no_time, mut outside, mut has_gps, mut assumed_utc, mut interpolated) = (0, 0, 0, 0, 0);
+    let (mut no_time, mut outside, mut has_gps, mut assumed_utc, mut interpolated, mut unplaceable) = (0, 0, 0, 0, 0, 0);
     let mut ops = Vec::new();
     let mut photos = Vec::new();
     for id in s.targets(p)? {
@@ -160,7 +160,14 @@ fn auto_tag_tracklog(s: &mut crate::Session, p: &Value) -> Result<Value> {
         // its recorded zone is wrong, #1276; `map.trackOffset` measures it against the wall clock), else the
         // recorded zone, else UTC
         let utc = match (offset, dt.offset_minutes) {
-            (Some(o), _) => wall_clock_utc(&dt, o).ok_or_else(|| bad(C, "the photo's capture time can't be placed in that time zone"))?,
+            (Some(o), _) => {
+                // a date chrono can't place (e.g. a leap second or an impossible day) skips this photo, not the batch
+                let Some(t) = wall_clock_utc(&dt, o) else {
+                    unplaceable += 1;
+                    continue;
+                };
+                t
+            }
             (None, Some(_)) => dt.unix_seconds(),
             (None, None) => {
                 assumed_utc += 1;
@@ -192,7 +199,7 @@ fn auto_tag_tracklog(s: &mut crate::Session, p: &Value) -> Result<Value> {
         "tagged": tagged,
         "interpolated": interpolated,
         "nearest": tagged - interpolated,
-        "skipped": {"noTime": no_time, "outside": outside, "hasGps": has_gps},
+        "skipped": {"noTime": no_time, "outside": outside, "hasGps": has_gps, "unplaceable": unplaceable},
         "assumedUtc": assumed_utc,
         "points": log.points.len(),
         "start": iso(start),
@@ -469,7 +476,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Auto-Tag Photos from Tracklog",
             [],
             None,
-            "{path?: GPX file | gpx?: GPX text, ids?, offset?: camera clock's UTC offset for photos whose capture time has no zone (`+02:00`, or hours; default UTC), maxGap?: seconds (600), replace?: bool (also photos that already have GPS), dryRun?: bool} → {tagged, interpolated, nearest, skipped: {noTime, outside, hasGps}, assumedUtc, points, start, end, photos: [{id, gps, match}]}: positions from the track log by capture time; one undo step",
+            "{path?: GPX file | gpx?: GPX text, ids?, offset?: camera clock's UTC offset (`+02:00`, or hours); given, it overrides a zone the photo recorded; not given, the recorded zone or else UTC, maxGap?: seconds (600), replace?: bool (also photos that already have GPS), dryRun?: bool} → {tagged, interpolated, nearest, skipped: {noTime, outside, hasGps, unplaceable: capture time can't be placed in the given zone}, assumedUtc, points, start, end, photos: [{id, gps, match}]}: positions from the track log by capture time; one undo step",
             has_selection,
             auto_tag_tracklog
         ),
@@ -587,4 +594,20 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(s.dialogs.other.get(dialog).cloned().unwrap_or(Value::Null))
         }),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    /// A capture time chrono has no wall clock for (a leap second) is unplaceable, so `photo.autoTagTracklog`
+    /// counts it under `skipped.unplaceable` instead of failing the batch; far dates and extreme zones place.
+    #[test]
+    fn wall_clock_utc_refuses_what_chrono_cant_place() {
+        let leap = lcc_meta::DateTime::parse_iso("2016-12-31T23:59:60").unwrap();
+        assert_eq!(super::wall_clock_utc(&leap, 120), None);
+        let far = lcc_meta::DateTime::parse_iso("0001-01-01T00:00:00").unwrap();
+        assert!(super::wall_clock_utc(&far, -18 * 60).is_some());
+        let noon = lcc_meta::DateTime::parse_iso("2026-05-01T12:00:00").unwrap();
+        assert_eq!(super::wall_clock_utc(&noon, 120), noon.unix_seconds().checked_sub(7200));
+        assert_eq!(super::wall_clock_utc(&noon, i64::MAX), None);
+    }
 }

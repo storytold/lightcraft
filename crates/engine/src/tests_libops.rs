@@ -589,7 +589,7 @@ fn tracklog_auto_tag() {
     // a dry run reports without changing anything
     let r = s.execute("photo.autoTagTracklog", &json!({"path": path, "ids": ids, "offset": "+02:00", "dryRun": true})).unwrap();
     assert_eq!((r["tagged"].as_u64(), r["interpolated"].as_u64()), (Some(2), Some(2)), "{r}");
-    assert_eq!(r["skipped"], json!({"noTime": 0, "outside": 1, "hasGps": 1}));
+    assert_eq!(r["skipped"], json!({"noTime": 0, "outside": 1, "hasGps": 1, "unplaceable": 0}));
     assert_eq!((r["points"].as_u64(), r["start"].as_str()), (Some(3), Some("2026-05-01T10:00:00Z")));
     assert_eq!(ids.iter().map(|i| gps(&s, *i)).collect::<Vec<_>>(), before);
     // tag: one undo step
@@ -649,10 +649,12 @@ fn tracklog_camera_zone_overrides_recorded_zone() {
     for hostile in [json!("+99:99"), json!(1e300), json!(-19)] {
         assert!(run(&mut s, hostile).is_err());
     }
+    // far dates still place in any zone (outside the track); a time chrono can't place is skipped, not an error
     for edge in ["0001-01-01T00:00:00", "9999-12-31T23:59:59"] {
         s.commit("t", Op::SetCaptured { id: PhotoId(id), captured: Some(edge.into()) }).unwrap();
         for o in ["+18:00", "-18:00"] {
-            let _ = run(&mut s, json!(o));
+            let r = run(&mut s, json!(o)).unwrap();
+            assert_eq!((r["tagged"].as_u64(), r["skipped"]["outside"].as_u64()), (Some(0), Some(1)), "{edge} {o}: {r}");
         }
     }
     let _ = std::fs::remove_dir_all(&dir);
