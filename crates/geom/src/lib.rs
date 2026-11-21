@@ -147,10 +147,10 @@ impl Rect {
         self.width().max(0.0) * self.height().max(0.0)
     }
     pub fn center(&self) -> Point {
-        Point::new((self.x0 + self.x1) / 2.0, (self.y0 + self.y1) / 2.0)
+        Point::new(f64::midpoint(self.x0, self.x1), f64::midpoint(self.y0, self.y1))
     }
     pub fn aspect(&self) -> f64 {
-        if self.height() != 0.0 { self.width() / self.height() } else { 0.0 }
+        if self.height() == 0.0 { 0.0 } else { self.width() / self.height() }
     }
     pub fn contains(&self, p: Point) -> bool {
         p.x >= self.x0 && p.x < self.x1 && p.y >= self.y0 && p.y < self.y1
@@ -221,10 +221,12 @@ impl Affine {
         Point::new(x, y)
     }
     /// [`Affine::apply`] for any [`Real`] (e.g. [`Interval`] bounds over many points).
+    #[expect(clippy::many_single_char_names, reason = "Affine coefficients and coordinates use conventional a–f/x/y notation.")]
     pub fn apply_real<T: Real>(&self, x: T, y: T) -> (T, T) {
         let [a, b, c, d, e, f] = self.0;
         (x * a + y * c + e, x * b + y * d + f)
     }
+    #[expect(clippy::many_single_char_names, reason = "Affine coefficients use conventional a–d matrix notation.")]
     pub fn apply_vec(&self, v: Vec2) -> Vec2 {
         let [a, b, c, d, ..] = self.0;
         Vec2::new(a * v.x + c * v.y, b * v.x + d * v.y)
@@ -232,6 +234,7 @@ impl Affine {
     pub fn determinant(&self) -> f64 {
         self.0[0] * self.0[3] - self.0[1] * self.0[2]
     }
+    #[expect(clippy::many_single_char_names, reason = "Affine inversion uses conventional a–f matrix-coefficient notation.")]
     pub fn inverse(&self) -> Option<Affine> {
         let det = self.determinant();
         if !det.is_finite() || det.abs() < 1e-300 {
@@ -256,6 +259,7 @@ impl Affine {
 impl std::ops::Mul for Affine {
     type Output = Affine;
     /// `self * o` applies `o` first, then `self`.
+    #[expect(clippy::many_single_char_names, reason = "Affine composition uses conventional a–f matrix-coefficient notation.")]
     fn mul(self, o: Affine) -> Affine {
         let [a, b, c, d, e, f] = self.0;
         let [a2, b2, c2, d2, e2, f2] = o.0;
@@ -360,6 +364,7 @@ impl Orientation {
         Rect::from_points(Point::new(ax, ay), Point::new(bx, by))
     }
     /// Map a point in stored pixel space (w×h stored dims) to oriented space.
+    #[expect(clippy::many_single_char_names, reason = "Orientation mapping uses conventional x/y/width/height/turn notation.")]
     pub fn map(self, x: f64, y: f64, w: f64, h: f64) -> (f64, f64) {
         let (flip, t) = self.to_parts();
         let (mut x, y2, mut w2, mut h2) = (x, y, w, h);
@@ -417,7 +422,7 @@ mod tests {
     #[test]
     fn rect_ops() {
         let r = Rect::new(0.0, 0.0, 4.0, 2.0);
-        assert_eq!(r.aspect(), 2.0);
+        assert_eq!(r.aspect().to_bits(), 2.0_f64.to_bits());
         let f = r.fit_aspect(1.0);
         assert_eq!((f.width(), f.height()), (2.0, 2.0));
         assert_eq!(f.center(), r.center());
