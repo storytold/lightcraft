@@ -247,6 +247,51 @@ fn reading_and_saving_xmp_records_a_stamp() {
     assert!(s.catalog.photo(id).unwrap().xmp.is_some());
 }
 
+/// Issue #1310: a sidecar the library was never in step with keeps its keywords on Save Metadata.
+#[test]
+fn saving_keeps_keywords_only_an_unsynced_sidecar_had() {
+    let (_lib, _src, mut s) = library("xmp-keep-keywords", 1);
+    let id = ids(&s)[0];
+    let orig = crate::sidecar::file_path(s.catalog.photo(id).unwrap()).unwrap().to_string();
+    let side = crate::sidecar::sidecar_path(&orig, s.sidecar_naming(id));
+    let md = lcc_meta::Metadata {
+        keywords: vec!["People".into(), "Anna".into(), "harbour".into()],
+        hierarchical_keywords: vec!["People|Anna".into(), "harbour".into()],
+        ..Default::default()
+    };
+    std::fs::write(&side, lcc_meta::write_xmp(&md, None)).unwrap();
+    assert_eq!(s.xmp_status(id), XmpStatus::Unknown);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "keywords": ["new"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let back = lcc_meta::parse_xmp(&std::fs::read_to_string(&side).unwrap()).unwrap().metadata;
+    let kws = lcc_catalog::keywords::from_file(&back.keywords, &back.hierarchical_keywords);
+    for k in ["new", "People|Anna", "harbour"] {
+        assert!(kws.iter().any(|x| x == k), "{k} kept: {kws:?}");
+    }
+    // the library holds them too, so a later save (now in step) keeps them
+    assert_eq!(s.xmp_status(id), XmpStatus::InSync);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "title": "Quay"})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let back = lcc_meta::parse_xmp(&std::fs::read_to_string(&side).unwrap()).unwrap().metadata;
+    assert!(back.keywords.iter().any(|k| k == "harbour"), "{:?}", back.keywords);
+    // once in step, a keyword removed here is removed from the file
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "keywords": ["new"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let back = lcc_meta::parse_xmp(&std::fs::read_to_string(&side).unwrap()).unwrap().metadata;
+    assert!(!back.keywords.iter().any(|k| k == "harbour"), "{:?}", back.keywords);
+}
+
+#[test]
+fn hostile_sidecars_add_no_keywords_and_never_panic() {
+    let p = lcc_catalog::Photo::new(PhotoId(1), lcc_catalog::Source::Demo { scene: 0 }, "a.jpg", "JPEG", 10, 10, "2026-01-01T00:00:00");
+    for xmp in ["", "<not xmp", "\u{feff}", "<x:xmpmeta><rdf:RDF><rdf:Description><dc:subject><rdf:Bag><rdf:li>", &"<".repeat(100_000)] {
+        assert!(crate::sidecar::sidecar_only_keywords(&p, xmp).is_empty(), "{xmp:.40}");
+    }
+    let many: Vec<String> = (0..10_000).map(|i| format!("k{i}")).collect();
+    let md = lcc_meta::Metadata { keywords: many, ..Default::default() };
+    assert!(crate::sidecar::sidecar_only_keywords(&p, &lcc_meta::write_xmp(&md, None)).len() <= 4096);
+}
+
 /// One photo with a written sidecar (rating 5) and that sidecar's path, with [`library`]'s folders
 /// and session first (bound in this order, the session drops before the folders).
 fn synced_photo(name: &str) -> (lcc_testkit::TempDir, lcc_testkit::TempDir, Session, PhotoId, PathBuf) {
