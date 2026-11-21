@@ -3,7 +3,7 @@ use super::gps::parse_gps;
 use super::import::{import_batch_done, import_params, list_auto_import_folder};
 use super::selection::{
     album_param, album_targets, album_targets_or_err, change_flag, change_rating, cull, flip, for_targets, has_library, mark_deleted,
-    opt_album_param, rotate, row_step, select_after_deletion, select_by, step, strs,
+    mark_deleted_with, opt_album_param, rotate, row_step, select_after_deletion, select_by, step, strs,
 };
 use super::{
     Album, AlbumId, ColorLabel, CommandSpec, CopyrightStatus, Filter, Flag, GroupBy, LibrarySource, Op, PhotoId, Result, Selection, Sort, SortKey,
@@ -65,7 +65,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         }
                         let f = Filter { library_folder: Some(path.to_string()), ..Default::default() };
                         let ids = s.catalog.query(&f, &Sort::default());
-                        if ids.is_empty() {
+                        if ids.is_empty() && !s.catalog.holds_made_folder(path) {
                             return Err(bad("library.source", format!("{path}: no photo in the library was imported from it")));
                         }
                         if covers_other_disks(s, path, &ids) {
@@ -119,7 +119,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Library Folders",
             [],
             None,
-            "{} → [{name, path, count, own, volume, selectable, label?, children}] the disks and the folders the library's photos were imported from, with photo counts (subfolders included in `count`); show one with library.source {kind: libraryFolder, path} (rows with selectable false only open)",
+            "{} → [{name, path, count, own, volume, selectable, label?, children}] the disks and the folders the library's photos were imported from (and the folders made with folder.create, empty), with photo counts (subfolders included in `count`); show one with library.source {kind: libraryFolder, path} (rows with selectable false only open)",
             always,
             |s, _| Ok(serde_json::to_value(s.catalog.folder_tree()).unwrap_or_default())
         ),
@@ -128,7 +128,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Remove Folder from Library",
             [],
             None,
-            "{path, disk?: bool} — move the library photos imported from this folder (and the folders inside it) to Recently Deleted; one undo step, no file is touched. A whole disk or share (`/Volumes/nas`, `C:\\`, `\\\\srv\\share`) goes only with `disk: true`, the startup disk never → {removed}",
+            "{path, disk?: bool} — move the library photos imported from this folder (and the folders inside it) to Recently Deleted, and take a folder made with folder.create (empty or not) off the list (`removed` may be 0); one undo step, no file is touched. A whole disk or share (`/Volumes/nas`, `C:\\`, `\\\\srv\\share`) goes only with `disk: true`, the startup disk never → {removed}",
             always,
             |s, p| {
                 const C: &str = "library.removeFolder";
@@ -144,14 +144,17 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 let f = Filter { library_folder: Some(path.to_string()), ..Default::default() };
                 let ids = s.catalog.query(&f, &Sort::default());
-                if ids.is_empty() {
+                // a folder made through LightCraft leaves the list too (undo brings the row back)
+                let unmade = s.catalog.folders_unmade_ops(path, bool_or(p, "disk", false));
+                if ids.is_empty() && unmade.is_empty() {
                     return Err(bad(C, format!("{path}: no photo in the library was imported from it")));
                 }
                 if covers_other_disks(s, path, &ids) && !bool_or(p, "disk", false) {
                     return Err(bad(C, format!("{path} holds whole disks: pass `disk: true` to remove everything on them")));
                 }
-                mark_deleted(s, &ids, "Remove Folder from Library")?;
-                if s.filter.library_folder.as_deref().is_some_and(|c| lightcraft_catalog::query::folder_within(c, path)) {
+                mark_deleted_with(s, &ids, unmade, "Remove Folder from Library")?;
+                let filter_changed = s.filter.library_folder.as_deref().is_some_and(|c| lightcraft_catalog::query::folder_within(c, path));
+                if filter_changed {
                     s.filter.library_folder = None;
                 }
                 // a filter put aside by Enable Filters must not bring the removed folder back
@@ -163,15 +166,22 @@ pub fn specs() -> Vec<CommandSpec> {
                 if s.shelved_filter.as_ref() == Some(&Filter::default()) {
                     s.shelved_filter = None;
                 }
-                // the folder being shown is gone: back to everything, as for a deleted album
+                // the folder being shown is gone: back to everything, as for a deleted album (a folder left again
+                // stays remembered in `library_folder` and is forgotten, but it was not the view)
+                let source_before = s.source;
                 if s.library_folder.as_deref().is_some_and(|c| lightcraft_catalog::query::folder_within(c, path)) {
                     s.library_folder = None;
                     if s.source == LibrarySource::LibraryFolder {
                         s.source = LibrarySource::All;
                     }
                 }
+                // (also drops a shown folder that is no longer listed: it held only the folder just removed)
                 let vis = s.visible_cloned();
-                s.selection = vis.first().map(|f| Selection::single(*f)).unwrap_or_default();
+                // photos went to Recently Deleted or the grid shows something else now: select afresh; an empty made
+                // folder that no view showed leaves the selection alone
+                if !ids.is_empty() || filter_changed || s.source != source_before {
+                    s.selection = vis.first().map(|f| Selection::single(*f)).unwrap_or_default();
+                }
                 Ok(json!({"removed": ids.len()}))
             }
         ),
@@ -180,7 +190,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Folder Color Label",
             [],
             None,
-            "{path, label: red|yellow|green|blue|purple|none} — give a folder of the library (one its photos were imported from, see library.folders) a colour label, or take it off (also once its photos are gone); one undo step. The label follows the folder when it is renamed or moved with folder.rename / folder.move → {path, label}",
+            "{path, label: red|yellow|green|blue|purple|none} — give a folder of the library (one its photos were imported from, or one made with folder.create; see library.folders) a colour label, or take it off (also once its photos are gone); one undo step. The label follows the folder when it is renamed or moved with folder.rename / folder.move → {path, label}",
             always,
             |s, p| {
                 const C: &str = "folder.label";
@@ -191,7 +201,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 };
                 // taking a label off always works, also once the folder's photos are gone
                 let f = Filter { library_folder: Some(path.to_string()), ..Default::default() };
-                if label.is_some() && s.catalog.query(&f, &Sort::default()).is_empty() {
+                if label.is_some() && !s.catalog.holds_made_folder(path) && s.catalog.query(&f, &Sort::default()).is_empty() {
                     return Err(bad(C, format!("{path}: no photo in the library was imported from it")));
                 }
                 if label.is_none() && s.catalog.folder_record(path).is_none() {

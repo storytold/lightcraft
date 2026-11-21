@@ -66,12 +66,18 @@ pub(super) fn album_targets_or_err(s: &Session, command: &str, targets: Vec<Phot
 /// Move to Recently Deleted and drop the photos from stacks so leftover members do not keep
 /// showing `i/n` (issue #1493).
 pub(super) fn mark_deleted(s: &mut Session, ids: &[PhotoId], label: &str) -> Result<usize> {
+    mark_deleted_with(s, ids, Vec::new(), label)
+}
+
+/// [`mark_deleted`] with `extra` ops in the same undo step (an empty `ids` still commits them).
+pub(super) fn mark_deleted_with(s: &mut Session, ids: &[PhotoId], extra: Vec<Op>, label: &str) -> Result<usize> {
     let mut ops: Vec<Op> = ids.iter().map(|id| Op::SetDeleted { id: *id, deleted: true }).collect();
     let n = ops.len();
-    if n == 0 {
+    if n == 0 && extra.is_empty() {
         return Ok(0);
     }
     ops.extend(s.catalog.remove_from_stacks_ops(ids));
+    ops.extend(extra);
     s.commit(label, Op::Batch { ops })?;
     Ok(n)
 }

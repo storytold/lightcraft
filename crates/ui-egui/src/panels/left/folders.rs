@@ -1,6 +1,6 @@
 use super::albums::pointer_over_row;
 use super::local::{is_builtin_place, same_folder, subfolders};
-use super::rows::{INDENT_STEP, LIBFOLDER_REVEALED, Row, out_of_sight, set_tree_open, tree_open, tree_toggle};
+use super::rows::{INDENT_STEP, LIBFOLDER_OPEN_ABOVE, LIBFOLDER_REVEALED, Row, out_of_sight, set_tree_open, tree_open, tree_toggle};
 use super::{Album, FolderNode, Icon, LibrarySource, LightcraftApp, Tokens, json, register, vec2};
 
 /// A folder on disk with a disclosure triangle: click browses it, the triangle lists its
@@ -48,7 +48,7 @@ pub(super) fn folder_tree(
             app.toast(ui.ctx(), e);
         }
         crate::widgets::context_menu(&resp, |ui| {
-            // the library actions of the Folders tree, when this folder (or one inside it) holds library photos
+            // the library actions of the Folders tree, when this folder is one of its rows (or one inside it holds library photos)
             let library = app.caches.folder_tree(&app.session.catalog);
             let held = library_node_for(&library, path);
             if (transient || indent > 0.0)
@@ -269,20 +269,12 @@ pub(super) fn is_within(app: &LightcraftApp, id: lightcraft_catalog::AlbumId, an
 // "Folders" (drawn in `show`): where on disk the library's photos were imported from, with photo counts (see
 // `lightcraft_catalog::folders`). A click makes that folder the source, like an album or a Local
 // folder: its photos and those of the folders inside it fill the grid. The triangle opens a
-// level. Only folders holding imported photos are listed; every folder on disk is under Local.
+// level. Only folders holding imported photos, and the ones made with New Folder on Disk…, are listed;
+// every folder on disk is under Local.
 
 /// Whenever the shown folder changes (a click, an agent, a rename or its undo), open the rows
 /// above it so it is on screen; folding one by hand afterwards sticks until the choice changes.
 pub(super) fn reveal_chosen(app: &LightcraftApp, ui: &egui::Ui, tree: &[FolderNode]) {
-    let shown = app.session.library_folder.clone().filter(|_| app.session.source == LibrarySource::LibraryFolder);
-    let chosen = shown.filter(|c| !lightcraft_catalog::query::folder_key(c).is_empty());
-    let seen = egui::Id::unique(LIBFOLDER_REVEALED);
-    let now = chosen.as_deref().map(lightcraft_catalog::query::folder_key);
-    if ui.data(|d| d.get_temp::<Option<String>>(seen)) == Some(now.clone()) {
-        return;
-    }
-    ui.data_mut(|d| d.insert_temp(seen, now));
-    let Some(chosen) = chosen else { return };
     fn open_above(ui: &egui::Ui, nodes: &[FolderNode], chosen: &str) {
         for n in nodes {
             if lightcraft_catalog::query::folder_within(chosen, &n.path) && !same_folder(chosen, &n.path) {
@@ -292,6 +284,20 @@ pub(super) fn reveal_chosen(app: &LightcraftApp, ui: &egui::Ui, tree: &[FolderNo
             }
         }
     }
+    // a folder to bring into view without choosing it (the one just made): its rows above open, once
+    let pending = egui::Id::unique(LIBFOLDER_OPEN_ABOVE);
+    if let Some(path) = ui.data_mut(|d| d.remove_temp::<String>(pending)) {
+        open_above(ui, tree, &path);
+    }
+    let shown = app.session.library_folder.clone().filter(|_| app.session.source == LibrarySource::LibraryFolder);
+    let chosen = shown.filter(|c| !lightcraft_catalog::query::folder_key(c).is_empty());
+    let seen = egui::Id::unique(LIBFOLDER_REVEALED);
+    let now = chosen.as_deref().map(lightcraft_catalog::query::folder_key);
+    if ui.data(|d| d.get_temp::<Option<String>>(seen)) == Some(now.clone()) {
+        return;
+    }
+    ui.data_mut(|d| d.insert_temp(seen, now));
+    let Some(chosen) = chosen else { return };
     open_above(ui, tree, &chosen);
 }
 
@@ -534,7 +540,8 @@ fn locate_missing_item(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNod
 
 /// The node Synchronize Folder… of a Local folder `path` works on, with the name its dialog shows:
 /// the Folders row for that very folder, else (a folder above rows) the folder itself, as a folder
-/// holding other folders. `None` when no library photo lies in `path` or inside it. Reads the
+/// holding other folders. `None` when no library photo lies in `path` or inside it and `path` is
+/// not itself a Folders row (a folder made through LightCraft stays a row while empty). Reads the
 /// cached Folders tree only; the disk is not touched.
 fn library_node_for(tree: &[FolderNode], path: &str) -> Option<(FolderNode, String)> {
     use lightcraft_catalog::query::folder_within;
@@ -544,7 +551,8 @@ fn library_node_for(tree: &[FolderNode], path: &str) -> Option<(FolderNode, Stri
     fn any_inside(tree: &[FolderNode], path: &str) -> bool {
         tree.iter().any(|n| (n.count > 0 && folder_within(&n.path, path)) || any_inside(&n.children, path))
     }
-    if let Some(n) = exact(tree, path).filter(|n| n.count > 0) {
+    // (a row with no photo is a folder made through LightCraft, or one above it: the scan finds what was put in it)
+    if let Some(n) = exact(tree, path) {
         return Some((n.clone(), lightcraft_catalog::folders::folder_label(&n.path)));
     }
     if !any_inside(tree, path) {
