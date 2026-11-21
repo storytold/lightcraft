@@ -207,6 +207,11 @@ pub struct AppSettings {
     /// profiles changes it). A value this version doesn't read asks again.
     #[serde(deserialize_with = "lenient")]
     pub lens_database: lightcraft_engine::lensfun_download::Offer,
+    /// Whether LightCraft offers to update photos imported earlier when it starts and the library holds some
+    /// ([`crate::file_facts`]; Settings ▸ General ▸ Library switches it).
+    pub file_facts_offer: bool,
+    /// The version of the app that last made that offer: each version asks once (a later one may record more).
+    pub file_facts_asked: Option<String>,
 }
 
 /// Where File ▸ Import Lightroom Catalog… puts a catalog (Settings ▸ General ▸ Library). Saved as
@@ -260,6 +265,8 @@ impl Default for AppSettings {
             loupe_info: LoupeInfo::default(),
             lightroom_import: LightroomImport::Ask,
             lens_database: Default::default(),
+            file_facts_offer: true,
+            file_facts_asked: None,
         }
     }
 }

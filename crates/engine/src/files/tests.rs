@@ -528,6 +528,7 @@ fn image_probe_reads_headers_like_the_decode_did() {
             assert_eq!(p.format, if name == "a.jpg" { "JPEG" } else { "PNG" });
             assert_eq!(p.file_size, bytes.len() as u64);
             assert!(p.content_hash.is_some());
+            assert_eq!(p.meta.facts, super::FACTS_VERSION, "issue #4371: every probe stamps its version");
             assert!(probe_bytes(name, &bytes[..bytes.len() / 2]).is_err(), "{name}: truncated file accepted");
         }
     }
@@ -1340,6 +1341,10 @@ fn dng_sky_matte_drives_the_sky_mask() {
     let (img, info) = load_bytes(&bytes, 64).unwrap();
     assert_eq!((img.width, img.height), (8, 16));
     assert!(info.mattes.is_some());
+    // issue #4361: the probe records which mattes the file carries, from their names alone (the unknown one is
+    // not a kind), and nothing for a file that isn't a DNG
+    assert_eq!(lightcraft_meta::dng_semantic_names(&bytes).len(), 2);
+    assert_eq!(probe_bytes("IMG_0001.DNG", &bytes).unwrap().meta.mattes, Some(vec!["sky".to_string()]));
     let sky = Mask {
         components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Sky }],
         adjust: LocalAdjustments { exposure: -3.0, ..Default::default() },
