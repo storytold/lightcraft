@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Smart-album rules keep exact album IDs
+- Album rules no longer round large IDs or interpret measurement units as album numbers. Exact numeric strings and
+  supported whole-number forms still work, while fractional and out-of-range values are rejected.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

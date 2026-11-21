@@ -547,6 +547,93 @@ fn album_rule_ids() {
     assert!(p.first().is_some_and(|p| p.message.contains("folder")), "{p:?}");
 }
 
+#[test]
+fn album_rule_ids_preserve_integer_precision() {
+    use crate::AlbumId;
+
+    let first = 9_007_199_254_740_992u64;
+    let next = first + 1;
+    assert_eq!(album_rule_id(&json!(first)), Some(AlbumId(first)));
+    assert_eq!(album_rule_id(&json!(next)), Some(AlbumId(next)));
+    assert_eq!(album_rule_id(&json!(next.to_string())), Some(AlbumId(next)));
+    assert_eq!(album_rule_id(&json!(u64::MAX)), Some(AlbumId(u64::MAX)));
+    assert_eq!(album_rule_id(&json!(u64::MAX.to_string())), Some(AlbumId(u64::MAX)));
+}
+
+#[test]
+fn album_rule_ids_reject_invalid_numeric_text() {
+    for value in [
+        json!("f/3mm"),
+        json!("1.0000000000000001"),
+        json!("18446744073709551616"),
+        json!("1.5"),
+        json!("-1"),
+        json!("NaN"),
+        json!("inf"),
+        json!("garbage"),
+        json!("3..0"),
+        json!("3e"),
+        json!(""),
+        json!(1.5),
+        json!(-1),
+    ] {
+        assert_eq!(album_rule_id(&value), None, "{value}");
+    }
+    assert_eq!(album_rule_id(&json!(u64::MAX as f64)), None, "the f64 upper bound is 2^64");
+    assert_eq!(album_rule_id(&json!(1e30)), None, "a float outside the u64 range");
+}
+
+#[test]
+fn album_rule_ids_preserve_supported_numeric_forms() {
+    use crate::AlbumId;
+
+    for value in [json!(3), json!(3.0), json!("3"), json!(" 3 "), json!("03"), json!("3.0"), json!("3e0"), json!("3E+0"), json!(" 003.000e+0 ")] {
+        assert_eq!(album_rule_id(&value), Some(AlbumId(3)), "{value}");
+    }
+    assert_eq!(album_rule_id(&json!(format!("{}3", "0".repeat(256)))), Some(AlbumId(3)));
+    assert_eq!(album_rule_id(&json!(format!("{}{}", "0".repeat(256), u64::MAX))), Some(AlbumId(u64::MAX)));
+    let largest_f64_below_u64_end = u64::MAX as f64 - 2048.0;
+    assert_eq!(album_rule_id(&json!(largest_f64_below_u64_end)), Some(AlbumId(largest_f64_below_u64_end as u64)));
+    assert_eq!(album_rule_id(&json!("-0")), Some(AlbumId(0)));
+}
+
+#[test]
+fn album_rule_validation_and_matching_keep_exact_target() {
+    use crate::{Album, AlbumId, Op};
+
+    let first = 9_007_199_254_740_992u64;
+    let next = first + 1;
+    let mut cat = Catalog::new();
+    for (id, name, photo) in [(first, "First", 11), (next, "Next", 12), (3, "Three", 13)] {
+        let mut album = Album::new(AlbumId(id), name);
+        album.photos.push(PhotoId(photo));
+        cat.apply(Op::AddAlbum { album }).unwrap();
+    }
+
+    let exact = rs(json!({"rules": [{"field": "album", "op": "is", "value": next}]}));
+    assert!(exact.check(&cat).is_empty());
+    assert!(!exact.matches(&photo(11), &cat));
+    assert!(exact.matches(&photo(12), &cat));
+
+    let not_exact = rs(json!({"rules": [{"field": "album", "op": "isNot", "value": next}]}));
+    assert!(not_exact.check(&cat).is_empty());
+    assert!(not_exact.matches(&photo(11), &cat));
+    assert!(!not_exact.matches(&photo(12), &cat));
+
+    let unit_bearing = rs(json!({"rules": [{"field": "album", "op": "is", "value": "f/3mm"}]}));
+    assert!(!unit_bearing.check(&cat).is_empty());
+    assert!(!unit_bearing.matches(&photo(13), &cat));
+}
+
+#[test]
+fn album_rule_is_not_rejects_invalid_ids() {
+    let cat = Catalog::new();
+    let invalid = rs(json!({"rules": [{"field": "album", "op": "isNot", "value": "f/3mm"}]}));
+
+    assert!(!invalid.check(&cat).is_empty());
+    assert!(!invalid.matches(&photo(1), &cat));
+}
+
 /// Album rules saved before Album offered only "is" / "isn't" (≥, between… from when it was a
 /// number field) always meant "isn't" to the matcher; upgrading says so, so they check again.
 #[test]
