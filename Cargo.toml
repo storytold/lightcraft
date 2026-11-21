@@ -28,6 +28,7 @@ jixel = "=0.3.4"
 craft-metadata = { git = "https://github.com/storytold/craft-libs", rev = "23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3" }
 craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3" }
 craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "494fceac863aa36eb1a6d1ecc2c95acd26319cba" }
+craft-sniff = { git = "https://github.com/storytold/craft-libs", rev = "494fceac863aa36eb1a6d1ecc2c95acd26319cba" }
 craft-media = { git = "https://github.com/storytold/craft-libs", rev = "057b0e3e01aed74ecc5d18eb047ddd7328b46b1d", default-features = false, features = ["isobmff", "matroska"] }
 craft-video = { git = "https://github.com/storytold/craft-libs", rev = "23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3", features = ["av1", "av1-large-encode", "threads"] }
 craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3" }

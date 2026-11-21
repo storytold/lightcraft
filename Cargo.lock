@@ -1523,6 +1523,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-sniff"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=494fceac863aa36eb1a6d1ecc2c95acd26319cba#494fceac863aa36eb1a6d1ecc2c95acd26319cba"
+
+[[package]]
 name = "craft-sqlite"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=0350c2edc0d6455c63ead4d48c83b9d262d0cb93#0350c2edc0d6455c63ead4d48c83b9d262d0cb93"
@@ -4093,6 +4098,7 @@ dependencies = [
  "craft-media 0.1.0 (git+https://github.com/storytold/craft-libs?rev=057b0e3e01aed74ecc5d18eb047ddd7328b46b1d)",
  "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3)",
  "craft-psd",
+ "craft-sniff",
  "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3)",
  "craft-video 0.1.0 (git+https://github.com/storytold/craft-libs?rev=23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3)",
  "dhat",

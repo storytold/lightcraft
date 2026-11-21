@@ -95,7 +95,7 @@ pub fn sniff(b: &[u8]) -> Option<Format> {
     if b.len() < 4 {
         return None;
     }
-    if b.starts_with(b"8BPS") && b.len() >= 6 && matches!(u16::from_be_bytes([b[4], b[5]]), 1 | 2) {
+    if b.get(..6).and_then(craft_sniff::identify) == Some(craft_sniff::Kind::Psd) {
         return Some(Format::Psd);
     }
     if b.starts_with(b"FUJIFILMCCD-RAW") || b.starts_with(b"\0MRM") || b.starts_with(b"FOVb") {
@@ -453,6 +453,8 @@ mod tests {
         assert_eq!(sniff(b"8BPS\0"), None);
         assert_eq!(sniff(b"8BPS\0\x00"), None);
         assert_eq!(sniff(b"8BPS\0\x03"), None);
+        assert_eq!(sniff(b"8BPS\x01\x01"), None);
+        assert_eq!(sniff(b"8BPT\0\x01"), None);
         assert_eq!(sniff(b"8BPS\0\x01"), Some(Format::Psd));
         assert_eq!(sniff(b"8BPS\0\x02"), Some(Format::Psd));
 
