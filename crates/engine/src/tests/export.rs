@@ -418,6 +418,29 @@ fn preset_export_never_overwrites_originals_or_sidecars() {
 }
 
 #[test]
+fn preset_export_rejects_malformed_ids_without_replacing_the_output() {
+    let dir = temp_dir("preset-export-ids");
+    let mut s = Session::with_demo();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.6})).unwrap();
+    s.execute("preset.create", &json!({"name": "Bright", "group": "Travel"})).unwrap();
+    s.execute("develop.set", &json!({"control": "effects.clarity", "value": 30})).unwrap();
+    s.execute("preset.create", &json!({"name": "Crisp", "group": "Street"})).unwrap();
+    let path = dir.join("selected.lcpreset");
+    let prior = b"previous output";
+    std::fs::write(&path, prior).unwrap();
+    let path_text = path.to_string_lossy();
+
+    for ids in [json!("lc.warm-glow"), json!(["lc.warm-glow", 7]), json!([])] {
+        assert!(s.execute("preset.export", &json!({"path": path_text, "ids": ids})).is_err(), "{ids}");
+        assert_eq!(std::fs::read(&path).unwrap().as_slice(), prior);
+    }
+    assert_eq!(s.execute("preset.export", &json!({"path": path_text})).unwrap()["count"], 2);
+    assert_eq!(s.execute("preset.export", &json!({"path": path_text, "ids": null, "group": "Travel"})).unwrap()["count"], 1);
+    assert_eq!(s.execute("preset.export", &json!({"path": path_text, "ids": ["lc.warm-glow"], "group": "Nope"})).unwrap()["count"], 1);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn curve_preset_export_never_overwrites_originals_or_sidecars() {
     preset_export_preserves_originals("curve.exportPresets", json!({"names": ["Linear"]}), "curve-export-guard");
 }
