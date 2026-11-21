@@ -55,9 +55,11 @@ pub fn apply_to(m: &mut Meta, fields: &Value) {
                 m.copyright_status = st;
             }
         } else if k == "keywords" {
+            let mut seen: std::collections::HashSet<String> = m.keywords.iter().map(|k| k.to_lowercase()).collect();
             for kw in v.as_array().into_iter().flatten().filter_map(Value::as_str) {
-                if !m.keywords.iter().any(|x| x.eq_ignore_ascii_case(kw)) {
-                    m.keywords.push(kw.to_string());
+                let kw = lightcraft_catalog::keywords::clean(kw);
+                if !kw.is_empty() && seen.insert(kw.to_lowercase()) {
+                    m.keywords.push(kw);
                 }
             }
         } else if let (Some(f), Some(t)) = (text_field(m, k), v.as_str()) {
