@@ -16,7 +16,10 @@ fn corpus() -> PathBuf {
 
 /// Green of the decoded mosaic against the camera's embedded JPEG on a `gw × gh` grid of the active area.
 fn green_vs_camera_jpeg(raw: &lightcraft_raw::RawImage, jpeg: &[u8], gw: usize, gh: usize) -> f64 {
-    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Jpeg, jpeg, &craft_image_codecs::DecodeOptions::default()).unwrap();
+    // the sensor data is in its stored orientation; keep the preview there too, or a rotated
+    // EXIF orientation (the X100VI's, for one) would be compared against a turned image.
+    let options = craft_image_codecs::DecodeOptions { keep_orientation: true, ..Default::default() };
+    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Jpeg, jpeg, &options).unwrap();
     let (jw, jh) = (img.width() as usize, img.height() as usize);
     let px = img.as_u8().unwrap();
     let mean = |sum: Vec<f64>, n: Vec<f64>| sum.iter().zip(&n).map(|(s, n)| s / n.max(1.0)).collect::<Vec<f64>>();
@@ -62,11 +65,14 @@ fn nikon_and_fujifilm_bodies_decode_like_the_camera_jpeg() {
         ("nef-nikon-1-j4.nef", (5248, 3504), 0xf226_1ee3_578c_e841),
         ("nef-nikon-1-j5.nef", (5584, 3726), 0x525e_c8ca_df29_13f1),
         ("nef-nikon-1-s1.nef", (3948, 2604), 0x0464_ed24_fdd0_772d),
+        ("nef-nikon-1-s2.nef", (4608, 3080), 0x262e_ba2a_3486_8b5f),
         ("nef-nikon-1-v1.nef", (3904, 2606), 0xedfd_ff98_70dd_9e89),
         ("nef-nikon-1-v2.nef", (4620, 3084), 0x99af_e262_e1d0_6ccb),
         ("nef-nikon-1-v3.nef", (5248, 3504), 0x0951_aa90_ad1f_50ae),
         ("nef-nikon-coolpix-a.nef", (4992, 3280), 0x875a_ed86_a3ad_09c6),
         ("nef-nikon-d1h.nef", (2012, 1324), 0x27ce_4372_4d64_8bc5),
+        ("nef-nikon-d1x.nef", (4028, 1324), 0xb6dc_e933_d2f2_59f1),
+        ("nef-nikon-d100.nef", (3034, 2024), 0xde21_bb64_c23a_9a3f),
         ("nef-nikon-d200.nef", (3904, 2616), 0xd33f_f00a_a90f_0f78),
         ("nef-nikon-d2h.nef", (2496, 1648), 0x0ca6_7d68_03aa_4ae1),
         ("nef-nikon-d2hs.nef", (2496, 1648), 0x9f70_b976_d7d0_a5a8),
@@ -115,7 +121,9 @@ fn nikon_and_fujifilm_bodies_decode_like_the_camera_jpeg() {
         ("nef-nikon-z50-2.nef", (5600, 3728), 0xb896_6b21_ac27_ad07),
         ("nef-nikon-z-50.nef", (5600, 3728), 0x3409_8168_87db_9bee),
         ("nef-nikon-z-5.nef", (6040, 4032), 0x214b_cc7b_5954_7ad2),
+        ("nef-nikon-z5-2-lossless.nef", (6064, 4040), 0x7772_25f7_e010_4027),
         ("nef-nikon-z-6-2.nef", (6064, 4040), 0xd40b_c647_373d_c2f8),
+        ("nef-nikon-z6-3-lossless.nef", (6064, 4040), 0x0ef0_08e7_7520_64ef),
         ("nef-nikon-z-7-2.nef", (8288, 5520), 0xde38_97ec_16cc_c71e),
         ("nef-nikon-z-9.nef", (8280, 5520), 0x7be1_80fd_f125_bc18),
         ("nef-nikon-z-fc.nef", (5600, 3728), 0xa65e_5bf4_6937_3625),
@@ -123,6 +131,8 @@ fn nikon_and_fujifilm_bodies_decode_like_the_camera_jpeg() {
         ("nrw-nikon-coolpix-p1000.nrw", (4624, 3470), 0xb512_6adb_9e72_6cae),
         ("nrw-nikon-coolpix-p1100.nrw", (4624, 3470), 0x7262_1601_b15b_4bba),
         ("nrw-nikon-coolpix-p950.nrw", (4624, 3470), 0xdc59_8f4d_a414_edfb),
+        ("nrw-nikon-coolpix-p7000.nrw", (3664, 2742), 0x5188_098d_c48f_5697),
+        ("nrw-nikon-coolpix-p7800.nrw", (4032, 3024), 0x6d6d_503c_ca03_381a),
         ("raf-fujifilm-finepix-f550exr.raf", (3328, 2464), 0x4247_157c_9d70_b359),
         ("raf-fujifilm-finepix-f770exr.raf", (3328, 2464), 0x6df4_5810_a581_1e9b),
         ("raf-fujifilm-finepix-hs30exr.raf", (3328, 2464), 0x5d4c_2901_70fa_83c3),

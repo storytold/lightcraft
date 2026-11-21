@@ -578,3 +578,19 @@ Canon	PowerShot G6	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAM
 Canon	PowerShot G5	preview	CRW entropy anomaly (craft-libs crates/crw/clean-room/02-crw-format.md section 4); embedded JPEG
 Olympus	OM-D E-M1	preview	compressed ORF support withdrawn pending provenance review; embedded JPEG
 Olympus	OM-D E-M10 Mark III	preview	compressed ORF support withdrawn pending provenance review; embedded JPEG
+Nikon	1 S2	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D100	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D1X	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	Z 5 2	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	Z 6 III	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	COOLPIX P7000	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	COOLPIX P7800	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS-1D X	verified	corpus: crates/raw/tests/it/canon_pentax_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS-1D Mark II	verified	corpus: crates/raw/tests/it/canon_pentax_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS-1Ds Mark III	verified	corpus: crates/raw/tests/it/canon_pentax_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot G10	verified	corpus: crates/raw/tests/it/canon_pentax_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot S90	verified	corpus: crates/raw/tests/it/canon_pentax_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot G2	verified	corpus: crates/raw/tests/it/crw_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot Pro 1	verified	corpus: crates/raw/tests/it/crw_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot S70	verified	corpus: crates/raw/tests/it/crw_corpus.rs (pinned sensor hash, camera-JPEG check)
+Sony	A7R VI (ILCE-7RM6) (** see note)	verified	corpus: crates/raw/tests/it/corpus.rs (pinned sensor hashes; ARW6 full-frame Compressed and APS-C lossless, docs/arw6-compression.md)
