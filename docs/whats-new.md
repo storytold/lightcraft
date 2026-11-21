@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-31
+
+### Filter for unrated photos
+- In the filter bar, Rating "= exactly" or "≤ at most" with no stars now shows the photos without a rating, as in
+  Lightroom. Before, it switched the rating rule off and showed every photo. "≥ at least" with no stars still shows
+  everything, and the chip above the grid reads "Unrated" (issue #3417).
+
 ## Unreleased
 
 ### Flatpak updates
@@ -282,7 +289,6 @@
   them, and folders you keep in Local with Browse Folder…, rename as before, starting from their real name. The
   `folder.rename` and `folder.move` commands now refuse the home folder and its Pictures, Desktop and Downloads too,
   so a script or an agent can't do it either.
-
 
 ## 2026-10-27
 
