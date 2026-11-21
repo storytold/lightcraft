@@ -3388,7 +3388,9 @@ fn browsing_the_same_folder_again_does_not_restart() {
     let (g, n) = (gate.clone(), started.clone());
     h.app.session.media.file_probe = Some(std::sync::Arc::new(move |_: &str| {
         n.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        while !g.load(std::sync::atomic::Ordering::Relaxed) {
+        // bounded, so a test that fails before opening the gate doesn't leave the scan spinning
+        let end = std::time::Instant::now() + Duration::from_secs(60);
+        while !g.load(std::sync::atomic::Ordering::Relaxed) && std::time::Instant::now() < end {
             std::thread::sleep(Duration::from_millis(5));
         }
         Ok(lightcraft_engine::media::ProbeInfo { format: "PNG".into(), ..Default::default() })
@@ -3516,7 +3518,9 @@ fn folder_scan_cancel_and_busy() {
     let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let g = gate.clone();
     h.app.session.media.file_probe = Some(std::sync::Arc::new(move |_: &str| {
-        while !g.load(std::sync::atomic::Ordering::Relaxed) {
+        // bounded, so a test that fails before opening the gate doesn't leave the scan spinning
+        let end = std::time::Instant::now() + Duration::from_secs(60);
+        while !g.load(std::sync::atomic::Ordering::Relaxed) && std::time::Instant::now() < end {
             std::thread::sleep(Duration::from_millis(5));
         }
         Ok(lightcraft_engine::media::ProbeInfo { format: "PNG".into(), ..Default::default() })
