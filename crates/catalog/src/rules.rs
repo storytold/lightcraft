@@ -1151,7 +1151,7 @@ impl Rule {
                 // (`want` is the value lowercased already; a photo no scan scored has no verdict,
                 // so it is not any of the three and it is every one of them's `isNot`)
                 let have = p.analysis.and_then(|a| a.quality).map(|q| q.verdict.as_str());
-                match op.as_str() {
+                match op {
                     "is" => have == Some(want.as_str()),
                     "isNot" => have != Some(want.as_str()),
                     _ => false,
