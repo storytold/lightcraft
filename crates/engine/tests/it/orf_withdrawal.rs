@@ -205,3 +205,73 @@ fn unavailable_legacy_orf_is_unchanged_and_retried() {
     assert_eq!(x.s.catalog.photo(x.id).unwrap(), &before);
     assert_eq!(recheck::stale(&x.s.catalog, false).len(), 1);
 }
+
+/// Regression check for the `source_format` review: the extension is the last path
+/// segment, so `next_back()` returns it directly and render keys are unchanged by the
+/// swap from `Iterator::last()`.
+#[test]
+fn withdrawn_orf_decoder_has_distinct_render_keys_without_changing_file_identity_review_regression_1() {
+    let mut s = decoder_session("ORF");
+    let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    let keys = decoder_keys(&mut s);
+    // Recomputing the keys must give the same result: the format extraction is stable.
+    assert_eq!(keys, decoder_keys(&mut s), "render keys are deterministic");
+    // The original-file identity is independent of the decoder format.
+    assert_eq!(keys.2, content_key(&p), "file identity does not change with the decoder");
+    // The decoder format must salt the persistent render identities: an ORF photo and a
+    // DNG photo must not share source keys, otherwise a withdrawn ORF decoder could stand
+    // in for another format's render.
+    let other = decoder_keys(&mut decoder_session("DNG"));
+    assert_ne!(keys.1[3], other.1[3], "ORF and DNG source keys must differ");
+    // The decoder format must salt every render family: an ORF render must not be reused
+    // for a DNG photo.
+    for (a, b) in keys.0.iter().zip(&other.0) {
+        assert_ne!(a, b, "ORF and DNG render keys must differ");
+    }
+    // ARW and CR2 both carry decoder_key == 0, so their persistent thumbnail, view and
+    // variant keys differ only through decoder_cache_version: this guards the per-format
+    // version propagation even when the decoder salt is zero.
+    let arw = decoder_keys(&mut decoder_session("ARW"));
+    let cr2 = decoder_keys(&mut decoder_session("CR2"));
+    for i in 0..3 {
+        assert_ne!(arw.1[i], cr2.1[i], "ARW and CR2 persistent key {} must differ by decoder_cache_version", i);
+    }
+    // `source_format` reads the path extension, so `decoder_session("DNG")` (path
+    // `same-original.orf`) is keyed as ORF for `decoder_cache_version`. Two photos with
+    // the same format field must share cache keys regardless of path extension; the path
+    // must not salt the decoder cache version.
+    let mut probe = Session::new();
+    let mut probe_photo =
+        Photo::new(PhotoId(1), Source::File { path: "same-original.dng".into() }, "same-original.dng", "DNG", 6000, 4000, "2026-01-01");
+    probe_photo.kind = MediaKind::Raw;
+    probe_photo.content_hash = Some("unchanged-file-bytes".into());
+    probe.catalog.apply(Op::AddPhoto { photo: Box::new(probe_photo) }).unwrap();
+    let probe_keys = decoder_keys(&mut probe);
+    assert_eq!(other.1[0], probe_keys.1[0], "cache keys must use the photo's format, not the path extension");
+}
+
+/// Regression check for the `decoder_cache_version` review: the ORF withdrawal invalidation
+/// only needs to salt ORF and the formats whose decoder actually changed, so DNG must stay
+/// at the base version and its persistent render keys must match ordinary JPEG keys
+/// (legacy-key stability), while ARW, CR2 and ORF keep their per-format offsets.
+#[test]
+fn withdrawn_orf_decoder_has_distinct_render_keys_without_changing_file_identity_review_regression_2() {
+    let jpeg = decoder_keys(&mut decoder_session("JPEG"));
+    let dng = decoder_keys(&mut decoder_session("DNG"));
+    assert_eq!(dng.1, jpeg.1, "DNG persistent render keys must match ordinary JPEG keys");
+    let arw = decoder_keys(&mut decoder_session("ARW"));
+    let cr2 = decoder_keys(&mut decoder_session("CR2"));
+    let orf = decoder_keys(&mut decoder_session("ORF"));
+    // The first three keys are the persistent render families (thumbnail, loupe view, variant).
+    // The fourth is the original file's identity, which no decoder version may change.
+    for (a, b) in jpeg.1.iter().zip(&arw.1).take(3) {
+        assert_ne!(a, b, "ARW persistent keys must differ from JPEG's by decoder_cache_version");
+    }
+    for (a, b) in jpeg.1.iter().zip(&cr2.1).take(3) {
+        assert_ne!(a, b, "CR2 persistent keys must differ from JPEG's by decoder_cache_version");
+    }
+    for (a, b) in jpeg.1.iter().zip(&orf.1).take(3) {
+        assert_ne!(a, b, "ORF persistent keys must differ from JPEG's by decoder_cache_version");
+    }
+    assert_eq!(jpeg.1[3], arw.1[3], "the original file's identity must not change with the decoder version");
+}
