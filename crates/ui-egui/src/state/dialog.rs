@@ -67,8 +67,8 @@ pub enum Dialog {
         params: serde_json::Value,
         key: String,
     },
-    /// Edit Capture Time: `mode` "set" (`time`; the others shift along), "shift" (by `days`,
-    /// `hours`, `minutes`) or "zone" (time-zone shift by `zone` hours).
+    /// Edit Capture Time: `mode` "set" (`time`; the others shift along, or with `each` every photo gets
+    /// `time`), "shift" (by `days`, `hours`, `minutes`) or "zone" (time-zone shift by `zone` hours).
     CaptureTime {
         mode: String,
         time: String,
@@ -76,6 +76,10 @@ pub enum Dialog {
         hours: i32,
         minutes: i32,
         zone: f32,
+        /// "set" with several photos: every one gets `time` instead of moving by the active photo's change
+        /// (issue #4205).
+        #[serde(default)]
+        each: bool,
     },
     /// The import review (File → Import Photos…).
     Import {
