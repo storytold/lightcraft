@@ -53,7 +53,7 @@ phase #85, duplicate Local entries #22, black GPU exports on an Intel iGPU #78).
 | Hardware | ~50% | ~40% | 40–80 h (+ tethering and printing, counted under Classic modules) | [hardware-parity.md](hardware-parity.md) |
 | Localization (12 key languages) | 8 of 12 present | ~64% (mean of the 12, measured) | 130–210 h for the target's set; +135–239 h for Hindi, Arabic, Vietnamese, Korean | [localization-parity.md](localization-parity.md) |
 | Performance | ~80% | ~70% | 30–50 h | 24 MP GPU slider 3.9 ms, export 0.3 s (measured, [gpu-pipeline.md](gpu-pipeline.md)); 85k library opens in 1.7–4.7 s; 100k test pending |
-| Stability | — | ~60% | 30–60 h | never-crash lints and guards workspace-wide, crash-tested journal, 2,561 tests; but CI runs tests on Linux x64 (every pull request and push to `main`) and FreeBSD (nightly), not on macOS or Windows, user reports keep finding bugs in ✅ areas |
+| Stability | — | ~60% | 30–60 h | never-crash lints and guards workspace-wide, crash-tested journal, 2,561 tests. CI tests run on Linux x64 (every PR and push to `main`) and FreeBSD (nightly). Selected Windows packages run for relevant path changes or PRs labelled `full-ci`. macOS still needs a test job. User reports keep finding bugs in ✅ areas |
 | Platforms | macOS, Windows (x64 / x86 / ARM64), Linux (AppImage, deb, rpm, Flatpak, Nix), FreeBSD, web | ~60% | 25–45 h | macOS is where it is tested; the Windows x64 installer is verified on Windows 11 (0.9.1) except for a confirmation after uninstalling from Settings → Apps (#892); web experimental (CPU only) |
 | Ecosystem / plug-ins | ~25% | ~15% | 40–80 h + owner decision | no Lightroom SDK equivalent (export, publish, metadata plug-ins); beyond the target: JSON-lines control channel, MCP server with 28 tools + one per command, CLI |
 | AI features | ~30% | ~20% | 120–220 h + model decisions | [AI](#ai) (overlaps the masking and Enhance rows; not added twice) |
@@ -158,7 +158,7 @@ essentials replaces its guessed 45% raw look with 84% × 0.75 (+1 point).
 | Discount | Mainstream | Essentials | Evidence |
 |---|---:|---:|---|
 | Interaction fidelity / UI clarity | ×0.95 | ×0.95 | brush live preview gaps and feathering (#517, #518); crop artefacts and limits (#731, #742, #770, #771); Compare white-balance selector (#743–#745); low-res slider previews (#330); dialogs taller than the window (#781); mouse-wheel scroll (#714) |
-| Stability on real machines | ×0.92 | ×0.92 | launch and quit crashes or silent startup failures (#250 macOS 12 Intel, #315 Windows Intel GPU, #431 Intel Mac, #260, #462, #783 Linux / Nouveau, #790 Windows installer, fixed in 0.9.1); tests run in CI on Linux x64 and FreeBSD (nightly), not on macOS or Windows (gap 9) |
+| Stability on real machines | ×0.92 | ×0.92 | launch and quit crashes or silent startup failures (#250 macOS 12 Intel, #315 Windows Intel GPU, #431 Intel Mac, #260, #462, #783 Linux / Nouveau, #790 Windows installer, fixed in 0.9.1); CI tests run on Linux x64 and FreeBSD (nightly), with conditional Windows coverage. Full Windows and macOS CI test coverage remains open (gap 9) |
 | File exchange with Lightroom users (mainstream) / opening files people send (essentials) | ×0.92 | ×0.95 | Adobe XMP sidecars change colours (#290), XMP CameraProfile and Upright ignored (#204, #205), catalog import fails (#599), same Light values render differently (#523, #209), no write-back to `.lrcat`; for casual users: CR3 beyond verified bodies, HE NEF open as previews (#473, #556) |
 | **Product** | **×0.804** | **×0.830** | |
 
@@ -241,7 +241,7 @@ variants, HE NEF as previews) degrade but don't block a workflow.
 around them. Beta needs: remaining CR3 variants and
 HE NEF decoding from sensor data; measured colour for the popular models and a fidelity suite with
 scores; Subject / Sky / People masks; a lens profile database for the
-popular lenses; tests in CI on macOS and Windows, and the GPU tests in CI.
+popular lenses; full CI test coverage on macOS and Windows, and GPU tests in CI.
 
 ## How hours are calibrated
 
@@ -299,6 +299,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | patch | Document conditional Windows tests and the remaining CI coverage gaps (#4463) |
 | 2026-11-15 | minor | Lens Blur renders with AI subject focus and per-mask bokeh (the AI table's 🟡 and the missing depth map are unchanged); survey layout, opened-library folder safety, direct Lightroom backup-zip import, legacy shutter repair and the Highlights/Shadows block fix landed; craft-libs cutover (TIFF/JPEG/JXL/GIF/PSD/HEIF/raw, metadata, gain maps); v0.21.0 and v0.21.1 released. Headline numbers, coverage and estimates were not re-measured. |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-05 | minor | AI table: Lens Blur ⬜ → 🟡 (subject- or mask-focused disc blur, no depth map); headline numbers unchanged |
