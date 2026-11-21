@@ -375,7 +375,9 @@ pub fn base_detail_radius(px_per_long: f64) -> usize {
 pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
     match s.process.process() {
         Process::V1 => 0,
-        Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 => base_detail_radius(px_per_long),
+        Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 | Process::V9 => {
+            base_detail_radius(px_per_long)
+        }
     }
 }
 
@@ -909,7 +911,7 @@ pub(crate) fn prepare(
     };
     let ev = s.light.exposure as f32;
     let masks = timed("masks", || masks::evaluate(&s.masks, frame, img.width, img.height, &img, &log_l, ev, mattes));
-    Prepared { img, log_l, base, clarity_blur, texture_blur, sharpen_blur, dark, chroma_blur, air, masks, px_per_long }
+    Prepared { img, log_l, base, clarity_blur, texture_blur, sharpen_blur, dark, chroma_blur, air, hs_range: None, masks, px_per_long }
 }
 
 /// The airlight of the whole output frame, estimated on a small render of it (`proxy_w` px wide):
@@ -919,6 +921,24 @@ pub(crate) fn frame_airlight(src: &Rgb32f, info: &SourceInfo, s: &DevelopSetting
     white_balance(&mut img, info, s);
     let sigma = (0.02 * frame.px_per_long(proxy_w)).max(1.0) as f32;
     airlight(&gaussian(&img.map(dark_of), sigma))
+}
+
+/// The tonal range of the whole output frame for process V9's Highlights ([`crate::hs_range`]): the base layer's
+/// percentiles on a small render of it (`proxy_w` px wide), so that a window, a preview and an export of one photo
+/// share it. Before exposure, like [`Prepared::base`](crate::Prepared).
+pub(crate) fn frame_range(
+    src: &Rgb32f,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    frame: &Frame,
+    proxy_w: usize,
+    proxy_h: usize,
+) -> Option<crate::hs_range::FrameRange> {
+    let mut img = Rgb32f::clone(&frame_proxy(src, frame, proxy_w, proxy_h));
+    white_balance(&mut img, info, s);
+    let ppl = frame.px_per_long(proxy_w);
+    let base = tone_base(&img.map(log_lum), (0.015 * ppl as f32).max(1.0), tone_base_detail(s, ppl), base_keeps_gaps(s));
+    crate::hs_range::FrameRange::of(&base.data, 0.0)
 }
 
 /// How many airlight proxies [`frame_proxy`] keeps (one per photo and frame being zoomed into; each ≤ 1.8 MB).

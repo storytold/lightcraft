@@ -12,6 +12,8 @@
 //! 3. tone map — contrast / whites / blacks filmic curve on luminance, highlight desaturation
 //! 4. colour — vibrance, saturation, colour mixer, colour grading, B&W (OkLCh)
 //! 5. display — gamut map to the output space (sRGB unless [`RenderRequest::space`] says otherwise), encode, tone curves (parametric + point), vignette, grain
+//!    (from process V9 the colour mixer, then the tone curves and Whites, run between 3 and 4 instead:
+//!    [`mixer_stage`], [`curve_stage`])
 //!
 //! Spatial parameters are specified relative to the image's long edge, so a 400 px preview and a
 //! 60 MP export look alike.
@@ -29,9 +31,19 @@ pub mod colorops;
 pub mod crystal;
 pub mod cull;
 pub mod curve;
+pub mod curve_stage;
+#[rustfmt::skip]
+mod curve_stage_tables;
+pub mod default_tone;
+#[rustfmt::skip]
+mod default_tone_table;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
+pub mod grading_stage;
+#[rustfmt::skip]
+mod grading_stage_tables;
+pub mod hs_range;
 pub mod lens_blur;
 pub mod light_v3;
 // generated (`light_v3_params.rs`), kept in its own compact layout
@@ -42,6 +54,7 @@ pub mod local_tone;
 pub mod lut;
 pub mod mask_space;
 pub mod masks;
+pub mod mixer_stage;
 pub mod nrc_joint;
 #[cfg(test)]
 mod nrc_joint_reference;
@@ -100,6 +113,11 @@ pub struct SourceInfo {
     /// the developed pixels (Bradford, linear Rec.2020).
     pub camera_color: Option<Arc<CameraColor>>,
     pub camera_tone: Option<tone::CameraTone>,
+    /// The raw is rendered through a camera profile without a tone curve of its own (a DCP without
+    /// `ProfileToneCurve`, such as Adobe Standard): from process V9 its base tone is Lightroom's default curve,
+    /// measured, with the scene shifted by this many stops, the camera's measured exposure offset
+    /// ([`default_tone`]; 0 for a camera not measured). `None`: the profile has its own curve, or no profile.
+    pub default_tone: Option<f32>,
     /// Segmentation mattes stored in the file (DNG semantic masks): AI masks use them.
     pub mattes: Option<Arc<masks::Mattes>>,
     /// The raw's own local tone mapping (DNG `ProfileGainTableMap`), rendered only when the
@@ -123,6 +141,7 @@ impl Default for SourceInfo {
             legacy_relative_wb: false,
             camera_color: None,
             camera_tone: None,
+            default_tone: None,
             mattes: None,
             local_tone: None,
             native_long: None,
@@ -282,6 +301,8 @@ pub(crate) struct Prepared {
     pub chroma_blur: Option<Arc<Rgb32f>>,
     /// Airlight of `dark` (before exposure).
     pub air: f32,
+    /// The whole frame's tonal range for process V9's Highlights (before exposure; [`Plan::hs_range`]).
+    pub hs_range: Option<hs_range::FrameRange>,
     pub masks: Vec<masks::Evaluated>,
     /// Output pixels per unit of the source long edge.
     pub px_per_long: f64,
@@ -460,6 +481,9 @@ pub struct Plan<'a> {
     pub eyes: Vec<redeye::EyeK>,
     /// The whole frame's dehaze airlight, for a windowed render (which can't see the whole frame).
     pub fixed_air: Option<f32>,
+    /// Process V9 with Highlights: the whole frame's tonal range ([`hs_range`]), from a small render of it so that
+    /// every render of the photo (a window, a preview, an export) shares it.
+    pub hs_range: Option<hs_range::FrameRange>,
     /// A windowed render works on a larger window when spots reach into it (see
     /// [`spots::window_for_reads`]); this is the requested window inside the rendered one, which
     /// the result is cut to.
@@ -502,6 +526,12 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let detail_scale = local::detail_scale(px_per_long, native_long);
     let mut fixed_air = None;
     let mut keep = None;
+    // a proxy of one fixed size whatever the output's, so a thumbnail, a preview, a window and an export share the range
+    let hs_range = hs_range::wanted(s).then(|| {
+        let (pw, ph) = RenderRequest::fit(hs_range::PROXY_EDGE, hs_range::PROXY_EDGE).size(&frame);
+        local::frame_range(src, info, s, &frame, pw.max(1), ph.max(1))
+    });
+    let hs_range = hs_range.flatten();
     let full = (frame.clone(), full_w, full_h);
     let (frame, w, h) = match req.window {
         Some(win) => {
@@ -575,6 +605,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         noise_key,
         eyes,
         fixed_air,
+        hs_range,
         keep,
         mattes: info.mattes.clone(),
         lens_subject,
@@ -613,6 +644,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
                 h: t.h,
                 eyes: Vec::new(),
                 fixed_air: None,
+                hs_range: None,
                 keep: None,
                 mattes: None,
                 lens_subject: None,
@@ -771,6 +803,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     if let Some(a) = plan.fixed_air {
         prep.air = a;
     }
+    prep.hs_range = plan.hs_range;
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
         c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), colour_noise, planes });
