@@ -325,6 +325,249 @@ fn the_original_stays_when_the_copys_folder_cannot_be_synced() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// Ask 1 of the review of #1775 (issue #1501): the folder is flushed **once per folder for the
+/// whole batch**, before any original goes — not once per photo. Each committed batch
+/// flushes a given folder once, so the syncs `lightcraft_catalog::safe_file` makes on this thread are counted.
+#[cfg(unix)]
+#[test]
+fn a_move_flushes_the_destination_folder_once_for_the_whole_batch() {
+    use lightcraft_catalog::safe_file::syncs_on_this_thread;
+    let base = temp_dir("dirsync-once");
+    let (card, dest) = (base.join("card"), base.join("out"));
+    std::fs::create_dir_all(&dest).unwrap();
+    for i in 0..8u8 {
+        write_png(&card.join(format!("IMG_{i}.png")), i + 1);
+    }
+    let mut s = session();
+    let before = syncs_on_this_thread();
+    let r = import_move(&mut s, &[&card], &dest, json!({"organize": "flat"}));
+    let flushed = syncs_on_this_thread() - before;
+    assert_eq!(len(&r, "moved"), 8, "{r}");
+    assert_eq!(len(&r, "kept"), 0, "{r}");
+    assert_eq!(flushed, 1, "8 photos into one folder is one folder flush, not one per photo: {r}");
+    assert_eq!(files_under(&card), Vec::<String>::new(), "the originals went");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// An unsupported directory flush (including our std-only non-Unix path) is not an I/O failure. Nothing is lost that this could have saved, so
+/// the Move goes ahead rather than keeping every original forever — and it is not told it was
+/// flushed either (the log says so).
+#[test]
+fn a_file_system_without_a_folder_flush_does_not_hold_every_move_back() {
+    let base = temp_dir("dirsync-refused");
+    let (card, dest) = (base.join("card"), base.join("out"));
+    write_png(&card.join("a.png"), 1);
+    std::fs::write(card.join("a.xmp"), xmp(2)).unwrap();
+    std::fs::create_dir_all(&dest).unwrap();
+    let mut s = session();
+    inject(Fault::RefuseDirSync);
+    let r = import_move(&mut s, &[&card], &dest, json!({"organize": "flat"}));
+    inject(Fault::None);
+    assert_eq!(len(&r, "moved"), 1, "a refusal is not a failure: {r}");
+    assert_eq!(len(&r, "kept"), 0, "{r}");
+    assert_eq!(files_under(&dest), ["a.png", "a.xmp"]);
+    assert_eq!(files_under(&card), Vec::<String>::new(), "the original went, as it does on Windows");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A folder flush that fails is the same outcome wherever it is caught — a new folder
+/// (`place` cannot make it durable, so the file is reported failed) and one that already exists
+/// (the batch's flush fails, so the photo is imported and the original kept). Both keep the
+/// original and both say so; the two reports differ only in whether the copy was made at all.
+#[test]
+fn a_folder_that_cannot_be_flushed_keeps_the_original_wherever_it_is_caught() {
+    let base = temp_dir("dirsync-both");
+    let (card, existing, fresh) = (base.join("card"), base.join("out"), base.join("out-new"));
+    write_png(&card.join("a.png"), 1);
+    std::fs::create_dir_all(&existing).unwrap();
+    let mut s = session();
+    // the folder that is already there: placed, then kept because its entry may not survive a crash
+    inject(Fault::FailDirSync);
+    let r = import_move(&mut s, &[&card], &existing, json!({"organize": "flat"}));
+    inject(Fault::None);
+    assert_eq!(len(&r, "kept"), 1, "{r}");
+    assert_eq!(len(&r, "moved"), 0, "{r}");
+    assert_eq!(len(&r, "failed"), 0, "{r}");
+    assert!(r["kept"][0]["reason"].as_str().unwrap().contains("durable"), "{r}");
+    assert!(card.join("a.png").is_file() && existing.join("a.png").is_file());
+    // a folder that has to be made: nothing is placed, and the folders made for it are taken back
+    // (a photo of its own: `a.png` is catalogued by now, and would come back as a duplicate)
+    write_png(&card.join("b.png"), 7);
+    inject(Fault::FailDirSync);
+    let r = import_move(&mut s, &[&card.join("b.png")], &fresh, json!({"organize": "flat"}));
+    inject(Fault::None);
+    assert_eq!(len(&r, "failed"), 1, "{r}");
+    assert_eq!(len(&r, "moved"), 0, "{r}");
+    assert!(r.to_string().contains("durable") && r.to_string().contains("the original is kept"), "{r}");
+    assert!(card.join("b.png").is_file(), "the original stays");
+    assert!(!fresh.exists(), "no folder is left behind");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A batch that goes into two folders where one cannot be flushed: the good folder's photos move and
+/// lose their originals, the other folder's are kept and reported, and each folder is flushed once —
+/// the mixed case, rather than one failure taking the whole batch with it.
+#[test]
+fn a_batch_moves_what_it_can_when_one_of_its_folders_cannot_be_flushed() {
+    let base = temp_dir("dirsync-mixed");
+    let (card, dest) = (base.join("card"), base.join("out"));
+    // `{folder}` files two photos into two folders of the destination with names this test knows
+    write_png(&card.join("good/a.png"), 1);
+    write_png(&card.join("good/c.png"), 3);
+    write_png(&card.join("failed/b.png"), 2);
+    write_png(&card.join("failed/d.png"), 4);
+    // both folders are there already, so the only flushes are the batch's own
+    for name in ["good", "failed"] {
+        std::fs::create_dir_all(dest.join(name)).unwrap();
+    }
+    let mut s = session();
+    #[cfg(unix)]
+    let before = lightcraft_catalog::safe_file::syncs_on_this_thread();
+    inject(Fault::FailDirSyncIn("failed"));
+    let r = import_move(&mut s, &[&card], &dest, json!({"organize": "{folder}"}));
+    inject(Fault::None);
+    // two folders, two flushes — not one per photo, and not one for the whole batch either
+    #[cfg(unix)]
+    assert_eq!(lightcraft_catalog::safe_file::syncs_on_this_thread() - before, 2, "two folders, two flushes: {r}");
+    assert_eq!(len(&r, "imported"), 4, "all are catalogued from their copies: {r}");
+    assert_eq!(len(&r, "moved"), 2, "{r}");
+    assert_eq!(len(&r, "kept"), 2, "{r}");
+    // the good folder moved: its original is gone
+    assert_eq!(r["moved"][0]["to"], dest.join("good").join("a.png").to_string_lossy().as_ref(), "{r}");
+    assert!(!card.join("good/a.png").exists());
+    // the failed one is kept, with the reason, and the copy the photo uses is there
+    assert!(r["kept"][0]["reason"].as_str().unwrap().contains("durable"), "{r}");
+    assert!(card.join("failed/b.png").is_file() && dest.join("failed").join("b.png").is_file());
+    assert!(!card.join("good/c.png").exists() && dest.join("good/c.png").is_file());
+    assert!(card.join("failed/d.png").is_file() && dest.join("failed/d.png").is_file());
+    assert!(r["kept"].as_array().unwrap().iter().all(|k| k["reason"].as_str().unwrap().contains("durable")));
+    assert_eq!(photo_paths(&s).len(), 4);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// One folder spelled several ways (`out/x`, `out//y`, `out/./z`) is one folder: one flush.
+#[cfg(unix)]
+#[test]
+fn one_folder_spelled_several_ways_is_one_flush() {
+    use crate::import_move::{Placed, sync_folders};
+    use lightcraft_catalog::safe_file::syncs_on_this_thread;
+    let base = temp_dir("dirsync-spellings");
+    let dir = base.join("out");
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.display().to_string();
+    let placed: Vec<Placed> = ["{d}/x.png", "{d}/y.png", "{d}//z.png", "{d}/./w.png"]
+        .into_iter()
+        .map(|dst| Placed { src: base.join("card/photo.png"), dst: PathBuf::from(dst.replace("{d}", &d)), sidecars: Vec::new() })
+        .collect();
+    let before = syncs_on_this_thread();
+    let failed = sync_folders(&placed);
+    assert_eq!(syncs_on_this_thread() - before, 1, "one folder, spelled four ways");
+    assert!(failed.is_empty(), "{failed:?}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Canonical keys also deduplicate symlinks, and a failure is reported under every spelling.
+#[cfg(unix)]
+#[test]
+fn symlinked_destination_folders_share_one_flush_and_one_failure() {
+    use crate::import_move::{Placed, sync_folders};
+    use lightcraft_catalog::safe_file::syncs_on_this_thread;
+    let base = temp_dir("dirsync-alias");
+    let dir = base.join("out");
+    let alias = base.join("alias");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::os::unix::fs::symlink(&dir, &alias).unwrap();
+    let placed: Vec<_> =
+        [&dir, &alias].into_iter().map(|d| Placed { src: base.join("source.png"), dst: d.join("copy.png"), sidecars: Vec::new() }).collect();
+    let before = syncs_on_this_thread();
+    assert!(sync_folders(&placed).is_empty());
+    assert_eq!(syncs_on_this_thread() - before, 1);
+    let before = syncs_on_this_thread();
+    inject(Fault::FailDirSync);
+    let failures = sync_folders(&placed);
+    inject(Fault::None);
+    assert_eq!(syncs_on_this_thread() - before, 1);
+    assert_eq!(failures.len(), 2, "both spellings keep their originals");
+    assert!(failures.contains_key(&dir) && failures.contains_key(&alias));
+    let _ = std::fs::remove_dir_all(base);
+}
+
+#[test]
+fn a_destination_that_cannot_be_resolved_is_not_allowed_to_remove_originals() {
+    use crate::import_move::{Placed, sync_folders};
+    let base = temp_dir("dirsync-unresolved");
+    let src = base.join("source.png");
+    std::fs::write(&src, b"original").unwrap();
+    let missing = base.join("gone");
+    let placed = Placed { src: src.clone(), dst: missing.join("copy.png"), sidecars: Vec::new() };
+    let failures = sync_folders(&[placed]);
+    assert!(failures.get(&missing).is_some_and(|why| why.contains("resolve")), "{failures:?}");
+    assert_eq!(std::fs::read(src).unwrap(), b"original");
+    let _ = std::fs::remove_dir_all(base);
+}
+
+/// A child process owns its working directory: never change the parallel test runner's cwd.
+#[cfg(unix)]
+#[test]
+fn relative_move_syncs_the_current_directory_and_the_new_folders() {
+    let base = temp_dir("dirsync-relative");
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "tests::import_move::relative_move_child", "--nocapture"])
+        .env("LC_MOVE_RELATIVE_CHILD", &base)
+        .current_dir(&base)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let _ = std::fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn relative_move_child() {
+    if std::env::var_os("LC_MOVE_RELATIVE_CHILD") != Some(std::env::current_dir().unwrap().into_os_string()) {
+        return;
+    }
+    use crate::import_move::{finish, folder_of, place, sync_folders};
+    use lightcraft_catalog::safe_file::syncs_on_this_thread;
+    assert_eq!(folder_of(Path::new("bare.png")), Path::new("."));
+    std::fs::write("source.png", b"original").unwrap();
+    let before = syncs_on_this_thread();
+    let placed = place(Path::new("source.png"), Path::new("out/nested"), "copy.png").unwrap();
+    assert_eq!(syncs_on_this_thread() - before, 2, "parents of out and nested");
+    assert!(sync_folders(std::slice::from_ref(&placed)).is_empty());
+    assert_eq!(syncs_on_this_thread() - before, 3, "the destination folder barrier");
+    assert!(finish(&placed).is_ok());
+    assert!(!Path::new("source.png").exists());
+}
+
+/// The batch flush is per distinct folder: three photos in two folders flush two, and a folder
+/// nothing goes into is not touched at all.
+#[cfg(unix)]
+#[test]
+fn the_batch_flushes_each_distinct_folder_once() {
+    use crate::import_move::{place, sync_folders};
+    use lightcraft_catalog::safe_file::syncs_on_this_thread;
+    let base = temp_dir("dirsync-folders");
+    let (card, a, b) = (base.join("card"), base.join("a"), base.join("b"));
+    let placed: Vec<_> = [(0u8, &a), (1, &a), (2, &b)]
+        .into_iter()
+        .map(|(i, dir)| {
+            let src = card.join(format!("{i}.png"));
+            write_png(&src, i + 1);
+            place(&src, dir, &format!("{i}.png")).unwrap()
+        })
+        .collect();
+    let before = syncs_on_this_thread();
+    let failed = sync_folders(&placed);
+    assert_eq!(syncs_on_this_thread() - before, 2, "three photos in two folders flush two folders");
+    assert!(failed.is_empty(), "{failed:?}");
+    for p in &placed {
+        assert!(p.dst.is_file());
+        assert!(p.src.is_file(), "sync_folders removes nothing");
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// Duplicates, unreadable files and files that fail (here: a different sidecar already at the
 /// destination) keep their sources; the rest of the batch still moves.
 #[test]

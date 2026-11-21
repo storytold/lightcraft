@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Safer Move imports
+- Import ▸ Move now flushes each destination folder once per committed batch before removing originals
+  (issue #1501). A real directory-sync failure keeps and reports the originals; if a new folder cannot
+  be prepared, nothing is imported from that file. Unsupported directory flushing retains the previous
+  behavior, without claiming durability. This includes the std-only Windows path: the copy's contents
+  are flushed, but this change does not add a native directory flush. Cross-volume file moves also
+  flush their destination folder before source removal, individually rather than in batches.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
@@ -1168,10 +1176,6 @@
   further ⇧-clicks carry on from the last point, as in Lightroom. Change the brush size, feather or flow before the
   ⇧-click and the line tapers from the old values to the new ones. The whole line is one undo step.
   `mask.brushStroke {connect: true}` does the same for agents.
-
-- Import ▸ Move (and a move to another volume) now writes the new file's folder entry to disk before it removes the
-  original, and keeps the original when that fails (issue #1501). The copy's contents were already synced, but not
-  the name in its folder, so a crash right after the move could in principle keep the deletion and lose the copy.
 
 ### Local folders you browse are kept
 - Browsing a folder under Local now records it as browsed, so the photos in folders you use aren't forgotten after

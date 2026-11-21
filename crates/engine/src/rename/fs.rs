@@ -313,3 +313,31 @@ mod open_regular_tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
+
+#[cfg(test)]
+mod cross_volume_sync_tests {
+    use super::{RealFs, move_across_volumes};
+    use crate::import_move::{Fault, inject};
+
+    #[test]
+    fn a_cross_volume_directory_sync_failure_keeps_the_source_and_removes_the_copy() {
+        let root = std::env::temp_dir().join(format!("lc-rename-dirsync-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let (src, dst) = (root.join("source"), root.join("copy"));
+        std::fs::write(&src, b"original").unwrap();
+        inject(Fault::FailDirSync);
+        // Call the real fallback, not Import Move's separate forced-copy path.
+        let result = move_across_volumes(&RealFs, &src, &dst);
+        inject(Fault::None);
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&src).unwrap(), b"original");
+        assert!(!dst.exists());
+        inject(Fault::RefuseDirSync);
+        let result = move_across_volumes(&RealFs, &src, &dst);
+        inject(Fault::None);
+        assert!(result.is_ok(), "an unsupported sync retains compatibility: {result:?}");
+        assert!(!src.exists());
+        assert_eq!(std::fs::read(&dst).unwrap(), b"original");
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
