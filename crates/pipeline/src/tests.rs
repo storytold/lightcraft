@@ -837,7 +837,7 @@ fn stage_cache_invalidates_wb_on_process_switch_and_undo() {
     use crate::{StageCache, render_cached};
     use lightcraft_develop::{Process, WbMode};
 
-    let src = scene();
+    let src = std::sync::Arc::new(scene());
     let info = SourceInfo { as_shot_temp: 5500.0, as_shot_tint: 0.0, ..Default::default() };
     let req = RenderRequest::fit(src.width, src.height);
     let cache = StageCache::default();
