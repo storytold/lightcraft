@@ -199,6 +199,32 @@ fn noise_reduction_does_not_depend_on_the_window() {
     }
 }
 
+#[test]
+fn downscaled_signed_noise_reduction_matches_the_full_frame() {
+    let src = Rgb32f::from_fn(1024, 768, |x, y| {
+        let n = (((x * 73 + y * 151 + x * y * 3) % 257) as f32 / 256.0 - 0.5) * 0.08;
+        let base = if x < 512 { 0.008 } else { 0.18 };
+        [base + n, base - n, base + 0.5 * n]
+    });
+    let info = SourceInfo { raw: true, ..Default::default() };
+    for orientation in [Orientation::Normal, Orientation::Rotate90] {
+        let mut s = DevelopSettings { orientation, ..Default::default() };
+        s.detail.nr_luminance = 80.0;
+        s.detail.nr_color = 60.0;
+        s.detail.sharpen_amount = 0.0;
+        s.light.exposure = 2.0;
+        s.crop.geometry.rect = Rect::new(0.1, 0.1, 0.9, 0.9);
+        s.crop.geometry.angle = 3.0;
+        s.crop.flip_h = true;
+        let req = RenderRequest::fit(512, 512);
+        let f = render(&src, &info, &s, &req).image;
+        let at = PixelWindow { x: f.width / 4, y: f.height / 4, w: f.width / 2, h: f.height / 2 };
+        let w = render(&src, &info, &s, &RenderRequest { window: Some(at), ..req }).image;
+        let (max, mean) = compare_inset(&f, &w, at, 32);
+        assert!(max <= 3 && mean < 0.15, "{orientation:?}: max {max}, mean {mean}");
+    }
+}
+
 // Given a mask with Refine Edges, the refinement width follows the whole frame's size
 #[test]
 fn mask_edge_refinement_does_not_depend_on_the_window() {
