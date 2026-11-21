@@ -35,6 +35,8 @@ pub enum RightPanel {
     Info,
     /// The profile browser (part of Edit).
     Profiles,
+    /// Assisted Culling's bursts, to arrange by hand (Window ▸ Bursts).
+    Bursts,
 }
 
 impl RightPanel {

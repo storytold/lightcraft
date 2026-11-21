@@ -149,7 +149,7 @@ pub fn auto_scroll_speed(y: f32, top: f32, bottom: f32) -> f32 {
 /// While an album, or photos from the grid, are dragged over the sidebar: scrolls it when the
 /// pointer is near its top or bottom edge, so rows beyond the visible part can be reached. Call
 /// inside the scroll area.
-pub(super) fn drag_auto_scroll(app: &LightcraftApp, ui: &egui::Ui) {
+pub(crate) fn drag_auto_scroll(app: &LightcraftApp, ui: &egui::Ui) {
     if app.ui.dragging_album.is_none() && app.ui.dragging_photos.is_none() && app.ui.dragging_section.is_none() {
         return;
     }

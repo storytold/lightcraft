@@ -19,8 +19,9 @@ mod local;
 mod rows;
 mod sections;
 
+use albums::albums_rows;
+pub(crate) use albums::drag_auto_scroll;
 pub use albums::{album_drag_feedback, auto_scroll_speed};
-use albums::{albums_rows, drag_auto_scroll};
 pub(crate) use dates::browse_all_photos;
 use dates::date_rows;
 pub(crate) use folders::{created_text, folder_row_of, move_photos, moved_text};

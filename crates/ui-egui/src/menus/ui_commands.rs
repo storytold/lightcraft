@@ -156,6 +156,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // Edit Keyword Tag for the keyword picked in the Keyword List
     ("panel.editKeywords", "Edit Keywords", Some("Cmd+Shift+K"), ""),
     ("panel.activity", "History", None, "Window"),
+    ("panel.bursts", "Bursts", None, "Window"),
     ("panel.close", "Close Panel", None, ""),
     // {solo?}: true opens just that section (⌥-click on its header); otherwise opens or closes it
     ("section.light", "Light", Some("Cmd+1"), "Window>Edit Sections"),
