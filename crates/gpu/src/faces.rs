@@ -677,21 +677,7 @@ fn build_dev(adapter: wgpu::Adapter, card: Card, adapter_key: AdapterKey) -> Res
     });
     let driver_sig = format!("{adapter_key}|{}|{:?}", info.driver_info, info.backend);
     log::info!("gpu (faces, {which} card): {} ({:?}, f16={has_f16}, nvidia={})", info.name, info.backend, info.vendor == VENDOR_NVIDIA);
-    Ok(Dev {
-        device,
-        queue,
-        info,
-        adapter_key,
-        driver_sig,
-        limits,
-        layout,
-        fp32,
-        fp16,
-        dummy,
-        card,
-        broken,
-        broken_why,
-    })
+    Ok(Dev { device, queue, info, adapter_key, driver_sig, limits, layout, fp32, fp16, dummy, card, broken, broken_why })
 }
 
 /// The adapter face scans would use ("NVIDIA GeForce RTX 4070 (Vulkan)"), or why they cannot use one. Creates the
