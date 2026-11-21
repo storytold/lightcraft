@@ -2773,7 +2773,7 @@
   "{n} photo(s) use {setting} in Capture One, which isn't imported": "{setting} trong Capture One: {n} ảnh; không được nhập",
   "{n} photo(s) were lens-corrected in Capture One but have no lens profile in LightCraft yet; the correction applies once LightCraft finds one": "Ảnh đã hiệu chỉnh ống kính trong Capture One nhưng chưa có hồ sơ ống kính trong LightCraft: {n}; hiệu chỉnh sẽ áp dụng khi LightCraft tìm thấy hồ sơ",
   "a perspective skew": "Độ nghiêng của phối cảnh",
-  "a perspective tilt together with a crop": "Nghiêng phối cảnh kèm theo vùng cắt",
+  "a perspective aspect change or a straighten together with a perspective correction and a crop": "Thay đổi tỉ lệ phối cảnh hoặc làm thẳng cùng với hiệu chỉnh phối cảnh và vùng cắt",
   "a crop reaching past the photo": "Vùng cắt vượt ra ngoài ảnh",
   "distortion correction with the generic lens profile": "Hiệu chỉnh méo hình với hồ sơ ống kính chung",
   "a lens profile chosen by hand": "Hồ sơ ống kính chọn thủ công",

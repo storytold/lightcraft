@@ -131,7 +131,7 @@ pub(crate) const GEOMETRY_LEFT_OUT: &str = "{n} photo(s) use {setting} in Captur
 pub(crate) const NO_LENS_PROFILE: &str =
     "{n} photo(s) were lens-corrected in Capture One but have no lens profile in LightCraft yet; the correction applies once LightCraft finds one";
 pub(crate) const PERSPECTIVE: &str = "a perspective skew";
-pub(crate) const TILT_WITH_CROP: &str = "a perspective tilt together with a crop";
+pub(crate) const TILT_WITH_CROP: &str = "a perspective aspect change or a straighten together with a perspective correction and a crop";
 pub(crate) const CROP_OUTSIDE: &str = "a crop reaching past the photo";
 pub(crate) const GENERIC_DISTORTION: &str = "distortion correction with the generic lens profile";
 pub(crate) const PROFILE_BY_HAND: &str = "a lens profile chosen by hand";

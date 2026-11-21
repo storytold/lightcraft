@@ -2486,7 +2486,7 @@
   "{n} photo(s) use {setting} in Capture One, which isn't imported": "Capture One の{setting}: {n} 枚。読み込まれません",
   "{n} photo(s) were lens-corrected in Capture One but have no lens profile in LightCraft yet; the correction applies once LightCraft finds one": "Capture One でレンズ補正されたが、LightCraft にまだレンズプロファイルがない写真: {n}。LightCraft がプロファイルを見つけると補正が適用されます",
   "a perspective skew": "遠近補正の傾斜",
-  "a perspective tilt together with a crop": "切り抜きと組み合わせた遠近の傾き補正",
+  "a perspective aspect change or a straighten together with a perspective correction and a crop": "遠近補正と切り抜きに加えた縦横比の変更または傾き補正",
   "a crop reaching past the photo": "写真の端を越える切り抜き",
   "distortion correction with the generic lens profile": "汎用レンズプロファイルによる歪曲補正",
   "a lens profile chosen by hand": "手動で選んだレンズプロファイル",

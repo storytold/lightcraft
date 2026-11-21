@@ -2487,7 +2487,7 @@
   "{n} photo(s) use {setting} in Capture One, which isn't imported": "Capture One 中的{setting}：{n} 张照片；不导入",
   "{n} photo(s) were lens-corrected in Capture One but have no lens profile in LightCraft yet; the correction applies once LightCraft finds one": "在 Capture One 中做过镜头校正、但在 LightCraft 中还没有镜头配置文件的照片：{n}；LightCraft 找到配置文件后即应用校正",
   "a perspective skew": "透视倾斜",
-  "a perspective tilt together with a crop": "与裁剪一起使用的透视倾斜",
+  "a perspective aspect change or a straighten together with a perspective correction and a crop": "与透视校正和裁剪一起使用的透视纵横比更改或拉直",
   "a crop reaching past the photo": "超出照片边缘的裁剪",
   "distortion correction with the generic lens profile": "使用通用镜头配置文件的畸变校正",
   "a lens profile chosen by hand": "手动选择的镜头配置文件",

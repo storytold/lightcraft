@@ -2534,7 +2534,7 @@
   "{n} photo(s) use {setting} in Capture One, which isn't imported": "{setting} v Capture One: {n} fotek; neimportuje se",
   "{n} photo(s) were lens-corrected in Capture One but have no lens profile in LightCraft yet; the correction applies once LightCraft finds one": "Fotky s korekcí objektivu v Capture One, ale zatím bez profilu objektivu v LightCraftu: {n}; korekce se použije, jakmile LightCraft nějaký najde",
   "a perspective skew": "Zkosení perspektivy",
-  "a perspective tilt together with a crop": "Náklon perspektivy spolu s ořezem",
+  "a perspective aspect change or a straighten together with a perspective correction and a crop": "Změna poměru stran perspektivy nebo narovnání spolu s korekcí perspektivy a ořezem",
   "a crop reaching past the photo": "Ořez přesahující fotku",
   "distortion correction with the generic lens profile": "Korekce zkreslení s obecným profilem objektivu",
   "a lens profile chosen by hand": "Ručně zvolený profil objektivu",

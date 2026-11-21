@@ -2332,7 +2332,7 @@
   "{n} photo(s) use {setting} in Capture One, which isn't imported": "{setting} no Capture One: {n} foto(s); não importado",
   "{n} photo(s) were lens-corrected in Capture One but have no lens profile in LightCraft yet; the correction applies once LightCraft finds one": "Fotos com correção de lente no Capture One, mas ainda sem perfil de lente no LightCraft: {n}; a correção é aplicada assim que o LightCraft encontrar um",
   "a perspective skew": "Inclinação da perspectiva",
-  "a perspective tilt together with a crop": "Inclinação de perspectiva junto com um corte",
+  "a perspective aspect change or a straighten together with a perspective correction and a crop": "Mudança de proporção da perspectiva ou endireitamento junto com correção de perspectiva e corte",
   "a crop reaching past the photo": "Corte que ultrapassa a foto",
   "distortion correction with the generic lens profile": "Correção de distorção com o perfil de lente genérico",
   "a lens profile chosen by hand": "Perfil de lente escolhido manualmente",

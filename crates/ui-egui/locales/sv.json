@@ -2549,7 +2549,7 @@
   "{n} photo(s) use {setting} in Capture One, which isn't imported": "{setting} i Capture One: {n} foto(n); importeras inte",
   "{n} photo(s) were lens-corrected in Capture One but have no lens profile in LightCraft yet; the correction applies once LightCraft finds one": "Foton som objektivkorrigerats i Capture One men ännu saknar objektivprofil i LightCraft: {n}; korrigeringen används så snart LightCraft hittar en",
   "a perspective skew": "Perspektivets lutning",
-  "a perspective tilt together with a crop": "Perspektivlutning tillsammans med en beskärning",
+  "a perspective aspect change or a straighten together with a perspective correction and a crop": "Ändrade perspektivproportioner eller upprätning tillsammans med perspektivkorrigering och beskärning",
   "a crop reaching past the photo": "Beskärning utanför fotot",
   "distortion correction with the generic lens profile": "Distorsionskorrigering med den generiska objektivprofilen",
   "a lens profile chosen by hand": "Manuellt vald objektivprofil",

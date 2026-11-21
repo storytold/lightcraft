@@ -2459,7 +2459,7 @@
   "{n} photo(s) use {setting} in Capture One, which isn't imported": "{setting} di Capture One: {n} foto; tidak diimpor",
   "{n} photo(s) were lens-corrected in Capture One but have no lens profile in LightCraft yet; the correction applies once LightCraft finds one": "Foto yang dikoreksi lensanya di Capture One tetapi belum punya profil lensa di LightCraft: {n}; koreksi berlaku begitu LightCraft menemukannya",
   "a perspective skew": "Kemiringan perspektif",
-  "a perspective tilt together with a crop": "Kemiringan perspektif bersama pangkasan",
+  "a perspective aspect change or a straighten together with a perspective correction and a crop": "Perubahan rasio perspektif atau pelurusan bersama koreksi perspektif dan pangkasan",
   "a crop reaching past the photo": "Pangkasan melewati tepi foto",
   "distortion correction with the generic lens profile": "Koreksi distorsi dengan profil lensa generik",
   "a lens profile chosen by hand": "Profil lensa yang dipilih manual",

@@ -2073,9 +2073,56 @@ fn a_keystone_tilt_widens_the_same_edge_and_keeps_the_crop_on_the_photo() {
     let skewed = geometry::develop(&photo(0.0, keystone(0.0, 30.0, 20.0), None)).unwrap();
     assert_eq!(skewed.left_out, [notice::PERSPECTIVE]);
     assert!(!skewed.partial.contains_key("geometry"));
-    let cropped = geometry::develop(&photo(0.0, keystone(0.0, 30.0, 0.0), Some([3000.0, 2000.0, 2000.0, 1000.0]))).unwrap();
+    let aspect_and_crop = geometry::Keystone { aspect: Some(20.0), ..keystone(0.0, 30.0, 0.0) };
+    let cropped = geometry::develop(&photo(0.0, aspect_and_crop, Some([3000.0, 2000.0, 2000.0, 1000.0]))).unwrap();
     assert_eq!(cropped.left_out, [notice::TILT_WITH_CROP]);
     assert!(!cropped.partial.contains_key("geometry"));
+}
+
+/// A crop of the user's own on a tilted photo shows what Capture One shows: its centre on the
+/// stored image goes through the keystone, its size is in pixels as Capture One shows them (with
+/// the camera turn's homography keeping its last entry 1). Checked through LightCraft's render
+/// frame against the model rebuilt in `capture_one_keystone`.
+#[test]
+fn a_crop_on_a_tilted_photo_shows_what_capture_one_shows() {
+    use lightcraft_geom::Point;
+    let (w, h) = (6000.0_f64, 4000.0_f64);
+    for (tilt_x, tilt_y, crop) in [
+        (0.0, 30.0, [3912.3, 1321.1, 3410.0, 2273.3]),
+        (-35.0, 0.0, [2500.0, 2600.0, 2400.0, 1600.0]),
+        (0.0, -55.0, [3000.0, 2900.0, 3000.0, 2000.0]),
+    ] {
+        let geometry = geometry::Geometry {
+            default: layer(0.0, 0, None),
+            adjusted: geometry::Layer {
+                crop: Some(crop),
+                keystone: geometry::Keystone { tilt_x: Some(tilt_x), tilt_y: Some(tilt_y), focal: Some(1.0), ..Default::default() },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let s = developed(&CatalogPhoto { width: 6000, height: 4000, geometry: Some(geometry), ..Default::default() });
+        let frame = lightcraft_pipeline::geometry::Frame::new(6000, 4000, &s, true);
+        let (out_w, out_h) = (1000, (1000.0 * crop[3] / crop[2]).round() as usize);
+        let to_norm = frame.out_to_norm(out_w, out_h);
+        // where an output point is on the stored image, and where Capture One shows that
+        let shown = |u: f64, v: f64| {
+            let p = frame.transformed_to_corrected(to_norm.apply(Point::new(u, v)));
+            let (x, y) = (p.x * w - w / 2.0, p.y * h - h / 2.0);
+            let r33 = (tilt_x / 100.0_f64).atan().cos() * (tilt_y / 100.0_f64).atan().cos();
+            let (sx, sy) = capture_one_keystone(tilt_x, tilt_y, 0.0, (w, h), x, y);
+            ((x + w / 2.0, y + h / 2.0), (sx * r33, sy * r33))
+        };
+        let case = format!("{tilt_x}/{tilt_y}");
+        // the centre: the crop's centre on the stored image, within 1.5 % of the photo's width
+        let ((cx, cy), _) = shown(out_w as f64 / 2.0, out_h as f64 / 2.0);
+        assert!((cx - crop[0]).hypot(cy - crop[1]) < 0.015 * w, "{case}: centre at {cx}, {cy}");
+        // the width: as wide as Capture One shows it, within 2 %
+        let (_, left) = shown(0.0, out_h as f64 / 2.0);
+        let (_, right) = shown(out_w as f64, out_h as f64 / 2.0);
+        let width = (right.0 - left.0).hypot(right.1 - left.1);
+        assert!((width / crop[2] - 1.0).abs() < 0.02, "{case}: {width} wide, Capture One {}", crop[2]);
+    }
 }
 
 /// Capture One's keystone, rebuilt here from what the exports showed: a camera turn with a focal

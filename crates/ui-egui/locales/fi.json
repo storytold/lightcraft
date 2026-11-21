@@ -2444,7 +2444,7 @@
   "{n} photo(s) use {setting} in Capture One, which isn't imported": "{setting} Capture Onessa: {n} kuvaa; ei tuoda",
   "{n} photo(s) were lens-corrected in Capture One but have no lens profile in LightCraft yet; the correction applies once LightCraft finds one": "Kuvat, joille Capture One teki objektiivikorjauksen mutta joilla ei vielä ole objektiiviprofiilia LightCraftissa: {n}; korjaus otetaan käyttöön, kun LightCraft löytää profiilin",
   "a perspective skew": "Perspektiivin vinous",
-  "a perspective tilt together with a crop": "Perspektiivin kallistus yhdessä rajauksen kanssa",
+  "a perspective aspect change or a straighten together with a perspective correction and a crop": "Perspektiivin kuvasuhteen muutos tai suoristus yhdessä perspektiivin korjauksen ja rajauksen kanssa",
   "a crop reaching past the photo": "Kuvan reunan yli ulottuva rajaus",
   "distortion correction with the generic lens profile": "Vääristymän korjaus yleisellä objektiiviprofiililla",
   "a lens profile chosen by hand": "Käsin valittu objektiiviprofiili",
