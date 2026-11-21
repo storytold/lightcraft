@@ -56,10 +56,16 @@ fn check_v3_luminance_cutoff(chroma: f32, pixel: [f32; 3], expected: [u8; 4]) {
     let cpu = render(&src, &info, &s, &req).image;
     let gpu = lightcraft_gpu::try_render(&src, &info, &s, &req, None).expect("GPU render without CPU fallback").image;
     for image in [&cpu, &gpu] {
-        // (8-bit output is dithered: a flat source varies by a level)
-        assert!(image.data.iter().all(|p| p.iter().zip(image.data[0]).all(|(a, b)| a.abs_diff(b) <= 1)));
-        for (actual, expected) in image.data[0].into_iter().zip(expected) {
-            assert!(actual.abs_diff(expected) <= 1, "chroma {chroma}: {:?}, expected {expected}", image.data[0]);
+        // Ordered dithering can vary a uniform source by one quantization level.
+        for channel in 0..4 {
+            let min = image.data.iter().map(|p| p[channel]).min().unwrap();
+            let max = image.data.iter().map(|p| p[channel]).max().unwrap();
+            assert!(max - min <= 1, "chroma {chroma}: channel {channel} spans {min}..{max}");
+        }
+        for pixel in &image.data {
+            for (actual, expected) in pixel.iter().zip(expected) {
+                assert!(actual.abs_diff(expected) <= 1, "chroma {chroma}: {pixel:?}, expected {expected}");
+            }
         }
     }
     let (_, max, _) = diff(&cpu, &gpu);

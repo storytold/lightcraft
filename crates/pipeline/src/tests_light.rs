@@ -38,10 +38,16 @@ fn check_luminance_cutoff(chroma: f32, pixel: [f32; 3], expected: [u8; 4]) {
     s.light.contrast = 100.0;
     s.light.blacks = 80.0;
     let image = render(&src, &info, &s, &RenderRequest::fit(64, 64)).image;
-    // (8-bit output is dithered: a flat source varies by a level)
-    assert!(image.data.iter().all(|p| p.iter().zip(image.data[0]).all(|(a, b)| a.abs_diff(b) <= 1)));
-    for (actual, expected) in image.data[0].into_iter().zip(expected) {
-        assert!(actual.abs_diff(expected) <= 1, "chroma {chroma}: {:?}, expected {expected}", image.data[0]);
+    // Ordered dithering can vary a uniform source by one quantization level.
+    for channel in 0..4 {
+        let min = image.data.iter().map(|p| p[channel]).min().unwrap();
+        let max = image.data.iter().map(|p| p[channel]).max().unwrap();
+        assert!(max - min <= 1, "chroma {chroma}: channel {channel} spans {min}..{max}");
+    }
+    for pixel in &image.data {
+        for (actual, expected) in pixel.iter().zip(expected) {
+            assert!(actual.abs_diff(expected) <= 1, "chroma {chroma}: {pixel:?}, expected {expected}");
+        }
     }
 }
 
@@ -314,8 +320,8 @@ fn v3_sliders_move_a_grey_ramp_their_way() {
         ("light.blacks", -60.0),
     ] {
         let r = shot(id, v);
-        // (within a level of 8-bit dither)
-        assert!(r.windows(2).all(|w| luma(w[1]) >= luma(w[0]) - 1), "{id} {v}: the ramp is no longer increasing");
+        // Adjacent ordered-dither thresholds can lower a sample by one 8-bit level.
+        assert!(r.windows(2).all(|w| luma(w[1]) + 1 >= luma(w[0])), "{id} {v}: the ramp decreases beyond the dither floor");
         assert!(r.iter().all(|p| p[0].abs_diff(p[1]) <= 1 && p[1].abs_diff(p[2]) <= 1), "{id} {v}: the ramp is no longer grey");
         let diff = |lo: usize, hi: usize| (lo..hi).map(|x| luma(r[x]) - luma(plain[x])).sum::<i32>();
         let (dark, light) = (diff(40, 90), diff(170, 220));
