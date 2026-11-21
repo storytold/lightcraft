@@ -133,15 +133,8 @@ pub fn sniff(b: &[u8]) -> Option<Format> {
 }
 
 fn sniff_bmff(b: &[u8]) -> Option<Format> {
-    let size = u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize;
-    let end = size.clamp(12, b.len().min(4096));
-    let mut brands: Vec<&[u8]> = vec![&b[8..12]];
-    let mut p = 16;
-    while p + 4 <= end {
-        brands.push(&b[p..p + 4]);
-        p += 4;
-    }
-    let has = |x: &[u8]| brands.contains(&x);
+    let mut brands = craft_image_codecs::ftyp_brands(&b[..b.len().min(4096)]);
+    let has = |brand: &[u8; 4]| brands.clone().any(|candidate| candidate == brand);
     if has(b"crx ") {
         return Some(Format::RawOther);
     }
@@ -151,10 +144,9 @@ fn sniff_bmff(b: &[u8]) -> Option<Format> {
     if has(b"avif") || has(b"avis") {
         return Some(Format::Avif);
     }
-    if [&b"heic"[..], b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs", b"mif1", b"msf1"].iter().any(|x| has(x)) {
-        return Some(Format::Heif);
-    }
-    None
+    brands
+        .any(|brand| matches!(brand, b"heic" | b"heix" | b"hevc" | b"hevx" | b"heim" | b"heis" | b"hevm" | b"hevs" | b"mif1" | b"msf1"))
+        .then_some(Format::Heif)
 }
 
 /// Heuristic camera-raw detection for classic TIFF: DNGVersion, the CR2 signature, CFA/LinearRaw
@@ -365,6 +357,19 @@ mod tests {
             b.extend_from_slice(*brand);
         }
         b
+    }
+
+    #[test]
+    fn bmff_probe_reads_the_last_complete_brand_in_its_prefix() {
+        let mut compatible = vec![b"zzzz"; 1021];
+        compatible[1019] = b"avif";
+        compatible[1020] = b"crx ";
+        let bytes = ftyp_box(None, b"heic", &compatible);
+
+        // AVIF starts at 4092, well beyond the shared image detector's 64-byte scan.
+        // CR3 starts at 4096, just past LightCraft's scan, so it cannot take precedence.
+        assert_eq!(sniff(&bytes), Some(Format::Avif));
+        assert_eq!(sniff(&bytes[..4095]), Some(Format::Heif));
     }
 
     #[test]
