@@ -26,7 +26,14 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
     // a photo listed twice is one photo, not a burst of two look-alikes (first occurrence kept)
     let mut seen = std::collections::HashSet::new();
     let ids: Vec<PhotoId> = ids.into_iter().filter(|id| seen.insert(*id)).collect();
-    let reject_below = p.get("rejectBelow").and_then(Value::as_f64).map(|v| v as f32);
+    let reject_below = match p.get("rejectBelow") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(
+            v.as_f64()
+                .filter(|x| (0.0..=100.0).contains(x))
+                .ok_or_else(|| super::bad("photo.analyze", "`rejectBelow` must be a number from 0 to 100"))? as f32,
+        ),
+    };
     let pick_best = p.get("pickBest").and_then(Value::as_bool).unwrap_or(false);
     let (gap, same) = burst_params(p)?;
     // measure (thumbnail-level sources: fast, and enough for focus at 512 px)
@@ -103,6 +110,20 @@ fn burst_params(p: &Value) -> Result<(f64, f32)> {
         }
     };
     Ok((num("burstGap", BURST_GAP, MAX_GAP)?, num("similarity", SAME, 1.0)? as f32))
+}
+
+#[test]
+fn assisted_culling_requires_a_sharpness_cutoff_in_range() {
+    let mut s = Session::new();
+    let commits = s.commits();
+    for value in [json!(-1), json!(101), json!("50")] {
+        let error = s.execute("photo.analyze", &json!({"rejectBelow": value})).unwrap_err();
+        assert!(error.to_string().contains("`rejectBelow` must be a number from 0 to 100"), "{error}");
+    }
+    assert_eq!(s.commits(), commits);
+    for value in [Value::Null, json!(0), json!(100)] {
+        assert!(s.execute("photo.analyze", &json!({"rejectBelow": value})).is_ok());
+    }
 }
 
 pub fn specs() -> Vec<CommandSpec> {
