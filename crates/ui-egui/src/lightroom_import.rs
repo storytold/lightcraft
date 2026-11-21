@@ -496,12 +496,24 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
             task.enter(Phase::Committing);
             let mut finalization = None;
             let mut report = None;
+            let mut previews = None;
             let committed = app.session.execute_fn("library.importLightroom", |s| {
                 let completion = lightcraft_engine::lightroom_job::commit_prepared(s, *prepared)?;
                 report = Some(completion.report.clone());
                 finalization = Some(completion.finalization);
+                previews = completion.previews;
                 Ok(completion.report)
             });
+            // Lightroom's previews of the photos whose originals were not read go into the
+            // thumbnail cache on a worker of their own (its own row in the activity stack)
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(seed) = previews.take()
+                && seed.spawn(&app.session.activity).is_none()
+            {
+                log::warn!("could not start using the Lightroom previews");
+            }
+            #[cfg(target_arch = "wasm32")]
+            drop(previews);
             let report = report.unwrap_or(Value::Null);
             task.enter(Phase::Finalizing);
             let (tx, rx) = mpsc::channel();
