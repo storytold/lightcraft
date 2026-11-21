@@ -900,23 +900,182 @@ fn cull_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut D
     );
 }
 
+/// One block of the What's New text, as the dialog shows it.
+#[derive(Debug, PartialEq)]
+enum WhatsNewBlock {
+    /// `## ` (a release).
+    Release(String),
+    /// `### ` (a change).
+    Change(String),
+    /// `- ` and the indented lines that continue it.
+    Bullet(String),
+    /// Other lines up to a blank line.
+    Paragraph(String),
+}
+
+/// The blocks of `docs/whats-new.md`. Its paragraphs and bullets are wrapped across several lines
+/// in the file; a wrapped line continues the block above it instead of starting a new one, so a
+/// sentence isn't broken where the file wraps it (#4383). Each line is still translated on its
+/// own (`tr`), as the catalogs hold it, and the translations are joined with a space. The joined
+/// text then loses its Markdown ([`plain_markdown`]), so a link or emphasis that the file wraps
+/// over two lines is read whole.
+fn whats_new_blocks(text: &str, tr: impl Fn(&str) -> String) -> Vec<WhatsNewBlock> {
+    let mut blocks = Vec::new();
+    let mut open: Option<WhatsNewBlock> = None;
+    let flush = |open: &mut Option<WhatsNewBlock>, blocks: &mut Vec<WhatsNewBlock>| {
+        if let Some(block) = open.take() {
+            blocks.push(block);
+        }
+    };
+    for line in text.lines() {
+        let l = line.trim_end();
+        if let Some(h) = l.strip_prefix("### ") {
+            flush(&mut open, &mut blocks);
+            blocks.push(WhatsNewBlock::Change(plain_markdown(&tr(h))));
+        } else if let Some(h) = l.strip_prefix("## ") {
+            flush(&mut open, &mut blocks);
+            blocks.push(WhatsNewBlock::Release(plain_markdown(&tr(h))));
+        } else if l.starts_with("# ") || l.trim().is_empty() {
+            flush(&mut open, &mut blocks);
+        } else if let Some(b) = l.strip_prefix("- ") {
+            flush(&mut open, &mut blocks);
+            open = Some(WhatsNewBlock::Bullet(tr(b)));
+        } else {
+            let more = tr(l.trim());
+            match &mut open {
+                Some(WhatsNewBlock::Bullet(s) | WhatsNewBlock::Paragraph(s)) => {
+                    s.push(' ');
+                    s.push_str(&more);
+                }
+                _ => open = Some(WhatsNewBlock::Paragraph(more)),
+            }
+        }
+    }
+    flush(&mut open, &mut blocks);
+    for block in &mut blocks {
+        if let WhatsNewBlock::Bullet(s) | WhatsNewBlock::Paragraph(s) = block {
+            *s = plain_markdown(s);
+        }
+    }
+    blocks
+}
+
+/// `text` as it reads without its Markdown:
+/// - a code span keeps its text as written, without its ticks (so `*.jpg` stays);
+/// - a link `[label](target)` shows its label;
+/// - `**bold**` and `*emphasis*` show their text.
+///
+/// A `[` or `*` that doesn't open one of these stays.
+fn plain_markdown(text: &str) -> String {
+    plain_markdown_within(text, 0)
+}
+
+/// Spans nested deeper than this are shown as written; the text is ours, but recursion stays bounded.
+const MARKDOWN_DEPTH: usize = 4;
+
+fn plain_markdown_within(text: &str, depth: usize) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(['`', '[', '*']) {
+        let (before, from) = rest.split_at(at);
+        out.push_str(before);
+        let prev = out.chars().next_back();
+        let (shown, used) = markdown_span(from, prev, depth);
+        out.push_str(&shown);
+        rest = from.get(used..).unwrap_or_default();
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Where `marker` first occurs in `text` outside a code span: the `*` of `` `*.jpg` `` doesn't
+/// close emphasis around it.
+fn find_outside_code(text: &str, marker: &str) -> Option<usize> {
+    let mut at = 0;
+    loop {
+        let rest = text.get(at..)?;
+        let tick = rest.find('`');
+        match rest.find(marker) {
+            Some(m) if tick.is_none_or(|t| m < t) => return Some(at + m),
+            _ => {}
+        }
+        // Skip the code span the tick opens; an unclosed tick is just a character.
+        let t = tick?;
+        let after = at + t + 1;
+        at = match text.get(after..).and_then(|r| r.find('`')) {
+            Some(end) => after + end + 1,
+            None => after,
+        };
+    }
+}
+
+/// The span `from` starts (at a `` ` ``, `[` or `*`): what it shows and how many bytes it takes.
+/// `prev` is the character before it. Not a span: the character itself, shown as it is (a
+/// lone code tick is dropped, as before).
+fn markdown_span(from: &str, prev: Option<char>, depth: usize) -> (String, usize) {
+    let bytes = from.as_bytes();
+    let inner = |text: &str| if depth < MARKDOWN_DEPTH { plain_markdown_within(text, depth + 1) } else { text.to_string() };
+    match bytes.first() {
+        Some(b'`') => match from.get(1..).and_then(|s| s.find('`')) {
+            Some(end) => (from.get(1..end + 1).unwrap_or_default().to_string(), end + 2),
+            None => (String::new(), 1),
+        },
+        Some(b'[') => {
+            let link = from.find("](").and_then(|mid| {
+                let label = from.get(1..mid)?;
+                let close = from.get(mid + 2..)?.find(')')? + mid + 2;
+                (!label.contains(['[', ']'])).then_some((label, close))
+            });
+            match link {
+                Some((label, close)) => (inner(label), close + 1),
+                None => ("[".into(), 1),
+            }
+        }
+        Some(b'*') => {
+            let marker = if bytes.get(1) == Some(&b'*') { "**" } else { "*" };
+            let inner_start = marker.len();
+            // Emphasis opens at the start of a word and closes at the end of one, around text
+            // that neither starts nor ends with a space: `a * b` and `lightcraft*` aren't emphasis.
+            let opens = prev.is_none_or(|c| !c.is_alphanumeric() && c != '*')
+                && from.get(inner_start..).and_then(|s| s.chars().next()).is_some_and(|c| !c.is_whitespace() && c != '*');
+            let close = from.get(inner_start..).and_then(|s| find_outside_code(s, marker)).map(|i| i + inner_start);
+            match close {
+                Some(end) if opens && end > inner_start => {
+                    let text = from.get(inner_start..end).unwrap_or_default();
+                    let after = from.get(end + marker.len()..).and_then(|s| s.chars().next());
+                    if text.ends_with(char::is_whitespace) || after.is_some_and(char::is_alphanumeric) {
+                        (marker.into(), marker.len())
+                    } else {
+                        (inner(text), end + marker.len())
+                    }
+                }
+                _ => (marker.into(), marker.len()),
+            }
+        }
+        _ => (from.chars().next().map(String::from).unwrap_or_default(), from.chars().next().map_or(1, char::len_utf8)),
+    }
+}
+
 /// The body of the WhatsNew dialog.
 fn whats_new_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::WhatsNew = dlg else { return };
     egui::ScrollArea::vertical().max_height(list_height(ui, 460.0)).auto_shrink([false, true]).show(ui, |ui| {
-        for line in WHATS_NEW.lines() {
-            let l = line.trim_end();
-            if let Some(h) = l.strip_prefix("### ") {
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(12.5)).color(t.text));
-            } else if let Some(h) = l.strip_prefix("## ") {
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(14.0)).color(t.text));
-            } else if l.starts_with("# ") || l.is_empty() {
-            } else if let Some(b) = l.strip_prefix("- ") {
-                ui.label(egui::RichText::new(format!("•  {}", crate::i18n::tr(b).replace('`', ""))).color(t.text_label));
-            } else {
-                ui.label(egui::RichText::new(crate::i18n::tr(l.trim()).replace('`', "")).color(t.text_label));
+        for block in whats_new_blocks(WHATS_NEW, |line| crate::i18n::tr(line).to_string()) {
+            match block {
+                WhatsNewBlock::Change(h) => {
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(h).font(t.semibold(12.5)).color(t.text));
+                }
+                WhatsNewBlock::Release(h) => {
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new(h).font(t.semibold(14.0)).color(t.text));
+                }
+                WhatsNewBlock::Bullet(b) => {
+                    ui.label(egui::RichText::new(format!("•  {b}")).color(t.text_label));
+                }
+                WhatsNewBlock::Paragraph(p) => {
+                    ui.label(egui::RichText::new(p).color(t.text_label));
+                }
             }
         }
     });
@@ -2157,5 +2316,101 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         Dialog::Shortcuts => crate::panels::keymap::body(app, ui, t),
         Dialog::ViewOptions => crate::panels::settings::view_options(app, ui, t),
         Dialog::Print => crate::print_view::body(app, ui, t),
+    }
+}
+
+#[cfg(test)]
+mod whats_new_tests {
+    use super::{WHATS_NEW, WhatsNewBlock as B, plain_markdown, whats_new_blocks};
+
+    #[test]
+    fn wrapped_lines_continue_their_bullet_or_paragraph() {
+        // #4383: the file wraps a bullet over indented lines; they're one bullet, not one per line.
+        let text = "# What's new\n\n## Unreleased\n\n### Flatpak updates\n- Help can now update Flatpak bundles.\n  This repair must arrive first. Flatpaks\n  keep their version.\n- Second `cmd` item.\n\nA paragraph that\nwraps here.\n\n### Grain\n- Grain is new. See [film grain](grain.md).\n";
+        let blocks = whats_new_blocks(text, str::to_string);
+        assert_eq!(
+            blocks,
+            [
+                B::Release("Unreleased".into()),
+                B::Change("Flatpak updates".into()),
+                B::Bullet("Help can now update Flatpak bundles. This repair must arrive first. Flatpaks keep their version.".into()),
+                B::Bullet("Second cmd item.".into()),
+                B::Paragraph("A paragraph that wraps here.".into()),
+                B::Change("Grain".into()),
+                B::Bullet("Grain is new. See film grain.".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn each_line_is_translated_as_the_catalog_holds_it() {
+        // The catalogs are keyed by the file's lines, so the joined text is made of translated lines.
+        let text = "### Change\n- first line\n  second line\n";
+        let blocks = whats_new_blocks(text, |s| format!("<{s}>"));
+        assert_eq!(blocks, [B::Change("<Change>".into()), B::Bullet("<first line> <second line>".into())]);
+    }
+
+    #[test]
+    fn links_show_their_label() {
+        assert_eq!(plain_markdown("See [film grain](grain.md)."), "See film grain.");
+        assert_eq!(plain_markdown("[a](x.md) and [b](y.md)"), "a and b");
+        assert_eq!(plain_markdown("Details: [focus-points.md](focus-points.md)."), "Details: focus-points.md.");
+        // Brackets that aren't a link stay as they are.
+        for text in ["a [b] c", "x[0] = 1", "[open", "a ](b)", "[a [b](c)"] {
+            assert_eq!(plain_markdown(text), text.replace("[b](c)", "b"), "{text}");
+        }
+        // A link the file wraps over two lines is whole once they are joined.
+        let blocks = whats_new_blocks("- See the [AI\n  Denoise](denoise.md) page.\n", str::to_string);
+        assert_eq!(blocks, [B::Bullet("See the AI Denoise page.".into())]);
+    }
+
+    #[test]
+    fn emphasis_shows_its_text_and_code_keeps_its_asterisks() {
+        assert_eq!(
+            plain_markdown("Settings ▸ **At launch**: *Open the last library* or *Ask me*."),
+            "Settings ▸ At launch: Open the last library or Ask me."
+        );
+        assert_eq!(plain_markdown("**View ▸ Show Focus Point** (⌥F)"), "View ▸ Show Focus Point (⌥F)");
+        // In a code span, text is kept as written.
+        assert_eq!(plain_markdown("matched `*.jpg` case-sensitively"), "matched *.jpg case-sensitively");
+        assert_eq!(plain_markdown("With `RUST_LOG=warn,lightcraft*=info`, the log"), "With RUST_LOG=warn,lightcraft*=info, the log");
+        assert_eq!(plain_markdown("Agents use `slideshow.templates.*`, and **this**"), "Agents use slideshow.templates.*, and this");
+        // What would be emphasis or a link outside a code span is kept inside one.
+        assert_eq!(plain_markdown("glob `*x*` and `[a](b)` and `**not bold**`"), "glob *x* and [a](b) and **not bold**");
+        // An asterisk that doesn't open emphasis stays.
+        for text in ["2 * 3 = 6", "a*b*c", "lightcraft*", "* not", "**", "*x *"] {
+            assert_eq!(plain_markdown(text), text, "{text}");
+        }
+        // Emphasis wrapped over two lines of the file, and a link inside emphasis.
+        let blocks = whats_new_blocks("- the window's **Remove from\n  List** does the same; **[docs](a.md)**.\n", str::to_string);
+        assert_eq!(blocks, [B::Bullet("the window's Remove from List does the same; docs.".into())]);
+        // A code span inside emphasis keeps its asterisk; the emphasis closes after it.
+        assert_eq!(plain_markdown("*Match `*.jpg` files* now"), "Match *.jpg files now");
+        assert_eq!(plain_markdown("**All `*` and `**` kept**."), "All * and ** kept.");
+        assert_eq!(plain_markdown("*open `tick only* here"), "open tick only here");
+        // Headings lose their code ticks too.
+        let blocks = whats_new_blocks("### `--import <folder>` takes HEIC\n### `>=` and `<=` work\n", str::to_string);
+        assert_eq!(blocks, [B::Change("--import <folder> takes HEIC".into()), B::Change(">= and <= work".into())]);
+        // Deep nesting stops at the limit instead of recursing on.
+        let deep = format!("{}x{}", "**[".repeat(40), "](a)**".repeat(40));
+        assert!(!plain_markdown(&deep).is_empty());
+    }
+
+    #[test]
+    fn the_shipped_notes_have_no_raw_links_or_split_bullets() {
+        let blocks = whats_new_blocks(WHATS_NEW, str::to_string);
+        let wrapped = WHATS_NEW.lines().filter(|l| l.starts_with("  ") && !l.trim().is_empty()).count();
+        assert!(wrapped > 0, "the notes wrap their bullets");
+        for block in &blocks {
+            let (B::Bullet(s) | B::Paragraph(s) | B::Change(s) | B::Release(s)) = block;
+            assert!(!s.contains("]("), "raw link in {s}");
+            assert!(!s.contains('`'), "code tick in {s}");
+            assert!(!s.contains("**"), "raw emphasis in {s}");
+        }
+        // Every wrapped line was joined into the block above it: no block starts with lower-case
+        // text cut from the middle of a sentence because of a wrap.
+        let bullets = blocks.iter().filter(|b| matches!(b, B::Bullet(_))).count();
+        let starts = WHATS_NEW.lines().filter(|l| l.starts_with("- ")).count();
+        assert_eq!(bullets, starts);
     }
 }
