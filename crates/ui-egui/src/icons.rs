@@ -81,7 +81,7 @@ pub enum Icon {
     Video,
     Heart,
     Edited,
-    /// Targeted adjustment: a ring with a centre dot and up/down arrows (drag vertically).
+    /// Targeted adjustment: a ring with a centre dot.
     Target,
     /// Community chat (opens the ArtCraft Discord): a speech bubble with three dots. Our own
     /// generic drawing, not any service's logo.
@@ -587,11 +587,8 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.line(&[(7.0, 13.0), (13.0, 7.0)]);
         }
         Target => {
-            pen.circle(8.0, 10.0, 5.0);
-            pen.dot(8.0, 10.0, 1.3);
-            pen.line(&[(15.5, 3.5), (15.5, 16.5)]);
-            pen.line(&[(13.5, 5.5), (15.5, 3.5), (17.5, 5.5)]);
-            pen.line(&[(13.5, 14.5), (15.5, 16.5), (17.5, 14.5)]);
+            pen.circle(10.0, 10.0, 6.0);
+            pen.dot(10.0, 10.0, 2.0);
         }
         Chat => {
             // rounded bubble with a tail at the lower left
@@ -637,5 +634,50 @@ mod tests {
                 assert!(upper.abs_diff(lower) < upper / 20, "arrowhead must be symmetric at scale {scale}: {upper} above, {lower} below");
             }
         }
+    }
+
+    /// The targeted-adjustment glyph is a ring with a dot, centred in its box. It used to carry a
+    /// pair of up/down arrows pushed against the ring, which at the Tone Curve button's size read as
+    /// one blob and left the ring off-centre. Along the middle row there are three marks: the ring's
+    /// two sides with the dot between them, centred on the icon, and nothing is lit outside the
+    /// ring's box.
+    #[test]
+    fn targeted_adjustment_is_a_ring_with_a_dot_centred_in_its_box() {
+        let mut view = crate::headless::HeadlessView::new();
+        let raw = crate::headless::HeadlessView::raw_input(vec2(64.0, 64.0), 2.0, 0.0, vec![]);
+        view.run(raw, |ui| {
+            ui.painter().rect_filled(ui.max_rect(), 0.0, Color32::BLACK);
+            paint(ui.painter(), Rect::from_center_size(pos2(32.0, 32.0), vec2(16.0, 16.0)), Icon::Target, Color32::WHITE);
+        });
+        let image = view.paint(&Default::default());
+        let (width, height) = (image.size[0], image.size[1]);
+        let lit_at = |x: usize, y: usize| image.pixels.get(y * width + x).is_some_and(|p| p.r() > 96);
+        // the two pixel rows either side of the glyph's centre line
+        let lit: Vec<bool> = (0..width).map(|x| (63..=64).any(|y| lit_at(x, y))).collect();
+        let mut marks: Vec<(usize, usize)> = Vec::new();
+        for (x, on) in lit.iter().enumerate() {
+            match (*on, marks.last_mut()) {
+                (true, Some(m)) if m.1 + 1 == x => m.1 = x,
+                (true, _) => marks.push((x, x)),
+                _ => {}
+            }
+        }
+        assert_eq!(marks.len(), 3, "ring (2 sides) and dot, nothing else: {marks:?}");
+        // the icon's centre is the pixel boundary between columns 63 and 64
+        let (left, right) = (marks[0].0, marks[2].1);
+        assert!((left + right).abs_diff(127) <= 1, "centred on the icon: the ring spans {left}..={right}");
+        // the dot is between the ring's sides, centred too
+        let dot = marks[1];
+        assert!((dot.0 + dot.1).abs_diff(127) <= 1, "the dot is centred: it spans columns {}..={}", dot.0, dot.1);
+        // the ring's top and bottom, read on the two columns either side of the centre line
+        let rows: Vec<usize> = (0..height).filter(|&y| (63..=64).any(|x| lit_at(x, y))).collect();
+        let (top, bottom) = (rows.first().copied().unwrap_or(0), rows.last().copied().unwrap_or(0));
+        assert!((top + bottom).abs_diff(127) <= 1, "centred on the icon: the ring spans rows {top}..={bottom}");
+        // and nothing else is lit outside the ring's box: no arrow above, below or beside it
+        let stray: Vec<(usize, usize)> = (0..height)
+            .flat_map(|y| (0..width).map(move |x| (x, y)))
+            .filter(|&(x, y)| lit_at(x, y) && !((left..=right).contains(&x) && (top..=bottom).contains(&y)))
+            .collect();
+        assert!(stray.is_empty(), "lit pixels outside the ring: {stray:?}");
     }
 }
