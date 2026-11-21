@@ -71,6 +71,12 @@ What was checked here instead of a whole-workspace build:
 - Every changed file parsed with a Rust grammar; every external symbol, field and signature the new
   code names checked against its definition.
 
+CI says the same about the library code: the **throw-away brand job passes** on every push, and it
+runs `cargo build -p lcc-cli` — which builds `lcc-catalog`, `lcc-pipeline`, `lcc-engine` and
+`lcc-ui-egui` inside it. So the production code compiles; what still fails is clippy's
+`--workspace --all-targets`, i.e. code only `cfg(test)` (or a bench or an example) sees. That is where
+the next error is, and it is being worked through on CI.
+
 ## Screenshots
 
 Not available: the change could not be run here. The manual page describes the dialog and the filter
