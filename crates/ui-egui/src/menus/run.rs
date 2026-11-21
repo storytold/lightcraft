@@ -165,6 +165,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         // the photos are read in the background (the first search reads the whole library)
         return Some(crate::find_similar::command(app, p));
     }
+    // the rating and color-label keys are commands of their own: they run what the Photo menu's rows run
+    if let Some((command, params)) = crate::shortcuts::culling_command(id) {
+        return Some(crate::menubar::run_item(app, command, params));
+    }
     if let Some(language) = language_from_command(id) {
         app.ui.language = language;
         // Immediately, not on the next frame: the reply and anything else run this frame

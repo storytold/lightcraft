@@ -133,30 +133,43 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, b: &Bindable, sc:
     ui.end_row();
 }
 
-/// Keys that aren't a command's own shortcut (ratings, labels, secondary keys): listed, not editable.
-/// One the user gave to a command shows struck through.
-fn fixed_keys(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, mac: bool, needle: &str) {
-    let mut fixed: Vec<(String, &str)> = Vec::new();
-    for (sc, id, _) in shortcuts::ALIASES {
-        let label = shortcuts::find_bindable(id).map_or(*id, |b| b.label);
-        fixed.push((sc.to_string(), label));
+/// What an alias does, as the list names it: the color-label aliases (Shift+6–9) name their label.
+fn alias_label(id: &'static str, params: &str) -> &'static str {
+    let label = serde_json::from_str::<serde_json::Value>(params).ok().and_then(|p| p["label"].as_str().map(str::to_string));
+    match (id, label.as_deref()) {
+        ("photo.label", Some("red")) => "Red label and advance",
+        ("photo.label", Some("yellow")) => "Yellow label and advance",
+        ("photo.label", Some("green")) => "Green label and advance",
+        ("photo.label", Some("blue")) => "Blue label and advance",
+        _ => shortcuts::find_bindable(id).map_or(id, |b| b.label),
     }
-    for n in 0..=5 {
-        fixed.push((n.to_string(), ["Clear rating", "Rate ★", "Rate ★★", "Rate ★★★", "Rate ★★★★", "Rate ★★★★★"][n]));
-        fixed.push((
-            format!("Shift+{n}"),
-            [
-                "Clear rating and advance",
-                "Rate ★ and advance",
-                "Rate ★★ and advance",
-                "Rate ★★★ and advance",
-                "Rate ★★★★ and advance",
-                "Rate ★★★★★ and advance",
-            ][n],
-        ));
+}
+
+/// The fixed keys, as (shortcut, label): the ones that aren't a command's own shortcut, which are secondary keys and the
+/// rating keys with Shift. The plain rating and color-label keys are commands of their own, rows of the editor. Static, so
+/// built once: the editor reads it every frame it is open.
+pub(crate) fn fixed_rows() -> &'static [(String, &'static str)] {
+    static ROWS: std::sync::LazyLock<Vec<(String, &'static str)>> = std::sync::LazyLock::new(build_fixed_rows);
+    &ROWS
+}
+
+fn build_fixed_rows() -> Vec<(String, &'static str)> {
+    let mut fixed: Vec<(String, &'static str)> = Vec::new();
+    for (sc, id, params) in shortcuts::ALIASES {
+        fixed.push((sc.to_string(), alias_label(id, params)));
     }
-    for (sc, label) in [("6", "Red label"), ("7", "Yellow label"), ("8", "Green label"), ("9", "Blue label")] {
-        fixed.push((sc.to_string(), label));
+    for (n, label) in [
+        "Clear rating and advance",
+        "Rate ★ and advance",
+        "Rate ★★ and advance",
+        "Rate ★★★ and advance",
+        "Rate ★★★★ and advance",
+        "Rate ★★★★★ and advance",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        fixed.push((format!("Shift+{n}"), label));
     }
     // grid navigation (Photo Grid and Square Grid): fixed keys that belong to no single command
     for (sc, label) in [
@@ -167,8 +180,13 @@ fn fixed_keys(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, mac: bool, nee
     ] {
         fixed.push((sc.to_string(), label));
     }
-    let fixed: Vec<_> = fixed
-        .into_iter()
+    fixed
+}
+
+/// The fixed keys the search matches: listed, not editable. One the user gave to a command shows struck through.
+fn fixed_keys(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, mac: bool, needle: &str) {
+    let fixed: Vec<_> = fixed_rows()
+        .iter()
         .filter(|(sc, label)| {
             needle.is_empty() || crate::i18n::tr(label).to_lowercase().contains(needle) || menu_text(sc, mac).to_lowercase().contains(needle)
         })
@@ -183,8 +201,8 @@ fn fixed_keys(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, mac: bool, nee
     egui::Grid::new("shortcuts-fixed").striped(true).num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
         for (sc, label) in fixed {
             ui.label(RichText::new(crate::i18n::tr(label)).color(t.text_label));
-            let mut text = RichText::new(menu_text(&sc, mac)).color(t.text_dim);
-            if shortcuts::parse(&sc).is_some_and(|k| taken.contains(&k)) {
+            let mut text = RichText::new(menu_text(sc, mac)).color(t.text_dim);
+            if shortcuts::parse(sc).is_some_and(|k| taken.contains(&k)) {
                 text = text.strikethrough();
             }
             ui.label(text);

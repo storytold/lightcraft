@@ -81,6 +81,7 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
         s if s.starts_with("dialog.merge") || (s.starts_with("merge.") && s.ends_with("Last")) => {
             app.session.selected().len() >= 2 && app.merge.final_task.is_none()
         }
+        s if crate::shortcuts::is_culling_command(s) => app.session.active().is_some(),
         _ => true,
     }
 }
