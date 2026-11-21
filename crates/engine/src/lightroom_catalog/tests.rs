@@ -796,6 +796,29 @@ fn catalog_crops_follow_the_photo_orientation() {
 }
 
 #[test]
+fn catalog_spots_are_imported_and_follow_the_photo_orientation() {
+    // a heal spot as a catalog's develop settings store it, source picked by Lightroom
+    let auto = r#"s = { RetouchAreas = { { Feather = 0, HealVersion = 2, Method = "gaussian", Opacity = 1, Seed = 2, SpotType = "heal",
+        SourceState = "sourceAutoComputed", SourceX = 0.329214, OffsetY = 0.160985,
+        Masks = { { Alpha = 0, CenterValue = 1, MaskValue = 1, PerimeterValue = 0, SizeX = 0.006114, SizeY = 0.006114, What = "Mask/Ellipse", X = 0.309134, Y = 0.12233 } } } } }"#;
+    let (partial, unknown) = mapped_settings(auto, crate::crs::Target::RawAbsolute, 1.5, Orientation::Normal, 1.5, Orientation::Normal).unwrap();
+    let spot = &partial["spots"][0];
+    assert_eq!((spot["mode"].as_str(), spot["size"].as_f64()), (Some("heal"), Some(0.006114)), "{partial}");
+    assert_eq!((spot["points"][0]["x"].as_f64(), spot["points"][0]["y"].as_f64()), (Some(0.309134), Some(0.12233)));
+    assert!(spot["source_offset"].is_null(), "an automatic source stays automatic");
+    assert!(!unknown.iter().any(|k| k.contains("Retouch")), "{unknown:?}");
+
+    // an explicit source on a photo shown a quarter turn counter-clockwise: (x, y) → (y, 1 − x)
+    let explicit = r#"s = { RetouchAreas = { { SpotType = "clone", SourceState = "sourceSetExplicitly", SourceX = 0.4, OffsetY = 0.5,
+        Masks = { { What = "Mask/Ellipse", X = 0.2, Y = 0.3, SizeX = 0.01, SizeY = 0.01 } } } } }"#;
+    let (partial, _) = mapped_settings(explicit, crate::crs::Target::RawAbsolute, 1.5, Orientation::Rotate270, 1.5, Orientation::Normal).unwrap();
+    let spot = &partial["spots"][0];
+    let close = |v: &Value, want: f64| (v.as_f64().unwrap() - want).abs() < 1e-9;
+    assert!(close(&spot["points"][0]["x"], 0.3) && close(&spot["points"][0]["y"], 0.8), "{spot}");
+    assert!(close(&spot["source_offset"]["x"], 0.2) && close(&spot["source_offset"]["y"], -0.2), "{spot}");
+}
+
+#[test]
 fn catalog_masks_follow_the_photo_orientation() {
     // #1806, EMY_9996 (EXIF 8, shown a quarter turn counter-clockwise): a horizon gradient along
     // the stored image's x axis runs along the shown photo's y axis

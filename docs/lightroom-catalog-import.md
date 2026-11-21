@@ -106,8 +106,8 @@ Optional history, keyword and collection tables that exceed limits are skipped w
 required photo tables still report errors. Unrelated unsupported schemas are ignored. A needed
 WITHOUT ROWID or virtual table produces an explicit error, handled as a warning when optional.
 
-Develop settings reuse the existing XMP/preset mapper. Supported sliders, curves and supported
-mask structures remain editable, but this is approximate rendering: camera profiles, Adobe AI
+Develop settings reuse the existing XMP/preset mapper. Supported sliders, curves, supported
+mask structures and heal / clone spots ([xmp-interop.md](xmp-interop.md#spot-removal)) remain editable, but this is approximate rendering: camera profiles, Adobe AI
 models, some masking/retouch fields and process-version algorithms are not reproduced. Unmapped
 fields are reported. Lightroom's `ProcessVersion` is not mapped: newly imported photos are on
 LightCraft's latest rendering process, and photos already in the library keep theirs
