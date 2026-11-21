@@ -110,3 +110,6 @@ mod thumbnail_hash_tests;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod curve_input_tests;
