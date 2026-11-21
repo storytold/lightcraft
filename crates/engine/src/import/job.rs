@@ -144,7 +144,7 @@ impl Prepared {
                     existing: Some(existing),
                     reason: if existing_path.is_some() { "path" } else { "content" },
                     hash: info.content_hash,
-                    file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured })),
+                    file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured, orientation: info.orientation, sidecar })),
                 });
             } else {
                 items.push(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed })));
@@ -299,11 +299,13 @@ impl ImportJob {
         // names asked of the disk, which on a network share made a folder of thousands of photos wait
         // a round trip per name, one name after another.
         let asked: Vec<&str> = todo.iter().zip(&probed).filter(|(_, p)| p.is_ok()).map(|(f, _)| f.as_str()).collect();
-        // (a file whose content the library has is skipped below as a duplicate: it asks the disk nothing)
+        // (a file whose content the library has is skipped below as a duplicate: it asks the disk
+        // nothing, unless the import makes a record of it from its file and sidecar, #2589)
+        let skipped = !opts.local && !opts.read_duplicates;
         let known: std::collections::HashSet<&str> = todo
             .iter()
             .zip(&probed)
-            .filter(|(_, p)| !opts.local && p.as_ref().is_ok_and(|i| i.content_hash.as_ref().is_some_and(|h| self.by_hash.contains_key(h))))
+            .filter(|(_, p)| skipped && p.as_ref().is_ok_and(|i| i.content_hash.as_ref().is_some_and(|h| self.by_hash.contains_key(h))))
             .map(|(f, _)| f.as_str())
             .collect();
         let mut found =
@@ -338,13 +340,14 @@ impl ImportJob {
                     break;
                 }
             }
-            // same bytes as a library photo: skipped below, once its capture time is known
+            // same bytes as a library photo: skipped below, once its capture time is known (and,
+            // when the import makes a record of it, once it is read as a file import reads it)
             let duplicate_of =
                 info.content_hash.as_ref().filter(|_| !opts.local).and_then(|h| self.by_hash.get(h).map(|existing| (h.clone(), *existing)));
             // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
-            // and names the copy when the file itself has none (a duplicate needs only that time)
+            // and names the copy when the file itself has none (a skipped duplicate needs only that time)
             let raw = info.kind == MediaKind::Raw;
-            let packet = if duplicate_of.is_some() && info.captured.is_some() {
+            let packet = if duplicate_of.is_some() && info.captured.is_some() && !opts.read_duplicates {
                 None
             } else {
                 found_sidecar.and_then(|f| std::fs::read_to_string(f).ok()).or_else(|| info.xmp.clone().filter(|_| raw))
@@ -371,7 +374,7 @@ impl ImportJob {
                     existing,
                     reason: "content",
                     hash: Some(hash),
-                    file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured })),
+                    file: Some(Box::new(FileFacts { meta: info.meta, captured: info.captured, orientation: info.orientation, sidecar })),
                 }));
                 continue;
             }
