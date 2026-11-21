@@ -63,9 +63,97 @@ fn join_path(a: &str, b: &str) -> String {
 /// A subfolder that stays inside the destination folder (issue #2571): `\`, `:` and NUL become `_`
 /// (so no drive, root or Windows separator), and empty, `.` and `..` parts are dropped; `a/b` still
 /// nests. Applied where the folder is used, so presets and the Export dialog's field are covered too.
-pub(super) fn clean_subfolder(s: &str) -> String {
+pub fn clean_subfolder(s: &str) -> String {
     let s = s.trim().replace(['\\', ':', '\0'], "_");
     s.split('/').map(str::trim).filter(|p| !p.is_empty() && *p != "." && *p != "..").collect::<Vec<_>>().join("/")
+}
+
+/// Clean an album name so it is safe to use as a directory or path component.
+///
+/// Characters `/ \ : * ? " < > | \0` and control characters become `_`, and surrounding
+/// whitespace and dots are trimmed. Windows-reserved device names (`CON`, `PRN`, `AUX`, `NUL`,
+/// `COM1`–`COM9`, `LPT1`–`LPT9`, plus superscript forms `COM¹`–`COM³`, `LPT¹`–`LPT³`, case-insensitive)
+/// get `_` inserted after the base component so they remain usable directory components. The result
+/// may be empty if the album name consisted entirely of dots or whitespace.
+pub fn clean_album_name(album: &str) -> String {
+    let mut s: String = album
+        .chars()
+        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0') || c.is_control() { '_' } else { c })
+        .collect();
+    loop {
+        let trimmed = s.trim().trim_matches('.');
+        if trimmed == s {
+            break;
+        }
+        s = trimmed.to_string();
+    }
+    let base = s.split('.').next().unwrap_or(&s);
+    let upper = base.to_uppercase();
+    if matches!(
+        upper.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+            | "COM¹"
+            | "COM²"
+            | "COM³"
+            | "LPT¹"
+            | "LPT²"
+            | "LPT³"
+    ) {
+        s.insert(base.len(), '_');
+    }
+    s
+}
+
+/// Expand `{album}`, `{date}`, `{hour}` variables in a subfolder template, and clean the result
+/// so it stays safely inside the destination folder.
+///
+/// `{date}` and `{hour}` are expanded before `{album}`, so an album name that contains token-like
+/// text (such as `{date}` or `{hour}`) is never double-expanded.
+///
+/// - `album`: the active album name, cleaned with [`clean_album_name`]; `None` expands `{album}` to `""`.
+/// - `now`: the UTC timestamp for `{date}` (YYYYMMDD) and `{hour}` (HHMM); `None` uses current UTC time.
+/// - Unknown tokens are left unchanged. The result passes through [`clean_subfolder`].
+///
+/// E.g. `"{album}/{date}_{hour}"` with album `"Vacation"` produces `"Vacation/20261107_0230"`.
+///
+/// Returns immediately without timestamp formatting or album lookup if `template` is empty or has no `{`.
+pub fn expand_subfolder(template: &str, album: Option<&str>, now: Option<chrono::NaiveDateTime>) -> String {
+    if template.is_empty() || !template.contains('{') {
+        return clean_subfolder(template);
+    }
+    let now = now.unwrap_or_else(|| {
+        let since = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).unwrap_or_default();
+        let secs = i64::try_from(since.as_secs()).unwrap_or(i64::MAX);
+        chrono::DateTime::from_timestamp(secs, 0).map(|dt| dt.naive_utc()).unwrap_or_default()
+    });
+    let date_str = now.format("%Y%m%d").to_string();
+    let hour_str = now.format("%H%M").to_string();
+    let album_str = album.map(clean_album_name).unwrap_or_default();
+
+    let res = template.replace("{date}", &date_str).replace("{hour}", &hour_str).replace("{album}", &album_str);
+
+    clean_subfolder(&res)
 }
 
 impl<'a> Placer<'a> {
@@ -82,7 +170,7 @@ impl<'a> Placer<'a> {
     /// The folder photo `name` (its original in `source_dir`) is written to: the batch's folder or
     /// the photo's own ([`DestinationMode`]), plus the subfolder. An error for a photo with no
     /// folder of its own, or whose folder is gone: never a file written somewhere else instead.
-    fn folder_for(&self, name: &str, source_dir: Option<&str>) -> Result<String, String> {
+    fn folder_for(&self, name: &str, source_dir: Option<&str>, subfolder: Option<&str>) -> Result<String, String> {
         let base = match self.o.destination_mode {
             DestinationMode::SpecificFolder => self.to.dir.clone(),
             DestinationMode::SameAsOriginal => {
@@ -97,7 +185,7 @@ impl<'a> Placer<'a> {
                 d.to_string()
             }
         };
-        let sub = clean_subfolder(&self.o.subfolder);
+        let sub = subfolder.map(clean_subfolder).unwrap_or_else(|| expand_subfolder(&self.o.subfolder, None, None));
         Ok(if sub.is_empty() { base } else { join_path(&base, &sub) })
     }
 
@@ -108,12 +196,13 @@ impl<'a> Placer<'a> {
         photo: lightcraft_catalog::PhotoId,
         name: String,
         source_dir: Option<&str>,
+        subfolder: Option<&str>,
         guard: &crate::originals::OriginalGuard,
         e: Result<Exported, String>,
     ) -> Result<(), String> {
         use serde_json::json;
         // an exact file path needs no folder
-        let dir = if self.to.exact.is_some() && self.single { Ok(String::new()) } else { self.folder_for(&name, source_dir) };
+        let dir = if self.to.exact.is_some() && self.single { Ok(String::new()) } else { self.folder_for(&name, source_dir, subfolder) };
         let (o, exists) = (self.o, self.exists);
         let (dir, e) = match dir.and_then(|dir| e.map(|e| (dir, e))) {
             Ok(v) => v,

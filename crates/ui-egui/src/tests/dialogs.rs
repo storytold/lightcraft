@@ -151,6 +151,66 @@ fn a_click_outside_an_open_dropdown_keeps_the_dialog() {
 }
 
 #[test]
+fn export_subfolder_variable_dropdown() {
+    let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
+    h.app.run("dialog.export", json!({})).unwrap();
+    h.step();
+    h.step();
+    let r = h.request("ui.clickWidget", json!({"id": "combo:exportSubfolderTags"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(egui::Popup::is_any_open(&h.view.ctx), "the subfolder tags dropdown is open");
+
+    // Inspect AccessKit nodes to verify ComboBox role and localized accessible name
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    ctx.enable_accesskit();
+    let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() };
+    let mut out = ctx.run_ui(raw, |ui| {
+        let c = crate::widgets::combo_box("exportSubfolderTags").width(90.0).selected_text(crate::i18n::tr("Insert…")).show_ui(ui, |_| {});
+        crate::widgets::name_combo(&c.response, crate::i18n::tr("Insert variable"));
+    });
+    out.textures_delta.clear();
+    let update = out.platform_output.accesskit_update.expect("AccessKit update produced");
+    let has_combo = update.nodes.iter().any(|(_, n)| format!("{:?}", n.role()) == "ComboBox" && n.label().unwrap_or_default() == "Insert variable");
+    assert!(has_combo, "ComboBox has localized accessible name 'Insert variable'");
+
+    // Test text insertion and cursor behavior for subfolder field
+    let subfolder_id = crate::text_field::id("field:exportSubfolder");
+    let mut text = String::from("prefix_suffix");
+    // Place cursor at index 7 (after "prefix_")
+    let mut state = egui::text_edit::TextEditState::default();
+    state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(7))));
+    state.store(&h.view.ctx, subfolder_id);
+
+    // Insert {date} at non-terminal cursor
+    crate::import::insert_at_cursor(&h.view.ctx, subfolder_id, &mut text, "{date}");
+    assert_eq!(text, "prefix_{date}suffix");
+    let loaded = egui::text_edit::TextEditState::load(&h.view.ctx, subfolder_id).unwrap();
+    assert_eq!(loaded.cursor.char_range().unwrap().primary.index.0, 7 + "{date}".chars().count());
+
+    // Replace selected range with {album}
+    let mut state = egui::text_edit::TextEditState::default();
+    state
+        .cursor
+        .set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(7), egui::text::CCursor::new(7 + "{date}".chars().count()))));
+    state.store(&h.view.ctx, subfolder_id);
+    crate::import::insert_at_cursor(&h.view.ctx, subfolder_id, &mut text, "{album}");
+    assert_eq!(text, "prefix_{album}suffix");
+    let loaded = egui::text_edit::TextEditState::load(&h.view.ctx, subfolder_id).unwrap();
+    assert_eq!(loaded.cursor.char_range().unwrap().primary.index.0, 7 + "{album}".chars().count());
+
+    // Replace selection with {hour}
+    let mut state = egui::text_edit::TextEditState::default();
+    state
+        .cursor
+        .set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(7), egui::text::CCursor::new(7 + "{album}".chars().count()))));
+    state.store(&h.view.ctx, subfolder_id);
+    crate::import::insert_at_cursor(&h.view.ctx, subfolder_id, &mut text, "{hour}");
+    assert_eq!(text, "prefix_{hour}suffix");
+}
+
+#[test]
 fn modal_dialogs_close_background_menus() {
     let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
     let r = h.request("ui.clickWidget", json!({"id": "menu:Photo"}), T);
