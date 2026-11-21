@@ -14,8 +14,8 @@ pub use settings::{
 };
 pub use view::{
     BRIEF_INFO_SECS, BeforeAfter, BriefInfo, CLICK_ZOOMS, CropOverlay, FOCUS_KEYWORDS_PASSES, InfoOverlay, KeywordingView, LEFT_WIDTH, LayoutImage,
-    LightsOut, LoupeInfo, LoupeInfoField, MIN_PHOTO_WIDTH, PanelWidth, RIGHT_WIDTH, RightPanel, THUMB_SIZE_MAX, THUMB_SIZE_MIN, THUMB_SIZE_STEP,
-    ToolOverlay, ViewMode, Zoom,
+    LightsOut, LoupeInfo, LoupeInfoField, MAX_ZOOM, MIN_PHOTO_WIDTH, PanelWidth, RIGHT_WIDTH, RightPanel, THUMB_SIZE_MAX, THUMB_SIZE_MIN,
+    THUMB_SIZE_STEP, ToolOverlay, ViewMode, Zoom,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
