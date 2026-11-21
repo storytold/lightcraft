@@ -23,8 +23,8 @@ use lcc_catalog::{Flag, Op, Photo, PhotoId, QualityScan, QualityVerdict, Source}
 use lcc_pipeline::quality::{QualityFactors, QualityWeights};
 use serde_json::{Value, json};
 
-use crate::cmd::{CommandSpec, always, bad, cmd};
 use crate::activity::{Cancel, TaskGuard, TaskHandle};
+use crate::cmd::{CommandSpec, always, bad, cmd};
 use crate::{Result, Session};
 
 const C: &str = "photo.qualityScan";
@@ -112,8 +112,8 @@ fn weight(p: &Value, key: &str, default: f32) -> Result<f32> {
 /// own data was never JPEG encoded (its embedded preview was, but the raw data is what is
 /// scored); a preview-only raw is scored on the camera's JPEG, so it is.
 pub fn jpeg_encoded(photo: &Photo) -> bool {
-    let jpeg = matches!(photo.kind, lcc_catalog::MediaKind::Image)
-        && ["jpg", "jpeg", "jpe", "jfif"].iter().any(|e| photo.format.eq_ignore_ascii_case(e));
+    let jpeg =
+        matches!(photo.kind, lcc_catalog::MediaKind::Image) && ["jpg", "jpeg", "jpe", "jfif"].iter().any(|e| photo.format.eq_ignore_ascii_case(e));
     jpeg || photo.preview_only.is_some()
 }
 
@@ -175,7 +175,11 @@ fn targets(s: &mut Session, p: &Value) -> Result<Vec<PhotoId>> {
             }
         }
         "view" => {
-            if explicit_ids { s.targets(p)? } else { s.visible_cloned() }
+            if explicit_ids {
+                s.targets(p)?
+            } else {
+                s.visible_cloned()
+            }
         }
         "folder" => {
             let path = p.get("path").and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty());
@@ -314,11 +318,8 @@ impl Session {
         let spawned = std::thread::Builder::new().name("quality-scan".into()).spawn(move || {
             use rayon::prelude::*;
             frames.into_par_iter().for_each_with(tx, |tx, frame| {
-                let measured = frame
-                    .source
-                    .load()
-                    .map_err(|e| format!("can't read the {}: {e}", frame.id.0))
-                    .map(|img| score(&img, &options, frame.jpeg));
+                let measured =
+                    frame.source.load().map_err(|e| format!("can't read the {}: {e}", frame.id.0)).map(|img| score(&img, &options, frame.jpeg));
                 match &measured {
                     Ok(_) => handle.item_done(),
                     Err(why) => handle.item_failed(why),
@@ -444,11 +445,7 @@ impl Session {
             // alone is the user's. The record says which: the flag just written, the one an earlier
             // scan wrote and this one kept, or none (the photo's flag is not the scan's)
             if let Some(q) = analysis.quality.as_mut() {
-                q.flag_written = if flag != flag_before {
-                    Some(flag)
-                } else {
-                    previous.and_then(|old| old.flag_written).filter(|old| *old == flag)
-                };
+                q.flag_written = if flag != flag_before { Some(flag) } else { previous.and_then(|old| old.flag_written).filter(|old| *old == flag) };
             }
             ops.push(Op::SetAnalysis { id, analysis: Some(analysis) });
             if flag != flag_before {

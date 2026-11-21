@@ -411,9 +411,9 @@ mod tests_profiles_layout;
 #[cfg(test)]
 mod tests_progress;
 #[cfg(test)]
-mod tests_quick_bar;
-#[cfg(test)]
 mod tests_quality_scan_ui;
+#[cfg(test)]
+mod tests_quick_bar;
 #[cfg(test)]
 mod tests_quit_unsaved;
 #[cfg(test)]

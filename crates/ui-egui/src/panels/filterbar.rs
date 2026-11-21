@@ -386,12 +386,8 @@ pub fn show(app: &mut LccApp, outer: &mut egui::Ui) {
         // picker needs; a ceiling set elsewhere — a rule, another window — is left as it is)
         if f.quality_min.is_some() {
             let mut min = f.quality_min.unwrap_or(0.0);
-            let r = ui.add(
-                egui::Slider::new(&mut min, 0.0..=100.0)
-                    .text(crate::i18n::tr("Quality score at least"))
-                    .fixed_decimals(0)
-                    .show_value(false),
-            );
+            let r =
+                ui.add(egui::Slider::new(&mut min, 0.0..=100.0).text(crate::i18n::tr("Quality score at least")).fixed_decimals(0).show_value(false));
             register(ui.ctx(), "slider:qualityMin", r.rect);
             if r.changed() {
                 filter(app, json!({"qualityMin": min}));

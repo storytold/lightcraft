@@ -7,15 +7,8 @@ use crate::*;
 
 /// A photo with `quality` as its scan (or none).
 fn photo(i: u64, quality: Option<QualityScan>) -> Photo {
-    let mut p = Photo::new(
-        PhotoId(i),
-        Source::File { path: format!("/pics/IMG_{i:04}.jpg") },
-        &format!("IMG_{i:04}.jpg"),
-        "JPEG",
-        100,
-        100,
-        "2026-01-01",
-    );
+    let mut p =
+        Photo::new(PhotoId(i), Source::File { path: format!("/pics/IMG_{i:04}.jpg") }, &format!("IMG_{i:04}.jpg"), "JPEG", 100, 100, "2026-01-01");
     p.analysis = quality.map(|q| Analysis { quality: Some(q), ..Default::default() });
     p
 }
@@ -54,12 +47,7 @@ fn the_quality_filter_reads_the_verdict_and_the_score() {
     }
     let shown = |f: Filter| -> Vec<u64> { c.query(&f, &Sort::default()).iter().map(|id| id.0).collect() };
     // the verdict
-    for (want, ids) in [
-        ("accepted", vec![1]),
-        ("pending", vec![2]),
-        ("rejected", vec![3]),
-        ("unscanned", vec![4]),
-    ] {
+    for (want, ids) in [("accepted", vec![1]), ("pending", vec![2]), ("rejected", vec![3]), ("unscanned", vec![4])] {
         let f = Filter { quality: Some(want.to_string()), ..Default::default() };
         assert_eq!(shown(f), ids, "{want}");
     }

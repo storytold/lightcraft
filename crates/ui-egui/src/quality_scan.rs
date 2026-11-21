@@ -2,8 +2,8 @@
 //! background, the scores are written as one undo step when it ends (`photo.qualityScanPump`), and
 //! the frame it ends reports how many photos landed on each side of the two cutoffs.
 
-use serde_json::json;
 use serde_json::Value;
+use serde_json::json;
 
 use crate::LccApp;
 

@@ -58,9 +58,8 @@ fn scan_stores_scores_verdicts_and_optional_flags() {
     assert!(rescanned["measured"].as_u64().unwrap_or(0) >= 4, "{rescanned}");
 
     // 4. flags: cutoffs at the ends of the scale put every photo on one side of them
-    let all_pick = s
-        .execute("photo.qualityScan", &json!({"ids": ids, "wait": true, "rescan": true, "accepted": 0, "rejected": 0, "applyFlags": true}))
-        .unwrap();
+    let all_pick =
+        s.execute("photo.qualityScan", &json!({"ids": ids, "wait": true, "rescan": true, "accepted": 0, "rejected": 0, "applyFlags": true})).unwrap();
     assert!(all_pick["flagged"].as_u64().unwrap_or(0) >= 4, "{all_pick}");
     // (a score of exactly 0 is a reject at both cutoffs, the rejected one winning a tie, so the
     // flag each photo carries is its own verdict's)

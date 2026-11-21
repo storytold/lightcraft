@@ -34,9 +34,8 @@ pub fn to_run_args(args: &[String]) -> Result<Vec<String>, String> {
             }
             "--connect" => {
                 // a bare port is an address; a word is the next option's start
-                let bare = args
-                    .get(i + 1)
-                    .is_some_and(|n| !n.is_empty() && !n.contains('=') && (n.contains(':') || n.chars().all(|c| c.is_ascii_digit())));
+                let bare =
+                    args.get(i + 1).is_some_and(|n| !n.is_empty() && !n.contains('=') && (n.contains(':') || n.chars().all(|c| c.is_ascii_digit())));
                 opts.push(a.clone());
                 if bare {
                     opts.push(value!());

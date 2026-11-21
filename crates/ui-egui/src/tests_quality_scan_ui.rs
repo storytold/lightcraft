@@ -57,8 +57,7 @@ fn the_quality_picker_appears_once_a_scan_has_scored_a_photo() {
         .filter(|p| p.analysis.and_then(|a| a.quality).is_some_and(|q| q.verdict == lcc_catalog::QualityVerdict::Rejected))
         .count();
     assert_eq!(rejected, stored, "the picker shows exactly the rejected photos");
-    let chips: Vec<String> =
-        lcc_engine::filter_chips(&h.app.session.filter, &h.app.session.catalog).into_iter().map(|c| c.label).collect();
+    let chips: Vec<String> = lcc_engine::filter_chips(&h.app.session.filter, &h.app.session.catalog).into_iter().map(|c| c.label).collect();
     assert!(chips.iter().any(|c| c == "Quality: rejected"), "{chips:?}");
     // "Any photo" clears it
     ok(&mut h, "ui.clickWidget", json!({"id": "dropdown:filter-quality"}));
@@ -78,8 +77,7 @@ fn the_score_floor_is_set_and_cleared_from_the_filter_bar() {
     ok(&mut h, "ui.clickWidget", json!({"id": "button:qualityMinSet"}));
     assert_eq!(h.app.session.filter.quality_min, Some(50.0), "the button sets a floor to start from");
     assert!(drawn(&h, "slider:qualityMin"), "a floor is a slider once it is set");
-    let chips: Vec<String> =
-        lcc_engine::filter_chips(&h.app.session.filter, &h.app.session.catalog).into_iter().map(|c| c.label).collect();
+    let chips: Vec<String> = lcc_engine::filter_chips(&h.app.session.filter, &h.app.session.catalog).into_iter().map(|c| c.label).collect();
     assert!(chips.iter().any(|c| c == "Quality score at least: 50"), "{chips:?}");
     // the chip's clear takes the floor off, and the button comes back
     ok(&mut h, "ui.clickWidget", json!({"id": "button:qualityMinClear"}));

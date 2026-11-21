@@ -148,11 +148,7 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("qualityNoise", "Noise (quality scan)", Kind::Number),
     ("qualityExposure", "Exposure (quality scan)", Kind::Number),
     ("qualityCompression", "Compression (quality scan)", Kind::Number),
-    (
-        "qualityVerdict",
-        "Quality Verdict",
-        Kind::Choice(&[("accepted", "Accepted"), ("pending", "Pending"), ("rejected", "Rejected")]),
-    ),
+    ("qualityVerdict", "Quality Verdict", Kind::Choice(&[("accepted", "Accepted"), ("pending", "Pending"), ("rejected", "Rejected")])),
 ];
 
 /// The fields the field menu shows at its top level, before the groups.
@@ -171,10 +167,7 @@ pub const FIELD_GROUPS: &[(&str, &[&str])] = &[
     ("Size", &["longEdge", "shortEdge", "width", "height", "aspect", "megapixels"]),
     ("Develop", &["edited", "cropped", "treatment", "processVersion", "vignettingReference"]),
     ("Assisted Culling", &["sharpness", "bestOfGroup", "clipped", "eyesOpen", "aesthetic", "cullScore", "suggestedStars"]),
-    (
-        "Image Quality",
-        &["qualityScore", "qualitySharpness", "qualityNoise", "qualityExposure", "qualityCompression", "qualityVerdict"],
-    ),
+    ("Image Quality", &["qualityScore", "qualitySharpness", "qualityNoise", "qualityExposure", "qualityCompression", "qualityVerdict"]),
 ];
 
 /// The field-menu group `field` sits in; `None` for a top-level or unknown field.
@@ -1153,9 +1146,7 @@ impl Rule {
             "qualitySharpness" => num_op(op, p.analysis.and_then(|a| a.quality).map(|q| f64::from(q.sharpness)), value),
             "qualityNoise" => num_op(op, p.analysis.and_then(|a| a.quality).map(|q| f64::from(q.noise)), value),
             "qualityExposure" => num_op(op, p.analysis.and_then(|a| a.quality).map(|q| f64::from(q.exposure)), value),
-            "qualityCompression" => {
-                num_op(op, p.analysis.and_then(|a| a.quality).and_then(|q| q.compression).map(f64::from), value)
-            }
+            "qualityCompression" => num_op(op, p.analysis.and_then(|a| a.quality).and_then(|q| q.compression).map(f64::from), value),
             "qualityVerdict" => {
                 // (`want` is the value lowercased already; a photo no scan scored has no verdict,
                 // so it is not any of the three and it is every one of them's `isNot`)

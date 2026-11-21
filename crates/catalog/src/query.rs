@@ -483,14 +483,10 @@ fn sort_photos<'a>(v: Vec<&'a Photo>, sort: &Sort) -> Vec<PhotoId> {
         // Unscanned photos rank below every score (first ascending, last descending), as
         // `Sort::order` puts them; the score is kept to a thousandth (the stored score's
         // precision) and one higher, so a measured 0 stays above "no score at all".
-        SortKey::Quality => (
-            none,
-            none,
-            |p, _| match p.analysis.and_then(|a| a.quality) {
-                Some(q) if q.score.is_finite() => (q.score.clamp(0.0, 100.0) * 1_000.0).round() as u64 + 1,
-                _ => 0,
-            },
-        ),
+        SortKey::Quality => (none, none, |p, _| match p.analysis.and_then(|a| a.quality) {
+            Some(q) if q.score.is_finite() => (q.score.clamp(0.0, 100.0) * 1_000.0).round() as u64 + 1,
+            _ => 0,
+        }),
         SortKey::FileName => {
             let mut keyed: Vec<(String, u64)> = v.into_iter().map(|p| (p.file_name.to_lowercase(), p.id.0)).collect();
             keyed.sort_unstable_by(|a, b| {

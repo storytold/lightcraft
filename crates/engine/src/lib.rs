@@ -113,7 +113,6 @@ pub mod phash;
 pub mod phash_store;
 pub mod placement;
 pub mod prep;
-pub mod quality_scan;
 pub mod preset_import;
 pub mod preset_luminar;
 pub mod preset_xmp;
@@ -127,6 +126,7 @@ pub mod profile_bodies;
 pub mod profile_edits;
 pub mod profile_refs;
 pub mod proof;
+pub mod quality_scan;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod remote;
 pub mod rename;
