@@ -624,7 +624,7 @@ fail. Error 1603 has other causes too; if this doesn't help, open an issue with 
 | Fedora/RHEL/openSUSE | `lightcraft-<ver>-linux-x86_64.rpm` | `lightcraft-<ver>-linux-aarch64.rpm` | |
 | Tarball | `lightcraft-<ver>-linux-x86_64.tar.gz` | `lightcraft-<ver>-linux-aarch64.tar.gz` | Unpack anywhere |
 
-RISC-V (riscv64): `lightcraft-<ver>-linux-riscv64.tar.gz`, a tarball only (glibc 2.39 or newer, e.g. Ubuntu 24.04+).
+RISC-V (riscv64): `lightcraft-<ver>-linux-riscv64.deb`, `lightcraft-<ver>-linux-riscv64.rpm`, and `lightcraft-<ver>-linux-riscv64.tar.gz` (glibc 2.39 or newer, e.g. Ubuntu 24.04+).
 
 On a Wayland desktop LightCraft runs through XWayland when it is available, because only X11 gives
 windows file drag-and-drop; set `LIGHTCRAFT_WAYLAND=1` to use native Wayland (sharper fractional scaling, no drop).
