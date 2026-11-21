@@ -7,7 +7,7 @@
 use candle_core::{D, DType, Device, Module, Tensor};
 use candle_nn::{LayerNorm, Linear, VarBuilder};
 
-use crate::Result;
+use crate::{Result, cpu};
 
 /// `nn.LayerNorm(d)` (PyTorch's default eps).
 pub const TORCH_LN_EPS: f64 = 1e-5;
@@ -149,15 +149,25 @@ impl DecoderMlp {
         Ok(Self { layers })
     }
 
+    /// On the CPU the hidden layers' bias add and ReLU are fused ([`cpu::linear_act`]: the box bias's MLPs have
+    /// 200 · 72 rows of 256).
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let mut dims = x.dims().to_vec();
         let mut x = x.clone();
         for (i, l) in self.layers.iter().enumerate() {
-            x = l.forward(&x)?;
-            if i + 1 < self.layers.len() {
-                x = x.relu()?;
-            }
+            x = if i + 1 == self.layers.len() {
+                l.forward(&x)?
+            } else if x.device().is_cpu() {
+                cpu::linear_act(&x, l, false)?
+            } else {
+                l.forward(&x)?.relu()?
+            };
         }
-        Ok(x)
+        // the fused layers return rows
+        if let Some(last) = dims.last_mut() {
+            *last = x.dim(D::Minus1)?;
+        }
+        Ok(x.reshape(dims)?)
     }
 }
 
@@ -239,4 +249,30 @@ pub fn cxcywh_to_xyxy(b: &Tensor) -> Result<Tensor> {
 /// A tensor's values as `f32` on the CPU.
 pub fn to_vec(t: &Tensor) -> Result<Vec<f32>> {
     Ok(t.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use candle_core::{DType, Device};
+    use candle_nn::VarMap;
+
+    use super::*;
+
+    #[test]
+    fn a_decoder_mlp_over_rows_matches_linear_per_batch() {
+        let vars = VarMap::new();
+        let vb = VarBuilder::from_varmap(&vars, DType::F32, &Device::Cpu);
+        let mlp = DecoderMlp::new(2, 256, 8, 2, vb).unwrap();
+        let x = Tensor::randn(0f32, 1.0, (200, 72, 2), &Device::Cpu).unwrap();
+        let mut want = x.clone();
+        for (i, l) in mlp.layers.iter().enumerate() {
+            want = l.forward(&want).unwrap();
+            if i + 1 < mlp.layers.len() {
+                want = want.relu().unwrap();
+            }
+        }
+        let got = mlp.forward(&x).unwrap();
+        assert_eq!(got.dims(), [200, 72, 8]);
+        assert_eq!(got.flatten_all().unwrap().to_vec1::<f32>().unwrap(), want.flatten_all().unwrap().to_vec1::<f32>().unwrap());
+    }
 }
