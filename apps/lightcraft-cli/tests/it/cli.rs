@@ -1075,6 +1075,22 @@ fn warnings_are_logged_on_stderr() {
 }
 
 #[test]
+fn snapshot_rejects_a_missing_value_before_rendering() {
+    let dir = tmp("snapshot-missing-values");
+    std::fs::create_dir_all(&dir).unwrap();
+    for (args, expected) in [
+        (&["snapshot", "--size", "320x200", "-o", "--script"][..], "-o needs a value"),
+        (&["snapshot", "--script", "-o"][..], "--script needs a value"),
+    ] {
+        let output = Command::new(binary()).current_dir(&dir).args(args).output().unwrap();
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success() && error.contains(expected), "{args:?}: {error}");
+        assert!(!dir.join("--script").exists());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn snapshot_rejects_invalid_dimensions_before_creating_an_image() {
     for (index, (size, scale)) in
         [("NaNx100", "1"), ("100x100", "inf"), ("9000x9000", "1"), ("9000x100", "2"), ("100x100", "0.001")].into_iter().enumerate()
