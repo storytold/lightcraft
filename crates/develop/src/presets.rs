@@ -159,6 +159,47 @@ pub fn deep_merge(base: &mut Value, patch: &Value) {
     }
 }
 
+/// Effective white-balance scale of a `wb` JSON object: `"kelvin"` was written on the Kelvin
+/// scale, anything else (absent — the Legacy default is omitted from the JSON) is Legacy.
+fn wb_is_kelvin(wb: Option<&Value>) -> bool {
+    wb.and_then(Value::as_object).and_then(|m| m.get("scale")).and_then(Value::as_str).is_some_and(|s| s == "kelvin")
+}
+
+/// True when the base and patch `wb` objects are written on different scales (absent = Legacy):
+/// their `temp`/`tint` numbers live on different scales (issue #3917) and must not interpolate.
+fn wb_scale_changed(base: Option<&Value>, patch: &Value) -> bool {
+    wb_is_kelvin(base) != wb_is_kelvin(Some(patch))
+}
+
+/// A `wb` whose base and patch are on different scales, for [`scale_patch`]: `temp`/`tint` switch
+/// at half amount (below it the photo keeps its own values, from it the preset's apply) while
+/// every other `wb` leaf follows the usual rules. Below half amount the result carries the base's
+/// own scale (a Kelvin base's `"kelvin"`, a Legacy base's absence of one) so the merge keeps it;
+/// a missing leaf is left out rather than nulled, so the rest of the preset still applies.
+fn scale_wb_across_scales(base: &Value, patch: &Map<String, Value>, t: f64) -> Value {
+    let base_map = base.as_object();
+    let mut out = Map::new();
+    for (k, pv) in patch {
+        if k == "temp" || k == "tint" || k == "scale" {
+            if t >= 0.5 {
+                out.insert(k.clone(), pv.clone());
+            } else if let Some(bv) = base_map.and_then(|m| m.get(k)) {
+                out.insert(k.clone(), bv.clone());
+            }
+        } else {
+            let bv = base_map.and_then(|m| m.get(k)).unwrap_or(&Value::Null);
+            let v = scale_patch(bv, pv, t);
+            if v != Value::Null || *bv != Value::Null {
+                out.insert(k.clone(), v);
+            }
+        }
+    }
+    if t < 0.5 && wb_is_kelvin(Some(base)) && !out.contains_key("scale") {
+        out.insert("scale".to_string(), Value::String("kelvin".to_string()));
+    }
+    Value::Object(out)
+}
+
 /// Interpolate numbers in `patch` towards/away from `base` by `t` (1 = patch as-is); non-numeric
 /// values are taken from the patch when `t >= 0.5`.
 fn scale_patch(base: &Value, patch: &Value, t: f64) -> Value {
@@ -167,6 +208,13 @@ fn scale_patch(base: &Value, patch: &Value, t: f64) -> Value {
             let mut out = Map::new();
             for (k, pv) in p {
                 let bv = b.get(k).unwrap_or(&Value::Null);
+                if k == "wb"
+                    && let Some(p_map) = pv.as_object()
+                    && wb_scale_changed(Some(bv), pv)
+                {
+                    out.insert(k.clone(), scale_wb_across_scales(bv, p_map, t));
+                    continue;
+                }
                 out.insert(k.clone(), scale_patch(bv, pv, t));
             }
             Value::Object(out)
@@ -228,12 +276,55 @@ fn compose_named(current: &DevelopSettings, original: &DevelopSettings, settings
     current.merged(&composed).unwrap_or_else(|_| current.clone())
 }
 
+/// A `wb` whose base and patch are on different scales, for [`interpolate_object`]: `temp` and
+/// `tint` switch at half amount (below it the baseline applies, from it the preset's value), while
+/// every other `wb` leaf follows the usual rules. A `temp`/`tint` with no baseline is left out
+/// below half amount, so the photo keeps its own value there. Below half amount a `temp`/`tint`
+/// the result carries comes from a Kelvin baseline, so the result also carries its scale and the
+/// merge keeps it; a patch naming neither leaves the photo's own numbers on the photo's scale.
+fn interpolate_wb_across_scales(base: Option<&Value>, patch: &Map<String, Value>, t: f64) -> Map<String, Value> {
+    let base_map = base.and_then(Value::as_object);
+    let mut out = Map::new();
+    for (k, pv) in patch {
+        if k == "temp" || k == "tint" || k == "scale" {
+            if t >= 0.5 {
+                out.insert(k.clone(), pv.clone());
+            } else if let Some(bv) = base_map.and_then(|m| m.get(k)) {
+                out.insert(k.clone(), bv.clone());
+            }
+        } else {
+            let bv = base_map.and_then(|m| m.get(k));
+            let v = match pv {
+                Value::Object(p) => Some(Value::Object(interpolate_object(bv.and_then(Value::as_object), p, t))),
+                _ => interpolate_leaf(bv, pv, t),
+            };
+            if let Some(v) = v {
+                out.insert(k.clone(), v);
+            }
+        }
+    }
+    // Only a `temp`/`tint` the result actually carries is read on the baseline's scale: a patch
+    // that names neither (a mode-only preset) leaves the photo's own numbers in place with their
+    // own scale, which a Kelvin label here would reinterpret.
+    if t < 0.5 && wb_is_kelvin(base) && !out.contains_key("scale") && (out.contains_key("temp") || out.contains_key("tint")) {
+        out.insert("scale".to_string(), Value::String("kelvin".to_string()));
+    }
+    out
+}
+
 /// The leaves of `patch` that apply at `t` (below 100 %), each computed from the same place in
 /// `base`. A leaf the amount does not reach is left out, so the photo keeps its own value there.
 fn interpolate_object(base: Option<&Map<String, Value>>, patch: &Map<String, Value>, t: f64) -> Map<String, Value> {
     let mut out = Map::new();
     for (k, pv) in patch {
         let bv = base.and_then(|b| b.get(k));
+        if k == "wb"
+            && let Value::Object(p_map) = pv
+            && wb_scale_changed(bv, pv)
+        {
+            out.insert(k.clone(), Value::Object(interpolate_wb_across_scales(bv, p_map, t)));
+            continue;
+        }
         let v = match pv {
             Value::Object(p) => Some(Value::Object(interpolate_object(bv.and_then(Value::as_object), p, t))),
             _ => interpolate_leaf(bv, pv, t),
@@ -592,6 +683,116 @@ mod tests {
         };
         assert_eq!(p.apply_on(&current, &original, 0.4).crop.aspect, None, "40 %: the import baseline (no aspect) applies");
         assert_eq!(p.apply_on(&current, &original, 0.6).crop.aspect, Some((16, 9)), "60 %: the preset's aspect applies");
+    }
+
+    /// A white balance on different scales must not interpolate (issue #3917): the photo's
+    /// colour data is not available here, so below half amount the photo keeps its own
+    /// temperature/tint/scale and from half amount the preset's apply.
+    fn custom_wb(temp: f64, tint: f64, scale: crate::WbScale) -> DevelopSettings {
+        let mut s = DevelopSettings::default();
+        s.wb.mode = crate::WbMode::Custom;
+        s.wb.temp = temp;
+        s.wb.tint = tint;
+        s.wb.scale = scale;
+        s
+    }
+
+    #[test]
+    fn partial_wb_across_scales_switches_at_half_amount() {
+        let base = custom_wb(6500.0, 10.0, crate::WbScale::Legacy);
+        let partial = json!({"wb": {"mode": "custom", "temp": 4000.0, "tint": -12.0, "scale": "kelvin"}});
+        let low = apply_partial(&base, &partial, 0.3);
+        assert_eq!((low.wb.temp, low.wb.tint, low.wb.scale), (6500.0, 10.0, crate::WbScale::Legacy), "30 % keeps the base");
+        for amount in [0.5, 0.7] {
+            let out = apply_partial(&base, &partial, amount);
+            assert_eq!((out.wb.temp, out.wb.tint, out.wb.scale), (4000.0, -12.0, crate::WbScale::Kelvin), "{amount}");
+        }
+    }
+
+    #[test]
+    fn preset_wb_across_scales_switches_at_half_amount() {
+        let base = custom_wb(6500.0, 10.0, crate::WbScale::Legacy);
+        let p = Preset {
+            id: "p".into(),
+            name: "P".into(),
+            group: "G".into(),
+            settings: json!({"wb": {"mode": "custom", "temp": 4000.0, "tint": -12.0, "scale": "kelvin"}}),
+            favorite: false,
+            builtin: false,
+        };
+        for amount in [0.3, 0.5, 0.7] {
+            let out = p.apply_on(&base, &base, amount);
+            let direct = apply_partial(&base, &p.settings, amount);
+            assert_eq!((out.wb.temp, out.wb.tint, out.wb.scale), (direct.wb.temp, direct.wb.tint, direct.wb.scale), "paths agree at {amount}");
+        }
+        let low = p.apply_on(&base, &base, 0.3);
+        assert_eq!((low.wb.temp, low.wb.tint, low.wb.scale), (6500.0, 10.0, crate::WbScale::Legacy), "30 % keeps the base");
+        for amount in [0.5, 0.7] {
+            let out = p.apply_on(&base, &base, amount);
+            assert_eq!((out.wb.temp, out.wb.tint, out.wb.scale), (4000.0, -12.0, crate::WbScale::Kelvin), "{amount}");
+        }
+    }
+
+    #[test]
+    fn preset_wb_from_kelvin_to_legacy_switches_at_half_amount() {
+        let base = custom_wb(6500.0, 10.0, crate::WbScale::Kelvin);
+        let partial = json!({"wb": {"mode": "custom", "temp": 4000.0, "tint": -12.0}});
+        let low = apply_partial(&base, &partial, 0.3);
+        assert_eq!((low.wb.temp, low.wb.tint, low.wb.scale), (6500.0, 10.0, crate::WbScale::Kelvin), "30 % keeps the base");
+        for amount in [0.5, 0.7] {
+            let out = apply_partial(&base, &partial, amount);
+            assert_eq!((out.wb.temp, out.wb.tint, out.wb.scale), (4000.0, -12.0, crate::WbScale::Legacy), "apply_partial at {amount}");
+            let p = Preset { id: "p".into(), name: "P".into(), group: "G".into(), settings: partial.clone(), favorite: false, builtin: false };
+            let via_preset = p.apply_on(&base, &base, amount);
+            assert_eq!(
+                (via_preset.wb.temp, via_preset.wb.tint, via_preset.wb.scale),
+                (4000.0, -12.0, crate::WbScale::Legacy),
+                "apply_on at {amount}"
+            );
+        }
+    }
+
+    /// A preset that names only the mode (neither `temp` nor `tint`) must not label the photo's
+    /// own numbers Kelvin: below half amount the merge keeps the photo's Legacy `temp`/`tint`, and
+    /// a Kelvin scale beside them would read them on the other scale (issue #3917 review).
+    #[test]
+    fn a_mode_only_preset_keeps_the_photos_own_scale() {
+        let current = custom_wb(6500.0, 10.0, crate::WbScale::Legacy);
+        let original = custom_wb(6000.0, 5.0, crate::WbScale::Kelvin);
+        let p = Preset {
+            id: "p".into(),
+            name: "P".into(),
+            group: "G".into(),
+            settings: json!({"wb": {"mode": "custom"}}),
+            favorite: false,
+            builtin: false,
+        };
+        for amount in [0.3, 0.7] {
+            let out = p.apply_on(&current, &original, amount);
+            assert_eq!((out.wb.temp, out.wb.tint), (6500.0, 10.0), "{amount}: the photo's own numbers");
+            assert_eq!(out.wb.scale, crate::WbScale::Legacy, "{amount}: the photo's own scale");
+        }
+    }
+
+    #[test]
+    fn wb_on_the_same_scale_still_interpolates() {
+        for scale in [crate::WbScale::Legacy, crate::WbScale::Kelvin] {
+            let base = custom_wb(6500.0, 10.0, scale);
+            let partial = if scale == crate::WbScale::Kelvin {
+                json!({"wb": {"mode": "custom", "temp": 4000.0, "tint": 20.0, "scale": "kelvin"}})
+            } else {
+                json!({"wb": {"mode": "custom", "temp": 4000.0, "tint": 20.0}})
+            };
+            let out = apply_partial(&base, &partial, 0.5);
+            assert!((out.wb.temp - 5250.0).abs() < 1e-9, "{scale:?}: temp {}", out.wb.temp);
+            assert!((out.wb.tint - 15.0).abs() < 1e-9, "{scale:?}: tint {}", out.wb.tint);
+            assert_eq!(out.wb.scale, scale, "{scale:?}: scale");
+            let p = Preset { id: "p".into(), name: "P".into(), group: "G".into(), settings: partial, favorite: false, builtin: false };
+            let via_preset = p.apply_on(&base, &base, 0.5);
+            assert!((via_preset.wb.temp - 5250.0).abs() < 1e-9, "{scale:?}: preset temp {}", via_preset.wb.temp);
+            assert!((via_preset.wb.tint - 15.0).abs() < 1e-9, "{scale:?}: preset tint {}", via_preset.wb.tint);
+            assert_eq!(via_preset.wb.scale, scale, "{scale:?}: preset scale");
+        }
     }
 
     #[test]
