@@ -97,6 +97,33 @@ fn recent_submenu(app: &LightcraftApp) -> Vec<crate::menubar::MenuNode> {
     }
 }
 
+/// Issue #4000: Open Recent Library names each library, and only libraries that share a name get
+/// the folders that tell them apart, written as a path like the grid's folder titles. Remove from
+/// List names them the same way.
+#[test]
+fn open_recent_library_names_same_named_libraries_by_their_folders() {
+    use crate::menubar::MenuNode;
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
+    app.ui.settings.recent_libraries = vec!["/clients/2025/work".into(), "/photos/travel".into(), "/clients/2026/work".into()];
+    let items = recent_submenu(&app);
+    let labels = |nodes: &[MenuNode], id: &str| -> Vec<String> {
+        nodes
+            .iter()
+            .filter_map(|n| match n {
+                MenuNode::Item { id: i, label, .. } if i == id => Some(label.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let expected = ["2025/work", "travel", "2026/work"];
+    assert_eq!(labels(&items, "app.openLibrary"), expected);
+    let Some(MenuNode::Submenu { children, .. }) = items.iter().find(|n| matches!(n, MenuNode::Submenu { label, .. } if label == "Remove from List"))
+    else {
+        panic!("no Remove from List in {items:?}")
+    };
+    assert_eq!(labels(children, "app.recentLibraries"), expected);
+}
+
 /// Issue #902: File ▸ New Library… creates a named library and opens it; it shows in the window
 /// title and in Open Recent Library, newest first.
 #[test]
