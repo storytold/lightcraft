@@ -33,8 +33,15 @@ pub fn default_budget() -> usize {
     }
 }
 
-/// Physical memory (bytes), when the platform tells us without native calls.
+/// Physical memory (bytes), when the platform tells us without native calls. Read once per
+/// process: it doesn't change, and High Quality Preview asks for it while the loupe is drawn
+/// (on macOS and FreeBSD each read starts a `sysctl` process).
 pub(crate) fn total_ram() -> Option<usize> {
+    static RAM: OnceLock<Option<usize>> = OnceLock::new();
+    *RAM.get_or_init(read_total_ram)
+}
+
+fn read_total_ram() -> Option<usize> {
     #[cfg(target_os = "linux")]
     {
         let s = std::fs::read_to_string("/proc/meminfo").ok()?;

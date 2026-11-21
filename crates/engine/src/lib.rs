@@ -45,6 +45,7 @@ pub mod files;
 mod focus_scan;
 pub mod fonts;
 pub mod guard;
+pub mod hq_preview;
 pub mod import;
 mod import_move;
 pub mod lens_profiles;
