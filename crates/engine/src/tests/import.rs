@@ -641,6 +641,65 @@ fn find_missing_does_not_take_a_look_alike_for_a_file_name_with_a_backslash() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Issue #3965: a record made without its file being read (a Lightroom catalog import whose
+/// original wasn't there) has no exposure information. Locating the file, by hand or with Find
+/// Missing Photos, reads it from the file; undo takes the record back to what it was.
+#[test]
+fn a_found_photo_reads_the_exposure_its_record_never_had() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value as Tv};
+    let dir = temp_dir("found-reads-exposure");
+    let mut exif = IfdBuilder::new();
+    exif.set(0x829a, Tv::Rational(vec![(1, 250)]));
+    exif.set(0x829d, Tv::Rational(vec![(28, 10)]));
+    exif.set(0x8827, Tv::Short(vec![400]));
+    exif.set(0x920a, Tv::Rational(vec![(50, 1)]));
+    let mut ifd0 = IfdBuilder::new();
+    ifd0.set(0x010f, Tv::Ascii("Canon".into()));
+    ifd0.set(0x0110, Tv::Ascii("Canon EOS 5D".into()));
+    ifd0.set_child(0x8769, exif);
+    let block = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+    let mut s = Session::new().with_fs();
+    let mut ids = Vec::new();
+    for (name, seed) in [("a.png", 1), ("b.png", 2)] {
+        let file = dir.join("found").join(name);
+        write_png_with_metadata(&file, seed, Some(&block), None);
+        // the record a Lightroom catalog import makes for an original that isn't there: path, name and size, no metadata
+        let id = s.catalog.alloc_photo_id();
+        let mut p = Photo::new(
+            id,
+            Source::File { path: dir.join("gone").join(name).to_string_lossy().to_string() },
+            name,
+            "PNG",
+            48,
+            32,
+            "2026-01-01T00:00:00",
+        );
+        p.file_size = std::fs::metadata(&file).unwrap().len();
+        s.commit("Add", Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        ids.push(id);
+    }
+    let exposure = |p: &Photo| (p.meta.shutter.clone(), p.meta.aperture, p.meta.iso, p.meta.focal_mm);
+    assert_eq!(exposure(s.catalog.photo(ids[0]).unwrap()), (String::new(), None, None, None));
+    // one located by hand
+    s.execute("photo.relink", &json!({"id": ids[0].0, "path": dir.join("found/a.png").to_string_lossy()})).unwrap();
+    let a = s.catalog.photo(ids[0]).unwrap();
+    assert_eq!(exposure(a), ("1/250".into(), Some(2.8), Some(400), Some(50.0)), "Locate reads the file's exposure");
+    assert_eq!(a.meta.camera, "Canon Canon EOS 5D");
+    // the other by searching the folder
+    let r = s.execute("library.findMissing", &json!({"folder": dir.join("found").to_string_lossy()})).unwrap();
+    assert_eq!(r["found"].as_array().map(Vec::len), Some(1), "{r}");
+    let b = s.catalog.photo(ids[1]).unwrap();
+    assert_eq!(exposure(b), ("1/250".into(), Some(2.8), Some(400), Some(50.0)), "Find Missing Photos reads the file's exposure");
+    assert!(matches!(&b.source, Source::File { path } if path.ends_with("b.png") && path.contains("found")), "{:?}", b.source);
+    // undo takes the record back to what it was, path and exposure alike
+    s.execute("edit.undo", &json!({})).unwrap();
+    let b = s.catalog.photo(ids[1]).unwrap();
+    assert_eq!(exposure(b), (String::new(), None, None, None));
+    assert!(matches!(&b.source, Source::File { path } if path.contains("gone")), "{:?}", b.source);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn missing_files_are_found_and_relinked() {
     let dir = std::env::temp_dir().join(format!("lc-missing-{}", std::process::id()));
