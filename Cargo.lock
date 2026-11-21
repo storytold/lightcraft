@@ -4228,6 +4228,7 @@ name = "lightcraft-gpu"
 version = "0.21.1"
 dependencies = [
  "bytemuck",
+ "candle-core",
  "lightcraft-color",
  "lightcraft-denoise",
  "lightcraft-develop",
@@ -4237,6 +4238,7 @@ dependencies = [
  "lightcraft-raster",
  "lightcraft-raw",
  "lightcraft-scenes",
+ "lightcraft-segment",
  "lightcraft-testkit",
  "log",
  "pollster 1.0.1",
@@ -4391,6 +4393,7 @@ dependencies = [
  "lightcraft-fetch",
  "lightcraft-testkit",
  "log",
+ "rayon",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
