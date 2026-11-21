@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::time::Duration;
+use web_time::Instant;
 
 /// Format version of the profile files.
 const VERSION: u32 = 1;
@@ -159,6 +161,22 @@ pub fn save(profile: &CameraProfile, dir: &Path) -> Result<PathBuf, String> {
     // a fresh temp file renamed over the profile: never a fixed `.tmp` name, which a planted link
     // would have written through
     lightcraft_catalog::safe_file::write_atomic(&path, &json).map_err(|e| format!("{}: {e}", path.display()))?;
+    // Drop any cached lookup for this model: an earlier miss must not hide the profile just saved.
+    // Other spellings of the model map to the same file (`Foo Bar` and `Foo_Bar`), so drop those too.
+    // Lock order is cache, then CACHE_KEY, as in cache_key(). Both are held while the key is refreshed,
+    // so a concurrent lookup or render cannot pair the new profile with the old key.
+    let mut cache_guard = cache().lock().unwrap_or_else(PoisonError::into_inner);
+    cache_guard.retain(|key, _| normalize_for_local_match(&key.1) != normalize_for_local_match(&profile.model));
+    let mut key_guard = key_lock().lock().unwrap_or_else(PoisonError::into_inner);
+    // The global key always describes dir(), not the directory this save wrote to.
+    let global = crate::camera_profiles::dir();
+    let fresh = cache_key_for(global.as_deref());
+    // If the global key changed (e.g. an external tool added another profile), clear all cached
+    // lookups so they are refreshed on next access.
+    if key_guard.as_ref().map(|s| s.key) != Some(fresh) {
+        cache_guard.clear();
+    }
+    *key_guard = Some(KeyState { key: fresh, dir: global, scanned: Instant::now() });
     Ok(path)
 }
 
@@ -194,6 +212,9 @@ fn get_from(model: &str, directory: Option<&Path>) -> Option<Arc<CameraProfile>>
     // instead of falling back to the bundled profile.
     let model = canonical_model(model);
     let key = (directory.map(Path::to_path_buf), model.to_owned());
+
+    // Refresh the cache key to detect external profile additions/removals before consulting the cache.
+    cache_key_at(directory, Instant::now());
     let mut cache = cache().lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(hit) = cache.get(&key) {
         return hit.clone();
@@ -232,11 +253,69 @@ fn get_from(model: &str, directory: Option<&Path>) -> Option<Arc<CameraProfile>>
     profile
 }
 
+/// How often the profiles folder is scanned again for [`cache_key`].
+const RESCAN_EVERY: Duration = Duration::from_secs(1);
+
+/// The render cache key last computed: the folder it describes, the key and when it was scanned.
+struct KeyState {
+    key: u64,
+    dir: Option<PathBuf>,
+    scanned: Instant,
+}
+
+static CACHE_KEY: OnceLock<Mutex<Option<KeyState>>> = OnceLock::new();
+
+fn key_lock() -> &'static Mutex<Option<KeyState>> {
+    CACHE_KEY.get_or_init(Default::default)
+}
+
 /// Changes when the profiles folder's contents change (per process): part of the render cache
-/// keys, so thumbnails rendered before a profile existed are not reused after.
+/// keys, so thumbnails rendered before a profile existed are not reused after. The folder is
+/// scanned at most once per [`RESCAN_EVERY`], so a grid of thumbnails does not rescan it per photo.
 pub fn cache_key() -> u64 {
+    cache_key_at(dir().as_deref(), Instant::now())
+}
+
+/// [`cache_key`] for `directory` as of `now`.
+fn cache_key_at(directory: Option<&Path>, now: Instant) -> u64 {
+    // Fast path: check if we can reuse the cached key without taking both locks.
+    if let Some(state) = key_lock().lock().unwrap_or_else(PoisonError::into_inner).as_ref()
+        && state.dir.as_deref() == directory
+        && now.saturating_duration_since(state.scanned) < RESCAN_EVERY
+    {
+        return state.key;
+    }
+    // Lock order is cache, then CACHE_KEY, as in save(). The scan runs under both locks, so a save()
+    // cannot land between the scan and the publishing of its result.
+    let mut cache_guard = cache().lock().unwrap_or_else(PoisonError::into_inner);
+    let mut guard = key_lock().lock().unwrap_or_else(PoisonError::into_inner);
+    // Re-check under the locks: another caller may have refreshed the key while we waited.
+    if let Some(state) = guard.as_ref()
+        && state.dir.as_deref() == directory
+        && now.saturating_duration_since(state.scanned) < RESCAN_EVERY
+    {
+        return state.key;
+    }
+    let fresh = cache_key_for(directory);
+    if guard.as_ref().map(|s| s.key) != Some(fresh) {
+        // The profile set changed outside save(): drop cached lookups (including
+        // misses) so a profile added externally is found, not hidden by an old miss.
+        cache_guard.clear();
+    }
+    *guard = Some(KeyState { key: fresh, dir: directory.map(Path::to_path_buf), scanned: now });
+    fresh
+}
+
+/// Digest of the built-in profiles, computed once per process.
+fn bundled_key() -> u64 {
     static KEY: OnceLock<u64> = OnceLock::new();
-    *KEY.get_or_init(|| cache_key_for(dir().as_deref()))
+    *KEY.get_or_init(|| {
+        let mut h = lightcraft_preview::Hasher128::new();
+        for (model, json) in BUNDLED {
+            h.str(model).str(json);
+        }
+        h.finish().0 as u64
+    })
 }
 
 fn cache_key_for(directory: Option<&Path>) -> u64 {
@@ -257,9 +336,7 @@ fn cache_key_for(directory: Option<&Path>) -> u64 {
     for (name, len, modified) in &files {
         h.str(name).u64(*len).u64(modified.as_secs()).u64(u64::from(modified.subsec_nanos()));
     }
-    for (model, json) in BUNDLED {
-        h.str(model).str(json);
-    }
+    h.u64(bundled_key());
     h.finish().0 as u64
 }
 
@@ -451,6 +528,41 @@ mod tests {
     }
 
     #[test]
+    fn saved_profile_is_found_after_earlier_miss() {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default();
+        let model = format!("TESTMISS-{}-{stamp}", std::process::id());
+        let isolated = std::env::temp_dir().join(format!("lc-camera-profile-miss-{}-{stamp}", std::process::id()));
+        let mut saved = profile();
+        saved.model = model.clone();
+
+        // A lookup before anything is saved caches the miss.
+        assert!(get_from(&model, Some(&isolated)).is_none(), "no profile saved yet");
+
+        // Saving replaces the on-disk file that the lookup reads.
+        let saved_path = save(&saved, &isolated).unwrap();
+
+        assert_eq!(get_from(&model, Some(&isolated)).as_deref(), Some(&saved), "a profile saved after the first lookup must be returned");
+        let _ = std::fs::remove_file(saved_path);
+        let _ = std::fs::remove_dir_all(&isolated);
+    }
+
+    #[test]
+    fn saved_profile_is_found_after_earlier_miss_review_regression_1() {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default();
+        let alias = format!("TESTALIAS {} {stamp}", std::process::id());
+        let saved_model = alias.replace(' ', "_");
+        assert_eq!(file_name(&alias), file_name(&saved_model));
+        cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert((None, alias.clone()), None);
+        let dir = std::env::temp_dir().join(format!("lc-camera-profile-alias-{}-{stamp}", std::process::id()));
+        let mut saved = profile();
+        saved.model = saved_model;
+        save(&saved, &dir).unwrap();
+        let still_cached = cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains_key(&(None, alias.clone()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!still_cached, "saving a profile must invalidate the cached miss for {alias:?}, which maps to the same file");
+    }
+
+    #[test]
     fn file_names_are_safe() {
         assert_eq!(file_name("ILCE-7M4"), "ILCE-7M4.json");
         assert_eq!(file_name(" DSC-RX100M3 "), "DSC-RX100M3.json");
@@ -572,5 +684,21 @@ mod tests {
         assert_eq!(files, Some(2), "local profile selection must not depend on filesystem iteration order");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn external_profile_addition_changes_cache_key() {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default();
+        let profiles_dir = std::env::temp_dir().join(format!("lc-camera-profile-external-{}-{stamp}", std::process::id()));
+        std::fs::create_dir_all(&profiles_dir).unwrap();
+        let now = Instant::now();
+        let before = cache_key_at(Some(&profiles_dir), now);
+        let mut external = profile();
+        external.model = format!("TESTEXT-{}-{stamp}", std::process::id());
+        let path = profiles_dir.join(file_name(&external.model));
+        std::fs::write(&path, serde_json::to_vec(&external).unwrap()).unwrap();
+        let after = cache_key_at(Some(&profiles_dir), now + RESCAN_EVERY);
+        let _ = std::fs::remove_dir_all(&profiles_dir);
+        assert_ne!(before, after, "a profile added outside save() must change the render cache key");
     }
 }
