@@ -54,8 +54,14 @@ pub(crate) fn sharpness_luma(l: &[f32], w: usize, h: usize) -> f32 {
             let mut n = 0;
             for y in by..(by + b).min(h - 1) {
                 for x in bx..(bx + b).min(w - 1) {
-                    let c = l[y * w + x];
-                    let lap = 4.0 * c - l[y * w + x - 1] - l[y * w + x + 1] - l[(y - 1) * w + x] - l[(y + 1) * w + x];
+                    // (a luminance shorter than `w` × `h` claims — a hostile or damaged source, or a
+                    // caller that handed over less than it said — reads only what is there)
+                    let (Some(c), Some(left), Some(right), Some(up), Some(down)) =
+                        (l.get(y * w + x), l.get(y * w + x - 1), l.get(y * w + x + 1), l.get((y - 1) * w + x), l.get((y + 1) * w + x))
+                    else {
+                        continue;
+                    };
+                    let lap = 4.0 * c - left - right - up - down;
                     e += lap * lap;
                     n += 1;
                 }
