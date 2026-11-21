@@ -183,6 +183,10 @@ per-request `_meta` receive `resultType: complete` and list/read cache hints; re
 | `render_photo {id?, size?, format?, path?}` | Render with current settings → **image content** (PNG, or JPEG with `format: "jpeg"`), long edge `size` (default 1024) |
 | `export {path \| dir, id? \| ids?, format?, longEdge? \| shortEdge? \| width?/height? \| megapixels? \| percent?, dontEnlarge?, ppi?, quality?, colorSpace?, bitDepth?, …}` | Full-quality render to `.png` / `.jpg` / `.tif` / `.webp` / `.avif` / `.jxl` (`jxlLossless`, `jxlEffort`, `jxlProgressive`); `format: "original"` copies the file + an XMP sidecar with the edits, `format: "dng"` writes raw photos as DNG with the edits embedded. No size param = 3000 px long edge; `longEdge: 0` = full size (cropped, native resolution); `width` + `height` fit either orientation (Lightroom's Dimensions); with `fit: "widthHeight"` they limit the width and the height as the photo stands (Width & Height); `dontEnlarge` defaults to true |
 
+`import` validates every `paths` array entry before discovering files or importing any of them.
+A non-string entry is a tool error naming its zero-based index (for example, `paths[1]`);
+the whole request is refused, including in Copy and Move modes. A single path string is also accepted.
+
 `get_develop {id}` and `render_photo {id}` use that photo without changing the selection.
 `set_develop`, `crop` and `export` with a supplied photo `id` end the current edit interaction,
 replace the selection with that one photo and make it active. Without `id`,
