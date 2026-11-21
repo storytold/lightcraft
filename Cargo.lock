@@ -4313,6 +4313,7 @@ dependencies = [
  "dhat",
  "lightcraft-color",
  "lightcraft-develop",
+ "lightcraft-film",
  "lightcraft-geom",
  "lightcraft-inpaint",
  "lightcraft-raster",

@@ -916,6 +916,8 @@ pub(crate) fn prepare(
 /// a windowed render must dehaze with the frame's airlight, not that of the pixels it holds.
 pub(crate) fn frame_airlight(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, frame: &Frame, proxy_w: usize, proxy_h: usize) -> f32 {
     let mut img = Rgb32f::clone(&frame_proxy(src, frame, proxy_w, proxy_h));
+    // (the positive of a negative, as the render it stands in for sees it)
+    crate::negative::apply(&mut img, s);
     white_balance(&mut img, info, s);
     let sigma = (0.02 * frame.px_per_long(proxy_w)).max(1.0) as f32;
     airlight(&gaussian(&img.map(dark_of), sigma))
@@ -1268,6 +1270,28 @@ mod tests {
         cropped.crop.rect.x1 = 0.5;
         assert_ne!(fresh(&hazy, &cropped), fresh(&hazy, &frame));
         assert_eq!(frame_airlight(&hazy, &info, &s, &cropped, 48, 32).to_bits(), fresh(&hazy, &cropped).to_bits());
+    }
+
+    /// A zoomed window of a converted negative estimates the airlight from the positive, as the
+    /// whole-frame render it stands in for does.
+    #[test]
+    fn the_airlight_proxy_of_a_negative_is_the_positive() {
+        let info = SourceInfo::default();
+        let scan = Rgb32f::from_fn(300, 200, |x, _| {
+            let t = 0.08 + 0.5 * x as f32 / 300.0;
+            [t, t * 0.6, t * 0.3]
+        });
+        let mut s = DevelopSettings::default();
+        let frame = crate::frame_for(&scan, &info, &s, true);
+        let plain = frame_airlight(&scan, &info, &s, &frame, 48, 32);
+        s.negative.enabled = true;
+        let converted = frame_airlight(&scan, &info, &s, &frame, 48, 32);
+        let mut positive = frame.sample(&scan, 48, 32);
+        crate::negative::apply(&mut positive, &s);
+        white_balance(&mut positive, &info, &s);
+        let want = airlight(&gaussian(&positive.map(dark_of), (0.02 * frame.px_per_long(48)).max(1.0) as f32));
+        assert_eq!(converted.to_bits(), want.to_bits());
+        assert_ne!(converted.to_bits(), plain.to_bits());
     }
 
     #[test]
