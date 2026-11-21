@@ -832,6 +832,33 @@ fn saved_warm_green_wb_preserves_legacy_bradford_while_v10_uses_checked_fallback
     assert_eq!(v10_m, v10_expected);
 }
 
+#[test]
+fn stage_cache_invalidates_wb_on_process_switch_and_undo() {
+    use crate::{StageCache, render_cached};
+    use lightcraft_develop::{Process, WbMode};
+
+    let src = scene();
+    let info = SourceInfo { as_shot_temp: 5500.0, as_shot_tint: 0.0, ..Default::default() };
+    let req = RenderRequest::fit(src.width, src.height);
+    let cache = StageCache::default();
+
+    let mut s_v8 = DevelopSettings { process: Process::V8.version(), ..Default::default() };
+    (s_v8.wb.mode, s_v8.wb.temp, s_v8.wb.tint) = (WbMode::Custom, 2000.0, 30.0);
+
+    let s_v10 = DevelopSettings { process: Process::V10.version(), ..s_v8.clone() };
+
+    let ref_v8 = render(&src, &info, &s_v8, &req).image.data;
+    let ref_v10 = render(&src, &info, &s_v10, &req).image.data;
+    assert_ne!(ref_v8, ref_v10, "V8 and V10 must differ at warm-green WB");
+
+    // Initial render at V8.
+    assert_eq!(render_cached(&src, &info, &s_v8, &req, &cache).image.data, ref_v8);
+    // Switch to V10 (Update to Current Process): must not reuse V8's cached WB linear image.
+    assert_eq!(render_cached(&src, &info, &s_v10, &req, &cache).image.data, ref_v10);
+    // Undo back to V8: must not reuse V10's cached WB linear image.
+    assert_eq!(render_cached(&src, &info, &s_v8, &req, &cache).image.data, ref_v8);
+}
+
 /// Every stored process number renders with a process this build knows: settings saved before
 /// process versions existed exactly as V1, and a number from a newer LightCraft exactly as the
 /// latest process here (`docs/process-versions.md`). Raw (base tone curve), camera-tone and

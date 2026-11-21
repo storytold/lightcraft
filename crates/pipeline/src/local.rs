@@ -22,6 +22,12 @@ pub fn white_balance(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings) {
     wb_gain(img, info, s, 1.0);
 }
 
+/// Whether `s` uses the checked Bradford white-balance adaptation (`Process::V10` on) instead
+/// of the legacy matrix (V1 to V9, which stay frozen).
+pub fn checked_wb(s: &DevelopSettings) -> bool {
+    s.process.process() >= Process::V10
+}
+
 /// The white-balance matrix (linear Rec.2020) for the settings, or `None` when the as-shot white
 /// is kept. A raw source with its camera colour model ([`crate::CameraColor`]) is re-developed for
 /// the new white in camera space, as Lightroom does (so a neutral under the chosen white renders
@@ -37,7 +43,7 @@ pub fn wb_matrix_for(info: &SourceInfo, s: &DevelopSettings) -> Option<[[f32; 3]
     {
         return Some(m.to_f32());
     }
-    let checked = s.process.process() >= Process::V10;
+    let checked = checked_wb(s);
     let set = if checked { wb_matrix_checked(&REC2020, effective_white(info, s)) } else { wb_matrix(&REC2020, effective_white(info, s)) };
     let shot = if checked {
         wb_matrix_checked(&REC2020, temp_tint_to_xy(info.as_shot_temp, info.as_shot_tint))
