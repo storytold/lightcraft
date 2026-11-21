@@ -72,6 +72,9 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
         "view.fullScreenPreview" | "view.infoOverlay" | "view.navigator" => app.session.active().is_some() || app.ui.fullscreen,
         "app.openLibrary" | "app.newLibrary" => app.services.pick_folder.is_some() && crate::panels::settings::can_switch_library(app).is_ok(),
         "file.addFolder" => app.services.pick_folder.is_some() && !crate::lightroom_import::is_running(app),
+        // a host with no catalog dialog has it off, as its empty library leaves the button out; the
+        // browser build can't read a catalog at all, whatever picker its host offers (#3655)
+        "file.importLightroom" => !cfg!(target_arch = "wasm32") && (app.services.pick_lightroom_catalog.is_some() || app.services.picker.is_some()),
         "file.backupLibrary" => app.services.backup_library.is_some(),
         "app.openLogFolder" => app.services.reveal.is_some() && app.services.log_file.is_some(),
         "file.restoreLibrary" => app.services.restore_library.is_some(),
