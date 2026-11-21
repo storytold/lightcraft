@@ -83,6 +83,13 @@ pub(crate) fn injected_fault() -> Fault {
 static COPY_THREADS: std::sync::Mutex<Vec<std::thread::ThreadId>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(test)]
+thread_local! {
+    /// How many copies the calling thread made through [`copy_in_chunks`] (tests only), to see
+    /// that a caller copies with it, not with `io::copy`'s 8 KiB writes.
+    pub(crate) static CHUNKED_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
 pub(crate) fn copy_threads() -> Vec<std::thread::ThreadId> {
     COPY_THREADS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
 }
@@ -305,7 +312,7 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<lightcraft_pr
             out.write_all(b"partial")?;
             return Err(io::Error::other("write failed (injected)"));
         }
-        io::copy(&mut inp, &mut out)?;
+        copy_in_chunks(&mut inp, &mut out)?;
         #[cfg(test)]
         if injected(Fault::Slow) {
             COPY_THREADS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(std::thread::current().id());
@@ -332,6 +339,25 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<lightcraft_pr
         let _ = fs::remove_file(dst);
     }
     r
+}
+
+/// Bytes per write of [`copy_in_chunks`]. `io::copy` from one `File` to another writes 8 KiB at a
+/// time on Windows, and on a network share every write waits for the server: 1.9 MB/s on gigabit
+/// SMB, against 17 MB/s in 1 MiB writes (issue #3561).
+pub(crate) const COPY_CHUNK: usize = 1 << 20;
+
+/// Copy `from` into `to` in writes of about [`COPY_CHUNK`], however little each read returns.
+/// Returns the number of bytes copied. Still `io::copy`, through a [`io::BufWriter`] of that
+/// capacity: on Linux std sees through the `BufWriter` to the files and copies in the kernel
+/// (`copy_file_range`, `sendfile`), and where the kernel declines, the copy std falls back to
+/// fills the buffer, so the writes stay large.
+pub(crate) fn copy_in_chunks<W: Write>(from: &mut impl Read, to: &mut W) -> io::Result<u64> {
+    #[cfg(test)]
+    CHUNKED_COPIES.with(|c| c.set(c.get() + 1));
+    let mut out = io::BufWriter::with_capacity(COPY_CHUNK, to);
+    let n = io::copy(from, &mut out)?;
+    out.flush()?;
+    Ok(n)
 }
 
 /// [`lightcraft_preview::hash_bytes`] of a file's content, read in chunks.
