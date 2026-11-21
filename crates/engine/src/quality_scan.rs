@@ -434,7 +434,6 @@ impl Session {
             let Some(photo) = self.catalog.photo(id) else { continue };
             let mut analysis = photo.analysis.unwrap_or_default();
             let previous = analysis.quality;
-            analysis.quality = Some(scan);
             // the focus the scan measured is the assisted culling's own focus measure: keep the
             // two in one number, and the best-of-burst and other culling marks as they were
             analysis.sharpness = scan.sharpness;
@@ -442,9 +441,8 @@ impl Session {
             // the flag a scan writes is its own, so a later scan may change it; a flag it leaves
             // alone is the user's. The record says which: the flag just written, the one an earlier
             // scan wrote and this one kept, or none (the photo's flag is not the scan's)
-            if let Some(q) = analysis.quality.as_mut() {
-                q.flag_written = if flag != flag_before { Some(flag) } else { previous.and_then(|old| old.flag_written).filter(|old| *old == flag) };
-            }
+            let flag_written = if flag != flag_before { Some(flag) } else { previous.and_then(|old| old.flag_written).filter(|old| *old == flag) };
+            analysis.quality = Some(lcc_catalog::QualityScan { flag_written, ..scan });
             ops.push(Op::SetAnalysis { id, analysis: Some(analysis) });
             if flag != flag_before {
                 ops.push(Op::SetFlag { id, flag });
