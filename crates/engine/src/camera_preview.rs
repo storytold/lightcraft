@@ -86,9 +86,8 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// the warped candidate's alignment leaves out the pixels outside the sensor instead of reading them as black.
 /// 14: bundled camera profiles also match the Nikon model spellings that differ in case, spacing or the Z8 alias,
 /// so previews made without the profile are rebuilt.
-/// 20: effective JPEG primaries for clipping in the partial look's second attempt with the bright pairs (#631's bird).
-/// 22: filtered bright retry holdouts stay out of chroma training.
-/// 24: bright-pair clipping follows every known decoded JPEG space, including Display P3.
+/// 24: retry the partial look with unclipped bright pairs (#631). Check clipping in the decoded JPEG's colour space
+/// and keep the retry's holdouts out of chroma training.
 pub const LOOK_VERSION: u32 = 24;
 
 #[derive(Clone, Debug)]

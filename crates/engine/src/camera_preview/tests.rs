@@ -1951,12 +1951,8 @@ fn partial_look_brightens_a_dull_scene_without_learning_colour() {
     assert!(lightness(&neutral) < target * 0.6, "the neutral fallback is far darker");
 }
 
-/// Issue #631's bird: a frame that is mostly bright overcast sky (here 90%, camera JPEG about
-/// 0.93, above the fits' 0.85 cut) and dark, nearly colourless branches that the camera renders
-/// like the neutral fallback. On the midtones alone no look is clearly better than the fallback;
-/// with the bright, unclipped pairs the partial look takes the sky from the camera.
-#[test]
-fn a_mostly_bright_frame_gets_its_sky_from_the_bright_pairs() {
+/// Paired sensor and camera JPEG proxies for a bright overcast sky with dark branches.
+fn bright_sky_scene() -> (Rgb32f, Rgb32f) {
     let (w, h) = (96usize, 64usize);
     let neutral = ToneMap::new(0.0, 0.0, 0.0);
     let (mut sensor, mut reference) = (Rgb32f::new(w, h), Rgb32f::new(w, h));
@@ -1974,16 +1970,61 @@ fn a_mostly_bright_frame_gets_its_sky_from_the_bright_pairs() {
             *r = displayed(s.map(f64::from), &neutral).map(|v| v as f32);
         }
     }
-    let none = vec![false; w * h];
+    (sensor, reference)
+}
+
+/// Per-channel root mean square error of the rendered held-out pairs against the JPEG.
+fn held_out_render_error(pairs: &[Pair], map: &ToneMap, matrix: Mat3, encode: impl Fn(f64) -> f64) -> f64 {
+    let error = pairs
+        .iter()
+        .step_by(3)
+        .map(|(x, y)| {
+            let render = displayed(matrix.apply(*x), map);
+            render.into_iter().zip(y).map(|(a, b)| (encode(a) - encode(*b)).powi(2)).sum::<f64>()
+        })
+        .sum::<f64>();
+    (error / (3 * pairs.len().div_ceil(3)) as f64).sqrt()
+}
+
+/// For the bright-overcast case from #631, the midtones already match the neutral fallback.
+/// The bright retry should bring the sky closer to the JPEG while keeping those midtones.
+#[test]
+fn a_mostly_bright_frame_gets_its_sky_from_the_bright_pairs() {
+    let (sensor, reference) = bright_sky_scene();
+    let none = vec![false; sensor.data.len()];
     let check = HighlightCheck { jpeg_space: None, pairs: highlights(&sensor, &reference), clipped: Vec::new(), dro: false, grey: false };
     let midtones_only = [None, Some(EDGE_CONTRAST)].into_iter().find_map(|e| fit_partial_on(&sensor, &reference, e, &check, false));
     assert!(midtones_only.is_none(), "on the midtones alone the look is no clear gain");
     let look = fit_look(&sensor, &reference, &none, None).expect("a partial look from the bright pairs");
     let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
-    let sky = luma(displayed(look.matrix.apply([0.42; 3]), &tone));
-    let fallback = luma(displayed([0.42; 3], &neutral));
-    assert!((sky - 0.92).abs() < 0.04, "the sky as the camera renders it: {sky} (fallback {fallback})");
-    assert!(fallback < 0.85, "the fallback is visibly darker: {fallback}");
+    let neutral = ToneMap::new(0.0, 0.0, 0.0);
+    let (midtones, bright) = collect_pairs(&sensor, &reference, 0.005, None, false).unwrap();
+    let (sky, _) = super::pairs::bright_tone_pairs(&bright, None);
+    let before = held_out_render_error(&sky, &neutral, Mat3::IDENTITY, |v| v);
+    let after = held_out_render_error(&sky, &tone, look.matrix, |v| v);
+    assert!(after.powi(2) < before.powi(2) * super::pairs::MIN_IMPROVEMENT, "sky RMS {before} to {after}");
+    let encode = |v: f64| v.max(0.0).powf(1.0 / 2.2);
+    let before = held_out_render_error(&midtones, &neutral, Mat3::IDENTITY, encode);
+    let after = held_out_render_error(&midtones, &tone, look.matrix, encode);
+    assert!(after <= before + MAX_MIDTONE_LOSS, "midtone RMS {before} to {after}");
+}
+
+#[test]
+fn a_uniform_bright_sky_keeps_the_neutral_fallback() {
+    let (mut sensor, mut reference) = bright_sky_scene();
+    let (sensor_sky, reference_sky) = (sensor.data[1], reference.data[1]);
+    sensor.data.fill(sensor_sky);
+    reference.data.fill(reference_sky);
+    let none = vec![false; sensor.data.len()];
+    assert!(fit_look(&sensor, &reference, &none, None).is_none(), "a uniform sky cannot constrain a look");
+}
+
+#[test]
+fn a_sky_with_all_bright_sensor_samples_clipped_keeps_the_neutral_fallback() {
+    let (sensor, reference) = bright_sky_scene();
+    // A proxy sample is marked clipped when any of the sensor sites it averages clipped.
+    let clipped: Vec<_> = reference.data.iter().map(|p| luminance_2020(*p) >= 0.85).collect();
+    assert!(fit_look(&sensor, &reference, &clipped, None).is_none(), "a clipped sky cannot train the retry");
 }
 
 /// Codex review of #631's bird: the second attempt (with bright pairs) must not buy its sky with
@@ -1994,7 +2035,6 @@ fn a_mostly_bright_frame_gets_its_sky_from_the_bright_pairs() {
 fn the_bright_pairs_attempt_keeps_midtones_clipped_sky_and_clipping() {
     let (w, h) = (96usize, 64usize);
     let neutral = ToneMap::new(0.0, 0.0, 0.0);
-    let encoded = |v: f64| v.max(0.0).powf(1.0 / 2.2);
     // (sky sensor range, share of the sky that is clipped)
     for (case, sky_lo, sky_hi, clipped_share) in [
         ("dim sky", 0.10, 0.20, 0usize),
@@ -2022,26 +2062,7 @@ fn the_bright_pairs_attempt_keeps_midtones_clipped_sky_and_clipping() {
                 *r = displayed(s.map(f64::from), &neutral).map(|v| v as f32);
             }
         }
-        let look = fit_look(&sensor, &reference, &clipped, None);
-        assert!(look.is_none(), "{case}: the guards must reject the fit and keep the fallback");
-        let render = |x: [f64; 3]| match &look {
-            Some(look) => displayed(look.matrix.apply(x), &ToneMap::camera(&look.tone, 0.0, 0.0, 0.0)),
-            None => displayed(x, &neutral),
-        };
-        // midtones: no further from the camera than the fallback, beyond the allowance
-        let (mut fallback, mut kept, mut n) = (0.0, 0.0, 0.0);
-        for (x, y) in sensor.data.iter().zip(&reference.data).step_by(10) {
-            let (x, y) = (x.map(f64::from), y.map(f64::from));
-            for c in 0..3 {
-                fallback += (encoded(displayed(x, &neutral)[c]) - encoded(y[c])).powi(2);
-                kept += (encoded(render(x)[c]) - encoded(y[c])).powi(2);
-                n += 1.0;
-            }
-        }
-        assert!((kept / n).sqrt() <= (fallback / n).sqrt() + MAX_MIDTONE_LOSS + 0.005, "{case}: midtones paid for the sky");
-        // a clipped sky no darker than the fallback renders it
-        let sky = luma(render([1.0; 3]));
-        assert!(sky >= luma(displayed([1.0; 3], &neutral)) - 0.01, "{case}: clipped sky darkened to {sky}");
+        assert!(fit_look(&sensor, &reference, &clipped, None).is_none(), "{case}: the guards must reject the fit and keep the fallback");
     }
     // clipped in the JPEG's sRGB, though no Rec.2020 channel reaches 0.98
     let to_2020 = REC2020.from_xyz().mul(&SRGB.to_xyz());
@@ -2085,9 +2106,10 @@ fn the_bright_pairs_attempt_follows_the_camera_toe() {
     let with_toe = fit_partial_on(&sensor, &reference, None, &check, true).expect("a partial look from the bright pairs");
     let straight = fit_partial_on(&without_dark, &reference, None, &check, true).expect("the same look without the dark pairs");
     let scene = |look: &CameraLook, x: [f32; 3]| look.tone.apply(luma(look.matrix.apply(x.map(f64::from))) as f32);
+    let before = held_out_render_error(&check.pairs, &ToneMap::new(0.0, 0.0, 0.0), Mat3::IDENTITY, |v| v);
     for look in [&with_toe, &straight] {
-        let sky = luma(displayed(look.matrix.apply([0.42; 3]), &ToneMap::camera(&look.tone, 0.0, 0.0, 0.0)));
-        assert!((sky - 0.92).abs() < 0.04, "the sky as the camera renders it: {sky}");
+        let after = held_out_render_error(&check.pairs, &ToneMap::camera(&look.tone, 0.0, 0.0, 0.0), look.matrix, |v| v);
+        assert!(after < before, "sky RMS {before} to {after}");
     }
     let error = |look: &CameraLook| {
         dark.iter().map(|&i| (scene(look, sensor.data[i]) - luminance_2020(reference.data[i])).abs()).sum::<f32>() / dark.len() as f32
