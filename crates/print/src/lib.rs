@@ -63,4 +63,6 @@ mod tests;
 #[cfg(test)]
 mod tests_ipps;
 #[cfg(test)]
+mod tests_mockprinter;
+#[cfg(test)]
 mod tests_robust;
