@@ -65,6 +65,7 @@ jobs:
     # contents: write only to create (or reuse) the draft release, never on a dry run or off `release`.
     permissions:
       contents: write
+      actions: read
     outputs:
       # 'true': not a dry run and on `release`; the draft exists and every platform uploads to it
       publish: ${{ steps.draft.outputs.publish }}
@@ -79,6 +80,36 @@ jobs:
       app_id: ${{ steps.v.outputs.app_id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # every branch's history: the nightly gate asks whether a nightly's commit is an ancestor
+          fetch-depth: 0
+      - name: Nightly gate
+        # The latest completed nightly (nightly.yml) on this commit or one of its ancestors must be
+        # green; a red one blocks the release (docs/ci.md). Dry runs only warn. No nightly yet: warn.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          bash .github/scripts/install-gh.sh
+          command -v gh >/dev/null || PATH="$(tail -n 1 "$GITHUB_PATH"):$PATH"
+          runs=$(gh api "repos/$GH_REPO/actions/workflows/nightly.yml/runs?status=completed&per_page=60" --jq '.workflow_runs | sort_by(.created_at) | reverse | .[] | "\(.head_sha) \(.conclusion) \(.html_url)"') || runs=""
+          found=""
+          while read -r sha conclusion url; do
+            [ -n "$sha" ] || continue
+            if git merge-base --is-ancestor "$sha" "$GITHUB_SHA" 2>/dev/null; then
+              found="$conclusion $url"; break
+            fi
+          done <<<"$runs"
+          if [ -z "$found" ]; then
+            echo "::warning::No completed nightly run on ${GITHUB_SHA::9} or its ancestors"
+            exit 0
+          fi
+          conclusion=${found%% *}; url=${found#* }
+          echo "Latest nightly on this history: $conclusion ($url)"
+          if [ "$conclusion" != success ]; then
+            msg="The latest nightly full run on this commit's history is $conclusion: $url. Fix it and wait for a green nightly (docs/ci.md)."
+            if [ -n "$DRY_RUN" ]; then echo "::warning::$msg"; else echo "::error::$msg"; exit 1; fi
+          fi
       - id: v
         name: Resolve version
         run: |
