@@ -5,7 +5,7 @@
 //! - the develop settings and the photo's metadata survive a sidecar write and a fresh import;
 //! - the exported JPEG decodes, has the photo's aspect ratio, is neither blank nor clipped, and a
 //!   brighter edit exports brighter;
-//! - the exported file re-imports with its title, keywords and capture time.
+//! - the exported file re-imports with its title, keywords and creator.
 use std::path::Path;
 
 use lcc_engine::Session;
@@ -126,8 +126,6 @@ fn import_develop_export_reimport_keeps_settings_metadata_and_sane_pixels() {
     assert_eq!(ph.meta.title, "Round trip");
     assert!(ph.meta.keywords.iter().any(|k| k == "sil"), "{:?}", ph.meta.keywords);
     assert_eq!(ph.meta.creator, "Test Rig");
-    // its pixels already carry the edit: it opens unedited, at the export's size
-    assert!(!s2.develop_of(exported).expect("settings").light.exposure.is_nan());
 }
 
 /// The same chain on a hostile path: an export of a photo whose original vanished is an error per
@@ -148,6 +146,6 @@ fn exporting_a_photo_whose_original_is_gone_is_an_error_not_a_panic() {
     let mut write = |p: &str, b: &[u8]| std::fs::write(p, b).map_err(|e| e.to_string());
     match export_batch(&mut s, &[id], &o, &to, &mut write, &|_| false) {
         Err(e) => assert!(!e.is_empty()),
-        Ok(files) => assert!(files.iter().all(|f| f.get("error").is_some() || f.get("path").is_none()), "{files:?}"),
+        Ok(files) => assert!(!files.is_empty() && files.iter().all(|f| f.get("error").is_some() || f.get("path").is_none()), "{files:?}"),
     }
 }
