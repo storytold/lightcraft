@@ -370,7 +370,9 @@ pub fn looks_as_shot(p: &Photo) -> bool {
 }
 
 /// [`looks_as_shot`] of a photo whose camera defaults ([`Photo::camera_defaults`]) are `defaults`.
-pub fn looks_as_shot_given(p: &Photo, defaults: lcc_develop::DevelopSettings) -> bool {
+pub fn looks_as_shot_given(p: &Photo, mut defaults: lcc_develop::DevelopSettings) -> bool {
+    // Remove Hot Pixels doesn't count, as in `has_import_look` (upstream #4389)
+    defaults.detail.nr_outliers = p.develop.detail.nr_outliers;
     let neutral = |d: &lcc_develop::DevelopSettings| {
         let mut d = d.clone();
         d.profile.camera.clear();
