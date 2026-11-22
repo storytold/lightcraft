@@ -2552,7 +2552,8 @@ pub(crate) fn preset_stack_section(app: &mut LccApp, ui: &mut egui::Ui, d: &mut 
 /// them again rather than dropping them until a Synchronize Folder (#1302).
 pub(crate) fn auto_import_take(app: &mut LccApp, r: &Value) {
     let Some(mut params) = r.get("import").cloned() else { return };
-    let paths: Vec<String> = params.get("paths").and_then(Value::as_array).into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
+    let paths: Vec<String> =
+        params.get("paths").and_then(Value::as_array).into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
     if app.import.is_some() {
         app.session.auto_import_retry(&paths);
         return;
