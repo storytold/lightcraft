@@ -21,6 +21,9 @@ pub enum Label {
 }
 
 thread_local! {
+    // Already `const`: clippy for aarch64-linux-android (the Android check in `cargo xtask ci`) still
+    // reports the initializer, so the lint is allowed here.
+    #[allow(clippy::missing_const_for_thread_local)]
     static LABEL: std::cell::Cell<Label> = const { std::cell::Cell::new(Label::Other) };
 }
 
