@@ -111,14 +111,19 @@ pub fn default_name(catalog: &Path, location: Option<&Path>) -> String {
 
 /// Refuse while a Lightroom catalog task or another import runs (as the import itself would),
 /// before a window asks a question whose answer couldn't be carried out.
-fn busy(app: &LightcraftApp) -> Result<(), String> {
-    if crate::lightroom_import::is_running(app) {
-        return Err("a Lightroom catalog task is already running; wait for it to finish".into());
+fn busy(app: &LightcraftApp, catalog: &str) -> Result<(), String> {
+    if let Some(running) = crate::lightroom_import::running_program(app) {
+        return Err(format!("a {running} catalog task is already running; wait for it to finish"));
     }
     if app.import.is_some() || app.scan.is_some() {
-        return Err("an import is running; wait for it to finish before importing a Lightroom catalog".into());
+        return Err(format!("an import is running; wait for it to finish before importing a {} catalog", program(catalog)));
     }
     Ok(())
+}
+
+/// The program the catalog at `catalog` is from, for messages that are not translated.
+fn program(catalog: &str) -> &'static str {
+    if is_capture_one(catalog) { "Capture One" } else { "Lightroom" }
 }
 
 /// `file.importLightroom` once the catalog `path` is known: merge, make a new library first, or
@@ -135,9 +140,9 @@ pub fn import(app: &mut LightcraftApp, path: &str, req: &Request) -> Result<Valu
         Plan::Merge => app.run("library.importLightroom", json!({"path": path})),
         Plan::NewLibrary => into_new_library(app, path, req),
         Plan::Ask { new_library } => {
-            busy(app)?;
+            busy(app, path)?;
             if !Path::new(path).is_file() {
-                return Err(format!("{path}: there is no Lightroom catalog file here"));
+                return Err(format!("{path}: there is no {} catalog file here", program(path)));
             }
             let location = req.location.clone().or_else(|| default_location(app).map(|d| d.to_string_lossy().into_owned())).unwrap_or_default();
             let name = req.name.clone().unwrap_or_else(|| default_name(Path::new(path), (!location.is_empty()).then_some(Path::new(&location))));
@@ -160,9 +165,9 @@ pub fn import(app: &mut LightcraftApp, path: &str, req: &Request) -> Result<Valu
 /// and import the catalog there. The catalog is checked first, so a mistyped path doesn't leave an
 /// empty library behind.
 fn into_new_library(app: &mut LightcraftApp, path: &str, req: &Request) -> Result<Value, String> {
-    busy(app)?;
+    busy(app, path)?;
     if !Path::new(path).is_file() {
-        return Err(format!("{path}: there is no Lightroom catalog file here"));
+        return Err(format!("{path}: there is no {} catalog file here", program(path)));
     }
     let location = match req.location.as_deref().map(str::trim) {
         Some("") => return Err("file.importLightroom: choose where to put the new library (`location`)".into()),
@@ -204,6 +209,11 @@ pub fn confirm(app: &mut LightcraftApp, dialog: &Dialog) -> Result<Value, String
     Ok(r)
 }
 
+/// Whether the catalog a window is about is Capture One's, told by its database's file name.
+pub fn is_capture_one(catalog: &str) -> bool {
+    lightcraft_engine::capture_one_catalog::is_database_path(Path::new(catalog))
+}
+
 /// After a failed confirm the window stays open to be corrected (a folder that isn't empty, a
 /// name a folder can't have), unless the library it named has gone.
 pub fn keeps_open_on_error(app: &LightcraftApp, dialog: &Dialog) -> bool {
@@ -224,7 +234,11 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, dialog: &mut Dialog) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let tr = crate::i18n::tr;
     let file = Path::new(catalog.as_str()).file_name().map_or_else(|| catalog.clone(), |n| n.to_string_lossy().into_owned());
-    ui.label(crate::i18n::tr_format!("Where should the Lightroom catalog “{catalog}” go?", catalog = file));
+    ui.label(if is_capture_one(catalog) {
+        crate::i18n::tr_format!("Where should the Capture One catalog “{catalog}” go?", catalog = file)
+    } else {
+        crate::i18n::tr_format!("Where should the Lightroom catalog “{catalog}” go?", catalog = file)
+    });
     ui.label(egui::RichText::new(catalog.as_str()).color(t.text_dim));
     ui.add_space(4.0);
     let n = *photos;
@@ -302,7 +316,11 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, dialog: &mut Dialog) {
     if !*new_library {
         *dont_ask = ticked;
     }
-    ui.label(egui::RichText::new(tr("To be asked again: Settings → General → When importing a Lightroom catalog.")).size(11.0).color(t.text_dim));
+    ui.label(
+        egui::RichText::new(tr("To be asked again: Settings → General → When importing a Lightroom or Capture One catalog."))
+            .size(11.0)
+            .color(t.text_dim),
+    );
 }
 
 #[cfg(test)]

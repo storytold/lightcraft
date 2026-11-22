@@ -29,6 +29,27 @@ fn next_seed(prev: u64, now: &str) -> u64 {
     (lightcraft_catalog::mix64(prev.wrapping_add(1)) ^ t) & (MAX_SEED - 1)
 }
 
+/// `photo.label` / `photo.clearLabel`: give the targets `label`. A colour kept from another
+/// program ([`lightcraft_catalog::Meta::label_text`]) goes with it: the choice made here replaces
+/// it, in the same undo step, so undo brings both back.
+fn set_label(s: &mut crate::Session, p: &Value, label: Option<ColorLabel>) -> Result<Value> {
+    cull(s, p, |s| {
+        // only the photos being labelled, and of those only the ones with a kept colour
+        let kept: std::collections::HashMap<PhotoId, lightcraft_catalog::Meta> = s
+            .targets(p)?
+            .into_iter()
+            .filter_map(|id| s.catalog.photo(id).filter(|photo| !photo.meta.label_text.is_empty()))
+            .map(|photo| (photo.id, lightcraft_catalog::Meta { label_text: String::new(), ..photo.meta.clone() }))
+            .collect();
+        for_targets(s, p, "Set Color Label", |id| {
+            Some(match kept.get(&id) {
+                Some(meta) => Op::Batch { ops: vec![Op::SetLabel { id, label }, Op::SetMeta { id, meta: Box::new(meta.clone()) }] },
+                None => Op::SetLabel { id, label },
+            })
+        })
+    })
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         // ---- view source / filter / sort
@@ -575,7 +596,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     None => return Err(bad("photo.label", "missing `label` (red|yellow|green|blue|purple|none)")),
                     Some(_) => return Err(bad("photo.label", "label must be red|yellow|green|blue|purple|none")),
                 };
-                cull(s, p, |s| for_targets(s, p, "Set Color Label", |id| Some(Op::SetLabel { id, label: l })))
+                set_label(s, p, l)
             }
         ),
         // `photo.label` takes the colour as a parameter, so a key can't be given to "none" alone
@@ -586,7 +607,7 @@ pub fn specs() -> Vec<CommandSpec> {
             None,
             "{ids?, advance?: bool} — `photo.label` with `none`; without `ids`, the selection moves on when this takes the active photo out of the view",
             has_selection,
-            |s, p| { cull(s, p, |s| for_targets(s, p, "Set Color Label", |id| Some(Op::SetLabel { id, label: None }))) }
+            |s, p| set_label(s, p, None)
         ),
         // ---- orientation
         cmd!("photo.rotateLeft", "Rotate Left", ["Photo"], Some("Cmd+["), "{ids?}", has_selection, |s, p| rotate(s, p, false)),
@@ -1314,13 +1335,15 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         // ---- import
         cmd!(query "library.inspectLightroom", "Inspect Lightroom Catalog", [], None,
-        "{path: .lrcat, or a Lightroom catalog backup .zip} → {photos, collections, missing, warnings}; read-only, no Lightroom required",
+        "{path: .lrcat, a Lightroom catalog backup .zip, or a Capture One catalog (its .cocatalog folder or .cocatalogdb)} → {photos, collections, missing, warnings}; read-only, neither program required",
         always, |s, p| {
             let path = str_param(p,"path").ok_or_else(|| bad("library.inspectLightroom","missing path"))?;
             let (cancel, total, done) = Default::default();
             let temp = crate::lightroom_catalog::backup_temp_root(s);
+            // (a Capture One catalog that can't be read is not a wrong parameter of this command)
+            let capture_one = crate::capture_one_catalog::is_catalog(std::path::Path::new(path));
             let data = crate::lightroom_catalog::read_source(std::path::Path::new(path), temp.as_deref(), &cancel, &total, &done)
-                .map_err(|e| bad("library.inspectLightroom",e))?;
+                .map_err(|e| if capture_one { crate::EngineError::Other(e) } else { bad("library.inspectLightroom",e) })?;
             Ok(json!({"photos":data.photos.len(),"collections":data.collections.iter().filter(|r|r.get("systemOnly").and_then(Value::as_f64).unwrap_or(0.0)==0.0).count(),"missing":data.photos.iter().filter(|p| !p.original_is_file()).map(|p|&p.path).collect::<Vec<_>>(),"warnings":data.warnings,"skipped":data.skipped}))
         }),
         cmd!(
@@ -1328,7 +1351,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import Lightroom Catalog",
             [],
             None,
-            "{path: .lrcat, or a Lightroom catalog backup .zip (unpacked to a temporary folder in the library, removed after reading; the zip is not changed), updateExisting?: false}; direct import of paths, ratings, flags, metadata, keywords, collections, virtual copies & mapped edits. Archives source settings/history first. Existing edited photos are preserved unless updateExisting=true; source catalog is read-only.",
+            "{path: .lrcat, or a Lightroom catalog backup .zip (unpacked to a temporary folder in the library, removed after reading; the zip is not changed), updateExisting?: false}; direct import of paths, ratings, flags, metadata, keywords, collections, virtual copies & mapped edits. Archives source settings/history first. Existing edited photos are preserved unless updateExisting=true; source catalog is read-only. path may also be a Capture One catalog (its .cocatalog folder or .cocatalogdb): ratings, colour tags, keywords, IPTC fields, variants as virtual copies, albums, projects and groups; its adjustments are not imported.",
             always,
             |s, p| {
                 let path = str_param(p, "path").ok_or_else(|| bad("library.importLightroom", "missing path"))?;
