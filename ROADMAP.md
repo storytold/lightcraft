@@ -151,7 +151,7 @@ trip, slideshow, auto import…) in ≈ 12 h on 2026-10-02; four to six parallel
 | Work package | Tracker rows | Agent-hours | Risk |
 |---|---|---:|---|
 | Remaining P0/P1 UI and library features (folder rename/move, keyword painter, people view…) | ≈ 8 | 5–10 | low |
-| Raw codecs: CR3 (CRX), compressed ORF, NEF lossy-after-split, HEIC/AVIF decode | LR-IMP-FORMATS | 40–80 | **high** — clean-room black-box analysis, no permissive specs |
+| Raw codecs: CR3 (CRX), compressed ORF, NEF lossy-after-split, HEIC/AVIF decode | LR-IMP-FORMATS | 40–80 | **high** — share-alike references (LibRaw, rawspeed) now usable, but CC0 samples of the missing variants are scarce |
 | Lens-profile database of our own (calibration targets, fitting, data) | LR-EDIT-OPTICS-PROFILE | 15–30 | data collection |
 | Video: playback, trim, edits, export (pure-Rust decode, ideally shared with FilmCraft) | R. Video | 20–40 | medium |
 | AI: subject / sky / background / people / object masks, object-aware remove, AI denoise, super resolution, lens blur, people & faces, natural-language search, culling | ≈ 30 | 80–150 | **high** — permissively licensed weights, pure-Rust inference, maybe training |
@@ -232,6 +232,8 @@ history/snapshots remain source data, and smart collections import current membe
 database is read-only; the app owns subsequent edits. See `docs/lightroom-catalog-import.md`.
 
 ## Log
+- 2026-11-23: Raw-format priority and effort row follow the 2026-11-10 licence policy (share-alike decoder ports
+  such as LibRaw `crx.cpp` allowed with provenance) instead of the 2026-10-05 clean-room rule.
 - 2026-11-15: M6 row: Depth Range masks are built (estimated depth, Depth Anything V2 Small) and now in the Masks
   panel's Create New Mask (issue #1144).
 - 2026-11-01: IMM-SIDECARS: XMP sidecars both ways — pull the sidecar Immich stores for a linked asset (metadata
