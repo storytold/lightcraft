@@ -25,6 +25,12 @@ fn is_zero(c: &u32) -> bool {
 impl Stamp {
     /// Before every real change.
     pub const ZERO: Stamp = Stamp { t: 0, c: 0, d: 0 };
+
+    /// Whether this stamp is more than [`MAX_SKEW_MS`] later than `now_ms`: no device whose
+    /// clock is within the allowed skew could have made it, so it is refused.
+    pub fn ahead_of(&self, now_ms: u64) -> bool {
+        self.t > now_ms.saturating_add(MAX_SKEW_MS)
+    }
 }
 
 /// A short tag of a device id, for [`Stamp::d`].
@@ -53,6 +59,16 @@ impl Clock {
         if s > self.last {
             self.last = s;
         }
+    }
+
+    /// [`Clock::observe`], unless `s` is more than [`MAX_SKEW_MS`] past `now_ms`: a stamp from
+    /// the far future would make every later change here lose to it. Says whether it was taken.
+    pub fn observe_at(&mut self, s: Stamp, now_ms: u64) -> bool {
+        if s.ahead_of(now_ms) {
+            return false;
+        }
+        self.observe(s);
+        true
     }
 
     pub fn last(&self) -> Stamp {
@@ -109,6 +125,22 @@ mod tests {
         assert!(a < b && b < back, "{a:?} {b:?} {back:?}");
         c.observe(Stamp { t: 9000, c: 3, d: 1 });
         assert!(c.tick(2000, "a") > Stamp { t: 9000, c: 3, d: 1 });
+    }
+
+    #[test]
+    fn far_future_stamps_are_not_observed() {
+        let now = 1_000_000_000;
+        let mut c = Clock::default();
+        let day = Stamp { t: now + 24 * 3600 * 1000, c: 0, d: 7 };
+        assert!(!c.observe_at(day, now));
+        assert!(c.tick(now, "a") < day);
+        assert!(c.observe_at(Stamp { t: now + MAX_SKEW_MS, c: 0, d: 7 }, now));
+        // the end of time neither overflows nor panics
+        let end = Stamp { t: u64::MAX, c: u32::MAX, d: u32::MAX };
+        assert!(!c.observe_at(end, now));
+        assert!(!end.ahead_of(u64::MAX));
+        c.observe(end);
+        let _ = c.tick(u64::MAX, "a");
     }
 
     #[test]

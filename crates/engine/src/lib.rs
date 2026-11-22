@@ -104,6 +104,7 @@ pub mod midi;
 /// The shared AI backend's queue and activity row (#491).
 pub mod ml;
 mod model_download;
+pub mod notice;
 pub mod open_path;
 pub mod originals;
 mod pdf;
@@ -472,6 +473,8 @@ pub struct Session {
     /// Sync with the app on other devices ([`device_sync`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub device_sync: device_sync::State,
+    /// Things to tell the user once ([`Session::take_notices`]).
+    notices: Vec<notice::Notice>,
     /// Auto updates: the last check, the download in flight, and the settings ([`update`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub updater: update::Updater,
@@ -891,6 +894,7 @@ impl Session {
             remote: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             device_sync: Default::default(),
+            notices: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             updater: Default::default(),
             desktop: desktop::default_desktop(),
