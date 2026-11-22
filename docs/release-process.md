@@ -30,11 +30,10 @@ Written after 26.46.2; keep it current. CI mechanics: [`ci.md`](ci.md). Changelo
 - **Full CI only runs on dispatch**, so a behaviour change merged without updating the tests that call it stays
   hidden until release day. A change to a command's semantics (for instance `panel.presets` becoming a toggle) must
   run the tests that use that command in the same PR.
-- **Windows CLI/MCP tests fail with Vulkan validation text on stdout** (`contact_sheet_exports_pdf…`,
-  `mcp_over_stdio_…`, `run_subcommand_chains…`, `transparent_png_export…`, `tether_cull_develop_publish_sync_print`,
-  plus an abort in `tests_i18n_sweep`). The validation layer rejects naga's strided arrays in Function/Workgroup
-  storage (`hist.wgsl` `local_bins`, `blur.wgsl` median `v`, `finish.wgsl` `band_weights`). They were red for
-  26.46.1 and 26.46.2 and shipped anyway; fix the shaders or quarantine the tests rather than re-diagnosing.
+- **Vulkan validation text on stdout** (`VUID-StandaloneSpirv-None-10684`) used to fail the Windows CLI/MCP tests
+  and `tests_i18n_sweep` in 26.46.1/26.46.2: naga put `ArrayStride` on Function/Workgroup arrays. Fixed by the
+  patched `vendor/naga` (vendor/README.md); if it comes back after a wgpu upgrade, re-apply that patch and check
+  with `WGPU_BACKEND=vulkan cargo test -p lcc-gpu --lib` rather than re-diagnosing.
 - **`exports_are_atomic_without_a_sync`** counts syncs on the exporting thread, so any other durable write on that
   thread (a cache, a baseline) fails it. Recreatable caches use `write_atomic_nosync`.
 - **Tests that press a toggling command** (`panel.presets`) must first put the panel in the state they expect.
