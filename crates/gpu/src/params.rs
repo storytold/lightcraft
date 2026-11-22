@@ -287,7 +287,7 @@ fn proraw_fields(p: &mut Block, aux: &mut Vec<f32>, fp: &FinishParams) {
 /// A curve whose length is not [`CURVE_N`] fails the render ([`FailKind::Fatal`]) and returns an
 /// empty parameter block with a truncated aux table, which the caller discards (CPU fallback).
 pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present, deep: bool) -> (Vec<u32>, Vec<f32>) {
-    let (tone, chroma) = match &fp.proraw {
+    let (tone, chroma): (&[f32], &[f32]) = match &fp.proraw {
         Some(map) => (map.lut(), &[1.0; lightcraft_pipeline::tone::CHROMA_N]),
         None => (fp.tone.lut(), fp.tone.chroma_lut()),
     };
