@@ -91,3 +91,18 @@ s.finish();
 Check behaviour the user would notice ("the album shows 2 photos", "the copy didn't change its original"), not
 numbers that are simply what the code produces today. To teach the monkey a new action, add an arm to
 `random_action`.
+
+## Hostile-input tables (below SIL)
+
+Malformed files are caught at the lowest level, next to the decoder, not here. Raw containers with a compressed
+decoder of their own (CR3 lossless and C-RAW, Sony ARW6, GoPro VC-5, Fujifilm compressed RAF in Bayer and X-Trans,
+Nikon High Efficiency) share one table in `crates/raw/src/vendor/container_robust.rs`: each row builds a valid seed
+with the crate's procedural test encoders, then runs truncations across the whole seed (tail included) and seeded mutations of it (`lcc-fuzzkit`)
+through the decoder with two budgets. The row must finish inside a generous deadline (a hang fails instead of
+stalling CI), and a successful decode of a mutation may not produce more samples than the row's cap (a header
+claim trusted without the data behind it). DNG and the vendor TIFF variants stay in `crates/raw/tests/it/robust.rs`
+and `vendor_robust.rs`.
+
+`LCC_FUZZ_ITERS=N` raises the mutation count of every `lcc-fuzzkit` harness for a longer local run, e.g.
+`LCC_FUZZ_ITERS=30000 cargo test -p lcc-raw --lib container_robust` (the deadlines scale with it). An input that
+fails is printed with its harness name and iteration; add it to the row's `regressions` so every run replays it.

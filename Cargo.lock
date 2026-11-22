@@ -5346,6 +5346,7 @@ dependencies = [
  "lcc-brand",
  "lcc-codecs",
  "lcc-color",
+ "lcc-fuzzkit",
  "lcc-geom",
  "lcc-hash",
  "lcc-meta",
