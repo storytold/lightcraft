@@ -13,6 +13,12 @@
   the other exports do, and writes the file atomically. It used to write the presets over whatever file it was given,
   and a failed write (a full disk) could leave a cut-off file where an earlier export was.
 
+### ProRAW tone-chain candidate (explicit process V13 only)
+- On Apple ProRAW with a profile tone curve, the provisional process applies the fitted tone chain to colour as well
+  as brightness. V10 remains the default for new photos, Reset and Update to Current Process.
+- A source without the curve, including an older offline smart preview, keeps V10 rendering. Previously saved
+  process numbers keep their behavior, including numeric 9's existing fallback to V8.
+
 ### Film grain that looks like film (process V7)
 - Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
   rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth

@@ -20,6 +20,11 @@ stronger Light sliders, issue #196) without changing a single photo someone has 
 | **V9** *(reserved)* | Reserved for `HealMethod::Pinned` (`#4069`). |
 | **V10** (the latest) | V8 plus: checked Bradford white-balance fallback (`craft_color_transform::cct::wb_matrix`, returning `Mat3::IDENTITY` when a source illuminant's Bradford blue cone response `s[2] <= 0.0`, `craft-libs#587`). V1 to V8 (and reserved V9) keep the legacy Bradford result for saved edits (`local::wb_matrix_for`). |
 
+Process V13 is a provisional explicit opt-in in this integration candidate, not the current default
+process. It inherits V10's checked white balance and adds the fitted tone chain only for Apple
+ProRAW with a profile tone curve. If the curve is absent (including an older offline smart preview),
+it keeps V10's rendering. The numeric V9 fallback is unchanged.
+
 ## The rule
 
 **A change that alters how existing settings render ships as a new process. V1 is frozen.**
@@ -128,6 +133,7 @@ extra field and retain their existing cached renders. No cache-version bump is n
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | minor | Provisional V13: fitted Apple ProRAW tone chain (#613); all older processes remain unchanged |
 | 2026-11-08 | minor | V8: the Highlights/Shadows base keeps the gaps in dark lettering (#3460) |
 | 2026-11-07 | minor | V7: film grain from crystal layers ([grain.md](grain.md)); V1 to V6 keep their value noise |
 | 2026-11-05 | minor | V5: a raw's tone curve rolls off into white in stops, so raising Exposure keeps recorded highlights (#1632) |

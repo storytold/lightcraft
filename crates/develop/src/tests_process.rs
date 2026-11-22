@@ -109,6 +109,25 @@ fn unknown_process_numbers_load_and_render_with_the_newest_known() {
 }
 
 #[test]
+fn only_an_exact_provisional_process_number_selects_proraw() {
+    for (stored, effective, known) in [
+        (9, Process::V8, false),
+        (10, Process::V10, true),
+        (11, Process::V10, false),
+        (12, Process::V10, false),
+        (13, Process::V13, true),
+        (14, Process::V10, false),
+    ] {
+        let settings = DevelopSettings::from_json(&json!({"process": stored})).unwrap();
+        assert_eq!(settings.process, ProcessVersion(stored));
+        assert_eq!(settings.process.process(), effective);
+        assert_eq!(settings.process.is_known(), known);
+        assert_eq!(settings.to_json()["process"], json!(stored));
+    }
+    assert_eq!(DevelopSettings::default().process, Process::V10.version());
+}
+
+#[test]
 fn a_damaged_process_value_reads_as_v1_and_keeps_the_edits() {
     let too_big = u64::from(u32::MAX) + 1;
     for bad in [

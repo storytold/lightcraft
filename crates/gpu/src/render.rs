@@ -1431,7 +1431,7 @@ struct Prep {
 fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, planes: &mut Planes) -> Prep {
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
-    let sig = local::plane_sigmas(&plan.settings, plan.px_per_long, plan.native_long as f64, req.quality);
+    let sig = local::plane_sigmas(&plan.settings, plan.px_per_long, plan.native_long as f64, req.quality, plan.lr_tone);
     let log_l = match &planes.log_l {
         Some(b) => b.clone(),
         None => {
@@ -1442,12 +1442,15 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, pla
             b
         }
     };
-    let base = match sig.base {
-        Some(sg) => {
-            let key = local::base_key(&plan.settings, sg, sig.base_detail);
+    // a window on Apple ProRAW reads Highlights / Shadows' neighbourhood from the whole frame
+    let whole = plan.frame_context.as_ref().zip(plan.frame.view).filter(|_| sig.base_gaussian);
+    let base = match (sig.base.zip(sig.base_key(&plan.settings)), whole) {
+        (Some((_, key)), Some((ctx, view))) => plane_at(&mut planes.base, key, || cx.gpu.upload(&local::context_window(ctx, view, w, h).data)),
+        (Some((sg, key)), None) if sig.base_gaussian => plane_at(&mut planes.base, key, || gaussian(cx, &log_l, w, h, 1, sg)),
+        (Some((sg, key)), None) => {
             plane_at(&mut planes.base, key, || tone_base(cx, &log_l, w, h, sg, sig.base_detail, local::base_keeps_gaps(&plan.settings)))
         }
-        None => log_l.clone(),
+        (None, _) => log_l.clone(),
     };
     let clarity = sig.clarity.map(|sg| plane_at(&mut planes.clarity, sg.to_bits(), || guided_fast(cx, &log_l, w, h, sg, local::CLARITY_EPS)));
     let texture = sig.texture.map(|sg| plane_at(&mut planes.texture, sg.to_bits(), || gaussian(cx, &log_l, w, h, 1, sg)));

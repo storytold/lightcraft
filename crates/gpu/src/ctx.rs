@@ -418,6 +418,8 @@ fn constants() -> String {
         "const TONE_MIN_EV: f32 = {LUT_MIN_EV:?};\nconst TONE_MAX_EV: f32 = {LUT_MAX_EV:?};\nconst TONE_N: u32 = {LUT_N}u;\nconst CHROMA_N: u32 = {CHROMA_N}u;\n"
     );
     s += &format!("const TONE_MIN_GAIN: f32 = {:?};\n", 2f32.powf(LUT_MIN_EV));
+    use lightcraft_pipeline::proraw::{LR_KNOT_STEP, LR_KNOT0, LR_KNOTS};
+    s += &format!("const LR_K0: f32 = {LR_KNOT0:?};\nconst LR_KSTEP: f32 = {LR_KNOT_STEP:?};\nconst LR_KN: u32 = {LR_KNOTS}u;\n");
     let b = lightcraft_pipeline::geometry::BLANK;
     s += &format!("const BLANK_R: f32 = {:?};\nconst BLANK_G: f32 = {:?};\nconst BLANK_B: f32 = {:?};\n", b[0], b[1], b[2]);
     s += &format!(
