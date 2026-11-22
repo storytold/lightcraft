@@ -81,12 +81,14 @@ pub(crate) fn linux_show_items(uris: &[String]) -> Result<(), String> {
 /// Open `dir` with the default handler (`xdg-open`), as the reveal fallback did before #4652.
 /// Only called on Linux/FreeBSD (see `linux_reveal_one`); kept unconditional so the Windows and
 /// macOS builds still reference the reveal helpers (runtime `cfg!` dispatch in `session`).
+/// Never waits for the file manager (issue #4658): the old `.status()` blocked the command until
+/// its window closed. The child is reaped on a thread so no zombie is left behind.
 fn xdg_open_dir(dir: &str) -> Result<(), String> {
-    std::process::Command::new("xdg-open")
-        .arg(dir)
-        .status()
-        .map_err(|e| e.to_string())
-        .and_then(|status| if status.success() { Ok(()) } else { Err(format!("reveal failed: {status}")) })
+    let mut child = std::process::Command::new("xdg-open").arg(dir).spawn().map_err(|e| e.to_string())?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 /// Reveal one path on Linux/FreeBSD (issue #4652): a folder opens as before, a file is selected
