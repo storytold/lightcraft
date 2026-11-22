@@ -142,6 +142,13 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("aesthetic", "Aesthetic", Kind::Number),
     ("cullScore", "Cull Score", Kind::Number),
     ("suggestedStars", "Suggested Stars (assisted culling)", Kind::Number),
+    // Image Quality Scanner (issue #1313)
+    ("qualityScore", "Quality Score", Kind::Number),
+    ("qualitySharpness", "Sharpness (quality scan)", Kind::Number),
+    ("qualityNoise", "Noise (quality scan)", Kind::Number),
+    ("qualityExposure", "Exposure (quality scan)", Kind::Number),
+    ("qualityCompression", "Compression (quality scan)", Kind::Number),
+    ("qualityVerdict", "Quality Verdict", Kind::Choice(&[("accepted", "Accepted"), ("pending", "Pending"), ("rejected", "Rejected")])),
 ];
 
 /// The fields the field menu shows at its top level, before the groups.
@@ -160,6 +167,7 @@ pub const FIELD_GROUPS: &[(&str, &[&str])] = &[
     ("Size", &["longEdge", "shortEdge", "width", "height", "aspect", "megapixels"]),
     ("Develop", &["edited", "cropped", "treatment", "processVersion", "vignettingReference"]),
     ("Assisted Culling", &["sharpness", "bestOfGroup", "clipped", "eyesOpen", "aesthetic", "cullScore", "suggestedStars"]),
+    ("Image Quality", &["qualityScore", "qualitySharpness", "qualityNoise", "qualityExposure", "qualityCompression", "qualityVerdict"]),
 ];
 
 /// The field-menu group `field` sits in; `None` for a top-level or unknown field.
@@ -1134,6 +1142,21 @@ impl Rule {
             "aesthetic" => num_op(op, p.analysis.and_then(|a| a.aesthetic).map(|v| v as f64), value),
             "cullScore" => num_op(op, p.analysis.and_then(|a| a.cull_score).map(|v| v as f64), value),
             "suggestedStars" => num_op(op, p.analysis.and_then(|a| a.suggested).map(f64::from), value),
+            "qualityScore" => num_op(op, p.analysis.and_then(|a| a.quality).map(|q| f64::from(q.score)), value),
+            "qualitySharpness" => num_op(op, p.analysis.and_then(|a| a.quality).map(|q| f64::from(q.sharpness)), value),
+            "qualityNoise" => num_op(op, p.analysis.and_then(|a| a.quality).map(|q| f64::from(q.noise)), value),
+            "qualityExposure" => num_op(op, p.analysis.and_then(|a| a.quality).map(|q| f64::from(q.exposure)), value),
+            "qualityCompression" => num_op(op, p.analysis.and_then(|a| a.quality).and_then(|q| q.compression).map(f64::from), value),
+            "qualityVerdict" => {
+                // (`want` is the value lowercased already; a photo no scan scored has no verdict,
+                // so it is not any of the three and it is every one of them's `isNot`)
+                let have = p.analysis.and_then(|a| a.quality).map(|q| q.verdict.as_str());
+                match op {
+                    "is" => have == Some(want.as_str()),
+                    "isNot" => have != Some(want.as_str()),
+                    _ => false,
+                }
+            }
             "album" => {
                 let id = album_rule_id(value);
                 // a smart album's photos are its matches; one being evaluated (a loop) holds none
@@ -2180,6 +2203,7 @@ mod tests {
             aesthetic: Some(6.5),
             cull_score: Some(0.7),
             suggested: Some(5),
+            ..Analysis::default()
         });
         let m =
             |field: &str, op: &str, value: serde_json::Value| rs(json!({"rules": [{"field": field, "op": op, "value": value}]})).matches(&p, &cat);

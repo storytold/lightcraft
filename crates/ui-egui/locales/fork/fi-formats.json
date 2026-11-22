@@ -1,6 +1,8 @@
 {
+  " ({n} could not be read)": " ({n} ei luettavissa)",
   "+ Create “{new}”": "+ Luo ”{new}”",
   ", ": ", ",
+  ": {accepted} accepted, {pending} to review, {rejected} rejected": ": {accepted} hyväksytty, {pending} tarkistettavaa, {rejected} hylätty",
   "A pixel-shift merge of this series already exists ({name})": "Tästä sarjasta on jo Pixel Shift -yhdistelmä ({name})",
   "A profile “{name}” is already there.": "Profiili ”{name}” on jo olemassa.",
   "A waiting export could not start: {e}": "Odottavaa vientiä ei voitu aloittaa: {e}",
@@ -90,6 +92,8 @@
   "Healed {n} mark{} from the infrared pass": "Infrapunakuvasta korjattuja jälkiä: {n}{:.0}",
   "Ignored {} face": "Ohitettu {} kasvo",
   "Ignored {} faces": "Ohitettu {} kasvoa",
+  "Image Quality Scan stopped: {n} photos scanned": "Kuvanlaadun skannaus pysäytetty: skannattiin {n} kuvaa",
+  "Image Quality Scan: {n} photos scanned": "Kuvanlaadun skannaus: skannattiin {n} kuvaa",
   "Immich albums: {n}, {kept} kept on this device": "Immich-albumit: {n}, tällä laitteella {kept}",
   "Import {n} Selected": "Tuo {n} valittua",
   "Import {n} into {library}": "Tuo {n} kohteeseen {library}",

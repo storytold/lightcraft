@@ -719,6 +719,7 @@ pub(crate) fn expanded(app: &LccApp, name: &str) -> Option<Vec<MenuNode>> {
                 ("Rating", Rating, "rating"),
                 ("File Size", FileSize, "fileSize"),
                 ("Random", Random, "random"),
+                ("Quality", Quality, "quality"),
             ]
             .into_iter()
             .map(|(label, key, k)| item("library.sort", json!({"key": k}), label, None, true, Some(cur.key == key)))

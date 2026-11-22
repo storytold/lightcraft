@@ -869,7 +869,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Filter",
             [],
             None,
-            "partial Filter: {text?, semantic?, rating?, ratingOp?: atLeast|exactly|atMost, flag?: pick|reject|none|null, label?, kind?, copy?: true (virtual copies only) | false (master photos only) | null, merged?: hdr|panorama|hdrPanorama|focusStack|any, immich?: linked|notLinked|probable, vignettingReference?: reference|none (Vignetting Calibration references in use; a withdrawn one counts as none), edited?, date?, libraryFolder?: a path from library.folders, keyword?, person?, camera?, lens?, keywords?/people?/cameras?/lenses?: [any of these values], keywordOp?/personOp?/lensOp?: any|all (how each list combines: any = OR, all = AND), labels?: [any of these labels], labelsNone?: true (photos with no colour label), faces?: count|min+|range}",
+            "partial Filter: {text?, semantic?, rating?, ratingOp?: atLeast|exactly|atMost, flag?: pick|reject|none|null, label?, kind?, copy?: true (virtual copies only) | false (master photos only) | null, merged?: hdr|panorama|hdrPanorama|focusStack|any, immich?: linked|notLinked|probable, vignettingReference?: reference|none (Vignetting Calibration references in use; a withdrawn one counts as none), quality?: accepted|pending|rejected|unscanned (the Image Quality Scanner's verdict; unscanned: no scan has scored the photo), qualityMin?: 0..100 (the score's floor), qualityMax?: 0..100 (its ceiling; a photo no scan scored matches neither), edited?, date?, libraryFolder?: a path from library.folders, keyword?, person?, camera?, lens?, keywords?/people?/cameras?/lenses?: [any of these values], keywordOp?/personOp?/lensOp?: any|all (how each list combines: any = OR, all = AND), labels?: [any of these labels], labelsNone?: true (photos with no colour label), faces?: count|min+|range}",
             always,
             |s, p| {
                 let mut v = serde_json::to_value(&s.filter).unwrap_or_default();
@@ -896,6 +896,20 @@ pub fn specs() -> Vec<CommandSpec> {
                 // deleted is let go of, `Session::reconcile_view`)
                 if p.get("album").is_some_and(|a| !a.is_null()) && f.album.is_some_and(|a| s.catalog.album(a).is_none()) {
                     return Err(bad("library.filter", "no such collection"));
+                }
+                // the quality filter's numbers: a verdict is one of the four, the bounds are 0..100
+                if let Some(q) = f.quality.as_deref().filter(|q| !matches!(*q, "accepted" | "pending" | "rejected" | "unscanned")) {
+                    return Err(bad("library.filter", format!("`quality` is accepted, pending, rejected or unscanned, not {q:?}")));
+                }
+                for (key, bound) in [("qualityMin", f.quality_min), ("qualityMax", f.quality_max)] {
+                    if bound.is_some_and(|b| !(0.0..=100.0).contains(&b)) {
+                        return Err(bad("library.filter", format!("`{key}` is a score from 0 to 100")));
+                    }
+                }
+                if let (Some(a), Some(b)) = (f.quality_min, f.quality_max)
+                    && a > b
+                {
+                    return Err(bad("library.filter", "`qualityMin` is above `qualityMax`"));
                 }
                 let sets_semantic = p.get("semantic").is_some();
                 let sets_only = p.get("only").is_some();
@@ -1090,7 +1104,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Sort",
             ["View", "Sort"],
             None,
-            "{key?: captureDate|importDate|editDate|fileName|rating|fileSize|random|custom (Custom Order: a regular album's order set by hand), ascending?: bool, group?: auto|none|day|month|year, seed?: u64 (the shuffle `random` gives)}",
+            "{key?: captureDate|importDate|editDate|fileName|rating|fileSize|random|custom (Custom Order: a regular album's order set by hand)|quality (the Image Quality Scanner's score; unscanned photos first ascending, last descending), ascending?: bool, group?: auto|none|day|month|year, seed?: u64 (the shuffle `random` gives)}",
             always,
             |s, p| {
                 let key: SortKey = match p.get("key") {

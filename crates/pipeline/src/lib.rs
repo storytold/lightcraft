@@ -52,6 +52,7 @@ pub mod optics;
 pub mod output;
 pub mod plugin_filters;
 pub mod profiles;
+pub mod quality;
 pub mod redeye;
 pub mod retouch;
 pub mod scene_model;

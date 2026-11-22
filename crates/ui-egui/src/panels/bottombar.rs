@@ -168,6 +168,7 @@ fn sort_key_label(key: lcc_catalog::SortKey) -> &'static str {
         FileSize => "File Size",
         Random => "Random",
         Custom => "Custom Order",
+        Quality => "Quality",
     }
 }
 
@@ -500,6 +501,7 @@ fn sort_menu(app: &mut LccApp, ui: &mut egui::Ui) {
         ("Rating", Rating, "rating"),
         ("File Size", FileSize, "fileSize"),
         ("Random", Random, "random"),
+        ("Quality", Quality, "quality"),
     ] {
         if ui.selectable_label(cur.key == key, crate::i18n::tr(label)).clicked() {
             let _ = app.run("library.sort", json!({"key": k}));

@@ -108,6 +108,7 @@ mod pointer_repair;
 pub mod print_ui;
 pub mod print_view;
 pub mod progress;
+mod quality_scan;
 pub mod quick_bar;
 pub mod rating;
 pub mod recheck;
@@ -409,6 +410,8 @@ mod tests_profile_manager;
 mod tests_profiles_layout;
 #[cfg(test)]
 mod tests_progress;
+#[cfg(test)]
+mod tests_quality_scan_ui;
 #[cfg(test)]
 mod tests_quick_bar;
 #[cfg(test)]
@@ -2618,6 +2621,7 @@ impl LccApp {
         }
         panels::denoise::pump(self, ctx);
         panels::plugin_filters::pump(self, ctx);
+        quality_scan::pump(self, ctx);
         panels::right::dust_pump(self, ctx);
         panels::faces::pump(self, ctx);
         focus_scan::pump(self, ctx);

@@ -1,6 +1,8 @@
 {
+  " ({n} could not be read)": " ({n} illisibles)",
   "+ Create “{new}”": "+ Créer « {new} »",
   ", ": ", ",
+  ": {accepted} accepted, {pending} to review, {rejected} rejected": " : {accepted} acceptées, {pending} à revoir, {rejected} rejetées",
   "A pixel-shift merge of this series already exists ({name})": "Une fusion Pixel Shift de cette série existe déjà ({name})",
   "A profile “{name}” is already there.": "Un profil « {name} » existe déjà.",
   "A waiting export could not start: {e}": "Impossible de démarrer une exportation en attente : {e}",
@@ -81,6 +83,8 @@
   "Healed {n} mark{} from the infrared pass": "Marques corrigées depuis la passe infrarouge : {n}{:.0}",
   "Ignored {} face": "{} visage ignoré",
   "Ignored {} faces": "{} visages ignorés",
+  "Image Quality Scan stopped: {n} photos scanned": "Analyse de la qualité d'image arrêtée : {n} photos analysées",
+  "Image Quality Scan: {n} photos scanned": "Analyse de la qualité d'image : {n} photos analysées",
   "Immich albums: {n}, {kept} kept on this device": "Albums Immich : {n}, {kept} gardés sur cet appareil",
   "Import {n} Selected": "Importer {n} sélectionnées",
   "Import {n} into {library}": "Importer {n} dans {library}",

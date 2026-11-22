@@ -1,7 +1,9 @@
 {
+  " ({n} could not be read)": "（{n} 张无法读取）",
   " · {queued} waiting": " · {queued} 张等待中",
   "+ Create “{new}”": "+ 创建“{new}”",
   ", ": "、",
+  ": {accepted} accepted, {pending} to review, {rejected} rejected": "：{accepted} 张接受，{pending} 张待审，{rejected} 张排除",
   "A pixel-shift merge of this series already exists ({name})": "此系列的像素偏移合成已存在 ({name})",
   "A profile “{name}” is already there.": "配置文件“{name}”已存在。",
   "A waiting export could not start: {e}": "等待中的导出无法开始：{e}",
@@ -83,6 +85,8 @@
   "Healed {n} mark{} from the infrared pass": "已根据红外通道修复痕迹：{n}{:.0}",
   "Ignored {} face": "已忽略 {} 张人脸",
   "Ignored {} faces": "已忽略 {} 张人脸",
+  "Image Quality Scan stopped: {n} photos scanned": "图像质量扫描已停止：已扫描 {n} 张照片",
+  "Image Quality Scan: {n} photos scanned": "图像质量扫描：已扫描 {n} 张照片",
   "Immich albums: {n}, {kept} kept on this device": "Immich 相册：{n} 个，本设备保留 {kept} 个",
   "Import {n} Selected": "导入 {n} 张选定照片",
   "Import {n} into {library}": "将 {n} 张导入 {library}",

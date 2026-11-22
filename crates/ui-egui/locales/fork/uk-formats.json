@@ -1,6 +1,8 @@
 {
+  " ({n} could not be read)": " (не читається: {n})",
   "+ Create “{new}”": "+ Створити «{new}»",
   ", ": ", ",
+  ": {accepted} accepted, {pending} to review, {rejected} rejected": ": прийнято {accepted}, на перевірку {pending}, відхилено {rejected}",
   "A pixel-shift merge of this series already exists ({name})": "Об’єднання Pixel Shift цієї серії вже існує ({name})",
   "A profile “{name}” is already there.": "Профіль «{name}» уже існує.",
   "A waiting export could not start: {e}": "Не вдалося почати експорт, що очікував: {e}",
@@ -81,6 +83,8 @@
   "Healed {n} mark{} from the infrared pass": "Виправлено слідів за інфрачервоним проходом: {n}{:.0}",
   "Ignored {} face": "Проігноровано облич: {}",
   "Ignored {} faces": "Проігноровано облич: {}",
+  "Image Quality Scan stopped: {n} photos scanned": "Сканування якості зображення зупинено: відскановано фото: {n}",
+  "Image Quality Scan: {n} photos scanned": "Сканування якості зображення: відскановано фото: {n}",
   "Immich albums: {n}, {kept} kept on this device": "Альбоми Immich: {n}, на цьому пристрої {kept}",
   "Import {n} Selected": "Імпортувати вибрані ({n})",
   "Import {n} into {library}": "Імпортувати {n} до {library}",

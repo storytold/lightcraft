@@ -13,7 +13,7 @@ import Shot from '../../../components/Shot.astro';
 
 <Shot name="lib-grid" alt="The filter bar above the grid" />
 
-- **Filter Bar** (`Shift+F`, or `\` in the grids): rating (at least / exactly / at most), pick or reject flag, colour labels, file type, edited or not, camera, lens, keyword, people. Counts show beside flags and labels. Click several colour swatches to show photos with any of them; the hollow swatch at the end shows the photos without a label; the **Library ▸ Filter by Color Label** menu has a **No Label** row, and searching `label:none` finds the same photos.
+- **Filter Bar** (`Shift+F`, or `\` in the grids): rating (at least / exactly / at most), pick or reject flag, colour labels, file type, edited or not, camera, lens, keyword, people, and — once the [Image Quality Scanner](../quality-scanner/) has scored something — the quality verdict (accepted, to review, rejected, not scanned) with a score floor. Counts show beside flags and labels. Click several colour swatches to show photos with any of them; the hollow swatch at the end shows the photos without a label; the **Library ▸ Filter by Color Label** menu has a **No Label** row, and searching `label:none` finds the same photos.
 - **Metadata columns**: the column switch shows up to six lists (Date, Camera, Lens, Label, Keyword, People, Flag, Rating, File Type, plus ISO, focal length, Aperture and Shutter Speed) with counts and a search box each.
 - **Enable Filters** (`Cmd/Ctrl+L`) switches the filter off and on; **Clear** resets it. The filter stays when you change collections.
 - **Presets** (filter bar): save, apply and delete filter presets. **Save as Smart Collection…** keeps the filter as a collection.
@@ -22,7 +22,7 @@ import Shot from '../../../components/Shot.astro';
   - **Codec** and **Frame rate** are listed but not supported yet; the inputs are disabled.
   - **Enter Full Screen** moved to `F11` (`Cmd+Ctrl+F` on macOS) to free the shortcut.
 - **Search chips** below it in Modern, such as `3+` and `Picks`, are quick filters.
-- **Sort** (bottom bar, **View ▸ Sort**): capture date, import date, edit date, file name, rating, file size, random, or custom order; ascending or descending; grouping by day, month or year.
+- **Sort** (bottom bar, **View ▸ Sort**): capture date, import date, edit date, file name, rating, file size, random, custom order, or quality (photos no scan scored come first ascending); ascending or descending; grouping by day, month or year.
 - Stacked photos and virtual copies honour the filter; **Hide Rejected Photos** filters rejects out.
 - **Find Similar Photos** filters to look-alikes; **Clear Filters** returns.
 

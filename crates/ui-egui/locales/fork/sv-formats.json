@@ -1,6 +1,8 @@
 {
+  " ({n} could not be read)": " ({n} kunde inte läsas)",
   "+ Create “{new}”": "+ Skapa ”{new}”",
   ", ": ", ",
+  ": {accepted} accepted, {pending} to review, {rejected} rejected": ": {accepted} accepterade, {pending} att granska, {rejected} refuserade",
   "A pixel-shift merge of this series already exists ({name})": "En Pixel Shift-sammanfogning av den här serien finns redan ({name})",
   "A profile “{name}” is already there.": "Det finns redan en profil ”{name}”.",
   "A waiting export could not start: {e}": "Det gick inte att starta en väntande export: {e}",
@@ -92,6 +94,8 @@
   "Healed {n} mark{} from the infrared pass": "Lagade märken från det infraröda passet: {n}{:.0}",
   "Ignored {} face": "{} ansikte ignorerat",
   "Ignored {} faces": "{} ansikten ignorerade",
+  "Image Quality Scan stopped: {n} photos scanned": "Bildkvalitetsskanning stoppad: {n} foton skannade",
+  "Image Quality Scan: {n} photos scanned": "Bildkvalitetsskanning: {n} foton skannade",
   "Immich albums: {n}, {kept} kept on this device": "Immich-album: {n}, {kept} sparade på den här enheten",
   "Import {n} Selected": "Importera {n} markerade",
   "Import {n} into {library}": "Importera {n} till {library}",
