@@ -5,7 +5,7 @@
 //! commands: dragging a cell is `print.cell.move`, its corner handle `print.cell.resize`, with
 //! the guides' snapping done by the command. Widgets register under `print:*`, `button:print*`
 //! and `drag:print*` ids for the control channel and the headless tests.
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
+use crate::json_ext::JsonExt as _;
 use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 use lcc_catalog::PhotoId;
 use lcc_engine::export::ExportOptions;
@@ -216,7 +216,7 @@ fn settings(app: &mut LccApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, st: &Pr
         if text_button(ui, "printSaveTemplate", "Save", false).clicked() && !pu.template_name.trim().is_empty() {
             let mut params = json!({"name": pu.template_name});
             if let Some(f) = &pu.folder {
-                params["folder"] = json!(f);
+                *params.field_mut("folder") = json!(f);
             }
             run(app, &ctx, "print.template.save", params);
         }
@@ -225,10 +225,10 @@ fn settings(app: &mut LccApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, st: &Pr
             for path in paths {
                 let mut params = json!({"path": path});
                 if let Some(f) = &pu.folder {
-                    params["folder"] = json!(f);
+                    *params.field_mut("folder") = json!(f);
                 }
                 if let Some(r) = run(app, &ctx, "print.template.import", params) {
-                    app.toast(&ctx, crate::i18n::tr_format!("Imported {name}", name = r["name"].as_str().unwrap_or_default()));
+                    app.toast(&ctx, crate::i18n::tr_format!("Imported {name}", name = r.field("name").as_str().unwrap_or_default()));
                 }
             }
         }
@@ -286,7 +286,7 @@ fn settings(app: &mut LccApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, st: &Pr
                         if let Some(path) = app.services.save_print_template.as_mut().and_then(|save| save(&file))
                             && let Some(r) = run(app, &ctx, "print.template.export", json!({"name": name, "path": path}))
                         {
-                            app.toast(&ctx, crate::i18n::tr_format!("Exported to {path}", path = r["path"].as_str().unwrap_or_default()));
+                            app.toast(&ctx, crate::i18n::tr_format!("Exported to {path}", path = r.field("path").as_str().unwrap_or_default()));
                         }
                     }
                     if text_button(ui, &format!("printTemplateApply-{i}"), "Apply", false).clicked() {
@@ -422,7 +422,7 @@ fn settings(app: &mut LccApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, st: &Pr
                 if text_button(ui, "printNewPage", "New Page", false).clicked()
                     && let Some(r) = run(app, &ctx, "print.layout.newPage", json!({}))
                 {
-                    pu.page = r["page"].as_u64().unwrap_or(0) as usize;
+                    pu.page = r.field("page").as_u64().unwrap_or(0) as usize;
                 }
                 if text_button(ui, "printClear", "Clear Layout", false).clicked() {
                     run(app, &ctx, "print.layout.clear", json!({}));
@@ -638,8 +638,8 @@ fn trim(v: f64) -> String {
 
 fn add_cell(app: &mut LccApp, ctx: &egui::Context, pu: &mut PrintUi, w: f64, h: f64) {
     if let Some(r) = run(app, ctx, "print.cell.add", json!({"width": w, "height": h})) {
-        pu.selected = r["id"].as_u64().and_then(|v| u32::try_from(v).ok());
-        pu.page = r["cell"]["page"].as_u64().unwrap_or(0) as usize;
+        pu.selected = r.field("id").as_u64().and_then(|v| u32::try_from(v).ok());
+        pu.page = r.field("cell").field("page").as_u64().unwrap_or(0) as usize;
     }
 }
 

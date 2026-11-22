@@ -11,8 +11,8 @@
 //! Portions © RAD Films - Roman Alurkoff (from TactileBridge), MIT: the settings design
 //! (TactileBridge's SettingsForm: global and per-value dial feel, workflow presets, bridge
 //! timing, OSD, plugin colours, tool contexts, Auto Sync, tool switching).
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
+use crate::json_ext::JsonExt as _;
 use egui::{Color32, CornerRadius, FontId, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
 use lcc_surface as ls;
 use ls::{Binding, PageGroup};
@@ -40,8 +40,11 @@ enum Drawing {
 }
 
 /// (id, name, drawing, controls) of the surfaces in the device bar, in order.
+/// The device the editor shows when the setting names none it knows.
+const DEFAULT_DEVICE: (&str, &str, Drawing) = ("keypad", "MX Creative Keypad", Drawing::Keypad);
+
 const DEVICES: &[(&str, &str, Drawing)] = &[
-    ("keypad", "MX Creative Keypad", Drawing::Keypad),
+    DEFAULT_DEVICE,
     ("dialpad", "MX Creative Dialpad", Drawing::Dialpad),
     ("ring", "Actions Ring", Drawing::Ring),
     ("loupedeck-plus", "Loupedeck+", Drawing::LoupedeckPlus),
@@ -69,7 +72,7 @@ fn device_of(control: &str) -> &'static str {
 
 fn current_device(app: &LccApp) -> (&'static str, &'static str, Drawing) {
     let id = app.surface.editor.device.as_str();
-    DEVICES.iter().copied().find(|d| d.0 == id).unwrap_or(DEVICES[0])
+    DEVICES.iter().copied().find(|d| d.0 == id).unwrap_or(DEFAULT_DEVICE)
 }
 
 /// Whether the MX Creative Console's plugin is connected now.
@@ -494,17 +497,22 @@ fn loupedeck_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, max_h: f32
         if !found.is_empty() {
             let mut pick = ui.ctx().data(|d| d.get_temp::<usize>(egui::Id::new("surfaceLoupedeckPick"))).unwrap_or(0).min(found.len() - 1);
             ui.label(RichText::new(tr("Loupedeck profile")).color(t.text_label));
-            let r = egui::ComboBox::from_id_salt("surfaceLoupedeckProfile").selected_text(found[pick].0.clone()).width(240.0).show_ui(ui, |ui| {
-                for (i, (name, path)) in found.iter().enumerate() {
-                    if ui.selectable_label(i == pick, name).on_hover_text(path.to_string_lossy()).clicked() {
-                        pick = i;
+            let r = egui::ComboBox::from_id_salt("surfaceLoupedeckProfile")
+                .selected_text(found.get(pick).map(|f| f.0.clone()).unwrap_or_default())
+                .width(240.0)
+                .show_ui(ui, |ui| {
+                    for (i, (name, path)) in found.iter().enumerate() {
+                        if ui.selectable_label(i == pick, name).on_hover_text(path.to_string_lossy()).clicked() {
+                            pick = i;
+                        }
                     }
-                }
-            });
+                });
             register(ui.ctx(), "combo:surfaceLoupedeckProfile", r.response.rect);
             ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("surfaceLoupedeckPick"), pick));
-            if button(ui, "surfaceImportLoupedeck", "Import") {
-                let r = app_run_import(app, &found[pick].1.to_string_lossy());
+            if button(ui, "surfaceImportLoupedeck", "Import")
+                && let Some((_, path)) = found.get(pick)
+            {
+                let r = app_run_import(app, &path.to_string_lossy());
                 report(app, r);
                 app.surface.editor.device = "loupedeck-plus".into();
             }
@@ -1585,7 +1593,7 @@ fn report(app: &mut LccApp, r: Result<Value, String>) {
     app.surface.editor.page = None;
     app.surface.editor.control = None;
     app.surface.editor.message = Some(match r {
-        Ok(v) => crate::i18n::tr_format!("Imported into the profile “{name}”", name = v["profile"].as_str().unwrap_or_default().to_string()),
+        Ok(v) => crate::i18n::tr_format!("Imported into the profile “{name}”", name = v.field("profile").as_str().unwrap_or_default().to_string()),
         Err(e) => e,
     });
 }

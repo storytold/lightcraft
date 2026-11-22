@@ -10,7 +10,6 @@
 //! with it first; ↑ / ↓ move through them, Enter picks, Esc closes. Widget ids for tests and agents:
 //! `albumPicker:<id>` (the button), `albumPickerSearch:<id>`, `albumPickerFolder:<folder>:<id>`
 //! and `albumPickerItem:<album>:<id>`.
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::{Rect, Response, RichText, Ui, vec2};
 
@@ -124,7 +123,7 @@ pub fn path_label(entries: &[AlbumEntry], id: u64) -> String {
 pub fn visible_tree(entries: &[AlbumEntry], open: &[u64]) -> Vec<usize> {
     let by_id = index(entries);
     let open: std::collections::HashSet<u64> = open.iter().copied().collect();
-    (0..entries.len()).filter(|&i| ancestors_in(entries, &by_id, entries[i].id).iter().all(|a| open.contains(a))).collect()
+    entries.iter().enumerate().filter(|(_, e)| ancestors_in(entries, &by_id, e.id).iter().all(|a| open.contains(a))).map(|(i, _)| i).collect()
 }
 
 /// The albums (not folders) whose path holds every word of `query`, any case: those whose own
@@ -136,14 +135,18 @@ pub fn search(entries: &[AlbumEntry], query: &str) -> Vec<usize> {
         return Vec::new();
     }
     let by_id = index(entries);
-    let hits: Vec<usize> = (0..entries.len())
-        .filter(|&i| !entries[i].folder)
-        .filter(|&i| {
-            let path = path_in(entries, &by_id, entries[i].id).to_lowercase();
+    let hits: Vec<usize> = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| !e.folder)
+        .filter(|(_, e)| {
+            let path = path_in(entries, &by_id, e.id).to_lowercase();
             words.iter().all(|w| path.contains(w))
         })
+        .map(|(i, _)| i)
         .collect();
-    let (first, rest): (Vec<usize>, Vec<usize>) = hits.into_iter().partition(|&i| entries[i].name.to_lowercase().starts_with(&query));
+    let (first, rest): (Vec<usize>, Vec<usize>) =
+        hits.into_iter().partition(|&i| entries.get(i).is_some_and(|e| e.name.to_lowercase().starts_with(&query)));
     first.into_iter().chain(rest).collect()
 }
 
@@ -270,7 +273,7 @@ impl<'a> AlbumPicker<'a> {
             egui::ScrollArea::vertical().max_height(320.0).auto_shrink([false, true]).show(ui, |ui| {
                 if state.query.trim().is_empty() {
                     for i in visible_tree(entries, &state.open) {
-                        let e = &entries[i];
+                        let Some(e) = entries.get(i) else { continue };
                         let indent = e.depth as f32 * 16.0;
                         if e.folder {
                             // a folder row folds and unfolds, like the sidebar's: triangle, icon, name
@@ -315,7 +318,7 @@ impl<'a> AlbumPicker<'a> {
                 } else {
                     let hits = search(entries, &state.query);
                     // ↑ / ↓ move through the results that can be picked, Enter picks one
-                    let pickable: Vec<usize> = hits.iter().copied().filter(|&i| entries[i].blocked.is_none()).collect();
+                    let pickable: Vec<usize> = hits.iter().copied().filter(|&i| entries.get(i).is_some_and(|e| e.blocked.is_none())).collect();
                     let (down, up, enter) = ui.input_mut(|i| {
                         (
                             i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
@@ -332,14 +335,14 @@ impl<'a> AlbumPicker<'a> {
                     let highlighted = pickable.get(state.highlight).copied();
                     if enter {
                         match highlighted {
-                            Some(i) => picked = Some(entries[i].id),
+                            Some(i) => picked = entries.get(i).map(|e| e.id),
                             // Enter took the keyboard from the search box and picked nothing: give it back
                             None => state.focus = true,
                         }
                     }
                     let by_id = index(entries);
                     for i in &hits {
-                        let e = &entries[*i];
+                        let Some(e) = entries.get(*i) else { continue };
                         row(
                             ui,
                             e,

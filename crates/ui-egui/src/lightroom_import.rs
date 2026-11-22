@@ -3,8 +3,8 @@
 //! Reading a catalog, probing its originals and staging its archive can take minutes on a
 //! removable or network drive.  This task keeps that work off the owner thread, commits prepared
 //! data only on the owner thread, then finishes the archive index on a worker.
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
+use crate::json_ext::JsonExt as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -574,7 +574,7 @@ pub fn tick(app: &mut LccApp, ctx: &egui::Context) {
             if let Err(e) = spawn_finalize(finalization, tx, ctx.clone()) {
                 let mut result = json!({"report": report, "indexWarning": e});
                 if let Some(error) = commit_error {
-                    result["error"] = json!(error);
+                    *result.field_mut("error") = json!(error);
                 }
                 terminal(app, ctx, &task, result);
                 return;
@@ -583,7 +583,7 @@ pub fn tick(app: &mut LccApp, ctx: &egui::Context) {
             task.cancelled = false;
             let mut pending = json!({"running": true, "kind": "import", "report": report});
             if let Some(error) = commit_error {
-                pending["error"] = json!(error);
+                *pending.field_mut("error") = json!(error);
             }
             app.lightroom_last = Some(pending);
             app.lightroom = Some(task);
@@ -593,11 +593,11 @@ pub fn tick(app: &mut LccApp, ctx: &egui::Context) {
             let report = pending.get("report").cloned().unwrap_or(Value::Null);
             match result {
                 Ok(()) if pending.get("error").is_none() => terminal(app, ctx, &task, report),
-                Ok(()) => terminal(app, ctx, &task, json!({"report": report, "error": pending["error"].clone()})),
+                Ok(()) => terminal(app, ctx, &task, json!({"report": report, "error": pending.field("error").clone()})),
                 Err(e) => {
                     let mut value = json!({"report": report, "indexWarning": e});
                     if let Some(error) = pending.get("error") {
-                        value["error"] = error.clone();
+                        *value.field_mut("error") = error.clone();
                     }
                     terminal(app, ctx, &task, value);
                 }

@@ -1,7 +1,6 @@
 //! Things the user must not miss (issue #103): settings files that were damaged or unreadable when
 //! the library opened (and host warnings such as a damaged `ui.json`), and quitting while changes
 //! are only in memory or while tasks that would be cut short are running (issue #345).
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::{Align2, RichText, vec2};
 
@@ -209,9 +208,12 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, hint: Option<&
 pub fn show(app: &mut LccApp, ctx: &egui::Context) {
     if let Some(QuitPrompt::Tasks(text)) = app.quit_prompt.clone() {
         let buttons = [("quitAnyway", "Quit Anyway", Choice::QuitAnyway), ("quitCancel", "Cancel", Choice::Cancel)];
-        let Some(i) = window(ctx, "quit-tasks", "Quit while tasks are running?", &text, None, &buttons) else { return };
+        let Some((_, _, choice)) = window(ctx, "quit-tasks", "Quit while tasks are running?", &text, None, &buttons).and_then(|i| buttons.get(i))
+        else {
+            return;
+        };
         app.quit_prompt = None;
-        if matches!(buttons[i].2, Choice::QuitAnyway) {
+        if matches!(choice, Choice::QuitAnyway) {
             app.session.activity.cancel_all();
             // unsaved changes still get their own question
             if may_close(app) {
@@ -226,9 +228,13 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
             ("quitSkipBackup", "Skip This Time", Choice::QuitAnyway),
             ("quitCancel", "Cancel", Choice::Cancel),
         ];
-        let Some(i) = window(ctx, "quit-backup", "Back up the catalog?", &text, backup_hint().as_deref(), &buttons) else { return };
+        let Some((_, _, choice)) =
+            window(ctx, "quit-backup", "Back up the catalog?", &text, backup_hint().as_deref(), &buttons).and_then(|i| buttons.get(i))
+        else {
+            return;
+        };
         app.quit_prompt = None;
-        match buttons[i].2 {
+        match choice {
             Choice::Retry => app.exit_backup = Some(true),
             Choice::QuitAnyway => app.exit_backup = Some(false),
             Choice::Cancel | Choice::Ok => return,
@@ -244,8 +250,11 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
             ("quitAnyway", "Quit Anyway", Choice::QuitAnyway),
             ("quitCancel", "Cancel", Choice::Cancel),
         ];
-        let Some(i) = window(ctx, "quit-unsaved", "Quit with unsaved changes?", &text, None, &buttons) else { return };
-        match buttons[i].2 {
+        let Some((_, _, choice)) = window(ctx, "quit-unsaved", "Quit with unsaved changes?", &text, None, &buttons).and_then(|i| buttons.get(i))
+        else {
+            return;
+        };
+        match choice {
             Choice::Retry => {
                 app.quit_prompt = None;
                 if may_close(app) {

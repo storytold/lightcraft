@@ -6,8 +6,8 @@
 //! preview and starts a new one. The final merge keeps running after the dialog closes (progress
 //! in the activity stack); when it finishes, the result is written, imported and selected
 //! ([`lcc_engine::Session::finish_merge`]).
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
+use crate::json_ext::JsonExt as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
@@ -248,7 +248,7 @@ pub fn ask_delete_sources(app: &mut LccApp) -> Result<Value, String> {
 /// Delete the other frames of the merged photo `id` and say how many went (and how many were already gone).
 pub fn delete_sources(app: &mut LccApp, id: u64) -> Result<Value, String> {
     let r = app.run("merge.deleteSources", json!({"id": id}))?;
-    let (n, missing) = (r["deleted"].as_u64().unwrap_or(0), r["missing"].as_u64().unwrap_or(0));
+    let (n, missing) = (r.field("deleted").as_u64().unwrap_or(0), r.field("missing").as_u64().unwrap_or(0));
     say(
         app,
         if missing == 0 {
@@ -621,16 +621,19 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui, opts: &mut MergeDialog) {
                 let txt = if opts.is_pano() {
                     crate::i18n::tr_format!(
                         "{} photos · {} · {:.0}° × {:.0}°",
-                        info["used"].as_array().map_or(0, Vec::len),
-                        info["projection"].as_str().unwrap_or(""),
-                        info["fov"][0].as_f64().unwrap_or(0.0),
-                        info["fov"][1].as_f64().unwrap_or(0.0)
+                        info.field("used").as_array().map_or(0, Vec::len),
+                        info.field("projection").as_str().unwrap_or(""),
+                        info.field("fov")[0].as_f64().unwrap_or(0.0),
+                        info.field("fov")[1].as_f64().unwrap_or(0.0)
                     )
                 } else if opts.command == "merge.focusStack" {
                     focus_stack_line(&info)
                 } else {
-                    let ev: Vec<String> =
-                        info["ev"].as_array().map(|a| a.iter().filter_map(Value::as_f64).map(|v| format!("{v:+.1}")).collect()).unwrap_or_default();
+                    let ev: Vec<String> = info
+                        .field("ev")
+                        .as_array()
+                        .map(|a| a.iter().filter_map(Value::as_f64).map(|v| format!("{v:+.1}")).collect())
+                        .unwrap_or_default();
                     crate::i18n::tr_format!("{} photos · exposures {} EV", ev.len(), ev.join(" / "))
                 };
                 ui.label(egui::RichText::new(txt).color(t.text_dim));

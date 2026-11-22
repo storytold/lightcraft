@@ -4,8 +4,8 @@
 //! one. A key another command had moves to the new command. Changes go through
 //! [`crate::shortcuts::assign`] into [`crate::state::AppSettings::keymap`] (saved in `ui.json`),
 //! the same path as the `app.setShortcut` command.
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
+use crate::json_ext::JsonExt as _;
 use egui::RichText;
 
 use crate::LccApp;
@@ -273,19 +273,18 @@ fn fixed_keys(app: &LccApp, ui: &mut egui::Ui, t: &Tokens, mac: bool, needle: &s
         let label = shortcuts::find_bindable(id).map_or(*id, |b| b.label);
         fixed.push((sc.to_string(), label));
     }
-    for n in 0..=5 {
-        fixed.push((n.to_string(), ["Clear rating", "Rate ★", "Rate ★★", "Rate ★★★", "Rate ★★★★", "Rate ★★★★★"][n]));
-        fixed.push((
-            format!("Shift+{n}"),
-            [
-                "Clear rating and advance",
-                "Rate ★ and advance",
-                "Rate ★★ and advance",
-                "Rate ★★★ and advance",
-                "Rate ★★★★ and advance",
-                "Rate ★★★★★ and advance",
-            ][n],
-        ));
+    const RATE: [&str; 6] = ["Clear rating", "Rate ★", "Rate ★★", "Rate ★★★", "Rate ★★★★", "Rate ★★★★★"];
+    const RATE_ADVANCE: [&str; 6] = [
+        "Clear rating and advance",
+        "Rate ★ and advance",
+        "Rate ★★ and advance",
+        "Rate ★★★ and advance",
+        "Rate ★★★★ and advance",
+        "Rate ★★★★★ and advance",
+    ];
+    for (n, (rate, advance)) in RATE.into_iter().zip(RATE_ADVANCE).enumerate() {
+        fixed.push((n.to_string(), rate));
+        fixed.push((format!("Shift+{n}"), advance));
     }
     for (sc, label) in [("6", "Red label"), ("7", "Yellow label"), ("8", "Green label"), ("9", "Blue label")] {
         fixed.push((sc.to_string(), label));
@@ -332,7 +331,8 @@ fn fixed_keys(app: &LccApp, ui: &mut egui::Ui, t: &Tokens, mac: bool, needle: &s
 fn apply(app: &mut LccApp, ctx: &egui::Context, params: serde_json::Value) {
     match app.run("app.setShortcut", params) {
         Ok(r) => {
-            let lost: Vec<String> = r["removedFrom"]
+            let lost: Vec<String> = r
+                .field("removedFrom")
                 .as_array()
                 .into_iter()
                 .flatten()

@@ -7,8 +7,8 @@
 //! numbers, borders, captions); the exported HTML is the reference (`web.preview` returns it).
 //!
 //! Export, upload and Share via Immich run on a worker thread ([`run`]: `webui.*`).
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
+use crate::json_ext::JsonExt as _;
 use egui::{Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
 use lcc_webgallery::Server;
 use lcc_webgallery::{GallerySettings, MetadataMode, Template};
@@ -412,7 +412,7 @@ fn settings_column(ui: &mut egui::Ui, app: &mut LccApp, st: &mut WebUi) {
         if ui.button(crate::i18n::tr("Save Server")).clicked() {
             let mut p = json!({"server": st.server});
             if !st.password.is_empty() {
-                p["password"] = json!(st.password);
+                *p.field_mut("password") = json!(st.password);
             }
             st.status = match app.session.execute("web.saveServer", &p) {
                 Ok(_) => crate::i18n::tr("Server saved").to_string(),
@@ -506,10 +506,10 @@ fn preview_in_browser(app: &mut LccApp, p: &Value) -> Result<Value, String> {
     if q.get("settings").is_none()
         && let Some(s) = SHOWN.with(|s| s.borrow().clone())
     {
-        q["settings"] = json!(s);
+        *q.field_mut("settings") = json!(s);
     }
-    q["dir"] = json!(dir.display().to_string());
-    q["openInBrowser"] = json!(true);
+    *q.field_mut("dir") = json!(dir.display().to_string());
+    *q.field_mut("openInBrowser") = json!(true);
     start(app, "webui.export", "web.export", &q)
 }
 
@@ -583,7 +583,7 @@ fn host_key_row(ui: &mut egui::Ui, app: &mut LccApp, st: &mut WebUi) {
     }
     if ui.small_button(crate::i18n::tr("Check Host Key")).clicked() {
         match app.session.execute("web.hostKey", &json!({"server": st.server})) {
-            Ok(v) => st.host_key_seen = v["fingerprint"].as_str().unwrap_or_default().to_string(),
+            Ok(v) => st.host_key_seen = v.field("fingerprint").as_str().unwrap_or_default().to_string(),
             Err(e) => st.status = e.to_string(),
         }
     }
@@ -611,10 +611,10 @@ fn export(app: &mut LccApp, st: &mut WebUi) {
 fn upload(app: &mut LccApp, st: &mut WebUi) {
     let mut p = json!({"server": st.server, "settings": st.settings});
     if !st.server.name.is_empty() && st.servers.iter().any(|x| x.name == st.server.name) && st.password.is_empty() {
-        p["server"] = json!(st.server.name);
+        *p.field_mut("server") = json!(st.server.name);
     }
     if !st.password.is_empty() {
-        p["password"] = json!(st.password);
+        *p.field_mut("password") = json!(st.password);
     }
     st.status = background_text(app.run("webui.upload", p));
 }
@@ -623,11 +623,11 @@ fn share(app: &mut LccApp, st: &mut WebUi) {
     let mut p = json!({"settings": st.settings, "allowDownload": !st.share_no_download, "showMetadata": !st.share_hide_metadata});
     for (k, v) in [("account", &st.share_account), ("album", &st.share_album), ("password", &st.share_password)] {
         if !v.trim().is_empty() {
-            p[k] = json!(v.trim());
+            *p.field_mut(k) = json!(v.trim());
         }
     }
     if st.share_days > 0 {
-        p["expiresDays"] = json!(st.share_days);
+        *p.field_mut("expiresDays") = json!(st.share_days);
     }
     st.share_url.clear();
     st.status = background_text(app.run("webui.shareImmich", p));
@@ -644,7 +644,7 @@ fn background_text(r: Result<Value, String>) -> String {
 fn result_text(r: Result<Value, String>) -> String {
     match r {
         Ok(v) => match (v.get("url"), v.get("files"), v.get("photos")) {
-            (Some(Value::String(u)), _, _) => crate::i18n::tr_format!("{n} photos shared: {u}", n = v["uploaded"], u = u),
+            (Some(Value::String(u)), _, _) => crate::i18n::tr_format!("{n} photos shared: {u}", n = v.field("uploaded"), u = u),
             (_, Some(f), Some(p)) => crate::i18n::tr_format!("{p} photos, {f} files", p = p, f = f),
             _ => v.to_string(),
         },

@@ -4,8 +4,8 @@
 //! "Save as Smart Collection…" keeps the current view as a live album; "Clear" resets the filter.
 //! The Metadata columns under it (issue #218, `view.filterColumns`) list each field's values among the photos in
 //! view with counts (`library.facets`); a click narrows the view (`library.facetPick`) and the columns cascade.
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
+use crate::json_ext::JsonExt as _;
 use egui::{Color32, Rect, Sense, Stroke, StrokeKind, vec2};
 use lcc_catalog::{ColorLabel, Flag, MediaKind, RatingOp};
 use serde_json::{Value, json};
@@ -835,7 +835,7 @@ fn columns(app: &mut LccApp, ui: &mut egui::Ui, area: Rect) {
             });
             c.separator();
         }
-        let data = &facets[field.as_str()];
+        let data = facets.field(field.as_str());
         let chosen: Vec<&str> = data["chosen"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
         let none_on = data["noneChosen"].as_bool().unwrap_or(false);
         let all = format!("{} ({})", crate::i18n::tr("All"), data["distinct"].as_u64().unwrap_or(0));

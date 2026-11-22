@@ -6,8 +6,8 @@
 //! in-window menu bar (web, Windows, Linux — [`show_in_window`]) and the control channel
 //! (`ui.menu.tree`). Items are a command id plus parameters, run through [`run_item`] so they
 //! behave exactly like their keyboard shortcuts.
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
+use crate::json_ext::JsonExt as _;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -571,8 +571,8 @@ pub(crate) fn expanded(app: &LccApp, name: &str) -> Option<Vec<MenuNode>> {
         "Set Rating" => (0..=5u8)
             .map(|r| {
                 let label = if r == 0 { "None".to_string() } else { "★".repeat(r as usize) };
-                let sc = ["0", "1", "2", "3", "4", "5"][r as usize];
-                item("photo.rate", json!({"rating": r}), label, Some(sc), has, Some(active.as_ref().is_some_and(|p| p.rating == r)))
+                let sc = ["0", "1", "2", "3", "4", "5"].get(usize::from(r)).copied();
+                item("photo.rate", json!({"rating": r}), label, sc, has, Some(active.as_ref().is_some_and(|p| p.rating == r)))
             })
             .collect(),
         "Set Flag" => [
@@ -611,8 +611,8 @@ pub(crate) fn expanded(app: &LccApp, name: &str) -> Option<Vec<MenuNode>> {
             v.push(MenuNode::Separator);
             // label sets: each a checkable item; Edit… names them
             let sets = lcc_engine::cmd::manage::label_sets_json(&app.session);
-            let current = sets["current"].as_str().map(str::to_string);
-            for set in sets["sets"].as_array().into_iter().flatten() {
+            let current = sets.field("current").as_str().map(str::to_string);
+            for set in sets.field("sets").as_array().into_iter().flatten() {
                 let name = set["name"].as_str().unwrap_or_default();
                 v.push(item(
                     "label.applySet",
@@ -844,10 +844,10 @@ pub(crate) fn expanded(app: &LccApp, name: &str) -> Option<Vec<MenuNode>> {
         // Classic's Metadata ▸ Color Label Set: the sets, then Edit
         "Color Label Set" => {
             let sets = lcc_engine::cmd::manage::label_sets_json(&app.session);
-            let current = sets["current"].as_str().map(str::to_string);
+            let current = sets.field("current").as_str().map(str::to_string);
             let mut v = crate::menu_choices::choices(
                 "label.applySet",
-                sets["sets"].as_array().into_iter().flatten().map(|set| {
+                sets.field("sets").as_array().into_iter().flatten().map(|set| {
                     let name = set["name"].as_str().unwrap_or_default();
                     crate::menu_choices::Choice::new(name, json!({"name": name}), current.as_deref() == Some(name))
                 }),
@@ -1078,11 +1078,11 @@ impl Build<'_> {
             return None;
         }
         let i = self.all.iter().position(|e| e.id == id)?;
-        if let Some(u) = self.listed.iter().position(|l| *l == i) {
-            self.used[u] = true;
+        if let Some(used) = self.listed.iter().position(|l| *l == i).and_then(|u| self.used.get_mut(u)) {
+            *used = true;
         }
         let app = self.app;
-        let e = &self.all[i];
+        let e = self.all.get(i)?;
         let mut n = node(app, e);
         if let MenuNode::Item { label: l, params: p, shortcut, checked, .. } = &mut n {
             // Classic's name, unless the label follows the state ("Undo Exposure") or macOS names it
@@ -1112,13 +1112,13 @@ impl Build<'_> {
         let generated = expanded(self.app, path).unwrap_or_default();
         let mut children = if after { Vec::new() } else { generated.clone() };
         children.push(MenuNode::Separator);
-        let here = |e: &MenuEntry| e.menu.len() == 2 && e.menu[0] == menu && e.menu[1] == path;
+        let here = |e: &MenuEntry| matches!(e.menu.as_slice(), [m, p] if m.as_str() == menu && p.as_str() == path);
         // a generated row stands for its registry entry (Previews listed Discard Preview Cache twice)
         for n in &generated {
             if let MenuNode::Item { id, .. } = n {
-                for u in 0..self.listed.len() {
-                    if self.all[self.listed[u]].id == *id && here(&self.all[self.listed[u]]) {
-                        self.used[u] = true;
+                for (l, used) in self.listed.iter().zip(self.used.iter_mut()) {
+                    if self.all.get(*l).is_some_and(|e| e.id == *id && here(e)) {
+                        *used = true;
                     }
                 }
             }
@@ -1131,7 +1131,9 @@ impl Build<'_> {
                 crate::lrc_menus::Slot::Submenu(..) => {}
                 crate::lrc_menus::Slot::Item(id, params, l) => {
                     // the registry's own order (no Classic layout) takes only this path's unplaced entries
-                    if classic.is_none() && !self.listed.iter().zip(&self.used).any(|(i, u)| !u && self.all[*i].id == id && here(&self.all[*i])) {
+                    if classic.is_none()
+                        && !self.listed.iter().zip(&self.used).any(|(i, u)| !u && self.all.get(*i).is_some_and(|e| e.id == id && here(e)))
+                    {
                         continue;
                     }
                     children.extend(self.command(id, params, l));
@@ -1139,10 +1141,10 @@ impl Build<'_> {
             }
         }
         let mut dialogs = Vec::new();
-        for u in 0..self.listed.len() {
-            let e = &self.all[self.listed[u]];
-            if !self.used[u] && here(e) {
-                self.used[u] = true;
+        for (l, used) in self.listed.iter().zip(self.used.iter_mut()) {
+            let Some(e) = self.all.get(*l) else { continue };
+            if !*used && here(e) {
+                *used = true;
                 // commands that open a dialog go last, after a separator
                 if e.label.ends_with('…') { dialogs.push(node(self.app, e)) } else { children.push(node(self.app, e)) }
             }
@@ -1176,11 +1178,11 @@ pub fn menus(app: &LccApp) -> &'static [&'static str] {
 /// commands whose menu path names it.
 pub fn menu_bar(app: &LccApp) -> Vec<(String, Vec<MenuNode>)> {
     let all = all_commands(app);
-    let listed: Vec<usize> = (0..all.len())
-        .filter(|i| {
-            let e = &all[*i];
-            !e.menu.is_empty() && !HIDDEN.contains(&e.id.as_str()) && host_supports(app, &e.id)
-        })
+    let listed: Vec<usize> = all
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| !e.menu.is_empty() && !HIDDEN.contains(&e.id.as_str()) && host_supports(app, &e.id))
+        .map(|(i, _)| i)
         .collect();
     let used = vec![false; listed.len()];
     let mut b = Build { app, all, listed, used, taken: None };
@@ -1207,16 +1209,18 @@ pub fn menu_bar(app: &LccApp) -> Vec<(String, Vec<MenuNode>)> {
             // everything else that names this menu
             items.push(MenuNode::Separator);
             let mut extra_subs: Vec<String> = Vec::new();
-            for u in 0..b.listed.len() {
-                let e = &b.all[b.listed[u]];
-                if b.used[u] || e.menu.first().map(String::as_str) != Some(title) {
+            for (l, used) in b.listed.iter().zip(b.used.iter_mut()) {
+                let Some(e) = b.all.get(*l) else { continue };
+                if *used || e.menu.first().map(String::as_str) != Some(title) {
                     continue;
                 }
                 if e.menu.len() == 1 {
-                    b.used[u] = true;
+                    *used = true;
                     items.push(node(app, e));
-                } else if !extra_subs.contains(&e.menu[1]) {
-                    extra_subs.push(e.menu[1].clone());
+                } else if let Some(sub) = e.menu.get(1)
+                    && !extra_subs.contains(sub)
+                {
+                    extra_subs.push(sub.clone());
                 }
             }
             for name in extra_subs {
@@ -1469,7 +1473,8 @@ fn switch_open_title(ctx: &egui::Context, titles: &[egui::Response]) -> Option<e
     let open = titles.iter().position(|r| egui::Popup::is_id_open(ctx, popup(r)));
     // the menu a hover opened, until it closes or is clicked
     let mut confirmed = None;
-    let mut hover_opened: Option<egui::Id> = ctx.data(|d| d.get_temp(key)).filter(|id| open.is_some_and(|o| popup(&titles[o]) == *id));
+    let mut hover_opened: Option<egui::Id> =
+        ctx.data(|d| d.get_temp(key)).filter(|id| open.and_then(|o| titles.get(o)).is_some_and(|t| popup(t) == *id));
     for (i, r) in titles.iter().enumerate() {
         if r.clicked() {
             // the click that follows a hover switch confirms the menu the hover opened

@@ -4,7 +4,7 @@
 //! (views, panels, zoom — see [`menus::ui_commands`]) and forwards everything else to the engine.
 //! The same entry point serves menus, shortcuts, buttons and the control channel ([`control`]).
 #![forbid(unsafe_code)]
-// checked indexing (`get`) only; the modules not yet converted carry a tracked `allow` (docs/gaps.md)
+// checked indexing (`get`, `json_ext::JsonExt::field`) only, with no module-level `allow`
 #![deny(clippy::indexing_slicing)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -26,6 +26,7 @@ pub mod color_readout;
 mod command_error;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod comments_ui;
+mod json_ext;
 /// Review Comments needs the publish services, which the browser build doesn't have.
 #[cfg(target_arch = "wasm32")]
 pub mod comments_ui {
