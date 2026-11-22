@@ -1525,3 +1525,50 @@ fn export_weights_follow_the_source_and_output_sizes() {
     assert_eq!(render_weight(0, 0, SourceLevel::Full, 0), 0);
     assert!(render_weight(usize::MAX, 1, SourceLevel::Full, usize::MAX) > 0, "no overflow");
 }
+
+/// A catalog's file name never adds a folder level through the empty-naming fallback or the original's extension.
+#[test]
+fn file_name_fallback_and_extension_are_one_path_component() {
+    let empty = |format| ExportOptions { format, naming: "{title}".into(), ..Default::default() };
+    for name in ["../../x.jpg", "..\\y.jpg", "a/b/c.jpg"] {
+        let f = empty(ExportFormat::Jpeg).file_name_for(&named(name), 1);
+        assert!(!f.contains(['/', '\\']), "{f}");
+    }
+    let f = empty(ExportFormat::Original).file_name_for(&named("x.a/../b"), 1);
+    assert!(!f.contains(['/', '\\']), "{f}");
+    assert_eq!(empty(ExportFormat::Jpeg).file_name_for(&named("IMG_1.jpg"), 1), "IMG_1.jpg");
+}
+
+/// A graphic is read within 8192 x 8192 pixels: a PNG header declaring more is refused before any pixel is allocated.
+#[test]
+fn a_graphic_past_the_pixel_cap_is_refused_before_it_is_decoded() {
+    fn crc32(data: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for &b in data {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            }
+        }
+        !crc
+    }
+    let mut ihdr = b"IHDR".to_vec();
+    ihdr.extend(10_000u32.to_be_bytes());
+    ihdr.extend(10_000u32.to_be_bytes());
+    ihdr.extend([8, 0, 0, 0, 0]);
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend(13u32.to_be_bytes());
+    png.extend(&ihdr);
+    png.extend(crc32(&ihdr).to_be_bytes());
+    // the start of the image data, so the header is read to its end (no pixels follow)
+    png.extend(0u32.to_be_bytes());
+    png.extend(b"IDAT");
+    png.extend(crc32(b"IDAT").to_be_bytes());
+    let dir = std::env::temp_dir().join(format!("lc-graphic-cap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("huge.png");
+    std::fs::write(&path, &png).unwrap();
+    let e = read_graphic(&path.to_string_lossy()).unwrap_err();
+    assert!(e.contains("too large") || e.contains("10000"), "{e}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

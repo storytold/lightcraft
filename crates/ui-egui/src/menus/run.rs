@@ -233,7 +233,14 @@ fn ui_commands_1(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
         }
         "tool.keywordPainter" => {
             // {keyword?}: paint that keyword onto photos in the grid by clicking them; no keyword stops
-            app.ui.keyword_painter = p.get("keyword").and_then(Value::as_str).map(str::trim).filter(|k| !k.is_empty()).map(str::to_string);
+            let keyword = p.get("keyword").and_then(Value::as_str).map(str::trim).filter(|k| !k.is_empty()).map(str::to_string);
+            // a new keyword ending in `*` is refused before painting starts, so no click fails unseen
+            if let Some(Err(e)) = keyword.as_deref().map(|k| app.session.catalog.check_keyword_name(k)) {
+                let e = format!("tool.keywordPainter: {e}");
+                app.toast_error(ctx, e.clone());
+                return Some(Err(e));
+            }
+            app.ui.keyword_painter = keyword;
             if app.ui.keyword_painter.is_some() && !matches!(app.ui.view, ViewMode::PhotoGrid | ViewMode::SquareGrid) {
                 app.ui.view = ViewMode::PhotoGrid;
             }
@@ -1359,8 +1366,11 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             let path = match p.get("path").and_then(Value::as_str).map(str::to_string) {
                 Some(path) => Some(path),
                 None => {
-                    let req =
-                        PickRequest::file(crate::i18n::tr("Import Lightroom Catalog"), crate::i18n::tr("Lightroom Classic Catalog"), &["lrcat"]);
+                    let req = PickRequest::file(
+                        crate::i18n::tr("Import Lightroom Catalog"),
+                        crate::i18n::tr("Lightroom Classic Catalog"),
+                        &["lrcat", "zip"],
+                    );
                     match crate::pick::ask(app, id, p, "path", req, |s| s.pick_lightroom_catalog.as_mut().and_then(|f| f()).map(|x| vec![x])) {
                         Picked::Now(v) => v.into_iter().next(),
                         Picked::Later | Picked::Unavailable => None,

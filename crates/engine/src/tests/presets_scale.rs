@@ -94,6 +94,50 @@ fn importing_thousands_of_presets_is_not_quadratic() {
     assert!(t.elapsed().as_secs() < 20, "took {:?}", t.elapsed());
 }
 
+#[test]
+fn a_preset_whose_settings_differ_only_in_the_sign_of_zero_is_a_repeat() {
+    let mut s = Session::new();
+    let preset = |x: f64| Preset {
+        id: "user.z".into(),
+        name: "Zero".into(),
+        group: "Coll".into(),
+        settings: json!({"light": {"exposure": x}}),
+        favorite: false,
+        builtin: false,
+    };
+    assert!(s.add_presets_each(vec![preset(0.0)])[0].is_some());
+    assert_eq!(s.add_presets_each(vec![preset(-0.0)]), vec![None]);
+}
+
+#[test]
+fn thousands_of_presets_sharing_a_name_and_id_get_unique_ids_in_one_pass() {
+    let mut s = Session::new();
+    let t = Instant::now();
+    // the same name, group and id throughout, each with its own settings: every one clashes
+    let same: Vec<Preset> = (0..20_000)
+        .map(|i| Preset {
+            id: "user.x".into(),
+            name: "Look".into(),
+            group: "Coll".into(),
+            settings: json!({"light": {"exposure": i}}),
+            favorite: false,
+            builtin: false,
+        })
+        .collect();
+    let each = s.add_presets_each(same);
+    assert_eq!(each.len(), 20_000);
+    assert!(each.iter().all(Option::is_some));
+    // (the session may hold built-in presets too: only the added ones are counted)
+    let ids: std::collections::HashSet<_> = s.presets.iter().filter(|p| p.group == "Coll").map(|p| p.id.as_str()).collect();
+    assert_eq!(ids.len(), 20_000);
+    // a repeat is skipped, per preset
+    let last = s.presets.last().cloned().unwrap();
+    let again = s.add_presets_each(vec![last.clone(), Preset { settings: json!({"light": {"exposure": -1}}), ..last }]);
+    assert_eq!(again[0], None);
+    assert!(again[1].is_some());
+    assert!(t.elapsed().as_secs() < 20, "took {:?}", t.elapsed());
+}
+
 /// Timing with a real preset collection: `LIGHTCRAFT_BENCH_PRESETS=path/to/presets.json cargo test
 /// -p lightcraft-engine --release presets_scale_bench -- --ignored --nocapture`. The file is copied
 /// into a temporary library; the original is only read.
@@ -123,4 +167,23 @@ fn presets_scale_bench() {
     s.execute("preset.favorite", &json!({"id": pid})).unwrap();
     eprintln!("preset.favorite (saves presets.json): {:?}", t.elapsed());
     let _ = std::fs::remove_dir_all(&lib);
+}
+
+#[test]
+fn integer_and_float_spellings_of_one_number_are_one_preset() {
+    // 15 slots of `0` / `0.0` / `-0.0`: all spellings are the same preset, so none collide in the index
+    let mut s = Session::new();
+    let preset = |i: usize| {
+        let spell = |bit: usize| match (i >> bit) % 3 {
+            0 => json!(0),
+            1 => json!(0.0),
+            _ => json!(-0.0),
+        };
+        let slots: Vec<_> = (0..15).map(spell).collect();
+        Preset { id: "user.n".into(), name: "N".into(), group: "G".into(), settings: json!({"v": slots}), favorite: false, builtin: false }
+    };
+    let t = Instant::now();
+    let added = s.add_presets_each((0..4000).map(preset).collect());
+    assert_eq!(added.iter().filter(|a| a.is_some()).count(), 1);
+    assert!(t.elapsed().as_secs() < 20);
 }

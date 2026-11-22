@@ -89,13 +89,13 @@ fn v1_is_left_out_when_saving_and_other_processes_are_kept() {
 #[test]
 fn unknown_process_numbers_load_and_render_with_the_newest_known() {
     // written by a newer LightCraft: kept as it is, rendered with the latest process this build has
-    let s = DevelopSettings::from_json(&json!({"process": 7, "light": {"exposure": 0.5}})).unwrap();
-    assert_eq!(s.process, ProcessVersion(7));
+    let s = DevelopSettings::from_json(&json!({"process": LATEST_PLUS_ONE, "light": {"exposure": 0.5}})).unwrap();
+    assert_eq!(s.process, ProcessVersion(LATEST_PLUS_ONE));
     assert_eq!(s.process.process(), Process::LATEST);
     assert!(!s.process.is_known());
     assert!(!s.process.is_outdated(), "never downgraded by Update to Current Process");
-    assert_eq!(s.to_json()["process"], json!(7));
-    assert_eq!(s.merged(&json!({"light": {"exposure": 1.0}})).unwrap().process, ProcessVersion(7));
+    assert_eq!(s.to_json()["process"], json!(LATEST_PLUS_ONE));
+    assert_eq!(s.merged(&json!({"light": {"exposure": 1.0}})).unwrap().process, ProcessVersion(LATEST_PLUS_ONE));
     // below V1 (no LightCraft writes it): rendered as V1, and updatable
     let zero = DevelopSettings::from_json(&json!({"process": 0})).unwrap().process;
     assert_eq!((zero.process(), zero.is_known(), zero.is_outdated()), (Process::V1, false, true));
@@ -103,6 +103,9 @@ fn unknown_process_numbers_load_and_render_with_the_newest_known() {
     assert_eq!(max.process(), Process::LATEST);
     // a whole number written as a float is that number
     assert_eq!(DevelopSettings::from_json(&json!({"process": 2.0})).unwrap().process, ProcessVersion(2));
+    // reserved V9 falls back to V8 without upgrading to V10
+    let reserved_v9 = DevelopSettings::from_json(&json!({"process": 9})).unwrap().process;
+    assert_eq!((reserved_v9.process(), reserved_v9.is_known(), reserved_v9.is_outdated()), (Process::V8, false, true));
 }
 
 #[test]

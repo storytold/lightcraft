@@ -218,7 +218,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             (Upright::Vertical, "Vertical", "vertical"),
             (Upright::Full, "Full", "full"),
         ];
-        if let Some(mode) = crate::widgets::labeled_dropdown(ui, "upright", "Upright", "", &modes, d.geometry.upright) {
+        if let Some(mode) = crate::widgets::labeled_dropdown(ui, "upright", "Perspective Correction", "", &modes, d.geometry.upright) {
             let _ = app.run("geometry.upright", json!({"mode": mode}));
             // Guided starts drawing guides on the photo; any other mode stops it
             app.ui.tool = if mode == Upright::Guided { "guidedUpright".into() } else { String::new() };

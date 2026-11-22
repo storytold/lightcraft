@@ -77,6 +77,52 @@ fn v3_luminance_cutoff_chroma_4() {
 }
 
 #[test]
+fn warm_green_wb_zero_crossing_gpu_matches_cpu_on_v10() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(2, 160, 120);
+    let info = SourceInfo { as_shot_temp: 5500.0, as_shot_tint: 0.0, ..Default::default() };
+    let req = RenderRequest::fit(160, 120);
+    // Test normal WB, positive s[2] > 0, and negative s[2] <= 0 across the zero crossing on Process::V10.
+    for (temp, tint) in [(5500.0, 10.0), (2000.0, 0.0), (2000.0, 30.0), (3000.0, 100.0)] {
+        let mut s = DevelopSettings::default();
+        assert_eq!(s.process.process(), Process::V10);
+        (s.wb.mode, s.wb.temp, s.wb.tint) = (WbMode::Custom, temp, tint);
+        let cpu = render(&src, &info, &s, &req).image;
+        let gpu = lightcraft_gpu::try_render(&src, &info, &s, &req, None).expect("GPU render without CPU fallback").image;
+        let (mean, max, _) = diff(&cpu, &gpu);
+        assert!(mean < MEAN_LSB && max <= MAX_LSB, "{temp} K tint {tint}: mean {mean:.3}, max {max}");
+    }
+}
+
+#[test]
+fn tone_curves_1024_lut_gpu_matches_cpu_without_fallback() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(2, 160, 120);
+    let curve = lightcraft_pipeline::tone::CameraTone::new(std::array::from_fn(|i| {
+        let x = 0.004 * 1.18f32.powi(i as i32);
+        [x, 1.0 - (-2.0 * x).exp()]
+    }))
+    .unwrap();
+    let info = SourceInfo { raw: true, camera_tone: Some(curve), ..Default::default() };
+    let mut s = DevelopSettings::default();
+    s.curve.highlights = -30.0;
+    s.curve.shadows = 25.0;
+    s.curve.master = vec![Point::new(0.0, 0.05), Point::new(0.5, 0.58), Point::new(1.0, 0.95)];
+    s.curve.red = vec![Point::new(0.0, 0.0), Point::new(0.4, 0.45), Point::new(1.0, 1.0)];
+    s.curve.blue = vec![Point::new(0.0, 0.0), Point::new(0.5, 0.42), Point::new(1.0, 1.0)];
+    s.curve.refine_saturation = 25.0;
+    let req = RenderRequest::fit(160, 120);
+    let cpu = render(&src, &info, &s, &req).image;
+    let gpu = lightcraft_gpu::try_render(&src, &info, &s, &req, None).expect("1024-entry tone curves must run on GPU without CPU fallback").image;
+    let (mean, max, _) = diff(&cpu, &gpu);
+    assert!(mean < MEAN_LSB && max <= MAX_LSB, "mean {mean:.3}, max {max}");
+}
+
+#[test]
 fn camera_tone_and_relative_wb() {
     if !gpu() {
         return;
@@ -210,6 +256,33 @@ fn banded_full_size_render_matches() {
     check("banded 3000×2000", &src, &SourceInfo { raw: true, ..Default::default() }, &s, &RenderRequest::fit(w, h));
 }
 
+/// The crystal grain's tables stay on the GPU between renders: an Amount change reuses them,
+/// another pattern (Size, Roughness, seed) replaces them, and going back draws the first again.
+#[test]
+fn grain_patterns_in_turn_match() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(1, 480, 320);
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let steps: [(&str, f64, f64, f64, u32); 6] = [
+        ("grain 50/25/50", 50.0, 25.0, 50.0, 1),
+        ("grain 90/25/50 (same pattern)", 90.0, 25.0, 50.0, 1),
+        ("grain 50/70/50 (new size)", 50.0, 70.0, 50.0, 1),
+        ("grain 50/70/0 (new roughness)", 50.0, 70.0, 0.0, 1),
+        ("grain 50/70/0 seed 7", 50.0, 70.0, 0.0, 7),
+        ("grain 50/25/50 again", 50.0, 25.0, 50.0, 1),
+    ];
+    for (name, amount, size, roughness, seed) in steps {
+        let mut s = DevelopSettings::default();
+        s.grain.amount = amount;
+        s.grain.size = size;
+        s.grain.roughness = roughness;
+        s.grain.seed = seed;
+        check(name, &src, &info, &s, &RenderRequest::fit(480, 320));
+    }
+}
+
 fn cases() -> Vec<(&'static str, Edit)> {
     vec![
         ("default", |_| {}),
@@ -283,6 +356,25 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.vignette.style = VignetteStyle::PaintOverlay;
         }),
         ("grain", |s| {
+            s.grain.amount = 50.0;
+            s.grain.size = 40.0;
+            s.grain.roughness = 60.0;
+        }),
+        // the frozen value-noise grain of the earlier processes (the default is V7's crystals)
+        ("grain, process V6", |s| {
+            s.process = Process::V6.version();
+            s.grain.amount = 50.0;
+            s.grain.size = 40.0;
+            s.grain.roughness = 60.0;
+        }),
+        ("grain, process V1", |s| {
+            s.process = Process::V1.version();
+            s.grain.amount = 50.0;
+            s.grain.size = 40.0;
+            s.grain.roughness = 60.0;
+        }),
+        ("grain, process V2", |s| {
+            s.process = Process::V2.version();
             s.grain.amount = 50.0;
             s.grain.size = 40.0;
             s.grain.roughness = 60.0;
@@ -761,7 +853,7 @@ fn light_v3_operators_match() {
 }
 
 /// Issue #632: the Highlights / Shadows base of each process (V1: the edge-aware filter of log
-/// luminance; V2: of its fine median, a radius that grows with the render) matches the CPU's, and
+/// luminance; V2 to V7: of its fine median, V8 on: of its detail-free plane, a radius that grows with the render) matches the CPU's, and
 /// a warm cache never hands one process the other's base.
 #[test]
 fn highlights_shadows_base_matches_on_every_process() {
@@ -792,7 +884,7 @@ fn highlights_shadows_base_matches_on_every_process() {
             }];
             check(&format!("{p:?} local highlights {w}"), &src, &raw, &s, &req);
         }
-        for p in [Process::V1, Process::V2, Process::V4, Process::V1, Process::V2, Process::V4] {
+        for p in [Process::V1, Process::V2, Process::V4, Process::V8, Process::V1, Process::V2, Process::V4, Process::V8] {
             let mut s = DevelopSettings { process: p.version(), ..DevelopSettings::default() };
             s.light.highlights = -100.0;
             let warm = lightcraft_gpu::render(&src, &raw, &s, &req, Some(&cache)).expect("gpu");
