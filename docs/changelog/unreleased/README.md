@@ -7,13 +7,14 @@ same changelog file. At release, `cargo xtask notes --release <version>` gathers
 - **Name:** `<YYYY-MM-DD>-<slug>.md`: the day you write it, then a few words in lowercase letters, digits and
   hyphens, e.g. `2026-10-16-faster-grid.md`. Within a section, entries are listed oldest first.
 - **Content:** one `## Section` heading and its bullets, written as in the released changelogs
-  (`docs/changelog/26.45.2.md`): a bold lead, what changed, credits and the Chromaforge PR as `PR #n`. Don't
-  mention upstream PRs (no `(no PR)` or `↑ #n` markers), and don't call Chromaforge's own PRs "Fork":
+  (`docs/changelog/26.45.2.md`): a bold lead, what changed and credits. Add the issue as `(#n)` if you know its
+  number when you write the entry; leave it out otherwise. Don't cite a PR (Chromaforge's or upstream's), and don't
+  make a later commit just to add a number:
 
   ```markdown
   ## Library
 
-  - **Faster grid:** scrolling a large library no longer stutters. Thanks @someone. PR #123.
+  - **Faster grid:** scrolling a large library no longer stutters (#123). Thanks @someone.
   ```
 
 - **Sections**, in the order a release lists them: Highlights, Develop and masking, Develop, Library, Import,
