@@ -93,6 +93,32 @@ fn light_channel(k: u32, x: f32) -> f32 {
     return light_eval(k, encode_srgb(x));
 }
 
+// `FrameRange::highlights` (process V9): Highlights scaled by the frame's tonal range HS_RANGE_LO..HS_RANGE_HI.
+fn hs_range_highlights(hh: f32, base: f32) -> f32 {
+    if (hh == 0.0) {
+        return 0.0;
+    }
+    let span = max(pf(F_HS_RANGE_HI) - pf(F_HS_RANGE_LO), 0.1);
+    let amp = clamp(HS_H_AMP * pow(span / HS_H_SPAN, HS_H_POW), HS_H_AMP_MIN, HS_H_AMP_MAX);
+    let low = -1.0 - HS_H_REACH * max(span - HS_H_SPAN, 0.0);
+    return hh * amp * sstep(low, 2.8, base);
+}
+
+// `default_tone::rgb_tone`: the base tone on the largest and smallest linear ProPhoto channel, the middle
+// channel keeping its place between them (process V9 with Lightroom's default curve).
+fn rgb_tone(c: vec3<f32>) -> vec3<f32> {
+    let p = max(mul3(PRO_FROM_2020, c), vec3<f32>(0.0));
+    let a = max(p.x, max(p.y, p.z));
+    let b = min(p.x, min(p.y, p.z));
+    let fa = tone_apply(a);
+    let fb = tone_apply(b);
+    var o = vec3<f32>(fa);
+    if (a > b) {
+        o = vec3<f32>(fb) + vec3<f32>(fa - fb) * (p - vec3<f32>(b)) / (a - b);
+    }
+    return mul3(PRO_TO_2020, o);
+}
+
 // `Operator::luminance`: scaled by F of the ProPhoto luminance over it.
 fn light_lum(k: u32, p: vec3<f32>) -> vec3<f32> {
     let y = PRO_Y.x * p.x + PRO_Y.y * p.y + PRO_Y.z * p.z;
@@ -120,6 +146,134 @@ fn light_ops(d: vec3<f32>) -> vec3<f32> {
         }
     }
     return mul3(PRO_TO_2020, p);
+}
+
+// `mixer_stage::level`: the lower and upper of three keys around `x` and the upper's weight, clamped.
+struct CLevel {
+    a: u32,
+    b: u32,
+    f: f32,
+}
+
+fn mstage_level(k: vec3<f32>, x: f32) -> CLevel {
+    if (x <= k.x) {
+        return CLevel(0u, 0u, 0.0);
+    }
+    if (x <= k.y) {
+        return CLevel(0u, 1u, (x - k.x) / (k.y - k.x));
+    }
+    if (x <= k.z) {
+        return CLevel(1u, 2u, (x - k.y) / (k.z - k.y));
+    }
+    return CLevel(2u, 2u, 0.0);
+}
+
+// `MixerStage::look`, with the level keys at `keys` (9 chroma by lightness level, then 3 lightness) and the table
+// after them: (hue shift, chroma factor, lightness change).
+fn mstage_look(keys: u32, l: f32, c: f32, h: f32) -> vec3<f32> {
+    let t = keys + 12u;
+    let hd = ((h * 57.29577951308232) % 360.0 + 360.0) % 360.0 / 5.0;
+    let i0 = u32(hd) % 72u;
+    let i1 = (i0 + 1u) % 72u;
+    let fh = hd - floor(hd);
+    let lb = mstage_level(vec3<f32>(aux[keys + 9u], aux[keys + 10u], aux[keys + 11u]), l);
+    var r = array<vec3<f32>, 2>(vec3<f32>(0.0), vec3<f32>(0.0));
+    for (var j = 0u; j < 2u; j++) {
+        let m = select(lb.a, lb.b, j == 1u);
+        let ck = vec3<f32>(aux[keys + 3u * m], aux[keys + 3u * m + 1u], aux[keys + 3u * m + 2u]);
+        let cb = mstage_level(ck, c);
+        var v = vec3<f32>(0.0);
+        for (var o = 0u; o < 3u; o++) {
+            let r0 = t + ((m * 3u + cb.a) * 3u + o) * 72u;
+            let r1 = t + ((m * 3u + cb.b) * 3u + o) * 72u;
+            let a = aux[r0 + i0] * (1.0 - fh) + aux[r0 + i1] * fh;
+            let b = aux[r1 + i0] * (1.0 - fh) + aux[r1 + i1] * fh;
+            v[o] = a * (1.0 - cb.f) + b * cb.f;
+        }
+        if (c < ck.x) {
+            v.z *= max(c / ck.x, 0.0);
+        }
+        r[j] = v;
+    }
+    return r[0] * (1.0 - lb.f) + r[1] * lb.f;
+}
+
+// One pass of `MixerStage::apply` (calibration or the mixer), through OkLCh: the keys and table at `keys` in `aux`.
+fn mixer_stage(d: vec3<f32>, keys: u32) -> vec3<f32> {
+    let lab = oklab(d);
+    let l = lab.x;
+    let c = sqrt(lab.y * lab.y + lab.z * lab.z);
+    // atan2(0, 0) is undefined in WGSL; the CPU's gives 0
+    let h = select(atan2(lab.z, lab.y), 0.0, c == 0.0);
+    let r = mstage_look(keys, l, c, h);
+    let h2 = h + r.x;
+    let c2 = c * r.y;
+    return oklab_inv(vec3<f32>(max(l + r.z, 0.0), c2 * cos(h2), c2 * sin(h2)));
+}
+
+// A table of process V9's curve stage (`Lut1::eval`) at offset `o` in `aux`.
+fn stage_lut(o: u32, x: f32) -> f32 {
+    let f = clamp(x, 0.0, 1.0) * f32(CURVE_N - 1u);
+    let i = min(u32(f), CURVE_N - 2u);
+    let t = f - f32(i);
+    return aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * t;
+}
+
+// `CurveStage::apply`: the base table on the largest and smallest channel of sRGB-encoded linear ProPhoto, the
+// middle one keeping its place between them in linear light, then the red, green and blue curves per channel.
+fn curve_stage(d: vec3<f32>) -> vec3<f32> {
+    let p = mul3(PRO_FROM_2020, d);
+    var pc = clamp(p, vec3<f32>(0.0), vec3<f32>(1.0));
+    var e = vec3<f32>(srgb_exact(pc.x), srgb_exact(pc.y), srgb_exact(pc.z));
+    var hi = 0u;
+    var lo = 0u;
+    for (var k = 1u; k < 3u; k++) {
+        if (e[k] > e[hi]) {
+            hi = k;
+        }
+        if (e[k] < e[lo]) {
+            lo = k;
+        }
+    }
+    let off = pu(F_STAGE_OFF);
+    let base = off + 3u * CURVE_N;
+    let la = srgb_linear(stage_lut(base, e[hi]));
+    let lb = srgb_linear(stage_lut(base, e[lo]));
+    let pa = pc[hi];
+    let pb = pc[lo];
+    var curved = vec3<f32>(0.0);
+    for (var k = 0u; k < 3u; k++) {
+        var t = 1.0;
+        if (pa > pb) {
+            t = (pc[k] - pb) / (pa - pb);
+        }
+        curved[k] = stage_lut(off + k * CURVE_N, srgb_exact(clamp(lb + (la - lb) * t, 0.0, 1.0)));
+    }
+    var q = vec3<f32>(0.0);
+    for (var k = 0u; k < 3u; k++) {
+        q[k] = srgb_linear(clamp(curved[k], 0.0, 1.0));
+    }
+    let rs = pf(F_STAGE_REFINE);
+    if (rs < 1.0) {
+        // the saturation back towards the input's, at the curves' luminance
+        let rr = refine_saturation(e, curved, rs);
+        var r = vec3<f32>(0.0);
+        for (var k = 0u; k < 3u; k++) {
+            r[k] = srgb_linear(clamp(rr[k], 0.0, 1.0));
+        }
+        let yq = dot(q, PRO_Y);
+        let yr = dot(r, PRO_Y);
+        q = r;
+        if (yr > 1e-6) {
+            q = r * (yq / yr);
+        }
+    }
+    for (var k = 0u; k < 3u; k++) {
+        if (p[k] > 1.0) {
+            q[k] += p[k] - 1.0;
+        }
+    }
+    return mul3(PRO_TO_2020, q);
 }
 
 fn band_weights(h: f32) -> array<f32, 8> {
@@ -244,7 +398,61 @@ fn color_ops(rgb: vec3<f32>, local_sat: f32, local_hue: f32) -> vec3<f32> {
             lab.x += pf(F_WHEELS + 3u * k + 2u) * wt;
         }
     }
+    if (pu(F_MGRADE) != 0u) {
+        lab = measured_grade(lab);
+    }
     return oklab_inv(lab);
+}
+
+// `grading_stage` lightness grid (65 entries at `o`), clamped.
+fn mgrade_grid(o: u32, l: f32) -> f32 {
+    let p = clamp(l, 0.0, 1.0) * 64.0;
+    let i = min(u32(p), 63u);
+    return aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * (p - f32(i));
+}
+
+// `GradingStage::apply`: each wheel's damped tint by its lightness profile, then the Luminance curve.
+fn measured_grade(lab: vec3<f32>) -> vec3<f32> {
+    let off = pu(F_MGRADE_OFF);
+    let n = pu(F_MGRADE) - 1u;
+    let c = sqrt(lab.y * lab.y + lab.z * lab.z);
+    // atan2(0, 0) is undefined in WGSL; the CPU's gives 0
+    let hue = select(atan2(lab.z, lab.y), 0.0, c == 0.0);
+    var out = lab;
+    for (var k = 0u; k < n; k++) {
+        let w = off + 65u + k * 85u;
+        let p = mgrade_grid(w + 20u, lab.x);
+        if (p == 0.0) {
+            continue;
+        }
+        let ta = aux[w];
+        let tb = aux[w + 1u];
+        let diff = abs(wrap_angle(hue - atan2(tb, ta)));
+        // linear between the 30° bins' centres (15°, 45° … 165°)
+        let pos = clamp(diff * 57.29577951308232 / 30.0 - 0.5, 0.0, 5.0);
+        let j = min(u32(pos), 4u);
+        let fa = pos - f32(j);
+        let d0 = aux[w + 2u + j] * (1.0 - fa) + aux[w + 3u + j] * fa;
+        let d1 = aux[w + 8u + j] * (1.0 - fa) + aux[w + 9u + j] * fa;
+        let d2 = aux[w + 14u + j] * (1.0 - fa) + aux[w + 15u + j] * fa;
+        // the damping's chroma levels (`grading_stage_tables::CHROMA`)
+        var damp = 1.0;
+        if (c <= 0.04) {
+            damp = 1.0 + (d0 - 1.0) * c / 0.04;
+        } else if (c <= 0.08) {
+            let f = (c - 0.04) / 0.04;
+            damp = d0 * (1.0 - f) + d1 * f;
+        } else if (c <= 0.12) {
+            let f = (c - 0.08) / 0.04;
+            damp = d1 * (1.0 - f) + d2 * f;
+        } else {
+            damp = d2;
+        }
+        out.y += p * ta * damp;
+        out.z += p * tb * damp;
+    }
+    out.x = max(lab.x + mgrade_grid(off, lab.x), 0.0);
+    return out;
 }
 
 // `colorops::calibrate`: primaries matrix, then the shadows tint (luminance kept).
@@ -585,8 +793,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ss = pf(F_SH) + lt[5];
     if (hh != 0.0 || ss != 0.0) {
         let ws = 1.0 - sstep(-4.8, 0.3, base);
-        let wh = sstep(-1.0, 2.8, base);
-        delta += ss * 1.7 * ws * sqrt(ws) + hh * 1.7 * wh;
+        delta += ss * 1.7 * ws * sqrt(ws);
+        if (pu(F_HS_RANGE) != 0u) {
+            delta += hs_range_highlights(hh, base);
+        } else {
+            delta += hh * 1.7 * sstep(-1.0, 2.8, base);
+        }
     }
     if (lt[6] != 0.0) {
         delta += lt[6] * 0.8 * sstep(0.5, 3.0, l1);
@@ -646,7 +858,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let yl = lum2020(c);
     let o = tone_apply(yl);
     var d = vec3<f32>(0.0);
-    if (yl > 1e-9) {
+    if (pu(F_RGB_TONE) != 0u) {
+        d = rgb_tone(c);
+    } else if (yl > 1e-9) {
         d = c * o / yl;
     }
     let k = chroma_scale(o);
@@ -662,6 +876,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // --- process V4: calibrated Contrast, Blacks
     if (pu(F_LIGHT_OPS) != 0u) {
         d = light_ops(d);
+    }
+
+    // --- process V9: the colour mixer, then Whites and the tone curves
+    if (pu(F_MSTAGE) != 0u) {
+        // calibration's primaries first, then the mixer (`MixerStage::apply`)
+        if (pu(F_MSTAGE_CAL) != 0u) {
+            d = mixer_stage(d, pu(F_MSTAGE_CAL_OFF));
+        }
+        if (pu(F_MSTAGE_MIX) != 0u) {
+            d = mixer_stage(d, pu(F_MSTAGE_OFF));
+        }
+    }
+    if (pu(F_STAGE) != 0u) {
+        d = curve_stage(d);
     }
 
     // --- colour
