@@ -1,0 +1,133 @@
+# Nightly data and adapter coverage (docs/ci.md → Nightly). Runs once a day and on manual dispatch.
+# - corpus: the full `cargo xtask ci` on Linux with every test input CI can fetch — the pinned raw
+#   corpus (`cargo xtask corpus --download`, sha256-checked), craft-fonts and the photocraft-corpus,
+#   both at pinned commits — then `cargo xtask skips check`: the run fails when more tests skipped
+#   (per need, from target/ci/report.json) than ci/skip-allowlist.toml allows.
+# - gpu-software: the CPU ↔ GPU equivalence tests of lcc-gpu on a software adapter (lavapipe in a
+#   Debian container on Linux, WARP on Windows), with the wider bounds the tests use there.
+name: Nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  corpus:
+    name: Corpus + fonts (cargo xtask ci, skip gate)
+    runs-on: [self-hosted, Linux, X64, lcc]
+    timeout-minutes: 300
+    env:
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+      CRAFT_FONTS_REQUIRED: "1"
+    defaults:
+      run:
+        shell: nice -n 19 bash -e {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: b4ce3ee090ea4b06791e9501ea2f8e6f746d5cd3 # same pin as ci.yml / release.yml
+          path: craft-fonts
+      # real-file oracles (MIT OR Apache-2.0), fetched at a pinned commit and checked against the
+      # repository's own sha256 manifest; bump the pin in a reviewed commit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/photocraft-corpus
+          ref: aeb450e694d0238dd317cb5c36ddca757d0acf44
+          path: corpus/photocraft
+      - name: Verify the photocraft-corpus
+        working-directory: corpus/photocraft
+        run: sha256sum --quiet -c SHA256SUMS
+      - name: Keep the build cache between runs
+        run: echo "CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$HOME/.cache/lcc-ci-target-$RUNNER_NAME}" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/sccache
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          targets: wasm32-unknown-unknown, aarch64-linux-android, x86_64-linux-android
+          components: rustfmt, clippy
+      - name: Android NDK (for `cargo xtask android check`)
+        run: .github/scripts/install-android-ndk.sh
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-nextest
+      - name: Raw corpus (pinned, sha256-checked)
+        run: cargo xtask corpus --download
+      - name: cargo xtask ci
+        run: cargo xtask ci
+      # also after a red test run: a failure and a skip regression are both worth knowing
+      - name: Skip gate
+        if: ${{ !cancelled() }}
+        run: cargo xtask skips check
+      - name: Upload the CI report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nightly-ci-report
+          path: target/ci/
+          retention-days: 30
+          if-no-files-found: warn
+
+  gpu-software-linux:
+    name: GPU equivalence on lavapipe (Linux)
+    # gpu0's Docker (docs/ci.md): a container without the host's GPU, so the only Vulkan adapter is
+    # Mesa's lavapipe
+    runs-on: [self-hosted, Linux, X64, lcc]
+    container:
+      image: rust:1-bookworm
+      volumes:
+        - lcc-ci-cargo-registry:/usr/local/cargo/registry
+        - lcc-ci-target-lavapipe:/ci-target
+    timeout-minutes: 120
+    env:
+      CARGO_TARGET_DIR: /ci-target
+      WGPU_BACKEND: vulkan
+    defaults:
+      run:
+        shell: nice -n 19 bash -e {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Mesa's software Vulkan driver
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 vulkan-tools
+          vulkaninfo --summary | grep -i -E 'deviceName|deviceType'
+      - name: Equivalence tests on the software adapter
+        run: |
+          prefix=$(sed -n 's/^env_prefix *= *"\([^"]*\)".*/\1/p' brand.toml)
+          export "${prefix}_GPU_SOFTWARE=1" "${prefix}_GPU_BACKEND=vulkan"
+          cargo test -p lcc-gpu --release --test it -- equivalence --test-threads=2
+      - name: Hand the target volume back
+        if: always()
+        # the container runs as root; root-owned files would break the next checkout on the host
+        run: chown -R "$(stat -c %u:%g "$GITHUB_WORKSPACE")" "$GITHUB_WORKSPACE" || true
+
+  gpu-software-windows:
+    name: GPU equivalence on WARP (Windows)
+    runs-on: [self-hosted, Windows, X64, lcc]
+    timeout-minutes: 120
+    env:
+      WGPU_BACKEND: dx12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - name: Equivalence tests on the software adapter
+        shell: bash
+        run: |
+          prefix=$(sed -n 's/^env_prefix *= *"\([^"]*\)".*/\1/p' brand.toml)
+          export "${prefix}_GPU_SOFTWARE=1" "${prefix}_GPU_BACKEND=dx12"
+          cargo test -p lcc-gpu --release --test it -- equivalence --test-threads=2

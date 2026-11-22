@@ -49,6 +49,9 @@ SIL_CORPUS=/path/to/raws cargo xtask sil raw
 is printed at the start, so a red run can be reproduced. Environment variables: `SIL_SEED`, `SIL_STEPS` (default 200; every run draws a new seed, so the PR gate keeps the budget short and runs add up. Use `--steps 2000` for a deep run),
 `SIL_CORPUS`, `SIL_OUT` (where run folders go; default the temp dir), `SIL_KEEP=1` (keep a passing run's folder).
 
+The nightly corpus job ([`ci.md`](ci.md#nightly)) runs the full `cargo xtask ci`, so `sil_raw_workflow` runs there
+on the pinned raw corpus instead of skipping; its skip, like every other, counts against `ci/skip-allowlist.toml`.
+
 ## When it fails
 
 The panic message names the broken invariant and shows the last steps. It also gives:
