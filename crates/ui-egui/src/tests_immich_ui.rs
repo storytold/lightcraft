@@ -1,4 +1,5 @@
 //! Immich in the Import dialog and the key-storage prompt of Settings → Connections.
+#![allow(clippy::indexing_slicing, reason = "test code: clippy.toml allows indexing in tests, but its test check misses cfg(all(test, ...))")]
 
 use std::time::Duration;
 

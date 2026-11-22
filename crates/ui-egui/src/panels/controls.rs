@@ -11,6 +11,7 @@
 //! Portions © RAD Films - Roman Alurkoff (from TactileBridge), MIT: the settings design
 //! (TactileBridge's SettingsForm: global and per-value dial feel, workflow presets, bridge
 //! timing, OSD, plugin colours, tool contexts, Auto Sync, tool switching).
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::{Color32, CornerRadius, FontId, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
 use lcc_surface as ls;

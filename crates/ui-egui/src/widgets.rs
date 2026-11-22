@@ -190,6 +190,11 @@ pub fn lerp(a: Color32, b: Color32, t: f32) -> Color32 {
 /// Band colours for the 8 colour-mixer bands (swatches and tracks).
 pub const BAND_COLORS: [&str; 8] = ["#aa0000", "#bb6600", "#aaaa00", "#009900", "#00aaaa", "#0044cc", "#7722aa", "#aa0077"];
 
+/// The colour of HSL band `i` (wrapping round the eight bands).
+fn band_color(i: usize) -> Color32 {
+    hex(BAND_COLORS.get(i % BAND_COLORS.len()).copied().unwrap_or("#808080"))
+}
+
 fn track_stops(track: &Track) -> Option<Vec<Color32>> {
     Some(match track {
         Track::Plain | Track::Centered => return None,
@@ -198,9 +203,9 @@ fn track_stops(track: &Track) -> Option<Vec<Color32>> {
         Track::Gradient { from, to } => vec![hex(from), hex(to)],
         Track::Hue { band } => {
             let i = *band as usize;
-            let prev = hex(BAND_COLORS[(i + 7) % 8]);
-            let next = hex(BAND_COLORS[(i + 1) % 8]);
-            let me = hex(BAND_COLORS[i]);
+            let prev = band_color(i + 7);
+            let next = band_color(i + 1);
+            let me = band_color(i);
             vec![
                 prev.gamma_multiply(0.7),
                 lerp(prev, me, 0.5).gamma_multiply(0.7),
@@ -209,9 +214,9 @@ fn track_stops(track: &Track) -> Option<Vec<Color32>> {
                 next.gamma_multiply(0.7),
             ]
         }
-        Track::Sat { band } => vec![hex("#454343"), lerp(hex("#454343"), hex(BAND_COLORS[*band as usize]), 0.6), hex(BAND_COLORS[*band as usize])],
+        Track::Sat { band } => vec![hex("#454343"), lerp(hex("#454343"), band_color(*band as usize), 0.6), band_color(*band as usize)],
         Track::Lum { band } => {
-            let c = hex(BAND_COLORS[*band as usize]);
+            let c = band_color(*band as usize);
             vec![c.gamma_multiply(0.2), c.gamma_multiply(0.55), lerp(c, Color32::WHITE, 0.35), lerp(c, Color32::WHITE, 0.6)]
         }
         Track::Rainbow => ["#aa0000", "#aaaa00", "#009900", "#00aaaa", "#0044cc", "#aa0077", "#aa0000"].iter().map(|h| hex(h)).collect(),
@@ -252,7 +257,9 @@ fn paint_track(ui: &Ui, rect: Rect, track: &Track, shade: Shade, t: &Tokens, thu
             let (a, b) = (i as f32 / steps as f32, (i + 1) as f32 / steps as f32);
             let seg = (a * n as f32).floor() as usize;
             let local = a * n as f32 - seg as f32;
-            let c = lerp(stops[seg.min(n)], stops[(seg + 1).min(n)], local);
+            // clamped to the last stop: a one-stop track is flat rather than read past its end
+            let at = |k: usize| stops.get(k.min(stops.len().saturating_sub(1))).copied().unwrap_or(Color32::GRAY);
+            let c = lerp(at(seg), at(seg + 1), local);
             let x0 = rect.left() + rect.width() * a;
             let x1 = rect.left() + rect.width() * b;
             p.rect_filled(Rect::from_min_max(pos2(x0, y - h - 0.5), pos2(x1 + 0.5, y + h + 0.5)), 0.0, c);

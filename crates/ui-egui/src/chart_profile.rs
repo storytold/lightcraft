@@ -5,6 +5,7 @@
 //! profile, and after building, each light's per-patch ΔE report. Decoding, finding and fitting run on worker threads
 //! with a row in the activity stack ([`crate::tasks::spawn`]); the profile lands among the camera
 //! profiles through [`lcc_engine::chart_profiling::install`].
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::collections::HashMap;
 use std::sync::Arc;

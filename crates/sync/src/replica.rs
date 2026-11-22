@@ -53,6 +53,53 @@ pub enum Item {
     },
 }
 
+impl Item {
+    /// The latest stamp in this item when one of its stamps is more than
+    /// [`crate::clock::MAX_SKEW_MS`] past `now_ms` (see [`Stamp::ahead_of`]).
+    pub fn ahead_of(&self, now_ms: u64) -> Option<Stamp> {
+        let stamps: Vec<Stamp> = match self {
+            Item::Group(g) => g.devices.values().map(|d| d.s).collect(),
+            Item::Coll(c) => coll_stamps(c),
+            Item::Member { on, .. } => vec![on.s],
+            Item::Photo { fields, .. } => fields.values().map(|f| f.s).collect(),
+        };
+        stamps.into_iter().filter(|s| s.ahead_of(now_ms)).max()
+    }
+
+    /// Splits this item into what may be merged now and what is stamped too far past `now_ms`
+    /// to take yet (a device whose clock ran in the far future would otherwise win every later
+    /// conflict). A photo's record and the group's devices split field by field, so one future
+    /// field doesn't hold back the others; a collection or a membership is one value and is held
+    /// whole. The held part is kept ([`Replica::hold`]) and tried again once it is no longer ahead.
+    pub fn split_ahead(&self, now_ms: u64) -> (Option<Item>, Option<Item>) {
+        if self.ahead_of(now_ms).is_none() {
+            return (Some(self.clone()), None);
+        }
+        match self {
+            Item::Photo { key, info, fields, here } => {
+                let (late, ok): (BTreeMap<_, _>, BTreeMap<_, _>) =
+                    fields.iter().map(|(k, v)| (k.clone(), v.clone())).partition(|(_, v)| v.s.ahead_of(now_ms));
+                let part = |fields: BTreeMap<String, Lww<Value>>, info: Value| Item::Photo { key: key.clone(), info, fields, here: *here };
+                let ready = (!ok.is_empty() || !info.is_null()).then(|| part(ok, info.clone()));
+                (ready, Some(part(late, Value::Null)))
+            }
+            Item::Group(g) => {
+                let (late, ok): (BTreeMap<_, _>, BTreeMap<_, _>) =
+                    g.devices.iter().map(|(k, v)| (k.clone(), v.clone())).partition(|(_, v)| v.s.ahead_of(now_ms));
+                let part = |devices| Item::Group(Group { devices, ..g.clone() });
+                ((!ok.is_empty()).then(|| part(ok)), Some(part(late)))
+            }
+            Item::Coll(_) | Item::Member { .. } => (None, Some(self.clone())),
+        }
+    }
+}
+
+fn coll_stamps(c: &Collection) -> Vec<Stamp> {
+    let mut v = vec![c.meta.s, c.grant.s, c.deleted.s];
+    v.extend(c.takes.values().map(|t| t.s));
+    v
+}
+
 /// What is known of one field of a photo's record: a fingerprint of its value and when it was written.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FieldState {
@@ -147,6 +194,8 @@ impl std::fmt::Display for Refused {
 const MAX_ID: usize = 128;
 /// The most fields a photo's record holds.
 const MAX_FIELDS: usize = 32;
+/// Items held back for being stamped in the future ([`Replica::hold`]), at most, over all devices.
+pub const MAX_HELD: usize = 1024;
 
 fn ok_id(s: &str) -> bool {
     !s.is_empty() && s.len() <= MAX_ID && !s.chars().any(char::is_control)
@@ -191,6 +240,11 @@ pub struct Replica {
     pub clock: Clock,
     #[serde(default)]
     pub seq: u64,
+    /// Parts of items other devices sent that were stamped too far in the future to take yet,
+    /// by sending device: tried again on the next exchange with it ([`Replica::take_held`]),
+    /// so a refused change is late, not lost. Local state; it doesn't travel.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub held: BTreeMap<String, Vec<Item>>,
     #[serde(skip)]
     by_seq: BTreeMap<u64, Ref>,
 }
@@ -319,11 +373,44 @@ impl Replica {
         Ok(())
     }
 
+    /// Keeps the part of an item `from` sent that was stamped too far in the future to take now
+    /// ([`Item::split_ahead`]), to try again later. Past [`MAX_HELD`] items in all, the oldest
+    /// held item of the longest list goes; says how many were dropped that way (0 normally). An
+    /// invalid `from` id keeps nothing: the item counts as dropped (1).
+    pub fn hold(&mut self, from: &str, item: Item) -> usize {
+        if !ok_id(from) {
+            // not kept under a bad id: counted as dropped, so the caller says so
+            return 1;
+        }
+        self.held.entry(from.to_string()).or_default().push(item);
+        let mut dropped = 0;
+        while self.held.values().map(Vec::len).sum::<usize>() > MAX_HELD {
+            let Some(list) = self.held.values_mut().max_by_key(|l| l.len()) else { break };
+            if list.is_empty() {
+                break;
+            }
+            list.remove(0);
+            dropped += 1;
+        }
+        self.held.retain(|_, l| !l.is_empty());
+        dropped
+    }
+
+    /// The held parts `from` sent earlier, taken out to be merged again (whatever is still ahead
+    /// is held again by the caller).
+    pub fn take_held(&mut self, from: &str) -> Vec<Item> {
+        self.held.remove(from).unwrap_or_default()
+    }
+
     /// What another device says the group is. Only the same group merges.
-    pub fn merge_group(&mut self, g: &Group, from: &str) -> bool {
+    /// A device entry stamped more than [`crate::clock::MAX_SKEW_MS`] past `now_ms` is left out
+    /// (see [`Item::split_ahead`]).
+    pub fn merge_group(&mut self, g: &Group, from: &str, now_ms: u64) -> bool {
+        let g =
+            &Group { devices: g.devices.iter().filter(|(_, d)| !d.s.ahead_of(now_ms)).map(|(k, d)| (k.clone(), d.clone())).collect(), ..g.clone() };
         let Some(mine) = &mut self.group else { return false };
         for d in g.devices.values() {
-            self.clock.observe(d.s);
+            self.clock.observe_at(d.s, now_ms);
         }
         let before: Vec<String> = mine.members().map(|(id, _)| id.clone()).collect();
         if !mine.merge(g) {
@@ -531,13 +618,14 @@ impl Replica {
     }
 
     /// What another device says a collection is.
-    pub fn merge_collection(&mut self, c: &Collection, from: &str) -> bool {
-        if !ok_id(&c.id) || !ok_id(&c.owner) {
+    /// One value: stamped more than [`crate::clock::MAX_SKEW_MS`] past `now_ms` anywhere, it is
+    /// refused whole.
+    pub fn merge_collection(&mut self, c: &Collection, from: &str, now_ms: u64) -> bool {
+        if !ok_id(&c.id) || !ok_id(&c.owner) || coll_stamps(c).iter().any(|s| s.ahead_of(now_ms)) {
             return false;
         }
-        self.clock.observe(c.meta.s.max(c.grant.s).max(c.deleted.s));
-        for t in c.takes.values() {
-            self.clock.observe(t.s);
+        for s in coll_stamps(c) {
+            self.clock.observe_at(s, now_ms);
         }
         let before = self.collection(&c.id).cloned();
         let changed = match self.collections.get_mut(&c.id) {
@@ -600,11 +688,11 @@ impl Replica {
     }
 
     /// What another device says about a photo being in a collection.
-    pub fn merge_member(&mut self, coll: &str, key: &str, on: &Lww<bool>, from: &str) -> bool {
-        if !ok_id(coll) || !ok_id(key) {
+    /// Refused when stamped more than [`crate::clock::MAX_SKEW_MS`] past `now_ms`.
+    pub fn merge_member(&mut self, coll: &str, key: &str, on: &Lww<bool>, from: &str, now_ms: u64) -> bool {
+        if !ok_id(coll) || !ok_id(key) || !self.clock.observe_at(on.s, now_ms) {
             return false;
         }
-        self.clock.observe(on.s);
         let e = self.members.entry(coll.to_string()).or_default().entry(key.to_string()).or_insert_with(|| MemberEntry {
             on: Lww::new(false, Stamp::ZERO),
             seq: 0,
@@ -678,11 +766,12 @@ impl Replica {
 
     /// Another device's write of a field was taken: `d` is the fingerprint of the value as this
     /// catalogue now holds it.
-    pub fn accept_field(&mut self, key: &str, field: &str, d: u64, s: Stamp, from: &str) {
-        if !ok_id(key) || !ok_id(field) {
+    /// A stamp more than [`crate::clock::MAX_SKEW_MS`] past `now_ms` is not recorded (callers
+    /// hold such fields back with [`Item::split_ahead`]).
+    pub fn accept_field(&mut self, key: &str, field: &str, d: u64, s: Stamp, from: &str, now_ms: u64) {
+        if !ok_id(key) || !ok_id(field) || !self.clock.observe_at(s, now_ms) {
             return;
         }
-        self.clock.observe(s);
         let e = self.photos.entry(key.to_string()).or_default();
         if e.fields.len() >= MAX_FIELDS && !e.fields.contains_key(field) {
             return;
@@ -693,16 +782,17 @@ impl Replica {
 
     /// A photo another device told of that this catalogue doesn't hold: kept until it is wanted.
     /// Later writes replace earlier ones field by field. Says whether anything was taken.
-    pub fn merge_ghost(&mut self, key: &str, info: &Value, fields: &BTreeMap<String, Lww<Value>>, from: &str) -> bool {
+    pub fn merge_ghost(&mut self, key: &str, info: &Value, fields: &BTreeMap<String, Lww<Value>>, from: &str, now_ms: u64) -> bool {
         if !ok_id(key) {
             return false;
         }
         let mut taken = false;
         for (name, lww) in fields.iter().take(MAX_FIELDS) {
-            if !ok_id(name) || !self.incoming_wins(key, name, lww) {
+            // a field stamped in the far future is left out, the others are taken
+            if !ok_id(name) || lww.s.ahead_of(now_ms) || !self.incoming_wins(key, name, lww) {
                 continue;
             }
-            self.clock.observe(lww.s);
+            self.clock.observe_at(lww.s, now_ms);
             let e = self.photos.entry(key.to_string()).or_default();
             e.fields.insert(name.clone(), FieldState { d: crate::digest(&lww.v), s: lww.s });
             e.ghost.get_or_insert_with(Default::default).values.insert(name.clone(), lww.v.clone());

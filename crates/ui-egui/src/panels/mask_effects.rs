@@ -67,9 +67,9 @@ fn last_applied(app: &LccApp, mask: &Mask) -> Option<String> {
 /// Apply an effect to `mask` (and take the brush settings it carries).
 pub fn apply(app: &mut LccApp, ctx: &egui::Context, name: &str, params: Value) {
     let mut p = params;
-    p["name"] = json!(name);
+    crate::json_set(&mut p, "name", json!(name));
     match app.run("mask.applyEffect", p) {
-        Ok(v) => take_brush(app, &v["brush"]),
+        Ok(v) => take_brush(app, v.get("brush").unwrap_or(&Value::Null)),
         Err(e) => app.toast_error(ctx, e),
     }
 }
@@ -441,7 +441,8 @@ pub fn save_body(
             let text = egui::RichText::new(crate::i18n::tr(field_label(k)));
             // the sliders this mask changes stand out; the others are dimmed
             let text = if changed.iter().any(|c| c == k) { text.color(t.text).strong() } else { text.color(t.text_dim) };
-            let r = cols[i % 2].checkbox(&mut on, text);
+            let Some(col) = cols.get_mut(i % 2) else { continue };
+            let r = col.checkbox(&mut on, text);
             register(&r.ctx, format!("effectInclude:{k}"), r.rect);
             if r.changed() {
                 fields.retain(|f| f != k);
@@ -490,9 +491,9 @@ pub fn save_confirm(app: &mut LccApp, name: &str, group: &str, fields: &[String]
     }
     let all = checklist().iter().all(|k| keep.iter().any(|f| f == k));
     let mut p = json!({"name": name.trim(), "group": group.trim(), "amount": amount});
-    p["fields"] = if all { json!("all") } else { json!(keep) };
+    crate::json_set(&mut p, "fields", if all { json!("all") } else { json!(keep) });
     if brush {
-        p["brush"] = brush_now(app);
+        crate::json_set(&mut p, "brush", brush_now(app));
     }
     app.run("mask.saveEffect", p)
 }
@@ -661,7 +662,7 @@ pub fn manage_body(
         if button(ui, "Duplicate", "Duplicate", one.is_some())
             && let Some(name) = &one
             && let Ok(v) = app.run("mask.duplicateEffect", json!({"name": name}))
-            && let Some(copy) = v["name"].as_str()
+            && let Some(copy) = v.get("name").and_then(Value::as_str)
         {
             *selected = vec![copy.to_string()];
         }

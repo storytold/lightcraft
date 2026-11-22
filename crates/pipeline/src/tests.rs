@@ -154,18 +154,25 @@ fn an_oversized_request_resolves_to_the_ceiling_size() {
     assert_eq!((p.w, p.h), (32_000, 16_000), "the render runs at the ceiling, not the request");
 }
 
-/// The crash itself: `render` sizes its resample from the plan, and this request asked it for
-/// 240 GB — `memory allocation of 240000000000 bytes failed`, an abort `catch_unwind` cannot
-/// catch. The plan now resolves at the ceiling and the resample that used to abort succeeds.
-/// Opt-in, as the 5.7 GB buffer at the ceiling is not a default-suite allocation.
-#[ignore = "a 5.7 GB resample buffer at the 512 megapixel ceiling; run with --ignored"]
+/// The crash itself: `render` sized its resample from the request, and one asked it for 240 GB —
+/// `memory allocation of 240000000000 bytes failed`, an abort `catch_unwind` cannot catch. The
+/// plan clamps to the ceiling (above); past what the machine can hold, the resample the render
+/// starts with reserves its buffer fallibly and reports an error instead of aborting.
 #[test]
-fn an_oversized_request_resamples_at_the_clamped_size() {
-    let src = Rgb32f::new(8, 4);
+fn an_unallocatable_resample_is_an_error_not_an_abort() {
+    let src = Rgb32f::filled(8, 4, [0.5, 0.25, 0.125]);
     let s = DevelopSettings::default();
-    let p = crate::plan(&src, &SourceInfo::default(), &s, &RenderRequest::fit(200_000, 100_000));
-    let img = p.frame.sample(&src, p.w, p.h);
-    assert_eq!((img.width, img.height), (32_000, 16_000));
+    let p = crate::plan(&src, &SourceInfo::default(), &s, &RenderRequest::fit(64, 32));
+    // 2^20 × 2^20 float pixels: 12 TiB, past `MAX_IMAGE_BYTES` and any allocator
+    assert!(p.frame.try_sample(&src, 1 << 20, 1 << 20).is_err());
+    assert!(p.frame.try_sample(&src, usize::MAX, 2).is_err(), "an overflowing pixel count is an error too");
+    // a downscale whose prefiltered copy is the oversized buffer fails the same way
+    let wide = Rgb32f::filled(4096, 1, [0.5; 3]);
+    let pw = crate::plan(&wide, &SourceInfo::default(), &s, &RenderRequest::fit(64, 32));
+    assert!(pw.frame.try_sample(&wide, 1 << 20, 1 << 20).is_err());
+    // and a size that fits samples exactly as the infallible path does
+    let ok = p.frame.try_sample(&src, p.w, p.h).expect("a small resample allocates");
+    assert_eq!(ok, p.frame.sample(&src, p.w, p.h));
 }
 
 #[test]

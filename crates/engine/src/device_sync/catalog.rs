@@ -409,11 +409,29 @@ pub(super) fn apply(s: &mut Session, lib: &mut Lib, peer: &lcc_peer::Peer, batch
         let room = lcc_sync::proto::MAX_SHARED.saturating_sub(lib.share_in.len());
         lib.share_in.extend(batch.accounts.iter().filter(|a| a.sane()).take(room).cloned());
     }
-    for item in batch.items.iter().take(MAX_ITEMS * 2) {
+    let now = now_ms();
+    // what this device held back from `peer` earlier is tried again first (older, so the batch's
+    // own items still win where they are later)
+    let earlier = lib.replica.take_held(from);
+    let mut ahead: Option<u64> = None;
+    for whole in earlier.iter().chain(batch.items.iter().take(MAX_ITEMS * 2)) {
+        // a write stamped past this device's clock (plus the allowed skew) would beat every later
+        // edit here: that part (field by field for a photo) is held back until it is due, so the
+        // batch is still confirmed and nothing of it is lost
+        let (ready, late) = whole.split_ahead(now);
+        if let Some(late) = late {
+            ahead = ahead.max(late.ahead_of(now).map(|st| st.t));
+            let dropped = lib.replica.hold(from, late);
+            if dropped > 0 {
+                log::warn!("sync: {dropped} held-back change(s) from {} dropped (too many held)", peer.name);
+            }
+            lib.dirty = true;
+        }
+        let Some(item) = ready.as_ref() else { continue };
         if let Item::Group(g) = item {
             let asked = lib.replica.invited.contains(from) || lib.replica.group.as_ref().is_some_and(|mine| mine.devices.contains_key(from));
             if asked {
-                lib.replica.merge_group(g, from);
+                lib.replica.merge_group(g, from, now);
             }
             continue;
         }
@@ -423,11 +441,11 @@ pub(super) fn apply(s: &mut Session, lib: &mut Lib, peer: &lcc_peer::Peer, batch
         match item {
             Item::Group(_) => {}
             Item::Coll(c) => {
-                lib.replica.merge_collection(c, from);
+                lib.replica.merge_collection(c, from, now);
             }
             Item::Member { coll, key, on } => {
                 let key = local_key(lib, key).to_string();
-                lib.replica.merge_member(coll, &key, on, from);
+                lib.replica.merge_member(coll, &key, on, from, now);
             }
             Item::Photo { key, info, fields, .. } => {
                 let key = &incoming_key(s, lib, key, info);
@@ -446,17 +464,23 @@ pub(super) fn apply(s: &mut Session, lib: &mut Lib, peer: &lcc_peer::Peer, batch
                                 continue;
                             }
                             let d = s.catalog.photo(id).map_or(0, |p| record::digest(p, &s.catalog, name));
-                            lib.replica.accept_field(key, name, d, lww.s, from);
+                            lib.replica.accept_field(key, name, d, lww.s, from, now);
                         }
                     }
                     _ => {
-                        lib.replica.merge_ghost(key, info, fields, from);
+                        lib.replica.merge_ghost(key, info, fields, from, now);
                     }
                 }
             }
         }
     }
     reconcile(s, lib);
+    if let Some(t) = ahead
+        && lib.held_told.insert(from.to_string())
+    {
+        let minutes = t.saturating_sub(now) / 60_000;
+        s.notify(crate::notice::Notice::SyncHeldFuture { device: peer.name.clone(), minutes });
+    }
     Ok(())
 }
 

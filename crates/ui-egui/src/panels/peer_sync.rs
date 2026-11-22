@@ -8,6 +8,7 @@
 //! paired, keeps the status known (slowly while the tab is closed) and runs `sync.tick` once a
 //! second while sync runs. [`dialogs`] asks how to share a collection created while the catalog
 //! syncs, and [`waiting`] counts what needs an answer (the top bar's cloud shows it).
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::collections::{BTreeMap, BTreeSet};
 

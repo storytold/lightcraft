@@ -1,6 +1,6 @@
 //! Separable resampling with precomputed filter weights.
 
-use crate::{Image, Rgba8, par_rows};
+use crate::{AllocError, Image, Rgba8, par_rows};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Filter {
@@ -124,15 +124,33 @@ pub fn resize<T: Pixel>(img: &Image<T>, w: usize, h: usize, filter: Filter) -> I
         return img.clone();
     }
     if w.saturating_mul(img.height) > img.width.saturating_mul(h).saturating_mul(4) {
-        return horizontal(&vertical(img, h, filter), w, filter);
+        return horizontal(&vertical(img, Image::new(img.width, h), filter), Image::new(w, h), filter);
     }
-    vertical(&horizontal(img, w, filter), h, filter)
+    vertical(&horizontal(img, Image::new(w, img.height), filter), Image::new(w, h), filter)
 }
 
-/// Each row resampled to `w` wide.
-fn horizontal<T: Pixel>(img: &Image<T>, w: usize, filter: Filter) -> Image<T> {
+/// [`resize`] that returns an error instead of aborting when the intermediate or the result can't
+/// be had (a megapixel-sized buffer past [`crate::MAX_IMAGE_BYTES`] or the allocator's reach).
+pub fn try_resize<T: Pixel>(img: &Image<T>, w: usize, h: usize, filter: Filter) -> Result<Image<T>, AllocError> {
+    let (w, h) = (w.max(1), h.max(1));
+    if img.width == w && img.height == h {
+        let mut data = Vec::new();
+        data.try_reserve_exact(img.data.len()).map_err(|_| AllocError { width: w, height: h })?;
+        data.extend_from_slice(&img.data);
+        return Ok(Image { width: w, height: h, data });
+    }
+    if w.saturating_mul(img.height) > img.width.saturating_mul(h).saturating_mul(4) {
+        let mid = vertical(img, Image::try_new(img.width, h)?, filter);
+        return Ok(horizontal(&mid, Image::try_new(w, h)?, filter));
+    }
+    let mid = horizontal(img, Image::try_new(w, img.height)?, filter);
+    Ok(vertical(&mid, Image::try_new(w, h)?, filter))
+}
+
+/// Each row resampled to `tmp.width` wide (`tmp` is the `w × img.height` output buffer).
+fn horizontal<T: Pixel>(img: &Image<T>, mut tmp: Image<T>, filter: Filter) -> Image<T> {
+    let w = tmp.width;
     let wx = weights(img.width, w, filter);
-    let mut tmp = Image::<T>::new(w, img.height);
     par_rows(&mut tmp.data, w, |y, row| {
         let src = img.row(y);
         for (x, o) in row.iter_mut().enumerate() {
@@ -147,11 +165,10 @@ fn horizontal<T: Pixel>(img: &Image<T>, w: usize, filter: Filter) -> Image<T> {
     tmp
 }
 
-/// Each column resampled to `h` tall.
-fn vertical<T: Pixel>(img: &Image<T>, h: usize, filter: Filter) -> Image<T> {
-    let w = img.width;
+/// Each column resampled to `out.height` tall (`out` is the `img.width × h` output buffer).
+fn vertical<T: Pixel>(img: &Image<T>, mut out: Image<T>, filter: Filter) -> Image<T> {
+    let (w, h) = (img.width, out.height);
     let wy = weights(img.height, h, filter);
-    let mut out = Image::<T>::new(w, h);
     par_rows(&mut out.data, w, |y, row| {
         let (lo, ws) = &wy[y];
         for (k, wt) in ws.iter().enumerate() {
@@ -264,6 +281,17 @@ pub fn half<T: Pixel>(img: &Image<T>) -> Image<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn try_resize_reports_an_unallocatable_size_and_matches_resize_otherwise() {
+        let img = Image::<[f32; 3]>::filled(16, 8, [0.25, 0.5, 0.75]);
+        assert!(try_resize(&img, 1 << 20, 1 << 20, Filter::Mitchell).is_err(), "12 TiB is an error, not an abort");
+        assert!(try_resize(&img, usize::MAX, 3, Filter::Box).is_err());
+        for (w, h) in [(16, 8), (5, 3), (40, 2), (1, 30)] {
+            let ok = try_resize(&img, w, h, Filter::Lanczos3).expect("small sizes allocate");
+            assert_eq!(ok, resize(&img, w, h, Filter::Lanczos3));
+        }
+    }
 
     #[test]
     fn widening_a_tall_strip_resamples_its_columns_first() {

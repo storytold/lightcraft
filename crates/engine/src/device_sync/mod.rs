@@ -162,6 +162,8 @@ pub(crate) struct Lib {
     pub share_out: Option<(Vec<String>, Vec<lcc_sync::proto::SharedAccount>)>,
     /// The devices already sent them in this session.
     pub share_sent: HashSet<String>,
+    /// The devices the user was already told send changes dated in the future (once a session).
+    pub held_told: HashSet<String>,
     /// Connections other devices of the group shared, to store (`immich::collections::tick`).
     pub share_in: Vec<lcc_sync::proto::SharedAccount>,
     /// The camera-roll folder's watch.
@@ -695,6 +697,7 @@ pub(crate) fn ensure_lib(s: &mut Session) {
         immich_out: Vec::new(),
         share_out: None,
         share_sent: HashSet::new(),
+        held_told: HashSet::new(),
         share_in: Vec::new(),
         #[cfg(not(target_arch = "wasm32"))]
         roll: Default::default(),

@@ -148,8 +148,23 @@ fn read_len(s: &mut TcpStream, max: usize, deadline: Option<Instant>) -> Result<
 
 fn read_raw(s: &mut TcpStream, max: usize, deadline: Option<Instant>) -> Result<Vec<u8>> {
     let len = read_len(s, max, deadline)?;
-    let mut buf = vec![0u8; len];
-    read_full(s, &mut buf, deadline)?;
+    read_growing(s, len, deadline)
+}
+
+/// How much more of a frame is allocated at a time: a peer that announces a large frame and then
+/// sends nothing (or closes) only ever makes this side hold what actually arrived, plus one step.
+const GROW_STEP: usize = 64 << 10;
+
+/// Reads exactly `len` bytes, growing the buffer as they arrive instead of allocating `len` up front.
+fn read_growing(s: &mut TcpStream, len: usize, deadline: Option<Instant>) -> Result<Vec<u8>> {
+    let mut buf = Vec::with_capacity(len.min(GROW_STEP));
+    while buf.len() < len {
+        let start = buf.len();
+        let step = len.saturating_sub(start).min(GROW_STEP);
+        buf.resize(start.saturating_add(step), 0);
+        let Some(tail) = buf.get_mut(start..) else { break };
+        read_full(s, tail, deadline)?;
+    }
     Ok(buf)
 }
 
@@ -372,8 +387,7 @@ impl Channel {
         if !matches!(kind, KIND_JSON | KIND_BYTES) {
             return Err(Error::Protocol("a frame of an unknown kind".into()));
         }
-        let mut ct = vec![0u8; len];
-        read_full(&mut self.stream, &mut ct, self.deadline)?;
+        let ct = read_growing(&mut self.stream, len, self.deadline)?;
         let n = nonce(self.received);
         self.received = self.received.checked_add(1).ok_or_else(|| Error::Protocol("channel exhausted".into()))?;
         let plain = self
@@ -674,6 +688,36 @@ mod tests {
     }
 
     /// Binary frames and message frames travel on one channel and arrive as what they were sent.
+    /// A paired peer that announces a near-maximum frame and then closes gets an error; the bytes
+    /// that did arrive are read in steps, not into one 64 MiB buffer made up front.
+    #[test]
+    fn a_frame_announced_large_but_cut_short_is_an_error() {
+        let (ca, cb, _, _) = pair();
+        let (ca, mut cb) = (ca.unwrap(), cb.unwrap());
+        cb.allow_large_frames();
+        let mut raw = ca.stream.try_clone().unwrap();
+        raw.write_all(&((MAX_FRAME as u32).to_be_bytes())).unwrap();
+        raw.write_all(&[KIND_BYTES]).unwrap();
+        raw.write_all(&vec![7u8; GROW_STEP * 3 + 5]).unwrap();
+        drop(raw);
+        drop(ca);
+        assert!(cb.recv_frame().is_err());
+    }
+
+    /// A frame spanning several growth steps (and not a multiple of the step) arrives whole.
+    #[test]
+    fn frames_across_growth_steps_arrive_whole() {
+        let (ca, cb, _, _) = pair();
+        let (mut ca, mut cb) = (ca.unwrap(), cb.unwrap());
+        ca.allow_large_frames();
+        cb.allow_large_frames();
+        let big: Vec<u8> = (0..GROW_STEP * 5 + 123).map(|i| (i % 251) as u8).collect();
+        let want = big.clone();
+        let t = std::thread::spawn(move || ca.send_bytes(&big).map(|_| ca));
+        assert_eq!(cb.recv_frame().unwrap(), Frame::Bytes(want));
+        t.join().unwrap().unwrap();
+    }
+
     #[test]
     fn binary_and_message_frames_are_told_apart() {
         let (ca, cb, _, _) = pair();

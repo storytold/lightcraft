@@ -3,6 +3,7 @@
 //! eight seconds. The window groups the warnings by reason with counts, selects the photos of a
 //! group, and copies or saves the full list; File ▸ More Imports ▸ Import Warnings… opens it again.
 //! Fork-owned.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::collections::{BTreeMap, BTreeSet};
 

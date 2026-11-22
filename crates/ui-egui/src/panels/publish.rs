@@ -5,6 +5,7 @@
 //! a Hard Drive, SFTP, Immich or plug-in service (Edit Settings… changes one). Everything goes
 //! through the `publish.*` commands; a publish renders and
 //! sends on a worker thread.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::{Align2, Sense, pos2, vec2};
 use serde_json::{Value, json};
