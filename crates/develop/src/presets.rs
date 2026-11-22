@@ -41,11 +41,14 @@ pub enum SettingsGroup {
     Spots,
     RedEye,
     LensBlur,
+    /// The RGB channel mixer: its own group, as it is its own section, so copying the Color Mixer (HSL) onto
+    /// an infrared photo leaves that photo's red/blue swap and picked gains alone (issue #2158).
+    ChannelMixer,
     Calibration,
 }
 
 impl SettingsGroup {
-    pub const ALL: [SettingsGroup; 20] = [
+    pub const ALL: [SettingsGroup; 21] = [
         SettingsGroup::Profile,
         SettingsGroup::Treatment,
         SettingsGroup::WhiteBalance,
@@ -65,6 +68,7 @@ impl SettingsGroup {
         SettingsGroup::Spots,
         SettingsGroup::RedEye,
         SettingsGroup::LensBlur,
+        SettingsGroup::ChannelMixer,
         SettingsGroup::Calibration,
     ];
 
@@ -97,6 +101,7 @@ impl SettingsGroup {
             SettingsGroup::Spots => "Remove",
             SettingsGroup::RedEye => "Red Eye",
             SettingsGroup::LensBlur => "Lens Blur",
+            SettingsGroup::ChannelMixer => "Channel Mixer",
             SettingsGroup::Calibration => "Calibration",
         }
     }
@@ -123,6 +128,7 @@ impl SettingsGroup {
             SettingsGroup::Spots => &["spots"],
             SettingsGroup::RedEye => &["red_eye"],
             SettingsGroup::LensBlur => &["lens_blur"],
+            SettingsGroup::ChannelMixer => &["channel_mixer"],
             SettingsGroup::Calibration => &["calibration"],
         }
     }
@@ -212,7 +218,9 @@ fn compose_named(current: &DevelopSettings, original: &DevelopSettings, settings
         return current.merged(settings).unwrap_or_else(|_| current.clone());
     }
     let cur = current.to_json();
-    let mut base = original.to_json();
+    // the base states what stored JSON leaves out at its default (an identity channel mixer, Remove
+    // Hot Pixels off): a preset naming it then moves from that value, not from nothing
+    let mut base = original.to_json_for_merge();
     if let (Some(b), Some(c)) = (base.as_object_mut(), cur.as_object()) {
         for k in REPAIR_KEYS {
             if let Some(v) = c.get(k) {
@@ -343,6 +351,42 @@ fn add_masks(out: &mut DevelopSettings, masks: &[Value], amount: f64) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Copying the Channel Mixer group carries the channel mixer, and pasting an untouched one resets a mixed photo,
+    /// though the identity isn't otherwise written (issue #2158).
+    #[test]
+    fn channel_mixer_group_carries_and_resets_the_channel_mixer() {
+        let mut mixed = DevelopSettings::default();
+        mixed.channel_mixer.red.red = 0.0;
+        mixed.channel_mixer.red.blue = 100.0;
+        let plain = DevelopSettings::default();
+        let copied = extract_groups(&mixed, &[SettingsGroup::ChannelMixer]);
+        assert_eq!(apply_partial(&plain, &copied, 1.0).channel_mixer, mixed.channel_mixer);
+        let untouched = extract_groups(&plain, &[SettingsGroup::ChannelMixer]);
+        assert!(untouched.get("channel_mixer").is_some());
+        assert!(apply_partial(&mixed, &untouched, 1.0).channel_mixer.is_identity());
+        // at half strength the mix blends halfway (both sides are numbers, so the preset isn't dropped)
+        let half = apply_partial(&plain, &copied, 0.5);
+        assert_eq!((half.channel_mixer.red.red, half.channel_mixer.red.blue), (50.0, 50.0));
+    }
+
+    /// The channel mixer is in its own group and no other. A copied group always states the mixer (so an untouched
+    /// one can reset), so in the Color Mixer group, copying HSL changes from a normal photo onto an infrared one
+    /// undid its red/blue swap (issue #2158).
+    #[test]
+    fn only_the_channel_mixer_group_carries_the_channel_mixer() {
+        let mut mixed = DevelopSettings::default();
+        mixed.channel_mixer.red.red = 0.0;
+        mixed.channel_mixer.red.blue = 100.0;
+        let plain = DevelopSettings::default();
+        for g in SettingsGroup::ALL.into_iter().filter(|g| *g != SettingsGroup::ChannelMixer) {
+            let copied = extract_groups(&plain, &[g]);
+            assert!(copied.get("channel_mixer").is_none(), "{g:?} carries the channel mixer");
+            assert_eq!(apply_partial(&mixed, &copied, 1.0).channel_mixer, mixed.channel_mixer, "{g:?} changed the channel mixer");
+        }
+        // a plain Copy (the default groups) still takes it along
+        assert!(SettingsGroup::default_copy().contains(&SettingsGroup::ChannelMixer));
+    }
 
     #[test]
     fn extract_and_apply_roundtrip() {
@@ -518,6 +562,30 @@ mod tests {
         };
         let out = p.apply_on(&current, &original, 0.5);
         assert!((out.light.exposure - 0.225).abs() < 1e-9, "{}", out.light.exposure);
+    }
+
+    /// Issue #2158: an original with the identity mixer (which stored JSON leaves out) is still the
+    /// base an infrared swap scales from, so 30 % moves each named coefficient 30 % of the way, and
+    /// 70 % doesn't jump to the full swap.
+    #[test]
+    fn apply_on_scales_a_mixer_from_the_identity() {
+        let original = DevelopSettings::default();
+        assert!(original.channel_mixer.is_identity() && original.to_json().get("channel_mixer").is_none());
+        let p = Preset {
+            id: "swap".into(),
+            name: "Swap".into(),
+            group: "G".into(),
+            settings: json!({"channel_mixer": {"red": {"red": 0.0, "blue": 100.0}, "blue": {"red": 100.0, "blue": 0.0}}}),
+            favorite: false,
+            builtin: false,
+        };
+        for (amount, own, swapped) in [(0.3, 70.0, 30.0), (0.7, 30.0, 70.0)] {
+            let m = p.apply_on(&original, &original, amount).channel_mixer;
+            for (got, want) in [(m.red.red, own), (m.red.blue, swapped), (m.blue.red, swapped), (m.blue.blue, own)] {
+                assert!((got - want).abs() < 1e-9, "at {amount}: {m:?}");
+            }
+            assert_eq!(m.green.green, 100.0, "a row it doesn't name keeps its value");
+        }
     }
 
     /// Pixel repairs are the photo's own: a preset's are patched in, and one without them never

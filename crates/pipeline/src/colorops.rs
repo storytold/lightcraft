@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 
 use lightcraft_color::perceptual::{hsv_to_rgb, lab_to_lch, lch_to_lab, oklab_from_2020, oklab_to_2020};
 use lightcraft_color::{Mat3, REC2020, SRGB};
-use lightcraft_develop::{Calibration, DevelopSettings, MIXER_HUES, PointColor};
+use lightcraft_develop::{Calibration, ChannelMixer, DevelopSettings, MIXER_HUES, MixRow, PointColor};
 
 /// OkLCh hue angle (radians) of a pure sRGB colour with HSV hue `deg`.
 pub fn oklch_hue_of_srgb_hue(deg: f64) -> f32 {
@@ -296,6 +296,110 @@ pub fn calibration_matrix(c: &Calibration) -> Option<[[f32; 3]; 3]> {
     Some(std::array::from_fn(|r| std::array::from_fn(|col| (p[r][col] * k[col]) as f32)))
 }
 
+/// The channel mixer as a 3×3 matrix on linear Rec.2020 (row-major: output channel × input channel, the percentages
+/// over 100). `None` for the identity, or when a value isn't finite.
+pub fn channel_mixer_matrix(m: &ChannelMixer) -> Option<[[f32; 3]; 3]> {
+    let rows = m.rows();
+    if m.is_identity() || rows.iter().flatten().any(|v| !v.is_finite()) {
+        return None;
+    }
+    Some(rows.map(|r| r.map(|v| (v.clamp(-200.0, 200.0) / 100.0) as f32)))
+}
+
+/// The matrix the scene-linear colour step applies: the channel mixer first, then the calibration primaries, each
+/// only when its section is on. `None` when both are neutral or off, so an untouched photo renders as before.
+pub fn scene_colour_matrix(s: &DevelopSettings) -> Option<[[f32; 3]; 3]> {
+    let calib = if s.section_enabled("calibration") { calibration_matrix(&s.calibration) } else { None };
+    let mixer = if s.section_enabled("channelMixer") { channel_mixer_matrix(&s.channel_mixer) } else { None };
+    match (calib, mixer) {
+        (Some(c), Some(m)) => Some(std::array::from_fn(|r| std::array::from_fn(|col| (0..3).map(|k| c[r][k] * m[k][col]).sum()))),
+        (c, m) => c.or(m),
+    }
+}
+
+/// What the spot-dependent refusals of [`mixer_neutral`] say: one message the UI can translate and
+/// the user act on.
+pub const MIXER_NEUTRAL_ERROR: &str = "This spot can't be made neutral: pick a brighter, less saturated area";
+
+/// What a mixer that no spot can fix refuses with: the rows can't be inverted, or the gains'
+/// direction `M⁻¹ · [1,1,1]` has a non-positive part (so every spot's gains come out non-positive).
+/// Picking elsewhere can't help — the mixer has to change or be reset (issue #2158).
+pub const MIXER_IMPOSSIBLE_ERROR: &str =
+    "The Channel Mixer's current mix can't be made neutral at any spot: change or reset the mixer, then pick again";
+
+/// The Rec.2020 luminance weights, as the tone map reads them.
+fn luminance(c: [f64; 3]) -> f64 {
+    c[0] * 0.2627 + c[1] * 0.6780 + c[2] * 0.0593
+}
+
+/// The channel mixer that makes a sampled colour come out neutral — white balance at the mixer's
+/// input (issue #2158, for infrared foliage). With `m` the mixer as it renders and `c` the colour at
+/// the mixer's input (linear Rec.2020: the sample with the photo's current white balance already
+/// applied), the new mixer is `M · diag(g)` where `g` are input gains, so a mix already set (a
+/// red/blue swap) is kept: `M · diag(g) · c` is neutral when `g ⊙ c` is proportional to
+/// `M⁻¹ · [1,1,1]`. `calib` is the calibration matrix the render will apply after the mixer (row-
+/// major, `None` when its section is off or neutral).
+///
+/// The brightness the point comes out at is the spot's own with no mix: the Rec.2020 luminance of
+/// `max(C · c, 0)` (the colour step clamps each channel at zero ahead of the tone map,
+/// [`calibrate`], CPU and GPU alike) — not of what the current mix made of it. Testers of the PR
+/// found that aiming for the mixed brightness made the result depend on the mix the pick started
+/// from: on an infrared raw at 2000 K a mix pouring the strong red channel into green made the spot
+/// several times brighter, and the pick kept that, raising Exposure by up to 3.5 stops and blowing
+/// the photo out. With the spot's own brightness, the spot keeps the brightness it has with no mix,
+/// whichever mix the pick composes over.
+///
+/// Calibration matrices are white-preserving (`C · [1,1,1] = [1,1,1]`, how [`calibration_matrix`]
+/// normalizes them), so `C⁻¹ · [1,1,1] = [1,1,1]`: the calibration moves only the brightness
+/// target, and `C · M' · c` comes out neutral at it. The calibration's shadow tint comes after the
+/// colour matrix and touches only dark tones, and is not modelled: a dark spot with a shadow tint
+/// set may keep a little of it. Returns the new nine values in per cent and how much the whole
+/// matrix was scaled down to fit the ±200 % sliders (1.0 when it already fitted; the point stays
+/// neutral at that lower luminance, and Exposure can compensate). `Err` ([`MIXER_IMPOSSIBLE_ERROR`])
+/// when no spot can fix the mixer, or ([`MIXER_NEUTRAL_ERROR`]) when the sample has no usable signal (a
+/// component ≤ 1e-6, or not a number) or the gains come out non-finite or non-positive; nothing is
+/// changed then.
+pub fn mixer_neutral(m: &ChannelMixer, c: [f64; 3], calib: Option<[[f64; 3]; 3]>) -> Result<(ChannelMixer, f64), &'static str> {
+    let rows = m.rows().map(|r| r.map(|v| v.clamp(-200.0, 200.0) / 100.0));
+    let mat = Mat3(rows);
+    let u = mat.inverse().ok_or(MIXER_IMPOSSIBLE_ERROR)?.apply([1.0, 1.0, 1.0]);
+    // the gains are g ∝ (M⁻¹ · 1) / c with c > 0: a non-positive (or not finite) component there
+    // refuses every spot, whatever and wherever it is — a mixer-level refusal, before the spot is
+    // even looked at (so a dark spot under such a mixer is told to fix the mixer, not to pick again)
+    if u.iter().any(|v| !(v.is_finite() && *v > 0.0)) {
+        return Err(MIXER_IMPOSSIBLE_ERROR);
+    }
+    // the spot, before anything divides by it
+    if c.iter().any(|v| !(v.is_finite() && *v > 1e-6)) {
+        return Err(MIXER_NEUTRAL_ERROR);
+    }
+    // the spot's own brightness, with no mix: the calibration over the mixer's input, clamped as
+    // the colour step clamps
+    let own = calib.map_or(c, |cm| Mat3(cm).apply(c));
+    let q = luminance(own.map(|v| v.max(0.0)));
+    let g = [q * u[0] / c[0], q * u[1] / c[1], q * u[2] / c[2]];
+    if !(q.is_finite() && q > 0.0) || g.iter().any(|v| !(v.is_finite() && *v > 0.0)) {
+        return Err(MIXER_NEUTRAL_ERROR);
+    }
+    // each input column j scales by g[j]
+    let mut new = rows;
+    for r in &mut new {
+        for (j, v) in r.iter_mut().enumerate() {
+            *v *= g[j];
+        }
+    }
+    // the inverse earned trust: the point this was all for really comes out neutral
+    let done = Mat3(new).apply(c);
+    if done.iter().any(|v| !v.is_finite()) || (done[0] - done[1]).abs() > 1e-6 * q || (done[1] - done[2]).abs() > 1e-6 * q {
+        return Err(MIXER_NEUTRAL_ERROR);
+    }
+    // past ±200 % the whole matrix scales down to fit: neutral stays neutral, luminance falls by it
+    let max = new.iter().flatten().map(|v| v.abs()).fold(0.0, f64::max);
+    let scaled = if max > 2.0 { 2.0 / max } else { 1.0 };
+    let row = |r: usize| MixRow { red: new[r][0] * scaled * 100.0, green: new[r][1] * scaled * 100.0, blue: new[r][2] * scaled * 100.0 };
+    Ok((ChannelMixer { red: row(0), green: row(1), blue: row(2) }, scaled))
+}
+
 /// Shadows-tint strength at ±100: the green channel's relative change in deep shadows.
 pub const SHADOW_TINT: f32 = 0.3;
 
@@ -394,6 +498,209 @@ mod tests {
         let c0 = lab_to_lch(oklab_from_2020(blue))[1];
         let c1 = lab_to_lch(oklab_from_2020(calibrate(blue, Some(&m), 0.0)))[1];
         assert!(c1 < c0 * 0.97, "{c0} -> {c1}");
+    }
+
+    /// Issue #2158: the channel mixer is a plain output × input matrix, applied ahead of the calibration primaries.
+    #[test]
+    fn channel_mixer_swaps_channels_and_composes_before_calibration() {
+        use lightcraft_develop::{ChannelMixer, MixRow};
+        let mut s = DevelopSettings::default();
+        assert!(channel_mixer_matrix(&s.channel_mixer).is_none());
+        assert!(scene_colour_matrix(&s).is_none(), "an untouched photo keeps the step off");
+
+        // swap red and blue: a red patch comes out blue, green stays
+        s.channel_mixer = ChannelMixer {
+            red: MixRow { blue: 100.0, ..MixRow::default() },
+            green: MixRow { green: 100.0, ..MixRow::default() },
+            blue: MixRow { red: 100.0, ..MixRow::default() },
+        };
+        let m = scene_colour_matrix(&s).unwrap();
+        assert_eq!(calibrate([0.4, 0.1, 0.02], Some(&m), 0.0), [0.02, 0.1, 0.4]);
+
+        // a negative weight can pull a channel below zero, which the step clamps
+        s.channel_mixer.green = MixRow { green: 100.0, red: -200.0, ..MixRow::default() };
+        let out = calibrate([0.4, 0.1, 0.02], Some(&scene_colour_matrix(&s).unwrap()), 0.0);
+        assert_eq!(out[1], 0.0);
+
+        // with calibration too: mixer first, then the primaries (calib × mixer)
+        s.channel_mixer.green = MixRow { green: 100.0, ..MixRow::default() };
+        s.calibration = Calibration { red_hue: 60.0, ..Default::default() };
+        let both = scene_colour_matrix(&s).unwrap();
+        let (c, x) = (calibration_matrix(&s.calibration).unwrap(), channel_mixer_matrix(&s.channel_mixer).unwrap());
+        let input = [0.3, 0.2, 0.1];
+        let seq = calibrate(calibrate(input, Some(&x), 0.0), Some(&c), 0.0);
+        let one = calibrate(input, Some(&both), 0.0);
+        assert!(seq.iter().zip(one).all(|(a, b)| (a - b).abs() < 1e-5), "{seq:?} vs {one:?}");
+
+        // each section's eye switches its part off
+        s.set_section_enabled("channelMixer", false);
+        assert_eq!(scene_colour_matrix(&s), Some(c));
+        s.set_section_enabled("calibration", false);
+        assert!(scene_colour_matrix(&s).is_none());
+
+        // values that aren't numbers leave the photo alone instead of turning it black
+        s.set_section_enabled("channelMixer", true);
+        s.channel_mixer.red.red = f64::NAN;
+        assert!(channel_mixer_matrix(&s.channel_mixer).is_none());
+    }
+
+    /// Issue #2158: the neutral picker's gains make the picked colour neutral at the mixer's input,
+    /// keep its luminance, keep a mix already set, scale to fit the sliders, and refuse what they
+    /// can't do without panicking.
+    #[test]
+    fn mixer_neutral_picks_input_gains() {
+        use lightcraft_develop::{ChannelMixer, MixRow};
+        let apply = |m: &ChannelMixer, c: [f64; 3]| Mat3(m.rows().map(|r| r.map(|v| v / 100.0))).apply(c);
+        // a mild red cast: within the ±200 % sliders, so nothing has to scale down
+        let red_cast = [0.4, 0.2, 0.15];
+
+        // the identity mixer: the point comes out neutral at the same luminance
+        let (m, scaled) = mixer_neutral(&ChannelMixer::default(), red_cast, None).unwrap();
+        assert_eq!(scaled, 1.0);
+        let out = apply(&m, red_cast);
+        assert!((out[0] - out[1]).abs() < 1e-4 && (out[1] - out[2]).abs() < 1e-4, "{out:?}");
+        assert!((luminance(out) - luminance(red_cast)).abs() < 1e-9, "{} vs {}", luminance(out), luminance(red_cast));
+
+        // a swapped mixer: the point still comes out neutral and the swap is kept (red takes from blue only)
+        let swap = ChannelMixer {
+            red: MixRow { blue: 100.0, ..MixRow::default() },
+            green: MixRow { green: 100.0, ..MixRow::default() },
+            blue: MixRow { red: 100.0, ..MixRow::default() },
+        };
+        let (m, scaled) = mixer_neutral(&swap, red_cast, None).unwrap();
+        assert_eq!(scaled, 1.0);
+        let out = apply(&m, red_cast);
+        assert!((out[0] - out[1]).abs() < 1e-4 && (out[1] - out[2]).abs() < 1e-4, "{out:?}");
+        // at the spot's own brightness, not at what the swap made of it (testers of the PR)
+        assert!((luminance(out) - luminance(red_cast)).abs() < 1e-9);
+        assert_eq!(m.red.red, 0.0, "red still takes no red: {:?}", m.red);
+        assert_eq!(m.red.green, 0.0);
+        assert!(m.red.blue > 0.0, "red takes blue: {:?}", m.red);
+        // and blue takes only red
+        assert_eq!((m.blue.red > 0.0, m.blue.green, m.blue.blue), (true, 0.0, 0.0), "{:?}", m.blue);
+
+        // a spot whose gains run past ±200 %: the whole matrix scales down to fit and stays neutral
+        let extreme = [1.0, 0.01, 0.02];
+        let (m, scaled) = mixer_neutral(&ChannelMixer::default(), extreme, None).unwrap();
+        assert!(scaled < 1.0, "{scaled}");
+        for v in m.rows().iter().flatten() {
+            assert!(*v >= -200.0 && *v <= 200.0 && v.is_finite(), "{v}");
+        }
+        let out = apply(&m, extreme);
+        assert!((out[0] - out[1]).abs() < 1e-4 && (out[1] - out[2]).abs() < 1e-4, "{out:?}");
+        assert!((luminance(out) - scaled * luminance(extreme)).abs() < 1e-9, "darker by the factor");
+
+        // what can't work is an error, not a panic: a singular mixer, a spot without signal
+        let singular = ChannelMixer {
+            red: MixRow { red: 100.0, ..MixRow::default() },
+            green: MixRow { red: 100.0, ..MixRow::default() },
+            blue: MixRow { red: 100.0, ..MixRow::default() },
+        };
+        assert!(mixer_neutral(&singular, red_cast, None).is_err(), "a singular mixer");
+        for bad_spot in [[0.0, 0.1, 0.1], [0.2, 1e-6, 0.1], [0.2, f64::NAN, 0.1], [f64::NEG_INFINITY, 0.1, 0.1]] {
+            assert!(mixer_neutral(&ChannelMixer::default(), bad_spot, None).is_err(), "{bad_spot:?}");
+        }
+        // gains that come out non-positive (a mixer whose inverse answers a negative input share)
+        let flip = ChannelMixer {
+            red: MixRow { red: 100.0, green: 200.0, ..MixRow::default() },
+            green: MixRow { red: -100.0, green: 100.0, ..MixRow::default() },
+            blue: MixRow { blue: 100.0, ..MixRow::default() },
+        };
+        assert!(mixer_neutral(&flip, red_cast, None).is_err(), "a negative gain is refused");
+    }
+
+    /// Issue #2158 review: a mixer no spot can fix says so even when the spot is also too dark — the
+    /// mixer-level refusal comes first, so the pick doesn't send someone off to pick a brighter area
+    /// that can't help; a usable mixer still refuses the dark spot itself.
+    #[test]
+    fn mixer_neutral_refuses_the_mixer_before_the_spot() {
+        use lightcraft_develop::{ChannelMixer, MixRow};
+        let same = MixRow { red: 100.0, green: 0.0, blue: 0.0 };
+        let singular = ChannelMixer { red: same, green: same, blue: same };
+        // no inverse, and an inverse with a negative gain: both mixer-level, whatever the spot
+        // M⁻¹ · 1 = (1, 1, −1)
+        let negative = ChannelMixer {
+            red: MixRow { red: 100.0, green: 0.0, blue: 0.0 },
+            green: MixRow { red: 0.0, green: 100.0, blue: 0.0 },
+            blue: MixRow { red: 100.0, green: 100.0, blue: 100.0 },
+        };
+        for (name, m) in [("singular", singular), ("negative gain", negative)] {
+            for spot in [[0.0, 0.0, 0.0], [1e-9, 0.2, 0.2], [f64::NAN, 0.2, 0.2], [0.3, 0.3, 0.3]] {
+                assert_eq!(mixer_neutral(&m, spot, None), Err(MIXER_IMPOSSIBLE_ERROR), "{name} at {spot:?}");
+            }
+        }
+        assert_eq!(mixer_neutral(&ChannelMixer::default(), [0.0, 0.0, 0.0], None), Err(MIXER_NEUTRAL_ERROR), "a black spot");
+    }
+
+    /// Issue #2158 review: the render clamps each mixer output channel at zero before the tone map
+    /// ([`calibrate`], CPU and GPU alike). The brightness the pick aims for is the spot's own, with
+    /// no mix (feedback from testers of the PR: aiming for what the mix made of the spot blew
+    /// infrared photos out), so a mix that drives a channel negative at the spot, or one that
+    /// brightens it, moves neither the target nor the result.
+    #[test]
+    fn mixer_neutral_targets_the_spots_own_brightness_whatever_the_mix() {
+        use lightcraft_develop::{ChannelMixer, MixRow};
+        let apply = |m: &ChannelMixer, c: [f64; 3]| Mat3(m.rows().map(|r| r.map(|v| v / 100.0))).apply(c);
+        let spot = [0.05, 0.4, 0.1];
+        // red takes −200 % of green: on this green-dominant spot the red output goes negative
+        let negative = ChannelMixer {
+            red: MixRow { red: 100.0, green: -200.0, ..MixRow::default() },
+            green: MixRow { green: 100.0, ..MixRow::default() },
+            blue: MixRow { blue: 100.0, ..MixRow::default() },
+        };
+        assert!(apply(&negative, spot)[0] < 0.0, "sanity: the mixer drives red negative: {:?}", apply(&negative, spot));
+        // green takes 150 % of itself and 50 % of red: the spot comes out much brighter
+        let brighter = ChannelMixer { green: MixRow { red: 50.0, green: 150.0, ..MixRow::default() }, ..ChannelMixer::default() };
+        assert!(luminance(apply(&brighter, spot)) > luminance(spot) * 1.4, "sanity: the mixer brightens the spot");
+        // a red/blue swap of an infrared-like (red-heavy) spot
+        let swap = ChannelMixer {
+            red: MixRow { blue: 100.0, ..MixRow::default() },
+            green: MixRow { green: 100.0, ..MixRow::default() },
+            blue: MixRow { red: 100.0, ..MixRow::default() },
+        };
+        for (name, m, spot) in [("negative", negative, spot), ("brighter", brighter, spot), ("swap", swap, [0.6, 0.2, 0.05])] {
+            let (picked, scaled) = mixer_neutral(&m, spot, None).unwrap();
+            let out = apply(&picked, spot);
+            assert!((out[0] - out[1]).abs() < 1e-4 && (out[1] - out[2]).abs() < 1e-4, "{name}: still neutral: {out:?}");
+            assert!(
+                (luminance(out) - scaled * luminance(spot)).abs() < 1e-9,
+                "{name}: the spot's own brightness is kept (scaled by the fit factor {scaled}): {} vs {}",
+                luminance(out),
+                luminance(spot)
+            );
+        }
+    }
+
+    /// Issue #2158 review: the brightness target runs through the calibration the render applies
+    /// after the mixer: the picked mixer's output has the luminance of `max(C·c, 0)`, not of `c`.
+    /// `C` is white-preserving by construction, so the neutral result itself is unchanged.
+    #[test]
+    fn mixer_neutral_targets_the_calibrated_luminance() {
+        use lightcraft_develop::Calibration;
+        let apply = |m: &lightcraft_develop::ChannelMixer, c: [f64; 3]| Mat3(m.rows().map(|r| r.map(|v| v / 100.0))).apply(c);
+        let calib = calibration_matrix(&Calibration { red_hue: 40.0, red_sat: 30.0, ..Default::default() })
+            .map(|m| m.map(|r| r.map(f64::from)))
+            .expect("an invertible calibration");
+        let spot = [0.4, 0.2, 0.15];
+        let shown = Mat3(calib).apply(spot).map(|v| v.max(0.0));
+        assert!(
+            (luminance(shown) - luminance(spot)).abs() > 5e-3,
+            "sanity: the calibration moves the spot's luminance: {} vs {}",
+            luminance(shown),
+            luminance(spot)
+        );
+        let (picked, scaled) = mixer_neutral(&lightcraft_develop::ChannelMixer::default(), spot, Some(calib)).unwrap();
+        let out = apply(&picked, spot);
+        assert!((out[0] - out[1]).abs() < 1e-4 && (out[1] - out[2]).abs() < 1e-4, "still neutral: {out:?}");
+        assert!(
+            (luminance(out) - scaled * luminance(shown)).abs() < 1e-9,
+            "the calibrated luminance is kept: {} vs {}",
+            luminance(out),
+            luminance(shown)
+        );
+        // without the calibration the target is the spot itself
+        let (plain, _) = mixer_neutral(&lightcraft_develop::ChannelMixer::default(), spot, None).unwrap();
+        assert!((luminance(apply(&plain, spot)) - luminance(spot)).abs() < 1e-9);
     }
 
     #[test]

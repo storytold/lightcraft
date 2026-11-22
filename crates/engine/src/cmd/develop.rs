@@ -54,11 +54,12 @@ fn partial_diff(a: &Value, b: &Value) -> Option<Value> {
     }
 }
 
-/// The settings as JSON with the HDR subtree always present: [`Hdr`] is left out while it is the default
-/// (its JSON stays as it was), so a reset to a default HDR value would have nothing to compare with and
-/// would be dropped from a saved preset.
+/// The settings as JSON with everything stored JSON leaves out at its default stated: the HDR subtree
+/// ([`Hdr`] is left out while it is the default, its JSON stays as it was), an untouched channel mixer
+/// and Remove Hot Pixels off ([`DevelopSettings::to_json_for_merge`]). A reset to one of those defaults
+/// would otherwise have nothing to compare with and would be dropped from a saved preset.
 fn full_json(s: &DevelopSettings) -> Value {
-    let mut v = s.to_json();
+    let mut v = s.to_json_for_merge();
     if let Some(obj) = v.as_object_mut() {
         obj.entry("hdr").or_insert_with(|| serde_json::to_value(s.hdr).unwrap_or(Value::Null));
     }
@@ -105,6 +106,23 @@ fn refit_crop_angle(touched: bool, before: CropGeometry, d: &mut DevelopSettings
 }
 
 const CROP_ANGLE: &str = "crop.angle";
+
+/// The mean colour of the 5×5 neighbourhood at normalized `(x, y)` of the oriented source: how the
+/// pickers (white balance, Channel Mixer Neutral) sample a point.
+fn sample_point(src: &lightcraft_raster::Rgb32f, d: &DevelopSettings, x: f64, y: f64) -> [f32; 3] {
+    let o = src.oriented(d.orientation);
+    let (cx, cy) = ((x.clamp(0.0, 1.0) * o.width as f64) as isize, (y.clamp(0.0, 1.0) * o.height as f64) as isize);
+    let mut acc = [0.0f32; 3];
+    for dy in -2..=2 {
+        for dx in -2..=2 {
+            let c = o.get_clamped(cx + dx, cy + dy);
+            for i in 0..3 {
+                acc[i] += c[i] / 25.0;
+            }
+        }
+    }
+    acc
+}
 
 /// Whether a white balance mode renders its own white instead of the numbers stored on the photo: `As Shot`
 /// renders the source's as-shot white, and on a raw edited in Kelvin a named preset renders its own Kelvin / tint
@@ -751,19 +769,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad("develop.wbPick", e))?;
             let info = s.source_info(id);
             let d = s.develop_of(id).unwrap_or_default();
-            // Sample a small neighbourhood in the oriented source.
-            let o = src.oriented(d.orientation);
-            let (cx, cy) = ((x.clamp(0.0, 1.0) * o.width as f64) as isize, (y.clamp(0.0, 1.0) * o.height as f64) as isize);
-            let mut acc = [0.0f32; 3];
-            for dy in -2..=2 {
-                for dx in -2..=2 {
-                    let c = o.get_clamped(cx + dx, cy + dy);
-                    for i in 0..3 {
-                        acc[i] += c[i] / 25.0;
-                    }
-                }
-            }
-            let patch = lightcraft_raster::Rgb32f::filled(4, 4, acc);
+            let patch = lightcraft_raster::Rgb32f::filled(4, 4, sample_point(&src, &d, x, y));
             let (t, tint) = lightcraft_pipeline::auto::auto_wb(&patch, &info);
             edit(s, "develop.wbPick", "White Balance", |d| {
                 lightcraft_pipeline::local::normalize_wb(d, &info);
@@ -774,6 +780,99 @@ pub fn specs() -> Vec<CommandSpec> {
             })?;
             Ok(json!({"temp": t, "tint": tint}))
         }),
+        cmd!(
+            "develop.mixerNeutralPick",
+            "Channel Mixer Neutral",
+            [],
+            None,
+            "Params: {x, y} normalized image coords (0..1) of a spot that should be neutral (white or grey). Returns: {scaled: the factor (0..1] the new mixer was scaled down by to fit the ±200 % sliders, 1 when it fit; darker: the stops the photo came out darker by because of that scaling, log2(1/scaled), 0 when none; mixer: the new mixer as {red, green, blue} rows of {red, green, blue} percentages}. Notes: the mixer and switching the section on (when its eye was off) are one undo step; Exposure is never changed; the white balance is read as the render does (Color's eye off means its defaults); a mask's local temperature/tint is not modelled, as the mixer is global; the spot keeps the brightness it has with no mix (through Calibration, before its shadow tint), whatever mix the pick starts from, so picking the same spot again changes nothing; refused (bad params) when the spot or the mixer can't be made neutral",
+            has_active,
+            |s, p| {
+                let (x, y) = (f64_req(p, "x", "develop.mixerNeutralPick")?, f64_req(p, "y", "develop.mixerNeutralPick")?);
+                let id = active(s, "develop.mixerNeutralPick")?;
+                // a source that cannot be loaded is an operational failure, not a bad parameter: the
+                // picker's UI shows this message itself and saves its "can't be made neutral" advice
+                // for the maths' refusal (a BadParams answer)
+                let src = s.source_now(id, SourceLevel::Thumb).map_err(crate::EngineError::Other)?;
+                let info = s.source_info(id);
+                let d = s.develop_of(id).unwrap_or_default();
+                // The colour at the mixer's input: the sample with the white balance the photo
+                // actually renders applied — read through `effective()`, because with the Color
+                // section's eye off the render resets the stored white balance to the defaults, and
+                // a pick computed on the stored one would neutralize for a look the photo doesn't
+                // have. The mixer is global, so a mask's local temperature/tint is deliberately not
+                // modelled here: the pick neutralizes for the photo as a whole, not per masked
+                // region. The channel mixer itself keeps its own eye (below): `effective()` never
+                // resets it.
+                let sample = sample_point(&src, &d, x, y);
+                let c = lightcraft_pipeline::local::wb_matrix_for(&info, &d.effective()).map_or(sample, |m| {
+                    [
+                        m[0][0] * sample[0] + m[0][1] * sample[1] + m[0][2] * sample[2],
+                        m[1][0] * sample[0] + m[1][1] * sample[1] + m[1][2] * sample[2],
+                        m[2][0] * sample[0] + m[2][1] * sample[1] + m[2][2] * sample[2],
+                    ]
+                });
+                // The pick means the mixer, even with its section's eye off: instead of computing from
+                // the identity (nine values the render would never show), the same undo step switches
+                // the section on and the pick computes from the stored mixer — the one that will
+                // render once the section is on.
+                let section_off = !d.section_enabled("channelMixer");
+                let current = d.channel_mixer;
+                // the calibration the render will apply after the mixer (the pick keeps the mixer
+                // neutral through it: it is white-preserving), gated by its own section's eye; the
+                // spot comes out at its own brightness with no mix, through the calibration, so the
+                // result doesn't depend on the mix the pick starts from (testers of the PR: aiming
+                // for the mixed brightness blew infrared photos out). The calibration's shadow tint
+                // comes after the colour matrix and touches only dark tones; it is not modelled, so
+                // a dark spot with a shadow tint set may keep a little of it.
+                let calib = if d.section_enabled("calibration") {
+                    lightcraft_pipeline::colorops::calibration_matrix(&d.calibration).map(|m| m.map(|r| r.map(f64::from)))
+                } else {
+                    None
+                };
+                let (mixer, scaled) = lightcraft_pipeline::colorops::mixer_neutral(&current, c.map(f64::from), calib)
+                    .map_err(|e| bad("develop.mixerNeutralPick", e))?;
+                // A mixer scaled down to fit the ±200 % sliders is a gain lost: the photo comes out
+                // darker by log2(1/scaled) stops, and the result says so (`darker`) for the picker's
+                // message. Exposure is left alone. Testers of the PR found that raising Exposure to
+                // make up for it piled up: the next pick can't tell the Exposure an earlier pick
+                // added from the photographer's own, so picking the same spot again, or after
+                // another mix, added the raise again each time.
+                edit(s, "develop.mixerNeutralPick", "Channel Mixer Neutral", |d| {
+                    if section_off {
+                        d.set_section_enabled("channelMixer", true);
+                    }
+                    d.channel_mixer = mixer;
+                    Ok(())
+                })?;
+                Ok(json!({
+                    "scaled": scaled,
+                    "darker": if scaled < 1.0 { -scaled.log2() } else { 0.0 },
+                    "mixer": mixer,
+                }))
+            }
+        ),
+        cmd!(
+            "develop.mixerSwapRB",
+            "Swap Red and Blue",
+            [],
+            None,
+            "{} (no parameters) → {mixer: the new mixer as {red, green, blue} rows of {red, green, blue} percentages} — swaps the mixer's red and blue output rows (the infrared swap; twice is the identity); with the section's eye off it switches the section on in the same step",
+            has_active,
+            |s, _| {
+                edit(s, "develop.mixerSwapRB", "Swap Red and Blue", |d| {
+                    // like the pick: a swap the render ignores (the section's eye off) would look
+                    // like a dead button, so the same undo step switches the section on
+                    if !d.section_enabled("channelMixer") {
+                        d.set_section_enabled("channelMixer", true);
+                    }
+                    std::mem::swap(&mut d.channel_mixer.red, &mut d.channel_mixer.blue);
+                    Ok(())
+                })?;
+                let d = s.develop_of(active(s, "develop.mixerSwapRB")?).unwrap_or_default();
+                Ok(json!({"mixer": d.channel_mixer}))
+            }
+        ),
         cmd!("develop.treatment", "Black & White", ["Photo"], Some("V"), "{bw?: bool} (toggles when omitted)", has_active, |s, p| {
             edit(s, "develop.treatment", "Treatment", |d| {
                 let bw = p.get("bw").and_then(Value::as_bool).unwrap_or(d.treatment != Treatment::Bw);
@@ -1430,6 +1529,8 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let c = "preset.update";
                 let id = active(s, c)?;
+                // the mixer and Remove Hot Pixels stated even at their defaults: a preset whose keys name
+                // them keeps the key, and updating from an untouched photo resets a mixed target
                 let current = s.develop_of(id).unwrap_or_default().to_json_for_merge();
                 let groups = groups_param(p, c)?;
                 let pr = user_preset(s, p, c)?;
@@ -1608,5 +1709,22 @@ mod recipe_tests {
         let both = recipe_partial(&recipe(&[("hdr.maxEv", 3.0), ("light.exposure", 0.5)])).expect("both are stored");
         assert_eq!(both.pointer("/hdr/max_ev"), Some(&json!(3.0)), "{both}");
         assert_eq!(both.pointer("/light/exposure"), Some(&json!(0.5)), "{both}");
+    }
+
+    /// An untouched channel mixer is left out of the JSON too (issue #2158), so a recipe that puts mixer
+    /// sliders back at neutral, to undo a red/blue swap say, is stored: alone, where the recipe's
+    /// settings are the identity and there was no mixer key to compare, and next to another adjustment.
+    #[test]
+    fn a_channel_mixer_reset_is_stored_alone_and_next_to_another_adjustment() {
+        let unswap = [("channelMixer.red.red", 100.0), ("channelMixer.red.blue", 0.0)];
+        let reset = recipe_partial(&recipe(&unswap)).expect("a reset is stored");
+        assert_eq!(reset, json!({"channel_mixer": {"red": {"red": 100.0, "blue": 0.0}}}));
+        let both = recipe_partial(&recipe(&[unswap[0], unswap[1], ("light.exposure", 0.5)])).expect("both are stored");
+        assert_eq!(both.pointer("/channel_mixer/red/red"), Some(&json!(100.0)), "{both}");
+        assert_eq!(both.pointer("/channel_mixer/red/blue"), Some(&json!(0.0)), "{both}");
+        assert_eq!(both.pointer("/light/exposure"), Some(&json!(0.5)), "{both}");
+        // a mix that isn't neutral was stored already
+        let swap = recipe_partial(&recipe(&[("channelMixer.red.red", 0.0), ("channelMixer.red.blue", 100.0)])).expect("stored");
+        assert_eq!(swap, json!({"channel_mixer": {"red": {"red": 0.0, "blue": 100.0}}}));
     }
 }

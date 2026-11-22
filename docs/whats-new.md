@@ -13,6 +13,21 @@
   the other exports do, and writes the file atomically. It used to write the presets over whatever file it was given,
   and a failed write (a full disk) could leave a cut-off file where an earlier export was.
 
+### A Channel Mixer in the Edit panel
+- The Edit panel has a new Channel Mixer section, above Calibration: three output rows — Red, Green and Blue — each with
+  three sliders saying in per cent how much of each colour goes into it (−200 to +200). It starts neutral, each row taking
+  only its own colour, so existing photos render exactly as before until you move a slider. It is mainly for infrared
+  photography: swap red and blue, or pull down a channel that white balance can't reach (issue #2158). For the usual
+  infrared workflow, click the section's eyedropper and then click foliage — the photo turns neutral there — and press
+  Swap Red and Blue beside it for the classic false-colour look. The spot you click keeps the brightness it has with no
+  mix, whatever mix you start from, and the eyedropper never changes Exposure: when a mix has to be scaled down to fit
+  the sliders, it tells you how much darker the photo came out instead. A spot it can't use (too dark or too
+  saturated) leaves the eyedropper on, so you can click another one straight away. Lightroom has no
+  channel mixer, so these settings travel only with LightCraft.
+- Channel Mixer is its own entry in Copy Settings, Sync Settings and Create Preset, separate from Color Mixer: copying
+  the Color Mixer onto an infrared photo leaves its swap alone. With Auto Sync on, the other selected photos get the
+  whole mixer, never a part of it.
+
 ### Film grain that looks like film (process V7)
 - Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
   rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth
