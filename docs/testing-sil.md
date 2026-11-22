@@ -23,6 +23,14 @@ Scenarios (one `#[test]` each, run in parallel):
 | `sil_raw_workflow` | corpus raws (skipped without a corpus): import, Auto, sliders, WB, export JPEG and DNG, XMP, reopen |
 | `sil_monkey` | seeded random user actions (about 8 % with hostile arguments: bogus ids, out-of-range and huge numbers, control characters), with a reopen every 100 steps and at the end; it stops making virtual copies once the library holds 64 photos (`MONKEY_MAX_PHOTOS`), so a long run's library, and with it each step and its checks, stays inside the per-step timeout |
 
+Engine-level scenarios (no child process; `cargo test -p lcc-engine --test it roundtrip`), in
+`crates/engine/tests/it/roundtrip.rs`:
+
+| Test | What it does |
+|---|---|
+| `import_develop_export_reimport_keeps_settings_metadata_and_sane_pixels` | procedural JPEG → import → metadata, rating, exposure/contrast → full-size JPEG export (unedited and edited) → XMP sidecar → fresh library re-imports the original (settings, rating, title, keywords back) and the export (title, keywords, creator back); pixels: decodable, same size, not blank or clipped, the brighter edit exports brighter (tolerances, no goldens) |
+| `exporting_a_photo_whose_original_is_gone_is_an_error_not_a_panic` | the original vanishes before export: a per-photo error or batch error, never a panic |
+
 Invariants:
 
 - **Still alive:** every request gets an answer within 180 s (otherwise it counts as a deadlock), the process never
