@@ -64,6 +64,38 @@ reopen). The import paths in the script point at the kept shoot folder. Shrink t
 the failure goes away. The smallest version that still fails becomes the regression test, either as an engine unit
 test or as a scenario step.
 
+## Fuzz targets (below SIL)
+
+SIL drives whole workflows; the fuzz targets hammer the parsers underneath with hostile bytes. Each is a
+`fuzz_target` test in the crate that owns the format, built on `lcc-fuzzkit`'s seeded mutators (stable Rust, no
+cargo-fuzz, no C):
+
+| Target | Test | What it feeds |
+|---|---|---|
+| `raw` | `crates/raw/tests/fuzz_target.rs` | DNGs (uncompressed, LJ92, lossy) and corpus raws → probe, preview, decode, develop |
+| `tiff` | `crates/tiff/tests/fuzz_target.rs` | classic and BigTIFF, both byte orders → parse, every IFD, image layout |
+| `codecs` | `crates/codecs/tests/fuzz_target.rs` | JPEG, PNG, TIFF, WebP and corpus images → decode, headers, thumbnails, ICC, gain maps |
+| `meta` | `crates/meta/tests/fuzz_target.rs` | EXIF containers and XMP (ours and sidecars) → extract, EXIF, IPTC, XMP parse and merge |
+| `develop` | `crates/develop/tests/fuzz_target.rs` | develop settings JSON from outside the app → `from_untrusted_json`, `merged` |
+| `lightroom` | `crates/engine/src/tests_fuzz_lightroom.rs` | Lightroom Classic catalogs (synthetic SQLite, corpus `.lrcat`) → SQLite reader, catalog import read |
+| `peer` | `crates/peer/tests/fuzz_target.rs` | mDNS packets, beacon TXT records and handshake frames over loopback |
+
+A plain `cargo test` runs each for a few hundred inputs. Long runs:
+
+```sh
+cargo xtask fuzz                     # every target, 60 s each
+cargo xtask fuzz raw lightroom --secs 1800 --rng 7
+cargo xtask fuzz --list
+```
+
+The driver runs each target in release mode with `LCC_FUZZ_SECS` (time box), `LCC_FUZZ_RNG` (mutation stream;
+a fresh one per run unless `--rng` repeats it), `LCC_FUZZ_CORPUS` (the gitignored `corpus/`, when present, as
+extra seeds) and `LCC_FUZZ_CRASH_DIR`. A crash fails the run and saves the input as
+`target/fuzz/crashes/<target>/<target>-<hash>.bin`. Fix the crash, then fold the input into that format's
+table-driven hostile-input test (built bytes, or the minimized input inline; never a media file), as
+AGENTS.md → Never crash asks. The nightly `Fuzz` workflow (`.github/workflows/fuzz.yml`) runs every target for
+30 minutes and uploads crash inputs as artifacts.
+
 ## Adding a scenario
 
 Write a `#[test] fn sil_<name>()` in `apps/cli/tests/sil.rs`:

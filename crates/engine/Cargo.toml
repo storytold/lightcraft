@@ -117,6 +117,7 @@ own-model = ["denoise", "lcc-denoise/own-model", "lcc-denoise-core/own-model"]
 test-support = []
 
 [dev-dependencies]
+lcc-fuzzkit = { workspace = true }
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lcc-testkit = { workspace = true }
 # the catalog-upgrade test marks a store as an older build left it

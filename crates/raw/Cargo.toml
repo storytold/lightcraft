@@ -35,6 +35,7 @@ jxl = ["dep:jxl-oxide"]
 testdata = []
 
 [dev-dependencies]
+lcc-fuzzkit = { workspace = true }
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lcc-testkit = { workspace = true }
 lcc-codecs = { workspace = true }

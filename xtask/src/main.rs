@@ -13,6 +13,7 @@ mod ci_quick;
 mod ci_report;
 mod dist;
 mod docs;
+mod fuzz;
 mod i18n;
 mod ico;
 mod immich;
@@ -47,6 +48,9 @@ commands:
   sil [workflow|raw|monkey] [--seed N] [--steps N]
                   software-in-the-loop: drive the real app headless through user workflows and a seeded
                   monkey, checking invariants (docs/testing-sil.md)
+  fuzz [TARGET…|all] [--secs N] [--rng N] [--list]
+                  time-boxed pure-Rust fuzzing (default 60 s per target, all targets): raw, tiff, codecs,
+                  meta, develop, lightroom, peer; crash inputs in target/fuzz/crashes/<target>/ (docs/testing-sil.md)
   bench-catalog [--photos N,N…] [--backend v3|v4] [--dir DIR]
                   catalog scale benchmark: import throughput, snapshot time, then (in a fresh process)
                   open time, peak RSS and filter latency (default 250000,1000000 photos, backend v4)
@@ -159,6 +163,7 @@ fn main() -> ExitCode {
         Some("assets") => assets::run(&root()),
         Some("bench") => bench::run(&root(), &rest),
         Some("sil") => cmd_sil(&rest),
+        Some("fuzz") => fuzz::run(&root(), &rest),
         Some("bench-catalog") => cmd_bench_catalog(&rest),
         Some("bench-keywords") => cmd_bench_keywords(&rest),
         Some("parity") => parity::run(&root(), rest.contains(&"--write")),

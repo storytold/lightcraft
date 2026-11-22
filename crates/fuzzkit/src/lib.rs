@@ -7,6 +7,12 @@
 //! raises the iteration count for longer local runs
 //! (e.g. `LCC_FUZZ_ITERS=200000 cargo test -p lcc-geo --test robust`).
 //!
+//! Long runs (`cargo xtask fuzz`, nightly CI) use three more variables: `LCC_FUZZ_SECS` time-boxes
+//! every harness (it runs until the deadline instead of a fixed count), `LCC_FUZZ_RNG` varies the
+//! mutation stream between runs, and `LCC_FUZZ_CRASH_DIR` receives each failing input as
+//! `<harness>-<hash>.bin`. `LCC_FUZZ_CORPUS` names a directory whose files [`corpus_seeds`] adds to a
+//! harness's built-in seeds (the gitignored `corpus/`).
+//!
 //! Used from dev-dependencies only. Pure computation; builds everywhere.
 
 #![forbid(unsafe_code)]
@@ -167,24 +173,113 @@ pub fn iterations(default: usize) -> usize {
     std::env::var("LCC_FUZZ_ITERS").ok().and_then(|s| s.parse().ok()).unwrap_or(default)
 }
 
+/// How long a harness runs: `LCC_FUZZ_SECS` (a deadline, for long runs) or a fixed count.
+struct Budget {
+    count: usize,
+    deadline: Option<std::time::Instant>,
+}
+
+impl Budget {
+    fn new(default: usize) -> Budget {
+        let secs = std::env::var("LCC_FUZZ_SECS").ok().and_then(|s| s.parse::<u64>().ok()).filter(|&s| s > 0);
+        let deadline = secs.and_then(|s| std::time::Instant::now().checked_add(std::time::Duration::from_secs(s)));
+        Budget { count: iterations(default), deadline }
+    }
+
+    fn more(&self, i: usize) -> bool {
+        match self.deadline {
+            Some(d) => std::time::Instant::now() < d,
+            None => i < self.count,
+        }
+    }
+}
+
+fn fnv(salt: u64, bytes: &[u8]) -> u64 {
+    bytes.iter().fold(salt, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x100_0000_01b3))
+}
+
+/// The generator seed for harness `name`, varied by `LCC_FUZZ_RNG` for long runs.
+fn rng_for(name: &str, salt: u64) -> Rng {
+    let extra = std::env::var("LCC_FUZZ_RNG").ok().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    Rng::new(fnv(salt, name.as_bytes()) ^ extra.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+}
+
+/// Files under `LCC_FUZZ_CORPUS` whose extension is one of `exts` (case-insensitive; `"*"` takes
+/// any), smallest first: at most `max_files`, each at most `max_bytes`. Empty when the variable is
+/// unset or the directory is unreadable, so harnesses always fall back on their built-in seeds.
+pub fn corpus_seeds(exts: &[&str], max_files: usize, max_bytes: u64) -> Vec<Vec<u8>> {
+    match std::env::var_os("LCC_FUZZ_CORPUS") {
+        Some(dir) => seeds_in(std::path::Path::new(&dir), exts, max_files, max_bytes),
+        None => Vec::new(),
+    }
+}
+
+fn seeds_in(dir: &std::path::Path, exts: &[&str], max_files: usize, max_bytes: u64) -> Vec<Vec<u8>> {
+    let mut found: Vec<(u64, std::path::PathBuf)> = Vec::new();
+    let mut stack = vec![(dir.to_path_buf(), 0usize)];
+    while let Some((d, depth)) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            let path = e.path();
+            let Ok(meta) = e.metadata() else { continue };
+            if meta.is_dir() {
+                if depth < 8 {
+                    stack.push((path, depth + 1));
+                }
+                continue;
+            }
+            let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+            if meta.len() <= max_bytes && exts.iter().any(|w| *w == "*" || w.eq_ignore_ascii_case(&ext)) {
+                found.push((meta.len(), path));
+            }
+        }
+    }
+    found.sort();
+    found.into_iter().take(max_files).filter_map(|(_, p)| std::fs::read(p).ok()).collect()
+}
+
+/// [`run`] over `builtin` seeds plus [`corpus_seeds`] for `exts` (up to 32 files of at most 8 MB):
+/// the shape of a `fuzz_target` harness that `cargo xtask fuzz` drives.
+pub fn run_target(name: &str, builtin: &[Vec<u8>], exts: &[&str], default: usize, check: impl FnMut(&[u8])) {
+    let mut all: Vec<Vec<u8>> = builtin.to_vec();
+    all.extend(corpus_seeds(exts, 32, 8 << 20));
+    let refs: Vec<&[u8]> = all.iter().map(Vec::as_slice).collect();
+    run(name, &refs, default, check);
+}
+
+/// Writes a failing input to `dir` as `<harness>-<hash>.bin` and returns its path.
+fn save_crash(dir: &std::path::Path, name: &str, input: &[u8]) -> std::io::Result<std::path::PathBuf> {
+    let file: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
+    let path = dir.join(format!("{file}-{:016x}.bin", fnv(0xcbf2_9ce4_8422_2325, input)));
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(&path, input)?;
+    Ok(path)
+}
+
 /// Runs `check` on every seed, every prefix of the shortest seed, and `iterations(default)`
-/// mutations of the seeds. A panic inside `check` fails the test; the harness name, iteration
-/// and offending input are printed on stderr first.
+/// mutations of the seeds (or, with `LCC_FUZZ_SECS`, mutations until that deadline). A panic
+/// inside `check` fails the test; the harness name, iteration and offending input are printed on
+/// stderr first (and saved under `LCC_FUZZ_CRASH_DIR` when set).
 pub fn run(name: &str, seeds: &[&[u8]], default: usize, mut check: impl FnMut(&[u8])) {
     for s in seeds {
+        let _report = Reporter { name, i: 0, input: s };
         check(s);
     }
     if let Some(short) = seeds.iter().min_by_key(|s| s.len()) {
         for n in 0..short.len().min(4096) {
-            check(short.get(..n).unwrap_or_default());
+            let input = short.get(..n).unwrap_or_default();
+            let _report = Reporter { name, i: n, input };
+            check(input);
         }
     }
     if seeds.is_empty() {
         return;
     }
-    let base = name.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3));
-    let mut rng = Rng::new(base);
-    for i in 0..iterations(default) {
+    let mut rng = rng_for(name, 0xcbf2_9ce4_8422_2325);
+    let budget = Budget::new(default);
+    let mut i = 0usize;
+    while budget.more(i) {
+        i += 1;
         let seed = seeds.get(rng.below(seeds.len())).copied().unwrap_or_default();
         let mut input = mutate(&mut rng, seed, 6);
         if rng.chance(8) {
@@ -305,9 +400,11 @@ pub fn mutate_json(rng: &mut Rng, seed: &serde_json::Value, max: usize) -> serde
 pub fn run_json(name: &str, seeds: &[&str], default: usize, mut check: impl FnMut(&str)) {
     let values: Vec<serde_json::Value> = seeds.iter().filter_map(|s| serde_json::from_str(s).ok()).collect();
     if !values.is_empty() {
-        let base = name.bytes().fold(0x8422_2325_cbf2_9ce4u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3));
-        let mut rng = Rng::new(base);
-        for i in 0..iterations(default) {
+        let mut rng = rng_for(name, 0x8422_2325_cbf2_9ce4);
+        let budget = Budget::new(default);
+        let mut i = 0usize;
+        while budget.more(i) {
+            i += 1;
             let seed = values.get(rng.below(values.len())).cloned().unwrap_or_default();
             let v = mutate_json(&mut rng, &seed, 4);
             let text = v.to_string();
@@ -329,6 +426,12 @@ impl Drop for Reporter<'_> {
         if std::thread::panicking() {
             let shown: String = String::from_utf8_lossy(self.input).chars().take(2000).collect();
             eprintln!("fuzz `{}` failed at iteration {} on input ({} bytes):\n{shown:?}", self.name, self.i, self.input.len());
+            if let Some(dir) = std::env::var_os("LCC_FUZZ_CRASH_DIR") {
+                match save_crash(std::path::Path::new(&dir), self.name, self.input) {
+                    Ok(path) => eprintln!("fuzz: crash input saved to {}", path.display()),
+                    Err(e) => eprintln!("fuzz: could not save the crash input under {}: {e}", std::path::Path::new(&dir).display()),
+                }
+            }
         }
     }
 }
@@ -345,5 +448,20 @@ mod tests {
         let mut n = 0;
         run("t", &[b"abc", b"{\"x\":1}"], 100, |_| n += 1);
         assert!(n >= 100);
+    }
+
+    #[test]
+    fn a_crash_input_is_saved_and_corpus_files_become_seeds() {
+        let dir = std::env::temp_dir().join(format!("lcc-fuzzkit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let saved = save_crash(&dir.join("crashes"), "raw/dng", b"boom").unwrap();
+        assert_eq!(std::fs::read(&saved).unwrap(), b"boom");
+        std::fs::create_dir_all(dir.join("a/b")).unwrap();
+        std::fs::write(dir.join("a/b/x.DNG"), b"dng").unwrap();
+        std::fs::write(dir.join("a/y.jpg"), b"jpeg").unwrap();
+        let seeds = seeds_in(&dir, &["dng"], 8, 1 << 20);
+        assert_eq!(seeds, vec![b"dng".to_vec()]);
+        assert!(seeds_in(&dir, &["dng"], 8, 1).is_empty(), "files over the size cap are skipped");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

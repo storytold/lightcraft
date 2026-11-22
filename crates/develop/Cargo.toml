@@ -18,4 +18,5 @@ miniz_oxide = { workspace = true }
 sha2 = { workspace = true }
 
 [dev-dependencies]
+lcc-fuzzkit = { workspace = true }
 proptest = { workspace = true }
