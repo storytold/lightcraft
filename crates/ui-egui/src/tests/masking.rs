@@ -622,6 +622,8 @@ fn brush_strokes_carry_auto_mask() {
 fn remove_spots_by_pointer_and_keyboard() {
     let mut h = detail("panel.remove");
     assert_eq!(h.app.ui.right, RightPanel::Remove);
+    // Heal: a spot with a source (Remove is content-aware, it has none)
+    h.app.ui.tool = "heal".into();
     let spots = |h: &Headless| develop(h).spots;
     // paint a spot: it's added with the brush's size/feather/opacity and selected
     let r = h.request("ui.set", json!({"removeFeather": 30.0, "removeOpacity": 80.0}), T);
