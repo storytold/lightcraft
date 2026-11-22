@@ -23,6 +23,12 @@ Scenarios (one `#[test]` each, run in parallel):
 | `sil_raw_workflow` | corpus raws (skipped without a corpus): import, Auto, sliders, WB, export JPEG and DNG, XMP, reopen |
 | `sil_monkey` | seeded random user actions (about 8 % with hostile arguments: bogus ids, out-of-range and huge numbers, control characters), with a reopen every 100 steps and at the end; it stops making virtual copies once the library holds 64 photos (`MONKEY_MAX_PHOTOS`), so a long run's library, and with it each step and its checks, stays inside the per-step timeout |
 
+`cargo xtask sil` also runs the sync merge properties (`crates/sync/src/proptests.rs`, no app process):
+merges of the group, of collections and of last-writer-wins values are commutative, associative and idempotent;
+copies that saw the same writes converge in any order; and no merge or sync session lets a device that doesn't own
+a collection take, fetch, add to or be told the photos of more than its owner granted. `cargo xtask sil sync` runs
+only these; `PROPTEST_CASES=5000` makes a deeper run, and a failure prints its minimal case.
+
 Invariants:
 
 - **Still alive:** every request gets an answer within 180 s (otherwise it counts as a deadlock), the process never

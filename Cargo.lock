@@ -5425,6 +5425,7 @@ dependencies = [
 name = "lcc-sync"
 version = "26.47.3"
 dependencies = [
+ "proptest",
  "serde",
  "serde_json",
 ]
