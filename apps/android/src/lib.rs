@@ -8,6 +8,7 @@
 //!
 //! Off Android the library is empty, so `cargo build --workspace` stays cheap.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![deny(clippy::indexing_slicing)]
 
 #[cfg(target_os = "android")]
 mod app;
