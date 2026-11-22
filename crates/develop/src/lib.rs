@@ -48,6 +48,17 @@ impl DevelopSettings {
         if let Some(detail) = v.get_mut("detail").and_then(Value::as_object_mut) {
             detail.insert("nr_outliers".into(), Value::Bool(self.detail.nr_outliers));
         }
+        // (Convert Negative is omitted while it is off at its defaults, and its picks and
+        // measurement while unset: state them, so a copy from a photo that isn't a negative switches
+        // the conversion off, and one without picks clears the photo's own)
+        if let (Some(o), Ok(mut n)) = (v.as_object_mut(), serde_json::to_value(&self.negative)) {
+            if let Some(n) = n.as_object_mut() {
+                for k in ["base", "gray", "measured"] {
+                    n.entry(k).or_insert(Value::Null);
+                }
+            }
+            o.insert("negative".into(), n);
+        }
         v
     }
 
@@ -88,6 +99,7 @@ impl DevelopSettings {
                 controls::set(self, c.id, v);
             }
         }
+        self.negative = self.negative.sanitized();
         let c = &mut self.curve;
         for p in [&mut c.master, &mut c.red, &mut c.green, &mut c.blue].into_iter().flatten() {
             *p = lightcraft_geom::Point::new(p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0));
@@ -196,6 +208,9 @@ impl DevelopSettings {
             Section::Profile => {
                 self.profile = Profile::default();
             }
+            // the preset, the mode, the picks and the measurement are not controls: the whole
+            // conversion goes back to off
+            Section::Negative => self.negative = Negative::default(),
             _ => {}
         }
     }
@@ -225,6 +240,8 @@ impl DevelopSettings {
     }
 }
 
+#[cfg(test)]
+mod tests_negative;
 #[cfg(test)]
 mod tests_process;
 
