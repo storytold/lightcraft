@@ -1513,6 +1513,56 @@ fn native_video_reimport_repairs_kind_without_losing_edits_or_memberships() {
 }
 
 #[test]
+#[cfg(any(target_os = "linux", windows))]
+fn catalog_import_finds_the_wal_for_a_non_unicode_filename() {
+    #[cfg(target_os = "linux")]
+    let mut name = {
+        use std::os::unix::ffi::OsStringExt;
+        std::ffi::OsString::from_vec(vec![0xff])
+    };
+    #[cfg(windows)]
+    let mut name = {
+        use std::os::windows::ffi::OsStringExt;
+        std::ffi::OsString::from_wide(&[0xd800])
+    };
+    name.push(format!("-lightcraft-catalog-wal-{}.lrcat", std::process::id()));
+    let path = std::env::temp_dir().join(&name);
+    name.push("-wal");
+    let wal_path = std::env::temp_dir().join(&name);
+
+    let mut tables = photo_tables(("/catalog/", ""));
+    let main = native_catalog(&tables);
+    tables[3].2[6] = SqlValue::Integer(3);
+    let updated = native_catalog(&tables);
+
+    // The fixture's fifth page holds Adobe_images. Commit its new rating in the WAL.
+    const PAGE_SIZE: usize = 2048;
+    let mut wal = vec![0; 32 + 24];
+    wal[..4].copy_from_slice(&0x377f0682u32.to_be_bytes());
+    wal[4..8].copy_from_slice(&3_007_000u32.to_be_bytes());
+    wal[8..12].copy_from_slice(&(PAGE_SIZE as u32).to_be_bytes());
+    let header_sum = wal_checksum(&wal[..24], false, (0, 0));
+    wal[24..28].copy_from_slice(&header_sum.0.to_be_bytes());
+    wal[28..32].copy_from_slice(&header_sum.1.to_be_bytes());
+    wal.extend_from_slice(&updated[4 * PAGE_SIZE..5 * PAGE_SIZE]);
+    let frame = &mut wal[32..];
+    frame[..4].copy_from_slice(&5u32.to_be_bytes());
+    frame[4..8].copy_from_slice(&5u32.to_be_bytes());
+    let frame_sum = wal_checksum(&frame[24..], false, wal_checksum(&frame[..8], false, header_sum));
+    frame[16..20].copy_from_slice(&frame_sum.0.to_be_bytes());
+    frame[20..24].copy_from_slice(&frame_sum.1.to_be_bytes());
+
+    std::fs::write(&path, main).unwrap();
+    let before = read(&path).unwrap();
+    std::fs::write(&wal_path, wal).unwrap();
+    let after = read(&path);
+    std::fs::remove_file(wal_path).unwrap();
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(number(&before.photos[0].image, "rating"), 5);
+    assert_eq!(number(&after.unwrap().photos[0].image, "rating"), 3);
+}
+
+#[test]
 fn reads_native_sqlite_tables_without_lightroom_or_external_processes() {
     let bytes = native_catalog(&photo_tables(("/catalog/", "")));
     let path = std::env::temp_dir().join(format!("lightcraft-native-catalog-{}.lrcat", std::process::id()));

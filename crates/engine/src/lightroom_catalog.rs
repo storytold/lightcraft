@@ -511,7 +511,10 @@ pub fn read_source(
 /// place and reporting `source` as where it came from.
 fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, done: &AtomicUsize) -> Result<CatalogImport, String> {
     let before = std::fs::metadata(path).map_err(|e| e.to_string())?;
-    let wal_path = PathBuf::from(format!("{}-wal", path.display()));
+    // Preserve the native filename when the catalog path cannot be represented as Unicode.
+    let mut wal_path = path.as_os_str().to_os_string();
+    wal_path.push("-wal");
+    let wal_path = PathBuf::from(wal_path);
     let wal_before = std::fs::metadata(&wal_path).ok().map(|m| (m.len(), m.modified().ok()));
     let main = FileSource::open(path)?;
     let wal = match std::fs::metadata(&wal_path) {
