@@ -4924,6 +4924,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lcc-fidelity"
+version = "26.47.3"
+dependencies = [
+ "lcc-camprof",
+ "lcc-color",
+ "lcc-raster",
+]
+
+[[package]]
 name = "lcc-filters"
 version = "26.47.3"
 dependencies = [
@@ -5235,6 +5244,7 @@ dependencies = [
  "lcc-brand",
  "lcc-color",
  "lcc-develop",
+ "lcc-fidelity",
  "lcc-filters",
  "lcc-genfill",
  "lcc-geom",

@@ -27,6 +27,7 @@ lcc-testkit = { workspace = true }
 wat = "1.228"
 dhat = { workspace = true }
 lcc-scenes = { workspace = true }
+lcc-fidelity = { workspace = true }
 proptest = { workspace = true }
 image = { workspace = true }
 serde_json = { workspace = true }

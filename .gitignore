@@ -30,3 +30,4 @@ __pycache__/
 /docs/manual-site/node_modules
 /docs/manual-site/dist
 /docs/manual-site/.astro
+/fidelity-refs

@@ -49,6 +49,9 @@ commands:
   sil [workflow|raw|monkey] [--seed N] [--steps N]
                   software-in-the-loop: drive the real app headless through user workflows and a seeded
                   monkey, checking invariants (docs/testing-sil.md)
+  fidelity [--regen] [--refs DIR]
+                  render-fidelity suite: tools × processes × scenes/corpus against local references
+                  (default fidelity-refs/); --regen writes them from the current renderer (docs/testing-sil.md)
   fuzz [TARGET…|all] [--secs N] [--rng N] [--list]
                   time-boxed pure-Rust fuzzing (default 60 s per target, all targets): raw, tiff, codecs,
                   meta, develop, lightroom, peer; crash inputs in target/fuzz/crashes/<target>/ (docs/testing-sil.md)
@@ -167,6 +170,7 @@ fn main() -> ExitCode {
         Some("assets") => assets::run(&root()),
         Some("bench") => bench::run(&root(), &rest),
         Some("sil") => cmd_sil(&rest),
+        Some("fidelity") => cmd_fidelity(&rest),
         Some("fuzz") => fuzz::run(&root(), &rest),
         Some("bench-catalog") => cmd_bench_catalog(&rest),
         Some("bench-keywords") => cmd_bench_keywords(&rest),
@@ -3845,6 +3849,31 @@ mod corpus_tests {
     }
 }
 
+/// `cargo xtask fidelity`: the render-fidelity reference suite (`crates/pipeline/tests/it/fidelity.rs`,
+/// docs/testing-sil.md). `--regen` writes the local references; otherwise it compares against them.
+fn cmd_fidelity(args: &[&str]) -> Result<(), String> {
+    let mut c = cargo();
+    c.args(["test", "-p", "lcc-pipeline", "--test", "it", "fidelity::"]);
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--regen" => {
+                c.env(env_name("FIDELITY_REGEN"), "1");
+            }
+            "--refs" => {
+                let v = args.get(i + 1).ok_or("--refs needs a folder")?;
+                c.env(env_name("FIDELITY_REFS"), v);
+                i += 1;
+            }
+            other => return Err(format!("fidelity: unknown option `{other}`")),
+        }
+        i += 1;
+    }
+    c.args(["--", "--nocapture"]);
+    let status = c.status().map_err(|e| format!("cargo test: {e}"))?;
+    if status.success() { Ok(()) } else { Err("render fidelity outside tolerance (aggregate numbers above)".into()) }
+}
+
 /// `cargo xtask sil`: the SIL harness (`apps/cli/tests/sil.rs`, docs/testing-sil.md).
 fn cmd_sil(args: &[&str]) -> Result<(), String> {
     let mut c = cargo();
@@ -3874,6 +3903,8 @@ fn cmd_sil(args: &[&str]) -> Result<(), String> {
         if sync_only {
             return Ok(());
         }
+        // the render-fidelity suite: compares when local references exist, skips otherwise
+        cmd_fidelity(&[])?;
     }
     if let Some(f) = &filter {
         c.arg(f);

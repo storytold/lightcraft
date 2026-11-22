@@ -68,6 +68,43 @@ is printed at the start, so a red run can be reproduced. Environment variables: 
 The nightly corpus job ([`ci.md`](ci.md#nightly)) runs the full `cargo xtask ci`, so `sil_raw_workflow` runs there
 on the pinned raw corpus instead of skipping; its skip, like every other, counts against `ci/skip-allowlist.toml`.
 
+## Render fidelity (reference suite)
+
+The SIL scenarios above never compare images. The render-fidelity suite does, with numeric tolerances and no
+goldens in the repository (`crates/pipeline/tests/it/fidelity.rs`, measures in `crates/fidelity`):
+
+- **Inputs:** four procedural `lcc-scenes` photos, plus up to four CC0 JPEGs from the gitignored `corpus/images/`
+  when it exists, rendered at 128 px on the long edge.
+- **Tools:** the unedited render and each of Exposure, Contrast, Highlights, Shadows, Whites, Blacks, Vibrance,
+  Saturation, Temp, Texture, Clarity, Dehaze, Sharpening and Luminance NR pushed to a telling value, each under
+  **every process version**.
+- **References:** stored locally in `fidelity-refs/` (gitignored; `--refs DIR` or `<PREFIX>_FIDELITY_REFS` names
+  another folder), one small file per tool, process and input. They never get committed.
+- **Measure:** per render, mean and 95th-percentile CIEDE2000 (sRGB → L\*a\*b\* D50) and SSIM of the luma; per tool,
+  the mean of the means, the worst 95th percentile and the lowest SSIM. Only these aggregates are committed, as the
+  per-tool tolerances in `crates/pipeline/tests/fidelity/tolerances.json` (`"*"` for tools without their own
+  entry). A run writes the aggregates to `fidelity-refs/report.json` and prints them.
+
+```sh
+cargo xtask fidelity --regen        # write the references from the current renderer
+cargo xtask fidelity                # compare against them (also part of `cargo xtask sil`)
+cargo xtask fidelity --refs DIR     # another reference folder
+```
+
+Without references the test records an `Input` skip and passes. **Process-version retunes are gated on it**
+([process-versions](process-versions.md)): before changing how a process renders, regenerate the references on
+`main`, make the change, and run the suite. Every process except the new one must stay within tolerance; the new
+process's numbers show how far the retune moved each tool. References made by another editor from the same inputs
+can be put in the folder to measure against it; like every other editor's pixels, they stay on the machine, and
+only aggregate numbers may be committed.
+
+**ColorChecker chart.** `lcc_fidelity::chart` draws a synthetic ColorChecker Classic (X-Rite's published values,
+the profiler's `COLORCHECKER_CLASSIC`) in any linear RGB space, and `lcc_fidelity::measure_chart` reads each patch
+of a render back and gives its ΔE2000. `the_colorchecker_chart_survives_the_unedited_pipeline` (always runs, no
+references) bounds the unedited pipeline's mean ΔE2000 on the chart under every process
+(`colorchecker_mean_de2000` in the tolerances file) and checks that removing the colour (Saturation −100) moves it. Per-camera
+checks (plan item 3.1) render the chart through a camera's profile and use the same measure.
+
 ## When it fails
 
 The panic message names the broken invariant and shows the last steps. It also gives:

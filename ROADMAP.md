@@ -1,6 +1,6 @@
 # Roadmap
 
-*Last updated 2026-11-15 (version 0.8.2). Revision history: [Log](#log).*
+*Last updated 2026-11-23 (version 0.8.2). Revision history: [Log](#log).*
 
 Milestones toward full Adobe Lightroom Classic parity, with the Classic shell and output modules (Map, Book, Slideshow,
 Print, Web, publish) and Immich integration as Chromaforge's own focus on top of the upstream engine. Estimates are for
@@ -63,7 +63,9 @@ Priorities, in order. Each points at tracker rows in [`docs/parity-checklist.md`
 3. **Verified camera coverage** (LR-IMP-CAMERA-COVERAGE, P0): a CC0 sample per model in the corpus, each decoded and
    checked for plausible colour; fix per-model bugs (#85).
 4. **Render fidelity suite** (LR-BEHAV-RENDER-FIDELITY, P1): measure our output against Lightroom on the same CC0 raws
-   (references stay in the local `plan/`), then tune against the numbers.
+   (references stay local), then tune against the numbers. The suite itself (`cargo xtask fidelity`: tools × process
+   versions against local references, aggregate ΔE2000 / SSIM tolerances, synthetic ColorChecker) landed 2026-11-23;
+   Lightroom references are still to be measured.
 5. **Lens profiles of our own** (LR-EDIT-OPTICS-PROFILE, P1): DNG, Panasonic / Leica RW2 and Sony ILCE-7RM4A Bayer ARW
    embedded distortion are supported; broaden validation and decode remaining vignetting / lateral CA metadata.
 6. **AI model strategy** (maintainer decision): which permissively licensed models (or our own training) for
@@ -230,6 +232,8 @@ history/snapshots remain source data, and smart collections import current membe
 database is read-only; the app owns subsequent edits. See `docs/lightroom-catalog-import.md`.
 
 ## Log
+- 2026-11-23: render-fidelity reference suite (LR-BEHAV-RENDER-FIDELITY, gap 3): `cargo xtask fidelity`, local
+  references, aggregate ΔE2000 / SSIM tolerances, synthetic ColorChecker check; retunes gated on it.
 - 2026-11-15: M6 row: Depth Range masks are built (estimated depth, Depth Anything V2 Small) and now in the Masks
   panel's Create New Mask (issue #1144).
 - 2026-11-01: IMM-SIDECARS: XMP sidecars both ways — pull the sidecar Immich stores for a linked asset (metadata

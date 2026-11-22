@@ -63,6 +63,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("raw", Class::Layer(1)),
     ("camdb", Class::Layer(1)),
     ("camprof", Class::Layer(1)),
+    // render-fidelity measures (ΔE2000, SSIM, the synthetic ColorChecker) for the SIL fidelity suite
+    ("fidelity", Class::Layer(1)),
     ("codecs", Class::Layer(1)),
     ("meta", Class::Layer(1)),
     ("develop", Class::Layer(1)),
@@ -147,6 +149,8 @@ pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     // camdb organises the colour data the raw decoder uses
     &["raw", "camdb"],
     &["raw", "camprof"],
+    // the fidelity chart is the profiler's ColorChecker reference
+    &["camprof", "fidelity"],
     // the PDF writer embeds fonts laid out by the type engine
     &["text", "pdf"],
     // L3: the Immich client writes remote links into the catalog

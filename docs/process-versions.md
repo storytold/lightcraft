@@ -52,6 +52,11 @@ outline is output that is neither in the photo nor in the edit, not a look anyon
 
 ## Adding a process
 
+Before a retune, regenerate the render-fidelity references on `main` (`cargo xtask fidelity --regen`,
+[testing-sil](testing-sil.md#render-fidelity-reference-suite)) and run `cargo xtask fidelity` on the change: the
+existing processes must stay within tolerance.
+
+
 1. Add a variant to `Process` (`V2`), append it to `Process::ALL` (oldest first), give it its number in
    `Process::version` and make it `Process::LATEST`.
 2. The compiler then points at every `match` on `Process`. The base tone map is chosen in one place,
