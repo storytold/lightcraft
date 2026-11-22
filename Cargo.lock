@@ -5346,6 +5346,7 @@ dependencies = [
  "lcc-brand",
  "lcc-codecs",
  "lcc-color",
+ "lcc-fuzzkit",
  "lcc-geom",
  "lcc-hash",
  "lcc-meta",
@@ -5419,6 +5420,7 @@ dependencies = [
 name = "lcc-sync"
 version = "26.47.3"
 dependencies = [
+ "proptest",
  "serde",
  "serde_json",
 ]
