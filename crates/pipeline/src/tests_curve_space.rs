@@ -44,7 +44,9 @@ fn oklab(s: &DevelopSettings, space: OutputSpace) -> Vec<[f32; 3]> {
     let r = render(&chart(), &SourceInfo::default(), s, &req);
     let Some(DeepSamples::F32(v)) = r.deep.map(|d| d.samples) else { panic!("no float render") };
     let m = space.rgb_space().to_space(&lcc_color::REC2020).to_f32();
-    v.chunks_exact(3)
+    v.as_chunks::<3>()
+        .0
+        .iter()
         .map(|c| {
             let l = [0, 1, 2].map(|i| m[i][0] * c[0] + m[i][1] * c[1] + m[i][2] * c[2]);
             lcc_color::perceptual::oklab_from_2020(l)
