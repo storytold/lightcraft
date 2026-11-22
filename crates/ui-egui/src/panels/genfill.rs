@@ -6,6 +6,7 @@
 //!
 //! Nothing is sent until Generate is clicked, and never to a provider whose terms the user has
 //! not accepted in the consent dialog, which shows the crop that will be uploaded.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::RichText;
 use serde_json::{Value, json};

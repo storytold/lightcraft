@@ -1,5 +1,6 @@
 //! The Show Alternatives bar: over the frames around a photo that didn't work (from its folder on
 //! disk, imported or not), what this view is, Apply the same edit, Import Selected and Back.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use serde_json::json;
 

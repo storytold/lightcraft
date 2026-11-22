@@ -10,6 +10,7 @@
 //! Every decision is a suggestion confirmed or not: nothing is named without the user saying so. A confirmation is a
 //! name on a face, so the catalog's undo takes it back; a rejection changes no photo, so the toast offers the way back
 //! (`faces.undoSuggestionDecision`).
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::json;

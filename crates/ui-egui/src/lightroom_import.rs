@@ -3,6 +3,7 @@
 //! Reading a catalog, probing its originals and staging its archive can take minutes on a
 //! removable or network drive.  This task keeps that work off the owner thread, commits prepared
 //! data only on the owner thread, then finishes the archive index on a worker.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -357,9 +357,10 @@ pub fn overlap_bands(h: [f32; 3]) -> ([(f32, f32, [bool; 3]); 3], usize) {
     // claim a band
     let hs: [f32; 3] = h.map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 });
     let mut order = [0usize, 1, 2];
-    order.sort_by(|a, b| hs[*a].total_cmp(&hs[*b]));
+    let at = |k: usize| hs.get(k).copied().unwrap_or(0.0);
+    order.sort_by(|a, b| at(*a).total_cmp(&at(*b)));
     // the same heights, shortest first, with `order` saying which channel each came from
-    let sorted: [f32; 3] = order.map(|k| hs[k]);
+    let sorted: [f32; 3] = order.map(at);
     let mut out = [(0.0f32, 0.0f32, [false; 3]); 3];
     let mut n = 0;
     for (k, (from, to)) in [(0usize, (0.0, sorted[0])), (1, (sorted[0], sorted[1])), (2, (sorted[1], sorted[2]))] {

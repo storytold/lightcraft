@@ -1,6 +1,7 @@
 //! The Library module's Quick Develop panel (Classic): changes for every selected photo at once.
 //! The arrows add a step to each photo's own value (`develop.quickAdjust`); the menus and Auto
 //! Tone set one choice on each (`develop.quickSet`); each click is one undo step.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use serde_json::json;
 

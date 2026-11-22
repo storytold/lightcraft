@@ -10,6 +10,7 @@
 //! with it first; ↑ / ↓ move through them, Enter picks, Esc closes. Widget ids for tests and agents:
 //! `albumPicker:<id>` (the button), `albumPickerSearch:<id>`, `albumPickerFolder:<folder>:<id>`
 //! and `albumPickerItem:<album>:<id>`.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::{Rect, Response, RichText, Ui, vec2};
 

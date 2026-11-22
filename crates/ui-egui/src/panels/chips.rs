@@ -143,7 +143,7 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
     child.spacing_mut().item_spacing.x = 8.0;
-    let hidden = &chips[shown..];
+    let hidden = chips.get(shown..).unwrap_or_default();
     if !hidden.is_empty() {
         let more = crate::widgets::text_button(&mut child, "chipsMore", &crate::i18n::tr_format!("+{} more", hidden.len()), false);
         egui::Popup::menu(&more).show(|ui| {

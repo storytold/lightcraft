@@ -127,11 +127,11 @@ fn a_scan_is_written_and_read_back_on_the_photo() {
     let scan = QualityScan { compression: None, ..scanned(50.0, 70.0, 25.0) };
     let v = serde_json::to_value(scan).unwrap();
     assert!(v.get("compression").is_none(), "an unmeasured factor is absent: {v}");
-    assert!(v.get("flagWritten").is_none(), "no flag written: absent, and a scan of an older build reads with none");
+    assert!(v.get("flag_written").is_none(), "no flag written: absent, and a scan of an older build reads with none");
     // the flag a scan wrote is kept with the score, so the next scan may change it (and only it)
     let scan = QualityScan { flag_written: Some(Flag::Pick), ..scanned(50.0, 70.0, 25.0) };
     let v = serde_json::to_value(scan).unwrap();
-    assert_eq!(v["flagWritten"], "pick", "{v}");
+    assert_eq!(v["flag_written"], "pick", "{v}");
     assert_eq!(serde_json::from_value::<QualityScan>(v).unwrap(), scan);
 }
 
@@ -152,8 +152,8 @@ fn the_rule_fields_read_the_stored_scan() {
     assert_eq!(rules(serde_json::json!({"field": "qualitySharpness", "op": "between", "value": [80, 90]})), [1]);
     assert_eq!(rules(serde_json::json!({"field": "qualityVerdict", "op": "is", "value": "accepted"})), [1]);
     assert_eq!(rules(serde_json::json!({"field": "qualityVerdict", "op": "isNot", "value": "accepted"})), [2]);
-    // — but an unscored photo has no number: a comparison it can't meet keeps it out
-    assert_eq!(rules(serde_json::json!({"field": "qualityScore", "op": "lt", "value": 100})), Vec::<u64>::new());
+    // but an unscored photo has no number: a comparison it can't meet keeps it out
+    assert_eq!(rules(serde_json::json!({"field": "qualityScore", "op": "lt", "value": 100})), [1], "the unscored photo 2 stays out");
     // the fields are grouped for the rule editor, under their own heading
     for field in ["qualityScore", "qualitySharpness", "qualityNoise", "qualityExposure", "qualityCompression", "qualityVerdict"] {
         assert_eq!(rules::field_group(field), Some("Image Quality"), "{field}");

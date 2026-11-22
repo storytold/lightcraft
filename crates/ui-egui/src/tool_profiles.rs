@@ -8,6 +8,7 @@
 //! group, slider or option this build doesn't know keeps the rest: the unknown ids are dropped
 //! when the settings are read, never an error. `view.toolProfile` picks the profile in use,
 //! `view.toolProfileEdit` changes the user's own (the Settings page and the panel's row run them).
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::sync::LazyLock;
 

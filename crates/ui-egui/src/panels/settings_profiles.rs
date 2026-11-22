@@ -1,5 +1,6 @@
 //! Settings ▸ Profiles (ported from OneSlips, LR-PROF-MANAGE / LR-PROF-BODY): each camera body's own
 //! camera profile, and the way to the Profile Manager (`panels::profile_manager`).
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use serde_json::{Value, json};
 

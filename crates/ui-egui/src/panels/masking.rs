@@ -1655,11 +1655,12 @@ fn scope_words(scope: &serde_json::Value) -> String {
 fn roles_window(app: &mut LccApp, ctx: &egui::Context) {
     let tr = crate::i18n::tr;
     let r = app.run("people.roles", json!({})).unwrap_or_default();
-    let here: Vec<(String, String)> = r["here"]
-        .as_array()
+    let here: Vec<(String, String)> = r
+        .get("here")
+        .and_then(serde_json::Value::as_array)
         .map(|v| v.iter().filter_map(|b| Some((b["role"].as_str()?.to_string(), b["person"].as_str()?.to_string()))).collect())
         .unwrap_or_default();
-    let all: Vec<serde_json::Value> = r["roles"].as_array().cloned().unwrap_or_default();
+    let all: Vec<serde_json::Value> = r.get("roles").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
     let mut open = true;
     let mut clear: Option<(String, serde_json::Value)> = None;
     egui::Window::new(tr("Roles")).id(egui::Id::new("rolesWindow")).open(&mut open).collapsible(false).resizable(false).default_width(320.0).show(
@@ -1981,8 +1982,8 @@ fn component_row_menu(app: &mut LccApp, ui: &mut egui::Ui, mask: u32, k: usize, 
     let mut run = |ui: &mut egui::Ui, text: &str, p: serde_json::Value| {
         if ui.button(menu_label(text)).clicked() {
             let mut p = p;
-            p["id"] = json!(mask);
-            p["component"] = json!(k);
+            crate::json_set(&mut p, "id", json!(mask));
+            crate::json_set(&mut p, "component", json!(k));
             let _ = app.run("mask.component", p);
             ui.close();
         }

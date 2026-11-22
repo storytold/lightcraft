@@ -1,5 +1,6 @@
 //! Keeps the engine's focus-point reader (`focus.pump`) and shared ML indexer (`ml.pump`) going at the pace the face
 //! scan uses (nothing new while the user drags, types or scrolls). Their progress is their rows in the activity stack.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use serde_json::json;
 

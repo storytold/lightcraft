@@ -2505,7 +2505,7 @@
   "Scan": "Skenovat",
   "Scan photos that have a score already (rescan all)": "Skenovat i fotografie, které už skóre mají (vše znovu)",
   "Scanning image quality": "Skenování kvality obrazu",
-  "Scores photos for technical quality — sharpness, noise, exposure and JPEG artifacts — and keeps each score on the photo so the Library can filter and sort by it.": "Hodnotí fotografie podle technické kvality — ostrost, šum, expozice a artefakty JPEG — a ukládá každé skóre k fotografii, aby knihovna mohla podle něj filtrovat a řadit.",
+  "Scores photos for technical quality (sharpness, noise, exposure and JPEG artifacts) and keeps each score on the photo so the Library can filter and sort by it.": "Hodnotí fotografie podle technické kvality (ostrost, šum, expozice a artefakty JPEG) a ukládá každé skóre k fotografii, aby knihovna mohla podle něj filtrovat a řadit.",
   "Screen Edges to Keep Clear": "Okraje obrazovky, které mají zůstat volné",
   "Screen Mode": "Režim obrazovky",
   "Scroll By Row": "Posouvat po řádcích",

@@ -4,6 +4,7 @@
 //! name they suggest; clicking that name accepts it for that face alone.
 //!
 //! The engine does the looking (`faces.unnamed`) and the naming (`faces.nameFaces`); this draws and selects.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::sync::Arc;
 

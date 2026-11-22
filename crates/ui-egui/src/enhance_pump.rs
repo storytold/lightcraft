@@ -1,5 +1,6 @@
 //! Keeps Photo ▸ Enhance going (`enhance.pump`): the engine makes Raw Details / Super Resolution DNGs on a worker
 //! thread, and this imports the finished ones. Its progress is its row in the activity stack.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use serde_json::json;
 

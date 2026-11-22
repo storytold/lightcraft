@@ -2656,7 +2656,7 @@
   "Scan": "Skannaa",
   "Scan photos that have a score already (rescan all)": "Skannaa myös kuvat, joilla on jo pistemäärä (skannaa kaikki uudelleen)",
   "Scanning image quality": "Skannataan kuvanlaatua",
-  "Scores photos for technical quality — sharpness, noise, exposure and JPEG artifacts — and keeps each score on the photo so the Library can filter and sort by it.": "Pisteyttää kuvat teknisen laadun mukaan – terävyys, kohina, valotus ja JPEG-artefaktit – ja tallentaa pisteen kuvaan, jotta kirjasto voi suodattaa ja lajitella sen mukaan.",
+  "Scores photos for technical quality (sharpness, noise, exposure and JPEG artifacts) and keeps each score on the photo so the Library can filter and sort by it.": "Pisteyttää kuvat teknisen laadun mukaan (terävyys, kohina, valotus ja JPEG-artefaktit) ja tallentaa pisteen kuvaan, jotta kirjasto voi suodattaa ja lajitella sen mukaan.",
   "Screen Edges to Keep Clear": "Vapaana pidettävät näytön reunat",
   "Screen Mode": "Näyttötila",
   "Scroll By Row": "Vieritä riveittäin",

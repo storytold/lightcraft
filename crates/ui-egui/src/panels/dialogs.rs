@@ -1,4 +1,5 @@
 //! Modal dialogs (new album, rename, create preset, choose settings to copy, export, about, shortcuts).
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use lcc_develop::{ControlSpec, Section, SettingsGroup, SettingsPick, Track};
 use serde_json::json;
@@ -583,7 +584,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     ];
                     ui.label(
                         egui::RichText::new(crate::i18n::tr(
-                            "Scores photos for technical quality — sharpness, noise, exposure and JPEG artifacts — and keeps each score on the photo so the Library can filter and sort by it.",
+                            "Scores photos for technical quality (sharpness, noise, exposure and JPEG artifacts) and keeps each score on the photo so the Library can filter and sort by it.",
                         ))
                         .color(t.text_label),
                     );
