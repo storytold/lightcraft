@@ -440,6 +440,7 @@ pub(crate) fn is_apple_proraw(raw: &lightcraft_raw::RawImage) -> bool {
 /// [`PRORAW_TONE_KNOTS`]: lightcraft_pipeline::proraw::PRORAW_TONE_KNOTS
 pub(crate) fn proraw_tone(raw: &lightcraft_raw::RawImage, baseline_ev: f32, pixels: &[[f32; 3]]) -> Option<lightcraft_pipeline::proraw::ProRawTone> {
     use lightcraft_pipeline::proraw::{PRORAW_TONE_KNOTS, ProRawTone, lr_key};
+    use lightcraft_raw::profile::ToneCurveEval;
     let curve = raw.color.profile.tone_curve.as_ref().filter(|_| is_apple_proraw(raw))?;
     let last = (PRORAW_TONE_KNOTS - 1) as f32;
     let knots = (0..PRORAW_TONE_KNOTS)
