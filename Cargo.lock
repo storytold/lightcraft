@@ -4308,7 +4308,6 @@ dependencies = [
  "craft-color",
  "craft-color-transform",
  "craft-develop",
- "craft-geom",
  "craft-image-codecs",
  "craft-jxl",
  "craft-raw",

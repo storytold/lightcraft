@@ -6,6 +6,13 @@ pub use craft_develop::sensor::opcodes::{apply_list, is_applied};
 pub use craft_raw::opcodes::{Area, Opcode, OpcodeLists, WR2_LEN, applied_ops, parse_list, wr2_factor, write_list};
 
 #[cfg(test)]
+use crate::Cfa;
+#[cfg(test)]
+const MAX_LIST_PASSES: usize = 32;
+#[cfg(test)]
+const MAX_LIST3_PASSES: usize = 8;
+
+#[cfg(test)]
 pub(crate) fn max_radius(cx: f64, cy: f64, w: f64, h: f64) -> f64 {
     let corners = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)];
     corners.iter().map(|&(x, y)| (x - cx).hypot(y - cy)).fold(0.0f64, f64::max).max(1e-9)
