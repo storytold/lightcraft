@@ -3,6 +3,7 @@
 //! Reading a catalog, probing its originals and staging its archive can take minutes on a
 //! removable or network drive.  This task keeps that work off the owner thread, commits prepared
 //! data only on the owner thread, then finishes the archive index on a worker.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -376,8 +377,11 @@ fn show_result(app: &mut LccApp) {
     }
 }
 
+/// Most warnings or failures the result window lists; the rest are counted (the full report stays in the command result).
+const MAX_LINES: usize = 10_000;
+
 /// The lasting result window for an inspect or import: counts, failures, missing originals, the
-/// skipped images (one line, in the UI language) and at most eight warnings.
+/// skipped images (one line, in the UI language) and the warnings (all but a pathological report's).
 fn result_dialog(value: &Value, summary: &str, capture_one: bool) -> crate::state::Dialog {
     let report = value.get("report").unwrap_or(value);
     let mut details = Vec::new();
@@ -389,8 +393,12 @@ fn result_dialog(value: &Value, summary: &str, capture_one: bool) -> crate::stat
         ));
     }
     if let Some(failures) = report["failed"].as_array() {
-        details
-            .extend(failures.iter().take(4).map(|failure| format!("{}: {}", failure[0].as_str().unwrap_or(""), failure[1].as_str().unwrap_or(""))));
+        details.extend(
+            failures.iter().take(MAX_LINES).map(|failure| format!("{}: {}", failure[0].as_str().unwrap_or(""), failure[1].as_str().unwrap_or(""))),
+        );
+        if failures.len() > MAX_LINES {
+            details.push(crate::i18n::tr_format!("{count} more failures.", count = failures.len() - MAX_LINES));
+        }
     }
     let missing = report["missing"].as_array().map_or(0, Vec::len);
     if missing > 0 {
@@ -412,10 +420,10 @@ fn result_dialog(value: &Value, summary: &str, capture_one: bool) -> crate::stat
         details.push(warning.to_string());
     }
     if let Some(warnings) = report["warnings"].as_array() {
-        // Results can contain one warning per image; keep the dialog bounded.
-        details.extend(warnings.iter().take(8).filter_map(Value::as_str).map(str::to_string));
-        if warnings.len() > 8 {
-            details.push(crate::i18n::tr_format!("{count} more warnings.", count = warnings.len() - 8));
+        // Every warning is listed (the dialog scrolls and copies them, #1309); only a pathological report is capped.
+        details.extend(warnings.iter().take(MAX_LINES).filter_map(Value::as_str).map(str::to_string));
+        if warnings.len() > MAX_LINES {
+            details.push(crate::i18n::tr_format!("{count} more warnings.", count = warnings.len() - MAX_LINES));
         }
     }
     let first = value.get("error").is_none().then(|| report["mapping"].as_object()?.values().filter_map(Value::as_u64).min()).flatten();
@@ -809,10 +817,33 @@ mod tests {
         let skipped: Vec<_> = (0..500).map(|i| json!({"image": i, "reason": "missingFile"})).collect();
         let value = json!({"report": {"warnings": warnings, "skipped": skipped}});
         let crate::state::Dialog::LightroomResult { details, .. } = result_dialog(&value, "done", false) else { panic!("not a Lightroom result") };
-        // one line for the skipped images, then the usual eight warnings and the rest counted
-        assert_eq!(details.len(), 10, "{details:?}");
+        // one line for the skipped images, then every warning
+        assert_eq!(details.len(), 11, "{details:?}");
         assert!(details[0].starts_with("500 catalog images were not imported"));
-        assert_eq!(details[9], "2 more warnings.");
+        assert_eq!(&details[1..], warnings.as_slice());
+    }
+
+    /// Large imports list every warning and failure (#1309), not the first eight; only a pathological report is capped.
+    #[test]
+    fn result_lists_every_warning_and_failure() {
+        let warnings: Vec<_> = (0..90).map(|i| format!("w{i}")).collect();
+        let failed: Vec<_> = (0..12).map(|i| json!([format!("f{i}.nef"), "unreadable"])).collect();
+        let value = json!({"report": {"warnings": warnings, "failed": failed}});
+        let crate::state::Dialog::LightroomResult { details, .. } = result_dialog(&value, "done", false) else { panic!("not a Lightroom result") };
+        assert!(warnings.iter().all(|w| details.contains(w)), "{details:?}");
+        assert!((0..12).all(|i| details.iter().any(|d| d.starts_with(&format!("f{i}.nef")))));
+        let huge: Vec<_> = (0..MAX_LINES + 5).map(|i| json!(format!("w{i}"))).collect();
+        let crate::state::Dialog::LightroomResult { details, .. } = result_dialog(&json!({"report": {"warnings": huge}}), "done", false) else {
+            panic!("not a Lightroom result")
+        };
+        assert_eq!(details.len(), MAX_LINES + 1);
+        // capped failures are counted too, not silently dropped
+        let huge: Vec<_> = (0..MAX_LINES + 3).map(|i| json!([format!("f{i}.nef"), "unreadable"])).collect();
+        let crate::state::Dialog::LightroomResult { details, .. } = result_dialog(&json!({"report": {"failed": huge}}), "done", false) else {
+            panic!("not a Lightroom result")
+        };
+        assert!(!details.iter().any(|d| d.starts_with(&format!("f{MAX_LINES}.nef"))));
+        assert!(details.last().is_some_and(|d| d.contains('3')), "{:?}", details.last());
     }
 
     #[test]

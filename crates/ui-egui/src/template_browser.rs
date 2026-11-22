@@ -6,6 +6,7 @@
 //! the folder commands (`create`, `rename`, `delete`, `move`) for any module's template list, so a
 //! module's `*.createTemplateFolder`, `*.renameTemplateFolder`, `*.deleteTemplateFolder` and
 //! `*.moveTemplate` commands are one-liners over it.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::RichText;
 use lcc_engine::template_folders::{self as folders, DEFAULT_FOLDER, Foldered};

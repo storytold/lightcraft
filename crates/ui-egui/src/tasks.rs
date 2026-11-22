@@ -3,6 +3,7 @@
 //! worker thread and its result is applied on the UI thread between frames, so the window keeps
 //! answering. Imports, scans, exports and preview builds have their own tasks with progress. A task the user started
 //! (Find Missing Photos) shows in the activity stack while it runs; quiet ones (the auto-import listing) don't.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 

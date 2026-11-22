@@ -5,3 +5,4 @@ mod denoise_cpu;
 #[cfg(feature = "denoise")]
 mod denoise_real;
 mod preview_read;
+mod roundtrip;

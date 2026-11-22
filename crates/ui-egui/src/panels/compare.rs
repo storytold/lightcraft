@@ -1,6 +1,7 @@
 //! Culling views: **Compare** (the "select" and a "candidate" side by side, with synced zoom and
 //! pan) and **Survey** (the selected photos tiled). Rating, flag and label keys act on the active
 //! photo only here, and with Auto Advance on they move to the next candidate / photo.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
 use lcc_catalog::{Flag, PhotoId};

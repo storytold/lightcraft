@@ -3853,6 +3853,18 @@ fn cmd_sil(args: &[&str]) -> Result<(), String> {
         }
         i += 1;
     }
+    // the sync merge properties (crates/sync/src/proptests.rs) are part of the SIL run: no app process,
+    // but the same "nothing contradicts itself" checks for what devices exchange
+    let sync_only = filter.as_deref() == Some("sil_sync");
+    if filter.is_none() || sync_only {
+        let st = cargo().args(["test", "-p", "lcc-sync", "--lib", "proptests"]).status().map_err(|e| format!("cargo test: {e}"))?;
+        if !st.success() {
+            return Err("SIL sync properties failed (proptest prints the minimal failing case above)".into());
+        }
+        if sync_only {
+            return Ok(());
+        }
+    }
     if let Some(f) = &filter {
         c.arg(f);
     }

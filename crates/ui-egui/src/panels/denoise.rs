@@ -4,6 +4,7 @@
 //! The Amount slider is an ordinary develop control (`enhance.denoise`); everything here is about the cleaned picture the
 //! slider mixes in. It is cached data made in the background for the photos being looked at, and never a file in the
 //! library. A model is fetched only when the user presses Download and accepts its terms.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use crate::i18n::{tr, tr_format};
 use egui::RichText;

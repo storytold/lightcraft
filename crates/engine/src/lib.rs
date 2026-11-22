@@ -104,6 +104,7 @@ pub mod midi;
 /// The shared AI backend's queue and activity row (#491).
 pub mod ml;
 mod model_download;
+pub mod notice;
 pub mod open_path;
 pub mod originals;
 mod pdf;
@@ -126,6 +127,7 @@ pub mod profile_bodies;
 pub mod profile_edits;
 pub mod profile_refs;
 pub mod proof;
+pub mod quality_scan;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod remote;
 pub mod rename;
@@ -471,6 +473,8 @@ pub struct Session {
     /// Sync with the app on other devices ([`device_sync`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub device_sync: device_sync::State,
+    /// Things to tell the user once ([`Session::take_notices`]).
+    notices: Vec<notice::Notice>,
     /// Auto updates: the last check, the download in flight, and the settings ([`update`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub updater: update::Updater,
@@ -694,6 +698,10 @@ pub struct Session {
     /// Background tasks in flight (imports, exports, preview builds…), for the activity stack and
     /// `activity.list` / `activity.cancel`.
     pub activity: activity::Activity,
+    /// The Image Quality Scanner's run in flight, when one is (issue #1313): its scores are
+    /// written as one undo step when it ends, and the frame it ends on answers with its summary
+    /// (`photo.qualityScanPump`).
+    pub quality_scan: Option<quality_scan::QualityScanRun>,
     /// Video playback, trim and poster (M14.4/M14.6): the decoder backend and the player.
     pub video: video::VideoState,
     /// Upright analysed on each photo an automatic mode reaches without its own correction ([`upright_jobs`]).
@@ -886,6 +894,7 @@ impl Session {
             remote: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             device_sync: Default::default(),
+            notices: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             updater: Default::default(),
             desktop: desktop::default_desktop(),
@@ -979,6 +988,7 @@ impl Session {
             folder_stamps: Default::default(),
             folder_new: Default::default(),
             activity: Default::default(),
+            quality_scan: None,
             video: Default::default(),
             genfill: Default::default(),
             upright_jobs: Default::default(),
@@ -2945,6 +2955,8 @@ mod tests_print;
 mod tests_process;
 #[cfg(test)]
 mod tests_profile_manager;
+#[cfg(test)]
+mod tests_quality_scan;
 #[cfg(test)]
 mod tests_recheck;
 #[cfg(test)]

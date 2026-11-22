@@ -6,6 +6,7 @@
 //! in-window menu bar (web, Windows, Linux — [`show_in_window`]) and the control channel
 //! (`ui.menu.tree`). Items are a command id plus parameters, run through [`run_item`] so they
 //! behave exactly like their keyboard shortcuts.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -719,6 +720,7 @@ pub(crate) fn expanded(app: &LccApp, name: &str) -> Option<Vec<MenuNode>> {
                 ("Rating", Rating, "rating"),
                 ("File Size", FileSize, "fileSize"),
                 ("Random", Random, "random"),
+                ("Quality", Quality, "quality"),
             ]
             .into_iter()
             .map(|(label, key, k)| item("library.sort", json!({"key": k}), label, None, true, Some(cur.key == key)))
@@ -1586,8 +1588,8 @@ mod tests {
     /// third level.
     #[test]
     fn menus_stay_short_and_two_levels_deep() {
-        // (Library ▸ View in Compare: Classic's rows, Compare's two, the app's six)
-        const MAX_ROWS: usize = 38;
+        // (Library ▸ View in Compare: Classic's rows, Compare's two, the app's seven with the Image Quality Scanner)
+        const MAX_ROWS: usize = 39;
         let mut a = app();
         let check = |a: &LccApp| {
             for (title, items) in menu_bar(a) {

@@ -111,19 +111,22 @@ without them, with a warning, and skipped only when still too big. At most eight
 untouched. When an archive is saved but cleanup afterwards fails (a temporary file or an old archive that
 can't be removed), the report still names the archive and a separate warning names what was left
 behind; the folder is synced once the archive is saved.
-`Interop/lightroom-index.json` records imported identities. Source catalogs and originals are
+`Interop/lightroom-index.json` records imported identities (read and written up to 1 GiB, about 45 bytes a photo, so a re-import of a large catalog finds what it made before). Source catalogs and originals are
 never overwritten.
 
 Native import reads MAIN database pages on demand; no whole-file size cutoff or MAIN-file read
 allocation is used. Committed WAL validation is streamed into a compact page index; WAL remains
 capped at 1 GiB and 4,000,000 frames. MAIN is structurally bounded to 16,777,216 pages (up to
 1 TiB logical size with 64 KiB pages); each table B-tree walk is bounded to 4,000,000 visited
-pages. A record is capped at 64 MiB and XMP packets at 16 MiB. The in-tree, read-only Rust SQLite
+pages. A record is capped at 64 MiB and XMP packets at 16 MiB. A record past the cap, or one that
+is malformed, is left out on its own and counted in a warning naming the table ("N records could not
+be read and were left out"); the rest of the table imports. Text that is not valid UTF-8 is read with
+replacement characters and counted in a warning. The in-tree, read-only Rust SQLite
 B-tree reader follows SQLite’s public file-format specification; it introduces no dependency or C
 runtime. Tables are streamed to the importer one row at a time, so memory follows what the
 importer keeps (mapped columns, never BLOBs), not the table's size: the large develop settings,
-history, snapshot and metadata tables have no row or payload cap. Tables the importer keeps whole
-(folders, files, images, keywords, collections, stacks) are capped at 1,000,000 rows and 256 MiB of
+history, snapshot, metadata and keyword-assignment tables have no row or payload cap. Tables the
+importer keeps whole (folders, files, images, keywords, collections, stacks) are capped at 1,000,000 rows and 256 MiB of
 payload each. These bounds limit work and decoded data: a catalog within the page-count cap may
 still exceed a per-table or record limit. Inspection and import can be cancelled between pages.
 The open file and source path are checked again after all tables are read. Close Lightroom before

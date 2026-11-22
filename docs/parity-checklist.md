@@ -27,9 +27,9 @@ cited here still exists. Formerly docs/parity.md.
 | Section | ✅ | 🟡 | ⬜ | 🚫 | P0 done | P1 done |
 |---|---:|---:|---:|---:|---:|---:|
 | A. Import (IMP) | 16 | 4 | 1 | 1 | 4/6 (67%) | 7/7 (100%) |
-| B. Library management (LIB) | 22 | 2 | 1 | 2 | 9/9 (100%) | 9/9 (100%) |
+| B. Library management (LIB) | 23 | 2 | 1 | 2 | 9/9 (100%) | 9/9 (100%) |
 | C. Views & navigation (VIEW) | 18 | 2 | 0 | 0 | 9/9 (100%) | 5/5 (100%) |
-| D. Search & filter (FILT) | 12 | 1 | 0 | 0 | 4/4 (100%) | 4/4 (100%) |
+| D. Search & filter (FILT) | 13 | 1 | 0 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
 | F. Edit panel — global adjustments (EDIT) | 44 | 6 | 1 | 0 | 28/28 (100%) | 13/15 (87%) |
 | G. Profiles (PROF) | 8 | 5 | 3 | 0 | 3/4 (75%) | 3/4 (75%) |
@@ -55,9 +55,9 @@ cited here still exists. Formerly docs/parity.md.
 | Lightroom Classic extras | 106 | 22 | 0 | 0 | — | 36/40 (90%) |
 | BEYOND. Beyond the reference app | 7 | 0 | 0 | 0 | — | — |
 | IMM. Immich integration | 11 | 0 | 0 | 0 | — | 7/7 (100%) |
-| **Total** | 525 | 82 | 20 | 25 | 195/203 (96%) | 172/191 (90%) |
+| **Total** | 527 | 82 | 20 | 25 | 195/203 (96%) | 172/191 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **90.3%** of 627 in-scope rows — P0 98.0% of 203 · P1 94.8% of 191 · P2 80.0% of 228.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **90.3%** of 629 in-scope rows — P0 98.0% of 203 · P1 94.8% of 191 · P2 80.2% of 230.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -194,6 +194,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-LIB-SHOWFINDER | Reveal original in file manager | P0 | ✅ | `cmd:app.showInFinder` | ⌘R (see MENU-FILE-SHOWFINDER) |
 | LR-LIB-COVER | Album cover | P2 | ✅ | `cmd:album.setCover` | |
 | LR-LIB-CULL | Assisted culling | P2 | 🟡 | `cmd:photo.analyze`, `cmd:dialog.cull`, `cmd:photo.rejectEyes`, `cmd:eyes.analyze`, `cmd:view.eyeFocus`, `crates/pipeline/src/cull.rs`, `crates/engine/src/eyes.rs`, `crates/ui-egui/src/eye_strip.rs` | Library ▸ Assisted Culling…: focus score (0–100), clipping, burst grouping (look-alike shots within 10 s, both limits adjustable in the dialog and as `burstGap` / `similarity`, #2275) with the sharpest marked; reject below a focus score, pick each burst's best; classical measures. Eyes (ported from OneSlips): the eye focus strip (View ▸ Eye Focus Strip) shows each person's sharper eye at 100 % judged sharp / soft / blurry, closed and half-closed eyes and sunglasses marked (MediaPipe Face Landmarker, downloaded on request), kept in the preview cache; `photo.rejectEyes` rejects closed / blurry eyes, `eyes.analyze` prepares a folder. No expression detection; the dialog has no eyes option yet; the Assisted Culling dialog asks for closed / blurry (or soft) eyes and main subjects only; suggested 1–5 stars and a Pick / Reject flag per photo from the combined score (issue #489), applied by the dialog only to photos the user has not rated or flagged (`applyRatings` / `applyFlags`), stored as `Analysis.suggested` and filterable as the smart-collection rule field `suggestedStars` |
+| LR-LIB-QUALITY | Image Quality Scanner | P2 | ✅ | `cmd:photo.qualityScan`, `cmd:photo.qualityScanPump`, `cmd:dialog.qualityScan`, `crates/pipeline/src/quality.rs`, `crates/engine/src/quality_scan.rs`, `apps/cli/src/quality_scan.rs` | Library ▸ Image Quality Scanner… (issue #1313): scores a selection, a folder (with its subfolders) or the whole catalog in the background (activity row, cancellable, one undo step) for sharpness, noise, exposure and JPEG compression artifacts, each 0–100 and combined by per-factor weights (0–10); the score and factors stay on the photo (catalog format 20, `Analysis.quality`), so `SortKey::Quality`, the filter bar's quality picker and score floor, and the rule fields Quality Score / Sharpness / Noise / Exposure / Compression / Quality Verdict read them without a rescan; **Unscanned only** by default, `rescan` measures everything again; the score maps to Pick / Reject by two cutoffs (70 / 25, inclusive, never crossing) written only onto photos the user has not flagged (a flag a scan wrote is the scan's own, so a rescan may change it); clips are skipped. The aesthetic engine (NIMA / MUSIQ ONNX, GPU) is not built: the score is technical, and aesthetic judgement stays with Assisted Culling's Aesthetic and Suggested Stars (see `docs/manual-site/src/content/docs/reference/not-built.md`) |
 | LR-LIB-ACTIVITY | Comments & likes | OOS | 🚫 | | |
 | LR-LIB-QUICKCOLL | Quick collection [Classic] | P2 | ✅ | `cmd:album.toggleTarget`, `cmd:album.clearQuick` | B in the grids; photo right-click menu ▸ Add to / Remove from Quick Collection (or target collection) |
 | LR-LIB-VIRTUALCOPY | Virtual copies [Classic] | P1 | ✅ | `cmd:photo.virtualCopy`, `cmd:photo.delete`, `crates/engine/src/cmd/organize.rs` | “Copy N” badge, stacked with the original, same albums, no XMP writes; deleting a copy dissolves or renumbers the stack (#1493); no “Set Copy as Master” |
@@ -238,6 +239,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-FILT-LOCATION | Location filter | P2 | ✅ | `cmd:library.filter` (`text`, `ruleSet` field `location`) | free text, or a rule on location / city / state / country (smart albums, `library.filter`) |
 | LR-FILT-PEOPLE | People filter | P2 | 🟡 | `cmd:library.filter`, `crates/catalog/src/query.rs` | filter by a person's name (case-insensitive, named Face regions only) from the People view, a filter chip or `person:`; by the number of detected faces, named or not (filter bar Faces menu, `faces` in `library.filter`: 2, 3+, <=2, 1-5, none / any; an unreadable spec is an error, not an empty grid; `faces:` search token; Face Count smart-album rule; fork #100); no unnamed / suggested people |
 | LR-FILT-CULL | Culling-score filters | P2 | ✅ | `cmd:library.filter` (`ruleSet` fields `sharpness`, `bestOfGroup`) | Focus and Best of Similar Shots in the rule editor / smart albums |
+| LR-FILT-QUALITY | Quality filters | P2 | ✅ | `cmd:library.filter` (`quality`, `qualityMin`, `qualityMax`; `ruleSet` fields `qualityScore`, `qualitySharpness`, `qualityNoise`, `qualityExposure`, `qualityCompression`, `qualityVerdict`), `cmd:library.sort` (`key: quality`), the filter bar's Quality picker and score floor (`crates/catalog/src/query.rs`) | The Image Quality Scanner's verdict (accepted / to review / rejected / not scanned) and score floor, and sorting the grid by score (unscanned photos first ascending) |
 | LR-FILT-SORT | Sort | P0 | ✅ | `cmd:library.sort`, `cmd:library.shuffle`, `cmd:album.orderPhotos`, `cmd:album.setPhotoOrder`, `cmd:album.duplicate`, `crates/ui-egui/src/panels/bottombar.rs`, `crates/ui-egui/src/panels/grid.rs` | Default: Capture Date, oldest first (ascending), as in Lightroom Classic; a library keeps the sort it was left in. Random sort (seeded, stable under edits; choosing Random or Reshuffle picks a new seed); the shuffle is part of the saved view state; no effect in Recently Added (always newest import first). Custom Order in regular albums and saved creations (upstream PR #1155): drag photos in the grid or along the filmstrip to reorder (dragging in another sort switches to Custom Order, as in Classic); saved per album (catalog format 9), followed by Slideshow / Book / Print / Web (they take the shown order), saved-creation photo lists, Rename `{seq}` and export of a selection; smart albums and other sources fall back to capture date. No colour-label sort |
 | LR-FILT-SAVED | Filter presets [Classic] | P2 | ✅ | `cmd:filter.savePreset`, `cmd:filter.applyPreset`, `cmd:filter.presets`, `cmd:filter.deletePreset`, `crates/ui-egui/src/panels/filterbar.rs` | filter bar → Presets: apply, save current filter, delete (right-click); saved with the library |
 
@@ -966,6 +968,7 @@ We only talk to Immich over its HTTP API with our own client; concepts, endpoint
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-21 | minor | LR-LIB-QUALITY (new, ✅), LR-FILT-QUALITY (new, ✅): Image Quality Scanner (issue #1313) — `photo.qualityScan` scores sharpness, noise, exposure and JPEG compression artifacts over a selection, the view, a folder or the catalog in a background activity (one undo step, cancellable), stores the factors and score on the photo (catalog format 20, `Analysis.quality`), maps the score to Pick / Reject by two cutoffs written only onto photos the user has not flagged (a flag a scan wrote is its own), and feeds the filter bar's quality picker and score floor, `SortKey::Quality` and the rule fields Quality Score / Sharpness / Noise / Exposure / Compression / Quality Verdict; Library ▸ Image Quality Scanner…, `<cli> quality-scan`, `photo.qualityScanPump`. The aesthetic engine (NIMA / MUSIQ ONNX, GPU) is not built: the score is technical |
 | 2026-11-08 | patch | LRC-SHELL-PLUGINS (G19): plug-ins carry their own icon and header picture, as pixel filters do (Plug-in Manager list and page, command dialogs; `plugin.picture`); status unchanged (🟡) |
 | 2026-11-07 | minor | LRC-SHELL-PLUGINS (G19): plug-ins look at a photo's pixels, set its crop and straighten angle, and make virtual copies (`pixels`, `crop`, `virtualCopy` permissions and host features; #891); status unchanged (🟡) |
 | 2026-11-02 | patch | LR-EDIT-DETAIL-DENOISE: the RawNIND weights are offered under CC BY 4.0, one of the two licences their author grants (with GPL-3.0, upstream #1760); the terms credit the author. The download stays opt-in (`rawnind-model`). Status unchanged (🟡) |
