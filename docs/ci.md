@@ -30,7 +30,9 @@ the workspace and HEIF test runs. The SIL step runs `cargo xtask sil` (docs/test
 exists and is skipped until then; it includes the sync merge properties (`lcc-sync` proptests: commutative,
 associative, idempotent merges and no grant leakage). Clippy also denies `indexing_slicing` (checked `get` instead of `[i]`) in
 `crates/tiff`, `crates/ui-egui`, `apps/app` and `apps/web`; a `ui-egui` module not yet converted carries a module-level
-`allow` whose reason names [gaps.md](gaps.md) gap 40, the list of what is left. Locally, `cargo xtask ci` stays the full run; use `--fast` per commit and run the targeted tests of what you touched.
+`allow` whose reason names [gaps.md](gaps.md) gap 40, the list of what is left. The engine's import → develop → export → re-import scenario
+(`crates/engine/tests/it/roundtrip.rs`) runs with `cargo test -p lcc-engine` (the full run's workspace tests),
+not in the SIL step. Locally, `cargo xtask ci` stays the full run; use `--fast` per commit and run the targeted tests of what you touched.
 
 The fast gate checks the wasm and Android crates in one `cargo check` per target, so a crate shared by several
 of them is checked once; when that fails it checks each crate on its own to name the broken ones. The full run,
