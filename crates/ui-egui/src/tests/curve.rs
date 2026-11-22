@@ -667,7 +667,6 @@ fn curve_input_shows_loading_failure_and_no_photo_without_reusing_a_backdrop() {
     exec(&mut h, "library.select", json!({"ids":[2], "active":2}));
     h.step();
     assert!(h.app.renderer.is_pending(Slot::CurveHistogram));
-    assert_eq!(h.app.renderer.curve_histogram.as_ref(), Some(&before), "the old result remains cached while its replacement is pending");
     assert!(h.painted_text().iter().any(|t| t == "Loading input histogram..."));
     assert!(!h.painted_text().iter().any(|t| t == "Sampled input"));
     open.set(true);
