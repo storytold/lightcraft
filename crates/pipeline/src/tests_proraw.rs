@@ -1,10 +1,10 @@
-//! Apple ProRAW in Lightroom's tone chain (process V9, [`crate::proraw`]): earlier processes render
-//! such photos exactly as before, other sources render on V9 exactly as on V8, and a zoomed window
+//! Apple ProRAW in Lightroom's tone chain (process V13, [`crate::proraw`]): earlier processes render
+//! such photos exactly as before, other sources render on V13 exactly as on V10, and a zoomed window
 //! reads the chain's Highlights / Shadows neighbourhood from the whole frame.
 
 use std::sync::Arc;
 
-use lightcraft_develop::{DevelopSettings, Process, controls};
+use lightcraft_develop::{DevelopSettings, Process, ProcessVersion, WbMode, controls};
 use lightcraft_raster::Rgb32f;
 
 use crate::proraw::{PRORAW_TONE_KNOTS, ProRawTone};
@@ -12,7 +12,7 @@ use crate::tone::CameraTone;
 use crate::{DeepSamples, OutputDepth, PixelWindow, RenderRequest, SourceInfo, render};
 
 /// A ProRAW-like curve: the same curve at 32 knots on luminance (the camera-curve path every
-/// process before V9 takes) and at 128 knots for Lightroom's chain.
+/// process before V13 takes) and at 128 knots for Lightroom's chain.
 fn proraw_info() -> SourceInfo {
     let f = |x: f32| (x.powf(0.6) * 0.98).min(0.9995);
     let at = |i: usize, n: usize| 2f32.powf(-12.0 + 12.0 * i as f32 / (n - 1) as f32);
@@ -49,30 +49,45 @@ fn deep(info: &SourceInfo, s: &DevelopSettings) -> Vec<u16> {
     v
 }
 
-/// Processes before V9 render Apple ProRAW exactly as they did before Lightroom's chain existed
-/// (the file's 32-knot curve on luminance, the sliders after it), and V9 renders it differently.
+/// Processes before V13 render Apple ProRAW exactly as they did before Lightroom's chain existed
+/// (the file's 32-knot curve on luminance, the sliders after it), and V13 renders it differently.
 #[test]
-fn proraw_renders_as_before_until_v9() {
+fn proraw_renders_as_before_until_v13() {
     let info = proraw_info();
     let before = SourceInfo { proraw: None, ..info.clone() };
-    for p in Process::ALL.into_iter().filter(|p| *p < Process::V9) {
+    for p in Process::ALL.into_iter().filter(|p| *p < Process::V13) {
         for s in [DevelopSettings { process: p.version(), ..DevelopSettings::for_raw(5200.0, 4.0) }, edited(p)] {
             assert!(deep(&info, &s) == deep(&before, &s), "{p:?} renders ProRAW as before");
         }
     }
-    for s in [DevelopSettings::for_raw(5200.0, 4.0), edited(Process::V9)] {
-        assert!(deep(&info, &s) != deep(&before, &s), "V9 renders ProRAW in Lightroom's chain");
+    for s in [DevelopSettings { process: Process::V13.version(), ..DevelopSettings::for_raw(5200.0, 4.0) }, edited(Process::V13)] {
+        assert!(deep(&info, &s) != deep(&before, &s), "V13 renders ProRAW in Lightroom's chain");
     }
 }
 
-/// V9 changes nothing but Apple ProRAW: other sources render as on V8.
+/// With no ProRAW curve, the candidate keeps all V10 behavior, including its checked WB.
 #[test]
-fn v9_renders_everything_else_as_v8() {
+fn v13_renders_everything_else_as_v10() {
     let camera = SourceInfo { proraw: None, ..proraw_info() };
     let raw = SourceInfo { camera_tone: None, ..camera.clone() };
     for info in [SourceInfo::default(), raw, camera] {
-        assert!(deep(&info, &edited(Process::V8)) == deep(&info, &edited(Process::V9)), "{info:?}");
+        assert!(deep(&info, &edited(Process::V10)) == deep(&info, &edited(Process::V13)), "{info:?}");
     }
+}
+
+#[test]
+fn provisional_proraw_process_keeps_the_v10_white_balance_and_v9_fallback() {
+    let info = SourceInfo { as_shot_temp: 5500.0, as_shot_tint: 0.0, proraw: None, ..proraw_info() };
+    let mut warm = edited(Process::V10);
+    (warm.wb.mode, warm.wb.temp, warm.wb.tint) = (WbMode::Custom, 2000.0, 30.0);
+    let v10 = deep(&info, &warm);
+    warm.process = Process::V13.version();
+    assert_eq!(deep(&info, &warm), v10);
+    warm.process = ProcessVersion(8);
+    let v8 = deep(&info, &warm);
+    assert_ne!(v8, v10, "the warm-green fixture must distinguish the old and checked white balance");
+    warm.process = ProcessVersion(9);
+    assert_eq!(deep(&info, &warm), v8);
 }
 
 /// An HDR render of Apple ProRAW keeps Lightroom's chain through the midtones, so they match the
@@ -89,10 +104,10 @@ fn proraw_hdr_midtones_match_the_sdr_render() {
             other => panic!("expected float samples, got {other:?}"),
         }
     };
-    let mut on = DevelopSettings::default();
+    let mut on = DevelopSettings { process: Process::V13.version(), ..DevelopSettings::default() };
     (on.hdr.enabled, on.hdr.max_ev) = (true, 3.0);
     let hdr = render_at(&on, OutputDepth::F32Hdr);
-    let sdr = render_at(&DevelopSettings::default(), OutputDepth::F32Linear);
+    let sdr = render_at(&DevelopSettings { process: Process::V13.version(), ..DevelopSettings::default() }, OutputDepth::F32Linear);
     let mut n = 0;
     for (h, s) in hdr.as_chunks::<3>().0.iter().zip(sdr.as_chunks::<3>().0) {
         if s.iter().all(|v| *v < 0.4) {
@@ -140,7 +155,8 @@ fn proraw_window_neighbourhood_has_the_camera_local_tone() {
 
 fn window_matches_the_whole_render(info: &SourceInfo, mut s: DevelopSettings) {
     let info = info.clone();
-    assert!(crate::proraw::active(&DevelopSettings::default(), &info).is_some());
+    s.process = Process::V13.version();
+    assert!(crate::proraw::active(&s, &info).is_some());
     let src = Rgb32f::from_fn(600, 400, |x, y| {
         let l = if x < 300 { 0.03 } else { 0.8 };
         let t = 1.0 + 0.3 * (((x * 7 + y * 13) % 11) as f32 / 10.0 - 0.5);

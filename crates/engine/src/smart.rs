@@ -79,7 +79,7 @@ const ENC_FIELD: &str = "enc";
 /// reads as 0, which makes every proxy from before this version stale. Version 2 is the first to
 /// record the field at all (a version 1 proxy is stored at JPEG quality 92, which this build
 /// raises to [`JPEG_QUALITY`]); version 3 is the first to store the decoder facts in the tail;
-/// version 4 adds Apple ProRAW's profile curve for Lightroom's tone chain (process V9). A stale
+/// version 4 adds Apple ProRAW's profile curve for Lightroom's tone chain (process V13). A stale
 /// proxy whose original is offline is kept as it is (see [`is_stale`]).
 /// Crate-visible so the look-marker test pins the marker format to it instead of to a literal.
 pub(crate) const ENCODE_VERSION: u64 = 4;
@@ -99,7 +99,7 @@ struct SmartFacts {
     camera_color: Option<lightcraft_pipeline::CameraColor>,
     local_tone: Option<lightcraft_pipeline::local_tone::LocalTone>,
     /// Apple ProRAW's profile curve for Lightroom's tone chain (absent before version 4: such a
-    /// proxy renders ProRAW on the camera-curve path, as process V8 does).
+    /// proxy renders ProRAW on the camera-curve path, retaining V10 behavior).
     #[serde(default)]
     proraw: Option<lightcraft_pipeline::proraw::ProRawTone>,
     /// The semantic mattes whose bytes follow the facts, in this order.

@@ -564,6 +564,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let pre_nr_key = hash_of((
         geo,
         [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
+        // the process picks checked vs legacy Bradford WB (Update to Current Process, undo)
+        local::checked_wb(s),
         format!("{:?}", s.spots),
         format!("{eyes:?}"),
         // defringe runs in this stage

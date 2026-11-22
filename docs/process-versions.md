@@ -17,7 +17,13 @@ stronger Light sliders, issue #196) without changing a single photo someone has 
 | **V6** | V5 plus: colour noise reduction filters the linear colour differences R−Y and B−Y with the joint method (issue #815, `docs/nr-color-joint.md`): edge-aware weights from a denoised guide shared by both differences, anisotropic diffusion over scales, a brake for isolated colour specks; Y is kept exactly. V1 to V5 keep the blurred chromaticity (`local::denoise`). CPU (`local::denoise`) and GPU (`render::denoise`) branch on `local::joint_colour_nr`. Renders with Color 0 are the same as V2's. |
 | **V7** | V6 plus: film grain from crystal layers ([grain.md](grain.md), `crates/pipeline/src/crystal.rs`), after Aurélien Pierre's model: resolution independent (a preview is the export's grain box-downscaled), fading out at black and white, calibrated to Lightroom Classic's strength and width at mid grey. V1 to V6 keep their two-octave value noise exactly (`finish::ValueGrain`; on the GPU `F_GRAIN_MODEL` 0); `finish::GrainModel::new` picks the model per process. Renders without grain don't depend on this. |
 | **V8** | V7 plus: Highlights and Shadows take their edge-aware filter of log luminance without its fine detail (`local::detail_free`: each value clamped between its separable median at the V2 radius and the median of a 3× wider neighbourhood) instead of V2's plain median (`local::base_keeps_gaps`), so the gaps in dark lettering on a bright panel are not lifted into bright blocks (issue #3460). CPU (`local::tone_base`) and GPU (`render::tone_base`) branch on it; the base plane is keyed by process. Renders without Highlights or Shadows (global or local) are the same as V7's. |
-| **V9** (the latest) | V8 plus: Apple ProRAW (a DNG with Make `Apple` and a `ProfileToneCurve`) takes Lightroom Classic's tone chain (`crates/pipeline/src/proraw.rs`, after #613), fitted on one CC0 iPhone 12 Pro file: a base operator that follows BaselineExposure + Exposure, Highlights / Shadows on a Gaussian neighbourhood of the photo (σ 6.4 % of the long edge), Whites, Blacks, the profile curve applied per channel (hue-preserving, linear ProPhoto) and Contrast adapting to the image's key. The curve travels in its own `SourceInfo::proraw` (128 knots), so V1 to V8 render ProRAW on the 32-knot camera curve exactly as before (`tests_proraw` locks them byte for byte). An HDR render keeps the chain through the midtones and lifts highlights as a camera curve's (`tone::camera_hdr_lift`). Every other photo renders as V8. |
+| **V9** *(reserved)* | Reserved for `HealMethod::Pinned` (`#4069`). |
+| **V10** (the latest) | V8 plus: checked Bradford white-balance fallback (`craft_color_transform::cct::wb_matrix`, returning `Mat3::IDENTITY` when a source illuminant's Bradford blue cone response `s[2] <= 0.0`, `craft-libs#587`). V1 to V8 (and reserved V9) keep the legacy Bradford result for saved edits (`local::wb_matrix_for`). |
+
+Process V13 is a provisional explicit opt-in in this integration candidate, not the current default
+process. It inherits V10's checked white balance and adds the fitted tone chain only for Apple
+ProRAW with a profile tone curve. If the curve is absent (including an older offline smart preview),
+it keeps V10's rendering. The numeric V9 fallback is unchanged.
 
 ## The rule
 
@@ -127,7 +133,7 @@ extra field and retain their existing cached renders. No cache-version bump is n
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-13 | minor | V9: Apple ProRAW in Lightroom's tone chain (#613); V1 to V8 render ProRAW as before |
+| 2026-11-13 | minor | Provisional V13: fitted Apple ProRAW tone chain (#613); all older processes remain unchanged |
 | 2026-11-08 | minor | V8: the Highlights/Shadows base keeps the gaps in dark lettering (#3460) |
 | 2026-11-07 | minor | V7: film grain from crystal layers ([grain.md](grain.md)); V1 to V6 keep their value noise |
 | 2026-11-05 | minor | V5: a raw's tone curve rolls off into white in stops, so raising Exposure keeps recorded highlights (#1632) |

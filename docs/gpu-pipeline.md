@@ -211,7 +211,7 @@ walks the drive.
   nr_params, plane_sigmas, guided_fast_step, airlight_of}`, `finish::{FinishParams, mask_terms}`,
   `masks::brush_dabs`; exact tables (tone LUT, sRGB LUT, curve LUTs, resample taps) and the OkLab
   matrices are uploaded / generated into the WGSL prelude from the CPU values. On Apple ProRAW
-  under process V9 the tone map's Lightroom stages (`proraw::ToneStages`: base operator, Whites,
+  under provisional process V13 the tone map's Lightroom stages (`proraw::ToneStages`: base operator, Whites,
   Blacks, profile curve, Contrast) are more tone tables in `aux`, and Highlights / Shadows
   (`proraw::LrHs`) are their curves sampled on the `proraw::LR_KNOTS` grid in the parameter block:
   both sides interpolate the same values. A windowed render's Highlights / Shadows neighbourhood

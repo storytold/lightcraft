@@ -1,4 +1,4 @@
-//! Lightroom's global tone on Apple ProRAW (process V9 on).
+//! Lightroom's global tone on Apple ProRAW (process V13).
 //!
 //! Apple ProRAW's DNG `ProfileToneCurve` is applied to RGB instead of luminance: in linear ProPhoto
 //! RGB, the curve maps the largest and smallest channel, and the middle channel keeps its relative
@@ -28,9 +28,9 @@
 //! shift somewhat (up to ~0.1 log2 on average at ±1 EV). The order of 2–5 comes from pairs of
 //! sliders on the photo: each pair's combined render follows from the single ones in this order
 //! only. Only Apple ProRAW was measured, so only it takes this chain ([`active`]), and only from
-//! process V9: photos on V1 to V8 keep the camera-curve path (`docs/process-versions.md`). An HDR
+//! process V13: earlier supported processes keep the camera-curve path (`docs/process-versions.md`). An HDR
 //! render keeps the chain up to white and lifts the highlights past it as it does a camera curve
-//! (`tone::camera_hdr_lift`), so its midtones match the SDR render.
+//! (`camera_hdr_lift`), so its midtones match the SDR render.
 
 use lightcraft_develop::{DevelopSettings, Process};
 
@@ -64,13 +64,18 @@ const LR_EV_RANGE: (f32, f32) = (-2.302, 1.698);
 pub const PRORAW_TONE_KNOTS: usize = 128;
 
 /// Whether `s` renders `info` in Lightroom's tone chain, and the source's curve if so: Apple ProRAW
-/// ([`SourceInfo::proraw`]), a raw, from process V9 on.
+/// ([`SourceInfo::proraw`]), a raw, from process V13.
 pub fn active<'a>(s: &DevelopSettings, info: &'a SourceInfo) -> Option<&'a ProRawTone> {
-    let process = match s.process.process() {
-        Process::V1 | Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 => false,
-        Process::V9 => true,
-    };
-    if process && info.raw { info.proraw.as_deref() } else { None }
+    if s.process.process() == Process::V13 && info.raw { info.proraw.as_deref() } else { None }
+}
+
+// The existing camera HDR shoulder, applied only to the ProRAW chain's output. The shared
+// camera tone map is still used unchanged for every other render.
+fn camera_hdr_lift(whites: f64, peak: f32, ev: f32) -> f32 {
+    const FROM_EV: f32 = 1.5;
+    let top = (2.9 - 1.6 * (whites as f32 / 100.0) + peak.log2() + 1.0).max(FROM_EV + 0.5);
+    let t = ((ev - FROM_EV) / (top - FROM_EV)).clamp(0.0, 1.0);
+    (peak - 1.0) * (t * t * (3.0 - 2.0 * t))
 }
 
 /// ln(1 + eˣ), without overflow.
@@ -588,7 +593,7 @@ impl ProRawMap {
             })
         });
         let (to, from) = prophoto_matrices();
-        let hdr = (peak.is_finite() && peak > 1.0).then(|| (peak, tone_table(|x| crate::tone::camera_hdr_lift(whites, peak, (x / GREY).log2()))));
+        let hdr = (peak.is_finite() && peak > 1.0).then(|| (peak, tone_table(|x| camera_hdr_lift(whites, peak, (x / GREY).log2()))));
         ProRawMap { lut, stages, contrast: split.then(|| tone_table(con)), to, from, hdr }
     }
 
@@ -598,7 +603,7 @@ impl ProRawMap {
     }
 
     /// In an HDR render, the display value `d` of scene-linear `c` lifted past white as a camera
-    /// curve's is (`tone::camera_hdr_lift`, by the luminance ratio), its colour pulled towards
+    /// curve's is (`camera_hdr_lift`, by the luminance ratio), its colour pulled towards
     /// its luminance where a channel would pass the peak; `d` itself in an SDR render.
     #[inline]
     pub fn apply_hdr(&self, c: [f32; 3], d: [f32; 3]) -> [f32; 3] {
@@ -908,17 +913,19 @@ mod tests {
         assert!(g > 0.5 && g < 1.0, "{g}");
     }
 
-    /// Only Apple ProRAW on process V9 or later takes the chain.
+    /// Only Apple ProRAW on the explicit provisional process takes the chain.
     #[test]
-    fn only_v9_proraw_takes_the_chain() {
-        let tone = std::sync::Arc::new(curve(32, |x| x.powf(0.6)));
+    fn only_explicit_v13_proraw_takes_the_chain() {
+        let tone = std::sync::Arc::new(curve(PRORAW_TONE_KNOTS, |x| x.powf(0.6)));
         let info = SourceInfo { raw: true, proraw: Some(tone), ..Default::default() };
         let mut s = DevelopSettings::default();
-        assert_eq!(Process::LATEST, Process::V9);
-        assert!(active(&s, &info).is_some());
-        s.process = Process::V8.version();
-        assert!(active(&s, &info).is_none(), "V8 keeps the camera-curve path");
-        s.process = Process::V9.version();
+        assert_eq!(s.process.process(), Process::V10);
+        assert!(active(&s, &info).is_none(), "V10 keeps the camera-curve path");
+        s.process = lightcraft_develop::ProcessVersion(9);
+        assert_eq!(s.process.process(), Process::V8);
+        assert!(active(&s, &info).is_none(), "numeric 9 keeps the V8 fallback");
+        s.process = Process::V13.version();
+        assert!(active(&s, &info).is_some(), "the explicit candidate activates ProRAW");
         assert!(active(&s, &SourceInfo { raw: false, ..info.clone() }).is_none());
         assert!(active(&s, &SourceInfo { proraw: None, ..info }).is_none());
     }

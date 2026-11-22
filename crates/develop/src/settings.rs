@@ -59,14 +59,18 @@ impl ProcessVersion {
 
     /// The process this build renders with: the newest one it knows that isn't newer than this
     /// number (a number from a newer LightCraft renders with [`Process::LATEST`]; one below V1,
-    /// which no LightCraft writes, with V1).
+    /// which no LightCraft writes, with V1). V13 is accepted only by its exact number while
+    /// the ProRAW integration is provisional; it is not selected for new or unknown edits.
     pub fn process(self) -> Process {
+        if self == Process::V13.version() {
+            return Process::V13;
+        }
         Process::ALL.into_iter().rev().find(|p| p.version() <= self).unwrap_or(Process::V1)
     }
 
     /// A process this build implements.
     pub fn is_known(self) -> bool {
-        Process::ALL.iter().any(|p| p.version() == self)
+        self == Process::V13.version() || Process::ALL.iter().any(|p| p.version() == self)
     }
 
     /// Older than [`Self::LATEST`]: Update to Current Process applies.
@@ -102,17 +106,19 @@ pub enum Process {
     /// V7, with the Highlights/Shadows base taken of log luminance without its fine detail (clamped
     /// between a fine and a 3× wider median), so gaps in dark lettering aren't lifted into bright blocks.
     V8,
-    /// V8, with Apple ProRAW's tone in Lightroom's chain: its DNG profile tone curve applied per
-    /// channel, between operators fitted to Lightroom's base tone and Light sliders
-    /// (`lightcraft_pipeline::proraw`).
-    V9,
+    /// V8, with the checked Bradford white-balance fallback (`Mat3::IDENTITY` when a source
+    /// illuminant's Bradford blue cone response is `<= 0.0`, `craft-libs#587`).
+    /// `ProcessVersion(9)` is reserved for `HealMethod::Pinned` (`#4069`).
+    V10,
+    /// Provisional, explicit opt-in for the ProRAW tone-chain integration; not a shipping default.
+    V13,
 }
 
 impl Process {
-    /// Every process, oldest first.
+    /// Default-eligible processes, oldest first (`ProcessVersion(9)` is reserved for `#4069`).
     pub const ALL: [Process; 9] =
-        [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7, Process::V8, Process::V9];
-    pub const LATEST: Process = Process::V9;
+        [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7, Process::V8, Process::V10];
+    pub const LATEST: Process = Process::V10;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
@@ -124,7 +130,8 @@ impl Process {
             Process::V6 => ProcessVersion(6),
             Process::V7 => ProcessVersion(7),
             Process::V8 => ProcessVersion(8),
-            Process::V9 => ProcessVersion(9),
+            Process::V10 => ProcessVersion(10),
+            Process::V13 => ProcessVersion(13),
         }
     }
 }

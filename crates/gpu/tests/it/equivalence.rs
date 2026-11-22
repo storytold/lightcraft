@@ -77,6 +77,52 @@ fn v3_luminance_cutoff_chroma_4() {
 }
 
 #[test]
+fn warm_green_wb_zero_crossing_gpu_matches_cpu_on_v10() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(2, 160, 120);
+    let info = SourceInfo { as_shot_temp: 5500.0, as_shot_tint: 0.0, ..Default::default() };
+    let req = RenderRequest::fit(160, 120);
+    // Test normal WB, positive s[2] > 0, and negative s[2] <= 0 across the zero crossing on Process::V10.
+    for (temp, tint) in [(5500.0, 10.0), (2000.0, 0.0), (2000.0, 30.0), (3000.0, 100.0)] {
+        let mut s = DevelopSettings::default();
+        assert_eq!(s.process.process(), Process::V10);
+        (s.wb.mode, s.wb.temp, s.wb.tint) = (WbMode::Custom, temp, tint);
+        let cpu = render(&src, &info, &s, &req).image;
+        let gpu = lightcraft_gpu::try_render(&src, &info, &s, &req, None).expect("GPU render without CPU fallback").image;
+        let (mean, max, _) = diff(&cpu, &gpu);
+        assert!(mean < MEAN_LSB && max <= MAX_LSB, "{temp} K tint {tint}: mean {mean:.3}, max {max}");
+    }
+}
+
+#[test]
+fn tone_curves_1024_lut_gpu_matches_cpu_without_fallback() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(2, 160, 120);
+    let curve = lightcraft_pipeline::tone::CameraTone::new(std::array::from_fn(|i| {
+        let x = 0.004 * 1.18f32.powi(i as i32);
+        [x, 1.0 - (-2.0 * x).exp()]
+    }))
+    .unwrap();
+    let info = SourceInfo { raw: true, camera_tone: Some(curve), ..Default::default() };
+    let mut s = DevelopSettings::default();
+    s.curve.highlights = -30.0;
+    s.curve.shadows = 25.0;
+    s.curve.master = vec![Point::new(0.0, 0.05), Point::new(0.5, 0.58), Point::new(1.0, 0.95)];
+    s.curve.red = vec![Point::new(0.0, 0.0), Point::new(0.4, 0.45), Point::new(1.0, 1.0)];
+    s.curve.blue = vec![Point::new(0.0, 0.0), Point::new(0.5, 0.42), Point::new(1.0, 1.0)];
+    s.curve.refine_saturation = 25.0;
+    let req = RenderRequest::fit(160, 120);
+    let cpu = render(&src, &info, &s, &req).image;
+    let gpu = lightcraft_gpu::try_render(&src, &info, &s, &req, None).expect("1024-entry tone curves must run on GPU without CPU fallback").image;
+    let (mean, max, _) = diff(&cpu, &gpu);
+    assert!(mean < MEAN_LSB && max <= MAX_LSB, "mean {mean:.3}, max {max}");
+}
+
+#[test]
 fn camera_tone_and_relative_wb() {
     if !gpu() {
         return;
@@ -103,9 +149,11 @@ fn camera_tone_and_relative_wb() {
     }
     // Apple ProRAW's profile tone curve in Lightroom's chain: per channel, hue-preserving
     let proraw = SourceInfo { proraw: Some(proraw_tone()), relative_wb: false, ..info.clone() };
-    check("ProRAW edited", &src, &proraw, &s, &RenderRequest::fit(320, 240));
-    check("ProRAW neutral", &src, &proraw, &DevelopSettings::default(), &RenderRequest::fit(320, 240));
-    let mut lr = s.clone();
+    let mut lr = DevelopSettings { process: Process::V13.version(), ..s.clone() };
+    assert!(lightcraft_pipeline::proraw::active(&lr, &proraw).is_some());
+    check("ProRAW edited", &src, &proraw, &lr, &RenderRequest::fit(320, 240));
+    let neutral = DevelopSettings { process: Process::V13.version(), ..DevelopSettings::default() };
+    check("ProRAW neutral", &src, &proraw, &neutral, &RenderRequest::fit(320, 240));
     (lr.light.highlights, lr.light.shadows, lr.light.whites, lr.light.blacks) = (-36.0, 39.0, -28.0, 22.0);
     check("ProRAW tone sliders", &src, &proraw, &lr, &RenderRequest::fit(320, 240));
     (lr.light.contrast, lr.light.whites, lr.light.blacks) = (0.0, 0.0, 0.0);
@@ -1128,7 +1176,8 @@ fn windows_match() {
     check("window: vignette corner", &src, &info, &s, &corner);
     // Apple ProRAW: Lightroom's Highlights / Shadows read the whole frame's neighbourhood
     let proraw = SourceInfo { proraw: Some(proraw_tone()), ..info };
-    let mut s = DevelopSettings::default();
+    let mut s = DevelopSettings { process: Process::V13.version(), ..DevelopSettings::default() };
+    assert!(lightcraft_pipeline::proraw::active(&s, &proraw).is_some());
     (s.light.contrast, s.light.highlights, s.light.shadows, s.light.whites) = (25.0, -60.0, 60.0, -20.0);
     check("window: ProRAW highlights / shadows", &src, &proraw, &s, &req);
 }
@@ -1323,7 +1372,8 @@ fn hdr_float_render_matches() {
     }
     // Apple ProRAW: Lightroom's chain with the highlights lifted past white
     let proraw = SourceInfo { proraw: Some(proraw_tone()), ..raw.clone() };
-    let mut s = hdr(Process::LATEST);
+    let mut s = hdr(Process::V13);
+    assert!(lightcraft_pipeline::proraw::active(&s, &proraw).is_some());
     check_hdr("ProRAW HDR", &src, &proraw, &s, &req, true);
     (s.light.contrast, s.light.highlights, s.light.shadows, s.light.whites) = (25.0, -40.0, 30.0, 20.0);
     check_hdr("ProRAW HDR edited", &src, &proraw, &s, &req, true);

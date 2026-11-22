@@ -103,6 +103,28 @@ fn unknown_process_numbers_load_and_render_with_the_newest_known() {
     assert_eq!(max.process(), Process::LATEST);
     // a whole number written as a float is that number
     assert_eq!(DevelopSettings::from_json(&json!({"process": 2.0})).unwrap().process, ProcessVersion(2));
+    // reserved V9 falls back to V8 without upgrading to V10
+    let reserved_v9 = DevelopSettings::from_json(&json!({"process": 9})).unwrap().process;
+    assert_eq!((reserved_v9.process(), reserved_v9.is_known(), reserved_v9.is_outdated()), (Process::V8, false, true));
+}
+
+#[test]
+fn only_an_exact_provisional_process_number_selects_proraw() {
+    for (stored, effective, known) in [
+        (9, Process::V8, false),
+        (10, Process::V10, true),
+        (11, Process::V10, false),
+        (12, Process::V10, false),
+        (13, Process::V13, true),
+        (14, Process::V10, false),
+    ] {
+        let settings = DevelopSettings::from_json(&json!({"process": stored})).unwrap();
+        assert_eq!(settings.process, ProcessVersion(stored));
+        assert_eq!(settings.process.process(), effective);
+        assert_eq!(settings.process.is_known(), known);
+        assert_eq!(settings.to_json()["process"], json!(stored));
+    }
+    assert_eq!(DevelopSettings::default().process, Process::V10.version());
 }
 
 #[test]

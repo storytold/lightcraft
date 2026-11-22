@@ -145,7 +145,7 @@ Many raw developers store edits as `crs:` properties (`http://ns.adobe.com/camer
 DNG files and in XMP presets. LightCraft reads the common ones and maps them to its own controls. We implemented this
 from the public XMP specification and by observing what each field does; no third-party code or preset files were used.
 Our pipeline renders differently, so **values carry over but the look is approximate**. One exception: on Apple
-ProRAW under process V9 the Light sliders (Exposure, Contrast, Highlights, Shadows, Whites, Blacks) run Lightroom
+ProRAW under provisional process V13 the Light sliders (Exposure, Contrast, Highlights, Shadows, Whites, Blacks) run Lightroom
 Classic's own tone chain, fitted to its renders of a CC0 iPhone 12 Pro file ([process versions](process-versions.md)),
 so there their values give Lightroom's look closely.
 

@@ -245,7 +245,7 @@ fn load_bytes_now(
             raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve),
             kept_tone,
         );
-        // Apple ProRAW's own profile curve renders in Lightroom's chain from process V9, whose
+        // Apple ProRAW's own profile curve renders in Lightroom's chain from process V13, whose
         // Contrast adapts to the image as decoded (at its own exposure, before any edit)
         let proraw =
             (dcp.is_none() && camera_look.is_none()).then(|| proraw_tone(&raw, t.baseline_exposure as f32, &img.data)).flatten().map(Arc::new);
@@ -380,6 +380,7 @@ fn local_tone(raw: &lightcraft_raw::RawImage) -> Option<Arc<lightcraft_pipeline:
 /// Subject mask then falls back to its heuristic); a sky matte counts even when empty (no sky).
 fn dng_mattes(bytes: &[u8], raw: &lightcraft_raw::RawInfo) -> Option<Arc<lightcraft_pipeline::masks::Mattes>> {
     use lightcraft_pipeline::masks::{MatteKind, Mattes};
+    use lightcraft_raw::semantic::SemanticMaskExt;
     if raw.format != lightcraft_raw::RawFormat::Dng {
         return None;
     }
@@ -415,6 +416,7 @@ fn matte_kind(name: &str) -> Option<lightcraft_pipeline::masks::MatteKind> {
 /// finish stage's camera tone curve: 32 knots, log-spaced over 12 stops below white; above white
 /// the camera tone's shoulder continues it.
 pub(crate) fn dng_tone_curve(curve: &lightcraft_raw::profile::ToneCurve) -> Option<lightcraft_pipeline::tone::CameraTone> {
+    use lightcraft_raw::profile::ToneCurveEval;
     let knots: [[f32; 2]; 32] = std::array::from_fn(|i| {
         let x = 2f32.powf(-12.0 + 12.0 * i as f32 / 31.0);
         [x, curve.eval(x).min(0.9995)]

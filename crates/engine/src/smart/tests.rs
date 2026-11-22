@@ -335,6 +335,27 @@ fn a_smooth_proxy_keeps_the_scene_closer_than_the_old_quality() {
 }
 
 #[test]
+fn a_proxy_from_the_previous_look_version_is_stale() {
+    let dir = temp("look-version");
+    let img = lightcraft_scenes::demo_library()[0].render(64, 40);
+    let bytes = encode(&img, None).unwrap();
+    let nl = MAGIC.len() + bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
+    let head: serde_json::Value = serde_json::from_slice(&bytes[MAGIC.len()..nl]).unwrap();
+    let path = dir.join("p.lcsp");
+    std::fs::write(&path, &bytes).unwrap();
+    assert!(!is_stale(&path), "this build's own proxy is up to date");
+    // a proxy fitted at the previous look version, with no profile for the camera, is rebuilt
+    let mut older = head.as_object().cloned().unwrap_or_default();
+    older.insert(LOOK_FIELD.to_owned(), serde_json::json!(13));
+    let mut old = MAGIC.to_vec();
+    old.extend_from_slice(serde_json::Value::Object(older).to_string().as_bytes());
+    old.extend_from_slice(&bytes[nl..]);
+    std::fs::write(&path, &old).unwrap();
+    assert!(is_valid(&path), "the previous look version keeps the file readable");
+    assert!(is_stale(&path), "a proxy from the previous look version is rebuilt");
+}
+
+#[test]
 fn a_proxy_from_an_older_encode_is_stale() {
     let dir = temp("encode-version");
     let img = lightcraft_scenes::demo_library()[0].render(64, 40);
@@ -365,19 +386,30 @@ fn a_proxy_from_an_older_encode_is_stale() {
 
 #[test]
 fn proraw_tone_travels_with_the_proxy() {
-    use lightcraft_pipeline::proraw::ProRawTone;
-    let knots = (0..32).map(|i| {
-        let x = 2f32.powf(-12.0 + 12.0 * i as f32 / 31.0);
+    use lightcraft_develop::{DevelopSettings, Process};
+    use lightcraft_pipeline::proraw::{PRORAW_TONE_KNOTS, ProRawTone};
+    use lightcraft_pipeline::tone::CameraTone;
+    use lightcraft_pipeline::{RenderRequest, render};
+
+    let knots = (0..PRORAW_TONE_KNOTS).map(|i| {
+        let x = 2f32.powf(-12.0 + 12.0 * i as f32 / (PRORAW_TONE_KNOTS - 1) as f32);
         [x, (x / (x + 0.1)).min(0.999)]
     });
     let tone = ProRawTone::new(knots.collect(), -0.3, Some(-4.0)).unwrap();
     let img = lightcraft_scenes::demo_library()[0].render(32, 20);
-    let info = SourceInfo { raw: true, proraw: Some(std::sync::Arc::new(tone.clone())), ..Default::default() };
+    let camera_tone = CameraTone::new(std::array::from_fn(|i| {
+        let x = 2f32.powf(-12.0 + 12.0 * i as f32 / 31.0);
+        [x, 0.98 * x.sqrt()]
+    }))
+    .unwrap();
+    let info = SourceInfo { raw: true, camera_tone: Some(camera_tone), proraw: Some(std::sync::Arc::new(tone.clone())), ..Default::default() };
     let bytes = encode(&img, Some(&info)).unwrap();
     let back = decode(&bytes).unwrap().2.expect("the facts are read back");
     assert_eq!(back.proraw.as_deref(), Some(&tone));
-    // a proxy written before the field (its facts lack `proraw`) has none: process V9 then
-    // renders the file on the camera-curve path, as V8 does
+    let v13 = DevelopSettings { process: Process::V13.version(), ..Default::default() };
+    assert!(lightcraft_pipeline::proraw::active(&v13, &back).is_some());
+
+    // A v3 proxy predates the curve field. V13 keeps the V10 rendering when the field is missing.
     let nl = MAGIC.len() + bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
     let mut head: serde_json::Value = serde_json::from_slice(&bytes[MAGIC.len()..nl]).unwrap();
     let tail = head["tail"].as_u64().unwrap() as usize;
@@ -390,10 +422,17 @@ fn proraw_tone_travels_with_the_proxy() {
     new_tail.extend_from_slice(&facts);
     new_tail.extend_from_slice(&t[4 + n..]);
     head["tail"] = serde_json::json!(new_tail.len());
+    head[ENC_FIELD] = serde_json::json!(3);
     let mut old = MAGIC.to_vec();
     old.extend_from_slice(head.to_string().as_bytes());
     old.extend_from_slice(&bytes[nl..bytes.len() - tail]);
     old.extend_from_slice(&new_tail);
-    let back = decode(&old).unwrap().2.expect("the older facts are still read");
+    let (pixels, _, back) = decode(&old).unwrap();
+    let back = back.expect("the older facts are still read");
     assert!(back.raw && back.proraw.is_none());
+    assert_eq!(back.camera_tone, Some(camera_tone));
+    assert!(lightcraft_pipeline::proraw::active(&v13, &back).is_none());
+    let v10 = DevelopSettings { process: Process::V10.version(), ..v13.clone() };
+    let req = RenderRequest::fit(pixels.width, pixels.height);
+    assert_eq!(render(&pixels, &back, &v13, &req).image.data, render(&pixels, &back, &v10, &req).image.data);
 }

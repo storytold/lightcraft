@@ -218,7 +218,7 @@ pub struct Present {
     pub chroma: bool,
 }
 
-/// Apple ProRAW's Lightroom chain (process V9): its tables appended to `aux`, and the fields
+/// Apple ProRAW's Lightroom chain (process V13): its tables appended to `aux`, and the fields
 /// that switch the finish kernel to it and point at them.
 fn proraw_fields(p: &mut Block, aux: &mut Vec<f32>, fp: &FinishParams) {
     let mut push = |t: &[f32]| {
@@ -287,8 +287,12 @@ fn proraw_fields(p: &mut Block, aux: &mut Vec<f32>, fp: &FinishParams) {
 /// A curve whose length is not [`CURVE_N`] fails the render ([`FailKind::Fatal`]) and returns an
 /// empty parameter block with a truncated aux table, which the caller discards (CPU fallback).
 pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present, deep: bool) -> (Vec<u32>, Vec<f32>) {
-    let mut aux: Vec<f32> = fp.tone.lut().to_vec();
-    aux.extend_from_slice(fp.tone.chroma_lut());
+    let (tone, chroma) = match &fp.proraw {
+        Some(map) => (map.lut(), &[1.0; lightcraft_pipeline::tone::CHROMA_N]),
+        None => (fp.tone.lut(), fp.tone.chroma_lut()),
+    };
+    let mut aux = tone.to_vec();
+    aux.extend_from_slice(chroma);
     let srgb_off = aux.len();
     aux.extend_from_slice(&srgb_lut()[..]);
     let curve_off = aux.len();
