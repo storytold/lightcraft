@@ -5402,6 +5402,7 @@ dependencies = [
  "candle-nn",
  "lcc-brand",
  "lcc-fetch",
+ "lcc-scenes",
  "lcc-testkit",
  "lcc-tflite",
  "log",
