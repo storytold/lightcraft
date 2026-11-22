@@ -156,7 +156,7 @@ sidebar:
 
 ## Faces
 - **Recognise faces (experimental)**, off until you switch it on; the face detector download; recognition models;
-  **Matching** and **Processor**. See [Faces and people](../../ai/faces/).
+  **Matching** and **Processor** (**Face models device** and **GPU precision**). See [Faces and people](../../ai/faces/).
 
 ### Face scan
 - Where the scan is (not started, indexing, paused, complete, photos done) and how many faces it has learned.

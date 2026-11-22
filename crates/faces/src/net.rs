@@ -118,6 +118,20 @@ pub trait Accelerator: Send + Sync {
     fn run_program(&self, _program: &program::Program, _inputs: &[&[f32]]) -> std::result::Result<Option<Vec<Vec<Vec<f32>>>>, String> {
         Ok(None)
     }
+    /// Precision mode in use (`"fp16"` mixed-precision or `"fp32"`).
+    fn precision(&self) -> &'static str {
+        "fp32"
+    }
+    /// Stable GPU adapter identifier when backed by a hardware device.
+    fn adapter_key(&self) -> Option<String> {
+        None
+    }
+    /// Whether `program_fingerprint` already has a verified-faster plan cached on disk for this device and precision.
+    fn plan_cached(&self, _program_fingerprint: u64) -> bool {
+        false
+    }
+    /// Persist the outcome of benchmarking `program_fingerprint` on this accelerator.
+    fn record_plan(&self, _program_fingerprint: u64, _faster: bool, _fast_ms: f64, _cpu_ms: f64) {}
 }
 
 /// A loaded network, ready to run.
@@ -158,15 +172,18 @@ impl Net {
     ) -> std::result::Result<(), String> {
         self.detach();
         let cpu = self.run(probe.clone()).map_err(|e| e.to_string())?;
+        let prog_fp = self.program(&probe.shape).ok().flatten().map(|p| p.fingerprint());
+        let acc = accelerator.clone();
         *self.accelerator.write().unwrap_or_else(PoisonError::into_inner) = Some(accelerator);
         // the first run also uploads the weights and builds the kernels: time a second one
         let fast = self.run(probe.clone()).map_err(|e| e.to_string());
+        let eff_tol = if acc.precision() == "fp16" { tolerance.max(1e-2) } else { tolerance };
         let mut verdict = match fast {
             Err(e) => Err(e),
             Ok(_) if self.accelerator().is_none() => Err("the device failed on the test input".into()),
-            Ok(fast) => agree(&cpu, &fast, tolerance),
+            Ok(fast) => agree(&cpu, &fast, eff_tol),
         };
-        if verdict.is_ok() && require_faster {
+        if verdict.is_ok() && require_faster && !prog_fp.is_some_and(|fp| acc.plan_cached(fp)) {
             // Measure batch throughput rather than single-face driver launch latency.
             // Face recognition in production batches faces (up to 16 per dispatch).
             const BENCH_BATCH: usize = 8;
@@ -183,12 +200,14 @@ impl Net {
                         self.run_one(input).map_err(|e| e.to_string())?;
                     }
                     let cpu_time = cpu_started.elapsed();
+                    let fast_ms = fast_time.as_secs_f64() * 1000.0;
+                    let cpu_ms = cpu_time.as_secs_f64() * 1000.0;
+                    if let Some(fp) = prog_fp {
+                        acc.record_plan(fp, fast_time < cpu_time, fast_ms, cpu_ms);
+                    }
                     if fast_time >= cpu_time {
                         Err(format!(
-                            "the device is not faster for this model ({:.0} ms against {:.0} ms on the CPU for {} faces)",
-                            fast_time.as_secs_f64() * 1000.0,
-                            cpu_time.as_secs_f64() * 1000.0,
-                            BENCH_BATCH
+                            "the device is not faster for this model ({fast_ms:.0} ms against {cpu_ms:.0} ms on the CPU for {BENCH_BATCH} faces)"
                         ))
                     } else {
                         Ok(())

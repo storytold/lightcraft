@@ -1,6 +1,6 @@
-// The face networks' other operators (lcc-faces `net::program`), so activations stay on the device between layers.
-// Same bindings as faces_conv.wgsl: the parameters, three read-only operands and the output. Element kernels run one
-// thread per output value; `gavg` and `gemv` one workgroup per output value.
+// The face networks' other operators (lcc-faces `net::program`), batched [B, ...], so activations stay on the
+// device between layers. Same bindings as faces_conv.wgsl: the parameters, three read-only operands and the output.
+// Element kernels run one thread per output value; `gavg` and `gemv` one workgroup per output value.
 //
 // Parameters are 24 numbers: q(0) = values (or workgroups) to make, q(1) = workgroups along x, then per kernel.
 
@@ -149,7 +149,7 @@ fn reduce(lid: u32) {
     workgroupBarrier();
 }
 
-// one workgroup per channel; q(2) plane
+// one workgroup per (batch, channel); q(0) = batch * channels, q(2) plane
 @compute @workgroup_size(256)
 fn gavg(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
     let ch = wid.y * q(1) + wid.x;
@@ -163,26 +163,30 @@ fn gavg(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     partial[lid] = sum;
     reduce(lid);
     if (lid == 0u && ch < q(0)) {
-        dst[ch] = partial[0] / f32(plane);
+        dst[ch] = partial[0] / f32(max(plane, 1u));
     }
 }
 
-// one workgroup per output; q(2) k, q(3) n, q(4) 1 when B is [n][k], q(5) alpha's bits
+// one workgroup per (batch, output); q(0) = batch * n, q(2) k, q(3) n, q(4) 1 when B is [n][k], q(5) alpha's bits
 @compute @workgroup_size(256)
 fn gemv(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
-    let o = wid.y * q(1) + wid.x;
+    let flat_o = wid.y * q(1) + wid.x;
     let k = q(2);
     let n = q(3);
+    var b_idx = 0u;
+    var o = 0u;
     var sum = 0.0;
-    if (o < q(0)) {
+    if (flat_o < q(0) && n > 0u) {
+        b_idx = flat_o / n;
+        o = flat_o % n;
         for (var j = lid; j < k; j = j + 256u) {
             let wi = select(j * n + o, o * k + j, q(4) == 1u);
-            sum = sum + a[j] * b[wi];
+            sum = sum + a[b_idx * k + j] * b[wi];
         }
     }
     partial[lid] = sum;
     reduce(lid);
-    if (lid == 0u && o < q(0)) {
-        dst[o] = bitcast<f32>(q(5)) * partial[0] + c[o];
+    if (lid == 0u && flat_o < q(0) && n > 0u) {
+        dst[flat_o] = bitcast<f32>(q(5)) * partial[0] + c[o];
     }
 }
