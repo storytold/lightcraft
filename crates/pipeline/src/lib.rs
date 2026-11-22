@@ -25,6 +25,7 @@
 
 pub mod auto;
 pub mod blemish;
+mod bridge;
 pub mod colorops;
 pub mod crystal;
 pub mod cull;
@@ -43,8 +44,6 @@ pub mod lut;
 pub mod mask_space;
 pub mod masks;
 pub mod nrc_joint;
-#[cfg(test)]
-mod nrc_joint_reference;
 pub mod optics;
 pub mod output;
 pub mod profiles;
