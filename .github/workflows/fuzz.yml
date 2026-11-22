@@ -6,7 +6,7 @@ name: Fuzz
 
 on:
   schedule:
-    - cron: "17 3 * * *"
+    - cron: "47 4 * * *"
   workflow_dispatch:
     inputs:
       secs:
@@ -27,7 +27,7 @@ env:
 
 jobs:
   fuzz:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, lcc]
     timeout-minutes: 75
     strategy:
       fail-fast: false
