@@ -34,8 +34,8 @@ const H: usize = 427;
 static WRITE: Mutex<()> = Mutex::new(());
 
 fn photo(kind: Kind, seed: u32) -> Vec<u8> {
-    let img = lcc_scenes::render(kind, seed, W, H).to_srgb8();
-    img.as_bytes().chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect()
+    let img = lcc_scenes::render_srgb_linear(kind, seed, W, H).to_srgb8();
+    img.data.iter().flat_map(|p| [p[0], p[1], p[2]]).collect()
 }
 
 /// Summary of one output: `[n, mean, std, min, max, share above threshold]`.
