@@ -602,7 +602,7 @@ impl Gpu {
     /// Create a device on `adapter` (not a software one), or why it can't be.
     pub fn on_adapter(adapter: &wgpu::Adapter) -> Result<Gpu, String> {
         let info = adapter.get_info();
-        if info.device_type == wgpu::DeviceType::Cpu {
+        if info.device_type == wgpu::DeviceType::Cpu && !crate::backend::software_forced() {
             log::info!("gpu: only a software adapter ({}), using the CPU pipeline", info.name);
             return Err(format!("software adapter ({}) skipped: the CPU pipeline is faster", info.name));
         }
