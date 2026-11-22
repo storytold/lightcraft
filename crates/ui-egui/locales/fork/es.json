@@ -2599,7 +2599,7 @@
   "Scan Folder for Changes": "Buscar cambios en la carpeta",
   "Scan photos that have a score already (rescan all)": "Escanear también las fotos que ya tienen puntuación (volver a escanear todo)",
   "Scanning image quality": "Escaneando la calidad de imagen",
-  "Scores photos for technical quality — sharpness, noise, exposure and JPEG artifacts — and keeps each score on the photo so the Library can filter and sort by it.": "Puntúa las fotos por calidad técnica —nitidez, ruido, exposición y artefactos JPEG— y guarda cada puntuación en la foto para que la Biblioteca pueda filtrar y ordenar por ella.",
+  "Scores photos for technical quality (sharpness, noise, exposure and JPEG artifacts) and keeps each score on the photo so the Library can filter and sort by it.": "Puntúa las fotos por calidad técnica , nitidez, ruido, exposición y artefactos JPEG,  y guarda cada puntuación en la foto para que la Biblioteca pueda filtrar y ordenar por ella.",
   "Screen Edges to Keep Clear": "Bordes de pantalla que dejar libres",
   "Screen Mode": "Modo de pantalla",
   "Scroll By Row": "Desplazar por fila",
