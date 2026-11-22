@@ -108,14 +108,7 @@ fn a_misbehaving_printer_is_an_error_naming_what_happened() {
     // a reply far over the read cap, claiming its whole length
     let huge = 20 * 1024 * 1024;
     let big = [
-        format!(
-            "HTTP/1.1 200 OK
-Content-Type: application/ipp
-Content-Length: {huge}
-
-"
-        )
-        .into_bytes(),
+        format!("HTTP/1.1 200 OK{crlf}Content-Type: application/ipp{crlf}Content-Length: {huge}{crlf}{crlf}", crlf = "\r\n").into_bytes(),
         vec![0u8; huge],
     ]
     .concat();
