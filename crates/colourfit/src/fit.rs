@@ -21,10 +21,13 @@
 //!    on them for [`LOOP_ROUNDS`] rounds (a round that makes the real training error worse is undone).
 //! 7. Gates: held-out ΔE00 median and p95, from real renders (the app's own colour `lc` before, the candidate after),
 //!    must beat the app's current colour. When a raw can't be rendered, the analytic numbers stand in, with a note.
+//!    A Lightroom fit whose base look loses to the current colour (on raws, each one's look fitted to its camera
+//!    JPEG) but beats the plain colour (the prior matrices, analytic) is kept for files with colour matrices of their
+//!    own only (`own_matrix_only`: converted DNGs, which get no JPEG fit; issue #1119).
 use crate::dataset::{DngMatrices, PhotoSamples};
 use crate::deltae;
 use crate::{Error, Result};
-use lcc_camdb::calibration::{Calibration, CameraModel, CctBin, Editor, Evidence, LICENCE, Look, LookEvidence, VERSION};
+use lcc_camdb::calibration::{Calibration, CameraModel, CctBin, DeltaE, Editor, Evidence, LICENCE, Look, LookEvidence, VERSION};
 use lcc_color::{D50, D65, Mat3, SRGB, Xy};
 use lcc_raw::profile::ToneCurve;
 
@@ -581,9 +584,7 @@ pub fn fit(photos: &[PhotoSamples], opts: &FitOptions) -> Result<Calibration> {
     let candidate = assemble(&who, &model, &looks, prior_fm, Evidence::default());
     let before_model = Model { cm: prior.cm, fm: prior.fm, hsm: None };
     let before_lut = pipe::Lut::build(None)?;
-    let mut look_evidence = Vec::new();
-    let mut gated = 0usize;
-    let mut dropped: Vec<String> = Vec::new();
+    let mut rows = Vec::new();
     for l in &looks {
         let of_look = |held: bool| -> Vec<&PhotoSamples> { photos.iter().filter(|p| p.held_out == held && p.look.trim() == l.name).collect() };
         let (held, trained) = (of_look(true), of_look(false));
@@ -607,33 +608,61 @@ pub fn fit(photos: &[PhotoSamples], opts: &FitOptions) -> Result<Calibration> {
             }
             Err(e) => eprintln!("note: {}: ΔE00 from the analytic model, a raw could not be rendered ({e})", l.name),
         }
-        if before.is_empty() {
-            before = errors(&before_model, &LookModel::default(), &before_lut, set, &ps);
-            after = errors(&model, &l.look, &l.lut, set, &ps);
-        }
-        let (b, a) = (deltae::summary(&before), deltae::summary(&after));
-        if !held.is_empty() {
-            gated += 1;
-            if !(a.median < b.median && a.p95 < b.p95) && l.name != base {
-                // another look that a fixed look can't match (an adaptive profile changes with each photo) is left out
+        // the analytic model: the prior matrices without any per-photo look (what a file with its own matrices and
+        // no JPEG fit starts from) against the candidate
+        let plain = (
+            deltae::summary(&errors(&before_model, &LookModel::default(), &before_lut, set, &ps)),
+            deltae::summary(&errors(&model, &l.look, &l.lut, set, &ps)),
+        );
+        let (b, a) = if before.is_empty() { plain } else { (deltae::summary(&before), deltae::summary(&after)) };
+        let evidence = LookEvidence { name: l.name.clone(), photos: count_photos(&trained), held_out: count_photos(&held), before: b, after: a };
+        rows.push((evidence, plain, !held.is_empty()));
+    }
+    let gated = rows.iter().filter(|r| r.2).count();
+    // the base look decides the calibration's reach: beating the app's current colour serves every file; losing to
+    // it (on raws that is the look fitted to each one's camera JPEG) but beating the plain colour serves only files
+    // with matrices of their own, which get no such fit (issue #1119); losing to both is refused
+    let mut own_matrix_only = false;
+    if let Some((e, plain, true)) = rows.iter().find(|r| r.0.name == base) {
+        match gate_verdict((e.before, e.after), *plain) {
+            Verdict::Beats => {}
+            Verdict::OwnMatrixOnly if opts.editor == Editor::Lightroom => {
+                own_matrix_only = true;
                 eprintln!(
-                    "note: look {:?} left out: on the held-out photos it does not beat the app's current colour \
-                     (ΔE00 median {:.2} vs {:.2}, p95 {:.2} vs {:.2}); adaptive profiles change with each photo and can't be matched",
-                    l.name, a.median, b.median, a.p95, b.p95
+                    "note: {}: on the held-out photos the fitted colour (ΔE00 median {:.2}, p95 {:.2}) does not beat the per-photo colour \
+                     these raws get from their camera JPEG (median {:.2}, p95 {:.2}), but beats the plain colour (median {:.2} vs {:.2}): \
+                     kept as the default only for files with colour matrices of their own (converted DNGs)",
+                    e.name, e.after.median, e.after.p95, e.before.median, e.before.p95, plain.1.median, plain.0.median
                 );
-                dropped.push(l.name.clone());
-                continue;
             }
-            if !(a.median < b.median && a.p95 < b.p95) {
+            _ => {
                 return Err(Error(format!(
                     "{}: on the held-out photos the fitted colour (ΔE00 median {:.2}, p95 {:.2}) does not beat the app's current colour \
                      (median {:.2}, p95 {:.2}). Add more photos with varied colours and light (daylight, shade and tungsten), and check \
                      the exports used the baseline preset",
-                    l.name, a.median, a.p95, b.median, b.p95
+                    e.name, e.after.median, e.after.p95, e.before.median, e.before.p95
                 )));
             }
         }
-        look_evidence.push(LookEvidence { name: l.name.clone(), photos: count_photos(&trained), held_out: count_photos(&held), before: b, after: a });
+    }
+    let mut look_evidence = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
+    for (e, plain, held) in rows {
+        if held && e.name != base {
+            let verdict = gate_verdict((e.before, e.after), plain);
+            let kept = verdict == Verdict::Beats || (own_matrix_only && verdict == Verdict::OwnMatrixOnly);
+            if !kept {
+                // another look that a fixed look can't match (an adaptive profile changes with each photo) is left out
+                eprintln!(
+                    "note: look {:?} left out: on the held-out photos it does not beat the app's current colour \
+                     (ΔE00 median {:.2} vs {:.2}, p95 {:.2} vs {:.2}); adaptive profiles change with each photo and can't be matched",
+                    e.name, e.after.median, e.before.median, e.after.p95, e.before.p95
+                );
+                dropped.push(e.name.clone());
+                continue;
+            }
+        }
+        look_evidence.push(e);
     }
     looks.retain(|l| !dropped.contains(&l.name));
     if gated == 0 {
@@ -648,9 +677,35 @@ pub fn fit(photos: &[PhotoSamples], opts: &FitOptions) -> Result<Calibration> {
         white_points,
         looks: look_evidence,
     };
-    let cal = assemble(&who, &model, &looks, prior_fm, evidence);
+    let mut cal = assemble(&who, &model, &looks, prior_fm, evidence);
+    cal.own_matrix_only = own_matrix_only;
     cal.validate().map_err(|e| Error(format!("the fitted calibration is not valid: {e}")))?;
     Ok(cal)
+}
+
+/// What a look's held-out gate says ([`gate_verdict`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Verdict {
+    /// It beats the app's current colour (median and p95): it serves every file.
+    Beats,
+    /// It loses to the current colour but beats the plain colour (the prior matrices without a per-photo look): it
+    /// serves only files with matrices of their own, which get no per-photo JPEG fit (issue #1119).
+    OwnMatrixOnly,
+    /// It beats neither.
+    Fails,
+}
+
+/// The held-out gate on `(before, after)` ΔE00 against the app's current colour (`current`) and against the plain
+/// colour (`plain`, analytic): after must be below before at both the median and p95.
+fn gate_verdict(current: (DeltaE, DeltaE), plain: (DeltaE, DeltaE)) -> Verdict {
+    let beats = |(b, a): &(DeltaE, DeltaE)| a.median < b.median && a.p95 < b.p95;
+    if beats(&current) {
+        Verdict::Beats
+    } else if beats(&plain) {
+        Verdict::OwnMatrixOnly
+    } else {
+        Verdict::Fails
+    }
 }
 
 /// Who the calibration is for and by.
@@ -670,6 +725,7 @@ fn assemble(who: &Who, model: &Model, looks: &[FittedLook], prior_fm: [Mat3; 2],
         aliases: Vec::new(),
         lens: None,
         editor: who.editor,
+        own_matrix_only: false,
         method: who.editor.method(),
         tool_version: env!("CARGO_PKG_VERSION").into(),
         contributor: who.contributor.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()),

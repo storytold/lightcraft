@@ -107,3 +107,18 @@ fn fit_hostile_inputs_are_errors() {
     mixed[1].model = "Other".into();
     assert!(fit(&mixed, &FitOptions::default()).is_err());
 }
+
+/// Issue #1119: the gate keeps a fit that beats the current colour for every file, one that loses to it (on raws,
+/// the per-photo JPEG fit) but beats the plain colour for files with matrices of their own only, and refuses the rest.
+#[test]
+fn gate_verdict_scopes_a_fit_that_loses_to_the_per_photo_fit() {
+    let d = |median: f32, p95: f32| DeltaE { median, p95 };
+    // the issue's numbers: fitted 1.84 / 6.11 against the CR2s' JPEG fit 1.63 / 4.31; far better than plain colour
+    assert_eq!(gate_verdict((d(1.63, 4.31), d(1.84, 6.11)), (d(4.0, 10.0), d(1.9, 6.0))), Verdict::OwnMatrixOnly);
+    assert_eq!(gate_verdict((d(3.0, 8.0), d(1.5, 4.0)), (d(4.0, 10.0), d(1.9, 6.0))), Verdict::Beats);
+    assert_eq!(gate_verdict((d(1.63, 4.31), d(1.84, 6.11)), (d(1.5, 4.0), d(1.9, 6.0))), Verdict::Fails);
+    // both the median and p95 must improve
+    assert_eq!(gate_verdict((d(2.0, 4.0), d(1.0, 5.0)), (d(2.0, 4.0), d(1.0, 5.0))), Verdict::Fails);
+    // hostile numbers never pass
+    assert_eq!(gate_verdict((d(f32::NAN, 4.0), d(1.0, 1.0)), (d(f32::NAN, f32::NAN), d(1.0, 1.0))), Verdict::Fails);
+}

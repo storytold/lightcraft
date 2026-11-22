@@ -1,6 +1,6 @@
 # CI and landing changes
 
-> **Last updated:** 2026-11-22 · **Change:** minor (nightly `Fuzz` workflow: every pure-Rust fuzz target for 30 minutes, crash inputs as artifacts); minor (nightly workflow: corpus + fonts full run with a skip gate, GPU equivalence on lavapipe and WARP); minor (timing probes and benchmarks run with `<PREFIX>_PROBES=1` and otherwise record a `probe` skip); minor (generated demo photos are kept on disk across test processes); minor (the fast gate checks that the fork catalogs are sorted); minor (the full run also checks the x86_64 Android target); major (no repeated runs: a push to main skips a tree its PR run tested, no CI on pushes to `release`, Brand only on PRs and built in the runner cache, Windows ARM64 only when packaging inputs change, sccache, one cargo run per target for the fast gate's wasm/Android checks); minor (release jobs upload straight to the draft release, not via Actions artifacts); major (every workflow on self-hosted runners, containers on gpu0, fork PRs approved after review); minor (test retries, flaky reports and the test quarantine for the full run); major (fast PR gate; full test runs only before a release); major (created: PR-only main, self-hosted runner, local status)
+> **Last updated:** 2026-11-23 · **Change:** patch (dependency updates: the hand-held `windows` 0.62.2 lockfile pin); minor (PRs run the tests of the changed crates and their dependents; the nightly full run covers macOS and Windows, files an issue when red, and a red nightly blocks `release.yml`); minor (nightly `Fuzz` workflow: every pure-Rust fuzz target for 30 minutes, crash inputs as artifacts); minor (nightly workflow: corpus + fonts full run with a skip gate, GPU equivalence on lavapipe and WARP); minor (timing probes and benchmarks run with `<PREFIX>_PROBES=1` and otherwise record a `probe` skip); minor (generated demo photos are kept on disk across test processes); minor (the fast gate checks that the fork catalogs are sorted); minor (the full run also checks the x86_64 Android target); major (no repeated runs: a push to main skips a tree its PR run tested, no CI on pushes to `release`, Brand only on PRs and built in the runner cache, Windows ARM64 only when packaging inputs change, sccache, one cargo run per target for the fast gate's wasm/Android checks); minor (release jobs upload straight to the draft release, not via Actions artifacts); major (every workflow on self-hosted runners, containers on gpu0, fork PRs approved after review); minor (test retries, flaky reports and the test quarantine for the full run); major (fast PR gate; full test runs only before a release); major (created: PR-only main, self-hosted runner, local status)
 
 ## How changes reach `main`
 
@@ -18,7 +18,8 @@ Every change goes on a branch, opens a PR and is set to auto-merge
 
 | Trigger | Linux ("Linux (cargo xtask ci)") | macOS / Windows |
 |---|---|---|
-| Pull request to `main`, push to `main` | `cargo xtask ci --fast` + SIL suite | clippy |
+| Pull request to `main` | `cargo xtask ci --fast` + changed-crate tests + SIL suite | clippy |
+| Push to `main` | `cargo xtask ci --fast` + SIL suite | clippy |
 | Manual dispatch (Actions → CI → Run workflow) | full `cargo xtask ci` + SIL suite | build + clippy + `cargo test --workspace` |
 | Push to `release` | none: the dispatched run tested that commit | none |
 
@@ -42,6 +43,14 @@ that builds only because another member turns on a feature it relies on. The And
 both ABIs a release ships, arm64 and x86_64, in the full run. `cargo xtask parity` reads the command
 and control registries from the CLI as `cargo test -p lcc-cli --test sil` builds it, so the SIL step that follows
 compiles nothing new.
+
+**Changed-crate tests (PRs).** After the fast gate, PR runs call `cargo xtask affected-tests --base HEAD^1`
+(the checkout fetches two commits: GitHub's merge of the PR and its first parent, the base). It takes the packages
+`ci --quick` would (files inside a package, files a crate compiles in, `ci_quick.rs`'s `EMBEDDED`), adds every
+workspace package that depends on one of them, directly or not and of any dependency kind, and runs those packages'
+unit and integration test binaries (one workspace `--no-run` build, as `ci --quick`; no doctests). A workspace-wide
+change (root `Cargo.toml`, `Cargo.lock`, lint or toolchain config) tests every package. Locally:
+`cargo xtask affected-tests` compares with `origin/main`.
 
 Before cutting a release, dispatch CI on the commit and make sure all three OSes are green, then push that commit
 to `release` (`release.yml` builds it; CI does not run again there).
@@ -208,13 +217,22 @@ Every such case must end in an error that names what happened, never a panic, a 
 ## Nightly
 
 `.github/workflows/nightly.yml` runs every day at 03:17 UTC and on manual dispatch (Actions → Nightly → Run workflow).
-It covers what the PR gate and the release dispatch cannot: test data and software GPU adapters.
+It covers what the PR gate and the release dispatch cannot: test data, software GPU adapters and the full test suite
+on all three desktop OSes every day.
 
 | Job | Runner | What it runs |
 |---|---|---|
 | Corpus + fonts | self-hosted Linux | the pinned raw corpus (`cargo xtask corpus --download`, sha256-checked), craft-fonts and [photocraft-corpus](https://github.com/storytold/photocraft-corpus) at pinned commits (the latter verified with its own `SHA256SUMS`, into `corpus/photocraft`; staged for future oracle tests, nothing reads it yet, so it adds no coverage and the skip gate cannot notice it missing), then the full `cargo xtask ci` and the skip gate; `target/ci/` is uploaded as `nightly-ci-report` |
 | GPU equivalence on lavapipe | gpu0, `rust:1.100.0-bookworm` container (exact tag) | `crates/gpu/tests/it/equivalence.rs` on Mesa's software Vulkan driver (the container has no GPU) |
 | GPU equivalence on WARP | self-hosted Windows | the same tests on DX12's software adapter |
+| Full tests (macOS), Full tests (Windows) | self-hosted mac0, win0 | `cargo build --workspace` and `cargo xtask quarantine test` (nextest with retries and the quarantine), as the manual full CI run |
+| Report | self-hosted Linux | scheduled runs only: when any job failed or was cancelled, opens the issue "Nightly full run failing" (or comments on the open one) with the run link; on a green run it closes that issue |
+
+**Release gate.** `release.yml`'s version job looks up the completed `nightly.yml` runs and takes the newest whose
+commit is the release commit or one of its ancestors (`git merge-base --is-ancestor`, full-history checkout). When
+that run is not `success`, a push to `release` fails before any draft is made; a dry-run dispatch only warns. With no
+such nightly at all it warns and continues. To release after a red nightly: fix it on `main`, dispatch Nightly (or
+wait for the next one) and push to `release` once it is green.
 
 **Skip gate.** `cargo xtask skips check` reads the skips of `target/ci/report.json` (each `lcc_testkit::skip!`, per
 need: `gpu`, `corpus`, `fonts`, `model`, …) and fails when a need has more than [`ci/skip-allowlist.toml`](../ci/skip-allowlist.toml)
@@ -231,10 +249,31 @@ and 3), since software rasterizers round transcendentals and fused multiply-adds
 moves far more. Locally: `<PREFIX>_GPU_SOFTWARE=1 <PREFIX>_GPU_BACKEND=dx12 cargo test -p lcc-gpu --release --test it
 -- equivalence` (Windows; `vulkan` with Mesa's `mesa-vulkan-drivers` on Linux).
 
-Model references (SAM 2.1, SAM 3, BiRefNet, EoMT, TFLite, YuNet) are not part of the nightly yet: their reference
-outputs come from scratch scripts and are not stored anywhere CI can fetch with a pinned sha256.
-**Blocked** until the checkpoints and their reference outputs are published at pinned URLs with sha256s; there is
-deliberately no placeholder job in `nightly.yml`, since it could only skip and would prove nothing.
+## Model references
+
+`.github/workflows/models.yml` runs every Sunday at 04:41 UTC and on manual dispatch, on the self-hosted Linux runner.
+It downloads the openly licensed checkpoints with `cargo run -p lcc-segment --release --example
+fetch_reference_models -- <dir>`, which uses the app's own pinned download locations and size + SHA-256 checks
+(`lcc_segment::models`, `lcc_segment::fetch`, through `lcc-fetch`), so CI fetches exactly what users get; the folder
+(`~/.cache/lcc-ci-models`, ~450 MB) stays on the runner and is re-verified, not re-downloaded. Then
+`crates/segment/tests/model_reference.rs` runs our own CPU inference on three procedural `lcc-scenes` photos and
+compares, per output, element count, mean, standard deviation, min, max and the share above the mask threshold with
+[`crates/segment/tests/data/model-references.json`](../crates/segment/tests/data/model-references.json) (mean / std /
+min / max within `rtol` of the output's range, the share within `share_tol`; both stored per model). The job fails if
+any model is skipped. These are regression references for our ports, generated by our own code (no images, no
+upstream outputs); the stage-by-stage comparisons with the upstream implementations (`*_reference.rs`) stay manual.
+Locally: `<PREFIX>_MODEL_REF_DIR=<dir> cargo test -p lcc-segment --release --test model_reference -- --nocapture`;
+after a deliberate change to a model's outputs, regenerate with `<PREFIX>_MODEL_REF_WRITE=1` and review the diff.
+
+| Model | Licence of the weights | In the job |
+|---|---|---|
+| SAM 2.1 Hiera-Tiny (`facebook/sam2.1-hiera-tiny`, pinned commit) | Apache-2.0 | yes: two click prompts per photo, logits and score |
+| BiRefNet_lite (`ZhengPeng7/BiRefNet_lite`, pinned commit) | MIT | yes: the matte |
+| EoMT-S COCO panoptic (`tue-mps/coco_panoptic_eomt_small_640_2x`, pinned commit) | MIT (COCO annotations CC BY 4.0, credited) | yes: class probabilities and the sky map |
+| MediaPipe Selfie Multiclass (TFLite interpreter) | Apache-2.0 | yes: raw logits |
+| MediaPipe Face Landmarker: BlazeFace + FaceMesh (TFLite interpreter) | Apache-2.0 | yes: raw detector and mesh outputs (the procedural photos have no faces, so this checks the numbers, not detections) |
+| SAM 3 (`facebook/sam3`) | SAM License (custom, gated on Hugging Face) | **no**: not a permissive licence, every download needs the user's own accepted token, and the app has no mirror of its own (`DEFAULT_MIRRORS` is empty) |
+| YuNet 2023mar | MIT weights trained on WIDER FACE (CC BY-NC-ND) | **no**: retired from the app for that reason, and it has no pinned download location in the code (only its SHA-256) |
 
 ## Checked in person, not on CI
 
@@ -292,3 +331,13 @@ A test that can't run here calls `lcc_testkit::skip!(Need, "why")`; `cargo xtask
 `target/ci/report.json` and `summary.md`. Timing probes and benchmarks are not `#[ignore]`d: they start with
 `if !lcc_testkit::probe("what") { return; }`, which records a `probe` skip unless `<PREFIX>_PROBES=1` is set. Run them
 in release, for example `<PREFIX>_PROBES=1 cargo test --release -p lcc-pipeline --lib bench_ -- --nocapture`.
+
+## Dependency updates
+
+Security updates (Dependabot alerts) land as ordinary PRs through the fast gate. One lockfile pin is held by hand
+(2026-11-19, PR #1292): the `windows` crate stays at **0.62.2** for wgpu-hal's dx12 backend and `crates/gpumem`. A
+plain `cargo update` re-resolves gpu-allocator onto `windows 0.54` and breaks the Windows dx12 build, so update with
+`cargo update -p <crate>` and check that `Cargo.lock` still resolves those users to 0.62.2
+(`cargo tree -i windows@0.62.2 --target x86_64-pc-windows-msvc`). The same note sits in `deny.toml` above `[bans]`.
+Still open from that round: `rustls-webpki` 0.102.8 (via `rustls-rustcrypto 0.0.2-alpha` in `lcc-fetch`) has no
+stable release on 0.103 and needs its own migration.

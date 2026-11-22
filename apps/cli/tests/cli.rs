@@ -642,7 +642,7 @@ fn mcp_over_stdio_sets_exposure_and_renders() {
         stdin.flush().unwrap();
         let mut line = String::new();
         stdout.read_line(&mut line).unwrap();
-        let v: Value = serde_json::from_str(&line).unwrap();
+        let v: Value = serde_json::from_str(&line).unwrap_or_else(|e| panic!("{e}: {line:?}"));
         assert_eq!(v["id"], id);
         v
     };
@@ -1182,7 +1182,7 @@ fn run_cli(args: &[&str], stdin: Option<&str>) -> (bool, Vec<Value>, String) {
     }
     drop(child.stdin.take());
     let o = child.wait_with_output().unwrap();
-    let lines = String::from_utf8_lossy(&o.stdout).lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let lines = String::from_utf8_lossy(&o.stdout).lines().map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{e}: {l:?}"))).collect();
     (o.status.success(), lines, String::from_utf8_lossy(&o.stderr).to_string())
 }
 

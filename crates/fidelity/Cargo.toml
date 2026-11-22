@@ -1,0 +1,15 @@
+[package]
+name = "lcc-fidelity"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Render-fidelity measures (L1): CIEDE2000 and SSIM between renders, a synthetic ColorChecker chart and its per-patch ΔE, and the local reference store of the render-fidelity suite"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+lcc-color = { workspace = true }
+lcc-raster = { workspace = true }
+lcc-camprof = { workspace = true }

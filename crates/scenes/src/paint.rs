@@ -20,9 +20,9 @@ pub enum Label {
     Water = 3,
 }
 
+// Already `const`; clippy's missing_const_for_thread_local still fires on the
+// aarch64-linux-android expansion (false positive, CI android check).
 thread_local! {
-    // Already `const`: clippy for aarch64-linux-android (the Android check in `cargo xtask ci`) still
-    // reports the initializer, so the lint is allowed here.
     #[allow(clippy::missing_const_for_thread_local)]
     static LABEL: std::cell::Cell<Label> = const { std::cell::Cell::new(Label::Other) };
 }
