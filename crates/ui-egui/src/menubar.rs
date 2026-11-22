@@ -6,6 +6,7 @@
 //! in-window menu bar (web, Windows, Linux — [`show_in_window`]) and the control channel
 //! (`ui.menu.tree`). Items are a command id plus parameters, run through [`run_item`] so they
 //! behave exactly like their keyboard shortcuts.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use serde::Serialize;
 use serde_json::{Value, json};

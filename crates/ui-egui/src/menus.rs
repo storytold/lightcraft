@@ -1,5 +1,6 @@
 //! UI-level commands (views, panels, zoom, tools, dialogs) and the menu model shared by the native
 //! menu bar, the shortcut handler and the control channel.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use serde::Serialize;
 use serde_json::{Value, json};

@@ -7,6 +7,7 @@
 //! white balance and exposure compensation readouts (menus where the camera allows changes), the
 //! capture button, "same as previous" develop settings, and a live view window where the camera
 //! supports it.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use serde_json::{Value, json};
 

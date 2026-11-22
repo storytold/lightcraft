@@ -1,4 +1,5 @@
 //! Photo Grid (justified rows) and Square Grid. Virtualized: only visible cells request thumbnails.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 /// A photo's exposure as a cell shows it: shutter · aperture · ISO · focal length, the parts the
 /// file has (`None`: none of them).

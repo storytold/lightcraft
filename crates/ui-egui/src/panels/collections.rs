@@ -1,6 +1,7 @@
 //! The Classic Collections panel's own parts: the target collection line under the tree and
 //! collection definition export / import. The tree itself (collection sets, collections, smart
 //! collections, drag and drop) is `left::albums_body`.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::{Align2, Sense, pos2, vec2};
 use serde_json::json;

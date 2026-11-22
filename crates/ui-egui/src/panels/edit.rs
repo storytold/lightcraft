@@ -1,5 +1,6 @@
 //! The Edit panel: histogram, Auto/B&W, profile, and the Light / Color / Effects / Detail / Optics
 //! sections, built from the engine's control specs.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::epaint::{Mesh, Vertex};
 use egui::{Align2, Color32, Pos2, Rect, RichText, Sense, Stroke, pos2, vec2};

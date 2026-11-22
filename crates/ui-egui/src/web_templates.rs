@@ -227,6 +227,7 @@ pub fn browser(ui: &mut egui::Ui, app: &mut LccApp) {
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::indexing_slicing, reason = "test code: clippy.toml allows indexing in tests, but its test check misses cfg(all(test, ...))")]
 mod tests {
     use std::time::Duration;
 

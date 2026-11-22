@@ -1,4 +1,5 @@
 //! Modal dialogs (new album, rename, create preset, choose settings to copy, export, about, shortcuts).
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use lcc_develop::{ControlSpec, Section, SettingsGroup, SettingsPick, Track};
 use serde_json::json;
