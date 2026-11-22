@@ -393,6 +393,18 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.curve.lights = 30.0;
             s.curve.refine_saturation = 20.0;
         }),
+        ("channel curves + brightness + levels in the V10 wide space (#1142)", |s| {
+            s.curve.red = vec![Point::new(0.0, 0.0), Point::new(0.62, 0.38), Point::new(1.0, 1.0)];
+            s.curve.green = vec![Point::new(0.0, 0.0), Point::new(0.514, 0.482), Point::new(1.0, 1.0)];
+            s.curve.refine_saturation = 60.0;
+            s.light.brightness = 30.0;
+            s.levels.master.midtone = 0.3;
+        }),
+        ("channel curves on output values (process V9)", |s| {
+            s.process = lcc_develop::Process::V9.version();
+            s.curve.red = vec![Point::new(0.0, 0.0), Point::new(0.62, 0.38), Point::new(1.0, 1.0)];
+            s.light.brightness = 30.0;
+        }),
         ("vignette (highlight)", |s| {
             s.vignette.amount = -60.0;
             s.vignette.highlights = 50.0;

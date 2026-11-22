@@ -6,6 +6,6 @@ sidebar:
 ---
 
 - Every photo remembers the **process** its settings were made with. New looks ship as a new process, so existing edits never change by themselves.
-- **Update to Current Process** (**Photo ▸ Develop Settings**) moves a photo to the latest, **V9**; **Reset** also does.
-- V2: Highlights and Shadows keep fine detail. V3: Dehaze. V4: Sharpening Radius and Detail. V5: bright saturated colours keep hue. V6: AI Denoise amount. V7: Grain. V8: dithered 8-bit output, a gentler highlight roll-off, joint colour noise reduction. V9: Calibration primary Saturation no longer bends hue (blues).
+- **Update to Current Process** (**Photo ▸ Develop Settings**) moves a photo to the latest, **V10**; **Reset** also does.
+- V2: Highlights and Shadows keep fine detail. V3: Dehaze. V4: Sharpening Radius and Detail. V5: bright saturated colours keep hue. V6: AI Denoise amount. V7: Grain. V8: dithered 8-bit output, a gentler highlight roll-off, joint colour noise reduction. V9: Calibration primary Saturation no longer bends hue (blues). V10: the Tone Curve (strongest on red, green and blue channel curves) works in a fixed wide colour space before the export conversion, as in Lightroom, so an edit looks the same exported to sRGB, Display P3 or ProPhoto; Levels and Brightness now come after it.
 - V1 is frozen. Bug fixes land in place; deliberate changes of look do not.

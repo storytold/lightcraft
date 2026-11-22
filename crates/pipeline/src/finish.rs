@@ -81,6 +81,54 @@ fn eval_curves(l: &[Lut1; 3], e: [f32; 3], hdr: bool) -> [f32; 3] {
     }
 }
 
+/// Gamma of the wide curve space (process V10, [`CurveSpace`]): ProPhoto RGB's own encoding.
+pub const CURVE_SPACE_GAMMA: f32 = 1.8;
+
+/// Process V10's space for the Tone Curve (fork issue #1142): linear Rec.2020 → linear ProPhoto RGB
+/// (Bradford D65 → D50) and back. The curves run on those values encoded with gamma
+/// [`CURVE_SPACE_GAMMA`], before the gamut map to the output space, as Lightroom applies its point
+/// curves in its ProPhoto-primaries working space; the result then no longer depends on the export space.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CurveSpace {
+    pub to_wide: [[f32; 3]; 3],
+    pub from_wide: [[f32; 3]; 3],
+}
+
+impl CurveSpace {
+    pub fn new() -> CurveSpace {
+        CurveSpace {
+            to_wide: lcc_color::REC2020.to_space(&lcc_color::PROPHOTO).to_f32(),
+            from_wide: lcc_color::PROPHOTO.to_space(&lcc_color::REC2020).to_f32(),
+        }
+    }
+
+    /// `stages` (Brightness, Levels, the curve tables and Refine Saturation) on linear Rec.2020 `d`, through the
+    /// wide space. Each channel's non-negative part is encoded and handed over; a negative part (outside ProPhoto)
+    /// passes through. Nothing is clipped here (the gamut map does that).
+    pub fn apply(&self, d: [f32; 3], stages: impl FnOnce([f32; 3]) -> [f32; 3]) -> [f32; 3] {
+        let q = mul3(&self.to_wide, d);
+        let pos = q.map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 });
+        let e = stages(pos.map(|v| v.powf(1.0 / CURVE_SPACE_GAMMA)));
+        let out: [f32; 3] = std::array::from_fn(|k| q[k] - pos[k] + e[k].max(0.0).powf(CURVE_SPACE_GAMMA));
+        mul3(&self.from_wide, out)
+    }
+
+    /// The curve tables `l` and Refine Saturation `refine` (0..1) in the wide space; above 1 a curve continues with
+    /// slope 1 from its end point.
+    pub fn apply_curves(&self, l: &[Lut1; 3], d: [f32; 3], refine: f32) -> [f32; 3] {
+        self.apply(d, |e0| {
+            let e = eval_curves(l, e0, true);
+            if refine < 1.0 { refine_saturation(e0, e, refine) } else { e }
+        })
+    }
+}
+
+impl Default for CurveSpace {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Parametric region curve (encoded domain) composed with the master point curve.
 fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     let parametric = c.highlights != 0.0 || c.lights != 0.0 || c.darks != 0.0 || c.shadows != 0.0;
@@ -297,6 +345,9 @@ pub struct FinishParams {
     pub levels: Option<crate::levels::LevelsK>,
     /// Refine Saturation as 0..1 (1 = the curves' own saturation).
     pub refine_sat: f32,
+    /// Process V10: Brightness, Levels and `curves` run in this wide space on linear values before the gamut map
+    /// instead of on the output's encoded values ([`CurveSpace`]); `None` before V10 or while all three are neutral.
+    pub curve_space: Option<CurveSpace>,
     pub vig: Option<Vig>,
     /// Linear Rec.2020 → linear output RGB, the output's luminance weights (gamut mapping) and its
     /// encoding curve (see [`crate::output`]).
@@ -384,7 +435,7 @@ impl FinishParams {
             && out_to_norm.0.iter().all(|v| v.is_finite());
         let v7 = match s.process.process() {
             Process::V1 | Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 => false,
-            Process::V7 | Process::V8 | Process::V9 => true,
+            Process::V7 | Process::V8 | Process::V9 | Process::V10 => true,
         };
         let particles = if effects && finite_frame && v7 { crate::grain::GrainParams::new(&s.grain, px_per_long) } else { None };
         let grain = (s.grain.amount > 0.0 && effects && finite_frame && !v7).then(|| {
@@ -405,6 +456,11 @@ impl FinishParams {
         } else {
             (base_tone(s, info, peak), None)
         };
+        let curves = curve_luts(&s.curve);
+        let brightness = crate::brightness::BrightnessK::for_peak(s.light.brightness, peak);
+        let levels = crate::levels::LevelsK::new(&s.levels);
+        let curve_space = (s.process.process() >= lcc_develop::Process::V10 && (curves.is_some() || brightness.is_some() || levels.is_some()))
+            .then(CurveSpace::new);
         FinishParams {
             peak,
             calib: if calibration {
@@ -419,9 +475,10 @@ impl FinishParams {
             ops: ColorOps::new(s),
             local_points: crate::colorops::mask_point_ks(s),
             local_mixers: crate::colorops::mask_mixer_ks(s),
-            brightness: crate::brightness::BrightnessK::for_peak(s.light.brightness, peak),
-            curves: curve_luts(&s.curve),
-            levels: crate::levels::LevelsK::new(&s.levels),
+            brightness,
+            curve_space,
+            curves,
+            levels,
             refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
             vig: if effects { vignette(s) } else { None },
             to_out: space.from_working(),
@@ -507,7 +564,7 @@ fn base_tone_at_with(s: &DevelopSettings, info: &SourceInfo, peak: f32, contrast
         }
         // a raw's tone curve rolls off into white in stops: a camera curve past its last knot, the
         // generic curve from half a stop below its white point instead of clipping (upstream #3783)
-        Process::V8 | Process::V9 => match info.camera_tone.as_ref().filter(|_| raw) {
+        Process::V8 | Process::V9 | Process::V10 => match info.camera_tone.as_ref().filter(|_| raw) {
             Some(curve) => ToneMap::camera_rolloff_hdr(curve, contrast, l.whites, blacks, peak),
             None if raw => ToneMap::rolloff_hdr(contrast, l.whites, blacks, peak),
             None => ToneMap::display_hdr(contrast, l.whites, blacks, peak),
@@ -919,6 +976,27 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             }
             d = crate::colorops::local_grade(d, &l_grade);
 
+            // --- process V10: the Tone Curve in its wide space, before the vignette and the gamut map
+            // (with Brightness and Levels before it, in the same order as the older processes run them on output values)
+            if let Some(cs) = &fp.curve_space {
+                d = cs.apply(d, |mut e| {
+                    if let Some(b) = &fp.brightness {
+                        e = b.apply(e, hdr);
+                    }
+                    if let Some(lv) = &fp.levels {
+                        e = lv.apply(e, hdr);
+                    }
+                    if let Some(l) = curves {
+                        let e0 = e;
+                        e = eval_curves(l, e, true);
+                        if fp.refine_sat < 1.0 {
+                            e = refine_saturation(e0, e, fp.refine_sat);
+                        }
+                    }
+                    e
+                });
+            }
+
             // --- vignette (display linear, post-crop)
             if let Some(v) = vig {
                 let u = (vx + x as f32 + 0.5) / vw * 2.0 - 1.0;
@@ -996,15 +1074,15 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             };
             // --- Brightness: the one call site of the stage (see `crate::brightness`): on the final in-gamut display
             // values, right after the encode and before the Tone Curve
-            if let Some(b) = &fp.brightness {
+            if let Some(b) = fp.brightness.as_ref().filter(|_| fp.curve_space.is_none()) {
                 e = b.apply(e, hdr);
             }
             // --- Levels: the one call site of the stage (see `crate::levels`): after the gamut map and the encode above, so
             // on the final in-gamut display values, and before the Tone Curve.
-            if let Some(lv) = &fp.levels {
+            if let Some(lv) = fp.levels.as_ref().filter(|_| fp.curve_space.is_none()) {
                 e = lv.apply(e, hdr);
             }
-            if let Some(l) = curves {
+            if let Some(l) = curves.as_ref().filter(|_| fp.curve_space.is_none()) {
                 let e0 = e;
                 e = eval_curves(l, e, hdr);
                 if fp.refine_sat < 1.0 {
