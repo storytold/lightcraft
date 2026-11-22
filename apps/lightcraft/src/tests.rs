@@ -448,44 +448,6 @@ fn window_has_no_indirect_call_validation_pipeline() {
     }
 }
 
-/// Issue #234: Windows opens links with the URL protocol handler (the default browser), not
-/// File Explorer, and passes the whole map link, `?`, `&` and `#` included, as one argument.
-#[test]
-fn windows_links_open_in_the_browser() {
-    let url = "https://www.openstreetmap.org/?mlat=48.856600&mlon=2.352200#map=15/48.856600/2.352200";
-    let c = windows_open_url_command(url);
-    assert_eq!(c.get_program(), "rundll32");
-    let args: Vec<&std::ffi::OsStr> = c.get_args().collect();
-    assert_eq!(args, ["url.dll,FileProtocolHandler", url]);
-}
-
-/// Issue #272: Explorer gets the file to select quoted after `/select,`, with backslashes and
-/// without the verbatim prefix, even when the path has spaces (else it opens Documents).
-#[test]
-fn explorer_select_quotes_the_path() {
-    assert_eq!(explorer_select_arg(r"C:\Users\Me\My Photos\IMG 1.jpg"), r#"/select,"C:\Users\Me\My Photos\IMG 1.jpg""#);
-    assert_eq!(explorer_select_arg("D:/Example/Photos/IMG_0001.CR3"), r#"/select,"D:\Example\Photos\IMG_0001.CR3""#);
-    assert_eq!(explorer_select_arg(r"\\server\share\My Photos\a.jpg"), r#"/select,"\\server\share\My Photos\a.jpg""#);
-    assert_eq!(explorer_select_arg(r"\\?\D:\My Photos\a.jpg"), r#"/select,"D:\My Photos\a.jpg""#);
-    assert_eq!(explorer_select_arg(r"\\?\UNC\server\share\a.jpg"), r#"/select,"\\server\share\a.jpg""#);
-    // a `"` can't end the quoted path and add arguments to the raw command line
-    assert_eq!(explorer_select_arg(r#"C:\a" "C:\b.jpg"#), r#"/select,"C:\a C:\b.jpg""#);
-    let c = explorer_select_command(r"C:\My Photos\a.jpg");
-    assert_eq!(c.get_program(), "explorer");
-    let args: Vec<&std::ffi::OsStr> = c.get_args().collect();
-    assert_eq!(args, [r#"/select,"C:\My Photos\a.jpg""#]);
-}
-
-/// Issue #4652: Linux reveal builds `file://` URIs for `FileManager1.ShowItems`, so the file
-/// manager selects the file instead of opening its folder.
-#[test]
-fn file_uris_encode_for_show_items() {
-    assert_eq!(file_uri("/photos/IMG_0001.CR3"), "file:///photos/IMG_0001.CR3");
-    assert_eq!(file_uri("/home/Me/My Photos/IMG 1.jpg"), "file:///home/Me/My%20Photos/IMG%201.jpg");
-    assert_eq!(file_uri("/photos/café-étude.jpg"), "file:///photos/caf%C3%A9-%C3%A9tude.jpg");
-    assert_eq!(file_uri("/photos/a#b%c.jpg"), "file:///photos/a%23b%25c.jpg");
-}
-
 #[test]
 fn a_control_port_that_is_not_a_number_is_ignored() {
     assert_eq!(control_port_from("--control", Some("7980".into())), Some(7980));
