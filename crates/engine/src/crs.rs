@@ -218,6 +218,15 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     if let Some(on) = boolean(props, "crs:HDREditMode") {
         put(o, "hdr.enabled", json!(on));
     }
+    // The raw's own local tone mapping (DNG `ProfileGainTableMap`, Apple ProRAW): Lightroom keeps
+    // its strength (0–100) in the parameters of the profile look that renders it ("Apple ProRaw",
+    // with the "Apple Embedded Color Profile"); ours is on or off.
+    if let Some(v) = num(props, "crs:Look/crs:Parameters/crs:ProfileGainTableMap") {
+        put(o, "profile.camera_local_tone", json!(v > 0.0));
+        if v > 0.0 && v < 100.0 {
+            skipped("Look: ProfileGainTableMap below 100 (rendered at 100)");
+        }
+    }
     // older process versions (most `.lrtemplate` presets): approximate the 2012 sliders from the
     // earlier ones, relative to their defaults (contrast 25, blacks 5, brightness 50)
     let has = |o: &Value, path: &str| path.split('.').try_fold(o, |v, k| v.get(k)).is_some();

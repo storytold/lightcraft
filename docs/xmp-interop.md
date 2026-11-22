@@ -201,7 +201,15 @@ own (`Adobe Color` → Color, `Adobe Neutral`, `Adobe Vivid`, `Adobe Landscape`,
 `Modern 10`, `Vintage 02`) can't be used here, and a third-party profile not imported yet leaves the photo's profile as it
 is; import reports either per preset (`Profile “Name” (Lightroom's own)` / `(not imported yet)` in `unmapped`).
 References are resolved again whenever profiles are imported or deleted, so a pack's profiles and presets can come in
-either order. The look's embedded `Parameters` are not read.
+either order. Of the look's embedded `Parameters` only `ProfileGainTableMap` is read (below).
+
+**Apple ProRAW local tone mapping (`Look/Parameters/ProfileGainTableMap`).** Lightroom renders an Apple ProRAW with the
+"Apple Embedded Color Profile" and the "Apple ProRaw" look, whose parameters keep the strength (0–100) of the raw's own
+local tone mapping (DNG `ProfileGainTableMap`). Imported from XMP, a preset or a Lightroom Classic catalog (the look's
+`Parameters` table), any strength turns on `profile.camera_local_tone` (Profile ▸ Camera local tone mapping) and 0 turns
+it off; ours is on or off, so a strength below 100 is rendered at 100 and reported. Without it these photos came over
+far darker than in Lightroom: on three iPhone 15 Pro ProRAWs and their Lightroom exports the mean luma went from
+87 / 52 / 86 to 137 / 139 / 109 (Lightroom: 133 / 139 / 124, 0–255).
 
 **Not mapped:** camera profiles (`CameraProfile`; we have our own profile set), red eye, lens blur,
 process-version 2010 field names, and AI features. Local adjustments and spot removal are read as described below.

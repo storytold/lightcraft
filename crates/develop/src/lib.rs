@@ -39,14 +39,22 @@ impl DevelopSettings {
         serde_json::from_value(v.clone())
     }
 
-    /// [`Self::to_json`] with Remove Hot Pixels (`detail.nr_outliers`) stated even when off, for JSON that is copied,
-    /// merged, scaled or compared key by key (copy / paste, presets, Auto Sync). The stored JSON leaves it out when
-    /// off, so settings saved before it keep their hash; a merge needs the `false`, or copying Detail would not turn
-    /// the box off and a preset applied at an amount would not find its base value.
+    /// [`Self::to_json`] with the settings the stored JSON leaves out at their defaults stated anyway: Remove Hot
+    /// Pixels (`detail.nr_outliers`), Camera local tone mapping (`profile.camera_local_tone`) and HDR (`hdr`), for
+    /// JSON that is copied, merged, scaled or compared key by key (copy / paste, presets, Auto Sync). The stored JSON
+    /// leaves them out, so settings saved before them keep their hash; a merge needs the values, or copying would not
+    /// turn an option off and a preset applied at an amount would not find its base value (a missing base read as
+    /// `null` used to fail and drop the whole preset).
     pub fn to_json_for_merge(&self) -> Value {
         let mut v = self.to_json();
         if let Some(detail) = v.get_mut("detail").and_then(Value::as_object_mut) {
             detail.insert("nr_outliers".into(), Value::Bool(self.detail.nr_outliers));
+        }
+        if let Some(profile) = v.get_mut("profile").and_then(Value::as_object_mut) {
+            profile.insert("camera_local_tone".into(), Value::Bool(self.profile.camera_local_tone));
+        }
+        if let (Some(o), Ok(hdr)) = (v.as_object_mut(), serde_json::to_value(self.hdr)) {
+            o.entry("hdr").or_insert(hdr);
         }
         v
     }
