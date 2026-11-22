@@ -35,7 +35,6 @@ jxl = ["dep:jxl-oxide"]
 testdata = []
 
 [dev-dependencies]
-lcc-fuzzkit = { workspace = true }
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lcc-testkit = { workspace = true }
 # seeded mutation fuzzing for the per-container hostile-input table (src/vendor/container_robust.rs)
