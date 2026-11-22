@@ -2665,7 +2665,7 @@
   "Scan": "Pindai",
   "Scan photos that have a score already (rescan all)": "Pindai juga foto yang sudah memiliki nilai (pindai ulang semua)",
   "Scanning image quality": "Memindai kualitas gambar",
-  "Scores photos for technical quality — sharpness, noise, exposure and JPEG artifacts — and keeps each score on the photo so the Library can filter and sort by it.": "Menilai kualitas teknis foto — ketajaman, noise, eksposur, dan artefak JPEG — dan menyimpan setiap nilai pada foto sehingga Pustaka dapat memfilter dan mengurutkannya.",
+  "Scores photos for technical quality (sharpness, noise, exposure and JPEG artifacts) and keeps each score on the photo so the Library can filter and sort by it.": "Menilai kualitas teknis foto (ketajaman, noise, eksposur, dan artefak JPEG) dan menyimpan setiap nilai pada foto sehingga Pustaka dapat memfilter dan mengurutkannya.",
   "Screen Edges to Keep Clear": "Tepi layar yang dibiarkan kosong",
   "Screen Mode": "Mode layar",
   "Scroll By Row": "Gulir per baris",

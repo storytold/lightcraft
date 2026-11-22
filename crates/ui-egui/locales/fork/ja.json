@@ -2602,7 +2602,7 @@
   "Scan Folder for Changes": "フォルダーの変更をスキャン",
   "Scan photos that have a score already (rescan all)": "スコアのある写真もスキャンする（すべて再スキャン）",
   "Scanning image quality": "画質をスキャン中",
-  "Scores photos for technical quality — sharpness, noise, exposure and JPEG artifacts — and keeps each score on the photo so the Library can filter and sort by it.": "写真の技術的な品質（シャープネス、ノイズ、露出、JPEG アーティファクト）を採点し、各スコアを写真に保存します。ライブラリでスコアによるフィルターと並べ替えができます。",
+  "Scores photos for technical quality (sharpness, noise, exposure and JPEG artifacts) and keeps each score on the photo so the Library can filter and sort by it.": "写真の技術的な品質（シャープネス、ノイズ、露出、JPEG アーティファクト）を採点し、各スコアを写真に保存します。ライブラリでスコアによるフィルターと並べ替えができます。",
   "Screen Edges to Keep Clear": "空けておく画面の端",
   "Screen Mode": "画面モード",
   "Scroll By Row": "行単位でスクロール",

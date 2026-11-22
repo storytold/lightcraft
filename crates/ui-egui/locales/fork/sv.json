@@ -2724,7 +2724,7 @@
   "Scan": "Skanna",
   "Scan photos that have a score already (rescan all)": "Skanna även bilder som redan har ett betyg (skanna om allt)",
   "Scanning image quality": "Skannar bildkvalitet",
-  "Scores photos for technical quality — sharpness, noise, exposure and JPEG artifacts — and keeps each score on the photo so the Library can filter and sort by it.": "Bedömer bilder efter teknisk kvalitet – skärpa, brus, exponering och JPEG-artefakter – och sparar varje betyg med bilden så att biblioteket kan filtrera och sortera på det.",
+  "Scores photos for technical quality (sharpness, noise, exposure and JPEG artifacts) and keeps each score on the photo so the Library can filter and sort by it.": "Bedömer bilder efter teknisk kvalitet (skärpa, brus, exponering och JPEG-artefakter) och sparar varje betyg med bilden så att biblioteket kan filtrera och sortera på det.",
   "Screen Edges to Keep Clear": "Skärmkanter att hålla fria",
   "Screen Mode": "Skärmläge",
   "Scroll By Row": "Rulla radvis",
