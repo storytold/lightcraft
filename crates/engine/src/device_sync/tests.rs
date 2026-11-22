@@ -579,7 +579,17 @@ fn immich_albums_are_collections_each_device_takes_as_it_chose() {
         };
         names(a) && names(b)
     });
-    let v = status(&mut a);
+    // (the album's record can reach a from b before a's own listing of its photos is in: members
+    // aren't told between devices, each lists them from the server)
+    let t = Instant::now();
+    let v = loop {
+        let v = status(&mut a);
+        if immich_collection(&v, "Holiday").is_some_and(|c| c["photos"] == 1) || t.elapsed() > Duration::from_secs(30) {
+            break v;
+        }
+        a.execute("remote.pump", &json!({"sync": false})).unwrap();
+        std::thread::sleep(Duration::from_millis(10));
+    };
     let c = immich_collection(&v, "Holiday").unwrap().clone();
     assert_eq!(c["photos"], 1, "{c}");
     assert_eq!(a.catalog.photos().count(), 0, "nothing comes before it is taken");

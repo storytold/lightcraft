@@ -1,0 +1,52 @@
+# Model references (docs/ci.md → Model references). Weekly and on manual dispatch.
+# Downloads the openly licensed AI checkpoints from the pinned locations the app itself uses
+# (size + SHA-256 checked by `lcc-fetch`, through crates/segment/examples/fetch_reference_models.rs),
+# caches them on the runner, and runs crates/segment/tests/model_reference.rs: our CPU inference on
+# procedural photos against the numeric summaries stored in
+# crates/segment/tests/data/model-references.json. The run fails if a model is skipped.
+name: Model references
+
+on:
+  schedule:
+    - cron: "41 4 * * 0"
+  workflow_dispatch:
+
+concurrency:
+  group: models-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  models:
+    name: SAM 2.1, BiRefNet, EoMT, MediaPipe (TFLite) within tolerance
+    runs-on: [self-hosted, Linux, X64, lcc]
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: nice -n 19 bash -e {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Keep the build cache and the models between runs
+        # the checkpoints (~450 MB) stay on the runner; files already there are re-verified, not re-downloaded
+        run: |
+          echo "CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$HOME/.cache/lcc-ci-target-$RUNNER_NAME}" >> "$GITHUB_ENV"
+          echo "MODELS_DIR=$HOME/.cache/lcc-ci-models" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/sccache
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - name: Fetch the models (pinned, sha256-checked)
+        run: cargo run -p lcc-segment --release --example fetch_reference_models -- "$MODELS_DIR"
+      - name: Model reference tests
+        run: |
+          set -o pipefail
+          prefix=$(sed -n 's/^env_prefix *= *"\([^"]*\)".*/\1/p' brand.toml)
+          export "${prefix}_MODEL_REF_DIR=$MODELS_DIR"
+          cargo test -p lcc-segment --release --test model_reference -- --nocapture --test-threads=1 2>&1 | tee model-reference.log
+          if grep -q "^skipped (" model-reference.log; then echo "a model was skipped" >&2; exit 1; fi
