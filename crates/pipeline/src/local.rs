@@ -20,16 +20,30 @@ pub use craft_develop::local::{
 
 /// White balance (relative to the source's as-shot white) and exposure, in place.
 pub fn scene_linear_pre(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings) {
-    let mut craft = crate::bridge::take_craft_rgb32f(img);
-    craft_develop::local::scene_linear_pre(&mut craft, &crate::bridge::to_craft_wb_source(info), &crate::bridge::to_craft_settings(s));
-    crate::bridge::put_craft_rgb32f(img, craft);
+    wb_gain(img, info, s, 2f32.powf(s.light.exposure as f32));
 }
 
 /// White balance only (exposure is applied by the per-pixel stage, see [`crate::Prepared`]).
 pub fn white_balance(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings) {
-    let mut craft = crate::bridge::take_craft_rgb32f(img);
-    craft_develop::local::white_balance(&mut craft, &crate::bridge::to_craft_wb_source(info), &crate::bridge::to_craft_settings(s));
-    crate::bridge::put_craft_rgb32f(img, craft);
+    wb_gain(img, info, s, 1.0);
+}
+
+fn wb_gain(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings, gain: f32) {
+    let m = wb_matrix_for(info, s);
+    let w = img.width;
+    crate::for_rows(&mut img.data, w, |_, row| {
+        for p in row.iter_mut() {
+            let mut c = *p;
+            if let Some(m) = &m {
+                c = [
+                    m[0][0] * c[0] + m[0][1] * c[1] + m[0][2] * c[2],
+                    m[1][0] * c[0] + m[1][1] * c[1] + m[1][2] * c[2],
+                    m[2][0] * c[0] + m[2][1] * c[1] + m[2][2] * c[2],
+                ];
+            }
+            *p = [(c[0] * gain).max(0.0), (c[1] * gain).max(0.0), (c[2] * gain).max(0.0)];
+        }
+    });
 }
 
 /// Whether `s` uses the checked Bradford white-balance adaptation (`Process::V10` on) instead
