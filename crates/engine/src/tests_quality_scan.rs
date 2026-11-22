@@ -28,6 +28,8 @@ fn scan_stores_scores_verdicts_and_optional_flags() {
     let vis = s.visible_cloned();
     assert!(vis.len() >= 4);
     let ids: Vec<u64> = vis.iter().take(4).map(|i| i.0).collect();
+    // the demo library flags some photos itself: start from photos nobody has flagged
+    s.execute("photo.flag", &json!({"ids": ids, "flag": "none"})).unwrap();
 
     // 1. measures, but with `applyFlags` off it only says what it would do
     let r = s.execute("photo.qualityScan", &json!({"ids": ids, "wait": true})).unwrap();
