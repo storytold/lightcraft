@@ -195,10 +195,10 @@ at 0.6 r.
 ### 5.1 Design
 
 The source keeps its detail, scaled to the target's detail level. The fill supplies only the smooth correction, and
-it is solved to agree with the photo on the spot's edge. Written out, with ḡ the source blurred at 1.5 px in log space:
+it is solved to agree with the photo on the spot's edge. Written out in log space, with ḡ the log of the source blurred at 1.5 px and g̃ the matched source (a log value):
 
 ```math
-\tilde g = \bar g + k\,(g - \bar g), \quad k = \operatorname{clamp}\!\Big(\frac{\sigma_{\mathrm{ring}}(f)}{\sigma_{\mathrm{in}}(g)},\ 0.5,\ 2\Big), \qquad \Delta P = 0 \ \text{in } \Omega, \quad P = \log f - \log \tilde g \ \text{on } \partial\Omega, \qquad h = \tilde g\, e^{P}
+\tilde g = \bar g + k\,(\log g - \bar g), \quad k = \operatorname{clamp}\!\Big(\frac{\sigma_{\mathrm{ring}}(f)}{\sigma_{\mathrm{in}}(g)},\ 0.5,\ 2\Big), \qquad \Delta P = 0 \ \text{in } \Omega, \quad P = \log f - \tilde g \ \text{on } \partial\Omega, \qquad h = e^{\tilde g + P}
 ```
 
 Here σ_ring(f) is the fine-detail spread of log luminance in the target's ring from 1.05 r to 2 r, and σ_in(g) the same

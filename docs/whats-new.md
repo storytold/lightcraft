@@ -3,13 +3,14 @@
 ## Unreleased
 
 ### Heal meets its surroundings (process 11)
-- A healed spot now meets the photo exactly at its edge: on a gradient (a sky, a shaded wall, a cheek) it no longer
-  leaves a faint disc or ring, and a dark line near the spot that the spot doesn't touch no longer smudges into it.
-  Texture taken from a brighter or darker area keeps its contrast relative to the light where it lands, instead of
-  turning blotchy in shadows or flat in highlights, and the patch takes the grain of the area around it. Heal, Remove
-  and Clone read their source at whole pixels, so a patch is no longer smoother than the photo around it. This is
-  rendering process 11: new photos (and Reset) get it, photos you already edited keep their look until you choose
-  Photo ▸ Update to Current Process. See [process versions](process-versions.md).
+- A healed spot is now pinned to the photo around its edge: on a gradient (a sky, a shaded wall, a cheek) it no
+  longer leaves a faint disc or ring, and a dark line near the spot that the spot doesn't touch no longer smudges into
+  it. Texture taken from a brighter or darker area keeps its contrast relative to the light where it lands, instead of
+  turning blotchy in shadows or flat in highlights, and Heal and Remove scale the patch's grain to the area around it.
+  Heal, Remove and Clone read their source at whole pixels, so the patch is no longer softened by blending between
+  pixels. Very large spots keep the previous heal. This is rendering process 11: new photos (and Reset) get it, photos
+  you already edited keep their look until you choose Photo ▸ Update to Current Process. See
+  [process versions](process-versions.md).
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

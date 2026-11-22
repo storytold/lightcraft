@@ -426,7 +426,9 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64, method: 
         let offset = if pinned { (offset.0.round(), offset.1.round()) } else { offset };
         // alpha of the stroke, its distance and the source patch in the box
         let mut alpha = vec![0.0f32; bw * bh];
-        let mut dist = vec![0.0f32; bw * bh];
+        // (only the pinned heal reads the distance)
+        let pinned_heal = heal && pinned;
+        let mut dist = if pinned_heal { vec![0.0f32; bw * bh] } else { Vec::new() };
         let mut src = vec![[0.0f32; 3]; bw * bh];
         let mut tgt = vec![[0.0f32; 3]; bw * bh];
         for y in 0..bh {
@@ -434,7 +436,9 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64, method: 
                 let (px, py) = ((bx0 + x) as f32 + 0.5, (by0 + y) as f32 + 0.5);
                 let d = pts.iter().map(|p| ((px - p.0).powi(2) + (py - p.1).powi(2)).sqrt()).fold(f32::MAX, f32::min);
                 alpha[y * bw + x] = (1.0 - smooth(inner, r, d)) * opacity;
-                dist[y * bw + x] = d;
+                if pinned_heal {
+                    dist[y * bw + x] = d;
+                }
                 src[y * bw + x] = img.sample_bilinear(px + offset.0, py + offset.1);
                 tgt[y * bw + x] = img.get(bx0 + x, by0 + y);
             }
@@ -443,7 +447,7 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64, method: 
             fill_box(&mut src, &tgt, &alpha, bw, bh);
         }
         // (a box too big for the pinned heal's working memory gets the averaged one)
-        let healed = if heal && pinned { pinned::heal(&pinned::Patch { w: bw, h: bh, src: &src, tgt: &tgt, dist: &dist, r }) } else { None };
+        let healed = if pinned_heal { pinned::heal(&pinned::Patch { w: bw, h: bh, src: &src, tgt: &tgt, dist: &dist, r }) } else { None };
         let pinned_here = healed.is_some();
         if let Some(healed) = healed {
             src = healed;
