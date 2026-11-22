@@ -100,6 +100,31 @@ fn backup_integrity_and_optimise_on_a_disk_catalog() {
 }
 
 #[test]
+fn damaged_catalog_settings_are_set_aside_and_the_user_told() {
+    let (lib, _src, mut s) = library("settings-damaged", 0);
+    s.close_library().unwrap();
+    drop(s);
+    let file = lib.join(lcc_catalog::library::SETTINGS_FILE);
+    std::fs::write(&file, b"{\"keepBackups\": \"lots\"").unwrap();
+    let mut s = Session::new().with_fs();
+    if let Err(e) = s.open_library(&lib, false) {
+        panic!("{e}");
+    }
+    let w = s.take_notices();
+    assert!(
+        w.iter().any(|n| matches!(n, crate::notice::Notice::SettingsSetAside { file, kept } if file == "catalog-settings.json" && kept.starts_with("catalog-settings.json.corrupt-"))),
+        "{w:?}"
+    );
+    assert!(s.take_notices().is_empty(), "told once");
+    assert!(!file.exists() || lcc_catalog::library::CatalogSettings::load_checked(&lib).1.is_none());
+    let kept = std::fs::read_dir(&lib).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with("catalog-settings.json.corrupt-"));
+    assert!(kept, "the damaged file is kept aside");
+    let cs = lcc_catalog::library::CatalogSettings::load(&lib);
+    assert!(cs.keep_backups > 0, "backups stay on: {cs:?}");
+    s.close_library().unwrap();
+}
+
+#[test]
 fn preview_settings_live_in_the_catalog_settings() {
     let (lib, _src, mut s) = library("previews", 0);
     s.execute("library.previewSettings", &json!({"standardEdge": 1024, "discardFull": "week"})).unwrap();
@@ -224,6 +249,96 @@ fn reading_and_saving_xmp_records_a_stamp() {
     let mut s = Session::new().with_fs();
     s.open_library(&dir, false).unwrap();
     assert!(s.catalog.photo(id).unwrap().xmp.is_some());
+}
+
+/// Issue #1310: a sidecar the library was never in step with keeps its keywords on Save Metadata.
+#[test]
+fn saving_keeps_keywords_only_an_unsynced_sidecar_had() {
+    let (_lib, _src, mut s) = library("xmp-keep-keywords", 1);
+    let id = ids(&s)[0];
+    let orig = crate::sidecar::file_path(s.catalog.photo(id).unwrap()).unwrap().to_string();
+    let side = crate::sidecar::sidecar_path(&orig, s.sidecar_naming(id));
+    let md = lcc_meta::Metadata {
+        keywords: vec!["People".into(), "Anna".into(), "harbour".into()],
+        hierarchical_keywords: vec!["People|Anna".into(), "harbour".into()],
+        ..Default::default()
+    };
+    std::fs::write(&side, lcc_meta::write_xmp(&md, None)).unwrap();
+    assert_eq!(s.xmp_status(id), XmpStatus::Unknown);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "keywords": ["new"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let back = lcc_meta::parse_xmp(&std::fs::read_to_string(&side).unwrap()).unwrap().metadata;
+    let kws = lcc_catalog::keywords::from_file(&back.keywords, &back.hierarchical_keywords);
+    for k in ["new", "People|Anna", "harbour"] {
+        assert!(kws.iter().any(|x| x == k), "{k} kept: {kws:?}");
+    }
+    // the library holds them too, so a later save (now in step) keeps them
+    assert_eq!(s.xmp_status(id), XmpStatus::InSync);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "title": "Quay"})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let back = lcc_meta::parse_xmp(&std::fs::read_to_string(&side).unwrap()).unwrap().metadata;
+    assert!(back.keywords.iter().any(|k| k == "harbour"), "{:?}", back.keywords);
+    // once in step, a keyword removed here is removed from the file
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "keywords": ["new"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let back = lcc_meta::parse_xmp(&std::fs::read_to_string(&side).unwrap()).unwrap().metadata;
+    assert!(!back.keywords.iter().any(|k| k == "harbour"), "{:?}", back.keywords);
+}
+
+/// Issue #1310, automatic XMP writes: the first write of a sidecar the library was never in step
+/// with keeps the keywords only the sidecar had, as Save Metadata to File does.
+#[test]
+fn auto_write_keeps_keywords_only_an_unsynced_sidecar_had() {
+    let (_lib, _src, mut s) = library("xmp-auto-keep-keywords", 1);
+    let id = ids(&s)[0];
+    let orig = crate::sidecar::file_path(s.catalog.photo(id).unwrap()).unwrap().to_string();
+    let side = crate::sidecar::sidecar_path(&orig, s.sidecar_naming(id));
+    let md = lcc_meta::Metadata { keywords: vec!["harbour".into()], hierarchical_keywords: vec!["harbour".into()], ..Default::default() };
+    std::fs::write(&side, lcc_meta::write_xmp(&md, None)).unwrap();
+    assert_eq!(s.xmp_status(id), XmpStatus::Unknown);
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "keywords": ["new"]})).unwrap();
+    s.settle_sidecar_writes().unwrap();
+    let back = lcc_meta::parse_xmp(&std::fs::read_to_string(&side).unwrap()).unwrap().metadata;
+    let kws = lcc_catalog::keywords::from_file(&back.keywords, &back.hierarchical_keywords);
+    for k in ["new", "harbour"] {
+        assert!(kws.iter().any(|x| x == k), "{k} kept: {kws:?}");
+    }
+    assert_eq!(s.xmp_status(id), XmpStatus::InSync);
+}
+
+/// Issue #1310 through undo: undoing the edit whose auto-write adopted the sidecar's keywords
+/// keeps them, so the next write doesn't remove them from the file.
+#[test]
+fn undo_after_an_auto_write_keeps_the_adopted_keywords() {
+    let (_lib, _src, mut s) = library("xmp-auto-undo-keywords", 1);
+    let id = ids(&s)[0];
+    let orig = crate::sidecar::file_path(s.catalog.photo(id).unwrap()).unwrap().to_string();
+    let side = crate::sidecar::sidecar_path(&orig, s.sidecar_naming(id));
+    let md = lcc_meta::Metadata { keywords: vec!["harbour".into()], hierarchical_keywords: vec!["harbour".into()], ..Default::default() };
+    std::fs::write(&side, lcc_meta::write_xmp(&md, None)).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "keywords": ["new"]})).unwrap();
+    s.settle_sidecar_writes().unwrap();
+    s.undo_step().unwrap();
+    assert!(s.catalog.photo(id).unwrap().meta.keywords.iter().any(|k| k == "harbour"));
+    s.settle_sidecar_writes().unwrap();
+    s.execute("photo.rate", &json!({"ids": [id.0], "rating": 3})).unwrap();
+    s.settle_sidecar_writes().unwrap();
+    let back = lcc_meta::parse_xmp(&std::fs::read_to_string(&side).unwrap()).unwrap().metadata;
+    let kws = lcc_catalog::keywords::from_file(&back.keywords, &back.hierarchical_keywords);
+    assert!(kws.iter().any(|x| x == "harbour"), "kept after undo: {kws:?}");
+}
+
+#[test]
+fn hostile_sidecars_add_no_keywords_and_never_panic() {
+    let p = lcc_catalog::Photo::new(PhotoId(1), lcc_catalog::Source::Demo { scene: 0 }, "a.jpg", "JPEG", 10, 10, "2026-01-01T00:00:00");
+    for xmp in ["", "<not xmp", "\u{feff}", "<x:xmpmeta><rdf:RDF><rdf:Description><dc:subject><rdf:Bag><rdf:li>", &"<".repeat(100_000)] {
+        assert!(crate::sidecar::sidecar_only_keywords(&p, xmp).is_empty(), "{xmp:.40}");
+    }
+    let many: Vec<String> = (0..10_000).map(|i| format!("k{i}")).collect();
+    let md = lcc_meta::Metadata { keywords: many, ..Default::default() };
+    assert!(crate::sidecar::sidecar_only_keywords(&p, &lcc_meta::write_xmp(&md, None)).len() <= 4096);
 }
 
 /// One photo with a written sidecar (rating 5) and that sidecar's path, with [`library`]'s folders

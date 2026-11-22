@@ -11,6 +11,8 @@
 //! takes when its JPEG fit fails; it never gives a Kelvin scale, which only [`find`]'s rows do.
 use crate::{ColorData, RawFormat};
 use lcc_color::{Mat3, Xy};
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 #[path = "spectral_table.rs"]
 mod table;
@@ -82,7 +84,76 @@ fn brand(make: &str) -> String {
 
 /// The table's camera for a file's Exif make and model, directly or through an alias. Without a make, the model
 /// alone must match.
+///
+/// Looked up in an index built once from the table ([`Index`]); [`find_by_scan`] is the plain scan it replaces, kept
+/// as the test oracle.
 pub fn find(make: Option<&str>, model: &str) -> Option<&'static Camera> {
+    let make = make.map(brand).filter(|b| !b.is_empty());
+    let ix = index();
+    let brands: &[String] = match &make {
+        Some(b) => std::slice::from_ref(b),
+        None => &ix.brands,
+    };
+    let lowest = |tables: &HashMap<String, HashMap<String, usize>>| brands.iter().filter_map(|b| tables.get(b)?.get(&key(b, model))).min().copied();
+    match lowest(&ix.aliases) {
+        Some(i) => {
+            let (m, _, target) = ix.alias_rows.get(i)?;
+            ix.targets.get(&brand(m))?.get(*target).and_then(|&c| table::CAMERAS.get(c))
+        }
+        None => lowest(&ix.cameras).and_then(|c| table::CAMERAS.get(c)),
+    }
+}
+
+/// Table rows by brand and normalised model name ([`key`]), each name pointing at the first row that has it, so a
+/// lookup costs a hash probe per brand instead of normalising every row's strings.
+struct Index {
+    /// Every brand of either table, for a lookup without a make.
+    brands: Vec<String>,
+    /// Position in [`Index::alias_rows`] of the first alias row with this brand and name.
+    aliases: HashMap<String, HashMap<String, usize>>,
+    /// Position in `table::CAMERAS` of the first camera with this brand and name.
+    cameras: HashMap<String, HashMap<String, usize>>,
+    /// `table::ALIASES` then [`SAME_SENSOR`], in the order a lookup tries them.
+    alias_rows: Vec<&'static (&'static str, &'static str, &'static str)>,
+    /// Position in `table::CAMERAS` of the first camera with this brand and exact model: where an alias leads.
+    targets: HashMap<String, HashMap<&'static str, usize>>,
+}
+
+fn index() -> &'static Index {
+    static INDEX: OnceLock<Index> = OnceLock::new();
+    INDEX.get_or_init(|| {
+        let alias_rows: Vec<_> = table::ALIASES.iter().chain(SAME_SENSOR).collect();
+        let mut ix = Index { brands: Vec::new(), aliases: HashMap::new(), cameras: HashMap::new(), alias_rows, targets: HashMap::new() };
+        let seen = |brands: &mut Vec<String>, b: &str| {
+            if !brands.iter().any(|x| x == b) {
+                brands.push(b.to_string());
+            }
+        };
+        for (i, (make, alias, _)) in ix.alias_rows.iter().enumerate() {
+            let b = brand(make);
+            seen(&mut ix.brands, &b);
+            let name = key(&b, alias);
+            if !name.is_empty() {
+                ix.aliases.entry(b).or_default().entry(name).or_insert(i);
+            }
+        }
+        for (i, c) in table::CAMERAS.iter().enumerate() {
+            let b = brand(c.make);
+            seen(&mut ix.brands, &b);
+            let name = key(&b, c.model);
+            if !name.is_empty() {
+                ix.cameras.entry(b.clone()).or_default().entry(name).or_insert(i);
+            }
+            ix.targets.entry(b).or_default().entry(c.model).or_insert(i);
+        }
+        ix
+    })
+}
+
+/// [`find`] as a plain scan of the tables, normalising every row on every call: the reference the index must agree
+/// with on every input.
+#[cfg(test)]
+fn find_by_scan(make: Option<&str>, model: &str) -> Option<&'static Camera> {
     let make = make.map(brand).filter(|b| !b.is_empty());
     let same = |row_make: &str, row_model: &str| {
         let row_brand = brand(row_make);
@@ -95,15 +166,31 @@ pub fn find(make: Option<&str>, model: &str) -> Option<&'static Camera> {
     }
 }
 
+/// Longest camera string (Exif make and model joined) the split lookups accept, in bytes. Real ones are 10-40
+/// bytes ("NIKON CORPORATION NIKON Z 9"); the cap keeps a hostile Exif string from making the lookups' quadratic
+/// split work freeze the UI thread (#1308).
+pub const MAX_CAMERA_BYTES: usize = 256;
+
+/// Most words a camera string may have for the split lookups (see [`MAX_CAMERA_BYTES`]).
+pub const MAX_CAMERA_WORDS: usize = 16;
+
+/// The words of a camera string for the make/model split lookups, or `None` when it is empty, longer than
+/// [`MAX_CAMERA_BYTES`] or has more than [`MAX_CAMERA_WORDS`] words: such a string names no known camera, and
+/// checking the length before splitting keeps the work bounded whatever a file holds.
+pub fn camera_words(camera: &str) -> Option<Vec<&str>> {
+    if camera.len() > MAX_CAMERA_BYTES {
+        return None;
+    }
+    let words: Vec<&str> = camera.split_whitespace().take(MAX_CAMERA_WORDS + 1).collect();
+    (!words.is_empty() && words.len() <= MAX_CAMERA_WORDS).then_some(words)
+}
+
 /// [`find`] for a camera written as one string, Exif make and model joined by a space (the catalog keeps
 /// `"SONY ILCE-7M3"`, `"NIKON CORPORATION NIKON D850"`): every split into make and model is tried, then the
 /// whole string as a model alone. Returns the same row as `find(Some(make), model)` for the parts it was
 /// made of, so the catalog and the decoder agree on which cameras have matrices.
 pub fn find_camera(camera: &str) -> Option<&'static Camera> {
-    let words: Vec<&str> = camera.split_whitespace().collect();
-    if words.is_empty() {
-        return None;
-    }
+    let words = camera_words(camera)?;
     (1..words.len()).find_map(|i| find(Some(&words[..i].join(" ")), &words[i..].join(" "))).or_else(|| find(None, camera))
 }
 
@@ -248,6 +335,58 @@ mod tests {
             assert_eq!(find(None, ""), None);
             assert_eq!(find(Some(""), ""), None);
         }
+    }
+
+    /// The index answers exactly what the plain scan does: for every row and alias under its own make, its brand,
+    /// another make, no make, other casing and padding, a model that repeats the brand, and strings the table
+    /// doesn't know.
+    #[test]
+    fn the_index_agrees_with_the_scan_on_every_input() {
+        let mut asks: Vec<(Option<String>, String)> = Vec::new();
+        let mut names: Vec<(String, String)> = Vec::new();
+        for c in cameras() {
+            names.push((c.make.to_string(), c.model.to_string()));
+        }
+        for (make, alias, _) in table::ALIASES.iter().chain(SAME_SENSOR) {
+            names.push((make.to_string(), alias.to_string()));
+        }
+        for (make, model) in &names {
+            let brand_only = make.split_whitespace().next().unwrap_or_default().to_string();
+            for m in [
+                Some(make.clone()),
+                Some(brand_only.clone()),
+                Some(make.to_lowercase()),
+                Some(format!("{make} CORPORATION")),
+                Some("OTHER".into()),
+                Some(String::new()),
+                Some("  ".into()),
+                None,
+            ] {
+                for md in [
+                    model.clone(),
+                    model.to_lowercase(),
+                    format!("  {model}  "),
+                    format!("{brand_only} {model}"),
+                    format!("{model} DIGITAL"),
+                    format!("EOS {model}"),
+                ] {
+                    asks.push((m.clone(), md));
+                }
+            }
+        }
+        for md in ["", "   ", "EOS", "DIGITAL", "EOS DIGITAL", "Canon EOS 400D DIGITAL", "NIKON NIKON", "ＳＯＮＹ", "e\u{301}", "A\0B"] {
+            for m in [None, Some("Canon".to_string()), Some("NIKON CORPORATION".into()), Some("SONY".into()), Some(String::new())] {
+                asks.push((m, md.to_string()));
+            }
+        }
+        assert!(asks.len() > 1000);
+        let mut found = 0;
+        for (make, model) in &asks {
+            let (a, b) = (find(make.as_deref(), model), find_by_scan(make.as_deref(), model));
+            assert_eq!(a, b, "{make:?} {model:?}");
+            found += a.is_some() as usize;
+        }
+        assert!(found > 100 && found < asks.len(), "both outcomes are exercised ({found} of {})", asks.len());
     }
 
     #[test]

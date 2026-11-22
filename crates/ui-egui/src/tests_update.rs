@@ -13,6 +13,7 @@
 //!
 //! The fixtures (a scratch folder, a fake downloaded file) are set up the short way this crate's
 //! other UI tests use: a failed `unwrap` there fails the test, which is the point.
+#![allow(clippy::indexing_slicing, reason = "test code: clippy.toml allows indexing in tests, but its test check misses cfg(all(test, ...))")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::path::PathBuf;

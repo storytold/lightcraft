@@ -330,6 +330,7 @@ fn measure(
     filter: &lcc_filters::Filter,
     entry: &PluginFilter,
     src: &lcc_raster::Rgb32f,
+    info: &lcc_pipeline::SourceInfo,
     settings: &DevelopSettings,
     cancel: &std::sync::atomic::AtomicBool,
 ) -> Measured {
@@ -341,7 +342,8 @@ fn measure(
     let mut entry = entry.clone();
     entry.analysis = None;
     let params = lcc_pipeline::plugin_filters::filter_params(&entry, "linear");
-    Ok(filter.analyze_rgb(&data, w, h, &params, cancel).map_err(|e| e.to_string())?.unwrap_or(Value::Null))
+    let source = lcc_pipeline::plugin_filters::image_source(info);
+    Ok(filter.analyze_rgb_with_source(&data, w, h, source.as_ref(), &params, cancel).map_err(|e| e.to_string())?.unwrap_or(Value::Null))
 }
 
 /// The key a roll measurement carries: how many photos it was made from (host-reserved, like `_analysis`).
@@ -380,6 +382,7 @@ struct Frame {
     entry: PluginFilter,
     settings: DevelopSettings,
     source: crate::media::SourceRef,
+    info: lcc_pipeline::SourceInfo,
 }
 
 /// The photos a measurement acts on: `ids` as given, else the active photo. On the active photo
@@ -426,8 +429,9 @@ fn frames(s: &mut Session, p: &Value, c: &str, active: PhotoId, entry: &PluginFi
             settings.plugin_filters.iter().find(|f| f.plugin == entry.plugin)
         };
         let found = found.cloned().ok_or_else(|| bad(c, format!("photo {} has no {} filter", id.0, entry.name)))?;
+        let info = s.source_info(id);
         let source = s.media.source_ref(&photo, crate::media::SourceLevel::Preview);
-        out.push(Frame { photo: id, entry: found, settings, source });
+        out.push(Frame { photo: id, entry: found, settings, source, info });
     }
     Ok(out)
 }
@@ -525,7 +529,10 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
                 if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                     return;
                 }
-                let r = fr.source.load_source().and_then(|src| measure(&filter, &fr.entry, &src.image, &fr.settings, &cancel));
+                let r = fr.source.load_source().and_then(|src| {
+                    let info = src.info_or(fr.info.clone());
+                    measure(&filter, &fr.entry, &src.image, &info, &fr.settings, &cancel)
+                });
                 progress.progress(i as u64 + 1, total);
                 if !roll {
                     let _ = tx.send((fr.photo, fr.entry.uid, r));

@@ -17,7 +17,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         args.get(*i).cloned().ok_or_else(|| format!("{flag} needs a value"))
     };
     while i < args.len() {
-        match args[i].as_str() {
+        match args.get(i).map_or("", String::as_str) {
             "--shot" => shots.push(Shot { path: PathBuf::from(take(&mut i, "--shot")?), light: default_light(), corners: [[f64::NAN; 2]; 4] }),
             "--corners" => {
                 let v = take(&mut i, "--corners")?;

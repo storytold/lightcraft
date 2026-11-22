@@ -7,8 +7,8 @@
 
 use lcc_develop::{DevelopSettings, EmbeddedLens};
 use lcc_geom::{Affine, CropGeometry, Homography, Orientation, Point, Rect};
-use lcc_raster::resample::{Filter, resize};
-use lcc_raster::{Coverage, Plane, Rgb32f, par_rows};
+use lcc_raster::resample::{Filter, resize, try_resize};
+use lcc_raster::{AllocError, Coverage, Plane, Rgb32f, par_rows};
 
 use crate::optics::{Warp, reorient_lens};
 
@@ -417,7 +417,21 @@ impl Frame {
             Some((nw, nh)) => std::borrow::Cow::Owned(resize(o, nw, nh, self.downscale)),
             None => std::borrow::Cow::Borrowed(o),
         };
-        self.sample_base(base, plan, w, h)
+        infallible(self.sample_base(base, plan, w, h, |w, h| Ok(Rgb32f::new(w, h))))
+    }
+
+    /// [`Self::sample`] that returns an error instead of aborting when the prefiltered copy or the
+    /// `w × h` output can't be had (past [`lcc_raster::MAX_IMAGE_BYTES`] or the allocator's reach):
+    /// the buffers are reserved with `try_reserve` before anything is written.
+    pub fn try_sample(&self, src: &Rgb32f, w: usize, h: usize) -> Result<Rgb32f, AllocError> {
+        let oriented = if self.orient == Orientation::Normal { None } else { Some(src.oriented(self.orient)) };
+        let o = oriented.as_ref().unwrap_or(src);
+        let plan = self.sample_plan(src.width, src.height, w, h);
+        let base = match plan.prefilter {
+            Some((nw, nh)) => std::borrow::Cow::Owned(try_resize(o, nw, nh, self.downscale)?),
+            None => std::borrow::Cow::Borrowed(o),
+        };
+        self.sample_base(base, plan, w, h, Rgb32f::try_new)
     }
 
     /// [`Frame::sample`] of each of `windows` of this frame at its `full_w × full_h` output size: the
@@ -449,26 +463,34 @@ impl Frame {
                     Some(b) => std::borrow::Cow::Borrowed(&b.1),
                     None => std::borrow::Cow::Borrowed(o),
                 };
-                frame.sample_base(base, plan, t.w, t.h)
+                infallible(frame.sample_base(base, plan, t.w, t.h, |w, h| Ok(Rgb32f::new(w, h))))
             })
             .collect()
     }
 
     /// The sampling of [`Frame::sample`] from the oriented, prefiltered source `base`.
-    fn sample_base(&self, base: std::borrow::Cow<'_, Rgb32f>, plan: SamplePlan, w: usize, h: usize) -> Rgb32f {
-        let affine = |xf: Affine| {
-            let mut out = Rgb32f::new(w, h);
+    /// `alloc` makes the `w × h` output buffer.
+    fn sample_base(
+        &self,
+        base: std::borrow::Cow<'_, Rgb32f>,
+        plan: SamplePlan,
+        w: usize,
+        h: usize,
+        alloc: impl Fn(usize, usize) -> Result<Rgb32f, AllocError>,
+    ) -> Result<Rgb32f, AllocError> {
+        let affine = |xf: Affine| -> Result<Rgb32f, AllocError> {
+            let mut out = alloc(w, h)?;
             par_rows(&mut out.data, w, |y, row| {
                 for (x, px) in row.iter_mut().enumerate() {
                     let p = xf.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
                     *px = base.sample_bilinear(p.x as f32, p.y as f32);
                 }
             });
-            out
+            Ok(out)
         };
         match (plan.mode, self.warp.as_ref()) {
-            (SampleMode::Copy, _) => base.into_owned(),
-            (SampleMode::Warp(o2t), Some(warp)) => sample_warped(&base, plan.sx, plan.sy, warp, o2t, w, h),
+            (SampleMode::Copy, _) => Ok(base.into_owned()),
+            (SampleMode::Warp(o2t), Some(warp)) => Ok(sample_warped(&base, plan.sx, plan.sy, warp, o2t, alloc(w, h)?)),
             // `sample_plan` plans a warp only when there is one; without it the same mapping is affine
             (SampleMode::Warp(o2t), None) => affine(Affine::scale(plan.sx, plan.sy) * o2t),
             (SampleMode::Affine(xf), _) => affine(xf),
@@ -553,10 +575,16 @@ pub fn perspective(s: &DevelopSettings, ow: f64, oh: f64) -> Homography {
 
 /// One resample through the warp: `o2t` maps output px → transformed px, the warp maps those to source px
 /// (scaled by `sx, sy` into `base`).
-fn sample_warped(base: &Rgb32f, sx: f64, sy: f64, wp: &Warp, o2t: Affine, w: usize, h: usize) -> Rgb32f {
+/// The image of a [`Frame::sample_base`] whose allocator never fails ([`Rgb32f::new`]).
+fn infallible(r: Result<Rgb32f, AllocError>) -> Rgb32f {
+    r.unwrap_or_else(|_| Rgb32f::new(0, 0))
+}
+
+/// `out` is the `w × h` output buffer.
+fn sample_warped(base: &Rgb32f, sx: f64, sy: f64, wp: &Warp, o2t: Affine, mut out: Rgb32f) -> Rgb32f {
+    let w = out.width;
     let per_channel = wp.per_channel();
     let gain = wp.has_gain();
-    let mut out = Rgb32f::new(w, h);
     par_rows(&mut out.data, w, |y, row| {
         for (x, px) in row.iter_mut().enumerate() {
             let Some((c, g)) = wp.frame(&o2t, x, y) else {

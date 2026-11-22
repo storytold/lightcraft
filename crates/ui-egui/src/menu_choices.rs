@@ -13,6 +13,7 @@
 //! A row is an ordinary `command{params}` item, so the menu, the control channel and MCP all run it the
 //! same way, and a test needs only the node's id and parameters.
 
+use crate::json_ext::JsonExt as _;
 use serde_json::{Value, json};
 
 use crate::LccApp;
@@ -163,7 +164,7 @@ fn filter_by_preset(app: &LccApp) -> Vec<MenuNode> {
 /// The current keyword set's nine keywords (⌥1–⌥9); on when every target photo has it.
 fn set_keyword(app: &LccApp) -> Vec<MenuNode> {
     let sets = lcc_engine::cmd::keywords::keyword_sets_json(&app.session);
-    let keywords: Vec<String> = sets["keywords"].as_array().into_iter().flatten().filter_map(|k| k.as_str().map(str::to_string)).collect();
+    let keywords: Vec<String> = sets.field("keywords").as_array().into_iter().flatten().filter_map(|k| k.as_str().map(str::to_string)).collect();
     let targets = app.session.selected();
     let has = |k: &str| {
         !targets.is_empty()
@@ -185,10 +186,10 @@ fn set_keyword(app: &LccApp) -> Vec<MenuNode> {
 /// The keyword sets (Recent Keywords first) with the one in use checked, then Edit Set….
 fn keyword_set(app: &LccApp) -> Vec<MenuNode> {
     let sets = lcc_engine::cmd::keywords::keyword_sets_json(&app.session);
-    let current = sets["current"].as_str().unwrap_or_default().to_string();
+    let current = sets.field("current").as_str().unwrap_or_default().to_string();
     let mut v = choices(
         "keyword.useSet",
-        sets["sets"].as_array().into_iter().flatten().map(|set| {
+        sets.field("sets").as_array().into_iter().flatten().map(|set| {
             let name = set["name"].as_str().unwrap_or_default();
             let builtin = set["builtin"].as_bool().unwrap_or(false);
             Choice::new(crate::i18n::builtin_label(name, builtin), json!({"name": name}), name == current)

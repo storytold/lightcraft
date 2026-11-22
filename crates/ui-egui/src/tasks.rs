@@ -101,7 +101,8 @@ pub fn poll(app: &mut LccApp, ctx: &egui::Context) {
     app.tasks.repaint = Some(ctx.clone());
     let mut i = 0;
     while i < app.tasks.running.len() {
-        match app.tasks.running[i].rx.try_recv() {
+        let Some(task) = app.tasks.running.get(i) else { break };
+        match task.rx.try_recv() {
             Ok(finish) => {
                 app.tasks.running.remove(i);
                 finish(app, ctx);

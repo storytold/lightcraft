@@ -12,6 +12,7 @@
 //! `<PREFIX>_NO_PREFS` runs never check at start. It never opens the dialog by itself: a found
 //! release is announced with a toast, so a start does not interrupt whatever the user is doing.
 
+use crate::json_ext::JsonExt as _;
 use serde_json::{Value, json};
 
 use crate::LccApp;
@@ -85,9 +86,9 @@ pub fn poll(app: &mut LccApp, ctx: &egui::Context) {
 pub fn body(app: &mut LccApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let status = app.session.updater.status();
-    let version = status["version"].as_str().unwrap_or_default().to_string();
-    let platform = status["platform"].as_str().unwrap_or_default().to_string();
-    let supported = status["supported"].as_bool().unwrap_or(false);
+    let version = status.field("version").as_str().unwrap_or_default().to_string();
+    let platform = status.field("platform").as_str().unwrap_or_default().to_string();
+    let supported = status.field("supported").as_bool().unwrap_or(false);
     ui.set_min_width(460.0);
 
     ui.horizontal(|ui| {
@@ -108,8 +109,8 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui) {
         return;
     }
 
-    let check = status["check"].as_str().unwrap_or("never");
-    let download = status["download"].as_str().unwrap_or("idle");
+    let check = status.field("check").as_str().unwrap_or("never");
+    let download = status.field("download").as_str().unwrap_or("idle");
     ui.add_space(8.0);
     match check {
         "running" => {
@@ -119,7 +120,7 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui) {
             });
         }
         "found" => {
-            let a = &status["available"];
+            let a = &status.field("available");
             let found = a["version"].as_str().unwrap_or_default().to_string();
             ui.label(egui::RichText::new(tr_format!("Version {version} is available.", version = found)).font(t.semibold(13.0)).color(t.text));
             let mut line = a["file"].as_str().unwrap_or_default().to_string();
@@ -170,14 +171,14 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui) {
             }
         }
         "current" => {
-            let last = status["lastChecked"].as_str().unwrap_or_default().to_string();
+            let last = status.field("lastChecked").as_str().unwrap_or_default().to_string();
             ui.label(egui::RichText::new(tr("This is the newest version.")).color(t.text_label));
             if !last.is_empty() {
                 ui.label(egui::RichText::new(tr_format!("Last checked {when}", when = last)).font(t.font(11.5)).color(t.text_dim));
             }
         }
         _ => {
-            let last = status["lastChecked"].as_str().unwrap_or_default().to_string();
+            let last = status.field("lastChecked").as_str().unwrap_or_default().to_string();
             if !last.is_empty() {
                 ui.label(egui::RichText::new(tr_format!("Last checked {when}", when = last)).font(t.font(11.5)).color(t.text_dim));
             }
@@ -188,8 +189,8 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui) {
     ui.add_space(8.0);
     match download {
         "running" => {
-            let bytes = status["progress"]["bytes"].as_u64().unwrap_or(0);
-            let total = status["progress"]["total"].as_u64().unwrap_or(0);
+            let bytes = status.field("progress").field("bytes").as_u64().unwrap_or(0);
+            let total = status.field("progress").field("total").as_u64().unwrap_or(0);
             let frac = if total > 0 { (bytes as f64 / total as f64).clamp(0.0, 1.0) as f32 } else { 0.0 };
             let text = if total > 0 {
                 tr_format!(
@@ -208,7 +209,7 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui) {
             }
         }
         "ready" => {
-            let staged = &status["staged"];
+            let staged = &status.field("staged");
             ui.label(
                 egui::RichText::new(tr_format!(
                     "{file} is downloaded and checked; install it to update (the app restarts).",
@@ -219,7 +220,7 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui) {
         }
         "failed" => {
             ui.label(egui::RichText::new(tr("The download could not be finished.")).color(t.text));
-            if let Some(why) = status["error"].as_str() {
+            if let Some(why) = status.field("error").as_str() {
                 ui.label(egui::RichText::new(why).font(t.font(11.5)).color(t.text_dim));
             }
         }
@@ -231,7 +232,7 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui) {
 
     // a failed check explains itself
     if check == "never"
-        && let Some(why) = status["error"].as_str()
+        && let Some(why) = status.field("error").as_str()
     {
         ui.label(egui::RichText::new(why).font(t.font(11.5)).color(t.text_dim));
     }
@@ -254,7 +255,8 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui) {
             let _ = app.session.execute("update.check", &json!({}));
         }
         // a copy that can't replace itself is sent to the release page, never offered a download
-        let can_verify = status["available"]["verified"].as_bool().unwrap_or(false) && status["available"]["selfUpdate"].as_bool().unwrap_or(true);
+        let can_verify = status.field("available").field("verified").as_bool().unwrap_or(false)
+            && status.field("available").field("selfUpdate").as_bool().unwrap_or(true);
         if check == "found"
             && !can_verify
             && button(ui, "button:updateReleasePage", tr("Open the Release Page"))
@@ -268,10 +270,10 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui) {
         if ready && button(ui, "button:updateInstall", tr("Install and Relaunch")) {
             match app.session.execute("update.install", &json!({"confirm": true})) {
                 Ok(v) => {
-                    if let Some(message) = v["message"].as_str() {
+                    if let Some(message) = v.field("message").as_str() {
                         app.toast(ui.ctx(), message);
                     }
-                    if v["exit"].as_bool().unwrap_or(false) {
+                    if v.field("exit").as_bool().unwrap_or(false) {
                         // the installer or the replacement script needs this process gone
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     }
@@ -280,7 +282,7 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui) {
             }
         }
         if check == "found"
-            && let Some(version) = status["available"]["version"].as_str()
+            && let Some(version) = status.field("available").field("version").as_str()
             && button(ui, "button:updateSkip", tr("Skip This Version"))
         {
             // the dialog stays open (its own Close or Esc ends it); this only stops the asking

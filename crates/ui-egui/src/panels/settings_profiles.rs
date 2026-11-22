@@ -1,6 +1,7 @@
 //! Settings ▸ Profiles (ported from OneSlips, LR-PROF-MANAGE / LR-PROF-BODY): each camera body's own
 //! camera profile, and the way to the Profile Manager (`panels::profile_manager`).
 
+use crate::json_ext::JsonExt as _;
 use serde_json::{Value, json};
 
 use super::settings::{heading, hint, row};
@@ -26,7 +27,7 @@ pub fn settings_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
         t,
         "Raws from a body start with its camera profile when they are imported. Apply to Photos gives it to the body's photos already in the catalog.",
     );
-    let bodies: Vec<Value> = m["bodies"].as_array().cloned().unwrap_or_default();
+    let bodies: Vec<Value> = m.field("bodies").as_array().cloned().unwrap_or_default();
     if bodies.is_empty() {
         hint(ui, t, "No raw photos with a known camera body in this catalog yet.");
     }
@@ -58,7 +59,7 @@ pub fn settings_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     // the imported camera profiles (.dcp): deleted here, with their copy as the camera's default (OneSlips,
     // LR-PROF-IMPORT `profile.deleteCamera`)
-    let camera: Vec<Value> = m["camera"].as_array().cloned().unwrap_or_default();
+    let camera: Vec<Value> = m.field("camera").as_array().cloned().unwrap_or_default();
     if !camera.is_empty() {
         heading(ui, t, "Camera profiles");
         hint(

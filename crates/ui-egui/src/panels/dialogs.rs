@@ -1,5 +1,6 @@
 //! Modal dialogs (new album, rename, create preset, choose settings to copy, export, about, shortcuts).
 
+use crate::json_ext::JsonExt as _;
 use lcc_develop::{ControlSpec, Section, SettingsGroup, SettingsPick, Track};
 use serde_json::json;
 
@@ -489,7 +490,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     let scope = if app.session.selection.ids.len() > 1 { "the selected photos" } else { "the photos in view" };
                     crate::dialog_frame::note(ui,
                         egui::RichText::new({
-                            let (stacks, photos) = (preview["stacks"].as_u64().unwrap_or(0), preview["photos"].as_u64().unwrap_or(0));
+                            let (stacks, photos) = (preview.field("stacks").as_u64().unwrap_or(0), preview.field("photos").as_u64().unwrap_or(0));
                             crate::i18n::tr_format!("Creates {stacks} stack{} from {photos} of {scope}", if stacks == 1 { "" } else { "s" }, stacks = stacks, photos = photos, scope = crate::i18n::tr(scope))
                         }).color(t.text_dim),
                     );
@@ -633,9 +634,9 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     ui.add_space(8.0);
                     // the factors and their weights (0 switches one off)
                     ui.label(egui::RichText::new(crate::i18n::tr("Basic Factors")).font(t.semibold(12.5)).color(t.text));
-                    for (i, label) in ["Blur (sharpness)", "Noise", "Exposure", "Compression artifacts"].iter().enumerate() {
+                    for (i, (label, weight)) in ["Blur (sharpness)", "Noise", "Exposure", "Compression artifacts"].iter().zip(weights.iter_mut()).enumerate() {
                         let r = ui.add(
-                            egui::Slider::new(&mut weights[i], 0.0..=10.0).text(crate::i18n::tr(label)).fixed_decimals(1).show_value(true),
+                            egui::Slider::new(weight, 0.0..=10.0).text(crate::i18n::tr(label)).fixed_decimals(1).show_value(true),
                         );
                         crate::widgets::register(ui.ctx(), format!("field:qualityWeight:{i}"), r.rect);
                     }
@@ -875,7 +876,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                         let delta = match mode.as_str() {
                             "set" => lcc_catalog::dates::normalize_iso(time)
                                 .and_then(|t| Some(lcc_catalog::dates::iso_seconds(&t)? - lcc_catalog::dates::iso_seconds(&cur)?)),
-                            "shift" => params["shift"].as_i64(),
+                            "shift" => params.field("shift").as_i64(),
                             "file" | "name" => None,
                             _ => Some((*zone as f64 * 3600.0).round() as i64),
                         };
@@ -922,7 +923,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     let sets = lcc_engine::cmd::manage::label_sets_json(&app.session);
                     field(ui, "Set", |ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
-                        for set in sets["sets"].as_array().into_iter().flatten() {
+                        for set in sets.field("sets").as_array().into_iter().flatten() {
                             let name = set["name"].as_str().unwrap_or_default();
                             let shown = crate::i18n::builtin_label(name, set["builtin"].as_bool() == Some(true));
                             if crate::widgets::text_button(ui, &format!("labelSet-{name}"), shown, false).clicked() {
@@ -930,12 +931,15 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                             }
                         }
                     });
-                    for (i, l) in lcc_catalog::ColorLabel::ALL.iter().enumerate() {
+                    if names.len() < lcc_catalog::ColorLabel::ALL.len() {
+                        names.resize(lcc_catalog::ColorLabel::ALL.len(), String::new());
+                    }
+                    for (l, name) in lcc_catalog::ColorLabel::ALL.iter().zip(names.iter_mut()) {
                         let colour = format!("{l:?}");
                         field(ui, &colour, |ui| {
                             let (r, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
                             ui.painter().circle_filled(r.center(), 6.0, crate::panels::grid::label_color(*l));
-                            let te = crate::widgets::named(ui.add(egui::TextEdit::singleline(&mut names[i]).hint_text(crate::i18n::tr(&colour)).desired_width(f32::INFINITY)), crate::i18n::tr(&colour));
+                            let te = crate::widgets::named(ui.add(egui::TextEdit::singleline(name).hint_text(crate::i18n::tr(&colour)).desired_width(f32::INFINITY)), crate::i18n::tr(&colour));
                             crate::widgets::register(ui.ctx(), format!("field:labelName-{}", colour.to_lowercase()), te.rect);
                         });
                     }
@@ -1649,7 +1653,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                             let named = !preset_name.trim().is_empty();
                             if crate::widgets::text_button(ui, "watermarkDialogSavePreset", crate::i18n::tr("Save"), false).clicked() && named {
                                 let mut params = app.session.last_export.clone().unwrap_or_default();
-                                params["watermark"] = serde_json::to_value(&wm).unwrap_or_default();
+                                *params.field_mut("watermark") = serde_json::to_value(&wm).unwrap_or_default();
                                 match app.run("export.savePreset", json!({"name": preset_name.trim(), "params": params})) {
                                     Ok(_) => {
                                         app.toast(ui.ctx(), format!("Saved watermark preset “{}”", preset_name.trim()));
@@ -1946,7 +1950,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
             // a move says how it went, or why nothing moved
             Ok(r) if matches!(dlg, Dialog::MovePhotos { .. }) => {
                 if let Dialog::MovePhotos { name, .. } = &dlg {
-                    let text = crate::panels::left::moved_text(r["moved"].as_u64().unwrap_or(0), name);
+                    let text = crate::panels::left::moved_text(r.field("moved").as_u64().unwrap_or(0), name);
                     app.toast(ctx, text);
                 }
                 close = true;
@@ -1962,16 +1966,16 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
             }
             // photos dated to a year or a month alone have no time to shift: say so (and, in the same
             // toast, about any whose time can't be read)
-            Ok(r) if matches!(dlg, Dialog::CaptureTime { .. }) && r["noTime"].as_u64().is_some_and(|n| n > 0) => {
+            Ok(r) if matches!(dlg, Dialog::CaptureTime { .. }) && r.field("noTime").as_u64().is_some_and(|n| n > 0) => {
                 let mut text = crate::i18n::tr("Photos dated to a year or month alone have no time to shift and were left as they were").to_string();
-                if r["unreadable"].as_u64().is_some_and(|n| n > 0) {
+                if r.field("unreadable").as_u64().is_some_and(|n| n > 0) {
                     text = format!("{text}. {}", crate::i18n::tr("Photos whose capture time can't be read were left as they were"));
                 }
                 app.toast(ctx, text);
                 close = true;
             }
             // photos whose capture time doesn't read are left as they were: say so
-            Ok(r) if matches!(dlg, Dialog::CaptureTime { .. }) && r["unreadable"].as_u64().is_some_and(|n| n > 0) => {
+            Ok(r) if matches!(dlg, Dialog::CaptureTime { .. }) && r.field("unreadable").as_u64().is_some_and(|n| n > 0) => {
                 app.toast(ctx, crate::i18n::tr("Photos whose capture time can't be read were left as they were"));
                 close = true;
             }
@@ -2132,13 +2136,13 @@ pub fn cull_params(
 ) -> serde_json::Value {
     let mut p = json!({"pickBest": pick_best, "burstGap": burst_gap, "similarity": similarity});
     if reject_below > 0.0 {
-        p["rejectBelow"] = json!(reject_below);
+        *p.field_mut("rejectBelow") = json!(reject_below);
     }
     if suggest_stars {
-        p["applyRatings"] = json!(true);
+        *p.field_mut("applyRatings") = json!(true);
     }
     if suggest_flags {
-        p["applyFlags"] = json!(true);
+        *p.field_mut("applyFlags") = json!(true);
     }
     p
 }
@@ -2311,9 +2315,9 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
                 app.run("library.source", json!({"kind": "all"}))?;
                 let mut filter = serde_json::to_value(lcc_catalog::Filter::default()).map_err(|e| e.to_string())?;
                 // The filter command merges a patch; these defaults are omitted by serde.
-                filter["only"] = json!([]);
-                filter["labels"] = json!([]);
-                filter["ruleSet"] = serde_json::Value::Null;
+                *filter.field_mut("only") = json!([]);
+                *filter.field_mut("labels") = json!([]);
+                *filter.field_mut("ruleSet") = serde_json::Value::Null;
                 app.run("library.filter", filter)?;
                 app.run("library.select", json!({"ids": [first]}))?;
                 app.ui.view = crate::state::ViewMode::PhotoGrid;
@@ -2342,7 +2346,7 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
         Dialog::RenameAlbum { id, name } => app.run("album.rename", json!({"id": id, "name": name})),
         Dialog::TextPrompt { value, command, params, key, .. } => {
             let mut p = params.clone();
-            p[key.as_str()] = json!(value.trim());
+            *p.field_mut(key.as_str()) = json!(value.trim());
             app.run(command, p)
         }
         Dialog::CaptureTime { mode, time, days, hours, minutes, zone, each } => app.run(
@@ -2415,8 +2419,8 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
             });
             match editing {
                 Some(keyword) => {
-                    params["keyword"] = json!(keyword);
-                    params["name"] = json!(name);
+                    *params.field_mut("keyword") = json!(keyword);
+                    *params.field_mut("name") = json!(name);
                     let r = app.run("keyword.edit", params);
                     if r.is_ok() {
                         let to = match keyword.rsplit_once('|') {
@@ -2428,9 +2432,9 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
                     r
                 }
                 None => {
-                    params["name"] = json!(name);
-                    params["parent"] = if *inside { json!(parent) } else { serde_json::Value::Null };
-                    params["addToSelected"] = json!(add_to_selected);
+                    *params.field_mut("name") = json!(name);
+                    *params.field_mut("parent") = if *inside { json!(parent) } else { serde_json::Value::Null };
+                    *params.field_mut("addToSelected") = json!(add_to_selected);
                     let r = app.run("keyword.create", params);
                     if *reveal && let Ok(made) = &r {
                         app.ui.reveal_keyword = made["keyword"].as_str().map(str::to_string);
@@ -2458,8 +2462,8 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
             }
             let mut params = json!({"name": name, "keywords": slots});
             match renames {
-                Some(old) => params["replace"] = json!(old),
-                None => params["new"] = json!(true),
+                Some(old) => *params.field_mut("replace") = json!(old),
+                None => *params.field_mut("new") = json!(true),
             }
             app.run("keyword.saveSet", params)
         }
@@ -2550,13 +2554,13 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
         }
         Dialog::CreatePreset { name, group, groups } => {
             let mut p = pick_params(groups);
-            p["name"] = json!(if name.trim().is_empty() { "My Preset" } else { name.trim() });
-            p["group"] = json!(if group.trim().is_empty() { "User Presets" } else { group.trim() });
+            *p.field_mut("name") = json!(if name.trim().is_empty() { "My Preset" } else { name.trim() });
+            *p.field_mut("group") = json!(if group.trim().is_empty() { "User Presets" } else { group.trim() });
             app.run("preset.create", p)
         }
         Dialog::UpdatePreset { id, name, groups } => {
             let mut p = pick_params(groups);
-            p["id"] = json!(id);
+            *p.field_mut("id") = json!(id);
             let r = app.run("preset.update", p);
             if r.is_ok()
                 && let Some(ctx) = app.tasks.repaint.clone()
@@ -2655,7 +2659,7 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
         Dialog::NewPhotoDefault { name } => app.run("library.setImportDefault", json!({"name": name.trim()})),
         Dialog::Watermark { wm, preset_name } => {
             let mut params = app.session.last_export.clone().unwrap_or_default();
-            params["watermark"] = serde_json::to_value(wm).unwrap_or_default();
+            *params.field_mut("watermark") = serde_json::to_value(wm).unwrap_or_default();
             app.session.last_export = Some(params.clone());
             if !preset_name.trim().is_empty() {
                 let _ = app.run("export.savePreset", json!({"name": preset_name.trim(), "params": params}));
@@ -2745,12 +2749,12 @@ pub(crate) fn start_export(
     let mut p = export_dialog_params(opts, full_size, resize, limit_kb);
     // (Choose folder later: `app.export` asks for it)
     if opts.destination_mode != lcc_engine::export::DestinationMode::ChooseLater {
-        p["dir"] = json!(dir);
+        *p.field_mut("dir") = json!(dir);
     }
-    p["background"] = json!(true);
+    *p.field_mut("background") = json!(true);
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(d) = crate::panels::plugins::chosen_destination() {
-        p["pluginDestination"] = d;
+        *p.field_mut("pluginDestination") = d;
     }
     app.run("app.export", p)
 }
@@ -2874,7 +2878,7 @@ fn preset_params(
 ) -> serde_json::Value {
     let mut params = export_dialog_params(opts, full_size, resize, limit_kb);
     if opts.destination_mode == lcc_engine::export::DestinationMode::SpecificFolder && !dir.trim().is_empty() {
-        params["dir"] = json!(dir.trim());
+        *params.field_mut("dir") = json!(dir.trim());
     }
     params
 }
@@ -2964,7 +2968,8 @@ pub(crate) fn export_presets(app: &mut LccApp, ui: &mut egui::Ui, f: ExportForm<
     ui.horizontal(|ui| {
         if crate::widgets::text_button(ui, "exportImportPresets", crate::i18n::tr("Import…"), false).clicked()
             && let Ok(v) = app.run("file.importPresets", json!({}))
-            && let Some(first) = v["exportPresets"].as_array().and_then(|a| a.iter().find(|r| r["skipped"] != true)).and_then(|r| r["name"].as_str())
+            && let Some(first) =
+                v.field("exportPresets").as_array().and_then(|a| a.iter().find(|r| r.field("skipped") != true)).and_then(|r| r.field("name").as_str())
         {
             load_export_preset(app, first, opts, full_size, resize, limit_kb, dir);
             picked = first.to_string();
@@ -3476,8 +3481,11 @@ pub(crate) fn export_settings(app: &mut LccApp, ui: &mut egui::Ui, f: ExportForm
         }
         let rendered = opts.format.is_rendered();
         let depths = lcc_engine::export::ExportOptions::bit_depths(opts.format);
-        if rendered && depths.len() > 1 {
-            let mut bd = opts.bit_depth.filter(|b| depths.iter().any(|d| d.0 == *b)).unwrap_or(depths[0].0);
+        if rendered
+            && depths.len() > 1
+            && let Some(first) = depths.first()
+        {
+            let mut bd = opts.bit_depth.filter(|b| depths.iter().any(|d| d.0 == *b)).unwrap_or(first.0);
             choices(ui, "Bit depth", "exportBitDepth", depths, &mut bd);
             opts.bit_depth = Some(bd);
         }

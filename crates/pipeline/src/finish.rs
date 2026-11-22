@@ -537,7 +537,7 @@ fn finish_post<T: Copy + Default + Send>(
     }
     let (w, h) = (p.img.width, p.img.height);
     let mut v = if linear { finish_with(p, fp, true, |_, _, e| e.map(srgb_to_linear_ext)) } else { finish_with(p, fp, exact, |_, _, e| e) };
-    crate::plugin_filters::apply_display(post.stack, &mut v, w, h, post.frame, linear, &mut post.warnings.borrow_mut());
+    crate::plugin_filters::apply_display(post.stack, &mut v, w, h, post.frame.clone(), linear, &mut post.warnings.borrow_mut());
     let (ox, oy) = view_origin(fp.view);
     let mut out = vec![T::default(); v.len()];
     for_rows(&mut out, w.max(1), |y, row| {

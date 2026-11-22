@@ -1,6 +1,7 @@
 //! Keyboard shortcuts: parse `Cmd+Shift+X` style strings, apply the user's keymap (Help ▸
 //! Keyboard Shortcuts, `app.setShortcut`) and dispatch UI and engine commands.
 
+use crate::json_ext::JsonExt as _;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
@@ -737,7 +738,7 @@ pub fn handle(app: &mut LccApp, ctx: &egui::Context) {
         // a slideshow: Space pauses / resumes
         if id == "view.zoomToggle" && app.ui.slideshow.is_some() {
             if let Ok(v) = app.run("slideshow.togglePause", json!({})) {
-                app.toast(ctx, crate::i18n::tr(if v["paused"] == true { "Slideshow paused" } else { "Slideshow resumed" }));
+                app.toast(ctx, crate::i18n::tr(if v.field("paused") == true { "Slideshow paused" } else { "Slideshow resumed" }));
             }
             continue;
         }
@@ -778,7 +779,7 @@ pub fn handle(app: &mut LccApp, ctx: &egui::Context) {
             // Add <filter>: on every selected photo that has none; the Develop panel's section opens
             match app.run("develop.pluginFilter.addTo", json!({"plugin": plugin})) {
                 Ok(r) => {
-                    let (added, had) = (r["added"].as_u64().unwrap_or(0), r["had"].as_u64().unwrap_or(0));
+                    let (added, had) = (r.field("added").as_u64().unwrap_or(0), r.field("had").as_u64().unwrap_or(0));
                     let name = find_bindable(&f).map_or(plugin, |b| b.label.strip_prefix("Add ").unwrap_or(b.label));
                     let text = match (added, had) {
                         (0, _) => crate::i18n::tr_format!("{name} is already on the selected photos", name = name),
@@ -925,12 +926,12 @@ pub fn handle(app: &mut LccApp, ctx: &egui::Context) {
             {
                 // `added` is null when nothing was left to toggle (the selected photos are gone): nothing to say
                 if let Some(r) = app.run("album.toggleTarget", json!({})).ok().filter(|r| r["added"].is_boolean()) {
-                    let n = r["toggled"].as_u64().unwrap_or(0);
+                    let n = r.field("toggled").as_u64().unwrap_or(0);
                     let what = crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n);
-                    let name = r["name"].as_str().unwrap_or("Quick Collection").to_string();
+                    let name = r.field("name").as_str().unwrap_or("Quick Collection").to_string();
                     app.toast(
                         ctx,
-                        if r["added"] == true {
+                        if r.field("added") == true {
                             crate::i18n::tr_format!("Added {what} to {name}", name = name, what = what)
                         } else {
                             crate::i18n::tr_format!("Removed {what} from {name}", name = name, what = what)

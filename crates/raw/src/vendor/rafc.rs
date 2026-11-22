@@ -369,7 +369,7 @@ fn decode_stripe(stripe: &Stripe<'_>, height: usize, bits: u32, xtrans: bool) ->
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::Cfa;
     use proptest::prelude::*;
@@ -424,7 +424,7 @@ mod tests {
         stream.chunks(8).map(|chunk| chunk.iter().enumerate().fold(0, |b, (i, bit)| b | (u8::from(*bit) << (7 - i)))).collect()
     }
 
-    fn compressed(bits: u32, xtrans: bool, quantizers: Option<&[u8]>) -> Vec<u8> {
+    pub(crate) fn compressed(bits: u32, xtrans: bool, quantizers: Option<&[u8]>) -> Vec<u8> {
         let groups = quantizers.map_or(3, <[u8]>::len);
         let stream = zero_stream(bits, xtrans, quantizers);
         // Two stripes; the second is mostly padding, which must never enter the output.

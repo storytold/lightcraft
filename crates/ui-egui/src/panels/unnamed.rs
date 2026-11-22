@@ -5,6 +5,7 @@
 //!
 //! The engine does the looking (`faces.unnamed`) and the naming (`faces.nameFaces`); this draws and selects.
 
+use crate::json_ext::JsonExt as _;
 use std::sync::Arc;
 
 use egui::{Align2, Color32, Rect, RichText, Sense, Stroke, StrokeKind, pos2};
@@ -66,7 +67,7 @@ fn face_of(v: &Value) -> Option<UnnamedFace> {
         index: usize::try_from(v["index"].as_u64()?).ok()?,
         rect: rect_of(&v["rect"]).or_else(|| rect_of(&v["view"]))?,
         view: rect_of(&v["view"]).or_else(|| rect_of(&v["rect"]))?,
-        suggestion: v["suggestion"]["name"].as_str().map(str::to_string),
+        suggestion: v.field("suggestion").field("name").as_str().map(str::to_string),
         group: v["group"].as_u64().and_then(|g| usize::try_from(g).ok()),
     })
 }

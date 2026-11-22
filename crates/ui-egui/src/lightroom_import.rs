@@ -4,6 +4,7 @@
 //! removable or network drive.  This task keeps that work off the owner thread, commits prepared
 //! data only on the owner thread, then finishes the archive index on a worker.
 
+use crate::json_ext::JsonExt as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -450,7 +451,10 @@ fn start_inspect(app: &mut LccApp, path: PathBuf, ctx: &egui::Context) -> Result
 #[cfg(not(target_arch = "wasm32"))]
 fn start_import(app: &mut LccApp, path: PathBuf, update_existing: bool, ctx: &egui::Context) -> Result<Value, String> {
     busy(app)?;
-    let job = lcc_engine::lightroom_job::LightroomJob::new(&mut app.session, path.clone(), update_existing).map_err(|e| e.to_string())?;
+    // the catalog's photos are committed first and their originals read afterwards in the background (issue #1303)
+    let job = lcc_engine::lightroom_job::LightroomJob::new(&mut app.session, path.clone(), update_existing)
+        .map_err(|e| e.to_string())?
+        .read_originals_later(true);
     let cancel = Arc::new(AtomicBool::new(false));
     let progress = job.progress();
     let (tx, rx) = mpsc::channel();
@@ -557,6 +561,9 @@ pub fn tick(app: &mut LccApp, ctx: &egui::Context) {
                 Ok(completion.report)
             });
             let report = report.unwrap_or(Value::Null);
+            if report.get("originalsToRead").and_then(Value::as_u64).is_some_and(|n| n > 0) {
+                crate::read_originals::wake(app);
+            }
             task.enter(Phase::Finalizing);
             let (tx, rx) = mpsc::channel();
             let commit_error = committed.as_ref().err().map(ToString::to_string);
@@ -567,7 +574,7 @@ pub fn tick(app: &mut LccApp, ctx: &egui::Context) {
             if let Err(e) = spawn_finalize(finalization, tx, ctx.clone()) {
                 let mut result = json!({"report": report, "indexWarning": e});
                 if let Some(error) = commit_error {
-                    result["error"] = json!(error);
+                    *result.field_mut("error") = json!(error);
                 }
                 terminal(app, ctx, &task, result);
                 return;
@@ -576,7 +583,7 @@ pub fn tick(app: &mut LccApp, ctx: &egui::Context) {
             task.cancelled = false;
             let mut pending = json!({"running": true, "kind": "import", "report": report});
             if let Some(error) = commit_error {
-                pending["error"] = json!(error);
+                *pending.field_mut("error") = json!(error);
             }
             app.lightroom_last = Some(pending);
             app.lightroom = Some(task);
@@ -586,11 +593,11 @@ pub fn tick(app: &mut LccApp, ctx: &egui::Context) {
             let report = pending.get("report").cloned().unwrap_or(Value::Null);
             match result {
                 Ok(()) if pending.get("error").is_none() => terminal(app, ctx, &task, report),
-                Ok(()) => terminal(app, ctx, &task, json!({"report": report, "error": pending["error"].clone()})),
+                Ok(()) => terminal(app, ctx, &task, json!({"report": report, "error": pending.field("error").clone()})),
                 Err(e) => {
                     let mut value = json!({"report": report, "indexWarning": e});
                     if let Some(error) = pending.get("error") {
-                        value["error"] = error.clone();
+                        *value.field_mut("error") = error.clone();
                     }
                     terminal(app, ctx, &task, value);
                 }

@@ -2,6 +2,7 @@
 //! background, the scores are written as one undo step when it ends (`photo.qualityScanPump`), and
 //! the frame it ends reports how many photos landed on each side of the two cutoffs.
 
+use crate::json_ext::JsonExt as _;
 use serde_json::Value;
 use serde_json::json;
 
@@ -10,14 +11,14 @@ use crate::LccApp;
 /// Every frame: takes a finished scan in, and keeps the frames coming while one runs.
 pub(crate) fn pump(app: &mut LccApp, ctx: &egui::Context) {
     let Ok(v) = app.session.execute("photo.qualityScanPump", &json!({})) else { return };
-    if v["done"] == true {
+    if v.field("done") == true {
         if let Some(text) = summary_text(&v) {
             let now = app.tasks.repaint.as_ref().map(|ctx| ctx.input(|i| i.time)).unwrap_or(app.last_time);
             app.ui.show_toast((text, now + crate::TOAST_SECONDS, None));
         }
         return;
     }
-    if v["active"] == true {
+    if v.field("active") == true {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
 }

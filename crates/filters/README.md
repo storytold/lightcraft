@@ -26,7 +26,9 @@ The manifest: `{"id", "name", "version", "kind": "filter", "description", "autho
 The host hands over interleaved, linear **RGB `f32`** (3 channels, no alpha; `format` = depth 32
 \| mode 3 << 16) and the resolved parameters as JSON with an `_image` object: `x`, `y` (the
 band's top-left in the full image, overlap included), `width`, `height`, `overlap`,
-`canvasWidth`, `canvasHeight`, `mode: "rgb"`, `depth: 32`, `alpha: false`, `channels: 3`.
+`canvasWidth`, `canvasHeight`, `mode: "rgb"`, `depth: 32`, `alpha: false`, `channels: 3`,
+`draft` (`draftScale`, `nativeCanvasWidth`, `nativeCanvasHeight` when drafting), and
+`source` (`origin`, `bitsPerSample`, optional `float`) when known.
 
 ## API
 

@@ -122,7 +122,7 @@ fn short_path(path: &str) -> String {
     let parts: Vec<&str> = path.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
     match parts.len() {
         0..=3 => path.to_string(),
-        n => format!("…/{}", parts[n - 3..].join("/")),
+        n => format!("…/{}", parts.get(n - 3..).unwrap_or_default().join("/")),
     }
 }
 
@@ -252,7 +252,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                                 row,
                                 g.photos.len(),
                                 |ui, range| {
-                                    for (path, _) in &g.photos[range] {
+                                    for (path, _) in g.photos.get(range).unwrap_or_default() {
                                         ui.add(egui::Label::new(RichText::new(short_path(path)).color(t.text_dim).small()).truncate())
                                             .on_hover_text(path);
                                     }

@@ -287,11 +287,13 @@ pub(crate) fn hsl_curves(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSetting
         && held < points.len()
     {
         let mut pts = points.clone();
-        let prev = if held > 0 { pts[held - 1].x + super::edit::POINT_GAP } else { 0.0 };
-        let next = if held + 1 < pts.len() { pts[held + 1].x - super::edit::POINT_GAP } else { 1.0 };
-        let to = to_point(pointer.unwrap_or(pos_of(&pts[held])));
-        pts[held].x = to.x.clamp(prev.min(next), prev.max(next));
-        pts[held].y = to.y;
+        let prev = held.checked_sub(1).and_then(|h| pts.get(h)).map_or(0.0, |p| p.x + super::edit::POINT_GAP);
+        let next = pts.get(held + 1).map_or(1.0, |p| p.x - super::edit::POINT_GAP);
+        if let Some(p) = pts.get_mut(held) {
+            let to = to_point(pointer.unwrap_or(pos_of(p)));
+            p.x = to.x.clamp(prev.min(next), prev.max(next));
+            p.y = to.y;
+        }
         write(app, &pts);
     }
     if resp.drag_stopped() {
