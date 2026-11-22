@@ -120,7 +120,7 @@ fn calibrated_camera_colour_row_is_kept_pending_on_a_photo_of_the_same_camera_no
     // whole Develop panel jumped up and down while the photo rendered
     let mut session = lcc_engine::Session::new();
     for (n, name) in [(1u64, "DSC_0001.NEF"), (2, "DSC_0002.NEF")] {
-        let mut p = Photo::new(PhotoId(n), Source::File { path: format!("/photos/{name}").into() }, name, "NEF", 6048, 4032, "2026-10-18");
+        let mut p = Photo::new(PhotoId(n), Source::File { path: format!("/photos/{name}") }, name, "NEF", 6048, 4032, "2026-10-18");
         p.meta.camera = "NIKON Z 6".into();
         p.kind = lcc_catalog::MediaKind::Raw;
         session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();

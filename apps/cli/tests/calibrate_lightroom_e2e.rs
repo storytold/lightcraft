@@ -62,6 +62,7 @@ fn hidden_calibration() -> Calibration {
         aliases: vec![],
         lens: None,
         editor: Default::default(),
+        own_matrix_only: false,
         method: calibration::METHOD.into(),
         tool_version: "0".into(),
         contributor: None,
