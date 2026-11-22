@@ -81,10 +81,10 @@ fn measure(w: usize, h: usize, edges: &[usize], inject: bool) {
     let src = scene(w, h);
     let s = edits();
     let info = SourceInfo::default();
-    let save = render(&src, &info, &s, &RenderRequest::fit(w, h)).image;
+    let save = render(&src, &info, &s, &RenderRequest::fit(w, h)).unwrap().image;
     for &edge in edges {
         let req = RenderRequest::fit(edge, edge);
-        let preview = render(&src, &info, &s, &req).image;
+        let preview = render(&src, &info, &s, &req).unwrap().image;
         let reference = reduced_save(&save, preview.width, preview.height);
         let actual = error(&preview, &reference);
         eprintln!("{w}x{h} -> {edge}: direct {actual:?}");
@@ -94,7 +94,7 @@ fn measure(w: usize, h: usize, edges: &[usize], inject: bool) {
         // size metadata and use the geometry stage's Mitchell prefilter here.
         let proxy = resize(&src, preview.width, preview.height, Filter::Mitchell);
         let proxy_info = SourceInfo { native_long: Some(w.max(h)), ..info.clone() };
-        let from_proxy = render(&proxy, &proxy_info, &s, &req).image;
+        let from_proxy = render(&proxy, &proxy_info, &s, &req).unwrap().image;
         let proxy_error = error(&from_proxy, &reference);
         eprintln!("{w}x{h} -> {edge}: proxy {proxy_error:?}");
         assert!(proxy_error.acceptable(), "{w}x{h} -> {edge} proxy: {proxy_error:?}");
@@ -106,7 +106,7 @@ fn measure(w: usize, h: usize, edges: &[usize], inject: bool) {
                     "exposure" => broken.light.exposure = 0.0,
                     _ => broken.light.highlights = 0.0,
                 }
-                let omitted = render(&src, &info, &broken, &req).image;
+                let omitted = render(&src, &info, &broken, &req).unwrap().image;
                 let omitted_error = error(&omitted, &reference);
                 eprintln!("{w}x{h} -> {edge}: omitted {control}: {omitted_error:?}");
                 // Exercise the very same acceptance predicate as the real

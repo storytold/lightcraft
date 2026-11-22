@@ -69,7 +69,7 @@ fn legacy_samples() -> Vec<[u16; 3]> {
         for s in [DevelopSettings::for_raw(5200.0, 4.0), edited.clone()] {
             for process in [ProcessVersion(1), ProcessVersion(2)] {
                 let s = DevelopSettings { process, ..s.clone() };
-                let deep = render(&src, info, &s, &req).deep.unwrap();
+                let deep = render(&src, info, &s, &req).unwrap().deep.unwrap();
                 let DeepSamples::U16(v) = deep.samples else { panic!("16-bit samples") };
                 for (x, y) in AT {
                     let i = (y * deep.width + x) * 3;
