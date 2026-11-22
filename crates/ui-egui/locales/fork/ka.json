@@ -2820,7 +2820,7 @@
   "Scan": "სკანირება",
   "Scan photos that have a score already (rescan all)": "უკვე შეფასებული ფოტოების სკანირებაც (ყველას ხელახლა)",
   "Scanning image quality": "გამოსახულების ხარისხის სკანირება",
-  "Scores photos for technical quality — sharpness, noise, exposure and JPEG artifacts — and keeps each score on the photo so the Library can filter and sort by it.": "აფასებს ფოტოებს ტექნიკური ხარისხით — სიმკვეთრე, ხმაური, ექსპოზიცია და JPEG არტეფაქტები — და ინახავს თითოეულ შეფასებას ფოტოსთან, რათა ბიბლიოთეკამ შეძლოს მის მიხედვით გაფილტვრა და დალაგება.",
+  "Scores photos for technical quality (sharpness, noise, exposure and JPEG artifacts) and keeps each score on the photo so the Library can filter and sort by it.": "აფასებს ფოტოებს ტექნიკური ხარისხით (სიმკვეთრე, ხმაური, ექსპოზიცია და JPEG არტეფაქტები) და ინახავს თითოეულ შეფასებას ფოტოსთან, რათა ბიბლიოთეკამ შეძლოს მის მიხედვით გაფილტვრა და დალაგება.",
   "Screen Edges to Keep Clear": "ეკრანის თავისუფლად დასატოვებელი კიდეები",
   "Screen Mode": "ეკრანის რეჟიმი",
   "Scroll By Row": "სტრიქონებით გადახვევა",

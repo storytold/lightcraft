@@ -2600,7 +2600,7 @@
   "Scan Folder for Changes": "掃描資料夾中的變更",
   "Scan photos that have a score already (rescan all)": "同時掃描已有分數的相片（全部重新掃描）",
   "Scanning image quality": "正在掃描影像品質",
-  "Scores photos for technical quality — sharpness, noise, exposure and JPEG artifacts — and keeps each score on the photo so the Library can filter and sort by it.": "依技術品質（銳利度、雜訊、曝光與 JPEG 壓縮假影）為相片評分，並把每個分數保存在相片上，讓圖庫能依分數篩選與排序。",
+  "Scores photos for technical quality (sharpness, noise, exposure and JPEG artifacts) and keeps each score on the photo so the Library can filter and sort by it.": "依技術品質（銳利度、雜訊、曝光與 JPEG 壓縮假影）為相片評分，並把每個分數保存在相片上，讓圖庫能依分數篩選與排序。",
   "Screen Edges to Keep Clear": "螢幕邊緣保留區",
   "Screen Mode": "螢幕模式",
   "Scroll By Row": "依列捲動",

@@ -2388,7 +2388,7 @@
   "Scan": "Scannen",
   "Scan photos that have a score already (rescan all)": "Auch Fotos mit vorhandener Bewertung scannen (alles neu)",
   "Scanning image quality": "Bildqualität wird gescannt",
-  "Scores photos for technical quality — sharpness, noise, exposure and JPEG artifacts — and keeps each score on the photo so the Library can filter and sort by it.": "Bewertet Fotos nach technischer Qualität – Schärfe, Rauschen, Belichtung und JPEG-Artefakte – und speichert jede Bewertung beim Foto, sodass die Bibliothek danach filtern und sortieren kann.",
+  "Scores photos for technical quality (sharpness, noise, exposure and JPEG artifacts) and keeps each score on the photo so the Library can filter and sort by it.": "Bewertet Fotos nach technischer Qualität (Schärfe, Rauschen, Belichtung und JPEG-Artefakte) und speichert jede Bewertung beim Foto, sodass die Bibliothek danach filtern und sortieren kann.",
   "Screen Edges to Keep Clear": "Freizuhaltende Bildschirmränder",
   "Screen Mode": "Bildschirmmodus",
   "Scroll By Row": "Zeilenweise scrollen",

@@ -27,7 +27,8 @@ catalogs sorted, [`localization.md`](localization.md)), clippy
 `-D warnings` (incl. the HEIF feature), parity refs, layers, assets, deny, the wasm check and the Android check (`cargo xtask android check`, see
 [`android.md`](android.md)); it skips
 the workspace and HEIF test runs. The SIL step runs `cargo xtask sil` (docs/testing-sil.md) once that command
-exists and is skipped until then. Locally, `cargo xtask ci` stays the full run; use `--fast` per commit and run the targeted tests of what you touched.
+exists and is skipped until then; it includes the sync merge properties (`lcc-sync` proptests: commutative,
+associative, idempotent merges and no grant leakage). Locally, `cargo xtask ci` stays the full run; use `--fast` per commit and run the targeted tests of what you touched.
 
 The fast gate checks the wasm and Android crates in one `cargo check` per target, so a crate shared by several
 of them is checked once; when that fails it checks each crate on its own to name the broken ones. The full run,
