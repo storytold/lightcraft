@@ -480,6 +480,23 @@ fn sil_workflow() {
     s.ok("library.clearFilter", json!({}));
     s.consistent();
 
+    // --- quality scan: score the shoot, then filter and sort by the scores it kept
+    let q = s.ok("photo.qualityScan", json!({"scope": "catalog", "wait": true}));
+    let measured = q["measured"].as_u64().unwrap_or(0);
+    s.check(measured as usize == n, "the scan did not score every photo", &format!("{measured} of {n}: {q}"));
+    s.check(q["failed"].as_u64().unwrap_or(1) == 0, "a photo could not be scored", &q.to_string());
+    // the verdicts add up to what was measured, and the flags the scan wrote are counted apart
+    let counted = ["accepted", "pending", "rejected"].iter().map(|k| q[*k].as_u64().unwrap_or(0)).sum::<u64>();
+    s.check(counted == measured, "the verdicts do not add up", &q.to_string());
+    s.ok("library.filter", json!({"quality": "accepted"}));
+    s.ok("library.sort", json!({"key": "quality"}));
+    let st = s.ok("library.state", json!({}));
+    let shown = st["visibleCount"].as_u64().unwrap_or(u64::MAX);
+    s.check(shown == q["accepted"].as_u64().unwrap_or(u64::MAX), "the quality filter shows the wrong photos", &format!("{shown}: {st}"));
+    s.ok("library.clearFilter", json!({}));
+    s.ok("library.sort", json!({"key": "captureDate"}));
+    s.consistent();
+
     // --- develop: auto, sliders, white-balance picker, crop, a mask, a preset
     s.ok("library.select", json!({"ids": [ids[0]], "active": ids[0]}));
     let r = s.request("ui.set", json!({"view": "detail"}));

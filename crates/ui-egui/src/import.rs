@@ -8,6 +8,7 @@
 //! runs on a worker thread (files are probed, copied or moved there) and its batches join the
 //! catalog between frames, with a row and ✕ in the activity stack (issue #345); the whole import is
 //! one undo step.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use lcc_engine::import::{ImportCandidate, ImportWarning, ScanInput, ScanOutput, ScanProgress, scan_with_subfolders};
@@ -2549,7 +2550,7 @@ pub(crate) fn preset_stack_section(app: &mut LccApp, ui: &mut egui::Ui, d: &mut 
 /// them again rather than dropping them until a Synchronize Folder (#1302).
 pub(crate) fn auto_import_take(app: &mut LccApp, r: &Value) {
     let Some(mut params) = r.get("import").cloned() else { return };
-    let paths: Vec<String> = params["paths"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
+    let paths: Vec<String> = params.get("paths").and_then(Value::as_array).into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
     if app.import.is_some() {
         app.session.auto_import_retry(&paths);
         return;

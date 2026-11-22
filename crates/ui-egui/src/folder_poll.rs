@@ -5,6 +5,7 @@
 //! files are then counted for the folder's "N new" badge with a notice (new files: ask, the
 //! default) or added in the background (add) as Synchronize Folder adds them. The whole poll is
 //! one row in the activity stack; its ✕ stops it.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

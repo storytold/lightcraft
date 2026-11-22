@@ -16,18 +16,28 @@ pub fn backup_if_due(session: &mut Session) {
 /// its "always show" choice then already asks. Only into settings read from their file that this
 /// session may write (not `--memory`, `<PREFIX>_NO_PREFS` or an unreadable `ui.json`; it waits for
 /// a later start then). The settings are written at once with `save`, and the old file is set aside
-/// only once that worked: otherwise the next start carries it over again.
-pub fn carry_over_recent(prefs: Option<&mut lcc_ui_egui::UiState>, writable: bool, save: impl FnOnce(&lcc_ui_egui::UiState) -> Result<(), String>) {
+/// only once that worked: otherwise the next start carries it over again. A file that couldn't be
+/// read or understood gives its reason, for a notice (the file itself is never written to).
+pub fn carry_over_recent(
+    prefs: Option<&mut lcc_ui_egui::UiState>,
+    writable: bool,
+    save: impl FnOnce(&lcc_ui_egui::UiState) -> Result<(), String>,
+) -> Option<String> {
     use lcc_ui_egui::catalog_ui::{CarryOver, carry_over_recent_catalogs, set_aside_recent_catalogs};
     if !writable || lcc_brand::env_is_set("NO_PREFS") {
-        return;
+        return None;
     }
-    let (Some(ui), Some(file)) = (prefs, lcc_engine::config::recent_catalogs_file()) else { return };
-    if let CarryOver::Carried { .. } = carry_over_recent_catalogs(&mut ui.settings, &file) {
-        match save(ui) {
-            Ok(()) => set_aside_recent_catalogs(&file),
-            Err(e) => log::warn!("recent catalogs: kept until the settings can be saved: {e}"),
+    let (Some(ui), Some(file)) = (prefs, lcc_engine::config::recent_catalogs_file()) else { return None };
+    match carry_over_recent_catalogs(&mut ui.settings, &file) {
+        CarryOver::Carried { .. } => {
+            match save(ui) {
+                Ok(()) => set_aside_recent_catalogs(&file),
+                Err(e) => log::warn!("recent catalogs: kept until the settings can be saved: {e}"),
+            }
+            None
         }
+        CarryOver::Skipped(why) => Some(why),
+        CarryOver::Nothing => None,
     }
 }
 

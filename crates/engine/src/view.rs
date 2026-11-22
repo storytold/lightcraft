@@ -323,6 +323,22 @@ pub fn filter_chips(f: &Filter, cat: &Catalog) -> Vec<FilterChip> {
     if let Some(x) = &f.faces {
         add(format!("Faces: {x}"), json!({"faces": Null}));
     }
+    // the Image Quality Scanner's verdict and score floor (issue #1313): the verdict chip's label
+    // is one the catalogs translate as it stands (the filter bar's own options)
+    if let Some(q) = f.quality.as_deref() {
+        let shown = match q {
+            "pending" => "to review",
+            "unscanned" => "not scanned",
+            other => other,
+        };
+        add(format!("Quality: {shown}"), json!({"quality": Null}));
+    }
+    if let Some(a) = f.quality_min {
+        add(format!("Quality score at least: {a:.0}"), json!({"qualityMin": Null}));
+    }
+    if let Some(b) = f.quality_max {
+        add(format!("Quality score at most: {b:.0}"), json!({"qualityMax": Null}));
+    }
     if let Some(d) = &f.date {
         add(format!("Date: {}", date_label(d)), json!({"date": Null}));
     }

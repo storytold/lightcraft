@@ -12,6 +12,7 @@
 //! The thumbnail-size slider in the bottom bar sizes the faces here too (with its own smaller and larger limits), and
 //! every face is cut from the same kind of box (the detector's, once the scan has looked at it), so faces are shown
 //! equally close. Only the rows on screen ask for a face render (the engine caches them, memory and disk).
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::sync::Arc;
 

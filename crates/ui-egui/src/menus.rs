@@ -1,5 +1,6 @@
 //! UI-level commands (views, panels, zoom, tools, dialogs) and the menu model shared by the native
 //! menu bar, the shortcut handler and the control channel.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -463,6 +464,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.frameRate", "Frame Rate", None, "Help>Debug"),
     ("app.whatsNew", "What's New", None, "Help"),
     ("dialog.cull", "Assisted Culling…", None, "Library"),
+    ("dialog.qualityScan", "Image Quality Scanner…", None, "Library"),
     ("app.help", "{app} Help", Some("F1"), "Help"),
     ("app.feedback", "Send Feedback…", None, "Help"),
     ("app.website", "{app} Website", None, "Help"),
@@ -2623,6 +2625,18 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             edit_in(app, &ctx, p, photocraft)
         }
         "photo.openOriginalInExternal" => open_original_in(app, &ctx, p),
+        "dialog.qualityScan" => {
+            let s = app.ui.quality_scan_settings.clone().unwrap_or_default();
+            app.ui.dialog = Some(Dialog::QualityScanner {
+                scope: s.scope,
+                accepted: s.accepted,
+                rejected: s.rejected,
+                apply_flags: s.apply_flags,
+                rescan: s.rescan,
+                weights: s.weights,
+            });
+            Ok(Value::Null)
+        }
         "dialog.cull" => {
             let (burst_gap, similarity) = app.ui.cull_burst.unwrap_or((10.0, 0.93));
             app.ui.dialog = Some(Dialog::Cull {
@@ -2978,7 +2992,7 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
                 crate::panels::dialogs::prompt(
                     app,
                     "Auto-Tag from Tracklog",
-                    "Camera time zone, e.g. -07:00 (empty: UTC)",
+                    "Camera time zone, e.g. -07:00 (empty: recorded zone, else UTC)",
                     "",
                     "photo.tagFromTracklog",
                     params,
@@ -2999,6 +3013,7 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
                 if kept > 0 {
                     msg += &crate::i18n::tr_format!("; {kept} already had a location", kept = kept);
                 }
+                msg += &unplaceable_note(sk);
                 let ctx = app.tasks.repaint.clone().unwrap_or_default();
                 app.toast(&ctx, msg);
             }
@@ -4054,4 +4069,26 @@ fn open_originals(app: &mut LccApp, p: &Value) -> Result<Value, String> {
         return Err(format!("Couldn't open the editor: {e}"));
     }
     Ok(json!({"opened": opened, "skipped": skipped, "app": editor, "failed": failed}))
+}
+
+/// The Auto-Tag toast's note for photos whose capture time the camera zone can't place (a leap second):
+/// `photo.autoTagTracklog` skips them under `skipped.unplaceable`; empty when there are none.
+pub(crate) fn unplaceable_note(skipped: &Value) -> String {
+    let unplaceable = skipped["unplaceable"].as_u64().unwrap_or(0);
+    if unplaceable == 0 {
+        return String::new();
+    }
+    crate::i18n::tr_format!("; {unplaceable} with a time the zone can't place", unplaceable = unplaceable)
+}
+
+#[cfg(test)]
+mod unplaceable_note_tests {
+    use super::*;
+
+    #[test]
+    fn auto_tag_toast_reports_unplaceable_photos() {
+        assert!(unplaceable_note(&json!({"unplaceable": 2})).contains('2'));
+        assert!(unplaceable_note(&json!({"unplaceable": 0})).is_empty());
+        assert!(unplaceable_note(&json!({})).is_empty());
+    }
 }

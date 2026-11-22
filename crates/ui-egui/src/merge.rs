@@ -6,6 +6,7 @@
 //! preview and starts a new one. The final merge keeps running after the dialog closes (progress
 //! in the activity stack); when it finishes, the result is written, imported and selected
 //! ([`lcc_engine::Session::finish_merge`]).
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, channel};

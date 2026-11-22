@@ -57,11 +57,13 @@ impl Weights {
                 Some("I64") => continue,
                 other => Err(format!("{other:?}")),
             };
+            // every dimension a non-negative integer that fits `usize`: one dropped or truncated
+            // would let a tensor pass the size check with a shape its bytes don't have
             let shape: Vec<usize> = v
                 .get("shape")
                 .and_then(|s| s.as_array())
-                .map(|a| a.iter().filter_map(|x| x.as_u64().map(|x| x as usize)).collect())
-                .unwrap_or_default();
+                .and_then(|a| a.iter().map(|x| x.as_u64().and_then(|x| usize::try_from(x).ok())).collect::<Option<Vec<usize>>>())
+                .ok_or_else(|| Error::Model(format!("{name}: bad shape")))?;
             let offsets: Vec<u64> =
                 v.get("data_offsets").and_then(|s| s.as_array()).map(|a| a.iter().filter_map(|x| x.as_u64()).collect()).unwrap_or_default();
             let [start, end] = offsets[..] else { return Err(Error::Model(format!("{name}: bad data_offsets"))) };
@@ -197,7 +199,19 @@ pub(crate) mod tests {
         let p = std::env::temp_dir().join(format!("lc-weights-hdr-{}.safetensors", std::process::id()));
         std::fs::write(&p, 1000u64.to_le_bytes()).unwrap();
         assert!(Weights::open(&p).is_err());
-        for f in [ok, short, huge, wrap, p] {
+        // a dimension that is not a non-negative integer is a bad shape, not one dropped: [2, -2]
+        // read as [2] used to match the 8 bytes of these offsets
+        let mut bad = Vec::new();
+        for (k, shape) in ["[2,-2]", "[2,2.5]", "[2,\"2\"]", "null", "4"].into_iter().enumerate() {
+            let f = write(&format!("dim{k}"), &format!(r#"{{"a":{{"dtype":"F32","shape":{shape},"data_offsets":[0,8]}}}}"#), 8);
+            let err = Weights::open(&f).err().map(|e| e.to_string()).unwrap_or_default();
+            assert!(err.contains("bad shape"), "{shape}: {err}");
+            bad.push(f);
+        }
+        let missing = write("noshape", r#"{"a":{"dtype":"F32","data_offsets":[0,4]}}"#, 4);
+        assert!(Weights::open(&missing).is_err(), "a tensor without a shape is refused");
+        bad.push(missing);
+        for f in [ok, short, huge, wrap, p].into_iter().chain(bad) {
             let _ = std::fs::remove_file(f);
         }
     }

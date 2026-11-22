@@ -83,14 +83,6 @@ fn id_of(r: &Row, k: &str) -> Option<i64> {
     // (2^63 is the first value past i64::MAX; a cast would saturate onto a real id)
     (f.fract() == 0.0 && f >= i64::MIN as f64 && f < 9_223_372_036_854_775_808.0).then_some(f as i64)
 }
-/// `rows` of `table` with the photo each belongs to ([`image_of`]). Rows that name no photo are left out, with one
-/// warning for the table.
-fn by_image(table: &str, rows: Vec<Row>, warnings: &mut Vec<String>) -> Vec<(i64, Row)> {
-    let total = rows.len();
-    let keyed: Vec<_> = rows.into_iter().filter_map(|r| Some((image_of(&r)?, r))).collect();
-    warn_unkeyed(table, total - keyed.len(), "skipped", warnings);
-    keyed
-}
 /// One warning for the `count` rows of `table` whose `image` names no photo; `outcome` says what became of them.
 fn warn_unkeyed(table: &str, count: usize, outcome: &str, warnings: &mut Vec<String>) {
     match count {
@@ -112,6 +104,8 @@ fn source_path(p: &Photo) -> Option<&str> {
 
 pub(crate) struct Reader {
     db: Database,
+    /// What table walks left out record by record (see [`crate::lightroom_sqlite::WalkStats`]), for the warnings.
+    notes: std::sync::Mutex<Vec<String>>,
 }
 /// The longest XMP packet kept for one image (what a compressed one may expand to). The bound is per
 /// image, never a running total, so the size of a catalog alone cannot drop a packet (upstream #3674).
@@ -138,6 +132,15 @@ fn compressed_settings(name: &str) -> Option<(&'static str, &'static str, &'stat
 }
 
 impl Reader {
+    pub(crate) fn new(db: Database) -> Self {
+        Self { db, notes: std::sync::Mutex::new(Vec::new()) }
+    }
+
+    /// The notes table walks have left so far, taken (each is reported once).
+    pub(crate) fn take_notes(&self) -> Vec<String> {
+        std::mem::take(&mut *self.notes.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+    }
+
     /// Stream `name`'s rows to `f`, one at a time: the table is never collected whole, so a catalog's large develop,
     /// history and metadata tables cost only what `f` keeps, and its pages are read from the file one at a time. A
     /// missing table yields no rows unless `required`. `Blob` columns never become JSON; they reach `f` separately,
@@ -179,7 +182,16 @@ impl Reader {
         } else {
             self.db.for_each_row_with_cancel(t.rootpage, columns.len(), cancel, &mut sink)
         };
-        walked.map_err(|e| format!("{name}: {e}"))
+        let stats = walked.map_err(|e| format!("{name}: {e}"))?;
+        let mut notes = stats.notes(name);
+        if required && stats.skipped > 0 {
+            // a required table's lost record is a photo, folder or file that can't come in: say so plainly
+            notes.push(format!("Lightroom table {name} is required: the photos its unreadable records describe may be missing from the import"));
+        }
+        if !notes.is_empty() {
+            self.notes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).extend(notes);
+        }
+        Ok(())
     }
 
     pub(crate) fn table(&self, name: &str, required: bool, cancel: &AtomicBool) -> Result<Vec<Row>, String> {
@@ -464,6 +476,12 @@ pub(crate) struct ImportIndex {
     pub(crate) collections: BTreeMap<String, u64>,
 }
 
+/// Largest import index read or written (`Interop/lightroom-index.json`). It grows with the catalog, about 45 bytes
+/// a photo plus its albums; 16 MiB was reached near 370,000 photos and a re-import then duplicated virtual copies and
+/// albums (issue #1312). This bound is over twenty times what the largest catalog the reader accepts needs, and the file's own length
+/// is checked before reading, so a hostile index still can't make the import allocate without bound.
+pub(crate) const MAX_INDEX_BYTES: u64 = 1 << 30;
+
 pub(crate) fn load_index(path: Option<&Path>) -> crate::Result<ImportIndex> {
     match path {
         Some(path) => {
@@ -472,14 +490,17 @@ pub(crate) fn load_index(path: Option<&Path>) -> crate::Result<ImportIndex> {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ImportIndex::default()),
                 Err(e) => return Err(error(e.to_string())),
             };
-            if file.metadata().map_err(|e| error(e.to_string()))?.len() > 16 * 1024 * 1024 {
-                return Err(error("Lightroom import index exceeds 16 MiB"));
+            let too_big = || error("Lightroom import index exceeds 1 GiB");
+            let len = file.metadata().map_err(|e| error(e.to_string()))?.len();
+            if len > MAX_INDEX_BYTES {
+                return Err(too_big());
             }
             let mut bytes = Vec::new();
+            bytes.try_reserve_exact(usize::try_from(len).map_err(|_| too_big())?).map_err(|_| too_big())?;
             use std::io::Read;
-            file.take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes).map_err(|e| error(e.to_string()))?;
-            if bytes.len() > 16 * 1024 * 1024 {
-                return Err(error("Lightroom import index exceeds 16 MiB"));
+            file.take(MAX_INDEX_BYTES + 1).read_to_end(&mut bytes).map_err(|e| error(e.to_string()))?;
+            if bytes.len() as u64 > MAX_INDEX_BYTES {
+                return Err(too_big());
             }
             serde_json::from_slice(&bytes).map_err(|e| error(format!("invalid Lightroom import index: {e}")))
         }
@@ -817,7 +838,7 @@ pub(crate) fn open_catalog(path: &Path, cancel: &AtomicBool) -> Result<(Reader, 
             hook(path);
         }
     }
-    Ok((Reader { db }, source_guard))
+    Ok((Reader::new(db), source_guard))
 }
 
 fn read_lightroom(path: &Path, reader: Reader, source_guard: SourceGuard, cancel: &AtomicBool, done: &AtomicUsize) -> Result<CatalogImport, String> {
@@ -865,10 +886,30 @@ fn read_lightroom(path: &Path, reader: Reader, source_guard: SourceGuard, cancel
     // each keyword's path is resolved once, however many photos carry it
     let mut paths: HashMap<i64, Option<String>> = HashMap::new();
     let mut keyword_bytes = 0usize;
-    let keyword_images = optional_table("AgLibraryKeywordImage", &mut warnings)?;
-    for (image, r) in by_image("AgLibraryKeywordImage", keyword_images, &mut warnings) {
+    // Keyword assignments are streamed into (image, tag) pairs, 16 bytes each, never kept as rows: a working
+    // archive holds millions of them, past any whole-table cap (issue #1312).
+    let mut keyword_images: Vec<(i64, i64)> = Vec::new();
+    let mut unkeyed_keywords = 0usize;
+    ensure_read_active(cancel)?;
+    let streamed = reader.each_row("AgLibraryKeywordImage", false, false, cancel, |r, _| {
+        match image_of(&r) {
+            Some(image) => {
+                keyword_images.try_reserve(1).map_err(|_| "AgLibraryKeywordImage: unable to reserve keyword assignments".to_string())?;
+                keyword_images.push((image, number(&r, "tag")));
+            }
+            None => unkeyed_keywords += 1,
+        }
+        Ok(())
+    });
+    done.fetch_add(1, Ordering::Relaxed);
+    if let Err(error) = streamed {
+        keyword_images.clear();
+        unkeyed_keywords = 0;
+        reader.skip_optional("AgLibraryKeywordImage", error, &mut warnings, cancel)?;
+    }
+    warn_unkeyed("AgLibraryKeywordImage", unkeyed_keywords, "skipped", &mut warnings);
+    for (image, tag) in keyword_images {
         ensure_read_active(cancel)?;
-        let tag = number(&r, "tag");
         let path = match paths.get(&tag) {
             Some(p) => p.clone(),
             None => {
@@ -1030,6 +1071,8 @@ fn read_lightroom(path: &Path, reader: Reader, source_guard: SourceGuard, cancel
     refuse_non_media(&mut out);
     ensure_read_active(cancel)?;
     source_guard.verify()?;
+    // collected after the last table read, so every table's left-out records reach the warnings
+    out.warnings.extend(reader.take_notes());
     Ok(out)
 }
 
@@ -1345,7 +1388,13 @@ fn strip_xmp_sentinels(value: &mut Value) {
 /// Import into the current library. Existing edited records are preserved unless explicitly
 /// requested; missing originals remain catalogued for later relinking. The source catalog is read-only.
 pub fn import(s: &mut crate::Session, path: &Path, update_existing: bool) -> crate::Result<Value> {
-    let mut job = crate::lightroom_job::LightroomJob::new(s, path.to_path_buf(), update_existing)?;
+    import_with(s, path, update_existing, false)
+}
+
+/// [`import`], committing the catalog's photos before their originals are read when `read_originals_later`
+/// ([`crate::lightroom_job::LightroomJob::read_originals_later`]); `library.readOriginals` reads them afterwards.
+pub fn import_with(s: &mut crate::Session, path: &Path, update_existing: bool, read_originals_later: bool) -> crate::Result<Value> {
+    let mut job = crate::lightroom_job::LightroomJob::new(s, path.to_path_buf(), update_existing)?.read_originals_later(read_originals_later);
     let cancel = AtomicBool::new(false);
     let prepared = job.prepare(&cancel)?;
     let completion = crate::lightroom_job::commit_prepared(s, prepared)?;
@@ -1483,6 +1532,8 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             .map(PhotoId)
             .filter(|id| s.catalog.photo(*id).is_some_and(|p| source_path(p).is_some_and(|path| key(path) == key(&src.path))));
         let existing_id = indexed.or_else(|| if master == 0 { by_path.get(&key(&src.path)).copied() } else { None });
+        // a record made here from the catalog alone: an original that is missing, or not read yet (issue #1303)
+        let mut catalog_only = false;
         let mut p = if let Some(id) = existing_id.and_then(|id| s.catalog.photo(id)) {
             (**id).clone()
         } else if master != 0 {
@@ -1505,18 +1556,17 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         } else {
             let id = s.catalog.alloc_photo_id();
             let name = Path::new(&src.path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| src.path.clone());
-            let mut p = Photo::new(
-                id,
-                Source::File { path: src.path.clone() },
-                &name,
-                text(&src.image, "fileFormat"),
-                number(&src.image, "fileWidth").max(0) as u32,
-                number(&src.image, "fileHeight").max(0) as u32,
-                &now,
-            );
+            // Lightroom stores the file's stored size; a record's size is upright, as a probe of the file gives it (a
+            // turned photo's crop is oriented against it below, and reading the original later must not turn it)
+            let side = |k: &str| number(&src.image, k).clamp(0, i64::from(u32::MAX)) as u32;
+            let (w, h) = (side("fileWidth"), side("fileHeight"));
+            let turned = lightroom_orientation(text(&src.image, "orientation")).is_some_and(|o| o.swaps_axes());
+            let (upright_w, upright_h) = if turned { (h, w) } else { (w, h) };
+            let mut p = Photo::new(id, Source::File { path: src.path.clone() }, &name, text(&src.image, "fileFormat"), upright_w, upright_h, &now);
             if ["RAW", "DNG", "ARW", "CR2", "CR3", "NEF", "NRW", "RAF", "ORF", "RW2", "PEF"].contains(&p.format.to_uppercase().as_str()) {
                 p.kind = lcc_catalog::MediaKind::Raw;
             }
+            catalog_only = true;
             p
         };
         // Lightroom gives any photo a Copy Name, not only a virtual copy (some use it as a short title).
@@ -1526,11 +1576,17 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         if text(&src.image, "fileFormat").eq_ignore_ascii_case("VIDEO") {
             p.kind = lcc_catalog::MediaKind::Video;
         }
+        // it starts as a photo the add step makes would: its camera (from the catalog, as a probe gives it), then the
+        // import defaults (Constrain Crop, a default preset, copyright), so reading its original later changes nothing
+        if catalog_only {
+            fill_camera(&mut p.meta, &src.image);
+            crate::import::apply_import_defaults(s, &mut p);
+        }
         ids.insert(src.source_id, p.id);
         index.photos.insert(identity(&data, src), p.id.0);
         // A record this import added, or a Local one untouched since browsing (an offline original
         // never reaches the add step, so it is judged here), holds no edits of the library's own.
-        let fresh = existing_id.is_some_and(|id| added.contains(&id) || s.catalog.photo(id).is_some_and(|q| q.untouched_local()));
+        let fresh = catalog_only || existing_id.is_some_and(|id| added.contains(&id) || s.catalog.photo(id).is_some_and(|q| q.untouched_local()));
         // Every photo Lightroom has carries its edit date (below), so a date alone doesn't say the library edited it:
         // its settings or its History do.
         let library_edits = existing_id.is_some() && !fresh && p.edited.is_some() && (p.is_edited() || !p.history.is_empty());
@@ -2391,7 +2447,7 @@ pub(crate) mod tests {
         let dir = fixture::dir(tag);
         let catalog = dir.join("test.lrcat");
         fixture::write(&catalog, &[Table { name: "Adobe_libraryImageDevelopHistoryStep", columns: fixture::HISTORY_COLUMNS, rows: steps }]);
-        let reader = Reader { db: Database::open_with_wal(std::fs::read(&catalog).unwrap(), &[]).unwrap() };
+        let reader = Reader::new(Database::open_with_wal(std::fs::read(&catalog).unwrap(), &[]).unwrap());
         let _ = std::fs::remove_dir_all(dir);
         let mut warnings = Vec::new();
         let grouped = reader.grouped_within("Adobe_libraryImageDevelopHistoryStep", 1 << 20, &mut warnings, &AtomicBool::new(false)).unwrap();
@@ -3667,6 +3723,48 @@ pub(crate) mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// An import index past the old 16 MiB limit is read and written again, so a re-import of a large catalog still
+    /// finds every photo, copy and album it made before and adds none twice (issue #1312).
+    #[test]
+    fn reimport_with_an_index_past_sixteen_mib_adds_nothing_twice() {
+        let dir = std::env::temp_dir().join(format!("app-lrcat-big-index-{}", std::process::id()));
+        let mut s = crate::Session::new();
+        s.open_library(&dir, false).unwrap();
+        let data = sample();
+        let first = apply(&mut s, data.clone(), false).unwrap();
+        let index_path = dir.join("Interop/lightroom-index.json");
+        let mut index: ImportIndex = serde_json::from_slice(&std::fs::read(&index_path).unwrap()).unwrap();
+        let (photos, albums) = (s.catalog.len(), s.catalog.albums().count());
+        // entries a catalog of ~400,000 photos would leave (other sources, so they map nothing here)
+        for n in 0..400_000u64 {
+            index.photos.insert(format!("lr:/elsewhere/archive.lrcat:{n:012}"), 1_000_000 + n);
+        }
+        let padded = serde_json::to_vec(&index).unwrap();
+        assert!(padded.len() > 16 * 1024 * 1024, "{} bytes", padded.len());
+        std::fs::write(&index_path, padded).unwrap();
+        let second = apply(&mut s, data, true).unwrap();
+        assert_eq!(first["mapping"], second["mapping"]);
+        assert_eq!(second["imported"], 0, "nothing is added twice");
+        assert_eq!((s.catalog.len(), s.catalog.albums().count()), (photos, albums));
+        let kept = load_index(Some(&index_path)).unwrap();
+        assert!(kept.photos.len() > 400_000, "the large index was written back whole");
+        s.close_library().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A hostile index (not JSON, or the wrong shape) is an error naming it, never a panic.
+    #[test]
+    fn a_hostile_import_index_is_an_error() {
+        let dir = std::env::temp_dir().join(format!("app-lrcat-bad-index-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("lightroom-index.json");
+        for bytes in [&b"\xff\xfe{"[..], b"[1,2,3]", b"{\"photos\":{\"a\":-1}}", b""] {
+            std::fs::write(&path, bytes).unwrap();
+            assert!(load_index(Some(&path)).is_err(), "{bytes:?}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     // Construct a small SQLite fixture from public file-format records, never private media.
     fn varint(mut n: u64) -> Vec<u8> {
         let mut out = vec![(n & 127) as u8];
@@ -4744,6 +4842,78 @@ pub(crate) mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// A record made from the catalog alone has the upright size a probe of its file would give (Lightroom keeps the
+    /// stored size), so reading the original later doesn't turn it; a hostile size is clamped, never wrapped.
+    #[test]
+    fn a_catalog_only_record_of_a_turned_photo_is_upright() {
+        for (orientation, w, h, want) in
+            [("BC", json!(20), json!(10), (10, 20)), ("AB", json!(20), json!(10), (20, 10)), ("", json!(-5), json!(1e30), (0, u32::MAX))]
+        {
+            let mut data = sample();
+            data.photos.retain(|p| p.source_id == 1);
+            let p = &mut data.photos[0];
+            p.image.insert("orientation".into(), json!(orientation));
+            p.image.insert("fileWidth".into(), w);
+            p.image.insert("fileHeight".into(), h);
+            let mut s = crate::Session::new();
+            apply(&mut s, data, false).unwrap();
+            let photo = s.catalog.photos().next().unwrap();
+            assert_eq!((photo.width, photo.height), want, "{orientation:?}");
+        }
+    }
+
+    /// Issue #1303: with the originals read later, the catalog's photos are committed without opening one file, marked
+    /// unread; reading them afterwards gives what the import that reads first gives, catalog data kept, and a second
+    /// import adds nothing.
+    #[test]
+    fn originals_read_later_commit_first_then_match_an_import_that_reads_first() {
+        let dir = std::env::temp_dir().join(format!("lcc-lrcat-read-later-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Photos")).unwrap();
+        let source = dir.join("source.lrcat");
+        std::fs::write(dir.join("Photos/test.ARW"), b"original").unwrap();
+        std::fs::write(&source, native_catalog(&photo_tables((dir.to_str().unwrap(), "")))).unwrap();
+        let session = |probes: Arc<AtomicUsize>| {
+            let mut s = crate::Session::new();
+            s.media.file_probe = Some(Arc::new(move |_| {
+                probes.fetch_add(1, Ordering::Relaxed);
+                Ok(crate::media::ProbeInfo {
+                    format: "ARW".into(),
+                    width: 20,
+                    height: 10,
+                    file_size: 8,
+                    content_hash: Some("abc".into()),
+                    kind: lcc_catalog::MediaKind::Raw,
+                    ..Default::default()
+                })
+            }));
+            s
+        };
+        let first_probes = Arc::new(AtomicUsize::new(0));
+        let mut first = session(first_probes.clone());
+        first.execute("library.importLightroom", &json!({"path": source})).unwrap();
+        let later_probes = Arc::new(AtomicUsize::new(0));
+        let mut later = session(later_probes.clone());
+        let r = later.execute("library.importLightroom", &json!({"path": source, "readOriginalsLater": true})).unwrap();
+        assert_eq!(later_probes.load(Ordering::Relaxed), 0, "no original is read before the commit");
+        assert_eq!(r["imported"], 1, "{r}");
+        assert_eq!(r["missing"], json!([]), "an unread original is not missing: {r}");
+        assert_eq!(r["originalsToRead"], 1, "{r}");
+        let p = later.catalog.photos().next().unwrap().clone();
+        assert!(crate::cmd::read_originals::is_unread(&p));
+        assert_eq!(p.rating, 5, "catalog data is there at once");
+        let read = later.execute("library.readOriginals", &json!({})).unwrap();
+        assert_eq!(read["remaining"], 0, "{read}");
+        let (a, b) = (first.catalog.photos().next().unwrap(), later.catalog.photos().next().unwrap());
+        assert_eq!(b.content_hash.as_deref(), Some("abc"));
+        assert_eq!((a.width, a.height, a.file_size, a.rating, a.flag), (b.width, b.height, b.file_size, b.rating, b.flag));
+        assert_eq!(a.develop, b.develop, "the catalog's edits map the same either way");
+        assert_eq!(a.meta.keywords, b.meta.keywords);
+        let again = later.execute("library.importLightroom", &json!({"path": source, "readOriginalsLater": true})).unwrap();
+        assert_eq!(again["imported"], 0, "{again}");
+        assert_eq!(later.catalog.len(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// An image row whose file record is gone (Lightroom keeps such rows, and its integrity check passes them) is left
     /// out with a warning instead of failing the whole import (issue #1588).
     #[test]
@@ -4792,7 +4962,7 @@ pub(crate) mod tests {
             vec![N, I(3), T("<x:xmpmeta>padding</x:xmpmeta>".into())],
         ];
         let bytes = native_catalog_rows(&[("Adobe_AdditionalMetadata", "id_local INTEGER PRIMARY KEY, image, xmp", rows)], None);
-        let reader = Reader { db: Database::open_with_wal(bytes, &[]).unwrap() };
+        let reader = Reader::new(Database::open_with_wal(bytes, &[]).unwrap());
         let cancel = AtomicBool::new(false);
         let (rows, warnings) = reader.xmp_table_within(&cancel, 12).unwrap();
         assert_eq!(rows.len(), 3);
@@ -4858,7 +5028,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn oversized_optional_table_warns_and_is_skipped() {
+    /// One oversized record is left out and noted; the table itself still reads (issue #1311).
+    fn an_oversized_record_is_noted_and_its_table_still_reads() {
         let mut main = vec![0u8; 2 * 512];
         main[..16].copy_from_slice(b"SQLite format 3\0");
         main[16..18].copy_from_slice(&512u16.to_be_bytes());
@@ -4889,12 +5060,14 @@ pub(crate) mod tests {
         page[8..10].copy_from_slice(&u16::try_from(start).unwrap_or(0).to_be_bytes());
         page[5..7].copy_from_slice(&u16::try_from(start).unwrap_or(0).to_be_bytes());
         let db = Database::open_with_wal(main, &[]).unwrap();
-        let reader = Reader { db };
+        let reader = Reader::new(db);
         let mut warnings = Vec::new();
         let cancel = AtomicBool::new(false);
         let rows = reader.optional_table("optional_history", &mut warnings, &cancel).unwrap();
         assert!(rows.is_empty());
-        assert!(warnings.iter().any(|warning| warning.contains("optional_history")));
+        assert!(warnings.is_empty(), "the table is not skipped: {warnings:?}");
+        let notes = reader.take_notes();
+        assert!(notes.iter().any(|n| n.contains("optional_history") && n.contains("1 record") && n.contains("too large")), "{notes:?}");
     }
 
     /// A Lightroom catalog's Apple ProRAW edit keeps the look's parameters as a nested table
@@ -5537,6 +5710,89 @@ pub(crate) mod tests {
         assert_eq!(s.catalog.photo(plain).unwrap().develop.light.exposure, 1.5, "Lightroom's settings apply");
         // (this test's imports keep no index, so the virtual copy comes in again as a new photo)
         assert_eq!(r["preservedExistingEdits"], 1, "only the master, imported with settings, keeps them: {r}");
+    }
+
+    /// Two photos (`id_local` 0 and 2) in a one-row-per-table catalog, plus `extra` tables.
+    fn two_photo_tables(extra: Vec<(&'static str, &'static str, Vec<Vec<SqlValue>>)>) -> Vec<(&'static str, &'static str, Vec<Vec<SqlValue>>)> {
+        use SqlValue::{Integer as I, Text as T};
+        let mut tables = one_row(photo_tables(("/catalog/", "")));
+        tables[2].2.push(vec![I(2), I(1), T("two.ARW".into())]);
+        tables[3].2 = vec![
+            vec![I(0), T("zero".into()), I(1), T("ARW".into()), I(20), I(10), I(1), I(0)],
+            vec![I(2), T("two".into()), I(2), T("ARW".into()), I(20), I(10), I(2), I(0)],
+        ];
+        tables.extend(extra);
+        tables
+    }
+
+    /// Gives cell `cell` of table `table`'s leaf page (as [`native_catalog_rows`] lays them out) a reserved serial
+    /// type, so that one record can't be read.
+    fn damage_record(bytes: &mut [u8], table: usize, cell: usize) {
+        let page = (table + 1) * 2048;
+        let at = page + 8 + cell * 2;
+        let mut pos = page + usize::from(u16::from_be_bytes([bytes[at], bytes[at + 1]]));
+        for _ in 0..3 {
+            // payload length, rowid, header length
+            while bytes[pos] & 0x80 != 0 {
+                pos += 1;
+            }
+            pos += 1;
+        }
+        bytes[pos] = 10;
+    }
+
+    /// A damaged record in a required table (`Adobe_images`) leaves out that photo, not the import, and always says
+    /// so: the note is collected after the last table read, and names the table as required.
+    #[test]
+    fn a_bad_record_in_a_required_table_is_warned() {
+        let dir = std::env::temp_dir().join(format!("lrcat-required-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bad.lrcat");
+        let tables = two_photo_tables(Vec::new());
+        assert_eq!(tables[3].0, "Adobe_images");
+        let mut bytes = native_catalog_rows(&tables, None);
+        damage_record(&mut bytes, 3, 1);
+        std::fs::write(&path, bytes).unwrap();
+        let catalog = read(&path).unwrap();
+        let ids: Vec<_> = catalog.photos.iter().map(|p| p.source_id).collect();
+        assert_eq!(ids, [0], "the readable photo imports");
+        let w = &catalog.warnings;
+        assert!(w.iter().any(|n| n.contains("Adobe_images") && n.contains("1 record") && n.contains("left out")), "{w:?}");
+        assert!(w.iter().any(|n| n.contains("Adobe_images") && n.contains("required") && n.contains("may be missing")), "{w:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Keyword assignments are streamed, never kept as rows: each photo still gets every keyword assigned to it, with
+    /// its hierarchy, and none of another photo's.
+    #[test]
+    fn streamed_keyword_assignments_reach_their_photos() {
+        use SqlValue::{Integer as I, Null as N, Text as T};
+        let dir = std::env::temp_dir().join(format!("lrcat-streamed-keywords-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("keywords.lrcat");
+        let tables = two_photo_tables(vec![
+            (
+                "AgLibraryKeyword",
+                "id_local INTEGER PRIMARY KEY, name, parent",
+                vec![vec![N, T("Travel".into()), N], vec![N, T("Goa".into()), I(1)], vec![N, T("Beach".into()), N], vec![N, T("Night".into()), N]],
+            ),
+            (
+                "AgLibraryKeywordImage",
+                "id_local INTEGER PRIMARY KEY, image, tag",
+                vec![vec![N, I(0), I(2)], vec![N, I(2), I(3)], vec![N, I(0), I(4)], vec![N, I(2), I(2)]],
+            ),
+        ]);
+        std::fs::write(&path, native_catalog_rows(&tables, None)).unwrap();
+        let catalog = read(&path).unwrap();
+        let keywords = |id: i64| {
+            let mut k = catalog.photos.iter().find(|p| p.source_id == id).unwrap().keywords.clone();
+            k.sort();
+            k
+        };
+        assert_eq!(keywords(0), ["Night", "Travel|Goa"]);
+        assert_eq!(keywords(2), ["Beach", "Travel|Goa"]);
+        assert!(catalog.warnings.is_empty(), "{:?}", catalog.warnings);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A side-table row whose `image` is missing, NULL, text or not a whole number names no photo. It used to read as

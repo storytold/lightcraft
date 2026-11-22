@@ -1934,6 +1934,8 @@ mod tests_lock;
 #[cfg(test)]
 mod tests_log_thread;
 #[cfg(test)]
+mod tests_quality;
+#[cfg(test)]
 mod tests_repair;
 #[cfg(test)]
 mod tests_robust;

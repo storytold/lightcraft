@@ -11,6 +11,7 @@
 //! with a settings folder of its own) runs it: headless sessions, `--memory` and
 //! `<PREFIX>_NO_PREFS` runs never check at start. It never opens the dialog by itself: a found
 //! release is announced with a toast, so a start does not interrupt whatever the user is doing.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use serde_json::{Value, json};
 

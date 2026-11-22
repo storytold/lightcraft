@@ -739,7 +739,7 @@ pub fn export_active(app: &mut LccApp, p: &Value) -> Result<Value, String> {
         return match picked {
             crate::pick::Picked::Now(paths) => match paths.into_iter().next() {
                 Some(d) => {
-                    again["dir"] = json!(d);
+                    crate::json_set(&mut again, "dir", json!(d));
                     export_active(app, &again)
                 }
                 // cancelled: nothing exported
@@ -793,13 +793,13 @@ pub fn export_active(app: &mut LccApp, p: &Value) -> Result<Value, String> {
         let plugins: Option<Vec<Value>> = None;
         let mut out = json!({"files": files});
         if let Some(r) = plugins {
-            out["plugins"] = json!(r);
+            crate::json_set(&mut out, "plugins", json!(r));
         }
         // Photos may take minutes (and waits for the permission prompt): in the desktop app on a
         // worker, never on this (UI) thread; the app announces the outcome and
         // `export.photosImports` reports it. A window-less run (snapshot scripts) waits.
         if let Some(photos) = after.finish(&app.session, &files) {
-            out["applePhotos"] = photos;
+            crate::json_set(&mut out, "applePhotos", photos);
         }
         out
     };

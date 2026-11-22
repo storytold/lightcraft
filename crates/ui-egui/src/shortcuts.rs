@@ -1,5 +1,6 @@
 //! Keyboard shortcuts: parse `Cmd+Shift+X` style strings, apply the user's keymap (Help ▸
 //! Keyboard Shortcuts, `app.setShortcut`) and dispatch UI and engine commands.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;

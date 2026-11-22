@@ -12,6 +12,7 @@
 //!
 //! Saved books are JSON files in the settings folder (`books/`) until saved creations (catalog
 //! collections holding a layout document) land; `book.save` / `book.open` then move there.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::cell::RefCell;
 use std::collections::HashMap;

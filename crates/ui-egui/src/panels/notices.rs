@@ -1,6 +1,7 @@
 //! Things the user must not miss (issue #103): settings files that were damaged or unreadable when
 //! the library opened (and host warnings such as a damaged `ui.json`), and quitting while changes
 //! are only in memory or while tasks that would be cut short are running (issue #345).
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::{Align2, RichText, vec2};
 
@@ -12,6 +13,8 @@ use crate::{LccApp, QuitPrompt};
 pub fn logic(app: &mut LccApp) {
     let new = app.session.take_library_warnings();
     app.notices.extend(new);
+    let notices = app.session.take_notices();
+    app.notices.extend(notices.iter().map(notice_text));
     if let Some(problems) = app.font_problems.take() {
         app.notices.extend(font_notice(problems));
     }
@@ -22,6 +25,37 @@ pub fn logic(app: &mut LccApp) {
             app.notices.extend(gpu_notice(gpu::unavailable_reason().as_deref(), app.ui.settings.gpu));
         }
     }
+}
+
+/// An engine notice in the user's language.
+pub fn notice_text(n: &lcc_engine::notice::Notice) -> String {
+    use lcc_engine::notice::Notice;
+    match n {
+        Notice::SettingsSetAside { file, kept } => crate::i18n::tr_format!(
+            "{file} was damaged. It was moved aside as {kept}, and the settings of a new library are used.",
+            file = file,
+            kept = kept
+        ),
+        Notice::SettingsUnreadable { file, reason } => crate::i18n::tr_format!(
+            "{file} couldn't be read ({reason}). The settings of a new library are used for now, and the file is not overwritten.",
+            file = file,
+            reason = reason
+        ),
+        Notice::SyncHeldFuture { device, minutes } => crate::i18n::tr_format!(
+            "Changes from {device} are dated {minutes} minutes in the future, so they are held back until then. Set the clock on {device} to the right time.",
+            device = device,
+            minutes = minutes
+        ),
+    }
+}
+
+/// What to tell the user when the recent list of older versions (`recent-catalogs.json`) couldn't
+/// be carried over (`why`, also in the log).
+pub fn recent_catalogs_notice(why: &str) -> String {
+    crate::i18n::tr_format!(
+        "The recent library list of an older version couldn't be carried over ({why}). Open those libraries with File → Open Catalog…",
+        why = why
+    )
 }
 
 /// What to tell the user when fonts the package carries could not be read (`problems`, also in the log): which ones,

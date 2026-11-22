@@ -5,6 +5,7 @@
 //!
 //! The preview is made on a worker thread ([`lcc_engine::enhance::EnhanceWork::preview`]); changing the method
 //! starts a new one.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

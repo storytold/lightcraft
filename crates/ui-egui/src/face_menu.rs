@@ -4,6 +4,7 @@
 //! - in the loupe, the face whose name box is open, else the face box the pointer last rested on.
 //!
 //! Without a chosen face the items are disabled.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use serde_json::{Value, json};
 

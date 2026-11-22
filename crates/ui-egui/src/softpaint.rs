@@ -68,8 +68,10 @@ impl TextureStore {
                     let [w, h] = img.size;
                     for y in 0..h.min(dh.saturating_sub(y0)) {
                         let n = w.min(dw.saturating_sub(x0));
-                        let s = &img.pixels[y * w..y * w + n];
-                        dst.pixels[(y0 + y) * dw + x0..(y0 + y) * dw + x0 + n].copy_from_slice(s);
+                        let at = (y0 + y) * dw + x0;
+                        if let (Some(s), Some(d)) = (img.pixels.get(y * w..y * w + n), dst.pixels.get_mut(at..at + n)) {
+                            d.copy_from_slice(s);
+                        }
                     }
                     t.magnification = d.options.magnification;
                     t.minification = d.options.minification;
@@ -191,7 +193,9 @@ pub fn paint(primitives: &[ClippedPrimitive], textures: &dyn TextureSource, size
     } else {
         let mut groups: Vec<Vec<(usize, &mut [Color32])>> = (0..threads).map(|_| Vec::new()).collect();
         for (i, b) in bands.into_iter().enumerate() {
-            groups[i % threads].push(b);
+            if let Some(g) = groups.get_mut(i % threads) {
+                g.push(b);
+            }
         }
         #[cfg(not(target_arch = "wasm32"))]
         std::thread::scope(|s| {
@@ -335,18 +339,18 @@ fn raster_triangle(
 
     for y in y0..y1 {
         let py = y as f64 + 0.5;
-        let row = &mut band[(y - band_y0) * w..(y - band_y0 + 1) * w];
+        let Some(row) = band.get_mut((y - band_y0) * w..(y - band_y0 + 1) * w) else { continue };
         let px0 = x0 as f64 + 0.5;
         let mut w0 = e0.eval(px0, py);
         let mut w1 = e1.eval(px0, py);
         let mut w2 = e2.eval(px0, py);
-        for dst in &mut row[x0..x1] {
+        for dst in row.iter_mut().take(x1).skip(x0) {
             if e0.inside(w0) && e1.inside(w1) && e2.inside(w2) {
                 let src = match const_src {
                     Some(s) => s,
                     None => {
                         let (l0, l1, l2) = ((w0 * inv) as f32, (w1 * inv) as f32, (w2 * inv) as f32);
-                        let c = if uniform_color { v0.c } else { std::array::from_fn(|i| l0 * v0.c[i] + l1 * v1.c[i] + l2 * v2.c[i]) };
+                        let c = if uniform_color { v0.c } else { zip4(zip4(v0.c, v1.c, |a, b| l0 * a + l1 * b), v2.c, |ab, c| ab + l2 * c) };
                         let t = match const_tex {
                             Some(t) => t,
                             None => sample(l0 * v0.u + l1 * v1.u + l2 * v2.u, l0 * v0.v + l1 * v1.v + l2 * v2.v),
@@ -378,9 +382,16 @@ fn mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
 #[inline]
 fn blend(dst: Color32, src: [f32; 4]) -> Color32 {
     let k = 1.0 - src[3].clamp(0.0, 1.0);
-    let d = dst.to_array();
-    let ch = |i: usize| ((src[i] + d[i] as f32 / 255.0 * k).clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-    Color32::from_rgba_premultiplied(ch(0), ch(1), ch(2), ch(3))
+    let [r, g, b, a] = zip4(src, dst.to_array().map(f32::from), |s, d| (s + d / 255.0 * k).clamp(0.0, 1.0) * 255.0 + 0.5);
+    Color32::from_rgba_premultiplied(r as u8, g as u8, b as u8, a as u8)
+}
+
+/// `f` of each pair of channels of `a` and `b`.
+#[inline]
+fn zip4(a: [f32; 4], b: [f32; 4], f: impl Fn(f32, f32) -> f32) -> [f32; 4] {
+    let [a0, a1, a2, a3] = a;
+    let [b0, b1, b2, b3] = b;
+    [f(a0, b0), f(a1, b1), f(a2, b2), f(a3, b3)]
 }
 
 fn sample_texture(img: &ColorImage, u: f32, v: f32, filter: TextureFilter) -> [f32; 4] {
@@ -388,7 +399,8 @@ fn sample_texture(img: &ColorImage, u: f32, v: f32, filter: TextureFilter) -> [f
     if w == 0 || h == 0 {
         return [0.0; 4];
     }
-    let at = |x: i64, y: i64| to_f(img.pixels[y.clamp(0, h as i64 - 1) as usize * w + x.clamp(0, w as i64 - 1) as usize]);
+    let at =
+        |x: i64, y: i64| to_f(img.pixels.get(y.clamp(0, h as i64 - 1) as usize * w + x.clamp(0, w as i64 - 1) as usize).copied().unwrap_or_default());
     match filter {
         TextureFilter::Nearest => at((u * w as f32).floor() as i64, (v * h as f32).floor() as i64),
         TextureFilter::Linear => {
@@ -398,11 +410,9 @@ fn sample_texture(img: &ColorImage, u: f32, v: f32, filter: TextureFilter) -> [f
             let (tx, ty) = (fx - x, fy - y);
             let (x, y) = (x as i64, y as i64);
             let (a, b, c, d) = (at(x, y), at(x + 1, y), at(x, y + 1), at(x + 1, y + 1));
-            std::array::from_fn(|i| {
-                let top = a[i] + (b[i] - a[i]) * tx;
-                let bot = c[i] + (d[i] - c[i]) * tx;
-                top + (bot - top) * ty
-            })
+            let top = zip4(a, b, |a, b| a + (b - a) * tx);
+            let bot = zip4(c, d, |c, d| c + (d - c) * tx);
+            zip4(top, bot, |top, bot| top + (bot - top) * ty)
         }
     }
 }

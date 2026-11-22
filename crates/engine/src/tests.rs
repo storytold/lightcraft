@@ -489,6 +489,11 @@ fn command_sweep() {
         if c.id == "app.testMachine" {
             continue;
         }
+        // empty params scan the photos in view, a real scan of the demo library on a thread of
+        // its own (its own tests run it, and cancel it)
+        if c.id == "photo.qualityScan" {
+            continue;
+        }
         let _ = s.execute(c.id, &Value::Null);
     }
     // empty params must never start a download from the internet

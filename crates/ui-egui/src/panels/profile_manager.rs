@@ -18,6 +18,7 @@
 //! The window opens at a size that fits the screen, never grows from its content, and keeps the
 //! size the user drags it to, as the Presets Manager's does
 //! ([`super::presets_manager::window_size`]).
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;

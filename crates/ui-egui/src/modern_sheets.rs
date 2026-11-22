@@ -15,6 +15,7 @@
 //! save to Pictures; failures are toasts.
 //!
 //! Own design (patterns of touch settings and share sheets; no assets taken from any).
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::sync::mpsc::{Receiver, TryRecvError};
 

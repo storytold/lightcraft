@@ -1579,6 +1579,11 @@ pub struct UiState {
     /// session; `None` until the dialog is first confirmed (then 10 s, 0.93).
     #[serde(skip)]
     pub cull_burst: Option<(f32, f32)>,
+    /// The Image Quality Scanner's cutoffs, weights, mode and whether flags are written, as last
+    /// confirmed; `None` until the dialog is first confirmed (then 70 / 25, every factor alike,
+    /// unscanned photos only, no flags).
+    #[serde(skip)]
+    pub quality_scan_settings: Option<crate::panels::dialogs::QualityScanSettings>,
     /// "More" faces the user hid with ×, for this session: (photo, region index).
     #[serde(skip)]
     pub dismissed_faces: std::collections::HashSet<(u64, usize)>,
@@ -1965,6 +1970,9 @@ pub struct UiState {
     /// (`crate::recheck`).
     #[serde(skip)]
     pub rechecked_library: Option<u64>,
+    /// Originals still to be read in the background (`crate::read_originals`).
+    #[serde(skip)]
+    pub originals: crate::read_originals::OriginalsState,
     #[serde(skip)]
     pub status: String,
     #[serde(skip)]
@@ -2260,6 +2268,24 @@ pub enum Dialog {
         /// flagged are left alone).
         #[serde(default)]
         suggest_flags: bool,
+    },
+    /// Library ▸ Image Quality Scanner… (issue #1313): score photos for technical
+    /// quality (blur, noise, exposure, JPEG blockiness) in the background and flag them Pick /
+    /// Reject by two cutoffs; the scores stay on the photos for the Library's quality filter and
+    /// sort.
+    QualityScanner {
+        /// The scope: `selection`, `folder` or `catalog` (`photo.qualityScan`'s `scope`).
+        scope: String,
+        /// The score at or above which a photo is a Pick, 0..100.
+        accepted: f32,
+        /// The score at or below which a photo is a Reject, 0..100.
+        rejected: f32,
+        /// Write the flags the scores ask for (photos the user flagged are left alone).
+        apply_flags: bool,
+        /// Measure photos that carry a score already.
+        rescan: bool,
+        /// The factors measured, as `photo.qualityScan`'s `weights`: blur, noise, exposure, compression.
+        weights: [f32; 4],
     },
     /// Help ▸ System Info: (label, value) rows.
     DenoiseModel {
@@ -2728,6 +2754,7 @@ impl Default for UiState {
             person_from: None,
             last_person: None,
             cull_burst: None,
+            quality_scan_settings: None,
             dismissed_faces: Default::default(),
             unnamed_selected: Default::default(),
             unnamed_name: String::new(),
@@ -2882,6 +2909,7 @@ impl Default for UiState {
             #[cfg(test)]
             find_missing_test_delay: None,
             rechecked_library: None,
+            originals: Default::default(),
             status: String::new(),
             dialog: None,
             settings_section: None,

@@ -1,4 +1,5 @@
 //! Semantic search models in Settings ▸ AI Models (`ml.models.*`, `ml.status`, `ml.enable`).
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use crate::i18n::{tr, tr_format};
 use egui::RichText;

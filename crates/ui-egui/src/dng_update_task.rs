@@ -5,6 +5,7 @@
 //! in the activity stack shows the count and ✕ (cancel between photos).
 //!
 //! Sources: own design, after `render_dng_task`.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
