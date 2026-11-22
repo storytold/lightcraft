@@ -79,6 +79,7 @@ pub mod import;
 pub mod import_report;
 mod import_screen;
 pub mod import_tab;
+pub mod keyboard;
 pub mod legacy;
 pub mod libtools;
 pub mod lightroom_destination;
@@ -342,6 +343,8 @@ mod tests_lightroom_destination;
 mod tests_loading_cell;
 #[cfg(test)]
 mod tests_lrc_menus;
+#[cfg(test)]
+mod tests_marketplace;
 #[cfg(test)]
 mod tests_mask_effects;
 #[cfg(test)]
@@ -3238,11 +3241,15 @@ impl LccApp {
         plate::show_setup(self, &ctx);
         #[cfg(not(target_arch = "wasm32"))]
         panels::plugins::show(self, &ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        panels::marketplace::show(self, &ctx);
         panels::library_problem::show(self, &ctx);
         camera_roll::prompt(self, &ctx);
         export_task::poll(self, &ctx);
         #[cfg(not(target_arch = "wasm32"))]
         panels::plugins::poll(self, &ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        panels::marketplace::poll(self, &ctx);
         render_dng_task::poll(self, &ctx);
         dng_update_task::poll(self, &ctx);
         machine_test::poll(self, &ctx);

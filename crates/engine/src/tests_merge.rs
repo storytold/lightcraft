@@ -641,17 +641,28 @@ fn a_merge_started_from_an_album_joins_that_album() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A header-only synthetic NEF: Exif and a Nikon maker note with the pixel-shift numbers of frame `index` (all values
-/// invented; no pixels).
-fn pixel_shift_header(index: u8, count: u16, shutter: f64) -> Vec<u8> {
+/// A header-only synthetic NEF: Exif and a Nikon maker note with the pixel-shift numbers of frame `index` of a series of
+/// `shots` (4, 8, 16 or 32; 0 for a lone frame) as the Z 8 writes them: tag `0x0034` says 16 in every mode, the mode is
+/// byte 4 of `0x005e`, the frame number is byte 8 of `0x0056` and byte 5 of `0x005e` is its slot (the number, but
+/// number + 12 for frames 5 to 8 of an 8-shot series). All values invented; no pixels.
+fn pixel_shift_header(index: u8, shots: u16, shutter: f64) -> Vec<u8> {
     use lcc_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t, writer::rational};
+    let mode = match shots {
+        4 => 1,
+        8 => 2,
+        16 => 3,
+        32 => 4,
+        _ => 0,
+    };
+    let slot = if shots == 8 && index > 4 { index + 12 } else { index };
     let mut note = IfdBuilder::new();
-    note.set(0x0034, Value::Short(vec![count]));
+    note.set(0x0034, Value::Short(vec![16]));
     let mut a = vec![0u8; 16];
     a[8] = index;
     note.set(0x0056, Value::Undefined(a));
     let mut b = vec![0u8; 28];
-    b[5] = index;
+    b[4] = mode;
+    b[5] = slot;
     note.set(0x005e, Value::Undefined(b));
     note.set(0x00a7, Value::Long(vec![5000 + u32::from(index)]));
     let mut maker = b"Nikon\0\x02\0\0\0".to_vec();
@@ -916,7 +927,8 @@ fn synthetic_merged_dng() -> Vec<u8> {
     for k in 0..16 {
         merger.add_frame(k, &frame(k)).unwrap();
     }
-    let metadata = lcc_meta::Metadata { make: Some("NIKON CORPORATION".into()), model: Some("NIKON Z 8".into()), ..Default::default() };
+    // a body no camera table names, so its raw edits white balance relative to as shot
+    let metadata = lcc_meta::Metadata { make: Some("NIKON CORPORATION".into()), model: Some("NIKON Z 0".into()), ..Default::default() };
     let provenance = lcc_raw::merge_provenance::Provenance { engine: 1, shot_count: 16, reference: 1, scale: 2, window: None, frames: vec![] };
     let color = ColorData { as_shot_neutral: Some([0.54, 1.0, 0.7]), baseline_exposure: 0.018, ..Default::default() };
     write_dng(
@@ -954,4 +966,80 @@ fn a_merged_dng_starts_its_colour_like_the_cameras_raw_and_a_normal_dng_does_not
     assert_eq!(normal["format"], "Dng", "{normal}");
     assert_eq!(normal["colour"]["kind"], "file", "{normal}");
     assert_eq!(normal["whiteBalance"], "absolute", "{normal}");
+}
+
+/// The frames of a series of `shots` (0: lone frames) as photos with header-only files in `dir`, named `<prefix>-NN.nef`.
+fn mode_series(s: &mut Session, dir: &std::path::Path, prefix: &str, shots: u16, count: u8) -> Vec<(lcc_catalog::PhotoId, String)> {
+    std::fs::create_dir_all(dir).unwrap();
+    (1..=count)
+        .map(|i| {
+            let name = format!("{prefix}-{i:02}.nef");
+            let path = dir.join(&name).to_string_lossy().to_string();
+            std::fs::write(&path, pixel_shift_header(if shots == 0 { 0 } else { i }, shots, 0.01)).unwrap();
+            let id = s.catalog.alloc_photo_id();
+            let photo =
+                lcc_catalog::Photo::new(id, lcc_catalog::Source::File { path: path.clone() }, &name, "NEF", 8256, 5504, "2031-01-01T00:00:00");
+            s.catalog.apply(lcc_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+            (id, path)
+        })
+        .collect()
+}
+
+/// A series of 4, 8 or 32 shots is told by its mode byte and refused by name, whichever of its frames are chosen: its
+/// first 16 frames are never taken for a 16-shot series (`0x0034` says 16 in every mode). Mixed modes and frames that are
+/// not pixel-shift frames get their own refusals; the 16-shot series plans as before.
+#[test]
+fn a_series_of_another_pixel_shift_mode_is_refused_by_name_and_never_taken_for_16_shots() {
+    use crate::merge::PixelShiftRefusal as R;
+    use lcc_raw::pixel_shift::SeriesError;
+    let dir = std::env::temp_dir().join(format!("lcc-ps-modes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut s = Session::new().with_fs();
+    let s32 = mode_series(&mut s, &dir, "s32", 32, 32);
+    let s8 = mode_series(&mut s, &dir, "s8", 8, 8);
+    let s4 = mode_series(&mut s, &dir, "s4", 4, 4);
+    let s16 = mode_series(&mut s, &dir, "s16", 16, 16);
+    let lone = mode_series(&mut s, &dir, "lone", 0, 2);
+    let refusal = |sel: &[(lcc_catalog::PhotoId, String)]| s.plan_pixel_shift_checked(sel).unwrap_err();
+    for (what, sel, shots) in [
+        ("all 32 frames", &s32[..], 32),
+        ("the first 16 frames of 32", &s32[..16], 32),
+        ("the last 16 frames of 32", &s32[16..], 32),
+        ("all 8 frames", &s8[..], 8),
+        ("the first 4 frames of 8", &s8[..4], 8),
+        ("all 4 frames", &s4[..], 4),
+    ] {
+        assert_eq!(refusal(sel), R::Unsupported(shots), "{what}");
+    }
+    // frames of different modes
+    let mut mixed = s4.clone();
+    mixed.push(s16[0].clone());
+    assert!(matches!(refusal(&mixed), R::Series(SeriesError::MixedCount(_))), "{:?}", refusal(&mixed));
+    // lone frames, alone and among the frames of a series
+    assert!(matches!(refusal(&lone), R::NotFrame { .. }), "{:?}", refusal(&lone));
+    let mut with_lone = s16.clone();
+    with_lone.push(lone[0].clone());
+    assert!(matches!(refusal(&with_lone), R::NotFrame { .. }), "{:?}", refusal(&with_lone));
+    // the 16-shot series is planned as before
+    assert_eq!(s.plan_pixel_shift_checked(&s16).unwrap().1.count, 16);
+    // through the command nothing is merged or written
+    let ids: Vec<u64> = s32[..16].iter().map(|(id, _)| id.0).collect();
+    let err = s.execute("merge.pixelShift", &json!({"ids": ids})).unwrap_err().to_string();
+    assert!(err.contains("32-shot") && err.contains("not supported yet"), "{err}");
+    assert!(std::fs::read_dir(&dir).unwrap().filter_map(Result::ok).all(|e| e.file_name().to_string_lossy().ends_with(".nef")), "no file written");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The first 16 frames of a 32-shot series are not a complete 16-shot series, although tag `0x0034` says 16 in every mode:
+/// the detection that read `0x0034` as the shot count accepted them and the merge would have run.
+#[test]
+fn the_first_16_frames_of_a_32_shot_series_are_not_taken_for_a_16_shot_series() {
+    let dir = std::env::temp_dir().join(format!("lcc-ps-first16-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut s = Session::new().with_fs();
+    let s32 = mode_series(&mut s, &dir, "s32", 32, 32);
+    let planned = s.plan_pixel_shift_checked(&s32[..16]);
+    assert!(planned.is_err(), "the first 16 frames of a 32-shot series were accepted as a complete 16-shot series");
+    assert_eq!(planned.unwrap_err(), crate::merge::PixelShiftRefusal::Unsupported(32));
+    let _ = std::fs::remove_dir_all(&dir);
 }
