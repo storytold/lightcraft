@@ -23,7 +23,7 @@ fn display_value(p: f32, contrast: f32, whites: f32, blacks: f32, shadows: f32) 
         let lo = 1.0 - smooth(0.0, black_range, p);
         p += blacks * 0.49 * lo * (p * 2.0).min(1.0);
     } else {
-        p += whites * 0.06;
+        p += whites * 0.25;
     }
     p.max(0.0).powf(2.2)
 }
@@ -101,4 +101,22 @@ pub(crate) fn apply(lut: &[f32], y: f32) -> f32 {
     let b = lut.get(i + 1).copied().unwrap_or(a);
     let v = a + (b - a) * (f - i as f32);
     if ev < LUT_MIN_EV { v * (y / (GREY * 2.0f32.powf(LUT_MIN_EV))) } else { v }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::display_value;
+
+    #[test]
+    fn display_whites_are_continuous_at_reference_white() {
+        for whites in [-1.0, 1.0] {
+            let below = display_value(1.0 - 1e-5, 0.0, whites, 0.0, 0.0);
+            let at = display_value(1.0, 0.0, whites, 0.0, 0.0);
+            let above = display_value(1.0 + 1e-5, 0.0, whites, 0.0, 0.0);
+            let expected_at = (1.0 + 0.25 * whites).powf(2.2);
+            assert!((at - expected_at).abs() < 1e-6, "Whites {whites}: expected {expected_at}, got {at}");
+            assert!((at - below).abs() < 5e-5, "Whites {whites}: below {below}, at {at}");
+            assert!((above - at).abs() < 5e-5, "Whites {whites}: at {at}, above {above}");
+        }
+    }
 }
