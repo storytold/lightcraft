@@ -4,6 +4,8 @@
 //! (views, panels, zoom — see [`menus::ui_commands`]) and forwards everything else to the engine.
 //! The same entry point serves menus, shortcuts, buttons and the control channel ([`control`]).
 #![forbid(unsafe_code)]
+// checked indexing (`get`) only; the modules not yet converted carry a tracked `allow` (docs/gaps.md)
+#![deny(clippy::indexing_slicing)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod access;
@@ -111,6 +113,7 @@ pub mod progress;
 mod quality_scan;
 pub mod quick_bar;
 pub mod rating;
+pub mod read_originals;
 pub mod recheck;
 pub mod region;
 pub mod reload;
@@ -418,6 +421,8 @@ mod tests_quick_bar;
 mod tests_quit_unsaved;
 #[cfg(test)]
 mod tests_rating;
+#[cfg(test)]
+mod tests_read_originals;
 #[cfg(test)]
 mod tests_recheck;
 #[cfg(test)]
@@ -796,6 +801,17 @@ impl QuitPrompt {
         match self {
             QuitPrompt::Unsaved(text) | QuitPrompt::Tasks(text) | QuitPrompt::Backup(text) => text,
         }
+    }
+}
+
+/// `v[key] = value` without the panic: sets `key` of the JSON object `v` (null becomes an empty
+/// object first, as `IndexMut` does); any other value is left as it is.
+pub(crate) fn json_set(v: &mut Value, key: &str, value: Value) {
+    if v.is_null() {
+        *v = Value::Object(serde_json::Map::new());
+    }
+    if let Some(o) = v.as_object_mut() {
+        o.insert(key.to_string(), value);
     }
 }
 
@@ -2042,13 +2058,13 @@ impl LccApp {
     /// step) and its summary is shown. Cheap every frame.
     fn faces_detect_pump(&mut self) {
         let Ok(v) = self.session.execute("faces.detectPump", &serde_json::json!({})) else { return };
-        if v["active"] == true {
+        if v.get("active").and_then(Value::as_bool) == Some(true) {
             if let Some(ctx) = self.tasks.repaint.as_ref() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(250));
             }
             return;
         }
-        if v["done"] != true {
+        if v.get("done").and_then(Value::as_bool) != Some(true) {
             return;
         }
         self.caches.faces_epoch += 1;
@@ -2467,6 +2483,7 @@ impl LccApp {
         import::tick(self, ctx);
         lightroom_import::tick(self, ctx);
         recheck::tick(self);
+        read_originals::tick(self);
         tasks::poll(self, ctx);
         self.lap(&mut lap, "logic.tasks");
         #[cfg(not(target_arch = "wasm32"))]
@@ -2488,7 +2505,7 @@ impl LccApp {
         if focused && !self.ui.was_focused && !self.ui.external_edits.is_empty() {
             let ids = self.ui.external_edits.clone();
             if let Ok(r) = self.session.execute("photo.reload", &serde_json::json!({"ids": ids}))
-                && r["reloaded"].as_array().is_some_and(|a| !a.is_empty())
+                && r.get("reloaded").and_then(Value::as_array).is_some_and(|a| !a.is_empty())
             {
                 self.toast(ctx, crate::i18n::tr("Updated the edits saved in the external editor"));
             }
@@ -2554,14 +2571,7 @@ impl LccApp {
                     }
                     let p = serde_json::json!({"listing": listing, "start": false});
                     let Ok(r) = app.session.execute("library.autoImportScan", &p) else { return };
-                    let Some(mut params) = r.get("import").cloned().filter(|_| app.import.is_none()) else { return };
-                    let paths: Vec<String> =
-                        params["paths"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
-                    if let Some(o) = params.as_object_mut() {
-                        o.remove("paths");
-                    }
-                    let undo0 = app.session.undo.len();
-                    app.import = Some(import::ImportTask::new(paths, params, undo0, false).auto());
+                    import::auto_import_take(app, &r);
                 };
                 // listed every few seconds: quiet, no row in the activity stack
                 if let Err(e) = tasks::spawn(self, LABEL, None, work, done) {
@@ -2922,7 +2932,7 @@ impl LccApp {
         }
         let pointer =
             |e: &egui::Event| matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. } | egui::Event::MouseWheel { .. });
-        let n = if pointer(&self.synthetic[0]) {
+        let n = if self.synthetic.first().is_some_and(pointer) {
             1
         } else {
             // a key sequence up to its release; a key held down (no release yet) stops before the
@@ -2940,7 +2950,7 @@ impl LccApp {
         // egui's `input.modifiers` follow `ModifiersChanged` events, not the modifiers carried by
         // pointer/key events: announce the injected events' modifiers (held from button down to
         // the frame after up), so ⌥-drag, ⇧-click … work through the control channel
-        let carried = self.synthetic[..n].iter().find_map(|e| match e {
+        let carried = self.synthetic.iter().take(n).find_map(|e| match e {
             egui::Event::PointerButton { pressed, modifiers, .. } => Some((*modifiers, !pressed)),
             egui::Event::Key { modifiers, .. } => Some((*modifiers, true)),
             _ => None,
@@ -3053,11 +3063,19 @@ impl LccApp {
         let paths = self.ui.settings.recent_libraries.clone();
         let mut n = 0;
         match self.run("store.mergeLibraries", serde_json::json!({"paths": paths})) {
-            Ok(r) => n += r["merged"].as_array().into_iter().flatten().map(|m| m["presets"].as_u64().unwrap_or(0)).sum::<u64>(),
+            Ok(r) => {
+                n += r
+                    .get("merged")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .map(|m| m.get("presets").and_then(Value::as_u64).unwrap_or(0))
+                    .sum::<u64>()
+            }
             Err(e) => log::warn!("store: {e}"),
         }
         match self.run("store.gatherPresets", serde_json::json!({"paths": paths})) {
-            Ok(r) => n += r["count"].as_u64().unwrap_or(0),
+            Ok(r) => n += r.get("count").and_then(Value::as_u64).unwrap_or(0),
             Err(e) => log::warn!("store: {e}"),
         }
         if n > 0 {
@@ -3073,7 +3091,9 @@ impl LccApp {
             return;
         }
         if let Ok(r) = self.run("store.importOlderInstalls", serde_json::json!({})) {
-            let sum = |key: &str| -> u64 { r["merged"].as_array().into_iter().flatten().map(|m| m[key].as_u64().unwrap_or(0)).sum() };
+            let sum = |key: &str| -> u64 {
+                r.get("merged").and_then(Value::as_array).into_iter().flatten().map(|m| m.get(key).and_then(Value::as_u64).unwrap_or(0)).sum()
+            };
             let (n, m) = (sum("presets"), sum("cameraProfiles"));
             let msg = match (n, m) {
                 (0, 0) => None,

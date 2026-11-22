@@ -7,6 +7,7 @@
 //! calls of the Immich import source, which run on worker threads with a client from
 //! [`lcc_engine::Session::immich_client`]. The API key typed into the form lives in memory until
 //! Connect hands it to the secret store; it is never shown again, logged or saved in settings.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError};

@@ -1,5 +1,6 @@
 //! The right-hand panel next to the tool strip: Edit, Crop, Remove, Masking, Red Eye, Info,
 //! Keywords, Versions, Activity.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::{Align2, Rect, Sense, pos2, vec2};
 use lcc_catalog::PhotoId;

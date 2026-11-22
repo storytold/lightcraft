@@ -1,6 +1,7 @@
 //! The left panel: the module's Classic column (Library's and Develop's, `classic_left.rs`), or
 //! upstream's "My Photos" sidebar (library sources, albums tree, date groups), which Develop keeps
 //! as one of its panels.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::{Align2, Rect, Sense, pos2, vec2};
 use lcc_catalog::{Album, AlbumId, FolderNode, KeywordNode};

@@ -8,6 +8,7 @@
 //! [`super::slide_layout::preview`]) without changing anything. Right-click a user template to
 //! update it with the current settings, rename, export or delete it; a built-in to export it.
 //! Every action goes through a `slideshow.templates.*` command.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::{RichText, Sense, Stroke, vec2};
 use lcc_engine::slide_template::{PREVIOUS, SlideLook, Template};

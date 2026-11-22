@@ -7,6 +7,7 @@
 //! same dialog shows its terms first, and accepting them downloads it (`faces.models.download`: checked against its
 //! size and SHA-256), installs it and chooses it; recognition stays off until the user switches it on (the scan can
 //! take a long time). "Open page" opens the model's own page in the browser for anything else.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::RichText;
 use serde_json::{Value, json};

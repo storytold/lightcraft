@@ -1,6 +1,7 @@
 //! The Image Quality Scanner's frame work (issue #1313): `photo.qualityScan` runs in the
 //! background, the scores are written as one undo step when it ends (`photo.qualityScanPump`), and
 //! the frame it ends reports how many photos landed on each side of the two cutoffs.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use serde_json::Value;
 use serde_json::json;

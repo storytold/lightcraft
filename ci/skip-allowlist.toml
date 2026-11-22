@@ -1,0 +1,16 @@
+# Skips the nightly corpus run may have, per need (docs/ci.md → Nightly). `cargo xtask skips check`
+# fails when target/ci/report.json has more; a need not listed allows none.
+# The nightly brings the corpus, craft-fonts and the photocraft-corpus, so `fonts` allows none.
+# The other caps are upper bounds from the skip! sites in the tree (2026-11-22, before the first
+# nightly): after the first green nightly, tighten them with `cargo xtask skips write --report
+# <its target/ci/report.json>`. Lower caps by hand as tests stop skipping; never raise one without
+# saying why in the commit.
+
+[max]
+corpus = 63
+feature = 2
+fonts = 0
+gpu = 120
+input = 4
+model = 24
+system = 15
