@@ -593,11 +593,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (v3 && ss > 0.0) {
             let weight = 1.0 - sstep(-6.0, -1.0, base);
             let mask = weight * (0.65 + 0.35 * sqrt(1.0 - weight));
-            shadow_delta = ss * (2.8 * mask + 1.5 * sqrt(mask) * detail);
+            shadow_delta = min(ss, 1.0) * (2.8 * mask + 1.5 * sqrt(mask) * detail);
         } else {
             shadow_delta = ss * 1.7 * ws * sqrt(ws);
         }
-        let highlight_delta = select(hh * 1.7 * wh, hh * 2.5 * sqrt(wh), v3);
+        let highlight_delta = select(hh * 1.7 * wh, hh * 2.5 * wh, v3);
         delta += shadow_delta + highlight_delta;
     }
     if (lt[6] != 0.0) {

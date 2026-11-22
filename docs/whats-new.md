@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### More control over highlights and shadows
-- Process V11 gives Shadows more reach while preserving fine detail, and extends Whites and Blacks across a broader tonal range. Highlights respond more independently from Whites, making it easier to recover bright areas without losing the overall tonal balance. Existing edits keep their current rendering until you update them to the latest process.
+- Process V11 gives Shadows more reach while preserving fine detail, and extends Whites and Blacks across a broader tonal range. As Whites rises, V11 limits the global Highlights contribution to preserve the Whites lift; at Whites +100, Highlights contributes 2% of its setting, unlike V2. Existing edits keep their current rendering until you update them to the latest process.
 
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.

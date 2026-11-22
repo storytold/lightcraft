@@ -32,7 +32,7 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
 pub(crate) fn separated_shadows(base: f32, detail: f32, amount: f32) -> f32 {
     let weight = 1.0 - smooth(-6.0, -1.0, base);
     let mask = weight * (0.65 + 0.35 * (1.0 - weight).sqrt());
-    amount * (2.8 * mask + 1.5 * mask.sqrt() * detail)
+    amount.min(1.0) * (2.8 * mask + 1.5 * mask.sqrt() * detail)
 }
 
 /// V3 local Whites weights over the tone LUT's scene-EV domain. Use the source's neutral
@@ -782,23 +782,15 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
     let mut delta = 0.0;
     let (highlights, shadows) = (fp.hl + l_hl, fp.sh + l_sh);
     if highlights != 0.0 || shadows != 0.0 {
-        let shadow_weight = 1.0 - smooth(-4.8, 0.3, base);
-        let highlight_weight = if fp.v11_tone_response { smooth(-2.8, 1.8, base) } else { smooth(-1.0, 2.8, base) };
         let detail = (l1 - base).clamp(-1.0, 1.0);
-        let shadow_delta = if fp.v11_tone_response && shadows > 0.0 {
-            separated_shadows(base, detail, shadows)
-        } else {
-            shadows * 1.7 * shadow_weight * shadow_weight.sqrt()
-        };
-        let highlight_delta = if fp.v11_tone_response { highlights * 2.5 * highlight_weight.sqrt() } else { highlights * 1.7 * highlight_weight };
-        delta += shadow_delta + highlight_delta;
+        delta += local_highlights_shadows_delta(base, detail, highlights, shadows, fp.v11_tone_response);
     }
     if l_wh != 0.0 {
-        let weight = match &fp.local_whites {
-            Some(lut) => lut.eval((l1 - crate::tone::LUT_MIN_EV) / (crate::tone::LUT_MAX_EV - crate::tone::LUT_MIN_EV)),
-            None => smooth(0.5, 3.0, l1),
+        let (amount, weight) = match &fp.local_whites {
+            Some(lut) => (l_wh.max(-1.0), lut.eval((l1 - crate::tone::LUT_MIN_EV) / (crate::tone::LUT_MAX_EV - crate::tone::LUT_MIN_EV))),
+            None => (l_wh, smooth(0.5, 3.0, l1)),
         };
-        delta += l_wh * 0.8 * weight;
+        delta += amount * 0.8 * weight;
     }
     if l_bl != 0.0 {
         delta += l_bl * 0.8 * (1.0 - smooth(-6.0, -1.5, l1));
@@ -843,6 +835,18 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
         delta -= l_noise.clamp(-1.0, 1.0) * 0.9 * detail * (1.0 - smooth(0.1, 0.5, detail.abs()));
     }
     delta
+}
+
+/// Highlights/Shadows adjustment in scene EV. The V11 highlight weight is linear so its slope
+/// stays bounded at the start of the range; a square root there can reverse a uniform ramp when
+/// negative Highlights overlap positive Shadows.
+pub(crate) fn local_highlights_shadows_delta(base: f32, detail: f32, highlights: f32, shadows: f32, v11: bool) -> f32 {
+    let shadow_weight = 1.0 - smooth(-4.8, 0.3, base);
+    let highlight_weight = if v11 { smooth(-2.8, 1.8, base) } else { smooth(-1.0, 2.8, base) };
+    let shadow_delta =
+        if v11 && shadows > 0.0 { separated_shadows(base, detail, shadows) } else { shadows * 1.7 * shadow_weight * shadow_weight.sqrt() };
+    let highlight_delta = if v11 { highlights * 2.5 * highlight_weight } else { highlights * 1.7 * highlight_weight };
+    shadow_delta + highlight_delta
 }
 
 /// For the gamut warnings: `r` needed desaturating by `t` to fit, and isn't simply a neutral

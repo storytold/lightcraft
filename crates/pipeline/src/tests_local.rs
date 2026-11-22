@@ -85,6 +85,29 @@ fn local_whites_follow_visible_camera_highlights_in_v11() {
 }
 
 #[test]
+fn overlapping_v11_negative_whites_masks_respect_the_lut_bound() {
+    use lightcraft_develop::Process;
+
+    let src = Rgb32f::from_fn(W, H, |_, _| [0.018; 3]);
+    let info = bright_camera_info();
+    let mut single = left_mask(LocalAdjustments { whites: -100.0, ..Default::default() });
+    single.process = Process::V11.version();
+    let mut overlapping = single.clone();
+    let mut second = overlapping.masks[0].clone();
+    second.id = 2;
+    overlapping.masks.push(second);
+
+    let req = RenderRequest::fit(W, H);
+    let one_mask = render(&src, &info, &single, &req).image;
+    let two_masks = render(&src, &info, &overlapping, &req).image;
+    let fully_covered_bright_pixel = 60 * W + 20;
+    assert_eq!(
+        two_masks.data[fully_covered_bright_pixel], one_mask.data[fully_covered_bright_pixel],
+        "two full-strength negative Whites masks must not exceed the LUT's -1 contribution bound"
+    );
+}
+
+#[test]
 fn v11_local_whites_do_not_change_other_adjustments_or_disabled_masks() {
     use lightcraft_develop::Process;
     let src = Rgb32f::from_fn(W, H, |x, _| [0.00002 * 1.025f32.powi(x as i32); 3]);

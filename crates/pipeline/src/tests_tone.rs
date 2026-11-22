@@ -364,6 +364,35 @@ fn v3_positive_shadows_preserve_tonal_order_and_fine_detail() {
 }
 
 #[test]
+fn v11_extreme_highlights_and_shadows_preserve_a_uniform_tonal_ramp() {
+    use crate::finish::local_highlights_shadows_delta;
+    use crate::tone::GREY;
+
+    let settings = on(Process::V11);
+    let info = SourceInfo::default();
+    let base = crate::finish::base_tone(&settings, &info, 1.0);
+    let lut = crate::tone_v11::build(&settings, &info, 1.0, &base);
+    // A global +100 and overlapping positive masks can produce any larger aggregate. Check
+    // those reachable sums across the full scene-EV range; the response caps them at +100.
+    for shadows in [1.0, 1.5, 2.0, 5.0, 20.0] {
+        let mapped = |ev: f32| {
+            let scene_ev = ev + local_highlights_shadows_delta(ev, 0.0, -1.0, shadows, true);
+            crate::tone_v11::apply(&lut, GREY * 2.0f32.powf(scene_ev))
+        };
+
+        // These are the inputs reported in the review, and the full sweep includes the V11 tone map.
+        assert!(mapped(-2.7) >= mapped(-2.8), "Shadows {shadows}, −2.8 EV: {} -> −2.7 EV: {}", mapped(-2.8), mapped(-2.7));
+        let mut previous = mapped(-16.0);
+        for n in 1..=20_000 {
+            let ev = -16.0 + n as f32 * 0.001;
+            let current = mapped(ev);
+            assert!(current >= previous, "Shadows {shadows}: V11 reversed the ramp at {ev} EV: {previous} -> {current}");
+            previous = current;
+        }
+    }
+}
+
+#[test]
 fn neutral_camera_tone_change_is_scoped_to_process_v11() {
     let curve = crate::tone::CameraTone::new(std::array::from_fn(|i| {
         let x = 0.0005 * 1.3f32.powi(i as i32);

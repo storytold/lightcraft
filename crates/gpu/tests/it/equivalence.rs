@@ -916,6 +916,22 @@ fn v11_shadow_separation_matches_cpu_with_and_without_blacks() {
             }
         }
     }
+
+    let mut overlapping = DevelopSettings { process: Process::V11.version(), ..Default::default() };
+    overlapping.light.shadows = 100.0;
+    let shadow_mask = |id| Mask {
+        id,
+        components: vec![MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Linear { start: Point::new(0.5, 0.0), end: Point::new(0.5, 0.9) },
+        }],
+        adjust: lightcraft_develop::LocalAdjustments { shadows: 100.0, ..Default::default() },
+        ..Default::default()
+    };
+    overlapping.masks = vec![shadow_mask(1), shadow_mask(2)];
+    check("V11 overlapping +300 shadows", &src, &raw, &overlapping, &req);
 }
 
 #[test]
