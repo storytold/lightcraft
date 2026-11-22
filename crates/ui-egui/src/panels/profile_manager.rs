@@ -18,8 +18,8 @@
 //! The window opens at a size that fits the screen, never grows from its content, and keeps the
 //! size the user drags it to, as the Presets Manager's does
 //! ([`super::presets_manager::window_size`]).
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
+use crate::json_ext::JsonExt as _;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -399,7 +399,7 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui, query: &mut String, confirm: &m
             *confirm = None;
         }
         match app.run(cmd, p) {
-            Ok(r) if cmd == "profile.deleteCamera" && r["wasCameraDefault"] == true => {
+            Ok(r) if cmd == "profile.deleteCamera" && r.field("wasCameraDefault") == true => {
                 app.toast(ui.ctx(), tr("Deleted. It was its camera's default: that camera's raws now start from its built-in colour."));
             }
             Ok(_) => {}

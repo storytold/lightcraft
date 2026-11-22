@@ -5,8 +5,8 @@
 //! `app.folders` lists them (id, path, whether it was chosen or is the default, what can be done)
 //! for agents and tests; `app.exportFolder {dir | reset}` sets the default export folder, the one
 //! File ▸ Export starts in.
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
+use crate::json_ext::JsonExt as _;
 use egui::RichText;
 use serde_json::{Value, json};
 
@@ -50,8 +50,8 @@ pub fn folders(app: &mut LccApp) -> Value {
     {
         let loc = app.session.execute("library.smartPreviewsLocation", &json!({})).unwrap_or(Value::Null);
         if !loc.is_null() {
-            let custom = loc["custom"].as_bool().unwrap_or(false);
-            let path = loc["path"].as_str().map(str::to_string);
+            let custom = loc.field("custom").as_bool().unwrap_or(false);
+            let path = loc.field("path").as_str().map(str::to_string);
             out.push(entry("smartPreviews", "Smart previews", path, custom, can_pick, custom, "Moving it moves the smart previews already built."));
         }
     }
@@ -77,17 +77,17 @@ pub fn folders(app: &mut LccApp) -> Value {
             false,
             "Adds the photos taken with this device to the catalog (asks for access to your photos). While watched, new photos are added on their own.",
         );
-        e["watch"] = json!(app.ui.camera_roll_watch);
+        *e.field_mut("watch") = json!(app.ui.camera_roll_watch);
         out.push(e);
     }
     let st = app.session.lens_db.status();
-    let lens = st["dir"].as_str().map(str::to_string);
-    let env = st["origin"] == "env";
+    let lens = st.field("dir").as_str().map(str::to_string);
+    let env = st.field("origin") == "env";
     out.push(entry(
         "lensProfiles",
         "Lens profiles",
         lens,
-        st["configured"].is_string(),
+        st.field("configured").is_string(),
         !env,
         false,
         "The lens database lens corrections fall back to.",
@@ -97,7 +97,7 @@ pub fn folders(app: &mut LccApp) -> Value {
         ("denoiseModels", "Denoise models", "denoise.models.list"),
         ("mlModels", "Semantic search models", "ml.models.list"),
     ] {
-        let dir = app.session.execute(cmd, &json!({})).ok().and_then(|v| v["dir"].as_str().map(str::to_string));
+        let dir = app.session.execute(cmd, &json!({})).ok().and_then(|v| v.field("dir").as_str().map(str::to_string));
         out.push(entry(id, label, dir, false, false, false, "Models you install are kept here."));
     }
     #[cfg(not(target_arch = "wasm32"))]

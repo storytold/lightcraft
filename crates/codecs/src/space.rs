@@ -237,6 +237,20 @@ pub enum SpaceOrigin {
     Naive,
 }
 
+impl SpaceOrigin {
+    /// Short machine-readable identifier for this colour interpretation origin.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SpaceOrigin::Untagged => "untagged",
+            SpaceOrigin::Container => "container",
+            SpaceOrigin::IccMatrixTrc => "iccMatrixTrc",
+            SpaceOrigin::IccCms => "iccCms",
+            SpaceOrigin::IccUnsupported => "iccUnsupported",
+            SpaceOrigin::Naive => "naive",
+        }
+    }
+}
+
 /// The colour space of [`crate::Decoded::image`]: linear RGB with these primaries.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SourceSpace {

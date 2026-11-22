@@ -165,7 +165,7 @@ proptest! {
         let Some(Item::Group(g)) = owner.item(&Ref::Group, |_| None) else { return Err(TestCaseError::fail("no group")) };
         peer.join_group(&g, "Peer", 1001).map_err(|e| TestCaseError::fail(e.to_string()))?;
         let Some(Item::Group(pg)) = peer.item(&Ref::Group, |_| None) else { return Err(TestCaseError::fail("no group")) };
-        owner.merge_group(&pg, "p");
+        owner.merge_group(&pg, "p", 1001);
         owner.add_collection("c", CollectionKind::Album, "Trip", None, Grant::None, Some(1), 1002);
         let mut now = 1010;
         for (i, (grant, take, on)) in steps.iter().enumerate() {
@@ -176,10 +176,10 @@ proptest! {
             owner.set_member("c", &key, *on, now);
             // the peer learns of the collection and says what it takes
             if let Some(c) = owner.collection("c").cloned() {
-                peer.merge_collection(&c, OWNER);
+                peer.merge_collection(&c, OWNER, now);
                 let _ = peer.set_take("c", *take, now + 1);
                 if let Some(back) = peer.collection("c").cloned() {
-                    owner.merge_collection(&back, "p");
+                    owner.merge_collection(&back, "p", now + 1);
                 }
             }
             let c = owner.collection("c").cloned().ok_or_else(|| TestCaseError::fail("collection lost"))?;

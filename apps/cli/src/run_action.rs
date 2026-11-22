@@ -39,7 +39,7 @@ pub fn to_run_args(args: &[String]) -> Result<Vec<String>, String> {
     let name = name.ok_or("run-action: no action name (actions.list shows them)")?;
     let mut p = json!({"name": name, "args": params});
     if let Some(ids) = ids {
-        p["ids"] = ids;
+        crate::set_key(&mut p, "ids", ids);
     }
     opts.push("actions.play".into());
     opts.push(p.to_string());

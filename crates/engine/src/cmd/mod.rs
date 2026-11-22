@@ -101,6 +101,7 @@ mod print;
 pub mod publish;
 mod query;
 mod quick;
+pub mod read_originals;
 pub mod recheck;
 pub mod reload;
 pub mod sensor;
@@ -307,6 +308,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(folders::specs());
         v.extend(missing::specs());
         v.extend(duplicates::specs());
+        v.extend(read_originals::specs());
         v.extend(recheck::specs());
         v.extend(sync::specs());
         v.extend(store::specs());

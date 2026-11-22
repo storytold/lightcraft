@@ -104,6 +104,7 @@ pub mod midi;
 /// The shared AI backend's queue and activity row (#491).
 pub mod ml;
 mod model_download;
+pub mod notice;
 pub mod open_path;
 pub mod originals;
 mod pdf;
@@ -472,6 +473,8 @@ pub struct Session {
     /// Sync with the app on other devices ([`device_sync`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub device_sync: device_sync::State,
+    /// Things to tell the user once ([`Session::take_notices`]).
+    notices: Vec<notice::Notice>,
     /// Auto updates: the last check, the download in flight, and the settings ([`update`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub updater: update::Updater,
@@ -672,6 +675,11 @@ pub struct Session {
     /// Auto import: files seen in the watched folder and their size then (a file is imported once
     /// its size held between two scans).
     pub auto_import_seen: std::collections::HashMap<String, u64>,
+    /// Auto import: files handed to an import and their size then. Such a file is not tried again
+    /// while its size stays the same (a non-photo isn't retried every scan), but one that changes
+    /// (a partial copy that went on growing, issue #1302) or is released by
+    /// [`Session::auto_import_retry`] is.
+    pub auto_import_tried: std::collections::HashMap<String, u64>,
     /// Keyword sets (⌥1–⌥9 apply the current set's keywords), the one in use (`None` = Recent
     /// Keywords) and the recently added keywords, newest first.
     pub keyword_sets: Vec<cmd::keywords::KeywordSet>,
@@ -802,6 +810,24 @@ impl Session {
         })
     }
 
+    /// Auto Import handed `paths` to an import that never ran them (it failed to start or was
+    /// cancelled): those the library still doesn't have are tried again by the next scans.
+    pub fn auto_import_retry(&mut self, paths: &[String]) {
+        let known: std::collections::HashSet<&str> = self
+            .catalog
+            .photos()
+            .filter_map(|p| match &p.source {
+                lcc_catalog::Source::File { path } => Some(path.as_str()),
+                _ => None,
+            })
+            .collect();
+        let missing: Vec<&String> = paths.iter().filter(|p| !known.contains(p.as_str())).collect();
+        for p in missing {
+            self.auto_import_tried.remove(p);
+            self.auto_import_seen.remove(p);
+        }
+    }
+
     pub fn library_generation(&self) -> u64 {
         self.library_generation
     }
@@ -891,6 +917,7 @@ impl Session {
             remote: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             device_sync: Default::default(),
+            notices: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             updater: Default::default(),
             desktop: desktop::default_desktop(),
@@ -974,6 +1001,7 @@ impl Session {
             lut_profiles: Vec::new(),
             target_album: None,
             auto_import_seen: Default::default(),
+            auto_import_tried: Default::default(),
             keyword_sets: Vec::new(),
             keyword_set: None,
             recent_keywords: Vec::new(),
@@ -2856,6 +2884,8 @@ mod tests_folders;
 mod tests_forget_local;
 #[cfg(test)]
 mod tests_fuji;
+#[cfg(test)]
+mod tests_fuzz_lightroom;
 #[cfg(test)]
 mod tests_genfill;
 #[cfg(test)]

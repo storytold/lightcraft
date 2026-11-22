@@ -22,8 +22,8 @@
 //!   field has the keyboard).
 //!
 //! The windows' state is per UI thread (the app has one), so no shared app state is touched.
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
+use crate::json_ext::JsonExt as _;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
@@ -216,7 +216,7 @@ pub(crate) fn ask_edit(app: &mut LccApp, ctx: &egui::Context, p: &Value, photocr
         let mode = if file_editable { mode } else { "copyWithAdjustments" };
         return Some(run_choice(app, ctx, &json!({}), Some(photocraft), mode, &ids));
     }
-    let first = app.session.catalog.photo(ids[0]).map(|ph| ph.file_name.clone()).unwrap_or_default();
+    let first = ids.first().and_then(|id| app.session.catalog.photo(*id)).map(|ph| ph.file_name.clone()).unwrap_or_default();
     let mode = if file_editable && lcc_engine::cmd::edit_in::suggested_mode(&first) == lcc_engine::cmd::edit_in::Mode::Original {
         "original"
     } else {
@@ -423,7 +423,7 @@ fn reload(app: &mut LccApp, ctx: &egui::Context, ids: Vec<u64>) {
         return;
     }
     match app.session.execute("photo.reload", &json!({"ids": ids})) {
-        Ok(r) if r["reloaded"].as_array().is_some_and(|a| !a.is_empty()) => {
+        Ok(r) if r.field("reloaded").as_array().is_some_and(|a| !a.is_empty()) => {
             app.toast(ctx, tr("Updated the edits saved in the external editor"));
             // fork: Edit In versions of Immich-linked photos go to Immich (RT.C1)
             #[cfg(not(target_arch = "wasm32"))]
@@ -811,7 +811,7 @@ fn play_shortcuts(app: &mut LccApp, ctx: &egui::Context) {
     }
     let Ok(l) = app.session.execute("actions.list", &json!({})) else { return };
     let mut hit = Vec::new();
-    for a in l["actions"].as_array().into_iter().flatten() {
+    for a in l.field("actions").as_array().into_iter().flatten() {
         let (Some(sc), Some(name)) = (a["shortcut"].as_str(), a["name"].as_str()) else { continue };
         let Some((mods, key)) = crate::shortcuts::parse(sc) else { continue };
         if ctx.input_mut(|i| i.consume_key(mods, key)) {

@@ -6,8 +6,8 @@
 //! the folder commands (`create`, `rename`, `delete`, `move`) for any module's template list, so a
 //! module's `*.createTemplateFolder`, `*.renameTemplateFolder`, `*.deleteTemplateFolder` and
 //! `*.moveTemplate` commands are one-liners over it.
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
+use crate::json_ext::JsonExt as _;
 use egui::RichText;
 use lcc_engine::template_folders::{self as folders, DEFAULT_FOLDER, Foldered};
 use serde_json::{Value, json};
@@ -205,20 +205,20 @@ pub fn folder_command<T: Foldered>(op: &str, listed: &mut Vec<String>, templates
     };
     let mut extra = json!({});
     match op {
-        "create" => extra["name"] = json!(folders::create_folder(listed, text("name")?)?),
+        "create" => *extra.field_mut("name") = json!(folders::create_folder(listed, text("name")?)?),
         "rename" => {
             let from = user_folder(listed)?;
             let (to, _) = folders::rename_folder(listed, templates, &from, text("to")?)?;
-            extra["name"] = json!(to);
+            *extra.field_mut("name") = json!(to);
         }
         "delete" => {
             let name = user_folder(listed)?;
-            extra["moved"] = json!(folders::delete_folder(listed, templates, &name));
-            extra["deleted"] = json!(name);
+            *extra.field_mut("moved") = json!(folders::delete_folder(listed, templates, &name));
+            *extra.field_mut("deleted") = json!(name);
         }
         "move" => {
             let folder = folder_param(listed, p)?.ok_or("missing `folder`")?;
-            extra["moved"] = json!(folders::move_template(templates, text("name")?, folder)?);
+            *extra.field_mut("moved") = json!(folders::move_template(templates, text("name")?, folder)?);
         }
         _ => return Err(format!("unknown folder operation {op}")),
     }

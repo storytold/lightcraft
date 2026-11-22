@@ -12,7 +12,6 @@
 //! The thumbnail-size slider in the bottom bar sizes the faces here too (with its own smaller and larger limits), and
 //! every face is cut from the same kind of box (the detector's, once the scan has looked at it), so faces are shown
 //! equally close. Only the rows on screen ask for a face render (the engine caches them, memory and disk).
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::sync::Arc;
 
@@ -69,7 +68,11 @@ pub(super) fn fit(painter: &egui::Painter, text: &str, font: egui::FontId, max_w
         return text.to_string();
     }
     let chars: Vec<char> = text.chars().collect();
-    (1..chars.len()).rev().map(|n| chars[..n].iter().collect::<String>() + "…").find(|s| width(s) <= max_w).unwrap_or_else(|| "…".to_string())
+    (1..chars.len())
+        .rev()
+        .map(|n| chars.get(..n).unwrap_or_default().iter().collect::<String>() + "…")
+        .find(|s| width(s) <= max_w)
+        .unwrap_or_else(|| "…".to_string())
 }
 
 /// The People view: its categories' picker, then whichever category is on screen (issue #1050).
@@ -104,7 +107,9 @@ fn category_header(app: &mut LccApp, ui: &mut egui::Ui) {
     let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), CATEGORY_H), Sense::hover());
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(row.shrink2(vec2(PAD, 6.0))));
     if let Some(i) = crate::widgets::segmented(&mut child, "peopleCategory", &items, active, 3) {
-        app.ui.people_category = [PeopleCategory::Unknown, PeopleCategory::Suggested, PeopleCategory::Confirmed][i.min(2)];
+        if let Some(category) = [PeopleCategory::Unknown, PeopleCategory::Suggested, PeopleCategory::Confirmed].into_iter().nth(i.min(2)) {
+            app.ui.people_category = category;
+        }
         app.ui.person_page = None;
     }
 }

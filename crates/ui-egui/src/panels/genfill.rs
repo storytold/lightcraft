@@ -6,8 +6,8 @@
 //!
 //! Nothing is sent until Generate is clicked, and never to a provider whose terms the user has
 //! not accepted in the consent dialog, which shows the crop that will be uploaded.
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
+use crate::json_ext::JsonExt as _;
 use egui::RichText;
 use serde_json::{Value, json};
 
@@ -48,7 +48,7 @@ fn providers(app: &mut LccApp) -> Vec<Value> {
         return list.clone();
     }
     let list: Vec<Value> =
-        app.session.execute("genfill.providers", &json!({})).ok().and_then(|v| v["providers"].as_array().cloned()).unwrap_or_default();
+        app.session.execute("genfill.providers", &json!({})).ok().and_then(|v| v.field("providers").as_array().cloned()).unwrap_or_default();
     app.ui.genfill.providers = Some((std::time::Instant::now(), list.clone()));
     list
 }
@@ -127,7 +127,7 @@ fn not_on_photo(app: &mut LccApp, photo: lcc_catalog::PhotoId) -> Vec<Value> {
         Some((at, k, list)) if *k == key && fresh(at) => list.clone(),
         _ => {
             let list: Vec<Value> =
-                app.session.execute("genfill.results", &json!({})).ok().and_then(|v| v["results"].as_array().cloned()).unwrap_or_default();
+                app.session.execute("genfill.results", &json!({})).ok().and_then(|v| v.field("results").as_array().cloned()).unwrap_or_default();
             app.ui.genfill.results = Some((std::time::Instant::now(), key, list.clone()));
             list
         }
@@ -223,7 +223,7 @@ pub fn remove_section(app: &mut LccApp, ui: &mut egui::Ui, spot: Option<(usize, 
         }
         return;
     };
-    let pid = current["id"].as_str().unwrap_or("openai").to_string();
+    let pid = current.field("id").as_str().unwrap_or("openai").to_string();
     let name = short_name(&current);
     if configured.len() > 1 {
         ui.horizontal_wrapped(|ui| {
@@ -248,7 +248,7 @@ pub fn remove_section(app: &mut LccApp, ui: &mut egui::Ui, spot: Option<(usize, 
         app.ui.genfill.plan = None;
     }
     // each variation is a paid result: 1 unless the user asks for more (remembered)
-    let usd_each = current["usdPerImage"].as_f64().unwrap_or(0.0);
+    let usd_each = current.field("usdPerImage").as_f64().unwrap_or(0.0);
     ui.horizontal(|ui| {
         ui.label(RichText::new(crate::i18n::tr("Variations")).color(t.text_label));
         let v = app.ui.genfill_variations.clamp(1, 4);
@@ -294,13 +294,13 @@ pub fn remove_section(app: &mut LccApp, ui: &mut egui::Ui, spot: Option<(usize, 
     }
     let plan = app.ui.genfill.plan.as_ref().map(|(_, p)| p.clone()).unwrap_or_default();
     // an area too large for one request can't be generated (it is never sent in pieces)
-    let refused = plan["error"].as_str().map(str::to_string);
+    let refused = plan.field("error").as_str().map(str::to_string);
     if let Some(e) = &refused {
         let r = ui.add(egui::Label::new(RichText::new(crate::i18n::tr(e)).size(11.0).color(t.caution)).wrap());
         register(ui.ctx(), "genfill:refused", r.rect);
     } else {
-        let requests = plan["requests"].as_u64().unwrap_or(1);
-        let usd = plan["usd"].as_f64().unwrap_or(0.0);
+        let requests = plan.field("requests").as_u64().unwrap_or(1);
+        let usd = plan.field("usd").as_f64().unwrap_or(0.0);
         let line = crate::i18n::tr_format!(
             "About ${usd} · {requests} request(s), billed to your {name} account",
             usd = format!("{usd:.2}"),
@@ -308,11 +308,14 @@ pub fn remove_section(app: &mut LccApp, ui: &mut egui::Ui, spot: Option<(usize, 
             name = name
         );
         ui.label(RichText::new(line).size(11.0).color(t.text_label));
-        if plan["soft"] == true && sp.generated.is_none() {
+        if plan.field("soft") == true && sp.generated.is_none() {
             ui.label(
-                RichText::new(crate::i18n::tr_format!("Generated at {}% of the photo's resolution: softer than the rest.", percent(&plan["scale"])))
-                    .size(11.0)
-                    .color(t.caution),
+                RichText::new(crate::i18n::tr_format!(
+                    "Generated at {}% of the photo's resolution: softer than the rest.",
+                    percent(plan.field("scale"))
+                ))
+                .size(11.0)
+                .color(t.caution),
             );
         }
         if requests > u64::from(lcc_engine::genfill::MAX_REQUESTS) {
@@ -327,9 +330,9 @@ pub fn remove_section(app: &mut LccApp, ui: &mut egui::Ui, spot: Option<(usize, 
             let st = app.session.execute("genfill.status", &json!({})).unwrap_or_default();
             ui.spinner();
             // "n of m" only for several requests (tiles, variations)
-            let total = st["total"].as_u64().unwrap_or(0);
+            let total = st.field("total").as_u64().unwrap_or(0);
             let text = if total > 1 {
-                crate::i18n::tr_format!("Generating… {} of {}", st["done"], total)
+                crate::i18n::tr_format!("Generating… {} of {}", st.field("done"), total)
             } else {
                 crate::i18n::tr("Generating…").to_string()
             };
@@ -511,24 +514,24 @@ pub fn consent_body(app: &mut LccApp, ui: &mut egui::Ui, provider: &str, index: 
             register(ui.ctx(), "genfill:consentPreview", r.rect);
         });
     }
-    let c = &plan["crop"];
+    let c = &plan.field("crop");
     if c.is_object() {
         ui.label(RichText::new(crate::i18n::tr_format!("Sends this {} × {} px area to {name}.", c["w"], c["h"], name = name)).color(t.text));
-    } else if let Some(e) = plan["error"].as_str() {
+    } else if let Some(e) = plan.field("error").as_str() {
         ui.label(RichText::new(crate::i18n::tr(e)).color(t.caution));
     }
-    if let Some(usd) = plan["usd"].as_f64() {
+    if let Some(usd) = plan.field("usd").as_f64() {
         ui.label(
             RichText::new(crate::i18n::tr_format!("About ${usd}, billed to your {name} account.", usd = format!("{usd:.2}"), name = name))
                 .color(t.text_label),
         );
     }
     // a warning only when it matters
-    if plan["soft"] == true {
+    if plan.field("soft") == true {
         ui.label(
             RichText::new(crate::i18n::tr_format!(
                 "The area is larger than {name} takes at full resolution: it will be softer than the rest of the photo ({}%).",
-                percent(&plan["scale"]),
+                percent(plan.field("scale")),
                 name = name
             ))
             .size(11.0)
@@ -536,8 +539,8 @@ pub fn consent_body(app: &mut LccApp, ui: &mut egui::Ui, provider: &str, index: 
         );
     }
     // a service that may train on what it gets: said up front, not only in Details
-    if p["policy"]["trainsByDefault"] == true
-        && let Some(c) = p["caveat"].as_str().filter(|c| !c.is_empty())
+    if p.field("policy").field("trainsByDefault") == true
+        && let Some(c) = p.field("caveat").as_str().filter(|c| !c.is_empty())
     {
         ui.label(RichText::new(c).size(11.0).color(t.caution));
     }
@@ -548,8 +551,8 @@ pub fn consent_body(app: &mut LccApp, ui: &mut egui::Ui, provider: &str, index: 
                 .size(11.0)
                 .color(t.text_label),
         );
-        ui.label(RichText::new(p["policy"]["summary"].as_str().unwrap_or_default()).size(11.0).color(t.text_label));
-        if let Some(pv) = p["policy"]["provenance"].as_str().filter(|v| !v.is_empty()) {
+        ui.label(RichText::new(p.field("policy").field("summary").as_str().unwrap_or_default()).size(11.0).color(t.text_label));
+        if let Some(pv) = p.field("policy").field("provenance").as_str().filter(|v| !v.is_empty()) {
             ui.label(RichText::new(pv).size(11.0).color(t.text_label));
         }
         ui.label(
@@ -559,12 +562,12 @@ pub fn consent_body(app: &mut LccApp, ui: &mut egui::Ui, provider: &str, index: 
             .size(11.0)
             .color(t.text_dim),
         );
-        if p["policy"]["trainsByDefault"] != true
-            && let Some(c) = p["caveat"].as_str().filter(|c| !c.is_empty())
+        if p.field("policy").field("trainsByDefault") != true
+            && let Some(c) = p.field("caveat").as_str().filter(|c| !c.is_empty())
         {
             ui.label(RichText::new(c).size(11.0).color(t.text_label));
         }
-        let url = p["policy"]["url"].as_str().unwrap_or_default().to_string();
+        let url = p.field("policy").field("url").as_str().unwrap_or_default().to_string();
         let r = ui.link(crate::i18n::tr_format!("Read {name}'s policy", name = name));
         register(ui.ctx(), "link:genfillPolicy", r.rect);
         if r.clicked() {
@@ -629,14 +632,14 @@ fn provider_card(ui: &mut egui::Ui, t: &Tokens, p: &Value) {
     row(
         ui,
         "Trains on uploads:",
-        crate::i18n::tr(if p["policy"]["trainsByDefault"] == true {
+        crate::i18n::tr(if p.field("policy").field("trainsByDefault") == true {
             "Yes, unless you opt out where the service allows it (see Data policy)"
         } else {
             "No"
         })
         .to_string(),
     );
-    if let Some(pv) = p["policy"]["provenance"].as_str().filter(|v| !v.is_empty()) {
+    if let Some(pv) = p.field("policy").field("provenance").as_str().filter(|v| !v.is_empty()) {
         row(ui, "Marks added:", pv.to_string());
     }
 }
@@ -659,13 +662,13 @@ pub fn settings_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
         ),
     );
     for p in providers(app) {
-        let id = p["id"].as_str().unwrap_or_default().to_string();
-        let name = p["name"].as_str().unwrap_or_default().to_string();
+        let id = p.field("id").as_str().unwrap_or_default().to_string();
+        let name = p.field("name").as_str().unwrap_or_default().to_string();
         super::settings::heading(ui, t, &name);
         provider_card(ui, t, &p);
-        let status = match p["keySource"].as_str() {
-            Some("settings") => crate::i18n::tr_format!("Key saved (ends in {})", p["keyHint"].as_str().unwrap_or_default()),
-            Some("env") => crate::i18n::tr_format!("Key from the environment variable {}", p["keyEnv"].as_str().unwrap_or_default()),
+        let status = match p.field("keySource").as_str() {
+            Some("settings") => crate::i18n::tr_format!("Key saved (ends in {})", p.field("keyHint").as_str().unwrap_or_default()),
+            Some("env") => crate::i18n::tr_format!("Key from the environment variable {}", p.field("keyEnv").as_str().unwrap_or_default()),
             _ => crate::i18n::tr("No key").to_string(),
         };
         crate::dialog_frame::form_row(ui, "API key", |ui| {
@@ -693,7 +696,9 @@ pub fn settings_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
                 // the typed key is not kept in the UI
                 app.ui.genfill.key_input.remove(&id);
             }
-            if p["keySource"] == "settings" && text_button(ui, &format!("genfillForgetKey-{id}"), crate::i18n::tr("Remove Key"), false).clicked() {
+            if p.field("keySource") == "settings"
+                && text_button(ui, &format!("genfillForgetKey-{id}"), crate::i18n::tr("Remove Key"), false).clicked()
+            {
                 let _ = app.run("genfill.setKey", json!({"provider": id, "key": null}));
                 app.ui.genfill.providers = None;
             }
@@ -702,19 +707,20 @@ pub fn settings_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
             let r = ui.link(crate::i18n::tr("Get an API key"));
             register(ui.ctx(), format!("link:genfillKeyUrl-{id}"), r.rect);
             if r.clicked() {
-                let _ = crate::links::open(app, p["keyUrl"].as_str().unwrap_or_default());
+                let _ = crate::links::open(app, p.field("keyUrl").as_str().unwrap_or_default());
             }
             let r = ui.link(crate::i18n::tr("Data policy"));
             if r.clicked() {
-                let _ = crate::links::open(app, p["policy"]["url"].as_str().unwrap_or_default());
+                let _ = crate::links::open(app, p.field("policy").field("url").as_str().unwrap_or_default());
             }
-            if p["consented"] == true && text_button(ui, &format!("genfillWithdraw-{id}"), crate::i18n::tr("Withdraw Consent"), false).clicked() {
+            if p.field("consented") == true && text_button(ui, &format!("genfillWithdraw-{id}"), crate::i18n::tr("Withdraw Consent"), false).clicked()
+            {
                 let _ = app.run("genfill.consent", json!({"provider": id, "accept": false}));
                 app.ui.genfill.providers = None;
             }
         });
-        if p["policy"]["trainsByDefault"] == true {
-            super::settings::hint(ui, t, p["policy"]["summary"].as_str().unwrap_or_default());
+        if p.field("policy").field("trainsByDefault") == true {
+            super::settings::hint(ui, t, p.field("policy").field("summary").as_str().unwrap_or_default());
         }
     }
 }

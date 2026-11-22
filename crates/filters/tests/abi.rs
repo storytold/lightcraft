@@ -6,7 +6,7 @@
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
-use lcc_filters::{Error, Filter, FrameInfo, Limits, Registry, is_filter_module};
+use lcc_filters::{Error, Filter, FrameInfo, ImageSource, Limits, Registry, is_filter_module};
 use serde_json::{Value, json};
 
 /// A module implementing the ABI: `manifest` JSON, `version`, `filter` body (params
@@ -187,7 +187,7 @@ fn overlap_makes_neighbourhood_filters_seamless_across_bands() {
 fn position_dependent_filters_line_up_across_bands_and_tiles() {
     let f = Filter::load(&ok_module(GRADIENT), small_bands()).unwrap();
     let (w, h) = (29, 13);
-    let frame = FrameInfo { x: 100, y: 40, full_w: 400, full_h: 300 };
+    let frame = FrameInfo { x: 100, y: 40, full_w: 400, full_h: 300, ..FrameInfo::default() };
     let mut img = image(w, h);
     run(&f, &mut img, w as u32, h as u32, frame).unwrap();
     for y in 0..h {
@@ -375,4 +375,134 @@ fn pc_merge_is_optional_and_combines_measurements() {
     (i64.or (i64.shl (i64.const 100) (i64.const 32)) (i64.const 0x7ffffff0)))"#;
     let f = Filter::load(&module(&manifest(""), 1, INVERT, bad), Limits::default()).unwrap();
     assert!(f.merge_analyses(&[one], &json!({}), &AtomicBool::new(false)).is_err());
+}
+
+/// Filter that dumps `params` JSON bytes into `$buf` (length in `[0]`, bytes as `f32` in `[1..]`)
+/// and echoes `params` directly from `pc_analyze`.
+fn echo_params_filter() -> Filter {
+    let filter = r#"
+    (local $cap i32) (local $n i32)
+    (local.set $cap (i32.sub (i32.div_u (local.get $len) (i32.const 4)) (i32.const 1)))
+    (local.set $n (select (local.get $pl) (local.get $cap) (i32.le_u (local.get $pl) (local.get $cap))))
+    (f32.store (local.get $buf) (f32.convert_i32_u (local.get $pl)))
+    (local.set $i (i32.const 0))
+    (block $d (loop $l
+      (br_if $d (i32.ge_u (local.get $i) (local.get $n)))
+      (f32.store
+        (i32.add (local.get $buf) (i32.mul (i32.add (local.get $i) (i32.const 1)) (i32.const 4)))
+        (f32.convert_i32_u (i32.load8_u (i32.add (local.get $pp) (local.get $i)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (i32.const 0)"#;
+    let extra = r#"(func (export "pc_analyze") (param i32 i32 i32 i32 i32 i32) (param $pp i32) (param $pl i32) (result i64)
+    (i64.or (i64.shl (i64.extend_i32_u (local.get $pl)) (i64.const 32)) (i64.extend_i32_u (local.get $pp))))"#;
+    Filter::load(&module(&manifest(""), 1, filter, extra), Limits::default()).unwrap()
+}
+
+fn decode_echoed_params(img: &[f32]) -> Value {
+    let len = img[0] as usize;
+    let bytes: Vec<u8> = img[1..=len].iter().map(|&v| v as u8).collect();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+#[test]
+fn image_metadata_reports_draft_and_source() {
+    let f = echo_params_filter();
+    let no = AtomicBool::new(false);
+    let (w, h) = (64u32, 64u32);
+
+    // Normal run: draft is false; draftScale, nativeCanvasWidth/Height, and source are omitted.
+    let mut img = image(w as usize, h as usize);
+    f.apply_rgb(&mut img, w, h, FrameInfo::whole(w, h), &json!({}), &no).unwrap();
+    let params = decode_echoed_params(&img);
+    let im = &params["_image"];
+    assert_eq!(im["draft"], false);
+    assert!(im.get("draftScale").is_none());
+    assert!(im.get("nativeCanvasWidth").is_none());
+    assert!(im.get("nativeCanvasHeight").is_none());
+    assert!(im.get("source").is_none());
+
+    // Draft run with untagged 16-bit integer source: all draft and source fields are present; float omitted.
+    let mut img = image(w as usize, h as usize);
+    let draft_frame = FrameInfo {
+        x: 10,
+        y: 20,
+        full_w: 2000,
+        full_h: 1500,
+        draft: true,
+        draft_scale: Some(0.5),
+        native_canvas_w: Some(4000),
+        native_canvas_h: Some(3000),
+        source: Some(ImageSource { origin: "untagged".into(), bits_per_sample: 16, float: false }),
+    };
+    f.apply_rgb(&mut img, w, h, draft_frame, &json!({}), &no).unwrap();
+    let params = decode_echoed_params(&img);
+    let im = &params["_image"];
+    assert_eq!(im["draft"], true);
+    assert!((im["draftScale"].as_f64().unwrap() - 0.5).abs() < 1e-6);
+    assert_eq!(im["nativeCanvasWidth"], 4000);
+    assert_eq!(im["nativeCanvasHeight"], 3000);
+    assert_eq!(im["source"], json!({"origin": "untagged", "bitsPerSample": 16}));
+
+    // Float source includes "float": true.
+    let mut img = image(w as usize, h as usize);
+    let float_frame =
+        FrameInfo { source: Some(ImageSource { origin: "container".into(), bits_per_sample: 32, float: true }), ..FrameInfo::whole(w, h) };
+    f.apply_rgb(&mut img, w, h, float_frame, &json!({}), &no).unwrap();
+    let params = decode_echoed_params(&img);
+    assert_eq!(params["_image"]["draft"], false);
+    assert_eq!(params["_image"]["source"], json!({"origin": "container", "bitsPerSample": 32, "float": true}));
+
+    // pc_analyze receives draft: false and optional source provenance.
+    let small = vec![0.5f32; 4 * 4 * 3];
+    let analyzed_plain = f.analyze_rgb(&small, 4, 4, &json!({}), &no).unwrap().unwrap();
+    assert_eq!(analyzed_plain["_image"]["draft"], false);
+    assert!(analyzed_plain["_image"].get("source").is_none());
+
+    let src = ImageSource { origin: "untagged".into(), bits_per_sample: 16, float: false };
+    let analyzed_src = f.analyze_rgb_with_source(&small, 4, 4, Some(&src), &json!({}), &no).unwrap().unwrap();
+    assert_eq!(analyzed_src["_image"]["draft"], false);
+    assert_eq!(analyzed_src["_image"]["source"], json!({"origin": "untagged", "bitsPerSample": 16}));
+}
+
+#[test]
+fn hostile_frame_metadata_never_panics() {
+    let f = echo_params_filter();
+    let no = AtomicBool::new(false);
+    let (w, h) = (64u32, 64u32);
+
+    // Non-finite or non-positive draft_scale values are omitted cleanly instead of emitting null/panicking.
+    for bad_scale in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -0.5] {
+        let mut img = image(w as usize, h as usize);
+        let frame = FrameInfo {
+            draft: true,
+            draft_scale: Some(bad_scale),
+            native_canvas_w: Some(0),
+            native_canvas_h: Some(u32::MAX),
+            ..FrameInfo::whole(w, h)
+        };
+        f.apply_rgb(&mut img, w, h, frame, &json!({}), &no).unwrap();
+        let params = decode_echoed_params(&img);
+        assert_eq!(params["_image"]["draft"], true);
+        assert!(params["_image"].get("draftScale").is_none(), "non-finite/non-positive scale {bad_scale} omitted");
+    }
+
+    // Extreme origin strings (empty, control chars, quotes, and large strings) serialize cleanly without panics.
+    let big_origin = "x".repeat(32_000);
+    let huge_origin = "y".repeat(100_000);
+    let small = vec![0.25f32; 4 * 4 * 3];
+    for origin in ["", "\"\\\n\t\x00", "Üñîçødé", big_origin.as_str(), huge_origin.as_str()] {
+        let src = ImageSource { origin: origin.to_string(), bits_per_sample: u8::MAX, float: true };
+        let mut img = image(w as usize, h as usize);
+        let frame = FrameInfo { draft: true, draft_scale: Some(f32::MAX), source: Some(src.clone()), ..FrameInfo::whole(w, h) };
+        f.apply_rgb(&mut img, w, h, frame, &json!({}), &no).unwrap();
+        let res = f.analyze_rgb_with_source(&small, 4, 4, Some(&src), &json!({}), &no);
+        if origin.len() <= 32_000 {
+            let analyzed = res.unwrap().unwrap();
+            assert_eq!(analyzed["_image"]["source"]["origin"], origin);
+            assert_eq!(analyzed["_image"]["source"]["bitsPerSample"], u8::MAX);
+        } else {
+            assert!(res.is_err(), "oversized echoed analysis returns an error, never panics");
+        }
+    }
 }

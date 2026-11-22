@@ -3,7 +3,6 @@
 //! worker thread and its result is applied on the UI thread between frames, so the window keeps
 //! answering. Imports, scans, exports and preview builds have their own tasks with progress. A task the user started
 //! (Find Missing Photos) shows in the activity stack while it runs; quiet ones (the auto-import listing) don't.
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
@@ -102,7 +101,8 @@ pub fn poll(app: &mut LccApp, ctx: &egui::Context) {
     app.tasks.repaint = Some(ctx.clone());
     let mut i = 0;
     while i < app.tasks.running.len() {
-        match app.tasks.running[i].rx.try_recv() {
+        let Some(task) = app.tasks.running.get(i) else { break };
+        match task.rx.try_recv() {
             Ok(finish) => {
                 app.tasks.running.remove(i);
                 finish(app, ctx);

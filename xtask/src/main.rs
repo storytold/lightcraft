@@ -13,6 +13,7 @@ mod ci_quick;
 mod ci_report;
 mod dist;
 mod docs;
+mod fuzz;
 mod i18n;
 mod ico;
 mod immich;
@@ -22,6 +23,7 @@ mod parity;
 mod quarantine;
 mod rename;
 mod shortcuts;
+mod skip_gate;
 mod stats;
 mod update_key;
 mod upstream;
@@ -47,6 +49,9 @@ commands:
   sil [workflow|raw|monkey] [--seed N] [--steps N]
                   software-in-the-loop: drive the real app headless through user workflows and a seeded
                   monkey, checking invariants (docs/testing-sil.md)
+  fuzz [TARGET…|all] [--secs N] [--rng N] [--list]
+                  time-boxed pure-Rust fuzzing (default 60 s per target, all targets): raw, tiff, codecs,
+                  meta, develop, lightroom, peer; crash inputs in target/fuzz/crashes/<target>/ (docs/testing-sil.md)
   bench-catalog [--photos N,N…] [--backend v3|v4] [--dir DIR]
                   catalog scale benchmark: import throughput, snapshot time, then (in a fresh process)
                   open time, peak RSS and filter latency (default 250000,1000000 photos, backend v4)
@@ -87,6 +92,9 @@ commands:
                   Lightroom parity summary; --write refreshes the summary table in the document
   quarantine check|filter|test [--platform linux|macos|windows]
                   known-flaky tests (ci/quarantine.toml): validate, print the nextest filter, run the CI tests
+  skips check|write [--report FILE] [--allow FILE]
+                  the nightly skip gate: fail when target/ci/report.json has more skips per need than
+                  ci/skip-allowlist.toml allows; write sets the caps to the report's counts
   wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates (+ the web app)
   android check   cargo check --target aarch64-linux-android for the crates the Android app uses
                   (needs the Android NDK; skipped without it outside CI)
@@ -159,6 +167,7 @@ fn main() -> ExitCode {
         Some("assets") => assets::run(&root()),
         Some("bench") => bench::run(&root(), &rest),
         Some("sil") => cmd_sil(&rest),
+        Some("fuzz") => fuzz::run(&root(), &rest),
         Some("bench-catalog") => cmd_bench_catalog(&rest),
         Some("bench-keywords") => cmd_bench_keywords(&rest),
         Some("parity") => parity::run(&root(), rest.contains(&"--write")),
@@ -167,6 +176,7 @@ fn main() -> ExitCode {
         Some("web") => web::run(&rest),
         Some("ci") => cmd_ci_cli(&rest),
         Some("quarantine") => quarantine::run(&root(), &rest),
+        Some("skips") => skip_gate::run(&root(), &rest),
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
         Some("upstream-merge") => upstream::merge(&root(), &rest),
         Some("upstream-pr") => upstream::pr(&root(), &rest),

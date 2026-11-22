@@ -40,6 +40,8 @@ impl Dev {
 /// Sends everything `from` has for `to`, as an exchange would, and returns how many items went.
 fn send(from: &mut Dev, to: &mut Dev) -> usize {
     let (a, b) = (from.r.device.clone(), to.r.device.clone());
+    // (an exchange only starts between clocks within the allowed skew)
+    let now = to.now.max(from.now);
     let mut sent = 0;
     loop {
         let out = from.r.outgoing(&b, 3);
@@ -49,25 +51,25 @@ fn send(from: &mut Dev, to: &mut Dev) -> usize {
             let item: Item = serde_json::from_str(&serde_json::to_string(&item).unwrap()).unwrap();
             match item {
                 Item::Group(g) => {
-                    to.r.merge_group(&g, &a);
+                    to.r.merge_group(&g, &a, now);
                 }
                 Item::Coll(c) => {
-                    to.r.merge_collection(&c, &a);
+                    to.r.merge_collection(&c, &a, now);
                 }
                 Item::Member { coll, key, on } => {
-                    to.r.merge_member(&coll, &key, &on, &a);
+                    to.r.merge_member(&coll, &key, &on, &a, now);
                 }
                 Item::Photo { key, info, fields, .. } => match to.cat.get_mut(&key) {
                     Some(row) => {
                         for (name, lww) in &fields {
                             if to.r.incoming_wins(&key, name, lww) {
                                 row.insert(name.clone(), lww.v.clone());
-                                to.r.accept_field(&key, name, crate::digest(&lww.v), lww.s, &a);
+                                to.r.accept_field(&key, name, crate::digest(&lww.v), lww.s, &a, now);
                             }
                         }
                     }
                     None => {
-                        to.r.merge_ghost(&key, &info, &fields, &a);
+                        to.r.merge_ghost(&key, &info, &fields, &a, now);
                     }
                 },
             }
@@ -261,20 +263,20 @@ fn hostile_items_change_nothing_and_never_panic() {
     let now = a.tick();
     a.r.start_group("g", Mode::Collections, None, "A", now).unwrap();
     let long = "x".repeat(10_000);
-    assert!(!a.r.merge_member(&long, "k", &Lww::new(true, Stamp { t: 1, c: 0, d: 0 }), "b"));
-    assert!(!a.r.merge_member("c", "", &Lww::new(true, Stamp { t: 1, c: 0, d: 0 }), "b"));
-    assert!(!a.r.merge_ghost("\u{0}", &json!({}), &BTreeMap::new(), "b"));
+    assert!(!a.r.merge_member(&long, "k", &Lww::new(true, Stamp { t: 1, c: 0, d: 0 }), "b", now));
+    assert!(!a.r.merge_member("c", "", &Lww::new(true, Stamp { t: 1, c: 0, d: 0 }), "b", now));
+    assert!(!a.r.merge_ghost("\u{0}", &json!({}), &BTreeMap::new(), "b", now));
     let mut c = Collection::new(&long, "b", CollectionKind::Album, "n", None, Grant::Sync, Stamp::ZERO);
-    assert!(!a.r.merge_collection(&c, "b"));
+    assert!(!a.r.merge_collection(&c, "b", now));
     c.id = "ok".into();
     c.owner = String::new();
-    assert!(!a.r.merge_collection(&c, "b"));
+    assert!(!a.r.merge_collection(&c, "b", now));
     // a group with another id is not this group
     let other = Group { id: "other".into(), mode: Mode::Catalogue, keeper: None, devices: BTreeMap::new() };
-    assert!(!a.r.merge_group(&other, "b"));
+    assert!(!a.r.merge_group(&other, "b", now));
     // a record with far too many fields is cut, not kept whole
     let fields: BTreeMap<String, Lww<Value>> = (0..500).map(|i| (format!("f{i}"), Lww::new(json!(i), Stamp { t: 9, c: 0, d: 0 }))).collect();
-    a.r.merge_ghost("k", &json!({}), &fields, "b");
+    a.r.merge_ghost("k", &json!({}), &fields, "b", now);
     assert!(a.r.photos["k"].fields.len() <= 32);
     // nothing of a device outside the group is ever told or served
     assert!(a.r.outgoing("stranger", 10).refs.is_empty());
@@ -386,4 +388,69 @@ fn immich_albums_are_collections_every_device_shares_but_members_come_from_the_s
     assert!(!a.r.immich_collection("", "u1", None, "x", None, now));
     assert!(!a.r.immich_collection(&"x".repeat(500), "u1", None, "x", None, now));
     assert!(!a.r.immich_collection("immich:x", "u\u{0}", None, "x", None, now));
+}
+
+#[test]
+fn far_future_fields_are_held_back_one_by_one_and_taken_once_due() {
+    let now = 1_000_000_000u64;
+    let day = now + 24 * 3600 * 1000;
+    let at = |t: u64| Lww::new(json!(t), Stamp { t, c: 0, d: 9 });
+    let photo = Item::Photo {
+        key: "k".into(),
+        info: json!({"name": "k"}),
+        fields: [("rating".to_string(), at(now)), ("flag".to_string(), at(day))].into_iter().collect(),
+        here: Depth::default(),
+    };
+    assert_eq!(photo.ahead_of(now).map(|s| s.t), Some(day));
+    // the valid field goes ahead, only the future one is held
+    let (ready, late) = photo.split_ahead(now);
+    let Some(Item::Photo { fields: ok, info, .. }) = ready else { panic!("{ready:?}") };
+    assert_eq!(ok.keys().collect::<Vec<_>>(), ["rating"]);
+    assert_eq!(info, json!({"name": "k"}));
+    let Some(late @ Item::Photo { .. }) = late else { panic!("{late:?}") };
+    let Item::Photo { fields: held, .. } = &late else { panic!("a photo") };
+    assert_eq!(held.keys().collect::<Vec<_>>(), ["flag"]);
+    // nothing ahead: whole
+    assert_eq!(photo.split_ahead(day), (Some(photo.clone()), None));
+
+    // the replica refuses each future stamp on its own and never lets its clock jump
+    let mut r = Replica::new("a");
+    r.start_group("g", Mode::Collections, None, "A", now).unwrap();
+    let Item::Photo { fields, .. } = &photo else { panic!("a photo") };
+    assert!(r.merge_ghost("k", &json!({}), fields, "b", now));
+    assert!(r.photos["k"].fields.contains_key("rating"));
+    assert!(!r.photos["k"].fields.contains_key("flag"));
+    r.accept_field("k2", "flag", 1, Stamp { t: day, c: 0, d: 9 }, "b", now);
+    assert!(!r.photos.contains_key("k2"));
+    let member = Lww::new(true, Stamp { t: u64::MAX, c: u32::MAX, d: 0 });
+    assert!(!r.merge_member("c", "k", &member, "b", now));
+    let c = Collection::new("c", "b", CollectionKind::Album, "n", None, Grant::Sync, Stamp { t: day, c: 0, d: 9 });
+    assert!(!r.merge_collection(&c, "b", now));
+    assert!(r.clock.last().t < day, "the clock never takes a future stamp: {:?}", r.clock.last());
+
+    // held, kept across a save, and handed back for the next try
+    assert_eq!(r.hold("b", late.clone()), 0);
+    let mut back: Replica = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+    back.rebuild();
+    assert_eq!(back.take_held("b"), vec![late.clone()]);
+    assert!(back.take_held("b").is_empty());
+    // once due, it merges
+    let Item::Photo { fields, .. } = &late else { panic!("a photo") };
+    assert!(back.merge_ghost("k", &json!({}), fields, "b", day));
+    assert!(back.photos["k"].fields.contains_key("flag"));
+}
+
+#[test]
+fn held_items_are_capped() {
+    let mut r = Replica::new("a");
+    let item = Item::Member { coll: "c".into(), key: "k".into(), on: Lww::new(true, Stamp { t: u64::MAX, c: 0, d: 0 }) };
+    let mut dropped = 0;
+    for i in 0..(MAX_HELD + 10) {
+        dropped += r.hold(if i % 2 == 0 { "b" } else { "c" }, item.clone());
+    }
+    assert_eq!(dropped, 10);
+    assert_eq!(r.held.values().map(Vec::len).sum::<usize>(), MAX_HELD);
+    // a hostile device id is not kept, and the caller is told it was dropped
+    assert_eq!(r.hold("\u{0}", item.clone()), 1);
+    assert!(!r.held.contains_key("\u{0}"));
 }

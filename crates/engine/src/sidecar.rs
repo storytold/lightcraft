@@ -980,6 +980,43 @@ fn sidecar_target(candidates: Vec<PathBuf>, preferred: PathBuf) -> PathBuf {
     listed.or_else(|| existing.into_iter().next()).unwrap_or(preferred)
 }
 
+/// Most keywords a sidecar may add to a photo the library has no sync record for (issue #1310).
+const MAX_ADOPTED_KEYWORDS: usize = 4096;
+
+/// The keywords sidecar packet `xmp` holds that photo `p` lacks (as `from_file` reads them; a flat
+/// name counts as held when it is a level of one of the photo's paths). Empty for an unreadable
+/// packet.
+/// Adds `extra` (case-insensitively missing ones) to every metadata snapshot of photo `id` in
+/// `op`, nested batches included (bounded depth).
+fn keep_keywords_in(op: &mut Op, id: PhotoId, extra: &[String], depth: u32) {
+    match op {
+        Op::SetMeta { id: of, meta } if *of == id => {
+            for k in extra {
+                let low = k.trim().to_lowercase();
+                if !meta.keywords.iter().any(|m| m.trim().to_lowercase() == low) {
+                    meta.keywords.push(k.clone());
+                }
+            }
+        }
+        Op::Batch { ops } if depth < 16 => {
+            for o in ops {
+                keep_keywords_in(o, id, extra, depth + 1);
+            }
+        }
+        _ => {}
+    }
+}
+
+pub(crate) fn sidecar_only_keywords(p: &Photo, xmp: &str) -> Vec<String> {
+    let Ok(data) = lcc_meta::parse_xmp(xmp.strip_prefix('\u{feff}').unwrap_or(xmp)) else { return Vec::new() };
+    let md = &data.metadata;
+    let theirs = lcc_catalog::keywords::from_file(&md.keywords, &md.hierarchical_keywords);
+    let mine = lcc_catalog::keywords::to_file(&p.meta.keywords);
+    let held: std::collections::HashSet<String> =
+        p.meta.keywords.iter().chain(&mine.flat).chain(&mine.hierarchical).map(|k| k.trim().to_lowercase()).collect();
+    theirs.into_iter().filter(|k| !held.contains(&k.trim().to_lowercase())).take(MAX_ADOPTED_KEYWORDS).collect()
+}
+
 /// The new contents for photo `p`'s sidecar at `path`: its packet merged into the existing file,
 /// if any. Returns (contents, merged, backup).
 fn sidecar_contents(path: &Path, p: &Photo, cat: &lcc_catalog::Catalog, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>)> {
@@ -1501,12 +1538,53 @@ impl Session {
             .map_err(|e| EngineError::Other(format!("{}: unfinished XMP repair: {e}", preferred.display())))?;
         let path = sidecar_target(candidates, preferred);
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
+        self.adopt_sidecar_keywords(id, &path);
         let p = self.catalog.photo(id).ok_or(lcc_catalog::CatalogError::NoPhoto(id))?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
         let (data, merged, backup) = sidecar_contents(&path, p, &self.catalog, &(self.clock)()).map_err(err)?;
         write_atomic(&path, data.as_bytes()).map_err(err)?;
         self.note_sidecar_write(&path, data.as_bytes());
         Ok(SidecarSaved { path, merged, backup })
+    }
+
+    /// Before photo `id`'s sidecar at `path` is written: when the library has no record of ever
+    /// being in step with it (the XMP status is unknown, e.g. the photo was imported while the
+    /// sidecar wasn't there, or its keyword table was skipped), the keywords the sidecar holds
+    /// that the photo lacks are added to the photo first, so the save keeps them rather than
+    /// replacing the file's keyword list with the library's (issue #1310). Keywords removed here
+    /// after the photo was in step with its sidecar are not brought back: by then it has a record.
+    /// Says whether any were added.
+    pub(crate) fn adopt_sidecar_keywords(&mut self, id: PhotoId, path: &Path) -> bool {
+        let Some(p) = self.catalog.photo(id) else { return false };
+        if p.xmp.is_some() || p.copy_of.is_some() {
+            return false;
+        }
+        let Ok(bytes) = read_capped(path, SIDECAR_READ_MAX) else { return false };
+        let Ok(text) = std::str::from_utf8(&bytes) else { return false };
+        let extra = sidecar_only_keywords(p, text);
+        if extra.is_empty() {
+            return false;
+        }
+        let mut meta = p.meta.clone();
+        meta.keywords.extend(extra.iter().cloned());
+        let op = Op::SetMeta { id, meta: Box::new(meta) };
+        match self.catalog.apply(op.clone()) {
+            Ok(_) => {
+                // The adopted keywords were the photo's all along: an undo or redo of an earlier
+                // metadata step must not take them away again (the photo is now in step with the
+                // sidecar, so the next write would remove them from the file too).
+                for entry in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+                    keep_keywords_in(&mut entry.op, id, &extra, 0);
+                }
+                log::info!("{}: kept the keywords only its sidecar had before saving it", path.display());
+                self.pending_log.push(op);
+                true
+            }
+            Err(e) => {
+                log::warn!("{}: {e}", path.display());
+                false
+            }
+        }
     }
 
     /// The op that applies a photo's sidecar (or embedded XMP) to the catalog, if there is one.
@@ -1665,6 +1743,15 @@ impl Session {
                 let Some(p) = self.catalog.photo(id).filter(|p| file_path(p).is_some() && p.copy_of.is_none() && (browsed_too || !p.local)) else {
                     continue;
                 };
+                // a photo never in step with its sidecar: the sidecar's own keywords are kept (issue #1310); only
+                // these photos have their sidecar looked at here, once (the write records them in step)
+                if p.xmp.is_none()
+                    && let Ok((preferred, candidates)) = self.sidecar_paths(id, &owners)
+                {
+                    let path = sidecar_target(candidates, preferred);
+                    self.adopt_sidecar_keywords(id, &path);
+                }
+                let Some(p) = self.catalog.photo(id) else { continue };
                 let original = PathBuf::from(file_path(p).unwrap_or_default());
                 let packets = Packets::of(p, &self.catalog);
                 let photo = Box::new((**p).clone());
