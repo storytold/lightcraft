@@ -1,6 +1,6 @@
 # Roadmap
 
-*Last updated 2026-11-15 (version 0.8.2). Revision history: [Log](#log).*
+*Last updated 2026-11-23 (version 0.8.2). Revision history: [Log](#log).*
 
 Milestones toward full Adobe Lightroom Classic parity, with the Classic shell and output modules (Map, Book, Slideshow,
 Print, Web, publish) and Immich integration as Chromaforge's own focus on top of the upstream engine. Estimates are for
@@ -8,12 +8,12 @@ continuous agent-driven development with 4–6 parallel agents and are revised a
 
 ## Where we stand
 
-*Honest assessment, 2026-10-12, at 0.6.1. Agents: read this before picking work. The checklist in
+*Honest assessment, 2026-10-12, at 0.6.1; checklist numbers refreshed 2026-11-23 (0.8.2), current milestone and next task in [`docs/status.md`](docs/status.md). Agents: read this before picking work. The checklist in
 [`docs/parity-checklist.md`](docs/parity-checklist.md) counts features that **exist**; this section is about whether a photographer can
 **switch** from Lightroom. Update it when a gap below closes. The full measured assessment is
 [`docs/target-app-parity.md`](docs/target-app-parity.md); the ranked work list is [`docs/gaps.md`](docs/gaps.md).*
 
-**In one line:** the checklist says **87.9%** of 581 rows (P0 98.0%, P1 95.1%, P2 71.6%; Classic extras 89% of P1,
+**In one line:** the checklist says **90.3%** of 629 rows (P0 98.0%, P1 94.8%, P2 80.2%; Classic extras 90% of P1,
 Immich 11/11), but measured by whether a working photographer could replace Lightroom without noticing, we are at
 roughly **60–65%** and at **alpha**. Every Classic module now exists; the remaining gap is mostly **quality of
 results and camera coverage** (colour calibration, CR3 variants, render fidelity, lens profiles, AI masks), not
@@ -27,7 +27,7 @@ duplicate Local entries #22, black GPU exports on an Intel iGPU #78).
 
 | Dimension | Estimate | What's true today | Biggest gaps |
 |---|---:|---|---|
-| **Feature checklist** | 87.9% | P0 core and P1 nearly complete: import (Add / Copy / Move, templates, devices), library, grid/loupe/compare/survey, every Edit slider, curves, colour grading, masking tools, crop/Upright, heal/clone, content-aware Remove (PatchMatch Fill spots), presets/profiles, versions/history, sync, export, Edit In round trips, plug-in host with SDK examples, menus, shortcuts | P1: lens-profile database (import / lensfun download in review), catalog settings, `.lrcat` import depth; video playback/trim |
+| **Feature checklist** | 90.3% | P0 core and P1 nearly complete: import (Add / Copy / Move, templates, devices), library, grid/loupe/compare/survey, every Edit slider, curves, colour grading, masking tools, crop/Upright, heal/clone, content-aware Remove (PatchMatch Fill spots), presets/profiles, versions/history, sync, export, Edit In round trips, plug-in host with SDK examples, menus, shortcuts | P1: lens-profile database (import / lensfun download in review), catalog settings, `.lrcat` import depth; video playback/trim |
 | **RAW coverage** (formats people shoot) | ~55% | DNG (all kinds), CR2, CR3 lossless Bayer and version 0x100/0x200 C-RAW (M50/R100/R8 pixel-exact corpus), ARW, NEF (uncompressed + Huffman lossless/lossy), RAF (uncompressed, lossless/lossy compressed Bayer and X-Trans), ORF (uncompressed and compressed, E-M1 / E-M10 III verified), Samsung SRW (uncompressed and compressed 32770 / 32772 / 32773), Minolta MRW, Sony ARW v1, packed NEF, SuperCCD RAF, Canon CRW, Epson ERF, Mamiya MEF, RW2 / RWL / Panasonic RAW (every raw format, checked on 178 files from 118 Panasonic and Leica bodies), PEF; every container's embedded preview (incl. CR3) | Unverified **CR3** CRX variants, Nikon lossy-after-split, Canon sRAW, HEIC/AVIF. NEFs labelled compressed but stored uncompressed (Z 6 packed 14-bit, D850 12-bit uncompressed). Nikon High Efficiency NEF (HE / HE★: Z 8, Z 9, Z 6III, Z f; JPEG XS-based, preview only, #193). Per-model verification is thin (~55 corpus files vs >1,000 models) |
 | **Colour & image quality** | ~55–65% | Pipeline is complete and fast; GPU path CPU-exact within 1/255 | **No measured camera calibration database**: ARW, NEF, RW2, RAF, CR3, CR2 and PEF have guarded camera-JPEG colour estimates, with bundled ILCE-7CR, ILCE-7M4, X-H2S and X-T4 profiles (docs/camera-preview-colour.md); 52 models whose JPEG fit is rejected start from matrices fitted to measured spectral sensitivities; other non-DNG raws and rejected estimates use a neutral matrix. Colour fidelity remains incomplete. No lens-profile database. No measured fidelity against Lightroom (tone, highlights, texture/clarity, NR, sharpening are tuned by eye) |
 | **AI & computational** | ~15–20% | Assisted culling (focus, bursts), auto tone, HDR/panorama merge; subject/sky/background masks as classical heuristics, or the photo's own segmentation mattes when it ships them (DNG semantic masks, e.g. iPhone ProRAW's sky matte); non-destructive Bayer RAW denoise with opt-in weights on pure-Rust CPU/GPU; **faces (MVP, [docs/faces.md](docs/faces.md))**: a pure-Rust detector (a 232 KB opt-in download), opt-in recognition models (one-click download or add a file; they run on the shared pure-Rust CPU interpreter; pinned SFace/AuraFace embeddings agree with an independent reference runtime on 40 public crops; one-thread medians 34–36 / 233–252 ms (AuraFace remains expensive)), a background scan that finds and embeds faces, name suggestions, a person's page with look-alike faces to confirm, an Unnamed faces section (look-alikes together, select a group and name it at once) | Real segmentation masks (subject, sky, people, objects, landscape, depth), denoise model policy / linear RGB / quality verification, super resolution, lens blur, generative remove, natural-language search; for faces: clusters with separators between groups, small faces in large photos (the detector looks at 640 px), thresholds calibrated on live faces, writing face regions back to XMP. **Blocked on a model strategy** (licensable weights or our own training; pure-Rust inference is feasible) |
@@ -57,9 +57,9 @@ Priorities, in order. Each points at tracker rows in [`docs/parity-checklist.md`
    Pentax PEF, Samsung SRW and Olympus ORF have the file-local fit (matrix + tone curve from their own JPEG; CR2 and PEF
    since issue #310, not yet checked on the corpus); 52 models whose fit is rejected fall back to matrices fitted to
    measured spectral sensitivities (rawtoaces-data); then validate fidelity.
-2. **Raw formats, clean-room** (LR-IMP-FORMATS, P0): Remaining **unverified CR3 CRX** variants, NEF
-   lossy-after-split, sRAW. Decided 2026-10-05: write our own decoders from prose descriptions (never decoder source,
-   no LGPL dependency); compressed NEF (#86) is the template.
+2. **Raw formats** (LR-IMP-FORMATS, P0): Remaining **unverified CR3 CRX** variants, NEF
+   lossy-after-split, sRAW. Since the 2026-11-10 licence policy (AGENTS.md) decoders may be ported from dcraw, LibRaw,
+   rawspeed, darktable and RawTherapee (permissive or share-alike) with provenance; layouts are verified on CC0 samples.
 3. **Verified camera coverage** (LR-IMP-CAMERA-COVERAGE, P0): a CC0 sample per model in the corpus, each decoded and
    checked for plausible colour; fix per-model bugs (#85).
 4. **Render fidelity suite** (LR-BEHAV-RENDER-FIDELITY, P1): measure our output against Lightroom on the same CC0 raws
@@ -126,12 +126,12 @@ photo's own pixels, so 1:1–8:1 is sharp in every view, with mask overlays and 
 **By feature count** — from `docs/parity-checklist.md` (one row per Lightroom feature, menu item and shortcut; `cargo xtask
 parity` prints this line on every run, so it stays current):
 
-| Scope | Weighted completion | Rows | 2026-10-08 | 2026-10-02 |
+| Scope | Weighted completion (2026-11-23) | Rows | 2026-10-12 | 2026-10-08 |
 |---|---:|---:|---:|---:|
-| P0 (core) | **98.0%** | 200 | 98.2% | 98.7% |
-| P1 (important parity) | **95.1%** | 173 | 95.6% | 94.4% |
-| P2 (later / AI / niche, incl. Classic modules) | **69.4%** | 196 | 41.6% | 29.4% |
-| **All in-scope rows** | **87.9%** | 581 | 79.7% | 75.6% |
+| P0 (core) | **98.0%** | 203 | 98.0% | 98.2% |
+| P1 (important parity) | **94.8%** | 191 | 95.1% | 95.6% |
+| P2 (later / AI / niche, incl. Classic modules) | **80.2%** | 230 | 69.4% | 41.6% |
+| **All in-scope rows** | **90.3%** | 629 | 87.9% | 79.7% |
 
 Rows grew from 509 to 570 with the Lightroom Classic extras and Immich sections; P1 dipped slightly because new
 Classic rows entered 🟡.
@@ -187,8 +187,10 @@ The milestone estimates in the table above were made before work started and are
   fallbacks first. No permissively licensed sky-segmentation or raw-denoise model was found — we may need to train our own.
 - **Camera colour and lens data** is a data problem: we never ship Adobe's matrices, DCPs or LCPs (a person's own `.dcp` files can be imported at run time, `camera.importDcp`; none is bundled). DNG-embedded data first,
   then our own calibration; long-tail camera/lens coverage grows over time.
-- **Raw-format sources:** decided 2026-10-05: decoders are written from *prose* format descriptions (even ones
-  published alongside GPL code); decoder source is never read. Still open: freedom-to-operate review for local
+- **Raw-format sources:** the 2026-10-05 clean-room, prose-only rule is replaced by the 2026-11-10 licence policy in
+  AGENTS.md: any source we may legally derive from (permissive or share-alike, e.g. dcraw, LibRaw, rawspeed, darktable,
+  RawTherapee) may be read and ported, with a **Sources:** line, module docs and a `NOTICE` credit; share-alike ports
+  stay Chromaforge-only. Still open: freedom-to-operate review for local
   Laplacian filters, PatchMatch and HEVC (HEIC).
 - **Look parity** with Adobe's default rendering is tuned by eye today; the planned fidelity suite (LR-BEHAV-RENDER-FIDELITY)
   turns it into measured comparisons against local-only Lightroom references. Retuning changes existing edits, so it
@@ -317,6 +319,7 @@ database is read-only; the app owns subsequent edits. See `docs/lightroom-catalo
 - 2026-10-11: 0.6.1 (draft; macOS build pending): Print via IPP / CUPS with copies, margins, job state and print sharpening; Immich album sync rule; Windows renderer fallback; screen-fitting dialogs; first-start welcome dialog.
 - 2026-10-11 (upstream): Canon EOS R5 Mark II C-RAW decodes from sensor data (CRX QP map first-symbol literal and limited-length escape; four CC0 files pinned, docs/cr3.md); CR3 on four verified bodies.
 - 2026-10-12: roadmap refreshed for the fork at 0.6.1: 87.3% of 570 rows, Classic modules ~30% → ~65%, Classic power user ~45% → ~60%, Classic completion and platform CI added to the priorities.
+- 2026-11-23: checklist numbers refreshed (90.3% of 629 rows, matching docs/target-app-parity.md); decoder-source policy brought in line with the 2026-11-10 licence policy; status moved to the tracked docs/status.md.
 - 2026-10-12: 0.6.3 numbers: 87.9% of 581 rows after the upstream merge (381 commits) and the fork gap batches.
 - 2026-10-20: M5 Performance ✅: colour NR blurs at half resolution (already landed: 24 MP 670 → 336 ms) and GPU renders bin the histogram, vectorscope and waveform grids on the GPU (CPU oracle, exact agreement test).
 

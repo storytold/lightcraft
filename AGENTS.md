@@ -22,9 +22,10 @@ This is the one rulebook for agents and humans; `CLAUDE.md` only imports it. Cla
   `cargo xtask run|package|install`). Env vars `<PREFIX>_X` (e.g. `<PREFIX>_PROFILE`); legacy prefix still read.
 
 ## Session start
-1. `plan/STATUS.md` (milestone, next task, blockers) → `plan/execution-plan.md` §3 (task) + §7 (autonomy protocol:
-   don't ask unless §7 says it's the user's call) → relevant `plan/architecture.md` section + crate docs. Visual
-   reference: `plan/lightroom/` (gitignored; `10-observed-ui.md` + screenshots).
+1. [`docs/status.md`](docs/status.md) (tracked: milestone, next task, blockers, metrics) → the local plan it names
+   (`plan/` is gitignored: `plan/completion-plan-*.md`, `plan/architecture.md`, `plan/lightroom/` with
+   `10-observed-ui.md` + screenshots) when you have it + crate docs. Don't ask unless the plan says it's the user's
+   call.
 2. `ROADMAP.md` + [`docs/target-app-parity.md`](docs/target-app-parity.md). The checklist counts existence; real gaps
    are quality/coverage (camera colour, CR3/compressed raws, per-model verification, render fidelity, AI, HDR/video/
    Classic; raw detail: [`docs/raw-parity.md`](docs/raw-parity.md)). A wrong ✅ row gets downgraded to 🟡.
@@ -191,7 +192,7 @@ One rule (2026-11-10): **use only material you may legally derive from.**
   regression, plus the level above when behaviour spans layers. Crash fixes always get the hostile-input check.
 - After every user-visible change: run the app, screenshot, look; `ui.inspect` → `perf`.
 - Measure, don't guess: `<PREFIX>_PROFILE=1` prints per-stage timings to stderr; `/usr/bin/time` for CLI renders;
-  record numbers in `plan/STATUS.md` → Metrics. Budgets: slider ≤ 16 ms (draft), loupe ≤ 60 ms @ ~2.5 MP, export
+  record numbers in `docs/status.md` → Metrics. Budgets: slider ≤ 16 ms (draft), loupe ≤ 60 ms @ ~2.5 MP, export
   ≤ 1 s per 24 MP JPEG.
 - Perf workflow: measure before (`cargo xtask bench` or `<PREFIX>_PROFILE=1`), change one thing, measure again,
   record both. Bench numbers compare only as same-machine, controlled-environment before/after pairs — never across
