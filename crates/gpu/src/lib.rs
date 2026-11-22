@@ -516,6 +516,20 @@ pub fn batch_usage() -> BatchUsage {
     }
 }
 
+/// The largest buffer (bytes) a render may put on the editing card's device: its storage-binding
+/// and buffer limits, the lower one. A source bigger than this is resampled on the processor.
+/// `None` before the device exists or without one.
+pub fn max_buffer_bytes() -> Option<u64> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        existing_device().map(|g| g.max_buffer)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
+}
+
 /// The graphics card's memory (bytes) as its backend reports it (`lcc_gpumem`), else the largest
 /// buffer the device allows; `None` before the device exists or without one.
 pub fn adapter_memory() -> Option<u64> {
