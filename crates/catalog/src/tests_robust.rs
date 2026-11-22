@@ -414,3 +414,46 @@ fn exhausted_sequence_is_an_error() {
     drop(j);
     assert!(Journal::open(Box::new(m)).is_ok());
 }
+
+/// 2.8: the newer-record check streams the log, so a record a newer build wrote is found however
+/// the reader chunks it, wherever it sits (first, middle, last without a newline, CRLF), and an
+/// overlong line is skipped rather than held whole.
+#[test]
+fn streamed_newer_record_check_matches_and_holds_one_line() {
+    use std::io::BufReader;
+    let body = r#"{"FutureOp":{"x":1}}"#;
+    let newer = format!("{{\"seq\":7,\"crc\":{},\"op\":{body}}}", crc32fast::hash(body.as_bytes()));
+    let (_, ops) = sample();
+    let good: Vec<String> = ops.iter().enumerate().map(|(i, op)| encode_record(i as u64 + 1, op)).collect();
+    let mut logs: Vec<(String, bool)> = vec![(good.join("\n"), false), (String::new(), false)];
+    logs.push((format!("{newer}\n{}", good.join("\n")), true));
+    logs.push((format!("{}\n{newer}\r\n{}", good.join("\n"), good.join("\n")), true));
+    logs.push((format!("{}\n{newer}", good.join("\n")), true));
+    for (log, refused) in &logs {
+        for cap in [1, 7, 64, 8192] {
+            let r = crate::journal::refuse_newer_records_in(BufReader::with_capacity(cap, log.as_bytes()));
+            assert_eq!(r.is_err(), *refused, "cap {cap}: {r:?}");
+            assert_eq!(crate::journal::refuse_newer_records(log.as_bytes()).is_err(), *refused);
+        }
+    }
+    // a line longer than the cap (garbage, no newline at all) is skipped, and what follows is still checked
+    let long = vec![b'x'; crate::journal::MAX_CHECKED_LINE + 10];
+    assert!(crate::journal::refuse_newer_records_in(BufReader::new(long.as_slice())).is_ok());
+    let mut then_newer = long.clone();
+    then_newer.push(b'\n');
+    then_newer.extend_from_slice(newer.as_bytes());
+    assert!(crate::journal::refuse_newer_records_in(BufReader::new(then_newer.as_slice())).is_err());
+}
+
+/// 2.8: an entry-point file far larger than any real one is refused as corrupt, not read whole;
+/// garbage of a normal size is still told apart from a catalog.
+#[test]
+fn oversized_or_garbage_entry_file_is_refused() {
+    let s = Scratch::new("bigentry");
+    let entry = s.path().join(format!("Big.{}", lcc_brand::CATALOG_EXT));
+    std::fs::write(&entry, vec![b' '; library::MAX_ENTRY_FILE as usize * 4]).unwrap();
+    let e = library::resolve(&entry).unwrap_err();
+    assert!(matches!(e, CatalogError::Corrupt(_)) && e.to_string().contains("too large"), "{e:?}");
+    std::fs::write(&entry, b"\xff\x00not json").unwrap();
+    assert!(matches!(library::resolve(&entry), Err(CatalogError::Corrupt(_))));
+}

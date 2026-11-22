@@ -2557,7 +2557,7 @@
   "Scan Folder for Changes": "扫描文件夹更改",
   "Scan photos that have a score already (rescan all)": "同时扫描已有分数的照片（全部重新扫描）",
   "Scanning image quality": "正在扫描图像质量",
-  "Scores photos for technical quality — sharpness, noise, exposure and JPEG artifacts — and keeps each score on the photo so the Library can filter and sort by it.": "按技术质量（锐度、噪点、曝光和 JPEG 压缩伪影）为照片评分，并把每个分数保存在照片上，以便图库按分数筛选和排序。",
+  "Scores photos for technical quality (sharpness, noise, exposure and JPEG artifacts) and keeps each score on the photo so the Library can filter and sort by it.": "按技术质量（锐度、噪点、曝光和 JPEG 压缩伪影）为照片评分，并把每个分数保存在照片上，以便图库按分数筛选和排序。",
   "Screen Edges to Keep Clear": "保持空白的屏幕边缘",
   "Screen Mode": "屏幕模式",
   "Scroll By Row": "按行滚动",

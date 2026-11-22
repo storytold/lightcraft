@@ -27,7 +27,8 @@ catalogs sorted, [`localization.md`](localization.md)), clippy
 `-D warnings` (incl. the HEIF feature), parity refs, layers, assets, deny, the wasm check and the Android check (`cargo xtask android check`, see
 [`android.md`](android.md)); it skips
 the workspace and HEIF test runs. The SIL step runs `cargo xtask sil` (docs/testing-sil.md) once that command
-exists and is skipped until then. Clippy also denies `indexing_slicing` (checked `get` instead of `[i]`) in
+exists and is skipped until then; it includes the sync merge properties (`lcc-sync` proptests: commutative,
+associative, idempotent merges and no grant leakage). Clippy also denies `indexing_slicing` (checked `get` instead of `[i]`) in
 `crates/tiff`, `crates/ui-egui`, `apps/app` and `apps/web`; a `ui-egui` module not yet converted carries a module-level
 `allow` whose reason names [gaps.md](gaps.md) gap 40, the list of what is left. Locally, `cargo xtask ci` stays the full run; use `--fast` per commit and run the targeted tests of what you touched.
 
