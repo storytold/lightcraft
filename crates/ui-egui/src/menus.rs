@@ -55,12 +55,12 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
                 })
         }
         "app.showInFinder" => {
-            app.services.reveal.is_some()
+            (app.services.reveal.is_some() || app.services.reveal_many.is_some())
                 && app
                     .session
-                    .active()
-                    .and_then(|id| app.session.catalog.photo(id))
-                    .is_some_and(|p| matches!(p.source, lightcraft_engine::catalog::Source::File { .. }))
+                    .selected()
+                    .iter()
+                    .any(|id| app.session.catalog.photo(*id).is_some_and(|p| matches!(p.source, lightcraft_engine::catalog::Source::File { .. })))
         }
         "app.showInFolders" => show_in_folders_enabled(app, None),
         "app.openSamModelFolder" => app.session.segmenter.dir.is_some() && app.services.open_with.is_some(),

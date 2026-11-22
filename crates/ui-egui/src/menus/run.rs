@@ -1492,7 +1492,7 @@ fn ui_commands_12(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
     let r: Result<Value, String> = match id {
         "file.exportCurvePresets" => file_export_curve_presets_command(app, ctx, id, p),
         "app.export" => crate::control::export_active(app, p),
-        "app.showInFinder" => show_in_finder(app),
+        "app.showInFinder" => show_in_finder(app, p),
         "app.showInFolders" => show_in_folders(app, p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId)),
         "app.openLogFolder" => open_log_folder(app),
         "app.discord" | "app.website" | "app.github" | "app.artcraft" | "app.help" | "app.feedback" => {

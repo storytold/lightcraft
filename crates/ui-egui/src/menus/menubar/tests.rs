@@ -420,6 +420,58 @@ fn open_log_folder_reveals_the_hosts_log_file() {
     assert_eq!(run_item(&mut app, "app.openLogFolder", Value::Null).unwrap_err(), "no file manager");
 }
 
+/// Issue #4652: Show in File Manager reveals the selection, not just the active photo, when the
+/// host selects several files at once. Without `reveal_many` it reveals the active photo.
+#[test]
+fn show_in_finder_reveals_the_selection() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-reveal-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let img_one = lightcraft_raster::Rgba8::from_fn(16, 12, |x, y| [(x * 9) as u8, (y * 11) as u8, 50, 255]);
+    let img_two = lightcraft_raster::Rgba8::from_fn(16, 12, |x, y| [(x * 7 + 40) as u8, (y * 13 + 80) as u8, 200, 255]);
+    let o = lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() };
+    for (name, img) in [("one.png", &img_one), ("two.png", &img_two)] {
+        std::fs::write(dir.join(name), lightcraft_engine::export::encode_image(img, &o).unwrap()).unwrap();
+    }
+    let mut photos = LightcraftApp::new(lightcraft_engine::Session::new().with_fs(), Default::default());
+    photos.session.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    let mut ids: Vec<u64> = photos.session.catalog.photos().map(|p| p.id.0).collect();
+    ids.sort_unstable();
+    assert_eq!(ids.len(), 2);
+    photos.session.execute("library.select", &json!({"ids": ids})).unwrap();
+    // a demo scene has no file to reveal
+    let mut demo = app();
+    assert!(run_item(&mut demo, "app.showInFinder", Value::Null).is_err());
+    assert!(!crate::menus::ui_enabled(&demo, "app.showInFinder"));
+    // several files at once where the host supports it
+    let shown = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let captured = shown.clone();
+    photos.services.reveal_many = Some(Box::new(move |paths: &[String]| {
+        captured.lock().unwrap().extend(paths.iter().cloned());
+        Ok(())
+    }));
+    assert!(crate::menus::ui_enabled(&photos, "app.showInFinder"));
+    let r = run_item(&mut photos, "app.showInFinder", Value::Null).unwrap();
+    let mut got = shown.lock().unwrap().clone();
+    got.sort();
+    let mut expected = [dir.join("one.png").to_string_lossy().to_string(), dir.join("two.png").to_string_lossy().to_string()];
+    expected.sort();
+    assert_eq!(got, expected);
+    assert_eq!(r["paths"].as_array().map(Vec::len), Some(2));
+    // without it, the active photo is revealed as before
+    let single = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let one = single.clone();
+    photos.services.reveal_many = None;
+    photos.services.reveal = Some(Box::new(move |p: &str| {
+        one.lock().unwrap().push(p.to_string());
+        Ok(())
+    }));
+    let r = run_item(&mut photos, "app.showInFinder", Value::Null).unwrap();
+    assert_eq!(single.lock().unwrap().len(), 1);
+    assert!(expected.contains(&r["path"].as_str().unwrap_or_default().to_string()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn find_missing_and_locate() {
     let dir = std::env::temp_dir().join(format!("lc-ui-missing-{}", std::process::id()));
