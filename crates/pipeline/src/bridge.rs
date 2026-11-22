@@ -4,8 +4,8 @@ use craft_color_transform::{Mat3 as CraftMat3, Xy as CraftXy};
 use craft_develop::local::{Quality as CraftQuality, WbSource};
 use craft_develop::raster::{Plane as CraftPlane, Rgb32f as CraftRgb32f};
 use craft_develop_model::{
-    BwMix, Calibration, ColorAdj, ColorGrading, Detail, DevelopSettings, Effects, Grain, Hsl, Light, Mixer, PointColor, Process, ProcessVersion,
-    Profile, ToneCurve, Treatment, WbMode, WbScale, Wheel, WhiteBalance,
+    BwMix, Calibration, ColorAdj, ColorGrading, Detail, DevelopSettings, Effects, Grain, Hsl, Light, Mixer, PointColor, ProcessVersion, Profile,
+    ToneCurve, Treatment, WbMode, WbScale, Wheel, WhiteBalance,
 };
 use craft_geom::Point as CraftPoint;
 use lightcraft_color::{Mat3, Xy};
@@ -67,20 +67,6 @@ pub fn to_craft_plane(p: &Plane) -> CraftPlane {
 
 pub fn from_craft_plane(p: CraftPlane) -> Plane {
     Plane { width: p.width, height: p.height, data: p.data }
-}
-
-pub fn to_craft_process(p: lc::Process) -> Process {
-    match p {
-        lc::Process::V1 => Process::V1,
-        lc::Process::V2 => Process::V2,
-        lc::Process::V3 => Process::V3,
-        lc::Process::V4 => Process::V4,
-        lc::Process::V5 => Process::V5,
-        lc::Process::V6 => Process::V6,
-        lc::Process::V7 => Process::V7,
-        lc::Process::V8 => Process::V8,
-        lc::Process::V10 => Process::V10,
-    }
 }
 
 pub fn to_craft_treatment(t: lc::Treatment) -> Treatment {
@@ -160,6 +146,7 @@ pub fn to_craft_tone_curve(c: &lc::ToneCurve) -> ToneCurve {
         red: to_craft_points(&c.red),
         green: to_craft_points(&c.green),
         blue: to_craft_points(&c.blue),
+        refine_saturation: c.refine_saturation,
     }
 }
 
@@ -176,6 +163,7 @@ pub fn from_craft_tone_curve(c: &ToneCurve) -> lc::ToneCurve {
         red: from_craft_points(&c.red),
         green: from_craft_points(&c.green),
         blue: from_craft_points(&c.blue),
+        refine_saturation: c.refine_saturation,
     }
 }
 
@@ -223,6 +211,22 @@ pub fn from_craft_calibration(c: &Calibration) -> lc::Calibration {
     }
 }
 
+pub fn to_craft_point_color(p: &lc::PointColor) -> PointColor {
+    PointColor {
+        lum: p.lum,
+        chroma: p.chroma,
+        hue: p.hue,
+        hue_shift: p.hue_shift,
+        sat_shift: p.sat_shift,
+        lum_shift: p.lum_shift,
+        range: p.range,
+        variance: p.variance,
+        hue_range: p.hue_range,
+        lum_range: p.lum_range,
+        sat_range: p.sat_range,
+    }
+}
+
 pub fn to_craft_settings(s: &lc::DevelopSettings) -> DevelopSettings {
     DevelopSettings {
         version: s.version,
@@ -250,20 +254,7 @@ pub fn to_craft_settings(s: &lc::DevelopSettings) -> DevelopSettings {
             purple: to_craft_hsl(s.mixer.purple),
             magenta: to_craft_hsl(s.mixer.magenta),
         },
-        point_colors: s
-            .point_colors
-            .iter()
-            .map(|p| PointColor {
-                lum: p.lum,
-                chroma: p.chroma,
-                hue: p.hue,
-                hue_shift: p.hue_shift,
-                sat_shift: p.sat_shift,
-                lum_shift: p.lum_shift,
-                range: p.range,
-                variance: p.variance,
-            })
-            .collect(),
+        point_colors: s.point_colors.iter().map(to_craft_point_color).collect(),
         bw_mix: BwMix {
             red: s.bw_mix.red,
             orange: s.bw_mix.orange,

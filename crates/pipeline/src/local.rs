@@ -123,7 +123,7 @@ pub fn joint_colour_nr(s: &DevelopSettings) -> bool {
     craft_develop::local::joint_colour_nr(&crate::bridge::to_craft_settings(s))
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Planes {
     pub key: u64,
     pub pre_nr: u64,

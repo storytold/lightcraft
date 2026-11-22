@@ -6,8 +6,6 @@ use lightcraft_develop::DevelopSettings;
 
 use crate::SourceInfo;
 
-#[cfg(test)]
-pub use craft_develop::light_v3::Reference;
 pub use craft_develop::light_v3::{FITS, Fit, LUT_N, Mode, Operator, PRO_Y, Unpacked, law, prophoto_matrices};
 
 /// The active operators of a render, in order (Contrast, Blacks), and the conversions to
