@@ -335,7 +335,12 @@ impl Watchdog {
                 let guard = strong.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 let Some((since, i, input)) = guard.as_ref() else { continue };
                 if since.elapsed() >= limit {
-                    eprintln!("fuzz harness `{name}` HANG at iteration {i}: one input ran over {}s; input ({} bytes): {:02x?}", limit.as_secs(), input.len(), input.get(..input.len().min(256)).unwrap_or_default());
+                    eprintln!(
+                        "fuzz harness `{name}` HANG at iteration {i}: one input ran over {}s; input ({} bytes): {:02x?}",
+                        limit.as_secs(),
+                        input.len(),
+                        input.get(..input.len().min(256)).unwrap_or_default()
+                    );
                     if let Some(dir) = std::env::var_os("LCC_FUZZ_CRASH_DIR") {
                         match save_crash(std::path::Path::new(&dir), &format!("{name}-hang"), input) {
                             Ok(p) => eprintln!("hang input saved to {}", p.display()),
