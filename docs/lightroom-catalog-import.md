@@ -75,9 +75,19 @@ hash, file size and dimensions, empty camera fields, embedded lens corrections, 
 from Disk would. Ratings, keywords, develop settings and history are kept, and none of it is an undo step. A stopped,
 interrupted or crashed run resumes the next time the library opens; a file that can't be read (an offline drive) is
 tried again then. Scripts get the same with `library.importLightroom {"readOriginalsLater": true}` followed by
-`library.readOriginals {limit?}` → `{checked, updated, unreadable, remaining}`; without `readOriginalsLater`, the
-engine command still reads every original before it commits. Because originals aren't read before the commit,
-two catalog entries whose files have identical bytes are no longer matched by content during the import.
+`library.readOriginals {limit?}` (default 1024 per call; repeat while `remaining` > 0) → `{checked, updated,
+unreadable, duplicates, remaining}`; without `readOriginalsLater`, the engine command still reads every original
+before it commits. Because originals aren't read before the commit, duplicates are matched by path only during the
+import: a file already in the library under another path gets its own record, and two catalog entries with
+identical bytes both stay. Reading the originals reports each such pair (`duplicates: [{id, sameAs}]`, logged by the
+app) and keeps both, since the new record carries the catalog's edits.
+
+The background reading looks at every library photo that has no content hash, not only photos from this import: a
+missing original from an older import (or one whose drive is offline) is tried once each time the library opens,
+so a **Reading originals** row can appear at open even without a new import; it touches only those files and can be
+stopped. Records made from the catalog alone (missing or not yet read originals, in either import mode) now get the
+library's import defaults (Constrain Crop, default preset, copyright) and the upright pixel size, as a read photo
+would, so reading the original later changes nothing the catalog set; this also applies to the CLI/MCP import.
 
 Original files are referenced in place. Ratings, picks/rejects, color labels, XMP metadata,
 hierarchical keywords, regular collections/collection sets, smart collections, saved prints, folder stacks,

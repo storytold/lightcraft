@@ -106,6 +106,10 @@ pub struct ReadOriginals {
     pub updated: Vec<PhotoId>,
     /// Listed photos whose file could not be read; they stay unread.
     pub unreadable: usize,
+    /// `(read, already)`: a photo whose file, once read, has the same content as another library
+    /// photo (an ordinary import would have skipped it as a duplicate). Both records are kept, since
+    /// the newly read one may carry the catalog's edits; the pair is reported so the user can choose.
+    pub duplicates: Vec<(PhotoId, PhotoId)>,
 }
 
 /// Apply the probes: each photo gets the ops Reload would give it, all in one batch that is
@@ -114,6 +118,12 @@ pub struct ReadOriginals {
 pub fn apply(s: &mut Session, results: Vec<(Unread, std::result::Result<ProbeInfo, String>)>) -> Result<ReadOriginals> {
     let mut ops = Vec::new();
     let mut out = ReadOriginals::default();
+    let mut hashes: std::collections::HashMap<String, PhotoId> = s
+        .catalog
+        .photos()
+        .filter(|p| p.copy_of.is_none())
+        .filter_map(|p| p.content_hash.as_deref().map(|h| (crate::sync::base_hash(h).to_string(), p.id)))
+        .collect();
     for (item, info) in results {
         let Ok(info) = info else {
             out.unreadable = out.unreadable.saturating_add(1);
@@ -121,6 +131,15 @@ pub fn apply(s: &mut Session, results: Vec<(Unread, std::result::Result<ProbeInf
         };
         if !s.catalog.photo(item.id).is_some_and(|p| item.current(p)) {
             continue;
+        }
+        if let Some(h) = info.content_hash.as_deref() {
+            let key = crate::sync::base_hash(h).to_string();
+            match hashes.get(&key) {
+                Some(other) if *other != item.id => out.duplicates.push((item.id, *other)),
+                _ => {
+                    hashes.insert(key, item.id);
+                }
+            }
         }
         crate::cmd::convert::reload_ops(&s.catalog, item.id, &info, &mut ops, &mut out.updated);
     }
@@ -137,16 +156,21 @@ pub fn apply(s: &mut Session, results: Vec<(Unread, std::result::Result<ProbeInf
 /// run keeps what it read.
 const BATCH: usize = 256;
 
+/// Files `library.readOriginals` reads when no `limit` is given: the command runs on the session's
+/// thread, so over `--connect` an unbounded run would hold the app for a large library. Callers
+/// loop on `remaining`.
+const DEFAULT_LIMIT: usize = 1024;
+
 fn read_originals(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "library.readOriginals";
     // without file access every probe "succeeds" with nothing known
     let fp = file_probe(s).ok_or_else(|| bad(C, "this session has no file access"))?;
     let limit = match p.get("limit") {
-        None | Some(Value::Null) => usize::MAX,
+        None | Some(Value::Null) => DEFAULT_LIMIT,
         Some(v) => v.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(C, "`limit` must be a whole number ≥ 0"))?,
     };
     let mut tried = HashSet::new();
-    let (mut updated, mut unreadable, mut checked) = (Vec::new(), 0usize, 0usize);
+    let (mut updated, mut unreadable, mut checked, mut duplicates) = (Vec::new(), 0usize, 0usize, Vec::new());
     let cancel = std::sync::atomic::AtomicBool::new(false);
     while checked < limit {
         let batch = unread(&s.catalog, &tried, BATCH.min(limit - checked));
@@ -158,11 +182,13 @@ fn read_originals(s: &mut Session, p: &Value) -> Result<Value> {
         let r = apply(s, probe_cancellable_with_progress(&fp, batch, &cancel, &|_| {}))?;
         updated.extend(r.updated);
         unreadable = unreadable.saturating_add(r.unreadable);
+        duplicates.extend(r.duplicates);
     }
     Ok(json!({
         "checked": checked,
         "updated": updated.iter().map(|i| i.0).collect::<Vec<_>>(),
         "unreadable": unreadable,
+        "duplicates": duplicates.iter().map(|(a, b)| json!({"id": a.0, "sameAs": b.0})).collect::<Vec<_>>(),
         "remaining": count_unread(&s.catalog),
     }))
 }
@@ -173,7 +199,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Read Originals Not Yet Read",
         [],
         None,
-        "{limit?: int}: read the originals of photos added without reading their file (a Lightroom catalog import adds its photos from the catalog first; the app then reads their originals in the background), at most `limit` of them, and fill in what needs the file as Reload from Disk would: content hash, file size, dimensions, empty camera fields, embedded lens corrections, as-shot white balance; not an undo step, ratings, keywords, develop settings and history are kept; files that can't be read (an offline drive) are left for next time → {checked, updated: [ids], unreadable, remaining}",
+        "{limit?: int}: read the originals of photos added without reading their file (a Lightroom catalog import adds its photos from the catalog first; the app then reads their originals in the background), at most `limit` of them (default 1024; call again while `remaining` > 0), and fill in what needs the file as Reload from Disk would: content hash, file size, dimensions, empty camera fields, embedded lens corrections, as-shot white balance; not an undo step, ratings, keywords, develop settings and history are kept; files that can't be read (an offline drive) are left for next time; a read file whose content matches another library photo is kept and reported in `duplicates` → {checked, updated: [ids], unreadable, duplicates: [{id, sameAs}], remaining}",
         always,
         read_originals
     )]
@@ -238,6 +264,34 @@ mod tests {
         let before = calls.load(Ordering::Relaxed);
         s.execute("library.readOriginals", &json!({})).unwrap();
         assert_eq!(calls.load(Ordering::Relaxed) - before, 1);
+    }
+
+    #[test]
+    fn a_read_original_matching_another_photo_is_reported_as_a_duplicate_and_kept() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut have = unread_photo(1, "/x/a.NEF");
+        have.content_hash = Some("hash-/x/a.NEF".into());
+        // the same file under another spelling hashes the same
+        let probe: FileProbe = Arc::new(move |_path: &str| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Ok(ProbeInfo { width: 6, height: 4, format: "NEF".into(), content_hash: Some("hash-/x/a.NEF".into()), ..Default::default() })
+        });
+        let mut s = session_with(vec![have, unread_photo(2, "/y/a.NEF")], probe);
+        let r = s.execute("library.readOriginals", &json!({})).unwrap();
+        assert_eq!(r["duplicates"], json!([{"id": 2, "sameAs": 1}]), "{r}");
+        assert_eq!(s.catalog.len(), 2, "both records are kept");
+        assert_eq!(r["remaining"], 0, "the duplicate is read, not listed again: {r}");
+    }
+
+    #[test]
+    fn without_a_limit_a_run_stops_at_the_default_and_reports_the_rest() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let n = DEFAULT_LIMIT as u64 + 3;
+        let photos = (1..=n).map(|i| unread_photo(i, &format!("/x/{i}.NEF"))).collect();
+        let mut s = session_with(photos, probe_hashing(calls));
+        let r = s.execute("library.readOriginals", &json!({})).unwrap();
+        assert_eq!(r["checked"], DEFAULT_LIMIT, "{}", r["checked"]);
+        assert_eq!(r["remaining"], 3);
     }
 
     #[test]

@@ -97,8 +97,13 @@ pub fn tick(app: &mut LccApp) {
             app.ui.originals.idle = true;
             app.ui.originals.total = 0;
         }
-        if let Err(e) = read_originals::apply(&mut app.session, results) {
-            log::warn!("reading originals: {e}");
+        match read_originals::apply(&mut app.session, results) {
+            Ok(r) => {
+                for (id, same) in r.duplicates {
+                    log::info!("reading originals: photo {} has the same file content as photo {}", id.0, same.0);
+                }
+            }
+            Err(e) => log::warn!("reading originals: {e}"),
         }
     };
     if let Err(e) = crate::tasks::spawn_tracked(app, LABEL, "readOriginals", cancel, work, done) {
