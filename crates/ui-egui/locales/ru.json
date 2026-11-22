@@ -3554,7 +3554,7 @@
   "hard edges such as clipped highlights.": "жёстких границ, например отсечённых светов.",
   "high-resolution cameras such as the Sony A7R VI (64 MP). Their decoded original (~800 MB) is bigger than the": "камерах высокого разрешения, таких как Sony A7R VI (64 Мп). Их декодированный оригинал (~800 МБ) больше, чем",
   "highlight recovery missed them and, darkened, they took a colour cast instead of going neutral grey.": "восстановление светов их пропускало, а при затемнении они приобретали цветовой оттенок вместо нейтрального серого.",
-  "hold (such as a name in brackets), which it leaves out so the file always reads back.": "вместить (например имя в скобках), и оставляет его, чтобы файл всегда читался обратно.",
+  "hold (such as a name in brackets), which it leaves out so the file always reads back.": "вместить (например имя в скобках), и исключает его, чтобы файл всегда читался обратно.",
   "iPhone ProRAW and other DNGs that carry their own segmentation mattes (DNG semantic masks) use them for the Select": "iPhone ProRAW и другие DNG с собственными масками сегментации (семантические маски DNG) используют их для масок «Выделить",
   "identity subissue in #840). The separate Make and Model tags keep their original values.": "идентификации камеры в #840). Отдельные теги Make и Model сохраняют исходные значения.",
   "image file such as a PNG logo with transparency, at a size and opacity, optionally drawn behind the photo), the": "файл изображения, например логотип PNG с прозрачностью, с размером и непрозрачностью, по желанию рисуется позади фото),",
