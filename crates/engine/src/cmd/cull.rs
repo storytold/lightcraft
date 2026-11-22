@@ -124,6 +124,9 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
                 aesthetic: Some(*aesthetic),
                 cull_score: Some(score),
                 suggested: Some(stars),
+                // (a quality scan's own verdict and score are left as they were: culling does not
+                // measure them, and must not throw them away)
+                quality: s.catalog.photo(*id).and_then(|p| p.analysis).and_then(|a| a.quality),
             }),
         });
         let photo = s.catalog.photo(*id);

@@ -203,7 +203,7 @@ fn accelerator(sc: &str) -> Option<Accelerator> {
         }
     }
     let code = match key? {
-        k if k.len() == 1 && k.as_bytes()[0].is_ascii_alphabetic() => {
+        k if k.len() == 1 && k.as_bytes().first().is_some_and(u8::is_ascii_alphabetic) => {
             const LETTERS: [Code; 26] = [
                 Code::KeyA,
                 Code::KeyB,
@@ -232,9 +232,10 @@ fn accelerator(sc: &str) -> Option<Accelerator> {
                 Code::KeyY,
                 Code::KeyZ,
             ];
-            LETTERS[(k.as_bytes()[0].to_ascii_uppercase() - b'A') as usize]
+            let letter = k.as_bytes().first()?.to_ascii_uppercase();
+            LETTERS.get(usize::from(letter.checked_sub(b'A')?)).copied()?
         }
-        k if k.len() == 1 && k.as_bytes()[0].is_ascii_digit() => {
+        k if k.len() == 1 && k.as_bytes().first().is_some_and(u8::is_ascii_digit) => {
             const DIGITS: [Code; 10] = [
                 Code::Digit0,
                 Code::Digit1,
@@ -247,7 +248,8 @@ fn accelerator(sc: &str) -> Option<Accelerator> {
                 Code::Digit8,
                 Code::Digit9,
             ];
-            DIGITS[(k.as_bytes()[0] - b'0') as usize]
+            let digit = *k.as_bytes().first()?;
+            DIGITS.get(usize::from(digit.checked_sub(b'0')?)).copied()?
         }
         "[" => Code::BracketLeft,
         "]" => Code::BracketRight,

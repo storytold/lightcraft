@@ -6,6 +6,7 @@
 //!
 //! Every action is a `slideshow.*` command (listed in `module::SHELL_COMMANDS`). View ▸ Slideshow
 //! (the impromptu slideshow) is unchanged.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::cell::RefCell;
 

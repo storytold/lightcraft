@@ -7,9 +7,13 @@ use lcc_raster::Rgb32f;
 /// Long edge the measurements run at.
 const EDGE: usize = 512;
 
-/// Display-ish luminance (sRGB-encoded) of `img` resampled to fit `EDGE` (box filter).
-fn luma(img: &Rgb32f) -> (Vec<f32>, usize, usize) {
-    let (w, h) = (img.width.max(1), img.height.max(1));
+/// Display-ish luminance (sRGB-encoded) of `img` resampled to fit `EDGE` (box filter). Also the
+/// Image Quality Scanner's starting point (`crate::quality`), so a scan and a cull of one photo
+/// measure the same luminance.
+pub(crate) fn luma(img: &Rgb32f) -> (Vec<f32>, usize, usize) {
+    // a buffer shorter than its size claims (a hostile or damaged source) reads only what it has:
+    // the scan and the cull never index past `data`
+    let (w, h) = (img.width.max(1).min(img.data.len().max(1)), img.height.max(1));
     let s = (EDGE as f64 / w.max(h) as f64).min(1.0);
     let (ow, oh) = (((w as f64 * s).round() as usize).max(8), ((h as f64 * s).round() as usize).max(8));
     let mut out = vec![0f32; ow * oh];
@@ -20,11 +24,15 @@ fn luma(img: &Rgb32f) -> (Vec<f32>, usize, usize) {
             let mut acc = 0.0f32;
             for yy in y0..y1 {
                 for xx in x0..x1 {
-                    let c = img.data[yy * w + xx];
+                    let Some(c) = img.data.get(yy * w + xx) else { continue };
                     acc += 0.2627 * c[0] + 0.678 * c[1] + 0.0593 * c[2];
                 }
             }
-            let l = acc / ((y1 - y0) * (x1 - x0)) as f32;
+            let l = acc / ((y1 - y0) * (x1 - x0)).max(1) as f32;
+            // (a NaN or infinite sample — a hostile or damaged source — has no tone to measure:
+            // `clamp` would pass it straight through, so it is dropped rather than carried into
+            // every factor that reads this luminance)
+            let l = if l.is_finite() { l } else { 0.0 };
             *v = lcc_color::transfer::linear_to_srgb(l.clamp(0.0, 1.0));
         }
     }
@@ -35,6 +43,13 @@ fn luma(img: &Rgb32f) -> (Vec<f32>, usize, usize) {
 /// 16 × 16-pixel blocks, so a sharp subject on a soft background still reads as sharp.
 pub fn sharpness(img: &Rgb32f) -> f32 {
     let (l, w, h) = luma(img);
+    sharpness_luma(&l, w, h)
+}
+
+/// The focus measure on a luminance copy already made ([`luma`], `w` × `h`), so the Image Quality
+/// Scanner can measure its grain-smoothed luminance with the cull's own measure rather than a
+/// second copy of it.
+pub(crate) fn sharpness_luma(l: &[f32], w: usize, h: usize) -> f32 {
     let b = 16;
     let mut blocks = Vec::new();
     for by in (1..h.saturating_sub(1)).step_by(b) {
@@ -43,8 +58,14 @@ pub fn sharpness(img: &Rgb32f) -> f32 {
             let mut n = 0;
             for y in by..(by + b).min(h - 1) {
                 for x in bx..(bx + b).min(w - 1) {
-                    let c = l[y * w + x];
-                    let lap = 4.0 * c - l[y * w + x - 1] - l[y * w + x + 1] - l[(y - 1) * w + x] - l[(y + 1) * w + x];
+                    // (a luminance shorter than `w` × `h` claims — a hostile or damaged source, or a
+                    // caller that handed over less than it said — reads only what is there)
+                    let (Some(c), Some(left), Some(right), Some(up), Some(down)) =
+                        (l.get(y * w + x), l.get(y * w + x - 1), l.get(y * w + x + 1), l.get((y - 1) * w + x), l.get((y + 1) * w + x))
+                    else {
+                        continue;
+                    };
+                    let lap = 4.0 * c - left - right - up - down;
                     e += lap * lap;
                     n += 1;
                 }

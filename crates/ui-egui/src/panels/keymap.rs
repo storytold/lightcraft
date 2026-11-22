@@ -4,6 +4,7 @@
 //! one. A key another command had moves to the new command. Changes go through
 //! [`crate::shortcuts::assign`] into [`crate::state::AppSettings::keymap`] (saved in `ui.json`),
 //! the same path as the `app.setShortcut` command.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::RichText;
 

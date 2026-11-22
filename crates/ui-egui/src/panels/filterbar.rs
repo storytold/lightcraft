@@ -4,6 +4,7 @@
 //! "Save as Smart Collection…" keeps the current view as a live album; "Clear" resets the filter.
 //! The Metadata columns under it (issue #218, `view.filterColumns`) list each field's values among the photos in
 //! view with counts (`library.facets`); a click narrows the view (`library.facetPick`) and the columns cascade.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::{Color32, Rect, Sense, Stroke, StrokeKind, vec2};
 use lcc_catalog::{ColorLabel, Flag, MediaKind, RatingOp};
@@ -161,6 +162,21 @@ fn tally(app: &LccApp, ctx: &egui::Context) -> lcc_catalog::Tally {
     let t = app.session.tally();
     ctx.data_mut(|d| d.insert_temp(id, (key, t.clone())));
     t
+}
+
+/// Whether any photo in the catalog carries a quality score (issue #1313), kept until the catalog
+/// changes: the scanner's picker appears once a scan has scored something.
+fn quality_scanned(app: &LccApp, ctx: &egui::Context) -> bool {
+    let revision = app.session.catalog.revision;
+    let id = egui::Id::new("filter-quality-scanned");
+    if let Some((r, yes)) = ctx.data(|d| d.get_temp::<(u64, bool)>(id))
+        && r == revision
+    {
+        return yes;
+    }
+    let yes = app.session.catalog.any_quality_scanned();
+    ctx.data_mut(|d| d.insert_temp(id, (revision, yes)));
+    yes
 }
 
 /// A live count after a flag or label toggle, small and dim.
@@ -348,6 +364,48 @@ pub fn show(app: &mut LccApp, outer: &mut egui::Ui) {
         picker(app, ui, "vignettingReference", current, want.is_some(), |_| {
             options.iter().map(|(l, v)| (l.to_string(), json!({"vignettingReference": v.clone()}), want == v.as_str())).collect()
         });
+    }
+
+    // The Image Quality Scanner's verdict (issue #1313): any, accepted, to review (pending),
+    // rejected, or the photos no scan has scored. Shown once a scan has scored something (or the
+    // filter is set), so a catalog no scan reached is not cluttered with a choice of nothing.
+    if f.quality.is_some() || f.quality_min.is_some() || f.quality_max.is_some() || quality_scanned(app, ui.ctx()) {
+        let options = [
+            ("Quality: any photo", Value::Null),
+            ("Quality: accepted", json!("accepted")),
+            ("Quality: to review", json!("pending")),
+            ("Quality: rejected", json!("rejected")),
+            ("Quality: not scanned", json!("unscanned")),
+        ];
+        let want = f.quality.as_deref();
+        let current = options.iter().find(|(_, v)| v.as_str() == want).map_or("Quality: any photo", |(l, _)| *l);
+        picker(app, ui, "quality", current, want.is_some(), |_| {
+            options.iter().map(|(l, v)| (l.to_string(), json!({"quality": v.clone()}), want == v.as_str())).collect()
+        });
+        // the score's floor: a slider in place of its button, and the button to clear it (the
+        // slider is drawn only while a floor is set, so the bar stays as wide as the verdict
+        // picker needs; a ceiling set elsewhere — a rule, another window — is left as it is)
+        if f.quality_min.is_some() {
+            let mut min = f.quality_min.unwrap_or(0.0);
+            let r =
+                ui.add(egui::Slider::new(&mut min, 0.0..=100.0).text(crate::i18n::tr("Quality score at least")).fixed_decimals(0).show_value(false));
+            register(ui.ctx(), "slider:qualityMin", r.rect);
+            if r.changed() {
+                filter(app, json!({"qualityMin": min}));
+            }
+            let clear = crate::widgets::text_button(ui, "qualityMinClear", "×", true);
+            register(ui.ctx(), "button:qualityMinClear", clear.rect);
+            if clear.clicked() {
+                filter(app, json!({"qualityMin": Value::Null}));
+            }
+        } else {
+            // (the label is translated in the button)
+            let floor = crate::widgets::text_button(ui, "qualityMinSet", "Quality score at least", false);
+            register(ui.ctx(), "button:qualityMinSet", floor.rect);
+            if floor.clicked() {
+                filter(app, json!({"qualityMin": 50.0}));
+            }
+        }
     }
 
     // metadata pickers

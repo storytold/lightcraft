@@ -16,8 +16,9 @@ catalog and your originals are opened read-only and never changed. You can keep 
 ## Import
 
 File → Import Lightroom Catalog… shows what will come across (`library.inspectLightroom`: photo and collection
-counts, missing files, warnings) and then imports it in the background, with progress and Cancel. One undo step
-reverses it. From the command line:
+counts, missing files, warnings) and then imports it in the background, with progress and Cancel. When it finishes,
+the result window lists every warning and failure in a scrollable area; **Copy** puts the whole report on the clipboard.
+One undo step reverses it. From the command line:
 
 ```sh
 <cli> run --library "<library_default>" library.inspectLightroom path="Lightroom Catalog.lrcat"
@@ -69,13 +70,16 @@ command line, add `readOriginalsLater=true` to the import and run `library.readO
 
 A failed import takes back the photos it added. Records with broken references (an image whose file, folder or root
 does not resolve, or a settings, keyword or collection-member record naming no photo) are skipped with a warning
-instead of landing on another photo.
+instead of landing on another photo. A single catalog record that can't be read (too large or damaged) is left
+out on its own, and the result window says how many were left out of which table; the rest of that table still
+imports. The photo behind such a record keeps only what its files say. If the record is in a table every import
+needs (photos, files, folders), the result also says that photos may be missing. Text with invalid characters is imported with replacement characters, also counted in the result.
 
 ## Safety
 
 Before changing anything, the importer saves the source records, decoded XMP, develop settings, history, snapshots
 and collection content to compressed recovery archives in the library's `Interop/` folder (best-effort, capped in
-size). Imports are bounded: a 1 GiB database, one million rows per table. Details and limits:
+size). Imports are bounded: a 1 GiB database, one million rows for each table kept whole (keyword assignments, develop history and metadata are read a row at a time, without that limit). Details and limits:
 [lightroom-catalog-import.md](../lightroom-catalog-import.md).
 
 ## Habits that carry over

@@ -60,6 +60,10 @@ pub(crate) fn display_label(chip: &FilterChip, filter: &lcc_catalog::Filter, cat
             _ => chip.label.clone(),
         };
     }
+    if chip.clear.get("quality").is_some() {
+        // the whole label is a catalog entry ("Quality: to review")
+        return tr(&chip.label).to_string();
+    }
     if chip.clear.get("semantic").is_some()
         && let Some(q) = &filter.semantic
     {
@@ -69,6 +73,10 @@ pub(crate) fn display_label(chip: &FilterChip, filter: &lcc_catalog::Filter, cat
         return format!("{} {}", tr("Only"), crate::i18n::tr_format!("{n} photos", n = if filter.only_none { 0 } else { filter.only.len() }));
     }
     if let Some((prefix, value)) = chip.label.split_once(": ") {
+        // ("Quality score at least: 40" keeps its number: the prefix is what is translated)
+        if prefix == "Quality score at least" || prefix == "Quality score at most" {
+            return format!("{}: {value}", tr(prefix));
+        }
         let value = if matches!(prefix, "Flag" | "Type") {
             tr(value).to_string()
         } else if prefix == "Date" {
@@ -135,7 +143,7 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
     child.spacing_mut().item_spacing.x = 8.0;
-    let hidden = &chips[shown..];
+    let hidden = chips.get(shown..).unwrap_or_default();
     if !hidden.is_empty() {
         let more = crate::widgets::text_button(&mut child, "chipsMore", &crate::i18n::tr_format!("+{} more", hidden.len()), false);
         egui::Popup::menu(&more).show(|ui| {

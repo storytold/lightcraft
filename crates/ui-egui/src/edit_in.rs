@@ -22,6 +22,7 @@
 //!   field has the keyboard).
 //!
 //! The windows' state is per UI thread (the app has one), so no shared app state is touched.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};

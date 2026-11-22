@@ -16,6 +16,7 @@
 //!   in step).
 //!
 //! Own layout, from observing Lightroom Classic's menus (names and order only; nothing copied).
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use crate::module::ModuleId;
 
@@ -163,6 +164,7 @@ const LIBRARY: &[&str] = &[
     "library.findSimilar",
     "---",
     "dialog.cull",
+    "dialog.qualityScan",
     "---",
     "library.toggleFilters=Enable Filters",
     "@Filter by Preset",

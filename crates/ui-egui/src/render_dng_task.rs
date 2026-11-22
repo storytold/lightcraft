@@ -7,6 +7,7 @@
 //!
 //! Needs [`crate::Services::write_shared`]; without it (web, headless scripts) the engine command
 //! runs synchronously.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

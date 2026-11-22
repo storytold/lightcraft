@@ -11,6 +11,7 @@
 //!
 //! The work is done by engine commands (`catalog.*`, `photo.xmpStatus`, `library.previewSettings`);
 //! this module only holds the dialogs and the UI commands that switch libraries.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::path::{Path, PathBuf};
 

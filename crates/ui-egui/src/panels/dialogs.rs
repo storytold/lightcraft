@@ -1,4 +1,5 @@
 //! Modal dialogs (new album, rename, create preset, choose settings to copy, export, about, shortcuts).
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use lcc_develop::{ControlSpec, Section, SettingsGroup, SettingsPick, Track};
 use serde_json::json;
@@ -198,6 +199,7 @@ pub(crate) fn window_id(dialog: &Dialog) -> egui::Id {
         Dialog::ProfileManager { .. } => crate::panels::profile_manager::WINDOW,
         // (the Settings screen's own layer: `settings_screen::LAYER`)
         Dialog::Settings { .. } => crate::settings_screen::LAYER,
+        Dialog::QualityScanner { .. } => "app-quality-scan-dialog",
         _ => return egui::Id::new("app-dialog").with(std::mem::discriminant(dialog)),
     };
     egui::Id::new(own)
@@ -274,6 +276,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
         Dialog::FaceModel { .. } => "Add Face Model",
         Dialog::WhatsNew => "What's New",
         Dialog::Cull { .. } => "Assisted Culling",
+        Dialog::QualityScanner { .. } => "Image Quality Scanner",
         Dialog::SmartRules { id: None, .. } => "Create Smart Collection",
         Dialog::SmartRules { .. } => "Edit Smart Collection",
         Dialog::AutoStack { .. } => "Auto-Stack by Capture Time",
@@ -436,6 +439,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
             Dialog::Export { .. } => 900.0_f32.min(screen.width() - 2.0 * crate::dialog_frame::SCREEN_MARGIN),
             Dialog::Rename { .. } | Dialog::ContactSheet { .. } | Dialog::Timelapse { .. } | Dialog::SlideshowExport { .. } | Dialog::EmailPhoto { .. } => 480.0,
             Dialog::CaptureTime { .. } | Dialog::LabelNames { .. } | Dialog::CreatePreset { .. } | Dialog::CreatePresetFolder { .. } => 440.0,
+            Dialog::QualityScanner { .. } => 470.0,
             _ => DIALOG_W,
         } })
         .show(ctx, |ui| {
@@ -568,6 +572,89 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr("Lower it when a panning or moving burst splits into several groups.")).color(t.text_dim));
                     crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr("Scores stay on the photos: filter or make smart collections with Focus, Eyes Open, Aesthetic and Cull Score.")).color(t.text_dim));
                 }
+                Dialog::QualityScanner { scope, accepted, rejected, apply_flags, rescan, weights } => {
+                    // what a scan measures, and how far it reaches
+                    let selected = app.session.selection.ids.len();
+                    // a folder is "shown" when one is open: the Folders panel's choice, or Browse's
+                    let folder_shown = app.session.library_folder.is_some() || app.session.browse.is_some();
+                    let scopes: [(&str, &str); 3] = [
+                        ("selection", if selected > 1 { "the selected photos" } else { "the photos in view" }),
+                        ("folder", if folder_shown { "the folder shown" } else { "the folder shown (no folder is: pick one first)" }),
+                        ("catalog", "the whole catalog"),
+                    ];
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(
+                            "Scores photos for technical quality (sharpness, noise, exposure and JPEG artifacts) and keeps each score on the photo so the Library can filter and sort by it.",
+                        ))
+                        .color(t.text_label),
+                    );
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(crate::i18n::tr("Scan")).font(t.semibold(12.5)).color(t.text));
+                    for (value, what) in scopes {
+                        let mut on = scope == value;
+                        let r = ui.radio_value(&mut on, true, crate::i18n::tr(what));
+                        crate::widgets::register(ui.ctx(), format!("radio:qualityScope:{value}"), r.rect);
+                        if r.clicked() {
+                            *scope = value.to_string();
+                        }
+                    }
+                    ui.add_space(4.0);
+                    let r = crate::dialog_frame::checkbox(ui, rescan, crate::i18n::tr("Scan photos that have a score already (rescan all)"));
+                    crate::widgets::register(ui.ctx(), "check:qualityRescan", r.rect);
+                    crate::dialog_frame::note(
+                        ui,
+                        egui::RichText::new(crate::i18n::tr(
+                            "Unscanned photos only by default; a rescan measures every photo again and overwrites its score.",
+                        ))
+                        .color(t.text_dim),
+                    );
+                    ui.add_space(8.0);
+                    // the two cutoffs, and what they do
+                    ui.label(egui::RichText::new(crate::i18n::tr("Pick Flags")).font(t.semibold(12.5)).color(t.text));
+                    let r = ui.add(egui::Slider::new(accepted, 0.0..=100.0).text(crate::i18n::tr("Accepted at or above")).fixed_decimals(0));
+                    crate::widgets::register(ui.ctx(), "field:qualityAccepted", r.rect);
+                    let r = ui.add(egui::Slider::new(rejected, 0.0..=100.0).text(crate::i18n::tr("Rejected at or below")).fixed_decimals(0));
+                    crate::widgets::register(ui.ctx(), "field:qualityRejected", r.rect);
+                    // (the two can't cross: a drag past the other stops at it)
+                    if *rejected > *accepted {
+                        *rejected = *accepted;
+                    }
+                    crate::dialog_frame::note(
+                        ui,
+                        egui::RichText::new(crate::i18n::tr("Between the two, a photo keeps its flag (unflagged stays unflagged).")).color(t.text_dim),
+                    );
+                    let r = crate::dialog_frame::checkbox(ui, apply_flags, crate::i18n::tr("Write the flags onto photos you have not flagged"));
+                    crate::widgets::register(ui.ctx(), "check:qualityApplyFlags", r.rect);
+                    if !*apply_flags {
+                        crate::dialog_frame::note(
+                            ui,
+                            egui::RichText::new(crate::i18n::tr("Off: the scan only scores; the verdict is there to filter on.")).color(t.text_dim),
+                        );
+                    }
+                    ui.add_space(8.0);
+                    // the factors and their weights (0 switches one off)
+                    ui.label(egui::RichText::new(crate::i18n::tr("Basic Factors")).font(t.semibold(12.5)).color(t.text));
+                    for (i, label) in ["Blur (sharpness)", "Noise", "Exposure", "Compression artifacts"].iter().enumerate() {
+                        let r = ui.add(
+                            egui::Slider::new(&mut weights[i], 0.0..=10.0).text(crate::i18n::tr(label)).fixed_decimals(1).show_value(true),
+                        );
+                        crate::widgets::register(ui.ctx(), format!("field:qualityWeight:{i}"), r.rect);
+                    }
+                    crate::dialog_frame::note(
+                        ui,
+                        egui::RichText::new(crate::i18n::tr(
+                            "The score is the factors' weighted mean; 0 leaves one out of it (it is still measured).",
+                        ))
+                        .color(t.text_dim),
+                    );
+                    crate::dialog_frame::note(
+                        ui,
+                        egui::RichText::new(crate::i18n::tr(
+                            "Runs in the background; the Activity stack shows how far it is and can stop it. Scores stay on the photos: sort or filter by Quality in the Library.",
+                        ))
+                        .color(t.text_dim),
+                    );
+                }
                 Dialog::WhatsNew => {
                     ui.scope(|ui| {
                         for line in WHATS_NEW.lines() {
@@ -603,8 +690,20 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     } else {
                         ui.label(crate::i18n::tr("These photos are only in memory. Open a catalog on disk and import again to save them."));
                     }
-                    for detail in details.iter() {
-                        ui.add(egui::Label::new(detail).wrap().selectable(true));
+                    if !details.is_empty() {
+                        ui.add_space(8.0);
+                        // every warning, scrolled and copyable (#1309)
+                        egui::ScrollArea::vertical().id_salt("lightroom_result_details").max_height(320.0).show(ui, |ui| {
+                            for detail in details.iter() {
+                                ui.add(egui::Label::new(detail).wrap().selectable(true));
+                            }
+                        });
+                        if ui.button(crate::i18n::tr("Copy")).clicked() {
+                            let mut text = vec![summary.clone()];
+                            text.extend(library.iter().cloned());
+                            text.extend(details.iter().cloned());
+                            ui.ctx().copy_text(text.join("\n"));
+                        }
                     }
                 }
                 Dialog::DngValidation { summary, damaged, unverifiable } => {
@@ -1706,6 +1805,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     Dialog::AdvancedSearch { .. } => "Search",
                     Dialog::CaptureTime { .. } => "Change Time",
                     Dialog::Cull { .. } => "Cull",
+                    Dialog::QualityScanner { .. } => "Scan",
                     Dialog::CopySettings { .. } => "Copy",
                     Dialog::PasteSettings { .. } => "Paste",
                     Dialog::TextPrompt { command, .. } => prompt_verb(command),
@@ -1994,6 +2094,26 @@ pub fn parse_gap(text: &str) -> Option<f64> {
 
 /// The longest burst gap `photo.analyze` accepts: a day.
 pub const MAX_BURST_GAP: f32 = 86_400.0;
+
+/// The Image Quality Scanner's settings as last confirmed (`UiState::quality_scan_settings`), so the
+/// dialog opens as it was left: the scope, the two cutoffs, whether flags are written and whether
+/// everything is measured again, and the four factors' weights.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QualityScanSettings {
+    pub scope: String,
+    pub accepted: f32,
+    pub rejected: f32,
+    pub apply_flags: bool,
+    pub rescan: bool,
+    /// Blur, noise, exposure, compression.
+    pub weights: [f32; 4],
+}
+
+impl Default for QualityScanSettings {
+    fn default() -> Self {
+        QualityScanSettings { scope: "selection".into(), accepted: 70.0, rejected: 25.0, apply_flags: false, rescan: false, weights: [1.0; 4] }
+    }
+}
 
 /// Keep what was typed in the Assisted Culling value fields within what `photo.analyze` accepts
 /// (a gap of 0 s to a day, a similarity of 0 to 1), not within the sliders' drag range.
@@ -2383,6 +2503,36 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
                 app.run("photo.rejectEyes", json!({"closed": closed_eyes, "blurry": blurry_eyes, "soft": soft_eyes, "mainOnly": !everyone}))?;
             }
             r
+        }
+        Dialog::QualityScanner { scope, accepted, rejected, apply_flags, rescan, weights } => {
+            // (the settings are kept for the next time the dialog opens, confirmed or not)
+            app.ui.quality_scan_settings = Some(QualityScanSettings {
+                scope: scope.clone(),
+                accepted: *accepted,
+                rejected: *rejected,
+                apply_flags: *apply_flags,
+                rescan: *rescan,
+                weights: *weights,
+            });
+            let scope = match scope.as_str() {
+                "folder" => "folder",
+                "catalog" => "catalog",
+                _ => "selected",
+            };
+            let p = json!({
+                "scope": scope,
+                "accepted": *accepted,
+                "rejected": *rejected,
+                "applyFlags": *apply_flags,
+                "rescan": *rescan,
+                "weights": {
+                    "blur": weights[0],
+                    "noise": weights[1],
+                    "exposure": weights[2],
+                    "compression": weights[3],
+                },
+            });
+            app.run("photo.qualityScan", p)
         }
         Dialog::SmartRules { id, name, rules, parent } => {
             // refused before anything changes (not even the name)
@@ -4557,6 +4707,63 @@ mod cull_dialog_tests {
         h.step();
         h.step();
         assert_eq!(burst(&h), (1800.0, 1.0));
+    }
+
+    fn quality_settings(h: &Headless) -> (String, f32, f32, bool, [f32; 4]) {
+        match &h.app.ui.dialog {
+            Some(Dialog::QualityScanner { scope, accepted, rejected, apply_flags, weights, .. }) => {
+                (scope.clone(), *accepted, *rejected, *apply_flags, *weights)
+            }
+            d => panic!("{d:?}"),
+        }
+    }
+
+    /// The Image Quality Scanner's dialog (issue #1313): it opens as it was left, the cutoffs can't
+    /// cross, and Scan hands what it shows to `photo.qualityScan` (which runs it in the background).
+    #[test]
+    fn the_quality_scanner_dialog_opens_as_left_and_scans() {
+        let app = LccApp::new(lcc_engine::Session::with_demo(), Services::default());
+        let mut h = Headless::new(app, [1400.0, 1000.0], 1.0);
+        h.step();
+        h.app.run("dialog.qualityScan", json!({})).unwrap();
+        for _ in 0..4 {
+            h.step();
+        }
+        let (scope, accepted, rejected, apply_flags, weights) = quality_settings(&h);
+        assert_eq!((scope.as_str(), accepted, rejected, apply_flags, weights), ("selection", 70.0, 25.0, false, [1.0; 4]));
+        // the tree of controls is drawn: the cutoffs, the rescan and flag boxes, a weight a factor
+        for id in ["field:qualityAccepted", "field:qualityRejected", "check:qualityRescan", "check:qualityApplyFlags", "field:qualityWeight:0"] {
+            assert!(h.app.widgets.iter().any(|(w, _)| w == id), "{id} is not drawn");
+        }
+        // a rejected cutoff typed above the accepted one stops at it
+        type_value(&mut h, "field:qualityAccepted", "40");
+        type_value(&mut h, "field:qualityRejected", "60");
+        let (_, accepted, rejected, ..) = quality_settings(&h);
+        assert_eq!((accepted, rejected), (40.0, 40.0));
+        // Scan: the settings are kept for the next opening, the dialog closes, and the scan starts
+        let r = h.request("ui.dialog.confirm", json!({}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(h.app.ui.dialog.is_none(), "{:?}", h.app.ui.dialog);
+        let kept = h.app.ui.quality_scan_settings.clone().expect("the settings are kept");
+        assert_eq!((kept.accepted, kept.rejected), (40.0, 40.0));
+        h.app.run("dialog.qualityScan", json!({})).unwrap();
+        h.step();
+        h.step();
+        let (_, accepted, ..) = quality_settings(&h);
+        assert_eq!(accepted, 40.0, "the next opening starts from what was confirmed");
+        // the frames pump the scan the dialog started: it finishes (the demo photos are small) or
+        // is stopped here, so nothing is left running when the test ends
+        for _ in 0..400 {
+            h.step();
+            if h.app.session.quality_scan.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let _ = h.app.run("photo.qualityScan", json!({"cancel": true}));
+        for _ in 0..10 {
+            h.step();
+        }
     }
 }
 

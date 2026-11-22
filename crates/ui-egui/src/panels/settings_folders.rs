@@ -5,6 +5,7 @@
 //! `app.folders` lists them (id, path, whether it was chosen or is the default, what can be done)
 //! for agents and tests; `app.exportFolder {dir | reset}` sets the default export folder, the one
 //! File ▸ Export starts in.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::RichText;
 use serde_json::{Value, json};

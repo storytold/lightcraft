@@ -281,6 +281,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(mask_effects::specs());
         v.extend(crate::machine_test::specs());
         v.extend(cull::specs());
+        v.extend(crate::quality_scan::specs());
         v.extend(convert::specs());
         v.extend(convert::edit_specs());
         v.extend(merge::specs());

@@ -207,10 +207,9 @@ pub fn covers(make: Option<&str>, model: &str) -> bool {
 /// into make and model is tried, then the whole string as a model alone; this matches [`crate::spectral::find_camera`]
 /// and the catalog's own lookup.
 pub fn covers_camera(camera: &str) -> bool {
-    let words: Vec<&str> = camera.split_whitespace().collect();
-    if words.is_empty() {
+    let Some(words) = crate::spectral::camera_words(camera) else {
         return false;
-    }
+    };
     (1..words.len()).any(|i| covers(Some(&words[..i].join(" ")), &words[i..].join(" "))) || covers(None, camera)
 }
 

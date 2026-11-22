@@ -1,6 +1,6 @@
 # CI and landing changes
 
-> **Last updated:** 2026-11-13 · **Change:** minor (generated demo photos are kept on disk across test processes); minor (the fast gate checks that the fork catalogs are sorted); minor (the full run also checks the x86_64 Android target); major (no repeated runs: a push to main skips a tree its PR run tested, no CI on pushes to `release`, Brand only on PRs and built in the runner cache, Windows ARM64 only when packaging inputs change, sccache, one cargo run per target for the fast gate's wasm/Android checks); minor (release jobs upload straight to the draft release, not via Actions artifacts); major (every workflow on self-hosted runners, containers on gpu0, fork PRs approved after review); minor (test retries, flaky reports and the test quarantine for the full run); major (fast PR gate; full test runs only before a release); major (created: PR-only main, self-hosted runner, local status)
+> **Last updated:** 2026-11-22 · **Change:** minor (timing probes and benchmarks run with `<PREFIX>_PROBES=1` and otherwise record a `probe` skip); minor (generated demo photos are kept on disk across test processes); minor (the fast gate checks that the fork catalogs are sorted); minor (the full run also checks the x86_64 Android target); major (no repeated runs: a push to main skips a tree its PR run tested, no CI on pushes to `release`, Brand only on PRs and built in the runner cache, Windows ARM64 only when packaging inputs change, sccache, one cargo run per target for the fast gate's wasm/Android checks); minor (release jobs upload straight to the draft release, not via Actions artifacts); major (every workflow on self-hosted runners, containers on gpu0, fork PRs approved after review); minor (test retries, flaky reports and the test quarantine for the full run); major (fast PR gate; full test runs only before a release); major (created: PR-only main, self-hosted runner, local status)
 
 ## How changes reach `main`
 
@@ -27,7 +27,12 @@ catalogs sorted, [`localization.md`](localization.md)), clippy
 `-D warnings` (incl. the HEIF feature), parity refs, layers, assets, deny, the wasm check and the Android check (`cargo xtask android check`, see
 [`android.md`](android.md)); it skips
 the workspace and HEIF test runs. The SIL step runs `cargo xtask sil` (docs/testing-sil.md) once that command
-exists and is skipped until then. Locally, `cargo xtask ci` stays the full run; use `--fast` per commit and run the targeted tests of what you touched.
+exists and is skipped until then; it includes the sync merge properties (`lcc-sync` proptests: commutative,
+associative, idempotent merges and no grant leakage). Clippy also denies `indexing_slicing` (checked `get` instead of `[i]`) in
+`crates/tiff`, `crates/ui-egui`, `apps/app` and `apps/web`; a `ui-egui` module not yet converted carries a module-level
+`allow` whose reason names [gaps.md](gaps.md) gap 40, the list of what is left. The engine's import → develop → export → re-import scenario
+(`crates/engine/tests/it/roundtrip.rs`) runs with `cargo test -p lcc-engine` (the full run's workspace tests),
+not in the SIL step. Locally, `cargo xtask ci` stays the full run; use `--fast` per commit and run the targeted tests of what you touched.
 
 The fast gate checks the wasm and Android crates in one `cargo check` per target, so a crate shared by several
 of them is checked once; when that fails it checks each crate on its own to name the broken ones. The full run,
@@ -222,3 +227,10 @@ tools/post-local-ci.sh
 It refuses with uncommitted changes or an unpushed HEAD, runs `cargo xtask ci`, and posts a commit status
 named "Linux (cargo xtask ci)" (success or failure) for HEAD with `gh`. Auto-merge then proceeds. The
 status is only as trustworthy as the run behind it: post it only from a real, complete run.
+
+## Skips and opt-in probes
+
+A test that can't run here calls `lcc_testkit::skip!(Need, "why")`; `cargo xtask ci` collects the skips in
+`target/ci/report.json` and `summary.md`. Timing probes and benchmarks are not `#[ignore]`d: they start with
+`if !lcc_testkit::probe("what") { return; }`, which records a `probe` skip unless `<PREFIX>_PROBES=1` is set. Run them
+in release, for example `<PREFIX>_PROBES=1 cargo test --release -p lcc-pipeline --lib bench_ -- --nocapture`.

@@ -3,6 +3,7 @@
 //! a file and runs `lcc_engine::timelapse` on a worker with an activity row whose ✕ stops it.
 //!
 //! Sources: own design.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;

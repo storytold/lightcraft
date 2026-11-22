@@ -178,6 +178,19 @@ fn geometry(width: usize, weights: &[(u8, u8); BANDS]) -> (PrecinctGeometry, Vec
     (PrecinctGeometry { bands, ng: 4, ss: 8, br: 4, fs: 1, rm: 0, rl: 0, lh: 1, short_packet_header: false }, packets)
 }
 
+/// Validate a codestream's headers and return its encoded black level without decoding any samples: the header
+/// probe of a High Efficiency NEF (issue #1304). Applies the same checks as [`decode`] up to the entropy-coded data,
+/// so a strip the probe accepts fails in [`decode`] only on a damaged body.
+pub(super) fn probe(bytes: &[u8], width: usize, height: usize, bits: u32) -> Result<u16> {
+    width.checked_mul(height).filter(|&n| n <= MAX_PIXELS).ok_or_else(|| corrupt("image exceeds the pixel limit"))?;
+    if bits != 14 || width < 64 || !width.is_multiple_of(2) || height < 4 || !height.is_multiple_of(4) {
+        return Err(unsupported("requires a 14-bit image with even width >= 64 and height divisible by four"));
+    }
+    let mut reader = Reader { rest: bytes };
+    let header = header(&mut reader, bytes.len(), width, height)?;
+    Ok(header.transfer.black)
+}
+
 /// Decode to the original 14-bit Bayer sample domain; also return its encoded black level.
 pub(super) fn decode(bytes: &[u8], width: usize, height: usize, bits: u32) -> Result<(Vec<u16>, u16)> {
     let count = width.checked_mul(height).filter(|&n| n <= MAX_PIXELS).ok_or_else(|| corrupt("image exceeds the pixel limit"))?;

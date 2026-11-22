@@ -7,6 +7,7 @@
 //! numbers, borders, captions); the exported HTML is the reference (`web.preview` returns it).
 //!
 //! Export, upload and Share via Immich run on a worker thread ([`run`]: `webui.*`).
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
 use lcc_webgallery::Server;

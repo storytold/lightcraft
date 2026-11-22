@@ -240,8 +240,8 @@ fn op_variants_are_versioned() {
             Op::SetMergeSources { .. } => 19,
         }
     }
-    /// v15: `Analysis.eyes_open` / `aesthetic` / `cull_score`.
-    const NEWEST_FIELDS: u32 = 15;
+    /// v20: `Analysis.quality` (the Image Quality Scanner's scores).
+    const NEWEST_FIELDS: u32 = 20;
     let map = lcc_develop::EmbeddedVignettingMap::from_ev([4, 4], [2, 2], None, Default::default(), &[0.0; 4]).unwrap();
     let id = lcc_develop::VignettingMapId::of(&map);
     let _vignetting = since(&Op::AddVignettingMap {

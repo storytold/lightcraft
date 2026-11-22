@@ -1122,10 +1122,12 @@ mod tests {
 
     /// Timings on a library the size of upstream's report (58,000 photos, 4,000 keyword levels: 2,000
     /// keywords with a child each):
-    /// `cargo test --release -p lcc-catalog --lib probe_keyword_tree_cost -- --ignored --nocapture`.
+    /// `<PREFIX>_PROBES=1 cargo test --release -p lcc-catalog --lib probe_keyword_tree_cost -- --nocapture`.
     #[test]
-    #[ignore = "timing probe"]
     fn probe_keyword_tree_cost() {
+        if !lcc_testkit::probe("keyword tree timing probe") {
+            return;
+        }
         let mut c = Catalog::new();
         for i in 0..58_000u64 {
             let id = c.alloc_photo_id();
