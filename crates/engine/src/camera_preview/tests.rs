@@ -2481,7 +2481,7 @@ fn a_photo_no_look_fits_keeps_its_camera_profiles_colour() {
     // too dark for any look, no tone either: the profile's colour, the default raw tone curve
     let look = with_profile_colour(None, Some(colour.clone()), None, |_| None).expect("the profile's colour");
     assert_eq!((look.matrix, look.hue_sat.is_some()), (colour.0, true));
-    assert_eq!(look.tone, CameraTone::default_raw().unwrap());
+    assert_eq!(look.tone, lightcraft_pipeline::tone::default_raw_camera_tone().unwrap());
     // the JPEG's tone curve when it has one
     let toned = dro_test_look(&std::array::from_fn(|i| 0.01 + i as f32 * 0.01), &|x| 0.9 * x);
     let look = with_profile_colour(None, Some(colour.clone()), None, |c| Some(CameraLook { matrix: c.0, ..toned.clone() })).unwrap();

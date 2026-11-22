@@ -2,6 +2,7 @@
 //! row, cancel and photos that can't be rendered.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use lightcraft_catalog::{Op, Photo, Source};
@@ -201,7 +202,7 @@ fn video_is_av1_in_mp4_with_fades_as_frames() {
     assert_eq!(r["samples"].as_u64(), Some(1 + 12 + 1), "held slides are one sample each, fades a frame each");
     assert_eq!((r["codec"].as_str(), r["audio"].as_bool(), r["container"].as_str()), (Some("av1"), Some(false), Some("mp4")));
     let d = std::fs::read(&path).unwrap();
-    let top: Vec<_> = boxes(&d, 0..d.len()).into_iter().map(|(k, _)| k).collect();
+    let top: Vec<_> = boxes(&d, 0..d.len()).into_iter().map(|(k, _)| k).filter(|k| k != b"free").collect();
     assert_eq!(top, vec![*b"ftyp", *b"mdat", *b"moov"]);
     let stbl = child(&d, 0..d.len(), &[b"moov", b"trak", b"mdia", b"minf", b"stbl"]);
     let be = |at: usize| u32::from_be_bytes(d[at..at + 4].try_into().unwrap());
@@ -306,6 +307,38 @@ fn cancel_leaves_no_file_behind() {
 }
 
 #[test]
+fn late_video_cancellation_preserves_the_destination() {
+    let (mut s, ids) = session(1);
+    let original = b"previous slideshow";
+    for container in ["mp4", "webm"] {
+        let dir = Scratch::new(&format!("cancel-finalization-{container}"));
+        let name = format!("show.{container}");
+        let path = dir.path(&name);
+        let staged = dir.path(&format!("{name}.part"));
+        std::fs::write(&path, original).unwrap();
+        let request = json!({"format": "video", "container": container, "path": path, "size": 64, "fps": 24, "ids": ids});
+        let prepared = crate::slideshow_export::prepare(&mut s, &request).unwrap();
+        let cancel = AtomicBool::new(false);
+
+        let result = prepared.run(
+            &|_, _, phase| {
+                // This notification precedes encoder and container finalization.
+                if phase == "AV1" {
+                    assert!(Path::new(&staged).is_file(), "{container}: expected a staged export");
+                    cancel.store(true, Ordering::Relaxed);
+                }
+            },
+            &cancel,
+        );
+
+        assert!(cancel.load(Ordering::Relaxed), "{container}: never reached finalization");
+        assert_eq!(std::fs::read(&path).unwrap(), original, "{container}: existing destination changed");
+        assert!(result.is_err_and(|error| error.contains("cancelled")), "{container}: expected cancellation");
+        assert_eq!(dir.files(""), vec![name], "{container}: staged export was left behind");
+    }
+}
+
+#[test]
 fn a_photo_that_cannot_render_is_skipped_with_a_warning() {
     let dir = Scratch::new("skip");
     let (mut s, mut ids) = session(2);
@@ -345,4 +378,61 @@ fn unwritable_targets_and_long_videos_are_errors() {
     let many: Vec<u64> = std::iter::repeat_n(ids[0], 61).collect();
     let e = s.execute("slideshow.export", &json!({"format": "video", "path": dir.path("long.mp4"), "ids": many})).unwrap_err();
     assert!(e.to_string().contains("limited to 120 min"), "{e}");
+}
+
+#[test]
+fn video_cancel_cleans_partial_mp4_and_webm_and_propagates_errors() {
+    let dir = Scratch::new("vid-cancel-err");
+    for (container, name) in [("mp4", "cancel.mp4"), ("webm", "cancel.webm")] {
+        let (mut s, ids) = session(12);
+        let path = dir.path(name);
+        let r = s.execute("slideshow.export", &json!({"format": "video", "container": container, "path": path, "size": 64, "ids": ids})).unwrap();
+        let part_deadline = Instant::now() + wait_timeout();
+        while Instant::now() < part_deadline {
+            if dir.files("").iter().any(|f| f.ends_with(".part")) || !s.slideshow_export.as_ref().unwrap().running() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        s.execute("activity.cancel", &json!({"id": r["taskId"]})).unwrap();
+        let status = wait_for(&s);
+        assert!(status["error"].as_str().is_some_and(|e| e.contains("cancelled")), "{container}: {status}");
+        assert!(status["cancelled"].as_bool().unwrap());
+        assert!(!Path::new(&path).is_file(), "{container}: no output");
+        assert!(dir.files("").iter().all(|f| !f.ends_with(".part")), "{container}: no partial files");
+        let row_deadline = Instant::now() + wait_timeout();
+        while !s.activity.list().is_empty() {
+            assert!(Instant::now() < row_deadline, "{container}: activity row remained after cancellation");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    let (mut s, ids) = session(2);
+    for (container, name) in [("mp4", "dir.mp4"), ("webm", "dir.webm")] {
+        std::fs::create_dir_all(dir.path(name)).unwrap();
+        let e = s
+            .execute(
+                "slideshow.export",
+                &json!({"format": "video", "container": container, "path": dir.path(name), "size": 64, "ids": ids, "wait": true}),
+            )
+            .unwrap_err();
+        assert!(!e.to_string().is_empty());
+        assert!(dir.files("").iter().all(|f| !f.ends_with(".part")));
+        assert!(s.activity.list().is_empty());
+    }
+
+    let bad_id = s.catalog.alloc_photo_id();
+    s.catalog
+        .apply(Op::AddPhoto {
+            photo: Box::new(Photo::new(bad_id, Source::File { path: dir.path("missing.jpg") }, "missing.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00")),
+        })
+        .unwrap();
+    let e = s
+        .execute(
+            "slideshow.export",
+            &json!({"format": "video", "container": "webm", "path": dir.path("none.webm"), "size": 64, "ids": [bad_id.0], "wait": true}),
+        )
+        .unwrap_err();
+    assert!(e.to_string().contains("no slide"), "{e}");
+    assert!(dir.files("").iter().all(|f| f != "none.webm" && !f.ends_with(".part")));
 }

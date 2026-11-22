@@ -76,7 +76,9 @@ pub(super) fn with_profile_colour(
         return fitted;
     }
     let colour = colour?;
-    tone_only(colour.clone()).or_else(|| Some(CameraLook { matrix: colour.0, tone: pooled.or_else(CameraTone::default_raw)?, hue_sat: colour.1 }))
+    tone_only(colour.clone()).or_else(|| {
+        Some(CameraLook { matrix: colour.0, tone: pooled.or_else(lightcraft_pipeline::tone::default_raw_camera_tone)?, hue_sat: colour.1 })
+    })
 }
 
 /// Sensor level (normalised, white = 1) at or above which a raw channel counts as clipped, as in
