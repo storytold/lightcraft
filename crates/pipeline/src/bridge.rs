@@ -4,8 +4,8 @@ use craft_color_transform::{Mat3 as CraftMat3, Xy as CraftXy};
 use craft_develop::local::{Quality as CraftQuality, WbSource};
 use craft_develop::raster::{Plane as CraftPlane, Rgb32f as CraftRgb32f};
 use craft_develop_model::{
-    BwMix, Calibration, ColorAdj, ColorGrading, Detail, DevelopSettings, Effects, Grain, Hsl, Light, Mixer, PointColor, ProcessVersion, Profile,
-    ToneCurve, Treatment, WbMode, WbScale, Wheel, WhiteBalance,
+    BwMix, Calibration, ColorAdj, ColorGrading, Detail, DevelopSettings, Effects, Grain, Hsl, Light, LocalAdjustments, Mask, MaskComponent, MaskOp,
+    MaskShape, Mixer, PointColor, ProcessVersion, Profile, ToneCurve, Treatment, WbMode, WbScale, Wheel, WhiteBalance,
 };
 use craft_geom::Point as CraftPoint;
 use lightcraft_color::{Mat3, Xy};
@@ -285,6 +285,47 @@ pub fn to_craft_settings(s: &lc::DevelopSettings) -> DevelopSettings {
             nr_outliers: s.detail.nr_outliers,
         },
         calibration: to_craft_calibration(&s.calibration),
+        masks: s
+            .masks
+            .iter()
+            .map(|m| Mask {
+                id: m.id,
+                visible: m.visible,
+                invert: m.invert,
+                components: if m.components.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![MaskComponent {
+                        name: None,
+                        op: MaskOp::Add,
+                        invert: false,
+                        shape: MaskShape::Linear { start: CraftPoint::new(0.0, 0.0), end: CraftPoint::new(1.0, 1.0) },
+                    }]
+                },
+                adjust: LocalAdjustments {
+                    temp: m.adjust.temp,
+                    tint: m.adjust.tint,
+                    exposure: m.adjust.exposure,
+                    contrast: m.adjust.contrast,
+                    highlights: m.adjust.highlights,
+                    shadows: m.adjust.shadows,
+                    whites: m.adjust.whites,
+                    blacks: m.adjust.blacks,
+                    texture: m.adjust.texture,
+                    clarity: m.adjust.clarity,
+                    dehaze: m.adjust.dehaze,
+                    hue: m.adjust.hue,
+                    saturation: m.adjust.saturation,
+                    sharpness: m.adjust.sharpness,
+                    noise: m.adjust.noise,
+                    moire: m.adjust.moire,
+                    defringe: m.adjust.defringe,
+                    lens_blur: m.adjust.lens_blur,
+                    lens_blur_off: m.adjust.lens_blur_off,
+                },
+                ..Default::default()
+            })
+            .collect(),
         disabled_sections: s.disabled_sections.clone(),
         ..Default::default()
     }
