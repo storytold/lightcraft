@@ -16,6 +16,7 @@
 //!
 //! Own design (patterns of touch settings and share sheets; no assets taken from any).
 
+use crate::json_ext::JsonExt as _;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use egui::{Align2, Id, Rect, Sense, Stroke, Vec2, pos2, vec2};
@@ -248,18 +249,18 @@ fn start_export(app: &mut LccApp, ids: Vec<u64>, choice: ExportChoice, then: The
     });
     match choice.format {
         Format::Jpeg => {
-            p["format"] = json!("jpeg");
-            p["quality"] = json!(choice.quality.clamp(1, 100));
+            *p.field_mut("format") = json!("jpeg");
+            *p.field_mut("quality") = json!(choice.quality.clamp(1, 100));
         }
         Format::Tiff => {
-            p["format"] = json!("tiff");
-            p["bitDepth"] = json!(16);
+            *p.field_mut("format") = json!("tiff");
+            *p.field_mut("bitDepth") = json!(16);
         }
-        Format::Dng => p["format"] = json!("dng"),
+        Format::Dng => *p.field_mut("format") = json!("dng"),
     }
     if choice.long_edge > 0 && choice.format != Format::Dng {
-        p["longEdge"] = json!(choice.long_edge);
-        p["dontEnlarge"] = json!(true);
+        *p.field_mut("longEdge") = json!(choice.long_edge);
+        *p.field_mut("dontEnlarge") = json!(true);
     }
     app.modern_sheets.last = Some(choice);
     app.last_export_result = None;

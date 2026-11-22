@@ -163,6 +163,7 @@ const LIBRARY: &[&str] = &[
     "library.findSimilar",
     "---",
     "dialog.cull",
+    "dialog.qualityScan",
     "---",
     "library.toggleFilters=Enable Filters",
     "@Filter by Preset",
@@ -911,6 +912,7 @@ pub fn gaps_doc() -> String {
 
 /// The "Coming soon" items as UI commands (no menu path: the layouts place them): `enabled()` is
 /// false and running one is an error, so a key, the control channel or MCP can't run them either.
+#[allow(clippy::indexing_slicing, reason = "const evaluation: i is bounded by the loop; an out-of-range index fails the build, not the app")]
 pub const SOON_COMMANDS: [crate::menus::UiCommand; COMING_SOON.len()] = {
     let mut out: [crate::menus::UiCommand; COMING_SOON.len()] = [("", "", None, ""); COMING_SOON.len()];
     let mut i = 0;

@@ -13,6 +13,7 @@
 //! Saved books are JSON files in the settings folder (`books/`) until saved creations (catalog
 //! collections holding a layout document) land; `book.save` / `book.open` then move there.
 
+use crate::json_ext::JsonExt as _;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -365,9 +366,9 @@ pub fn run(app: &mut LccApp, id: &str, p: &Value) -> Result<Value, String> {
             }
             ids.truncate(2000);
             let mut q = p.clone();
-            q["photos"] = json!(ids.iter().map(|i| i.0.to_string()).collect::<Vec<_>>());
+            *q.field_mut("photos") = json!(ids.iter().map(|i| i.0.to_string()).collect::<Vec<_>>());
             if q.get("preset").is_none() {
-                q["preset"] = json!(app.ui.book.preset);
+                *q.field_mut("preset") = json!(app.ui.book.preset);
             }
             run_op(app, id, &q)
         }
@@ -375,18 +376,18 @@ pub fn run(app: &mut LccApp, id: &str, p: &Value) -> Result<Value, String> {
             let mut q = if p.is_object() { p.clone() } else { json!({}) };
             if PAGE_OPS.contains(&id) && q.get("page").is_none() && !(id == "book.type" && q.get("target").and_then(Value::as_str) == Some("numbers"))
             {
-                q["page"] = page_json(st.current);
+                *q.field_mut("page") = page_json(st.current);
                 if q.get("cell").is_none()
                     && let Some(c) = st.cell
                 {
-                    q["cell"] = json!(c);
+                    *q.field_mut("cell") = json!(c);
                 }
             }
             if id == "book.addPage"
                 && q.get("after").is_none()
                 && let PageRef::Page(_) = st.current
             {
-                q["after"] = page_json(st.current);
+                *q.field_mut("after") = page_json(st.current);
             }
             run_op(app, id, &q)
         }
@@ -1418,8 +1419,8 @@ fn settings_panel(ui: &mut egui::Ui, app: &mut LccApp) {
     if let Some(sz) = combo(ui, "book-size", "Size", s.size, &sizes, |b| b.label()) {
         let mut p = json!({"size": sz.key()});
         if let lcc_book::BookSize::Custom { w, h } = sz {
-            p["width"] = json!(w);
-            p["height"] = json!(h);
+            *p.field_mut("width") = json!(w);
+            *p.field_mut("height") = json!(h);
         }
         op(app, &ctx, "book.settings", p);
     }

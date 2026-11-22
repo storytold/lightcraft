@@ -6,6 +6,7 @@
 //! The preview is made on a worker thread ([`lcc_engine::enhance::EnhanceWork::preview`]); changing the method
 //! starts a new one.
 
+use crate::json_ext::JsonExt as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, channel};
@@ -129,7 +130,7 @@ pub fn confirm(app: &mut LccApp, opts: &EnhanceDialog) -> Result<Value, String> 
     let method = if opts.ai_super_resolution { "ai" } else { "classical" };
     let mut p = json!({"ids": ids, "stack": opts.stack, "method": method});
     if opts.kind().ai_factor().is_some() {
-        p["space"] = json!(opts.space);
+        *p.field_mut("space") = json!(opts.space);
     }
     app.run(opts.command(), p)
 }

@@ -18,7 +18,7 @@ use crate::import::{ImportJob, ImportMode, ImportOptions, Prepared};
 use crate::lightroom_catalog::{self, CatalogImport, ImportIndex};
 
 const COMMAND: &str = "library.importLightroom";
-const MAX_INDEX_BYTES: usize = 16 * 1024 * 1024;
+use crate::lightroom_catalog::MAX_INDEX_BYTES;
 
 fn error(message: impl Into<String>) -> crate::EngineError {
     crate::EngineError::BadParams { cmd: COMMAND.into(), msg: message.into() }
@@ -143,6 +143,8 @@ pub struct PreparedLightroom {
     pub(crate) update_existing: bool,
     pub(crate) now: String,
     cancelled: bool,
+    /// Originals added without being read ([`LightroomJob::read_originals_later`]).
+    originals_to_read: usize,
 }
 
 impl PreparedLightroom {
@@ -178,8 +180,8 @@ pub struct LightroomArchiveFinalization {
 impl LightroomArchiveFinalization {
     pub fn finish(self) -> crate::Result<()> {
         let (Some(path), Some(bytes)) = (self.path, self.bytes) else { return Ok(()) };
-        if bytes.len() > MAX_INDEX_BYTES {
-            return Err(error("Lightroom import index exceeds 16 MiB"));
+        if bytes.len() as u64 > MAX_INDEX_BYTES {
+            return Err(error(format!("Lightroom import index exceeds {} MiB", MAX_INDEX_BYTES >> 20)));
         }
         let failed = |e: &dyn std::fmt::Display| crate::EngineError::Other(format!("could not write the import index {}: {e}", path.display()));
         // the archive refuses a linked folder; now that its failure no longer stops the import, the
@@ -272,6 +274,7 @@ pub struct LightroomJob {
     token: LightroomLibraryToken,
     archive_dir: Option<PathBuf>,
     progress: LightroomProgress,
+    read_originals_later: bool,
 }
 
 impl LightroomJob {
@@ -288,7 +291,16 @@ impl LightroomJob {
             add_done: Arc::clone(&import.done),
             ..LightroomProgress::default()
         };
-        Ok(Self { path, update_existing, import, token: LightroomLibraryToken::capture(s), archive_dir, progress })
+        Ok(Self { path, update_existing, import, token: LightroomLibraryToken::capture(s), archive_dir, progress, read_originals_later: false })
+    }
+
+    /// Commit the catalog's photos without reading their originals first (issue #1303): each is added from the
+    /// catalog alone, marked "original not yet read" (no content hash), and the originals are read afterwards by
+    /// [`crate::cmd::read_originals`] (the app does it in the background). Without this, every original is read and
+    /// hashed before anything is committed.
+    pub fn read_originals_later(mut self, later: bool) -> Self {
+        self.read_originals_later = later;
+        self
     }
 
     /// The job's progress, to watch from another thread while [`LightroomJob::prepare`] runs.
@@ -323,6 +335,8 @@ impl LightroomJob {
         // Complete the catalog step before the separate read/add photo progress starts.
         self.progress.catalog_done.fetch_add(1, Ordering::Relaxed);
         self.progress.photos.store(true, Ordering::Relaxed);
+        // read later: every original joins as a catalog-only record, like a missing one but not reported missing
+        let (paths, originals_to_read) = if self.read_originals_later { (Vec::new(), paths.len()) } else { (paths, 0) };
         self.import.total.fetch_add(paths.len(), Ordering::Relaxed);
         let normal = self.import.prepare_files(paths, cancel);
         if cancel.load(Ordering::Relaxed) {
@@ -342,6 +356,7 @@ impl LightroomJob {
             update_existing: self.update_existing,
             now: self.import.now().to_string(),
             cancelled: cancel.load(Ordering::Relaxed),
+            originals_to_read,
         })
     }
 }
@@ -394,9 +409,13 @@ pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) 
             });
         }
     };
+    let mut report = applied.report;
+    if prepared.originals_to_read > 0 {
+        report["originalsToRead"] = serde_json::json!(prepared.originals_to_read);
+    }
     let path = prepared.token.library_dir().map(|dir| dir.join("Interop/lightroom-index.json"));
     let bytes = if path.is_some() { Some(serde_json::to_vec(&applied.index).map_err(|e| error(e.to_string()))?) } else { None };
-    Ok(LightroomCompletion { report: applied.report, finalization: LightroomArchiveFinalization { path, bytes } })
+    Ok(LightroomCompletion { report, finalization: LightroomArchiveFinalization { path, bytes } })
 }
 
 fn original_paths(data: &CatalogImport, cancel: &AtomicBool) -> crate::Result<(Vec<String>, HashSet<String>)> {
@@ -456,6 +475,7 @@ mod tests {
             update_existing: false,
             now: "2026-01-01T00:00:00".into(),
             cancelled: true,
+            originals_to_read: 0,
         }
     }
 
@@ -500,6 +520,7 @@ mod tests {
             update_existing: false,
             now: "2026-01-01T00:00:00".into(),
             cancelled: false,
+            originals_to_read: 0,
         }
     }
 
@@ -653,6 +674,7 @@ mod tests {
                 update_existing: false,
                 now: "2026-01-01T00:00:00".into(),
                 cancelled: false,
+                originals_to_read: 0,
             };
             let completion = commit_prepared(&mut session, prepared).unwrap();
             assert_eq!(completion.report["photos"], 5_000);
@@ -705,6 +727,7 @@ mod tests {
             update_existing: false,
             now: "2026-01-01T00:00:00".into(),
             cancelled: false,
+            originals_to_read: 0,
         };
         let completion = commit_prepared(&mut session, prepared).unwrap();
         assert_eq!(completion.report["photos"], 20_000);

@@ -99,6 +99,7 @@ mod print;
 pub mod publish;
 mod query;
 mod quick;
+pub mod read_originals;
 pub mod recheck;
 pub mod reload;
 pub mod sensor;
@@ -280,6 +281,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(mask_effects::specs());
         v.extend(crate::machine_test::specs());
         v.extend(cull::specs());
+        v.extend(crate::quality_scan::specs());
         v.extend(convert::specs());
         v.extend(convert::edit_specs());
         v.extend(merge::specs());
@@ -304,6 +306,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(folders::specs());
         v.extend(missing::specs());
         v.extend(duplicates::specs());
+        v.extend(read_originals::specs());
         v.extend(recheck::specs());
         v.extend(sync::specs());
         v.extend(store::specs());

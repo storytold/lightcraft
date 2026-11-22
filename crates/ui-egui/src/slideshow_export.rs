@@ -3,6 +3,7 @@
 //! `slideshow.export` in the background. The export's row in the activity stack shows its
 //! progress and ✕ (the engine owns the row); [`poll`] tells the user how it ended.
 
+use crate::json_ext::JsonExt as _;
 use serde_json::{Value, json};
 
 use crate::LccApp;
@@ -36,7 +37,7 @@ pub fn start(app: &mut LccApp, id: &str, p: &Value) -> Result<Value, String> {
             Picked::Unavailable => return Err("no save dialog on this platform; supply path".into()),
         };
         let Some(path) = paths.into_iter().next() else { return Ok(Value::Null) };
-        params["path"] = json!(path);
+        *params.field_mut("path") = json!(path);
     }
     let r = app.run("slideshow.export", params)?;
     app.slideshow_export_reported = false;
@@ -55,13 +56,13 @@ pub fn poll(app: &mut LccApp, ctx: &egui::Context) {
     app.slideshow_export_reported = true;
     let msg = match run.result() {
         Some(Ok(r)) => {
-            let what = match r["format"].as_str() {
-                Some("pdf") => crate::i18n::tr_format!("{n} pages", n = r["pages"].as_u64().unwrap_or(0)),
-                Some("jpeg") => crate::i18n::tr_format!("{n} JPEG files", n = r["slides"].as_u64().unwrap_or(0)),
-                _ => crate::i18n::tr_format!("{s} s of AV1 video", s = r["seconds"].as_f64().unwrap_or(0.0).round()),
+            let what = match r.field("format").as_str() {
+                Some("pdf") => crate::i18n::tr_format!("{n} pages", n = r.field("pages").as_u64().unwrap_or(0)),
+                Some("jpeg") => crate::i18n::tr_format!("{n} JPEG files", n = r.field("slides").as_u64().unwrap_or(0)),
+                _ => crate::i18n::tr_format!("{s} s of AV1 video", s = r.field("seconds").as_f64().unwrap_or(0.0).round()),
             };
             let mut m = crate::i18n::tr_format!("Slideshow exported: {what}", what = what);
-            if let Some(n) = r["skipped"].as_u64().filter(|n| *n > 0) {
+            if let Some(n) = r.field("skipped").as_u64().filter(|n| *n > 0) {
                 m += &crate::i18n::tr_format!(" · {n} skipped (could not be rendered)", n = n);
             }
             m

@@ -200,7 +200,7 @@ pub(crate) fn run(
         let key = hash_of((base, stack.key));
         let src_long = src.width.max(src.height);
         if let Some(n) = native(src, info, plan, sampled, (nw, nh), (base, key), src_long, draft, warnings) {
-            let f = plan.filter_frame;
+            let f = &plan.filter_frame;
             let out = crate::timed("plug-in filters: resample native", || {
                 to_request(&n, f.full_w as usize, f.full_h as usize, (f.x as usize, f.y as usize), sampled.width, sampled.height)
             });
@@ -208,7 +208,7 @@ pub(crate) fn run(
         }
     }
     let mut img = sampled.clone();
-    plugin_filters::apply_source(stack, &mut img, plan.filter_frame, draft, warnings);
+    plugin_filters::apply_source(stack, &mut img, plan.filter_frame.clone(), draft, warnings);
     (if draft { draft_key } else { stack.key }, Arc::new(img))
 }
 
@@ -248,7 +248,7 @@ fn native(
             Some((k, img, w)) => (img, k, w),
             None => {
                 // (a whole-frame render at the native size has sampled exactly this already)
-                let f = plan.filter_frame;
+                let f = &plan.filter_frame;
                 let same = (f.x, f.y, f.full_w as usize, f.full_h as usize, sampled.width, sampled.height) == (0, 0, nw, nh, nw, nh);
                 let mut img = if same { sampled.clone() } else { plan.whole_frame.sample(src, nw, nh) };
                 if !same {
@@ -262,7 +262,8 @@ fn native(
         #[cfg(test)]
         NATIVE_RUNS.lock().unwrap_or_else(PoisonError::into_inner).push((crate::optics::fingerprint(src), start));
         // (a resumed run's size is the earlier run's: a decode a pixel apart works one out a pixel off)
-        let frame = lcc_filters::FrameInfo::whole(u32_of(img.width), u32_of(img.height));
+        let mut frame = lcc_filters::FrameInfo::whole(u32_of(img.width), u32_of(img.height));
+        frame.source = plan.filter_frame.source.clone();
         let last = stack.len().saturating_sub(1);
         let keep_at = (stack.len() > 1 && img.width.saturating_mul(img.height) <= KEEP_BEFORE_LAST_PIXELS && start <= last).then_some(last);
         let ran = plugin_filters::apply_native(stack, &mut img, frame, &mut w, plugin_filters::Run { give_way: &running.give_way, start, keep_at });

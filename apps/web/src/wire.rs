@@ -64,6 +64,12 @@ pub struct WireJob {
     /// Render only this window `[x, y, w, h]` of the output `max_w × max_h` describes (a zoomed view).
     #[serde(default)]
     pub window: Option<[usize; 4]>,
+    #[serde(default)]
+    pub space_origin: Option<String>,
+    #[serde(default)]
+    pub bits_per_sample: Option<u8>,
+    #[serde(default)]
+    pub source_float: bool,
 }
 
 impl WireJob {
@@ -103,6 +109,9 @@ impl WireJob {
             stages: job.stages.is_some().then(|| view.to_string()),
             overlay: job.request.overlay.to_parts(),
             window: job.request.window.map(|w| [w.x, w.y, w.w, w.h]),
+            space_origin: job.info.space_origin.clone(),
+            bits_per_sample: job.info.bits_per_sample,
+            source_float: job.info.float,
         }
     }
 
@@ -115,6 +124,9 @@ impl WireJob {
             relative_wb: self.relative_wb,
             legacy_relative_wb: self.legacy_relative_wb,
             native_long: self.native_long,
+            space_origin: self.space_origin.clone(),
+            bits_per_sample: self.bits_per_sample,
+            float: self.source_float,
             ..Default::default()
         }
     }
@@ -506,6 +518,9 @@ mod tests {
             stages: Some("Main".into()),
             overlay: (0, 0.0),
             window: None,
+            space_origin: None,
+            bits_per_sample: None,
+            source_float: false,
         };
         let mut core = WorkerCore::default();
         assert_eq!(core.needs_original(&job).as_deref(), Some(hash.as_str()));

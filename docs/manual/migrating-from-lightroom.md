@@ -16,8 +16,9 @@ catalog and your originals are opened read-only and never changed. You can keep 
 ## Import
 
 File → Import Lightroom Catalog… shows what will come across (`library.inspectLightroom`: photo and collection
-counts, missing files, warnings) and then imports it in the background, with progress and Cancel. One undo step
-reverses it. From the command line:
+counts, missing files, warnings) and then imports it in the background, with progress and Cancel. When it finishes,
+the result window lists every warning and failure in a scrollable area; **Copy** puts the whole report on the clipboard.
+One undo step reverses it. From the command line:
 
 ```sh
 <cli> run --library "<library_default>" library.inspectLightroom path="Lightroom Catalog.lrcat"
@@ -25,6 +26,15 @@ reverses it. From the command line:
 ```
 
 Photos you already edited in <app> keep their edits; `updateExisting=true` replaces them with Lightroom's.
+
+The photos appear as soon as the catalog is read: <app> doesn't wait for the original files. It reads them
+afterwards in the background (**Reading originals** on the activity stack, which you can stop), filling in the
+content hash, file size, lens data and other facts only the file has. Your ratings, keywords and edits are there from
+the start. If you stop it, quit, or a drive is unplugged, the rest is read the next time the library opens (any photo whose
+file hasn't been read yet, including missing originals from earlier imports, is tried once each time the library
+opens). Because files aren't read during the import, a photo already in the library under another path is added
+again; such pairs are noted in the log once the file is read, and both are kept. From the
+command line, add `readOriginalsLater=true` to the import and run `library.readOriginals` afterwards.
 
 ## What comes across
 
@@ -60,13 +70,16 @@ Photos you already edited in <app> keep their edits; `updateExisting=true` repla
 
 A failed import takes back the photos it added. Records with broken references (an image whose file, folder or root
 does not resolve, or a settings, keyword or collection-member record naming no photo) are skipped with a warning
-instead of landing on another photo.
+instead of landing on another photo. A single catalog record that can't be read (too large or damaged) is left
+out on its own, and the result window says how many were left out of which table; the rest of that table still
+imports. The photo behind such a record keeps only what its files say. If the record is in a table every import
+needs (photos, files, folders), the result also says that photos may be missing. Text with invalid characters is imported with replacement characters, also counted in the result.
 
 ## Safety
 
 Before changing anything, the importer saves the source records, decoded XMP, develop settings, history, snapshots
 and collection content to compressed recovery archives in the library's `Interop/` folder (best-effort, capped in
-size). Imports are bounded: a 1 GiB database, one million rows per table. Details and limits:
+size). Imports are bounded: a 1 GiB database, one million rows for each table kept whole (keyword assignments, develop history and metadata are read a row at a time, without that limit). Details and limits:
 [lightroom-catalog-import.md](../lightroom-catalog-import.md).
 
 ## Habits that carry over

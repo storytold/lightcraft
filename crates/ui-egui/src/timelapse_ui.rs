@@ -4,6 +4,7 @@
 //!
 //! Sources: own design.
 
+use crate::json_ext::JsonExt as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
@@ -64,7 +65,7 @@ pub fn run(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Value, String
                     Picked::Unavailable => return Some(Err("no save dialog on this platform; supply path".into())),
                 };
                 let Some(path) = paths.first() else { return Some(Ok(Value::Null)) };
-                params["path"] = json!(path);
+                *params.field_mut("path") = json!(path);
             }
             start(app, &params)
         }

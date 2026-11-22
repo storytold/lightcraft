@@ -54,6 +54,7 @@ heif = ["dep:lcc-heif"]
 avif = ["dep:ravif", "dep:rav1e", "dep:avif-serialize"]
 
 [dev-dependencies]
+lcc-fuzzkit = { workspace = true }
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lcc-testkit = { workspace = true }
 # JPEG XL tests read encoded samples without our colour conversion

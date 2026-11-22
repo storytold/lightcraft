@@ -8,6 +8,7 @@
 //! Needs [`crate::Services::write_shared`]; without it (web, headless scripts) the engine command
 //! runs synchronously.
 
+use crate::json_ext::JsonExt as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, channel};
@@ -79,9 +80,9 @@ pub fn poll(app: &mut LccApp, ctx: &egui::Context) {
             }
             let msg = match render_dng::finish(&mut app.session, done, cancelled) {
                 Ok(r) => {
-                    let ok = r["copies"].as_array().map_or(0, Vec::len);
+                    let ok = r.field("copies").as_array().map_or(0, Vec::len);
                     let mut m = crate::i18n::tr_format!("Rendered {ok} of {total} to DNG", ok = ok, total = total);
-                    if let Some(first) = r["failed"].as_array().and_then(|f| f.first()) {
+                    if let Some(first) = r.field("failed").as_array().and_then(|f| f.first()) {
                         m += &format!(" · {}", first["error"].as_str().unwrap_or("error"));
                     }
                     if cancelled {

@@ -4,6 +4,7 @@
 
 use std::sync::atomic::AtomicBool;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::runtime::{Deadline, Filter};
@@ -18,9 +19,27 @@ pub const MAX_MERGE: usize = 1024;
 /// Largest list of measurements handed to `pc_merge`.
 pub const MAX_MERGE_BYTES: usize = 16 * 1024 * 1024;
 
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// Source file decode provenance passed to pixel filters inside `_image.source`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageSource {
+    /// Where the source's colour interpretation came from (`"untagged"`, `"container"`,
+    /// `"iccMatrixTrc"`, `"iccCms"`, `"iccUnsupported"`, `"naive"`, `"raw"`, `"demo"`).
+    pub origin: String,
+    /// Bits per sample in the source file (`8`, `12`, `14`, `16`, `32`).
+    #[serde(rename = "bitsPerSample")]
+    pub bits_per_sample: u8,
+    /// Whether the source file stored floating-point samples.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub float: bool,
+}
+
 /// Where the buffer sits in the full image, so position-dependent filters (gradients, noise
-/// seeded by position) line up across tiles and bands.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// seeded by position) line up across tiles and bands, along with draft and source provenance.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct FrameInfo {
     /// Left edge of the buffer in the full image, in pixels.
     pub x: u32,
@@ -30,13 +49,77 @@ pub struct FrameInfo {
     pub full_w: u32,
     /// Height of the full image, in pixels.
     pub full_h: u32,
+    /// Whether this invocation is an interactive draft preview.
+    pub draft: bool,
+    /// Downscale factor applied to the frame when `draft` is `true` (`<= 1.0`).
+    pub draft_scale: Option<f32>,
+    /// Unscaled canvas width before draft downsampling.
+    pub native_canvas_w: Option<u32>,
+    /// Unscaled canvas height before draft downsampling.
+    pub native_canvas_h: Option<u32>,
+    /// Source file decode provenance, when known.
+    pub source: Option<ImageSource>,
 }
 
 impl FrameInfo {
     /// The buffer is the whole image.
     pub fn whole(width: u32, height: u32) -> Self {
-        Self { x: 0, y: 0, full_w: width, full_h: height }
+        Self {
+            x: 0,
+            y: 0,
+            full_w: width,
+            full_h: height,
+            draft: false,
+            draft_scale: None,
+            native_canvas_w: None,
+            native_canvas_h: None,
+            source: None,
+        }
     }
+}
+
+/// Builds the `_image` metadata object passed to `pc_filter` and `pc_analyze`.
+#[allow(clippy::too_many_arguments)]
+fn build_image_meta(
+    x: i64,
+    y: i64,
+    width: usize,
+    height: usize,
+    overlap: usize,
+    canvas_w: u32,
+    canvas_h: u32,
+    frame: &FrameInfo,
+) -> serde_json::Map<String, Value> {
+    let mut img_meta = serde_json::Map::new();
+    img_meta.insert("x".into(), json!(x));
+    img_meta.insert("y".into(), json!(y));
+    img_meta.insert("width".into(), json!(width));
+    img_meta.insert("height".into(), json!(height));
+    img_meta.insert("overlap".into(), json!(overlap));
+    img_meta.insert("canvasWidth".into(), json!(canvas_w));
+    img_meta.insert("canvasHeight".into(), json!(canvas_h));
+    img_meta.insert("mode".into(), json!("rgb"));
+    img_meta.insert("depth".into(), json!(32));
+    img_meta.insert("alpha".into(), json!(false));
+    img_meta.insert("channels".into(), json!(CH));
+    img_meta.insert("draft".into(), json!(frame.draft));
+    if frame.draft {
+        if let Some(scale) = frame.draft_scale.filter(|s| s.is_finite() && *s > 0.0) {
+            img_meta.insert("draftScale".into(), json!(scale));
+        }
+        if let Some(nw) = frame.native_canvas_w {
+            img_meta.insert("nativeCanvasWidth".into(), json!(nw));
+        }
+        if let Some(nh) = frame.native_canvas_h {
+            img_meta.insert("nativeCanvasHeight".into(), json!(nh));
+        }
+    }
+    if let Some(src) = &frame.source
+        && let Ok(v) = serde_json::to_value(src)
+    {
+        img_meta.insert("source".into(), v);
+    }
+    img_meta
 }
 
 /// A band of output pixels: `[x0, x1) × [y0, y1)` in buffer coordinates.
@@ -130,7 +213,7 @@ impl Filter {
         let base = Value::Object(resolved);
         let src: &[f32] = img;
         let run = |b: &Band| {
-            let r = self.run_band(src, w, h, *b, ov, frame, &base, &deadline);
+            let r = self.run_band(src, w, h, *b, ov, &frame, &base, &deadline);
             if let Err(error) = &r {
                 deadline.abort(error.clone());
             }
@@ -180,17 +263,29 @@ impl Filter {
     /// returns its JSON object (`None`: nothing measured). An error when the module has no
     /// `pc_analyze` ([`Self::has_analyze`]). Budgeted like a filter run.
     pub fn analyze_rgb(&self, img: &[f32], width: u32, height: u32, params: &Value, cancel: &AtomicBool) -> Result<Option<Value>> {
+        self.analyze_rgb_with_source(img, width, height, None, params, cancel)
+    }
+
+    /// Runs the module's optional `pc_analyze` export like [`Self::analyze_rgb`], including
+    /// `_image.source` when `source` is `Some`.
+    pub fn analyze_rgb_with_source(
+        &self,
+        img: &[f32],
+        width: u32,
+        height: u32,
+        source: Option<&ImageSource>,
+        params: &Value,
+        cancel: &AtomicBool,
+    ) -> Result<Option<Value>> {
         let mut base = self.host_params(params)?;
         let (w, h) = (width as usize, height as usize);
         let samples = w.checked_mul(h).and_then(|n| n.checked_mul(CH)).ok_or_else(|| Error::Params("image size overflows".into()))?;
         if img.len() != samples || samples == 0 {
             return Err(Error::Params(format!("buffer has {} samples, expected {width}×{height}×3", img.len())));
         }
-        base.insert(
-            "_image".into(),
-            json!({"x": 0, "y": 0, "width": w, "height": h, "overlap": 0, "canvasWidth": w, "canvasHeight": h,
-                   "mode": "rgb", "depth": 32, "alpha": false, "channels": CH}),
-        );
+        let mut frame = FrameInfo::whole(width, height);
+        frame.source = source.cloned();
+        base.insert("_image".into(), Value::Object(build_image_meta(0, 0, w, h, 0, width, height, &frame)));
         let pbytes = serde_json::to_vec(&Value::Object(base)).map_err(|e| Error::Params(e.to_string()))?;
         let cancels = [cancel];
         let deadline = Deadline::new(self.limits(), &cancels);
@@ -229,7 +324,7 @@ impl Filter {
         h: usize,
         b: Band,
         ov: usize,
-        frame: FrameInfo,
+        frame: &FrameInfo,
         base: &Value,
         deadline: &Deadline<'_>,
     ) -> Result<Vec<f32>> {
@@ -242,14 +337,7 @@ impl Filter {
         if let Value::Object(m) = &mut params {
             let x = i64::from(frame.x) + b.x0 as i64 - ov as i64;
             let y = i64::from(frame.y) + b.y0 as i64 - ov as i64;
-            m.insert(
-                "_image".into(),
-                json!({
-                    "x": x, "y": y, "width": iw, "height": ih, "overlap": ov,
-                    "canvasWidth": frame.full_w, "canvasHeight": frame.full_h,
-                    "mode": "rgb", "depth": 32, "alpha": false, "channels": CH,
-                }),
-            );
+            m.insert("_image".into(), Value::Object(build_image_meta(x, y, iw, ih, ov, frame.full_w, frame.full_h, frame)));
         }
         let pbytes = serde_json::to_vec(&params).map_err(|e| Error::Params(e.to_string()))?;
         let (iw32, ih32) = (u32::try_from(iw), u32::try_from(ih));

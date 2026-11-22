@@ -2,6 +2,7 @@
 //! app's executable under the CLI's name instead.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![deny(clippy::indexing_slicing)]
 
 fn main() -> std::process::ExitCode {
     lcc_cli::main()

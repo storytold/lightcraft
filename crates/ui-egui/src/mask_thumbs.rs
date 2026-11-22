@@ -114,7 +114,8 @@ pub fn thumb(app: &mut LccApp, ctx: &egui::Context, id: PhotoId, d: &DevelopSett
                 let px = |x: usize, y: usize| {
                     let i = (y * w + x) * 3;
                     match rgb.get(i..i + 3) {
-                        Some(p) => [lin(p[0]), lin(p[1]), lin(p[2])],
+                        Some(&[r, g, b]) => [lin(r), lin(g), lin(b)],
+                        Some(_) => [0.0; 3],
                         None => [0.0; 3],
                     }
                 };

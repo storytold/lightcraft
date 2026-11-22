@@ -18,6 +18,7 @@
 //! printer), `printui.trustCertificate {fingerprint?, uri?}` (an `ipps://` printer's certificate)
 //! and `printui.trustOnFirstUse {on}`.
 
+use crate::json_ext::JsonExt as _;
 use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use lcc_catalog::PhotoId;
 use lcc_engine::print::layout::Unit;
@@ -964,12 +965,12 @@ fn run_inner(app: &mut LccApp, id: &str, p: &Value) -> Result<Value, String> {
         "printui.openCreation" => {
             let cid = p.get("id").and_then(Value::as_u64).ok_or("missing id")?;
             let r = app.run("creation.get", json!({"id": cid}))?;
-            if r["kind"] != "print" {
+            if r.field("kind") != "print" {
                 return Err("not a Saved Print".into());
             }
             // a print saved from this module carries its settings; one made from a template (MCP)
             // keeps the current settings
-            if let Some(st) = r["document"].get("settings").filter(|v| v.is_object()) {
+            if let Some(st) = r.field("document").get("settings").filter(|v| v.is_object()) {
                 app.print.settings = PrintSettings::from_json(&st.to_string()).map_err(|e| e.to_string())?;
                 app.print.template = None;
             }
@@ -1131,9 +1132,9 @@ fn start(app: &mut LccApp, id: &str, p: &Value) -> Result<Value, String> {
         match r {
             Ok(v) => {
                 let msg = if let Some(j) = v.get("job") {
-                    crate::i18n::tr_format!("Sent {n} page(s) to the printer (job {j})", n = v["pages"], j = j)
+                    crate::i18n::tr_format!("Sent {n} page(s) to the printer (job {j})", n = v.field("pages"), j = j)
                 } else {
-                    crate::i18n::tr_format!("Printed {n} page(s) to file", n = v["pages"])
+                    crate::i18n::tr_format!("Printed {n} page(s) to file", n = v.field("pages"))
                 };
                 app.print.last = Some(v);
                 app.toast(ctx, msg);

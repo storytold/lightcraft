@@ -9,6 +9,7 @@
 //! update it with the current settings, rename, export or delete it; a built-in to export it.
 //! Every action goes through a `slideshow.templates.*` command.
 
+use crate::json_ext::JsonExt as _;
 use egui::{RichText, Sense, Stroke, vec2};
 use lcc_engine::slide_template::{PREVIOUS, SlideLook, Template};
 use serde_json::json;
@@ -73,7 +74,7 @@ fn act(app: &mut LccApp, ctx: &egui::Context, cmd: &str, p: serde_json::Value, d
     match app.run(cmd, p) {
         Ok(r) => {
             let mut msg = done(&r);
-            let warnings: Vec<&str> = r["warnings"].as_array().map(|w| w.iter().filter_map(|w| w.as_str()).collect()).unwrap_or_default();
+            let warnings: Vec<&str> = r.field("warnings").as_array().map(|w| w.iter().filter_map(|w| w.as_str()).collect()).unwrap_or_default();
             if !warnings.is_empty() {
                 msg = format!("{msg} · {}", warnings.join(" · "));
             }

@@ -191,7 +191,7 @@ fn note(ui: &mut egui::Ui, text: &str) {
 /// that offers it; otherwise a toast.
 fn report(app: &mut LccApp, ctx: &egui::Context, r: Result<Value, crate::CommandError>) {
     let e = match r {
-        Ok(v) => match v["error"].as_str() {
+        Ok(v) => match v.get("error").and_then(Value::as_str) {
             Some(e) => e.to_string(),
             None => return,
         },
@@ -297,9 +297,9 @@ pub fn find_blemishes(app: &mut LccApp, ui: &mut egui::Ui) {
     {
         let body = app.ui.blemish_body;
         match app.run_typed("spot.findBlemishes", json!({"body": body})) {
-            Ok(v) if v["queued"] == true => app.toast(ui.ctx(), tr("Finding blemishes…")),
+            Ok(v) if v.get("queued").and_then(Value::as_bool) == Some(true) => app.toast(ui.ctx(), tr("Finding blemishes…")),
             Ok(v) => {
-                let text = match v["added"].as_u64().unwrap_or(0) {
+                let text = match v.get("added").and_then(Value::as_u64).unwrap_or(0) {
                     0 => tr("No blemishes found").to_string(),
                     1 => tr("Healed 1 blemish").to_string(),
                     n => crate::i18n::tr_format!("Healed {n} blemishes", n = n),

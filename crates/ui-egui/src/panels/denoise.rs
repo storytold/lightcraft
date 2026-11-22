@@ -6,6 +6,7 @@
 //! library. A model is fetched only when the user presses Download and accepts its terms.
 
 use crate::i18n::{tr, tr_format};
+use crate::json_ext::JsonExt as _;
 use egui::RichText;
 use lcc_catalog::PhotoId;
 use lcc_engine::denoise::PhotoState;
@@ -61,14 +62,17 @@ pub fn pump(app: &mut LccApp, ctx: &egui::Context) {
     let pace = window_pace(app, ctx, now, watching);
     let Ok(v) = app.session.execute("denoise.pump", &json!({"pace": pace})) else { return };
     let c = &mut app.caches.denoise;
-    let generation = v["generation"].as_u64().unwrap_or(0);
+    let generation = v.field("generation").as_u64().unwrap_or(0);
     if generation != c.generation {
         c.generation = generation;
         ctx.request_repaint();
     }
-    c.active = v["active"] == true;
-    c.queued = v["queued"].as_u64().unwrap_or(0);
-    c.running = v["running"].is_object().then(|| (v["running"]["done"].as_u64().unwrap_or(0), v["running"]["total"].as_u64().unwrap_or(0)));
+    c.active = v.field("active") == true;
+    c.queued = v.field("queued").as_u64().unwrap_or(0);
+    c.running = v
+        .field("running")
+        .is_object()
+        .then(|| (v.field("running").field("done").as_u64().unwrap_or(0), v.field("running").field("total").as_u64().unwrap_or(0)));
     let busy = c.running.is_some() || c.queued > 0;
     c.next_pump = now
         + if busy {
@@ -109,7 +113,7 @@ fn watch_downloads(app: &mut LccApp, ctx: &egui::Context) {
         app.caches.denoise.dl_watch.clear();
         return;
     };
-    let rows: Vec<Value> = v["downloads"].as_array().cloned().unwrap_or_default();
+    let rows: Vec<Value> = v.field("downloads").as_array().cloned().unwrap_or_default();
     let (mut keep, mut installed) = (Vec::new(), Vec::new());
     for id in std::mem::take(&mut app.caches.denoise.dl_watch) {
         match rows.iter().find(|r| r["id"] == id.as_str()).and_then(|r| r["state"].as_str()) {
@@ -237,7 +241,7 @@ pub fn detail_status(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId, amount: f
 pub fn settings_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let list = models(app, ui.ctx());
     super::settings::heading_help(ui, t, "AI Denoise", "denoise");
-    if list["dir"].is_null() {
+    if list.field("dir").is_null() {
         hint(
             ui,
             t,
@@ -251,8 +255,8 @@ pub fn settings_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
         "Cleans noise out of raw photos before the picture is built: the AI Denoise Amount slider under Detail sets how much of it you see. \
          Your files are never changed and no extra files are made in your library: the cleaned picture is cached data that is made again when needed.",
     );
-    let runtime = list["runtime"].as_bool() == Some(true);
-    if list["model"].is_null() {
+    let runtime = list.field("runtime").as_bool() == Some(true);
+    if list.field("model").is_null() {
         hint(ui, t, "In use: the built-in denoiser. It needs nothing installed, so turning AI Denoise on just works.");
     }
     if !runtime {
@@ -273,15 +277,15 @@ pub fn settings_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
 /// Models a person brings themselves: Install from file…, and the ones installed that way (Settings ▸ AI Models).
 pub fn other_models_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let list = models(app, ui.ctx());
-    if list["dir"].is_null() {
+    if list.field("dir").is_null() {
         return;
     }
-    let runtime = list["runtime"].as_bool() == Some(true);
-    let all: Vec<Value> = list["models"].as_array().cloned().unwrap_or_default();
+    let runtime = list.field("runtime").as_bool() == Some(true);
+    let all: Vec<Value> = list.field("models").as_array().cloned().unwrap_or_default();
     let downloads = app
         .session
         .execute("denoise.models.downloads", &json!({}))
-        .map(|v| v["downloads"].as_array().cloned().unwrap_or_default())
+        .map(|v| v.field("downloads").as_array().cloned().unwrap_or_default())
         .unwrap_or_default();
     super::settings::heading_help(ui, t, "Other models (optional)", "denoiseModels");
     if all.is_empty() {
@@ -328,15 +332,16 @@ pub fn other_models_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
 /// to download, with its size and licence, under the same Download (terms first, then the activity stack), Use and Remove as Settings ▸ AI Denoise.
 pub fn ai_models_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let list = models(app, ui.ctx());
-    let known: Vec<Value> = list["models"].as_array().map(|a| a.iter().filter(|m| m["known"] == true).cloned().collect()).unwrap_or_default();
-    if list["dir"].is_null() || known.is_empty() {
+    let known: Vec<Value> =
+        list.field("models").as_array().map(|a| a.iter().filter(|m| m.field("known") == true).cloned().collect()).unwrap_or_default();
+    if list.field("dir").is_null() || known.is_empty() {
         return;
     }
-    let runtime = list["runtime"].as_bool() == Some(true);
+    let runtime = list.field("runtime").as_bool() == Some(true);
     let downloads = app
         .session
         .execute("denoise.models.downloads", &json!({}))
-        .map(|v| v["downloads"].as_array().cloned().unwrap_or_default())
+        .map(|v| v.field("downloads").as_array().cloned().unwrap_or_default())
         .unwrap_or_default();
     // denoise models and upscalers share the models folder, but each gets its own group under its own name
     let (upscalers, denoisers): (Vec<&Value>, Vec<&Value>) = known.iter().partition(|m| slot_kind(m) == "upscale");
@@ -369,7 +374,7 @@ pub fn ai_models_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
 /// What the cache holds, its limit, and what is being made.
 fn work_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, list: &Value) {
     let status = app.session.execute("denoise.status", &json!({})).unwrap_or(Value::Null);
-    if status["enabled"] != true {
+    if status.field("enabled") != true {
         return;
     }
     heading(ui, t, "Speed");
@@ -385,8 +390,8 @@ fn work_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, list: &Value) {
         t,
         "Automatic uses the graphics card where it is faster than the processor: both are timed on this computer the first time a photo is made.",
     );
-    hint(ui, t, &device_line(&status["device"], run_on));
-    if run_on != "cpu" && status["device"]["retry"] == true {
+    hint(ui, t, &device_line(status.field("device"), run_on));
+    if run_on != "cpu" && status.field("device").field("retry") == true {
         let r = crate::dialog_frame::control_row(ui, |ui| ui.small_button(crate::i18n::tr("Try the graphics card again")));
         register(ui.ctx(), "denoise:retryGpu", r.rect);
         if r.clicked() {
@@ -405,7 +410,9 @@ fn work_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, list: &Value) {
     let (running, queued) = (app.caches.denoise.running, app.caches.denoise.queued);
     match running {
         Some((done, total)) => {
-            let name = status["running"]["photo"]
+            let name = status
+                .field("running")
+                .field("photo")
                 .as_u64()
                 .and_then(|p| app.session.catalog.photo(PhotoId(p)).map(|p| p.file_name.clone()))
                 .unwrap_or_default();
@@ -420,7 +427,7 @@ fn work_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, list: &Value) {
         }
         None if queued > 0 => hint(ui, t, &count(queued, "photo waiting", "photos waiting")),
         None => {
-            let ready = status["ready"].as_u64().unwrap_or(0);
+            let ready = status.field("ready").as_u64().unwrap_or(0);
             hint(ui, t, &count(ready, "photo has its denoised picture.", "photos have their denoised picture."))
         }
     }
@@ -439,7 +446,7 @@ fn work_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, list: &Value) {
         }
     });
     heading(ui, t, "Cache");
-    let (files, bytes) = (status["cache"]["files"].as_u64().unwrap_or(0), status["cache"]["bytes"].as_u64().unwrap_or(0));
+    let (files, bytes) = (status.field("cache").field("files").as_u64().unwrap_or(0), status.field("cache").field("bytes").as_u64().unwrap_or(0));
     hint(
         ui,
         t,
@@ -521,12 +528,12 @@ fn model_row(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, dl: Opt
                     }
                 });
                 ui.label(RichText::new(made_for(m)).font(t.font(11.5)).color(t.text_dim));
-                ui.label(RichText::new(licence_line(m)).font(t.font(11.5)).color(if m["licence"]["commercial"] == "yes" {
+                ui.label(RichText::new(licence_line(m)).font(t.font(11.5)).color(if m.field("licence").field("commercial") == "yes" {
                     t.text_dim
                 } else {
                     t.caution
                 }));
-                match m["accepted"]["selfTest"].as_object() {
+                match m.field("accepted").field("selfTest").as_object() {
                     Some(test) if test.get("ok").and_then(Value::as_bool) == Some(true) => {
                         ui.label(RichText::new(tr("Tested and works on this computer")).font(t.font(11.5)).color(t.text_dim));
                     }
@@ -737,8 +744,8 @@ pub(super) fn sentence(s: &str) -> String {
 }
 
 pub(super) fn licence_line(m: &Value) -> String {
-    let name = m["licence"]["name"].as_str().filter(|s| !s.is_empty()).unwrap_or("Unknown licence");
-    let terms = match m["licence"]["commercial"].as_str() {
+    let name = m.field("licence").field("name").as_str().filter(|s| !s.is_empty()).unwrap_or("Unknown licence");
+    let terms = match m.field("licence").field("commercial").as_str() {
         Some("yes") if name.starts_with("GPL") => "commercial use subject to GPL conditions",
         Some("yes") => "commercial use allowed",
         Some("no") => "non-commercial use only",
@@ -791,9 +798,9 @@ pub fn model_dialog(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, info: &Valu
             .wrap(),
         );
     }
-    let commercial = m["licence"]["commercial"].as_str().unwrap_or("unknown");
+    let commercial = m.field("licence").field("commercial").as_str().unwrap_or("unknown");
     ui.label(RichText::new(licence_line(m)).font(t.semibold(12.5)).color(if commercial == "yes" { t.text } else { t.caution }));
-    let notice = m["licence"]["notice"].as_str().unwrap_or("");
+    let notice = m.field("licence").field("notice").as_str().unwrap_or("");
     if !notice.is_empty() {
         ui.add(egui::Label::new(RichText::new(notice).color(t.text_label)).wrap());
     }
@@ -808,7 +815,7 @@ pub fn model_dialog(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, info: &Valu
             ui.add(egui::Label::new(RichText::new(tr_format!("•  {assumption}", assumption = tr(a))).font(t.font(12.0)).color(t.text_dim)).wrap());
         }
     }
-    if let Some(url) = m["source"].as_str().or(m["licence"]["url"].as_str()) {
+    if let Some(url) = m.field("source").as_str().or(m.field("licence").field("url").as_str()) {
         let r = ui.link(tr("Open the model's page"));
         register(ui.ctx(), "denoiseModel:page", r.rect);
         if r.clicked() {

@@ -16,7 +16,7 @@ docs           = "https://emmertex.github.io/chromaforge/"
 # redirects a renamed repository's old URLs: so after a rename this stays the OLD repository
 # until every install runs a build that knows the new one. Empty: `repository`.
 release_repository = "https://github.com/emmertex/lightcraft-classic"
-discord        = "https://discord.gg/c3dfYATzsQ"  # community chat (Help menu, About); leave out for none
+discord        = "https://discord.gg/Vvqg2QhQXk"  # community chat (Help menu, About); leave out for none
 calibration_discord = "https://discord.gg/Vvqg2QhQXk" # where contributors send camera calibrations; leave out for the repository
 calibration_thread  = "Chromaforge-colour"            # the Discord thread for them
 developer_id   = "com.emmertex.chromaforge"      # AppStream <developer id>: lowercase reverse-DNS of whoever ships it

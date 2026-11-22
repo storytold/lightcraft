@@ -6,6 +6,7 @@
 //!
 //! Sources: own design, after `render_dng_task`.
 
+use crate::json_ext::JsonExt as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, channel};
@@ -92,7 +93,7 @@ pub fn poll(app: &mut LccApp, ctx: &egui::Context) {
             }
             match dng_update::finish(&mut app.session, done, cancelled) {
                 Ok(r) => {
-                    let failed = r["failed"].as_array().is_some_and(|f| !f.is_empty());
+                    let failed = r.field("failed").as_array().is_some_and(|f| !f.is_empty());
                     let msg = note(&r, total);
                     app.last_dng_update = Some(r);
                     app.toast_for(ctx, msg, if failed { 15.0 } else { crate::TOAST_SECONDS });

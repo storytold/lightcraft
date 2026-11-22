@@ -22,6 +22,12 @@ impl Buf {
     pub fn new(w: usize, h: usize, c: usize) -> Buf {
         Buf { w, h, c, data: vec![0.0; w * h * c] }
     }
+
+    /// [`Self::new`] that returns an error instead of aborting when the buffer can't be had.
+    pub fn try_new(w: usize, h: usize, c: usize) -> Result<Buf, lcc_raster::AllocError> {
+        let n = w.checked_mul(h).and_then(|p| p.checked_mul(c)).ok_or(lcc_raster::AllocError { width: w, height: h })?;
+        Ok(Buf { w, h, c, data: lcc_raster::try_vec(n, 0.0, w, h)? })
+    }
 }
 
 const K: [f32; 5] = [1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0];
@@ -197,6 +203,18 @@ impl Blender {
         Blender { levels, w, h, acc, wsum }
     }
 
+    /// [`Self::new`] that returns an error instead of aborting when the canvas-sized pyramid
+    /// (16 bytes a pixel at the base, a third more above) can't be reserved.
+    pub fn try_new(w: usize, h: usize, levels: usize) -> Result<Blender, lcc_raster::AllocError> {
+        let mut acc = Vec::new();
+        let mut wsum = Vec::new();
+        for l in 0..=levels {
+            acc.push(Buf::try_new(w.checked_shr(l as u32).unwrap_or(0), h.checked_shr(l as u32).unwrap_or(0), 3)?);
+            wsum.push(Buf::try_new(w.checked_shr(l as u32).unwrap_or(0), h.checked_shr(l as u32).unwrap_or(0), 1)?);
+        }
+        Ok(Blender { levels, w, h, acc, wsum })
+    }
+
     /// Add a tile at canvas offset (`x0`, `y0`) (multiples of 2^levels; tile size too): `vals`
     /// (3 channels, holes already filled) and its seam mask (0..1).
     pub fn add(&mut self, x0: usize, y0: usize, vals: Buf, mask: Buf) {
@@ -274,6 +292,15 @@ impl Blender {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_canvas_past_memory_is_an_error_not_an_abort() {
+        // 2^21 × 2^21: a 64 TiB pyramid base
+        assert!(Blender::try_new(1 << 21, 1 << 21, 7).is_err());
+        assert!(Buf::try_new(usize::MAX, 2, 3).is_err(), "an overflowing size is an error too");
+        let b = Blender::try_new(64, 32, 3).expect("a small canvas allocates");
+        assert_eq!((b.w, b.h, b.levels), (64, 32, 3));
+    }
 
     /// The edge-clamped formulas `down` and `up` implement, one tap at a time.
     fn at(b: &Buf, x: isize, y: isize, ch: usize) -> f32 {

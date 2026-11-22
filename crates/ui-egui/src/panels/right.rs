@@ -1,6 +1,7 @@
 //! The right-hand panel next to the tool strip: Edit, Crop, Remove, Masking, Red Eye, Info,
 //! Keywords, Versions, Activity.
 
+use crate::json_ext::JsonExt as _;
 use egui::{Align2, Rect, Sense, pos2, vec2};
 use lcc_catalog::PhotoId;
 use serde_json::json;
@@ -608,8 +609,9 @@ fn crop(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
                 ];
                 let items: Vec<(&str, &str)> = modes.iter().map(|(l, _, k)| (*l, *k)).collect();
                 let active = modes.iter().position(|(_, m, _)| *m == d.geometry.upright);
-                if let Some(i) = crate::widgets::segmented(ui, "upright", &items, active, 3) {
-                    let (_, mode, key) = modes[i];
+                if let Some(i) = crate::widgets::segmented(ui, "upright", &items, active, 3)
+                    && let Some(&(_, mode, key)) = modes.get(i)
+                {
                     let r = app.run("geometry.upright", json!({"mode": key, "again": Some(i) == active}));
                     upright_note(app, ui.ctx(), r.as_ref().ok());
                     app.ui.tool = if mode == Upright::Guided { "guidedUpright".into() } else { String::new() };
@@ -844,11 +846,11 @@ fn remove(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
                 {
                     match app.run("spot.findDust", json!({})) {
                         Ok(r) if r.get("total").is_some() => {
-                            let n = r["total"].as_u64().unwrap_or(0);
+                            let n = r.field("total").as_u64().unwrap_or(0);
                             app.toast(ui.ctx(), crate::i18n::tr_format!("Removing dust from {n} photos", n = n));
                         }
                         Ok(r) => {
-                            let n = r["added"].as_u64().unwrap_or(0);
+                            let n = r.field("added").as_u64().unwrap_or(0);
                             app.toast(
                                 ui.ctx(),
                                 if n == 0 {
@@ -1128,7 +1130,7 @@ pub fn dust_pump(app: &mut LccApp, ctx: &egui::Context) {
     }
     let running = !job.finished.load(std::sync::atomic::Ordering::Relaxed);
     if let Ok(v) = app.session.execute("dust.pump", &json!({}))
-        && v["applied"].as_u64().unwrap_or(0) > 0
+        && v.field("applied").as_u64().unwrap_or(0) > 0
     {
         ctx.request_repaint();
     }
@@ -1162,7 +1164,7 @@ fn red_eye(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
         app.ui.eye = n - 1;
     }
     let i = app.ui.eye;
-    let eye = d.red_eye[i];
+    let Some(&eye) = d.red_eye.get(i) else { return };
     divider(ui);
     super::edit::sub_title(
         ui,
@@ -1436,8 +1438,8 @@ fn hold_list_in_place(ui: &mut egui::Ui, top: f32) {
 /// Edit Set…: the current set's nine slots in the Edit Keyword Set dialog (Recent Keywords becomes a named set).
 pub(crate) fn edit_keyword_set(app: &mut LccApp) {
     let sets = lcc_engine::cmd::keywords::keyword_sets_json(&app.session);
-    let current = sets["current"].as_str().unwrap_or_default().to_string();
-    let mut slots: Vec<String> = sets["keywords"].as_array().into_iter().flatten().filter_map(|k| k.as_str().map(str::to_string)).collect();
+    let current = sets.field("current").as_str().unwrap_or_default().to_string();
+    let mut slots: Vec<String> = sets.field("keywords").as_array().into_iter().flatten().filter_map(|k| k.as_str().map(str::to_string)).collect();
     slots.resize(9, String::new());
     let named = current != lcc_engine::cmd::keywords::RECENT;
     app.ui.dialog = Some(crate::state::Dialog::KeywordSet {
@@ -1456,13 +1458,13 @@ fn keyword_set(app: &mut LccApp, ui: &mut egui::Ui) {
     let chips = app.caches.keyword_chips(&app.session.catalog, &selection);
     let t = Tokens::get(ui.ctx());
     let sets = lcc_engine::cmd::keywords::keyword_sets_json(&app.session);
-    let current = sets["current"].as_str().unwrap_or_default().to_string();
+    let current = sets.field("current").as_str().unwrap_or_default().to_string();
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Keyword Set")).color(t.text_dim));
         let combo = crate::widgets::combo_box("kw-set")
             .selected_text(crate::i18n::builtin_label(&current, current == lcc_engine::cmd::keywords::RECENT))
             .show_ui(ui, |ui| {
-                for set in sets["sets"].as_array().into_iter().flatten() {
+                for set in sets.field("sets").as_array().into_iter().flatten() {
                     let name = set["name"].as_str().unwrap_or_default();
                     if ui.selectable_label(name == current, crate::i18n::builtin_label(name, name == lcc_engine::cmd::keywords::RECENT)).clicked() {
                         let _ = app.run("keyword.useSet", json!({"name": name}));
@@ -1493,7 +1495,7 @@ fn keyword_set(app: &mut LccApp, ui: &mut egui::Ui) {
             });
         register(ui.ctx(), "keywordSetCombo", combo.response.rect);
     });
-    let mut kws: Vec<String> = sets["keywords"].as_array().into_iter().flatten().filter_map(|k| k.as_str().map(str::to_string)).collect();
+    let mut kws: Vec<String> = sets.field("keywords").as_array().into_iter().flatten().filter_map(|k| k.as_str().map(str::to_string)).collect();
     // nothing in the set yet (no recent keywords): its nine slots show empty, as they will fill, rather
     // than a sentence about them (issue #220); each still names its key
     if kws.is_empty() {

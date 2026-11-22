@@ -1,0 +1,10 @@
+### Image Quality Scanner
+
+- **Library ▸ Image Quality Scanner…** scores photos for technical quality (sharpness or blur, noise, exposure and JPEG compression artifacts) and keeps each score, and the factor scores behind it, on the photo. How long a scan takes depends on the photos: the app reads a thumbnail-level copy of each, a few at a time, in the background.
+- Choose what to scan (**the selected photos**, **the folder shown** or **the whole catalog**), and whether photos that already carry a score are measured again (**rescan**): by default a scan only touches photos it has not scored.
+- **Pick Flags**: a score at or above **Accepted** makes a photo a Pick, at or below **Rejected** a Reject, and between the two the photo keeps its flag. Turn on **Write the flags onto photos you have not flagged** to let a scan flag them; a flag you set yourself is never changed, while a flag a scan wrote can be changed by the next scan.
+- **Basic Factors**: each factor's weight in the score; 0 leaves one out of the score (it is still measured and shown).
+- The scan runs in the background: the Activity stack shows how far it is and can stop it, and what it measured is kept. Press `Cmd/Ctrl+Z` once to take a whole scan back (its scores and its flags).
+- **Sort and filter by quality**: the Library's **Sort** menu has **Quality**, and the filter bar has a quality picker (**accepted**, **to review**, **rejected**, **not scanned**) and a **Quality score at least** floor. Smart collections and rules offer the same fields (Quality Score, Quality Verdict, and each factor).
+- **Scripts and shells**: `photo.qualityScan` does the same: `<cli> quality-scan --library DIR --accepted 75 --rejected 20 --apply-flags` scans a library from a shell, and `photo.qualityScanPump` is the app's frame work.
+- No learned aesthetic model is used: the score is the four technical factors' weighted mean, so a photo of a poor subject that is sharp, clean and well exposed scores high, and one that is beautiful but soft or noisy scores low. Aesthetic judgement stays with the Aesthetic and Suggested Stars scores in Assisted Culling.

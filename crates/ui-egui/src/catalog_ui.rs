@@ -12,6 +12,7 @@
 //! The work is done by engine commands (`catalog.*`, `photo.xmpStatus`, `library.previewSettings`);
 //! this module only holds the dialogs and the UI commands that switch libraries.
 
+use crate::json_ext::JsonExt as _;
 use std::path::{Path, PathBuf};
 
 use lcc_catalog::library::RecentCatalogs;
@@ -241,7 +242,7 @@ pub fn run(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Value, String
             Ok(json!({"promptAtStartup": on, "atLaunch": app.ui.settings.at_launch}))
         }
         "dialog.catalogSettings" => {
-            let settings = app.session.execute("catalog.info", &json!({})).map(|v| v["settings"].clone()).unwrap_or_default();
+            let settings = app.session.execute("catalog.info", &json!({})).map(|v| v.field("settings").clone()).unwrap_or_default();
             app.catalog_ui.dialog = Some(CatalogDialog::Settings { settings });
             Ok(Value::Null)
         }
@@ -292,7 +293,7 @@ fn refine_question(app: &mut LccApp) -> Option<Result<Value, String>> {
 fn xmp_conflict(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
     let st = app.session.execute("photo.xmpStatus", p).ok()?;
     let lost = if id == "photo.readMetadataFromFile" { ["changedInCatalog", "conflict"] } else { ["changedOnDisk", "conflict"] };
-    let photos = st["photos"].as_array()?;
+    let photos = st.field("photos").as_array()?;
     let ids: Vec<u64> = photos.iter().filter_map(|x| x["id"].as_u64()).collect();
     let affected = photos.iter().filter(|x| x["status"].as_str().is_some_and(|s| lost.contains(&s))).count();
     if affected == 0 {
@@ -309,13 +310,13 @@ fn new_catalog(app: &mut LccApp, p: &Value) -> Result<Value, String> {
                 // an empty folder, opened as a new library: it starts with the demo photos
                 let dir = lcc_catalog::library::create_folder(Path::new(parent), name).map_err(|e| e.to_string())?;
                 let mut r = open_dir(app, &dir, true, p)?;
-                r["entry"] = json!(lcc_catalog::library::find_entry(&dir));
+                *r.field_mut("entry") = json!(lcc_catalog::library::find_entry(&dir));
                 r
             } else {
                 let entry = lcc_catalog::library::create(Path::new(parent), name).map_err(|e| e.to_string())?;
                 let dir = entry.parent().map(Path::to_path_buf).ok_or("library without a folder")?;
                 let mut r = open_dir(app, &dir, false, p)?;
-                r["entry"] = json!(entry);
+                *r.field_mut("entry") = json!(entry);
                 r
             };
             Ok(r)
@@ -720,18 +721,18 @@ fn settings_ui(app: &mut LccApp, ui: &mut egui::Ui, s: &mut Value, action: &mut 
     ui.label(egui::RichText::new(crate::i18n::tr("Previews")).strong());
     ui.horizontal(|ui| {
         ui.add_sized([150.0, 20.0], egui::Label::new(crate::i18n::tr("Standard preview size")));
-        let cur = s["previews"]["standardEdge"].as_u64().unwrap_or(2048);
+        let cur = s.field("previews").field("standardEdge").as_u64().unwrap_or(2048);
         let r = egui::ComboBox::from_id_salt("catalogEdge").selected_text(format!("{cur} px")).width(220.0).show_ui(ui, |ui| {
             for e in EDGES {
                 if ui.selectable_label(cur == *e, format!("{e} px")).clicked() {
-                    s["previews"]["standardEdge"] = json!(e);
+                    *s.field_mut("previews").field_mut("standardEdge") = json!(e);
                 }
             }
         });
         crate::widgets::register(ui.ctx(), "combo:catalogEdge", r.response.rect);
     });
-    combo(ui, "catalogDiscard", "Discard 1:1 previews", &mut s["previews"]["discardFull"], DISCARD);
-    combo(ui, "catalogAtImport", "Build at import", &mut s["previews"]["atImport"], AT_IMPORT);
+    combo(ui, "catalogDiscard", "Discard 1:1 previews", s.field_mut("previews").field_mut("discardFull"), DISCARD);
+    combo(ui, "catalogAtImport", "Build at import", s.field_mut("previews").field_mut("atImport"), AT_IMPORT);
     if buttons(ui, "OK", "button:catalogSettingsOk", close) {
         // the default folder stays "the default" (it moves with the library)
         if s["backupDir"] == s["defaultBackupDir"] {

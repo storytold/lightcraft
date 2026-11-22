@@ -1,0 +1,50 @@
+# Nightly long-run fuzzing (docs/ci.md, docs/testing-sil.md): every pure-Rust fuzz target for 30 minutes
+# (`cargo xtask fuzz <target> --secs 1800`), each target its own job, with the CC0 corpus as extra seeds.
+# A crash fails the job and uploads its inputs (target/fuzz/crashes/<target>/) as an artifact; fold each
+# into that format's table-driven hostile-input test with the fix. Manual dispatch can shorten the run.
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "47 4 * * *"
+  workflow_dispatch:
+    inputs:
+      secs:
+        description: "Seconds per target"
+        default: "1800"
+
+concurrency:
+  group: fuzz
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  fuzz:
+    runs-on: [self-hosted, Linux, X64, lcc]
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [raw, tiff, codecs, meta, develop, lightroom, peer]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - name: CC0 corpus (extra seeds; the run falls back on built-in seeds without it)
+        continue-on-error: true
+        run: cargo xtask corpus --download
+      - name: Fuzz ${{ matrix.target }}
+        run: cargo xtask fuzz ${{ matrix.target }} --secs ${{ inputs.secs || '1800' }} --rng ${{ github.run_id }}
+      - name: Upload crash inputs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-crashes-${{ matrix.target }}
+          path: target/fuzz/crashes/${{ matrix.target }}/
+          if-no-files-found: ignore

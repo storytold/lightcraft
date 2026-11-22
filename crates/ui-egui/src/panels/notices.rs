@@ -12,6 +12,8 @@ use crate::{LccApp, QuitPrompt};
 pub fn logic(app: &mut LccApp) {
     let new = app.session.take_library_warnings();
     app.notices.extend(new);
+    let notices = app.session.take_notices();
+    app.notices.extend(notices.iter().map(notice_text));
     if let Some(problems) = app.font_problems.take() {
         app.notices.extend(font_notice(problems));
     }
@@ -22,6 +24,37 @@ pub fn logic(app: &mut LccApp) {
             app.notices.extend(gpu_notice(gpu::unavailable_reason().as_deref(), app.ui.settings.gpu));
         }
     }
+}
+
+/// An engine notice in the user's language.
+pub fn notice_text(n: &lcc_engine::notice::Notice) -> String {
+    use lcc_engine::notice::Notice;
+    match n {
+        Notice::SettingsSetAside { file, kept } => crate::i18n::tr_format!(
+            "{file} was damaged. It was moved aside as {kept}, and the settings of a new library are used.",
+            file = file,
+            kept = kept
+        ),
+        Notice::SettingsUnreadable { file, reason } => crate::i18n::tr_format!(
+            "{file} couldn't be read ({reason}). The settings of a new library are used for now, and the file is not overwritten.",
+            file = file,
+            reason = reason
+        ),
+        Notice::SyncHeldFuture { device, minutes } => crate::i18n::tr_format!(
+            "Changes from {device} are dated {minutes} minutes in the future, so they are held back until then. Set the clock on {device} to the right time.",
+            device = device,
+            minutes = minutes
+        ),
+    }
+}
+
+/// What to tell the user when the recent list of older versions (`recent-catalogs.json`) couldn't
+/// be carried over (`why`, also in the log).
+pub fn recent_catalogs_notice(why: &str) -> String {
+    crate::i18n::tr_format!(
+        "The recent library list of an older version couldn't be carried over ({why}). Open those libraries with File → Open Catalog…",
+        why = why
+    )
 }
 
 /// What to tell the user when fonts the package carries could not be read (`problems`, also in the log): which ones,
@@ -175,9 +208,12 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, hint: Option<&
 pub fn show(app: &mut LccApp, ctx: &egui::Context) {
     if let Some(QuitPrompt::Tasks(text)) = app.quit_prompt.clone() {
         let buttons = [("quitAnyway", "Quit Anyway", Choice::QuitAnyway), ("quitCancel", "Cancel", Choice::Cancel)];
-        let Some(i) = window(ctx, "quit-tasks", "Quit while tasks are running?", &text, None, &buttons) else { return };
+        let Some((_, _, choice)) = window(ctx, "quit-tasks", "Quit while tasks are running?", &text, None, &buttons).and_then(|i| buttons.get(i))
+        else {
+            return;
+        };
         app.quit_prompt = None;
-        if matches!(buttons[i].2, Choice::QuitAnyway) {
+        if matches!(choice, Choice::QuitAnyway) {
             app.session.activity.cancel_all();
             // unsaved changes still get their own question
             if may_close(app) {
@@ -192,9 +228,13 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
             ("quitSkipBackup", "Skip This Time", Choice::QuitAnyway),
             ("quitCancel", "Cancel", Choice::Cancel),
         ];
-        let Some(i) = window(ctx, "quit-backup", "Back up the catalog?", &text, backup_hint().as_deref(), &buttons) else { return };
+        let Some((_, _, choice)) =
+            window(ctx, "quit-backup", "Back up the catalog?", &text, backup_hint().as_deref(), &buttons).and_then(|i| buttons.get(i))
+        else {
+            return;
+        };
         app.quit_prompt = None;
-        match buttons[i].2 {
+        match choice {
             Choice::Retry => app.exit_backup = Some(true),
             Choice::QuitAnyway => app.exit_backup = Some(false),
             Choice::Cancel | Choice::Ok => return,
@@ -210,8 +250,11 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
             ("quitAnyway", "Quit Anyway", Choice::QuitAnyway),
             ("quitCancel", "Cancel", Choice::Cancel),
         ];
-        let Some(i) = window(ctx, "quit-unsaved", "Quit with unsaved changes?", &text, None, &buttons) else { return };
-        match buttons[i].2 {
+        let Some((_, _, choice)) = window(ctx, "quit-unsaved", "Quit with unsaved changes?", &text, None, &buttons).and_then(|i| buttons.get(i))
+        else {
+            return;
+        };
+        match choice {
             Choice::Retry => {
                 app.quit_prompt = None;
                 if may_close(app) {

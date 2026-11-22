@@ -67,8 +67,9 @@ pub fn compare_step(app: &mut LccApp, d: isize) -> Result<Value, String> {
     let vis: Vec<PhotoId> = app.session.visible_cloned().into_iter().filter(|x| *x != sel).collect();
     let Some(i) = vis.iter().position(|x| *x == cand).or(if vis.is_empty() { None } else { Some(0) }) else { return Ok(Value::Null) };
     let j = (i as isize + d).clamp(0, vis.len() as isize - 1) as usize;
-    select_pair(app, sel, vis[j], vis[j]);
-    Ok(json!({"candidate": vis[j].0}))
+    let Some(&pick) = vis.get(j) else { return Ok(Value::Null) };
+    select_pair(app, sel, pick, pick);
+    Ok(json!({"candidate": pick.0}))
 }
 
 pub fn swap(app: &mut LccApp) -> Result<Value, String> {
@@ -160,8 +161,9 @@ pub fn survey_step(app: &mut LccApp, d: isize) -> Result<Value, String> {
     }
     let i = app.session.selection.active.and_then(|a| v.iter().position(|x| *x == a)).unwrap_or(0);
     let j = (i as isize + d).clamp(0, v.len() as isize - 1) as usize;
-    app.session.selection.active = Some(v[j]);
-    Ok(json!({"active": v[j].0}))
+    let Some(&pick) = v.get(j) else { return Ok(Value::Null) };
+    app.session.selection.active = Some(pick);
+    Ok(json!({"active": pick.0}))
 }
 
 /// After rating/flagging with Auto Advance: next candidate (Compare), next photo in the survey,

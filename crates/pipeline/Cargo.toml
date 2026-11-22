@@ -23,6 +23,7 @@ rayon = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]
+lcc-testkit = { workspace = true }
 wat = "1.228"
 dhat = { workspace = true }
 lcc-scenes = { workspace = true }

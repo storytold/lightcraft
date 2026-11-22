@@ -50,6 +50,25 @@ impl ChartProfileDialog {
     pub fn chart(&self, slot: usize) -> &'static camprof::reference::Chart {
         self.charts.get(slot).and_then(|k| camprof::reference::by_key(k)).unwrap_or_else(camprof::chart)
     }
+
+    /// Where `slot`'s chart was found (normalized corners, quarter turns, chart key); an unknown slot is ignored.
+    fn set_located(&mut self, slot: usize, corners: [[f64; 2]; 4], turns: u8, chart: &str) {
+        if let (Some(c), Some(t), Some(k)) = (self.corners.get_mut(slot), self.turns.get_mut(slot), self.charts.get_mut(slot)) {
+            *c = Some(corners);
+            *t = turns;
+            *k = chart.to_string();
+        }
+    }
+
+    /// `slot`'s corners, `None` for an unknown slot too.
+    fn corners_at(&self, slot: usize) -> Option<[[f64; 2]; 4]> {
+        self.corners.get(slot).copied().flatten()
+    }
+
+    /// `slot`'s quarter turns, 0 for an unknown slot.
+    fn turns_at(&self, slot: usize) -> u8 {
+        self.turns.get(slot).copied().unwrap_or(0)
+    }
 }
 
 impl Default for ChartProfileDialog {
@@ -136,7 +155,9 @@ fn load(app: &mut LccApp, slot: usize, photo: Option<PhotoId>, path: String) -> 
     let Some(entry) = app.chart_profile.shots.get_mut(slot) else { return Err("no such chart slot".into()) };
     *entry = Some(Shot { photo, path: path.clone(), prepared: None, texture: None, error: None });
     app.chart_profile.report = None;
-    app.chart_profile.views[slot] = View::default();
+    if let Some(view) = app.chart_profile.views.get_mut(slot) {
+        *view = View::default();
+    }
     let (p, shown) = (path.clone(), file_name(&path));
     crate::tasks::spawn(
         app,
@@ -158,9 +179,7 @@ fn load(app: &mut LccApp, slot: usize, photo: Option<PhotoId>, path: String) -> 
                     if let Some(Dialog::ChartProfile { opts }) = &mut app.ui.dialog
                         && let Some((corners, turns, chart)) = located
                     {
-                        opts.corners[slot] = Some(corners);
-                        opts.turns[slot] = turns;
-                        opts.charts[slot] = chart.key.to_string();
+                        opts.set_located(slot, corners, turns, &chart.key);
                     }
                     // the second chart is under the other light: tungsten beside daylight, else daylight
                     if slot == 1
@@ -258,23 +277,25 @@ pub fn adjust(app: &mut LccApp, command: &str, p: &Value) -> Result<Value, Strin
 fn adjust_in(state: &mut ChartProfileState, opts: &mut ChartProfileDialog, command: &str, slot: usize) -> Result<Value, String> {
     let prep = state.shots.get(slot).and_then(|s| s.as_ref()).and_then(|s| s.prepared.clone()).ok_or("the chart photo isn't read yet")?;
     match command {
-        "cameraProfile.turn" => opts.turns[slot] = (opts.turns[slot] + 1) % 4,
+        "cameraProfile.turn" => {
+            let t = opts.turns.get_mut(slot).ok_or("no such chart slot")?;
+            *t = (*t + 1) % 4;
+        }
         "cameraProfile.find" => {
             let found =
                 camprof::find_chart(&prep.frame).ok_or_else(|| crate::i18n::tr("No color chart found: drag the corners onto it").to_string())?;
-            opts.corners[slot] = Some(cp::normalized_corners(&prep.frame, &found.corners));
-            opts.turns[slot] = found.turns;
-            opts.charts[slot] = found.chart.key.to_string();
+            opts.set_located(slot, cp::normalized_corners(&prep.frame, &found.corners), found.turns, &found.chart.key);
         }
         _ => {
-            let corners = opts.corners[slot].and_then(|c| cp::corners_from_normalized(&prep.frame, c)).ok_or("no corners to align")?;
-            let refined = camprof::refine(&prep.frame, opts.chart(slot), &corners, opts.turns[slot])
+            let corners = opts.corners_at(slot).and_then(|c| cp::corners_from_normalized(&prep.frame, c)).ok_or("no corners to align")?;
+            let refined = camprof::refine(&prep.frame, opts.chart(slot), &corners, opts.turns_at(slot))
                 .ok_or_else(|| crate::i18n::tr("The corners are too far from the chart to align: drag them closer").to_string())?;
-            opts.corners[slot] = Some(cp::normalized_corners(&prep.frame, &refined.corners));
+            let c = opts.corners.get_mut(slot).ok_or("no such chart slot")?;
+            *c = Some(cp::normalized_corners(&prep.frame, &refined.corners));
         }
     }
     state.report = None;
-    Ok(json!({"slot": slot, "corners": opts.corners[slot], "turns": opts.turns[slot], "chart": opts.charts[slot]}))
+    Ok(json!({"slot": slot, "corners": opts.corners_at(slot), "turns": opts.turns_at(slot), "chart": opts.charts.get(slot)}))
 }
 
 /// A profile of the name asked for is there: what the dialog asks before saving.
@@ -354,10 +375,10 @@ fn build_now(app: &mut LccApp, opts: &ChartProfileDialog, on_exists: cp::OnExist
     let second =
         shot(1).map(|s| s.prepared.clone().ok_or_else(|| crate::i18n::tr("The second chart photo isn't read yet").to_string())).transpose()?;
     let request = |i: usize| Request {
-        corners: opts.corners[i],
-        turns: Some(opts.turns[i]),
+        corners: opts.corners_at(i),
+        turns: Some(opts.turns_at(i)),
         refine: false,
-        illuminant: opts.lights[i].clone(),
+        illuminant: opts.lights.get(i).cloned().unwrap_or_default(),
         chart: Some(opts.chart(i).key.to_string()),
     };
     let (req_a, req_b) = (request(0), request(1));
@@ -402,8 +423,8 @@ fn build_now(app: &mut LccApp, opts: &ChartProfileDialog, on_exists: cp::OnExist
             Ok(report)
         }) {
             Ok(report) => {
-                let name = report["name"].as_str().unwrap_or("").to_string();
-                let msg = if report["replaced"] == true {
+                let name = report.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+                let msg = if report.get("replaced").and_then(Value::as_bool) == Some(true) {
                     crate::i18n::tr_format!("Camera profile “{name}” replaced", name = name)
                 } else {
                     crate::i18n::tr_format!("Camera profile “{name}” created", name = name)
@@ -420,7 +441,8 @@ fn build_now(app: &mut LccApp, opts: &ChartProfileDialog, on_exists: cp::OnExist
 
 /// Whether Create Profile can run now.
 pub fn can_build(app: &LccApp, opts: &ChartProfileDialog) -> bool {
-    let ready = |i: usize| app.chart_profile.shots.get(i).and_then(|s| s.as_ref()).is_some_and(|s| s.prepared.is_some()) && opts.corners[i].is_some();
+    let ready =
+        |i: usize| app.chart_profile.shots.get(i).and_then(|s| s.as_ref()).is_some_and(|s| s.prepared.is_some()) && opts.corners_at(i).is_some();
     !app.tasks.is_running(BUILDING)
         && same_light(app, opts).is_none()
         && app.chart_profile.clash.is_none()
@@ -620,7 +642,7 @@ pub fn zoom(app: &mut LccApp, p: &Value) -> Result<Value, String> {
         .ok_or("the chart photo isn't read yet")?;
     let area = egui::Rect::from_min_size(egui::Pos2::ZERO, VIEW_SIZE);
     let ppp = app.tasks.repaint.as_ref().map_or(1.0, |c| c.pixels_per_point());
-    let view = &mut app.chart_profile.views[slot];
+    let view = app.chart_profile.views.get_mut(slot).ok_or("no such chart slot")?;
     match p.get("mode").and_then(Value::as_str).unwrap_or("fit") {
         "fit" => *view = View::default(),
         "actual" => view.set_actual(area, tex, ppp),
@@ -648,7 +670,7 @@ fn picture(app: &mut LccApp, ui: &mut egui::Ui, opts: &mut ChartProfileDialog) {
     };
     let size = tex.size();
     // zoom and pan
-    let view = &mut app.chart_profile.views[slot];
+    let Some(view) = app.chart_profile.views.get_mut(slot) else { return };
     if response.hovered() {
         let (pinch, smooth, at) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta.y, i.pointer.hover_pos()));
         let speed = ui.ctx().options(|o| o.input_options.scroll_zoom_speed);
@@ -683,22 +705,28 @@ fn picture(app: &mut LccApp, ui: &mut egui::Ui, opts: &mut ChartProfileDialog) {
     // dragging a corner (left button, without Space)
     if response.drag_started_by(egui::PointerButton::Primary)
         && !space
-        && let (Some(at), Some(c)) = (response.interact_pointer_pos(), opts.corners[slot])
+        && let (Some(at), Some(c)) = (response.interact_pointer_pos(), opts.corners_at(slot))
     {
-        app.chart_profile.drag =
-            (0..4).map(|i| (i, to_screen(c[i]).distance(at))).filter(|(_, d)| *d < 16.0).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(i, _)| i);
+        app.chart_profile.drag = c
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (i, to_screen(*p).distance(at)))
+            .filter(|(_, d)| *d < 16.0)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i);
     }
     if let (Some(i), Some(at)) = (app.chart_profile.drag, response.interact_pointer_pos())
         && response.dragged_by(egui::PointerButton::Primary)
-        && let Some(c) = &mut opts.corners[slot]
+        && let Some(Some(c)) = opts.corners.get_mut(slot)
+        && let Some(corner) = c.get_mut(i)
     {
-        c[i] = from_screen(at).map(|v| v.clamp(0.0, 1.0));
+        *corner = from_screen(at).map(|v| v.clamp(0.0, 1.0));
         app.chart_profile.report = None;
     }
     if response.drag_stopped() {
         app.chart_profile.drag = None;
     }
-    let Some(corners) = opts.corners[slot] else {
+    let Some(corners) = opts.corners_at(slot) else {
         painter.text(
             area.center_bottom() - egui::vec2(0.0, 14.0),
             egui::Align2::CENTER_CENTER,
@@ -711,7 +739,7 @@ fn picture(app: &mut LccApp, ui: &mut egui::Ui, opts: &mut ChartProfileDialog) {
     // the patch grid: the squares sampled, A01 marked
     let Some(px) = cp::corners_from_normalized(&prep.frame, corners) else { return };
     let chart = opts.chart(slot);
-    let turns = opts.turns[slot] % 4;
+    let turns = opts.turns_at(slot) % 4;
     let layout = if turns % 2 == 1 { camprof::reference::Layout { columns: chart.layout.rows, rows: chart.layout.columns } } else { chart.layout };
     let (fw, fh) = (prep.frame.width.max(1) as f64, prep.frame.height.max(1) as f64);
     let extent = px.patch_extent(layout, camprof::SAMPLE_FRACTION);
@@ -727,15 +755,15 @@ fn picture(app: &mut LccApp, ui: &mut egui::Ui, opts: &mut ChartProfileDialog) {
         }
     }
     let ring = corners.map(to_screen);
-    for i in 0..4 {
-        painter.line_segment([ring[i], ring[(i + 1) % 4]], egui::Stroke::new(1.0, green.gamma_multiply(0.6)));
-        painter.circle(ring[i], 6.0, egui::Color32::from_black_alpha(140), egui::Stroke::new(2.0, egui::Color32::WHITE));
-        crate::widgets::register(ui.ctx(), format!("chartProfile.corner{i}"), egui::Rect::from_center_size(ring[i], egui::vec2(12.0, 12.0)));
+    for (i, (&p, &next)) in ring.iter().zip(ring.iter().cycle().skip(1)).enumerate() {
+        painter.line_segment([p, next], egui::Stroke::new(1.0, green.gamma_multiply(0.6)));
+        painter.circle(p, 6.0, egui::Color32::from_black_alpha(140), egui::Stroke::new(2.0, egui::Color32::WHITE));
+        crate::widgets::register(ui.ctx(), format!("chartProfile.corner{i}"), egui::Rect::from_center_size(p, egui::vec2(12.0, 12.0)));
     }
     // the magnifier: the corner being dragged, else one the pointer rests on
-    let hovered = ui.input(|i| i.pointer.hover_pos()).and_then(|at| (0..4).find(|i| ring[*i].distance(at) < 10.0));
-    if let Some(i) = app.chart_profile.drag.or(hovered) {
-        magnifier(&painter, area, img, &tex, ring[i], &t);
+    let hovered = ui.input(|i| i.pointer.hover_pos()).and_then(|at| ring.iter().position(|p| p.distance(at) < 10.0));
+    if let Some(&at) = app.chart_profile.drag.or(hovered).and_then(|i| ring.get(i)) {
+        magnifier(&painter, area, img, &tex, at, &t);
     }
 }
 
@@ -1030,10 +1058,11 @@ fn suggested_name(app: &LccApp, opts: &ChartProfileDialog) -> Option<String> {
 /// One photo's light: the menu, and a note when the camera doesn't say.
 fn light_row(app: &mut LccApp, ui: &mut egui::Ui, opts: &mut ChartProfileDialog, slot: usize) {
     let t = crate::theme::Tokens::get(ui.ctx());
-    if !app.chart_profile.shots[slot].as_ref().is_some_and(|s| s.prepared.is_some()) {
+    if !app.chart_profile.shots.get(slot).and_then(Option::as_ref).is_some_and(|s| s.prepared.is_some()) {
         return;
     }
-    if light_combo(ui, &format!("chartProfileLight{slot}"), &mut opts.lights[slot]) {
+    let Some(light) = opts.lights.get_mut(slot) else { return };
+    if light_combo(ui, &format!("chartProfileLight{slot}"), light) {
         app.chart_profile.report = None;
     }
     // what the greys measure, for information (never chosen from: a camera's colour isn't a light meter)
@@ -1085,7 +1114,7 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui, opts: &mut ChartProfileDialog) 
             opts.slot = if has_second { opts.slot.min(1) } else { 0 };
             picture(app, ui, opts);
             let slot = opts.slot;
-            if let Some(shot) = app.chart_profile.shots[slot].as_ref() {
+            if let Some(shot) = app.chart_profile.shots.get(slot).and_then(Option::as_ref) {
                 let mut caption = file_name(&shot.path);
                 if let Some(prep) = &shot.prepared {
                     caption = format!("{caption} · {}", prep.camera_model);
@@ -1109,10 +1138,10 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui, opts: &mut ChartProfileDialog) 
                     let r = ui.button(crate::i18n::tr(label));
                     crate::widgets::register(ui.ctx(), format!("button:{id}"), r.rect);
                     if r.clicked()
-                        && let Some(tex) = app.chart_profile.shots[slot].as_ref().and_then(|s| s.texture.as_ref()).map(|t| t.size())
+                        && let Some(tex) = app.chart_profile.shots.get(slot).and_then(Option::as_ref).and_then(|s| s.texture.as_ref()).map(|t| t.size())
+                        && let Some(view) = app.chart_profile.views.get_mut(slot)
                     {
                         let area = egui::Rect::from_min_size(egui::Pos2::ZERO, VIEW_SIZE);
-                        let view = &mut app.chart_profile.views[slot];
                         if mode == "fit" {
                             *view = View::default();
                         } else {
@@ -1216,10 +1245,10 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui, opts: &mut ChartProfileDialog) 
             }
             if let Some(report) = app.chart_profile.report.clone() {
                 ui.label(
-                    egui::RichText::new(crate::i18n::tr_format!("“{name}” added to Camera Profiles", name = report["name"].as_str().unwrap_or("")))
+                    egui::RichText::new(crate::i18n::tr_format!("“{name}” added to Camera Profiles", name = report.get("name").and_then(Value::as_str).unwrap_or("")))
                         .color(t.text),
                 );
-                let cals = report["calibrations"].as_array().cloned().unwrap_or_default();
+                let cals = report.get("calibrations").and_then(Value::as_array).cloned().unwrap_or_default();
                 if cals.len() > 1 {
                     ui.horizontal(|ui| {
                         for (i, c) in cals.iter().enumerate() {

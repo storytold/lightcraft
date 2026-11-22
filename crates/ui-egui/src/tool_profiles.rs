@@ -245,7 +245,8 @@ impl ToolProfiles {
 
     /// The profile in use.
     pub fn active(&self) -> &ToolProfile {
-        self.find(&self.active).unwrap_or(&BUILTINS[0])
+        let [default, _] = &*BUILTINS;
+        self.find(&self.active).unwrap_or(default)
     }
 
     pub fn find(&self, id: &str) -> Option<&ToolProfile> {

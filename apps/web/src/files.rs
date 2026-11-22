@@ -127,7 +127,10 @@ impl Files {
             .map(|(name, d)| {
                 let data = m.files.get(&name).cloned().unwrap_or_default();
                 match d {
-                    Dirty::Append { from } if from <= data.len() => FlushOp::Append { offset: from, data: data[from..].to_vec(), name },
+                    Dirty::Append { from } if from <= data.len() => {
+                        let mut data = data;
+                        FlushOp::Append { offset: from, data: data.split_off(from), name }
+                    }
                     _ => FlushOp::Write { name, data },
                 }
             })

@@ -1,6 +1,7 @@
 //! The Show Alternatives bar: over the frames around a photo that didn't work (from its folder on
 //! disk, imported or not), what this view is, Apply the same edit, Import Selected and Back.
 
+use crate::json_ext::JsonExt as _;
 use serde_json::json;
 
 use crate::LccApp;
@@ -55,7 +56,7 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
                         let same = app.ui.alternatives_same_edit;
                         match app.run("photo.importAlternatives", json!({"sameEdit": same})) {
                             Ok(v) => {
-                                let n = v["chosen"].as_array().map_or(0, Vec::len);
+                                let n = v.field("chosen").as_array().map_or(0, Vec::len);
                                 app.toast(ui.ctx(), crate::i18n::tr_format!("{n} alternatives in the catalog", n = n));
                             }
                             Err(e) => app.toast(ui.ctx(), e),

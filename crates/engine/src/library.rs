@@ -764,6 +764,10 @@ impl Session {
         self.settle_sidecar_writes()?;
         let LibraryStores { dir, catalog, mut files, on_disk } = stores;
         self.media.smart_dir = on_disk.then(|| crate::smart::dir(&dir));
+        // a damaged catalog-settings.json is set aside here, before anything else reads it, so
+        // the user is told (the defaults of a new library, backups on, stand in)
+        #[cfg(not(target_arch = "wasm32"))]
+        let catalog_settings_problem = if on_disk { lcc_catalog::library::CatalogSettings::load_checked(&dir).1 } else { None };
         // the current library may be these same files: let its background snapshot land first
         if let Some(old) = self.library.as_mut()
             && let Err(e) = old.journal.wait()
@@ -828,6 +832,14 @@ impl Session {
         }
         stages.mark("plug-in fields");
         let mut settings = SettingsLoad::default();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(p) = catalog_settings_problem {
+            let file = lcc_catalog::library::SETTINGS_FILE.to_string();
+            self.notify(match p {
+                lcc_catalog::library::SettingsProblem::SetAside { kept } => crate::notice::Notice::SettingsSetAside { file, kept },
+                lcc_catalog::library::SettingsProblem::Unreadable { reason } => crate::notice::Notice::SettingsUnreadable { file, reason },
+            });
+        }
         // preferences
         let prefs = settings.read::<PrefsFile>(files.as_mut(), "prefs.json").unwrap_or_default();
         self.xmp = prefs.xmp;
