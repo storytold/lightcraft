@@ -12,6 +12,8 @@
 //! 3. tone map — contrast / whites / blacks filmic curve on luminance, highlight desaturation
 //! 4. colour — vibrance, saturation, colour mixer, colour grading, B&W (OkLCh)
 //! 5. display — gamut map to the output space (sRGB unless [`RenderRequest::space`] says otherwise), encode, tone curves (parametric + point), vignette, grain
+//!    (from process V9 the colour mixer, then the tone curves and Whites, run between 3 and 4 instead:
+//!    [`mixer_stage`], [`curve_stage`])
 //!
 //! Spatial parameters are specified relative to the image's long edge, so a 400 px preview and a
 //! 60 MP export look alike.
@@ -29,9 +31,18 @@ pub mod colorops;
 pub mod crystal;
 pub mod cull;
 pub mod curve;
+pub mod curve_stage;
+#[rustfmt::skip]
+mod curve_stage_tables;
+pub mod default_tone;
+#[rustfmt::skip]
+mod default_tone_table;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
+pub mod grading_stage;
+#[rustfmt::skip]
+mod grading_stage_tables;
 pub mod lens_blur;
 pub mod light_v3;
 // generated (`light_v3_params.rs`), kept in its own compact layout
@@ -42,6 +53,7 @@ pub mod local_tone;
 pub mod lut;
 pub mod mask_space;
 pub mod masks;
+pub mod mixer_stage;
 pub mod nrc_joint;
 #[cfg(test)]
 mod nrc_joint_reference;
@@ -100,6 +112,11 @@ pub struct SourceInfo {
     /// the developed pixels (Bradford, linear Rec.2020).
     pub camera_color: Option<Arc<CameraColor>>,
     pub camera_tone: Option<tone::CameraTone>,
+    /// The raw is rendered through a camera profile without a tone curve of its own (a DCP without
+    /// `ProfileToneCurve`, such as Adobe Standard): from process V9 its base tone is Lightroom's default curve,
+    /// measured, with the scene shifted by this many stops, the camera's measured exposure offset
+    /// ([`default_tone`]; 0 for a camera not measured). `None`: the profile has its own curve, or no profile.
+    pub default_tone: Option<f32>,
     /// Segmentation mattes stored in the file (DNG semantic masks): AI masks use them.
     pub mattes: Option<Arc<masks::Mattes>>,
     /// The raw's own local tone mapping (DNG `ProfileGainTableMap`), rendered only when the
@@ -123,6 +140,7 @@ impl Default for SourceInfo {
             legacy_relative_wb: false,
             camera_color: None,
             camera_tone: None,
+            default_tone: None,
             mattes: None,
             local_tone: None,
             native_long: None,
