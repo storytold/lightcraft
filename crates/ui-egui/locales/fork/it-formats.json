@@ -217,6 +217,7 @@
   "{a} on map · {b} untagged": "{a} sulla mappa · {b} senza posizione",
   "{card} (screen)": "{card} (schermo)",
   "{count} modules in the plug-ins folder weren't loaded: it holds more than it can load.": "{count} moduli nella cartella dei plug-in non sono stati caricati: ne contiene più di quanti se ne possano caricare.",
+  "{count} more failures.": "Altri {count} errori.",
   "{done} downloaded": "{done} scaricati",
   "{done} of {total} ({percent} %)": "{done} di {total} ({percent} %)",
   "{done} of {total} photos": "{done} di {total} foto",

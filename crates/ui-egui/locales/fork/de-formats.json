@@ -206,6 +206,7 @@
   "{a} on map · {b} untagged": "{a} auf der Karte · {b} ohne Ort",
   "{card} (screen)": "{card} (Bildschirm)",
   "{count} modules in the plug-ins folder weren't loaded: it holds more than it can load.": "{count} Module im Zusatzmodul-Ordner wurden nicht geladen: Er enthält mehr, als geladen werden kann.",
+  "{count} more failures.": "{count} weitere Fehler.",
   "{done} downloaded": "{done} heruntergeladen",
   "{done} of {total} ({percent} %)": "{done} von {total} ({percent} %)",
   "{done} of {total} photos": "{done} von {total} Fotos",

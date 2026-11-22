@@ -206,6 +206,7 @@
   "{a} on map · {b} untagged": "地図上 {a} 枚 · 位置なし {b} 枚",
   "{card} (screen)": "{card}(画面)",
   "{count} modules in the plug-ins folder weren't loaded: it holds more than it can load.": "プラグインフォルダー内の {count} 個のモジュールは読み込まれませんでした: 読み込める数を超えています。",
+  "{count} more failures.": "ほかに {count} 件の失敗。",
   "{done} downloaded": "{done} ダウンロード済み",
   "{done} of {total} ({percent} %)": "{done} / {total}（{percent} %）",
   "{done} of {total} photos": "{done} / {total} 枚",

@@ -215,6 +215,7 @@
   "{a} on map · {b} untagged": "Na mapie: {a} · bez lokalizacji: {b}",
   "{card} (screen)": "{card} (ekran)",
   "{count} modules in the plug-ins folder weren't loaded: it holds more than it can load.": "Nie wczytano modułów z folderu wtyczek ({count}): jest ich więcej, niż można wczytać.",
+  "{count} more failures.": "{count} innych niepowodzeń.",
   "{done} downloaded": "Pobrano {done}",
   "{done} of {total} ({percent} %)": "{done} z {total} ({percent} %)",
   "{done} of {total} photos": "{done} z {total} zdjęć",

@@ -227,6 +227,7 @@
   "{a} on map · {b} untagged": "{a} di peta · {b} tanpa lokasi",
   "{card} (screen)": "{card} (layar)",
   "{count} modules in the plug-ins folder weren't loaded: it holds more than it can load.": "{count} modul di folder plug-in tidak dimuat: isinya lebih banyak daripada yang dapat dimuat.",
+  "{count} more failures.": "{count} kegagalan lainnya.",
   "{done} downloaded": "{done} diunduh",
   "{done} of {total} ({percent} %)": "{done} dari {total} ({percent} %)",
   "{done} of {total} photos": "{done} dari {total} foto",

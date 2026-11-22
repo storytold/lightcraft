@@ -345,11 +345,45 @@ enum TextEncoding {
 /// `payload_budget` caps the total payload: `MAX_TABLE_PAYLOAD` for walks whose consumer keeps every row, and for
 /// every walk the database's own size. An honest table's payloads never add up to more than the database; a hostile
 /// one can point many cells at the same record or overflow chain, and a streaming walk must not decode that forever.
+/// `strict` walks (the schema) fail on the first bad record; the others skip it and count it in `stats`, so one
+/// oversized or malformed record costs that record, never the whole table (issue #1311).
 struct WalkState<'f> {
     seen: HashSet<u32>,
     payload_total: usize,
     payload_budget: usize,
+    strict: bool,
+    stats: WalkStats,
     sink: &'f mut dyn FnMut(Record) -> Result<(), String>,
+}
+
+/// What a table walk left out or read approximately: records it could not read (with the first reason), and text
+/// values that were not valid UTF-8 and were read with replacement characters.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct WalkStats {
+    pub(crate) skipped: usize,
+    pub(crate) first_skip: Option<String>,
+    pub(crate) lossy_text: usize,
+}
+
+impl WalkStats {
+    /// Plain-words notes for the import's warnings about table `name`, empty when nothing was left out.
+    pub(crate) fn notes(&self, name: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.skipped > 0 {
+            let why = self.first_skip.as_deref().unwrap_or("unreadable record");
+            let records = if self.skipped == 1 { "1 record".to_string() } else { format!("{} records", self.skipped) };
+            out.push(format!(
+                "Lightroom table {name}: {records} could not be read and were left out (first: {why}); the rest of the table was imported"
+            ));
+        }
+        if self.lossy_text > 0 {
+            out.push(format!(
+                "Lightroom table {name}: {} text values were not valid UTF-8 and were read with replacement characters",
+                self.lossy_text
+            ));
+        }
+        out
+    }
 }
 
 #[cfg(test)]
@@ -549,7 +583,11 @@ impl Database {
         visited_page_budget: usize,
     ) -> Result<Vec<Record>, String> {
         let mut out = Vec::new();
-        self.walk_rows(rootpage, ncols, cancel, visited_page_budget, Some(MAX_TABLE_PAYLOAD), &mut |record| keep_row(&mut out, record))?;
+        let stats =
+            self.walk_rows(rootpage, ncols, cancel, visited_page_budget, Some(MAX_TABLE_PAYLOAD), &mut |record| keep_row(&mut out, record))?;
+        if let Some(why) = stats.first_skip {
+            return Err(why);
+        }
         Ok(out)
     }
 
@@ -562,7 +600,7 @@ impl Database {
         ncols: usize,
         cancel: &std::sync::atomic::AtomicBool,
         sink: &mut dyn FnMut(Record) -> Result<(), String>,
-    ) -> Result<(), String> {
+    ) -> Result<WalkStats, String> {
         self.walk_rows(rootpage, ncols, cancel, MAX_VISITED_BTREE_PAGES, None, sink)
     }
 
@@ -574,7 +612,7 @@ impl Database {
         ncols: usize,
         cancel: &std::sync::atomic::AtomicBool,
         sink: &mut dyn FnMut(Record) -> Result<(), String>,
-    ) -> Result<(), String> {
+    ) -> Result<WalkStats, String> {
         let mut rows = 0usize;
         self.walk_rows(rootpage, ncols, cancel, MAX_VISITED_BTREE_PAGES, Some(MAX_TABLE_PAYLOAD), &mut |record| {
             if rows >= MAX_ROWS {
@@ -593,7 +631,7 @@ impl Database {
         visited_page_budget: usize,
         payload_budget: Option<usize>,
         sink: &mut dyn FnMut(Record) -> Result<(), String>,
-    ) -> Result<(), String> {
+    ) -> Result<WalkStats, String> {
         check_cancelled(cancel)?;
         if !(1..=MAX_PAGE_ID).contains(&rootpage) || rootpage > self.page_count {
             return Err("table root page is outside database".into());
@@ -604,9 +642,40 @@ impl Database {
         let alias = self.rowid_aliases.get(&rootpage).copied();
         let database_size = usize::try_from(self.page_count).unwrap_or(usize::MAX).saturating_mul(self.page_size);
         let payload_budget = payload_budget.map_or(database_size, |budget| budget.min(database_size));
-        let mut state = WalkState { seen: HashSet::new(), payload_total: 0, payload_budget, sink };
+        let mut state = WalkState { seen: HashSet::new(), payload_total: 0, payload_budget, strict: false, stats: WalkStats::default(), sink };
         self.visit_table(rootpage, ncols, alias, 0, cancel, visited_page_budget, &mut state)?;
-        check_cancelled(cancel)
+        check_cancelled(cancel)?;
+        Ok(state.stats)
+    }
+
+    /// One leaf cell's record: its values, or an error that concerns this record alone (too large, a broken overflow
+    /// chain, a malformed header). `lossy` counts its text values that were not valid UTF-8.
+    #[allow(clippy::too_many_arguments)]
+    fn leaf_record(
+        &self,
+        page: &[u8],
+        at: usize,
+        payload_len: usize,
+        rowid: i64,
+        ncols: usize,
+        alias: Option<usize>,
+        cancel: &std::sync::atomic::AtomicBool,
+        lossy: &mut usize,
+    ) -> Result<Vec<Value>, String> {
+        if payload_len > MAX_PAYLOAD {
+            return Err("SQLite record payload is too large".into());
+        }
+        let payload = self.payload(page, at, payload_len, cancel)?;
+        let mut values = decode_record(&payload, ncols, self.encoding, lossy)?;
+        if let Some(index) = alias {
+            if index >= values.len() {
+                return Err("INTEGER PRIMARY KEY column is missing from record".into());
+            }
+            if let Some(value @ Value::Null) = values.get_mut(index) {
+                *value = Value::Integer(rowid);
+            }
+        }
+        Ok(values)
     }
 
     fn page(&self, page_id: u32, cancel: &std::sync::atomic::AtomicBool) -> Result<Vec<u8>, String> {
@@ -684,25 +753,32 @@ impl Database {
                     }
                     let mut at = cell;
                     let payload_len = usize_from_u64(read_varint(content, &mut at)?, "payload length")?;
-                    if payload_len > MAX_PAYLOAD {
-                        return Err("SQLite record payload is too large".into());
-                    }
                     let rowid = i64::from_be_bytes(read_varint(content, &mut at)?.to_be_bytes());
-                    state.payload_total = state.payload_total.checked_add(payload_len).ok_or("SQLite table payload total overflow")?;
-                    if state.payload_total > state.payload_budget {
-                        return Err("SQLite table payload exceeds bounded import size".into());
+                    // An oversized record is never read, so it is not charged; every record read is, before reading.
+                    if payload_len <= MAX_PAYLOAD {
+                        state.payload_total = state.payload_total.checked_add(payload_len).ok_or("SQLite table payload total overflow")?;
+                        if state.payload_total > state.payload_budget {
+                            return Err("SQLite table payload exceeds bounded import size".into());
+                        }
                     }
-                    let payload = self.payload(&page, at, payload_len, cancel)?;
-                    let mut values = decode_record(&payload, ncols, self.encoding)?;
+                    let mut lossy = 0usize;
+                    let values = match self.leaf_record(&page, at, payload_len, rowid, ncols, alias, cancel, &mut lossy) {
+                        Ok(values) => values,
+                        Err(error) => {
+                            // cancellation, a failing source file, and schema walks still stop the walk
+                            check_cancelled(cancel)?;
+                            if state.strict || self.has_observed_source_failure() {
+                                return Err(error);
+                            }
+                            state.stats.skipped = state.stats.skipped.saturating_add(1);
+                            if state.stats.first_skip.is_none() {
+                                state.stats.first_skip = Some(format!("row {rowid}: {error}"));
+                            }
+                            continue;
+                        }
+                    };
+                    state.stats.lossy_text = state.stats.lossy_text.saturating_add(lossy);
                     check_cancelled(cancel)?;
-                    if let Some(index) = alias {
-                        if index >= values.len() {
-                            return Err("INTEGER PRIMARY KEY column is missing from record".into());
-                        }
-                        if let Some(value @ Value::Null) = values.get_mut(index) {
-                            *value = Value::Integer(rowid);
-                        }
-                    }
                     (state.sink)(Record { values })?;
                 }
                 Ok(())
@@ -816,8 +892,14 @@ impl Database {
         let mut roots = HashSet::new();
         let mut aliases = HashMap::new();
         let mut rows = Vec::new();
-        let mut state =
-            WalkState { seen: HashSet::new(), payload_total: 0, payload_budget: MAX_TABLE_PAYLOAD, sink: &mut |record| keep_row(&mut rows, record) };
+        let mut state = WalkState {
+            seen: HashSet::new(),
+            payload_total: 0,
+            payload_budget: MAX_TABLE_PAYLOAD,
+            strict: true,
+            stats: WalkStats::default(),
+            sink: &mut |record| keep_row(&mut rows, record),
+        };
         self.visit_table(1, 5, None, 0, cancel, MAX_VISITED_BTREE_PAGES, &mut state)?;
         for record in rows {
             check_cancelled(cancel)?;
@@ -945,7 +1027,7 @@ fn parse_wal(wal: &[u8], page_size: usize) -> Result<WalOverlay, String> {
     Ok(WalOverlay { page_size, frame_count, pages: overlay, page_count })
 }
 
-fn decode_record(payload: &[u8], ncols: usize, encoding: TextEncoding) -> Result<Vec<Value>, String> {
+fn decode_record(payload: &[u8], ncols: usize, encoding: TextEncoding, lossy: &mut usize) -> Result<Vec<Value>, String> {
     let mut at = 0;
     let header_len = usize_from_u64(read_varint(payload, &mut at)?, "record header length")?;
     if header_len < at || header_len > payload.len() {
@@ -964,7 +1046,7 @@ fn decode_record(payload: &[u8], ncols: usize, encoding: TextEncoding) -> Result
     let mut body = header_len;
     let mut values = Vec::with_capacity(ncols);
     for serial in serials {
-        let (value, size) = serial_value(payload, &mut body, serial, encoding)?;
+        let (value, size) = serial_value(payload, &mut body, serial, encoding, lossy)?;
         values.push(value);
         if values.len() > MAX_COLUMNS {
             return Err("SQLite record has too many columns".into());
@@ -978,7 +1060,7 @@ fn decode_record(payload: &[u8], ncols: usize, encoding: TextEncoding) -> Result
     Ok(values)
 }
 
-fn serial_value(payload: &[u8], body: &mut usize, serial: u64, encoding: TextEncoding) -> Result<(Value, usize), String> {
+fn serial_value(payload: &[u8], body: &mut usize, serial: u64, encoding: TextEncoding, lossy: &mut usize) -> Result<(Value, usize), String> {
     let (kind, len) = match serial {
         0 => (0, 0),
         1 => (1, 1),
@@ -1028,16 +1110,27 @@ fn serial_value(payload: &[u8], body: &mut usize, serial: u64, encoding: TextEnc
         8 => Value::Integer(0),
         9 => Value::Integer(1),
         12 => Value::Blob(bytes.to_vec()),
-        13 => Value::Text(decode_text(bytes, encoding)?),
+        13 => {
+            let (text, replaced) = decode_text(bytes, encoding)?;
+            if replaced {
+                *lossy = lossy.saturating_add(1);
+            }
+            Value::Text(text)
+        }
         _ => return Err("invalid SQLite field type".into()),
     };
     *body = end;
     Ok((value, len))
 }
 
-fn decode_text(bytes: &[u8], encoding: TextEncoding) -> Result<String, String> {
+/// A text value, and whether invalid UTF-8 or UTF-16 in it was replaced with U+FFFD (Lightroom catalogs hold text
+/// written by many tools over many years; one bad byte must not cost the record).
+fn decode_text(bytes: &[u8], encoding: TextEncoding) -> Result<(String, bool), String> {
     match encoding {
-        TextEncoding::Utf8 => String::from_utf8(bytes.to_vec()).map_err(|_| "invalid UTF-8 SQLite text".into()),
+        TextEncoding::Utf8 => match std::str::from_utf8(bytes) {
+            Ok(text) => Ok((text.to_string(), false)),
+            Err(_) => Ok((String::from_utf8_lossy(bytes).into_owned(), true)),
+        },
         TextEncoding::Utf16Le | TextEncoding::Utf16Be => {
             if !bytes.len().is_multiple_of(2) {
                 return Err("odd-length UTF-16 SQLite text".into());
@@ -1056,7 +1149,11 @@ fn decode_text(bytes: &[u8], encoding: TextEncoding) -> Result<String, String> {
                     })
                 })
                 .collect();
-            String::from_utf16(&units?).map_err(|_| "invalid UTF-16 SQLite text".into())
+            let units = units?;
+            match String::from_utf16(&units) {
+                Ok(text) => Ok((text, false)),
+                Err(_) => Ok((String::from_utf16_lossy(&units), true)),
+            }
         }
     }
 }
@@ -2212,10 +2309,10 @@ mod tests {
     #[test]
     fn utf16_and_overflow_payloads_are_supported() {
         let mut payload = vec![2, 17, b'A', 0];
-        assert_eq!(decode_record(&payload, 1, TextEncoding::Utf16Le).unwrap(), vec![Value::Text("A".into())]);
+        assert_eq!(decode_record(&payload, 1, TextEncoding::Utf16Le, &mut 0).unwrap(), vec![Value::Text("A".into())]);
         payload.clear();
         payload.extend([2, 17, 0, b'A']);
-        assert_eq!(decode_record(&payload, 1, TextEncoding::Utf16Be).unwrap(), vec![Value::Text("A".into())]);
+        assert_eq!(decode_record(&payload, 1, TextEncoding::Utf16Be, &mut 0).unwrap(), vec![Value::Text("A".into())]);
 
         let mut main = vec![0u8; 2 * 512];
         let db = Database {
@@ -2378,6 +2475,68 @@ mod tests {
             Ok(())
         });
         assert!(walked.is_err() && rows > 0 && rows < 100, "{walked:?} after {rows} rows");
+    }
+
+    /// Hostile records each cost only themselves (issue #1311): a record claiming more than `MAX_PAYLOAD`, one whose
+    /// header is malformed and one with a reserved serial type are left out and
+    /// counted; invalid UTF-8 is read with replacement characters and counted; the good rows around them all arrive.
+    #[test]
+    fn bad_records_are_skipped_and_counted_not_the_table() {
+        const PAGE: usize = 4096;
+        let mut main = vec![0u8; PAGE * 2];
+        let mut cells: Vec<Vec<u8>> = Vec::new();
+        let record = |rowid: u64, payload: &[u8]| {
+            let mut cell = varint(payload.len() as u64);
+            cell.extend(varint(rowid));
+            cell.extend(payload);
+            cell
+        };
+        cells.push(record(1, &[2, 1, 7])); // good: integer 7
+        let mut oversized = varint(MAX_PAYLOAD as u64 + 1);
+        oversized.extend(varint(2));
+        oversized.extend([0u8; 8]);
+        cells.push(oversized);
+        cells.push(record(3, &[9, 1, 7])); // header length past the payload
+        cells.push(record(4, &[2, 10])); // reserved serial type
+        cells.push(record(6, &[2, 0x13, 0xff, 0xfe, b'a'])); // text "\xff\xfea" (invalid UTF-8)
+        cells.push(record(7, &[2, 1, 9])); // good: integer 9
+        let leaf = &mut main[PAGE..];
+        leaf[0] = 0x0d;
+        leaf[3..5].copy_from_slice(&u16::try_from(cells.len()).unwrap().to_be_bytes());
+        let mut end = PAGE;
+        for (i, cell) in cells.iter().enumerate() {
+            end -= cell.len();
+            leaf[end..end + cell.len()].copy_from_slice(cell);
+            leaf[8 + i * 2..10 + i * 2].copy_from_slice(&u16::try_from(end).unwrap().to_be_bytes());
+        }
+        let db = Database {
+            main: MainPages::Bytes(main),
+            wal: None,
+            page_size: PAGE,
+            reserved: 0,
+            encoding: TextEncoding::Utf8,
+            page_count: 2,
+            tables: Vec::new(),
+            rowid_aliases: HashMap::new(),
+        };
+        let never_cancel = AtomicBool::new(false);
+        let mut got = Vec::new();
+        let stats = db
+            .for_each_row_with_cancel(2, 1, &never_cancel, &mut |r| {
+                got.push(r.values);
+                Ok(())
+            })
+            .expect("bad records never fail the walk");
+        assert_eq!(got, vec![vec![Value::Integer(7)], vec![Value::Text("\u{fffd}\u{fffd}a".into())], vec![Value::Integer(9)]]);
+        assert_eq!((stats.skipped, stats.lossy_text), (3, 1));
+        assert!(stats.first_skip.as_deref().is_some_and(|why| why.contains("row 2") && why.contains("too large")), "{stats:?}");
+        let notes = stats.notes("T");
+        assert!(notes.iter().any(|n| n.contains("3 records") && n.contains("left out")), "{notes:?}");
+        assert!(notes.iter().any(|n| n.contains("replacement characters")), "{notes:?}");
+        // a kept walk skips the same way; a cancelled one still stops
+        assert_eq!(db.for_each_kept_row_with_cancel(2, 1, &never_cancel, &mut |_| Ok(())).map(|s| s.skipped), Ok(3));
+        assert!(db.for_each_row_with_cancel(2, 1, &AtomicBool::new(true), &mut |_| Ok(())).is_err());
+        assert!(WalkStats::default().notes("T").is_empty(), "a clean walk adds no warning");
     }
 }
 

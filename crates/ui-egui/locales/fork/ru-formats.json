@@ -207,6 +207,7 @@
   "{a} on map · {b} untagged": "{a} на карте · {b} без места",
   "{card} (screen)": "{card} (экран)",
   "{count} modules in the plug-ins folder weren't loaded: it holds more than it can load.": "Не загружено модулей из папки подключаемых модулей: {count}. В ней больше модулей, чем можно загрузить.",
+  "{count} more failures.": "Ещё {count} сбоев.",
   "{done} downloaded": "Загружено: {done}",
   "{done} of {total} ({percent} %)": "{done} из {total} ({percent} %)",
   "{done} of {total} photos": "{done} из {total} фото",

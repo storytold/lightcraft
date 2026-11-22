@@ -233,6 +233,7 @@
   "{a} on map · {b} untagged": "{a} på kartan · {b} utan plats",
   "{card} (screen)": "{card} (skärm)",
   "{count} modules in the plug-ins folder weren't loaded: it holds more than it can load.": "{count} moduler i tilläggsmappen lästes inte in: den innehåller fler än som kan läsas in.",
+  "{count} more failures.": "{count} fler fel.",
   "{done} downloaded": "{done} hämtat",
   "{done} of {total} ({percent} %)": "{done} av {total} ({percent} %)",
   "{done} of {total} photos": "{done} av {total} foton",

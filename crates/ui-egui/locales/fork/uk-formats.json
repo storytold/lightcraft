@@ -198,6 +198,7 @@
   "{a} on map · {b} untagged": "{a} на мапі · {b} без місця",
   "{card} (screen)": "{card} (екран)",
   "{count} modules in the plug-ins folder weren't loaded: it holds more than it can load.": "Не завантажено модулів із теки плагінів: {count}. У ній більше модулів, ніж можна завантажити.",
+  "{count} more failures.": "Ще {count} збоїв.",
   "{done} downloaded": "Завантажено: {done}",
   "{done} of {total} ({percent} %)": "{done} з {total} ({percent} %)",
   "{done} of {total} photos": "{done} з {total} фото",
