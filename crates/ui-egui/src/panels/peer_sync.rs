@@ -8,8 +8,8 @@
 //! paired, keeps the status known (slowly while the tab is closed) and runs `sync.tick` once a
 //! second while sync runs. [`dialogs`] asks how to share a collection created while the catalog
 //! syncs, and [`waiting`] counts what needs an answer (the top bar's cloud shows it).
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
+use crate::json_ext::JsonExt as _;
 use std::collections::{BTreeMap, BTreeSet};
 
 use egui::RichText;
@@ -118,7 +118,7 @@ pub fn pump(app: &mut LccApp, ctx: &egui::Context) {
         match app.session.execute("sync.start", &json!({})) {
             Ok(v) => {
                 if running(&v) {
-                    app.peer_sync.status["running"] = json!(true);
+                    *app.peer_sync.status.field_mut("running") = json!(true);
                     app.peer_sync.ticked = f64::NEG_INFINITY;
                 }
             }
@@ -144,7 +144,7 @@ pub fn pump(app: &mut LccApp, ctx: &egui::Context) {
 
 /// Whether the open catalog syncs with other devices (as last known; [`pump`] keeps it fresh).
 pub(crate) fn catalog_syncs(app: &LccApp) -> bool {
-    !app.peer_sync.status["catalogue"]["group"].is_null()
+    !app.peer_sync.status.field("catalogue").field("group").is_null()
 }
 
 fn running(v: &Value) -> bool {
@@ -165,7 +165,7 @@ fn flag(v: &Value, key: &str) -> bool {
 
 /// New collections waiting to be asked about (not put off this run).
 fn undecided(app: &LccApp) -> Vec<(u64, String)> {
-    arr(&app.peer_sync.status["catalogue"], "undecided")
+    arr(app.peer_sync.status.field("catalogue"), "undecided")
         .iter()
         .filter_map(|u| Some((u.get("album")?.as_u64()?, s(u, "name").to_string())))
         .filter(|(a, _)| !app.peer_sync.later.contains(a))
@@ -469,7 +469,7 @@ fn catalogue(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, st: &Value) {
         super::settings::hint(ui, t, "Open a catalog saved on this computer to sync it.");
         return;
     };
-    let unkeyed = cat["unkeyed"].as_u64().unwrap_or(0);
+    let unkeyed = cat.field("unkeyed").as_u64().unwrap_or(0);
     if unkeyed > 0 {
         let r = crate::dialog_frame::note(
             ui,
@@ -478,7 +478,7 @@ fn catalogue(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, st: &Value) {
         register(ui.ctx(), "text:syncUnkeyed", r.rect);
     }
     let offers = arr(st, "offers");
-    let photos = cat["photos"].as_u64().unwrap_or(0);
+    let photos = cat.field("photos").as_u64().unwrap_or(0);
     for o in &offers {
         offer_box(app, ui, t, o, photos);
     }
@@ -729,12 +729,12 @@ fn rows(app: &LccApp, cat: &Value, g: &Value) -> Vec<Row> {
             name,
             owner,
             mine,
-            grant: parse(&c["grant"]).unwrap_or_default(),
-            take: parse(&c["take"]).unwrap_or_default(),
-            most: parse(&c["most"]).unwrap_or_default(),
+            grant: parse(c.field("grant")).unwrap_or_default(),
+            take: parse(c.field("take")).unwrap_or_default(),
+            most: parse(c.field("most")).unwrap_or_default(),
             letters: s(&c, "letters").to_string(),
-            pill: parse(&c["pill"]),
-            photos: c["photos"].as_u64().unwrap_or(0),
+            pill: parse(c.field("pill")),
+            photos: c.field("photos").as_u64().unwrap_or(0),
             immich: flag(&c, "immich"),
             target: json!({"collection": id}),
         });

@@ -5,8 +5,8 @@
 //! a Hard Drive, SFTP, Immich or plug-in service (Edit Settings… changes one). Everything goes
 //! through the `publish.*` commands; a publish renders and
 //! sends on a worker thread.
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
+use crate::json_ext::JsonExt as _;
 use egui::{Align2, Sense, pos2, vec2};
 use serde_json::{Value, json};
 
@@ -93,7 +93,7 @@ fn body(app: &mut LccApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let v = services(app, ui);
     let mut form: Form = ui.data(|d| d.get_temp(form_id())).unwrap_or_default();
-    let list = v["services"].as_array().cloned().unwrap_or_default();
+    let list = v.field("services").as_array().cloned().unwrap_or_default();
     if v.is_null() {
         ui.label(egui::RichText::new(crate::i18n::tr("Publish services need a catalog on disk.")).color(t.text_dim).size(11.5));
         return;
@@ -216,7 +216,7 @@ fn body(app: &mut LccApp, ui: &mut egui::Ui) {
 fn status_line(app: &mut LccApp, ui: &mut egui::Ui, album: u64) {
     let t = Tokens::get(ui.ctx());
     let Ok(st) = app.session.execute("publish.status", &json!({"collection": album})) else { return };
-    let n = |k: &str| st[k].as_array().map(Vec::len).unwrap_or(0);
+    let n = |k: &str| st.field(k).as_array().map(Vec::len).unwrap_or(0);
     let text = format!(
         "{} {} · {} {} · {} {} · {} {}",
         n("new"),
@@ -232,7 +232,7 @@ fn status_line(app: &mut LccApp, ui: &mut egui::Ui, album: u64) {
     let busy = app.tasks.is_running(TASK);
     ui.horizontal(|ui| {
         let r = ui.add_enabled(
-            !busy && st["pending"].as_u64().unwrap_or(0) > 0,
+            !busy && st.field("pending").as_u64().unwrap_or(0) > 0,
             egui::Button::new(crate::i18n::tr(if busy { "Publishing…" } else { "Publish" })),
         );
         register(ui.ctx(), "publishNow", r.rect);
@@ -269,7 +269,8 @@ impl Form {
         let servers = app.session.execute("web.servers", &json!({})).unwrap_or(Value::Null);
         self.servers = servers.as_array().into_iter().flatten().filter_map(|s| s["name"].as_str().map(str::to_string)).collect();
         let st = app.session.execute("immich.status", &json!({})).unwrap_or(Value::Null);
-        self.accounts = st["accounts"]
+        self.accounts = st
+            .field("accounts")
             .as_array()
             .into_iter()
             .flatten()
@@ -339,7 +340,7 @@ impl Form {
                 let port: u16 = self.sftp_port.trim().parse().map_err(|_| crate::i18n::tr("The port must be a number (1–65535)").to_string())?;
                 let mut server = json!({"host": self.sftp_host.trim(), "port": port, "user": self.sftp_user.trim(), "path": self.sftp_path.trim()});
                 if !self.sftp_key.trim().is_empty() {
-                    server["keyFile"] = json!(self.sftp_key.trim());
+                    *server.field_mut("keyFile") = json!(self.sftp_key.trim());
                 }
                 json!({"server": server})
             }
@@ -498,13 +499,13 @@ pub fn publish(app: &mut LccApp, ctx: &egui::Context, album: u64) {
     ) {
         Ok(r) => {
             let (p, rm, f) = (
-                r["published"].as_array().map(Vec::len).unwrap_or(0),
-                r["removed"].as_array().map(Vec::len).unwrap_or(0),
-                r["failed"].as_array().map(Vec::len).unwrap_or(0),
+                r.field("published").as_array().map(Vec::len).unwrap_or(0),
+                r.field("removed").as_array().map(Vec::len).unwrap_or(0),
+                r.field("failed").as_array().map(Vec::len).unwrap_or(0),
             );
             let mut msg = format!("{} {p} · {} {rm}", crate::i18n::tr("Published"), crate::i18n::tr("removed"));
             if f > 0 {
-                let first = r["failed"][0]["error"].as_str().unwrap_or_default();
+                let first = r.field("failed")[0].field("error").as_str().unwrap_or_default();
                 msg.push_str(&format!(" · {} {f}: {first}", crate::i18n::tr("failed")));
                 app.toast_error(ctx, msg);
             } else {

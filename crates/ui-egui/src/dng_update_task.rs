@@ -5,8 +5,8 @@
 //! in the activity stack shows the count and ✕ (cancel between photos).
 //!
 //! Sources: own design, after `render_dng_task`.
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
+use crate::json_ext::JsonExt as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, channel};
@@ -93,7 +93,7 @@ pub fn poll(app: &mut LccApp, ctx: &egui::Context) {
             }
             match dng_update::finish(&mut app.session, done, cancelled) {
                 Ok(r) => {
-                    let failed = r["failed"].as_array().is_some_and(|f| !f.is_empty());
+                    let failed = r.field("failed").as_array().is_some_and(|f| !f.is_empty());
                     let msg = note(&r, total);
                     app.last_dng_update = Some(r);
                     app.toast_for(ctx, msg, if failed { 15.0 } else { crate::TOAST_SECONDS });

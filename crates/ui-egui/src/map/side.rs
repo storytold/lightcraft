@@ -1,7 +1,7 @@
 //! The map's filter / search bar and its side panel (style, saved locations, tracklog, reverse
 //! geocoding, tile cache); the background jobs they start.
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
+use crate::json_ext::JsonExt as _;
 use egui::{Rect, RichText};
 use serde_json::{Value, json};
 
@@ -163,7 +163,9 @@ pub fn poll_jobs(app: &mut LccApp, ctx: &egui::Context) {
             },
             Job::Geocode(rx) => match rx.try_recv() {
                 Ok(Ok(params)) => match app.run("map.reverseGeocode", params) {
-                    Ok(v) => app.toast(ctx, crate::i18n::tr_format!("Filled the location of {n} photos", n = v["changed"].as_u64().unwrap_or(0))),
+                    Ok(v) => {
+                        app.toast(ctx, crate::i18n::tr_format!("Filled the location of {n} photos", n = v.field("changed").as_u64().unwrap_or(0)))
+                    }
                     Err(e) => app.toast_error(ctx, e),
                 },
                 Ok(Err(e)) => app.toast_error(ctx, e),
@@ -360,7 +362,7 @@ fn style_section(app: &mut LccApp, ui: &mut egui::Ui) {
 
 fn locations_section(app: &mut LccApp, ui: &mut egui::Ui) {
     section(ui, "Saved Locations", true, |ui| {
-        let list = app.run("map.locations", json!({})).ok().and_then(|v| v["locations"].as_array().cloned()).unwrap_or_default();
+        let list = app.run("map.locations", json!({})).ok().and_then(|v| v.field("locations").as_array().cloned()).unwrap_or_default();
         for l in &list {
             let name = l["name"].as_str().unwrap_or("").to_string();
             let private = l["private"].as_bool().unwrap_or(false);
@@ -446,24 +448,23 @@ fn track_section(app: &mut LccApp, ui: &mut egui::Ui) {
                 let mut p = json!({"path": path});
                 if let Some(id) = app.session.active() {
                     let has_gps = app.session.catalog.photo(id).is_some_and(|ph| ph.meta.gps.is_some());
-                    p["id"] = json!(id.0);
+                    *p.field_mut("id") = json!(id.0);
                     if !has_gps {
                         let c = app.map.centre();
-                        p["lat"] = json!(c.lat);
-                        p["lon"] = json!(c.lon);
+                        *p.field_mut("lat") = json!(c.lat);
+                        *p.field_mut("lon") = json!(c.lon);
                     }
                 }
                 match app.run("map.trackOffset", p) {
-                    Ok(v) => app.map.offset = v["offset"].as_str().unwrap_or("").to_string(),
+                    Ok(v) => app.map.offset = v.field("offset").as_str().unwrap_or("").to_string(),
                     Err(e) => app.toast_error(ui.ctx(), e),
                 }
             }
             let has_sel = !app.session.selection.ids.is_empty();
             if ui.add_enabled(has_sel, egui::Button::new(tr("Auto-Tag Selected Photos"))).clicked() {
                 match app.run("map.autoTag", json!({})) {
-                    Ok(v) => {
-                        app.toast(ui.ctx(), crate::i18n::tr_format!("Tagged {n} photos from the tracklog", n = v["tagged"].as_u64().unwrap_or(0)))
-                    }
+                    Ok(v) => app
+                        .toast(ui.ctx(), crate::i18n::tr_format!("Tagged {n} photos from the tracklog", n = v.field("tagged").as_u64().unwrap_or(0))),
                     Err(e) => app.toast_error(ui.ctx(), e),
                 }
             }
@@ -485,7 +486,7 @@ fn geocode_section(app: &mut LccApp, ui: &mut egui::Ui) {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     let st = app.run("map.geocodeStatus", json!({})).unwrap_or_default();
-                    let have = st["offline"]["downloaded"].as_bool().unwrap_or(false);
+                    let have = st.field("offline").field("downloaded").as_bool().unwrap_or(false);
                     ui.label(RichText::new(lcc_geo::geocode::GEONAMES_ATTRIBUTION).weak().size(11.0));
                     let busy = app.map.jobs.iter().any(|j| matches!(j, Job::Download(_)));
                     let label =
@@ -519,7 +520,9 @@ fn geocode_section(app: &mut LccApp, ui: &mut egui::Ui) {
         if ui.add_enabled(can, egui::Button::new(tr("Look Up Selected Photos"))).clicked() {
             match app.run("map.lookup", json!({})) {
                 Ok(v) if v.get("pending").is_some() => app.toast(ui.ctx(), tr("Looking up locations…")),
-                Ok(v) => app.toast(ui.ctx(), crate::i18n::tr_format!("Filled the location of {n} photos", n = v["found"].as_u64().unwrap_or(0))),
+                Ok(v) => {
+                    app.toast(ui.ctx(), crate::i18n::tr_format!("Filled the location of {n} photos", n = v.field("found").as_u64().unwrap_or(0)))
+                }
                 Err(e) => app.toast_error(ui.ctx(), e),
             }
         }

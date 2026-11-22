@@ -1,7 +1,7 @@
 //! Semantic search models in Settings ▸ AI Models (`ml.models.*`, `ml.status`, `ml.enable`).
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use crate::i18n::{tr, tr_format};
+use crate::json_ext::JsonExt as _;
 use egui::RichText;
 use serde_json::{Value, json};
 
@@ -18,8 +18,8 @@ fn mb(bytes: Option<u64>) -> String {
 }
 
 fn licence_line(m: &Value) -> String {
-    let spdx = m["licence"]["spdx"].as_str().unwrap_or("");
-    let summary = m["licence"]["summary"].as_str().unwrap_or("");
+    let spdx = m.field("licence").field("spdx").as_str().unwrap_or("");
+    let summary = m.field("licence").field("summary").as_str().unwrap_or("");
     match (spdx.is_empty(), summary.is_empty()) {
         (false, false) => format!("{} ({spdx}): {}", tr("Licence"), tr(summary)),
         (false, true) => format!("{}: {spdx}", tr("Licence")),
@@ -87,8 +87,11 @@ fn cached_downloads(app: &mut LccApp, ctx: &egui::Context) -> Vec<Value> {
             return v;
         }
     }
-    let v =
-        app.session.execute("ml.models.downloads", &json!({})).map(|v| v["downloads"].as_array().cloned().unwrap_or_default()).unwrap_or_default();
+    let v = app
+        .session
+        .execute("ml.models.downloads", &json!({}))
+        .map(|v| v.field("downloads").as_array().cloned().unwrap_or_default())
+        .unwrap_or_default();
     ctx.data_mut(|d| d.insert_temp(downloads_cache_id(), (now, v.clone())));
     v
 }
@@ -97,8 +100,8 @@ fn cached_downloads(app: &mut LccApp, ctx: &egui::Context) -> Vec<Value> {
 pub fn models_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let ctx = ui.ctx().clone();
     let list = cached_list(app, &ctx);
-    let models: Vec<Value> = list["models"].as_array().cloned().unwrap_or_default();
-    if list["dir"].is_null() || models.is_empty() {
+    let models: Vec<Value> = list.field("models").as_array().cloned().unwrap_or_default();
+    if list.field("dir").is_null() || models.is_empty() {
         return;
     }
     let status = cached_status(app, &ctx);
@@ -113,14 +116,14 @@ pub fn models_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
         r.scroll_to_me(Some(egui::Align::TOP));
         app.ui.settings_section = None;
     }
-    let mut enabled = status["enabled"].as_bool() == Some(true);
+    let mut enabled = status.field("enabled").as_bool() == Some(true);
     if check(ui, "mlEnable", &mut enabled, "Semantic search: search photos by description") {
         let _ = app.run("ml.enable", json!({"enabled": enabled}));
         invalidate_ml_caches(&ctx);
     }
     super::settings::hint(ui, t, "Off: photos are not indexed and the AI search button is hidden.");
     ml_device_selector(app, ui, t, &status);
-    if enabled && list["selected"].is_string() {
+    if enabled && list.field("selected").is_string() {
         let progress = app.session.execute("ml.indexStatus", &json!({})).unwrap_or(Value::Null);
         let indexer = super::index_controls::Indexer {
             key: "ml",
@@ -240,7 +243,11 @@ fn model_row(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, dl: Opt
                 });
                 let lic = licence_line(m);
                 if !lic.is_empty() {
-                    ui.label(RichText::new(lic).font(t.font(11.5)).color(if m["licence"]["commercial"] == "yes" { t.text_dim } else { t.caution }));
+                    ui.label(RichText::new(lic).font(t.font(11.5)).color(if m.field("licence").field("commercial") == "yes" {
+                        t.text_dim
+                    } else {
+                        t.caution
+                    }));
                 }
                 match (dl_state, dl) {
                     (Some("running"), Some(d)) => {

@@ -4,8 +4,8 @@
 //! - in the loupe, the face whose name box is open, else the face box the pointer last rested on.
 //!
 //! Without a chosen face the items are disabled.
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
+use crate::json_ext::JsonExt as _;
 use serde_json::{Value, json};
 
 use crate::LccApp;
@@ -62,7 +62,8 @@ fn find_similar(app: &mut LccApp, (photo, index): (u64, usize)) -> Result<Value,
         Some(n) => n,
         None => {
             let v = app.session.execute("faces.suggest", &json!({"ids": [photo], "budgetMs": 0})).map_err(|e| e.to_string())?;
-            let best = v["photos"]
+            let best = v
+                .field("photos")
                 .as_array()
                 .and_then(|a| a.iter().find(|p| p["id"].as_u64() == Some(photo)))
                 .and_then(|p| p["faces"].as_array())

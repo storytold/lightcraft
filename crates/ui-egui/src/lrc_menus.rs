@@ -16,7 +16,6 @@
 //!   in step).
 //!
 //! Own layout, from observing Lightroom Classic's menus (names and order only; nothing copied).
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use crate::module::ModuleId;
 
@@ -913,6 +912,7 @@ pub fn gaps_doc() -> String {
 
 /// The "Coming soon" items as UI commands (no menu path: the layouts place them): `enabled()` is
 /// false and running one is an error, so a key, the control channel or MCP can't run them either.
+#[allow(clippy::indexing_slicing, reason = "const evaluation: i is bounded by the loop; an out-of-range index fails the build, not the app")]
 pub const SOON_COMMANDS: [crate::menus::UiCommand; COMING_SOON.len()] = {
     let mut out: [crate::menus::UiCommand; COMING_SOON.len()] = [("", "", None, ""); COMING_SOON.len()];
     let mut i = 0;

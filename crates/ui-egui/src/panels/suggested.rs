@@ -10,8 +10,8 @@
 //! Every decision is a suggestion confirmed or not: nothing is named without the user saying so. A confirmation is a
 //! name on a face, so the catalog's undo takes it back; a rejection changes no photo, so the toast offers the way back
 //! (`faces.undoSuggestionDecision`).
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
+use crate::json_ext::JsonExt as _;
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::json;
 
@@ -139,7 +139,7 @@ pub fn apply(app: &mut LccApp, ctx: &egui::Context, d: Decision) {
     // (`confirmed`) or armed with no decision (`rejected`), and one it passed over is not taken off the screen as though
     // it had been decided
     let field = if d.verdict == Verdict::Confirm { "confirmed" } else { "rejected" };
-    let decided = reply[field].as_u64().map_or(d.faces.len(), |n| usize::try_from(n).unwrap_or(d.faces.len()));
+    let decided = reply.field(field).as_u64().map_or(d.faces.len(), |n| usize::try_from(n).unwrap_or(d.faces.len()));
     // the whole batch went through: it leaves the groups here at once, before the engine's next answer; a batch it
     // passed faces over for waits for the next answer, since a face whose suggestion changed still has one
     if decided == d.faces.len() {

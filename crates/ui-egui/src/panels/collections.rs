@@ -1,8 +1,8 @@
 //! The Classic Collections panel's own parts: the target collection line under the tree and
 //! collection definition export / import. The tree itself (collection sets, collections, smart
 //! collections, drag and drop) is `left::albums_body`.
-#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
+use crate::json_ext::JsonExt as _;
 use egui::{Align2, Sense, pos2, vec2};
 use serde_json::json;
 
@@ -46,7 +46,7 @@ pub fn import_item(app: &mut LccApp, ui: &mut egui::Ui, parent: Option<u64>) {
         if let Some(path) = picked.first() {
             match app.run("album.importDefinition", json!({"path": path, "parent": parent})) {
                 Ok(r) => {
-                    let (n, m) = (r["photos"].as_u64().unwrap_or(0), r["unmatched"].as_u64().unwrap_or(0));
+                    let (n, m) = (r.field("photos").as_u64().unwrap_or(0), r.field("unmatched").as_u64().unwrap_or(0));
                     app.toast(ui.ctx(), crate::i18n::tr_format!("Collection imported: {n} photos found, {m} not in this catalog", n = n, m = m));
                 }
                 Err(e) => app.toast(ui.ctx(), e),
