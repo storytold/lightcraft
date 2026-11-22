@@ -1,6 +1,7 @@
 # Quality gates (docs/ci.md).
 # PRs and pushes to main run the FAST gate: Linux `cargo xtask ci --fast` (fmt, brand, docs, clippy, heif
-# clippy, parity, layers, assets, deny, wasm; no unit-test run) plus the SIL suite when it exists; macOS
+# clippy, parity, layers, assets, deny, wasm), on PRs the tests of the changed crates and their dependents
+# (`cargo xtask affected-tests`), plus the SIL suite when it exists; macOS
 # and Windows clippy only. A push to main whose tree a green PR run already tested is skipped (`tested`).
 # Manual dispatch runs the FULL gate (before a release, on the commit that goes to `release`):
 # `cargo xtask ci` with every test on Linux, and the workspace tests on macOS and Windows. A push to
@@ -83,6 +84,9 @@ jobs:
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # the PR's merge commit and its first parent (the base), for `affected-tests --base HEAD^1`
+          fetch-depth: 2
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
@@ -108,6 +112,12 @@ jobs:
         shell: bash
         run: |
           if [ -n "$FULL_CI" ]; then cargo xtask ci; else cargo xtask ci --fast; fi
+      # PRs: the unit and integration tests of the crates the PR changes and of every workspace crate
+      # depending on them (all of them when Cargo.lock or another workspace-wide file changed)
+      - name: Changed-crate tests
+        if: github.event_name == 'pull_request' && env.FULL_CI != '1'
+        shell: bash
+        run: cargo xtask affected-tests --base HEAD^1
       # Software-in-the-loop suite (docs/testing-sil.md); skipped until `cargo xtask sil` exists.
       - name: SIL suite
         shell: bash
