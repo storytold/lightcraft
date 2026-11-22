@@ -370,9 +370,10 @@ fn load_settings<T: serde::de::DeserializeOwned>(file: &Path) -> (Option<T>, Opt
 }
 
 /// Writes a settings file, unless one is there that can't be read or doesn't parse: that is the
-/// user's, not to be replaced by defaults that only stood in for it.
-fn save_settings(file: &Path, body: &[u8]) -> Result<()> {
-    if let Err((_, why)) = read_settings::<serde_json::Value>(file) {
+/// user's, not to be replaced by defaults that only stood in for it. "Parses" means as `T`, the
+/// file's own shape: well-formed JSON of another shape (`{"keepBackups":"lots"}`) is refused too.
+fn save_settings<T: serde::de::DeserializeOwned>(file: &Path, body: &[u8]) -> Result<()> {
+    if let Err((_, why)) = read_settings::<T>(file) {
         let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         return Err(CatalogError::Io(format!("{name} couldn't be read ({why}), so it isn't overwritten; repair or remove it, then try again")));
     }
@@ -494,7 +495,7 @@ impl RecentCatalogs {
             std::fs::create_dir_all(parent).map_err(ioe)?;
         }
         let body = serde_json::to_vec_pretty(self).map_err(|e| CatalogError::Io(e.to_string()))?;
-        save_settings(file, &body)
+        save_settings::<RecentCatalogs>(file, &body)
     }
     /// Move `path` (an entry point) to the top.
     pub fn touch(&mut self, path: &Path) {
@@ -606,7 +607,7 @@ impl CatalogSettings {
     /// (the defaults that stood in for it never replace the user's settings).
     pub fn save(&self, dir: &Path) -> Result<()> {
         let body = serde_json::to_vec_pretty(self).map_err(|e| CatalogError::Io(e.to_string()))?;
-        save_settings(&dir.join(SETTINGS_FILE), &body)
+        save_settings::<CatalogSettings>(&dir.join(SETTINGS_FILE), &body)
     }
     /// A backup is due on exit at `now`.
     pub fn backup_due(&self, now: i64) -> bool {

@@ -375,10 +375,12 @@ impl Replica {
 
     /// Keeps the part of an item `from` sent that was stamped too far in the future to take now
     /// ([`Item::split_ahead`]), to try again later. Past [`MAX_HELD`] items in all, the oldest
-    /// held item of the longest list goes; says how many were dropped that way (0 normally).
+    /// held item of the longest list goes; says how many were dropped that way (0 normally). An
+    /// invalid `from` id keeps nothing: the item counts as dropped (1).
     pub fn hold(&mut self, from: &str, item: Item) -> usize {
         if !ok_id(from) {
-            return 0;
+            // not kept under a bad id: counted as dropped, so the caller says so
+            return 1;
         }
         self.held.entry(from.to_string()).or_default().push(item);
         let mut dropped = 0;

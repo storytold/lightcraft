@@ -537,6 +537,10 @@ fn catalog_settings_that_cant_be_read_are_never_overwritten() {
     assert!(matches!(CatalogSettings::load_checked(s.path()).1, Some(library::SettingsProblem::SetAside { .. })));
     CatalogSettings { keep_backups: 1, ..Default::default() }.save(s.path()).unwrap();
     assert_eq!(CatalogSettings::load(s.path()).keep_backups, 1);
+    // well-formed JSON of the wrong shape is the user's too: not overwritten
+    std::fs::write(&file, b"{\"keepBackups\": \"lots\"}").unwrap();
+    assert!(CatalogSettings { keep_backups: 2, ..Default::default() }.save(s.path()).is_err());
+    assert_eq!(std::fs::read(&file).unwrap(), b"{\"keepBackups\": \"lots\"}");
 }
 
 #[test]

@@ -450,7 +450,7 @@ fn held_items_are_capped() {
     }
     assert_eq!(dropped, 10);
     assert_eq!(r.held.values().map(Vec::len).sum::<usize>(), MAX_HELD);
-    // a hostile device id is not kept
-    assert_eq!(r.hold("\u{0}", item.clone()), 0);
+    // a hostile device id is not kept, and the caller is told it was dropped
+    assert_eq!(r.hold("\u{0}", item.clone()), 1);
     assert!(!r.held.contains_key("\u{0}"));
 }

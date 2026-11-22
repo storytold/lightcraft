@@ -1,5 +1,7 @@
 //! Things the user must be told once, as data: the UI words them in the user's language
-//! (`panels::notices` in the egui front end), the CLI and MCP print [`Notice::english`] on stderr.
+//! (`panels::notices` in the egui front end) and the CLI prints [`Notice::english`] on stderr.
+//! Every notice is also logged in English as it is queued ([`crate::Session::notify`]): that
+//! log line is all the MCP server shows, since it never takes the queue (bounded at 64).
 
 /// One thing to tell the user ([`crate::Session::take_notices`]).
 #[derive(Clone, Debug, PartialEq, Eq)]

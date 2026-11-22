@@ -986,6 +986,27 @@ const MAX_ADOPTED_KEYWORDS: usize = 4096;
 /// The keywords sidecar packet `xmp` holds that photo `p` lacks (as `from_file` reads them; a flat
 /// name counts as held when it is a level of one of the photo's paths). Empty for an unreadable
 /// packet.
+/// Adds `extra` (case-insensitively missing ones) to every metadata snapshot of photo `id` in
+/// `op`, nested batches included (bounded depth).
+fn keep_keywords_in(op: &mut Op, id: PhotoId, extra: &[String], depth: u32) {
+    match op {
+        Op::SetMeta { id: of, meta } if *of == id => {
+            for k in extra {
+                let low = k.trim().to_lowercase();
+                if !meta.keywords.iter().any(|m| m.trim().to_lowercase() == low) {
+                    meta.keywords.push(k.clone());
+                }
+            }
+        }
+        Op::Batch { ops } if depth < 16 => {
+            for o in ops {
+                keep_keywords_in(o, id, extra, depth + 1);
+            }
+        }
+        _ => {}
+    }
+}
+
 pub(crate) fn sidecar_only_keywords(p: &Photo, xmp: &str) -> Vec<String> {
     let Ok(data) = lcc_meta::parse_xmp(xmp.strip_prefix('\u{feff}').unwrap_or(xmp)) else { return Vec::new() };
     let md = &data.metadata;
@@ -1545,10 +1566,16 @@ impl Session {
             return false;
         }
         let mut meta = p.meta.clone();
-        meta.keywords.extend(extra);
+        meta.keywords.extend(extra.iter().cloned());
         let op = Op::SetMeta { id, meta: Box::new(meta) };
         match self.catalog.apply(op.clone()) {
             Ok(_) => {
+                // The adopted keywords were the photo's all along: an undo or redo of an earlier
+                // metadata step must not take them away again (the photo is now in step with the
+                // sidecar, so the next write would remove them from the file too).
+                for entry in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+                    keep_keywords_in(&mut entry.op, id, &extra, 0);
+                }
                 log::info!("{}: kept the keywords only its sidecar had before saving it", path.display());
                 self.pending_log.push(op);
                 true
