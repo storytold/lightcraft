@@ -1,7 +1,7 @@
 //! Scene-linear preparation: white balance + exposure, and the spatial planes the per-pixel stage
 //! needs (edge-aware base layer for highlights/shadows, clarity/texture bands, dehaze veil).
 
-use lightcraft_color::cct::{temp_tint_to_xy, wb_matrix, xy_to_temp_tint};
+use lightcraft_color::cct::{temp_tint_to_xy, wb_matrix, wb_matrix_checked, xy_to_temp_tint};
 use lightcraft_color::{REC2020, luminance_2020};
 use lightcraft_develop::{DevelopSettings, Process};
 use lightcraft_raster::blur::{gauss_taps, gaussian, gaussian_taps};
@@ -22,6 +22,12 @@ pub fn white_balance(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings) {
     wb_gain(img, info, s, 1.0);
 }
 
+/// Whether `s` uses the checked Bradford white-balance adaptation (`Process::V10` on) instead
+/// of the legacy matrix (V1 to V9, which stay frozen).
+pub fn checked_wb(s: &DevelopSettings) -> bool {
+    s.process.process() >= Process::V10
+}
+
 /// The white-balance matrix (linear Rec.2020) for the settings, or `None` when the as-shot white
 /// is kept. A raw source with its camera colour model ([`crate::CameraColor`]) is re-developed for
 /// the new white in camera space, as Lightroom does (so a neutral under the chosen white renders
@@ -37,8 +43,13 @@ pub fn wb_matrix_for(info: &SourceInfo, s: &DevelopSettings) -> Option<[[f32; 3]
     {
         return Some(m.to_f32());
     }
-    let set = wb_matrix(&REC2020, effective_white(info, s));
-    let shot = wb_matrix(&REC2020, temp_tint_to_xy(info.as_shot_temp, info.as_shot_tint));
+    let checked = checked_wb(s);
+    let set = if checked { wb_matrix_checked(&REC2020, effective_white(info, s)) } else { wb_matrix(&REC2020, effective_white(info, s)) };
+    let shot = if checked {
+        wb_matrix_checked(&REC2020, temp_tint_to_xy(info.as_shot_temp, info.as_shot_tint))
+    } else {
+        wb_matrix(&REC2020, temp_tint_to_xy(info.as_shot_temp, info.as_shot_tint))
+    };
     let m = set.mul(&shot.inverse().unwrap_or(lightcraft_color::Mat3::IDENTITY));
     // Normalize so neutral luminance is preserved (WB shouldn't change exposure).
     let g = m.apply([1.0, 1.0, 1.0]);
@@ -375,7 +386,9 @@ pub fn base_detail_radius(px_per_long: f64) -> usize {
 pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
     match s.process.process() {
         Process::V1 => 0,
-        Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 => base_detail_radius(px_per_long),
+        Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 | Process::V10 => {
+            base_detail_radius(px_per_long)
+        }
     }
 }
 
