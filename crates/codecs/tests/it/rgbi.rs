@@ -31,6 +31,12 @@ fn a_vuescan_rgbi_tiff_keeps_its_infrared_pass_and_is_opaque() {
         let d = decode(&tiff16(8, 6, 4, software, extra, px), DecodeOptions::default()).unwrap();
         assert!(d.has_alpha && d.infrared.is_none(), "{software} {extra:?}");
     }
+    // ExtraSamples = 0 ("unspecified data") is never alpha, from any software (#1212): opaque,
+    // with the same colour as the RGBI decode of the first three samples
+    let u = decode(&tiff16(8, 6, 4, "GIMP 3.0", Some(0), px), DecodeOptions::default()).unwrap();
+    assert!(!u.has_alpha && u.alpha.is_none());
+    let (a, b) = (u.image.get(5, 3), d.image.get(5, 3));
+    assert!((0..3).all(|c| (a[c] - b[c]).abs() < 1e-3), "{a:?} vs {b:?}");
     // an 8-bit four-sample VueScan file is not the RGBI layout
     // (hostile: a truncated file errors, never panics)
     let mut cut = tiff16(8, 6, 4, "VueScan 9 x64", None, px);

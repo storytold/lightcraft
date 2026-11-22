@@ -37,10 +37,15 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     let infrared_layout = model == Model::Rgb
         && n_color == 3
         && n_samples == 4
-        && extra.is_empty()
         && bits == 16
+        && extra.is_empty()
         && software.as_deref().is_some_and(|s| s.starts_with("VueScan") || s.starts_with("SilverFast"));
-    let has_alpha = !infrared_layout && n_samples > n_color && !matches!(ct, ColorType::Palette(_));
+    // ExtraSamples 0 is "unspecified data" (TIFF 6.0 §18), never transparency: only 1
+    // (associated) and 2 (unassociated) are alpha; a missing tag keeps the old alpha guess (#1212).
+    // (The `tiff` crate already reports RGB + one unspecified sample as plain RGB and drops the
+    // sample, so its data — an infrared pass, say — is not recoverable here; this guards the rest.)
+    let unspecified_extra = extra.first() == Some(&0);
+    let has_alpha = !infrared_layout && !unspecified_extra && n_samples > n_color && !matches!(ct, ColorType::Palette(_));
     let premultiplied = has_alpha && extra.first() == Some(&1);
 
     // `read_image` reads only the first plane of a planar image (#2462); this reads them all, or
