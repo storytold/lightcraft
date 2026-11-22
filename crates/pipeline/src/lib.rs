@@ -1061,7 +1061,16 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     let cached = shared.and_then(|(a, c)| c.get(a, geo));
     let sampled = match &cached {
         Some(e) => e.sampled.clone(),
-        None => Arc::new(frame.sample(src_img, w, h)),
+        // The first output-sized buffer: reserved fallibly, so a size the machine can't hold fails
+        // the render with a warning (an empty image) instead of aborting the process.
+        None => match frame.try_sample(src_img, w, h) {
+            Ok(img) => Arc::new(img),
+            Err(e) => {
+                let image = Rgba8::new(0, 0);
+                let histogram = Histogram::of_srgb8_covered(&image, None);
+                return Rendered { image, histogram, deep: None, warnings: vec![e.to_string()], coverage: None, alpha: None };
+            }
+        },
     };
     lap("sample", &mut t);
     // film dust: the infrared pass's marks filled in before anything reads the pixels
