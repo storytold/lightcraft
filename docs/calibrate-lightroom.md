@@ -143,7 +143,11 @@ Every example below writes `chromaforge-cli`: put the path or prefix you used he
 
    The tool lists exactly what the JSON holds and the held-out colour error (ΔE00 on photos the fit did not see)
    with the app's current colour and with the calibration. If the calibration doesn't beat the current colour, it
-   says what failed (often: add photos under another light).
+   says what failed (often: add photos under another light). For raws whose colour the app fits to each photo's own
+   camera JPEG (CR2, NEF, ARW and other raws without colour matrices), the current colour can already be close to
+   Lightroom's; a calibration that loses to that per-photo fit but beats the plain starting colour is kept as the
+   default **only for files with colour matrices of their own** (DNGs converted from those raws, which get no JPEG
+   fit), and the JSON says `"ownMatrixOnly": true`. Its looks can still be chosen for any photo.
 
 6. **Send the JSON file** where `fit` tells you to: the project's calibration thread on Discord (the link is printed),
    or an issue on the project's repository. `--contributor`

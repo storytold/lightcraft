@@ -405,7 +405,8 @@ pub(crate) fn profile_for(color: &lcc_raw::ColorData, meta: &lcc_meta::Metadata,
     if lcc_raw::color::is_rendered_rgb(color) {
         return None;
     }
-    lcc_raw::dcp::resolve_lens(choice, meta.make.as_deref(), meta.model.as_deref()?, meta.lens_model.as_deref())
+    let own_matrix = lcc_raw::color::has_matrix(color);
+    lcc_raw::dcp::resolve_file(choice, meta.make.as_deref(), meta.model.as_deref()?, meta.lens_model.as_deref(), own_matrix)
 }
 
 /// Whether `id` names a camera-profile choice (`profile.camera`) rather than a look: `lc` (the app's own colour),
@@ -432,7 +433,9 @@ pub fn photo_profile(p: &lcc_catalog::Photo) -> Option<std::sync::Arc<lcc_raw::d
     if !p.develops_raw() {
         return None;
     }
-    lcc_raw::dcp::resolve_camera(&p.develop.profile.camera, &p.meta.camera)
+    // a DNG carries its own colour matrices (no per-photo JPEG fit), which a DNG-only calibration serves (#1119)
+    let own_matrix = p.format.eq_ignore_ascii_case("dng");
+    lcc_raw::dcp::resolve_camera_file(&p.develop.profile.camera, &p.meta.camera, own_matrix)
 }
 
 /// Whether photo `p` develops "As profile": its camera profile has a look of its own and the photo keeps it (the
@@ -539,6 +542,7 @@ mod tests {
             aliases: vec![],
             lens: None,
             editor: c::Editor::Lightroom,
+            own_matrix_only: false,
             method: c::METHOD.into(),
             tool_version: "1".into(),
             contributor: None,

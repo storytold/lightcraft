@@ -113,3 +113,58 @@ fn contrast_mode_segmented_switch_toggles_between_luminance_and_rgb() {
     h.settle(SETTLE);
     assert_eq!(mode(&h), ContrastMode::Luminance);
 }
+
+#[test]
+fn calibrated_camera_colour_row_is_kept_pending_on_a_photo_of_the_same_camera_not_yet_decoded() {
+    // issue #1272: moving to a photo not decoded yet hid the row until its first decode and showed it again, and the
+    // whole Develop panel jumped up and down while the photo rendered
+    let mut session = lcc_engine::Session::new();
+    for (n, name) in [(1u64, "DSC_0001.NEF"), (2, "DSC_0002.NEF")] {
+        let mut p = Photo::new(PhotoId(n), Source::File { path: format!("/photos/{name}").into() }, name, "NEF", 6048, 4032, "2026-10-18");
+        p.meta.camera = "NIKON Z 6".into();
+        p.kind = lcc_catalog::MediaKind::Raw;
+        session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+    let open = gate.clone();
+    let loader: FileLoader = Arc::new(move |path, _, _| {
+        if path.contains("0002") {
+            let (lock, cv) = &*open;
+            let mut go = lock.lock().unwrap();
+            while !*go {
+                go = cv.wait_timeout(go, Duration::from_millis(50)).unwrap().0;
+            }
+        }
+        let mut img = lcc_raster::Rgb32f::new(48, 32);
+        img.data.fill([0.18; 3]);
+        Ok((img, SourceInfo { raw: true, colorimetric: true, ..SourceInfo::default() }))
+    });
+    session.media.file_loader = Some(loader);
+    let app = LccApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    let select = |h: &mut Headless, id: u64| {
+        let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id]}}), T);
+        assert_eq!(r["ok"], true, "{r}");
+    };
+    select(&mut h, 1);
+    let r = h.request("ui.set", json!({"view": "detail", "right": "edit"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(shown(&h));
+    let below = rect_of(&h, "slider:light.exposure").expect("the Exposure slider");
+    select(&mut h, 2);
+    for _ in 0..5 {
+        h.step();
+    }
+    assert!(!h.app.session.media.profile_facts(PhotoId(2)).known, "the second photo is still decoding");
+    assert!(rect_of(&h, "check:profile.cameraColour.pending").is_some(), "the row is kept, pending");
+    assert_eq!(rect_of(&h, "slider:light.exposure"), Some(below), "the controls under it stay put");
+    {
+        let (lock, cv) = &*gate;
+        *lock.lock().unwrap() = true;
+        cv.notify_all();
+    }
+    h.settle(SETTLE);
+    assert!(shown(&h), "offered once the decode reports");
+    assert_eq!(rect_of(&h, "slider:light.exposure"), Some(below));
+}

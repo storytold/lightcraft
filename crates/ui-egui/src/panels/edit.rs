@@ -430,6 +430,9 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
                             )
                         };
                         ui.label(egui::RichText::new(text).size(11.0).color(Tokens::get(ui.ctx()).text_dim));
+                    } else if fix && !app.session.media.profile_facts(id).known {
+                        // not decoded yet: keep the count's line laid out so the panels under it do not jump (#1272)
+                        ui.label(egui::RichText::new(" ").size(11.0));
                     }
                 },
             );
@@ -786,9 +789,25 @@ fn header_notices(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopS
     }
     // a raw without colour matrices whose camera model has measured ones: off starts from the look fitted to the
     // camera's JPEG (Auto), on from the measured colour with the app's own tone curve (Colorimetric)
-    if facts.colorimetric {
+    // Until the first decode reports, a raw of a camera that offered the option before in this session keeps the row
+    // laid out, disabled (pending), so the controls under it do not jump while the photo renders (issue #1272).
+    let camera = app.session.catalog.photo(id).filter(|p| p.develops_raw()).map(|p| p.meta.camera.clone()).unwrap_or_default();
+    let seen_key = egui::Id::new("profile.colorimetricCameras");
+    if facts.colorimetric && !camera.is_empty() {
+        ui.ctx().data_mut(|data| data.get_temp_mut_or_default::<std::collections::BTreeSet<String>>(seen_key).insert(camera.clone()));
+    }
+    let pending = !facts.colorimetric
+        && !facts.known
+        && !camera.is_empty()
+        && ui.ctx().data(|data| data.get_temp::<std::collections::BTreeSet<String>>(seen_key).is_some_and(|s| s.contains(&camera)));
+    if facts.colorimetric || pending {
         egui::Frame::NONE.inner_margin(m(ui, egui::Margin { left: 12, right: 16, top: 0, bottom: 10 }, 0, 3)).show(ui, |ui| {
             let mut on = d.profile.camera_colour == lcc_develop::CameraColour::Colorimetric;
+            if pending {
+                let r = ui.add_enabled(false, egui::Checkbox::new(&mut on, crate::i18n::tr("Calibrated camera colour")));
+                crate::widgets::register(ui.ctx(), "check:profile.cameraColour.pending", r.rect);
+                return;
+            }
             let r = ui.checkbox(&mut on, crate::i18n::tr("Calibrated camera colour"));
             crate::widgets::register(ui.ctx(), "check:profile.cameraColour", r.rect);
             let tip = "Start from the colour measured for this camera model instead of the look fitted to the camera's JPEG";
