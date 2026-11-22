@@ -20,7 +20,7 @@ use lcc_tiff::image::ImageInfo;
 use lcc_tiff::tags::{self as t, photometric};
 use lcc_tiff::{ByteOrder, Ifd, Tiff, makernote};
 
-const WB_RB_LEVELS: u16 = 0x000c;
+pub(super) const WB_RB_LEVELS: u16 = 0x000c;
 /// ColorBalance (named in the ExifTool Nikon tag-name documentation, which gives the channel order per version but
 /// not where the levels sit): a 4-character version, then, in the versions that aren't enciphered, the as-shot
 /// levels as four `u16` in the maker note's byte order: `0102` (D2H) RGGB from byte 10, `0103` (D70, D70s) RGBG
@@ -31,7 +31,7 @@ const WB_RB_LEVELS: u16 = 0x000c;
 /// 388 256, 589 256 366 256), and the gains they give are within 2 to 8 % of what the neutral areas of each camera
 /// JPEG imply. The D50's `0205` is enciphered.
 const COLOR_BALANCE: u16 = 0x0097;
-const BLACK_LEVEL: u16 = 0x003d;
+pub(super) const BLACK_LEVEL: u16 = 0x003d;
 const LINEARIZATION_TABLE: u16 = 0x0096;
 const CROP_AREA: u16 = 0x0045;
 /// Maker note `0x0014`, the "NRW" data block of Coolpix raws: `"NRW "` + a 4-character version, then fields. In
@@ -72,7 +72,7 @@ fn color_balance_wb(mn: Option<&makernote::MakerNote>) -> Option<[f32; 3]> {
 
 /// Nikon CropArea is `[left, top, width, height]` in sensor pixels (maker-note tag documentation).
 /// Keep the active area/CFA origin unchanged: the default crop is applied after demosaicing.
-fn default_crop(mn: Option<&makernote::MakerNote>, w: usize, h: usize) -> Rect {
+pub(super) fn default_crop(mn: Option<&makernote::MakerNote>, w: usize, h: usize) -> Rect {
     let fallback = Rect::new(0, 0, w, h);
     let Some(values) = mn.and_then(|m| m.ifd.u64s(CROP_AREA)) else { return fallback };
     let [x, y, width, height] = values.as_slice() else { return fallback };
@@ -282,6 +282,17 @@ pub(crate) fn trailing_masked_columns(d: &[u16], w: usize, bits: u32) -> usize {
     aw & !1
 }
 
+/// Width left after trimming trailing masked columns from the stored samples. A High Efficiency
+/// header probe carries no samples (issue #1304), so it keeps the stored width `w`; every full
+/// decode, High Efficiency included, trims.
+fn stored_active_width(data: &RawData, high_efficiency: bool, mode: Mode, w: usize, bits: u32) -> usize {
+    match data {
+        RawData::U16(_) if high_efficiency && mode == Mode::Header => w,
+        RawData::U16(samples) => trailing_masked_columns(samples, w, bits),
+        _ => w,
+    }
+}
+
 /// The three measured field-stored originals use the binary maker-note version 0.2.0.0,
 /// compression 1 and a single tight 12-bit strip. Restrict the scene heuristic to this
 /// legacy dialect: brightness transitions in unrelated ordinary rasters can pass it.
@@ -299,7 +310,13 @@ fn legacy_field_layout(info: &ImageInfo, mn: Option<&makernote::MakerNote>, file
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let tiff = Tiff::parse(bytes)?;
     let ifd0 = &tiff.ifds[0];
-    let raw = raw_ifd(&tiff).ok_or_else(|| RawError::Unsupported("NEF without a CFA image IFD".into()))?;
+    let Some(raw) = raw_ifd(&tiff) else {
+        // no CFA image IFD: a merged pixel-shift image from NX Studio keeps its RGB samples in a raw SubIFD of its own
+        return match super::nefx::raw_ifd(&tiff) {
+            Some(raw) => super::nefx::decode(bytes, &tiff, raw, mode),
+            None => Err(RawError::Unsupported("NEF without a CFA image IFD".into())),
+        };
+    };
     let info = raw.image()?;
     let (w, h) = (info.width as usize, info.height as usize);
     let bits = info.bits() as u32;
@@ -315,16 +332,15 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         Mode::Header => h.min(MASK_ROWS),
     };
     let (mut data, he_black) = if info.compression == t::compression::NIKON {
-        compressed(bytes, &info, mn.as_ref(), rows)?
+        compressed(bytes, &info, mn.as_ref(), rows, mode)?
     } else {
         (uncompressed(bytes, &info, tiff.order, mn.as_ref(), rows)?, None)
     };
     // Header probes inspect stored rows. Judge masked columns before rearranging the full
-    // image too, so the probe and full decoder use exactly the same prefix.
-    let stored_active_w = match &data {
-        RawData::U16(samples) => trailing_masked_columns(samples, w, bits),
-        _ => w,
-    };
+    // image too, so the probe and full decoder use the same prefix. Exception: a High Efficiency
+    // header probe reads no samples, so it reports the stored width while the full decode trims any
+    // trailing masked columns; for such a frame the probe can be wider than the decoded image.
+    let stored_active_w = stored_active_width(&data, he_black.is_some(), mode, w, bits);
     let model = ifd0.string(t::MODEL).unwrap_or_default();
     // Some CCD Coolpix bodies write two interlaced fields one after the other.
     // Only the measured legacy maker-note dialect and tightly packed layout enter the scene test.
@@ -576,7 +592,7 @@ fn unpack_packed(src: &[u8], w: usize, h: usize, bits: u32, layout: PackedLayout
 
 /// Nikon Huffman-compressed strip (see [`super::nefc`]); the decode table is maker note `0x0096`. Decodes the first
 /// `rows` rows of the `info.height`. Without a table the strip may be packed uncompressed data (see [`PackedLayout`]).
-fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>, rows: usize) -> Result<(RawData, Option<u16>)> {
+fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>, rows: usize, mode: Mode) -> Result<(RawData, Option<u16>)> {
     let starts_with = |magic: &[u8]| {
         let start = info.chunks(bytes.len() as u64).first().and_then(|c| usize::try_from(c.offset).ok());
         start.and_then(|o| bytes.get(o..o.checked_add(magic.len())?)) == Some(magic)
@@ -593,9 +609,14 @@ fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>,
             .zip(end.and_then(|v| usize::try_from(v).ok()))
             .and_then(|(a, b)| bytes.get(a..b))
             .ok_or_else(|| RawError::Corrupt("Nikon High Efficiency NEF: strip outside the file".into()))?;
-        // (the wavelet codestream decodes whole: the header probe keeps its first `rows` rows)
-        let (mut samples, black) = nefhe::decode(src, info.width as usize, info.height as usize, info.bits() as u32)?;
-        samples.truncate((info.width as usize).saturating_mul(rows));
+        // The wavelet codestream only decodes whole (its top rows are the last precincts and every level spans the
+        // full height), so the header probe reads just the codestream headers and no samples (issue #1304).
+        // The probe therefore cannot see masked columns; the full decode still trims them.
+        let (w, h, bits) = (info.width as usize, info.height as usize, info.bits() as u32);
+        if mode == Mode::Header {
+            return Ok((RawData::U16(Vec::new()), Some(nefhe::probe(src, w, h, bits)?)));
+        }
+        let (samples, black) = nefhe::decode(src, w, h, bits)?;
         return Ok((RawData::U16(samples), Some(black)));
     }
     let Some(table) = mn.and_then(|m| Some((m.ifd.bytes(LINEARIZATION_TABLE)?, m.order))) else {
@@ -1560,6 +1581,49 @@ mod tests {
             assert_eq!(crate::probe_info(&bytes).unwrap(), image.info());
         }
     }
+
+    /// The header probe of an HE NEF reads only the codestream headers (#1304): it still reports the frame and the
+    /// encoded black level, and accepts a strip whose entropy-coded body is garbage, which a full decode rejects.
+    #[test]
+    fn high_efficiency_header_probe_skips_the_codestream_body() {
+        let strip = nefhe::tests::fixture(70, 12);
+        let good = nef_in(ByteOrder::Big, 34713, 14, vec![strip.clone()], 70, 12, 12, None);
+        let header = decode(&good, Mode::Header).unwrap();
+        let full = decode(&good, Mode::Full).unwrap();
+        assert_eq!((header.active_area, header.crop, header.black.values.clone()), (full.active_area, full.crop, full.black.values.clone()));
+        assert!(matches!(header.data, RawData::U16(ref s) if s.is_empty()));
+        // keep the headers and the end marker, scramble everything in between
+        let mut scrambled = strip.clone();
+        let body_start = scrambled.len() * 7 / 8;
+        let body_end = scrambled.len() - 2;
+        for (i, b) in scrambled[body_start..body_end].iter_mut().enumerate() {
+            *b = (i as u8).wrapping_mul(37) ^ 0xa5;
+        }
+        let bad = nef_in(ByteOrder::Big, 34713, 14, vec![scrambled], 70, 12, 12, None);
+        assert!(decode(&bad, Mode::Header).is_ok(), "{:?} len {}", decode(&bad, Mode::Header).err(), strip.len());
+        assert!(crate::decode(&bad).is_err());
+        // hostile headers still fail cleanly in the probe
+        for cut in [0, 1, 2, 5, 20, 40] {
+            let mut short = strip.clone();
+            short.truncate(cut);
+            let bytes = nef_in(ByteOrder::Big, 34713, 14, vec![short], 70, 12, 12, None);
+            assert!(crate::probe_info(&bytes).is_err());
+        }
+    }
+
+    /// A full High Efficiency decode trims trailing masked columns; only the sample-less header probe keeps the
+    /// stored width (regression for the HE probe change in #1304).
+    #[test]
+    fn high_efficiency_full_decode_trims_masked_columns_and_the_probe_does_not() {
+        let (w, rows) = (256usize, 8usize);
+        let d: Vec<u16> = (0..w * rows).map(|i| if i % w >= w - 10 { 0 } else { 4000 }).collect();
+        let data = RawData::U16(d);
+        assert_eq!(stored_active_width(&data, true, Mode::Full, w, 14), w - 10);
+        assert_eq!(stored_active_width(&data, false, Mode::Full, w, 14), w - 10);
+        assert_eq!(stored_active_width(&data, false, Mode::Header, w, 14), w - 10);
+        assert_eq!(stored_active_width(&RawData::U16(Vec::new()), true, Mode::Header, w, 14), w);
+    }
+
     #[test]
     fn mild_neutral_horizon_outside_legacy_dialect_is_not_interleaved() {
         let (w, h) = (160usize, 256usize);

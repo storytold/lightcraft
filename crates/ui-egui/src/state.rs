@@ -21,6 +21,45 @@ pub enum ViewMode {
     People,
 }
 
+/// Which of the three categories of faces the People view shows (issue #1050), as digiKam sorts them: the faces that
+/// are still nobody, those recognition has matched to someone (to be confirmed or rejected), and the people it knows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PeopleCategory {
+    /// Faces nobody has named, with no name they were matched to: raw detected regions.
+    #[default]
+    Unknown,
+    /// Faces the named faces recognise, grouped under the person they suggest, until the user confirms or rejects.
+    Suggested,
+    /// The people the library knows: every named face, under its person.
+    Confirmed,
+}
+
+impl PeopleCategory {
+    /// What the control channel, the saved UI state and the category's widget id use.
+    pub const fn id(self) -> &'static str {
+        match self {
+            PeopleCategory::Unknown => "unknown",
+            PeopleCategory::Suggested => "suggested",
+            PeopleCategory::Confirmed => "confirmed",
+        }
+    }
+
+    /// The category `id` names, if it names one.
+    pub fn parse(id: &str) -> Option<Self> {
+        [PeopleCategory::Unknown, PeopleCategory::Suggested, PeopleCategory::Confirmed].into_iter().find(|c| c.id() == id)
+    }
+
+    /// The category's name in the picker, in English (translated where it is shown).
+    pub const fn title(self) -> &'static str {
+        match self {
+            PeopleCategory::Unknown => "Unknown",
+            PeopleCategory::Suggested => "Suggested",
+            PeopleCategory::Confirmed => "Confirmed",
+        }
+    }
+}
+
 impl ViewMode {
     /// The two Library grids ([`Self::PhotoGrid`], [`Self::SquareGrid`]).
     pub fn is_grid(self) -> bool {
@@ -618,6 +657,8 @@ pub struct AppSettings {
     pub reduce_motion: bool,
     /// When a brush tool is active, the mouse wheel changes its size instead of zooming.
     pub wheel_resizes_brush: bool,
+    /// Turn the wheel or trackpad scroll gesture the other way when resizing a brush (Issue #1257).
+    pub invert_brush_resize: bool,
     /// View ▸ View Options ▸ Show message when loading or rendering photos: the loupe says
     /// "Rendering…" while the photo it shows is not the finished render.
     pub loupe_messages: bool,
@@ -823,6 +864,7 @@ impl Default for AppSettings {
             mirror_image: false,
             reduce_motion: false,
             wheel_resizes_brush: true,
+            invert_brush_resize: false,
             loupe_messages: true,
             keymap: Default::default(),
             keymap_set: Default::default(),
@@ -1537,6 +1579,11 @@ pub struct UiState {
     /// session; `None` until the dialog is first confirmed (then 10 s, 0.93).
     #[serde(skip)]
     pub cull_burst: Option<(f32, f32)>,
+    /// The Image Quality Scanner's cutoffs, weights, mode and whether flags are written, as last
+    /// confirmed; `None` until the dialog is first confirmed (then 70 / 25, every factor alike,
+    /// unscanned photos only, no flags).
+    #[serde(skip)]
+    pub quality_scan_settings: Option<crate::panels::dialogs::QualityScanSettings>,
     /// "More" faces the user hid with ×, for this session: (photo, region index).
     #[serde(skip)]
     pub dismissed_faces: std::collections::HashSet<(u64, usize)>,
@@ -1767,6 +1814,21 @@ pub struct UiState {
     /// Not saved; the People button (or emptying the box) shows everyone again.
     #[serde(skip)]
     pub people_search: String,
+    /// The People view's category (issue #1050): the faces nobody has named, those recognition suggests a person for,
+    /// or the people it knows. Not saved: People opens on Unknown, the faces waiting for a name (the raw detected
+    /// ones), as it did before the categories.
+    #[serde(skip)]
+    pub people_category: PeopleCategory,
+    /// Suggested faces the user rejected from the Suggested category, for this session, as `(photo, region)`. The
+    /// rejection itself is kept (`faces.rejectSuggestions` stores it), so the face is not suggested as that person
+    /// again; this is what the groups drop at once, before the face lists are next read, and the toast's Undo
+    /// (`faces.undoSuggestionDecision`) takes it out again.
+    #[serde(skip)]
+    pub rejected_suggestions: std::collections::HashSet<(u64, usize)>,
+    /// Suggested faces the user confirmed from the Suggested category, for this session, as `(photo, region)`: they
+    /// leave the groups at once, rather than when the face lists are next read (a catalog revision later).
+    #[serde(skip)]
+    pub confirmed_suggestions: std::collections::HashSet<(u64, usize)>,
     /// Folders kept in Local (Browse Folder…, Keep in Local / Add to Local; `local.addRoot`):
     /// listed after the built-in locations, across restarts, whatever is browsed.
     pub local_roots: Vec<String>,
@@ -1908,6 +1970,9 @@ pub struct UiState {
     /// (`crate::recheck`).
     #[serde(skip)]
     pub rechecked_library: Option<u64>,
+    /// Originals still to be read in the background (`crate::read_originals`).
+    #[serde(skip)]
+    pub originals: crate::read_originals::OriginalsState,
     #[serde(skip)]
     pub status: String,
     #[serde(skip)]
@@ -2204,6 +2269,24 @@ pub enum Dialog {
         #[serde(default)]
         suggest_flags: bool,
     },
+    /// Library ▸ Image Quality Scanner… (issue #1313): score photos for technical
+    /// quality (blur, noise, exposure, JPEG blockiness) in the background and flag them Pick /
+    /// Reject by two cutoffs; the scores stay on the photos for the Library's quality filter and
+    /// sort.
+    QualityScanner {
+        /// The scope: `selection`, `folder` or `catalog` (`photo.qualityScan`'s `scope`).
+        scope: String,
+        /// The score at or above which a photo is a Pick, 0..100.
+        accepted: f32,
+        /// The score at or below which a photo is a Reject, 0..100.
+        rejected: f32,
+        /// Write the flags the scores ask for (photos the user flagged are left alone).
+        apply_flags: bool,
+        /// Measure photos that carry a score already.
+        rescan: bool,
+        /// The factors measured, as `photo.qualityScan`'s `weights`: blur, noise, exposure, compression.
+        weights: [f32; 4],
+    },
     /// Help ▸ System Info: (label, value) rows.
     DenoiseModel {
         info: serde_json::Value,
@@ -2256,8 +2339,12 @@ pub enum Dialog {
         name: String,
         parent: Option<String>,
     },
+    /// `masks_off`: the active photo's masks left unticked under Masking (issue #1268; empty: all
+    /// of them, as before).
     CopySettings {
         groups: Vec<String>,
+        #[serde(default)]
+        masks_off: Vec<u32>,
     },
     /// Synchronize Settings (Lightroom Classic's Sync…): the groups the active photo's settings
     /// carry to the other selected photos, plus single Basic Tone controls when Light is unchecked.
@@ -2302,6 +2389,17 @@ pub enum Dialog {
     /// Photo Merge (HDR / Panorama / HDR Panorama) options; the preview lives in the app.
     Merge {
         opts: crate::merge::MergeDialog,
+    },
+    /// The selection is one complete pixel-shift series, and `command` (another kind of merge) was chosen: merge it
+    /// as Pixel Shift instead, go on with `command`, or cancel.
+    PixelShiftOffer {
+        command: String,
+    },
+    /// Photo ▸ Photo Merge ▸ Delete Merge Sources with "Confirm before deleting" on: the merged photo `id`, whose other
+    /// frames (`count` of them in the library) would go to Recently Deleted.
+    ConfirmDeleteSources {
+        id: u64,
+        count: usize,
     },
     /// Settings (preferences): `tab` = general | import | performance | interface.
     Settings {
@@ -2547,7 +2645,7 @@ impl SyncCounts {
 /// (Point Color, Color Range). The white balance picker is left out: it puts itself away after one pick and keeps
 /// working across panels (W).
 pub fn is_picker(tool: &str) -> bool {
-    tool.starts_with("tat:") || matches!(tool, "pointColor" | "colorRange")
+    tool.starts_with("tat:") || matches!(tool, "pointColor" | "colorRange" | "levelsBlack" | "levelsWhite")
 }
 
 impl Default for UiState {
@@ -2656,6 +2754,7 @@ impl Default for UiState {
             person_from: None,
             last_person: None,
             cull_burst: None,
+            quality_scan_settings: None,
             dismissed_faces: Default::default(),
             unnamed_selected: Default::default(),
             unnamed_name: String::new(),
@@ -2795,6 +2894,9 @@ impl Default for UiState {
             filter_columns: Vec::new(),
             filter_column_search: Vec::new(),
             people_search: String::new(),
+            people_category: PeopleCategory::default(),
+            rejected_suggestions: Default::default(),
+            confirmed_suggestions: Default::default(),
             local_roots: Vec::new(),
             local_browse_root: None,
             compare: None,
@@ -2807,6 +2909,7 @@ impl Default for UiState {
             #[cfg(test)]
             find_missing_test_delay: None,
             rechecked_library: None,
+            originals: Default::default(),
             status: String::new(),
             dialog: None,
             settings_section: None,
@@ -2895,6 +2998,12 @@ impl UiState {
             self.picker_armed_in = None;
             return;
         }
+        // the Levels pickers also end when the Levels section is closed
+        if matches!(self.tool.as_str(), "levelsBlack" | "levelsWhite") && !self.section_open("levels") {
+            self.tool.clear();
+            self.picker_armed_in = None;
+            return;
+        }
         let here = self.picker_layout();
         match &self.picker_armed_in {
             Some(armed) if *armed != here => {
@@ -2908,7 +3017,9 @@ impl UiState {
 
     /// A slider (or dial) was touched: a picker armed is put away.
     pub fn put_away_picker(&mut self) {
-        if is_picker(&self.tool) {
+        // the Levels pickers stay armed while its sliders and boxes are used: Esc, a second click, the other picker or
+        // leaving the section ends them
+        if is_picker(&self.tool) && !matches!(self.tool.as_str(), "levelsBlack" | "levelsWhite") {
             self.tool.clear();
             self.picker_armed_in = None;
         }

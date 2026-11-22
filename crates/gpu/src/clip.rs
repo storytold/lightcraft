@@ -1,8 +1,8 @@
-//! CLIP's transformer blocks (AI semantic search) on the GPU through wgpu, so search runs on the graphics card on every
-//! OS (Vulkan, DX12, Metal) with the same code. A [`ClipTower`] keeps one tower's blocks (layer norms, attention and MLP
-//! weights) on the device and runs a batch through all of them in one submission (`wgsl/clip.wgsl`: layer norm, linear
-//! with GELU and the residual add fused in, multi-head attention). Embeddings, the final layer norm and the projection
-//! stay on the processor: they are a small share of the work.
+//! Full CLIP vision and text towers (AI semantic search) on the GPU through wgpu, so search runs on the graphics card
+//! on every OS (Vulkan, DX12, Metal) with the same code. [`ClipVisionTower`] and [`ClipTextTower`] keep a tower's
+//! embeddings, layer norms, transformer blocks and final projection on the device and run a whole batch in one
+//! submission (`wgsl/clip.wgsl`: patch/token embeddings, layer norm, linear with GELU and residual add fused in,
+//! multi-head attention, pooling gather), reading back only `[batch, embed_dim]` floats.
 //!
 //! The CPU encoder in `lcc-ml` is the reference: it checks a tower against itself on a test input before using it, and
 //! falls back to the CPU on any error. The device is a separate one (like the face models'), on the second graphics card
@@ -38,6 +38,9 @@ struct Dev {
     linear: wgpu::ComputePipeline,
     layernorm: wgpu::ComputePipeline,
     attention: wgpu::ComputePipeline,
+    patch_embed: wgpu::ComputePipeline,
+    text_embed: wgpu::ComputePipeline,
+    gather: wgpu::ComputePipeline,
     card: Card,
     broken: Arc<AtomicBool>,
     broken_why: Arc<Mutex<Option<String>>>,
@@ -272,9 +275,10 @@ fn build_dev_from_adapter(adapter: wgpu::Adapter, card: Card, named: Option<&Ada
             cache: None,
         })
     };
-    let (linear, layernorm, attention) = (pipe("linear"), pipe("layernorm"), pipe("attention"));
+    let (linear, layernorm, attention, patch_embed, text_embed, gather) =
+        (pipe("linear"), pipe("layernorm"), pipe("attention"), pipe("patch_embed"), pipe("text_embed"), pipe("gather"));
     log::info!("gpu (clip, {which} card): {} ({:?})", info.name, info.backend);
-    Ok(Dev { device, queue, info, limits, layout, linear, layernorm, attention, card, broken, broken_why })
+    Ok(Dev { device, queue, info, limits, layout, linear, layernorm, attention, patch_embed, text_embed, gather, card, broken, broken_why })
 }
 
 /// The adapter AI search would use ("AMD Radeon RX 7900 XTX (Vulkan)"), or why it cannot use one. Creates the device on
@@ -338,6 +342,87 @@ pub struct ClipTower {
     blocks: Vec<Block>,
 }
 
+/// Full weights and shape parameters for uploading a CLIP vision tower to the GPU.
+#[derive(Clone, Copy, Debug)]
+pub struct VisionTowerSpec<'a> {
+    pub hidden: usize,
+    pub intermediate: usize,
+    pub heads: usize,
+    pub eps: f32,
+    pub embed_dim: usize,
+    pub patch_size: usize,
+    pub num_positions: usize,
+    pub img_w: usize,
+    pub img_h: usize,
+    pub patch_weight: &'a [f32],
+    pub class_embedding: &'a [f32],
+    pub position_embedding: &'a [f32],
+    pub pre_ln_w: &'a [f32],
+    pub pre_ln_b: &'a [f32],
+    pub blocks: &'a [BlockRef<'a>],
+    pub post_ln_w: &'a [f32],
+    pub post_ln_b: &'a [f32],
+    pub projection: &'a [f32],
+}
+
+/// Full weights and shape parameters for uploading a CLIP text tower to the GPU.
+#[derive(Clone, Copy, Debug)]
+pub struct TextTowerSpec<'a> {
+    pub hidden: usize,
+    pub intermediate: usize,
+    pub heads: usize,
+    pub eps: f32,
+    pub embed_dim: usize,
+    pub vocab_size: usize,
+    pub context_len: usize,
+    pub token_embedding: &'a [f32],
+    pub position_embedding: &'a [f32],
+    pub blocks: &'a [BlockRef<'a>],
+    pub final_ln_w: &'a [f32],
+    pub final_ln_b: &'a [f32],
+    pub projection: &'a [f32],
+}
+
+/// A full CLIP vision tower resident on the GPU.
+pub struct ClipVisionTower {
+    dev: Arc<Dev>,
+    hidden: usize,
+    intermediate: usize,
+    heads: usize,
+    eps: f32,
+    embed_dim: usize,
+    patch_size: usize,
+    grid_w: usize,
+    seq: usize,
+    img_w: usize,
+    img_h: usize,
+    patch_weight: wgpu::Buffer,
+    pos_with_cls: wgpu::Buffer,
+    pre_ln: [wgpu::Buffer; 2],
+    blocks: Vec<Block>,
+    post_ln: [wgpu::Buffer; 2],
+    proj_w: wgpu::Buffer,
+    proj_zero_b: wgpu::Buffer,
+}
+
+/// A full CLIP text tower resident on the GPU.
+pub struct ClipTextTower {
+    dev: Arc<Dev>,
+    hidden: usize,
+    intermediate: usize,
+    heads: usize,
+    eps: f32,
+    embed_dim: usize,
+    vocab_size: usize,
+    context_len: usize,
+    token_emb: wgpu::Buffer,
+    pos_emb: wgpu::Buffer,
+    blocks: Vec<Block>,
+    final_ln: [wgpu::Buffer; 2],
+    proj_w: wgpu::Buffer,
+    proj_zero_b: wgpu::Buffer,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Params {
@@ -351,8 +436,8 @@ struct Params {
     causal: u32,
     eps: f32,
     scale: f32,
-    _a: u32,
-    _b: u32,
+    patch_size: u32,
+    grid_w: u32,
 }
 
 const GELU: u32 = 1;
@@ -362,6 +447,49 @@ fn u32_of(v: usize) -> Result<u32, String> {
     u32::try_from(v).map_err(|_| "a CLIP tower too large for the GPU".to_string())
 }
 
+fn validate_blocks(blocks: &[BlockRef<'_>], hidden: usize, intermediate: usize, heads: usize, eps: f32) -> Result<u64, String> {
+    if hidden == 0 || intermediate == 0 || heads == 0 || !hidden.is_multiple_of(heads) || blocks.is_empty() || !eps.is_finite() {
+        return Err("invalid CLIP tower shape".into());
+    }
+    let hh = hidden.checked_mul(hidden).ok_or("a CLIP tower too large")?;
+    let hi = hidden.checked_mul(intermediate).ok_or("a CLIP tower too large")?;
+    for b in blocks {
+        let ok = [b.ln1_w, b.ln1_b, b.ln2_w, b.ln2_b, b.q_b, b.k_b, b.v_b, b.o_b, b.fc2_b].iter().all(|s| s.len() == hidden)
+            && [b.q_w, b.k_w, b.v_w, b.o_w].iter().all(|s| s.len() == hh)
+            && b.fc1_w.len() == hi
+            && b.fc2_w.len() == hi
+            && b.fc1_b.len() == intermediate;
+        if !ok {
+            return Err("CLIP block weights do not match the tower's shape".into());
+        }
+    }
+    Ok((blocks.len() as u64).saturating_mul((4 * hh + 2 * hi + 9 * hidden + intermediate) as u64 * 4))
+}
+
+fn upload_f32(dev: &Dev, label: &str, data: &[f32]) -> wgpu::Buffer {
+    crate::upload::buffer_init(&dev.device, &dev.queue, Some(label), bytemuck::cast_slice(data), wgpu::BufferUsages::STORAGE)
+}
+
+fn upload_blocks(dev: &Dev, blocks: &[BlockRef<'_>]) -> Vec<Block> {
+    blocks
+        .iter()
+        .map(|b| Block {
+            ln1: [upload_f32(dev, "clip ln1 w", b.ln1_w), upload_f32(dev, "clip ln1 b", b.ln1_b)],
+            q: [upload_f32(dev, "clip q w", b.q_w), upload_f32(dev, "clip q b", b.q_b)],
+            k: [upload_f32(dev, "clip k w", b.k_w), upload_f32(dev, "clip k b", b.k_b)],
+            v: [upload_f32(dev, "clip v w", b.v_w), upload_f32(dev, "clip v b", b.v_b)],
+            o: [upload_f32(dev, "clip o w", b.o_w), upload_f32(dev, "clip o b", b.o_b)],
+            ln2: [upload_f32(dev, "clip ln2 w", b.ln2_w), upload_f32(dev, "clip ln2 b", b.ln2_b)],
+            fc1: [upload_f32(dev, "clip fc1 w", b.fc1_w), upload_f32(dev, "clip fc1 b", b.fc1_b)],
+            fc2: [upload_f32(dev, "clip fc2 w", b.fc2_w), upload_f32(dev, "clip fc2 b", b.fc2_b)],
+        })
+        .collect()
+}
+
+fn max_binding_bytes(dev: &Dev) -> u64 {
+    dev.limits.max_storage_buffer_binding_size.min(dev.limits.max_buffer_size)
+}
+
 /// Upload a tower's blocks to the GPU, or say why it can't run there.
 pub fn tower(spec: TowerSpec, blocks: &[BlockRef<'_>]) -> Result<ClipTower, String> {
     tower_for(None, spec, blocks)
@@ -369,52 +497,160 @@ pub fn tower(spec: TowerSpec, blocks: &[BlockRef<'_>]) -> Result<ClipTower, Stri
 
 /// [`tower`] on a chosen graphics card (`None` or `"auto"`: automatic selection).
 pub fn tower_for(card_key: Option<&str>, spec: TowerSpec, blocks: &[BlockRef<'_>]) -> Result<ClipTower, String> {
-    let (h, i) = (spec.hidden, spec.intermediate);
-    if h == 0 || i == 0 || spec.heads == 0 || !h.is_multiple_of(spec.heads) || blocks.is_empty() || !spec.eps.is_finite() {
-        return Err("invalid CLIP tower shape".into());
-    }
-    let hh = h.checked_mul(h).ok_or("a CLIP tower too large")?;
-    let hi = h.checked_mul(i).ok_or("a CLIP tower too large")?;
-    for b in blocks {
-        let ok = [b.ln1_w, b.ln1_b, b.ln2_w, b.ln2_b, b.q_b, b.k_b, b.v_b, b.o_b, b.fc2_b].iter().all(|s| s.len() == h)
-            && [b.q_w, b.k_w, b.v_w, b.o_w].iter().all(|s| s.len() == hh)
-            && b.fc1_w.len() == hi
-            && b.fc2_w.len() == hi
-            && b.fc1_b.len() == i;
-        if !ok {
-            return Err("CLIP block weights do not match the tower's shape".into());
-        }
-    }
-    let total = (blocks.len() as u64).saturating_mul((4 * hh + 2 * hi + 9 * h + i) as u64 * 4);
+    let total = validate_blocks(blocks, spec.hidden, spec.intermediate, spec.heads, spec.eps)?;
     if total > MAX_RESIDENT {
         return Err("the CLIP tower is too large for the GPU budget".into());
     }
+    let hi = spec.hidden.checked_mul(spec.intermediate).ok_or("a CLIP tower too large")?;
     let dev = dev_for(card_key)?;
-    if (hi as u64) * 4 > dev.limits.max_storage_buffer_binding_size.min(dev.limits.max_buffer_size) {
+    if (hi as u64) * 4 > max_binding_bytes(&dev) {
         return Err(format!("{}: a CLIP weight is larger than a storage buffer may be", dev.info.name));
     }
     let Some(_work) = crate::exit::enter() else { return Err("the app is closing".into()) };
-    let up = |label: &str, data: &[f32]| {
-        crate::upload::buffer_init(&dev.device, &dev.queue, Some(label), bytemuck::cast_slice(data), wgpu::BufferUsages::STORAGE)
-    };
     let scope = dev.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-    let uploaded = blocks
-        .iter()
-        .map(|b| Block {
-            ln1: [up("clip ln1 w", b.ln1_w), up("clip ln1 b", b.ln1_b)],
-            q: [up("clip q w", b.q_w), up("clip q b", b.q_b)],
-            k: [up("clip k w", b.k_w), up("clip k b", b.k_b)],
-            v: [up("clip v w", b.v_w), up("clip v b", b.v_b)],
-            o: [up("clip o w", b.o_w), up("clip o b", b.o_b)],
-            ln2: [up("clip ln2 w", b.ln2_w), up("clip ln2 b", b.ln2_b)],
-            fc1: [up("clip fc1 w", b.fc1_w), up("clip fc1 b", b.fc1_b)],
-            fc2: [up("clip fc2 w", b.fc2_w), up("clip fc2 b", b.fc2_b)],
-        })
-        .collect();
+    let uploaded = upload_blocks(&dev, blocks);
     if let Some(e) = pollster::block_on(scope.pop()) {
         return Err(format!("the GPU ran out of memory for the CLIP weights: {e}"));
     }
     Ok(ClipTower { dev, spec, blocks: uploaded })
+}
+
+/// Upload a full CLIP vision tower onto a chosen graphics card (`None` or `"auto"`: automatic selection).
+pub fn vision_tower_for(card_key: Option<&str>, spec: &VisionTowerSpec<'_>) -> Result<ClipVisionTower, String> {
+    let blocks_bytes = validate_blocks(spec.blocks, spec.hidden, spec.intermediate, spec.heads, spec.eps)?;
+    let (h, i, embed_dim, ps) = (spec.hidden, spec.intermediate, spec.embed_dim, spec.patch_size);
+    if embed_dim == 0 || ps == 0 || spec.img_w == 0 || spec.img_h == 0 || !spec.img_w.is_multiple_of(ps) || !spec.img_h.is_multiple_of(ps) {
+        return Err("invalid CLIP vision shape".into());
+    }
+    let grid_w = spec.img_w / ps;
+    let grid_h = spec.img_h / ps;
+    let expected_pos = grid_w.checked_mul(grid_h).and_then(|v| v.checked_add(1)).ok_or("a CLIP vision tower too large")?;
+    if spec.num_positions != expected_pos || spec.num_positions > MAX_SEQ {
+        return Err("invalid CLIP vision sequence length".into());
+    }
+    let patch_len = h.checked_mul(3).and_then(|v| v.checked_mul(ps)).and_then(|v| v.checked_mul(ps)).ok_or("a CLIP vision tower too large")?;
+    let pos_len = spec.num_positions.checked_mul(h).ok_or("a CLIP vision tower too large")?;
+    let proj_len = embed_dim.checked_mul(h).ok_or("a CLIP vision tower too large")?;
+    if spec.patch_weight.len() != patch_len
+        || spec.class_embedding.len() != h
+        || spec.position_embedding.len() != pos_len
+        || spec.pre_ln_w.len() != h
+        || spec.pre_ln_b.len() != h
+        || spec.post_ln_w.len() != h
+        || spec.post_ln_b.len() != h
+        || spec.projection.len() != proj_len
+    {
+        return Err("CLIP vision weights do not match the tower's shape".into());
+    }
+    let hi = h.checked_mul(i).ok_or("a CLIP tower too large")?;
+    let extra_floats = patch_len + pos_len + 4 * h + proj_len + embed_dim;
+    let total = blocks_bytes.saturating_add((extra_floats as u64) * 4);
+    if total > MAX_RESIDENT {
+        return Err("the CLIP vision tower is too large for the GPU budget".into());
+    }
+    let dev = dev_for(card_key)?;
+    let max_weight_bytes = (hi.max(patch_len).max(pos_len).max(proj_len) as u64) * 4;
+    if max_weight_bytes > max_binding_bytes(&dev) {
+        return Err(format!("{}: a CLIP vision weight is larger than a storage buffer may be", dev.info.name));
+    }
+    let Some(_work) = crate::exit::enter() else { return Err("the app is closing".into()) };
+    let mut pos_with_cls = spec.position_embedding.to_vec();
+    if let Some(first_row) = pos_with_cls.get_mut(..h) {
+        for (slot, &cls) in first_row.iter_mut().zip(spec.class_embedding) {
+            *slot += cls;
+        }
+    }
+    let zeros_proj_b = vec![0.0f32; embed_dim];
+    let scope = dev.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let patch_weight = upload_f32(&dev, "clip patch w", spec.patch_weight);
+    let pos_with_cls = upload_f32(&dev, "clip pos+cls", &pos_with_cls);
+    let pre_ln = [upload_f32(&dev, "clip pre_ln w", spec.pre_ln_w), upload_f32(&dev, "clip pre_ln b", spec.pre_ln_b)];
+    let blocks = upload_blocks(&dev, spec.blocks);
+    let post_ln = [upload_f32(&dev, "clip post_ln w", spec.post_ln_w), upload_f32(&dev, "clip post_ln b", spec.post_ln_b)];
+    let proj_w = upload_f32(&dev, "clip vis proj w", spec.projection);
+    let proj_zero_b = upload_f32(&dev, "clip vis proj b", &zeros_proj_b);
+    if let Some(e) = pollster::block_on(scope.pop()) {
+        return Err(format!("the GPU ran out of memory for the CLIP vision weights: {e}"));
+    }
+    Ok(ClipVisionTower {
+        dev,
+        hidden: h,
+        intermediate: i,
+        heads: spec.heads,
+        eps: spec.eps,
+        embed_dim,
+        patch_size: ps,
+        grid_w,
+        seq: spec.num_positions,
+        img_w: spec.img_w,
+        img_h: spec.img_h,
+        patch_weight,
+        pos_with_cls,
+        pre_ln,
+        blocks,
+        post_ln,
+        proj_w,
+        proj_zero_b,
+    })
+}
+
+/// Upload a full CLIP text tower onto a chosen graphics card (`None` or `"auto"`: automatic selection).
+pub fn text_tower_for(card_key: Option<&str>, spec: &TextTowerSpec<'_>) -> Result<ClipTextTower, String> {
+    let blocks_bytes = validate_blocks(spec.blocks, spec.hidden, spec.intermediate, spec.heads, spec.eps)?;
+    let (h, i, embed_dim) = (spec.hidden, spec.intermediate, spec.embed_dim);
+    if embed_dim == 0 || spec.vocab_size == 0 || spec.context_len == 0 || spec.context_len > MAX_SEQ {
+        return Err("invalid CLIP text shape".into());
+    }
+    let tok_len = spec.vocab_size.checked_mul(h).ok_or("a CLIP text tower too large")?;
+    let pos_len = spec.context_len.checked_mul(h).ok_or("a CLIP text tower too large")?;
+    let proj_len = embed_dim.checked_mul(h).ok_or("a CLIP text tower too large")?;
+    if spec.token_embedding.len() != tok_len
+        || spec.position_embedding.len() != pos_len
+        || spec.final_ln_w.len() != h
+        || spec.final_ln_b.len() != h
+        || spec.projection.len() != proj_len
+    {
+        return Err("CLIP text weights do not match the tower's shape".into());
+    }
+    let hi = h.checked_mul(i).ok_or("a CLIP tower too large")?;
+    let extra_floats = tok_len + pos_len + 2 * h + proj_len + embed_dim;
+    let total = blocks_bytes.saturating_add((extra_floats as u64) * 4);
+    if total > MAX_RESIDENT {
+        return Err("the CLIP text tower is too large for the GPU budget".into());
+    }
+    let dev = dev_for(card_key)?;
+    let max_weight_bytes = (hi.max(tok_len).max(pos_len).max(proj_len) as u64) * 4;
+    if max_weight_bytes > max_binding_bytes(&dev) {
+        return Err(format!("{}: a CLIP text weight is larger than a storage buffer may be", dev.info.name));
+    }
+    let Some(_work) = crate::exit::enter() else { return Err("the app is closing".into()) };
+    let zeros_proj_b = vec![0.0f32; embed_dim];
+    let scope = dev.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let token_emb = upload_f32(&dev, "clip tok emb", spec.token_embedding);
+    let pos_emb = upload_f32(&dev, "clip text pos", spec.position_embedding);
+    let blocks = upload_blocks(&dev, spec.blocks);
+    let final_ln = [upload_f32(&dev, "clip final_ln w", spec.final_ln_w), upload_f32(&dev, "clip final_ln b", spec.final_ln_b)];
+    let proj_w = upload_f32(&dev, "clip text proj w", spec.projection);
+    let proj_zero_b = upload_f32(&dev, "clip text proj b", &zeros_proj_b);
+    if let Some(e) = pollster::block_on(scope.pop()) {
+        return Err(format!("the GPU ran out of memory for the CLIP text weights: {e}"));
+    }
+    Ok(ClipTextTower {
+        dev,
+        hidden: h,
+        intermediate: i,
+        heads: spec.heads,
+        eps: spec.eps,
+        embed_dim,
+        vocab_size: spec.vocab_size,
+        context_len: spec.context_len,
+        token_emb,
+        pos_emb,
+        blocks,
+        final_ln,
+        proj_w,
+        proj_zero_b,
+    })
 }
 
 struct Pass<'a> {
@@ -422,6 +658,150 @@ struct Pass<'a> {
     params: Params,
     bufs: [&'a wgpu::Buffer; 4],
     groups: [u32; 3],
+}
+
+fn run_guarded(dev: &Dev, f: impl FnOnce() -> Result<Vec<f32>, String>) -> Result<Vec<f32>, String> {
+    if let Some(why) = dev_broken_reason(dev) {
+        return Err(format!("the GPU is not used any more: {why}"));
+    }
+    if let Some(why) = crate::switched_off() {
+        return Err(why);
+    }
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| {
+        mark_dev_broken(dev, "CLIP on the GPU panicked");
+        Err("the GPU runner gave up".into())
+    })
+}
+
+fn make_scratch(d: &Dev, label: &str, bytes: u64) -> wgpu::Buffer {
+    d.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: bytes.max(4),
+        usage: wgpu::BufferUsages::STORAGE,
+        mapped_at_creation: false,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_block_passes<'a>(
+    passes: &mut Vec<Pass<'a>>,
+    d: &'a Dev,
+    blocks: &'a [Block],
+    base: Params,
+    h: u32,
+    i: u32,
+    r: u32,
+    bh: u32,
+    state: &'a wgpu::Buffer,
+    normed: &'a wgpu::Buffer,
+    q: &'a wgpu::Buffer,
+    k: &'a wgpu::Buffer,
+    v: &'a wgpu::Buffer,
+    ctx: &'a wgpu::Buffer,
+    mid: &'a wgpu::Buffer,
+) {
+    let lin_groups = |n: u32| [n.div_ceil(16), r.div_ceil(16), 1];
+    for b in blocks {
+        passes.push(Pass { pipeline: &d.layernorm, params: base, bufs: [state, &b.ln1[0], &b.ln1[1], normed], groups: [r, 1, 1] });
+        for (wb, out) in [(&b.q, q), (&b.k, k), (&b.v, v)] {
+            passes.push(Pass { pipeline: &d.linear, params: base, bufs: [normed, &wb[0], &wb[1], out], groups: lin_groups(h) });
+        }
+        passes.push(Pass { pipeline: &d.attention, params: base, bufs: [q, k, v, ctx], groups: [base.seq, bh, 1] });
+        passes.push(Pass { pipeline: &d.linear, params: Params { flags: ADD, ..base }, bufs: [ctx, &b.o[0], &b.o[1], state], groups: lin_groups(h) });
+        passes.push(Pass { pipeline: &d.layernorm, params: base, bufs: [state, &b.ln2[0], &b.ln2[1], normed], groups: [r, 1, 1] });
+        passes.push(Pass {
+            pipeline: &d.linear,
+            params: Params { n: i, flags: GELU, ..base },
+            bufs: [normed, &b.fc1[0], &b.fc1[1], mid],
+            groups: lin_groups(i),
+        });
+        passes.push(Pass {
+            pipeline: &d.linear,
+            params: Params { k: i, flags: ADD, ..base },
+            bufs: [mid, &b.fc2[0], &b.fc2[1], state],
+            groups: lin_groups(h),
+        });
+    }
+}
+
+fn dispatch_and_readback(
+    d: &Dev,
+    label: &str,
+    scopes: [wgpu::ErrorScopeGuard; 2],
+    passes: &[Pass<'_>],
+    src: &wgpu::Buffer,
+    out_bytes: u64,
+    expected_len: usize,
+) -> Result<Vec<f32>, String> {
+    let staging = d.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("clip read-back"),
+        size: out_bytes.max(4),
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let binds: Vec<(wgpu::BindGroup, &wgpu::ComputePipeline, [u32; 3])> = passes
+        .iter()
+        .map(|p| {
+            let u = crate::upload::buffer_init(&d.device, &d.queue, Some("clip params"), bytemuck::bytes_of(&p.params), wgpu::BufferUsages::UNIFORM);
+            let [b1, b2, b3, b4] = p.bufs;
+            let bind = d.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &d.layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: u.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: b1.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: b2.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 3, resource: b3.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 4, resource: b4.as_entire_binding() },
+                ],
+            });
+            (bind, p.pipeline, p.groups)
+        })
+        .collect();
+    let mut enc = d.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
+    {
+        let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some(label), timestamp_writes: None });
+        for (bind, pipeline, [gx, gy, gz]) in &binds {
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, bind, &[]);
+            pass.dispatch_workgroups(*gx, *gy, *gz);
+        }
+    }
+    enc.copy_buffer_to_buffer(src, 0, &staging, 0, out_bytes);
+    let index = d.queue.submit([enc.finish()]);
+    let slice = staging.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |res| {
+        let _ = tx.send(res);
+    });
+    let waited = d.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: Some(TIMEOUT) });
+    let [oom, validation] = scopes;
+    let (validation, oom) = (pollster::block_on(validation.pop()), pollster::block_on(oom.pop()));
+    if let Some(e) = oom {
+        return Err(format!("the GPU ran out of memory: {e}"));
+    }
+    if let Some(e) = validation {
+        mark_dev_broken(d, &format!("device error: {e}"));
+        return Err(format!("the GPU reported an error: {e}"));
+    }
+    if let Err(e) = waited {
+        mark_dev_broken(d, &format!("the GPU did not finish a CLIP batch: {e}"));
+        return Err(format!("the GPU did not finish: {e}"));
+    }
+    match rx.recv_timeout(Duration::from_secs(10)) {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(format!("reading the result back failed: {e}")),
+        Err(e) => return Err(format!("reading the result back failed: {e}")),
+    }
+    let out = {
+        let data = slice.get_mapped_range().map_err(|e| format!("reading the result back failed: {e:?}"))?;
+        data.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect::<Vec<f32>>()
+    };
+    staging.unmap();
+    if out.len() != expected_len {
+        return Err("the GPU returned a result of the wrong size".into());
+    }
+    Ok(out)
 }
 
 impl ClipTower {
@@ -437,16 +817,7 @@ impl ClipTower {
 
     /// Run `x` (`[batch, seq, hidden]`, row-major) through every block; returns the result in the same shape.
     pub fn run(&self, x: &[f32], batch: usize, seq: usize) -> Result<Vec<f32>, String> {
-        if let Some(why) = dev_broken_reason(&self.dev) {
-            return Err(format!("the GPU is not used any more: {why}"));
-        }
-        if let Some(why) = crate::switched_off() {
-            return Err(why);
-        }
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run_inner(x, batch, seq))).unwrap_or_else(|_| {
-            mark_dev_broken(&self.dev, "CLIP on the GPU panicked");
-            Err("the GPU runner gave up".into())
-        })
+        run_guarded(&self.dev, || self.run_inner(x, batch, seq))
     }
 
     fn run_inner(&self, x: &[f32], batch: usize, seq: usize) -> Result<Vec<f32>, String> {
@@ -462,7 +833,7 @@ impl ClipTower {
             return Err("a CLIP batch too large for one dispatch".into());
         }
         let big = rows.checked_mul(s.intermediate).ok_or("a batch too large")? as u64 * 4;
-        if big > d.limits.max_storage_buffer_binding_size.min(d.limits.max_buffer_size) {
+        if big > max_binding_bytes(d) {
             return Err("a CLIP batch too large for one buffer".into());
         }
         let Some(_work) = crate::exit::enter() else { return Err("the app is closing".into()) };
@@ -475,28 +846,14 @@ impl ClipTower {
             bytemuck::cast_slice(x),
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         );
-        let scratch = |label: &str, bytes: u64| {
-            d.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes.max(4),
-                usage: wgpu::BufferUsages::STORAGE,
-                mapped_at_creation: false,
-            })
-        };
         let (normed, q, k, v, ctx, mid) = (
-            scratch("clip normed", width_bytes),
-            scratch("clip q", width_bytes),
-            scratch("clip k", width_bytes),
-            scratch("clip v", width_bytes),
-            scratch("clip ctx", width_bytes),
-            scratch("clip mlp", big),
+            make_scratch(d, "clip normed", width_bytes),
+            make_scratch(d, "clip q", width_bytes),
+            make_scratch(d, "clip k", width_bytes),
+            make_scratch(d, "clip v", width_bytes),
+            make_scratch(d, "clip ctx", width_bytes),
+            make_scratch(d, "clip mlp", big),
         );
-        let staging = d.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("clip read-back"),
-            size: width_bytes.max(4),
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
 
         let (r, h, i) = (u32_of(rows)?, u32_of(s.hidden)?, u32_of(s.intermediate)?);
         let head_dim = s.hidden / s.heads;
@@ -511,100 +868,233 @@ impl ClipTower {
             causal: u32::from(s.causal),
             eps: s.eps,
             scale: 1.0 / (head_dim as f32).sqrt(),
-            _a: 0,
-            _b: 0,
+            patch_size: 0,
+            grid_w: 0,
         };
-        let lin_groups = |n: u32| [n.div_ceil(16), r.div_ceil(16), 1];
         let mut passes: Vec<Pass<'_>> = Vec::with_capacity(self.blocks.len() * 9);
-        for b in &self.blocks {
-            passes.push(Pass { pipeline: &d.layernorm, params: base, bufs: [&state, &b.ln1[0], &b.ln1[1], &normed], groups: [r, 1, 1] });
-            for (wb, out) in [(&b.q, &q), (&b.k, &k), (&b.v, &v)] {
-                passes.push(Pass { pipeline: &d.linear, params: base, bufs: [&normed, &wb[0], &wb[1], out], groups: lin_groups(h) });
-            }
-            passes.push(Pass { pipeline: &d.attention, params: base, bufs: [&q, &k, &v, &ctx], groups: [base.seq, u32_of(bh)?, 1] });
-            passes.push(Pass {
-                pipeline: &d.linear,
-                params: Params { flags: ADD, ..base },
-                bufs: [&ctx, &b.o[0], &b.o[1], &state],
-                groups: lin_groups(h),
-            });
-            passes.push(Pass { pipeline: &d.layernorm, params: base, bufs: [&state, &b.ln2[0], &b.ln2[1], &normed], groups: [r, 1, 1] });
-            passes.push(Pass {
-                pipeline: &d.linear,
-                params: Params { n: i, flags: GELU, ..base },
-                bufs: [&normed, &b.fc1[0], &b.fc1[1], &mid],
-                groups: lin_groups(i),
-            });
-            passes.push(Pass {
-                pipeline: &d.linear,
-                params: Params { k: i, flags: ADD, ..base },
-                bufs: [&mid, &b.fc2[0], &b.fc2[1], &state],
-                groups: lin_groups(h),
-            });
+        push_block_passes(&mut passes, d, &self.blocks, base, h, i, r, u32_of(bh)?, &state, &normed, &q, &k, &v, &ctx, &mid);
+        dispatch_and_readback(d, "clip blocks", scopes, &passes, &state, width_bytes, x.len())
+    }
+}
+
+impl ClipVisionTower {
+    /// The adapter it runs on ("AMD Radeon RX 7900 XTX (Vulkan)").
+    pub fn device(&self) -> String {
+        format!("{} ({:?})", self.dev.info.name, self.dev.info.backend)
+    }
+
+    /// The card it runs on.
+    pub fn card(&self) -> Card {
+        self.dev.card
+    }
+
+    /// Run preprocessed CHW `images` (`[batch, 3, h, w]`) through the full vision tower; returns `[batch, embed_dim]`.
+    pub fn run(&self, images: &[f32], batch: usize, h: usize, w: usize) -> Result<Vec<f32>, String> {
+        run_guarded(&self.dev, || self.run_inner(images, batch, h, w))
+    }
+
+    fn run_inner(&self, images: &[f32], batch: usize, h: usize, w: usize) -> Result<Vec<f32>, String> {
+        if batch == 0 || h != self.img_h || w != self.img_w {
+            return Err("invalid CLIP vision batch shape".into());
         }
-        let binds: Vec<(wgpu::BindGroup, &wgpu::ComputePipeline, [u32; 3])> = passes
-            .iter()
-            .map(|p| {
-                let u =
-                    crate::upload::buffer_init(&d.device, &d.queue, Some("clip params"), bytemuck::bytes_of(&p.params), wgpu::BufferUsages::UNIFORM);
-                let bind = d.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: None,
-                    layout: &d.layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: u.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: p.bufs[0].as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 2, resource: p.bufs[1].as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 3, resource: p.bufs[2].as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 4, resource: p.bufs[3].as_entire_binding() },
-                    ],
-                });
-                (bind, p.pipeline, p.groups)
-            })
-            .collect();
-        let mut enc = d.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("clip") });
-        {
-            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("clip blocks"), timestamp_writes: None });
-            for (bind, pipeline, [gx, gy, gz]) in &binds {
-                pass.set_pipeline(pipeline);
-                pass.set_bind_group(0, bind, &[]);
-                pass.dispatch_workgroups(*gx, *gy, *gz);
-            }
+        let expected_in = batch.checked_mul(3).and_then(|v| v.checked_mul(h)).and_then(|v| v.checked_mul(w)).ok_or("a batch too large")?;
+        if images.len() != expected_in {
+            return Err("invalid CLIP vision image length".into());
         }
-        enc.copy_buffer_to_buffer(&state, 0, &staging, 0, width_bytes);
-        let index = d.queue.submit([enc.finish()]);
-        let slice = staging.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |res| {
-            let _ = tx.send(res);
+        let rows = batch.checked_mul(self.seq).ok_or("a batch too large")?;
+        let d = &self.dev;
+        let max_groups = d.limits.max_compute_workgroups_per_dimension as usize;
+        let bh = batch.checked_mul(self.heads).ok_or("a batch too large")?;
+        let max_lin_n = self.hidden.max(self.intermediate).max(self.embed_dim);
+        if rows > max_groups || bh > max_groups || rows.div_ceil(16) > max_groups || max_lin_n.div_ceil(16) > max_groups {
+            return Err("a CLIP vision batch too large for one dispatch".into());
+        }
+        let big = rows.checked_mul(self.intermediate).ok_or("a batch too large")? as u64 * 4;
+        let in_bytes = (expected_in as u64) * 4;
+        if big.max(in_bytes) > max_binding_bytes(d) {
+            return Err("a CLIP vision batch too large for one buffer".into());
+        }
+        let Some(_work) = crate::exit::enter() else { return Err("the app is closing".into()) };
+        let scopes = [d.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory), d.device.push_error_scope(wgpu::ErrorFilter::Validation)];
+
+        let width_bytes = (rows * self.hidden) as u64 * 4;
+        let batch_hidden_bytes = (batch * self.hidden) as u64 * 4;
+        let expected_out = batch.checked_mul(self.embed_dim).ok_or("a batch too large")?;
+        let out_bytes = (expected_out as u64) * 4;
+
+        let images_buf = upload_f32(d, "clip images", images);
+        let raw_state = make_scratch(d, "clip raw state", width_bytes);
+        let state = make_scratch(d, "clip state", width_bytes);
+        let (normed, q, k, v, ctx, mid) = (
+            make_scratch(d, "clip normed", width_bytes),
+            make_scratch(d, "clip q", width_bytes),
+            make_scratch(d, "clip k", width_bytes),
+            make_scratch(d, "clip v", width_bytes),
+            make_scratch(d, "clip ctx", width_bytes),
+            make_scratch(d, "clip mlp", big),
+        );
+        let pooled_a = make_scratch(d, "clip pooled a", batch_hidden_bytes);
+        let pooled_b = make_scratch(d, "clip pooled b", batch_hidden_bytes);
+        let out_buf = d.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("clip vision out"),
+            size: out_bytes.max(4),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
         });
-        let waited = d.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: Some(TIMEOUT) });
-        let [oom, validation] = scopes;
-        let (validation, oom) = (pollster::block_on(validation.pop()), pollster::block_on(oom.pop()));
-        if let Some(e) = oom {
-            return Err(format!("the GPU ran out of memory: {e}"));
-        }
-        if let Some(e) = validation {
-            mark_dev_broken(d, &format!("device error: {e}"));
-            return Err(format!("the GPU reported an error: {e}"));
-        }
-        if let Err(e) = waited {
-            mark_dev_broken(d, &format!("the GPU did not finish a CLIP batch: {e}"));
-            return Err(format!("the GPU did not finish: {e}"));
-        }
-        match rx.recv_timeout(Duration::from_secs(10)) {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(format!("reading the result back failed: {e}")),
-            Err(e) => return Err(format!("reading the result back failed: {e}")),
-        }
-        let out = {
-            let data = slice.get_mapped_range().map_err(|e| format!("reading the result back failed: {e:?}"))?;
-            data.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect::<Vec<f32>>()
+
+        let (r, b_u32, hidden_u32, inter_u32, embed_u32) =
+            (u32_of(rows)?, u32_of(batch)?, u32_of(self.hidden)?, u32_of(self.intermediate)?, u32_of(self.embed_dim)?);
+        let head_dim = self.hidden / self.heads;
+        let base = Params {
+            rows: r,
+            k: hidden_u32,
+            n: hidden_u32,
+            flags: 0,
+            heads: u32_of(self.heads)?,
+            seq: u32_of(self.seq)?,
+            head_dim: u32_of(head_dim)?,
+            causal: 0,
+            eps: self.eps,
+            scale: 1.0 / (head_dim as f32).sqrt(),
+            patch_size: u32_of(self.patch_size)?,
+            grid_w: u32_of(self.grid_w)?,
         };
-        staging.unmap();
-        if out.len() != x.len() {
-            return Err("the GPU returned a result of the wrong size".into());
+        let mut passes: Vec<Pass<'_>> = Vec::with_capacity(5 + self.blocks.len() * 9);
+        passes.push(Pass {
+            pipeline: &d.patch_embed,
+            params: base,
+            bufs: [&images_buf, &self.patch_weight, &self.pos_with_cls, &raw_state],
+            groups: [r, 1, 1],
+        });
+        passes.push(Pass { pipeline: &d.layernorm, params: base, bufs: [&raw_state, &self.pre_ln[0], &self.pre_ln[1], &state], groups: [r, 1, 1] });
+        push_block_passes(&mut passes, d, &self.blocks, base, hidden_u32, inter_u32, r, u32_of(bh)?, &state, &normed, &q, &k, &v, &ctx, &mid);
+        passes.push(Pass {
+            pipeline: &d.gather,
+            params: Params { rows: b_u32, flags: 0, ..base },
+            bufs: [&state, &self.proj_zero_b, &self.proj_zero_b, &pooled_a],
+            groups: [b_u32, 1, 1],
+        });
+        passes.push(Pass {
+            pipeline: &d.layernorm,
+            params: Params { rows: b_u32, ..base },
+            bufs: [&pooled_a, &self.post_ln[0], &self.post_ln[1], &pooled_b],
+            groups: [b_u32, 1, 1],
+        });
+        passes.push(Pass {
+            pipeline: &d.linear,
+            params: Params { rows: b_u32, n: embed_u32, flags: 0, ..base },
+            bufs: [&pooled_b, &self.proj_w, &self.proj_zero_b, &out_buf],
+            groups: [embed_u32.div_ceil(16), b_u32.div_ceil(16), 1],
+        });
+
+        dispatch_and_readback(d, "clip vision", scopes, &passes, &out_buf, out_bytes, expected_out)
+    }
+}
+
+impl ClipTextTower {
+    /// The adapter it runs on ("AMD Radeon RX 7900 XTX (Vulkan)").
+    pub fn device(&self) -> String {
+        format!("{} ({:?})", self.dev.info.name, self.dev.info.backend)
+    }
+
+    /// The card it runs on.
+    pub fn card(&self) -> Card {
+        self.dev.card
+    }
+
+    /// Run `token_ids` (`[batch, seq]`) and `eot_indices` (`[batch]`) through the full text tower; returns `[batch, embed_dim]`.
+    pub fn run(&self, token_ids: &[u32], eot_indices: &[u32], batch: usize, seq: usize) -> Result<Vec<f32>, String> {
+        run_guarded(&self.dev, || self.run_inner(token_ids, eot_indices, batch, seq))
+    }
+
+    fn run_inner(&self, token_ids: &[u32], eot_indices: &[u32], batch: usize, seq: usize) -> Result<Vec<f32>, String> {
+        if batch == 0 || seq != self.context_len {
+            return Err("invalid CLIP text batch shape".into());
         }
-        Ok(out)
+        let rows = batch.checked_mul(seq).ok_or("a batch too large")?;
+        if token_ids.len() != rows || eot_indices.len() != batch {
+            return Err("invalid CLIP text token length".into());
+        }
+        let d = &self.dev;
+        let max_groups = d.limits.max_compute_workgroups_per_dimension as usize;
+        let bh = batch.checked_mul(self.heads).ok_or("a batch too large")?;
+        let max_lin_n = self.hidden.max(self.intermediate).max(self.embed_dim);
+        if rows > max_groups || bh > max_groups || rows.div_ceil(16) > max_groups || max_lin_n.div_ceil(16) > max_groups {
+            return Err("a CLIP text batch too large for one dispatch".into());
+        }
+        let big = rows.checked_mul(self.intermediate).ok_or("a batch too large")? as u64 * 4;
+        if big > max_binding_bytes(d) {
+            return Err("a CLIP text batch too large for one buffer".into());
+        }
+        let Some(_work) = crate::exit::enter() else { return Err("the app is closing".into()) };
+        let scopes = [d.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory), d.device.push_error_scope(wgpu::ErrorFilter::Validation)];
+
+        let width_bytes = (rows * self.hidden) as u64 * 4;
+        let batch_hidden_bytes = (batch * self.hidden) as u64 * 4;
+        let expected_out = batch.checked_mul(self.embed_dim).ok_or("a batch too large")?;
+        let out_bytes = (expected_out as u64) * 4;
+
+        let ids_buf =
+            crate::upload::buffer_init(&d.device, &d.queue, Some("clip token ids"), bytemuck::cast_slice(token_ids), wgpu::BufferUsages::STORAGE);
+        let eot_buf =
+            crate::upload::buffer_init(&d.device, &d.queue, Some("clip eot"), bytemuck::cast_slice(eot_indices), wgpu::BufferUsages::STORAGE);
+        let state = make_scratch(d, "clip state", width_bytes);
+        let (normed, q, k, v, ctx, mid) = (
+            make_scratch(d, "clip normed", width_bytes),
+            make_scratch(d, "clip q", width_bytes),
+            make_scratch(d, "clip k", width_bytes),
+            make_scratch(d, "clip v", width_bytes),
+            make_scratch(d, "clip ctx", width_bytes),
+            make_scratch(d, "clip mlp", big),
+        );
+        let pooled_a = make_scratch(d, "clip pooled a", batch_hidden_bytes);
+        let out_buf = d.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("clip text out"),
+            size: out_bytes.max(4),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        let (r, b_u32, hidden_u32, inter_u32, embed_u32, vocab_u32) =
+            (u32_of(rows)?, u32_of(batch)?, u32_of(self.hidden)?, u32_of(self.intermediate)?, u32_of(self.embed_dim)?, u32_of(self.vocab_size)?);
+        let head_dim = self.hidden / self.heads;
+        let base = Params {
+            rows: r,
+            k: hidden_u32,
+            n: hidden_u32,
+            flags: 0,
+            heads: u32_of(self.heads)?,
+            seq: u32_of(seq)?,
+            head_dim: u32_of(head_dim)?,
+            causal: 1,
+            eps: self.eps,
+            scale: 1.0 / (head_dim as f32).sqrt(),
+            patch_size: 0,
+            grid_w: 0,
+        };
+        let mut passes: Vec<Pass<'_>> = Vec::with_capacity(4 + self.blocks.len() * 9);
+        passes.push(Pass {
+            pipeline: &d.text_embed,
+            params: Params { n: vocab_u32, ..base },
+            bufs: [&ids_buf, &self.token_emb, &self.pos_emb, &state],
+            groups: [r, 1, 1],
+        });
+        push_block_passes(&mut passes, d, &self.blocks, base, hidden_u32, inter_u32, r, u32_of(bh)?, &state, &normed, &q, &k, &v, &ctx, &mid);
+        passes.push(Pass { pipeline: &d.layernorm, params: base, bufs: [&state, &self.final_ln[0], &self.final_ln[1], &normed], groups: [r, 1, 1] });
+        passes.push(Pass {
+            pipeline: &d.gather,
+            params: Params { rows: b_u32, flags: 1, ..base },
+            bufs: [&normed, &eot_buf, &self.proj_zero_b, &pooled_a],
+            groups: [b_u32, 1, 1],
+        });
+        passes.push(Pass {
+            pipeline: &d.linear,
+            params: Params { rows: b_u32, n: embed_u32, flags: 0, ..base },
+            bufs: [&pooled_a, &self.proj_w, &self.proj_zero_b, &out_buf],
+            groups: [embed_u32.div_ceil(16), b_u32.div_ceil(16), 1],
+        });
+
+        dispatch_and_readback(d, "clip text", scopes, &passes, &out_buf, out_bytes, expected_out)
     }
 }
 
@@ -699,6 +1189,56 @@ mod tests {
         x
     }
 
+    fn make_owned_blocks(n_layers: usize, h: usize, i: usize) -> Vec<Vec<Vec<f32>>> {
+        (0..n_layers)
+            .map(|l| {
+                let s = l as f32 * 10.0;
+                vec![
+                    values(h, s + 1.0).iter().map(|v| v + 1.0).collect(),
+                    values(h, s + 2.0),
+                    values(h * h, s + 3.0),
+                    values(h, s + 4.0),
+                    values(h * h, s + 5.0),
+                    values(h, s + 6.0),
+                    values(h * h, s + 7.0),
+                    values(h, s + 8.0),
+                    values(h * h, s + 9.0),
+                    values(h, s + 10.0),
+                    values(h, s + 11.0).iter().map(|v| v + 1.0).collect(),
+                    values(h, s + 12.0),
+                    values(h * i, s + 13.0),
+                    values(i, s + 14.0),
+                    values(h * i, s + 15.0),
+                    values(h, s + 16.0),
+                ]
+            })
+            .collect()
+    }
+
+    fn as_block_refs(owned: &[Vec<Vec<f32>>]) -> Vec<BlockRef<'_>> {
+        owned
+            .iter()
+            .map(|w| BlockRef {
+                ln1_w: &w[0],
+                ln1_b: &w[1],
+                q_w: &w[2],
+                q_b: &w[3],
+                k_w: &w[4],
+                k_b: &w[5],
+                v_w: &w[6],
+                v_b: &w[7],
+                o_w: &w[8],
+                o_b: &w[9],
+                ln2_w: &w[10],
+                ln2_b: &w[11],
+                fc1_w: &w[12],
+                fc1_b: &w[13],
+                fc2_w: &w[14],
+                fc2_b: &w[15],
+            })
+            .collect()
+    }
+
     /// Blocks on the GPU give what the definition gives, causal or not, with sizes that are not multiples of a tile.
     #[test]
     fn clip_blocks_on_the_gpu_match_the_definition() {
@@ -708,59 +1248,160 @@ mod tests {
         }
         for causal in [false, true] {
             let spec = TowerSpec { hidden: 24, intermediate: 40, heads: 3, causal, eps: 1e-5 };
-            let (h, i) = (spec.hidden, spec.intermediate);
-            let owned: Vec<Vec<Vec<f32>>> = (0..2)
-                .map(|l| {
-                    let s = l as f32 * 10.0;
-                    vec![
-                        values(h, s + 1.0).iter().map(|v| v + 1.0).collect(),
-                        values(h, s + 2.0),
-                        values(h * h, s + 3.0),
-                        values(h, s + 4.0),
-                        values(h * h, s + 5.0),
-                        values(h, s + 6.0),
-                        values(h * h, s + 7.0),
-                        values(h, s + 8.0),
-                        values(h * h, s + 9.0),
-                        values(h, s + 10.0),
-                        values(h, s + 11.0).iter().map(|v| v + 1.0).collect(),
-                        values(h, s + 12.0),
-                        values(h * i, s + 13.0),
-                        values(i, s + 14.0),
-                        values(h * i, s + 15.0),
-                        values(h, s + 16.0),
-                    ]
-                })
-                .collect();
-            let blocks: Vec<BlockRef<'_>> = owned
-                .iter()
-                .map(|w| BlockRef {
-                    ln1_w: &w[0],
-                    ln1_b: &w[1],
-                    q_w: &w[2],
-                    q_b: &w[3],
-                    k_w: &w[4],
-                    k_b: &w[5],
-                    v_w: &w[6],
-                    v_b: &w[7],
-                    o_w: &w[8],
-                    o_b: &w[9],
-                    ln2_w: &w[10],
-                    ln2_b: &w[11],
-                    fc1_w: &w[12],
-                    fc1_b: &w[13],
-                    fc2_w: &w[14],
-                    fc2_b: &w[15],
-                })
-                .collect();
+            let owned = make_owned_blocks(2, spec.hidden, spec.intermediate);
+            let blocks = as_block_refs(&owned);
             let (batch, seq) = (2, 7);
-            let x = values(batch * seq * h, 0.5);
+            let x = values(batch * seq * spec.hidden, 0.5);
             let t = tower(spec, &blocks).unwrap();
             let got = t.run(&x, batch, seq).unwrap();
             let want = reference(spec, &blocks, &x, batch, seq);
             let worst = got.iter().zip(&want).map(|(g, w)| (g - w).abs()).fold(0f32, f32::max);
             assert!(worst < 1e-3, "causal {causal}: GPU differs from the definition by {worst}");
         }
+    }
+
+    #[test]
+    fn clip_vision_tower_on_gpu_matches_reference() {
+        if let Err(e) = adapter() {
+            lcc_testkit::skip!(Gpu, "no GPU for the CLIP vision tower: {e}");
+            return;
+        }
+        let (h, i, heads, embed_dim, ps, img_w, img_h) = (24, 40, 3, 12, 4, 12, 8);
+        let (grid_w, grid_h) = (img_w / ps, img_h / ps);
+        let num_pos = 1 + grid_w * grid_h;
+        let eps = 1e-5;
+        let owned = make_owned_blocks(2, h, i);
+        let blocks = as_block_refs(&owned);
+        let patch_w = values(h * 3 * ps * ps, 1.0);
+        let cls = values(h, 2.0);
+        let pos = values(num_pos * h, 3.0);
+        let pre_ln_w: Vec<f32> = values(h, 4.0).iter().map(|v| v + 1.0).collect();
+        let pre_ln_b = values(h, 5.0);
+        let post_ln_w: Vec<f32> = values(h, 6.0).iter().map(|v| v + 1.0).collect();
+        let post_ln_b = values(h, 7.0);
+        let proj = values(embed_dim * h, 8.0);
+        let spec = VisionTowerSpec {
+            hidden: h,
+            intermediate: i,
+            heads,
+            eps,
+            embed_dim,
+            patch_size: ps,
+            num_positions: num_pos,
+            img_w,
+            img_h,
+            patch_weight: &patch_w,
+            class_embedding: &cls,
+            position_embedding: &pos,
+            pre_ln_w: &pre_ln_w,
+            pre_ln_b: &pre_ln_b,
+            blocks: &blocks,
+            post_ln_w: &post_ln_w,
+            post_ln_b: &post_ln_b,
+            projection: &proj,
+        };
+        let batch = 2;
+        let images = values(batch * 3 * img_h * img_w, 0.25);
+        let gpu_tower = vision_tower_for(None, &spec).unwrap();
+        let got = gpu_tower.run(&images, batch, img_h, img_w).unwrap();
+
+        let mut seq_in = vec![0.0f32; batch * num_pos * h];
+        for b in 0..batch {
+            for d in 0..h {
+                seq_in[b * num_pos * h + d] = cls[d] + pos[d];
+            }
+            for p_idx in 0..(grid_w * grid_h) {
+                let (py, px) = (p_idx / grid_w, p_idx % grid_w);
+                let (y0, x0) = (py * ps, px * ps);
+                let row_off = (b * num_pos + 1 + p_idx) * h;
+                for d in 0..h {
+                    let mut acc = 0.0f32;
+                    for ch in 0..3 {
+                        for u in 0..ps {
+                            for v in 0..ps {
+                                let img_idx = ((b * 3 + ch) * img_h + y0 + u) * img_w + x0 + v;
+                                let w_idx = ((d * 3 + ch) * ps + u) * ps + v;
+                                acc += images[img_idx] * patch_w[w_idx];
+                            }
+                        }
+                    }
+                    seq_in[row_off + d] = acc + pos[(1 + p_idx) * h + d];
+                }
+            }
+        }
+        let pre_normed: Vec<f32> = seq_in.chunks(h).flat_map(|r| layernorm(r, &pre_ln_w, &pre_ln_b, eps)).collect();
+        let after = reference(TowerSpec { hidden: h, intermediate: i, heads, causal: false, eps }, &blocks, &pre_normed, batch, num_pos);
+        let mut want = Vec::with_capacity(batch * embed_dim);
+        for b in 0..batch {
+            let cls_tok = &after[b * num_pos * h..b * num_pos * h + h];
+            let post = layernorm(cls_tok, &post_ln_w, &post_ln_b, eps);
+            let zero_b = vec![0.0f32; embed_dim];
+            want.extend(linear(&post, 1, h, &proj, &zero_b));
+        }
+        let scale = want.iter().fold(0f32, |m, v| m.max(v.abs()));
+        let tol = 2e-3 * (1.0 + scale);
+        let worst = got.iter().zip(&want).map(|(g, w)| (g - w).abs()).fold(0f32, f32::max);
+        assert!(worst <= tol, "vision tower GPU differs from CPU reference by {worst} (tol {tol})");
+    }
+
+    #[test]
+    fn clip_text_tower_on_gpu_matches_reference() {
+        if let Err(e) = adapter() {
+            lcc_testkit::skip!(Gpu, "no GPU for the CLIP text tower: {e}");
+            return;
+        }
+        let (h, i, heads, embed_dim, vocab_size, context_len) = (24, 40, 3, 12, 32, 9);
+        let eps = 1e-5;
+        let owned = make_owned_blocks(2, h, i);
+        let blocks = as_block_refs(&owned);
+        let tok_emb = values(vocab_size * h, 1.0);
+        let pos_emb = values(context_len * h, 2.0);
+        let final_ln_w: Vec<f32> = values(h, 3.0).iter().map(|v| v + 1.0).collect();
+        let final_ln_b = values(h, 4.0);
+        let proj = values(embed_dim * h, 5.0);
+        let spec = TextTowerSpec {
+            hidden: h,
+            intermediate: i,
+            heads,
+            eps,
+            embed_dim,
+            vocab_size,
+            context_len,
+            token_embedding: &tok_emb,
+            position_embedding: &pos_emb,
+            blocks: &blocks,
+            final_ln_w: &final_ln_w,
+            final_ln_b: &final_ln_b,
+            projection: &proj,
+        };
+        let batch = 2;
+        let ids: Vec<u32> = (0..(batch * context_len)).map(|idx| ((idx * 5 + 1) % vocab_size) as u32).collect();
+        let eot = vec![2u32, 7u32];
+        let gpu_tower = text_tower_for(None, &spec).unwrap();
+        let got = gpu_tower.run(&ids, &eot, batch, context_len).unwrap();
+
+        let mut seq_in = vec![0.0f32; batch * context_len * h];
+        for b in 0..batch {
+            for s in 0..context_len {
+                let tok = ids[b * context_len + s] as usize;
+                for d in 0..h {
+                    seq_in[(b * context_len + s) * h + d] = tok_emb[tok * h + d] + pos_emb[s * h + d];
+                }
+            }
+        }
+        let after = reference(TowerSpec { hidden: h, intermediate: i, heads, causal: true, eps }, &blocks, &seq_in, batch, context_len);
+        let mut want = Vec::with_capacity(batch * embed_dim);
+        for b in 0..batch {
+            let eot_idx = eot[b] as usize;
+            let row = &after[(b * context_len + eot_idx) * h..(b * context_len + eot_idx + 1) * h];
+            let post = layernorm(row, &final_ln_w, &final_ln_b, eps);
+            let zero_b = vec![0.0f32; embed_dim];
+            want.extend(linear(&post, 1, h, &proj, &zero_b));
+        }
+        let scale = want.iter().fold(0f32, |m, v| m.max(v.abs()));
+        let tol = 2e-3 * (1.0 + scale);
+        let worst = got.iter().zip(&want).map(|(g, w)| (g - w).abs()).fold(0f32, f32::max);
+        assert!(worst <= tol, "text tower GPU differs from CPU reference by {worst} (tol {tol})");
     }
 
     #[test]

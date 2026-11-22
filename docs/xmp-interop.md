@@ -132,7 +132,7 @@ the only copy of those edits outside that application's catalog. Saving never dr
 Limits: the app writes keywords to `dc:subject` only, so another application's `lr:hierarchicalSubject` is kept as
 it was and may still list keywords removed in the app. The app doesn't write `crs:`: the other application's
 develop settings stay as that application left them, next to the app's own (`lc:settings`, which the app reads
-first).
+first). Levels (the Levels section) are only in `lc:settings`: they have no `crs:` equivalent, so Lightroom shows the photo without them. Brightness (the Basic section's slider after Contrast) is only in `lc:settings`: it is not written to `crs:` and not mapped to Lightroom's legacy `crs:Brightness` (Process Version 2010), which is a different operation, so Lightroom shows the photo without it.
 
 ## Shared names
 
@@ -160,7 +160,10 @@ write them, from sidecars and from XMP embedded in the file. Named faces become 
 - **Orientation**: regions are stored on the upright (EXIF-oriented) photo. A `mwg-rs:Rotation` of −π/2, +π/2 or ±π
   (how Lightroom marks a box given in the sensor's frame for Exif orientation 6, 8 or 3) is turned back into the
   upright frame; MWG can't say "mirrored", so boxes on mirrored photos (orientations 2, 4, 5, 7) are taken as written.
-  Boxes follow the app's own Rotate Left/Right and flips.
+  Boxes follow the app's own Rotate Left/Right and flips. A photo whose pixels were turned upright after its boxes
+  were drawn (no quarter turn in its Exif, `AppliedToDimensions` of the other shape: an iPhone photo saved upright)
+  has its boxes turned onto the pixels, the way Apple's `apple-fi:AngleInfoRoll` says (about 90: a counter-clockwise
+  turn; otherwise clockwise).
 - **Re-reading**: a sidecar that has `mwg-rs:Regions` — even with an empty list — replaces the photo's regions, so
   regions removed in another application go away here too. A sidecar without `mwg-rs:Regions` (an application that
   doesn't do regions) leaves the photo's regions as they are.

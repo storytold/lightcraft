@@ -16,7 +16,7 @@
 | `.deb`, `.rpm` | `packaging/linux/package.sh` + `nfpm.yaml.in` | release.yml | needs `nfpm`; runtime deps (Vulkan/EGL, X11/Wayland) as depends/recommends |
 | `.tar.gz` (FHS tree) | `packaging/linux/package.sh` | release.yml | input for the Flatpak bundle |
 | Flatpak bundle | `packaging/linux/flatpak-bundle.sh`, `flatpak/<app_id>.yml.in` (source build), `.bundle.yml.in` (from the tarball) | release.yml | installed and smoke-tested in CI; not on Flathub |
-| macOS `.dmg` + CLI `.zip` | `packaging/macos/package.sh` | release.yml (universal) | released builds are ad-hoc signed only (no Apple developer certificate, not notarized); signing/notarization run only if the secrets are set |
+| macOS `.dmg` (the app, with the CLI and the craft-fonts faces inside) | `packaging/macos/package.sh` | release.yml (`arm64`, `x64` and `universal`, from one build of each architecture) | released builds are ad-hoc signed only (no Apple developer certificate, not notarized); signing/notarization run only if the secrets are set |
 | Windows `.msi` | `packaging/windows/package.ps1`, `app.wxs.in` | release.yml (x64), windows-arm64.yml (installs and uninstalls) | released builds are unsigned; Authenticode signing via `sign.ps1` runs only if signing secrets are set |
 | FreeBSD `.tar.gz` | `packaging/freebsd/package.sh` | release.yml / freebsd.yml | `--dry-run` works on any OS (packaging-lint) |
 | Web (static) | `packaging/web/package.sh` | release.yml | hosting notes in `packaging/web/HOSTING.md` |
@@ -29,6 +29,18 @@ AppStream metadata (`<app_id>.metainfo.xml.in`), the PTP udev rule, which descri
 tethering, Edit In, actions and plug-in features. `packaging-lint.yml` validates the templates
 (`desktop-file-validate`, `appstreamcli`, Flatpak manifest parity). `cargo xtask install` installs locally under
 `~/.local` without a package.
+
+### Symbols
+
+The Linux, FreeBSD and macOS packages strip their binaries (`strip` in each platform's `package.sh`). On macOS
+that happens after `lipo` and before signing, since changing a signed binary breaks its signature, and it leaves
+only the symbols dynamic linking needs: about 40 MB less per binary and architecture (measured on 26.47.1 for
+Apple silicon; about 11 MB off the compressed disk image). Nothing looks its own symbols up at run time. Windows
+needs nothing: MSVC builds keep symbols in a separate `.pdb`, which isn't shipped.
+
+What's lost is function names in backtraces taken on users' machines: a `RUST_BACKTRACE=1` run of a packaged
+binary shows none. A panic's message and file:line are compiled into the program, not read from symbols, so the
+app's crash log (`<binary>-panics.log`, written by `lcc_engine::guard::install_hook`) still records them.
 
 ## Gaps
 

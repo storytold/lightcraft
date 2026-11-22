@@ -251,6 +251,8 @@ fn the_peoples_search_narrows_the_cards_by_name() {
     }
     let cards = |h: &Headless| -> Vec<String> { h.app.widgets.iter().filter(|(w, _)| w.starts_with("person:")).map(|(w, _)| w.clone()).collect() };
     ok(&mut h, "engine.execute", json!({"command": "view.people"}));
+    // the people's cards are under Confirmed; the view opens on the unknown faces (issue #1050)
+    ok(&mut h, "ui.clickWidget", json!({"id": "button:peopleCategory-confirmed"}));
     let both = cards(&h);
     assert!(both.contains(&"person:Jane Doe".to_string()) && both.contains(&"person:John Roe".to_string()), "{both:?}");
     // a name typed into the box narrows the cards to it

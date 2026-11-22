@@ -407,6 +407,10 @@ pub struct Photo {
     /// or cleared by Photo ▸ Reset Export Status). Catalog format 17.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exported: Option<String>,
+    /// A pixel-shift merge: the frames it was made from and which one is the reference. `None` for every other photo.
+    /// Catalog format 19.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_sources: Option<Box<MergeSources>>,
     /// Assisted culling scores (`None` until analysed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub analysis: Option<Analysis>,
@@ -544,6 +548,91 @@ pub struct Analysis {
     /// never applies it over a rating the user set). Absent until a run suggested one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggested: Option<u8>,
+    /// The Image Quality Scanner's verdict on the photo (issue #1313): the factors it measured and
+    /// the score it made of them, and the Pick Flag that score asked for. `None` until a scan
+    /// scored the photo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<QualityScan>,
+}
+
+/// What the Image Quality Scanner measured on a photo, and what it asked its flag to be (issue
+/// #1313; catalog format 20). The factors are 0..100 where 100 is clean; `None` where a factor
+/// wasn't measured (compression on a raw photo).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct QualityScan {
+    /// Sharpness (blur's inverse), 0..100 (assisted culling's focus measure).
+    pub sharpness: f32,
+    /// Freedom from noise, 0..100.
+    pub noise: f32,
+    /// Exposure, 0..100.
+    pub exposure: f32,
+    /// Freedom from JPEG blockiness, 0..100; absent for a raw.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compression: Option<f32>,
+    /// The combined 0..100 score the thresholds read. Always there (a scan with every factor
+    /// switched off is refused, so a stored scan has a score).
+    pub score: f32,
+    /// What the score asked the Pick Flag to be when it was scored (the engine writes the flag
+    /// with this); kept so the Library can filter and sort by it without a run.
+    pub verdict: QualityVerdict,
+    /// The flag a scan wrote onto the photo, when it did: the engine's record of its own flag, so
+    /// a later scan may change it while a flag the user set is never touched. Absent when the scan
+    /// wrote none (it wasn't asked to, the photo was already flagged, or the verdict asked for no
+    /// flag).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flag_written: Option<Flag>,
+}
+
+/// What a photo's quality score asked of its Pick Flag: picked at or above the accepted cutoff,
+/// rejected at or below the rejected one, left alone between them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QualityVerdict {
+    /// Between the thresholds: the photo keeps its own flag (an unflagged photo stays Unflagged).
+    #[default]
+    Pending,
+    /// At or above the accepted threshold: a Pick.
+    Accepted,
+    /// At or below the rejected threshold: a Reject.
+    Rejected,
+}
+
+impl QualityVerdict {
+    /// The verdict's name as commands and the Library use it: `accepted`, `pending`, `rejected`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            QualityVerdict::Accepted => "accepted",
+            QualityVerdict::Rejected => "rejected",
+            QualityVerdict::Pending => "pending",
+        }
+    }
+
+    /// The verdict of a score against the two cutoffs (each 0..100), as the scan reads them: at or
+    /// above `accepted` is Accepted, at or below `rejected` is Rejected (the rejected cutoff
+    /// winning a tie only when the two cross, which the scan refuses to store), else Pending.
+    pub fn of(score: f32, accepted: f32, rejected: f32) -> QualityVerdict {
+        if !score.is_finite() {
+            return QualityVerdict::Pending;
+        }
+        if score <= rejected {
+            QualityVerdict::Rejected
+        } else if score >= accepted {
+            QualityVerdict::Accepted
+        } else {
+            QualityVerdict::Pending
+        }
+    }
+
+    /// The Pick Flag a scan writes for this verdict: what the photo had (a Pick for Accepted, a
+    /// Reject for Rejected), or none at all for Pending (`None`: write the photo's own).
+    pub fn flag(self) -> Option<Flag> {
+        match self {
+            QualityVerdict::Accepted => Some(Flag::Pick),
+            QualityVerdict::Rejected => Some(Flag::Reject),
+            QualityVerdict::Pending => None,
+        }
+    }
 }
 
 /// Raw formats whose files carry vendor white-balance multipliers but no colour matrices: their starting
@@ -552,7 +641,7 @@ pub struct Analysis {
 /// file's white balance is edited relative to its as-shot look or in Kelvin depends on the camera:
 /// [`relative_wb_camera`].
 pub fn relative_wb_format(format: &str) -> bool {
-    ["ARW", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW", "ORF", "ERF", "CRW", "MRW"]
+    ["ARW", "NEF", "NEFX", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW", "ORF", "ERF", "CRW", "MRW"]
         .iter()
         .any(|f| format.eq_ignore_ascii_case(f))
 }
@@ -647,6 +736,7 @@ impl Photo {
             import_state: None,
             before: None,
             exported: None,
+            merge_sources: None,
             analysis: None,
             preview_only: None,
             preview_checked: String::new(),
@@ -677,20 +767,30 @@ impl Photo {
     pub fn develops_raw(&self) -> bool {
         self.kind == MediaKind::Raw && self.preview_only.is_none()
     }
+    /// The format that decides how the photo's colour starts ([`relative_wb_format`], [`Photo::fitted_look`]): its own,
+    /// except for a pixel-shift merge (a DNG that remembers its frames), whose colour is the camera's and is read like
+    /// the NEFX of the same series: a NEF.
+    pub fn colour_format(&self) -> &str {
+        if self.merge_sources.is_some() { "NEF" } else { &self.format }
+    }
     /// A raw developed from a look fitted to its own JPEG (ARW, NEF, RW2, RAF, CR3, CR2, PEF, SRW, ORF: vendor
     /// WB multipliers, no colour matrices in the file; RWL and RAW are Leica's and the oldest Panasonic bodies'
     /// names for RW2 files). The engine's `camera_preview::file_local_look` covers the same formats.
     pub fn fitted_look(&self) -> bool {
         // (a raw developed through a `.dcp` takes its colour from the profile instead)
         self.develops_raw()
-            && relative_wb_format(&self.format)
+            && relative_wb_format(self.colour_format())
             && lcc_raw::dcp::resolve_camera(&self.develop.profile.camera, &self.meta.camera).is_none()
     }
     /// White balance relative to the camera's as-shot look, as for rendered photographs: a
     /// [`Photo::fitted_look`] raw whose camera has no colour matrices measured either
     /// ([`relative_wb_camera`]). Other raws edit white balance in Kelvin.
     pub fn relative_wb(&self) -> bool {
-        self.develops_raw() && relative_wb_camera_as(&self.format, &self.meta.camera, &self.develop.profile.camera)
+        self.develops_raw() && relative_wb_camera_as(self.colour_format(), &self.meta.camera, &self.develop.profile.camera)
+    }
+    /// What [`Self::relative_wb`] depends on: photos with equal keys have the same answer.
+    pub fn relative_wb_key(&self) -> (bool, &str, &str, &str) {
+        (self.develops_raw(), self.colour_format(), &self.meta.camera, &self.develop.profile.camera)
     }
     /// The settings the Before view starts from: the one set by the user, else the photo as it
     /// came into the library (its import state), else its import defaults.
@@ -717,7 +817,12 @@ impl Photo {
     /// process a photo renders with is not an edit, so comparisons with its defaults (edited?
     /// still as imported?) don't change when a newer process exists. A new photo has the latest.
     pub fn camera_defaults(&self) -> DevelopSettings {
-        let relative = self.relative_wb();
+        self.camera_defaults_as(self.relative_wb())
+    }
+    /// [`Self::camera_defaults`] of a photo whose [`Self::relative_wb`] is `relative`: that looks the
+    /// camera up by name in the camera tables and profiles, so a pass over many photos asks it once
+    /// per camera ([`Self::relative_wb_key`]) instead of once per photo (issue #979).
+    pub fn camera_defaults_as(&self, relative: bool) -> DevelopSettings {
         let wb = if relative { Some((6500.0, 0.0)) } else { self.as_shot_wb };
         let mut d = match wb {
             Some((t, tint)) => DevelopSettings::for_raw(t, tint),
@@ -808,10 +913,14 @@ impl Photo {
             defaults.wb = self.develop.wb;
         }
     }
-    /// Edited by the user: settings differ from what import gave the photo.
+    /// Edited by the user: settings differ from what import gave the photo, As Shot's stored numbers and Remove Hot
+    /// Pixels aside.
     pub fn is_edited(&self) -> bool {
         let mut defaults = self.import_defaults();
         self.as_shot_normalised(&mut defaults);
+        // Remove Hot Pixels is on for raws imported since the box exists and off for older ones
+        // (upstream #4390); a photo doesn't record which it had, so neither is an edit.
+        defaults.detail.nr_outliers = self.develop.detail.nr_outliers;
         // Before lens corrections started off, import turned them on for every raw with lens data
         // (a database match too): a photo with no history that differs from its defaults only
         // there is still as imported.
@@ -928,6 +1037,26 @@ mod edited_tests {
     use super::*;
     use lcc_develop::WbScale;
 
+    /// Upstream #4390 (issue #4255): a raw imported before Remove Hot Pixels existed has the box off, one imported
+    /// since has it on: neither is an edit, and a real edit on top of either still is one.
+    #[test]
+    fn remove_hot_pixels_on_or_off_is_not_an_edit() {
+        let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.arw", "ARW", 10, 10, "2026-10-01T00:00:00");
+        p.kind = MediaKind::Raw;
+        let now = p.import_defaults();
+        assert!(now.detail.nr_outliers, "a raw imported now has the box on");
+        let mut before = now.clone();
+        before.detail.nr_outliers = false;
+        for (settings, what) in [(before, "imported before the box"), (now, "imported now")] {
+            p.develop = Arc::new(settings.clone());
+            assert!(!p.is_edited(), "{what}");
+            let mut edited = settings;
+            edited.light.exposure = 0.5;
+            p.develop = Arc::new(edited);
+            assert!(p.is_edited(), "{what}: an edit still is one");
+        }
+    }
+
     #[test]
     fn shutter_seconds_prefers_the_exact_time_while_the_text_still_shows_it() {
         let mut m = Meta { shutter: "0.3571".into(), exposure_time: Some(1.0 / 2.8), ..Default::default() };
@@ -989,12 +1118,36 @@ mod edited_tests {
         assert!(p.is_edited(), "an edit still is one");
     }
 
+    /// NEFX joined the relative-WB formats; no other format moved, and a NEFX decides as a NEF of the same body does
+    /// (what white balance a camera NEF gets in a catalog import is the same as before).
+    #[test]
+    fn nefx_joins_the_relative_formats_without_moving_any_other_format() {
+        for format in ["ARW", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW", "ORF", "ERF", "CRW", "MRW"] {
+            assert!(relative_wb_format(format), "{format}");
+        }
+        for format in ["DNG", "MEF", "IIQ", "3FR", "FFF", "X3F", "KDC", "MOS", "JPG", "TIF", "NEFS", "NE", ".NEF", ""] {
+            assert!(!relative_wb_format(format), "{format}");
+        }
+        assert!(relative_wb_format("nefx") && relative_wb_format("NeFx"));
+        for camera in [
+            "NIKON CORPORATION NIKON Z 8",
+            "NIKON CORPORATION NIKON D850",
+            "NIKON CORPORATION NIKON Z5_2",
+            "NIKON CORPORATION NIKON Z 6_2",
+            "NIKON CORPORATION NIKON Z f",
+            "Acme X-1",
+        ] {
+            assert_eq!(relative_wb_camera("NEFX", camera), relative_wb_camera("NEF", camera), "{camera}");
+        }
+    }
+
     #[test]
     fn supported_raws_use_relative_white_balance() {
         for (name, format, relative) in [
             ("a.arw", "ARW", true),
             ("a.nef", "NEF", true),
             ("a.nrw", "nrw", true),
+            ("a.nefx", "NeFx", true),
             ("a.rw2", "RW2", true),
             ("a.rwl", "RWL", true),
             ("a.raw", "RAW", true),
@@ -1110,5 +1263,81 @@ mod edited_tests {
         // nor does a rendered photo
         let jpeg = Photo::new(PhotoId(2), Source::Demo { scene: 0 }, "a.jpg", "JPEG", 10, 10, "2026-10-01T00:00:00");
         assert_eq!(jpeg.camera_defaults(), DevelopSettings::default());
+    }
+}
+
+/// What a merged photo was made from (Photo Merge ▸ Pixel Shift). The merged DNG carries the same facts in its XMP
+/// (`lcc_raw::merge_provenance`), so a merge imported without the catalog entry can be linked again to frames that are
+/// in the library.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeSources {
+    /// Version of the merge engine that made the file.
+    pub engine: u32,
+    /// Shots in the series.
+    pub shot_count: u16,
+    /// The series number (1-based) of the reference frame: the one whose metadata, colour and lens data the merge carries
+    /// and which stays when the other sources are deleted. Always 1 for now.
+    pub reference: u16,
+    /// Merged pixels per sensor pixel (per side).
+    pub scale: u16,
+    pub frames: Vec<MergeSource>,
+}
+
+/// One frame of a merge.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeSource {
+    /// The frame's photo in the library, when it is (still) there.
+    pub photo: Option<PhotoId>,
+    /// Number in the series, 1-based.
+    pub index: u16,
+    pub file_name: String,
+    /// Capture time (ISO 8601, local).
+    pub captured: String,
+    /// The camera's exposure counter of the frame.
+    pub counter: u32,
+}
+
+impl MergeSources {
+    /// The photo of the reference frame, when it is in the library.
+    pub fn reference_photo(&self) -> Option<PhotoId> {
+        self.frames.iter().find(|f| f.index == self.reference).and_then(|f| f.photo)
+    }
+    /// The photos of the frames other than the reference, in series order.
+    pub fn other_photos(&self) -> Vec<PhotoId> {
+        self.frames.iter().filter(|f| f.index != self.reference).filter_map(|f| f.photo).collect()
+    }
+}
+
+#[cfg(test)]
+mod merged_colour_tests {
+    use super::*;
+
+    fn raw(format: &str, camera: &str) -> Photo {
+        let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.raw", format, 10, 10, "2026-10-01T00:00:00");
+        p.kind = MediaKind::Raw;
+        p.meta.camera = camera.into();
+        p
+    }
+
+    /// A pixel-shift merge (a DNG that remembers its frames) starts its colour as the NEFX of its series does; every other
+    /// DNG, and every NEF, is as it was.
+    #[test]
+    fn a_pixel_shift_merge_starts_its_colour_like_the_cameras_nef_and_other_dngs_do_not() {
+        let camera = "NIKON CORPORATION NIKON Z 8";
+        let nef = raw("NEF", camera);
+        let mut merged = raw("DNG", camera);
+        merged.merge_sources = Some(Box::new(MergeSources { engine: 1, shot_count: 16, reference: 1, scale: 2, frames: vec![] }));
+        let dng = raw("DNG", camera);
+        assert!(nef.fitted_look() && nef.relative_wb(), "the camera's NEF");
+        assert!(!dng.fitted_look() && !dng.relative_wb(), "a DNG of any other origin");
+        assert_eq!((merged.fitted_look(), merged.relative_wb()), (nef.fitted_look(), nef.relative_wb()));
+        assert_eq!(merged.relative_wb_key().1, nef.relative_wb_key().1);
+        assert_ne!(dng.relative_wb_key().1, nef.relative_wb_key().1);
+        assert_eq!(merged.camera_defaults().wb, nef.camera_defaults().wb);
+        // the format the library shows and the lens correction it starts with are the DNG's own
+        assert_eq!(merged.format, "DNG");
+        assert_eq!(dng.colour_format(), "DNG");
     }
 }

@@ -7,7 +7,7 @@
 //! <cli> mcp [--connect [ADDR]] [--demo] [--compact] [FILES/FOLDERS…]
 //! <cli> render <in> -o <out> [--set control=value]… [--settings FILE.json|PRESET-FILE] [--preset ID] [--size N] [--quality Q] [--trim IN,OUT]
 //! <cli> snapshot [--library DIR | --demo] [--script FILE.jsonl|-] [-o OUT.png] [--size WxH] [--scale S] [FILES…]
-//! <cli> merge hdr|panorama|hdr-panorama|hdr-batch|focus [OPTIONS] FILES…
+//! <cli> merge hdr|panorama|hdr-panorama|hdr-batch|focus|pixel-shift [OPTIONS] FILES…
 //! <cli> synth-merge hdr|panorama|focus -o DIR
 //! <cli> denoise-serve [--model ID] [--models DIR] [--listen ADDR] [--token-env VAR] [--run-on auto|gpu|cpu]
 //! <cli> genfill-mock [--port N] [--key KEY] [--fill patchmatch|mean]
@@ -24,6 +24,7 @@
 //! ```
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![deny(clippy::indexing_slicing)]
 
 mod alloc_release;
 mod bench_cull;
@@ -31,6 +32,7 @@ mod calibrate_chart;
 mod calibrate_lightroom;
 mod catalog_migrate;
 mod compare;
+mod quality_scan;
 mod run_action;
 mod sync_folder;
 mod vignetting_calibration;
@@ -112,13 +114,13 @@ USAGE:
         -o, --output OUT  PNG path (a final screenshot is written here if the script took none)
         --size WxH        window size in points (default 1600x1000)
         --scale S         pixels per point (default 1)
-  {cli} merge hdr|panorama|hdr-panorama|hdr-batch|focus [OPTIONS] FILES…
-      Photo Merge: writes <first>-HDR.dng / -Pano.dng / -HDR-Pano.dng / -Focus.dng next to the first file and
+  {cli} merge hdr|panorama|hdr-panorama|hdr-batch|focus|pixel-shift [OPTIONS] FILES…
+      Photo Merge: writes <first>-HDR.dng / -Pano.dng / -HDR-Pano.dng / -Focus.dng / -PixelShift.dng next to the first file and
       prints the result as JSON. hdr-batch merges each bracket set among the files (photos taken
       less than a second apart at different exposures), e.g. a whole folder. Options:
         --deghost none|low|medium|high   --no-align   --bracket N (HDR panorama)
         --projection auto|spherical|cylindrical|perspective   --boundary-warp 0..100
-        --auto-crop   --fill-edges   --no-auto-settings
+        --auto-crop   --fill-edges   --no-auto-settings   --output-dir DIR (write the result there)
         --preview OUT.png   only render a ≤ 1024 px preview (nothing written next to the files)
       focus takes only --no-align, --no-auto-settings and --preview.
   {cli} synth-merge hdr|panorama|focus -o DIR
@@ -145,7 +147,7 @@ USAGE:
   {cli} controls [--json]   list every develop control id with its range
   {cli} calibrate [--max N] [--out DIR] FOLDERS/FILES…
       Fit a colour profile per camera model from raw files and their embedded camera JPEGs
-      (Sony ARW, Nikon NEF, Fujifilm RAF, Canon CR3/CR2, Panasonic RW2, Olympus ORF, Pentax PEF…): up to N files spread over the folders (default 300; 0 = all), pooled per
+      (Sony ARW, Nikon NEF/NRW, Canon CR2/CR3/CRW, Fujifilm RAF, Panasonic RW2/RWL, Olympus ORF, Pentax PEF, Samsung SRW, Minolta MRW, Epson ERF): up to N files spread over the folders (default 300; 0 = all), pooled per
       model, written as <model>.json to DIR (default: the profiles folder {app} reads,
       <config>/camera-profiles, or ${P}_CAMERA_PROFILES). Raws of a profiled model then
       take their colour from the profile and only their tone from their own JPEG.
@@ -198,6 +200,21 @@ USAGE:
       camera wrote itself. DNGs written by Adobe software or by {app}'s own export are refused.
   {cli} camdb show MAKE MODEL
       Print the camera database entry a camera's raws use, with its provenance.
+  {cli} quality-scan [OPTIONS] [FOLDER]
+      Score the library's photos for technical quality (sharpness, noise, exposure, JPEG
+      artifacts), store each score on the photo and map it to Pick / Reject flags. Options:
+        --demo            the procedural demo library
+        --library DIR     the library to scan
+        --import PATH     headless: import a file or folder first (repeatable)
+        --connect [ADDR]  scan in the running app instead (`{bin} --control 7980`)
+        --scope S         selection | view | folder | catalog (default: the whole catalog)
+        --accepted N      the score at or above which a photo is a pick (default 70)
+        --rejected N      the score at or below which a photo is a reject (default 25)
+        --apply-flags     write the flags the scores ask for (photos you flagged are left alone)
+        --rescan          measure photos that carry a score already
+        --weights a,b,c,d blur, noise, exposure, compression weights (default 1,1,1,1)
+      Prints the summary as one JSON line ({measured, skipped, accepted, pending, rejected,
+      flagged, failed, photos}). `run photo.qualityScan …` does the same from a script.
   {cli} bench-cull FOLDER [--files K] [--n N] [--copy M] [--work DIR] [--json FILE]
       Time what culling a shoot costs on its own files: reading the folder (browse), the first
       screen of grid thumbnails, camera previews at loupe sizes and full size, a loupe render,
@@ -261,6 +278,9 @@ fn library_warnings(session: &mut Session, who: &str) {
     for w in session.take_library_warnings() {
         eprintln!("{who}: warning: {w}");
     }
+    for n in session.take_notices() {
+        eprintln!("{who}: warning: {}", n.english());
+    }
 }
 
 fn library_error(dir: &str, e: lcc_engine::EngineError) -> String {
@@ -311,26 +331,27 @@ fn main() -> ExitCode {
         }
     }
     let r = match args.first().map(String::as_str) {
-        Some("run") => run(&args[1..]),
-        Some("run-action") => run_action::to_run_args(&args[1..]).and_then(|a| run(&a)),
-        Some("sync-folder") => sync_folder::sync_folder_args(&args[1..]).and_then(|a| run(&a)),
-        Some("open-url") => sync_folder::open_url_args(&args[1..]).and_then(|a| run(&a)),
-        Some("mcp") => mcp(&args[1..]),
-        Some("render") => render(&args[1..]),
-        Some("snapshot") => snapshot(&args[1..]),
-        Some("bench-cull") => bench_cull::run(&args[1..]),
-        Some("commands") => commands(&args[1..]),
-        Some("merge") => merge(&args[1..]),
-        Some("synth-merge") => synth_merge(&args[1..]),
-        Some("controls") => controls(&args[1..]),
-        Some("denoise-serve") => denoise_serve(&args[1..]),
-        Some("genfill-mock") => genfill_mock(&args[1..]),
-        Some("calibrate") => calibrate(&args[1..]),
-        Some("camdb") => camdb(&args[1..]),
-        Some("calibrate-lightroom") => calibrate_lightroom::run(&args[1..]),
-        Some("calibrate-chart") => calibrate_chart::run(&args[1..]),
-        Some("compare") => compare::run(&args[1..]),
-        Some("vignetting-calibration") => vignetting_calibration::run(&args[1..]),
+        Some("run") => run(args.get(1..).unwrap_or_default()),
+        Some("run-action") => run_action::to_run_args(args.get(1..).unwrap_or_default()).and_then(|a| run(&a)),
+        Some("sync-folder") => sync_folder::sync_folder_args(args.get(1..).unwrap_or_default()).and_then(|a| run(&a)),
+        Some("open-url") => sync_folder::open_url_args(args.get(1..).unwrap_or_default()).and_then(|a| run(&a)),
+        Some("mcp") => mcp(args.get(1..).unwrap_or_default()),
+        Some("render") => render(args.get(1..).unwrap_or_default()),
+        Some("snapshot") => snapshot(args.get(1..).unwrap_or_default()),
+        Some("bench-cull") => bench_cull::run(args.get(1..).unwrap_or_default()),
+        Some("quality-scan") => quality_scan::to_run_args(args.get(1..).unwrap_or_default()).and_then(|a| run(&a)),
+        Some("commands") => commands(args.get(1..).unwrap_or_default()),
+        Some("merge") => merge(args.get(1..).unwrap_or_default()),
+        Some("synth-merge") => synth_merge(args.get(1..).unwrap_or_default()),
+        Some("controls") => controls(args.get(1..).unwrap_or_default()),
+        Some("denoise-serve") => denoise_serve(args.get(1..).unwrap_or_default()),
+        Some("genfill-mock") => genfill_mock(args.get(1..).unwrap_or_default()),
+        Some("calibrate") => calibrate(args.get(1..).unwrap_or_default()),
+        Some("camdb") => camdb(args.get(1..).unwrap_or_default()),
+        Some("calibrate-lightroom") => calibrate_lightroom::run(args.get(1..).unwrap_or_default()),
+        Some("calibrate-chart") => calibrate_chart::run(args.get(1..).unwrap_or_default()),
+        Some("compare") => compare::run(args.get(1..).unwrap_or_default()),
+        Some("vignetting-calibration") => vignetting_calibration::run(args.get(1..).unwrap_or_default()),
         Some("--version" | "-V" | "version") => {
             println!("{CLI} {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -360,7 +381,7 @@ fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>) {
     let is_raw = |p: &Path| {
         p.extension()
             .and_then(|e| e.to_str())
-            .is_some_and(|e| ["arw", "nef", "nrw", "raf", "cr3", "cr2", "rw2", "orf", "pef", "srw", "erf"].iter().any(|x| e.eq_ignore_ascii_case(x)))
+            .is_some_and(|e| lcc_engine::camera_profiles::CALIBRATION_EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)))
     };
     if path.is_file() {
         if is_raw(path) {
@@ -392,7 +413,7 @@ fn camdb(args: &[String]) -> Result<(), String> {
             let mut files = Vec::new();
             let mut i = 1;
             while i < args.len() {
-                match args[i].as_str() {
+                match args.get(i).map_or("", String::as_str) {
                     "--contributor" => contributor = Some(take_value(args, &mut i, "--contributor")?.to_string()),
                     a if a.starts_with("--") => return Err(format!("unknown option `{a}`")),
                     f => files.push(f.to_string()),
@@ -430,7 +451,7 @@ fn calibrate(args: &[String]) -> Result<(), String> {
     let mut inputs = Vec::new();
     let mut i = 0;
     while i < args.len() {
-        match args[i].as_str() {
+        match args.get(i).map_or("", String::as_str) {
             "--max" => max = take_value(args, &mut i, "--max")?.parse().map_err(|_| "--max needs a number".to_string())?,
             "--out" => out = Some(take_value(args, &mut i, "--out")?.into()),
             a if a.starts_with("--") => return Err(format!("unknown option `{a}`")),
@@ -528,7 +549,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
     let mut files = Vec::new();
     let mut i = 0;
     while i < args.len() {
-        match args[i].as_str() {
+        match args.get(i).map_or("", String::as_str) {
             "--connect" => {
                 // Optional address argument. A bare port (all digits) is taken as a port on the
                 // loopback default — matches the help's `--connect [ADDR]` hint alongside the
@@ -587,7 +608,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
             if !files.is_empty() {
                 let paths = expand_paths(&files);
                 let r = h.session.execute("library.import", &json!({"paths": paths})).map_err(|e| e.to_string())?;
-                eprintln!("{CLI} mcp: imported {} photo(s)", r["imported"].as_array().map_or(0, Vec::len));
+                eprintln!("{CLI} mcp: imported {} photo(s)", r.get("imported").and_then(Value::as_array).map_or(0, Vec::len));
             }
             Box::new(h)
         }
@@ -604,13 +625,14 @@ fn merge(args: &[String]) -> Result<(), String> {
         Some("hdr-panorama") => "merge.hdrPanorama",
         Some("hdr-batch") => "merge.hdrBatch",
         Some("focus" | "focus-stack") => "merge.focusStack",
-        _ => return Err("merge: expected hdr, panorama, hdr-panorama, hdr-batch or focus".into()),
+        Some("pixel-shift" | "pixelshift") => "merge.pixelShift",
+        _ => return Err("merge: expected hdr, panorama, hdr-panorama, hdr-batch, focus or pixel-shift".into()),
     };
     let mut p = serde_json::Map::new();
     let mut files = Vec::new();
     let mut i = 1;
     while i < args.len() {
-        match args[i].as_str() {
+        match args.get(i).map_or("", String::as_str) {
             "--deghost" => {
                 p.insert("deghost".into(), json!(take_value(args, &mut i, "--deghost")?));
             }
@@ -632,6 +654,9 @@ fn merge(args: &[String]) -> Result<(), String> {
             "--fill-edges" => {
                 p.insert("fillEdges".into(), json!(true));
             }
+            "--output-dir" => {
+                p.insert("outputDir".into(), json!(take_value(args, &mut i, "--output-dir")?));
+            }
             "--no-auto-settings" => {
                 p.insert("autoSettings".into(), json!(false));
             }
@@ -648,7 +673,7 @@ fn merge(args: &[String]) -> Result<(), String> {
     let mut s = Session::new().with_fs().with_default_denoise_models().with_default_genfill().with_system_clock().with_default_connections();
     let paths = expand_paths(&files);
     let r = s.execute("library.import", &json!({"paths": paths})).map_err(|e| e.to_string())?;
-    let mut ids: Vec<u64> = r["imported"].as_array().map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
+    let mut ids: Vec<u64> = r.get("imported").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
     // keep the command line's order
     ids.sort_by_key(|id| {
         paths.iter().position(|f| {
@@ -660,7 +685,7 @@ fn merge(args: &[String]) -> Result<(), String> {
     p.insert("ids".into(), json!(ids));
     let t0 = std::time::Instant::now();
     let mut out = s.execute(cmd, &Value::Object(p)).map_err(|e| e.to_string())?;
-    out["seconds"] = json!(t0.elapsed().as_secs_f64());
+    crate::set_key(&mut out, "seconds", json!(t0.elapsed().as_secs_f64()));
     println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
     Ok(())
 }
@@ -670,7 +695,7 @@ fn synth_merge(args: &[String]) -> Result<(), String> {
     let mut dir = None;
     let mut i = 1;
     while i < args.len() {
-        match args[i].as_str() {
+        match args.get(i).map_or("", String::as_str) {
             "-o" | "--output" => dir = Some(take_value(args, &mut i, "-o")?.to_string()),
             a => return Err(format!("unknown option `{a}`")),
         }
@@ -739,7 +764,7 @@ fn parse_steps(tokens: &[String]) -> Result<Vec<Step>, String> {
         } else if let Some((k, v)) = t.split_once('=') {
             let step = steps.last_mut().ok_or_else(|| format!("param `{t}` before any command"))?;
             let v = serde_json::from_str(v).unwrap_or_else(|_| json!(v));
-            step.params[k.trim()] = v;
+            crate::set_key(&mut step.params, k.trim(), v);
         } else {
             steps.push(Step { id: t.clone(), params: json!({}) });
         }
@@ -763,8 +788,8 @@ fn run(args: &[String]) -> Result<(), String> {
     let mut keep_going = false;
     let mut shared_settings = false;
     let mut i = 0;
-    while i < args.len() && args[i].starts_with("--") {
-        match args[i].as_str() {
+    while i < args.len() && args.get(i).is_some_and(|a| a.starts_with("--")) {
+        match args.get(i).map_or("", String::as_str) {
             "--" => {
                 i += 1;
                 break;
@@ -787,7 +812,7 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         i += 1;
     }
-    let mut steps = parse_steps(&args[i..])?;
+    let mut steps = parse_steps(args.get(i..).unwrap_or_default())?;
     if let Some(path) = &script {
         let text = if path == "-" {
             let mut s = String::new();
@@ -852,8 +877,14 @@ fn run(args: &[String]) -> Result<(), String> {
                 let paths = expand_paths(&imports);
                 let r = h.session.execute("library.import", &json!({"paths": paths})).map_err(|e| e.to_string())?;
                 // what follows acts on the imported photos (already-known files are reported as duplicates)
-                let mut ids: Vec<Value> = r["imported"].as_array().cloned().unwrap_or_default();
-                ids.extend(r["duplicates"].as_array().into_iter().flatten().filter_map(|d| d.get("existing").filter(|v| v.is_u64()).cloned()));
+                let mut ids: Vec<Value> = r.get("imported").and_then(Value::as_array).cloned().unwrap_or_default();
+                ids.extend(
+                    r.get("duplicates")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|d| d.get("existing").filter(|v| v.is_u64()).cloned()),
+                );
                 if let Some(first) = ids.first().cloned() {
                     h.session.execute("library.select", &json!({"ids": ids, "active": first})).map_err(|e| e.to_string())?;
                 }
@@ -883,6 +914,17 @@ fn run(args: &[String]) -> Result<(), String> {
     if failed > 0 { Err(format!("{failed} command(s) failed")) } else { Ok(()) }
 }
 
+/// Sets `key` on a JSON object without `IndexMut` (which panics on a non-object). A `null` becomes an object first,
+/// as `value[key] = …` would make it; any other value is left as it is.
+pub(crate) fn set_key(value: &mut Value, key: impl Into<String>, field: Value) {
+    if value.is_null() {
+        *value = Value::Object(serde_json::Map::new());
+    }
+    if let Some(o) = value.as_object_mut() {
+        o.insert(key.into(), field);
+    }
+}
+
 fn take_value<'a>(args: &'a [String], i: &mut usize, flag: &str) -> Result<&'a str, String> {
     *i += 1;
     args.get(*i).map(String::as_str).ok_or_else(|| format!("{flag} needs a value"))
@@ -906,7 +948,8 @@ fn read_settings(p: &str) -> Result<SettingsFile, String> {
     use lcc_engine::presets::{LCPRESET_EXT, parse_preset_file};
     let bytes = std::fs::read(p).map_err(|e| format!("{p}: {e}"))?;
     let ext = Path::new(p).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    let json = serde_json::from_slice::<Value>(&bytes);
+    // Windows text editors and PowerShell can put a UTF-8 BOM before the settings object.
+    let json = serde_json::from_slice::<Value>(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes));
     // a settings object never has a top-level `presets` or `settings` key; a preset file always does
     let preset_file =
         ext == LCPRESET_EXT || ext == "xmp" || json.as_ref().is_ok_and(|v| v.is_array() || v.get("presets").is_some() || v.get("settings").is_some());
@@ -944,7 +987,7 @@ fn render(args: &[String]) -> Result<(), String> {
     let mut trim: Option<Value> = None;
     let mut i = 0;
     while i < args.len() {
-        match args[i].as_str() {
+        match args.get(i).map_or("", String::as_str) {
             "--trim" => {
                 let v = take_value(args, &mut i, "--trim")?;
                 let (a, b) = v.split_once(',').ok_or_else(|| format!("--trim expects IN,OUT seconds (OUT may be empty = end), got `{v}`"))?;
@@ -952,7 +995,7 @@ fn render(args: &[String]) -> Result<(), String> {
                     |x: &str| x.trim().parse::<f64>().ok().filter(|t| t.is_finite()).ok_or_else(|| format!("--trim: `{x}` is not a time in seconds"));
                 let mut t = json!({"in": num(a)?});
                 if !b.trim().is_empty() {
-                    t["out"] = json!(num(b)?);
+                    crate::set_key(&mut t, "out", json!(num(b)?));
                 }
                 trim = Some(t);
             }
@@ -984,7 +1027,7 @@ fn render(args: &[String]) -> Result<(), String> {
     let mut s = Session::new().with_fs().with_default_denoise_models().with_default_genfill().with_system_clock().with_default_connections();
     let abs = expand_paths(std::slice::from_ref(&input));
     let r = s.execute("library.import", &json!({"paths": abs})).map_err(|e| e.to_string())?;
-    let id = r["imported"][0].as_u64().ok_or_else(|| not_imported(&input, &r))?;
+    let id = r.get("imported").and_then(|a| a.get(0)).and_then(Value::as_u64).ok_or_else(|| not_imported(&input, &r))?;
     let run = |s: &mut Session, cmd: &str, p: Value| s.execute(cmd, &p).map(|_| ()).map_err(|e| e.to_string());
     run(&mut s, "library.select", json!({"ids": [id], "active": id}))?;
     if let Some(p) = preset {
@@ -1008,21 +1051,23 @@ fn render(args: &[String]) -> Result<(), String> {
     use lcc_engine::export::{ExportFormat, ExportOptions, export_photo};
     let mut p = json!({"quality": quality});
     if let Some(n) = size {
-        p["longEdge"] = json!(n);
+        crate::set_key(&mut p, "longEdge", json!(n));
     }
     for (k, v) in opts {
-        p[k] = v;
+        crate::set_key(&mut p, k, v);
     }
     let video = if p.get("format").is_none() {
         let ext = Path::new(&output).extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
         let mut video = None;
         match (ExportFormat::parse(&ext), lcc_engine::export_video::VideoFormat::parse(&ext)) {
             // given before validating, so `bitDepth` is checked against the format written (issue #1952)
-            (Some(_), _) => p["format"] = json!(ext),
+            (Some(_), _) => crate::set_key(&mut p, "format", json!(ext)),
             // a movie (.mp4 / .mov): a video clip exports as one; the format stays a rendered one
             (None, Some(v)) if p.get("videoFormat").is_none() => video = Some(v),
             (None, Some(_)) => {}
-            (None, None) => return Err(format!("{output}: unknown extension (use .jpg .png .tif .webp .avif .dng .mp4 .mov or --opt format=…)")),
+            (None, None) => {
+                return Err(format!("{output}: unknown extension (use .jpg .png .tif .webp .avif .jxl .psd .dng .mp4 .mov or --opt format=…)"));
+            }
         }
         video
     } else {
@@ -1070,7 +1115,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
     let mut files = Vec::new();
     let mut i = 0;
     while i < args.len() {
-        match args[i].as_str() {
+        match args.get(i).map_or("", String::as_str) {
             "--demo" => {}
             "--library" => library = Some(library_arg(take_value(args, &mut i, "--library")?)?),
             "--script" => script = Some(take_value(args, &mut i, "--script")?.to_string()),
@@ -1134,7 +1179,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
     if !files.is_empty() {
         let ti = Instant::now();
         let r = session.execute("library.import", &json!({"paths": expand_paths(&files)})).map_err(|e| e.to_string())?;
-        let n = r["imported"].as_array().map_or(0, Vec::len);
+        let n = r.get("imported").and_then(Value::as_array).map_or(0, Vec::len);
         eprintln!("{CLI} snapshot: imported {n} files in {:.0} ms", ti.elapsed().as_secs_f64() * 1e3);
     }
     let services = lcc_ui_egui::Services {
@@ -1223,7 +1268,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
                 }
                 _ => h.request(&method, params, timeout),
             };
-            if reply["ok"] != true {
+            if reply.get("ok") != Some(&Value::Bool(true)) {
                 failed += 1;
             }
             if let Some(o) = reply.as_object_mut() {
@@ -1235,7 +1280,11 @@ fn snapshot(args: &[String]) -> Result<(), String> {
             writeln!(out, "{reply}").map_err(|e| e.to_string())?;
             out.flush().map_err(|e| e.to_string())?;
             if method == "ui.screenshot" {
-                eprintln!("{CLI} snapshot: {} ({:.0} ms)", reply["result"]["path"].as_str().unwrap_or("?"), ts.elapsed().as_secs_f64() * 1000.0);
+                eprintln!(
+                    "{CLI} snapshot: {} ({:.0} ms)",
+                    reply.pointer("/result/path").and_then(Value::as_str).unwrap_or("?"),
+                    ts.elapsed().as_secs_f64() * 1000.0
+                );
             }
             if h.quit_requested() {
                 break;
@@ -1244,10 +1293,14 @@ fn snapshot(args: &[String]) -> Result<(), String> {
     }
     if !wrote_output && let Some(path) = next_path(&mut shots) {
         let r = h.request("ui.screenshot", json!({"path": path}), timeout);
-        if r["ok"] != true {
-            return Err(format!("screenshot failed: {}", r["error"]));
+        if r.get("ok") != Some(&Value::Bool(true)) {
+            return Err(format!("screenshot failed: {}", r.get("error").unwrap_or(&Value::Null)));
         }
-        eprintln!("{CLI} snapshot: wrote {path} ({}×{})", r["result"]["width"], r["result"]["height"]);
+        eprintln!(
+            "{CLI} snapshot: wrote {path} ({}×{})",
+            r.pointer("/result/width").unwrap_or(&Value::Null),
+            r.pointer("/result/height").unwrap_or(&Value::Null)
+        );
     }
     // a background export started by the script finishes before we exit (its files would be cut off)
     if h.app.export.is_some() {
@@ -1263,6 +1316,9 @@ fn snapshot(args: &[String]) -> Result<(), String> {
 }
 
 fn commands(args: &[String]) -> Result<(), String> {
+    if let Some(arg) = args.iter().find(|arg| arg.as_str() != "--json") {
+        return Err(format!("commands: unexpected argument `{arg}` (expected only --json)"));
+    }
     let mut h = Headless::demo();
     let mut cmds = h.call("engine.commands", json!({}))?;
     // Listed by id so each family (`photo.*`, `mask.*`, …) reads together; the registry keeps its own order.
@@ -1290,6 +1346,9 @@ fn commands(args: &[String]) -> Result<(), String> {
 }
 
 fn controls(args: &[String]) -> Result<(), String> {
+    if let Some(arg) = args.iter().find(|arg| arg.as_str() != "--json") {
+        return Err(format!("controls: unexpected argument `{arg}` (expected only --json)"));
+    }
     let mut s = Session::new();
     let v = s.execute("develop.controls", &json!({})).map_err(|e| e.to_string())?;
     let mut out = std::io::stdout().lock();
@@ -1365,7 +1424,7 @@ fn denoise_serve(args: &[String]) -> Result<(), String> {
     let mut max_connections = 8usize;
     let mut i = 0;
     while i < args.len() {
-        match args[i].as_str() {
+        match args.get(i).map_or("", String::as_str) {
             "--model" => model = Some(take_value(args, &mut i, "--model")?.to_string()),
             "--models" => dir = Some(take_value(args, &mut i, "--models")?.to_string()),
             "--listen" => listen = take_value(args, &mut i, "--listen")?.to_string(),
@@ -1399,6 +1458,27 @@ fn denoise_serve(_: &[String]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    /// Settings saved with a UTF-8 BOM keep the same values as an ordinary JSON file.
+    #[test]
+    fn render_settings_accepts_a_utf8_bom() {
+        use std::io::{Seek, Write};
+
+        let path = std::env::temp_dir().join(format!("cli-settings-bom-{}.json", std::process::id()));
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+        let settings = serde_json::json!({"light": {"exposure": 0.7}, "profile": {"id": "\u{feff}kept"}});
+        for prefix in ["", "\u{feff}"] {
+            file.set_len(0).unwrap();
+            file.rewind().unwrap();
+            write!(file, "{prefix}{settings}").unwrap();
+            let super::SettingsFile::Partial(actual) = super::read_settings(path.to_str().unwrap()).unwrap() else {
+                panic!("partial settings were read as a preset");
+            };
+            assert_eq!(actual, settings);
+        }
+        drop(file);
+        std::fs::remove_file(path).unwrap();
+    }
+
     use super::*;
 
     // `--library @app` finds the library the app opens: its saved Settings → Open Library…
@@ -1420,6 +1500,55 @@ mod tests {
         assert_eq!(app_library_with(None, false, None), None);
         assert_eq!(library_arg("/some/dir").unwrap(), "/some/dir");
         let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+#[cfg(test)]
+mod set_key_tests {
+    use super::set_key;
+    use serde_json::{Value, json};
+
+    /// Setting a field never panics: objects and `null` take it, any other value is left alone (`IndexMut` panics there).
+    #[test]
+    fn set_key_never_panics_on_a_non_object() {
+        let mut o = json!({"a": 1});
+        set_key(&mut o, "b", json!(2));
+        assert_eq!(o, json!({"a": 1, "b": 2}));
+        let mut n = Value::Null;
+        set_key(&mut n, "x", json!(true));
+        assert_eq!(n, json!({"x": true}));
+        for mut v in [json!([1, 2]), json!(3), json!("s"), json!(false)] {
+            let before = v.clone();
+            set_key(&mut v, "k", json!(0));
+            assert_eq!(v, before);
+        }
+    }
+}
+
+#[cfg(test)]
+mod raw_formats_tests {
+    use super::raw_files;
+
+    /// Every format whose camera JPEG the profile fit reads is collected, not only the ones the command was first
+    /// written for (upstream #4284: a folder of Leica RWLs or Canon CRWs found nothing).
+    #[test]
+    fn formats_the_profile_fit_reads_are_collected() {
+        let dir = std::env::temp_dir().join(format!("lcc-cli-raw-formats-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["a.RW2", "b.cr3", "c.ORF", "d.arw", "e.jpg", "f.rwl", "g.dng"] {
+            std::fs::write(dir.join(name), b"").unwrap();
+        }
+        let mut files = Vec::new();
+        raw_files(&dir, &mut files);
+        files.sort();
+        let names: Vec<_> = files.iter().filter_map(|p| p.file_name().and_then(|n| n.to_str())).collect();
+        assert_eq!(
+            names,
+            ["a.RW2", "b.cr3", "c.ORF", "d.arw", "f.rwl"],
+            "RW2, CR3, ORF and the Leica RWL variant carry usable camera JPEGs; a JPEG or DNG is not a calibration input"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

@@ -51,6 +51,9 @@ const RELAUNCH: &str =
 /// Install the disk image `dmg` (release `version`) over the bundle this program runs from, and
 /// start it again once this process has quit.
 pub(super) fn install_dmg(dmg: &Path, version: &str) -> Result<Outcome, UpdateError> {
+    if let Some(refused) = super::current_exe().as_deref().and_then(super::cli_in_bundle) {
+        return Err(refused);
+    }
     install_dmg_at(dmg, super::app_bundle().as_deref(), version, &mut relaunch)
 }
 
@@ -620,6 +623,62 @@ mod tests {
         assert!(launched.is_empty());
         assert!(leftovers(&s.apps()).is_empty(), "nothing should be left behind: {:?}", leftovers(&s.apps()));
         assert_unmounted(&s);
+    }
+
+    /// The CLI and the fonts in the bundle (`Contents/MacOS/<cli>`, `Contents/Resources/fonts`) are
+    /// replaced with the app, and a CLI started from the old bundle before the update finishes its
+    /// work after it, with the fonts it read at start.
+    #[test]
+    fn an_update_replaces_the_cli_and_its_fonts_and_a_running_cli_finishes() {
+        use std::io::{BufRead, Read, Write};
+        // like the real CLI, it reads its bundle's font when it starts, then works on (here: waits for a line)
+        fn fake_cli(app: &Path, font: &str, script: &str) -> PathBuf {
+            let face = app.join("Contents/Resources/fonts/face/Face.ttf");
+            std::fs::create_dir_all(face.parent().unwrap()).unwrap();
+            std::fs::write(&face, font).unwrap();
+            let cli = app.join("Contents/MacOS").join(lcc_brand::CLI_BINARY);
+            std::fs::write(&cli, script).unwrap();
+            set_mode(&cli, 0o755).unwrap();
+            cli
+        }
+        let s = Scratch::new("cli");
+        let app = installed(&s);
+        let reads_font =
+            "#!/bin/sh\nfont=$(cat \"$(dirname \"$0\")/../Resources/fonts/face/Face.ttf\")\necho started\nread line\necho \"$line with $font\"\n";
+        let cli = fake_cli(&app, "old font", reads_font);
+        let mut running = Command::new(&cli).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().unwrap();
+        let mut out = std::io::BufReader::new(running.stdout.take().unwrap());
+        let mut first = String::new();
+        out.read_line(&mut first).unwrap();
+        assert_eq!(first, "started\n", "the old CLI is running before the update");
+        // what a running program holds: its executable and files it opened, read after the update
+        let mut held = [std::fs::File::open(&cli).unwrap(), std::fs::File::open(app.join("Contents/Resources/fonts/face/Face.ttf")).unwrap()];
+
+        let dmg = image(&s, |root| {
+            let new = root.join(app_name());
+            fake_app(&new, Some(RELEASE), "new");
+            fake_cli(&new, "new font", "#!/bin/sh\necho \"new cli with $(cat \"$(dirname \"$0\")/../Resources/fonts/face/Face.ttf\")\"\n");
+        });
+        let (r, _) = run(&dmg, Some(&app), RELEASE);
+        r.expect("the install succeeds");
+        let held: Vec<String> = held
+            .iter_mut()
+            .map(|f| {
+                let mut text = String::new();
+                f.read_to_string(&mut text).unwrap();
+                text
+            })
+            .collect();
+        assert_eq!(held, [reads_font, "old font"], "the old bundle's files are moved aside whole, never overwritten in place");
+
+        writeln!(running.stdin.take().unwrap(), "done").unwrap();
+        let mut rest = String::new();
+        out.read_to_string(&mut rest).unwrap();
+        assert!(running.wait().unwrap().success(), "the CLI running during the update exits normally");
+        assert_eq!(rest, "done with old font\n", "the running CLI finishes with what it read at start");
+        let fresh = Command::new(&cli).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&fresh.stdout), "new cli with new font\n", "the next start runs the new CLI and fonts");
+        assert!(leftovers(&s.apps()).is_empty(), "no .partial or .old should be left: {:?}", leftovers(&s.apps()));
     }
 
     #[test]

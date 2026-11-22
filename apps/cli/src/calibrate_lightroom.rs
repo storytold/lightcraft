@@ -55,7 +55,7 @@ fn verify_cmd(args: &[String]) -> Result<(), String> {
     let mut list: Option<bool> = None; // Some(true) = raws, Some(false) = exports
     let mut i = 0;
     while i < args.len() {
-        match args[i].as_str() {
+        match args.get(i).map_or("", String::as_str) {
             "--raws" => list = Some(true),
             "--exports" => list = Some(false),
             "--report" => report_dir = Some(take(args, &mut i, "--report")?.into()),
@@ -126,7 +126,7 @@ fn probe_cmd(args: &[String]) -> Result<(), String> {
     let mut sweeps = true;
     let mut i = 0;
     while i < args.len() {
-        match args[i].as_str() {
+        match args.get(i).map_or("", String::as_str) {
             "-o" | "--out" => out = Some(PathBuf::from(take(args, &mut i, "-o")?)),
             "--make" => make = Some(take(args, &mut i, "--make")?.to_string()),
             "--model" => model = Some(take(args, &mut i, "--model")?.to_string()),
@@ -168,7 +168,7 @@ fn probe_check_cmd(args: &[String]) -> Result<(), String> {
     let mut json = false;
     let mut i = 0;
     while i < args.len() {
-        match args[i].as_str() {
+        match args.get(i).map_or("", String::as_str) {
             "--probes" => probes = Some(PathBuf::from(take(args, &mut i, "--probes")?)),
             "--exports" => exports = Some(PathBuf::from(take(args, &mut i, "--exports")?)),
             "-o" | "--out" => out = Some(PathBuf::from(take(args, &mut i, "-o")?)),
@@ -198,7 +198,7 @@ fn preset(args: &[String]) -> Result<(), String> {
     let mut out = None;
     let mut i = 0;
     while i < args.len() {
-        match args[i].as_str() {
+        match args.get(i).map_or("", String::as_str) {
             "-o" | "--out" => out = Some(take(args, &mut i, "-o")?.to_string()),
             a => return Err(format!("unknown argument `{a}`")),
         }
@@ -254,7 +254,7 @@ fn fit_cmd(args: &[String]) -> Result<(), String> {
     let mut list: Option<bool> = None; // Some(true) = raws, Some(false) = exports
     let mut i = 0;
     while i < args.len() {
-        match args[i].as_str() {
+        match args.get(i).map_or("", String::as_str) {
             "--raws" => list = Some(true),
             "--exports" => list = Some(false),
             "-o" | "--out" => out = take(args, &mut i, "-o")?.into(),
@@ -418,7 +418,7 @@ fn add(args: &[String]) -> Result<(), String> {
     let mut replace = false;
     let mut i = 0;
     while i < args.len() {
-        match args[i].as_str() {
+        match args.get(i).map_or("", String::as_str) {
             "--repo" => repo = take(args, &mut i, "--repo")?.into(),
             "--contributor" => contributor = Some(take(args, &mut i, "--contributor")?.to_string()),
             "--lens" => lens = Some(take(args, &mut i, "--lens")?.to_string()),

@@ -159,10 +159,27 @@ pipeline inside wgpu error scopes, so a driver that cannot compile egui's shader
 incorrect. (0x80070057)" in `egui_pipeline`) is logged and skipped instead of killing the app; no pop-up
 unless that renderer was forced (#1624). The renderer
 that worked is remembered in the settings folder (`window-renderer-2`); a start that dies before the window is up
-leaves `window-init.marker`, and the next start (relaunched automatically, at most 4 times) tries that
-renderer last. `<PREFIX>_GPU_BACKEND=dx12 | vulkan | gl | glow` (or `WGPU_BACKEND`) forces one; DX12 stays
+leaves the renderer's name in `window-init.marker` (emptied once the window is up), and the next start
+(relaunched automatically, at most 4 times) tries that renderer last. Where the file system supports locks, the
+starting copy holds an operating-system lock on the marker until its window is up, so a second copy started on
+the same settings folder while the first is still starting leaves the first's marker alone and does not read it
+as a failed start (no "could not start with its … renderer last time" notice, and Windows does not remember a
+weaker renderer because of it). That second copy writes no marker while the first holds it, so if its own start
+dies it is not relaunched. A crash or kill releases the lock, so a marker with no live owner (also one an older
+version left) still counts as a failed start; a copy that hangs inside the driver without dying keeps the lock
+until it is ended. An empty or unreadable marker names no failed start. `<PREFIX>_GPU_BACKEND=dx12 | vulkan | gl | glow` (or `WGPU_BACKEND`) forces one; DX12 stays
 first because a broken Vulkan driver can crash the process uncatchably (#136). Compute keeps its own
 device and falls back to the CPU as before.
+
+**A window device lost while running (#1194).** egui-wgpu skips a frame it cannot draw (#1098), so a
+window whose device was lost would skip every frame forever (frozen, "Application Hang"). eframe cannot
+rebuild a window's device in place, so `window_gpu::LossWatch` watches the frames instead (a vendored
+egui-wgpu hook, `on_frame_acquired`, reports each frame that got its texture): an unbroken run of failed
+frames — 30 over at least 2 s after the GPU reported a lost device, 600 over 20 s otherwise — means the
+device is gone. A single skipped frame, a hidden or resizing window never counts. The renderer is then written
+to `window-lost` in the settings folder (at once, so it survives the process being killed) and dropped from
+`window-renderer-2`; every later start tries it last (unless `<PREFIX>_GPU_BACKEND` forces it). The library and
+settings are saved, a native message box says what happened, and the app ends.
 
 **The window's surface: one frame in flight.** The window's wgpu options start from eframe's defaults
 (`NativeOptions::default().wgpu_options`, `window_gpu::base_options`), whose surface is egui-wgpu's

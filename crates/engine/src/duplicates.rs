@@ -270,7 +270,9 @@ fn pair_similar(phashes: &[Option<u64>], candidates: &[DupCandidate], mut pair: 
             }
         }
     }
-    let same_family = |a: usize, b: usize| (candidates[a].kind == MediaKind::Video) == (candidates[b].kind == MediaKind::Video);
+    // a hash without a candidate (mismatched lengths) never pairs
+    let is_video = |i: usize| candidates.get(i).map(|c| c.kind == MediaKind::Video);
+    let same_family = |a: usize, b: usize| matches!((is_video(a), is_video(b)), (Some(x), Some(y)) if x == y);
     let mut seen: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
     for (i, h) in phashes.iter().enumerate() {
         let Some(h) = *h else { continue };
@@ -396,6 +398,19 @@ pub fn report_to_json(cat: &Catalog, report: &ScanReport) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hashes_without_candidates_never_pair_and_never_panic() {
+        // three identical hashes, one candidate: the two past the list have no kind to compare
+        let phashes = [Some(0xdead_beef_u64), Some(0xdead_beef), Some(0xdead_beef)];
+        let one = [cand(1, None, MediaKind::Image, 100, 10)];
+        let mut pairs = Vec::new();
+        pair_similar(&phashes, &one, |a, b| pairs.push((a, b)));
+        assert!(pairs.is_empty(), "{pairs:?}");
+        let two = [cand(1, None, MediaKind::Image, 100, 10), cand(2, None, MediaKind::Image, 100, 10)];
+        pair_similar(&phashes, &two, |a, b| pairs.push((a, b)));
+        assert_eq!(pairs, vec![(0, 1)], "the pair both of whose candidates exist still matches");
+    }
 
     fn cand(id: u64, hash: Option<&str>, kind: MediaKind, pixels: u64, size: u64) -> DupCandidate {
         DupCandidate {

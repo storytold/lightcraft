@@ -177,6 +177,21 @@ pub fn memory(app: &LccApp) -> Value {
     v
 }
 
+/// `ui.pointer` events: each an object whose `kind`, when present, is down, drag, move or up (upstream #4291).
+fn pointer_batch_ok(events: &[Value]) -> Result<(), String> {
+    for event in events {
+        let event = event.as_object().ok_or("ui.pointer: every event must be an object")?;
+        let kind = match event.get("kind") {
+            None => "move",
+            Some(kind) => kind.as_str().ok_or("ui.pointer: `kind` must be a string")?,
+        };
+        if !matches!(kind, "down" | "drag" | "move" | "up") {
+            return Err(format!("ui.pointer: unknown event kind `{kind}` (down, drag, move or up)"));
+        }
+    }
+    Ok(())
+}
+
 fn modifiers(p: &Value) -> egui::Modifiers {
     let b = |n: &str| p.get(n).and_then(Value::as_bool).unwrap_or(false);
     egui::Modifiers { alt: b("alt"), ctrl: b("ctrl"), shift: b("shift"), mac_cmd: b("cmd") && cfg!(target_os = "macos"), command: b("cmd") }
@@ -368,6 +383,10 @@ pub fn handle(app: &mut LccApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             // events in normalized image coordinates of the displayed photo frame
             let Some(img) = app.image_rect else { return err("no image on screen (switch to Detail view)") };
             let Some(events) = p.get("events").and_then(Value::as_array) else { return err("missing `events`") };
+            // Check the whole batch first: a mistyped release must not leave a press queued (upstream #4291).
+            if let Err(e) = pointer_batch_ok(events) {
+                return err(e);
+            }
             let m = modifiers(p);
             for e in events {
                 let x = e.get("x").and_then(Value::as_f64).unwrap_or(0.5) as f32;
@@ -437,9 +456,11 @@ pub fn handle(app: &mut LccApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             match s("action") {
                 Some("cut") => app.synthetic.push(egui::Event::Cut),
                 Some("copy") => app.synthetic.push(egui::Event::Copy),
-                Some("paste") => match s("text") {
-                    Some(text) => app.synthetic.push(egui::Event::Paste(text.to_string())),
+                // a present but non-string `text` is an error, never a paste from the host clipboard (upstream #4295)
+                Some("paste") => match p.get("text") {
+                    Some(Value::String(text)) => app.synthetic.push(egui::Event::Paste(text.clone())),
                     None => ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste),
+                    Some(_) => return err("ui.clipboard: `text` must be a string"),
                 },
                 _ => return err("ui.clipboard: `action` is cut, copy or paste"),
             }
@@ -604,7 +625,9 @@ pub fn handle(app: &mut LccApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                         ok(json!({"width": r.image.width, "height": r.image.height, "png": lcc_engine::base64::encode(&bytes)}))
                     }
                     (None, None) if inline => err("ui.render: this build has no PNG encoder for `inline`"),
-                    _ => ok(json!({"width": r.image.width, "height": r.image.height, "histogram": r.histogram})),
+                    // a `path` with no encoder must not report success without writing (upstream #4294)
+                    (Some(_), None) => err("no encoder"),
+                    (None, _) => ok(json!({"width": r.image.width, "height": r.image.height, "histogram": r.histogram})),
                 },
                 Err(e) => err(e),
             }
@@ -716,7 +739,7 @@ pub fn export_active(app: &mut LccApp, p: &Value) -> Result<Value, String> {
         return match picked {
             crate::pick::Picked::Now(paths) => match paths.into_iter().next() {
                 Some(d) => {
-                    again["dir"] = json!(d);
+                    crate::json_set(&mut again, "dir", json!(d));
                     export_active(app, &again)
                 }
                 // cancelled: nothing exported
@@ -770,13 +793,13 @@ pub fn export_active(app: &mut LccApp, p: &Value) -> Result<Value, String> {
         let plugins: Option<Vec<Value>> = None;
         let mut out = json!({"files": files});
         if let Some(r) = plugins {
-            out["plugins"] = json!(r);
+            crate::json_set(&mut out, "plugins", json!(r));
         }
         // Photos may take minutes (and waits for the permission prompt): in the desktop app on a
         // worker, never on this (UI) thread; the app announces the outcome and
         // `export.photosImports` reports it. A window-less run (snapshot scripts) waits.
         if let Some(photos) = after.finish(&app.session, &files) {
-            out["applePhotos"] = photos;
+            crate::json_set(&mut out, "applePhotos", photos);
         }
         out
     };
@@ -836,5 +859,59 @@ mod arg_bounds_tests {
         assert_eq!(bounded_arg(&json!({"steps": 20.0}), "steps", 10, DRAG_STEPS), Ok(20));
         assert_eq!(bounded_arg(&json!({"size": 16384}), "size", 1600, RENDER_SIZE), Ok(16384));
         assert!(bounded_arg(&json!({"count": 0}), "count", 1, CLICK_COUNT).is_err());
+    }
+}
+
+/// Upstream #4291 / #4294: a bad `ui.pointer` batch queues nothing; a `ui.render` `path` needs an encoder.
+#[cfg(test)]
+mod hostile_gesture_tests {
+    use super::*;
+
+    fn reply(app: &mut LccApp, method: &str, params: Value) -> Value {
+        let (req, _) = ControlRequest::new(method, params);
+        let Outcome::Done(reply) = handle(app, &egui::Context::default(), &req) else { panic!("{method} must reply synchronously") };
+        reply
+    }
+
+    fn app() -> LccApp {
+        let mut app = LccApp::new(lcc_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
+        app.image_rect = Some(egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 100.0)));
+        app
+    }
+
+    #[test]
+    fn invalid_pointer_events_reject_the_whole_batch() {
+        let mut app = app();
+        app.synthetic = vec![egui::Event::Text("pending".into())];
+        let bad_kinds = [json!("upp"), json!(null), json!(false), json!(0), json!([]), json!({})].map(|k| json!({"kind": k}));
+        let bad_events = [json!(null), json!(false), json!(0), json!("up"), json!([])];
+        for event in bad_kinds.into_iter().chain(bad_events) {
+            let r = reply(&mut app, "ui.pointer", json!({"events": [{"kind": "down"}, event]}));
+            assert_eq!(r["ok"], false, "{event}: {r}");
+            assert!(r["error"].as_str().is_some_and(|e| e.contains("ui.pointer")), "{r}");
+            assert_eq!(app.synthetic, vec![egui::Event::Text("pending".into())], "{event}: a press was queued");
+        }
+    }
+
+    #[test]
+    fn pointer_drag_move_and_default_kinds_keep_their_events() {
+        let mut app = app();
+        app.synthetic.clear();
+        let r = reply(&mut app, "ui.pointer", json!({"events": [{"kind": "down"}, {"kind": "drag"}, {"kind": "move"}, {}, {"kind": "up"}]}));
+        assert_eq!(r["ok"], true, "{r}");
+        let presses = app.synthetic.iter().filter(|e| matches!(e, egui::Event::PointerButton { .. })).count();
+        assert_eq!(presses, 2, "one press and one release");
+    }
+
+    #[test]
+    fn render_to_a_path_needs_a_png_encoder() {
+        let mut app = app();
+        let path = std::env::temp_dir().join(format!("render-no-encoder-{}.png", std::process::id()));
+        let r = reply(&mut app, "ui.render", json!({"size": 16, "path": path.to_string_lossy()}));
+        assert_eq!(r["ok"], false, "{r}");
+        assert!(!path.exists(), "nothing written");
+        let r = reply(&mut app, "ui.render", json!({"size": 16}));
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(r["result"]["width"].as_u64().is_some_and(|w| w > 0), "{r}");
     }
 }

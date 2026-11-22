@@ -63,7 +63,10 @@ sidebar:
 - **Sidecar names**: how sidecars are named beside the raw.
 
 ### Folder polling and drag and drop
-- **Check folders for new photos** every so often; new photos are offered ("N new") or added at once.
+- **Check folders for new photos** every so often; new photos are offered ("N new") or added at once. New folders
+  count too: in a tree of dated folders, a new day or year folder is found, as long as it is inside the folder your
+  library's photos branch out of and that folder holds mostly your photo folders (your home folder and a whole disk or share never are).
+  Only photos in the new folder count, not new files in the folders beside it; they are counted on the folder that holds it.
 - **Import dropped photos without review**: off, a drop opens the import review first.
 - **Show the import review when a camera or card is connected**.
 
@@ -121,7 +124,7 @@ sidebar:
 
 ### Filmstrip, grid, keywords and presets
 - Filmstrip file names and badges; when the grid shows ratings and flags; **Double-click opens the photo in Develop**;
-  Square Grid file names; **Wheel scroll speed**; **Reduce motion**; **Wheel resizes brush instead of zooming**.
+  Square Grid file names; **Wheel scroll speed**; **Reduce motion**; **Wheel resizes brush instead of zooming**; **Invert brush resize direction**.
 - **Keywords of the selection**: whole names, or grouped by parent.
 - **List User Presets first**, and whether this catalog keeps its own presets, profiles and habits.
 
@@ -154,7 +157,7 @@ sidebar:
 
 ## Faces
 - **Recognise faces (experimental)**, off until you switch it on; the face detector download; recognition models;
-  **Matching** and **Processor**. See [Faces and people](../../ai/faces/).
+  **Matching** and **Processor** (**Face models device** and **GPU precision**). See [Faces and people](../../ai/faces/).
 
 ### Face scan
 - Where the scan is (not started, indexing, paused, complete, photos done) and how many faces it has learned.
@@ -193,7 +196,7 @@ sidebar:
   ([Installing SAM 3](../../ai/models/#installing-sam-3)).
 
 ### Semantic search
-- **Semantic search: search photos by description**. Off: nothing is indexed and the AI search button leaves the
+- **Semantic search: search photos by description** (on by default; off by default on Android). Off: nothing is indexed and the AI search button leaves the
   search box.
 - Indexing status with **Pause** / **Resume**, **Clear…** (deletes the index and leaves indexing paused) and
   **Restart…** (deletes it and indexes every photo again). Both ask first. The activity stack's "Indexing photos" row

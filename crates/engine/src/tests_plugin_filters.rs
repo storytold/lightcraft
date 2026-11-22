@@ -380,6 +380,52 @@ fn add_to_puts_a_default_entry_on_the_selected_photos_that_lack_one() {
     s.execute("plugin.uninstall", &json!({"id": "test.engine.addto"})).unwrap();
 }
 
+/// Parameters a filter's manifest marks `"remember": true` start a new copy of the filter where they
+/// were last set (by `set`, or given to `add`), on `add` and `addTo` alike; the others start at their
+/// defaults.
+#[test]
+fn a_new_copy_starts_with_the_values_last_set_for_the_parameters_that_remember() {
+    let mut s = Session::with_demo();
+    let m = concat!(
+        r#"{"id":"test.engine.remember","name":"Remember","kind":"filter","params":{"#,
+        r#""film":{"type":"choice","options":["Colour","B&W"],"default":"Colour","remember":true},"#,
+        r#""border":{"type":"number","min":0,"max":25,"default":10,"remember":true},"#,
+        r#""amount":{"type":"number","min":0,"max":1,"default":0.4}}}"#
+    );
+    install_bytes(&mut s, "test.engine.remember", &module(m, None));
+    let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
+    s.execute("library.select", &json!({"ids": [ids[0]]})).unwrap();
+    let first = s.execute("develop.pluginFilter.add", &json!({"plugin": "test.engine.remember"})).unwrap()["uid"].as_u64().unwrap();
+    let params = |s: &Session, id: u64, i: usize| s.develop_of(crate::catalog::PhotoId(id)).unwrap().plugin_filters[i].params.clone();
+    assert_eq!(
+        (params(&s, ids[0], 0)["film"].clone(), params(&s, ids[0], 0)["border"].clone()),
+        (json!("Colour"), json!(10.0)),
+        "nothing set yet: defaults"
+    );
+    s.execute("develop.pluginFilter.set", &json!({"uid": first, "params": {"film": "B&W", "border": 12, "amount": 0.9}})).unwrap();
+    // a second copy on the same photo
+    s.execute("develop.pluginFilter.add", &json!({"plugin": "test.engine.remember"})).unwrap();
+    let second = params(&s, ids[0], 1);
+    assert_eq!((second["film"].clone(), second["border"].clone(), second["amount"].clone()), (json!("B&W"), json!(12.0), json!(0.4)));
+    // and on the other photos, by addTo
+    s.execute("library.select", &json!({"ids": ids})).unwrap();
+    s.execute("develop.pluginFilter.addTo", &json!({"plugin": "test.engine.remember"})).unwrap();
+    for id in &ids[1..] {
+        let p = params(&s, *id, 0);
+        assert_eq!((p["film"].clone(), p["border"].clone(), p["amount"].clone()), (json!("B&W"), json!(12.0), json!(0.4)), "photo {id}");
+    }
+    // a value given to add wins, and is remembered too
+    s.execute("library.select", &json!({"ids": [ids[1]]})).unwrap();
+    s.execute("develop.pluginFilter.add", &json!({"plugin": "test.engine.remember", "params": {"film": "Colour"}})).unwrap();
+    assert_eq!(params(&s, ids[1], 1)["film"], "Colour");
+    assert_eq!(crate::filter_plugins::remembered("test.engine.remember")["film"], "Colour");
+    // hostile: a remembered value the manifest no longer takes leaves the remembered values out
+    crate::filter_plugins::remember("test.engine.remember", &["film".to_string()], &serde_json::Map::from_iter([("film".to_string(), json!(7))]));
+    s.execute("develop.pluginFilter.add", &json!({"plugin": "test.engine.remember"})).unwrap();
+    assert_eq!(params(&s, ids[1], 2)["film"], "Colour", "the default");
+    s.execute("plugin.uninstall", &json!({"id": "test.engine.remember"})).unwrap();
+}
+
 /// A photo may carry two entries of one plug-in: a measurement asked for the second one lands on
 /// it, not on the first, on the active photo; the other photos' first entry of the plug-in is used.
 #[test]

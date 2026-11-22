@@ -575,3 +575,247 @@ fn a_section_that_differs_from_lcc_manifest_is_refused() {
     assert!(installed.contains("`permissions`"), "{installed}");
     assert!(listed(&mut s, "test.installs.lying").is_none(), "nothing installed");
 }
+
+/// `bytes` with an author signature section appended, signed with the key whose seed is all `seed`
+/// (as `plugin-stamp sign` writes it), and that key's fingerprint.
+fn signed(bytes: &[u8], seed: u8) -> (Vec<u8>, String) {
+    use base64::Engine as _;
+    use ed25519_dalek::Signer as _;
+    let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+    let data = json!({"v": 1, "key": b64(key.verifying_key().as_bytes()), "sig": b64(&key.sign(bytes).to_bytes())}).to_string();
+    let leb = |out: &mut Vec<u8>, mut n: usize| loop {
+        let b = (n & 0x7f) as u8;
+        n >>= 7;
+        out.push(if n == 0 { b } else { b | 0x80 });
+        if n == 0 {
+            break;
+        }
+    };
+    let name = lcc_plugins::SIGNATURE_SECTION;
+    let mut payload = Vec::new();
+    leb(&mut payload, name.len());
+    payload.extend_from_slice(name.as_bytes());
+    payload.extend_from_slice(data.as_bytes());
+    let mut out = bytes.to_vec();
+    out.push(0);
+    leb(&mut out, payload.len());
+    out.extend_from_slice(&payload);
+    let fingerprint = lcc_plugins::Signer::from_base64(&b64(key.verifying_key().as_bytes())).unwrap().fingerprint();
+    (out, fingerprint)
+}
+
+/// `plugin.inspectFile` says who signed a file and whether that's the installed plug-in's pinned
+/// signer; `plugin.install` pins the first signer and takes `acceptSigner` / `acceptUnsigned` for a
+/// file that isn't signed by it; `plugin.list` shows the pin.
+#[test]
+fn signed_files_are_inspected_and_another_signer_installs_on_the_users_yes() {
+    let _turn = turn();
+    let mut s = Session::with_demo();
+    let id = "test.installs.signed";
+    let dir = folder("signed");
+    let version = |v: &str| {
+        let f = module_file(&format!("signed-{v}"), &json!({"id": id, "name": "Signed", "version": v}));
+        std::fs::read(f.path()).unwrap()
+    };
+    let write = |name: &str, bytes: &[u8]| {
+        let p = dir.join(name);
+        std::fs::write(&p, bytes).unwrap();
+        p
+    };
+    let (v1, fp1) = signed(&version("1.0.0"), 1);
+    let (v2, fp2) = signed(&version("2.0.0"), 2);
+    let (v1, v2) = (write("v1.wasm", &v1), write("v2.wasm", &v2));
+    let invalid = write("bad.wasm", &[std::fs::read(&v2).unwrap().as_slice(), &[0, 2, 1, b'x']].concat());
+    let unsigned = write("v3.wasm", &version("3.0.0"));
+    let inspect = |s: &mut Session, p: &std::path::Path| s.execute("plugin.inspectFile", &json!({"path": p, "verify": true})).unwrap();
+
+    let info = inspect(&mut s, &v1);
+    assert_eq!(
+        (&info["signature"], &info["signer"], &info["pinned"], &info["matchesPin"]),
+        (&json!("valid"), &json!(fp1), &Value::Null, &Value::Null),
+        "{info}"
+    );
+    s.execute("plugin.install", &json!({"path": v1})).unwrap();
+    assert_eq!(listed(&mut s, id).unwrap()["signer"], fp1, "pinned at the first signed install");
+
+    let info = inspect(&mut s, &v2);
+    assert_eq!(info["signer"], fp2);
+    let key2 = info["signerKey"].as_str().unwrap().to_string();
+    assert_eq!(lcc_plugins::Signer::from_base64(&key2).unwrap().fingerprint(), fp2, "the full key behind the fingerprint");
+    assert_eq!(info["pinned"], json!({"signer": fp1, "readable": true}), "{info}");
+    assert_eq!(info["matchesPin"], false);
+    let e = s.execute("plugin.install", &json!({"path": v2})).unwrap_err().to_string();
+    assert!(e.contains(&fp1) && e.contains(&fp2) && e.contains("acceptSigner"), "{e}");
+    assert!(s.execute("plugin.install", &json!({"path": v2, "acceptSigner": fp2, "acceptUnsigned": true})).is_err(), "one answer at a time");
+    assert!(s.execute("plugin.install", &json!({"path": v2, "acceptSigner": 7})).is_err());
+    let other_key = signed(&version("9.0.0"), 9).0;
+    let other_key = s.execute("plugin.inspectFile", &json!({"path": write("other.wasm", &other_key)})).unwrap()["signerKey"].clone();
+    assert!(s.execute("plugin.install", &json!({"path": v2, "acceptSigner": other_key})).is_err(), "another signer's full key");
+    s.execute("plugin.install", &json!({"path": v2, "acceptSigner": key2})).unwrap();
+    assert_eq!(listed(&mut s, id).unwrap()["signer"], fp2);
+    assert_eq!(inspect(&mut s, &v2)["matchesPin"], true);
+
+    let info = inspect(&mut s, &invalid);
+    assert_eq!(info["signature"], "invalid", "{info}");
+    assert!(info["signatureError"].as_str().unwrap().contains("last section"), "{info}");
+    assert!(s.execute("plugin.install", &json!({"path": invalid, "acceptSigner": fp2})).unwrap_err().to_string().contains("plug-in signature"));
+
+    assert_eq!(inspect(&mut s, &unsigned)["signature"], "none");
+    assert!(s.execute("plugin.install", &json!({"path": unsigned})).unwrap_err().to_string().contains("acceptUnsigned"));
+    s.execute("plugin.install", &json!({"path": unsigned, "acceptUnsigned": true})).unwrap();
+    let after = listed(&mut s, id).unwrap();
+    s.execute("plugin.uninstall", &json!({"id": id})).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!((&after["version"], &after["signer"]), (&json!("3.0.0"), &Value::Null), "installed unsigned, as the user said yes to");
+}
+
+/// Serves update feeds and files from a map, for `plugin.checkUpdates` and `plugin.update`.
+#[derive(Debug, Default)]
+struct Served(std::sync::Mutex<std::collections::BTreeMap<String, Vec<u8>>>);
+
+impl lcc_plugins::Fetch for Served {
+    fn get(&self, url: &str, max: u64) -> Result<Vec<u8>, String> {
+        let body = self.0.lock().unwrap().get(url).cloned().ok_or_else(|| format!("{url}: HTTP 404"))?;
+        if body.len() as u64 > max { Err("too large".into()) } else { Ok(body) }
+    }
+}
+
+/// AC-6, AC-3, AC-4: the update commands drive the whole flow: a signed, stamped plug-in with a
+/// feed has its check turned on, `plugin.checkUpdates` finds the update (listed in `plugin.list`),
+/// `plugin.update` asks before permission groups the feed didn't declare and then installs it, and
+/// `plugin.rollback` goes back. A pixel filter gets no update checks.
+#[test]
+fn the_update_commands_check_ask_and_install() {
+    use sha2::Digest as _;
+    let _turn = turn();
+    let mut s = Session::with_demo();
+    let id = "test.installs.updates";
+    let feed_url = "https://feed.test/index.json";
+    let file = |v: &str, perms: Value| {
+        let m = json!({"id": id, "name": "Updated", "version": v, "requires": ["updates"], "updateUrl": feed_url, "permissions": perms});
+        let f = stamped_file(&format!("updates-{v}"), Some(&m), &m);
+        signed(&std::fs::read(f.path()).unwrap(), 7).0
+    };
+    let v1 = file("1.0.0", json!({"catalog": true}));
+    let v2 = file("2.0.0", json!({"catalog": true, "metadataWrite": true}));
+    let served = std::sync::Arc::new(Served::default());
+    let sha: String = sha2::Sha256::digest(&v2).iter().map(|b| format!("{b:02x}")).collect();
+    let entry = json!({"id": id, "version": "2.0.0", "url": "https://feed.test/v2.wasm", "sha256": sha, "permissions": ["catalog"],
+        "changelog": "https://feed.test/CHANGELOG.md", "notes": "Writes captions now."});
+    served.0.lock().unwrap().insert(feed_url.into(), json!({"updated": entry}).to_string().into_bytes());
+    served.0.lock().unwrap().insert("https://feed.test/v2.wasm".into(), v2.clone());
+    let dir = folder("updates");
+    // a manager with a folder (an update keeps the version it replaced there), put back however
+    // the test ends
+    struct Restore(Option<lcc_plugins::Manager>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            *crate::cmd::plugins::manager() = self.0.take();
+        }
+    }
+    let mut m = lcc_plugins::Manager::open(&dir.join("plugins")).unwrap();
+    m.set_fetcher(served.clone());
+    let _restore = Restore(crate::cmd::plugins::manager().replace(m));
+    let path = dir.join("v1.wasm");
+    std::fs::write(&path, &v1).unwrap();
+    s.execute("plugin.install", &json!({"path": path})).unwrap();
+
+    let updates = |s: &mut Session| listed(s, id).unwrap()["updates"].clone();
+    assert_eq!((updates(&mut s)["check"].clone(), updates(&mut s)["available"].clone()), (json!(false), json!(true)), "{}", updates(&mut s));
+    let none = s.execute("plugin.checkUpdates", &json!({})).unwrap();
+    assert_eq!(none["checked"], json!([]), "off by default: nothing is checked");
+    s.execute("plugin.setUpdateCheck", &json!({"id": id, "on": true})).unwrap();
+    let checked = s.execute("plugin.checkUpdates", &json!({"due": true})).unwrap();
+    assert_eq!(checked["checked"], json!([id]), "{checked}");
+    let offer = &checked["plugins"][0]["updates"]["offer"];
+    assert_eq!((&offer["version"], &offer["notes"], &offer["adds"]), (&json!("2.0.0"), &json!("Writes captions now."), &json!([])), "{checked}");
+    assert_eq!(s.execute("plugin.checkUpdates", &json!({"due": true})).unwrap()["checked"], json!([]), "within the day: not again");
+    assert_eq!(updates(&mut s)["offer"]["version"], "2.0.0", "plugin.list shows the result");
+
+    let asked = s.execute("plugin.update", &json!({"id": id})).unwrap();
+    assert_eq!((&asked["updated"], &asked["undeclared"]), (&json!(false), &json!(["metadataWrite"])), "{asked}");
+    assert_eq!(listed(&mut s, id).unwrap()["version"], "1.0.0", "nothing installed");
+    let done = s.execute("plugin.update", &json!({"id": id, "acceptUndeclared": true})).unwrap();
+    assert_eq!((&done["updated"], &done["plugin"]["version"]), (&json!(true), &json!("2.0.0")), "{done}");
+    assert_eq!(listed(&mut s, id).unwrap()["previousVersion"], "1.0.0");
+    assert!(s.execute("plugin.update", &json!({"id": id})).is_err(), "nothing more to install");
+    s.execute("plugin.rollback", &json!({"id": id})).unwrap();
+    assert_eq!(listed(&mut s, id).unwrap()["version"], "1.0.0");
+
+    // a pixel filter gets no update checks
+    let f = filter_file("updates-filter", "test.installs.updates.filter", "1.0.0");
+    s.execute("plugin.install", &json!({"path": f.path()})).unwrap();
+    for (cmd, p) in [("plugin.setUpdateCheck", json!({"on": true})), ("plugin.checkUpdates", json!({})), ("plugin.update", json!({}))] {
+        let mut p = p;
+        p["id"] = json!("test.installs.updates.filter");
+        let e = s.execute(cmd, &p).unwrap_err().to_string();
+        assert!(e.contains("pixel filter"), "{cmd}: {e}");
+    }
+    s.execute("plugin.uninstall", &json!({"id": "test.installs.updates.filter"})).unwrap();
+    s.execute("plugin.uninstall", &json!({"id": id})).unwrap();
+}
+
+/// `plugin.inspectFile` gives a file's pictures as SVG text (not the booleans `plugin.list` shows),
+/// for a plug-in and a pixel filter alike; one the host can't use is `null` and named in `dropped`.
+#[test]
+fn inspecting_a_file_gives_its_pictures_and_names_the_dropped_ones() {
+    let _turn = turn();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 4'><circle cx='2' cy='2' r='2'/></svg>";
+    let light = svg.replace("circle", "ellipse rx='2' ry='1' ");
+    let huge = format!("<svg>{}</svg>", "a".repeat(lcc_plugins::MAX_PICTURE_BYTES));
+    let pictures = json!({"icon": svg, "header": {"dark": svg, "light": light}});
+    let broken = json!({"icon": huge, "header": {"dark": svg, "light": "png bytes"}});
+    let wasm = lcc_testkit::TempFile::new("lcc-engine-installs-pictures-filter", "filter.wasm");
+    let filter = |extra: &Value| {
+        let mut m = json!({"id": "test.installs.pictures", "name": "P", "version": "1", "kind": "filter", "params": {}});
+        m.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        std::fs::write(&wasm, crate::tests_plugin_filters::module(&m.to_string(), None)).unwrap();
+        Session::with_demo().execute("plugin.inspectFile", &json!({"path": wasm.path()})).unwrap()
+    };
+    let plugin = |extra: &Value| {
+        let mut m = json!({"id": "test.installs.pictures", "name": "P", "version": "1.0.0"});
+        m.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let file = module_file("pictures", &m);
+        Session::with_demo().execute("plugin.inspectFile", &json!({"path": file.path()})).unwrap()
+    };
+    let plugin_info = plugin(&pictures);
+    let filter_info = filter(&pictures);
+    for info in [&plugin_info, &filter_info] {
+        assert_eq!(info["manifest"]["icon"], svg, "{info}");
+        assert_eq!(info["manifest"]["header"], json!({"dark": svg, "light": light}), "{info}");
+        assert_eq!(info["dropped"], json!([]), "{info}");
+    }
+    let (plugin_none, filter_none) = (plugin(&json!({})), filter(&json!({})));
+    for info in [&plugin_none, &filter_none] {
+        assert_eq!(info["manifest"]["icon"], Value::Null, "{info}");
+        assert_eq!(info["manifest"]["header"], Value::Null, "{info}");
+    }
+    // a single picture is the dark one; `null` is "not given"; a header of no use is named
+    let (plugin_one, filter_one) = (plugin(&json!({"header": svg, "icon": null})), filter(&json!({"header": svg, "icon": null})));
+    for info in [&plugin_one, &filter_one] {
+        assert_eq!(info["manifest"]["header"], json!({"dark": svg, "light": null}), "{info}");
+        assert_eq!(info["manifest"]["icon"], Value::Null, "{info}");
+        assert_eq!(info["dropped"], json!([]), "{info}");
+    }
+    let (plugin_null, filter_null) = (plugin(&json!({"header": null})), filter(&json!({"header": null})));
+    for info in [&plugin_null, &filter_null] {
+        assert_eq!(info["manifest"]["header"], Value::Null, "{info}");
+        assert_eq!(info["dropped"], json!([]), "{info}");
+    }
+    for header in [json!({}), json!([svg]), json!({"light": 7})] {
+        let (plugin_odd, filter_odd) = (plugin(&json!({"header": header})), filter(&json!({"header": header})));
+        for info in [&plugin_odd, &filter_odd] {
+            assert_eq!(info["manifest"]["header"], Value::Null, "{header}: {info}");
+            assert_eq!(info["dropped"].as_array().map(Vec::len), Some(1), "{header}: {info}");
+        }
+    }
+    let (plugin_bad, filter_bad) = (plugin(&broken), filter(&broken));
+    for info in [&plugin_bad, &filter_bad] {
+        assert_eq!(info["manifest"]["icon"], Value::Null, "{info}");
+        assert_eq!(info["manifest"]["header"], json!({"dark": svg, "light": null}), "{info}");
+        let why = "not an SVG document of at most 24 KiB";
+        assert_eq!(info["dropped"], json!([format!("icon: {why}"), format!("header.light: {why}")]), "{info}");
+        assert_eq!(info["unknownFields"], json!([]), "{info}");
+    }
+}

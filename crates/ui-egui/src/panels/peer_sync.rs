@@ -9,6 +9,7 @@
 //! second while sync runs. [`dialogs`] asks how to share a collection created while the catalog
 //! syncs, and [`waiting`] counts what needs an answer (the top bar's cloud shows it).
 
+use crate::json_ext::JsonExt as _;
 use std::collections::{BTreeMap, BTreeSet};
 
 use egui::RichText;
@@ -117,7 +118,7 @@ pub fn pump(app: &mut LccApp, ctx: &egui::Context) {
         match app.session.execute("sync.start", &json!({})) {
             Ok(v) => {
                 if running(&v) {
-                    app.peer_sync.status["running"] = json!(true);
+                    *app.peer_sync.status.field_mut("running") = json!(true);
                     app.peer_sync.ticked = f64::NEG_INFINITY;
                 }
             }
@@ -141,6 +142,11 @@ pub fn pump(app: &mut LccApp, ctx: &egui::Context) {
     }
 }
 
+/// Whether the open catalog syncs with other devices (as last known; [`pump`] keeps it fresh).
+pub(crate) fn catalog_syncs(app: &LccApp) -> bool {
+    !app.peer_sync.status.field("catalogue").field("group").is_null()
+}
+
 fn running(v: &Value) -> bool {
     v.get("running").and_then(Value::as_bool).unwrap_or(false)
 }
@@ -159,7 +165,7 @@ fn flag(v: &Value, key: &str) -> bool {
 
 /// New collections waiting to be asked about (not put off this run).
 fn undecided(app: &LccApp) -> Vec<(u64, String)> {
-    arr(&app.peer_sync.status["catalogue"], "undecided")
+    arr(app.peer_sync.status.field("catalogue"), "undecided")
         .iter()
         .filter_map(|u| Some((u.get("album")?.as_u64()?, s(u, "name").to_string())))
         .filter(|(a, _)| !app.peer_sync.later.contains(a))
@@ -259,7 +265,10 @@ fn camera_roll_row(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, st: &Value) 
     if c.changed() {
         if !on {
             run(app, "roll", "sync.cameraRoll", json!({"on": false}));
-        } else if cfg!(target_os = "android") {
+        } else if app.services.camera_roll.is_some() {
+            // the platform's roll (Android): the watch lists it, which is how the collection
+            // learns its folder and new photos, so syncing the roll watches it too
+            crate::camera_roll::set_watch(app, true);
             run(app, "roll", "sync.cameraRoll", json!({"on": true}));
         } else if let Some(folder) = app.services.pick_folder.as_mut().and_then(|f| f()) {
             run(app, "roll", "sync.cameraRoll", json!({"on": true, "folder": folder}));
@@ -460,7 +469,7 @@ fn catalogue(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, st: &Value) {
         super::settings::hint(ui, t, "Open a catalog saved on this computer to sync it.");
         return;
     };
-    let unkeyed = cat["unkeyed"].as_u64().unwrap_or(0);
+    let unkeyed = cat.field("unkeyed").as_u64().unwrap_or(0);
     if unkeyed > 0 {
         let r = crate::dialog_frame::note(
             ui,
@@ -469,7 +478,7 @@ fn catalogue(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, st: &Value) {
         register(ui.ctx(), "text:syncUnkeyed", r.rect);
     }
     let offers = arr(st, "offers");
-    let photos = cat["photos"].as_u64().unwrap_or(0);
+    let photos = cat.field("photos").as_u64().unwrap_or(0);
     for o in &offers {
         offer_box(app, ui, t, o, photos);
     }
@@ -712,19 +721,20 @@ fn rows(app: &LccApp, cat: &Value, g: &Value) -> Vec<Row> {
         if s(&c, "kind") == "unfiled" && mine {
             unfiled = true;
         }
-        let name = if s(&c, "kind") == "unfiled" { tr("Not in a collection").to_string() } else { s(&c, "name").to_string() };
         let owner = if flag(&c, "immich") { "Immich".to_string() } else { s(&c, "ownerName").to_string() };
+        // one such row per device: its name tells them apart
+        let name = if s(&c, "kind") == "unfiled" { unfiled_name(&owner) } else { s(&c, "name").to_string() };
         out.push(Row {
             key: id.clone(),
             name,
             owner,
             mine,
-            grant: parse(&c["grant"]).unwrap_or_default(),
-            take: parse(&c["take"]).unwrap_or_default(),
-            most: parse(&c["most"]).unwrap_or_default(),
+            grant: parse(c.field("grant")).unwrap_or_default(),
+            take: parse(c.field("take")).unwrap_or_default(),
+            most: parse(c.field("most")).unwrap_or_default(),
             letters: s(&c, "letters").to_string(),
-            pill: parse(&c["pill"]),
-            photos: c["photos"].as_u64().unwrap_or(0),
+            pill: parse(c.field("pill")),
+            photos: c.field("photos").as_u64().unwrap_or(0),
             immich: flag(&c, "immich"),
             target: json!({"collection": id}),
         });
@@ -732,7 +742,7 @@ fn rows(app: &LccApp, cat: &Value, g: &Value) -> Vec<Row> {
     if !unfiled {
         out.push(Row {
             key: "unfiled".into(),
-            name: tr("Not in a collection").to_string(),
+            name: unfiled_name(&me_name),
             owner: me_name.clone(),
             mine: true,
             grant: Grant::None,
@@ -769,44 +779,38 @@ fn rows(app: &LccApp, cat: &Value, g: &Value) -> Vec<Row> {
     out
 }
 
+/// The row of a device's photos in no collection.
+pub(crate) fn unfiled_name(device: &str) -> String {
+    tr_format!("Not in a collection on {device}", device = device)
+}
+
 fn collections(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, cat: &Value, g: &Value) {
     super::settings::heading(ui, t, "Collections");
-    super::settings::hint(
-        ui,
-        t,
-        "On the device that owns a collection, choose what the others may have; on the others, choose what this device takes.",
-    );
+    super::settings::hint(ui, t, "Your collections: choose what the other devices may have. Theirs: choose what this device keeps.");
     let rows = rows(app, cat, g);
     let mut picked: Option<(Row, Value, &'static str)> = None;
-    egui::Grid::new("syncCollections").num_columns(5).striped(true).spacing([12.0, 4.0]).show(ui, |ui| {
-        for h in ["Collection", "Owner", "Sync", "Pill", "Photos"] {
-            ui.label(RichText::new(tr(h)).size(11.0).color(t.text_label));
+    // one row per collection, its choice at the right: no columns to run off a narrow screen
+    for r in rows.iter().filter(|r| !r.immich) {
+        if let Some(p) = collection_row(ui, t, r) {
+            picked = Some(p);
         }
-        ui.end_row();
-        let mut immich_heading = false;
-        for r in &rows {
-            if r.immich && !immich_heading {
-                immich_heading = true;
-                let h = ui.label(RichText::new(tr("Immich")).strong().color(t.text));
-                register(ui.ctx(), "text:syncImmichGroup", h.rect);
-                ui.label(RichText::new(tr("Albums on your Immich server: choose what this device keeps of each.")).size(11.0).color(t.text_dim));
-                ui.end_row();
+    }
+    // the Immich albums, folded away under one line: there can be many, and each defaults to None
+    let immich: Vec<&Row> = rows.iter().filter(|r| r.immich).collect();
+    if !immich.is_empty() {
+        let kept = immich.iter().filter(|r| r.take != Take::None).count();
+        ui.add_space(6.0);
+        let title = tr_format!("Immich albums: {n}, {kept} kept on this device", n = immich.len(), kept = kept);
+        let h = egui::CollapsingHeader::new(RichText::new(title).strong().color(t.text)).id_salt("syncImmichAlbums").default_open(false).show(ui, |ui| {
+            super::settings::hint(ui, t, "Previews or Full Quality keeps an album in step with Immich on this device: photos added to it on any device go to the album, and the album's photos come here.");
+            for r in &immich {
+                if let Some(p) = collection_row(ui, t, r) {
+                    picked = Some(p);
+                }
             }
-            let n = ui.label(RichText::new(&r.name).color(t.text));
-            register(ui.ctx(), format!("text:syncCollection-{}", r.key), n.rect);
-            ui.label(RichText::new(&r.owner).size(11.0).color(t.text_dim));
-            if let Some((v, cmd)) = picker(ui, r) {
-                picked = Some((r.clone(), v, cmd));
-            }
-            let text = r.pill.map(|p| p.text()).unwrap_or_else(|| r.letters.clone());
-            let l = ui.label(RichText::new(text).monospace().size(11.0).color(t.text_dim));
-            if let Some(p) = &r.pill {
-                l.on_hover_text(super::sync_pill::tooltip(p));
-            }
-            ui.label(RichText::new(r.photos.to_string()).size(11.0).color(t.text_dim));
-            ui.end_row();
-        }
-    });
+        });
+        register(ui.ctx(), "text:syncImmichGroup", h.header_response.rect);
+    }
     if let Some((r, v, cmd)) = picked {
         let mut params = r.target.clone();
         if let Some(o) = params.as_object_mut() {
@@ -819,6 +823,41 @@ fn collections(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, cat: &Value, g: 
     }
 }
 
+/// Width of a row's choice.
+const PICK_W: f32 = 140.0;
+
+/// One collection: its name over "owner · photos · pill", and its choice at the right (under the
+/// name when the screen is too narrow for both).
+fn collection_row(ui: &mut egui::Ui, t: &Tokens, r: &Row) -> Option<(Row, Value, &'static str)> {
+    let narrow = ui.available_width() < PICK_W + 160.0;
+    let text_w = if narrow { ui.available_width() } else { ui.available_width() - PICK_W - 12.0 };
+    let mut out = None;
+    let mut body = |ui: &mut egui::Ui| {
+        ui.vertical(|ui| {
+            ui.set_width(text_w);
+            ui.spacing_mut().item_spacing.y = 1.0;
+            let n = ui.add(egui::Label::new(RichText::new(&r.name).color(t.text)).truncate());
+            register(ui.ctx(), format!("text:syncCollection-{}", r.key), n.rect);
+            let pill = r.pill.map(|p| p.text()).unwrap_or_else(|| r.letters.clone());
+            let photos = tr_format!("{n} photos", n = r.photos);
+            let line = ui.add(egui::Label::new(RichText::new(format!("{} · {photos} · {pill}", r.owner)).size(11.0).color(t.text_dim)).truncate());
+            if let Some(p) = &r.pill {
+                line.on_hover_text(super::sync_pill::tooltip(p));
+            }
+        });
+        if let Some((v, cmd)) = picker(ui, r) {
+            out = Some((r.clone(), v, cmd));
+        }
+    };
+    if narrow {
+        ui.vertical(|ui| body(ui));
+    } else {
+        ui.horizontal(|ui| body(ui));
+    }
+    ui.add_space(4.0);
+    out
+}
+
 /// The choice for one row: what it allows (owner) or takes (others), each with its line of
 /// explanation; the new value and the command to send when it changes.
 fn picker(ui: &mut egui::Ui, r: &Row) -> Option<(Value, &'static str)> {
@@ -828,7 +867,7 @@ fn picker(ui: &mut egui::Ui, r: &Row) -> Option<(Value, &'static str)> {
     } else {
         TAKES.iter().find(|(k, _, _)| *k == r.take).map_or("None", |x| x.1)
     };
-    let resp = egui::ComboBox::from_id_salt(format!("syncPick-{}", r.key)).selected_text(tr(current)).width(130.0).show_ui(ui, |ui| {
+    let resp = egui::ComboBox::from_id_salt(format!("syncPick-{}", r.key)).selected_text(tr(current)).width(PICK_W).show_ui(ui, |ui| {
         let small = |ui: &mut egui::Ui, text: &str| {
             let t = Tokens::get(ui.ctx());
             ui.label(RichText::new(tr(text)).size(10.5).color(t.text_dim));

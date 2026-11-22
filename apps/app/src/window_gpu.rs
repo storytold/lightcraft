@@ -6,17 +6,31 @@
 //!   eframe's glow) is *probed* before the window opens: a device is created with an error handler
 //!   that logs instead of panicking, and egui's pipeline is built inside error scopes. The first
 //!   that builds cleanly is handed to eframe as an existing device (so its error handler stays).
-//! - **Everywhere:** a marker file names the renderer being started and is removed once the
+//! - **Everywhere:** a marker file names the renderer being started and is emptied once the
 //!   window's renderer is up. Left behind — the start died or panicked — the next launch tries that
-//!   renderer last; [`relaunch_after_failure`] starts that next launch right away.
+//!   renderer last; [`relaunch_after_failure`] starts that next launch right away. The copy that
+//!   starts holds an OS lock on the marker, so a second copy starting at the same time sees a live
+//!   start, not a dead one, and leaves the marker alone; a crash or kill releases the lock. A copy
+//!   whose start hangs without dying still holds it: end it to clear the way.
 //! - The renderer that worked is remembered (`<config>/window-renderer-2`, Windows only; the `-2`
 //!   drops the DX12 that 26.45.4 remembered, so Vulkan is tried again: issue #934) and tried
 //!   first next time. `<PREFIX>_GPU_BACKEND=dx12|vulkan|gl|glow` (or `WGPU_BACKEND`) forces one.
+//! - **A device lost while running (issue #1194):** egui-wgpu skips a frame it cannot draw instead
+//!   of panicking (#1098), so a window whose device is gone would skip every frame forever. The
+//!   window's frames are watched ([`LossWatch`]): a long unbroken run of failed frames — shorter
+//!   after the GPU reported a lost device — means the device is gone for good. The renderer is then
+//!   recorded as lost (`<config>/window-lost`, kept: every later start tries it last), the library
+//!   and settings are saved, the user is told in a native message box, and the app ends. eframe
+//!   cannot rebuild a window's device in place (its painter, egui's textures and the GPU renderer's
+//!   textures all live on the one device).
 
 use eframe::egui_wgpu::{WgpuConfiguration, WgpuSetup, WgpuSetupExisting};
 use eframe::wgpu;
 use lcc_engine::gpu::backend::{self, Backends, WindowRenderer};
+use std::fs::{File, OpenOptions, TryLockError};
+use std::io::{Read, Seek, Write};
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 /// Environment variable counting automatic relaunches after a failed start (bounds the chain). The
 /// updater reads it too (`lcc_updater` `zipswap::WINDOW_RETRY`): a relaunch carries on the start of
@@ -24,6 +38,8 @@ use std::path::PathBuf;
 const RETRY_VAR: &str = "WINDOW_RETRY";
 /// Never more relaunches than renderers to try.
 const MAX_RETRIES: u32 = 4;
+/// Most bytes read from the marker (a renderer name is a few; the file is not trusted).
+const MARKER_MAX: u64 = 256;
 
 /// The window's renderer for this start.
 pub struct Chosen {
@@ -37,14 +53,36 @@ pub struct Chosen {
 /// Files under the settings folder (`None` dir: write nothing — `--memory`, `<PREFIX>_NO_PREFS`).
 pub struct Files {
     dir: Option<PathBuf>,
+    /// The marker this copy armed, with its lock held: the lock says "a start is in flight here".
+    held: Mutex<Option<File>>,
 }
 
 impl Files {
     pub fn new(dir: Option<PathBuf>) -> Self {
-        Self { dir }
+        Self { dir, held: Mutex::new(None) }
+    }
+    fn held(&self) -> MutexGuard<'_, Option<File>> {
+        self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }
     fn marker(&self) -> Option<PathBuf> {
         self.dir.as_ref().map(|d| d.join("window-init.marker"))
+    }
+    fn lost(&self) -> Option<PathBuf> {
+        self.dir.as_ref().map(|d| d.join("window-lost"))
+    }
+    /// The renderer whose device was lost while running (kept across starts).
+    pub fn lost_renderer(&self) -> Option<WindowRenderer> {
+        Self::read(self.lost())
+    }
+    /// The window's device was lost for good with `r`: tried last from now on, and no longer the
+    /// remembered one.
+    pub fn record_lost(&self, r: WindowRenderer) {
+        Self::write(self.lost(), r);
+        if let Some(p) = self.remembered()
+            && Self::read(Some(p.clone())) == Some(r)
+        {
+            let _ = std::fs::remove_file(p);
+        }
     }
     fn remembered(&self) -> Option<PathBuf> {
         self.dir.as_ref().map(|d| d.join("window-renderer-2"))
@@ -66,29 +104,89 @@ impl Files {
             log::warn!("window: could not write {}: {e}", p.display());
         }
     }
-    /// The renderer the last start died in (marker left behind), removing the marker.
+    /// The renderer the last start died in (marker left behind), clearing the marker. A marker
+    /// whose lock another running copy holds is that copy's start in flight: not a failure, not
+    /// touched. A marker without a lock holder (a crash, an older version's) is a failed start.
+    /// An empty or unparseable marker names no failed start.
     pub fn take_failed(&self) -> Option<WindowRenderer> {
         let m = self.marker()?;
-        let r = Self::read(Some(m.clone()));
-        let _ = std::fs::remove_file(m);
-        r
+        // a marker that can't be written is still read (and `clear` deletes it if it can't be emptied)
+        let mut f = OpenOptions::new().read(true).write(true).open(&m).or_else(|_| File::open(&m)).ok()?;
+        match f.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => return None,
+            // a file system without locks: read it as before
+            Err(TryLockError::Error(e)) => log::warn!("window: can't lock {}: {e}", m.display()),
+        }
+        // through the locked handle (on Windows a lock refuses reads through any other); capped:
+        // a renderer name is a few bytes and the file may hold anything
+        let mut bytes = Vec::new();
+        let _ = (&mut f).take(MARKER_MAX).read_to_end(&mut bytes);
+        if !bytes.is_empty() {
+            Self::clear(&f, Some(m));
+        }
+        let _ = f.unlock();
+        WindowRenderer::parse(&String::from_utf8_lossy(&bytes))
     }
-    /// Before the window opens: record what is being started.
+    /// Empty the marker through its locked handle; only if that fails, delete it.
+    fn clear(f: &File, path: Option<PathBuf>) {
+        if f.set_len(0).is_err()
+            && let Some(p) = path
+        {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+    /// Before the window opens: record what is being started, holding the marker's lock until
+    /// the start finishes. Another copy's start in flight keeps its marker (this one writes none).
     pub fn arm(&self, r: WindowRenderer) {
-        Self::write(self.marker(), r);
+        let Some(p) = self.marker() else { return };
+        let mut held = self.held();
+        if held.is_none() {
+            if let Some(d) = p.parent() {
+                let _ = std::fs::create_dir_all(d);
+            }
+            let f = match OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&p) {
+                Ok(f) => f,
+                Err(e) => return log::warn!("window: could not write {}: {e}", p.display()),
+            };
+            match f.try_lock() {
+                Ok(()) => {}
+                Err(TryLockError::WouldBlock) => {
+                    return log::info!("window: another copy is starting its window; no marker written");
+                }
+                Err(TryLockError::Error(e)) => log::warn!("window: can't lock {}: {e}", p.display()),
+            }
+            *held = Some(f);
+        }
+        let Some(f) = held.as_mut() else { return };
+        // on disk before the driver is touched: a driver fault can take the machine down with it
+        let written =
+            f.set_len(0).and_then(|()| f.rewind()).and_then(|()| f.write_all(format!("{}\n", r.name()).as_bytes())).and_then(|()| f.sync_all());
+        if let Err(e) = written {
+            log::warn!("window: could not write {}: {e}", p.display());
+        }
     }
-    /// The window's renderer is up: clear the marker and (Windows) remember it.
+    /// The window's renderer is up: empty the marker (it is never deleted, so every copy locks the
+    /// same file; an empty one names no failed start) and (Windows) remember the renderer.
     pub fn started(&self, r: WindowRenderer) {
-        if let Some(m) = self.marker() {
-            let _ = std::fs::remove_file(m);
+        if let Some(f) = self.held().take() {
+            Self::clear(&f, self.marker());
+            let _ = f.unlock();
         }
         if cfg!(windows) {
             Self::write(self.remembered(), r);
         }
     }
-    /// The marker is still there: the window never came up.
+    /// Whether this copy armed the marker and the start has not come up.
     pub fn armed(&self) -> bool {
-        self.marker().is_some_and(|m| m.exists())
+        self.held().is_some()
+    }
+    /// Hand the marker on: keep the file, drop the lock, so the copy started next reads it as the
+    /// failed start (this copy is still alive, and would otherwise look like a start in flight).
+    fn release_for_relaunch(&self) {
+        if let Some(f) = self.held().take() {
+            let _ = f.unlock();
+        }
     }
 }
 
@@ -99,7 +197,7 @@ pub fn choose(files: &Files, compose_window: bool) -> Chosen {
     let remembered = if cfg!(windows) { Files::read(files.remembered()) } else { None };
     let compiled = wgpu::Instance::enabled_backend_features();
     let os = std::env::consts::OS;
-    let order = backend::window_renderer_order(forced, remembered, failed, os, compiled, true);
+    let order = demote_lost(backend::window_renderer_order(forced, remembered, failed, os, compiled, true), forced, files.lost_renderer());
     let mut problems = Vec::new();
     let chosen = if cfg!(windows) {
         pick_probed(files, &order, &mut problems, compose_window)
@@ -127,6 +225,116 @@ pub fn choose(files: &Files, compose_window: bool) -> Chosen {
         }
     };
     Chosen { renderer, wgpu_options, which, notice }
+}
+
+/// A renderer whose device was lost while running goes last (unless the environment forces it).
+fn demote_lost(mut order: Vec<WindowRenderer>, forced: Option<WindowRenderer>, lost: Option<WindowRenderer>) -> Vec<WindowRenderer> {
+    if let Some(l) = lost.filter(|l| Some(*l) != forced)
+        && let Some(i) = order.iter().position(|r| *r == l)
+    {
+        let r = order.remove(i);
+        order.push(r);
+    }
+    order
+}
+
+/// Watches the window's frames for a device that is gone for good (issue #1194). A skipped frame
+/// is harmless: any frame that gets its surface texture starts the count again.
+#[derive(Debug, Default)]
+pub struct LossWatch {
+    streak: u32,
+    since: Option<std::time::Instant>,
+    tripped: bool,
+}
+
+/// Failed frames in a row, and for how long, that mean the device is gone: after the GPU reported
+/// a lost device, and without such a report (a device of its own, or GPU rendering off).
+const AFTER_LOSS: (u32, std::time::Duration) = (30, std::time::Duration::from_secs(2));
+const WITHOUT_LOSS: (u32, std::time::Duration) = (600, std::time::Duration::from_secs(20));
+
+impl LossWatch {
+    /// A frame got its surface texture.
+    pub fn acquired(&mut self) {
+        self.streak = 0;
+        self.since = None;
+    }
+    /// A frame was dropped at `now` (`device_lost`: the GPU reported a lost device). `true` once,
+    /// when the window's device is judged gone for good.
+    pub fn dropped(&mut self, now: std::time::Instant, device_lost: bool) -> bool {
+        self.streak = self.streak.saturating_add(1);
+        let since = *self.since.get_or_insert(now);
+        let (n, d) = if device_lost { AFTER_LOSS } else { WITHOUT_LOSS };
+        if !self.tripped && self.streak >= n && now.saturating_duration_since(since) >= d {
+            self.tripped = true;
+            return true;
+        }
+        false
+    }
+}
+
+/// Whether a dropped frame counts towards a lost device: not a hidden window (`Occluded`), one
+/// being resized (`Outdated`, reconfigured right away), or a compositor that hands out no frame
+/// for now (`Timeout`: a minimised or covered window can time out for as long as it stays hidden,
+/// and the device is fine).
+fn counts_as_failure(status: &wgpu::CurrentSurfaceTexture) -> bool {
+    !matches!(
+        status,
+        wgpu::CurrentSurfaceTexture::Occluded
+            | wgpu::CurrentSurfaceTexture::Outdated
+            | wgpu::CurrentSurfaceTexture::Timeout
+            | wgpu::CurrentSurfaceTexture::Success(_)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(_)
+    )
+}
+
+static WATCH: std::sync::Mutex<LossWatch> = std::sync::Mutex::new(LossWatch { streak: 0, since: None, tripped: false });
+static LOST: std::sync::Mutex<Option<WindowRenderer>> = std::sync::Mutex::new(None);
+static CTX: std::sync::OnceLock<eframe::egui::Context> = std::sync::OnceLock::new();
+
+fn watch() -> std::sync::MutexGuard<'static, LossWatch> {
+    WATCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Watch the window's frames (see [`LossWatch`]); `which` is recorded in `files` when its device
+/// is judged lost. egui-wgpu's own handling of each dropped frame is kept.
+pub fn watch_device_loss(options: &mut WgpuConfiguration, files: std::sync::Arc<Files>, which: WindowRenderer) {
+    let inner = options.on_surface_status.clone();
+    options.on_surface_status = std::sync::Arc::new(move |status| {
+        let action = inner(status);
+        if counts_as_failure(status) && watch().dropped(std::time::Instant::now(), lcc_engine::gpu::last_loss().is_some()) {
+            log::error!("window: the {} renderer has drawn nothing since its GPU device was lost ({status:?}); ending the run", which.name());
+            // on disk now: the process may yet be ended by hand
+            files.record_lost(which);
+            *LOST.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(which);
+            if let Some(ctx) = CTX.get() {
+                ctx.request_repaint();
+            }
+        }
+        action
+    });
+    options.on_frame_acquired = Some(std::sync::Arc::new(|| watch().acquired()));
+}
+
+/// The window's context, so a lost device can wake the app (see [`watch_device_loss`]).
+pub fn set_context(ctx: &eframe::egui::Context) {
+    let _ = CTX.set(ctx.clone());
+}
+
+/// The renderer whose device was judged lost for good (once): the app should save and end.
+pub fn take_device_lost() -> Option<WindowRenderer> {
+    LOST.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+}
+
+/// What to tell the user when the window's device was lost with `which`.
+pub fn lost_text(which: WindowRenderer) -> String {
+    format!(
+        "its window stopped drawing: the graphics driver lost the {} renderer's GPU device. The library and settings were saved. \
+         {app} draws its window with another renderer from its next start; {var}=dx12, vulkan, gl or glow chooses one \
+         (see docs/gpu-pipeline.md → Troubleshooting)",
+        which.name(),
+        app = lcc_brand::DISPLAY_NAME,
+        var = lcc_brand::env_var("GPU_BACKEND"),
+    )
 }
 
 /// What to tell the user about the window's renderer. A renderer that failed its probe is skipped
@@ -260,6 +468,9 @@ pub fn relaunch_after_failure(files: &Files) -> bool {
     if !files.armed() {
         return false;
     }
+    // this start failed: the marker now belongs to the next one (relaunched, or started later while
+    // this copy shows its error), and a lock still held here would hide it from that one
+    files.release_for_relaunch();
     let tries = lcc_brand::env(RETRY_VAR).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
     if tries >= MAX_RETRIES {
         return false;
@@ -301,26 +512,128 @@ mod tests {
         d
     }
 
-    /// The marker names the renderer being started; left behind, the next start reads it as the
-    /// failed one (and removes it); a good start removes it and remembers the renderer (Windows).
+    /// Bytes in the marker, `None` when the file is gone (metadata, not a read: on Windows a held
+    /// lock refuses reads).
+    fn marker_len(f: &Files) -> Option<u64> {
+        std::fs::metadata(f.marker().unwrap()).ok().map(|m| m.len())
+    }
+
+    /// The marker names the renderer being started; left behind by a copy that is gone, the next
+    /// start reads it as the failed one (and clears it); a good start clears it and remembers
+    /// the renderer (Windows).
     #[test]
     fn marker_records_the_failed_renderer() {
         let d = dir("marker");
         let f = Files::new(Some(d.clone()));
         let dx = WindowRenderer::Wgpu(Backends::DX12);
         f.arm(dx);
-        assert!(f.armed());
-        assert_eq!(f.take_failed(), Some(dx));
-        assert!(!f.armed());
-        assert_eq!(f.take_failed(), None);
-        f.arm(WindowRenderer::Glow);
-        f.started(WindowRenderer::Glow);
-        assert!(!f.armed());
-        assert_eq!(Files::read(f.remembered()), cfg!(windows).then_some(WindowRenderer::Glow));
+        assert!(f.armed() && marker_len(&f) > Some(0));
+        // the start died: the OS releases its lock, the marker stays (unlocked by hand: a sibling
+        // test spawning a process can hold a copy of our descriptor, and a flock lasts while one is open)
+        f.release_for_relaunch();
+        drop(f);
+        let next = Files::new(Some(d.clone()));
+        assert_eq!(next.take_failed(), Some(dx));
+        assert_eq!(marker_len(&next), Some(0), "taken: the marker is emptied, not deleted");
+        assert_eq!(next.take_failed(), None);
+        next.arm(WindowRenderer::Glow);
+        next.started(WindowRenderer::Glow);
+        assert!(!next.armed() && marker_len(&next) == Some(0));
+        assert_eq!(Files::read(next.remembered()), cfg!(windows).then_some(WindowRenderer::Glow));
         // nothing written without a settings folder
         let none = Files::new(None);
         none.arm(dx);
         assert!(!none.armed() && !relaunch_after_failure(&none));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A second copy started on the same settings folder while the first is still starting finds
+    /// the first's marker: that is a start in flight, not a failure. It leaves the marker (and
+    /// the first's later clean start) alone, and writes none of its own.
+    #[test]
+    fn a_marker_of_a_live_copy_is_not_a_failure() {
+        let d = dir("live-marker");
+        let first = Files::new(Some(d.clone()));
+        let vk = WindowRenderer::Wgpu(Backends::VULKAN);
+        first.arm(vk);
+        let second = Files::new(Some(d.clone()));
+        assert_eq!(second.take_failed(), None, "the first copy is still starting");
+        assert!(marker_len(&second) > Some(0), "its marker is not cleared");
+        second.arm(WindowRenderer::Glow);
+        assert!(!second.armed(), "the second copy does not take over the first's marker");
+        second.started(WindowRenderer::Glow);
+        assert!(marker_len(&second) > Some(0), "nor does its start clear it");
+        first.started(vk);
+        assert_eq!(marker_len(&first), Some(0));
+        assert_eq!(Files::new(Some(d.clone())).take_failed(), None);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The relaunch after a failed start hands the marker on while the failed copy is still alive:
+    /// the copy it starts reads the failed renderer from it.
+    #[test]
+    fn the_relaunched_copy_reads_the_marker_of_its_failed_parent() {
+        let d = dir("relaunch-marker");
+        let parent = Files::new(Some(d.clone()));
+        let dx = WindowRenderer::Wgpu(Backends::DX12);
+        parent.arm(dx);
+        parent.release_for_relaunch();
+        assert!(!parent.armed());
+        assert_eq!(Files::new(Some(d.clone())).take_failed(), Some(dx));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A marker that can be read but not written (its permissions changed, a settings folder
+    /// copied from another account) still names the failed start: the next start does not retry
+    /// the renderer that died.
+    #[test]
+    fn a_read_only_marker_still_names_the_failed_start() {
+        let d = dir("read-only-marker");
+        let first = Files::new(Some(d.clone()));
+        let vk = WindowRenderer::Wgpu(Backends::VULKAN);
+        first.arm(vk);
+        first.release_for_relaunch();
+        drop(first);
+        let path = d.join("window-init.marker");
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&path, perms).unwrap();
+        assert_eq!(Files::new(Some(d.clone())).take_failed(), Some(vk));
+        if let Ok(m) = std::fs::metadata(&path) {
+            let mut perms = m.permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            perms.set_readonly(false);
+            let _ = std::fs::set_permissions(&path, perms);
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Hostile marker contents (empty, blank, garbage, invalid UTF-8, huge) name no failed start and
+    /// never panic, nor does a directory where the marker should be; the start still arms normally.
+    #[test]
+    fn a_corrupt_marker_names_no_failed_start() {
+        let d = dir("corrupt-marker");
+        let path = d.join("window-init.marker");
+        let mut huge = b"vulkan".to_vec();
+        huge.extend(std::iter::repeat_n(b'x', 1 << 20));
+        let cases: [&[u8]; 5] = [b"", b"\n", b"not-a-renderer\n", &[0xff, 0xfe, 0x00, 0x80], &huge];
+        for bytes in cases {
+            let _ = std::fs::remove_dir_all(&d);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(&path, bytes).unwrap();
+            let f = Files::new(Some(d.clone()));
+            assert_eq!(f.take_failed(), None, "{} bytes", bytes.len());
+            f.arm(WindowRenderer::Glow);
+            assert!(f.armed());
+            f.started(WindowRenderer::Glow);
+            assert_eq!(marker_len(&f), Some(0));
+        }
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(path.join("sub")).unwrap();
+        let f = Files::new(Some(d.clone()));
+        assert_eq!(f.take_failed(), None);
+        f.arm(WindowRenderer::Glow);
+        assert!(!f.armed() && !relaunch_after_failure(&f));
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -336,6 +649,60 @@ mod tests {
         assert!(forced.starts_with("The dx12 renderer failed") && forced.contains("now draws its window with vulkan"), "{forced}");
         let died = user_notice(Some(dx), None, &problems, vk).unwrap();
         assert!(died.contains("last time") && !died.contains("Validation Error"), "{died}");
+    }
+
+    /// #1194: a skipped frame, or a burst of them, is harmless; failed frames that never stop
+    /// (shorter after the GPU reported a lost device) trip once.
+    #[test]
+    fn only_an_unbroken_run_of_failed_frames_means_the_device_is_lost() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let ms = |m: u64| t0 + Duration::from_millis(m);
+        let mut w = LossWatch::default();
+        // many failures, each followed by a good frame: never
+        for i in 0..2000 {
+            assert!(!w.dropped(ms(i * 16), true));
+            w.acquired();
+        }
+        // a fast burst after a device loss: not yet (too short); keeps failing: trips, once
+        let mut w = LossWatch::default();
+        assert!((0..100).all(|i| !w.dropped(ms(i), true)));
+        assert!(w.dropped(ms(2100), true));
+        assert!(!w.dropped(ms(2200), true));
+        // without a reported loss it takes far longer
+        let mut w = LossWatch::default();
+        assert!((0..1000).all(|i| !w.dropped(ms(i * 16), false)));
+        assert!(w.dropped(ms(20_100), false));
+        // hidden / resized windows do not count
+        assert!(!counts_as_failure(&wgpu::CurrentSurfaceTexture::Occluded));
+        assert!(!counts_as_failure(&wgpu::CurrentSurfaceTexture::Outdated));
+        assert!(!counts_as_failure(&wgpu::CurrentSurfaceTexture::Timeout));
+        assert!(counts_as_failure(&wgpu::CurrentSurfaceTexture::Validation));
+        assert!(counts_as_failure(&wgpu::CurrentSurfaceTexture::Lost));
+    }
+
+    /// #1194: the renderer that lost its device is kept on disk, stops being the remembered one and
+    /// goes last in every later order (not when forced); an unreadable file is ignored.
+    #[test]
+    fn a_lost_renderer_is_tried_last_from_then_on() {
+        let (vk, dx, gl) = (WindowRenderer::Wgpu(Backends::VULKAN), WindowRenderer::Wgpu(Backends::DX12), WindowRenderer::Wgpu(Backends::GL));
+        let d = dir("lost");
+        let f = Files::new(Some(d.clone()));
+        assert_eq!(f.lost_renderer(), None);
+        f.started(vk);
+        f.record_lost(vk);
+        assert_eq!(f.lost_renderer(), Some(vk));
+        assert_eq!(Files::read(f.remembered()), None);
+        assert_eq!(f.lost_renderer(), Some(vk), "kept across starts");
+        let order = vec![vk, dx, gl, WindowRenderer::Glow];
+        assert_eq!(demote_lost(order.clone(), None, Some(vk)), vec![dx, gl, WindowRenderer::Glow, vk]);
+        assert_eq!(demote_lost(order.clone(), Some(vk), Some(vk)), order);
+        assert_eq!(demote_lost(order.clone(), None, None), order);
+        std::fs::write(d.join("window-lost"), b"\xff\x00garbage").unwrap();
+        assert_eq!(f.lost_renderer(), None);
+        Files::new(None).record_lost(vk);
+        assert!(lost_text(vk).contains("vulkan"));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// The window keeps eframe's low-latency surface: one frame queued (two Metal drawables), not

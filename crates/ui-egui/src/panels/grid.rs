@@ -21,6 +21,7 @@ pub(crate) fn exposure_line(m: &lcc_catalog::Meta) -> Option<String> {
 #[path = "grid_header_tests.rs"]
 mod header_tests;
 
+use crate::json_ext::JsonExt as _;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -471,7 +472,7 @@ fn show_inner(app: &mut LccApp, ui: &mut egui::Ui) {
                 bw_taken = bw + 10.0;
             }
             // the title gives way to the count: a long album or folder name is trimmed, in full on hover
-            let room = (hr.width() - 20.0 - count_w - 36.0).max(0.0);
+            let room = (hr.width() - 20.0 - count_w - 36.0 - if crate::modern::on(app) { 20.0 } else { 0.0 }).max(0.0);
             let font = t.semibold(17.0);
             let title = crate::widgets::elide_head(&full, room, |s| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text).size().x);
             let title_rect = ui.painter().text(pos2(hr.left() + 20.0, hr.center().y), Align2::LEFT_CENTER, &title, font, t.text);
@@ -487,6 +488,10 @@ fn show_inner(app: &mut LccApp, ui: &mut egui::Ui) {
             let count_rect = count.rect;
             count.on_hover_text(cnt.as_str());
             crate::widgets::register(ui.ctx(), "grid:title", title_rect);
+            // Modern has no source panel: its title opens the list of sources and collections
+            if crate::modern::on(app) {
+                crate::modern_sources::title(app, ui, title_rect, hr);
+            }
             crate::widgets::register(ui.ctx(), "grid:count", count_rect);
             if title != full {
                 ui.interact(title_rect, ui.id().with("grid-title"), Sense::hover()).on_hover_text(full);
@@ -856,7 +861,9 @@ pub fn layout_with_footer(aspects: &[f32], groups: &[(usize, usize)], avail_w: f
             for i in start..end {
                 let k = (i - start) as f32;
                 let (c, r) = (k % cols, (k / cols).floor());
-                out.cells[i] = Rect::from_min_size(pos2(4.0 + c * (cw + gap), y + r * (cw + footer + gap)), vec2(cw, cw + footer));
+                if let Some(cell) = out.cells.get_mut(i) {
+                    *cell = Rect::from_min_size(pos2(4.0 + c * (cw + gap), y + r * (cw + footer + gap)), vec2(cw, cw + footer));
+                }
             }
             let per_row = (cols as usize).max(1);
             for (r, row_start) in (start..end).step_by(per_row).enumerate() {
@@ -872,7 +879,7 @@ pub fn layout_with_footer(aspects: &[f32], groups: &[(usize, usize)], avail_w: f
                 let mut sum = 0.0;
                 let mut j = i;
                 while j < end {
-                    sum += aspects[j].max(0.05);
+                    sum += aspects.get(j).copied().unwrap_or(1.0).max(0.05);
                     let h = (avail_w - gap * (j - i) as f32) / sum;
                     j += 1;
                     if h <= target {
@@ -883,8 +890,10 @@ pub fn layout_with_footer(aspects: &[f32], groups: &[(usize, usize)], avail_w: f
                 let h = if j < end || row_h <= target { row_h } else { target };
                 let mut x = 4.0;
                 for k in i..j {
-                    let w = aspects[k].max(0.05) * h;
-                    out.cells[k] = Rect::from_min_size(pos2(x, y), vec2(w, h + footer));
+                    let w = aspects.get(k).copied().unwrap_or(1.0).max(0.05) * h;
+                    if let Some(cell) = out.cells.get_mut(k) {
+                        *cell = Rect::from_min_size(pos2(x, y), vec2(w, h + footer));
+                    }
                     x += w + gap;
                 }
                 out.rows.push(GridRow { top: y, bottom: y + h + footer, start: i, end: j });
@@ -950,7 +959,7 @@ fn group_header(app: &mut LccApp, ui: &mut egui::Ui, run: &DateRun, ids: &[Photo
         t.text_dim,
     );
     if resp.clicked() {
-        let group: Vec<u64> = ids[run.start..(run.start + run.count).min(ids.len())].iter().map(|p| p.0).collect();
+        let group: Vec<u64> = ids.get(run.start..(run.start + run.count).min(ids.len())).unwrap_or_default().iter().map(|p| p.0).collect();
         let m = ui.input(|i| i.modifiers);
         let mode = if m.command || m.shift { "add" } else { "replace" };
         let _ = app.run("library.select", json!({"ids": group, "mode": mode}));
@@ -2068,10 +2077,16 @@ pub fn context_menu(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
             ("dialog.mergePanorama", "Panorama…"),
             ("dialog.mergeHdrPanorama", "HDR Panorama…"),
             ("dialog.mergeFocusStack", "Focus Stack…"),
+            (crate::menus::PIXEL_SHIFT_ID, crate::menus::PIXEL_SHIFT_LABEL),
         ] {
             if ui.add_enabled(n >= 2, egui::Button::new(crate::i18n::tr(label))).clicked() {
                 let _ = app.run(id, json!({}));
             }
+        }
+        ui.separator();
+        let can_delete_sources = crate::menus::ui_enabled(app, crate::menus::DELETE_SOURCES_ID);
+        if ui.add_enabled(can_delete_sources, egui::Button::new(crate::i18n::tr(crate::menus::DELETE_SOURCES_LABEL))).clicked() {
+            let _ = app.run(crate::menus::DELETE_SOURCES_ID, json!({}));
         }
     });
     ui.separator();
@@ -2098,7 +2113,7 @@ pub fn context_menu(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
                 && let Some(into) = v.into_iter().next()
             {
                 match app.run("photo.moveToFolder", json!({"folder": into})) {
-                    Ok(r) => app.toast(ui.ctx(), crate::i18n::tr_format!("Moved {} photo(s)", r["moved"])),
+                    Ok(r) => app.toast(ui.ctx(), crate::i18n::tr_format!("Moved {} photo(s)", r.field("moved"))),
                     Err(e) => app.toast(ui.ctx(), e),
                 }
             }
@@ -2130,7 +2145,7 @@ pub fn context_menu(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     if ui.button(crate::i18n::tr("Find Similar Photos")).clicked() {
         match app.run("library.findSimilar", json!({"id": id.0})) {
             Ok(r) => {
-                let n = r["photos"].as_array().map_or(0, Vec::len);
+                let n = r.field("photos").as_array().map_or(0, Vec::len);
                 app.ui.view = crate::state::ViewMode::PhotoGrid;
                 app.toast(
                     ui.ctx(),
@@ -2150,7 +2165,7 @@ pub fn context_menu(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
                 match app.run("app.export", json!({"preset": p.name, "background": true})) {
                     Ok(r) if r.get("background").is_some() => {}
                     Ok(r) => {
-                        let n = r["files"].as_array().map_or(0, Vec::len);
+                        let n = r.field("files").as_array().map_or(0, Vec::len);
                         app.toast(ui.ctx(), crate::i18n::tr_format!("Exported {n} photo{}", if n == 1 { "" } else { "s" }, n = n));
                     }
                     Err(e) => app.toast(ui.ctx(), e),

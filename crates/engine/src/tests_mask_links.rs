@@ -391,3 +391,96 @@ fn the_selected_mask_follows_the_active_photo_to_its_linked_copy() {
     s.execute("library.select", &json!({"ids": [c.0]})).unwrap();
     assert_eq!(s.active_mask, None, "a photo without it: none");
 }
+
+/// Issue #1268: Copy can take some of the photo's masks (`masks`: their ids); Paste puts just
+/// those on, in the photo's order and linked to their originals. Without `masks` every mask goes,
+/// as before. A mask id the photo doesn't have, or a malformed list, is an error.
+#[test]
+fn copy_takes_a_subset_of_the_masks_and_paste_links_just_those() {
+    let (mut s, [a, b, c]) = photos::<3>();
+    s.execute("library.select", &json!({"ids": [a.0]})).unwrap();
+    s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+    s.execute("mask.add", &json!({"kind": "linear", "start": [0.5, 0.0], "end": [0.5, 0.5]})).unwrap();
+    s.execute("mask.add", &json!({"kind": "radial", "center": [0.2, 0.2]})).unwrap();
+    let mine = masks(&s, a);
+    assert_eq!(mine.len(), 3);
+    let names: Vec<&str> = mine.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(names, ["Radial Gradient", "Linear Gradient", "Radial Gradient 2"], "two radials don't share a name");
+    let (first, third) = (mine[0].id, mine[2].id);
+
+    // asked in reverse order: copied in the photo's order
+    let out = s.execute("develop.copy", &json!({"groups": ["masks"], "masks": [third, first]})).unwrap();
+    assert_eq!(out["masks"], json!([first, third]));
+    select(&mut s, &[b, c], b);
+    s.execute("develop.paste", &json!({})).unwrap();
+    for id in [b, c] {
+        let got = masks(&s, id);
+        let names: Vec<&str> = got.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, ["Radial Gradient", "Radial Gradient 2"], "only the two picked, in order");
+    }
+    let orig = masks(&s, a);
+    assert!(orig[1].link.is_empty(), "the mask left behind isn't linked");
+    for (k, o) in [(0, &orig[0]), (1, &orig[2])] {
+        assert!(!o.link.is_empty());
+        assert!([b, c].iter().all(|id| masks(&s, *id)[k].link == o.link), "each copy joins its own original");
+    }
+
+    // no `masks`: all of them, as before
+    s.execute("library.select", &json!({"ids": [a.0]})).unwrap();
+    let out = s.execute("develop.copy", &json!({"groups": ["masks"]})).unwrap();
+    assert!(out.get("masks").is_none());
+    s.execute("library.select", &json!({"ids": [c.0]})).unwrap();
+    s.execute("develop.paste", &json!({})).unwrap();
+    assert_eq!(masks(&s, c).len(), 3);
+
+    // an empty pick copies no mask
+    s.execute("library.select", &json!({"ids": [a.0]})).unwrap();
+    s.execute("develop.copy", &json!({"groups": ["masks"], "masks": []})).unwrap();
+    assert_eq!(s.clipboard.as_ref().and_then(|c| c.get("masks")).and_then(|m| m.as_array()).map(Vec::len), Some(0));
+
+    // hostile: errors, and the clipboard and the remembered choice stay as they were
+    let clip = s.clipboard.clone();
+    let remembered = s.dialogs.copy.clone();
+    for bad in [
+        json!({"groups": ["masks"], "masks": [9999]}),
+        json!({"groups": ["masks"], "masks": [-1]}),
+        json!({"groups": ["masks"], "masks": ["one"]}),
+        json!({"groups": ["masks"], "masks": [u64::MAX]}),
+        json!({"groups": ["masks"], "masks": 3}),
+        json!({"groups": ["light"], "masks": [first]}),
+    ] {
+        assert!(s.execute("develop.copy", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(s.clipboard, clip);
+    assert_eq!(s.dialogs.copy, remembered);
+}
+
+/// Issue #1268: a placeholder name the photographer gave ("Warmth") stays; an automatic name
+/// that would repeat gets a number, and a numbered name keeps its number while the mask selects
+/// the same; masks that already share a name keep it.
+#[test]
+fn automatic_mask_names_get_a_number_only_where_they_would_repeat() {
+    let (mut s, [a]) = photos::<1>();
+    s.execute("library.select", &json!({"ids": [a.0]})).unwrap();
+    s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+    s.execute("mask.add", &json!({"kind": "radial", "name": "Warmth"})).unwrap();
+    s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+    let names = |s: &Session| masks(s, a).iter().map(|m| m.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&s), ["Radial Gradient", "Warmth", "Radial Gradient 2"]);
+    // an edit that doesn't change what it selects keeps the number
+    let third = masks(&s, a)[2].id;
+    s.execute("mask.adjust", &json!({"id": third, "values": {"exposure": 0.5}})).unwrap();
+    assert_eq!(names(&s)[2], "Radial Gradient 2");
+    // a component of another kind: its new name, unique
+    s.execute("mask.addComponent", &json!({"id": third, "op": "add", "kind": "linear"})).unwrap();
+    assert_eq!(names(&s)[2], "Radial Gradient + Linear Gradient");
+    // masks that already shared a name (imported, or from before) keep it
+    let mut d = (*s.develop_of(a).unwrap()).clone();
+    for m in &mut d.masks {
+        m.name = "Radial Gradient".into();
+    }
+    s.set_develop(a, d, "test").unwrap();
+    let first = masks(&s, a)[0].id;
+    s.execute("mask.adjust", &json!({"id": first, "values": {"exposure": 0.2}})).unwrap();
+    assert!(names(&s).iter().all(|n| n == "Radial Gradient"), "{:?}", names(&s));
+}

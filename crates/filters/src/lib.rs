@@ -29,7 +29,7 @@ mod sniff;
 
 pub use about::About;
 pub use apply::{FrameInfo, ImageSource, MAX_MERGE, MAX_MERGE_BYTES};
-pub use manifest::{AnalyzeArea, Area, BaseTone, Header, Kind, Manifest, ParamSection, ParamSpec, Stage};
+pub use manifest::{AnalyzeArea, Area, Bands, BaseTone, Header, Kind, Manifest, ParamSection, ParamSpec, Stage};
 pub use registry::{FolderReport, Registry};
 pub use runtime::{ABI_VERSION, Filter, Limits};
 pub use sniff::is_filter_module;

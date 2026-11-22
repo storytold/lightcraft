@@ -5,9 +5,10 @@
 //!
 //! The engine does the looking (`faces.unnamed`) and the naming (`faces.nameFaces`); this draws and selects.
 
+use crate::json_ext::JsonExt as _;
 use std::sync::Arc;
 
-use egui::{Align2, Color32, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Align2, Color32, Rect, RichText, Sense, Stroke, StrokeKind, pos2};
 use serde_json::{Value, json};
 
 use crate::LccApp;
@@ -19,10 +20,24 @@ use crate::widgets::register;
 pub struct UnnamedFace {
     pub photo: u64,
     pub index: usize,
+    /// The face's own box in the photo: what a command about it sends, so the engine can refuse a face that changed.
+    pub rect: lcc_geom::Rect,
+    /// The box to show it by (a little wider than `rect`, a recognition model's own crop where it has one).
     pub view: lcc_geom::Rect,
     pub suggestion: Option<String>,
     /// Its look-alike group (#259), once recognition has compared it: faces sharing one can be selected at once.
     pub group: Option<usize>,
+}
+
+/// One person's suggested faces (issue #1050): the faces the named ones recognise as them, most alike first, so one
+/// person's suggestions are reviewed (confirmed or rejected) together.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SuggestionGroup {
+    /// The person suggested, as the faces named them.
+    pub name: String,
+    /// How many of the listed faces are in this group (`faces.len()`, a face never in two).
+    pub total: usize,
+    pub faces: Vec<UnnamedFace>,
 }
 
 /// What `faces.unnamed` said.
@@ -35,6 +50,11 @@ pub struct Unnamed {
     pub ordered: bool,
     /// Recognition is running.
     pub ready: bool,
+    /// The listed faces that carry a suggestion, grouped under the person it suggests (`faces.unnamed {bySuggestion:
+    /// true}`), the most suggested faces first. Empty when it was not asked for.
+    pub groups: Vec<SuggestionGroup>,
+    /// How many listed faces carry no suggestion because the user rejected that person for them.
+    pub rejected: usize,
 }
 
 fn rect_of(v: &Value) -> Option<lcc_geom::Rect> {
@@ -45,19 +65,42 @@ fn face_of(v: &Value) -> Option<UnnamedFace> {
     Some(UnnamedFace {
         photo: v["photo"].as_u64()?,
         index: usize::try_from(v["index"].as_u64()?).ok()?,
+        rect: rect_of(&v["rect"]).or_else(|| rect_of(&v["view"]))?,
         view: rect_of(&v["view"]).or_else(|| rect_of(&v["rect"]))?,
-        suggestion: v["suggestion"]["name"].as_str().map(str::to_string),
+        suggestion: v.field("suggestion").field("name").as_str().map(str::to_string),
         group: v["group"].as_u64().and_then(|g| usize::try_from(g).ok()),
     })
 }
 
+fn count(v: &Value) -> usize {
+    v.as_u64().map_or(0, |n| usize::try_from(n).unwrap_or(0))
+}
+
 /// The engine's answer as a list (anything that does not make sense is left out).
 pub fn parse(v: &Value) -> Unnamed {
+    let groups = v["groups"]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(|g| {
+                    let name = g["name"].as_str().map(str::trim).filter(|n| !n.is_empty())?;
+                    let mut faces: Vec<UnnamedFace> = g["faces"].as_array().map(|a| a.iter().filter_map(face_of).collect()).unwrap_or_default();
+                    // a group says who it is about, even where the faces carry only a score
+                    for face in &mut faces {
+                        face.suggestion.get_or_insert_with(|| name.to_string());
+                    }
+                    Some(SuggestionGroup { name: name.to_string(), total: faces.len().max(count(&g["total"])), faces })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     Unnamed {
-        total: v["total"].as_u64().map_or(0, |n| usize::try_from(n).unwrap_or(0)),
+        total: count(&v["total"]),
         faces: v["faces"].as_array().map(|a| a.iter().filter_map(face_of).collect()).unwrap_or_default(),
         ordered: v["ordered"] == true,
         ready: v["ready"] == true,
+        groups,
+        rejected: count(&v["rejected"]),
     }
 }
 
@@ -72,21 +115,25 @@ pub fn faces(app: &mut LccApp, now: f64) -> Arc<Unnamed> {
     {
         return list.clone();
     }
-    let v = app.session.execute("faces.unnamed", &json!({"scope": "filter"})).unwrap_or(Value::Null);
+    let v = app.session.execute("faces.unnamed", &json!({"scope": "filter", "bySuggestion": true})).unwrap_or(Value::Null);
     let list = Arc::new(parse(&v));
-    // what was selected and has since been named (or removed) is no longer selected
+    // what was selected and has since been named (or removed) is no longer selected; nor is a decision about a face
+    // that has left the list (a confirmed one is named by now, and the name is what keeps it out)
     let present: std::collections::HashSet<(u64, usize)> = list.faces.iter().map(|f| (f.photo, f.index)).collect();
     app.ui.unnamed_selected.retain(|k| present.contains(k));
+    app.ui.confirmed_suggestions.retain(|k| present.contains(k));
+    app.ui.rejected_suggestions.retain(|k| present.contains(k));
     app.caches.unnamed = Some((rev, indexed, now, list.clone()));
     list
 }
 
-/// A click on face number `i` of `list`: select it (or deselect it), or with Shift every face from the last one clicked.
-fn click(app: &mut LccApp, list: &Unnamed, i: usize, shift: bool) {
-    let Some(f) = list.faces.get(i) else { return };
+/// A click on face number `i` of the faces on screen (`visible`, a category's own slice of the listing, or the whole
+/// listing): select it (or deselect it), or with Shift every face from the last one clicked.
+fn click(app: &mut LccApp, visible: &[UnnamedFace], i: usize, shift: bool) {
+    let Some(f) = visible.get(i) else { return };
     match app.ui.unnamed_anchor.filter(|_| shift) {
         Some(a) => {
-            for f in list.faces.get(a.min(i)..=a.max(i)).unwrap_or_default() {
+            for f in visible.get(a.min(i)..=a.max(i)).unwrap_or_default() {
                 app.ui.unnamed_selected.insert((f.photo, f.index));
             }
         }
@@ -147,7 +194,7 @@ pub fn naming_bar(app: &mut LccApp, ui: &mut egui::Ui) {
         if field.ending == Some(crate::text_field::Ending::Return) && !chosen.is_empty() {
             submit = Some(chosen.clone());
         }
-        let label = if n == 1 { "Name face".to_string() } else { format!("Name {n} faces") };
+        let label = if n == 1 { crate::i18n::tr("Name face").to_string() } else { crate::i18n::tr_format!("Name {} faces", n).to_string() };
         let b = ui.add_enabled(!chosen.is_empty(), egui::Button::new(label));
         register(ui.ctx(), "unnamed:name", b.rect);
         if b.clicked() {
@@ -196,49 +243,23 @@ pub fn naming_bar(app: &mut LccApp, ui: &mut egui::Ui) {
     }
 }
 
-/// The heading of the section, at `at`, and what it says about where the faces come from.
-pub fn section_header(app: &mut LccApp, ui: &mut egui::Ui, list: &Unnamed, at: egui::Pos2, right: f32) {
-    let t = Tokens::get(ui.ctx());
-    let count = if list.total > list.faces.len() { format!("{} of {}", list.faces.len(), list.total) } else { list.total.to_string() };
-    let p = ui.painter();
-    p.text(at, Align2::LEFT_CENTER, "Unnamed faces", t.semibold(15.0), t.text);
-    p.text(pos2(right, at.y), Align2::RIGHT_CENTER, count, t.font(13.0), t.text_dim);
-    let sub = if !list.ready && list.faces.is_empty() {
-        "Turn on face recognition in Settings to find the faces in your photos.".to_string()
-    } else if list.faces.is_empty() && app.caches.faces_pending > 0 {
-        format!("Looking through your photos… {} left", app.caches.faces_pending)
-    } else if list.faces.is_empty() {
-        "No unnamed faces. Faces found in your photos appear here until you name them.".to_string()
-    } else if list.ordered {
-        "Faces that look alike are next to each other. Click to select, Shift-click for a range, then type a name.".to_string()
-    } else {
-        "Click faces to select them, Shift-click for a range, then type a name.".to_string()
+/// One face tile: face `i` of the faces on screen (`visible` — a category's slice of `list`, or all of it), drawn at `r`.
+pub fn tile(app: &mut LccApp, ui: &mut egui::Ui, list: &Unnamed, visible: &[UnnamedFace], i: usize, r: Rect, ppp: f32) -> egui::Response {
+    let keep;
+    let f = match visible.get(i) {
+        Some(f) => f,
+        None => {
+            keep = UnnamedFace {
+                photo: 0,
+                index: 0,
+                rect: lcc_geom::Rect { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 },
+                view: lcc_geom::Rect { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 },
+                suggestion: None,
+                group: None,
+            };
+            &keep
+        }
     };
-    p.text(pos2(at.x, at.y + 24.0), Align2::LEFT_CENTER, sub, t.font(12.0), t.text_dim);
-    if !list.ready && list.faces.is_empty() {
-        let r = Rect::from_min_size(pos2(at.x, at.y + 38.0), vec2(120.0, 22.0));
-        let b = ui.put(r, egui::Button::new(crate::i18n::tr("Open Settings")));
-        register(ui.ctx(), "unnamed:openSettings", b.rect);
-        if b.clicked() {
-            let _ = app.run("app.settings", json!({"tab": "faces"}));
-        }
-    } else if !list.faces.is_empty() {
-        let r = Rect::from_min_size(pos2(right - 130.0, at.y + 12.0), vec2(130.0, 22.0));
-        let all = app.ui.unnamed_selected.len() == list.faces.len();
-        let b = ui.put(r, egui::Button::new(crate::i18n::tr(if all { "Select none" } else { "Select all" })));
-        register(ui.ctx(), "unnamed:selectAll", b.rect);
-        if b.clicked() {
-            app.ui.unnamed_selected.clear();
-            if !all {
-                app.ui.unnamed_selected.extend(list.faces.iter().map(|f| (f.photo, f.index)));
-                app.ui.unnamed_focus = true;
-            }
-        }
-    }
-}
-
-/// One face tile, number `i` of `list`.
-pub fn tile(app: &mut LccApp, ui: &mut egui::Ui, list: &Unnamed, i: usize, r: Rect, f: &UnnamedFace, ppp: f32) {
     let t = Tokens::get(ui.ctx());
     let key = (f.photo, f.index);
     let selected = app.ui.unnamed_selected.contains(&key);
@@ -281,7 +302,7 @@ pub fn tile(app: &mut LccApp, ui: &mut egui::Ui, list: &Unnamed, i: usize, r: Re
         && a.clone().on_hover_text(crate::i18n::tr_format!("Name this face {who}", who = who)).clicked()
     {
         name(app, &[key], who);
-        return;
+        return resp;
     }
     // hovered: the whole photo, this face marked (#1147)
     super::face_preview::on_hover(app, &resp, f.photo, f.view, None);
@@ -293,7 +314,7 @@ pub fn tile(app: &mut LccApp, ui: &mut egui::Ui, list: &Unnamed, i: usize, r: Re
         app.ui.person_from = Some((None, f.photo));
     } else if resp.clicked() {
         let shift = ui.input(|i| i.modifiers.shift);
-        click(app, list, i, shift);
+        click(app, visible, i, shift);
     }
     // its look-alikes, selected at once to be named or ignored together (#259); or this face, ignored
     let alikes = look_alikes(list, f);
@@ -315,6 +336,12 @@ pub fn tile(app: &mut LccApp, ui: &mut egui::Ui, list: &Unnamed, i: usize, r: Re
             ui.close();
         }
     });
+    resp
+}
+/// One face of a category of the People view: [`tile`], for a category showing its own faces (its own order and
+/// selection) in place of the whole unnamed list.
+pub fn tile_at(app: &mut LccApp, ui: &mut egui::Ui, list: &Unnamed, visible: &[UnnamedFace], i: usize, r: Rect, ppp: f32) {
+    let _ = tile(app, ui, list, visible, i, r, ppp);
 }
 
 /// The faces in `f`'s look-alike group (`f` among them), or just `f` when it has none yet.
@@ -358,6 +385,7 @@ mod tests {
         assert_eq!((list.total, list.ordered, list.ready, list.faces.len()), (9, true, true, 2));
         assert_eq!(list.faces[0].suggestion.as_deref(), Some("Jane Doe"));
         assert_eq!(list.faces[0].view.x0, 0.12, "the view box is used when there is one");
+        assert_eq!(list.faces[0].rect.x0, 0.1, "the face's own box is kept for the commands that check it");
         assert_eq!((list.faces[1].view.x0, list.faces[1].suggestion.clone()), (0.1, None), "else the face's own box");
         assert_eq!(list.faces[0].group, None);
         for bad in [Value::Null, json!([]), json!({"faces": 5, "total": -1})] {

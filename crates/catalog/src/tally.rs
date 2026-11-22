@@ -36,6 +36,30 @@ impl Members {
         Members::Bits { words: Vec::new(), len: 0 }
     }
 
+    /// The photos `ids` (in any order, each once), as bits when the largest id is in proportion to how many there
+    /// are, as a set when not. Setting them one by one in a list's order (a sort order is not an id order) would
+    /// start with a far-off id and turn into a set at once.
+    fn of_ids(ids: &[PhotoId]) -> Members {
+        let Some(top) = ids.iter().map(|id| id.0).max() else { return Members::none() };
+        match usize::try_from(top / 64 + 1) {
+            Ok(needed) if needed <= ids.len().saturating_mul(WORDS_A_MEMBER).saturating_add(WORDS_TO_START) => {
+                let mut words = vec![0u64; needed];
+                let mut len = 0usize;
+                for id in ids {
+                    let bit = 1u64 << (id.0 % 64);
+                    if let Some(word) = usize::try_from(id.0 / 64).ok().and_then(|at| words.get_mut(at))
+                        && *word & bit == 0
+                    {
+                        *word |= bit;
+                        len += 1;
+                    }
+                }
+                Members::Bits { words, len }
+            }
+            _ => Members::Set(ids.iter().copied().collect()),
+        }
+    }
+
     fn len(&self) -> usize {
         match self {
             Members::Bits { len, .. } => *len,
@@ -207,6 +231,67 @@ impl AlbumTally {
     }
 }
 
+/// How many photos match one [`Filter`], as of one revision of the catalog, kept up to date the way [`AlbumTally`] keeps
+/// an album's count: after a small edit only the photos the edit touched are asked the filter again. The filter has to
+/// be one whose answer for a photo depends on that photo alone (and on albums and rules that only an op on the
+/// album changes, which is not followed): not one that reaches over the library (Recently Added's cut-off) or the
+/// clock ("in the last…" rules).
+#[derive(Clone, Debug)]
+pub struct FilterTally {
+    revision: u64,
+    members: Members,
+}
+
+impl FilterTally {
+    /// Counted from every photo.
+    pub fn of(cat: &Catalog, filter: &Filter) -> FilterTally {
+        let prepared = filter.prepare();
+        let mut members = Members::none();
+        for p in cat.photos().filter(|p| filter.matches_in(p, cat, &prepared)) {
+            members.set(p.id, true);
+        }
+        FilterTally { revision: cat.revision, members }
+    }
+
+    /// What a pass that already listed the photos matching the filter at `revision` knows: those photos, not asked
+    /// again. `matching` has to be every photo `filter` matches at that revision, each once, and no other, in any order.
+    pub fn from_matching(revision: u64, matching: &[PhotoId]) -> FilterTally {
+        FilterTally { revision, members: Members::of_ids(matching) }
+    }
+
+    /// How many photos match.
+    pub fn len(&self) -> usize {
+        self.members.len()
+    }
+
+    /// Whether no photo matches.
+    pub fn is_empty(&self) -> bool {
+        self.members.len() == 0
+    }
+
+    /// The catalog's revision the count is of.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Bring the count up to `cat` as it is now, for the same `filter`. `true` when that was done from the photos the
+    /// ops since touched (or nothing had changed), `false` when it could not be: the edit touched more than
+    /// [`MAX_FOLLOWED`] photos or more than photos, or is not remembered. The count is then untouched and to be made
+    /// again with [`FilterTally::of`]. `cat` has to be the catalog counted, further along (see [`AlbumTally::update`]).
+    pub fn update(&mut self, cat: &Catalog, filter: &Filter) -> bool {
+        if self.revision == cat.revision {
+            return true;
+        }
+        let Some(touched) = cat.touched_since(self.revision).filter(|touched| touched.len() <= MAX_FOLLOWED) else { return false };
+        let prepared = filter.prepare_one();
+        for id in touched {
+            self.members.set(id, cat.photo(id).is_some_and(|p| filter.matches_in(p, cat, &prepared)));
+        }
+        self.revision = cat.revision;
+        true
+    }
+}
+
 /// For each smart album, the most smart albums in a chain its rules lead through (itself included), or `None`
 /// when a loop is reachable from it (its answer may then depend on which albums are being evaluated around it).
 fn chain_heights(cat: &Catalog) -> HashMap<AlbumId, Option<usize>> {
@@ -304,5 +389,111 @@ mod tests {
         }
         assert!(matches!(&dense, Members::Bits { words, .. } if words.len() <= 200_000 / 64 + 1));
         assert_eq!(dense.len(), 200_000);
+    }
+
+    #[test]
+    fn photos_listed_in_any_order_are_kept_as_bits_when_their_ids_are_close_and_as_a_set_when_not() {
+        // a list in sort order starts anywhere: newest first has the largest id first
+        let listed: Vec<PhotoId> = (1..=200_000u64).rev().map(PhotoId).collect();
+        let tally = FilterTally::from_matching(7, &listed);
+        assert_eq!((tally.len(), tally.revision()), (200_000, 7));
+        assert!(matches!(&tally.members, Members::Bits { words, .. } if words.len() <= 200_000 / 64 + 1));
+        assert!(tally.members.holds(PhotoId(1)) && tally.members.holds(PhotoId(200_000)) && !tally.members.holds(PhotoId(200_001)));
+        let far = FilterTally::from_matching(7, &[PhotoId(9_000_000_000), PhotoId(3)]);
+        assert!(matches!(far.members, Members::Set(_)));
+        assert_eq!(far.len(), 2);
+        assert!(FilterTally::from_matching(7, &[]).is_empty());
+    }
+
+    /// A catalog of photos with the given ids, none rated.
+    fn catalog_of(ids: &[u64]) -> Catalog {
+        let mut cat = Catalog::new();
+        for id in ids {
+            let p = crate::Photo::new(
+                PhotoId(*id),
+                crate::Source::File { path: format!("/p/{id}.jpg") },
+                &format!("{id}.jpg"),
+                "JPEG",
+                60,
+                40,
+                "2026-01-01",
+            );
+            cat.apply(crate::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        }
+        cat
+    }
+
+    /// The photos rated three stars or more.
+    fn rated() -> Filter {
+        Filter { rating: 3, ..Default::default() }
+    }
+
+    fn rate(cat: &mut Catalog, id: u64, rating: u8) {
+        cat.apply(crate::Op::SetRating { id: PhotoId(id), rating }).unwrap();
+    }
+
+    #[test]
+    fn a_filter_tally_follows_photos_added_changed_and_removed() {
+        let mut cat = catalog_of(&[1, 2, 3, 4]);
+        let mut tally = FilterTally::of(&cat, &rated());
+        assert_eq!((tally.len(), tally.revision()), (0, cat.revision));
+        rate(&mut cat, 1, 5);
+        rate(&mut cat, 2, 4);
+        let added = crate::Photo::new(PhotoId(5), crate::Source::File { path: "/p/5.jpg".into() }, "5.jpg", "JPEG", 60, 40, "2026-01-01");
+        cat.apply(crate::Op::AddPhoto { photo: Box::new(crate::Photo { rating: 5, ..added }) }).unwrap();
+        assert!(tally.update(&cat, &rated()));
+        assert_eq!((tally.len(), tally.revision()), (3, cat.revision));
+        assert!(tally.members.holds(PhotoId(1)) && tally.members.holds(PhotoId(2)) && tally.members.holds(PhotoId(5)));
+        // one stops matching, one is removed: both leave
+        rate(&mut cat, 1, 0);
+        cat.apply(crate::Op::RemovePhoto { id: PhotoId(5) }).unwrap();
+        assert!(tally.update(&cat, &rated()));
+        assert_eq!((tally.len(), tally.revision()), (1, cat.revision));
+        assert!(tally.members.holds(PhotoId(2)) && !tally.members.holds(PhotoId(1)) && !tally.members.holds(PhotoId(5)));
+        // nothing changed: true, nothing asked
+        assert!(tally.update(&cat, &rated()));
+        assert_eq!(tally.len(), 1);
+    }
+
+    /// An edit that touched more than [`MAX_FOLLOWED`] photos, or one that is not remembered, leaves the tally as it
+    /// was (and says so), to be counted again with [`FilterTally::of`].
+    #[test]
+    fn a_filter_tally_that_cannot_follow_an_edit_is_left_untouched() {
+        let ids: Vec<u64> = (1..=300).collect();
+        let mut cat = catalog_of(&ids);
+        let mut tally = FilterTally::of(&cat, &rated());
+        let counted_at = tally.revision();
+        for id in 1..=(MAX_FOLLOWED as u64 + 1) {
+            rate(&mut cat, id, 5);
+        }
+        assert!(!tally.update(&cat, &rated()), "more than {MAX_FOLLOWED} photos touched");
+        assert_eq!((tally.len(), tally.revision()), (0, counted_at));
+        assert_eq!(FilterTally::of(&cat, &rated()).len(), MAX_FOLLOWED + 1, "counted again, it is right");
+
+        // an op that changes more than photos of its own is not followed photo by photo
+        let mut tally = FilterTally::of(&cat, &rated());
+        let counted_at = tally.revision();
+        let album = cat.alloc_album_id();
+        cat.apply(crate::Op::AddAlbum { album: Album::new(album, "Trip") }).unwrap();
+        rate(&mut cat, 300, 5);
+        assert!(!tally.update(&cat, &rated()), "touched_since is not known across an album change");
+        assert_eq!((tally.len(), tally.revision()), (MAX_FOLLOWED + 1, counted_at));
+    }
+
+    /// A tally made by [`FilterTally::from_matching`] over close ids is bits; a photo far away that starts matching
+    /// turns it into a set, and is held.
+    #[test]
+    fn a_filter_tally_of_bits_becomes_a_set_when_a_far_photo_matches() {
+        let mut cat = catalog_of(&[1, 2, 3]);
+        rate(&mut cat, 1, 5);
+        let mut tally = FilterTally::from_matching(cat.revision, &[PhotoId(1)]);
+        assert!(matches!(tally.members, Members::Bits { .. }));
+        let far =
+            crate::Photo::new(PhotoId(9_000_000_000), crate::Source::File { path: "/p/far.jpg".into() }, "far.jpg", "JPEG", 60, 40, "2026-01-01");
+        cat.apply(crate::Op::AddPhoto { photo: Box::new(crate::Photo { rating: 5, ..far }) }).unwrap();
+        assert!(tally.update(&cat, &rated()));
+        assert!(matches!(tally.members, Members::Set(_)), "ids too far apart for bits");
+        assert_eq!((tally.len(), tally.revision()), (2, cat.revision));
+        assert!(tally.members.holds(PhotoId(1)) && tally.members.holds(PhotoId(9_000_000_000)) && !tally.members.holds(PhotoId(2)));
     }
 }

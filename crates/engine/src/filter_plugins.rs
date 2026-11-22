@@ -352,3 +352,87 @@ pub fn info(f: &Filter) -> Value {
 pub fn sources() -> Vec<String> {
     registry().list().iter().filter_map(|f| f.source().map(str::to_string)).collect()
 }
+
+/// The values last set for the parameters filters remember (manifest `"remember": true`), by
+/// plug-in id: a newly added copy of the filter starts with them. Kept in the settings folder for
+/// the whole app (in memory only in tests, and when there is no settings folder).
+static REMEMBERED: Mutex<Option<serde_json::Map<String, Value>>> = Mutex::new(None);
+
+/// Most plug-ins whose values are kept, and most bytes the file may have.
+const MAX_REMEMBERED_PLUGINS: usize = 256;
+const MAX_REMEMBERED_BYTES: u64 = 1024 * 1024;
+
+fn remembered_path() -> Option<PathBuf> {
+    if cfg!(test) { None } else { crate::config::config_dir().map(|d| d.join("filter-remembered.json")) }
+}
+
+fn remembered_all() -> std::sync::MutexGuard<'static, Option<serde_json::Map<String, Value>>> {
+    let mut g = REMEMBERED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if g.is_none() {
+        // (a missing, oversized or unreadable file remembers nothing)
+        let read = remembered_path()
+            .filter(|p| std::fs::metadata(p).is_ok_and(|m| m.len() <= MAX_REMEMBERED_BYTES))
+            .and_then(|p| std::fs::read(p).ok())
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+        *g = Some(match read {
+            Some(Value::Object(m)) => m,
+            _ => serde_json::Map::new(),
+        });
+    }
+    g
+}
+
+/// The values plug-in `plugin`'s filter last had for the parameters it remembers.
+pub fn remembered(plugin: &str) -> serde_json::Map<String, Value> {
+    match remembered_all().as_ref().and_then(|m| m.get(plugin)) {
+        Some(Value::Object(v)) => v.clone(),
+        _ => serde_json::Map::new(),
+    }
+}
+
+/// Keeps those of `values` (already checked against the manifest) that are parameters plug-in
+/// `plugin` remembers (`keys`, its manifest's list), beside what it remembered before, and drops
+/// what it no longer remembers; written to the settings folder when there is one (a write that
+/// fails is logged: the values are still kept for this run).
+pub fn remember(plugin: &str, keys: &[String], values: &serde_json::Map<String, Value>) {
+    let new: Vec<(String, Value)> = values.iter().filter(|(k, _)| keys.contains(k)).map(|(k, v)| (k.clone(), v.clone())).collect();
+    if new.is_empty() {
+        return;
+    }
+    let mut g = remembered_all();
+    let Some(all) = g.as_mut() else { return };
+    if !all.contains_key(plugin) && all.len() >= MAX_REMEMBERED_PLUGINS {
+        return;
+    }
+    let entry = all.entry(plugin.to_string()).or_insert_with(|| Value::Object(serde_json::Map::new()));
+    if !entry.is_object() {
+        *entry = Value::Object(serde_json::Map::new());
+    }
+    let Some(m) = entry.as_object_mut() else { return };
+    let mut changed = false;
+    for (k, v) in new {
+        if m.get(&k) != Some(&v) {
+            m.insert(k, v);
+            changed = true;
+        }
+    }
+    // the parameters the plug-in no longer remembers go
+    let before = m.len();
+    m.retain(|k, _| keys.contains(k));
+    changed |= m.len() != before;
+    if !changed {
+        return;
+    }
+    if let (Some(path), Ok(bytes)) = (remembered_path(), serde_json::to_vec_pretty(&Value::Object(all.clone()))) {
+        let part = path.with_extension("part");
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&part, &bytes))
+            .and_then(|()| std::fs::rename(&part, &path));
+        if let Err(e) = written {
+            let _ = std::fs::remove_file(&part);
+            log::warn!("remembering filter settings in {}: {e}", path.display());
+        }
+    }
+}

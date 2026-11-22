@@ -312,6 +312,11 @@ pub struct DevelopSettings {
     /// without them keep their JSON and `hash64` (and every cached preview stays valid).
     #[serde(skip_serializing_if = "Primaries::is_default")]
     pub primaries: Primaries,
+    /// Levels (beyond Lightroom): black, midtone, white and output levels per channel, before the Tone
+    /// Curve. A channel at its defaults is not written, so settings without Levels keep their JSON and
+    /// `hash64` (and every cached preview stays valid).
+    #[serde(default, skip_serializing_if = "Levels::is_default")]
+    pub levels: Levels,
     /// Resolve-style HSL curves (the Witchcraft mode's Curves): free points over the hue circle,
     /// one curve each for hue, saturation and luminance. Not written while neutral.
     #[serde(default, skip_serializing_if = "HslCurves::is_neutral")]
@@ -437,6 +442,7 @@ impl Default for DevelopSettings {
             bw_mix: BwMix::default(),
             grading: ColorGrading::default(),
             primaries: Primaries::default(),
+            levels: Levels::default(),
             hsl_curves: HslCurves::default(),
             effects: Effects::default(),
             vignette: Vignette::default(),
@@ -724,6 +730,12 @@ pub struct Light {
     /// Mode for Contrast and Blacks: `Luminance` (default) or `Rgb` (issue #839).
     #[serde(skip_serializing_if = "ContrastMode::is_default")]
     pub contrast_mode: ContrastMode,
+    /// Brightness (beyond Lightroom; Capture One's Brightness), -100..100 (C1's -50..50 doubled). Lifts or darkens the
+    /// midtones, black and white stay fixed (`lcc_pipeline::brightness`, a stage on the encoded display values
+    /// before Levels / the Tone Curve). Left out of the JSON while 0, so existing settings keep their JSON and hash;
+    /// copying and presets write it explicitly (`presets::full_json`), so pasting an unedited photo resets it.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub brightness: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1062,6 +1074,197 @@ impl Primaries {
             .into_iter()
             .chain([&self.log_wheels.shadow, &self.log_wheels.midtone, &self.log_wheels.highlight, &self.log_wheels.offset])
             .all(|w| w.sat == 0.0 && w.lum == 0.0)
+    }
+}
+
+/// Smallest distance between the input black and white points (on the 0..255 scale). The points may lie either way
+/// round: black above white inverts the channel.
+pub const LEVELS_MIN_GAP: f64 = 2.0;
+/// One channel's Levels (beyond Lightroom): input black and white points (0..255), the signed midtone, and the
+/// output levels the input range is re-mapped to (0..255). Black above white inverts the channel, and so does
+/// output black above output white.
+///
+/// The midtone is the signed number Capture One shows (-1 to +1, 0 neutral): positive brightens the midtones (the
+/// marker moves toward the shadows), negative darkens them. It is a value, not a marker position, so it stays valid
+/// whenever the black or white point moves past where the marker was; [`ChannelLevels::midtone_position`] and
+/// [`ChannelLevels::set_midtone_position`] convert for the marker and its box. The curve it stands for is
+/// [`crate::levels_curve`].
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(from = "ChannelLevelsWire")]
+pub struct ChannelLevels {
+    pub black: f64,
+    /// -1..+1, 0 neutral. See [`ChannelLevels::midtone_position`].
+    pub midtone: f64,
+    pub white: f64,
+    pub out_black: f64,
+    pub out_white: f64,
+}
+
+/// What a channel is read from: whatever arrives (a sidecar, a preset, the catalog) is brought into range
+/// ([`ChannelLevels::sanitized`]), so no stored settings hold values the render would clamp.
+#[derive(Deserialize)]
+#[serde(default)]
+struct ChannelLevelsWire {
+    black: f64,
+    midtone: f64,
+    white: f64,
+    out_black: f64,
+    out_white: f64,
+}
+
+impl Default for ChannelLevelsWire {
+    fn default() -> Self {
+        let d = ChannelLevels::default();
+        Self { black: d.black, midtone: d.midtone, white: d.white, out_black: d.out_black, out_white: d.out_white }
+    }
+}
+
+impl From<ChannelLevelsWire> for ChannelLevels {
+    fn from(w: ChannelLevelsWire) -> Self {
+        ChannelLevels { black: w.black, midtone: w.midtone, white: w.white, out_black: w.out_black, out_white: w.out_white }.sanitized()
+    }
+}
+
+impl Default for ChannelLevels {
+    fn default() -> Self {
+        Self { black: 0.0, midtone: 0.0, white: 255.0, out_black: 0.0, out_white: 255.0 }
+    }
+}
+
+impl ChannelLevels {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The values brought into range: finite numbers within 0..255 (the midtone within -1..+1), and at least
+    /// [`LEVELS_MIN_GAP`] between black and white in whichever direction they lie (the white point
+    /// gives way, see [`Self::separate`]). Black above white is valid: it inverts the channel.
+    /// Whatever settings arrive, this is what renders.
+    pub fn sanitized(&self) -> ChannelLevels {
+        // (`+ 0.0` turns a negative zero into 0, so equal values never write differently)
+        let fin = |v: f64, d: f64, lo: f64, hi: f64| (if v.is_finite() { v.clamp(lo, hi) } else { d }) + 0.0;
+        let black = fin(self.black, 0.0, 0.0, 255.0);
+        let mut white = fin(self.white, 255.0, 0.0, 255.0);
+        if (white - black).abs() < LEVELS_MIN_GAP {
+            white = Self::separate(black, white);
+        }
+        ChannelLevels {
+            black,
+            midtone: fin(self.midtone, 0.0, -1.0, 1.0),
+            white,
+            out_black: fin(self.out_black, 0.0, 0.0, 255.0),
+            out_white: fin(self.out_white, 255.0, 0.0, 255.0),
+        }
+    }
+
+    /// The point `other` moved to when it comes within [`LEVELS_MIN_GAP`] of `fixed`: [`LEVELS_MIN_GAP`] away on
+    /// the side it was on (above `fixed` when level, which also decides a tie), or on the other side when
+    /// that side leaves the 0..255 scale.
+    fn separate(fixed: f64, other: f64) -> f64 {
+        let side = if other >= fixed { 1.0 } else { -1.0 };
+        let moved = fixed + side * LEVELS_MIN_GAP;
+        if (0.0..=255.0).contains(&moved) { moved } else { fixed - side * LEVELS_MIN_GAP }
+    }
+
+    /// Keeps the distance after the black point was set: the white point gives way, on the side it was on.
+    pub fn after_black_set(&mut self) {
+        self.black = self.black.clamp(0.0, 255.0);
+        if (self.white - self.black).abs() < LEVELS_MIN_GAP {
+            self.white = Self::separate(self.black, self.white);
+        }
+    }
+
+    /// Keeps the distance after the white point was set: the black point gives way, on the side it was on.
+    pub fn after_white_set(&mut self) {
+        self.white = self.white.clamp(0.0, 255.0);
+        if (self.white - self.black).abs() < LEVELS_MIN_GAP {
+            self.black = Self::separate(self.white, self.black);
+        }
+    }
+
+    /// Where the midtone marker sits on the 0..255 scale: the input level (between black and white) that comes
+    /// out as the middle of the output range. Neutral is halfway; the marker never leaves about a quarter to
+    /// seven tenths of the range ([`crate::levels_curve::marker`]), toward black for a positive midtone.
+    pub fn midtone_position(&self) -> f64 {
+        let c = self.sanitized();
+        c.black + (c.white - c.black) * crate::levels_curve::marker(c.midtone)
+    }
+
+    /// Sets the midtone from a marker position typed or dragged on the 0..255 scale (the inverse of
+    /// [`Self::midtone_position`]; a position the marker cannot reach gives -1 or +1). The position of the neutral
+    /// midtone is `(black + white) / 2`; that level, rounded as the box shows it (127.5 shows as 128), sets exactly 0.
+    pub fn set_midtone_position(&mut self, pos: f64) {
+        let c = self.sanitized();
+        if !pos.is_finite() {
+            return;
+        }
+        let centre = (c.black + c.white) / 2.0;
+        if (pos - centre.round()).abs() < 1e-9 {
+            self.midtone = 0.0;
+            return;
+        }
+        let p = ((pos - c.black) / (c.white - c.black)).clamp(0.0, 1.0);
+        self.midtone = crate::levels_curve::from_marker(p);
+    }
+}
+
+/// Levels (beyond Lightroom, Capture One's tool of that name): per channel black, midtone, white and
+/// output levels, on the encoded display values after Exposure and before the Tone Curve. Each colour
+/// channel's own levels apply first, then `master` to all three. A channel at its defaults is not written (and
+/// not applied), so settings without Levels keep their JSON and `hash64`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Levels {
+    #[serde(skip_serializing_if = "ChannelLevels::is_default")]
+    pub master: ChannelLevels,
+    #[serde(skip_serializing_if = "ChannelLevels::is_default")]
+    pub red: ChannelLevels,
+    #[serde(skip_serializing_if = "ChannelLevels::is_default")]
+    pub green: ChannelLevels,
+    #[serde(skip_serializing_if = "ChannelLevels::is_default")]
+    pub blue: ChannelLevels,
+}
+
+impl Levels {
+    /// The channels, in the order the tool's tabs show them.
+    pub const CHANNELS: [&str; 4] = ["master", "red", "green", "blue"];
+
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Every channel written out (the neutral ones too), as a partial settings object: copy and presets carry
+    /// it, so a photo without Levels resets the Levels it is pasted on.
+    pub fn full_json(&self) -> serde_json::Value {
+        let mut o = serde_json::Map::new();
+        for ch in Self::CHANNELS {
+            if let Some(c) = self.channel(ch) {
+                o.insert(ch.to_string(), serde_json::to_value(c).unwrap_or(serde_json::Value::Null));
+            }
+        }
+        serde_json::Value::Object(o)
+    }
+
+    /// Channel `ch`: `master` (also `rgb`), `red`, `green` or `blue`.
+    pub fn channel(&self, ch: &str) -> Option<&ChannelLevels> {
+        match ch {
+            "master" | "rgb" => Some(&self.master),
+            "red" => Some(&self.red),
+            "green" => Some(&self.green),
+            "blue" => Some(&self.blue),
+            _ => None,
+        }
+    }
+
+    /// Channel `ch` to change (see [`Levels::channel`]).
+    pub fn channel_mut(&mut self, ch: &str) -> Option<&mut ChannelLevels> {
+        match ch {
+            "master" | "rgb" => Some(&mut self.master),
+            "red" => Some(&mut self.red),
+            "green" => Some(&mut self.green),
+            "blue" => Some(&mut self.blue),
+            _ => None,
+        }
     }
 }
 
@@ -1444,10 +1647,18 @@ impl Geometry {
 #[serde(default)]
 pub struct Crop {
     pub geometry: CropGeometry,
-    /// Locked aspect (w, h); None = free / original.
+    /// Locked aspect (w × 100, h × 100); None = free. "Original" is the photo's own size as
+    /// oriented ([`Crop::original_aspect`]).
     pub aspect: Option<(u32, u32)>,
     pub flip_h: bool,
     pub flip_v: bool,
+}
+
+impl Crop {
+    /// The "Original" aspect lock of a `w × h` photo (as oriented): its own size, in hundredths.
+    pub fn original_aspect(w: f64, h: f64) -> (u32, u32) {
+        ((w * 100.0) as u32, (h * 100.0) as u32)
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

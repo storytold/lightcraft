@@ -2,6 +2,7 @@
 //! upstream's "My Photos" sidebar (library sources, albums tree, date groups), which Develop keeps
 //! as one of its panels.
 
+use crate::json_ext::JsonExt as _;
 use egui::{Align2, Rect, Sense, pos2, vec2};
 use lcc_catalog::{Album, AlbumId, FolderNode, KeywordNode};
 use lcc_engine::LibrarySource;
@@ -1039,7 +1040,7 @@ fn local_rows(app: &mut LccApp, ui: &mut egui::Ui, now: &LocalNow) {
             match app.run("library.browse", json!({"path": path, "show": "all"})) {
                 // the picked folder stays in Local (and comes back if it was hidden)
                 Ok(r) => {
-                    let dir = r["path"].as_str().unwrap_or(&path).to_string();
+                    let dir = r.field("path").as_str().unwrap_or(&path).to_string();
                     let _ = app.run("local.addRoot", json!({"path": dir}));
                 }
                 Err(e) => app.toast(ui.ctx(), e),
@@ -1832,7 +1833,7 @@ fn folder_menu(app: &mut LccApp, resp: &egui::Response, a: &Album) {
         {
             match app.run("album.duplicate", json!({"id": a.id.0})) {
                 Ok(r) => {
-                    if let Some(n) = r["id"].as_u64() {
+                    if let Some(n) = r.field("id").as_u64() {
                         let _ = app.run("library.source", json!({"kind": "album", "id": n}));
                     }
                 }
@@ -2059,19 +2060,22 @@ fn shape_folders(mut nodes: Vec<FolderNode>, lift: bool, shown: &std::collection
 /// if that is the same too, the whole path.
 fn disambiguate(nodes: &mut [FolderNode]) {
     let clash = |nodes: &[FolderNode], i: usize| {
-        let n = &nodes[i];
+        let Some(n) = nodes.get(i) else { return false };
         !n.volume && nodes.iter().enumerate().any(|(j, m)| j != i && !m.volume && m.name.to_lowercase() == n.name.to_lowercase())
     };
     let clashing: Vec<usize> = (0..nodes.len()).filter(|&i| clash(nodes, i)).collect();
     for &i in &clashing {
-        let parent = std::path::Path::new(&nodes[i].path).parent().and_then(|p| p.file_name()).map(|f| f.to_string_lossy().to_string());
+        let Some(node) = nodes.get_mut(i) else { continue };
+        let parent = std::path::Path::new(&node.path).parent().and_then(|p| p.file_name()).map(|f| f.to_string_lossy().to_string());
         if let Some(parent) = parent {
-            nodes[i].name = format!("{} ({parent})", nodes[i].name);
+            node.name = format!("{} ({parent})", node.name);
         }
     }
     let still: Vec<usize> = clashing.into_iter().filter(|&i| clash(nodes, i)).collect();
     for i in still {
-        nodes[i].name = nodes[i].path.clone();
+        if let Some(node) = nodes.get_mut(i) {
+            node.name = node.path.clone();
+        }
     }
 }
 
@@ -2245,7 +2249,7 @@ fn spring_open(app: &mut LccApp, ui: &egui::Ui, n: &FolderNode, key: &str, open_
 pub(crate) fn move_photos(app: &mut LccApp, ids: Option<&[u64]>, path: &str) -> Result<u64, String> {
     let mut params = json!({"folder": path});
     if let Some(ids) = ids {
-        params["ids"] = json!(ids);
+        *params.field_mut("ids") = json!(ids);
     }
     let r = app.run("photo.moveToFolder", params)?;
     let visible: std::collections::HashSet<lcc_catalog::PhotoId> = app.session.visible_cloned().into_iter().collect();
@@ -2254,7 +2258,7 @@ pub(crate) fn move_photos(app: &mut LccApp, ids: Option<&[u64]>, path: &str) -> 
     if sel.active.is_some_and(|a| !visible.contains(&a)) {
         sel.active = sel.ids.first().copied();
     }
-    Ok(r["moved"].as_u64().unwrap_or(0))
+    Ok(r.field("moved").as_u64().unwrap_or(0))
 }
 
 /// What a move of `n` photos into the folder `name` says: how many moved and that Undo moves them
@@ -2642,7 +2646,7 @@ fn folder_item(app: &mut LccApp, ui: &mut egui::Ui, row: FolderRow, item: Folder
                 let picked = app.services.pick_folder.as_mut().and_then(|f| f());
                 if let Some(to) = picked {
                     match app.run("folder.relocate", json!({"path": path, "to": to})) {
-                        Ok(r) => app.toast(ui.ctx(), crate::i18n::tr_format!("{n} photos relinked", n = r["relinked"].as_u64().unwrap_or(0))),
+                        Ok(r) => app.toast(ui.ctx(), crate::i18n::tr_format!("{n} photos relinked", n = r.field("relinked").as_u64().unwrap_or(0))),
                         Err(e) => app.toast(ui.ctx(), e),
                     }
                 }

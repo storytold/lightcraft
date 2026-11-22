@@ -195,8 +195,10 @@ message.
 
 | Build | File | Notes |
 |---|---|---|
-| App, universal (Apple silicon + Intel) | `<binary>-<ver>-macos-universal.dmg` | Not signed or notarized: macOS asks you to allow it on first open ([how](docs/manual/getting-started.md#install)) |
-| Command-line tool, universal | `<cli>-<ver>-macos-universal.zip` | Not signed or notarized: macOS asks you to allow it on first open ([how](docs/manual/getting-started.md#install)) |
+| App, Apple silicon | `<binary>-<ver>-macos-arm64.dmg` | Not signed or notarized: macOS asks you to allow it on first open ([how](docs/manual/getting-started.md#install)) |
+| App, Intel | `<binary>-<ver>-macos-x64.dmg` | As above |
+| App, universal (Apple silicon + Intel) | `<binary>-<ver>-macos-universal.dmg` | Both builds in one, twice the size; published while installed copies update through it |
+| Command-line tool | inside the app: `<app>.app/Contents/MacOS/<cli>` | Updates with the app; to run it from Terminal, link it onto `PATH` ([how](docs/manual/getting-started.md#install)) |
 
 ### Linux
 

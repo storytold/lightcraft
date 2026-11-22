@@ -173,26 +173,37 @@ names alone do not guarantee the same speed, and those additional model files we
 
 ### On the GPU
 
-On a machine with a usable GPU, the whole detector and recogniser run on it through wgpu (`crates/gpu/src/faces.rs`).
+On a machine with a usable GPU, the whole detector and recogniser run on it through pure-Rust wgpu (`crates/gpu/src/faces.rs`).
 The interpreter lowers the graph to a flat program for the input's shape (`crates/faces/src/net/program.rs`): each
-convolution (`wgsl/faces_conv.wgsl`: an implicit matrix product that gathers the input straight into workgroup memory,
-cuts K into slices when a map is small, and a direct kernel for depthwise layers) and every other operator (activations,
-batch norm, PRelu, broadcasting add/sub/mul, max pooling, nearest upscaling, transposes, global pooling and the fully
-connected layer, `wgsl/faces_ops.wgsl`) is a kernel, every value stays on the device between layers in reused
-buffers, and a run is one upload, one submission and one read-back. Shape-only operators make no step. A model that
-needs something the program cannot express runs its convolutions one by one on the GPU instead. Several faces of one
-photo go together (`Embedder::embed_batch`, up to 16 per submission).
+convolution (`wgsl/faces_conv.wgsl` and mixed-precision `wgsl/faces_conv_f16.wgsl`: a batched `[B, C, H, W]` implicit matrix
+product that gathers inputs and shared weights into workgroup memory across all faces in a batch, cuts `K` into slices
+when a map is small, and uses a direct kernel for depthwise layers) and every other operator (activations, batch norm,
+PReLU, broadcasting add/sub/mul, max pooling, nearest upscaling, transposes, global pooling and the fully connected
+layer, `wgsl/faces_ops.wgsl` and `wgsl/faces_ops_f16.wgsl`) is a kernel, intermediate values stay on the device in
+pooled scratch buffers, and a whole batch runs in one submission and read-back. Shape-only operators make no step.
+Several faces of one photo (`Embedder::embed_batch`, up to 16 per submission) and sliding detection windows in
+`FaceModel::detect_far` (up to 16 per submission) run batched on the GPU.
+
+When **Face models device** is set to **Automatic** in Settings ▸ Faces, selection prefers dedicated NVIDIA GPUs
+(`0x10de`) first, then other dedicated GPUs, before integrated adapters. When **GPU precision** is **Automatic** and
+the adapter supports `wgpu::Features::SHADER_F16` (Vulkan, DX12, Metal), weights and intermediate tensors use IEEE
+half-precision (`f16`) storage with `f32` accumulators and reductions, automatically falling back to `FP32` and then
+the CPU if a model exhibits numeric overflow, exceeds tolerance, or is slower than the CPU. Users can also pick a
+specific adapter or `CPU`, or force `FP16` or `FP32` (`faces.gpu`).
 
 The CPU interpreter remains the reference. After a model loads, a background check (a row in the activity stack, "Checking
-the GPU for faces") runs it once on the CPU and twice through the GPU on a fixed test input: the GPU is used only when
-every output is within 1e-3 of the CPU's (relative to the output's largest value) **and** it was faster; until then,
-and whenever the GPU is switched off (`<PREFIX>_GPU=0`, `<PREFIX>_GPU_BACKEND=off`, the GPU preference, or **Settings ▸
-Faces ▸ Run face models on the CPU only**), missing, wrong or slower, the model runs on the CPU. The first GPU error,
-or a result of the wrong size or with values that are not finite, drops it for that model. Settings ▸ Faces shows
-which device each model runs on (`faces.gpu`, with `card`: `second` or `editing`). The weights stay on a device of the
-scan's own (separate from the editor's) while the model is loaded, at most 768 MB per model: on the second graphics card
-(Settings ▸ Performance) when there is one, else on the card for editing. When that card stops working (a device error
-or loss), the scan offers the model to the other card, checked as at first, and runs on the CPU when that fails too.
+the GPU for faces") runs a 1-probe output check against the CPU (`1e-3` relative tolerance in FP32, `1e-2` in FP16)
+and, when not yet cached for `(driver/adapter, program fingerprint, precision)` in the on-disk plan cache
+(`face-models/.gpu-cache/plan-*.bin`), benchmarks an 8-face batch against the CPU. Until the check succeeds, and
+whenever the GPU is switched off (`<PREFIX>_GPU=0`, `<PREFIX>_GPU_BACKEND=off`, the GPU preference, or **Settings ▸
+Faces ▸ Face models device: CPU**), missing, wrong or slower, the model runs on the CPU. The first GPU error, or a
+result of the wrong size or with non-finite values, drops it for that model. Settings ▸ Faces shows which device and
+precision each model runs on (`faces.gpu`, with `card`: `second` or `editing`). When a multi-GPU card stops working,
+the scan offers the model to the other card and falls back to the CPU if that fails too.
+
+`Provenance note:` The GPU device selector, FP16 precision preference, and persistent plan-caching design follow pure-Rust
+wgpu implementations informed by [VisoMaster](https://github.com/visomaster/VisoMaster) (GPL-3.0-or-later) patterns
+(FP16 inference, plan caching, and NVIDIA/dedicated GPU selection) without copying third-party code or C++ dependencies.
 
 The background scan's pace also limits the GPU: paused or light, one model run at a time and the GPU busy at most a
 quarter of the time (the editor renders on the same GPU); normal, two at once and three quarters (the second graphics
@@ -337,13 +348,16 @@ yet: it opens Settings ▸ Faces, where the download is) or **Turn on** (a model
 on there and then). The loupe's name box offers the same ("Set up name suggestions…" / "Turn on name suggestions"), and so
 does a person's page.
 
-**People** shows a card for each named person (their face, with the number of photos they are in on the picture) and, below
-a line, the **Unnamed faces**: every face nobody has named, as cropped pictures. With recognition running, faces that look
-alike are next to each other (put in order by looking at every pair, for up to the first 1,500 embedded faces), and a face
-the named ones recognise carries the name they suggest along its bottom edge; click that name to accept it for that face.
-To name a group: click faces to select them (Shift-click selects a range, **Select all** takes every one listed), type a
-name in the bar that appears (people already named complete as you type), press Enter: all of them are named at once, as
-one undo step. Selecting names nothing.
+**People** has three categories, picked in the row at the top of the view (each shows its count):
+
+- **Unknown**: every face nobody has named and no name is suggested for, as cropped pictures. With recognition running,
+  faces that look alike are next to each other (put in order by looking at every pair, for up to the first 1,500 embedded
+  faces). To name a group: click faces to select them (Shift-click selects a range, **Select all** takes every one listed),
+  type a name in the bar that appears (people already named complete as you type), press Enter: all of them are named at
+  once, as one undo step. Selecting names nothing.
+- **Suggested**: the faces recognition has matched to a person, each person's faces under their own name, so one person's
+  suggestions are reviewed together. See [Suggested faces](#suggested-faces).
+- **Confirmed**: a card for each named person (their face, with the number of photos they are in on the picture).
 
 The unnamed faces follow the sidebar: pick a year, a folder or an album and only the faces in those photos are listed
 (`faces.unnamed {scope: "filter"}`), as the person cards are. A person filter is left aside here. On a person's page the
@@ -361,6 +375,32 @@ The thumbnail-size slider in the bottom bar sizes the faces here too, with limit
 same kind of box: the detector's own box once the scan has looked at it (kept beside its embedding), so a loosely drawn box
 from another tool does not make one face look farther away than the next; before the scan has looked at a face it is shown
 by its own box.
+
+### Suggested faces
+
+Recognition suggests a person for a face when that face looks like the ones named with them. Those faces wait in
+**Suggested**, grouped under the person the named faces picked out, the person with the most waiting faces first and each
+person's faces most alike first (`faces.unnamed {bySuggestion: true}`, which adds `groups` to its answer). A group is
+reviewed as a whole:
+
+- **✓ Confirm all** (or the **Confirm** button beside them in a group's own heading) names every one of that person's
+  suggested faces, in one undo step (`faces.confirmSuggestions`). It names a face what the named faces suggest for it
+  *now*, not what the list showed: a face whose suggestion has changed is left alone rather than named something it no
+  longer looks like.
+- **✗ Reject all** (`faces.rejectSuggestions`) says they are not that person. Nothing is named and nothing is ignored: the
+  face stays in **Unknown**, still detected, and that person is never suggested for it again — the rejection is kept in
+  `people.json` (`faces.suggestionDecisions` lists the decisions, and a person's page shows none of their rejected faces
+  again). A rejection changes no photo, so the catalog keeps no undo step for it: the toast's **Undo** calls
+  `faces.undoSuggestionDecision`, which forgets the decision so the suggestion comes back.
+- **− Ignore** leaves the face out of People altogether (`faces.ignore`), as it always has; see below.
+
+A click on one face's **✓**, **✗** or **−** decides about that face alone, with the same commands. A click on the person's
+name in a group's heading opens their page, where the same faces are offered face by face.
+
+The decisions are per face region, and the engine applies them before anything is grouped, so a session's decisions show
+at once: a confirmed face is named (and leaves the list), a rejected face moves to **Unknown**, and neither is suggested
+as that person again. The heading over **Suggested** offers to confirm every suggestion on screen at once, in one undo
+step.
 
 ### Ignored faces
 
@@ -383,7 +423,11 @@ suggestions below that score, previously confirmed faces and hidden suggestions 
 without this explicit action.
 **Show photos** puts their photos in the grid; **‹ People** or Escape goes back. "More" only holds faces the scan has
 already embedded, so it fills in as the scan goes; it shows faces scoring above four fifths of the model's suggestion bar,
-since you look at each one before anything is named.
+since you look at each one before anything is named, and only those that score clearly higher for this person than for
+anyone else already named (by the margin name suggestions use), checked best first for up to four times the page's
+size. With Settings ▸ Faces ▸ Matching ▸ Ignore a person's odd faces (`faces.matching` `skipOdd`, off by default), a
+person's faces whose cosine to their average face is below 0.3 (a head from behind, someone misnamed) are left out of
+both comparisons, unless fewer than three would be left.
 
 The review queue, suggestion previews, and confirmation/rejection actions remain accessible when automatic background
 face recognition is turned off: candidate suggestions on already-embedded faces can still be reviewed, named, or rejected
@@ -435,7 +479,7 @@ reuses the pictures of its step instead of rendering every face again.
 
 All of this is reachable from the control channel, the CLI and MCP: `faces.models.list`, `faces.models.inspect {path}`,
 `faces.models.install {path, acknowledged: true, activate?}`, `faces.models.download {id, acknowledged: true}` (then `faces.models.downloads`, which also installs what has arrived, and `faces.models.downloadCancel {id}`), `faces.models.remove {id}`, `faces.models.select {id}`,
-`faces.enable {enabled?}`, `faces.detect {ids?, apply?}`, `faces.index {budgetMs?, ids?}`, `faces.pump` (what the app calls every frame), `faces.suggest {ids?, threshold?, margin?}`, `faces.person {name, more?}` (a person's faces and the unnamed faces that look like them), `faces.unnamed {limit?}` (every unnamed face, look-alikes together, with suggested names), `faces.setName {id?, index, name}`, `faces.nameFaces {faces: [{photo, index}], name}` (name many at once, one undo step), `faces.renamePerson {from, to, merge?}` (rename every in-library face of one person, or merge two when `merge` is true, one undo step) and `faces.evaluate`. `acknowledged` must be `true`: the caller has shown the user the terms and the user agreed. Installing makes the model the one in use and switches recognition on unless `activate` is `false`.
+`faces.enable {enabled?}`, `faces.detect {ids?, apply?}`, `faces.index {budgetMs?, ids?}`, `faces.pump` (what the app calls every frame), `faces.suggest {ids?, threshold?, margin?}`, `faces.person {name, more?}` (a person's faces and the unnamed faces that look like them), `faces.unnamed {limit?}` (every unnamed face, look-alikes together, with suggested names), `faces.setName {id?, index, name}`, `faces.nameFaces {faces: [{photo, index}], name}` (name many at once, one undo step), `faces.renamePerson {from, to, merge?}` (rename every in-library face of one person, or merge two when `merge` is true, one undo step), `faces.confirmSuggestions {faces}` and `faces.rejectSuggestions {faces}` (the Suggested category's decisions: name the faces what is suggested for them now, one undo step; or keep them unknown and suggest that person no more), `faces.undoSuggestionDecision {faces}` (forget a decision, so the suggestion is back) and `faces.suggestionDecisions {photo?}` (what was decided, a page at a time), and `faces.evaluate`. `faces.unnamed {bySuggestion: true}` also answers `groups`: the suggested faces under the person suggested, the most faces first. Neither a confirmation nor a rejection writes to a photo's sidecar: a confirmation is a name on a face region (catalog only, undoable), a rejection is a line in `people.json`. `acknowledged` must be `true`: the caller has shown the user the terms and the user agreed. Installing makes the model the one in use and switches recognition on unless `activate` is `false`.
 
 ## Find Blemishes
 

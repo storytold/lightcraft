@@ -24,6 +24,7 @@ use wasmi::{
 
 use crate::context::CallContext;
 use crate::manifest::{MAX_MANIFEST_BYTES, Manifest};
+use crate::signature::Signature;
 use crate::{Error, Result};
 
 /// The plug-in ABI version this host implements (`lcc_abi_version` must return it).
@@ -85,6 +86,11 @@ pub struct Plugin {
     size: usize,
     /// SHA-256 of the module's bytes: whether an update changed the code.
     digest: [u8; 32],
+    /// Its author signature: none or valid ([`Plugin::load`] refuses an invalid one).
+    signature: Signature,
+    /// Its file carries a stamped [`MANIFEST_SECTION`] (which [`Plugin::load`] checked is
+    /// `lcc_manifest`'s answer).
+    stamped: bool,
 }
 
 impl fmt::Debug for Plugin {
@@ -122,6 +128,8 @@ pub struct Inspection {
     pub source: ManifestSource,
     /// SHA-256 of the module's bytes, as [`Plugin::digest`].
     pub digest: [u8; 32],
+    /// Its author signature, an invalid one included (installing refuses it).
+    pub signature: Signature,
 }
 
 impl Inspection {
@@ -217,17 +225,24 @@ fn unpack(packed: i64) -> (i32, usize) {
 impl Plugin {
     /// Validates and loads a module: checks its imports, the ABI version and the manifest. A module
     /// with a stamped [`MANIFEST_SECTION`] is refused unless the section is exactly what
-    /// `lcc_manifest` returns, so an installed plug-in's section is always true.
+    /// `lcc_manifest` returns, so an installed plug-in's section is always true. One with an author
+    /// signature that doesn't hold up ([`Signature::Invalid`]) is refused, before anything runs.
     pub fn load(bytes: &[u8], limits: Limits) -> Result<Plugin> {
         let (engine, module) = compile(bytes, &limits)?;
-        Plugin::load_compiled(bytes, limits, engine, module)
+        let signature = crate::signature::read(&module, bytes);
+        if let Signature::Invalid(why) = signature {
+            return Err(Error::Signature(why));
+        }
+        Plugin::load_compiled(bytes, limits, engine, module, signature)
     }
 
-    /// [`Plugin::load`] for a module [`compile`] has already validated.
-    fn load_compiled(bytes: &[u8], limits: Limits, engine: Engine, module: Module) -> Result<Plugin> {
+    /// [`Plugin::load`] for a module [`compile`] has already validated, signed as `signature`
+    /// ([`crate::signature::read`], read once: it hashes the whole module).
+    fn load_compiled(bytes: &[u8], limits: Limits, engine: Engine, module: Module, signature: Signature) -> Result<Plugin> {
         let section = stamped_section(&module)?.map(<[u8]>::to_vec);
         let digest = Sha256::digest(bytes).into();
-        let mut p = Plugin { manifest: placeholder_manifest(), engine, module, limits, size: bytes.len(), digest };
+        let stamped = section.is_some();
+        let mut p = Plugin { manifest: placeholder_manifest(), engine, module, limits, size: bytes.len(), digest, signature, stamped };
         let deadline = Deadline::new(&p.limits);
         let mut live = p.instantiate()?;
         let version: TypedFunc<(), i32> = live.func("lcc_abi_version")?;
@@ -256,16 +271,19 @@ impl Plugin {
     /// [`MANIFEST_SECTION`] is validated but never instantiated: the manifest is the section's, a
     /// claim [`Plugin::load`] checks on install ([`ManifestSource::Section`]). One without a section,
     /// or any module when `verify` is set, is loaded as [`Plugin::load`] loads it and gives
-    /// `lcc_manifest`'s answer ([`ManifestSource::Export`]).
+    /// `lcc_manifest`'s answer ([`ManifestSource::Export`]). Its author signature is read either
+    /// way, an invalid one included (installing refuses it; inspecting says why).
     pub fn inspect(bytes: &[u8], limits: Limits, verify: bool) -> Result<Inspection> {
         let (engine, module) = compile(bytes, &limits)?;
         if !verify && let Some(section) = stamped_section(&module)? {
             check_exports(&module)?;
             let manifest = Manifest::parse(section)?;
-            return Ok(Inspection { manifest, source: ManifestSource::Section, digest: Sha256::digest(bytes).into() });
+            let signature = crate::signature::read(&module, bytes);
+            return Ok(Inspection { manifest, source: ManifestSource::Section, digest: Sha256::digest(bytes).into(), signature });
         }
-        let p = Plugin::load_compiled(bytes, limits, engine, module)?;
-        Ok(Inspection { manifest: p.manifest, source: ManifestSource::Export, digest: p.digest })
+        let signature = crate::signature::read(&module, bytes);
+        let p = Plugin::load_compiled(bytes, limits, engine, module, signature)?;
+        Ok(Inspection { manifest: p.manifest, source: ManifestSource::Export, digest: p.digest, signature: p.signature })
     }
 
     pub fn manifest(&self) -> &Manifest {
@@ -284,6 +302,15 @@ impl Plugin {
     /// SHA-256 of the module's bytes.
     pub fn digest(&self) -> &[u8; 32] {
         &self.digest
+    }
+    /// Its author signature: [`Signature::None`] or [`Signature::Valid`].
+    pub fn signature(&self) -> &Signature {
+        &self.signature
+    }
+    /// Its file carries a stamped manifest section, the same as `lcc_manifest`'s answer: what its
+    /// update's permissions are read from before anything of the update runs.
+    pub fn stamped(&self) -> bool {
+        self.stamped
     }
     /// [`Plugin::digest`] as lowercase hex, as `plugin.list` gives it (`moduleHash`, like a pixel filter's).
     pub fn module_hash(&self) -> String {
@@ -543,6 +570,7 @@ fn placeholder_manifest() -> Manifest {
         icon: None,
         header: None,
         about: Default::default(),
+        update_url: None,
         dropped: Vec::new(),
     }
 }

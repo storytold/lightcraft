@@ -95,7 +95,7 @@ The app is young and moving fast. **Where we honestly stand** (details in the [r
 - **As a day-to-day Lightroom replacement we're nearer 60–70%.** It's great for JPEG/DNG and most Nikon / Sony /
   older-Canon raws on one machine.
 - **The biggest gaps:**
-  - **camera colour calibration:** Sony, Nikon, Panasonic, Fujifilm and Canon CR3 raws have guarded estimates from their camera JPEGs, with built-in profiles for twelve bodies (ILCA-99M2, ILCE-7CR, ILCE-7M4, ILCE-7RM5, X-H2S, X-T4, Nikon Z 6II, Z 8, D5300, D750, D780, D90), matrices fitted to measured spectral sensitivities for 52 more (Profile ▸ Calibrated camera colour), dcraw's matrices for about 550 more models, and your own `.dcp` camera profiles import; colour-chart and Lightroom-matched calibration tools exist, but a measured calibration database of our own is still missing;
+  - **camera colour calibration:** Sony, Nikon, Panasonic, Fujifilm and Canon CR3 raws have guarded estimates from their camera JPEGs, with built-in profiles for twenty bodies (among them ILCA-99M2, ILCE-7CR, ILCE-7M4, ILCE-7RM5, X-H2S, X-T4, Nikon Z 6II, Z 8, D5300, D750, D780, D90, Panasonic DMC-GM5), matrices fitted to measured spectral sensitivities for 52 more (Profile ▸ Calibrated camera colour), dcraw's matrices for about 550 more models, and your own `.dcp` camera profiles import; colour-chart and Lightroom-matched calibration tools exist, but a measured calibration database of our own is still missing;
   - **per-model raw verification:** 596 of 1,446 models (41%) are verified on real files, so about 7 in 8 photographers shoot a verified body; other bodies are unverified, see [docs/raw-parity.md](../raw-parity.md);
   - **AI quality:** Subject / Background (BiRefNet) and Object (SAM 3) masks are optional downloads; sky is still heuristic, denoise quality is unverified;
   - **network libraries:** a preview reads the raw's header and its embedded JPEG only (56.5 MB → 5.9 MB, 10 s → 1 s on the test share), but the *developed* picture still needs the sensor data over the wire; see [docs/raw-preview-reads.md](../raw-preview-reads.md);
@@ -106,7 +106,7 @@ The app is young and moving fast. **Where we honestly stand** (details in the [r
 |---|---|
 | Library: albums, folders, smart albums, stacks (incl. auto-stack), virtual copies, ratings, flags, labels, filter bar, search, sort, grids, filmstrip | ✅ |
 | Culling: Compare (synced zoom) and Survey views, auto-advance, instant previews | ✅ |
-| Light, Color, Effects (vignette styles), Tone Curve (+ refine saturation, targeted adjustment), Color Mixer (+ targeted), Point Color, Color Grading, Calibration, B&W | ✅ |
+| Light, Color, Effects (vignette styles), Levels, Tone Curve (+ refine saturation, targeted adjustment), Color Mixer (+ targeted), Point Color, Color Grading, Calibration, B&W | ✅ |
 | Histogram (RGB, luminance, R/G/B, chroma; linear or log; drag a tonal zone) and scopes (Waveform, RGB Parade, Vectorscope), pinned above the Edit panel | ✅ |
 | Masking: brush (A/B presets, density), linear, radial, luminance/colour range, per-mask feather and Curve, add/subtract/intersect; AI Subject / Background (BiRefNet) and Object (SAM 3), optional downloads | ✅ |
 | Crop, straighten tool + auto straighten, flip, rotate, aspect ratios, overlays | ✅ |

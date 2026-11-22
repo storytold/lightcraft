@@ -583,9 +583,24 @@ fn the_clipboard_tool_cuts_copies_and_pastes_in_the_app() {
     assert!(names.iter().any(|n| n == "clipboard"), "{names:?}");
     assert!(!crate::tools::helper_tools(false).iter().any(|t| t["name"] == "clipboard"), "not without the app");
     let mut b = Recorder(vec![]);
-    let r = call_tool(&mut b, "clipboard", &json!({"action": "paste", "text": "travel"}));
-    assert!(!r.is_error, "{r:?}");
-    assert_eq!(b.0, vec![("ui.clipboard".to_string(), json!({"action": "paste", "text": "travel"}))]);
+    for text in [Value::Null, json!(42), json!(true), json!([]), json!({})] {
+        let r = call_tool(&mut b, "clipboard", &json!({"action": "paste", "text": text}));
+        assert!(r.is_error, "{text}: {r:?}");
+        assert_eq!(r.content[0]["text"], "ui.clipboard: `text` must be a string");
+        assert!(b.0.is_empty(), "invalid text must never reach the backend: {text}");
+    }
+    for args in [
+        json!({"action": "paste", "text": "travel"}),
+        json!({"action": "paste", "text": ""}),
+        json!({"action": "paste"}),
+        json!({"action": "cut"}),
+        json!({"action": "copy"}),
+    ] {
+        b.0.clear();
+        let r = call_tool(&mut b, "clipboard", &args);
+        assert!(!r.is_error, "{args}: {r:?}");
+        assert_eq!(b.0, vec![("ui.clipboard".to_string(), args)]);
+    }
 }
 
 /// A running app that writes the PNG `ui.render` / `ui.screenshot` ask for. It notes each path and

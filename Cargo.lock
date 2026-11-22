@@ -380,7 +380,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
  "x11rb",
 ]
 
@@ -2348,7 +2348,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3256,7 +3256,6 @@ version = "1.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "337d46834ee672ab3e48caca2cb0c78cc174fb12b3a68d0d88f99a0519a5e36e"
 dependencies = [
- "generic-array 0.14.7",
  "rustversion",
  "typenum",
 ]
@@ -4458,7 +4457,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-actions"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -4466,7 +4465,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-android"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "android_logger",
  "eframe",
@@ -4477,6 +4476,7 @@ dependencies = [
  "lcc-codecs",
  "lcc-engine",
  "lcc-raster",
+ "lcc-sysmem",
  "lcc-ui-egui",
  "log",
  "serde_json",
@@ -4485,7 +4485,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-android-host"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "android-activity",
  "jni 0.21.1",
@@ -4494,7 +4494,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-app"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "bytemuck",
  "chrono",
@@ -4536,7 +4536,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-audio-out"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "cpal",
  "futures",
@@ -4548,7 +4548,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-book"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "hayro",
  "lcc-codecs",
@@ -4565,11 +4565,11 @@ dependencies = [
 
 [[package]]
 name = "lcc-brand"
-version = "26.46.3"
+version = "26.47.3"
 
 [[package]]
 name = "lcc-camdb"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-brand",
  "lcc-color",
@@ -4581,7 +4581,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-camprof"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-color",
  "lcc-raw",
@@ -4589,7 +4589,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-catalog"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "chrono",
  "crc32fast",
@@ -4616,7 +4616,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-classic-slideshow"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "claxon",
  "hayro",
@@ -4640,7 +4640,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-cli"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "chrono",
  "dhat",
@@ -4676,7 +4676,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-codecs"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "avif-serialize",
  "bytemuck",
@@ -4711,7 +4711,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-color"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-brand",
  "lcc-geom",
@@ -4721,7 +4721,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-colourfit"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-brand",
  "lcc-camdb",
@@ -4742,7 +4742,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-credentials"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "argon2 0.5.3",
  "chacha20poly1305",
@@ -4758,7 +4758,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-denoise"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "faer-core",
  "lcc-brand",
@@ -4776,7 +4776,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-denoise-core"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "dhat",
  "lcc-brand",
@@ -4793,7 +4793,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-develop"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-brand",
  "lcc-color",
@@ -4807,7 +4807,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-engine"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "ab_glyph",
  "base64",
@@ -4894,7 +4894,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-faces"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-brand",
  "lcc-testkit",
@@ -4910,7 +4910,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-fetch"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-brand",
  "log",
@@ -4922,7 +4922,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-filters"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "rayon",
  "serde",
@@ -4935,14 +4935,14 @@ dependencies = [
 
 [[package]]
 name = "lcc-fuzzkit"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "lcc-genfill"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-brand",
  "lcc-color",
@@ -4957,7 +4957,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-geo"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "flate2",
  "image",
@@ -4971,7 +4971,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-geocode"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "miniz_oxide 0.8.9",
  "serde",
@@ -4979,7 +4979,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-geom"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-brand",
  "proptest",
@@ -4988,9 +4988,10 @@ dependencies = [
 
 [[package]]
 name = "lcc-gpu"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "bytemuck",
+ "half",
  "lcc-brand",
  "lcc-color",
  "lcc-denoise",
@@ -5011,7 +5012,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-gpumem"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "ash",
  "lcc-testkit",
@@ -5024,7 +5025,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-hash"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "md-5",
  "sha1 0.10.7",
@@ -5032,7 +5033,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-hdrmeta"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "ash",
  "wgpu",
@@ -5041,7 +5042,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-heif"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "heic-rs",
  "lcc-brand",
@@ -5050,7 +5051,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-immich"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "chrono",
  "lcc-catalog",
@@ -5071,7 +5072,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-inpaint"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "png 0.18.1",
  "rayon",
@@ -5079,7 +5080,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-layout"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-fuzzkit",
  "lcc-meta",
@@ -5091,7 +5092,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-lensdb"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-develop",
  "lcc-geom",
@@ -5100,7 +5101,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-mcp"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-brand",
  "lcc-codecs",
@@ -5114,7 +5115,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-merge"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "half",
  "lcc-brand",
@@ -5132,7 +5133,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-meta"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "brotli",
  "brotli-decompressor",
@@ -5150,7 +5151,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-ml"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -5167,7 +5168,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-net"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "flate2",
  "lcc-brand",
@@ -5183,11 +5184,11 @@ dependencies = [
 
 [[package]]
 name = "lcc-notes"
-version = "26.46.3"
+version = "26.47.3"
 
 [[package]]
 name = "lcc-pdf"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "hayro",
  "lcc-fuzzkit",
@@ -5202,7 +5203,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-peer"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "base64",
  "chacha20poly1305",
@@ -5222,7 +5223,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-pipeline"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "dhat",
  "image",
@@ -5236,6 +5237,7 @@ dependencies = [
  "lcc-raster",
  "lcc-raw",
  "lcc-scenes",
+ "lcc-testkit",
  "proptest",
  "rayon",
  "serde",
@@ -5245,8 +5247,10 @@ dependencies = [
 
 [[package]]
 name = "lcc-plugins"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
+ "base64",
+ "ed25519-dalek 2.2.0",
  "lcc-fuzzkit",
  "lcc-net",
  "lcc-testkit",
@@ -5263,7 +5267,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-preview"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "jpeg-encoder",
  "lcc-brand",
@@ -5276,7 +5280,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-print"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-brand",
  "lcc-codecs",
@@ -5298,7 +5302,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-psd"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "flate2",
  "lcc-psd",
@@ -5309,7 +5313,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-publish"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-catalog",
  "lcc-fuzzkit",
@@ -5321,7 +5325,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-raster"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-brand",
  "lcc-color",
@@ -5334,7 +5338,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-raw"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "chrono",
  "dhat",
@@ -5343,6 +5347,7 @@ dependencies = [
  "lcc-brand",
  "lcc-codecs",
  "lcc-color",
+ "lcc-fuzzkit",
  "lcc-geom",
  "lcc-hash",
  "lcc-meta",
@@ -5364,7 +5369,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-scenes"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "image",
  "lcc-brand",
@@ -5376,7 +5381,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-segment"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -5394,7 +5399,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-slideshow"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-raster",
  "serde",
@@ -5403,7 +5408,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-surface"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-develop",
  "miniz_oxide 0.8.9",
@@ -5414,29 +5419,30 @@ dependencies = [
 
 [[package]]
 name = "lcc-sync"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
+ "proptest",
  "serde",
  "serde_json",
 ]
 
 [[package]]
 name = "lcc-sysmem"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-brand",
 ]
 
 [[package]]
 name = "lcc-testkit"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-brand",
 ]
 
 [[package]]
 name = "lcc-tether"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-fuzzkit",
  "lcc-testkit",
@@ -5447,7 +5453,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-text"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-fuzzkit",
  "lcc-testkit",
@@ -5459,7 +5465,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-tflite"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "candle-core",
  "lcc-brand",
@@ -5473,7 +5479,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-tiff"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-brand",
  "proptest",
@@ -5483,10 +5489,12 @@ dependencies = [
 
 [[package]]
 name = "lcc-ui-egui"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
+ "base64",
  "chrono",
  "craft-ui",
+ "ed25519-dalek 2.2.0",
  "egui",
  "egui_kittest",
  "filmcraft-h264enc",
@@ -5522,6 +5530,7 @@ dependencies = [
  "lcc-sync",
  "lcc-testkit",
  "lcc-text",
+ "lcc-tiff",
  "lcc-updater",
  "lcc-webgallery",
  "log",
@@ -5535,7 +5544,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-updater"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "base64",
  "ed25519-dalek 2.2.0",
@@ -5552,7 +5561,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-video"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "chrono",
  "filmcraft-aac",
@@ -5584,7 +5593,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-video-export"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "filmcraft-aac",
  "filmcraft-color",
@@ -5601,7 +5610,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-web"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "crc32fast",
  "eframe",
@@ -5623,7 +5632,7 @@ dependencies = [
 
 [[package]]
 name = "lcc-webgallery"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-fuzzkit",
  "russh",
@@ -5635,14 +5644,14 @@ dependencies = [
 
 [[package]]
 name = "lcc-winmsi"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "lcc-winspool"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "lcc-testkit",
  "windows-sys 0.61.2",
@@ -6859,9 +6868,9 @@ dependencies = [
 
 [[package]]
 name = "pageant"
-version = "0.2.4"
+version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0786409b5aaa884655c9b4065681db0835db0cc185a6fb19fb17a5d38656866"
+checksum = "e0bc922d9aa8cfcf598de27b3c6122cb2eeda9d6fe71527a22ebcb7f633540ff"
 dependencies = [
  "base16ct 1.0.0",
  "byteorder",
@@ -7223,8 +7232,13 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 name = "plugin-stamp"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "ed25519-dalek 2.2.0",
+ "getrandom 0.3.4",
  "serde_json",
+ "sha2 0.10.9",
  "wasmi",
+ "zeroize",
 ]
 
 [[package]]
@@ -8039,9 +8053,9 @@ dependencies = [
 
 [[package]]
 name = "russh"
-version = "0.65.0"
+version = "0.65.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3bb77a4b259312b2abbc541bca1c13cb4e9b61c560a7fd894068c3b92e0c9dc3"
+checksum = "94be3d86c71b9ed220a675c405e35c7a02565a009bf8da2e9cc13a700320a5c5"
 dependencies = [
  "aes 0.9.3",
  "bitflags 2.13.2",
@@ -8202,7 +8216,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -9032,7 +9046,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -10103,7 +10117,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -10309,15 +10323,6 @@ dependencies = [
 
 [[package]]
 name = "windows-sys"
-version = "0.60.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2f500e4d28234f72040990ec9d39e3a6b950f9f22d3dba18416c35882612bcb"
-dependencies = [
- "windows-targets 0.53.5",
-]
-
-[[package]]
-name = "windows-sys"
 version = "0.61.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
@@ -10349,28 +10354,11 @@ dependencies = [
  "windows_aarch64_gnullvm 0.52.6",
  "windows_aarch64_msvc 0.52.6",
  "windows_i686_gnu 0.52.6",
- "windows_i686_gnullvm 0.52.6",
+ "windows_i686_gnullvm",
  "windows_i686_msvc 0.52.6",
  "windows_x86_64_gnu 0.52.6",
  "windows_x86_64_gnullvm 0.52.6",
  "windows_x86_64_msvc 0.52.6",
-]
-
-[[package]]
-name = "windows-targets"
-version = "0.53.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4945f9f551b88e0d65f3db0bc25c33b8acea4d9e41163edf90dcd0b19f9069f3"
-dependencies = [
- "windows-link",
- "windows_aarch64_gnullvm 0.53.1",
- "windows_aarch64_msvc 0.53.1",
- "windows_i686_gnu 0.53.1",
- "windows_i686_gnullvm 0.53.1",
- "windows_i686_msvc 0.53.1",
- "windows_x86_64_gnu 0.53.1",
- "windows_x86_64_gnullvm 0.53.1",
- "windows_x86_64_msvc 0.53.1",
 ]
 
 [[package]]
@@ -10395,12 +10383,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a4622180e7a0ec044bb555404c800bc9fd9ec262ec147edd5989ccd0c02cd3"
 
 [[package]]
-name = "windows_aarch64_gnullvm"
-version = "0.53.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9d8416fa8b42f5c947f8482c43e7d89e73a173cead56d044f6a56104a6d1b53"
-
-[[package]]
 name = "windows_aarch64_msvc"
 version = "0.42.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10411,12 +10393,6 @@ name = "windows_aarch64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09ec2a7bb152e2252b53fa7803150007879548bc709c039df7627cabbd05d469"
-
-[[package]]
-name = "windows_aarch64_msvc"
-version = "0.53.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9d782e804c2f632e395708e99a94275910eb9100b2114651e04744e9b125006"
 
 [[package]]
 name = "windows_i686_gnu"
@@ -10431,22 +10407,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8e9b5ad5ab802e97eb8e295ac6720e509ee4c243f69d781394014ebfe8bbfa0b"
 
 [[package]]
-name = "windows_i686_gnu"
-version = "0.53.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "960e6da069d81e09becb0ca57a65220ddff016ff2d6af6a223cf372a506593a3"
-
-[[package]]
 name = "windows_i686_gnullvm"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0eee52d38c090b3caa76c563b86c3a4bd71ef1a819287c19d586d7334ae8ed66"
-
-[[package]]
-name = "windows_i686_gnullvm"
-version = "0.53.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa7359d10048f68ab8b09fa71c3daccfb0e9b559aed648a8f95469c27057180c"
 
 [[package]]
 name = "windows_i686_msvc"
@@ -10461,12 +10425,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "240948bc05c5e7c6dabba28bf89d89ffce3e303022809e73deaefe4f6ec56c66"
 
 [[package]]
-name = "windows_i686_msvc"
-version = "0.53.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e7ac75179f18232fe9c285163565a57ef8d3c89254a30685b57d83a38d326c2"
-
-[[package]]
 name = "windows_x86_64_gnu"
 version = "0.42.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10477,12 +10435,6 @@ name = "windows_x86_64_gnu"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "147a5c80aabfbf0c7d901cb5895d1de30ef2907eb21fbbab29ca94c5b08b1a78"
-
-[[package]]
-name = "windows_x86_64_gnu"
-version = "0.53.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c3842cdd74a865a8066ab39c8a7a473c0778a3f29370b5fd6b4b9aa7df4a499"
 
 [[package]]
 name = "windows_x86_64_gnullvm"
@@ -10497,12 +10449,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "24d5b23dc417412679681396f2b49f3de8c1473deb516bd34410872eff51ed0d"
 
 [[package]]
-name = "windows_x86_64_gnullvm"
-version = "0.53.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ffa179e2d07eee8ad8f57493436566c7cc30ac536a3379fdf008f47f6bb7ae1"
-
-[[package]]
 name = "windows_x86_64_msvc"
 version = "0.42.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10513,12 +10459,6 @@ name = "windows_x86_64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
-
-[[package]]
-name = "windows_x86_64_msvc"
-version = "0.53.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 
 [[package]]
 name = "winit"
@@ -10707,7 +10647,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "26.46.3"
+version = "26.47.3"
 dependencies = [
  "base64",
  "brotli",

@@ -869,7 +869,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Filter",
             [],
             None,
-            "partial Filter: {text?, semantic?, rating?, ratingOp?: atLeast|exactly|atMost, flag?: pick|reject|none|null, label?, kind?, copy?: true (virtual copies only) | false (master photos only) | null, merged?: hdr|panorama|hdrPanorama|focusStack|any, immich?: linked|notLinked|probable, vignettingReference?: reference|none (Vignetting Calibration references in use; a withdrawn one counts as none), edited?, date?, libraryFolder?: a path from library.folders, keyword?, person?, camera?, lens?, keywords?/people?/cameras?/lenses?: [any of these values], keywordOp?/personOp?/lensOp?: any|all (how each list combines: any = OR, all = AND), labels?: [any of these labels], labelsNone?: true (photos with no colour label), faces?: count|min+|range}",
+            "partial Filter: {text?, semantic?, rating?, ratingOp?: atLeast|exactly|atMost, flag?: pick|reject|none|null, label?, kind?, copy?: true (virtual copies only) | false (master photos only) | null, merged?: hdr|panorama|hdrPanorama|focusStack|any, immich?: linked|notLinked|probable, vignettingReference?: reference|none (Vignetting Calibration references in use; a withdrawn one counts as none), quality?: accepted|pending|rejected|unscanned (the Image Quality Scanner's verdict; unscanned: no scan has scored the photo), qualityMin?: 0..100 (the score's floor), qualityMax?: 0..100 (its ceiling; a photo no scan scored matches neither), edited?, date?, libraryFolder?: a path from library.folders, keyword?, person?, camera?, lens?, keywords?/people?/cameras?/lenses?: [any of these values], keywordOp?/personOp?/lensOp?: any|all (how each list combines: any = OR, all = AND), labels?: [any of these labels], labelsNone?: true (photos with no colour label), faces?: count|min+|range}",
             always,
             |s, p| {
                 let mut v = serde_json::to_value(&s.filter).unwrap_or_default();
@@ -896,6 +896,20 @@ pub fn specs() -> Vec<CommandSpec> {
                 // deleted is let go of, `Session::reconcile_view`)
                 if p.get("album").is_some_and(|a| !a.is_null()) && f.album.is_some_and(|a| s.catalog.album(a).is_none()) {
                     return Err(bad("library.filter", "no such collection"));
+                }
+                // the quality filter's numbers: a verdict is one of the four, the bounds are 0..100
+                if let Some(q) = f.quality.as_deref().filter(|q| !matches!(*q, "accepted" | "pending" | "rejected" | "unscanned")) {
+                    return Err(bad("library.filter", format!("`quality` is accepted, pending, rejected or unscanned, not {q:?}")));
+                }
+                for (key, bound) in [("qualityMin", f.quality_min), ("qualityMax", f.quality_max)] {
+                    if bound.is_some_and(|b| !(0.0..=100.0).contains(&b)) {
+                        return Err(bad("library.filter", format!("`{key}` is a score from 0 to 100")));
+                    }
+                }
+                if let (Some(a), Some(b)) = (f.quality_min, f.quality_max)
+                    && a > b
+                {
+                    return Err(bad("library.filter", "`qualityMin` is above `qualityMax`"));
                 }
                 let sets_semantic = p.get("semantic").is_some();
                 let sets_only = p.get("only").is_some();
@@ -1090,7 +1104,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Sort",
             ["View", "Sort"],
             None,
-            "{key?: captureDate|importDate|editDate|fileName|rating|fileSize|random|custom (Custom Order: a regular album's order set by hand), ascending?: bool, group?: auto|none|day|month|year, seed?: u64 (the shuffle `random` gives)}",
+            "{key?: captureDate|importDate|editDate|fileName|rating|fileSize|random|custom (Custom Order: a regular album's order set by hand)|quality (the Image Quality Scanner's score; unscanned photos first ascending, last descending), ascending?: bool, group?: auto|none|day|month|year, seed?: u64 (the shuffle `random` gives)}",
             always,
             |s, p| {
                 let key: SortKey = match p.get("key") {
@@ -1979,6 +1993,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"changed": n}))
             }
         ),
+        cmd!(query "photo.sharedMeta", "Shared Info", [], None, "{ids?} → {count, fields: {key: value | null}, mixed: [key]}: photo.setMeta's fields across the photos (default the selection); a field whose values differ is null and listed in `mixed`, so an edit can set only the fields the user changed", has_selection, shared_meta),
         // ---- albums
         cmd!(
             "album.create",
@@ -2605,18 +2620,24 @@ pub fn specs() -> Vec<CommandSpec> {
                     if known.contains(&ps) {
                         continue;
                     }
-                    // each file is tried once (a non-photo isn't retried every scan)
-                    if s.auto_import_seen.get(&ps) == Some(&u64::MAX) {
+                    // each file is tried once at a size and modification time (a non-photo isn't
+                    // retried every scan); one that changed since (a partial copy that went on, #1302,
+                    // or one preallocated at its final size and filled in later) is tried again
+                    if s.auto_import_tried.get(&ps) == Some(&tried_stamp(&ps, size)) {
                         continue;
                     }
                     let seen = s.auto_import_seen.insert(ps.clone(), size);
                     if size > 0 && seen == Some(size) {
-                        fresh.push(ps);
+                        fresh.push((ps, size));
                     }
                 }
                 if fresh.is_empty() {
                     return Ok(json!({"imported": [], "folder": folder}));
                 }
+                for (f, size) in &fresh {
+                    s.auto_import_tried.insert(f.clone(), tried_stamp(f, *size));
+                }
+                let fresh: Vec<String> = fresh.into_iter().map(|(f, _)| f).collect();
                 let mode = if s.import_defaults.auto_copy { "copy" } else { "add" };
                 // a photo deleted from the library doesn't come back on its own because its file
                 // is still in the watched folder (a copy's source is not a known path)
@@ -2642,17 +2663,22 @@ pub fn specs() -> Vec<CommandSpec> {
                         None => params["albumName"] = json!(a),
                     }
                 }
-                for f in &fresh {
-                    s.auto_import_seen.insert(f.clone(), u64::MAX);
-                }
                 if p.get("start").and_then(Value::as_bool) == Some(false) {
                     // the caller imports them (the app: on a worker thread)
                     return Ok(json!({"imported": [], "folder": folder, "import": params}));
                 }
                 let sel = s.selection.clone();
-                let r = s.execute("library.import", &params)?;
+                let r = s.execute("library.import", &params);
                 // arriving photos don't take over the selection
                 s.selection = sel;
+                // an import that failed as a whole: its files are tried again by the next scans
+                let r = match r {
+                    Ok(r) => r,
+                    Err(e) => {
+                        s.auto_import_retry(&fresh);
+                        return Err(e);
+                    }
+                };
                 let mut result = json!({"imported": r["imported"], "folder": folder});
                 if let Some(warnings) = r.get("warnings") {
                     result["warnings"] = warnings.clone();
@@ -2712,11 +2738,16 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import Lightroom Catalog",
             [],
             None,
-            "{path: .lrcat, updateExisting?: false}; direct import of paths, ratings, flags, metadata, keywords, collections, virtual copies & mapped edits. Archives source settings/history first. Existing edited photos are preserved unless updateExisting=true; source catalog is read-only.",
+            "{path: .lrcat, updateExisting?: false, readOriginalsLater?: false}; direct import of paths, ratings, flags, metadata, keywords, collections, virtual copies & mapped edits. Archives source settings/history first. Existing edited photos are preserved unless updateExisting=true; source catalog is read-only. readOriginalsLater=true commits the photos from the catalog without reading their originals first (report originalsToRead); library.readOriginals reads them afterwards.",
             always,
             |s, p| {
                 let path = str_param(p, "path").ok_or_else(|| bad("library.importLightroom", "missing path"))?;
-                crate::lightroom_catalog::import(s, std::path::Path::new(path), bool_or(p, "updateExisting", false))
+                crate::lightroom_catalog::import_with(
+                    s,
+                    std::path::Path::new(path),
+                    bool_or(p, "updateExisting", false),
+                    bool_or(p, "readOriginalsLater", false),
+                )
             }
         ),
         cmd!(
@@ -2747,7 +2778,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import Photos",
             ["File"],
             Some("Cmd+Shift+I"),
-            "{paths: [file or folder (recursive)], mode?: add|copy|move (add = reference the files in place; copy = into the library's Originals/YYYY/YYYY-MM-DD/; move = as copy, then each original and its XMP sidecars are removed from the source, only after the copy is verified (a hard link on the same volume, else copied, synced and compared byte for byte) and its catalog record is saved; failed, duplicate and unchecked files keep their sources; a taken name gets -1, -2…; undo removes the photos from the library but leaves the files at the destination), destination?: folder for copies / moves, organize?: date (YYYY/YYYY-MM-DD) | month (YYYY/YYYY-MM) | flat | a folder template, e.g. `{date:%Y}/{date:%Y%m%d}` → 2026/20260114 (the template's `/` make the folders, each level expanded with the rename tokens and made a safe folder name: never outside the destination; must be relative, no `..`; a level with missing metadata is `unknown`); dated by capture time, else the import time, rename?: file-name template for copies, original extension added (tokens: {name} {num} {seq} {seq:N} {date} {date:%Y%m%d} {folder} {camera} {lens} {iso} {rating} {title} {creator} {ext}; photo.renameTokens explains each; blank = keep names), renameStart?: 1 (must fit this platform; later files are reported failed if the sequence runs out), metadataPreset?: name, dng?: bool (copy raws as DNG; copy only), local?: bool (browsing: the photos stay out of the library, like library.browse; not with move), album?: albumId, albumName?: new album, preset?: presetId, presetProfile?: bool (a preset's camera profile replaces the raw's; default false: each raw keeps its body's camera profile through the presets), presets?: [presetId] (a stack applied in order after `preset`, one History step each; a browsed photo joining the library gets the presets, keywords and metadata preset too, on top of its own culling and edits, and copied or moved its record follows its file), recipe?: [{id: a plain develop control (develop.controls; no white balance, geometry or crop), value}] (a batch-edit recipe: each control is set to its value, clamped to the control's range, on every photo this import adds, after its sidecar, camera default and preset, as one extra History step named Import adjustments; a photo the library already has (a duplicate, one restored from Recently Deleted, one joined from a browsed folder) is not changed; a control a recipe may not name is refused before anything is imported; preset.saveRecipe keeps a recipe for reuse), keywords?: [..], cameraProfile?: auto (default: each body's own camera profile, else the camera's default) | {all: camera profile id} (every raw of that profile's camera) | {perBody: {body (as profiles.bodies lists it): camera profile id}}, for this import only; a raw whose XMP sidecar sets develop settings keeps its own, onDeleted?: restore|skip|fresh (a file that is in Recently Deleted: restore (default) = bring the photo back with its edits, relinked to the file when its own is gone; skip = leave it there and say so, fresh = delete the trashed record and import the file as new), importDuplicates?: bool (false by default = Lightroom's Don't Import Suspected Duplicates: a file whose content the library already has is skipped; true imports it as a new photo; a path already in the library, or a photo in Recently Deleted, is still handled as above)} → {imported, duplicates: [{path, existing, reason, existingDeleted?}], restored?: [photoId], failed, warnings?: [{path, code: cameraProfile|uprightGeometry|unmappedXmp, profile?, mode?: off|auto|level|vertical|full|guided|unknown, fields?}], moved?: [{from, to, sidecars?}], kept?: [{path, reason}] (move: sources left in place and why), album?}",
+            "{paths: [file or folder (recursive)], mode?: add|copy|move (add = reference the files in place; copy = into the library's Originals/YYYY/YYYY-MM-DD/; move = as copy, then each original and its XMP sidecars are removed from the source, only after the copy is verified (a hard link on the same volume, else copied, synced and compared byte for byte) and its catalog record is saved; failed, duplicate and unchecked files keep their sources; a taken name gets -1, -2…; undo removes the photos from the library but leaves the files at the destination), destination?: folder for copies / moves, organize?: date (YYYY/YYYY-MM-DD) | month (YYYY/YYYY-MM) | flat | a folder template, e.g. `{date:%Y}/{date:%Y%m%d}` → 2026/20260114 (the template's `/` make the folders, each level expanded with the rename tokens and made a safe folder name: never outside the destination; must be relative, no `..`; a level with missing metadata is `unknown`); dated by capture time, else the import time, rename?: file-name template for copies, original extension added (tokens: {name} {num} {seq} {seq:N} {date} {date:%Y%m%d} {folder} {camera} {lens} {iso} {rating} {title} {creator} {ext}; photo.renameTokens explains each; blank = keep names), renameStart?: 1 (must fit this platform; later files are reported failed if the sequence runs out), metadataPreset?: name, dng?: bool (copy raws as DNG; copy only), local?: bool (browsing: the photos stay out of the library, like library.browse; not with move), album?: albumId, albumName?: new album, preset?: presetId, presetProfile?: bool (a preset's camera profile replaces the raw's; default false: each raw keeps its body's camera profile through the presets), presets?: [presetId] (a stack applied in order after `preset`, one History step each; a browsed photo joining the library gets the presets, keywords and metadata preset too, on top of its own culling and edits, and copied or moved its record follows its file), recipe?: [{id: a plain develop control (develop.controls; no white balance, geometry or crop), value}] (a batch-edit recipe: each control is set to its value, clamped to the control's range, on every photo this import adds, after its sidecar, camera default and preset, as one extra History step named Import adjustments; a photo the library already has (a duplicate, one restored from Recently Deleted, one joined from a browsed folder) is not changed; a control a recipe may not name is refused before anything is imported; preset.saveRecipe keeps a recipe for reuse), keywords?: [..], cameraProfile?: auto (default: each body's own camera profile, else the camera's default) | {all: camera profile id} (every raw of that profile's camera) | {perBody: {body (as profiles.bodies lists it): camera profile id}}, for this import only; a raw whose XMP sidecar sets develop settings keeps its own, onDeleted?: restore|skip|fresh (a file that is in Recently Deleted: restore (default) = bring the photo back with its edits, relinked to the file when its own is gone; skip = leave it there and say so, fresh = delete the trashed record and import the file as new), importDuplicates?: bool (false by default = Lightroom's Don't Import Suspected Duplicates: a file whose content the library already has is skipped; true imports it as a new photo; a path already in the library, or a photo in Recently Deleted, is still handled as above)} → {imported, duplicates: [{path, existing, reason, existingDeleted?}], restored?: [photoId], failed, skipped: {unreadable, unsupported} (what the folder walk left out, as library.importPreview counts it; a file named in paths is always tried, so it is never counted here), warnings?: [{path, code: cameraProfile|uprightGeometry|unmappedXmp, profile?, mode?: off|auto|level|vertical|full|guided|unknown, fields?}], moved?: [{from, to, sidecars?}], kept?: [{path, reason}] (move: sources left in place and why), album?}",
             always,
             |s, p| {
                 let req = import_params(s, p)?;
@@ -3122,6 +3153,64 @@ fn flush_gps_number(token: &mut String, components: &mut Vec<f64>, explicit_sign
     Some(())
 }
 
+/// photo.setMeta's fields of one photo as JSON values, keyed as photo.setMeta takes them.
+fn meta_fields(m: &lcc_catalog::Meta) -> Vec<(&'static str, Value)> {
+    let mut out: Vec<(&'static str, Value)> = [
+        ("title", &m.title),
+        ("headline", &m.headline),
+        ("caption", &m.caption),
+        ("descriptionWriter", &m.description_writer),
+        ("category", &m.category),
+        ("copyright", &m.copyright),
+        ("usageTerms", &m.usage_terms),
+        ("copyrightUrl", &m.copyright_url),
+        ("creator", &m.creator),
+        ("location", &m.location),
+        ("city", &m.city),
+        ("state", &m.state),
+        ("country", &m.country),
+        ("countryCode", &m.country_code),
+        ("altText", &m.alt_text),
+        ("extendedDescription", &m.extended_description),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k, json!(v)))
+    .collect();
+    for k in lcc_meta::CreatorContact::KEYS {
+        out.push((k, json!(m.contact.get(k).cloned().unwrap_or_default())));
+    }
+    out.push(("copyrightStatus", json!(m.copyright_status.id())));
+    out.push(("gps", m.gps.map_or(Value::Null, |(la, lo)| json!([la, lo]))));
+    out.push(("keywords", json!(m.keywords)));
+    out.push(("supplementalCategories", json!(m.supplemental_categories)));
+    out.push(("subjectCode", json!(m.subject_code)));
+    out
+}
+
+/// `photo.sharedMeta`: each field's value when every target photo has the same one, else null and listed as mixed.
+fn shared_meta(s: &mut Session, p: &Value) -> Result<Value> {
+    let targets = s.targets(p)?;
+    let mut shared: Vec<(&'static str, Option<Value>)> = Vec::new();
+    let mut count = 0usize;
+    for id in targets {
+        let Some(ph) = s.catalog.photo(id) else { continue };
+        let fields = meta_fields(&ph.meta);
+        if count == 0 {
+            shared = fields.into_iter().map(|(k, v)| (k, Some(v))).collect();
+        } else {
+            for ((_, have), (_, v)) in shared.iter_mut().zip(fields) {
+                if have.as_ref().is_some_and(|h| *h != v) {
+                    *have = None;
+                }
+            }
+        }
+        count += 1;
+    }
+    let mixed: Vec<&str> = shared.iter().filter(|(_, v)| v.is_none()).map(|(k, _)| *k).collect();
+    let fields: serde_json::Map<String, Value> = shared.into_iter().map(|(k, v)| (k.to_string(), v.unwrap_or(Value::Null))).collect();
+    Ok(json!({"count": count, "fields": fields, "mixed": mixed}))
+}
+
 #[cfg(test)]
 mod gps_tests {
     use serde_json::json;
@@ -3296,3 +3385,18 @@ mod source_history_tests;
 #[cfg(test)]
 #[path = "library/tests_advanced_search.rs"]
 mod advanced_search_tests;
+
+/// What Auto Import remembers of a file it tried: its size and modification time folded into one
+/// number (the size alone where the time can't be read), so a file rewritten at the same size
+/// (a copier that preallocates the final size, then fills it in) is tried again.
+pub(crate) fn tried_stamp(path: &str, size: u64) -> u64 {
+    let mtime = std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
+    match mtime {
+        Some(t) => size ^ t.rotate_left(29).wrapping_mul(0x9e37_79b9_7f4a_7c15),
+        None => size,
+    }
+}

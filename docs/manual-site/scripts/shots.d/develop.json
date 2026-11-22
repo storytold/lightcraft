@@ -542,5 +542,49 @@
     }
    }
   ]
+ },
+ {
+  "name": "levels-section",
+  "steps": [
+   {
+    "method": "engine.execute",
+    "params": {
+     "command": "develop.reset"
+    }
+   },
+   {
+    "method": "engine.execute",
+    "params": {
+     "command": "develop.levels",
+     "params": {
+      "black": 18,
+      "white": 238,
+      "midtone": 0.3
+     }
+    }
+   },
+   {
+    "method": "engine.execute",
+    "params": {
+     "command": "section.levels",
+     "params": {
+      "solo": true
+     }
+    },
+    "only": [
+     "classic",
+     "compact"
+    ]
+   },
+   {
+    "method": "ui.clickWidget",
+    "params": {
+     "id": "modern:group:tone"
+    },
+    "only": [
+     "modern"
+    ]
+   }
+  ]
  }
 ]

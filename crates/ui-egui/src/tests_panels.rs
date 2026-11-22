@@ -3239,3 +3239,29 @@ fn ui_prompt_asks_for_a_name_then_runs_the_command_with_it() {
     assert_eq!(r["ok"], true, "{r}");
     assert!(h.app.session.preset_folders.iter().any(|f| f == "Wedding"), "{:?}", h.app.session.preset_folders);
 }
+
+/// Settings ▸ Faces ▸ Matching: Ignore a person's odd faces is off until ticked, and the box sets it both ways (#3318).
+#[test]
+fn ignoring_a_persons_odd_faces_is_off_until_ticked() {
+    let dir = lcc_testkit::TempDir::new("lc-ui-faces-odd");
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid"}));
+    let models = dir.join("models");
+    std::fs::create_dir_all(&models).unwrap();
+    std::fs::write(models.join("settings.json"), br#"{"cpuOnly":true}"#).unwrap();
+    h.app.session.face_models_dir = Some(models);
+    let r = h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "faces"}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    h.request("ui.widgets", json!({}), T);
+    h.step();
+    let on = |h: &mut Headless| h.app.session.execute("faces.matching", &json!({})).unwrap()["skipOdd"] == true;
+    assert!(!on(&mut h), "off by default");
+    for want in [true, false] {
+        // the list the tab shows is read again after the change
+        let r = h.request("ui.clickWidget", json!({"id": "check:settings.facesSkipOdd"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+        assert_eq!(on(&mut h), want);
+    }
+}

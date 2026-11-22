@@ -9,6 +9,7 @@
 //! catalog between frames, with a row and ✕ in the activity stack (issue #345); the whole import is
 //! one undo step.
 
+use crate::json_ext::JsonExt as _;
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use lcc_engine::import::{ImportCandidate, ImportWarning, ScanInput, ScanOutput, ScanProgress, scan_with_subfolders};
 use serde::{Deserialize, Serialize};
@@ -136,6 +137,9 @@ pub struct ImportDialog {
     /// decisions and album ids belong to that catalog, so the review is not shown or confirmed in another.
     #[serde(skip)]
     pub library: Option<u64>,
+    /// The review of the device's camera roll: added in place, with the roll's watch offered.
+    #[serde(skip)]
+    pub camera_roll: bool,
 }
 
 /// A candidate's file type, as the review groups them: its format, or its extension when the
@@ -326,47 +330,47 @@ impl ImportDialog {
         };
         let mut params = json!({"mode": mode, "keywords": self.keywords()});
         if !self.recipe.is_empty() {
-            params["recipe"] = recipe_items(&self.recipe);
+            *params.field_mut("recipe") = recipe_items(&self.recipe);
         }
         if !self.on_deleted.is_empty() {
-            params["onDeleted"] = json!(self.on_deleted);
+            *params.field_mut("onDeleted") = json!(self.on_deleted);
         }
         if self.import_duplicates {
-            params["importDuplicates"] = json!(true);
+            *params.field_mut("importDuplicates") = json!(true);
         }
         if !self.preset.is_empty() {
-            params["preset"] = json!(self.preset);
+            *params.field_mut("preset") = json!(self.preset);
         }
         if !self.presets.is_empty() {
-            params["presets"] = json!(self.presets);
+            *params.field_mut("presets") = json!(self.presets);
         }
         if self.preset_profile {
-            params["presetProfile"] = json!(true);
+            *params.field_mut("presetProfile") = json!(true);
         }
         if !self.camera_profile.is_empty() {
-            params["cameraProfile"] = json!({"all": self.camera_profile});
+            *params.field_mut("cameraProfile") = json!({"all": self.camera_profile});
         } else if !self.per_body.is_empty() {
-            params["cameraProfile"] = json!({"perBody": self.per_body});
+            *params.field_mut("cameraProfile") = json!({"perBody": self.per_body});
         }
         if !self.metadata_preset.is_empty() {
-            params["metadataPreset"] = json!(self.metadata_preset);
+            *params.field_mut("metadataPreset") = json!(self.metadata_preset);
         }
         if let Some(a) = self.album {
-            params["album"] = json!(a);
+            *params.field_mut("album") = json!(a);
         }
         if self.copy {
             if !self.destination.trim().is_empty() {
-                params["destination"] = json!(self.destination.trim());
+                *params.field_mut("destination") = json!(self.destination.trim());
             }
             if let Some(o) = self.organize_param()? {
-                params["organize"] = json!(o);
+                *params.field_mut("organize") = json!(o);
             }
             if !self.rename.trim().is_empty() {
-                params["rename"] = json!(self.rename.trim());
-                params["renameStart"] = json!(1);
+                *params.field_mut("rename") = json!(self.rename.trim());
+                *params.field_mut("renameStart") = json!(1);
             }
             if self.dng && !self.move_files {
-                params["dng"] = json!(true);
+                *params.field_mut("dng") = json!(true);
             }
         }
         Ok(params)
@@ -428,9 +432,11 @@ pub struct ImportTask {
     /// Cancel was pressed: no further files are started; batches already readied are added.
     pub cancelled: bool,
     /// Auto Import (the watched folder): the selection stays as it is, a short toast when done.
-    auto: bool,
+    pub(crate) auto: bool,
     /// Android's watched camera roll: like `auto`, and the toast says where the photos came from.
     camera_roll: bool,
+    /// Auto Import: the files it was handed (tried again later when the import can't start).
+    auto_paths: Vec<String>,
     /// Auto Import: the selection to keep.
     keep_selection: Option<lcc_engine::Selection>,
     /// The selection and source as the import last left them: a change between frames is the
@@ -440,7 +446,7 @@ pub struct ImportTask {
     moved_on: bool,
     run: Option<ImportRun>,
     /// The import's row in the activity stack (its ✕ and `activity.cancel` set the run's cancel flag).
-    guard: Option<lcc_engine::activity::TaskGuard>,
+    pub(crate) guard: Option<lcc_engine::activity::TaskGuard>,
     /// The Import tab's: once the photos are in, their previews are built unattended
     /// (`none` | `standard` | `full`: `library.finishImport`).
     pub finish_previews: Option<String>,
@@ -622,6 +628,9 @@ pub struct ScanTask {
     guard: lcc_engine::activity::TaskGuard,
     /// Whether subfolders are being scanned.
     pub subfolders: bool,
+    /// The device's camera roll is being scanned (`file.addCameraRoll`): the review offers to
+    /// keep watching it.
+    pub(crate) camera_roll: bool,
 }
 
 /// The activity row of a scan: the review's ("Scanning folder") or the Local view's ("Reading folder").
@@ -685,7 +694,8 @@ pub fn open_with_subfolders(app: &mut LccApp, paths: Vec<String>, subfolders: bo
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = scan_guard(app, &progress, false);
-    app.scan = Some(ScanTask { progress, rx, copy: false, destination: None, album: None, browse: false, sources, guard, subfolders });
+    app.scan =
+        Some(ScanTask { progress, rx, copy: false, destination: None, album: None, browse: false, sources, guard, subfolders, camera_roll: false });
     Ok(json!({"scanning": true}))
 }
 
@@ -713,7 +723,7 @@ pub fn rescan_with_subfolders(app: &mut LccApp, d: &ImportDialog, subfolders: bo
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = scan_guard(app, &progress, false);
-    app.scan = Some(ScanTask { progress, rx, copy, destination: None, album, browse: false, sources, guard, subfolders });
+    app.scan = Some(ScanTask { progress, rx, copy, destination: None, album, browse: false, sources, guard, subfolders, camera_roll: false });
     Ok(json!({"scanning": true}))
 }
 
@@ -811,7 +821,18 @@ pub fn browse(app: &mut LccApp, path: &str, subfolders: Option<bool>, show: Opti
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = scan_guard(app, &progress, true);
-    app.scan = Some(ScanTask { progress, rx, copy: false, destination: None, album: None, browse: true, sources: Vec::new(), guard, subfolders });
+    app.scan = Some(ScanTask {
+        progress,
+        rx,
+        copy: false,
+        destination: None,
+        album: None,
+        browse: true,
+        sources: Vec::new(),
+        guard,
+        subfolders,
+        camera_roll: false,
+    });
     app.renderer.forget_imports();
     app.lap(&mut lap, "browse.rest");
     Ok(json!({"path": dir_s, "subfolders": subfolders, "scanning": true}))
@@ -919,6 +940,12 @@ pub fn poll_scan(app: &mut LccApp, ctx: &egui::Context) {
     }
     d.sources = task.sources;
     d.subfolders = task.subfolders;
+    if task.camera_roll {
+        // the roll's files stay where the camera puts them: a copy would only double them
+        d.camera_roll = true;
+        d.copy = false;
+        d.move_files = false;
+    }
     if d.metadata_preset.is_empty()
         && let Some(mp) = &app.session.import_defaults.metadata_preset
         && app.session.metadata_presets.iter().any(|m| m.name.eq_ignore_ascii_case(mp))
@@ -969,7 +996,18 @@ pub(crate) fn stall_scan_of(app: &mut LccApp, browse: bool) -> Box<dyn std::any:
     let progress = std::sync::Arc::new(ScanProgress::default());
     let (tx, rx) = std::sync::mpsc::channel::<ScanOutput>();
     let guard = scan_guard(app, &progress, false);
-    app.scan = Some(ScanTask { progress, rx, copy: false, destination: None, album: None, browse, sources: Vec::new(), guard, subfolders: true });
+    app.scan = Some(ScanTask {
+        progress,
+        rx,
+        copy: false,
+        destination: None,
+        album: None,
+        browse,
+        sources: Vec::new(),
+        guard,
+        subfolders: true,
+        camera_roll: false,
+    });
     Box::new(tx)
 }
 
@@ -1017,11 +1055,11 @@ pub fn start(app: &mut LccApp, d: &ImportDialog) -> Result<Value, String> {
     let mut album = d.album;
     if album.is_none() && !d.new_album.trim().is_empty() {
         let r = app.session.execute("album.create", &json!({"name": d.new_album.trim()})).map_err(|e| e.to_string())?;
-        album = r["id"].as_u64();
+        album = r.field("id").as_u64();
     }
     let mut params = d.params()?;
     if let Some(a) = album {
-        params["album"] = json!(a);
+        *params.field_mut("album") = json!(a);
     }
     let mut meta_preset = d.metadata_preset.clone();
     if d.creating_meta_preset && !d.new_meta_name.trim().is_empty() {
@@ -1043,7 +1081,7 @@ pub fn start(app: &mut LccApp, d: &ImportDialog) -> Result<Value, String> {
         meta_preset = name;
     }
     if !meta_preset.is_empty() {
-        params["metadataPreset"] = json!(meta_preset);
+        *params.field_mut("metadataPreset") = json!(meta_preset);
     }
     let total = queue.len();
     app.import = Some(ImportTask::new(queue, params, undo0, false));
@@ -1116,7 +1154,7 @@ fn dropped_import_params(app: &LccApp) -> Value {
     if let Some(mp) = &app.session.import_defaults.metadata_preset
         && app.session.metadata_presets.iter().any(|m| m.name.eq_ignore_ascii_case(mp))
     {
-        p["metadataPreset"] = json!(mp);
+        *p.field_mut("metadataPreset") = json!(mp);
     }
     p
 }
@@ -1163,7 +1201,10 @@ pub fn tick(app: &mut LccApp, ctx: &egui::Context) {
     let Some(mut task) = app.import.take() else { return };
     if task.run.is_none() {
         let mut p = task.params.clone();
-        p["paths"] = json!(task.queue);
+        *p.field_mut("paths") = json!(task.queue);
+        if task.auto {
+            task.auto_paths = task.queue.clone();
+        }
         let started = lcc_engine::cmd::library::import_params(&app.session, &p)
             .and_then(|req| Ok((lcc_engine::import::ImportJob::new(&mut app.session, req.opts)?, req.album, req.album_name)))
             .map_err(|e| e.to_string())
@@ -1182,6 +1223,10 @@ pub fn tick(app: &mut LccApp, ctx: &egui::Context) {
             }
             Err(e) => {
                 log::warn!("import: {e}");
+                // Auto Import's files weren't read: the next scans try them again (#1302)
+                if task.auto {
+                    app.session.auto_import_retry(&task.auto_paths);
+                }
                 app.toast(ctx, crate::i18n::tr_format!("Import failed: {e}", e = e));
                 return;
             }
@@ -1236,24 +1281,25 @@ fn commit_batch(app: &mut LccApp, task: &mut ImportTask, prepared: lcc_engine::i
     match r {
         Ok(v) => {
             // a new album (named in the params) is created with the first photos; later batches join it
-            if let (Some(a), Some(run)) = (v["album"].as_u64(), task.run.as_mut()) {
+            if let (Some(a), Some(run)) = (v.field("album").as_u64(), task.run.as_mut()) {
                 run.album = Some(a);
             }
-            let len = |k: &str| v[k].as_array().map_or(0, Vec::len);
+            let len = |k: &str| v.field(k).as_array().map_or(0, Vec::len);
             task.imported += len("imported");
             task.restored += len("restored");
             task.duplicates += len("duplicates");
-            task.existing.extend(v["duplicates"].as_array().into_iter().flatten().filter_map(|d| d["existing"].as_u64()));
+            task.existing.extend(v.field("duplicates").as_array().into_iter().flatten().filter_map(|d| d.field("existing").as_u64()));
             task.failed += len("failed");
             task.moved += len("moved");
             task.kept += len("kept");
-            task.warnings.extend(v["warnings"].as_array().into_iter().flatten().filter_map(|warning| serde_json::from_value(warning.clone()).ok()));
-            for k in v["kept"].as_array().into_iter().flatten() {
+            task.warnings
+                .extend(v.field("warnings").as_array().into_iter().flatten().filter_map(|warning| serde_json::from_value(warning.clone()).ok()));
+            for k in v.field("kept").as_array().into_iter().flatten() {
                 log::warn!("import: kept {}: {}", k["path"].as_str().unwrap_or(""), k["reason"].as_str().unwrap_or(""));
             }
-            task.ids.extend(["imported", "restored"].iter().flat_map(|k| v[*k].as_array().into_iter().flatten().filter_map(Value::as_u64)));
+            task.ids.extend(["imported", "restored"].iter().flat_map(|k| v.field(k).as_array().into_iter().flatten().filter_map(Value::as_u64)));
             if task.first.is_none() {
-                task.first = ["imported", "restored"].iter().find_map(|k| v[*k].as_array().and_then(|a| a.first()).and_then(Value::as_u64));
+                task.first = ["imported", "restored"].iter().find_map(|k| v.field(k).as_array().and_then(|a| a.first()).and_then(Value::as_u64));
             }
         }
         Err(e) => {
@@ -1266,6 +1312,10 @@ fn commit_batch(app: &mut LccApp, task: &mut ImportTask, prepared: lcc_engine::i
 /// The import is done (or cancelled): one undo step, show and select the first photo (unless the
 /// user chose another meanwhile), say what happened.
 fn finish(app: &mut LccApp, ctx: &egui::Context, task: ImportTask) {
+    // a cancelled Auto Import: the files it never read are tried again by the next scans (#1302)
+    if task.auto && task.cancelled {
+        app.session.auto_import_retry(&task.auto_paths);
+    }
     let steps = app.session.undo.len().saturating_sub(task.undo0);
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     let label = if task.imported == 0 && task.restored > 0 {
@@ -1340,7 +1390,7 @@ fn finish(app: &mut LccApp, ctx: &egui::Context, task: ImportTask) {
     if task.restored > 0 && (task.imported > 0 || task.cancelled) {
         msg.push_str(&crate::i18n::tr_format!(" · {} restored from Recently Deleted", task.restored));
     }
-    if task.params["mode"] == "move" {
+    if task.params.field("mode") == "move" {
         msg.push_str(&crate::i18n::tr_format!(" · {} moved", task.moved));
         if task.kept > 0 {
             msg.push_str(&crate::i18n::tr_format!(" · {} original{} left at the source", task.kept, plural(task.kept)));
@@ -1481,8 +1531,9 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
                 d.checked.iter_mut().for_each(|c| *c = false);
             }
             if crate::widgets::text_button(ui, "importAll", crate::i18n::tr("Check All"), false).clicked() {
-                for i in 0..n {
-                    d.checked[i] = d.checked_by_default(i);
+                let defaults: Vec<bool> = (0..n).map(|i| d.checked_by_default(i)).collect();
+                for (c, v) in d.checked.iter_mut().zip(defaults) {
+                    *c = v;
                 }
             }
         });
@@ -1987,7 +2038,7 @@ pub(crate) fn metadata_preset_picker(app: &mut LccApp, ui: &mut egui::Ui, d: &mu
 
 pub(crate) fn candidate_cell(app: &mut LccApp, ui: &mut egui::Ui, d: &mut ImportDialog, i: usize, rect: Rect) {
     let t = Tokens::get(ui.ctx());
-    let c = d.candidates[i].clone();
+    let Some(c) = d.candidates.get(i).cloned() else { return };
     let ok = d.importable(i);
     let img = Rect::from_min_size(rect.min, vec2(rect.width(), rect.width()));
     let resp = ui.interact(img, egui::Id::new(("import-cell", i)), Sense::click());
@@ -2009,7 +2060,7 @@ pub(crate) fn candidate_cell(app: &mut LccApp, ui: &mut egui::Ui, d: &mut Import
         let tint = if ok { Color32::WHITE } else { Color32::from_gray(110) };
         p.image(tex.id(), fit, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
     }
-    let on = d.checked[i] && ok;
+    let on = d.checked.get(i).copied().unwrap_or(false) && ok;
     if on {
         p.rect_stroke(img, 3.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
     }
@@ -2494,6 +2545,23 @@ pub(crate) fn preset_stack_section(app: &mut LccApp, ui: &mut egui::Ui, d: &mut 
             help(ui, "Each raw keeps its camera body's profile, whatever profile a preset names.");
         }
     }
+}
+
+/// Start the Auto Import a `library.autoImportScan` result `r` asks for, or, when another import
+/// took `app.import` meanwhile, release the files the scan marked as tried so the next scan offers
+/// them again rather than dropping them until a Synchronize Folder (#1302).
+pub(crate) fn auto_import_take(app: &mut LccApp, r: &Value) {
+    let Some(mut params) = r.get("import").cloned() else { return };
+    let paths: Vec<String> = params.get("paths").and_then(Value::as_array).into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
+    if app.import.is_some() {
+        app.session.auto_import_retry(&paths);
+        return;
+    }
+    if let Some(o) = params.as_object_mut() {
+        o.remove("paths");
+    }
+    let undo0 = app.session.undo.len();
+    app.import = Some(ImportTask::new(paths, params, undo0, false).auto());
 }
 
 #[cfg(test)]

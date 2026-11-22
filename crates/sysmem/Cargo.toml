@@ -3,7 +3,7 @@ name = "lcc-sysmem"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Sysmem (L0): returns freed allocator memory to the OS (macOS, glibc Linux), a plain fsync on macOS, the memory the process may use (cgroup limits) and lower worker thread priority (Windows). One of the few crates allowed `unsafe` (FFI calls only)."
+description = "Sysmem (L0): returns freed allocator memory to the OS (macOS, glibc Linux, Android), a plain fsync on macOS, the memory the process may use (cgroup limits) and lower worker thread priority (Windows). One of the few crates allowed `unsafe` (FFI calls only)."
 
 # Opts out of the workspace lints only to keep `unsafe_code = "deny"` overridable for the FFI
 # module below; every other crate root has `#![forbid(unsafe_code)]`. See AGENTS.md ("Never crash",

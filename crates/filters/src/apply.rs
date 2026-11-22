@@ -149,15 +149,25 @@ fn read_padded(img: &[f32], w: usize, h: usize, b: Band, ov: usize) -> Vec<f32> 
     out
 }
 
-/// Splits `w × h` into bands whose padded input fits in `budget_px` pixels.
-fn plan_bands(w: usize, h: usize, ov: usize, budget_px: usize) -> Result<Vec<Band>> {
+/// Splits `w × h` into bands whose padded input fits in `budget_px` pixels: full-width rows, or
+/// with `tiles` (and an overlap) near-square tiles, evened out so no tile is a sliver.
+fn plan_bands(w: usize, h: usize, ov: usize, budget_px: usize, tiles: bool) -> Result<Vec<Band>> {
     let too_big = || Error::Limit("memory budget (a band does not fit in the filter's memory)".into());
     let tall = 1 + 2 * ov;
-    let bw = if (w + 2 * ov).saturating_mul(tall) <= budget_px { w } else { (budget_px / tall).saturating_sub(2 * ov).clamp(1, w) };
+    let mut bw = if (w + 2 * ov).saturating_mul(tall) <= budget_px { w } else { (budget_px / tall).saturating_sub(2 * ov).clamp(1, w) };
+    if tiles && ov > 0 {
+        // the widest square tile that fits, then the fewest columns of it, shared out evenly
+        let side = budget_px.isqrt().saturating_sub(2 * ov).max(1);
+        let cols = w.div_ceil(side.min(w));
+        bw = bw.min(w.div_ceil(cols));
+    }
     if (bw + 2 * ov).saturating_mul(tall) > budget_px {
         return Err(too_big());
     }
-    let bh = (budget_px / (bw + 2 * ov)).saturating_sub(2 * ov).clamp(1, h);
+    let mut bh = (budget_px / (bw + 2 * ov)).saturating_sub(2 * ov).clamp(1, h);
+    if tiles && ov > 0 {
+        bh = h.div_ceil(h.div_ceil(bh));
+    }
     let mut bands = Vec::new();
     for y0 in (0..h).step_by(bh) {
         for x0 in (0..w).step_by(bw) {
@@ -197,7 +207,8 @@ impl Filter {
         // Half the filter's memory cap is for the band (the module needs room of its own).
         let room = self.limits().max_memory_bytes / 2;
         let budget_px = self.limits().band_bytes.min(room) / (CH * 4);
-        let bands = plan_bands(w, h, ov, budget_px)?;
+        let tiles = self.manifest().bands == crate::Bands::Tiles;
+        let bands = plan_bands(w, h, ov, budget_px, tiles)?;
         let deadline = Deadline::new(self.limits(), cancel);
         let base = Value::Object(resolved);
         let src: &[f32] = img;
@@ -358,8 +369,9 @@ mod tests {
 
     #[test]
     fn bands_cover_the_image_exactly_once() {
-        for (w, h, ov, budget) in [(100, 80, 0, 1000), (7, 300, 3, 200), (1, 1, 0, 10), (5000, 3, 2, 600)] {
-            let bands = plan_bands(w, h, ov, budget).unwrap();
+        let cases = [(100, 80, 0, 1000), (7, 300, 3, 200), (1, 1, 0, 10), (5000, 3, 2, 600), (2624, 3936, 16, 349_525), (601, 37, 5, 900)];
+        for ((w, h, ov, budget), tiles) in cases.into_iter().flat_map(|c| [(c, false), (c, true)]) {
+            let bands = plan_bands(w, h, ov, budget, tiles).unwrap();
             let mut seen = vec![0u8; w * h];
             for b in &bands {
                 assert!((b.x1 - b.x0 + 2 * ov) * (b.y1 - b.y0 + 2 * ov) <= budget);
@@ -371,6 +383,22 @@ mod tests {
             }
             assert!(seen.iter().all(|c| *c == 1));
         }
-        assert!(plan_bands(10, 10, 50, 100).is_err());
+        assert!(plan_bands(10, 10, 50, 100, false).is_err());
+        assert!(plan_bands(10, 10, 50, 100, true).is_err());
+    }
+
+    #[test]
+    fn tiles_repeat_less_of_the_image_than_rows() {
+        // a 35 mm scan at 4000 dpi, in a 4 MiB band, with a 16 px overlap
+        let (w, h, ov, budget) = (3936, 2624, 16, 349_525);
+        let padded =
+            |tiles| plan_bands(w, h, ov, budget, tiles).unwrap().iter().map(|b| (b.x1 - b.x0 + 2 * ov) * (b.y1 - b.y0 + 2 * ov)).sum::<usize>();
+        let (rows, tiles) = (padded(false), padded(true));
+        assert!(tiles * 10 < rows * 9, "tiles {tiles} vs rows {rows}");
+        let shape = plan_bands(w, h, ov, budget, true).unwrap();
+        assert!(shape.iter().all(|b| (b.x1 - b.x0).abs_diff(b.y1 - b.y0) * 4 < b.x1 - b.x0), "near-square tiles");
+        // without an overlap there's nothing to save: rows as before
+        let flat = |tiles| plan_bands(w, h, 0, budget, tiles).unwrap().iter().map(|b| (b.x0, b.y0, b.x1, b.y1)).collect::<Vec<_>>();
+        assert_eq!(flat(true), flat(false));
     }
 }

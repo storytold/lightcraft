@@ -152,6 +152,9 @@ impl Filter {
         }
         let mut config = Config::default();
         config.consume_fuel(true).enforced_limits(EnforcedLimits::strict()).set_max_recursion_depth(limits.max_recursion_depth.max(16));
+        // Translate every function now. Lazy translation is charged to the call that first runs a
+        // function, and running out of fuel there can't be resumed, so it failed calls at a slice's end.
+        config.compilation_mode(wasmi::CompilationMode::Eager);
         let engine = Engine::new(&config);
         let module = Module::new(&engine, bytes).map_err(|e| Error::Module(e.to_string()))?;
         if let Some(imp) = module.imports().next() {
@@ -469,8 +472,10 @@ fn placeholder_manifest() -> Manifest {
         stage: None,
         analyze_area: crate::AnalyzeArea::Frame,
         base_tone: crate::BaseTone::Camera,
+        bands: crate::Bands::Rows,
         labels: Vec::new(),
         groups: Vec::new(),
+        remember: Vec::new(),
         header: None,
         icon: None,
         about: Default::default(),

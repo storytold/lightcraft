@@ -707,6 +707,44 @@ fn publish_to_immich_albums_renders_and_stacks() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 2.13: a publish run against a server that is down ends with the photo listed as failed (no panic, no
+/// half-published state); once the server is back the next run uploads it once and the collection is up to date.
+#[test]
+fn a_publish_run_while_the_server_is_down_fails_cleanly_and_the_next_run_sends_once() {
+    let Setup { mut s, state, down, one, dir, .. } = setup("publish-down");
+    let account = s.immich_accounts().unwrap().immich[0].id.clone();
+    let svc = s
+        .execute(
+            "publish.createService",
+            &json!({"kind": "immich", "name": "Immich", "settings": {"account": account}, "export": {"format": "jpeg", "longEdge": 20}}),
+        )
+        .unwrap();
+    s.execute("library.select", &json!({"ids": [one.0]})).unwrap();
+    let coll = s.execute("publish.createCollection", &json!({"service": svc["id"], "name": "Web", "addSelected": true})).unwrap()["collection"]
+        .as_u64()
+        .unwrap();
+    down.store(true, Ordering::SeqCst);
+    let r = s.execute("publish.run", &json!({"collection": coll}));
+    let uploads = state.lock().unwrap().uploads;
+    assert_eq!(uploads, 0, "nothing reached a server that is down");
+    if let Ok(r) = &r {
+        let run = &r["runs"][0];
+        assert!(run["published"].as_array().is_none_or(Vec::is_empty), "{r}");
+        assert_eq!(run["failed"][0]["id"], one.0, "{r}");
+        assert!(!run["failed"][0]["error"].as_str().unwrap_or("").is_empty());
+    }
+    let st = s.execute("publish.status", &json!({"collection": coll})).unwrap();
+    assert_eq!(st["new"], json!([one.0]), "still to publish: {st}");
+
+    down.store(false, Ordering::SeqCst);
+    let r = s.execute("publish.run", &json!({"collection": coll})).unwrap();
+    assert_eq!(r["runs"][0]["published"].as_array().map(Vec::len), Some(1), "{r}");
+    assert_eq!(state.lock().unwrap().uploads, 1, "uploaded once");
+    assert_eq!(state.lock().unwrap().albums.iter().filter(|a| a.1 == "Web").count(), 1, "one album");
+    assert_eq!(s.execute("publish.status", &json!({"collection": coll})).unwrap()["pending"], 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn smart_search_maps_results_to_photos() {
     let Setup { mut s, two, dir, .. } = setup("albums");

@@ -8,6 +8,8 @@ mod arw6_curve;
 pub(crate) mod arw6_testenc;
 mod arw_lens;
 pub(crate) mod arw_lens_rm6;
+#[cfg(test)]
+mod container_robust;
 pub(crate) mod coolpix;
 pub mod cr2;
 pub mod cr3;
@@ -23,6 +25,7 @@ pub mod nef;
 mod nef_lens;
 pub mod nefc;
 mod nefhe;
+mod nefx;
 pub mod orf;
 pub mod pef;
 pub mod raf;

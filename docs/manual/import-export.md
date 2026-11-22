@@ -16,8 +16,9 @@ File → Import Photos… (`Cmd+Shift+I`) or Import from Folder… (`library.imp
 - Duplicates are detected and reported; a file in Recently Deleted can be skipped, restored with its edits, or
   imported fresh. Library → Find Duplicates… later finds copies already in the library ([duplicates.md](../duplicates.md)).
 - Auto Import (Settings → Import) can watch subfolders, rename copies and apply a develop preset, metadata preset and
-  keywords to arriving photos (`library.autoImport`). On Android the camera roll is a watched source (Settings → Folders,
-  Watch for new photos).
+  keywords to arriving photos (`library.autoImport`). Photos in subfolders of the watched folder count only with
+  Include subfolders on; a file that couldn't be read when tried (a copy still arriving) is tried again once it changes. On Android the camera roll is added in place and is a watched source (the review's Keep adding new
+  photos from the camera roll, or Settings → Folders, Watch for new photos).
 - **Browse** (the Import tab, Settings → Import → Import as a tab): the bar's **Import** button imports the picks, the
   selection or all; a folder browsed for the first time includes its sub-folders (**Include subfolders** in the bar
   re-browses without them; re-browsing the same folder keeps the choice); **Develop** opens the selected photo without
@@ -32,7 +33,7 @@ from Immich… ([immich.md](../immich.md)), File → More Imports → Import fro
 tethered capture ([tethering.md](tethering.md)). File → Import Profiles & Presets… reads presets (including
 Lightroom `.xmp` presets); Import Keywords… reads keyword lists.
 
-Supported files: JPEG, PNG, TIFF, WebP, AVIF/HEIF (also on Android), PSD, DNG and the common raw formats (Sony ARW, Nikon NEF, Canon
+Supported files: JPEG, PNG, TIFF, WebP, AVIF/HEIF (also on Android), PSD, DNG and the common raw formats (Sony ARW, Nikon NEF and NEFX, Canon
 CR2/CR3, Fujifilm RAF, Panasonic RW2, Olympus ORF, Pentax PEF, Samsung SRW and more). Per-model status is in the
 [parity tracker](../parity-checklist.md) (`LR-IMP-CAMERA-COVERAGE`).
 
@@ -62,3 +63,7 @@ The same encoder as the dialog:
 <cli> run --library ~/Pictures/Lib library.import paths='["/media/card/DCIM"]' mode=copy \
     app.export dir=/tmp/out preset="<export preset name>"
 ```
+
+`library.import`'s result includes `skipped: {unreadable, unsupported}`: folders its walk could not read and files in
+the folders that are not a supported photo type (XMP sidecars not counted), as `library.importPreview` reports them.
+A file named on its own is always tried, so it shows under `failed`, never under `skipped`.

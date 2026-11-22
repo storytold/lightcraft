@@ -250,6 +250,7 @@ fn an_activity_bar_is_named_after_its_task() {
         parent: None,
         batch: false,
         failed: 0,
+        first_failure: None,
         eta_ms: None,
         stop_warning: None,
         controls: None,

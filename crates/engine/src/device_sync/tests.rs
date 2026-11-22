@@ -736,3 +736,57 @@ fn the_camera_roll_is_a_collection_that_follows_the_device_name() {
     assert_eq!(a.execute("sync.cameraRoll", &json!({"on": false})).unwrap()["on"], false);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A change from a device whose clock runs days ahead: the photo's fields stamped in the far future
+/// are held back (kept, not lost, tried again on later exchanges), its other fields are taken at
+/// once, and the user is told once which device's clock is wrong.
+#[test]
+fn far_future_fields_are_held_back_and_the_user_told_once() {
+    let dir = lcc_testkit::TempDir::new("lcc-engine-sync-future");
+    let src = dir.join("x.png");
+    write_png(&src, 5);
+    let (mut a, ap) = offline(&dir, "a");
+    let (mut b, bp) = offline(&dir, "b");
+    let ib = b.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap()["imported"][0].as_u64().unwrap();
+    offline_group(&mut a, &ap, &mut b, &bp);
+    let key = key_of(&b, ib).unwrap();
+    let _ = b.take_notices();
+    let now = super::now_ms();
+    let at = |t: u64| lcc_sync::clock::Stamp { t, c: 0, d: 7 };
+    let day = now + 24 * 3600 * 1000;
+    let fields = [
+        ("rating".to_string(), lcc_sync::clock::Lww::new(json!(4), at(now))),
+        ("flag".to_string(), lcc_sync::clock::Lww::new(serde_json::to_value(lcc_catalog::Flag::Pick).unwrap(), at(day))),
+    ]
+    .into_iter()
+    .collect();
+    let batch = lcc_sync::proto::Batch {
+        items: vec![lcc_sync::replica::Item::Photo { key: key.clone(), info: json!(null), fields, here: Default::default() }],
+        upto: 1,
+        more: false,
+        ..Default::default()
+    };
+    let mut l = b.device_sync.lib.take().unwrap();
+    super::catalog::apply(&mut b, &mut l, &ap, &batch).unwrap();
+    b.device_sync.lib = Some(l);
+    let p = b.catalog.photo(lcc_catalog::PhotoId(ib)).unwrap();
+    assert_eq!(p.rating, 4, "the field that is on time is taken");
+    assert_eq!(p.flag, lcc_catalog::Flag::None, "the future one waits");
+    let l = b.device_sync.lib.as_ref().unwrap();
+    assert!(l.replica.clock.last().t < day, "this device's clock didn't jump");
+    let held = l.replica.held.get(&ap.device_id).cloned().unwrap_or_default();
+    assert_eq!(held.len(), 1, "{held:?}");
+    let n = b.take_notices();
+    assert!(
+        n.iter().any(|n| matches!(n, crate::notice::Notice::SyncHeldFuture { device, minutes } if *device == ap.name && *minutes >= 23 * 60)),
+        "{n:?}"
+    );
+    // the next exchange tries it again: still held, not lost, and not told again
+    let empty = lcc_sync::proto::Batch { upto: 2, ..Default::default() };
+    let mut l = b.device_sync.lib.take().unwrap();
+    super::catalog::apply(&mut b, &mut l, &ap, &empty).unwrap();
+    b.device_sync.lib = Some(l);
+    assert_eq!(b.device_sync.lib.as_ref().unwrap().replica.held.get(&ap.device_id).map(Vec::len), Some(1));
+    assert!(b.take_notices().is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -287,8 +287,14 @@ pub struct FinishParams {
     /// Calibration: primaries matrix (row-major, linear Rec.2020) and shadows tint (−1..1).
     pub calib: Option<[[f32; 3]; 3]>,
     pub shadow_tint: f32,
+    /// Brightness on the encoded values, right after the encode and before the Tone Curve; `None` while 0. See
+    /// [`crate::brightness`].
+    pub brightness: Option<crate::brightness::BrightnessK>,
     /// Tone curves (parametric ∘ point, per channel) on encoded values, 1024 entries each.
     pub curves: Option<[Lut1; 3]>,
+    /// Levels (beyond Lightroom) on encoded values, after Exposure and right before the Tone Curve; `None` while
+    /// neutral. See [`crate::levels`].
+    pub levels: Option<crate::levels::LevelsK>,
     /// Refine Saturation as 0..1 (1 = the curves' own saturation).
     pub refine_sat: f32,
     pub vig: Option<Vig>,
@@ -413,7 +419,9 @@ impl FinishParams {
             ops: ColorOps::new(s),
             local_points: crate::colorops::mask_point_ks(s),
             local_mixers: crate::colorops::mask_mixer_ks(s),
+            brightness: crate::brightness::BrightnessK::for_peak(s.light.brightness, peak),
             curves: curve_luts(&s.curve),
+            levels: crate::levels::LevelsK::new(&s.levels),
             refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
             vig: if effects { vignette(s) } else { None },
             to_out: space.from_working(),
@@ -986,6 +994,16 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             } else {
                 r.map(|v| encode_srgb(srgb, v))
             };
+            // --- Brightness: the one call site of the stage (see `crate::brightness`): on the final in-gamut display
+            // values, right after the encode and before the Tone Curve
+            if let Some(b) = &fp.brightness {
+                e = b.apply(e, hdr);
+            }
+            // --- Levels: the one call site of the stage (see `crate::levels`): after the gamut map and the encode above, so
+            // on the final in-gamut display values, and before the Tone Curve.
+            if let Some(lv) = &fp.levels {
+                e = lv.apply(e, hdr);
+            }
             if let Some(l) = curves {
                 let e0 = e;
                 e = eval_curves(l, e, hdr);

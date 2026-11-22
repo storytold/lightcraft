@@ -8,6 +8,7 @@
 //! size and SHA-256), installs it and chooses it; recognition stays off until the user switches it on (the scan can
 //! take a long time). "Open page" opens the model's own page in the browser for anything else.
 
+use crate::json_ext::JsonExt as _;
 use egui::RichText;
 use serde_json::{Value, json};
 
@@ -103,12 +104,13 @@ pub fn setup(app: &mut LccApp, ctx: &egui::Context) -> Setup {
         return Setup::Running;
     }
     let list = models(app, ctx);
-    if list["dir"].is_null() || list["runtime"].as_bool() != Some(true) {
+    if list.field("dir").is_null() || list.field("runtime").as_bool() != Some(true) {
         return Setup::Unavailable;
     }
-    let chosen = list["embedder"].as_str();
-    let usable = chosen.is_some_and(|id| list["models"].as_array().into_iter().flatten().any(|m| m["id"] == id && m["installed"] == true));
-    match (usable, list["enabled"].as_bool() == Some(true)) {
+    let chosen = list.field("embedder").as_str();
+    let usable =
+        chosen.is_some_and(|id| list.field("models").as_array().into_iter().flatten().any(|m| m.field("id") == id && m.field("installed") == true));
+    match (usable, list.field("enabled").as_bool() == Some(true)) {
         (true, true) => Setup::Running,
         (true, false) => Setup::TurnOn,
         (false, _) => Setup::GetModel,
@@ -184,21 +186,120 @@ fn mirror_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, list: &Value)
         }
     }
     hint(ui, t, "Matches a little more often, but scanning takes twice as long. Changing it scans the faces again.");
+    let mut skip = list["skipOdd"].as_bool().unwrap_or(false);
+    let r = crate::dialog_frame::in_control_column(ui, |ui| {
+        ui.checkbox(&mut skip, crate::i18n::tr("Ignore a person's odd faces (from behind, misnamed)"))
+    });
+    register(ui.ctx(), "check:settings.facesSkipOdd", r.rect);
+    if r.changed() {
+        match app.run("faces.matching", json!({"skipOdd": skip})) {
+            Ok(_) => {
+                app.caches.faces_epoch += 1;
+                // a person's page asks again for the faces that look like them
+                app.caches.person_page = None;
+            }
+            Err(e) => app.toast(ui.ctx(), e),
+        }
+    }
+    hint(
+        ui,
+        t,
+        "Improves suggestions by leaving out faces seen from behind or misnamed. Double-edged: it also leaves out some for photos that look very different (childhood, beard…). Best used for a while, if you have many photos.",
+    );
 }
 
-/// Where the face models run (the GPU only once a check shows it gives the CPU's results faster), and the switch that
-/// keeps them on the CPU.
+/// Where the face models run (the GPU only once a check shows it gives the CPU's results faster), and the
+/// hardware device / precision selectors.
 fn gpu_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, gpu: &Value) {
     heading(ui, t, "Processor");
-    let mut cpu = gpu["cpuOnly"].as_bool().unwrap_or(false);
-    let r = crate::dialog_frame::in_control_column(ui, |ui| ui.checkbox(&mut cpu, crate::i18n::tr("Run face models on the CPU only")));
-    register(ui.ctx(), "check:settings.facesCpuOnly", r.rect);
-    if r.changed() {
-        match app.run("faces.gpu", json!({"cpuOnly": cpu})) {
+
+    let auto = crate::i18n::tr("Automatic").to_string();
+    let cpu = crate::i18n::tr("CPU").to_string();
+    let empty_vec = Vec::new();
+    let dev_list = gpu.get("availableDevices").and_then(Value::as_array).unwrap_or(&empty_vec);
+    let gpu_cards: Vec<&Value> = dev_list.iter().filter(|d| d["kind"].as_str() == Some("gpu")).collect();
+    let raw_choice = gpu.get("deviceChoice").and_then(Value::as_str).unwrap_or("auto");
+    let dev_before = if raw_choice.is_empty() || raw_choice.eq_ignore_ascii_case("auto") {
+        "auto".to_string()
+    } else if raw_choice.eq_ignore_ascii_case("cpu") {
+        "cpu".to_string()
+    } else {
+        raw_choice.to_string()
+    };
+    let current_dev = if dev_before == "auto" {
+        auto.clone()
+    } else if dev_before == "cpu" {
+        cpu.clone()
+    } else {
+        gpu_cards
+            .iter()
+            .find(|d| d["id"].as_str() == Some(dev_before.as_str()))
+            .and_then(|d| d["name"].as_str().map(str::to_string))
+            .unwrap_or_else(|| dev_before.clone())
+    };
+    let mut selected_dev = dev_before.clone();
+    super::settings::row(ui, t, crate::i18n::tr("Face models device"), |ui| {
+        let combo = crate::widgets::combo_box("settingsFacesDevice").selected_text(current_dev).width(260.0).show_ui(ui, |ui| {
+            let r = ui.selectable_value(&mut selected_dev, "auto".to_string(), auto.as_str());
+            register(ui.ctx(), "button:settingsFacesDevice-auto", r.rect);
+            let r = ui.selectable_value(&mut selected_dev, "cpu".to_string(), cpu.as_str());
+            register(ui.ctx(), "button:settingsFacesDevice-cpu", r.rect);
+            for (i, d) in gpu_cards.iter().enumerate() {
+                let id = d["id"].as_str().unwrap_or("");
+                let name = d["name"].as_str().unwrap_or(id);
+                let usable = d["usable"].as_bool().unwrap_or(true);
+                let why_not = d["whyNot"].as_str();
+                let r = ui.add_enabled_ui(usable, |ui| ui.selectable_value(&mut selected_dev, id.to_string(), name)).inner;
+                let r = match why_not {
+                    Some(why) => r.on_disabled_hover_text(why),
+                    None => r,
+                };
+                register(ui.ctx(), format!("button:settingsFacesDevice-{i}"), r.rect);
+            }
+        });
+        register(ui.ctx(), "combo:settingsFacesDevice", combo.response.rect);
+    });
+    if selected_dev != dev_before {
+        match app.run("faces.gpu", json!({"device": selected_dev})) {
             Ok(_) => app.caches.faces_epoch += 1,
             Err(e) => app.toast(ui.ctx(), e),
         }
     }
+
+    let prec_auto = crate::i18n::tr("Automatic (FP16 when supported)");
+    let prec_fp16 = crate::i18n::tr("FP16 (half precision)");
+    let prec_fp32 = crate::i18n::tr("FP32 (full precision)");
+    let prec_before = match gpu.get("precisionChoice").and_then(Value::as_str) {
+        Some("fp16") => "fp16".to_string(),
+        Some("fp32") => "fp32".to_string(),
+        _ => "auto".to_string(),
+    };
+    let current_prec = match prec_before.as_str() {
+        "fp16" => prec_fp16,
+        "fp32" => prec_fp32,
+        _ => prec_auto,
+    };
+    let mut selected_prec = prec_before.clone();
+    super::settings::row(ui, t, crate::i18n::tr("GPU precision"), |ui| {
+        ui.add_enabled_ui(dev_before != "cpu", |ui| {
+            let combo = crate::widgets::combo_box("settingsFacesPrecision").selected_text(current_prec).width(260.0).show_ui(ui, |ui| {
+                let r = ui.selectable_value(&mut selected_prec, "auto".to_string(), prec_auto);
+                register(ui.ctx(), "button:settingsFacesPrecision-auto", r.rect);
+                let r = ui.selectable_value(&mut selected_prec, "fp16".to_string(), prec_fp16);
+                register(ui.ctx(), "button:settingsFacesPrecision-fp16", r.rect);
+                let r = ui.selectable_value(&mut selected_prec, "fp32".to_string(), prec_fp32);
+                register(ui.ctx(), "button:settingsFacesPrecision-fp32", r.rect);
+            });
+            register(ui.ctx(), "combo:settingsFacesPrecision", combo.response.rect);
+        });
+    });
+    if selected_prec != prec_before {
+        match app.run("faces.gpu", json!({"precision": selected_prec})) {
+            Ok(_) => app.caches.faces_epoch += 1,
+            Err(e) => app.toast(ui.ctx(), e),
+        }
+    }
+
     for (what, label) in [("detection", "Detection"), ("recognition", "Recognition")] {
         let st = &gpu[what];
         let (text, why) = if st.is_null() {
@@ -206,7 +307,11 @@ fn gpu_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, gpu: &Value) {
         } else if st["checking"] == true {
             (crate::i18n::tr("Checking the GPU…").to_string(), None)
         } else if let Some(device) = st["device"].as_str() {
-            (device.to_string(), None)
+            let formatted = match st["precision"].as_str() {
+                Some(p) if !p.is_empty() => format!("{device} ({})", p.to_uppercase()),
+                _ => device.to_string(),
+            };
+            (formatted, None)
         } else if st["why"].as_str().is_some_and(|w| w.contains("not installed")) {
             (crate::i18n::tr("Not installed").to_string(), st["why"].as_str())
         } else if st["why"].as_str().is_some_and(|w| w.contains("No recognition model")) {
@@ -225,6 +330,7 @@ fn gpu_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, gpu: &Value) {
             }
         });
     }
+    hint(ui, t, "Automatic prefers dedicated NVIDIA GPUs and half-precision (FP16) compute when supported.");
     hint(ui, t, "A face model uses the GPU only when a check shows it gives the same results faster.");
 }
 
@@ -250,8 +356,8 @@ fn sentence(s: &str) -> String {
 
 /// "Apache-2.0 · commercial use allowed"
 fn licence_line(m: &Value) -> String {
-    let name = m["licence"]["name"].as_str().filter(|s| !s.is_empty()).unwrap_or("Unknown licence");
-    let terms = match m["licence"]["commercial"].as_str() {
+    let name = m.field("licence").field("name").as_str().filter(|s| !s.is_empty()).unwrap_or("Unknown licence");
+    let terms = match m.field("licence").field("commercial").as_str() {
         Some("yes") => "commercial use allowed",
         Some("no") => "non-commercial use only",
         _ => "terms unclear",
@@ -269,16 +375,18 @@ fn open_page(app: &mut LccApp, url: &str) {
 pub fn settings_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let list = models(app, ui.ctx());
     super::settings::heading_help(ui, t, "Face recognition", "faces");
-    if list["dir"].is_null() {
+    if list.field("dir").is_null() {
         hint(ui, t, "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)");
         return;
     }
-    let mut on = list["enabled"].as_bool().unwrap_or(false);
-    let runtime = list["runtime"].as_bool() == Some(true);
+    let mut on = list.field("enabled").as_bool().unwrap_or(false);
+    let runtime = list.field("runtime").as_bool() == Some(true);
     // a chosen recognition model that is installed: without one the switch has nothing to run
     // (issue #678), so it can only be switched off, with the hint below saying what to do first
-    let usable =
-        list["embedder"].as_str().is_some_and(|id| list["models"].as_array().into_iter().flatten().any(|m| m["id"] == id && m["installed"] == true));
+    let usable = list
+        .field("embedder")
+        .as_str()
+        .is_some_and(|id| list.field("models").as_array().into_iter().flatten().any(|m| m.field("id") == id && m.field("installed") == true));
     let r = crate::dialog_frame::in_control_column(ui, |ui| {
         ui.add_enabled(on || (runtime && usable), egui::Checkbox::new(&mut on, crate::i18n::tr("Recognise faces (experimental)")))
             .on_disabled_hover_text(crate::i18n::tr("Choose a model below (Use) to start."))
@@ -300,7 +408,7 @@ pub fn settings_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     if runtime {
         scan_section(app, ui, t);
     }
-    gpu_section(app, ui, t, &list["gpu"]);
+    gpu_section(app, ui, t, list.field("gpu"));
     mirror_section(app, ui, t, &list);
     hint(ui, t, "The face models are downloaded and chosen under Settings ▸ AI Models.");
     if crate::dialog_frame::link(ui, Some("faces:openAiModels"), "Open AI Models").clicked() {
@@ -311,13 +419,16 @@ pub fn settings_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
 /// The face detector and the recognition models, with their downloads (Settings ▸ AI Models).
 pub fn models_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let list = models(app, ui.ctx());
-    if list["dir"].is_null() {
+    if list.field("dir").is_null() {
         return;
     }
-    let runtime = list["runtime"].as_bool() == Some(true);
-    let all: Vec<Value> = list["models"].as_array().cloned().unwrap_or_default();
-    let downloads =
-        app.session.execute("faces.models.downloads", &json!({})).map(|v| v["downloads"].as_array().cloned().unwrap_or_default()).unwrap_or_default();
+    let runtime = list.field("runtime").as_bool() == Some(true);
+    let all: Vec<Value> = list.field("models").as_array().cloned().unwrap_or_default();
+    let downloads = app
+        .session
+        .execute("faces.models.downloads", &json!({}))
+        .map(|v| v.field("downloads").as_array().cloned().unwrap_or_default())
+        .unwrap_or_default();
     heading(ui, t, "Face detector");
     // faces are found by the open MediaPipe face model (the one Retouch uses), not by a model of this list
     let face_model = app.session.segmenter.open_model_installed("face");
@@ -357,7 +468,7 @@ pub fn models_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
         ui.label(RichText::new(crate::i18n::tr("or drop a .onnx file on the window")).color(t.text_dim));
     });
     // what is wrong with the user's own catalog (catalog.json in the models folder), if anything
-    for e in list["catalog"]["errors"].as_array().into_iter().flatten().filter_map(Value::as_str).take(3) {
+    for e in list.field("catalog").field("errors").as_array().into_iter().flatten().filter_map(Value::as_str).take(3) {
         ui.add(egui::Label::new(RichText::new(format!("catalog.json: {e}")).font(t.font(11.5)).color(t.caution)).wrap());
     }
 }
@@ -380,7 +491,7 @@ fn scan_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
         // the next frame's pump looks at once, so the row and the status follow the button
         app.caches.faces_next_pump = 0.0;
     }
-    let faces = status["indexedFaces"].as_u64().unwrap_or(app.caches.faces_indexed);
+    let faces = status.field("indexedFaces").as_u64().unwrap_or(app.caches.faces_indexed);
     if faces > 0 {
         hint(ui, t, &crate::i18n::tr_format!("{n} faces learned.", n = faces));
     }
@@ -408,7 +519,7 @@ fn model_row(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, dl: Opt
                         ui.label(RichText::new(crate::i18n::tr("installed")).color(t.text_dim));
                     }
                 });
-                ui.label(RichText::new(licence_line(m)).font(t.font(11.5)).color(if m["licence"]["commercial"] == "yes" {
+                ui.label(RichText::new(licence_line(m)).font(t.font(11.5)).color(if m.field("licence").field("commercial") == "yes" {
                     t.text_dim
                 } else {
                     t.caution
@@ -416,7 +527,7 @@ fn model_row(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, dl: Opt
                 // how fast it is, as times faster than a ResNet-100 model (milliseconds would depend on the computer),
                 // with whether it passed its test when it has been installed
                 let speed = m["speedText"].as_str().filter(|s| !s.is_empty());
-                let (line, ok) = match m["accepted"]["selfTest"].as_object() {
+                let (line, ok) = match m.field("accepted").field("selfTest").as_object() {
                     Some(test) if test.get("ok").and_then(Value::as_bool) == Some(true) => {
                         (Some(speed.map_or("Works".to_string(), |s| format!("Works · {s}"))), true)
                     }
@@ -553,9 +664,9 @@ pub fn model_dialog(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, info: &Valu
             .wrap(),
         );
     }
-    let commercial = m["licence"]["commercial"].as_str().unwrap_or("unknown");
+    let commercial = m.field("licence").field("commercial").as_str().unwrap_or("unknown");
     ui.label(RichText::new(licence_line(m)).font(t.semibold(12.5)).color(if commercial == "yes" { t.text } else { t.caution }));
-    let notice = m["licence"]["notice"].as_str().unwrap_or("");
+    let notice = m.field("licence").field("notice").as_str().unwrap_or("");
     if !notice.is_empty() {
         ui.add(egui::Label::new(RichText::new(notice).color(t.text_label)).wrap());
     }
@@ -572,7 +683,7 @@ pub fn model_dialog(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, info: &Valu
             ui.add(egui::Label::new(RichText::new(format!("•  {a}")).font(t.font(12.0)).color(t.text_dim)).wrap());
         }
     }
-    if let Some(url) = m["source"].as_str().or(m["licence"]["url"].as_str()) {
+    if let Some(url) = m.field("source").as_str().or(m.field("licence").field("url").as_str()) {
         let r = ui.link("Open the model's page");
         register(ui.ctx(), "faceModel:page", r.rect);
         if r.clicked() {
@@ -640,8 +751,8 @@ pub fn install(app: &mut LccApp, path: &str, info: &Value, accepted: bool) -> Re
     }
     let r = app.run("faces.models.install", json!({"path": path, "acknowledged": true}));
     if let Ok(v) = &r {
-        let name = v["installed"]["name"].as_str().unwrap_or("The model");
-        app.ui.status = if v["installed"]["role"] == "detector" {
+        let name = v.field("installed").field("name").as_str().unwrap_or("The model");
+        app.ui.status = if v.field("installed").field("role") == "detector" {
             format!("{name} is installed")
         } else {
             crate::i18n::tr_format!("{name} is installed and chosen: switch on Recognise faces to start", name = name)
@@ -679,7 +790,7 @@ pub fn hints_for(app: &mut LccApp, photo: u64) -> Option<std::sync::Arc<Hints>> 
     let answer = app.session.execute("faces.suggest", &json!({"ids": [photo], "budgetMs": 0})).ok()?;
     let pair = |v: &Value| Some((v["name"].as_str()?.to_string(), v["score"].as_f64()? as f32));
     let mut hints = Hints::default();
-    for f in answer["photos"][0]["faces"].as_array().into_iter().flatten() {
+    for f in answer.field("photos")[0].field("faces").as_array().into_iter().flatten() {
         let Some(index) = f["index"].as_u64().and_then(|i| usize::try_from(i).ok()) else { continue };
         hints.by_index.insert(
             index,
@@ -791,17 +902,17 @@ pub fn pump(app: &mut LccApp, ctx: &egui::Context) {
     app.caches.faces_pace = pace;
     app.caches.faces_in_front = in_front;
     let Ok(v) = app.session.execute("faces.pump", &json!({"pace": pace})) else { return };
-    app.caches.faces_active = v["active"] == true;
-    app.caches.faces_indexed = v["indexedFaces"].as_u64().unwrap_or(0);
-    app.caches.faces_pending = v["pendingPhotos"].as_u64().unwrap_or(0);
+    app.caches.faces_active = v.field("active") == true;
+    app.caches.faces_indexed = v.field("indexedFaces").as_u64().unwrap_or(0);
+    app.caches.faces_pending = v.field("pendingPhotos").as_u64().unwrap_or(0);
     // the progress bar's whole: the most photos that were left at once since the scan last finished (the engine keeps
     // it, so Settings and the activity stack agree)
-    app.caches.faces_peak = v["peak"].as_u64().unwrap_or(0);
+    app.caches.faces_peak = v.field("peak").as_u64().unwrap_or(0);
     // Frames are drawn only when something asks for one, so nothing here wakes the window needlessly: while there is work it
     // asks to be called again in 50 ms (the progress in Settings, the next photos for the workers); with recognition on and
     // nothing to do it looks again every few seconds (a few wake-ups a minute); with recognition off it asks for nothing
     // (and is called on every frame, which is cheap: whatever makes a frame, such as switching recognition on, is seen at once).
-    let busy = app.caches.faces_active && (app.caches.faces_pending > 0 || v["inFlight"].as_u64().unwrap_or(0) > 0);
+    let busy = app.caches.faces_active && (app.caches.faces_pending > 0 || v.field("inFlight").as_u64().unwrap_or(0) > 0);
     let wait = match (busy, app.caches.faces_active) {
         (true, _) => Some(0.05),
         (false, true) => Some(5.0),
@@ -844,7 +955,7 @@ fn watch_downloads(app: &mut LccApp, ctx: &egui::Context) {
         app.caches.faces_dl_watch.clear();
         return;
     };
-    let rows: Vec<Value> = v["downloads"].as_array().cloned().unwrap_or_default();
+    let rows: Vec<Value> = v.field("downloads").as_array().cloned().unwrap_or_default();
     let (installed, keep) = due(&rows, std::mem::take(&mut app.caches.faces_dl_watch));
     app.caches.faces_dl_watch = keep;
     for id in installed {
@@ -853,16 +964,16 @@ fn watch_downloads(app: &mut LccApp, ctx: &egui::Context) {
             .execute("faces.models.list", &json!({}))
             .ok()
             .and_then(|l| {
-                l["models"].as_array().and_then(|a| a.iter().find(|m| m["id"] == id.as_str()).and_then(|m| m["name"].as_str().map(str::to_string)))
+                l.field("models")
+                    .as_array()
+                    .and_then(|a| a.iter().find(|m| m.field("id") == id.as_str()).and_then(|m| m.field("name").as_str().map(str::to_string)))
             })
             .unwrap_or_else(|| id.clone());
         let _ = app.session.execute("faces.models.downloadCancel", &json!({"id": id}));
         app.caches.faces_epoch += 1;
-        let detector = app
-            .session
-            .execute("faces.models.list", &json!({}))
-            .ok()
-            .is_some_and(|l| l["models"].as_array().is_some_and(|a| a.iter().any(|m| m["id"] == id.as_str() && m["role"] == "detector")));
+        let detector = app.session.execute("faces.models.list", &json!({})).ok().is_some_and(|l| {
+            l.field("models").as_array().is_some_and(|a| a.iter().any(|m| m.field("id") == id.as_str() && m.field("role") == "detector"))
+        });
         let text = if detector {
             format!("{name} is installed")
         } else {

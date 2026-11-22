@@ -38,11 +38,16 @@ pub mod publish;
 mod runtime;
 mod safe_io;
 pub mod settings;
+pub mod signature;
 mod store;
+pub mod updates;
 
 pub use about::About;
 pub use context::{HostApi, JobReporter, JobUnit, NoHost, PIXELS_DEFAULT_EDGE, PIXELS_MAX_EDGE, PIXELS_MIN_EDGE, Unwatched};
-pub use manager::{Begun, Denial, Failed, Installed, Manager, PendingCall, Prepared, RequestState, SettingsView, duplicate_error, read_module};
+pub use manager::{
+    Begun, Denial, Failed, Installed, LastCheck, Manager, PendingCall, Pin, Prepared, RequestState, SettingsView, SignerAnswer, UpdateCheck,
+    duplicate_error, read_module,
+};
 pub use manifest::{
     CommandDecl, DestinationDecl, Field, FieldKind, HOST_FEATURES, Header, Hooks, MAX_PICTURE_BYTES, MAX_QUICK_ACTIONS, Manifest, MetadataField,
     PublishDecl,
@@ -51,7 +56,9 @@ pub use permissions::{FsRoot, Group, Permissions, Request, refused_root};
 pub use programs::{EndStatus, Exit, Found, ProgramDecl, Reservation, RunDir, Running, StartRequest};
 pub use runtime::{ABI_VERSION, Inspection, Limits, MANIFEST_SECTION, ManifestSource, Outcome, Plugin};
 pub use settings::SettingsStore;
+pub use signature::{MAX_SIGNATURE_BYTES, SIGNATURE_SECTION, Signature, Signer};
 pub use store::NamespaceStore;
+pub use updates::{Fetch, Offer};
 
 /// A plug-in error. Every way a module can misbehave ends here, never in a panic.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -62,6 +69,13 @@ pub enum Error {
     Abi(String),
     #[error("plug-in manifest: {0}")]
     Manifest(String),
+    /// The file's signature section doesn't hold up: never installed or loaded.
+    #[error("plug-in signature: {0}")]
+    Signature(String),
+    /// The file isn't signed by the key pinned for its plug-in (another key, or unsigned): it
+    /// installs only when the user says yes to that signer.
+    #[error("{0}")]
+    Signer(String),
     /// The plug-in requires host features this version of the app doesn't have.
     #[error("{}", missing_message(.0))]
     Unsupported(Vec<String>),
@@ -88,6 +102,14 @@ pub enum Error {
     Cancelled,
     #[error("{0}")]
     Io(String),
+    /// A plug-in update can't be checked for or installed, with why.
+    #[error("plug-in update: {0}")]
+    Update(String),
+    /// The update's own manifest asks for permission groups its feed didn't declare: it installs
+    /// only when the user says yes (`acceptUndeclared`). `requests`: what it asks for that the
+    /// installed version doesn't.
+    #[error("the update asks for {} too, which its update feed didn't say; install it only if you expect that (acceptUndeclared)", .groups.join(", "))]
+    Undeclared { groups: Vec<String>, requests: Vec<Request> },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

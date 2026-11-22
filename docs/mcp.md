@@ -67,9 +67,8 @@ Or check a project-scoped `.mcp.json` into your repo:
 
 ### Codex
 
-The macOS release includes a separate `<cli>-<version>-macos-universal.zip`;
-unpack it alongside the desktop app if you do not want to build from source. Use the CLI
-and app from the same release. Verify both downloads against that release's `SHA256SUMS.txt`.
+On macOS the CLI is inside the app, `/Applications/<app>.app/Contents/MacOS/<cli>`, so the CLI and
+app always come from the same release (verify the download against that release's `SHA256SUMS.txt`).
 
 Register the CLI's stdio server with Codex using its **absolute** installed path:
 
@@ -103,13 +102,15 @@ The release packages ship `<cli>` alongside the desktop app, so no build is need
 |---|---|
 | Windows (MSI) | `C:\Program Files\<app>\<cli>.exe` by default (wherever you installed it otherwise), not on `PATH` |
 | Linux (deb, rpm) | `/usr/bin/<cli>` |
-| macOS | the separate `<cli>-<version>-macos-<arch>.zip` release asset (the `.app` holds only the desktop app) |
+| macOS | inside the app: `/Applications/<app>.app/Contents/MacOS/<cli>`, not on `PATH` (the manual's Install page shows how to link it there) |
 
 ```sh
 # Windows, default install folder
 claude mcp add <binary> -- "C:\Program Files\<app>\<cli>.exe" mcp
-# Linux, or macOS with the CLI unzipped onto PATH
+# Linux, or macOS with the CLI linked onto PATH
 claude mcp add <binary> -- <cli> mcp
+# macOS, from inside the app
+claude mcp add <binary> -- /Applications/<app>.app/Contents/MacOS/<cli> mcp
 ```
 
 ### Other clients (Claude Desktop, Cursor, …)
@@ -252,6 +253,13 @@ from its raw data without a manual Reload. Headless sessions don't do this on th
 `cmd_library_recheckPreviewOnly` (`{all: true}` ignores the version stamps, e.g. to test a decoder
 build) → `{checked, updated, cleared}`. Like the app's recheck, it isn't an undo step and keeps
 develop settings and history.
+
+A Lightroom import with `readOriginalsLater: true` (what the desktop app does) adds the catalog's photos without
+reading their originals; the app then reads them in the background. Headless sessions call
+`cmd_library_readOriginals` (`{limit?}`, default 1024 files per call) → `{checked, updated, unreadable, duplicates,
+remaining}`: it fills in what needs the file as Reload would, in batches; call it again while `remaining` > 0. A file
+whose content matches another library photo is kept and listed in `duplicates` (`{id, sameAs}`), since a catalog-first
+import can't skip duplicates by content before reading them.
 
 ## Resources
 

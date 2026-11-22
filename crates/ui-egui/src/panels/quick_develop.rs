@@ -2,6 +2,7 @@
 //! The arrows add a step to each photo's own value (`develop.quickAdjust`); the menus and Auto
 //! Tone set one choice on each (`develop.quickSet`); each click is one undo step.
 
+use crate::json_ext::JsonExt as _;
 use serde_json::json;
 
 use crate::LccApp;
@@ -123,7 +124,7 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
 fn quick_set(app: &mut LccApp, ui: &egui::Ui, p: serde_json::Value) {
     match app.run("develop.quickSet", p) {
         Ok(r) => {
-            if let Some(e) = r["errors"].as_array().and_then(|a| a.first()).and_then(|e| e.as_str()) {
+            if let Some(e) = r.field("errors").as_array().and_then(|a| a.first()).and_then(|e| e.as_str()) {
                 app.toast(ui.ctx(), e.to_string());
             }
         }

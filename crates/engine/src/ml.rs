@@ -64,6 +64,14 @@ const LIGHT_REST: Duration = Duration::from_millis(25);
 /// Poll interval when `ml.pump` pauses background work.
 const PAUSE_POLL: Duration = Duration::from_millis(25);
 
+/// Photos in a row that fail to index, with none indexed between them, before background indexing pauses itself: a
+/// fault that fails every photo (a model or device that can't run here) would otherwise read and decode the whole
+/// library, at full speed, on every start. Resuming (the row's button, `ml.resume`) tries again.
+pub(crate) const FAIL_STREAK_PAUSE: u32 = 25;
+
+/// How many failures a session writes to the log with their reason (then every hundredth): enough to say why.
+const FAILURES_LOGGED: u32 = 5;
+
 /// Default `topK` when semantic search filters the grid (`library.filter {semantic}` or `search.semantic {filter: true}`).
 pub const DEFAULT_FILTER_TOP_K: usize = 200;
 
@@ -110,12 +118,17 @@ impl Pace {
     }
 }
 
+/// Semantic search and its background indexing when the user has not chosen: on, except on Android, where no AI
+/// feature runs until the user switches it on (a phone has neither the memory nor the battery for a library-wide
+/// background scan it did not ask for).
+pub(crate) const DEFAULT_ENABLED: bool = !cfg!(target_os = "android");
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct MlSettings {
     embedder: Option<String>,
     device: Option<String>,
-    /// Semantic search (and its background indexing) on or off (`ml.enable`); unset means on.
+    /// Semantic search (and its background indexing) on or off (`ml.enable`); unset means [`DEFAULT_ENABLED`].
     #[serde(skip_serializing_if = "Option::is_none")]
     enabled: Option<bool>,
     /// Background indexing paused by the user (`ml.pause`); unset means not paused.
@@ -258,6 +271,10 @@ pub(crate) struct State {
     pub in_flight: HashSet<PhotoId>,
     /// Photos `(id, fingerprint)` whose decode/inference failed this session.
     pub failed_photos: HashSet<(u64, u64)>,
+    /// Photos that failed in a row since one was last indexed ([`FAIL_STREAK_PAUSE`]).
+    fail_streak: u32,
+    /// Failures this session (for [`FAILURES_LOGGED`]).
+    failures_seen: u32,
     /// Last time `store` was saved to disk.
     last_saved: Option<web_time::Instant>,
     /// Last time `ml_models_dir` was checked by `ml.pump`.
@@ -278,7 +295,7 @@ impl Default for State {
             device_adopted_dir: None,
             settings_cache: None,
             models_cache: None,
-            enabled: true,
+            enabled: DEFAULT_ENABLED,
             enabled_adopted_dir: None,
             paused_by_user: false,
             paused: false,
@@ -293,6 +310,8 @@ impl Default for State {
             store_path: None,
             in_flight: HashSet::new(),
             failed_photos: HashSet::new(),
+            fail_streak: 0,
+            failures_seen: 0,
             last_saved: None,
             last_checked: None,
             query_seq: 0,
@@ -362,6 +381,7 @@ impl State {
             self.in_flight.clear();
         }
         self.failed_photos.clear();
+        self.fail_streak = 0;
         self.paused_by_user = false;
         self.paused_row = None;
         self.store = None;
@@ -441,17 +461,42 @@ fn make_gpu_probe(device_choice: Arc<Mutex<Option<String>>>) -> Probe {
     })
 }
 
-/// CLIP's transformer blocks on the GPU through `lcc-gpu`'s wgpu kernels (`lcc_ml` checks them against the CPU first).
+/// CLIP's full towers on the GPU through `lcc-gpu`'s wgpu kernels (`lcc_ml` checks them against the CPU first).
 #[cfg(test)]
 pub(crate) fn clip_accelerator() -> lcc_ml::AccelFactory {
     clip_accelerator_for(Arc::new(Mutex::new(None)))
 }
 
-/// CLIP's transformer blocks on the GPU through `lcc-gpu`'s wgpu kernels, bound to the session's `device_choice`.
+#[cfg(not(target_arch = "wasm32"))]
+fn clip_block_refs(blocks: &[lcc_ml::BlockWeights]) -> Vec<lcc_gpu::clip::BlockRef<'_>> {
+    blocks
+        .iter()
+        .map(|b| lcc_gpu::clip::BlockRef {
+            ln1_w: &b.ln1_w,
+            ln1_b: &b.ln1_b,
+            q_w: &b.q_w,
+            q_b: &b.q_b,
+            k_w: &b.k_w,
+            k_b: &b.k_b,
+            v_w: &b.v_w,
+            v_b: &b.v_b,
+            o_w: &b.o_w,
+            o_b: &b.o_b,
+            ln2_w: &b.ln2_w,
+            ln2_b: &b.ln2_b,
+            fc1_w: &b.fc1_w,
+            fc1_b: &b.fc1_b,
+            fc2_w: &b.fc2_w,
+            fc2_b: &b.fc2_b,
+        })
+        .collect()
+}
+
+/// CLIP's full towers on the GPU through `lcc-gpu`'s wgpu kernels, bound to the session's `device_choice`.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn clip_accelerator_for(device_choice: Arc<Mutex<Option<String>>>) -> lcc_ml::AccelFactory {
-    struct Tower(lcc_gpu::clip::ClipTower);
-    impl lcc_ml::Accelerator for Tower {
+    struct BlockRunner(lcc_gpu::clip::ClipTower);
+    impl lcc_ml::Accelerator for BlockRunner {
         fn device(&self) -> String {
             self.0.device()
         }
@@ -459,33 +504,79 @@ pub(crate) fn clip_accelerator_for(device_choice: Arc<Mutex<Option<String>>>) ->
             self.0.run(x, batch, seq)
         }
     }
+    struct VisionRunner(lcc_gpu::clip::ClipVisionTower);
+    impl lcc_ml::Accelerator for VisionRunner {
+        fn device(&self) -> String {
+            self.0.device()
+        }
+        fn run_vision(&self, images: &[f32], batch: usize, h: usize, w: usize) -> Result<Vec<f32>, String> {
+            self.0.run(images, batch, h, w)
+        }
+    }
+    struct TextRunner(lcc_gpu::clip::ClipTextTower);
+    impl lcc_ml::Accelerator for TextRunner {
+        fn device(&self) -> String {
+            self.0.device()
+        }
+        fn run_text(&self, token_ids: &[u32], eot_indices: &[u32], batch: usize, seq: usize) -> Result<Vec<f32>, String> {
+            self.0.run(token_ids, eot_indices, batch, seq)
+        }
+    }
     Arc::new(move |w: &lcc_ml::TowerWeights| {
-        let spec = lcc_gpu::clip::TowerSpec { hidden: w.hidden, intermediate: w.intermediate, heads: w.heads, causal: w.causal, eps: w.eps };
-        let blocks: Vec<lcc_gpu::clip::BlockRef<'_>> = w
-            .blocks
-            .iter()
-            .map(|b| lcc_gpu::clip::BlockRef {
-                ln1_w: &b.ln1_w,
-                ln1_b: &b.ln1_b,
-                q_w: &b.q_w,
-                q_b: &b.q_b,
-                k_w: &b.k_w,
-                k_b: &b.k_b,
-                v_w: &b.v_w,
-                v_b: &b.v_b,
-                o_w: &b.o_w,
-                o_b: &b.o_b,
-                ln2_w: &b.ln2_w,
-                ln2_b: &b.ln2_b,
-                fc1_w: &b.fc1_w,
-                fc1_b: &b.fc1_b,
-                fc2_w: &b.fc2_w,
-                fc2_b: &b.fc2_b,
-            })
-            .collect();
         let target = device_choice.lock().unwrap_or_else(PoisonError::into_inner).clone();
-        let tower = lcc_gpu::clip::tower_for(target.as_deref(), spec, &blocks)?;
-        Ok(Arc::new(Tower(tower)) as Arc<dyn lcc_ml::Accelerator>)
+        match w {
+            lcc_ml::TowerWeights::Vision(vw) => {
+                let blocks = clip_block_refs(&vw.blocks);
+                let spec = lcc_gpu::clip::VisionTowerSpec {
+                    hidden: vw.hidden,
+                    intermediate: vw.intermediate,
+                    heads: vw.heads,
+                    eps: vw.eps,
+                    embed_dim: vw.embed_dim,
+                    patch_size: vw.patch_size,
+                    num_positions: vw.num_positions,
+                    img_w: vw.img_w,
+                    img_h: vw.img_h,
+                    patch_weight: &vw.patch_weight,
+                    class_embedding: &vw.class_embedding,
+                    position_embedding: &vw.position_embedding,
+                    pre_ln_w: &vw.pre_ln_w,
+                    pre_ln_b: &vw.pre_ln_b,
+                    blocks: &blocks,
+                    post_ln_w: &vw.post_ln_w,
+                    post_ln_b: &vw.post_ln_b,
+                    projection: &vw.projection,
+                };
+                let tower = lcc_gpu::clip::vision_tower_for(target.as_deref(), &spec)?;
+                Ok(Arc::new(VisionRunner(tower)) as Arc<dyn lcc_ml::Accelerator>)
+            }
+            lcc_ml::TowerWeights::Text(tw) => {
+                let blocks = clip_block_refs(&tw.blocks);
+                let spec = lcc_gpu::clip::TextTowerSpec {
+                    hidden: tw.hidden,
+                    intermediate: tw.intermediate,
+                    heads: tw.heads,
+                    eps: tw.eps,
+                    embed_dim: tw.embed_dim,
+                    vocab_size: tw.vocab_size,
+                    context_len: tw.context_len,
+                    token_embedding: &tw.token_embedding,
+                    position_embedding: &tw.position_embedding,
+                    blocks: &blocks,
+                    final_ln_w: &tw.final_ln_w,
+                    final_ln_b: &tw.final_ln_b,
+                    projection: &tw.projection,
+                };
+                let tower = lcc_gpu::clip::text_tower_for(target.as_deref(), &spec)?;
+                Ok(Arc::new(TextRunner(tower)) as Arc<dyn lcc_ml::Accelerator>)
+            }
+            lcc_ml::TowerWeights::Blocks { hidden, intermediate, heads, causal, eps, blocks } => {
+                let spec = lcc_gpu::clip::TowerSpec { hidden: *hidden, intermediate: *intermediate, heads: *heads, causal: *causal, eps: *eps };
+                let block_refs = clip_block_refs(blocks);
+                let tower = lcc_gpu::clip::tower_for(target.as_deref(), spec, &block_refs)?;
+                Ok(Arc::new(BlockRunner(tower)) as Arc<dyn lcc_ml::Accelerator>)
+            }
+        }
     })
 }
 
@@ -819,7 +910,8 @@ impl Session {
         };
         let model_id = self.ml_models_dir.clone().and_then(|d| self.ml.cached_models(&d).1);
         #[cfg(not(target_arch = "wasm32"))]
-        if model_id.is_some() && self.ml.store.is_none() {
+        // (the model is loaded only for semantic search that is on: switched off, an installed model stays on disk)
+        if model_id.is_some() && self.ml.store.is_none() && self.ml_enabled() {
             let _ = self.ensure_ml_encoder(false);
         }
         let indexed = self.ml.store.as_ref().map_or(0, Store::len);
@@ -934,6 +1026,7 @@ impl Session {
         } else {
             self.ml.paused_by_user = false;
             self.ml.paused_row = None;
+            self.ml.fail_streak = 0;
         }
         if let Some(row) = self.ml.row.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
             row.set_controls(Some(row_controls(paused)));
@@ -1409,6 +1502,7 @@ impl Session {
         let busy = q.busy();
         let mut added = 0usize;
         let mut failed = 0usize;
+        let mut last_failure = None;
         for f in finished {
             if let Some(rest) = f.key.strip_prefix("embed:")
                 && let Ok(raw_id) = rest.parse::<u64>()
@@ -1427,10 +1521,18 @@ impl Session {
                             && store.insert(out.photo_id.0, out.fingerprint, out.embedding).is_ok()
                         {
                             added += 1;
+                            self.ml.fail_streak = 0;
                         }
                     }
-                    Outcome::Failed(_) => {
+                    Outcome::Failed(why) => {
                         failed += 1;
+                        self.ml.fail_streak = self.ml.fail_streak.saturating_add(1);
+                        self.ml.failures_seen = self.ml.failures_seen.saturating_add(1);
+                        let n = self.ml.failures_seen;
+                        if n <= FAILURES_LOGGED || n.is_multiple_of(100) {
+                            log::warn!("ml: photo {raw_id} could not be indexed ({n} so far this session): {why}");
+                        }
+                        last_failure = Some(why);
                         if let Some(photo) = self.catalog.photo(pid) {
                             self.ml.failed_photos.insert((pid.0, photo_fingerprint(photo)));
                         }
@@ -1440,6 +1542,16 @@ impl Session {
                         self.ml.in_flight.clear();
                     }
                 }
+            }
+        }
+        if self.ml.fail_streak >= FAIL_STREAK_PAUSE && !self.ml.paused {
+            log::warn!(
+                "ml: {} photos in a row could not be indexed; background indexing pauses until it is resumed (last: {})",
+                self.ml.fail_streak,
+                last_failure.as_deref().unwrap_or("unknown")
+            );
+            if let Err(e) = self.ml_set_paused("ml.pump", true) {
+                log::warn!("ml: could not save the pause: {e}");
             }
         }
         let should_save =

@@ -1,9 +1,11 @@
 //! [`Manager`]: installed plug-ins, their grants, enabled state, logs and data.
 //!
 //! On disk (a folder, usually `<settings>/plugins`): `<id>.wasm` per plug-in, `plugins.json` with
-//! each plug-in's `{enabled, grant, denied}` (what the user allowed, and what they said no to), `data/<id>.json`, its metadata namespace (per library), and
+//! each plug-in's `{enabled, grant, denied, signer?}` (what the user allowed, what they said no to,
+//! and the author key pinned at its first signed install, [`Pin`]), `data/<id>.json`, its metadata namespace (per library), and
 //! `settings/<id>.json`, its settings and remembered dialog values (for the whole app), and
-//! `previous/<id>.wasm` + `previous/<id>.json`, the version an update replaced and its settings, to
+//! `previous/<id>.wasm` + `previous/<id>.json`, the version an update replaced, its settings and
+//! its signer (checked when it goes back), to
 //! go back to ([`Manager::rollback`]; nothing loads from that folder). A manager without a folder
 //! keeps everything in memory (tests, the web build).
 
@@ -17,9 +19,11 @@ use serde_json::{Value, json};
 use crate::context::{CallContext, HostApi, JobReporter, Unwatched};
 use crate::manifest::{Field, dialog_args, parse_version};
 use crate::permissions::{Permissions, Request, refused_root};
-use crate::runtime::{Limits, Plugin};
+use crate::runtime::{Limits, ManifestSource, Plugin};
 use crate::settings::{MAX_SETTINGS_BYTES, SettingsStore, command_scope, destination_scope};
+use crate::signature::{Signature, Signer};
 use crate::store::{NamespaceStore, write_atomic};
+use crate::updates::{CHECK_INTERVAL_SECS, Fetch, Net, Offer};
 use crate::{Error, Result};
 
 /// Log lines kept per plug-in.
@@ -57,9 +61,94 @@ pub struct Installed {
     live: Arc<Mutex<Permissions>>,
     /// Its module file (`None` without a folder): `<id>.wasm`, or the file it was copied in as.
     path: Option<PathBuf>,
+    /// The author key pinned for it.
+    pin: Pin,
+    /// The user turned its update check on (off by default).
+    check_updates: bool,
+    /// Its last update check, kept until it is a day old or its version changes.
+    last_check: Option<LastCheck>,
+}
+
+/// A plug-in's last update check ([`Manager::record_check`]), as `plugins.json` keeps it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LastCheck {
+    /// When, in seconds since 1970 (UTC).
+    pub at: i64,
+    /// The version it found the plug-in at: a result for another version is out of date.
+    pub version: String,
+    /// The newer version the feed offers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offer: Option<Offer>,
+    /// Why the check failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// One update check to run ([`Manager::update_checks`]): plug-in `id` at `version`, whose feed is
+/// `url`. Fetched off the manager's lock, then handed to [`Manager::record_check`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdateCheck {
+    pub id: String,
+    pub version: String,
+    pub url: String,
 }
 
 impl Installed {
+    /// The author key pinned for it ([`Pin`]).
+    pub fn pin(&self) -> &Pin {
+        &self.pin
+    }
+
+    /// Its `plugins.json` entry.
+    fn entry(&self) -> Entry {
+        Entry {
+            enabled: self.enabled,
+            grant: self.grant.clone(),
+            denied: self.denied.clone(),
+            signer: self.pin.stored(),
+            check_updates: self.check_updates,
+            last_check: self.last_check.clone(),
+        }
+    }
+
+    /// Its update feed, or why it gets no update checks: only a plug-in whose manifest names a
+    /// feed (`updateUrl`) and whose file is stamped and signed by its pinned author key, so an
+    /// update's permissions can be read before it runs and only its author can ship one.
+    pub fn update_feed(&self) -> std::result::Result<&str, String> {
+        let url = self.plugin.manifest().update_url.as_deref().ok_or("its manifest names no update feed (updateUrl)")?;
+        if !self.plugin.stamped() {
+            return Err("its file isn't stamped with its manifest".into());
+        }
+        match (self.plugin.signature().signer(), self.pin.signer()) {
+            (Some(file), Some(pinned)) if file == pinned => Ok(url),
+            _ => Err("its file isn't signed by an author key pinned for it".into()),
+        }
+    }
+
+    /// Its update check as `plugin.list` gives it: whether the user turned it on, whether it can
+    /// have one (or why not), and the last result: the version offered, with the declared
+    /// permission groups it adds and the host features `features` lacks.
+    pub fn updates_info(&self, features: &[String]) -> Value {
+        let feed = self.update_feed();
+        let mut v = json!({"check": self.check_updates, "available": feed.is_ok(), "reason": feed.err()});
+        let current = self.last_check.as_ref().filter(|c| c.version == self.plugin.manifest().version);
+        if let Some(c) = current {
+            v["checkedAt"] = json!(c.at);
+            v["error"] = json!(c.error);
+            v["offer"] = match &c.offer {
+                Some(o) => {
+                    let mut ov = serde_json::to_value(o).unwrap_or(Value::Null);
+                    ov["adds"] = json!(o.adds(&self.plugin.manifest().permissions));
+                    ov["missing"] = json!(o.missing(features));
+                    ov
+                }
+                None => Value::Null,
+            };
+        }
+        v
+    }
+
     /// Its module file in the plug-ins folder (`None` without a folder).
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
@@ -141,6 +230,8 @@ impl Installed {
             "icon": m.icon.is_some(), "header": m.header.is_some(),
             // where it comes from: homepage, repository, changelog, license, issues
             "about": m.about.info(),
+            // the author key pinned for it, as a fingerprint; null: unsigned
+            "signer": self.pin.signer().map(|s| s.fingerprint()),
             // a page showing the settings is out of date when either changes (an update, or a
             // value set by the plug-in or another window)
             "moduleHash": self.plugin.module_hash(), "settingsRevision": self.settings().revision(),
@@ -193,6 +284,141 @@ struct Entry {
     grant: Permissions,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     denied: Vec<Denial>,
+    /// The pinned author key in standard base64 ([`Pin`]); none: unsigned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    signer: Option<String>,
+    /// The user turned its update check on.
+    #[serde(default, rename = "checkUpdates", skip_serializing_if = "std::ops::Not::not")]
+    check_updates: bool,
+    #[serde(default, rename = "lastCheck", skip_serializing_if = "Option::is_none")]
+    last_check: Option<LastCheck>,
+}
+
+impl Entry {
+    fn pin(&self) -> Pin {
+        match &self.signer {
+            None => Pin::None,
+            Some(text) => Signer::from_base64(text).map_or_else(|_| Pin::Unreadable(text.clone()), Pin::Key),
+        }
+    }
+}
+
+/// The author key pinned for an installed plug-in: set at its first signed install, kept while
+/// later files are signed by the same key, and changed only when the user says yes to another
+/// signer ([`SignerAnswer`]). A file that no longer matches it doesn't load.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Pin {
+    /// Installed unsigned: its first signed version pins its key.
+    None,
+    Key(Signer),
+    /// `plugins.json` holds something that isn't a key (kept as it was): treated as another signer.
+    Unreadable(String),
+}
+
+impl Pin {
+    /// The pinned key, when there is one that can be read.
+    pub fn signer(&self) -> Option<Signer> {
+        match self {
+            Pin::Key(s) => Some(*s),
+            _ => None,
+        }
+    }
+
+    /// As `plugins.json` keeps it.
+    fn stored(&self) -> Option<String> {
+        match self {
+            Pin::None => None,
+            Pin::Key(s) => Some(s.to_base64()),
+            Pin::Unreadable(text) => Some(text.clone()),
+        }
+    }
+
+    /// The pin a file signed as `signature` (none or valid) sets when nothing was pinned.
+    fn of(signature: &Signature) -> Pin {
+        signature.signer().map_or(Pin::None, Pin::Key)
+    }
+
+    /// A pin as a JSON file keeps it ([`Pin::stored`]): `null` for none, a key in base64, and
+    /// anything else as [`Pin::Unreadable`].
+    fn read(value: &Value) -> Pin {
+        match value {
+            Value::Null => Pin::None,
+            Value::String(text) => Signer::from_base64(text).map_or_else(|_| Pin::Unreadable(text.clone()), Pin::Key),
+            other => Pin::Unreadable(other.to_string()),
+        }
+    }
+
+    /// Whether a file signed as `file` is signed exactly as this pin says: by its key, or (for
+    /// [`Pin::None`]) not at all.
+    fn matches(&self, file: &Signature) -> bool {
+        match (self, file) {
+            (Pin::Key(k), Signature::Valid(s)) => k == s,
+            (Pin::None, Signature::None) => true,
+            _ => false,
+        }
+    }
+}
+
+/// The user's answer to "this file isn't signed by the key pinned for the plug-in: install it
+/// anyway?" ([`Manager::install_loaded_as`]), as `plugin.install` takes it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum SignerAnswer {
+    /// Not asked: a file that isn't signed by the pinned key is refused, saying why.
+    #[default]
+    None,
+    /// Yes to the file's signer (`acceptSigner`): its full public key in base64, as
+    /// `plugin.inspectFile` gives it in `signerKey`, or its fingerprint (spaces and case ignored).
+    /// It becomes the pinned key. Only for a file signed by exactly that key.
+    Signer(String),
+    /// Yes to an unsigned file (`acceptUnsigned`): the pin goes.
+    Unsigned,
+}
+
+/// What `current` (`None`: not installed) becomes when a file signed as `file` installs over it,
+/// or why that needs the user's yes. `trusted`: a file the user had installed (a rollback).
+fn decide_pin(name: &str, current: Option<&Pin>, file: &Signature, answer: &SignerAnswer, trusted: bool) -> Result<Pin> {
+    let signer = file.signer();
+    let current = match current {
+        None | Some(Pin::None) => return Ok(Pin::of(file)),
+        Some(Pin::Key(k)) if signer == Some(*k) => return Ok(Pin::Key(*k)),
+        Some(c) => c,
+    };
+    if trusted {
+        return Ok(Pin::of(file));
+    }
+    if let Some(pin) = answered(file, answer) {
+        return Ok(pin);
+    }
+    let was = match current {
+        Pin::Key(k) => format!("was installed signed by {}", k.fingerprint()),
+        _ => "has a pinned signer in plugins.json that can't be read".to_string(),
+    };
+    Err(signer_error(name, &was, file))
+}
+
+/// The pin the user's `answer` says yes to for a file signed as `file`, when it says yes to exactly
+/// that file's signer (or to its being unsigned).
+fn answered(file: &Signature, answer: &SignerAnswer) -> Option<Pin> {
+    let squash = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_ascii_lowercase();
+    match (file, answer) {
+        (Signature::Valid(s), SignerAnswer::Signer(given))
+            if Signer::from_base64(given.trim()).ok() == Some(*s) || squash(given) == squash(&s.fingerprint()) =>
+        {
+            Some(Pin::Key(*s))
+        }
+        (Signature::None, SignerAnswer::Unsigned) => Some(Pin::None),
+        _ => None,
+    }
+}
+
+/// Why a file signed as `file` needs the user's yes: plug-in `name` `was` (how it was signed).
+fn signer_error(name: &str, was: &str, file: &Signature) -> Error {
+    let (is, ask) = match file.signer() {
+        // the full key, so a yes from a script covers exactly this signer (the fingerprint works too)
+        Some(s) => (format!("this file is signed by {}", s.fingerprint()), format!("acceptSigner: \"{}\"", s.to_base64())),
+        None => ("this file isn't signed".to_string(), "acceptUnsigned: true".to_string()),
+    };
+    Error::Signer(format!("\"{name}\" {was}, but {is}: install it only if you trust where it came from ({ask} says yes, and pins the new signer)"))
 }
 
 /// A request the user said no to, and when (`YYYY-MM-DD`).
@@ -389,6 +615,22 @@ fn adds_nothing(grant: &Permissions, requested: &Permissions, granted: &Permissi
     }
 }
 
+/// Why a file doesn't load against its plug-in's pin ([`Pin::Key`] it isn't signed by, or
+/// [`Pin::Unreadable`]); its grant and data are kept.
+fn pin_error(pin: &Pin, file: &Signature) -> String {
+    let is = match file.signer() {
+        Some(s) => format!("it is signed by {}", s.fingerprint()),
+        None => "it isn't signed".to_string(),
+    };
+    match pin {
+        Pin::Key(k) => format!(
+            "its file isn't signed by the key pinned when it was installed ({}): {is}. It may have been replaced; install it again to choose whether to trust it",
+            k.fingerprint()
+        ),
+        _ => "the signer pinned for it in plugins.json can't be read; install it again to choose whether to trust its signer".to_string(),
+    }
+}
+
 /// A module in the plug-in folder that didn't load.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Failed {
@@ -438,6 +680,8 @@ pub struct Manager {
     library: String,
     /// Where `program.start` makes run folders (`None`: [`crate::programs::runs_root`]).
     runs_root: Option<PathBuf>,
+    /// What update checks and updates download with ([`Net`]; tests serve their own).
+    fetcher: Arc<dyn Fetch>,
 }
 
 impl Default for Manager {
@@ -455,6 +699,7 @@ impl Default for Manager {
             previous: BTreeMap::new(),
             library: String::new(),
             runs_root: None,
+            fetcher: Arc::new(Net),
         }
     }
 }
@@ -475,13 +720,20 @@ impl Manager {
     pub fn open_with_features(dir: &Path, features: &[&str]) -> Result<Manager> {
         let io = |e: std::io::Error| Error::Io(format!("{}: {e}", dir.display()));
         std::fs::create_dir_all(dir).map_err(io)?;
+        // unreadable: never written over by the pins set below, so the grants in it aren't lost
+        let mut readable = true;
         let state: State = match std::fs::read(dir.join("plugins.json")) {
             Ok(b) => serde_json::from_slice(&b).unwrap_or_else(|e| {
                 log::warn!("plugins.json is unreadable ({e}); plug-ins load disabled");
+                readable = false;
                 State::default()
             }),
-            Err(_) => State::default(),
+            Err(e) => {
+                readable = e.kind() == std::io::ErrorKind::NotFound;
+                State::default()
+            }
         };
+        let mut pinned_now = false;
         // run folders a program still used when the app last quit
         #[cfg(not(target_arch = "wasm32"))]
         crate::programs::sweep_old_runs(&crate::programs::runs_root(), crate::programs::STALE_RUN_AGE);
@@ -522,12 +774,28 @@ impl Manager {
                 m.failed.push(Failed { file, error: Error::Unsupported(missing.clone()).to_string(), missing, id, path: Some(f) });
                 continue;
             }
+            // a file that isn't signed by the pinned key doesn't load (replaced behind the app's
+            // back); not in plugins.json, or pinned as unsigned: its own signer is pinned
+            let pin = match state.plugins.get(&id).map(Entry::pin) {
+                Some(Pin::Key(k)) if p.signature().signer() == Some(k) => Pin::Key(k),
+                Some(Pin::None) | None => {
+                    // written at once, so a file swapped in before the next save can't take its place
+                    pinned_now |= p.signature().signer().is_some();
+                    Pin::of(p.signature())
+                }
+                Some(pin) => {
+                    m.keep(&state, &id);
+                    m.failed.push(Failed { file, error: pin_error(&pin, p.signature()), missing: Vec::new(), id, path: Some(f) });
+                    continue;
+                }
+            };
             // only a module that loads holds its id: one that can't gives way to a later file
             seen.insert(id.clone(), file.clone());
             m.unloaded.remove(&id);
             // not in plugins.json (copied in by hand): disabled, nothing granted
             let (enabled, grant, denied) =
                 state.plugins.get(&id).map_or((false, Permissions::default(), Vec::new()), |e| (e.enabled, e.grant.clone(), e.denied.clone()));
+            let (check_updates, last_check) = state.plugins.get(&id).map_or((false, None), |e| (e.check_updates, e.last_check.clone()));
             let mut log = VecDeque::new();
             if let Err(e) = p.manifest().semver() {
                 log.push_back(format!("loaded without a valid version ({e}); installing a new version will need one"));
@@ -536,13 +804,33 @@ impl Manager {
             log.extend(damaged);
             let live = Arc::new(Mutex::new(Permissions::default()));
             let refused = m.refused_roots(&p.manifest().permissions);
-            let installed =
-                Installed { plugin: Arc::new(p), enabled, grant, denied, refused, log, store: None, settings, busy: None, live, path: Some(f) };
+            let installed = Installed {
+                plugin: Arc::new(p),
+                enabled,
+                grant,
+                denied,
+                refused,
+                log,
+                store: None,
+                settings,
+                busy: None,
+                live,
+                path: Some(f),
+                pin,
+                check_updates,
+                last_check,
+            };
             installed.share_effective();
-            if let Some((version, _)) = read_previous(dir, &id) {
+            if let Some((version, ..)) = read_previous(dir, &id) {
                 m.previous.insert(id.clone(), version);
             }
             m.plugins.insert(id, installed);
+        }
+        if pinned_now
+            && readable
+            && let Err(e) = m.save_over(&state)
+        {
+            log::warn!("plug-ins: the signers pinned at start-up couldn't be saved to plugins.json: {e}");
         }
         Ok(m)
     }
@@ -671,21 +959,45 @@ impl Manager {
 
     /// [`Manager::install_bytes`] for a module already loaded by [`Manager::load`] from `bytes`.
     pub fn install_loaded(&mut self, plugin: Plugin, bytes: &[u8], grant: Option<Permissions>, allow_downgrade: bool) -> Result<&Installed> {
-        self.install_plugin(plugin, bytes, grant, allow_downgrade, false, false)
+        self.install_plugin(plugin, bytes, grant, allow_downgrade, false, false, &SignerAnswer::None)
     }
 
     /// [`Manager::install_loaded`] as the user approved it ([`Manager::install_bytes_by_user`]).
     pub fn install_loaded_by_user(&mut self, plugin: Plugin, bytes: &[u8], grant: Option<Permissions>, allow_downgrade: bool) -> Result<&Installed> {
-        self.install_plugin(plugin, bytes, grant, allow_downgrade, true, false)
+        self.install_plugin(plugin, bytes, grant, allow_downgrade, true, false, &SignerAnswer::None)
+    }
+
+    /// [`Manager::install_loaded`] (`by_user`: [`Manager::install_loaded_by_user`]) with the user's
+    /// answer about a file that isn't signed by the key pinned for its plug-in. The first signed
+    /// install pins the file's key; a file signed by the pinned key keeps it; one signed by another
+    /// key, unsigned, or over a pin that can't be read is refused ([`Error::Signer`]) unless
+    /// `signer` says yes to exactly that ([`SignerAnswer`]), which pins the new signer (or none).
+    pub fn install_loaded_as(
+        &mut self,
+        plugin: Plugin,
+        bytes: &[u8],
+        grant: Option<Permissions>,
+        allow_downgrade: bool,
+        by_user: bool,
+        signer: &SignerAnswer,
+    ) -> Result<&Installed> {
+        self.install_plugin(plugin, bytes, grant, allow_downgrade, by_user, false, signer)
+    }
+
+    /// The pin plug-in `id` has: loaded, or kept for a module in the folder that didn't load.
+    /// `None`: not installed.
+    pub fn pin(&self, id: &str) -> Option<Pin> {
+        self.plugins.get(id).map(|i| i.pin.clone()).or_else(|| self.kept.get(id).map(Entry::pin))
     }
 
     fn install_checked(&mut self, bytes: &[u8], grant: Option<Permissions>, allow_downgrade: bool, by_user: bool) -> Result<&Installed> {
         let plugin = Plugin::load(bytes, self.limits.clone())?;
-        self.install_plugin(plugin, bytes, grant, allow_downgrade, by_user, false)
+        self.install_plugin(plugin, bytes, grant, allow_downgrade, by_user, false, &SignerAnswer::None)
     }
 
     /// `rollback`: going back to the version kept ([`Manager::rollback`]): it keeps no version to
-    /// go back to, and logs the rollback.
+    /// go back to, logs the rollback, and pins that version's signer (the user had installed it).
+    #[allow(clippy::too_many_arguments)]
     fn install_plugin(
         &mut self,
         plugin: Plugin,
@@ -694,6 +1006,7 @@ impl Manager {
         allow_downgrade: bool,
         by_user: bool,
         rollback: bool,
+        signer: &SignerAnswer,
     ) -> Result<&Installed> {
         let (missing, version, downgrade) = self.install_check(plugin.manifest());
         if !missing.is_empty() {
@@ -709,6 +1022,20 @@ impl Manager {
             return Err(Error::Downgrade { installed: installed.clone(), new });
         }
         let id = plugin.id().to_string();
+        // before anything is written: a file not signed by the pinned key needs the user's yes
+        let old_pin = self.pin(&id);
+        let pin = decide_pin(&plugin.manifest().name, old_pin.as_ref(), plugin.signature(), signer, rollback)?;
+        let pin_line = match (&old_pin, &pin) {
+            (_, Pin::Key(k)) if old_pin.as_ref().and_then(Pin::signer) == Some(*k) => None,
+            (None | Some(Pin::None), Pin::Key(k)) => Some(format!("signed by {}: pinned as its signer", k.fingerprint())),
+            (Some(_), Pin::Key(k)) if rollback => Some(format!("went back to the version signed by {}: pinned as its signer", k.fingerprint())),
+            (Some(_), Pin::Key(k)) => Some(format!("signer changed to {}, as you said yes to", k.fingerprint())),
+            (Some(Pin::Key(_) | Pin::Unreadable(_)), Pin::None) if rollback => {
+                Some("went back to the unsigned version: no signer is pinned".to_string())
+            }
+            (Some(Pin::Key(_) | Pin::Unreadable(_)), Pin::None) => Some("installed unsigned, as you said yes to: no signer is pinned".to_string()),
+            _ => None,
+        };
         // a module that stopped loading keeps its grant for the version that replaces it
         let mut previous = self.plugins.get(&id).map(|i| i.grant.clone()).or_else(|| self.kept.get(&id).map(|e| e.grant.clone())).unwrap_or_default();
         // programs were allowed for the code the user saw: different code from a command keeps
@@ -731,6 +1058,14 @@ impl Manager {
             adds_nothing(g, &plugin.manifest().permissions, &previous)?;
         }
         let denied = self.plugins.get(&id).map(|i| i.denied.clone()).or_else(|| self.kept.get(&id).map(|e| e.denied.clone())).unwrap_or_default();
+        // the update check stays as the user set it; its last result only for the same version
+        let (check_updates, last_check) = self
+            .plugins
+            .get(&id)
+            .map(|i| (i.check_updates, i.last_check.clone()))
+            .or_else(|| self.kept.get(&id).map(|e| (e.check_updates, e.last_check.clone())))
+            .unwrap_or_default();
+        let last_check = last_check.filter(|c| c.version == new);
         let grant = grant.unwrap_or_else(|| previous.clone()).intersect(&plugin.manifest().permissions);
         // a granted program whose entry the update widened is no longer allowed: say why
         let widened: Vec<String> = plugin
@@ -750,7 +1085,7 @@ impl Manager {
                     .as_deref()
                     .ok_or_else(|| Error::NotFound(format!("{id}.wasm")))
                     .and_then(|p| read_module(p, &self.limits))
-                    .map(|b| (b, old.plugin.manifest().version.clone(), old.settings().snapshot())),
+                    .map(|b| (b, old.plugin.manifest().version.clone(), old.settings().snapshot(), old.pin.clone())),
             ),
             _ => None,
         };
@@ -779,20 +1114,22 @@ impl Manager {
             && !rollback
         {
             match keep {
-                Some(keep) => match keep.and_then(|(b, version, settings)| keep_previous(dir, &id, &b, &version, &settings).map(|_| version)) {
-                    Ok(version) => {
-                        self.previous.insert(id.clone(), version);
+                Some(keep) => {
+                    match keep.and_then(|(b, version, settings, pin)| keep_previous(dir, &id, &b, &version, &settings, &pin).map(|_| version)) {
+                        Ok(version) => {
+                            self.previous.insert(id.clone(), version);
+                        }
+                        Err(e) => {
+                            // none rather than an older one under the wrong version
+                            let _ = discard_previous(dir, &id);
+                            self.previous.remove(&id);
+                            kept_error = Some(format!("the version it replaces couldn't be kept to go back to: {e}"));
+                        }
                     }
-                    Err(e) => {
-                        // none rather than an older one under the wrong version
-                        let _ = discard_previous(dir, &id);
-                        self.previous.remove(&id);
-                        kept_error = Some(format!("the version it replaces couldn't be kept to go back to: {e}"));
-                    }
-                },
+                }
                 // the same code again keeps what it had; a fresh install finds one a removal kept
                 None if old_version.is_none() => match read_previous(dir, &id) {
-                    Some((version, _)) => {
+                    Some((version, ..)) => {
                         self.previous.insert(id.clone(), version);
                     }
                     None => {
@@ -828,8 +1165,22 @@ impl Manager {
             log.push_back(format!("settings: {e}"));
         }
         let refused = self.refused_roots(&plugin.manifest().permissions);
-        let installed =
-            Installed { plugin: Arc::new(plugin), enabled: true, grant, denied, refused, log, store: None, settings, busy: None, live, path };
+        let installed = Installed {
+            plugin: Arc::new(plugin),
+            enabled: true,
+            grant,
+            denied,
+            refused,
+            log,
+            store: None,
+            settings,
+            busy: None,
+            live,
+            path,
+            pin,
+            check_updates,
+            last_check,
+        };
         installed.share_effective();
         self.plugins.insert(id.clone(), installed);
         self.save()?;
@@ -844,7 +1195,7 @@ impl Manager {
                 let unknown = &i.plugin.manifest().unknown_fields;
                 let unknown = (!unknown.is_empty()).then(|| format!("unknown manifest fields: {}", unknown.join(", ")));
                 let ignored = i.plugin.manifest().dropped.iter().map(|d| format!("manifest value dropped: {d}")).collect::<Vec<_>>();
-                for line in dropped.into_iter().chain(widened).chain(unknown).chain(ignored) {
+                for line in pin_line.into_iter().chain(dropped).chain(widened).chain(unknown).chain(ignored) {
                     i.push_log(line);
                 }
                 &*i
@@ -877,26 +1228,43 @@ impl Manager {
     ///
     /// When the module can't be written, the current version stays as it was, settings too.
     pub fn rollback(&mut self, id: &str) -> Result<&Installed> {
-        self.rollback_as(id, false)
+        self.rollback_as(id, false, &SignerAnswer::None)
     }
 
     /// [`Manager::rollback`] as the user asked for it on the plug-in's page: it keeps the programs
     /// granted (those the old version asks for). Never reachable from a command.
     pub fn rollback_by_user(&mut self, id: &str) -> Result<&Installed> {
-        self.rollback_as(id, true)
+        self.rollback_as(id, true, &SignerAnswer::None)
     }
 
-    fn rollback_as(&mut self, id: &str, by_user: bool) -> Result<&Installed> {
+    /// [`Manager::rollback`] (`by_user`: [`Manager::rollback_by_user`]) with the user's answer
+    /// about a kept version that isn't signed as it was when it was replaced: the signer recorded
+    /// beside it in `previous/<id>.json` (another key, unsigned, or invalid: changed since). Such a
+    /// file is refused ([`Error::Signer`]) unless `signer` says yes to exactly its signer, as for
+    /// [`Manager::install_loaded_as`]. A version kept before signers were recorded goes back as it is.
+    pub fn rollback_as(&mut self, id: &str, by_user: bool, signer: &SignerAnswer) -> Result<&Installed> {
         let none = || Error::Params(format!("{id} has no previous version to go back to"));
         if !self.plugins.contains_key(id) {
             return Err(Error::NotFound(id.into()));
         }
         let Some(dir) = self.dir.clone().filter(|_| self.previous.contains_key(id)) else { return Err(none()) };
-        let (_, settings) = read_previous(&dir, id).ok_or_else(none)?;
+        let (_, settings, recorded) = read_previous(&dir, id).ok_or_else(none)?;
         let bytes = read_module(&previous_paths(&dir, id).0, &self.limits)?;
         let plugin = Plugin::load(&bytes, self.limits.clone())?;
         if plugin.id() != id {
             return Err(Error::Failed(format!("the version kept to go back to is another plug-in ({})", plugin.id())));
+        }
+        // the kept file is still the one the update replaced: signed as it was then, or the user's yes
+        if let Some(recorded) = recorded
+            && !recorded.matches(plugin.signature())
+            && answered(plugin.signature(), signer).is_none()
+        {
+            let was = match &recorded {
+                Pin::Key(k) => format!("version {} was kept signed by {}", plugin.manifest().version, k.fingerprint()),
+                Pin::None => format!("version {} was kept unsigned", plugin.manifest().version),
+                Pin::Unreadable(_) => format!("version {} was kept with a signer that can't be read", plugin.manifest().version),
+            };
+            return Err(signer_error(&plugin.manifest().name, &was, plugin.signature()));
         }
         // the settings go back with the module or not at all: staged beside their file first
         let file = SettingsStore::path_in(&dir, id);
@@ -910,7 +1278,7 @@ impl Manager {
         if let Some(b) = &restore {
             write_atomic(&staged, b)?;
         }
-        match self.install_plugin(plugin, &bytes, None, true, by_user, true) {
+        match self.install_plugin(plugin, &bytes, None, true, by_user, true, &SignerAnswer::None) {
             Ok(_) => {}
             Err(e) => {
                 let _ = std::fs::remove_file(&staged);
@@ -1026,10 +1394,156 @@ impl Manager {
     pub fn demote(&mut self, id: &str, error: String) -> bool {
         let Some(p) = self.plugins.remove(id) else { return false };
         *p.live.lock().unwrap_or_else(PoisonError::into_inner) = Permissions::default();
-        self.kept.insert(id.to_string(), Entry { enabled: p.enabled, grant: p.grant.clone(), denied: p.denied.clone() });
+        self.kept.insert(id.to_string(), p.entry());
         let file = p.path.as_ref().map_or_else(|| format!("{id}.wasm"), |f| f.display().to_string());
         self.failed.push(Failed { file, error, missing: Vec::new(), id: id.to_string(), path: p.path });
         true
+    }
+
+    /// What update checks and updates download with (default: the network).
+    pub fn set_fetcher(&mut self, fetcher: Arc<dyn Fetch>) {
+        self.fetcher = fetcher;
+    }
+
+    /// See [`Manager::set_fetcher`]: cloned out, so a download runs off the manager's lock.
+    pub fn fetcher(&self) -> Arc<dyn Fetch> {
+        self.fetcher.clone()
+    }
+
+    /// Turns plug-in `id`'s update check on or off (off by default). Only a plug-in that can have
+    /// one ([`Installed::update_feed`]) can have it turned on.
+    pub fn set_update_check(&mut self, id: &str, on: bool) -> Result<()> {
+        let p = self.plugins.get_mut(id).ok_or_else(|| Error::NotFound(id.into()))?;
+        if on && let Err(why) = p.update_feed() {
+            return Err(Error::Update(format!("{} gets no update checks: {why}", p.plugin.manifest().name)));
+        }
+        if p.check_updates != on {
+            p.check_updates = on;
+            p.push_log(if on { "update check turned on".into() } else { "update check turned off".into() });
+        }
+        self.save()
+    }
+
+    /// The update checks to run: plug-in `id` whatever its setting and the age of its last
+    /// check (an error when it can't have one), or, with no `id`, every plug-in whose check the
+    /// user turned on; with `due_at` (now, in seconds since 1970) only those whose last check is
+    /// a day old or more (or from another version, or from the future).
+    pub fn update_checks(&self, id: Option<&str>, due_at: Option<i64>) -> Result<Vec<UpdateCheck>> {
+        let check = |p: &Installed, url: &str| UpdateCheck {
+            id: p.plugin.id().to_string(),
+            version: p.plugin.manifest().version.clone(),
+            url: url.to_string(),
+        };
+        if let Some(id) = id {
+            let p = self.plugins.get(id).ok_or_else(|| Error::NotFound(id.into()))?;
+            let url = p.update_feed().map_err(|why| Error::Update(format!("{} gets no update checks: {why}", p.plugin.manifest().name)))?;
+            return Ok(vec![check(p, url)]);
+        }
+        let due = |p: &Installed| match (due_at, &p.last_check) {
+            (None, _) | (_, None) => true,
+            (Some(now), Some(c)) => c.version != p.plugin.manifest().version || c.at > now || now.saturating_sub(c.at) >= CHECK_INTERVAL_SECS,
+        };
+        Ok(self.plugins.values().filter(|p| p.check_updates && due(p)).filter_map(|p| p.update_feed().ok().map(|url| check(p, url))).collect())
+    }
+
+    /// Keeps the result of `check` made at `at` (seconds since 1970): the feed as fetched, or why
+    /// it couldn't be. Nothing is kept when the plug-in changed version (or went) meanwhile.
+    pub fn record_check(&mut self, check: &UpdateCheck, at: i64, fetched: std::result::Result<Vec<u8>, String>) -> Result<()> {
+        let Some(p) = self.plugins.get_mut(&check.id) else { return Ok(()) };
+        if p.plugin.manifest().version != check.version {
+            return Ok(());
+        }
+        let mut lines = Vec::new();
+        let result = fetched.and_then(|feed| crate::updates::read_feed(&feed, &check.id, &check.version, &mut lines));
+        let (offer, error) = match result {
+            Ok(offer) => (offer, None),
+            Err(e) => (None, Some(e)),
+        };
+        lines.extend(error.as_ref().map(|e| format!("update check failed: {e}")));
+        lines.extend(offer.as_ref().map(|o| format!("update check: version {} is available", o.version)));
+        for line in lines {
+            p.push_log(line);
+        }
+        p.last_check = Some(LastCheck { at, version: check.version.clone(), offer, error });
+        self.save()
+    }
+
+    /// The update plug-in `id`'s last check found, when it can be installed: not one that needs
+    /// host features this version lacks.
+    pub fn update_offer(&self, id: &str) -> Result<Offer> {
+        let p = self.plugins.get(id).ok_or_else(|| Error::NotFound(id.into()))?;
+        p.update_feed().map_err(|why| Error::Update(format!("{} gets no updates: {why}", p.plugin.manifest().name)))?;
+        let offer = p
+            .last_check
+            .as_ref()
+            .filter(|c| c.version == p.plugin.manifest().version)
+            .and_then(|c| c.offer.clone())
+            .ok_or_else(|| Error::Update(format!("no update of {} was found; check for one first", p.plugin.manifest().name)))?;
+        let missing = offer.missing(&self.features);
+        if !missing.is_empty() {
+            return Err(Error::Unsupported(missing));
+        }
+        Ok(offer)
+    }
+
+    /// Installs `bytes`, downloaded from [`Manager::update_offer`]'s `url`, as plug-in `id`'s
+    /// update, through the same path as an install (`by_user` as for one): its grant cut back to
+    /// what it asks for, new permissions not granted, the version replaced kept to go back to.
+    /// Refused, installing nothing: a file whose SHA-256 isn't the feed's, that isn't stamped, is
+    /// another plug-in or version than offered, or isn't signed by the pinned key; and, unless
+    /// `accept_undeclared`, one whose manifest asks for permission groups the feed didn't declare
+    /// ([`Error::Undeclared`]).
+    pub fn install_update(&mut self, id: &str, bytes: &[u8], accept_undeclared: bool, by_user: bool) -> Result<&Installed> {
+        use sha2::{Digest, Sha256};
+        let offer = self.update_offer(id)?;
+        let fail = |why: String| Err(Error::Update(why));
+        let sha: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
+        if sha != offer.sha256 {
+            return fail(format!("the downloaded file's SHA-256 is {sha}, not the {} its update feed gives", offer.sha256));
+        }
+        // read from the stamped section and the signature without running the module: nothing
+        // runs before it is known to be the offered version, signed by the pinned key
+        let seen = Plugin::inspect(bytes, self.limits.clone(), false)?;
+        if seen.source != ManifestSource::Section {
+            return fail("the downloaded file isn't stamped with its manifest, so what it asks for can't be read before it runs".into());
+        }
+        if seen.manifest.id != id || seen.manifest.version != offer.version {
+            return fail(format!(
+                "the downloaded file is {} {}, not {id} {} as its update feed says",
+                seen.manifest.id, seen.manifest.version, offer.version
+            ));
+        }
+        if let Signature::Invalid(why) = &seen.signature {
+            return fail(format!("the downloaded file's signature doesn't hold up: {why}"));
+        }
+        let installed = self.plugins.get(id).ok_or_else(|| Error::NotFound(id.into()))?;
+        if !installed.pin.matches(&seen.signature) || seen.signature.signer().is_none() {
+            return fail(match seen.signature.signer() {
+                Some(s) => {
+                    format!("the downloaded file is signed by {}, not by the author key pinned for it; install it by hand to decide", s.fingerprint())
+                }
+                None => "the downloaded file isn't signed; install it by hand to decide".into(),
+            });
+        }
+        let had = &installed.plugin.manifest().permissions;
+        let requests: Vec<Request> = seen.manifest.permissions.requests().into_iter().filter(|r| !had.holds(r)).collect();
+        let mut groups: Vec<String> = requests
+            .iter()
+            .filter(|r| !had.holds(&Request::group(r.group)) && !offer.permissions.iter().any(|g| g == r.group.name()))
+            .map(|r| r.group.name().to_string())
+            .collect();
+        groups.dedup();
+        if !groups.is_empty() && !accept_undeclared {
+            return Err(Error::Undeclared { groups, requests });
+        }
+        // now it runs: loading checks the section against `lcc_manifest`'s answer
+        let plugin = self.load(bytes)?;
+        self.install_plugin(plugin, bytes, None, false, by_user, false, &SignerAnswer::None)
+    }
+
+    /// The limits of plug-ins installed from now on ([`Manager::set_limits`]).
+    pub fn limits(&self) -> &Limits {
+        &self.limits
     }
 
     pub fn set_enabled(&mut self, id: &str, enabled: bool) -> Result<()> {
@@ -1146,10 +1660,17 @@ impl Manager {
     }
 
     fn save(&self) -> Result<()> {
+        self.save_over(&State::default())
+    }
+
+    /// [`Manager::save`] over `base`, the `plugins.json` read at start-up: its entries this manager
+    /// doesn't hold (modules past the most it loads, files it couldn't place) are written back as
+    /// they were, so a save nobody asked for drops nothing.
+    fn save_over(&self, base: &State) -> Result<()> {
         let Some(dir) = &self.dir else { return Ok(()) };
-        let mut plugins = self.kept.clone();
-        plugins
-            .extend(self.plugins.iter().map(|(id, p)| (id.clone(), Entry { enabled: p.enabled, grant: p.grant.clone(), denied: p.denied.clone() })));
+        let mut plugins = base.plugins.clone();
+        plugins.extend(self.kept.iter().map(|(id, e)| (id.clone(), e.clone())));
+        plugins.extend(self.plugins.iter().map(|(id, p)| (id.clone(), p.entry())));
         let state = State { plugins };
         let bytes = serde_json::to_vec_pretty(&state).map_err(|e| Error::Io(e.to_string()))?;
         write_atomic(&dir.join("plugins.json"), &bytes)
@@ -1794,9 +2315,10 @@ fn previous_paths(dir: &Path, id: &str) -> (PathBuf, PathBuf) {
     (d.join(format!("{id}.wasm")), d.join(format!("{id}.json")))
 }
 
-/// The version kept for plug-in `id` in `dir` to go back to: its version and settings (`null`:
-/// none kept). `None`: no version is kept, or it can't be read.
-fn read_previous(dir: &Path, id: &str) -> Option<(String, Value)> {
+/// The version kept for plug-in `id` in `dir` to go back to: its version, settings (`null`: none
+/// kept) and the signer pinned when it was replaced (`None`: kept before signers were recorded).
+/// `None`: no version is kept, or it can't be read.
+fn read_previous(dir: &Path, id: &str) -> Option<(String, Value, Option<Pin>)> {
     let (module, about) = previous_paths(dir, id);
     if !std::fs::metadata(&module).is_ok_and(|m| m.is_file()) {
         return None;
@@ -1804,15 +2326,17 @@ fn read_previous(dir: &Path, id: &str) -> Option<(String, Value)> {
     let bytes = crate::safe_io::read_capped(&about, MAX_PREVIOUS_BYTES).ok()?;
     let v: Value = serde_json::from_slice(&bytes).ok()?;
     let version = v.get("version")?.as_str()?.to_string();
-    Some((version, v.get("settings").cloned().unwrap_or(Value::Null)))
+    Some((version, v.get("settings").cloned().unwrap_or(Value::Null), v.get("signer").map(Pin::read)))
 }
 
-/// Keeps `module`, version `version` with `settings`, as plug-in `id`'s version to go back to.
-fn keep_previous(dir: &Path, id: &str, module: &[u8], version: &str, settings: &Value) -> Result<()> {
+/// Keeps `module`, version `version` with `settings` and the signer pinned for it (`pin`), as plug-in
+/// `id`'s version to go back to.
+fn keep_previous(dir: &Path, id: &str, module: &[u8], version: &str, settings: &Value, pin: &Pin) -> Result<()> {
     let (path, about) = previous_paths(dir, id);
     write_atomic(&path, module)?;
     // compact: the settings may be as large as their own file allows, and must read back
-    let text = serde_json::to_vec(&json!({"version": version, "settings": settings})).map_err(|e| Error::Io(e.to_string()))?;
+    let text =
+        serde_json::to_vec(&json!({"version": version, "settings": settings, "signer": pin.stored()})).map_err(|e| Error::Io(e.to_string()))?;
     write_atomic(&about, &text)
 }
 

@@ -104,6 +104,7 @@ pub mod midi;
 /// The shared AI backend's queue and activity row (#491).
 pub mod ml;
 mod model_download;
+pub mod notice;
 pub mod open_path;
 pub mod originals;
 mod pdf;
@@ -126,6 +127,7 @@ pub mod profile_bodies;
 pub mod profile_edits;
 pub mod profile_refs;
 pub mod proof;
+pub mod quality_scan;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod remote;
 pub mod rename;
@@ -166,7 +168,7 @@ use std::sync::Arc;
 pub use cmd::plugin_filters::ROLL_KEY;
 pub use cmd::{CommandInfo, CommandSpec, canonical_id, command_specs, find_command};
 pub use errors::{AiModel, ErrorKind};
-pub use fonts::{CRAFT_FONTS, CraftFont};
+pub use fonts::{CraftFont, craft_fonts};
 use lcc_catalog::{Catalog, Filter, Op, PhotoId, Sort};
 use lcc_develop::DevelopSettings;
 pub use media::{RenderJob, SourceLevel};
@@ -298,6 +300,15 @@ pub struct Interaction {
     pub along: Vec<(PhotoId, Arc<DevelopSettings>)>,
 }
 
+/// The photos of the current source, counted ([`Session::source_total`]).
+struct SourceTotal {
+    /// Which source ([`Session::total_key`]).
+    key: String,
+    tally: lcc_catalog::tally::FilterTally,
+    /// The clock's minute the count is of, for a source whose rules read the clock.
+    minute: Option<String>,
+}
+
 /// The most photos an edit may touch for the view to follow it photo by photo; a larger edit is worked out whole.
 const MAX_FOLLOWED: usize = 256;
 
@@ -377,8 +388,13 @@ pub struct Session {
     /// Identifies the current `visible` list: a new value (unique in the process) every time it
     /// is recomputed, so frontends can key their per-view caches on it instead of hashing the ids.
     visible_gen: u64,
-    /// Photos in the current source with no filter on (cached like `visible`).
-    total: Option<((u64, String), usize, Option<String>)>,
+    /// Photos in the current source with no filter on: kept up to date from what each edit touched, like the view.
+    total: Option<SourceTotal>,
+    /// How many times [`Session::source_total`] followed an edit photo by photo, took the count from the pass that
+    /// built the view, and counted every photo (`ui.inspect` → `perf`, tests).
+    pub total_followed: u64,
+    pub total_from_view: u64,
+    pub total_counted: u64,
     pub undo: Vec<UndoEntry>,
     /// While a long run (a synchronize) is still putting its steps into the history, the run's
     /// token: the history keeps every step then, so the run can fold them into one whole step
@@ -457,6 +473,8 @@ pub struct Session {
     /// Sync with the app on other devices ([`device_sync`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub device_sync: device_sync::State,
+    /// Things to tell the user once ([`Session::take_notices`]).
+    notices: Vec<notice::Notice>,
     /// Auto updates: the last check, the download in flight, and the settings ([`update`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub updater: update::Updater,
@@ -468,8 +486,13 @@ pub struct Session {
     pub(crate) focus_scan: focus_scan::FocusScan,
     /// Photo ▸ Enhance jobs on worker threads (`enhance.rawDetails`, `enhance.superResolution`, `enhance.pump`).
     pub(crate) enhance: enhance::EnhanceJobs,
-    /// Copied develop settings (partial JSON, portable: a flat-field map goes with them) for Paste.
+    /// Copied develop settings for Paste: the copied photo's whole settings (JSON, portable: a flat-field
+    /// map goes with them), so Paste Selected Settings can paste any group, also one the copy left out (crop,
+    /// Remove, masks; upstream #3148); a plain Paste applies what Copy ticked (`dialogs.copy`).
     pub clipboard: Option<Value>,
+    /// The copied photo's frame (width, height as oriented), to refit a pasted crop to a photo of another
+    /// shape; `None` when unknown (the crop is then pasted as it is).
+    pub clipboard_dims: Option<(f64, f64)>,
     /// Flat-field maps that came in with settings (a paste, a preset, an agent's partial) and wait for the edit that
     /// uses them to store them ([`vignetting_calibration_io`]).
     pub(crate) incoming_vignetting_maps: std::collections::BTreeMap<lcc_develop::VignettingMapId, lcc_develop::EmbeddedVignettingMap>,
@@ -652,6 +675,11 @@ pub struct Session {
     /// Auto import: files seen in the watched folder and their size then (a file is imported once
     /// its size held between two scans).
     pub auto_import_seen: std::collections::HashMap<String, u64>,
+    /// Auto import: files handed to an import and their size then. Such a file is not tried again
+    /// while its size stays the same (a non-photo isn't retried every scan), but one that changes
+    /// (a partial copy that went on growing, issue #1302) or is released by
+    /// [`Session::auto_import_retry`] is.
+    pub auto_import_tried: std::collections::HashMap<String, u64>,
     /// Keyword sets (⌥1–⌥9 apply the current set's keywords), the one in use (`None` = Recent
     /// Keywords) and the recently added keywords, newest first.
     pub keyword_sets: Vec<cmd::keywords::KeywordSet>,
@@ -675,6 +703,10 @@ pub struct Session {
     /// Background tasks in flight (imports, exports, preview builds…), for the activity stack and
     /// `activity.list` / `activity.cancel`.
     pub activity: activity::Activity,
+    /// The Image Quality Scanner's run in flight, when one is (issue #1313): its scores are
+    /// written as one undo step when it ends, and the frame it ends on answers with its summary
+    /// (`photo.qualityScanPump`).
+    pub quality_scan: Option<quality_scan::QualityScanRun>,
     /// Video playback, trim and poster (M14.4/M14.6): the decoder backend and the player.
     pub video: video::VideoState,
     /// Upright analysed on each photo an automatic mode reaches without its own correction ([`upright_jobs`]).
@@ -778,6 +810,24 @@ impl Session {
         })
     }
 
+    /// Auto Import handed `paths` to an import that never ran them (it failed to start or was
+    /// cancelled): those the library still doesn't have are tried again by the next scans.
+    pub fn auto_import_retry(&mut self, paths: &[String]) {
+        let known: std::collections::HashSet<&str> = self
+            .catalog
+            .photos()
+            .filter_map(|p| match &p.source {
+                lcc_catalog::Source::File { path } => Some(path.as_str()),
+                _ => None,
+            })
+            .collect();
+        let missing: Vec<&String> = paths.iter().filter(|p| !known.contains(p.as_str())).collect();
+        for p in missing {
+            self.auto_import_tried.remove(p);
+            self.auto_import_seen.remove(p);
+        }
+    }
+
     pub fn library_generation(&self) -> u64 {
         self.library_generation
     }
@@ -822,6 +872,9 @@ impl Session {
             never_follow: false,
             visible_gen: 0,
             total: None,
+            total_followed: 0,
+            total_from_view: 0,
+            total_counted: 0,
             undo: Vec::new(),
             undo_hold: std::sync::Weak::new(),
             in_run_step: false,
@@ -864,6 +917,7 @@ impl Session {
             remote: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             device_sync: Default::default(),
+            notices: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             updater: Default::default(),
             desktop: desktop::default_desktop(),
@@ -871,6 +925,7 @@ impl Session {
             focus_scan: Default::default(),
             enhance: Default::default(),
             clipboard: None,
+            clipboard_dims: None,
             incoming_vignetting_maps: Default::default(),
             vignetting_calibration_placements: Default::default(),
             vignetting_calibration_dir_override: None,
@@ -946,6 +1001,7 @@ impl Session {
             lut_profiles: Vec::new(),
             target_album: None,
             auto_import_seen: Default::default(),
+            auto_import_tried: Default::default(),
             keyword_sets: Vec::new(),
             keyword_set: None,
             recent_keywords: Vec::new(),
@@ -956,6 +1012,7 @@ impl Session {
             folder_stamps: Default::default(),
             folder_new: Default::default(),
             activity: Default::default(),
+            quality_scan: None,
             video: Default::default(),
             genfill: Default::default(),
             upright_jobs: Default::default(),
@@ -1964,9 +2021,14 @@ impl Session {
             return Some(op);
         }
         let step = lcc_catalog::HistoryStep { label: label.into(), settings: settings.clone(), batch: None };
-        Some(Op::Batch {
-            ops: vec![Op::SetDevelop { id, settings, label: label.into(), edited: Some((self.clock)()) }, Op::PushHistory { id, step }],
-        })
+        let first = p.history.is_empty();
+        let mut ops = vec![Op::SetDevelop { id, settings, label: label.into(), edited: Some((self.clock)()) }];
+        // a photo's first edit also lists where it started, as Lightroom's "Import" step: there to go back to
+        if let Some(start) = before.filter(|_| first) {
+            ops.push(Op::PushHistory { id, step: lcc_catalog::HistoryStep { label: "Import".into(), settings: start, batch: None } });
+        }
+        ops.push(Op::PushHistory { id, step });
+        Some(Op::Batch { ops })
     }
 
     /// The op that records `settings` (labelled `label`) as an edit made at History step `at` of
@@ -2170,8 +2232,7 @@ impl Session {
         // What a held view is told apart by: what is shown and how, and for a smart album its rules (rules that were
         // changed ask something else). Not the checks of Missing Photos below: they fill the view in, they are
         // no other view.
-        let asks = matches!(self.source, LibrarySource::Picks)
-            || matches!(self.source, LibrarySource::Album(a) if self.catalog.album(a).is_some_and(|al| al.is_smart()));
+        let asks = self.view_asks();
         let rules = match self.source {
             LibrarySource::Album(a) if asks => self.catalog.album(a).map(|al| format!("{:?}", al.smart)).unwrap_or_default(),
             _ => String::new(),
@@ -2233,14 +2294,30 @@ impl Session {
                 Some(_) => self.view_followed += 1,
                 None => self.view_worked_out += 1,
             }
+            // (a view worked out from every photo, asked only the source's own question, lists exactly the photos of
+            // the source: that is the source's total, with no second pass over the library)
+            let mut exact = self.filter == Filter::default() && self.source != LibrarySource::Missing;
+            #[cfg(test)]
+            {
+                exact &= !self.never_follow;
+            }
             let mut visible = match (followed, &base, &within) {
-                (Some(ids), _, _) => ids,
+                (Some(ids), _, _) => {
+                    exact = false;
+                    ids
+                }
                 (None, Some((_, _, held)), Some(within)) => {
+                    exact = false;
                     let keep: std::collections::HashSet<PhotoId> = held.iter().copied().collect();
                     self.catalog.query_keeping(&f, &self.sort, &keep, within)
                 }
                 _ => self.catalog.query(&f, &self.sort),
             };
+            if exact {
+                let tally = lcc_catalog::tally::FilterTally::from_matching(self.catalog.revision, &visible);
+                self.total = Some(SourceTotal { key: self.total_key(), tally, minute: clocked.then(|| clock_minute(&now).to_owned()) });
+                self.total_from_view += 1;
+            }
             // what the view shows now is what the next edit is followed from, and what it holds until it is
             // refreshed (taken before stacks are arranged, so a photo folded into a stack is held with it)
             self.base = (!whole || holds).then(|| (view, self.catalog.revision, visible.clone()));
@@ -2435,14 +2512,31 @@ impl Session {
         self.library_folder.is_some() && !self.catalog.query(&f, &Sort::default()).is_empty()
     }
 
+    /// Whether the view asks something of the photos it lists (Picks, a smart album's rules), so that a held view may
+    /// show photos that stopped matching.
+    fn view_asks(&self) -> bool {
+        matches!(self.source, LibrarySource::Picks)
+            || matches!(self.source, LibrarySource::Album(a) if self.catalog.album(a).is_some_and(|al| al.is_smart()))
+    }
+
+    /// What tells one source's total from another's (the catalog's revision and the source's rules aside).
+    fn total_key(&self) -> String {
+        format!("{:?}|{:?}|{:?}|{}", self.source, self.browse, self.library_folder, self.folder_subfolders)
+    }
+
     /// Photos in the current source (folder, album, …) before the filter bar and search narrow
     /// them; `None` where that is not a separate number (Missing Photos).
+    ///
+    /// Kept from one edit to the next: a small edit asks only the photos it touched, and a view just built for the
+    /// source with nothing narrowing it gives its own pass as the answer. Every photo is counted when an edit is
+    /// larger or more than photos, the clock moved under rules that read it, Recently Added is shown (its cut-off
+    /// moves with the newest photo), or the source changed.
     pub fn source_total(&mut self) -> Option<usize> {
         self.reconcile_view();
         if self.source == LibrarySource::Missing {
             return None;
         }
-        if self.filter == Filter::default() && !self.hold_view {
+        if self.filter == Filter::default() && !(self.hold_view && self.view_asks()) {
             // nothing narrows the source: what the view lists is all of it, and is counted already (not a view
             // that holds photos that stopped matching: those are not of the source any more)
             let _ = self.visible();
@@ -2452,39 +2546,35 @@ impl Session {
                 return Some(ids.len());
             }
         }
-        let key = (self.catalog.revision, format!("{:?}|{:?}|{:?}|{}", self.source, self.browse, self.library_folder, self.folder_subfolders));
-        let key_changed = self.total.as_ref().map(|total| &total.0) != Some(&key);
-        let cached_minute = self.total.as_ref().and_then(|total| total.2.as_deref());
+        let key = self.total_key();
+        let cached_minute = self.total.as_ref().filter(|total| total.key == key).and_then(|total| total.minute.as_deref());
         let current_now = cached_minute.map(|_| (self.clock)());
-        let current_minute = current_now.as_deref().map(clock_minute);
-        let clock_changed = cached_minute.is_some_and(|cached| current_minute != Some(cached));
-        if key_changed || clock_changed {
-            // The source count can be requested before `visible`; bind it to the session's clock itself.
-            let now = current_now.unwrap_or_else(|| (self.clock)());
-            lcc_catalog::rules::set_now(Some(now.clone()));
-            let mut f = self.source.to_filter(&Filter::default(), &self.catalog);
-            if self.source == LibrarySource::Folder {
-                let b = self.browse.clone().unwrap_or_default();
-                f.folder = Some(b.path);
-                f.subfolders = b.subfolders;
-                if b.not_imported {
-                    f.in_library = Some(false);
+        let clock_changed = cached_minute.is_some_and(|cached| current_now.as_deref().map(clock_minute) != Some(cached));
+        if !clock_changed && let Some(total) = self.total.as_ref().filter(|total| total.key == key) {
+            if total.tally.revision() == self.catalog.revision {
+                return Some(total.tally.len());
+            }
+            // (a rule that reads the clock, or Recently Added's reach, can change what a photo nobody touched matches)
+            if total.minute.is_none() && self.source != LibrarySource::RecentlyAdded {
+                let f = self.view_filter(self.source, &Filter::default());
+                if let Some(total) = self.total.as_mut()
+                    && total.tally.update(&self.catalog, &f)
+                {
+                    self.total_followed += 1;
+                    return Some(total.tally.len());
                 }
             }
-            if self.source == LibrarySource::LibraryFolder {
-                f.library_folder = Some(self.library_folder.clone().unwrap_or_else(|| ".".into()));
-                f.library_folder_only = !self.folder_subfolders;
-            }
-            if self.source == LibrarySource::PreviousExport {
-                f.only = self.previous_export_filter();
-                f.only_none = false;
-            }
-            // (how many, not which: nothing to put in order)
-            let n = self.catalog.count(&f);
-            let clocked = filter_depends_on_clock(&f, &self.catalog);
-            self.total = Some((key, n, clocked.then(|| clock_minute(&now).to_owned())));
         }
-        self.total.as_ref().map(|t| t.1)
+        // The source count can be requested before `visible`; bind it to the session's clock itself.
+        let now = current_now.unwrap_or_else(|| (self.clock)());
+        lcc_catalog::rules::set_now(Some(now.clone()));
+        let f = self.view_filter(self.source, &Filter::default());
+        let tally = lcc_catalog::tally::FilterTally::of(&self.catalog, &f);
+        let minute = filter_depends_on_clock(&f, &self.catalog).then(|| clock_minute(&now).to_owned());
+        self.total_counted += 1;
+        let n = tally.len();
+        self.total = Some(SourceTotal { key, tally, minute });
+        Some(n)
     }
 
     pub fn visible_cloned(&mut self) -> Vec<PhotoId> {
@@ -2713,6 +2803,8 @@ mod tests_autosync_wb;
 #[cfg(test)]
 mod tests_background_merge;
 #[cfg(test)]
+mod tests_brightness;
+#[cfg(test)]
 mod tests_browse_profile;
 #[cfg(test)]
 mod tests_camera_layers;
@@ -2820,6 +2912,8 @@ mod tests_keyword_list;
 #[cfg(not(target_arch = "wasm32"))]
 mod tests_lens_db;
 #[cfg(test)]
+mod tests_levels;
+#[cfg(test)]
 mod tests_libops;
 #[cfg(test)]
 mod tests_library;
@@ -2885,6 +2979,8 @@ mod tests_print;
 mod tests_process;
 #[cfg(test)]
 mod tests_profile_manager;
+#[cfg(test)]
+mod tests_quality_scan;
 #[cfg(test)]
 mod tests_recheck;
 #[cfg(test)]

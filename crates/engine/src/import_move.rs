@@ -279,14 +279,15 @@ pub(crate) fn sibling_photo(sidecar: &Path) -> Option<String> {
 }
 
 /// Flush folder `dir`'s entries (the names in it) to disk. A file's own sync doesn't cover the folder entry that names
-/// it. Windows can't open a folder for this; NTFS journals those entries itself, so there it does nothing.
+/// it. Windows can't open a folder for this; NTFS journals those entries itself, so there it does nothing. An SMB share
+/// on macOS refuses a folder's full flush as it does a file's, so this takes the same plain `fsync` fallback.
 pub(crate) fn sync_dir(dir: &Path) -> io::Result<()> {
     if injected(Fault::FailDirSync) {
         return Err(io::Error::other("folder sync failed (injected)"));
     }
     #[cfg(unix)]
     {
-        File::open(dir)?.sync_all()
+        lcc_catalog::safe_file::sync_file(&File::open(dir)?, false)
     }
     #[cfg(not(unix))]
     {

@@ -605,9 +605,8 @@ fn star_shape(c: Pos2, r: f32, col: Color32) -> Vec<egui::Shape> {
     };
     let inner: Vec<Pos2> = (0..5).map(|k| pt(2 * k + 1, r * 0.42)).collect();
     let mut v = vec![egui::Shape::convex_polygon(inner.clone(), col, Stroke::NONE)];
-    for k in 0..5 {
+    for (k, (&a, &b)) in inner.iter().cycle().skip(4).zip(&inner).enumerate() {
         let tip = pt(2 * k, r);
-        let (a, b) = (inner[(k + 4) % 5], inner[k]);
         v.push(egui::Shape::convex_polygon(vec![a, tip, b], col, Stroke::NONE));
     }
     v
@@ -1122,14 +1121,14 @@ fn right_column(app: &mut LccApp, ui: &mut egui::Ui) {
         ch |= ui.checkbox(&mut s.layout.show_guides, crate::i18n::tr("Show Guides")).changed();
         ch |= ui.checkbox(&mut s.layout.linked, crate::i18n::tr("Link All")).changed();
         let names = ["Left", "Top", "Right", "Bottom"];
-        for k in 0..4 {
-            let mut v = s.layout.margins[k];
-            if pct(ui, names[k], &mut v, 0.45) {
+        for (k, name) in names.into_iter().enumerate() {
+            let Some(mut v) = s.layout.margins.get(k).copied() else { continue };
+            if pct(ui, name, &mut v, 0.45) {
                 ch = true;
                 if s.layout.linked {
                     s.layout.margins = [v; 4];
-                } else {
-                    s.layout.margins[k] = v;
+                } else if let Some(m) = s.layout.margins.get_mut(k) {
+                    *m = v;
                 }
             }
         }

@@ -22,6 +22,8 @@
 //! go to; use the command-line tool (a console program) from a terminal, or a debug build.
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![forbid(unsafe_code)]
+// checked indexing (`get`) only
+#![deny(clippy::indexing_slicing)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod alloc_release;
@@ -139,6 +141,14 @@ impl eframe::App for App {
         egui::Color32::from_rgb(r, g, b).to_normalized_gamma_f32()
     }
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // the window's GPU device is gone for good (issue #1194): nothing can be drawn again, so
+        // save what closing the window saves, tell the user outside the window, and end
+        if let Some(which) = window_gpu::take_device_lost() {
+            eframe::App::on_exit(self, None);
+            let log_file = self.0.services.log_file.clone().map(std::path::PathBuf::from);
+            stopped_while_running(&window_gpu::lost_text(which), log_file.as_deref());
+            std::process::exit(1);
+        }
         #[cfg(target_os = "macos")]
         if let Some(m) = self.3.as_mut()
             && m.update(&mut self.0, ctx)
@@ -1445,7 +1455,7 @@ fn main() -> eframe::Result {
     // the upstream app's, named by settings copied from it) is never opened as this app's own.
     let mut prefs = prefs;
     // the recent list of older versions joins the settings' before Ask me is read (issue #871)
-    catalog_hooks::carry_over_recent(prefs.as_mut(), !in_memory && !keep_prefs_file, |ui| {
+    let recent_skipped = catalog_hooks::carry_over_recent(prefs.as_mut(), !in_memory && !keep_prefs_file, |ui| {
         PrefsWriter { path: prefs_path(), ..Default::default() }.save_ui(ui, false)
     });
     let explicit = library_dir.or_else(|| lcc_brand::env_os("LIBRARY").filter(|p| !p.is_empty()).map(Into::into));
@@ -1506,6 +1516,7 @@ fn main() -> eframe::Result {
         window_gpu::choose(&win_files, compose_window);
     // HDR display output: an extended-range float surface where the platform and display offer it
     hdr_display::configure(&mut wgpu_options);
+    window_gpu::watch_device_loss(&mut wgpu_options, win_files.clone(), window_renderer);
     win_files.arm(window_renderer);
     let win_files_app = win_files.clone();
     // the window came up: a failure after this is the app stopping, not a start that failed
@@ -1603,9 +1614,11 @@ fn main() -> eframe::Result {
                 app.integrated_titlebar = cfg!(target_os = "macos");
                 app.notices.extend(prefs_warning);
                 app.notices.extend(launch_notices);
+                app.notices.extend(recent_skipped.as_deref().map(lcc_ui_egui::panels::notices::recent_catalogs_notice));
                 app.notices.extend(window_notice);
                 app.pending_link = launch_link;
                 app.gpu_notice = true;
+                app.font_problems = Some(lcc_engine::fonts::craft_font_problems());
                 // the start-up update check, when the user turned it on (off by default)
                 app.startup_update_check = startup_update_check(keeps_settings, no_update_check);
                 // an empty library opens where Import is offered (a grid, with the sidebar); before
@@ -1710,6 +1723,7 @@ fn main() -> eframe::Result {
                 // anyway, `0` never.
                 let window_device = offers_window_device(lcc_brand::env("GPU_WINDOW").as_deref(), display.is_hdr(), HDR_WINDOW_GUARD);
                 let window_textures = cc.wgpu_render_state.as_ref().filter(|_| gpu_on && window_device).map(offer_window_device);
+                window_gpu::set_context(&cc.egui_ctx);
                 Ok(Box::new(App(
                     app,
                     writer,

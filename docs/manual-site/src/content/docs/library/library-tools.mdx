@@ -1,6 +1,6 @@
 ---
 title: Library tools
-description: Validate DNGs, export status, DNG updates, email and publish comments.
+description: Image quality scan, validate DNGs, export status, DNG updates, email and publish comments.
 sidebar:
   order: 16
 ---
@@ -15,6 +15,7 @@ import { Aside } from '@astrojs/starlight/components';
 - **Email Photo…** (**File** menu): exports the selection as small JPEGs (you choose the long edge and quality) and opens a new message with them attached in the system mail program. Without one, the files stay in a temporary folder that is shown.
 - **Review Comments** (**Library** menu): the comments on photos published to Immich, per photo; see [Immich](../../sync/immich/). Not supported by Hard Drive or SFTP publishing.
 - **Find Duplicates…**: see [Find duplicates](../duplicates/).
+- **Image Quality Scanner…** (**Library** menu): scores photos for sharpness, noise, exposure and JPEG artifacts and keeps the score on the photo; see [Image Quality Scanner](../quality-scanner/).
 
 <Aside type="note" title="Modern layout">
   All of these are in the ☰ menu: **Library**, **Photo**, **Metadata** and **File**.

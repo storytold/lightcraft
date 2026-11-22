@@ -11,6 +11,10 @@
 //! `malloc_trim(0)` returns the free pages of every arena. Elsewhere (musl, Windows, FreeBSD)
 //! nothing is called.
 //!
+//! Android's bionic allocator (scudo) keeps freed pages until its own purge interval: a phone has
+//! no memory to spare for that, so `mallopt(M_PURGE_ALL)` (or `M_PURGE` before Android 14) returns
+//! them at once.
+//!
 //! [`fsync`] is the plain POSIX `fsync`, which std doesn't offer on macOS: there `File::sync_all`
 //! and `sync_data` are `F_FULLFSYNC`, which SMB shares refuse with ENOTSUP while `fsync` works
 //! (upstream issue 1407).
@@ -23,7 +27,7 @@
 //! POSIX `df`, no system call of our own), for the preview cache's automatic size.
 //!
 //! This is one of the workspace's few crates allowed `unsafe` (two FFI calls in `macos`, one in
-//! `glibc`, three in `windows`). Its API is safe; on failure or on other platforms each call simply does nothing.
+//! `glibc`, one in `bionic`, three in `windows`). Its API is safe; on failure or on other platforms each call simply does nothing.
 //!
 //! It also says how much memory the process may use ([`limits`], safe std-only code): physical RAM
 //! held to the process's cgroup limit on Linux, for the engine's memory budget and `cargo xtask ci`.
@@ -45,7 +49,11 @@ pub fn release_free_memory() -> usize {
     {
         glibc::release()
     }
-    #[cfg(not(any(target_os = "macos", all(target_os = "linux", target_env = "gnu"))))]
+    #[cfg(target_os = "android")]
+    {
+        bionic::release()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "android", all(target_os = "linux", target_env = "gnu"))))]
     {
         0
     }
@@ -138,6 +146,39 @@ fn parse_df(text: &str) -> Option<u64> {
     // (a mount point may hold spaces; the numbers come before it)
     let kib: u64 = line.split_whitespace().nth(3)?.parse().ok()?;
     kib.checked_mul(1024)
+}
+
+#[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+mod bionic {
+    use std::ffi::c_int;
+
+    /// bionic malloc.h: purge every cache and free page the allocator holds, the thread caches
+    /// included (Android 14, API 34).
+    const M_PURGE_ALL: c_int = -104;
+    /// bionic malloc.h: purge the free pages (Android 9, API 28: the oldest the app runs on).
+    const M_PURGE: c_int = -101;
+
+    unsafe extern "C" {
+        /// bionic malloc: set an allocator option. Returns 1 when the option was taken, 0 when it
+        /// is unknown to this Android or the allocator in use.
+        fn mallopt(param: c_int, value: c_int) -> c_int;
+    }
+
+    pub fn release() -> usize {
+        // SAFETY: `mallopt` is a documented, thread-safe bionic function (malloc.h, every API
+        // level); M_PURGE (API 28) and M_PURGE_ALL (API 34) only return already-free pages to the
+        // system. It takes no pointers, reads and writes no memory we own, and an option this
+        // Android does not know is refused with 0, nothing else.
+        let all = unsafe { mallopt(M_PURGE_ALL, 0) };
+        let released = if all != 0 {
+            all
+        } else {
+            // SAFETY: as above.
+            unsafe { mallopt(M_PURGE, 0) }
+        };
+        usize::from(released != 0)
+    }
 }
 
 #[cfg(all(target_os = "linux", target_env = "gnu"))]

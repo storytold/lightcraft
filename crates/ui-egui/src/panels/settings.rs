@@ -14,6 +14,7 @@
 //!   `slideshow.playback` commands into the library's `prefs.json`,
 //!   so they travel with the library.
 
+use crate::json_ext::JsonExt as _;
 use egui::RichText;
 use serde_json::{Value, json};
 
@@ -1278,8 +1279,8 @@ fn lens_profiles(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     hint(ui, t, tr("Lens corrections use these profiles for raw photos whose files carry no correction of their own."));
     let st = app.session.lens_db.status();
-    let lenses = st["lenses"].as_u64().unwrap_or(0);
-    let dir = st["dir"].as_str().map(str::to_string);
+    let lenses = st.field("lenses").as_u64().unwrap_or(0);
+    let dir = st.field("dir").as_str().map(str::to_string);
     row(ui, t, tr("Database"), |ui| {
         let text = match &dir {
             Some(d) if lenses > 0 => d.clone(),
@@ -1294,15 +1295,15 @@ fn lens_profiles(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     if lenses > 0 {
         let summary = tr("{lenses} lenses, {cameras} cameras")
             .replace("{lenses}", &lenses.to_string())
-            .replace("{cameras}", &st["cameras"].as_u64().unwrap_or(0).to_string());
-        let updated = st["updated"].as_str().map(|d| tr("updated {date}").replace("{date}", d));
+            .replace("{cameras}", &st.field("cameras").as_u64().unwrap_or(0).to_string());
+        let updated = st.field("updated").as_str().map(|d| tr("updated {date}").replace("{date}", d));
         row(ui, t, "", |ui| ui.label(RichText::new(updated.map_or(summary.clone(), |u| format!("{summary} · {u}"))).color(t.text_label)));
     }
-    if st["origin"] == "env" {
-        hint(ui, t, &tr("Set by {var}, which overrides the folder chosen here.").replace("{var}", st["env"].as_str().unwrap_or_default()));
+    if st.field("origin") == "env" {
+        hint(ui, t, &tr("Set by {var}, which overrides the folder chosen here.").replace("{var}", st.field("env").as_str().unwrap_or_default()));
     }
-    let running = st["download"]["state"] == "running";
-    let configured = st["configured"].is_string();
+    let running = st.field("download").field("state") == "running";
+    let configured = st.field("configured").is_string();
     row(ui, t, "", |ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         if crate::widgets::text_button(ui, "lensDbFolder", "Choose Folder…", false).clicked()
@@ -1310,8 +1311,8 @@ fn lens_profiles(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
         {
             app.toast(ui.ctx(), e);
         }
-        if st["canDownload"] == true {
-            let label = if st["downloaded"] == true { "Update" } else { "Download" };
+        if st.field("canDownload") == true {
+            let label = if st.field("downloaded") == true { "Update" } else { "Download" };
             let b = ui.add_enabled_ui(!running, |ui| crate::widgets::text_button(ui, "lensDbDownload", label, false)).inner;
             if b.clicked()
                 && let Err(e) = app.run("lens.db.download", json!({}))
@@ -1330,13 +1331,13 @@ fn lens_profiles(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
             app.toast(ui.ctx(), e);
         }
     });
-    match st["download"]["state"].as_str() {
+    match st.field("download").field("state").as_str() {
         Some("running") => {
             // progress and Cancel are in the activity stack; this only repaints so the buttons update when it ends
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         }
         Some("failed") => {
-            let e = st["download"]["error"].as_str().unwrap_or_default().to_string();
+            let e = st.field("download").field("error").as_str().unwrap_or_default().to_string();
             row(ui, t, "", |ui| ui.label(RichText::new(e).color(t.caution)));
         }
         _ => {}
@@ -1862,9 +1863,9 @@ fn smart_previews(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
         return;
     }
     heading_help(ui, t, crate::i18n::tr("Smart previews"), "smartPreviews");
-    let path = loc["path"].as_str().unwrap_or_default().to_string();
-    let available = loc["available"].as_bool().unwrap_or(true);
-    let custom = loc["custom"].as_bool().unwrap_or(false);
+    let path = loc.field("path").as_str().unwrap_or_default().to_string();
+    let available = loc.field("available").as_bool().unwrap_or(true);
+    let custom = loc.field("custom").as_bool().unwrap_or(false);
     row(ui, t, crate::i18n::tr("Folder"), |ui| {
         path_label(
             ui,
@@ -1879,7 +1880,7 @@ fn smart_previews(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
             register(ui.ctx(), "text:settingsSmartDefault", r.rect);
         }
     });
-    let (count, bytes) = (loc["count"].as_u64().unwrap_or(0), loc["bytes"].as_u64().unwrap_or(0));
+    let (count, bytes) = (loc.field("count").as_u64().unwrap_or(0), loc.field("bytes").as_u64().unwrap_or(0));
     if available {
         hint(
             ui,
@@ -1910,7 +1911,7 @@ fn smart_previews(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
             }
         });
     }
-    let existing = ["move", "leave", "discard"][mode.min(2) as usize];
+    let existing = ["move", "leave", "discard"].get(mode.min(2) as usize).copied().unwrap_or("discard");
     let mut result = None;
     ui.horizontal(|ui| {
         ui.add_space(crate::dialog_frame::control_indent(ui));
@@ -1933,8 +1934,8 @@ fn smart_previews(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
         ui.data_mut(|d| d.remove::<(f64, Value)>(cache));
         match r {
             Ok(v) => {
-                let failed = v["failed"].as_array().map_or(0, Vec::len);
-                let msg = match (existing, v["handled"].as_u64().unwrap_or(0)) {
+                let failed = v.field("failed").as_array().map_or(0, Vec::len);
+                let msg = match (existing, v.field("handled").as_u64().unwrap_or(0)) {
                     (_, 0) => "Smart previews folder changed".to_string(),
                     ("move", n) => format!("Smart previews folder changed; moved {n}"),
                     ("discard", n) => format!("Smart previews folder changed; deleted {n}"),
@@ -2004,8 +2005,14 @@ fn display_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
             ui.label(RichText::new(kind).color(t.text));
         });
         row(ui, t, crate::i18n::tr("Primaries (x, y)"), |ui| {
-            let p = &info["primaries"];
-            let xy = |(k, l): (&str, &str)| format!("{l} {:.3}, {:.3}", p[k][0].as_f64().unwrap_or(0.0), p[k][1].as_f64().unwrap_or(0.0));
+            let p = &info.field("primaries");
+            let xy = |(k, l): (&str, &str)| {
+                format!(
+                    "{l} {:.3}, {:.3}",
+                    p.field(k).get(0).and_then(Value::as_f64).unwrap_or(0.0),
+                    p.field(k).get(1).and_then(Value::as_f64).unwrap_or(0.0)
+                )
+            };
             let text = [("red", "R"), ("green", "G"), ("blue", "B")].map(xy).join("   ");
             ui.label(RichText::new(text).size(11.0).color(t.text_dim));
         });
@@ -2026,10 +2033,10 @@ fn display_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
 /// shared store available (the desktop app).
 fn shared_store(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let info = app.session.store_info();
-    if info["available"] != serde_json::Value::Bool(true) || app.session.library.is_none() {
+    if *info.field("available") != serde_json::Value::Bool(true) || app.session.library.is_none() {
         return;
     }
-    let mut own = info["libraryKeepsOwn"] == serde_json::Value::Bool(true);
+    let mut own = *info.field("libraryKeepsOwn") == serde_json::Value::Bool(true);
     if check(ui, "settings.libraryKeepsOwnStore", &mut own, "This catalog keeps its own presets, profiles and habits") {
         match app.run("store.useLibrary", serde_json::json!({"keep": own})) {
             Ok(_) => app.toast(
@@ -2074,6 +2081,9 @@ fn interface_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     check(ui, "settings.reduceMotion", &mut app.ui.settings.reduce_motion, "Reduce motion");
     hint(ui, t, crate::i18n::tr("Turns off zoom and spinner animations. Fades stay."));
     check(ui, "settings.wheelResizesBrush", &mut app.ui.settings.wheel_resizes_brush, "Wheel resizes brush instead of zooming");
+    if app.ui.settings.wheel_resizes_brush {
+        check(ui, "settings.invertBrushResize", &mut app.ui.settings.invert_brush_resize, "Invert brush resize direction");
+    }
     check(ui, "settings.expandedSliders", &mut app.ui.settings.expanded_sliders, "Expanded sliders");
     hint(ui, t, crate::i18n::tr("Warning, expanding sliders is not XMP compliant."));
     heading(ui, t, crate::i18n::tr("Keywords"));
@@ -2875,7 +2885,7 @@ pub fn rename_library(app: &mut LccApp, p: &Value) -> Result<Value, String> {
     remember_library(&mut settings.recent_libraries, &new_s);
     let mut out = json!({"path": new_s, "name": name, "previous": old_s, "relinked": relinked});
     if let Some(w) = warning {
-        out["warning"] = json!(w);
+        *out.field_mut("warning") = json!(w);
     }
     Ok(out)
 }
@@ -2983,8 +2993,8 @@ pub fn display_profile(app: &mut LccApp, p: &Value) -> Result<Value, String> {
     Ok(match app.renderer.display() {
         Some(d) if d.path == crate::SCREEN_PROFILE => {
             let mut v = d.describe();
-            v["path"] = Value::Null;
-            v["screen"] = json!(true);
+            *v.field_mut("path") = Value::Null;
+            *v.field_mut("screen") = json!(true);
             v
         }
         Some(d) => d.describe(),

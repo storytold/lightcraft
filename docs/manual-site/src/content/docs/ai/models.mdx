@@ -197,7 +197,7 @@ Write-Host "SAM 3 installed successfully in $Dest"
 ## Hardware
 
 - **GPU** is used where it gives the same result faster: Metal on macOS for SAM 3, wgpu (Vulkan, DirectX 12, Metal) for denoise, search and face models. Elsewhere SAM runs on the CPU.
-- Settings ▸ **AI Denoise** ▸ Speed: Automatic, Graphics card or Processor. Settings ▸ **AI Models** and **Performance**: choose the device for search (Automatic, a named card, or CPU). Settings ▸ **Faces**: run face models on the CPU only.
+- Settings ▸ **AI Denoise** ▸ Speed: Automatic, Graphics card or Processor. Settings ▸ **AI Models** and **Performance**: choose the device for search (Automatic, a named card, or CPU). Settings ▸ **Faces**: choose **Face models device** (Automatic, CPU, or a specific card) and **GPU precision** (Automatic, FP16, or FP32).
 - A GPU error falls back to the CPU for that job; the reason is shown.
 - SAM 3 is large: it uses several GB of memory and is unloaded after 10 idle minutes.
 - A denoise batch can use a second graphics card, or another computer's card over a network (advanced; see the project documentation).

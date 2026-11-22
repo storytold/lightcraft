@@ -891,11 +891,13 @@ mod tests {
         }
     }
 
-    /// BENCH (ignored, prints): the optimised filter against the reference on the same 24 MP image,
+    /// BENCH (opt-in with `<PREFIX>_PROBES=1`, prints): the optimised filter against the reference on the same 24 MP image,
     /// interleaved so both see the same machine load. Median of 3 each.
     #[test]
-    #[ignore]
     fn bench_joint_against_reference() {
+        if !lcc_testkit::probe("bench_joint_against_reference") {
+            return;
+        }
         let (w, h) = (6000usize, 4000usize);
         let mut clean = Rgb32f::new(w, h);
         for (i, p) in clean.data.iter_mut().enumerate() {
@@ -920,10 +922,12 @@ mod tests {
         println!("joint 24 MP: optimised {:.2} s, reference {:.2} s (medians of {new:.2?} / {old:.2?})", new[1], old[1]);
     }
 
-    /// BENCH (ignored, prints): fitting the noise model to 130 000 samples (a 33 MP image's), median of 5.
+    /// BENCH (opt-in with `<PREFIX>_PROBES=1`, prints): fitting the noise model to 130 000 samples (a 33 MP image's), median of 5.
     #[test]
-    #[ignore]
     fn bench_noise_fit() {
+        if !lcc_testkit::probe("bench_noise_fit") {
+            return;
+        }
         let mut seed = 0x2545_f491_4f6c_dd1du64;
         let mut rnd = || {
             seed ^= seed << 13;
@@ -950,11 +954,13 @@ mod tests {
         println!("noise fit, 130 000 samples: {:.1} ms (of {times:.1?})", times[2]);
     }
 
-    /// BENCH (ignored, prints): the speck brake alone against the whole joint filter on one 24 MP image,
+    /// BENCH (opt-in with `<PREFIX>_PROBES=1`, prints): the speck brake alone against the whole joint filter on one 24 MP image,
     /// interleaved. Median of 3 each.
     #[test]
-    #[ignore]
     fn bench_speck_brake() {
+        if !lcc_testkit::probe("bench_speck_brake") {
+            return;
+        }
         let (w, h) = (6000usize, 4000usize);
         let clean = Rgb32f::from_fn(w, h, |x, y| if (x / 300 + y / 300) % 2 == 0 { [0.03, 0.02, 0.01] } else { [0.004, 0.006, 0.012] });
         let input = noisy(&clean, 0x2545_f491_4f6c_dd1d, 0.004);

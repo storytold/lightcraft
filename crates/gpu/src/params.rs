@@ -90,6 +90,18 @@ const FIELDS: &[(&str, usize)] = &[
     // the HSL curves (`HslK`): the hue, saturation and luminance LUTs over the hue circle
     ("HSL", 1),
     ("HSL_LUT", HSL_WORDS),
+    // Levels (`LevelsK`) on the encoded values before the curves: the master stage, then red, green, blue,
+    // each 8 words (active, black, 1/range, out black, span, slope at 0, slope at 1, has a midtone table)
+    ("LEVELS", 1),
+    ("LEVELS_M", 8),
+    ("LEVELS_R", 8),
+    ("LEVELS_G", 8),
+    ("LEVELS_B", 8),
+    // where each stage's midtone table starts in `aux` (`MIDTONE_SAMPLES` floats; unused without a midtone)
+    ("LEVELS_OFF_M", 1),
+    ("LEVELS_OFF_R", 1),
+    ("LEVELS_OFF_G", 1),
+    ("LEVELS_OFF_B", 1),
     ("VIG", 1),
     ("VIG_AMOUNT", 1),
     ("VIG_START", 1),
@@ -170,6 +182,11 @@ const FIELDS: &[(&str, usize)] = &[
     ("RGB_CONTRAST", 1),
     ("RGB_CONTRAST_OFF", 1),
     ("RGB_CONTRAST_ZERO", 1),
+    // Brightness (`FinishParams::brightness`): on/off, `E = e^phi`, the saturation weight and the HDR headroom (encoded peak, 1 for SDR)
+    ("BRIGHTNESS", 1),
+    ("BRIGHTNESS_E", 1),
+    ("BRIGHTNESS_W", 1),
+    ("BRIGHTNESS_H", 1),
     // first row of a band dispatch (the kernel runs over rows Y0.., see `render`)
     ("Y0", 1),
     // the mask planes' stride (0: the whole image's, `w × h`) and the band's first pixel in them
@@ -322,6 +339,19 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], curves: &[Op
         }
     }
 
+    // Levels: the midtone tables of the stages that have one (`MIDTONE_SAMPLES` floats each), after everything else
+    let mut levels_off = [0u32; 4];
+    if let Some(lv) = &fp.levels {
+        for (slot, st) in [&lv.master, &lv.channels[0], &lv.channels[1], &lv.channels[2]].into_iter().enumerate() {
+            if let Some(mid) = st.as_ref().and_then(|k| k.mid.as_ref()) {
+                if let Some(o) = levels_off.get_mut(slot) {
+                    *o = aux.len() as u32;
+                }
+                aux.extend_from_slice(&mid.y);
+            }
+        }
+    }
+
     let mut p = Block::new();
     p.u("W", fp.w as u32);
     p.u("H", fp.h as u32);
@@ -396,6 +426,22 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], curves: &[Op
         p.f("PRIM_LOW", pr.low);
         p.f("PRIM_HIGH", pr.high);
     }
+    if let Some(lv) = &fp.levels {
+        p.b("LEVELS", true);
+        let stages = [
+            ("LEVELS_M", "LEVELS_OFF_M", &lv.master),
+            ("LEVELS_R", "LEVELS_OFF_R", &lv.channels[0]),
+            ("LEVELS_G", "LEVELS_OFF_G", &lv.channels[1]),
+            ("LEVELS_B", "LEVELS_OFF_B", &lv.channels[2]),
+        ];
+        for (slot, (name, off, st)) in stages.into_iter().enumerate() {
+            if let Some(k) = st {
+                let (s0, s1, has) = k.mid.as_ref().map_or((1.0, 1.0, 0.0), |m| (m.s0, m.s1, 1.0));
+                p.fs(name, &[1.0, k.black, k.inv_range, k.out_black, k.span, s0, s1, has]);
+                p.u(off, levels_off.get(slot).copied().unwrap_or(0));
+            }
+        }
+    }
     if let Some(hsl) = &ops.hsl {
         p.b("HSL", true);
         p.fs("HSL_LUT", &hsl.words());
@@ -454,6 +500,12 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], curves: &[Op
         p.u("RGB_CONTRAST_OFF", rgb_contrast_off as u32);
         p.f("RGB_CONTRAST_ZERO", rc.zero());
     }
+    if let Some(b) = &fp.brightness {
+        p.b("BRIGHTNESS", true);
+        p.f("BRIGHTNESS_E", b.e);
+        p.f("BRIGHTNESS_W", b.sat_weight());
+        p.f("BRIGHTNESS_H", b.h);
+    }
     let grain_on = fp.grain.is_some() || fp.particles.is_some();
     if let Some((amt, cell, rough, seed)) = fp.grain {
         p.f("GRAIN_AMT", amt);
@@ -506,3 +558,6 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], curves: &[Op
     }
     (p.0, aux)
 }
+
+// the kernel's `MIDTONE_N` (finish.wgsl) is the number of samples of a midtone table
+const _: () = assert!(lcc_develop::levels_curve::MIDTONE_SAMPLES == 257);

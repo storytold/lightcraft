@@ -436,6 +436,7 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
                 keywords,
                 history: Vec::new(),
                 snapshots: Vec::new(),
+                caption: String::new(),
                 original: original.clone(),
                 as_shot_white: None,
                 capture_one: develop.map(Box::new),
@@ -691,7 +692,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A file type the app doesn't read (here a `.NEFX` next to a `.jpg`) is left out where the
+    /// A file type the app doesn't read (here a Sony `.ARQ` next to a `.jpg`) is left out where the
     /// catalog is read, with its variants and album places, so the import job never adds the file:
     /// the photo the job adds is the one the catalog's record becomes, nothing more.
     #[test]
@@ -704,14 +705,14 @@ mod tests {
             encode_jpeg(&EncodeImage::new(8, 8, 3, Samples::U8(&[128; 8 * 8 * 3])), 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
         // the same readable bytes under both names: only the file type decides
         std::fs::write(dir.join("Originals").join("a.jpg"), &jpeg).unwrap();
-        std::fs::write(dir.join("Originals").join("b.NEFX"), &jpeg).unwrap();
+        std::fs::write(dir.join("Originals").join("b.ARQ"), &jpeg).unwrap();
         let db = dir.join("Test.cocatalogdb");
         let image = |pk: i64, name: &str| json!({"Z_PK": pk, "ZIMAGEFILENAME": name, "ZIMAGELOCATION": 1, "ZWIDTH": 8, "ZHEIGHT": 8});
         std::fs::write(
             &db,
             sqlite(&[
                 ("ZPATHLOCATION", vec![json!({"Z_PK": 1, "ZRELATIVEPATH": "./Originals", "ZISRELATIVE": 1})]),
-                ("ZIMAGE", vec![image(1, "a.jpg"), image(2, "b.NEFX")]),
+                ("ZIMAGE", vec![image(1, "a.jpg"), image(2, "b.ARQ")]),
                 (
                     "ZVARIANT",
                     vec![
@@ -729,7 +730,7 @@ mod tests {
         .unwrap();
         let cancel = AtomicBool::new(false);
         let read = read_with_progress(&db, &cancel, &AtomicUsize::new(0), &AtomicUsize::new(0)).unwrap();
-        assert_eq!(read.photos.iter().map(|p| p.source_id).collect::<Vec<_>>(), vec![7], "the NEFX and its second variant are left out");
+        assert_eq!(read.photos.iter().map(|p| p.source_id).collect::<Vec<_>>(), vec![7], "the ARQ and its second variant are left out");
         assert!(read.members.iter().all(|m| number(m, "image") == 7), "no album place for a photo that isn't there: {:?}", read.members);
         let warnings = read.warnings.join("\n");
         assert!(warnings.contains("image 8: not imported") && warnings.contains("image 9: not imported"), "{warnings}");

@@ -1,5 +1,6 @@
 //! Modal dialogs (new album, rename, create preset, choose settings to copy, export, about, shortcuts).
 
+use crate::json_ext::JsonExt as _;
 use lcc_develop::{ControlSpec, Section, SettingsGroup, SettingsPick, Track};
 use serde_json::json;
 
@@ -198,6 +199,7 @@ pub(crate) fn window_id(dialog: &Dialog) -> egui::Id {
         Dialog::ProfileManager { .. } => crate::panels::profile_manager::WINDOW,
         // (the Settings screen's own layer: `settings_screen::LAYER`)
         Dialog::Settings { .. } => crate::settings_screen::LAYER,
+        Dialog::QualityScanner { .. } => "app-quality-scan-dialog",
         _ => return egui::Id::new("app-dialog").with(std::mem::discriminant(dialog)),
     };
     egui::Id::new(own)
@@ -274,6 +276,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
         Dialog::FaceModel { .. } => "Add Face Model",
         Dialog::WhatsNew => "What's New",
         Dialog::Cull { .. } => "Assisted Culling",
+        Dialog::QualityScanner { .. } => "Image Quality Scanner",
         Dialog::SmartRules { id: None, .. } => "Create Smart Collection",
         Dialog::SmartRules { .. } => "Edit Smart Collection",
         Dialog::AutoStack { .. } => "Auto-Stack by Capture Time",
@@ -295,6 +298,8 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
         Dialog::SlideshowExport { .. } => "Export Slideshow",
         Dialog::Print => "Print",
         Dialog::Merge { opts } => opts.title(),
+        Dialog::PixelShiftOffer { .. } => "Pixel Shift Merge",
+        Dialog::ConfirmDeleteSources { .. } => "Delete Merge Sources",
         Dialog::Enhance { .. } => "Enhance Preview",
         Dialog::Settings { .. } => "Settings",
         Dialog::ConfirmDelete { .. } => "Delete Photos",
@@ -434,6 +439,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
             Dialog::Export { .. } => 900.0_f32.min(screen.width() - 2.0 * crate::dialog_frame::SCREEN_MARGIN),
             Dialog::Rename { .. } | Dialog::ContactSheet { .. } | Dialog::Timelapse { .. } | Dialog::SlideshowExport { .. } | Dialog::EmailPhoto { .. } => 480.0,
             Dialog::CaptureTime { .. } | Dialog::LabelNames { .. } | Dialog::CreatePreset { .. } | Dialog::CreatePresetFolder { .. } => 440.0,
+            Dialog::QualityScanner { .. } => 470.0,
             _ => DIALOG_W,
         } })
         .show(ctx, |ui| {
@@ -484,7 +490,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     let scope = if app.session.selection.ids.len() > 1 { "the selected photos" } else { "the photos in view" };
                     crate::dialog_frame::note(ui,
                         egui::RichText::new({
-                            let (stacks, photos) = (preview["stacks"].as_u64().unwrap_or(0), preview["photos"].as_u64().unwrap_or(0));
+                            let (stacks, photos) = (preview.field("stacks").as_u64().unwrap_or(0), preview.field("photos").as_u64().unwrap_or(0));
                             crate::i18n::tr_format!("Creates {stacks} stack{} from {photos} of {scope}", if stacks == 1 { "" } else { "s" }, stacks = stacks, photos = photos, scope = crate::i18n::tr(scope))
                         }).color(t.text_dim),
                     );
@@ -566,6 +572,89 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr("Lower it when a panning or moving burst splits into several groups.")).color(t.text_dim));
                     crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr("Scores stay on the photos: filter or make smart collections with Focus, Eyes Open, Aesthetic and Cull Score.")).color(t.text_dim));
                 }
+                Dialog::QualityScanner { scope, accepted, rejected, apply_flags, rescan, weights } => {
+                    // what a scan measures, and how far it reaches
+                    let selected = app.session.selection.ids.len();
+                    // a folder is "shown" when one is open: the Folders panel's choice, or Browse's
+                    let folder_shown = app.session.library_folder.is_some() || app.session.browse.is_some();
+                    let scopes: [(&str, &str); 3] = [
+                        ("selection", if selected > 1 { "the selected photos" } else { "the photos in view" }),
+                        ("folder", if folder_shown { "the folder shown" } else { "the folder shown (no folder is: pick one first)" }),
+                        ("catalog", "the whole catalog"),
+                    ];
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(
+                            "Scores photos for technical quality (sharpness, noise, exposure and JPEG artifacts) and keeps each score on the photo so the Library can filter and sort by it.",
+                        ))
+                        .color(t.text_label),
+                    );
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(crate::i18n::tr("Scan")).font(t.semibold(12.5)).color(t.text));
+                    for (value, what) in scopes {
+                        let mut on = scope == value;
+                        let r = ui.radio_value(&mut on, true, crate::i18n::tr(what));
+                        crate::widgets::register(ui.ctx(), format!("radio:qualityScope:{value}"), r.rect);
+                        if r.clicked() {
+                            *scope = value.to_string();
+                        }
+                    }
+                    ui.add_space(4.0);
+                    let r = crate::dialog_frame::checkbox(ui, rescan, crate::i18n::tr("Scan photos that have a score already (rescan all)"));
+                    crate::widgets::register(ui.ctx(), "check:qualityRescan", r.rect);
+                    crate::dialog_frame::note(
+                        ui,
+                        egui::RichText::new(crate::i18n::tr(
+                            "Unscanned photos only by default; a rescan measures every photo again and overwrites its score.",
+                        ))
+                        .color(t.text_dim),
+                    );
+                    ui.add_space(8.0);
+                    // the two cutoffs, and what they do
+                    ui.label(egui::RichText::new(crate::i18n::tr("Pick Flags")).font(t.semibold(12.5)).color(t.text));
+                    let r = ui.add(egui::Slider::new(accepted, 0.0..=100.0).text(crate::i18n::tr("Accepted at or above")).fixed_decimals(0));
+                    crate::widgets::register(ui.ctx(), "field:qualityAccepted", r.rect);
+                    let r = ui.add(egui::Slider::new(rejected, 0.0..=100.0).text(crate::i18n::tr("Rejected at or below")).fixed_decimals(0));
+                    crate::widgets::register(ui.ctx(), "field:qualityRejected", r.rect);
+                    // (the two can't cross: a drag past the other stops at it)
+                    if *rejected > *accepted {
+                        *rejected = *accepted;
+                    }
+                    crate::dialog_frame::note(
+                        ui,
+                        egui::RichText::new(crate::i18n::tr("Between the two, a photo keeps its flag (unflagged stays unflagged).")).color(t.text_dim),
+                    );
+                    let r = crate::dialog_frame::checkbox(ui, apply_flags, crate::i18n::tr("Write the flags onto photos you have not flagged"));
+                    crate::widgets::register(ui.ctx(), "check:qualityApplyFlags", r.rect);
+                    if !*apply_flags {
+                        crate::dialog_frame::note(
+                            ui,
+                            egui::RichText::new(crate::i18n::tr("Off: the scan only scores; the verdict is there to filter on.")).color(t.text_dim),
+                        );
+                    }
+                    ui.add_space(8.0);
+                    // the factors and their weights (0 switches one off)
+                    ui.label(egui::RichText::new(crate::i18n::tr("Basic Factors")).font(t.semibold(12.5)).color(t.text));
+                    for (i, (label, weight)) in ["Blur (sharpness)", "Noise", "Exposure", "Compression artifacts"].iter().zip(weights.iter_mut()).enumerate() {
+                        let r = ui.add(
+                            egui::Slider::new(weight, 0.0..=10.0).text(crate::i18n::tr(label)).fixed_decimals(1).show_value(true),
+                        );
+                        crate::widgets::register(ui.ctx(), format!("field:qualityWeight:{i}"), r.rect);
+                    }
+                    crate::dialog_frame::note(
+                        ui,
+                        egui::RichText::new(crate::i18n::tr(
+                            "The score is the factors' weighted mean; 0 leaves one out of it (it is still measured).",
+                        ))
+                        .color(t.text_dim),
+                    );
+                    crate::dialog_frame::note(
+                        ui,
+                        egui::RichText::new(crate::i18n::tr(
+                            "Runs in the background; the Activity stack shows how far it is and can stop it. Scores stay on the photos: sort or filter by Quality in the Library.",
+                        ))
+                        .color(t.text_dim),
+                    );
+                }
                 Dialog::WhatsNew => {
                     ui.scope(|ui| {
                         for line in WHATS_NEW.lines() {
@@ -601,8 +690,20 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     } else {
                         ui.label(crate::i18n::tr("These photos are only in memory. Open a catalog on disk and import again to save them."));
                     }
-                    for detail in details.iter() {
-                        ui.add(egui::Label::new(detail).wrap().selectable(true));
+                    if !details.is_empty() {
+                        ui.add_space(8.0);
+                        // every warning, scrolled and copyable (#1309)
+                        egui::ScrollArea::vertical().id_salt("lightroom_result_details").max_height(320.0).show(ui, |ui| {
+                            for detail in details.iter() {
+                                ui.add(egui::Label::new(detail).wrap().selectable(true));
+                            }
+                        });
+                        if ui.button(crate::i18n::tr("Copy")).clicked() {
+                            let mut text = vec![summary.clone()];
+                            text.extend(library.iter().cloned());
+                            text.extend(details.iter().cloned());
+                            ui.ctx().copy_text(text.join("\n"));
+                        }
                     }
                 }
                 Dialog::DngValidation { summary, damaged, unverifiable } => {
@@ -775,7 +876,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                         let delta = match mode.as_str() {
                             "set" => lcc_catalog::dates::normalize_iso(time)
                                 .and_then(|t| Some(lcc_catalog::dates::iso_seconds(&t)? - lcc_catalog::dates::iso_seconds(&cur)?)),
-                            "shift" => params["shift"].as_i64(),
+                            "shift" => params.field("shift").as_i64(),
                             "file" | "name" => None,
                             _ => Some((*zone as f64 * 3600.0).round() as i64),
                         };
@@ -822,7 +923,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     let sets = lcc_engine::cmd::manage::label_sets_json(&app.session);
                     field(ui, "Set", |ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
-                        for set in sets["sets"].as_array().into_iter().flatten() {
+                        for set in sets.field("sets").as_array().into_iter().flatten() {
                             let name = set["name"].as_str().unwrap_or_default();
                             let shown = crate::i18n::builtin_label(name, set["builtin"].as_bool() == Some(true));
                             if crate::widgets::text_button(ui, &format!("labelSet-{name}"), shown, false).clicked() {
@@ -830,12 +931,15 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                             }
                         }
                     });
-                    for (i, l) in lcc_catalog::ColorLabel::ALL.iter().enumerate() {
+                    if names.len() < lcc_catalog::ColorLabel::ALL.len() {
+                        names.resize(lcc_catalog::ColorLabel::ALL.len(), String::new());
+                    }
+                    for (l, name) in lcc_catalog::ColorLabel::ALL.iter().zip(names.iter_mut()) {
                         let colour = format!("{l:?}");
                         field(ui, &colour, |ui| {
                             let (r, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
                             ui.painter().circle_filled(r.center(), 6.0, crate::panels::grid::label_color(*l));
-                            let te = crate::widgets::named(ui.add(egui::TextEdit::singleline(&mut names[i]).hint_text(crate::i18n::tr(&colour)).desired_width(f32::INFINITY)), crate::i18n::tr(&colour));
+                            let te = crate::widgets::named(ui.add(egui::TextEdit::singleline(name).hint_text(crate::i18n::tr(&colour)).desired_width(f32::INFINITY)), crate::i18n::tr(&colour));
                             crate::widgets::register(ui.ctx(), format!("field:labelName-{}", colour.to_lowercase()), te.rect);
                         });
                     }
@@ -1041,8 +1145,10 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                         crate::widgets::named(r, crate::i18n::tr("Folder name"));
                     });
                 }
-                Dialog::CopySettings { groups } => {
-                    let _ = group_checklist(ui, "copyGroup", groups, None);
+                Dialog::CopySettings { groups, masks_off } => {
+                    let rows = copy_mask_rows(&app.session);
+                    let mask_rows = MaskRows { rows: &rows, off: masks_off };
+                    let _ = group_checklist_with(ui, "copyGroup", groups, None, Some(mask_rows));
                 }
                 Dialog::SyncSettings { groups, controls } => {
                     let n = app.session.selection.ids.len().saturating_sub(1);
@@ -1073,11 +1179,11 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                 Dialog::PasteSettings { groups } => {
                     let n = app.session.selected().len();
                     crate::dialog_frame::note(ui,
-                        egui::RichText::new(crate::i18n::tr_format!("Paste into {n} photo{}. Only settings that were copied are pasted", if n == 1 { "" } else { "s" }, n = n))
+                        egui::RichText::new(crate::i18n::tr_format!("Paste into {n} photo{}", if n == 1 { "" } else { "s" }, n = n))
                             .color(t.text_dim),
                     );
-                    let copied = app.session.dialogs.copy.clone();
-                    let _ = group_checklist(ui, "pasteGroup", groups, Some(&copied));
+                    // any setting of the copied photo, also one the copy left out (upstream #3148)
+                    let _ = group_checklist(ui, "pasteGroup", groups, None);
                 }
                 Dialog::SlideshowExport { settings } => slideshow_export_body(app, ui, settings),
                 Dialog::CropOverlays { picked } => crop_overlays_body(ui, picked),
@@ -1147,6 +1253,14 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     export_body(app, ui, ExportForm { opts, full_size, resize, preset_name, limit_kb, dir }, window_id, settings_height)
                 }
                 Dialog::Merge { opts } => crate::merge::body(app, ui, opts),
+                Dialog::PixelShiftOffer { .. } => {
+                    ui.label(crate::i18n::tr("This selection is a complete pixel-shift series. Merge as Pixel Shift instead?"));
+                }
+                Dialog::ConfirmDeleteSources { count, .. } => {
+                    let what = if *count == 1 { crate::i18n::tr("this photo").to_string() } else { crate::i18n::tr_format!("these {count} photos", count = count) };
+                    ui.label(crate::i18n::tr_format!("Move {what} to Recently Deleted?", what = what));
+                    crate::dialog_frame::note(ui, egui::RichText::new(crate::i18n::tr("They can be restored from Recently Deleted until it is emptied.")).color(t.text_dim));
+                }
                 Dialog::Enhance { opts } => crate::enhance_ui::body(app, ui, opts),
                 Dialog::Import { opts } => crate::import::body(app, ui, opts),
                 Dialog::Settings { tab } => crate::panels::settings::body(app, ui, tab, 0.0),
@@ -1539,7 +1653,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                             let named = !preset_name.trim().is_empty();
                             if crate::widgets::text_button(ui, "watermarkDialogSavePreset", crate::i18n::tr("Save"), false).clicked() && named {
                                 let mut params = app.session.last_export.clone().unwrap_or_default();
-                                params["watermark"] = serde_json::to_value(&wm).unwrap_or_default();
+                                *params.field_mut("watermark") = serde_json::to_value(&wm).unwrap_or_default();
                                 match app.run("export.savePreset", json!({"name": preset_name.trim(), "params": params})) {
                                     Ok(_) => {
                                         app.toast(ui.ctx(), format!("Saved watermark preset “{}”", preset_name.trim()));
@@ -1606,6 +1720,21 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                         close = true;
                     }
                 }
+                if let Dialog::PixelShiftOffer { command } = &dlg {
+                    let mode = crate::i18n::tr(match command.as_str() {
+                        "merge.panorama" => "Panorama",
+                        "merge.hdrPanorama" => "HDR panorama",
+                        "merge.focusStack" => "Focus stack",
+                        _ => "HDR",
+                    });
+                    let label = crate::i18n::tr_format!("Continue with {mode}", mode = mode);
+                    if crate::button::Button::new(&label).widget("button:dialogContinueMerge").show(ui).clicked() {
+                        let r = crate::merge::answer_offer(app, command, crate::merge::OfferChoice::Continue);
+                        let _ = crate::merge::reported(app, r);
+                        // (the dialog it opens takes this one's place)
+                        return;
+                    }
+                }
                 let add_label;
                 let ok = match &dlg {
                     Dialog::Import { opts } => {
@@ -1624,6 +1753,8 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     Dialog::SlideshowExport { .. } => "Export…",
                     Dialog::Print => "Print to PDF…",
                     Dialog::Merge { .. } => "Merge",
+                    Dialog::PixelShiftOffer { .. } => "Pixel Shift",
+                    Dialog::ConfirmDeleteSources { .. } => "Delete",
                     Dialog::Enhance { .. } => "Enhance",
                     Dialog::DenoiseModel { info, .. } if info["download"].is_string() => "Accept & Download",
                     Dialog::DenoiseModel { .. } => "Install",
@@ -1677,6 +1808,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     Dialog::AdvancedSearch { .. } => "Search",
                     Dialog::CaptureTime { .. } => "Change Time",
                     Dialog::Cull { .. } => "Cull",
+                    Dialog::QualityScanner { .. } => "Scan",
                     Dialog::CopySettings { .. } => "Copy",
                     Dialog::PasteSettings { .. } => "Paste",
                     Dialog::TextPrompt { command, .. } => prompt_verb(command),
@@ -1818,7 +1950,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
             // a move says how it went, or why nothing moved
             Ok(r) if matches!(dlg, Dialog::MovePhotos { .. }) => {
                 if let Dialog::MovePhotos { name, .. } = &dlg {
-                    let text = crate::panels::left::moved_text(r["moved"].as_u64().unwrap_or(0), name);
+                    let text = crate::panels::left::moved_text(r.field("moved").as_u64().unwrap_or(0), name);
                     app.toast(ctx, text);
                 }
                 close = true;
@@ -1834,16 +1966,16 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
             }
             // photos dated to a year or a month alone have no time to shift: say so (and, in the same
             // toast, about any whose time can't be read)
-            Ok(r) if matches!(dlg, Dialog::CaptureTime { .. }) && r["noTime"].as_u64().is_some_and(|n| n > 0) => {
+            Ok(r) if matches!(dlg, Dialog::CaptureTime { .. }) && r.field("noTime").as_u64().is_some_and(|n| n > 0) => {
                 let mut text = crate::i18n::tr("Photos dated to a year or month alone have no time to shift and were left as they were").to_string();
-                if r["unreadable"].as_u64().is_some_and(|n| n > 0) {
+                if r.field("unreadable").as_u64().is_some_and(|n| n > 0) {
                     text = format!("{text}. {}", crate::i18n::tr("Photos whose capture time can't be read were left as they were"));
                 }
                 app.toast(ctx, text);
                 close = true;
             }
             // photos whose capture time doesn't read are left as they were: say so
-            Ok(r) if matches!(dlg, Dialog::CaptureTime { .. }) && r["unreadable"].as_u64().is_some_and(|n| n > 0) => {
+            Ok(r) if matches!(dlg, Dialog::CaptureTime { .. }) && r.field("unreadable").as_u64().is_some_and(|n| n > 0) => {
                 app.toast(ctx, crate::i18n::tr("Photos whose capture time can't be read were left as they were"));
                 close = true;
             }
@@ -1966,6 +2098,26 @@ pub fn parse_gap(text: &str) -> Option<f64> {
 /// The longest burst gap `photo.analyze` accepts: a day.
 pub const MAX_BURST_GAP: f32 = 86_400.0;
 
+/// The Image Quality Scanner's settings as last confirmed (`UiState::quality_scan_settings`), so the
+/// dialog opens as it was left: the scope, the two cutoffs, whether flags are written and whether
+/// everything is measured again, and the four factors' weights.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QualityScanSettings {
+    pub scope: String,
+    pub accepted: f32,
+    pub rejected: f32,
+    pub apply_flags: bool,
+    pub rescan: bool,
+    /// Blur, noise, exposure, compression.
+    pub weights: [f32; 4],
+}
+
+impl Default for QualityScanSettings {
+    fn default() -> Self {
+        QualityScanSettings { scope: "selection".into(), accepted: 70.0, rejected: 25.0, apply_flags: false, rescan: false, weights: [1.0; 4] }
+    }
+}
+
 /// Keep what was typed in the Assisted Culling value fields within what `photo.analyze` accepts
 /// (a gap of 0 s to a day, a similarity of 0 to 1), not within the sliders' drag range.
 pub fn clamp_cull_burst(gap: &mut f32, similarity: &mut f32) {
@@ -1984,13 +2136,13 @@ pub fn cull_params(
 ) -> serde_json::Value {
     let mut p = json!({"pickBest": pick_best, "burstGap": burst_gap, "similarity": similarity});
     if reject_below > 0.0 {
-        p["rejectBelow"] = json!(reject_below);
+        *p.field_mut("rejectBelow") = json!(reject_below);
     }
     if suggest_stars {
-        p["applyRatings"] = json!(true);
+        *p.field_mut("applyRatings") = json!(true);
     }
     if suggest_flags {
-        p["applyFlags"] = json!(true);
+        *p.field_mut("applyFlags") = json!(true);
     }
     p
 }
@@ -2163,9 +2315,9 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
                 app.run("library.source", json!({"kind": "all"}))?;
                 let mut filter = serde_json::to_value(lcc_catalog::Filter::default()).map_err(|e| e.to_string())?;
                 // The filter command merges a patch; these defaults are omitted by serde.
-                filter["only"] = json!([]);
-                filter["labels"] = json!([]);
-                filter["ruleSet"] = serde_json::Value::Null;
+                *filter.field_mut("only") = json!([]);
+                *filter.field_mut("labels") = json!([]);
+                *filter.field_mut("ruleSet") = serde_json::Value::Null;
                 app.run("library.filter", filter)?;
                 app.run("library.select", json!({"ids": [first]}))?;
                 app.ui.view = crate::state::ViewMode::PhotoGrid;
@@ -2194,7 +2346,7 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
         Dialog::RenameAlbum { id, name } => app.run("album.rename", json!({"id": id, "name": name})),
         Dialog::TextPrompt { value, command, params, key, .. } => {
             let mut p = params.clone();
-            p[key.as_str()] = json!(value.trim());
+            *p.field_mut(key.as_str()) = json!(value.trim());
             app.run(command, p)
         }
         Dialog::CaptureTime { mode, time, days, hours, minutes, zone, each } => app.run(
@@ -2267,8 +2419,8 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
             });
             match editing {
                 Some(keyword) => {
-                    params["keyword"] = json!(keyword);
-                    params["name"] = json!(name);
+                    *params.field_mut("keyword") = json!(keyword);
+                    *params.field_mut("name") = json!(name);
                     let r = app.run("keyword.edit", params);
                     if r.is_ok() {
                         let to = match keyword.rsplit_once('|') {
@@ -2280,9 +2432,9 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
                     r
                 }
                 None => {
-                    params["name"] = json!(name);
-                    params["parent"] = if *inside { json!(parent) } else { serde_json::Value::Null };
-                    params["addToSelected"] = json!(add_to_selected);
+                    *params.field_mut("name") = json!(name);
+                    *params.field_mut("parent") = if *inside { json!(parent) } else { serde_json::Value::Null };
+                    *params.field_mut("addToSelected") = json!(add_to_selected);
                     let r = app.run("keyword.create", params);
                     if *reveal && let Ok(made) = &r {
                         app.ui.reveal_keyword = made["keyword"].as_str().map(str::to_string);
@@ -2310,8 +2462,8 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
             }
             let mut params = json!({"name": name, "keywords": slots});
             match renames {
-                Some(old) => params["replace"] = json!(old),
-                None => params["new"] = json!(true),
+                Some(old) => *params.field_mut("replace") = json!(old),
+                None => *params.field_mut("new") = json!(true),
             }
             app.run("keyword.saveSet", params)
         }
@@ -2355,6 +2507,36 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
             }
             r
         }
+        Dialog::QualityScanner { scope, accepted, rejected, apply_flags, rescan, weights } => {
+            // (the settings are kept for the next time the dialog opens, confirmed or not)
+            app.ui.quality_scan_settings = Some(QualityScanSettings {
+                scope: scope.clone(),
+                accepted: *accepted,
+                rejected: *rejected,
+                apply_flags: *apply_flags,
+                rescan: *rescan,
+                weights: *weights,
+            });
+            let scope = match scope.as_str() {
+                "folder" => "folder",
+                "catalog" => "catalog",
+                _ => "selected",
+            };
+            let p = json!({
+                "scope": scope,
+                "accepted": *accepted,
+                "rejected": *rejected,
+                "applyFlags": *apply_flags,
+                "rescan": *rescan,
+                "weights": {
+                    "blur": weights[0],
+                    "noise": weights[1],
+                    "exposure": weights[2],
+                    "compression": weights[3],
+                },
+            });
+            app.run("photo.qualityScan", p)
+        }
         Dialog::SmartRules { id, name, rules, parent } => {
             // refused before anything changes (not even the name)
             if let Some(problem) = rules.check_for(&app.session.catalog, id.map(lcc_catalog::AlbumId)).first() {
@@ -2372,13 +2554,13 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
         }
         Dialog::CreatePreset { name, group, groups } => {
             let mut p = pick_params(groups);
-            p["name"] = json!(if name.trim().is_empty() { "My Preset" } else { name.trim() });
-            p["group"] = json!(if group.trim().is_empty() { "User Presets" } else { group.trim() });
+            *p.field_mut("name") = json!(if name.trim().is_empty() { "My Preset" } else { name.trim() });
+            *p.field_mut("group") = json!(if group.trim().is_empty() { "User Presets" } else { group.trim() });
             app.run("preset.create", p)
         }
         Dialog::UpdatePreset { id, name, groups } => {
             let mut p = pick_params(groups);
-            p["id"] = json!(id);
+            *p.field_mut("id") = json!(id);
             let r = app.run("preset.update", p);
             if r.is_ok()
                 && let Some(ctx) = app.tasks.repaint.clone()
@@ -2399,7 +2581,10 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
         Dialog::Print => app.run("app.print", json!({})),
         Dialog::CropOverlays { picked } => app.run("view.cropOverlays", json!({"overlays": picked})),
         Dialog::BookPrefs { prefs } => app.run("book.preferences", json!(prefs)),
-        Dialog::CopySettings { groups } => app.run("develop.copy", pick_params(groups)),
+        Dialog::CopySettings { groups, masks_off } => {
+            let params = copy_params(&app.session, groups, masks_off);
+            app.run("develop.copy", params)
+        }
         Dialog::PasteSettings { groups } => app.run("develop.paste", pick_params(groups)),
         Dialog::SyncSettings { groups, .. } => app.run("develop.sync", pick_params(groups)),
         Dialog::SyncCopies { groups } => {
@@ -2413,7 +2598,12 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
         Dialog::Export { opts, full_size, resize, limit_kb, dir, preset_name } => {
             start_export(app, opts, *full_size, resize, *limit_kb, dir, preset_name)
         }
-        Dialog::Merge { opts } => crate::merge::start_final(app, opts),
+        Dialog::Merge { opts } => {
+            let r = crate::merge::start_final(app, opts);
+            crate::merge::reported(app, r)
+        }
+        Dialog::PixelShiftOffer { command } => crate::merge::answer_offer(app, command, crate::merge::OfferChoice::PixelShift),
+        Dialog::ConfirmDeleteSources { id, .. } => crate::merge::delete_sources(app, *id),
         Dialog::Enhance { opts } => crate::enhance_ui::confirm(app, opts),
         Dialog::Import { opts } => crate::import::start(app, opts),
         Dialog::ConfirmDelete { .. } => app.run("photo.delete", json!({})),
@@ -2469,7 +2659,7 @@ pub fn confirm_dialog(app: &mut LccApp, dlg: &Dialog) -> Result<serde_json::Valu
         Dialog::NewPhotoDefault { name } => app.run("library.setImportDefault", json!({"name": name.trim()})),
         Dialog::Watermark { wm, preset_name } => {
             let mut params = app.session.last_export.clone().unwrap_or_default();
-            params["watermark"] = serde_json::to_value(wm).unwrap_or_default();
+            *params.field_mut("watermark") = serde_json::to_value(wm).unwrap_or_default();
             app.session.last_export = Some(params.clone());
             if !preset_name.trim().is_empty() {
                 let _ = app.run("export.savePreset", json!({"name": preset_name.trim(), "params": params}));
@@ -2559,12 +2749,12 @@ pub(crate) fn start_export(
     let mut p = export_dialog_params(opts, full_size, resize, limit_kb);
     // (Choose folder later: `app.export` asks for it)
     if opts.destination_mode != lcc_engine::export::DestinationMode::ChooseLater {
-        p["dir"] = json!(dir);
+        *p.field_mut("dir") = json!(dir);
     }
-    p["background"] = json!(true);
+    *p.field_mut("background") = json!(true);
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(d) = crate::panels::plugins::chosen_destination() {
-        p["pluginDestination"] = d;
+        *p.field_mut("pluginDestination") = d;
     }
     app.run("app.export", p)
 }
@@ -2688,7 +2878,7 @@ fn preset_params(
 ) -> serde_json::Value {
     let mut params = export_dialog_params(opts, full_size, resize, limit_kb);
     if opts.destination_mode == lcc_engine::export::DestinationMode::SpecificFolder && !dir.trim().is_empty() {
-        params["dir"] = json!(dir.trim());
+        *params.field_mut("dir") = json!(dir.trim());
     }
     params
 }
@@ -2778,7 +2968,8 @@ pub(crate) fn export_presets(app: &mut LccApp, ui: &mut egui::Ui, f: ExportForm<
     ui.horizontal(|ui| {
         if crate::widgets::text_button(ui, "exportImportPresets", crate::i18n::tr("Import…"), false).clicked()
             && let Ok(v) = app.run("file.importPresets", json!({}))
-            && let Some(first) = v["exportPresets"].as_array().and_then(|a| a.iter().find(|r| r["skipped"] != true)).and_then(|r| r["name"].as_str())
+            && let Some(first) =
+                v.field("exportPresets").as_array().and_then(|a| a.iter().find(|r| r.field("skipped") != true)).and_then(|r| r.field("name").as_str())
         {
             load_export_preset(app, first, opts, full_size, resize, limit_kb, dir);
             picked = first.to_string();
@@ -3290,8 +3481,11 @@ pub(crate) fn export_settings(app: &mut LccApp, ui: &mut egui::Ui, f: ExportForm
         }
         let rendered = opts.format.is_rendered();
         let depths = lcc_engine::export::ExportOptions::bit_depths(opts.format);
-        if rendered && depths.len() > 1 {
-            let mut bd = opts.bit_depth.filter(|b| depths.iter().any(|d| d.0 == *b)).unwrap_or(depths[0].0);
+        if rendered
+            && depths.len() > 1
+            && let Some(first) = depths.first()
+        {
+            let mut bd = opts.bit_depth.filter(|b| depths.iter().any(|d| d.0 == *b)).unwrap_or(first.0);
             choices(ui, "Bit depth", "exportBitDepth", depths, &mut bd);
             opts.bit_depth = Some(bd);
         }
@@ -3652,6 +3846,124 @@ pub(crate) fn export_settings(app: &mut LccApp, ui: &mut egui::Ui, f: ExportForm
 /// `<tag>:<setting>`, `<tag>:open:<group>`, `<tag>:all`, `<tag>:none`. → `Some(true/false)` when
 /// Check All / Check None was pressed.
 fn group_checklist(ui: &mut egui::Ui, tag: &str, ids: &mut Vec<String>, offered: Option<&SettingsPick>) -> Option<bool> {
+    group_checklist_with(ui, tag, ids, offered, None)
+}
+
+/// The masks of the active photo under Masking in Copy Settings (issue #1268): a box per mask, its
+/// name and what it is made of. `off` holds the masks left unticked while Masking is ticked.
+struct MaskRows<'a> {
+    rows: &'a [(u32, String)],
+    off: &'a mut Vec<u32>,
+}
+
+/// Each mask of the active photo with its row text: its name and what it is made of ("Mask 2:
+/// Radial Gradient, Brush"); an automatic name that already says it is shown alone.
+pub(crate) fn copy_mask_rows(session: &lcc_engine::Session) -> Vec<(u32, String)> {
+    let Some(d) = session.active().and_then(|id| session.develop_of(id)) else { return Vec::new() };
+    d.masks
+        .iter()
+        .map(|m| {
+            let comp = lcc_develop::recipe::composition(m);
+            let name = m.name.trim();
+            let text = if name.is_empty() {
+                lcc_develop::recipe::content_name(m)
+            } else if comp.is_empty() || lcc_develop::recipe::numbered_name(name, &lcc_develop::recipe::content_name(m)) || name == comp {
+                name.to_string()
+            } else {
+                format!("{name}: {comp}")
+            };
+            (m.id, text)
+        })
+        .collect()
+}
+
+/// Copy Settings' parameters: the ticked settings, and the masks ticked when some are left out.
+fn copy_params(session: &lcc_engine::Session, ids: &[String], masks_off: &[u32]) -> serde_json::Value {
+    let mut p = pick_params(ids);
+    let masks_ticked = SettingsPick::from_ids(ids).has(SettingsGroup::Masks.id());
+    if masks_ticked && !masks_off.is_empty() {
+        let on: Vec<u32> = copy_mask_rows(session).iter().map(|(id, _)| *id).filter(|id| !masks_off.contains(id)).collect();
+        if let Some(o) = p.as_object_mut() {
+            o.insert("masks".into(), json!(on));
+        }
+    }
+    p
+}
+
+/// The Masking group with a box per mask under it (opened with the arrow, as a group's single
+/// settings). Widget ids: `<tag>:masks`, `<tag>:open:masks`, `<tag>:mask:<id>`.
+fn mask_group(ui: &mut egui::Ui, tag: &str, ids: &mut Vec<String>, m: &mut MaskRows<'_>, t: &Tokens) {
+    let gid = SettingsGroup::Masks.id();
+    let rows = m.rows;
+    // (a mask deleted since is forgotten; none ticked is Masking unticked)
+    m.off.retain(|x| rows.iter().any(|(id, _)| id == x));
+    if m.off.len() >= rows.len() {
+        ids.retain(|x| x != gid);
+        m.off.clear();
+    }
+    let copied = ids.iter().any(|x| x == gid);
+    let open_id = egui::Id::new(("settings-tree-open", tag, gid));
+    let mut open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let (rect, arrow) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
+        let colour = if arrow.hovered() { t.text } else { t.text_dim };
+        let icon = if open { crate::icons::Icon::ChevronDown } else { crate::icons::Icon::ChevronRight };
+        crate::icons::paint(ui.painter(), egui::Rect::from_center_size(rect.center(), egui::vec2(14.0, 14.0)), icon, colour);
+        let arrow = arrow.on_hover_text(crate::i18n::tr(if open { "Hide the single settings" } else { "Show the single settings" }));
+        crate::access::button(&arrow, if open { "Hide the single settings" } else { "Show the single settings" });
+        crate::widgets::register(ui.ctx(), format!("{tag}:open:{gid}"), arrow.rect);
+        if arrow.clicked() {
+            open = !open;
+            ui.data_mut(|d| d.insert_temp(open_id, open));
+        }
+        let mut on = copied && m.off.is_empty();
+        let partial = copied && !m.off.is_empty();
+        let r = ui.add(egui::Checkbox::new(&mut on, crate::i18n::tr(SettingsGroup::Masks.label())).indeterminate(partial));
+        crate::widgets::register(ui.ctx(), format!("{tag}:{gid}"), r.rect);
+        if r.changed() {
+            // a partly ticked group ticks all of it, as the other groups do
+            let on = partial || on;
+            m.off.clear();
+            ids.retain(|x| x != gid);
+            if on {
+                ids.push(gid.to_string());
+            }
+        }
+    });
+    if !open {
+        return;
+    }
+    for (mid, text) in rows {
+        ui.horizontal(|ui| {
+            ui.add_space(38.0);
+            let mut on = copied && !m.off.contains(mid);
+            let r = ui.checkbox(&mut on, text.as_str());
+            crate::widgets::register(ui.ctx(), format!("{tag}:mask:{mid}"), r.rect);
+            if !r.changed() {
+                return;
+            }
+            if on && !ids.iter().any(|x| x == gid) {
+                // the first mask ticked: Masking with just this one
+                ids.push(gid.to_string());
+                *m.off = rows.iter().map(|(id, _)| *id).filter(|id| id != mid).collect();
+            } else if on {
+                m.off.retain(|x| x != mid);
+            } else if !m.off.contains(mid) {
+                m.off.push(*mid);
+            }
+        });
+    }
+}
+
+/// [`group_checklist`] with the masks of the photo under Masking (Copy Settings).
+fn group_checklist_with(
+    ui: &mut egui::Ui,
+    tag: &str,
+    ids: &mut Vec<String>,
+    offered: Option<&SettingsPick>,
+    mut masks: Option<MaskRows<'_>>,
+) -> Option<bool> {
     // (ids from an older ui.json may name whole groups: one tick per setting from here on)
     let normal = SettingsPick::from_ids(ids).to_ids();
     if normal != *ids {
@@ -3675,6 +3987,14 @@ fn group_checklist(ui: &mut egui::Ui, tag: &str, ids: &mut Vec<String>, offered:
         let half = SettingsGroup::ALL.len().div_ceil(2);
         for (i, g) in SettingsGroup::ALL.into_iter().enumerate() {
             let Some(ui) = cols.get_mut(usize::from(i >= half)) else { continue };
+            if g == SettingsGroup::Masks
+                && can(g.id())
+                && let Some(m) = masks.as_mut()
+                && !m.rows.is_empty()
+            {
+                mask_group(ui, tag, ids, m, &t);
+                continue;
+            }
             let mine: Vec<&str> = leaves(g).into_iter().filter(|id| can(id)).collect();
             let ticked = mine.iter().filter(|id| ids.iter().any(|x| x == *id)).count();
             let open_id = egui::Id::new(("settings-tree-open", tag, g.id()));
@@ -3728,12 +4048,18 @@ fn group_checklist(ui: &mut egui::Ui, tag: &str, ids: &mut Vec<String>, offered:
         crate::widgets::register(ui.ctx(), format!("{tag}:all"), all.rect);
         if all.clicked() {
             *ids = SettingsGroup::ALL.into_iter().flat_map(leaves).filter(|id| can(id)).map(str::to_string).collect();
+            if let Some(m) = masks.as_mut() {
+                m.off.clear();
+            }
             return Some(true);
         }
         let none = ui.small_button(crate::i18n::tr("Check None"));
         crate::widgets::register(ui.ctx(), format!("{tag}:none"), none.rect);
         if none.clicked() {
             ids.clear();
+            if let Some(m) = masks.as_mut() {
+                m.off.clear();
+            }
             return Some(false);
         }
         ui.label(egui::RichText::new(crate::i18n::tr("Open a group with its arrow to pick single settings.")).small().color(t.text_dim));
@@ -4221,6 +4547,7 @@ pub enum ConfirmStyle {
 pub fn confirm_style(dlg: &Dialog) -> ConfirmStyle {
     match dlg {
         Dialog::ConfirmDelete { .. }
+        | Dialog::ConfirmDeleteSources { .. }
         | Dialog::ConfirmPurge { .. }
         | Dialog::DeleteKeyword { .. }
         | Dialog::DeleteEffects { .. }
@@ -4387,6 +4714,63 @@ mod cull_dialog_tests {
         h.step();
         h.step();
         assert_eq!(burst(&h), (1800.0, 1.0));
+    }
+
+    fn quality_settings(h: &Headless) -> (String, f32, f32, bool, [f32; 4]) {
+        match &h.app.ui.dialog {
+            Some(Dialog::QualityScanner { scope, accepted, rejected, apply_flags, weights, .. }) => {
+                (scope.clone(), *accepted, *rejected, *apply_flags, *weights)
+            }
+            d => panic!("{d:?}"),
+        }
+    }
+
+    /// The Image Quality Scanner's dialog (issue #1313): it opens as it was left, the cutoffs can't
+    /// cross, and Scan hands what it shows to `photo.qualityScan` (which runs it in the background).
+    #[test]
+    fn the_quality_scanner_dialog_opens_as_left_and_scans() {
+        let app = LccApp::new(lcc_engine::Session::with_demo(), Services::default());
+        let mut h = Headless::new(app, [1400.0, 1000.0], 1.0);
+        h.step();
+        h.app.run("dialog.qualityScan", json!({})).unwrap();
+        for _ in 0..4 {
+            h.step();
+        }
+        let (scope, accepted, rejected, apply_flags, weights) = quality_settings(&h);
+        assert_eq!((scope.as_str(), accepted, rejected, apply_flags, weights), ("selection", 70.0, 25.0, false, [1.0; 4]));
+        // the tree of controls is drawn: the cutoffs, the rescan and flag boxes, a weight a factor
+        for id in ["field:qualityAccepted", "field:qualityRejected", "check:qualityRescan", "check:qualityApplyFlags", "field:qualityWeight:0"] {
+            assert!(h.app.widgets.iter().any(|(w, _)| w == id), "{id} is not drawn");
+        }
+        // a rejected cutoff typed above the accepted one stops at it
+        type_value(&mut h, "field:qualityAccepted", "40");
+        type_value(&mut h, "field:qualityRejected", "60");
+        let (_, accepted, rejected, ..) = quality_settings(&h);
+        assert_eq!((accepted, rejected), (40.0, 40.0));
+        // Scan: the settings are kept for the next opening, the dialog closes, and the scan starts
+        let r = h.request("ui.dialog.confirm", json!({}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(h.app.ui.dialog.is_none(), "{:?}", h.app.ui.dialog);
+        let kept = h.app.ui.quality_scan_settings.clone().expect("the settings are kept");
+        assert_eq!((kept.accepted, kept.rejected), (40.0, 40.0));
+        h.app.run("dialog.qualityScan", json!({})).unwrap();
+        h.step();
+        h.step();
+        let (_, accepted, ..) = quality_settings(&h);
+        assert_eq!(accepted, 40.0, "the next opening starts from what was confirmed");
+        // the frames pump the scan the dialog started: it finishes (the demo photos are small) or
+        // is stopped here, so nothing is left running when the test ends
+        for _ in 0..400 {
+            h.step();
+            if h.app.session.quality_scan.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let _ = h.app.run("photo.qualityScan", json!({"cancel": true}));
+        for _ in 0..10 {
+            h.step();
+        }
     }
 }
 

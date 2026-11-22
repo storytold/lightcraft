@@ -99,7 +99,13 @@ fn the_chrome_its_cards_the_dock_the_menu_and_the_module_switch() {
     // ☰ opens on Shortcuts and reaches every menu; Esc closes it and nothing more
     ask(&mut h, "ui.clickWidget", json!({"id": "modern:menu"}));
     assert_eq!(h.app.ui.modern.menu.as_deref(), Some("Shortcuts"));
-    assert!(has(&h, "modern:shortcut:import") && has(&h, "modern:shortcut:export"));
+    assert!(has(&h, "modern:shortcut:import") && has(&h, "modern:shortcut:export") && has(&h, "modern:shortcut:settings"));
+    // Settings opens the settings dialog, like Edit ▸ Settings
+    ask(&mut h, "ui.clickWidget", json!({"id": "modern:shortcut:settings"}));
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Settings { .. })), "settings dialog");
+    ask(&mut h, "ui.key", json!({"key": "Escape"}));
+    ask(&mut h, "ui.clickWidget", json!({"id": "modern:menu"}));
+    assert_eq!(h.app.ui.modern.menu.as_deref(), Some("Shortcuts"));
     for title in ["File", "Edit", "Photo", "View", "Help"] {
         assert!(has(&h, &format!("modern:menu:{title}")), "{title}");
     }
@@ -168,6 +174,32 @@ fn a_tap_in_the_library_grid_opens_the_photo() {
     ask(&mut h, "ui.clickWidget", json!({"id": cell}));
     assert_eq!(h.app.ui.module, crate::module::ModuleId::Develop);
     assert_eq!(h.app.ui.view, crate::state::ViewMode::Detail);
+}
+
+/// A tap opens the photo under the finger, wherever on its cell it lands, not the photo that was active before
+/// (on a phone a tap near a cell's corner opened the photo edited last).
+#[test]
+fn a_tap_opens_the_photo_under_the_finger_not_the_one_active_before() {
+    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1280.0, 800.0], 1.0);
+    exec(&mut h, "view.modernLayout", json!({"on": true}));
+    exec(&mut h, "view.photoGrid", json!({}));
+    h.settle(SETTLE);
+    let cells = |h: &Headless| -> Vec<(u64, egui::Rect)> {
+        h.app.widgets.iter().filter_map(|(w, r)| w.strip_prefix("thumb:").and_then(|n| n.parse().ok()).map(|id| (id, *r))).collect()
+    };
+    let on_screen = cells(&h);
+    assert!(on_screen.len() >= 2, "two grid cells on screen");
+    let last = on_screen.iter().map(|c| c.0).max().unwrap();
+    exec(&mut h, "library.select", json!({"ids": [last]}));
+    h.settle(SETTLE);
+    // another photo, where it is now, tapped near its cell's bottom-right corner (where its badges are)
+    let (other, rect) = cells(&h).into_iter().find(|c| c.0 != last).unwrap();
+    let at = rect.max - egui::vec2(4.0, 4.0);
+    h.request("ui.click", json!({"x": at.x, "y": at.y}), T);
+    h.settle(SETTLE);
+    assert_eq!(h.app.ui.module, crate::module::ModuleId::Develop);
+    assert_eq!(h.app.session.active(), Some(lcc_catalog::PhotoId(other)), "the tapped photo opened");
 }
 
 #[test]

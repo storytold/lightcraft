@@ -1,6 +1,7 @@
 //! UI-level commands (views, panels, zoom, tools, dialogs) and the menu model shared by the native
 //! menu bar, the shortcut handler and the control channel.
 
+use crate::json_ext::JsonExt as _;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -72,6 +73,16 @@ pub fn language_from_command(id: &str) -> Option<crate::i18n::Locale> {
     }
 }
 
+/// Photo Merge ▸ Pixel Shift: one definition for the menu bar, the command palette and the grid's context menu, so
+/// they always match.
+pub const PIXEL_SHIFT_ID: &str = "merge.pixelShiftNow";
+pub const PIXEL_SHIFT_LABEL: &str = "Pixel Shift…";
+
+/// Photo Merge ▸ Delete Merge Sources: the same one definition for the menu bar, the command palette and the grid's
+/// context menu.
+pub const DELETE_SOURCES_ID: &str = "merge.deleteSourcesNow";
+pub const DELETE_SOURCES_LABEL: &str = "Delete Merge Sources";
+
 pub const UI_COMMANDS: &[UiCommand] = &[
     ("ui.dock", "Arrange Panel", None, ""),
     ("ui.dock.reset", "Reset Panel Layout", None, "Window>Panels"),
@@ -98,6 +109,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.eyeFocus", "Eye Focus Strip", None, "View>Loupe Info"),
     ("view.people", "People", None, "View"),
     ("view.person", "Show Person", None, ""),
+    ("people.category", "Face Category", None, ""),
     ("view.faceBoxes", "Face Boxes", None, "View>Loupe Info"),
     ("view.focusPoint", "Show Focus Point", Some("Alt+F"), "View>Loupe Info"),
     ("view.zoomToFocus", "Zoom to Focus Point", None, "View>Loupe Info"),
@@ -362,6 +374,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("merge.panoramaLast", "Panorama with Last Settings", Some("Ctrl+Shift+M"), "Photo>Photo Merge"),
     ("merge.hdrPanoramaLast", "HDR Panorama with Last Settings", None, "Photo>Photo Merge"),
     ("merge.focusStackLast", "Focus Stack with Last Settings", None, "Photo>Photo Merge"),
+    // the frames of one Nikon pixel-shift series (no dialog: a selection that is not a complete series is refused
+    // with the reason)
+    (PIXEL_SHIFT_ID, PIXEL_SHIFT_LABEL, None, "Photo>Photo Merge"),
+    // a merged pixel-shift photo's other frames go to Recently Deleted (frame 01 and the merged photo stay)
+    (DELETE_SOURCES_ID, DELETE_SOURCES_LABEL, None, "Photo>Photo Merge"),
     ("file.addPhotos", "Import Photos…", None, "File"),
     // the workspace tabs (Settings ▸ Import ▸ Import as a tab; OneSlips LR-IMP-WINDOW)
     ("view.importTab", "Browse Tab", None, "Window>Modules"),
@@ -447,6 +464,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.frameRate", "Frame Rate", None, "Help>Debug"),
     ("app.whatsNew", "What's New", None, "Help"),
     ("dialog.cull", "Assisted Culling…", None, "Library"),
+    ("dialog.qualityScan", "Image Quality Scanner…", None, "Library"),
     ("app.help", "{app} Help", Some("F1"), "Help"),
     ("app.feedback", "Send Feedback…", None, "Help"),
     ("app.website", "{app} Website", None, "Help"),
@@ -568,10 +586,10 @@ pub(crate) fn adjust_brush(app: &mut LccApp, k: f32, df: f32) -> Value {
             let new_feather = (sp.feather as f32 + df).clamp(0.0, 100.0);
             let mut p = json!({"index": i});
             if k != 1.0 {
-                p["size"] = json!(new_size);
+                *p.field_mut("size") = json!(new_size);
             }
             if df != 0.0 {
-                p["feather"] = json!(new_feather);
+                *p.field_mut("feather") = json!(new_feather);
             }
             let _ = app.run("spot.update", p);
             return json!({"size": new_size, "feather": new_feather});
@@ -1046,6 +1064,17 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             // everyone, not what the search box last narrowed the cards to
             app.ui.people_search.clear();
             Ok(json!({"people": app.session.catalog.people().len()}))
+        }
+        "people.category" => {
+            // {category}: which of the People view's three categories is on screen (issue #1050), for a control surface
+            // or a script (a person's page is left: a category shows everyone)
+            let Some(category) = p.get("category").and_then(Value::as_str).and_then(crate::state::PeopleCategory::parse) else {
+                return Some(Err("people.category: `category` must be unknown, suggested or confirmed".into()));
+            };
+            app.ui.view = ViewMode::People;
+            app.ui.person_page = None;
+            app.ui.people_category = category;
+            Ok(json!({"category": category.id()}))
         }
         "view.person" => {
             // {name}: one person's page in the People view: their faces, and the faces that look like them
@@ -1722,7 +1751,9 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             if p.get("color").is_none() && p.get("opacity").is_none() {
                 let all = crate::panels::masking::OVERLAY_COLORS;
                 let i = all.iter().position(|c| *c == app.ui.mask_overlay_color).map_or(0, |i| (i + 1) % all.len());
-                app.ui.mask_overlay_color = all[i];
+                if let Some(c) = all.get(i) {
+                    app.ui.mask_overlay_color = *c;
+                }
             }
             if let Some(c) = p.get("color") {
                 match parse_rgb(c) {
@@ -2317,8 +2348,8 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
         }
         "dialog.rename" => {
             let targets = app.session.targets(p).unwrap_or_else(|_| app.session.selected());
-            if targets.len() == 1 {
-                let id = targets[0];
+            if let [id] = targets.as_slice() {
+                let id = *id;
                 let name = p
                     .get("name")
                     .or_else(|| p.get("template"))
@@ -2387,7 +2418,7 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
         }
         "dialog.copySettings" => {
             let groups = app.session.dialogs.copy.to_ids();
-            app.ui.dialog = Some(Dialog::CopySettings { groups });
+            app.ui.dialog = Some(Dialog::CopySettings { groups, masks_off: Vec::new() });
             Ok(Value::Null)
         }
         "dialog.slideshowExport" => {
@@ -2422,7 +2453,7 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
                     Picked::Unavailable => return Some(Err("no save dialog on this platform; supply path".into())),
                 };
                 let Some(path) = paths.first() else { return Some(Ok(Value::Null)) };
-                params["path"] = json!(path);
+                *params.field_mut("path") = json!(path);
             }
             crate::export_task::start_print(app, &params)
         }
@@ -2439,7 +2470,7 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
                     Picked::Unavailable => return Some(Err("no save dialog on this platform; supply path".into())),
                 };
                 let Some(path) = paths.first() else { return Some(Ok(Value::Null)) };
-                params["path"] = json!(path);
+                *params.field_mut("path") = json!(path);
             }
             crate::export_task::start_contact_sheet(app, &params)
         }
@@ -2466,13 +2497,39 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             app.ui.dialog = Some(Dialog::Export { opts, full_size, resize, preset_name: String::new(), limit_kb: u("limitKb", 0) as u32, dir });
             Ok(Value::Null)
         }
-        "merge.hdrLast" => crate::merge::start_last(app, "merge.hdr"),
-        "merge.hdrBatch" => crate::merge::start_batch(app, p),
-        "merge.panoramaLast" => crate::merge::start_last(app, "merge.panorama"),
-        "merge.hdrPanoramaLast" => crate::merge::start_last(app, "merge.hdrPanorama"),
-        "merge.focusStackLast" => crate::merge::start_last(app, "merge.focusStack"),
+        "merge.hdrLast" => {
+            let r = crate::merge::start_last(app, "merge.hdr");
+            crate::merge::reported(app, r)
+        }
+        "merge.hdrBatch" => {
+            let r = crate::merge::start_batch(app, p);
+            crate::merge::reported(app, r)
+        }
+        "merge.panoramaLast" => {
+            let r = crate::merge::start_last(app, "merge.panorama");
+            crate::merge::reported(app, r)
+        }
+        "merge.hdrPanoramaLast" => {
+            let r = crate::merge::start_last(app, "merge.hdrPanorama");
+            crate::merge::reported(app, r)
+        }
+        "merge.focusStackLast" => {
+            let r = crate::merge::start_last(app, "merge.focusStack");
+            crate::merge::reported(app, r)
+        }
+        "merge.pixelShiftNow" => {
+            let r = crate::merge::start_last(app, "merge.pixelShift");
+            crate::merge::reported(app, r)
+        }
+        "merge.deleteSourcesNow" => {
+            let r = crate::merge::ask_delete_sources(app);
+            crate::merge::reported(app, r)
+        }
         "dialog.enhance" => crate::enhance_ui::open(app),
-        "dialog.mergeHdr" => crate::merge::open(app, "merge.hdr"),
+        "dialog.mergeHdr" => {
+            let r = crate::merge::open(app, "merge.hdr");
+            crate::merge::reported(app, r)
+        }
         "dialog.faceModel" => {
             let path = match p.get("path").and_then(Value::as_str) {
                 Some(x) => Some(x.to_string()),
@@ -2483,9 +2540,18 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
                 None => Ok(Value::Null),
             }
         }
-        "dialog.mergePanorama" => crate::merge::open(app, "merge.panorama"),
-        "dialog.mergeHdrPanorama" => crate::merge::open(app, "merge.hdrPanorama"),
-        "dialog.mergeFocusStack" => crate::merge::open(app, "merge.focusStack"),
+        "dialog.mergePanorama" => {
+            let r = crate::merge::open(app, "merge.panorama");
+            crate::merge::reported(app, r)
+        }
+        "dialog.mergeHdrPanorama" => {
+            let r = crate::merge::open(app, "merge.hdrPanorama");
+            crate::merge::reported(app, r)
+        }
+        "dialog.mergeFocusStack" => {
+            let r = crate::merge::open(app, "merge.focusStack");
+            crate::merge::reported(app, r)
+        }
         "app.openSamModelFolder" => crate::panels::dialogs::show_model_folder(app),
         "dialog.aiModels" => {
             app.ui.dialog = Some(Dialog::Settings { tab: "ai".into() });
@@ -2516,10 +2582,10 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             // the same install the dialog's button runs, without the plan in front of it
             match app.session.execute("update.install", &json!({"confirm": true})) {
                 Ok(v) => {
-                    if let Some(message) = v["message"].as_str() {
+                    if let Some(message) = v.field("message").as_str() {
                         app.toast(&ctx, message);
                     }
-                    if v["exit"].as_bool().unwrap_or(false) {
+                    if v.field("exit").as_bool().unwrap_or(false) {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                     Ok(v)
@@ -2561,6 +2627,18 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             edit_in(app, &ctx, p, photocraft)
         }
         "photo.openOriginalInExternal" => open_original_in(app, &ctx, p),
+        "dialog.qualityScan" => {
+            let s = app.ui.quality_scan_settings.clone().unwrap_or_default();
+            app.ui.dialog = Some(Dialog::QualityScanner {
+                scope: s.scope,
+                accepted: s.accepted,
+                rejected: s.rejected,
+                apply_flags: s.apply_flags,
+                rescan: s.rescan,
+                weights: s.weights,
+            });
+            Ok(Value::Null)
+        }
         "dialog.cull" => {
             let (burst_gap, similarity) = app.ui.cull_burst.unwrap_or((10.0, 0.93));
             app.ui.dialog = Some(Dialog::Cull {
@@ -2605,10 +2683,10 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
                         n => format!("{n} px"),
                     },
                 ),
-                ("Photos".to_string(), info["photos"].to_string()),
-                ("Collections".to_string(), info["albums"].to_string()),
+                ("Photos".to_string(), info.field("photos").to_string()),
+                ("Collections".to_string(), info.field("albums").to_string()),
             ];
-            if let Some(dir) = info["dir"].as_str().or(info["path"].as_str()) {
+            if let Some(dir) = info.field("dir").as_str().or(info.field("path").as_str()) {
                 rows.push(("Library".into(), dir.to_string()));
             }
             rows.push(("Frame time".into(), format!("{:.1} ms ({:.0} fps)", app.perf.frame_ms, app.perf.fps)));
@@ -2796,9 +2874,9 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
                 let r = plan.and_then(|plan| app.run("library.findMissing", plan.to_json()));
                 match r {
                     Ok(v) => {
-                        let n = v["found"].as_array().map_or(0, Vec::len);
-                        let left = v["missing"].as_u64().unwrap_or(0);
-                        let unsure = v["ambiguous"].as_array().map_or(0, Vec::len);
+                        let n = v.field("found").as_array().map_or(0, Vec::len);
+                        let left = v.field("missing").as_u64().unwrap_or(0);
+                        let unsure = v.field("ambiguous").as_array().map_or(0, Vec::len);
                         let unsure = if unsure > 0 {
                             crate::i18n::tr_format!(" ({unsure} with several look-alike files: use Locate)", unsure = unsure)
                         } else {
@@ -2916,7 +2994,7 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
                 crate::panels::dialogs::prompt(
                     app,
                     "Auto-Tag from Tracklog",
-                    "Camera time zone, e.g. -07:00 (empty: UTC)",
+                    "Camera time zone, e.g. -07:00 (empty: recorded zone, else UTC)",
                     "",
                     "photo.tagFromTracklog",
                     params,
@@ -2937,6 +3015,7 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
                 if kept > 0 {
                     msg += &crate::i18n::tr_format!("; {kept} already had a location", kept = kept);
                 }
+                msg += &unplaceable_note(sk);
                 let ctx = app.tasks.repaint.clone().unwrap_or_default();
                 app.toast(&ctx, msg);
             }
@@ -3056,7 +3135,7 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             if !lut_paths.is_empty() {
                 match app.session.execute("profile.import", &json!({"paths": lut_paths})) {
                     Ok(v) => {
-                        let profiles = v["imported"].as_array().map_or(0, Vec::len);
+                        let profiles = v.field("imported").as_array().map_or(0, Vec::len);
                         if profiles > 0 {
                             parts.push(crate::i18n::tr_format!(
                                 "Imported {profiles} profile{} (Profile browser ▸ their groups)",
@@ -3064,7 +3143,7 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
                                 profiles = profiles
                             ));
                         }
-                        problems.extend(v["failed"].as_array().into_iter().flatten().map(|f| {
+                        problems.extend(v.field("failed").as_array().into_iter().flatten().map(|f| {
                             let name = f.get(0).and_then(Value::as_str).unwrap_or_default();
                             let reason = f.get(1).and_then(Value::as_str).unwrap_or_default();
                             format!("{name}: {reason}")
@@ -3080,17 +3159,17 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             if !dcp_paths.is_empty() {
                 match app.session.execute("camera.importDcp", &json!({"paths": dcp_paths})) {
                     Ok(v) => {
-                        let n = v["imported"].as_array().map_or(0, Vec::len);
+                        let n = v.field("imported").as_array().map_or(0, Vec::len);
                         if n > 0 {
                             parts.push(format!(
                                 "Imported {n} camera profile{} (.dcp): pick one per photo in Profiles ▸ Camera Profile",
                                 if n == 1 { "" } else { "s" }
                             ));
                         }
-                        if v["restart"].as_bool() == Some(true) {
+                        if v.field("restart").as_bool() == Some(true) {
                             parts.push(crate::i18n::tr("A new camera default applies after a restart").to_string());
                         }
-                        problems.extend(v["failed"].as_array().into_iter().flatten().map(|f| {
+                        problems.extend(v.field("failed").as_array().into_iter().flatten().map(|f| {
                             let name = f.get(0).and_then(Value::as_str).unwrap_or_default();
                             let reason = f.get(1).and_then(Value::as_str).unwrap_or_default();
                             format!("{name}: {reason}")
@@ -3336,7 +3415,7 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             let Some(path) = path else { return Some(Ok(Value::Null)) };
             let mut params = json!({"path": path});
             if let Some(v) = p.get("names") {
-                params["names"] = v.clone();
+                *params.field_mut("names") = v.clone();
             }
             let r = app.session.execute(command, &params).map_err(|e| e.to_string());
             match &r {
@@ -3376,7 +3455,7 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             let mut params = json!({"path": path});
             for k in ["names", "group"] {
                 if let Some(v) = p.get(k) {
-                    params[k] = v.clone();
+                    *params.field_mut(k) = v.clone();
                 }
             }
             let r = app.session.execute("mask.exportEffects", &params).map_err(|e| e.to_string());
@@ -3447,10 +3526,10 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             let Some(path) = path else { return Some(Ok(Value::Null)) };
             let mut params = json!({"path": path});
             if let Some(g) = group {
-                params["group"] = json!(g);
+                *params.field_mut("group") = json!(g);
             }
             if let Some(ids) = p.get("ids") {
-                params["ids"] = ids.clone();
+                *params.field_mut("ids") = ids.clone();
             }
             let r = app.session.execute("preset.export", &params).map_err(|e| e.to_string());
             if let Ok(v) = &r {
@@ -3511,7 +3590,7 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             let Some(path) = path else { return Some(Ok(Value::Null)) };
             let mut params = json!({"path": path});
             if let Some(n) = p.get("names") {
-                params["names"] = n.clone();
+                *params.field_mut("names") = n.clone();
             }
             let r = app.session.execute("curve.exportPresets", &params).map_err(|e| e.to_string());
             if let Ok(v) = &r {
@@ -3559,6 +3638,9 @@ pub fn ui_enabled(app: &LccApp, id: &str) -> bool {
         return e;
     }
     match id {
+        "merge.deleteSourcesNow" => {
+            app.session.active().and_then(|id| app.session.merge_sources_to_delete(id)).is_some_and(|(present, _)| !present.is_empty())
+        }
         "library.selectOnlyActive" => app.session.active().is_some(),
         "view.loupeToggle" => app.session.active().is_some() || app.ui.view == ViewMode::Detail,
         "dialog.newDiskFolder" | "dialog.synchronizeFolder" => chosen_library_folder(app).is_ok(),
@@ -3707,8 +3789,8 @@ pub fn delete_in_album(app: &mut LccApp, ctx: &egui::Context) -> bool {
     }
     match app.run("album.removePhotos", json!({"id": aid.0})) {
         Ok(r) => {
-            let n = r["removed"].as_u64().unwrap_or(0);
-            let name = r["album"].as_str().unwrap_or_default().to_string();
+            let n = r.field("removed").as_u64().unwrap_or(0);
+            let name = r.field("album").as_str().unwrap_or_default().to_string();
             let what = crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n);
             app.toast(ctx, crate::i18n::tr_format!("Removed {what} from {name}", what = what, name = name));
         }
@@ -3865,10 +3947,11 @@ fn edit_in_inner(app: &mut LccApp, ctx: &egui::Context, p: &Value, photocraft: b
     }
     let r = app.session.execute("photo.editExternal", &params).map_err(|e| e.to_string())?;
     // every selected photo got a copy (#920); each opens in the editor
-    let copies: Vec<(String, Option<u64>)> = r["copies"]
+    let copies: Vec<(String, Option<u64>)> = r
+        .field("copies")
         .as_array()
         .map(|c| c.iter().map(|c| (c["path"].as_str().unwrap_or_default().to_string(), c["id"].as_u64())).collect())
-        .unwrap_or_else(|| vec![(r["path"].as_str().unwrap_or_default().to_string(), r["id"].as_u64())]);
+        .unwrap_or_else(|| vec![(r.field("path").as_str().unwrap_or_default().to_string(), r.field("id").as_u64())]);
     let mut failed = None;
     for (path, id) in &copies {
         if let Some(id) = id {
@@ -3919,8 +4002,8 @@ fn open_original_in(app: &mut LccApp, ctx: &egui::Context, p: &Value) -> Result<
         app.toast(ctx, e.clone());
     }
     let r = r?;
-    let opened = r["opened"].as_array().map_or(0, Vec::len);
-    match (r["failed"].as_str(), r["opened"][0]["path"].as_str()) {
+    let opened = r.field("opened").as_array().map_or(0, Vec::len);
+    match (r.field("failed").as_str(), r.field("opened")[0].field("path").as_str()) {
         (Some(e), _) => app.toast(ctx, crate::i18n::tr_format!("Couldn't open the editor: {e}", e = e)),
         (None, Some(path)) if opened == 1 => {
             let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -3989,4 +4072,26 @@ fn open_originals(app: &mut LccApp, p: &Value) -> Result<Value, String> {
         return Err(format!("Couldn't open the editor: {e}"));
     }
     Ok(json!({"opened": opened, "skipped": skipped, "app": editor, "failed": failed}))
+}
+
+/// The Auto-Tag toast's note for photos whose capture time the camera zone can't place (a leap second):
+/// `photo.autoTagTracklog` skips them under `skipped.unplaceable`; empty when there are none.
+pub(crate) fn unplaceable_note(skipped: &Value) -> String {
+    let unplaceable = skipped["unplaceable"].as_u64().unwrap_or(0);
+    if unplaceable == 0 {
+        return String::new();
+    }
+    crate::i18n::tr_format!("; {unplaceable} with a time the zone can't place", unplaceable = unplaceable)
+}
+
+#[cfg(test)]
+mod unplaceable_note_tests {
+    use super::*;
+
+    #[test]
+    fn auto_tag_toast_reports_unplaceable_photos() {
+        assert!(unplaceable_note(&json!({"unplaceable": 2})).contains('2'));
+        assert!(unplaceable_note(&json!({"unplaceable": 0})).is_empty());
+        assert!(unplaceable_note(&json!({})).is_empty());
+    }
 }

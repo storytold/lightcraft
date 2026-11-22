@@ -848,9 +848,7 @@ fn import_menu(app: &mut LccApp, ui: &egui::Ui, right_top: Pos2) {
 /// A long press on a grid photo starts picking several, with that photo; later ones add or remove.
 fn long_press(app: &mut LccApp) {
     let Some(at) = app.ui.modern.long_press.take() else { return };
-    let Some(id) =
-        app.widgets.iter().rev().find(|(w, r)| w.starts_with("thumb:") && r.contains(at)).and_then(|(w, _)| w["thumb:".len()..].parse::<u64>().ok())
-    else {
+    let Some(id) = photo_at(app, at) else {
         return;
     };
     let mode = if app.ui.modern.selecting { "toggle" } else { "replace" };
@@ -866,7 +864,9 @@ fn open_tapped(app: &mut LccApp, ui: &egui::Ui, area: Rect, before: Option<lcc_c
     }
     // (a tap on a card floating over the grid, the search pill or the Info card, is the card's)
     let at = ui.input(|i| i.pointer.interact_pos());
-    let on_grid = at.is_some_and(|p| area.contains(p) && ui.ctx().layer_id_at(p).is_none_or(|l| l == ui.layer_id()));
+    let on_grid = at.is_some_and(|p| {
+        area.contains(p) && ui.ctx().layer_id_at(p).is_none_or(|l| l == ui.layer_id()) && !crate::modern_sources::owns_tap(ui.ctx(), p)
+    });
     let tapped = ui.input(|i| {
         i.pointer.primary_released()
             && on_grid
@@ -874,12 +874,25 @@ fn open_tapped(app: &mut LccApp, ui: &egui::Ui, area: Rect, before: Option<lcc_c
             && i.pointer.button_clicked(egui::PointerButton::Primary)
             && !i.modifiers.any()
     });
-    // a single photo picked by this tap (a tap on empty grid clears the selection instead);
-    // `before` is kept for a future "tap the picked photo again" rule
+    if !tapped {
+        return;
+    }
+    // the photo under the finger, not whichever one was active: the grid's own click does not pick it when the tap
+    // lands on a badge or a cell's edge, and the photo opened last (often the last in the grid) opened instead.
+    // `before` is kept for a future "tap the picked photo again" rule.
     let _ = before;
-    if tapped && app.session.active().is_some() && app.session.selection.ids.len() <= 1 {
+    let Some(id) = at.and_then(|p| photo_at(app, p)) else { return };
+    if app.session.active() != Some(lcc_catalog::PhotoId(id)) || app.session.selection.ids.len() > 1 {
+        let _ = app.run("library.select", json!({"ids": [id]}));
+    }
+    if app.session.active() == Some(lcc_catalog::PhotoId(id)) {
         open_develop(app);
     }
+}
+
+/// The grid photo whose thumbnail is under `at`, by the widgets drawn this frame.
+fn photo_at(app: &LccApp, at: egui::Pos2) -> Option<u64> {
+    app.widgets.iter().rev().find(|(w, r)| w.starts_with("thumb:") && r.contains(at)).and_then(|(w, _)| w["thumb:".len()..].parse::<u64>().ok())
 }
 
 fn open_develop(app: &mut LccApp) {

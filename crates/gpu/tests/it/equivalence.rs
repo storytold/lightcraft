@@ -3,6 +3,11 @@
 //!
 //! Bounds (documented in `docs/gpu-pipeline.md`): mean |Δ| < 0.5 LSB and max |Δ| ≤ 3 LSB per
 //! channel for every case. Skips (passes with a note) when no GPU adapter exists, e.g. on CI.
+//!
+//! On a software adapter (`<PREFIX>_GPU_SOFTWARE=1`: lavapipe on Linux, WARP on Windows; the
+//! nightly job in `docs/ci.md`) the per-pixel bounds are wider ([`SOFT_MEAN_LSB`], [`SOFT_MAX_LSB`]):
+//! those rasterizers round transcendental functions and fused multiply-adds differently from
+//! hardware, but a kernel that is wrong still moves far more than that.
 
 use std::sync::Arc;
 
@@ -11,8 +16,21 @@ use lcc_geom::{Orientation, Point, Rect};
 use lcc_pipeline::{Quality, RenderRequest, SourceInfo, StageCache, render};
 use lcc_raster::{Rgb32f, Rgba8};
 
-const MEAN_LSB: f64 = 0.5;
-const MAX_LSB: u8 = 3;
+const HW_MEAN_LSB: f64 = 0.5;
+const HW_MAX_LSB: u8 = 3;
+/// The bounds on a software adapter.
+const SOFT_MEAN_LSB: f64 = 1.0;
+const SOFT_MAX_LSB: u8 = 6;
+
+/// Mean |Δ| bound for the adapter in use.
+fn mean_lsb() -> f64 {
+    if lcc_gpu::software_adapter() { SOFT_MEAN_LSB } else { HW_MEAN_LSB }
+}
+
+/// Max |Δ| bound for the adapter in use.
+fn max_lsb() -> u8 {
+    if lcc_gpu::software_adapter() { SOFT_MAX_LSB } else { HW_MAX_LSB }
+}
 
 fn gpu() -> bool {
     let ok = lcc_gpu::available();
@@ -90,7 +108,7 @@ fn check(name: &str, src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, 
     let gpu = lcc_gpu::render(src, info, s, req, None).unwrap_or_else(|| panic!("gpu render ({:?})", lcc_gpu::last_fallback()));
     let (mean, max, over) = diff(&cpu, &gpu.image);
     eprintln!("{name:<28} {}x{}  mean {mean:.4}  max {max}  >1: {:.4}%", cpu.width, cpu.height, over * 100.0);
-    assert!(mean < MEAN_LSB && max <= MAX_LSB, "{name}: mean {mean:.4} LSB, max {max} LSB");
+    assert!(mean < mean_lsb() && max <= max_lsb(), "{name}: mean {mean:.4} LSB, max {max} LSB");
     (mean, max)
 }
 
@@ -100,7 +118,7 @@ fn check_spot(name: &str, src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSetti
     let gpu = lcc_gpu::render(src, info, s, req, None).unwrap_or_else(|| panic!("gpu render ({:?})", lcc_gpu::last_fallback()));
     let (mean, max, over) = diff(&cpu, &gpu.image);
     eprintln!("{name:<28} {}x{}  mean {mean:.4}  max {max}  >1: {:.4}%", cpu.width, cpu.height, over * 100.0);
-    assert!(mean < MEAN_LSB / 10.0 && max <= 8, "{name}: mean {mean:.4} LSB, max {max} LSB");
+    assert!(mean < mean_lsb() / 10.0 && max <= 8, "{name}: mean {mean:.4} LSB, max {max} LSB");
 }
 
 /// [`check`] for gamut-warning renders: a warning is a hard decision at the gamut boundary, so a
@@ -110,10 +128,10 @@ fn check_warned(name: &str, src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSet
     let cpu = render(src, info, s, req).image;
     let gpu = lcc_gpu::render(src, info, s, req, None).unwrap_or_else(|| panic!("gpu render ({:?})", lcc_gpu::last_fallback()));
     let (mean, _, over) = diff(&cpu, &gpu.image);
-    let flips = cpu.data.iter().zip(&gpu.image.data).filter(|(p, q)| (0..3).any(|c| p[c].abs_diff(q[c]) > MAX_LSB)).count();
+    let flips = cpu.data.iter().zip(&gpu.image.data).filter(|(p, q)| (0..3).any(|c| p[c].abs_diff(q[c]) > max_lsb())).count();
     let share = flips as f64 / cpu.data.len() as f64;
     eprintln!("{name:<28} {}x{}  mean {mean:.4}  >1: {:.4}%  boundary flips {flips}", cpu.width, cpu.height, over * 100.0);
-    assert!(mean < MEAN_LSB && share <= 1e-4, "{name}: mean {mean:.4} LSB, {flips} pixels differ by more than {MAX_LSB} LSB");
+    assert!(mean < mean_lsb() && share <= 1e-4, "{name}: mean {mean:.4} LSB, {flips} pixels differ by more than {} LSB", max_lsb());
 }
 
 type Edit = fn(&mut DevelopSettings);
@@ -316,6 +334,59 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.curve.shadows = 25.0;
             s.curve.master = vec![Point::new(0.0, 0.05), Point::new(0.5, 0.55), Point::new(1.0, 0.95)];
             s.curve.blue = vec![Point::new(0.0, 0.0), Point::new(0.5, 0.45), Point::new(1.0, 1.0)];
+        }),
+        ("levels (master points)", |s| {
+            s.levels.master.black = 24.0;
+            s.levels.master.white = 232.0;
+        }),
+        ("levels (midtone + output)", |s| {
+            s.levels.master.midtone = 0.5;
+            s.levels.master.out_black = 12.0;
+            s.levels.master.out_white = 244.0;
+        }),
+        ("levels (channels + master + curve)", |s| {
+            s.levels.master.black = 10.0;
+            s.levels.master.midtone = -0.3;
+            s.levels.red.white = 220.0;
+            s.levels.red.midtone = 0.6;
+            s.levels.green.black = 18.0;
+            s.levels.blue.out_black = 30.0;
+            s.levels.blue.out_white = 200.0;
+            s.curve.master = vec![Point::new(0.0, 0.03), Point::new(0.5, 0.55), Point::new(1.0, 0.97)];
+        }),
+        ("levels (inverted output, strong midtone)", |s| {
+            s.levels.master.midtone = 0.8;
+            s.levels.master.out_black = 255.0;
+            s.levels.master.out_white = 0.0;
+        }),
+        ("levels (hdr edit)", |s| {
+            s.hdr.enabled = true;
+            s.light.exposure = 1.5;
+            s.levels.master.black = 20.0;
+            s.levels.master.midtone = 0.4;
+            s.levels.master.white = 230.0;
+        }),
+        ("levels (inverted input range)", |s| {
+            s.levels.master.black = 215.0;
+            s.levels.master.white = 40.0;
+        }),
+        ("levels (inverted input, midtone, channels)", |s| {
+            s.levels.master.black = 230.0;
+            s.levels.master.white = 25.0;
+            s.levels.master.midtone = -0.5;
+            s.levels.red.black = 10.0;
+            s.levels.red.white = 200.0;
+            s.levels.green.out_black = 240.0;
+            s.levels.green.out_white = 15.0;
+            s.curve.master = vec![Point::new(0.0, 0.03), Point::new(0.5, 0.55), Point::new(1.0, 0.97)];
+        }),
+        ("levels (inverted red, hdr edit)", |s| {
+            // red runs backwards and holds its end value above SDR white; green and blue rise and continue
+            s.hdr.enabled = true;
+            s.light.exposure = 1.5;
+            s.levels.master.midtone = 0.3;
+            s.levels.red.black = 235.0;
+            s.levels.red.white = 15.0;
         }),
         ("tone curves + refine saturation", |s| {
             s.curve.master = vec![Point::new(0.0, 0.0), Point::new(0.25, 0.15), Point::new(0.75, 0.88), Point::new(1.0, 1.0)];
@@ -1397,7 +1468,7 @@ fn windows_match() {
         let name = format!("window: {name}");
         if name.contains("spot") {
             // Heal divides by its blurred source, so float rounding (Metal) moves a few pixels by
-            // more than MAX_LSB; a window missing part of the spot's ring moves many: hold the mean
+            // more than max_lsb(); a window missing part of the spot's ring moves many: hold the mean
             // ten times tighter instead
             check_spot(&name, &src, &info, &s, &req);
         } else {
@@ -1460,7 +1531,8 @@ fn a_zoomed_window_of_a_big_brush_matches_and_is_quick() {
         if !bench {
             check(&format!("big brush window (auto {auto})"), &src, &info, &s, &req);
         }
-        assert!(ms < 3000.0, "a zoomed brush window took {ms:.0} ms");
+        // a speed budget for hardware; a software rasterizer takes seconds
+        assert!(ms < 3000.0 || lcc_gpu::software_adapter(), "a zoomed brush window took {ms:.0} ms");
     }
 }
 
@@ -1475,6 +1547,11 @@ static BIG_SOURCE_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 fn a_window_does_not_keep_the_whole_source_on_the_device() {
     let _lock = BIG_SOURCE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     if !gpu() {
+        return;
+    }
+    if lcc_gpu::software_adapter() {
+        // WARP refuses the 288 MB source buffer (its limits are below a hardware card's)
+        lcc_testkit::skip!(Gpu, "a 24 MP source on the device needs a hardware adapter");
         return;
     }
     use lcc_pipeline::PixelWindow;
@@ -1574,9 +1651,9 @@ fn check_hdr_req(name: &str, src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSe
     let above = a.iter().filter(|&&c| c > 255.5).count() as f64 / a.len() as f64;
     eprintln!("{name:<28} {w}x{h}  peak {peak:.2}  mean {mean:.4}  max {max:.2}  above SDR white {:.2}%", above * 100.0);
     assert!(peak <= 1.0 || above > 0.0, "{name}: the case reaches above SDR white");
-    assert!(mean < MEAN_LSB && max <= MAX_LSB as f32, "{name}: mean {mean:.4}, max {max:.2} (8-bit steps)");
+    assert!(mean < mean_lsb() && max <= max_lsb() as f32, "{name}: mean {mean:.4}, max {max:.2} (8-bit steps)");
     let (m8, x8, _) = diff(&cpu.image, &gpu.image);
-    assert!(m8 < MEAN_LSB && x8 <= MAX_LSB, "{name}: 8-bit reduction mean {m8:.4}, max {x8}");
+    assert!(m8 < mean_lsb() && x8 <= max_lsb(), "{name}: 8-bit reduction mean {m8:.4}, max {x8}");
 }
 
 // Given an HDR edit, the GPU's float HDR render matches the CPU's (the reference) above and below
@@ -2212,4 +2289,260 @@ fn vignetting_calibration_matches() {
     check("flat field + colour NR preview", &src, &preview, &s, &RenderRequest::fit(636, 792));
     let w = lcc_pipeline::PixelWindow { x: 0, y: 500, w: 300, h: 260 };
     check("flat field + colour NR window", &src, &info, &s, &RenderRequest { window: Some(w), ..RenderRequest::fit(636, 792) });
+}
+
+/// Levels at their defaults, spelled out, change nothing: the same settings, no stage, and the GPU
+/// render equals the render of settings that never had Levels.
+#[test]
+fn neutral_levels_render_like_no_levels() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(1, 320, 240);
+    let info = SourceInfo::default();
+    let req = RenderRequest::fit(320, 240);
+    let plain = DevelopSettings::default();
+    let mut spelled = DevelopSettings::default();
+    spelled.levels.master = Default::default();
+    spelled.levels.red.black = 0.0;
+    assert_eq!(plain, spelled);
+    assert!(lcc_pipeline::levels::LevelsK::new(&spelled.levels).is_none());
+    let a = lcc_gpu::render(&src, &info, &plain, &req, None).unwrap().image;
+    let b = lcc_gpu::render(&src, &info, &spelled, &req, None).unwrap().image;
+    assert_eq!(a.data, b.data, "GPU");
+    let (ca, cb) = (render(&src, &info, &plain, &req).image, render(&src, &info, &spelled, &req).image);
+    assert_eq!(ca.data, cb.data, "CPU");
+}
+
+/// The ends of the midtone range (and some values between), ordinary and inverted (output levels reversed, and on
+/// every other scene the input range too), on every demo scene: the GPU matches the CPU within [`max_lsb`] everywhere
+/// and no pixel is off by more than that (the scales are 8-bit levels).
+#[test]
+fn midtone_extremes_match_cpu_on_every_scene() {
+    if !gpu() {
+        return;
+    }
+    let (info, req) = (SourceInfo::default(), RenderRequest::fit(720, 480));
+    let (mut worst_max, mut worst_share) = (0u8, 0.0f64);
+    for i in 0..lcc_scenes::demo_library().len().min(6) {
+        let src = scene(i, 720, 480);
+        for midtone in [1.0, -1.0, 0.5, -0.5, 0.1, -0.1] {
+            for inverted in [false, true] {
+                let mut s = DevelopSettings::default();
+                s.levels.master.midtone = midtone;
+                if inverted && i % 2 == 1 {
+                    s.levels.master.black = 215.0;
+                    s.levels.master.white = 40.0;
+                }
+                if inverted {
+                    s.levels.master.out_black = 255.0;
+                    s.levels.master.out_white = 0.0;
+                }
+                let cpu = render(&src, &info, &s, &req).image;
+                let gpu = lcc_gpu::render(&src, &info, &s, &req, None)
+                    .unwrap_or_else(|| panic!("scene {i} midtone {midtone}: gpu render ({:?})", lcc_gpu::last_fallback()));
+                let (mean, max, _) = diff(&cpu, &gpu.image);
+                let far = cpu.data.iter().zip(&gpu.image.data).filter(|(p, q)| (0..3).any(|c| p[c].abs_diff(q[c]) > max_lsb())).count();
+                let share = far as f64 / cpu.data.len() as f64;
+                worst_max = worst_max.max(max);
+                worst_share = worst_share.max(share);
+                assert!(
+                    mean < mean_lsb() && share == 0.0,
+                    "scene {i} midtone {midtone} inverted {inverted}: mean {mean:.4}, max {max}, share {share:.5}"
+                );
+            }
+        }
+    }
+    eprintln!("levels midtone extremes: worst max {worst_max} LSB (8-bit), worst share {worst_share:.5}");
+}
+
+/// 16-bit output samples of a render.
+fn u16_samples(r: &lcc_pipeline::Rendered) -> &[u16] {
+    let Some(lcc_pipeline::DeepImage { samples: lcc_pipeline::DeepSamples::U16(v), .. }) = &r.deep else { panic!("no 16-bit samples") };
+    v
+}
+
+/// Levels in the deep outputs, for every Levels case. The GPU renders two depths only (8-bit and the float
+/// HDR path; 16-bit and linear-float requests are the CPU's by design, `lcc_gpu::handles`), so:
+/// - the GPU's float samples match the CPU's, in 8-bit steps of the encoding they decode to
+///   (`check_hdr_req`, which also holds the 8-bit reductions together);
+/// - the CPU's 16-bit samples agree with its own 8-bit render to within the 8-bit rounding and dither
+///   (one level), so Levels act the same at every depth.
+#[test]
+fn levels_match_in_16_bit_and_float_output() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(2, 480, 320);
+    let info = SourceInfo::default();
+    for (name, edit) in cases().into_iter().filter(|(n, _)| n.starts_with("levels")) {
+        let mut s = DevelopSettings::default();
+        edit(&mut s);
+        let req = RenderRequest::fit(480, 320);
+        let eight = render(&src, &info, &s, &req);
+        let req16 = RenderRequest { depth: lcc_pipeline::OutputDepth::U16, ..req };
+        let sixteen = render(&src, &info, &s, &req16);
+        let deep = u16_samples(&sixteen);
+        let (mut sum, mut max) = (0.0f64, 0.0f64);
+        for (px, d) in eight.image.data.iter().zip(deep.as_chunks::<3>().0) {
+            for c in 0..3 {
+                let diff = (f64::from(px[c]) - f64::from(d[c]) / 257.0).abs();
+                sum += diff;
+                max = max.max(diff);
+            }
+        }
+        let mean = sum / (deep.len() as f64);
+        eprintln!("{name:<42} CPU 16-bit vs 8-bit: mean {mean:.4}  max {max:.3} (8-bit levels)");
+        assert!(mean < 0.6 && max <= 1.01, "{name}: 16-bit against 8-bit: mean {mean:.4}, max {max:.3}");
+        // float, linear (the HDR path): GPU against CPU
+        let reqf = RenderRequest { depth: lcc_pipeline::OutputDepth::F32Hdr, ..req };
+        check_hdr_req(&format!("{name} (float)"), &src, &info, &s, &reqf);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Brightness: the stage is closed form on both sides (`lcc_pipeline::brightness`, `brightness_*` in finish.wgsl), so the
+// float renders agree far closer than the 8-bit bounds above: within 0.1 of an 8-bit level on a dense sweep of greys and
+// colours and on the 63 colour patches of the calibration chart, SDR and HDR (the stage adds at most 0.1 of a level on top of
+// the difference the two renderers already have before it, scaled by its steepest slope).
+
+/// The 63 colour patches of the Brightness calibration chart (sRGB-encoded): 6 hues × 2 saturations × 3 levels, and 9
+/// natural tones (skin, foliage, sky, stone) at 3 levels.
+fn brightness_chart_colours() -> Vec<[f32; 3]> {
+    let mut v = Vec::new();
+    let hues = [[1.0f32, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 0.0]];
+    for h in hues {
+        for s in [1.0f32, 0.5] {
+            for level in [0.30f32, 0.60, 0.90] {
+                v.push(h.map(|c| level * ((1.0 - s) + s * c)));
+            }
+        }
+    }
+    let tones = [
+        [1.00f32, 0.82, 0.72],
+        [0.93, 0.68, 0.50],
+        [0.80, 0.55, 0.40],
+        [0.55, 0.70, 0.20],
+        [0.25, 0.60, 0.25],
+        [0.20, 0.50, 0.40],
+        [0.45, 0.65, 1.00],
+        [0.70, 0.82, 1.00],
+        [0.85, 0.75, 0.55],
+    ];
+    for t in tones {
+        for k in [0.35f32, 0.65, 1.0] {
+            v.push(t.map(|c| c * k));
+        }
+    }
+    v
+}
+
+/// A dense set of sRGB-encoded colours: a grey ramp (up to `top`, encoded), a hue ring at several saturations and
+/// levels, a colour cube, and the chart's patches.
+fn brightness_sweep(top: f32) -> Vec<[f32; 3]> {
+    let mut v = Vec::new();
+    for i in 0..2048 {
+        let g = top * i as f32 / 2047.0;
+        v.push([g; 3]);
+    }
+    for h in 0..180 {
+        let a = h as f32 / 180.0 * std::f32::consts::TAU;
+        let rgb = [a.cos(), (a - 2.0944).cos(), (a + 2.0944).cos()].map(|c| 0.5 + 0.5 * c.clamp(-1.0, 1.0));
+        for s in [0.15f32, 0.5, 1.0] {
+            for level in [0.05f32, 0.3, 0.6, 0.95] {
+                v.push(rgb.map(|c| (level * ((1.0 - s) + s * c)).min(top)));
+            }
+        }
+    }
+    for r in 0..17 {
+        for g in 0..17 {
+            for b in 0..17 {
+                v.push([r, g, b].map(|c| top * c as f32 / 16.0));
+            }
+        }
+    }
+    v.extend(brightness_chart_colours());
+    v
+}
+
+/// `colours` (encoded in sRGB) as a scene-linear Rec.2020 image `w` wide, padded with mid grey.
+fn brightness_image(colours: &[[f32; 3]], w: usize) -> (Arc<Rgb32f>, usize) {
+    let h = colours.len().div_ceil(w);
+    let m = lcc_color::SRGB.to_space(&lcc_color::REC2020);
+    let mut img = Rgb32f::new(w, h);
+    for (i, px) in img.data.iter_mut().enumerate() {
+        let e = colours.get(i).copied().unwrap_or([0.5; 3]);
+        *px = m.apply_f32(e.map(lcc_color::transfer::srgb_to_linear));
+    }
+    (Arc::new(img), h)
+}
+
+fn brightness_codes(src: &Arc<Rgb32f>, s: &DevelopSettings, w: usize, h: usize, gpu_side: bool) -> Vec<f32> {
+    let req = RenderRequest { depth: lcc_pipeline::OutputDepth::F32Hdr, ..RenderRequest::fit(w, h) };
+    let info = SourceInfo::default();
+    let r =
+        if gpu_side { lcc_gpu::try_render(src, &info, s, &req, None).expect("the GPU renders float requests") } else { render(src, &info, s, &req) };
+    hdr_codes(&r)
+}
+
+fn brightness_agreement(name: &str, stops: Option<f64>) {
+    let hdr = stops.is_some();
+    // an HDR render of `stops` stops of headroom has the encoded headroom H; the grey ramp runs up to just below it, so it covers
+    // the whole range from SDR white to H (the pass-through above H is in the CPU stage tests)
+    let top = stops.map_or(1.0, |ev| {
+        let h = lcc_pipeline::brightness::BrightnessK::for_peak(1.0, 2f32.powf(ev as f32)).expect("a stage").h;
+        0.98 * h
+    });
+    let colours = brightness_sweep(top);
+    let (src, h) = brightness_image(&colours, 128);
+    let mut flat = DevelopSettings::default();
+    if let Some(ev) = stops {
+        flat.hdr.enabled = true;
+        flat.hdr.max_ev = ev;
+    }
+    // the two renderers' own difference without Brightness, for reference
+    let base = {
+        let (a, b) = (brightness_codes(&src, &flat, 128, h, false), brightness_codes(&src, &flat, 128, h, true));
+        a.iter().zip(&b).map(|(p, q)| (p - q).abs()).fold(0.0f32, f32::max)
+    };
+    eprintln!("{name:<24} without Brightness: CPU and GPU differ by at most {base:.4} of an 8-bit level");
+    for cf in [-100.0, -50.0, -20.0, -1.0, 1.0, 20.0, 50.0, 100.0] {
+        let mut s = flat.clone();
+        s.light.brightness = cf;
+        let (a, b) = (brightness_codes(&src, &s, 128, h, false), brightness_codes(&src, &s, 128, h, true));
+        assert_eq!(a.len(), b.len());
+        let (mut max, mut sum) = (0.0f32, 0.0f64);
+        for (p, q) in a.iter().zip(&b) {
+            let d = (p - q).abs();
+            max = max.max(d);
+            sum += d as f64;
+        }
+        eprintln!("{name:<24} cf {cf:>6}: max {max:.4}  mean {:.5} (8-bit levels, {} samples)", sum / a.len() as f64, a.len());
+        // the two renderers already differ by `base` before the stage (the sRGB encode near black), and the stage amplifies
+        // that by at most its steepest slope; what it adds itself must stay within 0.1 of a level
+        let slope = (lcc_pipeline::brightness::PHI_PER_UNIT * f64::abs(cf) / lcc_pipeline::brightness::CF_PER_C1).exp() as f32;
+        assert!(
+            max <= slope * base + 0.1,
+            "{name}, cf {cf}: CPU and GPU differ by {max:.4} of an 8-bit level (before the stage {base:.4}, slope {slope:.2})"
+        );
+        // the stage did something
+        let plain = brightness_codes(&src, &flat, 128, h, false);
+        let moved = a.iter().zip(&plain).map(|(p, q)| (p - q).abs()).fold(0.0f32, f32::max);
+        assert!(moved > 0.1, "{name}, cf {cf}: Brightness changed nothing ({moved})");
+        if hdr {
+            assert!(a.iter().any(|&c| c > 255.5), "{name}, cf {cf}: the sweep reaches above SDR white");
+        }
+    }
+}
+
+#[test]
+fn brightness_matches_the_cpu_on_a_dense_sweep_and_the_chart_colours() {
+    if !gpu() {
+        return;
+    }
+    brightness_agreement("brightness SDR", None);
+    // the HDR headroom from 1 stop to the largest (5 stops, peak 32, H = 4.42 encoded)
+    for ev in [1.0, 2.0, 3.0, 5.0] {
+        brightness_agreement(&format!("brightness HDR {ev} stops"), Some(ev));
+    }
 }

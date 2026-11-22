@@ -52,6 +52,9 @@ struct Fake {
     pin: Option<String>,
     password: Option<String>,
     elevated: bool,
+    /// Answer the locked-folder endpoints as a real Immich does an API key that lacks `all`: 403
+    /// "Missing required permission: all".
+    key_without_all: bool,
 }
 
 fn read_req(s: impl Read) -> Option<(String, String, Option<String>, Vec<u8>)> {
@@ -115,6 +118,8 @@ fn serve(fake: Fake) -> (String, Arc<Mutex<Vec<String>>>) {
                 json(json!({"id": "user-1", "email": "me@example.invalid", "name": "Me", "isAdmin": false}))
             } else if path == "/api/api-keys/me" {
                 json(json!({"id": "k", "name": "app", "permissions": ["asset.read", "asset.view", "asset.download"]}))
+            } else if fake.key_without_all && path.starts_with("/api/auth/") {
+                resp("403 Forbidden", "application/json", br#"{"message":"Missing required permission: all","statusCode":403,"error":"Forbidden"}"#)
             } else if path == "/api/auth/status" {
                 json(json!({"isElevated": fake.elevated, "password": fake.password.is_some(), "pinCode": fake.pin.is_some()}))
             } else if path == "/api/auth/session/unlock" {
@@ -389,6 +394,25 @@ fn locked_folders_stay_hidden_until_the_session_is_unlocked() {
     let seen = seen.lock().unwrap();
     assert!(seen.iter().all(|r| !r.contains("2468")), "the PIN never goes into a URL: {seen:?}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Feature: an API key can't open Immich's locked folders (the server wants a signed-in session), and
+// the app says so in plain words instead of naming a permission the key can't be given.
+#[test]
+fn locked_folders_with_an_api_key_say_a_session_is_needed() {
+    let (url, _) = serve(Fake { key_without_all: true, pin: Some("2468".into()), ..Fake::default() });
+    let mut s = session();
+    let c = s.execute("immich.connect", &json!({"url": url, "apiKey": KEY})).unwrap();
+    assert_eq!(c["ok"], true, "{c}");
+    for (cmd, params) in [("immich.authStatus", json!({})), ("immich.unlockSession", json!({"secret": "2468"}))] {
+        let r = s.execute(cmd, &params).unwrap();
+        assert_eq!(r["ok"], false, "{r}");
+        assert_eq!(r["error"]["kind"], "sessionRequired", "{r}");
+        assert_eq!(r["error"]["retryable"], false, "{r}");
+        let m = r["error"]["message"].as_str().unwrap_or_default();
+        assert!(m.contains("signed-in session") && m.contains("API key"), "{m}");
+        assert!(!m.contains("auth/status") && !m.contains("2468"), "{m}");
+    }
 }
 
 #[test]

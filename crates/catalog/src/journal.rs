@@ -63,6 +63,8 @@
 //! | 16 | Before / After: the import state and Set Before kept with the photo | `Op::SetBefore`, `Photo.before`, `Photo.import_state` |
 //! | 17 | Export status: when a photo was last exported (the grid's exported badge; Reset Export Status) | `Op::SetExported`, `Photo.exported` |
 //! | 18 | vignetting calibration maps (like Capture One's LCC "Uniform Light"), stored once and referenced from the develop settings | `Op::AddVignettingMap`, `Op::SetVignettingMapState`, `Catalog.vignetting_maps`, `Optics.vignetting_calibration` (an id), `Optics.vignetting_calibration_amount` |
+//! | 19 | Pixel Shift merges remember their frames | `Op::SetMergeSources`, `Photo.merge_sources` |
+//! | 20 | Image Quality Scanner scores (issue #1313) | `Analysis.quality` (`QualityScan`: sharpness, noise, exposure, compression, score, verdict, the flag a scan wrote) |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -95,7 +97,7 @@ pub(crate) const FORMAT: &str = "lcc-catalog";
 pub(crate) const V4_FORMAT: &str = "lcc-catalog-db";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 18;
+pub const VERSION: u32 = 20;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]
@@ -312,10 +314,55 @@ fn newer(what: String) -> CatalogError {
 /// library a newer build has written to is refused untouched.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn refuse_newer_records(log: &[u8]) -> Result<()> {
-    for l in log.split(|b| *b == b'\n') {
-        if let Ok(Line::Newer(seq)) = std::str::from_utf8(l).map(|l| decode_line(l.trim_end_matches('\r'))) {
-            return Err(newer(format!("{LOG} record {seq} holds a change this version doesn't know")));
+    refuse_newer_records_in(log)
+}
+
+/// The longest log line [`refuse_newer_records_in`] holds in memory; the rest of a longer line is
+/// skipped (no record this build writes comes near it, and the replay judges such a line itself).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const MAX_CHECKED_LINE: usize = 16 << 20;
+
+/// [`refuse_newer_records`] over a stream: one line in memory at a time (at most
+/// [`MAX_CHECKED_LINE`] bytes of it), so a large log isn't read whole just to be checked.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn refuse_newer_records_in(mut log: impl std::io::BufRead) -> Result<()> {
+    let mut line = Vec::new();
+    let mut overlong = false;
+    loop {
+        let chunk = log.fill_buf().map_err(|e| CatalogError::Io(format!("{LOG}: {e}")))?;
+        if chunk.is_empty() {
+            break;
         }
+        let (part, ends) = match chunk.iter().position(|b| *b == b'\n') {
+            Some(at) => (chunk.get(..at).unwrap_or_default(), true),
+            None => (chunk, false),
+        };
+        if !overlong {
+            if line.len().saturating_add(part.len()) > MAX_CHECKED_LINE {
+                overlong = true;
+                line.clear();
+            } else {
+                line.extend_from_slice(part);
+            }
+        }
+        let used = if ends { part.len().saturating_add(1) } else { part.len() };
+        log.consume(used);
+        if ends {
+            check_line(&line, overlong)?;
+            line.clear();
+            overlong = false;
+        }
+    }
+    check_line(&line, overlong)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn check_line(l: &[u8], overlong: bool) -> Result<()> {
+    if overlong {
+        return Ok(());
+    }
+    if let Ok(Line::Newer(seq)) = std::str::from_utf8(l).map(|l| decode_line(l.trim_end_matches('\r'))) {
+        return Err(newer(format!("{LOG} record {seq} holds a change this version doesn't know")));
     }
     Ok(())
 }

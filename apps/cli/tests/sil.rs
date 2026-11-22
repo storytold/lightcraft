@@ -332,6 +332,41 @@ impl Sil {
         }
         files
     }
+
+    /// Slideshow export (2.13): a PDF in the foreground (`wait`), JPEG slides in the background with an activity row
+    /// that drains, a hostile request refused cleanly. Checks files on disk, never their pixels.
+    fn slideshow_exports(&mut self, ids: &[u64]) {
+        let pdf = self.root.join("slides.pdf");
+        let r = self.ok("slideshow.export", json!({"format": "pdf", "path": pdf.to_string_lossy(), "ids": ids, "size": 256, "wait": true}));
+        let bytes = std::fs::read(&pdf).unwrap_or_default();
+        self.check(bytes.starts_with(b"%PDF"), "the slideshow PDF is missing or not a PDF", &r.to_string());
+        let dir = self.root.join("slides-jpeg");
+        let r = self.ok("slideshow.export", json!({"format": "jpeg", "path": dir.to_string_lossy(), "ids": ids, "size": 256}));
+        self.check(r["background"] == true && r["taskId"].is_u64(), "a background slideshow export has no activity row", &r.to_string());
+        self.activity_drains();
+        let st = self.ok("slideshow.exportStatus", json!({}));
+        self.check(
+            st["running"] == false && st.get("error").is_none_or(Value::is_null),
+            "the slideshow export did not finish cleanly",
+            &st.to_string(),
+        );
+        let mut jpegs: Vec<PathBuf> = std::fs::read_dir(&dir).into_iter().flatten().flatten().map(|e| e.path()).collect();
+        jpegs.retain(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("jpg")));
+        self.check(jpegs.len() >= ids.len(), "the slideshow wrote fewer JPEG slides than photos", &format!("{jpegs:?} / {st}"));
+        for f in &jpegs {
+            let bytes = std::fs::read(f).unwrap_or_default();
+            if let Err(e) = lcc_codecs::decode(&bytes, Default::default()) {
+                self.fail("a slideshow JPEG does not decode", &format!("{}: {e}", f.display()));
+            }
+        }
+        let parts = std::fs::read_dir(&dir).into_iter().flatten().flatten().filter(|e| e.path().to_string_lossy().ends_with(".part")).count();
+        self.check(parts == 0, "a slideshow export left .part files behind", &dir.display().to_string());
+        // hostile: an unknown format is an error, a bogus size an error or clamped; never a crash (`request` checks `ok`)
+        let r = self.cmd("slideshow.export", json!({"format": "gif", "path": pdf.to_string_lossy()}));
+        self.check(r["ok"] == false, "an unknown slideshow format was accepted", &r.to_string());
+        self.cmd("slideshow.export", json!({"format": "pdf", "path": pdf.to_string_lossy(), "ids": ids, "size": -5, "wait": true}));
+        self.activity_drains();
+    }
 }
 
 fn album_counts(tree: &Value, out: &mut Vec<(String, u64)>) {
@@ -480,6 +515,23 @@ fn sil_workflow() {
     s.ok("library.clearFilter", json!({}));
     s.consistent();
 
+    // --- quality scan: score the shoot, then filter and sort by the scores it kept
+    let q = s.ok("photo.qualityScan", json!({"scope": "catalog", "wait": true}));
+    let measured = q["measured"].as_u64().unwrap_or(0);
+    s.check(measured as usize == n, "the scan did not score every photo", &format!("{measured} of {n}: {q}"));
+    s.check(q["failed"].as_u64().unwrap_or(1) == 0, "a photo could not be scored", &q.to_string());
+    // the verdicts add up to what was measured, and the flags the scan wrote are counted apart
+    let counted = ["accepted", "pending", "rejected"].iter().map(|k| q[*k].as_u64().unwrap_or(0)).sum::<u64>();
+    s.check(counted == measured, "the verdicts do not add up", &q.to_string());
+    s.ok("library.filter", json!({"quality": "accepted"}));
+    s.ok("library.sort", json!({"key": "quality"}));
+    let st = s.ok("library.state", json!({}));
+    let shown = st["visibleCount"].as_u64().unwrap_or(u64::MAX);
+    s.check(shown == q["accepted"].as_u64().unwrap_or(u64::MAX), "the quality filter shows the wrong photos", &format!("{shown}: {st}"));
+    s.ok("library.clearFilter", json!({}));
+    s.ok("library.sort", json!({"key": "captureDate"}));
+    s.consistent();
+
     // --- develop: auto, sliders, white-balance picker, crop, a mask, a preset
     s.ok("library.select", json!({"ids": [ids[0]], "active": ids[0]}));
     let r = s.request("ui.set", json!({"view": "detail"}));
@@ -599,6 +651,7 @@ fn sil_workflow() {
             s.check(std::fs::metadata(f).map(|m| m.len() > 0).unwrap_or(false), "a print page is missing or empty", f);
         }
     }
+    s.slideshow_exports(&[ids[0], ids[1], ids[2]]);
 
     // --- Recently Deleted: a re-import restores a deleted photo; emptying removes only the trash
     let live = |s: &mut Sil| {

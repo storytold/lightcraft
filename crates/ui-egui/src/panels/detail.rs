@@ -1,6 +1,7 @@
 //! The Detail (loupe) view: the developed photo, before/after, zoom & pan, the filmstrip, and the
 //! on-canvas tools (crop, brush/gradient masks, remove spots, white-balance picker).
 
+use crate::json_ext::JsonExt as _;
 use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use lcc_catalog::PhotoId;
 use lcc_develop::{DevelopSettings, MaskShape};
@@ -472,8 +473,10 @@ pub(crate) fn navigate_gesture(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui:
     // Holding Space lends the hand tool back so the scroll gesture moves the frame around instead;
     // Ctrl/Cmd+wheel still zooms.
     if app.ui.settings.wheel_resizes_brush && is_brush && !cmd_or_ctrl && !space_held {
+        let invert = if app.ui.settings.invert_brush_resize { -1.0 } else { 1.0 };
         if notches != 0.0 {
-            crate::menus::adjust_brush(app, (notches * BRUSH_PER_NOTCH).exp().clamp(0.25, 4.0), 0.0);
+            let step = notches * invert;
+            crate::menus::adjust_brush(app, (step * BRUSH_PER_NOTCH).exp().clamp(0.25, 4.0), 0.0);
             ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
             ui.ctx().request_repaint();
             // Not a view change: the frame still draws the tool overlay, so the brush ring stays
@@ -481,9 +484,12 @@ pub(crate) fn navigate_gesture(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui:
             return false;
         }
         if trackpad_delta.y != 0.0 {
+            // Trackpad natural scroll up generates negative delta.y; negate so scrolling up
+            // grows the brush (matching Lightroom Classic and mouse wheel forward, issue #1257).
             // Scales with the scroll distance, so a trackpad's many small deltas and a wheel's line
             // add up to the same growth per distance scrolled (#867).
-            let k = (trackpad_delta.y * (BRUSH_PER_NOTCH / crate::theme::WHEEL_LINE_POINTS)).exp().clamp(0.25, 4.0);
+            let step = -trackpad_delta.y * invert;
+            let k = (step * (BRUSH_PER_NOTCH / crate::theme::WHEEL_LINE_POINTS)).exp().clamp(0.25, 4.0);
             crate::menus::adjust_brush(app, k, 0.0);
             ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
             ui.ctx().request_repaint();
@@ -1039,6 +1045,8 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
         _ => vec![area],
     };
     let main_area = *areas.last().unwrap_or(&area);
+    // Before / After's before pane (the first); alone, the one view
+    let before_area = areas.first().copied().unwrap_or(main_area);
     // where the view's picture lies in the photo now: any picture of it that says where it lies is
     // drawn cut to that, at once (a synced or new crop shows with no render)
     let view_place = app.session.placement_of(id, !crop_tool);
@@ -1087,8 +1095,8 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
         target_rect = Rect::from_center_size(b.center(), vec2(frame.ow as f32 * v.k, frame.oh as f32 * v.k));
         img_rect = b;
     }
-    let before_img = in_pane(areas[0], img_rect);
-    let before_target = in_pane(areas[0], target_rect);
+    let before_img = in_pane(before_area, img_rect);
+    let before_target = in_pane(before_area, target_rect);
     app.image_rect = Some(img_rect);
     #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     let brush_released = if right == RightPanel::Masking && !navigating && resp.drag_stopped() && matches!(app.gesture, Some(Gesture::Brush { .. })) {
@@ -1407,6 +1415,9 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
         if now - since >= WARM_FULL_AFTER_S
             && native_long > lcc_engine::SourceLevel::Preview.max_edge()
             && !app.session.media.has_source(id, lcc_engine::SourceLevel::Full)
+            // (an original too big for the memory budget is decoded smaller, and only when the view needs it: ahead of
+            // a zoom that may never come it would take memory a phone does not have)
+            && !app.session.full_source_capped(id)
             && app.renderer.queued() == 0
             && let Some(job) =
                 app.session.region_job(id, native[0], native[1], lcc_engine::pipeline::PixelWindow { x: 0, y: 0, w: 1, h: 1 }, !crop_tool)
@@ -1478,7 +1489,7 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
                 before: true,
                 img: before_img,
                 target: before_target,
-                visible: areas[0],
+                visible: before_area,
             });
             window_views.push(after);
         } else if show_before {
@@ -1645,11 +1656,11 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
         // each view stays in its pane: zoomed in, a photo reaches past it (and would cover the
         // other view's margins with its whole-frame render, magnified and blurred)
         let br = before_img;
-        draw(Slot::Before, br, areas[0]);
+        draw(Slot::Before, br, before_area);
         shown = draw(Slot::Main, img_rect, main_area);
         // the labels under each photo, or under its pane when the photo reaches past it
         let label_at = |r: Rect, pane: Rect| pos2(r.left().max(pane.left()), r.bottom().min(pane.bottom()) + 14.0);
-        p.text(label_at(br, areas[0]), Align2::LEFT_CENTER, crate::i18n::tr("Before"), t.font(12.0), t.text_dim);
+        p.text(label_at(br, before_area), Align2::LEFT_CENTER, crate::i18n::tr("Before"), t.font(12.0), t.text_dim);
         p.text(label_at(img_rect, main_area), Align2::LEFT_CENTER, crate::i18n::tr("After"), t.font(12.0), t.text_dim);
     } else if show_before {
         shown = draw(Slot::Before, img_rect, canvas);
@@ -1896,7 +1907,7 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
         }
     }
     // Space held over a tool: the view's hand takes the pointer from it (#1895)
-    crate::space_hand::interact(app, ui, canvas, (main_area, img_rect), split.then(|| (areas[0], before_img)));
+    crate::space_hand::interact(app, ui, canvas, (main_area, img_rect), split.then_some((before_area, before_img)));
     // Compact (OneSlips 0c58de7ad): the overlay switched on to stay (O) overrides showing it only when useful, so the
     // photo says so; it steps aside while a slider or dial adjusts (the overlay does too)
     if right == RightPanel::Masking && crate::theme::compact(ui.ctx()) && app.ui.mask_overlay && !adjusting(app) && !fullscreen {
@@ -2178,7 +2189,7 @@ fn draw_face_overlay(
         let upright = orient.inverse().map_norm_rect(shown);
         if let Ok(v) =
             app.run("photo.addRegion", json!({"id": id.0, "rect": {"x0": upright.x0, "y0": upright.y0, "x1": upright.x1, "y1": upright.y1}}))
-            && let Some(index) = v["index"].as_u64().and_then(|i| usize::try_from(i).ok())
+            && let Some(index) = v.field("index").as_u64().and_then(|i| usize::try_from(i).ok())
         {
             app.ui.name_edit = Some(crate::state::NameEdit { photo: id.0, index, text: String::new(), fresh: true });
         }
@@ -2697,7 +2708,12 @@ pub(crate) fn ahead_only(ids: &[PhotoId], i: usize, n: usize, backward: bool) ->
 /// What the user is doing, for the background preparation: editing (a tool panel open), else
 /// culling a folder or browsing the library.
 pub fn prep_mode(app: &LccApp) -> lcc_engine::prep::Mode {
-    if app.ui.right.is_edit_tool() { lcc_engine::prep::Mode::Develop } else { lcc_engine::prep::Mode::of(&app.session) }
+    // (the touch layout's Develop is editing too, though it has no tool panel open on the right)
+    if app.ui.right.is_edit_tool() || (crate::modern::on(app) && app.ui.module == crate::module::ModuleId::Develop) {
+        lcc_engine::prep::Mode::Develop
+    } else {
+        lcc_engine::prep::Mode::of(&app.session)
+    }
 }
 
 /// How long (s) the whole photo is shown before its full-resolution source is decoded in the
@@ -2964,7 +2980,7 @@ fn targeted_drag(app: &mut LccApp, resp: &egui::Response, map: &CanvasMap, targe
             let at = *at;
             let mut p = json!({"target": target, "x": at.x, "y": at.y, "delta": step});
             if target == "curve" && app.ui.curve_channel != "parametric" {
-                p["channel"] = json!(app.ui.curve_channel);
+                *p.field_mut("channel") = json!(app.ui.curve_channel);
             }
             let _ = app.run("develop.targeted", p);
         }
@@ -3279,7 +3295,7 @@ fn general_cursor(app: &LccApp, ui: &egui::Ui, resp: &egui::Response, img: Rect,
     }
     let cursor = match app.ui.tool.as_str() {
         // the colour pickers: an eyedropper, its tip on the pixel picked
-        "wbPicker" | "fringe" | "colorRange" | "pointColor" | "hslPick" => {
+        "wbPicker" | "fringe" | "colorRange" | "pointColor" | "hslPick" | "levelsBlack" | "levelsWhite" => {
             if let Some(q) = resp.hover_pos().or_else(|| ui.input(|i| i.pointer.latest_pos())) {
                 crate::eyedropper::show(ui.ctx(), q);
             }
@@ -3316,8 +3332,8 @@ fn general_interaction(
             match app.run("develop.wbPick", json!({"x": n.x, "y": n.y, "size": app.ui.wb_sample})) {
                 // a clipped, near-white or near-black spot: nothing changes, the selector stays
                 // armed and says why (OneSlips, test notes 2026-10-25 note 13)
-                Ok(r) if r["applied"] == false => {
-                    let message = r["message"].as_str().unwrap_or("This spot can't be read").to_string();
+                Ok(r) if r.field("applied") == false => {
+                    let message = r.field("message").as_str().unwrap_or("This spot can't be read").to_string();
                     app.toast(ui.ctx(), crate::i18n::tr(&message));
                 }
                 _ => app.ui.tool.clear(),
@@ -3341,7 +3357,7 @@ fn general_interaction(
         {
             let n = map.norm(q);
             if let Ok(r) = app.run("pointColor.pick", json!({"x": n.x, "y": n.y})) {
-                app.ui.point_color = r["index"].as_u64().unwrap_or(0) as usize;
+                app.ui.point_color = r.field("index").as_u64().unwrap_or(0) as usize;
             }
             app.ui.tool.clear();
         }
@@ -3355,12 +3371,28 @@ fn general_interaction(
         {
             let n = map.norm(q);
             match app.run("develop.fringePick", json!({"x": n.x, "y": n.y})) {
-                Ok(r) if r["applied"] == false => {
-                    let message = r["message"].as_str().unwrap_or("This spot can't be read").to_string();
+                Ok(r) if r.field("applied") == false => {
+                    let message = r.field("message").as_str().unwrap_or("This spot can't be read").to_string();
                     app.toast(ui.ctx(), crate::i18n::tr(&message));
                 }
                 _ => app.ui.tool.clear(),
             }
+        }
+        return;
+    }
+    if matches!(app.ui.tool.as_str(), "levelsBlack" | "levelsWhite") {
+        // the Levels pickers: the photo's brightness under the pointer, as the Levels receive it, becomes the
+        // black or white point of the RGB channel
+        if resp.clicked()
+            && let Some(q) = resp.interact_pointer_pos()
+        {
+            let n = map.norm(q);
+            let target = if app.ui.tool == "levelsBlack" { "black" } else { "white" };
+            // the picker stays armed: each click sets the point again, one undo step each
+            let _ = app.run("develop.levelsPick", json!({"target": target, "x": n.x, "y": n.y}));
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            app.ui.tool.clear();
         }
         return;
     }
@@ -3519,7 +3551,7 @@ fn crop_overlay(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui::Response, map:
     let shown = shown_crop(d, frame);
     let d = &DevelopSettings { crop: lcc_develop::Crop { geometry: shown, ..d.crop }, ..d.clone() };
     let quad = frame_crop_quad(d, frame);
-    let pts: Vec<Pos2> = quad.iter().map(|q| map.screen(*q)).collect();
+    let pts: [Pos2; 4] = quad.map(|q| map.screen(q));
     // zoomed in, the box reaches past the canvas: it is drawn only on it, never over the
     // filmstrip or the panels (#1156)
     let p = &ui.painter_at(app.canvas_rect.unwrap_or(map.rect));
@@ -3533,7 +3565,7 @@ fn crop_overlay(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui::Response, map:
     }
     // the box's centre: what a rotation turns the photo about (it stays put on screen)
     let box_centre = pos2(pts.iter().map(|q| q.x).sum::<f32>() / 4.0, pts.iter().map(|q| q.y).sum::<f32>() / 4.0);
-    p.add(egui::Shape::closed_line(pts.clone(), Stroke::new(1.0, Color32::WHITE)));
+    p.add(egui::Shape::closed_line(pts.to_vec(), Stroke::new(1.0, Color32::WHITE)));
     // overlay guides and handles (hidden while a slider or dial adjusts the photo)
     let mut p = p.clone();
     if adjusting(app) {
@@ -3559,7 +3591,8 @@ fn crop_overlay(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui::Response, map:
         }
     }
     // handles: 0..3 corners, 4..7 edges (top, right, bottom, left)
-    let handles: Vec<Pos2> = (0..8).map(|i| if i < 4 { pts[i] } else { lerp(pts[i - 4], pts[(i - 3) % 4], 0.5) }).collect();
+    let [p0, p1, p2, p3] = pts;
+    let handles: Vec<Pos2> = vec![p0, p1, p2, p3, lerp(p0, p1, 0.5), lerp(p1, p2, 0.5), lerp(p2, p3, 0.5), lerp(p3, p0, 0.5)];
     for (i, h) in handles.iter().enumerate() {
         register(ui.ctx(), format!("cropHandle:{i}"), Rect::from_center_size(*h, vec2(14.0, 14.0)));
         let s = if i < 4 { 12.0 } else { 9.0 };
@@ -3860,9 +3893,10 @@ fn rotate_cursor(ui: &egui::Ui, at: Pos2, turn: f32) {
 /// point of the box's outline; `inside` (a rotate drag that has come back over the box) faces it
 /// the other way, still away from that edge.
 fn rotate_cursor_turn(pts: &[Pos2], q: Pos2, inside: bool) -> f32 {
-    let nearest = (0..pts.len())
-        .map(|i| {
-            let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+    let nearest = pts
+        .iter()
+        .zip(pts.iter().cycle().skip(1))
+        .map(|(&a, &b)| {
             let ab = b - a;
             let t = if ab.length_sq() > 0.0 { ((q - a).dot(ab) / ab.length_sq()).clamp(0.0, 1.0) } else { 0.0 };
             a + ab * t
@@ -4082,7 +4116,7 @@ fn outside_crop_mesh(photo: &[Pos2; 4], quad: &[Pos2; 4], color: Color32) -> egu
     let centre = pos2((quad[0].x + quad[1].x + quad[2].x + quad[3].x) / 4.0, (quad[0].y + quad[1].y + quad[2].y + quad[3].y) / 4.0);
     // signed distance from edge i's line, positive towards the crop's centre
     let side = |i: usize, q: Pos2| -> Option<f32> {
-        let (a, b) = (quad[i % 4], quad[(i + 1) % 4]);
+        let (a, b) = (*quad.get(i % 4)?, *quad.get((i + 1) % 4)?);
         let n = vec2(a.y - b.y, b.x - a.x);
         let orient = n.dot(centre - a);
         // an edge the centre lies on: the box is flat
@@ -4506,7 +4540,7 @@ fn mask_overlay(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui::Response, map:
         {
             let n = map.norm(q);
             if let Ok(r) = app.run("mask.pointColorPick", json!({"x": n.x, "y": n.y})) {
-                app.ui.mask_point_color = r["index"].as_u64().unwrap_or(0) as usize;
+                app.ui.mask_point_color = r.field("index").as_u64().unwrap_or(0) as usize;
             }
             app.ui.tool.clear();
         }
@@ -4868,7 +4902,7 @@ fn mask_overlay(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui::Response, map:
                 let _ = app.run("develop.beginInteraction", json!({"label": "Brush"}));
             }
             let params = brush_params(app, d, &points, &pressure, &erase, sent, false, long);
-            let n = params["runs"].as_array().map_or(1, Vec::len);
+            let n = params.field("runs").as_array().map_or(1, Vec::len);
             if app.run("mask.brushStroke", params).is_ok()
                 && let Some(Gesture::Brush { sent, .. }) = &mut app.gesture
             {
@@ -5176,12 +5210,12 @@ pub(crate) fn brush_params(
     match runs.as_slice() {
         [(mode, pts, pr)] => {
             merge(&mut params, values(*mode));
-            params["points"] = json!(pts);
-            params["erase"] = json!(mode);
-            params["pressure"] = json!(pr);
+            *params.field_mut("points") = json!(pts);
+            *params.field_mut("erase") = json!(mode);
+            *params.field_mut("pressure") = json!(pr);
         }
         _ => {
-            params["runs"] = runs
+            *params.field_mut("runs") = runs
                 .iter()
                 .map(|(mode, pts, pr)| {
                     let mut r = json!({"points": pts, "erase": mode, "pressure": pr});
@@ -5192,8 +5226,8 @@ pub(crate) fn brush_params(
         }
     }
     if sent > 0 {
-        params["continue"] = json!(true);
-        params["replace"] = json!(sent);
+        *params.field_mut("continue") = json!(true);
+        *params.field_mut("replace") = json!(sent);
     }
     if app.ui.mask_new.is_some() {
         return params;
@@ -5204,7 +5238,7 @@ pub(crate) fn brush_params(
         .and_then(|ci| d.masks.iter().find(|m| Some(m.id) == app.session.active_mask).and_then(|m| m.components.get(ci)))
         .is_some_and(|c| matches!(c.shape, MaskShape::Brush { .. }));
     if is_brush && let Some(ci) = app.ui.active_mask_component {
-        params["component"] = json!(ci);
+        *params.field_mut("component") = json!(ci);
     }
     params
 }
@@ -6084,7 +6118,7 @@ fn eye_overlay(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui::Response, map: 
             let c = map.norm(sa.lerp(sb, 0.5));
             let r = app.run("redeye.add", json!({"center": [c.x, c.y], "rx": half.x, "ry": half.y, "pet": app.ui.eye_pet}));
             if let Ok(v) = r {
-                app.ui.eye = v["index"].as_u64().unwrap_or(0) as usize;
+                app.ui.eye = v.field("index").as_u64().unwrap_or(0) as usize;
             }
         }
     } else if resp.clicked()
@@ -6155,7 +6189,7 @@ fn eye_keys(app: &mut LccApp, ui: &mut egui::Ui, map: &CanvasMap, d: &DevelopSet
     if keys.activated {
         let r = app.run("redeye.add", json!({"center": [place.0, place.1], "pet": app.ui.eye_pet}));
         if let Ok(v) = r {
-            app.ui.eye = v["index"].as_u64().unwrap_or(0) as usize;
+            app.ui.eye = v.field("index").as_u64().unwrap_or(0) as usize;
         }
         return true;
     }

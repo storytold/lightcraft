@@ -155,6 +155,24 @@ pixels the warp finds no sensor for; it used to read them as black, a false edge
 Adapted from upstream #3402, which measured 60 held-out X-S10 photos (mean dE00 against the camera JPEG 2.71 to
 2.55). Unmeasured on Chromaforge.
 
+### How much of the correction the camera JPEG shows
+
+That premise holds for a RAF's own correction, not for one from the lens database. The camera may have left its
+peripheral illumination correction off (Canon EOS 6D portraits on an EF 50 mm f/1.8 STM and EF 70-200 mm f/2.8L II:
+the JPEG keeps its dark corners), or applied part of it (6D chart frames on an EF 24-70 mm f/2.8L II, a 5D Mark IV at
+16 mm: about half to two thirds). A fit that sees the full correction pairs corners lifted by up to 1.6 EV with the
+JPEG's dark corners and lowers the whole tone curve: those 6D frames rendered 5 to 11 L* under their JPEGs at every
+radius. `proxies` therefore measures the share the JPEG shows (`vignetting_shown`), in the geometry it finally chose
+(after the warp choice) and in working space: for shares 0, 0.05, ..., 1 it orders the usable pixels by sensor
+brightness times `gain^share` and keeps the share whose 32 equal-count bins spread the JPEG's brightness least. Flat,
+edge and clipped pixels are left out. The sensor proxy then gets `gain^share`. A share of 0.9 or more, too few usable
+pixels, or a correction weaker than 0.03 in log gain keeps the full correction, as before. CR3s are not measured yet
+(their framing step comes later). `LOOK_VERSION` 28, `RENDER_CACHE_VERSION` 93.
+
+Measured at lens correction off, against the camera JPEG: six 6D portraits went from -6.0 .. -11.8 L* to -0.5 .. -1.0
+(one frame with no lens vignetting data unchanged); four 6D chart frames from -5.3 .. -7.2 to -2.9 .. -4.3. Photos
+with a calibration file (R5 C, Z 6III, G9) and the Z 8 (no vignetting data) render bit-identical.
+
 ## Camera profiles (pooled per model)
 
 One photo can show too little of a colour for its own fit to learn it: in a second shot of the lime shirt only a few dozen proxy pixels show it, next to a hillside of foliage at the same hue that the camera renders differently, and the shirt stayed yellow (hue 68° against the JPEG's 82°; a 192-pixel proxy only reached 74°). `<cli> calibrate [--max N] [--out DIR] FOLDERS…` therefore pools the colour pairs of many ARWs, NEFs or RAFs per camera model — each against its own embedded JPEG, at a 192-pixel proxy, at most 4000 pairs per photo, files spread evenly over the folders — and fits one matrix (from white-balanced camera RGB, so no single photo's white point is baked in) and one hue/saturation/value table. Models need at least 5 usable photos.

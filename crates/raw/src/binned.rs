@@ -23,6 +23,10 @@ impl RawImage {
     /// Can `k × k` blocks be binned (single-plane CFA data, every `k × k` window containing R, G
     /// and B; Bayer: `k` even, so that every block has the same layout)?
     pub fn can_bin(&self, k: usize) -> bool {
+        if self.merged_rgb() {
+            // block means of a picture with no mosaic keep no phase: any block size, but only plain levels
+            return k >= 2 && (self.pixel_aspect - 1.0).abs() < 0.01 && self.opcodes.list1.is_empty() && self.opcodes.list2.is_empty();
+        }
         let Some(cfa) = &self.cfa else { return false };
         if k < 2 || self.cpp != 1 || (self.pixel_aspect - 1.0).abs() >= 0.01 || !cfa.valid() || (cfa.is_bayer() && !k.is_multiple_of(2)) {
             return false;
@@ -51,6 +55,9 @@ impl RawImage {
         self.validate()?;
         if !self.can_bin(k) {
             return Ok(None);
+        }
+        if self.merged_rgb() {
+            return self.bin_merged_rgb(k, clip, keep_max);
         }
         // `OpcodeList3` (lens shading as a gain map, lens corrections) works on the demosaiced active area: its
         // operations re-expressed for the binned image, or a full-size develop when one needs every pixel
@@ -127,19 +134,94 @@ impl RawImage {
                 }
             }
         });
-        if list3.is_empty() {
-            return Ok(Some((out, mask)));
-        }
-        crate::opcodes::apply_list3(&list3, &mut out);
-        // the default crop at the binned scale
-        let (x0, y0) = ((crop.x / k).min(bw - 1), (crop.y / k).min(bh - 1));
-        let (cw, ch) = ((crop.width / k).clamp(1, bw - x0), (crop.height / k).clamp(1, bh - y0));
-        if (x0, y0, cw, ch) == (0, 0, bw, bh) {
-            return Ok(Some((out, mask)));
-        }
-        let mask = (y0..y0 + ch).flat_map(|y| mask[y * bw + x0..y * bw + x0 + cw].iter().copied()).collect();
-        Ok(Some((out.into_crop(x0, y0, cw, ch), mask)))
+        Ok(Some(finish_binned(out, mask, &list3, crop, k)))
     }
+
+    /// Three samples per pixel and no mosaic, from the merged pixel-shift decoder (a NEFX): binned by plain block
+    /// means. A LinearRaw DNG keeps its own path (it has reduced copies of its own and has always been developed
+    /// whole), so only this format is taken, and the app's own pixel-shift merges (a DNG of 16-bit samples on the
+    /// camera's scale, recognised by its provenance block, [`crate::merge_provenance`]).
+    fn merged_rgb(&self) -> bool {
+        let merged_dng = self.format == crate::RawFormat::Dng
+            && matches!(self.data, RawData::U16(_))
+            && self.metadata.software.as_deref() == Some(crate::merge_provenance::software().as_str());
+        (self.format == crate::RawFormat::Nef || merged_dng) && self.cpp == 3 && self.cfa.is_none()
+    }
+
+    /// [`Self::bin`] for [`Self::merged_rgb`] data: every channel of an output pixel is the mean of the block's samples
+    /// of that channel, and a channel is clipped when one of them reaches `clip` (as for a mosaic).
+    fn bin_merged_rgb(&self, k: usize, clip: f32, keep_max: bool) -> Result<Option<(Rgb32f, Vec<u8>)>> {
+        let RawData::U16(data) = &self.data else { return Ok(None) };
+        // `OpcodeList3` as for a mosaic: re-expressed for the binned image, or a full-size develop
+        let Some(list3) = self.opcodes.list3.iter().map(|op| op.binned(k)).collect::<Option<Vec<_>>>() else { return Ok(None) };
+        // a black level that varies by row, column or position needs every sample's own place
+        let black = &self.black;
+        if !black.delta_h.is_empty() || !black.delta_v.is_empty() || black.repeat_rows > 1 || black.repeat_cols > 1 {
+            return Ok(None);
+        }
+        let a = self.active_area;
+        let whole = crate::Rect::new(0, 0, a.width, a.height);
+        let crop = self.crop.clipped(a.width, a.height);
+        let crop = if crop.width < k || crop.height < k { whole } else { crop };
+        let c = if list3.is_empty() { crop } else { whole };
+        let (bw, bh) = (c.width / k, c.height / k);
+        if bw == 0 || bh == 0 {
+            return Ok(None);
+        }
+        // each channel against its own black and white level, as `normalized` does
+        let low: [f32; 3] = std::array::from_fn(|s| black.at(0, 0, s, 3));
+        let scale: [f32; 3] = std::array::from_fn(|s| {
+            let range = self.white_at(s) - low[s];
+            if range > 0.0 { 1.0 / range } else { 1.0 }
+        });
+        let inv_n = 1.0 / (k * k) as f32;
+        let mut out = Rgb32f::new(bw, bh);
+        let mut mask = vec![0u8; bw * bh];
+        out.data.par_chunks_mut(bw).zip(mask.par_chunks_mut(bw)).enumerate().for_each(|(by, (row, mrow))| {
+            // the block row's `k` source rows (a row the data lacks leaves its blocks black: the size was validated)
+            let rows: Vec<&[u16]> = (0..k)
+                .map(|dy| {
+                    let start = ((a.y + c.y + by * k + dy) * self.width + a.x + c.x) * 3;
+                    data.get(start..start + bw * k * 3).unwrap_or_default()
+                })
+                .collect();
+            for (bx, (px, m)) in row.iter_mut().zip(mrow.iter_mut()).enumerate() {
+                let (mut sum, mut max) = ([0f32; 3], [0u16; 3]);
+                for line in &rows {
+                    for pixel in line.get(bx * k * 3..(bx + 1) * k * 3).unwrap_or_default().as_chunks::<3>().0 {
+                        for (s, &v) in pixel.iter().enumerate() {
+                            sum[s] += f32::from(v);
+                            max[s] = max[s].max(v);
+                        }
+                    }
+                }
+                for ch in 0..3 {
+                    let top = (f32::from(max[ch]) - low[ch]) * scale[ch];
+                    let clipped = top >= clip;
+                    px[ch] = if clipped && keep_max { top } else { (sum[ch] * inv_n - low[ch]) * scale[ch] };
+                    *m |= u8::from(clipped) << ch;
+                }
+            }
+        });
+        Ok(Some(finish_binned(out, mask, &list3, crop, k)))
+    }
+}
+
+/// The binned image's last steps: `list3` (already re-expressed for the binned scale), then the default crop at that
+/// scale when `list3` made the whole active area be binned.
+fn finish_binned(mut out: Rgb32f, mask: Vec<u8>, list3: &[crate::opcodes::Opcode], crop: crate::Rect, k: usize) -> (Rgb32f, Vec<u8>) {
+    if list3.is_empty() {
+        return (out, mask);
+    }
+    let (bw, bh) = (out.width, out.height);
+    crate::opcodes::apply_list3(list3, &mut out);
+    let (x0, y0) = ((crop.x / k).min(bw - 1), (crop.y / k).min(bh - 1));
+    let (cw, ch) = ((crop.width / k).clamp(1, bw - x0), (crop.height / k).clamp(1, bh - y0));
+    if (x0, y0, cw, ch) == (0, 0, bw, bh) {
+        return (out, mask);
+    }
+    let mask = (y0..y0 + ch).flat_map(|y| mask[y * bw + x0..y * bw + x0 + cw].iter().copied()).collect();
+    (out.into_crop(x0, y0, cw, ch), mask)
 }
 
 /// Colours of the `k × k` samples of a block whose corner sits at pattern position `(i, j)`
@@ -340,5 +422,114 @@ mod list3_tests {
             .binned(2)
             .is_none()
         );
+    }
+
+    /// A three-sample raw (no mosaic) of `format`, `f(x, y, channel)` in sensor units.
+    fn rgb_raw(format: RawFormat, w: usize, h: usize, f: impl Fn(usize, usize, usize) -> u16) -> RawImage {
+        let data = (0..w * h * 3).map(|i| f(i / 3 % w, i / 3 / w, i % 3)).collect();
+        RawImage {
+            format,
+            width: w,
+            height: h,
+            cpp: 3,
+            data: RawData::U16(data),
+            cfa: None,
+            bits: 14,
+            black: BlackLevel { repeat_rows: 1, repeat_cols: 1, values: vec![1008.0, 1000.0, 1016.0], ..Default::default() },
+            white: vec![16383.0],
+            active_area: Rect::new(0, 0, w, h),
+            crop: Rect::new(0, 0, w, h),
+            orientation: Orientation::Normal,
+            color: ColorData::default(),
+            wb_multipliers: None,
+            linearized: false,
+            pixel_aspect: 1.0,
+            opcodes: OpcodeLists::default(),
+            metadata: Metadata::default(),
+            lens_metadata: Default::default(),
+        }
+    }
+
+    fn smooth(x: usize, y: usize, c: usize) -> u16 {
+        (1100 + x * 37 + y * 53 + c * 400 + (x * y) % 17) as u16
+    }
+
+    /// A LinearRaw DNG (Lightroom's HDR and panorama merges) is not binned and develops as it always has: each
+    /// sample minus its channel's black over the range to the white level, the default crop applied. A reference
+    /// worked out here pins that, so the merged-RGB binning below can't change it.
+    #[test]
+    fn a_linear_raw_dng_develops_as_before_and_is_never_binned() {
+        let mut raw = rgb_raw(RawFormat::Dng, 24, 18, smooth);
+        raw.crop = Rect::new(3, 2, 18, 12);
+        for k in 2..=8 {
+            assert!(!raw.can_bin(k), "k = {k}");
+            assert!(raw.develop_binned_masked(k, 0.99).unwrap().is_none());
+        }
+        let img = raw.develop(Method::Bilinear).unwrap();
+        assert_eq!((img.width, img.height), (18, 12));
+        let blacks = [1008.0f32, 1000.0, 1016.0];
+        for (y, x) in [(0, 0), (5, 7), (11, 17)] {
+            for c in 0..3 {
+                let want = (f32::from(smooth(x + 3, y + 2, c)) - blacks[c]) / (16383.0 - blacks[c]);
+                assert!((img.get(x, y)[c] - want).abs() < 1e-6, "({x},{y}) {c}: {} vs {want}", img.get(x, y)[c]);
+            }
+        }
+    }
+
+    /// Merged pixel-shift RGB (a NEFX) bins to block means per channel, with clipping decided per sample.
+    #[test]
+    fn merged_rgb_bins_to_block_means_and_marks_clipped_samples() {
+        let mut raw = rgb_raw(RawFormat::Nef, 24, 18, smooth);
+        // any block size works: there is no mosaic phase to keep
+        for k in [2, 3, 4, 5, 6, 8] {
+            assert!(raw.can_bin(k), "k = {k}");
+        }
+        assert!(!raw.can_bin(1));
+        let blacks = [1008.0f32, 1000.0, 1016.0];
+        let full = raw.develop(Method::Bilinear).unwrap();
+        let (b, mask) = raw.develop_binned_masked(3, 0.99).unwrap().unwrap();
+        assert_eq!((b.width, b.height, mask.len()), (8, 6, 48));
+        assert!(mask.iter().all(|&m| m == 0));
+        // the same image as averaging the full development over each block
+        for (bx, by) in [(0, 0), (3, 2), (7, 5)] {
+            for c in 0..3 {
+                let mean = (0..9).map(|i| full.get(bx * 3 + i % 3, by * 3 + i / 3)[c]).sum::<f32>() / 9.0;
+                assert!((b.get(bx, by)[c] - mean).abs() < 1e-5, "({bx},{by}) {c}");
+            }
+        }
+        // one clipped green sample marks that block's green, and only it; the mean stays the mean
+        if let RawData::U16(d) = &mut raw.data {
+            d[(4 * 24 + 7) * 3 + 1] = 16383;
+        }
+        let (m, mask) = raw.develop_binned_masked(3, 0.99).unwrap().unwrap();
+        assert_eq!(mask.iter().filter(|&&v| v != 0).count(), 1);
+        assert_eq!(mask[8 + 2], highlight::CLIPPED_G, "block (2, 1) of 8 across");
+        assert!(m.get(2, 1)[1] < 0.5, "the mean of the block, not its clip level");
+        // the plain variant gives the clipped channel the block's maximum
+        assert!(raw.develop_binned(3, 0.99).unwrap().unwrap().get(2, 1)[1] >= 0.99);
+        // the default crop is binned from its own corner
+        raw.crop = Rect::new(3, 3, 18, 12);
+        let c = raw.develop_binned(3, 0.99).unwrap().unwrap();
+        assert_eq!((c.width, c.height), (6, 4));
+        let want = (0..9).map(|i| f32::from(smooth(3 + i % 3, 3 + i / 3, 2)) - blacks[2]).sum::<f32>() / 9.0 / (16383.0 - blacks[2]);
+        assert!((c.get(0, 0)[2] - want).abs() < 1e-5);
+    }
+
+    /// Operations that need every pixel, files with opcode lists on the raw values, and the header-only image still
+    /// decline: the caller then develops at full size.
+    #[test]
+    fn merged_rgb_declines_what_it_cannot_bin_exactly() {
+        let mut raw = rgb_raw(RawFormat::Nef, 24, 18, smooth);
+        raw.opcodes.list3.push(Opcode::DeltaPerRow {
+            area: Area { top: 0, left: 0, bottom: 18, right: 24, plane: 0, planes: 3, row_pitch: 1, col_pitch: 1 },
+            deltas: vec![0.0; 18],
+        });
+        assert!(raw.develop_binned(2, 0.99).unwrap().is_none());
+        let mut raw = rgb_raw(RawFormat::Nef, 24, 18, smooth);
+        raw.opcodes.list2.push(Opcode::Unknown { id: 99, flags: 0, params: vec![] });
+        assert!(!raw.can_bin(2));
+        let mut raw = rgb_raw(RawFormat::Nef, 24, 18, smooth);
+        raw.black.delta_v = vec![0.0; 18];
+        assert!(raw.develop_binned(2, 0.99).unwrap().is_none(), "a per-row black level needs every row");
     }
 }

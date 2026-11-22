@@ -65,9 +65,34 @@ shows the destination library, the number of records added, missing originals an
 readable in the same result window. If another dialog is open, the result waits until that dialog closes. The result
 is also available through `library.importLightroom {"status":true}` during that session.
 
+**Photos first, originals afterwards (issue #1303).** The desktop import commits the catalog's photos as soon as the
+catalog is read, without opening their original files: ratings, flags, labels, keywords, collections, capture
+times, pixel sizes and mapped edits all come from the catalog, so the library is browsable within minutes even when
+the originals are on slow or external drives. Each photo starts "original not yet read" (it has no content hash).
+The app then reads the originals in the background, 500 at a time, as one **Reading originals** row on the activity
+stack that can be stopped; each batch is saved as soon as it is read, filling in only what needs the file (content
+hash, file size and dimensions, empty camera fields, embedded lens corrections, as-shot white balance), as Reload
+from Disk would. Ratings, keywords, develop settings and history are kept, and none of it is an undo step. A stopped,
+interrupted or crashed run resumes the next time the library opens; a file that can't be read (an offline drive) is
+tried again then. Scripts get the same with `library.importLightroom {"readOriginalsLater": true}` followed by
+`library.readOriginals {limit?}` (default 1024 per call; repeat while `remaining` > 0) → `{checked, updated,
+unreadable, duplicates, remaining}`; without `readOriginalsLater`, the engine command still reads every original
+before it commits. Because originals aren't read before the commit, duplicates are matched by path only during the
+import: a file already in the library under another path gets its own record, and two catalog entries with
+identical bytes both stay. Reading the originals reports each such pair (`duplicates: [{id, sameAs}]`, logged by the
+app) and keeps both, since the new record carries the catalog's edits.
+
+The background reading looks at every library photo that has no content hash, not only photos from this import: a
+missing original from an older import (or one whose drive is offline) is tried once each time the library opens,
+so a **Reading originals** row can appear at open even without a new import; it touches only those files and can be
+stopped. Records made from the catalog alone (missing or not yet read originals, in either import mode) now get the
+library's import defaults (Constrain Crop, default preset, copyright) and the upright pixel size, as a read photo
+would, so reading the original later changes nothing the catalog set; this also applies to the CLI/MCP import.
+
 Original files are referenced in place. Ratings, picks/rejects, color labels, XMP metadata,
 hierarchical keywords, regular collections/collection sets, smart collections, saved prints, folder stacks,
-virtual copies and mapped develop settings are imported. Missing originals remain catalogued for relinking, count as added records and are reported
+virtual copies and mapped develop settings are imported. An image's caption is taken from Lightroom's own IPTC table (`AgLibraryIPTC`) when it has one
+there, since the XMP packet Lightroom caches for the image can lack it. Missing originals remain catalogued for relinking, count as added records and are reported
 separately from failures reading files that are present. Known-missing originals are not probed
 again. Previously browsed Local records join All Photos even when their originals are offline;
 their promotion is counted once and undone together with the catalog import.
@@ -110,19 +135,22 @@ without them, with a warning, and skipped only when still too big. At most eight
 untouched. When an archive is saved but cleanup afterwards fails (a temporary file or an old archive that
 can't be removed), the report still names the archive and a separate warning names what was left
 behind; the folder is synced once the archive is saved.
-`Interop/lightroom-index.json` records imported identities. Source catalogs and originals are
+`Interop/lightroom-index.json` records imported identities (read and written up to 1 GiB, about 45 bytes a photo, so a re-import of a large catalog finds what it made before). Source catalogs and originals are
 never overwritten.
 
 Native import reads MAIN database pages on demand; no whole-file size cutoff or MAIN-file read
 allocation is used. Committed WAL validation is streamed into a compact page index; WAL remains
 capped at 1 GiB and 4,000,000 frames. MAIN is structurally bounded to 16,777,216 pages (up to
 1 TiB logical size with 64 KiB pages); each table B-tree walk is bounded to 4,000,000 visited
-pages. A record is capped at 64 MiB and XMP packets at 16 MiB. The in-tree, read-only Rust SQLite
+pages. A record is capped at 64 MiB and XMP packets at 16 MiB. A record past the cap, or one that
+is malformed, is left out on its own and counted in a warning naming the table ("N records could not
+be read and were left out"); the rest of the table imports. Text that is not valid UTF-8 is read with
+replacement characters and counted in a warning. The in-tree, read-only Rust SQLite
 B-tree reader follows SQLite’s public file-format specification; it introduces no dependency or C
 runtime. Tables are streamed to the importer one row at a time, so memory follows what the
 importer keeps (mapped columns, never BLOBs), not the table's size: the large develop settings,
-history, snapshot and metadata tables have no row or payload cap. Tables the importer keeps whole
-(folders, files, images, keywords, collections, stacks) are capped at 1,000,000 rows and 256 MiB of
+history, snapshot, metadata and keyword-assignment tables have no row or payload cap. Tables the
+importer keeps whole (folders, files, images, keywords, collections, stacks) are capped at 1,000,000 rows and 256 MiB of
 payload each. These bounds limit work and decoded data: a catalog within the page-count cap may
 still exceed a per-table or record limit. Inspection and import can be cancelled between pages.
 The open file and source path are checked again after all tables are read. Close Lightroom before
@@ -272,8 +300,8 @@ Capture One 16.9.0 on Windows (catalog format 160906).
 - **Photos:** one per variant (`ZVARIANT`); the first variant of an image is the photo, later ones become virtual
   copies ("Variant 2", …). Originals inside the catalog are found relative to the folder holding the database,
   referenced ones by `ZPATHLOCATION` (`ZWINROOT` / `ZMACROOT` + `ZRELATIVEPATH`). Images in Capture One's trash
-  are left out, with a warning, and so is any image whose original is a file type the app doesn't read (a Nikon
-  `.NEFX`, say): it is named in the warnings and its file is never added.
+  are left out, with a warning, and so is any image whose original is a file type the app doesn't read (a Sony
+  `.ARQ` pixel-shift raw, say): it is named in the warnings and its file is never added.
 - **Offline originals** (a drive that isn't connected, a file that is gone) take the capture time (`ZEXP_DATE`, the
   camera's clock, no offset), camera make, model and lens from the catalog; a file that is there keeps its own.
   Capture One's stand-ins for a file without a camera ("Tiff File", "Jpeg File") are no camera.

@@ -31,6 +31,7 @@ pub mod keyword_list;
 pub mod keywording;
 pub mod layout_overlay;
 pub mod left;
+pub mod levels;
 pub mod library_problem;
 pub mod manager_table;
 pub mod mask_effects;
@@ -72,6 +73,7 @@ pub mod slide_templates;
 pub mod slide_titles;
 pub mod slideshow;
 pub mod strip;
+pub mod suggested;
 pub mod surface_osd;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod sync_pill;

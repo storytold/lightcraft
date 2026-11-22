@@ -118,11 +118,15 @@ Prerelease tags get a manifest too (with `prerelease: true`): the app only offer
 
 ## Builds and artifacts
 
-Release jobs build macOS universal, Windows x64/ARM64, Linux x86_64 (aarch64 paused),
+Release jobs build macOS (Apple silicon, Intel and universal), Windows x64/ARM64, Linux x86_64 (aarch64 paused),
 and the WASM web app. The platform scripts in [`packaging/`](../packaging/) write their outputs to
 `dist/release/` (the full list of files is the README's Downloads section):
 
-- macOS: app DMG and CLI ZIP.
+- macOS: three app DMGs from one build of each architecture: `-macos-arm64.dmg`, `-macos-x64.dmg` and
+  `-macos-universal.dmg` (both builds). The CLI and the craft-fonts faces are inside the app. The
+  universal image stays while installed copies need it: builds before issue #1228 update only through it
+  (they take any `-macos-universal`, `-macos-aarch64` or `-macos-x86_64` file, so the per-architecture
+  images must never use those two slugs). Dropping it is the maintainer's call and its own change.
 - Windows: MSI installer and portable ZIP for each architecture.
 - Linux: AppImage (with its `.AppImage.zsync`), `.deb`, `.rpm`, and `.tar.gz` for each
   architecture (`packaging/linux/package.sh`). Each AppImage embeds
@@ -156,7 +160,7 @@ All on the maintainer's self-hosted runners (docs/ci.md, *Where the jobs run*):
 | version, web, draft release | gpu0 / gpu0-b | `nice -n 19`; jobs fetch the GitHub CLI into the job's temp dir (`.github/scripts/install-gh.sh`) where the runner has none |
 | Linux x86_64 | gpu0, `ubuntu:22.04` container | Rust, registry and target dir in Docker volumes |
 | Flatpak x86_64 | gpu0, `ubuntu:24.04` container, `--privileged` | Flathub runtime/SDK kept in a Docker volume |
-| macOS universal | mac0 | `nice -n 19`; signing certificate in a temporary keychain in `$RUNNER_TEMP`, deleted (and taken off the search list) at the end of the job, stale ones removed at the start; the login keychain is never modified |
+| macOS | mac0 | `nice -n 19`; signing certificate in a temporary keychain in `$RUNNER_TEMP`, deleted (and taken off the search list) at the end of the job, stale ones removed at the start; the login keychain is never modified |
 | Windows x64 | win0 | BelowNormal priority; .NET SDK and WiX in the runner tool cache |
 | Windows ARM64 | SNAPDRAGON | native ARM64 build (win0 has no ARM64 MSVC tools) |
 | Android | gpu0 / gpu0-b | both ABIs in one cargo run; one shared build cache (`~/.cache/lcc-release-android`) and sccache |

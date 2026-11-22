@@ -37,6 +37,14 @@ and `immich.unlockSession` are never journaled, and no result or log carries it.
 session: Immich locks it again later, so locked assets disappear from link, import, sync and sidecar runs until the
 session is unlocked again (`immich.authStatus {account}` reports `{isElevated, pinCode, password, pinExpiresAt?}`).
 
+Immich ties the elevation to a *session token* (a login), and an API key has none: `GET /auth/status` asks a key for its
+`all` permission and never reports it elevated, and `POST /auth/session/unlock` answers "only with a session token"
+(400) even then (checked against Immich's server source, 2026-11-17; no server was available to try it). So with the
+app's API key, both commands fail with `error.kind: "sessionRequired"` and a message saying that Immich opens locked
+folders only for a signed-in session, not for an API key. This is not a missing key permission, so `immich.test`'s
+`missingPermissions` has no entry for it. Whether to support a login session (PIN/password sign-in) for locked folders
+is a product decision; until then locked-folder assets stay invisible to link, import and sync.
+
 ## Link (IMM-LINK)
 
 `immich.link` starts a background pass that lists the server's images page by page (incremental by `updatedAt` after

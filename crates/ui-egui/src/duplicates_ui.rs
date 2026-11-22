@@ -25,7 +25,15 @@ use crate::widgets::register;
 
 pub const OPEN: &str = "library.findDuplicates";
 
-pub const COMMANDS: &[UiCommand] = &[(OPEN, "Find Duplicates…", None, "Library")];
+/// Width of a member's card: its thumbnail and the facts under it.
+const CARD_W: f32 = 184.0;
+
+/// Show one group's photos large and side by side: the group becomes the selection and the view
+/// is Survey (`{group?}`: 0-based index into the window's groups, default the first). The window
+/// steps aside with its marks kept; Find Duplicates… brings it back.
+pub const COMPARE: &str = "library.compareDuplicateGroup";
+
+pub const COMMANDS: &[UiCommand] = &[(OPEN, "Find Duplicates…", None, "Library"), (COMPARE, "Compare Group in Survey", None, "")];
 
 /// The review window's state, kept while it can be reopened.
 pub struct Finder {
@@ -39,6 +47,9 @@ pub struct Finder {
     pub cancel: Option<Arc<AtomicBool>>,
     /// Pictures the similar scan could not read.
     pub failed: usize,
+    /// The window stepped aside to show a group in Survey; opening Find Duplicates… again brings
+    /// it back with its marks instead of scanning anew.
+    pub parked: bool,
 }
 
 /// One group: the best copy to keep first, each member with whether it is marked for removal.
@@ -71,7 +82,7 @@ impl Finder {
                     .collect(),
             })
             .collect();
-        Finder { open: true, groups, similar_ran, progress: None, cancel: None, failed: report.failed }
+        Finder { open: true, groups, similar_ran, progress: None, cancel: None, failed: report.failed, parked: false }
     }
 
     /// The ids marked for removal.
@@ -90,12 +101,45 @@ impl Finder {
 }
 
 /// Open the window with the same-bytes groups, which the catalog answers at once. Returns the
-/// scan's JSON (what the `library.findDuplicates` command returns) for the control channel.
+/// scan's JSON (what the `library.findDuplicates` command returns) for the control channel. A
+/// window that stepped aside for Survey comes back as it was (marks and similar groups kept),
+/// minus the photos that are gone or in Recently Deleted by now.
 fn open(app: &mut LccApp) -> Result<Value, String> {
     let report = scan(&candidates(&app.session.catalog), None, None, false, &AtomicBool::new(false), &|_, _| {});
     let out = report_to_json(&app.session.catalog, &report);
+    if let Some(f) = app.duplicates.as_mut().filter(|f| f.parked) {
+        let cat = &app.session.catalog;
+        let gone: Vec<PhotoId> =
+            f.groups.iter().flat_map(|g| g.members.iter().map(|m| m.id)).filter(|id| cat.photo(*id).is_none_or(|p| p.deleted)).collect();
+        f.drop_ids(&gone);
+        f.parked = false;
+        f.open = true;
+        return Ok(out);
+    }
     app.duplicates = Some(Finder::from_report(&report, false));
     Ok(out)
+}
+
+/// `library.compareDuplicateGroup`: the group's photos become the selection (the group's best copy
+/// active) and Survey shows them large, side by side. Reuses the library's Survey rather than a
+/// viewer of its own; the window is parked until Find Duplicates… is chosen again.
+fn compare_group(app: &mut LccApp, p: &Value) -> Result<Value, String> {
+    let group = match p.get("group") {
+        None | Some(Value::Null) => 0,
+        Some(v) => v.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or("`group` must be a whole number (0 is the first group)")?,
+    };
+    let finder = app.duplicates.as_ref().filter(|f| f.open).ok_or("open Find Duplicates… first")?;
+    let g = finder.groups.get(group).ok_or_else(|| format!("no duplicate group {group}"))?;
+    let ids: Vec<u64> = g.members.iter().map(|m| m.id.0).collect();
+    let first = *ids.first().ok_or("the group is empty")?;
+    app.run("library.select", json!({"ids": ids, "active": first}))?;
+    app.run("view.survey", Value::Null)?;
+    if let Some(f) = app.duplicates.as_mut() {
+        f.open = false;
+        f.parked = true;
+    }
+    app.renderer.forget_duplicates();
+    Ok(json!({"group": group, "photos": ids}))
 }
 
 /// Find Similar Copies: read every photo's picture on a worker and swap the groups in when it is
@@ -156,14 +200,19 @@ fn summary_text(report: &ScanReport) -> String {
 }
 
 pub fn enabled(app: &LccApp, id: &str) -> Option<bool> {
-    (id == OPEN).then(|| app.session.catalog.photos().next().is_some())
+    match id {
+        OPEN => Some(app.session.catalog.photos().next().is_some()),
+        COMPARE => Some(app.duplicates.as_ref().is_some_and(|f| f.open && !f.groups.is_empty())),
+        _ => None,
+    }
 }
 
-pub fn run(app: &mut LccApp, id: &str, _p: &Value) -> Option<Result<Value, String>> {
-    if id != OPEN {
-        return None;
+pub fn run(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    match id {
+        OPEN => Some(open(app)),
+        COMPARE => Some(compare_group(app, p)),
+        _ => None,
     }
-    Some(open(app))
 }
 
 /// What a footer button asked for, applied after the window drew.
@@ -183,6 +232,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
     let mut closed = false;
     let mut similar = false;
     let mut forget = false;
+    let mut compare: Option<usize> = None;
     let (done_count, total) = finder.progress.as_ref().and_then(|p| p.lock().ok().map(|p| *p)).unwrap_or((0, 0));
     let scanning = finder.progress.is_some();
     let marked = finder.marked();
@@ -192,7 +242,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
         .title_bar(false)
         .frame(crate::dialog_frame::card_frame(ctx))
         .collapsible(false)
-        .default_width(640.0)
+        .default_width(820.0)
         .pivot(Align2::CENTER_CENTER)
         .default_pos(ctx.content_rect().center())
         .max_height(crate::dialog_frame::max_window_height(ctx))
@@ -251,7 +301,16 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     egui::CollapsingHeader::new(RichText::new(header).strong()).id_salt(("duplicates-group", gi)).default_open(gi == 0).show(
                         ui,
                         |ui| {
-                            egui::Grid::new(("duplicates-grid", gi)).num_columns(6).spacing([8.0, 4.0]).show(ui, |ui| {
+                            let r = ui
+                                .add(egui::Button::new(tr("Compare Group in Survey")).min_size(vec2(0.0, 24.0)))
+                                .on_hover_text(tr("Show this group large and side by side in Survey"));
+                            register(ui.ctx(), format!("button:duplicates.compare:{gi}"), r.rect);
+                            if r.clicked() {
+                                compare = Some(gi);
+                            }
+                            ui.add_space(4.0);
+                            ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing = vec2(10.0, 10.0);
                                 for m in g.members.iter_mut() {
                                     member_cell(session, renderer, ui, &t, member_index, m, g.kind);
                                     member_index += 1;
@@ -303,6 +362,12 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
     if similar {
         start_similar(app, ctx);
     }
+    if let Some(group) = compare {
+        match compare_group(app, &json!({"group": group})) {
+            Ok(_) => app.toast(ctx, tr("Find Duplicates… brings the window back with its marks")),
+            Err(e) => app.toast_error(ctx, e),
+        }
+    }
     if let Some(action) = action {
         apply(app, ctx, action);
     }
@@ -333,45 +398,82 @@ fn kind_label(kind: GroupKind) -> &'static str {
     }
 }
 
+/// What the window says about one photo, whole: nothing is cut to fit (the labels wrap).
+struct Facts {
+    name: String,
+    /// The folder the file is in (empty for a photo that is not a file, or a bare name).
+    folder: String,
+    /// The capture time as the catalog stores it, `YYYY-MM-DD HH:MM:SS` (empty when unknown).
+    captured: String,
+    width: u32,
+    height: u32,
+    size: u64,
+    format: String,
+}
+
+impl Facts {
+    fn of(p: &lcc_catalog::Photo) -> Facts {
+        let path = match &p.source {
+            lcc_catalog::Source::File { path } => path.as_str(),
+            _ => "",
+        };
+        // `/` and `\` are one byte, so the split is at a char boundary
+        let folder = path.rfind(['/', '\\']).and_then(|i| path.get(..i)).unwrap_or("");
+        let folder = if folder.is_empty() && path.starts_with(['/', '\\']) { path.get(..1).unwrap_or("") } else { folder };
+        let captured = p.captured.as_deref().map(|c| c.chars().take(19).map(|ch| if ch == 'T' { ' ' } else { ch }).collect()).unwrap_or_default();
+        Facts {
+            name: p.file_name.clone(),
+            folder: folder.to_string(),
+            captured,
+            width: p.width,
+            height: p.height,
+            size: p.file_size,
+            format: p.format.clone(),
+        }
+    }
+}
+
+/// A wrapping label that may break inside a long word (a path has no spaces to break at).
+fn wrapped(ui: &mut egui::Ui, text: &str, font: egui::FontId, color: Color32, width: f32) {
+    let mut job = egui::text::LayoutJob::single_section(text.to_string(), egui::TextFormat::simple(font, color));
+    job.wrap.max_width = width;
+    job.wrap.break_anywhere = true;
+    ui.add(egui::Label::new(job));
+}
+
 /// One photo of a group: its thumbnail (click to change the mark), a badge for the copy to keep
-/// (or for being the same file as it), and a caption naming it and its size, so a lower-resolution
-/// or wrongly named copy shows at a glance.
+/// (or for being the same file as it), and under it the whole story: file name, folder, capture
+/// date, size in pixels and bytes, so the copies can be told apart and the right one kept. The
+/// texts wrap rather than cut; the full path is also the tooltip.
 fn member_cell(session: &mut Session, renderer: &mut Renderer, ui: &mut egui::Ui, t: &Tokens, index: u32, m: &mut Member, kind: GroupKind) {
-    let (name, w, h, size, format, path) = session
-        .catalog
-        .photo(m.id)
-        .map(|p| {
-            (
-                p.file_name.clone(),
-                p.width,
-                p.height,
-                p.file_size,
-                p.format.clone(),
-                match &p.source {
-                    lcc_catalog::Source::File { path } => Some(path.clone()),
-                    _ => None,
-                },
-            )
-        })
-        .unwrap_or_default();
-    let side = 104.0;
+    let facts = session.catalog.photo(m.id).map(|p| Facts::of(p)).unwrap_or_else(|| Facts {
+        name: String::new(),
+        folder: String::new(),
+        captured: String::new(),
+        width: 0,
+        height: 0,
+        size: 0,
+        format: String::new(),
+    });
+    let side = CARD_W;
     ui.vertical(|ui| {
+        ui.set_width(side);
         let (rect, mut resp) = ui.allocate_exact_size(vec2(side, side), Sense::click());
         register(ui.ctx(), format!("duplicates:{index}"), rect);
-        crate::widgets::announce(&resp, name.clone());
+        crate::widgets::announce(&resp, facts.name.clone());
         {
             let p = ui.painter();
             p.rect_filled(rect, 3.0, t.skeleton);
             let slot = Slot::Duplicates(index);
             if !renderer.textures.contains_key(&slot)
-                && let Some(job) = session.thumb_job(m.id, 192)
+                && let Some(job) = session.thumb_job(m.id, 384)
                 && let Some(quick) = session.quick_thumb_job(&job)
             {
                 renderer.request_quick(slot, quick, 4);
             }
             if let Some(tex) = renderer.textures.get(&slot) {
                 let [tw, th] = tex.size;
-                let s = ((rect.width() - 8.0) / tw as f32).min((rect.height() - 8.0) / th as f32);
+                let s = ((rect.width() - 8.0) / tw.max(1) as f32).min((rect.height() - 8.0) / th.max(1) as f32);
                 let fit = Rect::from_center_size(rect.center(), vec2(tw as f32 * s, th as f32 * s));
                 p.image(
                     tex.id(),
@@ -410,21 +512,24 @@ fn member_cell(session: &mut Session, renderer: &mut Renderer, ui: &mut egui::Ui
                 p.galley(br.min + vec2(4.0, 2.0), g, Color32::WHITE);
             }
         }
-        // the two caption lines under the photo
-        ui.add_space(30.0);
-        let p = ui.painter();
-        let shown_name = if name.chars().count() > 16 { format!("{}…", name.chars().take(15).collect::<String>()) } else { name.clone() };
-        p.text(rect.left_bottom() + vec2(0.0, 11.0), Align2::LEFT_CENTER, shown_name, t.font(10.5), if m.marked { t.text_dim } else { t.text_label });
-        let mb = (size as f64 / 1e6 * 10.0).round() / 10.0;
-        p.text(
-            rect.left_bottom() + vec2(0.0, 24.0),
-            Align2::LEFT_CENTER,
-            tr_format!("{w} × {h} · {mb} MB · {format}", w = w, h = h, mb = mb, format = format),
-            t.font(9.5),
+        // the facts under the photo, whole
+        let name_color = if m.marked { t.text_dim } else { t.text_label };
+        wrapped(ui, &facts.name, t.semibold(11.5), name_color, side);
+        if !facts.folder.is_empty() {
+            wrapped(ui, &facts.folder, t.font(10.0), t.text_dim, side);
+        }
+        let when = if facts.captured.is_empty() { tr("No capture date").to_string() } else { facts.captured.clone() };
+        wrapped(ui, &when, t.font(10.5), t.text_dim, side);
+        let mb = (facts.size as f64 / 1e6 * 10.0).round() / 10.0;
+        wrapped(
+            ui,
+            &tr_format!("{w} × {h} · {mb} MB · {format}", w = facts.width, h = facts.height, mb = mb, format = facts.format),
+            t.font(10.5),
             t.text_dim,
+            side,
         );
-        if let Some(path) = path {
-            resp = resp.on_hover_text(path);
+        if !facts.folder.is_empty() {
+            resp = resp.on_hover_text(format!("{}\n{}", facts.folder, facts.name));
         }
         if resp.clicked() {
             m.marked = !m.marked;

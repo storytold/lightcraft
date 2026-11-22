@@ -106,6 +106,19 @@ fn pick_param(p: &Value, c: &str) -> Result<Option<SettingsPick>> {
     Ok(Some(SettingsPick { groups: groups.unwrap_or_default(), settings }.normalized()))
 }
 
+/// `masks` (Copy: which of the photo's masks, by id); `None` when not given.
+fn mask_ids_param(p: &Value, c: &str) -> Result<Option<Vec<u32>>> {
+    match p.get("masks") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|v| v.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(|| bad(c, format!("invalid mask id `{v}` (develop.get: masks[].id)"))))
+            .collect::<Result<Vec<u32>>>()
+            .map(Some),
+        Some(_) => Err(bad(c, "`masks` must be a list of mask ids (develop.get: masks[].id)")),
+    }
+}
+
 /// A preset group named like `name` (trimmed, any case) that exists already, else `name` trimmed:
 /// typing "wedding " never makes a second "Wedding" group.
 pub(crate) fn existing_preset_group(s: &Session, name: &str) -> String {
@@ -174,6 +187,26 @@ pub(crate) fn crop_dims(s: &Session, id: PhotoId) -> (f64, f64) {
     let (w, h) = p.map(|p| (p.width.max(1) as f64, p.height.max(1) as f64)).unwrap_or((3.0, 2.0));
     let o = p.map(|p| p.develop.orientation).unwrap_or_default();
     if o.swaps_axes() { (h, w) } else { (w, h) }
+}
+
+/// Photo `id`'s frame as oriented with `orientation`; `None` when the catalog doesn't know its size.
+fn oriented_dims(s: &Session, id: PhotoId, orientation: lcc_geom::Orientation) -> Option<(f64, f64)> {
+    let p = s.catalog.photo(id)?;
+    let (w, h) = (p.width as f64, p.height as f64);
+    (w > 0.0 && h > 0.0).then_some(if orientation.swaps_axes() { (h, w) } else { (w, h) })
+}
+
+/// Paste, Paste from Previous and Sync Settings: when `partial` carries a crop, photo `id`'s pasted settings take
+/// the crop `src` (made on a frame `from`) refitted to `id`'s frame as the paste orients it (the Crop group carries
+/// the orientation), as Auto Sync does ([`crate::sync_same::synced_crop`], upstream #3148). Without both frames the
+/// crop goes on as it is.
+fn refit_pasted_crop(s: &Session, partial: &Value, src: &lcc_develop::Crop, from: Option<(f64, f64)>, id: PhotoId, pasted: &mut DevelopSettings) {
+    if partial.get("crop").is_none() {
+        return;
+    }
+    if let (Some(from), Some(to)) = (from, oriented_dims(s, id, pasted.orientation)) {
+        pasted.crop = crate::sync_same::synced_crop(src, from, to);
+    }
 }
 
 /// Sets photo `id`'s crop as `crop.set` does (`c` names the command in errors): `rect` `[x0, y0,
@@ -1112,7 +1145,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let aspect = match p.get("aspect") {
                     Some(Value::String(a)) if a == "toggle" => None,
                     Some(Value::String(a)) if a == "free" => None,
-                    Some(Value::String(a)) if a == "original" => Some(((w * 100.0) as u32, (h * 100.0) as u32)),
+                    Some(Value::String(a)) if a == "original" => Some(lcc_develop::Crop::original_aspect(w, h)),
                     Some(Value::String(a)) => {
                         let (x, y) = a.split_once('x').ok_or_else(|| bad("crop.aspect", "use WxH"))?;
                         let (x, y): (f64, f64) =
@@ -1416,23 +1449,48 @@ pub fn specs() -> Vec<CommandSpec> {
             "Copy Edit Settings",
             ["Photo", "Develop Settings"],
             Some("Cmd+C"),
-            "{groups?: [settingsGroup], settings?: [settingItem] (single settings of a group, develop.settingItems)} (default: what was ticked last; at first all but crop, masks, remove): the choice is remembered → {groups, settings}",
+            "{groups?: [settingsGroup], settings?: [settingItem] (single settings of a group, develop.settingItems), masks?: [maskId] (with the masks group: only these of the photo's masks, by id (develop.get); default all)} (default: what was ticked last; at first all but crop, masks, remove): the group choice is remembered, the masks one is for this copy only → {groups, settings, masks? (the mask ids copied, when `masks` was given)}",
             has_active,
             |s, p| {
                 let c = "develop.copy";
                 let id = active(s, c)?;
-                if let Some(pick) = pick_param(p, c)?
+                let pick = pick_param(p, c)?;
+                let only_masks = mask_ids_param(p, c)?;
+                let d = s.develop_of(id).unwrap_or_default();
+                if let Some(only) = &only_masks {
+                    if !pick.as_ref().unwrap_or(&s.dialogs.copy).has(SettingsGroup::Masks.id()) {
+                        return Err(bad(c, "`masks` picks which masks to copy: add \"masks\" to `groups`"));
+                    }
+                    if let Some(unknown) = only.iter().find(|m| !d.masks.iter().any(|x| x.id == **m)) {
+                        return Err(bad(c, format!("this photo has no mask {unknown} (develop.get: masks[].id)")));
+                    }
+                }
+                if let Some(pick) = pick
                     && pick != s.dialogs.copy
                 {
                     s.dialogs.copy = pick;
                     remember_dialogs(s);
                 }
-                let d = s.develop_of(id).unwrap_or_default();
+                // the whole settings: Paste Selected Settings can paste a group the copy left out (upstream #3148)
+                let mut copied = d.to_json();
+                if let Some(only) = &only_masks
+                    && let Some(masks) = copied.get_mut("masks").and_then(Value::as_array_mut)
+                {
+                    // (in the photo's own order, whatever order they were named in)
+                    masks.retain(|m| m.get("id").and_then(Value::as_u64).and_then(|v| u32::try_from(v).ok()).is_some_and(|mid| only.contains(&mid)));
+                }
                 // portable: pasted in another catalog, a flat-field map still applies
-                let copied = s.dialogs.copy.extract(&d);
                 s.clipboard = Some(s.portable(&copied));
+                s.clipboard_dims = oriented_dims(s, id, d.orientation);
                 s.clipboard_from = Some(id);
-                Ok(json!({"groups": s.dialogs.copy.groups, "settings": s.dialogs.copy.settings}))
+                let mut out = json!({"groups": s.dialogs.copy.groups, "settings": s.dialogs.copy.settings});
+                if let Some(only) = only_masks
+                    && let Some(o) = out.as_object_mut()
+                {
+                    let ids: Vec<u32> = d.masks.iter().map(|m| m.id).filter(|mid| only.contains(mid)).collect();
+                    o.insert("masks".into(), json!(ids));
+                }
+                Ok(out)
             }
         ),
         cmd!(
@@ -1447,14 +1505,18 @@ pub fn specs() -> Vec<CommandSpec> {
                 let prev =
                     s.previous_active.filter(|id| s.catalog.photo(*id).is_some_and(|ph| !ph.deleted)).ok_or_else(|| bad(c, "no previous photo"))?;
                 let pick = pick_param(p, c)?.unwrap_or_else(|| s.dialogs.copy.clone());
-                let mut partial = pick.extract(&s.develop_of(prev).unwrap_or_default());
+                let src = s.develop_of(prev).unwrap_or_default();
+                let mut partial = pick.extract(&src);
                 lcc_develop::presets::to_recipes(&mut partial);
+                let from = oriented_dims(s, prev, src.orientation);
                 let ids: Vec<PhotoId> = s.targets(p)?.into_iter().filter(|id| *id != prev).collect();
                 let link_source = link_copied_masks(s, &mut partial, Some(prev), &ids, "Paste from Previous");
                 let mut ops = Vec::new();
                 for id in ids {
                     let Some(d) = s.develop_of(id) else { continue };
-                    let next = crate::smart_masks::completed(s, id, lcc_develop::apply_partial(&d, &partial, 1.0));
+                    let mut pasted = lcc_develop::apply_partial(&d, &partial, 1.0);
+                    refit_pasted_crop(s, &partial, &src.crop, from, id, &mut pasted);
+                    let next = crate::smart_masks::completed(s, id, pasted);
                     ops.extend(s.develop_op(id, next, "Paste from Previous"));
                 }
                 let n = ops.len();
@@ -1468,27 +1530,26 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paste Edit Settings",
             ["Photo", "Develop Settings"],
             Some("Cmd+V"),
-            "{ids?, groups?: [settingsGroup], settings?: [settingItem] (paste only these of the copied settings)} → {changed, vignettingCalibrationSkipped: [{id, reason}] (a vignetting map left off a photo it doesn't fit)}",
+            "{ids?, groups?: [settingsGroup], settings?: [settingItem] (default: what Copy ticked; any part of the copied photo's settings, also one the copy left out: Paste Selected Settings)} → {changed, vignettingCalibrationSkipped: [{id, reason}] (a vignetting map left off a photo it doesn't fit)}",
             has_clipboard,
             |s, p| {
                 let c = "develop.paste";
-                let mut clip = s.clipboard.clone().unwrap_or_default();
+                let mut whole = s.clipboard.clone().ok_or_else(|| bad(c, "no settings copied"))?;
                 // (copied in another catalog, the map comes with it: stored with the paste)
-                s.absorb_settings(&mut clip);
-                if let Some(only) = pick_param(p, c)? {
-                    // the clipboard holds what was copied: rebuild it with just the chosen part of it
-                    let only = only.intersect(&s.dialogs.copy);
-                    let masks = clip.get("masks").cloned();
-                    let full = lcc_develop::apply_partial(&DevelopSettings::default(), &clip, 1.0);
-                    clip = only.extract(&full);
-                    // (the copied masks go as they were copied)
-                    if let (Some(m), Some(o)) = (masks, clip.as_object_mut())
-                        && o.contains_key("masks")
-                    {
-                        o.insert("masks".into(), m);
-                    }
+                s.absorb_settings(&mut whole);
+                // the clipboard holds the copied photo's whole settings: what Copy ticked, or any part of them
+                // Paste Selected Settings names, also a group the copy left out (upstream #3148)
+                let pick = pick_param(p, c)?.unwrap_or_else(|| s.dialogs.copy.clone());
+                let src = lcc_develop::apply_partial(&DevelopSettings::default(), &whole, 1.0);
+                let mut clip = pick.extract(&src);
+                // (the copied masks go as they were copied)
+                if let (Some(m), Some(o)) = (whole.get("masks").cloned(), clip.as_object_mut())
+                    && o.contains_key("masks")
+                {
+                    o.insert("masks".into(), m);
                 }
                 lcc_develop::presets::to_recipes(&mut clip);
+                let from_dims = s.clipboard_dims;
                 let ids = s.targets(p)?;
                 let from = s.clipboard_from;
                 let link_source = link_copied_masks(s, &mut clip, from, &ids, "Paste Settings");
@@ -1497,6 +1558,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 for id in ids {
                     let Some(d) = s.develop_of(id) else { continue };
                     let mut pasted = lcc_develop::apply_partial(&d, &clip, 1.0);
+                    refit_pasted_crop(s, &clip, &src.crop, from_dims, id, &mut pasted);
                     // (a vignetting map from another lens stays off this photo)
                     if let Some(why) = s.keep_fitting_vignetting_calibration(id, &d, &mut pasted) {
                         vignetting_calibration_skipped.push(json!({"id": id.0, "reason": why}));
@@ -1563,8 +1625,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let mut ops = Vec::new();
                 let mut vignetting_calibration_skipped = Vec::new();
                 // a crop goes on as what it means on each photo's own frame (upstream #3572; as Auto Sync does)
-                let with_crop = partial.get("crop").is_some();
-                let adims = crop_dims(s, id);
+                let adims = oriented_dims(s, id, d.orientation);
                 for x in targets.iter().copied() {
                     let Some(dd) = s.develop_of(x) else { continue };
                     let mut nd = lcc_develop::apply_partial(&dd, &partial, 1.0);
@@ -1572,9 +1633,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     if let Some(why) = s.keep_fitting_vignetting_calibration(x, &dd, &mut nd) {
                         vignetting_calibration_skipped.push(json!({"id": x.0, "reason": why}));
                     }
-                    if with_crop {
-                        nd.crop = crate::sync_same::synced_crop(&d.crop, adims, crop_dims(s, x));
-                    }
+                    refit_pasted_crop(s, &partial, &d.crop, adims, x, &mut nd);
                     for (k, v) in &values {
                         lcc_develop::controls::set(&mut nd, k, *v);
                     }
@@ -1765,7 +1824,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 // photographer gave it ("Warmth") is kept
                 for k in 0..d.masks.len() {
                     let Some(m) = d.masks.get(k).cloned() else { continue };
-                    if s.auto_mask_name(id, &m) == m.name
+                    // (numbered too: "Brush 2" next to another Brush)
+                    if lcc_develop::recipe::numbered_name(&m.name, &s.auto_mask_name(id, &m))
                         && let Some(m) = d.masks.get_mut(k)
                     {
                         m.name.clear();

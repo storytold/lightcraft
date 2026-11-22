@@ -10,8 +10,9 @@ import { Aside } from '@astrojs/starlight/components';
 
 <Shot name="develop" alt="Develop with light and colour sliders" />
 
-- **Basic**: exposure, contrast, highlights, shadows, whites, blacks, **Contrast Mode** (**Luminance** / **RGB** for per-channel Contrast and Blacks); white balance (presets, eyedropper; the selector's loupe shows the sampled colour values); vibrance, saturation; colour / B&W.
+- **Basic**: exposure, contrast, **Brightness** (lifts or darkens the midtones, black and white stay fixed; -100 to +100), highlights, shadows, whites, blacks, **Contrast Mode** (**Luminance** / **RGB** for per-channel Contrast and Blacks); white balance (presets, eyedropper; the selector's loupe shows the sampled colour values); vibrance, saturation; colour / B&W.
 - **Profile**: look and camera profile, with an Amount slider. See [Colour, grading and profiles](../colour/).
+- **Levels**: black, midtone, white and output levels per channel. See [Colour, grading and profiles](../colour/#levels).
 - **Tone Curve**: point curve (RGB and per channel), parametric, targeted adjustment on the image.
 - **Color Mixer**: eight-band HSL, B&W mix, **Point Color**.
 - **Color Grading**: see [Colour, grading and profiles](../colour/).
@@ -21,7 +22,7 @@ import { Aside } from '@astrojs/starlight/components';
 - **Retouch**, **Lens Corrections**, **Transform**.
 - **HDR** headroom controls for HDR displays.
 - **Edit title** shares the button row with Auto, B&W and HDR.
-- Double-click a slider to reset it. Every slider is also a command.
+- Double-click a slider to reset it to the photo's own default (a raw starts with Sharpening 40, not 0). Every slider is also a command.
 - **Before / After** shows the difference; **Soft proof** (`S`) previews the output colour space.
 
 <Aside type="note" title="Modern layout">

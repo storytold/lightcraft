@@ -76,11 +76,13 @@ fn zip_tiff_is_never_larger_than_uncompressed() {
     }
 }
 
-/// What ZIP costs at 24 MP, 16 bit (ignored by default):
-/// `cargo test --release -p lcc-codecs --test it tiff_zip::bench -- --ignored --nocapture`
+/// What ZIP costs at 24 MP, 16 bit (opt-in: `<PREFIX>_PROBES=1`):
+/// `<PREFIX>_PROBES=1 cargo test --release -p lcc-codecs --test it tiff_zip::bench -- --nocapture`
 #[test]
-#[ignore]
 fn bench_24mp_16_bit_zip() {
+    if !lcc_testkit::probe("bench_24mp_16_bit_zip") {
+        return;
+    }
     let (w, h) = (6000, 4000);
     for noise in [200.0, 1300.0, 4000.0] {
         let px = noisy16(w, h, noise);

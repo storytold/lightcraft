@@ -101,6 +101,12 @@ pub struct Manifest {
     /// v1.1 proposal; hosts without it use their base tone). Unknown values mean the camera's.
     #[serde(default, deserialize_with = "lenient_base_tone", skip_serializing_if = "BaseTone::is_camera")]
     pub base_tone: BaseTone,
+    /// How the host cuts the image into bands (`"bands": "rows" | "tiles"`, an ABI v1.1 proposal):
+    /// full-width rows, or near-square tiles when the filter has an `overlap`, which repeat less of the
+    /// image in the margins and keep a long feature (a hair, a scratch) in one band more often. Hosts
+    /// without it cut rows. Unknown values mean rows.
+    #[serde(default, deserialize_with = "lenient_bands", skip_serializing_if = "Bands::is_rows")]
+    pub bands: Bands,
     /// Display labels of parameters that declare one (`{"type": …, "label": "Dynamic range"}`), by
     /// parameter name. Read by [`Manifest::parse`]; labels that aren't 1-64 printable characters are dropped.
     #[serde(skip)]
@@ -111,6 +117,11 @@ pub struct Manifest {
     /// is dropped (the menu stays flat).
     #[serde(skip)]
     pub groups: Vec<(String, Vec<String>)>,
+    /// Parameters that declare `"remember": true` (an ABI v1.1 proposal): the host may start a
+    /// newly added copy of the filter with the values last set for them (the film type, say)
+    /// instead of their defaults. Read by [`Manifest::parse`]; hosts without it ignore the key.
+    #[serde(skip)]
+    pub remember: Vec<String>,
     /// A header picture the host may show at the top of the filter's controls (`"header": "<svg…>"`,
     /// or `{"dark": "<svg…>", "light": "<svg…>"}` for dark and light interface themes). Read by
     /// [`Manifest::parse`]; a picture that isn't an SVG document of at most [`MAX_HEADER_BYTES`]
@@ -240,6 +251,28 @@ pub enum AnalyzeArea {
     Crop,
 }
 
+/// How the image is cut into bands (see [`Manifest::bands`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Bands {
+    /// Full-width rows (a very wide image is also cut across).
+    #[default]
+    Rows,
+    /// Near-square tiles, when the filter has an `overlap` (rows otherwise: nothing to save).
+    Tiles,
+}
+
+impl Bands {
+    pub fn is_rows(&self) -> bool {
+        *self == Bands::Rows
+    }
+}
+
+fn lenient_bands<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Bands, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(if v.as_str() == Some("tiles") { Bands::Tiles } else { Bands::Rows })
+}
+
 /// The base tone a raw gets after a Source filter (see [`Manifest::base_tone`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -283,6 +316,35 @@ fn lenient_stage<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<
     })
 }
 
+/// Names in `dropped` each picture of `raw` (`icon`, `header`, or a header's `dark` / `light`)
+/// that is there but isn't an SVG document of at most [`MAX_HEADER_BYTES`], so `parse` kept none of it.
+fn dropped_pictures(raw: &Value, dropped: &mut Vec<String>) {
+    let why = "not an SVG document of at most {} KiB";
+    let why = why.replace("{}", &(MAX_HEADER_BYTES / 1024).to_string());
+    if raw.get("icon").is_some_and(|v| !v.is_null() && svg_document(Some(v)).is_none()) {
+        dropped.push(format!("icon: {why}"));
+    }
+    match raw.get("header") {
+        None | Some(Value::Null) => {}
+        Some(h @ Value::String(_)) => {
+            if svg_document(Some(h)).is_none() {
+                dropped.push(format!("header: {why}"));
+            }
+        }
+        Some(h) => {
+            let named = ["dark", "light"].into_iter().filter_map(|k| h.get(k).map(|v| (k, v))).collect::<Vec<_>>();
+            if named.is_empty() {
+                dropped.push("header: neither `dark` nor `light` given".to_string());
+            }
+            for (k, v) in named {
+                if svg_document(Some(v)).is_none() {
+                    dropped.push(format!("header.{k}: {why}"));
+                }
+            }
+        }
+    }
+}
+
 impl Manifest {
     /// Parses and validates manifest JSON.
     pub fn parse(bytes: &[u8]) -> Result<Manifest> {
@@ -297,6 +359,7 @@ impl Manifest {
         man.header = raw.get("header").and_then(Header::parse);
         man.icon = svg_document(raw.get("icon"));
         (man.about, man.dropped) = About::parse(&raw);
+        dropped_pictures(&raw, &mut man.dropped);
         man.sections = param_sections(raw.get("sections"), &man.params);
         man.shortcut = raw
             .get("shortcut")
@@ -326,6 +389,12 @@ impl Manifest {
                     };
                     (names.len() == options.len() && names.iter().all(printable) && names.iter().any(|g| !g.is_empty())).then(|| (k.clone(), names))
                 })
+                .collect();
+            man.remember = man
+                .params
+                .iter()
+                .filter(|(k, _)| ps.get(k).and_then(|p| p.get("remember")).and_then(Value::as_bool) == Some(true))
+                .map(|(k, _)| k.clone())
                 .collect();
         }
         Ok(man)
@@ -606,6 +675,15 @@ mod tests {
         "overlap":2,"area":"canvas"}"#;
 
     #[test]
+    fn bands_are_rows_unless_a_filter_asks_for_tiles() {
+        let with = |v: &str| format!(r#"{{"id":"a.b","name":"A","kind":"filter"{v}}}"#);
+        assert_eq!(Manifest::parse(with("").as_bytes()).unwrap().bands, Bands::Rows);
+        assert_eq!(Manifest::parse(with(r#","bands":"tiles""#).as_bytes()).unwrap().bands, Bands::Tiles);
+        assert_eq!(Manifest::parse(with(r#","bands":"hexagons""#).as_bytes()).unwrap().bands, Bands::Rows);
+        assert_eq!(Manifest::parse(with(r#","bands":3"#).as_bytes()).unwrap().bands, Bands::Rows);
+    }
+
+    #[test]
     fn analyze_area_is_the_frame_unless_a_filter_asks_for_the_crop() {
         let with = |v: &str| format!(r#"{{"id":"a.b","name":"A","kind":"filter"{v}}}"#);
         assert_eq!(Manifest::parse(with("").as_bytes()).unwrap().analyze_area, AnalyzeArea::Frame);
@@ -743,6 +821,20 @@ mod tests {
             let m = Manifest::parse(format!(r#"{{"id":"a.b","name":"N","kind":"filter",{bad}}}"#).as_bytes()).unwrap();
             assert_eq!(m.shortcut, None, "{bad}");
         }
+    }
+
+    #[test]
+    fn parameters_that_remember_say_so_with_a_true() {
+        let m = Manifest::parse(
+            br#"{"id":"a.b","name":"N","kind":"filter","params":{
+                "film":{"type":"choice","options":["Colour","B&W"],"remember":true},
+                "border":{"type":"number","min":0,"max":25,"default":10,"remember":true},
+                "amount":{"type":"number","min":0,"max":1,"default":0.5},
+                "odd":{"type":"bool","remember":"yes"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(m.remember, ["film", "border"], "in declaration order, `true` only");
+        assert!(Manifest::parse(br#"{"id":"a.b","name":"N","kind":"filter"}"#).unwrap().remember.is_empty());
     }
 
     #[test]

@@ -62,7 +62,7 @@ impl SettingsHashes {
 }
 
 /// Bump when the pipeline's output changes, to invalidate cached thumbnails.
-pub const RENDER_CACHE_VERSION: u64 = 80;
+pub const RENDER_CACHE_VERSION: u64 = 93;
 
 /// Thumbnails render at one of these long edges (so window/cell size changes reuse the cache).
 pub const THUMB_SIZES: [usize; 4] = [128, 256, 384, 512];
@@ -836,6 +836,14 @@ impl MediaCache {
         self.previews.clear();
         self.full.clear();
         self.profile_facts.clear();
+    }
+
+    /// Forget every decoded source but `keep`'s (entering Develop under a small memory budget: the photos browsed
+    /// before are decoded again if they are shown again; their rendered previews stay on disk).
+    pub fn keep_sources_of(&mut self, keep: Option<PhotoId>) {
+        self.thumbs = Lru::new(THUMB_SOURCE_BYTES.min(self.budget));
+        self.previews.retain(|e| Some(e.0) == keep);
+        self.full.retain(|e| Some(e.0) == keep);
     }
 
     /// How many full-resolution originals to keep at once (at least one). Compare and Reference
@@ -2450,6 +2458,15 @@ impl crate::Session {
             None => SourceLevel::for_size(needed),
         };
         let mut source = self.media.source_ref(&p, level);
+        // an original too big to decode whole within the memory budget is decoded smaller for the window (a 200 MP
+        // phone JPEG); an export reads it whole ([`Self::full_resolution_source`])
+        if level == SourceLevel::Full
+            && thumb_bucket.is_none()
+            && let SourceRef::File { max_edge, .. } = &mut source
+            && let Some(cap) = crate::memory::interactive_edge_cap(p.width, p.height)
+        {
+            *max_edge = cap.min(*max_edge);
+        }
         let discard_source = thumb_bucket.is_some() && level == SourceLevel::Preview;
         if discard_source && let SourceRef::File { max_edge, .. } | SourceRef::Demo { max_edge, .. } | SourceRef::Video { max_edge, .. } = &mut source
         {
@@ -3102,7 +3119,8 @@ impl crate::Session {
     /// Synchronous render (CLI, MCP, tests).
     pub fn render_now(&mut self, id: PhotoId, max_w: usize, max_h: usize) -> Result<Rendered, String> {
         lcc_pipeline::check_output_size(max_w, max_h)?;
-        let job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
+        let mut job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
+        self.full_resolution_source(id, &mut job)?;
         let r = job.run();
         self.accept(&r);
         r.rendered
@@ -3149,17 +3167,7 @@ impl crate::Session {
     ) -> Result<RenderJob, String> {
         lcc_pipeline::check_output_size(max_w, max_h)?;
         let mut job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
-        // An export renders the full image: never a thumbnail's source developed from a smaller copy of the raw
-        // image that the file keeps (Lightroom's merged DNGs)
-        let reduced = match &job.source {
-            SourceRef::Loaded(s) => s.reduced,
-            SourceRef::Fit { from, .. } => from.reduced,
-            _ => false,
-        };
-        if reduced {
-            let p = self.rendered_photo_of(id).ok_or("no such photo")?;
-            job.source = self.media.source_ref_uncached(&p, job.level);
-        }
+        self.full_resolution_source(id, &mut job)?;
         // An export is made from the denoised picture its Denoise amount asks for, made when the job runs if the
         // background queue has not got to it. (A source kept in memory may lack the picture, so the job reads the file.)
         if let Some(wanted) = self.denoise_for_export(id, &job.settings)? {
@@ -3180,6 +3188,56 @@ impl crate::Session {
             job.key ^= 0x8ebc_6af0_9c88_c6e3;
         }
         Ok(job)
+    }
+
+    /// Point a full-size job (an export, a render for the CLI) at the original read whole, when what the window uses is
+    /// less: a thumbnail's source developed from a smaller copy of the raw image that the file keeps (Lightroom's merged
+    /// DNGs), or an original too big for the memory budget decoded smaller for the window
+    /// ([`crate::memory::interactive_edge_cap`]).
+    fn full_resolution_source(&mut self, id: PhotoId, job: &mut RenderJob) -> Result<(), String> {
+        let reduced = match &job.source {
+            SourceRef::Loaded(s) => s.reduced,
+            SourceRef::Fit { from, .. } => from.reduced,
+            _ => false,
+        };
+        // (only a capped original's window source is smaller than the export needs: a raw's decode a few pixels short
+        // of the catalog's size is not, and is kept)
+        if reduced || (job.level == SourceLevel::Full && self.full_source_capped(id)) {
+            let p = self.rendered_photo_of(id).ok_or("no such photo")?;
+            job.source = self.media.source_ref_uncached(&p, job.level);
+        }
+        Ok(())
+    }
+
+    /// Pixels along `id`'s original long edge that a render `out_long` pixels long of the photo as edited (its crop
+    /// applied) needs: what a decode for it may be fitted to.
+    pub(crate) fn source_edge_for(&self, id: PhotoId, out_long: usize) -> Option<usize> {
+        let p = self.rendered_photo_of(id)?;
+        Some(source_edge_needed(&p, &p.develop, true, out_long).max(1))
+    }
+
+    /// Make room for editing under a small memory budget ([`crate::memory::constrained`]; elsewhere nothing): the
+    /// background preview build is stopped (it is owed, and taken up again once browsing resumes), every decoded source
+    /// but the photo being edited is dropped, the GPU's recycled buffers are freed, and the allocator hands freed pages
+    /// back to the system. `true` when it did.
+    pub fn make_room_for_editing(&mut self) -> bool {
+        if !crate::memory::constrained() {
+            return false;
+        }
+        if let Some(b) = self.preview_build.as_ref().filter(|b| b.running() && b.background) {
+            b.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let active = self.active();
+        self.media.keep_sources_of(active);
+        crate::gpu::trim_pool(0);
+        crate::memory::release();
+        true
+    }
+
+    /// Whether the original of `id` is too big to decode whole within the memory budget, so the window decodes it
+    /// smaller ([`crate::memory::interactive_edge_cap`]): the loupe does not decode such a one ahead of a zoom.
+    pub fn full_source_capped(&self, id: PhotoId) -> bool {
+        self.catalog.photo(id).is_some_and(|p| crate::memory::interactive_edge_cap(p.width, p.height).is_some())
     }
 
     /// Prefer decoder facts to header-only metadata for pixel-statistics commands.
@@ -3353,6 +3411,33 @@ mod thumbnail_hash_tests {
     /// An unedited raw's camera JPEG is read once for the loupe and kept in memory for a step
     /// back; the full-size one (zoomed in) is made at the size asked for and kept nowhere; an
     /// edited raw or another file has none.
+    /// Upstream #4389 (issue #4255): a raw imported before Remove Hot Pixels existed has the box off, one
+    /// imported since has it on: either way its camera JPEG is the picture as imported.
+    #[test]
+    fn remove_hot_pixels_on_or_off_keeps_the_camera_thumbnail() {
+        let mut s = crate::Session::new();
+        s.media.preview_loader =
+            Some(Arc::new(|_: &str, edge: usize| Some(Rgba8 { width: edge.min(64), height: 2, data: vec![[9, 8, 7, 255]; edge.min(64) * 2] })));
+        let mut raw = Photo::new(PhotoId(1), Source::File { path: "a.arw".into() }, "a.arw", "ARW", 6000, 4000, "2026-10-01");
+        raw.kind = MediaKind::Raw;
+        let imported_now = raw.camera_defaults();
+        assert!(imported_now.detail.nr_outliers, "a raw imported now has the box on");
+        let mut imported_before = imported_now.clone();
+        imported_before.detail.nr_outliers = false;
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(raw) }).unwrap();
+        for (settings, what) in [(imported_before, "imported before the box"), (imported_now, "imported now")] {
+            s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(settings.clone()), label: "set".into(), edited: None }).unwrap();
+            let p = s.catalog.photo(PhotoId(1)).unwrap();
+            assert!(crate::import::has_import_look(p), "{what}");
+            assert!(s.embedded_thumb_is_final(p), "{what}");
+            assert!(s.embedded_full_job(PhotoId(1), 8192).is_some(), "{what}: the loupe's camera JPEG");
+            let mut edited = settings;
+            edited.light.exposure = 1.0;
+            s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(edited), label: "edit".into(), edited: None }).unwrap();
+            assert!(!s.embedded_thumb_is_final(s.catalog.photo(PhotoId(1)).unwrap()), "{what}: an edit is still rendered");
+        }
+    }
+
     #[test]
     fn camera_previews_are_kept_for_a_revisit_and_full_size_ones_are_not() {
         let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));

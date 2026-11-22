@@ -138,7 +138,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let (photos, ids): (u64, Vec<PhotoId>) = match files {
         None => {
             let r = s.execute("library.browse", &json!({"path": folder.display().to_string()})).map_err(|e| e.to_string())?;
-            (r["photos"].as_u64().unwrap_or(0), s.visible_cloned())
+            (r.get("photos").and_then(Value::as_u64).unwrap_or(0), s.visible_cloned())
         }
         Some(k) => {
             let mut list: Vec<String> = std::fs::read_dir(&folder)
@@ -151,14 +151,15 @@ pub fn run(args: &[String]) -> Result<(), String> {
             list.sort();
             list.truncate(k);
             let r = s.execute("library.import", &json!({"paths": list, "mode": "add", "local": true})).map_err(|e| e.to_string())?;
-            let ids: Vec<PhotoId> = r["imported"].as_array().into_iter().flatten().filter_map(Value::as_u64).map(PhotoId).collect();
+            let ids: Vec<PhotoId> =
+                r.get("imported").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_u64).map(PhotoId).collect();
             (ids.len() as u64, ids)
         }
     };
     let browse_ms = ms_since(t);
     let what = if files.is_some() { "first files" } else { "whole folder" };
     println!("browse {photos} photos ({what}): {browse_ms:.1} ms wall");
-    out["browse"] = json!({"ms": round(browse_ms), "photos": photos, "perPhotoMs": round(browse_ms / photos.max(1) as f64)});
+    crate::set_key(&mut out, "browse", json!({"ms": round(browse_ms), "photos": photos, "perPhotoMs": round(browse_ms / photos.max(1) as f64)}));
     let paths: Vec<String> = ids
         .iter()
         .filter_map(|id| match &s.catalog.photo(*id)?.source {
@@ -198,7 +199,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     println!("grid: first thumbnail: {first:.1} ms wall");
     println!("grid: {} thumbnails: {all:.1} ms wall", per.len());
     line("grid: one 512 px thumbnail", &each);
-    out["thumbs"] = json!({"firstMs": round(first), "allMs": round(all), "count": per.len(), "each": each});
+    crate::set_key(&mut out, "thumbs", json!({"firstMs": round(first), "allMs": round(all), "count": per.len(), "each": each}));
 
     // --- camera previews at loupe sizes, one at a time (what a step costs without look-ahead) -----
     let sample: Vec<&String> = paths.iter().skip(48).take(20).collect();
@@ -214,7 +215,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         let name = if edge == usize::MAX { "camera preview full size (100 %)".to_string() } else { format!("camera preview {edge} px") };
         let st = stats(&ms);
         line(&name, &st);
-        out[if edge == usize::MAX { "cameraFull".to_string() } else { format!("camera{edge}") }] = st;
+        crate::set_key(&mut out, if edge == usize::MAX { "cameraFull".to_string() } else { format!("camera{edge}") }, st);
     }
 
     // --- the app's loupe render (2560 px) from a cold source --------------------------------
@@ -232,7 +233,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         .collect();
     let st = stats(&ms);
     line("loupe render 2560 px (cold)", &st);
-    out["loupeRender"] = st;
+    crate::set_key(&mut out, "loupeRender", st);
 
     // --- rating: a culling pass of keypresses ---------------------------------------------------
     let ms: Vec<f64> = ids
@@ -249,7 +250,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         .collect();
     let st = stats(&ms);
     line("rate one photo (journal written)", &st);
-    out["rate"] = st;
+    crate::set_key(&mut out, "rate", st);
     drop(s);
 
     // --- import: add in place, then copy ----------------------------------------------------------
@@ -261,9 +262,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let t = Instant::now();
     let r = s.execute("library.import", &json!({"paths": add, "mode": "add"})).map_err(|e| e.to_string())?;
     let add_ms = ms_since(t);
-    let added = r["imported"].as_array().map(Vec::len).unwrap_or(0);
+    let added = r.get("imported").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
     println!("import {added} photos in place: {add_ms:.1} ms wall");
-    out["importAdd"] = json!({"ms": round(add_ms), "photos": added, "perPhotoMs": round(add_ms / added.max(1) as f64)});
+    crate::set_key(&mut out, "importAdd", json!({"ms": round(add_ms), "photos": added, "perPhotoMs": round(add_ms / added.max(1) as f64)}));
     drop(s);
     if copy > 0 {
         let some: Vec<String> = paths.iter().take(copy).cloned().collect();
@@ -274,9 +275,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
             .execute("library.import", &json!({"paths": some, "mode": "copy", "destination": lib.join("Originals").display().to_string()}))
             .map_err(|e| e.to_string())?;
         let copy_ms = ms_since(t);
-        let copied = r["imported"].as_array().map(Vec::len).unwrap_or(0);
+        let copied = r.get("imported").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
         println!("import {copied} photos by copying: {copy_ms:.1} ms wall");
-        out["importCopy"] = json!({"ms": round(copy_ms), "photos": copied, "perPhotoMs": round(copy_ms / copied.max(1) as f64)});
+        crate::set_key(&mut out, "importCopy", json!({"ms": round(copy_ms), "photos": copied, "perPhotoMs": round(copy_ms / copied.max(1) as f64)}));
         drop(s);
         let _ = std::fs::remove_dir_all(&lib);
     }

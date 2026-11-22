@@ -106,6 +106,25 @@ fn quitting_with_unsaved_changes_asks_first() {
     assert!(h.app.quit_confirmed && crate::panels::notices::may_close(&mut h.app));
 }
 
+/// Fonts the app's package was missing are shown once, by name, in the notice window (the desktop app sets
+/// `font_problems` from what the font loader found).
+#[test]
+fn missing_package_fonts_are_shown_once() {
+    let problems = vec![lcc_engine::fonts::FontProblem { what: "NanumGothic Regular".into(), detail: "damaged".into() }];
+    let mut app = LccApp::new(lcc_engine::Session::new(), Services { png: None, ..Default::default() });
+    app.font_problems = Some(Vec::leak(problems));
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.step();
+    h.step();
+    assert_eq!(h.app.notices.len(), 1, "{:?}", h.app.notices);
+    assert!(h.app.notices[0].contains("NanumGothic Regular"), "{:?}", h.app.notices);
+    assert!(has(&h, "button:noticeOk"));
+    click(&mut h, "button:noticeOk");
+    h.step();
+    h.step();
+    assert!(h.app.notices.is_empty(), "said once: {:?}", h.app.notices);
+}
+
 #[test]
 fn damaged_settings_file_is_shown() {
     let files = MemStore::new();

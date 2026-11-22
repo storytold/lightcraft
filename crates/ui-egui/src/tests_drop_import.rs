@@ -436,6 +436,42 @@ fn auto_import_waits_for_an_import_that_starts_during_its_listing() {
     h.app.session.import_defaults.auto_folder = None;
 }
 
+/// Issue #1302: a photo still being copied in when Auto Import tried it (a stalled copy whose size held
+/// between two listings) failed to read; once the copy finishes the photo arrives on its own, without a
+/// Synchronize Folder.
+#[test]
+fn auto_import_tries_again_a_photo_whose_copy_was_partial_when_tried() {
+    let dir = Scratch::new("auto-partial");
+    let mut h = app(&dir);
+    let full = {
+        write_png(&dir.path("full.png"), 4);
+        std::fs::read(dir.path("full.png")).unwrap()
+    };
+    std::fs::create_dir_all(dir.path("watch")).unwrap();
+    std::fs::write(dir.path("watch/w.png"), &full[..full.len() / 2]).unwrap();
+    h.app.session.import_defaults.auto_folder = Some(dir.path("watch"));
+    let tried = |h: &Headless| h.app.session.auto_import_tried.keys().any(|k| k.ends_with("w.png"));
+    assert!(h.step_until(T, |h| tried(h) && h.app.import.is_none()), "the partial file is tried");
+    assert_eq!(photos(&h), 0, "and can't be read");
+    std::fs::write(dir.path("watch/w.png"), &full).unwrap();
+    assert!(h.step_until(T, |h| photos(h) == 1), "the finished copy arrives: {}", photos(&h));
+    h.app.session.import_defaults.auto_folder = None;
+}
+
+/// An Auto Import that can't start (here: a preset deleted between the scan and the import) leaves its
+/// files to the next scans instead of marking them as tried.
+#[test]
+fn auto_import_that_cannot_start_leaves_its_files_for_the_next_scan() {
+    let dir = Scratch::new("auto-nostart");
+    let mut h = app(&dir);
+    let path = dir.path("trip/a.png");
+    h.app.session.auto_import_tried.insert(path.clone(), std::fs::metadata(&path).unwrap().len());
+    h.app.import = Some(crate::import::ImportTask::new(vec![path.clone()], json!({"mode": "add", "preset": "gone"}), 0, false).auto());
+    crate::import::tick(&mut h.app, &h.view.ctx.clone());
+    assert!(h.app.import.is_none(), "the import didn't start");
+    assert!(!h.app.session.auto_import_tried.contains_key(&path), "the file can be tried again");
+}
+
 /// The same with a Local folder browse: a browse that finishes replaces `app.import`, so Auto Import
 /// doesn't start one beside it.
 #[test]
@@ -514,4 +550,34 @@ fn old_auto_import_settings_still_watch() {
     assert_eq!(d.auto_active_folder().map(String::as_str), Some("/x"));
     let off: lcc_engine::import::ImportDefaults = serde_json::from_str(r#"{"autoFolder":"/x","autoPaused":true}"#).expect("loads");
     assert!(off.auto_active_folder().is_none() && off.auto_folder.is_some());
+}
+
+/// A scan whose files arrive while another import holds `app.import` releases them for the next scan
+/// instead of leaving them tried until a Synchronize Folder (#1302).
+#[test]
+fn auto_import_scan_beaten_by_another_import_leaves_its_files_for_the_next_scan() {
+    let dir = Scratch::new("auto-beaten");
+    let mut h = app(&dir);
+    let path = dir.path("watch/new.png");
+    h.app.session.auto_import_tried.insert(path.clone(), 1);
+    h.app.import = Some(crate::import::ImportTask::new(vec![], json!({"mode": "add"}), 0, false));
+    crate::import::auto_import_take(&mut h.app, &json!({"import": {"paths": [path.clone()], "mode": "add"}}));
+    assert!(!h.app.session.auto_import_tried.contains_key(&path), "the file can be tried again");
+    assert!(!h.app.import.as_ref().unwrap().auto, "the other import is kept");
+}
+
+/// A cancelled Auto Import leaves the files it never read to the next scans.
+#[test]
+fn cancelled_auto_import_leaves_its_unread_files_for_the_next_scan() {
+    let dir = Scratch::new("auto-cancel");
+    let mut h = app(&dir);
+    let unread = dir.path("watch/never-read.png");
+    h.app.session.auto_import_tried.insert(unread.clone(), 1);
+    h.app.import = Some(crate::import::ImportTask::new(vec![unread.clone()], json!({"mode": "add"}), 0, false).auto());
+    let ctx = h.view.ctx.clone();
+    crate::import::tick(&mut h.app, &ctx);
+    let id = h.app.import.as_ref().and_then(|t| t.guard.as_ref()).map(|g| g.id()).expect("the import started");
+    h.app.session.activity.cancel(id).unwrap();
+    assert!(h.step_until(T, |h| h.app.import.is_none()), "the import ends");
+    assert!(!h.app.session.auto_import_tried.contains_key(&unread), "the file can be tried again");
 }

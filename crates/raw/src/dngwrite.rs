@@ -172,12 +172,99 @@ pub struct DngWriteOptions {
     /// `UniqueCameraModel` to write instead of the one made from Exif make and model (raw converters pick their
     /// camera profiles by it).
     pub unique_camera_model: Option<String>,
+    /// Also write an Exif IFD made from the image metadata (capture time with its sub-seconds and time-zone offset,
+    /// exposure, focal length, lens): a DNG's own date and shot data for readers that look in Exif rather than XMP.
+    /// Off by default; only the pixel-shift merge asks for it so far.
+    pub exif: bool,
+    /// A JPEG preview to store as a reduced-resolution sub-image (the DNG way): the camera's own JPEG of the shot, kept by
+    /// a pixel-shift merge so the colour look can be fitted to it as it is for the camera's raw. Off by default.
+    pub preview: Option<DngPreview>,
+}
+
+/// A camera JPEG kept in a DNG as its preview.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DngPreview {
+    /// The JPEG file, as the camera wrote it.
+    pub jpeg: Vec<u8>,
+    /// The colour space of the JPEG when the camera, not the JPEG, says it (`PreviewColorSpace`).
+    pub color_space: Option<crate::PreviewColorSpace>,
+}
+
+/// The sub-image IFD of a preview: the JPEG as one strip.
+fn preview_ifd(p: &DngPreview) -> Option<IfdBuilder> {
+    let (w, h, components) = crate::preview::jpeg_frame(&p.jpeg)?;
+    let mut ifd = IfdBuilder::new();
+    ifd.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![1]));
+    ifd.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
+    ifd.set(t::IMAGE_LENGTH, Value::Long(vec![h]));
+    ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![8; usize::from(components)]));
+    ifd.set(t::COMPRESSION, Value::Short(vec![7]));
+    ifd.set(t::PHOTOMETRIC, Value::Short(vec![if components == 1 { 1 } else { 6 }]));
+    ifd.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![u16::from(components)]));
+    ifd.set(t::PLANAR_CONFIGURATION, Value::Short(vec![1]));
+    if let Some(space) = p.color_space {
+        ifd.set(t::PREVIEW_COLOR_SPACE, Value::Long(vec![if space == crate::PreviewColorSpace::AdobeRgb { 3 } else { 2 }]));
+    }
+    ifd.set_image(ImageData::Strips { rows_per_strip: h, strips: vec![p.jpeg.clone()] });
+    Some(ifd)
 }
 
 impl Default for DngWriteOptions {
     fn default() -> Self {
-        Self { compression: DngCompression::Lj92 { tile: 256 }, order: ByteOrder::Little, xmp: None, unique_camera_model: None }
+        Self {
+            compression: DngCompression::Lj92 { tile: 256 },
+            order: ByteOrder::Little,
+            xmp: None,
+            unique_camera_model: None,
+            exif: false,
+            preview: None,
+        }
     }
+}
+
+/// The Exif IFD of a DNG from `m`: `None` when there is nothing to put in it.
+fn exif_ifd(m: &lcc_meta::Metadata) -> Option<IfdBuilder> {
+    let mut e = IfdBuilder::new();
+    if let Some(d) = m.capture_time.filter(lcc_meta::DateTime::is_full) {
+        let exif = d.to_exif();
+        let sub = format!("{:03}", d.millis);
+        let offset = d.offset_minutes.map(|o| format!("{}{:02}:{:02}", if o < 0 { '-' } else { '+' }, o.unsigned_abs() / 60, o.unsigned_abs() % 60));
+        for (date, subsec, off) in [
+            (t::DATE_TIME_ORIGINAL, t::SUBSEC_TIME_ORIGINAL, t::OFFSET_TIME_ORIGINAL),
+            (t::DATE_TIME_DIGITIZED, t::SUBSEC_TIME_DIGITIZED, t::OFFSET_TIME_DIGITIZED),
+        ] {
+            e.set(date, Value::Ascii(exif.clone()));
+            e.set(subsec, Value::Ascii(sub.clone()));
+            if let Some(o) = &offset {
+                e.set(off, Value::Ascii(o.clone()));
+            }
+        }
+    }
+    if let Some(v) = m.exposure_time.filter(|v| *v > 0.0) {
+        e.set(t::EXPOSURE_TIME, Value::Rational(vec![rational(v)]));
+    }
+    if let Some(v) = m.f_number.filter(|v| *v > 0.0) {
+        e.set(t::F_NUMBER, Value::Rational(vec![rational(v)]));
+    }
+    if let Some(v) = m.iso {
+        e.set(t::ISO_SPEED, Value::Short(vec![v.min(u32::from(u16::MAX)) as u16]));
+    }
+    if let Some(v) = m.exposure_bias {
+        e.set(t::EXPOSURE_BIAS, Value::SRational(vec![srational(v)]));
+    }
+    if let Some(v) = m.focal_length.filter(|v| *v > 0.0) {
+        e.set(t::FOCAL_LENGTH, Value::Rational(vec![rational(v)]));
+    }
+    if let Some(v) = m.focal_length_35mm.filter(|v| *v >= 1.0) {
+        e.set(t::FOCAL_LENGTH_35MM, Value::Short(vec![v.round().min(65535.0) as u16]));
+    }
+    if let Some(s) = m.lens_make.clone().filter(|s| !s.is_empty()) {
+        e.set(t::LENS_MAKE, Value::Ascii(s));
+    }
+    if let Some(s) = m.lens_model.clone().filter(|s| !s.is_empty()) {
+        e.set(t::LENS_MODEL, Value::Ascii(s));
+    }
+    (!e.entries.is_empty()).then_some(e)
 }
 
 fn srat_mat(m: &Mat3) -> Value {
@@ -278,6 +365,14 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     ifd.set(t::SOFTWARE, Value::Ascii(software()));
     let xmp = opts.xmp.clone().unwrap_or_else(|| lcc_meta::write_xmp(&raw.metadata, None));
     ifd.set(t::XMP, Value::Byte(xmp.into_bytes()));
+    if opts.exif
+        && let Some(e) = exif_ifd(&raw.metadata)
+    {
+        ifd.set_child(t::EXIF_IFD, e);
+    }
+    if let Some(preview) = opts.preview.as_ref().and_then(preview_ifd) {
+        ifd.add_sub_ifd(preview);
+    }
 
     if let Some(cfa) = &raw.cfa {
         ifd.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![cfa.height as u16, cfa.width as u16]));
@@ -613,7 +708,17 @@ pub fn write_rendered_dng(
         lens_metadata: Default::default(),
     };
     let order = ByteOrder::Little;
-    write_dng(&raw, &DngWriteOptions { compression: DngCompression::Deflate { tile: 256, half: true }, order, xmp, unique_camera_model: None })
+    write_dng(
+        &raw,
+        &DngWriteOptions {
+            compression: DngCompression::Deflate { tile: 256, half: true },
+            order,
+            xmp,
+            unique_camera_model: None,
+            exif: false,
+            preview: None,
+        },
+    )
 }
 
 #[cfg(test)]

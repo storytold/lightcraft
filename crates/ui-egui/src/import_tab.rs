@@ -16,6 +16,7 @@
 //! sources and the settings a tap away in the bar. Ported by hand from OneSlips dd7bb41aa,
 //! db061a0a7, 437ed003f, 6e4fa44d0, 12d31e4fc.
 
+use crate::json_ext::JsonExt as _;
 use egui::{Align2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -248,11 +249,11 @@ pub fn start(app: &mut LccApp, p: &Value) -> Result<Value, String> {
     let mut params = settings.opts.params()?;
     // a new album named in the settings is made with the first batch (a later batch joins it)
     if settings.opts.album.is_none() && !settings.opts.new_album.trim().is_empty() {
-        params["albumName"] = json!(settings.opts.new_album.trim());
+        *params.field_mut("albumName") = json!(settings.opts.new_album.trim());
     }
     // checked now, not halfway through: an unknown preset or template refuses the import
     let mut check = params.clone();
-    check["paths"] = json!(paths.first().cloned().into_iter().collect::<Vec<_>>());
+    *check.field_mut("paths") = json!(paths.first().cloned().into_iter().collect::<Vec<_>>());
     lcc_engine::cmd::library::import_params(&app.session, &check).map_err(|e| e.to_string())?;
     // a browse still reading the folder stops: its files are what is imported now
     if app.import.as_ref().is_some_and(crate::import::ImportTask::is_browse) {
@@ -357,7 +358,7 @@ pub fn use_preset(app: &mut LccApp, name: &str) -> Result<Value, String> {
 pub fn save_preset(app: &mut LccApp, name: &str) -> Result<Value, String> {
     let settings = app.ui.settings.import_tab.to_preset();
     let r = app.session.execute("import.savePreset", &json!({"name": name, "settings": settings})).map_err(|e| e.to_string())?;
-    app.ui.settings.import_tab.preset_name = r["name"].as_str().unwrap_or(name).to_string();
+    app.ui.settings.import_tab.preset_name = r.field("name").as_str().unwrap_or(name).to_string();
     Ok(r)
 }
 
@@ -380,7 +381,7 @@ pub fn configure(app: &mut LccApp, p: &Value) -> Result<Value, String> {
                 s.previews = t.to_string();
             }
             "candidates" | "checked" | "trashed" | "sources" | "recipe" | "immich" => return Err(format!("`{k}` is not a setting")),
-            _ if opts.get(k).is_some() => opts[k] = v.clone(),
+            _ if opts.get(k).is_some() => *opts.field_mut(k) = v.clone(),
             _ => return Err(format!("unknown import setting `{k}`")),
         }
     }
@@ -636,10 +637,18 @@ pub(crate) fn test_drive() -> std::path::PathBuf {
     std::env::temp_dir().join(format!("app-test-drive-{}", std::process::id()))
 }
 
+/// A card mounted inside the test drive, as `/run/media/me/CARD` lies inside `/`: listed as a drive of its own too.
+pub(crate) fn test_card() -> std::path::PathBuf {
+    test_drive().join("Card")
+}
+
 pub(crate) fn list_drives(_: &str) -> Vec<(String, String)> {
     // tests never touch this machine's drives (mapped network drives can be slow to answer)
     if cfg!(test) {
-        return vec![("Test drive".into(), test_drive().to_string_lossy().to_string())];
+        return vec![
+            ("Test drive".into(), test_drive().to_string_lossy().to_string()),
+            ("Test card".into(), test_card().to_string_lossy().to_string()),
+        ];
     }
     let mut v: Vec<(String, String)> = Vec::new();
     if cfg!(windows) {
@@ -702,7 +711,9 @@ fn sources(app: &mut LccApp, ui: &mut egui::Ui) {
             });
         }
         for (label, path) in &drives {
-            crate::panels::left::folder_tree(app, ui, "drives", label, path, 0.0, current.as_deref(), true, false);
+            // each drive its own tree (`place` = the drive): a card lies inside the disk it is mounted on too,
+            // and its two rows must not share an arrow (issue #1234)
+            crate::panels::left::folder_tree(app, ui, &format!("drives:{path}"), label, path, 0.0, current.as_deref(), true, false);
         }
         heading(ui, "Folders");
         crate::panels::left::local_body(app, ui);
@@ -810,7 +821,7 @@ fn bar(app: &mut LccApp, ui: &mut egui::Ui, wide: bool, pane: &mut Pane) {
         if crate::button::Button::new(&import_label).primary().enabled(n > 0).widget("importGo").show(ui).on_hover_text(&import_tip).clicked() {
             match app.run("import.start", json!({})) {
                 Ok(v) => {
-                    let n = v["importing"].as_u64().unwrap_or(0);
+                    let n = v.field("importing").as_u64().unwrap_or(0);
                     app.toast(ui.ctx(), crate::i18n::tr_format!("Importing {n} photos…", n = n));
                 }
                 Err(e) => app.toast(ui.ctx(), e),

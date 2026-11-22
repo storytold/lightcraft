@@ -138,7 +138,9 @@ impl Session {
 /// portrait-shaped crop, nor a vertical a landscape one), its size is the same fraction of the
 /// largest crop of that shape at that angle as on the active photo, and its centre keeps its
 /// normalized place in the frame, moved towards the middle only as far as it must to stay inside
-/// the rotated photo. An uncropped photo gives each photo its own whole frame at that angle.
+/// the rotated photo. An uncropped photo gives each photo its own whole frame at that angle, and an
+/// "Original" lock takes the photo's own shape. Sync Settings, Auto Sync, Paste and Paste from
+/// Previous all refit a crop here.
 pub(crate) fn synced_crop(new: &Crop, adims: (f64, f64), odims: (f64, f64)) -> Crop {
     let (aw, ah) = (adims.0.max(1.0), adims.1.max(1.0));
     let (ow, oh) = (odims.0.max(1.0), odims.1.max(1.0));
@@ -149,7 +151,10 @@ pub(crate) fn synced_crop(new: &Crop, adims: (f64, f64), odims: (f64, f64)) -> C
     let wide = or > 1.0;
     // the shape turned to the photo's own orientation (a square stays a square)
     let orient = |s: f64| if s != 1.0 && (s > 1.0) != wide { 1.0 / s } else { s };
-    let aspect = new.aspect.map(|(x, y)| if x != y && (x > y) != wide { (y, x) } else { (x, y) });
+    // an "Original" lock takes this photo's own shape (and becomes its Original lock, issue #3056)
+    let original = new.aspect.is_some_and(|a| a == Crop::original_aspect(aw, ah));
+    let aspect =
+        if original { Some(Crop::original_aspect(ow, oh)) } else { new.aspect.map(|(x, y)| if x != y && (x > y) != wide { (y, x) } else { (x, y) }) };
     let angle = new.geometry.angle;
     let full = crop_fit_angle(aw, ah, angle, None).rect;
     let r = new.geometry.rect;
@@ -165,7 +170,7 @@ pub(crate) fn synced_crop(new: &Crop, adims: (f64, f64), odims: (f64, f64)) -> C
     let largest = crop_fit_angle(aw, ah, angle, Some(own)).rect_px(aw, ah);
     let frac = (px.width() / largest.width()).clamp(MIN_CROP_FRACTION, 1.0);
     let frac = if frac.is_finite() { frac } else { 1.0 };
-    let fit = crop_fit_angle(ow, oh, angle, Some(orient(own)));
+    let fit = crop_fit_angle(ow, oh, angle, Some(if original { ow / oh } else { orient(own) }));
     let f = fit.rect_px(ow, oh);
     let (cw, ch) = (f.width() * frac, f.height() * frac);
     let at = |c: Point| CropGeometry { rect: Rect::from_center(c, cw, ch).scale(1.0 / ow, 1.0 / oh), angle };
