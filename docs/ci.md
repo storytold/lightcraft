@@ -173,6 +173,24 @@ temporary step scripts (`shell: powershell`) may run. After changing `.env`, res
 
 If the runner is offline, jobs for our own branches wait in the queue; post a local result instead (below).
 
+## Network services in tests: loopback mocks
+
+Nothing in the test suite talks to the internet. Code that calls a remote service is tested against an in-process
+`std::net::TcpListener` on `127.0.0.1` (no extra dependencies), started by the test and dropped with it:
+
+- **Generative fill providers** (`crates/genfill/src/cloud/`): `mock.rs` is a friendly provider for the happy paths;
+  `tests_hostile.rs` scripts a misbehaving one (401/402/403/429/5xx, moderation, replies that are not JSON or not
+  PNG, a PNG claiming 100000×100000 pixels, truncated and over-cap replies, a result address on another host).
+- **Publish uploads** (Immich): `crates/immich/src/tests.rs` (client and retries) and
+  `crates/engine/src/tests_immich_sync.rs` (the `publish.*` commands end to end, including a run while the server
+  is down followed by one that sends each photo once).
+- **IPP printers** (`crates/print`): `testprinter.rs` is a well-behaved IPP Everywhere printer;
+  `tests_mockprinter.rs` answers Print-Job with IPP errors, HTTP errors, a closed connection, non-IPP, truncated
+  and oversized replies.
+- **Slideshow export** runs in the SIL harness (`docs/testing-sil.md`), with no network.
+
+Every such case must end in an error that names what happened, never a panic, a hang or an input-sized allocation.
+
 ## Checked in person, not on CI
 
 - **macOS LAN pairing check** (peer sync): finding and pairing devices over the LAN times out on the macOS CI runner,
