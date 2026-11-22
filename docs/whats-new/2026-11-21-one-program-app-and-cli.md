@@ -1,0 +1,2 @@
+### Smaller downloads: the command-line tool is the app
+- The command-line tool is no longer a second copy of the app. On macOS, Linux and FreeBSD it is a link to the app's program, which works as the tool when started under the tool's name; on Windows it is a small launcher that runs the app as the tool. Installations are about 170 to 250 MB smaller, downloads shrink too, and the tool's commands, output and exit codes are unchanged.

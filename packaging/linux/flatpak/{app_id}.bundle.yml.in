@@ -51,7 +51,8 @@ modules:
     buildsystem: simple
     build-commands:
       - install -Dm755 bin/{{binary}} /app/bin/{{binary}}
-      - install -Dm755 bin/{{cli_binary}} /app/bin/{{cli_binary}}
+      # the tarball's CLI is a link to the app's executable: kept a link, not copied
+      - ln -s {{binary}} /app/bin/{{cli_binary}}
       - install -Dm644 share/applications/{{app_id}}.desktop /app/share/applications/{{app_id}}.desktop
       # The same MIME definitions the deb/rpm install.
       - install -Dm644 share/mime/packages/{{app_id}}.xml /app/share/mime/packages/{{app_id}}.xml

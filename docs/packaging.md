@@ -16,7 +16,7 @@
 | `.deb`, `.rpm` | `packaging/linux/package.sh` + `nfpm.yaml.in` | release.yml | needs `nfpm`; runtime deps (Vulkan/EGL, X11/Wayland) as depends/recommends |
 | `.tar.gz` (FHS tree) | `packaging/linux/package.sh` | release.yml | input for the Flatpak bundle |
 | Flatpak bundle | `packaging/linux/flatpak-bundle.sh`, `flatpak/<app_id>.yml.in` (source build), `.bundle.yml.in` (from the tarball) | release.yml | installed and smoke-tested in CI; not on Flathub |
-| macOS `.dmg` (the app, with the CLI and the craft-fonts faces inside) | `packaging/macos/package.sh` | release.yml (`arm64`, `x64` and `universal`, from one build of each architecture) | released builds are ad-hoc signed only (no Apple developer certificate, not notarized); signing/notarization run only if the secrets are set |
+| macOS `.dmg` (the app, with the CLI link and the craft-fonts faces inside) | `packaging/macos/package.sh` | release.yml (`arm64`, `x64` and `universal`, from one build of each architecture) | released builds are ad-hoc signed only (no Apple developer certificate, not notarized); signing/notarization run only if the secrets are set |
 | Windows `.msi` | `packaging/windows/package.ps1`, `app.wxs.in` | release.yml (x64), windows-arm64.yml (installs and uninstalls) | released builds are unsigned; Authenticode signing via `sign.ps1` runs only if signing secrets are set |
 | FreeBSD `.tar.gz` | `packaging/freebsd/package.sh` | release.yml / freebsd.yml | `--dry-run` works on any OS (packaging-lint) |
 | Web (static) | `packaging/web/package.sh` | release.yml | hosting notes in `packaging/web/HOSTING.md` |
@@ -29,6 +29,41 @@ AppStream metadata (`<app_id>.metainfo.xml.in`), the PTP udev rule, which descri
 tethering, Edit In, actions and plug-in features. `packaging-lint.yml` validates the templates
 (`desktop-file-validate`, `appstreamcli`, Flatpak manifest parity). `cargo xtask install` installs locally under
 `~/.local` without a package.
+
+### One program for the app and the CLI
+
+Every desktop package carries one build of the engine: the app's executable, which is also `<cli>`. The CLI is a
+library (`apps/cli`, `lcc_cli::main_with`) that the app's `main` runs before anything of the app (no log file, no
+window, no GPU), when the program is started under the CLI's name (`<cli>`, `<cli>.exe`, case aside) or with `--cli`
+as its first argument. Before this, the CLI was a second program of about the app's size (231 MB next to 239 MB on
+Linux x86_64, 26.46.3).
+
+| Platform | `<cli>` is | Made by |
+|---|---|---|
+| Linux tarball, `.deb`, `.rpm`, AppImage | a relative link `usr/bin/<cli>` → `<binary>` | `stage_binaries` (`packaging/env.sh`); `nfpm.yaml.in` (a `symlink` entry) |
+| Flatpak | a link `/app/bin/<cli>` → `<binary>` | both `flatpak/<app_id>*.yml.in` manifests |
+| FreeBSD | a relative link `bin/<cli>` → `<binary>` | `stage_binaries` |
+| macOS | a relative link `Contents/MacOS/<cli>` → the bundle's executable, covered by the bundle's signature (`codesign --verify --strict --deep` accepts it) | `packaging/macos/package.sh` |
+| Windows `.msi` and portable zip | `<cli>.exe`, a console launcher of about half a megabyte that starts `<binary>.exe --cli …` beside it and passes on its standard input, output, error and exit code; the app runs in a job that ends it with the launcher, so a Ctrl+C or a closed console stops both (programs the app started, such as an external editor, keep running) | `apps/cli-launcher`, `crates/winjob`, `packaging/windows/package.ps1` |
+| Nix | a link to the wrapped `<binary>` (the wrapper keeps the name it was started by) | `nix/package.nix` |
+
+- **Windows needs the launcher** because the app is a GUI-subsystem program: a terminal doesn't wait for it and its
+  output has no console. The launcher is a console program (`package.ps1` checks both PE subsystems), and the app
+  it starts inherits the launcher's standard handles. Ctrl+C in the terminal reaches only the launcher, so the app
+  runs in a kill-on-close job object (`crates/winjob`) and ends with it, however the launcher ends. Programs the
+  app starts stay out of the job and keep running. Its tests run only on Windows and have not been run yet.
+- **The name decides.** A link of the user's own must keep the name `<cli>`: a link named otherwise starts the app.
+  The macOS manual's `ln -sf …/Contents/MacOS/<cli> ~/.local/bin/<cli>` keeps it.
+- **Headless machines:** the program hard-links only the C library, `libm`, `libgcc_s` and the loader; X11, Wayland,
+  xkbcommon, EGL, GL and Vulkan are opened at run time, and only by the app's window. Started as `<cli>` it runs
+  in a bare Ubuntu base chroot with none of them installed (checked 2026-11-21, arm64).
+- **Cost:** none measurable. Started as `<cli>` it runs `--version` in 1.25 ms against 1.21 ms for the old separate
+  CLI, and `commands --json` in 28.2 ms for both, with about 1 MB more peak memory (arm64 Linux, stripped release
+  builds, median of 50 runs).
+- **Updates:** the CLI marks its process (`lcc_updater::mark_command_line_tool`), so inside the macOS bundle it
+  still never installs an update over the app, though the executable it runs is the app's.
+- `cargo xtask install` and `cargo xtask package` still build and copy the two programs separately; the `app-cli`
+  binary stays for development, the tests and xtask.
 
 ### Symbols
 

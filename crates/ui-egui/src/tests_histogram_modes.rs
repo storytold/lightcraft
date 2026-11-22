@@ -372,6 +372,62 @@ fn a_clipping_indicator_previews_the_overlay_it_stands_for() {
     assert_eq!(crate::panels::detail::view_overlay(&h.app, &d, false), lcc_pipeline::Overlay::Clipping(None));
 }
 
+/// A click on a clipping indicator ends the preview it was showing: with the pointer still resting on
+/// it, switching the warnings off takes the mask off the photo, and the preview only comes back once
+/// the pointer has left and returned (#1348).
+#[test]
+fn a_click_on_a_clipping_indicator_ends_its_preview_until_the_pointer_leaves() {
+    fn overlay(h: &Headless) -> lcc_pipeline::Overlay {
+        let id = h.app.session.active().expect("an active photo");
+        let d = (*h.app.session.develop_of(id).unwrap_or_default()).clone();
+        crate::panels::detail::view_overlay(&h.app, &d, false)
+    }
+    /// Puts the pointer on the highlight indicator and leaves it there for the preview's rest.
+    fn rest_on_the_indicator(h: &mut Headless, fx: f64) {
+        let r = h.request("ui.hoverWidget", json!({"id": "histogram:highlights", "fx": fx, "fy": 0.5}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.time += crate::panels::edit::CLIPPING_PREVIEW_REST_S;
+        h.step();
+    }
+    fn click_the_indicator(h: &mut Headless) {
+        let r = h.request("ui.clickWidget", json!({"id": "histogram:highlights"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+    }
+    let mut h = edit_panel();
+    h.step();
+    rest_on_the_indicator(&mut h, 0.5);
+    assert!(h.app.clipping_preview && !h.app.ui.show_clipping, "the resting pointer previews the mask");
+
+    // on: the warnings themselves put the mask on the photo
+    click_the_indicator(&mut h);
+    assert!(h.app.ui.show_clipping);
+    assert_eq!(overlay(&h), lcc_pipeline::Overlay::Clipping(None));
+    // off again, the pointer never having moved: the mask goes, however long the pointer stays
+    click_the_indicator(&mut h);
+    assert!(!h.app.ui.show_clipping, "the second click turns the warnings off");
+    for _ in 0..3 {
+        h.time += crate::panels::edit::CLIPPING_PREVIEW_REST_S * 2.0;
+        h.step();
+        assert!(!h.app.clipping_preview, "no preview under the pointer that clicked");
+        assert_eq!(overlay(&h), lcc_pipeline::Overlay::None, "the click takes the mask off the photo");
+    }
+    // moving inside the indicator is not leaving it
+    rest_on_the_indicator(&mut h, 0.7);
+    assert!(!h.app.clipping_preview);
+    assert_eq!(overlay(&h), lcc_pipeline::Overlay::None);
+
+    // away and back: the next rest previews again
+    let r = h.request("ui.move", json!({"x": 700.0, "y": 500.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    rest_on_the_indicator(&mut h, 0.5);
+    assert!(h.app.clipping_preview && !h.app.ui.show_clipping, "a new hover previews again");
+    assert_eq!(overlay(&h), lcc_pipeline::Overlay::Clipping(None));
+}
+
 /// The Waveform overlays the loupe photo's red, green and blue columns left to right in one track, the RGB
 /// Parade puts the three channels in three side-by-side tracks of their own colours; only the loupe's histogram keeps the
 /// waveform planes, thumbnails' don't.
