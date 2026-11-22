@@ -1,0 +1,10 @@
+{
+  "about": "Summaries of our own CPU inference on procedural lcc-scenes photos (tests/model_reference.rs). Per output: [elements, mean, std, min, max, share above threshold]. mean/std/min/max must match within rtol of the output's range, the share within share_tol. Regenerate with <PREFIX>_MODEL_REF_WRITE=1.",
+  "models": {
+    "sam2.1-hiera-tiny": { "rtol": 0.005, "share_tol": 0.005, "outputs": {} },
+    "birefnet-lite": { "rtol": 0.005, "share_tol": 0.005, "outputs": {} },
+    "eomt-s-coco": { "rtol": 0.005, "share_tol": 0.005, "outputs": {} },
+    "mediapipe-selfie-multiclass": { "rtol": 0.002, "share_tol": 0.005, "outputs": {} },
+    "mediapipe-face-landmarker": { "rtol": 0.002, "share_tol": 0.005, "outputs": {} }
+  }
+}
