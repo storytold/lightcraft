@@ -153,12 +153,13 @@ fn a_new_dated_folder_in_a_tree_of_folders_is_found() {
     let changed: Vec<&str> = r["changed"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
     assert!(changed.len() == 1 && changed[0].ends_with("2026"), "{r}");
     assert_eq!(crate::folder_watch::new_in(&s, &dir.path("Photos/2026")), Some(1), "{r}");
-    // and a new year folder too; with new files: add, the scan of the tree adds both waiting photos
+    // and a new year folder too; with new files: add, only the new folder's photos are added (the
+    // day folder found earlier waits for Synchronize Folder)
     s.execute("folder.watchPreferences", &json!({"newFiles": "add"})).unwrap();
     write_png(&dir.path("Photos/2027/01-01/d.png"), 4);
     let r = s.execute("folder.poll", &json!({})).unwrap();
-    assert_eq!(r["imported"], 2, "{r}");
-    assert_eq!(s.catalog.len(), 4);
+    assert_eq!(r["imported"], 1, "{r}");
+    assert_eq!(s.catalog.len(), 3);
 }
 
 /// Two photo trees under one broad folder (a home folder holding `Pictures/x` and `Desktop/y` among
@@ -197,4 +198,42 @@ fn a_home_folder_or_disk_root_is_never_a_watched_parent() {
     assert!(!broad_place("/Users/me/Pictures", Some("/Users/me")));
     assert!(!broad_place("/Users/me", Some("")));
     assert!(!broad_place("/Users/me", None));
+}
+
+/// A new subfolder of a watched parent scans only that subfolder: new files in a sibling the
+/// library doesn't hold (an `exports/` folder) are not counted or imported.
+#[test]
+fn a_new_subfolder_scans_only_itself_not_its_siblings() {
+    let dir = Scratch::new("narrow");
+    write_png(&dir.path("Photos/2026/11-18/a.png"), 1);
+    write_png(&dir.path("Photos/2026/11-19/b.png"), 2);
+    write_png(&dir.path("Photos/2026/11-17/z.png"), 9);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [dir.path("Photos/2026/11-18"), dir.path("Photos/2026/11-19"), dir.path("Photos/2026/11-17")]}))
+        .unwrap();
+    s.execute("folder.watchPreferences", &json!({"newFiles": "add"})).unwrap();
+    std::fs::create_dir_all(dir.path("Photos/2026/exports")).unwrap();
+    s.execute("folder.poll", &json!({})).unwrap();
+    write_png(&dir.path("Photos/2026/exports/out.png"), 3);
+    write_png(&dir.path("Photos/2026/11-20/c.png"), 4);
+    let r = s.execute("folder.poll", &json!({})).unwrap();
+    assert_eq!(r["imported"], 1, "only the new day folder: {r}");
+    assert!(s.catalog.len() == 4, "{r}");
+}
+
+/// Folders lost and gained in one poll (two gone, one new): the new one is still found.
+#[test]
+fn a_new_folder_is_found_when_others_went_in_the_same_poll() {
+    let dir = Scratch::new("lostgained");
+    for (i, d) in ["a", "b", "c", "d"].into_iter().enumerate() {
+        write_png(&dir.path(&format!("P/{d}/x.png")), 10 + i as u8);
+    }
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [dir.path("P")]})).unwrap();
+    s.execute("folder.poll", &json!({})).unwrap();
+    std::fs::remove_dir_all(dir.path("P/a")).unwrap();
+    std::fs::remove_dir_all(dir.path("P/b")).unwrap();
+    write_png(&dir.path("P/e/y.png"), 2);
+    let r = s.execute("folder.poll", &json!({})).unwrap();
+    assert_eq!(crate::folder_watch::new_in(&s, &dir.path("P")), Some(1), "{r}");
 }

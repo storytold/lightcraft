@@ -2605,9 +2605,10 @@ pub fn specs() -> Vec<CommandSpec> {
                     if known.contains(&ps) {
                         continue;
                     }
-                    // each file is tried once at a size (a non-photo isn't retried every scan); one
-                    // whose size changed since (a partial copy that went on, #1302) is tried again
-                    if s.auto_import_tried.get(&ps) == Some(&size) {
+                    // each file is tried once at a size and modification time (a non-photo isn't
+                    // retried every scan); one that changed since (a partial copy that went on, #1302,
+                    // or one preallocated at its final size and filled in later) is tried again
+                    if s.auto_import_tried.get(&ps) == Some(&tried_stamp(&ps, size)) {
                         continue;
                     }
                     let seen = s.auto_import_seen.insert(ps.clone(), size);
@@ -2619,7 +2620,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Ok(json!({"imported": [], "folder": folder}));
                 }
                 for (f, size) in &fresh {
-                    s.auto_import_tried.insert(f.clone(), *size);
+                    s.auto_import_tried.insert(f.clone(), tried_stamp(f, *size));
                 }
                 let fresh: Vec<String> = fresh.into_iter().map(|(f, _)| f).collect();
                 let mode = if s.import_defaults.auto_copy { "copy" } else { "add" };
@@ -3306,3 +3307,18 @@ mod source_history_tests;
 #[cfg(test)]
 #[path = "library/tests_advanced_search.rs"]
 mod advanced_search_tests;
+
+/// What Auto Import remembers of a file it tried: its size and modification time folded into one
+/// number (the size alone where the time can't be read), so a file rewritten at the same size
+/// (a copier that preallocates the final size, then fills it in) is tried again.
+pub(crate) fn tried_stamp(path: &str, size: u64) -> u64 {
+    let mtime = std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
+    match mtime {
+        Some(t) => size ^ t.rotate_left(29).wrapping_mul(0x9e37_79b9_7f4a_7c15),
+        None => size,
+    }
+}

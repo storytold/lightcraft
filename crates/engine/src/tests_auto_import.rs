@@ -177,3 +177,21 @@ fn hostile_listing_entries_are_skipped() {
         assert!(r.get("import").is_none_or(|i| i["paths"].as_array().is_some_and(|p| p.iter().all(|p| p == "c.jpg"))), "{r}");
     }
 }
+
+/// A copier that preallocates the final size and fills it in later: the file tried while it was
+/// still empty bytes is tried again once it's rewritten at the same size (its time changed).
+#[test]
+fn a_tried_file_rewritten_at_the_same_size_is_tried_again() {
+    let dir = tmp("prealloc");
+    put(&dir, "w.jpg");
+    let mut s = watching(&dir);
+    let scan = |s: &mut Session| s.execute("library.autoImportScan", &json!({"start": false})).unwrap().get("import").cloned();
+    assert!(scan(&mut s).is_none());
+    assert!(scan(&mut s).is_some(), "handed to an import");
+    assert!(scan(&mut s).is_none(), "not again unchanged");
+    std::fs::write(dir.join("w.jpg"), b"DATA").unwrap();
+    let f = std::fs::File::options().write(true).open(dir.join("w.jpg")).unwrap();
+    f.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60)).unwrap();
+    drop(f);
+    assert!(scan(&mut s).is_some(), "same size, rewritten: tried again");
+}

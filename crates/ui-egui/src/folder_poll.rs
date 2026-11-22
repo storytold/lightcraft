@@ -35,6 +35,8 @@ pub struct PollTask {
     scanning: usize,
     /// New files counted by this poll (for the notice).
     found: Vec<(String, usize)>,
+    /// The poll's changed folders and narrowed parents ([`folder_watch::keep_new_in_scope`]).
+    scope: (Vec<String>, std::collections::BTreeMap<String, Vec<String>>),
     guard: TaskGuard,
 }
 
@@ -76,7 +78,7 @@ pub fn start(app: &mut LccApp) {
     let library = folder_watch::library_token(&app.session);
     let guard = app.session.activity.start("folderPoll", "Checking folders for new photos", Cancel::Flag(cancel.clone()));
     app.folder_poll.last = Some((Instant::now(), library.clone()));
-    app.folder_poll.task = Some(PollTask { rx, cancel, library, scanning: 0, found: Vec::new(), guard });
+    app.folder_poll.task = Some(PollTask { rx, cancel, library, scanning: 0, found: Vec::new(), scope: Default::default(), guard });
 }
 
 /// Called every frame: start a poll when it is due (`came_forward`: the app was just brought to
@@ -135,6 +137,7 @@ fn collect(app: &mut LccApp, ctx: &egui::Context) {
 /// Keep the listings, then scan the folders that changed, one after the other on a worker.
 fn scan_changed(app: &mut LccApp, polled: Polled) {
     let changed = polled.changed.clone();
+    let narrow = polled.narrow.clone();
     app.session.folder_stamps = polled.stamps;
     if let Err(e) = app.session.save_folder_stamps() {
         log::warn!("folder poll: {e}");
@@ -151,6 +154,7 @@ fn scan_changed(app: &mut LccApp, polled: Polled) {
         return;
     }
     task.scanning = inputs.len();
+    task.scope = (changed, narrow);
     let (tx, rx) = std::sync::mpsc::channel();
     task.rx = rx;
     let cancel = task.cancel.clone();
@@ -174,14 +178,20 @@ fn scan_changed(app: &mut LccApp, polled: Polled) {
     job();
 }
 
-fn took_scan(app: &mut LccApp, changes: FolderChanges) {
+fn took_scan(app: &mut LccApp, mut changes: FolderChanges) {
     if let Some(task) = app.folder_poll.task.as_mut() {
         task.scanning = task.scanning.saturating_sub(1);
+        folder_watch::keep_new_in_scope(&mut changes, &task.scope.0, &task.scope.1);
     }
     if changes.offline {
         return;
     }
-    let n = lcc_engine::folder_watch::record_new(&mut app.session, &changes.path, changes.new.len());
+    let n = lcc_engine::folder_watch::record_scan(
+        &mut app.session,
+        &changes.path,
+        changes.new.len(),
+        &app.folder_poll.task.as_ref().map(|t| t.scope.1.clone()).unwrap_or_default(),
+    );
     if n == 0 {
         return;
     }

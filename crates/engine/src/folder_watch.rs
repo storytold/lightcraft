@@ -90,7 +90,7 @@ impl WatchPrefs {
 }
 
 /// What a folder's listing looked like.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Stamp {
     /// The folder's modification time (ms since the epoch), when the file system says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -99,6 +99,10 @@ pub struct Stamp {
     pub entries: u64,
     /// How many entries it has.
     pub count: u64,
+    /// A [`WatchKind::Parent`]'s visible subfolder names (so a poll can tell which are new; empty
+    /// in stamps kept by an older version).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subdirs: Vec<String>,
 }
 
 /// Stamps by folder, as the catalog spells it.
@@ -162,7 +166,8 @@ pub fn stamp_of(dir: &str, kind: WatchKind) -> Option<Stamp> {
             fnv(&mut h, n.as_bytes());
             fnv(&mut h, b"/\0");
         }
-        return Some(Stamp { mtime: None, entries: h, count: names.len() as u64 });
+        let subdirs = names.iter().map(|(n, _)| n.clone()).collect();
+        return Some(Stamp { mtime: None, entries: h, count: names.len() as u64, subdirs });
     }
     names.sort();
     let mut h = 0xcbf2_9ce4_8422_2325_u64;
@@ -175,7 +180,7 @@ pub fn stamp_of(dir: &str, kind: WatchKind) -> Option<Stamp> {
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
-    Some(Stamp { mtime, entries: h, count: names.len() as u64 })
+    Some(Stamp { mtime, entries: h, count: names.len() as u64, subdirs: Vec::new() })
 }
 
 /// How a folder is watched.
@@ -205,7 +210,9 @@ fn too_broad(w: &WatchedDir) -> bool {
     if w.kind != WatchKind::Parent || cfg!(target_arch = "wasm32") {
         return false;
     }
-    let home = std::env::var("HOME").ok().filter(|h| !h.is_empty()).or_else(|| std::env::var("USERPROFILE").ok());
+    // (Windows: USERPROFILE first; Git Bash/MSYS set HOME to a `/c/Users/x` path that never matches)
+    let var = |k: &str| std::env::var(k).ok().filter(|h| !h.is_empty());
+    let home = if cfg!(windows) { var("USERPROFILE").or_else(|| var("HOME")) } else { var("HOME").or_else(|| var("USERPROFILE")) };
     if broad_place(&w.path, home.as_deref()) {
         return true;
     }
@@ -272,6 +279,10 @@ pub struct Polled {
     pub listed: usize,
     /// Folders that couldn't be listed (offline).
     pub offline: usize,
+    /// For a changed [`WatchKind::Parent`]: its subfolders that are new since the last poll. Only
+    /// new files inside them (or inside another changed folder) count from the parent's scan, so
+    /// a new day folder doesn't import new files from a folder beside it that isn't the library's.
+    pub narrow: BTreeMap<String, Vec<String>>,
 }
 
 /// Stamp each of `dirs` and compare with `prev` (reads only the folders' listings). A folder
@@ -287,7 +298,7 @@ pub fn poll_with(dirs: &[WatchedDir], prev: &Stamps, cancel: &AtomicBool, mut st
     let mut out = Polled { stamps: Stamps::new(), ..Default::default() };
     for w in dirs {
         let d = &w.path;
-        let old = prev.get(d).copied();
+        let old = prev.get(d).cloned();
         if cancel.load(Ordering::Relaxed) {
             if let Some(o) = old {
                 out.stamps.insert(d.clone(), o);
@@ -297,10 +308,29 @@ pub fn poll_with(dirs: &[WatchedDir], prev: &Stamps, cancel: &AtomicBool, mut st
         match stamp(w) {
             Some(s) => {
                 out.listed += 1;
-                // a parent that only lost subfolders: nothing new to find (a gone folder is
-                // offline, not a reason to rescan the folders beside it)
-                if old.is_some_and(|o| o != s && !(w.kind == WatchKind::Parent && s.count < o.count)) {
-                    out.changed.push(d.clone());
+                if let Some(o) = old.as_ref().filter(|o| **o != s) {
+                    if w.kind != WatchKind::Parent {
+                        out.changed.push(d.clone());
+                    } else if o.subdirs.is_empty() && !s.subdirs.is_empty() {
+                        // (a stamp from an older version, without names: a parent that only lost
+                        // subfolders has nothing new to find; otherwise its whole scan counts)
+                        if s.count >= o.count {
+                            out.changed.push(d.clone());
+                        }
+                    } else {
+                        // the subfolders new since the last poll (folders lost in the same poll
+                        // don't hide them); one that only lost folders has nothing new to find
+                        let new: Vec<String> = s
+                            .subdirs
+                            .iter()
+                            .filter(|n| !o.subdirs.contains(n))
+                            .map(|n| std::path::Path::new(d).join(n).to_string_lossy().into_owned())
+                            .collect();
+                        if !new.is_empty() {
+                            out.changed.push(d.clone());
+                            out.narrow.insert(d.clone(), new);
+                        }
+                    }
                 }
                 out.stamps.insert(d.clone(), s);
             }
@@ -354,7 +384,7 @@ pub fn apply(
     polled: Polled,
     mut scan_folder: impl FnMut(&mut crate::Session, &str) -> std::result::Result<crate::sync::FolderChanges, String>,
 ) -> Value {
-    let Polled { stamps, changed, listed, offline } = polled;
+    let Polled { stamps, changed, listed, offline, narrow } = polled;
     s.folder_stamps = stamps;
     let mut failed: Vec<(String, String)> = Vec::new();
     if let Err(e) = s.save_folder_stamps() {
@@ -364,13 +394,16 @@ pub fn apply(
     let mut imported = 0;
     for target in scan_targets(&changed) {
         let changes = match scan_folder(s, &target) {
-            Ok(c) => c,
+            Ok(mut c) => {
+                keep_new_in_scope(&mut c, &changed, &narrow);
+                c
+            }
             Err(e) => {
                 failed.push((target, e));
                 continue;
             }
         };
-        let n = record_new(s, &target, changes.new.len());
+        let n = record_scan(s, &target, changes.new.len(), &narrow);
         new.push(json!({"path": target, "count": n}));
         if n > 0 && s.folder_watch.new_files == NewFilePolicy::Add {
             match crate::sync::synchronize(s, changes, only_new()) {
@@ -383,6 +416,20 @@ pub fn apply(
         }
     }
     json!({"listed": listed, "offline": offline, "changed": changed, "new": new, "imported": imported, "failed": failed})
+}
+
+/// Keep of a scan's new files those a poll found news for: a narrowed parent's scan
+/// ([`Polled::narrow`]) keeps the files inside its new subfolders or inside another changed
+/// folder; any other scan keeps all.
+pub fn keep_new_in_scope(c: &mut crate::sync::FolderChanges, changed: &[String], narrow: &BTreeMap<String, Vec<String>>) {
+    let Some((parent, subs)) = narrow.iter().find(|(p, _)| lcc_catalog::query::folder_key(p) == lcc_catalog::query::folder_key(&c.path)) else {
+        return;
+    };
+    let scope: Vec<&String> = subs.iter().chain(changed.iter().filter(|o| *o != parent && within(o, parent))).collect();
+    c.new.retain(|f| {
+        let dir = std::path::Path::new(&f.path).parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+        scope.iter().any(|o| within(&dir, o))
+    });
 }
 
 /// What a poll's synchronize does: add the new files, nothing else.
@@ -399,6 +446,23 @@ pub fn record_new(s: &mut crate::Session, folder: &str, n: usize) -> usize {
         s.folder_new.insert(folder.to_string(), n);
     }
     save_if_changed(s, &before);
+    n
+}
+
+/// [`record_new`] for a poll's scan of `folder`: a narrowed parent's scan ([`Polled::narrow`])
+/// looked only at its new subfolders, so its `n` add to the folder's count and the counts of the
+/// folders inside it stay.
+pub fn record_scan(s: &mut crate::Session, folder: &str, n: usize, narrow: &BTreeMap<String, Vec<String>>) -> usize {
+    let key = lcc_catalog::query::folder_key(folder);
+    if !narrow.keys().any(|p| lcc_catalog::query::folder_key(p) == key) {
+        return record_new(s, folder, n);
+    }
+    if n > 0 && s.folder_watch.new_files == NewFilePolicy::Ask {
+        let before = s.folder_new.clone();
+        let e = s.folder_new.entry(folder.to_string()).or_insert(0);
+        *e = e.saturating_add(n);
+        save_if_changed(s, &before);
+    }
     n
 }
 
@@ -422,7 +486,7 @@ mod tests {
     use super::*;
 
     fn st(e: u64) -> Option<Stamp> {
-        Some(Stamp { mtime: Some(1), entries: e, count: 1 })
+        Some(Stamp { mtime: Some(1), entries: e, count: 1, subdirs: Vec::new() })
     }
 
     #[test]
