@@ -26,10 +26,6 @@ pub fn to_craft_mat3(m: Mat3) -> CraftMat3 {
     CraftMat3(m.0)
 }
 
-pub fn from_craft_mat3(m: CraftMat3) -> Mat3 {
-    Mat3(m.0)
-}
-
 pub fn to_craft_quality(q: Quality) -> CraftQuality {
     match q {
         Quality::Full => CraftQuality::Full,

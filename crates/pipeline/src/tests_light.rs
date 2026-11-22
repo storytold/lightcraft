@@ -1,7 +1,7 @@
 //! Process V4's calibrated Contrast and Blacks (`light_v3`): V1 and V2 render as they
 //! always did, and the V4 operators behave.
 
-use lightcraft_color::transfer::{linear_to_srgb, srgb_to_linear};
+use lightcraft_color::transfer::linear_to_srgb;
 use lightcraft_develop::{DevelopSettings, Process, ProcessVersion, controls};
 use lightcraft_raster::{Rgb32f, Rgba8};
 
