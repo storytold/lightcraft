@@ -499,8 +499,7 @@ CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p lightcraft
 Without it LightCraft builds and runs the same, but Chinese and Japanese text have no glyphs. Fonts are never committed to this
 repo — what goes there is described in the [craft-fonts README](https://github.com/storytold/craft-fonts#readme).
 
-**Interface language:** **Edit → Language** (English, 简体中文, 繁體中文（台灣）, 日本語, Português (Brasil), Español, Deutsch, Русский, Français, Українська, Polski, Čeština, Italiano, ქართული, Svenska, Suomi, Bahasa Indonesia, Tiếng Việt) or **Settings → General →
-Language**; the choice applies immediately and persists. See [docs/localization.md](docs/localization.md).
+**Interface language:** **Settings → General → Language** (English, 简体中文, 繁體中文（台灣）, 日本語, Português (Brasil), Español, Deutsch, Русский, Français, Українська, Polski, Čeština, Italiano, ქართული, Svenska, Suomi, Bahasa Indonesia, Tiếng Việt); the choice applies immediately and persists. See [docs/localization.md](docs/localization.md).
 
 **Logs:** the desktop app writes its log to standard error and to `logs/lightcraft.log` in its settings folder
 (Linux `$XDG_CONFIG_HOME/lightcraft/logs/`, by default `~/.config/lightcraft/logs/`; macOS
@@ -570,11 +569,10 @@ Humans and agents follow the same rules, so read [AGENTS.md](AGENTS.md) first. T
   image, icon and font in the repo is original, public domain, Creative Commons, OFL or permissively licensed, and has
   an entry in [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md) added in the same commit. New fonts go to
   [storytold/craft-fonts](https://github.com/storytold/craft-fonts), not here.
-- **Pure Rust**, enforced crate layering, everything is a command, and `cargo xtask ci` green before every commit
-  (one task id per commit).
+- The shared rules, including the checks to run for the crates you change, are in [AGENTS.md](AGENTS.md).
 - **Never crash.** Non-test code returns errors instead of panicking: no `unwrap()`, `expect()`, `panic!` or
-  `unsafe`, checked indexing on anything derived from input, and a regression test with every crash fix. Details in
-  [AGENTS.md](AGENTS.md#never-crash-outranks-feature-work).
+  `unsafe` (outside `crates/sysmem` and `crates/wincolor`), checked indexing on anything derived from input, and a
+  regression test with every crash fix. Details in [AGENTS.md](AGENTS.md) (rules 13 and 29).
 
 Questions, ideas or a bug you'd like to talk through first? Bring them to [Discord](https://discord.gg/artcraft).
 

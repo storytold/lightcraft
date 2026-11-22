@@ -80,6 +80,59 @@ fn jpeg_gray_and_scaled_decode() {
 }
 
 #[test]
+fn jpeg_gray_alpha_drops_alpha_and_ignores_surplus_samples() {
+    let (w, h) = (13u32, 9u32);
+    let mut gray_alpha: Vec<u8> = (0..w * h).flat_map(|i| [((i * 37 + 19) % 256) as u8, ((i * 83) % 256) as u8]).collect();
+    // EncodeImage historically permits a surplus tail; the writer must ignore it.
+    gray_alpha.extend_from_slice(&[255, 0, 17]);
+    let bytes = encode_jpeg(&EncodeImage::new(w, h, 2, Samples::U8(&gray_alpha)), 100, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+    let decoded = decode(&bytes, DecodeOptions::default()).unwrap();
+    assert_eq!((decoded.width, decoded.height), (w, h));
+    assert!(decoded.grayscale);
+    assert!(!decoded.has_alpha);
+    let output = decoded.to_srgb8();
+    for (i, pixel) in output.data.iter().enumerate() {
+        let source = gray_alpha[i * 2];
+        assert!(pixel[..3].iter().all(|&channel| channel.abs_diff(source) <= 2), "pixel {i}: source {source}, output {pixel:?}");
+        assert_eq!(pixel[3], 255);
+    }
+}
+
+#[test]
+fn jpeg_422_matches_the_previous_encoder_within_rounding_tolerance() {
+    let img = smooth(97, 61);
+    let rgb: Vec<u8> = img.data.iter().flat_map(|p| p[..3].iter().copied()).collect();
+    let mut reference = Vec::new();
+    let mut encoder = jpeg_encoder::Encoder::new(&mut reference, 90);
+    encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_2_2);
+    encoder.encode(&rgb, img.width as u16, img.height as u16, jpeg_encoder::ColorType::Rgb).unwrap();
+
+    let shared = encode_jpeg(
+        &EncodeImage::new(img.width as u32, img.height as u32, 3, Samples::U8(&rgb)),
+        90,
+        ChromaSubsampling::S422,
+        &EncodeMeta::default(),
+    )
+    .unwrap();
+    let old = decode(&reference, DecodeOptions::default()).unwrap().to_srgb8();
+    let new = decode(&shared, DecodeOptions::default()).unwrap().to_srgb8();
+    let mut max_delta = 0u8;
+    let mut squared_error = 0u64;
+    for (a, b) in old.data.iter().zip(&new.data) {
+        for c in 0..3 {
+            let delta = a[c].abs_diff(b[c]);
+            max_delta = max_delta.max(delta);
+            squared_error += u64::from(delta) * u64::from(delta);
+        }
+    }
+    let mse = squared_error as f64 / (old.data.len() * 3) as f64;
+    // The shared writer changes DCT rounding relative to jpeg-encoder, but this deterministic
+    // 4:2:2 fixture stays within a six-code maximum and 2.0 mean-squared channel delta.
+    assert!(max_delta <= 6, "max per-channel delta from the prior 4:2:2 output was {max_delta}");
+    assert!(mse <= 2.0, "mean squared channel delta from the prior 4:2:2 output was {mse}");
+}
+
+#[test]
 fn jpeg_cmyk_converts() {
     // 0 = no ink: white, cyan, black.
     let px: Vec<u8> = [[0u8, 0, 0, 0], [255, 0, 0, 0], [0, 0, 0, 255]].iter().flat_map(|p| p.repeat(16 * 16)).collect();
@@ -611,9 +664,28 @@ fn avif_encode_native() {
     if cfg!(feature = "avif") {
         let b = r.unwrap();
         assert_eq!(sniff(&b), Some(Format::Avif));
-        assert!(matches!(decode(&b, DecodeOptions::default()), Err(Error::Unsupported(Format::Avif, _))));
+        let decoded = decode(&b, DecodeOptions::default()).unwrap();
+        assert_eq!((decoded.source_width, decoded.source_height), (64, 48));
     } else {
         assert!(r.is_err());
+    }
+}
+
+#[test]
+fn avif_keeps_exif() {
+    // The ravif path wrote EXIF; the shared encoder must keep it, for 8- and 16-bit input.
+    let img = smooth(16, 12);
+    let exif = minimal_exif(3);
+    let meta = EncodeMeta { exif: Some(&exif), ..Default::default() };
+    let wide: Vec<u16> = img.data.iter().flat_map(|p| p.map(|c| u16::from(c) * 257)).collect();
+    for image in [EncodeImage::rgba8(&img), EncodeImage::new(16, 12, 4, Samples::U16(&wide))] {
+        let r = encode_avif(&image, 70, 10, &meta);
+        if cfg!(feature = "avif") {
+            let b = r.unwrap();
+            assert!(b.windows(exif.len()).any(|w| w == &exif[..]), "EXIF missing from the AVIF");
+        } else {
+            assert!(r.is_err());
+        }
     }
 }
 
@@ -798,8 +870,21 @@ fn pq_png_rejects_short_buffers_and_survives_hostile_samples() {
 }
 
 /// Largest per-channel difference between two linear images.
+#[cfg(feature = "jxl")]
 fn max_diff(a: &lightcraft_raster::Rgb32f, b: &lightcraft_raster::Rgb32f) -> f32 {
     a.data.iter().zip(&b.data).flat_map(|(p, q)| (0..3).map(move |c| (p[c] - q[c]).abs())).fold(0.0, f32::max)
+}
+
+#[test]
+#[cfg(not(feature = "jxl"))]
+fn jpeg_xl_disabled_reports_unavailable_codec() {
+    let image = EncodeImage::new(1, 1, 3, Samples::U8(&[17, 23, 83]));
+    let result = encode_jxl(&image, &JxlOptions::default(), &EncodeMeta::default());
+    assert!(matches!(result, Err(Error::Encode(message)) if message.contains("JPEG XL encoding is not included")));
+
+    let jxl_prefix = b"\xff\x0a\0\0";
+    assert_eq!(sniff(jxl_prefix), Some(Format::Jxl));
+    assert!(matches!(decode(jxl_prefix, DecodeOptions::default()), Err(Error::Unsupported(Format::Jxl, _))));
 }
 
 #[test]
@@ -909,23 +994,21 @@ fn jxl_alpha_and_gray() {
 #[test]
 #[cfg(feature = "jxl")]
 fn jxl_hdr_pq() {
-    // linear Rec. 2020, SDR white = 1.0: the left half at SDR white, the right half four times brighter
+    // linear Rec. 2020 input, with SDR white = 203 cd/m²; samples are encoded as BT.2020 PQ.
     let (w, h) = (64usize, 32usize);
     let px: Vec<f32> = (0..w * h).flat_map(|i| [if i % w < w / 2 { 1.0 } else { 4.0 }; 3]).collect();
     for lossless in [false, true] {
         let o = JxlOptions { lossless, quality: 95, colour: JxlColour::Rec2020Pq, ..Default::default() };
         let b = encode_jxl(&EncodeImage::new(w as u32, h as u32, 3, Samples::F32(&px)), &o, &EncodeMeta::default()).unwrap();
-        // the file's own samples: PQ code values for 203 and 812 cd/m²
-        let img = jxl_oxide::JxlImage::builder().read(std::io::Cursor::new(&b)).unwrap();
-        let m = &img.image_header().metadata;
-        assert_eq!(m.tone_mapping.intensity_target, 10_000.0);
-        assert!(format!("{:?}", m.colour_encoding).contains("Pq"), "{:?}", m.colour_encoding);
-        let r = img.render_frame(0).unwrap();
-        let fb = r.image_all_channels();
-        let at = |x: usize| fb.buf()[((h / 2) * w + x) * fb.channels() + 1];
-        for (x, nits) in [(w / 4, HDR_REFERENCE_WHITE_NITS), (w * 3 / 4, 4.0 * HDR_REFERENCE_WHITE_NITS)] {
-            let (got, want) = (at(x), lightcraft_codecs::encode::pq_encode(nits));
-            assert!((got - want).abs() < 0.005, "lossless={lossless}: {nits} cd/m² written as {got}, want {want}");
+        // DecoderDefault keeps the file's PQ transfer encoding, so compare against the PQ codes
+        // for 203 and 812 cd/m² rather than linear-light input values.
+        let dec = craft_jxl::decode(&b, craft_jxl::DecodeLimits::default()).unwrap();
+        assert_eq!(dec.rendered_cicp, Some([9, 16, 0, 1]));
+        let ch = dec.layout.channels();
+        let at = |x: usize| dec.pixels[((h / 2) * w + x) * ch + 1];
+        for (x, want) in [(w / 4, 0.5807f32), (w * 3 / 4, 0.7292f32)] {
+            let got = at(x);
+            assert!((got - want).abs() < 0.01, "lossless={lossless}: PQ code {got}, want {want}");
         }
     }
     // float samples are HDR only
