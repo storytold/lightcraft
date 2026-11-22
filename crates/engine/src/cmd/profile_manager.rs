@@ -720,6 +720,7 @@ mod tests {
             lens: None,
             looks: vec![("cal:pmhide-me".into(), dcp)],
             default: None,
+            own_matrix_only: false,
         });
         lcc_raw::dcp::install_calibrated(list);
         let hidden = s.execute("profile.hide", &json!({"id": "cal:pmhide-me", "hidden": true}));

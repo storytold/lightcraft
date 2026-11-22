@@ -1910,7 +1910,7 @@ pub(crate) mod tests {
         assert_eq!(ycbcr.as_shot(d65), a7m3.as_shot(d65));
         let unit = WbScaleOf::new(RawFormat::Arw, &ColorData::default(), Some([1.0; 3]), &meta("SONY", "ILCE-7M3"));
         assert!(unit.as_shot(d65).0 < 2500.0, "{:?}", unit.as_shot(d65));
-        // every Sony body but the three without presets is covered (the ILCE-1 has no measured matrices)
+        // every Sony body but the three without presets is covered (the ILCE-1 included)
         let a1 = WbScaleOf::new(RawFormat::Arw, &with, Some(g(2500.0, 1668.0)), &meta("SONY", "ILCE-1"));
         assert!(!a1.relative && a1.scale_white.is_some() && !lcc_catalog::relative_wb_camera("ARW", "SONY ILCE-1"));
         // presets in a file whose camera isn't named as a Sony body: relative, as the catalog decides from the camera alone

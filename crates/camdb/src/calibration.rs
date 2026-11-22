@@ -131,6 +131,11 @@ pub struct Calibration {
     /// The editor the looks match (Lightroom when the file doesn't say).
     #[serde(default, skip_serializing_if = "is_lightroom")]
     pub editor: Editor,
+    /// The default look serves only files with colour matrices of their own (converted DNGs of the camera): on the
+    /// camera's raws the fit lost to the per-photo look fitted to each raw's camera JPEG, which converted DNGs don't
+    /// get (issue #1119, `lcc_raw::dcp::ColourSource`). Looks chosen per photo serve every file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub own_matrix_only: bool,
     /// [`Editor::method`] of [`Calibration::editor`].
     pub method: String,
     /// The tool that made the file (the CLI's version).
@@ -507,7 +512,14 @@ impl Calibration {
         let looks = self.looks.iter().map(|l| (look_id(&l.name), std::sync::Arc::new(self.look_dcp(l)))).collect();
         // only a Lightroom calibration gives the camera a default look; other editors' looks are chosen per photo
         let default = (self.editor == Editor::Lightroom).then(|| self.default_look().map(|l| look_id(&l.name))).flatten();
-        lcc_raw::dcp::Calibrated { make: super::brand(&self.make), names, lens: self.lens.as_ref().map(|l| l.trim().to_string()), looks, default }
+        lcc_raw::dcp::Calibrated {
+            make: super::brand(&self.make),
+            names,
+            lens: self.lens.as_ref().map(|l| l.trim().to_string()),
+            looks,
+            default,
+            own_matrix_only: self.own_matrix_only,
+        }
     }
 
     /// The file name a calibration is kept under: `<Make>_<Model>.json` for Lightroom, `<Make>_<Model>_<editor>.json`
@@ -581,6 +593,7 @@ mod tests {
             aliases: vec![],
             lens: None,
             editor: Editor::Lightroom,
+            own_matrix_only: false,
             method: METHOD.into(),
             tool_version: "26.43.4".into(),
             contributor: Some("A Contributor".into()),

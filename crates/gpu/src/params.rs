@@ -26,6 +26,10 @@ const FIELDS: &[(&str, usize)] = &[
     ("SRGB_OFF", 1),
     ("CURVE_OFF", 1),
     ("CURVES", 1),
+    // process V10: the curves in the wide space before the gamut map (`finish::CurveSpace`): flag, to/from matrices
+    ("CURVE_WIDE", 1),
+    ("CURVE_TO_WIDE", 9),
+    ("CURVE_FROM_WIDE", 9),
     // the masks' local Curves: a slot per mask (its table set, or −1), then the table sets
     ("LCURVE_OFF", 1),
     // the masks' local Point Color: one record of `LOCAL_POINT_WORDS` per mask in `aux`
@@ -360,6 +364,11 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], curves: &[Op
     p.u("SRGB_OFF", srgb_off as u32);
     p.u("CURVE_OFF", curve_off as u32);
     p.b("CURVES", fp.curves.is_some());
+    if let Some(cs) = &fp.curve_space {
+        p.b("CURVE_WIDE", true);
+        p.fs("CURVE_TO_WIDE", cs.to_wide.as_flattened());
+        p.fs("CURVE_FROM_WIDE", cs.from_wide.as_flattened());
+    }
     p.u("LCURVE_OFF", lcurve_off as u32);
     p.b("LCURVES", next > 0.0);
     p.b("LPOINTS", lpoints);

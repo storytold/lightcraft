@@ -722,6 +722,9 @@ pub struct ProfileFacts {
     pub local_tone: bool,
     /// A DNG of rendered RGB: the Profiles panel offers no camera profile for it (issue #763).
     pub rendered_rgb: bool,
+    /// Whether a decode has reported on the file yet: until then the facts above are only "not seen", and the Edit
+    /// panel keeps a likely row laid out, pending, instead of letting it appear later (issue #1272).
+    pub known: bool,
 }
 
 /// The photos that have a cached denoised picture for the denoise model in use. Only memory: nothing here touches the
@@ -991,6 +994,7 @@ impl MediaCache {
             f.colorimetric |= info.colorimetric;
             f.local_tone |= info.local_tone.is_some();
             f.rendered_rgb |= info.rendered_rgb;
+            f.known = true;
         }
         let tick = lcc_preview::next_tick();
         match level {
@@ -1032,6 +1036,7 @@ impl MediaCache {
             colorimetric: seen.colorimetric || now.colorimetric,
             local_tone: seen.local_tone || now.local_tone.is_some(),
             rendered_rgb: seen.rendered_rgb || now.rendered_rgb,
+            known: seen.known,
         }
     }
 

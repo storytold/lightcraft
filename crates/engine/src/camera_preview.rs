@@ -166,7 +166,7 @@ pub(crate) fn starting_colour_traced(
             Some(LookFrom::Fitted) | None => None,
         };
         if let Some(tone) = tone {
-            *trace = StartTrace { colour: ColourSource::CameraProfile, tone };
+            *trace = StartTrace { colour: ColourSource::CameraProfile, tone, ..StartTrace::default() };
         }
     }
     let look = look.or_else(|| {
@@ -179,9 +179,35 @@ pub(crate) fn starting_colour_traced(
         if look.is_some() {
             trace.tone = ToneSource::DngToneFit;
         }
+        let mut t = t;
+        let extra = profile_default_exposure(raw, &t);
+        if extra > 0.0 {
+            raw.color.baseline_exposure += extra;
+            t.baseline_exposure += extra;
+            trace.default_exposure = extra;
+        }
         return (xy, t, look);
     }
     (xy, t, look)
+}
+
+/// Largest exposure [`profile_default_exposure`] adds (EV).
+const MAX_PROFILE_DEFAULT_EXPOSURE: f64 = 1.0;
+
+/// The exposure a DNG whose embedded profile has a look table but no tone curve of its own (Lightroom's
+/// "Adobe Standard" conversions) renders with on top of its `BaselineExposure`, as Lightroom shows it: the file's
+/// `BaselineExposure` once more, at most [`MAX_PROFILE_DEFAULT_EXPOSURE`]. Issue #1174: 556 such Canon EOS 6D DNGs
+/// (Lightroom Classic 7.3-11.4, `BaselineExposure` 0.25) rendered a median 5.7 ΔL* darker than Lightroom's exports,
+/// the same at every Exposure value (an offset, not a slope), with or without the DNG tone fit, and +0.25-0.35 EV
+/// closed it (ΔL* -0.1, ΔE00 1.9); the "Camera Standard" control group (tone curve present, `BaselineExposureOffset`
+/// cancelling the baseline) matched already and is left alone. 0 for any other file, and under an imported profile.
+pub(crate) fn profile_default_exposure(raw: &RawImage, t: &CameraTransform) -> f64 {
+    let p = &raw.color.profile;
+    if !dng_tone_eligible(raw, t) || p.look_table.is_none() {
+        return 0.0;
+    }
+    let baseline = raw.color.baseline_exposure - raw.color.white_extension_ev;
+    if baseline.is_finite() && baseline > 0.0 { baseline.min(MAX_PROFILE_DEFAULT_EXPOSURE) } else { 0.0 }
 }
 
 /// Which step of [`starting_colour`] gave a raw its colour.
@@ -233,11 +259,18 @@ pub(crate) enum ToneSource {
 }
 
 /// What [`starting_colour_traced`] reports.
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct StartTrace {
     pub colour: ColourSource,
     pub tone: ToneSource,
+    /// Exposure added for a DNG profile without a tone curve ([`profile_default_exposure`]), EV; 0 when none.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub default_exposure: f64,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
 }
 
 /// Whether the profile's tone curve is absent or the identity (within 0.005 over the range).
@@ -397,7 +430,7 @@ fn starting_colour_traced_from(
     let (look, black_and_white) = fit(raw, &t);
     if let Some(look) = look {
         let camera_profile = file_local_look(raw.format) && raw.metadata.model.as_deref().and_then(crate::camera_profiles::get).is_some();
-        *trace = StartTrace { colour: ColourSource::CameraJpeg { camera_profile }, tone: ToneSource::CameraJpeg };
+        *trace = StartTrace { colour: ColourSource::CameraJpeg { camera_profile }, tone: ToneSource::CameraJpeg, ..StartTrace::default() };
         return (xy, t, Some(look));
     }
     trace.colour = ColourSource::NeutralFallback;
@@ -3807,7 +3840,10 @@ mod tests {
         let color = lcc_raw::ColorData { illuminant: [21, 0], color_matrix: [Some(own), None], ..Default::default() };
         let mut raw = raw_of(RawFormat::Cr2, "Canon", "Canon EOS 600D", color);
         let e = lookup(&raw);
-        assert_eq!(traced(&mut raw, e, None, false, None), StartTrace { colour: ColourSource::File, tone: ToneSource::None });
+        assert_eq!(
+            traced(&mut raw, e, None, false, None),
+            StartTrace { colour: ColourSource::File, tone: ToneSource::None, ..StartTrace::default() }
+        );
         // 2. measured database matrices
         let mut entry = lcc_camdb::find(Some("Canon"), "Canon EOS 600D").unwrap();
         entry.provenance.source = lcc_camdb::Source::NativeDng;
@@ -3818,7 +3854,10 @@ mod tests {
         let mut raw = raw_of(RawFormat::Arw, "SONY", "ILCE-7M4", Default::default());
         let e = lookup(&raw);
         let t = traced(&mut raw, e, Some(fitted.clone()), false, None);
-        assert_eq!(t, StartTrace { colour: ColourSource::CameraJpeg { camera_profile: true }, tone: ToneSource::CameraJpeg });
+        assert_eq!(
+            t,
+            StartTrace { colour: ColourSource::CameraJpeg { camera_profile: true }, tone: ToneSource::CameraJpeg, ..StartTrace::default() }
+        );
         let mut raw = raw_of(RawFormat::Cr2, "Canon", "Canon EOS 7D", Default::default());
         let t = traced(&mut raw, None, Some(fitted.clone()), false, None);
         assert_eq!(t.colour, ColourSource::CameraJpeg { camera_profile: crate::camera_profiles::get("Canon EOS 7D").is_some() });
@@ -3831,7 +3870,10 @@ mod tests {
         assert_eq!(t.tone, ToneSource::MonochromeJpeg);
         // 5. the neutral fallback
         let mut raw = raw_of(RawFormat::Cr2, "Canon", "Canon EOS 7D", Default::default());
-        assert_eq!(traced(&mut raw, None, None, false, None), StartTrace { colour: ColourSource::NeutralFallback, tone: ToneSource::None });
+        assert_eq!(
+            traced(&mut raw, None, None, false, None),
+            StartTrace { colour: ColourSource::NeutralFallback, tone: ToneSource::None, ..StartTrace::default() }
+        );
     }
 
     /// Step 5: a camera outside every table whose fit fails keeps the neutral fallback; one in dcraw's table takes its
@@ -5633,6 +5675,45 @@ mod tests {
                 assert!(!jpeg_tone_fit_allowed(&raw, &t, true), "{format:?}");
                 assert_eq!(jpeg_tone_fit_allowed(&raw, &t, false), format == RawFormat::Dng, "{format:?}");
             }
+        }
+    }
+
+    /// Issue #1174: a DNG whose profile has a look table and no tone curve (Lightroom's Adobe Standard conversions)
+    /// renders with its BaselineExposure once more; one with its own tone curve, without a look table, another format,
+    /// an imported profile, or a hostile baseline gets nothing, and the amount is capped.
+    #[test]
+    fn adobe_standard_style_dngs_get_their_baseline_exposure_once_more() {
+        use lcc_raw::profile::{HsvTable, ToneCurve};
+        let own = Mat3([[0.6, -0.1, -0.05], [-0.4, 1.3, 0.1], [-0.1, 0.2, 0.7]]);
+        let mut looked = lcc_raw::ColorData { illuminant: [21, 0], color_matrix: [Some(own), None], baseline_exposure: 0.25, ..Default::default() };
+        looked.profile.look_table = HsvTable::from_tags(&[1, 2, 1], &[0.0, 1.0, 1.0, 0.0, 1.0, 1.0], 0);
+        let extra = |format: RawFormat, color: lcc_raw::ColorData| {
+            let raw = raw_of(format, "Canon", "Canon EOS 6D", color);
+            let t = lcc_raw::color::camera_transform(&raw, lcc_raw::color::as_shot_white_xy(&raw));
+            profile_default_exposure(&raw, &t)
+        };
+        assert!((extra(RawFormat::Dng, looked.clone()) - 0.25).abs() < 1e-9);
+        assert_eq!(extra(RawFormat::Cr2, looked.clone()), 0.0, "other formats");
+        let mut curved = looked.clone();
+        curved.profile.tone_curve = ToneCurve::from_tag(&[0.0, 0.0, 0.18, 0.4, 1.0, 1.0]);
+        assert_eq!(extra(RawFormat::Dng, curved), 0.0, "Camera Standard: the profile's own tone curve");
+        let mut plain = looked.clone();
+        plain.profile.look_table = None;
+        assert_eq!(extra(RawFormat::Dng, plain), 0.0, "no look table");
+        for hostile in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -3.0, 0.0, 1e300] {
+            let mut c = looked.clone();
+            c.baseline_exposure = hostile;
+            let e = extra(RawFormat::Dng, c);
+            assert!(e.is_finite() && (0.0..=MAX_PROFILE_DEFAULT_EXPOSURE).contains(&e), "{hostile}: {e}");
+        }
+        // the whole start: the transform the render uses carries it, and the trace says so; not under a `.dcp`
+        for dcp in [false, true] {
+            let mut raw = raw_of(RawFormat::Dng, "Canon", "Canon EOS 6D", looked.clone());
+            let mut trace = StartTrace::default();
+            let (_, t, _) = starting_colour_traced(&mut raw, &[], None, None, CameraColour::Auto, dcp, &mut trace);
+            let want = if dcp { 0.25 } else { 0.5 };
+            assert!((t.baseline_exposure - want).abs() < 1e-9, "dcp {dcp}: {}", t.baseline_exposure);
+            assert_eq!(trace.default_exposure > 0.0, !dcp);
         }
     }
 

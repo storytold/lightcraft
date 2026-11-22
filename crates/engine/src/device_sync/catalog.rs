@@ -631,9 +631,11 @@ pub(crate) fn reconcile(s: &mut Session, lib: &mut Lib) {
             (false, None) => {}
         }
     }
-    // photos told of that this device takes (or imported meanwhile)
+    // photos told of that this device takes (or imported meanwhile). An Immich album's photos
+    // come in from the server, as this device took them (link-only or the original); one told of
+    // by another device first waits for that import rather than coming in as the other device's.
     let ghosts: Vec<String> =
-        lib.replica.ghosts().filter(|k| lib.keys.contains_key(*k) || lib.replica.depth_wanted(k) >= Depth::Preview).cloned().collect();
+        lib.replica.ghosts().filter(|k| lib.keys.contains_key(*k) || lib.replica.depth_from_peers(k) >= Depth::Preview).cloned().collect();
     for key in ghosts {
         adopt(s, lib, &key);
     }
