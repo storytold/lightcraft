@@ -25,7 +25,7 @@ import { Aside } from '@astrojs/starlight/components';
 - Detection: the MediaPipe face model (a few MB, Apache-2.0).
 - Recognition: a model you choose in Settings ▸ Faces ▸ Download after accepting its terms (AuraFace 261 MB, SFace 39 MB). Nothing is bundled, and everything else works without one.
 - Faces are found from the photo upright and uncropped, so crops and edits do not matter. Raws use their embedded preview.
-- Face detection and recognition run on the GPU when a background check finds it matches the CPU and is faster; Settings ▸ Faces shows the device. Otherwise they run on the CPU unless a check shows the GPU gives the same results faster. Settings ▸ Faces has **Run face models on the CPU only**.
+- Face detection and recognition run on the GPU when a background check finds it matches the CPU and is faster; Settings ▸ Faces shows the device and precision (`FP16` or `FP32`). Settings ▸ Faces lets you pick **Face models device** (Automatic prefers dedicated NVIDIA GPUs, CPU, or a specific adapter) and **GPU precision** (Automatic uses FP16 when supported and falls back to FP32 then CPU).
 
 ## Limits
 

@@ -531,17 +531,21 @@ impl Model {
         require_faster: bool,
     ) -> std::result::Result<(), String> {
         self.detach();
-        if !self.can_accelerate() {
+        let Some(plan) = self.plan() else { return Err("the model has no form the GPU runs".into()) };
+        if plan.convs == 0 {
             return Err("the model has no form the GPU runs".into());
         }
+        let prog_fp = plan.program().fingerprint();
         let cpu = self.run_cpu(&[probe]).map_err(|e| e.to_string())?;
+        let acc = accelerator.clone();
         *self.device.accelerator.write().unwrap_or_else(PoisonError::into_inner) = Some(accelerator);
+        let eff_tol = if acc.precision() == "fp16" { tolerance.max(1e-2) } else { tolerance };
         let verdict = (|| {
             // the first run uploads the weights and builds the kernels
             let dev = self.run_on_device(&[probe]).map_err(|e| e.to_string())?.and_then(|mut v| v.pop());
             let Some(dev) = dev else { return Err("the GPU did not take the model".to_string()) };
-            agree(&cpu, &dev, tolerance)?;
-            if require_faster {
+            agree(&cpu, &dev, eff_tol)?;
+            if require_faster && !acc.plan_cached(prog_fp) {
                 let batch = vec![probe; BENCH_BATCH];
                 let started = web_time::Instant::now();
                 let ran = self.run_on_device(&batch).map_err(|e| e.to_string())?;
@@ -554,18 +558,15 @@ impl Model {
                     self.run_cpu(&[x]).map_err(|e| e.to_string())?;
                 }
                 let cpu_time = started.elapsed();
+                let dev_ms = dev_time.as_secs_f64() * 1000.0;
+                let cpu_ms = cpu_time.as_secs_f64() * 1000.0;
+                acc.record_plan(prog_fp, dev_time < cpu_time, dev_ms, cpu_ms);
                 if dev_time >= cpu_time {
                     return Err(format!(
-                        "the GPU is not faster for this model ({:.0} ms against {:.0} ms on the CPU for {BENCH_BATCH} runs)",
-                        dev_time.as_secs_f64() * 1000.0,
-                        cpu_time.as_secs_f64() * 1000.0
+                        "the GPU is not faster for this model ({dev_ms:.0} ms against {cpu_ms:.0} ms on the CPU for {BENCH_BATCH} runs)"
                     ));
                 }
-                log::info!(
-                    "tflite: {BENCH_BATCH} runs take {:.1} ms on the GPU, {:.1} ms on the CPU",
-                    dev_time.as_secs_f64() * 1000.0,
-                    cpu_time.as_secs_f64() * 1000.0
-                );
+                log::info!("tflite: {BENCH_BATCH} runs take {dev_ms:.1} ms on the GPU, {cpu_ms:.1} ms on the CPU");
             }
             Ok(())
         })();
