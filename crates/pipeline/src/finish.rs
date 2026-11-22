@@ -406,29 +406,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 ) -> Vec<T> {
     let (w, h) = (p.img.width, p.img.height);
     let p_lut = fp.lut.clone();
-    let FinishParams {
-        tone,
-        ops,
-        curves,
-        vig,
-        to_out,
-        out_luma,
-        hl,
-        sh,
-        clar,
-        tex,
-        dehaze,
-        sharpen,
-        sharpen_mask,
-        air,
-        air_pre,
-        gain,
-        ev,
-        grain,
-        ..
-    } = fp;
-    let (hl, sh, clar, tex, dehaze, sharpen, sharpen_mask, air, air_pre, gain, ev) =
-        (*hl, *sh, *clar, *tex, *dehaze, *sharpen, *sharpen_mask, *air, *air_pre, *gain, *ev);
+    let FinishParams { tone, curves, vig, to_out, out_luma, ev, grain, .. } = fp;
+    let ev = *ev;
 
     let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
     let out_to_norm = fp.out_to_norm;
@@ -455,57 +434,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             // --- local tone in log luminance
             let shift = l1 - l0;
             let base = p.base.data[i] + ev + shift;
-            let mut delta = 0.0f32;
-            let (hh, ss) = (hl + l_hl, sh + l_sh);
-            if hh != 0.0 || ss != 0.0 {
-                let ws = 1.0 - smooth(-4.8, 0.3, base);
-                let wh = if fp.v3_tone_response { smooth(-2.8, 1.8, base) } else { smooth(-1.0, 2.8, base) };
-                let detail = (l1 - base).clamp(-1.0, 1.0);
-                let shadow_delta = if fp.v3_tone_response && ss > 0.0 { separated_shadows(base, detail, ss) } else { ss * 1.7 * ws * ws.sqrt() };
-                let highlight_delta = if fp.v3_tone_response { hh * 2.5 * wh.sqrt() } else { hh * 1.7 * wh };
-                delta += shadow_delta + highlight_delta;
-            }
-            if l_wh != 0.0 {
-                let weight = match &fp.local_whites {
-                    Some(lut) => lut.eval((l1 - crate::tone::LUT_MIN_EV) / (crate::tone::LUT_MAX_EV - crate::tone::LUT_MIN_EV)),
-                    None => smooth(0.5, 3.0, l1),
-                };
-                delta += l_wh * 0.8 * weight;
-            }
-            if l_bl != 0.0 {
-                delta += l_bl * 0.8 * (1.0 - smooth(-6.0, -1.5, l1));
-            }
-            if l_con != 0.0 {
-                delta += l_con * 0.14 * l1.clamp(-6.0, 4.0);
-            }
-            let cl = clar + l_clar;
-            if cl != 0.0
-                && let Some(b) = &p.clarity_blur
-            {
-                let det = (l_pre - b.data[i]).clamp(-2.5, 2.5);
-                let mid = (-(base / 3.2).powi(2)).exp();
-                delta += cl * 0.85 * det * (0.35 + 0.65 * mid);
-            }
-            let tx = tex + l_tex;
-            let sp = l_sharp * 0.6 + sharpen;
-            if (tx != 0.0 || sp != 0.0)
-                && let Some(b) = &p.texture_blur
-            {
-                let det = l_pre - b.data[i];
-                let tame = 1.0 - 0.6 * smooth(0.4, 1.6, det.abs());
-                delta += tx * 1.1 * det.clamp(-1.0, 1.0) * tame;
-                if sp != 0.0 {
-                    let m = if sharpen_mask > 0.0 { smooth(sharpen_mask * 0.25, sharpen_mask * 0.25 + 0.15, det.abs()) } else { 1.0 };
-                    delta += sp * 1.3 * det.clamp(-0.8, 0.8) * m;
-                }
-            }
-            // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
-            if l_noise != 0.0
-                && let Some(b) = &p.texture_blur
-            {
-                let det = l_pre - b.data[i];
-                delta -= l_noise.clamp(-1.0, 1.0) * 0.9 * det * (1.0 - smooth(0.1, 0.5, det.abs()));
-            }
+            let delta = local_tone_delta(p, fp, i, base, l1, &local);
             if delta != 0.0 {
                 let g = delta.exp2();
                 c = c.map(|v| v * g);
@@ -742,11 +671,22 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
     let (highlights, shadows) = (fp.hl + l_hl, fp.sh + l_sh);
     if highlights != 0.0 || shadows != 0.0 {
         let shadow_weight = 1.0 - smooth(-4.8, 0.3, base);
-        let highlight_weight = smooth(-1.0, 2.8, base);
-        delta += shadows * 1.7 * shadow_weight * shadow_weight.sqrt() + highlights * 1.7 * highlight_weight;
+        let highlight_weight = if fp.v3_tone_response { smooth(-2.8, 1.8, base) } else { smooth(-1.0, 2.8, base) };
+        let detail = (l1 - base).clamp(-1.0, 1.0);
+        let shadow_delta = if fp.v3_tone_response && shadows > 0.0 {
+            separated_shadows(base, detail, shadows)
+        } else {
+            shadows * 1.7 * shadow_weight * shadow_weight.sqrt()
+        };
+        let highlight_delta = if fp.v3_tone_response { highlights * 2.5 * highlight_weight.sqrt() } else { highlights * 1.7 * highlight_weight };
+        delta += shadow_delta + highlight_delta;
     }
     if l_wh != 0.0 {
-        delta += l_wh * 0.8 * smooth(0.5, 3.0, l1);
+        let weight = match &fp.local_whites {
+            Some(lut) => lut.eval((l1 - crate::tone::LUT_MIN_EV) / (crate::tone::LUT_MAX_EV - crate::tone::LUT_MIN_EV)),
+            None => smooth(0.5, 3.0, l1),
+        };
+        delta += l_wh * 0.8 * weight;
     }
     if l_bl != 0.0 {
         delta += l_bl * 0.8 * (1.0 - smooth(-6.0, -1.5, l1));

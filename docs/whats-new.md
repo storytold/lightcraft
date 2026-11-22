@@ -1,5 +1,10 @@
 # What's new in LightCraft
 
+## 2026-11-21
+
+### More control over highlights and shadows
+- The latest process version (V3) gives Shadows more reach while preserving fine detail, and extends Whites and Blacks across a broader tonal range. Highlights respond more independently from Whites, making it easier to recover bright areas without losing the overall tonal balance. Existing edits keep their current rendering until you update them to the latest process.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
