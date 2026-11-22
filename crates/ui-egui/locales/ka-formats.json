@@ -115,6 +115,7 @@
   "New Folder in “{name}”": "ახალი საქაღალდე „{name}“-ში",
   "Created folder “{name}” in “{parent}”": "საქაღალდე „{name}“ შეიქმნა „{parent}“-ში",
   "On {have} of {of} selected photos": "{of} მონიშნული ფოტოდან {have}-ზე",
+  "A keyword name can't end with an asterisk: “{name}”": "საკვანძო სიტყვის სახელი ვარსკვლავით ვერ დასრულდება: „{name}“",
   "Painting “{k}”: click photos to add or remove it · Esc stops": "„{k}“-ის მინიჭება: დაწკაპეთ ფოტოებზე მის დასამატებლად ან მოსახსნელად · Esc ასრულებს",
   "Paste into {n} photo{} — only settings that were copied are pasted": "ჩასმა ფოტოებში: {n}{:.0} — ჩაისმება მხოლოდ კოპირებული პარამეტრები",
   "Preset: {name}": "პრესეტი: {name}",

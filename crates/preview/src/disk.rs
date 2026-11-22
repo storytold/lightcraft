@@ -516,11 +516,9 @@ pub fn encode_jpeg(img: &Rgba8) -> Option<Vec<u8>> {
     for p in &img.data {
         rgb.extend_from_slice(&p[..3]);
     }
-    let mut out = Vec::new();
-    let mut enc = jpeg_encoder::Encoder::new(&mut out, QUALITY);
-    enc.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_2_0);
-    enc.encode(&rgb, img.width as u16, img.height as u16, jpeg_encoder::ColorType::Rgb).ok()?;
-    Some(out)
+    let ic_img = craft_image_codecs::Image::from_u8(img.width as u32, img.height as u32, craft_image_codecs::ChannelLayout::Rgb, rgb).ok()?;
+    let opts = craft_image_codecs::EncodeOptions { jpeg_quality: QUALITY, jpeg_chroma_subsampling: true, ..Default::default() };
+    craft_image_codecs::encode(&ic_img, craft_image_codecs::Format::Jpeg, &opts).ok()
 }
 
 /// How much of a cached file [`DiskCache::dims`] reads: the JPEG headers this cache writes come
@@ -531,27 +529,51 @@ const FIRST_HEADER_BYTES: u64 = 4 << 10;
 
 /// A JPEG's (width, height) from its headers (`None`: not a JPEG, or cut short before its frame header).
 pub fn jpeg_dims(bytes: &[u8]) -> Option<(usize, usize)> {
-    use zune_core::bytestream::ZCursor;
-    let mut d = zune_jpeg::JpegDecoder::new(ZCursor::new(bytes));
-    d.decode_headers().ok()?;
-    let info = d.info()?;
-    let (w, h) = (info.width as usize, info.height as usize);
-    (w > 0 && h > 0).then_some((w, h))
+    if !bytes.starts_with(&[0xFF, 0xD8]) {
+        return None;
+    }
+    let mut i = 2;
+    while i + 4 <= bytes.len() {
+        if bytes[i] != 0xFF {
+            i += 1;
+            continue;
+        }
+        let m = bytes[i + 1];
+        if m == 0xFF {
+            i += 1;
+            continue;
+        }
+        if m == 0xD8 || (0xD0..=0xD7).contains(&m) || m == 0x01 {
+            i += 2;
+            continue;
+        }
+        if m == 0xD9 || m == 0xDA {
+            break;
+        }
+        let len = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
+        if len < 2 || i + 2 + len > bytes.len() {
+            break;
+        }
+        if matches!(m, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF) && len >= 7 {
+            let h = u16::from_be_bytes([bytes[i + 5], bytes[i + 6]]) as usize;
+            let w = u16::from_be_bytes([bytes[i + 7], bytes[i + 8]]) as usize;
+            return (w > 0 && h > 0).then_some((w, h));
+        }
+        i += 2 + len;
+    }
+    None
 }
 
 /// Decode a cached thumbnail (see [`encode_jpeg`]).
 pub fn decode_jpeg(bytes: &[u8]) -> Option<Rgba8> {
-    use zune_core::bytestream::ZCursor;
-    use zune_core::colorspace::ColorSpace;
-    use zune_core::options::DecoderOptions;
-    let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB);
-    let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(bytes), opts);
-    let px = d.decode().ok()?;
-    let info = d.info()?;
-    let (w, h) = (info.width as usize, info.height as usize);
-    if px.len() < w * h * 3 {
-        return None;
-    }
-    let data = px.as_chunks::<3>().0.iter().take(w * h).map(|c| [c[0], c[1], c[2], 255]).collect();
+    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Jpeg, bytes, &craft_image_codecs::DecodeOptions::default()).ok()?;
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    let px = img.as_u8()?;
+    let data = match img.layout() {
+        craft_image_codecs::ChannelLayout::Gray => px.iter().take(w * h).map(|&y| [y, y, y, 255]).collect(),
+        craft_image_codecs::ChannelLayout::Rgb => px.as_chunks::<3>().0.iter().take(w * h).map(|c| [c[0], c[1], c[2], 255]).collect(),
+        craft_image_codecs::ChannelLayout::Rgba => px.as_chunks::<4>().0.iter().take(w * h).copied().collect(),
+        _ => return None,
+    };
     Some(Rgba8 { width: w, height: h, data })
 }
