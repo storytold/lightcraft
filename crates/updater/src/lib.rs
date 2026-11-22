@@ -56,8 +56,8 @@ pub use check::{
 pub use download::{Downloaded, client, download, hash_file, part_path, recheck, stage_dir};
 pub use error::{NO_KEY, UpdateError};
 pub use install::{
-    CopyKind, Plan, Restart, Start, clean_up_after_update, confirm_update, copy_kind, install, install_with, on_start, plan, release_start, reveal,
-    runs_from_appimage,
+    CopyKind, Plan, Restart, Start, clean_up_after_update, confirm_update, copy_kind, install, install_with, is_command_line_tool,
+    mark_command_line_tool, on_start, plan, release_start, reveal, runs_from_appimage,
 };
 pub use msi::installed_by_msi;
 pub use release::{Release, newest, version_of};

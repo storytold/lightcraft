@@ -17,6 +17,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::download::Downloaded;
 use crate::error::UpdateError;
@@ -170,16 +171,40 @@ pub fn install_with(
 
 /// The `.app` bundle this program runs from, when it is that bundle's app.
 fn app_bundle() -> Option<PathBuf> {
-    app_bundle_of(&current_exe()?)
+    let exe = current_exe()?;
+    app_bundle_of(&exe, command_line_tool(&exe))
 }
 
-/// The `.app` bundle `exe` is the app of. The CLI inside the bundle (`Contents/MacOS/<cli>`)
-/// isn't: it never replaces the app it is part of, nor starts it ([`cli_in_bundle`]).
-fn app_bundle_of(exe: &Path) -> Option<PathBuf> {
-    if is_cli(exe) {
+/// The `.app` bundle `exe` is the app of. The CLI (`cli`) isn't, inside the bundle too
+/// (`Contents/MacOS/<cli>`): it never replaces the app it is part of, nor starts it
+/// ([`cli_in_bundle`]).
+fn app_bundle_of(exe: &Path, cli: bool) -> Option<PathBuf> {
+    if cli {
         return None;
     }
     bundle_of(exe)
+}
+
+/// Set by the CLI when it starts ([`mark_command_line_tool`]).
+static COMMAND_LINE_TOOL: AtomicBool = AtomicBool::new(false);
+
+/// Mark this process as the CLI. A desktop package can run the app's own executable as the CLI (a
+/// link named `<cli>`, or the Windows console launcher), so the executable no longer tells the two
+/// apart: the CLI calls this first, and then never installs an update over the app it is part of
+/// (the macOS bundle, a Windows MSI or zip copy).
+pub fn mark_command_line_tool() {
+    COMMAND_LINE_TOOL.store(true, Ordering::Relaxed);
+}
+
+/// Whether this process was marked as the CLI ([`mark_command_line_tool`]).
+pub fn is_command_line_tool() -> bool {
+    COMMAND_LINE_TOOL.load(Ordering::Relaxed)
+}
+
+/// Whether this process, running `exe`, is the CLI: marked so ([`mark_command_line_tool`]), or
+/// `exe` has its name ([`is_cli`]).
+fn command_line_tool(exe: &Path) -> bool {
+    is_command_line_tool() || is_cli(exe)
 }
 
 /// Whether `exe` is the CLI (by its brand name, `<cli>` or `<cli>.exe`).
@@ -187,11 +212,11 @@ fn is_cli(exe: &Path) -> bool {
     exe.file_stem().is_some_and(|name| name.eq_ignore_ascii_case(lcc_brand::CLI_BINARY))
 }
 
-/// Why the CLI at `exe` doesn't install a disk image, when it runs from inside the app's bundle:
-/// the app installs it, and that replaces the CLI too.
+/// Why the CLI (`cli`) running `exe` doesn't install a disk image, when `exe` is inside the app's
+/// bundle: the app installs it, and that replaces the CLI too.
 #[cfg(any(target_os = "macos", test))]
-fn cli_in_bundle(exe: &Path) -> Option<UpdateError> {
-    let bundle = bundle_of(exe).filter(|_| is_cli(exe))?;
+fn cli_in_bundle(exe: &Path, cli: bool) -> Option<UpdateError> {
+    let bundle = bundle_of(exe).filter(|_| cli)?;
     Some(UpdateError::Install(format!(
         "{} is part of {} and doesn't install updates itself: open {} and install the update there, which updates {} too",
         lcc_brand::CLI_BINARY,
@@ -258,7 +283,7 @@ pub fn copy_kind() -> CopyKind {
     }
     let Ok(exe) = std::env::current_exe() else { return CopyKind::Other };
     let (Some(dir), Some(name)) = (exe.parent(), exe.file_name().map(|n| n.to_string_lossy().to_string())) else { return CopyKind::Other };
-    if !name.eq_ignore_ascii_case(&format!("{}.exe", lcc_brand::BINARY)) {
+    if !updates_itself(&name, is_command_line_tool()) {
         return CopyKind::Other;
     }
     match crate::msi::installed_by_msi(&exe) {
@@ -383,7 +408,14 @@ fn zip_copy_exe() -> Option<PathBuf> {
         return None;
     }
     let exe = std::env::current_exe().ok()?;
-    exe.file_name()?.to_string_lossy().eq_ignore_ascii_case(&format!("{}.exe", lcc_brand::BINARY)).then_some(exe)
+    updates_itself(&exe.file_name()?.to_string_lossy(), is_command_line_tool()).then_some(exe)
+}
+
+/// Whether the Windows program `exe_name` (this process, the CLI when `cli`) is the app that
+/// updates its own copy: the app's executable, unless it runs as the CLI (started by the console
+/// launcher), which leaves its copy to the app.
+fn updates_itself(exe_name: &str, cli: bool) -> bool {
+    !cli && exe_name.eq_ignore_ascii_case(&format!("{}.exe", lcc_brand::BINARY))
 }
 
 /// A PowerShell single-quoted string: a `'` inside is doubled, nothing else is special (no
@@ -718,13 +750,38 @@ mod tests {
     fn the_cli_inside_the_bundle_never_installs_the_app() {
         let app = Path::new("/Applications/X.app/Contents/MacOS/X");
         let cli = PathBuf::from(format!("/Applications/X.app/Contents/MacOS/{}", lcc_brand::CLI_BINARY));
-        assert_eq!(app_bundle_of(app), Some(PathBuf::from("/Applications/X.app")));
-        assert_eq!(app_bundle_of(&cli), None, "the CLI is not the bundle's app");
-        assert!(cli_in_bundle(app).is_none(), "the app installs its own updates");
-        let err = cli_in_bundle(&cli).expect("the CLI in the bundle is refused");
+        assert_eq!(app_bundle_of(app, is_cli(app)), Some(PathBuf::from("/Applications/X.app")));
+        assert_eq!(app_bundle_of(&cli, is_cli(&cli)), None, "the CLI is not the bundle's app");
+        assert!(cli_in_bundle(app, is_cli(app)).is_none(), "the app installs its own updates");
+        let err = cli_in_bundle(&cli, is_cli(&cli)).expect("the CLI in the bundle is refused");
         assert!(err.to_string().contains(lcc_brand::DISPLAY_NAME) && err.to_string().contains("install the update there"), "{err}");
         // a CLI outside any bundle (a zip copy, a source build) is told about the release page instead, as before
-        assert!(cli_in_bundle(&PathBuf::from(format!("/usr/local/bin/{}", lcc_brand::CLI_BINARY))).is_none());
+        let outside = PathBuf::from(format!("/usr/local/bin/{}", lcc_brand::CLI_BINARY));
+        assert!(cli_in_bundle(&outside, is_cli(&outside)).is_none());
+    }
+
+    /// The app's own executable started as the CLI (a link named `<cli>` resolves to it) is still
+    /// the CLI once marked: it plans no install into the bundle and is told to update through the
+    /// app. (The mark is process-wide; no other test here needs it off.)
+    #[test]
+    fn the_app_executable_marked_as_the_cli_never_installs_the_app() {
+        let app = Path::new("/Applications/X.app/Contents/MacOS/X");
+        mark_command_line_tool();
+        assert!(is_command_line_tool());
+        assert_eq!(app_bundle_of(app, command_line_tool(app)), None, "the CLI is not the bundle's app, whatever executable it runs");
+        let err = cli_in_bundle(app, command_line_tool(app)).expect("the CLI in the bundle is refused");
+        assert!(err.to_string().contains("install the update there"), "{err}");
+    }
+
+    /// On Windows the CLI runs the app's executable through the console launcher: it never takes
+    /// the app's copy (MSI or zip) as its own to update.
+    #[test]
+    fn the_app_executable_updates_its_windows_copy_only_as_the_app() {
+        let app = format!("{}.exe", lcc_brand::BINARY);
+        assert!(updates_itself(&app, false), "the app updates its copy");
+        assert!(updates_itself(&app.to_uppercase(), false), "case aside");
+        assert!(!updates_itself(&app, true), "the CLI leaves the copy to the app");
+        assert!(!updates_itself(&format!("{}.exe", lcc_brand::CLI_BINARY), false), "nor any other program");
     }
 
     #[cfg(target_os = "macos")]

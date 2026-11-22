@@ -52,7 +52,7 @@ if [[ "$SKIP_BUILD" = 0 ]]; then
   # shellcheck source=../fonts.sh
   . "$ROOT/packaging/fonts.sh"
   prepare_fonts
-  (cd "$ROOT" && cargo build --release --locked -p lcc-app -p lcc-cli --features lcc-app/heif,lcc-cli/heif \
+  (cd "$ROOT" && cargo build --release --locked -p lcc-app --features lcc-app/heif \
     ${CROSS_TARGET:+--target "$CROSS_TARGET"})
 fi
 BIN="$CARGO_TARGET_DIR/${CROSS_TARGET:+$CROSS_TARGET/}release"
@@ -61,9 +61,9 @@ STAGE="$WORK/root"
 rm -rf "$WORK"
 
 # ---- stage an FHS tree (shared by every format) -------------------------------------------------
-# The cargo binaries have neutral names (app, app-cli); packages carry the brand's.
+# The cargo binary has a neutral name (app); packages carry the brand's, and the CLI is a link to it.
 stage_binaries "$BIN" "$STAGE/usr/bin"
-"${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/$APP" "$STAGE/usr/bin/$CLI" 2>/dev/null || true
+"${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/$APP" 2>/dev/null || true
 brand_render "$HERE/{app_id}.desktop.in" "$STAGE/usr/share/applications/$APP_ID.desktop"
 brand_render "$HERE/{app_id}.mime.xml.in" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
 brand_render "$HERE/{app_id}.metainfo.xml.in" "$STAGE/usr/share/metainfo/$APP_ID.metainfo.xml"

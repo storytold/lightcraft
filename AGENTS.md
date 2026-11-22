@@ -53,7 +53,8 @@ never a panic. Never ship a panic path; fix crashes before building on them. Thi
   free space elsewhere = POSIX `df`), `crates/hdrmeta` (wgpu-hal: `VK_EXT_hdr_metadata` + `vkSetHdrMetadataEXT` on
   Linux/BSD Wayland), `crates/gpumem` (wgpu-hal GPU memory budget for the HDR zoom cache), `crates/android-host`
   (JNI VM/activity adoption), `crates/winspool` (Win32 print spooler), `crates/winmsi` (`MsiEnumClientsW` +
-  `MsiGetComponentPathW` for the updater), and `apps/android`'s `#[unsafe(no_mangle)] android_main`. Every other
+  `MsiGetComponentPathW` for the updater), `crates/winjob` (a kill-on-close job object, so the Windows CLI
+  launcher's app ends with it), and `apps/android`'s `#[unsafe(no_mangle)] android_main`. Every other
   production crate root has `#![forbid(unsafe_code)]`. New unsafe need → isolated, well-tested helper crate:
   `// SAFETY:` everywhere, safe API, safe fallback, and a line here naming it.
 - Input-derived numbers are hostile: `get()` not `[i]`/`[a..b]`; checked/saturating math; no division by zero,

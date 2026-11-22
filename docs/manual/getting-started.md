@@ -13,8 +13,10 @@ if macOS still refuses, run `xattr -c` on the downloaded `.dmg` and open it agai
 let you verify the download.
 
 **The macOS command-line tool** is inside the app, `/Applications/<app>.app/Contents/MacOS/<cli>`, and updates
-with it (earlier releases had it as a separate `.zip`). To run it as `<cli>`, link it onto your `PATH` once, after
-opening the app the first time:
+with it (earlier releases had it as a separate `.zip`). It is a link to the app's own program, which works as the
+tool when started under the name `<cli>`; on Linux and FreeBSD `<cli>` is the same kind of link, and on Windows
+`<cli>.exe` is a small launcher for the app. To run it as `<cli>`, link it onto your `PATH` once, keeping that
+name, after opening the app the first time:
 
 ```sh
 mkdir -p ~/.local/bin

@@ -49,7 +49,7 @@ echo "==> $BRAND_DISPLAY_NAME $VERSION for FreeBSD $ARCH"
 # The release VM has 12 GB; full parallelism on the biggest crates runs it out of memory.
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
 if [[ "$SKIP_BUILD" = 0 ]]; then
-  (cd "$ROOT" && cargo build --release --locked -p lcc-app -p lcc-cli --features lcc-app/heif,lcc-cli/heif)
+  (cd "$ROOT" && cargo build --release --locked -p lcc-app --features lcc-app/heif)
 fi
 WORK="$CARGO_TARGET_DIR/freebsd-package"
 STAGE="$WORK/$BASENAME"
@@ -63,11 +63,9 @@ if [[ "$DRY_RUN" = 1 ]]; then
   BIN="$WORK/stub-bin"
   OUT_DIR="$WORK"
   mkdir -p "$BIN"
-  # stubs under the neutral cargo names, staged under the brand names like real builds
-  for b in app app-cli; do
-    printf '#!/bin/sh\necho "%s %s (dry-run stub)"\n' "$b" "$VERSION" >"$BIN/$b"
-    chmod 755 "$BIN/$b"
-  done
+  # a stub under the neutral cargo name, staged under the brand names like a real build
+  printf '#!/bin/sh\necho "app %s (dry-run stub)"\n' "$VERSION" >"$BIN/app"
+  chmod 755 "$BIN/app"
 fi
 
 # ---- stage a /usr/local-style tree --------------------------------------------------------------
@@ -75,8 +73,8 @@ fi
 mkdir -p "$STAGE/bin" "$STAGE/share/applications" "$STAGE/share/mime/packages" \
   "$STAGE/share/metainfo" "$STAGE/share/icons" "$STAGE/share/doc/$APP"
 stage_binaries "$BIN" "$STAGE/bin"
-chmod 755 "$STAGE/bin/$APP" "$STAGE/bin/$CLI"
-strip "$STAGE/bin/$APP" "$STAGE/bin/$CLI" 2>/dev/null || true
+chmod 755 "$STAGE/bin/$APP"
+strip "$STAGE/bin/$APP" 2>/dev/null || true
 # The desktop entry, MIME type, metainfo and icons are the freedesktop files Linux ships.
 brand_render "$LINUX/{app_id}.desktop.in" "$STAGE/share/applications/$APP_ID.desktop"
 brand_render "$LINUX/{app_id}.mime.xml.in" "$STAGE/share/mime/packages/$APP_ID.xml"

@@ -51,7 +51,7 @@ const RELAUNCH: &str =
 /// Install the disk image `dmg` (release `version`) over the bundle this program runs from, and
 /// start it again once this process has quit.
 pub(super) fn install_dmg(dmg: &Path, version: &str) -> Result<Outcome, UpdateError> {
-    if let Some(refused) = super::current_exe().as_deref().and_then(super::cli_in_bundle) {
+    if let Some(refused) = super::current_exe().and_then(|exe| super::cli_in_bundle(&exe, super::command_line_tool(&exe))) {
         return Err(refused);
     }
     install_dmg_at(dmg, super::app_bundle().as_deref(), version, &mut relaunch)

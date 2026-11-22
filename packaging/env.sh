@@ -13,7 +13,7 @@
 #                           ($BRAND_FILE, relative to ROOT, picks another brand file)
 #
 # Functions: brand_render IN OUT (fill a *.in template's {{key}} placeholders), stage_binaries DIR OUT
-# (copy the neutral `app`/`app-cli` binaries to their brand names), warn, copy_docs, sha256.
+# (copy the neutral `app` binary to its brand name, with the CLI a link to it), warn, copy_docs, sha256.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export ROOT
@@ -107,12 +107,14 @@ EOF_RENDER
   fi
 }
 
-# Copy the neutral cargo binaries (app, app-cli) from DIR to OUT under their brand names.
+# Copy the neutral cargo binary (app) from DIR to OUT under its brand name, and the CLI beside it as
+# a relative link to it: started under the CLI's name, the app's executable is the CLI
+# (docs/packaging.md → One program for the app and the CLI).
 stage_binaries() {
-  local dir="$1" out="$2" ext="${3:-}"
+  local dir="$1" out="$2"
   mkdir -p "$out"
-  cp "$dir/app$ext" "$out/$BRAND_BINARY$ext"
-  cp "$dir/app-cli$ext" "$out/$BRAND_CLI_BINARY$ext"
+  cp "$dir/app" "$out/$BRAND_BINARY"
+  ln -s "$BRAND_BINARY" "$out/$BRAND_CLI_BINARY"
 }
 
 # Emit a GitHub Actions warning (plain stderr outside Actions).

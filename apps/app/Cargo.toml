@@ -16,18 +16,21 @@ workspace = true
 [features]
 # The upstream project's own AI Denoise model (MIT OR Apache-2.0) is offered as a download
 default = ["denoise", "own-model", "heif"]
-denoise = ["lcc-engine/denoise"]
-rawnind-model = ["denoise", "lcc-engine/rawnind-model"]
-realesrgan-model = ["denoise", "lcc-engine/realesrgan-model"]
-own-model = ["denoise", "lcc-engine/own-model"]
+denoise = ["lcc-engine/denoise", "lcc-cli/denoise"]
+rawnind-model = ["denoise", "lcc-engine/rawnind-model", "lcc-cli/rawnind-model"]
+realesrgan-model = ["denoise", "lcc-engine/realesrgan-model", "lcc-cli/realesrgan-model"]
+own-model = ["denoise", "lcc-engine/own-model", "lcc-cli/own-model"]
 # Open HEIC/HEIF photos (the lcc-heif crate, pure Rust). On by default so every build, local
 # ones included, opens iPhone photos; distributors who must avoid HEVC (patents) build with
 # `--no-default-features --features denoise,own-model`.
-heif = ["lcc-codecs/heif"]
+heif = ["lcc-codecs/heif", "lcc-cli/heif"]
 # Sound for video playback and slideshow music (cpal; links libasound on Linux). See docs/video.md.
 audio-out = ["lcc-engine/audio-out"]
 
 [dependencies]
+# the command-line tool, run when the program is started as `<cli>` (`main`); its features follow
+# the app's, so a build without HEIF leaves it out of the CLI too
+lcc-cli = { path = "../cli", default-features = false }
 # reading the Logi plugin package's version (`logi_plugin`) and the control-surface e2e test
 lcc-surface = { workspace = true }
 lcc-brand = { workspace = true }

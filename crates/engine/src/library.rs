@@ -499,7 +499,26 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 /// This program, for the lock owner note (the app's display name, or the executable's name).
 fn program_name() -> String {
     let exe = std::env::current_exe().ok().and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()));
-    match exe.as_deref() {
+    program_name_of(exe.as_deref(), marked_cli())
+}
+
+/// Whether the CLI marked this process as itself ([`lcc_updater::mark_command_line_tool`]).
+#[cfg(not(target_arch = "wasm32"))]
+fn marked_cli() -> bool {
+    lcc_updater::is_command_line_tool()
+}
+
+/// No CLI in the browser.
+#[cfg(target_arch = "wasm32")]
+fn marked_cli() -> bool {
+    false
+}
+
+/// [`program_name`] for the executable named `exe` (its stem), in a process marked as the CLI when
+/// `cli`: the packages run the app's executable as the CLI, so the CLI is named by its mark.
+fn program_name_of(exe: Option<&str>, cli: bool) -> String {
+    match exe {
+        _ if cli => lcc_brand::CLI_BINARY.into(),
         None => lcc_brand::DISPLAY_NAME.into(),
         Some(n) if n == lcc_brand::BINARY || n == crate::legacy::BINARY => lcc_brand::DISPLAY_NAME.into(),
         Some(other) => other.to_string(),
@@ -1750,5 +1769,20 @@ mod resolve_tests {
         assert!(s.library.as_ref().is_some_and(|l| l.dir == a));
         drop(s);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod program_name_tests {
+    use super::program_name_of;
+
+    /// The packages run the app's executable as the CLI: a library it holds is "in use by" the CLI,
+    /// so the user quits the right program.
+    #[test]
+    fn a_process_marked_as_the_cli_names_the_cli_in_its_lock() {
+        assert_eq!(program_name_of(Some(lcc_brand::BINARY), true), lcc_brand::CLI_BINARY);
+        assert_eq!(program_name_of(None, true), lcc_brand::CLI_BINARY);
+        assert_eq!(program_name_of(Some(lcc_brand::BINARY), false), lcc_brand::DISPLAY_NAME, "the app is named by its display name");
+        assert_eq!(program_name_of(Some("other"), false), "other");
     }
 }

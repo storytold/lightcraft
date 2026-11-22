@@ -6,6 +6,9 @@ license.workspace = true
 publish = false
 description = "Command-line tool: headless render, command listing and the MCP server"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "app-cli"
 path = "src/main.rs"
@@ -28,6 +31,8 @@ lcc-develop = { workspace = true }
 chrono = { workspace = true }
 lcc-sysmem = { workspace = true }
 lcc-mcp = { workspace = true }
+# marking this process as the CLI, so it never installs an update over the app (`main_with`)
+lcc-updater = { workspace = true }
 log = { workspace = true }
 lcc-ui-egui = { workspace = true }
 lcc-codecs = { workspace = true }

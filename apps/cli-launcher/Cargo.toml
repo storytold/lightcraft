@@ -1,0 +1,23 @@
+[package]
+name = "lcc-cli-launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "The Windows packages' command-line tool: a console program that runs the app's executable as the CLI"
+
+[[bin]]
+name = "cli-launcher"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+lcc-brand = { workspace = true }
+# ends the app with the launcher on Windows
+lcc-winjob = { workspace = true }
+
+[dev-dependencies]
+# temp folders for the stand-in app
+lcc-testkit = { workspace = true }

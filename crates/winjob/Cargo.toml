@@ -1,0 +1,18 @@
+[package]
+name = "lcc-winjob"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Windows job objects (L0): ties a child process's life to this one's, so the Windows command-line launcher's app ends with it. One of the crates allowed `unsafe` (three kernel32 calls); reports unsupported elsewhere."
+
+# Opts out of the workspace lints only to keep `unsafe_code = "deny"` overridable for the single
+# `win` module below; every other crate root has `#![forbid(unsafe_code)]`. See CLAUDE.md.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] } # MIT OR Apache-2.0

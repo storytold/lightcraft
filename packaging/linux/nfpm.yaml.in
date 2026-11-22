@@ -57,9 +57,10 @@ contents:
   - src: ${STAGE}/usr/bin/{{binary}}
     dst: /usr/bin/{{binary}}
     file_info: { mode: 0755 }
-  - src: ${STAGE}/usr/bin/{{cli_binary}}
+  # the CLI is the app's executable started under its name (docs/packaging.md)
+  - src: {{binary}}
     dst: /usr/bin/{{cli_binary}}
-    file_info: { mode: 0755 }
+    type: symlink
   - src: ${STAGE}/usr/share/
     dst: /usr/share/
     type: tree

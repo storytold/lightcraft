@@ -43,6 +43,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("gpumem", Class::Layer(0)),
     ("winspool", Class::Layer(0)),
     ("winmsi", Class::Layer(0)),
+    ("winjob", Class::Layer(0)),
     ("android-host", Class::Layer(0)),
     ("peer", Class::Layer(0)),
     ("sync", Class::Layer(0)),
@@ -109,6 +110,7 @@ pub const TABLE: &[(&str, Class)] = &[
     // L6 apps and tooling
     ("app", Class::Exempt),
     ("cli", Class::Exempt),
+    ("cli-launcher", Class::Exempt),
     ("web", Class::Exempt),
     ("android", Class::Exempt),
     ("xtask", Class::Exempt),
