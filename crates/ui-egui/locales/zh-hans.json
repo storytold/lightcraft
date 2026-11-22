@@ -1,4 +1,6 @@
 {
+  "Photo Merge Result": "照片合并结果",
+  "LightCraft could not align these photos with the included set, so the panorama leaves them out.": "LightCraft 无法将这些照片与已包含的照片对齐，因此全景图未包含它们。",
   "LightCraft could not align these photos with the included set. Review the preview before merging.": "LightCraft 无法将这些照片与已包含的照片对齐。合并前请检查预览。",
   "  (library default)": "  （图库默认值）",
   " (inverted)": " （已反相）",

@@ -116,6 +116,8 @@ pub struct MergeState {
     pub ids: Vec<PhotoId>,
     /// HDR for Each Bracket Set: the sets still to merge after the running one.
     pub batch: std::collections::VecDeque<Vec<PhotoId>>,
+    /// A finished panorama's list of omitted photos, waiting for the dialog open when it finished to close.
+    pub pending_result: Option<crate::state::Dialog>,
 }
 
 impl MergeState {
@@ -319,11 +321,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     "HDR"
                 });
                 match r.map_err(lightcraft_engine::EngineError::Other).and_then(|out| app.session.finish_merge(&t.job, out)) {
-                    Ok(v) => {
-                        let message = added_message(what, &v);
-                        app.merge.last_result = Some(v);
-                        app.toast(ctx, message);
-                    }
+                    Ok(v) => finished(app, ctx, what, v),
                     Err(_) if t.cancel.load(Ordering::Relaxed) => {
                         // cancelling one merge of a batch stops the batch
                         app.merge.batch.clear();
@@ -353,6 +351,40 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
             }
         }
     }
+    // (never over a dialog the user has open: it waits until that one closes)
+    if app.ui.dialog.is_none()
+        && let Some(dialog) = app.merge.pending_result.take()
+    {
+        app.ui.dialog = Some(dialog);
+    }
+}
+
+/// A merge finished and was added (`what`: "Panorama", …; `info`: its result): say so, and when it left photos out,
+/// name them in a dialog that stays until closed (shown by [`poll`] once no other dialog is open).
+pub(crate) fn finished(app: &mut LightcraftApp, ctx: &egui::Context, what: &str, info: Value) {
+    let message = added_message(what, &info);
+    if let Some(dialog) = result_dialog(&message, &info) {
+        app.merge.pending_result = Some(dialog);
+    }
+    app.merge.last_result = Some(info);
+    app.toast(ctx, message);
+}
+
+/// The dialog that names the photos a finished panorama left out, from that result's own source paths (the
+/// preview registered smaller copies, so it can leave out other photos). `None` when it left none out.
+fn result_dialog(message: &str, info: &Value) -> Option<crate::state::Dialog> {
+    let omitted: Vec<String> = info["omitted"].as_array()?.iter().filter_map(|p| p["path"].as_str().map(str::to_string)).collect();
+    (!omitted.is_empty()).then(|| crate::state::Dialog::MergeResult { summary: message.to_string(), omitted })
+}
+
+/// The body of the result dialog: the completion message (a live region: the dialog opens when a background merge
+/// finishes, away from where the user is) and the omitted files' names.
+pub fn result_body(ui: &mut egui::Ui, summary: &str, omitted: &[String]) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let r = ui.add(egui::Label::new(egui::RichText::new(summary).strong().color(t.caution)).wrap());
+    ui.ctx().accesskit_node_builder(r.id, |node| node.set_live(egui::accesskit::Live::Polite));
+    ui.label(crate::i18n::tr("LightCraft could not align these photos with the included set, so the panorama leaves them out."));
+    omitted_names(ui, omitted.iter().map(String::as_str));
 }
 
 /// The message for a finished merge (`what`: "Panorama", …; `info`: its result): a panorama
@@ -389,9 +421,13 @@ fn omitted_photos(ui: &mut egui::Ui, info: &Value) {
     let t = crate::theme::Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(inclusion_summary(info)).strong().color(t.caution));
     ui.label(crate::i18n::tr("LightCraft could not align these photos with the included set. Review the preview before merging."));
+    omitted_names(ui, omitted.iter().filter_map(|photo| photo["path"].as_str()));
+}
+
+/// The omitted photos' file names, scrolling past a few; each one's full path on hover.
+fn omitted_names<'a>(ui: &mut egui::Ui, paths: impl Iterator<Item = &'a str>) {
     egui::ScrollArea::vertical().id_salt("merge-omitted").max_height(76.0).show(ui, |ui| {
-        for photo in omitted {
-            let Some(path) = photo["path"].as_str() else { continue };
+        for path in paths {
             let name = std::path::Path::new(path).file_name().and_then(|s| s.to_str()).unwrap_or(path);
             ui.add(egui::Label::new(name).wrap()).on_hover_text(path);
         }

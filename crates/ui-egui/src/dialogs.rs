@@ -472,6 +472,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::SlideshowExport { .. } => "Export Slideshow",
         Dialog::Print => "Print",
         Dialog::Merge { opts } => opts.title(),
+        Dialog::MergeResult { .. } => "Photo Merge Result",
         Dialog::Settings { .. } => "Settings",
         Dialog::ConfirmDelete { .. } => "Delete Photos",
         Dialog::MovePhotos { .. } => "Move Photos",
@@ -619,6 +620,7 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         | Dialog::WhatsNew
         | Dialog::ManageEffects { .. }
         | Dialog::ViewOptions
+        | Dialog::MergeResult { .. }
         | Dialog::LightroomResult { .. }
         | Dialog::DenoiseModel { .. }
         | Dialog::FaceModel { .. } => "Close",
@@ -2123,6 +2125,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         Dialog::ContactSheet { .. } => contact_sheet_body(app, ui, dlg),
         Dialog::Export { .. } => export_body(app, ui, t, dlg),
         Dialog::Merge { opts } => crate::merge::body(app, ui, opts),
+        Dialog::MergeResult { summary, omitted } => crate::merge::result_body(ui, summary, omitted),
         Dialog::Import { opts } => crate::import::body(app, ui, opts),
         // (Settings is never taller than `body_max`, so the scroll area round it never
         // scrolls: its tab bar stays put and its pages scroll by themselves)

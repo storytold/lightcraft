@@ -36,7 +36,10 @@ verified, and the `used` and `omitted` lists cover every source photo. A preview
 merge can use different photos because they run at different resolutions.
 
 The preview lists omitted filenames and the included count. The completion message uses
-the final merge's count. Pair measurements also appear at debug log level, including when
+the final merge's count. When the final merge omits photos, a Photo Merge Result dialog lists
+the final result's omitted filenames, because they can differ from the preview's: the preview
+registers copies at most 1,024 pixels on the long side, and the final merge registers the
+full-size photos again. Pair measurements also appear at debug log level, including when
 registration fails entirely. An accepted pair can belong to a component that is not used.
 `notRegistered` means the photo has no camera in the final registered set. It does not
 establish missing overlap, moving water, or parallax as the cause.

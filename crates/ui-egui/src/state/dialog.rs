@@ -33,6 +33,12 @@ pub enum Dialog {
         details: Vec<String>,
         first: Option<u64>,
     },
+    /// A finished panorama that left photos out: its message and the omitted files' paths, taken from the final
+    /// result (the preview registered smaller copies and can leave out other photos).
+    MergeResult {
+        summary: String,
+        omitted: Vec<String>,
+    },
     /// File ▸ Print…: the Print module. Its state is the session's (`print.*`); the page on show
     /// and the selected cell are [`UiState::print`].
     Print,
