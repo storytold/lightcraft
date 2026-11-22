@@ -55,7 +55,7 @@ fn bright_camera_info() -> SourceInfo {
 }
 
 #[test]
-fn local_whites_follow_visible_camera_highlights_in_v3() {
+fn local_whites_follow_visible_camera_highlights_in_v11() {
     use lightcraft_develop::{Process, Treatment};
     // Both patches lie below the old +0.5 scene-EV gate, but the camera renders the lower
     // patch as bright stone.
@@ -67,8 +67,8 @@ fn local_whites_follow_visible_camera_highlights_in_v3() {
         s.treatment = Treatment::Bw;
         render(&src, &info, &s, &RenderRequest::fit(W, H)).image
     };
-    let neutral = image(Process::V3, 0.0);
-    let (minus, plus) = (image(Process::V3, -100.0), image(Process::V3, 100.0));
+    let neutral = image(Process::V11, 0.0);
+    let (minus, plus) = (image(Process::V11, -100.0), image(Process::V11, 100.0));
     let bright = 90 * W + 50;
     let original = luma(neutral.data[bright]);
     assert!(original > 180.0, "fixture must be visibly bright: {original}");
@@ -85,13 +85,13 @@ fn local_whites_follow_visible_camera_highlights_in_v3() {
 }
 
 #[test]
-fn v3_local_whites_do_not_change_other_adjustments_or_disabled_masks() {
+fn v11_local_whites_do_not_change_other_adjustments_or_disabled_masks() {
     use lightcraft_develop::Process;
     let src = Rgb32f::from_fn(W, H, |x, _| [0.00002 * 1.025f32.powi(x as i32); 3]);
     let info = bright_camera_info();
     for (whites, visible, amount) in [(0.0, true, 100.0), (100.0, false, 100.0), (100.0, true, 0.0)] {
         let mut settings = left_mask(LocalAdjustments { whites, exposure: 0.3, shadows: 35.0, ..Default::default() });
-        settings.process = Process::V3.version();
+        settings.process = Process::V11.version();
         settings.light.shadows = 50.0;
         settings.light.blacks = -40.0;
         settings.masks[0].visible = visible;

@@ -47,7 +47,7 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
             let draw_open = open;
             let mut toggled = false;
             if has_children {
-                let tri = tree_toggle(ui, &resp, indent, open_id, &mut open, format!("albumToggle:{}", a.id.0));
+                let tri = tree_toggle(ui, &resp, indent, open_id, &mut open, format!("albumToggle:{}", a.id.0), &a.name);
                 toggled = tri.clicked();
                 // the triangle sits on the row and takes its clicks: the menu opens from it too
                 folder_menu(app, &tri, a);
@@ -63,9 +63,9 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
         } else {
             let sel = app.session.source == LibrarySource::Album(a.id);
             let icon = if a.is_smart() { Icon::SmartAlbum } else { Icon::Album };
-            // cached: a smart album's count scans the catalog
+            // cached: a smart album's count scans the catalog (in the background: no number until it is known)
             let now = (app.session.clock)();
-            let n = app.caches.album_counts(&app.session.catalog, &now).get(&a.id).copied().unwrap_or(0);
+            let n = app.caches.album_counts(&app.session.catalog, app.session.library_generation(), &now, ui.ctx()).get(&a.id).copied();
             // the album B adds to is marked "+"
             let target =
                 app.session.target_album.filter(|t| app.session.catalog.album(*t).is_some()).or_else(|| app.session.catalog.quick_collection());
@@ -74,7 +74,7 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
             let problems = app.caches.smart_album_problems(&app.session.catalog).get(&a.id).cloned().unwrap_or_default();
             let label = if problems.is_empty() { label } else { format!("⚠ {label}") };
             let mut resp = Row::new(&format!("album:{}", a.id.0), icon, &label)
-                .count(Some(n))
+                .count(n)
                 .selected(sel)
                 .indent(indent)
                 .sense(Sense::click_and_drag())
@@ -382,7 +382,7 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
     if !over {
         return;
     }
-    let released = ui.input(|i| i.pointer.any_released());
+    let released = ui.input(|i| i.pointer.primary_released());
     // albums hold library photos (issue #684): Local ones can't be dropped in; the row doesn't
     // light up, and a release says why
     let photos: Vec<lightcraft_catalog::PhotoId> = ids.iter().map(|id| lightcraft_catalog::PhotoId(*id)).collect();
@@ -405,16 +405,19 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
 /// Adds the dragged photos to the album and toasts how many went in (and how many Local ones were skipped).
 fn drop_photos_on_album(app: &mut LightcraftApp, ui: &egui::Ui, a: &Album, ids: Vec<u64>) {
     match app.run("album.addPhotos", json!({"id": a.id.0, "ids": ids})) {
-        Ok(r) => app.toast(ui.ctx(), added_message(a, &r)),
+        Ok(r) => {
+            let name = crate::destination::album(&app.session.catalog, a);
+            app.toast(ui.ctx(), added_message(&name, &r));
+        }
         Err(e) => app.toast(ui.ctx(), e),
     }
 }
 
 /// "Added N photos to “album”", plus a note when Local photos were skipped.
-fn added_message(a: &Album, r: &serde_json::Value) -> String {
+fn added_message(name: &str, r: &serde_json::Value) -> String {
     let n = r.get("added").and_then(serde_json::Value::as_u64).unwrap_or(0);
     let skipped = r.get("skipped").and_then(serde_json::Value::as_u64).unwrap_or(0);
-    let mut msg = crate::i18n::tr_format!("Added {n} photo{} to “{}”", if n == 1 { "" } else { "s" }, a.name, n = n);
+    let mut msg = crate::i18n::tr_format!("Added {n} photo{} to “{}”", if n == 1 { "" } else { "s" }, name, n = n);
     if skipped > 0 {
         msg.push_str(" · ");
         msg.push_str(&skipped_note(skipped));

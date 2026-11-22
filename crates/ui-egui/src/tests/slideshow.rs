@@ -48,7 +48,7 @@ fn fixture_grid(count: usize, open: Rc<Cell<bool>>) -> (RenderFixture, Headless)
     // consume the wall-clock budget before the slideshow scheduling assertions begin.
     assert!(open.get(), "the native grid setup gate starts open");
     h.app.renderer.set_offload(Box::new(RenderGate::new(open)));
-    assert!(h.settle(SETTLE), "the grid renders settle before controlling slide renders");
+    assert!(h.settle(super::ui_settle_timeout()), "the grid renders settle before controlling slide renders");
     assert_eq!(h.app.session.catalog.len(), count, "the slideshow fixture photos");
     let id = h.app.session.active().expect("a photo is open");
     let photo = h.app.session.catalog.photo(id).expect("it is in the catalog");
@@ -241,7 +241,7 @@ fn a_manual_slideshow_waits_for_the_arrow_keys() {
     assert_eq!(r["settings"]["manual"], true, "{r}");
     // once the first two slides are rendered, and far longer than the slide duration: the first
     // photo stays up
-    assert!(h.step_until(SETTLE, |h| has_slide(h, photos[0]) && has_slide(h, photos[1])), "the slides are rendered");
+    assert!(h.step_until(super::ui_settle_timeout(), |h| has_slide(h, photos[0]) && has_slide(h, photos[1])), "the slides are rendered");
     for _ in 0..120 {
         h.step();
     }
@@ -400,6 +400,29 @@ fn playback_settings_drive_the_slideshow_and_bad_ones_are_refused() {
     h.settle(SETTLE);
 }
 
+/// The slide preview's render lands on a frame nobody can name (a worker thread); the page under it must
+/// not move when it does, or a click made in that frame lands beside the control aimed at (the gate went
+/// red on it: `playback_settings_…` clicks "Random order" and the checkbox never changed).
+#[test]
+fn the_settings_page_does_not_move_when_the_slide_preview_finishes_rendering() {
+    let mut h = grid();
+    let open = std::rc::Rc::new(std::cell::Cell::new(false));
+    h.app.renderer.set_offload(Box::new(crate::headless::RenderGate::new(open.clone())));
+    run(&mut h, "view.slideshowOptions", json!({}));
+    // (the held render keeps the app "busy", so settle() would wait out its timeout: a second of frames instead)
+    for _ in 0..60 {
+        h.step();
+    }
+    let rect = |h: &Headless, w: &str| h.app.widgets.iter().find(|(id, _)| id == w).map(|(_, r)| *r).unwrap_or_else(|| panic!("{w} is on screen"));
+    let (room, check) = (rect(&h, "settings:pageRoom"), rect(&h, "check:settings.slideshowRandom"));
+    assert!(!h.app.renderer.textures.contains_key(&Slot::SlidePreview), "the render is held back");
+    open.set(true);
+    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.contains_key(&Slot::SlidePreview)), "the render lands");
+    h.settle(Duration::from_secs(5));
+    assert_eq!(rect(&h, "settings:pageRoom"), room, "the page's room is the same before and after the render");
+    assert_eq!(rect(&h, "check:settings.slideshowRandom"), check, "a control stays where it was drawn");
+}
+
 #[test]
 fn a_click_on_a_control_scrolled_out_of_the_settings_page_is_refused() {
     // A compact window leaves the lower controls of the Slideshow settings page outside the
@@ -434,7 +457,7 @@ fn a_photo_deleted_while_it_plays_does_not_stall_the_slideshow() {
     run(&mut h, "photo.delete", json!({"ids": [next.0]}));
     run(&mut h, "photo.deletePermanently", json!({"ids": [next.0]}));
     assert!(h.app.session.catalog.photo(next).is_none());
-    assert!(h.step_until(SETTLE, |h| h.app.ui.slideshow.as_ref().is_some_and(|r| r.play.position().0 >= 3)), "it plays on");
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.ui.slideshow.as_ref().is_some_and(|r| r.play.position().0 >= 3)), "it plays on");
     assert!(photos.len() > 3);
     h.settle(SETTLE);
 }
@@ -607,7 +630,7 @@ fn settings_shows_the_slide_layout_and_a_live_preview() {
         assert!(has(&h, w), "{w}");
     }
     // the preview is the composed slide, rendered off the UI thread
-    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
     // a checkbox goes through slideshow.layout, and its controls appear (scrolled into view)
     reveal(&mut h, "check:settings.slideshowShadow");
     let r = h.request("ui.clickWidget", json!({"id": "check:settings.slideshowShadow"}), T);
@@ -618,7 +641,7 @@ fn settings_shows_the_slide_layout_and_a_live_preview() {
     // a changed layout renders the preview again (once it has settled)
     let before = h.app.renderer.textures.get(&Slot::SlidePreview).map(|t| t.key);
     run(&mut h, "slideshow.layout", json!({"margins": 0.2, "backdropColor": "#00ff00"}));
-    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).map(|t| t.key) != before));
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.renderer.textures.get(&Slot::SlidePreview).map(|t| t.key) != before));
     h.step();
     // (the preview is pinned above the page: in view already)
     reveal(&mut h, "slideshow:preview");
