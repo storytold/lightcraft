@@ -19,6 +19,7 @@ chrono = { workspace = true }
 brotli-decompressor = { version = "5", default-features = false, features = ["std"] }
 
 [dev-dependencies]
+lcc-fuzzkit = { workspace = true }
 proptest = { workspace = true }
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lcc-testkit = { workspace = true }

@@ -2885,6 +2885,8 @@ mod tests_forget_local;
 #[cfg(test)]
 mod tests_fuji;
 #[cfg(test)]
+mod tests_fuzz_lightroom;
+#[cfg(test)]
 mod tests_genfill;
 #[cfg(test)]
 mod tests_history_cursor;

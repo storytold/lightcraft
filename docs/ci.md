@@ -1,6 +1,6 @@
 # CI and landing changes
 
-> **Last updated:** 2026-11-22 · **Change:** minor (nightly workflow: corpus + fonts full run with a skip gate, GPU equivalence on lavapipe and WARP); minor (timing probes and benchmarks run with `<PREFIX>_PROBES=1` and otherwise record a `probe` skip); minor (generated demo photos are kept on disk across test processes); minor (the fast gate checks that the fork catalogs are sorted); minor (the full run also checks the x86_64 Android target); major (no repeated runs: a push to main skips a tree its PR run tested, no CI on pushes to `release`, Brand only on PRs and built in the runner cache, Windows ARM64 only when packaging inputs change, sccache, one cargo run per target for the fast gate's wasm/Android checks); minor (release jobs upload straight to the draft release, not via Actions artifacts); major (every workflow on self-hosted runners, containers on gpu0, fork PRs approved after review); minor (test retries, flaky reports and the test quarantine for the full run); major (fast PR gate; full test runs only before a release); major (created: PR-only main, self-hosted runner, local status)
+> **Last updated:** 2026-11-22 · **Change:** minor (nightly `Fuzz` workflow: every pure-Rust fuzz target for 30 minutes, crash inputs as artifacts); minor (nightly workflow: corpus + fonts full run with a skip gate, GPU equivalence on lavapipe and WARP); minor (timing probes and benchmarks run with `<PREFIX>_PROBES=1` and otherwise record a `probe` skip); minor (generated demo photos are kept on disk across test processes); minor (the fast gate checks that the fork catalogs are sorted); minor (the full run also checks the x86_64 Android target); major (no repeated runs: a push to main skips a tree its PR run tested, no CI on pushes to `release`, Brand only on PRs and built in the runner cache, Windows ARM64 only when packaging inputs change, sccache, one cargo run per target for the fast gate's wasm/Android checks); minor (release jobs upload straight to the draft release, not via Actions artifacts); major (every workflow on self-hosted runners, containers on gpu0, fork PRs approved after review); minor (test retries, flaky reports and the test quarantine for the full run); major (fast PR gate; full test runs only before a release); major (created: PR-only main, self-hosted runner, local status)
 
 ## How changes reach `main`
 
@@ -177,6 +177,14 @@ temporary step scripts (`shell: powershell`) may run. After changing `.env`, res
 5. For the container jobs: Docker (see *Containers on gpu0*).
 
 If the runner is offline, jobs for our own branches wait in the queue; post a local result instead (below).
+
+### Nightly fuzzing
+
+`.github/workflows/fuzz.yml` runs every night (and on manual dispatch, with a shorter time if asked): one job per
+fuzz target (`raw`, `tiff`, `codecs`, `meta`, `develop`, `lightroom`, `peer`), each `cargo xtask fuzz <target>
+--secs 1800` with the CC0 corpus as extra seeds. It is not a PR gate. A crash fails that job and uploads its inputs
+as the `fuzz-crashes-<target>` artifact; the fix lands with the input folded into the format's hostile-input
+table ([`testing-sil.md`](testing-sil.md#fuzz-targets-below-sil)). Locally: `cargo xtask fuzz [TARGET…] --secs N`.
 
 ## Network services in tests: loopback mocks
 

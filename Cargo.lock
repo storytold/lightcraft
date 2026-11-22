@@ -4690,6 +4690,7 @@ dependencies = [
  "jxl-oxide",
  "lcc-brand",
  "lcc-color",
+ "lcc-fuzzkit",
  "lcc-geom",
  "lcc-heif",
  "lcc-meta",
@@ -4797,6 +4798,7 @@ version = "26.47.3"
 dependencies = [
  "lcc-brand",
  "lcc-color",
+ "lcc-fuzzkit",
  "lcc-geom",
  "miniz_oxide 0.8.9",
  "proptest",
@@ -4835,6 +4837,7 @@ dependencies = [
  "lcc-faces",
  "lcc-fetch",
  "lcc-filters",
+ "lcc-fuzzkit",
  "lcc-genfill",
  "lcc-geo",
  "lcc-geocode",
@@ -5139,6 +5142,7 @@ dependencies = [
  "brotli-decompressor",
  "chrono",
  "lcc-brand",
+ "lcc-fuzzkit",
  "lcc-geom",
  "lcc-heif",
  "lcc-testkit",
@@ -5211,6 +5215,7 @@ dependencies = [
  "getrandom 0.3.4",
  "hkdf 0.12.4",
  "lcc-brand",
+ "lcc-fuzzkit",
  "lcc-testkit",
  "log",
  "nix",
@@ -5482,6 +5487,7 @@ name = "lcc-tiff"
 version = "26.47.3"
 dependencies = [
  "lcc-brand",
+ "lcc-fuzzkit",
  "proptest",
  "serde",
  "thiserror 2.0.21",
