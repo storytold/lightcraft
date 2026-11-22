@@ -589,7 +589,7 @@ fn tracklog_auto_tag() {
     // a dry run reports without changing anything
     let r = s.execute("photo.autoTagTracklog", &json!({"path": path, "ids": ids, "offset": "+02:00", "dryRun": true})).unwrap();
     assert_eq!((r["tagged"].as_u64(), r["interpolated"].as_u64()), (Some(2), Some(2)), "{r}");
-    assert_eq!(r["skipped"], json!({"noTime": 0, "outside": 1, "hasGps": 1}));
+    assert_eq!(r["skipped"], json!({"noTime": 0, "outside": 1, "hasGps": 1, "unplaceable": 0}));
     assert_eq!((r["points"].as_u64(), r["start"].as_str()), (Some(3), Some("2026-05-01T10:00:00Z")));
     assert_eq!(ids.iter().map(|i| gps(&s, *i)).collect::<Vec<_>>(), before);
     // tag: one undo step
@@ -619,6 +619,44 @@ fn tracklog_auto_tag() {
     assert!(s.execute("photo.autoTagTracklog", &json!({"gpx": "<kml/>", "ids": [ids[0]]})).is_err());
     assert!(s.execute("photo.autoTagTracklog", &json!({"gpx": "<gpx><trk><trkseg/></trk></gpx>", "ids": [ids[0]]})).is_err());
     assert!(s.execute("photo.autoTagTracklog", &json!({"gpx": GPX, "ids": [ids[0]], "offset": "noon"})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #1276: the camera time zone the user sets moves the match along the track even when the photo recorded a
+/// (wrong) zone of its own, and extreme zones or dates are errors or misses, never a panic.
+#[test]
+fn tracklog_camera_zone_overrides_recorded_zone() {
+    use lcc_catalog::{Op, PhotoId};
+    const GPX: &str = r#"<gpx version="1.1" creator="test" xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg>
+  <trkpt lat="46.0000" lon="7.0000"><time>2026-05-01T10:00:00Z</time></trkpt>
+  <trkpt lat="46.0020" lon="7.0040"><time>2026-05-01T10:02:00Z</time></trkpt>
+</trkseg></trk></gpx>"#;
+    let dir = temp_dir("tracklog-zone");
+    let mut s = Session::new();
+    s.open_library(dir.join("lib"), true).unwrap();
+    let id = s.visible_cloned()[0].0;
+    // the camera's clock read 12:01 local (+02:00) but the file says UTC
+    s.commit("t", Op::SetCaptured { id: PhotoId(id), captured: Some("2026-05-01T12:01:00+00:00".into()) }).unwrap();
+    let run = |s: &mut Session, offset: serde_json::Value| {
+        s.execute("photo.autoTagTracklog", &json!({"gpx": GPX, "ids": [id], "offset": offset, "replace": true, "dryRun": true}))
+    };
+    assert_eq!(run(&mut s, json!(null)).unwrap()["tagged"].as_u64(), Some(0), "recorded zone alone: outside the track");
+    let r = run(&mut s, json!("+02:00")).unwrap();
+    assert_eq!(r["tagged"].as_u64(), Some(1), "{r}");
+    assert_eq!(r["photos"][0]["gps"], json!([46.001, 7.002]));
+    let r = run(&mut s, json!("+01:00")).unwrap();
+    assert_eq!(r["tagged"].as_u64(), Some(0), "a different zone moves the match: {r}");
+    for hostile in [json!("+99:99"), json!(1e300), json!(-19)] {
+        assert!(run(&mut s, hostile).is_err());
+    }
+    // far dates still place in any zone (outside the track); a time chrono can't place is skipped, not an error
+    for edge in ["0001-01-01T00:00:00", "9999-12-31T23:59:59"] {
+        s.commit("t", Op::SetCaptured { id: PhotoId(id), captured: Some(edge.into()) }).unwrap();
+        for o in ["+18:00", "-18:00"] {
+            let r = run(&mut s, json!(o)).unwrap();
+            assert_eq!((r["tagged"].as_u64(), r["skipped"]["outside"].as_u64()), (Some(0), Some(1)), "{edge} {o}: {r}");
+        }
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -842,4 +880,33 @@ fn shifting_a_capture_time_without_seconds_keeps_its_zone() {
     assert_eq!(got.as_deref(), Some("2026-01-01T11:00:00+02:00"), "an hour later, same zone");
     let got = got.unwrap();
     assert_eq!(lcc_catalog::dates::shift_iso(&got, 0).as_deref(), Some(got.as_str()), "the stored time reads back");
+}
+
+/// Gap 38: across a selection, photo.sharedMeta shows each field's shared value or marks it mixed, and an edit of
+/// one field leaves the other (mixed) fields of every photo as they were; hostile `ids` never panic.
+#[test]
+fn shared_meta_marks_mixed_fields_and_edits_keep_them() {
+    let mut s = Session::new();
+    s.open_library(temp_dir("shared-meta").join("lib"), true).unwrap();
+    let ids: Vec<u64> = s.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    s.execute("photo.setMeta", &json!({"ids": ids, "copyright": "© Me", "keywords": ["a"]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [ids[0]], "title": "One"})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [ids[1]], "title": "Two"})).unwrap();
+    let r = s.execute("photo.sharedMeta", &json!({"ids": ids})).unwrap();
+    assert_eq!(r["count"], json!(2));
+    assert_eq!(r["fields"]["copyright"], json!("© Me"));
+    assert_eq!(r["fields"]["keywords"], json!(["a"]));
+    assert_eq!(r["fields"]["title"], serde_json::Value::Null);
+    let mixed: Vec<&str> = r["mixed"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+    assert!(mixed.contains(&"title") && !mixed.contains(&"copyright"), "{r}");
+    // editing the shared field leaves each photo's own title
+    s.execute("photo.setMeta", &json!({"ids": ids, "copyright": "© You"})).unwrap();
+    let one = s.execute("photo.sharedMeta", &json!({"ids": [ids[0]]})).unwrap();
+    assert_eq!((one["fields"]["title"].clone(), one["fields"]["copyright"].clone()), (json!("One"), json!("© You")));
+    assert_eq!(s.execute("photo.sharedMeta", &json!({"ids": [ids[1]]})).unwrap()["fields"]["title"], json!("Two"));
+    for hostile in [json!({"ids": [u64::MAX]}), json!({"ids": "x"}), json!({"ids": [-1, 1.5, null]})] {
+        if let Ok(r) = s.execute("photo.sharedMeta", &hostile) {
+            assert_eq!(r["count"], json!(0), "no real photo in {hostile}: {r}");
+        }
+    }
 }

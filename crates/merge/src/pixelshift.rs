@@ -100,6 +100,7 @@ pub struct Merger {
     data: Vec<u16>,
     state: Vec<u8>,
     added: Vec<bool>,
+    cfa: Option<lcc_raw::Cfa>,
 }
 
 fn bad(m: impl Into<String>) -> MergeError {
@@ -144,6 +145,7 @@ impl Merger {
             data,
             state,
             added: vec![false; pattern.shifts.len()],
+            cfa: first.cfa.clone(),
         })
     }
 
@@ -163,6 +165,9 @@ impl Merger {
         let (RawData::U16(src), Some(cfa)) = (&frame.data, &frame.cfa) else { return Err(bad("pixel shift needs 16-bit mosaic frames")) };
         if frame.cpp != 1 || !cfa.is_bayer() || src.len() < frame.width.saturating_mul(frame.height) {
             return Err(bad(format!("frame {} is not a Bayer mosaic", index + 1)));
+        }
+        if self.cfa.as_ref() != Some(cfa) {
+            return Err(bad(format!("frame {} has a different colour filter layout from the first", index + 1)));
         }
         let (scale, width) = (self.pattern.scale, self.width);
         let [ax, ay, aw, ah] = self.active;
@@ -515,6 +520,59 @@ mod tests {
         assert!(pattern_for(4).is_none() && pattern_for(32).is_none() && pattern_for(16).is_some());
         assert_eq!(set_frames(3), Some(12..16));
         assert_eq!(set_frames(4), None);
+    }
+
+    /// Hostile frames, table-driven: each is refused with an error (never a panic) at `new` or `add_frame`, and a
+    /// merger that refused a frame still reports the missing frame at `finish`.
+    #[test]
+    fn hostile_frames_are_refused_without_panicking() {
+        let full = Rect::new(0, 0, 16, 16);
+        let good = || frame(&SET, 1, 16, 16, "RGGB", full, full);
+        type Spoil = fn(&mut RawImage);
+        let cases: &[(&str, Spoil)] = &[
+            ("short source data", |f| f.data = RawData::U16(vec![1008; 16 * 15])),
+            ("empty source data", |f| f.data = RawData::U16(Vec::new())),
+            ("CFA mismatch", |f| f.cfa = Cfa::bayer("BGGR")),
+            ("non-Bayer CFA", |f| f.cfa = None),
+            ("three samples per pixel", |f| f.cpp = 3),
+            ("float samples", |f| f.data = RawData::F32(vec![0.0; 256])),
+            ("active area past the edge", |f| f.active_area = Rect::new(8, 8, 9, 8)),
+            ("active area on the edge but shifted", |f| f.active_area = Rect::new(1, 0, 15, 16)),
+            ("zero-width active area", |f| f.active_area = Rect::new(0, 0, 0, 16)),
+            ("huge active area", |f| f.active_area = Rect::new(usize::MAX - 1, 0, usize::MAX, 16)),
+            ("NaN black", |f| f.black = BlackLevel::uniform(f32::NAN)),
+            ("no white level", |f| f.white.clear()),
+            ("wrong frame size", |f| f.width = 15),
+        ];
+        for (what, spoil) in cases {
+            let first = frame(&SET, 0, 16, 16, "RGGB", full, full);
+            let mut m = Merger::new(&SET, &first).unwrap();
+            m.add_frame(0, &first).unwrap();
+            let mut f = good();
+            spoil(&mut f);
+            assert!(m.add_frame(1, &f).is_err(), "{what}: add_frame accepted it");
+            assert!(m.finish().is_err(), "{what}: finish without frame 2");
+            // as the first frame: refused at `new`, or the merge refuses later; never a panic
+            if let Ok(mut m) = Merger::new(&SET, &f) {
+                let _ = m.add_frame(0, &f);
+            }
+        }
+        // an active area that ends exactly at the sensor edge is valid and merges
+        let edge = Rect::new(2, 2, 14, 14);
+        let m = run(&SET, 4, 16, 16, "RGGB", edge, Rect::new(0, 0, 14, 14));
+        assert_eq!((m.width, m.height), (14, 14));
+        // a frame loader that fails or yields a hostile frame mid-series is an error
+        let mut load = |i: usize| if i == 2 { Err("unreadable".to_string()) } else { Ok(frame(&SET, i, 16, 16, "RGGB", full, full)) };
+        assert!(matches!(merge_series(&SET, 0..4, &mut load, &|_| true), Err(MergeError::Decode(_))));
+        let mut load = |i: usize| {
+            let mut f = frame(&SET, i, 16, 16, "RGGB", full, full);
+            if i == 3 {
+                f.cfa = Cfa::bayer("GRBG");
+            }
+            Ok(f)
+        };
+        assert!(merge_series(&SET, 0..4, &mut load, &|_| true).is_err());
+        assert!(matches!(merge_series(&SET, 0..0, &mut |_| Err("no frames to load".to_string()), &|_| true), Err(MergeError::TooFew(..))));
     }
 
     #[test]

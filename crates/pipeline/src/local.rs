@@ -1494,11 +1494,13 @@ mod nrc_tests {
         assert!((a - 3.0).abs() < 1e-9 && (b - 2.0).abs() < 1e-9);
     }
 
-    /// PROBE (ignored): float mean of a flat, noisy dark patch over three noise realisations under the
+    /// PROBE (opt-in with `<PREFIX>_PROBES=1`): float mean of a flat, noisy dark patch over three noise realisations under the
     /// joint colour NR; asserts the means stay put.
     #[test]
-    #[ignore]
     fn probe_nrc_mean_drift() {
+        if !lcc_testkit::probe("probe_nrc_mean_drift") {
+            return;
+        }
         let (w, h) = (768usize, 768usize);
         let mut worst = 0.0f64;
         for seed0 in [0x2545_f491_4f6c_dd1du64, 0x9e37_79b9_7f4a_7c15, 0x1234_5678_9abc_def1] {

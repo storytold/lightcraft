@@ -1388,7 +1388,13 @@ fn strip_xmp_sentinels(value: &mut Value) {
 /// Import into the current library. Existing edited records are preserved unless explicitly
 /// requested; missing originals remain catalogued for later relinking. The source catalog is read-only.
 pub fn import(s: &mut crate::Session, path: &Path, update_existing: bool) -> crate::Result<Value> {
-    let mut job = crate::lightroom_job::LightroomJob::new(s, path.to_path_buf(), update_existing)?;
+    import_with(s, path, update_existing, false)
+}
+
+/// [`import`], committing the catalog's photos before their originals are read when `read_originals_later`
+/// ([`crate::lightroom_job::LightroomJob::read_originals_later`]); `library.readOriginals` reads them afterwards.
+pub fn import_with(s: &mut crate::Session, path: &Path, update_existing: bool, read_originals_later: bool) -> crate::Result<Value> {
+    let mut job = crate::lightroom_job::LightroomJob::new(s, path.to_path_buf(), update_existing)?.read_originals_later(read_originals_later);
     let cancel = AtomicBool::new(false);
     let prepared = job.prepare(&cancel)?;
     let completion = crate::lightroom_job::commit_prepared(s, prepared)?;
@@ -1526,6 +1532,8 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             .map(PhotoId)
             .filter(|id| s.catalog.photo(*id).is_some_and(|p| source_path(p).is_some_and(|path| key(path) == key(&src.path))));
         let existing_id = indexed.or_else(|| if master == 0 { by_path.get(&key(&src.path)).copied() } else { None });
+        // a record made here from the catalog alone: an original that is missing, or not read yet (issue #1303)
+        let mut catalog_only = false;
         let mut p = if let Some(id) = existing_id.and_then(|id| s.catalog.photo(id)) {
             (**id).clone()
         } else if master != 0 {
@@ -1548,18 +1556,17 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         } else {
             let id = s.catalog.alloc_photo_id();
             let name = Path::new(&src.path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| src.path.clone());
-            let mut p = Photo::new(
-                id,
-                Source::File { path: src.path.clone() },
-                &name,
-                text(&src.image, "fileFormat"),
-                number(&src.image, "fileWidth").max(0) as u32,
-                number(&src.image, "fileHeight").max(0) as u32,
-                &now,
-            );
+            // Lightroom stores the file's stored size; a record's size is upright, as a probe of the file gives it (a
+            // turned photo's crop is oriented against it below, and reading the original later must not turn it)
+            let side = |k: &str| number(&src.image, k).clamp(0, i64::from(u32::MAX)) as u32;
+            let (w, h) = (side("fileWidth"), side("fileHeight"));
+            let turned = lightroom_orientation(text(&src.image, "orientation")).is_some_and(|o| o.swaps_axes());
+            let (upright_w, upright_h) = if turned { (h, w) } else { (w, h) };
+            let mut p = Photo::new(id, Source::File { path: src.path.clone() }, &name, text(&src.image, "fileFormat"), upright_w, upright_h, &now);
             if ["RAW", "DNG", "ARW", "CR2", "CR3", "NEF", "NRW", "RAF", "ORF", "RW2", "PEF"].contains(&p.format.to_uppercase().as_str()) {
                 p.kind = lcc_catalog::MediaKind::Raw;
             }
+            catalog_only = true;
             p
         };
         // Lightroom gives any photo a Copy Name, not only a virtual copy (some use it as a short title).
@@ -1569,11 +1576,17 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         if text(&src.image, "fileFormat").eq_ignore_ascii_case("VIDEO") {
             p.kind = lcc_catalog::MediaKind::Video;
         }
+        // it starts as a photo the add step makes would: its camera (from the catalog, as a probe gives it), then the
+        // import defaults (Constrain Crop, a default preset, copyright), so reading its original later changes nothing
+        if catalog_only {
+            fill_camera(&mut p.meta, &src.image);
+            crate::import::apply_import_defaults(s, &mut p);
+        }
         ids.insert(src.source_id, p.id);
         index.photos.insert(identity(&data, src), p.id.0);
         // A record this import added, or a Local one untouched since browsing (an offline original
         // never reaches the add step, so it is judged here), holds no edits of the library's own.
-        let fresh = existing_id.is_some_and(|id| added.contains(&id) || s.catalog.photo(id).is_some_and(|q| q.untouched_local()));
+        let fresh = catalog_only || existing_id.is_some_and(|id| added.contains(&id) || s.catalog.photo(id).is_some_and(|q| q.untouched_local()));
         // Every photo Lightroom has carries its edit date (below), so a date alone doesn't say the library edited it:
         // its settings or its History do.
         let library_edits = existing_id.is_some() && !fresh && p.edited.is_some() && (p.is_edited() || !p.history.is_empty());
@@ -4826,6 +4839,78 @@ pub(crate) mod tests {
             assert_eq!(s.catalog.len(), 1);
         }
         assert_eq!(probes.load(Ordering::Relaxed), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A record made from the catalog alone has the upright size a probe of its file would give (Lightroom keeps the
+    /// stored size), so reading the original later doesn't turn it; a hostile size is clamped, never wrapped.
+    #[test]
+    fn a_catalog_only_record_of_a_turned_photo_is_upright() {
+        for (orientation, w, h, want) in
+            [("BC", json!(20), json!(10), (10, 20)), ("AB", json!(20), json!(10), (20, 10)), ("", json!(-5), json!(1e30), (0, u32::MAX))]
+        {
+            let mut data = sample();
+            data.photos.retain(|p| p.source_id == 1);
+            let p = &mut data.photos[0];
+            p.image.insert("orientation".into(), json!(orientation));
+            p.image.insert("fileWidth".into(), w);
+            p.image.insert("fileHeight".into(), h);
+            let mut s = crate::Session::new();
+            apply(&mut s, data, false).unwrap();
+            let photo = s.catalog.photos().next().unwrap();
+            assert_eq!((photo.width, photo.height), want, "{orientation:?}");
+        }
+    }
+
+    /// Issue #1303: with the originals read later, the catalog's photos are committed without opening one file, marked
+    /// unread; reading them afterwards gives what the import that reads first gives, catalog data kept, and a second
+    /// import adds nothing.
+    #[test]
+    fn originals_read_later_commit_first_then_match_an_import_that_reads_first() {
+        let dir = std::env::temp_dir().join(format!("lcc-lrcat-read-later-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Photos")).unwrap();
+        let source = dir.join("source.lrcat");
+        std::fs::write(dir.join("Photos/test.ARW"), b"original").unwrap();
+        std::fs::write(&source, native_catalog(&photo_tables((dir.to_str().unwrap(), "")))).unwrap();
+        let session = |probes: Arc<AtomicUsize>| {
+            let mut s = crate::Session::new();
+            s.media.file_probe = Some(Arc::new(move |_| {
+                probes.fetch_add(1, Ordering::Relaxed);
+                Ok(crate::media::ProbeInfo {
+                    format: "ARW".into(),
+                    width: 20,
+                    height: 10,
+                    file_size: 8,
+                    content_hash: Some("abc".into()),
+                    kind: lcc_catalog::MediaKind::Raw,
+                    ..Default::default()
+                })
+            }));
+            s
+        };
+        let first_probes = Arc::new(AtomicUsize::new(0));
+        let mut first = session(first_probes.clone());
+        first.execute("library.importLightroom", &json!({"path": source})).unwrap();
+        let later_probes = Arc::new(AtomicUsize::new(0));
+        let mut later = session(later_probes.clone());
+        let r = later.execute("library.importLightroom", &json!({"path": source, "readOriginalsLater": true})).unwrap();
+        assert_eq!(later_probes.load(Ordering::Relaxed), 0, "no original is read before the commit");
+        assert_eq!(r["imported"], 1, "{r}");
+        assert_eq!(r["missing"], json!([]), "an unread original is not missing: {r}");
+        assert_eq!(r["originalsToRead"], 1, "{r}");
+        let p = later.catalog.photos().next().unwrap().clone();
+        assert!(crate::cmd::read_originals::is_unread(&p));
+        assert_eq!(p.rating, 5, "catalog data is there at once");
+        let read = later.execute("library.readOriginals", &json!({})).unwrap();
+        assert_eq!(read["remaining"], 0, "{read}");
+        let (a, b) = (first.catalog.photos().next().unwrap(), later.catalog.photos().next().unwrap());
+        assert_eq!(b.content_hash.as_deref(), Some("abc"));
+        assert_eq!((a.width, a.height, a.file_size, a.rating, a.flag), (b.width, b.height, b.file_size, b.rating, b.flag));
+        assert_eq!(a.develop, b.develop, "the catalog's edits map the same either way");
+        assert_eq!(a.meta.keywords, b.meta.keywords);
+        let again = later.execute("library.importLightroom", &json!({"path": source, "readOriginalsLater": true})).unwrap();
+        assert_eq!(again["imported"], 0, "{again}");
+        assert_eq!(later.catalog.len(), 1);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

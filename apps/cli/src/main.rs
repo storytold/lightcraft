@@ -278,6 +278,9 @@ fn library_warnings(session: &mut Session, who: &str) {
     for w in session.take_library_warnings() {
         eprintln!("{who}: warning: {w}");
     }
+    for n in session.take_notices() {
+        eprintln!("{who}: warning: {}", n.english());
+    }
 }
 
 fn library_error(dir: &str, e: lcc_engine::EngineError) -> String {
