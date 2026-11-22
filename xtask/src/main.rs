@@ -3862,7 +3862,9 @@ fn cmd_fidelity(args: &[&str]) -> Result<(), String> {
             }
             "--refs" => {
                 let v = args.get(i + 1).ok_or("--refs needs a folder")?;
-                c.env(env_name("FIDELITY_REFS"), v);
+                // cargo runs the test from crates/pipeline, so a relative folder is made absolute here
+                let dir = std::path::absolute(v).map_err(|e| format!("--refs {v}: {e}"))?;
+                c.env(env_name("FIDELITY_REFS"), dir);
                 i += 1;
             }
             other => return Err(format!("fidelity: unknown option `{other}`")),
