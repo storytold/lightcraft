@@ -377,7 +377,7 @@ fn a_spot_overlapping_the_window_edge_matches_the_whole_render() {
 }
 
 /// Given a spot whose reads span exactly the 8192 px a window may grow to, a window over it is grown
-/// to hold them, not refused and read at its own edge, on the processes before V9 and V9's whole
+/// to hold them, not refused and read at its own edge, on the processes before V11 and V11's whole
 /// pixels alike (a 2×2 window then read the dark half for the bright source: 89 instead of 243).
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
@@ -397,7 +397,7 @@ fn a_spot_reading_exactly_the_span_limit_matches_the_whole_render() {
         source_offset: Some(Point::new(0.8188, 0.0)),
     };
     let win = PixelWindow { x: 999, y: 7, w: 2, h: 2 };
-    for p in [Process::V1, Process::V8, Process::V9] {
+    for p in [Process::V1, Process::V8, Process::V10, Process::V11] {
         let s = DevelopSettings { process: p.version(), spots: vec![spot.clone()], ..Default::default() };
         let f = render(&src, &SourceInfo::default(), &s, &req).image;
         let part = render(&src, &SourceInfo::default(), &s, &RenderRequest { window: Some(win), ..req }).image;
@@ -407,6 +407,46 @@ fn a_spot_reading_exactly_the_span_limit_matches_the_whole_render() {
             assert!(a[0] > 200, "{p:?}: the bright source, {a:?}");
         }
     }
+}
+
+/// Saved V8, 9 (no process; it renders as V8) and V10 edits keep their Heal, Remove and Clone
+/// spots exactly as main rendered them before V11 (sources read between pixels, the averaged heal);
+/// V11 renders them differently. The pixels are those main rendered at the time, inside each spot.
+#[test]
+fn saved_spots_before_v11_render_as_they_did() {
+    use lightcraft_develop::{Process, ProcessVersion, Spot, SpotMode};
+    use lightcraft_geom::Point;
+    let src = lightcraft_scenes::demo_library()[0].render(480, 320);
+    let spot = |mode, at: (f64, f64), off: Option<(f64, f64)>| Spot {
+        mode,
+        points: vec![Point::new(at.0, at.1)],
+        size: 0.03,
+        feather: 40.0,
+        opacity: 100.0,
+        source_offset: off.map(|o| Point::new(o.0, o.1)),
+    };
+    // sources between pixels, and one chosen automatically
+    let spots = vec![
+        spot(SpotMode::Heal, (0.30, 0.40), Some((0.1307, 0.0213))),
+        spot(SpotMode::Remove, (0.62, 0.58), None),
+        spot(SpotMode::Clone, (0.45, 0.72), Some((-0.0771, -0.0334))),
+    ];
+    let at = [(144, 128), (150, 133), (298, 186), (291, 180), (216, 230), (222, 226)];
+    let main: [[u8; 3]; 6] = [[93, 98, 107], [196, 176, 167], [57, 51, 46], [62, 55, 46], [20, 31, 31], [20, 31, 31]];
+    let pixels = |p: ProcessVersion| -> Vec<[u8; 3]> {
+        let s = DevelopSettings { process: p, spots: spots.clone(), ..Default::default() };
+        let img = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(480, 320)).image;
+        at.iter()
+            .map(|&(x, y)| {
+                let q = img.get(x, y);
+                [q[0], q[1], q[2]]
+            })
+            .collect()
+    };
+    for p in [Process::V8.version(), ProcessVersion(9), Process::V10.version()] {
+        assert_eq!(pixels(p), main, "saved {p:?}");
+    }
+    assert_ne!(pixels(Process::V11.version()), main, "V11's heal");
 }
 
 // Given a spot with an automatic source, two windows over the same spot choose the same source

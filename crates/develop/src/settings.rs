@@ -102,20 +102,23 @@ pub enum Process {
     /// V7, with the Highlights/Shadows base taken of log luminance without its fine detail (clamped
     /// between a fine and a 3× wider median), so gaps in dark lettering aren't lifted into bright blocks.
     V8,
-    /// V8, with Heal and Remove spots pinned to the photo on the spot's edge: the correction is a
+    /// V8, with the checked Bradford white-balance fallback (`Mat3::IDENTITY` when a source
+    /// illuminant's Bradford blue cone response is `<= 0.0`, `craft-libs#587`).
+    /// `ProcessVersion(9)` names no process: a saved 9 renders as V8.
+    V10,
+    /// V10, with Heal and Remove spots pinned to the photo on the spot's edge: the correction is a
     /// membrane fill of the log ratio of photo to source, the source's fine detail is matched to its
     /// surroundings, and every spot reads its source at whole pixels
     /// (`lightcraft_pipeline::spots::HealMethod`).
-    V9,
+    V11,
 }
 
 impl Process {
-    /// Every process, oldest first.
-    pub const ALL: [Process; 9] =
-        [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7, Process::V8, Process::V9];
-    pub const LATEST: Process = Process::V9;
+    /// Every process, oldest first (`ProcessVersion(9)` names none and renders as V8).
+    pub const ALL: [Process; 10] =
+        [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7, Process::V8, Process::V10, Process::V11];
+    pub const LATEST: Process = Process::V11;
 
-    /// The number this process is saved under (`process` in settings and sidecars).
     pub const fn version(self) -> ProcessVersion {
         match self {
             Process::V1 => ProcessVersion(1),
@@ -126,7 +129,8 @@ impl Process {
             Process::V6 => ProcessVersion(6),
             Process::V7 => ProcessVersion(7),
             Process::V8 => ProcessVersion(8),
-            Process::V9 => ProcessVersion(9),
+            Process::V10 => ProcessVersion(10),
+            Process::V11 => ProcessVersion(11),
         }
     }
 }

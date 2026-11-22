@@ -2,9 +2,9 @@
 //!
 //! - **Clone** copies the source patch with a feathered edge.
 //! - **Heal** copies the source's *detail* and keeps the target's *tone*. How depends on the photo's
-//!   process ([`HealMethod`]): from V9 the patch is pinned to the photo on the spot's edge by a membrane
+//!   process ([`HealMethod`]): from V11 the patch is pinned to the photo on the spot's edge by a membrane
 //!   fill of the log ratio, with the source's fine detail matched to its surroundings ([`pinned`]);
-//!   before V9 it is src + blur(target − src), a Gaussian-weighted average of the difference around the
+//!   before V11 it is src + blur(target − src), a Gaussian-weighted average of the difference around the
 //!   spot (frequency separation).
 //! - **Remove** is Heal with an automatically chosen source: candidate offsets on rings around the
 //!   spot are scored by how well the source's surrounding annulus matches the target's.
@@ -25,11 +25,11 @@ mod pinned;
 /// photo's process (`docs/process-versions.md`), so a photo keeps its look until it is updated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HealMethod {
-    /// V1 to V8: the source plus a Gaussian-weighted average of the difference around the spot
+    /// V1 to V10: the source plus a Gaussian-weighted average of the difference around the spot
     /// (not pinned to the spot's edge, added in linear light), the source read where its offset
     /// lands, between pixels.
     Averaged,
-    /// V9 on: pinned to the photo on the spot's edge in log space, the source's fine detail matched
+    /// V11 on: pinned to the photo on the spot's edge in log space, the source's fine detail matched
     /// to its surroundings ([`pinned`]), and every spot (Clone too) reads its source at whole pixels,
     /// so the grain isn't averaged away.
     Pinned,
@@ -38,7 +38,7 @@ pub enum HealMethod {
 impl HealMethod {
     /// The method `s`'s process renders spots with.
     pub fn of(s: &DevelopSettings) -> HealMethod {
-        if s.process.process() >= Process::V9 { HealMethod::Pinned } else { HealMethod::Averaged }
+        if s.process.process() >= Process::V11 { HealMethod::Pinned } else { HealMethod::Averaged }
     }
 }
 
@@ -243,7 +243,7 @@ pub fn window_for_reads_checked(
             let l = layout(spot, frame, full_w, full_h, ppl)?;
             let t = [l.bx, l.by, l.bx + l.bw, l.by + l.bh].map(|v| v as f64);
             let s = match l.offset {
-                // whole pixels from V9; before, the bilinear neighbour too unless the offset is whole
+                // whole pixels from V11; before, the bilinear neighbour too unless the offset is whole
                 Some((dx, dy)) => {
                     let reach = |d: f32| match method {
                         HealMethod::Pinned => (d.round(), d.round()),
@@ -422,7 +422,7 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64, method: 
         };
         let Some(&first) = pts.first() else { continue };
         let offset = offset.unwrap_or_else(|| auto_source(img, first, r));
-        // (V9 reads whole pixels: between them, bilinear sampling averages the source's grain away)
+        // (V11 reads whole pixels: between them, bilinear sampling averages the source's grain away)
         let offset = if pinned { (offset.0.round(), offset.1.round()) } else { offset };
         // alpha of the stroke, its distance and the source patch in the box
         let mut alpha = vec![0.0f32; bw * bh];
@@ -499,7 +499,7 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64, method: 
 mod tests {
     use super::*;
 
-    /// Both processes' spot rendering (before and from V9).
+    /// Both processes' spot rendering (before and from V11).
     const BOTH: [HealMethod; 2] = [HealMethod::Averaged, HealMethod::Pinned];
 
     /// A hard-edged spot of every mode at opacity 0, in the middle and at a corner, leaves every
@@ -745,7 +745,7 @@ mod tests {
     }
 
     /// A window holds exactly the pixels [`apply`] reads with a weight, whatever the spot's sub-pixel
-    /// position and offset: the whole pixels V9 rounds the offset to, and V8's bilinear neighbours.
+    /// position and offset: the whole pixels V11 rounds the offset to, and the bilinear neighbours before it.
     /// One pixel short, the window's edge pixel was read instead and a tile differed from the whole
     /// render; one pixel more refused windows that fit at the span limit.
     #[test]
@@ -773,7 +773,7 @@ mod tests {
             let win = PixelWindow { x: 1995, y: 1495, w: 10, h: 10 };
             let l = layout(&spot, &frame, fw, fh, ppl).expect("a spot inside the image");
             let (dx, dy) = l.offset.expect("an explicit source");
-            for process in [Process::V8, Process::V9] {
+            for process in [Process::V10, Process::V11] {
                 let s = DevelopSettings { process: process.version(), ..with_spots(vec![spot.clone()]) };
                 let method = HealMethod::of(&s);
                 let g = window_for_reads(&s, &frame, fw, fh, ppl, win);

@@ -103,6 +103,9 @@ fn unknown_process_numbers_load_and_render_with_the_newest_known() {
     assert_eq!(max.process(), Process::LATEST);
     // a whole number written as a float is that number
     assert_eq!(DevelopSettings::from_json(&json!({"process": 2.0})).unwrap().process, ProcessVersion(2));
+    // 9 names no process: it renders as V8 and Update to Current Process applies
+    let reserved_v9 = DevelopSettings::from_json(&json!({"process": 9})).unwrap().process;
+    assert_eq!((reserved_v9.process(), reserved_v9.is_known(), reserved_v9.is_outdated()), (Process::V8, false, true));
 }
 
 #[test]
