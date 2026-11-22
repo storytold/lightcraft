@@ -211,14 +211,16 @@ fn an_unedited_raws_thumbnail_skips_the_sensor_decode() {
     assert!(!skips_the_real_render(false, false));
 }
 
-/// Performance at scale (gap 26; ignored, run with
-/// `cargo test --release -p lcc-ui-egui scale_100k_grid -- --ignored --nocapture`): the grid on a
+/// Performance at scale (gap 26; opt-in, run with
+/// `<PREFIX>_PROBES=1 cargo test --release -p lcc-ui-egui scale_100k_grid -- --nocapture`): the grid on a
 /// 100k-photo library. Times the first frame, unchanged frames, wheel scrolling, a far jump, a
 /// filter change and a sort change, and checks the per-frame work stays bounded. Ceilings are
 /// loose (shared, loaded machines): compare numbers from the same run.
 #[test]
-#[ignore]
 fn scale_100k_grid_frames() {
+    if !lcc_testkit::probe("scale_100k_grid_frames") {
+        return;
+    }
     use std::time::Instant;
     let ms = |t: Instant| t.elapsed().as_secs_f64() * 1e3;
     let t = Instant::now();
@@ -283,12 +285,14 @@ fn scale_100k_grid_frames() {
     }
 }
 
-/// Issue #538 (ignored, run with `cargo test --release -p lcc-ui-egui scale_filter_bar -- --ignored --nocapture`):
+/// Issue #538 (opt-in, run with `<PREFIX>_PROBES=1 cargo test --release -p lcc-ui-egui scale_filter_bar -- --nocapture`):
 /// wheel-scroll frames on a 68k-photo library with cameras, lenses and keywords, with the Library Filter bar shown
 /// and hidden: on a still catalog, while a rating changes every frame, and while a photo's title does.
 #[test]
-#[ignore]
 fn scale_filter_bar_scroll() {
+    if !lcc_testkit::probe("scale_filter_bar_scroll") {
+        return;
+    }
     use std::time::Instant;
     let ms = |t: Instant| t.elapsed().as_secs_f64() * 1e3;
     let mut session = library_of(68_000);

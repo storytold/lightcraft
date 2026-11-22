@@ -886,10 +886,11 @@ fn editing_device(backends: wgpu::Backends, window: Option<WindowDevice>) -> Res
             format!("The graphics card chosen for editing ({}) isn't there; {} uses the automatic choice for now.", k.name, lcc_brand::DISPLAY_NAME),
         );
     }
-    let chosen = res.index.and_then(|i| entries.get(i).zip(adapters.get(i)));
+    // `<PREFIX>_GPU_SOFTWARE` (CI): no card, so `Gpu::new` takes the software adapter
+    let chosen = res.index.filter(|_| !backend::software_forced()).and_then(|i| entries.get(i).zip(adapters.get(i)));
     *EDITING_CARD.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = chosen.map(|(e, _)| e.key.clone());
     let on_screen = chosen.is_none_or(|(e, _)| e.drives_screen);
-    if let Some(w) = window.filter(|_| on_screen) {
+    if let Some(w) = window.filter(|_| on_screen && !backend::software_forced()) {
         if w.info.device_type == wgpu::DeviceType::Cpu {
             *WINDOW_DECLINED.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
                 Some(format!("software adapter ({}) skipped: the CPU pipeline is faster", w.info.name));
@@ -1244,6 +1245,19 @@ pub fn available() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
         allowed() && device().is_some()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+}
+
+/// Whether the device renders on a software adapter (only with `<PREFIX>_GPU_SOFTWARE`, CI):
+/// tests comparing it with the CPU allow wider bounds there.
+pub fn software_adapter() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        device().is_some_and(|g| g.info.device_type == wgpu::DeviceType::Cpu)
     }
     #[cfg(target_arch = "wasm32")]
     {

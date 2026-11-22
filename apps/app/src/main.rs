@@ -1455,7 +1455,7 @@ fn main() -> eframe::Result {
     // the upstream app's, named by settings copied from it) is never opened as this app's own.
     let mut prefs = prefs;
     // the recent list of older versions joins the settings' before Ask me is read (issue #871)
-    catalog_hooks::carry_over_recent(prefs.as_mut(), !in_memory && !keep_prefs_file, |ui| {
+    let recent_skipped = catalog_hooks::carry_over_recent(prefs.as_mut(), !in_memory && !keep_prefs_file, |ui| {
         PrefsWriter { path: prefs_path(), ..Default::default() }.save_ui(ui, false)
     });
     let explicit = library_dir.or_else(|| lcc_brand::env_os("LIBRARY").filter(|p| !p.is_empty()).map(Into::into));
@@ -1614,6 +1614,7 @@ fn main() -> eframe::Result {
                 app.integrated_titlebar = cfg!(target_os = "macos");
                 app.notices.extend(prefs_warning);
                 app.notices.extend(launch_notices);
+                app.notices.extend(recent_skipped.as_deref().map(lcc_ui_egui::panels::notices::recent_catalogs_notice));
                 app.notices.extend(window_notice);
                 app.pending_link = launch_link;
                 app.gpu_notice = true;

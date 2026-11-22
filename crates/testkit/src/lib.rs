@@ -202,6 +202,8 @@ pub enum Need {
     /// Support this build doesn't have yet (a decoder that refuses a file variant, an optional
     /// cargo feature that is off).
     Feature,
+    /// An opt-in measurement (timing probe, benchmark): runs only with `<PREFIX>_PROBES=1`, see [`probe`].
+    Probe,
 }
 
 impl Need {
@@ -215,6 +217,7 @@ impl Need {
             Need::Input => "input",
             Need::System => "system",
             Need::Feature => "feature",
+            Need::Probe => "probe",
         }
     }
 }
@@ -227,6 +230,18 @@ macro_rules! skip {
     ($need:ident, $($arg:tt)+) => {
         $crate::record($crate::Need::$need, &::std::format!($($arg)+), ::std::file!(), ::std::line!())
     };
+}
+
+/// Whether an opt-in probe or benchmark should run: true when `<PREFIX>_PROBES` is set to a non-empty value other
+/// than `0`. Otherwise records a `Probe` skip naming `what` (so `cargo xtask ci` lists it) and returns false.
+#[track_caller]
+pub fn probe(what: &str) -> bool {
+    let on = lcc_brand::env("PROBES").is_some_and(|v| !v.is_empty() && v != "0");
+    if !on {
+        let at = std::panic::Location::caller();
+        record(Need::Probe, &format!("{what}: opt-in measurement, set {}=1 to run it", lcc_brand::env_var("PROBES")), at.file(), at.line());
+    }
+    on
 }
 
 /// What [`skip!`] calls: print the note and append it to the skip log, if one is set. Never fails

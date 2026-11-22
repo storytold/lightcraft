@@ -789,3 +789,6 @@ pub fn requests_for(p: Provider, variations: u32, remove: bool) -> u32 {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod tests_hostile;

@@ -254,6 +254,13 @@ from its raw data without a manual Reload. Headless sessions don't do this on th
 build) → `{checked, updated, cleared}`. Like the app's recheck, it isn't an undo step and keeps
 develop settings and history.
 
+A Lightroom import with `readOriginalsLater: true` (what the desktop app does) adds the catalog's photos without
+reading their originals; the app then reads them in the background. Headless sessions call
+`cmd_library_readOriginals` (`{limit?}`, default 1024 files per call) → `{checked, updated, unreadable, duplicates,
+remaining}`: it fills in what needs the file as Reload would, in batches; call it again while `remaining` > 0. A file
+whose content matches another library photo is kept and listed in `duplicates` (`{id, sameAs}`), since a catalog-first
+import can't skip duplicates by content before reading them.
+
 ## Resources
 
 `resources/list` / `resources/read` serve JSON snapshots:

@@ -22,6 +22,7 @@ mod parity;
 mod quarantine;
 mod rename;
 mod shortcuts;
+mod skip_gate;
 mod stats;
 mod update_key;
 mod upstream;
@@ -87,6 +88,9 @@ commands:
                   Lightroom parity summary; --write refreshes the summary table in the document
   quarantine check|filter|test [--platform linux|macos|windows]
                   known-flaky tests (ci/quarantine.toml): validate, print the nextest filter, run the CI tests
+  skips check|write [--report FILE] [--allow FILE]
+                  the nightly skip gate: fail when target/ci/report.json has more skips per need than
+                  ci/skip-allowlist.toml allows; write sets the caps to the report's counts
   wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates (+ the web app)
   android check   cargo check --target aarch64-linux-android for the crates the Android app uses
                   (needs the Android NDK; skipped without it outside CI)
@@ -167,6 +171,7 @@ fn main() -> ExitCode {
         Some("web") => web::run(&rest),
         Some("ci") => cmd_ci_cli(&rest),
         Some("quarantine") => quarantine::run(&root(), &rest),
+        Some("skips") => skip_gate::run(&root(), &rest),
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
         Some("upstream-merge") => upstream::merge(&root(), &rest),
         Some("upstream-pr") => upstream::pr(&root(), &rest),
@@ -3852,6 +3857,18 @@ fn cmd_sil(args: &[&str]) -> Result<(), String> {
             other => return Err(format!("sil: unknown option `{other}`")),
         }
         i += 1;
+    }
+    // the sync merge properties (crates/sync/src/proptests.rs) are part of the SIL run: no app process,
+    // but the same "nothing contradicts itself" checks for what devices exchange
+    let sync_only = filter.as_deref() == Some("sil_sync");
+    if filter.is_none() || sync_only {
+        let st = cargo().args(["test", "-p", "lcc-sync", "--lib", "proptests"]).status().map_err(|e| format!("cargo test: {e}"))?;
+        if !st.success() {
+            return Err("SIL sync properties failed (proptest prints the minimal failing case above)".into());
+        }
+        if sync_only {
+            return Ok(());
+        }
     }
     if let Some(f) = &filter {
         c.arg(f);
