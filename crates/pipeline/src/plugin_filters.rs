@@ -199,7 +199,7 @@ impl Stack {
             };
             let params = filter_params(f, encoding);
             let r = crate::timed(&format!("plug-in {}", f.plugin), || {
-                filter.apply_rgb_until(img.as_flattened_mut(), w32, h32, frame, &params, &[&cancel, give_way])
+                filter.apply_rgb_until(img.as_flattened_mut(), w32, h32, frame.clone(), &params, &[&cancel, give_way])
             });
             match r {
                 Err(lcc_filters::Error::Cancelled) if gave_way() => {
@@ -267,6 +267,13 @@ fn mul(m: &[[f32; 3]; 3], c: [f32; 3]) -> [f32; 3] {
     std::array::from_fn(|i| m[i][0] * c[0] + m[i][1] * c[1] + m[i][2] * c[2])
 }
 
+/// Source provenance metadata for `_image.source`, when the origin and bit depth are known.
+pub fn image_source(info: &crate::SourceInfo) -> Option<lcc_filters::ImageSource> {
+    let origin = info.space_origin.as_ref()?.clone();
+    let bits_per_sample = info.bits_per_sample?;
+    Some(lcc_filters::ImageSource { origin, bits_per_sample, float: info.float })
+}
+
 /// Most pixels a draft runs Source filters on when it can't reuse a cached result: a drag of a
 /// filter's own parameter stays interactive, the full render after it is exact.
 pub const DRAFT_SOURCE_PIXELS: usize = 500_000;
@@ -274,7 +281,7 @@ pub const DRAFT_SOURCE_PIXELS: usize = 500_000;
 /// The Source stack on `img` (linear Rec.2020, in place): converted to linear sRGB primaries,
 /// filtered with `"encoding":"linear"`, converted back. `draft`: run on a reduced copy (at most
 /// [`DRAFT_SOURCE_PIXELS`]) and scale the result back up.
-pub fn apply_source(stack: &Stack, img: &mut Rgb32f, frame: lcc_filters::FrameInfo, draft: bool, warnings: &mut Vec<String>) {
+pub fn apply_source(stack: &Stack, img: &mut Rgb32f, mut frame: lcc_filters::FrameInfo, draft: bool, warnings: &mut Vec<String>) {
     if stack.is_empty() {
         return;
     }
@@ -290,6 +297,16 @@ pub fn apply_source(stack: &Stack, img: &mut Rgb32f, frame: lcc_filters::FrameIn
         small.data.iter_mut().for_each(|c| *c = mul(&to_2020, *c));
         *img = lcc_raster::resample::resize(&small, img.width, img.height, lcc_raster::resample::Filter::Bilinear);
         return;
+    }
+    frame.draft = draft;
+    if draft {
+        frame.draft_scale = Some(1.0);
+        frame.native_canvas_w = Some(frame.full_w);
+        frame.native_canvas_h = Some(frame.full_h);
+    } else {
+        frame.draft_scale = None;
+        frame.native_canvas_w = None;
+        frame.native_canvas_h = None;
     }
     crate::for_rows(&mut img.data, img.width.max(1), |_, row| row.iter_mut().for_each(|c| *c = mul(&to_srgb, *c)));
     let (w, h) = (img.width, img.height);
@@ -318,7 +335,17 @@ pub(crate) fn apply_native(stack: &Stack, img: &mut Rgb32f, frame: lcc_filters::
 
 fn scale_frame(f: lcc_filters::FrameInfo, k: f64) -> lcc_filters::FrameInfo {
     let s = |v: u32| ((v as f64 * k).round() as u32).max(1);
-    lcc_filters::FrameInfo { x: (f.x as f64 * k).round() as u32, y: (f.y as f64 * k).round() as u32, full_w: s(f.full_w), full_h: s(f.full_h) }
+    lcc_filters::FrameInfo {
+        x: (f.x as f64 * k).round() as u32,
+        y: (f.y as f64 * k).round() as u32,
+        full_w: s(f.full_w),
+        full_h: s(f.full_h),
+        draft: true,
+        draft_scale: Some(k as f32),
+        native_canvas_w: Some(f.full_w),
+        native_canvas_h: Some(f.full_h),
+        source: f.source,
+    }
 }
 
 /// The Display stack on finished samples (`linear`: an HDR render's linear values; otherwise
@@ -346,7 +373,8 @@ pub fn filtered_source<'a>(src: &'a Rgb32f, info: &crate::SourceInfo, s: &Develo
         return Cow::Borrowed(src);
     }
     let mut img = lcc_raster::resample::fit(src, max_edge.max(1), max_edge.max(1), lcc_raster::resample::Filter::Box);
-    let frame = lcc_filters::FrameInfo::whole(img.width as u32, img.height as u32);
+    let mut frame = lcc_filters::FrameInfo::whole(img.width as u32, img.height as u32);
+    frame.source = image_source(info);
     let mut warnings = Vec::new();
     apply_source(&stack, &mut img, frame, false, &mut warnings);
     Cow::Owned(img)
