@@ -322,6 +322,12 @@ pub fn to_craft_settings(s: &lc::DevelopSettings) -> DevelopSettings {
                     defringe: m.adjust.defringe,
                     lens_blur: m.adjust.lens_blur,
                     lens_blur_off: m.adjust.lens_blur_off,
+                    lens_blur_outside: m.adjust.lens_blur_outside,
+                    lens_blur_boost: m.adjust.lens_blur_boost,
+                    lens_blur_transition: m.adjust.lens_blur_transition,
+                    color_hue: m.adjust.color_hue,
+                    color_sat: m.adjust.color_sat,
+                    amount: m.adjust.amount,
                 },
                 ..Default::default()
             })
