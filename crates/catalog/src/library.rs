@@ -73,7 +73,7 @@ pub fn resolve(path: &Path) -> Result<PathBuf> {
         if !ext_ok {
             return Err(CatalogError::Invalid(format!("{} is not a catalog (expected a .{} file)", path.display(), lcc_brand::CATALOG_EXT)));
         }
-        let bytes = std::fs::read(path).map_err(ioe)?;
+        let bytes = read_entry_file(path)?;
         let e: EntryFile = serde_json::from_slice(&bytes).map_err(|e| CatalogError::Corrupt(format!("{}: {e}", path.display())))?;
         if e.magic != lcc_brand::CATALOG_MAGIC {
             return Err(CatalogError::Corrupt(format!("{}: not a catalog entry file", path.display())));
@@ -91,6 +91,21 @@ pub fn resolve(path: &Path) -> Result<PathBuf> {
         return Err(CatalogError::Invalid(format!("{} holds no catalog", path.display())));
     }
     Err(CatalogError::Io(format!("{} not found", path.display())))
+}
+
+/// The largest entry-point file read: it holds a few short fields, so anything bigger is not one.
+pub(crate) const MAX_ENTRY_FILE: u64 = 64 << 10;
+
+/// The entry-point file's bytes, refused (not read whole) when larger than [`MAX_ENTRY_FILE`].
+fn read_entry_file(path: &Path) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).map_err(ioe)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_ENTRY_FILE.saturating_add(1)).read_to_end(&mut bytes).map_err(ioe)?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_ENTRY_FILE {
+        return Err(CatalogError::Corrupt(format!("{}: too large to be a catalog entry file", path.display())));
+    }
+    Ok(bytes)
 }
 
 /// Create a new, empty catalog: the folder `parent/name` (must not exist or be empty) with its
@@ -191,8 +206,10 @@ fn prepare_upgrade_inner(dir: &Path) -> Result<bool> {
     }
     // (as the open reads it: a missing log is an empty one)
     let log_path = dir.join(LOG);
-    let log = if log_path.exists() { std::fs::read(&log_path).map_err(ioe)? } else { Vec::new() };
-    crate::journal::refuse_newer_records(&log)?;
+    if log_path.exists() {
+        let file = std::fs::File::open(&log_path).map_err(ioe)?;
+        crate::journal::refuse_newer_records_in(std::io::BufReader::new(file))?;
+    }
     let _running = crate::progress::Running::start(MigrationKind::FormatBump, dir.display().to_string());
     // copy first: the store, its log and stub as the older build left them, checked, before
     // anything of the library is written (the store is closed meanwhile, so the copy is the file
