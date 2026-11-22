@@ -776,6 +776,51 @@ fn custom_white_balance_redevelops_in_camera_space() {
 }
 
 #[test]
+fn cpu_white_balance_stages_redevelop_the_dual_illuminant_card() {
+    use crate::local::{scene_linear_pre, wb_matrix_for, white_balance};
+    use lightcraft_color::cct::temp_tint_to_xy;
+    use lightcraft_develop::{Process, WbMode};
+
+    let cc = camera_color(5500.0, 0.0);
+    let target = temp_tint_to_xy(3200.0, 10.0);
+    let neutral = lightcraft_raw::color::camera_neutral(&cc.tags, target);
+    let developed_at = |xy| {
+        let t = lightcraft_raw::color::camera_transform_of(&cc.tags, xy);
+        t.matrix.apply(std::array::from_fn(|c| neutral[c] * f64::from(t.wb[c]))).map(|v| v as f32)
+    };
+    let card = developed_at(cc.developed_for);
+    // Develop the same camera samples directly for the requested white, without either render route.
+    let expected = developed_at(target);
+    let camera = SourceInfo { raw: true, as_shot_temp: 5500.0, as_shot_tint: 0.0, camera_color: Some(cc), ..Default::default() };
+    let relative = SourceInfo { camera_color: None, relative_wb: true, ..camera.clone() };
+    let close = |actual: &Rgb32f, want: [f32; 3]| {
+        assert_eq!(actual.data.len(), 4);
+        for px in &actual.data {
+            assert!(px.iter().zip(want).all(|(&v, w)| (v - w).abs() < 1e-4), "wanted {want:?}, got {px:?}");
+        }
+    };
+    for process in [Process::V8, Process::V10] {
+        let mut settings = DevelopSettings { process: process.version(), ..DevelopSettings::default() };
+        (settings.wb.mode, settings.wb.temp, settings.wb.tint) = (WbMode::Custom, 3200.0, 10.0);
+        settings.light.exposure = 1.0;
+        let mut wb = Rgb32f::filled(2, 2, card);
+        white_balance(&mut wb, &camera, &settings);
+        close(&wb, expected);
+        let mut scene = Rgb32f::filled(2, 2, card);
+        scene_linear_pre(&mut scene, &camera, &settings);
+        close(&scene, expected.map(|v| v * 2.0));
+
+        // Without camera facts, the CPU stage still uses the relative Bradford result.
+        let m = wb_matrix_for(&relative, &settings).unwrap();
+        let relative_expected = m.map(|r| (r[0] * card[0] + r[1] * card[1] + r[2] * card[2]).max(0.0));
+        assert!(relative_expected.iter().zip(expected).any(|(&v, w)| (v - w).abs() > 1e-4));
+        let mut wb = Rgb32f::filled(2, 2, card);
+        white_balance(&mut wb, &relative, &settings);
+        close(&wb, relative_expected);
+    }
+}
+
+#[test]
 fn saved_warm_green_wb_preserves_legacy_bradford_while_v10_uses_checked_fallback() {
     use crate::local::wb_matrix_for;
     use lightcraft_color::REC2020;
