@@ -69,6 +69,9 @@ The **Levels** section sits in the Edit panel just before the Tone Curve (the Mo
 - **Camera profiles**: import, use, export DCP profiles; per-camera-body defaults.
 - **Create a camera profile** from a colour chart photo: **ColorChecker 24** or **SpyderCHECKR 24**. Uneven light across the chart (falloff, glare) is evened out before fitting by default.
 - **Camera colour**: Auto or Colorimetric calibration. Some cameras have a built-in calibration fitted to Lightroom's exports; the Pentax K-3 and Sony ILCE-7M5 are the newest. Colour for other models is estimated (partial; see [Raw support](../raw-support/)).
+- **Where a raw's colour starts**, first available first: your own default for the camera, your own `.dcp`, the camera's Lightroom calibration, the file's own colour matrices (DNG), the camera's measured matrices, a look fitted to the raw's camera JPEG, then estimated colour. A calibration that only beats the per-photo JPEG fit on converted DNGs is the default for DNGs only.
+- **Calibrated camera colour** (Profile section) keeps its place while a photo of a camera that offers it is still loading: it shows greyed out until the photo is decoded, so the controls under it don't jump when you move between photos.
+- **DNGs without a tone curve** in their embedded profile (Lightroom's "Adobe Standard" conversions) render with their `BaselineExposure` once more, as Lightroom shows them.
 
 ## Presets
 <Shot name="presets" alt="The Presets panel" />
