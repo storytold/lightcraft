@@ -392,6 +392,21 @@ impl Frame {
         }
     }
 
+    /// Orient and prefilter `src` once for several samples with the same plan ([`Frame::sample_prepared`]).
+    pub(crate) fn prepare_source<'a>(&self, src: &'a Rgb32f, plan: &SamplePlan) -> std::borrow::Cow<'a, Rgb32f> {
+        use std::borrow::Cow;
+        let oriented = if self.orient == Orientation::Normal { Cow::Borrowed(src) } else { Cow::Owned(src.oriented(self.orient)) };
+        match plan.prefilter {
+            Some((nw, nh)) => Cow::Owned(resize(&oriented, nw, nh, Filter::Mitchell)),
+            None => oriented,
+        }
+    }
+
+    /// Sample a source prepared with this plan's orientation and prefilter size ([`Frame::prepare_source`]).
+    pub(crate) fn sample_prepared(&self, base: &Rgb32f, plan: &SamplePlan, w: usize, h: usize) -> Rgb32f {
+        self.sample_base(std::borrow::Cow::Borrowed(base), plan.clone(), w, h)
+    }
+
     /// The crop rectangle as a quad in normalized oriented coordinates (for overlays).
     pub fn crop_quad_norm(&self) -> [Point; 4] {
         let r = self.crop.rect_px(self.ow, self.oh);
