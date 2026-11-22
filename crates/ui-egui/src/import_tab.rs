@@ -15,6 +15,7 @@
 //! cards). On a narrow window (Compact, Modern on a phone) the three columns become one, with the
 //! sources and the settings a tap away in the bar. Ported by hand from OneSlips dd7bb41aa,
 //! db061a0a7, 437ed003f, 6e4fa44d0, 12d31e4fc.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::{Align2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde::{Deserialize, Serialize};

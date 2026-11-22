@@ -41,6 +41,7 @@
 //! Every other action is an engine `plugin.*` command. State lives in a static here (no field on the
 //! app), so the shell only needs the calls in `run`, `show`, `menu_items`, `after_export` and
 //! [`take_drop`].
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

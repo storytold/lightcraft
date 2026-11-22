@@ -12,6 +12,7 @@
 //!
 //! A row is an ordinary `command{params}` item, so the menu, the control channel and MCP all run it the
 //! same way, and a test needs only the node's id and parameters.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use serde_json::{Value, json};
 

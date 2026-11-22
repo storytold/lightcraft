@@ -2,6 +2,7 @@
 //! activity), per photo with author, date and text. The network asks run on a worker thread
 //! (`tasks::spawn`, an activity row while they run); Refresh asks again. A service without
 //! comments (Hard Drive, SFTP) says so. Fork-owned.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use chrono::DateTime;
 use egui::{RichText, vec2};

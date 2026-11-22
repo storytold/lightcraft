@@ -4,6 +4,7 @@
 //! "Save as Smart Collection…" keeps the current view as a live album; "Clear" resets the filter.
 //! The Metadata columns under it (issue #218, `view.filterColumns`) list each field's values among the photos in
 //! view with counts (`library.facets`); a click narrows the view (`library.facetPick`) and the columns cascade.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::{Color32, Rect, Sense, Stroke, StrokeKind, vec2};
 use lcc_catalog::{ColorLabel, Flag, MediaKind, RatingOp};

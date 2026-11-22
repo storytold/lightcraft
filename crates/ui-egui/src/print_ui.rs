@@ -17,6 +17,7 @@
 //! mediaSource, printQuality, sides}` (the printer's own options; `null` leaves one to the
 //! printer), `printui.trustCertificate {fingerprint?, uri?}` (an `ipps://` printer's certificate)
 //! and `printui.trustOnFirstUse {on}`.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use lcc_catalog::PhotoId;

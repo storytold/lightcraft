@@ -2,6 +2,7 @@
 //! to write (a PDF or video file, or the folder of a JPEG sequence) and starts the engine's
 //! `slideshow.export` in the background. The export's row in the activity stack shows its
 //! progress and ✕ (the engine owns the row); [`poll`] tells the user how it ended.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use serde_json::{Value, json};
 

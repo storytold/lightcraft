@@ -1,6 +1,7 @@
 //! Things the user must not miss (issue #103): settings files that were damaged or unreadable when
 //! the library opened (and host warnings such as a damaged `ui.json`), and quitting while changes
 //! are only in memory or while tasks that would be cut short are running (issue #345).
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::{Align2, RichText, vec2};
 
