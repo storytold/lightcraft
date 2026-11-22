@@ -18,7 +18,7 @@ use crate::import::{ImportJob, ImportMode, ImportOptions, Prepared};
 use crate::lightroom_catalog::{self, CatalogImport, ImportIndex};
 
 const COMMAND: &str = "library.importLightroom";
-const MAX_INDEX_BYTES: usize = 16 * 1024 * 1024;
+use crate::lightroom_catalog::MAX_INDEX_BYTES;
 
 fn error(message: impl Into<String>) -> crate::EngineError {
     crate::EngineError::BadParams { cmd: COMMAND.into(), msg: message.into() }
@@ -178,8 +178,8 @@ pub struct LightroomArchiveFinalization {
 impl LightroomArchiveFinalization {
     pub fn finish(self) -> crate::Result<()> {
         let (Some(path), Some(bytes)) = (self.path, self.bytes) else { return Ok(()) };
-        if bytes.len() > MAX_INDEX_BYTES {
-            return Err(error("Lightroom import index exceeds 16 MiB"));
+        if bytes.len() as u64 > MAX_INDEX_BYTES {
+            return Err(error(format!("Lightroom import index exceeds {} MiB", MAX_INDEX_BYTES >> 20)));
         }
         let failed = |e: &dyn std::fmt::Display| crate::EngineError::Other(format!("could not write the import index {}: {e}", path.display()));
         // the archive refuses a linked folder; now that its failure no longer stops the import, the
