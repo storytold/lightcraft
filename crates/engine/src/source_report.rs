@@ -96,6 +96,7 @@ pub fn report(bytes: &[u8], camera: &str) -> Result<Value, String> {
         "matrixIsFallback": t.matrix_is_fallback,
         "look": look.as_ref().map(|l| json!({"hueSat": l.hue_sat.is_some()})),
         "tone": tone,
+        "defaultExposure": trace.default_exposure,
         "keptTone": kept_tone,
         "whiteBalance": if scale.relative { "relative" } else { "absolute" },
         "dngProfile": {
