@@ -91,7 +91,7 @@ numbers that are simply what the code produces today. To teach the monkey a new 
 Malformed files are caught at the lowest level, next to the decoder, not here. Raw containers with a compressed
 decoder of their own (CR3 lossless and C-RAW, Sony ARW6, GoPro VC-5, Fujifilm compressed RAF in Bayer and X-Trans,
 Nikon High Efficiency) share one table in `crates/raw/src/vendor/container_robust.rs`: each row builds a valid seed
-with the crate's procedural test encoders, then runs every prefix and seeded mutations of it (`lcc-fuzzkit`)
+with the crate's procedural test encoders, then runs truncations across the whole seed (tail included) and seeded mutations of it (`lcc-fuzzkit`)
 through the decoder with two budgets. The row must finish inside a generous deadline (a hang fails instead of
 stalling CI), and a successful decode of a mutation may not produce more samples than the row's cap (a header
 claim trusted without the data behind it). DNG and the vendor TIFF variants stay in `crates/raw/tests/it/robust.rs`

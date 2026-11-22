@@ -1,7 +1,8 @@
 //! Per-container hostile-input table (completion plan 2.2). Every compressed container with a decoder of its
 //! own (CR3 lossless and C-RAW, Sony ARW6, GoPro VC-5, Fujifilm compressed RAF in Bayer and X-Trans, Nikon High
-//! Efficiency) gets a structurally valid seed from the crate's own procedural test encoders, then every prefix of
-//! it and seeded mutations of it (`lcc_fuzzkit`) through the entry point a photo takes. Each row has two budgets:
+//! Efficiency) gets a structurally valid seed from the crate's own procedural test encoders, then truncations of
+//! it (every prefix of a seed up to 4 KiB, a spread of up to 4096 prefix lengths plus the last 64 bytes one by
+//! one beyond that) and seeded mutations of it (`lcc_fuzzkit`) through the entry point a photo takes. Each row has two budgets:
 //!
 //! - **time:** the whole row (seeds, truncations, mutations) finishes inside a generous deadline, so a mutation
 //!   that sends a decoder into a near-endless loop fails the test instead of hanging CI. A deadline, not a
@@ -12,8 +13,8 @@
 //!   (`tests/sr2_heap.rs`), which need a process of their own.
 //!
 //! An input that panics is printed by `lcc_fuzzkit` (harness name, iteration, bytes); fold it into the row's
-//! `regressions` so every run replays it. `LCC_FUZZ_ITERS` raises the mutation count for long runs (`cargo xtask
-//! fuzz raw`); the deadline scales with it.
+//! `regressions` so every run replays it. `LCC_FUZZ_ITERS` raises the mutation count for long runs
+//! (`LCC_FUZZ_ITERS=N cargo test -p lcc-raw --lib container_robust`); the deadline scales with it.
 
 use crate::{RawImage, Result};
 use std::sync::mpsc;
@@ -167,6 +168,25 @@ const ROWS: &[Row] = &[
     },
 ];
 
+/// Prefix lengths tried for a seed of `len` bytes: all of them up to 4 KiB, beyond that up to 4096 evenly
+/// spread lengths plus each of the last 64.
+fn truncation_lengths(len: usize) -> Vec<usize> {
+    let step = len.div_ceil(4096).max(1);
+    let mut v: Vec<usize> = (0..len).step_by(step).collect();
+    v.extend(len.saturating_sub(64)..len);
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+#[test]
+fn truncation_lengths_reach_the_tail_of_long_seeds() {
+    let v = truncation_lengths(100_000);
+    assert!(v.len() <= 4096 + 64 + 1);
+    assert!(v.contains(&0) && v.contains(&99_999) && v.contains(&99_937));
+    assert_eq!(truncation_lengths(10), (0..10).collect::<Vec<_>>());
+}
+
 /// Every seed decodes as built, so the mutations below start from live decode paths, not an early error.
 #[test]
 fn every_container_seed_decodes() {
@@ -176,7 +196,7 @@ fn every_container_seed_decodes() {
     }
 }
 
-/// Every prefix and every mutation of every container decodes or errors within its budgets; never a panic.
+/// Truncations of every seed (including its tail) and every mutation of every container decodes or errors within its budgets; never a panic.
 #[test]
 fn mutated_containers_stay_within_their_budgets() {
     let iters = lcc_fuzzkit::iterations(0);
@@ -192,14 +212,20 @@ fn mutated_containers_stay_within_their_budgets() {
                     let mut seeds: Vec<&[u8]> = vec![&seed];
                     seeds.extend_from_slice(regressions);
                     let mut over = None;
-                    lcc_fuzzkit::run(name, &seeds, mutations, |bytes| {
+                    let mut check = |bytes: &[u8]| {
                         if let Ok(n) = decode(bytes)
                             && n > max
                             && over.is_none()
                         {
                             over = Some((n, bytes.len()));
                         }
-                    });
+                    };
+                    // `lcc_fuzzkit::run` only truncates the shortest seed and stops at 4 KiB; cover the whole
+                    // seed here, tail included, so cuts near the end of a long container are tried too.
+                    for n in truncation_lengths(seed.len()) {
+                        check(seed.get(..n).unwrap_or_default());
+                    }
+                    lcc_fuzzkit::run(name, &seeds, mutations, check);
                     over
                 });
                 let _ = tx.send(outcome.map_err(|_| ()));
@@ -208,14 +234,23 @@ fn mutated_containers_stay_within_their_budgets() {
             (row.name, rx, row.deadline.saturating_mul(scale))
         })
         .collect();
+    let mut failures = Vec::new();
     for (name, rx, deadline) in rows {
         match rx.recv_timeout(deadline.saturating_sub(start.elapsed())) {
             Ok(Ok(None)) => {}
-            Ok(Ok(Some((n, len)))) => panic!("{name}: a {len}-byte mutation decoded to {n} samples, over the allocation budget"),
-            Ok(Err(())) => panic!("{name}: a candidate panicked (input printed above)"),
-            Err(_) => panic!("{name}: did not finish within {deadline:?} (time budget)"),
+            Ok(Ok(Some((n, len)))) => failures.push(format!("{name}: a {len}-byte candidate decoded to {n} samples, over the allocation budget")),
+            Ok(Err(())) => failures.push(format!("{name}: a candidate panicked (input printed above)")),
+            Err(_) => failures.push(format!("{name}: did not finish within {deadline:?} (time budget)")),
         }
     }
+    assert!(
+        failures.is_empty(),
+        "{}",
+        failures.join(
+            "
+"
+        )
+    );
 }
 
 /// Both CR3 fixtures decode as built, and the header-only description (used at import) agrees with the decode.
