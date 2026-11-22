@@ -29,11 +29,7 @@ fn display_value(p: f32, contrast: f32, whites: f32, blacks: f32, shadows: f32) 
 }
 
 fn display_lut(s: &DevelopSettings, peak: f32) -> Vec<f32> {
-    let (contrast, whites, blacks) = (
-        (s.light.contrast / 100.0) as f32,
-        (s.light.whites / 100.0) as f32,
-        (s.light.blacks / 100.0) as f32,
-    );
+    let (contrast, whites, blacks) = ((s.light.contrast / 100.0) as f32, (s.light.whites / 100.0) as f32, (s.light.blacks / 100.0) as f32);
     let shadows = (s.light.shadows / 100.0).clamp(0.0, 1.0) as f32;
     let peak = if peak.is_finite() { peak.max(1.0) } else { 1.0 };
     let neutral = contrast == 0.0 && whites == 0.0 && blacks == 0.0;
@@ -106,4 +102,3 @@ pub(crate) fn apply(lut: &[f32], y: f32) -> f32 {
     let v = a + (b - a) * (f - i as f32);
     if ev < LUT_MIN_EV { v * (y / (GREY * 2.0f32.powf(LUT_MIN_EV))) } else { v }
 }
-

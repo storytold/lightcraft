@@ -135,7 +135,9 @@ impl GrainModel {
                     seed: g.seed,
                 })
             }),
-            Process::V7 | Process::V8 | Process::V10 | Process::V11 if draft => crate::crystal::CrystalGrain::draft(g, px_per_long).map(GrainModel::Crystal),
+            Process::V7 | Process::V8 | Process::V10 | Process::V11 if draft => {
+                crate::crystal::CrystalGrain::draft(g, px_per_long).map(GrainModel::Crystal)
+            }
             Process::V7 | Process::V8 | Process::V10 | Process::V11 => crate::crystal::CrystalGrain::new(g, px_per_long).map(GrainModel::Crystal),
         }
     }

@@ -52,6 +52,7 @@ pub mod redeye;
 pub mod spots;
 pub mod straighten;
 pub mod tone;
+mod tone_v11;
 pub mod transform;
 pub mod upright;
 pub mod visualize;

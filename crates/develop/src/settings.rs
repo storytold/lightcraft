@@ -114,10 +114,8 @@ pub enum Process {
 
 impl Process {
     /// Every process, oldest first (`ProcessVersion(9)` is reserved for `#4069`).
-    pub const ALL: [Process; 10] = [
-        Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7, Process::V8, Process::V10,
-        Process::V11,
-    ];
+    pub const ALL: [Process; 10] =
+        [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7, Process::V8, Process::V10, Process::V11];
     pub const LATEST: Process = Process::V11;
 
     pub const fn version(self) -> ProcessVersion {

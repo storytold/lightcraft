@@ -29,7 +29,7 @@ const FIELDS: &[(&str, usize)] = &[
     ("AIR_PRE", 1),
     ("HL", 1),
     ("SH", 1),
-    ("V3_TONE_RESPONSE", 1),
+    ("V11_TONE_RESPONSE", 1),
     ("LOCAL_WHITES_OFF", 1),
     ("CLAR", 1),
     ("TEX", 1),
@@ -194,7 +194,7 @@ pub struct Present {
 /// A curve whose length is not [`CURVE_N`] fails the render ([`FailKind::Fatal`]) and returns an
 /// empty parameter block with a truncated aux table, which the caller discards (CPU fallback).
 pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present, deep: bool) -> (Vec<u32>, Vec<f32>) {
-    let mut aux: Vec<f32> = fp.tone.lut().to_vec();
+    let mut aux: Vec<f32> = fp.v11_tone_lut.clone().unwrap_or_else(|| fp.tone.lut().to_vec());
     aux.extend_from_slice(fp.tone.chroma_lut());
     let local_whites_off = if let Some(lut) = &fp.local_whites {
         let off = aux.len();
@@ -274,7 +274,7 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.f("AIR_PRE", fp.air_pre);
     p.f("HL", fp.hl);
     p.f("SH", fp.sh);
-    p.b("V3_TONE_RESPONSE", fp.v3_tone_response);
+    p.b("V11_TONE_RESPONSE", fp.v11_tone_response);
     p.u("LOCAL_WHITES_OFF", local_whites_off as u32);
     p.f("CLAR", fp.clar);
     p.f("TEX", fp.tex);

@@ -796,12 +796,12 @@ fn saved_warm_green_wb_preserves_legacy_bradford_while_v10_uses_checked_fallback
         assert_eq!(saved.to_json()["process"], serde_json::json!(proc_num));
         let legacy_m = wb_matrix_for(&info, &saved).unwrap();
 
-        // New V10 edit at the same warm-green WB uses the shared checked Mat3::IDENTITY fallback.
+        // New-process edits at the same warm-green WB use the shared checked fallback.
         let mut v10 = DevelopSettings::default();
-        assert_eq!(v10.process.process(), Process::V10);
+        assert_eq!(v10.process.process(), Process::V11);
         (v10.wb.mode, v10.wb.temp, v10.wb.tint) = (WbMode::Custom, 2000.0, 30.0);
         let v10_reopened = DevelopSettings::from_json(&v10.to_json()).unwrap();
-        assert_eq!(v10_reopened.process, ProcessVersion(10));
+        assert_eq!(v10_reopened.process, ProcessVersion(11));
         let v10_m = wb_matrix_for(&info, &v10_reopened).unwrap();
 
         assert_ne!(legacy_m, v10_m, "saved V{proc_num} edit must not silently adopt V10's checked fallback");
