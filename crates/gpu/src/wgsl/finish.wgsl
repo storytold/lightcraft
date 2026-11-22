@@ -166,6 +166,27 @@ fn brightness_apply(c0: vec3<f32>, hdr: bool) -> vec3<f32> {
     return brightness_core(c0, hdr, max(pf(F_BRIGHTNESS_H), 1.0));
 }
 
+// Brightness, then Levels (each channel's own stage first, then the master's): one call site per process
+// (`finish::finish_with`), on output values before V10 and in the wide curve space from V10.
+fn brightness_levels(e0: vec3<f32>, hdr: bool) -> vec3<f32> {
+    var e = e0;
+    if (pu(F_BRIGHTNESS) != 0u) {
+        e = brightness_apply(e, hdr);
+    }
+    // --- Levels: each channel's own stage first, then the master's (one call site, as `finish_with`)
+    if (pu(F_LEVELS) != 0u) {
+        let c = vec3<f32>(
+            levels_stage(F_LEVELS_R, pu(F_LEVELS_OFF_R), e.x, hdr),
+            levels_stage(F_LEVELS_G, pu(F_LEVELS_OFF_G), e.y, hdr),
+            levels_stage(F_LEVELS_B, pu(F_LEVELS_OFF_B), e.z, hdr));
+        e = vec3<f32>(
+            levels_stage(F_LEVELS_M, pu(F_LEVELS_OFF_M), c.x, hdr),
+            levels_stage(F_LEVELS_M, pu(F_LEVELS_OFF_M), c.y, hdr),
+            levels_stage(F_LEVELS_M, pu(F_LEVELS_OFF_M), c.z, hdr));
+    }
+    return e;
+}
+
 // The exact sRGB curve (`lcc_color::transfer`), unbounded above 1 as HDR renders encode.
 fn lin_to_srgb(v: f32) -> f32 {
     if (v <= 0.0031308) {
@@ -1131,6 +1152,24 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         d = oklab_inv(lab);
     }
 
+    // --- process V10: the Tone Curve in its wide space, before the vignette and the gamut map (`finish::CurveSpace::apply`)
+    // (with Brightness and Levels before it, in the order the older processes run them on output values)
+    let curve_wide = pu(F_CURVE_WIDE) != 0u;
+    if (curve_wide) {
+        let q = mul3(mat_at(F_CURVE_TO_WIDE), d);
+        let pos = max(q, vec3<f32>(0.0));
+        var ce = brightness_levels(pow(pos, vec3<f32>(1.0 / 1.8)), hdr);
+        if (pu(F_CURVES) != 0u) {
+            let e0 = ce;
+            ce = vec3<f32>(curve(0u, e0.x, true), curve(1u, e0.y, true), curve(2u, e0.z, true));
+            let rs = pf(F_REFINE_SAT);
+            if (rs < 1.0) {
+                ce = refine_saturation(e0, ce, rs);
+            }
+        }
+        d = mul3(mat_at(F_CURVE_FROM_WIDE), q - pos + pow(max(ce, vec3<f32>(0.0)), vec3<f32>(1.8)));
+    }
+
     // --- vignette (display linear, post-crop)
     if (pu(F_VIG) != 0u) {
         // the vignette belongs to the whole output frame, not to the window being drawn
@@ -1206,22 +1245,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     } else {
         e = vec3<f32>(encode_srgb(r.x), encode_srgb(r.y), encode_srgb(r.z));
     }
-    // --- Brightness (`finish::finish_with`): right after the encode, before the Tone Curve
-    if (pu(F_BRIGHTNESS) != 0u) {
-        e = brightness_apply(e, hdr);
+    // --- Brightness (`finish::finish_with`): right after the encode, before the Tone Curve; then Levels
+    if (!curve_wide) {
+        e = brightness_levels(e, hdr);
     }
-    // --- Levels: each channel's own stage first, then the master's (one call site, as `finish_with`)
-    if (pu(F_LEVELS) != 0u) {
-        let c = vec3<f32>(
-            levels_stage(F_LEVELS_R, pu(F_LEVELS_OFF_R), e.x, hdr),
-            levels_stage(F_LEVELS_G, pu(F_LEVELS_OFF_G), e.y, hdr),
-            levels_stage(F_LEVELS_B, pu(F_LEVELS_OFF_B), e.z, hdr));
-        e = vec3<f32>(
-            levels_stage(F_LEVELS_M, pu(F_LEVELS_OFF_M), c.x, hdr),
-            levels_stage(F_LEVELS_M, pu(F_LEVELS_OFF_M), c.y, hdr),
-            levels_stage(F_LEVELS_M, pu(F_LEVELS_OFF_M), c.z, hdr));
-    }
-    if (pu(F_CURVES) != 0u) {
+    if (pu(F_CURVES) != 0u && !curve_wide) {
         let e0 = e;
         e = vec3<f32>(curve(0u, e.x, hdr), curve(1u, e.y, hdr), curve(2u, e.z, hdr));
         let rs = pf(F_REFINE_SAT);
