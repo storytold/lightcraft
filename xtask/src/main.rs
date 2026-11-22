@@ -118,6 +118,10 @@ commands:
                   break: clippy, the changed packages' tests, and heif / parity / wasm when they apply.
                   One ci runs at a time per machine; others wait (<PREFIX>_CI_SLOTS=N for N at once,
                   <PREFIX>_CI_LOCK=off to skip the lock)
+  affected-tests [--base REF]
+                  the tests of the packages changed since the merge base with origin/main (or REF) and
+                  of every workspace package depending on them (all packages when a workspace-wide
+                  file changed); the PR gate's test step (docs/ci.md)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite, CC0 raw samples (raw.pixls.us) and public-domain / CC-BY video clips into corpus/ and checks their sha256
   upstream-review [--ref REF] | --done [REF]
@@ -176,6 +180,7 @@ fn main() -> ExitCode {
         Some("web") => web::run(&rest),
         Some("ci") => cmd_ci_cli(&rest),
         Some("quarantine") => quarantine::run(&root(), &rest),
+        Some("affected-tests") => cmd_affected_tests(&rest),
         Some("skips") => skip_gate::run(&root(), &rest),
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
         Some("upstream-merge") => upstream::merge(&root(), &rest),
@@ -595,6 +600,33 @@ fn cmd_deny() -> Result<(), String> {
     let mut c = cargo();
     c.args(["deny", "check", "licenses", "sources"]);
     run(c, "cargo deny check licenses sources")
+}
+
+/// `cargo xtask affected-tests [--base REF]`: the changed packages' and their dependents' tests.
+fn cmd_affected_tests(args: &[&str]) -> Result<(), String> {
+    let base = match args {
+        [] => None,
+        ["--base", r] => Some(*r),
+        _ => return Err("usage: cargo xtask affected-tests [--base REF]".into()),
+    };
+    let root = root();
+    let meta = metadata()?;
+    let (base, files) = ci_quick::changed_files(&root, base)?;
+    let plan = ci_quick::plan(&files, &ci_quick::packages(&root, &meta), base);
+    let deps = ci_quick::workspace_deps(&meta);
+    let packages = if plan.workspace_wide { deps.iter().map(|(n, _)| n.clone()).collect() } else { ci_quick::with_dependents(&plan.packages, &deps) };
+    eprintln!("=== affected-tests: {} changed file(s) since {} ===", plan.files, plan.base);
+    if packages.is_empty() {
+        println!("no package changed: no tests to run");
+        return Ok(());
+    }
+    eprintln!("  packages: {}", packages.iter().map(String::as_str).collect::<Vec<_>>().join(", "));
+    // not ci_report::prepare: that clears the report of the `ci --fast` run before this step
+    let skip_log = ci_report::skip_log(&root, "affected-tests");
+    if let Some(dir) = skip_log.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    test_selected(&root, &packages, &skip_log)
 }
 
 /// The app's environment variable `<PREFIX>_<suffix>` (`env_prefix` from brand.toml), for the

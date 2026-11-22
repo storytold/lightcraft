@@ -1,6 +1,6 @@
 # CI and landing changes
 
-> **Last updated:** 2026-11-22 · **Change:** minor (nightly `Fuzz` workflow: every pure-Rust fuzz target for 30 minutes, crash inputs as artifacts); minor (nightly workflow: corpus + fonts full run with a skip gate, GPU equivalence on lavapipe and WARP); minor (timing probes and benchmarks run with `<PREFIX>_PROBES=1` and otherwise record a `probe` skip); minor (generated demo photos are kept on disk across test processes); minor (the fast gate checks that the fork catalogs are sorted); minor (the full run also checks the x86_64 Android target); major (no repeated runs: a push to main skips a tree its PR run tested, no CI on pushes to `release`, Brand only on PRs and built in the runner cache, Windows ARM64 only when packaging inputs change, sccache, one cargo run per target for the fast gate's wasm/Android checks); minor (release jobs upload straight to the draft release, not via Actions artifacts); major (every workflow on self-hosted runners, containers on gpu0, fork PRs approved after review); minor (test retries, flaky reports and the test quarantine for the full run); major (fast PR gate; full test runs only before a release); major (created: PR-only main, self-hosted runner, local status)
+> **Last updated:** 2026-11-23 · **Change:** minor (PRs run the tests of the changed crates and their dependents; the nightly full run covers macOS and Windows, files an issue when red, and a red nightly blocks `release.yml`); minor (nightly `Fuzz` workflow: every pure-Rust fuzz target for 30 minutes, crash inputs as artifacts); minor (nightly workflow: corpus + fonts full run with a skip gate, GPU equivalence on lavapipe and WARP); minor (timing probes and benchmarks run with `<PREFIX>_PROBES=1` and otherwise record a `probe` skip); minor (generated demo photos are kept on disk across test processes); minor (the fast gate checks that the fork catalogs are sorted); minor (the full run also checks the x86_64 Android target); major (no repeated runs: a push to main skips a tree its PR run tested, no CI on pushes to `release`, Brand only on PRs and built in the runner cache, Windows ARM64 only when packaging inputs change, sccache, one cargo run per target for the fast gate's wasm/Android checks); minor (release jobs upload straight to the draft release, not via Actions artifacts); major (every workflow on self-hosted runners, containers on gpu0, fork PRs approved after review); minor (test retries, flaky reports and the test quarantine for the full run); major (fast PR gate; full test runs only before a release); major (created: PR-only main, self-hosted runner, local status)
 
 ## How changes reach `main`
 
@@ -18,7 +18,8 @@ Every change goes on a branch, opens a PR and is set to auto-merge
 
 | Trigger | Linux ("Linux (cargo xtask ci)") | macOS / Windows |
 |---|---|---|
-| Pull request to `main`, push to `main` | `cargo xtask ci --fast` + SIL suite | clippy |
+| Pull request to `main` | `cargo xtask ci --fast` + changed-crate tests + SIL suite | clippy |
+| Push to `main` | `cargo xtask ci --fast` + SIL suite | clippy |
 | Manual dispatch (Actions → CI → Run workflow) | full `cargo xtask ci` + SIL suite | build + clippy + `cargo test --workspace` |
 | Push to `release` | none: the dispatched run tested that commit | none |
 
@@ -42,6 +43,14 @@ that builds only because another member turns on a feature it relies on. The And
 both ABIs a release ships, arm64 and x86_64, in the full run. `cargo xtask parity` reads the command
 and control registries from the CLI as `cargo test -p lcc-cli --test sil` builds it, so the SIL step that follows
 compiles nothing new.
+
+**Changed-crate tests (PRs).** After the fast gate, PR runs call `cargo xtask affected-tests --base HEAD^1`
+(the checkout fetches two commits: GitHub's merge of the PR and its first parent, the base). It takes the packages
+`ci --quick` would (files inside a package, files a crate compiles in, `ci_quick.rs`'s `EMBEDDED`), adds every
+workspace package that depends on one of them, directly or not and of any dependency kind, and runs those packages'
+unit and integration test binaries (one workspace `--no-run` build, as `ci --quick`; no doctests). A workspace-wide
+change (root `Cargo.toml`, `Cargo.lock`, lint or toolchain config) tests every package. Locally:
+`cargo xtask affected-tests` compares with `origin/main`.
 
 Before cutting a release, dispatch CI on the commit and make sure all three OSes are green, then push that commit
 to `release` (`release.yml` builds it; CI does not run again there).
@@ -208,13 +217,22 @@ Every such case must end in an error that names what happened, never a panic, a 
 ## Nightly
 
 `.github/workflows/nightly.yml` runs every day at 03:17 UTC and on manual dispatch (Actions → Nightly → Run workflow).
-It covers what the PR gate and the release dispatch cannot: test data and software GPU adapters.
+It covers what the PR gate and the release dispatch cannot: test data, software GPU adapters and the full test suite
+on all three desktop OSes every day.
 
 | Job | Runner | What it runs |
 |---|---|---|
 | Corpus + fonts | self-hosted Linux | the pinned raw corpus (`cargo xtask corpus --download`, sha256-checked), craft-fonts and [photocraft-corpus](https://github.com/storytold/photocraft-corpus) at pinned commits (the latter verified with its own `SHA256SUMS`, into `corpus/photocraft`; staged for future oracle tests, nothing reads it yet, so it adds no coverage and the skip gate cannot notice it missing), then the full `cargo xtask ci` and the skip gate; `target/ci/` is uploaded as `nightly-ci-report` |
 | GPU equivalence on lavapipe | gpu0, `rust:1.100.0-bookworm` container (exact tag) | `crates/gpu/tests/it/equivalence.rs` on Mesa's software Vulkan driver (the container has no GPU) |
 | GPU equivalence on WARP | self-hosted Windows | the same tests on DX12's software adapter |
+| Full tests (macOS), Full tests (Windows) | self-hosted mac0, win0 | `cargo build --workspace` and `cargo xtask quarantine test` (nextest with retries and the quarantine), as the manual full CI run |
+| Report | self-hosted Linux | scheduled runs only: when any job failed or was cancelled, opens the issue "Nightly full run failing" (or comments on the open one) with the run link; on a green run it closes that issue |
+
+**Release gate.** `release.yml`'s version job looks up the completed `nightly.yml` runs and takes the newest whose
+commit is the release commit or one of its ancestors (`git merge-base --is-ancestor`, full-history checkout). When
+that run is not `success`, a push to `release` fails before any draft is made; a dry-run dispatch only warns. With no
+such nightly at all it warns and continues. To release after a red nightly: fix it on `main`, dispatch Nightly (or
+wait for the next one) and push to `release` once it is green.
 
 **Skip gate.** `cargo xtask skips check` reads the skips of `target/ci/report.json` (each `lcc_testkit::skip!`, per
 need: `gpu`, `corpus`, `fonts`, `model`, …) and fails when a need has more than [`ci/skip-allowlist.toml`](../ci/skip-allowlist.toml)
