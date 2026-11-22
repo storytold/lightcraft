@@ -3777,7 +3777,7 @@ fn fetch_pinned(dest: &Path, samples: &[(&str, &str, &str)], bad: &mut Vec<Strin
         let out = dest.join(name);
         if !out.exists() {
             let mut curl = Command::new("curl");
-            curl.args(["-fsSL", "-o"]).arg(&out).arg(url);
+            curl.args(["-fsSL", "--retry", "5", "--retry-all-errors", "--retry-delay", "10", "-o"]).arg(&out).arg(url);
             run(curl, &format!("curl {url}"))?;
         }
         let actual = file_sha256(&out)?;

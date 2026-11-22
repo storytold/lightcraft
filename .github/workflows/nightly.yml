@@ -120,7 +120,7 @@ jobs:
         run: |
           prefix=$(sed -n 's/^env_prefix *= *"\([^"]*\)".*/\1/p' brand.toml)
           export "${prefix}_GPU_SOFTWARE=1" "${prefix}_GPU_BACKEND=vulkan"
-          cargo test -p lcc-gpu --release --test it -- equivalence --test-threads=2
+          cargo test -p lcc-gpu --release --test it -- equivalence --test-threads=1
       - name: Hand the target volume back
         if: always()
         # the container runs as root; root-owned files would break the next checkout on the host
@@ -140,7 +140,7 @@ jobs:
         run: |
           prefix=$(sed -n 's/^env_prefix *= *"\([^"]*\)".*/\1/p' brand.toml)
           export "${prefix}_GPU_SOFTWARE=1" "${prefix}_GPU_BACKEND=dx12"
-          cargo test -p lcc-gpu --release --test it -- equivalence --test-threads=2
+          cargo test -p lcc-gpu --release --test it -- equivalence --test-threads=1
 
   full:
     name: Full tests (${{ matrix.name }})
