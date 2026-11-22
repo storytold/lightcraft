@@ -1230,6 +1230,20 @@ fn white_balance_on_a_named_photo_leaves_the_selection_and_auto_sync_alone() {
 }
 
 #[test]
+fn auto_settings_on_a_named_photo_need_no_selection() {
+    let mut s = demo();
+    let id = s.catalog.photos().next().unwrap().id;
+    s.selection.ids.clear();
+    s.selection.active = None;
+    let before = s.develop_of(id).unwrap();
+    assert!(s.execute("develop.auto", &json!({})).is_err(), "without a photo named or selected there is nothing to correct");
+    s.execute("develop.auto", &json!({"id": id.0})).unwrap();
+    assert_ne!(s.develop_of(id).unwrap(), before, "the named photo is corrected");
+    assert!(s.selection.ids.is_empty() && s.selection.active.is_none(), "and the selection stays empty");
+    assert!(s.execute("develop.auto", &json!({"id": 999_999})).is_err());
+}
+
+#[test]
 fn auto_sync_camera_local_tone_off_preserves_other_settings() {
     use lightcraft_catalog::PhotoId;
     let mut s = demo();

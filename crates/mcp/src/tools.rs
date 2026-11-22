@@ -509,11 +509,10 @@ fn auto_develop(b: &mut dyn Backend, args: &Value) -> Result<Value, String> {
         Some("white_balance") => ("develop.wb", json!({"mode": "auto", "id": id})),
         _ => return Err("`adjustment` must be tone or white_balance".into()),
     };
-    // A slider edit still in progress is committed first, as its own undo step.
-    exec(b, "develop.endInteraction", json!({}))?;
     let before = exec(b, "develop.get", json!({"id": id}))?;
-    // One request names the photo: the engine edits it alone (no Auto Sync) and leaves the selection as it is,
-    // so a photo the user selects between two requests (`--connect`) is never the one corrected.
+    // One request names the photo: the engine commits a pending slider edit as its own undo step, edits the photo
+    // alone (no Auto Sync) and leaves the selection as it is, so a photo the user selects or drags a slider on
+    // between two requests (`--connect`) never shares the correction.
     let result = exec(b, command, params)?;
     let after = exec(b, "develop.get", json!({"id": id}))
         .map_err(|e| format!("correction applied to photo {id}, but could not read resulting settings: {e}"))?;
