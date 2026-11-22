@@ -2167,6 +2167,7 @@ mod tests {
             lens: None,
             looks: vec![("cal:adobe-vivid".into(), dcp)],
             default: Some("cal:adobe-vivid".into()),
+            own_matrix_only: false,
         });
         lcc_raw::dcp::install_calibrated(list);
         let (calibrated, other_camera) = (warned("ONE"), warned("TWO"));

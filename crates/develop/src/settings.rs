@@ -247,6 +247,11 @@ pub enum Process {
     /// instead of its OkLab chroma, so it no longer turns blues in hue like the Hue slider
     /// (fork issue #1031).
     V9,
+    /// The Tone Curve's point curves (RGB and each colour channel, with Refine Saturation) run in a fixed
+    /// wide space, ProPhoto primaries encoded with gamma 1.8, before the conversion to the output space,
+    /// instead of on the output's sRGB-encoded values; strong per-channel curves then act as in Lightroom
+    /// and an edit no longer depends on the export colour space (fork issue #1142).
+    V10,
 }
 
 /// How much of the AI-denoised picture to mix in for a Denoise slider fraction `a` (0 to 1) under
@@ -256,15 +261,15 @@ pub fn denoise_weight(process: Process, a: f32) -> f32 {
     let a = if a.is_finite() { a.clamp(0.0, 1.0) } else { 0.0 };
     match process {
         Process::V1 | Process::V2 | Process::V3 | Process::V4 | Process::V5 => a,
-        Process::V6 | Process::V7 | Process::V8 | Process::V9 => 1.0 - (1.0 - a).powi(3),
+        Process::V6 | Process::V7 | Process::V8 | Process::V9 | Process::V10 => 1.0 - (1.0 - a).powi(3),
     }
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 9] =
-        [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7, Process::V8, Process::V9];
-    pub const LATEST: Process = Process::V9;
+    pub const ALL: [Process; 10] =
+        [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7, Process::V8, Process::V9, Process::V10];
+    pub const LATEST: Process = Process::V10;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
@@ -277,6 +282,7 @@ impl Process {
             Process::V7 => ProcessVersion(7),
             Process::V8 => ProcessVersion(8),
             Process::V9 => ProcessVersion(9),
+            Process::V10 => ProcessVersion(10),
         }
     }
 }

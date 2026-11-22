@@ -49,6 +49,9 @@ commands:
   sil [workflow|raw|monkey] [--seed N] [--steps N]
                   software-in-the-loop: drive the real app headless through user workflows and a seeded
                   monkey, checking invariants (docs/testing-sil.md)
+  fidelity [--regen] [--refs DIR]
+                  render-fidelity suite: tools × processes × scenes/corpus against local references
+                  (default fidelity-refs/); --regen writes them from the current renderer (docs/testing-sil.md)
   fuzz [TARGET…|all] [--secs N] [--rng N] [--list]
                   time-boxed pure-Rust fuzzing (default 60 s per target, all targets): raw, tiff, codecs,
                   meta, develop, lightroom, peer; crash inputs in target/fuzz/crashes/<target>/ (docs/testing-sil.md)
@@ -118,6 +121,10 @@ commands:
                   break: clippy, the changed packages' tests, and heif / parity / wasm when they apply.
                   One ci runs at a time per machine; others wait (<PREFIX>_CI_SLOTS=N for N at once,
                   <PREFIX>_CI_LOCK=off to skip the lock)
+  affected-tests [--base REF]
+                  the tests of the packages changed since the merge base with origin/main (or REF) and
+                  of every workspace package depending on them (all packages when a workspace-wide
+                  file changed); the PR gate's test step (docs/ci.md)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite, CC0 raw samples (raw.pixls.us) and public-domain / CC-BY video clips into corpus/ and checks their sha256
   upstream-review [--ref REF] | --done [REF]
@@ -167,6 +174,7 @@ fn main() -> ExitCode {
         Some("assets") => assets::run(&root()),
         Some("bench") => bench::run(&root(), &rest),
         Some("sil") => cmd_sil(&rest),
+        Some("fidelity") => cmd_fidelity(&rest),
         Some("fuzz") => fuzz::run(&root(), &rest),
         Some("bench-catalog") => cmd_bench_catalog(&rest),
         Some("bench-keywords") => cmd_bench_keywords(&rest),
@@ -176,6 +184,7 @@ fn main() -> ExitCode {
         Some("web") => web::run(&rest),
         Some("ci") => cmd_ci_cli(&rest),
         Some("quarantine") => quarantine::run(&root(), &rest),
+        Some("affected-tests") => cmd_affected_tests(&rest),
         Some("skips") => skip_gate::run(&root(), &rest),
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
         Some("upstream-merge") => upstream::merge(&root(), &rest),
@@ -595,6 +604,33 @@ fn cmd_deny() -> Result<(), String> {
     let mut c = cargo();
     c.args(["deny", "check", "licenses", "sources"]);
     run(c, "cargo deny check licenses sources")
+}
+
+/// `cargo xtask affected-tests [--base REF]`: the changed packages' and their dependents' tests.
+fn cmd_affected_tests(args: &[&str]) -> Result<(), String> {
+    let base = match args {
+        [] => None,
+        ["--base", r] => Some(*r),
+        _ => return Err("usage: cargo xtask affected-tests [--base REF]".into()),
+    };
+    let root = root();
+    let meta = metadata()?;
+    let (base, files) = ci_quick::changed_files(&root, base)?;
+    let plan = ci_quick::plan(&files, &ci_quick::packages(&root, &meta), base);
+    let deps = ci_quick::workspace_deps(&meta);
+    let packages = if plan.workspace_wide { deps.iter().map(|(n, _)| n.clone()).collect() } else { ci_quick::with_dependents(&plan.packages, &deps) };
+    eprintln!("=== affected-tests: {} changed file(s) since {} ===", plan.files, plan.base);
+    if packages.is_empty() {
+        println!("no package changed: no tests to run");
+        return Ok(());
+    }
+    eprintln!("  packages: {}", packages.iter().map(String::as_str).collect::<Vec<_>>().join(", "));
+    // not ci_report::prepare: that clears the report of the `ci --fast` run before this step
+    let skip_log = ci_report::skip_log(&root, "affected-tests");
+    if let Some(dir) = skip_log.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    test_selected(&root, &packages, &skip_log)
 }
 
 /// The app's environment variable `<PREFIX>_<suffix>` (`env_prefix` from brand.toml), for the
@@ -3741,7 +3777,7 @@ fn fetch_pinned(dest: &Path, samples: &[(&str, &str, &str)], bad: &mut Vec<Strin
         let out = dest.join(name);
         if !out.exists() {
             let mut curl = Command::new("curl");
-            curl.args(["-fsSL", "-o"]).arg(&out).arg(url);
+            curl.args(["-fsSL", "--retry", "5", "--retry-all-errors", "--retry-delay", "10", "-o"]).arg(&out).arg(url);
             run(curl, &format!("curl {url}"))?;
         }
         let actual = file_sha256(&out)?;
@@ -3845,6 +3881,33 @@ mod corpus_tests {
     }
 }
 
+/// `cargo xtask fidelity`: the render-fidelity reference suite (`crates/pipeline/tests/it/fidelity.rs`,
+/// docs/testing-sil.md). `--regen` writes the local references; otherwise it compares against them.
+fn cmd_fidelity(args: &[&str]) -> Result<(), String> {
+    let mut c = cargo();
+    c.args(["test", "-p", "lcc-pipeline", "--test", "it", "fidelity::"]);
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--regen" => {
+                c.env(env_name("FIDELITY_REGEN"), "1");
+            }
+            "--refs" => {
+                let v = args.get(i + 1).ok_or("--refs needs a folder")?;
+                // cargo runs the test from crates/pipeline, so a relative folder is made absolute here
+                let dir = std::path::absolute(v).map_err(|e| format!("--refs {v}: {e}"))?;
+                c.env(env_name("FIDELITY_REFS"), dir);
+                i += 1;
+            }
+            other => return Err(format!("fidelity: unknown option `{other}`")),
+        }
+        i += 1;
+    }
+    c.args(["--", "--nocapture"]);
+    let status = c.status().map_err(|e| format!("cargo test: {e}"))?;
+    if status.success() { Ok(()) } else { Err("render fidelity outside tolerance (aggregate numbers above)".into()) }
+}
+
 /// `cargo xtask sil`: the SIL harness (`apps/cli/tests/sil.rs`, docs/testing-sil.md).
 fn cmd_sil(args: &[&str]) -> Result<(), String> {
     let mut c = cargo();
@@ -3874,6 +3937,8 @@ fn cmd_sil(args: &[&str]) -> Result<(), String> {
         if sync_only {
             return Ok(());
         }
+        // the render-fidelity suite: compares when local references exist, skips otherwise
+        cmd_fidelity(&[])?;
     }
     if let Some(f) = &filter {
         c.arg(f);
