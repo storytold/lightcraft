@@ -48,9 +48,12 @@ impl Default for Runtime {
 
 impl LightcraftApp {
     /// Whether the app asks for a newer release when it starts (off until the desktop app turns it on).
+    ///
+    /// Distro packages set `LIGHTCRAFT_DISABLE_UPDATES`, which keeps this off: the package
+    /// manager owns the update flow, so the startup prompt would only nag.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_startup_update_check(&mut self, on: bool) {
-        self.updates_rt.startup_check = on;
+        self.updates_rt.startup_check = on && !updates_disabled();
     }
 
     /// Starts the helper of a ready update, which installs it once the process has exited. Call it
@@ -61,11 +64,26 @@ impl LightcraftApp {
     }
 }
 
+/// Whether every update check and prompt is disabled for this process.
+///
+/// Distro packages (NixOS, deb/rpm, …) own the update flow: the system state updates the
+/// software, so LightCraft's own startup prompt and manual check would only nag. Setting
+/// `LIGHTCRAFT_DISABLE_UPDATES` to `1`/`on`/`true`/`yes` turns all of them off; `Help ▸ Check
+/// for Updates…` is greyed out and reports why when run another way.
+pub(crate) fn updates_disabled() -> bool {
+    disabled_by_value(std::env::var("LIGHTCRAFT_DISABLE_UPDATES").ok().as_deref())
+}
+
+/// [`updates_disabled`] for a known variable value, without reading the environment (tests).
+fn disabled_by_value(value: Option<&str>) -> bool {
+    value.is_some_and(|v| matches!(v.trim(), "1" | "on" | "true" | "yes"))
+}
+
 /// The update prompt owns the keyboard while it is open: shortcuts must not reach the library behind it.
 pub(crate) fn blocks_input(app: &LightcraftApp) -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        app.updates_rt.updater.prompt_open()
+        !updates_disabled() && app.updates_rt.updater.prompt_open()
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -75,6 +93,10 @@ pub(crate) fn blocks_input(app: &LightcraftApp) -> bool {
 }
 
 pub(crate) fn check(app: &mut LightcraftApp) -> Result<Value, String> {
+    if updates_disabled() {
+        return Err(crate::i18n::tr("Updates are disabled (LIGHTCRAFT_DISABLE_UPDATES is set; your package manager should handle updates).").to_owned());
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     {
         app.updates_rt.check_requested = true;
@@ -92,6 +114,10 @@ pub(crate) fn check(app: &mut LightcraftApp) -> Result<Value, String> {
 }
 
 pub(crate) fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
+    if updates_disabled() {
+        return;
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     {
         let rt = &mut app.updates_rt;
@@ -118,6 +144,10 @@ fn result_window_shows(status: &Status, prompt_open: bool) -> bool {
 pub(crate) fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        if updates_disabled() {
+            return;
+        }
+
         // The close for a ready update waits until nothing is unsaved.
         let clean = app.session.unsaved().is_none();
         match app.updates_rt.updater.show_if(ctx, clean) {
@@ -253,5 +283,46 @@ mod tests {
             assert!(!result_window_shows(status, true), "{status:?} over the prompt");
         }
         assert!(!result_window_shows(&Status::Idle, false));
+    }
+
+    #[test]
+    fn disable_updates_parsing() {
+        for on in ["1", "on", "true", "yes", "  yes "] {
+            assert!(disabled_by_value(Some(on)), "{on:?}");
+        }
+
+        for off in [None, Some(""), Some("  "), Some("0"), Some("false"), Some("off"), Some("no"), Some("2")] {
+            assert!(!disabled_by_value(off), "{off:?}");
+        }
+    }
+
+    /// The menu entry follows the environment, whatever it is (tests never mutate it:
+    /// `std::env::set_var` is unsafe and forbidden here, so run the suite both with and
+    /// without `LIGHTCRAFT_DISABLE_UPDATES=1`).
+    #[test]
+    fn check_for_updates_entry_follows_the_env() {
+        let app = LightcraftApp::new(Session::new(), Default::default());
+        assert_eq!(crate::menus::ui_enabled(&app, "app.checkForUpdates"), !updates_disabled());
+    }
+
+    /// Only runs with the variable set; the default suite covers the enabled path.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn disabled_check_reports_and_tick_starts_nothing() {
+        if !updates_disabled() {
+            return;
+        }
+
+        let mut app = LightcraftApp::new(Session::new(), Default::default());
+        assert!(check(&mut app).is_err(), "a disabled manual check reports instead of checking");
+        assert!(!app.updates_rt.check_requested);
+
+        app.set_startup_update_check(true);
+        assert!(!app.updates_rt.startup_check, "the setter keeps the startup check off");
+
+        app.updates_rt.check_requested = true;
+        tick(&mut app, &egui::Context::default());
+        assert!(app.updates_rt.check_requested, "a disabled tick must not consume the request");
+        assert_eq!(app.updates_rt.updater.status(), &Status::Idle);
     }
 }

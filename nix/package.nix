@@ -194,6 +194,10 @@ rustPlatform.buildRustPackage {
     for bin in ${lib.concatStringsSep " " (map (b: "$out/bin/" + b) binaries)}; do
       wrapProgram "$bin" --prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath runtimeLibs}"
     done
+
+    # NixOS owns the update flow: the system state updates the software.
+    # LightCraft's own startup prompt and manual check are disabled.
+    wrapProgram "$out/bin/lightcraft" --set LIGHTCRAFT_DISABLE_UPDATES 1
   '';
 
   passthru = {
