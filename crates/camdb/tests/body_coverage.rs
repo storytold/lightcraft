@@ -32,9 +32,7 @@ const TOP_BODIES: &[(&str, &str)] = &[
 fn no_top_body_falls_back_to_the_neutral_matrix() {
     let missing: Vec<String> = TOP_BODIES
         .iter()
-        .filter(|(make, model)| {
-            !lcc_camdb::find(Some(make), model).is_some_and(|e| lcc_raw::color::has_matrix(&e.color_data()))
-        })
+        .filter(|(make, model)| !lcc_camdb::find(Some(make), model).is_some_and(|e| lcc_raw::color::has_matrix(&e.color_data())))
         .map(|(make, model)| format!("{make} {model}"))
         .collect();
     assert!(missing.is_empty(), "bodies on the neutral fallback matrix: {missing:?}");
