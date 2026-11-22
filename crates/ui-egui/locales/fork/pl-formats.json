@@ -1,6 +1,7 @@
 {
   "+ Create “{new}”": "+ Utwórz „{new}”",
   ", ": ", ",
+  "; {unplaceable} with a time the zone can't place": "; {unplaceable} z czasem, którego strefa nie może umieścić",
   "A pixel-shift merge of this series already exists ({name})": "Scalenie Pixel Shift tej serii już istnieje ({name})",
   "A profile “{name}” is already there.": "Profil „{name}” już istnieje.",
   "A waiting export could not start: {e}": "Nie udało się rozpocząć oczekującego eksportu: {e}",

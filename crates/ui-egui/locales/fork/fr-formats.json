@@ -1,6 +1,7 @@
 {
   "+ Create “{new}”": "+ Créer « {new} »",
   ", ": ", ",
+  "; {unplaceable} with a time the zone can't place": "; {unplaceable} avec une heure que le fuseau ne peut pas placer",
   "A pixel-shift merge of this series already exists ({name})": "Une fusion Pixel Shift de cette série existe déjà ({name})",
   "A profile “{name}” is already there.": "Un profil « {name} » existe déjà.",
   "A waiting export could not start: {e}": "Impossible de démarrer une exportation en attente : {e}",

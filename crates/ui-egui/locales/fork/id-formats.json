@@ -1,6 +1,7 @@
 {
   "+ Create “{new}”": "+ Buat “{new}”",
   ", ": ", ",
+  "; {unplaceable} with a time the zone can't place": "; {unplaceable} dengan waktu yang tidak dapat ditempatkan zona",
   "A pixel-shift merge of this series already exists ({name})": "Penggabungan Pixel Shift untuk seri ini sudah ada ({name})",
   "A profile “{name}” is already there.": "Profil “{name}” sudah ada.",
   "A waiting export could not start: {e}": "Ekspor yang menunggu tidak dapat dimulai: {e}",

@@ -2,6 +2,7 @@
   " · {queued} waiting": " · 待機中 {queued}",
   "+ Create “{new}”": "+「{new}」を作成",
   ", ": "、",
+  "; {unplaceable} with a time the zone can't place": "; タイムゾーンで配置できない時刻 {unplaceable} 件",
   "A pixel-shift merge of this series already exists ({name})": "このシリーズのピクセルシフト合成はすでにあります ({name})",
   "A profile “{name}” is already there.": "プロファイル「{name}」は既に存在します。",
   "A waiting export could not start: {e}": "待機中の書き出しを開始できませんでした: {e}",

@@ -2,6 +2,7 @@
   " · {queued} waiting": " · в очереди: {queued}",
   "+ Create “{new}”": "+ Создать «{new}»",
   ", ": ", ",
+  "; {unplaceable} with a time the zone can't place": "; {unplaceable} со временем, которое пояс не может разместить",
   "A pixel-shift merge of this series already exists ({name})": "Объединение Pixel Shift этой серии уже существует ({name})",
   "A profile “{name}” is already there.": "Профиль «{name}» уже существует.",
   "A waiting export could not start: {e}": "Не удалось начать ожидающий экспорт: {e}",

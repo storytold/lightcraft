@@ -20,7 +20,7 @@ import Shot from '../../../components/Shot.astro';
 - **Geotag**: drag photos from the filmstrip or grid onto the map, drag pins to move them, or right-click ▸ **Geotag Selected Photos Here**. One undo step each.
 - **Saved Locations**: name, centre and radius; **private** locations export without GPS and place fields.
 - **Search** box: latitude, longitude, a saved location or a place name (asks consent before using an online service).
-- **Auto-Tag from Tracklog…** (**Metadata** menu): a GPX file sets GPS by capture time, interpolated along the track. The camera time zone you give (or the Map's **Camera time zone** field, which **Set Offset from Active Photo** fills) reads the camera's clock in that zone, even when the photo recorded a zone of its own; left empty, the photo's recorded zone is used, else UTC.
+- **Auto-Tag from Tracklog…** (**Metadata** menu): a GPX file sets GPS by capture time, interpolated along the track. The camera time zone you give (or the Map's **Camera time zone** field, which **Set Offset from Active Photo** fills) reads the camera's clock in that zone, even when the photo recorded a zone of its own; left empty, the photo's recorded zone is used, else UTC. The Map's **Auto-Tag Selected Photos** always uses that field once it is set, so with phone and camera photos mixed, a set field overrides the phone photos' correct recorded zones too: clear it, or tag the groups separately. Photos whose capture time the zone can't place (a leap second) are skipped and counted in the result.
 - **Fill Location from GPS**: city, state, country from coordinates (offline GeoNames or an online server; opt-in).
 - The Metadata panel's *Location* view edits GPS and place fields in the Library.
 

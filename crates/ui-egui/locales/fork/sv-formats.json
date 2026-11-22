@@ -1,6 +1,7 @@
 {
   "+ Create “{new}”": "+ Skapa ”{new}”",
   ", ": ", ",
+  "; {unplaceable} with a time the zone can't place": "; {unplaceable} med en tid som zonen inte kan placera",
   "A pixel-shift merge of this series already exists ({name})": "En Pixel Shift-sammanfogning av den här serien finns redan ({name})",
   "A profile “{name}” is already there.": "Det finns redan en profil ”{name}”.",
   "A waiting export could not start: {e}": "Det gick inte att starta en väntande export: {e}",

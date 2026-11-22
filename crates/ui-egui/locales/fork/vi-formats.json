@@ -5,6 +5,7 @@
   " · {n} skipped (could not be rendered)": " · {n} đã bỏ qua (không thể kết xuất)",
   "+ Create “{new}”": "+ Tạo “{new}”",
   ", ": ", ",
+  "; {unplaceable} with a time the zone can't place": "; {unplaceable} có thời gian mà múi giờ không thể xác định",
   "A pixel-shift merge of this series already exists ({name})": "Đã có bản hợp nhất Pixel Shift của chuỗi này ({name})",
   "A profile “{name}” is already there.": "Hồ sơ “{name}” đã tồn tại.",
   "A waiting export could not start: {e}": "Không thể bắt đầu lần xuất đang chờ: {e}",

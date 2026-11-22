@@ -2,6 +2,7 @@
   " · {queued} waiting": " · {queued} en espera",
   "+ Create “{new}”": "+ Crear «{new}»",
   ", ": ", ",
+  "; {unplaceable} with a time the zone can't place": "; {unplaceable} con una hora que la zona no puede situar",
   "A pixel-shift merge of this series already exists ({name})": "Ya existe una fusión Pixel Shift de esta serie ({name})",
   "A profile “{name}” is already there.": "Ya existe un perfil «{name}».",
   "A waiting export could not start: {e}": "No se pudo iniciar una exportación en espera: {e}",

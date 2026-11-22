@@ -461,7 +461,9 @@ fn track_section(app: &mut LccApp, ui: &mut egui::Ui) {
             if ui.add_enabled(has_sel, egui::Button::new(tr("Auto-Tag Selected Photos"))).clicked() {
                 match app.run("map.autoTag", json!({})) {
                     Ok(v) => {
-                        app.toast(ui.ctx(), crate::i18n::tr_format!("Tagged {n} photos from the tracklog", n = v["tagged"].as_u64().unwrap_or(0)))
+                        let msg = crate::i18n::tr_format!("Tagged {n} photos from the tracklog", n = v["tagged"].as_u64().unwrap_or(0))
+                            + &crate::menus::unplaceable_note(&v["skipped"]);
+                        app.toast(ui.ctx(), msg)
                     }
                     Err(e) => app.toast_error(ui.ctx(), e),
                 }

@@ -2,6 +2,7 @@
   " · {queued} waiting": " · {queued} 张等待中",
   "+ Create “{new}”": "+ 创建“{new}”",
   ", ": "、",
+  "; {unplaceable} with a time the zone can't place": "；{unplaceable} 张的时间无法在该时区中确定",
   "A pixel-shift merge of this series already exists ({name})": "此系列的像素偏移合成已存在 ({name})",
   "A profile “{name}” is already there.": "配置文件“{name}”已存在。",
   "A waiting export could not start: {e}": "等待中的导出无法开始：{e}",
