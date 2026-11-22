@@ -25,6 +25,38 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// V3 positive Shadows, in scene EV. The broad roll-off avoids the old gate's abrupt loss of
+/// influence in lower midtones. Its slope stays positive even at +100 for a uniform ramp;
+/// the bounded detail term keeps small structures distinct without lifting the black point.
+#[inline]
+pub(crate) fn separated_shadows(base: f32, detail: f32, amount: f32) -> f32 {
+    let weight = 1.0 - smooth(-6.0, -1.0, base);
+    let mask = weight * (0.65 + 0.35 * (1.0 - weight).sqrt());
+    amount.min(1.0) * (2.8 * mask + 1.5 * mask.sqrt() * detail)
+}
+
+/// V3 local Whites weights over the tone LUT's scene-EV domain. Use the source's neutral
+/// rendering so a camera's bright stone is treated as bright even below middle-grey scene EV.
+/// Global Contrast/Whites/Blacks and local Whites themselves must not feed back into the weights.
+pub(crate) fn local_whites_lut(info: &SourceInfo) -> Lut1 {
+    use crate::tone::{GREY, LUT_MAX_EV, LUT_MIN_EV, LUT_N};
+    let neutral = base_tone(&DevelopSettings::default(), info, 1.0);
+    let step = (LUT_MAX_EV - LUT_MIN_EV) / (LUT_N - 1) as f32;
+    let mut previous = 0.0f32;
+    let v = (0..LUT_N)
+        .map(|i| {
+            let ev = LUT_MIN_EV + step * i as f32;
+            let display = linear_to_srgb(neutral.apply(GREY * ev.exp2()).clamp(0.0, 1.0));
+            let weight = smooth(0.35, 0.90, display);
+            // Limit dw/dEV to 1: even an unusually steep camera curve cannot reverse a
+            // uniform ramp under local Whites -100 (EV - 0.8*w retains slope >= 0.2).
+            previous = weight.clamp(previous, (previous + step).min(1.0));
+            previous
+        })
+        .collect();
+    Lut1 { v }
+}
+
 /// Parametric region curve (encoded domain) composed with the master point curve.
 fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     let parametric = c.highlights != 0.0 || c.lights != 0.0 || c.darks != 0.0 || c.shadows != 0.0;
@@ -103,8 +135,10 @@ impl GrainModel {
                     seed: g.seed,
                 })
             }),
-            Process::V7 | Process::V8 | Process::V10 if draft => crate::crystal::CrystalGrain::draft(g, px_per_long).map(GrainModel::Crystal),
-            Process::V7 | Process::V8 | Process::V10 => crate::crystal::CrystalGrain::new(g, px_per_long).map(GrainModel::Crystal),
+            Process::V7 | Process::V8 | Process::V10 | Process::V11 if draft => {
+                crate::crystal::CrystalGrain::draft(g, px_per_long).map(GrainModel::Crystal)
+            }
+            Process::V7 | Process::V8 | Process::V10 | Process::V11 => crate::crystal::CrystalGrain::new(g, px_per_long).map(GrainModel::Crystal),
         }
     }
 }
@@ -172,6 +206,10 @@ pub struct FinishParams {
     /// A LUT profile and its amount (0..2), applied to the display-encoded colour.
     pub lut: Option<(std::sync::Arc<crate::lut::Lut3d>, f32)>,
     pub tone: ToneMap,
+    /// V11 scene-EV tone map; absent for earlier, frozen processes.
+    pub v11_tone_lut: Option<Vec<f32>>,
+    /// V11 local Whites weights, indexed over `tone::LUT_MIN_EV..LUT_MAX_EV`.
+    pub local_whites: Option<Lut1>,
     /// Process V4's calibrated Contrast and Blacks on the camera-look path, applied after
     /// the tone map (`None`: another process or path, or both at 0; see [`crate::light_v3`]).
     pub light: Option<crate::light_v3::LightOps>,
@@ -193,6 +231,8 @@ pub struct FinishParams {
     pub proof: Option<crate::output::ProofParams>,
     pub hl: f32,
     pub sh: f32,
+    /// V11 tonal response branch, shared with the GPU parameter block.
+    pub v11_tone_response: bool,
     pub clar: f32,
     pub tex: f32,
     pub dehaze: f32,
@@ -249,6 +289,10 @@ impl FinishParams {
         };
         let ev = s.light.exposure as f32;
         let gain = 2f32.powf(ev);
+        let process = s.process.process();
+        let v11_tone_response = process == Process::V11;
+        let positive_whites = (s.light.whites / 100.0).clamp(0.0, 1.0) as f32;
+        let highlight_scale = if v11_tone_response { 1.0 - 0.98 * positive_whites } else { 1.0 };
         // A degenerate frame (zero-width crop, zero scale) has no finite grain mapping: skip grain (CPU and GPU).
         let out_to_norm = frame.out_to_norm(w, h);
         let finite_frame = px_per_long.is_finite()
@@ -265,6 +309,10 @@ impl FinishParams {
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
             tone: base_tone(s, info, peak),
+            v11_tone_lut: (process == Process::V11).then(|| crate::tone_v11::build(s, info, peak, &base_tone(s, info, peak))),
+            local_whites: (process == Process::V11
+                && s.masks.iter().any(|m| m.visible && !m.components.is_empty() && m.adjust.amount != 0.0 && m.adjust.whites != 0.0))
+            .then(|| local_whites_lut(info)),
             light: crate::light_v3::LightOps::new(s, info),
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
             ops: ColorOps::new(s),
@@ -275,8 +323,9 @@ impl FinishParams {
             out_luma: space.luma(),
             out_trc: space.trc(),
             proof: None,
-            hl: (s.light.highlights / 100.0) as f32,
+            hl: (s.light.highlights / 100.0) as f32 * highlight_scale,
             sh: (s.light.shadows / 100.0) as f32,
+            v11_tone_response,
             clar,
             tex,
             dehaze,
@@ -340,7 +389,7 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
         },
         // V4, with a raw's tone curve rolling off into white in stops: a camera curve past its last
         // knot, the generic curve from half a stop below its white point instead of clipping (issue #1632)
-        Process::V5 | Process::V6 | Process::V7 | Process::V8 | Process::V10 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+        Process::V5 | Process::V6 | Process::V7 | Process::V8 | Process::V10 | Process::V11 => match info.camera_tone.as_ref().filter(|_| info.raw) {
             Some(curve) => ToneMap::camera_rolloff_hdr(curve, 0.0, l.whites, 0.0, peak),
             None if info.raw => ToneMap::rolloff_hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
@@ -433,7 +482,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 ) -> Vec<T> {
     let (w, h) = (p.img.width, p.img.height);
     let p_lut = fp.lut.clone();
-    let FinishParams { light, curves, vig, to_out, out_luma, grain, .. } = fp;
+    let FinishParams { light, curves, vig, to_out, out_luma, ev, grain, .. } = fp;
+    let ev = *ev;
     let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
     let out_to_norm = fp.out_to_norm;
     let long = fp.ow.max(fp.oh);
@@ -462,7 +512,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 
             // --- local tone in log luminance
             let shift = l1 - l0;
-            let base = p.base.data[i] + fp.ev + shift;
+            let base = p.base.data[i] + ev + shift;
             let delta = local_tone_delta(p, fp, i, base, l1, &local);
             if delta != 0.0 {
                 let g = delta.exp2();
@@ -476,7 +526,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 
             // --- tone map on luminance, highlight desaturation
             let yl = luminance_2020(c);
-            let o = fp.tone.apply(yl);
+
+            let o = fp.v11_tone_lut.as_ref().map_or_else(|| fp.tone.apply(yl), |lut| crate::tone_v11::apply(lut, yl));
             let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
             let k = fp.tone.chroma_scale(o);
             if k != 1.0 {
@@ -731,12 +782,15 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
     let mut delta = 0.0;
     let (highlights, shadows) = (fp.hl + l_hl, fp.sh + l_sh);
     if highlights != 0.0 || shadows != 0.0 {
-        let shadow_weight = 1.0 - smooth(-4.8, 0.3, base);
-        let highlight_weight = smooth(-1.0, 2.8, base);
-        delta += shadows * 1.7 * shadow_weight * shadow_weight.sqrt() + highlights * 1.7 * highlight_weight;
+        let detail = (l1 - base).clamp(-1.0, 1.0);
+        delta += local_highlights_shadows_delta(base, detail, highlights, shadows, fp.v11_tone_response);
     }
     if l_wh != 0.0 {
-        delta += l_wh * 0.8 * smooth(0.5, 3.0, l1);
+        let (amount, weight) = match &fp.local_whites {
+            Some(lut) => (l_wh.max(-1.0), lut.eval((l1 - crate::tone::LUT_MIN_EV) / (crate::tone::LUT_MAX_EV - crate::tone::LUT_MIN_EV))),
+            None => (l_wh, smooth(0.5, 3.0, l1)),
+        };
+        delta += amount * 0.8 * weight;
     }
     if l_bl != 0.0 {
         delta += l_bl * 0.8 * (1.0 - smooth(-6.0, -1.5, l1));
@@ -781,6 +835,18 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
         delta -= l_noise.clamp(-1.0, 1.0) * 0.9 * detail * (1.0 - smooth(0.1, 0.5, detail.abs()));
     }
     delta
+}
+
+/// Highlights/Shadows adjustment in scene EV. The V11 highlight weight is linear so its slope
+/// stays bounded at the start of the range; a square root there can reverse a uniform ramp when
+/// negative Highlights overlap positive Shadows.
+pub(crate) fn local_highlights_shadows_delta(base: f32, detail: f32, highlights: f32, shadows: f32, v11: bool) -> f32 {
+    let shadow_weight = 1.0 - smooth(-4.8, 0.3, base);
+    let highlight_weight = if v11 { smooth(-2.8, 1.8, base) } else { smooth(-1.0, 2.8, base) };
+    let shadow_delta =
+        if v11 && shadows > 0.0 { separated_shadows(base, detail, shadows) } else { shadows * 1.7 * shadow_weight * shadow_weight.sqrt() };
+    let highlight_delta = if v11 { highlights * 2.5 * highlight_weight } else { highlights * 1.7 * highlight_weight };
+    shadow_delta + highlight_delta
 }
 
 /// For the gamut warnings: `r` needed desaturating by `t` to fit, and isn't simply a neutral

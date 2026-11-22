@@ -285,6 +285,8 @@ pub fn applies(s: &DevelopSettings, info: &SourceInfo) -> bool {
     match s.process.process() {
         Process::V1 | Process::V2 | Process::V3 => false,
         Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 | Process::V10 => camera_look,
+        // V11's camera tone table includes its global Contrast and Blacks response.
+        Process::V11 => false,
     }
 }
 

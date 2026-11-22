@@ -114,17 +114,19 @@ fn highlights_keep_the_local_contrast_of_bright_areas() {
 
 #[test]
 fn shadows_keep_the_local_contrast_of_dark_areas() {
-    let (plain, sh, exp) = (shot(&on(Process::V2)), shot(&with("light.shadows", 100.0)), shot(&with("light.exposure", 1.0)));
-    let dark = (640, 1160);
-    let ((m0, _), (ms, cs), (_, ce)) = (stats(&plain, dark.0, dark.1), stats(&sh, dark.0, dark.1), stats(&exp, dark.0, dark.1));
-    let (k0, ks, ke) = (line_contrast(&plain, dark.0, dark.1), line_contrast(&sh, dark.0, dark.1), line_contrast(&exp, dark.0, dark.1));
-    assert!(ms > m0 + 10.0, "shadows +100 mean {ms} vs {m0}");
-    // (the edge-aware base alone: 0.75 of Exposure's stalk contrast, 0.72 of its local contrast)
-    assert!(ks > 0.9 * ke, "shadows +100 stalk contrast {ks} EV vs exposure +1 {ke}, plain {k0}");
-    assert!(cs > 0.9 * ce, "shadows +100 local contrast {cs} vs exposure +1 {ce}");
-    // the bright half is not lifted
-    let (b0, bs) = (stats(&plain, 40, 540).0, stats(&sh, 40, 540).0);
-    assert!((bs - b0).abs() < 1.5, "bright half {bs} vs {b0}");
+    for process in [Process::V2, Process::V3] {
+        let (plain, sh, exp) = (shot(&on(process)), shot(&with_on(process, "light.shadows", 100.0)), shot(&with_on(process, "light.exposure", 1.0)));
+        let dark = (640, 1160);
+        let ((m0, _), (ms, cs), (_, ce)) = (stats(&plain, dark.0, dark.1), stats(&sh, dark.0, dark.1), stats(&exp, dark.0, dark.1));
+        let (k0, ks, ke) = (line_contrast(&plain, dark.0, dark.1), line_contrast(&sh, dark.0, dark.1), line_contrast(&exp, dark.0, dark.1));
+        assert!(ms > m0 + 10.0, "shadows +100 mean {ms} vs {m0}");
+        // (the edge-aware base alone: 0.75 of Exposure's stalk contrast, 0.72 of its local contrast)
+        assert!(ks > 0.9 * ke, "shadows +100 stalk contrast {ks} EV vs exposure +1 {ke}, plain {k0}");
+        assert!(cs > 0.9 * ce, "shadows +100 local contrast {cs} vs exposure +1 {ce}");
+        // the bright half is not lifted
+        let (b0, bs) = (stats(&plain, 40, 540).0, stats(&sh, 40, 540).0);
+        assert!((bs - b0).abs() < 1.5, "bright half {bs} vs {b0}");
+    }
 }
 
 #[test]
@@ -326,7 +328,7 @@ fn v1_keeps_the_base_it_always_had() {
 }
 
 #[test]
-fn only_v2_keeps_the_twigs_under_highlights() {
+fn v2_base_improves_twig_separation_under_highlights() {
     let bright = (40, 540);
     let (p1, p2) = (shot(&on(Process::V1)), shot(&on(Process::V2)));
     // without Highlights / Shadows the processes render alike
@@ -334,8 +336,136 @@ fn only_v2_keeps_the_twigs_under_highlights() {
     let (h1, h2, e) =
         (shot(&with_on(Process::V1, "light.highlights", -100.0)), shot(&with("light.highlights", -100.0)), shot(&with("light.exposure", -1.0)));
     let (k1, k2, ke) = (line_contrast(&h1, bright.0, bright.1), line_contrast(&h2, bright.0, bright.1), line_contrast(&e, bright.0, bright.1));
-    // V1 is the base from before (≈ 0.73 of Exposure's twig contrast), V2 keeps them
-    assert!(k1 < 0.85 * ke && k2 > 0.9 * ke, "twig contrast V1 {k1} EV, V2 {k2} EV, exposure −1 {ke} EV");
+    // V2's median base retains more twig separation. The absolute V1/Exposure ratio depends on
+    // the tone response (the tonal-range branch changed it); compare the base variants directly.
+    assert!(k2 > k1 + 0.05 && k2 > 0.9 * ke, "twig contrast V1 {k1} EV, V2 {k2} EV, exposure −1 {ke} EV");
+}
+
+#[test]
+fn v3_positive_shadows_preserve_tonal_order_and_fine_detail() {
+    use crate::finish::separated_shadows;
+    for amount in [0.25, 0.5, 1.0] {
+        let mut last = -16.0 + separated_shadows(-16.0, 0.0, amount);
+        for n in 1..=20000 {
+            let base = -16.0 + n as f32 * 0.001;
+            let out = base + separated_shadows(base, 0.0, amount);
+            // A lifted ramp must retain at least a quarter of its scene-EV separation: no
+            // reversal or broad plateau as the shadows roll into the midtones.
+            assert!(out - last > 0.00024, "amount {amount}, EV {base}: {last} -> {out}");
+            last = out;
+        }
+        for base in [-7.0, -5.0, -3.0, -1.5] {
+            let lower = -0.1 + separated_shadows(base, -0.1, amount);
+            let upper = 0.1 + separated_shadows(base, 0.1, amount);
+            assert!(upper - lower > 0.2, "detail compressed at {base} EV");
+        }
+        assert_eq!(separated_shadows(0.3, 0.0, amount), 0.0, "bright regions stay unchanged");
+    }
+}
+
+#[test]
+fn v11_extreme_highlights_and_shadows_preserve_a_uniform_tonal_ramp() {
+    use crate::finish::local_highlights_shadows_delta;
+    use crate::tone::GREY;
+
+    let settings = on(Process::V11);
+    let info = SourceInfo::default();
+    let base = crate::finish::base_tone(&settings, &info, 1.0);
+    let lut = crate::tone_v11::build(&settings, &info, 1.0, &base);
+    // A global +100 and overlapping positive masks can produce any larger aggregate. Check
+    // those reachable sums across the full scene-EV range; the response caps them at +100.
+    for shadows in [1.0, 1.5, 2.0, 5.0, 20.0] {
+        let mapped = |ev: f32| {
+            let scene_ev = ev + local_highlights_shadows_delta(ev, 0.0, -1.0, shadows, true);
+            crate::tone_v11::apply(&lut, GREY * 2.0f32.powf(scene_ev))
+        };
+
+        // These are the inputs reported in the review, and the full sweep includes the V11 tone map.
+        assert!(mapped(-2.7) >= mapped(-2.8), "Shadows {shadows}, −2.8 EV: {} -> −2.7 EV: {}", mapped(-2.8), mapped(-2.7));
+        let mut previous = mapped(-16.0);
+        for n in 1..=20_000 {
+            let ev = -16.0 + n as f32 * 0.001;
+            let current = mapped(ev);
+            assert!(current >= previous, "Shadows {shadows}: V11 reversed the ramp at {ev} EV: {previous} -> {current}");
+            previous = current;
+        }
+    }
+}
+
+#[test]
+fn neutral_camera_tone_change_is_scoped_to_process_v11() {
+    let curve = crate::tone::CameraTone::new(std::array::from_fn(|i| {
+        let x = 0.0005 * 1.3f32.powi(i as i32);
+        [x, x / (x + 0.01)]
+    }))
+    .unwrap();
+    let info = SourceInfo { raw: true, camera_tone: Some(curve), ..Default::default() };
+    let tone = |process| {
+        let settings = on(process);
+        crate::finish::base_tone(&settings, &info, 1.0)
+    };
+    let v1 = tone(Process::V1);
+    let v2 = tone(Process::V2);
+    let v11 = crate::tone_v11::build(&on(Process::V11), &info, 1.0, &tone(Process::V10));
+    assert_eq!(v1.lut(), v2.lut(), "V1 and V2 keep their established camera tone");
+    assert_ne!(v2.lut(), v11.as_slice(), "the neutral EV lift belongs to V11");
+}
+
+#[test]
+fn v11_shadows_open_lower_midtones_without_changing_zero_or_negative_shadows() {
+    let src = Rgb32f::from_fn(256, 64, |x, _| {
+        let ev = -8.0 + 9.0 * x as f32 / 255.0;
+        [0.18 * ev.exp2(); 3]
+    });
+    let req = RenderRequest::fit(256, 64);
+    let shot = |s: &DevelopSettings| render(&src, &SourceInfo::default(), s, &req).image;
+    for shadows in [-100.0, -50.0, 0.0] {
+        let v2 = shot(&with_on(Process::V2, "light.shadows", shadows));
+        let v11 = shot(&with_on(Process::V11, "light.shadows", shadows));
+        assert_eq!(v2, v11, "Shadows {shadows} must keep its previous rendering");
+    }
+    let neutral = shot(&with_on(Process::V11, "light.shadows", 0.0));
+    let new = shot(&with_on(Process::V11, "light.shadows", 100.0));
+    let mean = |image: &Rgba8| {
+        let mut total = 0.0;
+        let mut count = 0.0;
+        for y in 0..64 {
+            for x in 120..160 {
+                total += f64::from(luma(image.data[y * 256 + x]));
+                count += 1.0;
+            }
+        }
+        total / count
+    };
+    assert!(mean(&new) > mean(&neutral) + 10.0, "lower midtones must open up: {} -> {}", mean(&neutral), mean(&new));
+    assert_eq!(new.data[255], neutral.data[255], "bright end must remain unchanged");
+}
+
+#[test]
+fn v11_highlights_remain_targeted_and_whites_do_not_cancel_each_other() {
+    let src = Rgb32f::from_fn(W, H, |x, _| {
+        let y = 0.02 + 0.55 * x as f32 / (W - 1) as f32;
+        [y; 3]
+    });
+    let req = RenderRequest::fit(W, H);
+    let shot = |process, highlights, whites| {
+        let mut s = on(process);
+        s.light.highlights = highlights;
+        s.light.whites = whites;
+        render(&src, &SourceInfo::default(), &s, &req).image
+    };
+    let bright = |img: &Rgba8| stats(img, 900, 1100).0;
+    let v11_neutral = shot(Process::V11, 0.0, 0.0);
+    let v11_highlights = shot(Process::V11, -100.0, 0.0);
+    assert!(bright(&v11_highlights) < bright(&v11_neutral) - 10.0, "Highlights still lower bright tones");
+    let v11_both = shot(Process::V11, -100.0, 100.0);
+    assert!(bright(&v11_both) > bright(&v11_neutral), "positive Whites retain a net lift when Highlights are lowered");
+    assert!(
+        bright(&v11_both) > bright(&v11_highlights),
+        "positive Whites still lift over Highlights -100: both {}, Highlights only {}",
+        bright(&v11_both),
+        bright(&v11_highlights)
+    );
 }
 
 #[test]

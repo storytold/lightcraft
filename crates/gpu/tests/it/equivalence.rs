@@ -86,7 +86,7 @@ fn warm_green_wb_zero_crossing_gpu_matches_cpu_on_v10() {
     let req = RenderRequest::fit(160, 120);
     // Test normal WB, positive s[2] > 0, and negative s[2] <= 0 across the zero crossing on Process::V10.
     for (temp, tint) in [(5500.0, 10.0), (2000.0, 0.0), (2000.0, 30.0), (3000.0, 100.0)] {
-        let mut s = DevelopSettings::default();
+        let mut s = DevelopSettings { process: Process::V10.version(), ..Default::default() };
         assert_eq!(s.process.process(), Process::V10);
         (s.wb.mode, s.wb.temp, s.wb.tint) = (WbMode::Custom, temp, tint);
         let cpu = render(&src, &info, &s, &req).image;
@@ -895,6 +895,86 @@ fn highlights_shadows_base_matches_on_every_process() {
 }
 
 #[test]
+fn v11_shadow_separation_matches_cpu_with_and_without_blacks() {
+    if !gpu() {
+        return;
+    }
+    let src = Arc::new(Rgb32f::from_fn(512, 256, |x, y| {
+        let base = -9.0 + 10.0 * x as f32 / 511.0;
+        let detail = if (x + y) % 5 == 0 { 0.2 } else { -0.05 };
+        [0.18 * (base + detail).exp2(); 3]
+    }));
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    let req = RenderRequest::fit(512, 256);
+    for process in [Process::V2, Process::V11] {
+        for shadows in [-100.0, 0.0, 50.0, 100.0] {
+            for blacks in [0.0, -100.0] {
+                let mut s = DevelopSettings { process: process.version(), ..Default::default() };
+                s.light.shadows = shadows;
+                s.light.blacks = blacks;
+                check(&format!("{process:?} shadows {shadows}, blacks {blacks}"), &src, &raw, &s, &req);
+            }
+        }
+    }
+
+    let mut overlapping = DevelopSettings { process: Process::V11.version(), ..Default::default() };
+    overlapping.light.shadows = 100.0;
+    let shadow_mask = |id| Mask {
+        id,
+        components: vec![MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Linear { start: Point::new(0.5, 0.0), end: Point::new(0.5, 0.9) },
+        }],
+        adjust: lightcraft_develop::LocalAdjustments { shadows: 100.0, ..Default::default() },
+        ..Default::default()
+    };
+    overlapping.masks = vec![shadow_mask(1), shadow_mask(2)];
+    check("V11 overlapping +300 shadows", &src, &raw, &overlapping, &req);
+}
+
+#[test]
+fn v11_local_whites_and_tonal_controls_match_cpu_on_camera_and_display_sources() {
+    if !gpu() {
+        return;
+    }
+    let curve = lightcraft_pipeline::tone::CameraTone::new(std::array::from_fn(|i| {
+        let x = 0.0005 * 1.3f32.powi(i as i32);
+        [x, x / (x + 0.01)]
+    }))
+    .unwrap();
+    for raw in [true, false] {
+        let info = SourceInfo { raw, camera_tone: raw.then_some(curve), ..Default::default() };
+        let src = Arc::new(Rgb32f::from_fn(320, 160, |x, y| {
+            let v = if raw { 0.00003 * 1.024f32.powi(x as i32) } else { 0.01 + 0.98 * x as f32 / 319.0 };
+            let d = if y % 5 == 0 { 1.03 } else { 1.0 };
+            [v * d; 3]
+        }));
+        for process in [Process::V11] {
+            for whites in [-100.0, -40.0, 0.0, 40.0, 100.0] {
+                let mut s = DevelopSettings { process: process.version(), treatment: Treatment::Bw, ..Default::default() };
+                s.light.contrast = 20.0;
+                s.light.highlights = -60.0;
+                s.light.whites = 15.0;
+                s.light.blacks = -20.0;
+                s.masks = vec![Mask {
+                    components: vec![MaskComponent {
+                        name: None,
+                        op: MaskOp::Add,
+                        invert: false,
+                        shape: MaskShape::Linear { start: Point::new(0.4, 0.5), end: Point::new(0.7, 0.5) },
+                    }],
+                    adjust: lightcraft_develop::LocalAdjustments { whites, exposure: 0.2, ..Default::default() },
+                    ..Default::default()
+                }];
+                check(&format!("{process:?} local Whites {whites}, raw {raw}"), &src, &info, &s, &RenderRequest::fit(320, 160));
+            }
+        }
+    }
+}
+
+#[test]
 fn sharpening_matches_each_process_and_reduced_source() {
     if !gpu() {
         return;
@@ -1317,7 +1397,12 @@ fn hdr_float_render_matches() {
     let cases: [(&str, Edit); 7] = [
         ("HDR vignette out", |s| s.vignette.amount = -40.0),
         ("HDR vignette lighten", |s| s.vignette.amount = 40.0),
-        ("HDR saturated", saturated),
+        // Keep this legacy HDR-range assertion on V10; V11's Highlights response can
+        // intentionally bring this saturated test scene back below SDR white.
+        ("HDR saturated V10", |s| {
+            s.process = Process::V10.version();
+            saturated(s);
+        }),
         ("HDR curves", |s| {
             s.curve.master = vec![Point::new(0.0, 0.05), Point::new(0.5, 0.55), Point::new(1.0, 0.95)];
             s.curve.blue = vec![Point::new(0.0, 0.0), Point::new(0.5, 0.45), Point::new(1.0, 1.0)];

@@ -3,6 +3,7 @@
 // blurred chromaticity when HAS_CHROMA), aux
 // (tone LUT | chroma curve | sRGB LUT | curve LUTs | mask terms | light operator tables), out (packed RGBA8; a float render:
 // three words per pixel, see `F_DEEP`).
+// The optional V11 local Whites table is appended after the shared tables when present.
 
 fn tone_apply(y: f32) -> f32 {
     if (y <= 0.0) {
@@ -585,11 +586,29 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ss = pf(F_SH) + lt[5];
     if (hh != 0.0 || ss != 0.0) {
         let ws = 1.0 - sstep(-4.8, 0.3, base);
-        let wh = sstep(-1.0, 2.8, base);
-        delta += ss * 1.7 * ws * sqrt(ws) + hh * 1.7 * wh;
+        let v3 = pu(F_V11_TONE_RESPONSE) != 0u;
+        let wh = select(sstep(-1.0, 2.8, base), sstep(-2.8, 1.8, base), v3);
+        let detail = clamp(l1 - base, -1.0, 1.0);
+        var shadow_delta = 0.0;
+        if (v3 && ss > 0.0) {
+            let weight = 1.0 - sstep(-6.0, -1.0, base);
+            let mask = weight * (0.65 + 0.35 * sqrt(1.0 - weight));
+            shadow_delta = min(ss, 1.0) * (2.8 * mask + 1.5 * sqrt(mask) * detail);
+        } else {
+            shadow_delta = ss * 1.7 * ws * sqrt(ws);
+        }
+        let highlight_delta = select(hh * 1.7 * wh, hh * 2.5 * wh, v3);
+        delta += shadow_delta + highlight_delta;
     }
     if (lt[6] != 0.0) {
-        delta += lt[6] * 0.8 * sstep(0.5, 3.0, l1);
+        var weight = sstep(0.5, 3.0, l1);
+        let off = pu(F_LOCAL_WHITES_OFF);
+        if (off != 0u) {
+            let f = clamp((l1 - TONE_MIN_EV) / (TONE_MAX_EV - TONE_MIN_EV), 0.0, 1.0) * f32(TONE_N - 1u);
+            let j = min(u32(f), TONE_N - 2u);
+            weight = mix(aux[off + j], aux[off + j + 1u], f - f32(j));
+        }
+        delta += lt[6] * 0.8 * weight;
     }
     if (lt[7] != 0.0) {
         delta += lt[7] * 0.8 * (1.0 - sstep(-6.0, -1.5, l1));

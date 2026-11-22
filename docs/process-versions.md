@@ -18,7 +18,8 @@ stronger Light sliders, issue #196) without changing a single photo someone has 
 | **V7** | V6 plus: film grain from crystal layers ([grain.md](grain.md), `crates/pipeline/src/crystal.rs`), after Aurélien Pierre's model: resolution independent (a preview is the export's grain box-downscaled), fading out at black and white, calibrated to Lightroom Classic's strength and width at mid grey. V1 to V6 keep their two-octave value noise exactly (`finish::ValueGrain`; on the GPU `F_GRAIN_MODEL` 0); `finish::GrainModel::new` picks the model per process. Renders without grain don't depend on this. |
 | **V8** | V7 plus: Highlights and Shadows take their edge-aware filter of log luminance without its fine detail (`local::detail_free`: each value clamped between its separable median at the V2 radius and the median of a 3× wider neighbourhood) instead of V2's plain median (`local::base_keeps_gaps`), so the gaps in dark lettering on a bright panel are not lifted into bright blocks (issue #3460). CPU (`local::tone_base`) and GPU (`render::tone_base`) branch on it; the base plane is keyed by process. Renders without Highlights or Shadows (global or local) are the same as V7's. |
 | **V9** *(reserved)* | Reserved for `HealMethod::Pinned` (`#4069`). |
-| **V10** (the latest) | V8 plus: checked Bradford white-balance fallback (`craft_color_transform::cct::wb_matrix`, returning `Mat3::IDENTITY` when a source illuminant's Bradford blue cone response `s[2] <= 0.0`, `craft-libs#587`). V1 to V8 (and reserved V9) keep the legacy Bradford result for saved edits (`local::wb_matrix_for`). |
+| **V10** | V8 plus: checked Bradford white-balance fallback (`craft_color_transform::cct::wb_matrix`, returning `Mat3::IDENTITY` when a source illuminant's Bradford blue cone response `s[2] <= 0.0`, `craft-libs#587`). V1 to V8 (and reserved V9) keep the legacy Bradford result for saved edits (`local::wb_matrix_for`). |
+| **V11** (the latest) | V10 plus the tonal response evaluated in this branch: positive Shadows lift a broader range while preserving local detail and tonal order; Whites reach lower midtones and their local mask follows neutral camera rendering; negative Blacks extend farther while retaining black and white anchors; positive Whites bound the global Highlights contribution. RAW camera curves retain their V10 highlight roll-off. Existing V1–V10 edits keep their rendering. Evaluated qualitatively on a soft portrait, backlit bridge and façade; this is not general Lightroom parity. |
 
 ## The rule
 
@@ -128,6 +129,7 @@ extra field and retain their existing cached renders. No cache-version bump is n
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-22 | minor | V11: broader, detail-preserving Shadows; lower-mid-tone Whites; anchored Blacks; bounded Whites/Highlights interaction; prior processes retain their rendering |
 | 2026-11-08 | minor | V8: the Highlights/Shadows base keeps the gaps in dark lettering (#3460) |
 | 2026-11-07 | minor | V7: film grain from crystal layers ([grain.md](grain.md)); V1 to V6 keep their value noise |
 | 2026-11-05 | minor | V5: a raw's tone curve rolls off into white in stops, so raising Exposure keeps recorded highlights (#1632) |
