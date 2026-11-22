@@ -1,6 +1,6 @@
 # Roadmap
 
-*Last updated 2026-11-15 (version 0.8.2). Revision history: [Log](#log).*
+*Last updated 2026-11-23 (version 0.8.2). Revision history: [Log](#log).*
 
 Milestones toward full Adobe Lightroom Classic parity, with the Classic shell and output modules (Map, Book, Slideshow,
 Print, Web, publish) and Immich integration as Chromaforge's own focus on top of the upstream engine. Estimates are for
@@ -57,9 +57,10 @@ Priorities, in order. Each points at tracker rows in [`docs/parity-checklist.md`
    Pentax PEF, Samsung SRW and Olympus ORF have the file-local fit (matrix + tone curve from their own JPEG; CR2 and PEF
    since issue #310, not yet checked on the corpus); 52 models whose fit is rejected fall back to matrices fitted to
    measured spectral sensitivities (rawtoaces-data); then validate fidelity.
-2. **Raw formats, clean-room** (LR-IMP-FORMATS, P0): Remaining **unverified CR3 CRX** variants, NEF
-   lossy-after-split, sRAW. Decided 2026-10-05: write our own decoders from prose descriptions (never decoder source,
-   no LGPL dependency); compressed NEF (#86) is the template.
+2. **Raw formats** (LR-IMP-FORMATS, P0): Remaining **unverified CR3 CRX** variants, NEF
+   lossy-after-split, sRAW. Policy since 2026-11-10 (AGENTS.md licence policy): ports from share-alike decoders
+   (LibRaw `crx.cpp`, dcraw, rawspeed, darktable) are allowed with provenance; layouts are still verified on CC0
+   samples, and no CC0 CR3 on raw.pixls.us uses a refused CRX variant yet (`docs/cr3.md`).
 3. **Verified camera coverage** (LR-IMP-CAMERA-COVERAGE, P0): a CC0 sample per model in the corpus, each decoded and
    checked for plausible colour; fix per-model bugs (#85).
 4. **Render fidelity suite** (LR-BEHAV-RENDER-FIDELITY, P1): measure our output against Lightroom on the same CC0 raws
@@ -151,7 +152,7 @@ trip, slideshow, auto import…) in ≈ 12 h on 2026-10-02; four to six parallel
 | Work package | Tracker rows | Agent-hours | Risk |
 |---|---|---:|---|
 | Remaining P0/P1 UI and library features (folder rename/move, keyword painter, people view…) | ≈ 8 | 5–10 | low |
-| Raw codecs: CR3 (CRX), compressed ORF, NEF lossy-after-split, HEIC/AVIF decode | LR-IMP-FORMATS | 40–80 | **high** — clean-room black-box analysis, no permissive specs |
+| Raw codecs: CR3 (CRX), compressed ORF, NEF lossy-after-split, HEIC/AVIF decode | LR-IMP-FORMATS | 40–80 | **high** — share-alike references (LibRaw, rawspeed) now usable, but CC0 samples of the missing variants are scarce |
 | Lens-profile database of our own (calibration targets, fitting, data) | LR-EDIT-OPTICS-PROFILE | 15–30 | data collection |
 | Video: playback, trim, edits, export (pure-Rust decode, ideally shared with FilmCraft) | R. Video | 20–40 | medium |
 | AI: subject / sky / background / people / object masks, object-aware remove, AI denoise, super resolution, lens blur, people & faces, natural-language search, culling | ≈ 30 | 80–150 | **high** — permissively licensed weights, pure-Rust inference, maybe training |
