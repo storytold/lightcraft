@@ -32,6 +32,7 @@ mod b64;
 mod context;
 pub mod manager;
 pub mod manifest;
+pub mod marketplace;
 pub mod permissions;
 pub mod programs;
 pub mod publish;

@@ -34,6 +34,8 @@ pub mod left;
 pub mod levels;
 pub mod library_problem;
 pub mod manager_table;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod marketplace;
 pub mod mask_effects;
 pub mod mask_pickers;
 pub mod masking;

@@ -1325,7 +1325,9 @@ mod merged_colour_tests {
     /// DNG, and every NEF, is as it was.
     #[test]
     fn a_pixel_shift_merge_starts_its_colour_like_the_cameras_nef_and_other_dngs_do_not() {
-        let camera = "NIKON CORPORATION NIKON Z 8";
+        // a body no camera table names: its NEF edits white balance relative to as shot, which is what a merge has
+        // to follow (a body with measured or tabled matrices edits in Kelvin, and so would its merge)
+        let camera = "NIKON CORPORATION NIKON Z 0";
         let nef = raw("NEF", camera);
         let mut merged = raw("DNG", camera);
         merged.merge_sources = Some(Box::new(MergeSources { engine: 1, shot_count: 16, reference: 1, scale: 2, frames: vec![] }));

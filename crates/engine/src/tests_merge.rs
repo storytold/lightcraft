@@ -927,7 +927,8 @@ fn synthetic_merged_dng() -> Vec<u8> {
     for k in 0..16 {
         merger.add_frame(k, &frame(k)).unwrap();
     }
-    let metadata = lcc_meta::Metadata { make: Some("NIKON CORPORATION".into()), model: Some("NIKON Z 8".into()), ..Default::default() };
+    // a body no camera table names, so its raw edits white balance relative to as shot
+    let metadata = lcc_meta::Metadata { make: Some("NIKON CORPORATION".into()), model: Some("NIKON Z 0".into()), ..Default::default() };
     let provenance = lcc_raw::merge_provenance::Provenance { engine: 1, shot_count: 16, reference: 1, scale: 2, window: None, frames: vec![] };
     let color = ColorData { as_shot_neutral: Some([0.54, 1.0, 0.7]), baseline_exposure: 0.018, ..Default::default() };
     write_dng(
