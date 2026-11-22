@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- Russian translation © 2026 SuperSfera LLC, MIT OR Apache-2.0 -->
+<!-- Russian translation © 2026 SuperSfera LLC, MIT OR Apache-2.0 -->
 <!-- AppStream metadata (software centres, Flathub). Template: package.sh and the Flatpak
      manifest substitute @VERSION@ and @DATE@ from Cargo.toml and the build date. -->
 <component type="desktop-application">
@@ -7,12 +9,17 @@
   <project_license>MIT OR Apache-2.0</project_license>
   <name>LightCraft</name>
   <summary>Organise photos and develop raw files, non-destructively</summary>
+  <summary xml:lang="ru">Упорядочивание фотографий и неразрушающая обработка RAW-файлов</summary>
   <developer id="ai.storyteller">
     <name>Learning Machines LLC</name>
   </developer>
   <description>
     <p>
       LightCraft is a photo library and raw developer. Organise photos and develop raw files, non-destructively
+    </p>
+    <p xml:lang="ru">
+      LightCraft — фотобиблиотека и RAW-конвертер. Упорядочивание фотографий и
+      неразрушающая обработка RAW-файлов
     </p>
   </description>
   <launchable type="desktop-id">ai.storyteller.lightcraft.desktop</launchable>
@@ -29,13 +36,18 @@
   </categories>
   <keywords>
     <keyword>photo</keyword>
+    <keyword xml:lang="ru">фото</keyword>
     <keyword>image editor</keyword>
+    <keyword xml:lang="ru">редактор изображений</keyword>
     <keyword>psd</keyword>
+    <keyword xml:lang="ru">psd</keyword>
     <keyword>layers</keyword>
+    <keyword xml:lang="ru">слои</keyword>
   </keywords>
   <screenshots>
     <screenshot type="default">
       <caption>Photo editing with The Tetons and the Snake River by Ansel Adams</caption>
+      <caption xml:lang="ru">Обработка фотографии Ансела Адамса «The Tetons and the Snake River»</caption>
       <image type="source">https://raw.githubusercontent.com/storytold/lightcraft/3b4279fc2485bb51847c0071a1b3c514aa0f98f4/docs/images/hero-tetons.jpg</image>
     </screenshot>
   </screenshots>
