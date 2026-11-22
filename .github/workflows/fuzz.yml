@@ -38,6 +38,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
       - name: CC0 corpus (extra seeds; the run falls back on built-in seeds without it)
         continue-on-error: true
+        timeout-minutes: 15 # seven jobs pulling 532 raws from raw.pixls.us can outlast the job
         run: cargo xtask corpus --download
       - name: Fuzz ${{ matrix.target }}
         run: cargo xtask fuzz ${{ matrix.target }} --secs ${{ inputs.secs || '1800' }} --rng ${{ github.run_id }}
