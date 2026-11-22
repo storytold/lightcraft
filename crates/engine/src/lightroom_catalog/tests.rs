@@ -1053,6 +1053,19 @@ fn deferred_auto_tone_sentinels_never_become_real_slider_values() {
     assert_eq!(partial["light"]["contrast"], -100.0);
 }
 
+/// SQLite WAL checksum (file format §4.2) for building fixtures; the reader is craft-sqlite's.
+fn wal_checksum(bytes: &[u8], big: bool, mut sum: (u32, u32)) -> (u32, u32) {
+    for pair in bytes.as_chunks::<8>().0 {
+        let first = [pair[0], pair[1], pair[2], pair[3]];
+        let second = [pair[4], pair[5], pair[6], pair[7]];
+        let (first, second) =
+            if big { (u32::from_be_bytes(first), u32::from_be_bytes(second)) } else { (u32::from_le_bytes(first), u32::from_le_bytes(second)) };
+        sum.0 = sum.0.wrapping_add(first).wrapping_add(sum.1);
+        sum.1 = sum.1.wrapping_add(second).wrapping_add(sum.0);
+    }
+    sum
+}
+
 #[test]
 fn wal_checksums_cover_commits_without_materializing_historical_databases() {
     let mut main = vec![0; 512];
