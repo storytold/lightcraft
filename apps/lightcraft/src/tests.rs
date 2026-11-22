@@ -476,6 +476,16 @@ fn explorer_select_quotes_the_path() {
     assert_eq!(args, [r#"/select,"C:\My Photos\a.jpg""#]);
 }
 
+/// Issue #4652: Linux reveal builds `file://` URIs for `FileManager1.ShowItems`, so the file
+/// manager selects the file instead of opening its folder.
+#[test]
+fn file_uris_encode_for_show_items() {
+    assert_eq!(file_uri("/photos/IMG_0001.CR3"), "file:///photos/IMG_0001.CR3");
+    assert_eq!(file_uri("/home/Me/My Photos/IMG 1.jpg"), "file:///home/Me/My%20Photos/IMG%201.jpg");
+    assert_eq!(file_uri("/photos/café-étude.jpg"), "file:///photos/caf%C3%A9-%C3%A9tude.jpg");
+    assert_eq!(file_uri("/photos/a#b%c.jpg"), "file:///photos/a%23b%25c.jpg");
+}
+
 #[test]
 fn a_control_port_that_is_not_a_number_is_ignored() {
     assert_eq!(control_port_from("--control", Some("7980".into())), Some(7980));
