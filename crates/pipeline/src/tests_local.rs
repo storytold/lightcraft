@@ -57,9 +57,7 @@ fn local_clarity_changes_only_the_visible_mask() {
     s.masks[0].adjust.clarity = 100.0;
     assert!(clarity_plane(&s).is_some());
     let visible = shot(&src, &s);
-    let peak = |center| {
-        (center - 4..=center + 4).map(|x| visible.get(x, H / 2)[1].abs_diff(neutral.get(x, H / 2)[1])).max().unwrap_or(0)
-    };
+    let peak = |center| (center - 4..=center + 4).map(|x| visible.get(x, H / 2)[1].abs_diff(neutral.get(x, H / 2)[1])).max().unwrap_or(0);
     assert!(peak(W / 4) >= 3, "visible Clarity must move the inside edge by at least 3/255");
     assert!(peak(3 * W / 4) <= 1, "the far outside edge must stay within 1/255");
 
