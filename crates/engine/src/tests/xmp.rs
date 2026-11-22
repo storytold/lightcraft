@@ -966,6 +966,86 @@ fn dng_embedded_crs_settings_are_read_on_import() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// A catalog keeps a saved V8 raw edit on legacy Bradford white balance after reopening.
+#[test]
+fn saved_v8_warm_green_raw_reopens_with_the_same_cpu_render() {
+    use lightcraft_color::cct::temp_tint_to_xy;
+    use lightcraft_develop::{Process, WbMode};
+    use lightcraft_pipeline::local::{effective_wb, wb_matrix_for};
+    use lightcraft_pipeline::{RenderRequest, render};
+    use lightcraft_raw::{ColorData, DngCompression, DngWriteOptions, RawFormat, color::has_matrix, decode, write_dng};
+
+    let (w, h) = (32, 24);
+    // Original Bayer tiles with distinct red, green, and blue photo-site values, no embedded preview.
+    let samples = (0..w * h)
+        .map(|i| match (i % w % 2, i / w % 2) {
+            (0, 0) => 1_800 + (i % w) as u16 * 80,
+            (1, 1) => 3_000 + (i / w) as u16 * 200,
+            _ => 2_400 + (i % w) as u16 * 95,
+        })
+        .collect();
+    let mut raw = decode(&synthetic_dng_of(w, h, "RGGB", samples, None, Default::default())).unwrap();
+    // Omit the helper's camera matrices so this real DNG goes through Bradford, not camera-space WB.
+    raw.color = ColorData::default();
+    let bytes = write_dng(&raw, &DngWriteOptions { compression: DngCompression::Uncompressed, ..Default::default() }).unwrap();
+    let raw = decode(&bytes).unwrap();
+    assert_eq!(raw.format, RawFormat::Dng);
+    assert!(raw.cpp == 1 && raw.cfa.is_some() && !has_matrix(&raw.color));
+
+    let dir = temp_dir("saved-v8-warm-green-raw");
+    let path = dir.join("warm-green.dng");
+    let library = dir.join("catalog");
+    std::fs::write(&path, bytes).unwrap();
+    let mut session = Session::new().with_fs();
+    session.open_library(&library, false).unwrap();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = only(&session);
+    assert_eq!(session.catalog.photo(id).unwrap().kind, lightcraft_catalog::MediaKind::Raw);
+    let mut warm = (*session.develop_of(id).unwrap()).clone();
+    warm.process = Process::V8.version();
+    (warm.wb.mode, warm.wb.temp, warm.wb.tint) = (WbMode::Custom, 3_000.0, 100.0);
+    session.set_develop(id, warm, "Warm green white balance").unwrap();
+
+    let request = RenderRequest::fit(w, h);
+    let source = session.source_now(id, crate::SourceLevel::Full).unwrap();
+    let info = session.source_info(id);
+    let saved = session.develop_of(id).unwrap();
+    assert!(info.raw && info.camera_color.is_none() && !info.relative_wb && !info.legacy_relative_wb);
+    assert_eq!(effective_wb(&info, &saved), (3_000.0, 100.0));
+    let mut control = (*saved).clone();
+    control.wb.tint = 0.0;
+    let blue_cone = |tint| lightcraft_color::BRADFORD.apply(temp_tint_to_xy(3_000.0, tint).to_xyz())[2];
+    assert!(blue_cone(control.wb.tint) > 0.0 && blue_cone(saved.wb.tint) < 0.0);
+    let warm_matrix = wb_matrix_for(&info, &saved).unwrap();
+    assert!(warm_matrix.iter().flatten().all(|value| value.is_finite()));
+    let before = render(&source, &info, &saved, &request).image;
+    assert_ne!(before.data, render(&source, &info, &control, &request).image.data, "the warm-green edit affects these raw pixels");
+
+    session.flush_log().unwrap();
+    session.close_library().unwrap();
+    drop(session);
+    let mut reopened = Session::new().with_fs();
+    reopened.open_library(&library, false).unwrap();
+    let persisted_edit = reopened.develop_of(id).unwrap();
+    assert_eq!(persisted_edit.process, Process::V8.version());
+    assert_eq!(persisted_edit.wb, saved.wb);
+    let reopened_source = reopened.source_now(id, crate::SourceLevel::Full).unwrap();
+    let reopened_info = reopened.source_info(id);
+    let reopened_edit = reopened.develop_of(id).unwrap();
+    assert_eq!(reopened_edit.process, persisted_edit.process);
+    assert_eq!(reopened_edit.wb, persisted_edit.wb);
+    assert!(reopened_info.raw && reopened_info.camera_color.is_none() && !reopened_info.relative_wb && !reopened_info.legacy_relative_wb);
+    assert_eq!(effective_wb(&reopened_info, &reopened_edit), (3_000.0, 100.0));
+    assert_eq!(wb_matrix_for(&reopened_info, &reopened_edit), Some(warm_matrix));
+    let after = render(&reopened_source, &reopened_info, &reopened_edit, &request).image;
+    assert_eq!((after.width, after.height), (before.width, before.height));
+    assert_eq!(after.data, before.data, "reopening the saved V8 edit preserves every rendered byte");
+
+    reopened.close_library().unwrap();
+    drop(reopened);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn jpeg_xmp_packet(rating: i8, title: &str) -> String {
     lightcraft_meta::write_xmp(&lightcraft_meta::Metadata { rating: Some(rating), title: Some(title.into()), ..Default::default() }, None)
 }

@@ -4,6 +4,8 @@
 //! Also a flat-file writer ([`encode`]): the merged image of an 8- or 16-bit gray/RGB document
 //! with no layers, so an image editor opens it as one background layer and saves back to it.
 
+use craft_psd::{ImageResource, resources::ids};
+
 use crate::convert::{Buf, Meta, Model, Raw, finish};
 use crate::encode::{EncodeImage, EncodeMeta, Samples};
 use crate::{DecodeOptions, Decoded, Error, Format, Result};
@@ -74,7 +76,9 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     let h = &head.header;
     let (channels, width, height, depth, mode) = (usize::from(h.channels), h.width as usize, h.height as usize, h.depth, h.color_mode.as_u16());
     let color_mode_data = head.color_mode_data.as_slice();
-    let (icc, exif, xmp) = resources(&head.resources);
+    let icc = last_resource(&head.resources, ids::ICC_PROFILE).map(<[u8]>::to_vec);
+    let exif = last_exif(&head.resources).map(<[u8]>::to_vec);
+    let xmp = last_resource(&head.resources, ids::XMP).map(|data| String::from_utf8_lossy(data).trim_end_matches('\0').into());
     let merged_transparency = merged.transparency;
 
     // Image data.
@@ -196,7 +200,6 @@ pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
     let h = &head.header;
     let (channels, width, height, depth, mode) = (usize::from(h.channels), h.width as usize, h.height as usize, h.depth, h.color_mode.as_u16());
     let color_mode_data = head.color_mode_data.as_slice();
-    let (_, exif, _) = resources(&head.resources);
     match depth {
         8 | 16 | 32 => {}
         1 => return Err(Error::Unsupported(F, "1-bit bitmap PSD")),
@@ -221,7 +224,7 @@ pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
         craft_psd::PsdError::UnexpectedEof { .. } => err("truncated"),
         other => err(&other.to_string()),
     })?;
-    let orientation = exif.as_deref().map(crate::exif::summarize).unwrap_or_default().orientation.unwrap_or(1);
+    let orientation = last_exif(&head.resources).map(crate::exif::summarize).unwrap_or_default().orientation.unwrap_or(1);
     Ok((width as u32, height as u32, orientation))
 }
 
@@ -238,13 +241,12 @@ fn unpackbits(src: &[u8], row: &mut [u8]) -> Result<()> {
     craft_psd::merged::unpackbits(src, row).map_err(|error| err(&error.to_string()))
 }
 
-/// ICC (1039), EXIF (1058, without its optional `Exif\0\0` prefix) and XMP (1060) resources; the last of each id.
-fn resources(res: &[craft_psd::ImageResource]) -> (Option<Vec<u8>>, Option<Vec<u8>>, Option<String>) {
-    let last = |id: u16| res.iter().rev().find(|r| r.id == id).map(|r| r.data.as_slice());
-    let icc = last(1039).map(<[u8]>::to_vec);
-    let exif = last(1058).map(|d| d.strip_prefix(b"Exif\0\0").unwrap_or(d).to_vec());
-    let xmp = last(1060).map(|d| String::from_utf8_lossy(d).trim_end_matches('\0').to_string());
-    (icc, exif, xmp)
+fn last_resource(resources: &[ImageResource], id: u16) -> Option<&[u8]> {
+    resources.iter().rfind(|resource| resource.id == id).map(|resource| resource.data.as_slice())
+}
+
+fn last_exif(resources: &[ImageResource]) -> Option<&[u8]> {
+    last_resource(resources, ids::EXIF).map(|data| data.strip_prefix(b"Exif\0\0").unwrap_or(data))
 }
 
 #[cfg(test)]
@@ -592,16 +594,43 @@ mod tests {
         let icc = crate::icc::write_named(crate::NamedSpace::AdobeRgb);
         let exif = recovery_exif();
         for (id, payload) in [(1039u16, icc.as_slice()), (1058, exif.as_slice()), (1060, xmp.as_bytes())] {
-            resources.extend_from_slice(b"8BIM");
-            resources.extend_from_slice(&id.to_be_bytes());
-            resources.extend_from_slice(&[0, 0]);
-            resources.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-            resources.extend_from_slice(payload);
-            if payload.len() % 2 == 1 {
-                resources.push(0);
-            }
+            append_resource(&mut resources, id, payload);
         }
         resources
+    }
+
+    fn append_resource(resources: &mut Vec<u8>, id: u16, payload: &[u8]) {
+        resources.extend_from_slice(b"8BIM");
+        resources.extend_from_slice(&id.to_be_bytes());
+        resources.extend_from_slice(&[0, 0]);
+        resources.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        resources.extend_from_slice(payload);
+        if payload.len() % 2 == 1 {
+            resources.push(0);
+        }
+    }
+
+    #[test]
+    fn psd_header_and_decode_keep_last_resource_metadata() {
+        let mut resources = recovery_metadata_with_xmp("<first/>");
+        let icc = crate::icc::write_named(crate::NamedSpace::DisplayP3);
+        let mut exif = recovery_exif();
+        exif[18] = 3;
+        let prefixed_exif = [b"Exif\0\0".as_slice(), exif.as_slice()].concat();
+        append_resource(&mut resources, ids::ICC_PROFILE, &icc);
+        append_resource(&mut resources, ids::EXIF, &prefixed_exif);
+        append_resource(&mut resources, ids::XMP, b"<last>\xff</last>\0\0");
+
+        for (version, compression) in [(1, 0), (2, 1)] {
+            let bytes = recovery_image(version, compression, &resources);
+            let header = crate::read_header(&bytes).unwrap();
+            let decoded = crate::decode(&bytes, DecodeOptions::default()).unwrap();
+            assert_eq!((header.width, header.height, header.orientation), (2, 1, 3));
+            assert_eq!(decoded.orientation, header.orientation);
+            assert_eq!(decoded.exif.as_deref(), Some(exif.as_slice()));
+            assert_eq!(decoded.icc.as_deref(), Some(icc.as_slice()));
+            assert_eq!(decoded.xmp.as_deref(), Some("<last>\u{fffd}</last>"));
+        }
     }
 
     fn recovery_exif() -> Vec<u8> {
