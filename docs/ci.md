@@ -180,8 +180,8 @@ It covers what the PR gate and the release dispatch cannot: test data and softwa
 
 | Job | Runner | What it runs |
 |---|---|---|
-| Corpus + fonts | self-hosted Linux | the pinned raw corpus (`cargo xtask corpus --download`, sha256-checked), craft-fonts and [photocraft-corpus](https://github.com/storytold/photocraft-corpus) at pinned commits (the latter verified with its own `SHA256SUMS`, into `corpus/photocraft`), then the full `cargo xtask ci` and the skip gate; `target/ci/` is uploaded as `nightly-ci-report` |
-| GPU equivalence on lavapipe | gpu0, Debian container | `crates/gpu/tests/it/equivalence.rs` on Mesa's software Vulkan driver (the container has no GPU) |
+| Corpus + fonts | self-hosted Linux | the pinned raw corpus (`cargo xtask corpus --download`, sha256-checked), craft-fonts and [photocraft-corpus](https://github.com/storytold/photocraft-corpus) at pinned commits (the latter verified with its own `SHA256SUMS`, into `corpus/photocraft`; staged for future oracle tests, nothing reads it yet, so it adds no coverage and the skip gate cannot notice it missing), then the full `cargo xtask ci` and the skip gate; `target/ci/` is uploaded as `nightly-ci-report` |
+| GPU equivalence on lavapipe | gpu0, `rust:1.100.0-bookworm` container (exact tag) | `crates/gpu/tests/it/equivalence.rs` on Mesa's software Vulkan driver (the container has no GPU) |
 | GPU equivalence on WARP | self-hosted Windows | the same tests on DX12's software adapter |
 
 **Skip gate.** `cargo xtask skips check` reads the skips of `target/ci/report.json` (each `lcc_testkit::skip!`, per
@@ -201,6 +201,8 @@ moves far more. Locally: `<PREFIX>_GPU_SOFTWARE=1 <PREFIX>_GPU_BACKEND=dx12 carg
 
 Model references (SAM 2.1, SAM 3, BiRefNet, EoMT, TFLite, YuNet) are not part of the nightly yet: their reference
 outputs come from scratch scripts and are not stored anywhere CI can fetch with a pinned sha256.
+**Blocked** until the checkpoints and their reference outputs are published at pinned URLs with sha256s; there is
+deliberately no placeholder job in `nightly.yml`, since it could only skip and would prove nothing.
 
 ## Checked in person, not on CI
 

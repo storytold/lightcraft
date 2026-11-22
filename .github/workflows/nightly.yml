@@ -44,7 +44,9 @@ jobs:
           ref: b4ce3ee090ea4b06791e9501ea2f8e6f746d5cd3 # same pin as ci.yml / release.yml
           path: craft-fonts
       # real-file oracles (MIT OR Apache-2.0), fetched at a pinned commit and checked against the
-      # repository's own sha256 manifest; bump the pin in a reviewed commit
+      # repository's own sha256 manifest; bump the pin in a reviewed commit. Staged only: no test
+      # reads corpus/photocraft yet (docs/ci.md), so this step proves the pin stays fetchable and
+      # intact but adds no coverage and the skip gate cannot see it
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/photocraft-corpus
@@ -88,7 +90,10 @@ jobs:
     # Mesa's lavapipe
     runs-on: [self-hosted, Linux, X64, lcc]
     container:
-      image: rust:1-bookworm
+      # exact toolchain tag, so reruns are reproducible; bump with the dtolnay pin. No sccache or
+      # host target-cache here: the container has no host toolchain, so the target lives in a
+      # named volume instead
+      image: rust:1.100.0-bookworm
       volumes:
         - lcc-ci-cargo-registry:/usr/local/cargo/registry
         - lcc-ci-target-lavapipe:/ci-target
