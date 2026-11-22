@@ -13,7 +13,7 @@ continuous agent-driven development with 4–6 parallel agents and are revised a
 **switch** from Lightroom. Update it when a gap below closes. The full measured assessment is
 [`docs/target-app-parity.md`](docs/target-app-parity.md); the ranked work list is [`docs/gaps.md`](docs/gaps.md).*
 
-**In one line:** the checklist says **90.3%** of 629 rows (P0 98.0%, P1 94.8%, P2 80.2%; Classic extras 90% of P1,
+**In one line:** the checklist says **90.3%** of 629 rows (P0 98.0%, P1 94.8%, P2 80.2%; Classic extras 91% of P1,
 Immich 11/11), but measured by whether a working photographer could replace Lightroom without noticing, we are at
 roughly **60–65%** and at **alpha**. Every Classic module now exists; the remaining gap is mostly **quality of
 results and camera coverage** (colour calibration, CR3 variants, render fidelity, lens profiles, AI masks), not
