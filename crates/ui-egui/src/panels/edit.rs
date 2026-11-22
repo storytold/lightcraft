@@ -1166,6 +1166,8 @@ pub(crate) fn histogram(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     let [shadow_rect, highlight_rect] = super::histogram::clipping_rects(ui, plot);
     // the clipping mask the pointer is resting on, previewed on the photo this frame
     let mut preview = false;
+    // one of them took a click this frame: its preview is over until the pointer has left
+    let mut indicator_clicked = false;
     for (name, rect, out, label, clipped) in [
         ("shadows", shadow_rect, -1.0, "Shadow clipping", clipping.map(|c| c.shadow_channels())),
         ("highlights", highlight_rect, 1.0, "Highlight clipping", clipping.map(|c| c.highlight_channels())),
@@ -1174,6 +1176,7 @@ pub(crate) fn histogram(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
         register(ui.ctx(), format!("histogram:{name}"), rect);
         response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), app.ui.show_clipping, crate::i18n::tr(label)));
         clicked |= response.clicked();
+        indicator_clicked |= response.clicked();
         preview |= response.hovered();
         let active = app.ui.show_clipping;
         // which channels reach this end of the histogram: the triangle takes their blend (white for
@@ -1244,14 +1247,18 @@ pub(crate) fn histogram(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     // triangles, and each preview toggled the overlay, so the photo rendered again, every tile at
     // 100 %, twice per pass)
     let (now, pass) = (ui.input(|i| i.time), ui.ctx().cumulative_pass_nr());
+    // (a click on an indicator switches the persistent warnings, so the preview it was showing ends
+    // there and stays off until the pointer has left and come back: otherwise the photo keeps its
+    // mask under the resting pointer and the click seems to have done nothing, #1348)
     app.clipping_hover = if preview {
-        let since = app.clipping_hover.filter(|(_, seen)| seen.saturating_add(1) >= pass).map_or(now, |(since, _)| since);
+        let held = app.clipping_hover.filter(|(_, seen)| seen.saturating_add(1) >= pass).map(|(since, _)| since);
+        let since = if indicator_clicked { CLIPPING_PREVIEW_SPENT } else { held.unwrap_or(now) };
         Some((since, pass))
     } else {
         None
     };
     app.clipping_preview = app.clipping_hover.is_some_and(|(since, _)| clipping_preview_due(since, now));
-    if let Some((since, _)) = app.clipping_hover.filter(|_| !app.clipping_preview) {
+    if let Some((since, _)) = app.clipping_hover.filter(|(since, _)| !app.clipping_preview && since.is_finite()) {
         let left = (since + CLIPPING_PREVIEW_REST_S - now).clamp(0.0, CLIPPING_PREVIEW_REST_S);
         ui.ctx().request_repaint_after(std::time::Duration::try_from_secs_f64(left).unwrap_or_default());
     }
@@ -3731,6 +3738,10 @@ pub(crate) fn reset_tip(keymap: &crate::shortcuts::Keymap, mac: bool) -> String 
 /// How long the pointer rests on a histogram clipping indicator before its overlay is previewed
 /// on the photo (see [`crate::LccApp::clipping_hover`]).
 pub(crate) const CLIPPING_PREVIEW_REST_S: f64 = 0.3;
+
+/// The "hovered since" of an indicator that was clicked while hovered: a rest that never comes due,
+/// so the preview stays off until the pointer leaves the indicator ([`clipping_preview_due`]).
+pub(crate) const CLIPPING_PREVIEW_SPENT: f64 = f64::INFINITY;
 
 /// Whether a clipping indicator hovered since `since` has been rested on long enough at `now` (a
 /// clock that went back counts as no rest).
