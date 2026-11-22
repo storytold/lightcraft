@@ -1,0 +1,7 @@
+{
+  "about": "Render-fidelity suite tolerances (crates/pipeline/tests/it/fidelity.rs, docs/testing-sil.md). Aggregate numbers only; the reference renders stay local. '*' applies to tools without their own entry. colorchecker_mean_de2000 bounds the unedited pipeline's mean ΔE2000 on the synthetic ColorChecker.",
+  "colorchecker_mean_de2000": 1.0,
+  "tools": {
+    "*": { "mean_de2000": 0.5, "p95_de2000": 2.0, "min_ssim": 0.98 }
+  }
+}

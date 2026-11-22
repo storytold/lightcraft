@@ -166,6 +166,10 @@ pub struct Calibrated {
     /// The look photos of the camera start from when they choose none (a Lightroom calibration's first look);
     /// `None`: the looks are only there to be chosen (calibrations matched to other editors).
     pub default: Option<String>,
+    /// The default look serves only files with colour matrices of their own (converted DNGs), which get no per-photo
+    /// fit to their camera JPEG: the calibration lost to that fit on the camera's raws (issue #1119,
+    /// [`ColourSource`]). A look chosen per photo (`cal:<id>`) serves every file.
+    pub own_matrix_only: bool,
 }
 
 fn registry() -> &'static RwLock<Vec<Arc<Dcp>>> {
@@ -359,17 +363,23 @@ fn choice_direct(choice: &str, make: Option<&str>, model: &str, lens: Option<&st
     }
 }
 
-/// A camera's default profile: the person's choice ([`user_default_for`]) when one is set, else
-/// the person's own `.dcp` ([`for_camera`]), else its calibration's default look.
-fn default_for(make: Option<&str>, model: &str, lens: Option<&str>) -> Option<Arc<Dcp>> {
-    if let Some(choice) = user_default_for(make, model) {
-        return choice_direct(&choice, make, model, lens);
-    }
-    for_camera(make, model).or_else(|| {
-        let c = calibrated_for_lens(make, model, lens)?;
-        let id = c.default.as_ref()?;
-        c.looks.iter().find(|(i, _)| i == id).map(|(_, d)| d.clone())
-    })
+/// A camera's default profile: the first available of the profile sources ([`ColourSource::is_profile`]) in
+/// precedence order: the person's choice ([`user_default_for`]) when one is set, else the person's own `.dcp`
+/// ([`for_camera`]), else its calibration's default look when it serves this file ([`calibration_serves`]).
+fn default_for(make: Option<&str>, model: &str, lens: Option<&str>, own_matrix: bool) -> Option<Arc<Dcp>> {
+    let source = |s: ColourSource| -> Option<Option<Arc<Dcp>>> {
+        match s {
+            ColourSource::UserDefault => user_default_for(make, model).map(|choice| choice_direct(&choice, make, model, lens)),
+            ColourSource::OwnDcp => for_camera(make, model).map(Some),
+            ColourSource::Calibration => {
+                let c = calibrated_for_lens(make, model, lens).filter(|c| calibration_serves(c, own_matrix))?;
+                let id = c.default.as_ref()?;
+                c.looks.iter().find(|(i, _)| i == id).map(|(_, d)| Some(d.clone()))
+            }
+            _ => None,
+        }
+    };
+    ColourSource::ALL.into_iter().filter(|s| s.is_profile()).find_map(source).flatten()
 }
 
 /// The profile a photo's camera-profile choice (`profile.camera`) gives a camera (Exif make and
@@ -384,13 +394,83 @@ pub fn resolve(choice: &str, make: Option<&str>, model: &str) -> Option<Arc<Dcp>
 
 /// [`resolve`] for a photo taken with `lens` (its Exif lens model): calibrated looks come from that lens's
 /// calibration when there is one, else the camera's lens-less one (issue #1015).
+/// A file of unknown colour tags counts as one without matrices of its own, so a calibration that serves only files
+/// with their own ([`Calibrated::own_matrix_only`]) is not offered; [`resolve_file`] when the tags are known.
 pub fn resolve_lens(choice: &str, make: Option<&str>, model: &str, lens: Option<&str>) -> Option<Arc<Dcp>> {
+    resolve_file(choice, make, model, lens, false)
+}
+
+/// [`resolve_lens`] for a file whose colour tags are known: `own_matrix` whether it carries colour matrices of its own
+/// (a converted DNG), so it gets no per-photo fit to its camera JPEG ([`ColourSource`]).
+pub fn resolve_file(choice: &str, make: Option<&str>, model: &str, lens: Option<&str>, own_matrix: bool) -> Option<Arc<Dcp>> {
+    let default = || default_for(make, model, lens, own_matrix);
     match choice {
         "lc" => None,
-        c if c.starts_with("dcp:") => library_get(c).filter(|d| matches(&d.model, make, model)).or_else(|| default_for(make, model, lens)),
-        c if c.starts_with("cal:") => look_of(calibrated_for_lens(make, model, lens), c).or_else(|| default_for(make, model, lens)),
-        _ => default_for(make, model, lens),
+        c if c.starts_with("dcp:") => library_get(c).filter(|d| matches(&d.model, make, model)).or_else(default),
+        c if c.starts_with("cal:") => look_of(calibrated_for_lens(make, model, lens), c).or_else(default),
+        _ => default(),
     }
+}
+
+/// Where a raw's starting colour comes from, highest precedence first: the one place the order is written down.
+/// The photo's own choice (`profile.camera`) is above all of them; [`default_for`] walks the first three, and the
+/// engine's starting colour (`camera_preview::starting_colour`) the rest, in this order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ColourSource {
+    /// The person's default camera-profile choice for the camera (a library preference).
+    UserDefault,
+    /// The person's own imported `.dcp` for the camera.
+    OwnDcp,
+    /// A Lightroom calibration's default look ([`Calibrated`]); one that lost to the per-photo JPEG fit on the
+    /// camera's raws serves only files with matrices of their own ([`Calibrated::own_matrix_only`], issue #1119).
+    Calibration,
+    /// The file's own colour matrices (DNG tags, or matrices its decoder has for it).
+    FileMatrix,
+    /// The camera database's measured matrices.
+    MeasuredDatabase,
+    /// A look fitted to the file's camera JPEG.
+    CameraJpegFit,
+    /// The camera profile pooled for the model, when the photo's own fit failed.
+    CameraProfile,
+    /// The camera database's other matrices (spectral sensitivities, dcraw's table).
+    Database,
+    /// Another sensor's spectral matrices standing in (Sony bodies without their own).
+    SpectralStandIn,
+    /// The neutral fallback.
+    NeutralFallback,
+}
+
+impl ColourSource {
+    /// Every source, highest precedence first.
+    pub const ALL: [ColourSource; 10] = [
+        Self::UserDefault,
+        Self::OwnDcp,
+        Self::Calibration,
+        Self::FileMatrix,
+        Self::MeasuredDatabase,
+        Self::CameraJpegFit,
+        Self::CameraProfile,
+        Self::Database,
+        Self::SpectralStandIn,
+        Self::NeutralFallback,
+    ];
+
+    /// Whether a source replaces the raw's colour with a camera profile (`.dcp` form) before decoding; the rest are
+    /// the app's own colour (`lc`).
+    pub fn is_profile(self) -> bool {
+        matches!(self, Self::UserDefault | Self::OwnDcp | Self::Calibration)
+    }
+}
+
+/// The source a raw starts from among those `available`: the one of highest precedence ([`ColourSource`]).
+pub fn first_colour_source(available: impl IntoIterator<Item = ColourSource>) -> Option<ColourSource> {
+    available.into_iter().min()
+}
+
+/// Whether a calibration's default look serves a file: every file, or only one with matrices of its own when the
+/// calibration lost to the per-photo JPEG fit on raws (issue #1119).
+pub fn calibration_serves(cal: &Calibrated, own_matrix: bool) -> bool {
+    !cal.own_matrix_only || own_matrix
 }
 
 /// The look with id `id` of a calibration.
@@ -400,14 +480,20 @@ fn look_of(cal: Option<Arc<Calibrated>>, id: &str) -> Option<Arc<Dcp>> {
 
 /// [`resolve`] for a camera written as one string (see [`covers_camera`]).
 pub fn resolve_camera(choice: &str, camera: &str) -> Option<Arc<Dcp>> {
+    resolve_camera_file(choice, camera, false)
+}
+
+/// [`resolve_camera`] for a file that does (`own_matrix`) or doesn't carry colour matrices of its own
+/// ([`resolve_file`]).
+pub fn resolve_camera_file(choice: &str, camera: &str, own_matrix: bool) -> Option<Arc<Dcp>> {
     let words: Vec<&str> = camera.split_whitespace().collect();
     if words.is_empty() {
         return None;
     }
     (1..words.len())
         .filter_map(|i| words.split_at_checked(i))
-        .find_map(|(make, model)| resolve(choice, Some(&make.join(" ")), &model.join(" ")))
-        .or_else(|| resolve(choice, None, camera))
+        .find_map(|(make, model)| resolve_file(choice, Some(&make.join(" ")), &model.join(" "), None, own_matrix))
+        .or_else(|| resolve_file(choice, None, camera, None, own_matrix))
 }
 
 /// Write `dcp` as a `.dcp` file (little-endian, `IIRC`): `UniqueCameraModel`, the colour and forward matrices with
@@ -601,6 +687,29 @@ mod tests {
         assert!(parse(&no_model).is_err());
     }
 
+    /// Every pair of colour sources: the one of higher precedence wins whichever order they are offered in, the
+    /// profile sources outrank the app's own colour, and a Lightroom calibration outranks the per-photo JPEG fit.
+    #[test]
+    fn colour_sources_rank_pairwise() {
+        for (i, &a) in ColourSource::ALL.iter().enumerate() {
+            assert_eq!(first_colour_source([a]), Some(a));
+            for &b in &ColourSource::ALL[i + 1..] {
+                assert_eq!(first_colour_source([a, b]), Some(a), "{a:?} over {b:?}");
+                assert_eq!(first_colour_source([b, a]), Some(a), "{a:?} over {b:?}, offered second");
+                if a.is_profile() || b.is_profile() {
+                    assert!(a.is_profile(), "a camera profile outranks the app's own colour: {a:?} {b:?}");
+                }
+            }
+        }
+        assert_eq!(first_colour_source([]), None);
+        assert_eq!(first_colour_source([ColourSource::CameraJpegFit, ColourSource::Calibration]), Some(ColourSource::Calibration));
+        assert_eq!(first_colour_source([ColourSource::Calibration, ColourSource::OwnDcp]), Some(ColourSource::OwnDcp));
+        assert_eq!(first_colour_source([ColourSource::Database, ColourSource::CameraJpegFit]), Some(ColourSource::CameraJpegFit));
+        let cal = |own_matrix_only| Calibrated { make: "X".into(), names: vec![], lens: None, looks: vec![], default: None, own_matrix_only };
+        assert!(calibration_serves(&cal(false), false) && calibration_serves(&cal(false), true));
+        assert!(!calibration_serves(&cal(true), false) && calibration_serves(&cal(true), true));
+    }
+
     #[test]
     fn registry_finds_profiles_by_camera() {
         install(vec![parse(&tiny_dcp("TESTCAM ONE")).unwrap()]);
@@ -636,6 +745,7 @@ mod tests {
             lens: None,
             looks: vec![("cal:a".into(), look("A")), ("cal:b".into(), look("B"))],
             default: Some("cal:a".into()),
+            own_matrix_only: false,
         }]);
         let cam = "CALCAM CORP CALCAM ONE";
         assert!(covers_camera(cam) && covers_camera("CALCAM CORP ONE II"));
@@ -662,6 +772,7 @@ mod tests {
             lens: None,
             looks: vec![(id.into(), look(name))],
             default: None,
+            own_matrix_only: false,
         };
         install_calibrated(vec![
             Calibrated {
@@ -670,6 +781,7 @@ mod tests {
                 lens: None,
                 looks: vec![("cal:a".into(), look("A"))],
                 default: Some("cal:a".into()),
+                own_matrix_only: false,
             },
             other(vec!["CALCAM ONE".into(), "CALCAM ONE X".into()], "cal:capture-one-standard", "C1"),
             other(vec!["CALCAM TWO".into()], "cal:darktable-default", "DT"),
@@ -691,6 +803,7 @@ mod tests {
             lens: lens.map(str::to_string),
             looks: vec![("cal:adobe-color".into(), look(name))],
             default: Some("cal:adobe-color".into()),
+            own_matrix_only: false,
         };
         install_calibrated(vec![lensed(Some("Wide 24mm"), "Wide"), lensed(None, "Any"), lensed(Some("Ultra 14mm"), "Ultra")]);
         let (mk, md) = (Some("LENSCAM CORP"), "ONE");
@@ -705,6 +818,17 @@ mod tests {
         assert!(name("", Some("Ultra 14mm")).is_none(), "another lens's calibration never serves");
         assert!(name("", None).is_none());
         assert!(!same_lens("", "") && same_lens("A  b", "a B"));
+        install_calibrated(Vec::new());
+
+        // issue #1119: a calibration that lost to the per-photo JPEG fit on raws is the default only for files with
+        // matrices of their own (converted DNGs); a look chosen per photo still serves every file
+        install_calibrated(vec![Calibrated { own_matrix_only: true, ..lensed(None, "DNG only") }]);
+        let file = |choice: &str, own: bool| resolve_file(choice, mk, md, None, own).map(|d| d.name.clone());
+        assert_eq!(file("", true).as_deref(), Some("DNG only"));
+        assert!(file("", false).is_none(), "a raw keeps its per-photo JPEG fit");
+        assert!(name("", None).is_none(), "unknown colour tags count as a raw");
+        assert_eq!(file("cal:adobe-color", false).as_deref(), Some("DNG only"), "an explicit choice serves");
+        assert_eq!(resolve_camera_file("", "LENSCAM CORP ONE", true).map(|d| d.name.clone()).as_deref(), Some("DNG only"));
         install_calibrated(Vec::new());
 
         // the person's default choice (issue #723) outranks the camera's active `.dcp` and its

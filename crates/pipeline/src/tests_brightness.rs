@@ -422,7 +422,9 @@ mod render_level {
         const CF: f64 = 80.0;
 
         // after Contrast and Saturation: the render with them, put through the stage, is the render with all three
-        let mut earlier = DevelopSettings::default();
+        // (V9: the order is rebuilt here from 8-bit output values, which is where V1–V9 run the stage)
+        let v9 = || DevelopSettings { process: lcc_develop::Process::V9.version(), ..DevelopSettings::default() };
+        let mut earlier = v9();
         earlier.light.contrast = 45.0;
         earlier.color.saturation = 45.0;
         let mut all = earlier.clone();
@@ -431,12 +433,12 @@ mod render_level {
         let want: Vec<[f32; 3]> = px(&earlier, &src).into_iter().map(|p| through(p, CF)).collect();
         assert!(worst(&got, &want) <= 2.0, "Brightness is not after Contrast and Saturation: {}", worst(&got, &want));
         // (the test can tell the orders apart: Brightness first would be elsewhere)
-        let swapped: Vec<[f32; 3]> = px(&DevelopSettings::default(), &src).into_iter().map(|p| through(p, CF)).collect();
+        let swapped: Vec<[f32; 3]> = px(&v9(), &src).into_iter().map(|p| through(p, CF)).collect();
         let swapped = px(&earlier, &image(&swapped.iter().map(|p| p.map(|v| v / 255.0)).collect::<Vec<_>>()));
         assert!(worst(&got, &swapped.iter().map(|p| p.map(f32::from)).collect::<Vec<_>>()) > 4.0, "the orders are too alike to tell apart");
 
         // before the Tone Curve: the stage's output is what the curve gets
-        let mut curve = DevelopSettings::default();
+        let mut curve = v9();
         curve.curve.master = vec![lcc_geom::Point::new(0.0, 0.0), lcc_geom::Point::new(0.5, 0.3), lcc_geom::Point::new(1.0, 1.0)];
         let mut both = curve.clone();
         both.light.brightness = CF;
@@ -463,45 +465,56 @@ mod render_level {
             Levels { master: ChannelLevels { black: 30.0, midtone: 0.0, white: 225.0, out_black: 10.0, out_white: 245.0 }, ..Default::default() };
         let lv = LevelsK::new(&levels).expect("a stage");
         let b = super::BrightnessK::new(80.0).expect("a stage");
-        let plain = rgb(&render(&src, &info, &DevelopSettings::default(), &req).image);
+        // (V9: rebuilt from 8-bit output values, where V1–V9 run both stages)
+        let v9 = lcc_develop::Process::V9.version();
+        let plain = rgb(&render(&src, &info, &DevelopSettings { process: v9, ..Default::default() }, &req).image);
         let unit = |p: &[u8; 3]| p.map(|v| f32::from(v) / 255.0);
         let levels_first: Vec<[f32; 3]> = plain.iter().map(|p| b.apply(lv.apply(unit(p), false), false).map(|v| v * 255.0)).collect();
         let brightness_first: Vec<[f32; 3]> = plain.iter().map(|p| lv.apply(b.apply(unit(p), false), false).map(|v| v * 255.0)).collect();
-        let mut s = DevelopSettings { levels, ..Default::default() };
+        let mut s = DevelopSettings { levels, process: v9, ..Default::default() };
         s.light.brightness = 80.0;
         let got = rgb(&render(&src, &info, &s, &req).image);
         assert!(worst(&got, &brightness_first) <= 2.0, "Brightness is not before Levels: {}", worst(&got, &brightness_first));
         assert!(worst(&got, &levels_first) > 4.0, "the orders are too alike to tell apart");
     }
 
-    /// The call sites, as text, so a rebase that swaps the stage with a neighbour is caught on both renderers.
+    /// The call sites, as text, so a rebase that swaps the stage with a neighbour is caught on both renderers: up to
+    /// process V9 on the output values after the encode, from V10 in the wide curve space before the gamut map; in both
+    /// Brightness, then Levels, then the Tone Curve.
     #[test]
     fn the_stage_is_called_right_before_the_tone_curve_on_the_cpu_and_the_gpu() {
+        let find_from = |src: &str, from: usize, pat: &str| src.get(from..).and_then(|t| t.find(pat)).map(|i| i + from);
         let cpu = include_str!("finish.rs");
-        let (b, c) = (cpu.find("b.apply(e, hdr)").expect("the CPU call"), cpu.find("eval_curves(l, e, hdr)").expect("the CPU curve call"));
-        assert!(b < c, "CPU: Brightness must run before the Tone Curve");
-        // it comes after the encode, and Levels (merged, #1252) after it
         let encode = cpu.find("r.map(|v| encode_srgb(srgb, v))").expect("the encode");
-        assert!(encode < b, "CPU: Brightness must come after the output encode");
+        let b = find_from(cpu, encode, "b.apply(e, hdr)").expect("the CPU call");
+        let c = find_from(cpu, encode, "eval_curves(l, e, hdr)").expect("the CPU curve call");
+        assert!(b < c, "CPU: Brightness must run before the Tone Curve");
         {
-            let l = levels_call(cpu, encode, "&fp.levels", "finish.rs").expect("the Levels call in finish.rs");
+            let l = levels_call(cpu, encode, "fp.levels.as_ref()", "finish.rs").expect("the Levels call in finish.rs");
             assert!(b < l, "CPU: Levels must come after Brightness");
         }
+        // process V10: the same order inside the wide space
+        let wide = cpu.find("d = cs.apply(d, |mut e| {").expect("the V10 call");
+        let wb = find_from(cpu, wide, "e = b.apply(e, hdr)").expect("V10 Brightness");
+        let wl = find_from(cpu, wide, "e = lv.apply(e, hdr)").expect("V10 Levels");
+        let wc = find_from(cpu, wide, "e = eval_curves(l, e, true)").expect("V10 curve");
+        assert!(wb < wl && wl < wc && wc < encode, "CPU V10: Brightness, Levels, then the Tone Curve, before the encode");
         // the shader, the same
         let gpu = include_str!("../../gpu/src/wgsl/finish.wgsl");
-        let (b, c) = (gpu.find("brightness_apply(e, hdr)").expect("the GPU call"), gpu.find("pu(F_CURVES)").expect("the GPU curve block"));
-        assert!(b < c, "GPU: Brightness must run before the Tone Curve");
+        let helper = gpu.find("fn brightness_levels(").expect("the GPU helper");
+        let hb = find_from(gpu, helper, "brightness_apply(e, hdr)").expect("the GPU Brightness call");
+        let hl = find_from(gpu, helper, "pu(F_LEVELS)").expect("the GPU Levels call");
+        assert!(hb < hl, "GPU: Levels must come after Brightness");
         let encode = gpu.find("encode_srgb(r.x)").expect("the GPU encode");
-        assert!(encode < b, "GPU: Brightness must come after the output encode");
-        {
-            let l = levels_call(gpu, encode, "pu(F_LEVELS)", "finish.wgsl").expect("the Levels call in finish.wgsl");
-            assert!(b < l, "GPU: Levels must come after Brightness");
-        }
+        let b = find_from(gpu, encode, "brightness_levels(e, hdr)").expect("the GPU call");
+        let c = find_from(gpu, encode, "pu(F_CURVES)").expect("the GPU curve block");
+        assert!(b < c, "GPU: Brightness must run before the Tone Curve");
+        let wide = gpu.find("if (curve_wide) {").expect("the GPU V10 block");
+        let wb = find_from(gpu, wide, "brightness_levels(pow(").expect("GPU V10 Brightness");
+        let wc = find_from(gpu, wide, "curve(0u, e0.x, true)").expect("GPU V10 curve");
+        assert!(wb < wc && wc < encode, "GPU V10: Brightness and Levels, then the Tone Curve, before the encode");
     }
 
-    /// Where the Levels stage is called in `src` after `from` (its real names in the Levels branch: `&fp.levels` on the CPU,
-    /// `pu(F_LEVELS)` in the shader), `None` while the branch has no Levels. Any other code that mentions a level after `from`
-    /// is a Levels-like stage this test does not know (renamed or a new one): it fails, so a rename cannot pass silently.
     fn levels_call(src: &str, from: usize, marker: &str, file: &str) -> Option<usize> {
         let src = src.split("\n#[cfg(test)]").next().unwrap_or(src); // (a file's own tests are not stages)
         let mut at = 0;

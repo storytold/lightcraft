@@ -182,6 +182,44 @@ pub fn packages(root: &Path, metadata: &serde_json::Value) -> Vec<(String, Strin
         .collect()
 }
 
+/// (name, names of the workspace packages it depends on, any kind) of each workspace package, from
+/// `cargo metadata --no-deps` (whose `dependencies` name the package, not a rename).
+pub fn workspace_deps(metadata: &serde_json::Value) -> Vec<(String, Vec<String>)> {
+    let pkgs: Vec<&serde_json::Value> = metadata["packages"].as_array().into_iter().flatten().collect();
+    let names: BTreeSet<&str> = pkgs.iter().filter_map(|p| p["name"].as_str()).collect();
+    pkgs.iter()
+        .filter_map(|p| {
+            let deps = p["dependencies"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|d| d["name"].as_str())
+                .filter(|n| names.contains(n))
+                .map(str::to_owned)
+                .collect::<BTreeSet<_>>();
+            Some((p["name"].as_str()?.to_owned(), deps.into_iter().collect()))
+        })
+        .collect()
+}
+
+/// `changed` plus every workspace package that depends on one of them, directly or not (the PR
+/// gate's changed-crate tests: a dependent's tests exercise the changed code too).
+pub fn with_dependents(changed: &BTreeSet<String>, deps: &[(String, Vec<String>)]) -> BTreeSet<String> {
+    let mut out = changed.clone();
+    // a fixed point over a finite set: each pass adds at least one package or stops
+    loop {
+        let before = out.len();
+        for (name, d) in deps {
+            if !out.contains(name) && d.iter().any(|x| out.contains(x)) {
+                out.insert(name.clone());
+            }
+        }
+        if out.len() == before {
+            return out;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,6 +240,24 @@ mod tests {
         .into_iter()
         .map(|(a, b)| (a.to_owned(), b.to_owned()))
         .collect()
+    }
+
+    #[test]
+    fn dependents_are_added_transitively() {
+        let meta = serde_json::json!({"packages": [
+            {"name": "a", "dependencies": []},
+            {"name": "b", "dependencies": [{"name": "a"}, {"name": "serde"}]},
+            {"name": "c", "dependencies": [{"name": "b"}]},
+            {"name": "d", "dependencies": [{"name": "serde"}]},
+            {"name": "e", "dependencies": [{"name": "c"}, {"name": "e"}]}
+        ]});
+        let deps = workspace_deps(&meta);
+        let set = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<BTreeSet<_>>();
+        assert_eq!(with_dependents(&set(&["a"]), &deps), set(&["a", "b", "c", "e"]));
+        assert_eq!(with_dependents(&set(&["d"]), &deps), set(&["d"]));
+        assert!(with_dependents(&set(&[]), &deps).is_empty());
+        // hostile metadata: no packages array
+        assert!(workspace_deps(&serde_json::json!({})).is_empty());
     }
 
     #[test]

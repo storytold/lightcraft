@@ -5,6 +5,11 @@
 #   (per need, from target/ci/report.json) than ci/skip-allowlist.toml allows.
 # - gpu-software: the CPU ↔ GPU equivalence tests of lcc-gpu on a software adapter (lavapipe in a
 #   Debian container on Linux, WARP on Windows), with the wider bounds the tests use there.
+# - full-macos / full-windows: the workspace build and every test (nextest + quarantine) on macOS and
+#   Windows, so the nightly full run covers all three desktop OSes.
+# - report: opens (or comments on) the "Nightly full run failing" issue when any job failed, and
+#   closes it on the next green run. release.yml refuses to draft a release on a commit whose latest
+#   nightly (on it or an ancestor) is red.
 name: Nightly
 
 on:
@@ -136,3 +141,84 @@ jobs:
           prefix=$(sed -n 's/^env_prefix *= *"\([^"]*\)".*/\1/p' brand.toml)
           export "${prefix}_GPU_SOFTWARE=1" "${prefix}_GPU_BACKEND=dx12"
           cargo test -p lcc-gpu --release --test it -- equivalence --test-threads=2
+
+  full:
+    name: Full tests (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # the maintainer's self-hosted runners (docs/ci.md), as ci.yml's test job
+          - name: macOS
+            runner: '["self-hosted", "macOS", "ARM64", "lcc"]'
+          - name: Windows
+            runner: '["self-hosted", "Windows", "X64", "lcc"]'
+    runs-on: ${{ fromJSON(matrix.runner) }}
+    timeout-minutes: 300
+    env:
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+      CRAFT_FONTS_REQUIRED: "1"
+      CI: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: b4ce3ee090ea4b06791e9501ea2f8e6f746d5cd3 # same pin as ci.yml / release.yml
+          path: craft-fonts
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - name: Low priority
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Windows) powershell -NoProfile -Command "Get-Process -Name Runner.Worker | ForEach-Object { \$_.PriorityClass = 'BelowNormal' }" || true ;;
+            macOS) renice -n 19 -p $PPID >/dev/null ;;
+          esac
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      # debug test binaries fill mac0's disk (ci.yml's same step)
+      - name: Free disk space
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          dir="${CARGO_TARGET_DIR:-target}"
+          free_gb=$(df -g "$HOME" | awk 'NR==2 {print $4}')
+          if [ "${free_gb:-0}" -lt 40 ]; then rm -rf "$dir/debug"; fi
+      - name: build
+        run: cargo build --workspace --locked
+      - name: test
+        run: cargo xtask quarantine test
+
+  report:
+    name: Report (issue on failure)
+    needs: [corpus, gpu-software-linux, gpu-software-windows, full]
+    if: ${{ always() && github.event_name == 'schedule' }}
+    runs-on: [self-hosted, Linux, X64, lcc]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+      - run: bash .github/scripts/install-gh.sh
+      - name: Open, update or close the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          command -v gh >/dev/null || PATH="$(tail -n 1 "$GITHUB_PATH"):$PATH"
+          title="Nightly full run failing"
+          n=$(gh issue list --state open --search "\"$title\" in:title" --json number,title --jq "[.[] | select(.title == \"$title\")][0].number // empty")
+          if [ "$FAILED" = true ]; then
+            body="The nightly full run failed on \`${GITHUB_SHA::9}\`: $RUN_URL
+          A red nightly blocks release.yml until a later nightly is green (docs/ci.md)."
+            if [ -n "$n" ]; then gh issue comment "$n" --body "$body"
+            else gh issue create --title "$title" --body "$body"; fi
+          elif [ -n "$n" ]; then
+            gh issue close "$n" --comment "Green again on \`${GITHUB_SHA::9}\`: $RUN_URL"
+          fi

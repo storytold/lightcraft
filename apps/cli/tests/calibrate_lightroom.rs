@@ -43,6 +43,7 @@ fn xiaomi() -> lcc_camdb::calibration::Calibration {
         aliases: vec![],
         lens: None,
         editor: Default::default(),
+        own_matrix_only: false,
         method: lcc_camdb::calibration::METHOD.into(),
         tool_version: "26.43.7".into(),
         contributor: Some("A Contributor".into()),

@@ -39,6 +39,7 @@ lcc-tiff = { path = "crates/tiff" }
 lcc-raw = { path = "crates/raw" }
 lcc-camdb = { path = "crates/camdb" }
 lcc-camprof = { path = "crates/camprof" }
+lcc-fidelity = { path = "crates/fidelity" }
 lcc-colourfit = { path = "crates/colourfit" }
 lcc-codecs = { path = "crates/codecs" }
 lcc-meta = { path = "crates/meta" }
@@ -237,3 +238,6 @@ candle-core = { path = "vendor/candle-core" }
 # egui-wgpu 0.36.2 + HDR display output (an Rgba16Float / extended-linear surface, the display's
 # HDR facts, egui's output scaled to SDR white): see vendor/README.md
 egui-wgpu = { path = "vendor/egui-wgpu" }
+# naga 30.0.1 without ArrayStride on Function/Private/Workgroup arrays, which Vulkan validation
+# rejects (VUID-StandaloneSpirv-None-10684): see vendor/README.md
+naga = { path = "vendor/naga" }
