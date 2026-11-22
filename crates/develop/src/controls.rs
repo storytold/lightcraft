@@ -105,37 +105,84 @@ impl ControlSpec {
         }
         if v > 0.0 && self.min < 0.0 { format!("+{s}") } else { s }
     }
-    /// Where `v` sits on the slider track, from 0 (left end) to 1 (right end). Linear, except for the Kelvin
-    /// temperature, which follows Lightroom's scale: 2000–7000 K fill the left half evenly (100 K per 1 %), and
-    /// the right half grows logarithmically up to 50000 K, so everyday temperatures aren't crowded into the
-    /// left sixth of the track. The relative temperature of rendered files (−100…+100, already in mireds) stays
-    /// linear.
+    /// Where `v` sits on the slider track, from 0 (left end) to 1 (right end), with the Kelvin temperature on
+    /// Lightroom's scale ([`KelvinScale::Lightroom`]). See [`ControlSpec::position_on`].
     pub fn position(&self, v: f64) -> f64 {
+        self.position_on(v, KelvinScale::Lightroom)
+    }
+    /// Where `v` sits on the slider track, from 0 (left end) to 1 (right end). Linear, except for the Kelvin
+    /// temperature, which follows `scale` ([`KelvinScale`]). The relative temperature of rendered files
+    /// (−100…+100, already in mireds) stays linear.
+    pub fn position_on(&self, v: f64, scale: KelvinScale) -> f64 {
         let v = self.clamp(v);
-        let p = match self.kelvin_scale() {
-            Some((centre, right)) if v > centre => 0.5 + 0.5 * (1.0 + (v - centre) / KELVIN_KNEE).ln() / right,
-            Some((centre, _)) => 0.5 * (v - self.min) / (centre - self.min),
+        let p = match self.kelvin_track(scale) {
+            Some(KelvinTrack::Lightroom { centre, right }) if v > centre => 0.5 + 0.5 * (1.0 + (v - centre) / KELVIN_KNEE).ln() / right,
+            Some(KelvinTrack::Lightroom { centre, .. }) => 0.5 * (v - self.min) / (centre - self.min),
+            Some(KelvinTrack::Logarithmic) => (v / self.min).ln() / (self.max / self.min).ln(),
+            Some(KelvinTrack::Mired) => (1.0 / self.min - 1.0 / v) / (1.0 / self.min - 1.0 / self.max),
             None => (v - self.min) / (self.max - self.min).max(1e-9),
         };
         if p.is_finite() { p.clamp(0.0, 1.0) } else { 0.0 }
     }
-    /// The value at track position `p` (0…1): the inverse of [`ControlSpec::position`], not yet on the steps.
+    /// The value at track position `p` (0…1) on Lightroom's Kelvin scale. See [`ControlSpec::value_at_on`].
     pub fn value_at(&self, p: f64) -> f64 {
+        self.value_at_on(p, KelvinScale::Lightroom)
+    }
+    /// The value at track position `p` (0…1): the inverse of [`ControlSpec::position_on`], not yet on the steps.
+    pub fn value_at_on(&self, p: f64, scale: KelvinScale) -> f64 {
         let p = if p.is_finite() { p.clamp(0.0, 1.0) } else { 0.0 };
-        let v = match self.kelvin_scale() {
+        let v = match self.kelvin_track(scale) {
             Some(_) if p >= 1.0 => self.max,
-            Some((centre, right)) if p > 0.5 => centre + KELVIN_KNEE * (((2.0 * p - 1.0) * right).exp() - 1.0),
-            Some((centre, _)) => self.min + 2.0 * p * (centre - self.min),
+            Some(KelvinTrack::Lightroom { centre, right }) if p > 0.5 => centre + KELVIN_KNEE * (((2.0 * p - 1.0) * right).exp() - 1.0),
+            Some(KelvinTrack::Lightroom { centre, .. }) => self.min + 2.0 * p * (centre - self.min),
+            Some(KelvinTrack::Logarithmic) => self.min * (self.max / self.min).powf(p),
+            Some(KelvinTrack::Mired) => 1.0 / (1.0 / self.min - p * (1.0 / self.min - 1.0 / self.max)),
             None => self.min + p * (self.max - self.min),
         };
         self.clamp(v)
     }
-    /// The Kelvin temperature's track centre and `ln` of its right half's span (see [`ControlSpec::position`]);
-    /// `None` for every other control, or a range the centre isn't inside.
-    fn kelvin_scale(&self) -> Option<(f64, f64)> {
-        let centre = KELVIN_CENTRE;
-        (self.id == "wb.temp" && self.min < centre && centre < self.max).then(|| (centre, (1.0 + (self.max - centre) / KELVIN_KNEE).ln()))
+    /// The Kelvin temperature's track on `scale`; `None` for every other control, or a range the scale can't
+    /// span (Lightroom's needs its centre inside the range, the others a positive minimum).
+    fn kelvin_track(&self, scale: KelvinScale) -> Option<KelvinTrack> {
+        if self.id != "wb.temp" || !(self.min < self.max) {
+            return None;
+        }
+        match scale {
+            KelvinScale::Lightroom => {
+                let centre = KELVIN_CENTRE;
+                (self.min < centre && centre < self.max)
+                    .then(|| KelvinTrack::Lightroom { centre, right: (1.0 + (self.max - centre) / KELVIN_KNEE).ln() })
+            }
+            KelvinScale::Logarithmic => (self.min > 0.0).then_some(KelvinTrack::Logarithmic),
+            KelvinScale::Mired => (self.min > 0.0).then_some(KelvinTrack::Mired),
+        }
     }
+}
+
+/// How the Kelvin temperature slider spreads its range along the track (a display preference; the stored
+/// temperature is the same Kelvin whichever is chosen).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KelvinScale {
+    /// Lightroom's: 2000–7000 K fill the left half evenly (100 K per 1 %), and the right half grows
+    /// logarithmically up to 50000 K, so everyday temperatures aren't crowded into the left sixth of the track.
+    #[default]
+    Lightroom,
+    /// Logarithmic over the whole range: each 1 % of the track multiplies the temperature by the same factor
+    /// (about 3.3 % on 2000–50000 K), so 2000→4000 K is as far as 20000→40000 K.
+    Logarithmic,
+    /// Even in mireds (10⁶ / K), the scale white-balance shifts are perceived on: each 1 % of the track is the
+    /// same colour shift (4.8 mired on 2000–50000 K). Warm temperatures get most of the track.
+    Mired,
+}
+
+/// A Kelvin scale with what its mapping needs.
+#[derive(Clone, Copy)]
+enum KelvinTrack {
+    /// the track's centre and `ln` of its right half's span
+    Lightroom { centre: f64, right: f64 },
+    Logarithmic,
+    Mired,
 }
 
 /// The Kelvin temperature at the middle of its track, as in Lightroom.
@@ -628,5 +675,39 @@ mod tests {
         // a Kelvin range that doesn't contain the centre falls back to linear rather than dividing by zero
         let narrow = ControlSpec { min: 7000.0, max: 9000.0, ..*temp };
         assert_eq!((narrow.position(8000.0), narrow.value_at(0.5)), (0.5, 8000.0));
+    }
+
+    /// The logarithmic and mired Kelvin scales: their ends, middles and a few landmarks, an exact round trip
+    /// over every 50 K step, and a track that never runs backwards; other controls ignore the scale.
+    #[test]
+    fn the_logarithmic_and_mired_kelvin_tracks() {
+        let temp = find("wb.temp").unwrap();
+        // 2000 · 25^p: the middle is √(2000 · 50000) = 10000 K
+        for (k, p) in [(2000.0, 0.0), (4000.0, 2f64.ln() / 25f64.ln()), (10000.0, 0.5), (20000.0, 10f64.ln() / 25f64.ln()), (50000.0, 1.0)] {
+            assert!((temp.position_on(k, KelvinScale::Logarithmic) - p).abs() < 1e-12, "log {k} K");
+            assert!((temp.value_at_on(p, KelvinScale::Logarithmic) - k).abs() < 1e-6, "log {p}");
+        }
+        // 500 mired at the left, 20 at the right: the middle is 260 mired ≈ 3846 K, 6500 K (153.8 mired) is 72 %
+        for (k, p) in [(2000.0, 0.0), (1e6 / 260.0, 0.5), (6500.0, (500.0 - 1e6 / 6500.0) / 480.0), (50000.0, 1.0)] {
+            assert!((temp.position_on(k, KelvinScale::Mired) - p).abs() < 1e-12, "mired {k} K");
+            assert!((temp.value_at_on(p, KelvinScale::Mired) - k).abs() < 1e-6, "mired {p}");
+        }
+        for scale in [KelvinScale::Logarithmic, KelvinScale::Mired] {
+            let mut last = -1.0;
+            for k in (2000..=50000).step_by(50).map(f64::from) {
+                let p = temp.position_on(k, scale);
+                assert!(p > last, "{scale:?} {k} K");
+                last = p;
+                let back = (temp.value_at_on(p, scale) / temp.step).round() * temp.step;
+                assert_eq!(back, k, "{scale:?} {k} K → {p} → {back}");
+            }
+            assert_eq!((temp.value_at_on(-1.0, scale), temp.value_at_on(2.0, scale), temp.value_at_on(f64::NAN, scale)), (2000.0, 50000.0, 2000.0));
+            let exposure = find("light.exposure").unwrap();
+            assert_eq!((exposure.position_on(1.0, scale), exposure.value_at_on(0.25, scale)), (0.6, -2.5));
+            // a range starting at 0 K can't be logarithmic or mired: linear instead of dividing by zero
+            let from_zero = ControlSpec { min: 0.0, max: 10000.0, ..*temp };
+            assert_eq!((from_zero.position_on(2500.0, scale), from_zero.value_at_on(0.5, scale)), (0.25, 5000.0));
+        }
+        assert_eq!(KelvinScale::default(), KelvinScale::Lightroom);
     }
 }

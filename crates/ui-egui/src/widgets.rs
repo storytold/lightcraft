@@ -419,6 +419,19 @@ const THUMB_RING: f32 = 7.0;
 /// Esc keeps the old one. Drag the value sideways to scrub it, as if dragging the thumb (Shift: a tenth
 /// as far).
 pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_override: Option<&str>) -> SliderOut {
+    slider_on(ui, spec, value, enabled, label_override, lightcraft_develop::KelvinScale::default())
+}
+
+/// [`slider`] with the Kelvin temperature's track on `kelvin` (Settings ▸ Interface ▸ Temp slider scale); every
+/// other control's track is linear whatever it is.
+pub fn slider_on(
+    ui: &mut Ui,
+    spec: &ControlSpec,
+    value: f64,
+    enabled: bool,
+    label_override: Option<&str>,
+    kelvin: lightcraft_develop::KelvinScale,
+) -> SliderOut {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
     let (row, _) = ui.allocate_exact_size(vec2(w, t.slider_row_h), Sense::hover());
@@ -428,7 +441,7 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let track_rect = Rect::from_min_max(pos2(row.left() + pad_l, row.top() + 22.0), pos2(row.right() - pad_r, row.top() + 40.0));
     let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
     let id = ui.scope_id().with(spec.id);
-    let g = SliderLayout { spec, value, enabled, id, track_rect, value_rect };
+    let g = SliderLayout { spec, value, enabled, id, track_rect, value_rect, kelvin };
     let resp = ui.interact(track_rect.expand2(vec2(8.0, 2.0)), id, if enabled { Sense::click_and_drag() } else { Sense::hover() });
     let (wheel_armed, pointer_in_row) = update_wheel_arming(ui, id, &resp, row, enabled);
     // screen readers: a slider named after its control, with its value
@@ -526,6 +539,8 @@ struct SliderLayout<'a> {
     track_rect: Rect,
     /// the readout, where a value is typed or scrubbed
     value_rect: Rect,
+    /// the Kelvin temperature's track scale
+    kelvin: lightcraft_develop::KelvinScale,
 }
 
 impl SliderLayout<'_> {
@@ -556,13 +571,22 @@ impl SliderLayout<'_> {
         (nv - self.value).abs() > 1e-12
     }
 
-    /// value ↔ track position: linear, except for the Kelvin temperature (`ControlSpec::position`)
+    /// value → track position (0…1): linear, except for the Kelvin temperature (`ControlSpec::position_on`)
+    fn position(&self, v: f64) -> f64 {
+        self.spec.position_on(v, self.kelvin)
+    }
+
+    /// track position (0…1) → value, not yet on the steps
+    fn value_at(&self, p: f64) -> f64 {
+        self.spec.value_at_on(p, self.kelvin)
+    }
+
     fn to_x(&self, v: f64) -> f32 {
-        self.track_rect.left() + self.spec.position(v) as f32 * self.track_rect.width()
+        self.track_rect.left() + self.position(v) as f32 * self.track_rect.width()
     }
 
     fn value_at_x(&self, x: f32) -> f64 {
-        self.spec.value_at(f64::from((x - self.track_rect.left()) / self.track_rect.width()))
+        self.value_at(f64::from((x - self.track_rect.left()) / self.track_rect.width()))
     }
 
     /// Whether `p` is on the thumb.
@@ -615,7 +639,7 @@ fn begin_scrub(ui: &mut Ui, g: &SliderLayout, value_resp: &Response, scrub: &mut
     ui.memory_mut(|m| m.surrender_focus(g.field_id()));
     // the travel so far counts, so the value doesn't lag the pointer by the start distance
     let fine = if ui.input(|i| i.modifiers.shift) { 0.1 } else { 1.0 };
-    *scrub = Some((g.spec.position(g.value) + f64::from((p.x - origin.x) / g.track_rect.width()) * fine).clamp(0.0, 1.0));
+    *scrub = Some((g.position(g.value) + f64::from((p.x - origin.x) / g.track_rect.width()) * fine).clamp(0.0, 1.0));
     true
 }
 
@@ -646,7 +670,7 @@ fn scrub_value(ui: &mut Ui, g: &SliderLayout, value_resp: &Response, mut pos: f6
         let dx = ui.input(|i| i.pointer.delta().x);
         pos = (pos + f64::from(dx / g.track_rect.width()) * fine).clamp(0.0, 1.0);
     }
-    let nv = g.snap(g.spec.value_at(pos));
+    let nv = g.snap(g.value_at(pos));
     if g.differs(nv) {
         out.value = Some(nv);
     }
@@ -737,10 +761,10 @@ fn fine_drag_value(ui: &mut Ui, g: &SliderLayout) -> f64 {
     let step = g.step();
     let fine_id = g.id.with("fine-pos");
     let dx = ui.input(|i| i.pointer.delta().x);
-    let kept = ui.data(|m| m.get_temp::<f64>(fine_id)).filter(|&p| ((g.spec.value_at(p) / step).round() * step - g.value).abs() < step / 2.0);
-    let pos = (kept.unwrap_or_else(|| g.spec.position(g.value)) + f64::from(dx / g.track_rect.width()) * 0.1).clamp(0.0, 1.0);
+    let kept = ui.data(|m| m.get_temp::<f64>(fine_id)).filter(|&p| ((g.value_at(p) / step).round() * step - g.value).abs() < step / 2.0);
+    let pos = (kept.unwrap_or_else(|| g.position(g.value)) + f64::from(dx / g.track_rect.width()) * 0.1).clamp(0.0, 1.0);
     ui.data_mut(|m| m.insert_temp(fine_id, pos));
-    g.spec.value_at(pos)
+    g.value_at(pos)
 }
 
 /// A screen reader's increment / decrement (VoiceOver: Ctrl-Option-Up / Down) as `(increment, decrement)`.

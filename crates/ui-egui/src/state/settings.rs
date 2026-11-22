@@ -207,6 +207,10 @@ pub struct AppSettings {
     /// profiles changes it). A value this version doesn't read asks again.
     #[serde(deserialize_with = "lenient")]
     pub lens_database: lightcraft_engine::lensfun_download::Offer,
+    /// How the Kelvin Temp slider spreads 2000–50000 K along its track (Settings ▸ Interface ▸ Develop):
+    /// Lightroom's scale, logarithmic, or even in mireds. Only where the thumb sits; the stored Kelvin is the same.
+    #[serde(deserialize_with = "lenient")]
+    pub temp_scale: lightcraft_develop::KelvinScale,
 }
 
 /// Where File ▸ Import Lightroom Catalog… puts a catalog (Settings ▸ General ▸ Library). Saved as
@@ -260,6 +264,7 @@ impl Default for AppSettings {
             loupe_info: LoupeInfo::default(),
             lightroom_import: LightroomImport::Ask,
             lens_database: Default::default(),
+            temp_scale: Default::default(),
         }
     }
 }

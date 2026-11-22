@@ -1,6 +1,6 @@
-//! Headless tests of the Temp slider's scale: the Kelvin temperature of a raw follows Lightroom's track
-//! (2000–7000 K on the left half, logarithmic up to 50000 K on the right); the relative temperature of a
-//! rendered photo and every other slider stay linear.
+//! Headless tests of the Temp slider's scale: the Kelvin temperature of a raw follows Lightroom's track by
+//! default (2000–7000 K on the left half, logarithmic up to 50000 K on the right), or the logarithmic or mired
+//! track Settings picks; the relative temperature of a rendered photo and every other slider stay linear.
 
 use std::time::Duration;
 
@@ -122,4 +122,34 @@ fn the_relative_temp_slider_stays_linear() {
     let k = develop(&h).wb.temp;
     let rel = (1e6 / 6500.0 - 1e6 / k) / 0.8;
     assert!((rel - 50.0).abs() < 0.6, "{k} K is {rel} on the relative scale");
+}
+
+/// Settings ▸ Interface ▸ Temp slider scale: logarithmic puts √(2000 · 50000) = 10000 K in the middle of the
+/// track, even in mireds puts 260 mired (≈ 3846 K) there; a click in the middle sets that temperature, and the
+/// ends are still 2000 and 50000 K. The relative slider of a rendered photo ignores the setting.
+#[test]
+fn the_temp_slider_scale_setting() {
+    use lightcraft_develop::KelvinScale;
+    let mut h = edit_panel(true);
+    for (scale, middle, at_6500) in
+        [(KelvinScale::Logarithmic, 10000.0, (3.25f64).ln() / 25f64.ln()), (KelvinScale::Mired, 1e6 / 260.0, (500.0 - 1e6 / 6500.0) / 480.0)]
+    {
+        h.app.ui.settings.temp_scale = scale;
+        set(&mut h, "wb.temp", 6500.0);
+        let at = thumb(&h, "wb.temp");
+        assert!((f64::from(at) - at_6500).abs() < 0.005, "{scale:?}: 6500 K drawn at {at}, expected {at_6500}");
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "slider:wb.temp", "fx": 0.5}), T)["ok"], true);
+        h.settle(SETTLE);
+        let k = develop(&h).wb.temp;
+        assert!((k - middle).abs() <= 50.0, "{scale:?}: the middle of the track is {k} K, expected {middle}");
+        for (fx, end) in [(0.0, 2000.0), (1.0, 50000.0)] {
+            assert_eq!(h.request("ui.clickWidget", json!({"id": "slider:wb.temp", "fx": fx}), T)["ok"], true);
+            h.settle(SETTLE);
+            assert_eq!(develop(&h).wb.temp, end, "{scale:?}");
+        }
+    }
+    let mut h = edit_panel(false);
+    h.app.ui.settings.temp_scale = KelvinScale::Logarithmic;
+    h.settle(SETTLE);
+    assert!((thumb(&h, "wb.tempRel") - 0.5).abs() < 0.005, "the relative slider stays linear");
 }

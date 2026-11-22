@@ -108,6 +108,18 @@ pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Toke
         choices(ui, "settingsInfo", &[(I::Off, "Off"), (I::Basic, "Info 1"), (I::Exposure, "Info 2")], &mut app.ui.info_overlay);
     });
     hint(ui, t, crate::i18n::tr("View → View Options chooses the lines Info 1 and Info 2 show."));
+    heading(ui, t, crate::i18n::tr("Develop"));
+    row(ui, t, crate::i18n::tr("Temp slider scale"), |ui| {
+        use lightcraft_develop::KelvinScale as K;
+        choices(ui, "settingsTempScale", &[(K::Lightroom, "Lightroom"), (K::Logarithmic, "Logarithmic"), (K::Mired, "Even in mireds")], &mut app.ui.settings.temp_scale);
+    });
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(
+            "How the Kelvin Temp slider of raw photos spreads 2000–50000 K: Lightroom's (linear to 7000 K in the middle, then logarithmic), logarithmic throughout, or even in mireds, where every step is the same colour shift. Only the slider changes, not the photo.",
+        ),
+    );
 }
 
 /// View ▸ View Options (⌘J), Lightroom Classic's Loupe View tab: whether the info overlay shows and

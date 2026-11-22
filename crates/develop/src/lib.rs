@@ -11,7 +11,7 @@ pub mod presets;
 pub mod segmask;
 pub mod settings;
 
-pub use controls::{CONTROLS, ControlSpec, Section, Track};
+pub use controls::{CONTROLS, ControlSpec, KelvinScale, Section, Track};
 pub use presets::{Preset, SettingsGroup, apply_partial, extract_groups};
 pub use segmask::{SegMask, with_grid_interner};
 pub use settings::*;
