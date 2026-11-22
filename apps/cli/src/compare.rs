@@ -13,7 +13,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let mut json = false;
     let mut i = 0;
     while i < args.len() {
-        match args[i].as_str() {
+        match args.get(i).map_or("", String::as_str) {
             "--size" => {
                 i += 1;
                 let v = args.get(i).ok_or("--size needs a number of pixels")?;
