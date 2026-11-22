@@ -4,8 +4,8 @@
 
 ### Heal meets its surroundings (process 11)
 - A healed spot is now pinned to the photo around its edge: on a gradient (a sky, a shaded wall, a cheek) it no
-  longer leaves a faint disc or ring, and a dark line near the spot that the spot doesn't touch no longer smudges into
-  it. Texture taken from a brighter or darker area keeps its contrast relative to the light where it lands, instead of
+  longer leaves a faint disc or ring, and a dark line a few pixels or more beyond the spot's edge no longer smudges
+  into it. Texture taken from a brighter or darker area keeps its contrast relative to the light where it lands, instead of
   turning blotchy in shadows or flat in highlights, and Heal and Remove scale the patch's grain to the area around it.
   Heal, Remove and Clone read their source at whole pixels, so the patch is no longer softened by blending between
   pixels. Very large spots keep the previous heal. This is rendering process 11: new photos (and Reset) get it, photos
