@@ -1,6 +1,6 @@
 # CI and landing changes
 
-> **Last updated:** 2026-11-22 · **Change:** minor (nightly `Fuzz` workflow: every pure-Rust fuzz target for 30 minutes, crash inputs as artifacts); minor (nightly workflow: corpus + fonts full run with a skip gate, GPU equivalence on lavapipe and WARP); minor (timing probes and benchmarks run with `<PREFIX>_PROBES=1` and otherwise record a `probe` skip); minor (generated demo photos are kept on disk across test processes); minor (the fast gate checks that the fork catalogs are sorted); minor (the full run also checks the x86_64 Android target); major (no repeated runs: a push to main skips a tree its PR run tested, no CI on pushes to `release`, Brand only on PRs and built in the runner cache, Windows ARM64 only when packaging inputs change, sccache, one cargo run per target for the fast gate's wasm/Android checks); minor (release jobs upload straight to the draft release, not via Actions artifacts); major (every workflow on self-hosted runners, containers on gpu0, fork PRs approved after review); minor (test retries, flaky reports and the test quarantine for the full run); major (fast PR gate; full test runs only before a release); major (created: PR-only main, self-hosted runner, local status)
+> **Last updated:** 2026-11-23 · **Change:** patch (dependency updates: the hand-held `windows` 0.62.2 lockfile pin); minor (nightly `Fuzz` workflow: every pure-Rust fuzz target for 30 minutes, crash inputs as artifacts); minor (nightly workflow: corpus + fonts full run with a skip gate, GPU equivalence on lavapipe and WARP); minor (timing probes and benchmarks run with `<PREFIX>_PROBES=1` and otherwise record a `probe` skip); minor (generated demo photos are kept on disk across test processes); minor (the fast gate checks that the fork catalogs are sorted); minor (the full run also checks the x86_64 Android target); major (no repeated runs: a push to main skips a tree its PR run tested, no CI on pushes to `release`, Brand only on PRs and built in the runner cache, Windows ARM64 only when packaging inputs change, sccache, one cargo run per target for the fast gate's wasm/Android checks); minor (release jobs upload straight to the draft release, not via Actions artifacts); major (every workflow on self-hosted runners, containers on gpu0, fork PRs approved after review); minor (test retries, flaky reports and the test quarantine for the full run); major (fast PR gate; full test runs only before a release); major (created: PR-only main, self-hosted runner, local status)
 
 ## How changes reach `main`
 
@@ -292,3 +292,13 @@ A test that can't run here calls `lcc_testkit::skip!(Need, "why")`; `cargo xtask
 `target/ci/report.json` and `summary.md`. Timing probes and benchmarks are not `#[ignore]`d: they start with
 `if !lcc_testkit::probe("what") { return; }`, which records a `probe` skip unless `<PREFIX>_PROBES=1` is set. Run them
 in release, for example `<PREFIX>_PROBES=1 cargo test --release -p lcc-pipeline --lib bench_ -- --nocapture`.
+
+## Dependency updates
+
+Security updates (Dependabot alerts) land as ordinary PRs through the fast gate. One lockfile pin is held by hand
+(2026-11-19, PR #1292): the `windows` crate stays at **0.62.2** for wgpu-hal's dx12 backend and `crates/gpumem`. A
+plain `cargo update` re-resolves gpu-allocator onto `windows 0.54` and breaks the Windows dx12 build, so update with
+`cargo update -p <crate>` and check that `Cargo.lock` still resolves those users to 0.62.2
+(`cargo tree -i windows@0.62.2 --target x86_64-pc-windows-msvc`). The same note sits in `deny.toml` above `[bans]`.
+Still open from that round: `rustls-webpki` 0.102.8 (via `rustls-rustcrypto 0.0.2-alpha` in `lcc-fetch`) has no
+stable release on 0.103 and needs its own migration.

@@ -47,6 +47,11 @@ confidence-threshold = 0.9
 ignore = false
 
 [bans]
+# Lockfile pin (2026-11-19, PR #1292): `windows` stays at 0.62.2 for wgpu-hal's dx12 backend and
+# crates/gpumem. A plain `cargo update` re-resolves gpu-allocator onto `windows 0.54`, which breaks the
+# Windows dx12 build. Update dependencies with `cargo update -p <crate>` and check that Cargo.lock still
+# carries windows 0.62.2 for those users (`cargo tree -i windows@0.62.2 --target x86_64-pc-windows-msvc`).
+# See docs/ci.md, "Dependency updates".
 multiple-versions = "allow"
 
 [advisories]
