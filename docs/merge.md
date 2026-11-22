@@ -30,8 +30,10 @@ Panorama and HDR panorama results include `used` (source photo IDs, in source or
 `omitted` (`{id, path, reason: "notRegistered"}`), and `pairs`. Each pair has `a` and `b`
 (source photo ID arrays), `matches`, `inliers` (null if no fit was returned), and `status`:
 `insufficientMatches`, `noModel`, `rejected`, or `accepted`. HDR panorama expands each
-stitched bracket to all of its source photos. These fields describe this run; a preview
-and a full merge can use different photos because they run at different resolutions.
+stitched bracket to all of its source photos. The result keeps the first 1,024 pairs in
+input order. `pairsTruncated` is true when there are more pairs. All pairs are still
+verified, and the `used` and `omitted` lists cover every source photo. A preview and a full
+merge can use different photos because they run at different resolutions.
 
 The preview lists omitted filenames and the included count. The completion message uses
 the final merge's count. Pair measurements also appear at debug log level, including when
@@ -48,9 +50,11 @@ among 100 to 140 matches, then reproduce their rejection. A slope of 0.15 also a
 tests' coherent wrong panel match and translated-camera parallax. Spatial spread and a
 small reprojection error alone do not distinguish all of these cases.
 
-This is a diagnostic improvement, not a fix for the reporter's waterfall registration.
-The original waterfall photos were unavailable. A three-frame, 800 by 600 moving-texture
-experiment fails registration, while its clean control registers all three frames.
+The [waterfall registration report](https://github.com/storytold/lightcraft/issues/1765#issuecomment-7026674014)
+found two groups in the original raws. No pair between the groups reached the minimum
+inlier count for a model, so changing the verification slope would leave those groups
+apart. A separate three-frame moving-texture experiment fails registration, while its
+clean control registers all three frames.
 
 ## What it does
 

@@ -294,7 +294,9 @@ fn pano_source_info(
             })
         })
         .collect();
-    json!({"used": used, "omitted": omitted, "pairs": pairs})
+    let frames = sources.len().div_ceil(bracket);
+    let total_pairs = frames.saturating_mul(frames.saturating_sub(1)) / 2;
+    json!({"used": used, "omitted": omitted, "pairs": pairs, "pairsTruncated": pairs.len() < total_pairs})
 }
 
 /// Peak memory of a panorama per pixel of its output (bytes), measured as the peak resident size

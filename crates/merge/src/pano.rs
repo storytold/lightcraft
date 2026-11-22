@@ -74,7 +74,7 @@ pub struct PanoResult {
     pub projection: Projection,
     /// Indices (into the inputs) of the frames with recovered cameras in this panorama.
     pub used: Vec<usize>,
-    /// Measurements for all input pairs, including rejected pairs.
+    /// Measurements for the first [`camera::MAX_PAIR_DIAGNOSTICS`] input pairs, including rejected pairs.
     pub pairs: Vec<camera::PairDiagnostic>,
     /// Cameras of the inputs (`None` = not used), in their full-resolution pixels, straightened.
     pub cameras: Vec<Option<Camera>>,
@@ -178,11 +178,11 @@ struct Tile {
 
 /// Register the frames: cameras for the connected set.
 pub fn register(frames: &[Frame], progress: &Progress) -> Result<(Vec<Option<Camera>>, f64, f64)> {
-    let (cameras, before, after, _) = register_with_diagnostics(frames, progress)?;
+    let (cameras, before, after, _) = register_impl(frames, progress, false)?;
     Ok((cameras, before, after))
 }
 
-fn register_with_diagnostics(frames: &[Frame], progress: &Progress) -> Result<(Vec<Option<Camera>>, f64, f64, Vec<camera::PairDiagnostic>)> {
+fn register_impl(frames: &[Frame], progress: &Progress, report_pairs: bool) -> Result<(Vec<Option<Camera>>, f64, f64, Vec<camera::PairDiagnostic>)> {
     let n = frames.len();
     let work: Vec<(crate::features::Features, f64)> = frames
         .par_iter()
@@ -195,7 +195,8 @@ fn register_with_diagnostics(frames: &[Frame], progress: &Progress) -> Result<(V
     check(progress, 0.2, "Matching")?;
     let feats: Vec<_> = work.iter().map(|(f, _)| f.clone()).collect();
     let scales: Vec<f64> = work.iter().map(|(_, s)| *s).collect();
-    let (pairs, diagnostics) = camera::match_pairs_with_diagnostics(&feats, &scales);
+    let (pairs, diagnostics) =
+        if report_pairs { camera::match_pairs_with_diagnostics(&feats, &scales) } else { (camera::match_pairs(&feats, &scales), Vec::new()) };
     let ids = camera::largest_component(n, &pairs);
     if ids.len() < 2 {
         return Err(MergeError::NoOverlap("could not align at least two photos for a panorama".into()));
@@ -246,7 +247,7 @@ pub fn stitch(mut frames: Vec<Frame>, opts: &PanoOptions, progress: &Progress) -
         return Err(MergeError::TooMany(n, MAX_FRAMES));
     }
     check(progress, 0.01, "Finding features")?;
-    let (cams, rms_before, rms, pairs) = register_with_diagnostics(&frames, progress)?;
+    let (cams, rms_before, rms, pairs) = register_impl(&frames, progress, true)?;
     let used: Vec<usize> = (0..n).filter(|&i| cams[i].is_some()).collect();
     let fov = fov(&frames, &cams);
     let projection = match opts.projection {

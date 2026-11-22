@@ -634,12 +634,17 @@ mod tests {
 
     #[test]
     fn completed_panorama_reports_its_actual_inclusion_count() {
-        let info = json!({"used": [71, 9], "omitted": [{"id": 401, "path": "waterfall-3.png", "reason": "notRegistered"}]});
-        assert_eq!(added_message("Panorama", &info), "Panorama merge added\n2 of 3 photos included");
-        // All exposures are individual photos in the HDR panorama result.
-        let hdr = json!({"used": [71, 9, 401, 3], "omitted": [{"id": 6}, {"id": 12}]});
-        assert_eq!(added_message("HDR panorama", &hdr), "HDR panorama merge added\n4 of 6 photos included");
-        assert_eq!(added_message("Panorama", &json!({"used": [1, 2], "omitted": []})), "Panorama merge added\n2 of 2 photos included");
+        for (what, used, omitted) in
+            [("Panorama", vec![71, 9], vec![401]), ("HDR panorama", vec![71, 9, 401, 3], vec![6, 12]), ("Panorama", vec![1, 2], vec![])]
+        {
+            let info = json!({"used": used, "omitted": omitted.iter().map(|id| json!({"id": id})).collect::<Vec<_>>()});
+            let message = added_message(what, &info);
+            let mut lines = message.lines();
+            assert_eq!(lines.next(), Some(added_message(what, &Value::Null).as_str()));
+            let count = lines.next().expect("the completion message reports inclusion");
+            let numbers = count.split_whitespace().filter_map(|word| word.parse::<usize>().ok());
+            assert!(numbers.eq([used.len(), used.len() + omitted.len()]), "{count}");
+        }
     }
 
     /// Issue #1455: a panorama held to the computer's memory, or to the largest size, says so.

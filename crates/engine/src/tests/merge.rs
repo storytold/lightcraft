@@ -216,6 +216,7 @@ fn panorama_reports_omitted_source_photos() {
                 assert_eq!(entry["reason"], "notRegistered");
             }
             let pairs = r["pairs"].as_array().expect("pair verification diagnostics");
+            assert_eq!(r["pairsTruncated"], false);
             assert_eq!(pairs.len(), 3);
             assert_eq!(pairs[0]["a"], json!(ids[..bracket]));
             assert_eq!(pairs[0]["b"], json!(ids[bracket..2 * bracket]));

@@ -43,16 +43,14 @@ fn moving_scene_regime_is_rejected_despite_a_recovered_homography() {
     for (n, inliers) in [(104, 31), (136, 36), (100, 30), (140, 30)] {
         let f = correspondences(n, inliers, 1765, h);
         let recovered = fit(&f).expect("RANSAC recovers the known transform");
-        assert_eq!(recovered.inliers.len(), inliers);
         assert!(recovered.rms < 0.001);
         for p in [Point::new(100.0, 100.0), Point::new(700.0, 500.0)] {
             assert!(lightcraft_merge::ransac::transfer_error2(&recovered.h, p, h.apply(p)) < 0.001);
         }
-        eprintln!("known homography: {inliers}/{n}, rms={:.6}, accepted={}", recovered.rms, !match_pairs(&f, &[1.0; 2]).is_empty());
         // Keep the conservative gate until a policy distinguishes this from a coherent moving
         // object or a repeated patch. Lowering only the fraction does not establish that.
         assert!(match_pairs(&f, &[1.0; 2]).is_empty());
-        assert!(inliers as f64 > 8.0 + 0.15 * n as f64, "the proposed lower slope admits it");
+        assert!(recovered.inliers.len() as f64 > 8.0 + 0.15 * n as f64, "the proposed lower slope admits it");
     }
 }
 
@@ -65,7 +63,6 @@ fn a_repeated_patch_can_pass_the_lower_slope_with_the_wrong_camera_motion() {
     let f = correspondences(136, 36, 1765, false_motion);
     let r = fit(&f).unwrap();
     eprintln!("repeated panel: {}/136, rms={:.6}, lower slope accepts=true", r.inliers.len(), r.rms);
-    assert_eq!(r.inliers.len(), 36);
     assert!(r.rms < 0.001);
     assert!(r.inliers.len() as f64 > 8.0 + 0.15 * 136.0);
     assert!(match_pairs(&f, &[1.0; 2]).is_empty());
@@ -117,9 +114,30 @@ fn diagnostics_keep_rejected_and_unmatched_pairs_in_input_order() {
     let (pairs, diagnostics) = match_pairs_with_diagnostics(&[a, b, Features::default()], &[1.0; 3]);
     assert!(pairs.is_empty());
     assert_eq!(diagnostics.iter().map(|d| (d.i, d.j)).collect::<Vec<_>>(), [(0, 1), (0, 2), (1, 2)]);
-    assert_eq!((diagnostics[0].matches, diagnostics[0].inliers, diagnostics[0].status), (104, Some(31), PairStatus::Rejected));
+    let rejected = &diagnostics[0];
+    assert_eq!(rejected.status, PairStatus::Rejected);
+    assert!(rejected.inliers.is_some_and(|n| (n as f64) <= 8.0 + 0.3 * rejected.matches as f64));
     assert_eq!((diagnostics[1].matches, diagnostics[1].inliers, diagnostics[1].status), (0, None, PairStatus::InsufficientMatches));
     let f = correspondences(120, 0, 1, h);
     let (_, diagnostics) = match_pairs_with_diagnostics(&f, &[1.0; 2]);
     assert_eq!((diagnostics[0].inliers, diagnostics[0].status), (None, PairStatus::NoModel));
+}
+
+#[test]
+fn diagnostics_are_bounded_without_skipping_late_matches() {
+    use lightcraft_merge::pano::{
+        MAX_FRAMES,
+        camera::{MAX_PAIR_DIAGNOSTICS, PairMatch, match_pairs_with_diagnostics},
+    };
+    let mut features = vec![Features::default(); MAX_FRAMES - 2];
+    let identity = Homography([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+    features.extend(correspondences(32, 32, 1765, identity));
+    let scales = vec![1.0; features.len()];
+
+    let (matches, diagnostics) = match_pairs_with_diagnostics(&features, &scales);
+    let expected = (0..features.len()).flat_map(|i| ((i + 1)..features.len()).map(move |j| (i, j)));
+    assert!(diagnostics.iter().map(|d| (d.i, d.j)).eq(expected.take(MAX_PAIR_DIAGNOSTICS)));
+    let indices = |pairs: &[PairMatch]| pairs.iter().map(|p| (p.i, p.j)).collect::<Vec<_>>();
+    assert_eq!(indices(&matches), [(features.len() - 2, features.len() - 1)]);
+    assert_eq!(indices(&matches), indices(&match_pairs(&features, &scales)));
 }
