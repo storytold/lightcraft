@@ -27,6 +27,7 @@ lcc-hdrmeta = { path = "crates/hdrmeta" }
 lcc-gpumem = { path = "crates/gpumem" }
 lcc-winspool = { path = "crates/winspool" }
 lcc-winmsi = { path = "crates/winmsi" }
+lcc-winjob = { path = "crates/winjob" }
 lcc-android-host = { path = "crates/android-host" }
 lcc-peer = { path = "crates/peer" }
 lcc-sync = { path = "crates/sync" }

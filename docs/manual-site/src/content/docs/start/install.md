@@ -5,8 +5,8 @@ description: Get Chromaforge running.
 
 - Download from the project's **Releases** page.
 - **macOS**: download the `.dmg` for your Mac (`-macos-arm64` for Apple silicon, `-macos-x64` for Intel; `-macos-universal` runs on both and is twice the size), open it and drag the app to Applications. The app is not signed with an Apple developer certificate, so macOS warns first (see below). The [command-line tool](../../automate/cli/) is inside the app (see below).
-- **Windows**: run the installer, or unpack the portable zip. The files are not code-signed, so SmartScreen may warn: choose **More info ▸ Run anyway**.
-- **Linux**: AppImage, `.deb`, `.rpm`, Flatpak or a tarball.
+- **Windows**: run the installer, or unpack the portable zip. The files are not code-signed, so SmartScreen may warn: choose **More info ▸ Run anyway**. `<cli>.exe` beside the app is the command-line tool: a small launcher that runs the app as the tool.
+- **Linux**: AppImage, `.deb`, `.rpm`, Flatpak or a tarball. The `.deb`, `.rpm`, Flatpak and tarball put `<cli>` beside `<binary>` as a link to it: the app's program is the command-line tool when started under that name. An AppImage always starts the app (its `<cli>` link stays inside the image).
 - **Android**: install from [Google Play](https://play.google.com/store/apps/details?id=<app_id>), or sideload the `.apk` from Releases. Play runs a little behind Releases because of Google's review process.
 - **Web**: open the browser build; it runs locally, nothing is uploaded.
 - Build from source: `cargo xtask install`.
@@ -39,7 +39,8 @@ xattr -c path/to/file.dmg
 /Applications/<app>.app/Contents/MacOS/<cli> --version
 ```
 
-- To type just `<cli>` in Terminal, link it into a folder on your `PATH` once. The link follows the app, so updates reach it:
+- `<cli>` is a link to the app's own program, which works as the tool when started under that name.
+- To type just `<cli>` in Terminal, link it into a folder on your `PATH` once. The link follows the app, so updates reach it. Keep the name `<cli>`: a link under another name opens the app instead.
 
 ```bash
 mkdir -p ~/.local/bin

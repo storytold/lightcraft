@@ -945,7 +945,9 @@ pub struct LccApp {
     pub clipping_preview: bool,
     /// Since when (egui time) and up to which pass a clipping indicator has been hovered: the
     /// preview waits for the pointer to rest there ([`panels::edit::CLIPPING_PREVIEW_REST_S`]), so a
-    /// pointer gliding across the histogram never re-renders the photo (every tile at 100 %).
+    /// pointer gliding across the histogram never re-renders the photo (every tile at 100 %). A click
+    /// on the indicator sets the time to [`panels::edit::CLIPPING_PREVIEW_SPENT`]: no preview until
+    /// the pointer has left it.
     pub clipping_hover: Option<(f64, u64)>,
     /// In-progress on-canvas gesture (brush stroke points, gradient drag…).
     pub gesture: Option<panels::detail::Gesture>,
