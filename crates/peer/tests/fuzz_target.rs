@@ -66,8 +66,22 @@ fn fuzz_target() {
                     let _ = s.write_all(&junk);
                 }
             });
-            if let Ok((s, _)) = l.accept() {
-                let _ = Channel::handshake_within(s, &me, false, Duration::from_secs(2));
+            // Never a blocking accept: if the connect fails (e.g. ephemeral ports used up by
+            // TIME_WAIT after millions of loopback connections) nothing would ever arrive.
+            if l.set_nonblocking(true).is_ok() {
+                let until = std::time::Instant::now() + Duration::from_secs(2);
+                while std::time::Instant::now() < until {
+                    match l.accept() {
+                        Ok((s, _)) => {
+                            if s.set_nonblocking(false).is_ok() {
+                                let _ = Channel::handshake_within(s, &me, false, Duration::from_secs(2));
+                            }
+                            break;
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(1)),
+                        Err(_) => break,
+                    }
+                }
             }
             let _ = t.join();
         }

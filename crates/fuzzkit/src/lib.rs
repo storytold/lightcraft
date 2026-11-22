@@ -285,6 +285,7 @@ fn run_in(name: &str, seeds: &[&[u8]], budget: Budget, mut check: impl FnMut(&[u
     if seeds.is_empty() {
         return;
     }
+    let watch = Watchdog::start(name);
     let mut rng = rng_for(name, 0xcbf2_9ce4_8422_2325);
     let mut i = 0usize;
     while budget.more(i) {
@@ -298,8 +299,65 @@ fn run_in(name: &str, seeds: &[&[u8]], budget: Budget, mut check: impl FnMut(&[u
             input.truncate(at);
             input.extend_from_slice(other.get(from..).unwrap_or_default());
         }
+        watch.begin(i, &input);
         let _report = Reporter { name, i, input: &input };
         check(&input);
+    }
+    watch.stop();
+}
+
+/// Seconds one input may take before it counts as a hang: `LCC_FUZZ_HANG_SECS` (default 60).
+fn hang_secs() -> u64 {
+    std::env::var("LCC_FUZZ_HANG_SECS").ok().and_then(|s| s.parse().ok()).filter(|&s| s > 0).unwrap_or(60)
+}
+
+/// What the watchdog sees: the input in flight and when it started; `None` once the run ends.
+type Current = std::sync::Arc<std::sync::Mutex<Option<(std::time::Instant, usize, Vec<u8>)>>>;
+
+/// A wall-clock deadline per input. A blocked `check` would otherwise stall a time-boxed run forever
+/// (the budget is only consulted between inputs); a hang is reported like a crash (stderr + saved
+/// under `LCC_FUZZ_CRASH_DIR`) and the process exits with a failure.
+struct Watchdog {
+    current: Current,
+}
+
+impl Watchdog {
+    fn start(name: &str) -> Watchdog {
+        let current: Current = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let weak = std::sync::Arc::downgrade(&current);
+        let name = name.to_string();
+        let limit = std::time::Duration::from_secs(hang_secs());
+        let spawned = std::thread::Builder::new().name("fuzz-watchdog".into()).spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                // The run dropped its `Watchdog`: done.
+                let Some(strong) = weak.upgrade() else { return };
+                let guard = strong.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let Some((since, i, input)) = guard.as_ref() else { continue };
+                if since.elapsed() >= limit {
+                    eprintln!("fuzz harness `{name}` HANG at iteration {i}: one input ran over {}s; input ({} bytes): {:02x?}", limit.as_secs(), input.len(), input.get(..input.len().min(256)).unwrap_or_default());
+                    if let Some(dir) = std::env::var_os("LCC_FUZZ_CRASH_DIR") {
+                        match save_crash(std::path::Path::new(&dir), &format!("{name}-hang"), input) {
+                            Ok(p) => eprintln!("hang input saved to {}", p.display()),
+                            Err(e) => eprintln!("could not save the hang input: {e}"),
+                        }
+                    }
+                    std::process::exit(102);
+                }
+            }
+        });
+        if let Err(e) = spawned {
+            eprintln!("fuzz harness: no hang watchdog ({e})");
+        }
+        Watchdog { current }
+    }
+
+    fn begin(&self, i: usize, input: &[u8]) {
+        *self.current.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((std::time::Instant::now(), i, input.to_vec()));
+    }
+
+    fn stop(&self) {
+        *self.current.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 }
 
