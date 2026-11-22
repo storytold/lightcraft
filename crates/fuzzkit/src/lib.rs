@@ -181,8 +181,14 @@ struct Budget {
 
 impl Budget {
     fn new(default: usize) -> Budget {
+        Budget::share(default, 1)
+    }
+
+    /// `1/parts` of the `LCC_FUZZ_SECS` time box (harnesses with several phases split it, so the
+    /// whole harness still ends at the deadline).
+    fn share(default: usize, parts: u32) -> Budget {
         let secs = std::env::var("LCC_FUZZ_SECS").ok().and_then(|s| s.parse::<u64>().ok()).filter(|&s| s > 0);
-        let deadline = secs.and_then(|s| std::time::Instant::now().checked_add(std::time::Duration::from_secs(s)));
+        let deadline = secs.map(|s| std::time::Duration::from_secs(s) / parts.max(1)).and_then(|d| std::time::Instant::now().checked_add(d));
         Budget { count: iterations(default), deadline }
     }
 
@@ -260,7 +266,11 @@ fn save_crash(dir: &std::path::Path, name: &str, input: &[u8]) -> std::io::Resul
 /// mutations of the seeds (or, with `LCC_FUZZ_SECS`, mutations until that deadline). A panic
 /// inside `check` fails the test; the harness name, iteration and offending input are printed on
 /// stderr first (and saved under `LCC_FUZZ_CRASH_DIR` when set).
-pub fn run(name: &str, seeds: &[&[u8]], default: usize, mut check: impl FnMut(&[u8])) {
+pub fn run(name: &str, seeds: &[&[u8]], default: usize, check: impl FnMut(&[u8])) {
+    run_in(name, seeds, Budget::new(default), check);
+}
+
+fn run_in(name: &str, seeds: &[&[u8]], budget: Budget, mut check: impl FnMut(&[u8])) {
     for s in seeds {
         let _report = Reporter { name, i: 0, input: s };
         check(s);
@@ -276,7 +286,6 @@ pub fn run(name: &str, seeds: &[&[u8]], default: usize, mut check: impl FnMut(&[
         return;
     }
     let mut rng = rng_for(name, 0xcbf2_9ce4_8422_2325);
-    let budget = Budget::new(default);
     let mut i = 0usize;
     while budget.more(i) {
         i += 1;
@@ -401,7 +410,8 @@ pub fn run_json(name: &str, seeds: &[&str], default: usize, mut check: impl FnMu
     let values: Vec<serde_json::Value> = seeds.iter().filter_map(|s| serde_json::from_str(s).ok()).collect();
     if !values.is_empty() {
         let mut rng = rng_for(name, 0x8422_2325_cbf2_9ce4);
-        let budget = Budget::new(default);
+        // half the time box here, half on byte mutations below
+        let budget = Budget::share(default, 2);
         let mut i = 0usize;
         while budget.more(i) {
             i += 1;
@@ -412,7 +422,8 @@ pub fn run_json(name: &str, seeds: &[&str], default: usize, mut check: impl FnMu
             check(&text);
         }
     }
-    run_str(name, seeds, default / 2, check);
+    let bytes: Vec<&[u8]> = seeds.iter().map(|s| s.as_bytes()).collect();
+    run_in(name, &bytes, Budget::share(default / 2, 2), |b| check(&String::from_utf8_lossy(b)));
 }
 
 struct Reporter<'a> {
