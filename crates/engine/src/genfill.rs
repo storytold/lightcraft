@@ -494,6 +494,25 @@ fn tile_mask(p: &Plan, field: &Plane, t: &Tile) -> Vec<u8> {
     m
 }
 
+/// The most memory one variation's copy of the filled area may take (2 GiB: a 170 MP area).
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_VARIATION_BYTES: usize = 2 << 30;
+
+/// A copy of `base` for one variation to be pasted into, or an error when it is past
+/// [`MAX_VARIATION_BYTES`] or can't be reserved (never an allocation abort).
+#[cfg(not(target_arch = "wasm32"))]
+fn variation_canvas(base: &Rgb32f) -> Result<Rgb32f, String> {
+    let too_big = || format!("not enough memory to fill a {}×{} area; paint a smaller area", base.width, base.height);
+    let pixels = base.width.checked_mul(base.height).filter(|n| *n == base.data.len());
+    if pixels.and_then(|n| n.checked_mul(std::mem::size_of::<[f32; 3]>())).is_none_or(|b| b > MAX_VARIATION_BYTES) {
+        return Err(too_big());
+    }
+    let mut data = Vec::new();
+    data.try_reserve_exact(base.data.len()).map_err(|_| too_big())?;
+    data.extend_from_slice(&base.data);
+    Ok(Rgb32f { width: base.width, height: base.height, data })
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 /// One request's results for a tile: decoded to linear light at the crop's native size.
 fn receive(img: &lcc_genfill::cloud::Image, neutral: lcc_genfill::Neutral, t: &Tile) -> Option<Rgb32f> {
@@ -685,7 +704,6 @@ pub fn run(w: &Work, cancel: &AtomicBool, cache: &PatchCache, progress: &dyn Fn(
     let base = Rgb32f::from_fn(rx1 - rx0, ry1 - ry0, |x, y| src.data.get((ry0 + y) * src.width + rx0 + x).copied().unwrap_or_default());
     let ctl =
         Control { cancel, stall: std::time::Duration::from_secs(180), deadline: std::time::Duration::from_secs(600), accepted: Some(&w.accepted) };
-    let mut gens: Vec<Rgb32f> = vec![base.clone(); n as usize];
     progress(0, total);
     let seed = u64::from_str_radix(&w.id, 16).unwrap_or(1);
     // one request for the whole area (never several pieces)
@@ -703,18 +721,12 @@ pub fn run(w: &Work, cancel: &AtomicBool, cache: &PatchCache, progress: &dyn Fn(
     };
     let out = generate(w.provider, &w.key, &w.endpoint, &req, &ctl).map_err(|e| e.to_string())?;
     progress(total, total);
-    for (k, img) in out.iter().take(n as usize).enumerate() {
-        let res = receive(img, neutral, t).ok_or("the provider sent an unreadable image")?;
-        if let Some(g) = gens.get_mut(k) {
-            paste(&p, &field, t, &res, g);
-        }
-    }
-    gens.truncate(out.len().min(n as usize));
-    if gens.is_empty() {
+    let count = out.len().min(n as usize);
+    if count == 0 {
         return Err("the provider sent no image".into());
     }
     let photo_dir = &w.dir;
-    let variants = gens.len() as u32;
+    let variants = count as u32;
     let fill = GenFill {
         id: w.id.clone(),
         variants,
@@ -727,7 +739,13 @@ pub fn run(w: &Work, cancel: &AtomicBool, cache: &PatchCache, progress: &dyn Fn(
         earlier: Vec::new(),
         place: 0,
     };
-    for (k, g) in gens.into_iter().enumerate() {
+    // one variation at a time, its copy of the area reserved fallibly: the memory a fill takes is one
+    // area's worth whatever the number of variations (patches written before the record are unused
+    // until it is, so a failure part-way leaves nothing shown)
+    for (k, img) in out.iter().take(count).enumerate() {
+        let res = receive(img, neutral, t).ok_or("the provider sent an unreadable image")?;
+        let mut g = variation_canvas(&base)?;
+        paste(&p, &field, t, &res, &mut g);
         let layer = finish(&src, &p, &field, g, w.provider.info().id, neutral)?;
         let path = photo_dir.join(fill.file_name(k as u32));
         write_patch(&path, &layer)?;
@@ -1232,6 +1250,18 @@ impl crate::Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_variation_past_the_memory_budget_is_an_error() {
+        let base = Rgb32f::filled(6, 4, [0.25, 0.5, 0.75]);
+        assert_eq!(variation_canvas(&base).expect("a small area copies"), base);
+        // claims 2^20 × 2^20 pixels (12 TiB): refused before anything is reserved
+        let huge = Rgb32f { width: 1 << 20, height: 1 << 20, data: Vec::new() };
+        assert!(variation_canvas(&huge).is_err());
+        let overflow = Rgb32f { width: usize::MAX, height: 3, data: Vec::new() };
+        assert!(variation_canvas(&overflow).is_err());
+    }
 
     fn spot(x: f64, y: f64, size: f64) -> Spot {
         Spot { mode: SpotMode::Generate, points: vec![Point::new(x, y)], size, ..Default::default() }
