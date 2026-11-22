@@ -361,6 +361,15 @@ pub(super) fn color_range_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &eg
 /// component (click selects its mask, drag moves the component), and brush painting. The mask
 /// itself shows as a rendered overlay ([`view_overlay`]).
 pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
+    // Adjustment mode presents the photo without editable outlines or draggable pins.
+    // The rendered overlay remains available independently through O / Show overlay.
+    // A handle drag still in progress keeps going so its release can end the interaction.
+    if !crate::panels::masking::selection_mode(ui.ctx())
+        && !matches!(app.ui.tool.as_str(), "brush" | "linear" | "radial" | "object" | "colorRange")
+        && !matches!(app.gesture, Some(Gesture::MaskHandle { .. }))
+    {
+        return;
+    }
     let active = app.session.active_mask;
     let clip = app.canvas_rect.unwrap_or(map.rect);
     let p = &ui.painter_at(clip);
@@ -629,7 +638,7 @@ fn object_tool(
         && let Some(q) = resp.interact_pointer_pos()
     {
         if let Some(mid) = other_pin_at(grips, app.session.active_mask, q) {
-            let _ = app.run("mask.select", json!({"id": mid}));
+            let _ = select_from_pin(app, mid);
             let has_object =
                 d.masks.iter().find(|m| m.id == mid).is_some_and(|m| m.components.iter().any(|c| matches!(c.shape, MaskShape::Object { .. })));
             if !has_object {
@@ -766,7 +775,7 @@ fn grip_gestures(
         && let Some((mid, ..)) = hit(q)
         && Some(mid) != active
     {
-        let _ = app.run("mask.select", json!({"id": mid}));
+        let _ = select_from_pin(app, mid);
     }
     if resp.drag_started()
         && let Some(q) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
@@ -787,7 +796,7 @@ fn grip_gestures(
             && d.masks.iter().find(|m| m.id == mask).and_then(|m| m.components.get(comp)).is_some()
         {
             if Some(mask) != active {
-                let _ = app.run("mask.select", json!({"id": mask}));
+                let _ = select_from_pin(app, mask);
             }
             let _ = app.run("develop.beginInteraction", json!({"label": "Edit Mask"}));
             // (read after it begins: an old mask is on the photo from then on, in its coordinates)
@@ -846,11 +855,11 @@ fn mask_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
         let name = mask_handle_name(&mask_name, shape, handle);
         let keys = crate::canvas_keys::handle(ui, &format!("mask:{mid}:{ci}:{handle}"), &name, crate::canvas_keys::position_text(at.x, at.y), q);
         if keys.activated && app.session.active_mask != Some(mid) {
-            let _ = app.run("mask.select", json!({"id": mid}));
+            let _ = select_from_pin(app, mid);
         }
         let Some((dx, dy)) = keys.delta else { continue };
         if app.session.active_mask != Some(mid) {
-            let _ = app.run("mask.select", json!({"id": mid}));
+            let _ = select_from_pin(app, mid);
         }
         let _ = app.run("develop.beginInteraction", json!({"label": "Edit Mask"}));
         // (read after it begins: an old mask is on the photo from then on, in its coordinates)
@@ -1021,4 +1030,14 @@ mod region_drag_tests {
         assert!((moved.x0 - 0.3).abs() < 0.02 && (moved.y0 - 0.25).abs() < 0.02, "moved by the drag: {moved:?}");
         assert!(moved.x0 >= 0.0 && moved.y0 >= 0.0 && moved.x1 <= 1.0 && moved.y1 <= 1.0, "inside the photo: {moved:?}");
     }
+}
+
+/// Selecting another mask from a canvas pin keeps the overlay state the user chose; only mask
+/// cards (which go through `run` directly) hide it.
+fn select_from_pin(app: &mut LightcraftApp, id: u32) -> Result<serde_json::Value, String> {
+    let (overlay, all) = (app.ui.mask_overlay, app.ui.mask_overlay_all);
+    let r = app.run("mask.select", json!({"id": id}));
+    app.ui.mask_overlay = overlay;
+    app.ui.mask_overlay_all = all;
+    r
 }

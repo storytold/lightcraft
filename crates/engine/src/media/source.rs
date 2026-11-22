@@ -1,7 +1,10 @@
 use super::{Arc, DcpProfile, Deserialize, DevelopSettings, MediaKind, Photo, Rgb32f, Rgba8, Serialize, SourceInfo};
 
 /// Bump when the pipeline's output changes, to invalidate cached thumbnails.
-pub const RENDER_CACHE_VERSION: u64 = 77;
+// Continuous retouch paths, automatic reconstruction and Glow change existing pixels. Persisted
+// thumbnails and previews must be rebuilt instead of displaying the previous algorithms.
+// (77 is taken by the camera profile spellings on main.)
+pub const RENDER_CACHE_VERSION: u64 = 78;
 
 /// Thumbnails render at one of these long edges (so window/cell size changes reuse the cache).
 pub const THUMB_SIZES: [usize; 4] = [128, 256, 384, 512];

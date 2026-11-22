@@ -60,8 +60,16 @@ pub(super) fn field(ui: &mut egui::Ui, field: crate::text_field::TextField<'_>) 
 }
 
 pub(crate) fn heading(ui: &mut egui::Ui, t: &Tokens, text: &str) {
-    ui.add_space(4.0);
-    ui.label(RichText::new(crate::i18n::tr(text)).font(t.semibold(12.5)).color(t.text));
+    ui.add_space(8.0);
+    let response = ui.label(RichText::new(crate::i18n::tr(text)).font(t.semibold(12.5)).color(t.text));
+    let start = response.rect.right() + 12.0;
+    let end = ui.max_rect().right();
+    if end > start {
+        ui.painter().line_segment(
+            [egui::pos2(start, response.rect.center().y), egui::pos2(end, response.rect.center().y)],
+            egui::Stroke::new(1.0, t.divider),
+        );
+    }
 }
 
 pub(crate) fn row<R>(ui: &mut egui::Ui, t: &Tokens, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {

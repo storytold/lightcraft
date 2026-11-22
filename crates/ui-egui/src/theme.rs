@@ -132,7 +132,7 @@ impl ThemeKind {
 impl Default for Tokens {
     fn default() -> Self {
         Tokens {
-            chrome: Color32::from_rgb(0x2d, 0x2d, 0x2d),
+            chrome: Color32::from_rgb(0x27, 0x27, 0x27),
             canvas: Color32::from_rgb(0x1c, 0x1c, 0x1c),
             grid_bg: Color32::from_rgb(0x0f, 0x0f, 0x0f),
             cell: Color32::from_rgb(0x1c, 0x1c, 0x1c),
@@ -141,12 +141,12 @@ impl Default for Tokens {
             ring_active: Color32::from_rgb(0xff, 0xff, 0xff),
             ring_inner: Color32::from_rgb(0x00, 0x00, 0x00),
             ring_selected: Color32::from_rgb(0xc0, 0xc0, 0xc0),
-            divider: Color32::from_rgb(0x1c, 0x1c, 0x1c),
+            divider: Color32::from_rgb(0x35, 0x35, 0x35),
             inset: Color32::from_rgb(0x23, 0x23, 0x23),
             field: Color32::from_rgb(0x22, 0x22, 0x22),
             field_border: Color32::from_rgb(0x3c, 0x3c, 0x3c),
             button: Color32::from_rgb(0x24, 0x24, 0x24),
-            button_border: Color32::from_rgb(0x4c, 0x4c, 0x4c),
+            button_border: Color32::from_rgb(0x40, 0x40, 0x40),
             hover: Color32::from_rgb(0x3a, 0x3a, 0x3a),
             pressed: Color32::from_rgb(0x3f, 0x3f, 0x3f),
             tool_active: Color32::from_rgb(0x3f, 0x3f, 0x3f),
@@ -164,13 +164,13 @@ impl Default for Tokens {
             reject: Color32::from_rgb(0xe0, 0x4a, 0x4a),
             caution: Color32::from_rgb(0xe3, 0xa8, 0x3c),
             mask_overlay: Color32::from_rgba_unmultiplied(0xe0, 0x20, 0x30, 110),
-            top_bar_h: 42.0,
-            bottom_bar_h: 48.0,
-            panel_w: 270.0,
+            top_bar_h: 46.0,
+            bottom_bar_h: 42.0,
+            panel_w: 320.0,
             strip_w: 48.0,
-            slider_row_h: 45.0,
-            section_h: 57.0,
-            film_h: 142.0,
+            slider_row_h: 38.0,
+            section_h: 44.0,
+            film_h: 116.0,
         }
     }
 }
@@ -457,12 +457,12 @@ pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
     let dark = kind.is_dark();
     let mut v = if dark { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = t.chrome;
-    v.window_fill = t.chrome;
+    v.window_fill = t.chrome.lerp_to_gamma(t.inset, 0.35);
     v.extreme_bg_color = t.field;
     v.faint_bg_color = t.inset;
-    v.window_stroke = Stroke::new(1.0, t.button_border);
-    v.window_corner_radius = CornerRadius::same(6);
-    v.menu_corner_radius = CornerRadius::same(6);
+    v.window_stroke = Stroke::new(1.0, t.field_border);
+    v.window_corner_radius = CornerRadius::same(12);
+    v.menu_corner_radius = CornerRadius::same(9);
     v.selection.bg_fill = t.accent.gamma_multiply(0.6);
     v.selection.stroke = Stroke::new(1.0, t.accent);
     v.override_text_color = Some(t.text_label);
@@ -472,11 +472,14 @@ pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
     let w = &mut v.widgets;
     craft_ui::theme::WidgetPalette { noninteractive: t.chrome, inactive: t.button, hovered: t.hover, active: t.pressed, open: t.hover }.apply_to(
         w,
-        CornerRadius::same(4),
+        CornerRadius::same(6),
         Stroke::new(1.0, t.text_label),
     );
     w.noninteractive.bg_stroke = Stroke::new(1.0, t.divider);
-    w.inactive.bg_stroke = Stroke::new(1.0, t.button_border);
+    w.inactive.bg_stroke = Stroke::new(1.0, t.field_border);
+    w.hovered.bg_stroke = Stroke::new(1.0, t.text_dim.gamma_multiply(0.65));
+    w.active.bg_stroke = Stroke::new(1.0, t.accent);
+    w.open.bg_stroke = Stroke::new(1.0, t.accent.gamma_multiply(0.65));
     ctx.set_visuals_of(egui::Theme::Dark, v.clone());
     ctx.set_visuals_of(egui::Theme::Light, v);
     ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
@@ -488,7 +491,7 @@ pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
         s.text_styles.insert(egui::TextStyle::Button, FontId::proportional(13.0));
         s.text_styles.insert(egui::TextStyle::Small, FontId::proportional(11.0));
         s.text_styles.insert(egui::TextStyle::Heading, FontId::new(16.0, FontFamily::Name(FONT_SEMIBOLD.into())));
-        s.animation_time = 0.08;
+        s.animation_time = 0.12;
     });
 }
 

@@ -3,8 +3,8 @@
 //! - **Clone** copies the source patch with a feathered edge.
 //! - **Heal** copies the source's *detail* and keeps the target's *tone*: result = src + blur(target − src)
 //!   (frequency separation — a fast, stable approximation of gradient-domain healing).
-//! - **Remove** is Heal with an automatically chosen source: candidate offsets on rings around the
-//!   spot are scored by how well the source's surrounding annulus matches the target's.
+//! - **Remove** rebuilds the entire painted region from uncontaminated surrounding patches.
+//!   Stored source offsets from older edits are ignored; manual source matching belongs to Heal / Clone.
 //! - **Fill** (content-aware) rebuilds the spot from patches of its surroundings instead of one
 //!   source: PatchMatch-based completion ([`lightcraft_inpaint::complete`]), coarse to fine, so the
 //!   structure is chosen at a scale set by the spot's size (the same at preview and export size).
@@ -25,6 +25,21 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     }
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+/// Distance to the continuous painted path, including its round end caps. Input events can
+/// be far apart during a fast gesture; treating them as isolated dabs leaves holes in the edit.
+fn stroke_distance(points: &[(f32, f32)], q: (f32, f32)) -> f32 {
+    let Some(&first) = points.first() else { return f32::MAX };
+    let mut distance_squared = (q.0 - first.0).powi(2) + (q.1 - first.1).powi(2);
+    for pair in points.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let length = dx * dx + dy * dy;
+        let t = if length > 0.0 { (((q.0 - a.0) * dx + (q.1 - a.1) * dy) / length).clamp(0.0, 1.0) } else { 0.0 };
+        distance_squared = distance_squared.min((q.0 - a.0 - t * dx).powi(2) + (q.1 - a.1 - t * dy).powi(2));
+    }
+    distance_squared.sqrt()
 }
 
 /// Most a spot's size counts for, in long edges: a size read from a sidecar isn't held to the slider's range, and one
@@ -221,8 +236,11 @@ pub fn window_for_reads_checked(
                 (x0, y0, x1, y1) = (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y));
             }
             // the box `apply` works in: the stroke plus a radius, plus a radius of padding
-            let t = [x0 - 2.0 * r, y0 - 2.0 * r, x1 + 2.0 * r, y1 + 2.0 * r];
+            let reconstruction = matches!(spot.mode, SpotMode::Remove | SpotMode::Fill);
+            let reach = if reconstruction { 3.0 * r } else { 2.0 * r };
+            let t = [x0 - reach, y0 - reach, x1 + reach, y1 + reach];
             let s = match spot.source_offset {
+                _ if reconstruction => t,
                 Some(o) => {
                     let b = to_out.apply(o);
                     let (dx, dy) = (b.x - origin.x, b.y - origin.y);
@@ -307,10 +325,10 @@ pub struct SpotLayout {
     /// Alpha at distance d from the stroke: `(1 − smoothstep(inner, r, d)) · opacity`.
     pub inner: f32,
     pub opacity: f32,
-    /// Heal / Remove (tone from the surroundings) rather than Clone or Fill.
+    /// Heal (tone from the surroundings) rather than Clone or reconstruction.
     pub heal: bool,
-    /// Content-aware Fill: the stroke is rebuilt from the box around it (CPU only; the GPU
-    /// renderer leaves photos with a Fill spot to the CPU).
+    /// Remove / Fill: the stroke is reconstructed from its surroundings. The device pipeline
+    /// shares the CPU reconstruction for Remove.
     pub fill: bool,
 }
 
@@ -319,24 +337,32 @@ pub struct SpotLayout {
 pub fn layout(spot: &Spot, frame: &Frame, w: usize, h: usize, ppl: f64) -> Option<SpotLayout> {
     let to_out = frame.norm_to_out(w, h);
     let r = radius_px(spot.size, ppl) as f32;
-    let pts: Vec<(f32, f32)> = spot
+    // Huge finite values can overflow squared-distance arithmetic on either renderer.
+    // This bound is far beyond drawable images and off-image crop coordinates.
+    const MAX_RENDER_COORD: f32 = 1e12;
+    let valid = |x: f32, y: f32| x.is_finite() && y.is_finite() && x.abs() <= MAX_RENDER_COORD && y.abs() <= MAX_RENDER_COORD;
+    let mut pts: Vec<(f32, f32)> = spot
         .points
         .iter()
         .map(|p| {
             let q = to_out.apply(*p);
             (q.x as f32, q.y as f32)
         })
+        .filter(|&(x, y)| valid(x, y))
         .collect();
+    pts.dedup();
     pts.first()?;
-    let fill = spot.mode == SpotMode::Fill;
+    let fill = matches!(spot.mode, SpotMode::Remove | SpotMode::Fill);
     let offset = if fill {
         Some((0.0, 0.0))
     } else {
-        spot.source_offset.map(|o| {
-            let a = to_out.apply(Point::new(0.0, 0.0));
-            let b = to_out.apply(o);
-            ((b.x - a.x) as f32, (b.y - a.y) as f32)
-        })
+        spot.source_offset
+            .map(|o| {
+                let a = to_out.apply(Point::new(0.0, 0.0));
+                let b = to_out.apply(o);
+                ((b.x - a.x) as f32, (b.y - a.y) as f32)
+            })
+            .filter(|&(x, y)| valid(x, y))
     };
     // Bounding box of the stroke.
     let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
@@ -364,7 +390,7 @@ pub fn layout(spot: &Spot, frame: &Frame, w: usize, h: usize, ppl: f64) -> Optio
         bh: by1 - by0,
         inner: r * (1.0 - feather * 0.8),
         opacity: (spot.opacity / 100.0).clamp(0.0, 1.0) as f32,
-        heal: matches!(spot.mode, SpotMode::Remove | SpotMode::Heal),
+        heal: spot.mode == SpotMode::Heal,
         fill,
     })
 }
@@ -390,6 +416,9 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
         let Some(SpotLayout { r, pts, offset, bx: bx0, by: by0, bw, bh, inner, opacity, heal, fill }) = layout(spot, frame, w, h, ppl) else {
             continue;
         };
+        if opacity <= 0.0 {
+            continue;
+        }
         let Some(&first) = pts.first() else { continue };
         let offset = offset.unwrap_or_else(|| auto_source(img, first, r));
         // alpha of the stroke and source patch in the box
@@ -399,7 +428,7 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
         for y in 0..bh {
             for x in 0..bw {
                 let (px, py) = ((bx0 + x) as f32 + 0.5, (by0 + y) as f32 + 0.5);
-                let d = pts.iter().map(|p| ((px - p.0).powi(2) + (py - p.1).powi(2)).sqrt()).fold(f32::MAX, f32::min);
+                let d = stroke_distance(&pts, (px, py));
                 alpha[y * bw + x] = (1.0 - smooth(inner, r, d)) * opacity;
                 src[y * bw + x] = img.sample_bilinear(px + offset.0, py + offset.1);
                 tgt[y * bw + x] = img.get(bx0 + x, by0 + y);
@@ -411,7 +440,9 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
         let low = if heal {
             // Tone correction from the spot's *surroundings* only: normalized convolution of
             // (target − source) over pixels outside the stroke (a membrane-like interpolation).
-            let outside: Vec<f32> = alpha.iter().map(|a| if *a < 0.02 { 1.0 } else { 0.0 }).collect();
+            // Opacity mixes the finished correction; it must not change which pixels
+            // provide the surrounding tone, especially below two percent opacity.
+            let outside: Vec<f32> = alpha.iter().map(|a| if *a < opacity * 0.02 { 1.0 } else { 0.0 }).collect();
             let diff = Rgb32f {
                 width: bw,
                 height: bh,
@@ -503,6 +534,103 @@ mod tests {
             assert_eq!(img.get(x + radius as usize, y), original.get(x + radius as usize, y), "radius stays unchanged at {w}px");
             assert!(img.data.iter().flatten().all(|v| v.is_finite()));
         }
+    }
+
+    #[test]
+    fn heal_opacity_only_mixes_the_finished_correction() {
+        let mut original = Rgb32f::from_fn(120, 80, |x, _| [0.3 + x as f32 * 0.001; 3]);
+        for y in 36..44 {
+            for x in 56..64 {
+                original.set(x, y, [0.0; 3]);
+            }
+        }
+        let frame = Frame::new(120, 80, &DevelopSettings::default(), true);
+        let spot = Spot {
+            mode: SpotMode::Heal,
+            points: vec![Point::new(0.5, 0.5)],
+            size: 0.07,
+            source_offset: Some(Point::new(0.25, 0.0)),
+            ..Default::default()
+        };
+        let mut full = original.clone();
+        apply(&mut full, std::slice::from_ref(&spot), &frame, frame.px_per_long(120));
+        assert!(full.get(60, 40)[0] > 0.25);
+        for opacity in [1.0, 10.0, 50.0] {
+            let mut partial = original.clone();
+            apply(&mut partial, &[Spot { opacity, ..spot.clone() }], &frame, frame.px_per_long(120));
+            for ((before, corrected), actual) in original.data.iter().zip(&full.data).zip(&partial.data) {
+                for channel in 0..3 {
+                    let expected = before[channel] + (corrected[channel] - before[channel]) * opacity as f32 / 100.0;
+                    assert!((expected - actual[channel]).abs() < 2e-6, "opacity {opacity}: {expected} vs {}", actual[channel]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sparse_painted_paths_have_no_gaps_and_duplicate_events_are_harmless() {
+        let (w, h) = (160, 100);
+        let original = Rgb32f::from_fn(w, h, |_, y| if y < 40 { [0.8; 3] } else { [0.2; 3] });
+        let frame = Frame::new(w, h, &DevelopSettings::default(), true);
+        let sparse = Spot {
+            mode: SpotMode::Clone,
+            points: vec![Point::new(0.2, 0.65), Point::new(0.8, 0.65)],
+            size: 0.025,
+            feather: 0.0,
+            source_offset: Some(Point::new(0.0, -0.4)),
+            ..Default::default()
+        };
+        let mut result = original.clone();
+        apply(&mut result, std::slice::from_ref(&sparse), &frame, frame.px_per_long(w));
+        for x in 32..128 {
+            assert!(result.get(x, 65)[0] > 0.75, "unpainted gap at x={x}");
+        }
+        assert_eq!(result.get(80, 80), original.get(80, 80));
+        let mut duplicated = sparse.clone();
+        duplicated.points.insert(1, sparse.points[0]);
+        let mut again = original;
+        apply(&mut again, &[duplicated], &frame, frame.px_per_long(w));
+        assert_eq!(result.data, again.data);
+    }
+
+    #[test]
+    fn invalid_stroke_coordinates_do_not_reach_either_renderer() {
+        let frame = Frame::new(100, 100, &DevelopSettings::default(), true);
+        let spot = Spot {
+            mode: SpotMode::Clone,
+            points: vec![Point::new(f64::NAN, 0.0), Point::new(0.4, 0.5), Point::new(1e300, 0.5), Point::new(1e30, 0.5)],
+            source_offset: Some(Point::new(1e30, -1e30)),
+            ..Default::default()
+        };
+        let layout = layout(&spot, &frame, 100, 100, 100.0).unwrap();
+        assert_eq!(layout.pts.len(), 1);
+        assert!(layout.offset.is_none());
+        let mut image = Rgb32f::from_fn(100, 100, |x, y| [x as f32 / 100.0, y as f32 / 100.0, 0.3]);
+        apply(&mut image, &[spot], &frame, 100.0);
+        assert!(image.data.iter().flatten().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn remove_reconstructs_a_stroke_instead_of_copying_its_contaminated_source() {
+        let (w, h) = (160, 120);
+        let clean = Rgb32f::from_fn(w, h, |x, y| [0.2 + x as f32 * 0.001, 0.3 + y as f32 * 0.001, 0.4]);
+        let mut damaged = clean.clone();
+        for y in 44..85 {
+            for x in 77..83 {
+                damaged.set(x, y, [0.0; 3]);
+            }
+        }
+        let points = (0..=10).map(|i| Point::new(0.5, (44.0 + i as f64 * 4.0) / h as f64)).collect();
+        let spot = Spot { points, size: 0.06, feather: 50.0, source_offset: Some(Point::new(0.0, 0.08)), ..Default::default() };
+        let frame = Frame::new(w, h, &DevelopSettings::default(), true);
+        let mut removed = damaged.clone();
+        apply(&mut removed, std::slice::from_ref(&spot), &frame, frame.px_per_long(w));
+        let mut expected = damaged.clone();
+        apply(&mut expected, &[Spot { mode: SpotMode::Fill, ..spot }], &frame, frame.px_per_long(w));
+        assert_eq!(removed.data, expected.data, "Remove must reconstruct, including old edits with stored source offsets");
+        let error = (50..80).map(|y| (removed.get(80, y)[0] - clean.get(80, y)[0]).abs()).sum::<f32>() / 30.0;
+        assert!(error < 0.025, "dark remnants in the reconstructed stroke: {error}");
+        assert_eq!(removed.get(10, 10), damaged.get(10, 10), "unpainted pixels stay unchanged");
     }
 
     #[test]
@@ -616,7 +744,7 @@ mod tests {
     }
 
     fn spot_at(x: f64, y: f64, size: f64, offset: Option<Point>) -> Spot {
-        Spot { points: vec![Point::new(x, y)], size, source_offset: offset, ..Default::default() }
+        Spot { mode: SpotMode::Heal, points: vec![Point::new(x, y)], size, source_offset: offset, ..Default::default() }
     }
 
     #[test]

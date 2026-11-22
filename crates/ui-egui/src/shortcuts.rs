@@ -780,7 +780,15 @@ fn context_key_skipped(app: &mut LightcraftApp, f: &str, rotate_fires: bool) -> 
         "crop.lockAspect" => right != R::Crop,
         // / refreshes the selected spot's source in the Remove tool (the filmstrip elsewhere)
         "view.filmstrip" if right == R::Remove && app.session.active_spot.is_some() => {
-            let _ = app.run("spot.refreshSource", json!({}));
+            let manual = app.session.active().and_then(|id| app.session.develop_of(id)).is_some_and(|d| {
+                app.session
+                    .active_spot
+                    .and_then(|index| d.spots.get(index))
+                    .is_some_and(|spot| matches!(spot.mode, lightcraft_develop::SpotMode::Heal | lightcraft_develop::SpotMode::Clone))
+            });
+            if manual {
+                let _ = app.run("spot.refreshSource", json!({}));
+            }
             true
         }
         // Shift+O cycles the mask overlay colour while masking (the crop overlay elsewhere)

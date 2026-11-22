@@ -594,9 +594,47 @@ impl Calibration {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Effects {
+    #[serde(skip_serializing_if = "Glow::is_default")]
+    pub glow: Glow,
     pub texture: f64,
     pub clarity: f64,
     pub dehaze: f64,
+}
+
+/// Independent light-scattering styles; no generative model is used.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GlowStyle {
+    #[default]
+    Bloom,
+    Diffusion,
+    Halation,
+    Motion,
+    Streak,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Glow {
+    pub style: GlowStyle,
+    pub amount: f64,
+    pub range: f64,
+    pub spread: f64,
+    pub warmth: f64,
+    pub direction: f64,
+    pub softness: f64,
+}
+
+impl Glow {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+impl Default for Glow {
+    fn default() -> Self {
+        Self { style: GlowStyle::Bloom, amount: 0.0, range: 50.0, spread: 50.0, warmth: 0.0, direction: 0.0, softness: 50.0 }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

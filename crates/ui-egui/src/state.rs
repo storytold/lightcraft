@@ -103,6 +103,10 @@ pub struct UiState {
     /// Masking: show every visible mask's region as one overlay at once (Ctrl+Shift+O / Cmd+Shift+O),
     /// instead of just the selected mask's ([`mask_overlay`]).
     pub mask_overlay_all: bool,
+    /// A mask command requests its workspace on the next panel pass; never persisted.
+    #[serde(skip)]
+    /// A pending switch to Selection (`true`) after creating a mask, with the photo it was made on.
+    pub mask_workspace_request: Option<(Option<lightcraft_catalog::PhotoId>, bool)>,
     /// The overlay (on, mode) to go back to when Show Luminance Map is turned off.
     #[serde(skip)]
     pub luminance_map_restore: Option<(bool, String)>,
@@ -432,6 +436,7 @@ impl Default for UiState {
             mask_pins: true,
             tool_overlay: ToolOverlay::Auto,
             mask_overlay_all: false,
+            mask_workspace_request: None,
             crop_overlay: CropOverlay::Thirds,
             crop_default_aspect: None,
             crop_overlay_orient: 0,
@@ -508,7 +513,7 @@ impl Default for UiState {
             keyword_painter_text: String::new(),
             keywording_view: KeywordingView::default(),
             keyword_chips_all: None,
-            folded_sections: Vec::new(),
+            folded_sections: vec!["maskLensBlur".into()],
             keyword_list_open: Vec::new(),
             keyword_list_selected: None,
             dragging_keyword: None,

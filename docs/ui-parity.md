@@ -202,3 +202,48 @@ establish OS keyboard delivery or cross-platform acceptance.
 | 2026-10-11 | minor | Alt/Option-drag slider previews (clipping, sharpening) and the Linux window-manager note |
 | 2026-10-11 | minor | Zoom row: Compare and Reference get zoom windows; what remains of LR-VIEW-ZOOM is overlays and soft proofing |
 | 2026-10-10 | major | Created: measured command and shortcut counts, assessment by area, estimates; moved the shortcut conflicts section here from the checklist |
+
+## Workspace layout refresh
+
+The workflow bar below the search/title bar exposes Library and Develop, photo context, Import and Export.
+The default editing panel is 320 points wide; saved custom panel widths are retained. Slider rows are
+38 points, accordion headers 44 points, and the filmstrip 116 points. The 5-point slider rings preserve
+the existing keyboard, exact-value entry and reset interactions.
+
+Effects keeps the Amount controls of Vignette, Grain and Glow visible. Their advanced controls open
+from named disclosure headers, with the open state persisted in `openFlyouts`. Hiding advanced controls
+does not change any photo setting. The View menu groups panels, zoom, comparisons, overlays, filters,
+screen modes and slideshow actions while retaining command identities, enabled states and shortcuts.
+Community links remain in Help.
+
+Masking uses compact mask cards and a creation popover after the first mask. Adjustments and
+Selection are separate tabs: the former keeps local effects together and hides the rendered
+overlay, pins and handles on entry; the latter contains components, range controls, brush settings
+and edge refinement. O and Show overlay remain independent switches. Creating a mask or component
+opens Selection; changing tabs does not change photo settings. The Range row expands its colour
+and luminance choices inside the creation menu. Lens Blur starts folded and keeps its controls.
+
+This is an original layout inspired by Adobe's public workspace documentation, not copied assets:
+[Lightroom workspace](https://helpx.adobe.com/lightroom/desktop/introduction/customize-lightroom-workspace.html),
+[Lightroom Classic workspace](https://helpx.adobe.com/lightroom-classic/desktop/workspace/workspace-basics.html).
+
+Regression coverage: `crates/ui-egui/src/tests/workspace_design.rs` and the workspace-design test
+in `crates/ui-egui/src/menus/menubar/tests.rs`. Visual checks use procedural demo photos at desktop
+window sizes; full Lightroom visual parity is not claimed.
+
+## Retouch quality and workflow follow-up
+
+Remove reconstructs its painted region; Heal and Clone retain editable source pins. Sparse input
+points form a continuous path on CPU and GPU. Consecutive reconstructions share one device readback
+and upload while retaining edit order; zero-opacity corrections skip rendering work. Source picking
+is limited to Heal / Clone, including when an automatic correction changes to a manual mode.
+
+The Remove panel offers dust and blemish detection under More options. Missing face-detector
+weights open Settings > Faces without downloading anything or changing the photo. Clear All
+(`spot.clear`) is one undo step and leaves an empty history unchanged. Pin-display menus work
+both as panel dropdowns and nested inside the masking-overlay popover.
+
+Fast pointer gestures retain their press position and show a continuous, round-ended preview
+before committing one correction on release. Idle frames do not add duplicate path points.
+Heal opacity mixes the same reconstructed tone at every strength. Render cache version 77
+invalidates previews made with the previous retouch algorithm.

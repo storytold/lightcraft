@@ -362,7 +362,7 @@ impl PanelWidth {
 pub const LEFT_WIDTH: PanelWidth = PanelWidth { min: 200.0, default: 268.0, max: 480.0 };
 
 /// The right panel (Edit, Masking, Info, …).
-pub const RIGHT_WIDTH: PanelWidth = PanelWidth { min: 250.0, default: 270.0, max: 520.0 };
+pub const RIGHT_WIDTH: PanelWidth = PanelWidth { min: 250.0, default: 320.0, max: 520.0 };
 
 /// The photo area the side panels always leave free (as far as their minimum widths allow).
 pub const MIN_PHOTO_WIDTH: f32 = 360.0;

@@ -34,7 +34,7 @@ pub(crate) use histogram::histogram;
 use histogram::soft_proofing;
 use lens_blur::lens_blur;
 use mixer::{mixer, point_color};
-use sliders::{REL_TEMP, REL_TINT, hdr_row, header_buttons, k_to_rel, profile_menu, quick_develop, rel_to_k, reset_tip, section};
+use sliders::{REL_TEMP, REL_TINT, effect_group, hdr_row, header_buttons, k_to_rel, profile_menu, quick_develop, rel_to_k, reset_tip, section};
 pub use sliders::{apply_slider_out, sub_title};
 pub(crate) use sliders::{control, reload_preview_only};
 
@@ -262,8 +262,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         for c in ["effects.texture", "effects.clarity", "effects.dehaze"] {
             control(app, ui, d, c, true);
         }
-        sub_title(ui, crate::i18n::tr("Vignette"));
-        {
+        let vignette_open = effect_group(app, ui, "vignette", "Vignette");
+        control(app, ui, d, "vignette.amount", true);
+        if vignette_open {
             use lightcraft_develop::VignetteStyle as V;
             let styles = [
                 (V::HighlightPriority, "Highlight", "highlightPriority"),
@@ -283,13 +284,48 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 );
             }
         }
-        for c in ["vignette.amount", "vignette.midpoint", "vignette.feather", "vignette.roundness", "vignette.highlights"] {
-            let enabled = c == "vignette.amount" || d.vignette.amount != 0.0;
-            control(app, ui, d, c, enabled);
+        if vignette_open {
+            for c in ["vignette.midpoint", "vignette.feather", "vignette.roundness", "vignette.highlights"] {
+                let enabled = c == "vignette.amount" || d.vignette.amount != 0.0;
+                control(app, ui, d, c, enabled);
+            }
         }
-        sub_title(ui, crate::i18n::tr("Grain"));
-        for c in ["grain.amount", "grain.size", "grain.roughness"] {
-            control(app, ui, d, c, c == "grain.amount" || d.grain.amount != 0.0);
+        let grain_open = effect_group(app, ui, "grain", "Grain");
+        control(app, ui, d, "grain.amount", true);
+        if grain_open {
+            for c in ["grain.size", "grain.roughness"] {
+                control(app, ui, d, c, d.grain.amount != 0.0);
+            }
+        }
+        let glow_open = effect_group(app, ui, "glow", "Glow");
+        control(app, ui, d, "effects.glow.amount", true);
+        if glow_open {
+            ui.add_enabled_ui(d.effects.glow.amount > 0.0, |ui| {
+                use lightcraft_develop::GlowStyle as G;
+                let styles =
+                    [(G::Bloom, "Bloom"), (G::Diffusion, "Diffusion"), (G::Halation, "Halation"), (G::Motion, "Motion"), (G::Streak, "Streak")];
+                let mut style = d.effects.glow.style;
+                let combo = crate::widgets::combo_box("glowStyle")
+                    .selected_text(crate::i18n::tr(styles.iter().find(|(s, _)| *s == style).map_or("Bloom", |(_, l)| *l)))
+                    .show_ui(ui, |ui| {
+                        for (value, label) in styles {
+                            ui.selectable_value(&mut style, value, crate::i18n::tr(label));
+                        }
+                    });
+                crate::widgets::name_combo(&combo.response, crate::i18n::tr("Glow"));
+                crate::widgets::register(ui, "dropdown:glowStyle", combo.response.rect);
+                if style != d.effects.glow.style {
+                    let _ = app.run("develop.merge", serde_json::json!({"settings": {"effects": {"glow": {"style": style}}}}));
+                }
+                for c in ["effects.glow.range", "effects.glow.spread", "effects.glow.warmth"] {
+                    control(app, ui, d, c, true);
+                }
+                if matches!(style, G::Motion | G::Streak) {
+                    for c in ["effects.glow.direction", "effects.glow.softness"] {
+                        control(app, ui, d, c, true);
+                    }
+                }
+            });
         }
         ui.add_space(8.0);
     });
