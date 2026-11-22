@@ -398,6 +398,16 @@ pub(crate) mod test_gate {
 /// One photo's work in a build: its id and its render jobs ([`jobs_for`]).
 type PhotoJobs = (u64, Vec<RenderJob>);
 
+/// The photo's original is an online-only placeholder of a cloud folder ([`crate::cloud_files`]):
+/// the background preparation leaves it alone, since reading it downloads it. It is rendered when
+/// it is shown, or by a build asked for.
+fn online_only(jobs: &[RenderJob]) -> bool {
+    jobs.first().is_some_and(|j| match &j.origin {
+        lightcraft_catalog::Source::File { path } => crate::cloud_files::path_is_placeholder(std::path::Path::new(path)),
+        _ => false,
+    })
+}
+
 /// Build every photo of `jobs` on `lanes` threads. `force`: render even the photos whose previews
 /// are there. `task`: the build's own row (`None`: another job's row shows it, e.g. the import's
 /// Getting photos ready).
@@ -423,7 +433,7 @@ fn run_all(jobs: Vec<PhotoJobs>, state: &PreviewBuild, task: Option<&TaskGuard>,
             if state.cancel.load(Ordering::Relaxed) {
                 break;
             }
-            if !force && already_built(&photo_jobs) {
+            if (!force && already_built(&photo_jobs)) || (state.background && online_only(&photo_jobs)) {
                 state.skipped.fetch_add(1, Ordering::Relaxed);
             } else if let Some((held, shared)) = Building::wait(id, &photo_jobs, &state.cancel) {
                 // another build was rendering this photo: what it made counts, if it made it (not
