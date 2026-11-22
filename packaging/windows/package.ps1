@@ -7,6 +7,9 @@
     <binary>-<version>-windows-<arch>.msi            per-machine installer (WiX v5)
     <binary>-<version>-windows-<arch>-portable.zip   <binary>.exe + <cli_binary>.exe
 
+  <cli_binary>.exe is a small console launcher (apps/cli-launcher) that runs <binary>.exe as the
+  command-line tool (`--cli`), so the engine is in the package once.
+
   The binaries link the C runtime statically (+crt-static), so neither the MSI nor the portable
   zip needs the Visual C++ redistributable. Signing is delegated to sign.ps1 (skipped with a
   warning when no signing secrets are set).
@@ -94,22 +97,22 @@ if (-not $SkipBuild) {
   [Environment]::SetEnvironmentVariable($flagVar, '-C target-feature=+crt-static')
   # Fail the build (rather than warn) if the icon/VERSIONINFO can't be embedded.
   [Environment]::SetEnvironmentVariable("$($Brand.env_prefix)_REQUIRE_WINRES", '1')
-  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p lcc-app -p lcc-cli --features lcc-app/heif,lcc-cli/heif --target $Target }
+  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p lcc-app -p lcc-cli-launcher --features lcc-app/heif --target $Target }
 }
 
 $Bin = Join-Path $TargetDir "$Target\release"
 
 # Check both binaries' PE headers before packaging. Machine (COFF header) must match -Arch, so an
 # x64 build can never ship labelled arm64. Subsystem (optional header): 2 = Windows GUI, 3 = console.
-# The app must be GUI (no console window opens with it); the CLI must stay console so its output
-# reaches the terminal.
+# The app must be GUI (no console window opens with it); the CLI's launcher must be console so the
+# terminal waits for it and the app it starts writes to that terminal.
 function Get-PeHeader([string] $Path) {
   $bytes = [System.IO.File]::ReadAllBytes($Path)
   $pe = [BitConverter]::ToInt32($bytes, 0x3C)
   return @{ Machine = [BitConverter]::ToUInt16($bytes, $pe + 4); Subsystem = [BitConverter]::ToUInt16($bytes, $pe + 0x5C) }
 }
 $Machine = switch ($Arch) { 'x64' { 0x8664 } 'x86' { 0x14C } 'arm64' { 0xAA64 } }
-foreach ($check in @(@('app.exe', 2), @('app-cli.exe', 3))) {
+foreach ($check in @(@('app.exe', 2), @('cli-launcher.exe', 3))) {
   $h = Get-PeHeader (Join-Path $Bin $check[0])
   if ($h.Machine -ne $Machine) { throw "$($check[0]) is for machine 0x$('{0:X}' -f $h.Machine), expected 0x$('{0:X}' -f $Machine) ($Arch)" }
   if ($h.Subsystem -ne $check[1]) { throw "$($check[0]) has PE subsystem $($h.Subsystem), expected $($check[1])" }
@@ -118,9 +121,9 @@ foreach ($check in @(@('app.exe', 2), @('app-cli.exe', 3))) {
 $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
-# The cargo binaries have neutral names (app, app-cli); the package carries the brand's.
+# The cargo binaries have neutral names (app, cli-launcher); the package carries the brand's.
 Copy-Item (Join-Path $Bin 'app.exe') (Join-Path $Stage $AppExe)
-Copy-Item (Join-Path $Bin 'app-cli.exe') (Join-Path $Stage $CliExe)
+Copy-Item (Join-Path $Bin 'cli-launcher.exe') (Join-Path $Stage $CliExe)
 # Include the embedded fonts' unmodified OFL texts in both installer and portable releases.
 . (Join-Path $PSScriptRoot 'font-licences.ps1')
 Write-FontLicences (Join-Path $Stage 'FONT-LICENCES.txt') (Join-Path $Root 'assets\fonts\OFL-Inter.txt') $env:CRAFT_FONTS_DIR

@@ -60,9 +60,10 @@ modules:
         CARGO_HOME: /run/build/{{binary}}/cargo
         CARGO_NET_OFFLINE: 'true'
     build-commands:
-      - cargo --offline build --release --locked -p lcc-app -p lcc-cli
+      - cargo --offline build --release --locked -p lcc-app
       - install -Dm755 target/release/app /app/bin/{{binary}}
-      - install -Dm755 target/release/app-cli /app/bin/{{cli_binary}}
+      # the CLI is the app's executable started under its name (docs/packaging.md)
+      - ln -s {{binary}} /app/bin/{{cli_binary}}
       - install -Dm644 rendered/{{app_id}}.desktop /app/share/applications/{{app_id}}.desktop
       - install -Dm644 rendered/{{app_id}}.mime.xml /app/share/mime/packages/{{app_id}}.xml
       - install -Dm644 rendered/{{app_id}}.metainfo.xml /app/share/metainfo/{{app_id}}.metainfo.xml

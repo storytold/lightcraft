@@ -2,8 +2,9 @@
 # Build, sign and (optionally) notarize the macOS release artifacts:
 #
 #   $DIST/<binary>-<version>-macos-<arch>.dmg          <display_name>.app on a drag-to-Applications DMG
-# (names from brand.toml). The headless CLI is inside the app, Contents/MacOS/<cli_binary>, and the
-# craft-fonts faces are files in Contents/Resources/fonts/, one copy read by both programs.
+# (names from brand.toml). The headless CLI is inside the app, Contents/MacOS/<cli_binary>: a link to
+# the app's executable, which runs as the CLI when started under that name. The craft-fonts faces
+# are files in Contents/Resources/fonts/, read by both.
 #
 # Usage: packaging/macos/package.sh [--arch universal|arm64|x64] [--skip-build]
 #   arm64 (Apple silicon) and x64 (Intel) hold one build each; universal holds both. The names are
@@ -66,33 +67,31 @@ echo "==> $NAME $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: $NOTA
 # also with --skip-build: the bundle takes its fonts from the checkout
 prepare_fonts
 if [[ "$SKIP_BUILD" = 0 ]]; then
-  # The fonts go into the bundle as files (below), not into each binary: the app and the CLI share them.
+  # The fonts go into the bundle as files (below), not into the binary.
   export CRAFT_FONTS_EMBED=0
   args=()
   for t in "${TARGETS[@]}"; do args+=(--target "$t"); done
-  (cd "$ROOT" && cargo build --release --locked -p lcc-app -p lcc-cli --features lcc-app/heif,lcc-cli/heif "${args[@]}")
+  (cd "$ROOT" && cargo build --release --locked -p lcc-app --features lcc-app/heif "${args[@]}")
 fi
 
 rm -rf "$WORK"
 mkdir -p "$WORK/bin"
-# neutral cargo names (app, app-cli) -> brand names
-for pair in "app:$BRAND_BINARY" "app-cli:$CLI"; do
-  bin="${pair%%:*}" out="${pair#*:}"
-  inputs=()
-  for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/release/$bin"); done
-  lipo -create -output "$WORK/bin/$out" "${inputs[@]}"
-  lipo -info "$WORK/bin/$out"
-  archs="$(lipo -archs "$WORK/bin/$out" | tr ' ' '\n' | sort | xargs)"
-  if [[ "$archs" != "$LIPO_ARCHS" ]]; then
-    echo "error: $out holds '$archs', expected '$LIPO_ARCHS' for --arch $ARCH" >&2
-    exit 1
-  fi
-  # Symbols out, as Linux and FreeBSD do, before signing (docs/packaging.md → Symbols).
-  # Apple's strip by path: a Homebrew binutils strip earlier on PATH can't read every Mach-O.
-  before="$(wc -c <"$WORK/bin/$out" | tr -d ' ')"
-  /usr/bin/strip "$WORK/bin/$out"
-  echo "==> stripped $out: $before -> $(wc -c <"$WORK/bin/$out" | tr -d ' ') bytes"
-done
+# neutral cargo name (app) -> brand name
+bin=app out=$BRAND_BINARY
+inputs=()
+for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/release/$bin"); done
+lipo -create -output "$WORK/bin/$out" "${inputs[@]}"
+lipo -info "$WORK/bin/$out"
+archs="$(lipo -archs "$WORK/bin/$out" | tr ' ' '\n' | sort | xargs)"
+if [[ "$archs" != "$LIPO_ARCHS" ]]; then
+  echo "error: $out holds '$archs', expected '$LIPO_ARCHS' for --arch $ARCH" >&2
+  exit 1
+fi
+# Symbols out, as Linux and FreeBSD do, before signing (docs/packaging.md → Symbols).
+# Apple's strip by path: a Homebrew binutils strip earlier on PATH can't read every Mach-O.
+before="$(wc -c <"$WORK/bin/$out" | tr -d ' ')"
+/usr/bin/strip "$WORK/bin/$out"
+echo "==> stripped $out: $before -> $(wc -c <"$WORK/bin/$out" | tr -d ' ') bytes"
 
 # ---- signing helpers ---------------------------------------------------------------------------
 sign() {
@@ -131,8 +130,9 @@ cp "$ICNS" "$APP/Contents/Resources/$NAME.icns"
 brand_render "$HERE/Info.plist.in" "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist"
 printf 'APPL????' >"$APP/Contents/PkgInfo"
-# The CLI beside the app: signed and updated with it (the updater replaces the whole bundle).
-cp "$WORK/bin/$CLI" "$APP/Contents/MacOS/$CLI"
+# The CLI beside the app: a relative link to its executable, so covered by the bundle's signature
+# and updated with it (the updater replaces the whole bundle).
+ln -s "$NAME" "$APP/Contents/MacOS/$CLI"
 # The craft-fonts faces, once, as the checkout lays them out (fonts/manifest.txt, each file and its
 # licence at the path the manifest gives), checked against the manifest's checksums. The binaries
 # read them from here (lcc_engine::fonts::craft_fonts) and must not embed them.
@@ -191,7 +191,7 @@ check_no_embedded_fonts() {
   ' "$fonts" "$@"
 }
 copy_fonts "$CRAFT_FONTS_DIR" "$APP/Contents/Resources"
-check_no_embedded_fonts "$APP/Contents/Resources" "$APP/Contents/MacOS/$NAME" "$APP/Contents/MacOS/$CLI"
+check_no_embedded_fonts "$APP/Contents/Resources" "$APP/Contents/MacOS/$NAME"
 # Licences (and the craft-fonts font licences when built with CRAFT_FONTS_DIR) inside the bundle.
 mkdir -p "$APP/Contents/Resources/Licenses"
 copy_docs "$APP/Contents/Resources/Licenses"
@@ -201,11 +201,10 @@ copy_docs "$APP/Contents/Resources/Licenses"
 xattr -cr "$APP"
 
 # Sign inside-out: nested code first, then the bundle itself (no --deep on the final signature).
-# The nested code is the main executable and the CLI; frameworks/helpers would be signed here too.
-# The CLI has the app's entitlements: `--opt addToPhotos=true` / `app.export {addToPhotos}` send
-# Apple Events to Photos through osascript too (macOS asks about the app that started the CLI,
+# The nested code is the main executable, which is the CLI too; frameworks/helpers would be signed
+# here. The CLI needs the app's entitlements: `--opt addToPhotos=true` / `app.export {addToPhotos}`
+# send Apple Events to Photos through osascript too (macOS asks about the app that started the CLI,
 # usually the terminal).
-sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/$CLI"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/$NAME"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP"
 codesign --verify --strict --deep --verbose=2 "$APP"
