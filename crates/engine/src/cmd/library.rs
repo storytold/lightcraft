@@ -2727,11 +2727,16 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import Lightroom Catalog",
             [],
             None,
-            "{path: .lrcat, updateExisting?: false}; direct import of paths, ratings, flags, metadata, keywords, collections, virtual copies & mapped edits. Archives source settings/history first. Existing edited photos are preserved unless updateExisting=true; source catalog is read-only.",
+            "{path: .lrcat, updateExisting?: false, readOriginalsLater?: false}; direct import of paths, ratings, flags, metadata, keywords, collections, virtual copies & mapped edits. Archives source settings/history first. Existing edited photos are preserved unless updateExisting=true; source catalog is read-only. readOriginalsLater=true commits the photos from the catalog without reading their originals first (report originalsToRead); library.readOriginals reads them afterwards.",
             always,
             |s, p| {
                 let path = str_param(p, "path").ok_or_else(|| bad("library.importLightroom", "missing path"))?;
-                crate::lightroom_catalog::import(s, std::path::Path::new(path), bool_or(p, "updateExisting", false))
+                crate::lightroom_catalog::import_with(
+                    s,
+                    std::path::Path::new(path),
+                    bool_or(p, "updateExisting", false),
+                    bool_or(p, "readOriginalsLater", false),
+                )
             }
         ),
         cmd!(

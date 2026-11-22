@@ -113,6 +113,7 @@ pub mod progress;
 mod quality_scan;
 pub mod quick_bar;
 pub mod rating;
+pub mod read_originals;
 pub mod recheck;
 pub mod region;
 pub mod reload;
@@ -420,6 +421,8 @@ mod tests_quick_bar;
 mod tests_quit_unsaved;
 #[cfg(test)]
 mod tests_rating;
+#[cfg(test)]
+mod tests_read_originals;
 #[cfg(test)]
 mod tests_recheck;
 #[cfg(test)]
@@ -2480,6 +2483,7 @@ impl LccApp {
         import::tick(self, ctx);
         lightroom_import::tick(self, ctx);
         recheck::tick(self);
+        read_originals::tick(self);
         tasks::poll(self, ctx);
         self.lap(&mut lap, "logic.tasks");
         #[cfg(not(target_arch = "wasm32"))]
