@@ -584,7 +584,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     ];
                     ui.label(
                         egui::RichText::new(crate::i18n::tr(
-                            "Scores photos for technical quality — sharpness, noise, exposure and JPEG artifacts — and keeps each score on the photo so the Library can filter and sort by it.",
+                            "Scores photos for technical quality (sharpness, noise, exposure and JPEG artifacts) and keeps each score on the photo so the Library can filter and sort by it.",
                         ))
                         .color(t.text_label),
                     );

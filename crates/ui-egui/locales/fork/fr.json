@@ -2354,7 +2354,7 @@
   "Scan": "Analyser",
   "Scan photos that have a score already (rescan all)": "Analyser aussi les photos déjà notées (tout réanalyser)",
   "Scanning image quality": "Analyse de la qualité d'image",
-  "Scores photos for technical quality — sharpness, noise, exposure and JPEG artifacts — and keeps each score on the photo so the Library can filter and sort by it.": "Évalue la qualité technique des photos — netteté, bruit, exposition et artefacts JPEG — et conserve chaque note avec la photo pour que la bibliothèque puisse filtrer et trier dessus.",
+  "Scores photos for technical quality (sharpness, noise, exposure and JPEG artifacts) and keeps each score on the photo so the Library can filter and sort by it.": "Évalue la qualité technique des photos (netteté, bruit, exposition et artefacts JPEG) et conserve chaque note avec la photo pour que la bibliothèque puisse filtrer et trier dessus.",
   "Screen Edges to Keep Clear": "Bords d’écran à laisser libres",
   "Screen Mode": "Mode d’écran",
   "Scroll By Row": "Défiler par rangée",
