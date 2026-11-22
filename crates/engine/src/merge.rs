@@ -1213,7 +1213,7 @@ impl Session {
         &self,
         sources: &[(PhotoId, String)],
     ) -> std::result::Result<(Vec<(PhotoId, String)>, PixelShiftPlan), PixelShiftRefusal> {
-        use lcc_raw::pixel_shift::{HEADER_PREFIX_BYTES, detect, read_header, read_header_with};
+        use lcc_raw::pixel_shift::{HEADER_PREFIX_BYTES, detect, read_header, read_header_with, series_shot_count};
         use std::io::Read;
         let mut headers = Vec::with_capacity(sources.len());
         for (id, path) in sources {
@@ -1232,10 +1232,13 @@ impl Session {
             }?;
             headers.push(header.map_err(|why| PixelShiftRefusal::NotFrame { name: name.clone(), why })?);
         }
-        let series = detect(&headers).map_err(PixelShiftRefusal::Series)?;
-        if lcc_merge::pixelshift::pattern_for(series.count).is_none() {
-            return Err(PixelShiftRefusal::Unsupported(series.count));
+        // the series' mode first: a 4-, 8- or 32-shot series (whichever of its frames are chosen) is refused by name and
+        // never judged as a 16-shot series that happens to be incomplete or complete
+        let shots = series_shot_count(&headers).map_err(PixelShiftRefusal::Series)?;
+        if lcc_merge::pixelshift::pattern_for(shots).is_none() {
+            return Err(PixelShiftRefusal::Unsupported(shots));
         }
+        let series = detect(&headers).map_err(PixelShiftRefusal::Series)?;
         let ordered: Vec<(PhotoId, String)> = series.order.iter().map(|&i| sources[i].clone()).collect();
         let frames = series
             .order

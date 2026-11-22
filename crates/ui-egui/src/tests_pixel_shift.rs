@@ -15,8 +15,14 @@ const T: Duration = Duration::from_secs(20);
 /// The command Photo ▸ Photo Merge ▸ Delete Merge Sources runs.
 const DELETE: &str = "merge.deleteSourcesNow";
 
-/// A header-only synthetic NEF with the pixel-shift numbers of frame `index` (all values invented).
+/// A header-only synthetic NEF with the pixel-shift numbers of frame `index` of a 16-shot series (all values invented).
 fn frame_bytes(index: u8, shutter: f64) -> Vec<u8> {
+    frame_bytes_of(index, 16, shutter)
+}
+
+/// The same for a series of `shots` (4, 8, 16 or 32), as the Z 8 writes the tags: `0x0034` says 16 in every mode, the mode is
+/// byte 4 of `0x005e` and its byte 5 is the frame's slot (the number, 17 to 20 for frames 5 to 8 of 8 shots).
+fn frame_bytes_of(index: u8, shots: u16, shutter: f64) -> Vec<u8> {
     use lcc_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t, writer::rational};
     let mut note = IfdBuilder::new();
     note.set(0x0034, Value::Short(vec![16]));
@@ -24,7 +30,13 @@ fn frame_bytes(index: u8, shutter: f64) -> Vec<u8> {
     a[8] = index;
     note.set(0x0056, Value::Undefined(a));
     let mut b = vec![0u8; 28];
-    b[5] = index;
+    b[4] = match shots {
+        4 => 1,
+        8 => 2,
+        16 => 3,
+        _ => 4,
+    };
+    b[5] = if shots == 8 && index > 4 { index + 12 } else { index };
     note.set(0x005e, Value::Undefined(b));
     note.set(0x00a7, Value::Long(vec![5000 + u32::from(index)]));
     let mut maker = b"Nikon\0\x02\0\0\0".to_vec();
@@ -47,15 +59,20 @@ fn captured(index: u8) -> String {
 
 /// A library of the 16 frames of a series (`frame-01.nef` …) on disk, in the catalog and not yet selected.
 fn series(tag: &str) -> (lcc_testkit::TempDir, Headless, Vec<PhotoId>) {
+    series_of(tag, 16)
+}
+
+/// The same for a series of `shots` frames (4, 8, 16 or 32), written as the Z 8 writes them.
+fn series_of(tag: &str, shots: u8) -> (lcc_testkit::TempDir, Headless, Vec<PhotoId>) {
     let dir = lcc_testkit::TempDir::new(&format!("lc-pixelshift-{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut session = lcc_engine::Session::new().with_fs();
     let mut ids = Vec::new();
-    for i in 1..=16u8 {
+    for i in 1..=shots {
         let name = format!("frame-{i:02}.nef");
         let path = dir.join(&name).to_string_lossy().to_string();
-        std::fs::write(&path, frame_bytes(i, 0.01)).unwrap();
+        std::fs::write(&path, frame_bytes_of(i, u16::from(shots), 0.01)).unwrap();
         ids.push(add_photo(&mut session, &path, &name, "NEF", Some(captured(i))));
     }
     let app = LccApp::new(session, Services { png: None, ..Default::default() });
@@ -345,4 +362,22 @@ fn a_merged_file_imported_on_its_own_finds_its_frames_again() {
         assert_eq!((f.index, f.counter), (k as u16 + 1, 5000 + k as u32 + 1));
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A series of another pixel-shift mode is refused by name, whichever of its frames are chosen: the first 16 frames of a
+/// 32-shot series are not a 16-shot series (the Z 8 writes 16 in its old shot-count tag in every mode), and nothing starts.
+#[test]
+fn a_series_of_another_mode_is_refused_by_name_and_never_merged_as_16_shots() {
+    for (shots, selections) in [(32u8, vec![(0, 16), (16, 32), (0, 32)]), (8, vec![(0, 8), (0, 4)]), (4, vec![(0, 4)])] {
+        let (dir, mut h, ids) = series_of(&format!("mode{shots}"), shots);
+        for (from, to) in selections {
+            h.app.ui.toasts.clear();
+            select(&mut h, &ids[from..to]);
+            assert!(h.app.run("merge.pixelShiftNow", json!({})).is_err(), "{shots}-shot frames {from}..{to}");
+            assert_eq!(said(&h), format!("Pixel Shift: {shots}-shot pixel-shift series are not supported yet"), "{shots}-shot frames {from}..{to}");
+            assert!(h.app.merge.final_task.is_none() && h.app.session.activity.list().is_empty(), "nothing started");
+        }
+        assert_eq!(h.app.session.catalog.len(), usize::from(shots), "no photo added");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
