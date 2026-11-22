@@ -202,6 +202,7 @@
   "{a} on map · {b} untagged": "地图上 {a} 张 · 无位置 {b} 张",
   "{card} (screen)": "{card}（屏幕）",
   "{count} modules in the plug-ins folder weren't loaded: it holds more than it can load.": "插件文件夹中有 {count} 个模块未加载：其中的模块超出了可加载的数量。",
+  "{count} more failures.": "另有 {count} 个失败。",
   "{done} downloaded": "已下载 {done}",
   "{done} of {total} ({percent} %)": "{done} / {total}（{percent} %）",
   "{done} of {total} photos": "{done} / {total} 张照片",

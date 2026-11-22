@@ -194,6 +194,7 @@
   "{a} on map · {b} untagged": "{a} sur la carte · {b} sans lieu",
   "{card} (screen)": "{card} (écran)",
   "{count} modules in the plug-ins folder weren't loaded: it holds more than it can load.": "{count} modules du dossier des modules externes n'ont pas été chargés : il en contient plus qu'il n'est possible d'en charger.",
+  "{count} more failures.": "{count} échecs de plus.",
   "{done} downloaded": "{done} téléchargés",
   "{done} of {total} ({percent} %)": "{done} sur {total} ({percent} %)",
   "{done} of {total} photos": "{done} sur {total} photos",

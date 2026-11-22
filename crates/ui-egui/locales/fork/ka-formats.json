@@ -271,6 +271,7 @@
   "{a} on map · {b} untagged": "{a} რუკაზე · {b} მდებარეობის გარეშე",
   "{card} (screen)": "{card} (ეკრანი)",
   "{count} modules in the plug-ins folder weren't loaded: it holds more than it can load.": "დანამატების საქაღალდეში {count} მოდული არ ჩაიტვირთა: მასში იმაზე მეტია, ვიდრე ჩატვირთვა შეიძლება.",
+  "{count} more failures.": "კიდევ {count} შეცდომა.",
   "{count} more warnings.": "კიდევ {count} გაფრთხილება.",
   "{done} downloaded": "ჩამოტვირთულია {done}",
   "{done} of {total} ({percent} %)": "{done} / {total} ({percent} %)",

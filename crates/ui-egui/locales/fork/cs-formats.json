@@ -211,6 +211,7 @@
   "{a} on map · {b} untagged": "{a} na mapě · {b} bez polohy",
   "{card} (screen)": "{card} (obrazovka)",
   "{count} modules in the plug-ins folder weren't loaded: it holds more than it can load.": "Některé moduly ve složce zásuvných modulů nebyly načteny ({count}): je jich víc, než lze načíst.",
+  "{count} more failures.": "Dalších {count} selhání.",
   "{done} downloaded": "{done} staženo",
   "{done} of {total} ({percent} %)": "{done} z {total} ({percent} %)",
   "{done} of {total} photos": "{done} z {total} fotek",

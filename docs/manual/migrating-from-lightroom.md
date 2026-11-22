@@ -16,8 +16,9 @@ catalog and your originals are opened read-only and never changed. You can keep 
 ## Import
 
 File → Import Lightroom Catalog… shows what will come across (`library.inspectLightroom`: photo and collection
-counts, missing files, warnings) and then imports it in the background, with progress and Cancel. One undo step
-reverses it. From the command line:
+counts, missing files, warnings) and then imports it in the background, with progress and Cancel. When it finishes,
+the result window lists every warning and failure in a scrollable area; **Copy** puts the whole report on the clipboard.
+One undo step reverses it. From the command line:
 
 ```sh
 <cli> run --library "<library_default>" library.inspectLightroom path="Lightroom Catalog.lrcat"
