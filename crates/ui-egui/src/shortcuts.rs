@@ -9,6 +9,7 @@ use egui::{Key, Modifiers};
 use serde_json::{Value, json};
 
 use crate::LccApp;
+use crate::keyboard::Owner;
 
 /// The Classic keymap set and keymap files (fork-owned).
 #[path = "keymap_classic.rs"]
@@ -478,7 +479,7 @@ fn grid_key_command(keymap: &Keymap, grid: bool, fullscreen: bool, id: &'static 
 
 /// Content widgets keep keyboard ownership, including text fields and arrow-driven sliders.
 /// Dock chrome owns activation, traversal, resizing and cancellation; its other keys reach commands.
-fn keyboard_owned(app: &LccApp, ctx: &egui::Context) -> bool {
+pub(crate) fn keyboard_owned(app: &LccApp, ctx: &egui::Context) -> bool {
     if !ctx.egui_wants_keyboard_input() {
         // Escape drops egui focus before shortcuts run; keep the numeric edit's whole input batch.
         return ctx.input(|input| input.key_pressed(Key::Escape))
@@ -576,15 +577,17 @@ pub fn handle(app: &mut LccApp, ctx: &egui::Context) {
     if !classic::records_shortcuts(app.ui.dialog.as_ref()) {
         app.recording_shortcut = None;
     }
-    // Dialogs own their keys (including Esc and text editing); background photo actions wait.
-    if app.ui.dialog.is_some() {
+    let owner = crate::keyboard::owner(app, ctx);
+    // A modal (a dialog, Settings, the shortcuts overlay) owns its keys, Esc and text editing
+    // included, and so does the keymap editor recording a shortcut: background photo actions wait.
+    if matches!(owner, Owner::Recorder | Owner::Modal) {
         return;
     }
-    if app.recording_shortcut.is_none() && app.ui.name_edit.is_none() && crate::panels::person::handle_bulk_key(app, ctx) {
+    if app.ui.name_edit.is_none() && crate::panels::person::handle_bulk_key(app, ctx) {
         return;
     }
-    // don't steal keys from text fields or from the keymap editor recording a shortcut
-    if keyboard_owned(app, ctx) || app.recording_shortcut.is_some() || app.ui.name_edit.is_some() {
+    // don't steal keys from text fields
+    if owner == Owner::Widget {
         return;
     }
     // a paste key press the windowing layer dropped (no text on the clipboard): run it as one
