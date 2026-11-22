@@ -5,6 +5,7 @@
 //! commands: dragging a cell is `print.cell.move`, its corner handle `print.cell.resize`, with
 //! the guides' snapping done by the command. Widgets register under `print:*`, `button:print*`
 //! and `drag:print*` ids for the control channel and the headless tests.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 use lcc_catalog::PhotoId;
 use lcc_engine::export::ExportOptions;

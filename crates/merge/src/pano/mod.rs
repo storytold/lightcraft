@@ -57,6 +57,11 @@ impl Default for PanoOptions {
 /// The largest panorama, in megapixels (Lightroom's limit too); a bigger one is scaled down.
 pub const MAX_MEGAPIXELS: f64 = 512.0;
 
+/// The merge error for a canvas-sized buffer that couldn't be reserved.
+fn out_of_memory(e: lcc_raster::AllocError) -> MergeError {
+    MergeError::Output(format!("{e}; lower the panorama size or select fewer photos"))
+}
+
 /// Most frames one stitch accepts: pair matching compares every pair of frames (n(n−1)/2 runs), so an
 /// unbounded frame count is quadratic CPU as well as quadratic memory while the frames load. A panorama
 /// with more than [`MAX_FRAMES`] shots is refused with an error, not attempted.
@@ -409,8 +414,10 @@ pub fn stitch_with_output_pixel_limit(
     }
 
     // seams: label = max feather weight
-    let mut best = vec![0f32; pw * ph];
-    let mut label = vec![u16::MAX; pw * ph];
+    // canvas-sized buffers (up to 512 MP) are reserved fallibly: a canvas the machine can't hold
+    // fails the merge with an error instead of aborting the process
+    let mut best = lcc_raster::try_vec(output_pixels, 0f32, pw, ph).map_err(out_of_memory)?;
+    let mut label = lcc_raster::try_vec(output_pixels, u16::MAX, pw, ph).map_err(out_of_memory)?;
     for (i, t) in tiles.iter().enumerate() {
         let Some(t) = t else { continue };
         for ty in 0..t.h {
@@ -449,7 +456,7 @@ pub fn stitch_with_output_pixel_limit(
     };
     // what one gain and offset per frame leave at the seams (the sky's gradient, flare that grows towards the sun)
     let leveling = level::level(&tiles, &label, pw, ph, compensate);
-    let mut blender = Blender::new(pw, ph, levels);
+    let mut blender = Blender::try_new(pw, ph, levels).map_err(out_of_memory)?;
     for (i, t) in tiles.into_iter().enumerate() {
         let Some(t) = t else { continue };
         let mut vals = Buf::new(t.w, t.h, 3);
@@ -474,8 +481,8 @@ pub fn stitch_with_output_pixel_limit(
         check(progress, 0.7 + 0.2 * (i + 1) as f32 / n as f32, "Blending")?;
     }
     let out = blender.finish();
-    let mut image = Rgb32f::new(cw, ch);
-    let mut alpha = Plane::new(cw, ch);
+    let mut image = Rgb32f::try_new(cw, ch).map_err(out_of_memory)?;
+    let mut alpha = Plane::try_new(cw, ch).map_err(out_of_memory)?;
     for y in 0..ch {
         for x in 0..cw {
             let k = y * pw + x;

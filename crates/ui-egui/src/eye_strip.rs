@@ -325,10 +325,10 @@ pub fn find_quietly(app: &mut LccApp, id: PhotoId) {
 /// rejects are flagged in one undo step and its summary shown. Cheap every frame.
 pub fn reject_pump(app: &mut LccApp) {
     let Ok(v) = app.session.execute("photo.rejectEyesPump", &serde_json::json!({})) else { return };
-    if v["done"] != true {
+    if v.get("done").and_then(serde_json::Value::as_bool) != Some(true) {
         return;
     }
-    let n = |k: &str| v[k].as_u64().unwrap_or(0);
+    let n = |k: &str| v.get(k).and_then(serde_json::Value::as_u64).unwrap_or(0);
     let text = if n("rejected") == 0 {
         crate::i18n::tr("No closed or blurry eyes to reject").to_string()
     } else {

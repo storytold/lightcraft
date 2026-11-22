@@ -3,6 +3,7 @@
 //! master wheel beneath — in the Color variant (wide tonal overlap) and the Log variant (narrow
 //! ranges, `primaries.low`/`high`). The wheels drag the engine's own `primaries.*` controls, so
 //! everything else (history, presets, XMP, MCP, the GPU) sees one edit like any other.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, pos2, vec2};
 use lcc_develop::DevelopSettings;

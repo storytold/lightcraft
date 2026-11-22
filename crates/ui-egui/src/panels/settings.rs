@@ -13,6 +13,7 @@
 //!   playback) go through the `library.preferences` / `library.xmpPreferences` /
 //!   `slideshow.playback` commands into the library's `prefs.json`,
 //!   so they travel with the library.
+#![allow(clippy::indexing_slicing, reason = "not yet converted to checked indexing: tracked in docs/gaps.md (indexing lint)")]
 
 use egui::RichText;
 use serde_json::{Value, json};
