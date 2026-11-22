@@ -401,7 +401,7 @@ mod tests {
         p.version = 99;
         assert!(bad(p), "unknown version");
         // a pooled tone curve round-trips; a broken one (knots going backwards) is a damaged file
-        let toned = profile().with_tone(CameraTone::default_raw());
+        let toned = profile().with_tone(lightcraft_pipeline::tone::default_raw_camera_tone());
         let path = save(&toned, &dir).unwrap();
         assert_eq!(load(&path).unwrap(), toned);
         let mut json: serde_json::Value = serde_json::to_value(&toned).unwrap();
