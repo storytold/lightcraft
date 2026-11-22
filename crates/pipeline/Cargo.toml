@@ -10,7 +10,11 @@ workspace = true
 
 [dependencies]
 craft-cms-profile = { workspace = true }
+craft-color = { workspace = true }
+craft-color-transform = { workspace = true }
 craft-develop = { workspace = true }
+craft-develop-model = { workspace = true }
+craft-geom = { workspace = true }
 lightcraft-geom = { workspace = true }
 lightcraft-color = { workspace = true }
 lightcraft-raster = { workspace = true }
