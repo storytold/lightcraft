@@ -15,10 +15,6 @@ pub fn from_craft_xy(xy: CraftXy) -> Xy {
     Xy { x: xy.x, y: xy.y }
 }
 
-pub fn to_craft_mat3(m: Mat3) -> CraftMat3 {
-    CraftMat3(m.0)
-}
-
 pub fn from_craft_mat3(m: CraftMat3) -> Mat3 {
     Mat3(m.0)
 }
