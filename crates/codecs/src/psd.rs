@@ -485,11 +485,30 @@ mod tests {
     }
 
     #[test]
-    fn public_psd_and_psb_recover_odd_final_pad_and_truncated_resource() {
+    fn public_psd_and_psb_keep_complete_final_resource_without_pad() {
         let odd_xmp = "<x:xmpmeta/> ";
-        let mut unpadded_odd = recovery_metadata_with_xmp(odd_xmp);
-        assert_eq!(unpadded_odd.pop(), Some(0));
+        let padded_resources = recovery_metadata_with_xmp(odd_xmp);
+        let mut unpadded_resources = padded_resources.clone();
+        assert_eq!(unpadded_resources.pop(), Some(0));
 
+        for (version, compression) in [(1, 0), (2, 1)] {
+            let padded = recovery_image(version, compression, &padded_resources);
+            let unpadded = recovery_image(version, compression, &unpadded_resources);
+            let expected = crate::decode(&padded, DecodeOptions::default()).unwrap();
+            let decoded = crate::decode(&unpadded, DecodeOptions::default()).unwrap();
+
+            assert_recovery_pixels(&decoded, &expected);
+            assert_eq!(decoded.icc, expected.icc);
+            assert!(decoded.icc.is_some());
+            assert_eq!(decoded.exif, expected.exif);
+            assert_eq!(decoded.xmp.as_deref(), Some(odd_xmp));
+            assert_eq!(decoded.orientation, 6);
+            assert_eq!(crate::read_header(&unpadded).unwrap(), crate::read_header(&padded).unwrap());
+        }
+    }
+
+    #[test]
+    fn public_psd_and_psb_recover_truncated_resource() {
         let mut truncated_resource = recovery_metadata();
         // Resource id 1039 with declared length 4, truncated to 2 bytes inside the section.
         truncated_resource.extend_from_slice(b"8BIM");
@@ -502,17 +521,15 @@ mod tests {
             let control = recovery_image(version, compression, &[]);
             let expected = crate::decode(&control, DecodeOptions::default()).unwrap();
             let expected_header = crate::read_header(&control).unwrap();
+            let damaged = recovery_image(version, compression, &truncated_resource);
+            let recovered = crate::decode(&damaged, DecodeOptions::default()).unwrap();
 
-            for damaged_resources in [unpadded_odd.as_slice(), truncated_resource.as_slice()] {
-                let damaged = recovery_image(version, compression, damaged_resources);
-                let recovered = crate::decode(&damaged, DecodeOptions::default()).unwrap();
-                assert_recovery_pixels(&recovered, &expected);
-                assert!(recovered.icc.is_none());
-                assert!(recovered.exif.is_none());
-                assert!(recovered.xmp.is_none());
-                assert_eq!(recovered.orientation, 1);
-                assert_eq!(crate::read_header(&damaged).unwrap(), expected_header);
-            }
+            assert_recovery_pixels(&recovered, &expected);
+            assert!(recovered.icc.is_none());
+            assert!(recovered.exif.is_none());
+            assert!(recovered.xmp.is_none());
+            assert_eq!(recovered.orientation, 1);
+            assert_eq!(crate::read_header(&damaged).unwrap(), expected_header);
         }
     }
 
