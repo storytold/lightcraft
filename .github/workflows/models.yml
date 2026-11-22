@@ -10,6 +10,8 @@ on:
   schedule:
     - cron: "41 4 * * 0"
   workflow_dispatch:
+  push: # TEMP: first verification run of this branch; removed before merge
+    branches: [phase2/l-model-reference]
 
 concurrency:
   group: models-${{ github.ref }}
