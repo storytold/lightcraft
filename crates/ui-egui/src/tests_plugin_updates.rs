@@ -15,9 +15,12 @@ const T: Duration = Duration::from_secs(60);
 const ID: &str = "test.uiupdates";
 const FEED: &str = "https://feed.test/ui-updates.json";
 
+/// One test at a time puts its own fetcher on the process's plug-in manager.
+pub(crate) static FETCHER_TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Serves feeds and files from a map; anything else is a 404.
 #[derive(Debug, Default)]
-struct Served(std::sync::Mutex<std::collections::BTreeMap<String, Vec<u8>>>);
+pub(crate) struct Served(pub(crate) std::sync::Mutex<std::collections::BTreeMap<String, Vec<u8>>>);
 
 impl lcc_plugins::Fetch for Served {
     fn get(&self, url: &str, max: u64) -> Result<Vec<u8>, String> {
@@ -47,7 +50,7 @@ fn module(version: &str, permissions: Value) -> Vec<u8> {
 }
 
 /// `bytes` with an author signature section appended, as `plugin-stamp sign` writes it.
-fn sign(bytes: &[u8]) -> Vec<u8> {
+pub(crate) fn sign(bytes: &[u8]) -> Vec<u8> {
     use base64::Engine as _;
     use ed25519_dalek::Signer as _;
     let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
@@ -102,6 +105,7 @@ fn finish(h: &mut Headless) {
 /// Update Anyway; nothing new is granted.
 #[test]
 fn the_manager_checks_on_open_shows_the_update_and_asks_before_undeclared_groups() {
+    let _turn = FETCHER_TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     lcc_engine::cmd::plugins::use_in_memory_manager();
     let v1 = module("1.0.0", json!({"catalog": true}));
     let v2 = module("2.0.0", json!({"catalog": true, "metadataWrite": true, "crop": true}));

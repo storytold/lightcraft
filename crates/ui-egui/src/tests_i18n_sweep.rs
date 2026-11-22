@@ -68,6 +68,7 @@ fn screens() -> Vec<(String, Vec<(&'static str, serde_json::Value)>)> {
         "dialog.slideshowExport",
         "dialog.autoStack",
         "plugins.manager",
+        "plugins.marketplace",
     ] {
         out.push((dialog.to_string(), vec![("module.library", json!({})), (dialog, json!({}))]));
     }

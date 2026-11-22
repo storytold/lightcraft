@@ -1,0 +1,83 @@
+---
+title: Plug-in Marketplace
+description: Find, install and update plug-ins and pixel filters from inside the app.
+sidebar:
+  order: 8
+---
+
+import Shot from '../../../components/Shot.astro';
+import NeedsImage from '../../../components/NeedsImage.astro';
+import { Aside } from '@astrojs/starlight/components';
+
+<Shot name="plugin-marketplace" alt="The Plug-in Marketplace with an entry's page" menu="File ▸ Plug-ins ▸ Plug-in Marketplace…" />
+
+- **Open it**: **File ▸ Plug-ins ▸ Plug-in Marketplace…**.
+- **Always the newest**: the list is fetched each time the window opens, and on **Refresh**. It shows each plug-in's newest release; a new plug-in or version appears without updating Chromaforge.
+- **Search**: type in **Search plug-ins**. It looks in names, authors, descriptions and tags.
+- **Install**: select an entry, then **Install**. Installing allows nothing: a plug-in asks the first time it needs a permission ([Plug-ins](../plugins/)).
+- **Update**: an entry with a newer version says **Update** in the list. **Update** on its page installs it; **Update All** installs every one.
+- **Remove**: **Remove** asks first, and removes the plug-in with its data and settings. To keep those, use **Open in Plug-in Manager** and remove it there.
+
+## Vetted and community
+
+| Mark | Tier | Means |
+|---|---|---|
+| Filled dot with a tick | **Vetted** | A marketplace maintainer read the plug-in's source and recorded what it may ask for. |
+| Open ring | **Community** | Automatic checks only. Nobody has reviewed what it does. |
+
+- **Show community plug-ins (higher risk)**: off at first, so only vetted entries are listed. Tick it to list community entries too; a warning stays above the list while it is on.
+- What you have installed is always listed, whichever tier it is.
+- Either way a plug-in runs in the sandbox and can do only what you allow.
+
+## An entry's page
+
+Everything here is shown before anything is downloaded.
+
+- **Works on**: macOS, Windows, Linux and Android, each marked as supported or not. Where an entry isn't supported, its row says **Not for this system** and **Install** is off.
+- **May ask you for**: every permission the plug-in may request, with the hosts, folders and programs behind them. A pixel filter asks for nothing.
+- **Signed by**: the fingerprint of the author's key, or that the file isn't signed.
+- **Licence**, **Released**, **Size**, and links to its **Homepage**, **Source Code** and **Changelog**.
+
+<Shot name="plugin-marketplace-platforms" alt="An entry that is not available for this system" menu="File ▸ Plug-ins ▸ Plug-in Marketplace…" />
+
+## Automatic updates
+
+- **Update installed plug-ins automatically**: off until you tick it. **Update this one automatically** on an entry's page sets one plug-in apart.
+- With it on, Chromaforge looks for updates when it starts and once a day.
+- An update installs by itself only when it asks for nothing new (no new permission, host, folder or program) and is signed as the version you have.
+- Anything else waits: the entry's page says **Not updated automatically** and why, and **Update** installs it when you choose.
+- With it off, the marketplace is contacted only while its window is open.
+
+## Safety checks
+
+- A download is installed only when it is exactly the file the list names. Otherwise nothing is installed and the window says why.
+- **A different signer**: when an update is signed by another key than the version you have, the window names both and asks. **Install Anyway** is your yes.
+
+<NeedsImage what="The 'A different signer' question (needs a plug-in update signed by another key)" />
+
+## List your own plug-in
+
+- The list is a public repository; **Marketplace Website** in the window opens it. Add one small file that says where your plug-in is released; its `CONTRIBUTING.md` has the rules.
+- New releases are picked up within the hour, with nothing to change there.
+
+## Commands
+
+| Command | Does |
+|---|---|
+| `marketplace.list` | The list, with `query`, `community`, `installed` and `updates` filters |
+| `marketplace.refresh` | Fetches the list now |
+| `marketplace.install` | Installs an entry, or updates it |
+| `marketplace.updateAll` | Installs every update |
+| `marketplace.setCommunity` | Shows or hides community entries |
+| `marketplace.setAutoUpdate` | Turns automatic updates on or off, for all or one |
+| `plugins.marketplace` | Opens the window |
+
+```sh
+<cli> run --demo marketplace.refresh marketplace.install id=io.github.nwh212.chromagate
+```
+
+<Aside type="note" title="Modern layout">
+Open **☰ ▸ File ▸ Plug-ins ▸ Plug-in Marketplace…**.
+</Aside>
+
+- How the list is built and checked: `docs/plugins.md` ▸ Marketplace in the repository.

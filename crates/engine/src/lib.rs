@@ -2894,6 +2894,9 @@ mod tests_lightroom_folder;
 #[cfg(test)]
 mod tests_lightroom_history;
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod tests_marketplace;
+#[cfg(test)]
 mod tests_mask_effects;
 #[cfg(test)]
 mod tests_mask_geometry;

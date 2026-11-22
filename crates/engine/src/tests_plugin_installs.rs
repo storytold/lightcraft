@@ -15,7 +15,7 @@ fn filter_file(name: &str, id: &str, version: &str) -> lcc_testkit::TempFile {
     file
 }
 
-fn listed(s: &mut Session, id: &str) -> Option<Value> {
+pub(crate) fn listed(s: &mut Session, id: &str) -> Option<Value> {
     let l = s.execute("plugin.list", &json!({})).unwrap();
     l["plugins"].as_array().unwrap().iter().find(|p| p["id"] == id).cloned()
 }
@@ -109,7 +109,7 @@ fn a_plugin_and_a_filter_never_share_an_id() {
 }
 
 /// A fresh folder for one test, removed when the test ends.
-fn folder(name: &str) -> lcc_testkit::TempDir {
+pub(crate) fn folder(name: &str) -> lcc_testkit::TempDir {
     lcc_testkit::TempDir::new(&format!("lcc-engine-installs-{name}"))
 }
 
@@ -500,7 +500,7 @@ fn plugin_and_filter_about_checks_agree() {
 
 /// A plug-in whose `lcc_manifest` returns `manifest` (or traps, when `None`), stamped with `section`,
 /// written to `<name>.wasm` in a Temp folder of its own.
-fn stamped_file(name: &str, manifest: Option<&Value>, section: &Value) -> lcc_testkit::TempFile {
+pub(crate) fn stamped_file(name: &str, manifest: Option<&Value>, section: &Value) -> lcc_testkit::TempFile {
     let esc = |s: &str| s.replace('"', "\\\"");
     let (data, body) = match manifest {
         Some(m) => {
@@ -578,7 +578,7 @@ fn a_section_that_differs_from_lcc_manifest_is_refused() {
 
 /// `bytes` with an author signature section appended, signed with the key whose seed is all `seed`
 /// (as `plugin-stamp sign` writes it), and that key's fingerprint.
-fn signed(bytes: &[u8], seed: u8) -> (Vec<u8>, String) {
+pub(crate) fn signed(bytes: &[u8], seed: u8) -> (Vec<u8>, String) {
     use base64::Engine as _;
     use ed25519_dalek::Signer as _;
     let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
@@ -672,7 +672,7 @@ fn signed_files_are_inspected_and_another_signer_installs_on_the_users_yes() {
 
 /// Serves update feeds and files from a map, for `plugin.checkUpdates` and `plugin.update`.
 #[derive(Debug, Default)]
-struct Served(std::sync::Mutex<std::collections::BTreeMap<String, Vec<u8>>>);
+pub(crate) struct Served(pub(crate) std::sync::Mutex<std::collections::BTreeMap<String, Vec<u8>>>);
 
 impl lcc_plugins::Fetch for Served {
     fn get(&self, url: &str, max: u64) -> Result<Vec<u8>, String> {

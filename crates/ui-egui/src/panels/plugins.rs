@@ -2064,7 +2064,7 @@ fn update_row(ui: &mut egui::Ui, e: &Entry, offer: &Value, actions: &mut Vec<(&'
 }
 
 /// A permission group as the update row names it.
-fn group_label(group: &str) -> &'static str {
+pub(super) fn group_label(group: &str) -> &'static str {
     match group {
         "catalog" => tr("Read the catalog"),
         "metadataWrite" => tr("Write photo metadata"),

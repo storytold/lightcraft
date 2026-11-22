@@ -733,8 +733,9 @@ cargo install --locked --git <this repository's URL> --rev <the SDK's rev> plugi
    at start-up the plug-in is listed as failed with that reason. `plugin.inspectFile` reads a
    stamped file from the section without running it (Engine commands, below).
 
-Plug-in updates from a feed (not done yet) will be offered only for stamped plug-ins, which is the
-reason to add step 2 to your release build now.
+Plug-in updates from a feed ([Updates](#updates)) are offered only for stamped, signed plug-ins,
+and the [marketplace](#marketplace) shows whether a listed file is stamped and signed: add step 2
+to your release build.
 
 ## Signing your plug-in
 
@@ -792,7 +793,9 @@ users to expect the question. They install it by hand, see both fingerprints, an
 
 A plug-in can name an **update feed** in its manifest, `"updateUrl": "https://…"` (host feature
 `updates`). The app finds a newer version there and shows it in the Plug-in Manager; the user
-installs it. Nothing installs by itself.
+installs it. Nothing installs by itself from a feed. (A plug-in the
+[marketplace](#marketplace) lists is also updated from there, whether or not it has a feed, and
+can be set to update automatically.)
 
 **Which plug-ins can have update checks:** a plug-in whose manifest names a feed, whose installed
 file is stamped ([Stamping your plug-in](#stamping-your-plug-in)) and signed by its pinned key
@@ -855,6 +858,105 @@ be signed by the pinned key, and its own stamped manifest decides what it asks f
 asks for a permission group the feed didn't declare, the update stops and the user is asked
 first (a taken-over feed would hide exactly that). New permissions aren't granted, as with any
 update, and the version replaced is kept for *Go Back to Version X*.
+
+## Marketplace
+
+**File ▸ Plug-ins ▸ Plug-in Marketplace…** lists plug-ins and pixel filters to install without
+finding a file first: search, install, update, remove, and automatic updates. The list lives in a
+repository of its own (`plugins.marketplace` in `brand.toml`), which holds no plug-in code: each
+entry points at a file in its author's own release, with that file's SHA-256.
+
+**Always the newest, nothing pinned.** The app holds no list of plug-ins or versions. It fetches
+the marketplace's index (`plugins.marketplace_index` in `brand.toml`, one JSON file) every time the
+window opens and on **Refresh**; the index is rebuilt every hour from each plug-in's newest
+release. So a new plug-in, or a new version of one, shows up without a new version of the app. The
+last index fetched is kept, and shown until the next one arrives, or while the network is away.
+
+**Two tiers**, chosen with *Show community plug-ins (higher risk)*:
+
+| Tier | Who looked | Shown |
+|---|---|---|
+| **Vetted** | a marketplace maintainer read the source and recorded what the plug-in may ask for; a release that asks for more is held back until it is reviewed again | always |
+| **Community** | automatic checks only (a well-formed module of a kind the app runs, a manifest that reads, a valid signature if it has one, a public repository with a licence): nobody vouches for what it does | only with the box ticked (off by default), with a warning above the list |
+
+Each entry's page says which it is, and for a vetted one who reviewed it and when. Something
+installed is listed whatever the box says, so it can always be updated and removed. Neither tier
+changes what a plug-in may do: every one runs in the sandbox, and gets no permission the user
+didn't allow ([Permissions](#permissions)).
+
+**Platforms.** An entry names the systems it supports, and its page shows all four (macOS,
+Windows, Linux, Android) as supported or not: a plug-in that drives a program exists only where
+that program does. On a system an entry doesn't support, its row says *Not for this system* and
+**Install** is off. The web build has no plug-ins and no marketplace.
+
+**Before installing**, an entry's page shows what the index says about it, with nothing
+downloaded: description, author, version and release date, the permissions it may ask for with
+each host, folder and program behind them (a pixel filter asks for nothing: it only computes
+pixels), who signed it (the author key's fingerprint, or that nobody did), its licence, and links
+to its homepage, source and changelog, named by their host.
+
+**Install** and **Update** download the file on a worker (a row in the activity stack) and install
+it exactly as a hand install does ([Engine commands](#engine-commands)): nothing is granted, an
+update keeps what the user allowed and the version it replaces (*Go Back to Version X*). The index
+isn't signed, so the app trusts nothing in it beyond what it shows. A download is refused, with
+nothing installed, when:
+
+- its SHA-256 isn't the entry's (an author replaced a release file: the list catches up within
+  the hour);
+- it isn't the plug-in, the kind (plug-in or pixel filter) or the version the entry names;
+- it needs host features this version of the app lacks, or the entry doesn't support this system;
+- its author signature doesn't hold up, or it is older than what is installed;
+- it isn't signed by the key pinned for the installed plug-in
+  ([Signing your plug-in](#signing-your-plug-in)): the window then names both signers and asks,
+  and **Install Anyway** is the user's yes (a click the control channel made isn't one).
+
+**Update All** installs every update the list offers. **Remove** asks first and removes the
+plug-in with its data and settings; to keep those, remove it in the Plug-in Manager, which
+*Open in Plug-in Manager* opens on that plug-in's page.
+
+**Automatic updates** (*Update installed plug-ins automatically*, or *Update this one
+automatically* on an entry's page; both off by default). With it on for anything installed, the
+app fetches the index when it starts and once a day while it runs, and installs an update by
+itself **only when all of these hold**:
+
+- the file is the one the index names (its SHA-256, id, kind and version);
+- it asks for nothing the installed version didn't: no new permission, host, folder (or write
+  access to one) or program;
+- it is signed as the installed version is (the pinned key, or unsigned over unsigned).
+
+Anything else waits: the entry's page says *Not updated automatically:* and why, **Update**
+installs it on the user's click, and the automatic pass doesn't try that version again. With
+automatic updates off for everything installed, the app contacts the marketplace only while its
+window is open. An update installed automatically keeps the programs the user allowed only when
+the file is signed by the pinned key; an unsigned one drops them, as an install from a command
+does.
+
+**Listing a plug-in** is a pull request to the marketplace's repository adding one small record
+(where the plug-in is released); its `CONTRIBUTING.md` has the rules, and its tool reads each
+module in a sandbox before anything is listed. Releasing a new version needs nothing there: the
+hourly build finds it.
+
+Engine commands (they work headless too: the CLI, the control channel and MCP):
+
+| Command | |
+|---|---|
+| `marketplace.list {query?, community?, installed?, updates?}` | the last index fetched, filtered; fetches nothing. Each entry has the index's fields plus `installed` (the version here, or `null`), `update`, `supported`, `missing` (host features), `installable`, `autoUpdate` and `waiting` (`{version, why}`: an update the automatic pass left) |
+| `marketplace.refresh` | fetches the index now (https only, at most 8 MB), then as `marketplace.list` |
+| `marketplace.install {id, acceptSigner?, acceptUnsigned?}` | downloads the listed version and installs or updates to it; `{installed: true, plugin, from}`, or `{installed: false, needs: "signer", reason, signer, pinned}` until called again with the answer |
+| `marketplace.updateAll` | every update offered; `{updated: […], waiting: [{id, why}]}` |
+| `marketplace.setCommunity {on}` | lists community entries too |
+| `marketplace.setAutoUpdate {on, id?}` | automatic updates for everything installed, or for one plug-in |
+| `marketplace.autoUpdate {refresh?}` | the automatic pass, run now |
+
+Removing is `plugin.uninstall`. The window's own commands: `plugins.marketplace {open?, query?,
+id?}` (toggles the window, optionally with a search typed and an entry selected) and
+`plugins.marketplaceLink {id?, link}` (opens an entry's `homepage`, `repository` or `changelog`,
+or without `id` the marketplace's own page, in the browser). `<PREFIX>_MARKETPLACE` names another
+`https://` index for one run, to try a fork of the marketplace.
+
+The choices (community shown, automatic updates) and the last index are kept in
+`marketplace.json` in the plug-ins folder. A file that can't be read starts empty, with a line in
+the app's log.
 
 ## Engine commands
 
@@ -981,7 +1083,7 @@ toast and to `ui.inspect` → `export.last.plugins` when they finish. An export 
 (`app.export` without `background`, the CLI, MCP) runs them before it returns, as before.
 
 Plug-ins are installed per user in `<settings_dir>/plugins`, or in `<PREFIX>_PLUGINS` if that
-is set. That folder holds `<id>.wasm`, `plugins.json` (enabled state, grants, the pinned signer, whether its update check is on and the last check's result) and
+is set. That folder holds `marketplace.json` ([Marketplace](#marketplace)), `<id>.wasm`, `plugins.json` (enabled state, grants, the pinned signer, whether its update check is on and the last check's result) and
 `data/<id>.json` (the plug-in's namespace: `{"format": 2, "libraries": {<library id>: {<photo id>:
 {…}}}}`; a file written before namespaces were kept per library is claimed whole by the first
 library opened from a folder, so no value is lost), and `settings/<id>.json` (its settings and
@@ -1157,9 +1259,12 @@ filters turn it (long edge 2048, cached per photo and stack; a change of the sta
   are skipped with a message.
 - Network and filesystem permissions are fixed in the manifest: a WebDAV destination for "any
   server the user types" isn't possible; the author names the hosts.
-- No plug-in store, and updates aren't installed automatically or checked while the Plug-in
-  Manager is closed; Lightroom Lua plug-ins don't run. Signatures say who made
-  a plug-in, not whether it is safe: the permissions still decide what it may do.
+- An author's update feed is checked only while the Plug-in Manager is open, and its updates
+  are installed by the user; only the [marketplace](#marketplace) updates automatically. The
+  marketplace's index isn't signed, shows no icons or screenshots, and lists GitHub releases only.
+  Lightroom Lua plug-ins don't run. Signatures say who made a plug-in, and the marketplace's
+  vetted tier that someone read one version of it; neither says it is safe: the permissions still
+  decide what it may do.
 - Programs: a plug-in can't read a program's output while it runs, or stop it; ✕ only stops
   waiting. It adds what a program made only from the folder of the source photo, and can't make
   an album for the results. Versions are read on macOS only.

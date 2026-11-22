@@ -48,6 +48,78 @@
     ]
   },
   {
+    "name": "plugin-marketplace",
+    "layouts": [
+      "classic",
+      "compact"
+    ],
+    "steps": [
+      {
+        "method": "ui.dialog.cancel",
+        "params": {}
+      },
+      {
+        "method": "engine.execute",
+        "params": {
+          "command": "module.library"
+        }
+      },
+      {
+        "method": "engine.execute",
+        "params": {
+          "command": "plugins.manager",
+          "params": {
+            "open": false
+          }
+        }
+      },
+      {
+        "method": "engine.execute",
+        "params": {
+          "command": "marketplace.refresh"
+        }
+      },
+      {
+        "method": "engine.execute",
+        "params": {
+          "command": "marketplace.setCommunity",
+          "params": {
+            "on": true
+          }
+        }
+      },
+      {
+        "method": "engine.execute",
+        "params": {
+          "command": "plugins.marketplace",
+          "params": {
+            "open": true,
+            "id": "io.github.nwh212.chromagate"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "plugin-marketplace-platforms",
+    "layouts": [
+      "classic",
+      "compact"
+    ],
+    "steps": [
+      {
+        "method": "engine.execute",
+        "params": {
+          "command": "plugins.marketplace",
+          "params": {
+            "open": true,
+            "id": "io.github.clydecbrown.dxo-pureraw"
+          }
+        }
+      }
+    ]
+  },
+  {
     "name": "plugin-manager",
     "layouts": [
       "classic",
@@ -62,6 +134,15 @@
         "method": "engine.execute",
         "params": {
           "command": "module.library"
+        }
+      },
+      {
+        "method": "engine.execute",
+        "params": {
+          "command": "plugins.marketplace",
+          "params": {
+            "open": false
+          }
         }
       },
       {

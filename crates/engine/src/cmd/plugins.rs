@@ -179,7 +179,7 @@ impl HostApi for SessionHost<'_> {
     }
 }
 
-fn plugin_err(cmd: &str, e: lcc_plugins::Error) -> crate::EngineError {
+pub(crate) fn plugin_err(cmd: &str, e: lcc_plugins::Error) -> crate::EngineError {
     bad(cmd, e.to_string())
 }
 
@@ -346,19 +346,45 @@ fn install_as(s: &mut Session, p: &Value, by_user: bool) -> Result<Value> {
     let allow_downgrade = bool_or(p, "allowDowngrade", false);
     let signer = signer_answer(p, C)?;
     let bytes = lcc_plugins::read_module(std::path::Path::new(path), &lcc_plugins::Limits::default()).map_err(|e| plugin_err(C, e))?;
-    if lcc_filters::is_filter_module(&bytes) {
+    install_module(s, C, &bytes, grant, allow_downgrade, by_user, &signer, &|_| Ok(()))
+}
+
+/// A module loaded for installing, before anything is written: what [`install_module`]'s check
+/// looks at.
+pub(crate) enum Loaded<'a> {
+    Plugin(&'a Manager, &'a lcc_plugins::Plugin),
+    Filter(&'a lcc_filters::Filter),
+}
+
+/// Installs a module from its bytes, a plug-in or a pixel filter, as `plugin.install` does
+/// (command `cmd` in errors). `check` sees the loaded module first, under the manager's lock, and
+/// its error stops the install with nothing written (the marketplace: is this the plug-in and
+/// version its entry names?).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn install_module(
+    s: &mut Session,
+    cmd: &str,
+    bytes: &[u8],
+    grant: Option<Permissions>,
+    allow_downgrade: bool,
+    by_user: bool,
+    signer: &lcc_plugins::SignerAnswer,
+    check: &dyn Fn(Loaded<'_>) -> std::result::Result<(), String>,
+) -> Result<Value> {
+    if lcc_filters::is_filter_module(bytes) {
         // a pixel filter: no capabilities to grant, nothing for the manager
-        let f = lcc_filters::Filter::load(&bytes, lcc_filters::Limits::default()).map_err(|e| bad(C, e.to_string()))?;
+        let f = lcc_filters::Filter::load(bytes, lcc_filters::Limits::default()).map_err(|e| bad(cmd, e.to_string()))?;
         // checked and installed under the manager's lock, so a plug-in install can't take the id meanwhile
         let (f, unknown) = with_manager(|m| {
             if let Some(e) = plugin_has_id(m, f.id()) {
-                return Err(bad(C, e));
+                return Err(bad(cmd, e));
             }
             if let Some(e) = filter_downgrade(&f)
                 && !allow_downgrade
             {
-                return Err(bad(C, e.to_string()));
+                return Err(bad(cmd, e.to_string()));
             }
+            check(Loaded::Filter(&f)).map_err(|e| bad(cmd, e))?;
             let unknown = crate::filter_plugins::unknown_fields(&f);
             if !unknown.is_empty() {
                 // a filter has no log of its own
@@ -367,7 +393,7 @@ fn install_as(s: &mut Session, p: &Value, by_user: bool) -> Result<Value> {
             for d in &f.manifest().dropped {
                 log::warn!("pixel filter {}: manifest value dropped: {d}", f.id());
             }
-            Ok((crate::filter_plugins::install_loaded(f, &bytes).map_err(|e| bad(C, e))?, unknown))
+            Ok((crate::filter_plugins::install_loaded(f, bytes).map_err(|e| bad(cmd, e))?, unknown))
         })?;
         let mut info = crate::filter_plugins::info(&f);
         info["unknownFields"] = json!(unknown);
@@ -375,11 +401,12 @@ fn install_as(s: &mut Session, p: &Value, by_user: bool) -> Result<Value> {
     }
     let lib = s.plugin_library.clone();
     let r = with_library(&lib, |m| {
-        let plugin = m.load(&bytes).map_err(|e| plugin_err(C, e))?;
+        let plugin = m.load(bytes).map_err(|e| plugin_err(cmd, e))?;
         if let Some(e) = filter_has_id(plugin.id()) {
-            return Err(bad(C, e));
+            return Err(bad(cmd, e));
         }
-        m.install_loaded_as(plugin, &bytes, grant, allow_downgrade, by_user, &signer).map(|i| i.info()).map_err(|e| plugin_err(C, e))
+        check(Loaded::Plugin(m, &plugin)).map_err(|e| bad(cmd, e))?;
+        m.install_loaded_as(plugin, bytes, grant, allow_downgrade, by_user, signer).map(|i| i.info()).map_err(|e| plugin_err(cmd, e))
     })?;
     sync_fields(s);
     Ok(r)
@@ -484,7 +511,7 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// `acceptSigner: "<fingerprint>"` or `acceptUnsigned: true`: the user's yes to a file that isn't
 /// signed by the key pinned for its plug-in.
-fn signer_answer(p: &Value, cmd: &str) -> Result<lcc_plugins::SignerAnswer> {
+pub(crate) fn signer_answer(p: &Value, cmd: &str) -> Result<lcc_plugins::SignerAnswer> {
     let unsigned = bool_or(p, "acceptUnsigned", false);
     match (p.get("acceptSigner"), unsigned) {
         (None | Some(Value::Null), false) => Ok(lcc_plugins::SignerAnswer::None),

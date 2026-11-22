@@ -59,6 +59,8 @@ const EDIT_SECTIONS: &[UiCommand] = &[
 const PLUGIN_COMMANDS: &[UiCommand] = &[
     // Lightroom Classic's key for its Plug-in Manager (Ctrl+Alt+Shift+, on Windows and Linux)
     ("plugins.manager", "Plug-in Manager…", Some("Cmd+Alt+Shift+,"), "File>Plug-ins"),
+    ("plugins.marketplace", "Plug-in Marketplace…", None, "File>Plug-ins"),
+    ("plugins.marketplaceLink", "Open Marketplace Link", None, ""),
     ("plugins.install", "Install Plug-in…", None, ""),
     ("plugins.runItem", "Run Plug-in Command", None, ""),
     ("plugins.page", "Plug-in Settings", None, ""),
@@ -94,6 +96,10 @@ pub(super) fn run(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Value,
     }
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(r) = crate::panels::plugins::run(app, id, p) {
+        return Some(r);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(r) = crate::panels::marketplace::run(app, id, p) {
         return Some(r);
     }
     #[cfg(not(target_arch = "wasm32"))]

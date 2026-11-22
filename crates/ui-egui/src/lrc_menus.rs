@@ -111,6 +111,7 @@ const FILE: &[&str] = &[
     "dialog.emailPhoto",
     "---",
     "plugins.manager",
+    "plugins.marketplace",
     "@Plug-in Extras=Plug-ins",
     "---",
     "library.showQuickCollection=Show Quick Collection",

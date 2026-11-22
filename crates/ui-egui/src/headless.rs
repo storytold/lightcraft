@@ -93,6 +93,15 @@ impl Default for HeadlessView {
     }
 }
 
+/// Whether the Plug-in Marketplace is fetching its list or downloading: a snapshot taken then
+/// would show the list half arrived.
+fn marketplace_busy() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    return crate::panels::marketplace::running();
+    #[cfg(target_arch = "wasm32")]
+    false
+}
+
 impl HeadlessView {
     pub fn new() -> Self {
         let ctx = egui::Context::default();
@@ -412,6 +421,7 @@ impl Headless {
             || !self.app.tasks.is_empty()
             || !self.app.synthetic.is_empty()
             || !self.events.is_empty()
+            || marketplace_busy()
     }
 
     /// Clicks widget `id` (as `ui.widgets` names it) as the user would: input the app doesn't mark

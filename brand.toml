@@ -51,6 +51,14 @@ catalog_magic        = "PHOTO-CATALOG"      # file-format magic; neutral on purp
 [updates]
 public_keys = ["PtE/NoJCHCje8yQ9XftBT1GN6aT/5TSu6URW9Vp1aaI="]
 
+# The plug-in marketplace (File > Plug-ins > Plug-in Marketplace): its page, and the index the app
+# fetches each time the window opens. The index is built by that repository from each plug-in's
+# newest release; no versions are pinned here. Leave `marketplace_index` out for a build with no
+# marketplace. <PREFIX>_MARKETPLACE overrides the index for one run (testing a fork's index).
+[plugins]
+marketplace       = "https://github.com/emmertex/chromaforge-plugins"
+marketplace_index = "https://raw.githubusercontent.com/emmertex/chromaforge-plugins/index/index.json"
+
 # Previous identities, read on startup for migration (settings, catalogs, presets, env vars).
 [legacy]
 settings_dirs = ["NoNameYet", "LightCraft", "LightCraft Classic"]
