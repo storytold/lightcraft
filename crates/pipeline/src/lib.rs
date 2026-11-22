@@ -692,7 +692,15 @@ pub fn hdr_histogram(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: 
     };
     let deep = render(src, info, s, &hreq).deep?;
     let DeepSamples::F32(v) = &deep.samples else { return None };
-    Some(Histogram::of_hdr(v.as_chunks::<3>().0, lightcraft_develop::Hdr::MAX_EV_LIMIT as f32))
+    let shared = craft_develop::raster::Histogram::of_hdr(v.as_chunks::<3>().0, lightcraft_develop::Hdr::MAX_EV_LIMIT as f32);
+    Some(Histogram {
+        r: shared.r,
+        g: shared.g,
+        b: shared.b,
+        luma: shared.luma,
+        total: shared.total,
+        hdr: shared.hdr.map(|bins| lightcraft_raster::HdrBins { from: bins.from, stops: bins.stops }),
+    })
 }
 
 /// Render `src` with settings `s`.
