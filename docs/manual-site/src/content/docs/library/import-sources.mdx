@@ -15,7 +15,7 @@ import Shot from '../../../components/Shot.astro';
 - **Import from Device** (**File** menu): lists mounted cards and cameras that have a `DCIM` folder; opens the review and copies by default. Copies are verified; a bad copy is removed and reported.
 - **Settings ▸ Import ▸ Cameras and Cards**: open the review when a card is inserted (off by default).
 - **Import Camera Roll…** (Android): the photos in `DCIM/Camera`, through the media store.
-- **Auto Import** (**Settings ▸ Import**): a watched folder; new files are added (in place or copied) once complete, into an optional collection. Scanned every few seconds.
+- **Auto Import** (**Settings ▸ Import**): a watched folder; new files are added (in place or copied) once complete, into an optional collection. Scanned every few seconds. A file that couldn't be read when it was tried (a copy that was still arriving) is tried again once it changes. Photos in subfolders count only with **Include subfolders** on.
   - Options: include **subfolders** of the watched folder, a file **rename** template for copies, a develop **preset**, a **metadata preset** and **keywords** for arriving photos.
   - The same options are the parameters of `library.autoImport`.
 - **Android camera roll**: adding it (first-start question or **Settings ▸ Folders**) makes it a watched source; see [Android](../../platforms/android/).
