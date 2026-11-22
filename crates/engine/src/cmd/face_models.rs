@@ -35,6 +35,12 @@ pub(super) struct FaceSettings {
     /// Keep every face model on the CPU, even when the GPU would be faster.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub(super) cpu_only: bool,
+    /// Chosen hardware device for face models (`None` or `"auto"` = Automatic, `"cpu"` = CPU only, or an `AdapterKey`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) device: Option<String>,
+    /// Compute precision for GPU face models (`None` or `"auto"` = FP16 when supported & accurate else FP32, `"fp16"`, `"fp32"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) precision: Option<String>,
     /// How many of a person's best matching faces a match is based on (`None`: [`lcc_faces::matching::TOP_FACES`]).
     #[serde(deserialize_with = "lenient_count", skip_serializing_if = "Option::is_none")]
     pub(super) top_faces: Option<usize>,
@@ -68,6 +74,28 @@ impl FaceSettings {
     pub(super) fn top_faces(&self) -> usize {
         self.top_faces.unwrap_or(lcc_faces::matching::TOP_FACES).clamp(1, lcc_faces::matching::MAX_TOP_FACES)
     }
+
+    /// Normalized device selection (`"auto"`, `"cpu"`, or an `AdapterKey` string).
+    pub(super) fn effective_device(&self) -> String {
+        if let Some(d) = self.device.as_deref().map(str::trim).filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("auto")) {
+            return if d.eq_ignore_ascii_case("cpu") { "cpu".to_string() } else { d.to_string() };
+        }
+        if self.cpu_only { "cpu".to_string() } else { "auto".to_string() }
+    }
+
+    /// Whether face models are configured to run on the CPU only.
+    pub(super) fn is_cpu_only(&self) -> bool {
+        self.effective_device().eq_ignore_ascii_case("cpu")
+    }
+
+    /// Normalized GPU precision selection (`"auto"`, `"fp16"`, or `"fp32"`).
+    pub(super) fn effective_precision(&self) -> &'static str {
+        match self.precision.as_deref().map(str::trim) {
+            Some(p) if p.eq_ignore_ascii_case("fp16") => "fp16",
+            Some(p) if p.eq_ignore_ascii_case("fp32") => "fp32",
+            _ => "auto",
+        }
+    }
 }
 
 fn fail(what: &str, e: impl std::fmt::Display) -> EngineError {
@@ -98,11 +126,34 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     })
 }
 
-/// Keep the face models on the CPU (or let them use the GPU again).
-pub(super) fn set_cpu_only(dir: &Path, on: bool) -> Result<()> {
+/// Persist the face GPU device and precision preferences (`settings.json`).
+pub(super) fn set_gpu_settings(dir: &Path, device: Option<&str>, precision: Option<&str>) -> Result<FaceSettings> {
     let mut st = read_settings(dir);
-    st.cpu_only = on;
-    write_settings(dir, &st)
+    if let Some(dev) = device {
+        let trimmed = dev.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
+            st.device = None;
+            st.cpu_only = false;
+        } else if trimmed.eq_ignore_ascii_case("cpu") {
+            st.device = Some("cpu".to_string());
+            st.cpu_only = true;
+        } else {
+            st.device = Some(trimmed.to_string());
+            st.cpu_only = false;
+        }
+    }
+    if let Some(prec) = precision {
+        let trimmed = prec.trim();
+        st.precision = if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
+            None
+        } else if trimmed.eq_ignore_ascii_case("fp16") {
+            Some("fp16".to_string())
+        } else {
+            Some("fp32".to_string())
+        };
+    }
+    write_settings(dir, &st)?;
+    Ok(st)
 }
 
 /// `faces.matching`: how many of a person's best matching faces a match is based on (Settings ▸ Faces).

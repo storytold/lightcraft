@@ -91,19 +91,44 @@ fn listing_inspecting_download_refusals_and_the_cpu_only_switch_before_anything_
     assert_eq!(s.execute("faces.models.downloads", &json!({})).unwrap()["downloads"], json!([]));
     assert!(!d.join("models").join(".downloads").exists(), "a refused download touches nothing");
 
-    // the CPU-only switch is kept with the models, and bad values are refused
+    // the CPU-only switch, device, and precision are kept with the models, and bad values are refused
     let initial = s.execute("faces.gpu", &json!({})).unwrap();
     assert_eq!(initial["cpuOnly"], false);
+    assert_eq!(initial["deviceChoice"], "auto");
+    assert_eq!(initial["precisionChoice"], "auto");
+    assert!(initial["availableDevices"].as_array().unwrap().iter().any(|d| d["id"] == "auto"));
+    assert!(initial["availableDevices"].as_array().unwrap().iter().any(|d| d["id"] == "cpu"));
     assert!(!initial["detection"].is_null(), "detection state must not be null");
     assert!(!initial["recognition"].is_null(), "recognition state must not be null");
-    assert_eq!(s.execute("faces.gpu", &json!({"cpuOnly": true})).unwrap()["cpuOnly"], true);
+    let cpu_set = s.execute("faces.gpu", &json!({"cpuOnly": true})).unwrap();
+    assert_eq!(cpu_set["cpuOnly"], true);
+    assert_eq!(cpu_set["deviceChoice"], "cpu");
     // kept with the models, so a new session starts on the CPU too
     let mut again = session(&d);
     let list_gpu = again.execute("faces.models.list", &json!({})).unwrap()["gpu"].clone();
     assert_eq!(list_gpu["cpuOnly"], true);
+    assert_eq!(list_gpu["deviceChoice"], "cpu");
     assert_eq!(list_gpu["recognition"]["why"], "the CPU is chosen in Settings");
     assert!(again.execute("faces.gpu", &json!({"cpuOnly": "yes"})).is_err());
-    assert_eq!(again.execute("faces.gpu", &json!({"cpuOnly": false})).unwrap()["cpuOnly"], false);
+    for bad in [
+        json!({"device": 123}),
+        json!({"device": "potato"}),
+        json!({"device": "vulkan:10de:9999:Fake#1"}),
+        json!({"precision": "bf16"}),
+        json!({"precision": 16}),
+        json!({"cpuOnly": true, "device": "auto"}),
+        json!({"cpuOnly": false, "device": "cpu"}),
+    ] {
+        assert!(again.execute("faces.gpu", &bad).is_err(), "{bad:?}");
+    }
+    let fp32 = again.execute("faces.gpu", &json!({"device": "auto", "precision": "fp32"})).unwrap();
+    assert_eq!(fp32["cpuOnly"], false);
+    assert_eq!(fp32["deviceChoice"], "auto");
+    assert_eq!(fp32["precisionChoice"], "fp32");
+    let persisted = session(&d).execute("faces.gpu", &json!({})).unwrap();
+    assert_eq!(persisted["deviceChoice"], "auto");
+    assert_eq!(persisted["precisionChoice"], "fp32");
+    assert_eq!(again.execute("faces.gpu", &json!({"precision": "auto"})).unwrap()["precisionChoice"], "auto");
     let _ = std::fs::remove_dir_all(&d);
 }
 

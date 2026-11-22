@@ -84,6 +84,148 @@ pub struct Program<'a> {
     pub outputs: Vec<(String, usize, Vec<usize>)>,
 }
 
+impl Program<'_> {
+    /// Deterministic structural + weight-sample 64-bit fingerprint for persistent plan caching across sessions.
+    /// Intentionally ignores process-local `ConvJob::layer` and `Arg::Const::id` counters.
+    pub fn fingerprint(&self) -> u64 {
+        struct Fnv(u64);
+        impl Fnv {
+            fn u64(&mut self, v: u64) {
+                for b in v.to_le_bytes() {
+                    self.0 ^= u64::from(b);
+                    self.0 = self.0.wrapping_mul(0x100000001b3);
+                }
+            }
+            fn usize(&mut self, v: usize) {
+                self.u64(v as u64);
+            }
+            fn f32(&mut self, v: f32) {
+                self.u64(u64::from(v.to_bits()));
+            }
+            fn slice_sample(&mut self, s: &[f32]) {
+                self.usize(s.len());
+                if !s.is_empty() {
+                    for idx in [0, s.len() / 4, s.len() / 2, (s.len() * 3) / 4, s.len() - 1] {
+                        if let Some(v) = s.get(idx) {
+                            self.f32(*v);
+                        }
+                    }
+                }
+            }
+        }
+        let mut h = Fnv(0xcbf29ce484222325);
+        h.usize(self.lens.len());
+        for &l in &self.lens {
+            h.usize(l);
+        }
+        h.usize(self.steps.len());
+        for step in &self.steps {
+            h.usize(step.out);
+            h.usize(step.free.len());
+            for &f in &step.free {
+                h.usize(f);
+            }
+            match &step.op {
+                Op::Conv(j) => {
+                    h.u64(1);
+                    for v in [j.cin, j.h, j.w, j.cout, j.groups, j.kh, j.kw, j.sh, j.sw, j.pt, j.pl, j.oh, j.ow] {
+                        h.usize(v);
+                    }
+                    h.slice_sample(j.weights);
+                    match j.bias {
+                        Some(b) => {
+                            h.u64(1);
+                            h.slice_sample(b);
+                        }
+                        None => h.u64(0),
+                    }
+                }
+                Op::Unary(u) => {
+                    h.u64(2);
+                    h.u64(u64::from(*u == Unary::Sigmoid));
+                }
+                Op::ChannelAffine { channels, plane } => {
+                    h.u64(3);
+                    h.usize(*channels);
+                    h.usize(*plane);
+                }
+                Op::ChannelPrelu { channels, plane } => {
+                    h.u64(4);
+                    h.usize(*channels);
+                    h.usize(*plane);
+                }
+                Op::Binary { op, dims, a, b } => {
+                    h.u64(5);
+                    h.u64(match op {
+                        Binary::Add => 0,
+                        Binary::Sub => 1,
+                        Binary::Mul => 2,
+                    });
+                    for v in dims.iter().chain(a.iter()).chain(b.iter()) {
+                        h.usize(*v);
+                    }
+                }
+                Op::Gemv { k, n, trans_b, alpha } => {
+                    h.u64(6);
+                    h.usize(*k);
+                    h.usize(*n);
+                    h.u64(u64::from(*trans_b));
+                    h.f32(*alpha);
+                }
+                Op::GlobalAverage { channels, plane } => {
+                    h.u64(7);
+                    h.usize(*channels);
+                    h.usize(*plane);
+                }
+                Op::MaxPool { c, h: ih, w, kh, kw, sh, sw, oh, ow } => {
+                    h.u64(8);
+                    for v in [*c, *ih, *w, *kh, *kw, *sh, *sw, *oh, *ow] {
+                        h.usize(v);
+                    }
+                }
+                Op::Resize { c, h: ih, w, sh, sw } => {
+                    h.u64(9);
+                    for v in [*c, *ih, *w, *sh, *sw] {
+                        h.usize(v);
+                    }
+                }
+                Op::Transpose { dims, strides } => {
+                    h.u64(10);
+                    for v in dims.iter().chain(strides.iter()) {
+                        h.usize(*v);
+                    }
+                }
+            }
+            h.usize(step.args.len());
+            for arg in &step.args {
+                match arg {
+                    Arg::Value(v) => {
+                        h.u64(0);
+                        h.usize(*v);
+                    }
+                    Arg::Const { data, .. } => {
+                        h.u64(1);
+                        h.slice_sample(data);
+                    }
+                }
+            }
+        }
+        h.usize(self.outputs.len());
+        for (name, val, shape) in &self.outputs {
+            h.usize(name.len());
+            for b in name.as_bytes() {
+                h.u64(u64::from(*b));
+            }
+            h.usize(*val);
+            h.usize(shape.len());
+            for &d in shape {
+                h.usize(d);
+            }
+        }
+        h.0
+    }
+}
+
 /// Leading ones up to rank four, or `None` past four.
 fn rank4(s: &[usize]) -> Option<[usize; 4]> {
     let pad = 4usize.checked_sub(s.len())?;
