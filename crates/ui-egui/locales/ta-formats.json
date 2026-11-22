@@ -28,6 +28,7 @@
   "; {n} gained synonyms": "; {n} முக்கிய சொற்களுக்கு ஒத்த சொற்கள் சேர்ந்தன",
   "; {outside} outside its time range": "; {outside} அதன் நேர வரம்புக்கு வெளியே உள்ளன",
   "@{}: {} PRs, {} commits, +{} / −{} lines (Δ {}), +{} / −{} binary assets, {} – {}": "@{}: {} PR-கள், {} கமிட்கள், +{} / −{} வரிகள் (Δ {}), +{} / −{} பைனரி சொத்துகள், {} – {}",
+  "A keyword name can't end with an asterisk: “{name}”": "முக்கிய சொல்லின் பெயர் நட்சத்திரக்குறியுடன் முடியக் கூடாது: “{name}”",
   "Add Keyword “{keywords}”": "“{keywords}” முக்கிய சொல்லைச் சேர்",
   "Add {local_n} to My Photos": "{local_n} புகைப்படங்களை என் புகைப்படங்களில் சேர்",
   "Add {} Photo{}": "புகைப்படங்களைச் சேர் ({}){:.0}",

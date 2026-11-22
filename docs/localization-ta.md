@@ -1,12 +1,12 @@
 # LightCraft in Tamil
 
-Choose **Edit → Language → தமிழ்** or **Settings → General → Language**. The choice applies at once and
+Choose **Settings → General → Language → தமிழ்**. The choice applies at once and
 is saved for the next launch (`language: "ta"` in `ui.json`); the control command is
 `app.language.tamil`. `LIGHTCRAFT_LANGUAGE` selects it for headless runs and accepts `ta`, `ta-IN`,
 `ta-LK` and `ta_IN.UTF-8`; the saved value is always `ta`. LightCraft does not follow the system
 language, for Tamil as for every other language.
 
-The Tamil catalogs cover every plain and formats message the gap report counts (2,662 + 337): menus,
+The Tamil catalogs have 2,665 plain and 338 formats messages, every one another LightCraft catalog has: menus,
 shortcuts, library, editing, crop, masks, people, import/export, print, slideshow, settings, built-in
 presets and profiles, history, date headings, status messages and the smart-album rule editor. The
 embedded release notes (What's New) stay in English. Technical errors from lower layers stay in English,
@@ -15,7 +15,8 @@ as in the other languages. 576 labels reuse the Tamil wording of the sibling app
 merged there (the PhotoCraft, PdfCraft and shared catalogs, reviewed by native speakers) and 122 from
 catalogs still in storytold/craft-i18n#226. The rest were written with an agent from the meaning of
 the English labels. Native speakers Radhika and Mohan Raj reviewed the whole Tamil interface in the
-running app on 2026-11-15.
+running app on 2026-11-15. Four keyword messages added on 2026-11-22, written the same way, await
+that review.
 
 File names, command ids, template placeholders and albums, presets or metadata you named yourself are
 not translated.
@@ -79,8 +80,8 @@ older revision, or without `CRAFT_FONTS_DIR`, has no Tamil face and shows boxes.
 
 ## Maintenance and checks
 
-Fixed texts: `crates/ui-egui/locales/ta.json` (2,662 entries). Messages with values:
-`crates/ui-egui/locales/ta-formats.json` (337 entries). The English keys stay unchanged; Rust checks
+Fixed texts: `crates/ui-egui/locales/ta.json` (2,665 entries). Messages with values:
+`crates/ui-egui/locales/ta-formats.json` (338 entries). The English keys stay unchanged; Rust checks
 the placeholders at build time. Strings not yet in the plain catalog show in English.
 
 ```sh
