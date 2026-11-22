@@ -70,3 +70,20 @@ fn every_module_binds_the_help_key_and_lists_its_own_keys() {
     assert!(!h.app.help.open);
     assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Shortcuts)));
 }
+
+/// The sheet is a modal: the key that closes it closes it only, and the command bound to that key
+/// doesn't run behind it.
+#[test]
+fn a_key_that_closes_the_help_does_not_also_run_its_shortcut() {
+    let mut h = demo();
+    let active = h.app.session.active().expect("the demo opens on a photo");
+    h.app.session.execute("photo.rate", &json!({"ids": [active.0], "rating": 0})).unwrap();
+    let rating = |h: &Headless| h.app.session.catalog.photo(active).map(|p| p.rating);
+    key(&mut h, "/", true);
+    assert!(h.app.help.open, "⌘/ opens the help");
+    key(&mut h, "5", false);
+    assert!(!h.app.help.open, "a key closes the help");
+    assert_eq!(rating(&h), Some(0), "and doesn't also rate the photo behind it");
+    key(&mut h, "5", false);
+    assert_eq!(rating(&h), Some(5), "with the help closed, 5 rates the photo again");
+}

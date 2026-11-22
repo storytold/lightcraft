@@ -4,7 +4,7 @@
 
 Merges the frames of a Nikon pixel-shift series into one image with full colour at every pixel, without NX Studio.
 The merge runs on the raw mosaics, **before** demosaicing, and writes a LinearRaw DNG that is then developed like any
-raw. Measured on a Z 8 (16-shot series, FX 3:2 and 1:1 image areas); other bodies and shot counts are refused until
+raw. Measured on a Z 8 (16-shot series, FX 3:2 and 1:1 image areas; the 4-, 8- and 32-shot modes are recognised and refused by name); other bodies and shot counts are refused until
 they have been measured.
 
 ## Using it
@@ -34,9 +34,15 @@ they have been measured.
 
 ## How a series is recognised
 
-There is no series id in the files. The Nikon maker note of each frame has the shot count (`0x0034`), the frame's number
-in the series (`0x0056` byte 8 and `0x005e` byte 5, which agree), a per-exposure counter (`0x00a7`) and the sensor
-position of the frame (`0x0054`, reported only). A selection is one series when its frames have the same camera, lens,
+There is no series id in the files. The Nikon maker note of each frame has the pixel-shift mode (`0x005e` byte 4: 1, 2, 3, 4 for
+a series of 4, 8, 16, 32 shots; 0 for a lone frame), the frame's number in the series (`0x0056` byte 8, 1-based), its
+placement slot (`0x005e` byte 5: the number, except 17 to 20 for frames 5 to 8 of an 8-shot series), a per-exposure
+counter (`0x00a7`) and the sensor position of the frame (`0x0054`, reported only). Tag `0x0034` says 16 in every mode and
+for lone frames, so it is not the shot count and is only reported. These meanings were checked on every series of a Z 8 test
+set of all four modes, with lone frames. A frame whose slot does not match its number for its
+mode has no number. The selection's mode is judged first: a series of 4, 8 or 32 shots is refused by name ("n-shot
+pixel-shift series are not supported yet"), whichever of its frames are chosen, and frames of different modes are refused as
+different shot counts. A 16-shot selection is one series when its frames have the same camera, lens,
 exposure (shutter, aperture, ISO, exposure compensation, white balance), raw size and image area, the numbers 1..N once
 each, consecutive counters, and capture times spaced evenly relative to the series' own median interval (the camera's
 interval setting runs from none, about 0.12 s, to many seconds). Only the first 512 KB of each file is read; the whole

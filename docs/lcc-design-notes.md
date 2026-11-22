@@ -229,7 +229,7 @@ A Capture One develop import would wait for this tool, so it can bring LCC acros
   ([`parity-checklist.md`](parity-checklist.md):299) — a new beyond-Lightroom row; `docs/gaps.md` if listed;
   `cargo xtask parity` checks cited ids and paths.
 - **Release notes:** `docs/whats-new/<YYYY-MM-DD>-<slug>.md` (one `### Title` + bullets; `docs/whats-new/README.md`)
-  and `docs/changelog/unreleased/<YYYY-MM-DD>-<slug>.md` (one `## Develop` section + bullets with `PR #n`;
+  and `docs/changelog/unreleased/<YYYY-MM-DD>-<slug>.md` (one `## Develop` section + bullets;
   `docs/changelog/unreleased/README.md`). Never edit `docs/whats-new.md` or a released changelog;
   `cargo xtask notes --check` enforces it.
 - **Docs** name the fork "Chromaforge" and never write binary names or the env prefix outside `.md.in` templates
