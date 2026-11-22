@@ -51,7 +51,7 @@ fn local_clarity_changes_only_the_visible_mask() {
     let src = Rgb32f::from_fn(W, H, |x, _| [if x % (W / 2) < W / 4 { 0.10 } else { 0.28 }; 3]);
     let mut s = left_mask(LocalAdjustments::default());
     let neutral = shot(&src, &s);
-    let clarity_plane = |s| crate::local::plane_sigmas(s, W as f64, W as f64, crate::Quality::Full).clarity;
+    let clarity_plane = |s: &DevelopSettings| crate::local::plane_sigmas(s, W as f64, W as f64, crate::Quality::Full).clarity;
     assert!(clarity_plane(&s).is_none());
 
     s.masks[0].adjust.clarity = 100.0;
