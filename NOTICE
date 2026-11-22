@@ -25,6 +25,11 @@ dcraw.c (https://www.dechifro.org/dcraw/), Copyright 1997-2018 by Dave Coffin, o
 RESTRICTED (Foveon) block, which its header releases "free for all uses". Each such module names
 the dcraw revision and functions in its documentation.
 
+crates/camdb/data/cameras/libraw.toml holds colour matrices for six bodies newer than dcraw, taken
+from LibRaw's adobe_coeff table (src/tables/colordata.cpp, commit 2ab6323,
+https://github.com/LibRaw/LibRaw), Copyright 2019-2026 LibRaw LLC, used under the GNU LGPL 2.1
+(crates/camdb/data/cameras/LICENSE-LibRaw-LGPL-2.1.txt; LibRaw also offers CDDL 1.0).
+
 vendor/egui-wgpu is egui-wgpu 0.36.2 (https://github.com/emilk/egui), Copyright (c) 2018-2021
 Emil Ernerfeldt and the egui contributors, licensed under the MIT License or the Apache License,
 Version 2.0 (vendor/egui-wgpu/LICENSE-MIT, vendor/egui-wgpu/LICENSE-APACHE), with local changes

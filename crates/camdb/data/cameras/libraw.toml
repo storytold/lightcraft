@@ -1,0 +1,48 @@
+# XYZ (D65) -> camera matrices for bodies newer than dcraw 9.28, from LibRaw's adobe_coeff table
+# (src/tables/colordata.cpp, LibRaw commit 2ab632347ea003c96593eff2dc3105c91f5328e2, LGPL-2.1 or CDDL-1.0; see NOTICE).
+# Same rank as dcraw.toml (Source::Dcraw: dcraw descendants); measured and spectral entries win. Values are LibRaw's
+# integers divided by 10000. Added for completion plan 3.1 (no top body on the neutral fallback matrix).
+
+[[camera]]
+make = "Sony"
+model = "ILCE-1"
+illuminants = [21, 0]
+color_matrix_1 = [[0.8161, -0.2947, -0.0739], [-0.4811, 1.2668, 0.2389], [-0.0437, 0.1229, 0.6524]]
+provenance = { source = "dcraw", detail = "LibRaw adobe_coeff (src/tables/colordata.cpp, commit 2ab6323)" }
+
+[[camera]]
+make = "Canon"
+model = "EOS 90D"
+illuminants = [21, 0]
+color_matrix_1 = [[1.1498, -0.3759, -0.1516], [-0.5073, 1.2954, 0.2349], [-0.0892, 0.1867, 0.6118]]
+provenance = { source = "dcraw", detail = "LibRaw adobe_coeff (src/tables/colordata.cpp, commit 2ab6323)" }
+
+[[camera]]
+make = "Nikon"
+model = "Z 6"
+illuminants = [21, 0]
+color_matrix_1 = [[0.9943, -0.3269, -0.0839], [-0.5323, 1.3269, 0.2259], [-0.1198, 0.2083, 0.7557]]
+provenance = { source = "dcraw", detail = "LibRaw adobe_coeff (src/tables/colordata.cpp, commit 2ab6323)" }
+
+[[camera]]
+make = "Nikon"
+model = "Z 8"
+illuminants = [21, 0]
+color_matrix_1 = [[1.1423, -0.4564, -0.1123], [-0.4816, 1.2895, 0.2119], [-0.0210, 0.1061, 0.7282]]
+provenance = { source = "dcraw", detail = "LibRaw adobe_coeff (src/tables/colordata.cpp, commit 2ab6323)" }
+
+[[camera]]
+make = "Fujifilm"
+model = "X-T5"
+aliases = ["X-T50"]
+illuminants = [21, 0]
+color_matrix_1 = [[1.1809, -0.5358, -0.1141], [-0.4248, 1.2164, 0.2343], [-0.0514, 0.1097, 0.5848]]
+provenance = { source = "dcraw", detail = "LibRaw adobe_coeff (src/tables/colordata.cpp, commit 2ab6323)" }
+
+[[camera]]
+make = "Olympus"
+model = "E-M1 Mark II"
+aliases = ["E-M1MarkII"]
+illuminants = [21, 0]
+color_matrix_1 = [[0.9383, -0.3170, -0.0763], [-0.2457, 1.0702, 0.2020], [-0.0384, 0.1236, 0.5552]]
+provenance = { source = "dcraw", detail = "LibRaw adobe_coeff (src/tables/colordata.cpp, commit 2ab6323)" }
