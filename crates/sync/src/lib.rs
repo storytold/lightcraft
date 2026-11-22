@@ -21,6 +21,9 @@ pub mod pill;
 pub mod proto;
 pub mod replica;
 
+#[cfg(test)]
+mod proptests;
+
 pub use clock::{Clock, Lww, Stamp};
 pub use model::{Collection, CollectionKind, DeviceInfo, Grant, Group, Mode, Take};
 pub use pill::{Depth, Location, Pill, Status};
