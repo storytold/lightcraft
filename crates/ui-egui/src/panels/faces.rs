@@ -206,19 +206,98 @@ fn mirror_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, list: &Value)
     );
 }
 
-/// Where the face models run (the GPU only once a check shows it gives the CPU's results faster), and the switch that
-/// keeps them on the CPU.
+/// Where the face models run (the GPU only once a check shows it gives the CPU's results faster), and the
+/// hardware device / precision selectors.
 fn gpu_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, gpu: &Value) {
     heading(ui, t, "Processor");
-    let mut cpu = gpu["cpuOnly"].as_bool().unwrap_or(false);
-    let r = crate::dialog_frame::in_control_column(ui, |ui| ui.checkbox(&mut cpu, crate::i18n::tr("Run face models on the CPU only")));
-    register(ui.ctx(), "check:settings.facesCpuOnly", r.rect);
-    if r.changed() {
-        match app.run("faces.gpu", json!({"cpuOnly": cpu})) {
+
+    let auto = crate::i18n::tr("Automatic").to_string();
+    let cpu = crate::i18n::tr("CPU").to_string();
+    let empty_vec = Vec::new();
+    let dev_list = gpu.get("availableDevices").and_then(Value::as_array).unwrap_or(&empty_vec);
+    let gpu_cards: Vec<&Value> = dev_list.iter().filter(|d| d["kind"].as_str() == Some("gpu")).collect();
+    let raw_choice = gpu.get("deviceChoice").and_then(Value::as_str).unwrap_or("auto");
+    let dev_before = if raw_choice.is_empty() || raw_choice.eq_ignore_ascii_case("auto") {
+        "auto".to_string()
+    } else if raw_choice.eq_ignore_ascii_case("cpu") {
+        "cpu".to_string()
+    } else {
+        raw_choice.to_string()
+    };
+    let current_dev = if dev_before == "auto" {
+        auto.clone()
+    } else if dev_before == "cpu" {
+        cpu.clone()
+    } else {
+        gpu_cards
+            .iter()
+            .find(|d| d["id"].as_str() == Some(dev_before.as_str()))
+            .and_then(|d| d["name"].as_str().map(str::to_string))
+            .unwrap_or_else(|| dev_before.clone())
+    };
+    let mut selected_dev = dev_before.clone();
+    super::settings::row(ui, t, crate::i18n::tr("Face models device"), |ui| {
+        let combo = crate::widgets::combo_box("settingsFacesDevice").selected_text(current_dev).width(260.0).show_ui(ui, |ui| {
+            let r = ui.selectable_value(&mut selected_dev, "auto".to_string(), auto.as_str());
+            register(ui.ctx(), "button:settingsFacesDevice-auto", r.rect);
+            let r = ui.selectable_value(&mut selected_dev, "cpu".to_string(), cpu.as_str());
+            register(ui.ctx(), "button:settingsFacesDevice-cpu", r.rect);
+            for (i, d) in gpu_cards.iter().enumerate() {
+                let id = d["id"].as_str().unwrap_or("");
+                let name = d["name"].as_str().unwrap_or(id);
+                let usable = d["usable"].as_bool().unwrap_or(true);
+                let why_not = d["whyNot"].as_str();
+                let r = ui.add_enabled_ui(usable, |ui| ui.selectable_value(&mut selected_dev, id.to_string(), name)).inner;
+                let r = match why_not {
+                    Some(why) => r.on_disabled_hover_text(why),
+                    None => r,
+                };
+                register(ui.ctx(), format!("button:settingsFacesDevice-{i}"), r.rect);
+            }
+        });
+        register(ui.ctx(), "combo:settingsFacesDevice", combo.response.rect);
+    });
+    if selected_dev != dev_before {
+        match app.run("faces.gpu", json!({"device": selected_dev})) {
             Ok(_) => app.caches.faces_epoch += 1,
             Err(e) => app.toast(ui.ctx(), e),
         }
     }
+
+    let prec_auto = crate::i18n::tr("Automatic (FP16 when supported)");
+    let prec_fp16 = crate::i18n::tr("FP16 (half precision)");
+    let prec_fp32 = crate::i18n::tr("FP32 (full precision)");
+    let prec_before = match gpu.get("precisionChoice").and_then(Value::as_str) {
+        Some("fp16") => "fp16".to_string(),
+        Some("fp32") => "fp32".to_string(),
+        _ => "auto".to_string(),
+    };
+    let current_prec = match prec_before.as_str() {
+        "fp16" => prec_fp16,
+        "fp32" => prec_fp32,
+        _ => prec_auto,
+    };
+    let mut selected_prec = prec_before.clone();
+    super::settings::row(ui, t, crate::i18n::tr("GPU precision"), |ui| {
+        ui.add_enabled_ui(dev_before != "cpu", |ui| {
+            let combo = crate::widgets::combo_box("settingsFacesPrecision").selected_text(current_prec).width(260.0).show_ui(ui, |ui| {
+                let r = ui.selectable_value(&mut selected_prec, "auto".to_string(), prec_auto);
+                register(ui.ctx(), "button:settingsFacesPrecision-auto", r.rect);
+                let r = ui.selectable_value(&mut selected_prec, "fp16".to_string(), prec_fp16);
+                register(ui.ctx(), "button:settingsFacesPrecision-fp16", r.rect);
+                let r = ui.selectable_value(&mut selected_prec, "fp32".to_string(), prec_fp32);
+                register(ui.ctx(), "button:settingsFacesPrecision-fp32", r.rect);
+            });
+            register(ui.ctx(), "combo:settingsFacesPrecision", combo.response.rect);
+        });
+    });
+    if selected_prec != prec_before {
+        match app.run("faces.gpu", json!({"precision": selected_prec})) {
+            Ok(_) => app.caches.faces_epoch += 1,
+            Err(e) => app.toast(ui.ctx(), e),
+        }
+    }
+
     for (what, label) in [("detection", "Detection"), ("recognition", "Recognition")] {
         let st = &gpu[what];
         let (text, why) = if st.is_null() {
@@ -226,7 +305,11 @@ fn gpu_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, gpu: &Value) {
         } else if st["checking"] == true {
             (crate::i18n::tr("Checking the GPU…").to_string(), None)
         } else if let Some(device) = st["device"].as_str() {
-            (device.to_string(), None)
+            let formatted = match st["precision"].as_str() {
+                Some(p) if !p.is_empty() => format!("{device} ({})", p.to_uppercase()),
+                _ => device.to_string(),
+            };
+            (formatted, None)
         } else if st["why"].as_str().is_some_and(|w| w.contains("not installed")) {
             (crate::i18n::tr("Not installed").to_string(), st["why"].as_str())
         } else if st["why"].as_str().is_some_and(|w| w.contains("No recognition model")) {
@@ -245,6 +328,7 @@ fn gpu_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, gpu: &Value) {
             }
         });
     }
+    hint(ui, t, "Automatic prefers dedicated NVIDIA GPUs and half-precision (FP16) compute when supported.");
     hint(ui, t, "A face model uses the GPU only when a check shows it gives the same results faster.");
 }
 

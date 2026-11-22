@@ -23,7 +23,7 @@ import Shot from '../../../components/Shot.astro';
 - **Zoom at 100 %** no longer stalls on Vulkan; returning to 100 % keeps rendered tiles.
 - **Windows**: batch work no longer freezes the window (Segment Heap).
 - **Hot pixels**: confirming one rebuilds only that camera's previews.
-- **Search and face models**: **Settings ▸ Performance** and **AI Models** choose the device for semantic search (Automatic, a named GPU or CPU); face detection and recognition use the GPU when it is verified faster.
+- **Search and face models**: **Settings ▸ Performance** and **AI Models** choose the device for semantic search (Automatic, a named GPU or CPU); **Settings ▸ Faces** chooses **Face models device** (Automatic prefers dedicated NVIDIA GPUs) and **GPU precision** (Automatic uses FP16 when supported).
 - Budgets (measured on one desktop): slider update under 16 ms, loupe under 60 ms, a 24 MP JPEG export about half a second.
 - A GPU backend can be forced or turned off with an environment variable named in the developer docs, if a driver crashes.
 
