@@ -461,10 +461,7 @@ fn find_by_scan(make: Option<&str>, model: &str) -> Option<Entry> {
 /// `"SONY ILCE-7M3"`, `"NIKON CORPORATION NIKON D850"`): every split into make and model is tried, then the whole
 /// string as a model alone, as [`lcc_raw::spectral::find_camera`] does.
 pub fn find_camera(camera: &str) -> Option<Entry> {
-    let words: Vec<&str> = camera.split_whitespace().collect();
-    if words.is_empty() {
-        return None;
-    }
+    let words = lcc_raw::spectral::camera_words(camera)?;
     (1..words.len()).find_map(|i| find(Some(&words[..i].join(" ")), &words[i..].join(" "))).or_else(|| find(None, camera))
 }
 
@@ -503,6 +500,23 @@ fn key(brand: &str, model: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1308: a hostile Exif camera string of thousands of words (or one huge word) finds nothing and returns at
+    /// once instead of doing quadratic split work; a real one still resolves.
+    #[test]
+    fn hostile_camera_strings_are_bounded() {
+        let many: String = (0..4000).map(|i| format!("w{i} ")).collect();
+        let long = "A".repeat(1 << 20);
+        let start = std::time::Instant::now();
+        for s in [many.as_str(), long.as_str(), "", "   "] {
+            assert!(find_camera(s).is_none());
+            assert!(lcc_raw::spectral::find_camera(s).is_none());
+            assert!(!lcc_raw::kelvin_presets::covers_camera(s));
+            assert!(!has_matrices_camera(s));
+        }
+        assert!(start.elapsed() < std::time::Duration::from_secs(2), "took {:?}", start.elapsed());
+        assert!(lcc_raw::spectral::camera_words("NIKON CORPORATION NIKON Z 9").is_some());
+    }
 
     const SAMPLE: &str = r#"
 [[camera]]

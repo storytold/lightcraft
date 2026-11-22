@@ -4,6 +4,7 @@
   "+ Create “{new}”": "+ „{new}“ erstellen",
   ", ": ", ",
   ": {accepted} accepted, {pending} to review, {rejected} rejected": ": {accepted} akzeptiert, {pending} zu prüfen, {rejected} abgelehnt",
+  "; {unplaceable} with a time the zone can't place": "; {unplaceable} mit einer Zeit, die die Zone nicht einordnen kann",
   "A pixel-shift merge of this series already exists ({name})": "Eine Pixel-Shift-Zusammenführung dieser Serie gibt es schon ({name})",
   "A profile “{name}” is already there.": "Ein Profil „{name}“ ist bereits vorhanden.",
   "A waiting export could not start: {e}": "Ein wartender Export konnte nicht starten: {e}",

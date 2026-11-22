@@ -3,6 +3,7 @@
   "+ Create “{new}”": "+ Vytvořit „{new}“",
   ", ": ", ",
   ": {accepted} accepted, {pending} to review, {rejected} rejected": ": {accepted} přijato, {pending} k prohlédnutí, {rejected} odmítnuto",
+  "; {unplaceable} with a time the zone can't place": "; {unplaceable} s časem, který pásmo nedokáže umístit",
   "A pixel-shift merge of this series already exists ({name})": "Sloučení Pixel Shift této série již existuje ({name})",
   "A profile “{name}” is already there.": "Profil „{name}“ už existuje.",
   "A waiting export could not start: {e}": "Čekající export se nepodařilo spustit: {e}",

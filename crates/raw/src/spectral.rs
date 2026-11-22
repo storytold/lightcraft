@@ -166,15 +166,31 @@ fn find_by_scan(make: Option<&str>, model: &str) -> Option<&'static Camera> {
     }
 }
 
+/// Longest camera string (Exif make and model joined) the split lookups accept, in bytes. Real ones are 10-40
+/// bytes ("NIKON CORPORATION NIKON Z 9"); the cap keeps a hostile Exif string from making the lookups' quadratic
+/// split work freeze the UI thread (#1308).
+pub const MAX_CAMERA_BYTES: usize = 256;
+
+/// Most words a camera string may have for the split lookups (see [`MAX_CAMERA_BYTES`]).
+pub const MAX_CAMERA_WORDS: usize = 16;
+
+/// The words of a camera string for the make/model split lookups, or `None` when it is empty, longer than
+/// [`MAX_CAMERA_BYTES`] or has more than [`MAX_CAMERA_WORDS`] words: such a string names no known camera, and
+/// checking the length before splitting keeps the work bounded whatever a file holds.
+pub fn camera_words(camera: &str) -> Option<Vec<&str>> {
+    if camera.len() > MAX_CAMERA_BYTES {
+        return None;
+    }
+    let words: Vec<&str> = camera.split_whitespace().take(MAX_CAMERA_WORDS + 1).collect();
+    (!words.is_empty() && words.len() <= MAX_CAMERA_WORDS).then_some(words)
+}
+
 /// [`find`] for a camera written as one string, Exif make and model joined by a space (the catalog keeps
 /// `"SONY ILCE-7M3"`, `"NIKON CORPORATION NIKON D850"`): every split into make and model is tried, then the
 /// whole string as a model alone. Returns the same row as `find(Some(make), model)` for the parts it was
 /// made of, so the catalog and the decoder agree on which cameras have matrices.
 pub fn find_camera(camera: &str) -> Option<&'static Camera> {
-    let words: Vec<&str> = camera.split_whitespace().collect();
-    if words.is_empty() {
-        return None;
-    }
+    let words = camera_words(camera)?;
     (1..words.len()).find_map(|i| find(Some(&words[..i].join(" ")), &words[i..].join(" "))).or_else(|| find(None, camera))
 }
 

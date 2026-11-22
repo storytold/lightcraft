@@ -3,6 +3,7 @@
   "+ Create “{new}”": "+ Створити «{new}»",
   ", ": ", ",
   ": {accepted} accepted, {pending} to review, {rejected} rejected": ": прийнято {accepted}, на перевірку {pending}, відхилено {rejected}",
+  "; {unplaceable} with a time the zone can't place": "; {unplaceable} з часом, який пояс не може розмістити",
   "A pixel-shift merge of this series already exists ({name})": "Об’єднання Pixel Shift цієї серії вже існує ({name})",
   "A profile “{name}” is already there.": "Профіль «{name}» уже існує.",
   "A waiting export could not start: {e}": "Не вдалося почати експорт, що очікував: {e}",

@@ -7,6 +7,7 @@
   "+ Create “{new}”": "+ „{new}“-ის შექმნა",
   ", ": ", ",
   ": {accepted} accepted, {pending} to review, {rejected} rejected": ": მიღებულია {accepted}, გადასამოწმებელია {pending}, უარყოფილია {rejected}",
+  "; {unplaceable} with a time the zone can't place": "; {unplaceable} დროით, რომელსაც სარტყელი ვერ ათავსებს",
   "A pixel-shift merge of this series already exists ({name})": "ამ სერიის Pixel Shift გაერთიანება უკვე არსებობს ({name})",
   "A profile “{name}” is already there.": "პროფილი „{name}“ უკვე არსებობს.",
   "A waiting export could not start: {e}": "მოლოდინში მყოფი ექსპორტის დაწყება ვერ მოხერხდა: {e}",

@@ -3,6 +3,7 @@
   "+ Create “{new}”": "+ Luo ”{new}”",
   ", ": ", ",
   ": {accepted} accepted, {pending} to review, {rejected} rejected": ": {accepted} hyväksytty, {pending} tarkistettavaa, {rejected} hylätty",
+  "; {unplaceable} with a time the zone can't place": "; {unplaceable} aika, jota vyöhyke ei voi sijoittaa",
   "A pixel-shift merge of this series already exists ({name})": "Tästä sarjasta on jo Pixel Shift -yhdistelmä ({name})",
   "A profile “{name}” is already there.": "Profiili ”{name}” on jo olemassa.",
   "A waiting export could not start: {e}": "Odottavaa vientiä ei voitu aloittaa: {e}",
