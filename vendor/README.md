@@ -48,6 +48,27 @@ To upgrade egui: copy the new egui-wgpu release over `vendor/egui-wgpu` (drop `.
 marked changes, and run the app's HDR tests (`hdr_display`, `crates/hdrmeta`). Drop the patch once egui exposes the
 surface format, colour space and display HDR info itself.
 
+## naga 30.0.1 (MIT OR Apache-2.0, `vendor/naga`)
+
+Source: crates.io `naga` 30.0.1 (<https://github.com/gfx-rs/wgpu>), copyright the gfx-rs
+developers; licence texts in `LICENSE.MIT` / `LICENSE.APACHE`.
+
+Patch: no ArrayStride outside buffers (plan item 0.2). naga's SPIR-V writer decorates every
+array type with `ArrayStride`, including arrays only used by Function, Private and Workgroup
+variables (`hist.wgsl` `local_bins`, the `blur.wgsl` median window, `finish.wgsl`
+`band_weights`, the `clip.wgsl` / `faces*.wgsl` / `bm3d*.wgsl` scratch arrays). The Vulkan
+validation layer rejects that (VUID-StandaloneSpirv-None-10684: "the Workgroup storage class
+has a explicit layout from the ArrayStride decoration"), and the full `lcc-ui-egui` test run on
+Vulkan logged those errors before crashing. `src/back/spv/writer.rs` now collects the types
+reachable from uniform / storage / immediate / task-payload globals (`explicit_layout_types`)
+and only decorates those arrays. An array type shared by a buffer and a local would still carry
+the stride; none of our shaders has one. Marked `Patch (no ArrayStride outside buffers)`.
+
+To upgrade wgpu: copy the matching naga release over `vendor/naga` (drop `.cargo-ok`,
+`.cargo_vcs_info.json`, `Cargo.lock`, `Cargo.toml.orig`), re-apply the marked change, and run
+`WGPU_BACKEND=vulkan cargo test -p lcc-gpu --lib` with the Vulkan SDK's validation layer
+installed: no `VUID-StandaloneSpirv-None-10684`. Drop the patch once naga stops emitting it.
+
 ## candle-core 0.9.2 (MIT OR Apache-2.0, `vendor/candle-core`)
 
 Source: crates.io `candle-core` 0.9.2 (<https://github.com/huggingface/candle>), copyright the
