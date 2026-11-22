@@ -8,10 +8,11 @@
     "preview": "astro preview"
   },
   "dependencies": {
-    "@astrojs/starlight": "^0.36.0",
-    "astro": "^5.14.0",
-    "sharp": "^0.34.0",
-    "starlight-image-zoom": "^0.13.0"
+    "@astrojs/markdown-remark": "^7.3.10",
+    "@astrojs/starlight": "^0.43.1",
+    "astro": "^7.4.13",
+    "sharp": "^0.35.5",
+    "starlight-image-zoom": "^0.16.3"
   },
   "packageManager": "pnpm@12.17.0"
 }
