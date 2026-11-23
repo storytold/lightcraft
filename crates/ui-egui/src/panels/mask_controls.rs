@@ -51,6 +51,7 @@ struct MaskHit {
     fill: Fill,
     selected: bool,
     drag: bool,
+    pointer_only: bool,
     opacity: f32,
 }
 
@@ -66,6 +67,10 @@ impl Component for MaskHit {
     }
 
     fn sense(&self) -> Sense {
+        if self.pointer_only {
+            // a canvas handle: pressed and dragged with the pointer, never a keyboard stop
+            return if self.drag { Sense::DRAG } else { Sense::CLICK };
+        }
         let sense = Sense::CLICK | Sense::FOCUS;
         if self.drag { sense | Sense::DRAG } else { sense }
     }
@@ -166,6 +171,7 @@ pub(in crate::panels) struct Hit<'a> {
     fill: Fill,
     selected: bool,
     drag: bool,
+    pointer_only: bool,
     enabled: bool,
     visual: Option<Rect>,
     id: Option<egui::Id>,
@@ -174,7 +180,7 @@ pub(in crate::panels) struct Hit<'a> {
 impl<'a> Hit<'a> {
     /// A control registered for automation as `widget`, named `label` for a screen reader.
     pub fn new(widget: &'a str, label: impl Into<String>) -> Self {
-        Self { widget, label: label.into(), fill: Fill::NONE, selected: false, drag: false, enabled: true, visual: None, id: None }
+        Self { widget, label: label.into(), fill: Fill::NONE, selected: false, drag: false, pointer_only: false, enabled: true, visual: None, id: None }
     }
 
     pub fn fill(mut self, fill: Fill) -> Self {
@@ -191,6 +197,12 @@ impl<'a> Hit<'a> {
     /// A press on it may become a drag.
     pub fn drag(mut self, drag: bool) -> Self {
         self.drag = drag;
+        self
+    }
+
+    /// Only the pointer presses it (no keyboard stop): for a handle painted on the photo.
+    pub fn pointer_only(mut self, on: bool) -> Self {
+        self.pointer_only = on;
         self
     }
 
@@ -214,7 +226,7 @@ impl<'a> Hit<'a> {
 
     pub fn show_at(self, ui: &mut Ui, rect: Rect) -> HitOutput {
         let t = Tokens::get(ui.ctx());
-        let hit = MaskHit { common: Common::new(), accent: t.accent, fill: self.fill, selected: self.selected, drag: self.drag, opacity: ui.opacity() };
+        let hit = MaskHit { common: Common::new(), accent: t.accent, fill: self.fill, selected: self.selected, drag: self.drag, pointer_only: self.pointer_only, opacity: ui.opacity() };
         let enabled = self.enabled && ui.is_enabled();
         let shown = hit.label(self.label).id(self.id.unwrap_or_else(|| egui::Id::unique(self.widget))).enabled(enabled).show_at(ui, rect);
         if !measuring(ui) {
