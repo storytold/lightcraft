@@ -528,13 +528,13 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
     }
     let shown = list_shown(ui, &out, &source, selected, want.as_ref());
     let mut events = list_events(&out, &source);
-    // the menu opens from a row's triangle too (a request the list reports for the row itself only)
-    for row in &out.shown {
-        let asked = events.iter().any(|event| matches!(event, SideEvent::Menu { key, .. } if *key == row.key));
-        if let Some((_, response)) = row.openers.iter().find(|(_, response)| response.secondary_clicked())
-            && !asked
-        {
-            events.push(SideEvent::Menu { key: row.key.clone(), at: response.interact_pointer_pos().unwrap_or_else(|| response.rect.center()) });
+    // the menu opens from a row's triangle too (the list reports a request for the row itself only)
+    let secondary = ui.input(|i| if i.pointer.button_clicked(egui::PointerButton::Secondary) { i.pointer.interact_pos() } else { None });
+    if let Some(at) = secondary {
+        for row in out.shown.iter().filter(|row| row.openers.iter().any(|(_, response)| response.rect.contains(at))) {
+            if !events.iter().any(|event| matches!(event, SideEvent::Menu { key, .. } if *key == row.key)) {
+                events.push(SideEvent::Menu { key: row.key.clone(), at });
+            }
         }
     }
     SideOut { shown, events, response: Some(out.response.clone()) }
