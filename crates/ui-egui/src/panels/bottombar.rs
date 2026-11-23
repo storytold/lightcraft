@@ -339,7 +339,9 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
         let shown = Slider::new(Bind::bound(&mut size), f64::from(min)..=f64::from(max))
             .id_salt("thumb-size")
             .label(crate::i18n::tr("Thumbnail size"))
-            .step(f64::from(crate::state::THUMB_SIZE_STEP))
+            // a key or a screen reader's nudge moves one step from the current size, not to a grid anchored at the minimum
+            .key_policy(craft::ui::runtime::keys::ScalarKeyPolicy::new(f64::from(crate::state::THUMB_SIZE_STEP)))
+            .wheel_step(f64::from(crate::state::THUMB_SIZE_STEP))
             .show_at(&mut child, rect);
         if !measuring(&child) {
             crate::widgets::register_response("slider:thumbSize", rect, &shown.response);
