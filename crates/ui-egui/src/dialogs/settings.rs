@@ -30,6 +30,8 @@ mod slideshow;
 mod widgets;
 
 pub use display::display_profile;
+#[cfg(test)]
+pub(crate) use display::info_line_rows;
 pub(super) use display::view_options;
 use display::{display_tab, interface_tab};
 use general::general_tab;

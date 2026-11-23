@@ -10,6 +10,7 @@ use lightcraft_engine::cmd::mask_effects::{self as fx, FIELDS, MaskEffect};
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
+use crate::menu_item::MenuItem;
 use crate::state::Dialog;
 use crate::theme::Tokens;
 use crate::widgets::{register, register_response};
@@ -268,11 +269,7 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, current: Option
         return;
     }
     ui.separator();
-    let item = |ui: &mut egui::Ui, id: &str, text: String, enabled: bool| {
-        let r = ui.add_enabled(enabled, egui::Button::new(text).frame(false));
-        register(ui, id.to_string(), r.rect);
-        r.clicked()
-    };
+    let item = |ui: &mut egui::Ui, id: &str, text: String, enabled: bool| MenuItem::new(&text).enabled(enabled).widget(id).show(ui).clicked();
     if item(ui, "maskEffectMenu:reset", crate::i18n::tr("Reset Sliders").to_string(), true) {
         let zero: serde_json::Map<String, Value> = FIELDS.iter().map(|k| (k.to_string(), json!(0.0))).collect();
         let _ = app.run("mask.adjust", json!({"id": mask.id, "values": zero}));
@@ -321,8 +318,7 @@ fn preview(app: &mut LightcraftApp, mask: &Mask, name: &str) {
 /// The right-click menu of an effect in the Effect menu.
 fn row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, name: &str, fav: bool) {
     let run = |app: &mut LightcraftApp, ui: &mut egui::Ui, text: &str, cmd: &str, p: Value| {
-        let r = ui.button(crate::i18n::tr(text));
-        register(ui, format!("maskEffectRow:{text}"), r.rect);
+        let r = MenuItem::new(crate::i18n::tr(text)).widget(format!("maskEffectRow:{text}")).show(ui);
         if r.clicked() {
             if let Err(e) = app.run(cmd, p) {
                 app.toast_error(ui.ctx(), e);
@@ -331,28 +327,28 @@ fn row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, name: &str,
         }
     };
     let masks = app.session.active().and_then(|id| app.session.develop_of(id)).map_or(0, |d| d.masks.len());
-    if ui.add_enabled(masks > 1, egui::Button::new(crate::i18n::tr("Apply to All Masks"))).clicked() {
+    if MenuItem::new(crate::i18n::tr("Apply to All Masks")).enabled(masks > 1).show(ui).clicked() {
         apply(app, ui.ctx(), name, json!({"all": true}));
         ui.close();
     }
     if app.session.selection.ids.len() > 1 {
         let text = crate::i18n::tr_format!("Apply to “{mask}” on Selected Photos", mask = mask.name);
-        if ui.button(text).on_hover_text(crate::i18n::tr("Also the masks of the same name on the other selected photos")).clicked() {
+        if MenuItem::new(&text).show(ui).on_hover_text(crate::i18n::tr("Also the masks of the same name on the other selected photos")).clicked() {
             apply(app, ui.ctx(), name, json!({"id": mask.id, "photos": "selected"}));
             ui.close();
         }
     }
     ui.separator();
     run(app, ui, "Update with Current Settings", "mask.updateEffect", json!({"name": name, "id": mask.id}));
-    if ui.button(crate::i18n::tr("Rename…")).clicked() {
+    if MenuItem::new(crate::i18n::tr("Rename…")).show(ui).clicked() {
         crate::panels::dialogs::prompt(app, "Rename Effect Preset", "Preset name", name, "mask.renameEffect", json!({"name": name}), "to");
         ui.close();
     }
     run(app, ui, "Duplicate", "mask.duplicateEffect", json!({"name": name}));
     run(app, ui, if fav { "Remove from Favorites" } else { "Add to Favorites" }, "mask.favoriteEffect", json!({"name": name, "favorite": !fav}));
-    ui.menu_button(crate::i18n::tr("Move to Group"), |ui| group_menu(app, ui, &[name.to_string()]));
+    MenuItem::new(crate::i18n::tr("Move to Group")).submenu(ui, |ui| group_menu(app, ui, &[name.to_string()]));
     ui.separator();
-    if ui.button(crate::i18n::tr("Delete…")).clicked() {
+    if MenuItem::new(crate::i18n::tr("Delete…")).show(ui).clicked() {
         app.ui.dialog = Some(Dialog::DeleteEffects { names: vec![name.to_string()] });
         ui.close();
     }
@@ -363,13 +359,13 @@ fn group_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, names: &[String]) {
     let groups: Vec<String> = fx::menu_order(&app.session.mask_effects).into_iter().map(|(g, _)| g).filter(|g| !g.is_empty()).collect();
     for g in groups.iter().map(String::as_str).chain(std::iter::once("")) {
         let label = if g.is_empty() { crate::i18n::tr("None").to_string() } else { g.to_string() };
-        if ui.button(label).clicked() {
+        if MenuItem::new(&label).show(ui).clicked() {
             let _ = app.run("mask.setEffectGroup", json!({"names": names, "group": g}));
             ui.close();
         }
     }
     ui.separator();
-    if ui.button(crate::i18n::tr("New Group…")).clicked() {
+    if MenuItem::new(crate::i18n::tr("New Group…")).show(ui).clicked() {
         let names = json!({"names": names});
         crate::panels::dialogs::prompt(app, "New Effect Group", "Group name", "", "mask.setEffectGroup", names, "group");
         ui.close();
@@ -401,7 +397,8 @@ pub fn save_body(
         register(ui, "button:effectGroupPick", pick.rect);
         egui::Popup::menu(&pick).show(|ui| {
             for (g, _) in fx::menu_order(&app.session.mask_effects) {
-                if ui.button(if g.is_empty() { crate::i18n::tr("None").to_string() } else { g.clone() }).clicked() {
+                let label = if g.is_empty() { crate::i18n::tr("None").to_string() } else { g.clone() };
+                if MenuItem::new(&label).show(ui).clicked() {
                     *group = g;
                 }
             }
@@ -655,7 +652,7 @@ pub fn manage_body(
             let names = selected.clone();
             for (grp, _) in fx::menu_order(&app.session.mask_effects) {
                 let label = if grp.is_empty() { crate::i18n::tr("None").to_string() } else { grp.clone() };
-                if ui.button(label).clicked() {
+                if MenuItem::new(&label).show(ui).clicked() {
                     let _ = app.run("mask.setEffectGroup", json!({"names": names, "group": grp}));
                     ui.close();
                 }

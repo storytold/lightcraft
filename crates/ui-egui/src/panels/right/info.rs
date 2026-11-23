@@ -1,4 +1,5 @@
 use super::{Icon, LightcraftApp, PhotoId, Sense, Tokens, divider, header, json, padded, register, text_button, vec2};
+use crate::menu_item::MenuItem;
 
 pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
@@ -422,7 +423,7 @@ fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcr
     let r = crate::widgets::combo_box("info-copyright-status").selected_text(shown).show_ui(ui, |ui| {
         for st in lightcraft_catalog::CopyrightStatus::ALL {
             let on = !mixed && st == current;
-            if ui.selectable_label(on, crate::i18n::tr(st.label())).clicked() && !on {
+            if MenuItem::new(crate::i18n::tr(st.label())).selected(on).show(ui).clicked() && !on {
                 let ids: Vec<u64> = targets.iter().map(|id| id.0).collect();
                 let _ = app.run("photo.setMeta", json!({"ids": ids, "copyrightStatus": st.id()}));
             }

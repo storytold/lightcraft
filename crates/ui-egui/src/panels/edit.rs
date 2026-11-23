@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
+use crate::menu_item::MenuItem;
 use crate::render::Slot;
 use crate::state::RightPanel;
 use crate::theme::Tokens;
@@ -192,7 +193,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                         if m == WbMode::Custom {
                             continue;
                         }
-                        if ui.selectable_label(d.wb.mode == m, crate::i18n::tr(m.label())).clicked() {
+                        if MenuItem::new(crate::i18n::tr(m.label())).selected(d.wb.mode == m).show(ui).clicked() {
                             let mode = serde_json::to_value(m).unwrap_or_default();
                             let _ = app.run("develop.wb", json!({"mode": mode}));
                         }
