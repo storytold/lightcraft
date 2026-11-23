@@ -2272,7 +2272,9 @@ pub fn prepare_batch(session: &mut crate::Session, ids: &[lcc_catalog::PhotoId],
     ids.iter().enumerate().map(|(i, id)| prepare_guarded(session, *id, o, i + 1, guard.clone())).collect()
 }
 
-fn prepare_guarded(
+/// [`prepare_export`] against a `guard` the caller built once for all its photos: building one walks the whole library,
+/// so a caller that prepares many photos one by one (a publish, issue #1375) shares it, as [`prepare_batch`] does.
+pub(crate) fn prepare_guarded(
     session: &mut crate::Session,
     id: lcc_catalog::PhotoId,
     o: &ExportOptions,
@@ -2439,6 +2441,12 @@ impl PreparedExport {
     /// over their originals either.
     pub fn use_guard(&mut self, guard: std::sync::Arc<crate::originals::OriginalGuard>) {
         self.guard = guard;
+    }
+
+    /// Whether this item and `other` check what they write against the same snapshot of the library's originals.
+    #[cfg(test)]
+    pub(crate) fn shares_guard(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.guard, &other.guard)
     }
 
     /// Whether this item is a video clip exported as a movie.
