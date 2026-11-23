@@ -265,9 +265,9 @@ impl<'a> AlbumPicker<'a> {
             // the search field takes the keyboard when the popup opens, as typing is how most picks start
             .initial_focus(Initial::FirstField)
             .show(ui, |ui, cx| {
-                // Exit presence is paint-only: the closing popup's search and rows take no input.
+                // A closing popup only fades: its search and rows are gone, for input and for automation alike.
                 if !body_interactive {
-                    ui.disable();
+                    return;
                 }
                 // A wide popup remembered before a window resize must still fit the current viewport.
                 let max_width = (ui.ctx().content_rect().width() - 24.0).max(1.0);

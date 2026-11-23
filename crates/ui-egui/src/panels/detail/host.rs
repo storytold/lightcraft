@@ -80,6 +80,12 @@ impl HostOutput {
         craft::ui::contract::clicked(&self.response)
     }
 
+    /// A secondary-button click landed on the target this pass. The SDK rewrites the response's own click flags
+    /// (`Response::clicked` is the primary activation), so this reads egui's raw verdict for the same widget.
+    pub fn secondary_clicked(&self) -> bool {
+        self.response.secondary_clicked() || self.response.ctx.read_response(self.response.id).is_some_and(|raw| raw.enabled() && raw.secondary_clicked())
+    }
+
     /// The activation was the second press of a double click.
     pub fn double_clicked(&self) -> bool {
         self.clicked() && self.clicks >= 2

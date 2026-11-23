@@ -367,6 +367,9 @@ pub(super) struct SideOut {
     pub events: Vec<SideEvent>,
     /// The list's own response, which a menu hangs from.
     pub response: Option<egui::Response>,
+    /// The list holds a press on one of its rows (the button went down on it and is still down:
+    /// not when the press was ended by Escape).
+    pub pressed: bool,
 }
 
 impl SideOut {
@@ -500,11 +503,13 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
     if tree {
         list = list.tree(true).tree_leaves(TreeLeaves::Aligned);
     }
+    let mut pressed = false;
     let out = list.show_items(ui, &source, &mut |key, icx| {
         let item = &source.rows[source.index[key]];
         if item.fill.is_some() {
             return ListRow::spacer();
         }
+        pressed |= icx.row.pressed.is_some();
         if item.group {
             // Public ItemCx/CollectionResponse opener API returns the real
             // declared disclosure-part response; no invented hit geometry.
@@ -528,16 +533,16 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
     }
     let shown = list_shown(ui, &out, &source, selected, want.as_ref());
     let mut events = list_events(&out, &source);
-    // the menu opens from a row's triangle too (a request the list reports for the row itself only)
-    for row in &out.shown {
-        let asked = events.iter().any(|event| matches!(event, SideEvent::Menu { key, .. } if *key == row.key));
-        if let Some((_, response)) = row.openers.iter().find(|(_, response)| response.secondary_clicked())
-            && !asked
-        {
-            events.push(SideEvent::Menu { key: row.key.clone(), at: response.interact_pointer_pos().unwrap_or_else(|| response.rect.center()) });
+    // the menu opens from a row's triangle too (the list reports a request for the row itself only)
+    let secondary = ui.input(|i| if i.pointer.button_clicked(egui::PointerButton::Secondary) { i.pointer.interact_pos() } else { None });
+    if let Some(at) = secondary {
+        for row in out.shown.iter().filter(|row| row.openers.iter().any(|(_, response)| response.rect.contains(at))) {
+            if !events.iter().any(|event| matches!(event, SideEvent::Menu { key, .. } if *key == row.key)) {
+                events.push(SideEvent::Menu { key: row.key.clone(), at });
+            }
         }
     }
-    SideOut { shown, events, response: Some(out.response.clone()) }
+    SideOut { shown, events, response: Some(out.response.clone()), pressed }
 }
 
 /// The rows the list showed, listed under the names the control channel knows them by (and the

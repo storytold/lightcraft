@@ -382,23 +382,12 @@ fn slideshow_background_pointer_release_outside_cancels_without_changing_prefere
             f.click(BACKGROUND);
             f.select(Some(f.ids[1]));
             let before = f.state();
-            let journal = f.app.session.journal.len();
-            let unrelated = f.layout_without_background();
             let at = f.rect(id).center();
             f.frame(vec![Event::PointerMoved(at)]);
             f.pointer(at, true);
             f.pointer(egui::pos2(990.0, 790.0), false);
             f.frame(vec![]);
-            if id == BACKGROUND {
-                // The framework checkbox carries a sweep: a press that is dragged off it has set the value
-                // the sweep brings (here off), once, and releasing elsewhere adds nothing to that.
-                assert!(f.app.session.slide_layout.background_image.is_none());
-                f.assert_command(journal, json!({"backgroundImage": null}));
-                assert_eq!(f.document(), before["document"]);
-                assert_eq!(f.layout_without_background(), unrelated);
-            } else {
-                assert_eq!(f.state(), before);
-            }
+            assert_eq!(f.state(), before);
             f.idle_is_inert();
         }
     }

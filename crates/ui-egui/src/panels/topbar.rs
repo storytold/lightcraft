@@ -108,6 +108,10 @@ fn search_field(app: &mut LightcraftApp, ui: &mut egui::Ui, _t: &Tokens, sr: Rec
             .show_at(ui, sr)
     });
     crate::text_field::register_field(ui, "field:search", &shown.response, record.as_deref());
+    // Escape (which clears the text) and Return leave the field, so the next key is a shortcut again.
+    if shown.escaped || shown.submitted {
+        crate::text_field::blur(ui.ctx(), "field:search");
+    }
     if app.ui.search != before {
         let q = app.ui.search.clone();
         let _ = app.run("library.filter", json!({"text": q}));

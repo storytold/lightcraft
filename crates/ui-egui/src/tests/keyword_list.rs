@@ -389,6 +389,10 @@ fn a_photos_menu_adds_the_keyword_shortcut() {
     ask(&mut h, "ui.clickWidget", json!({"id": format!("thumb:{}", ids[0]), "button": "right"}));
     assert!(!has(&h, "button:contextAddKeywordShortcut"), "no keyword shortcut");
     ask(&mut h, "ui.key", json!({"key": "Escape"}));
+    // (the closed framework menu fades out for a few frames; a right-click on it meanwhile does not reopen it)
+    for _ in 0..20 {
+        h.step();
+    }
     run(&mut h, "keyword.setShortcut", json!({"keywords": "Weddings, Events|Ceremony"}));
     ask(&mut h, "ui.clickWidget", json!({"id": format!("thumb:{}", ids[0]), "button": "right"}));
     ask(&mut h, "ui.clickWidget", json!({"id": "button:contextAddKeywordShortcut"}));

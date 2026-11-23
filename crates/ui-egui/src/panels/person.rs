@@ -115,6 +115,7 @@ pub(crate) fn handle_bulk_key(app: &mut LightcraftApp, ctx: &egui::Context) -> b
     if !ctx.input(|i| i.modifiers == egui::Modifiers::NONE && i.key_pressed(egui::Key::A)) {
         return false;
     }
+
     let Some((cached_name, cached_revision, _, _, page)) = &app.caches.person_page else { return false };
     if *cached_name != name || *cached_revision != app.session.catalog.revision {
         return false;

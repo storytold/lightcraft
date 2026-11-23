@@ -275,6 +275,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     crate::i18n::tr("Browse Profiles"),
                 )
                 .clicked()
+                    // a measuring run of the panel (the framework sizes it before placing it) never acts
+                    && !ui.is_sizing_pass()
+                    && !craft::ui::runtime::measure::active(ui.ctx())
                 {
                     let _ = app.run("panel.profiles", json!({}));
                 }
