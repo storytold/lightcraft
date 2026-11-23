@@ -97,9 +97,22 @@ fn the_second_device_renders_alike_and_its_loss_leaves_the_editing_card() {
     };
     let a = photo(taken_tx.clone(), go_rx.clone());
     let first = taken_rx.recv().unwrap();
+    // The second photo goes to the card that would finish it soonest at each card's measured batch
+    // speed (`gate::order`): the other card, unless the first photo's card is at least twice as fast
+    // (two photos there still finish before one on the other). On one card's two devices the speeds
+    // are near alike, but they are measured from a render or two each, so a real card's (RADV)
+    // first-render costs can make one device look twice as fast: the expectation follows the speeds.
+    // The busy card's speed only falls while its turn is held (its busy time grows), so the ratio
+    // read before the second photo asks bounds the one it was placed by from above: under 2, the
+    // second photo must go to the other card; at 2 or more, either card can be right.
+    let ratio = || match (lcc_gpu::batch_rate_of(first), lcc_gpu::batch_rate_of(!first)) {
+        (Some(f), Some(o)) => f / o,
+        _ => 1.0,
+    };
+    let at_most = ratio();
     let b = photo(taken_tx, go_rx);
     let second = taken_rx.recv().unwrap();
-    assert_ne!(first, second, "one photo on each card");
+    assert!(at_most >= 2.0 || first != second, "one photo on each card: the first's card is only {at_most:.2}x as fast as the other");
     go_tx.send(()).unwrap();
     go_tx.send(()).unwrap();
     for h in [a, b] {
