@@ -22,6 +22,7 @@ fn focus(x0: f64, y0: f64, x1: f64, y1: f64) -> FocusPoint {
         mode: Some("AF-C".into()),
         area: Some("Wide".into()),
         tracking: Some("Animal Eye Tracking".into()),
+        af_point: None,
     }
 }
 
@@ -57,6 +58,34 @@ fn run(h: &mut Headless, cmd: &str, params: serde_json::Value) -> serde_json::Va
 fn on_image(h: &Headless, x: f32, y: f32) -> egui::Pos2 {
     let img = h.app.image_rect.expect("the photo is drawn");
     egui::pos2(img.left() + x * img.width(), img.top() + y * img.height())
+}
+
+/// A named grid point (Nikon) is drawn where its box is, and turns with the photo like a focus frame.
+#[test]
+fn a_named_af_point_is_drawn_in_place_and_follows_rotation() {
+    let mut f = focus(0.60, 0.20, 0.62, 0.24);
+    f.af_point = Some("B8".into());
+    let (mut h, _) = detail_with_focus(Some(f));
+    assert_eq!(run(&mut h, "view.focusPoint", json!({}))["on"], true);
+    let b = widget(&h, "canvas:focusPoint").expect("the point is drawn");
+    assert!((b.center() - on_image(&h, 0.61, 0.22)).length() < 1.5, "{b:?}");
+    run(&mut h, "photo.rotateRight", json!({}));
+    let b = widget(&h, "canvas:focusPoint").expect("still drawn after rotating");
+    assert!((b.center() - on_image(&h, 0.78, 0.61)).length() < 1.5, "{b:?}");
+}
+
+/// A point too small to see is grown to the same size, landscape or turned: its long side, not its width, sets it.
+#[test]
+fn a_tiny_af_point_grows_the_same_turned_or_not() {
+    let mut f = focus(0.500, 0.500, 0.502, 0.501);
+    f.af_point = Some("C6".into());
+    let (mut h, _) = detail_with_focus(Some(f));
+    run(&mut h, "view.focusPoint", json!({}));
+    let long = |h: &Headless| widget(h, "canvas:focusPoint").map(|b| b.width().max(b.height())).expect("drawn");
+    let before = long(&h);
+    run(&mut h, "photo.rotateRight", json!({}));
+    let after = long(&h);
+    assert!((before - 14.0).abs() < 0.6 && (after - 14.0).abs() < 0.6, "{before} {after}");
 }
 
 #[test]

@@ -472,6 +472,23 @@ mod tests {
         assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty());
     }
 
+    /// A photo imported while its ISO went unread (a Nikon Hi ISO NEF, whose ISO only the maker note states) gets it
+    /// from Reload from Disk, with everything else it has kept and no library rebuild.
+    #[test]
+    fn reload_fills_an_iso_an_older_import_missed() {
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/_DSC0001.NEF".into() }, "_DSC0001.NEF", "NEF", 7424, 4924, "2026-11-21T10:08:00");
+        ph.meta.camera = "NIKON CORPORATION NIKON D800E".into();
+        ph.meta.aperture = Some(5.6);
+        let mut info = crate::media::ProbeInfo::default();
+        info.meta.camera = ph.meta.camera.clone();
+        info.meta.aperture = Some(5.6);
+        info.meta.iso = Some(8063);
+        let ops = fill_missing_meta(PhotoId(1), &ph, &info);
+        let Some(Op::SetMeta { meta, .. }) = ops.first() else { panic!("{ops:?}") };
+        assert_eq!(meta.iso, Some(8063));
+        assert_eq!((meta.camera.as_str(), meta.aperture), (ph.meta.camera.as_str(), Some(5.6)));
+    }
+
     /// Reload from Disk repairs a shutter speed an older import rounded (0.4 s stored as `1/2`, with no
     /// exact time): the photo takes the file's exact time and today's text. A shutter speed set by hand
     /// that is not what an import wrote, and one that already has its exact time, are kept.
@@ -553,6 +570,7 @@ mod tests {
             mode: Some("AF-C".into()),
             area: None,
             tracking: None,
+            af_point: None,
         };
         let mut ph = Photo::new(PhotoId(1), Source::File { path: "/x.arw".into() }, "x.arw", "ARW", 8640, 5760, "2026-10-06T00:00:00");
         ph.captured = Some("2026-10-04T08:16:11".into());

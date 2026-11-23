@@ -49,8 +49,9 @@ const PAUSE_POLL: Duration = Duration::from_millis(50);
 /// Results taken in per pump (the rest wait for the next frame).
 const MAX_DRAIN: usize = 5000;
 
-/// The file extensions read (Sony bodies also shoot HEIF, which carries no maker note this decoder reads).
-const EXTENSIONS: [&str; 3] = ["arw", "jpg", "jpeg"];
+/// The file extensions read: Sony ARW, Nikon NEF and either's JPEG (Sony bodies also shoot HEIF, which carries no
+/// maker note this decoder reads).
+const EXTENSIONS: [&str; 4] = ["arw", "nef", "jpg", "jpeg"];
 
 /// How hard the worker may work, from what the user is doing (`focus.pump`'s `pace`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

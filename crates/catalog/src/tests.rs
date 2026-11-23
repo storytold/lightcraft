@@ -574,10 +574,15 @@ fn focus_point_is_not_serialized_when_unknown_and_round_trips() {
         mode: Some("AF-C".into()),
         area: Some("Wide".into()),
         tracking: None,
+        af_point: None,
     });
     let json = serde_json::to_string(&with).unwrap();
-    assert!(json.contains("\"focus\"") && !json.contains("tracking"), "{json}");
+    assert!(json.contains("\"focus\"") && !json.contains("tracking") && !json.contains("af_point"), "{json}");
     let back: Meta = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, with);
+    // a camera's named grid point (Nikon) is kept too
+    with.focus.as_mut().unwrap().af_point = Some("C7".into());
+    let back: Meta = serde_json::from_str(&serde_json::to_string(&with).unwrap()).unwrap();
     assert_eq!(back, with);
 }
 

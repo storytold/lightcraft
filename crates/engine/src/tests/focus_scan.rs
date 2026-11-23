@@ -86,6 +86,7 @@ fn fills_missing_points_and_remembers_photos_without_one() {
         mode: Some("AF-S".into()),
         area: None,
         tracking: None,
+        af_point: None,
     };
     let mut with_point = photo(4, &af, "SONY ILCE-1");
     with_point.meta.focus = Some(known.clone());
@@ -129,6 +130,24 @@ fn fills_missing_points_and_remembers_photos_without_one() {
     assert_eq!(s.execute("photo.readFocusPoints", &json!({"wait": true})).unwrap()["queued"], 1);
     // named photos are looked at again, even those recorded as having none
     assert_eq!(s.execute("photo.readFocusPoints", &json!({"ids": [2, 3, 4], "wait": true})).unwrap()["queued"], 1);
+}
+
+/// A D800E NEF is read like an ARW: the job opens `.NEF` files from the checked Nikon body (and no other Nikon), and
+/// the point it stores names the camera's grid point.
+#[test]
+fn reads_the_focus_point_of_nikon_nefs() {
+    let dir = temp_dir("nef");
+    let nef = dir.join("_DSC0001.NEF");
+    // PrimaryAFPoint 17: B8
+    std::fs::write(&nef, lightcraft_meta::focus::synthetic_nef(17, 100_000)).unwrap();
+    let mut s = Session::new();
+    add(&mut s, vec![photo(1, &nef, "NIKON CORPORATION NIKON D800E"), photo(2, &nef, "NIKON CORPORATION NIKON D850")]);
+    let r = s.execute("photo.readFocusPoints", &json!({"wait": true})).unwrap();
+    assert_eq!(r["queued"], 1, "{r}");
+    let f = focus(&s, 1).expect("the NEF's point");
+    assert_eq!(f.af_point.as_deref(), Some("B8"));
+    assert_eq!(Some(f), lightcraft_meta::extract(&std::fs::read(&nef).unwrap()).focus, "the same point a whole-file read gives");
+    assert_eq!(focus(&s, 2), None, "an unchecked Nikon body is not opened");
 }
 
 /// What was read survives a restart: the next session reads nothing again, and a photo whose file was offline is read
@@ -236,8 +255,13 @@ fn changes_under_a_running_job_are_respected() {
     assert_eq!(s.execute("focus.pump", &json!({"pace": "pause"})).unwrap()["running"]["total"], 6);
     // meanwhile: photo 1 removed, photo 2 relinked elsewhere, photo 3 given a point by the user's Reload, photo 4's file
     // replaced by garbage, photo 5's deleted
-    let mine =
-        lightcraft_meta::FocusPoint { rect: lightcraft_geom::Rect { x0: 0.5, y0: 0.5, x1: 0.6, y1: 0.6 }, mode: None, area: None, tracking: None };
+    let mine = lightcraft_meta::FocusPoint {
+        rect: lightcraft_geom::Rect { x0: 0.5, y0: 0.5, x1: 0.6, y1: 0.6 },
+        mode: None,
+        area: None,
+        tracking: None,
+        af_point: None,
+    };
     s.execute_fn("test.change", |s| {
         s.apply_system(Op::RemovePhoto { id: PhotoId(1) })?;
         let moved = dir.join("moved.ARW");
