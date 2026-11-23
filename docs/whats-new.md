@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### ISO for Panasonic and Leica raws
+- Panasonic and Leica raws (RW2, RWL and the older RAW files) now import with their ISO. Many bodies used to show
+  none (issue #3508). Photos imported earlier get it with Photo ▸ Reload from Disk.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
