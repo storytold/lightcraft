@@ -246,7 +246,7 @@ fn a_dialog_in_the_full_screen_photo_view_has_no_title_bar_handle() {
     h.app.run("dialog.export", json!({})).unwrap();
     h.step();
     assert!(h.app.ui.fullscreen && h.app.ui.dialog.is_some());
-    let handles = [0usize, 1].map(|i| egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("dialog-title-bar").with(i)));
+    let handles = [0usize, 1].map(|i| egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("dialog-title-bar").with(i)));
     let handle = h.view.ctx.memory(|m| handles.iter().any(|layer| m.areas().visible_last_frame(layer)));
     assert!(!handle, "no title bar handle over the photo");
 }
@@ -340,20 +340,22 @@ fn the_title_bar_handle_stays_below_a_dropdown_open_in_the_dialog() {
     let handle_at = |h: &mut Headless| {
         h.events.push(egui::Event::PointerMoved(spot));
         play(h);
-        let handles = [0usize, 1].map(|i| egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("dialog-title-bar").with(i)));
+        // (the handles sit in the tooltip order, above the framework's modal dialog layer)
+        let handles = [0usize, 1].map(|i| egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("dialog-title-bar").with(i)));
         h.view.ctx.memory(|m| handles.iter().any(|layer| m.areas().visible_last_frame(layer)))
     };
     assert!(handle_at(&mut h), "without a dropdown the bar beside the dialog is the handle's");
     let r = h.request("ui.clickWidget", json!({"id": "combo:exportPreset"}), T);
     assert_eq!(r["ok"], true, "{r}");
     play(&mut h);
-    assert!(egui::Popup::is_any_open(&h.view.ctx), "the preset dropdown is open");
+    // (the preset dropdown is a framework menu above the framework dialog)
+    assert!(crate::dialogs::popup_open(&h.view.ctx), "the preset dropdown is open");
     assert!(!handle_at(&mut h), "with one open, no handle sits above it");
-    assert!(egui::Popup::is_any_open(&h.view.ctx), "(and the pointer leaving the dialog did not close it)");
+    assert!(crate::dialogs::popup_open(&h.view.ctx), "(and the pointer leaving the dialog did not close it)");
     // once the dropdown is closed the handle is back, so the bar beside the dialog moves the window again
     h.request("ui.key", json!({"key": "Escape"}), T);
     play(&mut h);
-    assert!(!egui::Popup::is_any_open(&h.view.ctx), "Escape closes the dropdown");
+    assert!(!crate::dialogs::popup_open(&h.view.ctx), "Escape closes the dropdown");
     assert!(h.app.ui.dialog.is_some(), "and leaves the dialog");
     assert!(handle_at(&mut h), "the handle is back");
 }

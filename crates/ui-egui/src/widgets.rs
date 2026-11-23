@@ -81,13 +81,14 @@ pub(crate) fn menu_row(
 ) -> bool {
     use craft::ui::contract::{Props as _, Show as _};
     use craft::ui::menu::MenuItem;
-    let row = MenuItem::new(label.to_owned()).id_salt(salt).entry_checked(checked).enabled(enabled).show(ui);
+    let mut item = MenuItem::new(label.to_owned()).id_salt(salt).entry_checked(checked).enabled(enabled);
+    if let Some(tooltip) = tooltip {
+        item = item.tooltip(tooltip.to_owned());
+    }
+    let row = item.show(ui);
     let real = !measuring(ui);
     if real && let Some(name) = name {
         register_response(name, row.response.rect, &row.response);
-    }
-    if real && let Some(tooltip) = tooltip {
-        craft::ui::contract::tooltip::attach(&row.response, &tooltip.to_owned().into());
     }
     real && enabled && row.ran
 }
@@ -243,6 +244,24 @@ pub fn register_response(id: impl Into<String>, rect: Rect, response: &egui::Res
         let registry = d.get_temp_mut_or_default::<Registry>(egui::Id::unique("lc-registry"));
         registry.rects.push((id.clone(), rect));
         registry.hits.push((id, WidgetHit { id: response.id, layer_id: response.layer_id, interact_rect: response.interact_rect }));
+    });
+}
+
+/// A click pressed and released within this one pass on `response` (a host that delivers a whole click in one batch).
+/// The framework's own gesture needs to see the press before the release; egui still reports such a click.
+pub(crate) fn same_pass_click(response: &egui::Response) -> bool {
+    response.clicked() && response.ctx.input(|i| i.pointer.any_pressed() && i.pointer.any_released())
+}
+
+/// Point the hit last registered as `id` in this pass at `response` (its id and layer), keeping its geometry: for a
+/// widget whose own response, rather than one of its parts', names it.
+pub(crate) fn retarget_response(id: &str, response: &egui::Response) {
+    response.ctx.data_mut(|d| {
+        let registry = d.get_temp_mut_or_default::<Registry>(egui::Id::unique("lc-registry"));
+        if let Some((_, hit)) = registry.hits.iter_mut().rev().find(|(name, _)| name == id) {
+            hit.id = response.id;
+            hit.layer_id = response.layer_id;
+        }
     });
 }
 

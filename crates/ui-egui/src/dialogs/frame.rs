@@ -154,6 +154,10 @@ pub(super) fn return_confirms(dlg: &Dialog) -> bool {
 /// True when Return confirms the dialog; Esc cancels the dialog (`show`).
 pub(super) fn dialog_field(ui: &mut egui::Ui, widget: &str, text: &mut String, hint: &str) -> bool {
     let r = crate::text_field::TextField::singleline(widget, text).hint(crate::i18n::tr(hint)).width(f32::INFINITY).select_on_focus(true).show(ui);
+    // A dialog's one field is named by the field itself, the stop the framework focuses, not by its text part.
+    if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+        crate::widgets::retarget_response(widget, &r.response);
+    }
     // (and takes it back when nothing has it: after a click on the dialog's background or a check box,
     // or when Return gave it up on a refusal; a control Tab reached keeps it). A disabled dialog (a
     // prompt or the blocking library window owns input) must not request the focus at all: egui's
