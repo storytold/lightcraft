@@ -50,6 +50,11 @@ pub(super) fn prepare(app: &LightcraftApp, ctx: &egui::Context) {
 }
 
 pub(super) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    // The window's shell is never content to measure: a caller's measuring run (a test that measures the whole UI)
+    // draws nothing here, so no region registers or claims its id twice in the pass.
+    if craft::ui::runtime::measure::active(ui.ctx()) {
+        return;
+    }
     // Fullscreen preview and its reveal rules remain LightCraft's existing presentation path.
     // A given Standard mode prevents a separate framework-owned screen-mode preference.
     // The migrated shell owns placement, not the spacing of still-unported controls.

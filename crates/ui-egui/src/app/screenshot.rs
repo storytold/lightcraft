@@ -267,6 +267,10 @@ impl LightcraftApp {
         // same scroll offsets, open sections, style… as the window
         let memory = main.memory(|m| m.clone());
         view.ctx.memory_mut(|m| *m = memory);
+        // The copied memory carries the framework's record of the main window's current pass (the ids it has
+        // claimed). An empty pass first moves the shadow context on to a pass of its own, so drawing the window here
+        // claims its ids afresh instead of twice in what the runtime takes for the main window's pass.
+        view.run(headless::HeadlessView::raw_input(size, ppp, time, vec![]), |_| {});
         view.run(headless::HeadlessView::raw_input(size, ppp, time, vec![]), |ui| self.draw_window(ui));
         let img = capture.then(|| {
             let mut tex = self.renderer.cpu_textures();
