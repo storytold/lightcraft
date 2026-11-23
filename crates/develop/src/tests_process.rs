@@ -106,6 +106,11 @@ fn unknown_process_numbers_load_and_render_with_the_newest_known() {
     // reserved V9 falls back to V8 without upgrading to V10
     let reserved_v9 = DevelopSettings::from_json(&json!({"process": 9})).unwrap().process;
     assert_eq!((reserved_v9.process(), reserved_v9.is_known(), reserved_v9.is_outdated()), (Process::V8, false, true));
+    // 11 and 12 (claimed by open pull requests) fall back to V10 without upgrading to V13
+    for claimed in [11, 12] {
+        let v = DevelopSettings::from_json(&json!({"process": claimed})).unwrap().process;
+        assert_eq!((v.process(), v.is_known(), v.is_outdated()), (Process::V10, false, true), "{claimed}");
+    }
 }
 
 #[test]

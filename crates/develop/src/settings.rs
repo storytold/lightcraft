@@ -106,13 +106,19 @@ pub enum Process {
     /// illuminant's Bradford blue cone response is `<= 0.0`, `craft-libs#587`).
     /// `ProcessVersion(9)` is reserved for `HealMethod::Pinned` (`#4069`).
     V10,
+    /// V10, calibrated against Lightroom exports of real edits: global Shadows answers large amounts
+    /// compressively (`lightcraft_pipeline::finish::tone_slider`), a negative Texture smooths less
+    /// (`finish::texture_slider`) and the Global grading wheel tints less (`colorops::global_wheel`).
+    /// `ProcessVersion(11)` and `ProcessVersion(12)` are left to the open claims of #4069 and #4047.
+    V13,
 }
 
 impl Process {
-    /// Every process, oldest first (`ProcessVersion(9)` is reserved for `#4069`).
-    pub const ALL: [Process; 9] =
-        [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7, Process::V8, Process::V10];
-    pub const LATEST: Process = Process::V10;
+    /// Every process, oldest first (`ProcessVersion(9)` is reserved for `#4069`; 11 and 12 are claimed by open
+    /// pull requests).
+    pub const ALL: [Process; 10] =
+        [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7, Process::V8, Process::V10, Process::V13];
+    pub const LATEST: Process = Process::V13;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
@@ -125,6 +131,7 @@ impl Process {
             Process::V7 => ProcessVersion(7),
             Process::V8 => ProcessVersion(8),
             Process::V10 => ProcessVersion(10),
+            Process::V13 => ProcessVersion(13),
         }
     }
 }
