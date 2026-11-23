@@ -159,8 +159,11 @@ machine-readable schemas. Each tool's input schema lists the top-level keys its 
 doc's words as their description), typed only where that is certain: `boolean` for `bool` params and
 `string` for text keys such as `name`, `title` and `path`. Clients send untyped arguments as strings
 (`{"id": "11"}`), so the server turns a string that is a JSON number, boolean, null, list or object
-back into that value before the command runs. Text keys keep their text, so an album can be named
-`2008`; they are only decoded when the string is a JSON list or object. Nested params stay free-form. Existing command validation (including strict
+back into that value before the command runs, reading that command's doc to tell text from
+numbers: a key holds text when it is a known text key or its doc says text or name (`photosAlbum?:
+top-level album name`, `watermark?: text | {…}`). Text keeps its text, so an album can be named
+`2008`; it is only decoded when the string is a JSON list or object, or `null` where the doc offers
+it. Nested params stay free-form. Existing command validation (including strict
 export options) is preserved. Escaped tool panics return `isError: true`, and the session keeps
 serving; backend panics during resource reads or tool listing return an internal error.
 The headless backend owns its session directly, without a session mutex.

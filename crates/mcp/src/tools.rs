@@ -349,6 +349,8 @@ pub fn command_tools(backend: &mut dyn Backend) -> Vec<Value> {
         .filter_map(|c| {
             let id = c["id"].as_str()?;
             let label = c["label"].as_str().unwrap_or(id);
+            let params = c["params"].as_str().unwrap_or("");
+            crate::command_params::remember_doc(&command_tool_name(id), params);
             let mut d = format!("{label} (command `{id}`).");
             if let Some(p) = c["params"].as_str().filter(|p| !p.is_empty()) {
                 d.push_str(&format!(" Params: {p}."));
@@ -364,7 +366,7 @@ pub fn command_tools(backend: &mut dyn Backend) -> Vec<Value> {
                 "name": command_tool_name(id),
                 "title": label,
                 "description": d,
-                "inputSchema": crate::command_params::schema(c["params"].as_str().unwrap_or("")),
+                "inputSchema": crate::command_params::schema(params),
             }))
         })
         .collect()
@@ -606,8 +608,14 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
     let s = |k: &str| args.get(k).and_then(Value::as_str);
     if let Some(rest) = name.strip_prefix(COMMAND_TOOL_PREFIX) {
         // Command ids never contain `_`, so the mapping is reversible.
-        // clients stringify arguments a free-form schema doesn't type (`"11"` for 11): undo that
-        return ToolResult::from(exec(b, &rest.replace('_', "."), crate::command_params::repair_args(args)));
+        // clients stringify arguments a free-form schema doesn't type (`"11"` for 11): undo that,
+        // reading the command's doc (listed by `tools/list`; asked for here when it wasn't)
+        let doc = crate::command_params::doc_of(name).or_else(|| {
+            command_tools(b);
+            crate::command_params::doc_of(name)
+        });
+        let args = crate::command_params::repair_args(args, &doc.unwrap_or_default());
+        return ToolResult::from(exec(b, &rest.replace('_', "."), args));
     }
     match name {
         "list_commands" | "command_list" => {

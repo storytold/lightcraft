@@ -345,6 +345,20 @@ fn command_tool_schemas_list_documented_keys() {
     assert!(s["properties"]["parent"].is_object());
     assert_eq!(s["additionalProperties"], true);
     assert!(schema("cmd_album_addPhotos")["properties"]["id"].is_object());
+    let export = schema("cmd_app_export");
+    for k in ["longEdge", "shortEdge", "width", "height", "megapixels", "percent", "hdr"] {
+        assert!(export["properties"][k].is_object(), "app.export lists `{k}`: {export}");
+    }
+    assert_eq!(export["properties"]["photosAlbum"]["type"], "string");
+}
+
+/// The repair reads each command's doc even when the client never asked for `tools/list`.
+#[test]
+fn command_tools_repair_without_a_tool_list() {
+    let mut b = Headless::demo();
+    let r = call_tool(&mut b, "cmd_album_create", &json!({"name": "Keep", "folder": "false"}));
+    assert!(!r.is_error, "{r:?}");
+    assert!(b.session.catalog.albums().any(|a| a.name == "Keep" && !a.folder));
 }
 
 #[test]
