@@ -2,7 +2,7 @@
 //!
 //! [`layout`] is the pure page model (paper, margins, cells); [`compose`] renders a layout and its
 //! photos to [`PageRaster`]s; [`template`] holds the saved settings; [`output`] writes the pages
-//! as a PDF.
+//! as a PDF or as JPEG files.
 pub mod compose;
 pub mod layout;
 pub mod output;
@@ -31,6 +31,18 @@ pub struct PageRaster {
     pub rgb: Vec<u16>,
 }
 
+/// Where a print goes (#4675): a PDF, or one JPEG file per page.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PrintOutput {
+    #[default]
+    Pdf,
+    Jpeg,
+}
+
+/// Lowest and highest JPEG quality of a printed page file.
+pub const JPEG_QUALITY: std::ops::RangeInclusive<u8> = 1..=100;
+
 /// How a print job is produced (Lightroom's Print Job panel): resolution, and the colour
 /// management, print adjustment, print sharpening and depth of [`crate::print_color`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -40,11 +52,15 @@ pub struct PrintJob {
     pub ppi: f32,
     /// Profile, rendering intent, black point compensation, print adjustment, print sharpening.
     pub color: crate::print_color::PrintColorSettings,
+    /// Where the print goes: a PDF (`print.exportPdf`) or JPEG files (`print.exportJpeg`).
+    pub output: PrintOutput,
+    /// The JPEG quality of each page file, [`JPEG_QUALITY`].
+    pub jpeg_quality: u8,
 }
 
 impl Default for PrintJob {
     fn default() -> Self {
-        Self { ppi: 240.0, color: crate::print_color::PrintColorSettings::default() }
+        Self { ppi: 240.0, color: crate::print_color::PrintColorSettings::default(), output: PrintOutput::Pdf, jpeg_quality: 90 }
     }
 }
 
@@ -59,6 +75,9 @@ impl PrintJob {
     pub fn validate(&self) -> Result<(), String> {
         if !(self.ppi.is_finite() && (MIN_PPI..=MAX_PPI).contains(&self.ppi)) {
             return Err(format!("ppi must be a number from {MIN_PPI} to {MAX_PPI}"));
+        }
+        if !JPEG_QUALITY.contains(&self.jpeg_quality) {
+            return Err(format!("jpegQuality must be from {} to {}", JPEG_QUALITY.start(), JPEG_QUALITY.end()));
         }
         self.color.validate()
     }

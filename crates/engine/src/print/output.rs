@@ -1,15 +1,19 @@
-//! Writes composed pages as a print-ready PDF: each page is converted to the job's colour target
+//! Writes composed pages as a print-ready PDF, or as JPEG files ([`write_jpegs`]): each page is converted to the job's colour target
 //! (a printer / paper profile, or sRGB / Adobe RGB when the printer manages colour) with its
 //! intent, black point compensation and print adjustment ([`crate::print_color`]), then embedded
 //! covering the paper as an ICC-tagged, losslessly compressed 16-bit (or 8-bit) image. A printer
 //! profile is also named as the document's output intent ([`crate::print_pdf`]).
 use super::{MAX_JOB_PAGES, PageRaster, PrintJob};
+use crate::originals::OriginalGuard;
 use crate::print_color::PrintColorJob;
 use crate::print_pdf::ImageData;
+use crate::slideshow_export::{PartFile, file_name_prefix};
 use lightcraft_color::transfer::encode_srgb8;
 use lightcraft_color::{REC2020, SRGB};
 use lightcraft_pipeline::OutputSpace;
 use lightcraft_raster::Rgba8;
+use std::io::Write as _;
+use std::path::Path;
 
 /// Largest PDF produced, bytes.
 const MAX_PDF_BYTES: usize = 256 * 1024 * 1024;
@@ -64,6 +68,63 @@ pub fn write(pages: &[PageRaster], job: &PrintJob, title: &str) -> Result<Vec<u8
         out.push((size, image));
     }
     color.pdf(out, title)
+}
+
+/// The name of a print's JPEG files (`<name>-001.jpg`…): `name`, else the folder's own name when it
+/// can name files, else "Print". `name` follows the slideshow's rule for its JPEG files.
+pub fn jpeg_name(name: Option<&str>, folder: &str) -> Result<String, String> {
+    match name {
+        Some(n) => file_name_prefix(n),
+        None => Ok(Path::new(folder).file_name().and_then(|n| file_name_prefix(&n.to_string_lossy()).ok()).unwrap_or_else(|| "Print".into())),
+    }
+}
+
+/// Writes `pages` as JPEG files `<name>-001.jpg`, `<name>-002.jpg`… in `folder` (#4675), each in
+/// the job's colour target at its JPEG quality, with the profile and resolution embedded. Every
+/// file is written as `.part` first and they take their names together once all are written: a
+/// failure while writing, or `cancelled`, leaves no file behind, and a failure while renaming
+/// removes the rest. `guard` keeps an original from being replaced.
+/// → the files written and their total bytes.
+pub fn write_jpegs(
+    pages: &[PageRaster],
+    job: &PrintJob,
+    folder: &Path,
+    name: &str,
+    guard: &OriginalGuard,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(Vec<String>, usize), String> {
+    if pages.is_empty() {
+        return Err("nothing to print".into());
+    }
+    if pages.len() > MAX_JOB_PAGES {
+        return Err(format!("a print is limited to {MAX_JOB_PAGES} pages"));
+    }
+    let color = PrintColorJob::new(&job.color)?;
+    color.jpeg_ready()?;
+    let digits = pages.len().to_string().len().max(3);
+    let mut parts = Vec::with_capacity(pages.len());
+    let mut bytes = 0usize;
+    for (i, page) in pages.iter().enumerate() {
+        if cancelled() {
+            return Err("Print cancelled".into());
+        }
+        let jpg = color.jpeg(page, job.jpeg_quality)?;
+        let target = folder.join(format!("{name}-{:0digits$}.jpg", i + 1));
+        guard.check(&target)?;
+        let (part, mut f) = PartFile::new(&target)?;
+        f.write_all(&jpg).map_err(|e| format!("{}: {e}", part.part.display()))?;
+        f.sync_all().map_err(|e| format!("{}: {e}", part.part.display()))?;
+        bytes = bytes.saturating_add(jpg.len());
+        parts.push(part);
+    }
+    if cancelled() {
+        return Err("Print cancelled".into());
+    }
+    let files = parts.iter().map(|p| p.target.to_string_lossy().into_owned()).collect();
+    for part in parts {
+        part.commit(guard)?;
+    }
+    Ok((files, bytes))
 }
 
 #[cfg(test)]
@@ -132,5 +193,59 @@ mod tests {
         };
         let err = write(&[raster(2, 2, [0; 3])], &junk, "t").unwrap_err();
         assert!(err.contains("Junk"), "{err}");
+    }
+
+    /// The width and height in a JPEG's frame header, and its JFIF density in dots per inch.
+    fn jpeg_size_and_ppi(jpg: &[u8]) -> ((u16, u16), u16) {
+        let be = |i: usize| u16::from_be_bytes([jpg[i], jpg[i + 1]]);
+        let sof = jpg.windows(2).position(|w| w == [0xFF, 0xC0]).expect("a baseline frame header");
+        let jfif = jpg.windows(5).position(|w| w == b"JFIF\0").expect("a JFIF segment");
+        assert_eq!(jpg[jfif + 7], 1, "density in dots per inch");
+        ((be(sof + 7), be(sof + 5)), be(jfif + 8))
+    }
+
+    /// Print to JPEG files (#4675): one file per page, `<name>-001.jpg`…, at the page's pixels and
+    /// resolution, with the colour target's profile; nothing is left behind when it's cancelled.
+    #[test]
+    fn pages_become_numbered_jpeg_files() {
+        let dir = std::env::temp_dir().join(format!("lc-print-jpeg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let pages = [raster(425, 550, [255, 255, 255]), raster(425, 550, [200, 30, 30])];
+        let job = PrintJob { jpeg_quality: 80, ..PrintJob::default() };
+        let guard = OriginalGuard::default();
+        let (files, bytes) = write_jpegs(&pages, &job, &dir, "Proofs", &guard, &|| false).unwrap();
+        assert_eq!(files, [dir.join("Proofs-001.jpg"), dir.join("Proofs-002.jpg")].map(|p| p.to_string_lossy().into_owned()));
+        let mut total = 0;
+        for file in &files {
+            let jpg = std::fs::read(file).unwrap();
+            total += jpg.len();
+            assert!(jpg.starts_with(&[0xFF, 0xD8]), "{file}");
+            assert_eq!(jpeg_size_and_ppi(&jpg), ((425, 550), 100), "{file}");
+            assert!(jpg.windows(12).any(|w| w == b"ICC_PROFILE\0"), "{file}: the sRGB profile is embedded");
+        }
+        assert_eq!(bytes, total);
+        assert!(std::fs::read_dir(&dir).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".part")));
+        // cancelled after the first page: no file and no part file stays
+        let again = dir.join("again");
+        let calls = std::cell::Cell::new(0);
+        let cancel = || {
+            calls.set(calls.get() + 1);
+            calls.get() > 1
+        };
+        assert!(write_jpegs(&pages, &job, &again, "Proofs", &guard, &cancel).is_err());
+        assert_eq!(std::fs::read_dir(&again).map(|d| d.count()).unwrap_or(0), 0, "nothing left behind");
+        assert!(write_jpegs(&[], &job, &again, "Proofs", &guard, &|| false).is_err());
+        // a name is a plain file name: no path, drive or reserved character; a folder whose name
+        // can't name files gives "Print"
+        for bad in ["a/b", "a\\b", "D:lab", "", "x\u{0}y"] {
+            assert!(jpeg_name(Some(bad), "/tmp/out").is_err(), "{bad:?}");
+        }
+        assert_eq!(jpeg_name(Some(" Lab order "), "/tmp/out").unwrap(), "Lab order");
+        // a prefix only starts file names: ".." gives "..-001.jpg" in the folder, not its parent
+        assert_eq!(jpeg_name(Some(".."), "/tmp/out").unwrap(), "..");
+        assert_eq!(jpeg_name(None, "/tmp/Proofs").unwrap(), "Proofs");
+        assert_eq!(jpeg_name(None, "/tmp/a:b").unwrap(), "Print");
+        assert_eq!(jpeg_name(None, "/").unwrap(), "Print");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

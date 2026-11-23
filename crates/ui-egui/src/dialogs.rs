@@ -572,6 +572,7 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         Dialog::LightroomResult { first: Some(_), .. } => "Show in Library",
         Dialog::ContactSheet { .. } => "Choose PDF…",
         Dialog::SlideshowExport { .. } => "Export…",
+        Dialog::Print if app.session.print.job.output == lightcraft_engine::print::PrintOutput::Jpeg => "Print to JPEG Files…",
         Dialog::Print => "Print to PDF…",
         Dialog::Merge { .. } => "Merge",
         Dialog::DenoiseModel { info, .. } if !informational && info["download"].is_string() => "Accept & Download",

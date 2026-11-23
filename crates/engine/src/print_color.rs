@@ -17,11 +17,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use lightcraft_codecs::display::MAX_PROFILE_BYTES;
+use lightcraft_codecs::encode::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
 use lightcraft_codecs::print::{PrintColor, PrintTarget, PrintTransform};
 use lightcraft_codecs::{NamedSpace, proof::ProofIntent};
 use serde::{Deserialize, Serialize};
 
 use crate::export::{DeepImage, DeepSamples, OutputSpace, SharpenAmount, SharpenFor, output_sharpen_deep};
+use crate::print::PageRaster;
 use crate::print_pdf::{ImageData, OutputIntent, PdfImage, PdfInfo, PdfPage, Placement};
 
 /// The colour space a printer that manages colour receives.
@@ -204,10 +206,7 @@ impl PrintColorJob {
     /// Convert a composed page (16-bit RGB, `Rec2020` output encoding) to the PDF image that covers
     /// it, in the target's colours.
     pub fn page_image(&self, width: u32, height: u32, rgb: &[u16]) -> Result<PdfImage, String> {
-        let want = u64::from(width).checked_mul(u64::from(height)).and_then(|p| p.checked_mul(3));
-        if width == 0 || height == 0 || want != Some(rgb.len() as u64) {
-            return Err(format!("a page of {width} × {height} pixels can't be made from {} samples", rgb.len()));
-        }
+        check_page(width, height, rgb)?;
         let device = self.transform.apply(rgb)?;
         let channels = self.transform.channels() as u8;
         let icc = Some(Arc::clone(self.transform.icc()));
@@ -217,6 +216,31 @@ impl PrintColorJob {
             let samples = device.iter().map(|&v| ((u32::from(v) * 255 + 32767) / 65535) as u8).collect();
             PdfImage { width, height, channels, data: ImageData::Raw { bits: 8, samples }, icc }
         })
+    }
+
+    /// A composed page as a JPEG file at `quality` (#4675): converted to the target's colours, 8
+    /// bits per sample, with the target's profile and the page's resolution embedded.
+    pub fn jpeg(&self, page: &PageRaster, quality: u8) -> Result<Vec<u8>, String> {
+        self.jpeg_ready()?;
+        check_page(page.width, page.height, &page.rgb)?;
+        // the 16-bit samples go before encoding: a large page holds hundreds of megabytes of them
+        let samples: Vec<u8> = {
+            let device = self.transform.apply(&page.rgb)?;
+            device.iter().map(|&v| ((u32::from(v) * 255 + 32767) / 65535) as u8).collect()
+        };
+        let image = EncodeImage::new(page.width, page.height, self.transform.channels() as u8, Samples::U8(&samples));
+        let ppi = page.ppi.round().clamp(1.0, f32::from(u16::MAX)) as u16;
+        let meta = EncodeMeta { icc: Some(self.transform.icc().as_slice()), ppi: Some(ppi), ..EncodeMeta::default() };
+        encode_jpeg(&image, quality, ChromaSubsampling::S444, &meta).map_err(|e| e.to_string())
+    }
+
+    /// Whether the pages can be JPEG files: those hold RGB or grey, so a CMYK printer profile is
+    /// refused, before anything renders.
+    pub fn jpeg_ready(&self) -> Result<(), String> {
+        if self.transform.channels() == 4 {
+            return Err("JPEG files can't hold the CMYK printer profile: choose an RGB or grey profile, or let the printer manage colour".into());
+        }
+        Ok(())
     }
 
     /// The print-ready document: each page image covers its page (`size` in points).
@@ -238,6 +262,15 @@ impl PrintColorJob {
     pub fn profile_name(&self) -> Option<&str> {
         self.intent.as_ref().map(|i| i.condition.as_str()).or(self.transform.description())
     }
+}
+
+/// Refuses a page whose samples don't match its size.
+fn check_page(width: u32, height: u32, rgb: &[u16]) -> Result<(), String> {
+    let want = u64::from(width).checked_mul(u64::from(height)).and_then(|p| p.checked_mul(3));
+    if width == 0 || height == 0 || want != Some(rgb.len() as u64) {
+        return Err(format!("a page of {width} × {height} pixels can't be made from {} samples", rgb.len()));
+    }
+    Ok(())
 }
 
 /// A photo rendered for the page as the layout gets it from the export renderer.

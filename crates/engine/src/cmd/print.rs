@@ -232,18 +232,27 @@ fn clear(s: &mut Session, _: &Value) -> Result<Value> {
     Ok(json!({"pages": 1, "cells": 0}))
 }
 
-fn export_pdf(s: &mut Session, p: &Value) -> Result<Value> {
-    const ID: &str = "print.exportPdf";
-    let path = p.get("path").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).ok_or_else(|| bad(ID, "missing path"))?;
-    if let Some(k) = p.as_object().and_then(|o| o.keys().find(|k| !matches!(k.as_str(), "path" | "ids" | "id"))) {
-        return Err(bad(ID, format!("unknown parameter `{k}` (one of path, ids; change the print with print.set)")));
+/// The file or folder an export writes (`key`), after refusing parameters other than it, `extra`,
+/// `ids` and `id`, and photo ids that aren't numbers.
+fn export_target<'a>(p: &'a Value, id: &str, key: &str, extra: &[&str]) -> Result<&'a str> {
+    let target = p.get(key).and_then(Value::as_str).filter(|s| !s.trim().is_empty()).ok_or_else(|| bad(id, format!("missing {key}")))?;
+    let known = |k: &str| k == key || extra.contains(&k) || matches!(k, "ids" | "id");
+    if let Some(k) = p.as_object().and_then(|o| o.keys().find(|k| !known(k))) {
+        let one_of: Vec<&str> = std::iter::once(key).chain(extra.iter().copied()).chain(["ids"]).collect();
+        return Err(bad(id, format!("unknown parameter `{k}` (one of {}; change the print with print.set)", one_of.join(", "))));
     }
     if p.get("ids").is_some_and(|v| v.as_array().is_none_or(|a| a.iter().any(|v| v.as_u64().is_none()))) {
-        return Err(bad(ID, "ids must be an array of photo ids"));
+        return Err(bad(id, "ids must be an array of photo ids"));
     }
     if p.get("id").is_some_and(|v| v.as_u64().is_none()) {
-        return Err(bad(ID, "id must be a photo id"));
+        return Err(bad(id, "id must be a photo id"));
     }
+    Ok(target)
+}
+
+fn export_pdf(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "print.exportPdf";
+    let path = export_target(p, ID, "path", &[])?;
     s.check_write_target(path).map_err(|e| bad(ID, e))?;
     let ids = s.targets(p)?;
     let settings = s.print.clone();
@@ -265,6 +274,35 @@ fn export_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     s.check_write_target(path).map_err(|e| bad(ID, e))?;
     crate::export::write_file(path, &bytes).map_err(|e| bad(ID, e))?;
     Ok(json!({"path": path, "pages": pages.len(), "photos": ids.len(), "bytes": bytes.len()}))
+}
+
+fn export_jpeg(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "print.exportJpeg";
+    let folder = export_target(p, ID, "folder", &["name"])?;
+    if p.get("name").is_some_and(|v| !v.is_string() && !v.is_null()) {
+        return Err(bad(ID, "name must be a string"));
+    }
+    let name = crate::print::output::jpeg_name(p.get("name").and_then(Value::as_str), folder).map_err(|e| bad(ID, e))?;
+    s.check_write_target(folder).map_err(|e| bad(ID, e))?;
+    let ids = s.targets(p)?;
+    let settings = s.print.clone();
+    // a printer profile that can't be used, or one JPEG files can't hold, fails before anything renders
+    crate::print_color::PrintColorJob::new(&settings.job.color).and_then(|c| c.jpeg_ready()).map_err(|e| bad(ID, e))?;
+    let work = crate::print::compose::prepare(s, &settings, &ids).map_err(|e| bad(ID, e))?;
+    let total = work.len() as u64;
+    let row = s.activity.start("export", "Printing to JPEG files", crate::activity::Cancel::No);
+    row.progress(0, total);
+    let pages = work
+        .run(&mut |done, name| {
+            row.progress(done as u64, total);
+            row.detail(name);
+            true
+        })
+        .map_err(|e| bad(ID, e))?;
+    let guard = s.original_guard();
+    let (files, bytes) =
+        crate::print::output::write_jpegs(&pages, &settings.job, std::path::Path::new(folder), &name, &guard, &|| false).map_err(|e| bad(ID, e))?;
+    Ok(json!({"folder": folder, "files": files, "pages": pages.len(), "photos": ids.len(), "bytes": bytes}))
 }
 
 // ---- templates ------------------------------------------------------------------------------
@@ -386,7 +424,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{ids?} → {settings: {layout, image, page, guides, job}, papers, pageWidth, pageHeight, printable, pageCount, cellsPerPage, gridCells?, overlaps}; lengths are inches",
             always, get),
         cmd!(query "print.set", "Set Print Settings", [], None,
-            "{layout?: {style: singleImage|contactSheet|picturePackage|customPackage, page: {paper, customWidth, customHeight, orientation: portrait|landscape, margins: {top,right,bottom,left}}, grid: {columns, rows, spacingX, spacingY, keepSquare}, spacing}, image?: {zoomToFill, rotateToFit, borderEnabled, borderWidth, borderColor: [r,g,b], strokeEnabled, strokeWidthPt, strokeColor}, page?: {background: [r,g,b], pageNumbers, pageInfo, cropMarks} (Page Options: single image and contact sheet only), guides?: {showRulers, units: in|cm|mm|pt, snap: off|cells|grid, gridSize, showMargins, showBleed, showPageGrid, showCells, showDimensions}, job?: {ppi: 72..720, color?: {profile: {kind: managed, space: srgb|adobeRgb} | {kind: icc, path}, intent: perceptual|relative, blackPointCompensation, brightness: -100..100, contrast: -100..100, sharpen: off|low|standard|high, media: matte|glossy, sixteenBit}}} — merges into the current print; cells and pages change with print.cell.* / print.layout.*; → print.get",
+            "{layout?: {style: singleImage|contactSheet|picturePackage|customPackage, page: {paper, customWidth, customHeight, orientation: portrait|landscape, margins: {top,right,bottom,left}}, grid: {columns, rows, spacingX, spacingY, keepSquare}, spacing}, image?: {zoomToFill, rotateToFit, borderEnabled, borderWidth, borderColor: [r,g,b], strokeEnabled, strokeWidthPt, strokeColor}, page?: {background: [r,g,b], pageNumbers, pageInfo, cropMarks} (Page Options: single image and contact sheet only), guides?: {showRulers, units: in|cm|mm|pt, snap: off|cells|grid, gridSize, showMargins, showBleed, showPageGrid, showCells, showDimensions}, job?: {ppi: 72..720, output: pdf|jpeg (where the dialog prints: print.exportPdf or print.exportJpeg), jpegQuality: 1..100, color?: {profile: {kind: managed, space: srgb|adobeRgb} | {kind: icc, path}, intent: perceptual|relative, blackPointCompensation, brightness: -100..100, contrast: -100..100, sharpen: off|low|standard|high, media: matte|glossy, sixteenBit}}} — merges into the current print; cells and pages change with print.cell.* / print.layout.*; → print.get",
             always, set),
         cmd!(query "print.reset", "Reset Print Settings", [], None, "{} → print.get", always, reset),
         cmd!(query "print.cell.add", "Add Print Cell", [], None,
@@ -405,6 +443,9 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "print.exportPdf", "Print to PDF", [], None,
             "{path, ids?: photo ids (default selection)} → {path, pages, photos, bytes}; prints the current print.get settings; replaces an existing output, never an original",
             always, export_pdf),
+        cmd!(query "print.exportJpeg", "Print to JPEG Files", [], None,
+            "{folder, name?: file name prefix (default the folder's name: <name>-001.jpg…), ids?: photo ids (default selection)} → {folder, files, pages, photos, bytes}; prints the current print.get settings as one JPEG file per page at the job's resolution and jpegQuality, in its colour target with the profile embedded (a CMYK printer profile is refused); the files are written as .part and take their names once all are done; replaces existing outputs, never an original",
+            always, export_jpeg),
         cmd!(query "print.template.list", "Print Templates", [], None, "{} → {templates: [{name, style, settings}]}", always, |s, _| Ok(template_list(s))),
         cmd!(query "print.template.save", "Save Print Template", [], None,
             "{name} — saves the layout, image settings, page and job (not the cells' photos or the guides); an existing name (any case) is replaced → print.template.list",

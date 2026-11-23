@@ -294,6 +294,55 @@ fn print_to_pdf_picks_a_file_and_runs_in_the_background() {
     assert_eq!(h.app.last_export_result.as_ref().unwrap()["files"][0]["print"], true);
 }
 
+/// Print To › JPEG Files (#4675): the dialog's Print button asks for a folder and writes one JPEG
+/// file per page there in the background, named after the folder.
+#[test]
+fn print_to_jpeg_files_picks_a_folder_and_writes_a_file_per_page() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-ui-print-jpeg-{}", std::process::id())).join("Lab order");
+    let _ = std::fs::remove_dir_all(&dir);
+    let folder = dir.to_string_lossy().into_owned();
+    let asked = Arc::new(Mutex::new(Vec::<crate::pick::PickRequest>::new()));
+    let requests = asked.clone();
+    let picked = folder.clone();
+    let services = Services {
+        picker: Some(Box::new(move |req| {
+            requests.lock().unwrap().push(req);
+            let (tx, rx) = std::sync::mpsc::channel();
+            tx.send(vec![picked.clone()]).unwrap();
+            Ok(rx)
+        })),
+        write_shared: Some(Arc::new(|_, _| Ok(()))),
+        ..Default::default()
+    };
+    let mut h = demo(services);
+    open_print(&mut h);
+    cmd(&mut h, "print.set", json!({"layout": {"page": {"paper": "5x7", "orientation": "landscape"}}, "job": {"ppi": 100.0}}));
+    // the Print Job panel is at the bottom of the settings column: scroll down to it, as a person would
+    let r = h.request("ui.hoverWidget", json!({"id": "combo:printPaper"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    for _ in 0..4 {
+        h.request("ui.scroll", json!({"dy": -600.0}), T);
+        h.settle(T);
+    }
+    assert!(!has(&h, "drag:printJpegQuality"), "a PDF has no JPEG quality");
+    click(&mut h, "button:printOutput-1");
+    assert_eq!(h.app.session.print.job.output, lightcraft_engine::print::PrintOutput::Jpeg);
+    assert!(has(&h, "drag:printJpegQuality"));
+    click(&mut h, "button:dialogOk");
+    assert!(h.step_until(Duration::from_secs(60), |h| h.app.last_export_result.is_some()), "the print did not finish");
+    assert_eq!(asked.lock().unwrap()[0].kind, crate::pick::PickKind::Folder);
+    let result = h.app.last_export_result.as_ref().unwrap()["files"][0].clone();
+    assert_eq!((result["print"].as_bool(), result["folder"].as_str()), (Some(true), Some(folder.as_str())));
+    let files = result["files"].as_array().unwrap();
+    assert_eq!(files.len() as u64, result["pages"].as_u64().unwrap());
+    assert!(files[0].as_str().unwrap().ends_with("Lab order-001.jpg"), "{result}");
+    for f in files {
+        let jpg = std::fs::read(f.as_str().unwrap()).unwrap();
+        assert!(jpg.starts_with(&[0xFF, 0xD8]), "{f}");
+    }
+    let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+}
+
 #[test]
 fn printing_shows_a_row_in_the_activity_stack_and_stops() {
     let mut app = LightcraftApp::new(

@@ -179,16 +179,7 @@ impl Request {
         }
         let name = match o.get("name") {
             None | Some(Value::Null) => None,
-            Some(Value::String(n)) => {
-                let n = n.trim();
-                if n.is_empty()
-                    || n.chars().count() > 120
-                    || n.chars().any(|c| c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
-                {
-                    return Err(format!("`name` must be 1–120 characters without path separators or reserved characters, not {n:?}"));
-                }
-                Some(n.to_string())
-            }
+            Some(Value::String(n)) => Some(file_name_prefix(n)?),
             Some(v) => return Err(format!("`name` must be text, not {v}")),
         };
         if name.is_some() && format != Format::Jpeg {
@@ -373,16 +364,30 @@ pub type Progress<'a> = &'a dyn Fn(u64, u64, &str);
 
 const CANCELLED: &str = "Slideshow export cancelled";
 
+/// `name` as the start of a sequence's file names (`<name>-001.jpg`): 1–120 characters, without
+/// path separators, a drive's colon or other characters a file name can't hold on some system.
+/// Print's JPEG files are named the same way.
+pub(crate) fn file_name_prefix(name: &str) -> Result<String, String> {
+    let n = name.trim();
+    if n.is_empty()
+        || n.chars().count() > 120
+        || n.chars().any(|c| c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+    {
+        return Err(format!("`name` must be 1–120 characters without path separators or reserved characters, not {n:?}"));
+    }
+    Ok(n.to_string())
+}
+
 /// A file written as `<path>.part` and renamed over `path` when complete; dropped before that,
-/// the part file is removed.
-struct PartFile {
-    part: PathBuf,
-    target: PathBuf,
+/// the part file is removed. Print's JPEG files are written the same way.
+pub(crate) struct PartFile {
+    pub(crate) part: PathBuf,
+    pub(crate) target: PathBuf,
     done: bool,
 }
 
 impl PartFile {
-    fn new(target: &Path) -> Result<(PartFile, std::fs::File), String> {
+    pub(crate) fn new(target: &Path) -> Result<(PartFile, std::fs::File), String> {
         if let Some(dir) = target.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
@@ -396,7 +401,7 @@ impl PartFile {
         Ok((PartFile { part, target: target.to_path_buf(), done: false }, f))
     }
 
-    fn commit(mut self, guard: &OriginalGuard) -> Result<(), String> {
+    pub(crate) fn commit(mut self, guard: &OriginalGuard) -> Result<(), String> {
         guard.check(&self.target)?;
         std::fs::rename(&self.part, &self.target).map_err(|e| format!("{}: {e}", self.target.display()))?;
         self.done = true;
