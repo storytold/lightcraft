@@ -23,7 +23,7 @@ use export::group_checklist;
 pub(crate) use export::preset_lzw_note;
 pub use frame::{ConfirmStyle, confirm_style, list_height, prompt};
 use frame::{
-    DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, clicked_backdrop, dialog_body, dialog_field, field, just_opened, only_shows,
+    DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, clicked_backdrop, dialog_field, field, fit_lists, just_opened, only_shows,
     return_confirms,
 };
 pub(crate) use rename::rename_preview;
@@ -196,240 +196,292 @@ fn welcome_body(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, page: &mut u
     });
 }
 
-/// The import review and Settings keep window ids of their own, so the size each is given
-/// doesn't carry over to the other dialogs.
-fn window_id(dialog: &Dialog) -> egui::Id {
-    egui::Id::unique(match dialog {
-        Dialog::Import { .. } => "lightcraft-import-dialog",
-        Dialog::Print => "lightcraft-print-dialog",
-        Dialog::Settings { .. } => "lightcraft-settings-dialog",
-        _ => "lightcraft-dialog",
-    })
+/// The framework dialog of each kind of dialog: its id names its layer, its placement and its footer, so the
+/// keyboard's place doesn't carry from a dialog to the one it opens. Each Keyword caller keeps its own, as before.
+fn dialog_id(dialog: &Dialog) -> egui::Id {
+    let keyword_caller = match dialog {
+        Dialog::KeywordTag { editing, parent, .. } => Some((editing.clone(), parent.clone())),
+        _ => None,
+    };
+    egui::Id::unique(("lightcraft.dialog", std::mem::discriminant(dialog), keyword_caller))
 }
 
-/// Block the underlying panels from the first frame, before the window establishes its modal
-/// layer. Close background menus on entry; popups subsequently opened inside the dialog stay usable.
+/// The egui layer the framework shows the dialog `id` on: the overlay host shows a layer container's `Area` under
+/// the runtime sub-id "area" of the container's id, in the foreground tier of a modal. The prompt and library
+/// windows name it before they are drawn, for the control channel's barrier.
+pub(crate) fn framework_dialog_layer(id: egui::Id) -> egui::LayerId {
+    egui::LayerId::new(egui::Order::Foreground, craft::ui::runtime::memory::sub(id, "area"))
+}
+
+/// Registers the automation names of a framework dialog's footer buttons: each is the last button of the recorded
+/// dialog named by its shown label (the footer follows the body), with the hit area and node the framework gave it,
+/// on the dialog's `layer`. Returns each name with the button's access node.
+pub(crate) fn register_footer_buttons(
+    output: &egui::Response,
+    layer: Option<egui::LayerId>,
+    record: Option<&craft::ui::runtime::inspect::Recorded>,
+    names: &[(String, String)],
+) -> Vec<(String, egui::Id)> {
+    let mut seen = Vec::new();
+    let Some(record) = record else { return seen };
+    for (label, name) in names {
+        let button = record.elements.iter().rev().find(|element| {
+            element.facts.as_ref().is_some_and(|facts| facts.role == "Button" && facts.name.as_deref() == Some(label.as_str()))
+        });
+        let Some(button) = button else { continue };
+        let Some(hit) = record.hits.iter().find(|hit| hit.owner == button.id && hit.part == button.part) else { continue };
+        let mut response = output.clone();
+        response.id = button.id;
+        response.rect = hit.rect;
+        response.interact_rect = hit.rect;
+        if let Some(layer) = layer {
+            response.layer_id = layer;
+        }
+        crate::widgets::register_response(name.clone(), hit.rect, &response);
+        seen.push((name.clone(), button.node()));
+    }
+    seen
+}
+
+/// Block the underlying panels from the first frame, before the dialog's modal layer is recorded. Close background
+/// menus on entry only; popups subsequently opened inside the dialog stay usable.
 pub(crate) fn prepare(app: &LightcraftApp, ui: &mut egui::Ui) {
     let Some(dialog) = &app.ui.dialog else { return };
     ui.disable();
-    if matches!(dialog, Dialog::KeywordSet { .. } | Dialog::About) || save_effect::active(app, ui.ctx()) {
-        // The framework owns this modal's layer id. Close background menus on entry only;
-        // comparing it to the legacy window id would close its text menu on every pass.
-        let key = egui::Id::unique(if save_effect::active(app, ui.ctx()) {
-            "save-effect-prepared"
-        } else if matches!(dialog, Dialog::About) {
-            "about-prepared"
-        } else {
-            "keyword-set-prepared"
-        });
-        let pass = ui.ctx().cumulative_pass_nr();
-        let previous = ui.data_mut(|data| data.get_temp::<u64>(key));
-        if previous.is_none_or(|previous| previous != pass && previous.checked_add(1) != Some(pass)) {
-            egui::Popup::close_all(ui.ctx());
-        }
-        ui.data_mut(|data| data.insert_temp(key, pass));
-        return;
-    }
-    let layer = egui::LayerId::new(egui::Order::Middle, window_id(dialog));
-    if ui.ctx().memory(|m| m.top_modal_layer()) != Some(layer) {
+    // The framework owns each dialog's layer. Comparing it to egui's modal layer would close the dialog's own menus
+    // on every pass, so the entry is noted by pass instead.
+    let key = dialog_id(dialog).with("prepared");
+    let pass = ui.ctx().cumulative_pass_nr();
+    let previous = ui.data_mut(|data| data.get_temp::<u64>(key));
+    if previous.is_none_or(|previous| previous != pass && previous.checked_add(1) != Some(pass)) {
         egui::Popup::close_all(ui.ctx());
+    }
+    ui.data_mut(|data| data.insert_temp(key, pass));
+}
+
+/// The width a dialog first takes (its content may be wider).
+fn dialog_width(dlg: &Dialog) -> f32 {
+    match dlg {
+        Dialog::Import { .. } => crate::import::DIALOG_SIZE[0],
+        Dialog::SmartRules { .. } => 680.0,
+        Dialog::AllMetadata { .. } => 620.0,
+        Dialog::Print => 1100.0,
+        Dialog::FaceModel { .. } => 460.0,
+        Dialog::LightroomCatalog { .. } => 440.0,
+        Dialog::LightroomDestination { .. } => 480.0,
+        Dialog::Welcome { .. } => 460.0,
+        Dialog::LensDatabase { .. } => 440.0,
+        Dialog::ManageEffects { .. } => 560.0,
+        _ => 380.0,
     }
 }
 
 /// Draw the open dialog. `blocked` is true when a quit prompt or settings notice was on screen at
-/// the start of this frame: the dialog is still drawn (its state is preserved), but none of its raw
-/// keyboard/backdrop handling may act. The caller freezes `blocked` for the whole frame so the
-/// click or key that dismisses the prompt cannot also reach the dialog drawn after it. The
-/// blocking library-problem/launch-list window gets the same raw-input treatment while it is
-/// actually on screen over this dialog; ordinary dialogs without that window keep their normal
-/// Close a legacy dialog only after its children have had the first chance to cancel.
-fn escape_pressed(ctx: &egui::Context) -> bool {
-    use craft::behavior::Intent;
-    use craft::ui::runtime::keys::{intents_of, settle, with_window_intents};
-    // 1. An app egui widget or popup has focus (`foreign`): egui still has the key.
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-        return true;
-    }
-    // 2. Nothing framework-focused: the runtime routed it as the window's Cancel.
-    if with_window_intents(ctx, false, |w| w.take(Intent::Cancel)) {
-        return true;
-    }
-    // 3. A focused SDK stop left its Cancel untaken (a checkbox or radio; NOT a text field
-    //    that used it to give its draft back — that one is already taken, preserving
-    //    "first Esc restores the field, second Esc closes").
-    if let Some(rec) = craft::ui::runtime::focus::focused_rec(ctx) {
-        let mut mine = intents_of(ctx, Some(rec.stop.id), false);
-        if mine.take(Intent::Cancel) {
-            settle(ctx, Some(rec.stop.id), &mine);
-            return true;
-        }
-    }
-    false
-}
-
-/// Escape and outside-click behaviour.
+/// the start of this frame: the dialog is still drawn (its state is preserved), but it takes no input
+/// and none of its closes act. The caller freezes `blocked` for the whole frame so the click or key
+/// that dismisses the prompt cannot also reach the dialog drawn after it. The blocking
+/// library-problem/launch-list window gets the same treatment while it is actually on screen over
+/// this dialog.
 pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
-    let Some(mut dlg) = app.ui.dialog.clone() else { return };
+    let Some(dlg) = &app.ui.dialog else { return };
     if save_effect::active(app, ctx) {
         return save_effect::show(app, ctx, blocked);
     }
     // Only show_root has the enabled root Ui required by the SDK About dialog.
-    if matches!(dlg, Dialog::About) { return; }
-    let at_start = dlg.clone();
-    let library_blocks = crate::panels::library_problem::blocks_dialog_input(app);
-    let raw_blocked = blocked || library_blocks;
+    if matches!(dlg, Dialog::About) {
+        return;
+    }
     if matches!(dlg, Dialog::KeywordSet { .. }) {
+        let raw_blocked = blocked || crate::panels::library_problem::blocks_dialog_input(app);
         keyword_set::show(app, ctx, raw_blocked);
         return;
     }
-    // Esc with a popup open in the dialog (a dropdown, a date picker's calendar) closes the popup
-    // only: claimed before the dialog is drawn, since the popup is gone once it has handled the key
-    if !raw_blocked && ctx.input(|i| i.key_pressed(egui::Key::Escape)) && egui::Popup::is_any_open(ctx) {
-        crate::widgets::take_escape(ctx);
+    // The framework dialog mounts its own modal layer; this area only gives it a parent `Ui` (the root `Ui` is
+    // disabled under a dialog by `prepare`).
+    egui::Area::new(egui::Id::unique("lightcraft.dialog.host")).fixed_pos(ctx.content_rect().min).show(ctx, |ui| shell(app, ui, blocked));
+}
+
+/// The footer of the generic dialog: Cancel and the confirm, as framework dialog buttons, with the automation name of
+/// each and where the confirm stands.
+struct Footer {
+    buttons: Vec<craft::ui::sections::FooterButton>,
+    names: Vec<(String, String)>,
+    ok: Option<usize>,
+    informational: bool,
+}
+
+impl Footer {
+    /// Cancel (none in a dialog that only shows something) and the confirm (none when it has no label). The confirm
+    /// is the accepting button when it makes or brings in something, the destructive one when it deletes or removes,
+    /// and the dialog's Close when it only shows something. It stays open when picked: `confirmed` decides the close.
+    fn of(app: &LightcraftApp, dlg: &Dialog) -> Footer {
+        use craft::ui::sections::{DialogRole, FooterButton};
+        let informational = is_informational(dlg);
+        let sam = SamState::of(app);
+        let mut footer = Footer { buttons: Vec::new(), names: Vec::new(), ok: None, informational };
+        if !informational {
+            let cancel = crate::i18n::tr(cancel_label(dlg, &sam)).to_string();
+            footer.buttons.push(FooterButton::new(cancel.clone(), DialogRole::Cancel));
+            footer.names.push((cancel, "button:dialogCancel".into()));
+        }
+        let ok = ok_label(app, dlg, informational, &sam);
+        if !ok.is_empty() {
+            let ok = crate::i18n::tr(&ok).to_string();
+            let role = if informational {
+                DialogRole::Cancel
+            } else if confirm_style(dlg) == ConfirmStyle::Primary {
+                DialogRole::Accept
+            } else {
+                DialogRole::Destructive
+            };
+            footer.ok = Some(footer.buttons.len());
+            footer.buttons.push(FooterButton::new(ok.clone(), role).enabled(can_confirm(app, dlg, informational)).stays_open(!informational));
+            footer.names.push((ok, "button:dialogOk".into()));
+        }
+        footer
     }
-    let t = Tokens::get(ctx);
+}
+
+/// The generic dialog in one framework `Dialog`: the body is `dialog_content`, the footer the Cancel/confirm pair,
+/// Escape and Enter are the framework's, and the open state is `app.ui.dialog`.
+fn shell(app: &mut LightcraftApp, host: &mut egui::Ui, blocked: bool) {
+    use std::cell::Cell;
+
+    use craft::ui::contract::overlay::Outside;
+    use craft::ui::contract::{Bind, Props as _, ShowContainer as _};
+    use craft::ui::dialog::Dialog as FrameworkDialog;
+    use craft::ui::runtime::overlay::{Backdrop, CloseReason};
+
+    let ctx = host.ctx().clone();
+    let Some(mut dlg) = app.ui.dialog.clone() else { return };
+    let at_start = dlg.clone();
+    let raw_blocked = blocked || crate::panels::library_problem::blocks_dialog_input(app);
+    let real = !host.is_sizing_pass() && !craft::ui::runtime::measure::active(&ctx);
+    let t = Tokens::get(&ctx);
     let screen = ctx.content_rect();
-    // The backdrop is an area below the dialog window (a bare `Middle` layer painter would be
-    // painted after every area — i.e. over the dialog too). Like a macOS sheet, the dialog leaves
-    // the integrated title bar lit: the window buttons the OS draws over it do not dim.
     let title_bar = title_bar_band(app);
-    egui::Area::new(egui::Id::unique("dialog-dim")).order(egui::Order::Middle).fixed_pos(screen.min).interactable(false).show(ctx, |ui| {
-        let screen = below_title_bar(screen, title_bar);
-        ui.painter().rect_filled(screen, 0.0, egui::Color32::from_black_alpha(140));
-    });
-    let mut close = false;
-    let mut confirm = false;
-    // Return presses OK in a dialog without a text field of its own (Lightroom's default button);
-    // a widget that has the keyboard focus (a text field, a button or checkbox reached with Tab)
-    // takes Return itself. Consumed before the dialog is drawn, so nothing else sees it too.
-    if !raw_blocked
-        && return_confirms(&dlg)
-        && ctx.memory(|m| m.focused().is_none())
-        && !egui::Popup::is_any_open(ctx)
-        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
-    {
-        confirm = true;
-    }
     let title = dialog_title(app, &dlg);
-    let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::symmetric(16, 12));
-    // The import review can be resized (its photo grid takes the room); it keeps a window id of its
-    // own so the size it is given doesn't carry over to the other dialogs. Its content scrolls
-    // rather than growing the window when the options below the grid get taller (e.g. Copy).
+    // The import review can be resized (its photo grid takes the room).
     let import = matches!(dlg, Dialog::Import { .. });
     // The Print dialog sizes itself to the window and scrolls its settings column on its own.
     let print = matches!(dlg, Dialog::Print);
-    let window_id = window_id(&dlg);
-    // Every other dialog fits the window (#781): its options scroll when they don't, and the title
-    // bar and the button row stay outside the scroll area. The room they take is measured on the
-    // previous frame (a guess on the first one).
-    let chrome_id = window_id.with("chrome");
-    let chrome = ctx.data(|d| d.get_temp::<f32>(chrome_id)).unwrap_or(DIALOG_CHROME_GUESS);
     // Settings keeps its top edge, and the widest it has been, while tabs of different sizes are shown, so its tab
     // row stays where it is (centred like the others, the row jumped with each tab's height)
     let settings = matches!(dlg, Dialog::Settings { .. });
     let top = (screen.height() * 0.08).clamp(DIALOG_SCREEN_MARGIN, 96.0);
+    // Every dialog fits the window (#781): the framework scrolls a body that doesn't. Settings is never taller than
+    // `body_max`, so its tab bar stays put and its pages scroll by themselves.
     let body_max =
-        if settings { screen.height() - top - DIALOG_SCREEN_MARGIN - chrome } else { screen.height() - 2.0 * DIALOG_SCREEN_MARGIN - chrome }
+        if settings { screen.height() - top - DIALOG_SCREEN_MARGIN - DIALOG_CHROME_GUESS } else { screen.height() - 2.0 * DIALOG_SCREEN_MARGIN - DIALOG_CHROME_GUESS }
             .max(DIALOG_MIN_BODY);
-    let widest_id = window_id.with("widest");
+    let id = dialog_id(&dlg);
+    let widest_id = id.with("widest");
     let widest = if settings { ctx.data(|d| d.get_temp::<f32>(widest_id)).unwrap_or(0.0).min(screen.width() * 0.9) } else { 0.0 };
+    let width = dialog_width(&dlg).min(screen.width() - 2.0 * DIALOG_SCREEN_MARGIN).max(widest).max(1.0);
+    // before the dialog: drawing it closes a dropdown the key or click lands outside of
+    let popup_was_open = egui::Popup::is_any_open(&ctx);
+    let footer = Footer::of(app, &dlg);
+    let informational = footer.informational;
+    // (the import review keeps its hand-picked photos however the click lands)
+    let outside = if app.ui.settings.close_dialogs_outside && !import { Outside::Close } else { Outside::Keep };
+    // What the body leaves the confirm this pass: the footer's state follows the draft the body just wrote.
+    let can_now: Cell<Option<bool>> = Cell::new(None);
+    let shown_layer: Cell<Option<egui::LayerId>> = Cell::new(None);
+    let mut open = true;
+    let mut confirm = false;
+    let mut close = false;
     let mut content_w = 0.0f32;
-    let mut body_h = None;
-    // before the window: drawing it closes a dropdown the click lands outside of
-    let popup_was_open = egui::Popup::is_any_open(ctx);
-    let shown = egui::Window::new(crate::i18n::tr(&title))
-        .id(window_id)
-        .collapsible(false)
-        .resizable(import)
-        .vscroll(import)
-        .resize(|r| if import { r.default_height(crate::import::DIALOG_SIZE[1]) } else { r })
-        .frame(frame)
-        .anchor(if settings { egui::Align2::CENTER_TOP } else { egui::Align2::CENTER_CENTER }, [0.0, if settings { top } else { 0.0 }])
-        .min_width(widest)
-        .default_width(match dlg {
-            Dialog::Import { .. } => crate::import::DIALOG_SIZE[0],
-            Dialog::SmartRules { .. } => 680.0,
-            Dialog::AllMetadata { .. } => 620.0,
-            Dialog::Print => 1100.0,
-            Dialog::FaceModel { .. } => 460.0,
-            Dialog::LightroomCatalog { .. } => 440.0,
-            Dialog::LightroomDestination { .. } => 480.0,
-            Dialog::Welcome { .. } => 460.0,
-            Dialog::LensDatabase { .. } => 440.0,
-            Dialog::ManageEffects { .. } => 560.0,
-            _ => 380.0,
-        })
-        .show(ctx, |ui| {
-            // Disabled, not skipped: the dialog keeps its layout and state, but a raw event in the
-            // first prompt frame cannot toggle a checkbox or press a button underneath it. The
-            // blocking library window gets the same treatment: it owns input while it is on screen,
-            // so the dialog behind it must not take focus or accept typed text either.
-            if raw_blocked {
-                ui.disable();
-            }
-            ui.spacing_mut().item_spacing.y = 8.0;
-            body_h = dialog_body(ui, (!import && !print).then_some(title.as_str()), body_max, |ui| {
-                dialog_content(app, ui, &t, body_max, &mut confirm, &mut close, &mut dlg)
-            });
-            ui.add_space(4.0);
-            // the confirm on the right with Cancel to its left (macOS and GNOME's order), filled with
-            // the accent when it is the dialog's primary action. The row spans the width the window
-            // gives its content this frame (its default width, or its content's if wider), so it
-            // reaches the edge without widening the window.
-            let row_w = ui.available_width().max(ui.min_rect().width()).max(1.0);
-            let row_h = ui.spacing().interact_size.y;
-            ui.allocate_ui_with_layout(egui::vec2(row_w, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                button_row(app, ui, &dlg, &mut close, &mut confirm);
-            });
-            if import {
-                crate::import::note_dialog_bottom(ui);
-            }
-            content_w = ui.min_rect().width();
+    let mut dialog = FrameworkDialog::new(crate::i18n::tr(&title).to_owned())
+        .id(id)
+        .opened(Bind::bound(&mut open))
+        .enabled(!raw_blocked)
+        .closable(false)
+        .backdrop(Backdrop::Scrim)
+        .overlay(|mut overlay| {
+            overlay.dismiss = overlay.dismiss.outside(outside);
+            overlay
         });
+    if !footer.buttons.is_empty() {
+        let (ok, can_now) = (footer.ok, &can_now);
+        dialog = dialog.buttons(footer.buttons.iter().cloned()).settle_buttons(move |_, buttons| {
+            if let (Some(at), Some(can)) = (ok, can_now.get())
+                && let Some(button) = buttons.get_mut(at)
+            {
+                button.set_enabled(can);
+            }
+        });
+    }
+    // Return presses OK in a dialog without a text field of its own (Lightroom's default button); a dialog with a
+    // field confirms from the field.
+    dialog = dialog.close_on_enter(return_confirms(&dlg));
+    if import {
+        dialog = dialog.resizable(true).overlay(|overlay| overlay.size(egui::vec2(crate::import::DIALOG_SIZE[0], crate::import::DIALOG_SIZE[1])));
+    }
+    if settings {
+        dialog = dialog.first_place(egui::pos2(screen.center().x, screen.top() + top), egui::Align2::CENTER_TOP);
+    }
+    let (output, record) = craft::ui::runtime::inspect::record(host, egui::Id::unique("lightcraft.dialog.inspect"), |ui| {
+        dialog
+            .show(ui, |ui, _| {
+                let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+                if real {
+                    shown_layer.set(Some(ui.layer_id()));
+                }
+                ui.set_min_width(width);
+                ui.spacing_mut().item_spacing.y = 8.0;
+                // (the import review and Print size their own lists to the dialog)
+                fit_lists(ui, !import && !print, body_max, |ui| dialog_content(app, ui, &t, body_max, &mut confirm, &mut close, &mut dlg));
+                if import {
+                    crate::import::note_dialog_bottom(ui);
+                }
+                if real {
+                    content_w = ui.min_rect().width();
+                }
+                can_now.set(Some(can_confirm(app, &dlg, informational)));
+            })
+            .output
+    });
+    if !real {
+        return;
+    }
+    crate::widgets::register_response("dialog:window", output.response.rect, &output.response);
+    register_footer_buttons(&output.response, shown_layer.get(), record.as_deref(), &footer.names);
     if settings && content_w > widest + 0.5 {
         ctx.data_mut(|d| d.insert_temp(widest_id, content_w));
     }
-    if let Some(w) = &shown {
-        // (the import review keeps its hand-picked photos however the click lands)
-        if !raw_blocked && app.ui.settings.close_dialogs_outside && !import && clicked_backdrop(ctx, w.response.rect, title_bar, popup_was_open) {
-            close = true;
-        } else if raw_blocked {
-            // A press made under the prompt or library window must not be remembered as a
-            // backdrop press for a release that arrives after that covering window goes away.
-            ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::unique("dialog-backdrop-press")));
-        }
+    if !popup_was_open && let Some(band) = title_bar {
+        title_bar_handle(&ctx, band, output.response.rect);
     }
-    if let Some(w) = shown {
-        crate::widgets::announce_dialog(ctx, &w.response, crate::widgets::Modal::Dialog);
-        ctx.memory_mut(|m| m.set_modal_layer(w.response.layer_id));
-        if let Some(body_h) = body_h {
-            let measured = (w.response.rect.height() - body_h).max(0.0);
-            if (measured - chrome).abs() > 0.5 {
-                ctx.data_mut(|d| d.insert_temp(chrome_id, measured));
-                ctx.request_repaint();
+    // The startup dialog is recorded once it was presented, not when the logic tick picked it: a host that runs
+    // `logic` and quits before a visible frame does not burn the tour, and a crash while it is up still does not
+    // reopen it on every launch. A frame whose input a notice owns is not a presentation: the dialog is drawn but
+    // cannot be used, so the recording waits for a pass where the dialog actually takes input.
+    if !raw_blocked && matches!(at_start, Dialog::Welcome { .. } | Dialog::WhatsNew) {
+        app.ui.record_startup_dialog_seen();
+    }
+    if raw_blocked {
+        confirm = false;
+        close = false;
+    } else {
+        match output.closed {
+            // Escape or a press that closed a popup in the dialog (a dropdown, a date picker's calendar), or a key the
+            // shortcuts editor took while recording, leaves the dialog open
+            Some(CloseReason::Escape | CloseReason::Outside) if popup_was_open || crate::widgets::escape_taken(&ctx) => {}
+            // Return with nothing focused in a dialog whose confirm can't take it
+            Some(CloseReason::Enter) => confirm |= can_confirm(app, &dlg, informational),
+            Some(_) => close = true,
+            None => {}
+        }
+        if output.picked.is_some() && output.picked == footer.ok {
+            if informational {
+                close = true;
+            } else {
+                confirm = true;
             }
         }
-        ctx.move_to_top(w.response.layer_id);
-        crate::widgets::register_response("dialog:window", w.response.rect, &w.response);
-        if let Some(band) = title_bar {
-            title_bar_handle(ctx, band, w.response.rect);
-        }
-        // The startup dialog is recorded once it was presented, not when the logic tick picked
-        // it: a host that runs `logic` and quits before a visible frame does not burn the tour,
-        // and a crash while it is up still does not reopen it on every launch. A frame whose
-        // input a notice owns is not a presentation: the dialog is drawn but cannot be used, so
-        // the recording waits for a pass where the dialog actually takes input.
-        if !raw_blocked && matches!(at_start, Dialog::Welcome { .. } | Dialog::WhatsNew) {
-            app.ui.record_startup_dialog_seen();
-        }
     }
-    // (while the shortcuts editor records a key, it takes Esc itself to cancel; an open popup in
-    // the dialog, such as a date picker's calendar, takes it to close itself)
-    if !raw_blocked && !crate::widgets::escape_taken(ctx) && escape_pressed(ctx) {
-        close = true;
-    }
-    if !raw_blocked && confirm {
-        close |= confirmed(app, ctx, &mut dlg);
+    if confirm {
+        close |= confirmed(app, &ctx, &mut dlg);
     }
     // a dialog opened from inside this one (a button in Settings that shows a licence) takes its place
     if app.ui.dialog.as_ref().is_some_and(|now| *now != at_start) {
@@ -454,11 +506,6 @@ fn title_bar_band(app: &LightcraftApp) -> Option<egui::Rect> {
         return None;
     }
     app.widgets.iter().find(|(id, _)| id == "region:titlebar").map(|(_, r)| *r)
-}
-
-/// `screen` less the title bar band across its top.
-fn below_title_bar(screen: egui::Rect, band: Option<egui::Rect>) -> egui::Rect {
-    band.map_or(screen, |b| egui::Rect::from_min_max(egui::pos2(screen.min.x, b.max.y.clamp(screen.min.y, screen.max.y)), screen.max))
 }
 
 /// The bar's controls are disabled under a dialog, and the modal layer takes the hits of the layers
@@ -702,101 +749,6 @@ fn can_confirm(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> bool {
     let bad_rules =
         matches!(dlg, Dialog::SmartRules { id, rules, .. } if !rules.check_for(&app.session.catalog, id.map(lightcraft_catalog::AlbumId)).is_empty());
     !rename_blocked && (informational || (!waiting && !bad_rules))
-}
-
-/// The row of buttons under a dialog: Cancel and the confirm; `close` and `confirm` are set when one is clicked.
-fn button_row(
-    app: &LightcraftApp,
-    ui: &mut egui::Ui,
-    dlg: &Dialog,
-    close: &mut bool,
-    confirm: &mut bool,
-) {
-    let informational = is_informational(dlg);
-    let sam = SamState::of(app);
-    let cancel = cancel_label(dlg, &sam);
-    let ok = ok_label(app, dlg, informational, &sam);
-    let ok = ok.as_str();
-    let can_confirm = can_confirm(app, dlg, informational);
-    let primary = !informational && can_confirm && confirm_style(dlg) == ConfirmStyle::Primary;
-    use crate::button::{Button, Kind};
-    // (each kind of dialog its own buttons: the keyboard's place doesn't carry from a
-    // dialog to the one it opens)
-    let kind = std::mem::discriminant(dlg);
-    let cancel_button = Button::new(cancel)
-        .widget("button:dialogCancel")
-        .id_salt(kind)
-        .min_width(72.0);
-    let ok_button = Button::new(ok)
-        .kind(if primary {
-            Kind::Primary
-        } else {
-            Kind::Secondary
-        })
-        .enabled(can_confirm)
-        .widget("button:dialogOk")
-        .id_salt(kind)
-        .min_width(72.0);
-    // (Cancel first, then the confirm: the keyboard goes through them as the eye does)
-    let gap = ui.spacing().item_spacing.x;
-    let mut buttons_w = 0.0;
-    if !informational {
-        buttons_w += cancel_button.desired_size(ui).x + gap;
-    }
-    if !ok.is_empty() {
-        buttons_w += ok_button.desired_size(ui).x;
-    }
-    ui.add_space((ui.available_width() - buttons_w).max(0.0));
-    // Every dialog's footer is framework buttons, so Tab runs from the dialog's controls into Cancel and the
-    // confirm. Each kind of dialog (and each Keyword caller) keeps its own footer ids, so the keyboard's place
-    // doesn't carry from one dialog to the one it opens.
-    let keyword_footer = match dlg {
-        Dialog::KeywordTag { editing, parent, .. } => Some((editing.as_deref().map(str::to_owned), parent.as_deref().map(str::to_owned))),
-        _ => None,
-    };
-    let cancel_size = cancel_button.desired_size(ui);
-    let ok_size = ok_button.desired_size(ui);
-    ui.push_id(("dialog-footer", kind, keyword_footer), |ui| {
-        if !informational && footer_button(ui, cancel, "button:dialogCancel", cancel_size, true, false) {
-            *close = true;
-        }
-        if !ok.is_empty() && footer_button(ui, ok, "button:dialogOk", ok_size, can_confirm, primary) {
-            if informational {
-                *close = true;
-            } else {
-                *confirm = true;
-            }
-        }
-    });
-}
-
-/// A dialog footer button: a framework button in the dialog's Tab chain, registered for automation.
-fn footer_button(
-    ui: &mut egui::Ui,
-    label: &str,
-    alias: &'static str,
-    size: egui::Vec2,
-    enabled: bool,
-    primary: bool,
-) -> bool {
-    use craft::theme::Variant;
-    use craft::ui::buttons::Button;
-    use craft::ui::contract::{Props as _, Show as _};
-    let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-    let _ = size;
-    let shown = Button::new(crate::i18n::tr(label).to_string())
-        .id_salt(alias)
-        .enabled(enabled)
-        .variant(if primary {
-            Variant::PRIMARY
-        } else {
-            Variant::SECONDARY
-        })
-        .show(ui);
-    if real {
-        crate::widgets::register_response(alias, shown.response.rect, &shown.response);
-    }
-    real && ui.is_enabled() && enabled && shown.clicked()
 }
 
 /// Say where a folder made on disk is: the new folder holds no photos yet, so the Folders list may not show it.

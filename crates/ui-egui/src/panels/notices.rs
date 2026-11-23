@@ -3,7 +3,7 @@
 //! are only in memory or while tasks that would be cut short are running (issue #345). Also, once
 //! per session, that the drive holding the preview cache is running low ([`disk_space_notice`]).
 
-use egui::{Align2, RichText, vec2};
+use egui::RichText;
 
 use crate::theme::Tokens;
 use crate::widgets::WidgetHit;
@@ -181,19 +181,24 @@ enum Choice {
     Settings,
 }
 
-/// The prompt (quit or settings notice) that owns input this frame, if any.
+/// The framework dialog id of the prompt (quit or settings notice) that owns input this frame, if any.
+fn prompt_id(app: &LightcraftApp) -> Option<&'static str> {
+    match (&app.quit_prompt, app.notices.is_empty()) {
+        (Some(QuitPrompt::Tasks(_)), _) => Some("quit-tasks"),
+        (Some(QuitPrompt::Unsaved(_)), _) => Some("quit-unsaved"),
+        (None, false) => Some("settings-notice"),
+        (None, true) => None,
+    }
+}
+
+/// The layer of the prompt (quit or settings notice) that owns input this frame, if any: its
+/// framework dialog's modal layer.
 ///
-/// The dim area is `Order::Foreground`, so a settled egui pass routes pointer input to it before
-/// the main view or a `Middle` dialog. The control channel and raw keyboard/event handlers do not
-/// go through that hit test, however: they must consult this explicit barrier as well.
+/// The prompt's scrim covers the main view and a dialog under it, so a settled egui pass routes
+/// pointer input to the prompt. The control channel and raw keyboard/event handlers do not go
+/// through that hit test, however: they must consult this explicit barrier as well.
 pub(crate) fn prompt_layer(app: &LightcraftApp) -> Option<egui::LayerId> {
-    let id = match (&app.quit_prompt, app.notices.is_empty()) {
-        (Some(QuitPrompt::Tasks(_)), _) => "quit-tasks",
-        (Some(QuitPrompt::Unsaved(_)), _) => "quit-unsaved",
-        (None, false) => "settings-notice",
-        (None, true) => return None,
-    };
-    Some(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique(id)))
+    prompt_id(app).map(|id| crate::dialogs::framework_dialog_layer(egui::Id::unique(id)))
 }
 
 /// Whether a prompt is on screen and owns all pointer and keyboard input.
@@ -231,29 +236,25 @@ fn prompt_key(app: &LightcraftApp) -> Option<PromptKey> {
     Some(PromptKey { layer, text, queue_len })
 }
 
-/// The prompt's keyboard/focus state, isolated from the still-drawn background.
+/// The prompt's input state, isolated from the still-drawn background.
 ///
 /// The first host frame of a new prompt is a shielding pass: pointer/touch/key/accessibility input
 /// is removed before panels are drawn, and the frame is discarded so a second pass can lay out the
-/// new `Area` without any input. From then on this state routes only the prompt's own keys and
-/// AccessKit actions; everything else is dropped before egui or the panels can see it.
+/// new dialog without any input. From then on only the prompt's own keys (which the framework
+/// dialog routes: Tab between its buttons, Return, Space and Escape) and AccessKit actions on its
+/// buttons reach egui; everything else is dropped before egui or the panels can see it.
 #[derive(Default)]
 pub(crate) struct PromptInput {
     key: Option<PromptKey>,
     drawn: bool,
-    /// The prompt has completed a layout pass; its `Area`s are interactable and its button ids are
+    /// The prompt has completed a layout pass; its layer is interactable and its button ids are
     /// known. Before this, input must not reach it or the panels under it.
     laid_out: bool,
     /// The next `pass 0` is the shielding pass for a newly shown prompt.
     transition: bool,
-    /// Focused button index; `focus_set` distinguishes "not chosen yet" from index 0.
-    focus: usize,
-    focus_set: bool,
-    /// Enter/Space or an AccessKit Click on a prompt button.
+    /// A button index chosen outside the dialog's own input, taken by the next draw.
     activate: Option<usize>,
-    /// Escape (safe cancel).
-    cancel: bool,
-    /// Actual egui response ids of the prompt's buttons from its latest draw.
+    /// The access node ids of the prompt's buttons from its latest draw.
     button_ids: Vec<(String, egui::Id)>,
     /// Pointer state saved before the background draws. Restored only while the prompt itself is
     /// drawn (egui's `Response::clicked` needs `pointer_events`), then hidden again for the
@@ -262,7 +263,7 @@ pub(crate) struct PromptInput {
 }
 
 impl PromptInput {
-    /// Reset the prompt input state for `key`, discarding layout, focus, button ids and pending
+    /// Reset the prompt input state for `key`, discarding layout, button ids and pending
     /// activation. A present key arms the shield transition; `None` leaves input unowned.
     fn reset_to(&mut self, key: Option<PromptKey>) {
         let transition = key.is_some();
@@ -270,17 +271,9 @@ impl PromptInput {
         self.drawn = false;
         self.laid_out = false;
         self.transition = transition;
-        self.focus = 0;
-        self.focus_set = false;
         self.activate = None;
-        self.cancel = false;
         self.button_ids.clear();
         self.pointer = None;
-    }
-
-    /// The index of the prompt button whose real egui id matches AccessKit's `node`, if any.
-    fn button_index(&self, accesskit_node: egui::accesskit::NodeId) -> Option<usize> {
-        self.button_ids.iter().position(|(_, id)| id.accesskit_id() == accesskit_node)
     }
 }
 
@@ -421,45 +414,8 @@ pub(crate) fn prepare_ui_pass(app: &mut LightcraftApp, ctx: &egui::Context) -> b
     }
     let shield = ctx.current_pass_index() == 0 && app.notice_input.transition;
     let laid_out = app.notice_input.laid_out && !shield;
-    if laid_out {
-        // A screen reader's Focus/Click can target only a button whose actual response id we
-        // recorded in a completed prompt pass. Tab/Shift+Tab and Enter/Space/Escape are handled
-        // here too, so no background panel sees a key that belongs to the prompt.
-        let events = ctx.input(|input| input.events.clone());
-        for event in &events {
-            match event {
-                egui::Event::Key { key, pressed: true, modifiers, .. } if prompt_key_allowed(*key, *modifiers) => match key {
-                    egui::Key::Tab => {
-                        let len = app.notice_input.button_ids.len();
-                        if len > 0 {
-                            app.notice_input.focus_set = true;
-                            app.notice_input.focus = if modifiers.shift_only() {
-                                app.notice_input.focus.checked_add(len - 1).map_or(0, |i| i % len)
-                            } else {
-                                app.notice_input.focus.checked_add(1).map_or(0, |i| i % len)
-                            };
-                        }
-                    }
-                    egui::Key::Enter | egui::Key::Space => {
-                        app.notice_input.focus_set = true;
-                        app.notice_input.activate = Some(app.notice_input.focus);
-                    }
-                    egui::Key::Escape => app.notice_input.cancel = true,
-                    _ => {}
-                },
-                egui::Event::AccessKitActionRequest(request) => {
-                    if let Some(index) = app.notice_input.button_index(request.target_node) {
-                        app.notice_input.focus_set = true;
-                        app.notice_input.focus = index;
-                        if request.action == egui::accesskit::Action::Click {
-                            app.notice_input.activate = Some(index);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
+    // The prompt's own keys and AccessKit actions were routed by the framework from the host input
+    // (`prompt_allows_event` let only those through); none is left here for a covered panel.
     if laid_out {
         app.notice_input.pointer = Some(ctx.input(|input| input.pointer.clone()));
     }
@@ -486,9 +442,9 @@ pub(crate) fn prepare_ui_pass(app: &mut LightcraftApp, ctx: &egui::Context) -> b
             | egui::Event::MouseWheel { .. }
             | egui::Event::Zoom(_)
             | egui::Event::Rotate(_) => false,
-            // The allowed Focus/Click was already dispatched above to the prompt's own button;
-            // dropping every AccessKit request here leaves no residual for a covered panel to act
-            // on in this pass (including a request that targeted a background node).
+            // The allowed Focus/Click was already routed by the framework to the prompt's own
+            // button; dropping every AccessKit request here leaves no residual for a covered panel
+            // to act on in this pass (including a request that targeted a background node).
             egui::Event::AccessKitActionRequest(_) => false,
             egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. } | egui::Event::PointerGone => false,
             // A touch End/Cancel must reach egui even in this creation pass; Start/Move is
@@ -532,82 +488,69 @@ pub(crate) fn apply_completion(app: &mut LightcraftApp, completion: PromptComple
     }
 }
 
-/// Draw one modal prompt and return the index of the chosen button. The dim takes the modal
-/// layer and a sizing pass is discarded so the first interactive pass has settled geometry;
-/// `input` keeps focus on the safe Cancel/OK button unless a keyboard or AccessKit choice arrives.
+/// The framework role of a prompt button: the answer Return picks is the accepting one; quitting
+/// is destructive; Cancel is the dialog's cancel.
+fn role(choice: Choice) -> craft::ui::sections::DialogRole {
+    use craft::ui::sections::DialogRole;
+    match choice {
+        Choice::Ok => DialogRole::Accept,
+        Choice::QuitAnyway => DialogRole::Destructive,
+        Choice::Cancel => DialogRole::Cancel,
+        Choice::Retry | Choice::Settings => DialogRole::Other,
+    }
+}
+
+/// Draw one modal prompt, a framework alert dialog over a scrim, and return the index of the chosen
+/// button. Escape, and Return in a prompt with no accepting button (a quit prompt), give the safe
+/// Cancel/OK; a sizing pass is discarded so the first interactive pass has settled geometry.
 fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&str, &str, Choice)], input: &mut PromptInput) -> Option<usize> {
+    use craft::ui::contract::{Bind, Props as _, ShowContainer as _};
+    use craft::ui::dialog::Dialog;
+    use craft::ui::runtime::overlay::Backdrop;
+    use craft::ui::sections::FooterButton;
     let t = Tokens::get(ctx);
-    let screen = ctx.content_rect();
     let last = buttons.len().checked_sub(1)?;
     input.drawn = true;
     let cancel_index = buttons.iter().position(|(_, _, choice)| matches!(choice, Choice::Cancel | Choice::Ok)).unwrap_or(last);
-    if !input.focus_set {
-        input.focus = cancel_index;
-        input.focus_set = true;
-    }
-    input.focus = input.focus.min(last);
-    let focus = input.focus;
-    let manual = if std::mem::take(&mut input.cancel) { Some(cancel_index) } else { input.activate.take().filter(|index| *index <= last) };
-    // The backdrop must cover modal Middle-order dialogs as well as the main view.
-    let dim = egui::Area::new(egui::Id::unique((id, "dim"))).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
-        // The first layout of a newly shown Area is a sizing pass: egui keeps it invisible and
-        // `interactable = false`. A release injected before the next host frame would then bypass
-        // the layer check and reach the widget below. Finish the real hit area in this same frame.
-        if ui.is_sizing_pass() {
-            ctx.request_discard("notice dim: settle the modal hit area before input");
-        }
-        ui.allocate_rect(screen, egui::Sense::click_and_drag());
-        ui.painter().rect_filled(screen, 0.0, egui::Color32::from_black_alpha(140));
-    });
-    // The dim (with its full-screen hit area) is the modal scope; the prompt window below is moved
-    // above it. Everything below the dim, including a Middle-order Settings dialog, is then
-    // outside egui's modal layer and loses keyboard focus registration as well as pointer hits.
-    ctx.memory_mut(|memory| memory.set_modal_layer(dim.response.layer_id));
-    let mut chosen = manual;
-    let mut seen = Vec::with_capacity(buttons.len());
-    let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::symmetric(18, 14));
-    let shown = egui::Window::new(crate::i18n::tr(title))
-        .id(egui::Id::unique(id))
-        .order(egui::Order::Foreground)
-        .collapsible(false)
-        .resizable(false)
-        .frame(frame)
-        .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-        .default_width(440.0)
-        .show(ctx, |ui| {
-            // The prompt window has the same first-pass sizing rule as the dim above.
-            if ui.is_sizing_pass() {
-                ctx.request_discard("notice prompt: settle its buttons before input");
-            }
-            // a fixed width: a wrapped label in an auto-sized, centred window would move it every frame
-            ui.set_width(420.0);
-            ui.spacing_mut().item_spacing.y = 8.0;
-            ui.add(egui::Label::new(RichText::new(text).color(t.text_label)).wrap());
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                for (i, (bid, label, _)) in buttons.iter().enumerate() {
-                    let r = ui.add(egui::Button::new(crate::i18n::tr(label)).min_size(vec2(0.0, 26.0)));
-                    let widget = format!("button:{bid}");
-                    // The real response id is the AccessKit node a screen reader targets. A hover
-                    // probe's id would make every Focus/Click action fail to match the button.
-                    crate::widgets::register_response(widget.clone(), r.rect, &r);
-                    if i == focus {
-                        r.request_focus();
+    let mut chosen = input.activate.take().filter(|index| *index <= last);
+    let labels: Vec<String> = buttons.iter().map(|(_, label, _)| crate::i18n::tr(label).to_string()).collect();
+    let footer: Vec<FooterButton> = buttons.iter().zip(&labels).map(|((_, _, choice), label)| FooterButton::new(label.clone(), role(*choice))).collect();
+    let dialog_id = egui::Id::unique(id);
+    // The dialog mounts its own modal layer; this area only gives it a parent `Ui`.
+    egui::Area::new(egui::Id::unique((id, "host"))).fixed_pos(ctx.content_rect().min).show(ctx, |ui| {
+        let (output, record) = craft::ui::runtime::inspect::record(ui, egui::Id::unique((id, "inspect")), |ui| {
+            Dialog::new(crate::i18n::tr(title).to_owned())
+                .id(dialog_id)
+                .opened(Bind::given(true))
+                .closable(false)
+                .backdrop(Backdrop::Scrim)
+                .buttons(footer)
+                .close_on_enter(true)
+                .show(ui, |ui, _| {
+                    // The first layout of a new layer is a sizing pass: finish its real hit areas in this same frame.
+                    if ui.is_sizing_pass() {
+                        ctx.request_discard("notice prompt: settle its buttons before input");
                     }
-                    seen.push((widget, r.id));
-                    if r.clicked() && chosen.is_none() {
-                        chosen = Some(i);
-                    }
-                }
-            });
+                    // a fixed width: a wrapped label in an auto-sized, centred window would move it every frame
+                    ui.set_width(420.0);
+                    ui.spacing_mut().item_spacing.y = 8.0;
+                    ui.add(egui::Label::new(RichText::new(text).color(t.text_label)).wrap());
+                })
+                .output
         });
-    // A backdrop press can raise its area; keep the prompt buttons above it.
-    if let Some(window) = shown {
-        crate::widgets::announce_dialog(ctx, &window.response, crate::widgets::Modal::Alert);
-        crate::widgets::describe_dialog(ctx, &window.response, text);
-        ctx.move_to_top(window.response.layer_id);
-    }
-    input.button_ids = seen;
+        if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ctx) {
+            return;
+        }
+        // The buttons' real access nodes are what a screen reader targets.
+        let names: Vec<(String, String)> = buttons.iter().zip(&labels).map(|((bid, _, _), label)| (label.clone(), format!("button:{bid}"))).collect();
+        let layer = crate::dialogs::framework_dialog_layer(dialog_id);
+        input.button_ids = crate::dialogs::register_footer_buttons(&output.response, Some(layer), record.as_deref(), &names);
+        crate::widgets::announce_dialog(ctx, &output.response, crate::widgets::Modal::Alert);
+        crate::widgets::describe_dialog(ctx, &output.response, text);
+        if chosen.is_none() {
+            chosen = output.picked.filter(|index| *index <= last).or(output.closed.map(|_| cancel_index));
+        }
+    });
     if chosen.is_some() {
         // The focused prompt button is about to disappear. Drop its focus now so this pass's
         // `egui_wants_keyboard_input` (and `text_focus`) does not make the next Esc look like it
@@ -707,6 +650,8 @@ mod tests {
     fn a_low_disk_notice_of_the_library_before_is_not_drawn() {
         let ctx = egui::Context::default();
         let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+        // the prompt is a framework dialog
+        app.install_framework(&ctx);
         let text = "Drive almost full".to_string();
         app.notices.push(text.clone());
         app.disk_notice = Some((app.session.library_generation().wrapping_add(1), text));
