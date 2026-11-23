@@ -110,6 +110,8 @@
   "{label} Grading": "Graduação de {label}",
   "{label} {d:+} on every selected photo": "{label} {d:+} em cada foto selecionada",
   "{label}, {n} photos": "{label}, {n} fotos",
+  "{name} found nothing to select on {n} of {total} photos": "{name} não encontrou nada para selecionar em {n} de {total} fotos",
+  "Found nothing to select on {n} of {total} photos": "Nada para selecionar em {n} de {total} fotos",
   "{matching} of {t} photos": "{matching} de {t} fotos",
   "{matching} photos": "{matching} fotos",
   "{mode} spot {} of {}": "{mode}: ponto {} de {}",

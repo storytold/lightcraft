@@ -87,6 +87,8 @@
   "{label} Grading": "{label}のカラーグレーディング",
   "{label} {d:+} on every selected photo": "選択したすべての写真の{label}を{d:+}調整",
   "{label}, {n} photos": "{label}、{n}枚",
+  "{name} found nothing to select on {n} of {total} photos": "{name}：{total}枚中{n}枚で選択対象が見つかりませんでした",
+  "Found nothing to select on {n} of {total} photos": "{total}枚中{n}枚で選択対象が見つかりませんでした",
   "{matching} of {t} photos": "{t}枚中{matching}枚",
   "{matching} photos": "{matching}枚",
   "{mode} spot {} of {}": "{mode}：{1}か所中{0}か所",
