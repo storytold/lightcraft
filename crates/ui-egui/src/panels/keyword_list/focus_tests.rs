@@ -31,7 +31,7 @@ fn text(h: &mut Headless, value: &str) {
 }
 
 fn focused(h: &Headless, widget: &str) -> bool {
-    h.view.ctx.memory(|memory| memory.has_focus(crate::text_field::id(widget)))
+    crate::text_field::focused(&h.view.ctx, widget)
         || craft::ui::runtime::focus::focused_rec(&h.view.ctx)
             .is_some_and(|rec| h.app.widget_hits.iter().any(|(name, hit)| name == widget && hit.id == rec.stop.id))
 }

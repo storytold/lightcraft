@@ -175,7 +175,7 @@ fn apply_enter(app: &mut LightcraftApp, ctx: &egui::Context, edit: &EnterEdit) -
 /// is chosen again.
 fn leave_enter_keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId]) {
     let id = enter_id();
-    ui.memory_mut(|m| m.surrender_focus(crate::text_field::id(ENTER_FIELD)));
+    crate::text_field::blur(ui.ctx(), ENTER_FIELD);
     let Some(mut edit) = ui.data(|d| d.get_temp::<EnterEdit>(id)) else { return };
     if edit.is_for(app, crate::key_of(selection)) && !apply_enter(app, ui.ctx(), &edit) {
         edit.refused = true;
@@ -187,7 +187,7 @@ fn leave_enter_keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &
 
 /// Gives up an Enter Keywords edit, applied or not, and the cursor in its box.
 fn give_up_enter_keywords(ctx: &egui::Context) {
-    ctx.memory_mut(|m| m.surrender_focus(crate::text_field::id(ENTER_FIELD)));
+    crate::text_field::blur(ctx, ENTER_FIELD);
     ctx.data_mut(|d| d.remove::<EnterEdit>(enter_id()));
 }
 
@@ -215,11 +215,11 @@ fn enter_keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[Photo
     let library = app.session.library_generation();
     let chips = app.caches.keyword_chips(&app.session.catalog, selection);
     let fid = crate::text_field::id(ENTER_FIELD);
-    let focused = ui.memory(|m| m.has_focus(fid));
+    let focused = crate::text_field::has_focus_id(ui.ctx(), fid);
     let kept: Option<EnterEdit> = ui.data(|d| d.get_temp(id));
     // (an edit of another selection or library is given up, never applied to this one)
     if kept.as_ref().is_some_and(|e| !e.is_for(app, key)) && focused {
-        ui.memory_mut(|m| m.surrender_focus(fid));
+        crate::text_field::blur_id(ui.ctx(), fid);
     }
     let kept = kept.filter(|e| e.is_for(app, key));
     // (an edit kept without the cursor lost it while the box was not drawn, its panel hidden)
@@ -273,7 +273,7 @@ fn enter_keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[Photo
         edit.refused = !applied;
         done = applied;
         if applied && returned {
-            ui.memory_mut(|m| m.surrender_focus(fid));
+            crate::text_field::blur_id(ui.ctx(), fid);
         }
     }
     if !done && (r.editing || returned || edit.refused) {
@@ -324,7 +324,7 @@ fn hold_list_in_place(ui: &mut egui::Ui, top: f32) {
     // (only the part of it in sight: the pointer on the top bar above a half-hidden box isn't on it)
     let old_box = Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=top + before).intersect(ui.clip_rect());
     let on_box = ui.input(|i| i.pointer.latest_pos()).is_some_and(|p| old_box.contains(p));
-    let typing = crate::panels::keywording::field_focused(ui.ctx()) || ui.memory(|m| m.has_focus(crate::text_field::id(ENTER_FIELD)));
+    let typing = crate::panels::keywording::field_focused(ui.ctx()) || crate::text_field::focused(ui.ctx(), ENTER_FIELD);
     if on_box || typing {
         return;
     }

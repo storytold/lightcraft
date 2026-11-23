@@ -102,6 +102,8 @@ impl HeadlessView {
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx);
         crate::theme::apply(&ctx);
+        // Every control is a framework component: a view without the runtime would not sense or route input.
+        crate::app::install_runtime(&ctx).expect("the UI runtime installs on a fresh context");
         HeadlessView {
             ctx,
             textures: TextureStore::default(),

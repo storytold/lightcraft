@@ -58,7 +58,7 @@ impl Rig {
             endings.extend(r.ending);
             *editing = r.editing;
             if focus_after {
-                ui.memory_mut(|m| m.request_focus(id(FIELD)));
+                focus(ui.ctx(), FIELD);
             }
         });
         self.widgets = crate::widgets::take_registry(&self.view.ctx);
@@ -323,7 +323,7 @@ fn text_typed_on_the_first_focused_pass_replaces_the_whole_text() {
     rig.select_on_focus = true;
     // the dialog draws the field, then asks for its focus: effective on the next pass
     rig.frame_with(vec![], true);
-    assert!(rig.view.ctx.memory(|m| m.has_focus(id(FIELD))), "focused for the next pass");
+    assert!(focused(&rig.view.ctx, FIELD), "focused for the next pass");
     // the pass the focus takes effect already carries the text
     rig.frame(vec![Event::Text("Fresh".into())]);
     assert_eq!(rig.text, "Fresh", "the first keystroke replaced the selected text");

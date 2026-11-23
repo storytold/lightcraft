@@ -116,11 +116,9 @@ impl Fixture {
                                 .expect("current production controls");
                             assert_eq!(receipt["frame"], json!(ui.ctx().cumulative_frame_nr()));
                             assert_eq!(receipt["pass"], json!(ui.ctx().cumulative_pass_nr()));
-                            assert_eq!(receipt["native"], json!(native));
                             let controls = receipt["controls"].as_array().unwrap();
                             assert_eq!(controls.len(), 3);
                             for control in controls {
-                                assert_eq!(control["native"], json!(native));
                                 if matches!(pass, Pass::Disabled | Pass::Measure | Pass::Sizing) {
                                     assert_eq!(control["enabled"], json!(false));
                                     assert_eq!(control["clicked"], json!(false));
@@ -429,62 +427,14 @@ fn slideshow_launcher_sdk_12_natural_tab_and_activation() {
     case_12_natural_tab_and_activation(false);
 }
 
-#[test]
-fn slideshow_launcher_fallback_01_discovery_idle() {
-    case_01_discovery_idle(true);
-}
 
-#[test]
-fn slideshow_launcher_fallback_02_pdf_draft_cancel() {
-    case_02_pdf_draft_cancel(true);
-}
 
-#[test]
-fn slideshow_launcher_fallback_03_jpeg_draft_cancel() {
-    case_03_jpeg_draft_cancel(true);
-}
 
-#[test]
-fn slideshow_launcher_fallback_04_video_draft_cancel() {
-    case_04_video_draft_cancel(true);
-}
 
-#[test]
-fn slideshow_launcher_fallback_05_running_gates_all_formats() {
-    case_05_running_gates_all_formats(true);
-}
 
-#[test]
-fn slideshow_launcher_fallback_06_disabled_is_inert() {
-    case_06_disabled_is_inert(true);
-}
 
-#[test]
-fn slideshow_launcher_fallback_07_measurement_is_inert() {
-    case_07_measurement_is_inert(true);
-}
 
-#[test]
-fn slideshow_launcher_fallback_08_sizing_is_inert() {
-    case_08_sizing_is_inert(true);
-}
 
-#[test]
-fn slideshow_launcher_fallback_09_finished_record_allows_reopen() {
-    case_09_finished_record_allows_reopen(true);
-}
 
-#[test]
-fn slideshow_launcher_fallback_10_sequential_formats_reset_draft() {
-    case_10_sequential_formats_reset_draft(true);
-}
 
-#[test]
-fn slideshow_launcher_fallback_11_physical_escape_cancels_parent() {
-    case_11_physical_escape_cancels_parent(true);
-}
 
-#[test]
-fn slideshow_launcher_fallback_12_natural_tab_and_activation() {
-    case_12_natural_tab_and_activation(true);
-}

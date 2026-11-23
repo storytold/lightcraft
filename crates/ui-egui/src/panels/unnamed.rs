@@ -140,7 +140,7 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let field = crate::text_field::TextField::singleline("field:unnamedName", &mut app.ui.unnamed_name).hint(hint).width(240.0).show(ui);
         let edit = &field.response;
         if std::mem::take(&mut app.ui.unnamed_focus) {
-            edit.request_focus();
+            crate::text_field::focus_id(ui.ctx(), edit.id);
         }
         let typed = app.ui.unnamed_name.trim().to_string();
         let chosen = if typed.is_empty() { suggested.clone().unwrap_or_default() } else { typed.clone() };

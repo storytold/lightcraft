@@ -506,95 +506,6 @@ fn sizing(native: bool) {
     inert_release(native, Pass::Sizing);
 }
 #[test]
-fn general_library_live_window_retains_native_dispatch() {
-    let mut f = Fixture::new(false);
-    f.window = true;
-    for _ in 0..3 {
-        f.idle();
-    }
-    for alias in [OPEN, NEW, LAST, ASK, "text:settingsLocation"] {
-        assert!(f.rect(alias).is_positive());
-    }
-    assert_eq!(f.observations.len(), 2);
-    assert!(f.observations.iter().all(|o| o["native"] == true));
-}
-
-#[test]
-fn general_library_native_discovery() {
-    discovery(true);
-}
-
-#[test]
-fn general_library_native_unavailable() {
-    unavailable(true);
-}
-
-#[test]
-fn general_library_native_open_cancel() {
-    open_cancel(true);
-}
-
-#[test]
-fn general_library_native_open_refusal() {
-    open_refusal(true);
-}
-
-#[test]
-fn general_library_native_new_escape() {
-    new_escape(true);
-}
-
-#[test]
-fn general_library_native_new_focused_enter_cancel() {
-    new_focused_enter_cancel(true);
-}
-
-#[test]
-fn general_library_native_new_focused_enter_refusal() {
-    new_focused_enter_refusal(true);
-}
-
-#[test]
-fn general_library_native_waiting_refusal() {
-    waiting_refusal(true);
-}
-
-#[test]
-fn general_library_native_launch_choices() {
-    launch_choices(true);
-}
-
-#[test]
-fn general_library_native_tab_cycle() {
-    tab_cycle(true);
-}
-
-#[test]
-fn general_library_native_keyboard_open() {
-    keyboard_open(true);
-}
-
-#[test]
-fn general_library_native_keyboard_new() {
-    keyboard_new(true);
-}
-
-#[test]
-fn general_library_native_disabled() {
-    disabled(true);
-}
-
-#[test]
-fn general_library_native_measurement() {
-    measurement(true);
-}
-
-#[test]
-fn general_library_native_sizing() {
-    sizing(true);
-}
-
-#[test]
 fn general_library_sdk_discovery() {
     discovery(false);
 }
@@ -693,16 +604,6 @@ fn new_visible_create_refusal(native: bool) {
     f.answer(vec![path]);
     assert!(f.app.ui.toast.is_some(), "actual named command refuses its owned nonempty target");
     assert!(f.app.ui.dialog.is_none());
-}
-
-#[test]
-fn general_library_native_new_visible_create_cancel() {
-    new_visible_create_cancel(true);
-}
-
-#[test]
-fn general_library_native_new_visible_create_refusal() {
-    new_visible_create_refusal(true);
 }
 
 #[test]

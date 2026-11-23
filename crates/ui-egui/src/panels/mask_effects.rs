@@ -172,7 +172,7 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, current: Option
         .width(f32::INFINITY)
         .show(ui);
     if !st.focused {
-        r.response.request_focus();
+        crate::text_field::focus_id(ui.ctx(), r.response.id);
         st.focused = true;
     }
     if st.search != before {
@@ -678,7 +678,7 @@ pub fn manage_body(
                     if let Some((old, text)) = rename.as_mut().filter(|(old, _)| *old == e.name) {
                         let r = crate::text_field::TextField::singleline("field:effectRename", text).width(220.0).select_on_focus(true).show(ui);
                         if !r.editing && r.ending.is_none() {
-                            r.response.request_focus();
+                            crate::text_field::focus_id(ui.ctx(), r.response.id);
                         }
                         if r.cancelled() {
                             *rename = None;

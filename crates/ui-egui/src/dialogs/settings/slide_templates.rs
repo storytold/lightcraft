@@ -100,7 +100,7 @@ fn template_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, tpl: &Te
             .select_on_focus(true)
             .show(ui);
         if !r.editing && r.ending.is_none() {
-            r.response.request_focus();
+            crate::text_field::focus_id(&ctx, r.response.id);
         }
         if r.committed() {
             set_pending(&ctx, None);

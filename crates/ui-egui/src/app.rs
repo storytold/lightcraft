@@ -22,6 +22,19 @@ pub(crate) use frame::import_tick_allowed;
 #[cfg(test)]
 pub(crate) use screenshot::shot_ready;
 
+/// Installs the framework runtime on `ctx` (once; a second call is a no-op), with egui's wheel modifiers.
+pub(crate) fn install_runtime(ctx: &egui::Context) -> Result<(), String> {
+    let mut spec = craft::ui::InstallSpec::new(craft::host::target::ShellInfo::default(), std::sync::Arc::new(craft::window::system::NoWindows));
+    ctx.options(|options| {
+        spec.wheel.zoom = options.input_options.zoom_modifier;
+        spec.wheel.sideways = options.input_options.horizontal_scroll_modifier;
+    });
+    match craft::ui::install(ctx, spec) {
+        Ok(()) | Err(craft::ui::InstallError::AlreadyInstalled) => Ok(()),
+        Err(error) => Err(format!("Cannot install the LightCraft UI runtime: {error}")),
+    }
+}
+
 impl LightcraftApp {
     /// Installs the framework runtime before this context's first pass and supplies the shell's
     /// presentation values. It does not replace LightCraft's fonts, commands or saved workspace.
@@ -31,15 +44,7 @@ impl LightcraftApp {
 
     /// A host must not report successful startup with an unsensed SDK shell or About dialog.
     pub fn try_install_framework(&self, ctx: &egui::Context) -> Result<(), String> {
-        let mut spec = craft::ui::InstallSpec::new(craft::host::target::ShellInfo::default(), std::sync::Arc::new(craft::window::system::NoWindows));
-        ctx.options(|options| {
-            spec.wheel.zoom = options.input_options.zoom_modifier;
-            spec.wheel.sideways = options.input_options.horizontal_scroll_modifier;
-        });
-        match craft::ui::install(ctx, spec) {
-            Ok(()) | Err(craft::ui::InstallError::AlreadyInstalled) => {}
-            Err(error) => return Err(format!("Cannot install the LightCraft UI runtime: {error}")),
-        }
+        install_runtime(ctx)?;
         completion::install(ctx);
         shell::prepare(self, ctx);
         Ok(())

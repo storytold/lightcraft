@@ -163,7 +163,7 @@ pub(super) fn dialog_field(ui: &mut egui::Ui, widget: &str, text: &mut String, h
     // prompt or the blocking library window owns input) must not request the focus at all: egui's
     // text edit would otherwise keep editing the draft from host text behind that window.
     if ui.is_enabled() && (just_opened(ui, widget) || (!r.editing && r.ending.is_none() && ui.memory(|m| m.focused().is_none()))) {
-        r.response.request_focus();
+        crate::text_field::focus_id(ui.ctx(), r.response.id);
     }
     r.ending == Some(crate::text_field::Ending::Return)
 }

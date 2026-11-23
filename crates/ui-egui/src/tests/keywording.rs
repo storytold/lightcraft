@@ -967,7 +967,7 @@ fn enter(h: &mut Headless, text: &str) {
 }
 
 fn enter_focused(h: &Headless) -> bool {
-    h.view.ctx.memory(|m| m.has_focus(crate::text_field::id("field:enterKeywords")))
+    crate::text_field::focused(&h.view.ctx, "field:enterKeywords")
 }
 
 /// Given two selected photos, when Enter Keywords is chosen, then the box shows their keywords as

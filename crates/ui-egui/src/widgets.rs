@@ -620,7 +620,7 @@ fn begin_scrub(ui: &mut Ui, g: &SliderLayout, value_resp: &Response, scrub: &mut
     }
     *typing = None;
     ui.data_mut(|m| m.remove::<Draft>(g.typing_id()));
-    ui.memory_mut(|m| m.surrender_focus(g.field_id()));
+    crate::text_field::blur_id(ui.ctx(), g.field_id());
     // the travel so far counts, so the value doesn't lag the pointer by the start distance
     let fine = if ui.input(|i| i.modifiers.shift) { 0.1 } else { 1.0 };
     *scrub = Some((g.spec.position(g.value) + f64::from((p.x - origin.x) / g.track_rect.width()) * fine).clamp(0.0, 1.0));
@@ -642,7 +642,7 @@ fn update_typing_gesture(ui: &mut Ui, g: &SliderLayout, value_resp: &Response, t
     if value_released && !released_over_value && typing.as_ref().is_some_and(|(_, _, pressed)| *pressed) && !value_resp.clicked() {
         *typing = None;
         ui.data_mut(|m| m.remove::<Draft>(g.typing_id()));
-        ui.memory_mut(|m| m.surrender_focus(g.field_id()));
+        crate::text_field::blur_id(ui.ctx(), g.field_id());
     }
 }
 
@@ -676,7 +676,7 @@ fn edit_value(ui: &mut Ui, t: &Tokens, g: &SliderLayout, draft: Draft, out: &mut
     let released = ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary));
     let opening_release = pressed && released;
     if opening_release {
-        ui.memory_mut(|m| m.request_focus(g.field_id()));
+        crate::text_field::focus_id(ui.ctx(), g.field_id());
     }
     let pressed = pressed && !released;
     // a child over the value, so the field never moves the rows around it

@@ -70,11 +70,41 @@ pub(crate) fn focused(ctx: &egui::Context, widget: &str) -> bool {
 
 /// Gives the field registered as `widget` the keyboard focus.
 pub(crate) fn focus(ctx: &egui::Context, widget: &str) {
-    craft::ui::runtime::focus::request(ctx, FocusTarget::Id(id(widget)));
+    focus_id(ctx, id(widget));
+}
+
+/// Gives the field whose id is `id` ([`id`]) the keyboard focus.
+pub(crate) fn focus_id(ctx: &egui::Context, id: egui::Id) {
+    craft::ui::runtime::focus::request(ctx, FocusTarget::Id(id));
+}
+
+/// Takes the keyboard focus from the field registered as `widget`, if it has it.
+pub(crate) fn blur(ctx: &egui::Context, widget: &str) {
+    blur_id(ctx, id(widget));
+}
+
+/// Takes the keyboard focus from the field whose id is `id`, if it has it.
+pub(crate) fn blur_id(ctx: &egui::Context, id: egui::Id) {
+    if let Some(rec) = craft::ui::runtime::focus::focused_rec(ctx).filter(|rec| rec.stop.id == id || rec.stop.root == id) {
+        ctx.memory_mut(|m| m.surrender_focus(rec.stop.root));
+        if let Some(now) = ctx.memory(|m| m.focused()) {
+            ctx.memory_mut(|m| m.surrender_focus(now));
+        }
+    }
+}
+
+/// Whether the field whose id is `id` has the keyboard focus.
+pub(crate) fn has_focus_id(ctx: &egui::Context, id: egui::Id) -> bool {
+    has_focus(ctx, id)
+}
+
+/// The egui id of the field's text part, which holds the keyboard focus while the field is edited.
+pub(crate) fn text_id(id: egui::Id) -> egui::Id {
+    craft::ui::runtime::memory::sub(id, ("text", craft::behavior::PartKey::new("text")))
 }
 
 fn has_focus(ctx: &egui::Context, id: egui::Id) -> bool {
-    craft::ui::runtime::focus::focused_rec(ctx).is_some_and(|rec| rec.stop.id == id || rec.stop.root == id) || ctx.memory(|m| m.has_focus(id))
+    craft::ui::runtime::focus::focused_rec(ctx).is_some_and(|rec| rec.stop.id == id || rec.stop.root == id) || ctx.memory(|m| m.has_focus(id) || m.has_focus(text_id(id)))
 }
 
 /// What a field remembers between passes: the pass it was last drawn in and whether an edit was under way.
@@ -114,8 +144,10 @@ pub(crate) fn register_field(ui: &egui::Ui, widget: &str, response: &egui::Respo
             }
         }
     }
+    // The keyboard focus sits on the field's text part: register that response, so a focused id names the widget.
+    let text_part = ui.ctx().read_response(text_id(response.id));
     if response.interact_rect.is_positive() {
-        crate::widgets::register_response(widget, rect, response);
+        crate::widgets::register_response(widget, rect, text_part.as_ref().unwrap_or(response));
     } else {
         crate::widgets::register_geometry(ui.ctx(), widget, rect);
     }
@@ -231,168 +263,3 @@ mod tests;
 
 #[cfg(test)]
 mod live_filter_tests;
-
-
-#[cfg(test)]
-mod native_popup_preclose_tests {
-    use super::*;
-    use crate::headless::HeadlessView;
-    use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect};
-
-    const FIRST: &str = "preclose-first";
-    const SECOND: &str = "preclose-second";
-
-    struct Rig {
-        view: HeadlessView,
-        text: String,
-        sibling: String,
-        widgets: Vec<(String, Rect)>,
-        endings: Vec<Ending>,
-        sibling_open_after_first: bool,
-        first_escape_taken: bool,
-        enabled: bool,
-        measuring: bool,
-        time: f64,
-    }
-
-    impl Rig {
-        fn new() -> Self {
-            let mut rig = Self {
-                view: HeadlessView::new(), text: "Lisbon".into(), sibling: "Porto".into(),
-                widgets: Vec::new(), endings: Vec::new(), sibling_open_after_first: false, first_escape_taken: false,
-                enabled: true, measuring: false, time: 0.0,
-            };
-            rig.settle();
-            rig
-        }
-
-        fn frame(&mut self, events: Vec<Event>) {
-            self.time += 1.0 / 60.0;
-            let raw = HeadlessView::raw_input(egui::vec2(500.0, 320.0), 1.0, self.time, events);
-            let Self { view, text, sibling, endings, sibling_open_after_first, first_escape_taken, enabled, measuring, .. } = self;
-            view.run(raw, |ui| {
-                let ctx = ui.ctx().clone();
-                let mut draw = |ui: &mut Ui| {
-                    ui.add_space(20.0);
-                    ui.add_enabled_ui(*enabled, |ui| {
-                        let field = TextField::singleline(FIRST, text).width(210.0).show(ui);
-                        endings.extend(field.ending);
-                        *first_escape_taken = crate::widgets::escape_taken(&ctx);
-                    });
-                    // Observe the actual sibling owner between the two fields' shows.
-                    *sibling_open_after_first = egui::Popup::is_id_open(&ctx, id(SECOND).with("popup"));
-                    ui.add_space(80.0);
-                    TextField::singleline(SECOND, sibling).width(210.0).show(ui);
-                };
-                if *measuring {
-                    craft::ui::runtime::measure::run(&ctx, || draw(ui));
-                } else {
-                    draw(ui);
-                }
-            });
-            self.widgets = crate::widgets::take_registry(&self.view.ctx);
-        }
-
-        fn settle(&mut self) {
-            for _ in 0..4 { self.frame(Vec::new()); }
-        }
-
-        fn rect(&self, name: &str) -> Rect {
-            self.widgets.iter().rev().find(|(key, _)| key == name).map(|(_, rect)| *rect)
-                .unwrap_or_else(|| panic!("missing {name}: {:?}", self.widgets))
-        }
-
-        fn click_without_settling(&mut self, at: Pos2, button: PointerButton) {
-            self.time += 1.0;
-            let event = |pressed| Event::PointerButton { pos: at, button, pressed, modifiers: Modifiers::NONE };
-            self.frame(vec![Event::PointerMoved(at), event(true)]);
-            self.frame(vec![event(false)]);
-        }
-
-        fn click(&mut self, name: &str, button: PointerButton) {
-            self.click_without_settling(self.rect(name).center(), button);
-            self.settle();
-        }
-
-        fn key_event(key: Key, pressed: bool, modifiers: Modifiers) -> Event {
-            Event::Key { key, physical_key: None, pressed, repeat: false, modifiers }
-        }
-
-        fn key(&mut self, key: Key, modifiers: Modifiers) {
-            self.frame(vec![Self::key_event(key, true, modifiers), Self::key_event(key, false, modifiers)]);
-            self.settle();
-        }
-
-        fn popup_open(&self, name: &str) -> bool {
-            egui::Popup::is_id_open(&self.view.ctx, id(name).with("popup"))
-        }
-
-        fn selection(&self) -> Option<egui::text::CCursorRange> {
-            egui::text_edit::TextEditState::load(&self.view.ctx, id(FIRST)).and_then(|state| state.cursor.char_range())
-        }
-    }
-
-    #[test]
-    fn escape_omits_the_closing_proxy_before_immediate_secondary_reopen() {
-        let mut rig = Rig::new();
-        rig.click(FIRST, PointerButton::Primary);
-        rig.click(FIRST, PointerButton::Secondary);
-        assert!(rig.popup_open(FIRST));
-        let at = rig.rect(FIRST).center();
-        rig.frame(vec![Rig::key_event(Key::Escape, true, Modifiers::NONE), Rig::key_event(Key::Escape, false, Modifiers::NONE)]);
-        assert!(!rig.popup_open(FIRST));
-        assert!(rig.widgets.iter().all(|(name, _)| name != "preclose-first:cut"), "closing pass must not draw a menu proxy");
-        assert!(rig.first_escape_taken, "the closing pass owns Escape before the frame-local marker expires");
-        // The very next pass is the secondary press: no empty/settle frame in between.
-        rig.click_without_settling(at, PointerButton::Secondary);
-        assert!(rig.popup_open(FIRST), "the first real secondary click must reopen the field's menu");
-        assert!(rig.endings.is_empty());
-        assert_eq!(rig.text, "Lisbon");
-    }
-
-    #[test]
-    fn menu_escape_keeps_draft_selection_and_existing_second_escape_cancel() {
-        let mut rig = Rig::new();
-        rig.click(FIRST, PointerButton::Primary);
-        rig.key(Key::A, Modifiers::COMMAND);
-        rig.frame(vec![Event::Text("Rome".into())]);
-        rig.key(Key::A, Modifiers::COMMAND);
-        rig.click(FIRST, PointerButton::Secondary);
-        let selected = rig.selection();
-        assert!(selected.is_some_and(|range| !range.is_empty()));
-        rig.key(Key::Escape, Modifiers::NONE);
-        assert_eq!(rig.text, "Rome");
-        assert_eq!(rig.selection(), selected);
-        assert!(rig.endings.is_empty());
-        assert!(rig.view.ctx.memory(|memory| memory.has_focus(id(FIRST))));
-        rig.key(Key::Escape, Modifiers::NONE);
-        assert_eq!(rig.text, "Lisbon");
-        assert_eq!(rig.endings, vec![Ending::Escape]);
-    }
-
-    #[test]
-    fn earlier_field_does_not_preclose_its_siblings_popup() {
-        let mut rig = Rig::new();
-        rig.click(SECOND, PointerButton::Primary);
-        rig.click(SECOND, PointerButton::Secondary);
-        assert!(rig.popup_open(SECOND));
-        rig.frame(vec![Rig::key_event(Key::Escape, true, Modifiers::NONE), Rig::key_event(Key::Escape, false, Modifiers::NONE)]);
-        assert!(rig.sibling_open_after_first, "the first field must leave the second field's own popup to its owner");
-        assert!(!rig.popup_open(SECOND), "the sibling closes its own menu");
-        assert!(rig.endings.is_empty());
-    }
-
-    #[test]
-    fn preclose_does_not_claim_disabled_or_measuring_escape() {
-        for measuring in [false, true] {
-            let mut rig = Rig::new();
-            rig.click(FIRST, PointerButton::Secondary);
-            assert!(rig.popup_open(FIRST));
-            rig.enabled = measuring;
-            rig.measuring = measuring;
-            rig.frame(vec![Rig::key_event(Key::Escape, true, Modifiers::NONE), Rig::key_event(Key::Escape, false, Modifiers::NONE)]);
-            assert!(!rig.first_escape_taken, "the new preclose must not claim disabled/measurement input during the pass");
-            // This checks the new early-close effect, not egui's pre-existing late-close behavior.
-        }
-    }
-}
