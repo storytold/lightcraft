@@ -12,7 +12,7 @@ use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::primitives::IconSpec;
 use egui::{Pos2, Rect};
 
-use super::{pos2, register, vec2};
+use super::{Tokens, pos2, register, vec2};
 
 /// Temp-data key of the row (its widget id after `source:`, lower-case) the sidebar scrolls to
 /// this frame: set before the sections are drawn, cleared after.
@@ -78,6 +78,9 @@ const GAP_MARK: f32 = 16.0;
 /// How far one level of a tree steps in, as far as the sidebar plans its width: the deepest row
 /// asks for this many points a level, and the sidebar scrolls sideways when that exceeds the panel.
 const LEVEL_WIDTH: f32 = 16.0;
+
+/// What a row has before its name: the triangle's column and the icon.
+const LABEL_LEAD: f32 = 42.0;
 
 /// What a row needs besides its levels: the icon and triangle, a name's share, the count.
 const ROW_ROOM: f32 = 42.0 + 140.0 + 40.0;
@@ -307,15 +310,24 @@ pub(super) struct SideSpec<'a> {
     pub tree: bool,
     /// Build every row, whatever is in view (a short list that is never windowed).
     pub build_all: bool,
+    /// A press on a row puts the keyboard focus on the list. A header that is dragged or given up
+    /// with Escape keeps the focus where it was, so the Escape reaches the sidebar.
+    pub focus_on_press: bool,
 }
 
 impl<'a> SideSpec<'a> {
     pub(super) fn new(salt: &'a str, name: &'a str, show_counts: bool) -> Self {
-        SideSpec { salt, name, selected: None, show_counts, tree: true, build_all: false }
+        SideSpec { salt, name, selected: None, show_counts, tree: true, build_all: false, focus_on_press: true }
     }
 
     pub(super) fn selected(mut self, key: Option<&'a str>) -> Self {
         self.selected = key;
+        self
+    }
+
+    /// A press on a row leaves the keyboard focus where it was.
+    pub(super) fn keep_focus(mut self) -> Self {
+        self.focus_on_press = false;
         self
     }
 
@@ -457,7 +469,7 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
     if rows.is_empty() {
         return SideOut::default();
     }
-    let SideSpec { salt, name, selected, show_counts, tree, build_all } = spec;
+    let SideSpec { salt, name, selected, show_counts, tree, build_all, focus_on_press } = spec;
     let want = scroll_target(ui);
     let rows = if !build_all && rows.len() > WINDOW_FROM { built_rows(ui, rows, salt, want.as_ref()) } else { rows };
     let has_notes = rows.iter().any(|row| row.note.is_some());
@@ -483,6 +495,7 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
         .activate(ActivateOn::Click)
         .selection(Bind::bound(&mut chosen))
         .columns(columns)
+        .focus_on_press(focus_on_press)
         .enabled(ui.is_enabled());
     if tree {
         list = list.tree(true).tree_leaves(TreeLeaves::Aligned);
@@ -514,7 +527,17 @@ fn side_list_in(ui: &mut egui::Ui, spec: SideSpec<'_>, rows: Vec<SideRow>) -> Si
         ui.data_mut(|d| d.insert_temp(height_id, first.rect.height()));
     }
     let shown = list_shown(ui, &out, &source, selected, want.as_ref());
-    SideOut { shown, events: list_events(&out, &source), response: Some(out.response.clone()) }
+    let mut events = list_events(&out, &source);
+    // the menu opens from a row's triangle too (a request the list reports for the row itself only)
+    for row in &out.shown {
+        let asked = events.iter().any(|event| matches!(event, SideEvent::Menu { key, .. } if *key == row.key));
+        if let Some((_, response)) = row.openers.iter().find(|(_, response)| response.secondary_clicked())
+            && !asked
+        {
+            events.push(SideEvent::Menu { key: row.key.clone(), at: response.interact_pointer_pos().unwrap_or_else(|| response.rect.center()) });
+        }
+    }
+    SideOut { shown, events, response: Some(out.response.clone()) }
 }
 
 /// The rows the list showed, listed under the names the control channel knows them by (and the
@@ -554,7 +577,12 @@ fn register_row(ui: &egui::Ui, item: &SideRow, rect: Rect, (label, count, gap): 
         register(ui, format!("highlight:{id}"), rect);
     }
     if let Some(label) = label {
-        register(ui, format!("label:{id}"), label);
+        // the name as far as it is drawn: its own width, or the whole column when it is cut short
+        let font = Tokens::get(ui.ctx());
+        let text = ui.painter().layout_no_wrap(item.label.clone(), font.font(13.5), font.text_label).size().x;
+        let lead = LABEL_LEAD + item.depth as f32 * LEVEL_WIDTH;
+        let width = (lead + text).min(label.width());
+        register(ui, format!("label:{id}"), Rect::from_min_size(label.min, vec2(width, label.height())));
     }
     if item.count.is_some()
         && let Some(count) = count

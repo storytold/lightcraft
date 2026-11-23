@@ -50,7 +50,8 @@ fn harness(places: Vec<(String, String)>, kept: Vec<String>) -> Harness<'static,
 }
 
 fn open_menu(h: &mut Harness<'_, LightcraftApp>, row: &str) {
-    h.get_by_label(row).click_button(PointerButton::Secondary);
+    // (the row and its text both carry the name: the row is the first)
+    h.get_all_by_label(row).next().expect("the row is listed").click_button(PointerButton::Secondary);
     h.run_steps(4);
 }
 
