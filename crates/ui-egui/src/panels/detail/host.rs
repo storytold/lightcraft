@@ -151,8 +151,8 @@ pub(crate) fn target(ui: &mut Ui, key: impl Hash + std::fmt::Debug, rect: Rect, 
     let out = control.show_at(ui, rect);
     // A pointer click acts and leaves no keyboard focus behind, as the raw click targets these replace did: a focused
     // control makes the shell treat the next Escape as a text field's, so Escape would not go back from the photo.
-    // A key activation keeps its focus.
-    if out.clicked() && !out.by_key {
+    // Only a primary-button click does: a right-click opens its menu from this target. A key activation keeps its focus.
+    if out.clicked() && !out.by_key && ui.input(|input| input.pointer.button_released(egui::PointerButton::Primary)) {
         ui.ctx().memory_mut(|memory| memory.surrender_focus(out.response.id));
     }
     out
