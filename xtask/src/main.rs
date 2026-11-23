@@ -3784,7 +3784,12 @@ fn fetch_pinned(dest: &Path, samples: &[(&str, &str, &str)], bad: &mut Vec<Strin
         let out = dest.join(name);
         if !out.exists() {
             let mut curl = Command::new("curl");
-            curl.args(["-fsSL", "--retry", "5", "--retry-all-errors", "--retry-delay", "10", "-o"]).arg(&out).arg(url);
+            // a stalled transfer (under 1 KB/s for a minute, or one file past 10 minutes) is retried
+            // instead of hanging the job until its time limit
+            curl.args(["-fsSL", "--retry", "5", "--retry-all-errors", "--retry-delay", "10", "--connect-timeout", "30"])
+                .args(["--speed-limit", "1024", "--speed-time", "60", "--max-time", "600", "-o"])
+                .arg(&out)
+                .arg(url);
             run(curl, &format!("curl {url}"))?;
         }
         let actual = file_sha256(&out)?;
