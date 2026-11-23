@@ -366,18 +366,8 @@ fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
             [Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown, Key::Enter, Key::Space].iter().any(|key| input.key_pressed(*key))
         });
     }
-    let chrome =
-        app.ui.docking.as_ref().is_some_and(|workspace| {
-            craft_ui::docking::DockArea::new(egui::Id::unique("lightcraft-docking")).chrome_has_focus(ctx, &workspace.layout)
-        });
-    if !chrome {
-        return true;
-    }
-    ctx.input(|input| {
-        [Key::Enter, Key::Space, Key::Tab, Key::Escape, Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown]
-            .iter()
-            .any(|key| input.key_pressed(*key))
-    })
+    // (dock tabs and dividers are framework stops now, handled above)
+    true
 }
 
 /// Dispatch the global shortcut pass. It yields while a dialog, prompt, blocking library window,
