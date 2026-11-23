@@ -783,7 +783,7 @@ fn footer_button(
     use craft::ui::buttons::Button;
     use craft::ui::contract::{Props as _, Show as _};
     let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
-    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let _ = size;
     let shown = Button::new(crate::i18n::tr(label).to_string())
         .id_salt(alias)
         .enabled(enabled)
@@ -792,7 +792,7 @@ fn footer_button(
         } else {
             Variant::SECONDARY
         })
-        .show_at(ui, rect);
+        .show(ui);
     if real {
         crate::widgets::register_response(alias, shown.response.rect, &shown.response);
     }

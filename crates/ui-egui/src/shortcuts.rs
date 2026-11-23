@@ -415,6 +415,9 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
 /// pin toggle, see `handle`).
 fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, Vec<(&'static str, serde_json::Value)>, bool) {
     let mut fire: Vec<String> = Vec::new();
+    // An Escape no framework component took reaches the app as the window's Cancel (the runtime keeps the raw key):
+    // the app's own Escape bindings (View ▸ Back and the like) read it there, last in the pass.
+    let window_escape = craft::ui::runtime::keys::with_window_intents(ctx, false, |w| w.take(craft::ui::runtime::keys::Intent::Cancel));
     // shortcuts the native menu bar handles (it consumes those key presses itself)
     let native = |sc: &str| app.native_shortcuts.contains(sc);
     let mut aliased: Vec<(&'static str, serde_json::Value)> = Vec::new();
@@ -449,7 +452,7 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
                 && let Some((m, k)) = parse(sc)
                 && !native(sc)
                 && !(k == Key::Escape && popup_open)
-                && matches(i, m, k)
+                && (matches(i, m, k) || (window_escape && k == Key::Escape && m == Modifiers::NONE))
                 && let Some(id) = grid_key_command(keymap, grid, app.ui.fullscreen, b.id, (m, k))
             {
                 if id == "view.zoomToggle" && k == Key::Space {
@@ -468,7 +471,7 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
                 && !(k == Key::Escape && popup_open)
                 && !(k == Key::Space && space_repeat)
                 && !taken.contains(&(m, k))
-                && matches(i, m, k)
+                && (matches(i, m, k) || (window_escape && k == Key::Escape && m == Modifiers::NONE))
             {
                 aliased.push((id, serde_json::from_str(params).unwrap_or_default()));
             }
