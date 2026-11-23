@@ -154,9 +154,10 @@ pub(super) fn return_confirms(dlg: &Dialog) -> bool {
 /// True when Return confirms the dialog; Esc cancels the dialog (`show`).
 pub(super) fn dialog_field(ui: &mut egui::Ui, widget: &str, text: &mut String, hint: &str) -> bool {
     let r = crate::text_field::TextField::singleline(widget, text).hint(crate::i18n::tr(hint)).width(f32::INFINITY).select_on_focus(true).show(ui);
-    // A dialog's one field is named by the field itself, the stop the framework focuses, not by its text part.
+    // The field itself, the stop the framework focuses, names the widget too, beside the text part that holds egui's
+    // keyboard focus.
     if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
-        crate::widgets::retarget_response(widget, &r.response);
+        crate::widgets::add_hit(widget, &r.response);
     }
     // (and takes it back when nothing has it: after a click on the dialog's background or a check box,
     // or when Return gave it up on a refusal; a control Tab reached keeps it). A disabled dialog (a
@@ -165,7 +166,18 @@ pub(super) fn dialog_field(ui: &mut egui::Ui, widget: &str, text: &mut String, h
     if ui.is_enabled() && (just_opened(ui, widget) || (!r.editing && r.ending.is_none() && ui.memory(|m| m.focused().is_none()))) {
         crate::text_field::focus_id(ui.ctx(), r.response.id);
     }
+    // Escape in a dialog's one field cancels the dialog, its draft with it (the framework convention); the field takes
+    // the key to give its text back, so the dialog reads it from here (`escaped_field`).
+    if r.cancelled() && ui.is_enabled() && !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) {
+        let pass = ui.ctx().cumulative_pass_nr();
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("lightcraft.dialog.field-escaped"), pass));
+    }
     r.ending == Some(crate::text_field::Ending::Return)
+}
+
+/// Whether a dialog's one field (`dialog_field`) took an Escape in this pass.
+pub(super) fn escaped_field(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<u64>(egui::Id::unique("lightcraft.dialog.field-escaped"))) == Some(ctx.cumulative_pass_nr())
 }
 
 /// The dialog part `key` is drawn this frame but wasn't the frame before: the dialog has just

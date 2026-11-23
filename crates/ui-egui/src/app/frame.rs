@@ -453,9 +453,9 @@ impl LightcraftApp {
         }
         #[cfg(test)]
         self.library_passes.push(panels::library_problem::LibraryPass::Background);
-        // Disable a separate background UI for About; its SDK dialog mounts on the enabled root.
+        // Disable a separate background UI for About and Save Effect; their SDK dialogs mount on the enabled root.
         let mut about_background;
-        let background = if matches!(self.ui.dialog, Some(crate::state::Dialog::About)) {
+        let background = if matches!(self.ui.dialog, Some(crate::state::Dialog::About | crate::state::Dialog::SaveEffect { .. })) {
             about_background = ui.new_child(egui::UiBuilder::new().id_salt("about-background").max_rect(ui.max_rect()));
             &mut about_background
         } else {
