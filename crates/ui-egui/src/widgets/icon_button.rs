@@ -52,6 +52,7 @@ struct CompactStyle {
     metrics: Metrics,
 }
 
+#[derive(craft::ui::contract::MemoProps)]
 struct AppGlyph(Icon);
 
 impl Glyph for AppGlyph {

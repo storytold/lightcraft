@@ -104,6 +104,7 @@ pub(crate) fn display_label(chip: &FilterChip, filter: &lightcraft_catalog::Filt
 }
 
 /// The existing seven-point cross, painted by the public SDK icon-button lifecycle.
+#[derive(craft::ui::contract::MemoProps)]
 struct ChipClose;
 
 impl Glyph for ChipClose {

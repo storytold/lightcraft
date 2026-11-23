@@ -31,6 +31,7 @@ fn measuring(ui: &Ui) -> bool {
 }
 
 /// Reuse LightCraft's original artwork in the SDK face; no extra interaction or focus stop.
+#[derive(craft::ui::contract::MemoProps)]
 struct AlbumIcon(Icon);
 
 impl Glyph for AlbumIcon {

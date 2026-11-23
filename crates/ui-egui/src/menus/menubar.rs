@@ -1192,7 +1192,6 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
                 .close_behavior(close)
                 .open_memory(None)
                 .show(|ui| {
-                    craft::ui::runtime::focus::native_menu_popup(ui, r);
                     crate::menu_level::level(ui, 1, bar_bottom, |ui| nodes_ui(ui, items, mac, &mut clicked, 1, bar_bottom))
                 });
         }

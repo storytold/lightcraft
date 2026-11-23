@@ -79,7 +79,7 @@ pub(super) fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) 
     egui::Area::new(egui::Id::unique("keyword-set-host")).fixed_pos(ctx.content_rect().min).show(ctx, |ui| {
         let key = egui::Id::unique("keyword-set-inspect");
         let (_, record) = craft::ui::runtime::inspect::record(ui, key, |ui| {
-            Stack::new().theme(ThemeScope::mode(mode)).show(ui, |ui, _| {
+            Stack::new().theme(ThemeScope::new().mode(mode)).show(ui, |ui, _| {
                 output = Some(
                     FormDialog::new(crate::i18n::tr("Edit Keyword Set"), Bind::bound(&mut draft))
                         .ok_label(crate::i18n::tr("Save"))

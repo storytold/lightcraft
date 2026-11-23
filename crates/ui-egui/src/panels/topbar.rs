@@ -227,6 +227,7 @@ fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rec
 }
 
 /// LightCraft's original 18-point mode artwork; the SDK owns the button and its focus ring.
+#[derive(craft::ui::contract::MemoProps)]
 struct AppearanceGlyph {
     icon: Icon,
     ink: egui::Color32,

@@ -215,14 +215,6 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
                     ui,
                     crate::text_field::TextField::singleline("field:settingsAutoAlbum", &mut name).hint(crate::i18n::tr("None")).width(180.0),
                 );
-                // This island's adjacent Button/Checkbox are SDK controls even while the
-                // enclosing Settings subtree uses native presentation. Enroll only their
-                // actually shown native sibling, after field() has done its one show/Escape path.
-                if !auto_import_measuring(ui) {
-                    use craft::ui::runtime::focus::{NativeTextTab, native_text_tab_participant};
-                    let tab = if shown.tab_navigation { NativeTextTab::Navigation } else { NativeTextTab::EditorOwned };
-                    native_text_tab_participant(ui, &shown.response, tab);
-                }
                 if shown.committed() {
                     let _ = app.run("library.autoImport", json!({"album": name.trim()}));
                 }

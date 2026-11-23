@@ -319,6 +319,7 @@ pub(super) fn quick_develop(app: &mut LightcraftApp, ui: &mut egui::Ui, n: usize
             glyph: Stateful<StyleColor>,
         }
 
+        #[derive(craft::ui::contract::MemoProps)]
         struct ArrowGlyph(Icon);
         impl Glyph for ArrowGlyph {
             fn paint(&self, painter: &Painter, _: &UiTokens, rect: Rect, color: Color32, _: bool) {

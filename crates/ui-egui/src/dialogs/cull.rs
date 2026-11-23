@@ -71,7 +71,7 @@ pub(super) fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, _t: &Tokens, dlg:
     };
     let kind = crate::theme::current(ui.ctx()).unwrap_or_else(|| app.ui.settings.theme(app.system_theme(ui.ctx())));
     let mode = if kind.is_dark() { craft::theme::Mode::Dark } else { craft::theme::Mode::Light };
-    Stack::new().theme(ThemeScope::mode(mode)).show(ui, |ui, _| {
+    Stack::new().theme(ThemeScope::new().mode(mode)).show(ui, |ui, _| {
         Text::new(crate::i18n::tr_format!(
             "Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).",
             scope = scope

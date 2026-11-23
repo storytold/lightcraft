@@ -288,6 +288,7 @@ fn settings_transfer_sdk(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens,
 }
 
 // Only the app's existing glyph ink/geometry is local; the SDK owns all interaction.
+#[derive(craft::ui::contract::MemoProps)]
 struct SettingsGearGlyph {
     ink: egui::Color32,
 }
@@ -299,6 +300,7 @@ impl craft::ui::primitives::Glyph for SettingsGearGlyph {
 
 // Preserve LightCraft's filled/outlined Pick drawing inside the public SDK IconButton.
 // This glyph has no sensing, event handling, component state or command binding.
+#[derive(craft::ui::contract::MemoProps)]
 struct PickGlyph {
     selected: bool,
     ink: egui::Color32,

@@ -478,7 +478,6 @@ fn mask_local_scalar(app: &mut LightcraftApp, ui: &mut egui::Ui, target: (PhotoI
         .step(spec.step)
         .wheel_step(nudge)
         .key_policy(policy)
-        .atomic_editor_steps(true)
         .pointer_model_step(spec.step)
         .pointer_modifiers(craft::ui::value_drag::DragModifiers::new(Some(craft::ui::value_drag::DragModifier::Shift), None))
         .fill(false)

@@ -28,6 +28,7 @@ fn eye_measuring(ui: &egui::Ui) -> bool {
 
 /// Only the original drawing is local. The public IconButton owns sensing, Tab,
 /// focus indication, primary-release activation, cancellation and accessibility.
+#[derive(craft::ui::contract::MemoProps)]
 struct WheelEyeGlyph {
     id: egui::Id,
     visible: bool,
