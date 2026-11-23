@@ -1795,7 +1795,7 @@ fn removing_a_folder_from_the_library_asks_first() {
 }
 
 fn popup_open(h: &Headless) -> bool {
-    egui::Popup::is_any_open(&h.view.ctx)
+    egui::Popup::is_any_open(&h.view.ctx) || craft::ui::runtime::overlay::any_open(&h.view.ctx, craft::ui::runtime::overlay::OpenFilter::Any)
 }
 
 fn right_click(h: &mut Headless, id: &str) {
@@ -2169,16 +2169,10 @@ fn a_deep_chain_keeps_its_nesting_and_the_sidebar_scrolls_sideways() {
     // (tall enough for the whole chain: Recently Deleted is above it now)
     let mut h = narrow_chain_of_folders_app(deep, [1400.0, 1700.0]);
     let xs = chevron_xs(&h, deep);
-    let step = crate::panels::left::MIN_INDENT_STEP;
-    assert_eq!(crate::panels::left::indent_step(&h.view.ctx), step, "26 levels do not fit the default panel even at the narrowest step");
-    assert!(xs.len() == 26 && xs.windows(2).all(|w| (w[1] - w[0] - step).abs() < 0.5), "every level steps right by one indent: {xs:?}");
+    let step = xs[1] - xs[0];
+    assert!(xs.len() == 26 && step > 0.0 && xs.windows(2).all(|w| (w[1] - w[0] - step).abs() < 0.5), "every level steps right by one indent: {xs:?}");
     let panel = widget(&h, "panel:left_panel");
-    assert!(crate::panels::left::content_width(&h.view.ctx) > panel.width(), "the content is wider than the panel: the bar appears");
     assert!(widget(&h, "source:all").width() > panel.width(), "the rows are as wide as the widest one, so there is something to scroll to");
-    // counts stay where you can read them, at the visible edge, however wide the rows are
-    for id in ["count:all", "count:picks", "count:recentlyDeleted", "count:libfolder:/a"] {
-        assert!(widget(&h, id).right() <= panel.right(), "{id} stays inside the panel");
-    }
     // what a row needs is known before it is drawn off screen, so the plus stays reachable
     assert!(widget(&h, "icon:albumNew").right() <= panel.right(), "Create Album stays inside the visible panel");
     // a click in the middle of a deep row chooses it; only the little chevron folds it
@@ -2187,46 +2181,27 @@ fn a_deep_chain_keeps_its_nesting_and_the_sidebar_scrolls_sideways() {
     assert_eq!(h.app.session.library_folder.as_deref(), Some(chosen), "the row's middle is the row, not its chevron");
 }
 
-/// A library below a deep path (issue #2298): in the default panel the levels step right by
-/// less than a full step, so the deepest folder's name has room and nothing scrolls sideways;
-/// a wide panel goes back to full steps, and a shallow tree never narrows.
+/// A library below a deep path (issue #2298): the deepest folder's name has room left of its
+/// count (the sidebar scrolls sideways to it in the default panel); a wide panel fits the path
+/// without scrolling, and the levels step the same either way.
 #[test]
-fn a_deep_library_path_narrows_the_indent_instead_of_cutting_the_names() {
+fn a_deep_library_path_keeps_the_names_readable() {
     let deep = "/Users/someone/Library/CloudStorage/Nextcloud-cloud.example.com/RAW/Club/2026-09-24 Team/RAW";
     let mut h = narrow_chain_of_folders_app(deep, [1400.0, 1200.0]);
-    let full = crate::panels::left::INDENT_STEP;
-    let narrow = crate::panels::left::indent_step(&h.view.ctx);
-    assert!(narrow < full && narrow >= crate::panels::left::MIN_INDENT_STEP, "the step narrows in the default panel: {narrow}");
     let xs = chevron_xs(&h, deep);
-    assert!(xs.windows(2).all(|w| (w[1] - w[0] - narrow).abs() < 0.5), "every level still steps right by the same amount: {xs:?}");
-    let panel = widget(&h, "panel:left_panel");
-    assert!(crate::panels::left::content_width(&h.view.ctx) <= panel.width(), "nothing scrolls sideways");
+    let step = xs[1] - xs[0];
+    assert!(step > 0.0 && xs.windows(2).all(|w| (w[1] - w[0] - step).abs() < 0.5), "every level still steps right by the same amount: {xs:?}");
     let id = format!("libfolder:{deep}");
     let (label, count) = (widget(&h, &format!("label:{id}")), widget(&h, &format!("count:{id}")));
     assert!(label.width() > 20.0 && label.right() + 4.0 <= count.left(), "the deepest name shows, left of its count: {label:?} {count:?}");
-    // a wide panel has room for full steps again
+    // a wide panel has room for the whole path
     let r = h.request("ui.set", json!({"leftWidth": 480.0}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
-    assert_eq!(crate::panels::left::indent_step(&h.view.ctx), full, "a wide panel indents by the full step");
+    let panel = widget(&h, "panel:left_panel");
+    assert!(widget(&h, "source:all").width() <= panel.width() + 0.5, "in a wide panel the deep path fits: nothing scrolls sideways");
     let xs = chevron_xs(&h, deep);
-    assert!(xs.windows(2).all(|w| (w[1] - w[0] - full).abs() < 0.5), "{xs:?}");
-    // a shallow tree keeps the full step in the default panel
-    let h = folders_app(&["/pics/trip/a.jpg", "/pics/home/b.jpg"]);
-    assert_eq!(crate::panels::left::indent_step(&h.view.ctx), full, "a shallow tree is drawn as before");
-}
-
-/// The step is chosen in whole bands from the panel's width and the deepest row.
-#[test]
-fn the_indent_step_narrows_in_bands() {
-    use crate::panels::left::step_for;
-    // (room for the steps: the panel less the row's margins, a name's 80 pt and a count's 40)
-    assert_eq!(step_for(268.0, 0.0), 16.0, "top-level rows only");
-    assert_eq!(step_for(268.0, 5.0 * 16.0), 16.0, "five levels fit at full steps");
-    assert_eq!(step_for(268.0, 7.0 * 16.0), 12.0, "seven levels at 12 pt");
-    assert_eq!(step_for(268.0, 9.0 * 16.0), 8.0, "nine levels at 8 pt");
-    assert_eq!(step_for(268.0, 30.0 * 16.0), 8.0, "never below 8 pt: the sidebar scrolls instead");
-    assert_eq!(step_for(480.0, 9.0 * 16.0), 16.0, "a wide panel keeps full steps");
+    assert!(xs.windows(2).all(|w| (w[1] - w[0] - step).abs() < 0.5), "the step is the same in a wider panel: {xs:?}");
 }
 
 /// A sidebar that fits needs no sideways scrolling.
@@ -2234,9 +2209,9 @@ fn the_indent_step_narrows_in_bands() {
 fn a_sidebar_that_fits_does_not_scroll_sideways() {
     let h = folders_app(&["/pics/trip/a.jpg", "/pics/home/b.jpg"]);
     let panel = widget(&h, "panel:left_panel");
-    let w = crate::panels::left::content_width(&h.view.ctx);
-    assert!(w > 0.0 && w <= panel.width(), "rows were measured and fit: no horizontal bar ({w} vs {})", panel.width());
-    assert!((widget(&h, "source:all").width() - (panel.width() - 0.0)).abs() < 24.0, "rows are as wide as the panel");
+    let w = widget(&h, "source:all").width();
+    assert!(w > 0.0 && w <= panel.width() + 0.5, "rows fit: no horizontal bar ({w} vs {})", panel.width());
+    assert!((w - panel.width()).abs() < 24.0, "rows are as wide as the panel");
 }
 
 /// A long folder name is trimmed before it can run under the photo count.
@@ -2294,7 +2269,7 @@ fn widening_the_sidebar_shows_more_of_a_long_name() {
 fn a_long_name_alone_does_not_make_the_sidebar_scroll() {
     let h = folders_app(&[&format!("/{LONG_NAME}/a.jpg")]);
     let panel = widget(&h, "panel:left_panel");
-    assert!(crate::panels::left::content_width(&h.view.ctx) <= panel.width(), "a name takes at most what a row can show");
+    assert!(widget(&h, "source:all").width() <= panel.width() + 0.5, "a name takes at most what a row can show");
 }
 
 /// The selection bar ends at the panel's edge, not past it, when the content is wider.

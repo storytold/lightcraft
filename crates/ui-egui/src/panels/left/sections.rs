@@ -123,11 +123,23 @@ pub(crate) fn section_drop_before(placed: &[PlacedSection], y: f32) -> Option<Si
     placed.iter().find(|p| y < (p.top + p.bottom) / 2.0).map(|p| p.section)
 }
 
+/// Remembers whether Escape was pressed this frame, before the framework's lists see the input.
+pub(super) fn note_escape(ui: &egui::Ui) {
+    let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    ui.data_mut(|d| d.insert_temp(egui::Id::unique("left-escape"), esc));
+}
+
+/// Whether Escape was pressed this frame ([`note_escape`]).
+fn escape_pressed(ui: &egui::Ui) -> bool {
+    ui.data(|d| d.get_temp::<bool>(egui::Id::unique("left-escape"))).unwrap_or(false)
+}
+
 /// While a section is dragged by its header: a line shows where it would go, releasing over the
 /// sidebar moves it there (`view.sidebarMoveSection`), releasing elsewhere or Esc leaves it.
 pub(super) fn section_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, placed: &[PlacedSection]) {
     let Some(dragged) = app.ui.dragging_section else { return };
-    let (released, pos, esc) = ui.input(|i| (i.pointer.primary_released(), i.pointer.latest_pos(), i.key_pressed(egui::Key::Escape)));
+    let (released, pos) = ui.input(|i| (i.pointer.primary_released(), i.pointer.latest_pos()));
+    let esc = escape_pressed(ui);
     if esc {
         // the drag's Esc, not also a dialog's or a view's
         crate::widgets::take_escape(ui.ctx());

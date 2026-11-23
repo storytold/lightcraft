@@ -327,6 +327,15 @@ impl Fixture {
         assert!(roots.len() <= 1, "at most one real recorded By Date collection: {:#?}", self.elements);
         roots.into_iter().next()
     }
+    /// Whether the focus is on the section header's list (named "Sidebar section").
+    fn header_focused(&self) -> bool {
+        let focused = self.ctx.memory(|m| m.focused());
+        self.elements.iter().any(|element| {
+            element.part.is_none()
+                && Some(element.id) == focused
+                && element.facts.as_ref().is_some_and(|facts| facts.role == "List" && facts.name.as_deref() == Some("Sidebar section"))
+        })
+    }
     fn collection_lead(&self) -> Option<usize> {
         // Public, read-only collection fact; root ID comes from its actual
         // recorded role/name, never a reconstructed widget-ID recipe.
@@ -334,17 +343,16 @@ impl Fixture {
     }
     fn enter_dates(&mut self) {
         self.key(Key::Tab);
-        if self.focused("sidebarSection:byDate") {
-            // Native By Date has a legitimate section-header Tab stop.
+        if self.header_focused() {
+            // The section header is a one-row framework list with a Tab stop of its own.
             self.key(Key::Tab);
-        } else {
-            let root = self.collection_root().expect("first Tab must reach the actual native header or supported SDK collection");
-            assert_eq!(self.ctx.memory(|m| m.focused()), Some(root.id), "actual SDK root, not missing focus; trace={:#?}", self.trace);
-            if self.collection_lead().is_none() {
-                // An unselected List starts without a lead (LeadOnOpen::Selected).
-                // Real Down enters its first row; no synthetic focus or pick.
-                self.key(Key::ArrowDown);
-            }
+        }
+        let root = self.collection_root().expect("a Tab must reach the supported SDK collection");
+        assert_eq!(self.ctx.memory(|m| m.focused()), Some(root.id), "actual SDK root, not missing focus; trace={:#?}", self.trace);
+        if self.collection_lead().is_none() {
+            // An unselected List starts without a lead (LeadOnOpen::Selected).
+            // Real Down enters its first row; no synthetic focus or pick.
+            self.key(Key::ArrowDown);
         }
         assert!(
             self.focused(&action("2026")),
@@ -643,7 +651,13 @@ fn date_actual_section_has_supported_list_and_identity_keyed_tree_row_owners() {
         })
         .collect::<Vec<_>>();
     assert_eq!(lists.len(), 1, "one actual collection owns this live section; trace={:#?}", f.trace);
-    let rows = f.elements.iter().filter(|element| element.part.is_none() && element.component.starts_with("ListRow")).collect::<Vec<_>>();
+    // (the section header is a row of its own list, named like the section)
+    let rows = f
+        .elements
+        .iter()
+        .filter(|element| element.part.is_none() && element.component.starts_with("ListRow"))
+        .filter(|element| !element.facts.as_ref().is_some_and(|facts| facts.name.as_deref() == Some("By Date")))
+        .collect::<Vec<_>>();
     assert_eq!(rows.len(), 5, "two roots and their three actual months; trace={:#?}", f.trace);
     assert_eq!(rows.iter().filter(|element| element.facts.as_ref().is_some_and(|facts| facts.name.as_deref() == Some("March"))).count(), 2);
     let root = lists[0];
