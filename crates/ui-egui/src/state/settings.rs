@@ -498,4 +498,27 @@ mod loupe_info_tests {
         let read: AppSettings = serde_json::from_value(saved).unwrap();
         assert!(!read.loupe_messages);
     }
+
+    /// The Temp slider scale is saved with the app's settings under `tempScale`; a settings file from
+    /// before it existed gets Lightroom's scale, and a scale this build doesn't know reads as Lightroom's
+    /// and keeps the rest of the settings.
+    #[test]
+    fn the_temp_slider_scale_is_saved_with_the_settings() {
+        use lightcraft_develop::KelvinScale;
+        assert_eq!(AppSettings::default().temp_scale, KelvinScale::Lightroom);
+        for (scale, name) in [(KelvinScale::Lightroom, "lightroom"), (KelvinScale::Logarithmic, "logarithmic"), (KelvinScale::Mired, "mired")] {
+            let settings = AppSettings { temp_scale: scale, ..AppSettings::default() };
+            let saved = serde_json::to_value(&settings).unwrap();
+            assert_eq!(saved["tempScale"], name);
+            let read: AppSettings = serde_json::from_value(saved).unwrap();
+            assert_eq!(read.temp_scale, scale);
+        }
+        let old: AppSettings = serde_json::from_value(serde_json::json!({"filmNames": false})).unwrap();
+        assert_eq!(old.temp_scale, KelvinScale::Lightroom, "a settings file from before the choice existed");
+        for bad in [serde_json::json!("kelvin"), serde_json::json!(3), serde_json::Value::Null] {
+            let newer: AppSettings = serde_json::from_value(serde_json::json!({"filmNames": false, "tempScale": bad})).unwrap();
+            assert_eq!(newer.temp_scale, KelvinScale::Lightroom, "{bad}");
+            assert!(!newer.film_names, "the rest of the settings are still read");
+        }
+    }
 }

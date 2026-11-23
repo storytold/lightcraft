@@ -180,7 +180,10 @@ pub enum KelvinScale {
 #[derive(Clone, Copy)]
 enum KelvinTrack {
     /// the track's centre and `ln` of its right half's span
-    Lightroom { centre: f64, right: f64 },
+    Lightroom {
+        centre: f64,
+        right: f64,
+    },
     Logarithmic,
     Mired,
 }

@@ -111,7 +111,12 @@ pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Toke
     heading(ui, t, crate::i18n::tr("Develop"));
     row(ui, t, crate::i18n::tr("Temp slider scale"), |ui| {
         use lightcraft_develop::KelvinScale as K;
-        choices(ui, "settingsTempScale", &[(K::Lightroom, "Lightroom"), (K::Logarithmic, "Logarithmic"), (K::Mired, "Even in mireds")], &mut app.ui.settings.temp_scale);
+        choices(
+            ui,
+            "settingsTempScale",
+            &[(K::Lightroom, "Lightroom"), (K::Logarithmic, "Logarithmic"), (K::Mired, "Even in mireds")],
+            &mut app.ui.settings.temp_scale,
+        );
     });
     hint(
         ui,
