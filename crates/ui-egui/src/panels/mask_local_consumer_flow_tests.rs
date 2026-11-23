@@ -487,12 +487,10 @@ fn local_parent_pointer_modifier_comparison_records_fresh_thumb_travel_and_exact
         let after = f.photos();
         f.roundtrip(&photos, &undo, &after);
     }
-    // Characterize the known blocker, not a parity approval. Both native and SDK use fresh identical values.
-    if ported {
-        assert!(landed[1] > landed[0] * 2.0 && landed[2] < landed[0] * 0.5);
-    } else {
-        assert!(landed[1] < landed[0] * 0.5 && (landed[2] - landed[0]).abs() < 0.011);
-    }
+    // The SDK slider is bound with Shift as the fine modifier and none coarse (see `mask_local_scalar`), which is
+    // what the native slider did: Shift travels slowly, Alt changes nothing. Both use fresh identical values.
+    let _ = ported;
+    assert!(landed[1] < landed[0] * 0.5 && (landed[2] - landed[0]).abs() < 0.011);
 }
 
 #[test]
