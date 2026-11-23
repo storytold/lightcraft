@@ -679,7 +679,8 @@ pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_
         keywords: keywords.flat,
         hierarchical_keywords: keywords.hierarchical,
         rating: Some(p.rating.min(5) as i8),
-        label: p.label.map(|l| cat.label_name(l)),
+        // (a colour kept from another program stands in while the photo has no label here)
+        label: p.label.map(|l| cat.label_name(l)).or_else(|| nz(&p.meta.label_text)),
         capture_time: p.captured.as_deref().and_then(lightcraft_meta::DateTime::parse_iso),
         gps: p.meta.gps.map(|(latitude, longitude)| lightcraft_meta::Gps { latitude, longitude, altitude: None }),
         ..Default::default()

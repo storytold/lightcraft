@@ -34,6 +34,9 @@ pub(super) fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
         usage_terms: m.usage_terms.clone().unwrap_or_default(),
         copyright_url: m.copyright_url.clone().unwrap_or_default(),
         creator: m.artist.clone().unwrap_or_default(),
+        // (a label the file names is read with the rating; one the library has no colour for is
+        // only kept by a catalog import so far)
+        label_text: String::new(),
         // paths from `lr:hierarchicalSubject`, names from `dc:subject` that aren't their levels
         keywords: lightcraft_catalog::keywords::from_file(&m.keywords, &m.hierarchical_keywords),
         regions: m.regions.clone(),

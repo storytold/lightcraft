@@ -32,6 +32,9 @@ pub enum Dialog {
         library: Option<String>,
         details: Vec<String>,
         first: Option<u64>,
+        /// The catalog was Capture One's: the window says so.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        capture_one: bool,
     },
     /// File ▸ Print…: the Print module. Its state is the session's (`print.*`); the page on show
     /// and the selected cell are [`UiState::print`].

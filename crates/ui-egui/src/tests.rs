@@ -22,6 +22,7 @@ mod browse_active;
 mod button;
 mod canvas_keys;
 mod canvas_pan;
+mod capture_one_import;
 mod capture_time;
 mod carried_right_click;
 mod carried_text_field_menu;

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Import Capture One catalogs
+- File → Import Capture One Catalog… brings a Capture One catalog into LightCraft: its photos with their variants as
+  virtual copies, star ratings, colour tags, keywords and the whole keyword list, IPTC fields, camera data, and the
+  albums, projects and groups they are in. The catalog is only read, and Capture One isn't needed. Orange and pink,
+  which LightCraft has no labels for, are kept with the photo and found by the keywords “Capture One|Orange” and
+  “Capture One|Pink”. Adjustments, smart albums and Capture One sessions don't come over yet. See
+  [Capture One catalog import](capture-one-catalog-import.md).
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
