@@ -31,16 +31,24 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         // colour label: one swatch per label (hover shows its name); clicking the current one clears it
         ui.horizontal(|ui| {
             for l in lightcraft_catalog::ColorLabel::ALL {
-                let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
-                crate::widgets::announce(&resp, crate::i18n::tr(&format!("{l:?}")));
+                let (_, r) = ui.allocate_space(vec2(22.0, 22.0));
                 let key = format!("{l:?}").to_lowercase();
-                register(ui, format!("label:{key}"), r);
                 let on = p.label == Some(l);
+                let resp = crate::panels::detail::host::target(
+                    ui,
+                    ("info-label", &key),
+                    r,
+                    crate::panels::detail::host::Target::new(crate::i18n::tr(&format!("{l:?}")))
+                        .selected(on)
+                        .tooltip(crate::i18n::color_label(&app.session.catalog, l)),
+                );
+                if crate::panels::detail::host::live(ui) {
+                    crate::widgets::register_response(format!("label:{key}"), r, &resp);
+                }
                 ui.painter().circle_filled(r.center(), if on || resp.hovered() { 8.0 } else { 6.5 }, crate::panels::grid::label_color(l));
                 if on {
                     ui.painter().circle_stroke(r.center(), 10.0, egui::Stroke::new(1.5, t.text));
                 }
-                let resp = resp.on_hover_text(crate::i18n::color_label(&app.session.catalog, l));
                 if resp.clicked() {
                     // in Compare / Survey only the active photo, as the rating keys and the bottom pill do
                     let mut params = json!({"label": if on { "none".to_string() } else { key }});

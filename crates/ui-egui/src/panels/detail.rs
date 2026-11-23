@@ -649,7 +649,7 @@ fn failed_render<'a>(app: &'a LightcraftApp, id: PhotoId, settled: bool, shown: 
 /// The pill over the photo (the After in two views; in the crop tool's wide margin, under it): the
 /// failure, or View Options' "Show message when loading or rendering photos".
 fn status_pill(
-    ui: &egui::Ui,
+    ui: &mut egui::Ui,
     app: &LightcraftApp,
     photo: &lightcraft_catalog::Photo,
     [canvas, over]: [Rect; 2],

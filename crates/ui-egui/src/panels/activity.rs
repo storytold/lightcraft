@@ -12,7 +12,6 @@ use serde_json::json;
 
 use crate::LightcraftApp;
 use crate::i18n::{tr, tr_format};
-use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -28,12 +27,6 @@ const CROSS: f32 = 16.0;
 
 fn measuring(ui: &egui::Ui) -> bool {
     ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx())
-}
-
-/// The SDK runtime owns keyboard and pointer activation when installed for this pass.
-/// Plain egui callers retain the native fallback instead of mounting an unsensed SDK control.
-fn sdk_running(ui: &egui::Ui) -> bool {
-    craft::ui::runtime::frame::running(ui.ctx()).is_some()
 }
 
 /// "3 of 25", "12 of 340 MB", "40 %"; empty while the amount of work isn't known.
@@ -143,7 +136,7 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
                 ui.add(egui::Label::new(RichText::new(tr(&task.label)).font(t.font(12.5)).color(t.text)).truncate());
             });
             if cross {
-                clicked = cancel_control(ui, t, task.id);
+                clicked = cancel_control(ui, task.id);
             }
         });
         bar(ui, task, width);
@@ -159,57 +152,38 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
 }
 
 /// Per-task ids, not labels, identify both the sensed SDK control and the cancel command.
-fn cancel_control(ui: &mut egui::Ui, t: &Tokens, task_id: u64) -> bool {
+fn cancel_control(ui: &mut egui::Ui, task_id: u64) -> bool {
     let widget = format!("activity:cancel:{task_id}");
     let measuring = measuring(ui);
-    if sdk_running(ui) {
-        let (rect, _) = ui.allocate_exact_size(vec2(CROSS, CROSS), Sense::hover());
-        let shown = IconButton::new(IconSpec::svg(craft::behavior::IconId::new("close")))
-            .label(tr("Cancel"))
-            .id(egui::Id::unique(("activity-cancel", task_id)))
-            .enabled(ui.is_enabled() && !measuring)
-            .show_at(ui, rect);
-        let clicked = !measuring && shown.clicked();
-        let response = shown.response.on_hover_text(tr("Cancel"));
-        if !measuring {
-            crate::widgets::register_response(widget, rect, &response);
-        }
-        clicked
-    } else {
-        let (rect, response) = ui.allocate_exact_size(vec2(CROSS, CROSS), Sense::click());
-        crate::widgets::announce(&response, tr("Cancel"));
-        paint(ui.painter(), rect.shrink(2.0), Icon::Close, if response.hovered() { t.text } else { t.icon });
-        if !measuring {
-            crate::widgets::register_response(widget, rect, &response);
-        }
-        !measuring && response.on_hover_text(tr("Cancel")).clicked()
+    let (rect, _) = ui.allocate_exact_size(vec2(CROSS, CROSS), Sense::hover());
+    let shown = IconButton::new(IconSpec::svg(craft::behavior::IconId::new("close")))
+        .label(tr("Cancel"))
+        .tooltip(tr("Cancel"))
+        .id(egui::Id::unique(("activity-cancel", task_id)))
+        .enabled(ui.is_enabled() && !measuring)
+        .show_at(ui, rect);
+    if !measuring {
+        crate::widgets::register_response(widget, rect, &shown.response);
     }
+    !measuring && shown.clicked()
 }
 
 /// Keep the compact label-sized target; the SDK Link adds natural Tab/Space/Enter activation.
 fn more_control(ui: &mut egui::Ui, t: &Tokens, text: &str) -> bool {
     let measuring = measuring(ui);
-    if sdk_running(ui) {
-        // show_at does not allocate: reserve the same text-sized row as the native label,
-        // rather than importing a push button's larger padded minimum into the activity stack.
-        let size = ui.painter().layout_no_wrap(text.to_owned(), t.font(11.0), t.accent).size();
-        let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-        let shown = Link::new(text.to_owned())
-            .role(craft::theme::TypeRole::Caption)
-            .id(egui::Id::unique("activity-more"))
-            .enabled(ui.is_enabled() && !measuring)
-            .show_at(ui, rect);
-        if !measuring {
-            crate::widgets::register_response("activity:more", rect, &shown.response);
-        }
-        !measuring && shown.clicked()
-    } else {
-        let response = ui.add(egui::Label::new(RichText::new(text).font(t.font(11.0)).color(t.accent)).sense(Sense::click()));
-        if !measuring {
-            crate::widgets::register_response("activity:more", response.rect, &response);
-        }
-        !measuring && response.clicked()
+    // show_at does not allocate: reserve the same text-sized row as the native label,
+    // rather than importing a push button's larger padded minimum into the activity stack.
+    let size = ui.painter().layout_no_wrap(text.to_owned(), t.font(11.0), t.accent).size();
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let shown = Link::new(text.to_owned())
+        .role(craft::theme::TypeRole::Caption)
+        .id(egui::Id::unique("activity-more"))
+        .enabled(ui.is_enabled() && !measuring)
+        .show_at(ui, rect);
+    if !measuring {
+        crate::widgets::register_response("activity:more", rect, &shown.response);
     }
+    !measuring && shown.clicked()
 }
 
 /// The progress bar, named after its task for screen readers; while the amount of work isn't
