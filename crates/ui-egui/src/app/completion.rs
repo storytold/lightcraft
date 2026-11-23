@@ -111,6 +111,22 @@ mod tests {
     fn raw() -> egui::RawInput {
         egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 480.0))), time: Some(7.0), ..Default::default() }
     }
+    /// A framework text field named `name`: the paste target the host needs (an `egui` text editor holding the focus).
+    /// `begin` asks for the focus before the field's first input.
+    fn field(ui: &mut egui::Ui, name: &str, text: &mut String, begin: bool) {
+        let _ = crate::text_field::TextField::singleline(name, text).begin_edit(begin).show(ui);
+    }
+    /// Frames of `name` in `viewport` until the field has settled with the keyboard focus.
+    fn focus_field(ctx: &egui::Context, viewport: egui::ViewportId, name: &str, text: &mut String) {
+        for _ in 0..3 {
+            let mut input = raw();
+            if viewport != egui::ViewportId::ROOT {
+                input.viewport_id = viewport;
+                input.viewports.entry(viewport).or_default().parent = Some(egui::ViewportId::ROOT);
+            }
+            ctx.run_ui(input, |ui| field(ui, name, text, true)).drop_without_applying_deltas();
+        }
+    }
     fn marker(app: &mut LightcraftApp, name: &str) {
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(20.0, 20.0));
         app.next_widgets = vec![(name.into(), rect)];
@@ -241,13 +257,12 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = app(&ctx);
         let mut text = String::new();
-        let field = egui::Id::unique("paste-owner");
-        ctx.run_ui(raw(), |ui| { ui.add(egui::TextEdit::singleline(&mut text).id(field)).request_focus(); }).drop_without_applying_deltas();
+        focus_field(&ctx, egui::ViewportId::ROOT, "paste-owner", &mut text);
         assert!(ctx.text_edit_focused());
         let (reply, rx) = std::sync::mpsc::channel();
         app.admit_gesture(&ctx, "ui.clipboard".into(), serde_json::json!({"action": "paste"}), reply).unwrap();
         let mut output = ctx.run_ui(raw(), |ui| {
-            ui.add(egui::TextEdit::singleline(&mut text).id(field));
+            field(ui, "paste-owner", &mut text, false);
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste); // unrelated body request
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Title("keep".into()));
             app.capture_ui_completion(ui.ctx());
@@ -273,6 +288,9 @@ mod tests {
             let (stale, stale_rx) = std::sync::mpsc::channel();
             app.admit_gesture(&ctx, "ui.move".into(), serde_json::json!({}), stale).unwrap(); app.pending_gestures[0].deadline_ms = 0.0;
             let mut text = String::new(); let mut parent_text = String::new();
+            // both viewports' fields hold their own keyboard focus before the pass under test
+            focus_field(&ctx, egui::ViewportId::ROOT, "parent-field", &mut parent_text);
+            focus_field(&ctx, child, "child-field", &mut text);
             let (reply, rx) = std::sync::mpsc::channel();
             app.admit_gesture(&ctx, "ui.clipboard".into(), serde_json::json!({"action": "paste"}), reply).unwrap();
             let survivor = Arc::downgrade(&app.pending_gestures[1].completion);
@@ -284,14 +302,14 @@ mod tests {
             let mut outer = ctx.run_ui(raw(), |ui| {
                 if ui.ctx().current_pass_index() > 0 { app.capture_ui_completion(ui.ctx()); return; }
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste); // unrelated parent request
-                ui.add(egui::TextEdit::singleline(&mut parent_text).id(egui::Id::unique("parent-field"))).request_focus();
+                field(ui, "parent-field", &mut parent_text, false);
                 app.capture_ui_completion(ui.ctx()); // SAME pending paste in BOTH real candidates
                 let mut input = raw();
                 input.viewport_id = child;
                 input.viewports.entry(child).or_default().parent = Some(egui::ViewportId::ROOT);
                 let mut own = ctx.run_ui(input, |child_ui| {
                     if cancel { app.cancel_gestures_for_barrier(false, "nested prompt"); }
-                    child_ui.add(egui::TextEdit::singleline(&mut text).id(egui::Id::unique("child-field"))).request_focus();
+                    field(child_ui, "child-field", &mut text, false);
                     child_ui.ctx().send_viewport_cmd(egui::ViewportCommand::Title("unrelated child".into()));
                     app.capture_ui_completion(child_ui.ctx());
                 });

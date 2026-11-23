@@ -382,14 +382,14 @@ fn real_calendar_opens_by_enter_escape_preserves_value_and_pick_returns_changed_
     frames.frame(vec![], &mut draw);
     frames.frame(key(Key::Enter, false), &mut draw);
     frames.frame(vec![], &mut draw);
-    assert!(egui::Popup::is_any_open(&frames.ctx));
+    assert!(crate::dialogs::popup_open(&frames.ctx));
     assert!(frames.rects.iter().any(|(id, _)| id == "datePickerCell:2026-08-15:fixture"));
     frames.frame(key(Key::Escape, false), &mut draw);
     frames.frame(vec![], &mut draw);
     drop(draw);
     assert_eq!(value, Some(original));
     assert!(!changed);
-    assert!(!egui::Popup::is_any_open(&frames.ctx));
+    assert!(!crate::dialogs::popup_open(&frames.ctx));
     let mut draw = |ui: &mut Ui| {
         changed |= DatePicker::new("fixture", &mut value).show(ui).changed();
     };
@@ -400,7 +400,7 @@ fn real_calendar_opens_by_enter_escape_preserves_value_and_pick_returns_changed_
     drop(draw);
     assert_eq!(value, PickedDate::parse("2026-08-15"));
     assert!(changed, "the public DatePicker Response remains changed when a date is picked");
-    assert!(!egui::Popup::is_any_open(&frames.ctx));
+    assert!(!crate::dialogs::popup_open(&frames.ctx));
 }
 
 #[test]

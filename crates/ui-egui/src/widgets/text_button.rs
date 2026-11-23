@@ -11,7 +11,7 @@ use craft::behavior::Metrics;
 use craft::theme::{Stateful, States};
 use craft::ui::contract::{Common, Component, Cx, MeasureCx, NoValue, Outcome, PaintUi, Props as _, Role, Show as _};
 use craft::ui::style::{ComponentStyle, FocusLook, StyleCx, SurfaceLook};
-use egui::{Color32, CornerRadius, Galley, Response, Sense, Stroke, Ui, Vec2, vec2};
+use egui::{Color32, CornerRadius, Galley, Response, Stroke, Ui, Vec2, vec2};
 
 use crate::theme::Tokens;
 
@@ -104,35 +104,29 @@ impl Component for DenseTextButton {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> TextButtonOutput {
-        TextButtonOutput { response: cx.response.clone(), native: false }
+        TextButtonOutput { response: cx.response.clone() }
     }
 }
 
 /// A dense button's SDK activation and its egui geometry/hover response.
 ///
 /// `clicked()` follows the SDK's primary-release rule (including key/AT activation), not
-/// egui's independent pointer duration limit. Keep the output through tooltip chains; use
-/// `menu()` instead of `egui::Popup::menu(&output)`, which would call egui's click predicate.
+/// egui's independent pointer duration limit. Keep the output through tooltip chains; a menu
+/// the button opens is a framework `Menu` opened by `response` with `Trigger::Click`.
 /// No response flags or pointer/keyboard events are synthesized or rewritten by this adapter.
 #[derive(Clone, Debug)]
 pub struct TextButtonOutput {
     pub response: Response,
-    native: bool,
 }
 
 impl TextButtonOutput {
     pub fn clicked(&self) -> bool {
-        if self.native { self.response.clicked() } else { craft::ui::contract::clicked(&self.response) }
+        craft::ui::contract::clicked(&self.response)
     }
 
     pub fn on_hover_text(mut self, text: impl Into<egui::WidgetText>) -> Self {
         self.response = self.response.on_hover_text(text);
         self
-    }
-
-    /// The existing egui popup appearance/placement, with the SDK result as its explicit toggle.
-    pub fn menu(&self) -> egui::Popup<'_> {
-        egui::Popup::menu(&self.response).open_memory(self.clicked().then_some(egui::SetOpenCommand::Toggle))
     }
 }
 
@@ -155,9 +149,9 @@ impl Outcome for TextButtonOutput {
 pub(super) fn show(ui: &mut Ui, id: &str, label: &str, active: bool) -> TextButtonOutput {
     let label = if id.starts_with("labelSet-") { label } else { crate::i18n::tr(label) };
     let button = DenseTextButton::new(ui, label, active);
-    // Use the existing egui allocation, not SDK flow allocation, to retain horizontal_wrapped
-    // rows and RTL placement. The allocation senses hover only; only the SDK leaf owns clicks.
-    let (rect, _) = ui.allocate_exact_size(button.desired_size(), Sense::hover());
+    // Use the existing egui layout allocation, not SDK flow allocation, to retain horizontal_wrapped
+    // rows and RTL placement. It reserves the room and senses nothing: only the SDK leaf owns clicks.
+    let (_, rect) = ui.allocate_space(button.desired_size());
     let response = button.id_salt(("lightcraft-text-button", id)).show_at(ui, rect);
     // Framework Pages/layout can run this closure to measure before the real draw. Publishing
     // that invisible run would produce a duplicate automation registration with a stale rect.
