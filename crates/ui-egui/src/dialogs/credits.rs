@@ -9,8 +9,6 @@ use craft::ui::patterns::form_dialogs::{Contributor as FrameworkContributor, Cre
 
 use egui::RichText;
 
-use crate::{LightcraftApp, theme::Tokens};
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Contributor {
     pub login: &'static str,
@@ -242,97 +240,11 @@ fn day(iso: &str) -> &str {
     if iso.is_empty() { "—" } else { iso.get(..10).unwrap_or(iso) }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct View {
-    names: NameMode,
-    key: SortKey,
-    ascending: bool,
-    table: bool,
-}
-
-impl Default for View {
-    fn default() -> Self {
-        View { names: NameMode::Username, key: SortKey::FirstCommit, ascending: true, table: false }
-    }
-}
-
 /// The scrolling list's height: the About dialog is a fixed-size, centred window.
 const LIST_HEIGHT: f32 = 360.0;
 
 fn profile_url(c: &Contributor) -> String {
     format!("https://github.com/{}", c.login)
-}
-
-/// A contributor's name as a link to their GitHub profile, with the whole line as its tooltip.
-fn name_link(app: &mut LightcraftApp, ui: &mut egui::Ui, c: &Contributor, names: NameMode) {
-    if ui.link(c.name(names)).on_hover_text(c.summary()).clicked() {
-        let _ = crate::links::open(app, &profile_url(c));
-    }
-}
-
-/// About ▸ Contributors: a name toggle, a sort, and the list as a grab bag or a table.
-pub fn contributors_ui(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
-    let id = egui::Id::unique("credits_view");
-    let mut v = ui.data_mut(|d| d.get_temp::<View>(id)).unwrap_or_default();
-    ui.horizontal_wrapped(|ui| {
-        ui.label(crate::i18n::tr("Show"));
-        for m in NameMode::ALL {
-            if ui.selectable_label(v.names == m, crate::i18n::tr(m.label())).clicked() {
-                v.names = m;
-            }
-        }
-        ui.separator();
-        ui.label(crate::i18n::tr("Sort"));
-        let entries: Vec<_> = SortKey::ALL.into_iter().map(|k| craft::ui::contract::Entry::new(k, crate::i18n::tr(k.label().0).to_owned())).collect();
-        if let Some(k) = crate::widgets::select(ui, "combo:creditsSort", crate::i18n::tr("Sort"), v.key, &entries, None, None) {
-            v.key = k;
-            v.ascending = k.default_ascending();
-        }
-        let reverse =
-            crate::widgets::arrow_button(ui, "", if v.ascending { crate::icons::Icon::ChevronUp } else { crate::icons::Icon::ChevronDown }, false);
-        reverse.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), crate::i18n::tr("Reverse the order")));
-        if reverse.on_hover_text(crate::i18n::tr("Reverse the order")).clicked() {
-            v.ascending = !v.ascending;
-        }
-        ui.separator();
-        let r = ui.selectable_label(!v.table, crate::i18n::tr("Grab bag"));
-        crate::widgets::register(ui, "button:creditsGrabBag", r.rect);
-        if r.clicked() {
-            v.table = false;
-        }
-        let r = ui.selectable_label(v.table, crate::i18n::tr("Table"));
-        crate::widgets::register(ui, "button:creditsTable", r.rect);
-        if r.clicked() {
-            v.table = true;
-        }
-    });
-    let list = sorted(CONTRIBUTORS, v.names, v.key, v.ascending);
-    ui.label(RichText::new(crate::i18n::tr_format!("{} contributors · {} commits", list.len(), group(TOTAL_COMMITS))).small().color(t.text_dim));
-    ui.separator();
-    let list_h = crate::panels::dialogs::list_height(ui, LIST_HEIGHT);
-    if list.is_empty() {
-        ui.label(crate::i18n::tr("No contributor data was built into this copy."));
-    } else if v.table {
-        // The table scrolls vertically itself, under a fixed header; it only scrolls sideways
-        // once its columns are dragged wider than the dialog.
-        ui.allocate_ui(egui::vec2(ui.available_width(), list_h), |ui| {
-            ui.set_max_height(list_h);
-            egui::ScrollArea::horizontal().id_salt("credits_scroll").auto_shrink([false, false]).show(ui, |ui| table(app, ui, &list, &mut v));
-        });
-    } else {
-        egui::ScrollArea::vertical().id_salt("credits_scroll").max_height(list_h).auto_shrink([false, true]).show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for (i, c) in list.iter().enumerate() {
-                    if i > 0 {
-                        ui.label(RichText::new("·").color(t.text_dim));
-                    }
-                    name_link(app, ui, c, v.names);
-                }
-            });
-        });
-    }
-    ui.data_mut(|d| d.insert_temp(id, v));
 }
 
 /// How the contributor table's spare width is shared out: all of it to Name.
@@ -411,72 +323,6 @@ fn aligned<R>(ui: &mut egui::Ui, right: bool, add: impl FnOnce(&mut egui::Ui) ->
 
 fn row_height(ui: &egui::Ui) -> f32 {
     ui.text_style_height(&egui::TextStyle::Body) + 6.0
-}
-
-/// One contributor's table cells after the name, in `SortKey::ALL` order.
-fn cells(c: &Contributor) -> [String; 9] {
-    [
-        group(c.prs),
-        group(c.commits),
-        group(c.lines_added),
-        group(c.lines_deleted),
-        signed(c.lines_delta()),
-        group(c.binary_added),
-        group(c.binary_deleted),
-        day(c.first_commit).to_string(),
-        day(c.last_commit).to_string(),
-    ]
-}
-
-/// A contributor-table header. The sorted column is highlighted; its direction shows on the
-/// toolbar's sort-order button, so no arrow widens the column.
-fn header_text(k: SortKey) -> RichText {
-    RichText::new(crate::i18n::tr(k.label().1)).strong()
-}
-
-fn table(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
-    let h = row_height(ui);
-    let rows: Vec<[String; 9]> = list.iter().map(|c| cells(c)).collect();
-    let widths: Vec<f32> = SortKey::ALL
-        .iter()
-        .enumerate()
-        .map(|(i, &k)| match i.checked_sub(1) {
-            None => natural(ui, header_text(k), list.iter().map(|c| c.name(v.names))),
-            Some(col) => natural(ui, header_text(k), rows.iter().filter_map(|r| r.get(col).cloned())),
-        })
-        .collect();
-    fitted_table(ui, "credits_table", &widths, &CONTRIBUTOR_GROW)
-        .header(h + 4.0, |mut header| {
-            for k in SortKey::ALL {
-                header.col(|ui| {
-                    let r = aligned(ui, k != SortKey::Name, |ui| ui.selectable_label(v.key == k, header_text(k)))
-                        .on_hover_text(crate::i18n::tr(k.label().0));
-
-                    if r.clicked() {
-                        if v.key == k {
-                            v.ascending = !v.ascending;
-                        } else {
-                            v.key = k;
-                            v.ascending = k.default_ascending();
-                        }
-                    }
-                });
-            }
-        })
-        .body(|mut body| {
-            for (c, cells) in list.iter().zip(rows) {
-                body.row(h, |mut row| {
-                    row.col(|ui| {
-                        aligned(ui, false, |ui| name_link(app, ui, c, v.names));
-                    });
-                    for text in cells {
-                        row.col(|ui| {
-                            aligned(ui, true, |ui| ui.label(text));
-                        });
-                    }
-                });
-            }
-        });
 }
 
 /// About ▸ Models: AI models credited in Co-Authored-By trailers.

@@ -784,9 +784,20 @@ fn package_cells(
         let rect = sheet.rect(&c.rect);
         paint_cell(app, painter, t, st, rect, photo, sheet, &c.rect);
         shown.push(rect);
-        let resp = ui.interact(rect, egui::Id::unique(("print-cell", c.id)), Sense::click_and_drag());
-        register(ui, format!("print:cell:{}", c.id), rect);
-        if resp.clicked() || resp.drag_started() {
+        // A cell is host-painted; the framework senses it (click, drag, its accessible node), as the raw cell did, no Tab stop.
+        if !crate::panels::detail::host::live(ui) {
+            continue;
+        }
+        let label = format!("{} {}", crate::i18n::tr("Cell"), c.id);
+        let out = crate::panels::detail::host::target(
+            ui,
+            ("print-cell", c.id),
+            rect,
+            crate::panels::detail::host::Target::new(label).drag().selected(pu.selected == Some(c.id)).pointer_only(),
+        );
+        let resp = out.response.clone();
+        crate::widgets::register_response(format!("print:cell:{}", c.id), rect, &resp);
+        if out.clicked() || resp.drag_started() {
             pu.selected = Some(c.id);
         }
         if resp.drag_started() {
@@ -804,19 +815,19 @@ fn package_cells(
             pu.drag = None;
         }
         let id = c.id;
-        crate::widgets::context_menu(&resp, |ui| {
+        crate::panels::detail::host::context_menu(ui, &resp, crate::i18n::tr("Cell"), |ui| {
+            use craft::ui::contract::{Props as _, Show as _};
+            use craft::ui::menu::MenuItem;
             for (how, label) in
                 [("toFront", "Bring to Front"), ("forward", "Bring Forward"), ("backward", "Send Backward"), ("toBack", "Send to Back")]
             {
-                if ui.button(crate::i18n::tr(label)).clicked() {
+                if MenuItem::new(crate::i18n::tr(label).to_owned()).id_salt(("print-cell-order", id, how)).show(ui).ran {
                     run(app, &ctx, "print.cell.stack", json!({"id": id, "order": how}));
-                    ui.close();
                 }
             }
-            ui.separator();
-            if ui.button(crate::i18n::tr("Delete Cell")).clicked() {
+            craft::ui::display::Divider::horizontal().show(ui);
+            if MenuItem::new(crate::i18n::tr("Delete Cell").to_owned()).id_salt(("print-cell-delete", id)).show(ui).ran {
                 run(app, &ctx, "print.cell.delete", json!({"id": id}));
-                ui.close();
             }
         });
     }
@@ -827,8 +838,17 @@ fn package_cells(
     painter.rect_stroke(rect, 0.0, Stroke::new(2.0, t.accent), StrokeKind::Outside);
     let handle = Rect::from_center_size(rect.right_bottom(), Vec2::splat(HANDLE));
     painter.rect_filled(handle, 2.0, t.accent);
-    let resp = ui.interact(handle, egui::Id::unique(("print-resize", sel.id)), Sense::drag());
-    register(ui, format!("print:resize:{}", sel.id), handle);
+    if !crate::panels::detail::host::live(ui) {
+        return;
+    }
+    let out = crate::panels::detail::host::target(
+        ui,
+        ("print-resize", sel.id),
+        handle,
+        crate::panels::detail::host::Target::new(crate::i18n::tr("Resize Cell")).drag().pointer_only(),
+    );
+    let resp = out.response.clone();
+    crate::widgets::register_response(format!("print:resize:{}", sel.id), handle, &resp);
     if resp.drag_started() {
         pu.drag = Some(Drag { cell: sel.id, origin: sel.rect, resize: true, press: press_origin(ui, &resp), total: Vec2::ZERO });
     }

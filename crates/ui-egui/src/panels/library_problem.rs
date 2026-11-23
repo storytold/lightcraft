@@ -1250,10 +1250,11 @@ fn show_chooser(app: &mut LightcraftApp, ctx: &egui::Context, problem: &LibraryP
             egui::ScrollArea::vertical().max_height(300.0).auto_shrink([false, true]).show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 for (i, library) in chooser.libraries.iter().enumerate() {
-                    let r = recent_row(ui, &t, i, library, chooser.selected == Some(i), open_now.as_deref() == Some(Path::new(&library.path)));
-                    if r.double_clicked() {
+                    let (clicked, double) =
+                        recent_row(ui, &t, i, library, chooser.selected == Some(i), open_now.as_deref() == Some(Path::new(&library.path)));
+                    if double {
                         clicked_row = Some((i, true));
-                    } else if r.clicked() {
+                    } else if clicked {
                         clicked_row = Some((i, false));
                     }
                 }
@@ -1298,7 +1299,8 @@ fn show_chooser(app: &mut LightcraftApp, ctx: &egui::Context, problem: &LibraryP
 
 /// One row of the launch list: the library's name and when it was last opened, the folder it is
 /// in, and why it can't be opened (then greyed out). Registered as `libraryRecent:<index>`.
-fn recent_row(ui: &mut egui::Ui, t: &Tokens, i: usize, library: &RecentLibrary, selected: bool, open: bool) -> egui::Response {
+/// Returns whether it was clicked and whether that was a double click.
+fn recent_row(ui: &mut egui::Ui, t: &Tokens, i: usize, library: &RecentLibrary, selected: bool, open: bool) -> (bool, bool) {
     let dir = Path::new(&library.path);
     let name = crate::panels::settings::library_name(dir);
     let parent = dir.parent().map(|p| p.display().to_string()).unwrap_or_default();
@@ -1309,7 +1311,7 @@ fn recent_row(ui: &mut egui::Ui, t: &Tokens, i: usize, library: &RecentLibrary, 
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = 1.0;
         ui.horizontal(|ui| {
-            ui.add(egui::Label::new(RichText::new(name).font(t.semibold(12.5)).color(main)).truncate().selectable(false));
+            ui.add(egui::Label::new(RichText::new(name.as_str()).font(t.semibold(12.5)).color(main)).truncate().selectable(false));
             let when = if open {
                 Some(crate::i18n::tr("Open now").to_string())
             } else {
@@ -1334,19 +1336,33 @@ fn recent_row(ui: &mut egui::Ui, t: &Tokens, i: usize, library: &RecentLibrary, 
             ui.add(egui::Label::new(RichText::new(text).size(11.0).color(dim)).wrap().selectable(false));
         }
     });
-    let r = ui.interact(inner.response.rect, egui::Id::unique(("library-recent", i)), egui::Sense::click());
-    register(ui, format!("libraryRecent:{i}"), r.rect);
+    let rect = inner.response.rect;
+    // The row is app-painted; the framework senses it (click, double click, its accessible node). The launch list's
+    // own Up/Down/Enter move through the rows, so a row is no Tab stop of its own.
+    let mut picked = (false, false);
+    let mut hovered = false;
+    if crate::panels::detail::host::live(ui) {
+        let out = crate::panels::detail::host::target(
+            ui,
+            ("library-recent", i),
+            rect,
+            crate::panels::detail::host::Target::new(name.clone()).selected(selected).pointer_only(),
+        );
+        crate::widgets::register_response(format!("libraryRecent:{i}"), rect, &out.response);
+        picked = (out.clicked(), out.double_clicked());
+        hovered = out.response.hovered();
+    }
     let fill = if selected {
         Some(t.tool_active)
-    } else if r.hovered() {
+    } else if hovered {
         Some(t.hover)
     } else {
         None
     };
     if let Some(fill) = fill {
-        ui.painter().set(background, egui::Shape::rect_filled(r.rect, 4.0, fill));
+        ui.painter().set(background, egui::Shape::rect_filled(rect, 4.0, fill));
     }
-    r
+    picked
 }
 
 /// The banner under the top bar while the session is temporary (Continue Without Saving).
