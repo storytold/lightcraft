@@ -1,4 +1,4 @@
-use super::{Tokens, register};
+use super::Tokens;
 
 /// Reserve the actual translated tag button width beside a template field.
 pub(crate) fn tag_field_width(ui: &egui::Ui) -> f32 {
@@ -36,11 +36,20 @@ pub(crate) fn unknown_tags_warning(ui: &mut egui::Ui, template: &str) {
     }
 }
 
-/// Insert `tag` into `text` at the text cursor of the field `edit_id` (replacing its selection);
-/// appended when the field never had a cursor. The cursor ends up after the tag.
+/// Insert `tag` at the text cursor of the template field `edit_id` (replacing its selection); appended when the
+/// field never had a cursor. While the field is being edited its draft is the framework's, so the field takes the
+/// tag in its next pass at its caret ([`template_field`]); otherwise it goes into `text` now and the caret ends up
+/// after it.
 pub(crate) fn insert_at_cursor(ctx: &egui::Context, edit_id: egui::Id, text: &mut String, tag: &str) {
     use egui::text::{CCursor, CCursorRange};
-    let mut state = egui::text_edit::TextEditState::load(ctx, edit_id).unwrap_or_default();
+    if crate::text_field::has_focus_id(ctx, edit_id) {
+        ctx.data_mut(|d| d.insert_temp(edit_id.with("lc-pending-tag"), tag.to_owned()));
+        ctx.request_repaint();
+        return;
+    }
+    // the framework field keeps its caret on its text part
+    let part = crate::text_field::text_id(edit_id);
+    let state = egui::text_edit::TextEditState::load(ctx, part).or_else(|| egui::text_edit::TextEditState::load(ctx, edit_id)).unwrap_or_default();
     let n = text.chars().count();
     let (a, b) = state.cursor.char_range().map_or((n, n), |r| {
         let (x, y) = (r.primary.index.0.min(n), r.secondary.index.0.min(n));
@@ -49,9 +58,28 @@ pub(crate) fn insert_at_cursor(ctx: &egui::Context, edit_id: egui::Id, text: &mu
     let byte = |c: usize| text.char_indices().nth(c).map_or(text.len(), |(i, _)| i);
     let (ba, bb) = (byte(a), byte(b));
     text.replace_range(ba..bb, tag);
+    let mut state = egui::text_edit::TextEditState::load(ctx, part).unwrap_or_default();
     state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(a + tag.chars().count()))));
-    state.store(ctx, edit_id);
-    ctx.memory_mut(|m| m.request_focus(edit_id));
+    state.store(ctx, part);
+}
+
+/// A template field (folder template, file names) on the framework's text field, its tags inserted at its caret
+/// ([`insert_at_cursor`]). Registered as `name`.
+pub(crate) fn template_field(ui: &mut egui::Ui, name: &str, label: &str, value: &mut String, edit_id: egui::Id, hint: &str, width: f32) {
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+    use craft::ui::text::TextField;
+    let live = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+    let pending = if live { ui.ctx().data_mut(|d| d.remove_temp::<String>(edit_id.with("lc-pending-tag"))).filter(|tag| !tag.is_empty()) } else { None };
+    let width = width.min(ui.available_width()).max(1.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, ui.spacing().interact_size.y.max(24.0)), egui::Sense::hover());
+    let mut field = TextField::new(label.to_owned(), Bind::bound(value)).id(edit_id).placeholder(hint.to_owned()).limit(None);
+    if let Some(tag) = pending {
+        field = field.replace_selection(tag);
+    }
+    let shown = field.show_at(ui, rect);
+    if live {
+        crate::widgets::register_response(name, rect, &shown.response);
+    }
 }
 
 /// The template tag help: every tag (from the engine's one list, `rename::TOKENS`) with its
@@ -69,15 +97,22 @@ pub(crate) fn tag_help(ui: &mut egui::Ui, key: &str, text: &mut String, edit_id:
         egui::ScrollArea::vertical().id_salt((key, "tags")).max_height(170.0).show(ui, |ui| {
             egui::Grid::new((key, "tag-grid")).num_columns(3).spacing([10.0, 2.0]).show(ui, |ui| {
                 for (i, tok) in TOKENS.iter().enumerate() {
-                    let r = ui.add(egui::Button::new(egui::RichText::new(tok.tag).monospace().color(t.text)).small()).on_hover_text(
-                        if tok.aliases.is_empty() {
-                            crate::i18n::tr("Insert at the cursor").to_string()
-                        } else {
-                            crate::i18n::tr_format!("Insert at the cursor (also written {})", tok.aliases.join(", "))
-                        },
-                    );
-                    register(ui, format!("button:{key}Tag-{i}"), r.rect);
-                    if r.clicked() {
+                    use craft::ui::contract::{Props as _, Show as _};
+                    let tip = if tok.aliases.is_empty() {
+                        crate::i18n::tr("Insert at the cursor").to_string()
+                    } else {
+                        crate::i18n::tr_format!("Insert at the cursor (also written {})", tok.aliases.join(", "))
+                    };
+                    let r = craft::ui::buttons::Button::new(tok.tag.to_owned())
+                        .id_salt((key, "tag", i))
+                        .size(craft::theme::ControlSize::Sm)
+                        .tooltip(tip)
+                        .show(ui);
+                    let measuring = ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx());
+                    if !measuring {
+                        crate::widgets::register_response(format!("button:{key}Tag-{i}"), r.response.rect, &r.response);
+                    }
+                    if !measuring && r.clicked() {
                         insert_at_cursor(ui.ctx(), edit_id, text, tok.tag);
                     }
                     ui.label(egui::RichText::new(crate::i18n::tr(tok.meaning)).color(t.text_label));

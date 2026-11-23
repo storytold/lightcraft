@@ -1,3 +1,4 @@
+use craft::ui::contract::{Props as _, Show as _};
 use serde_json::json;
 
 use super::controls::{self, button, register};
@@ -401,17 +402,24 @@ fn body_inner(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) 
                 .width(ui.available_width())
                 .empty_text(empty)
                 .show_with_choices(ui, |ui| {
-                    let none = ui.selectable_label(d.album.is_none() && d.new_album.is_empty(), crate::i18n::tr("None"));
-                    register(ui, "importAlbum:none", none.rect);
-                    if none.clicked() {
-                        extra = Some(false);
+                    // The picker's own choices before its albums: framework rows, the current one selected.
+                    for (name, label, new, current) in [
+                        ("importAlbum:none", "None", false, d.album.is_none() && d.new_album.is_empty()),
+                        ("importAlbum:new", "New album…", true, d.album.is_none() && !d.new_album.is_empty()),
+                    ] {
+                        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ui.spacing().interact_size.y.max(24.0)), Sense::hover());
+                        let row = craft::ui::buttons::Button::new(crate::i18n::tr(label).to_owned())
+                            .id_salt(("import-album-choice", name))
+                            .variant(craft::theme::Variant::GHOST)
+                            .align(craft::ui::primitives::HAlign::Start)
+                            .selected(current)
+                            .show_at(ui, rect);
+                        crate::widgets::register_response(name, rect, &row.response);
+                        if row.clicked() {
+                            extra = Some(new);
+                        }
                     }
-                    let new = ui.selectable_label(d.album.is_none() && !d.new_album.is_empty(), crate::i18n::tr("New album…"));
-                    register(ui, "importAlbum:new", new.rect);
-                    if new.clicked() {
-                        extra = Some(true);
-                    }
-                    ui.separator();
+                    craft::ui::display::Divider::horizontal().show(ui);
                     extra.is_some()
                 });
             if response.changed() {
@@ -458,8 +466,7 @@ fn native_template(ui: &mut egui::Ui, key: &str, value: &mut String, id: egui::I
     if controls::measuring(ui) {
         ui.allocate_exact_size(vec2(width, ui.spacing().interact_size.y), Sense::hover());
     } else {
-        let response = ui.add(egui::TextEdit::singleline(value).id(id).hint_text(hint).desired_width(width));
-        register(ui, key, response.rect);
+        super::tags::template_field(ui, key, crate::i18n::tr("Template"), value, id, hint, width);
     }
 }
 
@@ -582,12 +589,28 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
     let Ok(slot_index) = u32::try_from(i) else { return };
     let ok = d.importable(i);
     let img = Rect::from_min_size(rect.min, vec2(rect.width(), rect.width()));
-    // No native candidate hit registration in speculative layout.
-    let resp = (!controls::measuring(ui)).then(|| ui.interact(img, egui::Id::unique(("import-cell", i)), Sense::click()));
-    if let Some(resp) = &resp {
-        crate::widgets::announce(resp, c.name.clone());
-    }
-    register(ui, format!("import:{i}"), img);
+    let tip = format!(
+        "{}\n{} × {} · {} · {:.1} MB{}",
+        c.path,
+        c.width,
+        c.height,
+        c.format,
+        c.file_size as f64 / 1e6,
+        c.captured.as_deref().map(|d| format!("\n{}", d.replace('T', " "))).unwrap_or_default()
+    );
+    let on = d.checked.get(i).copied().unwrap_or(false) && ok;
+    // The cell is host-painted; the framework senses it (click, tooltip, its accessible node), no Tab stop as before;
+    // none in speculative layout.
+    let clicked = (!controls::measuring(ui)).then(|| {
+        let out = crate::panels::detail::host::target(
+            ui,
+            ("import-cell", i),
+            img,
+            crate::panels::detail::host::Target::new(c.name.clone()).tooltip(tip).selected(on).pointer_only(),
+        );
+        crate::widgets::register_response(format!("import:{i}"), img, &out.response);
+        out.clicked()
+    });
     let p = ui.painter();
     p.rect_filled(img, 3.0, t.skeleton);
     // thumbnail (background job; the grid only asks for the cells in view)
@@ -603,7 +626,6 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
         let tint = if ok { Color32::WHITE } else { Color32::from_gray(110) };
         p.image(tex.id(), fit, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
     }
-    let on = d.checked.get(i).copied().unwrap_or(false) && ok;
     if on {
         p.rect_stroke(img, 3.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
     }
@@ -639,19 +661,7 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
     name.wrap.max_rows = 1;
     let name = p.layout_job(name);
     p.galley(pos2(rect.left() + 2.0, img.bottom() + 2.0), name, color);
-    let tip = format!(
-        "{}\n{} × {} · {} · {:.1} MB{}",
-        c.path,
-        c.width,
-        c.height,
-        c.format,
-        c.file_size as f64 / 1e6,
-        c.captured.as_deref().map(|d| format!("\n{}", d.replace('T', " "))).unwrap_or_default()
-    );
-    if let Some(resp) = resp.map(|resp| resp.on_hover_text(tip))
-        && resp.clicked()
-        && ok
-    {
+    if clicked == Some(true) && ok {
         let shift = ui.input(|input| input.modifiers.shift);
         d.click(i, shift);
     }

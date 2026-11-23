@@ -406,7 +406,7 @@ fn preview_rect(area: egui::Rect, size: [usize; 2], ppp: f32, zoom: Option<(f32,
 }
 
 /// Click on the preview: zoom in on the point clicked, or back out; drag pans while zoomed in.
-fn preview_input(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img: egui::Rect) {
+fn preview_input(app: &mut LightcraftApp, ui: &egui::Ui, clicked: bool, resp: &egui::Response, img: egui::Rect) {
     let zoomed = app.merge.zoom.is_some();
     if resp.hovered() {
         let cursor = match (zoomed, resp.dragged()) {
@@ -416,7 +416,7 @@ fn preview_input(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, 
         };
         ui.ctx().set_cursor_icon(cursor);
     }
-    if resp.clicked() {
+    if clicked {
         app.merge.zoom = if zoomed {
             None
         } else {
@@ -438,15 +438,27 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
         // preview
         ui.vertical(|ui| {
             let box_size = egui::vec2(520.0, 360.0);
-            let (rect, resp) = ui.allocate_exact_size(box_size, egui::Sense::click_and_drag());
+            let (rect, _) = ui.allocate_exact_size(box_size, egui::Sense::hover());
             ui.painter().rect_filled(rect, 4.0, t.canvas);
-            crate::widgets::register(ui, "merge.preview", rect);
+            // The preview is app-painted; the framework senses it (click to zoom, drag to pan, its accessible node), no Tab stop.
+            let target = crate::panels::detail::host::live(ui).then(|| {
+                let out = crate::panels::detail::host::target(
+                    ui,
+                    "merge-preview",
+                    rect,
+                    crate::panels::detail::host::Target::new(crate::i18n::tr("Merge preview")).drag().pointer_only(),
+                );
+                crate::widgets::register_response("merge.preview", rect, &out.response);
+                (out.clicked(), out.response.clone())
+            });
             if let Some((tex, size, _, _)) = &app.merge.preview {
                 let (tex, size) = (tex.id(), *size);
                 let (r, zoom) = preview_rect(rect, size, ui.ctx().pixels_per_point(), app.merge.zoom);
                 app.merge.zoom = zoom;
                 ui.painter_at(rect).image(tex, r, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
-                preview_input(app, ui, &resp, r);
+                if let Some((clicked, resp)) = &target {
+                    preview_input(app, ui, *clicked, resp, r);
+                }
             }
             if let Some(task) = &app.merge.preview_task {
                 let (f, stage) = task.progress.lock().map(|g| g.clone()).unwrap_or_default();
@@ -502,7 +514,10 @@ fn register(ui: &egui::Ui, id: impl Into<String>, response: &egui::Response) {
 
 fn check(ui: &mut egui::Ui, id: &str, label: &str, value: &mut bool, enabled: bool) {
     let shown = Checkbox::new(Bind::bound(value)).id_salt(id).label(crate::i18n::tr(label).to_owned()).enabled(enabled).show(ui);
-    register(ui, id, &shown.response);
+    // The labelled row is the checkbox's hit (box and label), as egui keeps its response: register that, not the box.
+    if !measuring(ui) {
+        crate::widgets::register_response(id, shown.response.interact_rect, &shown.response);
+    }
 }
 
 /// One keyboard group per parameter; retain the deghost button ids already used by scripts.
@@ -630,9 +645,18 @@ fn hover_keys(ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, row: eg
 fn num(ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, value: &mut f64) -> bool {
     let before = *value;
     let mut current = before;
-    let label = ui.label(crate::i18n::tr(spec.label)).interact(egui::Sense::click());
-    register(ui, format!("sliderLabel:{}", spec.id), &label);
-    if !measuring(ui) && label.double_clicked() { current = spec.default; }
+    let label = ui.label(crate::i18n::tr(spec.label));
+    // The caption resets the value on a double click: the framework senses it, as a pointer-only target.
+    if !measuring(ui) {
+        let caption = crate::panels::detail::host::target(
+            ui,
+            ("merge-caption", spec.id),
+            label.rect,
+            crate::panels::detail::host::Target::new(crate::i18n::tr(spec.label)).pointer_only(),
+        );
+        crate::widgets::register_response(format!("sliderLabel:{}", spec.id), label.rect, &caption.response);
+        if caption.double_clicked() { current = spec.default; }
+    }
     let row = egui::Rect::from_min_max(label.rect.min, egui::pos2(ui.max_rect().right(), ui.cursor().min.y + 24.0));
     let track_key = ui.scope_id().with(("merge-focused-track", spec.id));
     hover_keys(ui, spec, row, track_key, &mut current);
@@ -642,7 +666,10 @@ fn num(ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, value: &mut f6
         let record_id = ui.scope_id().with(("merge-track", spec.id));
         let (shown, record) = craft::ui::runtime::inspect::record(ui, record_id, |ui| {
             Slider::new(Bind::bound(&mut current).reset(spec.default), spec.min..=spec.max)
-                .id_salt(("merge-slider", spec.id)).label(crate::i18n::tr(spec.label)).step(spec.step).show_at(ui, rect)
+                .id_salt(("merge-slider", spec.id)).label(crate::i18n::tr(spec.label)).step(spec.step)
+                // LightCraft's slider keys: Shift steps five times, as the develop sliders do (`widgets::slider`).
+                .key_policy(craft::ui::runtime::keys::ScalarKeyPolicy::new(spec.step).model_step(spec.step).shift_factor(5.0))
+                .show_at(ui, rect)
         });
         // Automation fractions describe the value span, which runs between the endpoint thumb centres.
         let half_thumb = record.as_ref().and_then(|record| record.hits.iter().find(|hit| {

@@ -33,6 +33,9 @@ pub(crate) enum Mode {
     Control,
     /// A pointer handle over a canvas (a minimap): it clicks and drags but leaves the keyboard focus where it is.
     Handle,
+    /// A pointer-only control (a cell or a caption that resets on a double click): it activates from the pointer but is
+    /// no Tab stop.
+    Pointer,
     /// A label over a canvas that only explains itself on hover; it takes no press, so the canvas beneath keeps its clicks.
     Hover,
 }
@@ -62,6 +65,8 @@ impl Component for HostTarget {
 
     fn sense(&self) -> Sense {
         match self.mode {
+            Mode::Pointer if self.drag => Sense::CLICK | Sense::DRAG,
+            Mode::Pointer => Sense::CLICK,
             Mode::Control if self.drag => Sense::CLICK | Sense::DRAG | Sense::FOCUS,
             Mode::Control => Sense::CLICK | Sense::FOCUS,
             Mode::Handle => Sense::CLICK | Sense::DRAG | Sense::KEEP_FOCUS,
@@ -71,7 +76,7 @@ impl Component for HostTarget {
 
     fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
         match self.mode {
-            Mode::Control => {}
+            Mode::Control | Mode::Pointer => {}
             Mode::Handle => {
                 access.role(Role::CANVAS);
             }
@@ -195,6 +200,12 @@ impl<'a> Target<'a> {
 
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// Pointer-only: no Tab stop.
+    pub fn pointer_only(mut self) -> Self {
+        self.mode = Mode::Pointer;
         self
     }
 
