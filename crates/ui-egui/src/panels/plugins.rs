@@ -207,6 +207,21 @@ fn set_state(ctx: &egui::Context, s: State) {
     STATE.set(Some(s));
 }
 
+/// One of the plug-ins' windows on screen (the survey test): an install to "approve", a plug-in's own
+/// "dialog", or the "update" question over the manager.
+#[cfg(test)]
+pub(crate) fn show_for_test(ctx: &egui::Context, which: &str) {
+    let s = match which {
+        "approve" => State { pending: Some(Pending { path: "p.wasm".into(), info: json!({}) }), ..State::default() },
+        "dialog" => {
+            let d = Dialog { plugin: "p".into(), command: "c".into(), label: "C".into(), fields: Vec::new(), values: json!({}), error: None };
+            State { dialog: Some(d), ..State::default() }
+        }
+        _ => State { open: true, update_ask: Some(UpdateAsk { id: "p".into(), name: "P".into(), requests: Vec::new() }), ..State::default() },
+    };
+    set_state(ctx, s);
+}
+
 /// The Plug-in Manager or one of the plug-ins' windows is up (an install to approve, a permission
 /// to answer, a plug-in's own dialog), or a permission question is waiting to be shown: the
 /// keyboard is theirs ([`crate::keyboard::modal_open`]). The Update question counts through them:

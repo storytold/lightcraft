@@ -1,0 +1,60 @@
+{
+  "about": [
+    "Every window the UI draws with `egui::Window::new` in crates/ui-egui/src, found by the file and the function that draws it.",
+    "A modal takes the keyboard and the pointer while it is up: `keyboard::modal_open` counts it, it holds egui's modal layer, and the",
+    "survey test (`tests_dialogs.rs`) has a row for it (`survey`, else `name`). An exception stays out of the way on purpose: `reason` says why.",
+    "`count`: how many windows the function draws, when more than one. `notModalWhen`: a modal that isn't one at those times. `id`: the window's egui id, `Id::new` of the first, then `.with` of each other;",
+    "with it, the UI tests fail on a modal shown while `keyboard::modal_open` is false. `cargo xtask windows` (a step of `ci`) checks the list."
+  ],
+  "windows": [
+    { "name": "Add Your Camera Roll?", "file": "src/camera_roll.rs", "function": "prompt", "kind": "modal", "id": ["camera-roll-prompt"], "survey": "the camera-roll question" },
+    {
+      "name": "Catalog dialogs (New Catalog, Catalog Settings, Export as Catalog, Import from Another Catalog, the XMP conflict, Refine Photos, Welcome)",
+      "file": "src/catalog_ui.rs", "function": "show", "kind": "modal", "id": ["catalog-dialog"], "survey": "New Catalog (a catalog dialog)",
+      "notModalWhen": "Welcome: no library is open behind it, and the menu bar is its way to Settings, About and Check for Updates (issue #929)"
+    },
+    { "name": "Review Comments", "file": "src/comments_ui.rs", "function": "show", "kind": "modal", "id": ["review-comments"] },
+    { "name": "Find Duplicates", "file": "src/duplicates_ui.rs", "function": "show", "kind": "modal", "id": ["find-duplicates"] },
+    { "name": "Edit In Presets", "file": "src/edit_in.rs", "function": "presets_window", "kind": "modal", "id": ["edit-in-presets"] },
+    { "name": "Edit Photo", "file": "src/edit_in.rs", "function": "ask_window", "kind": "modal", "id": ["edit-in-ask"] },
+    {
+      "name": "Actions", "file": "src/edit_in.rs", "function": "actions_window", "kind": "exception", "id": ["actions-panel"],
+      "reason": "a recording is made of the keys and clicks on the photos, so they must reach them while it is open"
+    },
+    { "name": "Import Warnings", "file": "src/import_report.rs", "function": "show", "kind": "modal", "id": ["import-warnings"] },
+    { "name": "Getting Started", "file": "src/onboarding.rs", "function": "show", "kind": "modal", "id": ["getting-started"] },
+    { "name": "Edited Version Saved Again", "file": "src/panels/connections.rs", "function": "versions_ui", "kind": "modal", "id": ["immich-resave"] },
+    { "name": "Dialogs (`app.ui.dialog`: Settings, New Collection, Edit Smart Collection…, …)", "file": "src/panels/dialogs.rs", "function": "show", "kind": "modal", "survey": "a Dialog" },
+    { "name": "Upgrading your catalog", "file": "src/panels/library_problem.rs", "function": "upgrade_window", "kind": "modal", "id": ["library-upgrade"], "survey": "the catalog upgrading" },
+    { "name": "Opening your catalog", "file": "src/panels/library_problem.rs", "function": "opening_window", "kind": "modal", "id": ["library-opening"], "survey": "the catalog opening" },
+    {
+      "name": "A catalog that couldn't be opened", "file": "src/panels/library_problem.rs", "function": "show", "kind": "exception", "id": ["library-problem"],
+      "reason": "it comes at launch with no library behind it, and sends the user to the File menu for another catalog (issue #929)"
+    },
+    {
+      "name": "Open a Catalog (the catalog chooser)", "file": "src/panels/library_problem.rs", "function": "show_chooser", "kind": "modal", "id": ["library-chooser"],
+      "survey": "the catalog chooser over the open library",
+      "notModalWhen": "at launch, with no library open behind it: the menu bar is its way to another catalog (issue #929)"
+    },
+    { "name": "Plug-in Marketplace", "file": "src/panels/marketplace.rs", "function": "show", "kind": "modal", "id": ["plugin-marketplace"] },
+    { "name": "A different signer", "file": "src/panels/marketplace.rs", "function": "signer_ask_ui", "kind": "modal", "id": ["plugin-marketplace", "signer"], "survey": "the Marketplace's signer question" },
+    {
+      "name": "Roles", "file": "src/panels/masking.rs", "function": "roles_window", "kind": "exception", "id": ["rolesWindow"],
+      "reason": "a reference list that follows the photo: moving to the next photo shows that photo's roles first"
+    },
+    { "name": "The quit questions and the settings-file notice", "file": "src/panels/notices.rs", "function": "window", "kind": "modal", "survey": "the quit question" },
+    { "name": "Share the New Collection?", "file": "src/panels/peer_sync.rs", "function": "dialogs", "kind": "modal", "id": ["syncUndecided"] },
+    { "name": "Plug-in Manager", "file": "src/panels/plugins.rs", "function": "show", "kind": "modal", "id": ["plugin-manager"] },
+    { "name": "Allow Permission (a plug-in's permission question)", "file": "src/panels/plugins.rs", "function": "ask_ui", "kind": "modal", "id": ["plugin-manager", "ask"], "survey": "a plug-in's permission question" },
+    { "name": "Install Plug-in", "file": "src/panels/plugins.rs", "function": "approval_ui", "kind": "modal", "id": ["plugin-manager", "approve"] },
+    { "name": "A plug-in's own window", "file": "src/panels/plugins.rs", "function": "dialog_ui", "kind": "modal", "id": ["plugin-manager", "dialog"] },
+    { "name": "Update (a plug-in update's question)", "file": "src/panels/plugins.rs", "function": "update_ask_ui", "kind": "modal", "id": ["plugin-manager", "update-ask"], "survey": "a plug-in update's question" },
+    {
+      "name": "Live View", "file": "src/panels/tether_bar.rs", "function": "live_view", "kind": "exception", "id": ["tether-live-window"],
+      "reason": "the camera's live picture while shooting: the photos coming in are rated and flagged with it open"
+    },
+    { "name": "Tethered Capture Settings", "file": "src/panels/tether_bar.rs", "function": "settings_window", "kind": "modal", "id": ["tether-settings"] },
+    { "name": "Identity Plate Editor", "file": "src/plate.rs", "function": "show_setup", "kind": "modal", "id": ["identity-plate-setup"] },
+    { "name": "Settings", "file": "src/settings_screen.rs", "function": "window", "kind": "modal", "id": ["settings-screen"] }
+  ]
+}

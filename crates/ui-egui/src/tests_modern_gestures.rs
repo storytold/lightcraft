@@ -327,6 +327,37 @@ fn back_cancels_the_marketplace_signer_question_then_closes_the_marketplace() {
     assert!(h.app.ui.modern.group.is_some(), "Back leaves the card behind the Marketplace open");
 }
 
+/// Back closes the Edit In windows and the Immich, sync and tethering questions as Esc does, each
+/// by its own way out, and leaves what is behind them alone.
+#[test]
+fn back_closes_the_edit_in_immich_sync_and_tethering_windows() {
+    type Step = fn(&mut Headless);
+    let windows: [(&str, Step); 5] = [
+        ("Edit In Presets", |h| drop(exec(h, "dialog.editInPresets", json!({})))),
+        ("Edit Photo", |_| crate::edit_in::ask_for_test()),
+        ("Edited Version Saved Again", |h| crate::panels::connections::ask_resave(h.app.session.active().unwrap().0)),
+        ("Share the New Collection?", |h| {
+            let group = json!({"id": "g", "mode": "catalogue", "keeper": "me", "invited": [], "devices": []});
+            h.app.peer_sync.set_status_for_test(json!({"running": false, "paired": [],
+                "catalogue": {"name": "Main", "photos": 0, "unkeyed": 0, "group": group, "collections": [], "undecided": [{"album": 7, "name": "New"}]}}));
+        }),
+        ("Tethered Capture Settings", |h| drop(exec(h, "tether.start", json!({})))),
+    ];
+    for (name, open) in windows {
+        let mut h = develop([800.0, 1280.0]);
+        exec(&mut h, "modern.group", json!({"group": "light"}));
+        open(&mut h);
+        h.settle(SETTLE);
+        assert!(crate::keyboard::modal_open(&h.app), "{name} is up");
+        exec(&mut h, "modern.back", json!({}));
+        assert!(!crate::keyboard::modal_open(&h.app), "Back closes {name}");
+        assert!(h.app.ui.modern.group.is_some(), "Back leaves the card behind {name} open");
+        if name == "Share the New Collection?" {
+            assert_eq!(crate::panels::peer_sync::waiting(&h.app), 0, "Back is Decide Later: the collection is put off");
+        }
+    }
+}
+
 #[test]
 fn back_closes_dialog_menu_card_and_develop_then_leaves_the_root_to_the_system() {
     let mut h = develop([800.0, 1280.0]);

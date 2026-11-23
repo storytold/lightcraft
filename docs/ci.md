@@ -24,7 +24,8 @@ Every change goes on a branch, opens a PR and is set to auto-merge
 | Push to `release` | none: the dispatched run tested that commit | none |
 
 `cargo xtask ci --fast` runs fmt, brand, docs, notes (release-note entries, `docs/whats-new/README.md`), i18n (the fork
-catalogs sorted, [`localization.md`](localization.md)), clippy
+catalogs sorted, [`localization.md`](localization.md)), windows (every `egui::Window` in `crates/ui-egui/src` is listed in
+`crates/ui-egui/windows.json` as a modal or an exception with its reason; it reads the source only), clippy
 `-D warnings` (incl. the HEIF feature), parity refs, layers, assets, deny, the wasm check and the Android check (`cargo xtask android check`, see
 [`android.md`](android.md)); it skips
 the workspace and HEIF test runs. The SIL step runs `cargo xtask sil` (docs/testing-sil.md) once that command

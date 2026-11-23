@@ -179,6 +179,17 @@ thread_local! {
     static RESAVE: std::cell::RefCell<Vec<ResaveAsk>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// The Edited Version Saved Again question is up ([`crate::keyboard::modal_open`]).
+pub(crate) fn resave_asked() -> bool {
+    RESAVE.with_borrow(|q| !q.is_empty())
+}
+
+/// The question for a photo, as a second save of its edited version asks it.
+#[cfg(test)]
+pub(crate) fn ask_resave(photo: u64) {
+    RESAVE.with_borrow_mut(|q| q.push(ResaveAsk { photo, ..Default::default() }));
+}
+
 /// After the external editor saved Edit In versions (`ids` reloaded): versions of Immich-linked
 /// photos go to Immich (`immich.uploadVersion`); a version already there asks Keep both / Replace
 /// unless the user chose to be remembered.
@@ -210,8 +221,9 @@ fn versions_ui(app: &mut LccApp, ctx: &egui::Context) {
         }
     }
     let Some(mut ask) = RESAVE.with_borrow(|q| q.first().cloned()) else { return };
-    let (mut go, mut open) = (false, true);
-    egui::Window::new(crate::i18n::tr("Edited Version Saved Again"))
+    // (Esc is its ✕: nothing is uploaded)
+    let (mut go, mut open) = (false, !crate::dialog_frame::esc_closes(app.ui.dialog.is_some(), app.text_focus, ctx));
+    let shown = egui::Window::new(crate::i18n::tr("Edited Version Saved Again"))
         .id(egui::Id::new("immich-resave"))
         .title_bar(false)
         .frame(crate::dialog_frame::card_frame(ctx))
@@ -231,6 +243,10 @@ fn versions_ui(app: &mut LccApp, ctx: &egui::Context) {
                 go = crate::button::Button::new("Upload").kind(crate::button::Kind::Primary).widget("button:immichResaveUpload").show(ui).clicked();
             });
         });
+    // a modal: nothing behind it takes the pointer either (`keyboard::modal_open`)
+    if let Some(w) = &shown {
+        ctx.memory_mut(|m| m.set_modal_layer(w.response.layer_id));
+    }
     let choice = if ask.replace { "replace" } else { "keepBoth" };
     if go {
         if ask.remember

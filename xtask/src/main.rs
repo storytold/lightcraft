@@ -29,6 +29,7 @@ mod update_key;
 mod upstream;
 mod version;
 mod web;
+mod windows;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -71,6 +72,9 @@ commands:
                   the fork's message catalogs (crates/ui-egui/locales/fork/*.json): --check (in ci) fails when
                   one is out of key order, not in the catalog format, or not a JSON object of strings each key
                   once; --sort rewrites them in order (docs/localization.md)
+  windows [--check]
+                  every egui window in crates/ui-egui/src is listed in crates/ui-egui/windows.json as a
+                  modal or an exception with its reason, and every entry still has its window (in ci)
   deny            cargo deny check licenses sources (deny.toml), skipped with a message if cargo-deny is missing
   shortcuts       regenerate docs/manual/keyboard-shortcuts.md from the command registry (builds lcc-cli)
   docs [--check]  render README.md.in and docs/**/*.md.in ({{app}}, {{binary}}, … from brand.toml) into
@@ -163,6 +167,7 @@ fn main() -> ExitCode {
         Some("docs") => docs::run(&root(), rest.contains(&"--check")),
         Some("notes") => notes::run(&root(), &rest),
         Some("i18n") => i18n::run(&root(), &rest),
+        Some("windows") => windows::run(&root(), &rest),
         Some("deny") => cmd_deny(),
         Some("run") => dist::cmd_run(&root(), &rest),
         Some("install") => dist::cmd_install(&root(), &rest),
@@ -746,6 +751,7 @@ fn run_ci(opts: &CiOptions, args: &[&str]) -> Result<(), String> {
         ("docs", Box::new(|| docs::run(&root, true))),
         ("notes", Box::new(|| notes::check(&root))),
         ("i18n", Box::new(|| i18n::check(&root))),
+        ("windows", Box::new(|| windows::check(&root))),
         (
             "clippy",
             Box::new(|| {

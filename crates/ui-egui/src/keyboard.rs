@@ -40,7 +40,7 @@ pub fn modal_open(app: &LccApp) -> bool {
 }
 
 /// A modal that isn't a tool window ([`tool_window_open`]): a dialog, a question, the ⌘/ key list,
-/// a catalog window, the Export sheet.
+/// a catalog window, the Export sheet, the Edit In windows, the Immich, sync and tethering ones.
 pub(crate) fn answer_waiting(app: &LccApp) -> bool {
     app.ui.dialog.is_some()
         || app.help.open
@@ -52,6 +52,20 @@ pub(crate) fn answer_waiting(app: &LccApp) -> bool {
         || library_problem_modal(app)
         // the Modern layout's Export sheet
         || app.modern_sheets.export.is_some()
+        || crate::edit_in::modal_open()
+        || native_question_open(app)
+}
+
+/// Edited Version Saved Again (Immich), Share the New Collection? (sync) and Tethered Capture
+/// Settings, which the web app doesn't have.
+#[cfg(not(target_arch = "wasm32"))]
+fn native_question_open(app: &LccApp) -> bool {
+    crate::panels::connections::resave_asked() || crate::panels::peer_sync::question_open(app) || crate::panels::tether_bar::settings_open()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn native_question_open(_: &LccApp) -> bool {
+    false
 }
 
 /// Identity Plate Editor, Find Duplicates, Review Comments, Import Warnings, the camera-roll

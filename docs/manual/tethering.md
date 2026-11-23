@@ -18,7 +18,8 @@ start.
 
 File → Tethered Capture → Start Tethered Capture… (`tether.start`) asks for the folder the camera software saves to,
 a session name, whether to copy shots into `Originals/<session>/` (renamed with `{session}` and the rename tokens),
-and a develop preset, metadata preset, keywords and collection for every shot. A file is imported once its size
+and a develop preset, metadata preset, keywords and collection for every shot. The settings window waits over the
+app until you start the session or close it (Esc closes it, like its ✕, without starting one). A file is imported once its size
 holds still between two scans, so a shot still being written waits; the newest shot becomes the selection. The
 session is saved in the library (`tether.json`) and resumes after a restart.
 

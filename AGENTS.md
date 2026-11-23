@@ -175,6 +175,8 @@ One rule (2026-11-10): **use only material you may legally derive from.**
 - Export always goes through `lcc_engine::export`; UI-only commands live in `crates/ui-egui/src/menus.rs`.
 - Text boxes: `crates/ui-egui/src/text_field.rs` (`TextField`), not `egui::TextEdit` (context menu, Esc restore,
   edit-end reporting); widget ids unique on screen.
+- A new `egui::Window` goes on `crates/ui-egui/windows.json` as a modal (counted in `keyboard::modal_open`, holding the
+  modal layer, a row in `tests_dialogs.rs`'s survey) or an exception with its reason; `cargo xtask windows` (in `ci`) checks.
 - Shell: `mv`/`cp` are interactive aliases here — use `/bin/mv -f`/`/bin/cp -f`.
 - Parallel agents: own git worktree + `CARGO_TARGET_DIR=target/agent-<name>`; own control port (18000–19999, never
   7980); own scratch subfolder; never `rm -rf` shared paths; delete your target dir after; keep every `Cargo.toml`

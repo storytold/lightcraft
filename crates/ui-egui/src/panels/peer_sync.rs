@@ -899,6 +899,11 @@ fn picker(ui: &mut egui::Ui, r: &Row) -> Option<(Value, &'static str)> {
 
 // ── the new-collection question ────────────────────────────────────────────────────────────
 
+/// The new-collection question is up ([`crate::keyboard::modal_open`]).
+pub(crate) fn question_open(app: &LccApp) -> bool {
+    app.ui.dialog.is_none() && !undecided(app).is_empty()
+}
+
 /// A collection created while the catalog syncs: how should it be shared? Asked at once, only
 /// when there is one to ask about and no other dialog is open.
 pub fn dialogs(app: &mut LccApp, ctx: &egui::Context) {
@@ -906,8 +911,13 @@ pub fn dialogs(app: &mut LccApp, ctx: &egui::Context) {
         return;
     }
     let Some((album, name)) = undecided(app).into_iter().next() else { return };
+    // Esc is Decide Later
+    if crate::dialog_frame::esc_closes(false, app.text_focus, ctx) {
+        app.peer_sync.later.insert(album);
+        return;
+    }
     let t = Tokens::get(ctx);
-    egui::Window::new(tr("Share the New Collection?"))
+    let shown = egui::Window::new(tr("Share the New Collection?"))
         .id(egui::Id::new("syncUndecided"))
         .collapsible(false)
         .resizable(false)
@@ -943,4 +953,8 @@ pub fn dialogs(app: &mut LccApp, ctx: &egui::Context) {
                 app.peer_sync.later.insert(album);
             }
         });
+    // a modal: nothing behind it takes the pointer either (`keyboard::modal_open`)
+    if let Some(w) = &shown {
+        ctx.memory_mut(|m| m.set_modal_layer(w.response.layer_id));
+    }
 }
