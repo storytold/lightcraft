@@ -392,8 +392,6 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
     let u = &app.ui;
     let panel = |p: RightPanel| Some(u.right == p);
     match id {
-        // Every language's command is checked when it is the active one.
-        _ if crate::menus::language_from_command(id).is_some() => Some(crate::menus::language_from_command(id) == Some(u.language)),
         "develop.autoSync" => Some(app.session.auto_sync),
         "view.photoCounts" => Some(u.show_counts),
         "view.secondWindow" => Some(u.second_window),
