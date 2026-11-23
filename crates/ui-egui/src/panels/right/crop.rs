@@ -243,46 +243,70 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if let Some(spec) = ang {
         let out = slider(ui, &spec, d.crop.geometry.angle, true, Some("Straighten"));
         crate::panels::edit::apply_slider_out(app, &spec, out, |app, v| app.run("crop.straighten", json!({"angle": v})));
-        // an exact angle, typed (issue #534): a field of its own, besides the slider's value
+        // an exact angle, typed (issue #534): a framework number field of its own, besides the slider's value
         padded(ui, |ui| {
             ui.horizontal(|ui| {
+                use craft::behavior::{EditEvent, NumberCodec, Reader};
+                use craft::ui::text::NumberField;
                 ui.label(crate::i18n::tr("Angle"));
-                let mut angle = d.crop.geometry.angle;
-                let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
-                let r = ui.add(
-                    egui::DragValue::new(&mut angle)
-                        .range(spec.min..=spec.max)
-                        .clamp_existing_to_range(false)
-                        .speed(0.05)
-                        .fixed_decimals(2)
-                        // as the readout writes it: "+2.50", and every zero "0.00"
-                        .custom_formatter(|v, _| crate::panels::detail::crop_angle_label(v).trim_end_matches('°').to_string())
-                        .suffix("°")
-                        // read as the Straighten value reads a typed one: "-3,25" too
-                        .custom_parser(|text| crate::widgets::typed_value(&spec, text.trim().trim_end_matches('°')))
-                        // a typed angle applies on Return (or leaving the field), not keystroke by
-                        // keystroke: no half-typed angles, one undo step
-                        .update_while_editing(false),
-                );
-                crate::widgets::register(ui, "cropAngleField", r.rect);
-                // a drag on the field is one undo step, like the slider's
-                if r.drag_started() {
-                    let _ = app.run("develop.beginInteraction", json!({"label": "Straighten"}));
+                let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
+                let number_spec = spec;
+                let shown = NumberField::new(crate::i18n::tr("Angle").to_owned(), Bind::given(Some(d.crop.geometry.angle)).reset(Some(spec.default)))
+                    .id_salt(("cropAngleField", id))
+                    .range(spec.min..=spec.max)
+                    .step(spec.step)
+                    // a drag on the field moves 0.05° a point, as before
+                    .scrub_step(0.05)
+                    .commit_decimals(2)
+                    .fixed_decimals(2)
+                    .unit("°".to_owned())
+                    // read as the Straighten value reads a typed one: "-3,25" too
+                    .codec(
+                        NumberCodec::new(Reader::new(), 2)
+                            .parse_with(move |text| crate::widgets::typed_value(&number_spec, text.trim().trim_end_matches('°'))),
+                    )
+                    .show(ui);
+                if real {
+                    crate::widgets::register_response("cropAngleField", shown.response.rect, &shown.response);
                 }
-                // egui reports a change while text is typed even when the value isn't updated yet:
-                // apply only a new angle
-                // Esc keeps the old angle, but egui applies the typed text on the frame after the
-                // one where Esc took the focus away: remember the Esc for that frame
-                let cancel = egui::Id::unique("cropAngleFieldEscaped");
-                let escaped = ui.data_mut(|m| m.remove_temp::<bool>(cancel)).unwrap_or(false);
-                if escape && r.lost_focus() {
-                    ui.data_mut(|m| m.insert_temp(cancel, true));
-                }
-                if r.changed() && !escaped && angle.is_finite() && angle != d.crop.geometry.angle {
-                    let _ = app.run("crop.straighten", json!({"angle": (angle.clamp(spec.min, spec.max) * 100.0).round() / 100.0}));
-                }
-                if r.drag_stopped() {
-                    let _ = app.run("develop.endInteraction", json!({}));
+                if real && ui.is_enabled() {
+                    const OWNER: &str = "cropAngleField";
+                    let angle = |value: f64| (value.clamp(spec.min, spec.max) * 100.0).round() / 100.0;
+                    for event in &shown.events {
+                        match event {
+                            // a drag on the field is one undo step, like the slider's
+                            EditEvent::Begin { .. } => {
+                                if app.run("develop.beginInteraction", json!({"label": "Straighten"})).is_ok() {
+                                    app.ui.dragging_control = Some(OWNER.into());
+                                }
+                            }
+                            EditEvent::Update { value: Some(v), .. } if v.is_finite() && app.ui.dragging_control.as_deref() == Some(OWNER) => {
+                                let _ = app.run("crop.straighten", json!({"angle": angle(*v)}));
+                            }
+                            EditEvent::Commit { after: Some(v), .. } => {
+                                if v.is_finite() {
+                                    let _ = app.run("crop.straighten", json!({"angle": angle(*v)}));
+                                }
+                                if app.ui.dragging_control.as_deref() == Some(OWNER) {
+                                    let _ = app.run("develop.endInteraction", json!({}));
+                                    app.ui.dragging_control = None;
+                                }
+                            }
+                            // a typed angle applies on Return (or leaving the field): no half-typed angles, one undo step
+                            EditEvent::Set { after: Some(v), .. } if v.is_finite() && *v != d.crop.geometry.angle => {
+                                let _ = app.run("crop.straighten", json!({"angle": angle(*v)}));
+                            }
+                            // Esc keeps the old angle; it ends the field's edit, not the crop tool
+                            EditEvent::Cancel { .. } => {
+                                if app.ui.dragging_control.as_deref() == Some(OWNER) {
+                                    let _ = app.run("develop.cancelInteraction", json!({}));
+                                    app.ui.dragging_control = None;
+                                }
+                                crate::widgets::take_escape(ui.ctx());
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             });
         });

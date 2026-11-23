@@ -77,7 +77,6 @@ pub use dialogs::merge;
 pub use dialogs::print_view;
 pub use dialogs::slideshow_export;
 pub use dialogs::updates_ui;
-pub use menus::menu_level;
 pub use menus::menubar;
 pub use state::UiState;
 pub use widgets::album_picker;

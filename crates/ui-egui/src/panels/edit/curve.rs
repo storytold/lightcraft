@@ -1,8 +1,9 @@
 use super::histogram::preview_histogram;
+use crate::panels::detail::host;
 use super::sliders::control;
 use super::{
     Align2, Color32, DevelopSettings, Icon, LightcraftApp, Mesh, PARAM_AMOUNTS, ParametricCurve, PhotoId, Point, Pos2, Rect, RichText, Sense, Stroke,
-    Tokens, Vertex, controls, hex, json, paint, pos2, register, text_button, vec2,
+    Tokens, Vertex, controls, hex, json, paint, pos2, text_button, vec2,
 };
 
 // ------------------------------------------------------------------------------ tone curve
@@ -174,10 +175,30 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
                 ("green", hex("#33bb55")),
                 ("blue", hex("#3377ee")),
             ] {
-                let (r, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
-                crate::widgets::announce(&resp, format!("{} {ch}", crate::i18n::tr("Curve channel")));
-                register(ui, format!("curveChannel:{ch}"), r);
+                let (r, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
                 let sel = app.ui.curve_channel == ch;
+                let name = match ch {
+                    "parametric" => "Parametric curve",
+                    "master" => "Point curve",
+                    "red" => "Red channel",
+                    "green" => "Green channel",
+                    _ => "Blue channel",
+                };
+                // The framework senses the channel (click, double-click, keyboard, focus ring, its node); the
+                // panel paints its face.
+                let out = host::live(ui).then(|| {
+                    host::target(
+                        ui,
+                        ("curve-channel", ch),
+                        r,
+                        host::Target::new(format!("{} {ch}", crate::i18n::tr("Curve channel")))
+                            .tooltip(crate::i18n::tr_format!("{name} — double-click to reset it", name = name))
+                            .selected(sel),
+                    )
+                });
+                if let Some(out) = &out {
+                    crate::widgets::register_response(format!("curveChannel:{ch}"), r, &out.response);
+                }
                 if ch == "parametric" {
                     paint(ui.painter(), r.shrink(4.0), Icon::Curve, if sel { t.text } else { t.icon });
                 } else {
@@ -189,19 +210,13 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
                 if sel {
                     ui.painter().line_segment([r.left_bottom() + vec2(4.0, 1.0), r.right_bottom() + vec2(-4.0, 1.0)], Stroke::new(2.0, t.text));
                 }
-                let name = match ch {
-                    "parametric" => "Parametric curve",
-                    "master" => "Point curve",
-                    "red" => "Red channel",
-                    "green" => "Green channel",
-                    _ => "Blue channel",
-                };
-                let resp = resp.on_hover_text(crate::i18n::tr_format!("{name} — double-click to reset it", name = name));
-                if resp.double_clicked() {
-                    app.ui.curve_channel = ch.into();
-                    let _ = app.run("curve.reset", json!({"channel": ch}));
-                } else if resp.clicked() {
-                    app.ui.curve_channel = ch.into();
+                if let Some(out) = out {
+                    if out.double_clicked() {
+                        app.ui.curve_channel = ch.into();
+                        let _ = app.run("curve.reset", json!({"channel": ch}));
+                    } else if out.clicked() {
+                        app.ui.curve_channel = ch.into();
+                    }
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -214,10 +229,16 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
     let side = (w - 48.0).max(80.0);
     let (outer, _) = ui.allocate_exact_size(vec2(w, side + 12.0), Sense::hover());
     let r = Rect::from_min_size(pos2(outer.left() + 24.0, outer.top() + 6.0), vec2(side, side));
-    let resp = ui.interact(r, egui::Id::unique(("curve", &ch)), Sense::click_and_drag());
-    crate::widgets::announce(&resp, crate::i18n::tr("Tone Curve"));
-    register(ui, "curve", r);
-    crate::widgets::context_menu(&resp, |ui| curve_reset_menu(app, ui, &ch));
+    // The graph is painted by the panel; the framework senses it (press, drag, double-click, its node) and owns its
+    // context menu. A measuring run senses nothing.
+    let live = host::live(ui);
+    let out = live.then(|| host::target(ui, ("curve", &ch), r, host::Target::new(crate::i18n::tr("Tone Curve")).drag()));
+    let resp = out.as_ref().map_or_else(|| ui.response(), |out| out.response.clone());
+    let double_clicked = out.as_ref().is_some_and(host::HostOutput::double_clicked);
+    if let Some(out) = &out {
+        crate::widgets::register_response("curve", r, &out.response);
+        host::context_menu(ui, &out.response, crate::i18n::tr("Tone Curve"), |ui| curve_reset_menu(app, ui, &ch));
+    }
     let p = ui.painter();
     p.rect_filled(r, 2.0, t.canvas);
     if let Some(hist) = preview_histogram(app, id) {
@@ -309,7 +330,7 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
         );
     }
     let mut new_pts = None;
-    if resp.double_clicked()
+    if double_clicked
         && let Some(q) = resp.interact_pointer_pos()
         && let Some((i, dist)) = nearest(q)
         && dist < 10.0
@@ -319,7 +340,8 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
         let mut v = pts.clone();
         v.remove(i);
         new_pts = Some(v);
-    } else if resp.drag_started()
+    } else if live
+        && resp.drag_started()
         && let Some(q) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
     {
         // pick the point under the press, not where the pointer is once the drag threshold passed
@@ -366,7 +388,8 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
             v[i] = Point::new(x, y);
             new_pts = Some(v);
         }
-    } else if resp.clicked()
+    } else if live
+        && resp.clicked()
         && let Some(q) = resp.interact_pointer_pos()
         && nearest(q).is_none_or(|(_, dist)| dist >= 10.0)
     {
@@ -520,8 +543,8 @@ fn curve_reset_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, ch: &str) {
 
     let item = |ui: &mut egui::Ui, id: &str, label: String| {
         let shown = MenuItem::new(label).id_salt(("curve-reset-menu", id)).show(ui);
-        // Both egui popup sizing and SDK measurement render these rows. Neither may
-        // publish invisible automation targets or dispatch a reset.
+        // SDK measurement renders these rows too: it may neither publish invisible automation targets nor
+        // dispatch a reset.
         let real = !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx());
         if real {
             crate::widgets::register_response(id, shown.response.rect, &shown.response);
@@ -530,12 +553,9 @@ fn curve_reset_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, ch: &str) {
     };
     if item(ui, "curveMenu:resetChannel", label) {
         let _ = app.run("curve.reset", json!({"channel": ch}));
-        // The graph still owns an egui context popup, not an SDK menu chain.
-        ui.close();
     }
     if item(ui, "curveMenu:resetAll", crate::i18n::tr("Reset All Curves").to_string()) {
         let _ = app.run("curve.reset", json!({"channel": "all"}));
-        ui.close();
     }
 }
 

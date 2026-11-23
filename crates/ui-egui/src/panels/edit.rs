@@ -262,8 +262,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             // content, and the sliders below would run past its edge
             let max = ui.available_width() - 28.0 - ui.spacing().item_spacing.x;
             let r = crate::widgets::dropdown_within(ui, "profile", crate::i18n::profile_label(&d.profile.id, name), t.font(15.0), t.text_label, max);
-            let below = r.rect.bottom();
-            egui::Popup::menu(&r).show(|ui| profile_menu(app, ui, &d, below));
+            {
+                use craft::ui::contract::ShowContainer as _;
+                use craft::ui::contract::overlay::Trigger;
+                craft::ui::menu::Menu::new(crate::i18n::tr("Profile").to_owned())
+                    .id_salt(("profile-menu", app.session.active()))
+                    .opened_by(&r, Trigger::Click)
+                    .show(ui, |ui, _| profile_menu(app, ui, &d));
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if crate::widgets::icon_button(
                     ui,

@@ -113,7 +113,7 @@ fn lens_blur_apply(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &lightcraft_de
     }
 }
 
-/// Only the rows change; egui still owns the opener, popup, dismissal and focus lifecycle.
+/// The framework's value menu under the opener owns the popup, dismissal and focus lifecycle.
 fn lens_blur_focus(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
     let t = Tokens::get(ui.ctx());
     let b = &d.lens_blur;
@@ -129,16 +129,25 @@ fn lens_blur_focus(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettin
         let mut pick: Option<Option<u32>> = None;
         let enabled = ui.is_enabled();
         let parent_measuring = lens_blur_measuring(ui);
-        egui::Popup::menu(&r).show(|ui| {
-            if lens_blur_focus_item(ui, "lensBlurFocus:subject", crate::i18n::tr("Subject"), chosen.is_none() && auto, enabled, parent_measuring) {
-                pick = Some(None);
-            }
-            for m in &d.masks {
-                if lens_blur_focus_item(ui, &format!("lensBlurFocus:mask:{}", m.id), &m.name, chosen.is_some_and(|c| c.id == m.id), enabled, parent_measuring) {
-                    pick = Some(Some(m.id));
-                }
-            }
-        });
+        {
+            use craft::ui::contract::overlay::Trigger;
+            use craft::ui::contract::{Props as _, ShowContainer as _};
+            craft::ui::menu::Menu::new(crate::i18n::tr("In Focus").to_owned())
+                .id_salt(("lensBlurFocus", app.session.active()))
+                .values()
+                .opened_by(&r, Trigger::Click)
+                .show(ui, |ui, _| {
+                    if lens_blur_focus_item(ui, "lensBlurFocus:subject", crate::i18n::tr("Subject"), chosen.is_none() && auto, enabled, parent_measuring) {
+                        pick = Some(None);
+                    }
+                    for m in &d.masks {
+                        let selected = chosen.is_some_and(|c| c.id == m.id);
+                        if lens_blur_focus_item(ui, &format!("lensBlurFocus:mask:{}", m.id), &m.name, selected, enabled, parent_measuring) {
+                            pick = Some(Some(m.id));
+                        }
+                    }
+                });
+        }
         if !lens_blur_measuring(ui) && ui.is_enabled()
             && let Some(focus) = pick
         {
@@ -161,13 +170,8 @@ fn lens_blur_focus_item(ui: &mut egui::Ui, id: &str, label: &str, selected: bool
         return false;
     }
     crate::widgets::register_response(id, out.response.rect, &out.response);
-    if enabled && ui.is_enabled() && out.ran {
-        // The SDK row is not inside an SDK Menu: close its existing native egui popup.
-        ui.close();
-        true
-    } else {
-        false
-    }
+    // the menu closes on its row's run
+    enabled && ui.is_enabled() && out.ran
 }
 
 /// The Lens Blur focus area's shape when no mask sets it: one button per shape, each showing it
