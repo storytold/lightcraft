@@ -1,6 +1,6 @@
 //! The top bar: sidebar toggle, back/forward, search, filter, and the right-hand icons.
 
-use egui::{Align2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Align2, Rect, pos2, vec2};
 use serde_json::json;
 
 use crate::LightcraftApp;
@@ -118,37 +118,74 @@ fn search_field(app: &mut LightcraftApp, ui: &mut egui::Ui, _t: &Tokens, sr: Rec
 fn filter_button(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, sr: Rect) {
     // filter icon right of the search field
     let fr = Rect::from_center_size(pos2(sr.right() + 22.0, sr.center().y), vec2(28.0, 28.0));
-    let fresp = ui.interact(fr, egui::Id::unique("filter-btn"), Sense::click());
-    crate::widgets::announce(&fresp, crate::i18n::tr("Filters"));
-    register(ui, "icon:filter", fr);
     let filtering = app.session.filter != Default::default() || app.ui.filter_bar;
-    paint(
-        ui.painter(),
-        fr.shrink(6.0),
-        Icon::Filter,
-        if filtering {
-            t.accent
-        } else if fresp.hovered() {
-            t.text
-        } else {
-            t.icon
-        },
-    );
     // badge: how many filters are on, even with the filter bar closed
     let active = lightcraft_engine::filter_chips(&app.session.filter, &app.session.catalog).len();
-    if active > 0 {
+    let tip = if active > 0 {
+        crate::i18n::tr_format!("Filter bar — {active} active filter{}", if active == 1 { "" } else { "s" }, active = active)
+    } else {
+        crate::i18n::tr("Filter bar").into()
+    };
+    let accent = if filtering { Some(t.accent) } else { None };
+    let (fresp, live) = bar_icon(ui, fr, ("top", "filter"), "icon:filter", Icon::Filter, 16, accent.unwrap_or(t.icon), accent.unwrap_or(t.text), &tip);
+    if live && active > 0 {
         let c = fr.right_top() + vec2(-3.0, 8.0);
         ui.painter().circle_filled(c, 7.0, t.accent);
         ui.painter().text(c, Align2::CENTER_CENTER, active.to_string(), t.semibold(9.5), t.canvas);
     }
-    let fresp = fresp.on_hover_text(if active > 0 {
-        crate::i18n::tr_format!("Filter bar — {active} active filter{}", if active == 1 { "" } else { "s" }, active = active)
-    } else {
-        crate::i18n::tr("Filter bar").into()
-    });
-    if fresp.clicked() {
+    if fresp.is_some_and(|r| craft::ui::contract::clicked(&r)) {
         let _ = app.run("view.filterBar", json!({}));
     }
+}
+
+/// A top-bar icon on the framework's icon button: LightCraft's own vector artwork inside the SDK's face, so sensing,
+/// keyboard activation, focus ring and accessibility come from the framework. `rest` and `hover` are the ink colours.
+/// Returns the response (`None` while only measuring) and whether the pass is a live one.
+#[allow(clippy::too_many_arguments)]
+fn bar_icon(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    id: (&str, &str),
+    automation: &str,
+    icon: Icon,
+    side: u8,
+    rest: egui::Color32,
+    hover: egui::Color32,
+    tip: &str,
+) -> (Option<egui::Response>, bool) {
+    use craft::ui::buttons::IconButton;
+    use craft::ui::contract::{Props as _, Show as _};
+    use craft::ui::primitives::IconSpec;
+
+    let id = egui::Id::unique(id);
+    let tip = crate::i18n::tr(tip);
+    let (label, hint) = split_key_hint(tip);
+    // egui resolves hover from the prior pass's geometry before drawing this pass.
+    let hovered = ui.ctx().read_response(id).is_some_and(|r| r.hovered());
+    let glyph = BarGlyph { icon, ink: if hovered { hover } else { rest }, side };
+    let mut button = IconButton::new(IconSpec::glyph(&glyph)).id(id).label(label.to_owned());
+    if !tip.is_empty() {
+        button = button.tooltip(tip.to_owned());
+    }
+    if let Some(hint) = hint {
+        button = button.description(hint.to_owned());
+    }
+    let shown = button.show_at(ui, rect);
+    if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
+        return (None, false);
+    }
+    crate::widgets::register_response(automation, rect, &shown.response);
+    (Some(shown.response), true)
+}
+
+/// A tooltip that ends in its key hint ("Import Photos… (⌘⇧I)") is a label and a hint; the label is the accessible
+/// name and the hint its description. The Japanese and Traditional Chinese catalogs use full-width brackets.
+fn split_key_hint(tip: &str) -> (&str, Option<&str>) {
+    let split =
+        tip.strip_suffix(')').and_then(|body| body.rsplit_once(" (")).or_else(|| tip.strip_suffix('）').and_then(|body| body.rsplit_once('（')));
+    let Some((label, hint)) = split else { return (tip, None) };
+    let label = label.trim_end();
+    if label.is_empty() || hint.is_empty() { (tip, None) } else { (label, Some(hint)) }
 }
 
 /// The right-side action icons; returns the x where the next icon would go.
@@ -177,28 +214,16 @@ fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rec
             continue;
         }
         let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
-        let tip = crate::i18n::tr(tip);
-        let resp = ui.interact(r, egui::Id::unique(("top", id)), Sense::click());
-        let name = crate::widgets::accessible_label(&resp, tip);
-        let resp = resp.on_hover_text(tip);
-        crate::widgets::announce(&resp, name);
-        register(ui, format!("icon:{id}"), r);
-        let colour = if warn {
-            t.caution
-        } else if resp.hovered() {
-            t.text
-        } else {
-            t.icon
-        };
-        paint(ui.painter(), r.shrink(5.0), icon, colour);
-        if warn {
+        let (rest, hover) = if warn { (t.caution, t.caution) } else { (t.icon, t.text) };
+        let (resp, live) = bar_icon(ui, r, ("top", id), &format!("icon:{id}"), icon, 18, rest, hover, tip);
+        if live && warn {
             let c = r.right_top() + vec2(-5.0, 6.0);
             ui.painter().circle_filled(c, 6.0, t.reject);
             ui.painter().text(c, Align2::CENTER_CENTER, "!", t.semibold(9.5), t.canvas);
             register(ui, "indicator:unsaved", r);
         }
         // a refusal says why (Import while a Lightroom catalog is coming in)
-        if resp.clicked()
+        if resp.is_some_and(|resp| craft::ui::contract::clicked(&resp))
             && !cmd.is_empty()
             && let Err(e) = app.run(cmd, json!({}))
         {
@@ -209,16 +234,17 @@ fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rec
     x
 }
 
-/// LightCraft's original 18-point mode artwork; the SDK owns the button and its focus ring.
+/// LightCraft's original vector artwork at its own point size; the SDK owns the button and its focus ring.
 #[derive(craft::ui::contract::MemoProps)]
-struct AppearanceGlyph {
+struct BarGlyph {
     icon: Icon,
     ink: egui::Color32,
+    side: u8,
 }
 
-impl craft::ui::primitives::Glyph for AppearanceGlyph {
+impl craft::ui::primitives::Glyph for BarGlyph {
     fn paint(&self, painter: &egui::Painter, _: &craft::ui::style::UiTokens, rect: Rect, _: egui::Color32, _: bool) {
-        paint(painter, Rect::from_center_size(rect.center(), vec2(18.0, 18.0)), self.icon, self.ink);
+        paint(painter, Rect::from_center_size(rect.center(), vec2(f32::from(self.side), f32::from(self.side))), self.icon, self.ink);
     }
 }
 
@@ -235,7 +261,7 @@ fn appearance_button(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, ful
     let tip = format!("{}: {}", crate::i18n::tr("Appearance Mode"), crate::i18n::tr(mode));
     // egui resolves hover from the prior pass's geometry before drawing this pass.
     let hovered = ui.ctx().read_response(id).is_some_and(|r| r.hovered());
-    let glyph = AppearanceGlyph { icon, ink: if hovered { t.text } else { t.icon } };
+    let glyph = BarGlyph { icon, ink: if hovered { t.text } else { t.icon }, side: 18 };
     let anchor = IconButton::new(IconSpec::glyph(&glyph)).id(id).label(tip.clone()).tooltip(tip).show_at(ui, r);
     if ui.is_sizing_pass() || craft::ui::runtime::measure::active(ui.ctx()) {
         return;
@@ -281,7 +307,7 @@ fn appearance_button(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, ful
                 let mut first = true;
                 for kind in crate::theme::ThemeKind::ALL.iter().filter(|kind| kind.is_dark() == dark && favorites.iter().any(|id| id == kind.id())) {
                     if first {
-                        ui.separator();
+                        craft::ui::display::Divider::horizontal().show(ui);
                         first = false;
                     }
                     let id = format!("menu:themeFavorite-{}", kind.id());

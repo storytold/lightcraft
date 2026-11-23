@@ -77,7 +77,8 @@ pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
     let (r, resp) = ui.allocate_exact_size(vec2(w, 118.0 + legend), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Histogram"));
     register(ui, "histogram", r);
-    let p = ui.painter();
+    // an owned painter: the clipping buttons below borrow the Ui mutably
+    let p = &ui.painter().clone();
     p.rect_filled(r, 0.0, t.button);
     let plot = Rect::from_min_max(r.min + vec2(0.0, 6.0), pos2(r.right(), r.bottom() - 26.0 - legend));
     // Lightroom Classic's tonal zones (Blacks / Shadows / Exposure / Highlights / Whites across the
@@ -108,9 +109,15 @@ pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
         p.text(pos2((x0 + plot.right()) / 2.0, y), Align2::CENTER_CENTER, crate::i18n::tr("HDR"), t.font(12.5), t.text_label);
         let info = Rect::from_center_size(pos2(plot.right() - 16.0, y), vec2(14.0, 14.0));
         paint(p, info, Icon::Info, t.text_label);
-        ui.interact(info, egui::Id::unique("hdrHistogramInfo"), Sense::hover()).on_hover_text(crate::i18n::tr(
-            "Left: the standard (SDR) range up to SDR white. Right: the HDR range, one band per stop above SDR white (the orange line: the HDR headroom). With Visualize HDR range on, the bands take its colours.",
-        ));
+        let info_resp = ui.interact(info, egui::Id::unique("hdrHistogramInfo"), Sense::hover());
+        craft::ui::contract::tooltip::attach(
+            &info_resp,
+            &crate::i18n::tr(
+                "Left: the standard (SDR) range up to SDR white. Right: the HDR range, one band per stop above SDR white (the orange line: the HDR headroom). With Visualize HDR range on, the bands take its colours.",
+            )
+            .to_owned()
+            .into(),
+        );
     }
     let clipping = hist.as_ref().map(|h| h.clipping());
     // mid-way with no histogram of the new kind yet, the one being left is drawn alone
@@ -145,25 +152,13 @@ pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
         ("shadows", shadow_rect, "Shadow clipping", clipping.map(|(lo, _)| lo > 0.003)),
         ("highlights", highlight_rect, "Highlight clipping", clipping.map(|(_, hi)| hi > 0.003)),
     ] {
-        let response = ui.interact(rect, ui.scope_id().with(("histogram-clipping", name)), Sense::click());
-        register(ui, format!("histogram:{name}"), rect);
-        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), app.ui.show_clipping, crate::i18n::tr(label)));
-        clicked |= response.clicked();
         let active = app.ui.show_clipping;
-        // Keep the hit target comfortable, with a smaller box and clear space to the plot edges.
-        let box_rect = rect.shrink2(vec2(2.0, 2.0));
-        let (tile, mark) = clip_button_colors(&t, active, response.hovered(), clipped == Some(true));
-        p.rect_filled(box_rect, 3.0, tile);
-        if active {
-            p.rect_stroke(box_rect, 3.0, Stroke::new(1.0, t.text), egui::StrokeKind::Inside);
-        }
-        paint(p, Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), Icon::ChevronDown, mark);
         let status = match clipped {
             Some(true) => "Clipping detected in this preview.",
             Some(false) => "No clipping detected in this preview.",
             None => "Histogram not yet available.",
         };
-        response.on_hover_text(format!(
+        let tip = format!(
             "{}\n{}\n{}",
             crate::i18n::tr(label),
             crate::i18n::tr(if active {
@@ -172,7 +167,26 @@ pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
                 "Click to show clipping warnings for shadows and highlights."
             }),
             crate::i18n::tr(status)
-        ));
+        );
+        let key = ui.scope_id().with(("histogram-clipping", name));
+        let response = crate::panels::detail::host::target(
+            ui,
+            key,
+            rect,
+            crate::panels::detail::host::Target::new(crate::i18n::tr(label)).selected(active).tooltip(tip),
+        );
+        if crate::panels::detail::host::live(ui) {
+            crate::widgets::register_response(format!("histogram:{name}"), rect, &response);
+        }
+        clicked |= response.clicked();
+        // Keep the hit target comfortable, with a smaller box and clear space to the plot edges.
+        let box_rect = rect.shrink2(vec2(2.0, 2.0));
+        let (tile, mark) = clip_button_colors(&t, active, response.hovered(), clipped == Some(true));
+        p.rect_filled(box_rect, 3.0, tile);
+        if active {
+            p.rect_stroke(box_rect, 3.0, Stroke::new(1.0, t.text), egui::StrokeKind::Inside);
+        }
+        paint(p, Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), Icon::ChevronDown, mark);
     }
     if clicked {
         let _ = app.run("view.clipping", json!({}));
@@ -206,22 +220,39 @@ pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
 
 /// The Soft Proofing strip under the histogram: proof profile, gamut warnings, Create Proof Copy.
 pub(super) fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+    use craft::ui::buttons::Button;
+    use craft::ui::contract::{Props as _, Show as _, ShowContainer as _, Trigger};
+    use craft::ui::controls::disclosure::DisclosureGlyph;
+    use craft::ui::menu::{Menu, MenuItem};
     use lightcraft_engine::pipeline::OutputSpace;
     let t = Tokens::get(ui.ctx());
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 6 }).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.label(RichText::new(crate::i18n::tr("Soft Proofing")).color(t.text).strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                use craft::ui::choice::Swatch;
                 let mut dest = app.ui.proof.dest_warning;
-                let r = ui
-                    .toggle_value(&mut dest, RichText::new("■").color(Color32::from_rgb(255, 40, 40)))
-                    .on_hover_text(crate::i18n::tr("Show destination gamut warning"));
-                register(ui, "button:proofDestWarning", r.rect);
                 let mut disp = app.ui.proof.display_warning;
-                let r2 = ui
-                    .toggle_value(&mut disp, RichText::new("■").color(Color32::from_rgb(40, 90, 255)))
-                    .on_hover_text(crate::i18n::tr("Show display gamut warning"));
-                register(ui, "button:proofDisplayWarning", r2.rect);
+                let real = !proof_measuring(ui);
+                for (name, label, rgb, on) in [
+                    ("button:proofDestWarning", "Show destination gamut warning", [255u8, 40, 40], &mut dest),
+                    ("button:proofDisplayWarning", "Show display gamut warning", [40, 90, 255], &mut disp),
+                ] {
+                    let (id, rect) = ui.allocate_space(vec2(18.0, 18.0));
+                    // The warning's own colour, as encoded sRGB, is the face: the swatch stays pressed while the warning is on.
+                    let color = craft::theme::Srgba::rgb(f32::from(rgb[0]) / 255.0, f32::from(rgb[1]) / 255.0, f32::from(rgb[2]) / 255.0);
+                    let out = Swatch::new(crate::i18n::tr(label).to_owned(), color)
+                        .id(id)
+                        .selected(*on)
+                        .tooltip(crate::i18n::tr(label).to_owned())
+                        .show_at(ui, rect);
+                    if real {
+                        crate::widgets::register_response(name, rect, &out.response);
+                        if out.clicked {
+                            *on = !*on;
+                        }
+                    }
+                }
                 if dest != app.ui.proof.dest_warning || disp != app.ui.proof.display_warning {
                     let _ = app.run("view.softProof", json!({"destWarning": dest, "displayWarning": disp}));
                 }
@@ -233,20 +264,30 @@ pub(super) fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
             let device = app.ui.proof_profile.as_ref().map(|(_, n)| n.clone());
             let shown = device.clone().unwrap_or_else(|| cur.label().to_string());
             let mut pick = false;
-            let combo = crate::widgets::combo_box("proof-space").width(170.0).selected_text(shown).show_ui(ui, |ui| {
+            let (_, face_rect) = ui.allocate_space(vec2(170.0, 24.0));
+            let face = Button::new(crate::i18n::tr("Profile")).painted(shown).trailing_icon(DisclosureGlyph::dropdown()).id_salt("proof-space").show_at(ui, face_rect);
+            let real = !proof_measuring(ui);
+            if real {
+                crate::widgets::register_response("dropdown:proofProfile", face_rect, &face.response);
+            }
+            Menu::new(crate::i18n::tr("Profile").to_owned()).id_salt("proof-space-menu").values().opened_by(&face.response, Trigger::Click).show(ui, |ui, _| {
+                let real = !proof_measuring(ui);
                 for s in OutputSpace::ALL {
-                    if ui.selectable_label(device.is_none() && cur == s, s.label()).clicked() {
+                    let row = MenuItem::new(s.label().to_owned()).id_salt(("proof-space-item", s.label())).entry_checked(device.is_none() && cur == s).show(ui);
+                    if real && row.ran {
                         let _ = app.run("view.softProof", json!({"space": s}));
                     }
                 }
                 if let Some(n) = &device {
-                    let _ = ui.selectable_label(true, n);
+                    let _ = MenuItem::new(n.clone()).id_salt("proof-space-device").entry_checked(true).show(ui);
                 }
-                if app.services.pick_display_profile.is_some() && ui.selectable_label(false, crate::i18n::tr("Other…")).clicked() {
-                    pick = true;
+                if app.services.pick_display_profile.is_some() {
+                    let row = MenuItem::new(crate::i18n::tr("Other…").to_owned()).id_salt("proof-space-other").show(ui);
+                    if real && row.ran {
+                        pick = true;
+                    }
                 }
             });
-            crate::widgets::name_combo(&combo.response, crate::i18n::tr("Profile"));
             if pick
                 && let Some(path) = app.services.pick_display_profile.as_mut().and_then(|pick| pick().into_iter().next())
                 && let Err(e) = app.run("view.softProof", json!({"profile": path}))

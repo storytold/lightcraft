@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
+use craft::ui::list::ListRow;
 use craft::ui::menu::{Menu, MenuItem};
 
 use egui::{Align2, Rect, Sense, pos2, vec2};
@@ -17,7 +18,7 @@ use serde_json::json;
 
 use crate::icons::Icon;
 use crate::theme::Tokens;
-use crate::widgets::{divider, icon_button, register, slider};
+use crate::widgets::{divider, icon_button, slider};
 use crate::{HoverPreview, LightcraftApp};
 
 mod sdk;
@@ -463,7 +464,12 @@ pub fn picker_rows(ui: &mut egui::Ui, salt: &str, presets: &PresetList, selected
                     PickRow::Preset(i) => {
                         let Some(p) = presets.get(*i) else { continue };
                         let label = crate::i18n::builtin_label(&p.name, p.builtin);
-                        if ui.add_sized(size, egui::Button::selectable(selected == Some(p.id.as_str()), label)).clicked() {
+                        let (_, rect) = ui.allocate_space(size);
+                        let row = ListRow::new(label.to_string())
+                            .id_salt(("preset-picker-row", salt, p.id.as_str()))
+                            .selected(selected == Some(p.id.as_str()))
+                            .show_at(ui, rect);
+                        if !ui.is_sizing_pass() && !craft::ui::runtime::measure::active(ui.ctx()) && craft::ui::contract::clicked(&row.response) {
                             out = Some(p.id.clone());
                         }
                     }

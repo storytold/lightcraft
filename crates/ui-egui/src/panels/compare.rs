@@ -538,13 +538,8 @@ fn compare_action(ui: &mut egui::Ui, id: &'static str, label: &'static str) -> b
         return false;
     }
     crate::widgets::register_response(id, shown.response.rect, &shown.response);
-    if shown.ran {
-        // SDK keyboard activation must dismiss the legacy popup too, not just pointer clicks.
-        ui.close();
-        true
-    } else {
-        false
-    }
+    // Running a row closes the SDK menu, by pointer or by key.
+    shown.ran
 }
 
 pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
@@ -571,14 +566,14 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if resp.double_clicked() {
             app.ui.zoom = if app.ui.zoom == Zoom::Fit { Zoom::Percent(100.0) } else { Zoom::Fit };
         }
-        crate::widgets::context_menu(&resp, |ui| {
+        super::detail::host::context_menu(ui, &resp, crate::i18n::tr("Compare"), |ui| {
             if compare_action(ui, "compare:swap", "Swap") {
                 let _ = swap(app);
             }
             if compare_action(ui, "compare:makeSelect", "Make Candidate the Select") {
                 let _ = make_select(app);
             }
-            ui.separator();
+            craft::ui::display::Divider::horizontal().show(ui);
             super::grid::context_menu(app, ui, id);
         });
     }
@@ -628,15 +623,19 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // the tile has lost its hover to the × (tied to `hovered()`, it vanished before a click landed)
         if resp.contains_pointer() && photos.len() > 1 {
             let xr = Rect::from_min_size(pos2(img.right() - 26.0, img.top() + 6.0), vec2(20.0, 20.0));
-            let xresp = ui.interact(xr, egui::Id::unique(("survey-x", id.0)), Sense::click()).on_hover_text(crate::i18n::tr("Remove from survey"));
-            crate::widgets::announce(&xresp, crate::i18n::tr("Remove from survey"));
+            let xresp = super::detail::host::target(
+                ui,
+                ("survey-x", id.0),
+                xr,
+                super::detail::host::Target::new(crate::i18n::tr("Remove from survey")).tooltip(crate::i18n::tr("Remove from survey")),
+            );
             ui.painter().circle_filled(xr.center(), 10.0, Color32::from_black_alpha(if xresp.hovered() { 230 } else { 160 }));
             paint(ui.painter(), xr.shrink(4.0), Icon::Close, t.text);
             if xresp.clicked() {
                 let _ = app.run("library.select", json!({"ids": [id.0], "mode": "toggle"}));
             }
         }
-        crate::widgets::context_menu(&resp, |ui| super::grid::context_menu(app, ui, *id));
+        super::detail::host::context_menu(ui, &resp, crate::i18n::tr("Photo"), |ui| super::grid::context_menu(app, ui, *id));
     }
     let n = photos.len();
     let msg = if app.session.selection.ids.len() > SURVEY_MAX {
@@ -666,7 +665,7 @@ pub fn show_reference(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let (_, _, lresp) = photo_tile(app, ui, r, Slot::Compare(0), left, "Reference", zoom);
     let (img, _, _) = photo_tile(app, ui, active, Slot::Compare(1), right, "Active", zoom);
     app.image_rect = Some(img);
-    crate::widgets::context_menu(&lresp, |ui| {
+    super::detail::host::context_menu(ui, &lresp, crate::i18n::tr("Reference"), |ui| {
         if compare_action(ui, "compare:clearReference", "Clear Reference") {
             app.ui.reference = None;
             app.ui.view = ViewMode::Detail;
