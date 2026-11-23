@@ -192,7 +192,7 @@ fn clicking_back_into_field_dismisses_its_menu_and_places_a_new_caret() {
     rig.click(FIELD, PointerButton::Secondary);
     let rect = rig.rect(FIELD).unwrap();
     rig.click_at(egui::pos2(rect.left() + 2.0, rect.center().y), PointerButton::Primary);
-    let range = egui::text_edit::TextEditState::load(&rig.view.ctx, id(FIELD)).unwrap().cursor.char_range().unwrap();
+    let range = egui::text_edit::TextEditState::load(&rig.view.ctx, text_id(id(FIELD))).unwrap().cursor.char_range().unwrap();
     assert!(range.is_empty(), "a click back in the field places a caret: {range:?}");
     rig.type_text("X");
     assert_eq!(rig.text, "XLisbon");

@@ -1,2 +1,7 @@
 [alias]
 xtask = "run --package xtask --"
+
+[env]
+# Debug test threads overflow the default 2 MiB stack in deeply nested framework layouts (they crash with
+# SIGSEGV, not a message); the app's main thread has 8 MiB. Release builds are unaffected.
+RUST_MIN_STACK = "16777216"

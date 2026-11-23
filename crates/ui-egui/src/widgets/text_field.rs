@@ -139,6 +139,8 @@ pub(crate) fn register_field(ui: &egui::Ui, widget: &str, response: &egui::Respo
             if element.component == "MenuItem"
                 && let Some((_, action)) = action
                 && let Some(response) = ui.ctx().read_response(element.id)
+                // (a menu body still fading out after it closed publishes nothing)
+                && egui::AreaState::load(ui.ctx(), response.layer_id.id).is_none_or(|state| state.interactable)
             {
                 crate::widgets::register_response(format!("{widget}:{action}"), response.rect, &response);
             }
