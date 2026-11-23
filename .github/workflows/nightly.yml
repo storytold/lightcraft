@@ -72,8 +72,13 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny,cargo-nextest
+      - name: Keep the downloaded corpus on the runner between runs
+        # checkout cleans ignored files, so without this every run downloads all 532 raws again
+        run: |
+          mkdir -p corpus
+          for d in raw video people; do mkdir -p "$HOME/.cache/lcc-corpus/$d"; rm -rf "corpus/$d"; ln -sfn "$HOME/.cache/lcc-corpus/$d" "corpus/$d"; done
       - name: Raw corpus (pinned, sha256-checked)
-        timeout-minutes: 45 # a stalled mirror once held the whole 300-minute job
+        timeout-minutes: 120 # a first fill of the runner cache is slow; a stalled mirror once held the whole 300-minute job
         run: cargo xtask corpus --download
       - name: cargo xtask ci
         run: cargo xtask ci

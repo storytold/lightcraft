@@ -33,6 +33,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - name: Keep the downloaded corpus on the runner between runs
+        # checkout cleans ignored files, so without this every run downloads all 532 raws again
+        run: |
+          mkdir -p corpus
+          for d in raw video people; do mkdir -p "$HOME/.cache/lcc-corpus/$d"; rm -rf "corpus/$d"; ln -sfn "$HOME/.cache/lcc-corpus/$d" "corpus/$d"; done
       - name: CC0 corpus (extra seeds; the run falls back on built-in seeds without it)
         continue-on-error: true
         timeout-minutes: 15
