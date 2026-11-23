@@ -235,6 +235,8 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
     let out = live.then(|| host::target(ui, ("curve", &ch), r, host::Target::new(crate::i18n::tr("Tone Curve")).drag()));
     let resp = out.as_ref().map_or_else(|| ui.response(), |out| out.response.clone());
     let double_clicked = out.as_ref().is_some_and(host::HostOutput::double_clicked);
+    // the release of a drag (the framework's response reports no drag_stopped on that pass)
+    let drag_ended = resp.drag_stopped() || out.as_ref().is_some_and(host::HostOutput::drag_ended);
     if let Some(out) = &out {
         crate::widgets::register_response("curve", r, &out.response);
         host::context_menu(ui, &out.response, crate::i18n::tr("Tone Curve"), |ui| curve_reset_menu(app, ui, &ch));
@@ -406,7 +408,7 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
     // the drag is over when egui says so, or when the pointer comes up without it saying so (a
     // release outside the window would otherwise leave the interaction open, and every later edit a
     // silent preview that Undo cannot take back)
-    if commit_interaction(app, ui, dragging.is_some(), resp.drag_stopped()) {
+    if commit_interaction(app, ui, dragging.is_some(), drag_ended) {
         dragging = None;
     }
     ui.data_mut(|dd| dd.insert_temp(drag_id, dragging));

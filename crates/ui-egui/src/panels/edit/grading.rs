@@ -163,6 +163,8 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
     });
     let resp = target.as_ref().map_or_else(|| ui.response(), |target| target.response.clone());
     let double_clicked = target.as_ref().is_some_and(crate::panels::detail::host::HostOutput::double_clicked);
+    // the release of a drag (the framework's response reports no drag_stopped on that pass)
+    let drag_ended = resp.drag_stopped() || target.as_ref().is_some_and(crate::panels::detail::host::HostOutput::drag_ended);
     if let Some(target) = &target {
         crate::widgets::register_response(format!("wheel:{key}"), r, &target.response);
     }
@@ -231,11 +233,11 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
         let (hue, sat) = grab.map_or_else(|| wheel_pick(q - c, rad, None), |g| g.pick(q - c, rad));
         let _ = app.run("develop.set", json!({"values": {format!("grading.{key}.hue"): hue.round(), format!("grading.{key}.sat"): sat.round()}}));
     }
-    if wheel_input && (resp.drag_stopped() || resp.clicked()) {
+    if wheel_input && (drag_ended || resp.clicked()) {
         let _ = app.run("develop.endInteraction", json!({}));
     }
     // released, or Esc (egui ends a drag on it)
-    if resp.drag_stopped()
+    if drag_ended
         && let Some(held) = ui.ctx().data_mut(|m| m.remove_temp::<WheelCapture>(egui::Id::unique(WHEEL_CAPTURE)))
         && !held.dropped
     {

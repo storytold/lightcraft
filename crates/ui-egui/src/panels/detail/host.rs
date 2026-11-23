@@ -62,7 +62,10 @@ impl Component for HostTarget {
             0
         };
         let by_key = cx.activation().is_some_and(|activation| activation.by_key);
-        HostOutput { response: cx.response.clone(), clicks, by_key }
+        // egui's drag_stopped is only set while the press is still down, so the pass of the release is read from the
+        // press itself (as mask_controls' HitOutput does)
+        let drag_ended = matches!(cx.press().phase, PressPhase::Release { click: false, .. } | PressPhase::Cancel { .. });
+        HostOutput { response: cx.response.clone(), clicks, by_key, drag_ended }
     }
 }
 
@@ -72,6 +75,7 @@ pub(crate) struct HostOutput {
     pub response: Response,
     clicks: u32,
     by_key: bool,
+    drag_ended: bool,
 }
 
 impl HostOutput {
@@ -89,6 +93,12 @@ impl HostOutput {
     /// The activation was the second press of a double click.
     pub fn double_clicked(&self) -> bool {
         self.clicked() && self.clicks >= 2
+    }
+
+    /// A press that moved past the click slop ended this pass: released, or cancelled. This stands in for egui's
+    /// `drag_stopped`, which the framework's response does not report on the pass of the release.
+    pub fn drag_ended(&self) -> bool {
+        self.drag_ended
     }
 }
 
