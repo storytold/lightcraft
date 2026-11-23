@@ -20,6 +20,7 @@ pub mod focus;
 pub mod heif;
 mod iptc;
 pub mod mrw;
+mod picture_style;
 mod psd;
 mod xmp;
 
@@ -54,6 +55,7 @@ pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, try_read_
 pub use focus::FocusPoint;
 pub use iptc::parse_iptc;
 pub use lightcraft_geom::{Orientation, Rect};
+pub use picture_style::picture_look;
 pub use xmp::{CRS_NS, LC_NS, XmpData, XmpError, XmpValue, parse_xmp, write_xmp, write_xmp_lc};
 
 /// Which properties [`merge_xmp`] takes from the fresh packet.

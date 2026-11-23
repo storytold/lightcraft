@@ -8,6 +8,9 @@ plan/
 .DS_Store
 .claude/
 /craft-fonts
+# per-agent scratch (RAFs/JPEGs and compare dumps; never commit)
+.scratch*/
+.scratch-*/
 # nix build / nix develop
 /result
 /result-*
