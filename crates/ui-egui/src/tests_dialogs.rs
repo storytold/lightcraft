@@ -256,3 +256,328 @@ fn alternatives_bar_shows_and_goes_back() {
     assert_eq!(h.app.session.visible_cloned(), vec![id]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The windows that sit over the app and wait to be closed but aren't a `Dialog`: each one takes the
+/// keyboard and the pointer while it is open (a plain key or a click doesn't rate the photo behind
+/// it, and the native menu bar would drop its shortcuts too, as for a dialog), and gives them back
+/// once it closes.
+#[test]
+fn every_window_that_waits_over_the_app_keeps_the_keys_from_the_photos() {
+    use crate::keyboard::{MenuChoice, Owner, menu_choice, owner};
+    type Step = fn(&mut Headless);
+    // (the ⌘/ shortcuts overlay closes on any key: `tests_module_help` checks that key runs nothing)
+    let rows: [(&str, Step, Step); 17] = [
+        ("the quit question", |h| h.app.quit_prompt = Some(crate::QuitPrompt::Unsaved("changes not saved".into())), |h| h.app.quit_prompt = None),
+        ("the settings-file notice", |h| h.app.notices.push("settings file unreadable".into()), |h| h.app.notices.clear()),
+        (
+            "Refine Photos (a catalog dialog)",
+            |h| h.app.catalog_ui.dialog = Some(crate::catalog_ui::CatalogDialog::Refine { picks: 0, unflagged: 0 }),
+            |h| click(h, "button:catalogCancel"),
+        ),
+        (
+            "New Catalog (a catalog dialog)",
+            |h| h.app.catalog_ui.dialog = Some(crate::catalog_ui::CatalogDialog::NewCatalog { parent: String::new(), name: "x".into() }),
+            |h| click(h, "button:catalogCancel"),
+        ),
+        (
+            "the catalog chooser over the open library",
+            |h| {
+                let mut p = crate::panels::library_problem::LibraryProblem::choose_later(&h.app.ui.settings);
+                p.chooser.iter_mut().for_each(|c| c.over = Some(1));
+                h.app.library_problem = Some(p);
+            },
+            |h| h.app.library_problem = None,
+        ),
+        (
+            "the Export sheet",
+            |h| {
+                h.app.ui.modern.enabled = true;
+                h.app.run("modern.exportSheet", json!({"on": true})).unwrap();
+            },
+            |h| {
+                h.app.run("modern.exportSheet", json!({"on": false})).unwrap();
+                h.app.ui.modern.enabled = false;
+            },
+        ),
+        ("Identity Plate Editor", |h| drop(h.app.run("dialog.identityPlateSetup", json!({})).unwrap()), |h| click(h, "identity-plate-setup:close")),
+        ("Find Duplicates", |h| drop(h.app.run("library.findDuplicates", json!({})).unwrap()), |h| click(h, "button:duplicates.close")),
+        ("Review Comments", |h| h.app.review_comments.open = true, |h| click(h, "review-comments:close")),
+        (
+            "Import Warnings",
+            |h| h.app.import_report = Some(crate::import_report::Report { open: true, ..crate::import_report::Report::new(1, &[]) }),
+            |h| click(h, "button:importWarnings.close"),
+        ),
+        (
+            "the camera-roll question",
+            |h| {
+                h.app.ui.camera_roll_asked = false;
+                h.app.services.camera_roll = Some(Box::new(|| Err("no camera roll here".into())));
+            },
+            |h| click(h, "button:cameraRollNotNow"),
+        ),
+        ("Plug-in Manager", |h| drop(h.app.run("plugins.manager", json!({"open": true})).unwrap()), |h| click(h, "plugin-manager:close")),
+        (
+            "a plug-in's permission question",
+            |h| {
+                let request = lcc_plugins::Request { group: lcc_plugins::Group::Catalog, value: None };
+                let ask =
+                    lcc_engine::cmd::plugins::PluginAsk { plugin: "p".into(), plugin_name: "P".into(), request, rerun: json!({}), prepare: false };
+                h.app.session.plugin_asks.push(ask);
+            },
+            |h| {
+                h.step();
+                let r = h.request("ui.clickWidget", json!({"id": "button:pluginAskDeny"}), T);
+                assert_eq!(r["ok"], true, "{r}");
+            },
+        ),
+        ("a Dialog", |h| drop(h.app.run("dialog.copySettings", json!({})).unwrap()), |h| h.app.ui.dialog = None),
+        ("Edit Smart Collection…", |h| drop(h.app.run("dialog.smartAlbum", json!({"name": "Dates"})).unwrap()), |h| h.app.ui.dialog = None),
+        (
+            "New Collection (a text field with the focus)",
+            |h| {
+                h.app.run("dialog.newAlbum", json!({})).unwrap();
+                h.step();
+                h.step();
+            },
+            |h| h.app.ui.dialog = None,
+        ),
+        ("Settings", |h| drop(h.app.run("app.settings", json!({})).unwrap()), |h| h.app.ui.dialog = None),
+    ];
+    // the keys of the report: a rating, and the three menu bar shortcuts (⌘= / ⌘- zoom the photo,
+    // ⌘⌫ deletes the rejected photos), which AppKit hands to the menu bar before the window
+    let menu = [("view.zoomIn", "Cmd+=", "Equals"), ("view.zoomOut", "Cmd+-", "Minus"), ("library.deleteRejected", "Cmd+Delete", "Backspace")];
+    let mut leaks = Vec::new();
+    // the ones Esc closes, as before; the others wait for their own buttons (and Esc goes no
+    // further: it doesn't take the loupe back to the grid behind them)
+    let esc_closes = [
+        "Refine Photos (a catalog dialog)",
+        "New Catalog (a catalog dialog)",
+        "the catalog chooser over the open library",
+        "the Export sheet",
+        "Plug-in Manager",
+        "a Dialog",
+        "Edit Smart Collection…",
+        "New Collection (a text field with the focus)",
+        "Settings",
+    ];
+    let fresh = || {
+        let h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
+        assert_eq!(owner(&h.app, &h.view.ctx), Owner::Window, "nothing has the keyboard before the test");
+        let active = h.app.session.active().unwrap();
+        (h, active)
+    };
+    for (name, open, close) in rows {
+        // a session of its own: a key that got through must not change what the next row sees
+        let (mut h, active) = fresh();
+        h.app.session.execute("photo.rate", &json!({"ids": [active.0], "rating": 0})).unwrap();
+        h.app.session.execute("photo.flag", &json!({"ids": [active.0], "flag": "reject"})).unwrap();
+        // the toolbar's stars, for a click behind the window (the Modern layout's Export sheet has
+        // no toolbar behind it: a sheet covers the photo)
+        let star = |h: &Headless, id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| r.center());
+        open(&mut h);
+        let behind = star(&h, "star:bottom:5");
+        let (zoom, dialog) = (h.app.ui.zoom, h.app.ui.dialog.clone());
+        let keys = owner(&h.app, &h.view.ctx);
+        let typing = h.view.ctx.egui_wants_keyboard_input();
+        for (command, sc, _) in menu {
+            if menu_choice(keys, command, Some(sc), typing) != MenuChoice::Drop {
+                leaks.push(format!("{name}: the menu bar would run {sc} behind it"));
+            }
+        }
+        let r = h.request("ui.key", json!({"key": "5"}), T);
+        assert_eq!(r["ok"], true, "{name}: {r}");
+        h.step();
+        for (_, _, key) in menu {
+            let r = h.request("ui.key", json!({"key": key, "cmd": true}), T);
+            assert_eq!(r["ok"], true, "{name}: {r}");
+            h.step();
+        }
+        let photo = h.app.session.catalog.photo(active).unwrap();
+        if photo.rating != 0 {
+            leaks.push(format!("{name}: a plain key rated the photo behind it"));
+        }
+        if photo.deleted || h.app.ui.zoom != zoom || h.app.ui.dialog != dialog {
+            leaks.push(format!("{name}: a command key reached the photo behind it"));
+        }
+        // (the window's own layer: it keeps out what isn't in the panels, a tap on the Modern grid;
+        // the dimmed ones, the quit question, the notice, the chooser and the sheet, block with
+        // their dimming instead)
+        let dims = ["the quit question", "the settings-file notice", "the catalog chooser over the open library", "the Export sheet"];
+        if dialog.is_none() && !dims.contains(&name) && h.view.ctx.memory(|m| m.top_modal_layer()).is_none() {
+            leaks.push(format!("{name}: it doesn't take the modal layer"));
+        }
+        if let Some(at) = behind {
+            let r = h.request("ui.click", json!({"x": at.x, "y": at.y}), T);
+            assert_eq!(r["ok"], true, "{name}: {r}");
+            h.step();
+            if h.app.session.catalog.photo(active).unwrap().rating != 0 {
+                leaks.push(format!("{name}: a click behind it rated the photo"));
+            }
+        }
+        let view = h.app.ui.view;
+        let r = h.request("ui.key", json!({"key": "Escape"}), T);
+        assert_eq!(r["ok"], true, "{name}: {r}");
+        h.step();
+        h.step();
+        let closed = owner(&h.app, &h.view.ctx) != Owner::Modal;
+        if closed != esc_closes.contains(&name) {
+            leaks.push(format!("{name}: Esc {} it", if closed { "closed" } else { "didn't close" }));
+        }
+        if h.app.ui.view != view {
+            leaks.push(format!("{name}: Esc also left the loupe behind it"));
+        }
+        if !closed {
+            close(&mut h);
+        }
+        h.step();
+        let keys = owner(&h.app, &h.view.ctx);
+        if keys != Owner::Window {
+            leaks.push(format!("{name}: closing it leaves the keyboard with {keys:?}"));
+        }
+        for (command, sc, _) in menu {
+            if menu_choice(keys, command, Some(sc), false) != MenuChoice::Run {
+                leaks.push(format!("{name}: once it closes, {sc} still doesn't run"));
+            }
+        }
+        let zoom = h.app.ui.zoom;
+        let r = h.request("ui.key", json!({"key": "Equals", "cmd": true}), T);
+        assert_eq!(r["ok"], true, "{name}: {r}");
+        h.step();
+        if h.app.ui.zoom == zoom {
+            leaks.push(format!("{name}: once it closes, ⌘= doesn't zoom the photo"));
+        }
+        if let (Some(_), Some(at)) = (behind, star(&h, "star:bottom:4")) {
+            let r = h.request("ui.click", json!({"x": at.x, "y": at.y}), T);
+            assert_eq!(r["ok"], true, "{name}: {r}");
+            h.step();
+            if h.app.session.catalog.photo(active).unwrap().rating != 4 {
+                leaks.push(format!("{name}: once it closes, a click on a star doesn't rate the photo"));
+            }
+        }
+    }
+    assert!(leaks.is_empty(), "every window that waits over the app keeps the keys:\n{}", leaks.join("\n"));
+
+    // …and with nothing open, the same keys do reach the photo (so the checks above can fail)
+    let (mut h, active) = fresh();
+    h.app.session.execute("photo.flag", &json!({"ids": [active.0], "flag": "reject"})).unwrap();
+    let zoom = h.app.ui.zoom;
+    for key in ["5", "Equals"] {
+        let r = h.request("ui.key", json!({"key": key, "cmd": key != "5"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+    }
+    assert_eq!(h.app.session.catalog.photo(active).unwrap().rating, 5, "with nothing open, 5 rates the photo");
+    assert_ne!(h.app.ui.zoom, zoom, "with nothing open, ⌘= zooms the photo");
+    let r = h.request("ui.key", json!({"key": "Backspace", "cmd": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(
+        h.app.session.catalog.photo(active).unwrap().deleted || h.app.ui.dialog.is_some(),
+        "with nothing open, ⌘⌫ deletes the rejected photo (or asks first)"
+    );
+    h.app.ui.dialog = None;
+
+    // the full-screen preview draws none of the tool windows: one opened meanwhile (Find Duplicates
+    // from the menu bar, an import's warnings) waits, and the keys stay with the photo on show
+    h.app.ui.fullscreen = true;
+    h.app.run("library.findDuplicates", json!({})).unwrap();
+    assert_eq!(owner(&h.app, &h.view.ctx), Owner::Window, "a tool window that isn't drawn leaves the keys alone");
+    h.app.ui.fullscreen = false;
+    assert_eq!(owner(&h.app, &h.view.ctx), Owner::Modal, "and takes them once it shows");
+    h.app.duplicates = None;
+
+    // the catalog opening or upgrading (the owner only: with no open really running, the first
+    // frame turns either into the window of a catalog that won't open)
+    for (name, opening) in [("the catalog opening", true), ("the catalog upgrading", false)] {
+        let p = crate::panels::library_problem::LibraryProblem::new("/nowhere", "");
+        h.app.library_problem = Some(crate::panels::library_problem::LibraryProblem { opening, upgrading: !opening, ..p });
+        assert_eq!(owner(&h.app, &h.view.ctx), Owner::Modal, "{name}: nothing runs behind it");
+        h.app.library_problem = None;
+    }
+
+    // with no library open behind them, the launch windows leave the menu bar alone: it is their
+    // way to Settings, About and Check for Updates (issue #929), and to another catalog
+    let launch: [(&str, Step); 3] = [
+        ("Welcome", |h| {
+            h.app.catalog_ui.dialog = Some(crate::catalog_ui::CatalogDialog::Welcome {
+                parent: String::new(),
+                name: "x".into(),
+                demo: false,
+                updates: false,
+                foreign: Vec::new(),
+            })
+        }),
+        ("a catalog that couldn't be opened", |h| {
+            h.app.library_problem = Some(crate::panels::library_problem::LibraryProblem::new("/nowhere", "unreadable"))
+        }),
+        ("the catalog chooser at launch", |h| {
+            h.app.library_problem = Some(crate::panels::library_problem::LibraryProblem::choose_later(&h.app.ui.settings))
+        }),
+    ];
+    for (name, open) in launch {
+        open(&mut h);
+        assert_eq!(owner(&h.app, &h.view.ctx), Owner::Window, "{name}: the menu bar still works over it");
+        h.app.catalog_ui.dialog = None;
+        h.app.library_problem = None;
+    }
+}
+
+/// In a modal's text field the editing shortcuts edit the field: ⌘A selects its text, cut and
+/// paste change it, and none of them (nor ⌘Z) reaches the photos behind (Select All, Undo).
+#[test]
+fn a_modal_text_field_keeps_its_editing_shortcuts() {
+    use crate::keyboard::{MenuChoice, Owner, menu_choice, owner};
+    let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
+    let active = h.app.session.active().unwrap();
+    // something for ⌘Z to undo behind the dialog, were it to get there
+    let before = h.app.session.catalog.photo(active).unwrap().rating;
+    let rating = if before == 1 { 2 } else { 1 };
+    let r = h.request("ui.key", json!({"key": rating.to_string()}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(h.app.session.catalog.photo(active).unwrap().rating, rating);
+    let selected = h.app.session.selected();
+    h.app.run("dialog.newAlbum", json!({})).unwrap();
+    h.step();
+    h.step();
+    let name = |h: &Headless| match &h.app.ui.dialog {
+        Some(crate::state::Dialog::NewAlbum { name, .. }) => name.clone(),
+        other => panic!("New Collection closed: {other:?}"),
+    };
+    assert!(h.view.ctx.egui_wants_keyboard_input(), "the name field has the focus");
+    assert_eq!(owner(&h.app, &h.view.ctx), Owner::Modal);
+    for sc in crate::menubar::TEXT_EDIT_SHORTCUTS {
+        assert_eq!(menu_choice(Owner::Modal, "edit.any", Some(sc), true), MenuChoice::TextField, "the menu bar hands {sc} to the field");
+    }
+    let req = |h: &mut Headless, what: &str, p: serde_json::Value| {
+        let r = h.request(what, p, T);
+        assert_eq!(r["ok"], true, "{what}: {r}");
+        h.step();
+    };
+    req(&mut h, "ui.text", json!({"text": "Trip"}));
+    assert_eq!(name(&h), "Trip");
+    req(&mut h, "ui.key", json!({"key": "A", "cmd": true}));
+    req(&mut h, "ui.clipboard", json!({"action": "cut"}));
+    assert_eq!(name(&h), "", "⌘A selected the field's text and ⌘X cut it");
+    req(&mut h, "ui.clipboard", json!({"action": "paste", "text": "Hike"}));
+    assert_eq!(name(&h), "Hike", "⌘V pastes into the field");
+    req(&mut h, "ui.clipboard", json!({"action": "copy"}));
+    req(&mut h, "ui.key", json!({"key": "Z", "cmd": true}));
+    assert_eq!(h.app.session.catalog.photo(active).unwrap().rating, rating, "⌘Z stays in the field: the rating isn't undone");
+    assert_eq!(h.app.session.selected(), selected, "⌘A stays in the field: the photos aren't all selected");
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::NewAlbum { .. })), "the dialog is still open");
+    // …where, with the dialog closed, the same keys reach the photos (so the checks above can fail)
+    h.app.ui.dialog = None;
+    h.step();
+    req(&mut h, "ui.key", json!({"key": "Z", "cmd": true}));
+    assert_eq!(h.app.session.catalog.photo(active).unwrap().rating, before, "with nothing open, ⌘Z undoes the rating");
+    req(&mut h, "ui.key", json!({"key": "A", "cmd": true}));
+    assert_ne!(h.app.session.selected(), selected, "with nothing open, ⌘A selects every photo");
+}
+
+/// Clicks one of the open window's own controls: they still work while it keeps the app's.
+fn click(h: &mut Headless, id: &str) {
+    let r = h.request("ui.clickWidget", json!({"id": id}), T);
+    assert_eq!(r["ok"], true, "{id}: {r}");
+    h.step();
+}

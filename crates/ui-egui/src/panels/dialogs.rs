@@ -208,7 +208,17 @@ pub(crate) fn window_id(dialog: &Dialog) -> egui::Id {
 /// Block the underlying panels from the first frame, before the window establishes its modal
 /// layer. Close background menus on entry; popups subsequently opened inside the dialog stay usable.
 pub(crate) fn prepare(app: &LccApp, ui: &mut egui::Ui) {
-    let Some(dialog) = &app.ui.dialog else { return };
+    let Some(dialog) = &app.ui.dialog else {
+        // the other windows that wait over the app (Find Duplicates, a catalog dialog, a plug-in's
+        // question…) block them too; the ⌘/ key list takes its own clicks
+        if crate::keyboard::modal_open(app) && !app.help.open {
+            ui.disable();
+            if ui.ctx().memory(|m| m.top_modal_layer()).is_none() {
+                egui::Popup::close_all(ui.ctx());
+            }
+        }
+        return;
+    };
     ui.disable();
     let layer = egui::LayerId::new(egui::Order::Middle, window_id(dialog));
     if ui.ctx().memory(|m| m.top_modal_layer()) != Some(layer) {

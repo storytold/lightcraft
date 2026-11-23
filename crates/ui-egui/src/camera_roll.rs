@@ -191,7 +191,7 @@ pub fn prompt(app: &mut LccApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let mut choice = None;
     let frame = crate::dialog_frame::card_frame(ctx);
-    egui::Window::new(crate::i18n::tr("Add Your Camera Roll?"))
+    let shown = egui::Window::new(crate::i18n::tr("Add Your Camera Roll?"))
         .id(egui::Id::new("camera-roll-prompt"))
         .title_bar(false)
         .order(egui::Order::Foreground)
@@ -224,6 +224,10 @@ pub fn prompt(app: &mut LccApp, ctx: &egui::Context) {
                 }
             });
         });
+    // a modal: nothing behind it takes the pointer either (`keyboard::modal_open`)
+    if let Some(w) = &shown {
+        ctx.memory_mut(|m| m.set_modal_layer(w.response.layer_id));
+    }
     match choice {
         Some(true) => {
             if let Err(e) = add_and_watch(app) {

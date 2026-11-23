@@ -483,6 +483,11 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
             layout.footer(ui, |_| {});
         });
     crate::dialog_frame::ModalLayout::finish(ctx, window_id, shown.as_ref().map(|w| w.response.rect));
+    // a modal: nothing behind it takes the pointer either (`keyboard::modal_open`); not Welcome,
+    // which leaves the app alone (a notice from the first start stays clickable)
+    if let Some(w) = shown.as_ref().filter(|_| !welcoming) {
+        ctx.memory_mut(|m| m.set_modal_layer(w.response.layer_id));
+    }
     if app.catalog_ui.dialog.is_some() {
         app.catalog_ui.dialog = Some(dlg);
     }

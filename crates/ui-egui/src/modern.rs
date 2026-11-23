@@ -308,7 +308,8 @@ pub(crate) fn after_input(app: &mut LccApp, raw: &mut egui::RawInput) {
     }
     let widgets = std::mem::take(&mut app.widgets);
     let rect_of = |id: &str| widgets.iter().rev().find(|(w, _)| w == id).map(|(_, r)| *r);
-    let modal = app.ui.dialog.is_some() || app.ui.modern.popup_open || app.ui.modern.menu.is_some();
+    // (any window that waits over the app: a long press behind Find Duplicates selects nothing)
+    let modal = crate::keyboard::modal_open(app) || app.ui.modern.popup_open || app.ui.modern.menu.is_some();
     let develop = app.ui.module != ModuleId::Library;
     let canvas = if develop { rect_of("modern:canvas").or(app.canvas_rect) } else { None };
     let photos = [rect_of("grid:scroll"), rect_of("filmstrip")];
@@ -395,7 +396,12 @@ pub(crate) fn back(app: &mut LccApp) -> Option<&'static str> {
     {
         return Some(what);
     }
-    if app.ui.dialog.is_some() {
+    // a tool window over the app: Back closes it, as it closes a dialog
+    if let Some(what) = crate::keyboard::close_tool_window(app) {
+        return Some(what);
+    }
+    // (or another window over the app: Back is its Esc, and closes nothing behind it)
+    if crate::keyboard::modal_open(app) {
         esc(app);
         return Some("dialog");
     }
@@ -446,7 +452,7 @@ pub(crate) fn back(app: &mut LccApp) -> Option<&'static str> {
 /// Esc in the Modern layout: what Back closes of its own (the menu bar, the histogram's menu, the
 /// open card), before Esc's usual meaning. Returns whether it closed one.
 pub(crate) fn escape(app: &mut LccApp) -> bool {
-    if !on(app) || app.ui.dialog.is_some() {
+    if !on(app) || crate::keyboard::modal_open(app) {
         return false;
     }
     if app.ui.modern.menu.take().is_some() || app.ui.modern.histogram_menu.take().is_some() {

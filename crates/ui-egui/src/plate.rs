@@ -318,6 +318,10 @@ pub fn show_setup(app: &mut crate::LccApp, ctx: &egui::Context) {
             });
         });
     crate::dialog_frame::ModalLayout::finish(ctx, window_id, shown.as_ref().map(|w| w.response.rect));
+    // a modal: nothing behind it takes the pointer either (`keyboard::modal_open`)
+    if let Some(w) = &shown {
+        ctx.memory_mut(|m| m.set_modal_layer(w.response.layer_id));
+    }
     if !open {
         actions.push(("dialog.identityPlateSetup", json!({"close": "cancel"})));
     }

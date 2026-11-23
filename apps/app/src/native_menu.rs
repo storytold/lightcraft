@@ -11,8 +11,8 @@
 //! - while a text field has keyboard focus, accelerators without ⌘ (`G`, `1`, `Delete`…) and the
 //!   text-editing ones (⌘A/⌘C/⌘V/⌘X/⌘Z) are removed, so typing and text editing work; they come
 //!   back when the field loses focus.
-//! - while a modal has the keyboard (a dialog, Settings, the shortcuts overlay:
-//!   [`lcc_ui_egui::keyboard`]), a chosen item does nothing but Quit, and the items show disabled,
+//! - while a modal has the keyboard (a dialog, Settings, the shortcuts overlay, another window
+//!   that waits over the app: [`lcc_ui_egui::keyboard::modal_open`]), a chosen item does nothing but Quit, and the items show disabled,
 //!   so ⌘=, ⌘Delete… never act on the photos behind it.
 
 use std::collections::{HashMap, HashSet};
