@@ -42,6 +42,9 @@ pub(crate) struct Row<'a> {
     pub label: Option<&'a str>,
     /// Keeps a typed draft or a gesture with what it edits (the photo): a new owner starts afresh.
     pub salt: egui::Id,
+    /// The key the row's parts are recorded under (`inspect::recorded`), for a panel whose callers read them;
+    /// by default one derived from the row's id.
+    pub record: Option<egui::Id>,
 }
 
 /// What [`field`] showed.
@@ -58,11 +61,16 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
 
 /// [`slider`], its state kept apart per `salt` (the photo it edits).
 pub(crate) fn slider_salted(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label: Option<&str>, salt: egui::Id) -> SliderOut {
-    let shown = field(ui, &Row { spec, value, enabled, label, salt });
+    slider_row(ui, &Row { spec, value, enabled, label, salt, record: None })
+}
+
+/// [`slider`] for a full [`Row`].
+pub(crate) fn slider_row(ui: &mut Ui, row: &Row<'_>) -> SliderOut {
+    let shown = field(ui, row);
     if !real(ui) {
         return SliderOut::default();
     }
-    summarize(&shown.out.events, value)
+    summarize(&shown.out.events, row.value)
 }
 
 /// Whether this pass acts: never a sizing pass or the framework's measuring pass.
@@ -117,7 +125,7 @@ pub(crate) fn field(ui: &mut Ui, row: &Row<'_>) -> Shown {
     let policy = ScalarKeyPolicy::new(nudge).model_step(spec.step).shift_factor(5.0).trigger(ScalarKeyTrigger::HoveredOrFocused);
     let id = ui.scope_id().with(("lc-slider", spec.id, row.salt));
     let enabled = row.enabled;
-    let (out, record) = craft::ui::runtime::inspect::record(ui, id.with("record"), |ui| {
+    let (out, record) = craft::ui::runtime::inspect::record(ui, row.record.unwrap_or_else(|| id.with("record")), |ui| {
         // A vertical wheel edits only a row a press selected; a sideways swipe edits the row under the pointer.
         with_env(
             ui,
@@ -243,7 +251,8 @@ fn publish(ui: &Ui, row: &Row<'_>, name: &str, out: &SliderFieldOutput, record: 
             }
         }
         super::register_response(format!("{prefix}:{}", spec.id), target, &response);
-        if prefix == "sliderValue" {
+        // `sliderField:` is the editor: it is there while a value is being typed, as the old field was
+        if prefix == "sliderValue" && focus.is_some_and(|focus| focus.stop.text) {
             super::register_response(format!("sliderField:{}", spec.id), target, &response);
         }
     }

@@ -272,6 +272,8 @@ fn leaving_the_row_during_a_drag_keeps_dragging_but_release_disarms_the_wheel() 
     h.frame(vec![button(inside, true)]);
     let initial = h.value;
     h.frame(vec![Event::PointerMoved(outside)]);
+    // the framework's drag begins on the pass the pointer first moves and proposes from the next one
+    h.frame(vec![]);
     assert!(h.value > initial, "an owned drag keeps editing outside the row");
     h.frame(vec![button(outside, false)]);
     let released = h.value;

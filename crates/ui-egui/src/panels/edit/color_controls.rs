@@ -259,7 +259,7 @@ pub(super) fn preset(app: &mut LightcraftApp, ui: &mut egui::Ui, mode: WbMode) {
 /// A numeric value in the existing Color section, on its original displayed scale, on the shared develop slider
 /// row (the Kelvin temperature has Lightroom's track there).
 fn control(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &ControlSpec, value: f64, enabled: bool) {
-    let row = crate::widgets::SliderRow { spec, value, enabled, label: None, salt: egui::Id::new(app.session.active()) };
+    let row = crate::widgets::SliderRow { spec, value, enabled, label: None, salt: egui::Id::new(app.session.active()), record: None };
     let shown = crate::widgets::slider_field(ui, &row);
     if let Some(track) = shown.track
         && let Some(index) = NUMERIC.iter().position(|id| *id == spec.id)
