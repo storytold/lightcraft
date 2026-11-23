@@ -61,7 +61,8 @@ impl Component for HostTarget {
         } else {
             0
         };
-        HostOutput { response: cx.response.clone(), clicks }
+        let by_key = cx.activation().is_some_and(|activation| activation.by_key);
+        HostOutput { response: cx.response.clone(), clicks, by_key }
     }
 }
 
@@ -70,6 +71,7 @@ impl Component for HostTarget {
 pub(crate) struct HostOutput {
     pub response: Response,
     clicks: u32,
+    by_key: bool,
 }
 
 impl HostOutput {
@@ -146,7 +148,14 @@ pub(crate) fn target(ui: &mut Ui, key: impl Hash + std::fmt::Debug, rect: Rect, 
     if !spec.tooltip.is_empty() {
         control = control.tooltip(spec.tooltip);
     }
-    control.show_at(ui, rect)
+    let out = control.show_at(ui, rect);
+    // A pointer click acts and leaves no keyboard focus behind, as the raw click targets these replace did: a focused
+    // control makes the shell treat the next Escape as a text field's, so Escape would not go back from the photo.
+    // A key activation keeps its focus.
+    if out.clicked() && !out.by_key {
+        ui.ctx().memory_mut(|memory| memory.surrender_focus(out.response.id));
+    }
+    out
 }
 
 /// Whether this pass draws and acts: not an invisible sizing pass and not an SDK measuring run.
