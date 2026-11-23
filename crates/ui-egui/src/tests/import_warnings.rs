@@ -205,6 +205,42 @@ fn a_press_on_a_warning_toast_opens_its_report() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A warning that arrives while the report is open keeps its details when the report closes:
+/// closing clears only the toast the report emptied, never one that still holds warnings (#4434).
+#[test]
+fn closing_the_report_keeps_a_warning_that_arrived_while_it_was_open() {
+    let (mut h, dir, _text) = import("second", &["AutoToneDigest", "AutoToneDigest"]);
+    assert!(h.app.ui.dialog.is_none(), "the review closed when the import ran");
+    let widgets = h.request("ui.widgets", json!({}), T);
+    let all = widgets["result"].as_array().expect("widgets");
+    let w = all.iter().find(|w| w["id"] == "toast").expect("the toast is registered by its rectangle");
+    let rect: Vec<f64> = [0usize, 1, 2, 3].map(|i| w["rect"][i].as_f64().expect("rect")).to_vec();
+    let r = h.request("ui.click", json!({"x": rect[0] + rect[2] / 2.0, "y": rect[1] + rect[3] / 2.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::ImportWarnings { .. })), "the press opens the report");
+    // a second import finishes while the report is open: its warning toast carries its own details
+    h.app.ui.toast = Some((
+        "Import warnings (1):".into(),
+        h.app.tick_now() + 60.0,
+        None,
+        Some(vec![lightcraft_engine::import::ImportWarning {
+            path: "second.png".into(),
+            code: lightcraft_engine::import::ImportWarningCode::UnmappedXmp,
+            profile: None,
+            mode: None,
+            fields: vec!["ColorVariance".into()],
+        }]),
+    ));
+    h.settle(SETTLE);
+    let r = h.request("ui.dialog.cancel", json!({}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.ui.dialog.is_none(), "the report closed");
+    assert_eq!(toast(&h), "Import warnings (1):", "closing the report keeps the warning that arrived while it was open");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A plain toast without details still disappears on a press (#3050).
 #[test]
 fn a_press_on_a_plain_toast_dismisses_it() {

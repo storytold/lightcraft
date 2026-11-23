@@ -403,8 +403,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         app.renderer.forget_imports();
         app.review_listed = None;
     }
-    // the report's own toast goes with it: the pair is one notification (#3050)
-    if close && matches!(dlg, Dialog::ImportWarnings { .. }) {
+    // the report's own toast goes with it: the pair is one notification (#3050). A warning
+    // that arrived meanwhile holds its own details and stays; only an emptied toast clears.
+    if close && matches!(dlg, Dialog::ImportWarnings { .. }) && app.ui.toast.as_ref().is_some_and(|t| t.3.is_none()) {
         app.ui.toast = None;
     }
     app.ui.dialog = if close { None } else { Some(dlg) };
