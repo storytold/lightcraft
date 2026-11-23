@@ -1487,7 +1487,7 @@ const MAX_DABS: usize = 4096;
 
 /// The `shape` kernel's brush data for `dabs`: stroke records (12 words: dab offset, dab count,
 /// r, hard, flow, density, erase, bbox x0 y0 x1 y1, auto) then each dab's centre and the flow it
-/// adds (3 words; the stroke's flow before process V9, [`lightcraft_pipeline::masks::BrushDabs::dab`]).
+/// adds (3 words; the stroke's flow before process V12, [`lightcraft_pipeline::masks::BrushDabs::dab`]).
 fn brush_aux(dabs: &[&lightcraft_pipeline::masks::BrushDabs], erase: bool) -> Vec<f32> {
     let mut aux = Vec::new();
     let mut off = 12 * dabs.len();

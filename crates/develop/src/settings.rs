@@ -102,17 +102,22 @@ pub enum Process {
     /// V7, with the Highlights/Shadows base taken of log luminance without its fine detail (clamped
     /// between a fine and a 3× wider median), so gaps in dark lettering aren't lifted into bright blocks.
     V8,
-    /// V8, with brush Flow as the coverage a stroke adds per brush radius it travels, as in
+    /// V8, with the checked Bradford white-balance fallback (`Mat3::IDENTITY` when a source
+    /// illuminant's Bradford blue cone response is `<= 0.0`, `craft-libs#587`).
+    /// `ProcessVersion(9)` is reserved for `HealMethod::Pinned` (`#4069`).
+    V10,
+    /// V10, with brush Flow as the coverage a stroke adds per brush radius it travels, as in
     /// Lightroom: a dab adds `1 − (1 − flow)^(distance from the previous dab / radius)`, so a
-    /// stroke's strength no longer depends on how densely its dabs lie; V1 to V8 add `flow` per dab.
-    V9,
+    /// stroke's strength no longer depends on how densely its dabs lie; earlier processes add
+    /// `flow` per dab. Provisional number: 11 and 13 are claimed by open pull requests (#4047).
+    V12,
 }
 
 impl Process {
-    /// Every process, oldest first.
-    pub const ALL: [Process; 9] =
-        [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7, Process::V8, Process::V9];
-    pub const LATEST: Process = Process::V9;
+    /// Every process, oldest first (`ProcessVersion(9)` is reserved for `#4069`).
+    pub const ALL: [Process; 10] =
+        [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7, Process::V8, Process::V10, Process::V12];
+    pub const LATEST: Process = Process::V12;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
@@ -124,7 +129,8 @@ impl Process {
             Process::V6 => ProcessVersion(6),
             Process::V7 => ProcessVersion(7),
             Process::V8 => ProcessVersion(8),
-            Process::V9 => ProcessVersion(9),
+            Process::V10 => ProcessVersion(10),
+            Process::V12 => ProcessVersion(12),
         }
     }
 }

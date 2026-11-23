@@ -465,17 +465,17 @@ fn straight_stroke(process: lightcraft_develop::Process, flow: f64, points: Vec<
     shape_alpha(&MaskShape::Brush { strokes: vec![s] }, &f, w, h, &Rgb32f::new(w, h), &Plane::new(w, h), 0.0, None)
 }
 
-/// Process V9: Flow is the coverage a stroke adds per brush radius it travels, as Lightroom
+/// Process V12: Flow is the coverage a stroke adds per brush radius it travels, as Lightroom
 /// Classic's strokes measure on a grey card (Feather 0, straight strokes, #4045): a point the brush
 /// passes over for a length `L` is covered by `1 − (1 − flow)^(L / r)`, so the centre of a stroke
 /// (L = 2 r) by 41 % at Flow 25, 76 % at 50 and fully at 100 (Lightroom), and a point 0.6 radii off
-/// the centre line less. Process V8 adds the flow per dab, r/4 apart: 90 % at Flow 25.
+/// the centre line less. Process V10 adds the flow per dab, r/4 apart: 90 % at Flow 25.
 #[test]
 fn flow_is_coverage_per_radius_travelled_as_in_lightroom() {
     use lightcraft_develop::Process;
     let line = vec![Point::new(0.1, 0.5), Point::new(0.9, 0.5)];
     for (flow, lightroom) in [(25.0, 0.41), (50.0, 0.76), (100.0, 1.0)] {
-        let a = straight_stroke(Process::V9, flow, line.clone());
+        let a = straight_stroke(Process::V12, flow, line.clone());
         let keep = 1.0 - flow as f32 / 100.0;
         let centre = a.get(200, 50);
         assert!((centre - (1.0 - keep.powi(2))).abs() < 0.03, "Flow {flow}: centre {centre}");
@@ -486,29 +486,29 @@ fn flow_is_coverage_per_radius_travelled_as_in_lightroom() {
         assert!((off - (1.0 - keep.powf(chord))).abs() < 0.05, "Flow {flow}: 0.6 r off the line {off}");
         assert!(off <= centre + 1e-6);
     }
-    let old = straight_stroke(Process::V8, 25.0, line).get(200, 50);
-    assert!(old > 0.85, "V8 keeps the flow per dab: {old}");
+    let old = straight_stroke(Process::V10, 25.0, line).get(200, 50);
+    assert!(old > 0.85, "V10 keeps the flow per dab: {old}");
 }
 
-/// Process V9: a stroke covers the same however densely its samples lie (a slow drag samples
-/// every pixel, a fast one far apart); before V9 a slow stroke laid more dabs and built up more.
+/// Process V12: a stroke covers the same however densely its samples lie (a slow drag samples
+/// every pixel, a fast one far apart); before V12 a slow stroke laid more dabs and built up more.
 #[test]
 fn flow_does_not_depend_on_how_fast_the_stroke_was_painted() {
     use lightcraft_develop::Process;
     let fast = vec![Point::new(0.1, 0.5), Point::new(0.9, 0.5)];
     // one sample per output pixel
     let slow: Vec<Point> = (40..=360).map(|x| Point::new(x as f64 / 400.0, 0.5)).collect();
-    let (f, s) = (straight_stroke(Process::V9, 25.0, fast.clone()).get(200, 50), straight_stroke(Process::V9, 25.0, slow.clone()).get(200, 50));
+    let (f, s) = (straight_stroke(Process::V12, 25.0, fast.clone()).get(200, 50), straight_stroke(Process::V12, 25.0, slow.clone()).get(200, 50));
     assert!((f - s).abs() < 0.02, "fast {f} vs slow {s}");
-    let (f8, s8) = (straight_stroke(Process::V8, 25.0, fast).get(200, 50), straight_stroke(Process::V8, 25.0, slow).get(200, 50));
-    assert!(s8 > f8, "before V9 a slow stroke builds up more: {f8} vs {s8}");
+    let (f8, s8) = (straight_stroke(Process::V10, 25.0, fast).get(200, 50), straight_stroke(Process::V10, 25.0, slow).get(200, 50));
+    assert!(s8 > f8, "before V12 a slow stroke builds up more: {f8} vs {s8}");
 }
 
 /// A click (one dab) paints its flow on every process; Flow 100 paints fully.
 #[test]
 fn a_click_paints_its_flow() {
     use lightcraft_develop::Process;
-    for p in [Process::V8, Process::V9] {
+    for p in [Process::V10, Process::V12] {
         let a = straight_stroke(p, 40.0, vec![Point::new(0.5, 0.5)]);
         assert!((a.get(200, 50) - 0.4).abs() < 1e-4, "{p:?}: {}", a.get(200, 50));
     }
@@ -694,6 +694,51 @@ fn people_and_subject_use_person_mattes() {
     assert!(hair.get(190, 50) > 0.99 && hair.get(10, 50) < 0.01);
     let lips = MaskShape::People { person: 0, parts: vec!["Lips".into()] };
     assert_eq!(eval(&lips), shape_alpha(&lips, &f, w, h, &img, &l, 0.0, None));
+}
+
+/// A thousand two-point strokes, each a sweep far past the photo that lays most of a stroke's
+/// own budget: the mask shares one budget across its strokes, so it renders in moments rather
+/// than building and visiting most of a billion dabs.
+#[test]
+fn many_far_flung_strokes_share_one_dab_budget() {
+    let (w, h) = (64, 64);
+    let s = BrushStroke { points: vec![Point::new(-4000.0, 0.5), Point::new(4000.0, 0.5)], size: 0.05, ..Default::default() };
+    assert!(brush_dabs(&s, &frame(w, h), w, h).dabs.len() > 500_000, "each stroke alone is large");
+    let strokes = vec![s; 1000];
+    let t = std::time::Instant::now();
+    let mut out = Plane::new(w, h);
+    rasterize_brush(&strokes, &frame(w, h), w, h, &Rgb32f::new(w, h), &Plane::new(w, h), &mut out);
+    assert!(t.elapsed().as_secs() < 30, "took {:?}", t.elapsed());
+    assert!(out.data.iter().any(|&v| v > 0.0), "the strokes crossing the photo still paint it");
+}
+
+/// Past the shared dab budget a brush mask is an error for the caller, not a mask missing its later (erase) strokes.
+#[test]
+fn an_over_budget_brush_mask_is_reported() {
+    let (w, h) = (64, 64);
+    let far = BrushStroke { points: vec![Point::new(-4000.0, 0.5), Point::new(4000.0, 0.5)], size: 0.05, ..Default::default() };
+    let near = BrushStroke { points: vec![Point::new(0.1, 0.1), Point::new(0.9, 0.9)], size: 0.05, ..Default::default() };
+    assert!(!brush_over_budget(std::slice::from_ref(&near), &frame(w, h), w, h));
+    assert!(brush_over_budget(&vec![far; 10], &frame(w, h), w, h));
+}
+
+/// Strokes that fill the budget exactly are not over it; one more dab is.
+#[test]
+fn a_brush_mask_that_exactly_fills_the_budget_is_not_over_it() {
+    let (w, h) = (64, 64);
+    let stroke = |x: f64| BrushStroke { points: vec![Point::new(0.0, 0.5), Point::new(x, 0.5)], size: 0.05, ..Default::default() };
+    // a stroke whose dab count divides the budget evenly
+    let (s, m) = (0..14_000)
+        .map(|i| stroke(6.0 + f64::from(i) * 0.001))
+        .map(|s| {
+            let m = brush_dabs(&s, &frame(w, h), w, h).dabs.len();
+            (s, m)
+        })
+        .find(|(_, m)| *m >= 500 && MAX_STROKE_DABS.is_multiple_of(*m))
+        .expect("a stroke whose dabs divide the budget");
+    let k = MAX_STROKE_DABS / m;
+    assert!(!brush_over_budget(&vec![s.clone(); k], &frame(w, h), w, h), "{k} strokes of {m} dabs fill the budget exactly");
+    assert!(brush_over_budget(&vec![s; k + 1], &frame(w, h), w, h), "one more stroke is over it");
 }
 
 #[test]
