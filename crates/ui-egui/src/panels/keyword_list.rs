@@ -179,7 +179,10 @@ fn drop_keyword(app: &mut LightcraftApp, ctx: &egui::Context, keyword: &str, par
 /// `can_fold`: the triangle opens and closes the level (not while a filter opens it).
 fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId], ticks: &Ticks, can_fold: bool) {
     let t = Tokens::get(ui.ctx());
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click_and_drag());
+    // the row is known by its keyword, not by where it falls among the rows built (which change as
+    // the list scrolls): an open menu, a drag and a hover stay with it
+    let (_, rect) = ui.allocate_space(vec2(ui.available_width(), ROW_H));
+    let resp = ui.interact(rect, egui::Id::unique(("keyword-list-row", r.path.to_lowercase())), Sense::click_and_drag());
     crate::widgets::announce(&resp, r.path);
     register(ui, format!("keywordRow:{}", r.path), rect);
     if resp.drag_started() {

@@ -738,3 +738,19 @@ fn the_keyword_list_builds_only_the_rows_near_the_screen() {
     assert!(rows.contains(&format!("Keyword {:05}", KEYWORDS - 1)), "the last keyword is reached: {rows:?}");
     assert!(!rows.contains(&"Keyword 00000".to_string()), "{rows:?}");
 }
+
+/// Given a keyword's menu open in a long list, when the list scrolls a few rows under it, then
+/// the menu still acts on that keyword: a row is known by its keyword, not by where it falls among
+/// the rows built (which change as the list scrolls).
+#[test]
+fn a_keywords_menu_stays_with_it_while_the_list_scrolls() {
+    let mut h = many_keywords(3000);
+    ask(&mut h, "ui.clickWidget", json!({"id": "keywordRow:Keyword 00010", "button": "right"}));
+    assert!(has(&h, "keywordMenu:defaultParent"), "the menu is open");
+    ask(&mut h, "ui.hoverWidget", json!({"id": "keywordRow:Keyword 00004"}));
+    ask(&mut h, "ui.scroll", json!({"dx": 0, "dy": -400}));
+    assert!(!keyword_rows(&h).contains(&"Keyword 00000".to_string()), "the list scrolled: {:?}", keyword_rows(&h));
+    assert!(has(&h, "keywordMenu:defaultParent"), "the menu is still open");
+    ask(&mut h, "ui.clickWidget", json!({"id": "keywordMenu:defaultParent"}));
+    assert_eq!(h.app.session.catalog.default_keyword_parent().as_deref(), Some("Keyword 00010"));
+}
