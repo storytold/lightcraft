@@ -3137,6 +3137,87 @@ fn slider_values_can_be_typed() {
     assert_eq!(h.app.session.undo.len(), undo0 + 1);
 }
 
+#[test]
+fn arrow_keys_over_a_slider_value_separate_photo_navigation_and_edits() {
+    let mut h = demo([1300.0, 900.0]);
+    let t = Duration::from_secs(10);
+    let ids = h.app.session.visible_cloned();
+    h.app.run("library.select", json!({"ids": [ids[0].0]})).unwrap();
+    h.request("ui.set", json!({"view": "detail", "right": "edit"}), t);
+    h.settle(SETTLE);
+
+    // A previous click left the slider focused. Moving over its number doesn't start text entry.
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "slider:light.exposure"}), t)["ok"], true);
+    assert_eq!(h.request("ui.hoverWidget", json!({"id": "sliderValue:light.exposure"}), t)["ok"], true);
+    assert!(crate::widgets::slider_has_focus(&h.view.ctx));
+    h.request("ui.key", json!({"key": "right"}), t);
+    assert_eq!(h.app.session.active(), Some(ids[1]));
+
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "slider:light.exposure"}), t)["ok"], true);
+    assert_eq!(h.request("ui.hoverWidget", json!({"id": "sliderValue:light.contrast"}), t)["ok"], true);
+    assert!(crate::widgets::slider_has_focus(&h.view.ctx));
+    let light = |h: &Headless| h.app.session.develop_of(ids[1]).unwrap().light;
+    let before = light(&h);
+    h.request("ui.key", json!({"key": "up"}), t);
+    assert_eq!(h.app.session.active(), Some(ids[1]));
+    assert_eq!(light(&h).exposure, before.exposure);
+    assert!(light(&h).contrast > before.contrast);
+    h.request("ui.key", json!({"key": "down"}), t);
+    assert!((light(&h).contrast - before.contrast).abs() < 1e-9);
+
+    let contrast = |h: &Headless| h.app.session.develop_of(ids[1]).unwrap().light.contrast;
+    let before = contrast(&h);
+    for (key, repeat) in [(egui::Key::ArrowUp, true), (egui::Key::ArrowLeft, false)] {
+        h.events.push(egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat, modifiers: egui::Modifiers::NONE });
+    }
+    h.step();
+    assert_eq!(h.app.session.active(), Some(ids[0]));
+    assert!(contrast(&h) > before, "the vertical nudge still reaches the slider");
+}
+
+#[test]
+fn an_hdr_slider_value_is_nudged_before_navigation_to_an_sdr_photo() {
+    let mut h = demo([1300.0, 1200.0]);
+    let t = Duration::from_secs(10);
+    let ids = h.app.session.visible_cloned();
+    h.app.run("library.select", json!({"ids": [ids[1].0]})).unwrap();
+    h.app.run("develop.hdr", json!({"enabled": true})).unwrap();
+    h.request("ui.set", json!({"view": "detail", "right": "edit", "openSections": ["light"]}), t);
+    if !h.app.ui.flyout_open("sdrRendition") {
+        h.app.ui.toggle_flyout("sdrRendition");
+    }
+    h.settle(SETTLE);
+
+    assert_eq!(h.request("ui.hoverWidget", json!({"id": "sliderValue:hdr.sdrBrightness"}), t)["ok"], true);
+    let brightness = |h: &Headless| h.app.session.develop_of(ids[1]).unwrap().hdr.sdr_brightness;
+    let before = brightness(&h);
+    for (key, repeat) in [(egui::Key::ArrowUp, true), (egui::Key::ArrowLeft, false)] {
+        h.events.push(egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat, modifiers: egui::Modifiers::NONE });
+    }
+    h.step();
+    assert_eq!(h.app.session.active(), Some(ids[0]));
+    assert!(brightness(&h) > before, "the HDR photo receives its brightness change before leaving it");
+    assert!(!h.app.session.develop_of(ids[0]).unwrap().hdr.enabled);
+}
+
+#[test]
+fn a_disabled_slider_value_does_not_capture_the_focused_sliders_arrow_key() {
+    let mut h = demo([1300.0, 1200.0]);
+    let t = Duration::from_secs(10);
+    let photo = h.app.session.visible_cloned()[0];
+    h.app.run("library.select", json!({"ids": [photo.0]})).unwrap();
+    h.request("ui.set", json!({"view": "detail", "right": "edit", "openSections": ["light", "lensBlur"]}), t);
+    h.settle(SETTLE);
+
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "slider:light.exposure"}), t)["ok"], true);
+    assert_eq!(h.request("ui.hoverWidget", json!({"id": "sliderValue:lensBlur.amount"}), t)["ok"], true);
+    assert!(crate::widgets::slider_has_focus(&h.view.ctx));
+    let exposure = |h: &Headless| h.app.session.develop_of(photo).unwrap().light.exposure;
+    let before = exposure(&h);
+    h.request("ui.key", json!({"key": "up"}), t);
+    assert!(exposure(&h) > before, "a disabled readout leaves the focused slider in control");
+}
+
 /// Reset takes precedence over the value being typed when its button is clicked.
 #[test]
 fn reset_button_wins_over_an_active_numeric_draft() {

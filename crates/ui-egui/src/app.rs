@@ -702,6 +702,7 @@ impl LightcraftApp {
         self.sync_theme(&ctx);
         self.ui_pass(&ctx);
         self.draw_window(ui);
+        shortcuts::finish_slider_navigation(self, &ctx);
         self.finish_ui_pass(&ctx);
     }
 }
